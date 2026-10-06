@@ -1,0 +1,31 @@
+[mcp_servers.cigar-journal]
+url = "https://cigars.example.com/mcp"
+bearer_token_env_var = "CIGAR_JOURNAL_TOKEN"
+
+[mcp_servers.home-assistant]
+url = "http://ha-mcp.home-automation.svc.cluster.local:8086/private/abc123"
+
+# legacy-sse: type=sse in mcp.json — codex has no SSE client (streamable HTTP only), skipped
+
+[mcp_servers.outline]
+command = "uvx"
+args = ["mcp-outline"]
+env = { OUTLINE_API_URL = "https://wiki.example.org/api" }
+env_vars = ["HOME", "LANG", "OUTLINE_API_KEY", "PATH", "PLAYWRIGHT_BROWSERS_PATH", "TERM", "TMPDIR", "UV_CACHE_DIR", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR"]
+startup_timeout_sec = 60
+
+[mcp_servers.playwright]
+command = "playwright-mcp"
+args = ["--browser", "chromium", "--headless"]
+env_vars = ["HOME", "LANG", "PATH", "PLAYWRIGHT_BROWSERS_PATH", "TERM", "TMPDIR", "UV_CACHE_DIR", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR"]
+startup_timeout_sec = 60
+
+[mcp_servers.vexa]
+url = "http://vexa.ai.svc.cluster.local:8000/mcp"
+env_http_headers = { X-API-Key = "VEXA_API_KEY" }
+http_headers = { X-Client = "agentd <v2>" }
+
+[mcp_servers."weird name"]
+url = "http://weird.example/mcp"
+http_headers = { Authorization = "Token w-tok" }
+

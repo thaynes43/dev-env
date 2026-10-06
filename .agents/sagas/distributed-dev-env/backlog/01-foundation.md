@@ -25,7 +25,10 @@ step. Tick a step in the PR that lands it.
   DESIGN-001 section 7, with the 5.1 tests.
 - [ ] 3. The `/v1` API (`sessions`, `fleet`) with TokenReview auth.
 - [ ] 4. agentd: config rendering, partial clone and worktree, tmux start,
-  heartbeat, `ctl status|rescue`.
+  heartbeat, `ctl status|rescue` (DESIGN-001 3.6, D-40), in three PRs:
+  - [x] config rendering, the port of `dev-init.sh`: `agentd render` (#25);
+  - [ ] partial clone and worktree, the task in tmux, heartbeat, `agentd ctl status`;
+  - [ ] `agentd ctl rescue`, the entry point step 5 extends with the bundle.
 - [ ] 5. Rescue to a bundle on the shared volume (D-10), then suspend and archive.
 - [ ] 6. The minimal keeper: mint the gh token every 40 minutes.
 - [ ] 7. `agent-run` v2: `-p`, `list`, `reap` and `fleet`.

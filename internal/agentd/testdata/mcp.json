@@ -1,0 +1,52 @@
+{
+  "mcpServers": {
+    "cigar-journal": {
+      "type": "http",
+      "url": "https://cigars.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${CIGAR_JOURNAL_TOKEN}"
+      }
+    },
+    "home-assistant": {
+      "type": "http",
+      "url": "http://ha-mcp.home-automation.svc.cluster.local:8086${HA_MCP_SECRET_PATH}"
+    },
+    "legacy-sse": {
+      "type": "sse",
+      "url": "http://old.example/sse"
+    },
+    "outline": {
+      "command": "uvx",
+      "args": [
+        "mcp-outline"
+      ],
+      "env": {
+        "OUTLINE_API_KEY": "${OUTLINE_API_KEY}",
+        "OUTLINE_API_URL": "https://wiki.example.org/api"
+      }
+    },
+    "playwright": {
+      "command": "playwright-mcp",
+      "args": [
+        "--browser",
+        "chromium",
+        "--headless"
+      ]
+    },
+    "vexa": {
+      "type": "http",
+      "url": "http://vexa.ai.svc.cluster.local:8000/mcp",
+      "headers": {
+        "X-API-Key": "${VEXA_API_KEY}",
+        "X-Client": "agentd <v2>"
+      }
+    },
+    "weird name": {
+      "type": "http",
+      "url": "http://weird.example/mcp",
+      "headers": {
+        "Authorization": "Token ${WEIRD_TOKEN}"
+      }
+    }
+  }
+}
