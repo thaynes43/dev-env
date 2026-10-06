@@ -27,8 +27,12 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Only the agent-image job reads this, and that job runs on PRs only. On push the
+  # action would need a git fetch with credentials, which persist-credentials: false
+  # removes, so it is skipped there.
   changes:
     name: Changes
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # paths-filter lists a PR's files through the API, which a private repo
@@ -142,6 +146,9 @@ jobs:
           persist-credentials: false
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: TEMP resolve digests
+        run: |
+          for i in golang:1.27.1 gcr.io/distroless/static:nonroot; do echo "DIGEST $i $(docker buildx imagetools inspect $i --format '{{.Manifest.Digest}}')"; done
       - name: Build the operator image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
