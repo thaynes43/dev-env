@@ -268,7 +268,7 @@ An agent working outside under Tom's own gh login could make changes 1 and 2 wit
 After B1 to B4, work through plan 01's "In this repo" and "In haynes-ops" lists. One
 PR per piece, in this order:
 
-1. `AgentSession` types and the generated CRD, with an envtest suite. Done in #PRNUM
+1. `AgentSession` types and the generated CRD, with an envtest suite. Done in #24
    (2026-10-06): D-39 records what the schema enforces.
 2. Pods and volumes from the size class and the `dev-env-templates` ConfigMap,
    placed per DESIGN-001 section 7, with tests that enforce 5.1: no owner reference

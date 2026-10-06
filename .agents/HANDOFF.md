@@ -30,7 +30,7 @@ the saga. To start building, follow
   release PR is opened with `GITHUB_TOKEN`, so close and reopen it as haynes-dev-bot
   to get `CI - Success` to run (again after each update); never merge it without
   asking. Renovate auto-merge is off until the ruleset exists.
-- **Plan 01 step 1, the `AgentSession` CRD, is built** (#PRNUM). The schema enforces
+- **Plan 01 step 1, the `AgentSession` CRD, is built** (#24). The schema enforces
   the per-session rules as CEL, and spec is immutable after create except
   `operatingMode` and `lifecycle` (D-39). `make test` runs an envtest suite against
   kube-apiserver 1.35 (the main cluster's minor) that proves each rule;

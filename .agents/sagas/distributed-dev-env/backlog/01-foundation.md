@@ -1,7 +1,7 @@
 # 01: foundation, task mode
 
 **Status:** in progress: KICKOFF B1 to B4 landed (#14, #15, #17, #18); step 1, the
-`AgentSession` CRD, landed in #PRNUM (2026-10-06)
+`AgentSession` CRD, landed in #24 (2026-10-06)
 **Depends on:** Q-01 (build), Q-02 (Go), Q-04 (requests and limits, no cap) and Q-05
 (storage), all decided 2026-10-06; spikes S-7 (clone path), S-8 (gasha01 speed) and
 S-12 (the guard)
@@ -18,7 +18,7 @@ archived by the operator. An operator restart mid-task does not disturb it.
 The order of [KICKOFF section 4](../KICKOFF.md#4-then-plan-01-itself), one PR per
 step. Tick a step in the PR that lands it.
 
-- [x] 1. `AgentSession` types and the generated CRD, with an envtest suite (#PRNUM).
+- [x] 1. `AgentSession` types and the generated CRD, with an envtest suite (#24).
   The schema enforces D-39; `make test` runs the suite against kube-apiserver 1.35,
   the main cluster's minor.
 - [ ] 2. Pods and volumes from the size class and `dev-env-templates`, placed per
