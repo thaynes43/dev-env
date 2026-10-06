@@ -517,8 +517,10 @@ the index and prints the refs origin lacks.**
   and its branch stay as they were, and no hook runs (v1's `--no-verify`). `git
   status` runs with `--no-optional-locks`, so a rescue never takes a running agent's
   index lock.
-- Then agentd fetches origin (60 s limit) and lists every local branch, tag and the
-  stash whose commits origin's refs lack (`unpushedRefs`). That is D-10 step 4's
+- Then agentd fetches origin (60 s limit) and lists every local branch, tag and stash
+  entry whose commits origin's refs lack (`unpushedRefs`). Stash entries are named
+  `stash@{n}`: only the newest has a ref, so step 5 gives each a ref of its own before
+  it bundles. That is D-10 step 4's
   list: step 5's bundle must cover it, and the operator records it in status.
   `cleanAndPushed` is D-10's proof that no bundle is needed: every repo fetched,
   every worktree clean, no such ref. A failed fetch keeps the list (stale remote refs

@@ -249,15 +249,26 @@ func commitWIP(ctx context.Context, r Runner, s Settings, wt, gitDir string, w p
 	}
 	index := tmp.Name()
 	defer func() { _ = os.Remove(index) }()
-	if src, err := os.Open(filepath.Join(gitDir, "index")); err == nil {
+	src, err := os.Open(filepath.Join(gitDir, "index"))
+	switch {
+	case err == nil:
 		_, err = io.Copy(tmp, src)
 		_ = src.Close()
 		if err != nil {
 			_ = tmp.Close()
 			return "", err
 		}
-	}
-	if err := tmp.Close(); err != nil {
+		if err := tmp.Close(); err != nil {
+			return "", err
+		}
+	case isNotExist(err):
+		// git refuses a zero-byte index file but reads a missing one as empty.
+		_ = tmp.Close()
+		if err := os.Remove(index); err != nil {
+			return "", err
+		}
+	default:
+		_ = tmp.Close()
 		return "", err
 	}
 	env := append(append([]string(nil), gitEnv...), "GIT_INDEX_FILE="+index)
@@ -314,29 +325,42 @@ func createRescueRef(ctx context.Context, r Runner, s Settings, wt, stamp, commi
 	return "", fmt.Errorf("could not create a rescue branch %s: %s", base, cmdDetail(lastErr))
 }
 
-// unpushedRefs lists the local branches, tags and the stash whose commits
-// origin's refs do not contain.
+// unpushedRefs lists the local branches and tags, and every stash entry,
+// whose commits origin's refs do not contain. refs/stash names only the newest
+// entry; the older ones live only in its reflog, so each entry is listed as
+// stash@{n}, which step 5 anchors before it bundles.
 func unpushedRefs(ctx context.Context, r Runner, s Settings, repo string) ([]protocol.Ref, error) {
-	out, err := s.git(ctx, r, repo, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads", "refs/tags", "refs/stash")
+	out, err := s.git(ctx, r, repo, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads", "refs/tags")
 	if err != nil {
 		return nil, err
 	}
-	var refs []protocol.Ref
+	var cands []protocol.Ref
 	sc := bufio.NewScanner(strings.NewReader(out))
 	for sc.Scan() {
-		sha, name, ok := strings.Cut(sc.Text(), " ")
-		if !ok {
-			continue
+		if sha, name, ok := strings.Cut(sc.Text(), " "); ok {
+			cands = append(cands, protocol.Ref{Name: name, Commit: sha})
 		}
-		extra, err := s.git(ctx, r, repo, "rev-list", "-n", "1", sha, "--not", "--remotes=origin")
+	}
+	stashes, err := s.git(ctx, r, repo, "stash", "list", "--format=%H")
+	if err != nil {
+		return nil, err
+	}
+	n := 0
+	for _, sha := range strings.Fields(stashes) {
+		cands = append(cands, protocol.Ref{Name: fmt.Sprintf("stash@{%d}", n), Commit: sha})
+		n++
+	}
+	var refs []protocol.Ref
+	for _, ref := range cands {
+		extra, err := s.git(ctx, r, repo, "rev-list", "-n", "1", ref.Commit, "--not", "--remotes=origin")
 		if err != nil {
 			return nil, err
 		}
 		if extra != "" {
-			refs = append(refs, protocol.Ref{Name: name, Commit: sha})
+			refs = append(refs, ref)
 		}
 	}
-	sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
+	sort.SliceStable(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
 	return refs, nil
 }
 

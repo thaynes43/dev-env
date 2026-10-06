@@ -29,7 +29,8 @@ type RepoRescue struct {
 	Worktrees []WorktreeRescue `json:"worktrees"`
 	// UnpushedRefs are the local refs with commits origin lacks, rescue
 	// branches included, after the rescue: what the bundle must hold (D-10
-	// step 4). Empty when origin has everything.
+	// step 4). Stash entries are named stash@{n}, because only the newest has
+	// a ref. Empty when origin has everything.
 	UnpushedRefs []Ref  `json:"unpushedRefs,omitempty"`
 	Error        string `json:"error,omitempty"`
 }

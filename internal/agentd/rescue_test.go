@@ -148,26 +148,55 @@ func TestRescueReportsUnpushedCommitsAndStash(t *testing.T) {
 	gitRun(t, env, wt, "add", "done.txt")
 	gitRun(t, env, wt, "commit", "-q", "-m", "work")
 	writeFile(t, filepath.Join(wt, "README.md"), "stashed\n")
-	gitRun(t, env, wt, "stash", "push", "-q", "-m", "test")
+	gitRun(t, env, wt, "stash", "push", "-q", "-m", "older")
+	writeFile(t, filepath.Join(wt, "README.md"), "stashed again\n")
+	gitRun(t, env, wt, "stash", "push", "-q", "-m", "newer")
+	older := gitRun(t, env, wt, "rev-parse", "stash@{1}")
 
 	rep := rig.rescue(t)
 	if !rep.OK || rep.CleanAndPushed {
 		t.Fatalf("report %+v", rep)
 	}
-	got := refNames(rep.Repos[0].UnpushedRefs)
-	if got != "refs/heads/"+rig.ws.Branch+" refs/stash" {
+	refs := rep.Repos[0].UnpushedRefs
+	if got := refNames(refs); got != "refs/heads/"+rig.ws.Branch+" stash@{0} stash@{1}" {
 		t.Errorf("unpushed = %q", got)
+	}
+	// The older entry has no ref of its own; the report still names it.
+	if len(refs) == 3 && refs[2].Commit != older {
+		t.Errorf("stash@{1} = %s, want %s", refs[2].Commit, older)
 	}
 	if w := rig.worktree(t, rep, wt); w.Dirty || w.RescueBranch != "" {
 		t.Errorf("worktree %+v", w)
 	}
 
 	// Once pushed, the branch is no longer listed.
-	gitRun(t, env, wt, "stash", "drop", "-q")
+	gitRun(t, env, wt, "stash", "clear")
 	gitRun(t, env, wt, "push", "-q", "origin", rig.ws.Branch)
 	rep = rig.rescue(t)
 	if !rep.CleanAndPushed || len(rep.Repos[0].UnpushedRefs) != 0 {
 		t.Errorf("after push: %+v", rep.Repos[0])
+	}
+}
+
+func TestRescueWithoutAnIndexFile(t *testing.T) {
+	rig := newRescueRig(t)
+	wt, env := rig.ws.Worktree, rig.g.env
+	writeFile(t, filepath.Join(wt, "new.txt"), "new\n")
+	gd := gitRun(t, env, wt, "rev-parse", "--absolute-git-dir")
+	if err := os.Remove(filepath.Join(gd, "index")); err != nil {
+		t.Fatal(err)
+	}
+	rep := rig.rescue(t)
+	w := rig.worktree(t, rep, wt)
+	if !rep.OK || w.Refused != "" || w.RescueBranch == "" {
+		t.Fatalf("worktree %+v", w)
+	}
+	files := gitRun(t, env, wt, "ls-tree", "-r", "--name-only", "refs/heads/"+w.RescueBranch)
+	if !strings.Contains(files, "new.txt") || !strings.Contains(files, "README.md") {
+		t.Errorf("rescue tree:\n%s", files)
+	}
+	if exists(filepath.Join(gd, "index")) {
+		t.Error("the rescue wrote the worktree's own index")
 	}
 }
 
