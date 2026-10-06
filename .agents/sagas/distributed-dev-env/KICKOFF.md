@@ -176,7 +176,7 @@ Makefile               generate, lint, test, build; test parallelism capped
   - **auto-merge is off.** Two rules cover it (minor and patch for Go modules
     and for Actions; Actions pin and digest refreshes count with them) and set `automerge: false` until the Protect Main ruleset requires
     `CI - Success`. With no required check, GitHub auto-merge has nothing to wait
-    for, so it would merge before CI reports. Turning it on is a one-line flip in the
+    for, so it would merge before CI reports. Turning it on is a flip of both rules in the
     PR that records laptop handoff part 3 as done (HANDOFF checklist).
 - **release-please:** one version for the repo; both images are tagged with it
   (DESIGN-001 section 10). Manifest mode, `go` release type, and
