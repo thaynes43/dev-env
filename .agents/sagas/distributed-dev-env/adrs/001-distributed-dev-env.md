@@ -15,11 +15,13 @@ RWO volume. Since 2026-09-23 it runs on the control-plane nodes.
 
 That shape has three problems.
 
-1. **One blast radius for CPU.** The pod has no CPU limit. On 2026-10-05, from about
-   23:00Z to 00:11Z, a flake-reproduction subagent ran dozens of busy loops and wide
-   parallel vitest runs. Node talosm02 reached load 222 on 20 cores, and EMQX,
-   traefik, authentik and cloudnative-pg, all on that node, went into liveness-kill
-   loops. A CPU cap for v1 is pending as held draft haynes-ops#3381, but a cap on
+1. **One blast radius for CPU.** The pod has no CPU limit. On 2026-10-05, from 23:42Z
+   to 00:12Z, a flake-reproduction subagent ran dozens of busy loops and wide
+   parallel vitest runs (a separate 3.6-core blip at 23:03Z came first). Node talosm02
+   reached load 222 on 20 cores, and EMQX, traefik, authentik and cloudnative-pg, all
+   on that node, went into liveness-kill loops. The kubelet was not starved (it
+   peaked at 0.18 cores): the failing probes belonged to BestEffort pods, which have
+   no CPU request and so CPU weight 1, and got no CPU while the node was saturated. A CPU cap for v1 is pending as held draft haynes-ops#3381, but a cap on
    one shared pod only moves the starvation from the node to the other sessions.
 2. **One blast radius for change.** Any image or config change rolls the pod and
    kills every session mid-turn. That is why dev-env image bumps can never
@@ -142,9 +144,9 @@ The parts, in one paragraph each, with the design section that specifies them:
 | C-09 | Bad: each session clones its repo fresh, so start-up costs a clone (spike S-7 measures it; a shared mirror is the remedy for large repos). |
 | C-10 | Neutral (revised 2026-10-06): agent pods get open web egress, broader than v1, and keep v1's Secrets on day one except what design Q-07 moves behind grants. A tricked agent can leak what its pod holds; the credential set, not the allowlist, is the control. |
 | C-11 | Good: capacity grows with the cluster with no numbers to retune; a session that does not fit waits visibly in the scheduler's queue. |
-| C-12 | Bad: with no fleet cap, the Max plan's own windows are the only brake on parallel sessions; the operator shows quota state but does not ration it. |
+| C-12 | Bad: with no fleet cap, the Max plan's own windows are the only brake on parallel sessions; the operator shows quota state but does not ration it. A busy fleet can also saturate a worker, which is safe only once every household pod has a CPU request (design Q-08). |
 | C-13 | Good: agents never stall on a prompt, and anything beyond the baseline is a time-boxed, audited grant; the headlamp path is closed and replaced by break-glass. |
-| C-14 | Bad: the broker can bind `cluster-admin`. It is the most privileged v2 component and must stay small, isolated from agents, and approve only on Tom's Authentik identity. |
+| C-14 | Bad: the broker can bind the break-glass role, the most privileged v2 grant. Break-glass is not `cluster-admin`: it has no Secrets, no token minting, no RBAC or admission writes, and never reaches the dev-env namespaces. Residual risk: for up to an hour it can change or delete any household workload, volume or node setting, and leave workloads running after it expires; Tom gets the audit list of what it created. The broker must stay small, isolated from agents, and approve only on Tom's Authentik identity. |
 | C-15 | Bad: GPU accounting needs every household GPU workload to declare its VRAM, a change to household manifests in haynes-ops; the accounting is cooperative, not enforced. |
 | C-16 | Good: tools and local models become fleet members: started on demand, stopped when idle, and household AI is never displaced by agents. |
 | C-17 | Neutral: session volumes depend on the Proxmox Ceph, an HDD-backed cluster outside Kubernetes. Its outage stops new sessions and stalls running ones; it already carries Prometheus and Loki. |
@@ -152,8 +154,9 @@ The parts, in one paragraph each, with the design section that specifies them:
 ## More information
 
 - Design: [DESIGN-001](../designs/001-dev-env-v2.md). Q-01 to Q-05 were ruled on by
-  Tom on 2026-10-06; Q-06 (GPU tool pods on control-plane nodes) and Q-07
-  (root-equivalent credentials behind the broker) are open. All are in its section 15.
+  Tom on 2026-10-06; Q-06 (GPU tool pods on control-plane nodes), Q-07
+  (root-equivalent credentials behind the broker) and Q-08 (a CPU request for every
+  household pod) are open. All are in its section 15.
 - haynes-ops #3392: the v1 RBAC escalation finding that the baseline guard answers.
 - v1 saga and its decision log: haynes-ops `.agents/sagas/dev-env/`. Its ADR-001
   records that v2 lives in this repo.

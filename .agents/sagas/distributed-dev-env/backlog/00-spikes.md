@@ -4,7 +4,7 @@
 **Depends on:** nothing. S-1, S-2, S-3, S-6 and S-7 run in the v1 pod today; S-4 and
 S-5 need two session pods and run in phases 3 and 4; S-8 and S-12 run in phase 1,
 S-10 in phase 2, S-9 and S-11 before plan 09.
-**Parallel with:** Tom answering Q-06 and Q-07 (Q-01 to Q-05 were answered on
+**Parallel with:** Tom answering Q-06 to Q-08 (Q-01 to Q-05 were answered on
 2026-10-06)
 
 ## Goal
@@ -124,7 +124,10 @@ another ServiceAccount, a Job mounting a Secret, a Deployment image patch, a Flu
 `spec.path` patch, exec into a pod whose ServiceAccount is on the privileged list)
 and each runbook action (rollout restart, CronJob suspend, Flux reconcile and
 suspend, a volsync unlock Job, ExternalSecret force-sync). Every path must be
-refused and every action allowed. Check whether the ValidatingAdmissionPolicy sees
+refused and every action allowed. Then, as a `grant-<id>` ServiceAccount bound to
+`dev-env-grant-breakglass`: a write and an exec in each dev-env namespace, a pod
+under another ServiceAccount, a privileged pod, a Secret read and a TokenRequest
+must all be refused. Check whether the ValidatingAdmissionPolicy sees
 `CONNECT` for exec; if not, the Kyverno rule carries it. Decides D-19.
 
 ## Acceptance

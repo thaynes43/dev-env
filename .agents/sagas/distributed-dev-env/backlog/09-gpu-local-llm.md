@@ -40,8 +40,10 @@ GPU workload on the card it could land on declares its VRAM.
 - `ToolPool.spec.gpu.memoryGiB` turned into a request for VRAM units, a
   framework VRAM cap from the claim (environment for llama.cpp, vLLM, PyTorch
   apps), and the eviction guard that reads `nvidia-gpu-exporter`.
-- `LLMLease` CRD and `/v1/leases`: pool slots, the FIFO queue, the holder label and
-  its CNP, expiry, policy check through the broker.
+- `LLMLease` CRD and `/v1/leases`: pool slots, the FIFO queue, the holder label,
+  expiry, policy check through the broker. The egress rule for each pool is a
+  clusterwide policy in haynes-ops that selects the holder label; the operator only
+  sets and removes the label.
 - `kind: llm` pools: start on the first lease, scale to zero 30 minutes after the
   last.
 - agentd's opencode adapter (start, resume, status, deliver, MCP registration),

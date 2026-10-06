@@ -35,7 +35,8 @@ DESIGN-001 8.1, D-28 and D-29.
 ## In haynes-ops (GitOps PRs)
 
 - Namespace `dev-tools` contents: the operator's Roles there, LimitRange, the
-  pool ExternalSecrets.
+  pool ExternalSecrets. The default-deny `CiliumClusterwideNetworkPolicy` for
+  `dev-tools` pods landed in plan 01; the operator writes only namespaced allows.
 - ToolPools for `blender` (dedicated) and `audio` (shared), pinning the images the
   existing apps run, with workspaces on `gasha01-rbd`. Only after each pool passes
   its acceptance below, remove the matching app in `apps/dev/` (keep its PVC until

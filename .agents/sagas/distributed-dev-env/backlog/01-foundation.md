@@ -40,11 +40,15 @@ archived by the operator. An operator restart mid-task does not disturb it.
   with `prune: disabled`.
 - Namespace `dev-tools` too (empty until plan 08).
 - Operator and keeper HelmReleases, RBAC (DESIGN-001 6.11: cluster-wide read for
-  agents, v1's write verbs under the `dev-env-agent-guard` admission policy and the
-  Kyverno exec rule, nothing in the three dev-env namespaces), CNPs (the web and
-  platform tiers of D-24 for session pods, operator, keeper), LimitRange,
+  agents, v1's write verbs under the `dev-env-agent-guard` and
+  `dev-env-identity-guard` admission policies and the Kyverno exec rule, nothing in
+  the three dev-env namespaces), network policies (the web and platform tiers of D-24
+  as `CiliumClusterwideNetworkPolicy` objects, the default-deny clusterwide policy for
+  `dev-tools`, operator, keeper), LimitRange,
   PriorityClass `dev-env-agent` (-10, `preemptionPolicy: Never`), a Kyverno policy
   requiring CPU limits in `dev-agents`. No ResourceQuota (D-21).
+- Whatever Q-08 chose, so household pods on the workers carry a CPU request. Until it
+  is applied, phase 1 runs a handful of sessions at most.
 - ExternalSecrets in `dev-agents` mirroring v1's; the empty keeper-owned Secrets.
 - The shared CephFS volume `dev-env-shared` on `ceph-filesystem`, `prune: disabled`.
 - `dev-env-templates` with `gasha01-rbd` as the session volume class.

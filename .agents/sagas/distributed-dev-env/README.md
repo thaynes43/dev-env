@@ -4,7 +4,7 @@
 Nothing is built. The architecture is in [ADR-001](adrs/001-distributed-dev-env.md)
 and the detail in [DESIGN-001](designs/001-dev-env-v2.md). Tom ruled on Q-01 to Q-05
 on 2026-10-06 and widened the scope: tool pods, GPUs, local models, and access
-without in-pod prompts. Two questions wait on him (Q-06, Q-07, below); the spikes in
+without in-pod prompts. Three questions wait on him (Q-06 to Q-08, below); the spikes in
 [backlog 00](backlog/00-spikes.md) can run before they are answered.
 
 **Working rules:** this repo's [CLAUDE.md](../../../CLAUDE.md). Docs first. Ask Tom
@@ -80,11 +80,16 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 7. **GPU accounting touches household apps.** The scheduler cannot share GPUs fairly
    until every GPU workload, household ones included, declares its VRAM. Today they
    pin cards by UUID and the scheduler sees nothing.
-8. **The broker is powerful.** It can bind `cluster-admin` for break-glass. It runs
-   apart from the operator, binds only a named catalog of roles, and approves only
-   on Tom's Authentik login.
+8. **The broker is powerful.** It can grant break-glass: every verb outside the
+   dev-env namespaces except Secrets, token minting, RBAC and admission changes, for
+   up to an hour. It runs apart from the operator, binds only a named catalog of
+   roles, and approves only on Tom's Authentik login.
 9. **Session volumes live outside the cluster.** gasha01 is HDD-backed Proxmox Ceph.
    Its outage stops new sessions and stalls running ones (DESIGN-001 6.6).
+10. **No fleet cap means workers can saturate.** On 2026-10-05 the pods that failed
+   were BestEffort (no CPU request, CPU weight 1); the kubelet was fine. A busy v2
+   fleet could saturate a worker the same way, so every household pod needs a CPU
+   request first (Q-08).
 
 ## Decision log
 
@@ -102,8 +107,9 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 10 | Tool pods, GPUs and local LLMs | **PROPOSED** 2026-10-06, from Tom's Q-04 ruling | [DESIGN-001 section 8](designs/001-dev-env-v2.md#8-tool-pods-gpus-and-local-llms) (D-28 to D-32) |
 | 11 | Q-06: may GPU tool pods run on the control-plane nodes that carry GPUs? | **OPEN** | recommended: yes, GPU tool and LLM pods only, capped at 2 CPU / 16Gi, never preempting |
 | 12 | Q-07: do the root-equivalent credentials (Proxmox operator token, hw-ssh key) stay in every session pod? | **OPEN** | recommended: move them behind the broker as short-lived credential grants |
+| 13 | Q-08: how does every household pod get a CPU request, so a saturated worker cannot starve it? | **OPEN** | recommended: a Kyverno-generated LimitRange with a 50m default CPU request in every non-system namespace |
 
-The full options and consequences for Q-01 to Q-07 are in
+The full options and consequences for Q-01 to Q-08 are in
 [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions).
 
 ## Plan backlog
@@ -119,7 +125,7 @@ v1 stays live throughout. No v2 plan edits haynes-ops'
 | [07: access broker](backlog/07-access-broker.md) | 01; Q-07 for credential grants | with 02 |
 | [03: Remote Control](backlog/03-remote-control.md) | 02; spikes S-1, S-2, S-5, S-6 | |
 | [04: rolling updates and Codex](backlog/04-rolling-updates-codex.md) | 02, Q-03 (decided); spikes S-3, S-4 | with 03 |
-| [05: cutover from v1](backlog/05-cutover.md) | 03, 04, 07; Tom's approval | |
+| [05: cutover from v1](backlog/05-cutover.md) | 03, 04, 07; Q-08 applied; Tom's approval | |
 | [08: tool pods](backlog/08-tool-pods.md) | 02; spike S-10 | with 03, 04 |
 | [09: GPUs and local LLMs](backlog/09-gpu-local-llm.md) | 08; Q-06; spikes S-9, S-11 | |
 | [06: later](backlog/06-later.md) | 05 | each item on its own |

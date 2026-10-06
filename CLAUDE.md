@@ -49,8 +49,10 @@ backlog. Name each one here when it lands.
 
 - **No CPU burners in the dev-env pod.** No busy loops, stress tools or wide parallel
   test runs. On 2026-10-05 a flake-reproduction run in the v1 pod (which had no CPU
-  limit) pushed control-plane node talosm02 to load 222 on 20 cores, and EMQX,
-  traefik, authentik and cloudnative-pg went into liveness-kill loops. Cap test
+  limit) pushed control-plane node talosm02 to load 222 on 20 cores from 23:42 to
+  00:12Z, and EMQX, traefik, authentik and cloudnative-pg went into liveness-kill
+  loops. The kubelet was not starved (it peaked at 0.18 cores): BestEffort pods,
+  with no CPU request and so CPU weight 1, got no CPU on the saturated node. Cap test
   workers (for example vitest `--maxWorkers=2`) and run one suite at a time.
 - **Never commit secrets.** That covers Claude Max credentials and login URLs or
   codes, `CLAUDE_CODE_OAUTH_TOKEN`, Codex `auth.json`, GitHub App keys and minted
