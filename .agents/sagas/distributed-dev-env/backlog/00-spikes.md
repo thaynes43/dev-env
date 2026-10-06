@@ -34,8 +34,10 @@ and the evidence so far: research note
 
 1. **Cold home.** `mkdir -p /tmp/spike-s1/claude && chmod 700 /tmp/spike-s1/claude`.
    Write `.credentials.json` there from the live file with the refresh token removed
-   (`jq '.claudeAiOauth |= del(.refreshToken)'`), mode 0600, and nothing else: no
-   `.claude.json`, as a fresh v2 pod has.
+   (`jq '{claudeAiOauth: (.claudeAiOauth | del(.refreshToken))}'`), mode 0600, and
+   nothing else: no `.claude.json`, as a fresh v2 pod has. Drop `mcpOAuth` too: its
+   connector entries carry refresh tokens of their own (corrected 2026-10-06; the
+   earlier `.claudeAiOauth |= del(.refreshToken)` kept them).
 2. In a tmux session, run `CLAUDE_CONFIG_DIR=/tmp/spike-s1/claude env -u
    CLAUDE_CODE_OAUTH_TOKEN claude --debug-file /tmp/spike-s1/debug.log
    --remote-control spike-s1`. Does it register (a `bridgeSessionId` in
@@ -61,6 +63,32 @@ and the evidence so far: research note
 Pass = 2 and 3 work, 4's window is covered by agentd's re-merge or the 401 wait, and 5
 fails harmlessly (an error or a wait, never a write to the live login). Never print a
 token; read key names and expiry times only.
+
+- [x] **Done 2026-10-06: passed, with one caveat.** CLI 2.1.292, in the v1 pod, with a
+  cold `CLAUDE_CONFIG_DIR` and `HOME` and a cleared environment:
+  - **Step 2:** it registered (a `bridgeSessionId`) with no `.claude.json` seeding. The
+    CLI fetched the profile and wrote `oauthAccount` itself. A cold TUI first stops on
+    three prompts: theme, security notes, folder trust.
+  - **Step 3:** after the merge, the next request used the new token. No restart.
+  - **Step 4:** the refresh revoked the previous token at once ("OAuth token revoked"
+    on the first check, 22 s after the refresh). A turn in the gap fails after two
+    tries, about 2 s, and asks for `/login`. Remote Control stays registered, and the
+    first turn after the merge works. `CLAUDE_CODE_OAUTH_401_WAIT_MS=60000` changed
+    nothing: per the binary, the wait only polls for a rotated env or file-descriptor
+    token. The window is agentd's merge latency.
+  - **Step 5:** with no refresh token the CLI never refreshes. An expiry inside the
+    5-minute margin, or already past, still sends the token; a revoked token ends in an
+    error. It never wrote a credentials file.
+  - **Method for 4 and 5:** besides the running session, one-shot `claude -p` calls in
+    their own scratch dirs, with `expiresAt` edited to put a valid or a revoked token
+    inside its margin, past its expiry, or in the future (the state a pod is in right
+    after a keeper refresh). The live login was only read.
+  - **S-1b** registered with `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_CODE_OAUTH_SCOPES`;
+    `CLAUDE_CODE_SUBSCRIPTION_TYPE` was not needed.
+  - **Debug log:** `--debug-file` logs endpoints, not bodies: `POST /v1/code/sessions`,
+    `/bridge` (a worker JWT for 46800 s), the worker event stream, `/client/presence`,
+    and `/archive` on `/exit`. No `/v1/environments/bridge`, so no machine identity.
+  - Details and consequences: DESIGN-001 6.2 (D-11) and section 13.
 
 ## S-2: static token and Remote Control
 

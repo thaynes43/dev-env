@@ -743,8 +743,9 @@ section keeps what the design needs.
   re-enables Remote Control when a fresh same-account credential appears. With
   `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_CODE_OAUTH_SCOPES` set, it builds a
   credential with no refresh token at all (spike S-1b). `CLAUDE_CODE_OAUTH_401_WAIT_MS`
-  makes it wait on a 401 before acting. The `CLAUDE_CODE_HOST_CREDS_FILE` hook does
-  not help: Remote Control refuses the kind of auth it supplies.
+  makes it wait on a 401 for a rotated env or file-descriptor token; S-1 found it does
+  nothing for a credentials file. The `CLAUDE_CODE_HOST_CREDS_FILE` hook does not
+  help: Remote Control refuses the kind of auth it supplies.
 
 **Ruling (Q-11, Tom 2026-10-06).** The link Tom saw survive pod restarts is the Claude
 Code auth, the Max `/login` on the v1 PVC. **The keeper is its sole owner; session
@@ -756,23 +757,31 @@ Authentik, and replaces the chat relay.**
 - The keeper holds the refresh token and refreshes well inside the access token's
   8-hour life. It writes Secret `dev-env-claude-live` with the current access token,
   its expiry, scopes, subscription type and rate-limit tier, and **no refresh token**.
+  Every refresh revokes the previous access token in every pod at once (S-1), so the
+  keeper refreshes once per token life, not on a short cycle, and writes the Secret
+  the moment the refresh returns.
 - **agentd, not a mount, writes the pod's credentials file.** The CLI writes
   `.credentials.json` itself (connector `mcpOAuth` tokens, atomic temp-file renames),
   so a read-only Secret mount would break it. agentd reads the keeper's Secret and
   merges only `claudeAiOauth.{accessToken, expiresAt, scopes, subscriptionType,
   rateLimitTier}` into the pod's own `~/.claude/.credentials.json`: mode 0600, owned
-  by the agent user, by atomic rename, keeping every key the CLI owns. It re-merges
-  within seconds of the Secret changing.
-- **agentd seeds a cold home** (R-02 P-3): `.claude.json` with `oauthAccount`
-  (account and organization uuids from the keeper's profile fetch, nothing else), the
-  onboarding flags, and trust for the worktree. It never copies `machineID`,
+  by the agent user, by atomic rename, keeping every key the CLI owns. It watches the
+  Secret and re-merges the moment it changes: until it does, every request in that pod
+  meets a revoked token (S-1), so agentd's merge latency is the 401 window.
+- **agentd seeds a cold home** (R-02 P-3): `.claude.json` with the onboarding flags
+  and trust for the worktree. Without them a cold TUI stops on the theme, security and
+  trust prompts (S-1). `oauthAccount` is optional: on a cold home the CLI fetched the
+  profile and wrote it itself (S-1). agentd never copies `machineID`,
   `replBridgePlaceholders` or `sessions/*.json` between pods.
 - **Environment rules.** Remote pods unset `CLAUDE_CODE_OAUTH_TOKEN`, as v1 does. No
   pod sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_GROWTHBOOK`,
   `DISABLE_TELEMETRY` or `DO_NOT_TRACK`: the first two turn Remote Control off, and the
   last two switch the CLI to a check that wants a refresh token.
-- A pod can never rotate the token, because it never holds the refresh token. The
-  worst case is a 401 until agentd re-merges; S-1 measures that window.
+- A pod can never rotate the token, because it never holds the refresh token; with
+  none, the CLI never tries (S-1). The worst case is one failed turn ("OAuth token
+  revoked · Please run /login") when a request lands between a keeper refresh and
+  agentd's merge. The session and its Remote Control entry carry on, and the next
+  turn works.
 - **Trusted Devices stays off** on Tom's account (R-02 5.3). With it on, every pod
   would enrol as its own device, email Tom, and need a sign-in from the last 18 hours.
   Turning it on would need its own design pass.
@@ -793,7 +802,39 @@ from disk without a restart; quiet, harmless behaviour when the CLI wants to ref
 the 401 window after a keeper rotation; the env-token variant S-1b; and the request
 bodies confirmed with `--debug-file`.
 
-**Fallback if S-1 fails: a coordinator host.** One long-lived session pod of kind
+**S-1 result (2026-10-06): the target holds, with one caveat.** CLI 2.1.292, in the v1
+pod; backlog 00 has each step.
+
+- An access-token-only credentials file on a cold home registers Remote Control, with
+  no `.claude.json` seeding.
+- A merged token is used by the next request, with no restart. One presence pulse
+  sent in the same instant got a 401; the next one succeeded.
+- **The caveat: a refresh revokes the previous access token at once** (revoked on the
+  first check, 22 s after a v1 refresh). A request that meets the revoked token fails
+  its turn after two tries, in about 2 s. The binary shows that on a 401 the CLI
+  re-reads the stored credential once, so a merge that lands before the 401 should
+  rescue the request (not measured). `CLAUDE_CODE_OAUTH_401_WAIT_MS=60000` changed
+  nothing for a credentials file: per the binary, its wait polls only for a rotated
+  `CLAUDE_CODE_OAUTH_TOKEN` or file-descriptor token. agentd's merge
+  latency is therefore the window, and the D-11 bullets above keep it short.
+- With no refresh token the CLI never tries to refresh, whatever `expiresAt` says (an
+  expiry inside its 5-minute margin, or already past, still sends the token). A
+  revoked token ends in an error. Nothing wrote a credentials file.
+- S-1b registers too, without `CLAUDE_CODE_SUBSCRIPTION_TYPE`. It stays the fallback:
+  its 401 wait would poll for a new env token, which a running process cannot get.
+- `--debug-file` confirms R-02 2.1's first path by endpoint (`POST /v1/code/sessions`,
+  `/bridge`, the worker event stream, `/client/presence`, `/archive` on `/exit`) and
+  shows no `/v1/environments/bridge` call. It does not log bodies, so the body keys
+  stay as read from the binary.
+- Side results. The bridge's worker JWT lasts 46800 s and is re-minted with the OAuth
+  token 25 minutes before it lapses; the spike's run did not reach that point, so
+  plan 03's acceptance covers a session older than 13 hours. `/exit` archived the
+  entry (`archive=200`) on an access token alone, a data point for S-15. Without
+  `XDG_RUNTIME_DIR` the CLI puts its messaging socket under `/tmp` and refuses one with
+  no sticky bit, which 3.6 already handles.
+
+**Fallback if S-1 fails: a coordinator host.** S-1 passed, so this stays the fallback
+for a CLI release that breaks the target (section 14). One long-lived session pod of kind
 `coordinator-host` (size L, workers only, CPU-limited) owns `.credentials.json` on its
 own volume, exactly as v1 does, and runs every Remote Control session as a tmux
 window. Coordinators dispatch heavy work to task pods with `agent-run`, as the
@@ -2255,7 +2296,7 @@ Backlog plans: [`../backlog/`](../backlog/).
 
 | Id | Question | Where | Decides |
 |---|---|---|---|
-| S-1 | Does Claude Code run Remote Control on an access-token-only credentials file in a cold home, pick up a rotated token from disk without a restart, and never try to rotate? How long do 401s last after a keeper rotation, and does the 401 wait cover it? Does the env-token variant (S-1b: `CLAUDE_CODE_OAUTH_TOKEN` plus `CLAUDE_CODE_OAUTH_SCOPES`) register too? Do `--debug-file` logs confirm R-02's request bodies? | v1 pod, scratch `CLAUDE_CONFIG_DIR`, no refresh token copied | D-11 target vs the coordinator host |
+| S-1 | Does Claude Code run Remote Control on an access-token-only credentials file in a cold home, pick up a rotated token from disk without a restart, and never try to rotate? How long do 401s last after a keeper rotation, and does the 401 wait cover it? Does the env-token variant (S-1b: `CLAUDE_CODE_OAUTH_TOKEN` plus `CLAUDE_CODE_OAUTH_SCOPES`) register too? Do `--debug-file` logs confirm R-02's request bodies? | v1 pod, scratch `CLAUDE_CONFIG_DIR`, no refresh token copied. **Passed 2026-10-06** (CLI 2.1.292): it registers on a cold home with no `.claude.json` seeding, uses a merged token without a restart, and never tries to refresh. Each refresh revokes the old token at once, and the 401 wait does nothing for a file, so agentd's merge latency is the 401 window. S-1b registers too. The debug log confirms the endpoints, not the bodies (6.2) | D-11 target vs the coordinator host: **the target** |
 | S-2 | Can the static token register Remote Control on the current CLI? | **Answered 2026-10-06: no.** The docs require a full-scope login token, the 2.1.284 binary checks for `user:profile`, and R-01 F-01 saw 45 of 45 executor sessions rejected. Kept as a one-line check on each CLI bump | The keeper is needed for Claude |
 | S-3 | Do `codex exec` and `codex remote-control` run on `--with-access-token`, and pick up a new one? | v1 pod, scratch `CODEX_HOME` | D-12 step 2 |
 | S-4 | Can a hub thread execute in another pod through `codex exec-server`? | two pods, phase 4 | D-12 step 3 |
@@ -2303,9 +2344,9 @@ suite, a busy loop or anything parallel (the 2026-10-05 incident rule).
 | Image pull latency on a cold node | Pre-pull DaemonSet (7.4). |
 | A drain resumes a conversation on a new CLI version that reads old state differently | Drain happens on idle only; S-6 covers resume; a failed resume leaves the volume suspended, not deleted. |
 | Offline Remote Control entries pile up, one per reaped session, and push newer ones out of ListAgents' bounded listing | Archive on reap through the keeper (6.7, S-15); if S-15 fails, Tom archives from the console and `agent-run fleet` counts them. |
-| A keeper rotation revokes the access token pods hold | S-1 measures the 401 window; agentd re-merges within seconds; `CLAUDE_CODE_OAUTH_401_WAIT_MS` may cover the gap (6.2). |
+| A keeper rotation revokes the access token pods hold | Measured by S-1: it does, at once, and a turn that lands in the gap fails once. The keeper refreshes once per token life and writes the Secret straight away; agentd watches it and merges at once. `CLAUDE_CODE_OAUTH_401_WAIT_MS` does not cover a credentials file (6.2). |
 | The keeper's Secret mounted read-only as the credentials file breaks the CLI's own writes | Never mounted: agentd merges into a writable 0600 file (6.2). |
-| A cold home lacks the account, flags or policy cache ("Unable to determine your organization") | agentd seeds `.claude.json`; the egress tiers allow the CLI's flag and policy hosts; S-1 runs on a cold home (6.2). |
+| A cold home lacks the account, flags or policy cache ("Unable to determine your organization") | S-1 on a cold home: the CLI fetched the profile and its feature flags itself, with no seeding. agentd seeds the onboarding flags and worktree trust so the TUI does not stop on prompts; the egress tiers allow the CLI's flag and policy hosts (6.2). |
 | A telemetry kill-switch variable set in the image turns Remote Control off | None of the four is ever set; a CI check on the image env (6.2). |
 | Tom turns on Trusted Devices | Every pod would enrol as a device, email Tom and need an 18-hour sign-in; it stays off, and turning it on needs a design pass (6.2). |
 | Server mode in a session pod leaves an environment per pod on the account | Session pods only use `--remote-control` (6.7). |
@@ -2353,7 +2394,7 @@ step it names.
 | D-08 | Operator to pod by exec, pod to operator by heartbeat | 3.6 |
 | D-09 | Lifecycle timers | 4.3 |
 | D-10 | Rescue before reap; bundles in-cluster; never pushed | 4.4 |
-| D-11 | Keeper is the sole owner of the one Max login (absorbing v1's two); pods get access tokens that agentd merges into a writable file; coordinator host only if S-1 fails (revised 2026-10-06) | 6.2 |
+| D-11 | Keeper is the sole owner of the one Max login (absorbing v1's two); pods get access tokens that agentd merges into a writable file; coordinator host only if S-1 fails (revised 2026-10-06). S-1 passed on 2026-10-06, so the build takes the target | 6.2 |
 | D-12 | Codex hub, then keeper-owned auth, then exec-server | 6.3 |
 | D-13 | Keeper mints the gh token into a Secret | 6.4 |
 | D-14 | MCP registration per pod | 6.5 |
