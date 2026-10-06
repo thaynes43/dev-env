@@ -38,7 +38,9 @@ post-ready does. DESIGN-001 3.8, 6.2, 6.7; R-02.
     the Remote Control check runs before the CLI's own profile fetch can land and
     refuses without it (S-6, 2026-10-06; this bullet said it was optional).
   - Remote pods unset `CLAUDE_CODE_OAUTH_TOKEN` and set
-    `CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=dev-env`. An image CI check fails if
+    `CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=dev-env`. agentd removes the token
+    from the agent's environment in remote mode: the operator leaves it out of a
+    remote pod, but a profile's `envFrom` Secret could still carry it (D-44). An image CI check fails if
     the image sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_GROWTHBOOK`,
     `DISABLE_TELEMETRY` or `DO_NOT_TRACK`.
 - **If S-1 failed** (not taken; kept for a CLI release that breaks the target): the
