@@ -197,7 +197,7 @@ B5 has two preconditions:
 6. **The App key secret** for release-please, if Q-14 goes to A (B4).
 
 Items 2, 3 and 5 are plain settings; HANDOFF lists them as a checklist. Q-12 to Q-14
-are asked at kickoff, after ratification, one at a time.
+are asked at kickoff, one at a time.
 
 An agent working outside under Tom's own gh login could make changes 1 and 2 with
 `gh api`, but only after Tom says yes to that exact change.

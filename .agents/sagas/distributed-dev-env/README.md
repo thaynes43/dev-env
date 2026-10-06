@@ -145,9 +145,9 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 16 | Ratify ADR-001 | **DECIDED** 2026-10-06 (Tom: "Accept as written") | [Ratification summary](adrs/001-distributed-dev-env.md#ratification-summary) |
 | 17 | Q-11: which link that survives restarts did Tom mean? | **DECIDED** 2026-10-06 (Tom) | The Claude Code auth (the Max `/login` on the PVC). The keeper is its sole owner; pods get access tokens only; the monthly renewal is a console page behind Authentik, replacing the chat relay; the console lists every session's link and status with an archive button; the codex hub keeps its own single enrolment (D-11, D-37). |
 | 18 | Summoned sessions are a first-class requirement | **DECIDED** 2026-10-06 (Tom: "we need to preserve the functionality") | [DESIGN-001 3.7](designs/001-dev-env-v2.md#37-summoned-sessions), D-36, R-01 V-01 to V-17, plan 10 |
-| 19 | Q-12: branch protection on this private repo, if Tom's plan does not enforce rulesets | **OPEN** 2026-10-06, to ask at kickoff after ratification | [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions); recommended: GitHub Pro (A). |
-| 20 | Q-13: visibility of `ghcr.io/thaynes43/dev-env-operator` | **OPEN** 2026-10-06, to ask at kickoff after ratification | Recommended: public (A). |
-| 21 | Q-14: how release-please gets release PRs checked by CI | **OPEN** 2026-10-06, to ask at kickoff after ratification | Recommended: a GitHub App key secret (A). |
+| 19 | Q-12: branch protection on this private repo, if Tom's plan does not enforce rulesets | **OPEN** 2026-10-06, to ask at kickoff | [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions); recommended: GitHub Pro (A). |
+| 20 | Q-13: visibility of `ghcr.io/thaynes43/dev-env-operator` | **OPEN** 2026-10-06, to ask at kickoff | Recommended: public (A). |
+| 21 | Q-14: how release-please gets release PRs checked by CI | **OPEN** 2026-10-06, to ask at kickoff | Recommended: a GitHub App key secret (A). |
 
 The full options, consequences and rulings for Q-01 to Q-14 are in
 [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions).
