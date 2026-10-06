@@ -29,16 +29,16 @@ flowchart LR
   subgraph callers[Callers]
     cli1[agent-run in an agent pod]
     cli2[agent-run on a laptop]
-    phone[Tom's phone via a Remote Control session]
+    phone["Tom's phone via a Remote Control session"]
   end
   subgraph sys[namespace dev-env-system]
-    op[dev-env-operator<br/>API + controllers]
-    keeper[dev-env-keeper<br/>credential owner]
+    op["dev-env-operator<br/>API + controllers"]
+    keeper["dev-env-keeper<br/>credential owner"]
   end
-  subgraph agents[namespace dev-agents, worker nodes only]
-    s1[session pod<br/>agentd + claude]
-    s2[session pod<br/>agentd + codex]
-    s3[session pod<br/>agentd + claude --remote-control]
+  subgraph agents["namespace dev-agents, worker nodes only"]
+    s1["session pod<br/>agentd + claude"]
+    s2["session pod<br/>agentd + codex"]
+    s3["session pod<br/>agentd + claude --remote-control"]
   end
   cli1 & cli2 -->|HTTPS /v1| op
   phone -.->|claude.ai| s3
@@ -102,7 +102,7 @@ v1 namespace `dev` is left alone until cutover.
 ```mermaid
 flowchart TB
   dep[Deployment dev-env-operator] -.->|no owner reference| sess
-  crd[CRD agentsessions.dev-env.haynesops.com<br/>Flux ks with prune disabled] --> sess[AgentSession haynes-ops-1005-202504]
+  crd["CRD agentsessions.dev-env.haynesops.com<br/>Flux ks with prune disabled"] --> sess["AgentSession haynes-ops-1005-202504"]
   sess -->|ownerReference| pod[Pod haynes-ops-1005-202504]
   sess -->|ownerReference| pvc[PVC home-haynes-ops-1005-202504]
 ```
@@ -265,7 +265,7 @@ stateDiagram-v2
   Suspended --> Running: resume
   Suspended --> Archived: archive timer (bundle verified first)
   Archived --> [*]
-  Running --> Failed: pod cannot start
+  Pending --> Failed: pod cannot start
   Failed --> Suspended: rescue what is on the volume
 ```
 
