@@ -15,7 +15,8 @@ work orders leave the ConfigMap 14 days after they are digested.
 ## Verdict
 
 1. The money goal works. Every LLM run in the window was served by the Max plan: 35
-   responder diagnoses, 20 shepherd and triage runs, and 56 executor sessions. Metered
+   responder diagnoses, 20 shepherd and triage runs, and 56 executor sessions (57 with
+   `wo-2757`, started 2026-09-03, just before the window). Metered
    spend on these paths has been $0 since July 2026.
 2. The headless lanes are reliable. Remediation (`rem-*`) closed 12 of 12 orders on
    its own in 4 to 15 minutes, and the daily cigar curation closed 33 of 33.
@@ -147,7 +148,7 @@ Sessions run with `--dangerously-skip-permissions` inside that boundary.
 | Triage remediate runs | 8 | 8; 6 ended "not an upgrade regression, no fix", each escalated | 0 | 0 |
 | rem-* orders | 12 | 9 `done` (fixes on 3 incidents: multus conf on talosw01, a Ceph crash archived, dev-env PVC space freed twice; 5 "nothing to fix") | 0; 3 `escalate`, all correct (two physical device faults, one drill) | 0 |
 | esc-* sessions | 11 | 9 `done`, 1 `failed` with a clear human step (merge #3181) | 1 lost to a pod restart | 0 |
-| wo-* shepherd orders | 1 (`wo-2757`, filed 2026-09-03) | 0 | 1: the session never answered, sat `claimed` 3.4 days, lost at a restart; Tom finished it by hand | 0 |
+| wo-* shepherd orders | 1 (`wo-2757`, filed and started 2026-09-03, two days before the window; counted because it held the lane into it) | 0 | 1: the session never answered, sat `claimed` 3.4 days, lost at a restart; Tom finished it by hand | 0 |
 | wo-* curation | 33 | 33 | 0 | 0 |
 
 Other numbers:
@@ -201,7 +202,7 @@ for himself.
 | F-02 | **Escalations ran on the `fable` alias.** `escalate.sh` wrote `model:"fable"` into each order, which overrides the lane default, so the pinned `OPS_ESC_MODEL` never applied (10 of 11 spawns). | Fixed in haynes-ops#3416 |
 | F-03 | **Every config merge kills in-flight sessions.** Reloader rolls the pod when its scripts, the shared `upgrade-coordination-lib` ConfigMap or its Secrets change. Lost: `wo-2757` (2026-09-06, #2771) and `esc-shepherd-73c8c97a` (2026-09-13, #2905, 1 h 40 min after Tom was paged). | Filed haynes-ops#3415 |
 | F-04 | **A busy esc lane queues escalations without paging.** The page fires on spawn. On 2026-09-13 two escalations waited 11 and 12 hours behind a finished window. #2974 fixed the finished-window case; a session that never reports still pins the lane with no bound. | Filed haynes-ops#3415 |
-| F-05 | **The wo lane was pinned for 16 days.** A finished window held its lane for the 24 h reap TTL, and the mute `wo-2757` session held it 3.4 days with no watchdog. | Fixed before this audit: #2974 and #2978 (2026-09-19) |
+| F-05 | **The wo lane was pinned for 16 days.** A finished window held its lane for the 24 h reap TTL, and the mute `wo-2757` session held it 3.4 days with no watchdog. Its pre-flight probe failed and its fallback was the same id as its primary (`claude-opus-5` for both until 2026-09-23), so the watcher launched it anyway and it never produced a reply: its transcript holds one synthetic message and nothing else. | Fixed before this audit: #2974 and #2978 (2026-09-19), and a fallback distinct from the primary since 2026-09-23 |
 | F-06 | **The executor's login probe is blind to F-01.** It runs `claude -p 'ok'`, which needs only inference; it logged `login probe ok` 40 times in the window. | In haynes-ops#3414 |
 | F-07 | **One setup token carries every automated path** (shepherd, triage, responder, all executor lanes, scribe-notes). Nothing records its mint date or warns before its roughly one-year life ends (around 2027-07). When it dies, the shepherd and responder quietly move to the metered key, and the only alarm is the executor's probe, whose page names the wrong file. | Noted in the haynes-ops remediation runbook (#3416); v2 requirement V-12 |
 | F-08 | **A re-fired signature reuses its rem key** and overwrites the finished entry (`rem-responder-b7baaf6c` on 09-25 and 09-26; `rem-responder-ff1db1ab` for the 09-12 drill and the 09-23 real crash). An outcome not yet digested is lost from the digest. | Noted |
