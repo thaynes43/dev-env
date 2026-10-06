@@ -2,8 +2,8 @@
 
 **Status:** backlog
 **Depends on:** 03, 04, 07 (break-glass must exist before v1 and its headlamp habit
-go), Q-08 applied (no BestEffort household pods on the workers), and Tom's explicit
-approval
+go), Q-08's LimitRange live in haynes-ops (no BestEffort household pods), and Tom's
+explicit approval
 **Parallel with:** nothing
 
 ## Goal

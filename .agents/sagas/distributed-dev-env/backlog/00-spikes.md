@@ -3,8 +3,8 @@
 **Status:** backlog
 **Depends on:** nothing. S-1, S-2, S-3, S-6 and S-7 run in the v1 pod today; S-4 and
 S-5 need two session pods and run in phases 3 and 4; S-8 and S-12 run in phase 1,
-S-10 in phase 2, S-9 and S-11 before plan 09.
-**Parallel with:** Tom answering Q-06 to Q-08 (Q-01 to Q-05 were answered on
+S-10 in phase 2, S-9, S-11, S-13 and S-14 before plan 09.
+**Parallel with:** Tom answering Q-09 and Q-10 (Q-01 to Q-08 were answered on
 2026-10-06)
 
 ## Goal
@@ -132,9 +132,40 @@ a CRD delete and a write in `kyverno` must all be refused, while an eviction in
 `kube-system` is allowed. Check whether the ValidatingAdmissionPolicy sees
 `CONNECT` for exec; if not, the Kyverno rule carries it. Decides D-19.
 
+## S-13: the dynamic GPU budget (before plan 09)
+
+On talosw04 with Tom's lend label set, after S-9: run an agent-priority pod holding
+8 units, then create a reserve pod at priority -1 for 8 units. Check the scheduler
+preempts the agent pod with its termination grace and places the reserve pod. Then
+check that a priority-0 pod preempts the reserve pod, and that a gated pod's node
+affinity can be narrowed before its gate is removed.
+Separately, read each household probe once a minute for an hour of normal use, never
+writing: Ollama `GET /api/ps`, ComfyUI `GET /queue`, Immich `GET /api/jobs`,
+llama-server `GET /slots`, beside the exporter's used VRAM. Record whether each probe
+shows demand before the VRAM rises, and by how much. Decides D-34's probes and its
+15-minute cool-down.
+
+## S-14: satellites (before plan 09, with Tom present)
+
+One machine at a time, Tom at the keyboard:
+
+1. Install a llama.cpp build (Metal on the Mac, CUDA on Windows) and serve one pool
+   model behind a throwaway bearer token on the LAN. Record tokens per second for
+   that model and the load time from local disk.
+2. On the Mac, the same model through `mlx_lm.server`; record tokens per second.
+   Note the GPU wired-memory default and the `iogpu.wired_limit_mb` setting.
+3. On a PC, start a game and check that the owner-first signal (another process
+   holding VRAM) fires within 10 seconds. On the Mac, unplug power and check the
+   battery signal.
+4. From one session pod, with a temporary egress grant to that machine, call the
+   endpoint once.
+
+No load test. Remove the throwaway token afterwards. Decides D-35's engine per OS and
+its owner-first signals.
+
 ## Acceptance
 
 - Each spike has a result line in DESIGN-001 section 13 and a dated note in the
   section it decides.
-- D-11 and D-12 say which path the build takes; D-19, D-22, D-29, D-30 and D-33
-  record their spike's result.
+- D-11 and D-12 say which path the build takes; D-19, D-22, D-29, D-30, D-33, D-34
+  and D-35 record their spike's result.
