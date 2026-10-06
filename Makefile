@@ -29,8 +29,9 @@ BINARIES := agent-run agentd dev-env-keeper dev-env-operator
 # Stamped into every binary (internal/version). VERSION is the release tag; there
 # is none before release-please's first release (B4). COMMIT stays empty here
 # because the Go toolchain stamps the revision and a "-dirty" mark itself from
-# the checkout; set it where there is no .git, as in an image build. An empty
-# value falls back to the toolchain's stamp.
+# the checkout. An empty value falls back to the toolchain's stamp. Where there is
+# no .git, as in an image build, neither source exists: pass COMMIT=<sha>, and
+# VERSION=<release tag> on a release build, or the binaries report "dev".
 VERSION ?= $(shell git describe --tags --match 'v[0-9]*' --dirty 2>/dev/null)
 COMMIT ?=
 VERSION_PKG := github.com/thaynes43/dev-env/internal/version

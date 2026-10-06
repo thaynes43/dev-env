@@ -164,9 +164,10 @@ is left alone until cutover.
 **D-38 (2026-10-06, KICKOFF B1). The keeper is its own binary, `dev-env-keeper`,
 shipped in the operator image.** The broker is a mode of the operator binary because
 it shares the operator's shape: a controller-runtime manager, two replicas with
-leader election, CRDs to reconcile and HTTP to serve. The keeper shares none of it.
-It is one replica by rule (one owner per rotating refresh token), it reconciles no
-CRD, and its work is a timer loop that mints and refreshes credentials. It is also
+leader election, CRDs to reconcile and HTTP to serve. The keeper's shape differs.
+It is one replica by rule (one owner per rotating refresh token), it owns no CRD
+(for credential grants it only reads `AccessGrant`, 6.11), and its main work is a
+timer loop that mints and refreshes credentials. It is also
 the one process that holds the GitHub App keys and the Max login. As a separate
 binary it links only what that job needs. The keeper binary has no `/v1` API server
 and no controllers, so they can never run in the pod that mounts those keys. The

@@ -129,8 +129,10 @@ Makefile               generate, lint, test, build; test parallelism capped
   the agent image only when `images/agent/**` changes. They build and never push.
   B2 adds `images/operator/Dockerfile`, which B1 left out because nothing in B1
   builds an image. It ships both `dev-env-operator` and `dev-env-keeper` (D-38), built
-  with `make build` (or the same flags). The build has no `.git`, so pass
-  `COMMIT=<sha>`.
+  with `make build` (or the same flags). The build has no `.git`, so neither
+  `git describe` nor the toolchain's VCS stamp is there: pass `COMMIT=<sha>`
+  always, and `VERSION=<release tag>` on release builds. Without `VERSION` the
+  binaries report `dev`.
 - **The aggregate job.** `CI - Success` needs every job above, runs `if: always()`,
   and fails if any of them failed or was cancelled. It is the only check to make
   required. Do not put `paths:` filters on the workflow trigger: a docs-only PR must
