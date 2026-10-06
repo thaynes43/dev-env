@@ -2,9 +2,10 @@
 
 **Status:** design, Proposed (2026-10-05; Tom's rulings folded in 2026-10-06).
 Nothing is built. The architecture is in [ADR-001](adrs/001-distributed-dev-env.md)
-and the detail in [DESIGN-001](designs/001-dev-env-v2.md). Tom ruled on Q-01 to Q-05
-on 2026-10-06 and widened the scope: tool pods, GPUs, local models, and access
-without in-pod prompts. Three questions wait on him (Q-06 to Q-08, below); the spikes in
+and the detail in [DESIGN-001](designs/001-dev-env-v2.md). Tom ruled on Q-01 to Q-08
+on 2026-10-06 and widened the scope: tool pods, a dynamic GPU budget, satellite
+inference workers, local models, and access without in-pod prompts. Two questions
+wait on him (Q-09, Q-10, below); the spikes in
 [backlog 00](backlog/00-spikes.md) can run before they are answered.
 
 **Working rules:** this repo's [CLAUDE.md](../../../CLAUDE.md). Docs first. Ask Tom
@@ -30,6 +31,7 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 9 | (2026-10-06) Agents spin up specialised tools on other pods, some with a GPU: image gen, whisper, Blender, 3D-printer tools, MiniMax and other video gen, audio gen | 8.1 |
 | 10 | (2026-10-06) Agents may use the gasha01 storage | 6.6 |
 | 11 | (2026-10-06) Agents skip their vendor's permission prompts; Tom keeps control of cluster and external access, which agents request; agents can reach the web; local models such as Qwen work the same way | 6.10 to 6.13 |
+| 12 | (2026-10-06) GPU allocation adjusts dynamically to what the household needs VRAM for; larger models run on satellite workers: the 128 GB M5 MacBook, the 5090 and 4090 PCs | 8.2 to 8.4 |
 
 ## Architecture at a glance
 
@@ -50,7 +52,11 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
   three dev-env namespaces.
 - **Tool pods** (namespace `dev-tools`, any node that fits): Blender, audio, image,
   video, transcription, 3D-printer tools and local model servers, started on demand
-  and stopped when idle; GPUs counted in VRAM, household first.
+  and stopped when idle; GPUs counted in VRAM, with an agent share per card that
+  grows and shrinks with household demand, household first.
+- **Satellites**: Tom's M5 MacBook (128 GB) and his 5090 and 4090 PCs serve models to
+  agents through a small `dev-env-satellite` program, only while he is not using
+  them.
 - **`agent-run`**: one static Go CLI with v1's verbs, calling the API from anywhere.
 - Shared state, item by item, is in DESIGN-001 section 6.
 
@@ -75,11 +81,14 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
    a shared mirror.
 6. **Open web egress makes credentials the boundary.** Agents get the web they need,
    so a page that tricks an agent can leak whatever its pod holds. The allowlist never
-   stopped that (github.com and both model vendors were always on it). Q-07 asks
-   whether the root-equivalent credentials leave the default set.
+   stopped that (github.com and both model vendors were always on it). So the
+   root-equivalent credentials leave the default set and come as short-lived grants
+   (Q-07, Tom 2026-10-06).
 7. **GPU accounting touches household apps.** The scheduler cannot share GPUs fairly
-   until every GPU workload, household ones included, declares its VRAM. Today they
-   pin cards by UUID and the scheduler sees nothing.
+   until every GPU workload, household ones included, declares its VRAM, and the
+   dynamic budget needs each one's burst and an activity probe. Today they pin cards
+   by UUID and the scheduler sees nothing. Lending a batch app's idle VRAM means its
+   first job after a lend can wait about two minutes (Q-09).
 8. **The broker is powerful.** It can grant break-glass: every verb outside the
    dev-env namespaces except Secrets, token minting, RBAC and admission changes, for
    up to an hour. It runs apart from the operator, binds only a named catalog of
@@ -89,7 +98,11 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 10. **No fleet cap means workers can saturate.** On 2026-10-05 the pods that failed
    were BestEffort (no CPU request, CPU weight 1); the kubelet was fine. A busy v2
    fleet could saturate a worker the same way, so every household pod needs a CPU
-   request first (Q-08).
+   request first (Q-08: a Kyverno LimitRange, in flight in haynes-ops).
+11. **The big local models live on Tom's own machines.** The cluster's free VRAM is
+   small (one worker 3090, already busy with the house). Large models run on the
+   satellites, which are there only when Tom is not using them, so local-model agents
+   wait or fall back to smaller models when he is.
 
 ## Decision log
 
@@ -105,11 +118,13 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 8 | Q-05: where repos, worktrees and agent state live | **DECIDED** 2026-10-06 (Tom) | A block volume per session plus a small shared CephFS (A), and agents may use gasha01: session volumes on `gasha01-rbd`, the shared volume on in-cluster CephFS (D-22). |
 | 9 | Access model: no prompts in the pod, control at the platform, grants on request | **PROPOSED** 2026-10-06, from Tom's direction | [DESIGN-001 6.10 to 6.13](designs/001-dev-env-v2.md#612-access-no-prompts-in-the-pod-control-at-the-platform) (D-23 to D-27, D-33) |
 | 10 | Tool pods, GPUs and local LLMs | **PROPOSED** 2026-10-06, from Tom's Q-04 ruling | [DESIGN-001 section 8](designs/001-dev-env-v2.md#8-tool-pods-gpus-and-local-llms) (D-28 to D-32) |
-| 11 | Q-06: may GPU tool pods run on the control-plane nodes that carry GPUs? | **OPEN** | recommended: yes, GPU tool and LLM pods only, capped at 2 CPU / 16Gi, never preempting |
-| 12 | Q-07: do the root-equivalent credentials (Proxmox operator token, hw-ssh key) stay in every session pod? | **OPEN** | recommended: move them behind the broker as short-lived credential grants |
-| 13 | Q-08: how does every household pod get a CPU request, so a saturated worker cannot starve it? | **OPEN** | recommended: a Kyverno-generated LimitRange with a 50m default CPU request in every non-system namespace |
+| 11 | Q-06: GPU placement for agents | **DECIDED** 2026-10-06 (Tom) | Dynamic allocation, not a static per-node rule: a VRAM budget per card, control-plane cards included, that follows household demand (D-34); satellite inference workers on his Mac and PCs (D-35). |
+| 12 | Q-07: do the root-equivalent credentials (Proxmox operator token, hw-ssh key) stay in every session pod? | **DECIDED** 2026-10-06 (Tom) | A: they move behind the broker as short-lived credential grants. |
+| 13 | Q-08: how does every household pod get a CPU request? | **DECIDED** 2026-10-06 (Tom) | A: a Kyverno-generated LimitRange with a 50m default CPU request in every non-system namespace; a cluster-wide v1 fix in haynes-ops, in flight. |
+| 14 | Q-09: which household GPU apps may lend their burst VRAM to agents while idle? | **OPEN** | recommended: only batch apps (ComfyUI, Immich ML); the voice stack and Ollama never lend |
+| 15 | Q-10: when may agents use Tom's satellite machines? | **OPEN** | recommended: only while awake and not in use by Tom; never woken |
 
-The full options and consequences for Q-01 to Q-08 are in
+The full options and consequences for Q-01 to Q-10 are in
 [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions).
 
 ## Plan backlog
@@ -122,10 +137,10 @@ v1 stays live throughout. No v2 plan edits haynes-ops'
 | [00: spikes](backlog/00-spikes.md) | nothing | yes, with Tom's answers |
 | [01: foundation, task mode](backlog/01-foundation.md) | Q-01, Q-02, Q-04, Q-05 (all decided); spikes S-7, S-8, S-12 | |
 | [02: interactive sessions and lifecycle](backlog/02-interactive-lifecycle.md) | 01 | with 07 |
-| [07: access broker](backlog/07-access-broker.md) | 01; Q-07 for credential grants | with 02 |
+| [07: access broker](backlog/07-access-broker.md) | 01; Q-07 (decided) | with 02 |
 | [03: Remote Control](backlog/03-remote-control.md) | 02; spikes S-1, S-2, S-5, S-6 | |
 | [04: rolling updates and Codex](backlog/04-rolling-updates-codex.md) | 02, Q-03 (decided); spikes S-3, S-4 | with 03 |
-| [05: cutover from v1](backlog/05-cutover.md) | 03, 04, 07; Q-08 applied; Tom's approval | |
+| [05: cutover from v1](backlog/05-cutover.md) | 03, 04, 07; Q-08's LimitRange live in haynes-ops; Tom's approval | |
 | [08: tool pods](backlog/08-tool-pods.md) | 02; spike S-10 | with 03, 04 |
-| [09: GPUs and local LLMs](backlog/09-gpu-local-llm.md) | 08; Q-06; spikes S-9, S-11 | |
+| [09: GPUs, satellites and local LLMs](backlog/09-gpu-local-llm.md) | 08; Q-06 (decided), Q-09, Q-10; spikes S-9, S-11, S-13, S-14 | |
 | [06: later](backlog/06-later.md) | 05 | each item on its own |

@@ -1,8 +1,8 @@
 # 07: access broker
 
 **Status:** backlog
-**Depends on:** 01 (the baseline guard and egress tiers are in place); Q-07 for the
-credential grants only
+**Depends on:** 01 (the baseline guard and egress tiers are in place); Q-07 (Tom
+2026-10-06: credential grants, A)
 **Parallel with:** 02
 
 ## Goal
@@ -32,9 +32,12 @@ audited, and the headlamp path is no longer needed. DESIGN-001 6.12, D-23 to D-2
     only, fresh Authentik login (5 minutes), Pushover at high priority; at expiry the
     keeper forces a refresh of both logins and the broker sends Tom the audit list of
     objects the grant created;
-  - `credential` (if Q-07 picks A): the keeper installs the Proxmox operator token or
-    an hw-ssh certificate from its SSH CA into the pod's tmpfs, and removes it at
-    expiry.
+  - `credential` (Q-07, Tom 2026-10-06): the keeper installs a Proxmox API token for
+    `dev-env@pve` that expires with the grant, or an hw-ssh certificate from its SSH
+    CA valid for the grant's TTL, into the pod's tmpfs, and removes it at expiry.
+    First check that the operator token can mint expiring tokens for its own user;
+    if not, the keeper installs the operator token itself and the approval page says
+    that a copied value outlives the grant.
 - The operator's backstop: delete expired grants' network policies if the broker is
   down; re-install active grants after a drain.
 - agentd: `grant-install`, kube contexts, and the built-in `dev-env` MCP server's
@@ -62,10 +65,13 @@ audited, and the headlamp path is no longer needed. DESIGN-001 6.12, D-23 to D-2
   the broker as an ExternalSecret.
 - Ship the API server audit lines for `system:serviceaccount:dev-agents:grant-*` to
   Loki, if they are not shipped already.
-- Credential grants (Q-07 A only): the keeper's SSH CA public key trusted by the
-  `dev-env` user on the Proxmox nodes (`TrustedUserCAKeys`), set through hw-ssh with
-  `declare-activity`, and the operator token and hw-ssh key removed from profile
-  `full`.
+- Credential grants (Q-07): the keeper's SSH CA public key trusted by the `dev-env`
+  user on the Proxmox nodes and by root on HaynesTower (`TrustedUserCAKeys`; Unraid
+  keeps its sshd config on the flash drive), set through hw-ssh with
+  `declare-activity`; the Proxmox operator token and the hw-ssh key moved from the
+  `dev-agents` Secrets to the keeper's namespace; profile `full` no longer mounts
+  them. A GrantPolicy may approve credential grants for named repos (for example
+  haynes-ops ops sessions), so routine Proxmox work does not ping Tom.
 
 ## Acceptance
 
