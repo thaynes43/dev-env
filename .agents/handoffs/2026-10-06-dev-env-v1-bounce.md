@@ -194,7 +194,8 @@ gh run watch "$RUN" -R $R --exit-status                    # about 6 minutes
 ghcr "$V"                                                  # 200 and a docker-content-digest
 # Cross-check: the digest the run pushed and signed must be the same one.
 gh run view "$RUN" -R $R --log | grep -E "$V: digest: sha256|DIGEST: sha256"
-export NEW="$V@sha256:<the digest above>"
+export NEW="$V@$(ghcr "$V" | grep -i docker-content-digest | awk '{print $2}' | tr -d '\r')"
+echo "$NEW"                       # e.g. 0.6.8@sha256:<64 hex>, the same digest the log shows
 ```
 
 The `Accept` header must include the single-image manifest types. This image is
@@ -225,7 +226,9 @@ git log --oneline --merges origin/main..HEAD   # one merge per PR you folded
 to run while a merge is still open.
 
 ```bash
-if git rev-parse -q --verify MERGE_HEAD >/dev/null || [ -n "$(git diff --name-only --diff-filter=U)" ]; then
+if ! printf '%s' "$NEW" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$'; then
+  echo "NEW='$NEW' is not a <ver>@sha256:<64 hex> pin: set it as at the end of step 2"
+elif git rev-parse -q --verify MERGE_HEAD >/dev/null || [ -n "$(git diff --name-only --diff-filter=U)" ]; then
   echo "a merge is still open or has conflicts: finish block A first"
 else
   export OLD=$(git grep -h -o -E '[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}' -- \
