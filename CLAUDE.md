@@ -46,8 +46,9 @@ cmd/agent-run/           the CLI, one static binary (CGO_ENABLED=0, D-06)
 internal/version/        the build identity every binary's `version` prints
 internal/testenv/        starts envtest (kube-apiserver + etcd) with config/crd/ installed, for test suites
 internal/templates/      parses and checks dev-env-templates, the GitOps data pods are built from; its revision (D-44)
-internal/controller/     the AgentSession reconciler: each session's pod and volume (D-44). Its envtest suite proves
-                         DESIGN-001 5.1 (no owner reference to the operator; no pod or volume write or delete)
+internal/controller/     the AgentSession reconciler: each session's pod and volume (D-44), the reap finalizer and the
+                         one guarded pod delete (D-45). Its envtest suite proves DESIGN-001 5.1 (no owner reference
+                         to the operator; no pod or volume write or delete; delete and suspend wait for rescue)
 internal/agentd/         agentd: config rendering (the dev-init.sh port), clone and worktree, the task runner, heartbeat,
                          status and rescue; tests fake claude and tmux and run git against a bare repo in t.TempDir()
 internal/agentd/protocol/  what agentd and the operator exchange: the session document, the status, the heartbeat route,

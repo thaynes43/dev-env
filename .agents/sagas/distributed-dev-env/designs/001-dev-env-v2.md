@@ -192,6 +192,8 @@ operator Deployment.** The CRDs ship in their own Flux Kustomization with
 `prune: disabled`, and the operator adds no finalizer that deletes pods. Deleting or
 rolling the operator therefore cannot delete a session. Only an explicit reap, or a
 human deleting the `AgentSession`, removes a pod. See [5.1](#51-operator-broker-and-keeper-upgrades-never-touch-sessions).
+The one finalizer the operator does add (D-45) only holds: it keeps a deleted
+session, and its volume, until the reap has rescued them, and it deletes nothing.
 
 ### 3.3 The AgentSession resource
 
@@ -911,6 +913,47 @@ Rules, each enforced by a test in the operator's CI:
 
 Phase 1 proves this: run `kubectl rollout restart deploy/dev-env-operator` while a
 task session is mid-turn. The task must finish untouched.
+
+**D-45 (2026-10-06, plan 01 step 2). Deleting an `AgentSession` is a reap. A
+finalizer holds the session and its volume until rescue, and one guarded function
+deletes pods.**
+
+- **The finalizer.** The operator puts `dev-env.haynesops.com/rescue` on every
+  session before it creates anything for it, and creates the session's volume with
+  the same finalizer. The API server keeps an object that has a finalizer, and the
+  garbage collector deletes a pod or a volume only once its owner is gone, so it
+  never reaches them. A direct delete of the volume, or a foreground cascade, leaves
+  it terminating with its data until archive lifts the finalizer.
+- **A deleted session is reaped, never cascaded:** rescue, then suspend (the pod
+  goes), then archive (the volume goes once the bundle is verified, D-10), then the
+  finalizer comes off. Rescue is plan 01 step 5. Until it lands, a deleted or
+  suspended session keeps its pod and volume, and the condition `RemovalBlocked` says
+  why (`DeleteNeedsRescue` or `SuspendNeedsRescue`). A deleted session that never got
+  a pod or a volume has nothing to rescue and goes at once. The operator checks that
+  against the API server, not its cache, so a volume the cache has not seen yet
+  cannot lose its owner.
+- **One delete path.** `deletePod` is the only function that deletes, and only after
+  `podRemovalAllowed` allows it: in the Draining transition (plan 04) or the
+  Suspended one after a rescue. `releaseSession` is the only function that lifts the
+  finalizer. `TestOnlyTheGuardDeletes` reads the package's source and fails on any
+  other delete or finalizer removal, so a new path cannot land without a change to
+  that test, where review sees it.
+- **What stays in a human's hands** (3.4: destroying unrescued work needs a human
+  with `kubectl`): removing the finalizer from the session and from its volume, then
+  deleting them. A foreground cascade (`kubectl delete --cascade=foreground`) still
+  lets the garbage collector delete the pod, though not the volume: the running
+  process is lost, the work on the volume is not. An orphan delete strips the owner
+  references; the operator then treats the pod and the volume as not its own, leaves
+  them alone and reports them. Agents cannot do any of this: they have no write on
+  the `dev-env.haynesops.com` objects or in `dev-agents` (6.11).
+- **RBAC.** The session finalizer needs nothing new (the operator's own CRD group).
+  Archive must also lift the volume's finalizer, so plan 01 step 5 adds `patch` on
+  PVCs in `dev-agents` to the operator's row in 6.11.
+
+Rationale: 5.1 forbids deleting a Running session's pod outside drain and suspend,
+and D-10 puts rescue before any loss. Owner references alone hand that decision to
+the garbage collector the moment the session object goes; the finalizer keeps it
+with the operator, and the guard keeps it in one place.
 
 ### 5.2 New image or config reaches running sessions
 
@@ -2798,3 +2841,4 @@ step it names.
 | D-42 | A task runs once per volume, under `agentd run-agent` in tmux session `agent`, prompt on stdin, stream-json kept, timeout and turn cap enforced, the pod's SIGTERM forwarded to the CLI | 3.6 |
 | D-43 | `agentd ctl rescue` keeps v1's rules but commits through a copy of the index, leaving the worktree as it was, and prints the refs origin lacks for step 5's bundle | 3.6 |
 | D-44 | The operator builds one bare pod and one volume per session from `dev-env-templates` (strict format, revision = hash of the parsed content), places it per D-20 in code, and never updates or deletes either; no probes, 60 s grace, `Outdated` reported for plan 04 | 3.6 |
+| D-45 | Deleting an `AgentSession` is a reap: a finalizer on the session and its volume holds both until rescue; one guarded function deletes pods (Draining, or Suspended after rescue); `RemovalBlocked` reports the wait | 5.1 |
