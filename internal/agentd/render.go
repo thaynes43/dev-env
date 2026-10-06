@@ -14,15 +14,8 @@ import (
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
-// Step is the outcome of one boot step. Steps never stop the boot (DESIGN-001
-// 3.6): a failed one is reported and the next one runs.
-type Step struct {
-	Name string `json:"name"`
-	// State is ok, warn (done with a problem worth reading), skip (nothing to
-	// do here) or fail.
-	State string   `json:"state"`
-	Notes []string `json:"notes,omitempty"`
-}
+// Step is the outcome of one boot step (protocol.Step).
+type Step = protocol.Step
 
 // Step states.
 const (

@@ -56,8 +56,8 @@ post-ready does. DESIGN-001 3.8, 6.2, 6.7; R-02.
   archive its own entry (S-6), so the call matters when the CLI died first (SIGKILL,
   OOM, node loss).
 - **Shutdown and drain:** on its own SIGTERM, agentd sends SIGTERM to the CLI's pid
-  (from `sessions/<pid>.json`) and waits for it to exit inside the grace period.
-  `tini` signals only its own child, and the CLI runs under tmux, so nothing else
+  (from its own record, DESIGN-001 D-42) and waits for it to exit inside the grace
+  period. `tini` signals only its own child, and the CLI runs under tmux, so nothing else
   reaches it. The CLI then archives its entry, and agentd's `claude --resume <id>
   --remote-control <name>` unarchives it and reattaches (S-6). agentd does not
   SIGKILL the CLI to keep the entry listed.

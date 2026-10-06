@@ -298,6 +298,7 @@ HTTPS with a cert-manager certificate, JSON, versioned under `/v1`.
 | `POST /v1/sessions` | Create a session: repo, agent, mode, model, effort, prompt, base, size, profile. Summoning callers also send `name`, `idempotencyKey`, `lane`, and get `timeout` and `maxTurns` from their policy (3.7). Returns the id and state; a repeated idempotency key returns the existing session. |
 | `GET /v1/sessions`, `GET /v1/sessions/{id}` | List (filters: repo, state, mine, caller, lane, outcome) and detail: phase, node, revision, idle time, branch, Remote Control URL and state, outcome and note, usage. |
 | `POST /v1/sessions/{id}/outcome` | A session reports on itself: `working`, `done`, `failed` or `escalate`, with a note (3.7). Only the session's own token may call it. |
+| `POST /v1/sessions/{id}/heartbeat` | agentd's status every 60 s and on a task's end (D-41). Only the session's own pod token may call it. |
 | `GET /v1/sessions/{id}/log?tail=N` | Task log tail. The log is also kept on the shared volume after the pod is gone. |
 | `POST /v1/sessions/{id}/messages` | Relay a message into a session ([6.8](#68-messaging-between-agents)). |
 | `POST /v1/sessions/{id}/suspend` | Rescue, then stop the pod and keep the volume. |
@@ -433,6 +434,64 @@ variable, and its config port keeps v1's layout.**
   theme, security or trust prompt. `oauthAccount` (the account and organization uuids)
   comes from the file `AGENTD_OAUTH_ACCOUNT_FILE` names; plan 03 points that at the
   keeper's Secret. Task mode on the static token needs no `oauthAccount`.
+
+**D-41 (2026-10-06, plan 01 step 4). agentd's heartbeat is
+`POST /v1/sessions/{name}/heartbeat`.**
+
+- Every 60 s, once right after boot, and as soon as a task's result appears, agentd
+  posts its status as JSON (`protocol.Status`): the boot phase and the steps that
+  warned or failed, the worktree's branch and head, the agent's state, the task's
+  result and V-16's cost record. It authenticates with the pod's projected
+  ServiceAccount token for the audience `dev-env-operator`, read from
+  `AGENTD_API_TOKEN_FILE` at every beat because the kubelet rotates it. The operator
+  checks that the token's bound pod is the session's, as for `/outcome` (3.4), and
+  copies the status into `status.agent` and `status.usage`.
+- `agentd ctl status` prints the same document, built by the same code, so the exec
+  path (D-08) and the heartbeat never disagree.
+- The base URL is `AGENTD_API_URL`; `AGENTD_API_CA_FILE` adds the CA that signed the
+  API's certificate. With no URL, heartbeats are off and agentd says so once. A failed
+  heartbeat never touches the agent (D-01). agentd logs the first failure, every tenth
+  after it, and the recovery.
+- Rationale: D-08 asks for a heartbeat, but the API had no route for it. A route per
+  session keeps the same TokenReview check as `/outcome`, and agents still need no
+  RBAC in `dev-agents` (6.11). Plan 01 step 3 builds the operator's side.
+
+**D-42 (2026-10-06, plan 01 step 4). A task runs once, under `agentd run-agent` in
+tmux session `agent`.**
+
+- agentd writes `~/.agentd/launch.json` (mode 0600: the command, the prompt, the
+  worktree, the limits and a new conversation id) and starts
+  `tmux new-session -d -s agent -c <worktree> agentd run-agent --launch <file>`. The
+  pane runs `claude --model <id> [--effort <level>] --dangerously-skip-permissions
+  --session-id <uuid> [--max-turns <n>] --append-system-prompt <v1's guard>
+  --output-format stream-json --verbose -p`, with the prompt on stdin, so no prompt
+  passes through a shell or a command line. Checked on 2026-10-06 with CLI 2.1.292: a
+  one-turn Haiku task read its prompt from stdin, used the given session id, and its
+  result event carried the cost and token counts.
+- run-agent writes a readable log to the pane and to `~/work/<name>.log` (v1's path),
+  keeps the raw events in `~/.agentd/task-events.jsonl`, and when the CLI exits writes
+  `~/.agentd/task-result.json`: the exit code, whether `limits.timeout` stopped it,
+  the result's subtype and turn count, and the cost record. At `limits.timeout` it
+  sends SIGTERM, then SIGKILL to the CLI's process group 30 s later.
+  `limits.maxTurns` becomes `--max-turns`.
+- **A task starts once per volume.** If `launch.json` exists and no result does (a
+  container restart mid-task), agentd reports the agent `interrupted` and does not
+  start it again: a second run of the same prompt could open a second PR. Resuming
+  the conversation (`--resume <conversation id>`) is plan 02's.
+- **The pod's SIGTERM reaches the CLI** (6.7, S-6). run-agent records the CLI's pid
+  and its start time in `~/.agentd/agent.pid`. On its own SIGTERM, agentd sends
+  SIGTERM to that pid and waits up to 30 s for it to exit. The pid comes from agentd's
+  own record rather than `sessions/<pid>.json`, because agentd started the CLI; the
+  start time keeps a reused pid from being signalled. The pod's termination grace
+  period must be longer than 30 s (plan 01 step 2).
+- **Plan credentials only** (V-05). agentd refuses to start a task without
+  `CLAUDE_CODE_OAUTH_TOKEN`, and removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`
+  and the four variables of 6.2 from the agent's environment. `GH_TOKEN` is read from
+  `/creds/gh_token` as the CLI starts.
+- Not in plan 01: `local` and `remote` modes (plans 02 and 03), Codex task pods
+  (plan 04, after S-3), opencode (plan 09), and V-04's one-turn pre-flight with a
+  fallback model (plan 10). For a task, the CLI's own `--fallback-model` may do that
+  job; plan 10 decides.
 
 The agent runs with no approval prompts (D-23). Pod spec, inherited from v1 where
 the lesson still applies: non-root uid 1000,
@@ -1139,8 +1198,8 @@ clone belongs to one session.
   skip the archive. (This bullet said "a drain never archives" until S-6.)
   **agentd forwards the pod's SIGTERM to the CLI.** `tini` (PID 1, D-07) signals only
   its own child, and the CLI runs under tmux, so the kubelet's SIGTERM never reaches
-  it by itself. On SIGTERM, agentd sends SIGTERM to the CLI's pid (from
-  `sessions/<pid>.json`) and waits for it to exit inside the grace period. S-6 sent
+  it by itself. On SIGTERM, agentd sends SIGTERM to the CLI's pid (from its own
+  record, D-42) and waits for it to exit inside the grace period. S-6 sent
   that signal to the CLI's pid directly. Without the forward, the CLI is SIGKILLed
   when the grace period ends, and its entry goes offline without an archive (S-15
   step 1). Ending the tmux session sends SIGHUP instead, which S-6 did not test.
@@ -2565,3 +2624,5 @@ step it names.
 | D-38 | The keeper is its own binary, `dev-env-keeper`, in the operator image; the broker stays a mode of the operator binary | 3.1 |
 | D-39 | The AgentSession schema enforces the per-session rules as CEL; spec is immutable after create except `operatingMode` and `lifecycle`; per-caller rules stay in CallerPolicy's schema | 3.3 |
 | D-40 | agentd reads its session from `AGENTD_SESSION` (JSON, `internal/agentd/protocol`); pod settings default to v1's paths; the `dev-init.sh` port links Playwright browsers and seeds onboarding and trust | 3.6 |
+| D-41 | agentd's heartbeat: `POST /v1/sessions/{name}/heartbeat` with the pod's projected token, every 60 s and on a task's end; `agentd ctl status` prints the same status | 3.6 |
+| D-42 | A task runs once per volume, under `agentd run-agent` in tmux session `agent`, prompt on stdin, stream-json kept, timeout and turn cap enforced, the pod's SIGTERM forwarded to the CLI | 3.6 |

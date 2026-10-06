@@ -3,6 +3,8 @@ package agentd
 import (
 	"errors"
 	"path/filepath"
+	"strings"
+	"time"
 )
 
 // Settings is the pod-level configuration agentd reads from its environment.
@@ -58,8 +60,26 @@ type Settings struct {
 	// puts its pinned tools.
 	UserBin   string
 	SystemBin string
-	// ClaudeBin is the Claude Code CLI, "claude" on PATH.
+	// ClaudeBin is the Claude Code CLI, "claude" on PATH; TmuxBin is tmux.
 	ClaudeBin string
+	TmuxBin   string
+	// RemoteBase is where repos are cloned from: <RemoteBase>/<repo>
+	// (AGENTD_REMOTE_BASE, default https://github.com/thaynes43).
+	RemoteBase string
+	// TokenWait is how long the clone waits for GHTokenFile to appear, as v1's
+	// post-ready does (90 s).
+	TokenWait time.Duration
+	// APIURL is the operator API's base URL (AGENTD_API_URL). Empty turns
+	// heartbeats off.
+	APIURL string
+	// APITokenFile is the projected ServiceAccount token for the audience
+	// dev-env-operator (AGENTD_API_TOKEN_FILE, default
+	// /var/run/secrets/dev-env/token). Read at every heartbeat: the kubelet
+	// rotates it.
+	APITokenFile string
+	// APICAFile, when set, is the CA bundle that signed the API's certificate
+	// (AGENTD_API_CA_FILE).
+	APICAFile string
 	// Getenv reads the pod's environment, for ${VAR} references in mcp.json.
 	Getenv func(string) string
 }
@@ -94,6 +114,12 @@ func LoadSettings(getenv func(string) string) (Settings, error) {
 		UserBin:           filepath.Join(home, ".local", "bin"),
 		SystemBin:         "/usr/local/bin",
 		ClaudeBin:         "claude",
+		TmuxBin:           "tmux",
+		RemoteBase:        strings.TrimSuffix(or("AGENTD_REMOTE_BASE", "https://github.com/thaynes43"), "/"),
+		TokenWait:         90 * time.Second,
+		APIURL:            strings.TrimSuffix(getenv("AGENTD_API_URL"), "/"),
+		APITokenFile:      or("AGENTD_API_TOKEN_FILE", "/var/run/secrets/dev-env/token"),
+		APICAFile:         getenv("AGENTD_API_CA_FILE"),
 		Getenv:            getenv,
 	}
 	if dir := getenv("CLAUDE_CONFIG_DIR"); dir != "" {
@@ -117,3 +143,12 @@ func (s Settings) ClonePath(repo string) string { return filepath.Join(s.ReposDi
 
 // WorktreePath is ~/work/<name>.
 func (s Settings) WorktreePath(name string) string { return filepath.Join(s.WorkDir(), name) }
+
+// RemoteURL is the clone URL of a repo.
+func (s Settings) RemoteURL(repo string) string { return s.RemoteBase + "/" + repo }
+
+// LogPath is the task's log, ~/work/<name>.log as in v1.
+func (s Settings) LogPath(name string) string { return filepath.Join(s.WorkDir(), name+".log") }
+
+// statePath is a file in agentd's state directory.
+func (s Settings) statePath(name string) string { return filepath.Join(s.StateDir, name) }

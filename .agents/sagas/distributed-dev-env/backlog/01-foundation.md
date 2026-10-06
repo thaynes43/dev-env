@@ -23,11 +23,15 @@ step. Tick a step in the PR that lands it.
   the main cluster's minor.
 - [ ] 2. Pods and volumes from the size class and `dev-env-templates`, placed per
   DESIGN-001 section 7, with the 5.1 tests.
+  The pod gives agentd what D-40 to D-42 name: `AGENTD_SESSION`, `AGENTD_API_URL`,
+  the projected token at `/var/run/secrets/dev-env/token` (audience
+  `dev-env-operator`), and a termination grace period over 30 s.
 - [ ] 3. The `/v1` API (`sessions`, `fleet`) with TokenReview auth.
 - [ ] 4. agentd: config rendering, partial clone and worktree, tmux start,
   heartbeat, `ctl status|rescue` (DESIGN-001 3.6, D-40), in three PRs:
   - [x] config rendering, the port of `dev-init.sh`: `agentd render` (#25);
-  - [ ] partial clone and worktree, the task in tmux, heartbeat, `agentd ctl status`;
+  - [x] partial clone and worktree, the task in tmux, heartbeat, `agentd ctl status`
+    (PR_B; D-41, D-42);
   - [ ] `agentd ctl rescue`, the entry point step 5 extends with the bundle.
 - [ ] 5. Rescue to a bundle on the shared volume (D-10), then suspend and archive.
 - [ ] 6. The minimal keeper: mint the gh token every 40 minutes.

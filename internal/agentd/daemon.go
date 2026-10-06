@@ -1,0 +1,179 @@
+package agentd
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"syscall"
+	"time"
+
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+)
+
+// Daemon is `agentd run`, the session pod's supervisor under tini (DESIGN-001
+// 3.6): it renders the config, prepares the repo, starts the agent, then
+// heartbeats until SIGTERM, when it forwards the signal to the agent CLI and
+// waits for it.
+type Daemon struct {
+	S       Settings
+	R       Runner
+	Log     *slog.Logger
+	Session protocol.Session
+	// Self is agentd's own path, which the tmux pane runs as `run-agent`.
+	Self string
+	// Send posts a heartbeat; nil turns heartbeats off.
+	Send func(context.Context, protocol.Status) error
+	// Interval is the heartbeat period (60 s, DESIGN-001 3.6); Poll is how
+	// often agentd looks for the task's result, to report it at once.
+	Interval time.Duration
+	Poll     time.Duration
+	// StopGrace is how long shutdown waits for the agent CLI after SIGTERM.
+	// It must fit in the pod's termination grace period.
+	StopGrace time.Duration
+	// Now is the clock; nil means time.Now.
+	Now func() time.Time
+
+	failures int
+}
+
+func (d *Daemon) now() time.Time {
+	if d.Now != nil {
+		return d.Now()
+	}
+	return time.Now()
+}
+
+// Run boots and supervises until ctx ends. Boot steps never stop it: a step
+// that fails is reported in the status, and the heartbeat goes on, so the
+// operator sees why a session is not working.
+func (d *Daemon) Run(ctx context.Context) error {
+	if err := os.MkdirAll(d.S.StateDir, 0o700); err != nil {
+		return fmt.Errorf("state dir: %w", err)
+	}
+	rec := bootRecord{BootID: newBootID(), BootedAt: d.now().UTC(), Boot: protocol.BootBooting}
+	if err := writeJSONFile(d.S.statePath(bootFile), rec); err != nil {
+		return fmt.Errorf("boot record: %w", err)
+	}
+	d.Log.Info("boot", "session", d.Session.Name, "boot", rec.BootID, "repo", d.Session.Repo, "agent", d.Session.Agent, "mode", d.Session.Mode, "model", d.Session.Model, "promptBytes", len(d.Session.Prompt))
+	d.beat(ctx)
+
+	steps := Render(ctx, d.R, d.S, d.Session)
+	ws, repoStep := PrepareRepo(ctx, d.R, d.S, d.Session)
+	steps = append(steps, repoStep)
+	agentStep, agentErr := d.startAgent(ctx, ws, repoStep, rec.BootID)
+	steps = append(steps, agentStep)
+	LogSteps(d.Log, steps)
+
+	rec.Steps, rec.Workspace, rec.AgentError = steps, &ws, agentErr
+	rec.Boot = protocol.BootReady
+	if agentErr != "" {
+		rec.Boot = protocol.BootFailed
+	}
+	if err := writeJSONFile(d.S.statePath(bootFile), rec); err != nil {
+		d.Log.Error("boot record", "err", err)
+	}
+	d.beat(ctx)
+	return d.supervise(ctx)
+}
+
+// startAgent starts the task unless this volume already started it once
+// (D-42). It returns the boot step and, when the agent cannot run, why.
+func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Step, bootID string) (Step, string) {
+	const name = "agent"
+	if repo.State == StepFail {
+		why := "the repo step failed, so the agent was not started"
+		return newStep(name, nil, errors.New(why)), why
+	}
+	var res taskResult
+	if readJSONFile(d.S.statePath(resultFile), &res) == nil {
+		return skipStep(name, fmt.Sprintf("the task already finished (exit %d at %s); not started again", res.ExitCode, res.FinishedAt.Format(time.RFC3339))), ""
+	}
+	var l Launch
+	if readJSONFile(d.S.statePath(launchFile), &l) == nil {
+		return newStep(name, []string{fmt.Sprintf("WARN the task was started at %s by boot %s and left no result; agentd never starts a task twice (D-42)", l.CreatedAt.Format(time.RFC3339), l.BootID)}, nil), ""
+	}
+	launch, err := BuildLaunch(d.S, d.Session, ws, bootID, d.now())
+	if err != nil {
+		return newStep(name, nil, err), err.Error()
+	}
+	if err := StartAgent(ctx, d.R, d.S, launch, d.Self); err != nil {
+		return newStep(name, nil, err), err.Error()
+	}
+	return newStep(name, []string{fmt.Sprintf("claude task started in tmux session %q, conversation %s", TmuxSession, launch.ConversationID)}, nil), ""
+}
+
+func (d *Daemon) supervise(ctx context.Context) error {
+	tick := time.NewTicker(d.Interval)
+	defer tick.Stop()
+	poll := time.NewTicker(d.Poll)
+	defer poll.Stop()
+	last := newestMtime(d.S.statePath(resultFile))
+	for {
+		select {
+		case <-ctx.Done():
+			d.shutdown()
+			return nil
+		case <-tick.C:
+			d.beat(ctx)
+		case <-poll.C:
+			if m := newestMtime(d.S.statePath(resultFile)); !m.Equal(last) {
+				last = m
+				d.Log.Info("the task finished")
+				d.beat(ctx)
+			}
+		}
+	}
+}
+
+// shutdown forwards the pod's SIGTERM to the agent CLI and waits for it to
+// exit, up to StopGrace. tini signals only agentd, and the CLI runs under
+// tmux, so nothing else would reach it; a CLI that is SIGKILLed instead
+// leaves its Remote Control entry offline and unarchived (S-6, S-15).
+func (d *Daemon) shutdown() {
+	var p agentPid
+	if readJSONFile(d.S.statePath(pidFile), &p) == nil && pidAlive(p) {
+		d.Log.Info("SIGTERM: forwarding to the agent", "pid", p.Pid, "grace", d.StopGrace)
+		if err := syscall.Kill(p.Pid, syscall.SIGTERM); err != nil {
+			d.Log.Warn("SIGTERM to the agent", "err", err)
+		}
+		deadline := time.Now().Add(d.StopGrace)
+		for pidAlive(p) && time.Now().Before(deadline) {
+			time.Sleep(100 * time.Millisecond)
+		}
+		if pidAlive(p) {
+			d.Log.Warn("the agent is still running after the grace period", "pid", p.Pid)
+		} else {
+			d.Log.Info("the agent exited")
+		}
+		// Let run-agent write the result before the last heartbeat.
+		for i := 0; i < 20 && !exists(d.S.statePath(resultFile)); i++ {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	d.beat(ctx)
+}
+
+// beat sends one heartbeat. A failure never touches the agent (D-01: running
+// sessions do not notice an operator outage); it is logged on the first
+// failure and every tenth after it, and the recovery is logged too.
+func (d *Daemon) beat(ctx context.Context) {
+	if d.Send == nil {
+		return
+	}
+	st := CollectStatus(ctx, d.R, d.S, d.Session.Name, d.now())
+	err := d.Send(ctx, st)
+	switch {
+	case err == nil && d.failures > 0:
+		d.Log.Info("heartbeat recovered", "after", d.failures)
+		d.failures = 0
+	case err != nil:
+		d.failures++
+		if d.failures == 1 || d.failures%10 == 0 {
+			d.Log.Warn("heartbeat failed", "err", err, "failures", d.failures)
+		}
+	}
+}

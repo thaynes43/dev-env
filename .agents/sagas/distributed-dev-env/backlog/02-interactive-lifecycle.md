@@ -15,6 +15,8 @@ bundle. declare-activity moves to the API. Tom can run `agent-run` from his lapt
 - agentd: Claude status from `~/.claude/sessions/<pid>.json`, Codex activity from
   process CPU and rollout mtime, attached tmux clients, and v1's `wt_busy` git and
   file signals (DESIGN-001 4.2); `agentd ctl prepare-restart` and resume on boot.
+  Resume takes the conversation id from `~/.agentd/launch.json`; plan 01 never
+  starts a launched task again (D-42), so resume is the only way back in.
 - Operator: the timers of D-09, the reaper, `suspend`, `resume`, `restore`,
   `/v1/sessions/{id}/log` (logs also copied to the shared volume), the child-session
   limit (4 per parent, depth 2).
