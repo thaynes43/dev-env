@@ -19,7 +19,7 @@ the saga. To start building, follow
   laptop (below).
 - **ADR-001 is Accepted.** Tom ratified it on 2026-10-06: "Accept as written".
   DESIGN-001 is Accepted with it.
-- **KICKOFF B1, the Go skeleton, is built.** The module, the `AgentSession` types and
+- **KICKOFF B1, the Go skeleton, is built** (#14). The module, the `AgentSession` types and
   CRD, the four binaries and the Makefile are on main; only `agent-run version` does
   real work. D-38 records that the keeper is its own binary. There is no build CI and
   no image yet (B2 to B5). The only workflows are the Claude reviewer and the

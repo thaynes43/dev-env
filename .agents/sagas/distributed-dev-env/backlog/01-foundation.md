@@ -1,6 +1,6 @@
 # 01: foundation, task mode
 
-**Status:** backlog
+**Status:** in progress: KICKOFF B1, the Go skeleton, landed in #14 (2026-10-06)
 **Depends on:** Q-01 (build), Q-02 (Go), Q-04 (requests and limits, no cap) and Q-05
 (storage), all decided 2026-10-06; spikes S-7 (clone path), S-8 (gasha01 speed) and
 S-12 (the guard)

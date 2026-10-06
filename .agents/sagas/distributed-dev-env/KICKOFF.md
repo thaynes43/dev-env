@@ -92,7 +92,7 @@ S-13, S-11 and S-14 before plan 09. S-14 needs Tom at each machine.
 Each step is one ready PR in the order below. Once B2 exists, merge each PR when
 `CI - Success` is green and every review finding is handled.
 
-**B1: the Go skeleton.**
+**B1: the Go skeleton.** Done in #14 (2026-10-06).
 
 - **Module:** `github.com/thaynes43/dev-env`, with a `go` and `toolchain` line that
   Renovate bumps.
