@@ -152,22 +152,34 @@ drop it.
    the `gh-refresher` env of `kubernetes/main/apps/dev/dev-env/app/helmrelease.yaml`,
    in the combined branch. The haynes-dev-bot App already holds the permission.
 
-### Step 2: build `0.6.8` from #3342 (no restart)
+### Step 2: build the new tag from #3342 (no restart)
+
+Run the blocks of steps 2 and 3 in **one shell**, in order. Later blocks use the
+variables (`R`, `ACCEPT`, `CUR`, `V`, `NEW`) and the `ghcr` helper set here. `ghcr` mints
+a fresh anonymous pull token on every call, because the token expires within minutes.
 
 ```bash
 R=thaynes43/haynes-ops
-TOKEN=$(curl -s "https://ghcr.io/token?scope=repository:thaynes43/dev-env:pull&service=ghcr.io" | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
 ACCEPT='application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json'
-curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" -H "Accept: $ACCEPT" \
-  https://ghcr.io/v2/thaynes43/dev-env/manifests/0.6.8      # expect 404. If 200, use the next free patch.
+ghcr() {  # ghcr <tag-or-digest>: prints the HTTP status and, when it exists, the digest
+  local t; t=$(curl -s "https://ghcr.io/token?scope=repository:thaynes43/dev-env:pull&service=ghcr.io" \
+    | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
+  curl -sI -H "Authorization: Bearer $t" -H "Accept: $ACCEPT" \
+    "https://ghcr.io/v2/thaynes43/dev-env/manifests/$1" | grep -i -E '^HTTP|docker-content-digest'
+}
 
 gh pr checkout 3342 -R $R
-grep -c '0\.6\.7' .github/workflows/dev-env-build.yml     # expect 4
-perl -pi -e 's/0\.6\.7/0.6.8/g' .github/workflows/dev-env-build.yml
-git diff --stat                                           # 1 file, 4 lines
-git commit -am "dev-env image 0.6.8: bump the build tag so the toolchain group builds a new tag"
+export CUR=$(grep -m1 -o 'dev-env:[0-9][0-9.]*' .github/workflows/dev-env-build.yml | cut -d: -f2)
+echo "$CUR"                       # 0.6.7 at audit time: the tag main's workflow builds today
+export V=0.6.8                    # CUR's next patch
+ghcr "$V"                         # must be 404. If it is 200, raise V to the next patch that 404s.
+grep -c -F "dev-env:$CUR" .github/workflows/dev-env-build.yml   # expect 2
+grep -c -F "$CUR" .github/workflows/dev-env-build.yml           # expect 4
+perl -pi -e 's/\Q$ENV{CUR}\E/$ENV{V}/g' .github/workflows/dev-env-build.yml
+git diff --stat                   # 1 file, 4 lines changed
+git commit -am "dev-env image $V: bump the build tag so the toolchain group builds a new tag"
 git push      # pushing a workflow file needs the `workflow` scope: `gh auth refresh -s workflow`
-gh pr checks 3342 -R $R --watch                           # build-and-push (PR build, no publish), Flux Local - Success, Diff Scope - Success
+gh pr checks 3342 -R $R --watch   # build-and-push (PR build, no publish), Flux Local - Success, Diff Scope - Success
 gh pr merge 3342 -R $R --squash --delete-branch
 ```
 
@@ -177,11 +189,12 @@ Then wait for the `main` build and read the new digest:
 SHA=$(gh pr view 3342 -R $R --json mergeCommit --jq .mergeCommit.oid)
 RUN=$(gh run list -R $R --workflow dev-env-build.yml --branch main --event push --limit 5 \
       --json databaseId,headSha --jq ".[] | select(.headSha==\"$SHA\") | .databaseId" | head -1)
+echo "$RUN"                       # empty = the run has not started yet; wait 30 s and repeat the line above
 gh run watch "$RUN" -R $R --exit-status                    # about 6 minutes
-curl -sI -H "Authorization: Bearer $TOKEN" -H "Accept: $ACCEPT" \
-  https://ghcr.io/v2/thaynes43/dev-env/manifests/0.6.8 | grep -i -E '^HTTP|docker-content-digest'
+ghcr "$V"                                                  # 200 and a docker-content-digest
 # Cross-check: the digest the run pushed and signed must be the same one.
-gh run view "$RUN" -R $R --log | grep -E '0\.6\.8: digest: sha256|DIGEST: sha256'
+gh run view "$RUN" -R $R --log | grep -E "$V: digest: sha256|DIGEST: sha256"
+export NEW="$V@sha256:<the digest above>"
 ```
 
 The `Accept` header must include the single-image manifest types. This image is
@@ -191,31 +204,56 @@ the 0.6.7 path in step 3. It is safe because 0.6.7 has codex 0.160.0.
 
 ### Step 3: one combined branch
 
+Three blocks. Do not paste them as one: block A can stop on a merge conflict, and
+blocks B and C must not run until that conflict is resolved.
+
+**Block A: merge the drafts.** The branch names come from the PRs themselves. All five
+heads were in thaynes43/haynes-ops at audit time, including Tom's #3330
+(`agent/codex-gpt-6.1-sol`). Leave 3381 out of the list if Tom kept it with its owner.
+
 ```bash
 git fetch origin && git switch -c agent/dev-env-v1-bounce origin/main
-# Drop agent/dev-env-cpu-limit if Tom kept #3381 with its owner.
-for b in agent/dev-env-cpu-limit agent/hwssh-pikvm agent/codex-gpt-6.1-sol \
-         agent/claude-review-rule agent/cronjob-suspend-note; do
-  git merge --no-edit "origin/$b" || { echo "conflict in $b: stop and resolve"; break; }
+for n in 3381 3336 3330 3294 3274; do
+  read -r b x < <(gh pr view $n -R $R --json headRefName,isCrossRepository --jq '"\(.headRefName) \(.isCrossRepository)"')
+  [ "$x" = false ] || { echo "#$n comes from a fork: stop and ask Tom"; break; }
+  git merge --no-edit "origin/$b" || { echo "CONFLICT merging #$n ($b): resolve and commit it before block B"; break; }
 done
+git log --oneline --merges origin/main..HEAD   # one merge per PR you folded
+```
 
-# Re-pin 0.6.7 -> 0.6.8 in all 7 places. Skip this on the 0.6.7 path.
-export OLD='0.6.7@sha256:92e206a02148ac766195d48acdf6c339486cff00473c800434927b54e9c37908'
-export NEW='0.6.8@sha256:<digest from step 2>'
-perl -pi -e 's/\Q$ENV{OLD}\E/$ENV{NEW}/g' \
-  kubernetes/main/apps/dev/dev-env/app/helmrelease.yaml \
-  kubernetes/main/apps/upgrade-agent/dev-env-ops/app/helmrelease.yaml \
-  kubernetes/main/apps/ai/vexa/app/resources/scribe-notes-job.json
-git grep -c "$NEW" -- kubernetes        # 3 + 3 + 1
-git grep -n -e '92e206a0' -e '57d001f4' -- kubernetes   # expect nothing (on the 0.6.7 path, expect 7 hits of 92e206a0)
-git commit -am "dev-env v1 bounce: pin image 0.6.8 in dev-env, dev-env-ops and vexa scribe-notes"
+**Block B: re-pin all 7 places to the new image.** Skip it on the 0.6.7 path. It refuses
+to run while a merge is still open.
+
+```bash
+if git rev-parse -q --verify MERGE_HEAD >/dev/null || [ -n "$(git diff --name-only --diff-filter=U)" ]; then
+  echo "a merge is still open or has conflicts: finish block A first"
+else
+  export OLD=$(git grep -h -o -E '[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}' -- \
+      kubernetes/main/apps/ai/vexa/app/resources/scribe-notes-job.json)
+  echo "OLD=$OLD  NEW=$NEW"   # OLD is #3330's pin (0.6.7@sha256:92e206a0... at audit time)
+  git grep -c -F "$OLD" -- kubernetes        # 3 + 3 + 1 before the change
+  perl -pi -e 's/\Q$ENV{OLD}\E/$ENV{NEW}/g' \
+    kubernetes/main/apps/dev/dev-env/app/helmrelease.yaml \
+    kubernetes/main/apps/upgrade-agent/dev-env-ops/app/helmrelease.yaml \
+    kubernetes/main/apps/ai/vexa/app/resources/scribe-notes-job.json
+  git grep -c -F "$NEW" -- kubernetes        # 3 + 3 + 1 after
+  git grep -n -F -e "$OLD" -e '57d001f4' -- kubernetes   # expect nothing
+fi
+```
+
+**Block C: commit and push**, only after block B's counts are right (on the 0.6.7 path,
+after `git grep -c 92e206a0 -- kubernetes` shows 3 + 3 + 1 and there is nothing to commit):
+
+```bash
+git status --short                # only the 3 pinned files, no conflict markers
+git commit -am "dev-env v1 bounce: pin image $V in dev-env, dev-env-ops and vexa scribe-notes"
 git push -u origin agent/dev-env-v1-bounce
 ```
 
 Open it **ready**, not draft, so the advisory reviewer runs. Put "HELD" in the title so
 no in-pod agent mistakes it for routine work. You merge it yourself in step 5.
 Suggested title:
-`HELD: dev-env v1 bounce: image 0.6.8, CPU limit 8, PiKVM hw-ssh, GPT-6.1 Sol, two rules [restarts dev-env + dev-env-ops]`.
+`HELD: dev-env v1 bounce: image 0.6.8 (or the $V step 2 built), CPU limit 8, PiKVM hw-ssh, GPT-6.1 Sol, two rules [restarts dev-env + dev-env-ops]`.
 The body must:
 
 - list each folded PR (#3381, #3336, #3330, #3294, #3274) with one line on what it
@@ -315,18 +353,15 @@ done
 ### What you can check from outside
 
 ```bash
-# Re-mint TOKEN and set ACCEPT as in step 2 first: the anonymous token is short-lived.
+# Uses ghcr, ACCEPT and V from step 2. In a new shell, define them again first.
 gh pr view <N> -R $R --json state,mergedAt,mergeCommit
 gh api repos/$R/commits/$M/statuses --jq '.[].context'      # cluster + cluster-apps success
-# The pin on main equals what GHCR serves for 0.6.8:
-git fetch origin && git show origin/main:kubernetes/main/apps/dev/dev-env/app/helmrelease.yaml | grep -m1 'tag: 0.6'
-curl -sI -H "Authorization: Bearer $TOKEN" -H "Accept: $ACCEPT" \
-  https://ghcr.io/v2/thaynes43/dev-env/manifests/0.6.8 | grep -i docker-content-digest
-# Rollback targets still resolve (200):
-for d in sha256:57d001f4c868c04c932c6e7299eea78dcea9597f8e99f2123a06ce754dbde01a \
-         sha256:92e206a02148ac766195d48acdf6c339486cff00473c800434927b54e9c37908; do
-  curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" -H "Accept: $ACCEPT" \
-    https://ghcr.io/v2/thaynes43/dev-env/manifests/$d; done
+# The pin on main equals what GHCR serves for the new tag:
+git fetch origin && git show origin/main:kubernetes/main/apps/dev/dev-env/app/helmrelease.yaml | grep -m1 "tag: $V@"
+ghcr "$V"
+# Rollback targets still resolve (HTTP 200):
+ghcr sha256:57d001f4c868c04c932c6e7299eea78dcea9597f8e99f2123a06ce754dbde01a    # 0.6.5, live before
+ghcr sha256:92e206a02148ac766195d48acdf6c339486cff00473c800434927b54e9c37908    # 0.6.7
 for n in 3381 3336 3330 3294 3274 3241 3342 3418; do
   gh api repos/$R/issues/$n --jq '"\(.number) \(.state)"'; done
 ```
