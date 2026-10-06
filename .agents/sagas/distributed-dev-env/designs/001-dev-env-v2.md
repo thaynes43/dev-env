@@ -1571,7 +1571,8 @@ In both cases:
 
 1. The budgeter picks agent workloads on that card until enough units are covered:
    first idle tool instances and LLM backends. Agent against agent stops there: if
-   the idle holders do not cover the claim, it keeps waiting. Only when the budget
+   the idle holders on one card cannot cover the claim between them, nothing is
+   reclaimed and the claim keeps waiting. Only when the budget
    shrinks does it go on to LLM pools that have another backend available (8.3 moves
    the pool first, then this backend stops), and then to busy tools and pools,
    newest claim first.
