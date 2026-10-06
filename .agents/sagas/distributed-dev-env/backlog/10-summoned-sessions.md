@@ -31,8 +31,8 @@ DESIGN-001 3.7 (D-36), 6.1, 6.4, 6.10 (`ops`), 7.3 (V-14); research note
   [--note]`; `status.outcome`; `ops-event` log lines; the daily digest on Pushover at
   priority -1; the guaranteed outcome (`onUnreported`) (V-08).
 - Single-flight lanes for remediation, upgrade and curation (start order upgrade,
-  remediation, curation); escalations with no lane, limited only by their caller's
-  limits, with a page for one queued over 15 minutes (V-09).
+  remediation, curation); escalations in a label-only lane that is not single-flight,
+  limited only by their caller's limits, with a page for one queued over 15 minutes (V-09).
 - Watchdogs per lane, closing as `onUnreported`; `session lost`; the bounded
   escalation exemption (reminder at 24 h, closed at 72 h) (V-11).
 - Priority per session kind in `CallerPolicy`, `urgent` required for escalation and
