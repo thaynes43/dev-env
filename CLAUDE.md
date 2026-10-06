@@ -19,8 +19,7 @@ This repo will hold the operator, the CLI, the agent container image
 [thaynes43/haynes-ops](https://github.com/thaynes43/haynes-ops)** (GitOps via Flux):
 this repo publishes signed images, haynes-ops pins and deploys them.
 
-**Status: design complete; ADR-001 awaits Tom's ratification (2026-10-06).** Nothing
-is built yet. The first build session follows
+**Status: design complete; ADR-001 Accepted 2026-10-06.** Nothing is built yet. The first build session follows
 [`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md). v1 keeps running from
 haynes-ops (`kubernetes/main/apps/dev/dev-env/`, `scripts/dev-env/Dockerfile`) until
 v2 proves itself and Tom approves the cutover. The saga:

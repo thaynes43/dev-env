@@ -10,12 +10,22 @@ the saga. To start building, follow
 - **The dev-env v2 design is complete.** It covers the architecture (ADR-001), the
   details (DESIGN-001, D-01 to D-37), 16 spikes, backlog plans 00 to 10 and two
   research notes.
-- **Every design question is ruled.** Tom answered Q-01 to Q-11 on 2026-10-06 (index
-  below). Three repo-setup questions, Q-12 to Q-14, are open: to ask Tom at kickoff,
-  after ratification.
-- **ADR-001 is Proposed.** Tom has not ratified it yet. Nothing is built: there is
-  no Go code, no build CI and no image. The only workflows are the Claude reviewer
-  and the `@claude` handler.
+- **Every design question is ruled except Q-12.** Tom answered Q-01 to Q-11, Q-13
+  and Q-14 on 2026-10-06 (index below). Q-12 (branch protection) is open but not
+  asked yet: the repo has no ruleset (`GET /repos/thaynes43/dev-env/rulesets`
+  returned `[]` on 2026-10-06), and the question's premise is GitHub's warning when
+  the ruleset is created, which happens once `CI - Success` has reported, after B2.
+  Ask Tom then. The settings only Tom can click are in a handoff for an agent on his
+  laptop (below).
+- **ADR-001 is Accepted.** Tom ratified it on 2026-10-06: "Accept as written".
+  DESIGN-001 is Accepted with it. Nothing is built: there is no Go code, no build CI
+  and no image. The only workflows are the Claude reviewer and the `@claude`
+  handler.
+- **The v1 bounce landed on 2026-10-06.** haynes-ops #3381, #3342, #3336, #3294 and
+  #3274 merged at about 21:05Z, and #3330 at 21:15Z. #3241 was closed. The v1 pod
+  restarted at 21:17Z on `ghcr.io/thaynes43/dev-env:0.6.8` with a CPU limit of 8.
+- **Spikes S-1, S-1b and S-7 are running** in the v1 pod. Their results arrive in
+  their own PRs.
 - **v1 keeps running.** The single dev-env pod and the `dev-env-ops` executor are
   deployed from haynes-ops until the cutover (plan 05) and plan 10.
 - **Q-08 is live.** Kyverno `default-cpu-request` (haynes-ops #3406) went live on
@@ -23,31 +33,21 @@ the saga. To start building, follow
 
 ## What happens first
 
-1. **The v1 bounce, done by a separate agent.** A morning agent lands the staged v1
-   PRs in haynes-ops, following this repo's
-   [`.agents/handoffs/2026-10-06-dev-env-v1-bounce.md`](handoffs/2026-10-06-dev-env-v1-bounce.md).
-   If that file is not on main yet, the open PR from branch `agent/handoff-v1-bounce`
-   adds it. Those merges restart the v1 pod and every session in it. Do not
-   do that work yourself. Inside the pod, start after the bounce. Outside, only the
-   in-pod spikes wait for it.
-2. **Tom ratifies ADR-001.** Ask him once ("Accept ADR-001 as written" first). When
-   he says yes, flip the ADR to Accepted with a dated ruling in the ratification PR
-   ([KICKOFF step 0](sagas/distributed-dev-env/KICKOFF.md#step-0-the-ratification-pr)
-   lists every edit). If he asks for changes, fold them in as dated rulings first.
-   Write no code against a Proposed ADR.
-3. **Spikes, in the documented order.** The Max-credential spikes come first. S-1 is
-   Claude on an access-token-only credential. S-2 is already answered: the static
-   token cannot register Remote Control. Spikes write no code, so they need not wait
-   for step 2: backlog 00 runs them in parallel with the ratification. The order and
-   pass criteria are in
-   [KICKOFF section 2](sagas/distributed-dev-env/KICKOFF.md#2-track-a-spikes).
-4. **Plan 01, the foundation in task mode,** once ADR-001 is Accepted. It starts
-   with the repo skeleton and CI
-   ([KICKOFF section 3](sagas/distributed-dev-env/KICKOFF.md#3-track-b-the-first-prs-in-this-repo)).
-   Those PRs depend on no spike, so they may run while the in-pod spikes run
+1. **Tell Tom about the laptop handoff** ([`handoffs/2026-10-06-tom-laptop-settings.md`](handoffs/2026-10-06-tom-laptop-settings.md)).
+   Part 1 (auto-merge, GHCR Actions access, Renovate, the release-please App) is
+   needed before B4 and B5. Part 2 (make the operator package public) waits for B3's
+   first publish. Q-12 is asked later, when the ruleset is created after B2.
+2. **Track B, plan 01: the repo skeleton and CI.** Start with
+   [KICKOFF section 3](sagas/distributed-dev-env/KICKOFF.md#3-track-b-the-first-prs-in-this-repo).
+   Those PRs depend on no spike, so they run while the in-pod spikes run
    ([KICKOFF section 1](sagas/distributed-dev-env/KICKOFF.md#1-objective-of-phase-1)
-   says why).
-5. **The rest of the MVP, then beyond it.** The MVP ends at the cutover (plan 05);
+   says why). ADR-001 is Accepted, so code may start.
+3. **Collect the spike results.** S-1, S-1b and S-7 are running in the v1 pod. The
+   Max-credential spikes come first: S-1 is Claude on an access-token-only
+   credential, and S-2 is already answered (the static token cannot register Remote
+   Control). Each result lands in its own PR. The order and pass criteria are in
+   [KICKOFF section 2](sagas/distributed-dev-env/KICKOFF.md#2-track-a-spikes).
+4. **The rest of the MVP, then beyond it.** The MVP ends at the cutover (plan 05);
    [the saga README](sagas/distributed-dev-env/README.md#plan-backlog) lists which
    plans are in it, their order, and the plans that follow.
 
@@ -59,8 +59,8 @@ the saga. To start building, follow
 | [.agents/sagas/README.md](sagas/README.md) | Saga conventions: statuses and the D/Q/C/S id schemes. |
 | [distributed-dev-env/README.md](sagas/distributed-dev-env/README.md) | Tom's vision, the architecture at a glance, the hard news, the decision log and the plan index. |
 | [distributed-dev-env/KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) | The work order for the first build session. |
-| [adrs/001-distributed-dev-env.md](sagas/distributed-dev-env/adrs/001-distributed-dev-env.md) | The architecture decision (Proposed), with the ratification summary at the top and consequences C-01 to C-21. |
-| [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 to Q-11 with rulings and the open Q-12 to Q-14 in 15, D-01 to D-37 in 16. |
+| [adrs/001-distributed-dev-env.md](sagas/distributed-dev-env/adrs/001-distributed-dev-env.md) | The architecture decision (Accepted 2026-10-06), with the ratification summary at the top and consequences C-01 to C-21. |
+| [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 to Q-14 with rulings (Q-12 still open) in 15, D-01 to D-37 in 16. |
 | [research/R-01](sagas/distributed-dev-env/research/R-01-summoned-agents-audit.md) | An audit of summoned agents today, with v2 requirements V-01 to V-17. |
 | [research/R-02](sagas/distributed-dev-env/research/R-02-remote-control-identity.md) | Remote Control identity, the evidence behind S-1, and proposals P-1 to P-12. |
 | [backlog/00-spikes.md](sagas/distributed-dev-env/backlog/00-spikes.md) | S-1 to S-16: steps, safety rules and pass criteria. |
@@ -92,23 +92,29 @@ the saga. To start building, follow
 | Q-09 | No household GPU app lends VRAM. Agents get only what is left, and that grows as GPUs are added. |
 | Q-10 | Satellites are used only while awake and not in use by Tom, and are never woken. |
 | Q-11 | The link that survives restarts is the Claude Max login. The keeper owns it, and the console renews it each month. |
+| Q-13 | Make `ghcr.io/thaynes43/dev-env-operator` public (A). "Public package write a prompt for an agent on my laptop to flip it": a laptop agent flips it after B3's first publish, because GitHub has no API for package visibility. |
+| Q-14 | A GitHub App key secret for release-please (A): "GitHub App key secret (Recommended)". Repo variable `RELEASE_APP_ID`, repo secret `RELEASE_APP_PRIVATE_KEY`; the App also needs Issues read and write for `autorelease:` labels. |
 
-**Open, to ask Tom at kickoff, after ratification** (one at a time, recommended option
-first; full entries in DESIGN-001 section 15):
+**Open** (full entry in DESIGN-001 section 15):
 
 | Id | Question | Recommended |
 |---|---|---|
-| Q-12 | Branch protection on this private repo, if his plan does not enforce the ruleset | A: GitHub Pro (B: make the repo public; C: convention only) |
-| Q-13 | Visibility of `ghcr.io/thaynes43/dev-env-operator` | A: public, pulled anonymously like every other image (B: private with a pull secret) |
-| Q-14 | How release-please's PRs get CI | A: a GitHub App key secret (B: the bot closes and reopens each release PR; C: no release-please) |
+| Q-12 | Branch protection on this private repo, if his plan does not enforce the ruleset. **Not asked yet:** the repo has no ruleset, and the premise is GitHub's warning when it is created, once `CI - Success` has reported (after B2). Ask Tom then, as one question. | A: GitHub Pro (B: make the repo public; C: convention only) |
 
-**Settings only Tom can click** (no decision needed; ask at kickoff, after
-ratification):
+**Settings only Tom can click** (no decision needed). An agent on his laptop does
+them from [`handoffs/2026-10-06-tom-laptop-settings.md`](handoffs/2026-10-06-tom-laptop-settings.md),
+which lists exactly what to change:
 
-- [ ] On the `ghcr.io/thaynes43/dev-env` package, "Manage Actions access": give
-      `thaynes43/dev-env` Write (before KICKOFF B5).
-- [ ] Repo settings: allow auto-merge (Renovate's `platformAutomerge` needs it).
-- [ ] The Mend Renovate app covers this repo.
+- [ ] Part 1, before B4 and B5: on the `ghcr.io/thaynes43/dev-env` package, "Manage
+      Actions access": give `thaynes43/dev-env` Write (before KICKOFF B5).
+- [ ] Part 1: repo settings: allow auto-merge (Renovate's `platformAutomerge` needs
+      it).
+- [ ] Part 1: the Mend Renovate app covers this repo.
+- [ ] Part 1: the release-please GitHub App (Q-14), with repo variable
+      `RELEASE_APP_ID` and repo secret `RELEASE_APP_PRIVATE_KEY` (before B4's
+      release-please part).
+- [ ] Part 2, after B3's first publish: make `ghcr.io/thaynes43/dev-env-operator`
+      public (Q-13).
 
 ## Working rules (the summary; CLAUDE.md is the source)
 
