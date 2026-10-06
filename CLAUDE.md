@@ -19,9 +19,11 @@ This repo will hold the operator, the CLI, the agent container image
 [thaynes43/haynes-ops](https://github.com/thaynes43/haynes-ops)** (GitOps via Flux):
 this repo publishes signed images, haynes-ops pins and deploys them.
 
-**Status: ADR-001 Accepted 2026-10-06; the Go skeleton (KICKOFF B1), CI and the
-`AgentSession` CRD (plan 01 step 1) are built.** Only `agent-run version` works so far:
-the other binaries are honest stubs that say which plan step builds them. The build sessions follow
+**Status: ADR-001 Accepted 2026-10-06; the Go skeleton (KICKOFF B1), CI, the
+`AgentSession` CRD (plan 01 step 1), the operator's pod and volume reconciler (step 2)
+and agentd's config rendering, clone, task runner and heartbeat (step 4, parts 1
+and 2) are built.** The keeper and most of `agent-run`
+are still honest stubs that say which plan step builds them. The build sessions follow
 [`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md). v1 keeps running from
 haynes-ops (`kubernetes/main/apps/dev/dev-env/`, `scripts/dev-env/Dockerfile`) until
 v2 proves itself and Tom approves the cutover. The saga:
@@ -43,6 +45,9 @@ cmd/agentd/              the in-pod supervisor: `run`, `run-agent`, `render`, `c
 cmd/agent-run/           the CLI, one static binary (CGO_ENABLED=0, D-06)
 internal/version/        the build identity every binary's `version` prints
 internal/testenv/        starts envtest (kube-apiserver + etcd) with config/crd/ installed, for test suites
+internal/templates/      parses and checks dev-env-templates, the GitOps data pods are built from; its revision (D-44)
+internal/controller/     the AgentSession reconciler: each session's pod and volume (D-44). Its envtest suite proves
+                         DESIGN-001 5.1 (no owner reference to the operator; no pod or volume write or delete)
 internal/agentd/         agentd: config rendering (the dev-init.sh port), clone and worktree, the task runner, heartbeat,
                          status and rescue; tests fake claude and tmux and run git against a bare repo in t.TempDir()
 internal/agentd/protocol/  what agentd and the operator exchange: the session document, the status, the heartbeat route,
@@ -93,8 +98,8 @@ Every Makefile target caps Go at two CPUs and two packages at a time and runs un
 `nice -n 19`, so it is safe in the shared pod (Hard rules). Do not raise
 `GO_PARALLELISM` there.
 
-Directories still to come: `internal/` gains the controllers (with their own envtest
-suites on `internal/testenv`), the `/v1` API server and shared clients (plan 01); `images/agent/` arrives with B5, and CI builds it only
+Directories still to come: `internal/` gains the `/v1` API server and shared clients
+(plan 01), and later controllers (ToolSession, LLMLease) beside `internal/controller/`; `images/agent/` arrives with B5, and CI builds it only
 when that directory changes. Name each one here when it lands.
 
 ## How work happens here

@@ -546,6 +546,85 @@ read-only root filesystem, all capabilities dropped, `RuntimeDefault` seccomp,
 and the `not-ready`/`unreachable` tolerations at 3600 s (an RWO volume cannot
 re-attach until the old node lets go, so early eviction never helps).
 
+**D-44 (2026-10-06, plan 01 step 2). The operator builds one bare pod and one volume
+per session from `dev-env-templates`, and never changes either after create.**
+
+- **The templates.** The ConfigMap `dev-env-templates` lives in `dev-env-system` under
+  the key `templates.yaml`. It holds `image` (pinned by digest, or refused); `sizes`
+  (S, M and L, each with CPU and memory requests and limits, a CPU limit required; a
+  class may name its own `storageClassName`, which is how the S-8 rule moves L);
+  `home` (`storageClassName`, `size`); `sharedClaim`; `env` and `mounts` for every
+  pod (ConfigMaps or Secrets, mounted read-only); `claude.staticToken`, the Secret key
+  of 6.1; `defaultProfile`; and `profiles`, each with `env`, `envFrom`, `mounts` and
+  `labels`. The parse is strict. An unknown or repeated field, a missing class, a
+  mount over a path the operator mounts, or an `env` entry that names a variable the
+  operator sets or 6.2 forbids leaves new sessions Pending with the reason. Running
+  pods are not affected. An `envFrom` source cannot be checked, because the operator
+  reads no Secrets, so the rule for it is written here: a Secret or ConfigMap in a
+  profile's `envFrom` holds no `CLAUDE_CODE_OAUTH_TOKEN`, none of 6.2's four
+  variables, and none of the operator's own (`HOME`, `XDG_RUNTIME_DIR`,
+  `DEV_ENV_CPU_LIMIT`, `AGENTD_*`). What backs the rule up: the operator sets each of
+  its own variables in the container's `env` in every pod, empty when unused, and
+  Kubernetes ranks `env` above `envFrom`; agentd removes 6.2's four before it starts
+  the CLI (D-42). The static token outside task and local mode is the gap: the
+  operator leaves it out there rather than set it empty, because an empty variable is
+  not an unset one to every program. Until plan 03's agentd unsets it in remote mode
+  (6.2), only the written rule keeps it out of a remote pod.
+  `internal/templates/testdata/templates.yaml` is the shape haynes-ops ships. The
+  revision is a hash of the parsed content, prefixed with the image tag
+  (`2.0.3-1a2b3c4d5e`), so a comment or a reordered key is not a new revision.
+- **Design, not data.** Placement (D-20), the PriorityClass and ServiceAccount
+  (`dev-env-agent`), the security settings above, the operator's own volumes and the
+  grace period are code. No template can put a session on a control-plane node or
+  run it as root.
+- **The pod** is named after the session and has one container, `agent`.
+  `restartPolicy: Always`: a crashed agentd restarts in place, in the same pod with the
+  same UID. **No probes**: a liveness probe would restart the agent under load, which
+  5.1 forbids, and readiness gates nothing on a pod with no Service.
+  `terminationGracePeriodSeconds: 60`: agentd forwards SIGTERM to the CLI and waits
+  up to 30 s for it (D-42), while the CLI flushes its transcript and archives its
+  Remote Control entry (S-6). Rescue runs by exec before a pod is deleted, so the
+  grace covers the shutdown only. Volumes: the session's claim at `/home/dev`,
+  `dev-env-shared` at `/home/dev/.shared`, `/tmp` (emptyDir, 8Gi), a projected token
+  for the audience `dev-env-operator` at `/var/run/secrets/dev-env/token` (D-05,
+  agentd's default for `AGENTD_API_TOKEN_FILE`, D-41), then the templates' mounts. The
+  environment: `HOME`, `XDG_RUNTIME_DIR`, `DEV_ENV_CPU_LIMIT` (7.2, the limit rounded
+  up to whole CPUs), `AGENTD_SESSION` (D-40) with `AGENTD_SESSION_FILE` set empty,
+  `AGENTD_API_URL` from the operator's `--api-url` flag (empty until plan 01 step 3
+  serves the API, which keeps heartbeats off), `AGENTD_API_TOKEN_FILE`,
+  `CLAUDE_CODE_OAUTH_TOKEN` from the static token's Secret for Claude task
+  and local sessions only, then the templates' env (`AGENTD_API_CA_FILE` among it,
+  with the CA's mount). The operator checks the session document with agentd's own rules first, so a
+  session agentd would refuse (a prompt over 64 KiB, say) is `Failed` and gets no pod.
+- **Labels.** `app.kubernetes.io/name: dev-env-session`, and under
+  `dev-env.haynesops.com/`: `session`, `agent`, `mode`, `size`, `profile` (the resolved
+  one), `lane` for a summoned session, and `revision` on the pod only. `repo` and
+  `caller` are annotations, because either can be longer than a label value. A profile
+  may add labels for the egress tiers and standing grants, but never these keys.
+  `api/v1alpha1/labels.go` names them for every client.
+- **The volume** is `home-<session>`: RWO, `home.size`, on the class's storage class.
+- **Ownership and writes.** Pod and volume each carry one owner reference, to the
+  session as controller (D-03). The operator creates them when they are missing and
+  otherwise only reads them: it never updates or deletes a pod or a volume. A
+  template change marks a running session `Outdated` (a condition) and changes
+  nothing else; plan 04's drain acts on it. A pod that is gone is replaced on the same
+  volume, so a preempted session resumes (D-20). A pod that ended, for example by
+  eviction, is kept and the session is `Failed`. A pod or volume with the session's
+  name that the session does not control is left alone and reported.
+- **Status.** `phase` (Pending, Running, Suspended or Failed so far), `pending` (the
+  scheduler's reason, else the container's waiting reason), `podName`, `nodeName`,
+  `revision` (the pod's, not the templates'), and the conditions `PodReady` and
+  `Outdated`.
+- **Reach.** The operator's cache holds `dev-agents` and the one templates ConfigMap.
+  Its RBAC (6.11) gains `get`, `list` and `watch` on that ConfigMap by `resourceNames`
+  in `dev-env-system` (the cache lists and watches it with a `metadata.name` field
+  selector, which RBAC authorizes by name), and `update` on `agentsessions/finalizers`
+  for clusters that enforce owner-reference permissions.
+
+Rationale: a bare pod is what D-03 and Q-01 chose, and a pod that is never written
+after create cannot be restarted by an operator release or a template change. Every
+input is in the cluster, so a fresh operator computes the same status (5.1).
+
 ### 3.7 Summoned sessions
 
 Automated callers in haynes-ops hand work to Claude Code sessions that bill the Max
@@ -1547,7 +1626,7 @@ anything more is a grant; nothing in the three dev-env namespaces.**
 |---|---|---|
 | `dev-agents/dev-env-agent` (session pods) | Cluster-wide read (v1's read rules, no Secrets) + `dev-env.haynesops.com` read. v1's write and proxy verbs cluster-wide, under `dev-env-agent-guard`. The `database` PVC-delete binding, as v1. | **At most v1's tier, minus the #3392 escalations, and nothing in the three dev-env namespaces.** No write to its own CRDs: every v2 write goes through the API. |
 | `dev-agents/grant-<id>` (one per kube grant) | Exactly the granted role, in the granted namespaces, until the grant expires, under `dev-env-identity-guard`. | Created and deleted by the broker. Its token lives in the session pod's tmpfs. Never valid in the three dev-env namespaces. |
-| `dev-env-system/dev-env-operator` | Roles in `dev-agents` and `dev-tools`: pods (create, delete, get, list, watch, patch), `pods/exec` create, `pods/log` get, `pods/eviction` create, PVCs and Services (create, delete, get, list, watch), namespaced CiliumNetworkPolicies in `dev-tools` (tool ingress and declared egress) and delete on namespaced CiliumNetworkPolicies in `dev-agents` (the expiry backstop; only grants live there), events. No write on `CiliumClusterwideNetworkPolicy`. ClusterRole: its own CRD group, `tokenreviews` create. Leases in its own namespace. | No cluster-wide pod or PVC rights, no Secrets, no `bind`. |
+| `dev-env-system/dev-env-operator` | Roles in `dev-agents` and `dev-tools`: pods (create, delete, get, list, watch, patch), `pods/exec` create, `pods/log` get, `pods/eviction` create, PVCs and Services (create, delete, get, list, watch), namespaced CiliumNetworkPolicies in `dev-tools` (tool ingress and declared egress) and delete on namespaced CiliumNetworkPolicies in `dev-agents` (the expiry backstop; only grants live there), events. No write on `CiliumClusterwideNetworkPolicy`. ClusterRole: its own CRD group (with `agentsessions/finalizers` update), `tokenreviews` create. Leases in its own namespace, and `get`, `list`, `watch` on the ConfigMap `dev-env-templates` there by `resourceNames` (D-44). | No cluster-wide pod or PVC rights, no Secrets, no `bind`. |
 | `dev-env-system/dev-env-broker` | RoleBindings and ClusterRoleBindings (create, delete); `bind` only on the grant role catalog by `resourceNames`; ServiceAccounts and `serviceaccounts/token` in `dev-agents`; CiliumNetworkPolicies in `dev-agents`; `pods/exec` in `dev-agents` (installs grant tokens); status of `AccessGrant`; read on the `dev-env.haynesops.com` group for the console's session list. No write on `CiliumClusterwideNetworkPolicy`, admission policies or Secrets. | The most privileged v2 identity: it can hand out the break-glass role. It accepts approvals only from Tom's Authentik identity and runs where agents cannot write or exec. |
 | `dev-env-system/dev-env-keeper` | Role in `dev-agents`: Secrets get, update and patch on `resourceNames` `dev-env-gh-token`, `dev-env-ops-gh-token`, `dev-env-claude-live`, `dev-env-codex-live` only; for credential grants (Q-07), also `pods/exec` in `dev-agents` and read on `AccessGrant`. ClusterRole: `tokenreviews` create. Leases in its own namespace. | The four Secrets are created empty by GitOps, so no `create` is needed. |
 | `dev-env-system/dev-env-gpu-guard` (DaemonSet on GPU nodes) | Role in `dev-tools`: pods get, list; `pods/eviction` create. Read on the budgeter's Lease in `dev-env-system`. | Evicts agent GPU pods only; works when the operator is down (8.2). |
@@ -2718,3 +2797,4 @@ step it names.
 | D-41 | agentd's heartbeat: `POST /v1/sessions/{name}/heartbeat` with the pod's projected token, every 60 s and on a task's end; `agentd ctl status` prints the same status | 3.6 |
 | D-42 | A task runs once per volume, under `agentd run-agent` in tmux session `agent`, prompt on stdin, stream-json kept, timeout and turn cap enforced, the pod's SIGTERM forwarded to the CLI | 3.6 |
 | D-43 | `agentd ctl rescue` keeps v1's rules but commits through a copy of the index, leaving the worktree as it was, and prints the refs origin lacks for step 5's bundle | 3.6 |
+| D-44 | The operator builds one bare pod and one volume per session from `dev-env-templates` (strict format, revision = hash of the parsed content), places it per D-20 in code, and never updates or deletes either; no probes, 60 s grace, `Outdated` reported for plan 04 | 3.6 |

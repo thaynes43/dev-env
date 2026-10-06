@@ -22,10 +22,15 @@ step. Tick a step in the PR that lands it.
   The schema enforces D-39; `make test` runs the suite against kube-apiserver 1.35,
   the main cluster's minor.
 - [ ] 2. Pods and volumes from the size class and `dev-env-templates`, placed per
-  DESIGN-001 section 7, with the 5.1 tests.
+  DESIGN-001 section 7, with the 5.1 tests (D-44), in two PRs.
   The pod gives agentd what D-40 to D-42 name: `AGENTD_SESSION`, `AGENTD_API_URL`,
   the projected token at `/var/run/secrets/dev-env/token` (audience
   `dev-env-operator`), and a termination grace period over 30 s.
+  - [x] the templates, the pod and the volume, status, the operator's manager, and
+    envtest proof that pods carry no owner reference to the operator and that a
+    restart or a template change leaves a running pod untouched (#29);
+  - [ ] the finalizers: deleting or suspending a session never deletes its pod or
+    volume before rescue (step 5 fills the seam).
 - [ ] 3. The `/v1` API (`sessions`, `fleet`) with TokenReview auth.
 - [x] 4. agentd: config rendering, partial clone and worktree, tmux start,
   heartbeat, `ctl status|rescue` (DESIGN-001 3.6, D-40 to D-43), in three PRs:

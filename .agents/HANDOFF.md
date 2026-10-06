@@ -42,6 +42,12 @@ the saga. To start building, follow
   `agentd ctl status` and `ctl rescue` answer the operator (D-40 to D-43). The
   operator's heartbeat route is step 3's; the pod that sets agentd's inputs is
   step 2's; the bundle is step 5's.
+- **Plan 01 step 2, part 1, is built** (#29). `dev-env-operator` runs a
+  controller-runtime manager whose reconciler builds each session's pod and volume
+  from `dev-env-templates` (D-44: the format, placement, no probes, 60 s grace). It
+  creates what is missing and never updates or deletes a pod or volume; envtest proves
+  that across an operator restart and a template change. Part 2 adds the finalizers
+  that keep a deleted or suspended session's pod and volume until rescue.
 - **The v1 bounce landed on 2026-10-06.** haynes-ops #3381, #3342, #3336, #3294 and
   #3274 merged at about 21:05Z, and #3330 at 21:15Z. #3241 was closed. The v1 pod
   restarted at 21:17Z on `ghcr.io/thaynes43/dev-env:0.6.8` with a CPU limit of 8.
