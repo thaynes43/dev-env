@@ -1,7 +1,9 @@
 # DESIGN-001: dev-env v2, one pod per agent session
 
-- **Status:** Proposed (nothing ratified; Tom owns the open questions in section 15)
-- **Last updated:** 2026-10-05
+- **Status:** Proposed. Tom ruled on Q-01 to Q-05 on 2026-10-06 and widened the scope
+  (tool pods, GPUs, local models, access without in-pod prompts); Q-06 and Q-07 are
+  open (section 15).
+- **Last updated:** 2026-10-06
 - **Governed by:** [ADR-001](../adrs/001-distributed-dev-env.md) (Proposed)
 - **Saga:** [README](../README.md)
 
@@ -20,32 +22,61 @@ v2 runs **one pod per agent session**. An **operator** (control plane only) crea
 upgrades and prunes those pods and serves an HTTP API. **`agent-run`** becomes a
 client of that API and runs anywhere: in an agent pod, on a laptop, or from a
 phone-driven session. A small **keeper** owns every rotating credential, so no two
-pods ever refresh the same token. Each agent pod has CPU and memory limits, runs on
-the worker nodes only, and keeps its work on its own volume, so a pod can be stopped
-and resumed with its conversation intact.
+pods ever refresh the same token. Each agent pod has CPU and memory requests and
+limits, runs on the worker nodes only, and keeps its work on its own volume, so a
+pod can be stopped and resumed with its conversation intact.
+
+Tom's rulings and new asks of 2026-10-06 add five things:
+
+- **The scheduler places pods.** Every pod carries requests and limits; there is no
+  fleet cap and no allocation logic in the operator (7.3).
+- **Session volumes live on gasha01**, the Proxmox-hosted Ceph, which keeps agent
+  disk load off the in-cluster OSDs on the control-plane nodes (6.6).
+- **No approval prompts inside a pod.** The agent runs with its vendor's
+  skip-permissions mode. The control point is the platform: RBAC, egress tiers, and
+  an **access broker** that grants more for a while, approved on Tom's phone or by a
+  policy in git (6.10 to 6.12).
+- **Tool pods.** Blender, audio, image and video generation, transcription and
+  3D-printer tools run as pods that agents start, attach to and release, on any
+  node, with a GPU when they need one (8.1).
+- **GPUs and local models.** GPUs are counted in VRAM and claimed through the
+  scheduler; household AI always wins. Local-model agents (opencode on a Qwen coder
+  model) join Claude Code and Codex as fleet members (6.13, 8.2, 8.3).
 
 ```mermaid
 flowchart LR
   subgraph callers[Callers]
     cli1[agent-run in an agent pod]
     cli2[agent-run on a laptop]
-    phone["Tom's phone via a Remote Control session"]
+    phone["Tom's phone"]
   end
   subgraph sys[namespace dev-env-system]
     op["dev-env-operator<br/>API + controllers"]
+    broker["dev-env-broker<br/>grants + approval page"]
     keeper["dev-env-keeper<br/>credential owner"]
   end
   subgraph agents["namespace dev-agents, worker nodes only"]
     s1["session pod<br/>agentd + claude"]
     s2["session pod<br/>agentd + codex"]
     s3["session pod<br/>agentd + claude --remote-control"]
+    s4["session pod<br/>agentd + opencode"]
+  end
+  subgraph tools["namespace dev-tools, any node"]
+    t1["tool pod: blender"]
+    t2["tool pod: llm-coder, GPU"]
   end
   cli1 & cli2 -->|HTTPS /v1| op
   phone -.->|claude.ai| s3
+  phone -.->|approve| broker
   s3 -->|agent-run| op
-  op -->|create / suspend / resume / exec| s1 & s2 & s3
+  op -->|create / suspend / resume / exec| s1 & s2 & s3 & s4
+  op -->|start / scale to zero| t1 & t2
+  op -->|grant requests| broker
+  broker -->|RoleBinding, CNP, TTL| agents
   keeper -->|Secrets: gh token, live creds| s1 & s2 & s3
-  s1 & s2 & s3 -->|heartbeat| op
+  s1 -->|MCP| t1
+  s4 -->|LLM lease| t2
+  s1 & s2 & s3 & s4 -->|heartbeat| op
 ```
 
 ## 2. Facts this design rests on
@@ -59,9 +90,15 @@ All measured or read on 2026-10-05 unless a date says otherwise.
 | v1 memory over 7 days (whole app container): p50 7.4 GiB, p95 10.8 GiB, max 35.4 GiB | Prometheus, `container_memory_working_set_bytes` |
 | 13 to 14 claude processes at about 400 MiB RSS each; 16 tmux sessions; 137 worktree dirs; 41G of 252G used | `ps`, `tmux`, `df` in the pod |
 | Earlier OOMs: an 8Gi limit killed haynesnetwork's `pnpm test`; a 24Gi limit was hit at 21.9 GiB with concurrent sessions (2026-08-16) | helmrelease comments |
-| Nodes: talosm01-05 (20 cores, 96 GiB, zone `m`, control plane, untainted); talosw01 (40 cores, 3090 GPU host), talosw02 (16 cores, 123 GiB), talosw03 (16 cores, 39 GiB) in zone `w`; talosw04 tainted `haynesops.com/gpu-test` | `kubectl get nodes` |
+| Nodes: talosm01-05 (20 cores, 96 GiB, zone `m`, control plane, untainted); talosw01 (40 cores, 3090 GPU host), talosw02 (16 cores, 123 GiB), talosw03 (16 cores, 39 GiB) in zone `w`; talosw04 tainted `haynesops.com/gpu-test`. On 2026-10-06 talosm04 was out of service (its A2000 does not enumerate). Kubernetes 1.35.5 | `kubectl get nodes`, `kubectl version` |
 | talosm02 hosts dev-env, `emqx-core-0`, the CNPG operator, a traefik-internal and a traefik-external replica, and authentik pods | `kubectl get pods -o wide` |
 | Storage classes: `ceph-block` (RBD, RWO, default, expandable), `ceph-filesystem` (CephFS, RWX, one active MDS, also used by zigbee2mqtt, zwave, outline, immich ML), `gasha01-rbd`, `openebs-hostpath` | `kubectl get sc`, `get pvc -A` |
+| In-cluster Rook Ceph: 10 NVMe OSDs on talosm01-05. `gasha01-rbd`: ceph-csi-rbd against the Proxmox Ceph (30 HDD OSDs on three hosts, 2 SSD on pve04), RBD only, tenants Prometheus and Loki. Detail in 6.6 | `kubectl get cephcluster`, Proxmox API (2026-10-06) |
+| GPUs: one 3090 (talosw01), A2000s (talosm01, talosm05, talosw04), an RTX 2000 Ada (talosm03). Household GPU pods pin cards by UUID without requesting `nvidia.com/gpu`; the device plugin advertises one unit per card with no sharing. Detail in 8.2 | `nvidia-smi` via the GPU exporter, pod specs |
+| blender-authoring and audio-authoring: MCP services in `dev`, reachable only from the v1 pod. Detail in 8.1 | haynes-ops `apps/dev/{blender,audio}-authoring`, runbooks |
+| v1 runs agents with no approval prompts (`--dangerously-skip-permissions`; Codex approval `never`) | `agent-run.sh` |
+| Cilium has Hubble and its relay enabled, and its L7 proxy on | `cilium-config` |
+| haynes-ops #3392 (open): v1's OPERATOR tier lets an agent act as another namespace's ServiceAccount (Jobs, template patches, Flux spec patches) | the issue |
 | Repo sizes (`.git`): haynes-ops 30M, haynesnetwork 124M, hass-sandbox 47M, cigar-journal 17M, haynes-quest 934M | `du` in the pod |
 | v1 RBAC: ClusterRole `dev-env-operator` (the "OPERATOR tier"): read everything except Secrets, plus pod delete, pod exec, service/pod proxy, rollout restart, Flux reconcile/suspend, ExternalSecret refresh, Job create/delete, CronJob suspend; PVC delete in `database` only | `rbac.yaml`, `cloudnative-pg/app/dev-env-rbac.yaml` |
 | v1 egress: default-deny CiliumNetworkPolicy with about 115 enumerated DNS names plus in-cluster services, selected by `app.kubernetes.io/name: dev-env` | `networkpolicy.yaml` |
@@ -78,24 +115,31 @@ codex 0.160.0), are given where they are used: [6.2](#62-claude-max-login-and-it
 
 | Component | What it is | Runs as |
 |---|---|---|
-| **dev-env-operator** | Control plane. Serves the `/v1` API, reconciles `AgentSession` resources into pods and volumes, detects idle sessions, runs rescue, drains outdated sessions, expires activities. Owns no running work. | Deployment, 2 replicas with leader election, namespace `dev-env-system` |
+| **dev-env-operator** | Control plane. Serves the `/v1` API, reconciles `AgentSession`, `ToolSession` and `LLMLease` resources into pods and volumes, detects idle sessions, runs rescue, drains outdated sessions, expires activities. Owns no running work and holds no grant privileges. | Deployment, 2 replicas with leader election, namespace `dev-env-system` |
+| **dev-env-broker** | Access broker (6.12). Checks grant requests against the standing policies in git, sends Tom the rest, serves the approval page, creates and revokes the time-boxed RoleBindings and network policies. The same binary as the operator, run in a second mode. | Deployment, 2 replicas with leader election, own ServiceAccount, namespace `dev-env-system` |
 | **dev-env-keeper** | The only holder of rotating credentials (Claude Max login, Codex login) and of the GitHub App key. Mints and refreshes; writes short-lived results into Secrets that agent pods mount. Pages Tom when a login nears expiry. | Deployment, 1 replica, `Recreate`, namespace `dev-env-system` |
-| **session pod** | One agent session: `tini` as PID 1, `agentd`, tmux, the agent CLI, its MCP children, the build tools. | Pod in namespace `dev-agents`, owned by its `AgentSession` |
-| **agentd** | Small supervisor inside each session pod. Renders config at boot, clones the repo, starts or resumes the agent, sends heartbeats, runs rescue and drain hooks on request. Replaces v1's `dev-init.sh` and `post-ready.sh` per pod. | Child of `tini` in the session pod |
-| **agent-run** | CLI client of the API. Same verbs as v1. One static binary. | Wherever it is called |
+| **session pod** | One agent session: `tini` as PID 1, `agentd`, tmux, the agent CLI (Claude Code, Codex or opencode), its MCP children, the build tools. | Pod in namespace `dev-agents`, owned by its `AgentSession` |
+| **agentd** | Small supervisor inside each session pod. Renders config at boot, clones the repo, starts or resumes the agent, sends heartbeats, runs rescue and drain hooks on request, and serves the loopback tool gateway (8.1). Replaces v1's `dev-init.sh` and `post-ready.sh` per pod. | Child of `tini` in the session pod |
+| **tool pod** | One instance of a specialised tool (Blender, audio, image, transcription, 3D printing, video, a local LLM server), started for agents on demand and stopped when idle (8.1). | Pod in namespace `dev-tools`, any node that fits, owned by its `ToolSession` or pool |
+| **agent-run** | CLI client of the API. Same verbs as v1. One static Go binary. | Wherever it is called |
 | **workbench** | Tom's browser IDE (code-server) plus `agent-run` and `kubectl`. Runs no agents by default. | Small Deployment, namespace `dev-agents` (phase 5) |
 | **codex hub** | The one long-lived session that runs the Codex remote-control daemon and keeps the phone's enrolment. | A session pod of kind `codex-hub` (phase 4) |
+
+The operator, broker, agentd and `agent-run` are written in Go (Q-02, Tom
+2026-10-06). The operator owns pods and volumes itself (Q-01, Tom 2026-10-06).
 
 **D-01. The operator is control plane only.** It never runs agent work, and its
 Deployment owns nothing that runs agent work. Its outage stops new sessions and
 lifecycle actions; running sessions do not notice. Rationale: requirement 4 of the
 vision, and it keeps the operator's upgrade path trivial.
 
-**D-02. Two namespaces.** `dev-env-system` holds the operator and keeper.
-`dev-agents` holds session pods, their volumes, the workbench and the Secrets agents
-mount. The operator's write access is limited to `dev-agents`. Rationale: least
-privilege, and a ResourceQuota and LimitRange that apply to agent pods only. The
-v1 namespace `dev` is left alone until cutover.
+**D-02 (revised 2026-10-06). Three namespaces.** `dev-env-system` holds the operator,
+broker and keeper. `dev-agents` holds session pods, their volumes, the workbench and
+the Secrets agents mount. `dev-tools` holds tool pods, their volumes and the Secrets
+only tools use (for example a video vendor's API key). The operator's write access is
+limited to `dev-agents` and `dev-tools`. Rationale: least privilege, and a LimitRange
+and network policies that apply to agent and tool pods only. The v1 namespace `dev`
+is left alone until cutover.
 
 ### 3.2 Ownership, so an operator upgrade cannot cascade
 
@@ -111,7 +155,7 @@ flowchart TB
 operator Deployment.** The CRDs ship in their own Flux Kustomization with
 `prune: disabled`, and the operator adds no finalizer that deletes pods. Deleting or
 rolling the operator therefore cannot delete a session. Only an explicit reap, or a
-human deleting the `AgentSession`, removes a pod. See [5.1](#51-operator-and-keeper-upgrades-never-touch-sessions).
+human deleting the `AgentSession`, removes a pod. See [5.1](#51-operator-broker-and-keeper-upgrades-never-touch-sessions).
 
 ### 3.3 The AgentSession resource
 
@@ -128,13 +172,15 @@ metadata:
 spec:
   repo: haynes-ops
   base: origin/main
-  agent: claude                       # claude | codex
+  agent: claude                       # claude | codex | opencode (6.13)
   mode: remote                        # task | local | remote (v1's task | local | both)
-  model: claude-opus-5-5              # full id, never an alias
+  model: claude-opus-5-5              # full id, never an alias; opencode: the LLM pool's model id
   effort: xhigh
   prompt: "…"                         # task mode only
-  size: M                             # S | M | L (section 7.2)
-  profile: full                       # which Secrets and egress policy (D-18)
+  size: M                             # S | M | L: presets for requests and limits (section 7.2)
+  profile: full                       # which Secrets and standing grants (D-18)
+  tools: [blender, audio]             # tool pools registered at boot (8.1); default from the profile
+  llm: { pool: llm-coder }            # opencode only: the LLM pool it leases (8.3)
   parent: haynes-ops-1005-195501      # the session that created it, from the caller's token
   operatingMode: Running              # Running | Suspended
   lifecycle:
@@ -142,6 +188,7 @@ spec:
     archiveAfter: 168h                # after suspension
 status:
   phase: Running                      # Pending | Running | Idle | Draining | Suspended | Archived | Failed
+  pending: ""                         # while Pending: the scheduler's reason (7.3)
   revision: 2.0.3-7f3a9c              # template revision the pod runs (section 5.2)
   podName: haynes-ops-1005-202504
   nodeName: talosw02
@@ -151,8 +198,9 @@ status:
   conditions: []
 ```
 
-**D-04. Session templates are GitOps data.** Image digest, size classes and
-profiles live in a ConfigMap (`dev-env-templates`) in haynes-ops. The template
+**D-04. Session templates are GitOps data.** Image digest, size classes, storage
+classes and profiles live in a ConfigMap (`dev-env-templates`) in haynes-ops.
+ToolPools, GrantPolicies and LLM pools are GitOps data in the same way. The template
 **revision** is a hash of that content. Renovate bumps the image digest there, the
 same way it bumps any HelmRelease. Rationale: every change that reaches agent pods
 shows up as a haynes-ops PR diff, like v1's ConfigMaps do today.
@@ -171,12 +219,14 @@ HTTPS with a cert-manager certificate, JSON, versioned under `/v1`.
 | `POST /v1/sessions/{id}/resume` | Start the pod again and resume the conversation. |
 | `POST /v1/sessions/{id}/restart` | Move a session onto the current revision now (explicit drain). |
 | `DELETE /v1/sessions/{id}` | Reap: rescue, suspend, archive. There is no "skip the rescue" flag. |
-| `GET /v1/fleet` | Capacity, quota use, current revision, outdated sessions. |
+| `GET /v1/fleet` | Running and Pending sessions with the scheduler's reasons, current revision, outdated sessions, storage health, plan-quota state. It reports; it gates nothing (D-21). |
 | `GET/POST/DELETE /v1/activities` | `declare-activity` ([6.9](#69-declare-activity)). |
 | `GET /v1/auth` | Status of each credential: present, expires, days left. Never a value. |
 | `POST /v1/auth/{claude,codex}/login` and `…/login/code` | Relay the monthly login ceremony ([6.2](#62-claude-max-login-and-its-monthly-renewal)). |
 | `GET /v1/rescues`, `POST /v1/rescues/{id}/restore` | List rescue bundles; start a new session from one. |
-| `/v1/leases` | Reserved for local-LLM leases ([section 8](#8-local-llm-leases-the-seam)). Not built in v2.0. |
+| `GET /v1/tools`, `POST /v1/tools/sessions`, `DELETE /v1/tools/sessions/{id}` | List tool pools; attach (create a ToolSession for the caller); release ([8.1](#81-tool-pods)). |
+| `POST /v1/grants`, `GET /v1/grants`, `GET/DELETE /v1/grants/{id}` | Request, list, inspect or release an access grant ([6.12](#612-access-no-prompts-in-the-pod-control-at-the-platform)). Approving is not in this API: it happens on the broker's page. |
+| `POST /v1/leases`, `GET /v1/leases`, `DELETE /v1/leases/{id}` | LLM leases ([8.3](#83-llm-pools-and-leases)). |
 
 **D-05. Callers authenticate with a Kubernetes ServiceAccount token** for the
 audience `dev-env-operator`, checked with a TokenReview.
@@ -189,8 +239,8 @@ audience `dev-env-operator`, checked with a TokenReview.
   port-forward. `agent-run` does both steps for him.
 - An Authentik OIDC login for the laptop is a later step (phase 6).
 
-All authenticated callers get the same API. Destroying unrescued work is not in
-the API at all: it needs a human with `kubectl` (agents cannot delete PVCs in
+All authenticated callers get the same API, except that only Tom (on the broker's
+page) can approve a grant. Destroying unrescued work is not in the API at all: it needs a human with `kubectl` (agents cannot delete PVCs in
 `dev-agents`). Each session may create at most 4 child sessions at a time, two
 levels deep, so a confused agent cannot fork-bomb the fleet.
 
@@ -200,7 +250,7 @@ The verbs stay, so muscle memory and every CLAUDE.md instruction carry over.
 
 | v1 verb | v2 behaviour |
 |---|---|
-| `agent-run [--repo r] [--agent a] [-p "…"\|--local\|--interactive] [--model] [--effort]` | `POST /v1/sessions`, prints the id. New flags: `--size S\|M\|L`, `--profile`. `--interactive` still means "TUI + Remote Control" for claude. |
+| `agent-run [--repo r] [--agent a] [-p "…"\|--local\|--interactive] [--model] [--effort]` | `POST /v1/sessions`, prints the id. New: `--agent opencode`, `--size S\|M\|L`, `--profile`, `--tools a,b`. `--interactive` still means "TUI + Remote Control" for claude. |
 | `list` | `GET /v1/sessions` |
 | `attach [<id>]` | For Tom: `kubectl exec -it <pod> -- tmux attach` from the workbench or a laptop. Not offered to agents, which have no exec in `dev-agents` (D-19); they use `msg`. |
 | `detach` | For Tom: exec `tmux detach-client` in the pod. |
@@ -208,6 +258,9 @@ The verbs stay, so muscle memory and every CLAUDE.md instruction carry over.
 | `prune`, `sweep` | Gone as commands. The operator's reaper does this continuously ([4.3](#43-timers)). `agent-run fleet` shows what it will do. |
 | `codex-remote [up\|stop]` | Manages the codex hub session ([6.3](#63-codex)). |
 | new: `suspend`, `resume`, `restart`, `msg`, `fleet`, `auth status\|login\|code`, `rescue list\|restore` | Map one to one onto the API. |
+| new: `tools list\|attach\|release\|get\|put` | Tool pods and their artifacts ([8.1](#81-tool-pods)). |
+| new: `grant request\|list\|use\|release`, `breakglass` | Access grants ([6.12](#612-access-no-prompts-in-the-pod-control-at-the-platform)). `grant request` prints the approval link and waits for the answer; `--no-wait` returns the id. |
+| new: `lease <pool> [--minutes N]` | LLM leases ([8.3](#83-llm-pools-and-leases)). |
 | `declare-activity …` | Same command and flags, now a thin client of `/v1/activities`. |
 
 **D-06. `agent-run` is one static binary** with no runtime dependency. It needs only
@@ -237,10 +290,12 @@ never reaps: on 2026-09-28 the pod held 2,970 zombie processes, and an un-reaped
 Codex updater is why its self-updater had to be switched off.
 
 **D-08. Commands go operator to pod by `kubectl exec`; status goes pod to operator
-by heartbeat.** No session pod opens a listening port, so no in-pod auth scheme is
-needed and agent pods keep zero ingress.
+by heartbeat.** No session pod opens a listening port on the pod network, so no
+in-pod auth scheme is needed and agent pods keep zero ingress. agentd's tool gateway
+(8.1) listens on loopback only.
 
-Pod spec, inherited from v1 where the lesson still applies: non-root uid 1000,
+The agent runs with no approval prompts (D-23). Pod spec, inherited from v1 where
+the lesson still applies: non-root uid 1000,
 read-only root filesystem, all capabilities dropped, `RuntimeDefault` seccomp,
 `ndots:1` (the DNS allowlist refuses search-expanded names),
 `XDG_RUNTIME_DIR=/dev/shm/run-1000` (Claude refuses a group-writable socket dir),
@@ -295,6 +350,9 @@ busy-lock, merger waits for release"). The agent sets it simply by working.
 | suspended session | archived after 7 days | resume window; RBD is thin, so a parked volume costs only its written bytes |
 | rescue bundle | kept 30 days | long enough to notice a loss |
 | outdated revision | drained at the next idle moment (Q-03) | section 5.2 |
+| tool instance with no claims and not busy | stopped after 30 min, volume kept | 8.1 |
+| access grant | expires at its TTL (at most 8 h; break-glass 1 h) | 6.12 |
+| unanswered grant request | denied after 30 min | 6.12 |
 | post-ready standby | the operator keeps one `remote` session on haynes-ops ready, as v1's post-ready does | Tom (2026-09-10): after a roll nothing could start a session |
 
 The standby keeps v1's circuit breaker: if three standbys are created inside 30
@@ -336,7 +394,7 @@ inside the cluster, on the shared volume.
 
 ## 5. Rolling updates
 
-### 5.1 Operator and keeper upgrades never touch sessions
+### 5.1 Operator, broker and keeper upgrades never touch sessions
 
 Rules, each enforced by a test in the operator's CI:
 
@@ -349,6 +407,11 @@ Rules, each enforced by a test in the operator's CI:
   ships as a new served version with conversion, never a delete and re-create.
 - The keeper writes Secrets on a schedule with a wide margin (gh token: minted every
   40 min, valid 60 min). A keeper outage shorter than 20 minutes is invisible.
+- The broker keeps no state outside `AccessGrant` objects. A broker restart or
+  outage stops new grants only; active kube grants keep working until their tokens
+  expire, and the operator deletes expired egress grants as a backstop.
+- The same rules hold for tool pods: they are owned by their `ToolSession` or pool,
+  never by the operator Deployment.
 
 Phase 1 proves this: run `kubectl rollout restart deploy/dev-env-operator` while a
 task session is mid-turn. The task must finish untouched.
@@ -358,20 +421,23 @@ task session is mid-turn. The task must finish untouched.
 The revision is the hash of the template ConfigMap (D-04). New sessions always start
 on the current revision. A running session on an older revision is **outdated**.
 
-Recommended policy, pending **Q-03**: **drain on idle, then resume.**
+Policy (**Q-03**, Tom 2026-10-06): **drain on idle, then resume the conversation on
+the new version.**
 
 1. The operator marks the session `Draining` only when it is idle (4.2).
 2. agentd `prepare-restart` records the agent session id, mode, model, effort and
    Remote Control name on the volume.
 3. The operator deletes the pod and starts a new one on the new revision with the
    same volume. agentd resumes the conversation (`claude --resume`,
-   `codex resume`).
+   `codex resume`, opencode's session resume).
 4. A session that stays busy for 72 h after going outdated gets a message asking it
    to reach a stopping point; nothing is forced. Tom gets one Pushover line if it is
    still outdated 24 h after that.
 
 A busy turn is never cut. Background processes (a dev server, a watch) do not
 survive the restart; they are rare in an idle session and the agent restarts them.
+Active grants and leases survive a drain: they belong to the session, not the pod,
+and the operator re-labels the new pod and agentd re-installs grant tokens.
 
 ### 5.3 What this changes for Renovate
 
@@ -389,20 +455,22 @@ tool group keeps its single grouped PR.
 | Codex login (`auth.json`, rotating refresh token) | on the PVC | Codex hub owns it first; keeper later if S-3 passes (6.3) | Codex work runs in the hub until then. |
 | GitHub App token | sidecar per pod, PEM in the sidecar | Keeper mints into one Secret; pods mount it (6.4) | PEM in one place; one mint for the fleet. |
 | MCP server registration | dev-init, once per pod boot | agentd, once per session pod boot (6.5) | Same mechanism, same ConfigMap. |
-| Repos and worktrees | 256Gi RWO volume, canonical clones + 137 worktrees | Volume per session + small shared CephFS (6.6) | Q-05. |
+| Repos and worktrees | 256Gi RWO volume, canonical clones + 137 worktrees | `gasha01-rbd` volume per session + small shared CephFS (6.6) | Q-05, decided 2026-10-06. |
 | Claude memory (`~/.claude/projects/*/memory`) | on the PVC, shared by all sessions | Shared CephFS, linked into each pod (6.6) | Same visibility as today. |
 | Remote Control, phone, standby | per session; post-ready keeps one standby | per session pod; operator keeps one standby (6.7) | Unchanged for Tom. |
 | ListAgents and SendMessage | Unix sockets in `/dev/shm`, one pod | Native inside a pod, native between Remote Control sessions, relay otherwise (6.8) | No cross-pod inbox for headless tasks. |
 | declare-activity | JSON files on the PVC, read by dev-env-ops over `kubectl exec` | `Activity` resource via the API (6.9) | Limits enforced server-side. |
-| Egress | one CNP for the pod | one CNP per profile (6.10) | Same list on day one. |
+| Egress | one CNP for the pod, about 115 names | Web and platform tiers for every pod; the controlled tier by grant (6.10) | Web fetch works; what a tricked agent can leak depends on what the pod holds (Q-07). |
+| Access beyond the baseline | ask Tom in chat; a headlamp Job on his live directive | `AccessGrant` through the broker, approved on Tom's phone or by a policy in git (6.12) | Audited and time-boxed. |
+| Specialised tools | fixed Deployments in `dev` (Blender, audio) | `ToolPool` and `ToolSession` in `dev-tools` (8.1) | Start on demand, stop when idle. |
 
 ### 6.1 Claude static token
 
 Unchanged in substance. `dev-env-claude-secret` is copied into `dev-agents` by an
 ExternalSecret and injected as env into every session pod for `task` and `local`
 modes. Many pods may use it at once: it has no refresh token, so there is nothing to
-race. It counts against the same Max plan windows as everything else, which is why
-the fleet has a cap (section 7.3).
+race. It counts against the same Max plan windows as everything else; the plan's own
+wall is the limit, and `agent-run fleet` shows it (section 7.3).
 
 ### 6.2 Claude Max login and its monthly renewal
 
@@ -519,19 +587,54 @@ hop) or per-session stdio children (playwright, outline). Their Secrets
 (`dev-env-mcp`, `dev-env-cigar`) are copied into `dev-agents` by ExternalSecrets. Two
 side effects to handle in haynes-ops: the haynesnetwork hop's CiliumNetworkPolicy
 admits the v1 pod today and must also admit `dev-agents` pods, and the authoring
-services' policies likewise.
+services' policies likewise. Tool pools (8.1) are registered differently: agentd
+points each at its loopback gateway, so a tool pod can move or sleep without
+re-registration.
 
 ### 6.6 Repos, worktrees and storage
 
-**Recommended (Q-05): a volume per session, plus one small shared CephFS volume.**
+**Ruling (Q-05, Tom 2026-10-06): a block volume per session plus one small shared
+CephFS volume, and agents may also use gasha01.** "gasha01" names two things: the
+Proxmox-hosted Ceph cluster, which Kubernetes uses through ceph-csi-rbd as
+StorageClass `gasha01-rbd`, and the NFS server VM of the same name (VM 104 on
+twin-bottom), which exports that cluster's large CephFS `hdd-nfs-repl`.
 
-- **Per session:** a `ceph-block` RWO PVC (default 20Gi, thin-provisioned) mounted
-  at `/home/dev`. It holds the clone, the worktree, `~/.claude` (transcripts,
-  session registry, settings), `~/.codex`, and package caches.
-- **Shared:** one `ceph-filesystem` RWX PVC (`dev-env-shared`, 20Gi) mounted at
-  `/home/dev/.shared` with three directories: `memory/` (linked into each pod's
-  `~/.claude/projects/<key>/memory`), `rescue/` (bundles), `logs/` (task logs).
-  All three are small and written rarely.
+The two Ceph clusters, read on 2026-10-06:
+
+| | In-cluster Rook Ceph | gasha01 (Proxmox Ceph) |
+|---|---|---|
+| OSDs | 10 NVMe, two on each control-plane node talosm01-05 | 30 HDD (10 each on HaynesIntelligence, twin-top, twin-bottom) and 2 SSD on pve04 |
+| Raw size, used | 17.2 TiB, 3.2 TiB used | about 155 TiB raw (2026-08-21); pool `k8s-rbd` 0.14 % used |
+| Offered to Kubernetes | `ceph-block` (RBD, default), `ceph-filesystem` (CephFS, one active MDS), `ceph-bucket` | `gasha01-rbd` only: RBD, pool `k8s-rbd`, size 3, `min_size` 2, ext4, expandable, ceph-csi-rbd 3.18.0 in namespace `ceph-csi`. The cluster also has CephFS filesystems (`k8s-cephfs`, `hdd-nfs-repl`), but no CephFS CSI driver for it runs in Kubernetes; `hdd-nfs-repl` reaches pods only as NFS from the gasha01 VM. |
+| Tenants today | every household app's volumes, EMQX, CNPG and Home Assistant included | Prometheus (2Ti), Loki (128Gi); model files for Ollama, llama-server and ComfyUI over NFS |
+
+**D-22. Where each volume lives.**
+
+| Volume | Where | Why |
+|---|---|---|
+| Session home: one RWO PVC per session, default 20Gi, mounted at `/home/dev`. It holds the clone, the worktree, `~/.claude`, `~/.codex`, opencode's state and package caches. | `gasha01-rbd` | Keeps agent disk load off the in-cluster OSDs. Those OSDs run on the control-plane nodes that v2 exists to protect, and they carry every household volume: an install storm on `ceph-block` costs OSD CPU on the masters and IO for EMQX and Home Assistant. The workers are VMs on the same Proxmox hosts as gasha01's OSDs, and its capacity is effectively unlimited. ext4 on RBD caches in the node's page cache, so most small-file work does not wait on HDD seeks; spike S-8 measures how much it does. |
+| `dev-env-shared`: one RWX PVC, 20Gi, mounted at `/home/dev/.shared` with `memory/` (linked into each pod's `~/.claude/projects/<key>/memory`), `rescue/` (bundles), `logs/` (task logs) and `mirrors/` (D-15) | `ceph-filesystem` (Rook) | It needs RWX, and gasha01 offers only RBD to Kubernetes. It is small and written rarely, so the one MDS barely notices. It sits in a different storage cluster from the session volumes, so a rescue bundle survives a gasha01 failure. |
+| Tool workspaces (8.1) | `gasha01-rbd` | Large, written once, read back by the agent: the same reasoning as session volumes. |
+| Model files for tool and LLM pools | gasha01 NFS (`hdd-nfs-repl`), mounted read-only | Where Ollama, llama-server and ComfyUI keep models today; one copy serves every pod. |
+| Codex hub and coordinator-host volumes | `gasha01-rbd` | They are session volumes. |
+| `/tmp` | emptyDir on the node, `sizeLimit` 8Gi | Scratch. |
+| Operator, broker, keeper | none | Their state lives in CRDs and Secrets. |
+
+Storage class names are template data (D-04), so moving any of these later is a
+haynes-ops data change, not code. One rule is set now: if S-8 shows a session's
+clone, install and one test file more than twice as slow on `gasha01-rbd` as on
+`ceph-block`, size L (heavy builds) defaults to `ceph-block` and S and M stay on
+gasha01.
+
+**Failure modes.**
+
+| Failure | What sessions see | What the operator does |
+|---|---|---|
+| gasha01 Ceph unavailable: lost monitor quorum (3 of its 4 monitors are needed) or a placement group below `min_size` | New session volumes cannot be created or attached, so sessions cannot start or resume. Running sessions' file IO blocks, then continues when Ceph returns; nothing is lost. Prometheus and Loki stall at the same moment, so the outage is loud. | `POST /v1/sessions` fails within 2 minutes with "session storage unavailable", never a silent queue. Drains, suspends and archives wait. `GET /v1/fleet` shows storage `Degraded`. If the outage is long, a one-line template PR points new sessions at `ceph-block`. There is no automatic fallback: it would move agent IO onto the masters' OSDs exactly when the house is already degraded. |
+| One Proxmox host down | It also takes one worker VM. The pool (size 3, `min_size` 2, host failure domain, OSDs on four hosts) stays writable after a short peering pause. Sessions on the lost worker resume elsewhere once their volume is released. | The out-of-service taint job releases the volume (section 14). |
+| ceph-csi for gasha01 down (its provisioner or node plugin) | New volumes stay Pending and a resume cannot attach; mounted volumes keep working. | Same error path as the first row. |
+| In-cluster CephFS down | Memory links and new bundles fail; sessions keep working on their own volumes. | Archive is blocked, because no verified bundle exists. That is the safe direction. |
+| HDD latency under a heavy build | Slower installs and tests. | The S-8 rule above; L moves to `ceph-block` by template. |
 
 Why not one shared CephFS home, as in v1? Three reasons:
 
@@ -609,91 +712,336 @@ read list gains the `dev-env.haynesops.com` group.
 
 ### 6.10 Egress
 
-**D-18. Profiles.** A profile names the Secrets a session pod gets and the egress
-policy it falls under (a pod label that a CiliumNetworkPolicy selects). Profile
-`full` is v1's set: the same Secrets and the same allowlist, moved verbatim. Nothing
-regresses on day one; tightening a profile later (for example, no Proxmox root token
-for a haynesnetwork task) is a data change.
+Tom (2026-10-06): agents often cannot get out to the web, and today's limits feel
+overly restrictive. v1's policy is a default-deny list of about 115 DNS names.
+Fetching a page from the pod (Claude Code's WebFetch, `curl`, a docs site, a
+package's homepage) fails unless its host is on that list.
 
-- Session pods: egress per profile, plus the operator API. **No ingress**:
-  `kubectl exec` and attach go through the kubelet, not the pod network.
-- Operator: ingress from `dev-agents` on 8443; egress to the API server and to the
-  keeper on 8443.
-- Keeper: ingress only from operator pods on 8443 (the login relay and status, D-19);
-  egress to the API server, `api.github.com`, the Claude and OpenAI token
-  endpoints, and `api.pushover.net`. Nothing else.
-- Later, leases open egress to an LLM endpoint by pod label (section 8).
+**D-24. Three egress tiers, enforced by Cilium, audited by Hubble.**
+
+| Tier | Who gets it | What it allows |
+|---|---|---|
+| **Web** (baseline) | every session pod | DNS through CoreDNS, and TCP 80 and 443 to any public address: a `toCIDRSet` of `0.0.0.0/0` and `::/0` that excepts the private, CGNAT, link-local and loopback ranges, the cluster's pod and service ranges, and the LAN (`192.168.0.0/16`). Cilium's `world` entity is not used, because it includes the LAN. |
+| **Platform** (baseline) | every session pod | The operator API, the Kubernetes API server, the shared in-cluster MCP services (Home Assistant, Grafana, UniFi, vexa, the haynesnetwork hop), and the tool pods the session has attached (8.1). This is v1's in-cluster list, moved as it is. |
+| **Controlled** | by grant (6.12) or a standing policy | LAN hosts, every other in-cluster service, any other port, SSH anywhere. The broker adds a per-session CiliumNetworkPolicy (`toFQDNs`, `toCIDR` or `toEndpoints`) for the grant's lifetime. |
+
+**D-18 (revised 2026-10-06). Profiles.** A profile names the Secrets a session pod
+gets and its standing controlled-tier grants (a pod label that the broker's standing
+policies match). The web and platform tiers are the same for every profile. Profile
+`full` keeps v1's Secrets on day one, except what Q-07 decides; profile `dev` (gh
+token and MCP tokens only) arrives with local-model agents (6.13). Tightening a
+profile later is a data change.
+
+**Why Cilium and no forward proxy.** A proxy sees each request's host name, and the
+full URL only if it intercepts TLS. It would be a new single point of failure for
+every web call. Many tools ignore or mishandle `HTTPS_PROXY` (git, Node's built-in
+`fetch`, gRPC, websockets), and TLS interception needs a CA in every pod and breaks
+certificate pinning. Cilium enforces by pod label with no client configuration, and
+it is already how v1 is fenced. Hubble (enabled, with its relay) records each pod's
+DNS lookups and flows; agent pods' DNS names are shipped to Loki. That is the audit
+trail a proxy would give, without interception. "Request to allow" still exists, for
+the controlled tier, as an egress grant.
+
+**Exfiltration, plainly.** With the web tier, an agent that a page tricks can send
+anything it can read to any host. The v1 list never closed that: github.com (gists,
+public repos) and both model vendors were always on it, and an agent can write to
+them. What limits the damage is what a pod can read. So the web tier comes with a
+smaller default credential set: the gh token (the down-scoped App token, as v1),
+the agent's own vendor token and the MCP tokens. Whether the root-equivalent
+credentials (the Proxmox operator token and the hw-ssh key) leave the default set
+and move behind the broker is Q-07.
+
+Component policies:
+
+- Session pods: the tiers above. **No ingress**: `kubectl exec` and attach go through
+  the kubelet, not the pod network.
+- Operator: ingress from `dev-agents` on 8443; egress to the API server, the keeper
+  on 8443, and tool pods' health ports.
+- Broker: ingress only from traefik, on its approval port (6.12). It needs no other
+  ingress: it acts on `AccessGrant` objects through the API server. Egress to the API
+  server and `api.pushover.net`.
+- Keeper: ingress only from operator pods on 8443 (the login relay and status);
+  egress to the API server, `api.github.com`, the Claude and OpenAI token endpoints,
+  and `api.pushover.net`. Nothing else. Credential grants reach it as `AccessGrant`
+  objects, not calls.
+- Tool pods: section 8.1.
+- LLM leases open egress to a model server by pod label (8.3).
 
 ### 6.11 RBAC tiers
 
 v1's OPERATOR tier (ClusterRole `dev-env-operator`) is bound cluster-wide. Its write
 verbs reach every namespace: `pods/exec`, pod delete, Job create, `patch` on
 Deployments, StatefulSets and DaemonSets, and the API-server proxy. In v1 that was an
-accepted trade-off (Tom, 2026-08-06, for exec), and Job create with any namespace's
-ServiceAccount is already a known escape hatch (the headlamp Job). v2 adds targets
-that v1 never had: the keeper holds the Max and Codex refresh tokens and the GitHub
-App key, the codex hub and the coordinator-host fallback hold login files, and every
-sibling session pod holds someone's work. With v1's binding as it is, any agent could
-exec into the keeper, start a Job that mounts its Secrets, patch its Deployment, or
-delete a sibling's pod mid-turn with no rescue.
+accepted trade-off (Tom, 2026-08-06, for exec). haynes-ops issue #3392 (open, Tom's
+decision) showed it is closer to cluster-admin than intended: RBAC verbs are not
+field-scoped, so a Job can run under any ServiceAccount in its namespace, a pod
+template patch can change the whole template, and a Flux spec patch makes Flux apply
+the change with its own rights. Agents have used exactly that, on Tom's live
+directive, to run a Job as `frontend/headlamp` (cluster-admin) or to exec into the
+headlamp pod. v2 adds targets that v1 never had: the keeper holds the Max and Codex
+refresh tokens and the GitHub App key, the broker can bind roles, the codex hub and
+the coordinator-host fallback hold login files, tool pods hold vendor API keys, and
+every sibling session pod holds someone's work.
 
-**D-19. Agent writes are granted per namespace, never in `dev-env-system` or
-`dev-agents`.**
+**D-19 (revised 2026-10-06). The baseline keeps v1's verbs with a field-level guard;
+anything more is a grant; nothing in the three dev-env namespaces.**
 
 - **Reads stay cluster-wide**, exactly as v1 (everything except Secrets), plus the
   `dev-env.haynesops.com` group.
-- **Every write verb and the proxy verbs** move into a ClusterRole
-  `dev-env-agent-writes` that is bound only by RoleBindings, one per namespace, from
-  a namespace list kept in haynes-ops. The list never contains `dev-env-system` or
-  `dev-agents`. A namespace missing from the list fails closed: the agent gets a 403,
-  and adding the namespace is a one-line PR (v1's rule: denials are the signal).
+- **The baseline write and proxy verbs are v1's**, bound cluster-wide again, so no
+  namespace list has to grow with the cluster. A ValidatingAdmissionPolicy
+  (`dev-env-agent-guard`), matched to the agent ServiceAccount, lets through only
+  what the runbooks use:
+  - Job create: the pod runs as its namespace's `default` ServiceAccount or one on a
+    short list (policy parameters in haynes-ops); it mounts no Secret outside that
+    list; it is not privileged and uses no hostPath, host network or host PID;
+  - Deployment, StatefulSet and DaemonSet patch: only the
+    `kubectl.kubernetes.io/restartedAt` template annotation;
+  - CronJob patch: only `spec.suspend`;
+  - Flux object patch: only the reconcile annotations and `spec.suspend`;
+  - ExternalSecret patch: only the `force-sync` annotation.
+
+  Exec stays in the baseline, as v1, with one exception: a Kyverno rule on the
+  `CONNECT` operation looks up the target pod and refuses exec into a pod whose
+  ServiceAccount is on a privileged list in haynes-ops (headlamp, the Flux
+  controllers, external-secrets, the CSI provisioners). That list is the one place a
+  new privileged ServiceAccount must be added.
+
+  This is #3392's option 1. It closes the escalation class without taking away
+  anything the runbooks do. The first draft of this design used per-namespace
+  RoleBindings (#3392's option 2) instead; that left the escalation open inside
+  every listed namespace and needed the list to grow with the cluster.
+- **Nothing in `dev-env-system`, `dev-agents` or `dev-tools`.** The same guard denies
+  every write, delete and exec by the agent ServiceAccount in those three namespaces.
+  Spike S-12 checks that the guard sees `CONNECT` for exec; if the admission policy
+  does not, the Kyverno rule carries that part.
 - **Inside `dev-agents`, agents act only through the API.** They cannot exec into,
   attach to or delete another session's pod. `agent-run attach` from an agent pod is
   not offered; agents use `agent-run msg`. Tom attaches from the workbench or his
   laptop (the workbench ServiceAccount has `pods/exec` in `dev-agents`).
-- **The keeper serves only the operator.** Its endpoint is HTTPS with TokenReview
-  that accepts only the operator's ServiceAccount, and its CiliumNetworkPolicy
-  admits only operator pods, so API-server proxy traffic is dropped too.
+- **Anything beyond the baseline is a grant** (6.12): a separate identity per grant,
+  holding exactly the granted role for the grant's lifetime. The guard does not
+  apply to it.
+- **The keeper serves only the operator; the broker serves only Tom's browser.** The
+  keeper's endpoint is HTTPS with TokenReview that accepts only the operator's
+  ServiceAccount. The broker's approval page trusts Authentik's identity headers and
+  is reachable only from traefik. Their CiliumNetworkPolicies admit only those
+  callers, so API-server proxy traffic is dropped too.
 - **Accepted, as in v1:** sessions inside the coordinator host or the codex hub can
   read that pod's login file, because they run where it lives.
 
 | Identity | Grants | Note |
 |---|---|---|
-| `dev-agents/dev-env-agent` (session pods) | Cluster-wide read (v1's read rules, no Secrets) + `dev-env.haynesops.com` read. `dev-env-agent-writes` (v1's write and proxy verbs) by RoleBinding in each listed namespace. The `database` PVC-delete binding, as v1. | **At most v1's tier, and less in the two dev-env namespaces.** No write to its own CRDs: every v2 write goes through the API, where limits are enforced. |
-| `dev-env-system/dev-env-operator` | Role in `dev-agents`: pods (create, delete, get, list, watch, patch), `pods/exec` create, `pods/log` get, PVCs (create, delete, get, list, watch), events. ClusterRole: its own CRD group, `tokenreviews` create. Leases in its own namespace. | No cluster-wide pod or PVC rights, no Secrets. |
-| `dev-env-system/dev-env-keeper` | Role in `dev-agents`: Secrets get, update and patch on `resourceNames` `dev-env-gh-token`, `dev-env-claude-live`, `dev-env-codex-live` only. ClusterRole: `tokenreviews` create, to accept calls from the operator's ServiceAccount only. Leases in its own namespace. | The three Secrets are created empty by GitOps, so no `create` is needed. |
+| `dev-agents/dev-env-agent` (session pods) | Cluster-wide read (v1's read rules, no Secrets) + `dev-env.haynesops.com` read. v1's write and proxy verbs cluster-wide, under `dev-env-agent-guard`. The `database` PVC-delete binding, as v1. | **At most v1's tier, minus the #3392 escalations, and nothing in the three dev-env namespaces.** No write to its own CRDs: every v2 write goes through the API. |
+| `dev-agents/grant-<id>` (one per kube grant) | Exactly the granted role, in the granted namespaces, until the grant expires. | Created and deleted by the broker. Its token lives in the session pod's tmpfs. |
+| `dev-env-system/dev-env-operator` | Roles in `dev-agents` and `dev-tools`: pods (create, delete, get, list, watch, patch), `pods/exec` create, `pods/log` get, `pods/eviction` create, PVCs and Services (create, delete, get, list, watch), CiliumNetworkPolicies in `dev-tools` and those labelled as grants in `dev-agents` (delete only, the expiry backstop), events. ClusterRole: its own CRD group, `tokenreviews` create. Leases in its own namespace. | No cluster-wide pod or PVC rights, no Secrets, no `bind`. |
+| `dev-env-system/dev-env-broker` | RoleBindings and ClusterRoleBindings (create, delete); `bind` only on the grant role catalog by `resourceNames`; ServiceAccounts and `serviceaccounts/token` in `dev-agents`; CiliumNetworkPolicies in `dev-agents`; `pods/exec` in `dev-agents` (installs grant tokens); status of `AccessGrant`. | The most privileged v2 identity: it can hand out `cluster-admin` for break-glass. It accepts approvals only from Tom's Authentik identity and runs where agents cannot write or exec. |
+| `dev-env-system/dev-env-keeper` | Role in `dev-agents`: Secrets get, update and patch on `resourceNames` `dev-env-gh-token`, `dev-env-claude-live`, `dev-env-codex-live` only; if Q-07 moves credentials behind grants, also `pods/exec` in `dev-agents` and read on `AccessGrant`. ClusterRole: `tokenreviews` create. Leases in its own namespace. | The three Secrets are created empty by GitOps, so no `create` is needed. |
 | `dev-agents/dev-env-workbench` | Role in `dev-agents`: pods get, list; `pods/exec` create. | Tom's IDE; runs no agents by default. |
 | `dev-env-system/dev-env-human` | none (token audience only) | Exists so Tom's laptop can mint an API token (D-05). |
+| tool pods (`dev-tools`) | none: no ServiceAccount token is mounted | As blender-authoring and audio-authoring today. |
 
 The v1 pod keeps its cluster-wide binding until cutover; it runs no v2 session and
-holds no v2 credential, but it can still reach the two v2 namespaces. Phase 1 checks
-`kubectl auth can-i` from a session pod for each denied verb in both namespaces.
+holds no v2 credential, but it can still reach the v2 namespaces. Phase 1 checks
+`kubectl auth can-i` and the guard from a session pod for each denied path.
 
 Naming note: the ClusterRole `dev-env-operator` is v1's **OPERATOR tier** for agents.
 The new **operator** component runs as ServiceAccount `dev-env-operator` in another
 namespace with its own Roles. Same words, different things; the ClusterRole keeps
 its name because a ClusterRoleBinding's `roleRef` cannot change.
 
+### 6.12 Access: no prompts in the pod, control at the platform
+
+Tom (2026-10-06): agents should skip permission prompts for their own vendor's tools,
+as `--dangerously-skip-permissions` does now, while he keeps control over cluster
+and external access, which an agent would have to request. Today agents hit
+limits, ask him in chat, and sometimes go through the headlamp pod.
+
+**D-23. No approval prompts inside a session pod.** Claude Code runs with
+`--dangerously-skip-permissions`, Codex with approval `never` and sandbox
+`danger-full-access` (`requirements.toml`), and opencode with every permission set to
+`allow`. v1 already does this for Claude and Codex (`agent-run.sh` defaults to it).
+A prompt inside the pod protects nothing the platform cannot, and it stalls headless
+work. The boundary is the platform: what the pod's identity may do (6.11), where it
+may connect (6.10), what it holds (D-18, Q-07), and grants that widen those for a
+while.
+
+**D-25. An access broker grants more, for a while, on request.**
+
+```mermaid
+sequenceDiagram
+  participant A as agent (any harness)
+  participant O as operator API
+  participant B as broker
+  participant T as Tom's phone
+  A->>O: agent-run grant request (or MCP request_access)
+  O->>B: AccessGrant created, Pending
+  alt a GrantPolicy in git matches
+    B->>B: Approved by policy
+  else no policy matches
+    B->>T: Pushover: summary + approval link
+    T->>B: Approve on the page (Authentik login)
+  end
+  B->>B: create ServiceAccount + RoleBinding, or CNP
+  B->>A: install grant token (agentd ctl grant-install)
+  O->>A: message "grant approved", with its expiry time
+  Note over B: at expiry, delete binding, ServiceAccount or CNP
+  B->>A: grant expired
+```
+
+```yaml
+apiVersion: dev-env.haynesops.com/v1alpha1
+kind: AccessGrant
+metadata:
+  name: g-1006-1342-91
+  namespace: dev-env-system
+spec:
+  requester: haynes-ops-1006-1310        # from the caller's token, never from the body
+  type: kube                             # kube | egress | credential | breakglass | lease
+  kube:
+    role: dev-env-grant-workloads        # from the grant role catalog
+    namespaces: [home-automation]
+  ttl: 1h
+  reason: "Patch zigbee2mqtt Deployment image to test 2.12.1 before the PR"   # agent-written
+status:
+  phase: Active                          # Pending | Active | Denied | Expired | Released
+  approvedBy: tom (authentik)            # or policy/<name>
+  approvedAt: "2026-10-06T13:43:10Z"
+  expiresAt: "2026-10-06T14:43:10Z"
+```
+
+Grant types:
+
+| Type | Made of | Revoked by | Longest TTL |
+|---|---|---|---|
+| `kube` | ServiceAccount `grant-<id>` in `dev-agents`, RoleBindings (or a ClusterRoleBinding) to a role from the catalog, and a token from TokenRequest with the grant's TTL. agentd writes it to tmpfs as kube context `grant-<id>`; `agent-run grant use <id>` switches to it. | The token's own expiry; then the broker deletes the ServiceAccount and bindings, which invalidates its tokens at once. | 8 h |
+| `egress` | A CiliumNetworkPolicy selecting `dev-env.haynesops.com/session: <id>`, with `toFQDNs`, `toCIDR` or `toEndpoints` and ports. | Deleting the policy. | 8 h |
+| `credential` (if Q-07 picks A) | The keeper writes the file into the pod's tmpfs. Where the system allows, the credential itself is short-lived: an SSH certificate from the keeper's CA for hw-ssh, a Proxmox API token with an `expire` time. | Removal, and the credential's own expiry. A value an agent has read cannot be un-read; that is why short-lived credentials come first. | 4 h |
+| `breakglass` | A `kube` grant bound to `cluster-admin` (D-27). | As `kube`. | 1 h |
+| `lease` | The LLM lease of 8.3, approved through the same policies. | Label removal. | per pool |
+
+The **grant role catalog** is a set of ClusterRoles in haynes-ops (`dev-env-grant-*`,
+for example `-workloads`: create, update, patch and delete workloads; `-secrets-read`;
+`-storage`: PVCs and VolumeSnapshots), plus the built-in `edit`, `admin` and
+`cluster-admin`. The broker holds `bind` on those names only, so it cannot hand out
+anything else.
+
+**Standing grants are code.** `GrantPolicy` resources live in haynes-ops (namespace
+`dev-env-system`). Each one matches requests (requester profile, repo or agent kind;
+grant type; namespaces and role; FQDN or CIDR patterns; longest TTL) and approves
+them at once, recorded under the policy's name. Examples: egress to the 3D printer's
+LAN address for haynes-quest sessions, 2 h; role `dev-env-grant-workloads` in
+`frontend` for haynesnetwork sessions, 1 h; leases on the shared LLM pool up to
+60 minutes. A CRD validation rule rejects any GrantPolicy for type `breakglass` or
+role `cluster-admin`, so no policy can approve break-glass. The day-one policy set
+approves nothing beyond what v1 already allowed, because the baseline (6.11) already
+covers v1.
+
+**Limits and audit.** At most 3 pending requests per session; identical requests
+merge. A request nobody answers in 30 minutes ends as `Denied` (timeout). Every grant
+is kept for 90 days as a resource and logged to Loki with requester, parent session,
+reason (shown as agent-written), scope, approver (policy name or Tom's Authentik
+user) and times. Talos writes the API server's audit log on each control-plane node;
+every action under a kube grant appears there as `grant-<id>`. Shipping those lines
+to Loki is part of plan 07.
+
+**The broker** is the operator binary in a second mode (`dev-env-operator broker`),
+deployed as its own Deployment with its own ServiceAccount (6.11), so the operator,
+which serves agents all day, holds none of these privileges. Agents cannot write
+`AccessGrant` or `GrantPolicy` objects; they request through the API. A broker
+outage stops new grants and nothing else: kube grants still die with their tokens,
+and the operator deletes expired grants' network policies as a backstop. Upgrading the broker
+never touches sessions (5.1 applies to it).
+
+**D-26. Approvals: a Pushover link to an approval page behind Authentik.**
+
+| Channel | Verdict |
+|---|---|
+| Remote Control `AskUserQuestion` | Not the approval. Tom's answer passes through the agent, so the operator cannot tell it from the agent's own claim, and headless tasks have no such channel. A coordinator still shows the approval link to Tom bare, the way it relays the login URL. |
+| Home Assistant actionable notification | No. The tap comes back as an HA event, and agents hold the Home Assistant MCP server, which can fire events, so an agent could forge an approval. It would also make HA part of the security boundary. |
+| **A small web page served by the broker behind Authentik, its link sent by Pushover** | **Chosen.** Tom's identity comes from Authentik (his passkey), which no agent holds. Pushover is already his paging channel. The page shows the full scope and works the same for task, local and remote sessions. |
+
+The page lists each pending request with requester, repo, parent, scope, TTL and
+reason, and offers Approve, Approve for less time, and Deny. It is served on its own
+port that only traefik can reach, on an external host behind Authentik like Tom's
+other apps. A break-glass approval needs an Authentik login from the last 5 minutes.
+The page can show a request as a GrantPolicy snippet, so an approval Tom keeps
+giving becomes a standing policy through a haynes-ops PR.
+
+**D-27. Break-glass replaces the headlamp path.** Agents have reached cluster-admin
+by running a Job as `frontend/headlamp` or exec-ing into the headlamp pod, only on
+Tom's live directive (2026-08-21, 2026-09-22). In v2 both paths are closed by the
+guard (6.11), and the sanctioned path is `agent-run breakglass --reason "…" --ttl
+30m`: a kube grant of `cluster-admin`, at most 1 hour, approved only by Tom on the
+page, announced by Pushover at high priority, every action attributable to
+`grant-<id>` in the audit log, and revoked at expiry.
+
+**How this meets haynes-ops #3392.** That issue (open, Tom's decision for v1) found
+the escalation class. v2 takes its option 1 as the baseline guard (D-19). The policy
+is written once with the matched ServiceAccounts as a parameter, so if Tom picks
+"mitigate" for v1, the same policy can also match `dev/dev-env` and
+`upgrade-agent/dev-env-ops` before cutover. Once break-glass exists, closing the
+headlamp path costs no capability. Nothing in this design changes haynes-ops today.
+
+### 6.13 Local-model agents
+
+Tom (2026-10-06): local models such as Qwen should work alongside Claude Code and
+Codex, and heavily once more GPUs come online.
+
+**D-33. Local-model agents run opencode in ordinary session pods.** `agent: opencode`
+is a third agent kind beside `claude` and `codex`. It gets the same session pod,
+lifecycle, egress tiers and broker. Its model is a pinned model from an LLM pool
+(8.3), named by the pool's full model id, for example
+`qwen3-coder-30b-a3b-instruct-q4_k_m` on pool `llm-coder`; never an alias.
+
+| Harness | For | Against |
+|---|---|---|
+| **opencode** (chosen) | Talks to any OpenAI-compatible endpoint (llama-server, vLLM, Ollama), so one harness serves every local model and can be compared against vendor models. MCP client over stdio and HTTP. Headless `opencode run` and a TUI. Sessions are kept on disk and can be resumed, which drain-and-resume needs. A permission config that allows everything (D-23). A server mode for a later browser or phone path. | Tool-call quality depends on the model's chat template. A third CLI to pin and bump. |
+| Qwen Code | Tuned for Qwen3-Coder's tool calls; `--yolo`; MCP. | One model family; follows Gemini CLI's release churn. |
+| goose | MCP-native, Ollama provider, headless runs. | Its session and config model is further from the Claude and Codex shape agentd already handles. |
+
+Spike S-11 confirms the pinned opencode does what the table says, against a Qwen
+coder model on llama-server, before plan 09 builds on it.
+
+agentd talks to each harness through an adapter with five verbs: start, resume,
+status (busy, idle, waiting), deliver a message, and register MCP servers. Adding
+goose or Qwen Code later is one adapter.
+
+- **Profile:** opencode sessions start on profile `dev` (gh token and MCP tokens
+  only). Smaller local models follow injected instructions more readily, and they
+  have the same open web tier. Tom can pass `--profile full`.
+- **Lease:** an opencode session holds an LLM lease for its whole run (8.3). If a
+  household workload preempts its pool, agentd marks the session `waiting` and
+  resumes it when the lease is granted again.
+- **Quota:** local models do not draw on the Max plan, so bulk work (mechanical
+  refactors, triage, test writing) can move to them as GPUs arrive.
+
 ## 7. Scheduling and resources
 
 ### 7.1 Placement
 
-**D-20. Session pods run on worker nodes only.**
+**D-20 (revised 2026-10-06). Session pods run on worker nodes only; the scheduler
+places them.**
 
 - Required node affinity `topology.kubernetes.io/zone In [w]`. No control-plane node
-  ever runs an agent, so EMQX, traefik, the CNPG operator and etcd keep their CPU.
-  talosw04 stays out through its `gpu-test` taint.
-- Preferred anti-affinity (weight 30) against talosw01: it is the GPU host, and 3090
-  bus drops there have needed host reboots (the reason v1 moved off it on
-  2026-09-23). With one pod per session, a w01 failure now costs only the sessions on
-  it, and they resume.
+  ever runs an agent session, so EMQX, traefik, the CNPG operator and etcd keep their
+  CPU. talosw04 stays out through its `gpu-test` taint.
+- Preferred anti-affinity (weight 30) against nodes labelled
+  `feature.node.kubernetes.io/nvidia-gpu=true`. It keeps GPU hosts' CPU and memory for
+  GPU work, and keeps sessions away from 3090 bus drops (the reason v1 moved off
+  talosw01 on 2026-09-23). NFD sets the label, so a new GPU node needs no change.
+  The first draft named talosw01 instead.
 - Topology spread over `kubernetes.io/hostname`, `maxSkew: 2`, `ScheduleAnyway`.
-- PriorityClass `dev-env-agent` with value -10: under pressure, household workloads
-  preempt agents, never the reverse. A preempted session resumes from its volume.
-- The operator and keeper are tiny and may run anywhere; the operator's two replicas
-  spread across zones `m` and `w`.
+- PriorityClass `dev-env-agent`, value -10, `preemptionPolicy: Never`. Agents never
+  preempt anything, not even each other; household workloads preempt agents. A
+  preempted session resumes from its volume.
+- The operator, broker and keeper are tiny and may run anywhere; the operator's and
+  broker's two replicas each spread across zones `m` and `w`.
+- Tool pods have their own placement rules (8.1, 8.2).
 
 ### 7.2 Size classes
+
+Size classes are presets for requests and limits (Q-04, Tom 2026-10-06).
 
 | Class | For | Requests (CPU / memory) | Limits (CPU / memory) |
 |---|---|---|---|
@@ -704,29 +1052,48 @@ its name because a ClusterRoleBinding's `roleRef` cannot change.
 Why these numbers: a single Claude process is about 400 MiB; v1's whole-pod median
 is 0.09 cores and its normal peaks are 1 to 6 cores across all sessions together; the
 known memory-heavy job (haynesnetwork's parallel vitest with embedded Postgres)
-broke an 8Gi limit that it shared with other sessions, so it gets L. **CPU limits are
-mandatory**: a LimitRange in `dev-agents` sets M as the default and L as the maximum,
-and a Kyverno policy rejects a session pod without a CPU limit. `/tmp` is an emptyDir
-with an 8Gi `sizeLimit`.
+broke an 8Gi limit that it shared with other sessions, so it gets L. Requests are
+sized to typical use, so the scheduler's picture of each node is true; limits cap
+bursts. **CPU limits are mandatory**: a LimitRange in `dev-agents` sets M as the
+default and L as the most one pod may ask for, and a Kyverno policy rejects a session
+pod without a CPU limit. `/tmp` is an emptyDir with an 8Gi `sizeLimit`.
 
 Each pod exports its CPU limit as `DEV_ENV_CPU_LIMIT`, and the pod CLAUDE.md tells
 agents to size test workers to it. A limit throttles a runaway; it does not stop
 `vitest` from starting 20 workers on a 4-CPU pod and timing out its own tests.
 
-### 7.3 Fleet cap (Q-04)
+### 7.3 Capacity: the scheduler, not a fleet cap
 
-Recommended: a ResourceQuota on `dev-agents` of `limits.cpu` 48, 20 session pods,
-`requests.cpu` 8 and `requests.memory` 64Gi.
+**Ruling (Q-04, Tom 2026-10-06):** "The pods should have requests and limits and
+kubernetes should handle scheduling so the cluster can grow without us having to
+tune how the dispatcher allocates resources." The first draft's cap (48 CPU of
+limits and 20 pods in a ResourceQuota) is withdrawn.
 
-- **What fits:** 48 CPU of limits is 12 sessions at M (4 each), or 16 with a mix such
-  as 8 M and 8 S (8 × 4 + 8 × 2 = 48). An L session counts 8. Today's 13 to 16
-  concurrent sessions fit if the idle coordinators run as S, which is what S is for.
-  The 20-pod cap only matters when most sessions are S.
-- **Why 48:** the worker nodes have 72 cores together, and talosw01 also carries the
-  GPU workloads. With every agent pegged at once, the workers still keep a third of
-  their CPU.
-- **When it is full**, `agent-run` says so and lists the idle sessions it could
-  suspend. A full fleet is a visible error, never a silent queue.
+**D-21. The Kubernetes scheduler decides where and when a session runs.**
+
+- No ResourceQuota on CPU, memory or pod count in `dev-agents` or `dev-tools`, and
+  no capacity logic in the operator. The operator never picks a node and never
+  counts cores.
+- A session that does not fit stays `Pending`. The scheduler's queue is the queue:
+  it places the pod when room appears (a session ends, a node joins). `agent-run`
+  returns at once with the scheduler's reason and the idle sessions that could be
+  suspended to make room. A Pending session is visible, never silent.
+- What protects household workloads, all of which grow with the cluster on their
+  own: (1) a CPU limit on every agent pod; (2) under CPU contention the kernel shares
+  CPU in proportion to requests, so a household pod gets at least what it requested;
+  (3) under memory pressure the kubelet evicts pods using more than their request,
+  lowest priority first, so agents go first; (4) PriorityClass -10 with
+  `preemptionPolicy: Never`; (5) workers only for sessions.
+- **No capacity backstop.** The five mechanisms above are the backstop, and none of
+  them has a number to retune when a node is added. Three guards stay because they
+  are about runaway agents, not capacity, and do not depend on cluster size: at most
+  4 child sessions per session, two levels deep (D-05); at most 4 tool sessions per
+  session (8.1); and the standby's circuit breaker (4.3).
+- **Plan quota.** The Max plan's 5-hour and weekly windows are an account limit, not
+  a cluster one, and with no fleet cap the plan's own wall is the limit. agentd
+  recognises the CLI's quota error (`out of usage credits`), marks the session
+  `QuotaExhausted`, and `agent-run fleet` shows it. Local-model sessions (6.13) do
+  not draw on the plan.
 
 ### 7.4 Image pull
 
@@ -734,21 +1101,275 @@ The image is over 1 GB, and a cold pull took 6m15s. A DaemonSet on the worker no
 keeps the current agent image pulled (a pause container that references it), so a
 new session starts in seconds. It moves to the new digest when the template changes.
 
-## 8. Local LLM leases (the seam)
+## 8. Tool pods, GPUs and local LLMs
 
-Not built in v2.0. These names are reserved so the build does not paint over them.
+Tom (2026-10-06): "We do need more advanced considerations for GPU usage when we add
+in local LLMs. We may also want the ability to spin up specialized tools agents can
+work in that may be on other pods (like needing a GPU) like image gen / speech to
+text (whisper) for transcription / Blender / 3D Printer tools / minimax and other
+video gen tools / audio gen tools (like we use for haynes-quest) / etc".
 
-- **Resource:** `LLMLease` in `dev-env.haynesops.com`. Spec: `pool` (for example
-  `ollama-prime`, `gpu-3090-1`), `model`, `minutes`, `holder` (the session, taken
-  from the caller's token). Status: `granted`, `endpoint`, `expiresAt`,
-  `queuePosition`.
-- **Pools** are GitOps data next to the session templates: endpoint, how many
-  concurrent holders, and whether household use pre-empts the lease.
-- **Enforcement without a proxy:** while a lease is granted, the operator labels the
-  holder's pod `dev-env.haynesops.com/lease-<pool>: granted`. A CiliumNetworkPolicy
-  allows egress to the pool endpoint only for pods with that label. Expiry removes
-  the label.
-- **Household first:** leases govern agents only. Home Assistant voice, Open WebUI
+### 8.1 Tool pods
+
+**Today.** Two tools run beside v1, each deployed by hand from haynes-ops in namespace
+`dev`:
+
+- `blender-authoring` (and `blender-authoring-2`, added because one Blender scene
+  takes one author): Blender with its MCP adapter, MCP over streamable HTTP on
+  `:8000/mcp`, a confined `GET /artifacts/<path>` route, a 10Gi CephFS workspace,
+  requests 500m / 1Gi, limits 4 / 8Gi, CPU only.
+- `audio-authoring`: Stable Audio Small-SFX on CPU, the same MCP and artifact
+  pattern, a job queue (one running, four waiting), requests 1 / 4Gi, limits
+  4 / 16Gi, a provisioning Job that fills a read-only model volume.
+
+Both mount no ServiceAccount token, deny all egress, admit only the v1 pod on port
+8000, use `Recreate` with one replica, and run all day whether used or not. Each new
+tool needs its own hand-made app, and a second author needs a second app.
+
+**D-28. Tools are `ToolPool`s; an agent's use of one is a `ToolSession`.** A
+ToolPool is GitOps data: how to run one kind of tool. A ToolSession is one agent
+session's claim on it. The operator starts tool pods for claims and stops them when
+idle. Tool pods run in namespace `dev-tools`.
+
+Why not reuse `AgentSession` with a tool profile: a tool pod has no agent CLI, no git
+work to rescue, none of the agent's credentials, may serve several sessions at once,
+and may hold a GPU or a vendor API key. Reusing AgentSession would bend its
+lifecycle (rescue, Remote Control, resume) around things that do not apply. The two
+share the operator's machinery (idle detection, revisions, drain on idle), and the
+shapes follow agent-sandbox's `SandboxTemplate` and `SandboxClaim`, as AgentSession
+follows `Sandbox`.
+
+```yaml
+apiVersion: dev-env.haynesops.com/v1alpha1
+kind: ToolPool
+metadata:
+  name: blender
+  namespace: dev-tools
+spec:
+  image: ghcr.io/thaynes43/blender-authoring:<tag>@sha256:…
+  mode: dedicated                     # dedicated | shared | external
+  mcp: { port: 8000, path: /mcp }
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: "4", memory: 8Gi }
+  gpu: { memoryGiB: 0 }               # > 0 claims VRAM (8.2)
+  storage:
+    workspace: { class: gasha01-rbd, size: 10Gi }
+    models: { nfsPath: "", readOnly: true }   # gasha01 NFS path for model files
+  egress: []                          # declared destinations; none by default
+  secretRefs: []                      # Secrets in dev-tools, mounted into the tool only
+  idle: { scaleToZeroAfter: 30m }
+status:
+  toolManifest: { tools: 4, hash: 9c1e… }    # cached tools/list (D-29)
+  instances: 1
+---
+apiVersion: dev-env.haynesops.com/v1alpha1
+kind: ToolSession
+metadata:
+  name: haynes-quest-1006-0912-blender
+  namespace: dev-tools
+spec:
+  pool: blender
+  holder: haynes-quest-1006-0912      # the AgentSession, from the caller's token
+status:
+  phase: Ready                        # Pending | Starting | Ready | Released
+  endpoint: http://blender-7f2c.dev-tools.svc:8000/mcp
+  nodeName: talosw02
+  gpuMemoryGiB: 0
+```
+
+**Modes.**
+
+- `dedicated`: one instance per ToolSession. For tools with one mutable state per
+  user, such as a Blender scene.
+- `shared`: one instance, scaled between 0 and 1, serves every claim; the tool queues
+  work itself (audio, transcription, video).
+- `external`: no pod. A claim opens egress to an existing service by grant, for a
+  deliberate use of a household service (household ComfyUI, for example).
+
+**Lifecycle.**
+
+- **Start on demand.** A claim makes the operator create (dedicated) or scale up
+  (shared) an instance. The claim is Ready when the tool's ready check passes.
+- **Release.** `agent-run tools release`, the holder's suspend or reap, or the
+  holder idle for the pool's idle window.
+- **Scale to zero.** An instance with no claims that reports not busy for
+  `scaleToZeroAfter` (default 30 minutes) is stopped. Its volume stays.
+- **Revisions.** A pool spec change reaches an instance only when it is not busy,
+  the same rule as sessions (Q-03).
+- **Guard.** At most 4 tool sessions per agent session, so a confused agent cannot
+  start a fleet of Blenders. It is a per-session rule, independent of cluster size.
+
+**Tool contract** (every pool image): MCP over streamable HTTP; `GET /readyz`;
+`GET /status` returning `busy` (running or queued jobs, or for Blender a scene with
+unsaved changes); a confined `GET /artifacts/<path>`; a bounded `PUT /inputs/<path>`;
+on SIGTERM, finish within the grace period or record the running job as
+interrupted. blender-authoring and audio-authoring already meet most of it.
+
+**Storage.** Each instance's workspace is a `gasha01-rbd` volume (D-22). A dedicated
+instance's workspace follows its holder: kept while the holder session exists,
+suspended included, and deleted when the holder is archived. A shared pool keeps one
+workspace with a directory per holder and its own retention, as audio-authoring keeps
+job history today. Model files are mounted read-only from gasha01 NFS, filled by a
+provisioning Job, as audio-authoring does.
+
+**Network.** Tool pods mount no ServiceAccount token and none of the agent's
+credentials. Ingress: only from session pods holding a claim (the operator labels the
+holder's pod `dev-env.haynesops.com/tool.<pool>: bound`; a dedicated instance admits
+only its holder's session label) and from the operator for health checks. Egress:
+none, plus what the pool declares in git: the video pool reaches its vendor's API,
+the printer pool reaches the printer's LAN address. A pool that calls a paid API
+holds the key in a Secret in `dev-tools`; the agent never sees it.
+
+**Placement.** Tool pods carry requests and limits and the scheduler places them
+(D-21). CPU-only tool pods run on workers, like sessions. GPU tool pods go wherever
+their VRAM claim fits (8.2), within the limits Q-06 sets.
+
+**D-29. Tools reach the agent through agentd's loopback gateway.**
+
+- At boot, agentd registers one MCP server per pool in the session's `tools:` list
+  (default from the profile; for example, haynes-quest sessions get `blender`,
+  `audio` and `image`) at `http://127.0.0.1:7700/tools/<pool>/mcp`, for whichever CLI
+  runs. The URL never changes, so nothing re-registers when a tool pod moves.
+- The gateway answers `initialize` and `tools/list` from the pool's cached manifest
+  (the operator records it in ToolPool status the first time an instance is Ready),
+  so session start never waits for a cold tool.
+- The first `tools/call` creates the ToolSession, waits for Ready while sending
+  progress notifications, and then proxies. After 60 seconds it returns a tool error
+  ("starting, retry in N s") rather than hang the agent's turn.
+- `agent-run tools attach <pool>` adds a pool mid-session. If the CLI does not pick
+  up a server added mid-session (spike S-10), the pool takes effect at the next
+  `agent-run restart`, which resumes the conversation.
+- **Artifacts.** `agent-run tools get <pool> <path> [dest]` and
+  `agent-run tools put <pool> <src> <path>` move files through the same gateway.
+  Small results, such as screenshots, still come back inline in MCP.
+- The gateway also serves a built-in `dev-env` MCP server with `request_access`,
+  `grant_status`, `release_access`, `request_lease` and `attach_tool`, thin wrappers
+  over the API, so a model asks for access the way it calls any tool (6.12).
+- The gateway listens on loopback only. Session pods still open no port on the pod
+  network (D-08).
+
+**The tools Tom named, as pools:**
+
+| Tool | Today | Pool | GPU | Notes |
+|---|---|---|---|---|
+| Blender | `blender-authoring`, `blender-authoring-2` in `dev` | `blender`, dedicated | none; GPU render Jobs later claim VRAM | one scene, one author |
+| Audio generation (haynes-quest) | `audio-authoring` in `dev` | `audio`, shared | none (CPU route) | keeps its internal queue |
+| Image generation | ComfyUI in `ai` (household, on the RTX 2000 Ada) | `image`, dedicated: ComfyUI plus an MCP adapter, models read-only from the household's NFS path | yes, 8 to 12 GiB | agent renders never queue in front of household ones; reaching household ComfyUI directly is an `external` claim |
+| Transcription | `whisper`, `vexa-whisper` in `ai` (household, Wyoming and vexa) | `whisper`, shared: faster-whisper behind MCP, files through artifacts | optional, about 4 GiB; CPU fallback | |
+| 3D printing | none | `printer`, dedicated: a slicer CLI (OrcaSlicer or PrusaSlicer) and the printer's LAN API | none | the only pool with LAN egress, declared in git |
+| Video generation (MiniMax and others) | none | `video`, shared: holds the vendor API key, egress to the vendor only | none for hosted APIs; a local video model later claims VRAM | agents never see the key |
+| Coder LLM | none | `llm-coder`, `kind: llm` (8.3) | about 20 GiB | |
+
+The existing blender and audio apps keep running from haynes-ops until plan 08
+converts them; phase 1 only lets `dev-agents` pods reach them.
+
+### 8.2 GPUs
+
+**Facts** (read 2026-10-06):
+
+| Node | Card | VRAM | In use by | Free |
+|---|---|---|---|---|
+| talosw01 (worker) | RTX 3090 | 24 GiB | llama-server (Muse Glimmer 30B, Home Assistant voice), ollama-prime, Immich ML | about 7 GiB |
+| talosm01 (control plane) | RTX A2000 | 12 GiB | whisper, vexa-whisper, kokoro, speech-to-phrase | about 4 GiB |
+| talosm03 (control plane) | RTX 2000 Ada | 16 GiB | ComfyUI, ollama-assist02, Immich ML | about 3 GiB |
+| talosm05 (control plane) | RTX A2000 | 12 GiB | nothing | 12 GiB |
+| talosm04 (control plane) | RTX A2000, not enumerating | | node out of service | |
+| talosw04 (tainted `gpu-test`) | RTX A2000 (eGPU test bench) | 12 GiB | nothing; it hosts card tests | |
+
+The second 3090 is out of HaynesIntelligence. Household GPU pods pick a card through
+RuntimeClass `nvidia` and an `NVIDIA_VISIBLE_DEVICES` UUID pin, or no pin at all; only
+`vexa-whisper` requests `nvidia.com/gpu`. The NVIDIA device plugin advertises one
+`nvidia.com/gpu` per card with no sharing, so the scheduler's view of GPUs is fiction:
+it would happily place a new GPU pod on a card that is 70 % full. NFD labels each GPU
+node by model (`feature.node.kubernetes.io/nvidia-3090-gpu` and so on). The cluster
+runs Kubernetes 1.35.5 and serves `resource.k8s.io/v1` (DRA).
+
+**D-30. GPU capacity is counted in VRAM and claimed through the scheduler, by
+everyone.**
+
+- The device plugin (already deployed) advertises each card as time-sliced
+  replicas, one per GiB of VRAM, under `nvidia.com/gpu.shared`: 3090 24, RTX 2000
+  Ada 16, A2000 12. A node's config is chosen by a label that an NFD rule sets from
+  the card model (the model rules exist today), so a new card of a known model needs
+  no change, and a new model needs one config entry beside the NFD rule it already
+  needs.
+- Every GPU workload requests its steady VRAM in those units: household pods
+  (llama-server, Ollama, ComfyUI, whisper, kokoro, speech-to-phrase, Immich ML,
+  vexa-whisper) and agent pods alike. Household pods drop their UUID pins; the
+  plugin assigns the card. This changes household manifests in haynes-ops; plan 09
+  does it one app per PR, verified after each, before any agent GPU pod runs.
+- The units are accounting, not enforcement. Each workload caps its own VRAM in its
+  own config (model and context size for llama-server, `OLLAMA_MAX_LOADED_MODELS`
+  for Ollama, vLLM's `--gpu-memory-utilization`, ComfyUI's VRAM flags), and the
+  operator sets an agent GPU pod's cap from its claim. A guard backs this: if a
+  card's used VRAM (from `nvidia-gpu-exporter`) passes its total less 1 GiB while an
+  agent pod holds a claim on it, the operator evicts that agent pod and records why.
+  The guard reads each card's total from the exporter, so it has no per-node numbers.
+- **Alternatives.** HAMi enforces VRAM limits, but replaces the device plugin, adds
+  a scheduler extender and preloads a CUDA hook into every GPU pod, household ones
+  included: more blast radius than the problem. DRA is the long-term shape, but
+  splitting one card's memory between claims needs DRA's consumable-capacity feature
+  and NVIDIA's DRA driver to support it on these cards. Spike S-9 checks both before
+  plan 09 builds; a claim's `memoryGiB` maps onto a ResourceClaim later without
+  changing the ToolPool shape.
+
+**D-31. Household first; the scheduler queues; agents never preempt.**
+
+- Agent GPU pods use PriorityClass `dev-env-agent` (-10, `preemptionPolicy: Never`).
+  Household GPU pods keep the default priority, so when one needs VRAM an agent pod
+  holds, the scheduler preempts the agent pod. Agent GPU pods get 60 seconds to stop
+  and record their running job as interrupted (tool contract, 8.1).
+- A GPU claim that does not fit stays Pending, and the scheduler places it when VRAM
+  frees, by priority and then age. `agent-run tools` and `agent-run lease` show the
+  scheduler's reason and the pods ahead.
+- A model that needs a whole card claims all of the card's units.
+- Session pods never claim a GPU. GPU work lives in tool pods and LLM pools.
+- **Control-plane GPUs.** Three of the five working cards sit on control-plane nodes
+  (talosm01, talosm03, talosm05), and the only idle one is talosm05's A2000. Whether
+  GPU tool pods may run there is **Q-06**. Until Tom answers, GPU tool pods run on
+  workers only.
+- **talosw04** (the eGPU test bench) is left out unless its node carries
+  `dev-env.haynesops.com/gpu-lend: "true"`, which Tom sets in git when no card test
+  is running.
+
+### 8.3 LLM pools and leases
+
+The seam reserved in the first draft becomes the design.
+
+**D-32. Two kinds of LLM pool, and leases that grant access to them.**
+
+- **Pools** are GitOps data next to the session templates.
+  - `shared`: a household model server that agents may also call, such as
+    llama-server serving Muse Glimmer 30B on the 3090, or ollama-prime. Agents get at
+    most the server's own parallel slot count less one, so a household request never
+    waits behind agents for a slot. It uses no extra VRAM.
+  - `dedicated`: an LLM tool pool for agents (8.1, `kind: llm`): llama-server
+    (llama.cpp, already pinned in haynes-ops) with a coder model read from gasha01
+    NFS, a VRAM claim, started on the first lease, scaled to zero 30 minutes after the
+    last one, and preempted by household GPU pods (D-31). vLLM replaces llama.cpp
+    for a pool once a card has room for its parallel throughput.
+- **Today's limit, plainly.** A 30B coder model at 4-bit with a long context needs
+  about 20 GiB, a whole 3090, and the one worker 3090 runs Muse Glimmer for the house.
+  Until more GPUs arrive (or Q-06 opens a master's A2000 to smaller models),
+  local-model agents use the shared pool, one slot at a time, and `llm-coder` waits
+  for a card.
+- **`LLMLease`** (resource name kept from the first draft). Spec: `pool`, `model`,
+  `minutes`, `holder` (from the caller's token). Status: `granted`, `endpoint`,
+  `expiresAt`, `queuePosition`.
+- **Enforcement without a proxy.** While a lease is granted, the operator labels the
+  holder's pod `dev-env.haynesops.com/lease-<pool>: granted`, and a
+  CiliumNetworkPolicy allows egress to the pool's endpoint only for pods with that
+  label. Expiry removes the label.
+- **Queue.** Leases beyond a pool's slots wait in a first-in, first-out queue in the
+  operator. It counts the model server's request slots, a property of the server's
+  own config, not of nodes or cores, so adding nodes needs no retuning.
+- **Approval.** A lease goes through the broker's policy check like any grant (6.12).
+  A standing policy approves normal use, so Tom is not asked per lease.
+- **Holders.** An opencode session holds a lease for its whole run (6.13). A Claude
+  or Codex session may take one for a subtask, for example to have a local model
+  summarise a large log.
+- **Household first.** Leases govern agents only. Home Assistant voice, Open WebUI
   and ComfyUI never queue behind an agent lease.
 - **API:** `POST /v1/leases` (request), `GET /v1/leases`, `DELETE /v1/leases/{id}`.
 
@@ -762,13 +1383,14 @@ Not built in v2.0. These names are reserved so the build does not paint over the
 | **Daytona, E2B and similar sandbox platforms** | Short-lived code-execution sandboxes. | Long-lived interactive sessions with cluster credentials, which is the whole job. | No. Different problem. Not evaluated further. |
 | **No operator: a StatefulSet per session, made by a script** | Pods and volumes. | Every lifecycle rule, with no reconcile loop to keep them true. | No. It is v1's sweep problem again. |
 
-**Recommendation (Q-01): build a small operator that owns pods and PVCs directly**,
-keeping the `AgentSession` shape close to agent-sandbox's `Sandbox`. The pod-and-volume
-layer is the easy fifth of this design. Owning it keeps the one guarantee the vision
-cares most about ("an operator upgrade never takes down running sessions") in code we
-test, and keeps all write access namespaced to `dev-agents`. Adopting agent-sandbox
-instead (option B) is a sound second choice: less code and warm pools, at the cost of
-re-verifying a third-party controller on every upgrade.
+**Ruling (Q-01, Tom 2026-10-06): build a small operator that owns pods and PVCs
+directly**, modelled on agent-sandbox: `AgentSession` follows `Sandbox`, and
+`ToolPool` and `ToolSession` follow `SandboxTemplate` and `SandboxClaim` (8.1). The
+pod-and-volume layer is the easy fifth of this design. Owning it keeps the one
+guarantee the vision cares most about ("an operator upgrade never takes down running
+sessions") in code we test, and keeps all write access namespaced to `dev-agents` and
+`dev-tools`. Warm pools, agent-sandbox's main extra, stay a later item (plan 06). The
+code is Go (Q-02, Tom 2026-10-06).
 
 ## 10. Repository split: what moves, what stays, migration order
 
@@ -788,15 +1410,18 @@ image name `ghcr.io/thaynes43/dev-env`. haynes-ops records it in its dev-env sag
 | `declare-activity.sh` | the `declare-activity` client |
 | `login-check.sh`, `auth-check.sh`, `gh-token-refresh.sh` | the keeper |
 | `pve.sh`, `hw-ssh.sh` | tools baked into the agent image |
-| (new) | the operator, its CRDs, its image `ghcr.io/thaynes43/dev-env-operator` |
+| (new) | the operator, its CRDs, its image `ghcr.io/thaynes43/dev-env-operator`; the same binary runs as the broker |
 
 **Stays in haynes-ops (GitOps):** every manifest. v1 (`apps/dev/dev-env`), maintained
-as today until cutover; the new `dev-env-system` and `dev-agents` apps (namespaces, CRDs,
-operator and keeper HelmReleases, RBAC, CNPs, ExternalSecrets, ResourceQuota,
-LimitRange, PriorityClass, the Kyverno limit policy); the config the pods read
-(`CLAUDE.md`, `mcp.json`, Codex `config.toml` and `requirements.toml`, subagent
-definitions, `dev-env-templates`), because config is deploy-time data and belongs in
-the audited GitOps diff; dev-env-ops; the Kyverno image policy.
+as today until cutover; the new `dev-env-system`, `dev-agents` and `dev-tools` apps
+(namespaces, CRDs, operator, broker and keeper HelmReleases, RBAC with the grant role
+catalog and the baseline guard, CNPs, ExternalSecrets, LimitRange, PriorityClass, the
+Kyverno limit policy); the config the pods read (`CLAUDE.md`, `mcp.json`, Codex
+`config.toml` and `requirements.toml`, opencode's config, subagent definitions,
+`dev-env-templates`) and the ToolPools, GrantPolicies and LLM pools, because config
+is deploy-time data and belongs in the audited GitOps diff; dev-env-ops; the Kyverno
+image policy. Tool images keep their own sources (blender-authoring and
+audio-authoring build in haynes-ops today); a ToolPool pins any signed image.
 
 **Migration order:**
 
@@ -855,13 +1480,16 @@ v2 work never edits
 
 | Phase | Delivers | Done when |
 |---|---|---|
-| **0. Design and spikes** | This saga; spikes S-1 to S-7 | Q-01 to Q-05 answered, spike results recorded, ADR-001 Accepted |
-| **1. Foundation** | Repo CI; operator with `AgentSession`, pod and volume lifecycle; agentd boot; agent image `2.0` (tini, agentd, baked Codex and kubectl-cnpg); keeper minting the gh token; haynes-ops apps for namespaces, CRDs, operator, keeper, RBAC, CNPs, quota, LimitRange, PriorityClass, Kyverno limit policy. **Task mode only**, static token. | `agent-run -p` from the v1 pod creates a pod on a worker; the task opens a PR; reap leaves a verified bundle. An operator rollout mid-task leaves the task untouched. |
+| **0. Design and spikes** | This saga; spikes S-1 to S-12 | Q-01 to Q-05 answered (done 2026-10-06), Q-06 and Q-07 answered, spike results recorded, ADR-001 Accepted |
+| **1. Foundation** | Repo CI; operator with `AgentSession`, pod and volume lifecycle; agentd boot; agent image `2.0` (tini, agentd, baked Codex and kubectl-cnpg); keeper minting the gh token; haynes-ops apps for namespaces, CRDs, operator, keeper, RBAC with the baseline guard (D-19), CNPs with the web and platform tiers (D-24), LimitRange, PriorityClass, Kyverno limit policy; session volumes on `gasha01-rbd` (D-22). No ResourceQuota. **Task mode only**, static token. | `agent-run -p` from the v1 pod creates a pod on a worker; the task opens a PR; reap leaves a verified bundle. An operator rollout mid-task leaves the task untouched. The guard refuses each #3392 path. |
 | **2. Interactive and lifecycle** | `local` mode, attach, idle detection, timers, rescue, resume, restore; `/v1/activities` and dev-env-ops reading both sources; messaging tier 3; laptop access | A local session survives suspend and resume with its conversation; a declared activity is visible to dev-env-ops; Tom runs `agent-run` from his laptop. |
+| **7. Access broker** (after 1, alongside 2) | `AccessGrant`, `GrantPolicy`, the broker Deployment, the approval page and Pushover link, kube and egress grants, break-glass; credential grants if Q-07 picks A | A grant request reaches Tom's phone, he approves it, the agent uses it, and it is gone at its TTL; a standing policy approves a matching request with no ping; break-glass works and the headlamp Job is refused. |
 | **3. Remote Control** | Keeper-owned Max login (or the coordinator host if S-1 and S-2 fail); `agent-run auth`; the standby; messaging tier 2 | Tom drives a v2 session from his phone; a coordinator dispatches v2 task pods; the monthly renewal works through `agent-run auth login`. |
 | **4. Rolling updates and Codex** | Revisions; drain-on-idle and resume (per Q-03); codex hub; keeper-owned Codex auth if S-3 passes; image pre-pull DaemonSet; Renovate auto-merge for `2.x` | An image bump reaches every idle session with its conversation intact and interrupts no busy turn; the phone's Codex entry survives a hub drain. |
-| **5. Cutover** | Workbench pod; dev-env-ops reads only `Activity`; v1 scaled to zero, its PVC kept 30 days, then removed with its build and Renovate carve-outs | Tom approves the cutover. |
-| **6. Later** | LLM leases; per-profile egress tightening; Authentik OIDC for the laptop; Codex `exec-server` isolation; a web terminal route | Each on its own plan. |
+| **5. Cutover** (needs 3, 4 and 7) | Workbench pod; dev-env-ops reads only `Activity`; v1 scaled to zero, its PVC kept 30 days, then removed with its build and Renovate carve-outs | Tom approves the cutover. |
+| **8. Tool pods** (after 2) | `ToolPool`, `ToolSession`, the loopback gateway, artifacts; blender and audio converted; image, whisper, printer and video pools | An agent calls a Blender tool with no pod running; the pod starts, serves, and stops 30 minutes after release, keeping its workspace. |
+| **9. GPUs and local LLMs** (after 8) | VRAM accounting for every GPU workload (household included); GPU tool pods; LLM pools and leases; opencode sessions | An opencode session on a Qwen coder model opens a PR; a household GPU pod preempts an agent GPU pod and the agent's work resumes later. |
+| **6. Later** | Profile tightening; Authentik OIDC for the laptop; Codex `exec-server` isolation; a web terminal route; warm pools; DRA for GPUs | Each on its own plan. |
 
 Backlog plans: [`../backlog/`](../backlog/).
 
@@ -876,6 +1504,11 @@ Backlog plans: [`../backlog/`](../backlog/).
 | S-5 | Does SendMessage reach a Remote Control session in another pod? | two pods, phase 3 | D-16 tier 2 |
 | S-6 | Does `claude --resume <id> --remote-control <name>` reattach the same phone entry? | v1 pod | 6.7 |
 | S-7 | How long does `git clone --filter=blob:none` plus checkout take per repo? | v1 pod, one repo at a time | D-15 mirror or not |
+| S-8 | How much slower is a session's clone, install and one test file on `gasha01-rbd` than on `ceph-block`? | one phase-1 task pod at size M, one run per class | D-22's rule for size L |
+| S-9 | Does the pinned device plugin count VRAM units with time-slicing (requests above 1, config chosen by an NFD-set label), and does a household-priority pod preempt an agent GPU pod? Is DRA consumable capacity usable with NVIDIA's driver on these cards yet? | talosw04 (nothing household runs there), one pod at a time | D-30 mechanism |
+| S-10 | Do Claude Code, Codex and opencode accept a loopback MCP server that answers `initialize` and `tools/list` from a cache, and pick up a server added mid-session? | one session pod, phase 2 | D-29 |
+| S-11 | Does the pinned opencode run headless, resume a session, use MCP over HTTP, allow everything by config, and make sound tool calls with a Qwen coder model on llama-server? | one session pod, one request at a time against the shared pool | D-33 |
+| S-12 | Does the baseline guard refuse each #3392 path (Job as another ServiceAccount, image patch, Flux spec patch, exec into the headlamp pod) and allow each runbook action (rollout restart, CronJob suspend, Flux reconcile and suspend, volsync unlock Job, ExternalSecret force-sync)? Does the admission policy see `CONNECT` for exec? | a scratch namespace, phase 1 | D-19 |
 
 Every spike is light: a handful of CLI invocations, one at a time. None runs a test
 suite, a busy loop or anything parallel (the 2026-10-05 incident rule).
@@ -887,32 +1520,40 @@ suite, a busy loop or anything parallel (the 2026-10-05 incident rule).
 | S-1 relies on undocumented CLI behaviour that a CLI release can change | The fallback (coordinator host) is proven today. Every CLI bump re-runs S-1's three checks in one canary session before the new revision reaches Remote Control sessions. |
 | An abrupt node loss leaves RWO volumes attached (multi-attach) | The existing out-of-service taint job covers it; sessions resume once the volume frees. |
 | More moving parts: an operator outage stops new sessions | Running sessions are unaffected (D-01). v1 stays until cutover. |
-| More parallel sessions burn the Max plan's windows faster | The fleet cap (7.3). Fable is never a default (pod model policy). |
+| More parallel sessions burn the Max plan's windows faster | No fleet cap (Q-04): the plan's own wall is the limit, shown in `agent-run fleet` (7.3). Fable is never a default (pod model policy). Local-model sessions take bulk work off the plan (6.13). |
+| Many Pending sessions when the workers are full | The scheduler places them as room frees; `agent-run` shows the reason and suspendable idle sessions (7.3). |
+| Open web egress lets a tricked agent send what it can read anywhere | The default credential set shrinks (Q-07); Hubble logs every agent DNS lookup; LAN and cluster stay behind grants (6.10). |
+| The broker can bind `cluster-admin` | `bind` limited to the catalog by name; approvals only from Tom's Authentik identity; agents cannot write or exec in `dev-env-system`; break-glass never auto-approved (6.12). |
+| GPU VRAM accounting is cooperative, not enforced | Each workload caps its own VRAM; the operator evicts an agent GPU pod when a card nears full (D-30); HAMi or DRA if that proves weak. |
+| gasha01 is HDD-backed and outside the cluster | S-8 measures; size L can move to `ceph-block` by template; failure modes in 6.6. |
+| Local models follow injected instructions more readily | opencode sessions start on the narrow profile `dev` (6.13). |
 | CephFS MDS shared with home automation | The shared volume holds only small, rarely written files (6.6). |
-| More pods hold the same broad Secrets as v1 | Profiles (D-18) allow tightening without code changes. |
-| The namespace list for agent write bindings (D-19) must grow with the cluster | It fails closed: a new namespace gives a 403 until a one-line PR adds it. |
+| More pods hold the same broad Secrets as v1 | Profiles (D-18) allow tightening without code changes; Q-07 moves the root-equivalent ones behind grants. |
+| The privileged-ServiceAccount list for the exec rule (D-19) must grow when a new privileged ServiceAccount appears | Rare; the list sits beside the guard in haynes-ops, and a reviewer of any new cluster-admin binding adds it. |
 | Image pull latency on a cold node | Pre-pull DaemonSet (7.4). |
 | A drain resumes a conversation on a new CLI version that reads old state differently | Drain happens on idle only; S-6 covers resume; a failed resume leaves the volume suspended, not deleted. |
 
 ## 15. Open questions
 
 Each blocks building. Ask Tom one at a time; fold the answer back in as a dated
-ruling.
+ruling. Q-01 to Q-05 were answered on 2026-10-06; Q-06 and Q-07 are open.
 
 | Id | Question | Options (recommended first) | Resolution |
 |---|---|---|---|
-| Q-01 | Do we write the pod-and-volume layer ourselves or adopt agent-sandbox? | **A. Build** a small operator owning pods and PVCs, shaped like agent-sandbox's `Sandbox`: more code we own, and the "upgrades never kill sessions" guarantee lives in code we test. **B. Adopt** kubernetes-sigs/agent-sandbox for pods and volumes, build the rest on top: less code and warm pools, but a third-party controller with pod and PVC write access to re-verify on every upgrade. **C. Adopt Coder**: a large system (coderd, Postgres, Terraform templates, its own UI) that still solves none of the credential, Remote Control or rescue problems. | (open) |
-| Q-02 | Which language for the operator and the CLI? | **A. Go**: the standard operator toolkit (controller-runtime, envtest, leader election, CRD generation) and one static `agent-run` binary for laptop, pod and CI; a new language among Tom's repos. **B. TypeScript**: Tom's main app language, but thin operator libraries, and the CLI needs Node wherever it runs. **C. Python (kopf)**: quick to write, less proven for long-lived controllers, and the CLI needs Python. | (open) |
-| Q-03 | When the image or config changes, what happens to running sessions? | **A. Drain on idle, then resume**: sessions pick up new versions within hours, conversations continue, a busy turn is never cut. **B. New sessions only**: zero interruptions, but an old session can run stale tools for days until it is reaped. **C. Only on explicit `agent-run restart`**: nothing moves unless someone asks, so the fleet drifts. | (open) |
-| Q-04 | How big is a session by default, and how big may the fleet get? | **A. Classes S/M/L, default M (4 CPU / 8Gi limit), fleet cap 48 CPU of limits and 20 pods** (12 M sessions, or 16 with a mix such as 8 M + 8 S): today's 13 to 16 sessions fit with idle coordinators as S, and the workers keep a third of their CPU even if every agent pegs. **B. Default M, cap 96 CPU of limits and 40 pods**: room for 24 M sessions, but a fully busy fleet can take every worker core. **C. Per-pod limits only, no fleet cap**: no quota errors, and no ceiling on total agent load. | (open) |
-| Q-05 | Where do repos, worktrees and agent state live? | **A. A ceph-block volume per session plus one small shared CephFS volume** (memory, rescue bundles, logs): fast builds, no shared locks or credentials, little load on the CephFS MDS. **B. One shared CephFS home for every pod** (closest to v1): nothing moves, but pid-bound locks and the Max credential are shared across pods, and installs load the MDS that zigbee2mqtt and zwave use. **C. A volume per session, nothing shared**: simplest, but Claude's memory stops being shared and rescue bundles die with the volume. | (open) |
+| Q-01 | Do we write the pod-and-volume layer ourselves or adopt agent-sandbox? | **A. Build** a small operator owning pods and PVCs, shaped like agent-sandbox's `Sandbox`: more code we own, and the "upgrades never kill sessions" guarantee lives in code we test. **B. Adopt** kubernetes-sigs/agent-sandbox for pods and volumes, build the rest on top: less code and warm pools, but a third-party controller with pod and PVC write access to re-verify on every upgrade. **C. Adopt Coder**: a large system (coderd, Postgres, Terraform templates, its own UI) that still solves none of the credential, Remote Control or rescue problems. | **Ruling, Tom 2026-10-06: A, build.** A small operator modelled on agent-sandbox. Section 9. |
+| Q-02 | Which language for the operator and the CLI? | **A. Go**: the standard operator toolkit (controller-runtime, envtest, leader election, CRD generation) and one static `agent-run` binary for laptop, pod and CI; a new language among Tom's repos. **B. TypeScript**: Tom's main app language, but thin operator libraries, and the CLI needs Node wherever it runs. **C. Python (kopf)**: quick to write, less proven for long-lived controllers, and the CLI needs Python. | **Ruling, Tom 2026-10-06: A, Go**, for the operator (and the broker, which is the same binary), agentd, and a static `agent-run`. |
+| Q-03 | When the image or config changes, what happens to running sessions? | **A. Drain on idle, then resume**: sessions pick up new versions within hours, conversations continue, a busy turn is never cut. **B. New sessions only**: zero interruptions, but an old session can run stale tools for days until it is reaped. **C. Only on explicit `agent-run restart`**: nothing moves unless someone asks, so the fleet drifts. | **Ruling, Tom 2026-10-06: A, drain on idle, then resume the conversation on the new version.** Section 5.2. The same rule moves tool pods to a new pool spec (8.1). |
+| Q-04 | How big is a session by default, and how big may the fleet get? | **A. Classes S/M/L, default M (4 CPU / 8Gi limit), fleet cap 48 CPU of limits and 20 pods** (12 M sessions, or 16 with a mix such as 8 M + 8 S): today's 13 to 16 sessions fit with idle coordinators as S, and the workers keep a third of their CPU even if every agent pegs. **B. Default M, cap 96 CPU of limits and 40 pods**: room for 24 M sessions, but a fully busy fleet can take every worker core. **C. Per-pod limits only, no fleet cap**: no quota errors, and no ceiling on total agent load. | **Ruling, Tom 2026-10-06: the fleet cap is rejected.** "The pods should have requests and limits and kubernetes should handle scheduling so the cluster can grow without us having to tune how the dispatcher allocates resources." Size classes stay as presets for requests and limits, default M, with the low PriorityClass; no ResourceQuota and no allocation logic in the operator (D-21, 7.3). He added GPU access for local LLMs (8.2, 8.3) and tool pods on other nodes (8.1) to the scope. |
+| Q-05 | Where do repos, worktrees and agent state live? | **A. A ceph-block volume per session plus one small shared CephFS volume** (memory, rescue bundles, logs): fast builds, no shared locks or credentials, little load on the CephFS MDS. **B. One shared CephFS home for every pod** (closest to v1): nothing moves, but pid-bound locks and the Max credential are shared across pods, and installs load the MDS that zigbee2mqtt and zwave use. **C. A volume per session, nothing shared**: simplest, but Claude's memory stops being shared and rescue bundles die with the volume. | **Ruling, Tom 2026-10-06: A, and agents may also use gasha01** (the Proxmox Ceph through ceph-csi-rbd). Session volumes go on `gasha01-rbd`, the shared volume stays on the in-cluster CephFS (D-22, 6.6). |
+| Q-06 | May GPU tool pods run on the control-plane nodes that carry GPUs? | **A. Yes, GPU tool and LLM pods only, capped at 2 CPU and 16Gi, low priority, never preempting**: agents get the idle talosm05 A2000 and spare VRAM on talosm01 and talosm03 now; a pod capped at 2 CPU cannot starve a 20-core master (the 2026-10-05 incident took 18 cores). **B. No, workers only**: masters never run agent work; agent GPU work waits for VRAM on talosw01 (about 7 GiB free beside the household model) or for more worker GPUs. **C. Only on masters Tom marks with a lend label in git**: control per node, but one more label to keep in step with the hardware. | (open) |
+| Q-07 | Do the root-equivalent credentials (the Proxmox operator token and the hw-ssh key) stay in every session pod, now that pods get open web egress? | **A. Move them behind the broker**: the Proxmox read token stays in the baseline; the operator token and an hw-ssh certificate (short-lived, from the keeper's SSH CA) come by credential grant; a page that tricks an agent can no longer take a root-equivalent key, and a standing policy can approve named repos so routine use does not ping Tom. **B. Keep them in profile `full`, as v1**: no change in habits, but any web page that tricks an agent can send a key that is root on all five Proxmox hosts anywhere. **C. Keep them, and keep v1's default-deny allowlist for pods that hold them**: safe, but those sessions keep today's web problem. | (open) |
 
 ## 16. Decisions settled in this design
 
 | Id | Decision | Section |
 |---|---|---|
 | D-01 | The operator is control plane only | 3.1 |
-| D-02 | Namespaces `dev-env-system` and `dev-agents` | 3.1 |
+| D-02 | Namespaces `dev-env-system`, `dev-agents` and `dev-tools` (revised 2026-10-06: `dev-tools` added) | 3.1 |
 | D-03 | Sessions own their pods and volumes; CRDs never pruned | 3.2 |
 | D-04 | Session templates are GitOps data; revision = hash | 3.3 |
 | D-05 | API auth by ServiceAccount token and TokenReview; laptop by minted token | 3.4 |
@@ -928,6 +1569,19 @@ ruling.
 | D-15 | Fresh partial clone per session, v1 paths | 6.6 |
 | D-16 | Three messaging tiers | 6.8 |
 | D-17 | `Activity` resource via the API | 6.9 |
-| D-18 | Profiles for Secrets and egress; `full` = v1 | 6.10 |
-| D-19 | Agent writes per namespace, never in the two dev-env namespaces; agents reach sessions only through the API | 6.11 |
-| D-20 | Workers only, spread, low priority | 7.1 |
+| D-18 | Profiles name Secrets and standing controlled-tier grants; web and platform tiers are common (revised 2026-10-06) | 6.10 |
+| D-19 | Baseline = v1's verbs under a field-level admission guard; more only by grant; nothing in the dev-env namespaces (revised 2026-10-06; was per-namespace bindings) | 6.11 |
+| D-20 | Sessions on workers only, GPU nodes avoided by label, low priority that never preempts (revised 2026-10-06) | 7.1 |
+| D-21 | Capacity is the scheduler's: requests and limits, no fleet quota, Pending is the queue | 7.3 |
+| D-22 | Session volumes and tool workspaces on `gasha01-rbd`; the shared RWX volume on Rook CephFS; model files on gasha01 NFS | 6.6 |
+| D-23 | No approval prompts inside a session pod; the platform is the boundary | 6.12 |
+| D-24 | Egress tiers: web baseline, platform baseline, controlled by grant; Cilium and Hubble, no proxy | 6.10 |
+| D-25 | Access broker: `AccessGrant` and `GrantPolicy`, a separate Deployment, an identity per kube grant, a CNP per egress grant | 6.12 |
+| D-26 | Approvals through a Pushover link to the broker's page behind Authentik | 6.12 |
+| D-27 | Break-glass grant replaces the headlamp path | 6.12 |
+| D-28 | `ToolPool` and `ToolSession` in `dev-tools`: on demand, scale to zero | 8.1 |
+| D-29 | Tools reach agents through agentd's loopback MCP gateway with cached manifests | 8.1 |
+| D-30 | GPU capacity counted in VRAM units through the device plugin, by household and agents alike | 8.2 |
+| D-31 | Household first: agents never preempt; the scheduler queues GPU claims | 8.2 |
+| D-32 | LLM pools (shared household servers, dedicated agent servers) and leases | 8.3 |
+| D-33 | Local-model agents run opencode in ordinary session pods | 6.13 |

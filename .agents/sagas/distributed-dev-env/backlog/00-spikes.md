@@ -2,8 +2,10 @@
 
 **Status:** backlog
 **Depends on:** nothing. S-1, S-2, S-3, S-6 and S-7 run in the v1 pod today; S-4 and
-S-5 need two session pods and run in phases 3 and 4.
-**Parallel with:** Tom answering Q-01 to Q-05
+S-5 need two session pods and run in phases 3 and 4; S-8 and S-12 run in phase 1,
+S-10 in phase 2, S-9 and S-11 before plan 09.
+**Parallel with:** Tom answering Q-06 and Q-07 (Q-01 to Q-05 were answered on
+2026-10-06)
 
 ## Goal
 
@@ -81,8 +83,53 @@ one at a time: `time git -c pack.threads=2 clone --filter=blob:none <url>
 /tmp/spike-s7/<repo>` then `git worktree add`, then delete it. Record the wall time.
 A repo over two minutes gets a shared mirror (D-15).
 
+## S-8: gasha01-rbd against ceph-block (phase 1)
+
+In one task pod at size M, once with its volume on `gasha01-rbd` and once on
+`ceph-block`, never both at once: `git -c pack.threads=2 clone --filter=blob:none`
+haynesnetwork, `pnpm install`, then one test file with `--maxWorkers=2`. Record the
+wall time of each step. If gasha01 is more than twice as slow overall, size L
+defaults to `ceph-block` (DESIGN-001 D-22).
+
+## S-9: VRAM units through the device plugin (before plan 09)
+
+On talosw04, where nothing household runs, and with Tom's lend label set: give the
+pinned device plugin a time-slicing config of 12 replicas under
+`nvidia.com/gpu.shared`, chosen by a node label that an NFD rule sets. Check that a
+pod requesting 8 units schedules, a second requesting 8 stays Pending, and a pod at
+default priority preempts a `dev-env-agent` pod holding the units. One small CUDA
+container at a time; no load test. Also read whether NVIDIA's DRA driver supports
+splitting one card's memory between claims on these cards yet. Decides D-30's
+mechanism.
+
+## S-10: lazy MCP tools (phase 2)
+
+In one session pod, register a loopback MCP server whose `initialize` and
+`tools/list` come from a cached manifest, and whose first `tools/call` waits for a
+tool pod. Check Claude Code, Codex and opencode each list the tools at start and
+complete the call. Then add a server mid-session and see whether each CLI picks it
+up without a restart. Decides D-29.
+
+## S-11: opencode with a local coder model (before plan 09)
+
+In one session pod, with a lease on the shared LLM pool and one request at a time:
+`opencode run` a small real task (a one-file change and its test) against a Qwen
+coder model on llama-server. Check headless run, session resume, MCP over HTTP, the
+allow-all permission config, and that tool calls parse. Decides D-33.
+
+## S-12: the baseline guard (phase 1)
+
+In a scratch namespace, as the agent ServiceAccount: try each #3392 path (a Job as
+another ServiceAccount, a Job mounting a Secret, a Deployment image patch, a Flux
+`spec.path` patch, exec into a pod whose ServiceAccount is on the privileged list)
+and each runbook action (rollout restart, CronJob suspend, Flux reconcile and
+suspend, a volsync unlock Job, ExternalSecret force-sync). Every path must be
+refused and every action allowed. Check whether the ValidatingAdmissionPolicy sees
+`CONNECT` for exec; if not, the Kyverno rule carries it. Decides D-19.
+
 ## Acceptance
 
 - Each spike has a result line in DESIGN-001 section 13 and a dated note in the
   section it decides.
-- D-11 and D-12 say which path the build takes.
+- D-11 and D-12 say which path the build takes; D-19, D-22, D-29, D-30 and D-33
+  record their spike's result.
