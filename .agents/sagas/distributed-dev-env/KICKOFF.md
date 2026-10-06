@@ -173,8 +173,8 @@ Makefile               generate, lint, test, build; test parallelism capped
   - gomod, GitHub Actions (`helpers:pinGitHubActionDigests`, SHA plus version
     comment) and Dockerfile digests (`docker:pinDigests`);
   - haynes-ops' nightly schedule (after 10pm, before 6am, America/New_York);
-  - **auto-merge is off.** The one rule for it (minor and patch, Go modules and
-    Actions only; Actions pin and digest refreshes count with them) sets `automerge: false` until the Protect Main ruleset requires
+  - **auto-merge is off.** Two rules cover it (minor and patch for Go modules
+    and for Actions; Actions pin and digest refreshes count with them) and set `automerge: false` until the Protect Main ruleset requires
     `CI - Success`. With no required check, GitHub auto-merge has nothing to wait
     for, so it would merge before CI reports. Turning it on is a one-line flip in the
     PR that records laptop handoff part 3 as done (HANDOFF checklist).

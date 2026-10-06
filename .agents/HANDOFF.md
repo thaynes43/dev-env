@@ -128,8 +128,8 @@ which lists exactly what to change:
 - [ ] Part 3, after `CI - Success` has reported once (B2): the Protect Main ruleset on
       the default branch, with `CI - Success` required. If GitHub will not enforce it
       on this private repo, that is Q-12. **Then an agent flips Renovate's auto-merge
-      on:** set `automerge: true` in the first `packageRules` entry of
-      `.github/renovate.json5` (B4 left it off).
+      on:** set `automerge: true` in the first two `packageRules` entries of
+      `.github/renovate.json5` (Go modules and GitHub Actions) (B4 left it off).
 
 ## Working rules (the summary; CLAUDE.md is the source)
 
