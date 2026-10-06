@@ -8,6 +8,8 @@
 # Go toolchain's VCS stamp exists. Pass COMMIT always, and VERSION on a release
 # build, or the binaries report "dev" (internal/version). Base images are pinned by
 # digest; Renovate (B4) keeps the digests fresh.
+# publish.yml builds this file on every merge to main that changes a build input and
+# pushes ghcr.io/thaynes43/dev-env-operator:sha-<short>, signed with keyless cosign.
 
 FROM golang:1.27.1@sha256:162be5298a40ed317005c8339c6de4d10d3eef336d66dc8e9259b03ab9d3a6d2 AS build
 WORKDIR /src
