@@ -32,8 +32,11 @@ post-ready does. DESIGN-001 3.8, 6.2, 6.7; R-02.
     unattended session does not stall at "Please run /login" (DESIGN-001 6.2). This
     plan picks the signal, the transcript's last entry or the session record.
   - agentd seeds `.claude.json` with the onboarding flags and worktree trust (S-1: a
-    cold TUI otherwise stops on the theme, security and trust prompts) and copies
-    nothing per machine. `oauthAccount` is optional: the CLI fetched it itself in S-1.
+    cold TUI otherwise stops on the theme, security and trust prompts), and with
+    `oauthAccount` (the account and organization uuids from the keeper's Secret). It
+    copies nothing per machine. `oauthAccount` is required: with the flags seeded,
+    the Remote Control check runs before the CLI's own profile fetch can land and
+    refuses without it (S-6, 2026-10-06; this bullet said it was optional).
   - Remote pods unset `CLAUDE_CODE_OAUTH_TOKEN` and set
     `CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=dev-env`. An image CI check fails if
     the image sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_GROWTHBOOK`,
@@ -44,9 +47,16 @@ post-ready does. DESIGN-001 3.8, 6.2, 6.7; R-02.
   every Remote Control session as a tmux window, summoned `remote` sessions included.
 - **Links:** agentd reports `status.remoteControl.{sessionId, url, state}` from
   `~/.claude/sessions/<pid>.json`, not from the pane; the URL only after registration.
+  The name it reports is the one it passed: the record's `name` is a local name
+  derived from the cwd (S-6).
 - **Archive on reap:** after the bundle is verified, the operator asks the keeper to
   archive the entry (S-15), records the result, and counts unarchived offline
-  entries in `agent-run fleet`.
+  entries in `agent-run fleet`. The pod's SIGTERM already makes the CLI archive its
+  own entry (S-6), so the call matters when the CLI died first (SIGKILL, OOM, node
+  loss).
+- **Drain:** the pod's SIGTERM archives the entry, and agentd's `claude --resume <id>
+  --remote-control <name>` unarchives it and reattaches (S-6). agentd lets the CLI
+  shut down normally; it does not SIGKILL it to keep the entry listed.
 - **The console** (the broker's web UI, 3.8): sessions with link, state and an
   archive button; the Claude login page (days left; Renew runs the ceremony in the
   page; the link and code are never logged or stored; a waiting login ends after 10
@@ -70,8 +80,9 @@ post-ready does. DESIGN-001 3.8, 6.2, 6.7; R-02.
   result back.
 - Tom renews the keeper's login from the console page on his phone, with no chat
   relay, and the page shows the new expiry.
-- A drained remote session comes back as the same phone entry; a reaped one leaves
-  the phone's active list (or, if S-15 failed, is archived from the console).
+- A drained remote session comes back as the same phone entry, with its history: the
+  same `bridgeSessionId`, unarchived by the resume (S-6). A reaped one leaves the
+  phone's active list (or, if S-15 failed, is archived from the console).
 - No pod other than the credential owner holds a refresh token (checked by listing
   the credentials files' keys, never their values).
 - A Remote Control session older than 13 hours still takes a message from the phone.

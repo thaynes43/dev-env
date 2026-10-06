@@ -40,8 +40,9 @@ DESIGN-001 3.7 (D-36), 6.1, 6.4, 6.10 (`ops`), 7.3 (V-14); research note
 - The static token's mint date and days left in `GET /v1/auth`, pages at 30 and 7 days
   (V-12).
 - No drain for summoned sessions (V-13).
-- Quota priority from the keeper's usage read (S-16), with the error-count fallback
-  (V-14).
+- Quota priority from the keeper's usage read (S-16, done 2026-10-06: `GET
+  /api/oauth/usage` works with the access token; DESIGN-001 7.3), with the
+  error-count fallback (V-14).
 - Retention: 1 day after `done`, 7 days after `failed` or `escalated` (V-15).
 - `status.usage` and its metrics (V-16).
 - The keeper mints the `haynes-ops-bot` token into `dev-env-ops-gh-token`.

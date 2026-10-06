@@ -35,6 +35,11 @@ the saga. To start building, follow
   restarted at 21:17Z on `ghcr.io/thaynes43/dev-env:0.6.8` with a CPU limit of 8.
 - **Spikes S-1, S-1b and S-7 are done** (2026-10-06). S-1 and S-1b passed, so D-11
   takes the keeper-owned target (DESIGN-001 6.2). S-7 found no repo needs a mirror.
+- **S-6 and S-16 are done** (2026-10-06). S-6 passed: `--resume` brings back the same
+  Remote Control entry with its history. It also found that the pod's SIGTERM
+  archives the entry and the resume unarchives it, and that agentd must seed
+  `oauthAccount` (DESIGN-001 6.2, 6.7). S-16: the keeper can read plan usage with
+  `GET /api/oauth/usage` (7.3).
 - **v1 keeps running.** The single dev-env pod and the `dev-env-ops` executor are
   deployed from haynes-ops until the cutover (plan 05) and plan 10.
 - **Q-08 is live.** Kyverno `default-cpu-request` (haynes-ops #3406) went live on
@@ -54,8 +59,8 @@ the saga. To start building, follow
    ([KICKOFF section 1](sagas/distributed-dev-env/KICKOFF.md#1-objective-of-phase-1)
    says why). ADR-001 is Accepted, so code may start.
 3. **Collect the spike results.** S-1, S-1b and S-7 are done, and S-2 is already
-   answered (the static token cannot register Remote Control). Next in order is S-6,
-   then S-15, S-16 and S-3. Each result lands in its own PR. The order and pass criteria are in
+   answered (the static token cannot register Remote Control). S-6 and S-16 are done.
+   Next in order is S-15, then S-3. Each result lands in its own PR. The order and pass criteria are in
    [KICKOFF section 2](sagas/distributed-dev-env/KICKOFF.md#2-track-a-spikes).
 4. **The rest of the MVP, then beyond it.** The MVP ends at the cutover (plan 05);
    [the saga README](sagas/distributed-dev-env/README.md#plan-backlog) lists which
