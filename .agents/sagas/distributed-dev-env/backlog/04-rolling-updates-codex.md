@@ -1,7 +1,8 @@
 # 04: rolling updates and Codex
 
 **Status:** backlog
-**Depends on:** 02; Q-03 (drain policy); spikes S-3 and S-4
+**Depends on:** 02; Q-03 (drain on idle, then resume: decided 2026-10-06); spikes
+S-3 and S-4
 **Parallel with:** 03
 
 ## Goal
@@ -13,7 +14,7 @@ gets its v2 home: one hub for the phone, then sessions in their own pods.
 
 - **Revisions:** the template ConfigMap's hash (D-04); `status.revision` per
   session; `GET /v1/fleet` lists outdated sessions.
-- **Drain** per Q-03. Recommended: on idle, `prepare-restart`, new pod on the new
+- **Drain** per Q-03 (Tom 2026-10-06): on idle, `prepare-restart`, new pod on the new
   revision, resume. A session busy 72 h after going outdated gets a message; 24 h
   later Tom gets one Pushover line. `agent-run restart <id>` drains on demand.
 - **Image pre-pull** DaemonSet on the workers (DESIGN-001 7.4).

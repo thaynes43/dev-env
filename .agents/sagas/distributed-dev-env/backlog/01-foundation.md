@@ -1,8 +1,9 @@
 # 01: foundation, task mode
 
 **Status:** backlog
-**Depends on:** Q-01 (build or adopt), Q-02 (language), Q-04 (sizes and cap), Q-05
-(storage); spike S-7 for the clone path
+**Depends on:** Q-01 (build), Q-02 (Go), Q-04 (requests and limits, no cap) and Q-05
+(storage), all decided 2026-10-06; spikes S-7 (clone path), S-8 (gasha01 speed) and
+S-12 (the guard)
 **Parallel with:** nothing
 
 ## Goal
@@ -13,6 +14,7 @@ archived by the operator. An operator restart mid-task does not disturb it.
 
 ## In this repo
 
+- Everything in Go: the operator, agentd and `agent-run`.
 - CI: lint and tests (envtest for the operator), build, smoke-test and cosign-sign
   the agent image (`2.x`) and the operator image (`ghcr.io/thaynes43/dev-env-operator`),
   publishing from `main` only; one aggregate `… - Success` check; release-please;
@@ -23,8 +25,10 @@ archived by the operator. An operator restart mid-task does not disturb it.
 - agentd: config rendering (port of `dev-init.sh`), partial clone and worktree,
   start the agent in tmux, heartbeat, `agentd ctl status|rescue`.
 - Operator: `AgentSession` CRD, pod and volume creation with the size class,
-  placement and labels of DESIGN-001 section 7, suspend and archive with rescue
-  (D-10), `POST/GET/DELETE /v1/sessions`, `GET /v1/fleet`, TokenReview auth.
+  placement and labels of DESIGN-001 section 7 (the scheduler places pods; a Pending
+  session reports the scheduler's reason, D-21), session volumes on `gasha01-rbd`
+  (D-22), suspend and archive with rescue (D-10), `POST/GET/DELETE /v1/sessions`,
+  `GET /v1/fleet`, TokenReview auth. Agents run with no approval prompts (D-23).
 - Keeper, minimal: mint the gh token into `dev-env-gh-token` every 40 minutes.
 - `agent-run` v2: `-p`, `list`, `reap`, `fleet`.
 - Tests that enforce DESIGN-001 5.1 (no owner reference to the Deployment; no delete
@@ -34,14 +38,20 @@ archived by the operator. An operator restart mid-task does not disturb it.
 
 - Namespaces `dev-env-system` and `dev-agents`; the CRDs in their own Kustomization
   with `prune: disabled`.
+- Namespace `dev-tools` too (empty until plan 08).
 - Operator and keeper HelmReleases, RBAC (DESIGN-001 6.11: cluster-wide read for
-  agents, write verbs only by per-namespace RoleBindings that exclude both dev-env
-  namespaces), CNPs (agent profile
-  `full` = v1's allowlist verbatim, operator, keeper), ResourceQuota, LimitRange,
-  PriorityClass `dev-env-agent`, a Kyverno policy requiring CPU limits in
-  `dev-agents`.
+  agents, v1's write verbs under the `dev-env-agent-guard` and
+  `dev-env-identity-guard` admission policies and the Kyverno exec rule, nothing in
+  the three dev-env namespaces), network policies (the web and platform tiers of D-24
+  as `CiliumClusterwideNetworkPolicy` objects, the default-deny clusterwide policy for
+  `dev-tools`, operator, keeper), LimitRange,
+  PriorityClass `dev-env-agent` (-10, `preemptionPolicy: Never`), a Kyverno policy
+  requiring CPU limits in `dev-agents`. No ResourceQuota (D-21).
+- Whatever Q-08 chose, so household pods on the workers carry a CPU request. Until it
+  is applied, phase 1 runs a handful of sessions at most.
 - ExternalSecrets in `dev-agents` mirroring v1's; the empty keeper-owned Secrets.
-- The shared CephFS volume (if Q-05 chose it), `prune: disabled`.
+- The shared CephFS volume `dev-env-shared` on `ceph-filesystem`, `prune: disabled`.
+- `dev-env-templates` with `gasha01-rbd` as the session volume class.
 - Kyverno `verify-thaynes43-images`: add the `thaynes43/dev-env` workflow identity.
 - Renovate: hold the v1 HelmRelease below `2.0.0`.
 - CNPs of in-cluster MCP services that admit only the v1 pod (the haynesnetwork hop,
@@ -57,6 +67,11 @@ archived by the operator. An operator restart mid-task does not disturb it.
   that restores the file.
 - No session pod is ever scheduled on a control-plane node (checked with
   `kubectl get pods -n dev-agents -o wide`).
-- From a session pod, `kubectl auth can-i` denies `pods/exec`, pod delete, Job create
-  and Deployment patch in `dev-env-system` and `dev-agents`, and allows them in a
-  listed namespace.
+- A session that does not fit stays Pending, and `agent-run` prints the scheduler's
+  reason at once.
+- The session's PVC is on `gasha01-rbd`; S-8's numbers are recorded.
+- A session pod fetches an arbitrary public web page, and cannot reach a LAN
+  address or an in-cluster service outside the platform tier.
+- From a session pod, `pods/exec`, pod delete, Job create and Deployment patch are
+  refused in `dev-env-system`, `dev-agents` and `dev-tools`, and allowed elsewhere
+  within the guard (S-12's checks pass).

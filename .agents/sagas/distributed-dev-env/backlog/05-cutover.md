@@ -1,7 +1,9 @@
 # 05: cutover from v1
 
 **Status:** backlog
-**Depends on:** 03, 04, and Tom's explicit approval
+**Depends on:** 03, 04, 07 (break-glass must exist before v1 and its headlamp habit
+go), Q-08 applied (no BestEffort household pods on the workers), and Tom's explicit
+approval
 **Parallel with:** nothing
 
 ## Goal
