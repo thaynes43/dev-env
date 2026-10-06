@@ -1,8 +1,10 @@
 # DESIGN-001: dev-env v2, one pod per agent session
 
-- **Status:** Proposed. Tom ruled on Q-01 to Q-08 on 2026-10-06 and widened the scope
-  (tool pods, GPUs with a dynamic VRAM budget, satellite inference workers, local
-  models, access without in-pod prompts); Q-09 and Q-10 are open (section 15).
+- **Status:** Proposed, ready for Tom to ratify (summary at the top of
+  [ADR-001](../adrs/001-distributed-dev-env.md#ratification-summary)). Tom ruled on
+  every open question, Q-01 to Q-10, on 2026-10-06 and widened the scope (tool pods,
+  a VRAM budget per card, satellite inference workers, local models, access without
+  in-pod prompts). No question is open (section 15).
 - **Last updated:** 2026-10-06
 - **Governed by:** [ADR-001](../adrs/001-distributed-dev-env.md) (Proposed)
 - **Saga:** [README](../README.md)
@@ -40,10 +42,10 @@ Tom's rulings and new asks of 2026-10-06 add five things:
   3D-printer tools run as pods that agents start, attach to and release, on any
   node, with a GPU when they need one (8.1).
 - **GPUs and local models.** GPUs are counted in VRAM and claimed through the
-  scheduler. The agent share of each card, control-plane cards included, grows and
-  shrinks with what the household needs at the moment; household AI always wins.
+  scheduler. Household AI keeps its full reservation on every card; agents get only
+  what is left, control-plane cards included, and that share grows as Tom adds GPUs.
   Larger models run on satellites: Tom's 128 GB M5 MacBook and his 5090 and 4090
-  PCs, used only when he is not. Local-model agents (opencode on a Qwen coder model)
+  PCs, used only while they are awake and he is not using them. Local-model agents (opencode on a Qwen coder model)
   join Claude Code and Codex as fleet members (6.13, 8.2 to 8.4).
 
 ```mermaid
@@ -1213,7 +1215,7 @@ limits and 20 pods in a ResourceQuota) is withdrawn.
   pod on the workers therefore needs a CPU request. Ruling (Q-08, Tom 2026-10-06): a
   Kyverno-generated LimitRange with a 50m default CPU request in every non-system
   namespace. It is a cluster-wide fix in haynes-ops, in flight as a v1 fix on
-  2026-10-06 (the BestEffort infrastructure pods already got requests in
+  2026-10-06 (haynes-ops #3406) (the BestEffort infrastructure pods already got requests in
   haynes-ops #3387, #3388 and #3404). This design does not repeat it. v2 runs no
   more than a handful of sessions (phase 1) until it is live, and cutover depends
   on it.
@@ -1474,67 +1476,75 @@ everyone.**
   `dev-env.haynesops.com/gpu-lend: "true"`, which Tom sets in git when no card test
   is running.
 
-**D-34. A dynamic VRAM budget per card.** Ruling (Q-06, Tom 2026-10-06):
+**D-34 (revised 2026-10-06). A VRAM budget per card that follows the household's
+reservations and the cards in the cluster.** Rulings: Q-06 (Tom 2026-10-06):
 "Allocated GPU resources which can be dynamically adjusted. Will depend on what other
-workloads we need VRAM for." So the agent share of each card is not a fixed number.
-A budgeter in the operator recomputes it all the time, from what the household needs
-right now.
+workloads we need VRAM for." Q-09 (Tom 2026-10-06): "None but I bring online more
+GPUs in cluster". So no household app ever lends VRAM to agents. Agents get only what
+is left on a card above every household app's full reservation, and their share grows
+as Tom adds GPUs to the cluster. A budgeter in the operator keeps that number current.
 
 ```mermaid
 flowchart LR
   subgraph inputs[What the budgeter reads]
-    decl["GpuReservation data in git<br/>floor, burst, class, probe"]
-    probe["activity probes<br/>Ollama /api/ps, ComfyUI /queue,<br/>Immich jobs, llama-server /slots"]
+    decl["GpuReservation data in git<br/>floor + burst per household app"]
+    cards["GPU nodes and their units<br/>found automatically"]
     live["nvidia-gpu-exporter<br/>used VRAM per card"]
     hold["Tom's holds<br/>agent-run gpu hold"]
   end
   bud["budgeter (operator)"]
   res["reserve pods per GPU node<br/>priority -1, request the reserve"]
   sched["Kubernetes scheduler"]
-  agents["agent GPU pods<br/>priority -10"]
-  decl & probe & live & hold --> bud
-  bud -->|"1. reclaim notice, wait for release"| agents
-  bud -->|"2. resize"| res
+  agents["agent GPU pods<br/>priority -10, gated"]
+  decl & cards & live & hold --> bud
+  bud -->|"un-gate when budget fits;<br/>reclaim notice when it shrinks"| agents
+  bud -->|"resize"| res
   res --> sched
   sched -->|"preempts what is left"| agents
 ```
 
-**How household demand is known.** Each household GPU workload gets a
-`GpuReservation` entry in haynes-ops, next to its HelmRelease:
+**What the household reserves.** Each household GPU workload gets a `GpuReservation`
+entry in haynes-ops, next to its HelmRelease: `floor` (the VRAM it always holds, equal
+to its pod's request in units, D-30) and `burst` (the extra it may load on demand,
+for example ollama-prime 8 GiB, ComfyUI 10 GiB, Immich ML 3 GiB). Both are always
+reserved, active or idle. There are no activity probes and nothing is lent.
 
-| Field | Meaning | Example |
-|---|---|---|
-| `floor` | VRAM it always holds; equals its pod's request in units (D-30) | llama-server with Muse Glimmer: 18 GiB |
-| `burst` | extra VRAM it may load on demand | ollama-prime: 8 GiB; ComfyUI: 10 GiB; Immich ML: 3 GiB |
-| `class` | `interactive`: the burst is always reserved. `batch`: the burst may be lent to agents while the app is idle | voice stack interactive; ComfyUI and Immich ML batch (Q-09) |
-| `probe` | how to see that it is active | Ollama `GET /api/ps` (loaded models and their VRAM); ComfyUI `GET /queue`; Immich `GET /api/jobs`; llama-server `GET /slots` |
-| `schedule` | windows when the burst is reserved anyway | Immich ML's nightly jobs |
+**Agent budget per card** = card total − the floors and bursts of the household pods
+on that card − 1 GiB headroom − Tom's holds − any live overage, never below zero.
 
-The budgeter reads every probe each 15 seconds and the exporter's used VRAM per
-card. A card's **reserve** is the floors, plus the bursts of interactive apps, plus
-the bursts of batch apps that are active, in a schedule window, or were active in the
-last 15 minutes, plus 1 GiB of headroom. If used VRAM shows the household above that
-(an app without a reservation, or a burst larger than declared), the reserve rises to
-match, and the budgeter logs the gap so the data can be fixed. Tom can also hold a
-card for the house: `agent-run gpu hold talosm03 --for 2h` reserves all of it
-(Tom only, like evacuate).
+- **Live overage:** if the exporter shows the household using more than its
+  reservations on a card (an app without a `GpuReservation`, or a burst larger than
+  declared), the budget drops to match, and the budgeter logs the gap so the data
+  can be fixed.
+- **Holds:** `agent-run gpu hold talosm03 --for 2h` (Tom only, like evacuate)
+  reserves a whole card for the house, for a session of his own.
+- Today that leaves agents little: on the 3090, llama-server's floor plus
+  ollama-prime's burst already fill the card. talosm05's A2000 is the main in-cluster
+  agent capacity, and the large models run on the satellites (8.4).
 
-**Agent budget = card total − reserve.** The budgeter publishes it per card
-(`GET /v1/gpus`, a Prometheus metric, `agent-run gpu`).
+**New cards are picked up automatically.** Tom's answer to Q-09 is more GPUs, so
+adding one must need no tuning. The budgeter finds GPU nodes from their advertised
+`nvidia.com/gpu.shared` units and the NFD GPU label, and reads each card's total
+VRAM from the exporter. A new node with a card of a known model gets its units from
+the device-plugin config that the NFD model label selects (D-30), and its guard pod
+from the same label, so it joins the budget on the budgeter's next pass. A card of a
+new model needs one device-plugin config entry beside its NFD rule. A card that
+leaves (a node drained, a card pulled) leaves the budget the same way, and agent
+pods on it are reclaimed like any other shrink.
 
 **How the budget reaches the scheduler.** The scheduler only sees the device
-plugin's units, which are static. So the budgeter holds the part of the reserve that
-household pods do not already request (bursts and headroom) with **reserve pods**:
-pause containers in `dev-tools`, pinned to the GPU node by required node affinity
-(not `nodeName`, which would skip the scheduler and its preemption), each requesting
-some units. Their PriorityClass `dev-env-gpu-reserve` has value -1: above agents
-(-10), so a reserve pod preempts agent pods, and below household pods (0), so a
-household pod that does not fit (an app added or resized before its `GpuReservation`
-catches up, a reschedule, a surge rollout) preempts a reserve pod instead of waiting
-behind it. The budgeter recreates a preempted reserve pod and logs the household pod
-that took its place, because that means the reservation data is behind. Growing the
-reserve adds a reserve pod for the difference; shrinking it deletes one. That is how
-the agent share grows and shrinks, while the scheduler keeps doing the placing.
+plugin's units, which are static. So the budgeter holds the part of the reservation
+that household pods do not already request (bursts, headroom, holds and overage)
+with **reserve pods**: pause containers in `dev-tools`, pinned to the GPU node by
+required node affinity (not `nodeName`, which would skip the scheduler and its
+preemption), each requesting some units. Their PriorityClass `dev-env-gpu-reserve`
+has value -1: above agents (-10), so a reserve pod preempts agent pods, and below
+household pods (0), so a household pod that does not fit (an app added or resized
+before its `GpuReservation` catches up, a reschedule, a surge rollout) preempts a
+reserve pod instead of waiting behind it. The budgeter recreates a preempted reserve
+pod and logs the household pod that took its place, because that means the
+reservation data is behind. Growing the reserve adds a reserve pod for the
+difference; shrinking it deletes one.
 
 **Only the budgeter lets agent GPU pods schedule.** Every agent GPU pod is created
 with a scheduling gate (`dev-env.haynesops.com/gpu-budget`), so the scheduler ignores
@@ -1545,46 +1555,55 @@ narrowed). The scheduler still binds the pod and checks every other constraint. 
 reclaim starts on a node, the budgeter first deletes and recreates, gated, any agent
 GPU pod that was un-gated toward that node and is still Pending. So no Pending agent
 pod can take units that a reclaim is freeing. A pod that stays Pending a minute after
-its gate is removed is also recreated gated.
+its gate is removed is also recreated gated. Gated claims wait first in, first out.
 
-**Shrinking the agent share (reclaim), gracefully.** When a reserve must grow by N
-units on a card:
+**Reclaiming from agents, gracefully.** Two things make the budgeter take VRAM back
+from agent workloads:
 
-1. The budgeter picks agent GPU workloads on that card until N units are covered:
-   first idle tool instances and LLM backends with no request in flight; then LLM
-   pools that have another backend available (8.3 moves the pool first, then this
-   backend stops); then busy tools and pools, newest claim first.
-2. It sends each a reclaim notice: the tool contract's `POST /reclaim` (finish or
+- **The agent budget on a card shrinks:** a household reservation is added or
+  raised, Tom holds the card, live overage appears, or the card leaves.
+- **Agent against agent:** a gated claim is waiting, and the card's agent budget is
+  held by agent workloads that are idle (a tool instance that is not busy, an LLM
+  backend with no request in flight). An idle holder yields to a waiting claim. A
+  busy agent workload is never interrupted for another agent; the claim waits.
+
+In both cases:
+
+1. The budgeter picks agent workloads on that card until enough units are covered:
+   first idle tool instances and LLM backends. Agent against agent stops there: if
+   the idle holders on one card cannot cover the claim between them, nothing is
+   reclaimed and the claim keeps waiting. Only when the budget
+   shrinks does it go on to LLM pools that have another backend available (8.3 moves
+   the pool first, then this backend stops), and then to busy tools and pools,
+   newest claim first.
+2. Before any notice goes out, it re-gates any Pending agent GPU pod aimed at that
+   node, and from then on it un-gates nothing toward it except the waiting claim
+   the reclaim is for.
+3. It sends each a reclaim notice: the tool contract's `POST /reclaim` (finish or
    checkpoint the current job, then exit) or, for an LLM backend, stop taking new
    requests and finish the ones in flight. The grace is 60 seconds for LLM backends
    and 120 seconds for tools.
-3. Before the notices go out, the budgeter re-gates any Pending agent GPU pod aimed
-   at that node, and from then on it un-gates nothing toward it. As each workload releases, or at the end of its grace, it adds the reserve
-   pod. Anything still on the card is then preempted by the scheduler, which gives
-   it its termination grace.
-4. Interactive household bursts are never lent, so Home Assistant voice never waits
-   for a reclaim. A batch app that starts while its burst is lent may wait up to
-   about two minutes for the VRAM. ComfyUI then offloads to RAM or fails that one job;
-   Immich retries the job. That cost is why lending is per app (Q-09).
+4. As each workload releases, or at the end of its grace, the budgeter adds the
+   reserve pod (for a shrink) or un-gates the waiting claim (agent against agent).
+   For a shrink, anything still on the card is then preempted by the scheduler,
+   which gives it its termination grace.
 
-**Growing the agent share.** When a batch app has been idle for 15 minutes (its probe
-shows no queue and no loaded model) and no schedule window is open, the budgeter
-shrinks the reserve. Pending agent claims on that card are then un-gated and
-scheduled, and LLM pools may move back from a satellite (8.3). The reserve grows at
-once when the house needs VRAM; it shrinks only after 15 minutes idle. The
-difference stops the share from flapping.
+The household never waits on a reclaim: its full reservation is never in agent
+hands. A shrink only happens when the household's reservation or the card set
+changes, so it is rare, and it is never driven by a household app becoming active.
 
 **Safety nets that do not depend on the operator.** A small DaemonSet,
-`dev-env-gpu-guard` (namespace `dev-env-system`, on GPU nodes, a few millicores),
-reads the node's cards through NVML every 5 seconds. It does two things on its own:
+`dev-env-gpu-guard` (namespace `dev-env-system`, on every node with the NFD GPU
+label, a few millicores), reads the node's cards through NVML every 5 seconds. It
+does two things on its own:
 
 - **Near full:** if a card's used VRAM passes its total less 1 GiB while an agent GPU
   pod runs on that node, it evicts that pod through the Eviction API at once. This is
   D-30's live guard, moved out of the operator.
 - **Budgeter gone:** the budgeter renews a Lease every 15 seconds. If the Lease is
-  more than 5 minutes old, the guard evicts every agent GPU pod on its node, so all
-  lent VRAM returns to the house. No new agent GPU pod can start meanwhile, because
-  only the budgeter removes scheduling gates.
+  more than 5 minutes old, the guard evicts every agent GPU pod on its node. No new
+  agent GPU pod can start meanwhile, because only the budgeter removes scheduling
+  gates.
 
 Its RBAC is pods get and list, and `pods/eviction` create, in `dev-tools` only, and
 read on that one Lease. An operator outage therefore costs agents their GPU work
@@ -1698,8 +1717,8 @@ LaunchAgent on the Mac, a Windows service on the PCs. It:
 
 **Registration.** Each satellite is an `InferenceWorker` resource in haynes-ops
 (`dev-env-system`): name, LAN address (a DHCP reservation, set by Tom or by an agent
-with his confirmation), OS, memory for models, the pools it may serve, and its lend
-policy. To enrol, Tom runs `agent-run satellite enroll m5-macbook` (Tom only), which
+with his confirmation), OS, memory for models, the pools it may serve, and its
+owner-first settings (for example how long the machine must be idle before it lends). To enrol, Tom runs `agent-run satellite enroll m5-macbook` (Tom only), which
 prints a one-time code. The code is bound to that satellite's name, valid for 15
 minutes and usable once, and it carries the fingerprint of the operator's CA so the
 first connection is verified. On the machine, `dev-env-satellite enroll <code>`
@@ -1733,8 +1752,10 @@ while it says it is lendable.
   the home network. It then reports `Draining`, takes no new requests, finishes those
   in flight within 30 seconds, unloads the model, and frees the memory. The game never
   waits on an agent.
-- **Lend policy** per machine (data in its `InferenceWorker`): when it may be used,
-  and whether it may be woken. Which policy Tom wants is **Q-10**.
+- **Never woken** (Q-10, Tom 2026-10-06: A). A satellite is used only while it is
+  awake and Tom is not using it, by the owner-first rules above. The operator never
+  sends Wake-on-LAN or wakes a machine in any other way; leases for a sleeping
+  satellite's pools go to the next backend or wait.
 - **Pause** from the machine itself: `dev-env-satellite pause [--for 3h]`, or the
   menu-bar and tray icon, stops lending at once.
 
@@ -1833,11 +1854,11 @@ The day-one setup follows haynes-ops
 [`.agents/runbooks/new-repo-setup.md`](https://github.com/thaynes43/haynes-ops/blob/main/.agents/runbooks/new-repo-setup.md);
 this design does not repeat it.
 
-| Item | State on 2026-10-05 |
+| Item | State on 2026-10-06 |
 |---|---|
 | Claude PR reviewer and `@claude` workflows, repo-specific review prompt, CLAUDE.md and AGENTS.md (runbook steps 1 to 3) | Done in PR #1 |
-| `CLAUDE_CODE_OAUTH_TOKEN` repo secret (step 4) | **Tom.** The bot's minted token has no `secrets` permission (HTTP 403). |
-| Review verified on a later PR (step 5) | The saga PR is the verification PR |
+| `CLAUDE_CODE_OAUTH_TOKEN` repo secret (step 4) | Set by Tom: the advisory review ran on PRs #2 to #4 |
+| Review verified on a later PR (step 5) | Done: PR #2 was the verification PR |
 
 Added by phase 1, in this repo: build, smoke-test and sign workflows for both images
 (publish from `main` only, cosign keyless); Go lint and tests (envtest); one
@@ -1866,7 +1887,7 @@ v2 work never edits
 
 | Phase | Delivers | Done when |
 |---|---|---|
-| **0. Design and spikes** | This saga; spikes S-1 to S-14 | Q-01 to Q-08 answered (done 2026-10-06), Q-09 and Q-10 answered, spike results recorded, ADR-001 Accepted |
+| **0. Design and spikes** | This saga; spikes S-1 to S-14 | Q-01 to Q-10 answered (done 2026-10-06), spike results recorded, ADR-001 Accepted |
 | **1. Foundation** | Repo CI; operator with `AgentSession`, pod and volume lifecycle; agentd boot; agent image `2.0` (tini, agentd, baked Codex and kubectl-cnpg); keeper minting the gh token; haynes-ops apps for namespaces, CRDs, operator, keeper, RBAC with the baseline guard (D-19), CNPs with the web and platform tiers (D-24), LimitRange, PriorityClass, Kyverno limit policy; session volumes on `gasha01-rbd` (D-22). No ResourceQuota. **Task mode only**, static token. | `agent-run -p` from the v1 pod creates a pod on a worker; the task opens a PR; reap leaves a verified bundle. An operator rollout mid-task leaves the task untouched. The guard refuses each #3392 path. |
 | **2. Interactive and lifecycle** | `local` mode, attach, idle detection, timers, rescue, resume, restore; `/v1/activities` and dev-env-ops reading both sources; messaging tier 3; laptop access | A local session survives suspend and resume with its conversation; a declared activity is visible to dev-env-ops; Tom runs `agent-run` from his laptop. |
 | **7. Access broker** (after 1, alongside 2) | `AccessGrant`, `GrantPolicy`, the broker Deployment, the approval page and Pushover link, kube and egress grants, break-glass; credential grants (Q-07) | A grant request reaches Tom's phone, he approves it, the agent uses it, and it is gone at its TTL; a standing policy approves a matching request with no ping; break-glass works and the headlamp Job is refused. |
@@ -1874,7 +1895,7 @@ v2 work never edits
 | **4. Rolling updates and Codex** | Revisions; drain-on-idle and resume (per Q-03); codex hub; keeper-owned Codex auth if S-3 passes; image pre-pull DaemonSet; Renovate auto-merge for `2.x` | An image bump reaches every idle session with its conversation intact and interrupts no busy turn; the phone's Codex entry survives a hub drain. |
 | **5. Cutover** (needs 3, 4, 7 and Q-08 applied) | Workbench pod; dev-env-ops reads only `Activity`; v1 scaled to zero, its PVC kept 30 days, then removed with its build and Renovate carve-outs | Tom approves the cutover. |
 | **8. Tool pods** (after 2) | `ToolPool`, `ToolSession`, the loopback gateway, artifacts; blender and audio converted; image, whisper, printer and video pools | An agent calls a Blender tool with no pod running; the pod starts, serves, and stops 30 minutes after release, keeping its workspace. |
-| **9. GPUs, satellites and local LLMs** (after 8) | VRAM accounting for every GPU workload (household included); the dynamic budget with reserve pods and reclaim; GPU tool pods; LLM pools with backends and leases; satellite workers; opencode sessions | An opencode session on a Qwen coder model opens a PR; a household batch app's activity shrinks the agent share and the agent's work moves or resumes; a pool moves to a satellite and back when Tom starts and ends a game. |
+| **9. GPUs, satellites and local LLMs** (after 8) | VRAM accounting for every GPU workload (household included); the per-card budget with reserve pods, gates, reclaim and automatic card discovery; GPU tool pods; LLM pools with backends and leases; satellite workers; opencode sessions | An opencode session on a Qwen coder model opens a PR; no household app's VRAM is ever in agent hands; a GPU node that joins shows up in the budget with no config change; a pool moves to a satellite and back when Tom starts and ends a game. |
 | **6. Later** | Profile tightening; Authentik OIDC for the laptop; Codex `exec-server` isolation; a web terminal route; warm pools; DRA for GPUs | Each on its own plan. |
 
 Backlog plans: [`../backlog/`](../backlog/).
@@ -1895,7 +1916,7 @@ Backlog plans: [`../backlog/`](../backlog/).
 | S-10 | Do Claude Code, Codex and opencode accept a loopback MCP server that answers `initialize` and `tools/list` from a cache, and pick up a server added mid-session? | one session pod, phase 2 | D-29 |
 | S-11 | Does the pinned opencode run headless, resume a session, use MCP over HTTP, allow everything by config, and make sound tool calls with a Qwen coder model on llama-server? | one session pod, one request at a time against the shared pool | D-33 |
 | S-12 | Does the baseline guard refuse each #3392 path (Job as another ServiceAccount, image patch, Flux spec patch, exec into the headlamp pod) and allow each runbook action (rollout restart, CronJob suspend, Flux reconcile and suspend, volsync unlock Job, ExternalSecret force-sync)? Does the admission policy see `CONNECT` for exec? | a scratch namespace, phase 1 | D-19 |
-| S-13 | Does a reserve pod at priority -1 make the scheduler preempt an agent GPU pod and keep the units, and does a household pod preempt the reserve pod? Can a gated pod's node affinity be narrowed before its gate is removed? Do the activity probes (Ollama `/api/ps`, ComfyUI `/queue`, Immich `/api/jobs`, llama-server `/slots`) show demand before a model load, and how long does a reclaim take end to end? | talosw04 for the preemption, read-only probe calls against the household apps, one at a time | D-34 |
+| S-13 | Does a reserve pod at priority -1 make the scheduler preempt an agent GPU pod and keep the units, and does a household pod preempt the reserve pod? Can a gated pod's node affinity be narrowed before its gate is removed? Does a GPU node that joins (talosw04 with its lend label set) appear in the budget with no config change? | talosw04, one pod at a time | D-34 |
 | S-14 | On each satellite: does `llama-server` (Metal, CUDA on Windows) serve the pool models with the satellite agent in front; tokens per second for each pool model; MLX against llama.cpp on the M5; do the owner-first signals (a game's VRAM on Windows, battery and memory pressure on macOS) fire within seconds; model load time from local disk? | Tom's three machines, with Tom present, one machine at a time | D-35 |
 
 Every spike is light: a handful of CLI invocations, one at a time. None runs a test
@@ -1913,8 +1934,9 @@ suite, a busy loop or anything parallel (the 2026-10-05 incident rule).
 | Open web egress lets a tricked agent send what it can read anywhere | The root-equivalent credentials are no longer mounted (Q-07); Hubble logs every agent DNS lookup; LAN and cluster stay behind grants (6.10). |
 | The broker can bind the break-glass role | `bind` limited to the catalog by name, and the catalog has no `cluster-admin`, `edit` or `admin`; break-glass has no Secrets, token minting, RBAC or admission writes and never reaches the dev-env namespaces; approvals only from Tom's Authentik identity; break-glass is never auto-approved (6.12). |
 | Break-glass leaves workloads behind | The broker sends Tom the audit list of objects the grant created; the keeper refreshes both logins at expiry (D-27). |
-| A busy fleet saturates a worker and starves BestEffort household pods | Q-08's LimitRange gives every household pod a CPU request (in flight in haynes-ops); until it is live v2 stays small (7.3). |
-| A household batch app starts while its burst VRAM is lent to agents | Up to about two minutes of reclaim; interactive apps never lend; lending is per app (Q-09); the per-node guard evicts at once if a card nears full, and returns all lent VRAM if the budgeter is gone for 5 minutes (D-34). |
+| A busy fleet saturates a worker and starves BestEffort household pods | Q-08's LimitRange gives every household pod a CPU request (in flight as haynes-ops #3406); until it is live v2 stays small (7.3). |
+| Household VRAM use exceeds its declared reservation | Nothing is lent (Q-09), so this only happens with missing or low data. The budget drops to match the live overage, the per-node guard evicts agent GPU pods at once if a card nears full, and all agent GPU pods leave a node if the budgeter is gone for 5 minutes (D-34). |
+| Little in-cluster VRAM for agents today | The household reservations fill most cards; agent capacity grows as Tom adds GPUs, picked up with no tuning, and the large models run on satellites (D-34, D-35). |
 | The budgeter's data drifts from what household apps really load | The live VRAM check raises the reserve to match and logs the gap (D-34). |
 | A satellite disappears mid-request (sleep, game, travel) | Missed heartbeats or `Draining` move the pool to the next backend; agentd retries the request once (8.3, 8.4). |
 | A leaked lease token | Valid only against one satellite, only for completions, only until the lease ends (8.4). |
@@ -1931,7 +1953,7 @@ suite, a busy loop or anything parallel (the 2026-10-05 incident rule).
 ## 15. Open questions
 
 Each blocks building. Ask Tom one at a time; fold the answer back in as a dated
-ruling. Q-01 to Q-08 were answered on 2026-10-06; Q-09 and Q-10 are open.
+ruling. Q-01 to Q-10 were all answered on 2026-10-06; none is open.
 
 | Id | Question | Options (recommended first) | Resolution |
 |---|---|---|---|
@@ -1942,9 +1964,9 @@ ruling. Q-01 to Q-08 were answered on 2026-10-06; Q-09 and Q-10 are open.
 | Q-05 | Where do repos, worktrees and agent state live? | **A. A ceph-block volume per session plus one small shared CephFS volume** (memory, rescue bundles, logs): fast builds, no shared locks or credentials, little load on the CephFS MDS. **B. One shared CephFS home for every pod** (closest to v1): nothing moves, but pid-bound locks and the Max credential are shared across pods, and installs load the MDS that zigbee2mqtt and zwave use. **C. A volume per session, nothing shared**: simplest, but Claude's memory stops being shared and rescue bundles die with the volume. | **Ruling, Tom 2026-10-06: A, and agents may also use gasha01** (the Proxmox Ceph through ceph-csi-rbd). Session volumes go on `gasha01-rbd`, the shared volume stays on the in-cluster CephFS (D-22, 6.6). |
 | Q-06 | May GPU tool pods run on the control-plane nodes that carry GPUs? | **A. Yes, GPU tool and LLM pods only, capped at 2 CPU and 16Gi, low priority, never preempting**: agents get the idle talosm05 A2000 and spare VRAM on talosm01 and talosm03 now; a pod capped at 2 CPU cannot starve a 20-core master (the 2026-10-05 incident took 18 cores). **B. No, workers only**: masters never run agent work; agent GPU work waits for VRAM on talosw01 (about 7 GiB free beside the household model) or for more worker GPUs. **C. Only on masters Tom marks with a lend label in git**: control per node, but one more label to keep in step with the hardware. | **Ruling, Tom 2026-10-06: none of the static options; allocate dynamically.** "Allocated GPU resources which can be dynamically adjusted. Will depend on what other workloads we need VRAM for. Can also run larger models on satellite workers like something on my 128Gb shared memory m5 MacBook, or my 5090 or 4090 PCs." Every in-cluster card, control-plane ones included, gets an agent budget that grows and shrinks with household demand (D-34); GPU pods on control-plane nodes keep the 2 CPU / 16Gi cap (D-31); larger models run on satellite workers (D-35). |
 | Q-07 | Do the root-equivalent credentials (the Proxmox operator token and the hw-ssh key) stay in every session pod, now that pods get open web egress? | **A. Move them behind the broker**: the Proxmox read token stays in the baseline; the operator token and an hw-ssh certificate (short-lived, from the keeper's SSH CA) come by credential grant; a page that tricks an agent can no longer take a root-equivalent key, and a standing policy can approve named repos so routine use does not ping Tom. **B. Keep them in profile `full`, as v1**: no change in habits, but any web page that tricks an agent can send a key that is root on all five Proxmox hosts anywhere. **C. Keep them, and keep v1's default-deny allowlist for pods that hold them**: safe, but those sessions keep today's web problem. | **Ruling, Tom 2026-10-06: A.** The Proxmox operator token and the hw-ssh key move behind the broker as short-lived credential grants and are not mounted in any session pod (6.10, 6.12). |
-| Q-08 | How does every household pod get a CPU request, so a saturated worker cannot starve it? | **A. Kyverno generates a LimitRange with a small default CPU request (50m) in every namespace except the system ones**: no pod is BestEffort again, new apps included, with no per-app work; existing pods change at their next restart, and the scheduler counts a little more requested CPU. **B. Add CPU requests app by app in haynes-ops, with a Kyverno audit rule that flags BestEffort pods**: each request is sized to the app, but it is slow, and the gap reopens whenever an app lands without one. **C. Leave household pods as they are**: nothing changes for the house, but with no fleet cap a busy fleet can saturate a worker and starve its BestEffort pods, as on 2026-10-05. | **Ruling, Tom 2026-10-06: A.** A Kyverno-generated LimitRange with a 50m default CPU request in every non-system namespace, done in haynes-ops as a cluster-wide v1 fix (in flight on 2026-10-06). Referenced here, not designed again (7.3). |
-| Q-09 | Which household GPU apps may lend their burst VRAM to agents while they are idle? | **A. Only batch apps (ComfyUI, Immich ML); the voice stack and Ollama never lend**: agents get several more GiB on talosm03 and talosw01 when those apps are idle; the first render or Immich job after a lend may wait up to about two minutes, or fail once and be retried. **B. None; every declared burst is always reserved**: the house never waits; agents get only what no household app could ever use (talosm05's A2000, a few GiB elsewhere) plus the satellites. **C. All, Ollama and the voice stack included**: the largest agent share, but a voice or chat request can stall for up to a minute while agents release VRAM. | (open) |
-| Q-10 | When may agents use Tom's satellite machines? | **A. Only while they are awake and Tom is not using them, by the owner-first rules; never woken**: no surprise fan noise or power use; satellites serve mainly when Tom leaves them on. **B. As A, and the operator may wake the 5090 and 4090 PCs with Wake-on-LAN overnight (01:00 to 07:00) when leases are queued**: overnight agent runs get the fast cards, and the PCs wake and run at night; the Mac is never woken. **C. Only when Tom switches a machine to lend himself**: full control, but the machines sit unused unless he remembers. | (open) |
+| Q-08 | How does every household pod get a CPU request, so a saturated worker cannot starve it? | **A. Kyverno generates a LimitRange with a small default CPU request (50m) in every namespace except the system ones**: no pod is BestEffort again, new apps included, with no per-app work; existing pods change at their next restart, and the scheduler counts a little more requested CPU. **B. Add CPU requests app by app in haynes-ops, with a Kyverno audit rule that flags BestEffort pods**: each request is sized to the app, but it is slow, and the gap reopens whenever an app lands without one. **C. Leave household pods as they are**: nothing changes for the house, but with no fleet cap a busy fleet can saturate a worker and starve its BestEffort pods, as on 2026-10-05. | **Ruling, Tom 2026-10-06: A.** A Kyverno-generated LimitRange with a 50m default CPU request in every non-system namespace, done in haynes-ops as a cluster-wide v1 fix (in flight as haynes-ops #3406 on 2026-10-06). Referenced here, not designed again (7.3). |
+| Q-09 | Which household GPU apps may lend their burst VRAM to agents while they are idle? | **A. Only batch apps (ComfyUI, Immich ML); the voice stack and Ollama never lend**: agents get several more GiB on talosm03 and talosw01 when those apps are idle; the first render or Immich job after a lend may wait up to about two minutes, or fail once and be retried. **B. None; every declared burst is always reserved**: the house never waits; agents get only what no household app could ever use (talosm05's A2000, a few GiB elsewhere) plus the satellites. **C. All, Ollama and the voice stack included**: the largest agent share, but a voice or chat request can stall for up to a minute while agents release VRAM. | **Ruling, Tom 2026-10-06: B, none.** "None but I bring online more GPUs in cluster". No household app lends burst VRAM to agents; agents get only what is left above every household app's full reservation, and their share grows as GPUs are added, picked up automatically (D-34). |
+| Q-10 | When may agents use Tom's satellite machines? | **A. Only while they are awake and Tom is not using them, by the owner-first rules; never woken**: no surprise fan noise or power use; satellites serve mainly when Tom leaves them on. **B. As A, and the operator may wake the 5090 and 4090 PCs with Wake-on-LAN overnight (01:00 to 07:00) when leases are queued**: overnight agent runs get the fast cards, and the PCs wake and run at night; the Mac is never woken. **C. Only when Tom switches a machine to lend himself**: full control, but the machines sit unused unless he remembers. | **Ruling, Tom 2026-10-06: A.** Satellites are used only while they are awake and Tom is not using them; they are never woken (8.4). |
 
 ## 16. Decisions settled in this design
 
@@ -1983,5 +2005,5 @@ ruling. Q-01 to Q-08 were answered on 2026-10-06; Q-09 and Q-10 are open.
 | D-31 | Household first: agents never preempt; the scheduler queues GPU claims; control-plane GPUs usable within a 2 CPU / 16Gi cap (revised 2026-10-06) | 8.2 |
 | D-32 | LLM pools name a model and ordered backends (household, cluster, satellite); leases grant access; agentd routes each request (revised 2026-10-06) | 8.3 |
 | D-33 | Local-model agents run opencode in ordinary session pods | 6.13 |
-| D-34 | A dynamic VRAM budget per card: household reservations and probes set a reserve; reserve pods at -1 carry it to the scheduler; only the budgeter un-gates agent GPU pods; reclaim is graceful; a per-node guard protects the house without the operator | 8.2 |
+| D-34 | A VRAM budget per card: agents get only what is left above every household app's full reservation (floor + burst), nothing is lent; new cards join automatically; reserve pods at -1 carry the reservation to the scheduler; only the budgeter un-gates agent GPU pods; graceful reclaim from agents, including agent against agent; a per-node guard protects the house without the operator (revised 2026-10-06) | 8.2 |
 | D-35 | Satellite inference workers on Tom's own machines, owner first, reached by lease token over the LAN | 8.4 |

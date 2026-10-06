@@ -3,9 +3,10 @@
 **Status:** backlog
 **Depends on:** nothing. S-1, S-2, S-3, S-6 and S-7 run in the v1 pod today; S-4 and
 S-5 need two session pods and run in phases 3 and 4; S-8 and S-12 run in phase 1,
-S-10 in phase 2, S-9, S-11, S-13 and S-14 before plan 09.
-**Parallel with:** Tom answering Q-09 and Q-10 (Q-01 to Q-08 were answered on
-2026-10-06)
+S-10 in phase 2, S-9, S-11, S-13 and S-14 before plan 09. S-1 and S-2 come first:
+they decide how Remote Control gets the Max login (DESIGN-001 D-11).
+**Parallel with:** Tom's ratification of ADR-001 (every question, Q-01 to Q-10, was
+answered on 2026-10-06)
 
 ## Goal
 
@@ -132,18 +133,15 @@ a CRD delete and a write in `kyverno` must all be refused, while an eviction in
 `kube-system` is allowed. Check whether the ValidatingAdmissionPolicy sees
 `CONNECT` for exec; if not, the Kyverno rule carries it. Decides D-19.
 
-## S-13: the dynamic GPU budget (before plan 09)
+## S-13: the GPU budget (before plan 09)
 
 On talosw04 with Tom's lend label set, after S-9: run an agent-priority pod holding
 8 units, then create a reserve pod at priority -1 for 8 units. Check the scheduler
 preempts the agent pod with its termination grace and places the reserve pod. Then
 check that a priority-0 pod preempts the reserve pod, and that a gated pod's node
-affinity can be narrowed before its gate is removed.
-Separately, read each household probe once a minute for an hour of normal use, never
-writing: Ollama `GET /api/ps`, ComfyUI `GET /queue`, Immich `GET /api/jobs`,
-llama-server `GET /slots`, beside the exporter's used VRAM. Record whether each probe
-shows demand before the VRAM rises, and by how much. Decides D-34's probes and its
-15-minute cool-down.
+affinity can be narrowed before its gate is removed. Then remove and restore the lend
+label and check that the budgeter drops and re-adds the node with no config change.
+Decides D-34's mechanism.
 
 ## S-14: satellites (before plan 09, with Tom present)
 

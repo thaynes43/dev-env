@@ -1,11 +1,34 @@
 # ADR-001: Distributed dev-env, one pod per agent session, run by an operator
 
 - **Status:** Proposed
-- **Date:** 2026-10-05; Tom's rulings on Q-01 to Q-08 folded in 2026-10-06
+- **Date:** 2026-10-05; Tom's rulings on Q-01 to Q-10 folded in 2026-10-06
 - **Deciders:** Tom Haynes (owner). Drafted by an agent. Tom decided the repository
-  location (2026-10-05) and the design's questions Q-01 to Q-08 (2026-10-06); the
+  location (2026-10-05) and every design question, Q-01 to Q-10 (2026-10-06); the
   ADR itself is not yet Accepted.
 - **Design:** [DESIGN-001](../designs/001-dev-env-v2.md)
+
+## Ratification summary
+
+**What Tom ratifies:** this architecture and DESIGN-001's D-01 to D-35 with his
+rulings on Q-01 to Q-10. In short: one pod per agent session, run by our own Go
+operator; a keeper that alone holds the rotating logins; an access broker for
+time-boxed grants approved on his phone; tool pods; a GPU budget that never takes
+household VRAM; and satellites on his own machines. Once Accepted, this ADR is
+never edited; a later change gets a new ADR.
+
+**Build order:** spikes first, with S-1 and S-2 before anything else. Together they
+decide whether Remote Control can run on a keeper-held Max login or needs a
+coordinator host pod (D-11). S-3, S-6 and S-7 also run in the v1 pod today. Then plan 01; 02 and 07
+together; 03, 04 and 08 together; then 05 (cutover); then 09 once 08 is done.
+
+**v1 until cutover:** v1 runs every session and is maintained in haynes-ops as today.
+No v2 plan touches `apps/dev/dev-env/app/resources/**`. Cutover needs Tom's written
+approval, and v1's volume is kept for 30 days after it.
+
+**First build:** [plan 01](../backlog/01-foundation.md), task mode on the static
+token. It is done when `agent-run -p` from v1 starts a worker pod that opens a PR,
+an operator restart leaves that pod untouched, and the guard refuses every #3392
+path.
 
 ## Context and problem statement
 
@@ -116,14 +139,15 @@ The parts, in one paragraph each, with the design section that specifies them:
   gateway in the session pod, placed by the scheduler, with a GPU when needed
   (DESIGN-001 8.1).
 - **GPUs**: VRAM is counted through the device plugin by every GPU workload,
-  household ones included. A budgeter gives agents a share of each card, control-plane
-  cards included, that grows when household apps are idle and shrinks, gracefully,
-  when they need the VRAM; household pods preempt agent GPU pods, never the reverse.
+  household ones included. Every household app keeps its full reservation (floor and
+  burst); a budgeter gives agents only what is left on each card, control-plane cards
+  included, picks up new cards on its own, and reclaims from agents gracefully;
+  household pods preempt agent GPU pods, never the reverse.
   LLM pools name a model and an ordered list of backends, and agentd routes each
   request to the one that is up (DESIGN-001 8.2, 8.3).
 - **Satellites**: Tom's own machines serve the larger models through a small
-  `dev-env-satellite` program, only while he is not using them, reached over the LAN
-  with lease tokens (DESIGN-001 8.4).
+  `dev-env-satellite` program, only while they are awake and he is not using them,
+  never woken, reached over the LAN with lease tokens (DESIGN-001 8.4).
 - **`agent-run`**: a static CLI with v1's verbs that calls the API from any pod or a
   laptop (DESIGN-001 3.5).
 - **Lifecycle**: idle detection from the agent's own status, timers, rescue to an
@@ -152,20 +176,19 @@ The parts, in one paragraph each, with the design section that specifies them:
 | C-09 | Bad: each session clones its repo fresh, so start-up costs a clone (spike S-7 measures it; a shared mirror is the remedy for large repos). |
 | C-10 | Neutral (revised 2026-10-06): agent pods get open web egress, broader than v1, and keep v1's Secrets on day one except the Proxmox operator token and the hw-ssh key, which come only as short-lived grants (design Q-07). A tricked agent can leak what its pod holds; the credential set, not the allowlist, is the control. |
 | C-11 | Good: capacity grows with the cluster with no numbers to retune; a session that does not fit waits visibly in the scheduler's queue. |
-| C-12 | Bad: with no fleet cap, the Max plan's own windows are the only brake on parallel sessions; the operator shows quota state but does not ration it. A busy fleet can also saturate a worker, which is safe only once every household pod has a CPU request (design Q-08: a Kyverno LimitRange, in flight in haynes-ops). |
+| C-12 | Bad: with no fleet cap, the Max plan's own windows are the only brake on parallel sessions; the operator shows quota state but does not ration it. A busy fleet can also saturate a worker, which is safe only once every household pod has a CPU request (design Q-08: a Kyverno LimitRange, in flight as haynes-ops #3406). |
 | C-13 | Good: agents never stall on a prompt, and anything beyond the baseline is a time-boxed, audited grant; the headlamp path is closed and replaced by break-glass. |
 | C-14 | Bad: the broker can bind the break-glass role, the most privileged v2 grant. Break-glass is not `cluster-admin`: it has no Secrets, no token minting, no RBAC or admission writes, and never reaches the dev-env namespaces. Residual risk: for up to an hour it can change or delete any household workload, volume or node setting, change a workload that already mounts a Secret, or an operator resource that names one to mount (CNPG, volsync), and so read that Secret, and leave workloads running after it expires; Tom gets the audit list of what it created. The broker must stay small, isolated from agents, and approve only on Tom's Authentik identity. |
-| C-15 | Bad: GPU accounting needs every household GPU workload to declare its VRAM, burst and activity probe, a change to household manifests in haynes-ops; the accounting is cooperative, not enforced, and a lent batch app can wait about two minutes for its VRAM back. |
+| C-15 | Bad: GPU accounting needs every household GPU workload to declare its VRAM floor and burst, a change to household manifests in haynes-ops; the accounting is cooperative, not enforced. |
 | C-16 | Good: tools and local models become fleet members: started on demand, stopped when idle, and household AI is never displaced by agents. |
 | C-17 | Neutral: session volumes depend on the Proxmox Ceph, an HDD-backed cluster outside Kubernetes. Its outage stops new sessions and stalls running ones; it already carries Prometheus and Loki. |
-| C-18 | Good: the agent GPU share follows real household demand, so idle VRAM on every card, control-plane ones included, is used, and adding a card needs no tuning. |
+| C-18 | Good: the house never waits on agents for VRAM, because nothing is lent. Agent GPU capacity grows as Tom adds GPUs, with no tuning. Bad: today the household reservations fill most cards, so in-cluster agent GPU work is small until then. |
 | C-19 | Neutral: the large local models depend on Tom's own machines, which are there only when he is not using them; agents fall back to smaller in-cluster models or wait. |
 
 ## More information
 
-- Design: [DESIGN-001](../designs/001-dev-env-v2.md). Q-01 to Q-08 were ruled on by
-  Tom on 2026-10-06; Q-09 (which household GPU apps lend idle VRAM) and Q-10 (when
-  agents may use his satellite machines) are open. All are in its section 15.
+- Design: [DESIGN-001](../designs/001-dev-env-v2.md). Tom ruled on every question,
+  Q-01 to Q-10, on 2026-10-06; the rulings are in its section 15.
 - haynes-ops #3392: the v1 RBAC escalation finding that the baseline guard answers.
 - v1 saga and its decision log: haynes-ops `.agents/sagas/dev-env/`. Its ADR-001
   records that v2 lives in this repo.
