@@ -1,7 +1,7 @@
 # KICKOFF: the first build session (ratification, spikes, plan 01)
 
-- **For:** the first Claude Code or Codex session after Tom ratifies ADR-001, either
-  in the v1 dev-env pod or on Tom's own machine. Read
+- **For:** the first Claude Code or Codex build session, in the v1 dev-env pod or on
+  Tom's own machine. It starts by asking Tom to ratify ADR-001. Read
   [`.agents/HANDOFF.md`](../../HANDOFF.md) first.
 - **Source of truth:** backlog [00 (spikes)](backlog/00-spikes.md),
   [01 (foundation)](backlog/01-foundation.md) and
