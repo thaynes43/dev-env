@@ -1,0 +1,5 @@
+# Built binaries and the pinned tools (Makefile).
+/bin/
+# Go test artefacts.
+*.test
+*.out
