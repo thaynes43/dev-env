@@ -1045,12 +1045,19 @@ clone belongs to one session.
   organization, not the machine), and S-6 confirmed it.
   **S-6 result (2026-10-06): passed, and a drain archives.** The resumed process
   showed the same `bridgeSessionId`, and the server's event list held both turns. But
-  the pod's SIGTERM makes the CLI tear down and archive its entry, as `/exit` does,
+  a SIGTERM to the CLI makes it tear down and archive its entry, as `/exit` does,
   and the resume then unarchives it (`Unarchive … 200`) before it reattaches. So the
   entry leaves Tom's active list while the session is drained and comes back on
-  resume. The design accepts that: drains take idle sessions only, and the
-  alternative, SIGKILL, skips the CLI's own shutdown. The binary has no setting to
+  resume. The design accepts that: drains take idle sessions only, and the CLI's own
+  shutdown flushes its transcript and bridge events. The binary has no setting to
   skip the archive. (This bullet said "a drain never archives" until S-6.)
+  **agentd forwards the pod's SIGTERM to the CLI.** `tini` (PID 1, D-07) signals only
+  its own child, and the CLI runs under tmux, so the kubelet's SIGTERM never reaches
+  it by itself. On SIGTERM, agentd sends SIGTERM to the CLI's pid (from
+  `sessions/<pid>.json`) and waits for it to exit inside the grace period. S-6 sent
+  that signal to the CLI's pid directly. Without the forward, the CLI is SIGKILLed
+  when the grace period ends, and its entry goes offline without an archive (S-15
+  step 1). Ending the tmux session sends SIGHUP instead, which S-6 did not test.
 - **Reap archives the entry** (P-7). After the rescue bundle is verified, the operator
   asks the keeper, which holds the access token, to archive
   `status.remoteControl.sessionId` with the CLI's archive call. It is best effort and
@@ -1059,8 +1066,8 @@ clone belongs to one session.
   or the app, and `agent-run fleet` counts them. Without archiving, offline entries
   pile up (one per reaped session), and ListAgents, which pages through a bounded
   listing, can stop showing newer sessions.
-  S-6 (2026-10-06) narrows the call's job: a reap deletes the pod, and its SIGTERM
-  already makes the CLI archive its own entry. The operator's call covers a CLI that
+  S-6 (2026-10-06) narrows the call's job: a reap deletes the pod, and the SIGTERM
+  agentd forwards (P-6 above) already makes the CLI archive its own entry. The operator's call covers a CLI that
   could not: SIGKILL after the grace period, an OOM kill, node loss, or a teardown
   that met a revoked token.
 - **Standby** (P-8). The operator keeps one standby `remote` session on haynes-ops,
@@ -2340,7 +2347,7 @@ Backlog plans: [`../backlog/`](../backlog/).
 | S-3 | Do `codex exec` and `codex remote-control` run on `--with-access-token`, and pick up a new one? | v1 pod, scratch `CODEX_HOME` | D-12 step 2 |
 | S-4 | Can a hub thread execute in another pod through `codex exec-server`? | two pods, phase 4 | D-12 step 3 |
 | S-5 | Does SendMessage reach a Remote Control session in another pod? | two pods, phase 3 | D-16 tier 2 |
-| S-6 | Does `claude --resume <id> --remote-control <name>` reattach the same phone entry? | v1 pod, scratch access-token-only home. **Passed 2026-10-06** (CLI 2.1.292): the same bridge session id after `--resume`, and the server's event list kept both turns. The pod's SIGTERM archives the entry and the resume unarchives it, so a drained entry is off the active list until resume. Seeding needs `oauthAccount` (6.2) | 6.7: a drain keeps the entry, through the unarchive |
+| S-6 | Does `claude --resume <id> --remote-control <name>` reattach the same phone entry? | v1 pod, scratch access-token-only home. **Passed 2026-10-06** (CLI 2.1.292): the same bridge session id after `--resume`, and the server's event list kept both turns. A SIGTERM to the CLI archives the entry (agentd forwards the pod's) and the resume unarchives it, so a drained entry is off the active list until resume. Seeding needs `oauthAccount` (6.2) | 6.7: a drain keeps the entry, through the unarchive |
 | S-7 | How long does `git clone --filter=blob:none` plus checkout take per repo? | v1 pod, one repo at a time. **Done 2026-10-06: no repo needs a mirror.** Clone plus checkout took 2.0 s (cigar-journal), 2.6 s (haynes-ops), 3.3 s (hass-sandbox), 10.9 s (haynesnetwork) and 22.9 s (haynes-quest); the limit is 120 s. Detail in [00-spikes](../backlog/00-spikes.md) | D-15: no mirror for any of the five |
 | S-8 | How much slower is a session's clone, install and one test file on `gasha01-rbd` than on `ceph-block`? | one phase-1 task pod at size M, one run per class | D-22's rule for size L |
 | S-9 | Does the pinned device plugin count VRAM units with time-slicing (requests above 1, config chosen by an NFD-set label), and does a household-priority pod preempt an agent GPU pod? Is DRA consumable capacity usable with NVIDIA's driver on these cards yet? | talosw04 (nothing household runs there), one pod at a time | D-30 mechanism |

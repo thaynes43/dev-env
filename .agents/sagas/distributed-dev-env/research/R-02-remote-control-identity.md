@@ -314,7 +314,7 @@ plan ever changes.
 - **P-6. Drain keeps the entry.** On resume, agentd runs `claude --resume
   <conversation-id> --remote-control <session-id>` on the moved volume. The transcript's
   `bridge-session` pointer and the same account bring back the same phone entry (S-6).
-  Never archive on a drain. (2026-10-06, S-6: the drain's SIGTERM makes the CLI
+  Never archive on a drain. (2026-10-06, S-6: a SIGTERM to the CLI makes it
   archive the entry itself, and the resume unarchives it. DESIGN-001 6.7.)
 - **P-7. Reap archives the entry.** After the rescue bundle is verified, the operator
   asks the keeper, which holds the access token, to archive `status.remoteControl.sessionId`

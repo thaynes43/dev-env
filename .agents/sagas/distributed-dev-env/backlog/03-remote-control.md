@@ -51,12 +51,15 @@ post-ready does. DESIGN-001 3.8, 6.2, 6.7; R-02.
   derived from the cwd (S-6).
 - **Archive on reap:** after the bundle is verified, the operator asks the keeper to
   archive the entry (S-15), records the result, and counts unarchived offline
-  entries in `agent-run fleet`. The pod's SIGTERM already makes the CLI archive its
-  own entry (S-6), so the call matters when the CLI died first (SIGKILL, OOM, node
-  loss).
-- **Drain:** the pod's SIGTERM archives the entry, and agentd's `claude --resume <id>
-  --remote-control <name>` unarchives it and reattaches (S-6). agentd lets the CLI
-  shut down normally; it does not SIGKILL it to keep the entry listed.
+  entries in `agent-run fleet`. The SIGTERM agentd forwards already makes the CLI
+  archive its own entry (S-6), so the call matters when the CLI died first (SIGKILL,
+  OOM, node loss).
+- **Shutdown and drain:** on its own SIGTERM, agentd sends SIGTERM to the CLI's pid
+  (from `sessions/<pid>.json`) and waits for it to exit inside the grace period.
+  `tini` signals only its own child, and the CLI runs under tmux, so nothing else
+  reaches it. The CLI then archives its entry, and agentd's `claude --resume <id>
+  --remote-control <name>` unarchives it and reattaches (S-6). agentd does not
+  SIGKILL the CLI to keep the entry listed.
 - **The console** (the broker's web UI, 3.8): sessions with link, state and an
   archive button; the Claude login page (days left; Renew runs the ceremony in the
   page; the link and code are never logged or stored; a waiting login ends after 10
@@ -81,7 +84,10 @@ post-ready does. DESIGN-001 3.8, 6.2, 6.7; R-02.
 - Tom renews the keeper's login from the console page on his phone, with no chat
   relay, and the page shows the new expiry.
 - A drained remote session comes back as the same phone entry, with its history: the
-  same `bridgeSessionId`, unarchived by the resume (S-6). A reaped one leaves the
+  same `bridgeSessionId`, unarchived by the resume (S-6). In a v2 pod the CLI gets
+  agentd's forwarded SIGTERM and archives its entry on the way out (`Torn down
+  (archive=200)` in its debug log); it is not SIGKILLed at the end of the grace
+  period. A reaped one leaves the
   phone's active list (or, if S-15 failed, is archived from the console).
 - No pod other than the credential owner holds a refresh token (checked by listing
   the credentials files' keys, never their values).

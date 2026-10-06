@@ -137,7 +137,8 @@ a few minutes and stop it when done.
   live login. The account and organization are the same, so the owner check is the
   same, and this is the state a v2 pod runs in.
   - **Run:** `--remote-control spike-s6` in a scratch worktree, one message, then
-    SIGTERM (what a pod deletion sends). Then `claude --resume <conversation-id>
+    SIGTERM sent to the CLI's pid (the signal a pod deletion sends; in a v2 pod
+    agentd must forward it, DESIGN-001 6.7). Then `claude --resume <conversation-id>
     --remote-control spike-s6` and a second message.
   - **Result:** the new `sessions/<pid>.json` holds the same `bridgeSessionId`. The
     debug log says "Reattaching to session" and creates no new session. The server's
@@ -282,7 +283,7 @@ access-token-only credential (as S-1):
 
 If step 2 fails, reaped entries stay offline, Tom archives them from the console or
 the app, and the fleet view counts them. (Corrected 2026-10-06 by S-6: this said "a
-drain never archives, so P-6 does not depend on step 4". A drain's SIGTERM does
+drain never archives, so P-6 does not depend on step 4". A SIGTERM to the CLI does
 archive, and S-6's `--resume <id> --remote-control <name>` unarchived the entry, so
 P-6 rests on that unarchive.)
 

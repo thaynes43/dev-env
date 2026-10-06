@@ -36,8 +36,9 @@ the saga. To start building, follow
 - **Spikes S-1, S-1b and S-7 are done** (2026-10-06). S-1 and S-1b passed, so D-11
   takes the keeper-owned target (DESIGN-001 6.2). S-7 found no repo needs a mirror.
 - **S-6 and S-16 are done** (2026-10-06). S-6 passed: `--resume` brings back the same
-  Remote Control entry with its history. It also found that the pod's SIGTERM
-  archives the entry and the resume unarchives it, and that agentd must seed
+  Remote Control entry with its history. It also found that a SIGTERM to the CLI
+  archives the entry and the resume unarchives it (so agentd forwards the pod's
+  SIGTERM to the CLI), and that agentd must seed
   `oauthAccount` (DESIGN-001 6.2, 6.7). S-16: the keeper can read plan usage with
   `GET /api/oauth/usage` (7.3).
 - **v1 keeps running.** The single dev-env pod and the `dev-env-ops` executor are
