@@ -69,7 +69,8 @@ token; read key names and expiry times only.
   - **Step 2:** it registered (a `bridgeSessionId`) with no `.claude.json` seeding. The
     CLI fetched the profile and its feature flags and wrote `oauthAccount` and
     `cachedGrowthBookFeatures` itself. A cold TUI first stops on
-    three prompts: theme, security notes, folder trust.
+    three prompts: theme, security notes, folder trust. (S-6 found that with those
+    prompts' flags seeded, Remote Control also needs a seeded `oauthAccount`.)
   - **Step 3:** after the merge, the next request used the new token. No restart.
   - **Step 4:** the refresh revoked the previous token at once ("OAuth token revoked"
     on the first check, 22 s after the refresh). A turn in the gap fails after two
