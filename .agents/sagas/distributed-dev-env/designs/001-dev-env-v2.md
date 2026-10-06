@@ -781,7 +781,11 @@ Authentik, and replaces the chat relay.**
   none, the CLI never tries (S-1). The worst case is one failed turn ("OAuth token
   revoked · Please run /login") when a request lands between a keeper refresh and
   agentd's merge. The session and its Remote Control entry carry on, and the next
-  turn works.
+  turn works. An unattended session would wait for that next turn, so **agentd
+  resumes it** (added 2026-10-06 after S-1): after each merge, if the session's last
+  turn ended in that error since the previous token was revoked, agentd sends one
+  `continue` turn. Plan 03 picks the signal (the transcript or the session record)
+  and tests it.
 - **Trusted Devices stays off** on Tom's account (R-02 5.3). With it on, every pod
   would enrol as its own device, email Tom, and need a sign-in from the last 18 hours.
   Turning it on would need its own design pass.
@@ -806,7 +810,9 @@ bodies confirmed with `--debug-file`.
 pod; backlog 00 has each step.
 
 - An access-token-only credentials file on a cold home registers Remote Control, with
-  no `.claude.json` seeding.
+  no `.claude.json` seeding. The CLI fetched the profile (`oauthAccount`) and its
+  feature flags (`cachedGrowthBookFeatures`; the debug log names GrowthBook as the
+  source) and wrote both into `.claude.json` itself.
 - A merged token is used by the next request, with no restart. One presence pulse
   sent in the same instant got a 401; the next one succeeded.
 - **The caveat: a refresh revokes the previous access token at once** (revoked on the
@@ -2344,7 +2350,7 @@ suite, a busy loop or anything parallel (the 2026-10-05 incident rule).
 | Image pull latency on a cold node | Pre-pull DaemonSet (7.4). |
 | A drain resumes a conversation on a new CLI version that reads old state differently | Drain happens on idle only; S-6 covers resume; a failed resume leaves the volume suspended, not deleted. |
 | Offline Remote Control entries pile up, one per reaped session, and push newer ones out of ListAgents' bounded listing | Archive on reap through the keeper (6.7, S-15); if S-15 fails, Tom archives from the console and `agent-run fleet` counts them. |
-| A keeper rotation revokes the access token pods hold | Measured by S-1: it does, at once, and a turn that lands in the gap fails once. The keeper refreshes once per token life and writes the Secret straight away; agentd watches it and merges at once. `CLAUDE_CODE_OAUTH_401_WAIT_MS` does not cover a credentials file (6.2). |
+| A keeper rotation revokes the access token pods hold | Measured by S-1: it does, at once, and a turn that lands in the gap fails once. The keeper refreshes once per token life and writes the Secret straight away; agentd watches it, merges at once, and resumes a turn that failed in the gap. `CLAUDE_CODE_OAUTH_401_WAIT_MS` does not cover a credentials file (6.2). |
 | The keeper's Secret mounted read-only as the credentials file breaks the CLI's own writes | Never mounted: agentd merges into a writable 0600 file (6.2). |
 | A cold home lacks the account, flags or policy cache ("Unable to determine your organization") | S-1 on a cold home: the CLI fetched the profile and its feature flags itself, with no seeding. agentd seeds the onboarding flags and worktree trust so the TUI does not stop on prompts; the egress tiers allow the CLI's flag and policy hosts (6.2). |
 | A telemetry kill-switch variable set in the image turns Remote Control off | None of the four is ever set; a CI check on the image env (6.2). |

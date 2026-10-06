@@ -27,6 +27,10 @@ post-ready does. DESIGN-001 3.8, 6.2, 6.7; R-02.
     as soon as it changes; the Secret is never mounted as the file. Its merge latency
     is the 401 window: a turn that lands in it fails once, and
     `CLAUDE_CODE_OAUTH_401_WAIT_MS` does not cover a credentials file (S-1).
+  - After each merge, agentd resumes a session whose last turn ended in "OAuth token
+    revoked" since the previous token was revoked: it sends one `continue` turn, so an
+    unattended session does not stall at "Please run /login" (DESIGN-001 6.2). This
+    plan picks the signal, the transcript's last entry or the session record.
   - agentd seeds `.claude.json` with the onboarding flags and worktree trust (S-1: a
     cold TUI otherwise stops on the theme, security and trust prompts) and copies
     nothing per machine. `oauthAccount` is optional: the CLI fetched it itself in S-1.
@@ -75,3 +79,5 @@ post-ready does. DESIGN-001 3.8, 6.2, 6.7; R-02.
   bridge worker JWT (46800 s), which S-1 did not reach.
 - agentd's merge latency after a keeper refresh is measured and recorded: the time
   from the Secret's update to the pod's file changing.
+- A turn that fails in the 401 window is resumed by agentd after its merge, with no
+  message from Tom. The test forces it once by holding back one merge in a test pod.

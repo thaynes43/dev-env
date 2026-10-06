@@ -67,7 +67,8 @@ token; read key names and expiry times only.
 - [x] **Done 2026-10-06: passed, with one caveat.** CLI 2.1.292, in the v1 pod, with a
   cold `CLAUDE_CONFIG_DIR` and `HOME` and a cleared environment:
   - **Step 2:** it registered (a `bridgeSessionId`) with no `.claude.json` seeding. The
-    CLI fetched the profile and wrote `oauthAccount` itself. A cold TUI first stops on
+    CLI fetched the profile and its feature flags and wrote `oauthAccount` and
+    `cachedGrowthBookFeatures` itself. A cold TUI first stops on
     three prompts: theme, security notes, folder trust.
   - **Step 3:** after the merge, the next request used the new token. No restart.
   - **Step 4:** the refresh revoked the previous token at once ("OAuth token revoked"
