@@ -84,8 +84,9 @@ post-ready does. DESIGN-001 3.8, 6.2, 6.7; R-02.
   result back.
 - Tom renews the keeper's login from the console page on his phone, with no chat
   relay, and the page shows the new expiry.
-- A reaped remote session's entry is archived, by the CLI on SIGTERM or by the
-  keeper's call, and the operator records which in status (S-15).
+- A reaped remote session's entry ends archived, by the CLI on SIGTERM or by the
+  keeper's call, and the keeper's result is recorded in status. A repeat archive
+  returns 200 (S-15), so that result does not show whether the CLI archived first.
 - A drained remote session comes back as the same phone entry, with its history: the
   same `bridgeSessionId`, unarchived by the resume (S-6). In a v2 pod the CLI gets
   agentd's forwarded SIGTERM and archives its entry on the way out (`Torn down
