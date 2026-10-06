@@ -1,0 +1,116 @@
+package agentd
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
+)
+
+// Cmd is one external command: git, claude, tmux.
+type Cmd struct {
+	Name string
+	Args []string
+	// Dir is the working directory; empty means agentd's own.
+	Dir string
+	// Env is added to the runner's base environment, as KEY=VALUE. A later
+	// entry wins over an earlier one with the same key.
+	Env []string
+	// Stdin is the command's input; nil means /dev/null.
+	Stdin io.Reader
+}
+
+// Result is what a command printed and how it exited.
+type Result struct {
+	Stdout   []byte
+	Stderr   []byte
+	ExitCode int
+}
+
+// Runner runs external commands. Tests use a fake; the daemon uses ExecRunner.
+type Runner interface {
+	Run(ctx context.Context, c Cmd) (Result, error)
+	LookPath(name string) (string, error)
+}
+
+// CmdError is a command that ran and exited non-zero. Its message names the
+// command and its first argument only: arguments can carry secrets (an MCP
+// spec with a token, a credential helper), and messages end up in logs.
+type CmdError struct {
+	Name     string
+	Sub      string
+	ExitCode int
+	Stderr   string
+}
+
+func (e *CmdError) Error() string {
+	if e.Sub != "" {
+		return fmt.Sprintf("%s %s: exit status %d", e.Name, e.Sub, e.ExitCode)
+	}
+	return fmt.Sprintf("%s: exit status %d", e.Name, e.ExitCode)
+}
+
+// Detail adds the command's stderr, trimmed. Use it only for commands whose
+// output cannot hold a secret (git, tmux).
+func (e *CmdError) Detail() string {
+	msg := strings.TrimSpace(e.Stderr)
+	if len(msg) > 400 {
+		msg = msg[:400] + "…"
+	}
+	if msg == "" {
+		return e.Error()
+	}
+	return e.Error() + ": " + msg
+}
+
+// ExitCodeOf returns the exit code of a CmdError, or -1 for any other error.
+func ExitCodeOf(err error) int {
+	var ce *CmdError
+	if errors.As(err, &ce) {
+		return ce.ExitCode
+	}
+	return -1
+}
+
+// ExecRunner runs commands as child processes.
+type ExecRunner struct {
+	// BaseEnv is every command's environment before Cmd.Env; nil means
+	// agentd's own environment.
+	BaseEnv []string
+}
+
+// Run implements Runner.
+func (r ExecRunner) Run(ctx context.Context, c Cmd) (Result, error) {
+	cmd := exec.CommandContext(ctx, c.Name, c.Args...)
+	cmd.Dir = c.Dir
+	base := r.BaseEnv
+	if base == nil {
+		base = os.Environ()
+	}
+	cmd.Env = append(append([]string(nil), base...), c.Env...)
+	cmd.Stdin = c.Stdin
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	res := Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			res.ExitCode = ee.ExitCode()
+			sub := ""
+			if len(c.Args) > 0 {
+				sub = c.Args[0]
+			}
+			return res, &CmdError{Name: c.Name, Sub: sub, ExitCode: res.ExitCode, Stderr: stderr.String()}
+		}
+		return res, fmt.Errorf("%s: %w", c.Name, err)
+	}
+	return res, nil
+}
+
+// LookPath implements Runner.
+func (ExecRunner) LookPath(name string) (string, error) { return exec.LookPath(name) }

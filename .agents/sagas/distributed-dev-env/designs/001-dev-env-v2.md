@@ -390,6 +390,45 @@ by heartbeat.** No session pod opens a listening port on the pod network, so no
 in-pod auth scheme is needed and agent pods keep zero ingress. agentd's tool gateway
 (8.1) listens on loopback only.
 
+**D-40 (2026-10-06, plan 01 step 4). agentd reads its session from one environment
+variable, and its config port keeps v1's layout.**
+
+- **The session.** The operator sets `AGENTD_SESSION` on the pod's container: one JSON
+  document with the session's `name` and the spec fields agentd needs (`repo`, `base`,
+  `agent`, `mode`, `model`, `effort`, `prompt`, `limits`), under the spec's own field
+  names. `AGENTD_SESSION_FILE`, when set, names a file with the same document instead.
+  The types are in `internal/agentd/protocol`, which the operator imports; agentd
+  ignores fields it does not know, so a newer operator can add some. Rationale: one
+  variable needs no extra object per session and no API read from the pod, and
+  `kubectl exec` (D-08) inherits it, so `agentd ctl` sees the same session. An
+  environment string holds at most 128 KiB, so the API refuses a prompt over 64 KiB
+  (`protocol.MaxPromptBytes`). agentd refuses a Claude model that is not a full id.
+- **Pod settings** are environment variables whose defaults are v1's paths: the GitOps
+  config at `/opt/dev-env/config` in v1's layout (`claude/CLAUDE.md`, `claude/mcp.json`,
+  `claude/agent-*.md`, `codex/config.toml`, `codex/AGENTS.header.md`), so haynes-ops
+  mounts the same ConfigMap content (D-14); the image's browsers at
+  `/opt/dev-env/ms-playwright`; the shell profile at `/opt/dev-env/scripts/bashrc.sh`;
+  the gh token at `/creds/gh_token` (D-13); `dev-env-shared` at `~/.shared` (D-22).
+  `agentd.Settings` lists every one.
+- **What the port of `dev-init.sh` changes.** The Codex standalone and `kubectl-cnpg`
+  downloads and the helper links (`agent-run`, `declare-activity`, `pve`, `hw-ssh`,
+  `claude-login-check`) are gone: the image bakes them in. The workspace README is gone
+  with code-server. Playwright's browser revisions are linked from the image instead of
+  copied, because every session has a new volume and the browsers are about 670 MB;
+  the small `.links` registry files are copied. `${VAR}` is expanded inside decoded
+  JSON strings, not over the JSON text, so a value cannot break a spec. The MCP loop
+  removes a server only when it is registered, and removes a server that has left
+  `mcp.json`, from the list agentd keeps in `~/.agentd/mcp-managed.json`. The default
+  model in `settings.json` is `DEV_ENV_CLAUDE_MODEL`, else the session's own model, so
+  agentd's code names no model. agentd also links the repo's Claude memory to
+  `~/.shared/memory/<key>`, keyed by the clone's path as the CLI does.
+- **Seeding** (6.2): `hasCompletedOnboarding`, and `hasTrustDialogAccepted` and
+  `hasCompletedProjectOnboarding` for the worktree and the clone. Checked on
+  2026-10-06 with CLI 2.1.292: a cold TUI with those keys opens at its prompt, with no
+  theme, security or trust prompt. `oauthAccount` (the account and organization uuids)
+  comes from the file `AGENTD_OAUTH_ACCOUNT_FILE` names; plan 03 points that at the
+  keeper's Secret. Task mode on the static token needs no `oauthAccount`.
+
 The agent runs with no approval prompts (D-23). Pod spec, inherited from v1 where
 the lesson still applies: non-root uid 1000,
 read-only root filesystem, all capabilities dropped, `RuntimeDefault` seccomp,
@@ -2520,3 +2559,4 @@ step it names.
 | D-37 | One console for Tom, served by the broker behind Authentik: sessions with links and archive, approvals, the login renewal page, Codex status | 3.8 |
 | D-38 | The keeper is its own binary, `dev-env-keeper`, in the operator image; the broker stays a mode of the operator binary | 3.1 |
 | D-39 | The AgentSession schema enforces the per-session rules as CEL; spec is immutable after create except `operatingMode` and `lifecycle`; per-caller rules stay in CallerPolicy's schema | 3.3 |
+| D-40 | agentd reads its session from `AGENTD_SESSION` (JSON, `internal/agentd/protocol`); pod settings default to v1's paths; the `dev-init.sh` port links Playwright browsers and seeds onboarding and trust | 3.6 |
