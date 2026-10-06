@@ -617,8 +617,10 @@ for a haynesnetwork task) is a data change.
 
 - Session pods: egress per profile, plus the operator API. **No ingress**:
   `kubectl exec` and attach go through the kubelet, not the pod network.
-- Operator: ingress from `dev-agents` on 8443; egress to the API server.
-- Keeper: egress to the API server, `api.github.com`, the Claude and OpenAI token
+- Operator: ingress from `dev-agents` on 8443; egress to the API server and to the
+  keeper on 8443.
+- Keeper: ingress only from operator pods on 8443 (the login relay and status, D-19);
+  egress to the API server, `api.github.com`, the Claude and OpenAI token
   endpoints, and `api.pushover.net`. Nothing else.
 - Later, leases open egress to an LLM endpoint by pod label (section 8).
 
@@ -659,7 +661,7 @@ delete a sibling's pod mid-turn with no rescue.
 |---|---|---|
 | `dev-agents/dev-env-agent` (session pods) | Cluster-wide read (v1's read rules, no Secrets) + `dev-env.haynesops.com` read. `dev-env-agent-writes` (v1's write and proxy verbs) by RoleBinding in each listed namespace. The `database` PVC-delete binding, as v1. | **At most v1's tier, and less in the two dev-env namespaces.** No write to its own CRDs: every v2 write goes through the API, where limits are enforced. |
 | `dev-env-system/dev-env-operator` | Role in `dev-agents`: pods (create, delete, get, list, watch, patch), `pods/exec` create, `pods/log` get, PVCs (create, delete, get, list, watch), events. ClusterRole: its own CRD group, `tokenreviews` create. Leases in its own namespace. | No cluster-wide pod or PVC rights, no Secrets. |
-| `dev-env-system/dev-env-keeper` | Role in `dev-agents`: Secrets get, update and patch on `resourceNames` `dev-env-gh-token`, `dev-env-claude-live`, `dev-env-codex-live` only. | The three Secrets are created empty by GitOps, so no `create` is needed. |
+| `dev-env-system/dev-env-keeper` | Role in `dev-agents`: Secrets get, update and patch on `resourceNames` `dev-env-gh-token`, `dev-env-claude-live`, `dev-env-codex-live` only. ClusterRole: `tokenreviews` create, to accept calls from the operator's ServiceAccount only. Leases in its own namespace. | The three Secrets are created empty by GitOps, so no `create` is needed. |
 | `dev-agents/dev-env-workbench` | Role in `dev-agents`: pods get, list; `pods/exec` create. | Tom's IDE; runs no agents by default. |
 | `dev-env-system/dev-env-human` | none (token audience only) | Exists so Tom's laptop can mint an API token (D-05). |
 
