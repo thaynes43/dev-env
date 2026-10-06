@@ -33,7 +33,8 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
   and of the GitHub App key. Agent pods only ever get short-lived tokens.
 - **Session pods** (namespace `dev-agents`, worker nodes only): one agent each, with
   `tini`, an `agentd` supervisor, a size class with mandatory CPU and memory limits,
-  and its own volume. v1's OPERATOR-tier RBAC and egress at most.
+  and its own volume. v1's OPERATOR-tier RBAC and egress at most, and no write,
+  exec or delete in the two dev-env namespaces.
 - **`agent-run`**: one static CLI with v1's verbs, calling the API from anywhere.
 - Shared state, item by item, is in DESIGN-001 section 6.
 
@@ -64,11 +65,11 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 |---|---|---|---|
 | 1 | Where v2's saga and code live | **DECIDED** 2026-10-05 (Tom) | A new private repo, **thaynes43/dev-env**, keeping the image name `ghcr.io/thaynes43/dev-env`. Manifests and pod config stay in haynes-ops (GitOps). Recorded in haynes-ops as ADR-001 of its dev-env saga. |
 | 2 | Architecture: one pod per session run by an operator | **PROPOSED** 2026-10-05 | [ADR-001](adrs/001-distributed-dev-env.md) |
-| 3 | Settled design decisions D-01 to D-19 | **PROPOSED** with ADR-001 | [DESIGN-001 section 16](designs/001-dev-env-v2.md#16-decisions-settled-in-this-design) |
+| 3 | Settled design decisions D-01 to D-20 | **PROPOSED** with ADR-001 | [DESIGN-001 section 16](designs/001-dev-env-v2.md#16-decisions-settled-in-this-design) |
 | 4 | Q-01: build the pod-and-volume layer, or adopt kubernetes-sigs/agent-sandbox | **OPEN** | recommended: build |
 | 5 | Q-02: language for the operator and CLI | **OPEN** | recommended: Go |
 | 6 | Q-03: what happens to running sessions when the image or config changes | **OPEN** | recommended: drain on idle, then resume |
-| 7 | Q-04: default session size and fleet cap | **OPEN** | recommended: S/M/L, default M (4 CPU / 8Gi), cap 24 pods and 48 CPU of limits |
+| 7 | Q-04: default session size and fleet cap | **OPEN** | recommended: S/M/L, default M (4 CPU / 8Gi), cap 48 CPU of limits and 20 pods |
 | 8 | Q-05: where repos, worktrees and agent state live | **OPEN** | recommended: a ceph-block volume per session plus one small shared CephFS volume |
 
 The full options and consequences for Q-01 to Q-05 are in

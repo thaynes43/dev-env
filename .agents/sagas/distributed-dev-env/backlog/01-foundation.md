@@ -34,7 +34,9 @@ archived by the operator. An operator restart mid-task does not disturb it.
 
 - Namespaces `dev-env-system` and `dev-agents`; the CRDs in their own Kustomization
   with `prune: disabled`.
-- Operator and keeper HelmReleases, RBAC (DESIGN-001 6.11), CNPs (agent profile
+- Operator and keeper HelmReleases, RBAC (DESIGN-001 6.11: cluster-wide read for
+  agents, write verbs only by per-namespace RoleBindings that exclude both dev-env
+  namespaces), CNPs (agent profile
   `full` = v1's allowlist verbatim, operator, keeper), ResourceQuota, LimitRange,
   PriorityClass `dev-env-agent`, a Kyverno policy requiring CPU limits in
   `dev-agents`.
@@ -55,3 +57,6 @@ archived by the operator. An operator restart mid-task does not disturb it.
   that restores the file.
 - No session pod is ever scheduled on a control-plane node (checked with
   `kubectl get pods -n dev-agents -o wide`).
+- From a session pod, `kubectl auth can-i` denies `pods/exec`, pod delete, Job create
+  and Deployment patch in `dev-env-system` and `dev-agents`, and allows them in a
+  listed namespace.

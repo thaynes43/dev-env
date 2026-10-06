@@ -79,7 +79,9 @@ The parts, in one paragraph each, with the design section that specifies them:
   into Secrets that agent pods mount (DESIGN-001 6.2 to 6.4).
 - **Session pod**: `tini`, an `agentd` supervisor, tmux and one agent; worker nodes
   only; a size class with mandatory CPU and memory limits; its own volume; v1's
-  OPERATOR-tier RBAC and egress at most (DESIGN-001 3.6, 6.10, 6.11, 7).
+  OPERATOR-tier RBAC and egress at most, with no write, exec or delete in the two
+  dev-env namespaces, so no agent can reach the keeper or a sibling session except
+  through the API (DESIGN-001 3.6, 6.10, 6.11, 7).
 - **`agent-run`**: a static CLI with v1's verbs that calls the API from any pod or a
   laptop (DESIGN-001 3.5).
 - **Lifecycle**: idle detection from the agent's own status, timers, rescue to an

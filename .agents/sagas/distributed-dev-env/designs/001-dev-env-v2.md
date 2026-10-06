@@ -202,8 +202,8 @@ The verbs stay, so muscle memory and every CLAUDE.md instruction carry over.
 |---|---|
 | `agent-run [--repo r] [--agent a] [-p "…"\|--local\|--interactive] [--model] [--effort]` | `POST /v1/sessions`, prints the id. New flags: `--size S\|M\|L`, `--profile`. `--interactive` still means "TUI + Remote Control" for claude. |
 | `list` | `GET /v1/sessions` |
-| `attach [<id>]` | `kubectl exec -it <pod> -- tmux attach` with the caller's credentials. Agent pods already hold `pods/exec`. |
-| `detach` | Exec `tmux detach-client` in the pod. |
+| `attach [<id>]` | For Tom: `kubectl exec -it <pod> -- tmux attach` from the workbench or a laptop. Not offered to agents, which have no exec in `dev-agents` (D-19); they use `msg`. |
+| `detach` | For Tom: exec `tmux detach-client` in the pod. |
 | `reap [<id>]` | `DELETE /v1/sessions/{id}` |
 | `prune`, `sweep` | Gone as commands. The operator's reaper does this continuously ([4.3](#43-timers)). `agent-run fleet` shows what it will do. |
 | `codex-remote [up\|stop]` | Manages the codex hub session ([6.3](#63-codex)). |
@@ -315,8 +315,13 @@ not enough.
 2. It writes a `git bundle` of every local ref that origin does not contain to the
    shared volume at `rescue/<id>/<stamp>.bundle`, with a small JSON manifest.
 3. Suspension keeps the whole volume, gitignored files included, for 7 days.
-4. Archive deletes the volume only when a bundle exists, or when agentd proved every
-   repo clean and fully pushed. Otherwise archive stops and pages.
+4. agentd records, in the session's status, the list of local refs that origin
+   lacks at suspend time. Archive deletes the volume only when the newest bundle was
+   written after the last pod start **and** its manifest covers every ref on that
+   list, or when agentd proved every repo clean and fully pushed at that suspend. A
+   failed rescue still suspends (the volume is kept) but marks the session
+   `rescueFailed`, which blocks archive and pages. An old bundle from an earlier
+   suspend never counts.
 
 **Rescue branches are never pushed to GitHub.** haynes-ops is public, and untracked
 files can hold secrets (`.env`, tokens pasted into a scratch file). The bundle stays
@@ -619,12 +624,48 @@ for a haynesnetwork task) is a data change.
 
 ### 6.11 RBAC tiers
 
+v1's OPERATOR tier (ClusterRole `dev-env-operator`) is bound cluster-wide. Its write
+verbs reach every namespace: `pods/exec`, pod delete, Job create, `patch` on
+Deployments, StatefulSets and DaemonSets, and the API-server proxy. In v1 that was an
+accepted trade-off (Tom, 2026-08-06, for exec), and Job create with any namespace's
+ServiceAccount is already a known escape hatch (the headlamp Job). v2 adds targets
+that v1 never had: the keeper holds the Max and Codex refresh tokens and the GitHub
+App key, the codex hub and the coordinator-host fallback hold login files, and every
+sibling session pod holds someone's work. With v1's binding as it is, any agent could
+exec into the keeper, start a Job that mounts its Secrets, patch its Deployment, or
+delete a sibling's pod mid-turn with no rescue.
+
+**D-19. Agent writes are granted per namespace, never in `dev-env-system` or
+`dev-agents`.**
+
+- **Reads stay cluster-wide**, exactly as v1 (everything except Secrets), plus the
+  `dev-env.haynesops.com` group.
+- **Every write verb and the proxy verbs** move into a ClusterRole
+  `dev-env-agent-writes` that is bound only by RoleBindings, one per namespace, from
+  a namespace list kept in haynes-ops. The list never contains `dev-env-system` or
+  `dev-agents`. A namespace missing from the list fails closed: the agent gets a 403,
+  and adding the namespace is a one-line PR (v1's rule: denials are the signal).
+- **Inside `dev-agents`, agents act only through the API.** They cannot exec into,
+  attach to or delete another session's pod. `agent-run attach` from an agent pod is
+  not offered; agents use `agent-run msg`. Tom attaches from the workbench or his
+  laptop (the workbench ServiceAccount has `pods/exec` in `dev-agents`).
+- **The keeper serves only the operator.** Its endpoint is HTTPS with TokenReview
+  that accepts only the operator's ServiceAccount, and its CiliumNetworkPolicy
+  admits only operator pods, so API-server proxy traffic is dropped too.
+- **Accepted, as in v1:** sessions inside the coordinator host or the codex hub can
+  read that pod's login file, because they run where it lives.
+
 | Identity | Grants | Note |
 |---|---|---|
-| `dev-agents/dev-env-agent` (session pods) | the existing ClusterRole `dev-env-operator` (OPERATOR tier) + the `database` PVC-delete binding, exactly as v1; read on `dev-env.haynesops.com` | **At most v1's tier.** No write to its own CRDs: every write goes through the API, where limits are enforced. |
+| `dev-agents/dev-env-agent` (session pods) | Cluster-wide read (v1's read rules, no Secrets) + `dev-env.haynesops.com` read. `dev-env-agent-writes` (v1's write and proxy verbs) by RoleBinding in each listed namespace. The `database` PVC-delete binding, as v1. | **At most v1's tier, and less in the two dev-env namespaces.** No write to its own CRDs: every v2 write goes through the API, where limits are enforced. |
 | `dev-env-system/dev-env-operator` | Role in `dev-agents`: pods (create, delete, get, list, watch, patch), `pods/exec` create, `pods/log` get, PVCs (create, delete, get, list, watch), events. ClusterRole: its own CRD group, `tokenreviews` create. Leases in its own namespace. | No cluster-wide pod or PVC rights, no Secrets. |
 | `dev-env-system/dev-env-keeper` | Role in `dev-agents`: Secrets get, update and patch on `resourceNames` `dev-env-gh-token`, `dev-env-claude-live`, `dev-env-codex-live` only. | The three Secrets are created empty by GitOps, so no `create` is needed. |
+| `dev-agents/dev-env-workbench` | Role in `dev-agents`: pods get, list; `pods/exec` create. | Tom's IDE; runs no agents by default. |
 | `dev-env-system/dev-env-human` | none (token audience only) | Exists so Tom's laptop can mint an API token (D-05). |
+
+The v1 pod keeps its cluster-wide binding until cutover; it runs no v2 session and
+holds no v2 credential, but it can still reach the two v2 namespaces. Phase 1 checks
+`kubectl auth can-i` from a session pod for each denied verb in both namespaces.
 
 Naming note: the ClusterRole `dev-env-operator` is v1's **OPERATOR tier** for agents.
 The new **operator** component runs as ServiceAccount `dev-env-operator` in another
@@ -635,7 +676,7 @@ its name because a ClusterRoleBinding's `roleRef` cannot change.
 
 ### 7.1 Placement
 
-**D-19. Session pods run on worker nodes only.**
+**D-20. Session pods run on worker nodes only.**
 
 - Required node affinity `topology.kubernetes.io/zone In [w]`. No control-plane node
   ever runs an agent, so EMQX, traefik, the CNPG operator and etcd keep their CPU.
@@ -672,11 +713,18 @@ agents to size test workers to it. A limit throttles a runaway; it does not stop
 
 ### 7.3 Fleet cap (Q-04)
 
-Recommended: a ResourceQuota on `dev-agents` of 24 session pods, `requests.cpu` 8,
-`requests.memory` 64Gi and `limits.cpu` 48. The worker nodes have 72 cores together,
-and talosw01 also carries the GPU workloads. 48 cores of limits means that even with
-every agent pegged at once, the workers keep a third of their CPU. Today's 13 to 16
-concurrent sessions fit, mostly as M with a few S coordinators.
+Recommended: a ResourceQuota on `dev-agents` of `limits.cpu` 48, 20 session pods,
+`requests.cpu` 8 and `requests.memory` 64Gi.
+
+- **What fits:** 48 CPU of limits is 12 sessions at M (4 each), or 16 with a mix such
+  as 8 M and 8 S (8 × 4 + 8 × 2 = 48). An L session counts 8. Today's 13 to 16
+  concurrent sessions fit if the idle coordinators run as S, which is what S is for.
+  The 20-pod cap only matters when most sessions are S.
+- **Why 48:** the worker nodes have 72 cores together, and talosw01 also carries the
+  GPU workloads. With every agent pegged at once, the workers still keep a third of
+  their CPU.
+- **When it is full**, `agent-run` says so and lists the idle sessions it could
+  suspend. A full fleet is a visible error, never a silent queue.
 
 ### 7.4 Image pull
 
@@ -840,6 +888,7 @@ suite, a busy loop or anything parallel (the 2026-10-05 incident rule).
 | More parallel sessions burn the Max plan's windows faster | The fleet cap (7.3). Fable is never a default (pod model policy). |
 | CephFS MDS shared with home automation | The shared volume holds only small, rarely written files (6.6). |
 | More pods hold the same broad Secrets as v1 | Profiles (D-18) allow tightening without code changes. |
+| The namespace list for agent write bindings (D-19) must grow with the cluster | It fails closed: a new namespace gives a 403 until a one-line PR adds it. |
 | Image pull latency on a cold node | Pre-pull DaemonSet (7.4). |
 | A drain resumes a conversation on a new CLI version that reads old state differently | Drain happens on idle only; S-6 covers resume; a failed resume leaves the volume suspended, not deleted. |
 
@@ -853,7 +902,7 @@ ruling.
 | Q-01 | Do we write the pod-and-volume layer ourselves or adopt agent-sandbox? | **A. Build** a small operator owning pods and PVCs, shaped like agent-sandbox's `Sandbox`: more code we own, and the "upgrades never kill sessions" guarantee lives in code we test. **B. Adopt** kubernetes-sigs/agent-sandbox for pods and volumes, build the rest on top: less code and warm pools, but a third-party controller with pod and PVC write access to re-verify on every upgrade. **C. Adopt Coder**: a large system (coderd, Postgres, Terraform templates, its own UI) that still solves none of the credential, Remote Control or rescue problems. | (open) |
 | Q-02 | Which language for the operator and the CLI? | **A. Go**: the standard operator toolkit (controller-runtime, envtest, leader election, CRD generation) and one static `agent-run` binary for laptop, pod and CI; a new language among Tom's repos. **B. TypeScript**: Tom's main app language, but thin operator libraries, and the CLI needs Node wherever it runs. **C. Python (kopf)**: quick to write, less proven for long-lived controllers, and the CLI needs Python. | (open) |
 | Q-03 | When the image or config changes, what happens to running sessions? | **A. Drain on idle, then resume**: sessions pick up new versions within hours, conversations continue, a busy turn is never cut. **B. New sessions only**: zero interruptions, but an old session can run stale tools for days until it is reaped. **C. Only on explicit `agent-run restart`**: nothing moves unless someone asks, so the fleet drifts. | (open) |
-| Q-04 | How big is a session by default, and how big may the fleet get? | **A. Classes S/M/L, default M (4 CPU / 8Gi limit), fleet cap 24 pods and 48 CPU of limits**: today's load fits, and the workers keep a third of their CPU even if every agent pegs. **B. Default L (8 CPU / 24Gi), cap 40 pods and 96 CPU**: fewer throttled builds, but a fully busy fleet can saturate the workers. **C. Per-pod limits only, no fleet cap**: no quota errors, and no ceiling on total agent load. | (open) |
+| Q-04 | How big is a session by default, and how big may the fleet get? | **A. Classes S/M/L, default M (4 CPU / 8Gi limit), fleet cap 48 CPU of limits and 20 pods** (12 M sessions, or 16 with a mix such as 8 M + 8 S): today's 13 to 16 sessions fit with idle coordinators as S, and the workers keep a third of their CPU even if every agent pegs. **B. Default M, cap 96 CPU of limits and 40 pods**: room for 24 M sessions, but a fully busy fleet can take every worker core. **C. Per-pod limits only, no fleet cap**: no quota errors, and no ceiling on total agent load. | (open) |
 | Q-05 | Where do repos, worktrees and agent state live? | **A. A ceph-block volume per session plus one small shared CephFS volume** (memory, rescue bundles, logs): fast builds, no shared locks or credentials, little load on the CephFS MDS. **B. One shared CephFS home for every pod** (closest to v1): nothing moves, but pid-bound locks and the Max credential are shared across pods, and installs load the MDS that zigbee2mqtt and zwave use. **C. A volume per session, nothing shared**: simplest, but Claude's memory stops being shared and rescue bundles die with the volume. | (open) |
 
 ## 16. Decisions settled in this design
@@ -878,4 +927,5 @@ ruling.
 | D-16 | Three messaging tiers | 6.8 |
 | D-17 | `Activity` resource via the API | 6.9 |
 | D-18 | Profiles for Secrets and egress; `full` = v1 | 6.10 |
-| D-19 | Workers only, spread, low priority | 7.1 |
+| D-19 | Agent writes per namespace, never in the two dev-env namespaces; agents reach sessions only through the API | 6.11 |
+| D-20 | Workers only, spread, low priority | 7.1 |

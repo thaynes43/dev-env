@@ -18,8 +18,8 @@ bundle. declare-activity moves to the API. Tom can run `agent-run` from his lapt
 - Operator: the timers of D-09, the reaper, `suspend`, `resume`, `restore`,
   `/v1/sessions/{id}/log` (logs also copied to the shared volume), the child-session
   limit (4 per parent, depth 2).
-- `agent-run attach|detach` through `kubectl exec`; `suspend`, `resume`, `rescue
-  list|restore`, `msg`.
+- `agent-run attach|detach` for Tom through `kubectl exec` (workbench or laptop; not
+  from agent pods, D-19); `suspend`, `resume`, `rescue list|restore`, `msg`.
 - Messaging tier 3 (D-16): `/v1/sessions/{id}/messages` → `agentd ctl deliver`
   (TUI paste for Claude, `codex queue` for Codex).
 - `Activity` CRD and `/v1/activities` with the v1 limits enforced server-side;
