@@ -83,7 +83,11 @@ audited, and the headlamp path is no longer needed. DESIGN-001 6.12, D-23 to D-2
 - Under break-glass, creating a Flux Kustomization, an ExternalSecret, a pod that
   mounts a Secret, or deleting a CRD are all refused.
 - `agent-run fleet evacuate <node>` moves a cordoned worker's sessions (rescue first)
-  and tool instances; a `dev-env-grant-nodes` drain then completes.
+  and tool instances; a `dev-env-grant-nodes` drain then completes. Evacuate is
+  refused for a caller without a nodes or break-glass grant, and for a node that is
+  not cordoned.
+- A GrantPolicy for `dev-env-grant-workloads` with a wildcard namespace is refused
+  at apply time.
 - A Job with `serviceAccountName: headlamp` and exec into the headlamp pod are both
   refused for the agent ServiceAccount.
 - A broker restart during an active grant changes nothing for the session.

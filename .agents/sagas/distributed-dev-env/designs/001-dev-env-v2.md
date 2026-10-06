@@ -241,8 +241,9 @@ audience `dev-env-operator`, checked with a TokenReview.
   port-forward. `agent-run` does both steps for him.
 - An Authentik OIDC login for the laptop is a later step (phase 6).
 
-All authenticated callers get the same API, except that only Tom (on the broker's
-page) can approve a grant. Destroying unrescued work is not in the API at all: it needs a human with `kubectl` (agents cannot delete PVCs in
+All authenticated callers get the same API, with two exceptions: only Tom (on the
+broker's page) can approve a grant, and only Tom or the holder of an active nodes or
+break-glass grant can evacuate a node (6.12). Destroying unrescued work is not in the API at all: it needs a human with `kubectl` (agents cannot delete PVCs in
 `dev-agents`). Each session may create at most 4 child sessions at a time, two
 levels deep, so a confused agent cannot fork-bomb the fleet.
 
@@ -851,10 +852,15 @@ anything more is a grant; nothing in the three dev-env namespaces.**
     `external-secrets.io` objects (beyond the baseline's force-sync annotation) and
     the `dev-env.haynesops.com` CRDs.
 
-  These rules close the controller paths too: no grant can have Flux apply
+  These rules close the controller paths they name: no grant can have Flux apply
   something with Flux's rights, pull a 1Password item through an ExternalSecret,
-  mount a Secret it could not read, or remove a CRD or policy engine that enforces
-  the rules.
+  add a Secret to a pod spec, or remove a CRD or policy engine that enforces the
+  rules. They do not close every controller path. An operator that mounts a Secret
+  named in its own resource is another route: for example, patching a CNPG
+  `Cluster`'s `projectedVolumeTemplate`, or a volsync source's repository Secret,
+  makes the operator start pods with that Secret mounted, and exec then reads it.
+  Only break-glass can write those resources, and D-27 states this as residual
+  risk.
 
   The Kyverno exec rule (privileged-ServiceAccount pods) matches the same
   identities. Spike S-12 checks that the admission policy sees `CONNECT` for exec;
@@ -972,7 +978,7 @@ every granted namespace. What each role allows, plainly:
 
 | Role | Allows (in the granted namespaces) | Note |
 |---|---|---|
-| `dev-env-grant-workloads` | create, update, patch, delete Deployments, StatefulSets, DaemonSets, Jobs, CronJobs, Services, ConfigMaps, pods | Pods still run as `default` or a listed ServiceAccount, and no new Secret reference may be added (identity guard), so it does not reach the namespace's Secrets. It can change images and commands of workloads that already mount Secrets; the approval page says so. |
+| `dev-env-grant-workloads` | create, update, patch, delete Deployments, StatefulSets, DaemonSets, Jobs, CronJobs, Services, ConfigMaps, pods | Pods still run as `default` or a listed ServiceAccount, and no new Secret reference may be added (identity guard). It still **reads every Secret its namespace's workloads already mount**: changing such a workload's image or command is enough. The approval page says so, and a GrantPolicy may auto-approve it only for namespaces it names one by one. |
 | `dev-env-grant-storage` | create, delete PVCs and VolumeSnapshots; delete StatefulSets | The observability and CNPG cases v1 solved with one-off Roles. |
 | `dev-env-grant-secrets-read` | get, list Secrets | Always shown with its namespaces in red on the page. |
 | `dev-env-grant-nodes` (cluster-wide) | cordon, uncordon, drain (evictions), node labels and taints | The talosw01 drain of 2026-09-25 was a headlamp job. Its evictions in the dev-env namespaces stay refused: before a drain, `agent-run fleet evacuate <node>` has the operator move that node's sessions and tool instances (below). |
@@ -982,7 +988,10 @@ every granted namespace. What each role allows, plainly:
 /v1/fleet/nodes/{node}/evacuate`) asks the operator to move that node's sessions:
 each one drains at its next idle moment, as Q-03 does for revisions, or within a
 deadline (default 30 minutes) is suspended after rescue, and its tool instances stop.
-The caller cordons the node first, so the resumed sessions land elsewhere. A drain
+Because it suspends sibling sessions, only Tom (his laptop or the workbench) or a
+caller holding an active `dev-env-grant-nodes` or break-glass grant may call it, and
+the operator refuses it unless the node is already cordoned, so the resumed sessions
+land elsewhere. A drain
 by another identity, such as a Talos upgrade through Omni, evicts session pods
 directly: that cuts a busy turn, but the volume stays and the operator resumes the
 session on another node.
@@ -998,10 +1007,13 @@ his own credentials.
 grant type; namespaces and role; FQDN or CIDR patterns; longest TTL) and approves
 them at once, recorded under the policy's name. Examples: egress to the 3D printer's
 LAN address for haynes-quest sessions, 2 h; role `dev-env-grant-workloads` in
-`frontend` for haynesnetwork sessions, 1 h; leases on the shared LLM pool up to
-60 minutes. A CRD validation rule rejects any GrantPolicy for type `breakglass`, for
+`frontend` for haynesnetwork sessions, 1 h, which records that Tom accepts an agent
+reading the Secrets that `frontend`'s workloads mount; leases on the shared LLM pool
+up to 60 minutes. CRD validation rejects any GrantPolicy for type `breakglass`, for
 role `dev-env-grant-breakglass` or `dev-env-grant-secrets-read`, or for a dev-env
-namespace, so no policy can approve those. The day-one policy set
+namespace, so no policy can approve those. It also rejects a GrantPolicy for
+`dev-env-grant-workloads` whose namespaces are a wildcard or a pattern: each
+namespace is named. The day-one policy set
 approves nothing beyond what v1 already allowed, because the baseline (6.11) already
 covers v1.
 
@@ -1060,7 +1072,12 @@ can change or delete any household workload, volume or node setting outside the
 dev-env and enforcing namespaces, and it can create workloads (as `default`
 ServiceAccounts) that keep running after it expires. It can change the image or
 command of a workload that already mounts a Secret, and so read that Secret through
-the workload. It can read a Secret mounted in a running pod by exec, as the baseline
+the workload. It can edit another operator's resource that names a Secret to mount
+(a CNPG `Cluster`'s `projectedVolumeTemplate`, a volsync repository Secret), so that
+the operator mounts it, and then read it by exec. Building break-glass from an
+allowlist of API groups would close that, but break-glass exists largely for those
+operators' resources (CNPG re-clones, volsync unlocks, Rook), so the design keeps
+discovery minus exclusions and names the risk. It can read a Secret mounted in a running pod by exec, as the baseline
 can (v1's accepted exec trade-off, Tom 2026-08-06). That is what "do this for me" needs; the audit list
 is how Tom sees what was left behind. Giving break-glass only to Tom's own workbench
 or laptop was considered and rejected: the point is to let an agent do the work Tom
