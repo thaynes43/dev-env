@@ -201,7 +201,7 @@ spec:
   llm: { pool: llm-coder }            # opencode only: the LLM pool it leases (8.3)
   parent: haynes-ops-1005-195501      # the session or caller that created it, from the caller's token
   caller: ""                          # summoned only: the CallerPolicy, e.g. alert-responder (3.7)
-  lane: ""                            # summoned only: remediation | upgrade | escalation | curation
+  lane: ""                            # summoned only: remediation | upgrade | curation (single-flight) | escalation (a label, not single-flight)
   idempotencyKey: ""                  # summoned only: e.g. the alert signature
   limits: { timeout: "", maxTurns: 0 } # task kind: wall clock and turn cap from the policy
   operatingMode: Running              # Running | Suspended
@@ -438,7 +438,8 @@ spec:
   capacity, so they sit beside D-21, not against it. Queued sessions start in the
   order upgrade, remediation, curation.
 - **Escalations are not single-flight.** An escalation waits on Tom rather than acting
-  unattended, so it has no lane: each starts at once, within its caller's
+  unattended, so its `escalation` lane is a label for listing and priority, not a
+  single-flight lane: each starts at once, within its caller's
   `concurrent` and `createsPerHour` limits, and pages on spawn. One unanswered
   escalation can never hold back another (v1 F-04). An escalation that does queue
   behind those limits pages Tom after 15 minutes.
@@ -1532,7 +1533,7 @@ limits and 20 pods in a ResourceQuota) is withdrawn.
   not draw on the plan.
 - **Priority against Tom's work** (V-14). One plan pool serves Tom and the summoned
   sessions, and curation alone drew 4.5 M output tokens in a month (R-01). So the
-  quota is acted on for summoned work, by caller priority, without capping Tom:
+  quota is acted on for summoned work, by session priority, without capping Tom:
   - The keeper reads plan usage (the 5-hour and weekly windows) the way the CLI's
     `/usage` does, every 5 minutes, and `GET /v1/fleet` shows it. That call is
     undocumented; spike S-16 checks it. If it is not usable, the operator falls back
@@ -2283,7 +2284,7 @@ suite, a busy loop or anything parallel (the 2026-10-05 incident rule).
 | Server mode in a session pod leaves an environment per pod on the account | Session pods only use `--remote-control` (6.7). |
 | A forged summon order runs with operator verbs (v1 F-11) | Callers authenticate with their ServiceAccount and a `CallerPolicy` limits kinds, prefixes, profiles and models; caller text is data, not instructions (3.7). |
 | The static setup token dies unannounced and every automated path breaks (v1 F-07) | Mint date tracked, pages at 30 and 7 days, creates fail loudly; nothing falls back to metered (6.1, 3.7). |
-| Summoned bulk work starves Tom's interactive plan use | Caller priority acts on the plan's own usage signal; bulk waits past 80 % of the 5-hour window (7.3, V-14). |
+| Summoned bulk work starves Tom's interactive plan use | Session priority acts on the plan's own usage signal; bulk waits past 80 % of the 5-hour window (7.3, V-14). |
 | Up to three monthly Max logins to renew during the migration (v1 dev-env, v1 dev-env-ops, the v2 keeper) | Each v1 login retires with its pod (plans 05 and 10); the console turns each renewal into a page (6.2, 3.8). |
 
 ## 15. Open questions
