@@ -175,6 +175,6 @@ v1 stays live throughout. No v2 plan edits haynes-ops'
 **MVP, and what comes after it.** The MVP is v2 replacing v1: plans 01, 02, 07, 03 and
 04, ending with the cutover in plan 05, which needs Tom's written approval. Phase 1
 (plan 01, task mode) is its first slice. The cutover does not wait for plan 10:
-`dev-env-ops` keeps serving the shepherd and the alert-responder until plan 10 moves
-those lanes. Everything after the MVP stays in this saga: 08 (tool pods),
+`dev-env-ops` keeps serving every summoned lane listed in plan 10 until plan 10
+moves it. Everything after the MVP stays in this saga: 08 (tool pods),
 10 (summoned sessions), 09 (GPUs and local LLMs) and the 06 items.
