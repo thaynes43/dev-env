@@ -59,21 +59,22 @@ func TestRunAgentTask(t *testing.T) {
 	s := testSettings(t, t.TempDir())
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "lines.jsonl"), streamLines)
-	writeFile(t, s.GHTokenFile, "gh-minted\n")
+
 	// The fake CLI checks its environment and stdin, then prints the stream.
 	cli := fakeCLI(t, dir, `
 read -r prompt
 [ "$prompt" = "fix the docs" ] || { echo "bad prompt: $prompt" >&2; exit 9; }
 [ -z "$ANTHROPIC_API_KEY" ] || { echo "metered key leaked" >&2; exit 8; }
-[ "$GH_TOKEN" = "gh-minted" ] || { echo "no gh token" >&2; exit 7; }
+[ -z "$GH_TOKEN" ] || { echo "a stale GH_TOKEN reached the CLI" >&2; exit 7; }
 [ "$CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX" = "dev-env" ] || exit 6
 echo "a warning on stderr" >&2
 cat "`+filepath.Join(dir, "lines.jsonl")+`"
 exit 0`)
 	t.Setenv("ANTHROPIC_API_KEY", "metered")
+	t.Setenv("GH_TOKEN", "stale")
 	l := Launch{
 		Session: "s-1", Argv: []string{cli, "-p"}, Prompt: "fix the docs\n", Dir: dir,
-		Env: []string{"CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=dev-env"}, Unset: unsetForAgent, GHTokenFile: s.GHTokenFile,
+		Env: []string{"CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=dev-env"}, Unset: unsetForAgent,
 		LogPath: filepath.Join(s.WorkDir(), "s-1.log"), EventsPath: s.statePath(eventsFile), ConversationID: "conv-1", BootID: "b1",
 	}
 	if err := os.MkdirAll(s.WorkDir(), 0o755); err != nil {
@@ -166,6 +167,35 @@ func TestRunAgentForwardsSignal(t *testing.T) {
 	}
 	if pidAlive(p) {
 		t.Error("the CLI is still alive")
+	}
+}
+
+func TestRunAgentSurvivesAnOverlongLine(t *testing.T) {
+	old := maxStreamLine
+	maxStreamLine = 1 << 10
+	t.Cleanup(func() { maxStreamLine = old })
+	s := testSettings(t, t.TempDir())
+	dir := t.TempDir()
+	// A 4 KiB line, then 256 KiB more: more than a pipe holds, so a reader
+	// that stopped would leave the CLI blocked.
+	cli := fakeCLI(t, dir, `head -c 4096 /dev/zero | tr '\0' x; echo; i=0; while [ $i -lt 64 ]; do head -c 4096 /dev/zero | tr '\0' y; echo; i=$((i+1)); done; exit 3`)
+	l := Launch{Session: "s-5", Argv: []string{cli}, Dir: dir, LogPath: filepath.Join(dir, "s-5.log"), EventsPath: filepath.Join(dir, "ev")}
+	pane := &syncBuffer{}
+	done := make(chan int, 1)
+	go func() { done <- RunAgent(writeLaunch(t, s, l), pane, nil, time.Second) }()
+	select {
+	case code := <-done:
+		if code != 3 || !strings.Contains(pane.String(), "output no longer parsed") {
+			t.Errorf("exit %d\n%.300s", code, pane.String())
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("run-agent hung on an overlong line")
+	}
+	if fi, err := os.Stat(l.EventsPath); err != nil || fi.Size() < 64*4096 {
+		t.Errorf("events file kept %v bytes (%v)", fi, err)
+	}
+	if !fileExists(s.statePath(resultFile)) {
+		t.Error("no result file")
 	}
 }
 

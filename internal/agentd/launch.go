@@ -41,9 +41,6 @@ type Launch struct {
 	// Env is added to the pane's environment; Unset is removed from it.
 	Env   []string `json:"env,omitempty"`
 	Unset []string `json:"unset,omitempty"`
-	// GHTokenFile is read when the agent starts, into GH_TOKEN (v1's
-	// token_env), so no token is stored in this file.
-	GHTokenFile string `json:"ghTokenFile,omitempty"`
 	// LogPath is the readable task log; EventsPath the CLI's raw output: its
 	// stream-json events, and any stderr lines among them.
 	LogPath    string `json:"logPath"`
@@ -65,10 +62,15 @@ var ErrNotInPlan01 = errors.New("not built yet")
 //     DISABLE_TELEMETRY, DO_NOT_TRACK: the first two turn Remote Control off,
 //     the last two switch the CLI to a check that wants a refresh token
 //     (DESIGN-001 6.2). No pod should set them; agentd makes sure.
+//   - GH_TOKEN: a minted token lasts 60 minutes, so a copy taken when the CLI
+//     starts dies during a long task and shadows gh's other auth. gh gets a
+//     fresh one from agentd's wrapper instead, and git from its credential
+//     helper; both read /creds/gh_token at each call (D-42).
 //   - AGENTD_SESSION: the agent does not need the session document.
 var unsetForAgent = []string{
 	"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
 	"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "DISABLE_GROWTHBOOK", "DISABLE_TELEMETRY", "DO_NOT_TRACK",
+	"GH_TOKEN",
 	protocol.SessionEnv,
 }
 
@@ -127,7 +129,6 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 		Dir:            ws.Worktree,
 		Env:            []string{"CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=dev-env"},
 		Unset:          unsetForAgent,
-		GHTokenFile:    s.GHTokenFile,
 		LogPath:        s.LogPath(sess.Name),
 		EventsPath:     s.statePath(eventsFile),
 		Timeout:        sess.TimeoutDuration(),

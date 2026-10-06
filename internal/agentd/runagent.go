@@ -21,6 +21,9 @@ import (
 // drainWait is how long run-agent reads the CLI's output after it exits.
 var drainWait = 5 * time.Second
 
+// maxStreamLine is the longest stream-json line run-agent parses.
+var maxStreamLine = 16 << 20
+
 // taskResult is ~/.agentd/task-result.json, written when the agent exits.
 type taskResult struct {
 	protocol.TaskResult
@@ -102,11 +105,17 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	go func() {
 		defer close(readDone)
 		sc := bufio.NewScanner(pr)
-		sc.Buffer(make([]byte, 64<<10), 16<<20)
+		sc.Buffer(make([]byte, 0, min(64<<10, maxStreamLine)), maxStreamLine)
 		for sc.Scan() {
 			line := sc.Bytes()
 			_, _ = events.Write(append(append([]byte(nil), line...), '\n'))
 			renderStreamLine(line, out, &res)
+		}
+		if err := sc.Err(); err != nil {
+			// A line too long to parse: keep the rest of the output in the
+			// events file, unparsed, so the CLI never blocks on a full pipe.
+			_, _ = fmt.Fprintf(out, "[agentd] output no longer parsed: %v\n", err)
+			_, _ = io.Copy(events, pr)
 		}
 	}()
 	waitDone := make(chan error, 1)
@@ -215,10 +224,9 @@ func writeResult(stateDir string, l Launch, started time.Time, code int, timedOu
 	_ = writeJSONFile(filepath.Join(stateDir, resultFile), tr)
 }
 
-// agentEnv is the pane's environment minus Launch.Unset, plus Launch.Env and a
-// fresh GH_TOKEN read from the keeper's file.
+// agentEnv is the pane's environment minus Launch.Unset, plus Launch.Env.
 func agentEnv(base []string, l Launch) []string {
-	out := make([]string, 0, len(base)+len(l.Env)+1)
+	out := make([]string, 0, len(base)+len(l.Env))
 	for _, kv := range base {
 		k, _, _ := strings.Cut(kv, "=")
 		if slices.Contains(l.Unset, k) {
@@ -226,13 +234,7 @@ func agentEnv(base []string, l Launch) []string {
 		}
 		out = append(out, kv)
 	}
-	out = append(out, l.Env...)
-	if l.GHTokenFile != "" {
-		if tok, err := os.ReadFile(l.GHTokenFile); err == nil && len(strings.TrimSpace(string(tok))) > 0 {
-			out = append(out, "GH_TOKEN="+strings.TrimSpace(string(tok)))
-		}
-	}
-	return out
+	return append(out, l.Env...)
 }
 
 // procStartTime is field 22 of /proc/<pid>/stat, the process's start time in

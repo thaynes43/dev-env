@@ -469,7 +469,9 @@ tmux session `agent`.**
   one-turn Haiku task read its prompt from stdin, used the given session id, and its
   result event carried the cost and token counts.
 - run-agent writes a readable log to the pane and to `~/work/<name>.log` (v1's path),
-  keeps the raw events in `~/.agentd/task-events.jsonl`, and when the CLI exits writes
+  keeps the raw events in `~/.agentd/task-events.jsonl` (a line over 16 MiB ends the
+  parsing, and the rest is kept unparsed, so the CLI never blocks on a full pipe), and
+  when the CLI exits writes
   `~/.agentd/task-result.json`: the exit code, whether `limits.timeout` stopped it,
   the result's subtype and turn count, and the cost record. At `limits.timeout` it
   sends SIGTERM, then SIGKILL to the CLI's process group 30 s later.
@@ -486,8 +488,14 @@ tmux session `agent`.**
   period must be longer than 30 s (plan 01 step 2).
 - **Plan credentials only** (V-05). agentd refuses to start a task without
   `CLAUDE_CODE_OAUTH_TOKEN`, and removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`
-  and the four variables of 6.2 from the agent's environment. `GH_TOKEN` is read from
-  `/creds/gh_token` as the CLI starts.
+  and the four variables of 6.2 from the agent's environment.
+- **A fresh GitHub token on every call.** A minted token lasts 60 minutes and the
+  keeper re-mints it every 40 (D-13), so a `GH_TOKEN` copied when the CLI starts can
+  die mid-task and, because gh prefers it, break the task's last `gh pr create`.
+  agentd removes `GH_TOKEN` from the agent's environment and writes `~/.local/bin/gh`,
+  a wrapper that reads `/creds/gh_token` on every call and runs the image's gh
+  (`~/.local/bin` leads the image's PATH). git's credential helper already reads the
+  file each time (D-40). v1 exported the token once per shell.
 - Not in plan 01: `local` and `remote` modes (plans 02 and 03), Codex task pods
   (plan 04, after S-3), opencode (plan 09), and V-04's one-turn pre-flight with a
   fallback model (plan 10). For a task, the CLI's own `--fallback-model` may do that

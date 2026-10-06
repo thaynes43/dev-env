@@ -45,7 +45,11 @@ func renderFixture(t *testing.T) (Settings, protocol.Session) {
 		t.Fatal(err)
 	}
 	s.HWSSHKeyB64 = base64.StdEncoding.EncodeToString([]byte(fakeKey))
-	s.Getenv = envOf(map[string]string{"HA_PATH": "/secret-path-xyz"})
+	writeFile(t, filepath.Join(s.SystemBin, "gh"), "#!/bin/sh\n")
+	if err := os.Chmod(filepath.Join(s.SystemBin, "gh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.Getenv = envOf(map[string]string{"HA_PATH": "/secret-path-xyz", "PATH": s.UserBin + ":" + s.SystemBin})
 	sess := protocol.Session{Name: "haynes-ops-1006-120000", Repo: "haynes-ops", Agent: protocol.AgentClaude, Mode: protocol.ModeTask, Model: "claude-opus-5-5", Prompt: "p"}
 	return s, sess
 }
@@ -130,6 +134,13 @@ func TestRenderFullPod(t *testing.T) {
 	} {
 		if !strings.Contains(gitCalls, want) {
 			t.Errorf("git calls lack %q", want)
+		}
+	}
+	// gh wrapper: reads the token file on every call, runs the image's gh.
+	wrapper, _ := os.ReadFile(filepath.Join(s.UserBin, "gh"))
+	for _, want := range []string{ghWrapperMarker, "GH_TOKEN=\"$(cat '" + s.GHTokenFile + "')\"", "exec '" + filepath.Join(s.SystemBin, "gh") + "' \"$@\""} {
+		if !strings.Contains(string(wrapper), want) {
+			t.Errorf("gh wrapper lacks %q:\n%s", want, wrapper)
 		}
 	}
 	// Playwright: revision linked, registry copied.
@@ -242,6 +253,34 @@ func TestMemoryLinkKeepsRealDirectory(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(filepath.Join(real, "note.md")); string(data) != "kept" {
 		t.Error("real memory directory touched")
+	}
+}
+
+func TestGHWrapperLeavesAForeignGh(t *testing.T) {
+	s, _ := renderFixture(t)
+	writeFile(t, filepath.Join(s.UserBin, "gh"), "#!/bin/sh\necho mine\n")
+	if st := renderGHWrapper(s); st.State != StepWarn {
+		t.Errorf("state %s %q", st.State, st.Notes)
+	}
+	if data, _ := os.ReadFile(filepath.Join(s.UserBin, "gh")); string(data) != "#!/bin/sh\necho mine\n" {
+		t.Error("a gh agentd did not write was replaced")
+	}
+	s.Getenv = envOf(map[string]string{"PATH": s.SystemBin + ":" + s.UserBin})
+	if err := os.Remove(filepath.Join(s.UserBin, "gh")); err != nil {
+		t.Fatal(err)
+	}
+	if st := renderGHWrapper(s); st.State != StepWarn || !strings.Contains(strings.Join(st.Notes, " "), "does not lead PATH") {
+		t.Errorf("PATH order: %s %q", st.State, st.Notes)
+	}
+	s.Getenv = envOf(nil)
+	if st := renderGHWrapper(s); st.State != StepSkip {
+		t.Errorf("no gh: %s %q", st.State, st.Notes)
+	}
+}
+
+func TestShellQuote(t *testing.T) {
+	if got := shellQuote("/a b/it's"); got != `'/a b/it'\''s'` {
+		t.Errorf("shellQuote = %s", got)
 	}
 }
 

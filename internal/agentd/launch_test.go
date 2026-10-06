@@ -56,8 +56,8 @@ func TestBuildLaunchTask(t *testing.T) {
 			t.Errorf("%s is not unset for the agent", k)
 		}
 	}
-	if l.LogPath != s.LogPath(sess.Name) || l.GHTokenFile != s.GHTokenFile {
-		t.Errorf("paths: %q %q", l.LogPath, l.GHTokenFile)
+	if l.LogPath != s.LogPath(sess.Name) || !slices.Contains(l.Unset, "GH_TOKEN") {
+		t.Errorf("log path %q, unset %q", l.LogPath, l.Unset)
 	}
 
 	sess.Effort, sess.Limits = "", nil
