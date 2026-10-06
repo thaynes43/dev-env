@@ -314,12 +314,14 @@ plan ever changes.
 - **P-6. Drain keeps the entry.** On resume, agentd runs `claude --resume
   <conversation-id> --remote-control <session-id>` on the moved volume. The transcript's
   `bridge-session` pointer and the same account bring back the same phone entry (S-6).
-  Never archive on a drain.
+  Never archive on a drain. (2026-10-06, S-6: a SIGTERM to the CLI makes it
+  archive the entry itself, and the resume unarchives it. DESIGN-001 6.7.)
 - **P-7. Reap archives the entry.** After the rescue bundle is verified, the operator
   asks the keeper, which holds the access token, to archive `status.remoteControl.sessionId`
   (spike S-15). The archive is best effort, and the result is recorded in status.
   If S-15 fails, reaped sessions stay offline in the list, Tom archives them from the
-  app, and the fleet view counts them.
+  app, and the fleet view counts them. (2026-10-06: S-15 passed, and `--resume` alone
+  unarchives an archived entry. DESIGN-001 6.7.)
 - **P-8. Standby.** Unchanged from 6.7: one operator-kept standby, with the circuit
   breaker.
 - **P-9. Trusted Devices stays off** on Tom's account. If he wants it, it needs its
@@ -372,7 +374,8 @@ For whoever edits the design next (this PR adds only this file):
   an archived session" (docs). Also record whether `--resume` alone brings it back: the
   binary has a reattach path that unarchives a reaped session ("Unarchived reaped
   session … before reattach"), but no doc says `--resume` does. P-6 does not depend
-  on this, because a drain never archives. Decides P-7.
+  on this, because a drain never archives. Decides P-7. (2026-10-06, S-6: a drain's
+  SIGTERM does archive, and `--resume <id> --remote-control <name>` unarchived it.)
 - **Section 14 (risks):** add the offline-entry and Trusted Devices rows from
   section 6.
 

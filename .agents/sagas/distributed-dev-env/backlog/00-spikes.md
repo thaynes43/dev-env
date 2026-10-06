@@ -69,7 +69,8 @@ token; read key names and expiry times only.
   - **Step 2:** it registered (a `bridgeSessionId`) with no `.claude.json` seeding. The
     CLI fetched the profile and its feature flags and wrote `oauthAccount` and
     `cachedGrowthBookFeatures` itself. A cold TUI first stops on
-    three prompts: theme, security notes, folder trust.
+    three prompts: theme, security notes, folder trust. (S-6 found that with those
+    prompts' flags seeded, Remote Control also needs a seeded `oauthAccount`.)
   - **Step 3:** after the merge, the next request used the new token. No restart.
   - **Step 4:** the refresh revoked the previous token at once ("OAuth token revoked"
     on the first check, 22 s after the refresh). A turn in the gap fails after two
@@ -130,6 +131,41 @@ the owner check is the account and organization, not the machine (R-02 2.3); one
 confirms it.
 This spike runs on the live Max login, like any v1 Remote Control session: keep it to
 a few minutes and stop it when done.
+
+- [x] **Done 2026-10-06: passed, with one finding.** CLI 2.1.292, in the v1 pod. It ran
+  on a scratch access-token-only home set up as S-1's (a cleared environment, its own
+  `HOME` and `CLAUDE_CONFIG_DIR`), not on the live login, so nothing could refresh the
+  live login. The account and organization are the same, so the owner check is the
+  same, and this is the state a v2 pod runs in.
+  - **Run:** `--remote-control spike-s6` in a scratch worktree, one message, then
+    SIGTERM sent to the CLI's pid (the signal a pod deletion sends; in a v2 pod
+    agentd must forward it, DESIGN-001 6.7). Then `claude --resume <conversation-id>
+    --remote-control spike-s6` and a second message.
+  - **Result:** the new `sessions/<pid>.json` holds the same `bridgeSessionId`. The
+    debug log says "Reattaching to session" and creates no new session. The server's
+    event list for that id (`GET /v1/code/sessions/{id}/events`, the CLI's own read)
+    holds both turns, so the phone entry keeps its history.
+  - **Finding: SIGTERM archives the entry.** On SIGTERM the CLI tears its bridge down
+    and archives the entry (`archive=200`, exit 143), as `/exit` does (S-1). The resume
+    then unarchived it (`Unarchive … status=200`) and reattached. So a drain archives
+    and the resume reopens it: the same entry and history come back, but the entry is
+    off Tom's active list while the session is drained. SIGKILL does not archive; the
+    entry goes offline (S-15 step 1). The binary has no setting to skip the archive on
+    exit: only internal paths set `skipArchive`, such as the CLI's self-update restart.
+  - **Seeding needs `oauthAccount`.** With the onboarding flags and trust seeded and no
+    `oauthAccount`, Remote Control was refused ("Unable to determine your
+    organization", `--rc flag ignored`). The eligibility check reads only the cached
+    `oauthAccount`, and it ran 0.3 s after start. The CLI's own profile fetch in that
+    run failed (the log redacts why; the same `GET /api/oauth/profile` from curl, with
+    or without the beta header, returned 200). S-1's unseeded run had the three
+    onboarding prompts to give that fetch time. Seeding `oauthAccount` with the account
+    and organization uuids only, step 2's fallback in S-1, fixed it.
+  - **The record's `name` is not the title.** `sessions/<pid>.json` → `name` is a local
+    name derived from the cwd (`wt-bc`, then `wt-d4` after the resume). The Remote
+    Control title is the name on the command line: `GET /v1/code/sessions/{id}`
+    returned `title=spike-s6`.
+  - The entry was archived at the end (SIGTERM again, `archive=200`) and the scratch
+    files were shredded. Consequences: DESIGN-001 6.2 (D-11) and 6.7.
 
 ## S-7: clone time per repo
 
@@ -246,9 +282,31 @@ access-token-only credential (as S-1):
    `/remote-control`, which "reopens an archived session"? Record whether `--resume`
    alone brings it back.
 
-A drain never archives, so P-6 does not depend on step 4. If step 2 fails, reaped
-entries stay offline, Tom archives them from the console or the app, and the fleet
-view counts them.
+If step 2 fails, reaped entries stay offline, Tom archives them from the console or
+the app, and the fleet view counts them. (Corrected 2026-10-06 by S-6: this said "a
+drain never archives, so P-6 does not depend on step 4". A SIGTERM to the CLI does
+archive, and S-6's `--resume <id> --remote-control <name>` unarchived the entry, so
+P-6 rests on that unarchive.)
+
+- [x] **Done 2026-10-06: passed.** CLI 2.1.292, in the v1 pod, on a scratch
+  access-token-only home set up as S-6's, with `oauthAccount` seeded.
+  - **Step 1:** `--remote-control spike-s15`, one message, then SIGKILL, so the CLI
+    could not archive its own entry (a SIGTERM would have, S-6). The entry went
+    offline: `GET /v1/code/sessions/{id}` showed `status=active` and
+    `connection_status=disconnected` about 50 s after the kill.
+  - **Step 2:** `POST /v1/code/sessions/{id}/archive` (the `cse_` form of the id),
+    body `{}`, the access token as `Bearer` and `anthropic-version: 2023-06-01`,
+    returned 200 with a `session` object. A repeat call also returned 200, not 409,
+    so the call is idempotent. The server then showed `status=archived`.
+  - **Step 3:** Tom looked at his Claude app's Code session list, offline entries
+    included, after the archive: "Not listed".
+  - **Step 4:** `claude --resume <conversation-id>` alone, with no `--remote-control`,
+    brought it back. The CLI reattached the persisted bridge session
+    ("restored_owner_match"), unarchived it (`Unarchive … status=200`) and kept the
+    same `bridgeSessionId`. A new message landed in the same entry, next to the first,
+    so `/remote-control` was not needed.
+  - The entry was archived again at the end (SIGTERM, `archive=200`), and the scratch
+    files were shredded. Consequence: DESIGN-001 6.7 (P-7).
 
 ## S-16: reading plan usage
 
@@ -256,6 +314,31 @@ Decides DESIGN-001 7.3 (quota priority for summoned callers, V-14). In the v1 po
 once: can the 5-hour and weekly usage that the CLI's `/usage` shows be read with an
 access token, without side effects, and how fresh is it? Record the shape (key names)
 only. If it cannot, the operator counts quota errors instead.
+
+- [x] **Done 2026-10-06: the read works, with no side effects.** One `GET
+  https://api.anthropic.com/api/oauth/usage` with the access token as `Bearer` (and
+  `anthropic-beta: oauth-2025-04-20`) returned 200 in 0.2 s. It is the call the CLI's
+  `/usage` makes: its default `plain` variant, read from the 2.1.292 binary. It is a
+  GET made without a refresh token, so it can neither write nor rotate anything.
+  - **Shape (key names only):** `five_hour` and `seven_day`, each with `utilization`,
+    `resets_at`, `limit_dollars`, `used_dollars`, `remaining_dollars` and
+    `locked_reason`. Then `seven_day_opus`, `seven_day_sonnet`,
+    `seven_day_oauth_apps` and more per-model or promotional buckets, each null or the
+    same shape. `extra_usage` has `is_enabled`, `monthly_limit`, `used_credits`,
+    `utilization` and more. `limits[]` entries have `kind`, `group`, `percent`,
+    `severity`, `resets_at`, `scope` and `is_active`, with kinds `session`,
+    `weekly_all` and `weekly_scoped`. `utilization` is a whole-number percent,
+    `resets_at` an ISO 8601 time, and the dollar fields were null on this Max plan.
+  - **Freshness:** computed per request. There is no `cache-control` or `age` header,
+    `cf-cache-status` is `DYNAMIC`, and `seven_day.utilization` changed between two
+    reads 2 minutes apart (22:28 and 22:30Z) while the v1 pod was busy. `resets_at` is
+    the top of an hour with sub-second jitter per response, so compare it to the
+    minute.
+  - The same numbers also reach a Remote Control session: its
+    `external_metadata.rate_limit_info` (`status`, `rateLimitType`, `resetsAt`) and
+    its `rate_limit_event` stream events (seen in S-6).
+  - Values were read locally only and the scratch files were shredded. Consequence:
+    DESIGN-001 7.3.
 
 ## Acceptance
 
