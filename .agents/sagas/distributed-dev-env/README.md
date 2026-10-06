@@ -14,8 +14,8 @@ ruled on 2026-10-06, and Q-12 (branch protection) is open, to ask once the rules
 created after B2. Research notes
 [R-01](research/R-01-summoned-agents-audit.md) (summoned agents) and [R-02](research/R-02-remote-control-identity.md) (Remote Control
 identity) are folded into the design. The spikes in
-[backlog 00](backlog/00-spikes.md) come first: S-1 and S-6 passed on 2026-10-06, S-7 and
-S-16 are done, and S-2 is answered. The
+[backlog 00](backlog/00-spikes.md) come first: S-1, S-6 and S-15 passed on 2026-10-06, S-7
+and S-16 are done, and S-2 is answered. The
 first build session's work order is [KICKOFF.md](KICKOFF.md); the repo's front door is
 [`.agents/HANDOFF.md`](../../HANDOFF.md).
 

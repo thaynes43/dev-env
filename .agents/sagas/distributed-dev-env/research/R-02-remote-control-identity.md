@@ -320,7 +320,8 @@ plan ever changes.
   asks the keeper, which holds the access token, to archive `status.remoteControl.sessionId`
   (spike S-15). The archive is best effort, and the result is recorded in status.
   If S-15 fails, reaped sessions stay offline in the list, Tom archives them from the
-  app, and the fleet view counts them.
+  app, and the fleet view counts them. (2026-10-06: S-15 passed, and `--resume` alone
+  unarchives an archived entry. DESIGN-001 6.7.)
 - **P-8. Standby.** Unchanged from 6.7: one operator-kept standby, with the circuit
   breaker.
 - **P-9. Trusted Devices stays off** on Tom's account. If he wants it, it needs its

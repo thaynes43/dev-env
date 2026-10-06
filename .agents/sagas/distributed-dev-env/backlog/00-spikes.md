@@ -287,6 +287,26 @@ drain never archives, so P-6 does not depend on step 4". A SIGTERM to the CLI do
 archive, and S-6's `--resume <id> --remote-control <name>` unarchived the entry, so
 P-6 rests on that unarchive.)
 
+- [x] **Done 2026-10-06: passed.** CLI 2.1.292, in the v1 pod, on a scratch
+  access-token-only home set up as S-6's, with `oauthAccount` seeded.
+  - **Step 1:** `--remote-control spike-s15`, one message, then SIGKILL, so the CLI
+    could not archive its own entry (a SIGTERM would have, S-6). The entry went
+    offline: `GET /v1/code/sessions/{id}` showed `status=active` and
+    `connection_status=disconnected` about 50 s after the kill.
+  - **Step 2:** `POST /v1/code/sessions/{id}/archive` (the `cse_` form of the id),
+    body `{}`, the access token as `Bearer` and `anthropic-version: 2023-06-01`,
+    returned 200 with a `session` object. A repeat call also returned 200, not 409,
+    so the call is idempotent. The server then showed `status=archived`.
+  - **Step 3:** Tom looked at his Claude app's Code session list, offline entries
+    included, after the archive: "Not listed".
+  - **Step 4:** `claude --resume <conversation-id>` alone, with no `--remote-control`,
+    brought it back. The CLI reattached the persisted bridge session
+    ("restored_owner_match"), unarchived it (`Unarchive … status=200`) and kept the
+    same `bridgeSessionId`. A new message landed in the same entry, next to the first,
+    so `/remote-control` was not needed.
+  - The entry was archived again at the end (SIGTERM, `archive=200`), and the scratch
+    files were shredded. Consequence: DESIGN-001 6.7 (P-7).
+
 ## S-16: reading plan usage
 
 Decides DESIGN-001 7.3 (quota priority for summoned callers, V-14). In the v1 pod,

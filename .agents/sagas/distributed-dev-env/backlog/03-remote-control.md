@@ -50,8 +50,9 @@ post-ready does. DESIGN-001 3.8, 6.2, 6.7; R-02.
   The name it reports is the one it passed: the record's `name` is a local name
   derived from the cwd (S-6).
 - **Archive on reap:** after the bundle is verified, the operator asks the keeper to
-  archive the entry (S-15), records the result, and counts unarchived offline
-  entries in `agent-run fleet`. The SIGTERM agentd forwards already makes the CLI
+  archive the entry (S-15, passed 2026-10-06: 200 on an offline entry, 200 again on a
+  repeat), records the result, and counts unarchived offline entries in
+  `agent-run fleet`. The SIGTERM agentd forwards already makes the CLI
   archive its own entry (S-6), so the call matters when the CLI died first (SIGKILL,
   OOM, node loss).
 - **Shutdown and drain:** on its own SIGTERM, agentd sends SIGTERM to the CLI's pid
@@ -83,6 +84,8 @@ post-ready does. DESIGN-001 3.8, 6.2, 6.7; R-02.
   result back.
 - Tom renews the keeper's login from the console page on his phone, with no chat
   relay, and the page shows the new expiry.
+- A reaped remote session's entry is archived, by the CLI on SIGTERM or by the
+  keeper's call, and the operator records which in status (S-15).
 - A drained remote session comes back as the same phone entry, with its history: the
   same `bridgeSessionId`, unarchived by the resume (S-6). In a v2 pod the CLI gets
   agentd's forwarded SIGTERM and archives its entry on the way out (`Torn down

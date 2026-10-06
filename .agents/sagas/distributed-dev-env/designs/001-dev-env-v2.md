@@ -1067,9 +1067,18 @@ clone belongs to one session.
   pile up (one per reaped session), and ListAgents, which pages through a bounded
   listing, can stop showing newer sessions.
   S-6 (2026-10-06) narrows the call's job: a reap deletes the pod, and the SIGTERM
-  agentd forwards (P-6 above) already makes the CLI archive its own entry. The operator's call covers a CLI that
-  could not: SIGKILL after the grace period, an OOM kill, node loss, or a teardown
-  that met a revoked token.
+  agentd forwards (P-6 above) already makes the CLI archive its own entry. The
+  operator's call covers a CLI that could not: SIGKILL after the grace period, an OOM
+  kill, node loss, or a teardown that met a revoked token.
+  **S-15 result (2026-10-06): passed.** On an offline entry (the CLI SIGKILLed), `POST
+  /v1/code/sessions/{id}/archive` with the access token returned 200, and the server
+  showed it archived. A repeat call also returned 200, not 409, so the keeper treats
+  either as done. Tom checked his Claude app's Code list, offline entries included,
+  and the entry was gone. The way back works without `/remote-control`: `claude
+  --resume <conversation-id>` alone reattached the same `bridgeSessionId` and
+  unarchived it, and a new message landed in the same entry. So any later resume of
+  an archived conversation reopens its entry. The fallback above stays for a CLI
+  release that breaks the undocumented call.
 - **Standby** (P-8). The operator keeps one standby `remote` session on haynes-ops,
   replacing post-ready's standby (4.3), with the circuit breaker.
 - **The console** lists every session's link and state, with an archive button (Q-11;
@@ -2356,7 +2365,7 @@ Backlog plans: [`../backlog/`](../backlog/).
 | S-12 | Does the baseline guard refuse each #3392 path (Job as another ServiceAccount, image patch, Flux spec patch, exec into the headlamp pod) and allow each runbook action (rollout restart, CronJob suspend, Flux reconcile and suspend, volsync unlock Job, ExternalSecret force-sync)? Does the admission policy see `CONNECT` for exec? | a scratch namespace, phase 1 | D-19 |
 | S-13 | Does a reserve pod at priority -1 make the scheduler preempt an agent GPU pod and keep the units, and does a household pod preempt the reserve pod? Can a gated pod's node affinity be narrowed before its gate is removed? Does a GPU node that joins (talosw04 with its lend label set) appear in the budget with no config change? | talosw04, one pod at a time | D-34 |
 | S-14 | On each satellite: does `llama-server` (Metal, CUDA on Windows) serve the pool models with the satellite agent in front; tokens per second for each pool model; MLX against llama.cpp on the M5; do the owner-first signals (a game's VRAM on Windows, battery and memory pressure on macOS) fire within seconds; model load time from local disk? | Tom's three machines, with Tom present, one machine at a time | D-35 |
-| S-15 | Does the CLI's archive call (`POST /v1/code/sessions/{id}/archive`, undocumented) with an access token take a finished session off the phone's active list, and does the documented way back (`claude --resume`, then `/remote-control`) still reopen it? Does `--resume` alone? | v1 pod, scratch config dir, one `spike-s15` session | 6.7 archive on reap |
+| S-15 | Does the CLI's archive call (`POST /v1/code/sessions/{id}/archive`, undocumented) with an access token take a finished session off the phone's active list, and does the documented way back (`claude --resume`, then `/remote-control`) still reopen it? Does `--resume` alone? | v1 pod, scratch config dir, one `spike-s15` session. **Passed 2026-10-06** (CLI 2.1.292): 200 on an offline entry, and 200 again on a repeat (not 409); Tom saw the entry leave his list. `claude --resume` alone unarchived and reattached it, with no `/remote-control` | 6.7 archive on reap: the keeper's call, after the CLI's own archive on SIGTERM |
 | S-16 | Can the keeper read the plan's 5-hour and weekly usage the way the CLI's `/usage` does, with the access token, without side effects? | v1 pod, one read and a repeat. **Done 2026-10-06: yes.** `GET /api/oauth/usage` with the access token returns `five_hour` and `seven_day` (`utilization`, `resets_at`), computed per request; a plain GET with no refresh token, so no side effects. Key names in [00-spikes](../backlog/00-spikes.md) | 7.3 quota priority (V-14): the keeper reads it; the error count stays the fallback |
 
 Every spike is light: a handful of CLI invocations, one at a time. None runs a test
@@ -2389,7 +2398,7 @@ suite, a busy loop or anything parallel (the 2026-10-05 incident rule).
 | The privileged-ServiceAccount list for the exec rule (D-19) must grow when a new privileged ServiceAccount appears | Rare; the list sits beside the guard in haynes-ops, and a reviewer of any new cluster-admin binding adds it. |
 | Image pull latency on a cold node | Pre-pull DaemonSet (7.4). |
 | A drain resumes a conversation on a new CLI version that reads old state differently | Drain happens on idle only; S-6 passed on CLI 2.1.292 (the resume reattaches and unarchives the entry); a failed resume leaves the volume suspended, not deleted. |
-| Offline Remote Control entries pile up, one per reaped session, and push newer ones out of ListAgents' bounded listing | Archive on reap through the keeper (6.7, S-15); if S-15 fails, Tom archives from the console and `agent-run fleet` counts them. |
+| Offline Remote Control entries pile up, one per reaped session, and push newer ones out of ListAgents' bounded listing | The CLI archives its own entry on agentd's forwarded SIGTERM (S-6), and the operator archives the rest through the keeper (6.7; S-15 passed 2026-10-06). If a CLI release breaks the undocumented call, Tom archives from the console and `agent-run fleet` counts them. |
 | A keeper rotation revokes the access token pods hold | Measured by S-1: it does, at once, and a turn that lands in the gap fails once. The keeper refreshes once per token life and writes the Secret straight away; agentd watches it, merges at once, and resumes a turn that failed in the gap. `CLAUDE_CODE_OAUTH_401_WAIT_MS` does not cover a credentials file (6.2). |
 | The keeper's Secret mounted read-only as the credentials file breaks the CLI's own writes | Never mounted: agentd merges into a writable 0600 file (6.2). |
 | A cold home lacks the account, flags or policy cache ("Unable to determine your organization") | S-1 on a cold home: the CLI fetched the profile and its feature flags itself, with no seeding. agentd seeds the onboarding flags and worktree trust so the TUI does not stop on prompts; the egress tiers allow the CLI's flag and policy hosts (6.2). |
