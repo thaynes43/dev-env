@@ -24,8 +24,9 @@ Then plan 01; 02 and 07 together; 03, 04, 08 and 10 together; 05 (cutover); 09
 after 08.
 
 **v1 until cutover:** v1 and `dev-env-ops` keep running from haynes-ops. No v2 plan
-touches `apps/dev/dev-env/app/resources/**`. Each has its own monthly Max login now
-(haynes-ops #3414); the keeper replaces both, and each retires with its pod (plans 05
+touches `apps/dev/dev-env/app/resources/**`. Each gets its own monthly Max login
+(haynes-ops #3414: wiring merged as #3422, `dev-env-ops`' login ceremony pending on
+2026-10-06); the keeper replaces both, and each retires with its pod (plans 05
 and 10).
 
 **First build:** [plan 01](../backlog/01-foundation.md), task mode on the static
@@ -186,7 +187,7 @@ The parts, in one paragraph each, with the design section that specifies them:
 | C-09 | Bad: each session clones its repo fresh, so start-up costs a clone (spike S-7 measures it; a shared mirror is the remedy for large repos). |
 | C-10 | Neutral (revised 2026-10-06): agent pods get open web egress, broader than v1, and keep v1's Secrets on day one except the Proxmox operator token and the hw-ssh key, which come only as short-lived grants (design Q-07). A tricked agent can leak what its pod holds; the credential set, not the allowlist, is the control. |
 | C-11 | Good: capacity grows with the cluster with no numbers to retune; a session that does not fit waits visibly in the scheduler's queue. |
-| C-12 | Bad: with no fleet cap, the Max plan's own windows are the only brake on parallel sessions; the operator shows quota state but does not ration it. A busy fleet can also saturate a worker, which is safe only once every household pod has a CPU request (design Q-08: a Kyverno LimitRange, in flight as haynes-ops #3406). |
+| C-12 | Bad: with no fleet cap, the Max plan's own windows are the only brake on parallel sessions; the operator shows quota state but does not ration it. A busy fleet can also saturate a worker, which is safe only once every household pod has a CPU request (design Q-08: a Kyverno LimitRange, live since 2026-10-06 as haynes-ops #3406). |
 | C-13 | Good: agents never stall on a prompt, and anything beyond the baseline is a time-boxed, audited grant; the headlamp path is closed and replaced by break-glass. |
 | C-14 | Bad: the broker can bind the break-glass role, the most privileged v2 grant. Break-glass is not `cluster-admin`: it has no Secrets, no token minting, no RBAC or admission writes, and never reaches the dev-env namespaces. Residual risk: for up to an hour it can change or delete any household workload, volume or node setting, change a workload that already mounts a Secret, or an operator resource that names one to mount (CNPG, volsync), and so read that Secret, and leave workloads running after it expires; Tom gets the audit list of what it created. The broker must stay small, isolated from agents, and approve only on Tom's Authentik identity. |
 | C-15 | Bad: GPU accounting needs every household GPU workload to declare its VRAM floor and burst, a change to household manifests in haynes-ops; the accounting is cooperative, not enforced. |

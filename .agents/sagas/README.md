@@ -9,10 +9,14 @@ haynes-ops' `.agents/sagas/README.md`, plus numbered ADRs and designs.
 ```
 .agents/sagas/<saga>/
 ├── README.md          vision, architecture at a glance, hard news, decision log, backlog index
+├── KICKOFF.md         work order for the next build session (optional)
 ├── adrs/NNN-<slug>.md      decisions (MADR); consequences get C-NN ids
 ├── designs/NNN-<slug>.md   how: components, APIs, flows; D-NN decisions, Q-NN questions
+├── research/R-NN-<slug>.md findings that feed a design; not decisions
 └── backlog/NN-<slug>.md    plans, numbered in rough order; each declares its dependencies
 ```
+
+The repo's front door, above every saga, is [`.agents/HANDOFF.md`](../HANDOFF.md).
 
 ## Conventions
 

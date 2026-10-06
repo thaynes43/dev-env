@@ -12,7 +12,9 @@ first-class path, and one console for links, archives and the login renewal. No
 question is open. Research notes [R-01](research/R-01-summoned-agents-audit.md)
 (summoned agents) and [R-02](research/R-02-remote-control-identity.md) (Remote Control
 identity) are folded into the design. The spikes in
-[backlog 00](backlog/00-spikes.md) come first, S-1 before all (S-2 is answered).
+[backlog 00](backlog/00-spikes.md) come first, S-1 before all (S-2 is answered). The
+first build session's work order is [KICKOFF.md](KICKOFF.md); the repo's front door is
+[`.agents/HANDOFF.md`](../../HANDOFF.md).
 
 **Working rules:** this repo's [CLAUDE.md](../../../CLAUDE.md). Docs first. Ask Tom
 one question at a time with AskUserQuestion, and fold each answer back into the
@@ -80,7 +82,8 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
    access tokens only, which relies on CLI behaviour that spike S-1 must prove; R-02
    found the CLI re-reads its credentials file and revives Remote Control on a fresh
    token. If S-1 fails, Remote Control sessions share one coordinator host pod. v1 now
-   has two logins (the dev-env pod's, and `dev-env-ops`'s since haynes-ops #3414);
+   has two logins (the dev-env pod's, and `dev-env-ops`'s from haynes-ops #3414, whose
+   login ceremony is pending on 2026-10-06);
    v2's keeper replaces both with one, so Tom renews up to three a month until both
    v1 pods are gone.
 2. **Native agent messaging stops at the pod boundary.** Claude Code ties its session
@@ -114,7 +117,7 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 10. **No fleet cap means workers can saturate.** On 2026-10-05 the pods that failed
    were BestEffort (no CPU request, CPU weight 1); the kubelet was fine. A busy v2
    fleet could saturate a worker the same way, so every household pod needs a CPU
-   request first (Q-08: a Kyverno LimitRange, in flight as haynes-ops #3406).
+   request first (Q-08: a Kyverno LimitRange, live since 2026-10-06 as haynes-ops #3406).
 11. **The big local models live on Tom's own machines.** The cluster's free VRAM is
    small (one worker 3090, already busy with the house). Large models run on the
    satellites, which are there only when Tom is not using them, so local-model agents
@@ -136,7 +139,7 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 10 | Tool pods, GPUs and local LLMs | **PROPOSED** 2026-10-06, from Tom's Q-04 ruling | [DESIGN-001 section 8](designs/001-dev-env-v2.md#8-tool-pods-gpus-and-local-llms) (D-28 to D-32) |
 | 11 | Q-06: GPU placement for agents | **DECIDED** 2026-10-06 (Tom) | Dynamic allocation, not a static per-node rule: a VRAM budget per card, control-plane cards included (D-34, narrowed by Q-09); satellite inference workers on his Mac and PCs (D-35). |
 | 12 | Q-07: do the root-equivalent credentials (Proxmox operator token, hw-ssh key) stay in every session pod? | **DECIDED** 2026-10-06 (Tom) | A: they move behind the broker as short-lived credential grants. |
-| 13 | Q-08: how does every household pod get a CPU request? | **DECIDED** 2026-10-06 (Tom) | A: a Kyverno-generated LimitRange with a 50m default CPU request in every non-system namespace; a cluster-wide v1 fix in haynes-ops, in flight as #3406. |
+| 13 | Q-08: how does every household pod get a CPU request? | **DECIDED** 2026-10-06 (Tom) | A: a Kyverno-generated LimitRange with a 50m default CPU request in every non-system namespace; a cluster-wide v1 fix in haynes-ops, merged and live 2026-10-06 (#3406). |
 | 14 | Q-09: which household GPU apps may lend their burst VRAM to agents while idle? | **DECIDED** 2026-10-06 (Tom) | None: "None but I bring online more GPUs in cluster". Agents get only what is left above every household app's full reservation; new cards join the budget automatically (D-34). |
 | 15 | Q-10: when may agents use Tom's satellite machines? | **DECIDED** 2026-10-06 (Tom) | A: only while awake and not in use by Tom; never woken. |
 | 16 | Ratify ADR-001 | **PROPOSED** 2026-10-06 | [Ratification summary](adrs/001-distributed-dev-env.md#ratification-summary) |
