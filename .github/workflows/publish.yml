@@ -22,6 +22,9 @@ name: Publish
 # v1, this workflow does not list its own file in the paths, so a workflow edit never
 # rebuilds; run it by hand after deliberately changing it.
 #
+# After signing, a verify step checks the pushed digest against this workflow's
+# identity, on every run, so a mis-signed image fails the job.
+#
 # Signing matches haynes-ops v1 exactly (cosign-installer v4.1.2 with cosign v3.1.3,
 # `cosign sign --yes <image>@<digest>`, keyless), so Kyverno sees v2 images the same
 # way it sees v1's. cosign v3 writes only the Sigstore bundle (an OCI referrer, which
@@ -77,6 +80,8 @@ jobs:
       id-token: write # keyless cosign signing: proves the image came from THIS workflow
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/dev-env-operator
+      # The keyless signing identity: this workflow, on main. Used to sign-check and verify.
+      IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/publish.yml@refs/heads/main
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -155,7 +160,6 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
           EXISTS: ${{ steps.existing.outputs.exists }}
           TAG: ${{ steps.meta.outputs.tag }}
-          IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/publish.yml@refs/heads/main
         run: |
           test -n "${DIGEST}"
           echo "Image: ${IMAGE}:${TAG}@${DIGEST}"
@@ -169,3 +173,24 @@ jobs:
           fi
           cosign sign --yes "${IMAGE}@${DIGEST}"
           echo "Signed ${IMAGE}@${DIGEST}"
+
+      # Runs on both paths (fresh build and existing tag), after signing or after the
+      # "already signed" check, so every run ends with a verified image: a mis-signed
+      # or unsigned digest fails the run. The identity is pinned to this repo's publish
+      # workflow on refs/heads/main, exactly. Kyverno differs: haynes-ops'
+      # verify-thaynes43-images policy matches subject
+      # https://github.com/thaynes43/haynes-ops/.github/workflows/* (a wildcard over
+      # haynes-ops workflows, no ref pin). For v2 images it would need a second
+      # keyless entry with subject
+      # https://github.com/thaynes43/dev-env/.github/workflows/publish.yml@refs/heads/main
+      # (haynes-ops change, see the header). The package is private until Tom makes it
+      # public, so this reads it with the job's login from the step above.
+      - name: Verify the signature
+        env:
+          DIGEST: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
+        run: |
+          test -n "${DIGEST}"
+          cosign verify "${IMAGE}@${DIGEST}" \
+            --certificate-identity "${IDENTITY}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null
+          echo "Verified ${IMAGE}@${DIGEST} signed by ${IDENTITY}"
