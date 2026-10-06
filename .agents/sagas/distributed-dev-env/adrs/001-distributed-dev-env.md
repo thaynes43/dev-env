@@ -1,10 +1,11 @@
 # ADR-001: Distributed dev-env, one pod per agent session, run by an operator
 
-- **Status:** Proposed
+- **Status:** Accepted
+- **Ratified:** Tom, 2026-10-06: "Accept as written"
 - **Date:** 2026-10-05; Tom's rulings on Q-01 to Q-11 folded in 2026-10-06
 - **Deciders:** Tom Haynes (owner). Drafted by an agent. Tom decided the repository
-  location (2026-10-05) and every design question, Q-01 to Q-11 (2026-10-06); the
-  ADR itself is not yet Accepted.
+  location (2026-10-05) and every design question, Q-01 to Q-11 (2026-10-06). He
+  accepted the ADR itself on 2026-10-06.
 - **Design:** [DESIGN-001](../designs/001-dev-env-v2.md)
 
 ## Ratification summary

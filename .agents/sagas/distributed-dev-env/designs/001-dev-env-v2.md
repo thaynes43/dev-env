@@ -1,6 +1,6 @@
 # DESIGN-001: dev-env v2, one pod per agent session
 
-- **Status:** Proposed, ready for Tom to ratify (summary at the top of
+- **Status:** Accepted 2026-10-06 with ADR-001 (summary at the top of
   [ADR-001](../adrs/001-distributed-dev-env.md#ratification-summary)). Tom ruled on
   every open question, Q-01 to Q-11, on 2026-10-06 and widened the scope (tool pods,
   a VRAM budget per card, satellite inference workers, local models, access without
@@ -9,7 +9,7 @@
   Research notes [R-01](../research/R-01-summoned-agents-audit.md) and
   [R-02](../research/R-02-remote-control-identity.md) are folded in.
 - **Last updated:** 2026-10-06
-- **Governed by:** [ADR-001](../adrs/001-distributed-dev-env.md) (Proposed)
+- **Governed by:** [ADR-001](../adrs/001-distributed-dev-env.md) (Accepted 2026-10-06)
 - **Saga:** [README](../README.md)
 
 Decisions settled in this design carry a `D-NN` id. Questions only Tom can answer

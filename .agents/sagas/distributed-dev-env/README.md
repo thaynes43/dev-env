@@ -1,7 +1,7 @@
 # Saga: distributed-dev-env (dev-env v2)
 
-**Status:** design, Proposed (2026-10-05; Tom's rulings folded in 2026-10-06), ready
-for Tom to ratify: see the
+**Status:** design, Accepted 2026-10-06. Tom ratified ADR-001 as written (drafted
+2026-10-05, his rulings folded in 2026-10-06): see the
 [ratification summary](adrs/001-distributed-dev-env.md#ratification-summary) at the
 top of ADR-001. Nothing is built. The architecture is in
 [ADR-001](adrs/001-distributed-dev-env.md) and the detail in
@@ -9,9 +9,8 @@ top of ADR-001. Nothing is built. The architecture is in
 on 2026-10-06 and widened the scope: tool pods, a GPU budget, satellite inference
 workers, local models, access without in-pod prompts, summoned sessions kept as a
 first-class path, and one console for links, archives and the login renewal. Three
-repo-setup questions, Q-12 to Q-14, are open: to ask Tom at kickoff, after
-ratification. Research notes [R-01](research/R-01-summoned-agents-audit.md)
-(summoned agents) and [R-02](research/R-02-remote-control-identity.md) (Remote Control
+repo-setup questions, Q-12 to Q-14, are open: to ask Tom at kickoff. Research notes
+[R-01](research/R-01-summoned-agents-audit.md) (summoned agents) and [R-02](research/R-02-remote-control-identity.md) (Remote Control
 identity) are folded into the design. The spikes in
 [backlog 00](backlog/00-spikes.md) come first, S-1 before all (S-2 is answered). The
 first build session's work order is [KICKOFF.md](KICKOFF.md); the repo's front door is
@@ -129,21 +128,21 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | # | Decision | Status | Outcome |
 |---|---|---|---|
 | 1 | Where v2's saga and code live | **DECIDED** 2026-10-05 (Tom) | A new private repo, **thaynes43/dev-env**, keeping the image name `ghcr.io/thaynes43/dev-env`. Manifests and pod config stay in haynes-ops (GitOps). Recorded in haynes-ops as ADR-001 of its dev-env saga. |
-| 2 | Architecture: one pod per session run by an operator | **PROPOSED** 2026-10-05 | [ADR-001](adrs/001-distributed-dev-env.md) |
-| 3 | Settled design decisions D-01 to D-37 (D-34 to D-37 added 2026-10-06) | **PROPOSED** with ADR-001; D-02, D-18, D-19 and D-20 **REVISED** 2026-10-06 | [DESIGN-001 section 16](designs/001-dev-env-v2.md#16-decisions-settled-in-this-design) |
+| 2 | Architecture: one pod per session run by an operator | **DECIDED** 2026-10-06 (Tom) | [ADR-001](adrs/001-distributed-dev-env.md) |
+| 3 | Settled design decisions D-01 to D-37 (D-34 to D-37 added 2026-10-06) | **DECIDED** 2026-10-06 (Tom) with ADR-001; D-02, D-18, D-19 and D-20 **REVISED** 2026-10-06 | [DESIGN-001 section 16](designs/001-dev-env-v2.md#16-decisions-settled-in-this-design) |
 | 4 | Q-01: build the pod-and-volume layer, or adopt kubernetes-sigs/agent-sandbox | **DECIDED** 2026-10-06 (Tom) | Build a small operator modelled on agent-sandbox (A). |
 | 5 | Q-02: language for the operator and CLI | **DECIDED** 2026-10-06 (Tom) | Go, for the operator and a static `agent-run` (A). |
 | 6 | Q-03: what happens to running sessions when the image or config changes | **DECIDED** 2026-10-06 (Tom) | Drain on idle, then resume the conversation on the new version (A). |
 | 7 | Q-04: default session size and fleet cap | **DECIDED** 2026-10-06 (Tom) | Fleet cap rejected. Every pod has requests and limits (S/M/L presets, default M, low PriorityClass); the scheduler places them; no allocation logic to retune (D-21). Scope added: GPUs for local LLMs, tool pods. |
 | 8 | Q-05: where repos, worktrees and agent state live | **DECIDED** 2026-10-06 (Tom) | A block volume per session plus a small shared CephFS (A), and agents may use gasha01: session volumes on `gasha01-rbd`, the shared volume on in-cluster CephFS (D-22). |
-| 9 | Access model: no prompts in the pod, control at the platform, grants on request | **PROPOSED** 2026-10-06, from Tom's direction | [DESIGN-001 6.10 to 6.13](designs/001-dev-env-v2.md#612-access-no-prompts-in-the-pod-control-at-the-platform) (D-23 to D-27, D-33) |
-| 10 | Tool pods, GPUs and local LLMs | **PROPOSED** 2026-10-06, from Tom's Q-04 ruling | [DESIGN-001 section 8](designs/001-dev-env-v2.md#8-tool-pods-gpus-and-local-llms) (D-28 to D-32) |
+| 9 | Access model: no prompts in the pod, control at the platform, grants on request | **DECIDED** 2026-10-06 (Tom) | [DESIGN-001 6.10 to 6.13](designs/001-dev-env-v2.md#612-access-no-prompts-in-the-pod-control-at-the-platform) (D-23 to D-27, D-33) |
+| 10 | Tool pods, GPUs and local LLMs | **DECIDED** 2026-10-06 (Tom) | [DESIGN-001 section 8](designs/001-dev-env-v2.md#8-tool-pods-gpus-and-local-llms) (D-28 to D-32) |
 | 11 | Q-06: GPU placement for agents | **DECIDED** 2026-10-06 (Tom) | Dynamic allocation, not a static per-node rule: a VRAM budget per card, control-plane cards included (D-34, narrowed by Q-09); satellite inference workers on his Mac and PCs (D-35). |
 | 12 | Q-07: do the root-equivalent credentials (Proxmox operator token, hw-ssh key) stay in every session pod? | **DECIDED** 2026-10-06 (Tom) | A: they move behind the broker as short-lived credential grants. |
 | 13 | Q-08: how does every household pod get a CPU request? | **DECIDED** 2026-10-06 (Tom) | A: a Kyverno-generated LimitRange with a 50m default CPU request in every non-system namespace; a cluster-wide v1 fix in haynes-ops, merged and live 2026-10-06 (#3406). |
 | 14 | Q-09: which household GPU apps may lend their burst VRAM to agents while idle? | **DECIDED** 2026-10-06 (Tom) | None: "None but I bring online more GPUs in cluster". Agents get only what is left above every household app's full reservation; new cards join the budget automatically (D-34). |
 | 15 | Q-10: when may agents use Tom's satellite machines? | **DECIDED** 2026-10-06 (Tom) | A: only while awake and not in use by Tom; never woken. |
-| 16 | Ratify ADR-001 | **PROPOSED** 2026-10-06 | [Ratification summary](adrs/001-distributed-dev-env.md#ratification-summary) |
+| 16 | Ratify ADR-001 | **DECIDED** 2026-10-06 (Tom: "Accept as written") | [Ratification summary](adrs/001-distributed-dev-env.md#ratification-summary) |
 | 17 | Q-11: which link that survives restarts did Tom mean? | **DECIDED** 2026-10-06 (Tom) | The Claude Code auth (the Max `/login` on the PVC). The keeper is its sole owner; pods get access tokens only; the monthly renewal is a console page behind Authentik, replacing the chat relay; the console lists every session's link and status with an archive button; the codex hub keeps its own single enrolment (D-11, D-37). |
 | 18 | Summoned sessions are a first-class requirement | **DECIDED** 2026-10-06 (Tom: "we need to preserve the functionality") | [DESIGN-001 3.7](designs/001-dev-env-v2.md#37-summoned-sessions), D-36, R-01 V-01 to V-17, plan 10 |
 | 19 | Q-12: branch protection on this private repo, if Tom's plan does not enforce rulesets | **OPEN** 2026-10-06, to ask at kickoff after ratification | [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions); recommended: GitHub Pro (A). |
