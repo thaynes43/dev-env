@@ -228,8 +228,10 @@ Audit only):
   release-please tag), the certificate ends in `@refs/tags/v2.x.y` and fails the
   rule. Either sign from main, or widen the subject to `@refs/tags/v2.*` in the
   same change that adds the workflow.
-- **The v1 glob.** v1's `dev-env*` image glob also matches `dev-env:2.*`. Narrow it
-  to `dev-env:0.*` before either rule moves to Enforce.
+- **The v1 glob.** v1's `dev-env*` image glob also matches `dev-env:2.*` and, already
+  today, `dev-env-operator:sha-*`, which `publish.yml` signs from this repo. So v1's
+  rule fails the operator image now. Narrow it to `dev-env:0.*` before the operator
+  HelmRelease (plan 01 item 8.9) and before either rule moves to Enforce.
 
 **What only Tom can click** (the bot has no Administration permission):
 
