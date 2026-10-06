@@ -53,7 +53,7 @@ Four candidates, checked against the v1 pod:
 
 "A link for this pod that survives restarts" fits the Codex entry best: it is named
 after a pod that no longer exists and still works. Only Tom can say which one he
-meant. That is question Q-R02-1 in section 9.
+meant. That is the open question in section 9 (Q-11 once asked).
 
 ## 2. What a Remote Control registration is bound to
 
@@ -363,15 +363,21 @@ For whoever edits the design next (this PR adds only this file):
 - **Backlog 00, new S-15: archive on reap.** In the v1 pod, start
   `claude --remote-control spike-s15`, send one message, stop it, then archive that
   session through the CLI's archive endpoint with an access token, in a scratch config
-  dir. Pass: the entry leaves the phone's active list, and `claude --resume` can still
-  unarchive it. Decides P-7.
+  dir. Pass: the entry leaves the phone's active list, and the documented way back
+  still works: `claude --resume` the conversation, then `/remote-control`, which "reopens
+  an archived session" (docs). Also record whether `--resume` alone brings it back: the
+  binary has a reattach path that unarchives a reaped session ("Unarchived reaped
+  session … before reattach"), but no doc says `--resume` does. P-6 does not depend
+  on this, because a drain never archives. Decides P-7.
 - **Section 14 (risks):** add the offline-entry and Trusted Devices rows from
   section 6.
 
-## 9. Open question for Tom
+## 9. Open question for Tom (Q-11 when asked)
 
-**Q-R02-1. Which link did you mean, the one that survives restarts?** This is only for
-the coordinator to confirm with Tom. The design does not depend on the answer.
+**Which link did you mean, the one that survives restarts?** Q-01 to Q-10 are taken.
+When the coordinator asks this one, it is recorded as **Q-11** in DESIGN-001 section 15,
+with Tom's ruling, and this note then points there. The design does not depend on the
+answer.
 
 1. **The Codex computer `dev-env-574bdc9844-jhvfs` in the ChatGPT app.** This is the
    most likely: it is named after a pod and survives restarts because its enrolment
