@@ -171,3 +171,10 @@ v1 stays live throughout. No v2 plan edits haynes-ops'
 | [09: GPUs, satellites and local LLMs](backlog/09-gpu-local-llm.md) | 08; Q-06, Q-09, Q-10 (decided); spikes S-9, S-11, S-13, S-14 | |
 | [10: summoned sessions](backlog/10-summoned-sessions.md) | 02, 03, 07; spike S-16 | with 04, 08 |
 | [06: later](backlog/06-later.md) | 05 | each item on its own |
+
+**MVP, and what comes after it.** The MVP is v2 replacing v1: plans 01, 02, 07, 03 and
+04, ending with the cutover in plan 05, which needs Tom's written approval. Phase 1
+(plan 01, task mode) is its first slice. The cutover does not wait for plan 10:
+`dev-env-ops` keeps serving the shepherd and the alert-responder until plan 10 moves
+those lanes. Everything after the MVP stays in this saga: 08 (tool pods),
+10 (summoned sessions), 09 (GPUs and local LLMs) and the 06 items.
