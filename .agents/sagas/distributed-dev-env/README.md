@@ -14,7 +14,8 @@ ruled on 2026-10-06, and Q-12 (branch protection) is open, to ask once the rules
 created after B2. Research notes
 [R-01](research/R-01-summoned-agents-audit.md) (summoned agents) and [R-02](research/R-02-remote-control-identity.md) (Remote Control
 identity) are folded into the design. The spikes in
-[backlog 00](backlog/00-spikes.md) come first, S-1 before all (S-2 is answered). The
+[backlog 00](backlog/00-spikes.md) come first: S-1 passed on 2026-10-06 and S-2 is
+answered. The
 first build session's work order is [KICKOFF.md](KICKOFF.md); the repo's front door is
 [`.agents/HANDOFF.md`](../../HANDOFF.md).
 
@@ -81,9 +82,11 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
    login revoked it mid-task on 2026-08-29. Remote Control needs that login; the
    static token cannot register Remote Control (settled: the docs say so, and v1's
    executor saw 45 of 45 sessions rejected). The keeper owns the login and pods get
-   access tokens only, which relies on CLI behaviour that spike S-1 must prove; R-02
-   found the CLI re-reads its credentials file and revives Remote Control on a fresh
-   token. If S-1 fails, Remote Control sessions share one coordinator host pod. v1 now
+   access tokens only. Spike S-1 proved the CLI behaviour this relies on (2026-10-06,
+   DESIGN-001 6.2): an access-token-only file registers Remote Control on a cold home,
+   and a merged token is picked up without a restart. Each refresh revokes the old
+   token in every pod at once, so agentd must merge fast. The coordinator host pod
+   stays the fallback for a CLI release that breaks this. v1 now
    has two logins (the dev-env pod's, and `dev-env-ops`'s from haynes-ops #3414, whose
    login ceremony is pending on 2026-10-06);
    v2's keeper replaces both with one, so Tom renews up to three a month until both

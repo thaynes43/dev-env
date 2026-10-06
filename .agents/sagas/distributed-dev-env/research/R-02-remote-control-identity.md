@@ -195,6 +195,10 @@ the client side, in the rotating refresh token:
 
 ### 5.2 Evidence that bears on S-1 (keeper-owned refresh, access token only in pods)
 
+*S-1 ran on 2026-10-06 (DESIGN-001 6.2). Counts 1 and 2 held. Count 3 did not: the 401
+wait polls only for a rotated env or file-descriptor token, so it does nothing for a
+credentials file. The previous access token is revoked at each refresh.*
+
 The binary supports the D-11 target on three counts:
 
 1. **It re-reads the credentials file when its mtime changes.** The credential cache
