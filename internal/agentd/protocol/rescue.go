@@ -47,7 +47,8 @@ type WorktreeRescue struct {
 	// commit was on no ref. The worktree itself is left as it was.
 	RescueBranch string `json:"rescueBranch,omitempty"`
 	// Refused says why the work could not be rescued: a merge or rebase in
-	// progress, an untracked nested repo, or more than 50 MiB untracked.
+	// progress, an untracked nested repo, an initialized submodule, or more
+	// than 50 MiB untracked.
 	Refused string `json:"refused,omitempty"`
 }
 

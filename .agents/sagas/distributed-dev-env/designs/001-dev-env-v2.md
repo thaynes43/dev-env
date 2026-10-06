@@ -509,7 +509,10 @@ the index and prints the refs origin lacks.**
   `YYYYMMDD-HHMM`; a second rescue in the same minute adds `-2`), gitignored files
   excluded. A detached HEAD whose commit is on no ref is anchored on such a branch.
   A worktree with a merge or rebase in progress, an untracked nested repo, or more
-  than 50 MiB untracked is refused.
+  than 50 MiB untracked is refused, and so is one with an initialized submodule: a
+  submodule's own edits and commits live in its own repo, which neither the rescue
+  commit (it records only the gitlink) nor the ref list reaches. A refusal keeps the
+  volume and blocks archive (D-10), so a human decides.
 - One change from v1. v1 switched the worktree onto the rescue branch, because the
   worktree was about to be removed. A v2 session can be resumed after its rescue
   (4.5), so agentd copies the worktree's index, runs `git add -A` against the copy,

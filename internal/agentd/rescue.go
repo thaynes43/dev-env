@@ -34,8 +34,9 @@ const rescueLockFile = "rescue.lock"
 // switched the worktree onto the rescue branch; agentd commits through a
 // temporary index instead and leaves the worktree, its index and its branch as
 // they were, because a v2 session can be resumed after its rescue. It refuses a
-// worktree with a merge or rebase in progress, an untracked nested repo, or
-// more than 50 MiB untracked. Rescue branches are never pushed (D-10).
+// worktree with a merge or rebase in progress, an untracked nested repo, an
+// initialized submodule, or more than 50 MiB untracked. Rescue branches are
+// never pushed (D-10).
 func Rescue(ctx context.Context, r Runner, s Settings, session string, now time.Time) (protocol.RescueReport, error) {
 	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
 		return protocol.RescueReport{}, err
@@ -173,6 +174,16 @@ func rescueWorktree(ctx context.Context, r Runner, s Settings, wt, stamp string)
 			return w
 		}
 	}
+	// A submodule's own edits and commits are in its own repo, which neither
+	// the rescue commit (it records only the gitlink) nor the ref list reaches.
+	// Refuse, so the volume is kept and a human decides.
+	if sub, err := initializedSubmodule(ctx, r, wt); err != nil {
+		w.Refused = "git submodule status failed: " + cmdDetail(err)
+		return w
+	} else if sub != "" {
+		w.Refused = "an initialized submodule (" + sub + "); rescue does not reach into submodules"
+		return w
+	}
 	// --no-optional-locks: never take the index lock from a running agent.
 	st, err := s.git(ctx, r, wt, "--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=all")
 	if err != nil {
@@ -211,6 +222,30 @@ func rescueWorktree(ctx context.Context, r Runner, s Settings, wt, stamp string)
 		}
 	}
 	return w
+}
+
+// initializedSubmodule names the first initialized submodule of a worktree,
+// or returns "" when it has none.
+func initializedSubmodule(ctx context.Context, r Runner, wt string) (string, error) {
+	if !exists(filepath.Join(wt, ".gitmodules")) {
+		return "", nil
+	}
+	res, err := r.Run(ctx, Cmd{Name: "git", Args: []string{"-C", wt, "submodule", "status", "--recursive"}, Env: append(append([]string(nil), gitEnv...), "GIT_OPTIONAL_LOCKS=0")})
+	if err != nil {
+		return "", err
+	}
+	// "-<sha> path" is a submodule that was never initialized: nothing of its
+	// own is on the volume.
+	for _, line := range strings.Split(string(res.Stdout), "\n") {
+		if line == "" || strings.HasPrefix(line, "-") {
+			continue
+		}
+		if f := strings.Fields(line); len(f) >= 2 {
+			return f[1], nil
+		}
+		return strings.TrimSpace(line), nil
+	}
+	return "", nil
 }
 
 // untrackedProblem is v1's rescue_untracked_ok: it names a reason to refuse,

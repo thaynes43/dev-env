@@ -258,6 +258,30 @@ func TestRescueRefusals(t *testing.T) {
 	}
 }
 
+func TestRescueRefusesAnInitializedSubmodule(t *testing.T) {
+	rig := newRescueRig(t)
+	env := append(append([]string(nil), rig.g.env...), "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=protocol.file.allow", "GIT_CONFIG_VALUE_0=always")
+	lib := filepath.Join(rig.g.root, "remote", "lib")
+	gitRun(t, env, rig.g.root, "init", "-q", "-b", "main", lib)
+	writeFile(t, filepath.Join(lib, "lib.txt"), "lib\n")
+	gitRun(t, env, lib, "add", "lib.txt")
+	gitRun(t, env, lib, "commit", "-q", "-m", "lib")
+	wt := rig.ws.Worktree
+	gitRun(t, env, wt, "submodule", "add", "-q", "file://"+lib, "lib")
+	gitRun(t, env, wt, "commit", "-q", "-m", "add lib")
+	writeFile(t, filepath.Join(wt, "lib", "lib.txt"), "edited inside the submodule\n")
+
+	rep := rig.rescue(t)
+	w := rig.worktree(t, rep, wt)
+	if rep.OK || !strings.Contains(w.Refused, "an initialized submodule (lib)") || w.RescueBranch != "" {
+		t.Errorf("ok=%v worktree %+v", rep.OK, w)
+	}
+	// The clone's main checkout never initialized it: nothing to refuse there.
+	if m := rig.worktree(t, rep, rig.ws.Clone); m.Refused != "" {
+		t.Errorf("main checkout refused: %q", m.Refused)
+	}
+}
+
 func TestRescueWithoutOrigin(t *testing.T) {
 	rig := newRescueRig(t)
 	if err := os.RemoveAll(rig.g.remote); err != nil {
