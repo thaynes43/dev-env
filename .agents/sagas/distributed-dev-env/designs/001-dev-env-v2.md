@@ -136,7 +136,7 @@ codex 0.160.0), are given where they are used: [6.2](#62-claude-max-login-and-it
 |---|---|---|
 | **dev-env-operator** | Control plane. Serves the `/v1` API, reconciles `AgentSession`, `ToolSession` and `LLMLease` resources into pods and volumes, detects idle sessions, runs rescue, drains outdated sessions, expires activities. Owns no running work and holds no grant privileges. | Deployment, 2 replicas with leader election, namespace `dev-env-system` |
 | **dev-env-broker** | Access broker (6.12) and Tom's console (3.8). Checks grant requests against the standing policies in git, sends Tom the rest, creates and revokes the time-boxed RoleBindings and network policies, and serves the console: sessions with their links and an archive button, approvals, and the login renewal page. The same binary as the operator, run in a second mode. | Deployment, 2 replicas with leader election, own ServiceAccount, namespace `dev-env-system` |
-| **dev-env-keeper** | The only holder of rotating credentials (the one Claude Max login, the Codex login) and of the GitHub App keys (haynes-dev-bot, haynes-ops-bot). Mints and refreshes; writes short-lived results into Secrets that agent pods read. Runs the login ceremony for the console, archives Remote Control entries on reap, tracks the static token's age. Pages Tom when a credential nears expiry. | Deployment, 1 replica, `Recreate`, namespace `dev-env-system` |
+| **dev-env-keeper** | The only holder of rotating credentials (the one Claude Max login, the Codex login) and of the GitHub App keys (haynes-dev-bot, haynes-ops-bot). Mints and refreshes; writes short-lived results into Secrets that agent pods read. Runs the login ceremony for the console, archives Remote Control entries on reap, tracks the static token's age. Pages Tom when a credential nears expiry. | Deployment, 1 replica, `Recreate`, namespace `dev-env-system`; its own binary in the operator image (D-38) |
 | **session pod** | One agent session: `tini` as PID 1, `agentd`, tmux, the agent CLI (Claude Code, Codex or opencode), its MCP children, the build tools. | Pod in namespace `dev-agents`, owned by its `AgentSession` |
 | **agentd** | Small supervisor inside each session pod. Renders config at boot, clones the repo, starts or resumes the agent, sends heartbeats, runs rescue and drain hooks on request, and serves the loopback tool gateway (8.1). Replaces v1's `dev-init.sh` and `post-ready.sh` per pod. | Child of `tini` in the session pod |
 | **tool pod** | One instance of a specialised tool (Blender, audio, image, transcription, 3D printing, video, a local LLM server), started for agents on demand and stopped when idle (8.1). | Pod in namespace `dev-tools`, any node that fits, owned by its `ToolSession` or pool |
@@ -160,6 +160,21 @@ only tools use (for example a video vendor's API key). The operator's write acce
 limited to `dev-agents` and `dev-tools`. Rationale: least privilege, and a LimitRange
 and network policies that apply to agent and tool pods only. The v1 namespace `dev`
 is left alone until cutover.
+
+**D-38 (2026-10-06, KICKOFF B1). The keeper is its own binary, `dev-env-keeper`,
+shipped in the operator image.** The broker is a mode of the operator binary because
+it shares the operator's shape: a controller-runtime manager, two replicas with
+leader election, CRDs to reconcile and HTTP to serve. The keeper shares none of it.
+It is one replica by rule (one owner per rotating refresh token), it reconciles no
+CRD, and its work is a timer loop that mints and refreshes credentials. It is also
+the one process that holds the GitHub App keys and the Max login. As a separate
+binary it links only what that job needs. The keeper binary has no `/v1` API server
+and no controllers, so they can never run in the pod that mounts those keys. The
+operator binary has no refresh loop, so its two replicas can never become two
+owners of one refresh token, whatever mode they are started in.
+It costs one more `main` package and nothing else: both binaries ship in
+`ghcr.io/thaynes43/dev-env-operator` with one version, so the build, signing and
+haynes-ops pin stay single. B1 created `cmd/dev-env-keeper/` on this basis.
 
 ### 3.2 Ownership, so an operator upgrade cannot cascade
 
@@ -2364,3 +2379,4 @@ step it names.
 | D-35 | Satellite inference workers on Tom's own machines, owner first, reached by lease token over the LAN | 8.4 |
 | D-36 | Summoning is a first-class API use, authorized per caller by a `CallerPolicy`: kinds, names, idempotency, plan-only credentials, verified links, outcomes, lanes, storm limits, watchdogs, retention, cost records (V-01 to V-17) | 3.7 |
 | D-37 | One console for Tom, served by the broker behind Authentik: sessions with links and archive, approvals, the login renewal page, Codex status | 3.8 |
+| D-38 | The keeper is its own binary, `dev-env-keeper`, in the operator image; the broker stays a mode of the operator binary | 3.1 |

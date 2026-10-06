@@ -1,0 +1,380 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.22.0
+  name: agentsessions.dev-env.haynesops.com
+spec:
+  group: dev-env.haynesops.com
+  names:
+    kind: AgentSession
+    listKind: AgentSessionList
+    plural: agentsessions
+    singular: agentsession
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.repo
+      name: Repo
+      type: string
+    - jsonPath: .spec.agent
+      name: Agent
+      type: string
+    - jsonPath: .spec.mode
+      name: Mode
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.nodeName
+      name: Node
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          AgentSession is one agent session: its pod, its volume and its lifecycle. The
+          name is also the pod name, the hostname and the Remote Control name.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              AgentSessionSpec is what the caller asked for. The operator's /v1 API writes
+              it; agents never write AgentSession objects themselves (DESIGN-001 6.11).
+            properties:
+              agent:
+                description: Agent is the agent CLI to run.
+                enum:
+                - claude
+                - codex
+                - opencode
+                type: string
+              base:
+                default: origin/main
+                description: Base is the ref the session's worktree branches from.
+                type: string
+              caller:
+                description: |-
+                  Caller is the CallerPolicy of a summoned session, for example
+                  alert-responder (DESIGN-001 3.7). Empty for Tom's own sessions.
+                type: string
+              effort:
+                description: |-
+                  Effort is the reasoning effort. The levels differ per model, so the API
+                  checks them, not this schema.
+                type: string
+              idempotencyKey:
+                description: |-
+                  IdempotencyKey lets a summoning caller repeat a create safely, for example
+                  with an alert signature: a repeated key returns the existing session.
+                type: string
+              lane:
+                description: Lane is a summoned session's lane.
+                enum:
+                - remediation
+                - upgrade
+                - curation
+                - escalation
+                type: string
+              lifecycle:
+                description: Lifecycle overrides the default timers of D-09.
+                properties:
+                  archiveAfter:
+                    description: |-
+                      ArchiveAfter archives a suspended session after this long, once its rescue
+                      bundle is verified (D-09: 168h).
+                    type: string
+                  idleSuspendAfter:
+                    description: |-
+                      IdleSuspendAfter suspends an idle session after this long (D-09: 72h for
+                      interactive and remote sessions).
+                    type: string
+                type: object
+              limits:
+                description: Limits caps a task session. Summoned callers get them
+                  from their policy.
+                properties:
+                  maxTurns:
+                    description: MaxTurns caps the agent's turns. 0 means no cap.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  timeout:
+                    description: Timeout is the wall-clock limit, for example 3h.
+                    type: string
+                type: object
+              llm:
+                description: LLM is the LLM pool an opencode session leases (DESIGN-001
+                  8.3).
+                properties:
+                  pool:
+                    description: Pool is the LLMPool name, for example llm-coder.
+                    minLength: 1
+                    type: string
+                required:
+                - pool
+                type: object
+              mode:
+                description: Mode is how the agent runs.
+                enum:
+                - task
+                - local
+                - remote
+                type: string
+              model:
+                description: |-
+                  Model is a full model id, never an alias (for example claude-opus-5-5).
+                  For opencode it is the LLM pool's model id.
+                minLength: 1
+                type: string
+              operatingMode:
+                default: Running
+                description: OperatingMode is the desired state of the pod.
+                enum:
+                - Running
+                - Suspended
+                type: string
+              parent:
+                description: |-
+                  Parent is the session or caller that created this one. The API sets it from
+                  the caller's token, never from the request body (D-05).
+                type: string
+              profile:
+                description: |-
+                  Profile names the Secrets, egress tier and standing grants the pod gets
+                  (D-18): full, dev or ops. Profiles are template data.
+                type: string
+              prompt:
+                description: Prompt is the task. Task mode only.
+                type: string
+              repo:
+                description: Repo is the repository the session works in, for example
+                  haynes-ops.
+                minLength: 1
+                type: string
+              size:
+                default: M
+                description: Size picks the requests and limits preset.
+                enum:
+                - S
+                - M
+                - L
+                type: string
+              tools:
+                description: |-
+                  Tools are the tool pools registered at boot (DESIGN-001 8.1). Empty means
+                  the profile's default.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+            required:
+            - agent
+            - mode
+            - model
+            - repo
+            type: object
+          status:
+            description: |-
+              AgentSessionStatus is what the operator and agentd observed. Reconcile is
+              level-based (DESIGN-001 5.1): everything a fresh operator needs is here, not
+              in its memory.
+            properties:
+              agent:
+                description: Agent is the agent's own state, from agentd's heartbeat.
+                properties:
+                  lastActivity:
+                    description: LastActivity is the last time agentd saw the agent
+                      or its worktree change.
+                    format: date-time
+                    type: string
+                  status:
+                    description: |-
+                      Status is the agent's state: busy, idle or waiting for Claude, which
+                      writes it itself; agentd derives it for Codex and opencode.
+                    type: string
+                type: object
+              conditions:
+                description: Conditions are the standard conditions.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              nodeName:
+                description: NodeName is the node the pod runs on.
+                type: string
+              outcome:
+                description: Outcome is what a summoned session reported about its
+                  work.
+                properties:
+                  at:
+                    description: At is when the outcome was reported.
+                    format: date-time
+                    type: string
+                  note:
+                    description: Note is the session's one-line note with its report.
+                    type: string
+                  state:
+                    description: State is the reported outcome.
+                    enum:
+                    - pending
+                    - running
+                    - done
+                    - failed
+                    - escalated
+                    type: string
+                type: object
+              pending:
+                description: |-
+                  PendingReason is the scheduler's reason while the session is Pending
+                  (DESIGN-001 7.3).
+                type: string
+              phase:
+                description: Phase is the lifecycle state.
+                enum:
+                - Pending
+                - Running
+                - Idle
+                - Draining
+                - Suspended
+                - Archived
+                - Failed
+                type: string
+              podName:
+                description: PodName is the session's pod. It equals the session's
+                  name.
+                type: string
+              remoteControl:
+                description: |-
+                  RemoteControl is the session's Remote Control entry, for remote mode
+                  (DESIGN-001 6.7).
+                properties:
+                  name:
+                    description: Name is the entry's name, which equals the session's
+                      name.
+                    type: string
+                  sessionId:
+                    description: SessionID is the Remote Control session id.
+                    type: string
+                  state:
+                    description: State is the entry's registration state, for example
+                      registered.
+                    type: string
+                  url:
+                    description: URL is the session's claude.ai link.
+                    type: string
+                type: object
+              rescue:
+                description: Rescue records the session's rescue bundles (D-10).
+                properties:
+                  lastBundle:
+                    description: |-
+                      LastBundle is the newest bundle's path on the shared volume, for example
+                      rescue/haynes-ops-1005-202504/20261006-0130.bundle.
+                    type: string
+                type: object
+              revision:
+                description: Revision is the template revision the pod runs (DESIGN-001
+                  5.2).
+                type: string
+              usage:
+                description: Usage is the session's cost record (DESIGN-001 3.7, V-16).
+                properties:
+                  costUSD:
+                    description: |-
+                      CostUSD is the CLI's total_cost_usd as a decimal string, because CRDs
+                      avoid floating-point fields.
+                    type: string
+                  inputTokens:
+                    description: InputTokens is the number of input tokens.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  outputTokens:
+                    description: OutputTokens is the number of output tokens.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                type: object
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

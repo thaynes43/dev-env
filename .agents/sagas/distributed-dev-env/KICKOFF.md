@@ -97,7 +97,12 @@ Each step is one ready PR in the order below. Once B2 exists, merge each PR when
 - **Module:** `github.com/thaynes43/dev-env`, with a `go` and `toolchain` line that
   Renovate bumps.
 - **Tooling:** controller-runtime plus controller-gen. A kubebuilder scaffold is fine
-  if you trim it to this layout.
+  if you trim it to this layout. *As built:* B1 pins controller-gen in the Makefile.
+  controller-runtime is not in `go.mod` yet: its one helper for API packages
+  (`pkg/scheme.Builder`) is deprecated in v0.25 because API packages should depend on
+  k8s.io/apimachinery only, so `api/v1alpha1` uses apimachinery's `SchemeBuilder`, and
+  nothing else in B1 imports controller-runtime. It arrives with the first code that
+  does: plan 01 step 1's envtest suite and the operator's manager.
 - **CLAUDE.md:** record the layout in its "Layout" section in the same PR.
 - **A first test:** ship one real command (`agent-run version`) with its test, so CI
   has something to run.
@@ -105,12 +110,12 @@ Each step is one ready PR in the order below. Once B2 exists, merge each PR when
 ```
 api/v1alpha1/          CRD types, group dev-env.haynesops.com (AgentSession first)
 cmd/dev-env-operator/  the operator; the broker is a second mode of it (DESIGN-001 3.1)
-cmd/dev-env-keeper/    the keeper (or a keeper mode of the operator: your call, recorded as the next D-NN)
+cmd/dev-env-keeper/    the keeper, its own binary in the operator image (D-38)
 cmd/agentd/            the in-pod supervisor
 cmd/agent-run/         the CLI, static (CGO_ENABLED=0)
 internal/              controllers, the /v1 API server, shared clients
 config/crd/            generated CRDs; haynes-ops gets copies by PR
-images/operator/       Dockerfile: ghcr.io/thaynes43/dev-env-operator (operator + keeper)
+images/operator/       Dockerfile: ghcr.io/thaynes43/dev-env-operator (operator + keeper) (B2)
 images/agent/          Dockerfile: ghcr.io/thaynes43/dev-env, tag line 2.x (B5)
 Makefile               generate, lint, test, build; test parallelism capped
 ```
@@ -122,6 +127,10 @@ Makefile               generate, lint, test, build; test parallelism capped
   and darwin/arm64, and the rest for linux/amd64).
 - **Image builds on PRs** live in this workflow too: the operator image always, and
   the agent image only when `images/agent/**` changes. They build and never push.
+  B2 adds `images/operator/Dockerfile`, which B1 left out because nothing in B1
+  builds an image. It ships both `dev-env-operator` and `dev-env-keeper` (D-38), built
+  with `make build` (or the same flags). The build has no `.git`, so pass
+  `COMMIT=<sha>`.
 - **The aggregate job.** `CI - Success` needs every job above, runs `if: always()`,
   and fails if any of them failed or was cancelled. It is the only check to make
   required. Do not put `paths:` filters on the workflow trigger: a docs-only PR must

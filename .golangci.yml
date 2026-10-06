@@ -1,0 +1,27 @@
+# golangci-lint v2. `make lint` runs it with --concurrency 2, so it stays light
+# in the shared dev-env pod; the setting below covers a direct run too.
+version: "2"
+
+run:
+  concurrency: 2
+
+linters:
+  # standard = errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    - errorlint
+    - misspell
+    - nolintlint
+    - unconvert
+  exclusions:
+    # zz_generated.deepcopy.go and other generated files.
+    generated: lax
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/thaynes43/dev-env

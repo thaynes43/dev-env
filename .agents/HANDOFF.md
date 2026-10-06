@@ -8,7 +8,7 @@ the saga. To start building, follow
 ## State on 2026-10-06
 
 - **The dev-env v2 design is complete.** It covers the architecture (ADR-001), the
-  details (DESIGN-001, D-01 to D-37), 16 spikes, backlog plans 00 to 10 and two
+  details (DESIGN-001, D-01 to D-38), 16 spikes, backlog plans 00 to 10 and two
   research notes.
 - **Every design question is ruled except Q-12.** Tom answered Q-01 to Q-11, Q-13
   and Q-14 on 2026-10-06 (index below). Q-12 (branch protection) is open but not
@@ -18,9 +18,12 @@ the saga. To start building, follow
   Ask Tom then. The settings only Tom can click are in a handoff for an agent on his
   laptop (below).
 - **ADR-001 is Accepted.** Tom ratified it on 2026-10-06: "Accept as written".
-  DESIGN-001 is Accepted with it. Nothing is built: there is no Go code, no build CI
-  and no image. The only workflows are the Claude reviewer and the `@claude`
-  handler.
+  DESIGN-001 is Accepted with it.
+- **KICKOFF B1, the Go skeleton, is built.** The module, the `AgentSession` types and
+  CRD, the four binaries and the Makefile are on main; only `agent-run version` does
+  real work. D-38 records that the keeper is its own binary. There is no build CI and
+  no image yet (B2 to B5). The only workflows are the Claude reviewer and the
+  `@claude` handler.
 - **The v1 bounce landed on 2026-10-06.** haynes-ops #3381, #3342, #3336, #3294 and
   #3274 merged at about 21:05Z, and #3330 at 21:15Z. #3241 was closed. The v1 pod
   restarted at 21:17Z on `ghcr.io/thaynes43/dev-env:0.6.8` with a CPU limit of 8.
@@ -37,7 +40,8 @@ the saga. To start building, follow
    Part 1 (auto-merge, GHCR Actions access, Renovate, the release-please App) is
    needed before B4 and B5. Part 2 (make the operator package public) waits for B3's
    first publish. Q-12 is asked later, when the ruleset is created after B2.
-2. **Track B, plan 01: the repo skeleton and CI.** Start with
+2. **Track B, plan 01: the repo skeleton and CI.** B1 (the Go skeleton) is done;
+   continue with B2 in
    [KICKOFF section 3](sagas/distributed-dev-env/KICKOFF.md#3-track-b-the-first-prs-in-this-repo).
    Those PRs depend on no spike, so they run while the in-pod spikes run
    ([KICKOFF section 1](sagas/distributed-dev-env/KICKOFF.md#1-objective-of-phase-1)
