@@ -39,7 +39,8 @@ the saga. To start building, follow
 1. **Tell Tom about the laptop handoff** ([`handoffs/2026-10-06-tom-laptop-settings.md`](handoffs/2026-10-06-tom-laptop-settings.md)).
    Part 1 (auto-merge, GHCR Actions access, Renovate, the release-please App) is
    needed before B4 and B5. Part 2 (make the operator package public) waits for B3's
-   first publish. Q-12 is asked later, when the ruleset is created after B2.
+   first publish. Part 3 (the Protect Main ruleset) waits for `CI - Success` to report
+   once, after B2. Q-12 is asked then, if GitHub will not enforce it.
 2. **Track B, plan 01: the repo skeleton and CI.** B1 (the Go skeleton) is done;
    continue with B2 in
    [KICKOFF section 3](sagas/distributed-dev-env/KICKOFF.md#3-track-b-the-first-prs-in-this-repo).
@@ -119,6 +120,9 @@ which lists exactly what to change:
       release-please part).
 - [ ] Part 2, after B3's first publish: make `ghcr.io/thaynes43/dev-env-operator`
       public (Q-13).
+- [ ] Part 3, after `CI - Success` has reported once (B2): the Protect Main ruleset on
+      the default branch, with `CI - Success` required. If GitHub will not enforce it
+      on this private repo, that is Q-12.
 
 ## Working rules (the summary; CLAUDE.md is the source)
 

@@ -1,0 +1,7 @@
+# Keep the build context small and free of secrets. Nothing here needs .git: the
+# Dockerfiles take COMMIT and VERSION as build args.
+.git
+.github
+.agents
+bin
+*.md
