@@ -12,7 +12,7 @@ design and the decision log below with its date.
 
 **v1** is the single dev-env pod deployed from haynes-ops
 (`kubernetes/main/apps/dev/dev-env/`; saga `.agents/sagas/dev-env/` there). It keeps
-running, unchanged, until Tom approves the cutover in phase 5.
+running, maintained in haynes-ops as today, until Tom approves the cutover in phase 5.
 
 ## Vision (Tom, 2026-10-05)
 

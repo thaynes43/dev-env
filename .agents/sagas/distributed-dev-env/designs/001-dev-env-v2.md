@@ -740,8 +740,8 @@ image name `ghcr.io/thaynes43/dev-env`. haynes-ops records it in its dev-env sag
 | `pve.sh`, `hw-ssh.sh` | tools baked into the agent image |
 | (new) | the operator, its CRDs, its image `ghcr.io/thaynes43/dev-env-operator` |
 
-**Stays in haynes-ops (GitOps):** every manifest. v1 (`apps/dev/dev-env`) unchanged
-until cutover; the new `dev-env-system` and `dev-agents` apps (namespaces, CRDs,
+**Stays in haynes-ops (GitOps):** every manifest. v1 (`apps/dev/dev-env`), maintained
+as today until cutover; the new `dev-env-system` and `dev-agents` apps (namespaces, CRDs,
 operator and keeper HelmReleases, RBAC, CNPs, ExternalSecrets, ResourceQuota,
 LimitRange, PriorityClass, the Kyverno limit policy); the config the pods read
 (`CLAUDE.md`, `mcp.json`, Codex `config.toml` and `requirements.toml`, subagent
@@ -799,7 +799,8 @@ The haynes-dev-bot installation already sees the repo.
 
 ## 12. Phased migration from v1
 
-v1 keeps running, unchanged, until Tom approves the cutover. v2 work never edits
+v1 keeps running, maintained in haynes-ops as today, until Tom approves the cutover.
+v2 work never edits
 `apps/dev/dev-env/app/resources/**` (that bounces the v1 pod and every session in it).
 
 | Phase | Delivers | Done when |
