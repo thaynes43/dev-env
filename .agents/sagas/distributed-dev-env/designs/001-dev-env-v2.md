@@ -1489,7 +1489,7 @@ flowchart LR
     hold["Tom's holds<br/>agent-run gpu hold"]
   end
   bud["budgeter (operator)"]
-  res["reserve pods per GPU node<br/>priority 0, request the reserve"]
+  res["reserve pods per GPU node<br/>priority -1, request the reserve"]
   sched["Kubernetes scheduler"]
   agents["agent GPU pods<br/>priority -10"]
   decl & probe & live & hold --> bud
@@ -1538,12 +1538,14 @@ the agent share grows and shrinks, while the scheduler keeps doing the placing.
 
 **Only the budgeter lets agent GPU pods schedule.** Every agent GPU pod is created
 with a scheduling gate (`dev-env.haynesops.com/gpu-budget`), so the scheduler ignores
-it until the budgeter removes the gate. Before removing it, the budgeter narrows the
-pod's required node affinity to the nodes with enough budget that are not being
-reclaimed (Kubernetes lets a gated pod's affinity be narrowed). So the scheduler still
-picks the node, among nodes the budget allows, and a Pending agent GPU pod can never
-slip into units that a reclaim is freeing. A pod that stays Pending a minute after its
-gate is removed is deleted and recreated gated.
+it until the budgeter removes the gate. Before removing it, the budgeter picks one
+node whose budget fits the claim and is not being reclaimed, and narrows the pod's
+required node affinity to that node alone (Kubernetes lets a gated pod's affinity be
+narrowed). The scheduler still binds the pod and checks every other constraint. When a
+reclaim starts on a node, the budgeter first deletes and recreates, gated, any agent
+GPU pod that was un-gated toward that node and is still Pending. So no Pending agent
+pod can take units that a reclaim is freeing. A pod that stays Pending a minute after
+its gate is removed is also recreated gated.
 
 **Shrinking the agent share (reclaim), gracefully.** When a reserve must grow by N
 units on a card:
@@ -1556,8 +1558,8 @@ units on a card:
    checkpoint the current job, then exit) or, for an LLM backend, stop taking new
    requests and finish the ones in flight. The grace is 60 seconds for LLM backends
    and 120 seconds for tools.
-3. From the moment the notices go out, the budgeter un-gates nothing toward that
-   card. As each workload releases, or at the end of its grace, it adds the reserve
+3. Before the notices go out, the budgeter re-gates any Pending agent GPU pod aimed
+   at that node, and from then on it un-gates nothing toward it. As each workload releases, or at the end of its grace, it adds the reserve
    pod. Anything still on the card is then preempted by the scheduler, which gives
    it its termination grace.
 4. Interactive household bursts are never lent, so Home Assistant voice never waits

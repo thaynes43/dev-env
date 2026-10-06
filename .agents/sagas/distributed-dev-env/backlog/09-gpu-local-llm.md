@@ -59,15 +59,15 @@ on opencode that are fleet members beside Claude Code and Codex. DESIGN-001 6.13
 - `ToolPool.spec.gpu.memoryGiB` turned into a request for VRAM units and a framework
   VRAM cap from the claim (environment for llama.cpp, vLLM, PyTorch apps). Every
   agent GPU pod is created with the `dev-env.haynesops.com/gpu-budget` scheduling
-  gate.
+  gate. GPU pools may run on control-plane nodes only with limits of at most 2 CPU
+  and 16Gi (CRD validation).
 - `dev-env-gpu-guard`, a DaemonSet on GPU nodes: NVML every 5 s; evicts agent GPU
   pods on a near-full card, and all of them on its node when the budgeter's Lease is
-  over 5 minutes old. GPU pools may run on
-  control-plane nodes only with limits of at most 2 CPU and 16Gi (CRD validation).
+  over 5 minutes old.
 - The budgeter in the operator: read reservations, probes (every 15 s) and the
   exporter; compute each card's reserve and agent budget; hold the reserve with
-  reserve pods at priority -1; remove agent pods' scheduling gates only toward nodes
-  with budget that are not being reclaimed; renew its Lease; reclaim in order with notices and graces (60 s for LLM backends,
+  reserve pods at priority -1; remove an agent pod's scheduling gate only after
+  pinning its affinity to the one node the budgeter chose; renew its Lease; reclaim in order with notices and graces (60 s for LLM backends,
   120 s for tools); shrink after a 15-minute cool-down; `GET /v1/gpus`,
   `POST /v1/gpus/{node}/hold` (Tom only); metrics for a Grafana panel.
 - The tool contract's `POST /reclaim`.
