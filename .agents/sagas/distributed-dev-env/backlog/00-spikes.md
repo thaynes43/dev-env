@@ -126,8 +126,10 @@ and each runbook action (rollout restart, CronJob suspend, Flux reconcile and
 suspend, a volsync unlock Job, ExternalSecret force-sync). Every path must be
 refused and every action allowed. Then, as a `grant-<id>` ServiceAccount bound to
 `dev-env-grant-breakglass`: a write and an exec in each dev-env namespace, a pod
-under another ServiceAccount, a privileged pod, a Secret read and a TokenRequest
-must all be refused. Check whether the ValidatingAdmissionPolicy sees
+under another ServiceAccount, a privileged pod, a Secret read, a TokenRequest, a
+new pod or Deployment that mounts a Secret, a Flux Kustomization, an ExternalSecret,
+a CRD delete and a write in `kyverno` must all be refused, while an eviction in
+`kube-system` is allowed. Check whether the ValidatingAdmissionPolicy sees
 `CONNECT` for exec; if not, the Kyverno rule carries it. Decides D-19.
 
 ## Acceptance

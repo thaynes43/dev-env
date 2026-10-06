@@ -221,6 +221,7 @@ HTTPS with a cert-manager certificate, JSON, versioned under `/v1`.
 | `POST /v1/sessions/{id}/restart` | Move a session onto the current revision now (explicit drain). |
 | `DELETE /v1/sessions/{id}` | Reap: rescue, suspend, archive. There is no "skip the rescue" flag. |
 | `GET /v1/fleet` | Running and Pending sessions with the scheduler's reasons, current revision, outdated sessions, storage health, plan-quota state. It reports; it gates nothing (D-21). |
+| `POST /v1/fleet/nodes/{node}/evacuate` | Move a node's sessions and tool instances off it before a drain ([6.12](#612-access-no-prompts-in-the-pod-control-at-the-platform)). |
 | `GET/POST/DELETE /v1/activities` | `declare-activity` ([6.9](#69-declare-activity)). |
 | `GET /v1/auth` | Status of each credential: present, expires, days left. Never a value. |
 | `POST /v1/auth/{claude,codex}/login` and `…/login/code` | Relay the monthly login ceremony ([6.2](#62-claude-max-login-and-its-monthly-renewal)). |
@@ -258,7 +259,7 @@ The verbs stay, so muscle memory and every CLAUDE.md instruction carry over.
 | `reap [<id>]` | `DELETE /v1/sessions/{id}` |
 | `prune`, `sweep` | Gone as commands. The operator's reaper does this continuously ([4.3](#43-timers)). `agent-run fleet` shows what it will do. |
 | `codex-remote [up\|stop]` | Manages the codex hub session ([6.3](#63-codex)). |
-| new: `suspend`, `resume`, `restart`, `msg`, `fleet`, `auth status\|login\|code`, `rescue list\|restore` | Map one to one onto the API. |
+| new: `suspend`, `resume`, `restart`, `msg`, `fleet`, `fleet evacuate <node>`, `auth status\|login\|code`, `rescue list\|restore` | Map one to one onto the API. |
 | new: `tools list\|attach\|release\|get\|put` | Tool pods and their artifacts ([8.1](#81-tool-pods)). |
 | new: `grant request\|list\|use\|release`, `breakglass` | Access grants ([6.12](#612-access-no-prompts-in-the-pod-control-at-the-platform)). `grant request` prints the approval link and waits for the answer; `--no-wait` returns the id. |
 | new: `lease <pool> [--minutes N]` | LLM leases ([8.3](#83-llm-pools-and-leases)). |
@@ -829,13 +830,31 @@ anything more is a grant; nothing in the three dev-env namespaces.**
   matches every identity in `dev-agents` except the workbench: the agent
   ServiceAccount and every `grant-<id>` ServiceAccount, break-glass included. It
   denies:
-  - any write, delete or exec in `dev-env-system`, `dev-agents` or `dev-tools`;
+  - any write, delete, eviction or exec in `dev-env-system`, `dev-agents` or
+    `dev-tools`;
+  - for grant identities, any write or exec in the namespaces that enforce these
+    rules: `flux-system`, `kyverno`, `external-secrets` and `kube-system` (Cilium).
+    Evictions there are allowed, so a node drain still works. The baseline agent
+    ServiceAccount keeps v1's guarded actions there (Flux reconcile and suspend,
+    rollout restart, pod delete, as in the multus fix), so the runbooks still work;
   - any pod, Job, CronJob or workload whose pod runs as a ServiceAccount other than
     its namespace's `default` or one on the short list, or that is privileged or
     uses hostPath, host network or host PID;
+  - any create or update that adds a Secret reference (volume, projected volume,
+    `envFrom`, `valueFrom`) the object did not already have, unless the Secret is on
+    the short list. Updating a workload that already mounts its Secret still works,
+    because the controller, not the grant, creates its pods;
   - any PersistentVolume with a hostPath or local source;
   - writes to RBAC objects, admission policies and webhooks, Kyverno policies,
-    `CiliumClusterwideNetworkPolicy` objects and the `dev-env.haynesops.com` CRDs.
+    CustomResourceDefinitions, APIServices, `CiliumClusterwideNetworkPolicy`
+    objects, Flux objects (beyond the baseline's reconcile and suspend fields),
+    `external-secrets.io` objects (beyond the baseline's force-sync annotation) and
+    the `dev-env.haynesops.com` CRDs.
+
+  These rules close the controller paths too: no grant can have Flux apply
+  something with Flux's rights, pull a 1Password item through an ExternalSecret,
+  mount a Secret it could not read, or remove a CRD or policy engine that enforces
+  the rules.
 
   The Kyverno exec rule (privileged-ServiceAccount pods) matches the same
   identities. Spike S-12 checks that the admission policy sees `CONNECT` for exec;
@@ -953,11 +972,20 @@ every granted namespace. What each role allows, plainly:
 
 | Role | Allows (in the granted namespaces) | Note |
 |---|---|---|
-| `dev-env-grant-workloads` | create, update, patch, delete Deployments, StatefulSets, DaemonSets, Jobs, CronJobs, Services, ConfigMaps, pods | Pods still run as `default` or a listed ServiceAccount (identity guard). A pod can mount the namespace's Secrets, so this role implies reading them; the approval page says so. |
+| `dev-env-grant-workloads` | create, update, patch, delete Deployments, StatefulSets, DaemonSets, Jobs, CronJobs, Services, ConfigMaps, pods | Pods still run as `default` or a listed ServiceAccount, and no new Secret reference may be added (identity guard), so it does not reach the namespace's Secrets. It can change images and commands of workloads that already mount Secrets; the approval page says so. |
 | `dev-env-grant-storage` | create, delete PVCs and VolumeSnapshots; delete StatefulSets | The observability and CNPG cases v1 solved with one-off Roles. |
 | `dev-env-grant-secrets-read` | get, list Secrets | Always shown with its namespaces in red on the page. |
-| `dev-env-grant-nodes` (cluster-wide) | cordon, uncordon, drain (evictions), node labels and taints | The talosw01 drain of 2026-09-25 was a headlamp job. |
-| `dev-env-grant-breakglass` (cluster-wide) | every verb on every resource except Secrets, `serviceaccounts/token`, `nodes/proxy` (the kubelet API bypasses admission), `pods/ephemeralcontainers`, the verbs `bind`, `escalate` and `impersonate`, RBAC objects, CSR approval, admission policies and webhooks, Kyverno policies, `CiliumClusterwideNetworkPolicy` and the `dev-env.haynesops.com` CRDs | Built from API discovery minus that list; a CI check regenerates it when the cluster gains an API group. |
+| `dev-env-grant-nodes` (cluster-wide) | cordon, uncordon, drain (evictions), node labels and taints | The talosw01 drain of 2026-09-25 was a headlamp job. Its evictions in the dev-env namespaces stay refused: before a drain, `agent-run fleet evacuate <node>` has the operator move that node's sessions and tool instances (below). |
+| `dev-env-grant-breakglass` (cluster-wide) | every verb on every resource except Secrets, `serviceaccounts/token`, `nodes/proxy` (the kubelet API bypasses admission), `pods/ephemeralcontainers`, the verbs `bind`, `escalate` and `impersonate`, RBAC objects, CSR approval, admission policies and webhooks, Kyverno policies, CustomResourceDefinitions, APIServices, Flux objects, `external-secrets.io` objects, `CiliumClusterwideNetworkPolicy` and the `dev-env.haynesops.com` CRDs | Built from API discovery minus that list; a CI check regenerates it when the cluster gains an API group. The identity guard applies on top. |
+
+**Draining a node with sessions on it.** `agent-run fleet evacuate <node>` (API `POST
+/v1/fleet/nodes/{node}/evacuate`) asks the operator to move that node's sessions:
+each one drains at its next idle moment, as Q-03 does for revisions, or within a
+deadline (default 30 minutes) is suspended after rescue, and its tool instances stop.
+The caller cordons the node first, so the resumed sessions land elsewhere. A drain
+by another identity, such as a Talos upgrade through Omni, evicts session pods
+directly: that cuts a busy turn, but the volume stays and the operator resumes the
+session on another node.
 
 **No grant reaches the dev-env namespaces.** The `AccessGrant` and `GrantPolicy` CRD
 validation, and the broker, refuse `dev-env-system`, `dev-agents` and `dev-tools` as a
@@ -1019,17 +1047,21 @@ on the page, announced by Pushover at high priority, every action attributable t
 Break-glass is deliberately not `cluster-admin`. A `cluster-admin` token in an agent
 pod could read the keeper's refresh tokens and the GitHub App key, delete session
 volumes without rescue, and mint tokens for other ServiceAccounts that outlive the
-grant. The break-glass role has no Secrets, no `serviceaccounts/token`, no RBAC or
-admission writes, and the identity guard keeps it out of the dev-env namespaces and
-away from privileged pods and other ServiceAccounts. When it expires, the keeper
+grant. The break-glass role has no Secrets, no `serviceaccounts/token`, no RBAC,
+admission, CRD, Flux or ExternalSecret writes. The identity guard keeps it out of
+the dev-env namespaces and the enforcing namespaces, away from privileged pods and
+other ServiceAccounts, and from adding Secret references. When it expires, the keeper
 forces a refresh of the Claude and Codex logins (each refresh issues a new refresh
 token and retires the old one), and the broker sends Tom the list of objects the
 grant created, read from the audit log.
 
 **What break-glass can still do**, stated as the residual risk: for up to an hour it
 can change or delete any household workload, volume or node setting outside the
-dev-env namespaces, and it can create workloads (as `default` ServiceAccounts) that
-keep running after it expires. That is what "do this for me" needs; the audit list
+dev-env and enforcing namespaces, and it can create workloads (as `default`
+ServiceAccounts) that keep running after it expires. It can change the image or
+command of a workload that already mounts a Secret, and so read that Secret through
+the workload. It can read a Secret mounted in a running pod by exec, as the baseline
+can (v1's accepted exec trade-off, Tom 2026-08-06). That is what "do this for me" needs; the audit list
 is how Tom sees what was left behind. Giving break-glass only to Tom's own workbench
 or laptop was considered and rejected: the point is to let an agent do the work Tom
 asks for without a headlamp detour.

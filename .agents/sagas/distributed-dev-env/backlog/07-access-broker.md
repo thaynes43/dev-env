@@ -80,6 +80,10 @@ audited, and the headlamp path is no longer needed. DESIGN-001 6.12, D-23 to D-2
   TokenRequest, a RoleBinding create and any write in the three dev-env namespaces
   are all refused.
 - A grant request that targets a dev-env namespace is refused at creation.
+- Under break-glass, creating a Flux Kustomization, an ExternalSecret, a pod that
+  mounts a Secret, or deleting a CRD are all refused.
+- `agent-run fleet evacuate <node>` moves a cordoned worker's sessions (rescue first)
+  and tool instances; a `dev-env-grant-nodes` drain then completes.
 - A Job with `serviceAccountName: headlamp` and exec into the headlamp pod are both
   refused for the agent ServiceAccount.
 - A broker restart during an active grant changes nothing for the session.
