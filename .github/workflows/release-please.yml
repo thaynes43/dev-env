@@ -1,0 +1,61 @@
+name: Release Please
+
+# One version for the whole repo (DESIGN-001 section 10): release-please keeps a
+# release PR open from the conventional commits on main, and merging it tags
+# vX.Y.Z and creates the GitHub release. The operator image and the agent image
+# are both tagged with that version. The first release is 2.0.0 (initial-version in
+# release-please-config.json), because the agent image line is 2.x.
+#
+# Why a token step: a PR opened with the workflow's GITHUB_TOKEN starts no workflows,
+# so `CI - Success` would never report on it. Tom ruled (DESIGN-001 Q-14, A) a GitHub
+# App: repo variable RELEASE_APP_ID and repo secret RELEASE_APP_PRIVATE_KEY. App
+# tokens do start workflows. The App needs Contents, Pull requests and Issues write
+# (Issues for release-please's `autorelease:` labels).
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The token comes from the App, so the workflow's own token needs nothing
+    # beyond reading the repo. The fallback below uses GITHUB_TOKEN, which then
+    # needs these.
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    env:
+      RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
+      HAS_APP_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY != '' }}
+    steps:
+      - name: Mint the release App token
+        id: app-token
+        if: env.RELEASE_APP_ID != '' && env.HAS_APP_KEY == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+      - name: Warn that the App is missing
+        if: steps.app-token.outcome != 'success'
+        run: |
+          echo "::warning title=Release App missing::RELEASE_APP_ID or RELEASE_APP_PRIVATE_KEY is not set, so release-please falls back to GITHUB_TOKEN. Release PRs it opens will not get CI (CI - Success never reports) until the App exists. Interim: haynes-dev-bot closes and reopens each release PR."
+      - name: Run release-please
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

@@ -1,0 +1,112 @@
+// Renovate config for thaynes43/dev-env (KICKOFF B4), run by the Mend Renovate app.
+// Style and schedule follow haynes-ops .github/renovate.json5. Everything is in this
+// one file (haynes-ops splits it into .renovate/*.json5 presets because it is big);
+// the customManagers below are copied from haynes-ops .renovate/customManagers.json5.
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  extends: [
+    'config:recommended',
+    // GitHub Actions: pin every `uses:` to a full SHA and keep the `# vX.Y.Z` comment.
+    'helpers:pinGitHubActionDigests',
+    // Dockerfile base images: pin by digest (images/*/Dockerfile).
+    'docker:pinDigests',
+    ':semanticCommits',
+    ':dependencyDashboard',
+  ],
+  dependencyDashboard: true,
+  dependencyDashboardTitle: 'Renovate Dashboard',
+  // Same overnight window as haynes-ops.
+  timezone: 'America/New_York',
+  schedule: [
+    'after 10pm',
+    'before 6am',
+  ],
+  // PR-based auto-merge, never branch mode (haynes-ops' lesson: CI runs on
+  // pull_request, so a branch-mode merge would skip it). The default is no
+  // auto-merge at all; the one rule below says which updates may.
+  automergeType: 'pr',
+  // Each automerged PR is merged by GitHub itself once the required checks pass,
+  // not by Renovate's own run (haynes-ops does the same). It needs "Allow
+  // auto-merge" in the repo settings (laptop handoff part 1).
+  platformAutomerge: true,
+  // go.mod / go.sum stay tidy; a major bump rewrites import paths.
+  postUpdateOptions: [
+    'gomodTidy',
+    'gomodUpdateImportPaths',
+  ],
+  rebaseWhen: 'conflicted',
+  prConcurrentLimit: 0,
+  prHourlyLimit: 0,
+  branchConcurrentLimit: 0,
+  suppressNotifications: [
+    'prEditedNotification',
+    'prIgnoreNotification',
+  ],
+  packageRules: [
+    // AUTO-MERGE IS OFF until the "Protect Main" ruleset requires `CI - Success`
+    // (laptop handoff part 3). Without a required check, GitHub has nothing to
+    // wait for: platform auto-merge would either fail to enable or merge before CI
+    // has reported, and Renovate's own fallback would judge by an empty status. To
+    // turn it on, flip `automerge` to true here in the same PR that records the
+    // ruleset as done. Scope is minor and patch only, and only Go modules and
+    // GitHub Actions: no majors, no Docker digests, no Go toolchain, no tool pins.
+    // Everything not matched here never auto-merges.
+    {
+      description: 'Go modules: minor and patch updates (auto-merge held, see above)',
+      matchManagers: ['gomod'],
+      matchUpdateTypes: ['minor', 'patch'],
+      automerge: false,
+    },
+    // Actions: the SHA pin and digest refreshes belong with their minor and patch
+    // bumps. Go `digest` updates (pseudo-versions of untagged modules) do not: they
+    // carry no semver promise, so they are left out of the rule above.
+    {
+      description: 'GitHub Actions: minor, patch, pin and digest updates (auto-merge held, see above)',
+      matchManagers: ['github-actions'],
+      matchUpdateTypes: ['minor', 'patch', 'digest', 'pin', 'pinDigest'],
+      automerge: false,
+    },
+    // The gomod manager also reads the `go` and `toolchain` lines. A human reviews
+    // those, so this rule comes after the one above and wins.
+    {
+      description: 'Go version and toolchain: never auto-merge',
+      matchDatasources: ['golang-version'],
+      automerge: false,
+    },
+  ],
+  customManagers: [
+    {
+      customType: 'regex',
+      description: [
+        'Dockerfile ARG version pins (images/**/Dockerfile)',
+        'Copied from haynes-ops. The built-in `dockerfile` manager only reads',
+        'FROM/image refs, so an `ARG FOO_VERSION=1.2.3` preceded by a',
+        '`# renovate: datasource=... depName=...` comment needs THIS regex manager to',
+        'be seen at all. Without it the annotations are decoration and the baked CLIs',
+        'silently freeze. The agent image (B5) carries these.',
+      ],
+      managerFilePatterns: [
+        '/(^|/)Dockerfile[^/]*$/',
+      ],
+      matchStrings: [
+        // Not anchored to '# renovate:' at line start, because a pin may trail its
+        // comment mid-line. Full comment lines between the annotation and the ARG
+        // are allowed too.
+        'renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?(?: extractVersion=(?<extractVersion>\\S+))?[^\\n]*\\n(?:#[^\\n]*\\n)*ARG \\w+_VERSION=(?<currentValue>\\S+)',
+      ],
+    },
+    {
+      customType: 'regex',
+      description: [
+        'Makefile tool pins (new here, same annotation as the Dockerfile ARGs):',
+        '`# renovate: datasource=go depName=...` above `NAME_VERSION ?= v1.2.3`.',
+      ],
+      managerFilePatterns: [
+        '/(^|/)Makefile$/',
+      ],
+      matchStrings: [
+        'renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?[^\\n]*\\n\\w+_VERSION \\?= (?<currentValue>\\S+)',
+      ],
+    },
+  ],
+}
