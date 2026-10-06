@@ -31,7 +31,7 @@ step. Tick a step in the PR that lands it.
   heartbeat, `ctl status|rescue` (DESIGN-001 3.6, D-40), in three PRs:
   - [x] config rendering, the port of `dev-init.sh`: `agentd render` (#25);
   - [x] partial clone and worktree, the task in tmux, heartbeat, `agentd ctl status`
-    (PR_B; D-41, D-42);
+    (#27; D-41, D-42);
   - [ ] `agentd ctl rescue`, the entry point step 5 extends with the bundle.
 - [ ] 5. Rescue to a bundle on the shared volume (D-10), then suspend and archive.
 - [ ] 6. The minimal keeper: mint the gh token every 40 minutes.
