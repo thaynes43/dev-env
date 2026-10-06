@@ -79,3 +79,41 @@ func TestRenderNeedsSession(t *testing.T) {
 		t.Errorf("alias: code %d\n%s", code, errOut)
 	}
 }
+
+func TestCtl(t *testing.T) {
+	home := t.TempDir()
+	env := map[string]string{"HOME": home, "AGENTD_SESSION": `{"name":"r-1","repo":"r","agent":"claude","mode":"task","model":"claude-opus-5-5","prompt":"p"}`}
+	code, out, errOut := runArgs([]string{"ctl", "status"}, env)
+	if code != exitOK || !strings.Contains(out, `"session": "r-1"`) || !strings.Contains(out, `"state": "pending"`) {
+		t.Errorf("ctl status: %d %s %s", code, out, errOut)
+	}
+	if code, _, _ := runArgs([]string{"ctl", "status"}, map[string]string{"HOME": home}); code != exitFailure {
+		t.Errorf("ctl status without a session: %d", code)
+	}
+	for _, c := range []string{"rescue", "prepare-restart", "deliver"} {
+		if code, _, errOut := runArgs([]string{"ctl", c}, env); code != exitFailure || !strings.Contains(errOut, "not built yet") {
+			t.Errorf("ctl %s: %d %q", c, code, errOut)
+		}
+	}
+	if code, _, _ := runArgs([]string{"ctl"}, env); code != exitUsage {
+		t.Errorf("ctl: %d", code)
+	}
+	if code, _, _ := runArgs([]string{"ctl", "fly"}, env); code != exitUsage {
+		t.Errorf("ctl fly: %d", code)
+	}
+}
+
+func TestRunNeedsASession(t *testing.T) {
+	if code, _, errOut := runArgs([]string{"run"}, map[string]string{"HOME": t.TempDir()}); code != exitFailure || !strings.Contains(errOut, "AGENTD_SESSION is not set") {
+		t.Errorf("run: %d %s", code, errOut)
+	}
+	if code, _, _ := runArgs([]string{"run", "x"}, nil); code != exitUsage {
+		t.Errorf("run x: %d", code)
+	}
+	if code, _, _ := runArgs([]string{"run-agent"}, nil); code != exitUsage {
+		t.Errorf("run-agent: %d", code)
+	}
+	if code, out, _ := runArgs([]string{"run-agent", "--launch", filepath.Join(t.TempDir(), "none.json")}, nil); code != exitFailure || !strings.Contains(out, "run-agent") {
+		t.Errorf("run-agent missing launch: %d %q", code, out)
+	}
+}

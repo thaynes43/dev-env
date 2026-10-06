@@ -14,15 +14,8 @@ import (
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
-// Step is the outcome of one boot step. Steps never stop the boot (DESIGN-001
-// 3.6): a failed one is reported and the next one runs.
-type Step struct {
-	Name string `json:"name"`
-	// State is ok, warn (done with a problem worth reading), skip (nothing to
-	// do here) or fail.
-	State string   `json:"state"`
-	Notes []string `json:"notes,omitempty"`
-}
+// Step is the outcome of one boot step (protocol.Step).
+type Step = protocol.Step
 
 // Step states.
 const (
@@ -72,6 +65,7 @@ func Render(ctx context.Context, r Runner, s Settings, sess protocol.Session) []
 		renderCodexConfig(s, cfg),
 		renderCodexAgentsMD(s, cfg),
 		renderGit(ctx, r, s),
+		renderGHWrapper(s),
 		renderPlaywright(s),
 		renderCorepackShims(s),
 		renderHWSSHKey(s),
@@ -290,6 +284,59 @@ func renderGit(ctx context.Context, r Runner, s Settings) Step {
 	}
 	return newStep(name, notes, nil)
 }
+
+// ghWrapperMarker marks the gh wrapper agentd writes; a gh it did not write
+// is never replaced.
+const ghWrapperMarker = "# dev-env-managed: agentd's gh wrapper"
+
+// renderGHWrapper writes ~/.local/bin/gh, which reads the keeper's token file
+// on every call and runs the image's gh. A minted token lasts 60 minutes and the
+// keeper re-mints it every 40 (D-13), so a GH_TOKEN copied when the agent
+// started would be dead by the end of a long task; agentd removes that copy
+// from the agent's environment (D-42). ~/.local/bin leads the image's PATH.
+func renderGHWrapper(s Settings) Step {
+	const name = "gh-wrapper"
+	path := s.Getenv("PATH")
+	real := findInPath(path, "gh", s.UserBin)
+	if real == "" {
+		return skipStep(name, "gh is not on PATH")
+	}
+	wrapper := filepath.Join(s.UserBin, "gh")
+	if data, err := os.ReadFile(wrapper); err == nil && !bytes.Contains(data, []byte(ghWrapperMarker)) {
+		return newStep(name, []string{"WARN " + wrapper + " was not written by agentd; left as it is, so gh may hold a stale token"}, nil)
+	}
+	script := fmt.Sprintf("#!/bin/sh\n%s (DESIGN-001 D-42).\n"+
+		"# A minted token lasts 60 minutes, so read it on every call.\n"+
+		"if [ -s %s ]; then GH_TOKEN=\"$(cat %s)\"; export GH_TOKEN; fi\n"+
+		"exec %s \"$@\"\n", ghWrapperMarker, shellQuote(s.GHTokenFile), shellQuote(s.GHTokenFile), shellQuote(real))
+	if err := writeFileAtomic(wrapper, []byte(script), 0o755); err != nil {
+		return newStep(name, nil, err)
+	}
+	var notes []string
+	if dirs := filepath.SplitList(path); len(dirs) == 0 || filepath.Clean(dirs[0]) != filepath.Clean(s.UserBin) {
+		notes = append(notes, "WARN "+s.UserBin+" does not lead PATH, so the wrapper may not be the gh that runs")
+	}
+	notes = append(notes, wrapper+" runs "+real+" with a fresh token")
+	return newStep(name, notes, nil)
+}
+
+// findInPath is the first executable named name in a PATH value, skipping the
+// directory skip.
+func findInPath(path, name, skip string) string {
+	for _, dir := range filepath.SplitList(path) {
+		if dir == "" || filepath.Clean(dir) == filepath.Clean(skip) {
+			continue
+		}
+		p := filepath.Join(dir, name)
+		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() && fi.Mode()&0o111 != 0 {
+			return p
+		}
+	}
+	return ""
+}
+
+// shellQuote quotes s for sh.
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // renderPlaywright makes the image's browsers available in the volume's
 // browser cache. v1 copies each revision directory; agentd links it, because a
