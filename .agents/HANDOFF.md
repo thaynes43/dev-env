@@ -122,7 +122,9 @@ which lists exactly what to change:
 - [ ] Part 1: the Mend Renovate app covers this repo.
 - [ ] Part 1: the release-please GitHub App (Q-14), with repo variable
       `RELEASE_APP_ID` and repo secret `RELEASE_APP_PRIVATE_KEY` (before B4's
-      release-please part).
+      release-please part). Until then the workflow's `GITHUB_TOKEN` fallback cannot
+      open the release PR at all (it failed on 2026-10-06), so also allow Actions to
+      create PRs (handoff part 1, step 5).
 - [ ] Part 2, after B3's first publish: make `ghcr.io/thaynes43/dev-env-operator`
       public (Q-13).
 - [ ] Part 3, after `CI - Success` has reported once (B2): the Protect Main ruleset on

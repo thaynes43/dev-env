@@ -52,7 +52,7 @@ jobs:
       - name: Warn that the App is missing
         if: steps.app-token.outcome != 'success'
         run: |
-          echo "::warning title=Release App missing::RELEASE_APP_ID or RELEASE_APP_PRIVATE_KEY is not set, so release-please falls back to GITHUB_TOKEN. Release PRs it opens will not get CI (CI - Success never reports) until the App exists. Interim: haynes-dev-bot closes and reopens each release PR."
+          echo "::warning title=Release App missing::RELEASE_APP_ID or RELEASE_APP_PRIVATE_KEY is not set, so release-please falls back to GITHUB_TOKEN. Opening the release PR also needs the repo setting Allow GitHub Actions to create and approve pull requests. Release PRs opened this way get no CI (CI - Success never reports) until the App exists. Interim: haynes-dev-bot closes and reopens each release PR, after every update."
       - name: Run release-please
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
