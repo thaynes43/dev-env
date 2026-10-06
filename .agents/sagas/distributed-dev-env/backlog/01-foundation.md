@@ -27,13 +27,16 @@ step. Tick a step in the PR that lands it.
   the projected token at `/var/run/secrets/dev-env/token` (audience
   `dev-env-operator`), and a termination grace period over 30 s.
 - [ ] 3. The `/v1` API (`sessions`, `fleet`) with TokenReview auth.
-- [ ] 4. agentd: config rendering, partial clone and worktree, tmux start,
-  heartbeat, `ctl status|rescue` (DESIGN-001 3.6, D-40), in three PRs:
+- [x] 4. agentd: config rendering, partial clone and worktree, tmux start,
+  heartbeat, `ctl status|rescue` (DESIGN-001 3.6, D-40 to D-43), in three PRs:
   - [x] config rendering, the port of `dev-init.sh`: `agentd render` (#25);
   - [x] partial clone and worktree, the task in tmux, heartbeat, `agentd ctl status`
     (#27; D-41, D-42);
-  - [ ] `agentd ctl rescue`, the entry point step 5 extends with the bundle.
+  - [x] `agentd ctl rescue`, the entry point step 5 extends with the bundle (PR_C;
+    D-43).
 - [ ] 5. Rescue to a bundle on the shared volume (D-10), then suspend and archive.
+  The bundle extends `agentd ctl rescue` (D-43): it bundles the report's
+  `unpushedRefs`, and archive trusts `cleanAndPushed`.
 - [ ] 6. The minimal keeper: mint the gh token every 40 minutes.
 - [ ] 7. `agent-run` v2: `-p`, `list`, `reap` and `fleet`.
 - [ ] 8. The haynes-ops PRs (KICKOFF section 4, item 8).

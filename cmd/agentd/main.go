@@ -4,8 +4,8 @@
 // `agentd ctl status|rescue|prepare-restart|deliver` for the operator.
 //
 // Built so far: the daemon (`run`), the task runner in the tmux pane
-// (`run-agent`), `render` and `ctl status`. `ctl rescue` follows in plan 01
-// step 4's last PR; `ctl prepare-restart` and `ctl deliver` in plan 02.
+// (`run-agent`), `render`, `ctl status` and `ctl rescue`. `ctl prepare-restart`
+// and `ctl deliver` arrive with plan 02.
 package main
 
 import (
@@ -40,13 +40,16 @@ Commands:
                            then heartbeat until SIGTERM.
   render                   Render the GitOps config into $HOME (boot step 1).
   ctl status               Print the session's status as JSON.
+  ctl rescue               Commit every worktree's uncommitted work to a local
+                           rescue/ branch and print the report as JSON; exit 1
+                           when a worktree could not be rescued (D-43).
   run-agent --launch FILE  Run the agent CLI; agentd starts this in tmux.
   version                  Print the version, commit, Go version and platform.
   help                     Print this help.
 
 agentd reads the session from AGENTD_SESSION (JSON) or the file named by
-AGENTD_SESSION_FILE (D-40). ctl rescue arrives with plan 01 step 4's last PR;
-ctl prepare-restart and ctl deliver with plan 02.
+AGENTD_SESSION_FILE (D-40). ctl prepare-restart and ctl deliver arrive with
+plan 02.
 `
 
 // Daemon timings (DESIGN-001 3.6). stopGrace must fit inside the pod's
@@ -165,7 +168,7 @@ func daemon(ctx context.Context, log *slog.Logger, getenv func(string) string, r
 
 func ctl(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string, r agentd.Runner) int {
 	if len(args) != 1 {
-		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl status\n", binaryName)
+		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl status|rescue\n", binaryName)
 		return exitUsage
 	}
 	switch args[0] {
@@ -188,8 +191,32 @@ func ctl(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		}
 		return exitOK
 	case "rescue":
-		_, _ = fmt.Fprintf(stderr, "%s: ctl rescue is not built yet; it arrives with plan 01 step 4's last PR\n", binaryName)
-		return exitFailure
+		s, err := agentd.LoadSettings(getenv)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
+			return exitFailure
+		}
+		// The session name only labels the report; rescue works without one.
+		name := ""
+		if sess, err := agentd.LoadSession(getenv); err == nil {
+			name = sess.Name
+		}
+		rep, err := agentd.Rescue(ctx, r, s, name, time.Now())
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "%s: rescue: %v\n", binaryName, err)
+			return exitFailure
+		}
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(rep); err != nil {
+			return exitFailure
+		}
+		if !rep.OK {
+			// The report says which worktree was refused; the operator marks
+			// the session rescueFailed (D-10).
+			return exitFailure
+		}
+		return exitOK
 	case "prepare-restart", "deliver":
 		_, _ = fmt.Fprintf(stderr, "%s: ctl %s is not built yet; it arrives with plan 02\n", binaryName, args[0])
 		return exitFailure

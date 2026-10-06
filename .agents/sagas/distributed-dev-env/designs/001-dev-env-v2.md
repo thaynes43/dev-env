@@ -497,9 +497,39 @@ tmux session `agent`.**
   (`~/.local/bin` leads the image's PATH). git's credential helper already reads the
   file each time (D-40). v1 exported the token once per shell.
 - Not in plan 01: `local` and `remote` modes (plans 02 and 03), Codex task pods
-  (plan 04, after S-3), opencode (plan 09), and V-04's one-turn pre-flight with a
-  fallback model (plan 10). For a task, the CLI's own `--fallback-model` may do that
-  job; plan 10 decides.
+  (plan 04, which S-3 unblocked on 2026-10-06), opencode (plan 09), and V-04's
+  one-turn pre-flight with a fallback model (plan 10). For a task, the CLI's own
+  `--fallback-model` may do that job; plan 10 decides.
+
+**D-43 (2026-10-06, plan 01 step 4). `agentd ctl rescue` commits through a copy of
+the index and prints the refs origin lacks.**
+
+- It keeps v1's rules (D-10 step 1). In every clone under `~/repos`, each worktree's
+  tracked edits and untracked files go to `rescue/<worktree>-<stamp>` (UTC
+  `YYYYMMDD-HHMM`; a second rescue in the same minute adds `-2`), gitignored files
+  excluded. A detached HEAD whose commit is on no ref is anchored on such a branch.
+  A worktree with a merge or rebase in progress, an untracked nested repo, or more
+  than 50 MiB untracked is refused.
+- One change from v1. v1 switched the worktree onto the rescue branch, because the
+  worktree was about to be removed. A v2 session can be resumed after its rescue
+  (4.5), so agentd copies the worktree's index, runs `git add -A` against the copy,
+  and makes the commit with `commit-tree` and `update-ref`. The worktree, its index
+  and its branch stay as they were, and no hook runs (v1's `--no-verify`). `git
+  status` runs with `--no-optional-locks`, so a rescue never takes a running agent's
+  index lock.
+- Then agentd fetches origin (60 s limit) and lists every local branch, tag and the
+  stash whose commits origin's refs lack (`unpushedRefs`). That is D-10 step 4's
+  list: step 5's bundle must cover it, and the operator records it in status.
+  `cleanAndPushed` is D-10's proof that no bundle is needed: every repo fetched,
+  every worktree clean, no such ref. A failed fetch keeps the list (stale remote refs
+  only make it longer) but voids the proof.
+- The report is JSON on stdout (`protocol.RescueReport`). The exit code is 0 when
+  every worktree is clean or rescued and 1 otherwise; either way the operator can
+  mark `rescueFailed` from the report. One rescue runs at a time in a pod.
+- Step 5 extends the same command: it writes `rescue/<id>/<stamp>.bundle` and its
+  manifest on the shared volume from `unpushedRefs`, with the report's stamp. In a
+  partial clone, objects that origin already has stay out of the bundle; step 5
+  checks `git bundle create` on a `blob:none` clone.
 
 The agent runs with no approval prompts (D-23). Pod spec, inherited from v1 where
 the lesson still applies: non-root uid 1000,
@@ -2680,3 +2710,4 @@ step it names.
 | D-40 | agentd reads its session from `AGENTD_SESSION` (JSON, `internal/agentd/protocol`); pod settings default to v1's paths; the `dev-init.sh` port links Playwright browsers and seeds onboarding and trust | 3.6 |
 | D-41 | agentd's heartbeat: `POST /v1/sessions/{name}/heartbeat` with the pod's projected token, every 60 s and on a task's end; `agentd ctl status` prints the same status | 3.6 |
 | D-42 | A task runs once per volume, under `agentd run-agent` in tmux session `agent`, prompt on stdin, stream-json kept, timeout and turn cap enforced, the pod's SIGTERM forwarded to the CLI | 3.6 |
+| D-43 | `agentd ctl rescue` keeps v1's rules but commits through a copy of the index, leaving the worktree as it was, and prints the refs origin lacks for step 5's bundle | 3.6 |
