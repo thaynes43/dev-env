@@ -2293,7 +2293,7 @@ suite, a busy loop or anything parallel (the 2026-10-05 incident rule).
 Each blocks building. Ask Tom one at a time; fold the answer back in as a dated
 ruling. Q-01 to Q-11 were all answered on 2026-10-06. Q-12 to Q-14 are repo-setup
 questions for phase 1, open on 2026-10-06: **to ask Tom at kickoff, after
-ratification** (ratification is on hold). Each blocks only the KICKOFF step it names.
+ratification**, once the kickoff session has Tom's answer on ADR-001. Each blocks only the KICKOFF step it names.
 
 | Id | Question | Options (recommended first) | Resolution |
 |---|---|---|---|
