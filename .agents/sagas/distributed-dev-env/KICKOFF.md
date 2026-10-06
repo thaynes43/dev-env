@@ -164,26 +164,45 @@ Makefile               generate, lint, test, build; test parallelism capped
   [the laptop handoff](../../handoffs/2026-10-06-tom-laptop-settings.md). Tell Tom
   when the package exists, then check that an anonymous pull works.
 
-**B4: Renovate and release-please.**
+**B4: Renovate and release-please.** Done in #18 (2026-10-06).
 
-- **Renovate:**
-  - copy the Dockerfile `customManagers` from haynes-ops
-    `.renovate/customManagers.json5`, as plan 01 says;
-  - cover gomod and GitHub Actions;
-  - use haynes-ops' nightly schedule;
-  - auto-merge only minor and patch Go and Actions updates, and only after
-    `CI - Success` is required.
+- **Renovate** (`.github/renovate.json5`, one file):
+  - the Dockerfile `customManagers` are copied from haynes-ops
+    `.renovate/customManagers.json5`, as plan 01 says, and a second regex manager
+    reads the `# renovate:` pins in the Makefile (controller-gen, golangci-lint);
+  - gomod, GitHub Actions (`helpers:pinGitHubActionDigests`, SHA plus version
+    comment) and Dockerfile digests (`docker:pinDigests`);
+  - haynes-ops' nightly schedule (after 10pm, before 6am, America/New_York);
+  - **auto-merge is off.** Two rules cover it (minor and patch for Go modules
+    and for Actions; Actions pin and digest refreshes count with them) and set `automerge: false` until the Protect Main ruleset requires
+    `CI - Success`. With no required check, GitHub auto-merge has nothing to wait
+    for, so it would merge before CI reports. Turning it on is a flip of both rules in the
+    PR that records laptop handoff part 3 as done (HANDOFF checklist).
 - **release-please:** one version for the repo; both images are tagged with it
-  (DESIGN-001 section 10).
+  (DESIGN-001 section 10). Manifest mode, `go` release type, and
+  `initial-version: 2.0.0`: section 10 puts the agent image on the `2.x` line and B5
+  publishes `2.x.y` tags only, so the one repo version starts at 2.0.0 and the first
+  release is 2.0.0. Tags are `vX.Y.Z` (the Makefile's `git describe` matches
+  `v[0-9]*`); image tags drop the `v`. The Go module path has no `/v2` suffix, so
+  `v2.0.0` is not a version `go get` accepts for the module. That is fine: everything
+  here ships as built binaries and images (D-06), and nothing imports the module as
+  a library. If that changes, move the module to `/v2` first.
 - **The release-please trap.** A PR opened with the workflow's `GITHUB_TOKEN` starts
   no workflows, so `CI - Success` never reports on release PRs. Tom ruled the fix on
-  2026-10-06 (DESIGN-001 Q-14, A): a GitHub App key secret. The workflow reads the
-  repo variable `RELEASE_APP_ID` and the repo secret `RELEASE_APP_PRIVATE_KEY` with
-  `actions/create-github-app-token`. The App needs Issues read and write too, because
-  release-please creates its `autorelease:` labels. Only Tom can add them (part 1 of
-  [the laptop handoff](../../handoffs/2026-10-06-tom-laptop-settings.md)). Until the
-  secret exists, close and reopen each release PR from the pod as haynes-dev-bot. App
-  tokens do start workflows.
+  2026-10-06 (DESIGN-001 Q-14, A): a GitHub App key secret. The workflow
+  (`.github/workflows/release-please.yml`) reads the repo variable `RELEASE_APP_ID`
+  and the repo secret `RELEASE_APP_PRIVATE_KEY` with `actions/create-github-app-token`.
+  The App needs Issues read and write too, because release-please creates its
+  `autorelease:` labels. Only Tom can add them (part 1 of
+  [the laptop handoff](../../handoffs/2026-10-06-tom-laptop-settings.md)).
+- **Until the secret exists** the workflow falls back to `GITHUB_TOKEN` and prints a
+  `::warning::`. Then close and reopen each release PR from the pod as
+  haynes-dev-bot (App tokens do start workflows):
+  `gh pr close <n> && gh pr reopen <n>`. Repeat it after every update: release-please
+  force-pushes the same PR branch after each push to main, and a push made with
+  `GITHUB_TOKEN` starts no run, so `CI - Success` stays on the old head. Do not merge a release PR whose
+  `CI - Success` has not reported. The fallback also needs the repo setting "Allow
+  GitHub Actions to create and approve pull requests" (the App path does not).
 
 **B5: agent image `2.0`.** Plan 01 lists the contents: a copy of haynes-ops
 `scripts/dev-env/Dockerfile` with `tini`, agentd, Codex and `kubectl-cnpg` baked

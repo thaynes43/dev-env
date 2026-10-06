@@ -25,6 +25,11 @@ the saga. To start building, follow
   operator Dockerfile; B3 added `publish.yml`, which pushes and signs
   `dev-env-operator:sha-<short>` from main. The agent image (B5) is still to come. The
   operator package stays private until Tom flips it (laptop handoff, part 2).
+  **B4 added Renovate and release-please** (#18): the first release is 2.0.0 (one repo
+  version on the agent image's `2.x` line). Until Tom adds the release App, the
+  release PR is opened with `GITHUB_TOKEN`, so close and reopen it as haynes-dev-bot
+  to get `CI - Success` to run (again after each update); never merge it without
+  asking. Renovate auto-merge is off until the ruleset exists.
 - **The v1 bounce landed on 2026-10-06.** haynes-ops #3381, #3342, #3336, #3294 and
   #3274 merged at about 21:05Z, and #3330 at 21:15Z. #3241 was closed. The v1 pod
   restarted at 21:17Z on `ghcr.io/thaynes43/dev-env:0.6.8` with a CPU limit of 8.
@@ -43,7 +48,7 @@ the saga. To start building, follow
    first publish. Part 3 (the Protect Main ruleset) waits for `CI - Success` to report
    once, after B2. Q-12 is asked then, if GitHub will not enforce it.
 2. **Track B, plan 01: the repo skeleton and CI.** B1 (the Go skeleton) is done;
-   B2 (CI) and B3 (`publish.yml`) are done; continue with B4 in
+   B2 (CI), B3 (`publish.yml`) and B4 (Renovate, release-please) are done; continue with B5 in
    [KICKOFF section 3](sagas/distributed-dev-env/KICKOFF.md#3-track-b-the-first-prs-in-this-repo).
    Those PRs depend on no spike, so they run while the in-pod spikes run
    ([KICKOFF section 1](sagas/distributed-dev-env/KICKOFF.md#1-objective-of-phase-1)
@@ -122,7 +127,9 @@ which lists exactly what to change:
       public (Q-13).
 - [ ] Part 3, after `CI - Success` has reported once (B2): the Protect Main ruleset on
       the default branch, with `CI - Success` required. If GitHub will not enforce it
-      on this private repo, that is Q-12.
+      on this private repo, that is Q-12. **Then an agent flips Renovate's auto-merge
+      on:** set `automerge: true` in the first two `packageRules` entries of
+      `.github/renovate.json5` (Go modules and GitHub Actions) (B4 left it off).
 
 ## Working rules (the summary; CLAUDE.md is the source)
 

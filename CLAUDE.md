@@ -32,7 +32,9 @@ v2 proves itself and Tom approves the cutover. The saga:
 ```
 .agents/HANDOFF.md       the front door: state, next steps, rulings, inside vs outside
 .agents/sagas/<saga>/    saga README (vision, decision log), KICKOFF, adrs/, designs/, backlog/, research/
-.github/workflows/       ci.yml (lint, test, build, check-generated, image builds; aggregate `CI - Success`), publish.yml (operator image from main, signed), Claude review + @claude
+.github/workflows/       ci.yml (lint, test, build, check-generated, image builds; aggregate `CI - Success`), publish.yml (operator image from main, signed), release-please.yml, Claude review + @claude
+.github/renovate.json5   Renovate config (gomod, Actions SHA pins, Dockerfile digests, ARG and Makefile pins)
+release-please-config.json, .release-please-manifest.json   one repo version, `go` type, first release 2.0.0
 api/v1alpha1/            CRD types, group dev-env.haynesops.com (AgentSession); depends on apimachinery only
 cmd/dev-env-operator/    the operator; the broker will be its second mode (DESIGN-001 3.1, 6.12)
 cmd/dev-env-keeper/      the keeper, its own binary in the operator image (D-38)
@@ -58,6 +60,17 @@ and on `workflow_dispatch`; run it by hand after editing it. It pushes `dev-env-
 `latest`, never an existing tag) and signs the digest with keyless cosign, pinned like
 haynes-ops v1 (see the workflow header and haynes-ops #3092). It needs no Docker in the
 pod: never build images here.
+
+Releases: `release-please.yml` runs on every push to main and keeps one release PR
+open (one version for the repo; both images are tagged with it, and the first release
+is 2.0.0 because the agent image line is 2.x). Its token is a GitHub App's, from the
+repo variable `RELEASE_APP_ID` and secret `RELEASE_APP_PRIVATE_KEY`. Without them it
+falls back to `GITHUB_TOKEN`, and a PR opened that way starts no workflows. Interim
+procedure: close and reopen the release PR (`gh pr close <n> && gh pr reopen <n>`)
+as haynes-dev-bot so `CI - Success` runs, and repeat it after every update to that PR
+(release-please force-pushes it after each push to main, and that push starts no run). Merging a release PR is Tom's call, not
+an agent's. Renovate auto-merge is off until the ruleset requires `CI - Success`;
+`.github/renovate.json5` says how to turn it on.
 
 Every Makefile target caps Go at two CPUs and two packages at a time and runs under
 `nice -n 19`, so it is safe in the shared pod (Hard rules). Do not raise
