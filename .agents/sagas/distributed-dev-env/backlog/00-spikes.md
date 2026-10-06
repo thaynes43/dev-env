@@ -109,6 +109,20 @@ one at a time: `time git -c pack.threads=2 clone --filter=blob:none <url>
 /tmp/spike-s7/<repo>` then `git worktree add`, then delete it. Record the wall time.
 A repo over two minutes gets a shared mirror (D-15).
 
+- [x] **Done 2026-10-06.** All five repos clone in under 25 seconds, so no repo gets a
+  shared mirror. Each was cloned alone with `nice -n 19` and `pack.threads=2` from the
+  v1 pod, over the pod's normal GitHub egress, through a `GIT_ASKPASS` script that read
+  the bot token without printing it. The clone time includes the checkout. Results are
+  in DESIGN-001 section 13 and D-15.
+
+| Repo | Clone plus checkout | `git worktree add` | `.git` plus checkout | Commits |
+|---|---|---|---|---|
+| cigar-journal | 2.0 s | 0.1 s | 13M | 336 |
+| haynes-ops | 2.6 s | 0.1 s | 27M | 6619 |
+| hass-sandbox | 3.3 s | 0.1 s | 24M | 324 |
+| haynesnetwork | 10.9 s | 0.2 s | 134M | 734 |
+| haynes-quest | 22.9 s | 3.2 s | 1.9G | 142 |
+
 ## S-8: gasha01-rbd against ceph-block (phase 1)
 
 In one task pod at size M, once with its volume on `gasha01-rbd` and once on
