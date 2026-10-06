@@ -51,7 +51,9 @@ Running a part is Tom's yes to exactly the changes it lists. Do nothing else.
 
 Run this once the pod's agent says `ghcr.io/thaynes43/dev-env-operator` exists.
 
-1. Check it exists: `gh api /users/thaynes43/packages/container/dev-env-operator -q
+1. Give `gh` the package scope (a default login lacks it, and the call below then
+   fails with 403 instead of 404): `gh auth refresh -h github.com -s read:packages`.
+   Then check it exists: `gh api /users/thaynes43/packages/container/dev-env-operator -q
    .visibility`. If the call returns 404, stop and tell Tom that B3 has not
    published yet.
 2. If it says `private`: in the browser, open
