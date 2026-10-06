@@ -12,9 +12,11 @@
 
 ## Before you start
 
-- **ADR-001 must be Accepted.** If it is still Proposed, ask Tom once whether he
-  ratifies it ("Accept as written" first), then do step 0. Write no code against a
-  Proposed ADR.
+- **ADR-001 must be Accepted before any code.** If it is still Proposed, ask Tom once
+  whether he ratifies it ("Accept as written" first), then do step 0. Track B and
+  every code PR wait for Accepted. Track A's spikes do not: they write no code, and
+  [00](backlog/00-spikes.md) runs them in parallel with the ratification. So an
+  in-pod spike may start while Tom's answer is pending.
 - **If you are in the v1 pod,** wait until the v1 bounce is done (HANDOFF, "What
   happens first"). Also run `claude-login-check`, as the pod's CLAUDE.md asks.
 - **Read** plans 00 and 01 in full. From DESIGN-001, read sections 3.1 to 3.6, 4.4,
@@ -71,8 +73,8 @@ or per small group.
 | 5 | S-3: Codex on an access token | `codex exec` and the unpaired app-server both run on the access token alone. | D-12 stops at step 1: the codex hub keeps `auth.json`. |
 | 6 | S-7: clone time per repo | Wall time is recorded for each of the five repos, cloned one at a time with `pack.threads=2`. | Any repo over 2 minutes gets a shared mirror (D-15). |
 
-You never have to wait idle. In S-1 step 3, read `expiresAt` once, then come back
-after that time instead of polling. S-2 is already answered; re-run its one-line
+Do not poll for S-1 step 3's token refresh. Read `expiresAt` once, do other work, and
+come back after that time. S-2 is already answered; re-run its one-line
 probe after each Claude Code CLI bump.
 
 **Group 2: phase 1, after the haynes-ops PRs that deploy what they test**

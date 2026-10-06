@@ -33,12 +33,15 @@ the saga. To start building, follow
    he says yes, flip the ADR to Accepted with a dated ruling in the ratification PR
    ([KICKOFF step 0](sagas/distributed-dev-env/KICKOFF.md#step-0-the-ratification-pr)
    lists every edit). If he asks for changes, fold them in as dated rulings first.
-   Never build on a Proposed ADR.
+   Write no code against a Proposed ADR.
 3. **Spikes, in the documented order.** The Max-credential spikes come first. S-1 is
    Claude on an access-token-only credential. S-2 is already answered: the static
-   token cannot register Remote Control. The order and pass criteria are in
+   token cannot register Remote Control. Spikes write no code, so they need not wait
+   for step 2: backlog 00 runs them in parallel with the ratification. The order and
+   pass criteria are in
    [KICKOFF section 2](sagas/distributed-dev-env/KICKOFF.md#2-track-a-spikes).
-4. **Plan 01, the foundation in task mode.** It starts with the repo skeleton and CI
+4. **Plan 01, the foundation in task mode,** once ADR-001 is Accepted. It starts
+   with the repo skeleton and CI
    ([KICKOFF section 3](sagas/distributed-dev-env/KICKOFF.md#3-track-b-the-first-prs-in-this-repo)).
    Those PRs depend on no spike, so they may run while the in-pod spikes run
    ([KICKOFF section 1](sagas/distributed-dev-env/KICKOFF.md#1-objective-of-phase-1)
