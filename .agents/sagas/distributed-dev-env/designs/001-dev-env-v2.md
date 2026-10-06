@@ -929,6 +929,15 @@ S-7 measures clone time; haynes-quest (934M of history) is the one to watch. If 
 repo takes more than two minutes, add a read-only bare mirror on the shared volume
 for that repo, refreshed by the operator.
 
+*S-7 result, 2026-10-06:* every repo cloned in under 25 seconds, one at a time with
+`nice -n 19` and `pack.threads=2` from the v1 pod. haynes-quest was the slowest at
+22.9 s plus 3.2 s for `git worktree add`, and is the largest on disk (1.9G with its
+checkout, because the checkout fetches the large blobs it needs). No repo comes near
+the two-minute limit, so the build adds no mirror now. The `mirrors/` directory on
+`dev-env-shared` stays reserved for a repo that later crosses the limit. Run the
+clone from a session pod on gasha01 once (S-8) before treating this as final for
+that storage class: S-7 measured the v1 pod's disk.
+
 The "canonical clones are fetch-only" rule needs no enforcement any more: each
 clone belongs to one session.
 
@@ -2235,7 +2244,7 @@ Backlog plans: [`../backlog/`](../backlog/).
 | S-4 | Can a hub thread execute in another pod through `codex exec-server`? | two pods, phase 4 | D-12 step 3 |
 | S-5 | Does SendMessage reach a Remote Control session in another pod? | two pods, phase 3 | D-16 tier 2 |
 | S-6 | Does `claude --resume <id> --remote-control <name>` reattach the same phone entry? | v1 pod. Documented behaviour (R-02); one run confirms it | 6.7 |
-| S-7 | How long does `git clone --filter=blob:none` plus checkout take per repo? | v1 pod, one repo at a time | D-15 mirror or not |
+| S-7 | How long does `git clone --filter=blob:none` plus checkout take per repo? | v1 pod, one repo at a time. **Done 2026-10-06: no repo needs a mirror.** Clone plus checkout took 2.0 s (cigar-journal), 2.6 s (haynes-ops), 3.3 s (hass-sandbox), 10.9 s (haynesnetwork) and 22.9 s (haynes-quest); the limit is 120 s. Detail in [00-spikes](../backlog/00-spikes.md) | D-15: no mirror for any of the five |
 | S-8 | How much slower is a session's clone, install and one test file on `gasha01-rbd` than on `ceph-block`? | one phase-1 task pod at size M, one run per class | D-22's rule for size L |
 | S-9 | Does the pinned device plugin count VRAM units with time-slicing (requests above 1, config chosen by an NFD-set label), and does a household-priority pod preempt an agent GPU pod? Is DRA consumable capacity usable with NVIDIA's driver on these cards yet? | talosw04 (nothing household runs there), one pod at a time | D-30 mechanism |
 | S-10 | Do Claude Code, Codex and opencode accept a loopback MCP server that answers `initialize` and `tools/list` from a cache, and pick up a server added mid-session? | one session pod, phase 2 | D-29 |
