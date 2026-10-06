@@ -10,8 +10,9 @@ the saga. To start building, follow
 - **The dev-env v2 design is complete.** It covers the architecture (ADR-001), the
   details (DESIGN-001, D-01 to D-37), 16 spikes, backlog plans 00 to 10 and two
   research notes.
-- **Every question is ruled.** Tom answered Q-01 to Q-11 on 2026-10-06 (index below).
-  None is open.
+- **Every design question is ruled.** Tom answered Q-01 to Q-11 on 2026-10-06 (index
+  below). Three repo-setup questions, Q-12 to Q-14, are open: to ask Tom at kickoff,
+  after ratification.
 - **ADR-001 is Proposed.** Tom has not ratified it yet. Nothing is built: there is
   no Go code, no build CI and no image. The only workflows are the Claude reviewer
   and the `@claude` handler.
@@ -23,10 +24,10 @@ the saga. To start building, follow
 ## What happens first
 
 1. **The v1 bounce, done by a separate agent.** A morning agent lands the staged v1
-   PRs in haynes-ops, following haynes-ops
-   [`.agents/handoffs/2026-10-06-dev-env-v1-bounce.md`](https://github.com/thaynes43/haynes-ops/blob/main/.agents/handoffs/2026-10-06-dev-env-v1-bounce.md).
-   Another worker is writing that file, so if it is not on main yet, look for the open
-   PR that adds it. Those merges restart the v1 pod and every session in it. Do not
+   PRs in haynes-ops, following this repo's
+   [`.agents/handoffs/2026-10-06-dev-env-v1-bounce.md`](handoffs/2026-10-06-dev-env-v1-bounce.md).
+   If that file is not on main yet, the open PR from branch `agent/handoff-v1-bounce`
+   adds it. Those merges restart the v1 pod and every session in it. Do not
    do that work yourself. Inside the pod, start after the bounce. Outside, only the
    in-pod spikes wait for it.
 2. **Tom ratifies ADR-001.** Ask him once ("Accept ADR-001 as written" first). When
@@ -88,6 +89,23 @@ the saga. To start building, follow
 | Q-09 | No household GPU app lends VRAM. Agents get only what is left, and that grows as GPUs are added. |
 | Q-10 | Satellites are used only while awake and not in use by Tom, and are never woken. |
 | Q-11 | The link that survives restarts is the Claude Max login. The keeper owns it, and the console renews it each month. |
+
+**Open, to ask Tom at kickoff, after ratification** (one at a time, recommended option
+first; full entries in DESIGN-001 section 15):
+
+| Id | Question | Recommended |
+|---|---|---|
+| Q-12 | Branch protection on this private repo, if his plan does not enforce the ruleset | A: GitHub Pro (B: make the repo public; C: convention only) |
+| Q-13 | Visibility of `ghcr.io/thaynes43/dev-env-operator` | A: public, pulled anonymously like every other image (B: private with a pull secret) |
+| Q-14 | How release-please's PRs get CI | A: a GitHub App key secret (B: the bot closes and reopens each release PR; C: no release-please) |
+
+**Settings only Tom can click** (no decision needed; ask at kickoff, after
+ratification):
+
+- [ ] On the `ghcr.io/thaynes43/dev-env` package, "Manage Actions access": give
+      `thaynes43/dev-env` Write (before KICKOFF B5).
+- [ ] Repo settings: allow auto-merge (Renovate's `platformAutomerge` needs it).
+- [ ] The Mend Renovate app covers this repo.
 
 ## Working rules (the summary; CLAUDE.md is the source)
 

@@ -147,8 +147,8 @@ Makefile               generate, lint, test, build; test parallelism capped
 - **Signing:** match the cosign pin in haynes-ops `dev-env-build.yml`, so v2 images
   verify (or fail to) exactly as v1's do. Follow haynes-ops #3092 when it changes how
   Kyverno reads signatures.
-- **After the first publish,** Tom makes the package public: the cluster pulls GHCR
-  images anonymously.
+- **After the first publish,** the package needs Tom's ruling on Q-13 (recommended:
+  public, because the cluster pulls GHCR images anonymously).
 
 **B4: Renovate and release-please.**
 
@@ -162,10 +162,10 @@ Makefile               generate, lint, test, build; test parallelism capped
 - **release-please:** one version for the repo; both images are tagged with it
   (DESIGN-001 section 10).
 - **The release-please trap.** A PR opened with the workflow's `GITHUB_TOKEN` starts
-  no workflows, so `CI - Success` never reports on release PRs. Recommended fix:
-  run release-please with a GitHub App token, which needs an App key secret that
-  only Tom can add (ask him: one question). Until then, close and reopen each release
-  PR from the pod as haynes-dev-bot. App tokens do start workflows.
+  no workflows, so `CI - Success` never reports on release PRs. Tom decides the fix
+  (DESIGN-001 Q-14; recommended: a GitHub App key secret only he can add). Until he
+  rules, close and reopen each release PR from the pod as haynes-dev-bot. App tokens
+  do start workflows.
 
 **B5: agent image `2.0`.** Plan 01 lists the contents: a copy of haynes-ops
 `scripts/dev-env/Dockerfile` with `tini`, agentd, Codex and `kubectl-cnpg` baked
@@ -186,14 +186,18 @@ B5 has two preconditions:
    approvals and the status check `CI - Success` from GitHub Actions. Leave "require
    up to date" off, so parallel agent PRs do not re-run CI after every merge. Add it
    once `CI - Success` has reported at least once. If GitHub says the ruleset will
-   not be enforced on a private repo on his plan, ask him how to proceed.
+   not be enforced on a private repo on his plan, ask him DESIGN-001 Q-12.
 2. **Settings:** allow auto-merge (Renovate's `platformAutomerge` needs it), and
    optionally auto-delete head branches.
 3. **GHCR access:** on the `dev-env` package, "Manage Actions access", give
    `thaynes43/dev-env` Write. This comes before B5.
-4. **Visibility:** make `dev-env-operator` public after its first publish (B3).
+4. **Visibility:** the `dev-env-operator` package after its first publish (B3), as
+   Tom rules on Q-13 (recommended: public).
 5. **Renovate:** the Mend Renovate app must cover this repo.
-6. **The App key secret** for release-please, if he takes that recommendation (B4).
+6. **The App key secret** for release-please, if Q-14 goes to A (B4).
+
+Items 2, 3 and 5 are plain settings; HANDOFF lists them as a checklist. Q-12 to Q-14
+are asked at kickoff, after ratification, one at a time.
 
 An agent working outside under Tom's own gh login could make changes 1 and 2 with
 `gh api`, but only after Tom says yes to that exact change.
