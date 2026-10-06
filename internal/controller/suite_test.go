@@ -140,7 +140,7 @@ func startOperator(t *testing.T) *operator {
 		t.Fatal(err)
 	}
 	rec := &recordingClient{Client: mgr.GetClient()}
-	r := &Reconciler{Client: rec, Templates: templatesKey}
+	r := &Reconciler{Client: rec, Templates: templatesKey, APIReader: mgr.GetAPIReader()}
 	if err := r.SetupWithManager(mgr); err != nil {
 		t.Fatal(err)
 	}

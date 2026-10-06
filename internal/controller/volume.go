@@ -12,7 +12,7 @@ import (
 // buildHomeClaim returns the session volume (D-22): one RWO claim, mounted at
 // /home/dev, on the size class's storage class. Like the pod, it is never updated
 // after create: a later change to the templates' size or class reaches new
-// sessions only.
+// sessions only. Archive (plan 01 step 5) deletes it and lifts its finalizer.
 func buildHomeClaim(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.PersistentVolumeClaim, error) {
 	profile, _, err := t.Profile(s.Spec.Profile)
 	if err != nil {
@@ -28,6 +28,11 @@ func buildHomeClaim(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.P
 			Labels:          sessionLabels(s, profile),
 			Annotations:     sessionAnnotations(s),
 			OwnerReferences: []metav1.OwnerReference{ownerRef(s)},
+			// The volume outlives any delete until its session is rescued
+			// and archived (D-45): a direct delete, or the garbage
+			// collector's foreground cascade, leaves it terminating with
+			// its data.
+			Finalizers: []string{Finalizer},
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},

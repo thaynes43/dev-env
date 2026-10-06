@@ -273,7 +273,8 @@ PR per piece, in this order:
 2. Pods and volumes from the size class and the `dev-env-templates` ConfigMap,
    placed per DESIGN-001 section 7, with tests that enforce 5.1: no owner reference
    to the Deployment, and no delete of a Running session's pod outside drain and
-   suspend.
+   suspend. Done in #29 and #30 (2026-10-06): D-44 records the pod and the
+   templates, D-45 the reap and the one guarded delete path.
 3. The `/v1` API (`sessions`, `fleet`) with TokenReview auth.
 4. agentd: config rendering (a port of `dev-init.sh`), partial clone and worktree,
    tmux start, heartbeat, and `ctl status|rescue`.

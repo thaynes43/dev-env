@@ -131,6 +131,7 @@ func run(args []string) error {
 		Client:    mgr.GetClient(),
 		Templates: templatesKey,
 		APIURL:    o.apiURL,
+		APIReader: mgr.GetAPIReader(),
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
 		return err
