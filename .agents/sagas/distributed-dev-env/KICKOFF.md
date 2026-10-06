@@ -70,12 +70,12 @@ or per small group.
 | 2 | S-6: resume with Remote Control. **Passed 2026-10-06** (00 and DESIGN-001 6.7) | After `--resume`, the same Remote Control entry comes back with its history: the same bridge session id in `~/.claude/sessions/<pid>.json`. | Section 6.7 records that a drain makes a new phone entry. Plan 03's acceptance changes to match. |
 | 3 | S-15: archive on reap. **Passed 2026-10-06** (00 and DESIGN-001 6.7) | The archive call returns 200 or 409, and the entry leaves Tom's active list. Ask him to look: one question. Record step 4 either way. | Reaped entries stay offline, the console's archive button covers them, and `agent-run fleet` counts them (00, S-15). |
 | 4 | S-16: reading plan usage. **Done 2026-10-06: the read works** (00 and DESIGN-001 7.3) | Either outcome is a result: the usage read works with no side effects (record key names and freshness), or it does not. | The operator counts quota errors instead (7.3). |
-| 5 | S-3: Codex on an access token | `codex exec` and the unpaired app-server both run on the access token alone. | D-12 stops at step 1: the codex hub keeps `auth.json`. |
+| 5 | S-3: Codex on an access token. **Passed 2026-10-06** (00 and DESIGN-001 6.3), on an `auth.json` with no refresh token: `--with-access-token` refuses a ChatGPT token | `codex exec` and the unpaired app-server both run on the access token alone. | D-12 stops at step 1: the codex hub keeps `auth.json`. |
 | 6 | S-7: clone time per repo | Wall time is recorded for each of the five repos, cloned one at a time with `pack.threads=2`. | Any repo over 2 minutes gets a shared mirror (D-15). |
 
 Do not poll for S-1 step 3's token refresh. Read `expiresAt` once, do other work, and
 come back after that time. S-2 is already answered; re-run its one-line
-probe after each Claude Code CLI bump.
+probe after each Claude Code CLI bump (last run on 2.1.292, 2026-10-06: still refused).
 
 **Group 2: phase 1, after the haynes-ops PRs that deploy what they test**
 
