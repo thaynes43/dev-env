@@ -216,7 +216,20 @@ B5 has two preconditions:
 
 1. Tom has granted this repo write access to the existing GHCR package.
 2. The haynes-ops Renovate rule that holds the v1 HelmRelease below `2.0.0` is
-   merged. Without it, the first `2.x` tag invites a v1 "upgrade" PR.
+   merged. Without it, the first `2.x` tag invites a v1 "upgrade" PR. Done
+   2026-10-06: haynes-ops #3458 (`.renovate/holds.json5`).
+
+B5 also owes two haynes-ops edits to the Kyverno rule that checks signatures
+(`verify-thaynes43-images`, rule `verify-dev-env-v2`, added in haynes-ops #3462,
+Audit only):
+
+- **The tag ref.** The rule trusts `thaynes43/dev-env` workflows on
+  `refs/heads/main` only. If B5 signs the agent image from a tag-triggered run (a
+  release-please tag), the certificate ends in `@refs/tags/v2.x.y` and fails the
+  rule. Either sign from main, or widen the subject to `@refs/tags/v2.*` in the
+  same change that adds the workflow.
+- **The v1 glob.** v1's `dev-env*` image glob also matches `dev-env:2.*`. Narrow it
+  to `dev-env:0.*` before either rule moves to Enforce.
 
 **What only Tom can click** (the bot has no Administration permission):
 
