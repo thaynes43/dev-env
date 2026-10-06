@@ -30,6 +30,18 @@ spec:
     - jsonPath: .status.nodeName
       name: Node
       type: string
+    - jsonPath: .spec.model
+      name: Model
+      priority: 1
+      type: string
+    - jsonPath: .spec.lane
+      name: Lane
+      priority: 1
+      type: string
+    - jsonPath: .status.outcome.state
+      name: Outcome
+      priority: 1
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -38,7 +50,8 @@ spec:
       openAPIV3Schema:
         description: |-
           AgentSession is one agent session: its pod, its volume and its lifecycle. The
-          name is also the pod name, the hostname and the Remote Control name.
+          name is also the pod name, the hostname and the Remote Control name, so it is a
+          DNS label of at most 63 characters.
         properties:
           apiVersion:
             description: |-
@@ -60,7 +73,9 @@ spec:
           spec:
             description: |-
               AgentSessionSpec is what the caller asked for. The operator's /v1 API writes
-              it; agents never write AgentSession objects themselves (DESIGN-001 6.11).
+              it; agents never write AgentSession objects themselves (DESIGN-001 6.11). The
+              operator never writes spec either: what it resolves (the default profile and
+              tools, the timers per mode) it reads from the templates or records in status.
             properties:
               agent:
                 description: Agent is the agent CLI to run.
@@ -69,25 +84,59 @@ spec:
                 - codex
                 - opencode
                 type: string
+                x-kubernetes-validations:
+                - message: immutable after create; only operatingMode and lifecycle
+                    may change
+                  rule: self == oldSelf
               base:
                 default: origin/main
-                description: Base is the ref the session's worktree branches from.
+                description: |-
+                  Base is the ref the session's worktree branches from. It cannot start
+                  with '-', so git never reads it as an option.
+                maxLength: 255
+                minLength: 1
+                pattern: ^[^-\s]\S*$
                 type: string
+                x-kubernetes-validations:
+                - message: immutable after create; only operatingMode and lifecycle
+                    may change
+                  rule: self == oldSelf
               caller:
                 description: |-
                   Caller is the CallerPolicy of a summoned session, for example
-                  alert-responder (DESIGN-001 3.7). Empty for Tom's own sessions.
+                  alert-responder (DESIGN-001 3.7). Empty for Tom's own sessions. A
+                  summoned session sets caller and lane together.
+                maxLength: 253
+                pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
                 type: string
+                x-kubernetes-validations:
+                - message: immutable after create; only operatingMode and lifecycle
+                    may change
+                  rule: self == oldSelf
               effort:
                 description: |-
                   Effort is the reasoning effort. The levels differ per model, so the API
                   checks them, not this schema.
+                maxLength: 32
+                pattern: ^[a-z]+$
                 type: string
+                x-kubernetes-validations:
+                - message: immutable after create; only operatingMode and lifecycle
+                    may change
+                  rule: self == oldSelf
               idempotencyKey:
                 description: |-
                   IdempotencyKey lets a summoning caller repeat a create safely, for example
-                  with an alert signature: a repeated key returns the existing session.
+                  with an alert signature: a repeated key returns the existing session. It has
+                  the form of a label value, so the API can find that session with a label
+                  selector; a caller with a longer signature sends a hash of it.
+                maxLength: 63
+                pattern: ^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$
                 type: string
+                x-kubernetes-validations:
+                - message: immutable after create; only operatingMode and lifecycle
+                    may change
+                  rule: self == oldSelf
               lane:
                 description: Lane is a summoned session's lane.
                 enum:
@@ -96,6 +145,10 @@ spec:
                 - curation
                 - escalation
                 type: string
+                x-kubernetes-validations:
+                - message: immutable after create; only operatingMode and lifecycle
+                    may change
+                  rule: self == oldSelf
               lifecycle:
                 description: Lifecycle overrides the default timers of D-09.
                 properties:
@@ -104,15 +157,22 @@ spec:
                       ArchiveAfter archives a suspended session after this long, once its rescue
                       bundle is verified (D-09: 168h).
                     type: string
+                    x-kubernetes-validations:
+                    - message: must be a positive Go duration such as 40m or 72h
+                      rule: duration(self) > duration('0s')
                   idleSuspendAfter:
                     description: |-
                       IdleSuspendAfter suspends an idle session after this long (D-09: 72h for
                       interactive and remote sessions).
                     type: string
+                    x-kubernetes-validations:
+                    - message: must be a positive Go duration such as 40m or 72h
+                      rule: duration(self) > duration('0s')
                 type: object
               limits:
-                description: Limits caps a task session. Summoned callers get them
-                  from their policy.
+                description: |-
+                  Limits caps a task session; task mode only. Summoned callers get them from
+                  their policy.
                 properties:
                   maxTurns:
                     description: MaxTurns caps the agent's turns. 0 means no cap.
@@ -122,18 +182,31 @@ spec:
                   timeout:
                     description: Timeout is the wall-clock limit, for example 3h.
                     type: string
+                    x-kubernetes-validations:
+                    - message: must be a positive Go duration such as 40m or 72h
+                      rule: duration(self) > duration('0s')
                 type: object
+                x-kubernetes-validations:
+                - message: immutable after create; only operatingMode and lifecycle
+                    may change
+                  rule: self == oldSelf
               llm:
                 description: LLM is the LLM pool an opencode session leases (DESIGN-001
                   8.3).
                 properties:
                   pool:
                     description: Pool is the LLMPool name, for example llm-coder.
+                    maxLength: 63
                     minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                     type: string
                 required:
                 - pool
                 type: object
+                x-kubernetes-validations:
+                - message: immutable after create; only operatingMode and lifecycle
+                    may change
+                  rule: self == oldSelf
               mode:
                 description: Mode is how the agent runs.
                 enum:
@@ -141,12 +214,23 @@ spec:
                 - local
                 - remote
                 type: string
+                x-kubernetes-validations:
+                - message: immutable after create; only operatingMode and lifecycle
+                    may change
+                  rule: self == oldSelf
               model:
                 description: |-
-                  Model is a full model id, never an alias (for example claude-opus-5-5).
-                  For opencode it is the LLM pool's model id.
+                  Model is a full model id, never an alias (for example claude-opus-5-5), so
+                  a Claude model starts with claude-. For opencode it is the LLM pool's model
+                  id.
+                maxLength: 128
                 minLength: 1
+                pattern: ^\S+$
                 type: string
+                x-kubernetes-validations:
+                - message: immutable after create; only operatingMode and lifecycle
+                    may change
+                  rule: self == oldSelf
               operatingMode:
                 default: Running
                 description: OperatingMode is the desired state of the pod.
@@ -158,20 +242,48 @@ spec:
                 description: |-
                   Parent is the session or caller that created this one. The API sets it from
                   the caller's token, never from the request body (D-05).
+                maxLength: 253
                 type: string
+                x-kubernetes-validations:
+                - message: immutable after create; only operatingMode and lifecycle
+                    may change
+                  rule: self == oldSelf
               profile:
                 description: |-
                   Profile names the Secrets, egress tier and standing grants the pod gets
-                  (D-18): full, dev or ops. Profiles are template data.
+                  (D-18): full, dev or ops. Profiles are template data, so the schema checks
+                  the form, not the name. Empty means the templates' default; a summoned
+                  session always names one.
+                maxLength: 63
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                 type: string
+                x-kubernetes-validations:
+                - message: immutable after create; only operatingMode and lifecycle
+                    may change
+                  rule: self == oldSelf
               prompt:
-                description: Prompt is the task. Task mode only.
-                type: string
-              repo:
-                description: Repo is the repository the session works in, for example
-                  haynes-ops.
+                description: Prompt is the task. Task mode only, and required there.
+                maxLength: 262144
                 minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: immutable after create; only operatingMode and lifecycle
+                    may change
+                  rule: self == oldSelf
+              repo:
+                description: |-
+                  Repo is the repository the session works in, for example haynes-ops: a
+                  name, not a path (it becomes a directory in the pod).
+                maxLength: 100
+                minLength: 1
+                pattern: ^[A-Za-z0-9_.-]+$
+                type: string
+                x-kubernetes-validations:
+                - message: repo is a repository name, not a path
+                  rule: self != '.' && self != '..'
+                - message: immutable after create; only operatingMode and lifecycle
+                    may change
+                  rule: self == oldSelf
               size:
                 default: M
                 description: Size picks the requests and limits preset.
@@ -180,20 +292,63 @@ spec:
                 - M
                 - L
                 type: string
+                x-kubernetes-validations:
+                - message: immutable after create; only operatingMode and lifecycle
+                    may change
+                  rule: self == oldSelf
               tools:
                 description: |-
-                  Tools are the tool pools registered at boot (DESIGN-001 8.1). Empty means
-                  the profile's default.
+                  Tools are the tool pools registered at boot (DESIGN-001 8.1), by ToolPool
+                  name. Empty means the profile's default.
                 items:
+                  maxLength: 63
+                  pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                   type: string
+                maxItems: 32
                 type: array
                 x-kubernetes-list-type: set
+                x-kubernetes-validations:
+                - message: immutable after create; only operatingMode and lifecycle
+                    may change
+                  rule: self == oldSelf
             required:
             - agent
             - mode
             - model
             - repo
             type: object
+            x-kubernetes-validations:
+            - message: prompt is required in task mode and not allowed in local or
+                remote mode
+              rule: 'self.mode == ''task'' ? has(self.prompt) : !has(self.prompt)'
+            - message: limits apply to task mode only
+              rule: '!has(self.limits) || self.mode == ''task'''
+            - message: llm is required for agent opencode and not allowed for claude
+                or codex
+              rule: 'self.agent == ''opencode'' ? has(self.llm) : !has(self.llm)'
+            - message: a Claude model is a full id such as claude-opus-5-5, never
+                an alias
+              rule: self.agent != 'claude' || self.model.startsWith('claude-')
+            - message: 'caller and lane go together: a summoned session sets both,
+                Tom''s own sessions neither'
+              rule: has(self.caller) == has(self.lane)
+            - message: 'idempotencyKey is for summoned sessions only: set caller and
+                lane'
+              rule: '!has(self.idempotencyKey) || has(self.caller)'
+            - message: a summoned session runs in task or remote mode, never local
+              rule: '!has(self.caller) || self.mode != ''local'''
+            - message: a summoned session names its profile, and it is never full
+                (D-36)
+              rule: '!has(self.caller) || (has(self.profile) && self.profile != ''full'')'
+            - message: 'immutable after create: no spec field may be added or removed,
+                except operatingMode and lifecycle'
+              rule: has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort)
+                && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size)
+                && has(self.profile) == has(oldSelf.profile) && has(self.tools) ==
+                has(oldSelf.tools) && has(self.llm) == has(oldSelf.llm) && has(self.parent)
+                == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller)
+                && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey)
+                == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits)
           status:
             description: |-
               AgentSessionStatus is what the operator and agentd observed. Reconcile is
@@ -358,6 +513,7 @@ spec:
                     description: |-
                       CostUSD is the CLI's total_cost_usd as a decimal string, because CRDs
                       avoid floating-point fields.
+                    pattern: ^[0-9]+(\.[0-9]+)?$
                     type: string
                   inputTokens:
                     description: InputTokens is the number of input tokens.
@@ -374,6 +530,13 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: 'metadata.name must be at most 63 characters: it is the pod''s
+            hostname'
+          rule: self.metadata.name.size() <= 63
+        - message: 'metadata.name must be a DNS label (lowercase letters, digits and
+            ''-'', no dots): it is the pod''s hostname'
+          rule: self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
     served: true
     storage: true
     subresources:

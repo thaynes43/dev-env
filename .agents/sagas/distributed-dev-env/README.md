@@ -3,7 +3,8 @@
 **Status:** design, Accepted 2026-10-06. Tom ratified ADR-001 as written (drafted
 2026-10-05, his rulings folded in 2026-10-06): see the
 [ratification summary](adrs/001-distributed-dev-env.md#ratification-summary) at the
-top of ADR-001. The Go skeleton (KICKOFF B1) is built; nothing runs yet. The architecture is in
+top of ADR-001. The Go skeleton (KICKOFF B1), CI and the `AgentSession` CRD (plan 01
+step 1) are built; nothing runs yet. The architecture is in
 [ADR-001](adrs/001-distributed-dev-env.md) and the detail in
 [DESIGN-001](designs/001-dev-env-v2.md). Tom ruled on every question, Q-01 to Q-11,
 on 2026-10-06 and widened the scope: tool pods, a GPU budget, satellite inference
@@ -154,6 +155,7 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 20 | Q-13: visibility of `ghcr.io/thaynes43/dev-env-operator` | **DECIDED** 2026-10-06 (Tom) | A, public: "Public package write a prompt for an agent on my laptop to flip it". A laptop agent flips it after B3's first publish ([handoff](../../handoffs/2026-10-06-tom-laptop-settings.md)). |
 | 21 | Q-14: how release-please gets release PRs checked by CI | **DECIDED** 2026-10-06 (Tom) | A, a GitHub App key secret: "GitHub App key secret (Recommended)". Names for B4: variable `RELEASE_APP_ID`, secret `RELEASE_APP_PRIVATE_KEY`. The App also needs Issues read and write (release-please creates `autorelease:` labels). |
 | 22 | D-38: the keeper as its own binary or a mode of the operator | **DECIDED** 2026-10-06 (agent, delegated by KICKOFF B1) | Its own binary, `dev-env-keeper`, shipped in the operator image; the broker stays a mode of the operator ([DESIGN-001 3.1](designs/001-dev-env-v2.md#31-components)). |
+| 23 | D-39: what the AgentSession schema enforces, and which spec fields may change | **DECIDED** 2026-10-06 (agent, plan 01 step 1) | The per-session rules of 3.3 and 3.7 as CEL validations; spec immutable after create except `operatingMode` and `lifecycle`; per-caller rules (priority, fallback model, no `full` in a policy) stay in CallerPolicy's schema ([DESIGN-001 3.3](designs/001-dev-env-v2.md#33-the-agentsession-resource)). |
 
 The full options, consequences and rulings for Q-01 to Q-14 are in
 [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions).

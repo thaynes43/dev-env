@@ -102,7 +102,9 @@ Each step is one ready PR in the order below. Once B2 exists, merge each PR when
   (`pkg/scheme.Builder`) is deprecated in v0.25 because API packages should depend on
   k8s.io/apimachinery only, so `api/v1alpha1` uses apimachinery's `SchemeBuilder`, and
   nothing else in B1 imports controller-runtime. It arrives with the first code that
-  does: plan 01 step 1's envtest suite and the operator's manager.
+  does: plan 01 step 1's envtest suite and the operator's manager. *Plan 01 step 1
+  added it* (v0.25.2), for `pkg/envtest` and the test client in `internal/testenv`;
+  `api/v1alpha1` itself still imports apimachinery only.
 - **CLAUDE.md:** record the layout in its "Layout" section in the same PR.
 - **A first test:** ship one real command (`agent-run version`) with its test, so CI
   has something to run.
@@ -266,7 +268,8 @@ An agent working outside under Tom's own gh login could make changes 1 and 2 wit
 After B1 to B4, work through plan 01's "In this repo" and "In haynes-ops" lists. One
 PR per piece, in this order:
 
-1. `AgentSession` types and the generated CRD, with an envtest suite.
+1. `AgentSession` types and the generated CRD, with an envtest suite. Done in #24
+   (2026-10-06): D-39 records what the schema enforces.
 2. Pods and volumes from the size class and the `dev-env-templates` ConfigMap,
    placed per DESIGN-001 section 7, with tests that enforce 5.1: no owner reference
    to the Deployment, and no delete of a Running session's pod outside drain and

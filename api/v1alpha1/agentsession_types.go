@@ -8,12 +8,24 @@ import (
 // Sandbox (operatingMode, a timer-style lifecycle) so a later move to that
 // project stays mechanical (DESIGN-001 9).
 //
-// TODO(plan 01 step 1, KICKOFF section 4): with the envtest suite, add the
-// cross-field rules the design states in prose as CEL validations: prompt only in
-// task mode, llm only for opencode, caller, lane and idempotencyKey only on
-// summoned sessions, urgent priority for the escalation and remediation lanes
-// (7.3), metadata.name at most 63 characters (it is the pod's hostname), and
-// which spec fields are immutable after create.
+// The schema enforces every rule about a single session that DESIGN-001 states
+// (D-39): the API server refuses a bad object, whoever writes it. The cross-field
+// rules are CEL (x-kubernetes-validations) on AgentSession and AgentSessionSpec:
+//
+//   - metadata.name is a DNS label of at most 63 characters (it is the pod's
+//     hostname and the Remote Control name);
+//   - prompt is set in task mode and only there; limits are task mode only;
+//   - llm is set for opencode and only there;
+//   - a Claude model is a full id (claude-...), never an alias;
+//   - caller and lane go together and mark a summoned session; idempotencyKey
+//     needs them; a summoned session runs in task or remote mode and names a
+//     profile other than full (3.7, D-36);
+//   - spec is immutable after create except operatingMode and lifecycle.
+//
+// Rules about a caller rather than a session (urgent priority for the
+// remediation and escalation lanes, a fallback model that differs from the
+// primary, no profile full in a policy) belong to CallerPolicy's schema (plan 10).
+// The envtest suite in this package proves each rule against a real API server.
 
 // AgentKind is the agent CLI a session runs.
 // +kubebuilder:validation:Enum=claude;codex;opencode
@@ -102,84 +114,144 @@ const (
 )
 
 // AgentSessionSpec is what the caller asked for. The operator's /v1 API writes
-// it; agents never write AgentSession objects themselves (DESIGN-001 6.11).
+// it; agents never write AgentSession objects themselves (DESIGN-001 6.11). The
+// operator never writes spec either: what it resolves (the default profile and
+// tools, the timers per mode) it reads from the templates or records in status.
+//
+// +kubebuilder:validation:XValidation:rule="self.mode == 'task' ? has(self.prompt) : !has(self.prompt)",message="prompt is required in task mode and not allowed in local or remote mode"
+// +kubebuilder:validation:XValidation:rule="!has(self.limits) || self.mode == 'task'",message="limits apply to task mode only"
+// +kubebuilder:validation:XValidation:rule="self.agent == 'opencode' ? has(self.llm) : !has(self.llm)",message="llm is required for agent opencode and not allowed for claude or codex"
+// +kubebuilder:validation:XValidation:rule="self.agent != 'claude' || self.model.startsWith('claude-')",message="a Claude model is a full id such as claude-opus-5-5, never an alias"
+// +kubebuilder:validation:XValidation:rule="has(self.caller) == has(self.lane)",message="caller and lane go together: a summoned session sets both, Tom's own sessions neither"
+// +kubebuilder:validation:XValidation:rule="!has(self.idempotencyKey) || has(self.caller)",message="idempotencyKey is for summoned sessions only: set caller and lane"
+// +kubebuilder:validation:XValidation:rule="!has(self.caller) || self.mode != 'local'",message="a summoned session runs in task or remote mode, never local"
+// +kubebuilder:validation:XValidation:rule="!has(self.caller) || (has(self.profile) && self.profile != 'full')",message="a summoned session names its profile, and it is never full (D-36)"
+// +kubebuilder:validation:XValidation:rule="has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort) && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size) && has(self.profile) == has(oldSelf.profile) && has(self.tools) == has(oldSelf.tools) && has(self.llm) == has(oldSelf.llm) && has(self.parent) == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller) && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey) == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits)",message="immutable after create: no spec field may be added or removed, except operatingMode and lifecycle"
 type AgentSessionSpec struct {
-	// Repo is the repository the session works in, for example haynes-ops.
+	// Repo is the repository the session works in, for example haynes-ops: a
+	// name, not a path (it becomes a directory in the pod).
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=100
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_.-]+$`
+	// +kubebuilder:validation:XValidation:rule="self != '.' && self != '..'",message="repo is a repository name, not a path"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +required
 	Repo string `json:"repo"`
 
-	// Base is the ref the session's worktree branches from.
+	// Base is the ref the session's worktree branches from. It cannot start
+	// with '-', so git never reads it as an option.
 	// +kubebuilder:default="origin/main"
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=255
+	// +kubebuilder:validation:Pattern=`^[^-\s]\S*$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +optional
 	Base string `json:"base,omitempty"`
 
 	// Agent is the agent CLI to run.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +required
 	Agent AgentKind `json:"agent"`
 
 	// Mode is how the agent runs.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +required
 	Mode SessionMode `json:"mode"`
 
-	// Model is a full model id, never an alias (for example claude-opus-5-5).
-	// For opencode it is the LLM pool's model id.
+	// Model is a full model id, never an alias (for example claude-opus-5-5), so
+	// a Claude model starts with claude-. For opencode it is the LLM pool's model
+	// id.
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:Pattern=`^\S+$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +required
 	Model string `json:"model"`
 
 	// Effort is the reasoning effort. The levels differ per model, so the API
 	// checks them, not this schema.
+	// +kubebuilder:validation:MaxLength=32
+	// +kubebuilder:validation:Pattern=`^[a-z]+$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +optional
 	Effort string `json:"effort,omitempty"`
 
-	// Prompt is the task. Task mode only.
+	// Prompt is the task. Task mode only, and required there.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=262144
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +optional
 	Prompt string `json:"prompt,omitempty"`
 
 	// Size picks the requests and limits preset.
 	// +kubebuilder:default=M
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +optional
 	Size SizeClass `json:"size,omitempty"`
 
-	// TODO(plan 01 step 2, KICKOFF section 4): set the default profile when the
-	// templates land.
+	// TODO(plan 01 step 2, KICKOFF section 4): the operator resolves an empty
+	// profile to the templates' default when it builds the pod. It never writes
+	// the default back into spec.
 
 	// Profile names the Secrets, egress tier and standing grants the pod gets
-	// (D-18): full, dev or ops. Profiles are template data.
+	// (D-18): full, dev or ops. Profiles are template data, so the schema checks
+	// the form, not the name. Empty means the templates' default; a summoned
+	// session always names one.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +optional
 	Profile string `json:"profile,omitempty"`
 
-	// Tools are the tool pools registered at boot (DESIGN-001 8.1). Empty means
-	// the profile's default.
+	// Tools are the tool pools registered at boot (DESIGN-001 8.1), by ToolPool
+	// name. Empty means the profile's default.
 	// +listType=set
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:MaxLength=63
+	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +optional
 	Tools []string `json:"tools,omitempty"`
 
 	// LLM is the LLM pool an opencode session leases (DESIGN-001 8.3).
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +optional
 	LLM *LLMSpec `json:"llm,omitempty"`
 
 	// Parent is the session or caller that created this one. The API sets it from
 	// the caller's token, never from the request body (D-05).
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +optional
 	Parent string `json:"parent,omitempty"`
 
 	// Caller is the CallerPolicy of a summoned session, for example
-	// alert-responder (DESIGN-001 3.7). Empty for Tom's own sessions.
+	// alert-responder (DESIGN-001 3.7). Empty for Tom's own sessions. A
+	// summoned session sets caller and lane together.
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +optional
 	Caller string `json:"caller,omitempty"`
 
 	// Lane is a summoned session's lane.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +optional
 	Lane Lane `json:"lane,omitempty"`
 
 	// IdempotencyKey lets a summoning caller repeat a create safely, for example
-	// with an alert signature: a repeated key returns the existing session.
+	// with an alert signature: a repeated key returns the existing session. It has
+	// the form of a label value, so the API can find that session with a label
+	// selector; a caller with a longer signature sends a hash of it.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +optional
 	IdempotencyKey string `json:"idempotencyKey,omitempty"`
 
-	// Limits caps a task session. Summoned callers get them from their policy.
+	// Limits caps a task session; task mode only. Summoned callers get them from
+	// their policy.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +optional
 	Limits *SessionLimits `json:"limits,omitempty"`
 
@@ -197,6 +269,8 @@ type AgentSessionSpec struct {
 type LLMSpec struct {
 	// Pool is the LLMPool name, for example llm-coder.
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	// +required
 	Pool string `json:"pool"`
 }
@@ -204,6 +278,7 @@ type LLMSpec struct {
 // SessionLimits caps a task session.
 type SessionLimits struct {
 	// Timeout is the wall-clock limit, for example 3h.
+	// +kubebuilder:validation:XValidation:rule="duration(self) > duration('0s')",message="must be a positive Go duration such as 40m or 72h"
 	// +optional
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
 
@@ -221,11 +296,13 @@ type SessionLimits struct {
 type Lifecycle struct {
 	// IdleSuspendAfter suspends an idle session after this long (D-09: 72h for
 	// interactive and remote sessions).
+	// +kubebuilder:validation:XValidation:rule="duration(self) > duration('0s')",message="must be a positive Go duration such as 40m or 72h"
 	// +optional
 	IdleSuspendAfter *metav1.Duration `json:"idleSuspendAfter,omitempty"`
 
 	// ArchiveAfter archives a suspended session after this long, once its rescue
 	// bundle is verified (D-09: 168h).
+	// +kubebuilder:validation:XValidation:rule="duration(self) > duration('0s')",message="must be a positive Go duration such as 40m or 72h"
 	// +optional
 	ArchiveAfter *metav1.Duration `json:"archiveAfter,omitempty"`
 }
@@ -344,6 +421,7 @@ type UsageStatus struct {
 
 	// CostUSD is the CLI's total_cost_usd as a decimal string, because CRDs
 	// avoid floating-point fields.
+	// +kubebuilder:validation:Pattern=`^[0-9]+(\.[0-9]+)?$`
 	// +optional
 	CostUSD string `json:"costUSD,omitempty"`
 
@@ -370,7 +448,8 @@ type RescueStatus struct {
 }
 
 // AgentSession is one agent session: its pod, its volume and its lifecycle. The
-// name is also the pod name, the hostname and the Remote Control name.
+// name is also the pod name, the hostname and the Remote Control name, so it is a
+// DNS label of at most 63 characters.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
@@ -380,7 +459,12 @@ type RescueStatus struct {
 // +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=`.spec.mode`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Node",type=string,JSONPath=`.status.nodeName`
+// +kubebuilder:printcolumn:name="Model",type=string,JSONPath=`.spec.model`,priority=1
+// +kubebuilder:printcolumn:name="Lane",type=string,JSONPath=`.spec.lane`,priority=1
+// +kubebuilder:printcolumn:name="Outcome",type=string,JSONPath=`.status.outcome.state`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 63",message="metadata.name must be at most 63 characters: it is the pod's hostname"
+// +kubebuilder:validation:XValidation:rule="self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')",message="metadata.name must be a DNS label (lowercase letters, digits and '-', no dots): it is the pod's hostname"
 type AgentSession struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

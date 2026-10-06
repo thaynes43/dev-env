@@ -43,8 +43,19 @@ LDFLAGS := -X $(VERSION_PKG).version=$(VERSION) -X $(VERSION_PKG).commit=$(COMMI
 CONTROLLER_TOOLS_VERSION ?= v0.22.0
 # renovate: datasource=go depName=github.com/golangci/golangci-lint/v2
 GOLANGCI_LINT_VERSION ?= v2.14.0
+# setup-envtest downloads kube-apiserver, etcd and kubectl for the envtest suites
+# (from the controller-tools GitHub releases) into bin/tools/envtest/.
+# renovate: datasource=go depName=sigs.k8s.io/controller-runtime/tools/setup-envtest
+SETUP_ENVTEST_VERSION ?= v0.25.2
+# The API server the envtest suites run against. It follows the main cluster's
+# Kubernetes minor (v1.35.5 on 2026-10-06), not the client libraries in go.mod,
+# so the suites prove the CRDs on the server haynes-ops applies them to. Bump it
+# by hand when the cluster moves to a new minor; Renovate does not track it.
+ENVTEST_K8S_VERSION ?= 1.35.0
 CONTROLLER_GEN := $(TOOLS_DIR)/controller-gen-$(CONTROLLER_TOOLS_VERSION)
 GOLANGCI_LINT := $(TOOLS_DIR)/golangci-lint-$(GOLANGCI_LINT_VERSION)
+SETUP_ENVTEST := $(TOOLS_DIR)/setup-envtest-$(SETUP_ENVTEST_VERSION)
+ENVTEST_DIR := $(TOOLS_DIR)/envtest
 
 .PHONY: help
 help: ## List the targets.
@@ -68,9 +79,23 @@ check-generated: generate ## Fail if the generated files differ from what is com
 lint: $(GOLANGCI_LINT) ## Run golangci-lint.
 	$(NICE) $(GOLANGCI_LINT) run --concurrency $(GO_PARALLELISM) ./...
 
+# The envtest suites (internal/testenv) start a real kube-apiserver and etcd per
+# package. Both inherit GOMAXPROCS and the nice level from go test, and -p caps
+# how many packages, and so how many API servers, run at once.
 .PHONY: test
-test: ## Run the unit tests, GO_PARALLELISM packages at a time.
-	$(NICE) $(GO) test -p $(GO_PARALLELISM) ./...
+test: $(SETUP_ENVTEST) ## Run the unit tests and the envtest suites, GO_PARALLELISM packages at a time.
+	assets="$$($(ENVTEST_USE))"; $(ENVTEST_WRITABLE); \
+		KUBEBUILDER_ASSETS="$$assets" $(NICE) $(GO) test -p $(GO_PARALLELISM) ./...
+
+.PHONY: envtest
+envtest: $(SETUP_ENVTEST) ## Download the envtest binaries into bin/tools/envtest/, for a plain `go test`.
+	@assets="$$($(ENVTEST_USE))"; $(ENVTEST_WRITABLE); echo "KUBEBUILDER_ASSETS=$$assets"
+
+# setup-envtest prints the binaries' directory, downloading them on first use.
+ENVTEST_USE = $(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(ENVTEST_DIR) -p path
+# setup-envtest leaves its version directory read-only, which makes
+# `git worktree remove --force` (and v1's worktree sweeper) fail. Undo that.
+ENVTEST_WRITABLE = chmod -R u+w $(ENVTEST_DIR)
 
 .PHONY: build
 build: $(addprefix $(BIN_DIR)/,$(BINARIES)) ## Build every binary into bin/ and check that agent-run is static.
@@ -90,7 +115,7 @@ $(BIN_DIR)/%: FORCE
 FORCE:
 
 .PHONY: tools
-tools: $(CONTROLLER_GEN) $(GOLANGCI_LINT) ## Install the pinned tools into bin/tools/.
+tools: $(CONTROLLER_GEN) $(GOLANGCI_LINT) $(SETUP_ENVTEST) ## Install the pinned tools into bin/tools/.
 
 $(CONTROLLER_GEN):
 	@mkdir -p $(TOOLS_DIR)
@@ -101,6 +126,11 @@ $(GOLANGCI_LINT):
 	@mkdir -p $(TOOLS_DIR)
 	GOBIN=$(TOOLS_DIR) $(NICE) $(GO) install -p $(GO_PARALLELISM) github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	mv $(TOOLS_DIR)/golangci-lint $@
+
+$(SETUP_ENVTEST):
+	@mkdir -p $(TOOLS_DIR)
+	GOBIN=$(TOOLS_DIR) $(NICE) $(GO) install -p $(GO_PARALLELISM) sigs.k8s.io/controller-runtime/tools/setup-envtest@$(SETUP_ENVTEST_VERSION)
+	mv $(TOOLS_DIR)/setup-envtest $@
 
 .PHONY: clean
 clean: ## Remove the built binaries. The tools in bin/tools/ stay.

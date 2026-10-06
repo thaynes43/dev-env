@@ -235,7 +235,7 @@ status:
   agent: { status: busy, lastActivity: "2026-10-05T23:41:07Z" }
   remoteControl: { name: haynes-ops-1005-202504, sessionId: "session_…", url: "https://claude.ai/code/…", state: registered }  # 6.7
   outcome: { state: running, note: "", at: "" }   # summoned: pending | running | done | failed | escalated
-  usage: { costUSD: 0, inputTokens: 0, outputTokens: 0 }  # 3.7, V-16
+  usage: { costUSD: "0", inputTokens: 0, outputTokens: 0 }  # 3.7, V-16; cost is a decimal string
   rescue: { lastBundle: "rescue/haynes-ops-1005-202504/20261006-0130.bundle" }
   conditions: []
 ```
@@ -246,6 +246,48 @@ ToolPools, GrantPolicies and LLM pools are GitOps data in the same way. The temp
 **revision** is a hash of that content. Renovate bumps the image digest there, the
 same way it bumps any HelmRelease. Rationale: every change that reaches agent pods
 shows up as a haynes-ops PR diff, like v1's ConfigMaps do today.
+
+The example above lists every field. A real object sets only the fields its mode,
+agent and caller allow, as D-39 says.
+
+**D-39 (2026-10-06, plan 01 step 1). The AgentSession schema enforces the rules
+about one session, and spec is fixed at create.** The API server refuses a bad
+session whoever writes it, so the `/v1` API, a future client and a human with
+`kubectl` meet the same rules, and the envtest suite in `api/v1alpha1` proves each
+one against a real API server.
+
+- **Cross-field rules, as CEL** (`x-kubernetes-validations`): `prompt` is required
+  in task mode and allowed only there; `limits` are task mode only; `llm` is
+  required for opencode and allowed only there; a Claude `model` starts with
+  `claude-`, because ids are full and never aliases; `caller` and `lane` go together
+  and mark a summoned session, `idempotencyKey` needs them, and a summoned session
+  runs in task or remote mode and names a profile other than `full` (3.7, D-36);
+  `metadata.name` is a DNS label of at most 63 characters, because it is the pod's
+  hostname and the Remote Control name.
+- **Spec is immutable after create, except `operatingMode` (suspend and resume) and
+  `lifecycle` (a session's timers may be lengthened or shortened).** Everything else
+  is what the caller asked for and what its policy granted. Changing it under a
+  running pod would make spec disagree with the pod, and a summoned session could
+  raise its own limits. A different ask is a new session. The operator never writes
+  spec either: what it resolves (the default profile and tools, the timers per mode)
+  it reads from the templates, and what it decides at run time (for example the
+  fallback model a summoned session moved to, V-04) goes into status. A changed
+  value is refused at its field; an added or removed field by one rule on spec.
+- **Formats:** `repo` is a name, not a path (no `/`, not `.` or `..`); `base` may
+  not start with `-`, so git never reads it as an option; `profile`, `tools`,
+  `llm.pool` and `caller` are object names; `idempotencyKey` is a label value (at
+  most 63 characters), so the API can find a caller's earlier session with a label
+  selector, and a caller with a longer signature sends a hash of it; `prompt` is at
+  most 256 KiB; durations are positive Go durations (`40m`, `72h`).
+- **Rules about a caller stay in CallerPolicy's schema** (plan 10): `urgent`
+  priority for the remediation and escalation lanes (7.3), a fallback model that
+  differs from the primary (V-04), and no profile `full` in a policy (D-36).
+  AgentSession has no priority field; priority is set per session kind in the
+  caller's policy.
+
+Rationale: v1alpha1 starts strict because loosening a rule later is a compatible
+change and tightening one is not. Every rule here is one the design already states
+in prose; the schema only makes it impossible to break.
 
 ### 3.4 The API
 
@@ -2477,3 +2519,4 @@ step it names.
 | D-36 | Summoning is a first-class API use, authorized per caller by a `CallerPolicy`: kinds, names, idempotency, plan-only credentials, verified links, outcomes, lanes, storm limits, watchdogs, retention, cost records (V-01 to V-17) | 3.7 |
 | D-37 | One console for Tom, served by the broker behind Authentik: sessions with links and archive, approvals, the login renewal page, Codex status | 3.8 |
 | D-38 | The keeper is its own binary, `dev-env-keeper`, in the operator image; the broker stays a mode of the operator binary | 3.1 |
+| D-39 | The AgentSession schema enforces the per-session rules as CEL; spec is immutable after create except `operatingMode` and `lifecycle`; per-caller rules stay in CallerPolicy's schema | 3.3 |
