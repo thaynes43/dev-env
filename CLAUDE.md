@@ -53,7 +53,8 @@ Go module `github.com/thaynes43/dev-env`, with a `go` and a `toolchain` line in
 CI (`ci.yml`) runs the Makefile targets, so what passes in the pod passes there. The
 one required check is the aggregate job `CI - Success`; the workflow has no `paths:`
 filter, so a docs-only PR still gets it. Image builds run on PRs and never push.
-`publish.yml` runs on push to main only: it pushes `dev-env-operator:sha-<short>` (never
+`publish.yml` runs on push to main when an image build input changed (a paths filter),
+and on `workflow_dispatch`; run it by hand after editing it. It pushes `dev-env-operator:sha-<short>` (never
 `latest`, never an existing tag) and signs the digest with keyless cosign, pinned like
 haynes-ops v1 (see the workflow header and haynes-ops #3092). It needs no Docker in the
 pod: never build images here.
