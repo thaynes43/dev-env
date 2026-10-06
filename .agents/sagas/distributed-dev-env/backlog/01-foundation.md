@@ -1,6 +1,7 @@
 # 01: foundation, task mode
 
-**Status:** in progress: KICKOFF B1, the Go skeleton, landed in #14 (2026-10-06)
+**Status:** in progress: KICKOFF B1 to B4 landed (#14, #15, #17, #18); step 1, the
+`AgentSession` CRD, landed in #PRNUM (2026-10-06)
 **Depends on:** Q-01 (build), Q-02 (Go), Q-04 (requests and limits, no cap) and Q-05
 (storage), all decided 2026-10-06; spikes S-7 (clone path), S-8 (gasha01 speed) and
 S-12 (the guard)
@@ -11,6 +12,25 @@ S-12 (the guard)
 `agent-run -p "<task>"` from the v1 pod creates a session pod on a worker node. The
 task runs on the static Claude token, opens its PR, and is suspended, rescued and
 archived by the operator. An operator restart mid-task does not disturb it.
+
+## Progress
+
+The order of [KICKOFF section 4](../KICKOFF.md#4-then-plan-01-itself), one PR per
+step. Tick a step in the PR that lands it.
+
+- [x] 1. `AgentSession` types and the generated CRD, with an envtest suite (#PRNUM).
+  The schema enforces D-39; `make test` runs the suite against kube-apiserver 1.35,
+  the main cluster's minor.
+- [ ] 2. Pods and volumes from the size class and `dev-env-templates`, placed per
+  DESIGN-001 section 7, with the 5.1 tests.
+- [ ] 3. The `/v1` API (`sessions`, `fleet`) with TokenReview auth.
+- [ ] 4. agentd: config rendering, partial clone and worktree, tmux start,
+  heartbeat, `ctl status|rescue`.
+- [ ] 5. Rescue to a bundle on the shared volume (D-10), then suspend and archive.
+- [ ] 6. The minimal keeper: mint the gh token every 40 minutes.
+- [ ] 7. `agent-run` v2: `-p`, `list`, `reap` and `fleet`.
+- [ ] 8. The haynes-ops PRs (KICKOFF section 4, item 8).
+- [ ] 9. The first end-to-end run, then the acceptance checks below.
 
 ## In this repo
 

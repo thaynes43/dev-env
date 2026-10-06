@@ -89,6 +89,16 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      # setup-envtest and the kube-apiserver, etcd and kubectl it downloads for
+      # the envtest suites (internal/testenv). The Makefile pins both versions.
+      - name: Cache setup-envtest and the envtest binaries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            bin/tools/setup-envtest-*
+            bin/tools/envtest
+          key: envtest-${{ runner.os }}-${{ hashFiles('Makefile') }}
+      # Unit tests and the envtest suites, two packages at a time (Makefile).
       - name: go test -p 2
         run: make test
 
