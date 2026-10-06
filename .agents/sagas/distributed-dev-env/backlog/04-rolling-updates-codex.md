@@ -27,7 +27,9 @@ gets its v2 home: one hub for the phone, then sessions in their own pods.
 - **Codex step 2 (S-3 passed 2026-10-06):** the keeper owns the Codex refresh and
   writes `dev-env-codex-live` (`id_token`, `access_token`, `account_id`, `exp`; no
   refresh token). agentd writes each pod's `auth.json` from it with an empty
-  `refresh_token`, by atomic rename; the hub runs on one too. The keeper makes the
+  `refresh_token`, by atomic rename; the hub runs on one too. The keeper's login comes
+  from the codex login ceremony, never a copy of the hub's or v1's `auth.json`, and
+  the hub switches to its access-token-only file on a drain. The keeper makes the
   refresh call itself, about a day before `exp`, because codex would wait until 5
   minutes before it (DESIGN-001 6.3). Codex task and local sessions run in their own
   pods.

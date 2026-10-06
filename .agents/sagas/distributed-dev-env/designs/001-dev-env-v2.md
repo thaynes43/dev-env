@@ -904,7 +904,11 @@ with a link to the console page.
   readable name, not a pod hash. It is drained like any session: resume brings the
   daemon back on the same enrolment.
 - **Auth, step 1:** the hub owns `auth.json`, as v1 does today. Codex work runs in
-  the hub (CPU-limited, workers only) until step 2.
+  the hub (CPU-limited, workers only) until step 2. The hub's login is made fresh
+  with the codex login ceremony (`POST /v1/auth/codex/login`, normally from the
+  console), never copied from v1. v1's `codex-remote` daemon keeps refreshing its own
+  file until cutover, so a copy would give one token family two owners. (Added
+  2026-10-06.)
 - **Auth, step 2 (spike S-3):** the keeper owns the Codex refresh and distributes
   access tokens; Codex task and local sessions then run in their own pods.
   **S-3 passed on 2026-10-06** (backlog 00), so the build takes step 2. How it works,
@@ -912,6 +916,12 @@ with a link to the console page.
   - The keeper holds the Codex login and is the only process that refreshes it. It
     writes Secret `dev-env-codex-live` with `id_token`, `access_token`, `account_id`
     and the token's `exp`, and **no refresh token**.
+  - **The keeper's login is its own**, made with the codex login ceremony and never
+    copied from the hub's or v1's `auth.json`. As in 6.2, nothing with a live refresh
+    token moves. The switch from step 1 happens on a hub drain: agentd writes the
+    access-token-only file before the daemon starts. That overwrite drops the hub's
+    step-1 refresh token, and that login lapses. v1's login is retired with the v1 pod
+    at cutover (plan 05). (Added 2026-10-06 from the PR #26 review.)
   - **agentd writes the pod's `~/.codex/auth.json`** from that Secret: `auth_mode:
     chatgpt`, those three fields, `refresh_token: ""` (a required field), mode 0600, by
     atomic rename. It does not use `codex login --with-access-token`, which refuses
