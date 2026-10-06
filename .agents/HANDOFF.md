@@ -47,6 +47,9 @@ the saga. To start building, follow
    Those PRs depend on no spike, so they may run while the in-pod spikes run
    ([KICKOFF section 1](sagas/distributed-dev-env/KICKOFF.md#1-objective-of-phase-1)
    says why).
+5. **The rest of the MVP, then beyond it.** The MVP ends at the cutover (plan 05);
+   [the saga README](sagas/distributed-dev-env/README.md#plan-backlog) lists which
+   plans are in it, their order, and the plans that follow.
 
 ## Where everything is
 
