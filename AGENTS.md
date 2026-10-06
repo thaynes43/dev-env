@@ -4,16 +4,21 @@ Codex and other agents: the rules for this repository live in
 [`CLAUDE.md`](CLAUDE.md). Read it before you change anything; it is the single
 source, kept in one file so the two never drift.
 
+**Start with [`.agents/HANDOFF.md`](.agents/HANDOFF.md):** the current state, the
+next steps, and what works outside the cluster. The first build session follows
+[`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md).
+
 The short version:
 
-- **Status: design.** Start with
+- **Status: design complete; ADR-001 awaits Tom's ratification.** The saga is
   [`.agents/sagas/distributed-dev-env/`](.agents/sagas/distributed-dev-env/README.md).
   Deploy manifests live in thaynes43/haynes-ops, not here.
-- Docs first; one question at a time to Tom, recorded as `Q-NN` in the design.
+- Docs first; one question at a time to Tom, recommended option first, recorded as
+  `Q-NN` in the design. Codex has no AskUserQuestion, so ask in the conversation.
 - Worktree per task, branch `agent/<task>`, ready PR, never push to main.
-- No CPU burners in the dev-env pod. No secrets in git. One owner per rotating
-  refresh token. Full model ids. Never restart running agent sessions on an
-  operator upgrade.
+- No CPU burners on any shared node; a CPU limit on anything you run in the
+  cluster. No secrets in git. One owner per rotating refresh token. Full model ids.
+  Never restart running agent sessions on an operator upgrade.
 
 ## Automated PR review (agents read this)
 

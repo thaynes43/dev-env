@@ -48,8 +48,9 @@ archived by the operator. An operator restart mid-task does not disturb it.
   PriorityClass `dev-env-agent` (-10, `preemptionPolicy: Never`), a Kyverno policy
   requiring CPU limits in `dev-agents`. No ResourceQuota (D-21).
 - Q-08's Kyverno LimitRange (50m default CPU request in every non-system namespace)
-  is built in haynes-ops as a v1 fix, not by this plan (in flight as haynes-ops #3406 on 2026-10-06).
-  Until it is live, phase 1 runs a handful of sessions at most.
+  is built in haynes-ops as a v1 fix, not by this plan. It went live on 2026-10-06
+  (haynes-ops #3406, Kyverno `default-cpu-request`); at 03:34Z no Running pod in the
+  cluster was BestEffort. Before phase 1 adds sessions, check that this still holds.
 - ExternalSecrets in `dev-agents` mirroring v1's; the empty keeper-owned Secrets.
 - The shared CephFS volume `dev-env-shared` on `ceph-filesystem`, `prune: disabled`.
 - `dev-env-templates` with `gasha01-rbd` as the session volume class.

@@ -156,7 +156,9 @@ under another ServiceAccount, a privileged pod, a Secret read, a TokenRequest, a
 new pod or Deployment that mounts a Secret, a Flux Kustomization, an ExternalSecret,
 a CRD delete and a write in `kyverno` must all be refused, while an eviction in
 `kube-system` is allowed. Check whether the ValidatingAdmissionPolicy sees
-`CONNECT` for exec; if not, the Kyverno rule carries it. Decides D-19.
+`CONNECT` for exec; if not, the Kyverno rule carries it. Decides D-19. The break-glass
+half needs the `dev-env-grant-breakglass` role, which plan 07 ships; if phase 1 does
+not have it yet, that half runs with plan 07.
 
 ## S-13: the GPU budget (before plan 09)
 

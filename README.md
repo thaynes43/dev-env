@@ -13,7 +13,8 @@ and memory limits, created, upgraded and pruned by an operator that the `agent-r
 CLI calls from anywhere. This repo will publish the operator, the CLI and the agent
 image (`ghcr.io/thaynes43/dev-env`); haynes-ops deploys them.
 
-**Status: design.** Read the saga first:
+**Status: design complete, awaiting Tom's ratification of ADR-001 (2026-10-06).**
+Start at [`.agents/HANDOFF.md`](.agents/HANDOFF.md); the saga is
 [`.agents/sagas/distributed-dev-env/`](.agents/sagas/distributed-dev-env/README.md).
 
 Agents: see [CLAUDE.md](CLAUDE.md) (Codex: [AGENTS.md](AGENTS.md)).

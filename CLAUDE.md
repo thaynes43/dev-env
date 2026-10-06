@@ -3,6 +3,10 @@
 Guidance for Claude Code and other agents working in this repository. Codex reads
 `AGENTS.md`, which points here: this file is the one source of the rules.
 
+**Start with [`.agents/HANDOFF.md`](.agents/HANDOFF.md).** It gives the current
+state, what happens next, where every file is, the ruling index, and what an agent
+can and cannot do outside the cluster.
+
 ## What this repo is
 
 **dev-env v2**: the distributed version of the in-cluster development environment
@@ -15,15 +19,18 @@ This repo will hold the operator, the CLI, the agent container image
 [thaynes43/haynes-ops](https://github.com/thaynes43/haynes-ops)** (GitOps via Flux):
 this repo publishes signed images, haynes-ops pins and deploys them.
 
-**Status: design.** Nothing is built yet. v1 keeps running from haynes-ops
-(`kubernetes/main/apps/dev/dev-env/`, `scripts/dev-env/Dockerfile`) until v2 proves
-itself and Tom approves the cutover. Start with the saga:
+**Status: design complete; ADR-001 awaits Tom's ratification (2026-10-06).** Nothing
+is built yet. The first build session follows
+[`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md). v1 keeps running from
+haynes-ops (`kubernetes/main/apps/dev/dev-env/`, `scripts/dev-env/Dockerfile`) until
+v2 proves itself and Tom approves the cutover. The saga:
 [`.agents/sagas/distributed-dev-env/`](.agents/sagas/distributed-dev-env/README.md).
 
 ## Layout
 
 ```
-.agents/sagas/<saga>/    saga README (vision, decision log), adrs/, designs/, backlog/
+.agents/HANDOFF.md       the front door: state, next steps, rulings, inside vs outside
+.agents/sagas/<saga>/    saga README (vision, decision log), KICKOFF, adrs/, designs/, backlog/, research/
 .github/workflows/       CI (Claude review + @claude today; builds arrive with the code)
 ```
 
@@ -47,8 +54,9 @@ backlog. Name each one here when it lands.
 
 ## Hard rules
 
-- **No CPU burners in the dev-env pod.** No busy loops, stress tools or wide parallel
-  test runs. On 2026-10-05 a flake-reproduction run in the v1 pod (which had no CPU
+- **No CPU burners on any shared node**, the dev-env pod included. No busy loops,
+  stress tools or wide parallel test runs, and a CPU limit on anything you run in
+  the cluster. On 2026-10-05 a flake-reproduction run in the v1 pod (which had no CPU
   limit) pushed control-plane node talosm02 to load 222 on 20 cores from 23:42 to
   00:12Z, and EMQX, traefik, authentik and cloudnative-pg went into liveness-kill
   loops. The kubelet was not starved (it peaked at 0.18 cores): BestEffort pods,

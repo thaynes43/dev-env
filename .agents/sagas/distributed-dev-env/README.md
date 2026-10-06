@@ -8,11 +8,14 @@ top of ADR-001. Nothing is built. The architecture is in
 [DESIGN-001](designs/001-dev-env-v2.md). Tom ruled on every question, Q-01 to Q-11,
 on 2026-10-06 and widened the scope: tool pods, a GPU budget, satellite inference
 workers, local models, access without in-pod prompts, summoned sessions kept as a
-first-class path, and one console for links, archives and the login renewal. No
-question is open. Research notes [R-01](research/R-01-summoned-agents-audit.md)
+first-class path, and one console for links, archives and the login renewal. Three
+repo-setup questions, Q-12 to Q-14, are open: to ask Tom at kickoff, after
+ratification. Research notes [R-01](research/R-01-summoned-agents-audit.md)
 (summoned agents) and [R-02](research/R-02-remote-control-identity.md) (Remote Control
 identity) are folded into the design. The spikes in
-[backlog 00](backlog/00-spikes.md) come first, S-1 before all (S-2 is answered).
+[backlog 00](backlog/00-spikes.md) come first, S-1 before all (S-2 is answered). The
+first build session's work order is [KICKOFF.md](KICKOFF.md); the repo's front door is
+[`.agents/HANDOFF.md`](../../HANDOFF.md).
 
 **Working rules:** this repo's [CLAUDE.md](../../../CLAUDE.md). Docs first. Ask Tom
 one question at a time with AskUserQuestion, and fold each answer back into the
@@ -80,7 +83,8 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
    access tokens only, which relies on CLI behaviour that spike S-1 must prove; R-02
    found the CLI re-reads its credentials file and revives Remote Control on a fresh
    token. If S-1 fails, Remote Control sessions share one coordinator host pod. v1 now
-   has two logins (the dev-env pod's, and `dev-env-ops`'s since haynes-ops #3414);
+   has two logins (the dev-env pod's, and `dev-env-ops`'s from haynes-ops #3414, whose
+   login ceremony is pending on 2026-10-06);
    v2's keeper replaces both with one, so Tom renews up to three a month until both
    v1 pods are gone.
 2. **Native agent messaging stops at the pod boundary.** Claude Code ties its session
@@ -114,7 +118,7 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 10. **No fleet cap means workers can saturate.** On 2026-10-05 the pods that failed
    were BestEffort (no CPU request, CPU weight 1); the kubelet was fine. A busy v2
    fleet could saturate a worker the same way, so every household pod needs a CPU
-   request first (Q-08: a Kyverno LimitRange, in flight as haynes-ops #3406).
+   request first (Q-08: a Kyverno LimitRange, live since 2026-10-06 as haynes-ops #3406).
 11. **The big local models live on Tom's own machines.** The cluster's free VRAM is
    small (one worker 3090, already busy with the house). Large models run on the
    satellites, which are there only when Tom is not using them, so local-model agents
@@ -126,7 +130,7 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 |---|---|---|---|
 | 1 | Where v2's saga and code live | **DECIDED** 2026-10-05 (Tom) | A new private repo, **thaynes43/dev-env**, keeping the image name `ghcr.io/thaynes43/dev-env`. Manifests and pod config stay in haynes-ops (GitOps). Recorded in haynes-ops as ADR-001 of its dev-env saga. |
 | 2 | Architecture: one pod per session run by an operator | **PROPOSED** 2026-10-05 | [ADR-001](adrs/001-distributed-dev-env.md) |
-| 3 | Settled design decisions D-01 to D-33 | **PROPOSED** with ADR-001; D-02, D-18, D-19 and D-20 **REVISED** 2026-10-06 | [DESIGN-001 section 16](designs/001-dev-env-v2.md#16-decisions-settled-in-this-design) |
+| 3 | Settled design decisions D-01 to D-37 (D-34 to D-37 added 2026-10-06) | **PROPOSED** with ADR-001; D-02, D-18, D-19 and D-20 **REVISED** 2026-10-06 | [DESIGN-001 section 16](designs/001-dev-env-v2.md#16-decisions-settled-in-this-design) |
 | 4 | Q-01: build the pod-and-volume layer, or adopt kubernetes-sigs/agent-sandbox | **DECIDED** 2026-10-06 (Tom) | Build a small operator modelled on agent-sandbox (A). |
 | 5 | Q-02: language for the operator and CLI | **DECIDED** 2026-10-06 (Tom) | Go, for the operator and a static `agent-run` (A). |
 | 6 | Q-03: what happens to running sessions when the image or config changes | **DECIDED** 2026-10-06 (Tom) | Drain on idle, then resume the conversation on the new version (A). |
@@ -136,14 +140,17 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 10 | Tool pods, GPUs and local LLMs | **PROPOSED** 2026-10-06, from Tom's Q-04 ruling | [DESIGN-001 section 8](designs/001-dev-env-v2.md#8-tool-pods-gpus-and-local-llms) (D-28 to D-32) |
 | 11 | Q-06: GPU placement for agents | **DECIDED** 2026-10-06 (Tom) | Dynamic allocation, not a static per-node rule: a VRAM budget per card, control-plane cards included (D-34, narrowed by Q-09); satellite inference workers on his Mac and PCs (D-35). |
 | 12 | Q-07: do the root-equivalent credentials (Proxmox operator token, hw-ssh key) stay in every session pod? | **DECIDED** 2026-10-06 (Tom) | A: they move behind the broker as short-lived credential grants. |
-| 13 | Q-08: how does every household pod get a CPU request? | **DECIDED** 2026-10-06 (Tom) | A: a Kyverno-generated LimitRange with a 50m default CPU request in every non-system namespace; a cluster-wide v1 fix in haynes-ops, in flight as #3406. |
+| 13 | Q-08: how does every household pod get a CPU request? | **DECIDED** 2026-10-06 (Tom) | A: a Kyverno-generated LimitRange with a 50m default CPU request in every non-system namespace; a cluster-wide v1 fix in haynes-ops, merged and live 2026-10-06 (#3406). |
 | 14 | Q-09: which household GPU apps may lend their burst VRAM to agents while idle? | **DECIDED** 2026-10-06 (Tom) | None: "None but I bring online more GPUs in cluster". Agents get only what is left above every household app's full reservation; new cards join the budget automatically (D-34). |
 | 15 | Q-10: when may agents use Tom's satellite machines? | **DECIDED** 2026-10-06 (Tom) | A: only while awake and not in use by Tom; never woken. |
 | 16 | Ratify ADR-001 | **PROPOSED** 2026-10-06 | [Ratification summary](adrs/001-distributed-dev-env.md#ratification-summary) |
 | 17 | Q-11: which link that survives restarts did Tom mean? | **DECIDED** 2026-10-06 (Tom) | The Claude Code auth (the Max `/login` on the PVC). The keeper is its sole owner; pods get access tokens only; the monthly renewal is a console page behind Authentik, replacing the chat relay; the console lists every session's link and status with an archive button; the codex hub keeps its own single enrolment (D-11, D-37). |
 | 18 | Summoned sessions are a first-class requirement | **DECIDED** 2026-10-06 (Tom: "we need to preserve the functionality") | [DESIGN-001 3.7](designs/001-dev-env-v2.md#37-summoned-sessions), D-36, R-01 V-01 to V-17, plan 10 |
+| 19 | Q-12: branch protection on this private repo, if Tom's plan does not enforce rulesets | **OPEN** 2026-10-06, to ask at kickoff after ratification | [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions); recommended: GitHub Pro (A). |
+| 20 | Q-13: visibility of `ghcr.io/thaynes43/dev-env-operator` | **OPEN** 2026-10-06, to ask at kickoff after ratification | Recommended: public (A). |
+| 21 | Q-14: how release-please gets release PRs checked by CI | **OPEN** 2026-10-06, to ask at kickoff after ratification | Recommended: a GitHub App key secret (A). |
 
-The full options, consequences and rulings for Q-01 to Q-11 are in
+The full options, consequences and rulings for Q-01 to Q-14 are in
 [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions).
 
 ## Plan backlog
