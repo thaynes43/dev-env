@@ -425,8 +425,8 @@ variable, and its config port keeps v1's layout.**
   email is the bot's with its App user id (`304655321+haynes-dev-bot[bot]@…`), the form
   GitHub links to the account; v1 leaves the id out. `safe.directory` covers `~/work/*`
   as well as `~/repos/*`, because git checks a linked worktree by its own path. Each
-  `claude` and `git` call of the config steps has a 30-second limit, so a stalled CLI
-  is a warning, not a stuck boot.
+  `claude` and `git` call of the config steps has a 30-second limit that kills the
+  call's whole process group, so a stalled CLI is a warning, not a stuck boot.
 - **Seeding** (6.2): `hasCompletedOnboarding`, and `hasTrustDialogAccepted` and
   `hasCompletedProjectOnboarding` for the worktree and the clone. Checked on
   2026-10-06 with CLI 2.1.292: a cold TUI with those keys opens at its prompt, with no

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExecRunner(t *testing.T) {
@@ -43,6 +44,21 @@ func TestExecRunner(t *testing.T) {
 	}
 	if _, err := r.LookPath("sh"); err != nil {
 		t.Errorf("LookPath(sh): %v", err)
+	}
+}
+
+func TestExecRunnerTimeLimitKillsTheGroup(t *testing.T) {
+	old := waitDelay
+	waitDelay = 200 * time.Millisecond
+	t.Cleanup(func() { waitDelay = old })
+	// The grandchild keeps stdout open; only a group kill and WaitDelay end Run.
+	start := time.Now()
+	_, err := runBounded(context.Background(), ExecRunner{}, 100*time.Millisecond, Cmd{Name: "sh", Args: []string{"-c", "sleep 30 & sleep 30"}})
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("Run took %v after its limit", took)
+	}
+	if err == nil || !strings.Contains(err.Error(), "no answer within 100ms") {
+		t.Errorf("err = %v", err)
 	}
 }
 

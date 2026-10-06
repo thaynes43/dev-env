@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -100,6 +101,9 @@ func firstArg(args []string) string {
 	return args[0]
 }
 
+// waitDelay is how long Run waits for a killed command's output pipes.
+var waitDelay = 5 * time.Second
+
 // ExecRunner runs commands as child processes.
 type ExecRunner struct {
 	// BaseEnv is every command's environment before Cmd.Env; nil means
@@ -117,6 +121,12 @@ func (r ExecRunner) Run(ctx context.Context, c Cmd) (Result, error) {
 	}
 	cmd.Env = append(append([]string(nil), base...), c.Env...)
 	cmd.Stdin = c.Stdin
+	// When ctx ends, kill the whole process group, not only the direct child,
+	// and stop waiting for output soon after: a grandchild (node starts some)
+	// that holds the pipes open must not turn a time limit into a hang.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = waitDelay
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
