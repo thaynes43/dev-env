@@ -682,7 +682,7 @@ tool group keeps its single grouped PR.
 |---|---|---|---|
 | Claude static token (`CLAUDE_CODE_OAUTH_TOKEN`, about 1 year, no refresh) | env from ExternalSecret `dev-env-claude` | Same Secret, env in every session pod | Safe in many pods: it never rotates. Cannot register Remote Control. |
 | Claude Max login (`.credentials.json`, rotating refresh token, lapses about 30 days after each `/login`) | on the PVC, shared by the Remote Control sessions | Keeper owns it; Remote Control pods get an access token only (6.2) | Needs spike S-1. Fallback: one coordinator host pod. |
-| Codex login (`auth.json`, rotating refresh token) | on the PVC | Codex hub owns it first; keeper later if S-3 passes (6.3) | Codex work runs in the hub until then. |
+| Codex login (`auth.json`, rotating refresh token) | on the PVC | Codex hub owns it first; then the keeper, since S-3 passed (6.3) | Codex work runs in the hub until step 2. Pods then get an access-token-only `auth.json`. |
 | GitHub App token | sidecar per pod, PEM in the sidecar | Keeper mints into one Secret; pods mount it (6.4) | PEM in one place; one mint for the fleet. |
 | MCP server registration | dev-init, once per pod boot | agentd, once per session pod boot (6.5) | Same mechanism, same ConfigMap. |
 | Repos and worktrees | 256Gi RWO volume, canonical clones + 137 worktrees | `gasha01-rbd` volume per session + small shared CephFS (6.6) | Q-05, decided 2026-10-06. |
@@ -724,9 +724,10 @@ section keeps what the design needs.
   stored token's scopes include `user:profile`, and refuses inference-only tokens
   (`token_scope_limited`). **S-2 is answered: the static token cannot register Remote
   Control.** The docs say so ("Remote Control requires a full-scope login token"), the
-  2.1.284 binary has the same check, and the v1 executor proved it again: all 45 of its
-  `wo-*` and `esc-*` sessions since 2026-09-03 ran on a credentials file synthesized
-  from the setup token and were rejected (R-01, F-01).
+  2.1.284 binary has the same check (2.1.292 still refused, re-probed 2026-10-06), and
+  the v1 executor proved it again: all 45 of its `wo-*` and `esc-*` sessions since
+  2026-09-03 ran on a credentials file synthesized from the setup token and were
+  rejected (R-01, F-01).
 - Remote Control is bound to the claude.ai account and organization of the
   credential, not to an IP, a hostname or a machine (R-02 section 2). Many pods can
   each run Remote Control on one Max account: v1 runs 14 at once from one login.
@@ -878,8 +879,14 @@ with a link to the console page.
 - Phone control is one per-machine daemon (`codex remote-control`), not per session.
   The phone shows the name stored at first enrolment; the enrolment lives in the
   `~/.codex` state database.
-- `codex login --with-access-token` (or `CODEX_ACCESS_TOKEN`) runs on an access token
-  alone. `codex queue` puts a message into an existing session. `codex exec-server`
+- An `auth.json` that holds the access token and an empty refresh token runs `codex
+  exec` and the remote-control app-server (S-3, codex 0.160.1). `codex login
+  --with-access-token` and `CODEX_ACCESS_TOKEN` do not take that token: they take an
+  Agent Identity JWT or an `at-` personal access token. (Corrected 2026-10-06 by S-3;
+  this bullet said they ran on an access token alone.) The access token lives 10 days.
+  Codex refreshes it within 5 minutes of its `exp`, or after a 401, and reloads
+  `auth.json` from disk before either.
+- `codex queue` puts a message into an existing session. `codex exec-server`
   (experimental) registers a WebSocket exec-server as a remote environment for the
   daemon's threads.
 - `/etc/codex/requirements.toml` pins approval `never` and sandbox
@@ -900,6 +907,35 @@ with a link to the console page.
   the hub (CPU-limited, workers only) until step 2.
 - **Auth, step 2 (spike S-3):** the keeper owns the Codex refresh and distributes
   access tokens; Codex task and local sessions then run in their own pods.
+  **S-3 passed on 2026-10-06** (backlog 00), so the build takes step 2. How it works,
+  from S-3:
+  - The keeper holds the Codex login and is the only process that refreshes it. It
+    writes Secret `dev-env-codex-live` with `id_token`, `access_token`, `account_id`
+    and the token's `exp`, and **no refresh token**.
+  - **agentd writes the pod's `~/.codex/auth.json`** from that Secret: `auth_mode:
+    chatgpt`, those three fields, `refresh_token: ""` (a required field), mode 0600, by
+    atomic rename. It does not use `codex login --with-access-token`, which refuses
+    this token. The codex hub runs on the same kind of file: S-3's unpaired
+    remote-control app-server enrolled and connected on it in 1.4 s.
+  - A running codex keeps its cached token until 5 minutes before that token's `exp`,
+    or until a 401. Then it reloads `auth.json` and uses a changed file, with no
+    restart: in S-3, remote control reconnected 4 s after the rename.
+  - **The keeper refreshes early, not at codex's 5-minute mark:** about a day before
+    `exp`, and it writes the Secret at once. Its lead time must exceed agentd's worst
+    merge latency plus those 5 minutes. A pod whose file still holds the old token
+    inside that window, or past `exp`, calls the refresh endpoint about three times a
+    second with its empty refresh token (85 calls in 26 s in S-3) until the file
+    changes. That cannot harm the login, but it is noise, and past `exp` every turn
+    fails.
+  - S-3 did not test whether a refresh revokes the previous access token. Either way,
+    a 401 makes codex reload the file, so agentd's merge latency is the window, as for
+    Claude (6.2).
+  - Remote control enrols one server per `installation_id`, named by the hostname with
+    no override. The CLI cannot remove an enrolment. Both facts are reasons for the
+    hub's fixed hostname and its own volume.
+  - `account/login/start` with `chatgptAuthTokens` (the client supplies tokens and
+    answers refresh requests) exists in 0.160.1, but the source marks it OpenAI
+    internal only, so the design does not use it.
 - **Isolation, step 3 (spike S-4):** hub threads execute inside a per-session pod
   through `codex exec-server`. This fixes v1's "the phone picks the directory and
   bypasses per-worktree isolation".
@@ -2338,7 +2374,7 @@ v2 work never edits
 | **2. Interactive and lifecycle** | `local` mode, attach, idle detection, timers, rescue, resume, restore; `/v1/activities` and dev-env-ops reading both sources; messaging tier 3; laptop access | A local session survives suspend and resume with its conversation; a declared activity is visible to dev-env-ops; Tom runs `agent-run` from his laptop. |
 | **7. Access broker** (after 1, alongside 2) | `AccessGrant`, `GrantPolicy`, the broker Deployment, the approval page and Pushover link, kube and egress grants, break-glass; credential grants (Q-07) | A grant request reaches Tom's phone, he approves it, the agent uses it, and it is gone at its TTL; a standing policy approves a matching request with no ping; break-glass works and the headlamp Job is refused. |
 | **3. Remote Control** | Keeper-owned Max login, made fresh with `/login` (or the coordinator host if S-1 fails); agentd merging the access token into a writable credentials file and seeding the home; links from the CLI registry; archive on reap (S-15); the console with sessions, links, archive and the login page; the standby; messaging tier 2 | Tom drives a v2 session from his phone; a coordinator dispatches v2 task pods; the monthly renewal works from the console page. |
-| **4. Rolling updates and Codex** | Revisions; drain-on-idle and resume (per Q-03); codex hub; keeper-owned Codex auth if S-3 passes; image pre-pull DaemonSet; Renovate auto-merge for `2.x` | An image bump reaches every idle session with its conversation intact and interrupts no busy turn; the phone's Codex entry survives a hub drain. |
+| **4. Rolling updates and Codex** | Revisions; drain-on-idle and resume (per Q-03); codex hub; keeper-owned Codex auth (S-3 passed); image pre-pull DaemonSet; Renovate auto-merge for `2.x` | An image bump reaches every idle session with its conversation intact and interrupts no busy turn; the phone's Codex entry survives a hub drain. |
 | **5. Cutover** (needs 3, 4, 7 and Q-08 applied) | Workbench pod; dev-env-ops reads only `Activity`; v1 scaled to zero, its Max login retired with it (it lapses; nothing is copied), its PVC kept 30 days, then removed with its build and Renovate carve-outs | Tom approves the cutover. |
 | **8. Tool pods** (after 2) | `ToolPool`, `ToolSession`, the loopback gateway, artifacts; blender and audio converted; image, whisper, printer and video pools | An agent calls a Blender tool with no pod running; the pod starts, serves, and stops 30 minutes after release, keeping its workspace. |
 | **9. GPUs, satellites and local LLMs** (after 8) | VRAM accounting for every GPU workload (household included); the per-card budget with reserve pods, gates, reclaim and automatic card discovery; GPU tool pods; LLM pools with backends and leases; satellite workers; opencode sessions | An opencode session on a Qwen coder model opens a PR; no household app's VRAM is ever in agent hands; a GPU node that joins shows up in the budget with no config change; a pool moves to a satellite and back when Tom starts and ends a game. |
@@ -2352,8 +2388,8 @@ Backlog plans: [`../backlog/`](../backlog/).
 | Id | Question | Where | Decides |
 |---|---|---|---|
 | S-1 | Does Claude Code run Remote Control on an access-token-only credentials file in a cold home, pick up a rotated token from disk without a restart, and never try to rotate? How long do 401s last after a keeper rotation, and does the 401 wait cover it? Does the env-token variant (S-1b: `CLAUDE_CODE_OAUTH_TOKEN` plus `CLAUDE_CODE_OAUTH_SCOPES`) register too? Do `--debug-file` logs confirm R-02's request bodies? | v1 pod, scratch `CLAUDE_CONFIG_DIR`, no refresh token copied. **Passed 2026-10-06** (CLI 2.1.292): it registers on a cold home with no `.claude.json` seeding (S-6: once the onboarding flags are seeded, it needs `oauthAccount` too), uses a merged token without a restart, and never tries to refresh. Each refresh revokes the old token at once, and the 401 wait does nothing for a file, so agentd's merge latency is the 401 window. S-1b registers too. The debug log confirms the endpoints, not the bodies (6.2) | D-11 target vs the coordinator host: **the target** |
-| S-2 | Can the static token register Remote Control on the current CLI? | **Answered 2026-10-06: no.** The docs require a full-scope login token, the 2.1.284 binary checks for `user:profile`, and R-01 F-01 saw 45 of 45 executor sessions rejected. Kept as a one-line check on each CLI bump | The keeper is needed for Claude |
-| S-3 | Do `codex exec` and `codex remote-control` run on `--with-access-token`, and pick up a new one? | v1 pod, scratch `CODEX_HOME` | D-12 step 2 |
+| S-2 | Can the static token register Remote Control on the current CLI? | **Answered 2026-10-06: no.** The docs require a full-scope login token, the 2.1.284 binary checks for `user:profile`, and R-01 F-01 saw 45 of 45 executor sessions rejected. Kept as a one-line check on each CLI bump. **Re-probed on 2.1.292 (2026-10-06): still refused** ("Remote Control requires a full-scope login token", no `bridgeSessionId`) | The keeper is needed for Claude |
+| S-3 | Do `codex exec` and `codex remote-control` run on `--with-access-token`, and pick up a new one? | v1 pod, scratch `CODEX_HOME`. **Passed 2026-10-06** (codex 0.160.1) on an `auth.json` with an empty refresh token, not on `--with-access-token`, which refuses a ChatGPT token (it takes an Agent Identity JWT or an `at-` token). `codex exec` answered, and an unpaired `app-server --remote-control` connected in 1.4 s and ran a turn. A file renamed into place was picked up with no restart (remote control back in 4 s). Inside the 5-minute window before `exp`, or past it, codex calls the refresh endpoint about three times a second with the empty token, so the keeper refreshes early (6.3) | D-12 step 2: **the keeper owns the Codex refresh** |
 | S-4 | Can a hub thread execute in another pod through `codex exec-server`? | two pods, phase 4 | D-12 step 3 |
 | S-5 | Does SendMessage reach a Remote Control session in another pod? | two pods, phase 3 | D-16 tier 2 |
 | S-6 | Does `claude --resume <id> --remote-control <name>` reattach the same phone entry? | v1 pod, scratch access-token-only home. **Passed 2026-10-06** (CLI 2.1.292): the same bridge session id after `--resume`, and the server's event list kept both turns. A SIGTERM to the CLI archives the entry (agentd forwards the pod's) and the resume unarchives it, so a drained entry is off the active list until resume. Seeding needs `oauthAccount` (6.2) | 6.7: a drain keeps the entry, through the unarchive |

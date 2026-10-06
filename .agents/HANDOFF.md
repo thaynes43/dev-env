@@ -63,7 +63,9 @@ the saga. To start building, follow
    says why). ADR-001 is Accepted, so code may start.
 3. **Collect the spike results.** S-1, S-1b and S-7 are done, and S-2 is already
    answered (the static token cannot register Remote Control). S-6, S-15 and S-16
-   are done. Next in order is S-3. Each result lands in its own PR. The order and pass criteria are in
+   are done, and S-3 passed (keeper-owned Codex auth, DESIGN-001 D-12 step 2), so
+   group 1 is complete. Group 2 (S-12, S-8) waits for its phase-1 haynes-ops PRs.
+   Each result lands in its own PR. The order and pass criteria are in
    [KICKOFF section 2](sagas/distributed-dev-env/KICKOFF.md#2-track-a-spikes).
 4. **The rest of the MVP, then beyond it.** The MVP ends at the cutover (plan 05);
    [the saga README](sagas/distributed-dev-env/README.md#plan-backlog) lists which

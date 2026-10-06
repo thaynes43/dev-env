@@ -102,13 +102,76 @@ each CLI bump, one probe confirms it still holds:
 `CLAUDE_CONFIG_DIR=/tmp/spike-s2 claude --remote-control spike-s2` with
 `CLAUDE_CODE_OAUTH_TOKEN` set and no `.credentials.json`.
 
+- [x] **Re-probed 2026-10-06 on CLI 2.1.292: still refused.** The probe ran as above,
+  in a cleared environment with its own `HOME`, and the token was read from the pod's
+  environment, never put on a command line. A cold home first stops on the theme,
+  security and trust prompts, and the trust prompt's default is "No, exit". Past them,
+  the CLI printed "Remote Control requires a full-scope login token. Long-lived tokens
+  (from `claude setup-token` or CLAUDE_CODE_OAUTH_TOKEN) are limited to inference-only
+  for security reasons" and "--rc flag ignored". `sessions/<pid>.json` has no
+  `bridgeSessionId`. The refusal names the token's scope, so it needed no
+  `oauthAccount` seeding (S-6) to be clear.
+
 ## S-3: Codex on an access token
 
 Scratch `CODEX_HOME=/tmp/spike-s3`. Feed the access token from the live `auth.json`
 to `codex login --with-access-token` through a pipe. Then `codex exec "reply ok" <
 /dev/null`. Then start the app-server with remote control in the scratch home
 **without pairing** and see whether it runs. Note how codex behaves when the token
-expires. Pass = exec and app-server run on the access token alone.
+expires. Pass = exec and app-server run on the access token alone. (Corrected
+2026-10-06 by the run: `--with-access-token` does not take this token. The credential
+that works is an `auth.json` written by `jq`, as below.)
+
+- [x] **Done 2026-10-06: passed, on an `auth.json` with no refresh token, not through
+  `--with-access-token`.** codex 0.160.1, in the v1 pod, one call at a time, in a
+  scratch `CODEX_HOME` and `HOME` with a cleared environment. The live `auth.json` was
+  only read: its hash and mtime were the same after every step. The `codex-remote`
+  daemon was not touched.
+  - **`--with-access-token` refuses a ChatGPT token.** It exits 1 with "agent identity
+    JWT payload is not valid JSON" and writes nothing. In 0.160.1 that flag and
+    `CODEX_ACCESS_TOKEN` take only an Agent Identity JWT or an `at-` personal access
+    token (`codex-rs/login/src/auth/access_token.rs`). The ChatGPT OAuth access token
+    in `auth.json` is neither.
+  - **The credential that works** is S-1's method, applied to Codex: `jq` writes
+    `auth.json` (mode 0600) from the live file with `auth_mode: chatgpt`,
+    `tokens.{id_token, access_token, account_id}`, an empty `refresh_token` (the field
+    is a required string) and `last_refresh`.
+  - **`codex exec "reply ok"`** answered `ok`, exit 0 (`gpt-6-luna`, effort low).
+  - **The unpaired app-server** (`codex app-server --remote-control --listen
+    stdio://`: the daemon's remote-control transport, without the managed daemon or its
+    updater) enrolled and reached `connected` in 1.4 s, and one turn answered `ok`. A
+    small stdio JSON-RPC driver sent `initialize`, `remoteControl/status/read`,
+    `thread/start` and `turn/start`.
+  - **Enrolment.** The app-server enrols one server per `installation_id`, named by
+    `gethostname()`. There is no name override, and the v1 pod allows no UTS
+    namespace, so the entry could not be named `spike-s3`. It carries the v1 pod's
+    hostname, `dev-env-577b4d8f7c-nnfzv`, and was never paired. The CLI has no call to
+    remove an enrolment (only enroll and refresh), so that offline server stays on the
+    account.
+  - **Token life and refresh.** The access token lives 10 days (`iat` to `exp`). Codex
+    refreshes when the cached token is within 5 minutes of its `exp`, or after a 401.
+    The 8-day `last_refresh` rule applies only when `exp` cannot be read. With an empty
+    refresh token, nothing can rotate.
+  - **Expiry.** With a synthetic JWT whose `exp` was an hour past (unsigned, not a real
+    token), remote control went `errored` at once. The turn failed after 25 s of
+    retries (`workspace routing discovery unauthorized (401)`). Meanwhile codex called
+    the refresh endpoint 85 times in 26 s, about three a second, each with the empty
+    refresh token, and each was refused with `400 empty_string`. Nothing from the token
+    family is sent, so the live login is safe, but the calls go on until the file
+    changes.
+  - **Pickup without a restart.** A valid file renamed into place, in the same
+    process: remote control was `connected` again 4 s later, and the next turn answered
+    `ok`. Before it refreshes, codex reloads `auth.json` and uses a changed file (the
+    "guarded reload" in `refresh_token()`). The first step of its 401 recovery is the
+    same reload.
+  - **Not tested:** whether an OpenAI refresh revokes the previous access token. The
+    live login next refreshes near 2026-10-09T00:59Z. D-12 step 2 holds either way: a
+    revoked token gives a 401, and the 401 reload picks up agentd's merge.
+  - **Also in 0.160.1:** `account/login/start` with `chatgptAuthTokens` lets an
+    app-server client supply the access token and answer
+    `account/chatgptAuthTokens/refresh`. The source marks it "FOR OPENAI INTERNAL USE
+    ONLY - DO NOT USE", so it was not tried.
+  - The scratch files were shredded. Consequence: DESIGN-001 6.3 (D-12 step 2).
 
 ## S-4: Codex exec-server (phase 4)
 

@@ -24,8 +24,13 @@ gets its v2 home: one hub for the phone, then sessions in their own pods.
 - **Codex hub:** a `codex-hub` session runs the remote-control daemon, owns the
   enrolment and (step 1) `auth.json`; the phone keeps one computer entry across
   drains. `agent-run codex-remote` manages it.
-- **Codex step 2 (if S-3 passed):** the keeper owns the Codex refresh and writes
-  `dev-env-codex-live`; Codex task and local sessions run in their own pods.
+- **Codex step 2 (S-3 passed 2026-10-06):** the keeper owns the Codex refresh and
+  writes `dev-env-codex-live` (`id_token`, `access_token`, `account_id`, `exp`; no
+  refresh token). agentd writes each pod's `auth.json` from it with an empty
+  `refresh_token`, by atomic rename; the hub runs on one too. The keeper makes the
+  refresh call itself, about a day before `exp`, because codex would wait until 5
+  minutes before it (DESIGN-001 6.3). Codex task and local sessions run in their own
+  pods.
 - **Codex step 3 (if S-4 passed):** hub threads execute in per-session pods through
   `codex exec-server`.
 
@@ -34,5 +39,7 @@ gets its v2 home: one hub for the phone, then sessions in their own pods.
 - An image bump PR in haynes-ops reaches every idle session within an hour of
   merge; each resumes its conversation; no busy session restarts.
 - A drain of the codex hub leaves the phone's entry working without re-pairing.
+- A keeper refresh reaches a running Codex session and the hub without a restart,
+  and no pod calls the refresh endpoint.
 - `requirements.toml` holds in every pod that runs Codex (approval `never`, sandbox
   `danger-full-access`).
