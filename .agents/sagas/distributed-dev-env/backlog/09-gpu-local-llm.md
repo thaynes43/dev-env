@@ -37,7 +37,9 @@ on opencode that are fleet members beside Claude Code and Codex. DESIGN-001 6.13
   for llama-server; a render for ComfyUI).
 - A `GpuReservation` entry beside each household GPU app: floor, burst, class
   (`interactive` or `batch`, per Q-09), probe, schedule (DESIGN-001 D-34).
-- PriorityClass `dev-env-gpu-reserve` (value 0).
+- PriorityClass `dev-env-gpu-reserve` (value -1: above agents, below household).
+- `dev-env-gpu-guard`'s DaemonSet, its RBAC (pods get, list and eviction in
+  `dev-tools`, read on the budgeter's Lease) and the nvidia RuntimeClass.
 - `GpuMissing` and the GPU exporter alerts keep working with the new resource name.
 - Pools as data: `household-llama` (llama-server's slot count less one for agents),
   `ollama-prime` (household), `llm-coder` (backends: 5090, 4090, cluster),
@@ -50,17 +52,22 @@ on opencode that are fleet members beside Claude Code and Codex. DESIGN-001 6.13
   confirmation), and a clusterwide egress policy from lease-holding pods to its
   address and port.
 - The internal route `dev-env-api.haynesops.com` on traefik-internal, TLS passed
-  through to the operator, answering only `/v1/satellites/*`.
+  through by SNI to the operator's satellite listener (9443).
 
 ## In this repo
 
-- `ToolPool.spec.gpu.memoryGiB` turned into a request for VRAM units, a framework
-  VRAM cap from the claim (environment for llama.cpp, vLLM, PyTorch apps), and the
-  eviction guard that reads `nvidia-gpu-exporter`. GPU pools may run on
+- `ToolPool.spec.gpu.memoryGiB` turned into a request for VRAM units and a framework
+  VRAM cap from the claim (environment for llama.cpp, vLLM, PyTorch apps). Every
+  agent GPU pod is created with the `dev-env.haynesops.com/gpu-budget` scheduling
+  gate.
+- `dev-env-gpu-guard`, a DaemonSet on GPU nodes: NVML every 5 s; evicts agent GPU
+  pods on a near-full card, and all of them on its node when the budgeter's Lease is
+  over 5 minutes old. GPU pools may run on
   control-plane nodes only with limits of at most 2 CPU and 16Gi (CRD validation).
 - The budgeter in the operator: read reservations, probes (every 15 s) and the
   exporter; compute each card's reserve and agent budget; hold the reserve with
-  reserve pods; reclaim in order with notices and graces (60 s for LLM backends,
+  reserve pods at priority -1; remove agent pods' scheduling gates only toward nodes
+  with budget that are not being reclaimed; renew its Lease; reclaim in order with notices and graces (60 s for LLM backends,
   120 s for tools); shrink after a 15-minute cool-down; `GET /v1/gpus`,
   `POST /v1/gpus/{node}/hold` (Tom only); metrics for a Grafana panel.
 - The tool contract's `POST /reclaim`.
@@ -73,13 +80,16 @@ on opencode that are fleet members beside Claude Code and Codex. DESIGN-001 6.13
   change.
 - `kind: llm` cluster backends: start on the first lease, scale to zero 30 minutes
   after the last.
-- `dev-env-satellite` for macOS arm64 and Windows amd64: enrol, heartbeat, run
+- `dev-env-satellite` for macOS arm64 and Windows amd64 (the Mac installer adds the
+  root LaunchDaemon that sets `iogpu.wired_limit_mb` at boot): enrol, heartbeat, run
   `llama-server` (or `mlx_lm.server` where S-14 favoured it), download and verify
   pinned model files, HTTPS with the operator-issued certificate, lease-token
   checks, owner-first detection, `pause`, menu-bar and tray icon. Signed release
   binaries.
-- Operator: `InferenceWorker` status from heartbeats, enrolment with one-time codes
-  (`agent-run satellite enroll`, Tom only), certificate issue and renewal, lease
+- Operator: the satellite listener on 9443 (client certificates required except on
+  enrol); `InferenceWorker` status from heartbeats; enrolment with one-time codes
+  (`agent-run satellite enroll`, Tom only; bound to a name, 15 minutes, single use,
+  carrying the CA fingerprint, rate-limited); certificate issue and renewal; lease
   tokens.
 - agentd's opencode adapter (start, resume, status, deliver, MCP registration),
   opencode's config rendered with every permission `allow` and its provider pointed
@@ -103,6 +113,9 @@ on opencode that are fleet members beside Claude Code and Codex. DESIGN-001 6.13
   back, and a Pending claim starts.
 - An interactive household app's burst is never lent: Home Assistant voice latency
   is unchanged across the test.
+- With the operator scaled to zero for 6 minutes, the guard evicts the agent GPU pods
+  on each GPU node and no new one starts.
+- A household pod that does not fit preempts a reserve pod, never waits behind one.
 - An opencode session on `llm-coder` opens a PR on a small real task while the 5090
   PC serves it. Tom starts a game mid-run: the satellite drains within 30 seconds,
   the pool moves to the next backend, and the session carries on (or waits, then

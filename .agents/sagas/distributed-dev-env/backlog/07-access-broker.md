@@ -36,8 +36,9 @@ audited, and the headlamp path is no longer needed. DESIGN-001 6.12, D-23 to D-2
     `dev-env@pve` that expires with the grant, or an hw-ssh certificate from its SSH
     CA valid for the grant's TTL, into the pod's tmpfs, and removes it at expiry.
     First check that the operator token can mint expiring tokens for its own user;
-    if not, the keeper installs the operator token itself and the approval page says
-    that a copied value outlives the grant.
+    if it cannot, credential grants for Proxmox fail closed (refused, Tom told) until
+    a narrower minting identity is designed. The long-lived operator token never
+    enters a session pod.
 - The operator's backstop: delete expired grants' network policies if the broker is
   down; re-install active grants after a drain.
 - agentd: `grant-install`, kube contexts, and the built-in `dev-env` MCP server's

@@ -135,8 +135,10 @@ a CRD delete and a write in `kyverno` must all be refused, while an eviction in
 ## S-13: the dynamic GPU budget (before plan 09)
 
 On talosw04 with Tom's lend label set, after S-9: run an agent-priority pod holding
-8 units, then create a reserve pod at priority 0 for 8 units. Check the scheduler
-preempts the agent pod with its termination grace and places the reserve pod.
+8 units, then create a reserve pod at priority -1 for 8 units. Check the scheduler
+preempts the agent pod with its termination grace and places the reserve pod. Then
+check that a priority-0 pod preempts the reserve pod, and that a gated pod's node
+affinity can be narrowed before its gate is removed.
 Separately, read each household probe once a minute for an hour of normal use, never
 writing: Ollama `GET /api/ps`, ComfyUI `GET /queue`, Immich `GET /api/jobs`,
 llama-server `GET /slots`, beside the exporter's used VRAM. Record whether each probe
