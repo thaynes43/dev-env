@@ -221,7 +221,7 @@ B5 has two preconditions:
 
 Two haynes-ops edits follow from the Kyverno rule that checks v2 signatures
 (`verify-thaynes43-images`, rule `verify-dev-env-v2`, added in haynes-ops #3462,
-Audit only). The first is B5's; the second is due now:
+Audit only). The first is B5's; the second is done:
 
 - **The tag ref.** The rule trusts `thaynes43/dev-env` workflows on
   `refs/heads/main` only. If B5 signs the agent image from a tag-triggered run (a
@@ -230,8 +230,8 @@ Audit only). The first is B5's; the second is due now:
   same change that adds the workflow.
 - **The v1 glob.** v1's `dev-env*` image glob also matches `dev-env:2.*` and, already
   today, `dev-env-operator:sha-*`, which `publish.yml` signs from this repo. So v1's
-  rule fails the operator image now. Narrow it to `dev-env:0.*` before the operator
-  HelmRelease (section 4, item 8.9) and before either rule moves to Enforce.
+  rule failed the operator image. Done 2026-10-06: haynes-ops #3463 narrowed it to
+  `dev-env:0.*`, ahead of the operator HelmRelease (section 4, item 8.9).
 
 **What only Tom can click** (the bot has no Administration permission):
 
