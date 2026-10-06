@@ -50,8 +50,9 @@ Running a part is Tom's yes to exactly the changes it lists. Do nothing else.
    failed with "GitHub Actions is not permitted to create or approve pull requests",
    because without the App the workflow uses `GITHUB_TOKEN`). Allow Actions to open
    PRs: `gh api -X PUT repos/thaynes43/dev-env/actions/permissions/workflow
-   -f default_workflow_permissions=read -F can_approve_pull_request_reviews=true`,
-   and check with `gh api repos/thaynes43/dev-env/actions/permissions/workflow`
+   -F can_approve_pull_request_reviews=true` (this one field only; the default
+   workflow permissions stay as they are). Skip this step if step 4 is done in the
+   same run. Check with `gh api repos/thaynes43/dev-env/actions/permissions/workflow`
    (expect `can_approve_pull_request_reviews: true`). The release PR then opens, but
    starts no CI until it is closed and reopened (CLAUDE.md "Releases"). With the App
    in place this setting is no longer needed and may be switched back off.
