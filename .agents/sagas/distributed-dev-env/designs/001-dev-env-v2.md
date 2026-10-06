@@ -2,9 +2,11 @@
 
 - **Status:** Proposed, ready for Tom to ratify (summary at the top of
   [ADR-001](../adrs/001-distributed-dev-env.md#ratification-summary)). Tom ruled on
-  every open question, Q-01 to Q-10, on 2026-10-06 and widened the scope (tool pods,
+  every open question, Q-01 to Q-11, on 2026-10-06 and widened the scope (tool pods,
   a VRAM budget per card, satellite inference workers, local models, access without
-  in-pod prompts). No question is open (section 15).
+  in-pod prompts, summoned sessions, the console). No question is open (section 15).
+  Research notes [R-01](../research/R-01-summoned-agents-audit.md) and
+  [R-02](../research/R-02-remote-control-identity.md) are folded in.
 - **Last updated:** 2026-10-06
 - **Governed by:** [ADR-001](../adrs/001-distributed-dev-env.md) (Proposed)
 - **Saga:** [README](../README.md)
@@ -28,7 +30,7 @@ pods ever refresh the same token. Each agent pod has CPU and memory requests and
 limits, runs on the worker nodes only, and keeps its work on its own volume, so a
 pod can be stopped and resumed with its conversation intact.
 
-Tom's rulings and new asks of 2026-10-06 add five things:
+Tom's rulings and new asks of 2026-10-06 add seven things:
 
 - **The scheduler places pods.** Every pod carries requests and limits; there is no
   fleet cap and no allocation logic in the operator (7.3).
@@ -45,8 +47,16 @@ Tom's rulings and new asks of 2026-10-06 add five things:
   scheduler. Household AI keeps its full reservation on every card; agents get only
   what is left, control-plane cards included, and that share grows as Tom adds GPUs.
   Larger models run on satellites: Tom's 128 GB M5 MacBook and his 5090 and 4090
-  PCs, used only while they are awake and he is not using them. Local-model agents (opencode on a Qwen coder model)
-  join Claude Code and Codex as fleet members (6.13, 8.2 to 8.4).
+  PCs, used only while they are awake and he is not using them. Local-model agents
+  (opencode on a Qwen coder model) join Claude Code and Codex as fleet members (6.13,
+  8.2 to 8.4).
+- **Summoned sessions are preserved.** The alert responder, the upgrade shepherd and
+  the other automated callers keep summoning Max-plan sessions, now through the API,
+  authorized per caller, with outcomes, lanes and watchdogs; the v1 executor
+  `dev-env-ops` moves into the operator (3.7).
+- **One login, one console.** The keeper is the sole owner of the Max login, and Tom
+  renews it each month on a console page behind Authentik that also lists every
+  session's link with an archive button (6.2, 3.8).
 
 ```mermaid
 flowchart LR
@@ -123,8 +133,8 @@ codex 0.160.0), are given where they are used: [6.2](#62-claude-max-login-and-it
 | Component | What it is | Runs as |
 |---|---|---|
 | **dev-env-operator** | Control plane. Serves the `/v1` API, reconciles `AgentSession`, `ToolSession` and `LLMLease` resources into pods and volumes, detects idle sessions, runs rescue, drains outdated sessions, expires activities. Owns no running work and holds no grant privileges. | Deployment, 2 replicas with leader election, namespace `dev-env-system` |
-| **dev-env-broker** | Access broker (6.12). Checks grant requests against the standing policies in git, sends Tom the rest, serves the approval page, creates and revokes the time-boxed RoleBindings and network policies. The same binary as the operator, run in a second mode. | Deployment, 2 replicas with leader election, own ServiceAccount, namespace `dev-env-system` |
-| **dev-env-keeper** | The only holder of rotating credentials (Claude Max login, Codex login) and of the GitHub App key. Mints and refreshes; writes short-lived results into Secrets that agent pods mount. Pages Tom when a login nears expiry. | Deployment, 1 replica, `Recreate`, namespace `dev-env-system` |
+| **dev-env-broker** | Access broker (6.12) and Tom's console (3.8). Checks grant requests against the standing policies in git, sends Tom the rest, creates and revokes the time-boxed RoleBindings and network policies, and serves the console: sessions with their links and an archive button, approvals, and the login renewal page. The same binary as the operator, run in a second mode. | Deployment, 2 replicas with leader election, own ServiceAccount, namespace `dev-env-system` |
+| **dev-env-keeper** | The only holder of rotating credentials (the one Claude Max login, the Codex login) and of the GitHub App keys (haynes-dev-bot, haynes-ops-bot). Mints and refreshes; writes short-lived results into Secrets that agent pods read. Runs the login ceremony for the console, archives Remote Control entries on reap, tracks the static token's age. Pages Tom when a credential nears expiry. | Deployment, 1 replica, `Recreate`, namespace `dev-env-system` |
 | **session pod** | One agent session: `tini` as PID 1, `agentd`, tmux, the agent CLI (Claude Code, Codex or opencode), its MCP children, the build tools. | Pod in namespace `dev-agents`, owned by its `AgentSession` |
 | **agentd** | Small supervisor inside each session pod. Renders config at boot, clones the repo, starts or resumes the agent, sends heartbeats, runs rescue and drain hooks on request, and serves the loopback tool gateway (8.1). Replaces v1's `dev-init.sh` and `post-ready.sh` per pod. | Child of `tini` in the session pod |
 | **tool pod** | One instance of a specialised tool (Blender, audio, image, transcription, 3D printing, video, a local LLM server), started for agents on demand and stopped when idle (8.1). | Pod in namespace `dev-tools`, any node that fits, owned by its `ToolSession` or pool |
@@ -181,7 +191,7 @@ spec:
   repo: haynes-ops
   base: origin/main
   agent: claude                       # claude | codex | opencode (6.13)
-  mode: remote                        # task | local | remote (v1's task | local | both)
+  mode: remote                        # task | local | remote (v1's task | local | both); summoned: task | remote (3.7)
   model: claude-opus-5-5              # full id, never an alias; opencode: the LLM pool's model id
   effort: xhigh
   prompt: "…"                         # task mode only
@@ -189,7 +199,11 @@ spec:
   profile: full                       # which Secrets and standing grants (D-18)
   tools: [blender, audio]             # tool pools registered at boot (8.1); default from the profile
   llm: { pool: llm-coder }            # opencode only: the LLM pool it leases (8.3)
-  parent: haynes-ops-1005-195501      # the session that created it, from the caller's token
+  parent: haynes-ops-1005-195501      # the session or caller that created it, from the caller's token
+  caller: ""                          # summoned only: the CallerPolicy, e.g. alert-responder (3.7)
+  lane: ""                            # summoned only: remediation | upgrade | escalation | curation
+  idempotencyKey: ""                  # summoned only: e.g. the alert signature
+  limits: { timeout: "", maxTurns: 0 } # task kind: wall clock and turn cap from the policy
   operatingMode: Running              # Running | Suspended
   lifecycle:
     idleSuspendAfter: 72h
@@ -201,7 +215,9 @@ status:
   podName: haynes-ops-1005-202504
   nodeName: talosw02
   agent: { status: busy, lastActivity: "2026-10-05T23:41:07Z" }
-  remoteControl: { name: haynes-ops-1005-202504, url: "https://claude.ai/code/…" }
+  remoteControl: { name: haynes-ops-1005-202504, sessionId: "session_…", url: "https://claude.ai/code/…", state: registered }  # 6.7
+  outcome: { state: running, note: "", at: "" }   # summoned: pending | running | done | failed | escalated
+  usage: { costUSD: 0, inputTokens: 0, outputTokens: 0 }  # 3.7, V-16
   rescue: { lastBundle: "rescue/haynes-ops-1005-202504/20261006-0130.bundle" }
   conditions: []
 ```
@@ -219,8 +235,9 @@ HTTPS with a cert-manager certificate, JSON, versioned under `/v1`.
 
 | Method and path | Purpose |
 |---|---|
-| `POST /v1/sessions` | Create a session: repo, agent, mode, model, effort, prompt, base, size, profile. Returns the id and state. |
-| `GET /v1/sessions`, `GET /v1/sessions/{id}` | List (filters: repo, state, mine) and detail: phase, node, revision, idle time, branch, Remote Control URL. |
+| `POST /v1/sessions` | Create a session: repo, agent, mode, model, effort, prompt, base, size, profile. Summoning callers also send `name`, `idempotencyKey`, `lane`, and get `timeout` and `maxTurns` from their policy (3.7). Returns the id and state; a repeated idempotency key returns the existing session. |
+| `GET /v1/sessions`, `GET /v1/sessions/{id}` | List (filters: repo, state, mine, caller, lane, outcome) and detail: phase, node, revision, idle time, branch, Remote Control URL and state, outcome and note, usage. |
+| `POST /v1/sessions/{id}/outcome` | A session reports on itself: `working`, `done`, `failed` or `escalate`, with a note (3.7). Only the session's own token may call it. |
 | `GET /v1/sessions/{id}/log?tail=N` | Task log tail. The log is also kept on the shared volume after the pod is gone. |
 | `POST /v1/sessions/{id}/messages` | Relay a message into a session ([6.8](#68-messaging-between-agents)). |
 | `POST /v1/sessions/{id}/suspend` | Rescue, then stop the pod and keep the volume. |
@@ -230,8 +247,8 @@ HTTPS with a cert-manager certificate, JSON, versioned under `/v1`.
 | `GET /v1/fleet` | Running and Pending sessions with the scheduler's reasons, current revision, outdated sessions, storage health, plan-quota state. It reports; it gates nothing (D-21). |
 | `POST /v1/fleet/nodes/{node}/evacuate` | Move a node's sessions and tool instances off it before a drain ([6.12](#612-access-no-prompts-in-the-pod-control-at-the-platform)). |
 | `GET/POST/DELETE /v1/activities` | `declare-activity` ([6.9](#69-declare-activity)). |
-| `GET /v1/auth` | Status of each credential: present, expires, days left. Never a value. |
-| `POST /v1/auth/{claude,codex}/login` and `…/login/code` | Relay the monthly login ceremony ([6.2](#62-claude-max-login-and-its-monthly-renewal)). |
+| `GET /v1/auth` | Status of each credential: present, expires, days left; for the static token, its mint date and days left (V-12). Never a value. |
+| `POST /v1/auth/{claude,codex}/login` and `…/login/code` | The login ceremony. The console (3.8) is the normal way in; this is the laptop fallback, Tom only ([6.2](#62-claude-max-login-and-its-monthly-renewal)). |
 | `GET /v1/rescues`, `POST /v1/rescues/{id}/restore` | List rescue bundles; start a new session from one. |
 | `GET /v1/tools`, `POST /v1/tools/sessions`, `DELETE /v1/tools/sessions/{id}` | List tool pools; attach (create a ToolSession for the caller); release ([8.1](#81-tool-pods)). |
 | `POST /v1/grants`, `GET /v1/grants`, `GET/DELETE /v1/grants/{id}` | Request, list, inspect or release an access grant ([6.12](#612-access-no-prompts-in-the-pod-control-at-the-platform)). Approving is not in this API: it happens on the broker's page. |
@@ -249,9 +266,12 @@ audience `dev-env-operator`, checked with a TokenReview.
   dev-env-operator` with Tom's admin kubeconfig and reaches the API through a
   port-forward. `agent-run` does both steps for him.
 - An Authentik OIDC login for the laptop is a later step (phase 6).
+- Summoning callers (alert-responder, upgrade-shepherd and the rest, 3.7) use their
+  own ServiceAccount's projected token. The operator looks up their `CallerPolicy`.
 
-All authenticated callers get the same API, with these exceptions: only Tom (on the
-broker's page) can approve a grant; only Tom or the holder of an active nodes or
+All authenticated callers get the same API, with these exceptions: a summoning
+caller gets only what its `CallerPolicy` allows (3.7, V-01); only Tom (on the
+console) can approve a grant or renew a login; only Tom or the holder of an active nodes or
 break-glass grant can evacuate a node (6.12); only Tom can hold a GPU or enrol a
 satellite (8.2, 8.4); and satellite heartbeats accept only satellite client
 certificates. Destroying unrescued work is not in the API at all: it needs a human with `kubectl` (agents cannot delete PVCs in
@@ -272,6 +292,7 @@ The verbs stay, so muscle memory and every CLAUDE.md instruction carry over.
 | `prune`, `sweep` | Gone as commands. The operator's reaper does this continuously ([4.3](#43-timers)). `agent-run fleet` shows what it will do. |
 | `codex-remote [up\|stop]` | Manages the codex hub session ([6.3](#63-codex)). |
 | new: `suspend`, `resume`, `restart`, `msg`, `fleet`, `fleet evacuate <node>`, `auth status\|login\|code`, `rescue list\|restore` | Map one to one onto the API. |
+| new: `report working\|done\|failed\|escalate [--note]`, `wait <name> --registered` | Summoned sessions report their outcome; callers wait for a verified Remote Control link (3.7). `report` replaces v1's `order-status.sh`. |
 | new: `tools list\|attach\|release\|get\|put` | Tool pods and their artifacts ([8.1](#81-tool-pods)). |
 | new: `grant request\|list\|use\|release`, `breakglass` | Access grants ([6.12](#612-access-no-prompts-in-the-pod-control-at-the-platform)). `grant request` prints the approval link and waits for the answer; `--no-wait` returns the id. |
 | new: `lease <pool> [--minutes N]` | LLM leases ([8.3](#83-llm-pools-and-leases)). |
@@ -316,6 +337,163 @@ read-only root filesystem, all capabilities dropped, `RuntimeDefault` seccomp,
 `XDG_RUNTIME_DIR=/dev/shm/run-1000` (Claude refuses a group-writable socket dir),
 and the `not-ready`/`unreachable` tolerations at 3600 s (an RWO volume cannot
 re-attach until the old node lets go, so early eviction never helps).
+
+### 3.7 Summoned sessions
+
+Automated callers in haynes-ops hand work to Claude Code sessions that bill the Max
+plan instead of the metered API. Research note
+[R-01](../research/R-01-summoned-agents-audit.md) audited that path: metered spend on
+it has been $0 since July 2026, the headless lanes are reliable, and the interactive
+lanes were broken because they never registered Remote Control (F-01). Tom
+(2026-10-06): "we need to preserve the functionality". So summoning is a first-class
+use of the v2 API, and the v1 executor (`dev-env-ops`) moves into the operator
+(plan 10).
+
+| Caller (namespace `upgrade-agent`) | Summons today | v2 kind and lane |
+|---|---|---|
+| alert-responder | `rem-responder-<sig>` when a critical alert needs a fix; `esc-responder-<sig>` when its own diagnosis died | `task` / remediation; `remote` / escalation |
+| upgrade-shepherd | `wo-<PR>` for a consequential bump; `esc-shepherd-<sig>` on a terminal HOLD or failure | `remote` / upgrade; `remote` / escalation |
+| shepherd-triage, health-gate | `esc-shepherd-<sig>`, `esc-gate-<sig>` | `remote` / escalation |
+| curation CronJob | `wo-cigar-curate-<date>`, daily | `remote` / curation |
+| a remediation session | `esc-rem-<sig>` when it cannot fix the fault | `remote` / escalation, under the original caller |
+
+**D-36. Summoning is authorized per caller, by a `CallerPolicy` in git.**
+
+```yaml
+apiVersion: dev-env.haynesops.com/v1alpha1
+kind: CallerPolicy
+metadata:
+  name: alert-responder
+  namespace: dev-env-system
+spec:
+  serviceAccount: upgrade-agent/alert-responder
+  priority: urgent                     # urgent | normal | bulk (7.3)
+  limits: { concurrent: 2, createsPerHour: 6 }
+  sessions:
+    - kind: task                       # headless, never on Tom's list
+      lane: remediation
+      namePrefix: rem-
+      profile: ops
+      model: { default: claude-opus-5-5, fallback: claude-opus-5 }
+      effort: xhigh
+      timeout: 40m
+      maxTurns: 120
+      onUnreported: escalate
+    - kind: remote                     # Tom joins from the phone
+      lane: escalation
+      namePrefix: esc-
+      profile: ops
+      model: { default: claude-fable-5-1, fallback: claude-opus-5-5 }
+      onUnreported: failed
+```
+
+- **Authorization, not just authentication** (V-01). A ServiceAccount with a
+  `CallerPolicy` may create only the kinds, name prefixes, profiles and models its
+  policy lists. CRD validation refuses a policy that names profile `full`, and
+  summoning callers never request grants. The caller is recorded as the session's
+  `parent`. A ServiceAccount with no policy that is not a session, the workbench or
+  Tom gets a 403. Every caller-supplied field (reason, diagnosis, alert text) reaches
+  the session as data in a fenced block, never as instructions, as today. That and
+  the authenticated caller replace v1's unauthenticated ConfigMap queue (F-11).
+- **Two kinds** (V-02). `task`: headless `claude -p` with the policy's wall-clock
+  timeout and turn cap, never registered with Remote Control. `remote`: interactive,
+  registered under its name (6.7), quiet on success.
+- **Names and idempotency** (V-03). The create carries `name` (with the lane prefix,
+  so Tom's phone list sorts) and `idempotencyKey` (the alert or regression
+  signature). A create whose key matches an unfinished session of the same caller
+  returns that session instead of a new one. If the earlier one has finished, the new
+  session gets a numeric suffix (`rem-responder-b7baaf6c-2`), so a re-fired
+  signature never overwrites a finished record (F-08).
+- **Models** (V-04). Full ids only. Before the agent starts, agentd runs a one-turn
+  pre-flight on the primary model and uses the fallback if it is refused. CRD
+  validation requires the fallback to differ from the primary (F-05). The curation
+  order's `opus` alias (Tom's choice, 2026-08-29) becomes the current Opus full id in
+  its policy, moved by the standard model-bump procedure, because this repo allows no
+  aliases; the intent, "the latest Opus", is kept.
+- **Plan credentials only, and fail loudly** (V-05). `task` sessions use the static
+  token (6.1); `remote` sessions use the keeper's access token (6.2). No v2 pod holds a
+  metered API key, so no session can fall back to metered. If no plan credential
+  works, the create fails with `503 plan credential unavailable`, and the caller pages
+  as it does today.
+- **A verified join handle** (V-06). For a `remote` session the caller waits
+  (`agent-run wait <name> --registered`) until `status.remoteControl.state` is
+  `registered`, and puts that `url` in its page. If registration fails, the state is
+  `failed` and the page says so and links the console's session page instead of a
+  dead handle.
+- **Outcome** (V-08). The session reports with `agent-run report
+  done|failed|escalate --note "…"` (replacing `order-status.sh`) and heartbeats with
+  `agent-run report working`. These set `status.outcome.{state, note, at}`; the
+  states are `pending`, `running`, `done`, `failed` and `escalated`. Each decision is
+  an `ops-event` line in the operator's log, so it reaches Loki. A daily digest of
+  silent outcomes goes to Tom on Pushover at priority -1, as today. **Guaranteed
+  outcome:** if the agent exits, hits its timeout or turn cap, or trips its watchdog
+  without reporting, the operator closes the session as the policy's `onUnreported`
+  says (`failed`, or `escalate`, which files an `esc-rem-…` session for remediation).
+- **Lanes** (V-09). At most one running session per lane: remediation, upgrade,
+  escalation, curation. One remediation actuator touches the cluster at a time. Lanes
+  limit actuators, not capacity, so they sit beside D-21, not against it. Queued
+  sessions start escalations first, then upgrade, remediation and curation. A queued
+  escalation that waits more than 15 minutes pages Tom (F-04).
+- **Storm limits** (V-10). Per caller, from its policy: concurrent sessions, creates
+  per hour, and the idempotency key. The responder keeps its own collapse, cooldown and
+  page cap, so there are two layers.
+- **Watchdogs** (V-11). A session with no agent activity and no `working` report for
+  its lane's limit (180 minutes for upgrades; the timeout for `task`) is closed as
+  `failed`, its lane is freed, and Tom is paged. A pod that vanishes is reported as
+  `session lost` and resumed from its volume where it can be. An escalation that is
+  idle because it is waiting on Tom is exempt.
+- **Pages**, from the operator on Pushover: an escalation spawned (with its verified
+  link), an upgrade or escalation `failed`, a session lost, an escalation queued over
+  15 minutes. Everything else goes to the digest. Email stays refused, as in v1.
+- **Never ended by a change** (V-13). Operator, broker and keeper upgrades never touch
+  a session (5.1). A summoned session is not drained for a new revision: it runs to its
+  outcome on the revision it started on (5.2).
+- **Retention** (V-15). After its outcome a `done` session stays joinable for 1 day,
+  a `failed` or `escalated` one for 7 days; then it is rescued and reaped, and its
+  phone entry archived (6.7).
+- **Cost record** (V-16). `status.usage` holds the CLI's `total_cost_usd` and token
+  counts for `task` sessions (from `--output-format json`) and token counts from the
+  transcript for `remote` ones. They are exported as metrics, so the API tax avoided
+  stays measurable.
+- **Activity first** (V-17). `ops` sessions read `Activity` resources before acting
+  (6.9), as the remediation contract requires. Their read RBAC covers the group.
+
+Where each R-01 requirement lands:
+
+| Req | Section | Req | Section |
+|---|---|---|---|
+| V-01 caller authorization | 3.7 D-36, 3.4 | V-10 storm limits | 3.7 |
+| V-02 two kinds | 3.7, 3.3 | V-11 watchdogs | 3.7, 4.3 |
+| V-03 names, idempotency | 3.7, 3.4 | V-12 credential lifecycle | 6.1, 3.8 |
+| V-04 model pin, fallback | 3.7 | V-13 never ended by a change | 3.7, 5.2 |
+| V-05 plan credentials only | 3.7, 6.1, 6.2 | V-14 priority against Tom's work | 7.3 |
+| V-06 verified join handle | 6.7, 3.7 | V-15 retention | 4.3, 3.7 |
+| V-07 `ops` profile | 6.10 D-18 | V-16 cost record | 3.7, 3.3 |
+| V-08 outcome, guaranteed close | 3.7, 3.4 | V-17 read `Activity` | 3.7, 6.9 |
+| V-09 lanes | 3.7 | | |
+
+### 3.8 The console
+
+**D-37. One web front end for Tom: the console.** Ruling (Q-11, Tom 2026-10-06): the
+monthly login renewal is "baked into the front end", and the same front end lists
+every session's link and status with an archive button. The console is the broker's
+web UI, extended: the broker already serves Tom's approval page on a port only
+traefik reaches, on an external host behind Authentik, and already trusts only Tom's
+Authentik identity (D-26). One Tom-facing surface keeps one place that trusts that
+identity. Pages:
+
+1. **Sessions.** Every session, interactive and summoned: name, kind, caller, repo,
+   phase, outcome and note, and the Remote Control link with its state (registered,
+   offline, archived). Buttons: open the link, archive a stale entry (the broker asks
+   the keeper to archive, as reap does in 6.7), and how to attach from the workbench
+   or a laptop.
+2. **Approvals.** Grant requests (D-26).
+3. **Logins.** Each credential's state and days left: the Claude Max login, the static
+   token (V-12), the Codex login, the GitHub App keys. "Renew" runs the Claude login
+   ceremony (6.2) in the page. The sign-in link and the code are never logged or
+   stored; if the page is left, the keeper ends the waiting login after 10 minutes.
+4. **Codex.** The codex hub's state and its single phone enrolment, read-only. The
+   enrolment stays on the hub's volume (6.3).
 
 ## 4. Session lifecycle
 
@@ -364,7 +542,11 @@ busy-lock, merger waits for release"). The agent sets it simply by working.
 | interactive or remote session idle | suspended after 3 days | v1's sweep window (Tom, 2026-09-25) |
 | suspended session | archived after 7 days | resume window; RBD is thin, so a parked volume costs only its written bytes |
 | rescue bundle | kept 30 days | long enough to notice a loss |
-| outdated revision | drained at the next idle moment (Q-03) | section 5.2 |
+| outdated revision | drained at the next idle moment (Q-03); summoned sessions are never drained | section 5.2, 3.7 |
+| summoned session, outcome `done` | kept joinable 1 day, then rescued and reaped | V-15 (3.7) |
+| summoned session, outcome `failed` or `escalated` | kept joinable 7 days, then rescued and reaped | V-15: Tom joins failures after the fact |
+| summoned session, no activity and no `working` report | closed as its policy's `onUnreported` after its lane's limit (180 min for upgrades; the timeout for `task`); escalations waiting on Tom are exempt | V-11 (3.7) |
+| reaped `remote` session | its Remote Control entry archived after the bundle is verified | 6.7, S-15 |
 | tool instance with no claims and not busy | stopped after 30 min, volume kept | 8.1 |
 | access grant | expires at its TTL (at most 8 h; break-glass 1 h) | 6.12 |
 | unanswered grant request | denied after 30 min | 6.12 |
@@ -437,7 +619,10 @@ The revision is the hash of the template ConfigMap (D-04). New sessions always s
 on the current revision. A running session on an older revision is **outdated**.
 
 Policy (**Q-03**, Tom 2026-10-06): **drain on idle, then resume the conversation on
-the new version.**
+the new version.** Summoned sessions (3.7) are the exception: they are short, they
+belong to an unattended caller, and an escalation that sits idle is waiting on Tom.
+They are never drained; each runs to its outcome on the revision it started on
+(V-13).
 
 1. The operator marks the session `Draining` only when it is idle (4.2).
 2. agentd `prepare-restart` records the agent session id, mode, model, effort and
@@ -475,6 +660,7 @@ tool group keeps its single grouped PR.
 | Remote Control, phone, standby | per session; post-ready keeps one standby | per session pod; operator keeps one standby (6.7) | Unchanged for Tom. |
 | ListAgents and SendMessage | Unix sockets in `/dev/shm`, one pod | Native inside a pod, native between Remote Control sessions, relay otherwise (6.8) | No cross-pod inbox for headless tasks. |
 | declare-activity | JSON files on the PVC, read by dev-env-ops over `kubectl exec` | `Activity` resource via the API (6.9) | Limits enforced server-side. |
+| Summoned sessions | `dev-env-ops` executor polling the `upgrade-work-orders` ConfigMap; unauthenticated writers | The operator API, authorized per caller by `CallerPolicy`; lanes, watchdogs and the digest in the operator (3.7) | Callers change their scripts to call the API, one at a time (plan 10). |
 | Egress | one CNP for the pod, about 115 names | Web and platform tiers for every pod; the controlled tier by grant (6.10) | Web fetch works; what a tricked agent can leak depends on what the pod holds (Q-07). |
 | Access beyond the baseline | ask Tom in chat; a headlamp Job on his live directive | `AccessGrant` through the broker, approved on Tom's phone or by a policy in git (6.12) | Audited and time-boxed. |
 | Specialised tools | fixed Deployments in `dev` (Blender, audio) | `ToolPool` and `ToolSession` in `dev-tools` (8.1) | Start on demand, stop when idle. |
@@ -483,67 +669,118 @@ tool group keeps its single grouped PR.
 
 Unchanged in substance. `dev-env-claude-secret` is copied into `dev-agents` by an
 ExternalSecret and injected as env into every session pod for `task` and `local`
-modes. Many pods may use it at once: it has no refresh token, so there is nothing to
-race. It counts against the same Max plan windows as everything else; the plan's own
-wall is the limit, and `agent-run fleet` shows it (section 7.3).
+modes, summoned `task` sessions included. Many pods may use it at once: it has no
+refresh token, so there is nothing to race. It is inference-only, so it never
+registers Remote Control (6.2). It counts against the same Max plan windows as
+everything else; the plan's own wall is the limit, and `agent-run fleet` shows it
+(section 7.3).
+
+**Its age is tracked** (V-12, R-01 F-07). One setup token carries every automated
+path today, it lives about a year (the current one to about 2027-07), and nothing
+warns before it dies. Its 1Password item gets a `minted` field, synced with the token.
+The keeper reports the mint date and days left in `GET /v1/auth` and on the console,
+and pages Tom at 30 and at 7 days. When it dies, no v2 path falls back to metered:
+creates fail with `503 plan credential unavailable` (3.7).
 
 ### 6.2 Claude Max login and its monthly renewal
 
-This is the hard part.
+This is the hard part. Research note
+[R-02](../research/R-02-remote-control-identity.md) has the full evidence; this
+section keeps what the design needs.
 
 **What we know.**
 
-- Remote Control needs the `/login` credential. The static token "cannot register
-  `/v1/code/sessions`" (A/B-proven in the v1 pod, 2026-08-29), so v1 strips it for
-  `both` mode.
-- The `/login` credential holds a rotating refresh token. On 2026-08-29, five or more
-  sessions sharing one `.credentials.json` raced the rotation: one rotated, a sibling
-  replayed the old token, and the whole token family was revoked mid-task. Copying
-  that file into many pods would make this certain, not merely possible.
+- Remote Control needs a full-scope `/login` credential. The CLI checks that the
+  stored token's scopes include `user:profile`, and refuses inference-only tokens
+  (`token_scope_limited`). **S-2 is answered: the static token cannot register Remote
+  Control.** The docs say so ("Remote Control requires a full-scope login token"), the
+  2.1.284 binary has the same check, and the v1 executor proved it again: all 45 of its
+  `wo-*` and `esc-*` sessions since 2026-09-03 ran on a credentials file synthesized
+  from the setup token and were rejected (R-01, F-01).
+- Remote Control is bound to the claude.ai account and organization of the
+  credential, not to an IP, a hostname or a machine (R-02 section 2). Many pods can
+  each run Remote Control on one Max account: v1 runs 14 at once from one login.
+- The `/login` credential holds a rotating refresh token; the access token lasts
+  about 8 hours, and the login lapses about 30 days after each `/login`. On
+  2026-08-29, five or more sessions sharing one `.credentials.json` raced the
+  rotation: one rotated, a sibling replayed the old token, and the whole token family
+  was revoked mid-task. Copying that file into many pods would make this certain.
 - Sharing one file over CephFS is no better: the race happened on one kernel with
   one file, and the CLI's own locks refuse to break a lock held in another pid
   namespace ([6.8](#68-messaging-between-agents)).
-- claude-code 2.1.284 contains undocumented hooks for host-managed auth:
-  `CLAUDE_CODE_HOST_CREDS_FILE`, `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` (requires
-  `CLAUDE_CODE_OAUTH_SCOPES`), `CLAUDE_CODE_OAUTH_401_WAIT_MS`,
-  `CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH`. They suggest the CLI can run on a credential
-  that a host refreshes for it. They are undocumented, so this design only tests them.
+- **The CLI can run on a credential someone else refreshes** (R-02 5.2). It re-reads
+  `.credentials.json` when the file's mtime changes, and an "auth-revive watcher"
+  re-enables Remote Control when a fresh same-account credential appears. With
+  `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_CODE_OAUTH_SCOPES` set, it builds a
+  credential with no refresh token at all (spike S-1b). `CLAUDE_CODE_OAUTH_401_WAIT_MS`
+  makes it wait on a 401 before acting. The `CLAUDE_CODE_HOST_CREDS_FILE` hook does
+  not help: Remote Control refuses the kind of auth it supplies.
 
-**D-11. Target: the keeper is the only owner of the Max login.**
+**Ruling (Q-11, Tom 2026-10-06).** The link Tom saw survive pod restarts is the Claude
+Code auth, the Max `/login` on the v1 PVC. **The keeper is its sole owner; session
+pods get access tokens only. The monthly renewal moves into the console (3.8), behind
+Authentik, and replaces the chat relay.**
 
-- The keeper holds the refresh token and refreshes well before expiry.
-- It writes Secret `dev-env-claude-live` with a credentials file that carries the
-  current access token and **no refresh token**. Remote Control pods mount it as a
-  directory (so kubelet updates it in place) and point the CLI at it.
+**D-11 (revised 2026-10-06). The keeper is the only owner of every Max login.**
+
+- The keeper holds the refresh token and refreshes well inside the access token's
+  8-hour life. It writes Secret `dev-env-claude-live` with the current access token,
+  its expiry, scopes, subscription type and rate-limit tier, and **no refresh token**.
+- **agentd, not a mount, writes the pod's credentials file.** The CLI writes
+  `.credentials.json` itself (connector `mcpOAuth` tokens, atomic temp-file renames),
+  so a read-only Secret mount would break it. agentd reads the keeper's Secret and
+  merges only `claudeAiOauth.{accessToken, expiresAt, scopes, subscriptionType,
+  rateLimitTier}` into the pod's own `~/.claude/.credentials.json`: mode 0600, owned
+  by the agent user, by atomic rename, keeping every key the CLI owns. It re-merges
+  within seconds of the Secret changing.
+- **agentd seeds a cold home** (R-02 P-3): `.claude.json` with `oauthAccount`
+  (account and organization uuids from the keeper's profile fetch, nothing else), the
+  onboarding flags, and trust for the worktree. It never copies `machineID`,
+  `replBridgePlaceholders` or `sessions/*.json` between pods.
+- **Environment rules.** Remote pods unset `CLAUDE_CODE_OAUTH_TOKEN`, as v1 does. No
+  pod sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_GROWTHBOOK`,
+  `DISABLE_TELEMETRY` or `DO_NOT_TRACK`: the first two turn Remote Control off, and the
+  last two switch the CLI to a check that wants a refresh token.
 - A pod can never rotate the token, because it never holds the refresh token. The
-  worst case is a 401 until the kubelet syncs the new file.
+  worst case is a 401 until agentd re-merges; S-1 measures that window.
+- **Trusted Devices stays off** on Tom's account (R-02 5.3). With it on, every pod
+  would enrol as its own device, email Tom, and need a sign-in from the last 18 hours.
+  Turning it on would need its own design pass.
+- **Two v1 logins to absorb.** v1 has the dev-env pod's login, and since Tom's ruling
+  on haynes-ops #3414 (2026-10-06) `dev-env-ops` has a second monthly login of its own,
+  so its `wo-*` and `esc-*` sessions can register Remote Control. In v2 the keeper
+  holds **one** login of its own, made fresh with `/login` in phase 3, and serves every
+  remote pod, interactive or summoned. A second login bought separation from the
+  refresh race, which the keeper removes. Nothing is copied from v1: moving a live
+  refresh token would give it two owners for a while. Each v1 login is retired with
+  its pod (the dev-env pod at cutover, plan 05; `dev-env-ops` when its callers move,
+  plan 10) and simply lapses. Until then Tom renews up to three logins a month; the
+  console makes each one a page, not a chat relay.
 
-**Spike S-1** decides it, in the v1 pod with a scratch `CLAUDE_CONFIG_DIR` that never
-contains the refresh token:
+**Spike S-1** decides whether the target works (backlog 00 has the steps): an
+access-token-only credentials file on a cold home; a newer access token picked up
+from disk without a restart; quiet, harmless behaviour when the CLI wants to refresh;
+the 401 window after a keeper rotation; the env-token variant S-1b; and the request
+bodies confirmed with `--debug-file`.
 
-1. Does `--remote-control` register with an access-token-only credentials file?
-2. Does a running session pick up a newer access token from disk without a restart?
-3. Does the CLI stay quiet, or fail harmlessly, when it wants to refresh and has no
-   refresh token?
+**Fallback if S-1 fails: a coordinator host.** One long-lived session pod of kind
+`coordinator-host` (size L, workers only, CPU-limited) owns `.credentials.json` on its
+own volume, exactly as v1 does, and runs every Remote Control session as a tmux
+window. Coordinators dispatch heavy work to task pods with `agent-run`, as the
+coordinator rules already ask. Summoned `remote` sessions (3.7) then also run as
+windows there. Fewer processes share the rotating credential than in v1 today.
+Identity does not force this fallback; only the refresh token does.
 
-The keeper forces rotations on demand, so the spike takes minutes, not a soak.
-**Spike S-2** re-tests whether the static token can register Remote Control on the
-current CLI. If it can, the keeper is not needed for Claude at all.
-
-**Fallback if S-1 and S-2 both fail: a coordinator host.** One long-lived session pod
-of kind `coordinator-host` (size L, workers only, CPU-limited) owns
-`.credentials.json` on its own volume, exactly as v1 does, and runs every Remote
-Control session as a tmux window. Coordinators dispatch heavy work to task pods with
-`agent-run`, as the coordinator rules already ask. Fewer processes share the rotating
-credential than in v1 today.
-
-**Renewal ceremony**, in either mode: `agent-run auth login claude` starts
-`claude auth login` where the credential lives (keeper or host) and returns the bare
-URL. Tom opens it on his phone and pastes back the code; the coordinator relays it
-with `agent-run auth code '<code>'`. The URL and code are secrets for the life of
-the flow: the API never logs request bodies on these paths, and nothing writes them
-to git. `claude-login-check` becomes `agent-run auth status`, and the daily page at
-7 days or fewer moves from v1's auth-watch sidecar into the keeper.
+**Renewal ceremony.** Tom opens the console's **Claude login** page (3.8). It shows
+days left. "Renew" asks the keeper to start `claude auth login` where the credential
+lives (keeper, or the coordinator host in the fallback); the page shows the sign-in
+link; Tom signs in on his phone and pastes the code the page asks for; the keeper
+finishes and the page shows the new expiry. The link and code are secrets for the
+life of the flow: the console and keeper never log or store them, and nothing writes
+them to git. `agent-run auth login` and `auth code` stay as a laptop fallback for
+when the console is down. `claude-login-check` becomes `agent-run auth status`, and
+the daily page at 7 days or fewer moves from v1's auth-watch sidecar into the keeper,
+with a link to the console page.
 
 ### 6.3 Codex
 
@@ -565,9 +802,14 @@ to git. `claude-login-check` becomes `agent-run auth status`, and the daily page
 **D-12. Codex in v2:**
 
 - **Codex hub.** One long-lived session pod of kind `codex-hub` runs the
-  remote-control daemon and keeps the enrolment on its volume, so the phone keeps one
-  stable computer entry across upgrades. It is drained like any session: resume
-  brings the daemon back on the same enrolment.
+  remote-control daemon and keeps its single enrolment on its own volume, so the phone
+  keeps one stable computer entry across upgrades (Q-11, Tom 2026-10-06). That is how
+  Codex survives restarts, and it differs from Claude: the enrolment is a row in the
+  hub's `~/.codex` state database, named after the host at first enrolment, while a
+  Claude Remote Control session is bound to the account. The hub has the fixed
+  hostname `codex-hub` (R-02 P-12), so a re-enrolment after a lost volume shows a
+  readable name, not a pod hash. It is drained like any session: resume brings the
+  daemon back on the same enrolment.
 - **Auth, step 1:** the hub owns `auth.json`, as v1 does today. Codex work runs in
   the hub (CPU-limited, workers only) until step 2.
 - **Auth, step 2 (spike S-3):** the keeper owns the Codex refresh and distributes
@@ -592,6 +834,11 @@ per-shell `GH_TOKEN` export all work unchanged. The PEM exists only in the keepe
 Trade-off: one token is shared by the fleet, and a kubelet sync takes up to about two
 minutes. The 20-minute margin covers that. A per-pod sidecar would put the PEM in
 every pod, which is worse.
+
+**The ops bot.** Summoned sessions keep v1's narrower GitHub identity. The keeper also
+holds the `haynes-ops-bot` App key and mints its token (haynes-ops only; contents,
+pull requests, issues; no workflows) into `dev-env-ops-gh-token`, which only
+`ops`-profile pods mount (D-18). They never get the 23-repo dev bot.
 
 ### 6.5 MCP servers
 
@@ -676,12 +923,41 @@ clone belongs to one session.
 
 - `remote` mode is opt-in per session, as `--interactive` is today. Tom's rule stands
   (2026-08-23): only sessions that want Tom appear in his session list.
-- The Remote Control name is the session id, which is also the pod name and hostname.
-- The operator keeps one standby `remote` session on haynes-ops, replacing
-  post-ready's standby (4.3).
-- A session's Remote Control registration survives a drain if spike S-6 shows that
-  `claude --resume <id> --remote-control <name>` reattaches. If it registers a new
-  entry instead, the old one goes stale; acceptable, and noted for Tom.
+- **Per session pod** (R-02 P-1). Each `remote` session pod runs
+  `claude --remote-control <name>`, as v1's `both` mode does. The identity is the
+  account, so pod IPs and hostnames need not be stable. Session pods never run server
+  mode (`claude remote-control`), which would leave one environment per pod on the
+  account (P-10).
+- **Names** (P-4). The Remote Control name is the session's name: the session id, or a
+  summoning caller's lane name such as `esc-responder-1a2b3c4d` (3.7). Every pod sets
+  `CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=dev-env`, so a session that turns on
+  `/remote-control` without a name never shows a pod hostname. Tom can rename from the
+  phone; the CLI syncs the title back.
+- **The link comes from the CLI's registry, not the pane** (P-5). agentd reads
+  `~/.claude/sessions/<pid>.json` (`bridgeSessionId`, `name`, `status`) and reports
+  `status.remoteControl.{sessionId, url, state}`, with
+  `url = https://claude.ai/code/<bridgeSessionId>` and `state` one of `registering`,
+  `registered`, `offline`, `failed`, `archived`. The URL is set only after
+  registration succeeds. This replaces post-ready's pane scraping, and it is the
+  verified join handle summoned sessions need (V-06). The link opens only for Tom's
+  account, but it still stays out of public git.
+- **Drain keeps the entry** (P-6). On resume, agentd runs `claude --resume
+  <conversation-id> --remote-control <name>` on the moved volume. The transcript's
+  `bridge-session` pointer and the same account bring back the same phone entry. This
+  is documented behaviour (the owner check is the account and organization, not the
+  machine); spike S-6 confirms it in one run. A drain never archives.
+- **Reap archives the entry** (P-7). After the rescue bundle is verified, the operator
+  asks the keeper, which holds the access token, to archive
+  `status.remoteControl.sessionId` with the CLI's archive call. It is best effort and
+  recorded in status. Spike S-15 decides it: the archive call is undocumented. If S-15
+  fails, reaped sessions stay offline in the list, Tom archives them from the console
+  or the app, and `agent-run fleet` counts them. Without archiving, offline entries
+  pile up (one per reaped session), and ListAgents, which pages through a bounded
+  listing, can stop showing newer sessions.
+- **Standby** (P-8). The operator keeps one standby `remote` session on haynes-ops,
+  replacing post-ready's standby (4.3), with the circuit breaker.
+- **The console** lists every session's link and state, with an archive button (Q-11;
+  3.8).
 - The coordinator role (Tom, 2026-09-28) is unchanged. A coordinator now dispatches
   work as separate pods with `agent-run -p`, in addition to in-process subagents.
 
@@ -736,9 +1012,10 @@ package's homepage) fails unless its host is on that list.
 
 | Tier | Who gets it | What it allows |
 |---|---|---|
-| **Web** (baseline) | every session pod | DNS through CoreDNS, and TCP 80 and 443 to any public address: a `toCIDRSet` of `0.0.0.0/0` and `::/0` that excepts the private, CGNAT, link-local and loopback ranges, the cluster's pod and service ranges, and the LAN (`192.168.0.0/16`). Cilium's `world` entity is not used, because it includes the LAN. |
+| **Web** (baseline) | every session pod except profile `ops` | DNS through CoreDNS, and TCP 80 and 443 to any public address: a `toCIDRSet` of `0.0.0.0/0` and `::/0` that excepts the private, CGNAT, link-local and loopback ranges, the cluster's pod and service ranges, and the LAN (`192.168.0.0/16`). Cilium's `world` entity is not used, because it includes the LAN. |
 | **Platform** (baseline) | every session pod | The operator API, the Kubernetes API server, the shared in-cluster MCP services (Home Assistant, Grafana, UniFi, vexa, the haynesnetwork hop), and the tool pods the session has attached (8.1). This is v1's in-cluster list, moved as it is. |
 | **Controlled** | by grant (6.12) or a standing policy | LAN hosts, every other in-cluster service, any other port, SSH anywhere. The broker adds a per-session CiliumNetworkPolicy (`toFQDNs`, `toCIDR` or `toEndpoints`) for the grant's lifetime. |
+| **Ops** (instead of web) | profile `ops` only (summoned sessions, 3.7) | v1's shepherd-class list, enumerated by DNS name: GitHub, the Anthropic and Claude endpoints Remote Control needs (`bridge.claudeusercontent.com` included), Pushover, cigar-journal, and in-cluster Prometheus, Alertmanager and Loki. No open web. |
 
 **The baseline tiers are `CiliumClusterwideNetworkPolicy` objects**, shipped from
 haynes-ops and selecting pods by namespace label. No v2 identity can write them: the
@@ -751,12 +1028,21 @@ still selected by a clusterwide policy, so it stays default-deny outside its tie
 instead of falling back to Cilium's allow-all.
 
 **D-18 (revised 2026-10-06). Profiles.** A profile names the Secrets a session pod
-gets and its standing controlled-tier grants (a pod label that the broker's standing
-policies match). The web and platform tiers are the same for every profile. Profile
-`full` keeps v1's Secrets on day one, except the Proxmox operator token and the
-hw-ssh key, which move behind the broker (Q-07, Tom 2026-10-06); profile `dev` (gh
-token and MCP tokens only) arrives with local-model agents (6.13). Tightening a
-profile later is a data change.
+gets, its egress tier, and its standing controlled-tier grants (a pod label that the
+broker's standing policies match). The platform tier is the same for every profile.
+
+| Profile | For | Secrets | Egress |
+|---|---|---|---|
+| `full` | Tom's interactive sessions | v1's set, except the Proxmox operator token and the hw-ssh key, which come only as grants (Q-07, Tom 2026-10-06) | web + platform |
+| `dev` | local-model agents (6.13), narrow tasks | the dev-bot gh token and the MCP tokens | web + platform |
+| `ops` | summoned sessions (3.7, V-07) | the `haynes-ops-bot` token (one repo, no workflows; 6.4), the cigar-journal MCP token for curation, the Proxmox read token | **ops tier, no open web** + platform |
+
+`ops` keeps the containment boundary the v1 executor has (saga-07): its sessions read
+attacker-influenced text (release notes, alert annotations) and act unattended with
+operator verbs, so the open web tier, an exfiltration path for a tricked session, is
+not theirs. Its RBAC is the baseline agent identity under the guards (6.11), the
+same verbs the executor has today. No GrantPolicy matches profile `ops`, so any grant
+an `ops` session asks for goes to Tom. Tightening a profile later is a data change.
 
 **Why Cilium and no forward proxy.** A proxy sees each request's host name, and the
 full URL only if it intercepts TLS. It would be a new single point of failure for
@@ -782,15 +1068,17 @@ Component policies:
 
 - Session pods: the tiers above. **No ingress**: `kubectl exec` and attach go through
   the kubelet, not the pod network.
-- Operator: ingress from `dev-agents` on 8443; egress to the API server, the keeper
-  on 8443, and tool pods' health ports.
-- Broker: ingress only from traefik, on its approval port (6.12). It needs no other
-  ingress: it acts on `AccessGrant` objects through the API server. Egress to the API
-  server and `api.pushover.net`.
-- Keeper: ingress only from operator pods on 8443 (the login relay and status);
-  egress to the API server, `api.github.com`, the Claude and OpenAI token endpoints,
-  and `api.pushover.net`. Nothing else. Credential grants reach it as `AccessGrant`
-  objects, not calls.
+- Operator: ingress on 8443 from `dev-agents`, and from the summoning callers'
+  pods in `upgrade-agent` (3.7); egress to the API server, the keeper on 8443, tool
+  pods' health ports, and `api.pushover.net` (summoned-session pages and the digest).
+- Broker: ingress only from traefik, on its console port (3.8, 6.12). It needs no
+  other ingress: it acts on `AccessGrant` objects through the API server. Egress to
+  the API server, the keeper on 8443 (login ceremony, archive) and `api.pushover.net`.
+- Keeper: ingress only from operator and broker pods on 8443 (the login ceremony,
+  status, archive); egress to the API server, `api.github.com`, the Claude and OpenAI
+  token endpoints, `api.anthropic.com` (the profile fetch for seeding homes, and the
+  Remote Control archive call), and `api.pushover.net`. Nothing else. Credential
+  grants reach it as `AccessGrant` objects, not calls.
 - Tool pods: a clusterwide policy selects every `dev-tools` pod and allows only DNS
   and the operator's health checks, so each tool pod is default-deny before any
   namespaced policy exists; the rest is section 8.1.
@@ -899,9 +1187,10 @@ anything more is a grant; nothing in the three dev-env namespaces.**
 | `dev-agents/dev-env-agent` (session pods) | Cluster-wide read (v1's read rules, no Secrets) + `dev-env.haynesops.com` read. v1's write and proxy verbs cluster-wide, under `dev-env-agent-guard`. The `database` PVC-delete binding, as v1. | **At most v1's tier, minus the #3392 escalations, and nothing in the three dev-env namespaces.** No write to its own CRDs: every v2 write goes through the API. |
 | `dev-agents/grant-<id>` (one per kube grant) | Exactly the granted role, in the granted namespaces, until the grant expires, under `dev-env-identity-guard`. | Created and deleted by the broker. Its token lives in the session pod's tmpfs. Never valid in the three dev-env namespaces. |
 | `dev-env-system/dev-env-operator` | Roles in `dev-agents` and `dev-tools`: pods (create, delete, get, list, watch, patch), `pods/exec` create, `pods/log` get, `pods/eviction` create, PVCs and Services (create, delete, get, list, watch), namespaced CiliumNetworkPolicies in `dev-tools` (tool ingress and declared egress) and delete on namespaced CiliumNetworkPolicies in `dev-agents` (the expiry backstop; only grants live there), events. No write on `CiliumClusterwideNetworkPolicy`. ClusterRole: its own CRD group, `tokenreviews` create. Leases in its own namespace. | No cluster-wide pod or PVC rights, no Secrets, no `bind`. |
-| `dev-env-system/dev-env-broker` | RoleBindings and ClusterRoleBindings (create, delete); `bind` only on the grant role catalog by `resourceNames`; ServiceAccounts and `serviceaccounts/token` in `dev-agents`; CiliumNetworkPolicies in `dev-agents`; `pods/exec` in `dev-agents` (installs grant tokens); status of `AccessGrant`. No write on `CiliumClusterwideNetworkPolicy`, admission policies or Secrets. | The most privileged v2 identity: it can hand out the break-glass role. It accepts approvals only from Tom's Authentik identity and runs where agents cannot write or exec. |
-| `dev-env-system/dev-env-keeper` | Role in `dev-agents`: Secrets get, update and patch on `resourceNames` `dev-env-gh-token`, `dev-env-claude-live`, `dev-env-codex-live` only; for credential grants (Q-07), also `pods/exec` in `dev-agents` and read on `AccessGrant`. ClusterRole: `tokenreviews` create. Leases in its own namespace. | The three Secrets are created empty by GitOps, so no `create` is needed. |
+| `dev-env-system/dev-env-broker` | RoleBindings and ClusterRoleBindings (create, delete); `bind` only on the grant role catalog by `resourceNames`; ServiceAccounts and `serviceaccounts/token` in `dev-agents`; CiliumNetworkPolicies in `dev-agents`; `pods/exec` in `dev-agents` (installs grant tokens); status of `AccessGrant`; read on the `dev-env.haynesops.com` group for the console's session list. No write on `CiliumClusterwideNetworkPolicy`, admission policies or Secrets. | The most privileged v2 identity: it can hand out the break-glass role. It accepts approvals only from Tom's Authentik identity and runs where agents cannot write or exec. |
+| `dev-env-system/dev-env-keeper` | Role in `dev-agents`: Secrets get, update and patch on `resourceNames` `dev-env-gh-token`, `dev-env-ops-gh-token`, `dev-env-claude-live`, `dev-env-codex-live` only; for credential grants (Q-07), also `pods/exec` in `dev-agents` and read on `AccessGrant`. ClusterRole: `tokenreviews` create. Leases in its own namespace. | The four Secrets are created empty by GitOps, so no `create` is needed. |
 | `dev-env-system/dev-env-gpu-guard` (DaemonSet on GPU nodes) | Role in `dev-tools`: pods get, list; `pods/eviction` create. Read on the budgeter's Lease in `dev-env-system`. | Evicts agent GPU pods only; works when the operator is down (8.2). |
+| `upgrade-agent/<caller>` (alert-responder, upgrade-shepherd, triage, health-gate, the curation CronJob) | No new Kubernetes rights. Their projected token for the `dev-env-operator` audience lets them call the API, within their `CallerPolicy` (3.7). | They no longer need write on the `upgrade-work-orders` ConfigMap once plan 10 moves them. |
 | `dev-agents/dev-env-workbench` | Role in `dev-agents`: pods get, list; `pods/exec` create. | Tom's IDE; runs no agents by default. |
 | `dev-env-system/dev-env-human` | none (token audience only) | Exists so Tom's laptop can mint an API token (D-05). |
 | tool pods (`dev-tools`) | none: no ServiceAccount token is mounted | As blender-authoring and audio-authoring today. |
@@ -1056,8 +1345,8 @@ never touches sessions (5.1 applies to it).
 | Home Assistant actionable notification | No. The tap comes back as an HA event, and agents hold the Home Assistant MCP server, which can fire events, so an agent could forge an approval. It would also make HA part of the security boundary. |
 | **A small web page served by the broker behind Authentik, its link sent by Pushover** | **Chosen.** Tom's identity comes from Authentik (his passkey), which no agent holds. Pushover is already his paging channel. The page shows the full scope and works the same for task, local and remote sessions. |
 
-The page lists each pending request with requester, repo, parent, scope, TTL and
-reason, and offers Approve, Approve for less time, and Deny. It is served on its own
+The page, now the console's approvals page (3.8), lists each pending request with
+requester, repo, parent, scope, TTL and reason, and offers Approve, Approve for less time, and Deny. It is served on its own
 port that only traefik can reach, on an external host behind Authentik like Tom's
 other apps. A break-glass approval needs an Authentik login from the last 5 minutes.
 The page can show a request as a GrantPolicy snippet, so an approval Tom keeps
@@ -1230,6 +1519,23 @@ limits and 20 pods in a ResourceQuota) is withdrawn.
   recognises the CLI's quota error (`out of usage credits`), marks the session
   `QuotaExhausted`, and `agent-run fleet` shows it. Local-model sessions (6.13) do
   not draw on the plan.
+- **Priority against Tom's work** (V-14). One plan pool serves Tom and the summoned
+  sessions, and curation alone drew 4.5 M output tokens in a month (R-01). So the
+  quota is acted on for summoned work, by caller priority, without capping Tom:
+  - The keeper reads plan usage (the 5-hour and weekly windows) the way the CLI's
+    `/usage` does, every 5 minutes, and `GET /v1/fleet` shows it. That call is
+    undocumented; spike S-16 checks it. If it is not usable, the operator falls back
+    to counting quota errors in the last hour.
+  - `urgent` callers (escalation, remediation) always start. `normal` callers
+    (upgrades) start unless the 5-hour window is past 95 %. `bulk` callers (curation)
+    wait in their lane while the 5-hour window is past 80 % or the weekly window past
+    90 %, and are refused with a reason after 12 hours. The thresholds are policy
+    data in git.
+  - Tom's interactive sessions are never gated. This is not a fleet cap (Q-04): it
+    orders the summoned callers by the plan's own signal and limits none of Tom's
+    work.
+  - On a quota wall a summoned session moves to its policy's fallback plan model,
+    never to a metered key (V-05).
 
 ### 7.4 Image pull
 
@@ -1816,6 +2122,7 @@ image name `ghcr.io/thaynes43/dev-env`. haynes-ops records it in its dev-env sag
 | `declare-activity.sh` | the `declare-activity` client |
 | `login-check.sh`, `auth-check.sh`, `gh-token-refresh.sh` | the keeper |
 | `pve.sh`, `hw-ssh.sh` | tools baked into the agent image |
+| `dev-env-ops`'s `work-order-watch.sh`, `session-launch.sh`, `order-status.sh`, the lane, watchdog and digest logic | the operator's summoned-session support (3.7) and `agent-run report` |
 | (new) | the operator, its CRDs, its image `ghcr.io/thaynes43/dev-env-operator`; the same binary runs as the broker |
 | (new) | `dev-env-satellite` for macOS arm64 and Windows amd64, signed release binaries (8.4) |
 
@@ -1825,9 +2132,11 @@ as today until cutover; the new `dev-env-system`, `dev-agents` and `dev-tools` a
 catalog and the baseline guard, CNPs, ExternalSecrets, LimitRange, PriorityClass, the
 Kyverno limit policy); the config the pods read (`CLAUDE.md`, `mcp.json`, Codex
 `config.toml` and `requirements.toml`, opencode's config, subagent definitions,
-`dev-env-templates`) and the ToolPools, GrantPolicies and LLM pools, because config
-is deploy-time data and belongs in the audited GitOps diff; dev-env-ops; the Kyverno
-image policy. Tool images keep their own sources (blender-authoring and
+`dev-env-templates`) and the ToolPools, GrantPolicies, CallerPolicies and LLM pools,
+because config is deploy-time data and belongs in the audited GitOps diff; the
+summoning callers (alert-responder, upgrade-shepherd, triage, health-gate, the
+curation CronJob), whose scripts call the API from plan 10 on; `dev-env-ops` until
+plan 10 retires it; the Kyverno image policy. Tool images keep their own sources (blender-authoring and
 audio-authoring build in haynes-ops today); a ToolPool pins any signed image.
 
 **Migration order:**
@@ -1887,15 +2196,16 @@ v2 work never edits
 
 | Phase | Delivers | Done when |
 |---|---|---|
-| **0. Design and spikes** | This saga; spikes S-1 to S-14 | Q-01 to Q-10 answered (done 2026-10-06), spike results recorded, ADR-001 Accepted |
+| **0. Design and spikes** | This saga; spikes S-1 to S-16 (S-2 answered) | Q-01 to Q-11 answered (done 2026-10-06), spike results recorded, ADR-001 Accepted |
 | **1. Foundation** | Repo CI; operator with `AgentSession`, pod and volume lifecycle; agentd boot; agent image `2.0` (tini, agentd, baked Codex and kubectl-cnpg); keeper minting the gh token; haynes-ops apps for namespaces, CRDs, operator, keeper, RBAC with the baseline guard (D-19), CNPs with the web and platform tiers (D-24), LimitRange, PriorityClass, Kyverno limit policy; session volumes on `gasha01-rbd` (D-22). No ResourceQuota. **Task mode only**, static token. | `agent-run -p` from the v1 pod creates a pod on a worker; the task opens a PR; reap leaves a verified bundle. An operator rollout mid-task leaves the task untouched. The guard refuses each #3392 path. |
 | **2. Interactive and lifecycle** | `local` mode, attach, idle detection, timers, rescue, resume, restore; `/v1/activities` and dev-env-ops reading both sources; messaging tier 3; laptop access | A local session survives suspend and resume with its conversation; a declared activity is visible to dev-env-ops; Tom runs `agent-run` from his laptop. |
 | **7. Access broker** (after 1, alongside 2) | `AccessGrant`, `GrantPolicy`, the broker Deployment, the approval page and Pushover link, kube and egress grants, break-glass; credential grants (Q-07) | A grant request reaches Tom's phone, he approves it, the agent uses it, and it is gone at its TTL; a standing policy approves a matching request with no ping; break-glass works and the headlamp Job is refused. |
-| **3. Remote Control** | Keeper-owned Max login (or the coordinator host if S-1 and S-2 fail); `agent-run auth`; the standby; messaging tier 2 | Tom drives a v2 session from his phone; a coordinator dispatches v2 task pods; the monthly renewal works through `agent-run auth login`. |
+| **3. Remote Control** | Keeper-owned Max login, made fresh with `/login` (or the coordinator host if S-1 fails); agentd merging the access token into a writable credentials file and seeding the home; links from the CLI registry; archive on reap (S-15); the console with sessions, links, archive and the login page; the standby; messaging tier 2 | Tom drives a v2 session from his phone; a coordinator dispatches v2 task pods; the monthly renewal works from the console page. |
 | **4. Rolling updates and Codex** | Revisions; drain-on-idle and resume (per Q-03); codex hub; keeper-owned Codex auth if S-3 passes; image pre-pull DaemonSet; Renovate auto-merge for `2.x` | An image bump reaches every idle session with its conversation intact and interrupts no busy turn; the phone's Codex entry survives a hub drain. |
-| **5. Cutover** (needs 3, 4, 7 and Q-08 applied) | Workbench pod; dev-env-ops reads only `Activity`; v1 scaled to zero, its PVC kept 30 days, then removed with its build and Renovate carve-outs | Tom approves the cutover. |
+| **5. Cutover** (needs 3, 4, 7 and Q-08 applied) | Workbench pod; dev-env-ops reads only `Activity`; v1 scaled to zero, its Max login retired with it (it lapses; nothing is copied), its PVC kept 30 days, then removed with its build and Renovate carve-outs | Tom approves the cutover. |
 | **8. Tool pods** (after 2) | `ToolPool`, `ToolSession`, the loopback gateway, artifacts; blender and audio converted; image, whisper, printer and video pools | An agent calls a Blender tool with no pod running; the pod starts, serves, and stops 30 minutes after release, keeping its workspace. |
 | **9. GPUs, satellites and local LLMs** (after 8) | VRAM accounting for every GPU workload (household included); the per-card budget with reserve pods, gates, reclaim and automatic card discovery; GPU tool pods; LLM pools with backends and leases; satellite workers; opencode sessions | An opencode session on a Qwen coder model opens a PR; no household app's VRAM is ever in agent hands; a GPU node that joins shows up in the budget with no config change; a pool moves to a satellite and back when Tom starts and ends a game. |
+| **10. Summoned sessions** (after 2 and 3, with 7's `ops` tier) | `CallerPolicy`; `task` and `remote` kinds with names, idempotency, outcome reports, lanes, storm limits, watchdogs, pages and the digest; profile `ops` with the ops bot; quota priority; cost records (3.7, V-01 to V-17). Callers move one at a time (curation, remediation, escalation, upgrade), each by pointing its script at the API; `dev-env-ops` keeps serving the rest. When none is left, `dev-env-ops` is scaled to zero and its second Max login retired | Every R-01 caller runs on v2; an escalation page carries a link that opens on Tom's phone; a remediation that never reports is closed and escalated; no metered spend; `dev-env-ops` is gone. |
 | **6. Later** | Profile tightening; Authentik OIDC for the laptop; Codex `exec-server` isolation; a web terminal route; warm pools; DRA for GPUs | Each on its own plan. |
 
 Backlog plans: [`../backlog/`](../backlog/).
@@ -1904,12 +2214,12 @@ Backlog plans: [`../backlog/`](../backlog/).
 
 | Id | Question | Where | Decides |
 |---|---|---|---|
-| S-1 | Does Claude Code run Remote Control on an access-token-only credential, pick up a rotated token from disk, and never try to rotate? | v1 pod, scratch `CLAUDE_CONFIG_DIR`, no refresh token copied | D-11 target vs fallback |
-| S-2 | Can the static token register Remote Control on the current CLI? | v1 pod, one probe | Whether the keeper is needed for Claude |
+| S-1 | Does Claude Code run Remote Control on an access-token-only credentials file in a cold home, pick up a rotated token from disk without a restart, and never try to rotate? How long do 401s last after a keeper rotation, and does the 401 wait cover it? Does the env-token variant (S-1b: `CLAUDE_CODE_OAUTH_TOKEN` plus `CLAUDE_CODE_OAUTH_SCOPES`) register too? Do `--debug-file` logs confirm R-02's request bodies? | v1 pod, scratch `CLAUDE_CONFIG_DIR`, no refresh token copied | D-11 target vs the coordinator host |
+| S-2 | Can the static token register Remote Control on the current CLI? | **Answered 2026-10-06: no.** The docs require a full-scope login token, the 2.1.284 binary checks for `user:profile`, and R-01 F-01 saw 45 of 45 executor sessions rejected. Kept as a one-line check on each CLI bump | The keeper is needed for Claude |
 | S-3 | Do `codex exec` and `codex remote-control` run on `--with-access-token`, and pick up a new one? | v1 pod, scratch `CODEX_HOME` | D-12 step 2 |
 | S-4 | Can a hub thread execute in another pod through `codex exec-server`? | two pods, phase 4 | D-12 step 3 |
 | S-5 | Does SendMessage reach a Remote Control session in another pod? | two pods, phase 3 | D-16 tier 2 |
-| S-6 | Does `claude --resume <id> --remote-control <name>` reattach the same phone entry? | v1 pod | 6.7 |
+| S-6 | Does `claude --resume <id> --remote-control <name>` reattach the same phone entry? | v1 pod. Documented behaviour (R-02); one run confirms it | 6.7 |
 | S-7 | How long does `git clone --filter=blob:none` plus checkout take per repo? | v1 pod, one repo at a time | D-15 mirror or not |
 | S-8 | How much slower is a session's clone, install and one test file on `gasha01-rbd` than on `ceph-block`? | one phase-1 task pod at size M, one run per class | D-22's rule for size L |
 | S-9 | Does the pinned device plugin count VRAM units with time-slicing (requests above 1, config chosen by an NFD-set label), and does a household-priority pod preempt an agent GPU pod? Is DRA consumable capacity usable with NVIDIA's driver on these cards yet? | talosw04 (nothing household runs there), one pod at a time | D-30 mechanism |
@@ -1918,6 +2228,8 @@ Backlog plans: [`../backlog/`](../backlog/).
 | S-12 | Does the baseline guard refuse each #3392 path (Job as another ServiceAccount, image patch, Flux spec patch, exec into the headlamp pod) and allow each runbook action (rollout restart, CronJob suspend, Flux reconcile and suspend, volsync unlock Job, ExternalSecret force-sync)? Does the admission policy see `CONNECT` for exec? | a scratch namespace, phase 1 | D-19 |
 | S-13 | Does a reserve pod at priority -1 make the scheduler preempt an agent GPU pod and keep the units, and does a household pod preempt the reserve pod? Can a gated pod's node affinity be narrowed before its gate is removed? Does a GPU node that joins (talosw04 with its lend label set) appear in the budget with no config change? | talosw04, one pod at a time | D-34 |
 | S-14 | On each satellite: does `llama-server` (Metal, CUDA on Windows) serve the pool models with the satellite agent in front; tokens per second for each pool model; MLX against llama.cpp on the M5; do the owner-first signals (a game's VRAM on Windows, battery and memory pressure on macOS) fire within seconds; model load time from local disk? | Tom's three machines, with Tom present, one machine at a time | D-35 |
+| S-15 | Does the CLI's archive call (`POST /v1/code/sessions/{id}/archive`, undocumented) with an access token take a finished session off the phone's active list, and does the documented way back (`claude --resume`, then `/remote-control`) still reopen it? Does `--resume` alone? | v1 pod, scratch config dir, one `spike-s15` session | 6.7 archive on reap |
+| S-16 | Can the keeper read the plan's 5-hour and weekly usage the way the CLI's `/usage` does, with the access token, without side effects? | v1 pod, one read | 7.3 quota priority (V-14) |
 
 Every spike is light: a handful of CLI invocations, one at a time. None runs a test
 suite, a busy loop or anything parallel (the 2026-10-05 incident rule).
@@ -1926,7 +2238,7 @@ suite, a busy loop or anything parallel (the 2026-10-05 incident rule).
 
 | Risk | Mitigation |
 |---|---|
-| S-1 relies on undocumented CLI behaviour that a CLI release can change | The fallback (coordinator host) is proven today. Every CLI bump re-runs S-1's three checks in one canary session before the new revision reaches Remote Control sessions. |
+| S-1 relies on undocumented CLI behaviour that a CLI release can change | The fallback (coordinator host) is proven today. Every CLI bump re-runs S-1's checks in one canary session before the new revision reaches Remote Control sessions. |
 | An abrupt node loss leaves RWO volumes attached (multi-attach) | The existing out-of-service taint job covers it; sessions resume once the volume frees. |
 | More moving parts: an operator outage stops new sessions | Running sessions are unaffected (D-01). v1 stays until cutover. |
 | More parallel sessions burn the Max plan's windows faster | No fleet cap (Q-04): the plan's own wall is the limit, shown in `agent-run fleet` (7.3). Fable is never a default (pod model policy). Local-model sessions take bulk work off the plan (6.13). |
@@ -1949,11 +2261,22 @@ suite, a busy loop or anything parallel (the 2026-10-05 incident rule).
 | The privileged-ServiceAccount list for the exec rule (D-19) must grow when a new privileged ServiceAccount appears | Rare; the list sits beside the guard in haynes-ops, and a reviewer of any new cluster-admin binding adds it. |
 | Image pull latency on a cold node | Pre-pull DaemonSet (7.4). |
 | A drain resumes a conversation on a new CLI version that reads old state differently | Drain happens on idle only; S-6 covers resume; a failed resume leaves the volume suspended, not deleted. |
+| Offline Remote Control entries pile up, one per reaped session, and push newer ones out of ListAgents' bounded listing | Archive on reap through the keeper (6.7, S-15); if S-15 fails, Tom archives from the console and `agent-run fleet` counts them. |
+| A keeper rotation revokes the access token pods hold | S-1 measures the 401 window; agentd re-merges within seconds; `CLAUDE_CODE_OAUTH_401_WAIT_MS` may cover the gap (6.2). |
+| The keeper's Secret mounted read-only as the credentials file breaks the CLI's own writes | Never mounted: agentd merges into a writable 0600 file (6.2). |
+| A cold home lacks the account, flags or policy cache ("Unable to determine your organization") | agentd seeds `.claude.json`; the egress tiers allow the CLI's flag and policy hosts; S-1 runs on a cold home (6.2). |
+| A telemetry kill-switch variable set in the image turns Remote Control off | None of the four is ever set; a CI check on the image env (6.2). |
+| Tom turns on Trusted Devices | Every pod would enrol as a device, email Tom and need an 18-hour sign-in; it stays off, and turning it on needs a design pass (6.2). |
+| Server mode in a session pod leaves an environment per pod on the account | Session pods only use `--remote-control` (6.7). |
+| A forged summon order runs with operator verbs (v1 F-11) | Callers authenticate with their ServiceAccount and a `CallerPolicy` limits kinds, prefixes, profiles and models; caller text is data, not instructions (3.7). |
+| The static setup token dies unannounced and every automated path breaks (v1 F-07) | Mint date tracked, pages at 30 and 7 days, creates fail loudly; nothing falls back to metered (6.1, 3.7). |
+| Summoned bulk work starves Tom's interactive plan use | Caller priority acts on the plan's own usage signal; bulk waits past 80 % of the 5-hour window (7.3, V-14). |
+| Up to three monthly Max logins to renew during the migration (v1 dev-env, v1 dev-env-ops, the v2 keeper) | Each v1 login retires with its pod (plans 05 and 10); the console turns each renewal into a page (6.2, 3.8). |
 
 ## 15. Open questions
 
 Each blocks building. Ask Tom one at a time; fold the answer back in as a dated
-ruling. Q-01 to Q-10 were all answered on 2026-10-06; none is open.
+ruling. Q-01 to Q-11 were all answered on 2026-10-06; none is open.
 
 | Id | Question | Options (recommended first) | Resolution |
 |---|---|---|---|
@@ -1967,6 +2290,7 @@ ruling. Q-01 to Q-10 were all answered on 2026-10-06; none is open.
 | Q-08 | How does every household pod get a CPU request, so a saturated worker cannot starve it? | **A. Kyverno generates a LimitRange with a small default CPU request (50m) in every namespace except the system ones**: no pod is BestEffort again, new apps included, with no per-app work; existing pods change at their next restart, and the scheduler counts a little more requested CPU. **B. Add CPU requests app by app in haynes-ops, with a Kyverno audit rule that flags BestEffort pods**: each request is sized to the app, but it is slow, and the gap reopens whenever an app lands without one. **C. Leave household pods as they are**: nothing changes for the house, but with no fleet cap a busy fleet can saturate a worker and starve its BestEffort pods, as on 2026-10-05. | **Ruling, Tom 2026-10-06: A.** A Kyverno-generated LimitRange with a 50m default CPU request in every non-system namespace, done in haynes-ops as a cluster-wide v1 fix (in flight as haynes-ops #3406 on 2026-10-06). Referenced here, not designed again (7.3). |
 | Q-09 | Which household GPU apps may lend their burst VRAM to agents while they are idle? | **A. Only batch apps (ComfyUI, Immich ML); the voice stack and Ollama never lend**: agents get several more GiB on talosm03 and talosw01 when those apps are idle; the first render or Immich job after a lend may wait up to about two minutes, or fail once and be retried. **B. None; every declared burst is always reserved**: the house never waits; agents get only what no household app could ever use (talosm05's A2000, a few GiB elsewhere) plus the satellites. **C. All, Ollama and the voice stack included**: the largest agent share, but a voice or chat request can stall for up to a minute while agents release VRAM. | **Ruling, Tom 2026-10-06: B, none.** "None but I bring online more GPUs in cluster". No household app lends burst VRAM to agents; agents get only what is left above every household app's full reservation, and their share grows as GPUs are added, picked up automatically (D-34). |
 | Q-10 | When may agents use Tom's satellite machines? | **A. Only while they are awake and Tom is not using them, by the owner-first rules; never woken**: no surprise fan noise or power use; satellites serve mainly when Tom leaves them on. **B. As A, and the operator may wake the 5090 and 4090 PCs with Wake-on-LAN overnight (01:00 to 07:00) when leases are queued**: overnight agent runs get the fast cards, and the PCs wake and run at night; the Mac is never woken. **C. Only when Tom switches a machine to lend himself**: full control, but the machines sit unused unless he remembers. | **Ruling, Tom 2026-10-06: A.** Satellites are used only while they are awake and Tom is not using them; they are never woken (8.4). |
+| Q-11 | Which link that survives pod restarts did you mean, and what belongs in a front end? (R-02 section 9) | **A. The Codex computer `dev-env-574bdc9844-jhvfs` in the ChatGPT app**: survives because its enrolment is on the PVC; in v2 the codex hub keeps it; no front-end work. **B. A claude.ai/code session link**: each session has its own, bound to the account; the operator shows every session's link. **C. `dev-env.haynesops.com` (code-server)**: stable through DNS; the workbench keeps one host. | **Ruling, Tom 2026-10-06: the Claude Code auth**, the Max `/login` on the PVC that survives restarts, "something we just need baked into the front end". The keeper is its sole owner and session pods get access tokens only (D-11). The monthly renewal becomes a page in the console behind Authentik, replacing the chat relay; the same console lists every session's link and status with an archive button (D-37). Codex's enrolment also survives restarts but works differently: the codex hub keeps its single enrolment on its own volume (D-12). |
 
 ## 16. Decisions settled in this design
 
@@ -1982,20 +2306,20 @@ ruling. Q-01 to Q-10 were all answered on 2026-10-06; none is open.
 | D-08 | Operator to pod by exec, pod to operator by heartbeat | 3.6 |
 | D-09 | Lifecycle timers | 4.3 |
 | D-10 | Rescue before reap; bundles in-cluster; never pushed | 4.4 |
-| D-11 | Keeper owns the Max login; coordinator host as fallback | 6.2 |
+| D-11 | Keeper is the sole owner of the one Max login (absorbing v1's two); pods get access tokens that agentd merges into a writable file; coordinator host only if S-1 fails (revised 2026-10-06) | 6.2 |
 | D-12 | Codex hub, then keeper-owned auth, then exec-server | 6.3 |
 | D-13 | Keeper mints the gh token into a Secret | 6.4 |
 | D-14 | MCP registration per pod | 6.5 |
 | D-15 | Fresh partial clone per session, v1 paths | 6.6 |
 | D-16 | Three messaging tiers | 6.8 |
 | D-17 | `Activity` resource via the API | 6.9 |
-| D-18 | Profiles name Secrets and standing controlled-tier grants; web and platform tiers are common (revised 2026-10-06) | 6.10 |
+| D-18 | Profiles name Secrets, egress tier and standing grants: `full`, `dev`, and `ops` for summoned sessions (revised 2026-10-06) | 6.10 |
 | D-19 | Baseline = v1's verbs under a field-level admission guard; identity rules (no dev-env namespaces, no other ServiceAccounts, no privileged pods) bind grants too; more only by grant (revised 2026-10-06; was per-namespace bindings) | 6.11 |
 | D-20 | Sessions on workers only, GPU nodes avoided by label, low priority that never preempts (revised 2026-10-06) | 7.1 |
 | D-21 | Capacity is the scheduler's: requests and limits, no fleet quota, Pending is the queue; household pods need CPU requests (Q-08) | 7.3 |
 | D-22 | Session volumes and tool workspaces on `gasha01-rbd`; the shared RWX volume on Rook CephFS; model files on gasha01 NFS | 6.6 |
 | D-23 | No approval prompts inside a session pod; the platform is the boundary | 6.12 |
-| D-24 | Egress tiers: web baseline, platform baseline, controlled by grant; baseline as clusterwide policies; Cilium and Hubble, no proxy | 6.10 |
+| D-24 | Egress tiers: web baseline (not for `ops`), platform baseline, ops tier for `ops`, controlled by grant; baseline as clusterwide policies; Cilium and Hubble, no proxy | 6.10 |
 | D-25 | Access broker: `AccessGrant` and `GrantPolicy`, a separate Deployment, an identity per kube grant, a CNP per egress grant | 6.12 |
 | D-26 | Approvals through a Pushover link to the broker's page behind Authentik | 6.12 |
 | D-27 | Break-glass grant (a role short of `cluster-admin`) replaces the headlamp path | 6.12 |
@@ -2007,3 +2331,5 @@ ruling. Q-01 to Q-10 were all answered on 2026-10-06; none is open.
 | D-33 | Local-model agents run opencode in ordinary session pods | 6.13 |
 | D-34 | A VRAM budget per card: agents get only what is left above every household app's full reservation (floor + burst), nothing is lent; new cards join automatically; reserve pods at -1 carry the reservation to the scheduler; only the budgeter un-gates agent GPU pods; graceful reclaim from agents, including agent against agent; a per-node guard protects the house without the operator (revised 2026-10-06) | 8.2 |
 | D-35 | Satellite inference workers on Tom's own machines, owner first, reached by lease token over the LAN | 8.4 |
+| D-36 | Summoning is a first-class API use, authorized per caller by a `CallerPolicy`: kinds, names, idempotency, plan-only credentials, verified links, outcomes, lanes, storm limits, watchdogs, retention, cost records (V-01 to V-17) | 3.7 |
+| D-37 | One console for Tom, served by the broker behind Authentik: sessions with links and archive, approvals, the login renewal page, Codex status | 3.8 |

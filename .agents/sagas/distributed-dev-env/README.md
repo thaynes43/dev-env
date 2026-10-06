@@ -5,10 +5,14 @@ for Tom to ratify: see the
 [ratification summary](adrs/001-distributed-dev-env.md#ratification-summary) at the
 top of ADR-001. Nothing is built. The architecture is in
 [ADR-001](adrs/001-distributed-dev-env.md) and the detail in
-[DESIGN-001](designs/001-dev-env-v2.md). Tom ruled on every question, Q-01 to Q-10,
+[DESIGN-001](designs/001-dev-env-v2.md). Tom ruled on every question, Q-01 to Q-11,
 on 2026-10-06 and widened the scope: tool pods, a GPU budget, satellite inference
-workers, local models, and access without in-pod prompts. No question is open. The
-spikes in [backlog 00](backlog/00-spikes.md) come first, S-1 and S-2 before all.
+workers, local models, access without in-pod prompts, summoned sessions kept as a
+first-class path, and one console for links, archives and the login renewal. No
+question is open. Research notes [R-01](research/R-01-summoned-agents-audit.md)
+(summoned agents) and [R-02](research/R-02-remote-control-identity.md) (Remote Control
+identity) are folded into the design. The spikes in
+[backlog 00](backlog/00-spikes.md) come first, S-1 before all (S-2 is answered).
 
 **Working rules:** this repo's [CLAUDE.md](../../../CLAUDE.md). Docs first. Ask Tom
 one question at a time with AskUserQuestion, and fold each answer back into the
@@ -34,18 +38,23 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 10 | (2026-10-06) Agents may use the gasha01 storage | 6.6 |
 | 11 | (2026-10-06) Agents skip their vendor's permission prompts; Tom keeps control of cluster and external access, which agents request; agents can reach the web; local models such as Qwen work the same way | 6.10 to 6.13 |
 | 12 | (2026-10-06) GPU allocation adjusts dynamically to what the household needs VRAM for; nothing is lent, and more GPUs come online in the cluster; larger models run on satellite workers: the 128 GB M5 MacBook, the 5090 and 4090 PCs | 8.2 to 8.4 |
+| 13 | (2026-10-06) Summoning a Max-plan agent from automation: "we need to preserve the functionality" | 3.7 |
+| 14 | (2026-10-06) The Claude Code auth that survives restarts belongs to one owner, and its renewal is "baked into the front end", which also lists every session's link with an archive button | 3.8, 6.2, 6.7 |
 
 ## Architecture at a glance
 
 - **dev-env-operator** (namespace `dev-env-system`, Go): control plane only. HTTPS
-  API, `AgentSession`, `Activity`, `ToolPool`, `ToolSession` and `LLMLease`
-  resources, idle detection, rescue, drain-and-resume.
-- **dev-env-broker** (same namespace, same binary, own Deployment): access grants.
-  Standing policies in git approve the routine; the rest goes to Tom's phone as a
-  Pushover link to an approval page behind Authentik. Grants are time-boxed and
-  audited; break-glass replaces the headlamp path.
-- **dev-env-keeper** (same namespace): the single owner of every rotating credential
-  and of the GitHub App key. Agent pods only ever get short-lived tokens.
+  API, `AgentSession`, `Activity`, `ToolPool`, `ToolSession`, `LLMLease` and
+  `CallerPolicy` resources, idle detection, rescue, drain-and-resume, and the
+  summoned-session lanes, watchdogs and digest that `dev-env-ops` runs today.
+- **dev-env-broker** (same namespace, same binary, own Deployment): access grants and
+  **the console**. Standing policies in git approve the routine; the rest goes to
+  Tom's phone as a Pushover link. The console, behind Authentik, lists every session
+  with its link and an archive button, takes approvals, and holds the monthly login
+  renewal page. Break-glass replaces the headlamp path.
+- **dev-env-keeper** (same namespace): the single owner of every rotating credential,
+  the one Max login included, and of the GitHub App keys. Agent pods only ever get
+  short-lived tokens.
 - **Session pods** (namespace `dev-agents`, worker nodes only): one agent each
   (Claude Code, Codex or opencode for local models), with no approval prompts,
   `tini`, an `agentd` supervisor, requests and mandatory limits from a size class,
@@ -66,9 +75,14 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 
 1. **The Max login cannot be shared by pods.** Two processes refreshing one Claude Max
    login revoked it mid-task on 2026-08-29. Remote Control needs that login; the
-   static token cannot register Remote Control. The target design gives pods access
-   tokens only, which relies on CLI behaviour that spike S-1 must prove. If it fails,
-   Remote Control sessions share one coordinator host pod.
+   static token cannot register Remote Control (settled: the docs say so, and v1's
+   executor saw 45 of 45 sessions rejected). The keeper owns the login and pods get
+   access tokens only, which relies on CLI behaviour that spike S-1 must prove; R-02
+   found the CLI re-reads its credentials file and revives Remote Control on a fresh
+   token. If S-1 fails, Remote Control sessions share one coordinator host pod. v1 now
+   has two logins (the dev-env pod's, and `dev-env-ops`'s since haynes-ops #3414);
+   v2's keeper replaces both with one, so Tom renews up to three a month until both
+   v1 pods are gone.
 2. **Native agent messaging stops at the pod boundary.** Claude Code ties its session
    registry, inbox sockets and locks to the pid namespace. Across pods, only Remote
    Control sessions talk natively; everything else goes through the operator.
@@ -126,8 +140,10 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 14 | Q-09: which household GPU apps may lend their burst VRAM to agents while idle? | **DECIDED** 2026-10-06 (Tom) | None: "None but I bring online more GPUs in cluster". Agents get only what is left above every household app's full reservation; new cards join the budget automatically (D-34). |
 | 15 | Q-10: when may agents use Tom's satellite machines? | **DECIDED** 2026-10-06 (Tom) | A: only while awake and not in use by Tom; never woken. |
 | 16 | Ratify ADR-001 | **PROPOSED** 2026-10-06 | [Ratification summary](adrs/001-distributed-dev-env.md#ratification-summary) |
+| 17 | Q-11: which link that survives restarts did Tom mean? | **DECIDED** 2026-10-06 (Tom) | The Claude Code auth (the Max `/login` on the PVC). The keeper is its sole owner; pods get access tokens only; the monthly renewal is a console page behind Authentik, replacing the chat relay; the console lists every session's link and status with an archive button; the codex hub keeps its own single enrolment (D-11, D-37). |
+| 18 | Summoned sessions are a first-class requirement | **DECIDED** 2026-10-06 (Tom: "we need to preserve the functionality") | [DESIGN-001 3.7](designs/001-dev-env-v2.md#37-summoned-sessions), D-36, R-01 V-01 to V-17, plan 10 |
 
-The full options, consequences and rulings for Q-01 to Q-10 are in
+The full options, consequences and rulings for Q-01 to Q-11 are in
 [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions).
 
 ## Plan backlog
@@ -141,9 +157,10 @@ v1 stays live throughout. No v2 plan edits haynes-ops'
 | [01: foundation, task mode](backlog/01-foundation.md) | Q-01, Q-02, Q-04, Q-05 (all decided); spikes S-7, S-8, S-12 | |
 | [02: interactive sessions and lifecycle](backlog/02-interactive-lifecycle.md) | 01 | with 07 |
 | [07: access broker](backlog/07-access-broker.md) | 01; Q-07 (decided) | with 02 |
-| [03: Remote Control](backlog/03-remote-control.md) | 02; spikes S-1, S-2, S-5, S-6 | |
+| [03: Remote Control](backlog/03-remote-control.md) | 02, 07; spikes S-1, S-5, S-6, S-15 | |
 | [04: rolling updates and Codex](backlog/04-rolling-updates-codex.md) | 02, Q-03 (decided); spikes S-3, S-4 | with 03 |
 | [05: cutover from v1](backlog/05-cutover.md) | 03, 04, 07; Q-08's LimitRange live in haynes-ops; Tom's approval | |
 | [08: tool pods](backlog/08-tool-pods.md) | 02; spike S-10 | with 03, 04 |
 | [09: GPUs, satellites and local LLMs](backlog/09-gpu-local-llm.md) | 08; Q-06, Q-09, Q-10 (decided); spikes S-9, S-11, S-13, S-14 | |
+| [10: summoned sessions](backlog/10-summoned-sessions.md) | 02, 03, 07; spike S-16 | with 04, 08 |
 | [06: later](backlog/06-later.md) | 05 | each item on its own |
