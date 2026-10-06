@@ -147,8 +147,11 @@ Makefile               generate, lint, test, build; test parallelism capped
 - **Signing:** match the cosign pin in haynes-ops `dev-env-build.yml`, so v2 images
   verify (or fail to) exactly as v1's do. Follow haynes-ops #3092 when it changes how
   Kyverno reads signatures.
-- **After the first publish,** the package needs Tom's ruling on Q-13 (recommended:
-  public, because the cluster pulls GHCR images anonymously).
+- **After the first publish,** the package must be made public (Q-13, ruled A on
+  2026-10-06, because the cluster pulls GHCR images anonymously). GitHub has no API
+  for visibility, so a laptop agent flips it in the browser: part 2 of
+  [the laptop handoff](../../handoffs/2026-10-06-tom-laptop-settings.md). Tell Tom
+  when the package exists, then check that an anonymous pull works.
 
 **B4: Renovate and release-please.**
 
@@ -162,10 +165,14 @@ Makefile               generate, lint, test, build; test parallelism capped
 - **release-please:** one version for the repo; both images are tagged with it
   (DESIGN-001 section 10).
 - **The release-please trap.** A PR opened with the workflow's `GITHUB_TOKEN` starts
-  no workflows, so `CI - Success` never reports on release PRs. Tom decides the fix
-  (DESIGN-001 Q-14; recommended: a GitHub App key secret only he can add). Until he
-  rules, close and reopen each release PR from the pod as haynes-dev-bot. App tokens
-  do start workflows.
+  no workflows, so `CI - Success` never reports on release PRs. Tom ruled the fix on
+  2026-10-06 (DESIGN-001 Q-14, A): a GitHub App key secret. The workflow reads the
+  repo variable `RELEASE_APP_ID` and the repo secret `RELEASE_APP_PRIVATE_KEY` with
+  `actions/create-github-app-token`. The App needs Issues read and write too, because
+  release-please creates its `autorelease:` labels. Only Tom can add them (part 1 of
+  [the laptop handoff](../../handoffs/2026-10-06-tom-laptop-settings.md)). Until the
+  secret exists, close and reopen each release PR from the pod as haynes-dev-bot. App
+  tokens do start workflows.
 
 **B5: agent image `2.0`.** Plan 01 lists the contents: a copy of haynes-ops
 `scripts/dev-env/Dockerfile` with `tini`, agentd, Codex and `kubectl-cnpg` baked
@@ -186,18 +193,23 @@ B5 has two preconditions:
    approvals and the status check `CI - Success` from GitHub Actions. Leave "require
    up to date" off, so parallel agent PRs do not re-run CI after every merge. Add it
    once `CI - Success` has reported at least once. If GitHub says the ruleset will
-   not be enforced on a private repo on his plan, ask him DESIGN-001 Q-12.
+   not be enforced on a private repo on his plan, ask him DESIGN-001 Q-12 then, not
+   before: the repo has no ruleset yet, and that warning is the question's premise.
 2. **Settings:** allow auto-merge (Renovate's `platformAutomerge` needs it), and
    optionally auto-delete head branches.
 3. **GHCR access:** on the `dev-env` package, "Manage Actions access", give
    `thaynes43/dev-env` Write. This comes before B5.
-4. **Visibility:** the `dev-env-operator` package after its first publish (B3), as
-   Tom rules on Q-13 (recommended: public).
+4. **Visibility:** make the `dev-env-operator` package public after its first publish
+   (B3), as Tom ruled on Q-13 (A, 2026-10-06). Part 2 of
+   [the laptop handoff](../../handoffs/2026-10-06-tom-laptop-settings.md).
 5. **Renovate:** the Mend Renovate app must cover this repo.
-6. **The App key secret** for release-please, if Q-14 goes to A (B4).
+6. **The App key secret** for release-please (B4), as Tom ruled on Q-14 (A,
+   2026-10-06). Part 1, step 4 of the same handoff.
 
-Items 2, 3 and 5 are plain settings; HANDOFF lists them as a checklist. Q-12 to Q-14
-are asked at kickoff, one at a time.
+Items 2, 3 and 5 are plain settings; HANDOFF lists them as a checklist. Items 2 to 6
+are in [the laptop handoff](../../handoffs/2026-10-06-tom-laptop-settings.md), which
+Tom can give to an agent on his own machine. Q-12 is the only question left, asked
+when item 1 raises it.
 
 An agent working outside under Tom's own gh login could make changes 1 and 2 with
 `gh api`, but only after Tom says yes to that exact change.
