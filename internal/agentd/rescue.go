@@ -34,8 +34,8 @@ const rescueLockFile = "rescue.lock"
 // switched the worktree onto the rescue branch; agentd commits through a
 // temporary index instead and leaves the worktree, its index and its branch as
 // they were, because a v2 session can be resumed after its rescue. It refuses a
-// worktree with a merge or rebase in progress, an untracked nested repo, an
-// initialized submodule, or more than 50 MiB untracked. Rescue branches are
+// worktree with a merge or rebase in progress, an untracked nested repo, a
+// submodule holding work origin lacks, or more than 50 MiB untracked. Rescue branches are
 // never pushed (D-10).
 func Rescue(ctx context.Context, r Runner, s Settings, session string, now time.Time) (protocol.RescueReport, error) {
 	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
@@ -174,14 +174,13 @@ func rescueWorktree(ctx context.Context, r Runner, s Settings, wt, stamp string)
 			return w
 		}
 	}
-	// A submodule's own edits and commits are in its own repo, which neither
-	// the rescue commit (it records only the gitlink) nor the ref list reaches.
-	// Refuse, so the volume is kept and a human decides.
-	if sub, err := initializedSubmodule(ctx, r, wt); err != nil {
+	// Refuse a submodule holding work the rescue cannot reach, so the volume
+	// is kept and a human decides.
+	if why, err := submoduleProblem(ctx, r, wt); err != nil {
 		w.Refused = "git submodule status failed: " + cmdDetail(err)
 		return w
-	} else if sub != "" {
-		w.Refused = "an initialized submodule (" + sub + "); rescue does not reach into submodules"
+	} else if why != "" {
+		w.Refused = why + "; rescue does not reach into submodules"
 		return w
 	}
 	// --no-optional-locks: never take the index lock from a running agent.
@@ -224,26 +223,52 @@ func rescueWorktree(ctx context.Context, r Runner, s Settings, wt, stamp string)
 	return w
 }
 
-// initializedSubmodule names the first initialized submodule of a worktree,
-// or returns "" when it has none.
-func initializedSubmodule(ctx context.Context, r Runner, wt string) (string, error) {
+// submoduleProblem names a reason to refuse a worktree because of a
+// submodule, or returns "". A submodule's own edits and commits live in its
+// own repo, which the rescue commit (it records only the gitlink) and the ref
+// list never reach. So a submodule passes only when it is clean and origin has
+// everything it holds: not drifted from the recorded commit (+) or conflicted
+// (U), no uncommitted change, no stash, and no branch, tag or HEAD commit that
+// its origin lacks. One never initialized (-) holds nothing of its own.
+func submoduleProblem(ctx context.Context, r Runner, wt string) (string, error) {
 	if !exists(filepath.Join(wt, ".gitmodules")) {
 		return "", nil
 	}
-	res, err := r.Run(ctx, Cmd{Name: "git", Args: []string{"-C", wt, "submodule", "status", "--recursive"}, Env: append(append([]string(nil), gitEnv...), "GIT_OPTIONAL_LOCKS=0")})
+	env := append(append([]string(nil), gitEnv...), "GIT_OPTIONAL_LOCKS=0")
+	gitOut := func(dir string, args ...string) (string, error) {
+		res, err := r.Run(ctx, Cmd{Name: "git", Args: append([]string{"-C", dir}, args...), Env: env})
+		return strings.TrimSpace(string(res.Stdout)), err
+	}
+	out, err := gitOut(wt, "submodule", "status", "--recursive")
 	if err != nil {
 		return "", err
 	}
-	// "-<sha> path" is a submodule that was never initialized: nothing of its
-	// own is on the volume.
-	for _, line := range strings.Split(string(res.Stdout), "\n") {
-		if line == "" || strings.HasPrefix(line, "-") {
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" {
 			continue
 		}
-		if f := strings.Fields(line); len(f) >= 2 {
-			return f[1], nil
+		state := line[0]
+		f := strings.Fields(line[1:])
+		if len(f) < 2 {
+			continue
 		}
-		return strings.TrimSpace(line), nil
+		path := f[1]
+		switch state {
+		case '-':
+			continue
+		case '+', 'U':
+			return fmt.Sprintf("submodule %s is not at its recorded commit", path), nil
+		}
+		sub := filepath.Join(wt, path)
+		if st, err := gitOut(sub, "status", "--porcelain=v1", "--untracked-files=all"); err != nil || st != "" {
+			return fmt.Sprintf("submodule %s has uncommitted changes", path), nil
+		}
+		if st, err := gitOut(sub, "stash", "list"); err != nil || st != "" {
+			return fmt.Sprintf("submodule %s has a stash", path), nil
+		}
+		if extra, err := gitOut(sub, "rev-list", "-n", "1", "HEAD", "--branches", "--tags", "--not", "--remotes=origin"); err != nil || extra != "" {
+			return fmt.Sprintf("submodule %s has commits its origin lacks", path), nil
+		}
 	}
 	return "", nil
 }

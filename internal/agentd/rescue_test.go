@@ -258,7 +258,7 @@ func TestRescueRefusals(t *testing.T) {
 	}
 }
 
-func TestRescueRefusesAnInitializedSubmodule(t *testing.T) {
+func TestRescueAndSubmodules(t *testing.T) {
 	rig := newRescueRig(t)
 	env := append(append([]string(nil), rig.g.env...), "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=protocol.file.allow", "GIT_CONFIG_VALUE_0=always")
 	lib := filepath.Join(rig.g.root, "remote", "lib")
@@ -269,17 +269,47 @@ func TestRescueRefusesAnInitializedSubmodule(t *testing.T) {
 	wt := rig.ws.Worktree
 	gitRun(t, env, wt, "submodule", "add", "-q", "file://"+lib, "lib")
 	gitRun(t, env, wt, "commit", "-q", "-m", "add lib")
-	writeFile(t, filepath.Join(wt, "lib", "lib.txt"), "edited inside the submodule\n")
+	gitRun(t, env, wt, "push", "-q", "origin", rig.ws.Branch)
+	sub := filepath.Join(wt, "lib")
+	refused := func(t *testing.T, want string) {
+		t.Helper()
+		rep := rig.rescue(t)
+		w := rig.worktree(t, rep, wt)
+		switch {
+		case want == "" && (!rep.OK || w.Refused != ""):
+			t.Errorf("a clean submodule was refused: %q", w.Refused)
+		case want != "" && (rep.OK || !strings.Contains(w.Refused, want) || w.RescueBranch != ""):
+			t.Errorf("ok=%v refused=%q, want %q", rep.OK, w.Refused, want)
+		}
+		// The clone's main checkout never initialized it.
+		if m := rig.worktree(t, rep, rig.ws.Clone); m.Refused != "" {
+			t.Errorf("main checkout refused: %q", m.Refused)
+		}
+	}
 
-	rep := rig.rescue(t)
-	w := rig.worktree(t, rep, wt)
-	if rep.OK || !strings.Contains(w.Refused, "an initialized submodule (lib)") || w.RescueBranch != "" {
-		t.Errorf("ok=%v worktree %+v", rep.OK, w)
-	}
-	// The clone's main checkout never initialized it: nothing to refuse there.
-	if m := rig.worktree(t, rep, rig.ws.Clone); m.Refused != "" {
-		t.Errorf("main checkout refused: %q", m.Refused)
-	}
+	t.Run("clean", func(t *testing.T) { refused(t, "") })
+	t.Run("dirty", func(t *testing.T) {
+		writeFile(t, filepath.Join(sub, "lib.txt"), "edited inside the submodule\n")
+		refused(t, "submodule lib has uncommitted changes")
+		gitRun(t, env, sub, "checkout", "-q", "--", "lib.txt")
+	})
+	t.Run("stash", func(t *testing.T) {
+		writeFile(t, filepath.Join(sub, "lib.txt"), "stashed\n")
+		gitRun(t, env, sub, "stash", "push", "-q")
+		refused(t, "submodule lib has a stash")
+		gitRun(t, env, sub, "stash", "clear")
+	})
+	t.Run("drifted", func(t *testing.T) {
+		writeFile(t, filepath.Join(sub, "more.txt"), "more\n")
+		gitRun(t, env, sub, "add", "more.txt")
+		gitRun(t, env, sub, "commit", "-q", "-m", "local only")
+		refused(t, "submodule lib is not at its recorded commit")
+	})
+	t.Run("unpushed at the recorded commit", func(t *testing.T) {
+		gitRun(t, env, wt, "add", "lib")
+		gitRun(t, env, wt, "commit", "-q", "-m", "bump lib")
+		refused(t, "submodule lib has commits its origin lacks")
+	})
 }
 
 func TestRescueWithoutOrigin(t *testing.T) {
