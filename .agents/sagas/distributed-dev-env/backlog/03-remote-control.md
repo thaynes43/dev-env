@@ -1,26 +1,49 @@
 # 03: Remote Control
 
 **Status:** backlog
-**Depends on:** 02; spikes S-1 and S-2 (which auth path), S-5 (cross-pod messaging),
-S-6 (resume keeps the phone entry)
+**Depends on:** 02; 07 (the console is the broker's web UI); spike S-1 (which auth
+path), S-5 (cross-pod messaging), S-6 (resume keeps the phone entry), S-15 (archive on
+reap). S-2 is answered: the static token cannot register Remote Control.
 **Parallel with:** 04
 
 ## Goal
 
-Tom drives v2 sessions from his phone, the monthly Max login renewal runs through
-`agent-run`, and the operator keeps a standby session ready the way v1's post-ready
-does.
+Tom drives v2 sessions from his phone. The keeper is the sole owner of the Max login
+(Q-11, Tom 2026-10-06), and Tom renews it each month on a console page behind
+Authentik instead of a chat relay. The console lists every session's link and state
+with an archive button. The operator keeps a standby session ready the way v1's
+post-ready does. DESIGN-001 3.8, 6.2, 6.7; R-02.
 
 ## Scope
 
-- **If S-1 or S-2 passed:** the keeper owns the Max login. It refreshes on a
-  schedule and writes `dev-env-claude-live` (access token only); `remote` session
-  pods mount it. If S-2 passed, `remote` pods simply use the static token.
-- **If both failed:** the coordinator host (DESIGN-001 6.2): one long-lived session
-  pod of kind `coordinator-host` that owns `.credentials.json` on its volume and
-  runs every Remote Control session as a tmux window.
-- `agent-run auth status|login|code`; the keeper's daily check pages Tom at 7 days or
-  fewer (replacing v1's auth-watch for this credential).
+- **If S-1 passed (the target):** the keeper makes its own fresh `/login` and owns
+  it. It refreshes well inside the 8-hour access-token life and writes
+  `dev-env-claude-live` (access token, expiry, scopes, subscription type, rate-limit
+  tier; no refresh token).
+  - agentd merges those keys into the pod's own writable `~/.claude/.credentials.json`
+    (0600, atomic rename, keeping the CLI's `mcpOAuth`) within seconds of a change;
+    the Secret is never mounted as the file.
+  - agentd seeds `.claude.json` (`oauthAccount` uuids from the keeper's profile
+    fetch, onboarding flags, worktree trust) and copies nothing per machine.
+  - Remote pods unset `CLAUDE_CODE_OAUTH_TOKEN` and set
+    `CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=dev-env`. An image CI check fails if
+    the image sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_GROWTHBOOK`,
+    `DISABLE_TELEMETRY` or `DO_NOT_TRACK`.
+- **If S-1 failed:** the coordinator host (DESIGN-001 6.2): one long-lived session
+  pod of kind `coordinator-host` that owns `.credentials.json` on its volume and runs
+  every Remote Control session as a tmux window, summoned `remote` sessions included.
+- **Links:** agentd reports `status.remoteControl.{sessionId, url, state}` from
+  `~/.claude/sessions/<pid>.json`, not from the pane; the URL only after registration.
+- **Archive on reap:** after the bundle is verified, the operator asks the keeper to
+  archive the entry (S-15), records the result, and counts unarchived offline
+  entries in `agent-run fleet`.
+- **The console** (the broker's web UI, 3.8): sessions with link, state and an
+  archive button; the Claude login page (days left; Renew runs the ceremony in the
+  page; the link and code are never logged or stored; a waiting login ends after 10
+  minutes); credential status for every credential; the codex hub's state.
+- `agent-run auth status|login|code` as the laptop fallback; the keeper's daily check
+  pages Tom at 7 days or fewer, with a link to the console page (replacing v1's
+  auth-watch for this credential).
 - `remote` mode in `agent-run --interactive`; the Remote Control name is the session
   id. The coordinator system prompt that v1's agent-run adds for `both` mode carries
   over.
@@ -31,10 +54,13 @@ does.
 
 ## Acceptance
 
-- Tom starts and drives a v2 Remote Control session from his phone.
+- Tom starts and drives a v2 Remote Control session from his phone, and the console
+  shows its link as registered.
 - A coordinator session dispatches a v2 task pod with `agent-run -p` and gets the
   result back.
-- The login renewal ceremony completes through `agent-run auth login claude` with the
-  URL relayed bare and the code pasted back.
+- Tom renews the keeper's login from the console page on his phone, with no chat
+  relay, and the page shows the new expiry.
+- A drained remote session comes back as the same phone entry; a reaped one leaves
+  the phone's active list (or, if S-15 failed, is archived from the console).
 - No pod other than the credential owner holds a refresh token (checked by listing
-  the mounted files' keys, never their values).
+  the credentials files' keys, never their values).

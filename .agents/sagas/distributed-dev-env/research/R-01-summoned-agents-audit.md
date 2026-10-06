@@ -240,6 +240,10 @@ the design can cite them. Each comes from something above.
 
 ## 6. Points for DESIGN-001 (not edited here)
 
+Folded into DESIGN-001 on 2026-10-06: section 3.7 (D-36) with a table of where each
+of V-01 to V-17 lands, the `ops` profile in 6.10, quota priority in 7.3, and plan 10
+for the executor's migration.
+
 - D-05: add per-caller authorization (V-01). Today "all authenticated callers get the
   same API".
 - D-18 and D-24: add an `ops` profile with a narrow egress tier (V-07).

@@ -374,6 +374,12 @@ For whoever edits the design next (this PR adds only this file):
 
 ## 9. Open question for Tom (Q-11 when asked)
 
+**Answered 2026-10-06:** Tom meant the Claude Code auth, the Max `/login` on the PVC.
+The ruling is recorded as Q-11 in
+[DESIGN-001 section 15](../designs/001-dev-env-v2.md#15-open-questions), and section 8's
+edits are folded into DESIGN-001 6.2, 6.7, 3.8 and the spikes. The question as it
+was asked:
+
 **Which link did you mean, the one that survives restarts?** Q-01 to Q-10 are taken.
 When the coordinator asks this one, it is recorded as **Q-11** in DESIGN-001 section 15,
 with Tom's ruling, and this note then points there. The design does not depend on the

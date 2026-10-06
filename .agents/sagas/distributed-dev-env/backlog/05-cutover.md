@@ -15,16 +15,22 @@ v2 carries all agent work. v1 is retired without losing anything on its volume.
 - **Workbench:** a small Deployment in `dev-agents` with code-server, `agent-run`
   and `kubectl`, behind traefik-internal and Authentik like v1. It runs no agents by
   default.
-- **dev-env-ops** reads only `Activity` resources.
+- **dev-env-ops** reads only `Activity` resources (if plan 10 has not already retired
+  it; its summoning lanes move in plan 10, not here).
 - **v1 drain:** announce, let v1 sessions finish or move them (`agent-run` v2 from
   inside v1), run `agent-run sweep` once more so v1's WIP lands on rescue branches,
   then scale v1 to zero. Its PVC stays 30 days.
+- **v1's Max login is retired with the pod.** Tom stops renewing it; it lapses about
+  30 days after its last `/login`. Nothing is copied to the keeper, which has had its
+  own login since plan 03. The `claude-login-check` page and the v1 renewal runbook
+  give way to the console's login page.
 - **haynes-ops cleanup** after the 30 days: delete `apps/dev/dev-env`, the v1
   Dockerfile and build workflow, the v1 Renovate carve-outs and holds, and the
   Kyverno attestor for haynes-ops-built `dev-env*` images. These are held drafts,
   merged at a natural break, because they touch the v1 pod.
-- Move v1's runbook knowledge that still applies (Max login renewal, hw-ssh, pve,
-  declare-activity) into this repo's docs and the pod CLAUDE.md in haynes-ops.
+- Move v1's runbook knowledge that still applies (hw-ssh, pve, declare-activity)
+  into this repo's docs and the pod CLAUDE.md in haynes-ops. The Max login renewal
+  is now the console page (DESIGN-001 3.8).
 
 ## Acceptance
 

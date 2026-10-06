@@ -1,34 +1,36 @@
 # ADR-001: Distributed dev-env, one pod per agent session, run by an operator
 
 - **Status:** Proposed
-- **Date:** 2026-10-05; Tom's rulings on Q-01 to Q-10 folded in 2026-10-06
+- **Date:** 2026-10-05; Tom's rulings on Q-01 to Q-11 folded in 2026-10-06
 - **Deciders:** Tom Haynes (owner). Drafted by an agent. Tom decided the repository
-  location (2026-10-05) and every design question, Q-01 to Q-10 (2026-10-06); the
+  location (2026-10-05) and every design question, Q-01 to Q-11 (2026-10-06); the
   ADR itself is not yet Accepted.
 - **Design:** [DESIGN-001](../designs/001-dev-env-v2.md)
 
 ## Ratification summary
 
-**What Tom ratifies:** this architecture and DESIGN-001's D-01 to D-35 with his
-rulings on Q-01 to Q-10. In short: one pod per agent session, run by our own Go
-operator; a keeper that alone holds the rotating logins; an access broker for
-time-boxed grants approved on his phone; tool pods; a GPU budget that never takes
-household VRAM; and satellites on his own machines. Once Accepted, this ADR is
-never edited; a later change gets a new ADR.
+**What Tom ratifies:** this architecture and DESIGN-001's D-01 to D-37 with his
+rulings on Q-01 to Q-11: one pod per agent session, run by our own Go operator; a
+keeper that is the sole owner of the one Max login, with pods on access tokens; a
+console behind Authentik for session links, archives, approvals and the monthly
+login renewal; an access broker; tool pods; a GPU budget that never takes household
+VRAM; satellites; and summoned sessions kept as a first-class path (R-01 V-01 to
+V-17). Once Accepted, this ADR is never edited; a later change gets a new ADR.
 
-**Build order:** spikes first, with S-1 and S-2 before anything else. Together they
-decide whether Remote Control can run on a keeper-held Max login or needs a
-coordinator host pod (D-11). S-3, S-6 and S-7 also run in the v1 pod today. Then plan 01; 02 and 07
-together; 03, 04 and 08 together; then 05 (cutover); then 09 once 08 is done.
+**Build order:** spikes first, S-1 before anything else: it decides whether Remote
+Control runs on the keeper's login or needs a coordinator host pod (D-11; S-2 is
+answered: the static token cannot). S-6, S-15 and S-16 also run in the v1 pod today.
+Then plan 01; 02 and 07 together; 03, 04, 08 and 10 together; 05 (cutover); 09
+after 08.
 
-**v1 until cutover:** v1 runs every session and is maintained in haynes-ops as today.
-No v2 plan touches `apps/dev/dev-env/app/resources/**`. Cutover needs Tom's written
-approval, and v1's volume is kept for 30 days after it.
+**v1 until cutover:** v1 and `dev-env-ops` keep running from haynes-ops. No v2 plan
+touches `apps/dev/dev-env/app/resources/**`. Each has its own monthly Max login now
+(haynes-ops #3414); the keeper replaces both, and each retires with its pod (plans 05
+and 10).
 
 **First build:** [plan 01](../backlog/01-foundation.md), task mode on the static
-token. It is done when `agent-run -p` from v1 starts a worker pod that opens a PR,
-an operator restart leaves that pod untouched, and the guard refuses every #3392
-path.
+token, done when a v2 task pod opens a PR, survives an operator restart, and the
+guard refuses every #3392 path.
 
 ## Context and problem statement
 
@@ -120,12 +122,20 @@ The parts, in one paragraph each, with the design section that specifies them:
   the operator Deployment, and the CRDs are never pruned (DESIGN-001 3.1 to 3.4, 5.1).
 - **Broker**: the operator binary in a second Deployment with its own ServiceAccount.
   It approves grant requests that match a standing policy in git, sends the rest to
-  Tom as a Pushover link to an approval page behind Authentik, and creates and
-  revokes time-boxed RoleBindings and network policies. Break-glass replaces the
-  headlamp path (DESIGN-001 6.12).
-- **Keeper**: the single owner of the Claude Max login, the Codex login and the
-  GitHub App key. It writes only short-lived results (access tokens, the gh token)
-  into Secrets that agent pods mount (DESIGN-001 6.2 to 6.4).
+  Tom as a Pushover link, and creates and revokes time-boxed RoleBindings and network
+  policies. Break-glass replaces the headlamp path (DESIGN-001 6.12). It also serves
+  **the console** behind Authentik: every session's Remote Control link and state
+  with an archive button, approvals, and the monthly login renewal page that replaces
+  the chat relay (DESIGN-001 3.8; Q-11).
+- **Keeper**: the sole owner of the one Claude Max login (replacing v1's two), the
+  Codex login and the GitHub App keys. It writes only short-lived results (access
+  tokens, the gh tokens) into Secrets; agentd merges the Claude access token into
+  each pod's own credentials file (DESIGN-001 6.2 to 6.4).
+- **Summoned sessions**: the alert responder, the upgrade shepherd and the other
+  automated callers keep summoning Max-plan sessions, through the API, authorized per
+  caller by a `CallerPolicy`, with lanes, outcomes, watchdogs, retention and no
+  metered fallback. The v1 executor `dev-env-ops` moves into the operator
+  (DESIGN-001 3.7, plan 10).
 - **Session pod**: `tini`, an `agentd` supervisor, tmux and one agent (Claude Code,
   Codex or opencode for local models), running with no approval prompts; worker
   nodes only; a size class that presets requests and mandatory limits, placed by the
@@ -184,11 +194,17 @@ The parts, in one paragraph each, with the design section that specifies them:
 | C-17 | Neutral: session volumes depend on the Proxmox Ceph, an HDD-backed cluster outside Kubernetes. Its outage stops new sessions and stalls running ones; it already carries Prometheus and Loki. |
 | C-18 | Good: the house never waits on agents for VRAM, because nothing is lent. Agent GPU capacity grows as Tom adds GPUs, with no tuning. Bad: today the household reservations fill most cards, so in-cluster agent GPU work is small until then. |
 | C-19 | Neutral: the large local models depend on Tom's own machines, which are there only when he is not using them; agents fall back to smaller in-cluster models or wait. |
+| C-20 | Good: summoning a Max-plan agent stays a first-class path, now authenticated and authorized per caller, with outcomes guaranteed and links that open on Tom's phone; v1's executor and its separate login go away. |
+| C-21 | Good: one login with one owner and a renewal page in the console replace the chat relay. Bad: until both v1 pods are retired, Tom renews up to three logins a month. |
 
 ## More information
 
 - Design: [DESIGN-001](../designs/001-dev-env-v2.md). Tom ruled on every question,
-  Q-01 to Q-10, on 2026-10-06; the rulings are in its section 15.
+  Q-01 to Q-11, on 2026-10-06; the rulings are in its section 15.
+- Research: [R-01](../research/R-01-summoned-agents-audit.md) (summoned agents, the
+  v2 requirements V-01 to V-17) and
+  [R-02](../research/R-02-remote-control-identity.md) (Remote Control identity,
+  proposals P-1 to P-12), both folded into DESIGN-001.
 - haynes-ops #3392: the v1 RBAC escalation finding that the baseline guard answers.
 - v1 saga and its decision log: haynes-ops `.agents/sagas/dev-env/`. Its ADR-001
   records that v2 lives in this repo.
