@@ -1570,9 +1570,11 @@ from agent workloads:
 In both cases:
 
 1. The budgeter picks agent workloads on that card until enough units are covered:
-   first idle tool instances and LLM backends; then (only for a shrinking budget)
-   LLM pools that have another backend available (8.3 moves the pool first, then
-   this backend stops); then busy tools and pools, newest claim first.
+   first idle tool instances and LLM backends. Agent against agent stops there: if
+   the idle holders do not cover the claim, it keeps waiting. Only when the budget
+   shrinks does it go on to LLM pools that have another backend available (8.3 moves
+   the pool first, then this backend stops), and then to busy tools and pools,
+   newest claim first.
 2. Before any notice goes out, it re-gates any Pending agent GPU pod aimed at that
    node, and from then on it un-gates nothing toward it except the waiting claim
    the reclaim is for.

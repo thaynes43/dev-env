@@ -16,9 +16,9 @@ time-boxed grants approved on his phone; tool pods; a GPU budget that never take
 household VRAM; and satellites on his own machines. Once Accepted, this ADR is
 never edited; a later change gets a new ADR.
 
-**Build order:** spikes first, with S-1 before anything else. It decides whether
-Remote Control can run on a keeper-held Max login or needs a coordinator host pod
-(D-11). S-2, S-3, S-6 and S-7 also run in the v1 pod today. Then plan 01; 02 and 07
+**Build order:** spikes first, with S-1 and S-2 before anything else. Together they
+decide whether Remote Control can run on a keeper-held Max login or needs a
+coordinator host pod (D-11). S-3, S-6 and S-7 also run in the v1 pod today. Then plan 01; 02 and 07
 together; 03, 04 and 08 together; then 05 (cutover); then 09 once 08 is done.
 
 **v1 until cutover:** v1 runs every session and is maintained in haynes-ops as today.

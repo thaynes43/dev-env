@@ -8,7 +8,7 @@ top of ADR-001. Nothing is built. The architecture is in
 [DESIGN-001](designs/001-dev-env-v2.md). Tom ruled on every question, Q-01 to Q-10,
 on 2026-10-06 and widened the scope: tool pods, a GPU budget, satellite inference
 workers, local models, and access without in-pod prompts. No question is open. The
-spikes in [backlog 00](backlog/00-spikes.md) come first, S-1 before all.
+spikes in [backlog 00](backlog/00-spikes.md) come first, S-1 and S-2 before all.
 
 **Working rules:** this repo's [CLAUDE.md](../../../CLAUDE.md). Docs first. Ask Tom
 one question at a time with AskUserQuestion, and fold each answer back into the
