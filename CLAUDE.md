@@ -32,7 +32,7 @@ v2 proves itself and Tom approves the cutover. The saga:
 ```
 .agents/HANDOFF.md       the front door: state, next steps, rulings, inside vs outside
 .agents/sagas/<saga>/    saga README (vision, decision log), KICKOFF, adrs/, designs/, backlog/, research/
-.github/workflows/       ci.yml (lint, test, build, check-generated, image builds; aggregate `CI - Success`), Claude review + @claude
+.github/workflows/       ci.yml (lint, test, build, check-generated, image builds; aggregate `CI - Success`), publish.yml (operator image from main, signed), Claude review + @claude
 api/v1alpha1/            CRD types, group dev-env.haynesops.com (AgentSession); depends on apimachinery only
 cmd/dev-env-operator/    the operator; the broker will be its second mode (DESIGN-001 3.1, 6.12)
 cmd/dev-env-keeper/      the keeper, its own binary in the operator image (D-38)
@@ -53,6 +53,11 @@ Go module `github.com/thaynes43/dev-env`, with a `go` and a `toolchain` line in
 CI (`ci.yml`) runs the Makefile targets, so what passes in the pod passes there. The
 one required check is the aggregate job `CI - Success`; the workflow has no `paths:`
 filter, so a docs-only PR still gets it. Image builds run on PRs and never push.
+`publish.yml` runs on push to main when an image build input changed (a paths filter),
+and on `workflow_dispatch`; run it by hand after editing it. It pushes `dev-env-operator:sha-<short>` (never
+`latest`, never an existing tag) and signs the digest with keyless cosign, pinned like
+haynes-ops v1 (see the workflow header and haynes-ops #3092). It needs no Docker in the
+pod: never build images here.
 
 Every Makefile target caps Go at two CPUs and two packages at a time and runs under
 `nice -n 19`, so it is safe in the shared pod (Hard rules). Do not raise
