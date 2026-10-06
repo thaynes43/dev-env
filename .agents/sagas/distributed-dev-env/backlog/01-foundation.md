@@ -32,7 +32,7 @@ step. Tick a step in the PR that lands it.
   - [x] config rendering, the port of `dev-init.sh`: `agentd render` (#25);
   - [x] partial clone and worktree, the task in tmux, heartbeat, `agentd ctl status`
     (#27; D-41, D-42);
-  - [x] `agentd ctl rescue`, the entry point step 5 extends with the bundle (PR_C;
+  - [x] `agentd ctl rescue`, the entry point step 5 extends with the bundle (#28;
     D-43).
 - [ ] 5. Rescue to a bundle on the shared volume (D-10), then suspend and archive.
   The bundle extends `agentd ctl rescue` (D-43): it bundles the report's

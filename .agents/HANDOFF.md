@@ -35,7 +35,7 @@ the saga. To start building, follow
   `operatingMode` and `lifecycle` (D-39). `make test` runs an envtest suite against
   kube-apiserver 1.35 (the main cluster's minor) that proves each rule;
   `internal/testenv` starts it, for later suites too.
-- **Plan 01 step 4, agentd, is built** (#25, #27, PR_C). `agentd run` renders the
+- **Plan 01 step 4, agentd, is built** (#25, #27, #28). `agentd run` renders the
   config (the `dev-init.sh` port), clones the repo and adds the worktree, runs the
   task once in tmux session `agent` on the static token, heartbeats to
   `POST /v1/sessions/{name}/heartbeat`, and forwards the pod's SIGTERM to the CLI.
