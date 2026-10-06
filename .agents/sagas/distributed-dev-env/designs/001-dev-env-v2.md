@@ -367,11 +367,11 @@ metadata:
   namespace: dev-env-system
 spec:
   serviceAccount: upgrade-agent/alert-responder
-  priority: urgent                     # urgent | normal | bulk (7.3)
   limits: { concurrent: 2, createsPerHour: 6 }
   sessions:
     - kind: task                       # headless, never on Tom's list
       lane: remediation
+      priority: urgent                 # urgent | normal | bulk, per session kind (7.3)
       namePrefix: rem-
       profile: ops
       model: { default: claude-opus-5-5, fallback: claude-opus-5 }
@@ -380,7 +380,8 @@ spec:
       maxTurns: 120
       onUnreported: escalate
     - kind: remote                     # Tom joins from the phone
-      lane: escalation
+      lane: escalation                 # not single-flight (see Lanes)
+      priority: urgent
       namePrefix: esc-
       profile: ops
       model: { default: claude-fable-5-1, fallback: claude-opus-5-5 }
@@ -429,19 +430,28 @@ spec:
   outcome:** if the agent exits, hits its timeout or turn cap, or trips its watchdog
   without reporting, the operator closes the session as the policy's `onUnreported`
   says (`failed`, or `escalate`, which files an `esc-rem-…` session for remediation).
-- **Lanes** (V-09). At most one running session per lane: remediation, upgrade,
-  escalation, curation. One remediation actuator touches the cluster at a time. Lanes
-  limit actuators, not capacity, so they sit beside D-21, not against it. Queued
-  sessions start escalations first, then upgrade, remediation and curation. A queued
-  escalation that waits more than 15 minutes pages Tom (F-04).
+  This one rule covers every way a session can end unreported, watchdog trips
+  included.
+- **Lanes** (V-09). At most one running session per lane for the lanes that act on
+  their own: remediation, upgrade, curation, each fed by one caller class. One
+  remediation actuator touches the cluster at a time. Lanes limit actuators, not
+  capacity, so they sit beside D-21, not against it. Queued sessions start in the
+  order upgrade, remediation, curation.
+- **Escalations are not single-flight.** An escalation waits on Tom rather than acting
+  unattended, so it has no lane: each starts at once, within its caller's
+  `concurrent` and `createsPerHour` limits, and pages on spawn. One unanswered
+  escalation can never hold back another (v1 F-04). An escalation that does queue
+  behind those limits pages Tom after 15 minutes.
 - **Storm limits** (V-10). Per caller, from its policy: concurrent sessions, creates
   per hour, and the idempotency key. The responder keeps its own collapse, cooldown and
   page cap, so there are two layers.
 - **Watchdogs** (V-11). A session with no agent activity and no `working` report for
   its lane's limit (180 minutes for upgrades; the timeout for `task`) is closed as
-  `failed`, its lane is freed, and Tom is paged. A pod that vanishes is reported as
-  `session lost` and resumed from its volume where it can be. An escalation that is
-  idle because it is waiting on Tom is exempt.
+  its policy's `onUnreported` says, its lane is freed, and Tom is paged. A pod that
+  vanishes is reported as `session lost` and resumed from its volume where it can be.
+  An escalation that is idle because it is waiting on Tom is exempt from the watchdog,
+  within a bound: after 24 hours it pages Tom once more, and after 72 hours it is
+  closed as `failed` with a note, then kept joinable for 7 days (V-15).
 - **Pages**, from the operator on Pushover: an escalation spawned (with its verified
   link), an upgrade or escalation `failed`, a session lost, an escalation queued over
   15 minutes. Everything else goes to the digest. Email stays refused, as in v1.
@@ -545,7 +555,8 @@ busy-lock, merger waits for release"). The agent sets it simply by working.
 | outdated revision | drained at the next idle moment (Q-03); summoned sessions are never drained | section 5.2, 3.7 |
 | summoned session, outcome `done` | kept joinable 1 day, then rescued and reaped | V-15 (3.7) |
 | summoned session, outcome `failed` or `escalated` | kept joinable 7 days, then rescued and reaped | V-15: Tom joins failures after the fact |
-| summoned session, no activity and no `working` report | closed as its policy's `onUnreported` after its lane's limit (180 min for upgrades; the timeout for `task`); escalations waiting on Tom are exempt | V-11 (3.7) |
+| summoned session, no activity and no `working` report | closed as its policy's `onUnreported` after its lane's limit (180 min for upgrades; the timeout for `task`) | V-11 (3.7) |
+| escalation idle, waiting on Tom | a reminder page after 24 h; closed as `failed` after 72 h | V-11 (3.7) |
 | reaped `remote` session | its Remote Control entry archived after the bundle is verified | 6.7, S-15 |
 | tool instance with no claims and not busy | stopped after 30 min, volume kept | 8.1 |
 | access grant | expires at its TTL (at most 8 h; break-glass 1 h) | 6.12 |
@@ -1526,11 +1537,13 @@ limits and 20 pods in a ResourceQuota) is withdrawn.
     `/usage` does, every 5 minutes, and `GET /v1/fleet` shows it. That call is
     undocumented; spike S-16 checks it. If it is not usable, the operator falls back
     to counting quota errors in the last hour.
-  - `urgent` callers (escalation, remediation) always start. `normal` callers
-    (upgrades) start unless the 5-hour window is past 95 %. `bulk` callers (curation)
-    wait in their lane while the 5-hour window is past 80 % or the weekly window past
-    90 %, and are refused with a reason after 12 hours. The thresholds are policy
-    data in git.
+  - Priority is set per session kind in each `CallerPolicy`, so one caller's
+    escalations and its upgrades differ. `urgent` sessions (every escalation, every
+    remediation) always start. `normal` sessions (upgrades) start unless the 5-hour
+    window is past 95 %. `bulk` sessions (curation) wait in their lane while the
+    5-hour window is past 80 % or the weekly window past 90 %, and are refused with a
+    reason after 12 hours. CRD validation requires `urgent` for the escalation and
+    remediation lanes. The thresholds are policy data in git.
   - Tom's interactive sessions are never gated. This is not a fleet cap (Q-04): it
     orders the summoned callers by the plan's own signal and limits none of Tom's
     work.

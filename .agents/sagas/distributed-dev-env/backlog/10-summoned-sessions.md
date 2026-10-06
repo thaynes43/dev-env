@@ -30,9 +30,13 @@ DESIGN-001 3.7 (D-36), 6.1, 6.4, 6.10 (`ops`), 7.3 (V-14); research note
 - `POST /v1/sessions/{id}/outcome` and `agent-run report working|done|failed|escalate
   [--note]`; `status.outcome`; `ops-event` log lines; the daily digest on Pushover at
   priority -1; the guaranteed outcome (`onUnreported`) (V-08).
-- Lanes with the start order escalation, upgrade, remediation, curation, and a page
-  for an escalation queued over 15 minutes (V-09).
-- Watchdogs per lane, `session lost`, and the escalation exemption (V-11).
+- Single-flight lanes for remediation, upgrade and curation (start order upgrade,
+  remediation, curation); escalations with no lane, limited only by their caller's
+  limits, with a page for one queued over 15 minutes (V-09).
+- Watchdogs per lane, closing as `onUnreported`; `session lost`; the bounded
+  escalation exemption (reminder at 24 h, closed at 72 h) (V-11).
+- Priority per session kind in `CallerPolicy`, `urgent` required for escalation and
+  remediation (V-14).
 - The static token's mint date and days left in `GET /v1/auth`, pages at 30 and 7 days
   (V-12).
 - No drain for summoned sessions (V-13).
@@ -73,6 +77,10 @@ DESIGN-001 3.7 (D-36), 6.1, 6.4, 6.10 (`ops`), 7.3 (V-14); research note
 
 - Every caller in R-01's table runs on v2 for a week with no lost order.
 - An escalation page carries a link that opens the session on Tom's phone.
+- Two escalations from different callers run at once, and an escalation left
+  unanswered never holds back the next one.
+- With the 5-hour window past 95 %, a shepherd escalation still starts while its
+  upgrade order waits.
 - A remediation that exits without reporting is closed as `escalate` and files an
   `esc-rem-…` session.
 - A re-fired signature returns the running session, and after it finishes, a new one
