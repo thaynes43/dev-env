@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Cmd is one external command: git, claude, tmux.
@@ -74,6 +75,29 @@ func ExitCodeOf(err error) int {
 		return ce.ExitCode
 	}
 	return -1
+}
+
+// cliTimeout bounds each claude or git call of the boot's config steps, so a
+// stalled CLI (a network check, a lock on .claude.json) becomes a warning and
+// the boot goes on.
+var cliTimeout = 30 * time.Second
+
+// runBounded runs c with its own time limit.
+func runBounded(ctx context.Context, r Runner, limit time.Duration, c Cmd) (Result, error) {
+	ctx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	res, err := r.Run(ctx, c)
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		return res, fmt.Errorf("%s %s: no answer within %s", c.Name, firstArg(c.Args), limit)
+	}
+	return res, err
+}
+
+func firstArg(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return args[0]
 }
 
 // ExecRunner runs commands as child processes.

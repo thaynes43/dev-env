@@ -168,23 +168,30 @@ func registerMCP(ctx context.Context, r Runner, s Settings, cfg mcpConfig) []str
 			notes = append(notes, fmt.Sprintf("WARN mcp %q: %s", name, w))
 		}
 		if existing[name] {
-			_, _ = r.Run(ctx, Cmd{Name: s.ClaudeBin, Args: []string{"mcp", "remove", "-s", "user", name}})
+			_, _ = runBounded(ctx, r, cliTimeout, Cmd{Name: s.ClaudeBin, Args: []string{"mcp", "remove", "-s", "user", name}})
 		}
-		if _, err := r.Run(ctx, Cmd{Name: s.ClaudeBin, Args: []string{"mcp", "add-json", "-s", "user", name, string(spec)}}); err != nil {
+		if _, err := runBounded(ctx, r, cliTimeout, Cmd{Name: s.ClaudeBin, Args: []string{"mcp", "add-json", "-s", "user", name, string(spec)}}); err != nil {
 			notes = append(notes, fmt.Sprintf("WARN mcp %q registration failed (%v)", name, err))
 			continue
 		}
 		registered = append(registered, name)
 	}
+	// keep is what the next boot must still manage: what was registered now,
+	// plus any server that left mcp.json and could not be removed, so the
+	// remove is tried again.
+	keep := registered
 	for _, name := range managed {
 		if _, ok := cfg.Servers[name]; ok {
 			continue
 		}
-		if _, err := r.Run(ctx, Cmd{Name: s.ClaudeBin, Args: []string{"mcp", "remove", "-s", "user", name}}); err == nil {
-			notes = append(notes, fmt.Sprintf("mcp %q removed (no longer in mcp.json)", name))
+		if _, err := runBounded(ctx, r, cliTimeout, Cmd{Name: s.ClaudeBin, Args: []string{"mcp", "remove", "-s", "user", name}}); err != nil {
+			notes = append(notes, fmt.Sprintf("WARN mcp %q left mcp.json but its remove failed (%v); the next boot retries", name, err))
+			keep = append(keep, name)
+			continue
 		}
+		notes = append(notes, fmt.Sprintf("mcp %q removed (no longer in mcp.json)", name))
 	}
-	if data, err := json.Marshal(registered); err == nil {
+	if data, err := json.Marshal(keep); err == nil {
 		if err := writeFileAtomic(managedPath, data, 0o600); err != nil {
 			notes = append(notes, fmt.Sprintf("WARN could not record the registered MCP servers: %v", err))
 		}

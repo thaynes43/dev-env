@@ -274,8 +274,10 @@ func renderGit(ctx context.Context, r Runner, s Settings) Step {
 		{"config", "--global", "--unset-all", `credential.https://gist.github.com.helper`},
 		{"config", "--global", `credential.https://github.com.helper`, helper},
 		{"config", "--global", "--replace-all", "safe.directory", filepath.Join(s.ReposDir(), "*")},
+		// A linked worktree is checked by its own path, so ~/work too.
+		{"config", "--global", "--add", "safe.directory", filepath.Join(s.WorkDir(), "*")},
 	} {
-		_, err := r.Run(ctx, Cmd{Name: "git", Args: args})
+		_, err := runBounded(ctx, r, cliTimeout, Cmd{Name: "git", Args: args})
 		// git config --unset-all exits 5 when the key is not set.
 		notSet := args[2] == "--unset-all" && ExitCodeOf(err) == 5
 		if err != nil && !notSet {

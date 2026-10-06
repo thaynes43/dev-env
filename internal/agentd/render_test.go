@@ -125,6 +125,8 @@ func TestRenderFullPod(t *testing.T) {
 		"git config --global --unset-all credential.https://github.com.helper",
 		`password=$(cat ` + s.GHTokenFile + `)`,
 		"git config --global --replace-all safe.directory " + filepath.Join(s.Home, "repos", "*"),
+		"git config --global --add safe.directory " + filepath.Join(s.Home, "work", "*"),
+		"git config --global user.email 304655321+haynes-dev-bot[bot]@users.noreply.github.com",
 	} {
 		if !strings.Contains(gitCalls, want) {
 			t.Errorf("git calls lack %q", want)

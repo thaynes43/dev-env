@@ -38,6 +38,8 @@ type Settings struct {
 	GHTokenFile string
 	// GitUserName and GitUserEmail are the commit identity
 	// (AGENTD_GIT_USER_NAME, AGENTD_GIT_USER_EMAIL; default haynes-dev-bot).
+	// The email has the App user's id, the form GitHub links to the account
+	// and the one this repo's merged commits carry; v1 left the id out.
 	GitUserName  string
 	GitUserEmail string
 	// SharedDir is the dev-env-shared mount (AGENTD_SHARED_DIR, default
@@ -84,7 +86,7 @@ func LoadSettings(getenv func(string) string) (Settings, error) {
 		DefaultModel:      getenv("DEV_ENV_CLAUDE_MODEL"),
 		GHTokenFile:       or("AGENTD_GH_TOKEN_FILE", "/creds/gh_token"),
 		GitUserName:       or("AGENTD_GIT_USER_NAME", "haynes-dev-bot[bot]"),
-		GitUserEmail:      or("AGENTD_GIT_USER_EMAIL", "haynes-dev-bot[bot]@users.noreply.github.com"),
+		GitUserEmail:      or("AGENTD_GIT_USER_EMAIL", "304655321+haynes-dev-bot[bot]@users.noreply.github.com"),
 		SharedDir:         or("AGENTD_SHARED_DIR", filepath.Join(home, ".shared")),
 		StateDir:          filepath.Join(home, ".agentd"),
 		OAuthAccountFile:  getenv("AGENTD_OAUTH_ACCOUNT_FILE"),

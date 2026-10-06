@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExpanderMatchesEnvsubst(t *testing.T) {
@@ -141,6 +142,44 @@ func TestRegisterMCP(t *testing.T) {
 		t.Errorf("managed = %q", managed)
 	}
 }
+
+func TestRegisterMCPKeepsAFailedRemove(t *testing.T) {
+	s := testSettings(t, t.TempDir())
+	writeJSON(t, filepath.Join(s.StateDir, mcpManagedFile), []string{"gone"})
+	f := &fakeRunner{handle: func(c Cmd) (Result, error) {
+		if c.Args[1] == "remove" {
+			return Result{}, &CmdError{Name: c.Name, Sub: "mcp", ExitCode: 1}
+		}
+		return Result{}, nil
+	}}
+	notes := registerMCP(context.Background(), f, s, mcpConfig{Servers: map[string]json.RawMessage{"kept": json.RawMessage(`{"command":"k"}`)}})
+	if !strings.Contains(strings.Join(notes, "\n"), `WARN mcp "gone" left mcp.json but its remove failed`) {
+		t.Errorf("notes = %q", notes)
+	}
+	var managed []string
+	data, _ := os.ReadFile(filepath.Join(s.StateDir, mcpManagedFile))
+	_ = json.Unmarshal(data, &managed)
+	if !reflect.DeepEqual(managed, []string{"kept", "gone"}) {
+		t.Errorf("managed = %q, want the failed remove kept for the next boot", managed)
+	}
+}
+
+func TestRunBoundedStall(t *testing.T) {
+	r := blockingRunner{}
+	_, err := runBounded(context.Background(), r, 20*time.Millisecond, Cmd{Name: "claude", Args: []string{"mcp", "add-json", "x", "secret-spec"}})
+	if err == nil || err.Error() != "claude mcp: no answer within 20ms" {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// blockingRunner never answers until its context ends.
+type blockingRunner struct{}
+
+func (blockingRunner) Run(ctx context.Context, _ Cmd) (Result, error) {
+	<-ctx.Done()
+	return Result{}, ctx.Err()
+}
+func (blockingRunner) LookPath(string) (string, error) { return "", nil }
 
 func TestCmdErrorHidesArguments(t *testing.T) {
 	err := error(&CmdError{Name: "claude", Sub: "mcp", ExitCode: 3, Stderr: "boom"})
