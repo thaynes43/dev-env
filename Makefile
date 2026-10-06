@@ -77,6 +77,11 @@ build: $(addprefix $(BIN_DIR)/,$(BINARIES)) ## Build every binary into bin/ and 
 	@$(GO) version -m $(BIN_DIR)/agent-run | grep -q 'CGO_ENABLED=0' \
 		|| { echo "bin/agent-run was not built with CGO_ENABLED=0 (D-06)"; exit 1; }
 
+# The CLI also ships as a macOS binary (laptops). Static like the Linux one.
+.PHONY: build-agent-run-darwin
+build-agent-run-darwin: ## Cross-build agent-run for darwin/arm64 into bin/.
+	GOOS=darwin GOARCH=arm64 $(NICE) $(GO) build -p $(GO_PARALLELISM) -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/agent-run-darwin-arm64 ./cmd/agent-run
+
 # One rule per binary. FORCE leaves the up-to-date check to Go's build cache.
 $(BIN_DIR)/%: FORCE
 	$(NICE) $(GO) build -p $(GO_PARALLELISM) -trimpath -ldflags '$(LDFLAGS)' -o $@ ./cmd/$*
@@ -99,4 +104,4 @@ $(GOLANGCI_LINT):
 
 .PHONY: clean
 clean: ## Remove the built binaries. The tools in bin/tools/ stay.
-	rm -f $(addprefix $(BIN_DIR)/,$(BINARIES))
+	rm -f $(addprefix $(BIN_DIR)/,$(BINARIES)) $(BIN_DIR)/agent-run-darwin-arm64
