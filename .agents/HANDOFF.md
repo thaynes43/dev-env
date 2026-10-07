@@ -28,7 +28,8 @@ the saga. To start building, follow
   and break-glass grants (D-61); haynes-ops H1 (#3528, #3531) deployed the CRDs, the
   grant role catalog, the broker's RBAC and `dev-env-broker-guard`. Nothing issues a
   grant until haynes-ops H2 deploys the broker. Step 4 has a WIP commit on branch
-  `agent/plan07-install` (backlog/07 says what is left). Q-15 waits on Tom.
+  `agent/plan07-install` (backlog/07 says what is left). Q-15 is ruled (A), so step 8's
+  Proxmox grant is unblocked.
 - **What the run found and fixed (2026-10-07).** haynes-ops still had #24's CRD, so
   the API server pruned the heartbeat's task result and the rescue verdict from
   status; haynes-ops #3502 synced it before any reap. A PR here that changes
@@ -43,7 +44,7 @@ the saga. To start building, follow
   details (DESIGN-001, D-01 onward), 16 spikes, backlog plans 00 to 10 and two
   research notes.
 - **Every design question is ruled.** Tom answered Q-01 to Q-11, Q-13 and Q-14 on
-  2026-10-06 (index below). Q-12 (branch protection) was settled on 2026-10-07: Tom
+  2026-10-06 and Q-15 on 2026-10-07 (index below). Q-12 (branch protection) was settled on 2026-10-07: Tom
   made the repo public (B) after Actions billing stopped CI on the private repo. The
   settings only Tom can click are in a handoff for an agent on his laptop (below).
 - **The repo is public since 2026-10-07.** Everything committed, history and PR
@@ -235,9 +236,9 @@ the saga. To start building, follow
 | Q-12 | The repo is public (B), so the ruleset is enforced free. Tom made it public himself on 2026-10-07: "I made dev-env public so I can go to bed but make sure it's good and safe". Actions billing had stopped CI on the private repo. |
 | Q-13 | Make `ghcr.io/thaynes43/dev-env-operator` public (A). "Public package write a prompt for an agent on my laptop to flip it": a laptop agent flips it after B3's first publish, because GitHub has no API for package visibility. |
 | Q-14 | A GitHub App key secret for release-please (A): "GitHub App key secret (Recommended)". Repo variable `RELEASE_APP_ID`, repo secret `RELEASE_APP_PRIVATE_KEY`; the App also needs Issues read and write for `autorelease:` labels. |
+| Q-15 | The keeper mints a Proxmox grant's token over SSH (A): "Keeper mints over SSH (Recommended)". With a certificate from its own SSH CA it runs `sudo pvesh create /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0` on a node and deletes the token at the grant's end. No new Proxmox user, and v2 never holds the long-lived token. Port 22 from the keeper to the nodes. |
 
-**Open:** Q-15, how a Proxmox credential grant gets its short-lived token (plan 07 step 8;
-the operator token cannot mint one). Full entries in DESIGN-001 section 15.
+**Open:** none.
 
 **Settings only Tom can click** (no decision needed). An agent on his laptop does
 them from [`handoffs/2026-10-06-tom-laptop-settings.md`](handoffs/2026-10-06-tom-laptop-settings.md),
