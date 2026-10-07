@@ -302,6 +302,64 @@ a CRD delete and a write in `kyverno` must all be refused, while an eviction in
 half needs the `dev-env-grant-breakglass` role, which plan 07 ships; if phase 1 does
 not have it yet, that half runs with plan 07.
 
+- [x] **Done 2026-10-07: the baseline half passed, 45 of 45 checks.** haynes-ops #3477
+  deployed the RBAC and guards (#3479 fixed a target and re-ran). Job
+  `dev-agents/s12-baseline-guard-2` (pod `s12-baseline-guard-2-bzwzp`, UID
+  `f917d2f6-9ac2-4466-b60c-9d2282914b86`, talosw01) ran as `dev-env-agent` at 02:08Z.
+  It used `flux-cli` 2.9.6, a 250m CPU limit and one `kubectl` call at a time. It
+  tested real objects, not a scratch namespace: every write was a server-side dry run,
+  so a guard that failed would have let nothing through. Exec ran `true`. One
+  `flux reconcile source git haynes-ops` was real. The script is
+  `kubernetes/main/apps/dev-env-system/rbac-s12/app/s12.sh` at haynes-ops `efcf9860`.
+  #3490 removed the Job, and plan 07 redeploys the script for the break-glass half.
+  Results are in DESIGN-001 section 13 and D-19.
+  - **The ValidatingAdmissionPolicy sees `CONNECT`.** Exec into the Job's own pod
+    (N1) and API-server proxy into it (N2) were refused by `dev-env-identity-guard`.
+    The VAP also refused exec into `flux-system`, `kyverno` and `kube-system` pods. So
+    the VAP carries the namespace half of the exec rule, and Kyverno carries the
+    pod-lookup half (D-19).
+  - **First run, 44 of 45.** P5f picked a Completed CronJob pod that runs as
+    `dev-env-ops`, and kubectl refused to exec before sending a request. A test
+    fault; the re-run selects only Running pods.
+
+Where both VAP guards refuse a request, the API server reports one of them, and which
+one varied between the two runs; "a VAP guard" marks those rows.
+
+| Check | Expected | Decided by |
+|---|---|---|
+| P1 Job as `frontend/headlamp` | refused | a VAP guard |
+| P2, P2b Job with a Secret outside the short list (envFrom; volume) | refused | a VAP guard |
+| P2c to P2e privileged, hostPath, host-PID Job | refused | a VAP guard |
+| P2f Job named `volsync-src-s12` with `SYS_ADMIN` and Unconfined seccomp (Kyverno's PSS exception matches the name) | refused | a VAP guard |
+| P2g Job with a hostPort | refused | a VAP guard |
+| P3, P3d Deployment image; `spec.paused` | refused | a VAP guard |
+| P3b StatefulSet env | refused | a VAP guard |
+| P3c DaemonSet ServiceAccount | refused | a VAP guard |
+| P3e CronJob jobTemplate image | refused | a VAP guard |
+| P4, P4b Kustomization `spec.path`; HelmRelease values | refused | a VAP guard |
+| P4c, P4d GitRepository url; Kustomization label | refused | a VAP guard |
+| P4e ExternalSecret spec | refused | a VAP guard |
+| P5 exec into the headlamp pod (cluster-admin) | refused | Kyverno exec guard |
+| P5b exec into a host-PID `node-exporter` pod | refused | Kyverno exec guard |
+| P5c to P5e exec into `flux-system`, `kyverno`, `kube-system` pods | refused | identity guard (VAP, `CONNECT`) |
+| P5f exec into the v1 `dev-env-ops` pod | refused | Kyverno exec guard |
+| N1, N2 exec and proxy into a `dev-agents` pod | refused | identity guard (VAP, `CONNECT`) |
+| N3, N4 pod delete, Job create in `dev-agents` | refused | identity guard |
+| N5 Secret list | refused | RBAC |
+| A1 to A1c rollout restart Deployment, StatefulSet, DaemonSet (the patch `kubectl rollout restart` sends; a DaemonSet's server-bumped `deprecated.daemonset.template.generation` is allowed) | allowed | |
+| A2 CronJob `spec.suspend` | allowed | |
+| A3, A3b reconcile annotations on a Kustomization; HelmRelease with `forceAt` | allowed | |
+| A3c `flux reconcile source git haynes-ops` (real) | allowed | |
+| A4, A4b `spec.suspend` on a Kustomization and a HelmRelease | allowed | |
+| A5 volsync unlock Job (`default` SA, `envFrom` the repo's `-volsync-aws-secret`) | allowed | |
+| A6 ExternalSecret `force-sync` | allowed | |
+| A7 pod delete; A8 exec into the rook toolbox (real) | allowed | |
+| A9 API-server proxy to Prometheus; A10 CNPG PVC delete in `database`; A11 read `agentsessions` | allowed | |
+
+- [ ] **The break-glass half** (a `grant-<id>` identity bound to
+  `dev-env-grant-breakglass`) runs with plan 07. Until then, only a local
+  kube-apiserver 1.35 has checked the identity guard's grant rules (D-19's note).
+
 ## S-13: the GPU budget (before plan 09)
 
 On talosw04 with Tom's lend label set, after S-9: run an agent-priority pod holding
