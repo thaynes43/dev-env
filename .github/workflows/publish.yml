@@ -2,7 +2,7 @@ name: Publish
 
 # Publishes the operator image, ghcr.io/thaynes43/dev-env-operator, from main and
 # signs it. (B3, .agents/sagas/distributed-dev-env/KICKOFF.md section 3.) The agent
-# image joins this workflow in B5.
+# image has its own workflow, publish-agent.yml, which runs from a release tag (B5, D-53).
 #
 # Tags: only sha-<short>. Never `latest`, and an existing tag is never pushed again.
 # A run for a commit whose tag already exists (a manual re-run) skips the build, so
@@ -183,8 +183,8 @@ jobs:
       # haynes-ops workflows, no ref pin). For v2 images it would need a second
       # keyless entry with subject
       # https://github.com/thaynes43/dev-env/.github/workflows/publish.yml@refs/heads/main
-      # (haynes-ops change, see the header). The package is private until Tom makes it
-      # public, so this reads it with the job's login from the step above.
+      # (haynes-ops change, see the header). The package is public (Q-13), but this
+      # reads it with the job's login from the step above, which a private one needs.
       - name: Verify the signature
         env:
           DIGEST: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
