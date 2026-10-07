@@ -108,8 +108,8 @@ jobs:
             **CRITICAL - block the merge**
             - Secrets or PII in code, docs, fixtures, logs or workflow files. The repo
               is public, so this also covers household details, private addresses
-              and pasted session transcripts. In this repo that includes Claude Max credentials (`.credentials.json`
-              contents, OAuth login URLs with `code_challenge`/`state`, pasted login
+              and pasted session transcripts. In this repo that includes Claude Max
+              credentials (`.credentials.json` contents, OAuth login URLs with `code_challenge`/`state`, pasted login
               codes), `CLAUDE_CODE_OAUTH_TOKEN` values, Codex `auth.json` contents,
               GitHub App private keys or minted `ghs_` tokens, 1Password field
               values, SSH keys, and the Unraid/Proxmox tokens the agent pods use.
