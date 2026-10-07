@@ -23,6 +23,10 @@ const (
 	LabelRevision = LabelPrefix + "revision"
 	// LabelLane is a summoned session's lane (DESIGN-001 3.7).
 	LabelLane = LabelPrefix + "lane"
+	// LabelHold marks a session's rescue pod (D-55), value "true": it runs
+	// `agentd hold`, holds the session's volume for the operator's rescue, and
+	// runs no agent. Pods only.
+	LabelHold = LabelPrefix + "hold"
 
 	// AnnotationRepo is spec.repo. It is an annotation because a repository
 	// name can be longer than a label value.

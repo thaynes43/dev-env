@@ -1396,7 +1396,8 @@ a reaped session's volume, only after a verified rescue of the volume's last pod
   agent, and lets the operator rescue it or retry a failed rescue), the archive timer
   for suspended sessions (D-09's 7 days, from the templates) and what resume does
   after an archive, the 30-day bundle pruning, and the page on `RescueFailed`. Until
-  then a human decides, with `kubectl` (D-45).
+  then a human decides, with `kubectl` (D-45). *Built (plan 02 step 2):* the rescue
+  pod is D-55's hold pod.
 - **The guard and its tests.** `podRemovalAllowed` and `volumeRemovalAllowed` are
   the two guards; `deletePod` and `deleteVolume` are the only deletes, and
   `releaseVolume`, which only `deleteVolume` calls, the second finalizer lift.
@@ -1407,6 +1408,67 @@ a reaped session's volume, only after a verified rescue of the volume's last pod
 - **RBAC** (6.11): `patch` on PVCs, to lift the volume's finalizer; `create` on
   `events.k8s.io` events. `pods/exec` `create` was already in the row; it covers the
   WebSocket and the SPDY path.
+
+**D-55 (2026-10-07, plan 02 step 2). A volume that needs a rescue and has no pod to
+run it in gets a hold pod: the session's pod running `agentd hold`, in which the
+operator runs the usual exec rescue.**
+
+- **When.** A reaped session whose volume has no valid rescue (none ran, the newest
+  was superseded, or it failed) and no pod: its last pod was preempted, evicted or
+  never started, or a suspend deleted it after a failed rescue. This is the 4.1 edge
+  "Failed → Suspended: rescue what is on the volume". An ended or never-started pod
+  goes first, without a rescue (D-51). The operator asks the API server that no pod
+  exists. It creates no hold pod on a volume that is being deleted (a human decides
+  there, D-45), nor while the templates are invalid; `RemovalBlocked` says so.
+- **What.** The session's pod, with the same name and owner, the label
+  `dev-env.haynesops.com/hold: "true"` and the container argument `hold` (the image's
+  entrypoint is `tini -- agentd`). It takes the S class's requests and limits,
+  whatever the session's size, and the current templates and image. It carries no
+  agent credentials: no static token, no profile `env` or `envFrom`, and no API URL,
+  so no heartbeat. It keeps every volume and mount of a session pod: the session
+  volume, the shared volume, the templates' mounts and the profile's (the gh token,
+  for the rescue's fetch). `agentd hold` starts nothing and writes nothing: no
+  config, no clone, no agent. So a task never runs twice (D-42), and an empty volume
+  stays empty.
+- **The rescue.** Once the hold pod runs, the operator runs `agentd ctl rescue
+  --stop-agent` in it by exec and records the verdict, as in any pod (D-51). When the
+  verdict is `Verified` or `CleanAndPushed`, the hold pod goes; then archive deletes
+  the volume and the session goes. While the rescue fails, the hold pod stays, so a
+  human can exec in and fix the worktree, and the operator runs the rescue again
+  every 15 minutes (`HoldRescueRetry`). A passing failure, such as CephFS or GitHub
+  being down, clears on its own. A rescue that cannot run at all is retried every
+  minute, as before.
+- **An empty volume.** A pod that never started leaves a volume with nothing on it
+  but ext4's empty `lost+found` and the shared volume's mount point. `agentd ctl
+  rescue` reports that as `volumeEmpty`, writes nothing, not even `~/.agentd`, and the
+  operator records `CleanAndPushed` with the reason `VolumeEmpty`. This is the one
+  case where a report without the session's clone proves the volume holds no work:
+  agentd's boot writes `~/.agentd` before anything else, so no agent ever ran there.
+  Anything more on the volume (one file, agentd's state, a `lost+found` that holds a
+  file or cannot be read, a shared directory that is not a mount) is not empty, and
+  a missing clone is still `NotProven` (D-51). A report that claims an empty volume
+  and also lists a clone, a bundle or a failure is `Failed` (`ReportMismatch`).
+- **When a hold pod goes otherwise.** It runs no agent, so the guard
+  (`holdRemovalAllowed`, through `podRemovalAllowed` and `deletePod`) lets it go
+  whenever nothing needs it: the session wants its own pod again (a resume, once
+  step 7's archive timer gives suspended sessions hold pods), or the hold pod ended
+  and a new one replaces it. A hold pod that has not started stays: it is there to
+  run the rescue, and `RemovalBlocked` carries its pending reason. One that crash
+  loops stays too, and its rescue is retried every minute.
+- **Status.** A session with a hold pod is `Suspended`, with `PodReady` False and the
+  reason `HoldPod`. `RemovalBlocked` says why the volume needs a rescue and, after a
+  failure, when the rescue runs again. A hold pod gets no `Outdated` condition. The
+  events are `HoldPod` when it is created, then the rescue's and the archive's.
+- **Deploy order.** The agent image that has `agentd hold` must be in
+  `dev-env-templates` before the operator that creates hold pods. A hold pod built
+  from an older image cannot start (its agentd has no `hold`), and it would crash
+  loop until a human deletes it.
+- **RBAC.** Nothing new: the operator already creates and deletes pods, and execs,
+  in `dev-agents`.
+
+Rationale: the rescue already runs by exec in a session pod (D-08, D-51). A hold pod
+is that pod without the agent, so the verdict, the record, the guard and the archive
+stay one code path, and the operator gains no new way to touch a volume.
 
 ### 4.5 Resume and restore
 
@@ -3553,3 +3615,4 @@ was settled on 2026-10-07: Tom made the repo public (B). ADR-001 was Accepted on
 | D-51 | The operator rescues by exec (`agentd ctl rescue --stop-agent`) before a suspend deletes a pod that ran, writes the verdict to `status.rescue` first, marks it superseded when the session asks for its pod again, and archives only a reaped session's volume after a verified rescue of its last pod | 4.4 |
 | D-52 | The minimal keeper: the haynes-dev-bot token minted v1's way from an App directory read at every mint, merged into `dev-env-gh-token` by one patch, every 40 minutes or two thirds of its life, retried from 10 s to 5 minutes with jitter; one replica behind a Lease (not a fence: plans 03 and 04 fence each refresh); Secrets `patch` only; ready while its token lives; nothing secret logged | 6.4 |
 | D-53 | The agent image is built from `images/agent/Dockerfile` (v1's plus tini, agentd, agent-run, baked Codex and kubectl-cnpg, pve and hw-ssh; no code-server), smoke-tested in CI on every PR that touches it, and published as `dev-env:2.x.y` only, from a `v2.x.y` release tag by `publish-agent.yml`, signed keyless; the paired haynes-ops Kyverno change trusts that workflow on `refs/tags/v2.*` | 3.6 |
+| D-55 | A volume that needs a rescue and has no pod gets a hold pod: the session's pod running `agentd hold` at size S, with no agent credentials; the operator rescues in it, keeps it and retries every 15 minutes while the rescue fails, and archives once it passes; a volume with nothing but an empty `lost+found` is a valid rescue (`VolumeEmpty`) | 4.4 |

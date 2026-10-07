@@ -128,7 +128,7 @@ type operator struct {
 	done   chan error
 }
 
-func startOperator(t *testing.T) *operator {
+func startOperator(t *testing.T, opts ...func(*Reconciler)) *operator {
 	t.Helper()
 	mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
 		Scheme:                 scheme,
@@ -144,6 +144,9 @@ func startOperator(t *testing.T) *operator {
 	rec := &recordingClient{Client: mgr.GetClient()}
 	r := &Reconciler{Client: rec, Templates: templatesKey, APIReader: mgr.GetAPIReader(),
 		Rescuer: rescuer, Recorder: mgr.GetEventRecorder("dev-env-operator")}
+	for _, o := range opts {
+		o(r)
+	}
 	if err := r.SetupWithManager(mgr); err != nil {
 		t.Fatal(err)
 	}

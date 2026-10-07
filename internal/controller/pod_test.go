@@ -9,6 +9,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -408,4 +409,54 @@ func TestHomeClaim(t *testing.T) {
 		t.Error("the volume outlives revisions; it carries no revision label")
 	}
 	assertOnlyOwnerIsSession(t, claim.OwnerReferences, s)
+}
+
+// The hold pod (D-55) is the session's pod with `agentd hold`, the S class, and
+// no agent credentials: it mounts what a rescue needs and nothing an agent does.
+func TestHoldPodShape(t *testing.T) {
+	tmpl := exampleTemplates(t)
+	s := taskSession()
+	s.Spec.Size = v1alpha1.SizeL
+	pod, err := buildHoldPod(s, tmpl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, err := buildPod(s, tmpl, "https://api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := pod.Spec.Containers[0]
+	if !isHoldPod(pod) || isHoldPod(full) || pod.Labels[v1alpha1.LabelSize] != "S" || pod.Name != s.Name {
+		t.Errorf("name %s, labels %v", pod.Name, pod.Labels)
+	}
+	if !slices.Equal(c.Args, []string{"hold"}) || len(c.Command) != 0 || len(full.Spec.Containers[0].Args) != 0 {
+		t.Errorf("args %q, command %q; the session pod's args %q", c.Args, c.Command, full.Spec.Containers[0].Args)
+	}
+	small, _ := tmpl.Size(v1alpha1.SizeS)
+	if !apiequality.Semantic.DeepEqual(c.Resources.Limits, small.Limits) || !apiequality.Semantic.DeepEqual(c.Resources.Requests, small.Requests) {
+		t.Errorf("resources %+v, want S's", c.Resources)
+	}
+	for _, name := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "CIGAR_JOURNAL_TOKEN"} {
+		if envOf(c, name) != nil {
+			t.Errorf("the hold pod has %s", name)
+		}
+	}
+	if len(c.EnvFrom) != 0 {
+		t.Errorf("envFrom %+v", c.EnvFrom)
+	}
+	if e := envOf(c, "AGENTD_API_URL"); e == nil || e.Value != "" {
+		t.Errorf("AGENTD_API_URL %+v, want set and empty", e)
+	}
+	if e := envOf(c, protocol.SessionEnv); e == nil || !strings.Contains(e.Value, `"name":"`+s.Name+`"`) {
+		t.Errorf("the session document %+v", e)
+	}
+	// Every volume and mount of the session pod is there: the rescue needs the
+	// session volume, the shared volume and the gh token.
+	if !apiequality.Semantic.DeepEqual(pod.Spec.Volumes, full.Spec.Volumes) || !apiequality.Semantic.DeepEqual(c.VolumeMounts, full.Spec.Containers[0].VolumeMounts) {
+		t.Errorf("volumes differ from the session pod's")
+	}
+	if !apiequality.Semantic.DeepEqual(pod.Spec.Affinity, full.Spec.Affinity) || !apiequality.Semantic.DeepEqual(c.SecurityContext, full.Spec.Containers[0].SecurityContext) || *pod.Spec.SecurityContext.RunAsUser != 1000 {
+		t.Error("placement or security differ from the session pod's")
+	}
+	assertOnlyOwnerIsSession(t, pod.OwnerReferences, s)
 }

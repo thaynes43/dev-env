@@ -67,7 +67,7 @@ the `dev-env-templates` pin in haynes-ops. Operator changes ship as the
 the cluster.
 
 - [x] 1. This list (docs only, #65).
-- [ ] 2. **The rescue pod** (D-51's gap). `agentd hold` holds the volume and starts no
+- [x] 2. **The rescue pod** (D-51's gap; D-55, this PR; deployed when the evidence below is in). `agentd hold` holds the volume and starts no
   agent (D-42). `agentd ctl rescue` reports an empty volume, with no clone and no
   worktree (what a pod that never started leaves), as a valid rescue with nothing
   to save. The operator gives a reaped session whose

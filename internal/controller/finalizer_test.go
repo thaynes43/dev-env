@@ -171,9 +171,11 @@ func TestADeletedSessionWithNothingToRescueGoes(t *testing.T) {
 	})
 }
 
-// A deleted session whose pod is gone but whose volume holds its work stays until
-// a rescue. The pod here was never scheduled, so the suspend removes it without
-// a rescue (no process ever ran in it), and no rescue can run on the volume.
+// A deleted session whose pod is gone but whose volume may hold its work stays
+// until a rescue. The pod here was never scheduled, so the suspend removes it
+// without a rescue (no process ever ran in it). The reap then gives the volume a
+// hold pod to rescue it in (D-55); until that pod runs, the volume and the
+// session stay.
 func TestADeletedSessionWithOnlyAVolumeStays(t *testing.T) {
 	op := startOperator(t)
 	s := newSession(t, nil)
@@ -187,12 +189,22 @@ func TestADeletedSessionWithOnlyAVolumeStays(t *testing.T) {
 	if err := k8s.Delete(context.Background(), session(t, s.Name)); err != nil {
 		t.Fatal(err)
 	}
+	hold := waitHoldPod(t, s.Name)
 	got := waitStatus(t, s.Name, "the reap waits for rescue", blockedBy("DeleteNeedsRescue"))
-	if c := condition(&got.Status, ConditionRemovalBlocked); !strings.Contains(c.Message, "no rescue has run on the volume") {
+	if c := condition(&got.Status, ConditionRemovalBlocked); !strings.Contains(c.Message, "hold pod has not started yet") || !strings.Contains(c.Message, "no rescue has run on the volume") {
 		t.Errorf("RemovalBlocked %q", c.Message)
+	}
+	if c := condition(&got.Status, ConditionPodReady); got.Status.Phase != v1alpha1.PhaseSuspended || c == nil || c.Reason != "HoldPod" {
+		t.Errorf("phase %s, PodReady %+v", got.Status.Phase, c)
 	}
 	if c := waitClaim(t, s.Name); !c.DeletionTimestamp.IsZero() || c.UID != claim.UID {
 		t.Error("the volume is being deleted")
+	}
+	if n := rescuer.callsFor(s.Name); n != 0 {
+		t.Errorf("a rescue ran %d times in a hold pod that has not started", n)
+	}
+	if hold.UID == pod.UID {
+		t.Error("the hold pod is the old pod")
 	}
 	assertWritesOnly(t, op, "delete *v1.Pod "+pod.Name)
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	eventsv1 "k8s.io/api/events/v1"
@@ -202,8 +203,10 @@ func TestAFailedRescueStillSuspendsAndBlocksArchive(t *testing.T) {
 		t.Errorf("RescueFailed %+v", c)
 	}
 	reap(t, s.Name)
+	// The reap gives the volume a hold pod to retry the rescue in (D-55).
+	waitHoldPod(t, s.Name)
 	got = waitStatus(t, s.Name, "the reap keeps the volume", blockedBy("DeleteNeedsRescue"))
-	if c := condition(&got.Status, ConditionRemovalBlocked); !strings.Contains(c.Message, "the newest rescue failed") {
+	if c := condition(&got.Status, ConditionRemovalBlocked); !strings.Contains(c.Message, "the newest rescue failed") || !strings.Contains(c.Message, "hold pod") {
 		t.Errorf("RemovalBlocked %q", c.Message)
 	}
 	if c := waitClaim(t, s.Name); c.UID != claim.UID || !c.DeletionTimestamp.IsZero() {
@@ -332,7 +335,7 @@ func TestAResumeWithTheRescuedPodStillThereSupersedesTheRescue(t *testing.T) {
 	}
 	waitStatus(t, s.Name, "Failed", phaseIs(v1alpha1.PhaseFailed))
 	reap(t, s.Name)
-	finishPodDelete(t, pod)
+	waitEndedPodGone(t, pod)
 	got := waitStatus(t, s.Name, "the volume waits", blockedBy("DeleteNeedsRescue"))
 	if c := condition(&got.Status, ConditionRemovalBlocked); !strings.Contains(c.Message, "superseded") {
 		t.Errorf("RemovalBlocked %q", c.Message)
@@ -374,30 +377,69 @@ func TestARescueFromAnOlderGenerationIsNotReused(t *testing.T) {
 	assertNoPodOrVolumeWrites(t, op)
 }
 
-// A pod that ended (evicted) runs nothing a rescue could reach: a reap removes
-// it, and the volume waits for a rescue no pod can run (a rescue pod is plan
-// 02's).
+// A reap of a session whose pod was evicted: the ended pod goes without a rescue
+// (no agent can run in it), and a hold pod rescues the volume (D-55). Its rescue
+// fails at first, so the hold pod stays and the rescue runs again; once it
+// passes, the hold pod goes and the volume is archived.
 func TestReapOfAnEvictedPod(t *testing.T) {
-	op := startOperator(t)
+	op := startOperator(t, func(r *Reconciler) { r.HoldRetry = 2 * time.Second })
 	s, pod, claim := runningSession(t, "talosw02")
 	pod.Status.Phase, pod.Status.Reason = corev1.PodFailed, "Evicted"
 	if err := k8s.Status().Update(context.Background(), pod); err != nil {
 		t.Fatal(err)
 	}
 	waitStatus(t, s.Name, "Failed", phaseIs(v1alpha1.PhaseFailed))
+	var failing atomic.Bool
+	failing.Store(true)
+	rescuer.answer(t, s.Name, func(p *corev1.Pod) (protocol.RescueReport, error) {
+		if !isHoldPod(p) {
+			return protocol.RescueReport{}, errors.New("a rescue in a pod that is not the hold pod")
+		}
+		if failing.Load() {
+			return failedReport(p.Name), nil
+		}
+		return goodReport(p.Name), nil
+	})
 	reap(t, s.Name)
-	finishPodDelete(t, pod)
-	got := waitStatus(t, s.Name, "the volume waits", blockedBy("DeleteNeedsRescue"))
+	waitEndedPodGone(t, pod)
+	hold := waitHoldPod(t, s.Name)
+	if n := rescuer.callsFor(s.Name); n != 0 {
+		t.Errorf("%d rescues before the hold pod ran", n)
+	}
+	got := waitStatus(t, s.Name, "the volume waits for the hold pod", blockedBy("DeleteNeedsRescue"))
 	if c := condition(&got.Status, ConditionRemovalBlocked); !strings.Contains(c.Message, "no rescue has run on the volume") {
 		t.Errorf("RemovalBlocked %q", c.Message)
 	}
-	if n := rescuer.callsFor(s.Name); n != 0 {
-		t.Errorf("%d rescues in an ended pod", n)
+	hold = markRunning(t, hold, "talosw03")
+	got = waitStatus(t, s.Name, "a failed rescue keeps the hold pod", func(st *v1alpha1.AgentSessionStatus) error {
+		if err := rescueIs(v1alpha1.RescueFailed)(st); err != nil {
+			return err
+		}
+		if c := condition(st, ConditionRemovalBlocked); c == nil || !strings.Contains(c.Message, "runs again at") {
+			return fmt.Errorf("RemovalBlocked %+v", c)
+		}
+		return nil
+	})
+	if got.Status.Rescue.PodUID != string(hold.UID) {
+		t.Errorf("the rescue ran in %s, not the hold pod %s", got.Status.Rescue.PodUID, hold.UID)
+	}
+	eventually(t, "the rescue runs again", func() error {
+		if n := rescuer.callsFor(s.Name); n < 2 {
+			return fmt.Errorf("%d rescues", n)
+		}
+		return nil
+	})
+	if p := waitPod(t, s.Name); p.UID != hold.UID || !p.DeletionTimestamp.IsZero() {
+		t.Error("the hold pod went while its rescue failed")
 	}
 	if c := waitClaim(t, s.Name); c.UID != claim.UID || !c.DeletionTimestamp.IsZero() {
-		t.Error("the volume is being deleted")
+		t.Error("the volume is being deleted after a failed rescue")
 	}
-	assertWritesOnly(t, op, "delete *v1.Pod "+pod.Name)
+	failing.Store(false)
+	finishPodDelete(t, hold)
+	finishClaimDelete(t, s.Name)
+	waitGone(t, s.Name)
+	assertWritesOnly(t, op, "delete *v1.Pod "+pod.Name, "delete *v1.PersistentVolumeClaim "+claim.Name, "patch *v1.PersistentVolumeClaim "+claim.Name)
 }
 
 // A report from a pod that was replaced while the rescue ran is not recorded,

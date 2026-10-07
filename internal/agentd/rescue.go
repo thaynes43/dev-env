@@ -42,7 +42,25 @@ const rescueLockFile = "rescue.lock"
 // (D-48, writeBundles). With opt.StopAgent it first stops the agent CLI, so the
 // rescue is the worktree's last state: the operator asks for that before it
 // deletes a pod.
+//
+// A volume that holds nothing (volumeEmpty) gets a report that says so and
+// nothing else: the rescue writes nothing to it, so it stays empty for the
+// next look (D-55).
 func Rescue(ctx context.Context, r Runner, s Settings, session string, now time.Time, opt RescueOptions) (protocol.RescueReport, error) {
+	empty, err := volumeEmpty(s)
+	if err != nil {
+		return protocol.RescueReport{}, err
+	}
+	if empty {
+		rep := protocol.RescueReport{Session: session, Stamp: now.UTC().Format("20060102-1504"), StartedAt: now.UTC(),
+			Repos: []protocol.RepoRescue{}, OK: true, CleanAndPushed: true, VolumeEmpty: true}
+		if opt.StopAgent {
+			// Only reads agentd's pid file, which an empty volume lacks.
+			rep.Agent = stopAgent(s, opt.StopGrace)
+		}
+		rep.FinishedAt = time.Now().UTC()
+		return rep, nil
+	}
 	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
 		return protocol.RescueReport{}, err
 	}
@@ -81,6 +99,40 @@ func Rescue(ctx context.Context, r Runner, s Settings, session string, now time.
 	writeBundles(ctx, r, s, &rep, now)
 	rep.FinishedAt = time.Now().UTC()
 	return rep, nil
+}
+
+// lostAndFound is the directory mkfs.ext4 puts at the root of every ext4
+// volume, gasha01-rbd's included.
+const lostAndFound = "lost+found"
+
+// volumeEmpty reports whether the session volume holds nothing a pod wrote:
+// at most an empty lost+found and the shared volume's own mount point, whose
+// content is not on the session volume. That is what a volume whose pod never
+// started looks like, and agentd's boot writes ~/.agentd before anything else,
+// so no agent ever ran on it. It is the one case where a volume without the
+// session's clone proves it holds no work (D-51, D-55). Anything else, one
+// file or an unreadable lost+found, is not empty, and the rescue goes on as
+// usual.
+func volumeEmpty(s Settings) (bool, error) {
+	entries, err := os.ReadDir(s.Home)
+	if err != nil {
+		return false, err
+	}
+	shared := filepath.Clean(s.SharedDir)
+	for _, e := range entries {
+		p := filepath.Join(s.Home, e.Name())
+		switch {
+		case e.Name() == lostAndFound && e.IsDir():
+			inner, err := os.ReadDir(p)
+			if err != nil || len(inner) > 0 {
+				return false, nil
+			}
+		case p == shared && e.IsDir() && sharedIsMounted(p, s.Home) == nil:
+		default:
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // RescueOptions are `agentd ctl rescue`'s flags.

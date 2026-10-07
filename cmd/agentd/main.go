@@ -3,9 +3,9 @@
 // resumes the agent in tmux, sends heartbeats, and answers
 // `agentd ctl status|rescue|prepare-restart|deliver` for the operator.
 //
-// Built so far: the daemon (`run`), the task runner in the tmux pane
-// (`run-agent`), `render`, `ctl status` and `ctl rescue`. `ctl prepare-restart`
-// and `ctl deliver` arrive with plan 02.
+// Built so far: the daemon (`run`), the rescue pod's `hold`, the task runner
+// in the tmux pane (`run-agent`), `render`, `ctl status` and `ctl rescue`.
+// `ctl prepare-restart` and `ctl deliver` arrive with plan 02.
 package main
 
 import (
@@ -38,6 +38,9 @@ Commands:
   run                      The supervisor tini starts: render the config, clone
                            the repo, start the agent in tmux session "agent",
                            then heartbeat until SIGTERM.
+  hold                     The rescue pod's command (D-55): hold the session
+                           volume for the operator's rescue and start nothing
+                           (no config, clone, agent or heartbeat), until SIGTERM.
   render                   Render the GitOps config into $HOME (boot step 1).
   ctl status               Print the session's status as JSON.
   ctl rescue [--stop-agent]
@@ -102,6 +105,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 			return exitUsage
 		}
 		return daemon(ctx, log, getenv, r)
+	case "hold":
+		if len(args) > 1 {
+			_, _ = fmt.Fprintf(stderr, "%s: hold takes no arguments, got %q\n", binaryName, args[1:])
+			return exitUsage
+		}
+		return hold(ctx, log, getenv)
 	case "run-agent":
 		if len(args) != 3 || args[1] != "--launch" {
 			_, _ = fmt.Fprintf(stderr, "%s: usage: run-agent --launch FILE\n", binaryName)
@@ -137,6 +146,25 @@ func render(ctx context.Context, log *slog.Logger, getenv func(string) string, r
 			return exitFailure
 		}
 	}
+	return exitOK
+}
+
+// hold is the rescue pod's command (D-55). The operator gives a session whose
+// volume needs a rescue but has no pod a pod that runs this, then runs `agentd
+// ctl rescue` in it by exec, as in any session pod. hold starts nothing and
+// writes nothing: no config, no clone, no agent and no heartbeat. A task never
+// runs twice (D-42), and an empty volume stays empty, which is how the rescue
+// proves it holds no work.
+func hold(ctx context.Context, log *slog.Logger, getenv func(string) string) int {
+	name := ""
+	if sess, err := agentd.LoadSession(getenv); err == nil {
+		name = sess.Name
+	} else {
+		log.Warn("hold without a session; the rescue's report will name none", "err", err)
+	}
+	log.Info("holding the session volume for the operator's rescue; no agent starts in this pod", "session", name)
+	<-ctx.Done()
+	log.Info("hold ends", "session", name)
 	return exitOK
 }
 
