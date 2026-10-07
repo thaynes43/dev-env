@@ -83,8 +83,8 @@ func CacheOptions(sessionNamespace, policyNamespace string) cache.Options {
 // NewManager builds the broker as `dev-env-operator broker` runs it: a
 // controller-runtime manager with leader election on its own Lease, its cache
 // scoped by CacheOptions, and the Broker registered. ServiceAccounts and
-// bindings are read through the API server only, never cached or listed. The
-// Broker is returned for Decide.
+// bindings and unstructured CiliumNetworkPolicies are read through the API
+// server only, never cached or listed. The Broker is returned for Decide.
 func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 	if o.SessionNamespace == "" || o.PolicyNamespace == "" {
 		return nil, nil, errors.New("the session and policy namespaces must be set")

@@ -173,6 +173,11 @@ func startSuite() error {
 			return err
 		}
 	}
+	// The emitted policy surface, projected from the live Cilium schema. No
+	// Cilium controller or dataplane runs in envtest.
+	if err := apply(ctx, filepath.Join("testdata", "cilium", "ciliumnetworkpolicies.yaml")); err != nil {
+		return err
+	}
 	brokerCfg = impersonate(brokerUser)
 	return waitForGuard(ctx)
 }

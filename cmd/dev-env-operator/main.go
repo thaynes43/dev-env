@@ -9,7 +9,8 @@
 // rescue (plan 01 step 5, D-51), and the /v1 API (plan 01 step 3,
 // internal/apiserver, D-46), which every replica serves on :8443, with its grant
 // routes (plan 07 step 2, D-56). The broker mode (broker.go, internal/broker,
-// D-61) decides, makes and revokes kube and break-glass grants (plan 07 step 3).
+// D-61) decides, makes and revokes kube and break-glass grants (plan 07 step 3)
+// and egress grants (step 5, D-64), whose expiry also has an operator backstop.
 package main
 
 import (
@@ -33,6 +34,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver"
 	"github.com/thaynes43/dev-env/internal/controller"
+	"github.com/thaynes43/dev-env/internal/grantexpiry"
 	"github.com/thaynes43/dev-env/internal/templates"
 	"github.com/thaynes43/dev-env/internal/version"
 )
@@ -182,6 +184,14 @@ func run(args []string) error {
 		Recorder:  mgr.GetEventRecorder(binaryName),
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
+		return err
+	}
+	// Egress grants have no token expiry. The operator revokes their policies
+	// at expiresAt even when the broker is unavailable (plan 07 step 5, D-64).
+	expiry := &grantexpiry.Reconciler{
+		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), SessionNamespace: o.sessionNamespace,
+	}
+	if err := expiry.SetupWithManager(mgr); err != nil {
 		return err
 	}
 	// The sessions' metrics, read from the cache at scrape time on every

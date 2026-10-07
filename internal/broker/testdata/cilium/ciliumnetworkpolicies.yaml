@@ -1,0 +1,462 @@
+# Envtest policy surface projected from the live Cilium CRD on 2026-10-07.
+# io.cilium.k8s.crd.schema.version: 1.33.12; source: cilium/cilium
+# pkg/k8s/apis/cilium.io/client/crds/v2/ciliumnetworkpolicies.yaml (Apache-2.0).
+# Keeps the actual selector and emitted egress-field schemas; omits ingress,
+# node selectors, L7 rules and status. Envtest has no Cilium dataplane; cluster
+# acceptance separately verifies policy import and traffic enforcement.
+{
+  "apiVersion": "apiextensions.k8s.io/v1",
+  "kind": "CustomResourceDefinition",
+  "metadata": {
+    "name": "ciliumnetworkpolicies.cilium.io"
+  },
+  "spec": {
+    "group": "cilium.io",
+    "names": {
+      "categories": [
+        "cilium",
+        "ciliumpolicy"
+      ],
+      "kind": "CiliumNetworkPolicy",
+      "listKind": "CiliumNetworkPolicyList",
+      "plural": "ciliumnetworkpolicies",
+      "shortNames": [
+        "cnp",
+        "ciliumnp"
+      ],
+      "singular": "ciliumnetworkpolicy"
+    },
+    "scope": "Namespaced",
+    "versions": [
+      {
+        "name": "v2",
+        "schema": {
+          "openAPIV3Schema": {
+            "properties": {
+              "apiVersion": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "metadata": {
+                "type": "object"
+              },
+              "spec": {
+                "properties": {
+                  "egress": {
+                    "items": {
+                      "properties": {
+                        "toCIDR": {
+                          "items": {
+                            "format": "cidr",
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "toEndpoints": {
+                          "items": {
+                            "properties": {
+                              "matchExpressions": {
+                                "items": {
+                                  "properties": {
+                                    "key": {
+                                      "type": "string"
+                                    },
+                                    "operator": {
+                                      "enum": [
+                                        "In",
+                                        "NotIn",
+                                        "Exists",
+                                        "DoesNotExist"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "values": {
+                                      "items": {
+                                        "type": "string"
+                                      },
+                                      "type": "array",
+                                      "x-kubernetes-list-type": "atomic"
+                                    }
+                                  },
+                                  "required": [
+                                    "key",
+                                    "operator"
+                                  ],
+                                  "type": "object"
+                                },
+                                "type": "array",
+                                "x-kubernetes-list-type": "atomic"
+                              },
+                              "matchLabels": {
+                                "additionalProperties": {
+                                  "maxLength": 63,
+                                  "pattern": "^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$",
+                                  "type": "string"
+                                },
+                                "type": "object"
+                              }
+                            },
+                            "type": "object",
+                            "x-kubernetes-map-type": "atomic"
+                          },
+                          "type": "array"
+                        },
+                        "toFQDNs": {
+                          "items": {
+                            "oneOf": [
+                              {
+                                "properties": {
+                                  "matchName": {}
+                                },
+                                "required": [
+                                  "matchName"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "matchPattern": {}
+                                },
+                                "required": [
+                                  "matchPattern"
+                                ]
+                              }
+                            ],
+                            "properties": {
+                              "matchName": {
+                                "maxLength": 255,
+                                "pattern": "^([-a-zA-Z0-9_]+[.]?)+$",
+                                "type": "string"
+                              },
+                              "matchPattern": {
+                                "maxLength": 255,
+                                "pattern": "^([-a-zA-Z0-9_*]+[.]?)+$",
+                                "type": "string"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "toPorts": {
+                          "items": {
+                            "properties": {
+                              "ports": {
+                                "items": {
+                                  "properties": {
+                                    "endPort": {
+                                      "format": "int32",
+                                      "maximum": 65535,
+                                      "minimum": 0,
+                                      "type": "integer"
+                                    },
+                                    "port": {
+                                      "pattern": "^(6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[0-9]{1,4})|([a-zA-Z0-9]-?)*[a-zA-Z](-?[a-zA-Z0-9])*$",
+                                      "type": "string"
+                                    },
+                                    "protocol": {
+                                      "enum": [
+                                        "TCP",
+                                        "UDP",
+                                        "SCTP",
+                                        "VRRP",
+                                        "IGMP",
+                                        "GRE",
+                                        "IPIP",
+                                        "IPV6",
+                                        "ESP",
+                                        "AH",
+                                        "ANY"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "type": "object"
+                                },
+                                "maxItems": 40,
+                                "type": "array"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "endpointSelector": {
+                    "properties": {
+                      "matchExpressions": {
+                        "items": {
+                          "properties": {
+                            "key": {
+                              "type": "string"
+                            },
+                            "operator": {
+                              "enum": [
+                                "In",
+                                "NotIn",
+                                "Exists",
+                                "DoesNotExist"
+                              ],
+                              "type": "string"
+                            },
+                            "values": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array",
+                              "x-kubernetes-list-type": "atomic"
+                            }
+                          },
+                          "required": [
+                            "key",
+                            "operator"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array",
+                        "x-kubernetes-list-type": "atomic"
+                      },
+                      "matchLabels": {
+                        "additionalProperties": {
+                          "maxLength": 63,
+                          "pattern": "^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$",
+                          "type": "string"
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "type": "object",
+                    "x-kubernetes-map-type": "atomic"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "endpointSelector",
+                  "egress"
+                ]
+              },
+              "specs": {
+                "type": "array",
+                "items": {
+                  "properties": {
+                    "egress": {
+                      "items": {
+                        "properties": {
+                          "toCIDR": {
+                            "items": {
+                              "format": "cidr",
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "toEndpoints": {
+                            "items": {
+                              "properties": {
+                                "matchExpressions": {
+                                  "items": {
+                                    "properties": {
+                                      "key": {
+                                        "type": "string"
+                                      },
+                                      "operator": {
+                                        "enum": [
+                                          "In",
+                                          "NotIn",
+                                          "Exists",
+                                          "DoesNotExist"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      "values": {
+                                        "items": {
+                                          "type": "string"
+                                        },
+                                        "type": "array",
+                                        "x-kubernetes-list-type": "atomic"
+                                      }
+                                    },
+                                    "required": [
+                                      "key",
+                                      "operator"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "type": "array",
+                                  "x-kubernetes-list-type": "atomic"
+                                },
+                                "matchLabels": {
+                                  "additionalProperties": {
+                                    "maxLength": 63,
+                                    "pattern": "^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$",
+                                    "type": "string"
+                                  },
+                                  "type": "object"
+                                }
+                              },
+                              "type": "object",
+                              "x-kubernetes-map-type": "atomic"
+                            },
+                            "type": "array"
+                          },
+                          "toFQDNs": {
+                            "items": {
+                              "oneOf": [
+                                {
+                                  "properties": {
+                                    "matchName": {}
+                                  },
+                                  "required": [
+                                    "matchName"
+                                  ]
+                                },
+                                {
+                                  "properties": {
+                                    "matchPattern": {}
+                                  },
+                                  "required": [
+                                    "matchPattern"
+                                  ]
+                                }
+                              ],
+                              "properties": {
+                                "matchName": {
+                                  "maxLength": 255,
+                                  "pattern": "^([-a-zA-Z0-9_]+[.]?)+$",
+                                  "type": "string"
+                                },
+                                "matchPattern": {
+                                  "maxLength": 255,
+                                  "pattern": "^([-a-zA-Z0-9_*]+[.]?)+$",
+                                  "type": "string"
+                                }
+                              },
+                              "type": "object"
+                            },
+                            "type": "array"
+                          },
+                          "toPorts": {
+                            "items": {
+                              "properties": {
+                                "ports": {
+                                  "items": {
+                                    "properties": {
+                                      "endPort": {
+                                        "format": "int32",
+                                        "maximum": 65535,
+                                        "minimum": 0,
+                                        "type": "integer"
+                                      },
+                                      "port": {
+                                        "pattern": "^(6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[0-9]{1,4})|([a-zA-Z0-9]-?)*[a-zA-Z](-?[a-zA-Z0-9])*$",
+                                        "type": "string"
+                                      },
+                                      "protocol": {
+                                        "enum": [
+                                          "TCP",
+                                          "UDP",
+                                          "SCTP",
+                                          "VRRP",
+                                          "IGMP",
+                                          "GRE",
+                                          "IPIP",
+                                          "IPV6",
+                                          "ESP",
+                                          "AH",
+                                          "ANY"
+                                        ],
+                                        "type": "string"
+                                      }
+                                    },
+                                    "type": "object"
+                                  },
+                                  "maxItems": 40,
+                                  "type": "array"
+                                }
+                              },
+                              "type": "object"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "endpointSelector": {
+                      "properties": {
+                        "matchExpressions": {
+                          "items": {
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "operator": {
+                                "enum": [
+                                  "In",
+                                  "NotIn",
+                                  "Exists",
+                                  "DoesNotExist"
+                                ],
+                                "type": "string"
+                              },
+                              "values": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array",
+                                "x-kubernetes-list-type": "atomic"
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "operator"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array",
+                          "x-kubernetes-list-type": "atomic"
+                        },
+                        "matchLabels": {
+                          "additionalProperties": {
+                            "maxLength": 63,
+                            "pattern": "^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$",
+                            "type": "string"
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "type": "object",
+                      "x-kubernetes-map-type": "atomic"
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "endpointSelector",
+                    "egress"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "metadata"
+            ],
+            "type": "object",
+            "x-kubernetes-validations": [
+              {
+                "message": "spec or specs must be provided",
+                "rule": "has(self.spec) || has(self.specs)"
+              }
+            ]
+          }
+        },
+        "served": true,
+        "storage": true
+      }
+    ]
+  }
+}

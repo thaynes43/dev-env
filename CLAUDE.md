@@ -65,9 +65,12 @@ internal/keeper/         the keeper (D-52): mints the haynes-dev-bot token into 
                          GitHub (httptest) and a fake clock; its envtest suite runs it as its ServiceAccount with exactly
                          the Roles haynes-ops gives it
 internal/broker/         the access broker (D-61): decides AccessGrants (GrantPolicy match, Decide for the approval page,
-                         a Notifier), makes kube and break-glass grants (a ServiceAccount and RoleBindings or a
+                         a Notifier), makes kube, break-glass and egress grants (a ServiceAccount and RoleBindings or a
                          ClusterRoleBinding per grant) and revokes them; ExecInstaller installs kube tokens on stdin into the pod's grants tmpfs (D-63), guarded by pod UID; older pods fail/revoke after three attempts. Its envtest
                          suite runs it as dev-env-broker under haynes-ops' RBAC and broker guard, copied into testdata/
+internal/egress/         the scoped CiliumNetworkPolicy builder and ownership checks (D-64), shared by broker and operator
+internal/grantexpiry/    the operator's separate egress expiry backstop (D-64), watches grants, reads CNPs by name only,
+                         deletes by verified ownership and UID, and preserves the broker's grant audit record
 internal/agentd/         agentd: config rendering (the dev-init.sh port), clone and worktree, the task runner, heartbeat,
                          status, rescue and its bundle on the shared volume (D-48); tests fake claude and tmux and run
                          git against a bare repo in t.TempDir()

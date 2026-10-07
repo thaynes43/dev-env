@@ -1,6 +1,6 @@
 # 07: access broker
 
-**Status:** resumed by the coordinator on 2026-10-07; steps 1 to 4 built, H2 still pending
+**Status:** resumed by the coordinator on 2026-10-07; steps 1 to 5 built, H2 still pending
 **Depends on:** 01 (the baseline guard and egress tiers are in place); Q-07 (Tom
 2026-10-06: credential grants, A)
 **Parallel with:** 02; the coordinator resumed plan 07 on Codex after the pause in
@@ -45,9 +45,13 @@ In this repo:
   fails/revokes after three attempts when an older pod lacks the grants directory.
   A broker upgrade never restarts a session. The kubeconfig names the API server by
   `KUBERNETES_SERVICE_HOST` and `_PORT`, because session pods use `ndots:1`.
-- [ ] 5. Egress grants: one CiliumNetworkPolicy per grant, selecting the session's
-  pod; the operator's backstop deletes an expired grant's policy when the broker is
-  down.
+- [x] 5. Egress grants (D-64): one CiliumNetworkPolicy per grant, selecting the
+  session and excluding rescue hold pods; separate destination rules with the
+  requested ports. The broker revokes on expiry/release/session end; the operator's
+  separate backstop uses same-name reads and UID-precondition deletes at expiry
+  when the broker is unavailable. Its CNP Role needs `get, delete`, applied in H2
+  before the new operator pin. Unit/fake-clock and envtest cases prove ownership,
+  restart, finalizer delays, late creation and the exact RBAC.
 - [ ] 6. The approval page and Pushover: the broker's console port behind Authentik
   (Approve, Approve for less time, Deny, the request as a GrantPolicy snippet), a
   fresh login for break-glass, one Pushover message per request (high priority for

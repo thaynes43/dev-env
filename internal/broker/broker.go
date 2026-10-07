@@ -18,11 +18,11 @@
 //   - An ended grant is deleted 90 days after it ended. A deleted grant is
 //     revoked before its finalizer comes off.
 //
-// Plan 07 step 3 makes kube and break-glass grants: a ServiceAccount named after
+// Kube and break-glass grants (plan 07 step 3) make a ServiceAccount named after
 // the grant, and a RoleBinding per granted namespace or one ClusterRoleBinding,
-// to a role of the catalog. Step 4 installs the token in the session's pod
-// (Installer), step 5 makes egress grants, step 6 is the approval page (Decide)
-// and Pushover (Notifier).
+// to a role of the catalog. Installer installs their token (step 4). Egress
+// grants (step 5, D-64) make a namespaced CiliumNetworkPolicy, without an
+// identity or token. Step 6 is the approval page (Decide) and Pushover (Notifier).
 //
 // 5.1 holds here too: the broker keeps nothing outside AccessGrant objects, so
 // a restart changes nothing for an active grant. The envtest suite in this
@@ -89,7 +89,7 @@ type Broker struct {
 	// bindings are never cached (NewManager disables them).
 	Client client.Client
 	// APIReader reads from the API server, past the cache: each grant at the
-	// start of its reconcile, ServiceAccounts and bindings by name, and a
+	// start of its reconcile, ServiceAccounts, bindings and policies by name, and a
 	// session the cache does not have yet.
 	APIReader client.Reader
 	// SessionNamespace holds the sessions, their pods, the grants and the grant
@@ -252,26 +252,34 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 		log.FromContext(ctx).Info("made the grant", append(grantFields(g), "made", made)...)
 		b.event(g, corev1.EventTypeNormal, "Make", "Made", "made "+strings.Join(made, ", "))
 	}
-	res := ctrl.Result{RequeueAfter: expires.Sub(now.Time)}
-	changed := g.Status.ServiceAccount != g.Name
-	if b.Installer != nil {
-		if pod := b.sessionPod(ctx, sess, true); pod != nil {
-			var installed bool
-			res, installed, err = b.install(ctx, g, pod, now)
-			if err != nil || g.Status.Phase != v1alpha1.GrantActive {
-				return res, err
-			}
-			if !installed && g.Status.InstalledPodUID != string(pod.UID) {
-				return res, nil
-			}
-			changed = changed || installed
-		} else {
-			res.RequeueAfter = min(installRetry, res.RequeueAfter)
-		}
+	if g.Spec.Type == v1alpha1.GrantEgress && !b.Clock.Now().Before(expires) {
+		// Materialization can cross expiry if the API server was slow. Revoke
+		// immediately rather than schedule from the time before the create.
+		return b.end(ctx, g, v1alpha1.GrantExpired, "", "", b.now())
 	}
-	// The metadata patch in install reads back the server's status. Set the
-	// identity afterwards so that patch cannot discard it.
-	g.Status.ServiceAccount = g.Name
+	res := ctrl.Result{RequeueAfter: expires.Sub(now.Time)}
+	changed := false
+	if g.Spec.Kube != nil {
+		changed = g.Status.ServiceAccount != g.Name
+		if b.Installer != nil {
+			if pod := b.sessionPod(ctx, sess, true); pod != nil {
+				var installed bool
+				res, installed, err = b.install(ctx, g, pod, now)
+				if err != nil || g.Status.Phase != v1alpha1.GrantActive {
+					return res, err
+				}
+				if !installed && g.Status.InstalledPodUID != string(pod.UID) {
+					return res, nil
+				}
+				changed = changed || installed
+			} else {
+				res.RequeueAfter = min(installRetry, res.RequeueAfter)
+			}
+		}
+		// The metadata patch in install reads back the server's status. Set
+		// the identity afterwards so that patch cannot discard it.
+		g.Status.ServiceAccount = g.Name
+	}
 	if changed {
 		if _, err := b.writeStatus(ctx, g); err != nil {
 			return ctrl.Result{}, err

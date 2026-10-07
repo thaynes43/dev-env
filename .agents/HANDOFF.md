@@ -21,13 +21,15 @@ the saga. To start building, follow
   (pod UIDs, nodes, the bundle path). The v1 pod and `dev-env-ops` did not restart.
   **Next is plan 02** ([interactive sessions and lifecycle](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md)).
 - **Plan 07, the access broker, resumed on Codex** (2026-10-07, coordinator work
-  order after the pause in README decision 40). Steps 1 to 4 are built: the CRDs
+  order after the pause in README decision 40). Steps 1 to 5 are built: the CRDs
   (D-54), `/v1/grants` (D-56), broker mode (D-61) and installation into a session
-  pod's memory-backed grants volume (D-63). Existing pods gain the volume on a
+  pod's memory-backed grants volume (D-63), plus egress grants and the operator's
+  expiry backstop (D-64). Existing pods gain the volume on a
   later resume; a broker rollout never restarts them. H1's RBAC and guards are
   deployed. H2 still needs the broker Deployment, so no grant is issued yet.
-  This round next builds egress grants and the operator's expiry backstop, then
-  deploys and verifies the broker. The approval page and Pushover are step 6.
+  Next is H2: pin the checked agent release and new operator image, grant the
+  operator CNP get/delete, then deploy and verify the broker. The approval page
+  and Pushover are step 6.
   Q-15 is ruled (A), so step 8's Proxmox minting identity is settled.
   [backlog/07](sagas/distributed-dev-env/backlog/07-access-broker.md) tracks each PR.
 - **What the run found and fixed (2026-10-07).** haynes-ops still had #24's CRD, so
