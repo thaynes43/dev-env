@@ -87,6 +87,11 @@ Flags:
                              the session the first one created, while it is
                              unfinished (default: a new key for each run, which
                              agent-run's own retries reuse)
+  --idle-suspend-after <d>   suspend the session once its agent has been idle this
+                             long (default: the templates', 1h for a task, 72h otherwise)
+  --archive-after <d>        archive the volume this long after a suspend (default:
+                             the templates', 168h); an archived session is restored,
+                             not resumed
   --wait <duration>          how long to wait for the pod to start (default 30s;
                              0 returns as soon as the session is created)
   -o name|json               print only the name, or the session as JSON

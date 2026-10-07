@@ -150,6 +150,27 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 		}
 	}
 
+	if l := req.Lifecycle; l != nil {
+		spec.Lifecycle = &v1alpha1.Lifecycle{}
+		for field, v := range map[string]struct {
+			text string
+			dst  **metav1.Duration
+		}{
+			"lifecycle.idleSuspendAfter": {l.IdleSuspendAfter, &spec.Lifecycle.IdleSuspendAfter},
+			"lifecycle.archiveAfter":     {l.ArchiveAfter, &spec.Lifecycle.ArchiveAfter},
+		} {
+			if v.text == "" {
+				continue
+			}
+			d, err := time.ParseDuration(v.text)
+			if err != nil || d <= 0 {
+				add(field, "%q is not a positive Go duration such as 72h", v.text)
+				continue
+			}
+			*v.dst = &metav1.Duration{Duration: d}
+		}
+	}
+
 	// A session's child runs on its parent's profile: a session cannot widen
 	// what it may read or reach by starting another (D-46).
 	if c.kind == kindSession && c.profile != "" {

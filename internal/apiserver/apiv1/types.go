@@ -61,6 +61,9 @@ type CreateSessionRequest struct {
 	Tools []string `json:"tools,omitempty"`
 	// Limits caps the task.
 	Limits *Limits `json:"limits,omitempty"`
+	// Lifecycle sets this session's own timers (D-09, D-60); the templates'
+	// apply to the rest.
+	Lifecycle *Lifecycle `json:"lifecycle,omitempty"`
 	// IdempotencyKey makes a retry safe: a repeated key, from the same caller,
 	// returns the session the first request created while it is unfinished. A
 	// label value: at most 63 characters of letters, digits, '-', '_' and '.',
@@ -81,24 +84,37 @@ type Limits struct {
 	MaxTurns int32 `json:"maxTurns,omitempty"`
 }
 
+// Lifecycle is a session's own timers (D-09, D-60): positive Go durations.
+// Empty fields take the templates' timers.
+type Lifecycle struct {
+	// IdleSuspendAfter suspends the session once its agent has been idle this
+	// long (D-60).
+	IdleSuspendAfter string `json:"idleSuspendAfter,omitempty"`
+	// ArchiveAfter archives the suspended session's volume this long after the
+	// suspend (D-62).
+	ArchiveAfter string `json:"archiveAfter,omitempty"`
+}
+
 // Session is one session as the API shows it: GET /v1/sessions/{name}, the
 // items of GET /v1/sessions, and the answer to a create or a reap.
 type Session struct {
-	Name           string   `json:"name"`
-	Repo           string   `json:"repo"`
-	Base           string   `json:"base,omitempty"`
-	Agent          string   `json:"agent"`
-	Mode           string   `json:"mode"`
-	Model          string   `json:"model"`
-	Effort         string   `json:"effort,omitempty"`
-	Size           string   `json:"size,omitempty"`
-	Profile        string   `json:"profile,omitempty"`
-	Tools          []string `json:"tools,omitempty"`
-	Limits         *Limits  `json:"limits,omitempty"`
-	Parent         string   `json:"parent,omitempty"`
-	Caller         string   `json:"caller,omitempty"`
-	Lane           string   `json:"lane,omitempty"`
-	IdempotencyKey string   `json:"idempotencyKey,omitempty"`
+	Name    string   `json:"name"`
+	Repo    string   `json:"repo"`
+	Base    string   `json:"base,omitempty"`
+	Agent   string   `json:"agent"`
+	Mode    string   `json:"mode"`
+	Model   string   `json:"model"`
+	Effort  string   `json:"effort,omitempty"`
+	Size    string   `json:"size,omitempty"`
+	Profile string   `json:"profile,omitempty"`
+	Tools   []string `json:"tools,omitempty"`
+	Limits  *Limits  `json:"limits,omitempty"`
+	// Lifecycle is the session's own timers, when it has any.
+	Lifecycle      *Lifecycle `json:"lifecycle,omitempty"`
+	Parent         string     `json:"parent,omitempty"`
+	Caller         string     `json:"caller,omitempty"`
+	Lane           string     `json:"lane,omitempty"`
+	IdempotencyKey string     `json:"idempotencyKey,omitempty"`
 	// Prompt is in GET /v1/sessions/{name} only, never in a list.
 	Prompt        string `json:"prompt,omitempty"`
 	OperatingMode string `json:"operatingMode,omitempty"`
