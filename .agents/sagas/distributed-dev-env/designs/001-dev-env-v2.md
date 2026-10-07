@@ -2473,19 +2473,22 @@ sequenceDiagram
 apiVersion: dev-env.haynesops.com/v1alpha1
 kind: AccessGrant
 metadata:
-  name: g-1006-1342-91
-  namespace: dev-env-system
+  name: grant-1006-134210-9f1c         # also its ServiceAccount, bindings and policy (D-54)
+  namespace: dev-agents                  # beside the sessions (D-54)
 spec:
-  requester: haynes-ops-1006-1310        # from the caller's token, never from the body
-  type: kube                             # kube | egress | credential | breakglass | lease
+  requester:                             # from the caller's token, never from the body
+    session: haynes-ops-1006-1310
+    repo: haynes-ops
+    profile: full
+  type: kube                             # kube | egress | credential | breakglass (lease: plan 09)
   kube:
     role: dev-env-grant-workloads        # from the grant role catalog
     namespaces: [home-automation]
   ttl: 1h
   reason: "Patch zigbee2mqtt Deployment image to test 2.12.1 before the PR"   # agent-written
 status:
-  phase: Active                          # Pending | Active | Denied | Expired | Released
-  approvedBy: tom (authentik)            # or policy/<name>
+  phase: Active                          # Pending | Active | Denied | Expired | Released | Failed
+  approvedBy: authentik/tom              # or policy/<name>
   approvedAt: "2026-10-06T13:43:10Z"
   expiresAt: "2026-10-06T14:43:10Z"
 ```
@@ -2562,6 +2565,50 @@ which serves agents all day, holds none of these privileges. Agents cannot write
 outage stops new grants and nothing else: kube grants still die with their tokens,
 and the operator deletes expired grants' network policies as a backstop. Upgrading the broker
 never touches sessions (5.1 applies to it).
+
+**D-54 (2026-10-07, plan 07 step 1). The `AccessGrant` and `GrantPolicy` schema as
+built.** `api/v1alpha1/accessgrant_types.go`; an envtest suite proves each rule.
+
+- **Where they live.** AccessGrants live in `dev-agents`, beside their sessions, not
+  in `dev-env-system` as the example above showed. The operator's cache and its Role
+  for its own CRD group are in `dev-agents` (6.11, as built), and so are the grant
+  ServiceAccounts and network policies. Agents still cannot write them: their RBAC
+  reads the group only, and the identity guard refuses any write in `dev-agents`.
+  GrantPolicies live in `dev-env-system`, applied by Flux from haynes-ops.
+- **One name for everything.** A grant is named `grant-<MMDD>-<HHMMSS>-<4 hex>`. The
+  same name is its ServiceAccount, its bindings and its network policy, so the audit
+  log's `system:serviceaccount:dev-agents:grant-...` is the grant itself, and the
+  identity guard's `grant-` prefix (D-19, as built) already matches it.
+- **Spec.** `requester` (session, repo, profile, agent, parent: the API copies them
+  from the calling session, never from the body), `type`, one of `kube`, `egress`
+  or `credential` to match the type (`kube` for `breakglass` too), `ttl`, `reason`
+  (shown as agent-written) and `release`. Spec is immutable after create, except
+  `release`, which only goes from false to true: it is how the API asks the broker
+  to end a grant early, because the API holds no status write.
+- **Status is the broker's.** Only the broker writes `accessgrants/status`: phase,
+  who approved or denied it and when, the TTL it was approved for (Approve for less
+  time), expiry, end, when Tom was notified, the ServiceAccount, and the pod it was
+  last installed in. The operator's API cannot approve a grant, because it cannot
+  write status.
+- **TTL.** From 10 minutes, the shortest token TokenRequest issues, to the type's
+  longest: 8 h for `kube` and `egress`, 4 h for `credential`, 1 h for `breakglass`.
+- **Egress.** A grant names DNS names (exact, or one leading `*.`), CIDRs, or
+  in-cluster pods by namespace and labels, and at least one port. In-cluster
+  destinations go by endpoint, never by name: a `.local` name is refused, because
+  Cilium enforces in-cluster traffic by the destination pod's identity, which an
+  endpoint rule names. An endpoint's labels are plain pod labels: the
+  `io.kubernetes.`, `io.cilium.` and `k8s.io/` meta labels, and Cilium's `k8s:` or
+  `reserved:` sources, are refused, so a selector cannot leave its namespace (the
+  advisory review on #66 found this).
+- **Credentials.** `proxmox` and `hw-ssh` (Q-07).
+- **GrantPolicy.** It matches a request when the type is its type, the requester's
+  profile, repo and agent are in each list it sets (it sets profiles, repos or both),
+  the request's scope lies inside its scope, and the TTL is at most `maxTTL`. A
+  `description` says what Tom accepts by it. The schema refuses type `breakglass`,
+  roles `dev-env-grant-breakglass` and `dev-env-grant-secrets-read`, profile `ops`,
+  a dev-env namespace, and a namespace that is not a plain name. A policy's name is a
+  DNS label of at most 63 characters, because a grant records it as `policy/<name>`.
+- **Not yet.** Type `lease` joins with plan 09.
 
 **D-26. Approvals: a Pushover link to an approval page behind Authentik.**
 
@@ -3538,7 +3585,8 @@ suite, a busy loop or anything parallel (the 2026-10-05 incident rule).
 
 Each blocks building. Ask Tom one at a time; fold the answer back in as a dated
 ruling. Q-01 to Q-11 were all answered on 2026-10-06, and so were Q-13 and Q-14. Q-12
-was settled on 2026-10-07: Tom made the repo public (B). ADR-001 was Accepted on
+was settled on 2026-10-07: Tom made the repo public (B). Q-15 (plan 07, Proxmox
+credential grants) is open. ADR-001 was Accepted on
 2026-10-06. Each blocks only the KICKOFF step it names.
 
 | Id | Question | Options (recommended first) | Resolution |
@@ -3557,6 +3605,7 @@ was settled on 2026-10-07: Tom made the repo public (B). ADR-001 was Accepted on
 | Q-12 | Branch protection on `main` of this private repo. Ask only if GitHub says the "Protect Main" ruleset will not be enforced on Tom's plan (KICKOFF, Tom's settings item 1). | **A. GitHub Pro on Tom's account**: the ruleset is enforced as on hass-sandbox, so `CI - Success` really gates every merge, at a monthly cost. **B. Make the repo public**: enforcement is free, but the saga and code become public (they hold no secrets; haynes-ops already is public). **C. Convention only**: no cost and no change, but nothing stops a red merge or a direct push to `main`. | **Ruling, Tom 2026-10-07: B, the repo is public.** He made it public himself, before the question was asked: "I made dev-env public so I can go to bed but make sure it's good and safe". The trigger was GitHub Actions billing, which stopped CI on the private repo. The same day an agent checked the full history and every PR ref for secrets (none found), gated the `@claude` workflow on the commenter's association, and added the MIT `LICENSE` and `images/THIRD_PARTY.md`. A public repo gets the ruleset enforced at no cost, so the "Protect Main" ruleset is free to create: part 3 of the [laptop handoff](../../../handoffs/2026-10-06-tom-laptop-settings.md), done 2026-10-07 (the ruleset is live). |
 | Q-13 | How does the cluster pull the new `ghcr.io/thaynes43/dev-env-operator` package? (B3) | **A. Make the package public**: the cluster pulls it anonymously, like `ghcr.io/thaynes43/dev-env` and every other image today; anyone can pull a binary that holds no secrets. **B. Keep it private, with an image pull secret**: the binary stays private, but a `read:packages` token in 1Password and an ExternalSecret become one more credential to rotate, and a lapsed one stops operator pods from starting. | **Ruling, Tom 2026-10-06: A, public.** "Public package write a prompt for an agent on my laptop to flip it". GitHub has no API for package visibility, so a laptop agent flips it in the browser after B3's first publish: [part 2 of the laptop handoff](../../../handoffs/2026-10-06-tom-laptop-settings.md). Until then the package is private and the HelmRelease cannot pull it. Blocks deploying the operator (plan 01's HelmRelease) until the flip. Done: the package allowed an anonymous pull on 2026-10-07, and 8.9 runs from it. |
 | Q-14 | How does release-please open release PRs that CI checks? A PR opened with the workflow's `GITHUB_TOKEN` starts no workflows, so `CI - Success` never reports on it. (B4) | **A. A GitHub App key as a repo secret** (a small App with contents and pull-request write on this repo only): release PRs run CI like any PR; one more secret, which only Tom can add. **B. haynes-dev-bot closes and reopens each release PR** from the pod (App tokens do start workflows): no new secret, but every release needs an agent step, and a forgotten one leaves the release PR stuck. **C. No release-please; tag releases by hand**: nothing to set up, but versioning (section 10) becomes manual and inconsistent. | **Ruling, Tom 2026-10-06: A, a GitHub App key secret.** "GitHub App key secret (Recommended)". B4 uses the repo variable `RELEASE_APP_ID` and the repo secret `RELEASE_APP_PRIVATE_KEY`, read by `actions/create-github-app-token`. Refinement of the option text: the App also needs Issues read and write, besides Contents and Pull requests write, because release-please creates its `autorelease:` labels. Tom or his laptop agent adds both ([part 1 of the laptop handoff](../../../handoffs/2026-10-06-tom-laptop-settings.md)). Blocks B4's release-please part until the secret exists. |
+| Q-15 | How does a Proxmox credential grant get its short-lived token? Plan 07 step 8's first check failed on 2026-10-07: the operator token (`dev-env@pve!operator`, PVE 8.4.16) cannot mint an expiring token for its own user. Proxmox answered 403 to both the list and the create of `/access/users/dev-env@pve/token`, so Q-07's mint "from the operator token" does not work. Confirmed: `dev-env@pve` holds `DevEnvOperator` and `PVEAuditor` on `/`, and hw-ssh's `dev-env` user may run `sudo pvesh` as root on every Proxmox node. | **A. The keeper mints it over SSH**: with a certificate from its own SSH CA (the one hw-ssh grants use), it runs `sudo pvesh create /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0` on a Proxmox node, so the token carries `dev-env@pve`'s operator role and dies at the grant's end, and it deletes the token at expiry. No new Proxmox identity, and the long-lived operator token is not needed by v2 at all. The keeper gains egress to the Proxmox nodes on port 22, and Proxmox grants depend on the SSH CA. **B. A dedicated minting user**: `dev-env-minter@pve` with a password and `User.Modify` on `/access/users/dev-env@pve`; the keeper logs in for a ticket and mints over the API. One more Proxmox identity able to make operator tokens, a password in 1Password, and Tom creates the user and its ACL. **C. No Proxmox credential grants**: Proxmox writes go through hw-ssh certificates and `sudo qm` or `sudo pvesh` on a node. Simplest, but the `pve` CLI's operator tier stops working in v2 sessions and its runbook steps move to the SSH path. | open |
 
 ## 16. Decisions settled in this design
 
@@ -3615,4 +3664,5 @@ was settled on 2026-10-07: Tom made the repo public (B). ADR-001 was Accepted on
 | D-51 | The operator rescues by exec (`agentd ctl rescue --stop-agent`) before a suspend deletes a pod that ran, writes the verdict to `status.rescue` first, marks it superseded when the session asks for its pod again, and archives only a reaped session's volume after a verified rescue of its last pod | 4.4 |
 | D-52 | The minimal keeper: the haynes-dev-bot token minted v1's way from an App directory read at every mint, merged into `dev-env-gh-token` by one patch, every 40 minutes or two thirds of its life, retried from 10 s to 5 minutes with jitter; one replica behind a Lease (not a fence: plans 03 and 04 fence each refresh); Secrets `patch` only; ready while its token lives; nothing secret logged | 6.4 |
 | D-53 | The agent image is built from `images/agent/Dockerfile` (v1's plus tini, agentd, agent-run, baked Codex and kubectl-cnpg, pve and hw-ssh; no code-server), smoke-tested in CI on every PR that touches it, and published as `dev-env:2.x.y` only, from a `v2.x.y` release tag by `publish-agent.yml`, signed keyless; the paired haynes-ops Kyverno change trusts that workflow on `refs/tags/v2.*` | 3.6 |
+| D-54 | `AccessGrant` lives in `dev-agents`, `GrantPolicy` in `dev-env-system`; a grant's name is its ServiceAccount, bindings and policy; spec immutable but a one-way `release`; status the broker's only; TTL 10 m to the type's longest; in-cluster egress by endpoint, never by name | 6.12 |
 | D-55 | A volume that needs a rescue and has no pod gets a hold pod: the session's pod running `agentd hold` at size S, with no agent credentials; the operator rescues in it, keeps it and retries every 15 minutes while the rescue fails, and archives once it passes; a volume with nothing but an empty `lost+found` is a valid rescue (`VolumeEmpty`) | 4.4 |
