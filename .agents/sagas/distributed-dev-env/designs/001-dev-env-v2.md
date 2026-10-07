@@ -2929,10 +2929,10 @@ built.** `api/v1alpha1/accessgrant_types.go`; an envtest suite proves each rule.
   `approvalURL`: that base plus the grant's name, which a coordinator shows Tom bare
   (D-26). Empty, the default, links nothing.
 - **Reads.** The grant routes read from the API server, not the manager's cache: a
-  session polls its grant right after it asks, and the operator keeps no
-  AccessGrant informer. So the operator's `dev-agents` Role needs `create`, `get`,
-  `list` and `patch` on `accessgrants`, and nothing on `accessgrants/status`
-  (H1; `watch` waits for the backstop of step 5).
+  session polls its grant right after it asks. The routes do not use the
+  AccessGrant informer added for D-64's expiry backstop. The operator's
+  `dev-agents` Role has `create`, `get`, `list`, `patch` and `watch` on
+  `accessgrants`, and nothing on `accessgrants/status` (H1).
 
 **D-61 (2026-10-07, plan 07 step 3). The broker as built: kube and break-glass
 grants.** `internal/broker`; `dev-env-operator broker` (`cmd/dev-env-operator/broker.go`).
@@ -2955,8 +2955,9 @@ grants.** `internal/broker`; `dev-env-operator broker` (`cmd/dev-env-operator/br
   cluster-wide role takes no namespaces and the others name some; no namespace is
   `dev-env-system`, `dev-agents`, `dev-tools` or the broker's own; the TTL is within
   the type's bounds. A failure ends the grant `Denied`, `deniedBy: broker`, with the
-  reason. Egress and credential grants end the same way ("not built yet") until steps
-  5 and 8, rather than being approved with nothing made.
+  reason. At step 3, egress and credential grants ended the same way ("not built
+  yet"). D-64 adds egress enforcement; credential grants remain refused until
+  step 8.
 - **The requester.** The session in `spec.requester.session` must exist and not be
   being deleted. A session missing from the cache is read from the API server before
   a grant ends for it. Once the session is gone, a pending grant ends `Denied` ("the
@@ -3127,8 +3128,13 @@ grants.** `internal/broker`; `dev-env-operator broker` (`cmd/dev-env-operator/br
   default TCP, ownership and UID races with fake clocks. Envtest uses a focused
   projection of the live Cilium CRD schema, and proves broker lifecycle and
   restart, finalizer-delayed cleanup, and expiry under the operator's precise
-  get/delete-only RBAC with the broker stopped. Runtime Cilium enforcement is
-  checked by the H2 deployment's bounded smoke run.
+  get/delete-only RBAC with the broker stopped. H2's runtime smoke passed on
+  2026-10-07: egress opened only while active, release blocked it, and a real
+  ten-minute grant expired with zero broker pods. The operator was restarted
+  after approval and deleted `grant-1007-232214-4f02`'s policy at
+  23:32:14.018Z; HTTP was blocked and the audit phase stayed Active. Restoring
+  the broker ended it Expired. Session/v1 UIDs and restart counts were preserved;
+  the dedicated session and fixtures were removed (haynes-ops #3542–#3544).
 
 **D-26. Approvals: a Pushover link to an approval page behind Authentik.**
 
