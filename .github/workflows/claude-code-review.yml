@@ -57,8 +57,9 @@ jobs:
       - name: Checkout repository
         if: steps.gate.outputs.present == 'true'
         # Keep the default credential persistence: claude-code-action runs `git fetch origin
-        # <pr-branch>` before it sets up its own git auth, and this private repo refuses that
-        # without a credential. Do NOT add `persist-credentials: false`.
+        # <pr-branch>` before it sets up its own git auth, and a private repo refuses that
+        # without a credential (this one was private until 2026-10-07). Do NOT add
+        # `persist-credentials: false`.
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -105,8 +106,9 @@ jobs:
             CLAUDE.md when they do.
 
             **CRITICAL - block the merge**
-            - Secrets or PII in code, docs, fixtures, logs or workflow files. In this
-              repo that includes Claude Max credentials (`.credentials.json`
+            - Secrets or PII in code, docs, fixtures, logs or workflow files. The repo
+              is public, so this also covers household details, private addresses
+              and pasted session transcripts. In this repo that includes Claude Max credentials (`.credentials.json`
               contents, OAuth login URLs with `code_challenge`/`state`, pasted login
               codes), `CLAUDE_CODE_OAUTH_TOKEN` values, Codex `auth.json` contents,
               GitHub App private keys or minted `ghs_` tokens, 1Password field
@@ -144,6 +146,8 @@ jobs:
               ids such as `claude-opus-5-5`.
             - Tool versions in a Dockerfile without a `# renovate:` annotation, or a
               version number placed between that annotation and its ARG.
+            - A Dockerfile that adds or removes a bundled component without the
+              matching change to `images/THIRD_PARTY.md`.
             - Boot-path scripts that can block or exit non-zero (the v1 boot path must
               stay fast and never fatal; slow work belongs after readiness).
             - Behavior change with no test change where the code has tests.

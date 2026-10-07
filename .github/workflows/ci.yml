@@ -6,9 +6,10 @@ name: CI
 #
 # Every job runs the Makefile's own targets, so a developer or an agent in the
 # shared dev-env pod runs exactly what CI runs. The Makefile caps parallelism at 2
-# (GO_PARALLELISM). Actions minutes on a private repo are a budget: no matrices, no
-# repeated suites, and the Go module and build caches (setup-go) plus the pinned
-# tools in bin/tools/ (actions/cache) are restored for every job.
+# (GO_PARALLELISM). CI stays lean (the repo was private, and its minutes a budget,
+# until 2026-10-07): no matrices, no repeated suites, and the Go module and build
+# caches (setup-go) plus the pinned tools in bin/tools/ (actions/cache) are restored
+# for every job. Fork PRs run here with a read-only token and no secrets.
 #
 # Image builds run on PRs only and never push. publish.yml publishes the operator
 # image from main (B3); publish-agent.yml publishes the agent image from a release tag

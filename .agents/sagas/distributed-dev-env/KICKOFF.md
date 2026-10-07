@@ -255,9 +255,9 @@ Audit only). The first is B5's; the second is done:
    blocks deletion and force-push, keeps linear history, and requires a PR with 0
    approvals and the status check `CI - Success` from GitHub Actions. Leave "require
    up to date" off, so parallel agent PRs do not re-run CI after every merge. Add it
-   once `CI - Success` has reported at least once. If GitHub says the ruleset will
-   not be enforced on a private repo on his plan, ask him DESIGN-001 Q-12 then, not
-   before: the repo has no ruleset yet, and that warning is the question's premise.
+   once `CI - Success` has reported at least once. DESIGN-001 Q-12 (enforcement on a
+   private repo) is settled: Tom made the repo public on 2026-10-07 (B), so GitHub
+   enforces the ruleset at no cost. Part 3 of the laptop handoff.
 2. **Settings:** allow auto-merge (Renovate's `platformAutomerge` needs it), and
    optionally auto-delete head branches.
 3. **GHCR access:** on the `dev-env` package, "Manage Actions access", give
@@ -271,8 +271,8 @@ Audit only). The first is B5's; the second is done:
 
 Items 2, 3 and 5 are plain settings; HANDOFF lists them as a checklist. Items 2 to 6
 are in [the laptop handoff](../../handoffs/2026-10-06-tom-laptop-settings.md), which
-Tom can give to an agent on his own machine. Q-12 is the only question left, asked
-when item 1 raises it.
+Tom can give to an agent on his own machine. No question is left open: Q-12 was
+settled on 2026-10-07.
 
 An agent working outside under Tom's own gh login could make changes 1 and 2 with
 `gh api`, but only after Tom says yes to that exact change.

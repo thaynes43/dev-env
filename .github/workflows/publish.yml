@@ -183,8 +183,8 @@ jobs:
       # haynes-ops workflows, no ref pin). For v2 images it would need a second
       # keyless entry with subject
       # https://github.com/thaynes43/dev-env/.github/workflows/publish.yml@refs/heads/main
-      # (haynes-ops change, see the header). The package is private until Tom makes it
-      # public, so this reads it with the job's login from the step above.
+      # (haynes-ops change, see the header). The package is public (Q-13), but this
+      # reads it with the job's login from the step above, which a private one needs.
       - name: Verify the signature
         env:
           DIGEST: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
