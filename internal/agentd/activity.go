@@ -46,10 +46,14 @@ const (
 // shortest idle window is an hour.
 const worktreeScanEvery = 5 * time.Minute
 
-// worktreeScanCap bounds one walk. A worktree with more entries outside the
-// pruned directories is treated as changed now, which keeps it from looking
-// idle: the safe direction.
-var worktreeScanCap = 200000
+// worktreeScanCap and worktreeScanTime bound one walk. A worktree with more
+// entries outside the pruned directories, or one too slow to walk, is treated
+// as changed now, which keeps it from looking idle: the safe direction. The
+// time bound keeps a slow volume from holding back the heartbeat.
+var (
+	worktreeScanCap  = 200000
+	worktreeScanTime = 20 * time.Second
+)
 
 // gitActivityFiles are v1's wt_busy git signals, in the worktree's git dir.
 var gitActivityFiles = []string{"HEAD", "FETCH_HEAD", "ORIG_HEAD", "COMMIT_EDITMSG", "MERGE_HEAD", "REBASE_HEAD"}
@@ -112,9 +116,10 @@ var worktreeScans = struct {
 }{m: map[string]worktreeScan{}}
 
 // worktreeActivity is the newest change in the worktree by v1's wt_busy
-// signals, walked at most every worktreeScanEvery. A walk that fails or hits
-// its cap answers now, so a worktree it cannot read never looks idle.
-func worktreeActivity(worktree string, now time.Time) time.Time {
+// signals, walked at most every worktreeScanEvery. A walk that fails, hits its
+// cap, runs out of time or is cancelled answers now, so a worktree it cannot
+// read never looks idle.
+func worktreeActivity(ctx context.Context, worktree string, now time.Time) time.Time {
 	if worktree == "" {
 		return time.Time{}
 	}
@@ -123,7 +128,9 @@ func worktreeActivity(worktree string, now time.Time) time.Time {
 	if c, ok := worktreeScans.m[worktree]; ok && now.Sub(c.at) < worktreeScanEvery && !now.Before(c.at) {
 		return c.newest
 	}
-	newest, err := scanWorktree(worktree)
+	ctx, cancel := context.WithTimeout(ctx, worktreeScanTime)
+	defer cancel()
+	newest, err := scanWorktree(ctx, worktree)
 	if err != nil {
 		newest = now
 	}
@@ -135,7 +142,8 @@ var errScanCap = errors.New("too many files to walk")
 
 // scanWorktree walks the worktree once: its git dir's signal files, then every
 // file outside the pruned directories. A worktree that is gone has no activity.
-func scanWorktree(worktree string) (time.Time, error) {
+// It stops with ctx's error when ctx ends.
+func scanWorktree(ctx context.Context, worktree string) (time.Time, error) {
 	if _, err := os.Stat(worktree); isNotExist(err) {
 		return time.Time{}, nil
 	}
@@ -165,6 +173,11 @@ func scanWorktree(worktree string) (time.Time, error) {
 		}
 		if n++; n > worktreeScanCap {
 			return errScanCap
+		}
+		if n%1000 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 		}
 		if d.Name() == ".git" {
 			// A linked worktree's .git file; its git dir is read above.
@@ -243,7 +256,7 @@ func applyActivity(ctx context.Context, r Runner, s Settings, st *protocol.Statu
 		see(now)
 	}
 	if st.Workspace != nil {
-		see(worktreeActivity(st.Workspace.Worktree, now))
+		see(worktreeActivity(ctx, st.Workspace.Worktree, now))
 	}
 	if !newest.IsZero() {
 		t := newest.UTC()

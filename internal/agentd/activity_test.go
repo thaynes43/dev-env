@@ -37,14 +37,14 @@ func TestScanWorktree(t *testing.T) {
 	touch(t, filepath.Join(wt, "node_modules", "x.js"), base.Add(9*time.Hour))
 	touch(t, filepath.Join(wt, ".claude", "settings.local.json"), base.Add(9*time.Hour))
 	touch(t, filepath.Join(gd, "index"), base.Add(9*time.Hour))
-	if got, err := scanWorktree(wt); err != nil || !got.Equal(base.Add(time.Hour)) {
+	if got, err := scanWorktree(context.Background(), wt); err != nil || !got.Equal(base.Add(time.Hour)) {
 		t.Errorf("newest %s %v, want the source file's", got, err)
 	}
 	touch(t, filepath.Join(gd, "FETCH_HEAD"), base.Add(2*time.Hour))
-	if got, _ := scanWorktree(wt); !got.Equal(base.Add(2 * time.Hour)) {
+	if got, _ := scanWorktree(context.Background(), wt); !got.Equal(base.Add(2 * time.Hour)) {
 		t.Errorf("newest %s, want FETCH_HEAD's", got)
 	}
-	if got, err := scanWorktree(filepath.Join(wt, "gone")); err != nil || !got.IsZero() {
+	if got, err := scanWorktree(context.Background(), filepath.Join(wt, "gone")); err != nil || !got.IsZero() {
 		t.Errorf("a missing worktree: %s %v", got, err)
 	}
 
@@ -54,8 +54,23 @@ func TestScanWorktree(t *testing.T) {
 	worktreeScanCap = 1
 	t.Cleanup(func() { worktreeScanCap = old })
 	now := time.Now().UTC()
-	if got := worktreeActivity(wt, now); !got.Equal(now) {
+	if got := worktreeActivity(context.Background(), wt, now); !got.Equal(now) {
 		t.Errorf("over the cap: %s, want now", got)
+	}
+	worktreeScanCap = old
+
+	// A walk that is cancelled, or runs out of time, answers now too.
+	many := t.TempDir()
+	for i := range 2500 {
+		touch(t, filepath.Join(many, strconv.Itoa(i)), base)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := scanWorktree(ctx, many); err == nil {
+		t.Error("a cancelled walk finished")
+	}
+	if got := worktreeActivity(ctx, many, now); !got.Equal(now) {
+		t.Errorf("a cancelled walk: %s, want now", got)
 	}
 }
 
@@ -65,14 +80,14 @@ func TestWorktreeActivityIsCached(t *testing.T) {
 	wt := t.TempDir()
 	touch(t, filepath.Join(wt, "a"), base)
 	now := time.Now().UTC()
-	if got := worktreeActivity(wt, now); !got.Equal(base) {
+	if got := worktreeActivity(context.Background(), wt, now); !got.Equal(base) {
 		t.Fatalf("first walk %s", got)
 	}
 	touch(t, filepath.Join(wt, "b"), base.Add(time.Hour))
-	if got := worktreeActivity(wt, now.Add(time.Minute)); !got.Equal(base) {
+	if got := worktreeActivity(context.Background(), wt, now.Add(time.Minute)); !got.Equal(base) {
 		t.Errorf("within the interval: %s, want the cached answer", got)
 	}
-	if got := worktreeActivity(wt, now.Add(worktreeScanEvery)); !got.Equal(base.Add(time.Hour)) {
+	if got := worktreeActivity(context.Background(), wt, now.Add(worktreeScanEvery)); !got.Equal(base.Add(time.Hour)) {
 		t.Errorf("after the interval: %s, want a new walk", got)
 	}
 }
