@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.5.0](https://github.com/thaynes43/dev-env/compare/v2.4.0...v2.5.0) (2026-10-07)
+
+
+### Features
+
+* **api,agent-run:** a session's own timers at create (D-60) ([#82](https://github.com/thaynes43/dev-env/issues/82)) ([1d6cc53](https://github.com/thaynes43/dev-env/commit/1d6cc5395f82b9ef44a1a090c201d174cbeedd0e))
+* **broker,agentd:** install kube grants in session tmpfs (D-63) ([0af613d](https://github.com/thaynes43/dev-env/commit/0af613d0660ba6a338905736bd47bd7c5c2a0504))
+* **broker,operator:** egress grants and expiry backstop (D-64) ([763fe77](https://github.com/thaynes43/dev-env/commit/763fe77880b066e6d79cc2460832f1a017712812))
+* **broker:** the access broker mode, kube and break-glass grants (plan 07 step 3) ([#74](https://github.com/thaynes43/dev-env/issues/74)) ([2ed524f](https://github.com/thaynes43/dev-env/commit/2ed524fdacff0deb31540fface56e005c0a0fa23))
+* **operator:** the archive timer of a suspended session (D-62) ([#78](https://github.com/thaynes43/dev-env/issues/78)) ([aaa9c93](https://github.com/thaynes43/dev-env/commit/aaa9c93bab8555cb7bfa6a8237377b01e6c8db57))
+
 ## [2.4.0](https://github.com/thaynes43/dev-env/compare/v2.3.0...v2.4.0) (2026-10-07)
 
 
