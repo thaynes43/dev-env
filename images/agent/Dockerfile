@@ -105,7 +105,7 @@ ARG TINI_VERSION=0.19.0
 # it in dev-init.sh as CNPG_PLUGIN_VERSION and downloaded it at every boot; the image
 # carries it now.
 # renovate: datasource=github-releases depName=cloudnative-pg/cloudnative-pg
-ARG CNPG_PLUGIN_VERSION=1.30.0
+ARG CNPG_PLUGIN_VERSION=1.30.1
 # ── claude-code ── NOTE: this prose sits ABOVE the `# renovate:` line ON PURPOSE.
 # See the "version numbers in comments" warning at the top of this ARG block.
 # 2.1.251 (2026-08-29): catching up 35 releases of drift. 2.1.217 was pinned by
