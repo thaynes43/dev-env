@@ -1655,7 +1655,9 @@ is never resumed.**
   resume clears it.
 - **The timer.** The volume is due for archive at `suspendedAt` plus
   `spec.lifecycle.archiveAfter`, else the templates' `lifecycle.archiveAfter`, else
-  D-09's 168h. Until then the operator asks to be called back at the deadline. At
+  D-09's 168h; with no spec override and templates that do not load, the timer is not
+  due, because their window may be longer than the default. Until then the operator
+  asks to be called back at the deadline. At
   the deadline it runs the reap's archive path (D-51): no pod may exist (asked of the
   API server), and the newest rescue must be valid. That is normally the rescue the
   suspend ran. Without one (the pod never ran, ended, or its rescue failed or was
@@ -1664,7 +1666,15 @@ is never resumed.**
 - **The guard.** `volumeRemovalAllowed` now allows a deleted session, or a suspended
   one whose timer is due. Its caller computes "due" and passes it through
   `deleteVolume` and `releaseVolume`, which stay the only volume deletes.
-- **After the archive.** The volume is deleted and `status.archivedAt` is set. The
+- **The record comes first.** Before the volume is deleted, the operator writes
+  `status.archivedAt` to the API server, on the session as the API server has it and
+  only while it is the same session, still suspended, with the same valid rescue
+  (like the rescue record, D-51). The guard refuses a suspended session's volume
+  until that record exists. So a resume, a lost status write or an operator restart
+  in between can never find the volume gone and the session resumable: the API
+  refuses a resume once `archivedAt` is set, and a delete that a restart interrupted
+  is finished on the next reconcile.
+- **After the archive.** The volume is deleted and the session keeps `status.archivedAt`. The
   session is not released: it stays, phase `Archived`, with its rescue record and
   its bundle path, until it is reaped, which then releases it at once. An archived
   session is never resumed. A new volume would start its task again, so the API's

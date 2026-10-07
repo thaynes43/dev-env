@@ -165,10 +165,17 @@ func volumeRemovalAllowed(s *v1alpha1.AgentSession, podExists, archiveDue bool) 
 		return fmt.Errorf("the rescue %s was superseded: a pod started on the volume after it, and no rescue ran in that pod", r.Stamp)
 	case !rescued(s):
 		return fmt.Errorf("the newest rescue failed, so the volume is kept for a human: %s", r.Message)
+	case s.DeletionTimestamp.IsZero() && s.Status.ArchivedAt == nil:
+		return errArchiveNotRecorded
 	default:
 		return nil
 	}
 }
+
+// errArchiveNotRecorded keeps a suspended session's volume until
+// status.archivedAt is on the API server: the record comes first, so the
+// session can never be resumed onto a new volume (D-62).
+var errArchiveNotRecorded = errors.New("the archive is not recorded in the session's status yet; it is written before the volume goes (D-62)")
 
 // deletePod deletes the session's pod if the guard allows it. With deleteVolume
 // it is the only delete in the package.

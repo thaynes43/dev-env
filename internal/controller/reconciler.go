@@ -242,10 +242,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return res, err
 		}
 		result = res
-	case !obs.claim.missing && s.Status.ArchivedAt == nil:
+	case !obs.claim.missing:
 		// A suspended session with no pod: its archive timer (D-09, D-62).
-		due, wait := r.archiveDue(&s, t, obs.now)
-		if !due {
+		// Once the archive is recorded it is due whatever the clock says, so
+		// a delete that an operator restart interrupted is finished.
+		due, wait := r.archiveDue(&s, t, obs)
+		if !due && s.Status.ArchivedAt == nil {
 			if wait > 0 {
 				result = ctrl.Result{RequeueAfter: wait}
 			}
@@ -519,22 +521,26 @@ func (r *Reconciler) rescue(ctx context.Context, s *v1alpha1.AgentSession, pod *
 
 // archiveDue reports whether a suspended session's archive timer is due, and
 // otherwise how long until it is (D-62): status.suspendedAt plus
-// spec.lifecycle.archiveAfter, else the templates', else D-09's 168h. A
-// session the operator has not yet seen suspended has no timer yet.
-func (r *Reconciler) archiveDue(s *v1alpha1.AgentSession, t *templates.Templates, now time.Time) (bool, time.Duration) {
+// spec.lifecycle.archiveAfter, else the templates'. A session the operator has
+// not yet seen suspended has no timer yet. Without a spec override and with
+// templates that do not load, the timer is not due: their window may be longer
+// than D-09's default, and archive never runs early.
+func (r *Reconciler) archiveDue(s *v1alpha1.AgentSession, t *templates.Templates, obs observation) (bool, time.Duration) {
 	if s.Status.SuspendedAt == nil {
 		return false, time.Second
 	}
-	after := templates.DefaultArchiveAfter
-	if t != nil {
-		after = t.ArchiveAfter()
-	}
-	if l := s.Spec.Lifecycle; l != nil && l.ArchiveAfter != nil {
+	var after time.Duration
+	switch l := s.Spec.Lifecycle; {
+	case l != nil && l.ArchiveAfter != nil:
 		after = l.ArchiveAfter.Duration
+	case t != nil:
+		after = t.ArchiveAfter()
+	default:
+		return false, time.Minute
 	}
 	at := s.Status.SuspendedAt.Add(after)
-	if now.Before(at) {
-		return false, at.Sub(now) + time.Second
+	if obs.now.Before(at) {
+		return false, at.Sub(obs.now) + time.Second
 	}
 	return true, 0
 }
@@ -573,7 +579,17 @@ func (r *Reconciler) archive(ctx context.Context, s *v1alpha1.AgentSession, obs 
 	} else if err != nil {
 		return ctrl.Result{}, true, err
 	}
-	if obs.removalBlocked = volumeRemovalAllowed(s, podExists, archiveDue); obs.removalBlocked != nil {
+	obs.removalBlocked = volumeRemovalAllowed(s, podExists, archiveDue)
+	if errors.Is(obs.removalBlocked, errArchiveNotRecorded) {
+		// Record the archive before the volume goes, so a restart or a
+		// resume in between can never find the volume gone and the session
+		// resumable (D-62): a resume of an archived session is refused.
+		if written, err := r.recordArchive(ctx, s, obs.now); err != nil || !written {
+			return ctrl.Result{RequeueAfter: time.Second}, true, err
+		}
+		obs.removalBlocked = volumeRemovalAllowed(s, podExists, archiveDue)
+	}
+	if obs.removalBlocked != nil {
 		if !podExists && !rescued(s) {
 			// No valid rescue and no pod to run one in: a hold pod (D-55).
 			return ctrl.Result{}, false, r.startHoldPod(ctx, s, obs)
@@ -599,6 +615,39 @@ func (r *Reconciler) archive(ctx context.Context, s *v1alpha1.AgentSession, obs 
 	// The claim goes once its other finalizers do; its delete event comes
 	// back here and releases the session.
 	return ctrl.Result{}, false, nil
+}
+
+// recordArchive writes status.archivedAt onto the newest version of a
+// suspended session, before its volume is deleted, and on success makes s that
+// version (D-62). It writes only while the session is the one the archive was
+// judged for: same UID, still suspended and not deleted, and the same valid
+// rescue. Otherwise it reports false, and the next reconcile judges it again.
+func (r *Reconciler) recordArchive(ctx context.Context, s *v1alpha1.AgentSession, now time.Time) (bool, error) {
+	for range 5 {
+		var fresh v1alpha1.AgentSession
+		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &fresh); err != nil {
+			return false, client.IgnoreNotFound(err)
+		}
+		switch {
+		case fresh.UID != s.UID, !fresh.DeletionTimestamp.IsZero(), fresh.Spec.OperatingMode != v1alpha1.OperatingModeSuspended,
+			!rescued(&fresh), s.Status.Rescue == nil || fresh.Status.Rescue.PodUID != s.Status.Rescue.PodUID || fresh.Status.Rescue.Stamp != s.Status.Rescue.Stamp:
+			return false, nil
+		case fresh.Status.ArchivedAt != nil:
+			*s = fresh
+			return true, nil
+		}
+		t := metav1.NewTime(now)
+		fresh.Status.ArchivedAt = &t
+		err := r.Client.Status().Update(ctx, &fresh)
+		if err == nil {
+			*s = fresh
+			return true, nil
+		}
+		if !apierrors.IsConflict(err) {
+			return false, client.IgnoreNotFound(err)
+		}
+	}
+	return false, nil
 }
 
 func (r *Reconciler) event(s *v1alpha1.AgentSession, typ, action, reason, note string) {

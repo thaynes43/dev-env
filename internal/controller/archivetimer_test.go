@@ -51,6 +51,11 @@ func TestTheArchiveTimerArchivesASuspendedSession(t *testing.T) {
 	finishClaimDelete(t, s.Name)
 	waitStatus(t, s.Name, "Archived", archived)
 	assertWritesOnly(t, op, "delete *v1.Pod "+pod.Name, "delete *v1.PersistentVolumeClaim "+claim.Name, "patch *v1.PersistentVolumeClaim "+claim.Name)
+	// The record comes first, so the session can never be resumed onto a
+	// new volume (D-62).
+	if !op.writes.before("record archive of "+s.Name, "delete *v1.PersistentVolumeClaim "+claim.Name) {
+		t.Errorf("the volume was deleted before the archive was recorded: %v", op.writes.orderLog())
+	}
 
 	setMode(t, s.Name, v1alpha1.OperatingModeRunning)
 	time.Sleep(2 * time.Second)
@@ -99,4 +104,25 @@ func TestTheArchiveTimerWaits(t *testing.T) {
 		t.Errorf("a hold pod before the timer: %v", err)
 	}
 	assertWritesOnly(t, op, "delete *v1.Pod "+pod.Name)
+}
+
+// Without a spec override and with templates that do not load, the timer is
+// not due: their window may be longer than D-09's default (D-62).
+func TestArchiveDueNeedsAWindow(t *testing.T) {
+	r := &Reconciler{}
+	now := time.Now()
+	since := metav1.NewTime(now.Add(-1000 * time.Hour))
+	s := &v1alpha1.AgentSession{Spec: v1alpha1.AgentSessionSpec{OperatingMode: v1alpha1.OperatingModeSuspended}}
+	s.Status.SuspendedAt = &since
+	if due, wait := r.archiveDue(s, nil, observation{now: now}); due || wait <= 0 {
+		t.Errorf("no templates: due %v, wait %s", due, wait)
+	}
+	s.Spec.Lifecycle = &v1alpha1.Lifecycle{ArchiveAfter: &metav1.Duration{Duration: time.Hour}}
+	if due, _ := r.archiveDue(s, nil, observation{now: now}); !due {
+		t.Error("a spec window is due without templates")
+	}
+	s.Status.SuspendedAt = nil
+	if due, _ := r.archiveDue(s, nil, observation{now: now}); due {
+		t.Error("due before the session was seen suspended")
+	}
 }

@@ -180,20 +180,25 @@ func TestVolumeGuardTable(t *testing.T) {
 			for _, deleted := range []bool{false, true} {
 				for _, podExists := range []bool{false, true} {
 					for _, due := range []bool{false, true} {
-						for recName, mkRec := range guardRecords {
-							s := &v1alpha1.AgentSession{Spec: v1alpha1.AgentSessionSpec{OperatingMode: mode}, Status: v1alpha1.AgentSessionStatus{Phase: phase}}
-							s.Generation = 7
-							if deleted {
-								s.DeletionTimestamp = &now
-							}
-							s.Status.Rescue = mkRec("last-pod", s.Generation)
-							want := (deleted || (mode == v1alpha1.OperatingModeSuspended && due)) && !podExists && safe[recName]
-							err := volumeRemovalAllowed(s, podExists, due)
-							if want != (err == nil) {
-								t.Errorf("phase %q, %s, deleted %v, pod exists %v, archive due %v, rescue %s: %v (want allowed %v)", phase, mode, deleted, podExists, due, recName, err, want)
-							}
-							if want {
-								allowed++
+						for _, recorded := range []bool{false, true} {
+							for recName, mkRec := range guardRecords {
+								s := &v1alpha1.AgentSession{Spec: v1alpha1.AgentSessionSpec{OperatingMode: mode}, Status: v1alpha1.AgentSessionStatus{Phase: phase}}
+								s.Generation = 7
+								if deleted {
+									s.DeletionTimestamp = &now
+								}
+								if recorded {
+									s.Status.ArchivedAt = &now
+								}
+								s.Status.Rescue = mkRec("last-pod", s.Generation)
+								want := (deleted || (mode == v1alpha1.OperatingModeSuspended && due && recorded)) && !podExists && safe[recName]
+								err := volumeRemovalAllowed(s, podExists, due)
+								if want != (err == nil) {
+									t.Errorf("phase %q, %s, deleted %v, pod exists %v, archive due %v, recorded %v, rescue %s: %v (want allowed %v)", phase, mode, deleted, podExists, due, recorded, recName, err, want)
+								}
+								if want {
+									allowed++
+								}
 							}
 						}
 					}
