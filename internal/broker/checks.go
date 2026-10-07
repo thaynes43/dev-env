@@ -46,6 +46,9 @@ func check(g *v1alpha1.AccessGrant, reserved ...string) error {
 	if s.Requester.Session == "" {
 		return errors.New("the grant names no requesting session")
 	}
+	if len(validation.IsDNS1123Label(s.Requester.Session)) > 0 {
+		return errors.New("the requesting session is not a session name")
+	}
 	kube := s.Type == v1alpha1.GrantKube || s.Type == v1alpha1.GrantBreakglass
 	switch {
 	case s.Type != v1alpha1.GrantKube && s.Type != v1alpha1.GrantBreakglass &&
@@ -92,17 +95,14 @@ func check(g *v1alpha1.AccessGrant, reserved ...string) error {
 		}
 	}
 	if e := s.Egress; e != nil {
-		for _, ep := range e.Endpoints {
-			if slices.Contains(forbidden, ep.Namespace) {
-				return fmt.Errorf("no grant reaches namespace %s (DESIGN-001 6.12)", ep.Namespace)
-			}
+		if err := checkEgress(e, forbidden); err != nil {
+			return err
 		}
 	}
-	// What this broker makes: kube and break-glass grants (plan 07 step 3).
-	// Egress (step 5) and credential grants (step 8) are refused until then,
+	// Credential grants (step 8) are refused until they are built,
 	// rather than approved with nothing made.
-	if !kube {
-		return fmt.Errorf("%s grants are %w: this broker makes kube and breakglass grants only", s.Type, errNotBuilt)
+	if s.Type == v1alpha1.GrantCredential {
+		return fmt.Errorf("credential grants are %w", errNotBuilt)
 	}
 	return nil
 }

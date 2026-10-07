@@ -373,11 +373,11 @@ func TestBrokerFailsWhatItCannotMake(t *testing.T) {
 		t.Errorf("message %q; the foreign ServiceAccount must stay and no binding be made", g.Status.Message)
 	}
 
-	// An egress grant: not built yet, so refused rather than approved with
+	// A credential grant: not built yet, so refused rather than approved with
 	// nothing made.
 	eg := newGrant(t, s, func(g *v1alpha1.AccessGrant) {
-		g.Spec.Type, g.Spec.Kube = v1alpha1.GrantEgress, nil
-		g.Spec.Egress = &v1alpha1.EgressGrant{CIDRs: []string{"192.168.40.21/32"}, Ports: tcp(443)}
+		g.Spec.Type, g.Spec.Kube = v1alpha1.GrantCredential, nil
+		g.Spec.Credential = &v1alpha1.CredentialGrant{Name: v1alpha1.CredentialHWSSH}
 	})
 	if g := waitPhase(t, eg, v1alpha1.GrantDenied); g.Status.DeniedBy != DeniedByBroker || !strings.Contains(g.Status.Message, "not built yet") {
 		t.Errorf("status %+v", g.Status)

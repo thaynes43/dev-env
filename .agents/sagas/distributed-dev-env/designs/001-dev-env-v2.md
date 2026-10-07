@@ -2635,7 +2635,7 @@ the Kyverno exec rule.
 |---|---|---|
 | `dev-agents/dev-env-agent` (session pods) | Cluster-wide read (v1's read rules, no Secrets) + `dev-env.haynesops.com` read. v1's write and proxy verbs cluster-wide, under `dev-env-agent-guard`. The `database` PVC-delete binding, as v1. | **At most v1's tier, minus the #3392 escalations, and nothing in the three dev-env namespaces.** No write to its own CRDs: every v2 write goes through the API. |
 | `dev-agents/grant-<id>` (one per kube grant) | Exactly the granted role, in the granted namespaces, until the grant expires, under `dev-env-identity-guard`. | Created and deleted by the broker. Its token lives in the session pod's tmpfs. Never valid in the three dev-env namespaces. |
-| `dev-env-system/dev-env-operator` | Roles in `dev-agents` and `dev-tools`: pods (create, delete, get, list, watch, patch), `pods/exec` create, `pods/log` get, `pods/eviction` create, PVCs (create, delete, get, list, watch, patch: archive lifts the volume's finalizer, D-51) and Services (create, delete, get, list, watch), namespaced CiliumNetworkPolicies in `dev-tools` (tool ingress and declared egress) and delete on namespaced CiliumNetworkPolicies in `dev-agents` (the expiry backstop; only grants live there), events (core, and `events.k8s.io` create and patch: the rescue and archive events, D-51). No write on `CiliumClusterwideNetworkPolicy`. Its own CRD group (with `agentsessions/finalizers` update) in the `dev-agents` Role, where the sessions live; ClusterRole: `tokenreviews` create. Leases (get, create, update) in its own namespace, and `get`, `list`, `watch` on the ConfigMap `dev-env-templates` there by `resourceNames` (D-44). | No cluster-wide pod or PVC rights, no Secrets, no `bind`. |
+| `dev-env-system/dev-env-operator` | Roles in `dev-agents` and `dev-tools`: pods (create, delete, get, list, watch, patch), `pods/exec` create, `pods/log` get, `pods/eviction` create, PVCs (create, delete, get, list, watch, patch: archive lifts the volume's finalizer, D-51) and Services (create, delete, get, list, watch), namespaced CiliumNetworkPolicies in `dev-tools` (tool ingress and declared egress) and get/delete on namespaced CiliumNetworkPolicies in `dev-agents` (the expiry backstop reads by name and deletes with verified ownership and UID; D-64), events (core, and `events.k8s.io` create and patch: the rescue and archive events, D-51). No write on `CiliumClusterwideNetworkPolicy`. Its own CRD group (with `agentsessions/finalizers` update) in the `dev-agents` Role, where the sessions live; ClusterRole: `tokenreviews` create. Leases (get, create, update) in its own namespace, and `get`, `list`, `watch` on the ConfigMap `dev-env-templates` there by `resourceNames` (D-44). | No cluster-wide pod or PVC rights, no Secrets, no `bind`. |
 | `dev-env-system/dev-env-broker` | RoleBindings and ClusterRoleBindings (create, delete); `bind` only on the grant role catalog by `resourceNames`; ServiceAccounts and `serviceaccounts/token` in `dev-agents`; CiliumNetworkPolicies in `dev-agents`; `pods/exec` in `dev-agents` (installs grant tokens); status of `AccessGrant`; read on the `dev-env.haynesops.com` group for the console's session list. No write on `CiliumClusterwideNetworkPolicy`, admission policies or Secrets. | The most privileged v2 identity: it can hand out the break-glass role. It accepts approvals only from Tom's Authentik identity and runs where agents cannot write or exec. |
 | `dev-env-system/dev-env-keeper` | Role in `dev-agents`: Secrets get, update and patch on `resourceNames` `dev-env-gh-token`, `dev-env-ops-gh-token`, `dev-env-claude-live`, `dev-env-codex-live` only; for credential grants (Q-07), also `pods/exec` in `dev-agents` and read on `AccessGrant`. ClusterRole: `tokenreviews` create. Leases (get, create, update) and Events (create, patch) in its own namespace (D-52). Plan 01 grants the Secrets `patch` only (D-52). | The four Secrets are created empty by GitOps, so no `create` is needed. |
 | `dev-env-system/dev-env-gpu-guard` (DaemonSet on GPU nodes) | Role in `dev-tools`: pods get, list; `pods/eviction` create. Read on the budgeter's Lease in `dev-env-system`. | Evicts agent GPU pods only; works when the operator is down (8.2). |
@@ -3050,6 +3050,46 @@ grants.** `internal/broker`; `dev-env-operator broker` (`cmd/dev-env-operator/br
   AccessGrant annotations for that pod UID, so a broker restart keeps the count. The broker never restarts a pod
   to install a grant. Removing the file is best effort after the authoritative
   revoke in D-61.
+
+**D-64 (2026-10-07, plan 07 step 5). Egress grants and the operator expiry backstop.**
+
+- **One policy per grant.** The broker creates a namespaced CiliumNetworkPolicy in
+  `dev-agents`, named after the grant and labelled with its grant, requesting session
+  and manager. Its source selector names the session and excludes `hold=true`, so
+  a replacement agent pod inherits the grant while a rescue pod does not. Egress
+  grants make no ServiceAccount, token or pod credential file.
+- **Scope.** FQDNs, CIDRs and in-cluster endpoints are separate egress rules, each
+  with the complete requested port list; Cilium forbids combining `toFQDNs` with
+  other L3 selectors in one rule. Exact DNS names use `matchName`, leading `*.`
+  names use `matchPattern`, and endpoint labels are prefixed with `k8s:` and bounded
+  by an explicit namespace label. Ports are strings and an omitted protocol is TCP.
+  The platform tier already supplies DNS inspection. The broker repeats the
+  schema's checks for destination names, CIDRs, namespaces, label keys and ports.
+- **Ownership.** A same-named policy is accepted only when its namespace, labels,
+  source selector, destinations and ports match the grant. A foreign collision is
+  left alone and the grant fails. Both deletion paths verify the identity labels
+  and source selector, then delete with a UID precondition; a replacement must
+  pass a fresh ownership check. Partial creation remains subject to cleanup. A
+  policy whose finalizer delays deletion keeps the broker's grant active until
+  revocation completes.
+- **The broker.** Expiry, release, session deletion and grant deletion revoke its
+  policy before the grant ends. A restart finds and preserves an unchanged policy.
+  Credential grants remain refused until step 8.
+- **The operator.** A separate `egress-grant-expiry` controller watches AccessGrants,
+  reads the grant and its same-named policy directly from the API server, and
+  deletes an owned policy at `expiresAt` even when the broker is unavailable.
+  Its namespaced CNP permissions are `get` and `delete` only: no list, watch or
+  policy writes, and no CNP informer. It writes no grant status or finalizer,
+  preserving the broker's approval and 90-day audit record. A restart rebuilds
+  timers from the grant informer. An expired Active record is checked again each
+  minute, including when its policy is absent, to catch a broker create crossing
+  the expiry boundary. The controller never writes or restarts a session pod.
+- **Tests.** Unit cases exercise mixed destinations, namespace/source bounds,
+  default TCP, ownership and UID races with fake clocks. Envtest uses a focused
+  projection of the live Cilium CRD schema, and proves broker lifecycle and
+  restart, finalizer-delayed cleanup, and expiry under the operator's precise
+  get/delete-only RBAC with the broker stopped. Runtime Cilium enforcement is
+  checked by the H2 deployment's bounded smoke run.
 
 **D-26. Approvals: a Pushover link to an approval page behind Authentik.**
 
@@ -4115,3 +4155,4 @@ credential grants) was answered on 2026-10-07 too. ADR-001 was Accepted on
 | D-61 | The broker mode of plan 07 step 3, kube and break-glass grants: checks repeated in Go; the policy match in name order, never for break-glass, `dev-env-grant-secrets-read` or profile `ops`; a 30-minute timeout; per grant a ServiceAccount and RoleBindings or one ClusterRoleBinding, labelled with the grant and deleted only by that label; a token not bound to the pod (the API server refuses it), lasting until `expiresAt` and at least 600 s, minted only for a new pod UID; deleting the ServiceAccount revokes; ended grants kept 90 days; `Decide`, `Notifier` and `Installer` as the seams of steps 4 and 6 | 6.12 |
 | D-62 | A suspended session's volume is archived at `status.suspendedAt` plus `archiveAfter` (spec, templates, else 168h), through the reap's archive path with a hold pod when no valid rescue exists; the session stays Archived (`status.archivedAt`), is never resumed, and goes when reaped | 4.4 |
 | D-63 | Installing kube grants through exec with a stdin-only token, a memory-backed grants volume, private atomic files and a kubeconfig with baseline and grant contexts; installation follows the session pod UID, never a pod restart; three missing-volume failures revoke the grant | 6.12 |
+| D-64 | One scoped CiliumNetworkPolicy per egress grant, separate FQDN/CIDR/endpoint rules with requested ports, source excluding hold pods; verified ownership and UID-precondition revoke; a separate operator expiry controller reads policies by name with get/delete-only RBAC and preserves audit records when the broker is unavailable | 6.12 |

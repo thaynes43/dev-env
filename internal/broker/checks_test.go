@@ -52,10 +52,10 @@ func TestCheck(t *testing.T) {
 			g.Spec.Type, g.Spec.Kube = v1alpha1.GrantEgress, nil
 			g.Spec.Egress = &v1alpha1.EgressGrant{Endpoints: []v1alpha1.EgressEndpoint{{Namespace: "dev-tools"}}, Ports: tcp(443)}
 		}, "no grant reaches"},
-		{"egress, not built yet", func(g *v1alpha1.AccessGrant) {
+		{"egress", func(g *v1alpha1.AccessGrant) {
 			g.Spec.Type, g.Spec.Kube = v1alpha1.GrantEgress, nil
 			g.Spec.Egress = &v1alpha1.EgressGrant{CIDRs: []string{"192.168.40.21/32"}, Ports: tcp(443)}
-		}, "not built yet"},
+		}, ""},
 		{"credential over 4h", func(g *v1alpha1.AccessGrant) {
 			g.Spec.Type, g.Spec.Kube = v1alpha1.GrantCredential, nil
 			g.Spec.Credential = &v1alpha1.CredentialGrant{Name: v1alpha1.CredentialHWSSH}

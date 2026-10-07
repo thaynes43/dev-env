@@ -11,11 +11,13 @@ import (
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/egress"
 )
 
 // What a kube grant is made of (DESIGN-001 6.12, D-54): a ServiceAccount in the
@@ -30,6 +32,9 @@ import (
 // that binds something else, is a permanent error: the grant fails and the
 // object is left alone.
 func (b *Broker) ensure(ctx context.Context, g *v1alpha1.AccessGrant) ([]string, error) {
+	if g.Spec.Type == v1alpha1.GrantEgress {
+		return b.ensureEgress(ctx, g)
+	}
 	var made []string
 	labels := grantLabels(g)
 	sa := &corev1.ServiceAccount{
@@ -100,6 +105,9 @@ func (b *Broker) ensureOne(ctx context.Context, g *v1alpha1.AccessGrant, want, h
 				return false, fmt.Errorf("%s %s is still being deleted", kind, describe(want))
 			}
 			if same != nil && !same(have) {
+				if g.Spec.Type == v1alpha1.GrantEgress {
+					return false, permanent{fmt.Errorf("%s %s does not match this grant's source, destinations and ports", kind, describe(want))}
+				}
 				return false, permanent{fmt.Errorf("%s %s binds something other than the grant's role to the grant's ServiceAccount", kind, describe(want))}
 			}
 			return false, nil
@@ -154,7 +162,9 @@ func (b *Broker) revoke(ctx context.Context, g *v1alpha1.AccessGrant, why string
 			}
 		}
 	}
-	if len(errs) == 0 {
+	if g.Spec.Type == v1alpha1.GrantEgress {
+		del(egress.Object(b.SessionNamespace, g.Name))
+	} else if g.Spec.Kube != nil && len(errs) == 0 {
 		// The identity goes last, once nothing binds it.
 		del(&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: b.SessionNamespace, Name: g.Name}})
 	}
@@ -163,7 +173,7 @@ func (b *Broker) revoke(ctx context.Context, g *v1alpha1.AccessGrant, why string
 	}
 
 	l := log.FromContext(ctx)
-	if b.Installer != nil {
+	if g.Spec.Kube != nil && b.Installer != nil {
 		// A session being reaped keeps its pod until its rescue, so a
 		// deleting session's pod still has the token taken out.
 		// Exec may have delivered a token before its installation status
@@ -206,9 +216,25 @@ func (b *Broker) deleteOwn(ctx context.Context, g *v1alpha1.AccessGrant, o clien
 		log.FromContext(ctx).Info("left alone: not made for this grant", "grant", g.Name, "kind", kindOf(o), "object", describe(o))
 		return false, nil
 	}
+	if u, ok := o.(*unstructured.Unstructured); ok && u.GroupVersionKind() == egress.GVK && !egress.OwnedBy(u, b.SessionNamespace, g) {
+		log.FromContext(ctx).Info("left the grant policy alone: ownership does not match", "grant", g.Name)
+		return false, nil
+	}
 	uid := o.GetUID()
 	if err := b.Client.Delete(ctx, o, client.Preconditions{UID: &uid}); err != nil && !apierrors.IsNotFound(err) {
 		return false, fmt.Errorf("delete %s %s: %w", kindOf(o), describe(o), err)
+	}
+	if u, ok := o.(*unstructured.Unstructured); ok && u.GroupVersionKind() == egress.GVK {
+		// Cilium may still enforce a policy that has a finalizer. The grant
+		// cannot say ended, or lift its own finalizer, until the policy is gone.
+		remaining := egress.Object(b.SessionNamespace, g.Name)
+		if err := b.APIReader.Get(ctx, client.ObjectKeyFromObject(o), remaining); err == nil {
+			if egress.OwnedBy(remaining, b.SessionNamespace, g) {
+				return false, fmt.Errorf("ciliumnetworkpolicy %s is still being deleted", describe(o))
+			}
+		} else if !apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("confirm deletion of %s %s: %w", kindOf(o), describe(o), err)
+		}
 	}
 	return true, nil
 }
@@ -221,6 +247,10 @@ func kindOf(o client.Object) string {
 		return "rolebinding"
 	case *rbacv1.ClusterRoleBinding:
 		return "clusterrolebinding"
+	case *unstructured.Unstructured:
+		if o.GetObjectKind().GroupVersionKind() == egress.GVK {
+			return "ciliumnetworkpolicy"
+		}
 	}
 	return fmt.Sprintf("%T", o)
 }
