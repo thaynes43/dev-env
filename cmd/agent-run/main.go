@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/thaynes43/dev-env/internal/agentrun"
@@ -16,7 +17,12 @@ import (
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	code := agentrun.Run(ctx, os.Args[1:], agentrun.DefaultEnv())
+	args := os.Args[1:]
+	// The image links declare-activity to agent-run (D-66).
+	if filepath.Base(os.Args[0]) == "declare-activity" {
+		args = append([]string{"declare-activity"}, args...)
+	}
+	code := agentrun.Run(ctx, args, agentrun.DefaultEnv())
 	stop()
 	os.Exit(code)
 }

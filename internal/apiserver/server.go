@@ -130,6 +130,13 @@ func (s *Server) Handler() http.Handler {
 		http.MethodGet:    s.getGrant,
 		http.MethodDelete: s.releaseGrant,
 	}}))
+	mux.Handle(apiv1.ActivitiesPath, s.serve(route{methods: map[string]handler{
+		http.MethodGet:  s.listActivities,
+		http.MethodPost: s.declareActivity,
+	}}))
+	mux.Handle(apiv1.ActivitiesPath+"/{name}", s.serve(route{methods: map[string]handler{
+		http.MethodDelete: s.endActivity,
+	}}))
 	mux.Handle(apiv1.FleetPath, s.serve(route{methods: map[string]handler{
 		http.MethodGet: s.fleet,
 	}}))

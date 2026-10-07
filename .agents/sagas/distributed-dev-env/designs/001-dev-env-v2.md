@@ -2421,6 +2421,37 @@ dev-env-ops' `dev-activity-check.sh` switches from `kubectl exec` into the v1 po
 `kubectl get activities`. Until cutover it reads both sources. The OPERATOR tier's
 read list gains the `dev-env.haynesops.com` group.
 
+**D-66 (2026-10-07, plan 02 step 10). `Activity` is a namespaced CRD in
+`dev-env-system`, written only by the API, deleted by the operator at expiry, and
+read by `declare-activity` v2 and by dev-env-ops.**
+
+- **The resource.** `spec`: `description` (1 to 512 bytes), `scope` (1 to 32 tokens
+  of at most 63 bytes), `declaredBy` (the caller, from its token: `session/<name>`,
+  `client/...`, `human/...`), `session` (the declaring session's name, when a
+  session declared it, so the remediation lane can message it) and `expiresAt`. The
+  spec is immutable (CEL `self == oldSelf`); a different declaration is a new one.
+  `kubectl get activities -n dev-env-system` prints scope, expiry, declarer and
+  description. The name keeps v1's shape, `act-<HHMMSS>-<6 digits>`.
+- **The routes.** `POST /v1/activities` declares: the API enforces v1's rules (a
+  scope is required, `*` is refused in favour of `cluster`, the TTL is 45m by
+  default, at least a minute, at most 8h, and at most 2h when the scope holds
+  `cluster`) and answers 422 on the field that breaks one. `GET /v1/activities`
+  lists the live ones, newest first, leaving out any that expired and have not been
+  deleted yet. `DELETE /v1/activities/{id}` ends one; any caller may end any, because
+  ending early is always the safe direction. The API reads activities from the API
+  server (the operator's cache holds `dev-agents` only).
+- **Expiry.** `internal/activity`'s reaper runs in the leader and deletes each expired
+  `Activity` within a minute, so a stale declaration never waves off a real fault.
+- **The client.** `declare-activity start "<what>" --scope a,b [--ttl 45m]`, `end
+  <id>` and `list`: v1's command and flags, now `agent-run` under another name (the
+  agent image links it) and `agent-run declare-activity`. `prune` says it is
+  automatic.
+- **In haynes-ops.** The CRD copy; the operator's Role in `dev-env-system` gains
+  `activities` create, get, list, watch and delete; a ClusterRole gives `get`,
+  `list` and `watch` on the `dev-env.haynesops.com` group to v1's pod and to
+  dev-env-ops (6.11's read rule), without touching v1's app; and
+  `dev-activity-check.sh` reads both v1's files and `kubectl get activities`.
+
 ### 6.10 Egress
 
 Tom (2026-10-06): agents often cannot get out to the web, and today's limits feel
@@ -4196,3 +4227,4 @@ credential grants) was answered on 2026-10-07 too. ADR-001 was Accepted on
 | D-63 | Installing kube grants through exec with a stdin-only token, a memory-backed grants volume, private atomic files and a kubeconfig with baseline and grant contexts; installation follows the session pod UID, never a pod restart; three missing-volume failures revoke the grant | 6.12 |
 | D-64 | One scoped CiliumNetworkPolicy per egress grant, separate FQDN/CIDR/endpoint rules with requested ports, source excluding hold pods; verified ownership and UID-precondition revoke; a separate operator expiry controller reads policies by name with get/delete-only RBAC and preserves audit records when the broker is unavailable | 6.12 |
 | D-65 | Messages and logs run agentd by exec in the session's running pod: `POST /v1/sessions/{name}/messages` → `agentd ctl deliver` (one bracketed paste and Enter into the Claude TUI, `codex queue` for Codex, 409 for a headless task), never retried by agent-run; `GET .../log?tail=N` → `agentd ctl log`; the log is copied to `~/.shared/logs/` | 6.8 |
+| D-66 | `Activity` CRD in `dev-env-system`: created only by `POST /v1/activities` with v1's limits enforced (scope required, 45m default, 8h cap, 2h for `cluster`), the declarer from the token, deleted by the operator at expiry; `declare-activity` is agent-run by another name; dev-env-ops reads both v1's files and the CRD | 6.9 |

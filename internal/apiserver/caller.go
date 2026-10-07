@@ -52,6 +52,9 @@ type Policy struct {
 	// SessionServiceAccount is the ServiceAccount every session pod runs as, in
 	// SessionNamespace.
 	SessionServiceAccount string
+	// ActivityNamespace holds the Activity declarations (dev-env-system, D-66).
+	// Empty answers /v1/activities with 503.
+	ActivityNamespace string
 }
 
 // caller is an authenticated, classified caller.

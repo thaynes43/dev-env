@@ -432,6 +432,9 @@ RUN chmod 0755 /usr/local/bin/pve /usr/local/bin/hw-ssh
 # The binaries of this repo come last, so a Go change rebuilds only these layers.
 # agentd is the one thing tini starts; agent-run is the v2 CLI (D-50).
 COPY --from=go /src/bin/agentd /src/bin/agent-run /usr/local/bin/
+# declare-activity is agent-run under another name (D-66): v1's command, now a client of
+# /v1/activities.
+RUN ln -s agent-run /usr/local/bin/declare-activity
 
 # This repo's license, the third-party list and the texts of the Go modules the binaries
 # above link (#55). Beside them: /usr/share/licenses/<tool>/ for each downloaded tool

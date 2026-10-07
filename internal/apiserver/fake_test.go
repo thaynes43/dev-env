@@ -127,6 +127,7 @@ func newFixtureWith(t *testing.T, funcs interceptor.Funcs, objs ...client.Object
 			Clients:               []string{clientSA},
 			SessionNamespace:      sessionNS,
 			SessionServiceAccount: controller.ServiceAccountName,
+			ActivityNamespace:     "dev-env-system",
 		},
 		Templates: func(context.Context) (*templates.Templates, error) {
 			if !f.tmplOK {
