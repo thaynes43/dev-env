@@ -2844,6 +2844,7 @@ built.** `api/v1alpha1/accessgrant_types.go`; an envtest suite proves each rule.
   AccessGrant informer. So the operator's `dev-agents` Role needs `create`, `get`,
   `list` and `patch` on `accessgrants`, and nothing on `accessgrants/status`
   (H1; `watch` waits for the backstop of step 5).
+
 **D-58 (2026-10-07, plan 07 step 3). The broker as built: kube and break-glass
 grants.** `internal/broker`; `dev-env-operator broker` (`cmd/dev-env-operator/broker.go`).
 
