@@ -150,6 +150,7 @@ func TestPodShape(t *testing.T) {
 	for path, vol := range map[string]string{
 		"/home/dev": "home", "/home/dev/.shared": "shared", "/tmp": "tmp",
 		"/var/run/secrets/dev-env": "api-token", "/opt/dev-env/config/claude": "config-claude", "/creds": "gh-token",
+		"/etc/codex": "codex-requirements",
 	} {
 		if m, ok := mounts[path]; !ok || m.Name != vol {
 			t.Errorf("mount at %s: %+v, want volume %s", path, m, vol)

@@ -117,15 +117,16 @@ step. Tick a step in the PR that lands it.
   and the templates are done (2026-10-06, haynes-ops #3471, KICKOFF 8.7). The templates
   carry an all-zero placeholder image digest until KICKOFF B5 publishes
   `ghcr.io/thaynes43/dev-env:2.x.y`; B5's haynes-ops follow-up sets the real digest.
-- The three config ConfigMaps in `dev-agents`, before the HelmReleases (KICKOFF 8.8a):
-  `dev-env-config-claude` (`CLAUDE.md`, `mcp.json`, `agent-*.md`), `dev-env-config-codex`
-  (`config.toml`, `AGENTS.header.md`) and `dev-env-scripts` (`bashrc.sh`). The templates
-  mount them at `/opt/dev-env/config/claude`, `/opt/dev-env/config/codex` and
-  `/opt/dev-env/scripts`; a session pod waits in `ContainerCreating` without them. The
-  source is v1's `apps/dev/dev-env/app/resources/config/**` and `bashrc.sh`, copied
-  into a v2 app and adapted (never editing v1's files). Open in the design: the v2 text
-  of `CLAUDE.md` and `bashrc.sh`, and the mount for Codex's `requirements.toml`
-  (`/etc/codex/`, DESIGN-001 6.3).
+- The four config ConfigMaps in `dev-agents`, before the HelmReleases (KICKOFF 8.8a,
+  D-49): `dev-env-config-claude` (`CLAUDE.md`, `mcp.json`, `agent-*.md`),
+  `dev-env-config-codex` (`config.toml`, `AGENTS.header.md`),
+  `dev-env-codex-requirements` (`requirements.toml`) and `dev-env-scripts`
+  (`bashrc.sh`). The templates mount them at `/opt/dev-env/config/claude`,
+  `/opt/dev-env/config/codex`, `/etc/codex` and `/opt/dev-env/scripts`; a session pod
+  waits in `ContainerCreating` without them. The source is v1's
+  `apps/dev/dev-env/app/resources/config/**` and `bashrc.sh`, copied into the v2 app
+  `apps/dev-env-system/session-config/` and adapted (never editing v1's files), with a
+  new `CLAUDE.md` for a session pod.
 - Kyverno `verify-thaynes43-images`: add the `thaynes43/dev-env` workflow identity.
 - Renovate: hold the v1 HelmRelease below `2.0.0`.
 - CNPs of in-cluster MCP services that admit only the v1 pod (the haynesnetwork hop,
