@@ -1636,6 +1636,80 @@ holds the `haynes-ops-bot` App key and mints its token (haynes-ops only; content
 pull requests, issues; no workflows) into `dev-env-ops-gh-token`, which only
 `ops`-profile pods mount (D-18). They never get the 23-repo dev bot.
 
+**D-52 (2026-10-06, plan 01 step 6). The minimal keeper: what it mints, where it
+writes, when it refreshes and retries, how it stays the one owner, and what
+haynes-ops gives it.**
+
+- **Shape.** `dev-env-keeper` (D-38) runs a controller-runtime manager with no
+  controllers, for its Lease, its probes and one Runnable, `internal/keeper`, that
+  runs only on the leader. Its writes go through an uncached client, so it never
+  lists or watches a Secret. Each credential is a Job with its
+  own schedule. Plan 01 has one, the haynes-dev-bot installation token. The Max
+  login (D-11), the Codex login (D-12) and the ops bot's token (above) come later as
+  more Jobs, and so do the HTTPS endpoint for the operator (6.10, 6.11) and the
+  expiry pages (6.1, 6.2).
+- **The App.** The keeper reads the App from a directory, `--github-app-dir`
+  (default `/etc/dev-env-keeper/github-dev-bot`): the mount of Secret
+  `dev-env-keeper-github-dev-bot` in `dev-env-system`, which an ExternalSecret fills
+  from v1's 1Password item `github-dev-bot`. Its files: `client-id` (property
+  `GITHUB_BOT_APP_CLIENT_ID`; the JWT's issuer), `app-id` (`GITHUB_BOT_APP_ID`; the
+  issuer only when there is no client ID), `installation-id`
+  (`GITHUB_BOT_APP_INSTALLATION_ID`) and `private-key` (`GITHUB_BOT_APP_PRIVATE_KEY`,
+  PEM, PKCS #1 or #8). It reads them at every mint, so a key rotated in 1Password
+  arrives with the kubelet's next sync of the mount, without a restart. Only the
+  keeper mounts that Secret. The App is haynes-dev-bot, App ID 4291021, installed on
+  all of Tom's repositories.
+- **The mint is v1's.** A JWT (RS256, dated 60 s back, 10 minutes of life) for
+  `POST /app/installations/{id}/access_tokens`, with v1's down-scoped set as the
+  default of `--gh-token-permissions`: contents, pull requests, workflows and issues
+  write; checks and actions read. On 2026-10-06 the App also holds `secrets: write`,
+  which the down-scope keeps out of every pod. A permission the App lacks makes
+  GitHub refuse the mint with 422, so a new one is granted on the App and approved
+  on the installation before it is added here.
+- **The write.** One JSON merge patch on `dev-agents/dev-env-gh-token` sets
+  `data.gh_token` (the token and a newline, as v1's file) and the annotations
+  `dev-env.haynesops.com/expires-at` and `dev-env.haynesops.com/written-at`, with
+  field manager `dev-env-keeper`. The API server applies a patch as one update and
+  the kubelet swaps a mounted Secret's files in one step, so a reader never sees half
+  a token. The keeper never creates, lists or reads the Secret: GitOps creates it
+  empty and the Role names it. A missing Secret is an error that says so, retried.
+- **The schedule.** A mint as soon as the keeper leads, then again after 40 minutes
+  or two thirds of the token's life, whichever is sooner, and never sooner than
+  30 s. After a failure it retries in 10 s, doubling to at most 5 minutes, each wait
+  varied by up to a fifth either way: eight attempts inside the 20-minute margin.
+  Its state is in memory only. A new keeper mints at once and never trusts what an
+  earlier one wrote; a mint costs nothing, and old tokens stay valid until they
+  expire.
+- **One owner.** One replica with `Recreate`, and leader election on the Lease
+  `dev-env-keeper.dev-env.haynesops.com` in `dev-env-system` (15 s, renewed within
+  10 s). A second keeper, such as a pod on a partitioned node that has not stopped,
+  waits. A keeper that loses the Lease exits. One that stops releases it, so the
+  next takes over at once. For the gh token two owners would be harmless; for the
+  refresh token of plan 03 they are not, so the guarantee comes first. An envtest
+  suite proves it as the keeper's ServiceAccount, with exactly the Roles below.
+- **Health.** `/healthz` and `/readyz` on 8081. Ready means every credential holds
+  a value this process wrote and none has expired. A keeper that does not lead, or
+  whose mints have failed for a token's whole life, is not ready, so the cluster's
+  pod-not-ready alert covers a dark gh token until the keeper pages on its own. No
+  metrics of its own: controller-runtime's serve on 8080, which no policy admits
+  yet.
+- **Nothing secret in a log.** Tokens and the JWT live in a type that prints,
+  marshals and logs as `[redacted]`. A refusal from GitHub logs GitHub's `message`
+  only, never the body. A write error is scrubbed of the token, raw and in base64.
+  The tests search every log for the token, the JWT and each line of the key.
+- **RBAC.** 6.11's row, plus Events: a Role in `dev-agents` with Secrets get, update
+  and patch on the four names; a Role in `dev-env-system` with Leases get, create
+  and update, and Events create and patch (leader election records one when it
+  takes the Lease). No `create` on Secrets, no list, no watch. Plan 01's "In
+  haynes-ops" list carries this, the ExternalSecret and the Deployment for 8.8 and
+  8.9.
+
+Rationale: the protocol, the permission set and the file are v1's, so nothing in a
+session changes, and the PEM stays in one pod. The Lease turns "one replica" from a
+convention into a guarantee before the keeper holds a refresh token. Readiness
+tied to the token, not to the process, makes a broken key or a GitHub outage show
+up where the cluster already alerts.
+
 ### 6.5 MCP servers
 
 **D-14.** Registration stays per pod: agentd runs v1's loop (`claude mcp add-json -s
@@ -2023,7 +2097,7 @@ anything more is a grant; nothing in the three dev-env namespaces.**
 | `dev-agents/grant-<id>` (one per kube grant) | Exactly the granted role, in the granted namespaces, until the grant expires, under `dev-env-identity-guard`. | Created and deleted by the broker. Its token lives in the session pod's tmpfs. Never valid in the three dev-env namespaces. |
 | `dev-env-system/dev-env-operator` | Roles in `dev-agents` and `dev-tools`: pods (create, delete, get, list, watch, patch), `pods/exec` create, `pods/log` get, `pods/eviction` create, PVCs and Services (create, delete, get, list, watch), namespaced CiliumNetworkPolicies in `dev-tools` (tool ingress and declared egress) and delete on namespaced CiliumNetworkPolicies in `dev-agents` (the expiry backstop; only grants live there), events. No write on `CiliumClusterwideNetworkPolicy`. ClusterRole: its own CRD group (with `agentsessions/finalizers` update), `tokenreviews` create. Leases in its own namespace, and `get`, `list`, `watch` on the ConfigMap `dev-env-templates` there by `resourceNames` (D-44). | No cluster-wide pod or PVC rights, no Secrets, no `bind`. |
 | `dev-env-system/dev-env-broker` | RoleBindings and ClusterRoleBindings (create, delete); `bind` only on the grant role catalog by `resourceNames`; ServiceAccounts and `serviceaccounts/token` in `dev-agents`; CiliumNetworkPolicies in `dev-agents`; `pods/exec` in `dev-agents` (installs grant tokens); status of `AccessGrant`; read on the `dev-env.haynesops.com` group for the console's session list. No write on `CiliumClusterwideNetworkPolicy`, admission policies or Secrets. | The most privileged v2 identity: it can hand out the break-glass role. It accepts approvals only from Tom's Authentik identity and runs where agents cannot write or exec. |
-| `dev-env-system/dev-env-keeper` | Role in `dev-agents`: Secrets get, update and patch on `resourceNames` `dev-env-gh-token`, `dev-env-ops-gh-token`, `dev-env-claude-live`, `dev-env-codex-live` only; for credential grants (Q-07), also `pods/exec` in `dev-agents` and read on `AccessGrant`. ClusterRole: `tokenreviews` create. Leases in its own namespace. | The four Secrets are created empty by GitOps, so no `create` is needed. |
+| `dev-env-system/dev-env-keeper` | Role in `dev-agents`: Secrets get, update and patch on `resourceNames` `dev-env-gh-token`, `dev-env-ops-gh-token`, `dev-env-claude-live`, `dev-env-codex-live` only; for credential grants (Q-07), also `pods/exec` in `dev-agents` and read on `AccessGrant`. ClusterRole: `tokenreviews` create. Leases (get, create, update) and Events (create, patch) in its own namespace (D-52). | The four Secrets are created empty by GitOps, so no `create` is needed. |
 | `dev-env-system/dev-env-gpu-guard` (DaemonSet on GPU nodes) | Role in `dev-tools`: pods get, list; `pods/eviction` create. Read on the budgeter's Lease in `dev-env-system`. | Evicts agent GPU pods only; works when the operator is down (8.2). |
 | `upgrade-agent/<caller>` (alert-responder, upgrade-shepherd, triage, health-gate, the curation CronJob) | No new Kubernetes rights. Their projected token for the `dev-env-operator` audience lets them call the API, within their `CallerPolicy` (3.7). | They no longer need write on the `upgrade-work-orders` ConfigMap once plan 10 moves them. |
 | `dev-agents/dev-env-workbench` | Role in `dev-agents`: pods get, list; `pods/exec` create. | Tom's IDE; runs no agents by default. |
@@ -3220,3 +3294,4 @@ step it names.
 | D-48 | `agentd ctl rescue` writes one bundle per clone of its unpushed refs, thin against `origin/HEAD`, to `rescue/<session>/<stamp>/` on the shared volume with `manifest.json` last; it checks each bundle there before it reports `ok`; `--stop-agent` stops the CLI first | 3.6 |
 | D-49 | The session config: four ConfigMaps in `dev-agents` built from v2 copies of v1's files, with a new `CLAUDE.md` for a session pod; `requirements.toml` keeps v1's floor, in its own ConfigMap at `/etc/codex` in every pod; `bashrc.sh` exports no `GH_TOKEN` | 3.6 |
 | D-50 | `agent-run` v2 of plan 01: `-p`, `list`, `show`, `reap` and `fleet`; v1's defaults and checks before a create, with the API's effort table moved to `apiv1`; a new idempotency key per run, kept across retries; it waits for the pod and prints the scheduler's reason; the API found from flags, `DEV_ENV_API_*`, the session pod's settings, or a token minted for the pod's own ServiceAccount; exit codes 0 to 5 | 3.5 |
+| D-52 | The minimal keeper: the haynes-dev-bot token minted v1's way from an App directory read at every mint, merged into `dev-env-gh-token` by one patch, every 40 minutes or two thirds of its life, retried from 10 s to 5 minutes with jitter; one replica behind a Lease; ready while its token lives; nothing secret logged | 6.4 |

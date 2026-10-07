@@ -1,8 +1,8 @@
 # 01: foundation, task mode
 
-**Status:** in progress: KICKOFF B1 to B4 landed (#14, #15, #17, #18); steps 1 to 4
-and 7 landed on 2026-10-06 (the CRD #24; pods and volumes #29, #30; the `/v1` API #31;
-agentd #25, #27, #28; `agent-run` #34)
+**Status:** in progress: KICKOFF B1 to B4 landed (#14, #15, #17, #18); steps 1 to 4,
+6 and 7 landed on 2026-10-06 (the CRD #24; pods and volumes #29, #30; the `/v1` API #31;
+agentd #25, #27, #28; the keeper #PRNUM; `agent-run` #34)
 **Depends on:** Q-01 (build), Q-02 (Go), Q-04 (requests and limits, no cap) and Q-05
 (storage), all decided 2026-10-06; spikes S-7 (clone path), S-8 (gasha01 speed) and
 S-12 (the guard)
@@ -56,7 +56,14 @@ step. Tick a step in the PR that lands it.
   - [ ] the operator: it runs that rescue by exec before a suspend deletes the pod,
     records the verdict in status, and archives a reaped session's volume only
     after a verified rescue; `patch` on PVCs in its RBAC.
-- [ ] 6. The minimal keeper: mint the gh token every 40 minutes.
+- [x] 6. The minimal keeper: mint the gh token every 40 minutes (#PRNUM; D-52).
+  `dev-env-keeper` mints the haynes-dev-bot installation token v1's way and merges
+  it into `dev-agents/dev-env-gh-token` (`gh_token`) by one patch, every 40 minutes
+  or two thirds of its life, retrying from 10 s to 5 minutes with jitter. It reads
+  the App from a mounted directory at every mint, runs only while it holds its
+  Lease, is ready while the token it wrote lives, and logs nothing secret.
+  `internal/keeper`'s envtest suite runs it as its ServiceAccount with exactly the
+  Roles below. What 8.8 and 8.9 must give it is under "In haynes-ops".
 - [x] 7. `agent-run` v2: `-p`, `list`, `reap` and `fleet` (#34; D-50), plus `show`.
   `internal/agentrun` holds the commands; `make build` checks that the binary links
   no Kubernetes library. It finds the API in a session pod, mints a token for the
@@ -101,6 +108,40 @@ step. Tick a step in the PR that lands it.
   [dev-env]` only, so the pod can mint its own token for audience `dev-env-operator`
   (D-46). The v1 pod also needs the API's CA as a file for `DEV_ENV_API_CA_FILE`
   (D-50): choose a way that does not restart the v1 pod, or hold that PR for Tom.
+- **The keeper's inputs (D-52), for 8.8 and 8.9.** Never log or commit a value.
+  - ExternalSecret `dev-env-keeper-github-dev-bot` in `dev-env-system`
+    (ClusterSecretStore `onepassword-connect`), target a Secret of the same name, from
+    v1's 1Password item `github-dev-bot`: `client-id` from property
+    `GITHUB_BOT_APP_CLIENT_ID`, `app-id` from `GITHUB_BOT_APP_ID`, `installation-id`
+    from `GITHUB_BOT_APP_INSTALLATION_ID`, `private-key` from
+    `GITHUB_BOT_APP_PRIVATE_KEY`. The App is haynes-dev-bot (App ID 4291021). Only the
+    keeper mounts it; v1's `dev-env-bot` ExternalSecret stays as it is.
+  - The keeper-owned Secrets in `dev-agents`, created empty (type `Opaque`, no
+    `data`): `dev-env-gh-token`, which plan 01 writes, and `dev-env-ops-gh-token`,
+    `dev-env-claude-live` and `dev-env-codex-live` for plans 10, 03 and 04, so the
+    Role's names and the templates' `ops` mount resolve. Give each the annotation
+    `kustomize.toolkit.fluxcd.io/ssa: IfNotPresent`, so Flux creates it once and
+    never touches what the keeper writes (`data.gh_token` and the
+    `dev-env.haynesops.com/expires-at` and `written-at` annotations).
+  - RBAC for ServiceAccount `dev-env-system/dev-env-keeper`: a Role in `dev-agents`
+    with `secrets` get, update and patch on `resourceNames` `dev-env-gh-token`,
+    `dev-env-ops-gh-token`, `dev-env-claude-live` and `dev-env-codex-live`; a Role in
+    `dev-env-system` with `coordination.k8s.io` `leases` get, create and update, and
+    core `events` create and patch. No Secret `create`, list or watch anywhere; no
+    ClusterRole until plan 03 (`tokenreviews` create, for its 8443 endpoint). The
+    envtest suite in `internal/keeper` runs the keeper with exactly these Roles.
+  - The keeper's Deployment (8.9): one replica, `strategy: Recreate`; image
+    `ghcr.io/thaynes43/dev-env-operator` at the operator's pin, with `command:
+    [/usr/local/bin/dev-env-keeper]` (the image's entrypoint is the operator);
+    ServiceAccount `dev-env-keeper`; label `app.kubernetes.io/name: dev-env-keeper`,
+    which haynes-ops #3469's policy selects; `POD_NAMESPACE` from the downward API;
+    the App Secret mounted read-only at `/etc/dev-env-keeper/github-dev-bot` with
+    `defaultMode: 0440` and pod `fsGroup: 65532` (distroless nonroot); liveness
+    `/healthz` and readiness `/readyz` on 8081; requests 10m CPU and 64Mi, limits
+    200m CPU and 256Mi; the usual nonroot, read-only-root, no-capabilities security
+    context. No flags are needed: the defaults are the names above. No Service until
+    plan 03 adds the 8443 endpoint. #3469's policy already admits the API server and
+    `api.github.com`; the kubelet's probes come from the host, which Cilium admits.
 - Operator and keeper HelmReleases, RBAC (DESIGN-001 6.11: cluster-wide read for
   agents, v1's write verbs under the `dev-env-agent-guard` and
   `dev-env-identity-guard` admission policies and the Kyverno exec rule, nothing in

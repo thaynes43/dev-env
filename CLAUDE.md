@@ -23,8 +23,8 @@ this repo publishes signed images, haynes-ops pins and deploys them.
 `AgentSession` CRD (plan 01 step 1), the operator's pod and volume reconciler (step 2),
 its `/v1` API (step 3), agentd's config rendering, clone, task runner, heartbeat
 and rescue report (step 4), agentd's rescue bundle (step 5, part 1) and
-`agent-run`'s `-p`, `list`, `show`, `reap` and `fleet` (step 7) are built.** The
-keeper is still an honest stub that says which plan step builds it. The build sessions follow
+`agent-run`'s `-p`, `list`, `show`, `reap` and `fleet` (step 7) and the minimal
+keeper, which mints the gh token every 40 minutes (step 6), are built.** The build sessions follow
 [`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md). v1 keeps running from
 haynes-ops (`kubernetes/main/apps/dev/dev-env/`, `scripts/dev-env/Dockerfile`) until
 v2 proves itself and Tom approves the cutover. The saga:
@@ -41,7 +41,7 @@ release-please-config.json, .release-please-manifest.json   one repo version, `g
 api/v1alpha1/            CRD types, group dev-env.haynesops.com (AgentSession); depends on apimachinery only.
                          Its envtest suite proves the schema's rules (D-39) on a real API server
 cmd/dev-env-operator/    the operator; the broker will be its second mode (DESIGN-001 3.1, 6.12)
-cmd/dev-env-keeper/      the keeper, its own binary in the operator image (D-38)
+cmd/dev-env-keeper/      the keeper, its own binary in the operator image (D-38); main only, the work is internal/keeper
 cmd/agentd/              the in-pod supervisor: `run`, `run-agent`, `render`, `ctl status|rescue [--stop-agent]` (D-40 to D-43, D-48)
 cmd/agent-run/           the CLI, one static binary (CGO_ENABLED=0, D-06); main only, the commands are internal/agentrun
 internal/version/        the build identity every binary's `version` prints
@@ -57,6 +57,10 @@ internal/apiserver/apiv1/  the API's wire types, error codes and Claude effort t
 internal/agentrun/       agent-run's commands (D-50): -p, list, show, reap, fleet; finds the API and a token in a session
                          pod, in another pod (a minted token) or from flags; imports the standard library, apiv1 and
                          agentd's protocol only (`make build` checks); tests run against an httptest TLS server
+internal/keeper/         the keeper (D-52): mints the haynes-dev-bot token into dev-agents/dev-env-gh-token every 40 minutes
+                         behind a Lease; one Job per credential, so plans 03, 04 and 10 add theirs. Unit tests use a fake
+                         GitHub (httptest) and a fake clock; its envtest suite runs it as its ServiceAccount with exactly
+                         the Roles haynes-ops gives it
 internal/agentd/         agentd: config rendering (the dev-init.sh port), clone and worktree, the task runner, heartbeat,
                          status, rescue and its bundle on the shared volume (D-48); tests fake claude and tmux and run
                          git against a bare repo in t.TempDir()
