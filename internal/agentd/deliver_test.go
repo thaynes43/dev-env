@@ -144,14 +144,30 @@ func TestTailLogAndSharedCopy(t *testing.T) {
 	if err := copyLogToShared(s, "s-1"); err != nil {
 		t.Fatal(err)
 	}
-	if fi2, _ := os.Stat(s.SharedLogPath("s-1")); !fi2.ModTime().Equal(fi.ModTime()) {
+	// A copy renames a new file into place, so an unchanged log keeps the
+	// same inode: the copy was skipped.
+	if fi2, _ := os.Stat(s.SharedLogPath("s-1")); !os.SameFile(fi, fi2) {
 		t.Error("an unchanged log was copied again")
+	}
+	// A changed log is copied again: a new inode with the new content.
+	writeFile(t, s.LogPath("s-1"), "one\ntwo\nthree\nfour\n")
+	if err := copyLogToShared(s, "s-1"); err != nil {
+		t.Fatal(err)
+	}
+	if fi3, _ := os.Stat(s.SharedLogPath("s-1")); os.SameFile(fi, fi3) {
+		t.Error("a changed log was not copied")
+	}
+	if err := os.Remove(s.SharedLogPath("s-1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyLogToShared(s, "s-1"); err != nil {
+		t.Fatal(err)
 	}
 	if err := os.Remove(s.LogPath("s-1")); err != nil {
 		t.Fatal(err)
 	}
 	buf.Reset()
-	if err := TailLog(s, "s-1", 5, &buf); err != nil || buf.String() != "one\ntwo\nthree\n" {
+	if err := TailLog(s, "s-1", 5, &buf); err != nil || buf.String() != "one\ntwo\nthree\nfour\n" {
 		t.Errorf("from the shared copy: %q %v", buf.String(), err)
 	}
 }
