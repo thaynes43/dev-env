@@ -80,10 +80,16 @@ B2). Before that, the check does not exist and the ruleset would block every mer
 forever. It is the one required check; the Claude review stays advisory and is never
 added.
 
-**Ready to run (2026-10-07).** `CI - Success` has reported on many PRs, and Tom made
-the repo public on 2026-10-07 (DESIGN-001 Q-12, ruled B), so GitHub enforces the
-ruleset at no cost. On 2026-10-07 the repo still had no ruleset and `main` was
-unprotected. This part stays Tom's to run.
+**Done (2026-10-07).** The ruleset exists, so the steps below are kept as the record and
+as the way to rebuild it. Checked on 2026-10-07 with `gh api
+repos/thaynes43/dev-env/rulesets`: "Protect Main" (id 24655718) is active on
+`~DEFAULT_BRANCH` with `deletion`, `non_fast_forward`, `required_linear_history`,
+`pull_request` (0 approvals) and `required_status_checks` (`CI - Success`, integration
+id 15368 = GitHub Actions, up-to-date off). Private vulnerability reporting is enabled
+(`gh api repos/thaynes43/dev-env/private-vulnerability-reporting`). Tom set approval for
+all outside contributors' fork PRs, secret scanning and push protection; the bot's token
+cannot read them (`security_and_analysis` is null, the fork-PR approval endpoint
+answers 403). Renovate auto-merge was turned on in the PR that recorded this.
 
 1. Check that the check has reported:
    `gh api repos/thaynes43/dev-env/commits/main/check-runs -q '.check_runs[].name'`
