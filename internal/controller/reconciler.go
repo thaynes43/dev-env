@@ -44,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/templates"
 )
 
@@ -216,6 +217,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if err := r.ensure(ctx, &s, t, &obs); err != nil {
 			return ctrl.Result{}, err
 		}
+		res, stop, err := r.idleTimer(ctx, &s, t, &obs)
+		if err != nil || stop {
+			return res, err
+		}
+		result = res
 	case !obs.pod.missing && obs.pod.foreign == "":
 		// Suspend or delete asks for the pod to go, or a hold pod is no longer
 		// needed: rescue first, then 5.1's guard decides.
@@ -304,6 +310,75 @@ func (r *Reconciler) removePod(ctx context.Context, s *v1alpha1.AgentSession, ob
 	}
 	log.FromContext(ctx).Info("deleted the session pod", "pod", pod.Name, "uid", pod.UID, "hold", isHoldPod(pod), "suspend", s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended, "deleted", !s.DeletionTimestamp.IsZero())
 	return ctrl.Result{}, false, nil
+}
+
+// IdleTimerSuspender is the value of AnnotationSuspendedBy when the idle timer
+// suspended the session (D-60).
+const IdleTimerSuspender = "idle-timer"
+
+// idleTimer suspends a session that has been idle past its window (D-09,
+// D-60): it writes spec.operatingMode Suspended, as the API's suspend does,
+// and the usual rescue and pod delete follow. Otherwise it asks to be called
+// back at the deadline; heartbeats, which update the session every minute,
+// also reconcile it. stop means the reconcile ends here with res.
+func (r *Reconciler) idleTimer(ctx context.Context, s *v1alpha1.AgentSession, t *templates.Templates, obs *observation) (res ctrl.Result, stop bool, err error) {
+	deadline, why, ok := idleDeadline(s, t, obs.pod)
+	if !ok {
+		return ctrl.Result{}, false, nil
+	}
+	now := time.Now()
+	if now.Before(deadline) {
+		return ctrl.Result{RequeueAfter: deadline.Sub(now) + time.Second}, false, nil
+	}
+	orig := s.DeepCopy()
+	s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+	if s.Annotations == nil {
+		s.Annotations = map[string]string{}
+	}
+	s.Annotations[v1alpha1.AnnotationSuspendedBy] = IdleTimerSuspender
+	if err := r.Client.Patch(ctx, s, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})); err != nil {
+		if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+			return ctrl.Result{RequeueAfter: time.Second}, true, nil
+		}
+		return ctrl.Result{}, true, fmt.Errorf("suspend an idle session: %w", err)
+	}
+	log.FromContext(ctx).Info("suspended an idle session", "why", why)
+	r.event(s, corev1.EventTypeNormal, "Suspend", "IdleSuspend", why)
+	return ctrl.Result{RequeueAfter: time.Second}, true, nil
+}
+
+// idleDeadline is when the idle timer suspends the session, and why (D-60). It
+// runs only while the session's own pod runs and is Ready, and its agent has
+// reported a state that is not busy: a busy agent, or one that has not
+// reported yet, is never suspended. The window is spec.lifecycle's, else the
+// templates' for the mode (D-09: a task after 1h, the others after 72h). It
+// counts from the newest of the agent's lastActivity, the pod's start and the
+// API's last resume, so a resumed session gets a whole window.
+func idleDeadline(s *v1alpha1.AgentSession, t *templates.Templates, pod owned[*corev1.Pod]) (time.Time, string, bool) {
+	a := s.Status.Agent
+	if pod.missing || pod.foreign != "" || isHoldPod(pod.obj) || !pod.obj.DeletionTimestamp.IsZero() ||
+		pod.obj.Status.Phase != corev1.PodRunning || !podReady(pod.obj) || a == nil || a.Status == "" || a.Status == protocol.AgentBusy {
+		return time.Time{}, "", false
+	}
+	window := t.IdleSuspendAfter(s.Spec.Mode)
+	if l := s.Spec.Lifecycle; l != nil && l.IdleSuspendAfter != nil {
+		window = l.IdleSuspendAfter.Duration
+	}
+	last := s.CreationTimestamp.Time
+	if st := pod.obj.Status.StartTime; st != nil && st.After(last) {
+		last = st.Time
+	}
+	if a.LastActivity != nil && a.LastActivity.After(last) {
+		last = a.LastActivity.Time
+	}
+	// A resume that landed while an idle suspend's rescue ran keeps the old
+	// pod, whose start and activity are old: count from the resume as well.
+	if at, err := time.Parse(time.RFC3339, s.Annotations[v1alpha1.AnnotationResumedAt]); err == nil && at.After(last) {
+		last = at
+	}
+	why := fmt.Sprintf("the agent was %s and nothing happened since %s, %s ago; the idle window is %s (D-09)",
+		a.Status, last.UTC().Format(time.RFC3339), time.Since(last).Round(time.Minute), window)
+	return last.Add(window), why, true
 }
 
 // holdWait says why a hold pod stays and when to look at it again (D-55). A

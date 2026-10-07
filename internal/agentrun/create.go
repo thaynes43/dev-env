@@ -194,7 +194,7 @@ func (a *app) create(ctx context.Context, args []string) error {
 		a.outf("  %s %s, %s, size %s, repo %s\n", sess.Agent, sess.Model, effortText(sess.Effort), firstOf(sess.Size, "M"), sess.Repo)
 	}
 
-	final, waitErr := a.waitForPod(ctx, c, sess, wait)
+	final, waitErr := a.waitForPod(ctx, c, sess, wait, false)
 	switch cmd.c.output {
 	case outputName:
 		a.outf("%s\n", sess.Name)
@@ -246,8 +246,11 @@ func (a *app) readPrompt(path string) (string, error) {
 // waitForPod polls the session until its pod is Ready, it fails, the scheduler
 // cannot place it, or wait is over. It returns the last view it read; an error
 // means it could not read one after the create.
-func (a *app) waitForPod(ctx context.Context, c *conn, sess apiv1.Session, wait time.Duration) (apiv1.Session, error) {
-	if wait <= 0 || settled(sess) {
+// waitForPod polls the session until its pod's start is over (settled). For a
+// resume, the session is still Suspended until the operator starts its new
+// pod, so Suspended does not count as settled then.
+func (a *app) waitForPod(ctx context.Context, c *conn, sess apiv1.Session, wait time.Duration, resuming bool) (apiv1.Session, error) {
+	if wait <= 0 || settled(sess, resuming) {
 		return sess, nil
 	}
 	// The deadline is on env's clock, so tests can run it on a fake one.
@@ -265,7 +268,7 @@ func (a *app) waitForPod(ctx context.Context, c *conn, sess apiv1.Session, wait 
 			return sess, err
 		}
 		sess = cur
-		if settled(sess) {
+		if settled(sess, resuming) {
 			return sess, nil
 		}
 		if podReadyReason(sess) == unschedulable {
@@ -283,10 +286,12 @@ func (a *app) waitForPod(ctx context.Context, c *conn, sess apiv1.Session, wait 
 }
 
 // settled is a session whose start is over, one way or the other.
-func settled(s apiv1.Session) bool {
+func settled(s apiv1.Session, resuming bool) bool {
 	switch s.Phase {
-	case "Running", "Idle", "Failed", "Suspended", "Archived":
+	case "Running", "Idle", "Failed", "Archived":
 		return true
+	case "Suspended":
+		return !resuming
 	}
 	return s.Reaping
 }

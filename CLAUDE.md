@@ -56,7 +56,7 @@ internal/apiserver/      the operator's /v1 API (D-46): HTTPS runnable, TokenRev
                          heartbeat, fleet and grants (D-56) handlers. Unit tests use the fake client; its envtest suite mints real
                          tokens and serves through a manager wired as the operator's
 internal/apiserver/apiv1/  the API's wire types, error codes and Claude effort table, standard library only, for agent-run
-internal/agentrun/       agent-run's commands (D-50, D-58): -p, --local, list, show, reap, attach, detach, fleet; finds the API and a token in a session
+internal/agentrun/       agent-run's commands (D-50, D-58, D-60): -p, --local, list, show, reap, suspend, resume, attach, detach, fleet; finds the API and a token in a session
                          pod, in another pod (a minted token) or from flags; imports the standard library, apiv1 and
                          agentd's protocol only (`make build` checks); tests run against an httptest TLS server
 internal/keeper/         the keeper (D-52): mints the haynes-dev-bot token into dev-agents/dev-env-gh-token every 40 minutes

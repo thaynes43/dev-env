@@ -138,6 +138,9 @@ func (a *app) printSession(s apiv1.Session) {
 		phase += ", reaping: rescue, then suspend and archive"
 	}
 	row("phase", "%s", phase)
+	if s.SuspendedBy != "" && s.OperatingMode == "Suspended" {
+		row("suspended by", "%s", s.SuspendedBy)
+	}
 	if s.Pending != "" && s.Phase == "Pending" {
 		row("pending", "%s", s.Pending)
 	}

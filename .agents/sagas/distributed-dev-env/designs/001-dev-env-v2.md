@@ -273,7 +273,9 @@ one against a real API server.
   raise its own limits. A different ask is a new session. The operator never writes
   spec either: what it resolves (the default profile and tools, the timers per mode)
   it reads from the templates, and what it decides at run time (for example the
-  fallback model a summoned session moved to, V-04) goes into status. A changed
+  fallback model a summoned session moved to, V-04) goes into status. The one
+  exception is the idle timer, which writes `operatingMode` as a client's suspend
+  does (D-60). A changed
   value is refused at its field; an added or removed field by one rule on spec.
 - **Formats:** `repo` is a name, not a path (no `/`, not `.` or `..`); `base` may
   not start with `-`, so git never reads it as an option; `profile`, `tools`,
@@ -1388,6 +1390,51 @@ sign of activity; the operator's timers judge the window.**
 
 The standby keeps v1's circuit breaker: if three standbys are created inside 30
 minutes, the operator stops creating them and reports `loop suspected`.
+
+**D-60 (2026-10-07, plan 02 step 6). Suspend and resume are API calls that set
+`spec.operatingMode`, and the idle timer sets it the same way.**
+
+- **The routes.** `POST /v1/sessions/{name}/suspend` and `/resume` (3.4), with no
+  body. Each patches `spec.operatingMode`, the field D-39 lets a client change, with
+  the resourceVersion as a precondition. A suspend also writes the annotation
+  `dev-env.haynesops.com/suspended-by` (the caller); a resume removes it and writes
+  `dev-env.haynesops.com/resumed-at`. The
+  answer is 202 with the session once the change is made, 200 when the session is
+  already in that mode, and 409 for a session being reaped: a reap is final. Any
+  caller may suspend or resume any session, as any caller may reap one (D-46),
+  because neither loses work. The reconciler does the rest. A suspend rescues the
+  pod and deletes it, keeping the volume (D-51). A resume supersedes the last rescue
+  and starts a new pod on the volume, where agentd resumes the conversation (D-58).
+  `agent-run suspend <name>...` and `agent-run resume <name>` call them; resume waits
+  for the new pod, as a create does, and prints how to attach.
+- **The idle timer.** While a session's own pod runs and is Ready and its agent has
+  reported a state other than `busy` (D-59), the operator computes a deadline. It is
+  the newest of the agent's `lastActivity`, the pod's start, the session's creation
+  and the API's last resume (`resumed-at`), plus the window. The window is `spec.lifecycle.idleSuspendAfter`, else
+  the templates' `lifecycle.taskIdleSuspendAfter` for a task and
+  `lifecycle.idleSuspendAfter` for the other modes, else D-09's defaults (1h and
+  72h). Counting from the pod's start gives a resumed session a whole window. At the
+  deadline the operator sets `operatingMode: Suspended` and the annotation's value
+  `idle-timer`, and emits an `IdleSuspend` event. Before it, it asks to be called
+  back at the deadline; heartbeats reconcile the session every minute as well. An
+  agent that is busy, or has never reported, is never suspended by the timer.
+- **A resume during an idle suspend's rescue.** The rescue takes minutes. A resume
+  that lands meanwhile keeps the old pod, and the rescue's record is dropped (D-51).
+  That pod's start and activity are old, so without `resumed-at` the timer would
+  suspend it again at once and undo the resume. The rescue's `--stop-agent` has
+  stopped the agent in that pod, though, so it runs without one until the timer
+  suspends it a window after the resume. A suspend and a resume then give it a new
+  pod that resumes the conversation. The race is narrow, and nothing is lost.
+- **The one spec write.** D-39 says the operator never writes spec. The idle timer is
+  the exception: it changes `operatingMode` only, exactly as a client's suspend does,
+  on the session's own timer. Everything else the operator decides still goes into
+  status.
+- **The timers in the templates.** `dev-env-templates` takes an optional `lifecycle`
+  block (`taskIdleSuspendAfter`, `idleSuspendAfter`, `archiveAfter`,
+  `bundleRetention`), each a positive duration, each defaulting to D-09's value. The
+  revision leaves them out, because they reach no pod: a timer change marks no
+  session `Outdated`. The parse is strict, so haynes-ops adds the block only after
+  the operator that knows it is deployed.
 
 ### 4.4 Rescue before reap
 
@@ -3858,3 +3905,4 @@ credential grants) is open. ADR-001 was Accepted on
 | D-57 | The page on `RescueFailed` is a Prometheus alert: the operator serves `dev_env_session_rescue_failed` and `dev_env_sessions` from its cache at scrape time; haynes-ops' `DevEnvRescueFailed` (critical, 20 minutes) pages Tom through Alertmanager, and `DevEnvOperatorMetricsAbsent` pages when the series vanish | 4.4 |
 | D-58 | Local sessions run Claude's TUI in tmux on the static token; every later boot resumes the first launch's conversation in the TUI (`claude --resume`), so a task's prompt still runs once; run-agent gives a TUI the pane's terminal and records its pid and exit; render seeds `skipDangerousModePermissionPrompt`; `ctl prepare-restart`; `agent-run --local`, and `attach` and `detach` through `kubectl exec` for Tom only | 3.6 |
 | D-59 | Idle detection: agentd reports Claude's own status (`busy`, `idle`, `waiting`) for a TUI and `lastActivity`, the newest of the task's log, Claude's last status change, an attached tmux client (now) and v1's `wt_busy` worktree signals (walked at most every 5 minutes, within 20 seconds and 200,000 entries, else now); the operator's timers judge the window | 4.2 |
+| D-60 | Suspend and resume are `POST /v1/sessions/{name}/suspend` and `/resume`, which set `spec.operatingMode` and the `suspended-by` annotation; the idle timer sets the same field when an agent that is not busy has had no activity for its window (`spec.lifecycle`, else the templates' optional `lifecycle` block, else D-09); the only spec write the operator makes | 4.3 |

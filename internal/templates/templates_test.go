@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -226,5 +227,34 @@ func TestSizeQuantities(t *testing.T) {
 	}
 	if got := l.Limits[corev1.ResourceMemory]; got.String() != "24Gi" {
 		t.Errorf("L's memory limit = %s, want 24Gi", got.String())
+	}
+}
+
+// D-60: the timers are optional, take D-09's defaults when missing, are
+// checked, and are not part of the revision.
+func TestLifecycle(t *testing.T) {
+	plain, err := parse(t, example(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.IdleSuspendAfter(v1alpha1.ModeTask) != time.Hour || plain.IdleSuspendAfter(v1alpha1.ModeLocal) != 72*time.Hour ||
+		plain.ArchiveAfter() != 168*time.Hour || plain.BundleRetention() != 720*time.Hour {
+		t.Errorf("defaults: %v %v %v %v", plain.IdleSuspendAfter(v1alpha1.ModeTask), plain.IdleSuspendAfter(v1alpha1.ModeLocal), plain.ArchiveAfter(), plain.BundleRetention())
+	}
+	set, err := parse(t, example(t)+"\nlifecycle:\n  taskIdleSuspendAfter: 30m\n  idleSuspendAfter: 24h\n  archiveAfter: 72h\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.IdleSuspendAfter(v1alpha1.ModeTask) != 30*time.Minute || set.IdleSuspendAfter(v1alpha1.ModeRemote) != 24*time.Hour ||
+		set.ArchiveAfter() != 72*time.Hour || set.BundleRetention() != 720*time.Hour {
+		t.Errorf("set: %+v", set.Lifecycle)
+	}
+	if set.Revision() != plain.Revision() {
+		t.Errorf("a timer changed the revision: %s, was %s", set.Revision(), plain.Revision())
+	}
+	for _, bad := range []string{"\nlifecycle:\n  archiveAfter: -1h\n", "\nlifecycle:\n  idleSuspendAfter: 0s\n", "\nlifecycle:\n  sleepAfter: 1h\n"} {
+		if _, err := parse(t, example(t)+bad); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
 	}
 }

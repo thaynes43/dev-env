@@ -13,6 +13,8 @@ Usage:
                                                   list sessions, newest first
   agent-run show <name>                           show one session, with its task
   agent-run reap <name>...                        rescue, stop and archive sessions
+  agent-run suspend <name>...                     rescue and stop sessions, keeping their volumes
+  agent-run resume <name>                         start a suspended session again, conversation intact
   agent-run attach <name>                         attach to a session's TUI (Tom only)
   agent-run detach <name>                         detach every client from it (Tom only)
   agent-run fleet                                 show what runs and waits, by node and revision
@@ -93,6 +95,22 @@ v1's --interactive (a TUI with Remote Control) arrives with plan 03. --safe is
 gone: a session pod runs its agent without approval prompts, and the platform is
 the boundary.
 `,
+	"suspend": `Usage: agent-run suspend <name>... [-o json]
+
+Suspends each session: the operator rescues its work to a bundle on the shared
+volume, then stops its pod. The volume stays, with the worktree, the conversation
+and gitignored build output, so agent-run resume brings the session back as it
+was. The operator also suspends a session by itself once it has been idle for its
+window (a finished task after 1h, an interactive session after 72h); show says
+who suspended it.
+`,
+	"resume": `Usage: agent-run resume <name> [--wait <duration>] [-o json]
+
+Starts a suspended session again: a new pod on its volume, where the agent
+resumes the same conversation in its TUI (claude --resume). A task's prompt is
+never run again. agent-run waits up to --wait (default 30s) for the pod, then
+prints how to attach. A reaped session cannot be resumed.
+`,
 	"attach": `Usage: agent-run attach <name>
 
 Attaches your terminal to the session's TUI: kubectl exec -it into the session's
@@ -150,7 +168,7 @@ Prints the version, the commit, the Go version and the platform.
 `,
 	"help": `Usage: agent-run help [<command>]
 
-Prints help for agent-run, or for one command: run, list, show, reap, attach,
-detach, fleet, version.
+Prints help for agent-run, or for one command: run, list, show, reap, suspend,
+resume, attach, detach, fleet, version.
 `,
 }

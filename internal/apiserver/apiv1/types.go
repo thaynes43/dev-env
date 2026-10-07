@@ -18,6 +18,13 @@ const (
 // SessionPath is the route of one session.
 func SessionPath(name string) string { return SessionsPath + "/" + name }
 
+// SessionSuspendPath and SessionResumePath are a session's suspend and resume
+// routes (DESIGN-001 3.4, D-60). Each is a POST with no body.
+func SessionSuspendPath(name string) string { return SessionPath(name) + "/suspend" }
+
+// SessionResumePath is a session's resume route; see SessionSuspendPath.
+func SessionResumePath(name string) string { return SessionPath(name) + "/resume" }
+
 // TokenAudience is the audience of every token the API accepts (D-05). A token
 // for the API server's own audience is refused.
 const TokenAudience = "dev-env-operator"
@@ -93,9 +100,12 @@ type Session struct {
 	Lane           string   `json:"lane,omitempty"`
 	IdempotencyKey string   `json:"idempotencyKey,omitempty"`
 	// Prompt is in GET /v1/sessions/{name} only, never in a list.
-	Prompt        string    `json:"prompt,omitempty"`
-	OperatingMode string    `json:"operatingMode,omitempty"`
-	CreatedAt     time.Time `json:"createdAt"`
+	Prompt        string `json:"prompt,omitempty"`
+	OperatingMode string `json:"operatingMode,omitempty"`
+	// SuspendedBy says who suspended the session: "idle-timer" for the
+	// operator's idle timer (D-60), else the API caller.
+	SuspendedBy string    `json:"suspendedBy,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
 	// Reaping is set once the session is deleted: the operator rescues it,
 	// suspends it and archives it (D-10, D-45).
 	Reaping bool `json:"reaping,omitempty"`
