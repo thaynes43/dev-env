@@ -60,7 +60,7 @@ func (a *app) tmuxExec(ctx context.Context, verb string, args []string, interact
 	if len(pos) != 1 {
 		return usageError("%s takes one session name; agent-run list shows them", verb)
 	}
-	if a.env.Getenv("AGENTD_SESSION") != "" {
+	if a.inSessionPod() {
 		return fail(ExitAuth, "%s is for Tom, from the workbench, a laptop or the v1 pod: an agent has no exec into another session's pod (D-19). Send it a message instead: agent-run msg %s \"<text>\"", verb, pos[0])
 	}
 	kubectl, err := a.env.LookPath("kubectl")
@@ -94,4 +94,12 @@ func (a *app) tmuxExec(ctx context.Context, verb string, args []string, interact
 		return fail(ExitFailed, "%s: kubectl exec exited %d", verb, code)
 	}
 	return nil
+}
+
+// inSessionPod reports whether agent-run runs in a session pod, by the same
+// sign connect uses: the pod's projected API token. agentd removes
+// AGENTD_SESSION from the agent's environment (D-42), but the token's
+// variable and file reach every process in the pod.
+func (a *app) inSessionPod() bool {
+	return a.env.Getenv(envAgentdTokenFile) != "" || exists(a.env.SessionTokenFile)
 }

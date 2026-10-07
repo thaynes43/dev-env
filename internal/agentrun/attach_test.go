@@ -2,6 +2,7 @@ package agentrun
 
 import (
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -66,12 +67,17 @@ func TestAttachRefusals(t *testing.T) {
 	contains(t, "stderr", h.stderr.String(), name+" is Suspended")
 
 	// An agent has no exec into another pod (D-19): it is told to use msg,
-	// and nothing is sent or run.
-	h.vars["AGENTD_SESSION"] = `{"name":"other"}`
+	// and nothing is sent or run. A session pod is known by its projected
+	// token, its variable or its file, as connect finds it: agentd removes
+	// AGENTD_SESSION from the agent's environment.
 	n := len(h.api.requests())
+	h.vars[envAgentdTokenFile] = h.write("projected-token", "tok")
 	h.mustRun(ExitAuth, "attach", name)
 	contains(t, "stderr", h.stderr.String(), "agent-run msg "+name)
-	delete(h.vars, "AGENTD_SESSION")
+	delete(h.vars, envAgentdTokenFile)
+	h.env.SessionTokenFile = h.write("var/run/secrets/dev-env/token", "tok")
+	h.mustRun(ExitAuth, "detach", name)
+	h.env.SessionTokenFile = filepath.Join(h.dir, "no-session-token")
 
 	// No kubectl.
 	h.kubectl = nil

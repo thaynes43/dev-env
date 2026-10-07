@@ -1102,7 +1102,10 @@ task's prompt still runs once.**
 - **Status.** This boot's TUI is `busy` while its process runs and `exited` once it
   has recorded its exit. How the first launch's task ended stays in
   `status.agent.task`. Step 5's idle detection refines `busy` with Claude's own
-  status.
+  status. A resumed task session is therefore unfinished again (D-46): it counts
+  against its parent's four children, and a create that repeats its idempotency key
+  finds it. That is meant: it is a live session again, holding a pod and a
+  conversation someone resumed.
 - **No dialog in a cold home.** A TUI started with `--dangerously-skip-permissions`
   opens on a "Bypass Permissions mode" warning whose default is "No, exit" (checked
   with CLI 2.1.292 on 2026-10-07). Nobody is attached to answer it, and a message
@@ -1119,7 +1122,9 @@ task's prompt still runs once.**
   rights. `agent-run detach <name>` runs `tmux detach-client -s agent` there. They
   are for Tom: from the v1 pod (its ServiceAccount has exec in `dev-agents`), the
   workbench, or a laptop (step 12). Agents have no exec there (D-19), so inside a
-  session pod agent-run refuses both (exit 3) and points at `msg`. `agent-run
+  session pod (known by its projected API token, as agent-run's connect finds it;
+  agentd removes `AGENTD_SESSION` from the agent's environment) agent-run refuses
+  both (exit 3) and points at `msg`. `agent-run
   --local` creates a local session and prints the attach command; `--interactive`
   waits for plan 03.
 
