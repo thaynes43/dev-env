@@ -28,6 +28,12 @@ const (
 	// runs no agent. Pods only.
 	LabelHold = LabelPrefix + "hold"
 
+	// LabelGrant is an AccessGrant's name, on what the broker makes for it: the
+	// grant's ServiceAccount and bindings, and its network policy (D-58). The
+	// broker deletes an object only when it carries this label with the
+	// grant's name. Such objects also carry LabelSession, the requester.
+	LabelGrant = LabelPrefix + "grant"
+
 	// AnnotationRepo is spec.repo. It is an annotation because a repository
 	// name can be longer than a label value.
 	AnnotationRepo = LabelPrefix + "repo"

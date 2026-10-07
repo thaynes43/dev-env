@@ -2844,6 +2844,125 @@ built.** `api/v1alpha1/accessgrant_types.go`; an envtest suite proves each rule.
   AccessGrant informer. So the operator's `dev-agents` Role needs `create`, `get`,
   `list` and `patch` on `accessgrants`, and nothing on `accessgrants/status`
   (H1; `watch` waits for the backstop of step 5).
+**D-58 (2026-10-07, plan 07 step 3). The broker as built: kube and break-glass
+grants.** `internal/broker`; `dev-env-operator broker` (`cmd/dev-env-operator/broker.go`).
+
+- **The mode.** Its own flags: `--session-namespace` (`dev-agents`),
+  `--policy-namespace` (its own namespace), `--leader-elect`, and the operator's
+  metrics and probe addresses. Its Lease is `dev-env-broker.dev-env.haynesops.com` in
+  its own namespace. Its cache holds AccessGrants, AgentSessions and session pods
+  (`app.kubernetes.io/name: dev-env-session`) in `dev-agents`, and GrantPolicies in
+  its own namespace. ServiceAccounts, RoleBindings and ClusterRoleBindings are read
+  and deleted by name through the API server, never cached or listed.
+- **One grant at a time, read live.** Each reconcile reads the grant from the API
+  server, not the cache: a copy that has not seen the broker's last write could make
+  an identity for a grant that has already ended. Every status write goes through the
+  status subresource with the grant's resourceVersion.
+- **The finalizer.** `dev-env.haynesops.com/grant-revoke` goes on every grant the
+  broker sees. A deleted grant is revoked, then the finalizer comes off.
+- **Checks first.** The broker repeats the schema's rules in Go before anything else:
+  the name is `grant-<id>`; type and role go together; the role is in the catalog; a
+  cluster-wide role takes no namespaces and the others name some; no namespace is
+  `dev-env-system`, `dev-agents`, `dev-tools` or the broker's own; the TTL is within
+  the type's bounds. A failure ends the grant `Denied`, `deniedBy: broker`, with the
+  reason. Egress and credential grants end the same way ("not built yet") until steps
+  5 and 8, rather than being approved with nothing made.
+- **The requester.** The session in `spec.requester.session` must exist and not be
+  being deleted. A session missing from the cache is read from the API server before
+  a grant ends for it. Once the session is gone, a pending grant ends `Denied` ("the
+  session ended") and an active one ends `Released`, revoked.
+- **Pending.** Phase "" becomes `Pending`. Then `spec.release` ends it `Released`,
+  with nothing made. Thirty minutes after creation it ends `Denied`, `deniedBy:
+  timeout`. A matching GrantPolicy approves it at once: `approvedBy: policy/<name>`,
+  `approvedTTL` = `spec.ttl`, `expiresAt` = `approvedAt` + `approvedTTL`, phase
+  `Active`. Otherwise the Notifier is called once, `notifiedAt` is recorded, and the
+  broker looks again at the 30-minute deadline. The message goes at least once: a
+  lost status write sends it again.
+- **The policy match** (`Match`, a pure function with table tests). Policies in name
+  order, first match wins; a policy being deleted matches nothing. A policy matches
+  when the type is the same; each requester list it sets holds the requester's
+  profile, repo or agent (one that sets neither profiles nor repos matches nobody);
+  the profile is not `ops`; `spec.ttl` is at most `maxTTL`; and the scope lies
+  inside. Kube: the role is one of its roles and every granted namespace one of its
+  namespaces (a cluster-wide role takes none). Egress: every FQDN equals one of its
+  FQDNs or lies under one of its `*.suffix` entries (`*.a.x` lies inside `*.x`; `x`
+  does not); every CIDR lies inside one of its CIDRs of the same family; every
+  endpoint is in one of its endpoints' namespace and carries that endpoint's labels;
+  every port and protocol (TCP by default) is one of its ports. Credential: the name
+  is one of its names. Break-glass, `dev-env-grant-breakglass` and
+  `dev-env-grant-secrets-read` never match, whatever the policy says: the schema
+  refuses such a policy, and the broker does not rely on that.
+- **Decide and Notifier, step 6's seams.** `Broker.Decide(ctx, name, Decision)`
+  records Tom's answer: approve, optionally for less time, or deny with a reason, by
+  `authentik/<user>`. It refuses a grant that is not pending (answered, released,
+  deleted or past 30 minutes), a TTL longer than `spec.ttl` or shorter than 10
+  minutes, an empty approver, an approver that is a policy (for every grant, so for
+  break-glass too), and an approval of a grant that fails the checks. It writes status
+  only, with the resourceVersion, so any replica can call it; the reconciler then
+  makes the grant. `Notifier.NotifyPending` only logs until step 6 brings Pushover.
+- **Active.** Past `expiresAt`: revoke, then `Expired`. `spec.release`: revoke, then
+  `Released`. Otherwise the broker makes what is missing and looks again at
+  `expiresAt`: the ServiceAccount `dev-agents/<grant>`
+  (`automountServiceAccountToken: false`), and a RoleBinding `<grant>` in each
+  granted namespace, or one ClusterRoleBinding `<grant>` for nodes and break-glass,
+  binding the catalog ClusterRole to that ServiceAccount alone. Each carries
+  `dev-env.haynesops.com/grant: <grant>`, `dev-env.haynesops.com/session: <session>`
+  and `app.kubernetes.io/managed-by: dev-env-broker`; `status.serviceAccount` records
+  the name. The grant ends `Failed`, revoked, when an object of its name exists that
+  the broker did not make for it (left alone) or that binds something else, when a
+  granted namespace does not exist, or when RBAC or the broker guard refuses a create.
+- **The token.** Installing it in the pod is step 4, behind the `Installer` interface
+  (`Install`, `Remove`). When the session's own pod (named after the session,
+  controlled by it, not a hold pod) is Running and its UID is not
+  `status.installedPodUID`, the broker mints a token, calls `Install`, and records
+  `installedPodUID` and `installedAt`. It mints again only for a new pod UID, so a
+  restart mints nothing. With no installer, as in this step, nothing is minted. The
+  mint is a TokenRequest for the grant's ServiceAccount and the API server's own
+  audience, lasting until `expiresAt`, rounded up to at least 600 seconds
+  (TokenRequest's shortest), and never exactly 3607 seconds, which the API server
+  would extend to a year.
+- **The token is not bound to the pod.** Plan 07 meant it to be: a pod-bound token
+  dies with its pod. The API server refuses that. It binds a token only to a pod that
+  runs as the same ServiceAccount ("cannot bind token for serviceaccount ... to pod
+  running with different serviceaccount name"), and session pods run as
+  `dev-env-agent`. The suite keeps a case that shows the refusal. So a token copied
+  out of a pod outlives that pod until the grant ends, which is at most the grant's
+  TTL. The real revoke is deleting the ServiceAccount: the API server checks the
+  ServiceAccount's UID on every request, so every token of the grant stops at once.
+- **Revoke** (on `Expired`, `Released`, `Denied` or `Failed` after approval, and on
+  deletion). The RoleBindings in each granted namespace, or the ClusterRoleBinding,
+  then the ServiceAccount: each is read by name and deleted only when it carries the
+  grant's label, with a UID precondition. NotFound counts as done, so revoke can run
+  again. Then `Installer.Remove` on the session's pod if it still exists, best effort:
+  a failure is logged and never blocks the revoke. Then `endedAt`.
+- **Retention.** An ended grant is deleted 90 days after `endedAt`; its finalizer
+  revokes once more and lets it go.
+- **Watches.** A session that is deleted or starts deleting, and a session pod that
+  appears or turns Running, enqueue that session's grants (by the label
+  `dev-env.haynesops.com/session` that the API sets, D-56, checked against
+  `spec.requester.session`). A GrantPolicy change enqueues every pending grant.
+- **Audit.** One log line per decision and per revoke (grant, session, type, role and
+  namespaces, approvedBy or deniedBy, expiresAt), and an Event on the AccessGrant for
+  each. Never a token; the suite checks the log for it.
+- **A restart.** The broker keeps nothing outside AccessGrant objects (5.1). A new
+  broker reconciles every grant. For an active one it finds the ServiceAccount and the
+  bindings, creates and deletes nothing, writes no status, and mints nothing while the
+  pod's UID is the same. The suite proves it: the ServiceAccount's and the binding's
+  UID and resourceVersion do not change, and the token still passes a TokenReview.
+- **Proved under haynes-ops' RBAC.** The envtest suite runs the broker as
+  `dev-env-system/dev-env-broker` with haynes-ops' `broker.yaml`, `broker-guard.yaml`,
+  `grant-catalog.yaml` and `operator.yaml`, copied verbatim (haynes-ops d5371366).
+  The broker binds every catalog role. RBAC's escalation check refuses it
+  `cluster-admin` and a role outside the catalog; envtest aggregates no ClusterRoles,
+  so `admin`, `edit` and `view` are empty there, and bind SARs show RBAC refuses
+  them. The guard refuses it a token for `dev-env-workbench`, a ServiceAccount not
+  named `grant-<id>`, and a binding to another subject, in a dev-env namespace, or of
+  a role from the other scope. SARs show that the operator can neither create a
+  RoleBinding or ClusterRoleBinding nor bind any role, and that neither can write a
+  `CiliumClusterwideNetworkPolicy`. A minted token passes a TokenReview while the
+  grant is active and is refused once it is revoked. The suite found a fault in the
+  first guard: validation 3 read `request.namespace`, which a cluster-scoped request
+  lacks, so every ClusterRoleBinding failed closed. haynes-ops #3531 fixed it.
 
 **D-26. Approvals: a Pushover link to an approval page behind Authentik.**
 
@@ -3906,3 +4025,4 @@ credential grants) is open. ADR-001 was Accepted on
 | D-58 | Local sessions run Claude's TUI in tmux on the static token; every later boot resumes the first launch's conversation in the TUI (`claude --resume`), so a task's prompt still runs once; run-agent gives a TUI the pane's terminal and records its pid and exit; render seeds `skipDangerousModePermissionPrompt`; `ctl prepare-restart`; `agent-run --local`, and `attach` and `detach` through `kubectl exec` for Tom only | 3.6 |
 | D-59 | Idle detection: agentd reports Claude's own status (`busy`, `idle`, `waiting`) for a TUI and `lastActivity`, the newest of the task's log, Claude's last status change, an attached tmux client (now) and v1's `wt_busy` worktree signals (walked at most every 5 minutes, within 20 seconds and 200,000 entries, else now); the operator's timers judge the window | 4.2 |
 | D-60 | Suspend and resume are `POST /v1/sessions/{name}/suspend` and `/resume`, which set `spec.operatingMode` and the `suspended-by` annotation; the idle timer sets the same field when an agent that is not busy has had no activity for its window (`spec.lifecycle`, else the templates' optional `lifecycle` block, else D-09); the only spec write the operator makes | 4.3 |
+| D-58 | The broker mode of plan 07 step 3, kube and break-glass grants: checks repeated in Go; the policy match in name order, never for break-glass, `dev-env-grant-secrets-read` or profile `ops`; a 30-minute timeout; per grant a ServiceAccount and RoleBindings or one ClusterRoleBinding, labelled with the grant and deleted only by that label; a token not bound to the pod (the API server refuses it), lasting until `expiresAt` and at least 600 s, minted only for a new pod UID; deleting the ServiceAccount revokes; ended grants kept 90 days; `Decide`, `Notifier` and `Installer` as the seams of steps 4 and 6 | 6.12 |

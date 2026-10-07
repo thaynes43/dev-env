@@ -8,7 +8,8 @@
 // suspend deletes it and archives a reaped session's volume after a verified
 // rescue (plan 01 step 5, D-51), and the /v1 API (plan 01 step 3,
 // internal/apiserver, D-46), which every replica serves on :8443, with its grant
-// routes (plan 07 step 2, D-56). The broker mode arrives later in plan 07.
+// routes (plan 07 step 2, D-56). The broker mode (broker.go, internal/broker,
+// D-58) decides, makes and revokes kube and break-glass grants (plan 07 step 3).
 package main
 
 import (
@@ -49,8 +50,11 @@ func main() {
 		return
 	}
 	if len(os.Args) >= 2 && os.Args[1] == "broker" {
-		_, _ = fmt.Fprintf(os.Stderr, "%s: the broker mode is not built yet; it arrives in plan 07.\n", binaryName)
-		os.Exit(1)
+		if err := runBroker(os.Args[2:]); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "%s broker: %v\n", binaryName, err)
+			os.Exit(1)
+		}
+		return
 	}
 	if err := run(os.Args[1:]); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "%s: %v\n", binaryName, err)
