@@ -24,8 +24,14 @@ const (
 const (
 	// AgentPending: the boot has not started the agent yet.
 	AgentPending = "pending"
-	// AgentBusy: the agent process is running.
+	// AgentBusy: the agent process is running, and for a TUI, Claude says it
+	// is working (D-59).
 	AgentBusy = "busy"
+	// AgentIdle: a TUI whose Claude waits for its next prompt (D-59).
+	AgentIdle = "idle"
+	// AgentWaiting: a TUI whose Claude waits on a person, such as a question
+	// it asked (D-59). It is not working either.
+	AgentWaiting = "waiting"
 	// AgentExited: the agent finished; Task holds how.
 	AgentExited = "exited"
 	// AgentFailed: agentd could not start the agent; Error says why.
@@ -78,10 +84,14 @@ type AgentState struct {
 	// handle a later resume uses.
 	ConversationID string     `json:"conversationId,omitempty"`
 	StartedAt      *time.Time `json:"startedAt,omitempty"`
-	// LastActivity is the newest write to the task's log.
-	LastActivity *time.Time  `json:"lastActivity,omitempty"`
-	Task         *TaskResult `json:"task,omitempty"`
-	Error        string      `json:"error,omitempty"`
+	// LastActivity is the newest sign of activity (D-59): the task's log, the
+	// last change of Claude's own status, an attached client (now), or a
+	// change in the worktree. The operator's idle timers read it.
+	LastActivity *time.Time `json:"lastActivity,omitempty"`
+	// Attached is how many clients are attached to the agent's tmux session.
+	Attached int         `json:"attached,omitempty"`
+	Task     *TaskResult `json:"task,omitempty"`
+	Error    string      `json:"error,omitempty"`
 }
 
 // TaskResult is how a task ended.

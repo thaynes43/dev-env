@@ -93,7 +93,7 @@ the cluster.
   `claude --resume <id>` as a TUI instead: a task's `-p` never runs twice (D-42).
   `agentd ctl prepare-restart`. `agent-run --local`, and `attach` and `detach` through
   `kubectl exec` for Tom.
-- [ ] 5. **Idle detection** (4.2). agentd reads Claude's `sessions/<pid>.json` status,
+- [x] 5. **Idle detection** (4.2, D-59, this PR). agentd reads Claude's `sessions/<pid>.json` status,
   the attached tmux clients and v1's `wt_busy` signals, and the heartbeat reports
   them (the Codex signals come with plan 04's Codex pods).
 - [ ] 6. **Suspend, resume and the idle timer** (D-09). `POST

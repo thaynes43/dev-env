@@ -104,6 +104,12 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, session string, no
 			st.Agent.LastActivity = &t
 		}
 	}
+	pid := 0
+	var p agentPid
+	if readJSONFile(s.statePath(pidFile), &p) == nil && pidAlive(p) {
+		pid = p.Pid
+	}
+	applyActivity(ctx, r, s, &st, pid, hasCur && cur.TUI, now)
 	return st
 }
 

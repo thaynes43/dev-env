@@ -1338,6 +1338,33 @@ A session is **idle** when all of these hold for the idle window:
 A busy agent is the busy-lock that v1's Renovate note asked for ("agents hold a
 busy-lock, merger waits for release"). The agent sets it simply by working.
 
+**D-59 (2026-10-07, plan 02 step 5). agentd reports the agent's state and the newest
+sign of activity; the operator's timers judge the window.**
+
+- **The agent's state.** For this boot's TUI (D-58), agentd reads the CLI's own record,
+  `$CLAUDE_CONFIG_DIR/sessions/<pid>.json` for the pid run-agent recorded: `status`
+  is `busy`, `idle` or `waiting`, and `updatedAt` (milliseconds) is when it last
+  changed. The heartbeat's `agent.state` becomes `busy`, `idle` or `waiting`; a CLI
+  that has not written its record yet, or writes a status agentd does not know,
+  counts as busy. A task (`-p`) stays `busy` until it ends, whatever its record
+  says. Checked with CLI 2.1.292 on 2026-10-07: a TUI that had answered a prompt
+  reported `idle`.
+- **The newest activity.** `agent.lastActivity` is the newest of: the task's log and
+  events (as before), the last change of Claude's status (now while it is busy), now
+  while any client is attached to tmux session `agent` (counted in
+  `agent.attached`), and v1's `wt_busy` signals in the worktree. Those are the git
+  dir's `HEAD`, `FETCH_HEAD`, `ORIG_HEAD`, `COMMIT_EDITMSG`, `MERGE_HEAD` and
+  `REBASE_HEAD`, and every file's mtime outside `.git`, `node_modules` and
+  `.claude`. The worktree is walked at most every 5 minutes. A walk that fails,
+  passes 200,000 entries, runs past 20 seconds or is cancelled with the heartbeat
+  answers now, so a worktree agentd cannot read in time never looks idle, and a slow
+  volume holds a heartbeat back by 20 seconds at most. v1's other signal, a process whose cwd is in the worktree, is left out: in
+  a session pod the agent's own CLI always has one.
+- **Who decides.** agentd does not decide idleness. The operator reads
+  `status.agent.status` and `status.agent.lastActivity` from the heartbeat (D-41) and
+  applies D-09's windows (step 6). Codex's signals (process CPU and the rollout
+  file's mtime) arrive with plan 04's Codex pods.
+
 ### 4.3 Timers
 
 **D-09. Defaults, all overridable per session:**
@@ -3830,3 +3857,4 @@ credential grants) is open. ADR-001 was Accepted on
 | D-56 | `/v1/grants` of plan 07 step 2: only a session requests, for its own pod, with the requester from its token; every caller reads; each type's own fields; TTL 30 m for break-glass and 1 h otherwise; identical pending or active requests merge; at most 3 pending per session, per replica; release by `spec.release`; an approval link from `--grant-approval-url` | 6.12 |
 | D-57 | The page on `RescueFailed` is a Prometheus alert: the operator serves `dev_env_session_rescue_failed` and `dev_env_sessions` from its cache at scrape time; haynes-ops' `DevEnvRescueFailed` (critical, 20 minutes) pages Tom through Alertmanager, and `DevEnvOperatorMetricsAbsent` pages when the series vanish | 4.4 |
 | D-58 | Local sessions run Claude's TUI in tmux on the static token; every later boot resumes the first launch's conversation in the TUI (`claude --resume`), so a task's prompt still runs once; run-agent gives a TUI the pane's terminal and records its pid and exit; render seeds `skipDangerousModePermissionPrompt`; `ctl prepare-restart`; `agent-run --local`, and `attach` and `detach` through `kubectl exec` for Tom only | 3.6 |
+| D-59 | Idle detection: agentd reports Claude's own status (`busy`, `idle`, `waiting`) for a TUI and `lastActivity`, the newest of the task's log, Claude's last status change, an attached tmux client (now) and v1's `wt_busy` worktree signals (walked at most every 5 minutes, within 20 seconds and 200,000 entries, else now); the operator's timers judge the window | 4.2 |
