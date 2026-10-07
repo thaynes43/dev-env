@@ -297,8 +297,9 @@ PR per piece, in this order:
    `show`: D-50 records the commands, the checks before a create, the retries and
    the wait, how the CLI finds the API from each place, and the exit codes.
 8. The haynes-ops PRs, smallest first:
-   1. the Renovate v1 hold;
-   2. the Kyverno identity for `thaynes43/dev-env`;
+   1. the Renovate v1 hold. Done 2026-10-06: haynes-ops #3458;
+   2. the Kyverno identity for `thaynes43/dev-env`. Done 2026-10-06: haynes-ops #3462
+      (Audit);
    3. the namespaces, and the CRDs in their own Kustomization with `prune: disabled`.
       Done 2026-10-06: haynes-ops #3468;
    4. RBAC with the guard (S-12 runs here). Done 2026-10-07: haynes-ops #3477 and
@@ -338,7 +339,16 @@ PR per piece, in this order:
       own-token RBAC, came with 8.4. `agent-run` in the v1 pod also needs the
       Certificate's CA as a file it can name in `DEV_ENV_API_CA_FILE` (D-50); a new
       mount on the v1 pod restarts it, so prefer a way that does not, or hold that PR
-      for Tom;
+      for Tom. Done 2026-10-07: haynes-ops #3494 (`apps/dev-env-system/pki/`: a private
+      CA with namespaced Issuers and the API's Certificate) and #3497 (`operator/`,
+      `keeper/`, the CA ConfigMap, the templates' CA mount, and the network path from
+      the v1 pod). The CA certificate is pinned in git as ConfigMap
+      `dev-agents/dev-env-api-ca`, so the v1 pod reads it through the API and nothing on
+      that pod changed (D-50, as built). Verified: both HelmReleases Ready, the operator's
+      replicas on talosw01 and talosm05 with the Lease held and the controller started,
+      the keeper's first mint written, and `agent-run fleet` and `list` (v2) answered
+      from the v1 pod as `client/dev/dev-env`; the v1 pod and `dev-env-ops` did not
+      restart;
    10. the MCP network policy admits for `dev-agents`. Done 2026-10-06: haynes-ops
        #3491 (egress in `dev-env-session-platform`; ingress in the hop, audio and
        Blender policies; a test Job reached all eight services and not four others).
