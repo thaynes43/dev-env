@@ -49,10 +49,12 @@ In this repo:
 - [ ] 7. `agent-run grant request|list|show|use|release` and `agent-run breakglass`;
   agentd's built-in `dev-env` MCP server with `request_access`, `grant_status` and
   `release_access`.
-- [ ] 8. Credential grants (Q-07): first the check that the operator token can mint
-  an expiring token for its own user; then the keeper mints the Proxmox token or
-  signs an SSH certificate, installs it in the pod's `grants` volume, and removes it
-  at expiry.
+- [ ] 8. Credential grants (Q-07): the keeper mints the Proxmox token or signs an SSH
+  certificate, installs it in the pod's `grants` volume, and removes it at expiry.
+  The first check failed on 2026-10-07: the operator token cannot mint an expiring
+  token for its own user (Proxmox answered 403 to the list and the create). Until
+  Q-15 picks the minting identity, a Proxmox credential grant is refused (fails
+  closed); hw-ssh certificates do not wait for it.
 - [ ] 9. `POST /v1/fleet/nodes/{node}/evacuate` and `agent-run fleet evacuate`.
 - [ ] 10. The end of break-glass: the broker sends Tom the audit list of what the
   grant created, from Loki. The forced refresh of both logins waits for plans 03 and

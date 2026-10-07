@@ -231,7 +231,8 @@ the saga. To start building, follow
 | Q-13 | Make `ghcr.io/thaynes43/dev-env-operator` public (A). "Public package write a prompt for an agent on my laptop to flip it": a laptop agent flips it after B3's first publish, because GitHub has no API for package visibility. |
 | Q-14 | A GitHub App key secret for release-please (A): "GitHub App key secret (Recommended)". Repo variable `RELEASE_APP_ID`, repo secret `RELEASE_APP_PRIVATE_KEY`; the App also needs Issues read and write for `autorelease:` labels. |
 
-**Open:** none (full entries in DESIGN-001 section 15).
+**Open:** Q-15, how a Proxmox credential grant gets its short-lived token (plan 07 step 8;
+the operator token cannot mint one). Full entries in DESIGN-001 section 15.
 
 **Settings only Tom can click** (no decision needed). An agent on his laptop does
 them from [`handoffs/2026-10-06-tom-laptop-settings.md`](handoffs/2026-10-06-tom-laptop-settings.md),
