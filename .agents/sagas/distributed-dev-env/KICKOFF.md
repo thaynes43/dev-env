@@ -275,7 +275,9 @@ PR per piece, in this order:
    to the Deployment, and no delete of a Running session's pod outside drain and
    suspend. Done in #29 and #30 (2026-10-06): D-44 records the pod and the
    templates, D-45 the reap and the one guarded delete path.
-3. The `/v1` API (`sessions`, `fleet`) with TokenReview auth.
+3. The `/v1` API (`sessions`, `fleet`) with TokenReview auth. Done in #31
+   (2026-10-06): D-46 records the callers, the create checks, the reap and the
+   heartbeat, and what step 8 deploys for it.
 4. agentd: config rendering (a port of `dev-init.sh`), partial clone and worktree,
    tmux start, heartbeat, and `ctl status|rescue`.
 5. Rescue to a bundle on the shared volume (D-10), then suspend and archive.
@@ -290,7 +292,8 @@ PR per piece, in this order:
    6. the PriorityClass and the Kyverno CPU-limit policy;
    7. the templates and the shared volume (`prune: disabled`);
    8. the ExternalSecrets;
-   9. the operator and keeper HelmReleases;
+   9. the operator and keeper HelmReleases, with the API's Service and Certificate
+      and v1's own-token RBAC (D-46);
    10. the MCP network policy admits for `dev-agents`.
 
    Write new Kyverno policies on the `policies.kyverno.io` CEL types where they can

@@ -1,0 +1,141 @@
+package apiserver
+
+import (
+	"context"
+	"math"
+	"net/http"
+	"strconv"
+	"strings"
+	"unicode/utf8"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+)
+
+// Length caps on what a heartbeat may write into status. agentd's values are
+// far shorter; the caps keep a confused pod from bloating its object.
+const (
+	maxShort    = 128
+	maxMessage  = 1024
+	maxProblems = 16
+	maxProblem  = 256
+)
+
+// heartbeat serves POST /v1/sessions/{name}/heartbeat (D-41): agentd's status,
+// from the session's own pod only. It copies the status into status.agent and
+// status.usage and answers 204.
+func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+	key, err := s.sessionKey(r)
+	if err != nil {
+		return 0, nil, err
+	}
+	if c.kind != kindSession || c.session.Name != key.Name {
+		return 0, nil, forbidden("only session %s's own pod may post its heartbeat", key.Name)
+	}
+	var st protocol.Status
+	if err := decodeJSON(w, r, maxHeartbeatBody, &st, false); err != nil {
+		return 0, nil, err
+	}
+	if st.Session != key.Name {
+		return 0, nil, invalid(fieldError("session", "%q is not %s, the session in the path", st.Session, key.Name))
+	}
+
+	// The base is read from the API server, so the patch clears exactly what
+	// the last heartbeat set and this one does not.
+	var sess v1alpha1.AgentSession
+	if err := s.Live.Get(ctx, key, &sess); err != nil {
+		return 0, nil, fromKubeError(err, "session "+key.Name)
+	}
+	if sess.UID != c.session.UID {
+		return 0, nil, forbidden("session %s was replaced; the pod belongs to the earlier one", key.Name)
+	}
+	base := sess.DeepCopy()
+	sess.Status.Agent = agentStatus(st, metav1.NewTime(s.now()))
+	if st.Usage != nil {
+		sess.Status.Usage = usageStatus(*st.Usage)
+	}
+	if err := s.Client.Status().Patch(ctx, &sess, client.MergeFrom(base)); err != nil {
+		return 0, nil, fromKubeError(err, "session "+key.Name+" status")
+	}
+	return http.StatusNoContent, nil, nil
+}
+
+// agentStatus is status.agent from a heartbeat, received at now.
+func agentStatus(st protocol.Status, now metav1.Time) *v1alpha1.AgentStatus {
+	a := &v1alpha1.AgentStatus{
+		Status:         clip(st.Agent.State, maxShort),
+		LastHeartbeat:  &now,
+		Agentd:         clip(st.Agentd, maxShort),
+		Boot:           clip(st.Boot, maxShort),
+		ConversationID: clip(st.Agent.ConversationID, maxShort),
+		Message:        clip(st.Agent.Error, maxMessage),
+	}
+	if t := st.Agent.LastActivity; t != nil && !t.IsZero() {
+		lt := metav1.NewTime(*t)
+		a.LastActivity = &lt
+	}
+	if ws := st.Workspace; ws != nil {
+		a.Branch = clip(ws.Branch, maxShort*2)
+		a.Head = clip(ws.Head, maxShort)
+	}
+	for _, p := range st.Problems {
+		if len(a.Problems) == maxProblems {
+			break
+		}
+		line := p.Name + ": " + p.State
+		if len(p.Notes) > 0 {
+			line += ": " + p.Notes[0]
+		}
+		a.Problems = append(a.Problems, clip(line, maxProblem))
+	}
+	if t := st.Agent.Task; t != nil {
+		a.Task = &v1alpha1.TaskStatus{
+			ExitCode:   clampInt32(int64(t.ExitCode)),
+			FinishedAt: metav1.NewTime(t.FinishedAt),
+			TimedOut:   t.TimedOut,
+			Subtype:    clip(t.Subtype, maxShort),
+			IsError:    t.IsError,
+			NumTurns:   clampInt32(int64(t.NumTurns)),
+		}
+	}
+	return a
+}
+
+// usageStatus is status.usage from agentd's cost record (V-16). The cost is a
+// decimal string because CRDs avoid floats.
+func usageStatus(u protocol.Usage) *v1alpha1.UsageStatus {
+	cost := u.CostUSD
+	if math.IsNaN(cost) || math.IsInf(cost, 0) || cost < 0 {
+		cost = 0
+	}
+	return &v1alpha1.UsageStatus{
+		CostUSD:      strconv.FormatFloat(cost, 'f', -1, 64),
+		InputTokens:  max(u.InputTokens, 0),
+		OutputTokens: max(u.OutputTokens, 0),
+	}
+}
+
+// clip cuts s to at most n bytes on a rune boundary.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	s = s[:n]
+	for len(s) > 0 && !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return strings.TrimSpace(s) + "…"
+}
+
+func clampInt32(v int64) int32 {
+	switch {
+	case v > math.MaxInt32:
+		return math.MaxInt32
+	case v < math.MinInt32:
+		return math.MinInt32
+	}
+	return int32(v)
+}

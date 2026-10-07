@@ -20,9 +20,9 @@ This repo will hold the operator, the CLI, the agent container image
 this repo publishes signed images, haynes-ops pins and deploys them.
 
 **Status: ADR-001 Accepted 2026-10-06; the Go skeleton (KICKOFF B1), CI, the
-`AgentSession` CRD (plan 01 step 1), the operator's pod and volume reconciler (step 2)
-and agentd's config rendering, clone, task runner and heartbeat (step 4, parts 1
-and 2) are built.** The keeper and most of `agent-run`
+`AgentSession` CRD (plan 01 step 1), the operator's pod and volume reconciler (step 2),
+its `/v1` API (step 3) and agentd's config rendering, clone, task runner, heartbeat
+and rescue report (step 4) are built.** The keeper and most of `agent-run`
 are still honest stubs that say which plan step builds them. The build sessions follow
 [`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md). v1 keeps running from
 haynes-ops (`kubernetes/main/apps/dev/dev-env/`, `scripts/dev-env/Dockerfile`) until
@@ -49,6 +49,10 @@ internal/templates/      parses and checks dev-env-templates, the GitOps data po
 internal/controller/     the AgentSession reconciler: each session's pod and volume (D-44), the reap finalizer and the
                          one guarded pod delete (D-45). Its envtest suite proves DESIGN-001 5.1 (no owner reference
                          to the operator; no pod or volume write or delete; delete and suspend wait for rescue)
+internal/apiserver/      the operator's /v1 API (D-46): HTTPS runnable, TokenReview auth, caller classes, sessions,
+                         heartbeat and fleet handlers. Unit tests use the fake client; its envtest suite mints real
+                         tokens and serves through a manager wired as the operator's
+internal/apiserver/apiv1/  the API's wire types and error codes, standard library only, for agent-run
 internal/agentd/         agentd: config rendering (the dev-init.sh port), clone and worktree, the task runner, heartbeat,
                          status and rescue; tests fake claude and tmux and run git against a bare repo in t.TempDir()
 internal/agentd/protocol/  what agentd and the operator exchange: the session document, the status, the heartbeat route,

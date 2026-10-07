@@ -284,6 +284,15 @@ type sessionInvalidError struct{ err error }
 func (e sessionInvalidError) Error() string { return e.err.Error() }
 func (e sessionInvalidError) Unwrap() error { return e.err }
 
+// CheckAgentdSession reports whether agentd would accept the session, by the same
+// code that builds its pod. The /v1 API calls it before a create (D-46), so a
+// session that could never start is refused to its caller instead of failing
+// later.
+func CheckAgentdSession(s *v1alpha1.AgentSession) error {
+	_, err := sessionDocument(s)
+	return err
+}
+
 // sessionDocument is AGENTD_SESSION's value (D-40): the session's name and the
 // spec fields agentd needs, checked with agentd's own rules, so the operator never
 // starts a pod whose agentd would refuse its session at boot.

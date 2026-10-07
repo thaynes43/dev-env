@@ -1,7 +1,8 @@
 # 01: foundation, task mode
 
-**Status:** in progress: KICKOFF B1 to B4 landed (#14, #15, #17, #18); step 1, the
-`AgentSession` CRD, landed in #24 (2026-10-06)
+**Status:** in progress: KICKOFF B1 to B4 landed (#14, #15, #17, #18); steps 1 to 4
+landed on 2026-10-06 (the CRD #24; pods and volumes #29, #30; the `/v1` API #31;
+agentd #25, #27, #28)
 **Depends on:** Q-01 (build), Q-02 (Go), Q-04 (requests and limits, no cap) and Q-05
 (storage), all decided 2026-10-06; spikes S-7 (clone path), S-8 (gasha01 speed) and
 S-12 (the guard)
@@ -33,7 +34,12 @@ step. Tick a step in the PR that lands it.
     volume before rescue; one guarded delete path (#30). Step 5 fills the seam:
     `rescued()` in `internal/controller/guard.go`, the archive that deletes the
     volume and lifts its finalizer, and `patch` on PVCs in the operator's RBAC.
-- [ ] 3. The `/v1` API (`sessions`, `fleet`) with TokenReview auth.
+- [x] 3. The `/v1` API (`sessions`, `fleet`) with TokenReview auth (#31; D-46).
+  `internal/apiserver` serves `POST/GET /v1/sessions`, `GET/DELETE
+  /v1/sessions/{name}`, the heartbeat route of D-41 and `GET /v1/fleet` on `:8443`
+  from every replica; `internal/apiserver/apiv1` holds the wire types `agent-run`
+  imports. Its envtest suite mints real tokens and reviews them on envtest's API
+  server.
 - [x] 4. agentd: config rendering, partial clone and worktree, tmux start,
   heartbeat, `ctl status|rescue` (DESIGN-001 3.6, D-40 to D-43), in three PRs:
   - [x] config rendering, the port of `dev-init.sh`: `agentd render` (#25);
@@ -76,6 +82,14 @@ step. Tick a step in the PR that lands it.
 - Namespaces `dev-env-system` and `dev-agents`; the CRDs in their own Kustomization
   with `prune: disabled`.
 - Namespace `dev-tools` too (empty until plan 08).
+- The operator API's Service (`dev-env-operator`, port 8443) and its cert-manager
+  Certificate, named for `dev-env-operator.dev-env-system.svc.cluster.local`; the
+  operator's `--api-url` is that full name and `--client-service-accounts` adds the
+  v1 pod (`dev/dev-env`); the CA reaches session pods through a templates mount and
+  `AGENTD_API_CA_FILE`. For `agent-run` in the v1 pod, v1's `rbac.yaml` (outside
+  `resources/**`) grants `create` on `serviceaccounts/token` for `resourceNames:
+  [dev-env]` only, so the pod can mint its own token for audience `dev-env-operator`
+  (D-46).
 - Operator and keeper HelmReleases, RBAC (DESIGN-001 6.11: cluster-wide read for
   agents, v1's write verbs under the `dev-env-agent-guard` and
   `dev-env-identity-guard` admission policies and the Kyverno exec rule, nothing in

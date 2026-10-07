@@ -364,18 +364,88 @@ type AgentSessionStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
-// AgentStatus is the agent's own state.
+// AgentStatus is the agent's own state. The /v1 API copies it from agentd's
+// heartbeat (D-41, D-46); nothing else writes it.
 type AgentStatus struct {
 	// TODO(plan 02): fix the values with idle detection (DESIGN-001 4.2).
 
-	// Status is the agent's state: busy, idle or waiting for Claude, which
-	// writes it itself; agentd derives it for Codex and opencode.
+	// Status is the agent's state. In plan 01 it is agentd's agent state:
+	// pending, busy, exited, failed or interrupted. Plan 02 adds Claude's own
+	// busy, idle and waiting; agentd derives them for Codex and opencode.
 	// +optional
 	Status string `json:"status,omitempty"`
 
 	// LastActivity is the last time agentd saw the agent or its worktree change.
 	// +optional
 	LastActivity *metav1.Time `json:"lastActivity,omitempty"`
+
+	// LastHeartbeat is when the operator last accepted a heartbeat from the
+	// session's pod, by the operator's clock.
+	// +optional
+	LastHeartbeat *metav1.Time `json:"lastHeartbeat,omitempty"`
+
+	// Agentd is agentd's version line.
+	// +optional
+	Agentd string `json:"agentd,omitempty"`
+
+	// Boot is agentd's boot phase: booting, ready or failed.
+	// +optional
+	Boot string `json:"boot,omitempty"`
+
+	// Problems are the boot steps that warned or failed, each as
+	// "<step>: <state>", with its first note when it has one.
+	// +listType=atomic
+	// +optional
+	Problems []string `json:"problems,omitempty"`
+
+	// Branch is the worktree's branch, for example agent/haynes-ops-1005-202504.
+	// +optional
+	Branch string `json:"branch,omitempty"`
+
+	// Head is the worktree's commit.
+	// +optional
+	Head string `json:"head,omitempty"`
+
+	// ConversationID is the agent's own session id (claude --session-id), the
+	// handle a resume uses.
+	// +optional
+	ConversationID string `json:"conversationId,omitempty"`
+
+	// Task is how a task ended, once it has.
+	// +optional
+	Task *TaskStatus `json:"task,omitempty"`
+
+	// Message is why agentd could not start the agent, when it could not.
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
+// TaskStatus is how a task ended (D-42): the CLI's exit and its result event.
+type TaskStatus struct {
+	// ExitCode is the CLI's exit code.
+	// +required
+	ExitCode int32 `json:"exitCode"`
+
+	// FinishedAt is when the CLI exited.
+	// +required
+	FinishedAt metav1.Time `json:"finishedAt"`
+
+	// TimedOut is set when agentd stopped the task at limits.timeout.
+	// +optional
+	TimedOut bool `json:"timedOut,omitempty"`
+
+	// Subtype is the result event's subtype: success, error_max_turns or
+	// error_during_execution.
+	// +optional
+	Subtype string `json:"subtype,omitempty"`
+
+	// IsError is the result event's is_error.
+	// +optional
+	IsError bool `json:"isError,omitempty"`
+
+	// NumTurns is the number of turns the task took.
+	// +optional
+	NumTurns int32 `json:"numTurns,omitempty"`
 }
 
 // RemoteControlStatus is a session's Remote Control entry.
