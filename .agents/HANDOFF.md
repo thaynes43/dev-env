@@ -68,6 +68,14 @@ the saga. To start building, follow
   reap deletes the session, which the rescue finalizer holds (D-45). `agent-run`
   (step 7) imports the wire types from `internal/apiserver/apiv1`; step 8 deploys
   the Service, the Certificate and v1's own-token RBAC that D-46 lists.
+- **Plan 01 step 6, the minimal keeper, is built** (#39). `dev-env-keeper` mints
+  the haynes-dev-bot installation token v1's way (same permission set) and merges it
+  into `dev-agents/dev-env-gh-token`, key `gh_token`, every 40 minutes or two thirds of
+  its life, with retries from 10 s to 5 minutes. It reads the App's key from a
+  mounted directory at every mint, refreshes only while it holds its Lease, is ready
+  while its token lives, and logs nothing secret (D-52). Nothing deploys it yet:
+  plan 01's "In haynes-ops" list names the ExternalSecret, the empty Secrets, the
+  Roles and the Deployment that 8.8 and 8.9 add.
 - **Plan 01 step 7, `agent-run` v2, is built** (#34). `agent-run --repo <r> -p
   "<task>"` creates a task session, then waits up to 30 s and prints the node it runs
   on or the scheduler's reason; `list`, `show <name>`, `reap <name>...` and `fleet`

@@ -290,7 +290,9 @@ PR per piece, in this order:
 5. Rescue to a bundle on the shared volume (D-10), then suspend and archive. Done
    in #32 and #36 (2026-10-06): D-48 records the bundle, D-51 the
    operator's rescue, suspend and archive.
-6. The minimal keeper: mint the gh token every 40 minutes.
+6. The minimal keeper: mint the gh token every 40 minutes. Done in #39
+   (2026-10-06): D-52 records the mint, the write, the schedule, the Lease and the
+   readiness; plan 01's "In haynes-ops" list says what 8.8 and 8.9 give it.
 7. `agent-run` v2: `-p`, `list`, `reap` and `fleet`. Done in #34 (2026-10-06), with
    `show`: D-50 records the commands, the checks before a create, the retries and
    the wait, how the CLI finds the API from each place, and the exit codes.
@@ -306,7 +308,8 @@ PR per piece, in this order:
    7. the templates and the shared volume (`prune: disabled`). Done 2026-10-06:
       haynes-ops #3471. `dev-env-templates` carries an all-zero placeholder image digest
       until B5 (section 3) publishes `dev-env:2.x.y`;
-   8. the ExternalSecrets;
+   8. the ExternalSecrets, among them the keeper's App key and its empty Secrets
+      (plan 01, "The keeper's inputs"; D-52);
    - **8.8a:** the four config ConfigMaps in `dev-agents` of D-49:
      `dev-env-config-claude` (`CLAUDE.md`, `mcp.json`, `agent-*.md`),
      `dev-env-config-codex` (`config.toml`, `AGENTS.header.md`),
@@ -324,7 +327,7 @@ PR per piece, in this order:
      (DESIGN-001 3.6, D-40, the port of `dev-init.sh`). Done 2026-10-06: haynes-ops
      #3474;
    9. the operator and keeper HelmReleases, with the API's Service and Certificate
-      and v1's own-token RBAC (D-46). `agent-run` in the v1 pod also needs the
+      and v1's own-token RBAC (D-46), and the keeper's Roles and Deployment (D-52). `agent-run` in the v1 pod also needs the
       Certificate's CA as a file it can name in `DEV_ENV_API_CA_FILE` (D-50); a new
       mount on the v1 pod restarts it, so prefer a way that does not, or hold that PR
       for Tom;

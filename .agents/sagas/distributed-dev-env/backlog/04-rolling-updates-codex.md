@@ -31,8 +31,9 @@ gets its v2 home: one hub for the phone, then sessions in their own pods.
   from the codex login ceremony, never a copy of the hub's or v1's `auth.json`, and
   the hub switches to its access-token-only file on a drain. The keeper makes the
   refresh call itself, about a day before `exp`, because codex would wait until 5
-  minutes before it (DESIGN-001 6.3). Codex task and local sessions run in their own
-  pods.
+  minutes before it (DESIGN-001 6.3). The refresh is fenced as plan 03 fences the
+  Max login's (D-52): the keeper calls only while it holds its Lease with time to
+  spare. Codex task and local sessions run in their own pods.
 - **Codex step 3 (if S-4 passed):** hub threads execute in per-session pods through
   `codex exec-server`.
 
