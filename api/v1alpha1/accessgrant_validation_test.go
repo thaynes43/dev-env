@@ -467,6 +467,8 @@ func TestGrantPolicyRejects(t *testing.T) {
 		{"a kube policy without kube", workloadsPolicy, func(p *v1alpha1.GrantPolicy) { p.Spec.Kube = nil }, "kube is set for type kube"},
 		{"egress with no destination", printerPolicy, func(p *v1alpha1.GrantPolicy) { p.Spec.Egress.CIDRs = nil }, "name at least one destination"},
 		{"no description", workloadsPolicy, func(p *v1alpha1.GrantPolicy) { p.Spec.Description = "" }, "spec.description"},
+		{"a 64-character name", workloadsPolicy, func(p *v1alpha1.GrantPolicy) { p.Name = strings.Repeat("p", 64) }, "metadata.name is a DNS label of at most 63 characters"},
+		{"a name with a dot", workloadsPolicy, func(p *v1alpha1.GrantPolicy) { p.Name = "frontend.workloads" }, "metadata.name is a DNS label of at most 63 characters"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.title, func(t *testing.T) {

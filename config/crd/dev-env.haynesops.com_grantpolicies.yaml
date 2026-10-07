@@ -309,6 +309,10 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: 'metadata.name is a DNS label of at most 63 characters: a grant
+            records it as policy/<name>'
+          rule: self.metadata.name.size() <= 63 && self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
     served: true
     storage: true
     subresources: {}
