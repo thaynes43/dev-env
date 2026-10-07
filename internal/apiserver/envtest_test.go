@@ -312,9 +312,19 @@ func TestEnvtestAPI(t *testing.T) {
 		if child.Parent != sess.Name || child.Profile != "dev" {
 			t.Errorf("child %+v", child)
 		}
-		mine := unmarshal[apiv1.SessionList](t, l.want(http.MethodGet, apiv1.SessionsPath+"?mine=true", agent, nil, http.StatusOK))
-		if len(mine.Sessions) != 1 || mine.Sessions[0].Name != child.Name {
-			t.Errorf("mine %+v", mine)
+		// The list is served from the informer cache, so a list right after the
+		// create can miss the child until the watch event arrives (as the fleet
+		// check below allows too).
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			mine := unmarshal[apiv1.SessionList](t, l.want(http.MethodGet, apiv1.SessionsPath+"?mine=true", agent, nil, http.StatusOK))
+			if len(mine.Sessions) == 1 && mine.Sessions[0].Name == child.Name {
+				break
+			}
+			if len(mine.Sessions) > 1 || time.Now().After(deadline) {
+				t.Fatalf("mine %+v", mine)
+			}
+			time.Sleep(50 * time.Millisecond)
 		}
 		wider := task()
 		wider.Profile = "full"
