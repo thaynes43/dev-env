@@ -48,7 +48,7 @@ FROM node:24-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7
 # ║ DO NOT put a version number in a comment BETWEEN a `# renovate:` annotation  ║
 # ║ and its `ARG`. RENOVATE SILENTLY REWRITES IT.                               ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
-# The Dockerfile customManager (.renovate/customManagers.json5) matches from the
+# The Dockerfile customManager (.github/renovate.json5) matches from the
 # `renovate:` annotation, THROUGH any intervening full comment lines, to the ARG —
 # and the replacement rewrites every occurrence of the old version inside that whole
 # match, comments included. So explanatory prose placed under the annotation gets
@@ -346,8 +346,9 @@ RUN npm install -g \
 # PLAYWRIGHT_BROWSERS_PATH points at the PVC (~/.cache/ms-playwright) so a repo whose
 # own playwright pins a DIFFERENT chromium revision (haynesnetwork: @playwright/test
 # 1.61.x) can `playwright install` it alongside — impossible under
-# readOnlyRootFilesystem if the path lived in an image layer. dev-init seeds the PVC
-# cache from this staging dir on first boot, so the MCP works with zero downloads.
+# readOnlyRootFilesystem if the path lived in an image layer. agentd links the
+# staged revisions into that cache at boot (D-40, AGENTD_PLAYWRIGHT_STAGING), so the MCP
+# works with zero downloads.
 RUN npm install -g "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}" \
  && PLAYWRIGHT_BROWSERS_PATH=/opt/dev-env/ms-playwright \
       node "$(npm root -g)/@playwright/mcp/node_modules/playwright-core/cli.js" \
