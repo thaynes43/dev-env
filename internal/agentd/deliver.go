@@ -2,7 +2,6 @@ package agentd
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -249,19 +248,24 @@ func readLogLine(br *bufio.Reader) (string, error) {
 }
 
 // copyLogToShared copies the session's log to the shared volume through a
-// temporary file, so the copy is whole or absent (D-65). Nothing to copy is not
-// an error.
+// temporary file, so the copy is whole or absent (D-65). It streams the file,
+// and skips a copy whose size and modification time already match, so a large
+// log costs neither memory nor CephFS writes. Nothing to copy is not an error.
 func copyLogToShared(s Settings, name string) error {
-	src := s.LogPath(name)
-	data, err := os.ReadFile(src)
+	src, err := os.Open(s.LogPath(name))
 	if isNotExist(err) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
+	defer func() { _ = src.Close() }()
+	fi, err := src.Stat()
+	if err != nil {
+		return err
+	}
 	dst := s.SharedLogPath(name)
-	if cur, err := os.ReadFile(dst); err == nil && bytes.Equal(cur, data) {
+	if cur, err := os.Stat(dst); err == nil && cur.Size() == fi.Size() && cur.ModTime().Equal(fi.ModTime()) {
 		return nil
 	}
 	if err := sharedIsMounted(s.SharedDir, s.Home); err != nil {
@@ -270,5 +274,30 @@ func copyLogToShared(s Settings, name string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return err
 	}
-	return writeFileAtomic(dst, data, 0o600)
+	tmp, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := io.Copy(tmp, src); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	// The copy carries the log's time, which is how the next copy knows it is
+	// current.
+	if err := os.Chtimes(tmp.Name(), fi.ModTime(), fi.ModTime()); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), dst)
 }

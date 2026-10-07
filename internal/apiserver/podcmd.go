@@ -106,15 +106,22 @@ type tailBuffer struct {
 
 func (b *tailBuffer) Write(p []byte) (int, error) {
 	b.buf = append(b.buf, p...)
-	if over := len(b.buf) - b.max; over > 0 {
+	// Trim only once it holds twice the cap, so the copying costs no more
+	// than the bytes written.
+	if over := len(b.buf) - b.max; over > b.max {
 		b.buf = append(b.buf[:0], b.buf[over:]...)
 		b.truncated = true
 	}
 	return len(p), nil
 }
 
-// String is the kept bytes, from the first whole line when some were dropped.
+// String is the last max bytes, from the first whole line when some were
+// dropped.
 func (b *tailBuffer) String() string {
+	if over := len(b.buf) - b.max; over > 0 {
+		b.buf = b.buf[over:]
+		b.truncated = true
+	}
 	s := string(b.buf)
 	if b.truncated {
 		if i := strings.IndexByte(s, '\n'); i >= 0 {
@@ -174,7 +181,8 @@ func (s *Server) sessionLog(ctx context.Context, _ http.ResponseWriter, r *http.
 	if err != nil {
 		return 0, nil, execError("read the log of "+sess.Name, err, stderr.String())
 	}
-	return http.StatusOK, apiv1.SessionLog{Session: sess.Name, Tail: tail, Text: stdout.String(), Truncated: stdout.truncated}, nil
+	text := stdout.String() // sets truncated when it drops bytes
+	return http.StatusOK, apiv1.SessionLog{Session: sess.Name, Tail: tail, Text: text, Truncated: stdout.truncated}, nil
 }
 
 // sendMessage serves POST /v1/sessions/{name}/messages: agentd ctl deliver in
