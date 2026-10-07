@@ -3,8 +3,9 @@
 **Status:** design, Accepted 2026-10-06. Tom ratified ADR-001 as written (drafted
 2026-10-05, his rulings folded in 2026-10-06): see the
 [ratification summary](adrs/001-distributed-dev-env.md#ratification-summary) at the
-top of ADR-001. The Go skeleton (KICKOFF B1), CI and the `AgentSession` CRD (plan 01
-step 1) are built; nothing runs yet. The architecture is in
+top of ADR-001. Phase 1 is built: plan 01 (task mode) is done since 2026-10-07. The
+operator and the keeper run in the cluster, the agent image 2.0.0 is released, and
+the first task session ran from the v1 pod and opened its PR. The architecture is in
 [ADR-001](adrs/001-distributed-dev-env.md) and the detail in
 [DESIGN-001](designs/001-dev-env-v2.md). Tom ruled on every question, Q-01 to Q-11,
 on 2026-10-06 and widened the scope: tool pods, a GPU budget, satellite inference
@@ -170,6 +171,7 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 35 | D-51: how the operator rescues, suspends and archives | **DECIDED** 2026-10-06 (agent, plan 01 step 5) | `agentd ctl rescue --stop-agent` by exec before a suspend deletes a pod that ran; the verdict in `status.rescue` before the delete; a resume supersedes it; only a reap archives, after a verified rescue of the volume's last pod; a rescue pod and the archive timer are plan 02's ([DESIGN-001 4.4](designs/001-dev-env-v2.md#44-rescue-before-reap)). |
 | 36 | D-52: the minimal keeper | **DECIDED** 2026-10-06 (agent, plan 01 step 6) | The haynes-dev-bot token minted v1's way, from an App directory read at every mint, into `dev-agents/dev-env-gh-token` by one merge patch; every 40 minutes or two thirds of its life, retries 10 s to 5 minutes with jitter; one replica behind a Lease (plans 03 and 04 fence each refresh); Secrets `patch` only; ready while its token lives; nothing secret logged ([DESIGN-001 6.4](designs/001-dev-env-v2.md#64-github-app-token)). |
 | 37 | D-53: how the agent image is built and published | **DECIDED** 2026-10-06 (agent, KICKOFF B5) | `images/agent/Dockerfile`; smoke-tested in CI on PRs; `dev-env:2.x.y` only, from a release tag by `publish-agent.yml`, signed keyless; Kyverno trusts it on `refs/tags/v2.*` ([DESIGN-001 D-53](designs/001-dev-env-v2.md)) |
+| 38 | S-8: where size L's session volume lives | **DECIDED** 2026-10-07 (spike S-8) | `gasha01-rbd` was 1.55 to 1.81 times slower than `ceph-block` for a clone, `pnpm install` and one test file, under D-22's line of two, so every size stays on `gasha01-rbd` ([00-spikes](backlog/00-spikes.md#s-8-gasha01-rbd-against-ceph-block-phase-1)). |
 
 The full options, consequences and rulings for Q-01 to Q-14 are in
 [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions).
@@ -182,7 +184,7 @@ v1 stays live throughout. No v2 plan edits haynes-ops'
 | Plan | Depends on | Parallel? |
 |---|---|---|
 | [00: spikes](backlog/00-spikes.md) | nothing | yes, with Tom's answers |
-| [01: foundation, task mode](backlog/01-foundation.md) | Q-01, Q-02, Q-04, Q-05 (all decided); spikes S-7, S-8, S-12 | |
+| [01: foundation, task mode](backlog/01-foundation.md) (done 2026-10-07) | Q-01, Q-02, Q-04, Q-05 (all decided); spikes S-7, S-8, S-12 | |
 | [02: interactive sessions and lifecycle](backlog/02-interactive-lifecycle.md) | 01 | with 07 |
 | [07: access broker](backlog/07-access-broker.md) | 01; Q-07 (decided) | with 02 |
 | [03: Remote Control](backlog/03-remote-control.md) | 02, 07; spikes S-1, S-5, S-6, S-15 | |

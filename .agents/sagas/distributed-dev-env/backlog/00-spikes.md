@@ -259,6 +259,31 @@ haynesnetwork, `pnpm install`, then one test file with `--maxWorkers=2`. Record 
 wall time of each step. If gasha01 is more than twice as slow overall, size L
 defaults to `ceph-block` (DESIGN-001 D-22).
 
+- [x] **Done 2026-10-07: `gasha01-rbd` is 1.55 to 1.81 times slower overall, under the
+  line of two, so size L stays on `gasha01-rbd` (D-22) and the templates do not
+  change.** The harness was a Job in `dev-agents`, created from the v1 pod (its
+  OPERATOR tier allows batch Jobs) and deleted after the run, rather than a session's
+  own volume: one pod could then mount a 20Gi volume of each class and run them one
+  after the other on the same node, CPU and network. The pod used the agent image
+  `dev-env:2.0.0@sha256:8bab980d…` with size M's requests and limits (250m and 2Gi;
+  4 CPU and 8Gi) on talosw02. Each run put `HOME`, the pnpm store and the caches on
+  the volume under test, then ran `git -c pack.threads=2 clone --filter=blob:none`
+  of haynesnetwork, `pnpm install --frozen-lockfile`, and
+  `vitest run lib/__tests__/app-error.test.ts --maxWorkers=2` in `apps/web`. The
+  second run swapped the order, so warm registry caches favour neither class. Pod
+  UIDs `9b4d7976-18bf-4d76-9da5-d95f1e32a72e` and
+  `00417e85-a094-41e8-a611-ecaeae0781ff`. Seconds:
+
+  | Run | Class | Clone | Install | Test | Total |
+  |---|---|---|---|---|---|
+  | 1 | `gasha01-rbd` (first) | 6.1 | 18.9 | 0.7 | 25.7 |
+  | 1 | `ceph-block` | 4.6 | 8.9 | 0.7 | 14.2 |
+  | 2 | `ceph-block` (first) | 4.7 | 9.4 | 0.7 | 14.8 |
+  | 2 | `gasha01-rbd` | 5.9 | 16.4 | 0.7 | 23.0 |
+
+  The install is most of the gap (1.7 to 2.1 times); the one test file is too small
+  to tell the classes apart. Recheck with a heavier step if size L sessions feel slow.
+
 ## S-9: VRAM units through the device plugin (before plan 09)
 
 On talosw04, where nothing household runs, and with Tom's lend label set: give the

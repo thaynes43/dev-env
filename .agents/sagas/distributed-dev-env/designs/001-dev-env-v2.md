@@ -1941,6 +1941,8 @@ haynes-ops data change, not code. One rule is set now: if S-8 shows a session's
 clone, install and one test file more than twice as slow on `gasha01-rbd` as on
 `ceph-block`, size L (heavy builds) defaults to `ceph-block` and S and M stay on
 gasha01.
+S-8 measured 1.55 to 1.81 times on 2026-10-07, so every size stays on
+`gasha01-rbd`.
 
 **Failure modes.**
 
@@ -3416,7 +3418,7 @@ Backlog plans: [`../backlog/`](../backlog/).
 | S-5 | Does SendMessage reach a Remote Control session in another pod? | two pods, phase 3 | D-16 tier 2 |
 | S-6 | Does `claude --resume <id> --remote-control <name>` reattach the same phone entry? | v1 pod, scratch access-token-only home. **Passed 2026-10-06** (CLI 2.1.292): the same bridge session id after `--resume`, and the server's event list kept both turns. A SIGTERM to the CLI archives the entry (agentd forwards the pod's) and the resume unarchives it, so a drained entry is off the active list until resume. Seeding needs `oauthAccount` (6.2) | 6.7: a drain keeps the entry, through the unarchive |
 | S-7 | How long does `git clone --filter=blob:none` plus checkout take per repo? | v1 pod, one repo at a time. **Done 2026-10-06: no repo needs a mirror.** Clone plus checkout took 2.0 s (cigar-journal), 2.6 s (haynes-ops), 3.3 s (hass-sandbox), 10.9 s (haynesnetwork) and 22.9 s (haynes-quest); the limit is 120 s. Detail in [00-spikes](../backlog/00-spikes.md) | D-15: no mirror for any of the five |
-| S-8 | How much slower is a session's clone, install and one test file on `gasha01-rbd` than on `ceph-block`? | one phase-1 task pod at size M, one run per class | D-22's rule for size L |
+| S-8 | How much slower is a session's clone, install and one test file on `gasha01-rbd` than on `ceph-block`? | one phase-1 task pod at size M, one run per class. **Done 2026-10-07** (00-spikes.md): one Job at size M's limits on talosw02, one volume of each class, two runs in swapped order. `gasha01-rbd` took 25.7 s and 23.0 s against 14.2 s and 14.8 s, 1.55 to 1.81 times slower, most of it in `pnpm install` | D-22's rule for size L: under the line of two, so L stays on `gasha01-rbd` |
 | S-9 | Does the pinned device plugin count VRAM units with time-slicing (requests above 1, config chosen by an NFD-set label), and does a household-priority pod preempt an agent GPU pod? Is DRA consumable capacity usable with NVIDIA's driver on these cards yet? | talosw04 (nothing household runs there), one pod at a time | D-30 mechanism |
 | S-10 | Do Claude Code, Codex and opencode accept a loopback MCP server that answers `initialize` and `tools/list` from a cache, and pick up a server added mid-session? | one session pod, phase 2 | D-29 |
 | S-11 | Does the pinned opencode run headless, resume a session, use MCP over HTTP, allow everything by config, and make sound tool calls with a Qwen coder model on llama-server? | one session pod, one request at a time against the shared pool | D-33 |

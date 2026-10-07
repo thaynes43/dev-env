@@ -13,9 +13,11 @@ and memory limits, created, upgraded and pruned by an operator that the `agent-r
 CLI calls from anywhere. This repo will publish the operator, the CLI and the agent
 image (`ghcr.io/thaynes43/dev-env`); haynes-ops deploys them.
 
-**Status: ADR-001 Accepted 2026-10-06. Plan 01 is being built: the operator and the
-keeper run in the cluster since 2026-10-07, and the agent image (KICKOFF B5) is built
-here and released from `v2.x.y` tags.**
+**Status: phase 1 built (2026-10-07).** ADR-001 was Accepted on 2026-10-06. Plan 01,
+task mode, is done: the operator and the keeper run in the cluster, the agent image
+`ghcr.io/thaynes43/dev-env:2.0.0` is released, and `agent-run -p` from the v1 pod
+starts a session pod on a worker that does its task and opens its PR. Plan 02
+(interactive sessions and lifecycle) is next.
 Start at [`.agents/HANDOFF.md`](.agents/HANDOFF.md); the saga is
 [`.agents/sagas/distributed-dev-env/`](.agents/sagas/distributed-dev-env/README.md).
 
