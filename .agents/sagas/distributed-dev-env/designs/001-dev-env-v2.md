@@ -1052,7 +1052,7 @@ workflow, `publish-agent.yml`.**
   from main, as `sha-<short>` (B3).
 - **Kyverno.** The signature's subject ends `@refs/tags/v2.x.y`, which
   `verify-dev-env-v2` (`...workflows/*@refs/heads/main`) does not match. The paired
-  haynes-ops change splits the rule's `verifyImages` by image: the operator keeps the
+  haynes-ops change (#3478, merged 2026-10-07) splits the rule's `verifyImages` by image: the operator keeps the
   main subject, and `dev-env:2.*` gets `.../workflows/publish-agent.yml@refs/tags/v2.*`.
   Both rules are still Audit and still unverifying (haynes-ops #3092).
 - **The first `2.0.0`.** release-please opens the release PR, and merging it tags
@@ -1065,8 +1065,9 @@ workflow, `publish-agent.yml`.**
   push fails with 403.
 - **Not decided here.** Tagging the operator image `2.x.y` as well (section 10 says
   both images take the release version) is not part of B5: the operator is pinned by
-  `sha-<short>` today, and a retag needs no rebuild, so it can follow when the
-  operator HelmRelease (KICKOFF 8.9) says which tag it wants.
+  `sha-<short>`, and the operator HelmRelease (KICKOFF 8.9, haynes-ops #3497) runs
+  `dev-env-operator:sha-8b388b2` as deployed. A retag needs no rebuild, so it can
+  follow if that pin ever moves to the release version.
 
 ### 3.7 Summoned sessions
 

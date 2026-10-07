@@ -123,8 +123,8 @@ Every Makefile target caps Go at two CPUs and two packages at a time and runs un
 `nice -n 19`, so it is safe in the shared pod (Hard rules). Do not raise
 `GO_PARALLELISM` there.
 
-Directories still to come: `internal/` gains the `/v1` API server and shared clients
-(plan 01), and later controllers (ToolSession, LLMLease) beside `internal/controller/`; Name each one here when it lands.
+Directories still to come: later controllers (ToolSession, LLMLease) beside
+`internal/controller/`. Name each one here when it lands.
 
 ## How work happens here
 
