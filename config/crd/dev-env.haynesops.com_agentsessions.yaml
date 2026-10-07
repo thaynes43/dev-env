@@ -358,16 +358,84 @@ spec:
               agent:
                 description: Agent is the agent's own state, from agentd's heartbeat.
                 properties:
+                  agentd:
+                    description: Agentd is agentd's version line.
+                    type: string
+                  boot:
+                    description: 'Boot is agentd''s boot phase: booting, ready or
+                      failed.'
+                    type: string
+                  branch:
+                    description: Branch is the worktree's branch, for example agent/haynes-ops-1005-202504.
+                    type: string
+                  conversationId:
+                    description: |-
+                      ConversationID is the agent's own session id (claude --session-id), the
+                      handle a resume uses.
+                    type: string
+                  head:
+                    description: Head is the worktree's commit.
+                    type: string
                   lastActivity:
                     description: LastActivity is the last time agentd saw the agent
                       or its worktree change.
                     format: date-time
                     type: string
+                  lastHeartbeat:
+                    description: |-
+                      LastHeartbeat is when the operator last accepted a heartbeat from the
+                      session's pod, by the operator's clock.
+                    format: date-time
+                    type: string
+                  message:
+                    description: Message is why agentd could not start the agent,
+                      when it could not.
+                    type: string
+                  problems:
+                    description: |-
+                      Problems are the boot steps that warned or failed, each as
+                      "<step>: <state>", with its first note when it has one.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: atomic
                   status:
                     description: |-
-                      Status is the agent's state: busy, idle or waiting for Claude, which
-                      writes it itself; agentd derives it for Codex and opencode.
+                      Status is the agent's state. In plan 01 it is agentd's agent state:
+                      pending, busy, exited, failed or interrupted. Plan 02 adds Claude's own
+                      busy, idle and waiting; agentd derives them for Codex and opencode.
                     type: string
+                  task:
+                    description: Task is how a task ended, once it has.
+                    properties:
+                      exitCode:
+                        description: ExitCode is the CLI's exit code.
+                        format: int32
+                        type: integer
+                      finishedAt:
+                        description: FinishedAt is when the CLI exited.
+                        format: date-time
+                        type: string
+                      isError:
+                        description: IsError is the result event's is_error.
+                        type: boolean
+                      numTurns:
+                        description: NumTurns is the number of turns the task took.
+                        format: int32
+                        type: integer
+                      subtype:
+                        description: |-
+                          Subtype is the result event's subtype: success, error_max_turns or
+                          error_during_execution.
+                        type: string
+                      timedOut:
+                        description: TimedOut is set when agentd stopped the task
+                          at limits.timeout.
+                        type: boolean
+                    required:
+                    - exitCode
+                    - finishedAt
+                    type: object
                 type: object
               conditions:
                 description: Conditions are the standard conditions.

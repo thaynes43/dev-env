@@ -38,3 +38,22 @@ const (
 	AppNameSession    = "dev-env-session"
 	ManagedByOperator = "dev-env-operator"
 )
+
+// The labels and annotations the /v1 API puts on an AgentSession when it creates
+// one (D-46). They are the API's own bookkeeping: agents cannot write
+// AgentSession objects (DESIGN-001 6.11), so a value here is the API's.
+const (
+	// LabelIdempotencyKey is the create's idempotency key (DESIGN-001 3.4, V-03).
+	// It is a label so the API finds a caller's earlier session with a label
+	// selector (D-39); the API then matches spec.parent, so a key is scoped to its
+	// caller.
+	LabelIdempotencyKey = LabelPrefix + "idempotency-key"
+	// AnnotationRequestHash is the SHA-256 of the create request that carried the
+	// idempotency key. A repeat of the key with a different request is refused.
+	AnnotationRequestHash = LabelPrefix + "request-hash"
+	// LabelDepth is how many sessions stand between this one and the human or
+	// client that started the chain: 0 for a session Tom or a client created, 1
+	// for its child, 2 for a grandchild. A session at depth 2 creates no children
+	// (DESIGN-001 3.4: two levels deep).
+	LabelDepth = LabelPrefix + "depth"
+)

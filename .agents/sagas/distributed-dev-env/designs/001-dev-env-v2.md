@@ -341,6 +341,118 @@ certificates. Destroying unrescued work is not in the API at all: it needs a hum
 `dev-agents`). Each session may create at most 4 child sessions at a time, two
 levels deep, so a confused agent cannot fork-bomb the fleet.
 
+**D-46 (2026-10-06, plan 01 step 3). The `/v1` API as plan 01 builds it: who may
+call, what a create checks, and how a reap and a heartbeat reach the objects.**
+
+- **Served.** `internal/apiserver` is a runnable in the operator's manager on every
+  replica (only the leader reconciles). HTTPS on `:8443`, TLS 1.3 only, with the
+  cert-manager certificate's `tls.crt` and `tls.key` from `--api-tls-dir`, reloaded on
+  renewal; if the watcher fails, the API stops with its error, so the pod restarts
+  rather than serve a certificate that no longer renews. Routes: `POST` and `GET
+  /v1/sessions`, `GET` and `DELETE /v1/sessions/{name}`, `POST
+  /v1/sessions/{name}/heartbeat`, `GET /v1/fleet`. The wire types are in
+  `internal/apiserver/apiv1`, which uses the standard library only, so `agent-run`
+  imports it and stays small. Every refusal is
+  `{"error": {"code", "message", "fields"}}` with a stable code: 400 `bad_request`, 401
+  `unauthenticated`, 403 `forbidden`, 404 `not_found`, 405, 409 `conflict`, 413, 415,
+  422 `invalid`, 429 `limit_exceeded`, 500 `internal`, 503 `unavailable`.
+- **Authentication** (D-05). One TokenReview per request for the audience
+  `dev-env-operator`, with no cache. A token for the API server's own audience is a
+  401: callers send a token only the operator accepts, so the operator never holds
+  one it could replay against the cluster. The
+  operator never logs a token, a body or a prompt: each request logs its method,
+  path, status and caller.
+- **Caller classes.** The token decides, never the body:
+  - `human`: `--human-service-account`, default `dev-env-system/dev-env-human`, the
+    token Tom's laptop mints (D-05);
+  - `client`: `--client-service-accounts`, trusted callers that are not sessions: the
+    workbench (`dev-agents/dev-env-workbench`, the default) and, until cutover, the
+    v1 pod (`dev/dev-env`), which haynes-ops adds. Plan 01's goal is `agent-run -p`
+    from the v1 pod, and D-05 named no identity for it;
+  - `session`: the agent ServiceAccount in `dev-agents`, with a token bound to a pod
+    (the projected token). The API server has checked that the pod exists with that
+    UID; the API also checks that the pod's controller is an `AgentSession` of the
+    same UID. That session is the caller;
+  - anyone else: 403. Summoning callers get theirs with `CallerPolicy` (plan 10).
+
+  In plan 01 the three classes have the same verbs, as D-05 says ("all
+  authenticated callers get the same API"), except that only a session's own pod
+  posts its heartbeat and a session's children are bounded (below). `human` is kept
+  apart from `client` for the Tom-only verbs of later plans.
+- **Create.** `spec.parent` is the caller: a session's name, else
+  `<namespace>/<name>`; the `mine` filter matches it. The API checks what only it
+  knows: what plan 01 serves (agent `claude`, mode `task`, no `tools`, no `name` or
+  `lane`; each later plan lifts its own line); the effort level per model (v1
+  `agent-run`'s table: Haiku 4.5 and older take none, the 4.6 tier has no `xhigh`,
+  `ultracode` goes wherever `xhigh` does, every newer model takes the full set); the
+  prompt at most 64 KiB (D-40); the idempotency key a label value; the profile in the
+  templates. Then agentd's own check runs (`controller.CheckAgentdSession`, the code
+  that builds the pod), and the schema's CEL rules (D-39) run at create: the API
+  server's Invalid causes come back as 422 fields under the request's names (`size`,
+  `limits.timeout`). The API restates neither set of rules, so they cannot drift.
+- **Names.** v1's `<repo>-<mmdd>-<HHMMSS>`, in UTC, with the repo lowercased, each
+  run of other characters one `-`, and cut to 49 characters; `-2` to `-9` when
+  another create took the second.
+- **Idempotency** (V-03). The key is a label on the session for every caller
+  (`dev-env.haynesops.com/idempotency-key`), and `spec.idempotencyKey` for a summoned
+  session only, because D-39 allows it in spec only there. A repeat of the key by the
+  same parent returns the newest unfinished session with 200. A repeat with a
+  different request is a 409: the annotation `dev-env.haynesops.com/request-hash`
+  holds the SHA-256 of the decoded request. The key is looked up before the child
+  limits below, so a retry of a create whose answer was lost gets its session back
+  even when that session reached a limit. A finished session frees its key.
+  Unfinished means not reaped, suspended, archived or failed, with its agent not
+  `exited`, `failed` or `interrupted`.
+- **Children** (3.4). A session's child: at most 4 unfinished at a time (429); at
+  most two levels deep, by the label `dev-env.haynesops.com/depth` (0 for a session
+  Tom or a client starts; 403 beyond 2); and on its parent's profile, the profile
+  label on the parent's pod. A request for another profile is a 403, and one with
+  none gets the parent's: a session cannot widen what it may read or reach by
+  starting another. A replica serialises its creates and reads keys and children from
+  the API server, not its cache, so these checks see each other's writes. Two
+  replicas can still race inside the same few milliseconds, so the bound can be
+  exceeded by one for that moment; plan 10's summoned sessions carry their own name,
+  and a create of a taken name is atomic.
+- **Reap** (D-45). `DELETE` deletes the `AgentSession` with background propagation
+  and a UID precondition: that is the reap, and the rescue finalizer holds the
+  session, its pod and its volume until rescue. The API reads the session from the
+  API server first and refuses (409) one the operator has seen that lacks the
+  finalizer, because deleting it would let the garbage collector take its pod and
+  volume unrescued. Any caller may reap any session, as in v1, because the rescue
+  comes first. The answer is 202 with the session, marked `reaping`.
+- **Heartbeat** (D-41). The caller must be the session in the path. The body is
+  decoded leniently, because a newer agentd may report more, and its `session` must
+  match the path (422). It is merge-patched into `status.agent` (state, boot phase,
+  problems, branch, head, conversation id, last activity, the task's end, agentd's
+  version, and `lastHeartbeat`, the operator's receive time) and `status.usage`
+  (the cost as a decimal string). The patch's base is read from the API server, so a
+  field the last beat set and this one lacks is cleared. The patch touches no field
+  the reconciler writes, and the reconciler's status update carries a
+  resourceVersion, so neither overwrites the other. The answer is 204.
+- **Fleet.** Phase counts for every session; each session that holds or waits for a
+  pod (every phase but Suspended and Archived) with the scheduler's reason; sessions
+  per node; the current template revision; and the sessions on an older one (the
+  reconciler's `Outdated` condition). Storage health arrives with plan 04 and the
+  plan-quota state with the keeper (S-16).
+- **Deploying it** (plan 01 step 8). A Service `dev-env-operator` in
+  `dev-env-system` on 8443. A Certificate whose names include
+  `dev-env-operator.dev-env-system.svc.cluster.local`: session pods use `ndots:1` and
+  the DNS allowlist refuses search-expanded names, so `--api-url` is that full name.
+  The CA reaches session pods through a templates mount and `AGENTD_API_CA_FILE`.
+  The RBAC is 6.11's operator row as written (`tokenreviews` create, its CRD group,
+  pods read in `dev-agents`). The v1 pod mints its token with `kubectl create token
+  dev-env -n dev --audience dev-env-operator`, which needs `create` on
+  `serviceaccounts/token` for its own ServiceAccount (`resourceNames: [dev-env]`) in
+  v1's `rbac.yaml`. A token for the pod's own identity, for an audience only the
+  operator accepts, adds no right in the cluster.
+- **Not in plan 01:** the other routes of the table above, `CallerPolicy`, and a
+  rate limit on TokenReviews. Only the platform tier and the v1 pod reach the API.
+
+Rationale: the API is the one door agents have to `dev-agents` (6.11), so the token,
+not the body, sets a session's parent, depth and profile. Leaving the schema's and
+agentd's rules to their own code keeps one copy of each, and v1alpha1 starts strict
+because loosening a rule later is compatible and tightening one is not (D-39).
+
 ### 3.5 agent-run v2
 
 The verbs stay, so muscle memory and every CLAUDE.md instruction carry over.
@@ -2842,3 +2954,4 @@ step it names.
 | D-43 | `agentd ctl rescue` keeps v1's rules but commits through a copy of the index, leaving the worktree as it was, and prints the refs origin lacks for step 5's bundle | 3.6 |
 | D-44 | The operator builds one bare pod and one volume per session from `dev-env-templates` (strict format, revision = hash of the parsed content), places it per D-20 in code, and never updates or deletes either; no probes, 60 s grace, `Outdated` reported for plan 04 | 3.6 |
 | D-45 | Deleting an `AgentSession` is a reap: a finalizer on the session and its volume holds both until rescue; one guarded function deletes pods (Draining, or Suspended after rescue); `RemovalBlocked` reports the wait | 5.1 |
+| D-46 | The `/v1` API of plan 01: HTTPS on 8443 on every replica; TokenReview per request; callers by class (human, client, session; the v1 pod a client until cutover); create checks what only the API knows and leaves the schema and agentd their own rules; idempotency by label per parent; children bounded by count, depth and the parent's profile; reap is a delete held by the rescue finalizer; heartbeat merged into `status.agent` | 3.4 |

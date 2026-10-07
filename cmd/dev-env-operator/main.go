@@ -4,8 +4,9 @@
 // DESIGN-001 6.12), deployed as its own Deployment with its own ServiceAccount.
 //
 // Built so far: the AgentSession reconciler (plan 01 step 2), which creates each
-// session's pod and volume from dev-env-templates. The /v1 API arrives in plan 01
-// step 3, the broker mode in plan 07.
+// session's pod and volume from dev-env-templates, and the /v1 API (plan 01 step
+// 3, internal/apiserver, D-46), which every replica serves on :8443. The broker
+// mode arrives in plan 07.
 package main
 
 import (
@@ -14,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -24,6 +26,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/apiserver"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/templates"
 	"github.com/thaynes43/dev-env/internal/version"
@@ -59,6 +62,10 @@ type options struct {
 	metricsAddr        string
 	probeAddr          string
 	apiURL             string
+	apiAddr            string
+	apiTLSDir          string
+	humanSA            string
+	clientSAs          []string
 }
 
 func parseFlags(args []string) (options, error) {
@@ -77,6 +84,10 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.metricsAddr, "metrics-bind-address", ":8080", "address of the Prometheus metrics endpoint; 0 turns it off")
 	fs.StringVar(&o.probeAddr, "health-probe-bind-address", ":8081", "address of /healthz and /readyz")
 	fs.StringVar(&o.apiURL, "api-url", "", "base URL of the operator's /v1 API that session pods report to (AGENTD_API_URL, D-41); empty turns their heartbeat off")
+	fs.StringVar(&o.apiAddr, "api-bind-address", ":8443", "address of the /v1 API (HTTPS, D-46); 0 turns it off")
+	fs.StringVar(&o.apiTLSDir, "api-tls-dir", "/etc/dev-env-operator/api-tls", "directory holding the /v1 API's tls.crt and tls.key, the cert-manager Secret's mount")
+	fs.StringVar(&o.humanSA, "human-service-account", ownNamespace+"/dev-env-human", "Tom's ServiceAccount, <namespace>/<name>, whose token his laptop mints (D-05)")
+	clients := fs.String("client-service-accounts", "dev-agents/dev-env-workbench", "comma-separated ServiceAccounts, <namespace>/<name>, of trusted clients that are not sessions: the workbench, and the v1 pod (dev/dev-env) until cutover (D-46)")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
@@ -86,6 +97,19 @@ func parseFlags(args []string) (options, error) {
 	if o.sessionNamespace == "" || o.templatesNamespace == "" || o.templatesName == "" {
 		return o, errors.New("--session-namespace, --templates-namespace and --templates-name must not be empty")
 	}
+	if o.apiAddr != "0" {
+		if o.apiTLSDir == "" {
+			return o, errors.New("--api-tls-dir must not be empty while the API is on")
+		}
+		if _, err := apiserver.ParseServiceAccountRefs([]string{o.humanSA}); err != nil || o.humanSA == "" {
+			return o, fmt.Errorf("--human-service-account: %q is not <namespace>/<serviceaccount>", o.humanSA)
+		}
+		refs, err := apiserver.ParseServiceAccountRefs(strings.Split(*clients, ","))
+		if err != nil {
+			return o, fmt.Errorf("--client-service-accounts: %w", err)
+		}
+		o.clientSAs = refs
+	}
 	return o, nil
 }
 
@@ -94,7 +118,8 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	ctrl.SetLogger(logr.FromSlogHandler(slog.NewJSONHandler(os.Stderr, nil)))
+	logHandler := slog.NewJSONHandler(os.Stderr, nil)
+	ctrl.SetLogger(logr.FromSlogHandler(logHandler))
 	log := ctrl.Log.WithName(binaryName)
 	log.Info("starting", "version", version.Get().String(binaryName),
 		"sessionNamespace", o.sessionNamespace, "templates", o.templatesNamespace+"/"+o.templatesName)
@@ -141,6 +166,33 @@ func run(args []string) error {
 	}
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		return err
+	}
+	if o.apiAddr != "0" {
+		api := &apiserver.Server{
+			Client: mgr.GetClient(),
+			Live:   mgr.GetAPIReader(),
+			Auth:   apiserver.TokenReviewer{Client: mgr.GetClient()},
+			Policy: apiserver.Policy{
+				Human:                 o.humanSA,
+				Clients:               o.clientSAs,
+				SessionNamespace:      o.sessionNamespace,
+				SessionServiceAccount: controller.ServiceAccountName,
+			},
+			Templates: apiserver.TemplatesFrom(mgr.GetClient(), templatesKey),
+			Log:       ctrl.Log.WithName("api"),
+		}
+		runner := &apiserver.Runner{
+			Addr:     o.apiAddr,
+			CertDir:  o.apiTLSDir,
+			Handler:  api.Handler(),
+			ErrorLog: slog.NewLogLogger(logHandler, slog.LevelWarn),
+		}
+		if err := mgr.Add(runner); err != nil {
+			return err
+		}
+		if err := mgr.AddReadyzCheck("api", runner.ReadyCheck); err != nil {
+			return err
+		}
 	}
 	return mgr.Start(ctrl.SetupSignalHandler())
 }

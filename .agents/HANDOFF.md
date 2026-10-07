@@ -50,6 +50,15 @@ the saga. To start building, follow
   (D-45): a finalizer keeps the session and its volume until rescue, and the one
   guarded delete path refuses until plan 01 step 5 builds `rescued()`. Until then a
   deleted session stays, with `RemovalBlocked`, unless it never got a pod or volume.
+- **Plan 01 step 3, the `/v1` API, is built** (#31). Every operator replica serves
+  `POST/GET /v1/sessions`, `GET/DELETE /v1/sessions/{name}`, agentd's heartbeat
+  route and `GET /v1/fleet` over HTTPS on 8443, each call checked by a TokenReview
+  for the audience `dev-env-operator` (D-46). Callers are Tom's `dev-env-human`,
+  trusted clients (the workbench, and the v1 pod until cutover) and sessions by
+  their pod's token; the token sets a new session's parent, depth and profile. A
+  reap deletes the session, which the rescue finalizer holds (D-45). `agent-run`
+  (step 7) imports the wire types from `internal/apiserver/apiv1`; step 8 deploys
+  the Service, the Certificate and v1's own-token RBAC that D-46 lists.
 - **The v1 bounce landed on 2026-10-06.** haynes-ops #3381, #3342, #3336, #3294 and
   #3274 merged at about 21:05Z, and #3330 at 21:15Z. #3241 was closed. The v1 pod
   restarted at 21:17Z on `ghcr.io/thaynes43/dev-env:0.6.8` with a CPU limit of 8.
