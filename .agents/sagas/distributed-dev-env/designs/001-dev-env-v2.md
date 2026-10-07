@@ -1554,7 +1554,8 @@ a reaped session's volume, only after a verified rescue of the volume's last pod
   bundle: not when a new pod vanishes before a rescue, and not when the rescued pod
   itself kept running because the resume came before its delete (a conflict, or an
   operator restart in between) and ended later.
-- **Archive, plan 01's part.** Only a reap archives. For a deleted session with no
+- **Archive, plan 01's part.** Only a reap archives (plan 02 adds the archive timer
+  of a suspended session, D-62). For a deleted session with no
   pod (asked of the API server), whose newest rescue is not superseded and is
   `Verified` or `CleanAndPushed`, the operator deletes the claim (with its UID as a
   precondition), lifts its finalizer, reports phase `Archived`, and lets the session
@@ -1645,10 +1646,39 @@ Rationale: the rescue already runs by exec in a session pod (D-08, D-51). A hold
 is that pod without the agent, so the verdict, the record, the guard and the archive
 stay one code path, and the operator gains no new way to touch a volume.
 
+**D-62 (2026-10-07, plan 02 step 7). A suspended session's volume is archived on
+its timer after a valid rescue, and the session stays as an Archived record that
+is never resumed.**
+
+- **The clock.** `status.suspendedAt` is set when the operator first sees a session
+  suspended with no pod of its own. A hold pod (D-55) does not reset it, and a
+  resume clears it.
+- **The timer.** The volume is due for archive at `suspendedAt` plus
+  `spec.lifecycle.archiveAfter`, else the templates' `lifecycle.archiveAfter`, else
+  D-09's 168h. Until then the operator asks to be called back at the deadline. At
+  the deadline it runs the reap's archive path (D-51): no pod may exist (asked of the
+  API server), and the newest rescue must be valid. That is normally the rescue the
+  suspend ran. Without one (the pod never ran, ended, or its rescue failed or was
+  superseded), a hold pod rescues the volume first (D-55), and the retry and the
+  page apply as for a reap (D-57).
+- **The guard.** `volumeRemovalAllowed` now allows a deleted session, or a suspended
+  one whose timer is due. Its caller computes "due" and passes it through
+  `deleteVolume` and `releaseVolume`, which stay the only volume deletes.
+- **After the archive.** The volume is deleted and `status.archivedAt` is set. The
+  session is not released: it stays, phase `Archived`, with its rescue record and
+  its bundle path, until it is reaped, which then releases it at once. An archived
+  session is never resumed. A new volume would start its task again, so the API's
+  resume answers 409 and points at a restore from the bundle (step 11). The
+  reconciler starts no pod for it even if `operatingMode` is set back by hand.
+- **CRD.** `status.suspendedAt` and `status.archivedAt` are new fields. haynes-ops
+  gets the `config/crd/` copy before the operator pin that writes them, or the API
+  server prunes them (CLAUDE.md).
+
 ### 4.5 Resume and restore
 
 - `agent-run resume <id>`: same volume, new pod, `claude --resume <session-id>`. The
-  conversation, worktree and gitignored build output are all still there.
+  conversation, worktree and gitignored build output are all still there. An
+  archived session is not resumed (D-62).
 - `agent-run rescue restore <bundle>`: a new session whose clone fetches the bundle.
   Used after archive.
 
@@ -4027,3 +4057,4 @@ credential grants) is open. ADR-001 was Accepted on
 | D-59 | Idle detection: agentd reports Claude's own status (`busy`, `idle`, `waiting`) for a TUI and `lastActivity`, the newest of the task's log, Claude's last status change, an attached tmux client (now) and v1's `wt_busy` worktree signals (walked at most every 5 minutes, within 20 seconds and 200,000 entries, else now); the operator's timers judge the window | 4.2 |
 | D-60 | Suspend and resume are `POST /v1/sessions/{name}/suspend` and `/resume`, which set `spec.operatingMode` and the `suspended-by` annotation; the idle timer sets the same field when an agent that is not busy has had no activity for its window (`spec.lifecycle`, else the templates' optional `lifecycle` block, else D-09); the only spec write the operator makes | 4.3 |
 | D-61 | The broker mode of plan 07 step 3, kube and break-glass grants: checks repeated in Go; the policy match in name order, never for break-glass, `dev-env-grant-secrets-read` or profile `ops`; a 30-minute timeout; per grant a ServiceAccount and RoleBindings or one ClusterRoleBinding, labelled with the grant and deleted only by that label; a token not bound to the pod (the API server refuses it), lasting until `expiresAt` and at least 600 s, minted only for a new pod UID; deleting the ServiceAccount revokes; ended grants kept 90 days; `Decide`, `Notifier` and `Installer` as the seams of steps 4 and 6 | 6.12 |
+| D-62 | A suspended session's volume is archived at `status.suspendedAt` plus `archiveAfter` (spec, templates, else 168h), through the reap's archive path with a hold pod when no valid rescue exists; the session stays Archived (`status.archivedAt`), is never resumed, and goes when reaped | 4.4 |

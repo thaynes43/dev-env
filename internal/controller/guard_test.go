@@ -167,9 +167,10 @@ func TestARunningPodNeedsARescueOfItsOwn(t *testing.T) {
 	}
 }
 
-// TestVolumeGuardTable is the archive rule (D-10, D-51): a volume goes only
-// when its session is deleted, no pod of it exists, and the newest rescue, of
-// the volume's last pod, was verified or found nothing to save.
+// TestVolumeGuardTable is the archive rule (D-10, D-51, D-62): a volume goes
+// only when its session is deleted, or suspended with its archive timer due; no
+// pod of it exists; and the newest rescue, of the volume's last pod, was
+// verified or found nothing to save.
 func TestVolumeGuardTable(t *testing.T) {
 	now := metav1.Now()
 	safe := map[string]bool{"verified here": true, "clean here": true, "verified here, older generation": true, "verified in another pod": true}
@@ -178,20 +179,22 @@ func TestVolumeGuardTable(t *testing.T) {
 		for _, mode := range []v1alpha1.OperatingMode{v1alpha1.OperatingModeRunning, v1alpha1.OperatingModeSuspended} {
 			for _, deleted := range []bool{false, true} {
 				for _, podExists := range []bool{false, true} {
-					for recName, mkRec := range guardRecords {
-						s := &v1alpha1.AgentSession{Spec: v1alpha1.AgentSessionSpec{OperatingMode: mode}, Status: v1alpha1.AgentSessionStatus{Phase: phase}}
-						s.Generation = 7
-						if deleted {
-							s.DeletionTimestamp = &now
-						}
-						s.Status.Rescue = mkRec("last-pod", s.Generation)
-						want := deleted && !podExists && safe[recName]
-						err := volumeRemovalAllowed(s, podExists)
-						if want != (err == nil) {
-							t.Errorf("phase %q, %s, deleted %v, pod exists %v, rescue %s: %v (want allowed %v)", phase, mode, deleted, podExists, recName, err, want)
-						}
-						if want {
-							allowed++
+					for _, due := range []bool{false, true} {
+						for recName, mkRec := range guardRecords {
+							s := &v1alpha1.AgentSession{Spec: v1alpha1.AgentSessionSpec{OperatingMode: mode}, Status: v1alpha1.AgentSessionStatus{Phase: phase}}
+							s.Generation = 7
+							if deleted {
+								s.DeletionTimestamp = &now
+							}
+							s.Status.Rescue = mkRec("last-pod", s.Generation)
+							want := (deleted || (mode == v1alpha1.OperatingModeSuspended && due)) && !podExists && safe[recName]
+							err := volumeRemovalAllowed(s, podExists, due)
+							if want != (err == nil) {
+								t.Errorf("phase %q, %s, deleted %v, pod exists %v, archive due %v, rescue %s: %v (want allowed %v)", phase, mode, deleted, podExists, due, recName, err, want)
+							}
+							if want {
+								allowed++
+							}
 						}
 					}
 				}

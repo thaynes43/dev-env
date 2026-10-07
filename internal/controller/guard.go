@@ -145,15 +145,18 @@ func holdRetryDue(s *v1alpha1.AgentSession, now time.Time, retry time.Duration) 
 }
 
 // volumeRemovalAllowed is nil only when archive may delete the session's volume
-// (D-10, D-51): the session is deleted (a reap; the archive timer of a suspended
-// session is plan 02's), no pod of it exists, and the newest rescue, of the
-// volume's last pod, is verified or proved there was nothing to save. podExists
-// must come from the API server, not the cache.
-func volumeRemovalAllowed(s *v1alpha1.AgentSession, podExists bool) error {
+// (D-10, D-51, D-62): the session is deleted (a reap), or it is suspended and
+// its archive timer is due (archiveDue, which the caller computes from
+// status.suspendedAt and the window); no pod of it exists; and the newest
+// rescue, of the volume's last pod, is verified or proved there was nothing to
+// save. podExists must come from the API server, not the cache.
+func volumeRemovalAllowed(s *v1alpha1.AgentSession, podExists, archiveDue bool) error {
 	r := s.Status.Rescue
 	switch {
-	case s.DeletionTimestamp.IsZero():
-		return errors.New("only a reap archives a volume in plan 01; a suspended session keeps its volume (the archive timer is plan 02's)")
+	case s.DeletionTimestamp.IsZero() && s.Spec.OperatingMode != v1alpha1.OperatingModeSuspended:
+		return errors.New("the session wants its pod: only a reap or the archive timer of a suspended session archives a volume")
+	case s.DeletionTimestamp.IsZero() && !archiveDue:
+		return errors.New("a suspended session keeps its volume until its archive timer is due (D-09, D-62)")
 	case podExists:
 		return errors.New("a pod of the session still exists, so the volume may still change")
 	case r == nil || r.Result == "":
@@ -183,8 +186,8 @@ func deletePod(ctx context.Context, c client.Client, s *v1alpha1.AgentSession, p
 // the claim, then lifts the operator's finalizer from it, so the API server can
 // remove it (D-45). With the storage class's Delete policy the RBD image goes
 // with it, so this is where work is lost if the rescue was wrong.
-func deleteVolume(ctx context.Context, c client.Client, s *v1alpha1.AgentSession, claim *corev1.PersistentVolumeClaim, podExists bool) error {
-	if err := volumeRemovalAllowed(s, podExists); err != nil {
+func deleteVolume(ctx context.Context, c client.Client, s *v1alpha1.AgentSession, claim *corev1.PersistentVolumeClaim, podExists, archiveDue bool) error {
+	if err := volumeRemovalAllowed(s, podExists, archiveDue); err != nil {
 		return err
 	}
 	if claim.DeletionTimestamp.IsZero() {
@@ -192,13 +195,13 @@ func deleteVolume(ctx context.Context, c client.Client, s *v1alpha1.AgentSession
 			return err
 		}
 	}
-	return releaseVolume(ctx, c, s, claim, podExists)
+	return releaseVolume(ctx, c, s, claim, podExists, archiveDue)
 }
 
 // releaseVolume lifts the operator's finalizer from the session's volume. Only
 // deleteVolume calls it (TestOnlyTheGuardDeletes).
-func releaseVolume(ctx context.Context, c client.Client, s *v1alpha1.AgentSession, claim *corev1.PersistentVolumeClaim, podExists bool) error {
-	if err := volumeRemovalAllowed(s, podExists); err != nil {
+func releaseVolume(ctx context.Context, c client.Client, s *v1alpha1.AgentSession, claim *corev1.PersistentVolumeClaim, podExists, archiveDue bool) error {
+	if err := volumeRemovalAllowed(s, podExists, archiveDue); err != nil {
 		return err
 	}
 	if !controllerutil.ContainsFinalizer(claim, Finalizer) {

@@ -47,6 +47,11 @@ func (s *Server) setOperatingMode(ctx context.Context, r *http.Request, c *calle
 			return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict,
 				"session %s is being reaped: rescued, suspended and archived (D-45); a reap is final", sess.Name)
 		}
+		if mode == v1alpha1.OperatingModeRunning && sess.Status.ArchivedAt != nil {
+			return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict,
+				"session %s was archived at %s: its volume is gone, so a resume would start its task again on a new one; restore it from its bundle instead (D-62)",
+				sess.Name, sess.Status.ArchivedAt.UTC().Format("2006-01-02T15:04:05Z"))
+		}
 		cur := sess.Spec.OperatingMode
 		if cur == "" {
 			cur = v1alpha1.OperatingModeRunning

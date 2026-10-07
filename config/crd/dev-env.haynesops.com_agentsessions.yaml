@@ -401,9 +401,9 @@ spec:
                     x-kubernetes-list-type: atomic
                   status:
                     description: |-
-                      Status is the agent's state. In plan 01 it is agentd's agent state:
-                      pending, busy, exited, failed or interrupted. Plan 02 adds Claude's own
-                      busy, idle and waiting; agentd derives them for Codex and opencode.
+                      Status is the agent's state, agentd's: pending, busy, idle, waiting,
+                      exited, failed or interrupted. idle and waiting are Claude's own, for a
+                      TUI (D-59); plan 04 derives them for Codex.
                     type: string
                   task:
                     description: Task is how a task ended, once it has.
@@ -437,6 +437,14 @@ spec:
                     - finishedAt
                     type: object
                 type: object
+              archivedAt:
+                description: |-
+                  ArchivedAt is when the archive timer deleted the suspended session's
+                  volume, after a valid rescue (D-62). An archived session is never
+                  resumed: a new volume would start its task again, so it is restored
+                  from its bundle instead.
+                format: date-time
+                type: string
               conditions:
                 description: Conditions are the standard conditions.
                 items:
@@ -648,6 +656,13 @@ spec:
               revision:
                 description: Revision is the template revision the pod runs (DESIGN-001
                   5.2).
+                type: string
+              suspendedAt:
+                description: |-
+                  SuspendedAt is when the operator first saw the session suspended with
+                  no pod of its own: the start of its archive timer (D-09, D-62). A resume
+                  clears it.
+                format: date-time
                 type: string
               usage:
                 description: Usage is the session's cost record (DESIGN-001 3.7, V-16).
