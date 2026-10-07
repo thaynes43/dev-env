@@ -81,7 +81,7 @@ step. Tick a step in the PR that lands it.
 - Everything in Go: the operator, agentd and `agent-run`.
 - CI: lint and tests (envtest for the operator), build, smoke-test and cosign-sign
   the agent image (`2.x`) and the operator image (`ghcr.io/thaynes43/dev-env-operator`),
-  publishing from `main` only; one aggregate `… - Success` check; release-please;
+  publishing the operator image from `main` and the agent image from a `v2.x.y` release tag (D-53); one aggregate `… - Success` check; release-please;
   Renovate with the Dockerfile `customManagers` copied from haynes-ops.
 - Agent image `2.0`: a copy of haynes-ops' `scripts/dev-env/Dockerfile` plus `tini`,
   `agentd`, the Codex standalone and `kubectl-cnpg` baked in (v1 downloads them at

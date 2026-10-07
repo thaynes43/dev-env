@@ -1008,6 +1008,67 @@ a ConfigMap of their own.**
   retires them, a change to a rule both pods share, or to the MCP list, goes into both:
   the v2 copy in an ordinary PR, v1's as a held draft.
 
+**D-53 (2026-10-06, KICKOFF B5). The agent image `ghcr.io/thaynes43/dev-env:2.x.y` is
+built from `images/agent/Dockerfile` and published from a release tag by its own
+workflow, `publish-agent.yml`.**
+
+- **The image** is a copy of v1's Dockerfile with `tini`, agentd, `agent-run`, the
+  Codex standalone and `kubectl-cnpg` baked in (v1 installed the last two at boot),
+  `pve` and `hw-ssh` (v1's scripts, byte for byte, in `images/agent/tools/`), and no
+  code-server and no `github-app-token.sh`. It is multi-stage: a Go stage runs `make
+  build` on the repo's Go sources, and the Debian/Node final stage copies `agentd` and
+  `agent-run` in last, so a Go change rebuilds two layers. Every version is an
+  `ARG ..._VERSION` under a `# renovate:` annotation, the same shape as v1's, so
+  B4's Dockerfile manager tracks them. No model id is written in the image: agentd
+  takes the default from `DEV_ENV_CLAUDE_MODEL`, which the templates set (D-44).
+- **PID 1 and the entrypoint.** `ENTRYPOINT [tini, --, agentd]`, `CMD [run]`. The
+  operator's container sets no command (D-44), so the pod runs `agentd run`. No `-g`:
+  agentd forwards SIGTERM to the CLI and waits for its own shutdown (D-42), and a
+  group signal would reach the CLI first.
+- **Where things are.** The user is `dev`, uid 1000, `HOME=/home/dev` (the session
+  volume mounts over it). Binaries are in `/usr/local/bin` (`gh` there too, which
+  agentd's wrapper in `~/.local/bin` shadows). Codex's install tree is
+  `/opt/dev-env/codex`, outside `CODEX_HOME`, so the volume cannot hide it, and `codex`
+  is a symlink on PATH. The browsers stay staged at `/opt/dev-env/ms-playwright`.
+  `/opt/dev-env/config`, `/opt/dev-env/scripts` and `/etc/codex` are the ConfigMap
+  mounts of D-49; the image ships nothing at them.
+- **The build runs in CI only** (3.2 GB on disk, measured in CI). `ci.yml`'s `image-agent` job builds it
+  on PRs that touch `images/agent/**`, loads it, runs `images/agent/smoke-test.sh`
+  (v1's toolchain test run as uid 1000 on a read-only root with no network, plus the
+  default entrypoint, agentd's and agent-run's stamped commit, Codex's location, the
+  absence of code-server, and a zombie-reaping check under tini), and never pushes.
+- **Publish trigger: a release tag, not main.** The image's tag is the repo's release
+  version (section 10), and only release-please knows it. A push to main knows a
+  commit; publishing there would need a `sha-` tag or `latest`, and B5 publishes
+  `2.x.y` only. `publish-agent.yml` runs on a push of `v2.<n>.<n>` and on
+  `workflow_dispatch` on a tag ref; the job is skipped on any branch, requires the
+  tagged commit to be reachable from main, and refuses a tag that is not `v2.x.y`.
+  It pushes `dev-env:<x.y.z>` (no `v`), never `latest`, and never an existing tag: a
+  run for a tag whose image exists builds nothing and only signs it if unsigned. It
+  builds and smoke-tests first and pushes the image that passed, then signs the
+  digest keyless (cosign v3.1.3, as publish.yml and v1) and runs `cosign verify` with
+  the identity `publish-agent.yml@refs/tags/v2.x.y`. `packages: write` and
+  `id-token: write` are on that one job. The operator image stays on publish.yml
+  from main, as `sha-<short>` (B3).
+- **Kyverno.** The signature's subject ends `@refs/tags/v2.x.y`, which
+  `verify-dev-env-v2` (`...workflows/*@refs/heads/main`) does not match. The paired
+  haynes-ops change (#3478, merged 2026-10-07) splits the rule's `verifyImages` by image: the operator keeps the
+  main subject, and `dev-env:2.*` gets `.../workflows/publish-agent.yml@refs/tags/v2.*`.
+  Both rules are still Audit and still unverifying (haynes-ops #3092).
+- **The first `2.0.0`.** release-please opens the release PR, and merging it tags
+  `v2.0.0`. Until the repo setting "Allow GitHub Actions to create and approve pull
+  requests" is on (laptop handoff part 1, step 5), release-please fails on main and
+  there is no release PR and no tag, so no agent image. Until the release App secret
+  exists, release-please creates the tag with `GITHUB_TOKEN`, and GitHub starts no
+  workflow for it: run `gh workflow run publish-agent.yml --ref v2.0.0` by hand. The
+  GHCR grant (Write for this repo on the `dev-env` package) must also exist, or the
+  push fails with 403.
+- **Not decided here.** Tagging the operator image `2.x.y` as well (section 10 says
+  both images take the release version) is not part of B5: the operator is pinned by
+  `sha-<short>`, and the operator HelmRelease (KICKOFF 8.9, haynes-ops #3497) runs
+  `dev-env-operator:sha-8b388b2` as deployed. A retag needs no rebuild, so it can
+  follow if that pin ever moves to the release version.
+
 ### 3.7 Summoned sessions
 
 Automated callers in haynes-ops hand work to Claude Code sessions that bill the Max
@@ -3304,7 +3365,7 @@ this design does not repeat it.
 | Review verified on a later PR (step 5) | Done: PR #2 was the verification PR |
 
 Added by phase 1, in this repo: build, smoke-test and sign workflows for both images
-(publish from `main` only, cosign keyless); Go lint and tests (envtest); one
+(the operator image publishes from `main`, the agent image from a release tag, D-53; cosign keyless); Go lint and tests (envtest); one
 aggregate `… - Success` check to make required, as haynes-ops does; Renovate config
 with the Dockerfile `customManagers` copied from haynes-ops.
 
@@ -3488,3 +3549,4 @@ step it names.
 | D-50 | `agent-run` v2 of plan 01: `-p`, `list`, `show`, `reap` and `fleet`; v1's defaults and checks before a create, with the API's effort table moved to `apiv1`; a new idempotency key per run, kept across retries; it waits for the pod and prints the scheduler's reason; the API found from flags, `DEV_ENV_API_*`, the session pod's settings, or a token minted for the pod's own ServiceAccount; exit codes 0 to 5 | 3.5 |
 | D-51 | The operator rescues by exec (`agentd ctl rescue --stop-agent`) before a suspend deletes a pod that ran, writes the verdict to `status.rescue` first, marks it superseded when the session asks for its pod again, and archives only a reaped session's volume after a verified rescue of its last pod | 4.4 |
 | D-52 | The minimal keeper: the haynes-dev-bot token minted v1's way from an App directory read at every mint, merged into `dev-env-gh-token` by one patch, every 40 minutes or two thirds of its life, retried from 10 s to 5 minutes with jitter; one replica behind a Lease (not a fence: plans 03 and 04 fence each refresh); Secrets `patch` only; ready while its token lives; nothing secret logged | 6.4 |
+| D-53 | The agent image is built from `images/agent/Dockerfile` (v1's plus tini, agentd, agent-run, baked Codex and kubectl-cnpg, pve and hw-ssh; no code-server), smoke-tested in CI on every PR that touches it, and published as `dev-env:2.x.y` only, from a `v2.x.y` release tag by `publish-agent.yml`, signed keyless; the paired haynes-ops Kyverno change trusts that workflow on `refs/tags/v2.*` | 3.6 |

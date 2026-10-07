@@ -23,7 +23,9 @@ the saga. To start building, follow
   CRD, the four binaries and the Makefile are on main; only `agent-run version` does
   real work. D-38 records that the keeper is its own binary. B2 added `ci.yml` and the
   operator Dockerfile; B3 added `publish.yml`, which pushes and signs
-  `dev-env-operator:sha-<short>` from main. The agent image (B5) is still to come. The
+  `dev-env-operator:sha-<short>` from main. The agent image (B5, D-53) is built and
+  smoke-tested by CI on PRs and published by `publish-agent.yml` from a `v2.x.y` release tag;
+  it ships once the GHCR grant and the first release exist. The
   operator package stays private until Tom flips it (laptop handoff, part 2).
   **B4 added Renovate and release-please** (#18): the first release is 2.0.0 (one repo
   version on the agent image's `2.x` line). Until Tom adds the release App, the
