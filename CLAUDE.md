@@ -22,9 +22,9 @@ this repo publishes signed images, haynes-ops pins and deploys them.
 **Status: ADR-001 Accepted 2026-10-06; the Go skeleton (KICKOFF B1), CI, the
 `AgentSession` CRD (plan 01 step 1), the operator's pod and volume reconciler (step 2),
 its `/v1` API (step 3), agentd's config rendering, clone, task runner, heartbeat
-and rescue report (step 4) and agentd's rescue bundle (step 5, part 1) are
-built.** The keeper and most of `agent-run`
-are still honest stubs that say which plan step builds them. The build sessions follow
+and rescue report (step 4), agentd's rescue bundle (step 5, part 1) and
+`agent-run`'s `-p`, `list`, `show`, `reap` and `fleet` (step 7) are built.** The
+keeper is still an honest stub that says which plan step builds it. The build sessions follow
 [`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md). v1 keeps running from
 haynes-ops (`kubernetes/main/apps/dev/dev-env/`, `scripts/dev-env/Dockerfile`) until
 v2 proves itself and Tom approves the cutover. The saga:
@@ -43,7 +43,7 @@ api/v1alpha1/            CRD types, group dev-env.haynesops.com (AgentSession); 
 cmd/dev-env-operator/    the operator; the broker will be its second mode (DESIGN-001 3.1, 6.12)
 cmd/dev-env-keeper/      the keeper, its own binary in the operator image (D-38)
 cmd/agentd/              the in-pod supervisor: `run`, `run-agent`, `render`, `ctl status|rescue [--stop-agent]` (D-40 to D-43, D-48)
-cmd/agent-run/           the CLI, one static binary (CGO_ENABLED=0, D-06)
+cmd/agent-run/           the CLI, one static binary (CGO_ENABLED=0, D-06); main only, the commands are internal/agentrun
 internal/version/        the build identity every binary's `version` prints
 internal/testenv/        starts envtest (kube-apiserver + etcd) with config/crd/ installed, for test suites
 internal/templates/      parses and checks dev-env-templates, the GitOps data pods are built from; its revision (D-44)
@@ -53,7 +53,10 @@ internal/controller/     the AgentSession reconciler: each session's pod and vol
 internal/apiserver/      the operator's /v1 API (D-46): HTTPS runnable, TokenReview auth, caller classes, sessions,
                          heartbeat and fleet handlers. Unit tests use the fake client; its envtest suite mints real
                          tokens and serves through a manager wired as the operator's
-internal/apiserver/apiv1/  the API's wire types and error codes, standard library only, for agent-run
+internal/apiserver/apiv1/  the API's wire types, error codes and Claude effort table, standard library only, for agent-run
+internal/agentrun/       agent-run's commands (D-50): -p, list, show, reap, fleet; finds the API and a token in a session
+                         pod, in another pod (a minted token) or from flags; imports the standard library, apiv1 and
+                         agentd's protocol only (`make build` checks); tests run against an httptest TLS server
 internal/agentd/         agentd: config rendering (the dev-init.sh port), clone and worktree, the task runner, heartbeat,
                          status, rescue and its bundle on the shared volume (D-48); tests fake claude and tmux and run
                          git against a bare repo in t.TempDir()

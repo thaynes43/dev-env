@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/thaynes43/dev-env/internal/agentrun"
 )
 
 // versionLine matches "agent-run <version> (commit <commit>, <go>, <os>/<arch>)".
@@ -17,8 +19,8 @@ func TestVersion(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			code := run([]string{arg}, &stdout, &stderr)
 
-			if code != exitOK {
-				t.Fatalf("exit code = %d, want %d (stderr: %q)", code, exitOK, stderr.String())
+			if code != agentrun.ExitOK {
+				t.Fatalf("exit code = %d, want %d (stderr: %q)", code, agentrun.ExitOK, stderr.String())
 			}
 			if stderr.Len() != 0 {
 				t.Errorf("stderr = %q, want empty", stderr.String())
@@ -36,8 +38,8 @@ func TestVersion(t *testing.T) {
 
 func TestVersionRejectsArguments(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"version", "--json"}, &stdout, &stderr); code != exitUsage {
-		t.Fatalf("exit code = %d, want %d", code, exitUsage)
+	if code := run([]string{"version", "--json"}, &stdout, &stderr); code != agentrun.ExitUsage {
+		t.Fatalf("exit code = %d, want %d", code, agentrun.ExitUsage)
 	}
 	if stdout.Len() != 0 {
 		t.Errorf("stdout = %q, want empty", stdout.String())
@@ -47,19 +49,18 @@ func TestVersionRejectsArguments(t *testing.T) {
 	}
 }
 
+// The commands themselves are tested in internal/agentrun; this checks that
+// main hands the arguments and streams through.
 func TestUsage(t *testing.T) {
 	tests := []struct {
 		name       string
 		args       []string
 		wantCode   int
 		wantStdout bool // usage on stdout (asked for) rather than stderr (an error)
-		wantInErr  string
 	}{
-		{name: "no arguments", args: nil, wantCode: exitUsage},
-		{name: "help", args: []string{"help"}, wantCode: exitOK, wantStdout: true},
-		{name: "--help", args: []string{"--help"}, wantCode: exitOK, wantStdout: true},
-		{name: "a verb not built yet", args: []string{"list"}, wantCode: exitUsage, wantInErr: `unknown command "list"`},
-		{name: "a v1 flag not built yet", args: []string{"-p", "fix the docs"}, wantCode: exitUsage, wantInErr: `unknown command "-p"`},
+		{name: "no arguments", args: nil, wantCode: agentrun.ExitUsage},
+		{name: "help", args: []string{"help"}, wantCode: agentrun.ExitOK, wantStdout: true},
+		{name: "--help", args: []string{"--help"}, wantCode: agentrun.ExitOK, wantStdout: true},
 	}
 
 	for _, tt := range tests {
@@ -74,14 +75,11 @@ func TestUsage(t *testing.T) {
 			if tt.wantStdout {
 				usageOut, other = &stdout, &stderr
 			}
-			if !strings.Contains(usageOut.String(), "Usage: agent-run <command>") {
+			if !strings.Contains(usageOut.String(), "agent-run [--repo] <repo> -p") {
 				t.Errorf("usage missing from the expected stream; got %q", usageOut.String())
 			}
 			if other.Len() != 0 {
 				t.Errorf("unexpected output on the other stream: %q", other.String())
-			}
-			if tt.wantInErr != "" && !strings.Contains(stderr.String(), tt.wantInErr) {
-				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tt.wantInErr)
 			}
 		})
 	}

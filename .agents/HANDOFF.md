@@ -64,6 +64,15 @@ the saga. To start building, follow
   reap deletes the session, which the rescue finalizer holds (D-45). `agent-run`
   (step 7) imports the wire types from `internal/apiserver/apiv1`; step 8 deploys
   the Service, the Certificate and v1's own-token RBAC that D-46 lists.
+- **Plan 01 step 7, `agent-run` v2, is built** (#34). `agent-run --repo <r> -p
+  "<task>"` creates a task session, then waits up to 30 s and prints the node it runs
+  on or the scheduler's reason; `list`, `show <name>`, `reap <name>...` and `fleet`
+  read and reap; `-o json` prints the API's own document, and the exit codes are in
+  D-50. A session pod uses its projected token; any other pod, such as the v1 pod,
+  mints a token for its own ServiceAccount, which the cluster refuses until step 8's
+  RBAC lands, and step 8 must also get the API's CA to the v1 pod; elsewhere, pass
+  `--api-url` and `--token-file` until plan 02. v1's own `agent-run` is unchanged and
+  still starts every session today.
 - **The v1 bounce landed on 2026-10-06.** haynes-ops #3381, #3342, #3336, #3294 and
   #3274 merged at about 21:05Z, and #3330 at 21:15Z. #3241 was closed. The v1 pod
   restarted at 21:17Z on `ghcr.io/thaynes43/dev-env:0.6.8` with a CPU limit of 8.

@@ -110,8 +110,8 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	if req.Model == "" {
 		add("model", "required: a full model id such as claude-opus-5-5")
 	}
-	if req.Effort != "" && v1alpha1.AgentKind(req.Agent) == v1alpha1.AgentClaude && req.Model != "" && !claudeEffortAccepted(req.Model, req.Effort) {
-		if levels := claudeEffortLevels(req.Model); levels == nil {
+	if req.Effort != "" && v1alpha1.AgentKind(req.Agent) == v1alpha1.AgentClaude && req.Model != "" && !apiv1.ClaudeEffortAccepted(req.Model, req.Effort) {
+		if levels := apiv1.ClaudeEffortLevels(req.Model); levels == nil {
 			add("effort", "model %s has no effort control; leave effort empty", req.Model)
 		} else {
 			add("effort", "model %s takes %s (or ultracode where it takes xhigh), not %q", req.Model, strings.Join(levels, ", "), req.Effort)

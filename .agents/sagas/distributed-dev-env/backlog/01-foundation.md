@@ -1,8 +1,8 @@
 # 01: foundation, task mode
 
 **Status:** in progress: KICKOFF B1 to B4 landed (#14, #15, #17, #18); steps 1 to 4
-landed on 2026-10-06 (the CRD #24; pods and volumes #29, #30; the `/v1` API #31;
-agentd #25, #27, #28)
+and 7 landed on 2026-10-06 (the CRD #24; pods and volumes #29, #30; the `/v1` API #31;
+agentd #25, #27, #28; `agent-run` #34)
 **Depends on:** Q-01 (build), Q-02 (Go), Q-04 (requests and limits, no cap) and Q-05
 (storage), all decided 2026-10-06; spikes S-7 (clone path), S-8 (gasha01 speed) and
 S-12 (the guard)
@@ -57,7 +57,11 @@ step. Tick a step in the PR that lands it.
     records the verdict in status, and archives a reaped session's volume only
     after a verified rescue; `patch` on PVCs in its RBAC.
 - [ ] 6. The minimal keeper: mint the gh token every 40 minutes.
-- [ ] 7. `agent-run` v2: `-p`, `list`, `reap` and `fleet`.
+- [x] 7. `agent-run` v2: `-p`, `list`, `reap` and `fleet` (#34; D-50), plus `show`.
+  `internal/agentrun` holds the commands; `make build` checks that the binary links
+  no Kubernetes library. It finds the API in a session pod, mints a token for the
+  pod's own ServiceAccount in any other pod (the v1 pod), and takes `--api-url` and
+  `--token-file` elsewhere. Step 8 must get the API's CA to the v1 pod (D-50).
 - [ ] 8. The haynes-ops PRs (KICKOFF section 4, item 8).
 - [ ] 9. The first end-to-end run, then the acceptance checks below.
 
@@ -95,7 +99,8 @@ step. Tick a step in the PR that lands it.
   `AGENTD_API_CA_FILE`. For `agent-run` in the v1 pod, v1's `rbac.yaml` (outside
   `resources/**`) grants `create` on `serviceaccounts/token` for `resourceNames:
   [dev-env]` only, so the pod can mint its own token for audience `dev-env-operator`
-  (D-46).
+  (D-46). The v1 pod also needs the API's CA as a file for `DEV_ENV_API_CA_FILE`
+  (D-50): choose a way that does not restart the v1 pod, or hold that PR for Tom.
 - Operator and keeper HelmReleases, RBAC (DESIGN-001 6.11: cluster-wide read for
   agents, v1's write verbs under the `dev-env-agent-guard` and
   `dev-env-identity-guard` admission policies and the Kyverno exec rule, nothing in

@@ -1,4 +1,4 @@
-package apiserver
+package apiv1
 
 import (
 	"slices"
@@ -22,7 +22,7 @@ func TestClaudeEffortLevels(t *testing.T) {
 		"claude-3-7-sonnet-20250219": nil,
 		"claude-mythos-6-0":          fullEffort, // a newer model gets the full set
 	} {
-		if got := claudeEffortLevels(model); !slices.Equal(got, want) {
+		if got := ClaudeEffortLevels(model); !slices.Equal(got, want) {
 			t.Errorf("%s: %v, want %v", model, got, want)
 		}
 	}
@@ -37,8 +37,17 @@ func TestClaudeEffortLevels(t *testing.T) {
 		{"claude-haiku-4-5", "low", false},
 		{"claude-opus-5-5", "ultra", false},
 	} {
-		if got := claudeEffortAccepted(tc.model, tc.level); got != tc.ok {
+		if got := ClaudeEffortAccepted(tc.model, tc.level); got != tc.ok {
 			t.Errorf("%s %s: %v, want %v", tc.model, tc.level, got, tc.ok)
 		}
+	}
+}
+
+// The table is shared: a caller that changes the returned slice must not change
+// the next answer.
+func TestClaudeEffortLevelsReturnsACopy(t *testing.T) {
+	ClaudeEffortLevels("claude-opus-5-5")[0] = "changed"
+	if got := ClaudeEffortLevels("claude-opus-5-5"); got[0] != "low" {
+		t.Fatalf("the table changed under a caller: %v", got)
 	}
 }

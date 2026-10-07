@@ -289,7 +289,9 @@ PR per piece, in this order:
    tmux start, heartbeat, and `ctl status|rescue`.
 5. Rescue to a bundle on the shared volume (D-10), then suspend and archive.
 6. The minimal keeper: mint the gh token every 40 minutes.
-7. `agent-run` v2: `-p`, `list`, `reap` and `fleet`.
+7. `agent-run` v2: `-p`, `list`, `reap` and `fleet`. Done in #34 (2026-10-06), with
+   `show`: D-50 records the commands, the checks before a create, the retries and
+   the wait, how the CLI finds the API from each place, and the exit codes.
 8. The haynes-ops PRs, smallest first:
    1. the Renovate v1 hold;
    2. the Kyverno identity for `thaynes43/dev-env`;
@@ -319,7 +321,10 @@ PR per piece, in this order:
      stay true. The other v1 scripts are gone: agentd and the image replace them
      (DESIGN-001 3.6, D-40, the port of `dev-init.sh`).
    9. the operator and keeper HelmReleases, with the API's Service and Certificate
-      and v1's own-token RBAC (D-46);
+      and v1's own-token RBAC (D-46). `agent-run` in the v1 pod also needs the
+      Certificate's CA as a file it can name in `DEV_ENV_API_CA_FILE` (D-50); a new
+      mount on the v1 pod restarts it, so prefer a way that does not, or hold that PR
+      for Tom;
    10. the MCP network policy admits for `dev-agents`.
 
    Write new Kyverno policies on the `policies.kyverno.io` CEL types where they can
