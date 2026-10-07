@@ -71,7 +71,29 @@ Claude Code.
 The source for the MPL-2.0 components is in their upstream repositories, at the tag
 the Dockerfile pins.
 
-The npm and Debian packages keep their license files inside the image. The release
-binaries downloaded by the Dockerfile do not yet: their archives' license files are
-dropped when the binary is extracted. Tracked in
-[#55](https://github.com/thaynes43/dev-env/issues/55).
+## Where the license texts are in the images
+
+Both images carry the same two paths for this repo's own material:
+
+* `/usr/share/doc/dev-env/LICENSE` and `/usr/share/doc/dev-env/THIRD_PARTY.md`: this
+  repo's license and this page.
+* `/usr/share/licenses/dev-env/go-modules/`: the license texts of the third-party Go
+  modules linked into this repo's binaries, collected by
+  [go-licenses](https://github.com/google/go-licenses) at the version pinned in each
+  Dockerfile. `/usr/share/licenses/dev-env/go-stdlib/LICENSE` is the Go standard
+  library's license.
+
+The agent image adds one directory per downloaded tool under
+`/usr/share/licenses/<tool>/`: `kubectl`, `flux`, `gh`, `helm`, `kustomize`, `sops`,
+`age`, `yq`, `task`, `tofu`, `restic`, `talosctl`, `omnictl`, `tini`, `kubectl-cnpg`,
+`codex` and `uv`. Where a release archive holds the license file (`gh`, `helm`, `age`,
+`task`, `tofu`, `kubectl-cnpg`), that file is the one kept. Where it does not (the
+other tools), the Dockerfile downloads the license file from the upstream git tag that
+matches the pinned version, so the text cannot drift from the binary. `omnictl` has two
+files, the BSL 1.1 text (`LICENSE`) and its client library's MPL-2.0 text
+(`LICENSE.client-MPL-2.0`); `uv` has `LICENSE-MIT` and `LICENSE-APACHE`;
+`kubectl-cnpg` also keeps the `licenses/` tree of the modules it links. The npm
+packages and the Debian packages keep their own license files, as above.
+
+Both CI image jobs check that these paths exist, so a Dockerfile change that drops one
+fails the PR.

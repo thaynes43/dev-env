@@ -44,8 +44,9 @@ the saga. To start building, follow
   for the owner, members, collaborators and haynes-dev-bot. The code is MIT
   ([`LICENSE`](../LICENSE)); [`images/THIRD_PARTY.md`](../images/THIRD_PARTY.md) lists
   what the images bundle (the agent image carries proprietary Claude Code), and
-  [#55](https://github.com/thaynes43/dev-env/issues/55) puts the upstream license texts
-  into the images.
+  [#55](https://github.com/thaynes43/dev-env/issues/55) put the upstream license texts
+  into the images (`/usr/share/licenses/<tool>/` in the agent image, the Go module
+  texts and this repo's `LICENSE` and `THIRD_PARTY.md` in both; CI checks the paths).
 - **ADR-001 is Accepted.** Tom ratified it on 2026-10-06: "Accept as written".
   DESIGN-001 is Accepted with it.
 - **KICKOFF B1, the Go skeleton, is built** (#14). The module, the `AgentSession` types and

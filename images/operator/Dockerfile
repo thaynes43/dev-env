@@ -13,6 +13,11 @@
 
 FROM golang:1.27.1@sha256:162be5298a40ed317005c8339c6de4d10d3eef336d66dc8e9259b03ab9d3a6d2 AS build
 WORKDIR /src
+# go-licenses collects the license texts of the modules linked into the binaries (#55).
+# It goes in before the sources, so a Go change does not rebuild it.
+# renovate: datasource=github-releases depName=google/go-licenses
+ARG GO_LICENSES_VERSION=v2.0.1
+RUN CGO_ENABLED=0 go install "github.com/google/go-licenses/v2@${GO_LICENSES_VERSION}"
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
@@ -20,8 +25,20 @@ ARG COMMIT=
 ARG VERSION=
 # `make build` is the same path CI and developers use (static, trimpath, stamped).
 RUN make build COMMIT="${COMMIT}" VERSION="${VERSION}"
+# The texts of the third-party modules the two binaries link, plus the Go standard
+# library's own license. `--ignore` skips this repo's own packages (MIT, the LICENSE
+# copied beside them below). CGO_ENABLED=0 matches the Makefile, so go-licenses sees
+# the package set the binaries were built from.
+RUN mkdir -p /out/licenses/go-stdlib /out/licenses/go-modules \
+ && CGO_ENABLED=0 go-licenses save ./cmd/dev-env-operator ./cmd/dev-env-keeper \
+      --ignore github.com/thaynes43/dev-env --save_path=/out/licenses/go-modules \
+ && cp "$(go env GOROOT)/LICENSE" /out/licenses/go-stdlib/LICENSE
 
 FROM gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
 COPY --from=build /src/bin/dev-env-operator /src/bin/dev-env-keeper /usr/local/bin/
+# This repo's license, the third-party list and the module license texts (#55). The
+# distroless base keeps its Debian packages' copyright files in /usr/share/doc.
+COPY LICENSE images/THIRD_PARTY.md /usr/share/doc/dev-env/
+COPY --from=build /out/licenses/ /usr/share/licenses/dev-env/
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/dev-env-operator"]

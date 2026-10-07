@@ -46,6 +46,8 @@ on:
     # appears, for example an embedded directory.
     paths:
       - 'images/operator/**'
+      - 'images/THIRD_PARTY.md'
+      - 'LICENSE'
       - 'cmd/**'
       - 'internal/**'
       - 'api/**'

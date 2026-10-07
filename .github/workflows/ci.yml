@@ -56,6 +56,9 @@ jobs:
           filters: |
             agent_image:
               - 'images/agent/**'
+              # Copied into the image (#55): a change to either is a change to the image.
+              - 'LICENSE'
+              - 'images/THIRD_PARTY.md'
 
   lint:
     name: Lint
@@ -164,10 +167,25 @@ jobs:
           context: .
           file: ./images/operator/Dockerfile
           push: false
+          load: true
+          tags: dev-env-operator:ci
           build-args: |
             COMMIT=${{ github.event.pull_request.head.sha }}
           cache-from: type=gha,scope=dev-env-operator
           cache-to: type=gha,mode=max,scope=dev-env-operator
+      # The image is distroless (no shell), so list its files from outside.
+      - name: Check the license files in the operator image
+        run: |
+          id="$(docker create dev-env-operator:ci)"
+          docker export "${id}" | tar -t > "${RUNNER_TEMP}/operator-files"
+          docker rm "${id}" > /dev/null
+          for f in usr/share/doc/dev-env/LICENSE usr/share/doc/dev-env/THIRD_PARTY.md \
+                   usr/share/licenses/dev-env/go-stdlib/LICENSE; do
+            grep -qx "${f}" "${RUNNER_TEMP}/operator-files" || { echo "missing from the image: ${f}" >&2; exit 1; }
+          done
+          # The operator links Kubernetes client libraries, so the module texts are not empty.
+          grep -q '^usr/share/licenses/dev-env/go-modules/.*LICEN[CS]E' "${RUNNER_TEMP}/operator-files" \
+            || { echo "no Go module license texts in the image" >&2; exit 1; }
 
   # Only when images/agent/** changes (the Dockerfile, its tools, the smoke test). ~3 GB
   # image: CI only, never in the pod. Builds, loads and smoke-tests it; never pushes

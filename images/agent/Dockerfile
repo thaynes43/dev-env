@@ -29,6 +29,11 @@
 # sources are copied, so an edit to the tools below does not rebuild them.
 FROM golang:1.27.1@sha256:162be5298a40ed317005c8339c6de4d10d3eef336d66dc8e9259b03ab9d3a6d2 AS go
 WORKDIR /src
+# go-licenses collects the license texts of the modules linked into the binaries below
+# (the issue #55 work). It goes in before the sources, so a Go change does not rebuild it.
+# renovate: datasource=github-releases depName=google/go-licenses
+ARG GO_LICENSES_VERSION=v2.0.1
+RUN CGO_ENABLED=0 go install "github.com/google/go-licenses/v2@${GO_LICENSES_VERSION}"
 COPY go.mod go.sum ./
 RUN go mod download
 COPY Makefile ./
@@ -40,6 +45,14 @@ ARG VERSION=
 # `make build` also checks that agent-run is static (D-06). It builds the operator and
 # the keeper too, which this image drops; they cost seconds.
 RUN make build COMMIT="${COMMIT}" VERSION="${VERSION}"
+# The texts of the third-party modules agentd and agent-run link, plus the Go
+# standard library's own license. `--ignore` skips this repo's own packages (MIT, the
+# LICENSE copied beside them in the final stage). CGO_ENABLED=0 matches the Makefile,
+# so go-licenses sees the package set the binaries were built from.
+RUN mkdir -p /out/licenses/go-stdlib /out/licenses/go-modules \
+ && CGO_ENABLED=0 go-licenses save ./cmd/agentd ./cmd/agent-run \
+      --ignore github.com/thaynes43/dev-env --save_path=/out/licenses/go-modules \
+ && cp "$(go env GOROOT)/LICENSE" /out/licenses/go-stdlib/LICENSE
 
 # Pinned by digest, as every base image here is; Renovate (docker:pinDigests) keeps it fresh.
 FROM node:24-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
@@ -212,19 +225,26 @@ RUN curl -fsSLo /usr/local/bin/kubectl \
  && curl -fsSLo /tmp/kubectl.sha256 \
       "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256" \
  && echo "$(cat /tmp/kubectl.sha256)  /usr/local/bin/kubectl" | sha256sum -c - \
- && chmod +x /usr/local/bin/kubectl && rm -f /tmp/kubectl.sha256
+ && chmod +x /usr/local/bin/kubectl && rm -f /tmp/kubectl.sha256 \
+ && mkdir -p /usr/share/licenses/kubectl \
+ && curl -fsSLo /usr/share/licenses/kubectl/LICENSE \
+      "https://raw.githubusercontent.com/kubernetes/kubernetes/${KUBECTL_VERSION}/LICENSE"
 
 # flux CLI.
 RUN curl -fsSLo /tmp/flux.tar.gz \
       "https://github.com/fluxcd/flux2/releases/download/v${FLUX_VERSION}/flux_${FLUX_VERSION}_linux_amd64.tar.gz" \
  && tar -xzf /tmp/flux.tar.gz -C /usr/local/bin flux \
- && chmod +x /usr/local/bin/flux && rm -f /tmp/flux.tar.gz
+ && chmod +x /usr/local/bin/flux && rm -f /tmp/flux.tar.gz \
+ && mkdir -p /usr/share/licenses/flux \
+ && curl -fsSLo /usr/share/licenses/flux/LICENSE \
+      "https://raw.githubusercontent.com/fluxcd/flux2/v${FLUX_VERSION}/LICENSE"
 
 # gh CLI.
 RUN curl -fsSLo /tmp/gh.tar.gz \
       "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
  && tar -xzf /tmp/gh.tar.gz -C /tmp \
  && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh \
+ && install -D -m 0644 "/tmp/gh_${GH_VERSION}_linux_amd64/LICENSE" /usr/share/licenses/gh/LICENSE \
  && rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_amd64"
 
 # helm.
@@ -232,48 +252,66 @@ RUN curl -fsSLo /tmp/helm.tar.gz \
       "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz" \
  && tar -xzf /tmp/helm.tar.gz -C /tmp \
  && install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm \
+ && install -D -m 0644 /tmp/linux-amd64/LICENSE /usr/share/licenses/helm/LICENSE \
  && rm -rf /tmp/helm.tar.gz /tmp/linux-amd64
 
 # kustomize (release tags are kustomize/vX.Y.Z — hence the URL-encoded path).
 RUN curl -fsSLo /tmp/kustomize.tar.gz \
       "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" \
  && tar -xzf /tmp/kustomize.tar.gz -C /usr/local/bin kustomize \
- && chmod +x /usr/local/bin/kustomize && rm -f /tmp/kustomize.tar.gz
+ && chmod +x /usr/local/bin/kustomize && rm -f /tmp/kustomize.tar.gz \
+ && mkdir -p /usr/share/licenses/kustomize \
+ && curl -fsSLo /usr/share/licenses/kustomize/LICENSE \
+      "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/kustomize/v${KUSTOMIZE_VERSION}/LICENSE"
 
 # sops + age (SOPS_AGE_KEY_FILE workflows, same as the Mac direnv setup).
 RUN curl -fsSLo /usr/local/bin/sops \
       "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64" \
  && chmod +x /usr/local/bin/sops \
+ && mkdir -p /usr/share/licenses/sops \
+ && curl -fsSLo /usr/share/licenses/sops/LICENSE \
+      "https://raw.githubusercontent.com/getsops/sops/v${SOPS_VERSION}/LICENSE" \
  && curl -fsSLo /tmp/age.tar.gz \
       "https://github.com/FiloSottile/age/releases/download/v${AGE_VERSION}/age-v${AGE_VERSION}-linux-amd64.tar.gz" \
  && tar -xzf /tmp/age.tar.gz -C /tmp \
  && install -m 0755 /tmp/age/age /usr/local/bin/age \
  && install -m 0755 /tmp/age/age-keygen /usr/local/bin/age-keygen \
+ && install -D -m 0644 /tmp/age/LICENSE /usr/share/licenses/age/LICENSE \
  && rm -rf /tmp/age.tar.gz /tmp/age
 
 # yq.
 RUN curl -fsSLo /usr/local/bin/yq \
       "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64" \
- && chmod +x /usr/local/bin/yq
+ && chmod +x /usr/local/bin/yq \
+ && mkdir -p /usr/share/licenses/yq \
+ && curl -fsSLo /usr/share/licenses/yq/LICENSE \
+      "https://raw.githubusercontent.com/mikefarah/yq/v${YQ_VERSION}/LICENSE"
 
 # go-task (the repo's Taskfile runner).
 RUN curl -fsSLo /tmp/task.tar.gz \
       "https://github.com/go-task/task/releases/download/v${TASK_VERSION}/task_linux_amd64.tar.gz" \
  && tar -xzf /tmp/task.tar.gz -C /usr/local/bin task \
- && chmod +x /usr/local/bin/task && rm -f /tmp/task.tar.gz
+ && chmod +x /usr/local/bin/task \
+ && mkdir -p /usr/share/licenses/task \
+ && tar -xzf /tmp/task.tar.gz -C /usr/share/licenses/task LICENSE \
+ && rm -f /tmp/task.tar.gz
 
 # opentofu.
 RUN curl -fsSLo /tmp/tofu.zip \
       "https://github.com/opentofu/opentofu/releases/download/v${OPENTOFU_VERSION}/tofu_${OPENTOFU_VERSION}_linux_amd64.zip" \
  && unzip -q /tmp/tofu.zip -d /tmp/tofu \
  && install -m 0755 /tmp/tofu/tofu /usr/local/bin/tofu \
+ && install -D -m 0644 /tmp/tofu/LICENSE /usr/share/licenses/tofu/LICENSE \
  && rm -rf /tmp/tofu.zip /tmp/tofu
 
 # restic (volsync debugging per the runbooks).
 RUN curl -fsSLo /tmp/restic.bz2 \
       "https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/restic_${RESTIC_VERSION}_linux_amd64.bz2" \
  && bunzip2 /tmp/restic.bz2 \
- && install -m 0755 /tmp/restic /usr/local/bin/restic && rm -f /tmp/restic
+ && install -m 0755 /tmp/restic /usr/local/bin/restic && rm -f /tmp/restic \
+ && mkdir -p /usr/share/licenses/restic \
+ && curl -fsSLo /usr/share/licenses/restic/LICENSE \
+      "https://raw.githubusercontent.com/restic/restic/v${RESTIC_VERSION}/LICENSE"
 
 # talosctl + omnictl (single static binaries, siderolabs releases) — READ-ONLY node
 # triage (saga backlog 10). talosctl reads dmesg/logs/machine resources directly from
@@ -286,7 +324,14 @@ RUN curl -fsSLo /usr/local/bin/talosctl \
  && chmod +x /usr/local/bin/talosctl \
  && curl -fsSLo /usr/local/bin/omnictl \
       "https://github.com/siderolabs/omni/releases/download/${OMNICTL_VERSION}/omnictl-linux-amd64" \
- && chmod +x /usr/local/bin/omnictl
+ && chmod +x /usr/local/bin/omnictl \
+ && mkdir -p /usr/share/licenses/talosctl /usr/share/licenses/omnictl \
+ && curl -fsSLo /usr/share/licenses/talosctl/LICENSE \
+      "https://raw.githubusercontent.com/siderolabs/talos/${TALOSCTL_VERSION}/LICENSE" \
+ && curl -fsSLo /usr/share/licenses/omnictl/LICENSE \
+      "https://raw.githubusercontent.com/siderolabs/omni/${OMNICTL_VERSION}/LICENSE" \
+ && curl -fsSLo /usr/share/licenses/omnictl/LICENSE.client-MPL-2.0 \
+      "https://raw.githubusercontent.com/siderolabs/omni/${OMNICTL_VERSION}/client/LICENSE"
 
 # tini (checksum-verified): PID 1, the one process that reaps (D-07).
 RUN curl -fsSLo /usr/local/bin/tini \
@@ -294,13 +339,20 @@ RUN curl -fsSLo /usr/local/bin/tini \
  && curl -fsSLo /tmp/tini.sha256sum \
       "https://github.com/krallin/tini/releases/download/v${TINI_VERSION}/tini-static-amd64.sha256sum" \
  && echo "$(cut -d' ' -f1 /tmp/tini.sha256sum)  /usr/local/bin/tini" | sha256sum -c - \
- && chmod +x /usr/local/bin/tini && rm -f /tmp/tini.sha256sum
+ && chmod +x /usr/local/bin/tini && rm -f /tmp/tini.sha256sum \
+ && mkdir -p /usr/share/licenses/tini \
+ && curl -fsSLo /usr/share/licenses/tini/LICENSE \
+      "https://raw.githubusercontent.com/krallin/tini/v${TINI_VERSION}/LICENSE"
 
 # kubectl-cnpg: the CloudNativePG plugin, found by `kubectl cnpg ...` on PATH.
-RUN curl -fsSL \
+# The archive ships its own LICENSE and a `licenses/` tree with the texts of the modules it links.
+RUN curl -fsSLo /tmp/kubectl-cnpg.tar.gz \
       "https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v${CNPG_PLUGIN_VERSION}/kubectl-cnpg_${CNPG_PLUGIN_VERSION}_linux_x86_64.tar.gz" \
-  | tar -xz -C /usr/local/bin kubectl-cnpg \
+ && tar -xzf /tmp/kubectl-cnpg.tar.gz -C /usr/local/bin kubectl-cnpg \
  && chmod +x /usr/local/bin/kubectl-cnpg \
+ && mkdir -p /usr/share/licenses/kubectl-cnpg \
+ && tar -xzf /tmp/kubectl-cnpg.tar.gz -C /usr/share/licenses/kubectl-cnpg LICENSE licenses \
+ && rm -f /tmp/kubectl-cnpg.tar.gz \
  && kubectl-cnpg version
 
 # Codex standalone, from the release's own installer (it checks the archive digest).
@@ -317,6 +369,11 @@ RUN curl -fsSLo /tmp/codex-install.sh \
       CODEX_NON_INTERACTIVE=1 sh /tmp/codex-install.sh --release "${CODEX_VERSION}" \
  && chmod -R a+rX /opt/dev-env/codex \
  && rm -rf /tmp/codex-install.sh /tmp/codex-home \
+ && mkdir -p /usr/share/licenses/codex \
+ && curl -fsSLo /usr/share/licenses/codex/LICENSE \
+      "https://raw.githubusercontent.com/openai/codex/rust-v${CODEX_VERSION}/LICENSE" \
+ && curl -fsSLo /usr/share/licenses/codex/NOTICE \
+      "https://raw.githubusercontent.com/openai/codex/rust-v${CODEX_VERSION}/NOTICE" \
  && codex --version
 
 # uv — modern python env/dependency management (hass-sandbox, makejinja venvs).
@@ -325,6 +382,11 @@ RUN curl -fsSLo /tmp/uv.tar.gz \
  && tar -xzf /tmp/uv.tar.gz -C /tmp \
  && install -m 0755 /tmp/uv-x86_64-unknown-linux-gnu/uv /usr/local/bin/uv \
  && install -m 0755 /tmp/uv-x86_64-unknown-linux-gnu/uvx /usr/local/bin/uvx \
+ && mkdir -p /usr/share/licenses/uv \
+ && curl -fsSLo /usr/share/licenses/uv/LICENSE-MIT \
+      "https://raw.githubusercontent.com/astral-sh/uv/${UV_VERSION}/LICENSE-MIT" \
+ && curl -fsSLo /usr/share/licenses/uv/LICENSE-APACHE \
+      "https://raw.githubusercontent.com/astral-sh/uv/${UV_VERSION}/LICENSE-APACHE" \
  && rm -rf /tmp/uv.tar.gz /tmp/uv-x86_64-unknown-linux-gnu
 
 # Agent CLIs + TS tooling (haynesnetwork runs tsx).
@@ -367,6 +429,13 @@ RUN chmod 0755 /usr/local/bin/pve /usr/local/bin/hw-ssh
 # The binaries of this repo come last, so a Go change rebuilds only these layers.
 # agentd is the one thing tini starts; agent-run is the v2 CLI (D-50).
 COPY --from=go /src/bin/agentd /src/bin/agent-run /usr/local/bin/
+
+# This repo's license, the third-party list and the texts of the Go modules the binaries
+# above link (#55). Beside them: /usr/share/licenses/<tool>/ for each downloaded tool
+# (above), /usr/share/doc/<package>/copyright for the Debian packages and each npm
+# package's own LICENSE. images/agent/smoke-test.sh checks these paths.
+COPY LICENSE images/THIRD_PARTY.md /usr/share/doc/dev-env/
+COPY --from=go /out/licenses/ /usr/share/licenses/dev-env/
 
 # /opt/dev-env/config and /opt/dev-env/scripts are ConfigMap mounts (D-49); the
 # browsers staged above and the Codex tree live in the same directory.
