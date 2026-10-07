@@ -98,9 +98,11 @@ ENVTEST_USE = $(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(ENVTEST_DI
 ENVTEST_WRITABLE = chmod -R u+w $(ENVTEST_DIR)
 
 .PHONY: build
-build: $(addprefix $(BIN_DIR)/,$(BINARIES)) ## Build every binary into bin/ and check that agent-run is static.
+build: $(addprefix $(BIN_DIR)/,$(BINARIES)) ## Build every binary into bin/ and check that agent-run is static and small.
 	@$(GO) version -m $(BIN_DIR)/agent-run | grep -q 'CGO_ENABLED=0' \
 		|| { echo "bin/agent-run was not built with CGO_ENABLED=0 (D-06)"; exit 1; }
+	@if $(GO) version -m $(BIN_DIR)/agent-run | grep -E '^\s+dep\s+(k8s\.io|sigs\.k8s\.io)/'; then \
+		echo "bin/agent-run links the Kubernetes libraries above; it imports only the standard library, apiv1 and agentd's protocol (D-06, D-50)"; exit 1; fi
 
 # The CLI also ships as a macOS binary (laptops). Static like the Linux one.
 .PHONY: build-agent-run-darwin

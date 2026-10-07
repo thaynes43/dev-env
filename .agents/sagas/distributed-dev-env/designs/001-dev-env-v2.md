@@ -461,6 +461,7 @@ The verbs stay, so muscle memory and every CLAUDE.md instruction carry over.
 |---|---|
 | `agent-run [--repo r] [--agent a] [-p "…"\|--local\|--interactive] [--model] [--effort]` | `POST /v1/sessions`, prints the id. New: `--agent opencode`, `--size S\|M\|L`, `--profile`, `--tools a,b`. `--interactive` still means "TUI + Remote Control" for claude. |
 | `list` | `GET /v1/sessions` |
+| new: `show <id>` | `GET /v1/sessions/{id}`: the task, the last heartbeat and how the task ended (D-50). |
 | `attach [<id>]` | For Tom: `kubectl exec -it <pod> -- tmux attach` from the workbench or a laptop. Not offered to agents, which have no exec in `dev-agents` (D-19); they use `msg`. |
 | `detach` | For Tom: exec `tmux detach-client` in the pod. |
 | `reap [<id>]` | `DELETE /v1/sessions/{id}` |
@@ -477,6 +478,98 @@ The verbs stay, so muscle memory and every CLAUDE.md instruction carry over.
 **D-06. `agent-run` is one static binary** with no runtime dependency. It needs only
 the API URL and a token, which it finds automatically in a pod (projected token,
 in-cluster Service DNS) or gets from the kubeconfig on a laptop.
+
+**D-50 (2026-10-06, plan 01 step 7). `agent-run` v2 as plan 01 builds it: the
+commands, how a create is checked and retried, how the CLI finds the API from
+each place, and what it prints.**
+
+- **Commands.** `-p "<task>"` creates a task session; `list`, `show <name>`, `reap
+  <name>...`, `fleet`, `version` and `help`. `show` is new: it is `GET
+  /v1/sessions/{name}`, the one view with the task, the last heartbeat and how the
+  task ended. v1's forms still work: `run` as the verb, the repository as the first
+  word anywhere, and v1's typo check (a first word within two edits of a command is
+  refused; a repository with such a name takes `--repo`). There are no pickers: a
+  missing repository or task is a usage error, and pickers can come back with plan
+  02's interactive sessions. v1's other verbs answer with the plan that builds
+  them; `prune` and `sweep` say they are gone. The code is `internal/agentrun`,
+  which imports the standard library, `apiv1` and agentd's `protocol` only, and
+  `make build` fails if the binary links a Kubernetes library.
+- **A create is checked before it is sent**, as v1 checked, and a refusal sends
+  nothing (exit 2). The defaults are v1's: agent `claude`, model
+  `$DEV_ENV_CLAUDE_MODEL` or else `claude-opus-5-5`, effort `xhigh` or else the
+  highest level below it the model takes, and none for a model without effort
+  control. An alias (`opus`, `fable`, `sonnet[1m]`, anything ending `-latest`) and
+  anything that is not a `claude-` id with a version number in it are refused, in
+  `--model` and in `DEV_ENV_CLAUDE_MODEL` alike. A level the model would not honour
+  is refused from the same table the API checks: it moved from `internal/apiserver`
+  to `apiv1.ClaudeEffortLevels`, so the CLI and the API cannot drift. `--safe` is
+  refused (D-23), and so are `--interactive` and `--local` until plans 02 and 03.
+  `codex` and `opencode` need `--model` and are left to the API, which names the
+  plan that serves them. `--base`, `--size`, `--profile`, `--timeout` and
+  `--max-turns` pass through to the schema's rules (D-39). `--prompt-file` (`-` for
+  stdin) carries a long work order.
+- **Idempotency and retries.** Each run makes a new key, `agent-run-` and 16 hex
+  digits, and sends it with the create; `--idempotency-key` names one, so that a
+  repeat of the whole command returns the first session (V-03). A request that
+  could not be sent, or that got 502, 503 or 504, is sent twice more, after 1 s and
+  2 s, with the same key, so a create whose answer was lost returns its session
+  rather than a second one. A 429 is not retried, because the limit frees only when
+  a session finishes, and neither is a certificate agent-run does not trust.
+- **Waiting for the pod.** After a create, agent-run polls the session every 2 s
+  for up to `--wait` (default 30 s; `0` returns at once). It stops when the pod is
+  Ready, the session fails, or two polls in a row carry the scheduler's
+  `Unschedulable` reason, and prints that reason then (plan 01's acceptance: "prints
+  the scheduler's reason at once"). One such poll alone, such as a volume still
+  binding, is not reported. A session that failed exits 1. A poll that fails after
+  the create prints a warning and exits 0, because the session exists.
+- **Reap.** One `DELETE` per name, with no confirmation, as v1's reap of a named
+  task: the rescue comes first, so nothing is lost (D-45). `--force` is accepted for
+  v1's sake, changes nothing, and says so. With several names each one is tried,
+  and the exit code is the first failure's.
+- **Finding the API** (D-05, D-06). The first match wins for each part.
+  - Address: `--api-url`, `DEV_ENV_API_URL`, `AGENTD_API_URL` (a session pod's),
+    then, in any pod of the cluster, `https://dev-env-operator.dev-env-system.svc.cluster.local:8443`.
+    HTTPS only, TLS 1.3, as the API serves.
+  - Token: `--token-file`, `DEV_ENV_API_TOKEN_FILE`, a session pod's projected token
+    (`AGENTD_API_TOKEN_FILE`, else `/var/run/secrets/dev-env/token`), then, in any
+    other pod, a TokenRequest for the pod's own ServiceAccount, named by the `sub`
+    of its mounted token: audience `dev-env-operator`, 600 s, reused for five
+    minutes, never written to disk. That is D-46's `kubectl create token dev-env -n
+    dev --audience dev-env-operator` without kubectl. In the v1 pod on 2026-10-06 it
+    reached the Kubernetes API and was refused 403, as expected until step 8 adds
+    the `serviceaccounts/token` grant; agent-run says which grant is missing.
+  - CA: `--ca-file`, `DEV_ENV_API_CA_FILE`, `AGENTD_API_CA_FILE`, on top of the
+    system roots.
+  - Tom's laptop: until plan 02 builds D-05's mint and port-forward, he passes
+    `--api-url` and `--token-file` (from `kubectl create token dev-env-human -n
+    dev-env-system --audience dev-env-operator`). Plan 02 also decides how the
+    laptop verifies the API's certificate through a port-forward, where the address
+    is not the certificate's name.
+  - **Open for step 8:** the v1 pod has no CA for the API's certificate yet. Step 8
+    picks the issuer and how its CA reaches the v1 pod as a file that
+    `DEV_ENV_API_CA_FILE` names. A new mount on the v1 pod restarts it, so step 8
+    prefers a way that does not, or holds that PR for Tom like any v1 bounce.
+- **Two `agent-run`s until cutover.** In the v1 pod, `agent-run` on the PATH stays
+  v1's script until plan 05. The v2 binary runs from a build of this repo (`make
+  build` puts it at `bin/agent-run`; the darwin build is
+  `bin/agent-run-darwin-arm64`), and session pods get it in the agent image (B5).
+- **Output.** Short aligned text by default, with no trailing spaces. `-o json`
+  prints the API's own document: the session as last polled for a create, a
+  `SessionList` for `list` and `reap`, the `Fleet` for `fleet`. `-o name` prints
+  names only, for `-p` and `list`. Messages go to stderr as `agent-run: <sentence>`,
+  with the API's status and code, and a 422's fields named by the flag that sets
+  each one (`--timeout`, not `limits.timeout`).
+- **Exit codes.** `0` done; `1` failed: the API refused the request, answered
+  something unexpected, or the session failed; `2` usage error, nothing sent; `3`
+  not authenticated or not allowed: no credentials, a 401 or 403, a refused token
+  mint, or an untrusted certificate; `4` no such session; `5` try again later: a
+  429, or the API unavailable or unreachable after the retries.
+
+Rationale: the verbs, flags and defaults stay v1's, so every CLAUDE.md instruction
+carries over (3.5). The CLI refuses what the API would refuse only where it can
+use the API's own table, so the two cannot disagree, and it leaves the schema's
+rules to the schema. The exit codes let an agent tell a command to fix (2) from a
+wait (5) from a question for Tom (3).
 
 ### 3.6 agentd and the session pod
 
@@ -3126,3 +3219,4 @@ step it names.
 | D-47 | The `dev-agents` CPU and memory ceiling is a Kyverno policy, not a LimitRange, because a LimitRange fills every unset limit with its default, so the "no CPU limit" rule could never fire | 7.2 |
 | D-48 | `agentd ctl rescue` writes one bundle per clone of its unpushed refs, thin against `origin/HEAD`, to `rescue/<session>/<stamp>/` on the shared volume with `manifest.json` last; it checks each bundle there before it reports `ok`; `--stop-agent` stops the CLI first | 3.6 |
 | D-49 | The session config: four ConfigMaps in `dev-agents` built from v2 copies of v1's files, with a new `CLAUDE.md` for a session pod; `requirements.toml` keeps v1's floor, in its own ConfigMap at `/etc/codex` in every pod; `bashrc.sh` exports no `GH_TOKEN` | 3.6 |
+| D-50 | `agent-run` v2 of plan 01: `-p`, `list`, `show`, `reap` and `fleet`; v1's defaults and checks before a create, with the API's effort table moved to `apiv1`; a new idempotency key per run, kept across retries; it waits for the pod and prints the scheduler's reason; the API found from flags, `DEV_ENV_API_*`, the session pod's settings, or a token minted for the pod's own ServiceAccount; exit codes 0 to 5 | 3.5 |
