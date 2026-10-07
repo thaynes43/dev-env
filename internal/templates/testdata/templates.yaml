@@ -26,11 +26,13 @@ env:
   - { name: DISABLE_AUTOUPDATER, value: "1" }
   - { name: DEV_ENV_CLAUDE_MODEL, value: claude-opus-5-5 }
 
-# The GitOps config agentd renders, in v1's layout (D-14).
+# The GitOps config agentd renders, in v1's layout (D-14, D-49), and Codex's
+# requirements at the system path Codex reads.
 mounts:
   - { name: config-claude, configMap: dev-env-config-claude, path: /opt/dev-env/config/claude }
   - { name: config-codex, configMap: dev-env-config-codex, path: /opt/dev-env/config/codex }
   - { name: scripts, configMap: dev-env-scripts, path: /opt/dev-env/scripts, defaultMode: 0555 }
+  - { name: codex-requirements, configMap: dev-env-codex-requirements, path: /etc/codex }
 
 claude:
   staticToken: { name: dev-env-claude-secret, key: CLAUDE_CODE_OAUTH_TOKEN }

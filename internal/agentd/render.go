@@ -465,8 +465,8 @@ func renderHWSSHKey(s Settings) Step {
 	return newStep(name, []string{"written to " + path}, os.Chmod(path, 0o600))
 }
 
-// renderShellProfile makes every interactive shell source the image's
-// bashrc.sh (fresh GH_TOKEN per shell, PATH), and bridges login shells to
+// renderShellProfile makes every interactive shell source the mounted
+// bashrc.sh (PATH; it exports no GH_TOKEN, D-49), and bridges login shells to
 // .bashrc: a fresh volume has no skeleton files.
 func renderShellProfile(s Settings) Step {
 	const name = "shell-profile"

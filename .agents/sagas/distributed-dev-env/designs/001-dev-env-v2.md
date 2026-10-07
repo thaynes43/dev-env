@@ -795,6 +795,95 @@ Rationale: a bare pod is what D-03 and Q-01 chose, and a pod that is never writt
 after create cannot be restarted by an operator release or a template change. Every
 input is in the cluster, so a fresh operator computes the same status (5.1).
 
+**D-49 (2026-10-06, plan 01 step 8.8a). The session config is four ConfigMaps in
+`dev-agents`: v2 copies of v1's files, a new `CLAUDE.md`, and Codex's requirements in
+a ConfigMap of their own.**
+
+- **Where.** haynes-ops `kubernetes/main/apps/dev-env-system/session-config/`, the
+  Flux Kustomization `dev-env-session-config`. It builds the four ConfigMaps in
+  `dev-agents` with fixed names, because `dev-env-templates` names them, and has no
+  `postBuild.substitute`, so `mcp.json`'s `${VAR}` placeholders reach agentd as
+  written (D-40). The files are copies of v1's `apps/dev/dev-env/app/resources/**`,
+  never references to them: an edit there restarts the v1 pod.
+- **What each key holds.**
+
+  | ConfigMap | Mounted at | Key | Content |
+  |---|---|---|---|
+  | `dev-env-config-claude` | `/opt/dev-env/config/claude` | `CLAUDE.md` | New: the session pod's rules, below. |
+  | | | `mcp.json` | v1's, byte for byte: the same ten servers and placeholders. |
+  | | | `agent-opus-worker.md`, `agent-sonnet-worker.md` | v1's name, description, model and effort. The body says "a dev-env v2 session pod", and the `# dev-env-managed` comment (agentd's marker) names agentd and the v2 path. |
+  | `dev-env-config-codex` | `/opt/dev-env/config/codex` | `config.toml` | v1's settings unchanged: `gpt-6-astra` at `max`, approval `never`, sandbox `danger-full-access`, the `CLAUDE.md` fallback, a 128 KiB doc cap, `save-all` history. The comments name agentd. |
+  | | | `AGENTS.header.md` | v1's preamble for a session pod: other sessions are other pods (`agent-run msg`), the phone is the codex hub's (plan 04), the sandbox is pinned, no `codex login` in a session pod, and the v2 path of `mcp.json`. |
+  | `dev-env-codex-requirements` (new) | `/etc/codex` | `requirements.toml` | v1's, unchanged: approval `never` only; sandbox `read-only` or `danger-full-access`. |
+  | `dev-env-scripts` | `/opt/dev-env/scripts`, mode 0555 | `bashrc.sh` | `PATH` with `~/.local/bin` first, and no `GH_TOKEN` export (below). |
+
+- **`requirements.toml` still applies.** bubblewrap cannot run in a session pod. The
+  pod's settings are v1's (`internal/controller/pod.go`: RuntimeDefault seccomp, all
+  capabilities dropped, no privilege escalation, uid 1000), and in the v1 pod on
+  2026-10-06 `codex sandbox linux -- true` failed with "No permissions to create a new
+  namespace" while `user.max_user_namespaces` was 11255. So the seccomp profile
+  refuses it, not the kernel, and Pod Security `restricted` on `dev-agents` loosens
+  nothing. A workspace-write sandbox would fail every command and turn it into an
+  approval, against D-23. The floor stays.
+- **Its mount.** `dev-env-templates`' top-level `mounts` put
+  `dev-env-codex-requirements` at `/etc/codex`, the system path Codex reads, in every
+  pod: every image carries Codex, and any agent can start it. It has a ConfigMap of
+  its own because a template mount takes a whole ConfigMap as a directory (D-44 has no
+  `items` or `subPath`), and `dev-env-config-codex` at `/etc/codex` would make its
+  `config.toml` Codex's system config layer. A directory mount also sees ConfigMap
+  updates, which v1's `subPath` mount never does. The operator's code does not change.
+  The other option was to bake the file into the agent image, which ties the floor to
+  the image's `CODEX_VERSION` (codex 0.153.4 refused a set without `read-only`). It was
+  not taken: it moves a GitOps policy into an image release, and the image pin and
+  this ConfigMap both live in haynes-ops, so a Codex bump that needs a new floor
+  changes both in one PR.
+- **The v2 `CLAUDE.md`** is v1's global file rewritten for a pod that runs one session.
+  Commands a later plan delivers are marked with that plan, and the haynes-ops PR that
+  deploys each plan updates the file.
+  - **Dropped, because only the v1 pod has them:** the Max login check and renewal from
+    inside the pod (the keeper is the sole owner, D-11; renewal moves to the console,
+    plan 03); the post-ready standby and its circuit breaker (the operator keeps the
+    standby, 6.7); the worktree sweeper, `prune` and `sweep` (rescue and the reaper,
+    D-10); the pod-level Codex daemon (the codex hub, D-12); the tool-auth rows for
+    hw-ssh, PiKVM and the Proxmox operator token (grants only, Q-07, plan 07), for
+    GCP (not mounted in a session pod) and for Codex's self-refreshing `auth.json`;
+    v1's `agent-run` modes and their traps (`both` stripping the static token, the
+    `tmux send-keys` hand-off, `capture-pane` checks, `attach`); the default-deny
+    allowlist; the PVC notes (`~/.cache/dev-env`, one shared home, `/proc/1/environ`);
+    and the held-draft rule for this config itself, which restarts nothing.
+  - **Kept, adapted where v2 differs:** the ground rules (worktree per task, GitOps
+    strictly with the Flux-suspend trap, never push to main but merge your own PRs,
+    finish work in flight, the PR reviewer, questions one at a time with the held-draft
+    exception now for PRs that restart the v1 pod), the secrets rule, the MCP servers
+    and their usage rules, declare-activity, the CPU budget (now sized to
+    `DEV_ENV_CPU_LIMIT`, 7.2), the model policy with ids, effort and the stale-id
+    tripwire, the coordinator rule, the subagent dispatch rules, the quota wall, and
+    the `codex exec` stdin trap.
+  - **New:** one pod per session (agentd under `tini`, `AGENTD_SESSION`, workers only,
+    the size class, the read-only root and the 8Gi `/tmp`, no ingress, no approval
+    prompts, messages across pods); the session's own volume, partial clone and
+    worktree, and `~/.shared`; suspend, rescue, resume, drain and archive (D-09, D-10,
+    D-42, D-43, D-48); `agent-run` v2 with the plan each command ships in; Kubernetes access
+    as `dev-env-agent` under the guard, nothing in the three dev-env namespaces, and
+    more only by grant (D-19, D-25); the egress tiers (D-24); and the credentials a
+    profile carries (D-18).
+- **`bashrc.sh` drops v1's `GH_TOKEN` export.** agentd's gh wrapper and git's
+  credential helper read `/creds/gh_token` at every call (D-42). An exported token is
+  inherited by every process started from that shell and dies with its 60-minute
+  mint. Checked in the v1 pod on 2026-10-06: a Claude Code Bash tool shell carries the
+  `GH_TOKEN` the CLI started with, not bashrc's, and `gh api /rate_limit` with it
+  answered "Bad credentials" while the file's token worked.
+- **How an edit reaches sessions.** Nothing restarts. No Reloader watches these
+  ConfigMaps, and the revision (D-04) hashes only `dev-env-templates`, so an edit marks
+  no session `Outdated`. The kubelet refreshes the mounted files in a minute or two.
+  Then `CLAUDE.md`, which agentd links, reaches the next Claude session started in the
+  pod, `bashrc.sh` the next shell, and `requirements.toml` the next Codex session. The
+  subagents, the MCP registration, `config.toml` and `AGENTS.md` change at the pod's
+  next boot: a new session, a resume or a drain.
+- **Two copies until cutover.** The v1 pod keeps reading v1's files. Until plan 05
+  retires them, a change to a rule both pods share, or to the MCP list, goes into both:
+  the v2 copy in an ordinary PR, v1's as a held draft.
+
 ### 3.7 Summoned sessions
 
 Automated callers in haynes-ops hand work to Claude Code sessions that bill the Max
@@ -1429,7 +1518,8 @@ with a link to the console page.
 - **Isolation, step 3 (spike S-4):** hub threads execute inside a per-session pod
   through `codex exec-server`. This fixes v1's "the phone picks the directory and
   bypasses per-worktree isolation".
-- `requirements.toml` is mounted at `/etc/codex/` in every pod that runs Codex.
+- `requirements.toml` is mounted at `/etc/codex/` in every session pod, from its own
+  ConfigMap `dev-env-codex-requirements` (D-49).
 - agentd renders `[mcp_servers.*]` from `mcp.json` (v1's `mcp-json-to-codex-toml.sh`,
   ported), so both agents keep one MCP list.
 - Updates stay pinned to the image's `CODEX_VERSION` (Tom, 2026-09-10). With `tini`
@@ -1440,8 +1530,9 @@ with a link to the console page.
 **D-13.** The keeper mints a haynes-dev-bot installation token every 40 minutes
 (valid 60) with the same down-scoped permission set as v1's refresher, and writes it
 to Secret `dev-env-gh-token` in `dev-agents`. Session pods mount that Secret as a
-directory at `/creds`, so `/creds/gh_token`, the git credential helper and the
-per-shell `GH_TOKEN` export all work unchanged. The PEM exists only in the keeper.
+directory at `/creds`, so `/creds/gh_token` and the git credential helper work
+unchanged, and agentd's gh wrapper reads the file at each call (D-42). v1's per-shell
+`GH_TOKEN` export is dropped (D-49). The PEM exists only in the keeper.
 
 Trade-off: one token is shared by the fleet, and a kubelet sync takes up to about two
 minutes. The 20-minute margin covers that. A per-pod sidecar would put the PEM in
@@ -3034,3 +3125,4 @@ step it names.
 | D-46 | The `/v1` API of plan 01: HTTPS on 8443 on every replica; TokenReview per request; callers by class (human, client, session; the v1 pod a client until cutover); create checks what only the API knows and leaves the schema and agentd their own rules; idempotency by label per parent; children bounded by count, depth and the parent's profile; reap is a delete held by the rescue finalizer; heartbeat merged into `status.agent` | 3.4 |
 | D-47 | The `dev-agents` CPU and memory ceiling is a Kyverno policy, not a LimitRange, because a LimitRange fills every unset limit with its default, so the "no CPU limit" rule could never fire | 7.2 |
 | D-48 | `agentd ctl rescue` writes one bundle per clone of its unpushed refs, thin against `origin/HEAD`, to `rescue/<session>/<stamp>/` on the shared volume with `manifest.json` last; it checks each bundle there before it reports `ok`; `--stop-agent` stops the CLI first | 3.6 |
+| D-49 | The session config: four ConfigMaps in `dev-agents` built from v2 copies of v1's files, with a new `CLAUDE.md` for a session pod; `requirements.toml` keeps v1's floor, in its own ConfigMap at `/etc/codex` in every pod; `bashrc.sh` exports no `GH_TOKEN` | 3.6 |

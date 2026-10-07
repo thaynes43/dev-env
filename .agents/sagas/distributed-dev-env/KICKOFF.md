@@ -303,23 +303,21 @@ PR per piece, in this order:
       haynes-ops #3471. `dev-env-templates` carries an all-zero placeholder image digest
       until B5 (section 3) publishes `dev-env:2.x.y`;
    8. the ExternalSecrets;
-   - **8.8a:** the three config ConfigMaps in `dev-agents`: `dev-env-config-claude`,
-     `dev-env-config-codex` and `dev-env-scripts`. `dev-env-templates` mounts them
-     (`/opt/dev-env/config/claude`, `/opt/dev-env/config/codex`, and
-     `/opt/dev-env/scripts` with mode 0555), and a session pod waits in
-     `ContainerCreating` until all three exist, so they come before any session and
-     before 8.9. No earlier item created them. It is a sub-item rather than a
-     renumbering so that the haynes-ops comments that cite 8.8 and 8.9 stay true. What
-     each holds, in v1's layout (D-14, D-40): `dev-env-config-claude` has `CLAUDE.md`,
-     `mcp.json` and `agent-*.md`; `dev-env-config-codex` has `config.toml` and
-     `AGENTS.header.md`; `dev-env-scripts` has `bashrc.sh`. The source is v1's
-     `apps/dev/dev-env/app/resources/config/**` and `bashrc.sh`, adapted for v2 as a new
-     copy in a v2 app, never an edit of v1's files (that path restarts the v1 pod). The
-     other v1 scripts are gone: agentd and the image replace them (DESIGN-001 3.6, D-40,
-     the port of `dev-init.sh`). What the design leaves open is the v2 text itself: how
-     the pod `CLAUDE.md` and `bashrc.sh` change for a pod with no code-server, tmux
-     standby or `post-ready`, and where Codex's `requirements.toml` goes (6.3 says
-     `/etc/codex/`, but `dev-env-templates` has no mount for it yet).
+   - **8.8a:** the four config ConfigMaps in `dev-agents` of D-49:
+     `dev-env-config-claude` (`CLAUDE.md`, `mcp.json`, `agent-*.md`),
+     `dev-env-config-codex` (`config.toml`, `AGENTS.header.md`),
+     `dev-env-codex-requirements` (`requirements.toml`) and `dev-env-scripts`
+     (`bashrc.sh`), built by a v2 app, `apps/dev-env-system/session-config/`. They are
+     v2 copies of v1's `apps/dev/dev-env/app/resources/config/**` and `bashrc.sh`,
+     never an edit of v1's files (that path restarts the v1 pod), with a new
+     `CLAUDE.md` for a session pod. `dev-env-templates` mounts them
+     (`/opt/dev-env/config/claude`, `/opt/dev-env/config/codex`, `/etc/codex`, and
+     `/opt/dev-env/scripts` with mode 0555); the same PR adds the `/etc/codex` mount.
+     A session pod waits in `ContainerCreating` until all four exist, so they come
+     before any session and before 8.9. No earlier item created them. It is a sub-item
+     rather than a renumbering so that the haynes-ops comments that cite 8.8 and 8.9
+     stay true. The other v1 scripts are gone: agentd and the image replace them
+     (DESIGN-001 3.6, D-40, the port of `dev-init.sh`).
    9. the operator and keeper HelmReleases, with the API's Service and Certificate
       and v1's own-token RBAC (D-46);
    10. the MCP network policy admits for `dev-agents`.

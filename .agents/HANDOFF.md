@@ -79,9 +79,11 @@ the saga. To start building, follow
   it (6.7).
 - **Plan 01 step 8 has begun in haynes-ops** (2026-10-06). Items 8.1 to 8.3 and 8.5 to 8.7
   are merged and verified (#3458, #3462, #3463, #3468 to #3471). Three gaps came out of
-  them: the `dev-agents` ceiling is a Kyverno policy, not a LimitRange (D-47); the three
-  config ConfigMaps have no owner yet (KICKOFF 8.8a); and `dev-env-templates` holds a
-  placeholder image digest until B5's follow-up sets the real one.
+  them: the `dev-agents` ceiling is a Kyverno policy, not a LimitRange (D-47); the
+  config ConfigMaps had no owner (KICKOFF 8.8a, now defined by D-49: four ConfigMaps,
+  a v2 `CLAUDE.md`, and Codex's `requirements.toml` at `/etc/codex` in every pod); and
+  `dev-env-templates` holds a placeholder image digest until B5's follow-up sets the
+  real one.
 - **v1 keeps running.** The single dev-env pod and the `dev-env-ops` executor are
   deployed from haynes-ops until the cutover (plan 05) and plan 10.
 - **Q-08 is live.** Kyverno `default-cpu-request` (haynes-ops #3406) went live on
