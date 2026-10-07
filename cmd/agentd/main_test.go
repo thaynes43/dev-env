@@ -121,7 +121,17 @@ func TestRunNeedsASession(t *testing.T) {
 func TestCtlRescueWithNoRepos(t *testing.T) {
 	home := t.TempDir()
 	code, out, errOut := runArgs([]string{"ctl", "rescue"}, map[string]string{"HOME": home})
-	if code != exitOK || !strings.Contains(out, `"ok": true`) || !strings.Contains(out, `"cleanAndPushed": true`) {
+	if code != exitOK || !strings.Contains(out, `"ok": true`) || !strings.Contains(out, `"cleanAndPushed": true`) || strings.Contains(out, `"agent"`) {
 		t.Errorf("ctl rescue: %d %s %s", code, out, errOut)
+	}
+	// --stop-agent reports what it stopped: here, nothing.
+	code, out, errOut = runArgs([]string{"ctl", "rescue", "--stop-agent"}, map[string]string{"HOME": home})
+	if code != exitOK || !strings.Contains(out, `"wasRunning": false`) || !strings.Contains(out, `"running": false`) {
+		t.Errorf("ctl rescue --stop-agent: %d %s %s", code, out, errOut)
+	}
+	for _, args := range [][]string{{"ctl"}, {"ctl", "rescue", "--force"}, {"ctl", "status", "--stop-agent"}, {"ctl", "rescue", "--stop-agent", "x"}} {
+		if code, _, _ := runArgs(args, map[string]string{"HOME": home}); code != exitUsage {
+			t.Errorf("%q: exit %d, want usage", args, code)
+		}
 	}
 }

@@ -37,7 +37,12 @@ const rescueLockFile = "rescue.lock"
 // worktree with a merge or rebase in progress, an untracked nested repo, a
 // submodule holding work origin lacks, or more than 50 MiB untracked. Rescue branches are
 // never pushed (D-10).
-func Rescue(ctx context.Context, r Runner, s Settings, session string, now time.Time) (protocol.RescueReport, error) {
+//
+// Then it writes D-10 step 2's bundle of the unpushed refs to the shared volume
+// (D-48, writeBundles). With opt.StopAgent it first stops the agent CLI, so the
+// rescue is the worktree's last state: the operator asks for that before it
+// deletes a pod.
+func Rescue(ctx context.Context, r Runner, s Settings, session string, now time.Time, opt RescueOptions) (protocol.RescueReport, error) {
 	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
 		return protocol.RescueReport{}, err
 	}
@@ -48,6 +53,9 @@ func Rescue(ctx context.Context, r Runner, s Settings, session string, now time.
 	defer unlock()
 
 	rep := protocol.RescueReport{Session: session, Stamp: now.UTC().Format("20060102-1504"), StartedAt: now.UTC(), Repos: []protocol.RepoRescue{}, OK: true, CleanAndPushed: true}
+	if opt.StopAgent {
+		rep.Agent = stopAgent(s, opt.StopGrace)
+	}
 	repos, err := clonesIn(s.ReposDir())
 	if err != nil {
 		return protocol.RescueReport{}, err
@@ -70,8 +78,17 @@ func Rescue(ctx context.Context, r Runner, s Settings, session string, now time.
 		}
 		rep.Repos = append(rep.Repos, rr)
 	}
+	writeBundles(ctx, r, s, &rep, now)
 	rep.FinishedAt = time.Now().UTC()
 	return rep, nil
+}
+
+// RescueOptions are `agentd ctl rescue`'s flags.
+type RescueOptions struct {
+	// StopAgent stops the agent CLI before the rescue (--stop-agent, D-48).
+	StopAgent bool
+	// StopGrace is how long the stop waits after SIGTERM before SIGKILL.
+	StopGrace time.Duration
 }
 
 // clonesIn lists the git clones directly under dir, skipping hidden entries

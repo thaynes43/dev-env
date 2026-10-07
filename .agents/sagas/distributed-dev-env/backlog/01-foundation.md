@@ -49,7 +49,13 @@ step. Tick a step in the PR that lands it.
     D-43).
 - [ ] 5. Rescue to a bundle on the shared volume (D-10), then suspend and archive.
   The bundle extends `agentd ctl rescue` (D-43): it bundles the report's
-  `unpushedRefs`, and archive trusts `cleanAndPushed`.
+  `unpushedRefs`, and archive trusts `cleanAndPushed`. In two PRs:
+  - [x] the bundle: `agentd ctl rescue` writes one bundle per clone and a manifest
+    to `rescue/<session>/<stamp>/` on the shared volume, checks them there, and
+    with `--stop-agent` stops the CLI first (#32; D-48);
+  - [ ] the operator: it runs that rescue by exec before a suspend deletes the pod,
+    records the verdict in status, and archives a reaped session's volume only
+    after a verified rescue; `patch` on PVCs in its RBAC.
 - [ ] 6. The minimal keeper: mint the gh token every 40 minutes.
 - [ ] 7. `agent-run` v2: `-p`, `list`, `reap` and `fleet`.
 - [ ] 8. The haynes-ops PRs (KICKOFF section 4, item 8).
