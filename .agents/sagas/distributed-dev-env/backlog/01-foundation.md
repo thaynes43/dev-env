@@ -71,7 +71,9 @@ step. Tick a step in the PR that lands it.
   no Kubernetes library. It finds the API in a session pod, mints a token for the
   pod's own ServiceAccount in any other pod (the v1 pod), and takes `--api-url` and
   `--token-file` elsewhere. Step 8 must get the API's CA to the v1 pod (D-50).
-- [ ] 8. The haynes-ops PRs (KICKOFF section 4, item 8).
+- [x] 8. The haynes-ops PRs (KICKOFF section 4, item 8), 2026-10-06 to 2026-10-07:
+  haynes-ops #3458, #3462, #3463, #3468 to #3471, #3474, #3477, #3479, #3480, #3491,
+  #3494 and #3497. The operator and the keeper run; the v1 pod reaches `/v1`.
 - [ ] 9. The first end-to-end run, then the acceptance checks below.
 
 ## In this repo
@@ -112,6 +114,12 @@ step. Tick a step in the PR that lands it.
   `rbac.yaml`, and `dev-env-v1-token-guard` holds the TokenRequests to that audience
   and an hour at most. The v1 pod also needs the API's CA as a file for `DEV_ENV_API_CA_FILE`
   (D-50): choose a way that does not restart the v1 pod, or hold that PR for Tom.
+  Done 2026-10-07 in KICKOFF 8.9 (haynes-ops #3494, #3497): the private dev-env CA
+  (`apps/dev-env-system/pki/`), its certificate pinned as ConfigMap
+  `dev-agents/dev-env-api-ca` (templates mount at `/opt/dev-env/api-ca`,
+  `AGENTD_API_CA_FILE`), and the v1 pod reading it through the API (D-50, as built).
+  The v1 pod's CiliumNetworkPolicy gained egress to the operator on 8443 and the API's
+  DNS name, and the operator's policy admits that pod.
 - **The keeper's inputs (D-52), for 8.8 and 8.9.** Never log or commit a value.
   - ExternalSecret `dev-env-keeper-github-dev-bot` in `dev-env-system`
     (ClusterSecretStore `onepassword-connect`), target a Secret of the same name, from
@@ -148,8 +156,10 @@ step. Tick a step in the PR that lands it.
     context. No flags are needed: the defaults are the names above. No Service until
     plan 03 adds the 8443 endpoint. #3469's policy already admits the API server and
     `api.github.com`; the kubelet's probes come from the host, which Cilium admits.
-- Operator and keeper HelmReleases, RBAC (DESIGN-001 6.11: cluster-wide read for
-  agents, v1's write verbs under the `dev-env-agent-guard` and
+    Done 2026-10-07: haynes-ops #3497 (`apps/dev-env-system/keeper/`); its first mint
+    was written at deploy.
+- Operator and keeper HelmReleases (done 2026-10-07, haynes-ops #3497, KICKOFF 8.9),
+  RBAC (DESIGN-001 6.11: cluster-wide read for agents, v1's write verbs under the `dev-env-agent-guard` and
   `dev-env-identity-guard` admission policies and the Kyverno exec rule, nothing in
   the three dev-env namespaces; done 2026-10-07, haynes-ops #3477 and #3479, KICKOFF
   8.4, S-12 passed, D-19), network policies (the web and platform tiers of D-24
@@ -184,8 +194,11 @@ step. Tick a step in the PR that lands it.
   `apps/dev/dev-env/app/resources/config/**` and `bashrc.sh`, copied into the v2 app
   `apps/dev-env-system/session-config/` and adapted (never editing v1's files), with a
   new `CLAUDE.md` for a session pod. Done 2026-10-06: haynes-ops #3474 (KICKOFF 8.8a).
-- Kyverno `verify-thaynes43-images`: add the `thaynes43/dev-env` workflow identity.
-- Renovate: hold the v1 HelmRelease below `2.0.0`.
+- Kyverno `verify-thaynes43-images`: add the `thaynes43/dev-env` workflow identity. Done
+  2026-10-06: haynes-ops #3462 (Audit). It reports `no signatures found` for the operator
+  image as it does for v1's, because cosign v3 writes bundle-only signatures
+  (haynes-ops#3092).
+- Renovate: hold the v1 HelmRelease below `2.0.0`. Done 2026-10-06: haynes-ops #3458.
 - CNPs of in-cluster MCP services that admit only the v1 pod (the haynesnetwork hop,
   the authoring services) also admit `dev-agents` session pods. Done 2026-10-06:
   haynes-ops #3491 (KICKOFF 8.10).

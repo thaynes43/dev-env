@@ -453,6 +453,16 @@ call, what a create checks, and how a reap and a heartbeat reach the objects.**
   the ValidatingAdmissionPolicy `dev-env-v1-token-guard` admits the v1 pod's
   TokenRequests only for the audience `dev-env-operator` and at most 3600 s
   (`agent-run` asks for 600 s). That is what makes "adds no right" true.
+  *As built (2026-10-07, KICKOFF 8.9, haynes-ops #3494 and #3497):* the certificate comes
+  from a private dev-env CA in `dev-env-system` (a self-signed Issuer, CA Certificate
+  `dev-env-ca` for ten years, and a CA Issuer, all namespaced so no other namespace can
+  get the API's name signed). The serving certificate `dev-env-operator-api` (90 days,
+  renewed at 60) names the service's full, `.svc` and `.dev-env-system` forms. The
+  operator runs two replicas spread over zones `m` and `w` (7.1) with `--api-url` the
+  full name and `--client-service-accounts dev-agents/dev-env-workbench,dev/dev-env`.
+  The CA reaches clients as D-50 says. The v1 pod's CiliumNetworkPolicy gained egress
+  to the operator on 8443 and the API's DNS name, and the operator's policy admits that
+  pod; a policy change restarts nothing.
 - **Not in plan 01:** the other routes of the table above, `CallerPolicy`, and a
   rate limit on TokenReviews. Only the platform tier and the v1 pod reach the API.
 
@@ -557,6 +567,19 @@ each place, and what it prints.**
     picks the issuer and how its CA reaches the v1 pod as a file that
     `DEV_ENV_API_CA_FILE` names. A new mount on the v1 pod restarts it, so step 8
     prefers a way that does not, or holds that PR for Tom like any v1 bounce.
+    *Closed (2026-10-07, KICKOFF 8.9):* the CA certificate is pinned in haynes-ops as
+    ConfigMap `dev-agents/dev-env-api-ca` (`apps/dev-env-system/pki/app/ca.crt`).
+    Session pods mount it at `/opt/dev-env/api-ca` with `AGENTD_API_CA_FILE` in the
+    templates. In the v1 pod, which can read ConfigMaps, `kubectl get configmap
+    dev-env-api-ca -n dev-agents -o jsonpath='{.data.ca\.crt}'` writes the file that
+    `DEV_ENV_API_CA_FILE` names, so the v1 pod needs no mount and did not restart. A
+    pin needs no controller and no new right (nothing reads the CA Secret to copy it),
+    and the trust anchor changes only by a reviewed commit; a client that meets another
+    CA refuses it (exit 3). Its cost is a re-pin when the CA changes: cert-manager
+    renews it in 2035, or makes a new one if its Secret is lost in a rebuild. The
+    ConfigMap's comment has the command, which reads the CA's CertificateRequest.
+    If a second consumer of the CA arrives (the keeper's 8443, plan 03), revisit a
+    controller that copies it, such as trust-manager.
 - **Two `agent-run`s until cutover.** In the v1 pod, `agent-run` on the PATH stays
   v1's script until plan 05. The v2 binary runs from a build of this repo (`make
   build` puts it at `bin/agent-run`; the darwin build is
