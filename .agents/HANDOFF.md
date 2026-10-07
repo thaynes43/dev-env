@@ -5,8 +5,31 @@ Tom's own machine. Read this page, then [CLAUDE.md](../CLAUDE.md) (the rules), t
 the saga. To start building, follow
 [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md).
 
-## State on 2026-10-06
+## State on 2026-10-07
 
+- **Phase 1 is built: plan 01 is done (2026-10-07, #60).** From the v1 pod,
+  `agent-run` (built from main) started task session `dev-env-1007-045709` on
+  talosw02 at size M. It ran a real docs task on the static token and opened #57,
+  which merged. An operator rollout restart during the task left its pod alone (same
+  UID, no restart). A reap of a session with an uncommitted file wrote a verified
+  bundle to the shared volume that gives the file back, and only then archived the
+  volume. A session that cannot fit stayed Pending, and `agent-run` printed the
+  scheduler's reason in 4 s. The session pod reached the web but no LAN address and no
+  service outside the platform tier, and the guard refused its writes in the dev-env
+  namespaces. S-8 is done: `gasha01-rbd` is 1.55 to 1.81 times slower than
+  `ceph-block`, so every size stays on it. Plan 01's Acceptance lists the evidence
+  (pod UIDs, nodes, the bundle path). The v1 pod and `dev-env-ops` did not restart.
+  **Next is plan 02** ([interactive sessions and lifecycle](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md)).
+- **What the run found and fixed (2026-10-07).** haynes-ops still had #24's CRD, so
+  the API server pruned the heartbeat's task result and the rescue verdict from
+  status; haynes-ops #3502 synced it before any reap. A PR here that changes
+  `config/crd/` now needs its haynes-ops copy before the operator pin that writes the
+  new fields (CLAUDE.md, layout). The advisory review failed on release PRs, and
+  release-please used the deprecated `app-id` input; #59 fixed both.
+- **One session waits for plan 02.** `dev-agents/dev-env-1007-050756` was the Pending
+  check (size L, via haynes-ops #3504, reverted by #3505). Its pod never started, so
+  its reap shows `RemovalBlocked` and keeps an empty 20Gi volume until plan 02's rescue
+  pod archives it (D-51). Plan 02 lists it.
 - **The dev-env v2 design is complete.** It covers the architecture (ADR-001), the
   details (DESIGN-001, D-01 onward), 16 spikes, backlog plans 00 to 10 and two
   research notes.
@@ -29,15 +52,19 @@ the saga. To start building, follow
   CRD, the four binaries and the Makefile are on main; only `agent-run version` does
   real work. D-38 records that the keeper is its own binary. B2 added `ci.yml` and the
   operator Dockerfile; B3 added `publish.yml`, which pushes and signs
-  `dev-env-operator:sha-<short>` from main. The agent image (B5, D-53) is built and
-  smoke-tested by CI on PRs and published by `publish-agent.yml` from a `v2.x.y` release tag;
-  it ships once the GHCR grant and the first release exist. The
-  operator package is public (Q-13; an anonymous pull works since 2026-10-07).
-  **B4 added Renovate and release-please** (#18): the first release is 2.0.0 (one repo
-  version on the agent image's `2.x` line). Until Tom adds the release App, the
-  release PR is opened with `GITHUB_TOKEN`, so close and reopen it as haynes-dev-bot
-  to get `CI - Success` to run (again after each update); never merge it without
-  asking. Renovate auto-merge is off until the ruleset exists.
+  `dev-env-operator:sha-<short>` from main. The agent image (B5, D-53, #40) is built and
+  smoke-tested by CI on PRs and published by `publish-agent.yml` from a `v2.x.y` release
+  tag. 2.0.0 shipped on 2026-10-07: release PR #52 tagged `v2.0.0`, and the publish run
+  pushed and signed `ghcr.io/thaynes43/dev-env:2.0.0@sha256:8bab980d6beea9eb8f1576d38a3fd9837150193414728baf1bcc3e07e28a371a`
+  (`cosign verify` with the `publish-agent.yml@refs/tags/v2.0.0` identity passes).
+  haynes-ops #3501 pinned it in `dev-env-templates`, with a Renovate regex manager
+  for that line. The operator package is public (Q-13; an anonymous pull works since
+  2026-10-07).
+  **B4 added Renovate and release-please** (#18): one repo version on the agent image's
+  `2.x` line. The release App is live since 2026-10-07, so release PRs run CI like any
+  PR. Merging one stays Tom's call (CLAUDE.md); #52 was merged by the overnight build
+  session on its work order, to unblock the first end-to-end run. Renovate
+  auto-merge is off until the ruleset exists.
 - **Plan 01 step 1, the `AgentSession` CRD, is built** (#24). The schema enforces
   the per-session rules as CEL, and spec is immutable after create except
   `operatingMode` and `lifecycle` (D-39). `make test` runs an envtest suite against
@@ -114,8 +141,8 @@ the saga. To start building, follow
   `/v1` on `dev-env-operator.dev-env-system.svc.cluster.local:8443`) and
   `dev-env-keeper` from `dev-env-operator:sha-8b388b2`, and the v2 `agent-run fleet`
   answers from the v1 pod. The API's CA is pinned as ConfigMap
-  `dev-agents/dev-env-api-ca` (D-50, as built). Next is step 9, the first end-to-end
-  run. B5's agent image is in `dev-env-templates` since 2026-10-07 (haynes-ops #3501).
+  `dev-agents/dev-env-api-ca` (D-50, as built). Step 9, the first end-to-end run, is
+  done (first bullet).
   8.4 is the RBAC and the baseline guard: three ValidatingAdmissionPolicies and a
   Kyverno exec rule. Spike S-12 passed against it, 45 of 45 checks from a Job running
   as `dev-env-agent`, and the VAP sees `CONNECT` for exec (D-19). The v2
@@ -133,23 +160,22 @@ the saga. To start building, follow
 
 ## What happens first
 
-1. **Tell Tom about the laptop handoff** ([`handoffs/2026-10-06-tom-laptop-settings.md`](handoffs/2026-10-06-tom-laptop-settings.md)).
-   Part 1 (auto-merge, GHCR Actions access, Renovate, the release-please App) is
-   needed before B4 and B5. Part 2 (make the operator package public) is done. Part 3
+1. **The laptop handoff** ([`handoffs/2026-10-06-tom-laptop-settings.md`](handoffs/2026-10-06-tom-laptop-settings.md)).
+   Parts 1 and 2 are done (2026-10-07; the checklist below says how each was
+   checked). Part 3
    (the Protect Main ruleset) can run now: `CI - Success` has reported, and since the
    repo went public (Q-12, 2026-10-07) GitHub enforces the ruleset at no cost. It is
    still Tom's to run.
-2. **Track B, plan 01: the repo skeleton and CI.** B1 (the Go skeleton) is done;
-   B2 (CI), B3 (`publish.yml`) and B4 (Renovate, release-please) are done; continue with B5 in
-   [KICKOFF section 3](sagas/distributed-dev-env/KICKOFF.md#3-track-b-the-first-prs-in-this-repo).
-   Those PRs depend on no spike, so they run while the in-pod spikes run
-   ([KICKOFF section 1](sagas/distributed-dev-env/KICKOFF.md#1-objective-of-phase-1)
-   says why). ADR-001 is Accepted, so code may start.
+2. **Plan 02: interactive sessions and lifecycle.** Plan 01, with KICKOFF B1 to B5,
+   is done ([plan 01](sagas/distributed-dev-env/backlog/01-foundation.md)). Plan 02
+   ([backlog/02](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md)) runs
+   in parallel with plan 07, the access broker.
 3. **Collect the spike results.** S-1, S-1b and S-7 are done, and S-2 is already
    answered (the static token cannot register Remote Control). S-6, S-15 and S-16
    are done, and S-3 passed (keeper-owned Codex auth, DESIGN-001 D-12 step 2), so
    group 1 is complete. In group 2, S-12 passed on 2026-10-07 (its break-glass half
-   runs with plan 07); S-8 waits for the first task pod.
+   runs with plan 07), and S-8 is done (2026-10-07: every size stays on
+   `gasha01-rbd`). Phase 1's spikes are complete.
    Each result lands in its own PR. The order and pass criteria are in
    [KICKOFF section 2](sagas/distributed-dev-env/KICKOFF.md#2-track-a-spikes).
 4. **The rest of the MVP, then beyond it.** The MVP ends at the cutover (plan 05);
@@ -165,7 +191,7 @@ the saga. To start building, follow
 | [distributed-dev-env/README.md](sagas/distributed-dev-env/README.md) | Tom's vision, the architecture at a glance, the hard news, the decision log and the plan index. |
 | [distributed-dev-env/KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) | The work order for the first build session. |
 | [adrs/001-distributed-dev-env.md](sagas/distributed-dev-env/adrs/001-distributed-dev-env.md) | The architecture decision (Accepted 2026-10-06), with the ratification summary at the top and consequences C-01 to C-21. |
-| [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 to Q-14 with rulings (Q-12 still open) in 15, the decisions (D-01 onward) in 16. |
+| [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 to Q-14 with rulings in 15, the decisions (D-01 onward) in 16. |
 | [research/R-01](sagas/distributed-dev-env/research/R-01-summoned-agents-audit.md) | An audit of summoned agents today, with v2 requirements V-01 to V-17. |
 | [research/R-02](sagas/distributed-dev-env/research/R-02-remote-control-identity.md) | Remote Control identity, the evidence behind S-1, and proposals P-1 to P-12. |
 | [backlog/00-spikes.md](sagas/distributed-dev-env/backlog/00-spikes.md) | S-1 to S-16: steps, safety rules and pass criteria. |
@@ -179,7 +205,7 @@ the saga. To start building, follow
 | [backlog/08](sagas/distributed-dev-env/backlog/08-tool-pods.md) | Plan 08: tool pods (Blender, audio, image, whisper, printer, video). |
 | [backlog/09](sagas/distributed-dev-env/backlog/09-gpu-local-llm.md) | Plan 09: the VRAM budget, LLM pools, satellites and opencode. |
 | [backlog/10](sagas/distributed-dev-env/backlog/10-summoned-sessions.md) | Plan 10: summoned sessions move into v2 and `dev-env-ops` retires. |
-| [.github/workflows/](../.github/workflows/) | The Claude advisory review and the `@claude` handler. Build CI arrives with plan 01. |
+| [.github/workflows/](../.github/workflows/) | CI (`ci.yml`, with the aggregate `CI - Success`), the operator image (`publish.yml`, from main), the agent image (`publish-agent.yml`, from a `v2.x.y` tag), release-please, the Claude advisory review and the `@claude` handler. |
 | haynes-ops [`.agents/sagas/dev-env/adrs/001-v2-lives-in-own-repo.md`](https://github.com/thaynes43/haynes-ops/blob/main/.agents/sagas/dev-env/adrs/001-v2-lives-in-own-repo.md) | Accepted: v2 lives here, and v1 and every manifest stay in haynes-ops. |
 
 ## Rulings (Tom, 2026-10-06; full text in DESIGN-001 section 15)
@@ -207,16 +233,18 @@ the saga. To start building, follow
 them from [`handoffs/2026-10-06-tom-laptop-settings.md`](handoffs/2026-10-06-tom-laptop-settings.md),
 which lists exactly what to change:
 
-- [ ] Part 1, before B4 and B5: on the `ghcr.io/thaynes43/dev-env` package, "Manage
-      Actions access": give `thaynes43/dev-env` Write (before KICKOFF B5).
-- [ ] Part 1: repo settings: allow auto-merge (Renovate's `platformAutomerge` needs
-      it).
-- [ ] Part 1: the Mend Renovate app covers this repo.
-- [ ] Part 1: the release-please GitHub App (Q-14), with repo variable
+- [x] Part 1, before B4 and B5: on the `ghcr.io/thaynes43/dev-env` package, "Manage
+      Actions access": give `thaynes43/dev-env` Write (before KICKOFF B5). Done: the
+      2.0.0 publish pushed to it (2026-10-07).
+- [x] Part 1: repo settings: allow auto-merge (Renovate's `platformAutomerge` needs
+      it). Done: `allow_auto_merge` is true (2026-10-07).
+- [x] Part 1: the Mend Renovate app covers this repo. Done: Renovate opens PRs here.
+- [x] Part 1: the release-please GitHub App (Q-14), with repo variable
       `RELEASE_APP_ID` and repo secret `RELEASE_APP_PRIVATE_KEY` (before B4's
       release-please part). Until then the workflow's `GITHUB_TOKEN` fallback cannot
       open the release PR at all (it failed on 2026-10-06), so also allow Actions to
-      create PRs (handoff part 1, step 5).
+      create PRs (handoff part 1, step 5). Done: the App minted the token and opened
+      release PR #52 on 2026-10-07.
 - [x] Part 2, after B3's first publish: make `ghcr.io/thaynes43/dev-env-operator`
       public (Q-13). Done: an anonymous pull works (checked 2026-10-07).
 - [ ] Part 3, after `CI - Success` has reported once (B2): the Protect Main ruleset on

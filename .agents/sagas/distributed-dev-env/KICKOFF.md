@@ -82,7 +82,7 @@ probe after each Claude Code CLI bump (last run on 2.1.292, 2026-10-06: still re
 | Spike | When | Pass | On a fail |
 |---|---|---|---|
 | S-12: the baseline guard. **Passed 2026-10-07** (00 and D-19): 45 of 45, and the VAP sees `CONNECT` | After the RBAC and guard PR, and before any agent pod gets the role. Run it from a pod that uses the agent ServiceAccount: the first task pod, or a test Job the PR deploys with a CPU limit. An in-pod session reads the output. | Every #3392 path is refused and every runbook action is allowed. Record whether the ValidatingAdmissionPolicy sees `CONNECT` for exec. The break-glass half of S-12 (its exclusions refused, the `kube-system` eviction allowed) needs `dev-env-grant-breakglass`, which plan 07 ships, so it runs there. | Fix the guard before going further. D-19 records the change. |
-| S-8: `gasha01-rbd` against `ceph-block` | Once the first task pod runs at size M. Do two runs, never at the same time. | The times for each step are recorded. | If gasha01 is more than twice as slow overall, size L defaults to `ceph-block` (D-22). |
+| S-8: `gasha01-rbd` against `ceph-block`. **Done 2026-10-07** (00): 1.55 to 1.81 times slower, so L stays on `gasha01-rbd` | Once the first task pod runs at size M. Do two runs, never at the same time. | The times for each step are recorded. | If gasha01 is more than twice as slow overall, size L defaults to `ceph-block` (D-22). |
 
 **Later, not phase 1:** S-10 before plan 08, S-5 in phase 3, S-4 in phase 4, and S-9,
 S-13, S-11 and S-14 before plan 09. S-14 needs Tom at each machine.
@@ -365,7 +365,11 @@ PR per piece, in this order:
    express them (haynes-ops #3405). An outside agent may author these PRs; an
    in-pod session merges and verifies them, because they are cluster-scoped.
 9. The first end-to-end run: from the v1 pod, `agent-run -p` a small real task, such
-   as a docs fix in this repo, then plan 01's acceptance checks.
+   as a docs fix in this repo, then plan 01's acceptance checks. Done 2026-10-07
+   (#60): session `dev-env-1007-045709` ran on talosw02 at size M, opened #57
+   and survived an operator restart; every acceptance check passed (plan 01 lists the
+   evidence). The run found that haynes-ops still had #24's CRD; haynes-ops #3502
+   synced it.
 
 ## 5. What "done" means for plan 01
 

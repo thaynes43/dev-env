@@ -29,7 +29,10 @@ bundle. declare-activity moves to the API. Tom can run `agent-run` from his lapt
     the operator run the same exec rescue; it also retries a rescue that failed for
     a passing reason (CephFS down), and stays up while one fails so a human can exec
     in and fix the worktree. It is the "Failed → Suspended: rescue what is on the
-    volume" edge of 4.1.
+    volume" edge of 4.1. One session already waits for it: `dev-agents/dev-env-1007-050756`,
+    plan 01's Pending check (size L, 2026-10-07). Its pod never started, so it keeps an
+    empty 20Gi `gasha01-rbd` volume and shows `RemovalBlocked` (`DeleteNeedsRescue`)
+    in `agent-run list`. When the rescue pod lands, check that it archives this one.
   - **The archive timer** for a suspended session (D-09: 7 days, from the
     templates, not code), and what `resume` does after an archive: a new volume
     would start the task again, so an archived session should be refused and a
