@@ -343,3 +343,76 @@ func TestRescueLock(t *testing.T) {
 		t.Errorf("no repos: %+v %v", rep, err)
 	}
 }
+
+// A volume no pod wrote to holds an empty lost+found and the shared volume's
+// mount point, and nothing else. The rescue proves that, and writes nothing
+// (D-55). Anything more is not empty.
+func TestRescueOfAnEmptyVolume(t *testing.T) {
+	mounted := true
+	old := sharedIsMounted
+	sharedIsMounted = func(string, string) error {
+		if !mounted {
+			return os.ErrNotExist
+		}
+		return nil
+	}
+	t.Cleanup(func() { sharedIsMounted = old })
+
+	fresh := func(t *testing.T) Settings {
+		t.Helper()
+		home := t.TempDir()
+		s := testSettings(t, home)
+		for _, d := range []string{filepath.Join(home, lostAndFound), s.SharedDir} {
+			if err := os.MkdirAll(d, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// The shared volume's own content is not the session volume's.
+		writeFile(t, filepath.Join(s.SharedDir, "rescue", "other", "x"), "x")
+		return s
+	}
+	rescue := func(t *testing.T, s Settings) protocol.RescueReport {
+		t.Helper()
+		rep, err := Rescue(context.Background(), &fakeRunner{}, s, "s-1", rescueNow, RescueOptions{StopAgent: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rep
+	}
+
+	s := fresh(t)
+	rep := rescue(t, s)
+	if !rep.VolumeEmpty || !rep.OK || !rep.CleanAndPushed || len(rep.Repos) != 0 || rep.Session != "s-1" || rep.Stamp != "20261006-1730" {
+		t.Errorf("report %+v", rep)
+	}
+	if rep.Agent == nil || rep.Agent.WasRunning || rep.Agent.Running {
+		t.Errorf("agent %+v", rep.Agent)
+	}
+	if _, err := os.Stat(s.StateDir); !os.IsNotExist(err) {
+		t.Errorf("the rescue wrote its state dir to an empty volume: %v", err)
+	}
+	if rep2 := rescue(t, s); !rep2.VolumeEmpty {
+		t.Error("a second rescue of the empty volume did not find it empty")
+	}
+
+	for name, edit := range map[string]func(*testing.T, Settings){
+		"a file":                  func(t *testing.T, s Settings) { writeFile(t, filepath.Join(s.Home, ".bash_history"), "ls\n") },
+		"agentd's state":          func(t *testing.T, s Settings) { _ = os.MkdirAll(s.StateDir, 0o700) },
+		"lost+found holds a file": func(t *testing.T, s Settings) { writeFile(t, filepath.Join(s.Home, lostAndFound, "#1234"), "x") },
+		"lost+found is a file": func(t *testing.T, s Settings) {
+			_ = os.Remove(filepath.Join(s.Home, lostAndFound))
+			writeFile(t, filepath.Join(s.Home, lostAndFound), "x")
+		},
+		"the shared dir is not mounted": func(*testing.T, Settings) { mounted = false },
+	} {
+		t.Run(name, func(t *testing.T) {
+			mounted = true
+			t.Cleanup(func() { mounted = true })
+			s := fresh(t)
+			edit(t, s)
+			if rep := rescue(t, s); rep.VolumeEmpty {
+				t.Errorf("found empty: %+v", rep)
+			}
+		})
+	}
+}

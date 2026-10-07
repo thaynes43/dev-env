@@ -121,7 +121,7 @@ func TestRunNeedsASession(t *testing.T) {
 func TestCtlRescueWithNoRepos(t *testing.T) {
 	home := t.TempDir()
 	code, out, errOut := runArgs([]string{"ctl", "rescue"}, map[string]string{"HOME": home})
-	if code != exitOK || !strings.Contains(out, `"ok": true`) || !strings.Contains(out, `"cleanAndPushed": true`) || strings.Contains(out, `"agent"`) {
+	if code != exitOK || !strings.Contains(out, `"ok": true`) || !strings.Contains(out, `"cleanAndPushed": true`) || !strings.Contains(out, `"volumeEmpty": true`) || strings.Contains(out, `"agent"`) {
 		t.Errorf("ctl rescue: %d %s %s", code, out, errOut)
 	}
 	// --stop-agent reports what it stopped: here, nothing.
@@ -133,5 +133,30 @@ func TestCtlRescueWithNoRepos(t *testing.T) {
 		if code, _, _ := runArgs(args, map[string]string{"HOME": home}); code != exitUsage {
 			t.Errorf("%q: exit %d, want usage", args, code)
 		}
+	}
+}
+
+// hold starts nothing and writes nothing, and ends with its context (D-55).
+func TestHold(t *testing.T) {
+	home := t.TempDir()
+	env := map[string]string{"HOME": home, "AGENTD_SESSION": `{"name":"r-1","repo":"r","agent":"claude","mode":"task","model":"claude-opus-5-5","prompt":"p"}`}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	var stdout, stderr bytes.Buffer
+	go func() {
+		done <- run(ctx, []string{"hold"}, &stdout, &stderr, func(k string) string { return env[k] }, noRunner{})
+	}()
+	cancel()
+	if code := <-done; code != exitOK {
+		t.Errorf("hold: exit %d\n%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "session=r-1") || !strings.Contains(stderr.String(), "no agent starts") {
+		t.Errorf("hold's log:\n%s", stderr.String())
+	}
+	if entries, err := os.ReadDir(home); err != nil || len(entries) > 0 {
+		t.Errorf("hold wrote to the volume: %v %v", entries, err)
+	}
+	if code, _, _ := runArgs([]string{"hold", "x"}, env); code != exitUsage {
+		t.Errorf("hold x: %d", code)
 	}
 }

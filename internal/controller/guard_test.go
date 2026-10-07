@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -293,5 +294,107 @@ func TestOnlyTheGuardDeletes(t *testing.T) {
 		if n := seen[g.call+" in "+g.in]; n != 1 {
 			t.Errorf("%s in %s: seen %d times, want once", g.call, g.in, n)
 		}
+	}
+}
+
+// A hold pod runs no agent (D-55), so the guard judges it by what it is for: it
+// goes when the session wants its own pod, when it ended, or once a rescue in it
+// made the volume safe. It stays while it starts and while its rescue fails.
+func TestHoldPodGuardTable(t *testing.T) {
+	now := metav1.Now()
+	safeHere := map[string]bool{"verified here": true, "clean here": true}
+	ended := map[string]bool{"evicted": true, "succeeded": true}
+	notStarted := map[string]bool{"unscheduled": true, "never started": true}
+	allowed, kept := 0, 0
+	for _, mode := range []v1alpha1.OperatingMode{v1alpha1.OperatingModeRunning, v1alpha1.OperatingModeSuspended} {
+		for _, deleted := range []bool{false, true} {
+			for podName, mkPod := range guardPods {
+				for recName, mkRec := range guardRecords {
+					pod := mkPod()
+					pod.UID = "this-pod"
+					pod.Labels = map[string]string{v1alpha1.LabelHold: "true"}
+					s := &v1alpha1.AgentSession{Spec: v1alpha1.AgentSessionSpec{OperatingMode: mode}}
+					s.Generation = 7
+					if deleted {
+						s.DeletionTimestamp = &now
+					}
+					s.Status.Rescue = mkRec(pod.UID, s.Generation)
+					wantsGone := mode == v1alpha1.OperatingModeSuspended || deleted
+					want := !wantsGone || ended[podName] || safeHere[recName]
+					err := podRemovalAllowed(s, pod)
+					name := fmt.Sprintf("%s, deleted %v, pod %s, rescue %s", mode, deleted, podName, recName)
+					switch {
+					case want && err != nil:
+						t.Errorf("%s: refused: %v", name, err)
+					case !want && err == nil:
+						t.Errorf("%s: let the hold pod go", name)
+					case !want && notStarted[podName] && !errors.Is(err, errHoldStarting):
+						t.Errorf("%s: %v, want the starting reason", name, err)
+					case !want && !notStarted[podName] && !errors.Is(err, errHoldRescuing):
+						t.Errorf("%s: %v, want the rescuing reason", name, err)
+					}
+					if want {
+						allowed++
+					} else {
+						kept++
+					}
+				}
+			}
+		}
+	}
+	if allowed == 0 || kept == 0 {
+		t.Fatalf("allowed %d, kept %d: the table proves nothing", allowed, kept)
+	}
+}
+
+// The hold pod's rescue runs once it has started and the session still wants
+// its pod gone, and again every retry while the last one failed (D-55). A
+// session pod's rule is unchanged: one rescue since the session last changed.
+func TestHoldPodRescueRetry(t *testing.T) {
+	now := time.Now()
+	deleted := metav1.NewTime(now)
+	retry := 15 * time.Minute
+	for _, c := range []struct {
+		name   string
+		hold   bool
+		pod    string
+		rec    func(types.UID, int64) *v1alpha1.RescueStatus
+		ago    time.Duration
+		reaped bool
+		want   bool
+	}{
+		{"no rescue yet", true, "running", guardRecords["none"], 0, true, true},
+		{"not started", true, "never started", guardRecords["none"], 0, true, false},
+		{"ended", true, "evicted", guardRecords["none"], 0, true, false},
+		{"failed just now", true, "running", guardRecords["failed here"], time.Minute, true, false},
+		{"failed a retry ago", true, "running", guardRecords["failed here"], retry, true, true},
+		{"verified", true, "running", guardRecords["verified here"], retry, true, false},
+		{"failed in another pod", true, "running", func(_ types.UID, gen int64) *v1alpha1.RescueStatus {
+			return &v1alpha1.RescueStatus{Result: v1alpha1.RescueFailed, PodUID: "an-earlier-pod", Generation: gen}
+		}, time.Minute, true, true},
+		{"the session wants its pod", true, "running", guardRecords["none"], 0, false, false},
+		{"a session pod's failed rescue is not retried", false, "running", guardRecords["failed here"], retry, true, false},
+		{"a session pod with no rescue", false, "running", guardRecords["none"], 0, true, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pod := guardPods[c.pod]()
+			pod.UID = "this-pod"
+			if c.hold {
+				pod.Labels = map[string]string{v1alpha1.LabelHold: "true"}
+			}
+			s := &v1alpha1.AgentSession{}
+			s.Generation = 4
+			if c.reaped {
+				s.DeletionTimestamp = &deleted
+			}
+			s.Status.Rescue = c.rec(pod.UID, s.Generation)
+			if s.Status.Rescue != nil {
+				at := metav1.NewTime(now.Add(-c.ago))
+				s.Status.Rescue.At = &at
+			}
+			if got := needsRescue(s, pod, now, retry); got != c.want {
+				t.Errorf("needsRescue = %v, want %v", got, c.want)
+			}
+		})
 	}
 }

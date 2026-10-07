@@ -22,6 +22,11 @@ type RescueReport struct {
 	// fetched, every worktree clean, and no local ref holds a commit origin
 	// lacks.
 	CleanAndPushed bool `json:"cleanAndPushed"`
+	// VolumeEmpty is the proof for a volume no pod ever wrote to (D-55): it
+	// holds nothing but an empty lost+found and the shared volume's mount
+	// point, so there is no clone and nothing to save. Such a report has no
+	// repos, and the rescue wrote nothing, not even agentd's state directory.
+	VolumeEmpty bool `json:"volumeEmpty,omitempty"`
 	// Agent is what `--stop-agent` did to the agent CLI before the rescue
 	// began. It is nil without the flag.
 	Agent *AgentStop `json:"agent,omitempty"`

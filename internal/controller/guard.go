@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -30,6 +31,15 @@ const Finalizer = v1alpha1.LabelPrefix + "rescue"
 // has run in it since the session last changed.
 var errNeedsRescue = errors.New("the pod stays until a rescue has run in it (DESIGN-001 4.4, D-51)")
 
+// errHoldStarting is why a hold pod that has not started yet stays: it is
+// there to run the rescue (D-55).
+var errHoldStarting = errors.New("the hold pod has not started yet; it stays to run the volume's rescue (D-55)")
+
+// errHoldRescuing is why a hold pod stays while the volume has no valid rescue:
+// the operator rescues in it and retries a failed rescue, and a human may exec
+// in to fix the worktree meanwhile (D-55).
+var errHoldRescuing = errors.New("the hold pod stays until a rescue in it makes the volume safe (D-55)")
+
 // errDrainNotBuilt is why a Draining session keeps its pod today: drain needs
 // agentd's prepare-restart, plan 04 (DESIGN-001 5.2).
 var errDrainNotBuilt = errors.New("drain is not built yet (plan 04, DESIGN-001 5.2); the pod stays")
@@ -48,8 +58,12 @@ func wantsPodGone(s *v1alpha1.AgentSession) bool {
 // for the pod, because the volume stays and archive asks for its own rescue.
 // Every other state keeps the pod, whatever else asks. Draining (plan 04)
 // keeps it too, until drain is built.
+//
+// A hold pod (D-55) runs no agent, so holdRemovalAllowed judges it instead.
 func podRemovalAllowed(s *v1alpha1.AgentSession, pod *corev1.Pod) error {
 	switch {
+	case isHoldPod(pod):
+		return holdRemovalAllowed(s, pod)
 	case s.Status.Phase == v1alpha1.PhaseDraining:
 		return errDrainNotBuilt
 	case !wantsPodGone(s):
@@ -58,6 +72,23 @@ func podRemovalAllowed(s *v1alpha1.AgentSession, pod *corev1.Pod) error {
 		return nil
 	default:
 		return errNeedsRescue
+	}
+}
+
+// holdRemovalAllowed is nil when the session's hold pod (D-55) may go. No agent
+// runs in a hold pod, so it goes as soon as nothing needs it: the session wants
+// its own pod again (a resume), the hold pod ended (a new one replaces it), or
+// a rescue in it made the volume safe. It stays while it starts, because it is
+// there to run the rescue, and while its rescue fails, so the operator can
+// retry and a human can exec in.
+func holdRemovalAllowed(s *v1alpha1.AgentSession, pod *corev1.Pod) error {
+	switch {
+	case !wantsPodGone(s), podEnded(pod), rescueRanIn(s, pod) && rescued(s):
+		return nil
+	case podNeverStarted(pod):
+		return errHoldStarting
+	default:
+		return errHoldRescuing
 	}
 }
 
@@ -88,9 +119,29 @@ func podEnded(p *corev1.Pod) bool {
 
 // needsRescue reports whether the operator must run a rescue in the pod before
 // it may go: an agent may run in it, and no rescue has since the session last
-// changed.
-func needsRescue(s *v1alpha1.AgentSession, pod *corev1.Pod) bool {
-	return !podNeverStarted(pod) && !podEnded(pod) && !rescueRanIn(s, pod)
+// changed. In a hold pod (D-55) it is the volume's rescue: it runs while the
+// session still wants its pod gone, once the pod has started, and again every
+// retry while the last one failed.
+func needsRescue(s *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time, retry time.Duration) bool {
+	switch {
+	case podNeverStarted(pod) || podEnded(pod):
+		return false
+	case !isHoldPod(pod):
+		return !rescueRanIn(s, pod)
+	case !wantsPodGone(s):
+		return false
+	case !rescueRanIn(s, pod):
+		return true
+	default:
+		return holdRetryDue(s, now, retry)
+	}
+}
+
+// holdRetryDue reports whether the newest rescue failed at least retry ago,
+// so a hold pod's rescue runs again (D-55).
+func holdRetryDue(s *v1alpha1.AgentSession, now time.Time, retry time.Duration) bool {
+	r := s.Status.Rescue
+	return r != nil && r.Result == v1alpha1.RescueFailed && (r.At == nil || !now.Before(r.At.Add(retry)))
 }
 
 // volumeRemovalAllowed is nil only when archive may delete the session's volume
@@ -106,7 +157,7 @@ func volumeRemovalAllowed(s *v1alpha1.AgentSession, podExists bool) error {
 	case podExists:
 		return errors.New("a pod of the session still exists, so the volume may still change")
 	case r == nil || r.Result == "":
-		return errors.New("no rescue has run on the volume; a pod that never ran or ended cannot run one, and a rescue pod is plan 02's (D-51)")
+		return errors.New("no rescue has run on the volume; a pod that never ran or ended cannot run one, so a hold pod does (D-55)")
 	case r.Superseded:
 		return fmt.Errorf("the rescue %s was superseded: a pod started on the volume after it, and no rescue ran in that pod", r.Stamp)
 	case !rescued(s):

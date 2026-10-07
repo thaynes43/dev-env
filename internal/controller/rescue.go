@@ -177,10 +177,17 @@ func verdict(s *v1alpha1.AgentSession, pod *corev1.Pod, rep protocol.RescueRepor
 		add("the agent still ran after the stop, so it may have written more")
 	}
 	refs := 0
-	// The session's own clone must be on the report: agentd finds clones by
-	// looking, so a missing ~/repos, a clone that failed, or a .git that is not
-	// a directory would otherwise read as nothing to save.
-	if !slices.ContainsFunc(rep.Repos, func(r protocol.RepoRescue) bool { return path.Base(r.Path) == s.Spec.Repo }) {
+	switch {
+	case rep.VolumeEmpty && (len(rep.Repos) > 0 || rep.Bundle != nil || !rep.OK || !rep.CleanAndPushed):
+		setReason("ReportMismatch")
+		add("the report says the volume is empty but also lists clones, a bundle or a failure")
+	case rep.VolumeEmpty:
+		// agentd proved the volume holds nothing: no pod ever wrote to it, so
+		// there is no clone to look for (D-55).
+	case !slices.ContainsFunc(rep.Repos, func(r protocol.RepoRescue) bool { return path.Base(r.Path) == s.Spec.Repo }):
+		// The session's own clone must be on the report: agentd finds clones
+		// by looking, so a missing ~/repos, a clone that failed, or a .git
+		// that is not a directory would otherwise read as nothing to save.
 		setReason("NotProven")
 		add("the session's clone ~/repos/%s is not in the report, so nothing proves the volume holds no work", s.Spec.Repo)
 	}
@@ -249,6 +256,10 @@ func verdict(s *v1alpha1.AgentSession, pod *corev1.Pod, rep protocol.RescueRepor
 		rec.Result = v1alpha1.RescueFailed
 		rec.Message = truncate("the rescue " + rep.Stamp + " failed: " + strings.Join(problems, "; "))
 		return rec, reason
+	case rep.VolumeEmpty:
+		rec.Result = v1alpha1.RescueCleanAndPushed
+		rec.Message = fmt.Sprintf("the rescue %s found the volume empty: nothing but lost+found, so no pod ever wrote to it", rep.Stamp)
+		return rec, "VolumeEmpty"
 	case refs == 0 && rep.CleanAndPushed:
 		rec.Result = v1alpha1.RescueCleanAndPushed
 		rec.Message = fmt.Sprintf("the rescue %s found every clone clean and pushed; %s", rep.Stamp, stopped)

@@ -57,6 +57,10 @@ const (
 	runtimeDir        = "/dev/shm/run-1000"
 )
 
+// HoldArgs are the rescue pod's container arguments (D-55): the image's
+// entrypoint is `tini -- agentd`, and `hold` replaces its default `run`.
+var HoldArgs = []string{"hold"}
+
 // HomeClaimName is the session volume's name (DESIGN-001 3.2).
 func HomeClaimName(session string) string { return "home-" + session }
 
@@ -65,11 +69,32 @@ func HomeClaimName(session string) string { return "home-" + session }
 // updated after create: a change in the templates reaches a session only through
 // a drain (5.2).
 func buildPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string) (*corev1.Pod, error) {
+	return buildSessionPod(s, t, apiURL, false)
+}
+
+// buildHoldPod returns the session's rescue pod (D-55): the session's pod with
+// `agentd hold` in place of `agentd run`, the S class's requests and limits,
+// and no agent credentials: no static token, and no profile env or envFrom. It
+// keeps the volumes a rescue needs: the session volume, the shared volume, and
+// the templates' and the profile's mounts (the gh token, for the rescue's
+// fetch). Heartbeats are off, because no agent runs in it.
+func buildHoldPod(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.Pod, error) {
+	return buildSessionPod(s, t, "", true)
+}
+
+// isHoldPod reports whether the pod is a session's rescue pod (D-55).
+func isHoldPod(p *corev1.Pod) bool { return p.Labels[v1alpha1.LabelHold] == "true" }
+
+func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, hold bool) (*corev1.Pod, error) {
 	profileName, profile, err := t.Profile(s.Spec.Profile)
 	if err != nil {
 		return nil, err
 	}
-	size, err := t.Size(s.Spec.Size)
+	sizeClass := s.Spec.Size
+	if hold {
+		sizeClass = v1alpha1.SizeS
+	}
+	size, err := t.Size(sizeClass)
 	if err != nil {
 		return nil, err
 	}
@@ -81,6 +106,10 @@ func buildPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string) (
 	labels := sessionLabels(s, profileName)
 	maps.Copy(labels, profile.Labels)
 	labels[v1alpha1.LabelRevision] = t.Revision()
+	if hold {
+		labels[v1alpha1.LabelSize] = string(v1alpha1.SizeS)
+		labels[v1alpha1.LabelHold] = "true"
+	}
 
 	env := []corev1.EnvVar{
 		{Name: "HOME", Value: templates.HomePath},
@@ -100,7 +129,7 @@ func buildPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string) (
 		{Name: "AGENTD_API_URL", Value: apiURL},
 		{Name: "AGENTD_API_TOKEN_FILE", Value: APITokenFile},
 	}
-	if staticTokenFor(s) {
+	if staticTokenFor(s) && !hold {
 		env = append(env, corev1.EnvVar{Name: "CLAUDE_CODE_OAUTH_TOKEN", ValueFrom: &corev1.EnvVarSource{
 			SecretKeyRef: &corev1.SecretKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: t.Claude.StaticToken.Name},
@@ -109,7 +138,15 @@ func buildPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string) (
 		}})
 	}
 	env = append(env, t.Env...)
-	env = append(env, profile.Env...)
+	envFrom := []corev1.EnvFromSource{}
+	if !hold {
+		env = append(env, profile.Env...)
+		envFrom = append(envFrom, profile.EnvFrom...)
+	}
+	var args []string
+	if hold {
+		args = append(args, HoldArgs...)
+	}
 
 	volumes := []corev1.Volume{
 		{Name: "home", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: HomeClaimName(s.Name)}}},
@@ -172,8 +209,9 @@ func buildPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string) (
 				Name:            ContainerName,
 				Image:           t.Image,
 				ImagePullPolicy: corev1.PullIfNotPresent,
+				Args:            args,
 				Env:             env,
-				EnvFrom:         append([]corev1.EnvFromSource{}, profile.EnvFrom...),
+				EnvFrom:         envFrom,
 				Resources:       resources,
 				VolumeMounts:    mounts,
 				// No probes. A liveness probe would restart the agent CLI

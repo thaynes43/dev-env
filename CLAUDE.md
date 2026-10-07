@@ -41,14 +41,14 @@ api/v1alpha1/            CRD types, group dev-env.haynesops.com (AgentSession); 
                          Its envtest suite proves the schema's rules (D-39) on a real API server
 cmd/dev-env-operator/    the operator; the broker will be its second mode (DESIGN-001 3.1, 6.12)
 cmd/dev-env-keeper/      the keeper, its own binary in the operator image (D-38); main only, the work is internal/keeper
-cmd/agentd/              the in-pod supervisor: `run`, `run-agent`, `render`, `ctl status|rescue [--stop-agent]` (D-40 to D-43, D-48)
+cmd/agentd/              the in-pod supervisor: `run`, `hold` (the rescue pod, D-55), `run-agent`, `render`, `ctl status|rescue [--stop-agent]` (D-40 to D-43, D-48)
 cmd/agent-run/           the CLI, one static binary (CGO_ENABLED=0, D-06); main only, the commands are internal/agentrun
 internal/version/        the build identity every binary's `version` prints
 internal/testenv/        starts envtest (kube-apiserver + etcd) with config/crd/ installed, for test suites
 internal/templates/      parses and checks dev-env-templates, the GitOps data pods are built from; its revision (D-44)
 internal/controller/     the AgentSession reconciler: each session's pod and volume (D-44), the reap finalizer and the
                          guarded deletes (D-45): the rescue by exec before a suspend deletes a pod, and the archive of
-                         a reaped session's volume after a verified rescue (D-51). Its envtest suite proves DESIGN-001
+                         a reaped session's volume after a verified rescue (D-51), in a hold pod when the volume has no pod (D-55). Its envtest suite proves DESIGN-001
                          5.1 (no owner reference to the operator; no pod or volume write or delete outside the guards;
                          delete and suspend wait for rescue); a fake rescuer stands in for exec
 internal/apiserver/      the operator's /v1 API (D-46): HTTPS runnable, TokenReview auth, caller classes, sessions,

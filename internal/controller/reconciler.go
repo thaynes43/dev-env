@@ -70,6 +70,11 @@ const (
 // rescueRetry is how soon a rescue that could not run is tried again.
 const rescueRetry = time.Minute
 
+// HoldRescueRetry is how soon a failed rescue in a hold pod runs again (D-55).
+// A failure can pass on its own (CephFS or GitHub was down) or wait for a
+// human to fix the worktree in the pod; either way the next try finds out.
+const HoldRescueRetry = 15 * time.Minute
+
 // MaxConcurrentReconciles lets a rescue, which can take minutes, run while other
 // sessions are reconciled. Reconciles of one session never overlap.
 const MaxConcurrentReconciles = 4
@@ -109,6 +114,16 @@ type Reconciler struct {
 	// Recorder emits the rescue's and the archive's events on the session; nil
 	// emits none.
 	Recorder events.EventRecorder
+	// HoldRetry is how soon a failed rescue in a hold pod runs again; zero
+	// means HoldRescueRetry (D-55).
+	HoldRetry time.Duration
+}
+
+func (r *Reconciler) holdRetry() time.Duration {
+	if r.HoldRetry > 0 {
+		return r.HoldRetry
+	}
+	return HoldRescueRetry
 }
 
 // SetupWithManager registers the reconciler. It watches sessions, the pods and
@@ -178,9 +193,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	t, tErr := r.loadTemplates(ctx)
 	obs := observation{pod: pod, claim: claim, templates: t, templatesErr: tErr}
 
+	// A hold pod (D-55) is never the pod a session wants: when the session
+	// wants its pod again, the guard lets the hold pod go first.
+	hold := !obs.pod.missing && obs.pod.foreign == "" && isHoldPod(obs.pod.obj)
+
 	var result ctrl.Result
 	switch {
-	case !wantsPodGone(&s):
+	case !wantsPodGone(&s) && !hold:
 		// A session that wants its pod can change its volume again: through
 		// a new pod, or through the rescued pod itself when a resume came
 		// before its delete. So the last rescue stops counting, and the
@@ -198,8 +217,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, err
 		}
 	case !obs.pod.missing && obs.pod.foreign == "":
-		// Suspend or delete asks for the pod to go: rescue first, then 5.1's
-		// guard decides.
+		// Suspend or delete asks for the pod to go, or a hold pod is no longer
+		// needed: rescue first, then 5.1's guard decides.
 		res, stop, err := r.removePod(ctx, &s, &obs)
 		if err != nil || stop {
 			return res, err
@@ -246,7 +265,7 @@ func (r *Reconciler) removePod(ctx context.Context, s *v1alpha1.AgentSession, ob
 		// Going already; its last event reconciles again.
 		return ctrl.Result{}, false, nil
 	}
-	if needsRescue(s, pod) {
+	if needsRescue(s, pod, time.Now(), r.holdRetry()) {
 		// A rescue takes minutes and stops the agent: run it only on the
 		// newest session and pod, not on a cache that has not caught up with
 		// the operator's own writes, so its record does not conflict.
@@ -271,6 +290,9 @@ func (r *Reconciler) removePod(ctx context.Context, s *v1alpha1.AgentSession, ob
 		pod = cur
 	}
 	if obs.removalBlocked = podRemovalAllowed(s, pod); obs.removalBlocked != nil {
+		if isHoldPod(pod) {
+			return r.holdWait(s, pod, obs), false, nil
+		}
 		return ctrl.Result{}, false, nil
 	}
 	if err := deletePod(ctx, r.Client, s, pod); err != nil {
@@ -280,8 +302,57 @@ func (r *Reconciler) removePod(ctx context.Context, s *v1alpha1.AgentSession, ob
 		}
 		return ctrl.Result{}, true, err
 	}
-	log.FromContext(ctx).Info("deleted the session pod", "pod", pod.Name, "uid", pod.UID, "suspend", s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended, "deleted", !s.DeletionTimestamp.IsZero())
+	log.FromContext(ctx).Info("deleted the session pod", "pod", pod.Name, "uid", pod.UID, "hold", isHoldPod(pod), "suspend", s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended, "deleted", !s.DeletionTimestamp.IsZero())
 	return ctrl.Result{}, false, nil
+}
+
+// holdWait says why a hold pod stays and when to look at it again (D-55). A
+// pod that is starting is looked at when it changes; a failed rescue runs
+// again HoldRetry after it ended.
+func (r *Reconciler) holdWait(s *v1alpha1.AgentSession, pod *corev1.Pod, obs *observation) ctrl.Result {
+	rec := s.Status.Rescue
+	switch {
+	case errors.Is(obs.removalBlocked, errHoldStarting):
+		_, msg := pendingReason(pod)
+		obs.removalBlocked = fmt.Errorf("%w: %s", errHoldStarting, msg)
+		if why := volumeRemovalAllowed(s, false); why != nil {
+			obs.removalBlocked = fmt.Errorf("%w; it is there because %w", obs.removalBlocked, why)
+		}
+	case rec != nil && rec.Result == v1alpha1.RescueFailed && rec.At != nil && rescueRanIn(s, pod):
+		next := rec.At.Add(r.holdRetry())
+		obs.removalBlocked = fmt.Errorf("%w; the rescue in it failed and runs again at %s: %s", errHoldRescuing, next.UTC().Format(time.RFC3339), rec.Message)
+		return ctrl.Result{RequeueAfter: max(time.Second, time.Until(next))}
+	}
+	return ctrl.Result{}
+}
+
+// startHoldPod gives a session whose volume needs a rescue, and that has no pod
+// to run it in, a hold pod (D-55): its pod was preempted, evicted or never
+// started, or the rescue in it failed. The operator then rescues in the hold pod
+// as in any session pod, and the guard lets it go once the volume is safe.
+func (r *Reconciler) startHoldPod(ctx context.Context, s *v1alpha1.AgentSession, obs *observation) error {
+	why := obs.removalBlocked
+	switch {
+	case volumeTerminating(*obs):
+		obs.removalBlocked = fmt.Errorf("%w; the volume is being deleted, so no hold pod can mount it to rescue it, and a human decides (D-45)", why)
+		return nil
+	case obs.templatesErr != nil:
+		obs.removalBlocked = fmt.Errorf("%w; no hold pod can start until the templates are fixed: %w", why, obs.templatesErr)
+		return nil
+	}
+	pod, err := buildHoldPod(s, obs.templates)
+	if err != nil {
+		obs.removalBlocked = fmt.Errorf("%w; the hold pod cannot be built: %w", why, err)
+		return nil
+	}
+	if err := r.create(ctx, "hold pod", pod); err != nil {
+		return err
+	}
+	log.FromContext(ctx).Info("created a hold pod to rescue the session volume", "pod", pod.Name, "why", why.Error())
+	r.event(s, corev1.EventTypeNormal, "Rescue", "HoldPod", "created hold pod "+pod.Name+" to rescue the volume: "+why.Error())
+	obs.pod = owned[*corev1.Pod]{obj: pod}
+	obs.removalBlocked = fmt.Errorf("%w: created it, because %w", errHoldStarting, why)
+	return nil
 }
 
 // recordRescue writes the rescue record onto the newest version of the session
@@ -380,6 +451,10 @@ func (r *Reconciler) archive(ctx context.Context, s *v1alpha1.AgentSession, obs 
 		return ctrl.Result{}, true, err
 	}
 	if obs.removalBlocked = volumeRemovalAllowed(s, podExists); obs.removalBlocked != nil {
+		if !podExists && !rescued(s) {
+			// No valid rescue and no pod to run one in: a hold pod (D-55).
+			return ctrl.Result{}, false, r.startHoldPod(ctx, s, obs)
+		}
 		return ctrl.Result{}, false, nil
 	}
 	claim := obs.claim.obj
@@ -630,8 +705,10 @@ func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessio
 		meta.RemoveStatusCondition(&st.Conditions, ConditionRemovalBlocked)
 	}
 
+	// A hold pod runs no agent, so no drain is due for it (D-55).
+	agentPod := hasPod && !isHoldPod(pod)
 	switch {
-	case hasPod && obs.templates != nil:
+	case agentPod && obs.templates != nil:
 		cur := obs.templates.Revision()
 		c := metav1.Condition{Type: ConditionOutdated, Status: metav1.ConditionFalse, Reason: "CurrentRevision",
 			Message: "the pod runs the current template revision " + cur, ObservedGeneration: s.Generation}
@@ -640,7 +717,7 @@ func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessio
 			c.Message = fmt.Sprintf("the pod runs template revision %s; the current one is %s", st.Revision, cur)
 		}
 		meta.SetStatusCondition(&st.Conditions, c)
-	case hasPod:
+	case agentPod:
 		meta.SetStatusCondition(&st.Conditions, metav1.Condition{Type: ConditionOutdated, Status: metav1.ConditionUnknown,
 			Reason: "TemplatesInvalid", Message: truncate("the current template revision is unknown: " + obs.templatesErr.Error()), ObservedGeneration: s.Generation})
 	default:
@@ -703,6 +780,14 @@ func podPhase(s *v1alpha1.AgentSession, obs observation) (v1alpha1.SessionPhase,
 		return v1alpha1.PhasePending, notReady("PodSpecInvalid", obs.buildErr.Error())
 	case obs.pod.missing:
 		return v1alpha1.PhasePending, notReady("Creating", "creating the pod")
+	case isHoldPod(pod):
+		// The 4.1 edge "Failed → Suspended: rescue what is on the volume": no
+		// agent runs, and the pod holds the volume for its rescue (D-55).
+		state := "it is starting"
+		if pod.Status.Phase == corev1.PodRunning {
+			state = "it runs on " + pod.Spec.NodeName
+		}
+		return v1alpha1.PhaseSuspended, notReady("HoldPod", "the hold pod holds the volume for a rescue and runs no agent (D-55); "+state)
 	case !pod.DeletionTimestamp.IsZero():
 		return v1alpha1.PhasePending, notReady("PodTerminating", "the pod is terminating; a new one starts on the same volume once it is gone")
 	case pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded:

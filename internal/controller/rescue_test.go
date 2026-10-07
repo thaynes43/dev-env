@@ -215,3 +215,29 @@ func TestRescueCommand(t *testing.T) {
 		t.Errorf("command %q", RescueCommand)
 	}
 }
+
+// An empty volume (D-55) is proof enough on its own: no clone is expected. A
+// report that claims it and lists more is not trusted.
+func TestVerdictVolumeEmpty(t *testing.T) {
+	empty := protocol.RescueReport{Session: "s1", Stamp: "20261007-2100", Repos: []protocol.RepoRescue{}, OK: true, CleanAndPushed: true,
+		VolumeEmpty: true, Agent: &protocol.AgentStop{}}
+	rec, reason := verdictFor(empty)
+	if rec.Result != v1alpha1.RescueCleanAndPushed || reason != "VolumeEmpty" || !strings.Contains(rec.Message, "empty") {
+		t.Errorf("%s %s %q", rec.Result, reason, rec.Message)
+	}
+	odd := goodReport("s1")
+	odd.VolumeEmpty = true
+	if rec, reason := verdictFor(odd); rec.Result != v1alpha1.RescueFailed || reason != "ReportMismatch" {
+		t.Errorf("an empty volume with clones: %s %s", rec.Result, reason)
+	}
+	running := empty
+	running.Agent = &protocol.AgentStop{WasRunning: true, Running: true}
+	if rec, _ := verdictFor(running); rec.Result != v1alpha1.RescueFailed {
+		t.Errorf("an agent still running: %s", rec.Result)
+	}
+	other := empty
+	other.Session = "s2"
+	if rec, _ := verdictFor(other); rec.Result != v1alpha1.RescueFailed {
+		t.Errorf("another session's report: %s", rec.Result)
+	}
+}
