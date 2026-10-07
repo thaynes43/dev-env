@@ -32,14 +32,16 @@ func newRescueRig(t *testing.T) rescueRig {
 	if step.State != StepOK {
 		t.Fatalf("prepare: %q", step.Notes)
 	}
-	return rescueRig{g: g, s: s, r: r, ws: ws}
+	rig := rescueRig{g: g, s: s, r: r, ws: ws}
+	rig.sharedVolume(t)
+	return rig
 }
 
 var rescueNow = time.Date(2026, 10, 6, 17, 30, 0, 0, time.UTC)
 
 func (rig rescueRig) rescue(t *testing.T) protocol.RescueReport {
 	t.Helper()
-	rep, err := Rescue(context.Background(), rig.r, rig.s, "demo-1006-170000", rescueNow)
+	rep, err := Rescue(context.Background(), rig.r, rig.s, "demo-1006-170000", rescueNow, RescueOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,11 +334,11 @@ func TestRescueLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Rescue(context.Background(), &fakeRunner{}, s, "s", rescueNow); err == nil || !strings.Contains(err.Error(), "another rescue") {
+	if _, err := Rescue(context.Background(), &fakeRunner{}, s, "s", rescueNow, RescueOptions{}); err == nil || !strings.Contains(err.Error(), "another rescue") {
 		t.Errorf("err = %v", err)
 	}
 	unlock()
-	rep, err := Rescue(context.Background(), &fakeRunner{}, s, "s", rescueNow)
+	rep, err := Rescue(context.Background(), &fakeRunner{}, s, "s", rescueNow, RescueOptions{})
 	if err != nil || !rep.OK || len(rep.Repos) != 0 {
 		t.Errorf("no repos: %+v %v", rep, err)
 	}

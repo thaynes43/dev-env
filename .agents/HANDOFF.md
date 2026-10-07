@@ -41,7 +41,12 @@ the saga. To start building, follow
   `POST /v1/sessions/{name}/heartbeat`, and forwards the pod's SIGTERM to the CLI.
   `agentd ctl status` and `ctl rescue` answer the operator (D-40 to D-43). The
   operator's heartbeat route is step 3's; the pod that sets agentd's inputs is
-  step 2's; the bundle is step 5's.
+  step 2's.
+- **Plan 01 step 5, part 1, the rescue bundle, is built** (#32). `agentd ctl rescue`
+  writes one git bundle per clone of the refs origin lacks, and `manifest.json`
+  last, to `rescue/<session>/<stamp>/` on the shared volume, and checks them there
+  before it reports `ok`; `--stop-agent` stops the CLI first (D-48). Part 2 is the
+  operator's side: run it by exec before a suspend, then archive.
 - **Plan 01 step 2 is built** (#29, #30). `dev-env-operator` runs a
   controller-runtime manager whose reconciler builds each session's pod and volume
   from `dev-env-templates` (D-44: the format, placement, no probes, 60 s grace). It

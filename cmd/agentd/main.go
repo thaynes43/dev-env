@@ -40,9 +40,14 @@ Commands:
                            then heartbeat until SIGTERM.
   render                   Render the GitOps config into $HOME (boot step 1).
   ctl status               Print the session's status as JSON.
-  ctl rescue               Commit every worktree's uncommitted work to a local
-                           rescue/ branch and print the report as JSON; exit 1
-                           when a worktree could not be rescued (D-43).
+  ctl rescue [--stop-agent]
+                           Commit every worktree's uncommitted work to a local
+                           rescue/ branch, write a bundle of every ref origin
+                           lacks to the shared volume (rescue/<session>/<stamp>/,
+                           D-48), and print the report as JSON; exit 1 when a
+                           worktree could not be rescued or a bundle could not
+                           be written (D-43). --stop-agent stops the agent CLI
+                           first, as the operator does before a suspend.
   run-agent --launch FILE  Run the agent CLI; agentd starts this in tmux.
   version                  Print the version, commit, Go version and platform.
   help                     Print this help.
@@ -167,8 +172,13 @@ func daemon(ctx context.Context, log *slog.Logger, getenv func(string) string, r
 }
 
 func ctl(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string, r agentd.Runner) int {
-	if len(args) != 1 {
-		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl status|rescue\n", binaryName)
+	stopAgent := false
+	switch {
+	case len(args) == 1:
+	case len(args) == 2 && args[0] == "rescue" && args[1] == "--stop-agent":
+		stopAgent = true
+	default:
+		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl status | ctl rescue [--stop-agent]\n", binaryName)
 		return exitUsage
 	}
 	switch args[0] {
@@ -201,7 +211,8 @@ func ctl(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		if sess, err := agentd.LoadSession(getenv); err == nil {
 			name = sess.Name
 		}
-		rep, err := agentd.Rescue(ctx, r, s, name, time.Now())
+		opt := agentd.RescueOptions{StopAgent: stopAgent, StopGrace: stopGrace}
+		rep, err := agentd.Rescue(ctx, r, s, name, time.Now(), opt)
 		if err != nil {
 			_, _ = fmt.Fprintf(stderr, "%s: rescue: %v\n", binaryName, err)
 			return exitFailure
@@ -212,8 +223,8 @@ func ctl(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 			return exitFailure
 		}
 		if !rep.OK {
-			// The report says which worktree was refused; the operator marks
-			// the session rescueFailed (D-10).
+			// The report says which worktree was refused or which bundle
+			// failed; the operator marks the session rescueFailed (D-10).
 			return exitFailure
 		}
 		return exitOK

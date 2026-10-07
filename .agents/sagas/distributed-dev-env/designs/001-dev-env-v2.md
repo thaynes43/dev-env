@@ -650,7 +650,63 @@ the index and prints the refs origin lacks.**
 - Step 5 extends the same command: it writes `rescue/<id>/<stamp>.bundle` and its
   manifest on the shared volume from `unpushedRefs`, with the report's stamp. In a
   partial clone, objects that origin already has stay out of the bundle; step 5
-  checks `git bundle create` on a `blob:none` clone.
+  checks `git bundle create` on a `blob:none` clone. D-48 records what it writes.
+
+**D-48 (2026-10-06, plan 01 step 5). `agentd ctl rescue` writes D-10's bundle, one
+per clone, into a directory per rescue on the shared volume, and checks it there.**
+
+- **Where.** `~/.shared/rescue/<session>/<stamp>/` holds `<clone>.bundle` for each
+  clone under `~/repos` that has unpushed refs, then `manifest.json`, written last.
+  A second rescue in the same minute gets `<stamp>-2`. This refines D-10 step 2's
+  `rescue/<id>/<stamp>.bundle`: a session can hold more than one clone, and git
+  bundles one repository each. Paths in the report and the manifest are relative to
+  the shared volume's root (`rescue/<session>/<stamp>/manifest.json`), so they mean
+  the same in every pod. Directories are mode 0700 and files 0600; the bundles hold
+  untracked files, which can hold secrets, and they never leave the cluster (D-10).
+- **What.** Exactly the clone's `unpushedRefs` (D-43), under their own names. A
+  stash entry becomes `refs/agentd-rescue/stash/<n>`: agentd creates those refs for
+  the bundle and deletes them after. The bundle is thin against
+  `refs/remotes/origin/HEAD`, origin's default branch, rather than every origin ref:
+  a pushed feature branch is often deleted after its merge, and a bundle that needed
+  its commits could no longer be restored. A clone without `origin/HEAD` is bundled
+  against every origin ref. In a partial clone, git fetches any blob the bundle needs
+  that the clone never downloaded (a ref built on a fetched branch, say) while it
+  writes the bundle; with origin unreachable that bundle fails, and so does the
+  rescue. A ref that moves between the list and the bundle fails the check below,
+  so a bundle never claims a commit it does not hold.
+- **Checks, before the report says `ok`.** git writes the bundle on the session
+  volume first. `git bundle verify` passes in the clone (the format, and the
+  prerequisites the clone has), and `git bundle list-heads` names exactly the refs
+  it should, at the listed commits. agentd copies it to the shared volume through a
+  temporary file, syncs the file and its directory, reads it back and compares the
+  size and SHA-256, and runs both checks again on the shared copy. The manifest
+  (`protocol.RescueManifest`: the session, the stamp, each clone's path, origin's URL
+  without credentials, and its bundle's file, SHA-256, size, base and refs) is
+  written the same way and read back byte for byte. It is written even when a bundle
+  failed, with `complete: false`; a directory without one is a rescue that did not
+  finish. Any failure makes the report not `ok`, which D-10 turns into
+  `rescueFailed`.
+- **The shared volume must be mounted.** `~/.shared` must be a filesystem of its own
+  (its device differs from `$HOME`'s). A plain directory there would put the bundle
+  on the session volume, which archive deletes, so the rescue fails instead.
+- **A clean rescue writes nothing to the shared volume.** When every clone is clean
+  and pushed there is nothing to bundle, so `cleanAndPushed` is the proof, and a
+  CephFS outage does not fail it.
+- **`--stop-agent`**, which the operator passes before it deletes a pod (plan 01
+  step 5, part 2). Before the rescue, agentd
+  sends SIGTERM to the CLI that run-agent recorded, waits the 30 s grace, then
+  SIGKILLs whatever is left of the CLI's process group: the CLI, or a background
+  command it started. run-agent is outside that group and still writes the task's
+  result. The report's `agent` says whether the CLI was running, was killed, or
+  still runs. Then nothing writes to the worktree between the rescue and the end of
+  the pod. A background process the CLI left behind after it had already exited is
+  out of reach: run-agent removes `agent.pid` when the CLI exits.
+- **Restore** (`agent-run rescue restore`, plan 02): clone origin, `git bundle
+  verify`, then `git fetch <bundle> 'refs/*:refs/rescued/*'`. The tests restore an
+  uncommitted file this way, after origin has moved on, and a ref whose branch origin
+  deleted, from a `blob:none` clone with origin gone.
+- Not here: pruning bundles after D-09's 30 days, and listing them (`GET
+  /v1/rescues`), go with plan 02's `rescue list|restore`.
 
 The agent runs with no approval prompts (D-23). Pod spec, inherited from v1 where
 the lesson still applies: non-root uid 1000,
@@ -2977,3 +3033,4 @@ step it names.
 | D-45 | Deleting an `AgentSession` is a reap: a finalizer on the session and its volume holds both until rescue; one guarded function deletes pods (Draining, or Suspended after rescue); `RemovalBlocked` reports the wait | 5.1 |
 | D-46 | The `/v1` API of plan 01: HTTPS on 8443 on every replica; TokenReview per request; callers by class (human, client, session; the v1 pod a client until cutover); create checks what only the API knows and leaves the schema and agentd their own rules; idempotency by label per parent; children bounded by count, depth and the parent's profile; reap is a delete held by the rescue finalizer; heartbeat merged into `status.agent` | 3.4 |
 | D-47 | The `dev-agents` CPU and memory ceiling is a Kyverno policy, not a LimitRange, because a LimitRange fills every unset limit with its default, so the "no CPU limit" rule could never fire | 7.2 |
+| D-48 | `agentd ctl rescue` writes one bundle per clone of its unpushed refs, thin against `origin/HEAD`, to `rescue/<session>/<stamp>/` on the shared volume with `manifest.json` last; it checks each bundle there before it reports `ok`; `--stop-agent` stops the CLI first | 3.6 |
