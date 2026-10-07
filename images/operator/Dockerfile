@@ -28,10 +28,12 @@ RUN make build COMMIT="${COMMIT}" VERSION="${VERSION}"
 # The texts of the third-party modules the two binaries link, plus the Go standard
 # library's own license. `--ignore` skips this repo's own packages (MIT, the LICENSE
 # copied beside them below). CGO_ENABLED=0 matches the Makefile, so go-licenses sees
-# the package set the binaries were built from.
-RUN mkdir -p /out/licenses/go-stdlib /out/licenses/go-modules \
+# the package set the binaries were built from. go-licenses refuses an existing save
+# path and may write none when no third-party module is linked, hence the late mkdir.
+RUN mkdir -p /out/licenses/go-stdlib \
  && CGO_ENABLED=0 go-licenses save ./cmd/dev-env-operator ./cmd/dev-env-keeper \
       --ignore github.com/thaynes43/dev-env --save_path=/out/licenses/go-modules \
+ && mkdir -p /out/licenses/go-modules \
  && cp "$(go env GOROOT)/LICENSE" /out/licenses/go-stdlib/LICENSE
 
 FROM gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3

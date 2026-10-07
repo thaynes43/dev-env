@@ -48,10 +48,13 @@ RUN make build COMMIT="${COMMIT}" VERSION="${VERSION}"
 # The texts of the third-party modules agentd and agent-run link, plus the Go
 # standard library's own license. `--ignore` skips this repo's own packages (MIT, the
 # LICENSE copied beside them in the final stage). CGO_ENABLED=0 matches the Makefile,
-# so go-licenses sees the package set the binaries were built from.
-RUN mkdir -p /out/licenses/go-stdlib /out/licenses/go-modules \
+# so go-licenses sees the package set the binaries were built from. It refuses an
+# existing save path and may write none when no third-party module is linked, hence the
+# late mkdir.
+RUN mkdir -p /out/licenses/go-stdlib \
  && CGO_ENABLED=0 go-licenses save ./cmd/agentd ./cmd/agent-run \
       --ignore github.com/thaynes43/dev-env --save_path=/out/licenses/go-modules \
+ && mkdir -p /out/licenses/go-modules \
  && cp "$(go env GOROOT)/LICENSE" /out/licenses/go-stdlib/LICENSE
 
 # Pinned by digest, as every base image here is; Renovate (docker:pinDigests) keeps it fresh.
