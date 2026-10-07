@@ -292,11 +292,22 @@ type EgressEndpoint struct {
 	// +required
 	Namespace string `json:"namespace"`
 
-	// MatchLabels narrows the pods; empty means every pod in the namespace.
+	// MatchLabels narrows the pods; empty means every pod in the namespace. The
+	// keys are plain pod labels: a Cilium or Kubernetes meta label such as
+	// io.kubernetes.pod.namespace or k8s:io.cilium.k8s.policy.serviceaccount
+	// would let the selector leave Namespace, so those are refused.
 	// +kubebuilder:validation:MaxProperties=8
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k.size() <= 253 && k.matches('^([a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$'))",message="matchLabels keys are plain label keys, such as app.kubernetes.io/name"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, !k.startsWith('io.kubernetes.') && !k.startsWith('io.cilium.') && !k.startsWith('k8s.io/'))",message="matchLabels may not use the io.kubernetes., io.cilium. or k8s.io/ meta labels: the endpoint stays in its namespace"
 	// +optional
-	MatchLabels map[string]string `json:"matchLabels,omitempty"`
+	MatchLabels map[string]LabelValue `json:"matchLabels,omitempty"`
 }
+
+// LabelValue is a label value: at most 63 letters, digits, '-', '_' and '.',
+// starting and ending with a letter or digit, or empty.
+// +kubebuilder:validation:MaxLength=63
+// +kubebuilder:validation:Pattern=`^([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?)?$`
+type LabelValue string
 
 // GrantPort is one port.
 type GrantPort struct {

@@ -2596,7 +2596,10 @@ built.** `api/v1alpha1/accessgrant_types.go`; an envtest suite proves each rule.
   in-cluster pods by namespace and labels, and at least one port. In-cluster
   destinations go by endpoint, never by name: a `.local` name is refused, because
   Cilium enforces in-cluster traffic by the destination pod's identity, which an
-  endpoint rule names.
+  endpoint rule names. An endpoint's labels are plain pod labels: the
+  `io.kubernetes.`, `io.cilium.` and `k8s.io/` meta labels, and Cilium's `k8s:` or
+  `reserved:` sources, are refused, so a selector cannot leave its namespace (the
+  advisory review on #66 found this).
 - **Credentials.** `proxmox` and `hw-ssh` (Q-07).
 - **GrantPolicy.** It matches a request when the type is its type, the requester's
   profile, repo and agent are in each list it sets (it sets profiles, repos or both),

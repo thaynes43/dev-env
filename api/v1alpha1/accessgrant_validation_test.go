@@ -105,7 +105,7 @@ func TestAccessGrantAccepts(t *testing.T) {
 		}},
 		{"egress to in-cluster pods", egressGrant, func(g *v1alpha1.AccessGrant) {
 			g.Spec.Egress = &v1alpha1.EgressGrant{
-				Endpoints: []v1alpha1.EgressEndpoint{{Namespace: "database", MatchLabels: map[string]string{"cnpg.io/cluster": "postgres"}}},
+				Endpoints: []v1alpha1.EgressEndpoint{{Namespace: "database", MatchLabels: map[string]v1alpha1.LabelValue{"cnpg.io/cluster": "postgres"}}},
 				Ports:     []v1alpha1.GrantPort{{Port: 5432}},
 			}
 		}},
@@ -161,6 +161,21 @@ func TestAccessGrantRejects(t *testing.T) {
 		{"egress to dev-tools pods", egressGrant, func(g *v1alpha1.AccessGrant) {
 			g.Spec.Egress.Endpoints = []v1alpha1.EgressEndpoint{{Namespace: "dev-tools"}}
 		}, devEnv},
+		{"an endpoint label that moves the selector to another namespace", egressGrant, func(g *v1alpha1.AccessGrant) {
+			g.Spec.Egress.Endpoints = []v1alpha1.EgressEndpoint{{Namespace: "database", MatchLabels: map[string]v1alpha1.LabelValue{"io.kubernetes.pod.namespace": "dev-env-system"}}}
+		}, "may not use the io.kubernetes., io.cilium. or k8s.io/ meta labels"},
+		{"an endpoint label on namespace labels", egressGrant, func(g *v1alpha1.AccessGrant) {
+			g.Spec.Egress.Endpoints = []v1alpha1.EgressEndpoint{{Namespace: "database", MatchLabels: map[string]v1alpha1.LabelValue{"io.cilium.k8s.namespace.labels.kubernetes.io/metadata.name": "dev-agents"}}}
+		}, "matchLabels"},
+		{"a Cilium-sourced label key", egressGrant, func(g *v1alpha1.AccessGrant) {
+			g.Spec.Egress.Endpoints = []v1alpha1.EgressEndpoint{{Namespace: "database", MatchLabels: map[string]v1alpha1.LabelValue{"k8s:io.kubernetes.pod.namespace": "dev-agents"}}}
+		}, "matchLabels keys are plain label keys"},
+		{"a reserved label", egressGrant, func(g *v1alpha1.AccessGrant) {
+			g.Spec.Egress.Endpoints = []v1alpha1.EgressEndpoint{{Namespace: "database", MatchLabels: map[string]v1alpha1.LabelValue{"reserved:host": ""}}}
+		}, "matchLabels keys are plain label keys"},
+		{"a label value with a space", egressGrant, func(g *v1alpha1.AccessGrant) {
+			g.Spec.Egress.Endpoints = []v1alpha1.EgressEndpoint{{Namespace: "database", MatchLabels: map[string]v1alpha1.LabelValue{"app": "a b"}}}
+		}, "spec.egress.endpoints[0].matchLabels.app"},
 		{"egress to an in-cluster name", egressGrant, func(g *v1alpha1.AccessGrant) {
 			g.Spec.Egress.FQDNs = []string{"dev-env-keeper.dev-env-system.svc.cluster.local"}
 		}, "not reached by name"},
@@ -435,6 +450,9 @@ func TestGrantPolicyRejects(t *testing.T) {
 		{"egress to dev-env-system pods", printerPolicy, func(p *v1alpha1.GrantPolicy) {
 			p.Spec.Egress.Endpoints = []v1alpha1.EgressEndpoint{{Namespace: "dev-env-system"}}
 		}, "no grant reaches the dev-env namespaces"},
+		{"an endpoint label that moves the selector", printerPolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Egress.Endpoints = []v1alpha1.EgressEndpoint{{Namespace: "database", MatchLabels: map[string]v1alpha1.LabelValue{"io.cilium.k8s.policy.serviceaccount": "dev-env-keeper"}}}
+		}, "may not use the io.kubernetes., io.cilium. or k8s.io/ meta labels"},
 		{"profile ops", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
 			p.Spec.Profiles = []string{"ops"}
 		}, "no policy matches profile ops"},
