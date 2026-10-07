@@ -1,7 +1,8 @@
 // Package agentrun is agent-run v2, the dev-env CLI (DESIGN-001 3.5, D-06,
 // D-50): a client of the operator's /v1 API. Plan 01 builds `-p` (create a task
 // session), `list`, `show`, `reap` and `fleet`; plan 02 adds `--local`,
-// `attach` and `detach` (D-58), and `suspend` and `resume` (D-60). The other verbs of 3.5 arrive with the plans
+// `attach` and `detach` (D-58), `suspend` and `resume` (D-60), and `log` and
+// `msg` (D-65). The other verbs of 3.5 arrive with the plans
 // that build their routes.
 //
 // It imports the standard library, the API's wire types (internal/apiserver/apiv1)
@@ -183,6 +184,10 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return a.suspend(ctx, rest)
 	case "resume":
 		return a.resume(ctx, rest)
+	case "log":
+		return a.log(ctx, rest)
+	case "msg":
+		return a.msg(ctx, rest)
 	case "attach":
 		return a.attach(ctx, rest)
 	case "detach":
@@ -203,7 +208,7 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 }
 
 // commands are the words agent-run takes first, built or not yet.
-var commands = []string{"run", "list", "show", "reap", "suspend", "resume", "fleet", "version", "help", "attach", "detach", "prune", "sweep", "codex-remote"}
+var commands = []string{"run", "list", "show", "log", "msg", "reap", "suspend", "resume", "fleet", "version", "help", "attach", "detach", "prune", "sweep", "codex-remote"}
 
 // nearestCommand is the command within two edits of word, or "".
 func nearestCommand(word string) string {

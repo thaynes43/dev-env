@@ -31,8 +31,8 @@ func TestHelp(t *testing.T) {
 		t.Errorf("help sent %d requests", n)
 	}
 
-	h.mustRun(ExitUsage, "help", "msg")
-	contains(t, "stderr", h.stderr.String(), `no command "msg"`)
+	h.mustRun(ExitUsage, "help", "grant")
+	contains(t, "stderr", h.stderr.String(), `no command "grant"`)
 	h.mustRun(ExitUsage, "help", "a", "b")
 }
 

@@ -90,8 +90,14 @@ func TestCtl(t *testing.T) {
 	if code, _, _ := runArgs([]string{"ctl", "status"}, map[string]string{"HOME": home}); code != exitFailure {
 		t.Errorf("ctl status without a session: %d", code)
 	}
-	if code, _, errOut := runArgs([]string{"ctl", "deliver"}, env); code != exitFailure || !strings.Contains(errOut, "not built yet") {
-		t.Errorf("ctl deliver: %d %q", code, errOut)
+	if code, _, errOut := runArgs([]string{"ctl", "deliver"}, env); code != exitUsage || !strings.Contains(errOut, "--from") {
+		t.Errorf("ctl deliver without --from: %d %q", code, errOut)
+	}
+	if code, _, errOut := runArgs([]string{"ctl", "log", "--tail", "0"}, env); code != exitUsage {
+		t.Errorf("ctl log --tail 0: %d %q", code, errOut)
+	}
+	if code, _, errOut := runArgs([]string{"ctl", "log"}, env); code != exitFailure || !strings.Contains(errOut, "no log yet") {
+		t.Errorf("ctl log with no log: %d %q", code, errOut)
 	}
 	// Nothing launched yet: the next boot starts fresh, and no agent ran.
 	if code, out, errOut := runArgs([]string{"ctl", "prepare-restart"}, env); code != exitOK || !strings.Contains(out, `"resumable": false`) || !strings.Contains(out, `"wasRunning": false`) {

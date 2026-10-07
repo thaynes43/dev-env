@@ -2363,11 +2363,44 @@ would not move it.
 |---|---|
 | sessions or subagents in the same pod | native (unchanged) |
 | two Remote Control sessions in different pods | native, through Remote Control (spike S-5 confirms between two pods) |
-| anything else | `agent-run msg <id> "<text>"` → operator → `agentd ctl deliver` in the target pod. Claude TUI: pasted into the pane, as v1 hands a session its first instruction. Codex: `codex queue`. Headless `-p` tasks are not addressable; they report through their log and PR. |
+| anything else | `agent-run msg <id> "<text>"` → operator → `agentd ctl deliver` in the target pod. Claude TUI: pasted into the pane, as v1 hands a session its first instruction. Codex: `codex queue`. Headless `-p` tasks are not addressable; they report through their log and PR. (As built: D-65.) |
 
 The reply goes back the same way (`agent-run msg <parent>`). This design does not
 re-implement the CLI's internal socket protocol: it is undocumented and changes with
 CLI releases.
+
+**D-65 (2026-10-07, plan 02 steps 8 and 9). The log and message routes run agentd
+in the session's running pod by exec; agentd keeps the log's copy on the shared
+volume.**
+
+- **Messages** (tier 3). `POST /v1/sessions/{name}/messages` takes `{"text"}` (at
+  most 16 KiB). The API checks that the session's own pod runs and is Ready, and is
+  not a hold pod. It then runs `agentd ctl deliver --from <caller>` in the pod, with
+  the text on stdin. The caller comes from the token (`session/<name>`,
+  `client/...`, `human/...`), never from the body. agentd delivers only to this
+  boot's TUI while its CLI runs. For Claude it loads the text into a tmux buffer
+  of its own, pastes it into the pane as one bracketed paste, and presses Enter, so
+  a multi-line message is one prompt and no text passes through a shell. A lock in
+  `~/.agentd` holds from the load to the Enter, so two messages sent at once are
+  delivered one after the other, never as one prompt. For Codex it
+  runs `codex queue --thread <id> --message <text>`. The agent reads a first line
+  saying who sent it, that it is information and not its user's instruction, and,
+  for a session sender, how to answer (`agent-run msg <sender>`). A headless task or
+  an agent that is not running takes nothing: agentd exits 3, and the API answers
+  409. Any caller may message any session, as D-16 has it. `agent-run msg <name>
+  "<text>"` (or `-` for stdin) sends a message once and never retries it, so a lost
+  answer cannot deliver it twice; the API answers a failed exec 500, not a 502
+  agent-run would retry.
+- **Logs.** `GET /v1/sessions/{name}/log?tail=N` (1 to 5000, default 200) runs
+  `agentd ctl log --tail N` in the running pod, which prints the end of the session's
+  log (`~/work/<name>.log`), else of its shared copy. agentd copies that log to
+  `~/.shared/logs/<name>.log` every 5 minutes, when the agent exits, and at
+  shutdown, through a temporary file, in the background so a hung CephFS write never
+  blocks the daemon. With no running pod the API answers 409 and names the shared
+  path, which any session pod reads. `agent-run log <name> [--tail N]` prints it.
+- **Exec.** `internal/podexec` is the one exec client (WebSocket with the SPDY
+  fallback). The rescue uses it too. The operator's RBAC already has `pods/exec` in
+  `dev-agents` (6.11).
 
 ### 6.9 declare-activity
 
@@ -4156,3 +4189,4 @@ credential grants) was answered on 2026-10-07 too. ADR-001 was Accepted on
 | D-62 | A suspended session's volume is archived at `status.suspendedAt` plus `archiveAfter` (spec, templates, else 168h), through the reap's archive path with a hold pod when no valid rescue exists; the session stays Archived (`status.archivedAt`), is never resumed, and goes when reaped | 4.4 |
 | D-63 | Installing kube grants through exec with a stdin-only token, a memory-backed grants volume, private atomic files and a kubeconfig with baseline and grant contexts; installation follows the session pod UID, never a pod restart; three missing-volume failures revoke the grant | 6.12 |
 | D-64 | One scoped CiliumNetworkPolicy per egress grant, separate FQDN/CIDR/endpoint rules with requested ports, source excluding hold pods; verified ownership and UID-precondition revoke; a separate operator expiry controller reads policies by name with get/delete-only RBAC and preserves audit records when the broker is unavailable | 6.12 |
+| D-65 | Messages and logs run agentd by exec in the session's running pod: `POST /v1/sessions/{name}/messages` → `agentd ctl deliver` (one bracketed paste and Enter into the Claude TUI, `codex queue` for Codex, 409 for a headless task), never retried by agent-run; `GET .../log?tail=N` → `agentd ctl log`; the log is copied to `~/.shared/logs/` | 6.8 |

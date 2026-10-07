@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -36,6 +37,28 @@ type Daemon struct {
 	Now func() time.Time
 
 	failures int
+	// copying is set while a copy of the log to the shared volume runs, so a
+	// hung CephFS write never stacks copies (D-65).
+	copying atomic.Bool
+}
+
+// logCopyEvery is how often the session's log is copied to the shared volume,
+// besides when the agent exits and at shutdown (D-65).
+const logCopyEvery = 5 * time.Minute
+
+// copyLog copies the session's log to the shared volume in the background. A
+// CephFS outage can hang a write, so it never blocks the daemon, and a copy
+// still running is not started twice.
+func (d *Daemon) copyLog() {
+	if !d.copying.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer d.copying.Store(false)
+		if err := copyLogToShared(d.S, d.Session.Name); err != nil {
+			d.Log.Warn("copy the log to the shared volume", "err", err)
+		}
+	}()
 }
 
 func (d *Daemon) now() time.Time {
@@ -128,6 +151,8 @@ func (d *Daemon) supervise(ctx context.Context) error {
 	defer tick.Stop()
 	poll := time.NewTicker(d.Poll)
 	defer poll.Stop()
+	logs := time.NewTicker(logCopyEvery)
+	defer logs.Stop()
 	last := newestMtime(d.S.statePath(resultFile), d.S.statePath(tuiExitFile))
 	for {
 		select {
@@ -136,11 +161,14 @@ func (d *Daemon) supervise(ctx context.Context) error {
 			return nil
 		case <-tick.C:
 			d.beat(ctx)
+		case <-logs.C:
+			d.copyLog()
 		case <-poll.C:
 			if m := newestMtime(d.S.statePath(resultFile), d.S.statePath(tuiExitFile)); !m.Equal(last) {
 				last = m
 				d.Log.Info("the agent exited")
 				d.beat(ctx)
+				d.copyLog()
 			}
 		}
 	}
@@ -170,6 +198,11 @@ func (d *Daemon) shutdown() {
 		for i := 0; i < 20 && !exists(d.S.statePath(resultFile)); i++ {
 			time.Sleep(100 * time.Millisecond)
 		}
+	}
+	// A last copy of the log, given at most a few seconds of the grace.
+	d.copyLog()
+	for i := 0; i < 30 && d.copying.Load(); i++ {
+		time.Sleep(100 * time.Millisecond)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

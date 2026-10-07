@@ -13,15 +13,12 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	clientscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/remotecommand"
 	utilexec "k8s.io/client-go/util/exec"
-	"k8s.io/streaming/pkg/httpstream"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/podexec"
 )
 
 // The operator's side of D-10's rescue (D-51). Before a suspend deletes a pod
@@ -53,42 +50,25 @@ type Rescuer interface {
 // ExecRescuer runs the rescue through the API server's pods/exec subresource,
 // which the operator's RBAC allows in dev-agents (DESIGN-001 6.11).
 type ExecRescuer struct {
-	config  *rest.Config
-	client  rest.Interface
+	exec    *podexec.Executor
 	timeout time.Duration
 }
 
 // NewExecRescuer returns a Rescuer that execs into pods with cfg.
 func NewExecRescuer(cfg *rest.Config) (*ExecRescuer, error) {
-	cs, err := kubernetes.NewForConfig(cfg)
+	ex, err := podexec.New(cfg)
 	if err != nil {
 		return nil, err
 	}
-	return &ExecRescuer{config: cfg, client: cs.CoreV1().RESTClient(), timeout: RescueTimeout}, nil
+	return &ExecRescuer{exec: ex, timeout: RescueTimeout}, nil
 }
 
 // Rescue implements Rescuer.
 func (e *ExecRescuer) Rescue(ctx context.Context, pod *corev1.Pod) (protocol.RescueReport, error) {
 	ctx, cancel := context.WithTimeout(ctx, e.timeout)
 	defer cancel()
-	req := e.client.Post().Resource("pods").Namespace(pod.Namespace).Name(pod.Name).SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{Container: ContainerName, Command: RescueCommand, Stdout: true, Stderr: true}, clientscheme.ParameterCodec)
-	ws, err := remotecommand.NewWebSocketExecutor(e.config, "GET", req.URL().String())
-	if err != nil {
-		return protocol.RescueReport{}, err
-	}
-	spdy, err := remotecommand.NewSPDYExecutor(e.config, "POST", req.URL())
-	if err != nil {
-		return protocol.RescueReport{}, err
-	}
-	ex, err := remotecommand.NewFallbackExecutor(ws, spdy, func(err error) bool {
-		return httpstream.IsUpgradeFailure(err) || httpstream.IsHTTPSProxyError(err)
-	})
-	if err != nil {
-		return protocol.RescueReport{}, err
-	}
 	stdout, stderr := &cappedBuffer{max: maxReport}, &cappedBuffer{max: 64 << 10}
-	err = ex.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: stdout, Stderr: stderr})
+	err := e.exec.Run(ctx, pod.Namespace, pod.Name, ContainerName, RescueCommand, nil, stdout, stderr)
 	return parseRescueOutput(stdout, stderr.String(), err)
 }
 
