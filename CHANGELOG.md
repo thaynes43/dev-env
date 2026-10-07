@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.6.0](https://github.com/thaynes43/dev-env/compare/v2.5.0...v2.6.0) (2026-10-07)
+
+
+### Features
+
+* **api,agentd,agent-run:** messages and logs (D-65) ([#85](https://github.com/thaynes43/dev-env/issues/85)) ([953f786](https://github.com/thaynes43/dev-env/commit/953f78686f81880c447b580853b7122b1e2eb45f))
+* **api,operator,agent-run:** declare-activity on the API (D-66) ([#87](https://github.com/thaynes43/dev-env/issues/87)) ([44fff0f](https://github.com/thaynes43/dev-env/commit/44fff0feb2750794ad2f37db401f0318eea7b83d))
+
 ## [2.5.0](https://github.com/thaynes43/dev-env/compare/v2.4.0...v2.5.0) (2026-10-07)
 
 
