@@ -25,12 +25,19 @@ run() {
 
 echo "::group::default entrypoint: tini then agentd"
 # No operator in a bare `docker run`, so `agentd version` is the check that the ENTRYPOINT
-# chain starts: tini execs agentd, agentd prints its stamped identity and exits 0.
+# chain starts: tini execs agentd, agentd prints its stamped identity and exits 0. Then
+# agent-run, which the entrypoint does not reach, must carry the same stamp.
 out="$(run "${image}" version)"
 echo "${out}"
 case "${out}" in agentd\ *) ;; *) echo "FAIL: expected 'agentd <version> ...'" >&2; exit 1 ;; esac
 if [ -n "${expect_commit}" ]; then
   case "${out}" in *"${expect_commit:0:12}"*) ;; *) echo "FAIL: agentd does not report commit ${expect_commit:0:12}" >&2; exit 1 ;; esac
+fi
+out="$(run --entrypoint /usr/local/bin/agent-run "${image}" version)"
+echo "${out}"
+case "${out}" in agent-run\ *) ;; *) echo "FAIL: expected 'agent-run <version> ...'" >&2; exit 1 ;; esac
+if [ -n "${expect_commit}" ]; then
+  case "${out}" in *"${expect_commit:0:12}"*) ;; *) echo "FAIL: agent-run does not report commit ${expect_commit:0:12}" >&2; exit 1 ;; esac
 fi
 echo "::endgroup::"
 
@@ -38,6 +45,8 @@ echo "::group::toolchain as the runtime user"
 run --entrypoint /bin/bash "${image}" -euc '
   test "$(id -u)" = 1000
   test "$HOME" = /home/dev
+  # agentd creates ~/.codex at boot; codex warns when CODEX_HOME is missing.
+  mkdir -p "$CODEX_HOME"
   # PID 1 is only tini under the real ENTRYPOINT; here we check the binary and the
   # tools the Go code calls by name (agentd: git, tmux, claude; the gh wrapper: gh).
   tini --version
@@ -57,7 +66,7 @@ run --entrypoint /bin/bash "${image}" -euc '
   python3 --version
   uv --version
   pnpm --version
-  sops --version
+  sops --disable-version-check --version
   yq --version
   talosctl version --client >/dev/null
   omnictl --help >/dev/null

@@ -168,7 +168,7 @@ jobs:
           cache-from: type=gha,scope=dev-env-operator
           cache-to: type=gha,mode=max,scope=dev-env-operator
 
-  # Only when images/agent/** changes (the Dockerfile, its tools, the smoke test). ~1 GB
+  # Only when images/agent/** changes (the Dockerfile, its tools, the smoke test). ~3 GB
   # image: CI only, never in the pod. Builds, loads and smoke-tests it; never pushes
   # (publish-agent.yml pushes from a release tag). The `commit` here is the PR head, so
   # the smoke test also proves COMMIT reaches agentd. Changes to the Go code alone do

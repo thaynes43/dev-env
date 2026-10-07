@@ -31,7 +31,7 @@ name: Publish agent image
 # The image is built and loaded, smoke-tested (images/agent/smoke-test.sh, the same
 # script CI runs on PRs), and only then pushed, so what ships is what passed. It is
 # built without a cache: this workflow runs once per release, and a cold build is
-# worth more than another ~1 GB in the repo's Actions cache quota.
+# worth more than another ~3 GB in the repo's Actions cache quota.
 #
 # Needs: the `thaynes43/dev-env` repo has Write on the existing GHCR package
 # `ghcr.io/thaynes43/dev-env` (package settings, "Manage Actions access"; it was

@@ -16,7 +16,8 @@
 #
 # Unlike v1 this file is built from this repo's root (`docker build -f
 # images/agent/Dockerfile --build-arg COMMIT=$(git rev-parse HEAD) .`). It is about
-# 1 GB: build it in CI only, never in the dev-env pod (CLAUDE.md, "No CPU burners").
+# 3.2 GB on disk (measured in CI, 2026-10-06): build it in CI only, never in the
+# dev-env pod (CLAUDE.md, "No CPU burners").
 # .github/workflows/ci.yml builds and smoke-tests it on every PR that touches
 # images/agent/**, and publish-agent.yml pushes and signs it from a release tag.
 #
@@ -40,8 +41,8 @@ ARG VERSION=
 # the keeper too, which this image drops; they cost seconds.
 RUN make build COMMIT="${COMMIT}" VERSION="${VERSION}"
 
-# Not pinned by digest yet: Renovate's docker:pinDigests adds the pin on its next run.
-FROM node:24-slim
+# Pinned by digest, as every base image here is; Renovate (docker:pinDigests) keeps it fresh.
+FROM node:24-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║ DO NOT put a version number in a comment BETWEEN a `# renovate:` annotation  ║

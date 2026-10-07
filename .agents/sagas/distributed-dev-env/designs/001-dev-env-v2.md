@@ -1001,7 +1001,7 @@ workflow, `publish-agent.yml`.**
   is a symlink on PATH. The browsers stay staged at `/opt/dev-env/ms-playwright`.
   `/opt/dev-env/config`, `/opt/dev-env/scripts` and `/etc/codex` are the ConfigMap
   mounts of D-49; the image ships nothing at them.
-- **The build runs in CI only** (about 1 GB). `ci.yml`'s `image-agent` job builds it
+- **The build runs in CI only** (3.2 GB on disk, measured in CI). `ci.yml`'s `image-agent` job builds it
   on PRs that touch `images/agent/**`, loads it, runs `images/agent/smoke-test.sh`
   (v1's toolchain test run as uid 1000 on a read-only root with no network, plus the
   default entrypoint, agentd's and agent-run's stamped commit, Codex's location, the

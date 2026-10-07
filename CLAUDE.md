@@ -113,7 +113,7 @@ an agent's. Renovate auto-merge is off until the ruleset requires `CI - Success`
 
 The agent image is `images/agent/Dockerfile` (D-53): v1's Dockerfile plus `tini`, agentd,
 `agent-run`, Codex and `kubectl-cnpg`, with `pve` and `hw-ssh` in `images/agent/tools/`.
-It is about 1 GB, so **never build it in the pod**: `ci.yml` builds and smoke-tests it
+It is about 3.2 GB on disk, so **never build it in the pod**: `ci.yml` builds and smoke-tests it
 (`images/agent/smoke-test.sh`) on PRs that change `images/agent/**`. `publish-agent.yml`
 pushes `dev-env:2.x.y` from a `v2.x.y` release tag (or `gh workflow run publish-agent.yml
 --ref v2.x.y` when the tag was made with `GITHUB_TOKEN`, which starts no workflow), never
