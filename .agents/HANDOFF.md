@@ -62,8 +62,10 @@ the saga. To start building, follow
   2026-10-07).
   **B4 added Renovate and release-please** (#18): one repo version on the agent image's
   `2.x` line. The release App is live since 2026-10-07, so release PRs run CI like any
-  PR. Merging one stays Tom's call (CLAUDE.md); #52 was merged by the overnight build
-  session on its work order, to unblock the first end-to-end run. Renovate
+  PR. Agents squash-merge a green release PR themselves (Tom, 2026-10-07: "Merge, and
+  let agents merge releases"; CLAUDE.md). #52 was merged on the overnight work order,
+  before that ruling, to unblock the first end-to-end run; #61 (2.0.1) was merged under it.
+  Renovate
   auto-merge is off until the ruleset exists.
 - **Plan 01 step 1, the `AgentSession` CRD, is built** (#24). The schema enforces
   the per-session rules as CEL, and spec is immutable after create except
