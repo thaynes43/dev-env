@@ -398,7 +398,9 @@ call, what a create checks, and how a reap and a heartbeat reach the objects.**
   session only, because D-39 allows it in spec only there. A repeat of the key by the
   same parent returns the newest unfinished session with 200. A repeat with a
   different request is a 409: the annotation `dev-env.haynesops.com/request-hash`
-  holds the SHA-256 of the decoded request. A finished session frees its key.
+  holds the SHA-256 of the decoded request. The key is looked up before the child
+  limits below, so a retry of a create whose answer was lost gets its session back
+  even when that session reached a limit. A finished session frees its key.
   Unfinished means not reaped, suspended, archived or failed, with its agent not
   `exited`, `failed` or `interrupted`.
 - **Children** (3.4). A session's child: at most 4 unfinished at a time (429); at

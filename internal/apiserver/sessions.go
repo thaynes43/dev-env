@@ -41,19 +41,8 @@ func (s *Server) createSession(ctx context.Context, w http.ResponseWriter, r *ht
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
 
-	if c.kind == kindSession {
-		if c.depth > maxSessionDepth {
-			return 0, nil, forbidden("session %s is %d levels deep and may not start sessions: two levels is the limit (DESIGN-001 3.4)", c.parent, maxSessionDepth)
-		}
-		n, err := s.runningChildren(ctx, c.parent)
-		if err != nil {
-			return 0, nil, err
-		}
-		if n >= maxRunningChildren {
-			return 0, nil, newError(http.StatusTooManyRequests, apiv1.CodeLimitExceeded,
-				"session %s already has %d running children, the most at a time (DESIGN-001 3.4); one must finish first", c.parent, n)
-		}
-	}
+	// A repeat of a key comes first: a retry of a create that succeeded must get
+	// its session back, even when that session is the one that reached a limit.
 	if req.IdempotencyKey != "" {
 		existing, err := s.byIdempotencyKey(ctx, c.parent, req.IdempotencyKey)
 		if err != nil {
@@ -66,6 +55,20 @@ func (s *Server) createSession(ctx context.Context, w http.ResponseWriter, r *ht
 			}
 			w.Header().Set("Location", apiv1.SessionPath(existing.Name))
 			return http.StatusOK, view(existing, false), nil
+		}
+	}
+
+	if c.kind == kindSession {
+		if c.depth > maxSessionDepth {
+			return 0, nil, forbidden("session %s is %d levels deep and may not start sessions: two levels is the limit (DESIGN-001 3.4)", c.parent, c.depth-1)
+		}
+		n, err := s.runningChildren(ctx, c.parent)
+		if err != nil {
+			return 0, nil, err
+		}
+		if n >= maxRunningChildren {
+			return 0, nil, newError(http.StatusTooManyRequests, apiv1.CodeLimitExceeded,
+				"session %s already has %d running children, the most at a time (DESIGN-001 3.4); one must finish first", c.parent, n)
 		}
 	}
 

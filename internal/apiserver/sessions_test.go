@@ -249,14 +249,26 @@ func TestSessionChildren(t *testing.T) {
 
 	same := task()
 	same.Profile = "dev"
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 2; i++ {
 		f.now = f.now.Add(time.Second)
 		if w := f.do(http.MethodPost, apiv1.SessionsPath, tok, same); w.Code != http.StatusCreated {
 			t.Fatalf("child %d: %d %s", i+2, w.Code, w.Body.String())
 		}
 	}
+	keyed := task()
+	keyed.IdempotencyKey = "fourth-child"
+	f.now = f.now.Add(time.Second)
+	w = f.do(http.MethodPost, apiv1.SessionsPath, tok, keyed)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("child 4: %d %s", w.Code, w.Body.String())
+	}
+	fourth := decode[apiv1.Session](t, w).Name
 	f.now = f.now.Add(time.Second)
 	wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, tok, task()), http.StatusTooManyRequests, apiv1.CodeLimitExceeded)
+	// A retry of the fourth, whose answer was lost, gets it back, not a 429.
+	if w := f.do(http.MethodPost, apiv1.SessionsPath, tok, keyed); w.Code != http.StatusOK || decode[apiv1.Session](t, w).Name != fourth {
+		t.Fatalf("retry of the fourth child at the limit: %d %s", w.Code, w.Body.String())
+	}
 
 	// A child whose task ended no longer counts.
 	child = f.session(child.Name)

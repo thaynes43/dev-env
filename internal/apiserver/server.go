@@ -242,7 +242,8 @@ func (r *Runner) Start(ctx context.Context) error {
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    64 << 10,
 		ErrorLog:          r.ErrorLog,
-		BaseContext:       func(net.Listener) context.Context { return ctx },
+		// Requests do not inherit ctx: at shutdown, Shutdown lets the ones in
+		// flight finish rather than cancel them halfway through a write.
 	}
 
 	wctx, stopWatch := context.WithCancel(ctx)
