@@ -66,10 +66,11 @@ the `dev-env-templates` pin in haynes-ops. Operator changes ship as the
 `dev-env-operator:sha-<short>` pin. A step is done when it is deployed and checked in
 the cluster.
 
-- [ ] 1. This list (docs only).
+- [x] 1. This list (docs only, #65).
 - [ ] 2. **The rescue pod** (D-51's gap). `agentd hold` holds the volume and starts no
-  agent (D-42). `agentd ctl rescue` proves a volume that holds nothing at all, which
-  is what a pod that never started leaves. The operator gives a reaped session whose
+  agent (D-42). `agentd ctl rescue` reports an empty volume, with no clone and no
+  worktree (what a pod that never started leaves), as a valid rescue with nothing
+  to save. The operator gives a reaped session whose
   volume has no valid rescue and no pod a hold pod (the session's pod, size S, no
   agent token), runs the usual exec rescue in it, retries a failed rescue, and keeps
   the hold pod up while the rescue fails, so a human can exec in. A hold pod goes as
