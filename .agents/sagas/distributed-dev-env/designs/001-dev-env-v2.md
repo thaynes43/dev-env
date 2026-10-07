@@ -440,7 +440,8 @@ call, what a create checks, and how a reap and a heartbeat reach the objects.**
   the DNS allowlist refuses search-expanded names, so `--api-url` is that full name.
   The CA reaches session pods through a templates mount and `AGENTD_API_CA_FILE`.
   The RBAC is 6.11's operator row as written (`tokenreviews` create, its CRD group,
-  pods read in `dev-agents`). The v1 pod mints its token with `kubectl create token
+  pods read in `dev-agents`); as built, the CRD group is in the `dev-agents` Role
+  (D-19's 2026-10-07 note). The v1 pod mints its token with `kubectl create token
   dev-env -n dev --audience dev-env-operator`, which needs `create` on
   `serviceaccounts/token` for its own ServiceAccount (`resourceNames: [dev-env]`) in
   v1's `rbac.yaml`. A token for the pod's own identity, for an audience only the
@@ -2232,6 +2233,13 @@ the Kyverno exec rule.
   variables in the policy. Kyverno 1.19 copies a CEL policy's match conditions into
   its own webhook, so the exec guard also fails closed only for `dev-agents`
   identities.
+- **The table's rows, as built.** The operator's rights on its own CRD group are in
+  its `dev-agents` Role, not a ClusterRole. Its cache lists only `dev-agents`
+  (`controller.CacheOptions`), so nothing needs the group cluster-wide, and only
+  `tokenreviews` stays in a ClusterRole. Leases are get, create and update for the
+  operator and the keeper, the verbs client-go's LeaseLock uses. The keeper has
+  D-52's rights, with no TokenReview until plan 03. The RBAC app also creates the
+  ServiceAccounts, so the HelmReleases do not.
 - **The short lists.** A pod may run as `default` and as no other ServiceAccount. A
   Job may mount only the volsync restic repositories (`<app>-volsync-aws-secret`),
   which the unlock runbook needs.
