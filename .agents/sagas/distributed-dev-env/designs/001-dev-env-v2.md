@@ -2606,7 +2606,8 @@ built.** `api/v1alpha1/accessgrant_types.go`; an envtest suite proves each rule.
   the request's scope lies inside its scope, and the TTL is at most `maxTTL`. A
   `description` says what Tom accepts by it. The schema refuses type `breakglass`,
   roles `dev-env-grant-breakglass` and `dev-env-grant-secrets-read`, profile `ops`,
-  a dev-env namespace, and a namespace that is not a plain name.
+  a dev-env namespace, and a namespace that is not a plain name. A policy's name is a
+  DNS label of at most 63 characters, because a grant records it as `policy/<name>`.
 - **Not yet.** Type `lease` joins with plan 09.
 
 **D-26. Approvals: a Pushover link to an approval page behind Authentik.**
