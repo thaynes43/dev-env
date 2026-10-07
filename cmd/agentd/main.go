@@ -55,6 +55,10 @@ Commands:
                            ~/.agentd/launch.json) as JSON, then stop the agent
                            CLI as the pod's SIGTERM would (D-58).
   run-agent --launch FILE  Run the agent CLI; agentd starts this in tmux.
+  ctl grant-install        Install a kube grant; token on stdin, pod UID required.
+  ctl grant-remove         Remove a kube grant; pod UID required.
+  ctl grant-list           List this pod's grants and their expiry.
+  ctl grant-use            Select a grant context or default.
   version                  Print the version, commit, Go version and platform.
   help                     Print this help.
 
@@ -72,13 +76,13 @@ const (
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
-	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr, os.Getenv, agentd.ExecRunner{})
+	code := run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, os.Getenv, agentd.ExecRunner{})
 	stop()
 	os.Exit(code)
 }
 
 // run is main without the process, so tests can call it.
-func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string, r agentd.Runner) int {
+func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, r agentd.Runner) int {
 	if len(args) == 0 {
 		_, _ = fmt.Fprint(stderr, usage)
 		return exitUsage
@@ -123,7 +127,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		defer signal.Stop(sigs)
 		return agentd.RunAgent(args[2], stdout, sigs, stopGrace)
 	case "ctl":
-		return ctl(ctx, args[1:], stdout, stderr, getenv, r)
+		return ctl(ctx, args[1:], stdin, stdout, stderr, getenv, r)
 	default:
 		_, _ = fmt.Fprintf(stderr, "%s: unknown command %q\n\n%s", binaryName, args[0], usage)
 		return exitUsage
@@ -201,14 +205,20 @@ func daemon(ctx context.Context, log *slog.Logger, getenv func(string) string, r
 	return exitOK
 }
 
-func ctl(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string, r agentd.Runner) int {
+func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, r agentd.Runner) int {
+	if len(args) > 0 {
+		switch args[0] {
+		case "grant-install", "grant-remove", "grant-use", "grant-list":
+			return grantCtl(args, stdin, stdout, stderr, getenv)
+		}
+	}
 	stopAgent := false
 	switch {
 	case len(args) == 1:
 	case len(args) == 2 && args[0] == "rescue" && args[1] == "--stop-agent":
 		stopAgent = true
 	default:
-		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl status | ctl rescue [--stop-agent] | ctl prepare-restart\n", binaryName)
+		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl status | rescue [--stop-agent] | prepare-restart | grant-install | grant-remove | grant-list | grant-use\n", binaryName)
 		return exitUsage
 	}
 	switch args[0] {

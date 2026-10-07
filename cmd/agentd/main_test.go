@@ -24,7 +24,7 @@ func (noRunner) LookPath(string) (string, error) { return "", os.ErrNotExist }
 
 func runArgs(args []string, env map[string]string) (int, string, string) {
 	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), args, &stdout, &stderr, func(k string) string { return env[k] }, noRunner{})
+	code := run(context.Background(), args, strings.NewReader(""), &stdout, &stderr, func(k string) string { return env[k] }, noRunner{})
 	return code, stdout.String(), stderr.String()
 }
 
@@ -146,7 +146,7 @@ func TestHold(t *testing.T) {
 	done := make(chan int, 1)
 	var stdout, stderr bytes.Buffer
 	go func() {
-		done <- run(ctx, []string{"hold"}, &stdout, &stderr, func(k string) string { return env[k] }, noRunner{})
+		done <- run(ctx, []string{"hold"}, strings.NewReader(""), &stdout, &stderr, func(k string) string { return env[k] }, noRunner{})
 	}()
 	cancel()
 	if code := <-done; code != exitOK {

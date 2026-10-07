@@ -252,28 +252,26 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 		log.FromContext(ctx).Info("made the grant", append(grantFields(g), "made", made)...)
 		b.event(g, corev1.EventTypeNormal, "Make", "Made", "made "+strings.Join(made, ", "))
 	}
+	res := ctrl.Result{RequeueAfter: expires.Sub(now.Time)}
 	changed := g.Status.ServiceAccount != g.Name
-	g.Status.ServiceAccount = g.Name
-
 	if b.Installer != nil {
-		if pod := b.sessionPod(ctx, sess, true); pod != nil && string(pod.UID) != g.Status.InstalledPodUID {
-			token, tokenExpires, err := b.mint(ctx, g, now)
-			if err != nil {
-				return ctrl.Result{}, err
+		if pod := b.sessionPod(ctx, sess, true); pod != nil {
+			var installed bool
+			res, installed, err = b.install(ctx, g, pod, now)
+			if err != nil || g.Status.Phase != v1alpha1.GrantActive {
+				return res, err
 			}
-			if err := b.Installer.Install(ctx, pod, g, token, earliest(tokenExpires, expires)); err != nil {
-				b.event(g, corev1.EventTypeWarning, "Install", "InstallFailed", fmt.Sprintf("pod %s: %v", pod.Name, err))
-				return ctrl.Result{}, fmt.Errorf("install the grant in pod %s: %w", pod.Name, err)
+			if !installed && g.Status.InstalledPodUID != string(pod.UID) {
+				return res, nil
 			}
-			g.Status.InstalledPodUID = string(pod.UID)
-			g.Status.InstalledAt = &now
-			changed = true
-			log.FromContext(ctx).Info("installed the grant", append(grantFields(g), "pod", pod.Name, "podUID", pod.UID)...)
-			b.event(g, corev1.EventTypeNormal, "Install", "Installed", "installed in pod "+pod.Name)
+			changed = changed || installed
+		} else {
+			res.RequeueAfter = min(installRetry, res.RequeueAfter)
 		}
 	}
-
-	res := ctrl.Result{RequeueAfter: expires.Sub(now.Time)}
+	// The metadata patch in install reads back the server's status. Set the
+	// identity afterwards so that patch cannot discard it.
+	g.Status.ServiceAccount = g.Name
 	if changed {
 		if _, err := b.writeStatus(ctx, g); err != nil {
 			return ctrl.Result{}, err
@@ -388,12 +386,12 @@ func (b *Broker) lookupSession(ctx context.Context, name string) (*v1alpha1.Agen
 	return &s, nil
 }
 
-// sessionPod returns the session's own pod from the cache: named after the
+// sessionPod returns the session's own pod from the API server: named after the
 // session, controlled by it, not a hold pod (D-55), not being deleted, and
 // Running when running is true. Otherwise nil.
 func (b *Broker) sessionPod(ctx context.Context, s *v1alpha1.AgentSession, running bool) *corev1.Pod {
 	var pod corev1.Pod
-	if err := b.Client.Get(ctx, types.NamespacedName{Namespace: b.SessionNamespace, Name: s.Name}, &pod); err != nil {
+	if err := b.APIReader.Get(ctx, types.NamespacedName{Namespace: b.SessionNamespace, Name: s.Name}, &pod); err != nil {
 		return nil
 	}
 	ref := metav1.GetControllerOf(&pod)

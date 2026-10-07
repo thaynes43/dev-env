@@ -42,7 +42,8 @@ api/v1alpha1/            CRD types, group dev-env.haynesops.com (AgentSession; A
 cmd/dev-env-operator/    the operator, and the access broker as its second mode, `dev-env-operator broker` (broker.go, D-61)
 cmd/dev-env-keeper/      the keeper, its own binary in the operator image (D-38); main only, the work is internal/keeper
 cmd/agentd/              the in-pod supervisor: `run`, `hold` (the rescue pod, D-55), `run-agent` (a task, or a TUI, D-58), `render`,
-                         `ctl status|rescue [--stop-agent]|prepare-restart` (D-40 to D-43, D-48, D-58)
+                         `ctl status|rescue [--stop-agent]|prepare-restart` (D-40 to D-43, D-48, D-58),
+                         `ctl grant-install|grant-remove|grant-list|grant-use` (D-63)
 cmd/agent-run/           the CLI, one static binary (CGO_ENABLED=0, D-06); main only, the commands are internal/agentrun
 internal/version/        the build identity every binary's `version` prints
 internal/testenv/        starts envtest (kube-apiserver + etcd) with config/crd/ installed, for test suites
@@ -65,7 +66,7 @@ internal/keeper/         the keeper (D-52): mints the haynes-dev-bot token into 
                          the Roles haynes-ops gives it
 internal/broker/         the access broker (D-61): decides AccessGrants (GrantPolicy match, Decide for the approval page,
                          a Notifier), makes kube and break-glass grants (a ServiceAccount and RoleBindings or a
-                         ClusterRoleBinding per grant) and revokes them; Installer is plan 07 step 4's seam. Its envtest
+                         ClusterRoleBinding per grant) and revokes them; ExecInstaller installs kube tokens on stdin into the pod's grants tmpfs (D-63), guarded by pod UID; older pods fail/revoke after three attempts. Its envtest
                          suite runs it as dev-env-broker under haynes-ops' RBAC and broker guard, copied into testdata/
 internal/agentd/         agentd: config rendering (the dev-init.sh port), clone and worktree, the task runner, heartbeat,
                          status, rescue and its bundle on the shared volume (D-48); tests fake claude and tmux and run

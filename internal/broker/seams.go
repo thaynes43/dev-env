@@ -39,8 +39,8 @@ func (n LogNotifier) NotifyPending(_ context.Context, g *v1alpha1.AccessGrant) e
 
 // Installer puts a kube grant's token in the session's pod and takes it out
 // (plan 07 step 4). Install is called with a freshly minted token whenever the
-// session's Running pod is not the one in status.installedPodUID; Remove at
-// revoke, best effort.
+// session's Running pod is not the one in status.installedPodUID, or before a
+// shortened TokenRequest expires; Remove at revoke, best effort (D-63).
 type Installer interface {
 	Install(ctx context.Context, pod *corev1.Pod, g *v1alpha1.AccessGrant, token string, expires time.Time) error
 	Remove(ctx context.Context, pod *corev1.Pod, g *v1alpha1.AccessGrant) error

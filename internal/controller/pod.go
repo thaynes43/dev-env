@@ -53,6 +53,7 @@ const (
 	tolerationSeconds = 3600
 	uid               = 1000
 	tmpSizeLimit      = "8Gi"
+	grantsSizeLimit   = "16Mi"
 	apiTokenSeconds   = 3600
 	runtimeDir        = "/dev/shm/run-1000"
 )
@@ -128,6 +129,10 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		// Empty until the API is served: agentd's heartbeat is off then.
 		{Name: "AGENTD_API_URL", Value: apiURL},
 		{Name: "AGENTD_API_TOKEN_FILE", Value: APITokenFile},
+		{Name: protocol.GrantsDirEnv, Value: protocol.GrantsDir},
+		{Name: protocol.KubeconfigEnv, Value: protocol.GrantsDir + "/" + protocol.KubeconfigName},
+		{Name: protocol.PodUIDEnv, ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.uid"}}},
+		{Name: protocol.PodNamespaceEnv, ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}},
 	}
 	if staticTokenFor(s) && !hold {
 		env = append(env, corev1.EnvVar{Name: "CLAUDE_CODE_OAUTH_TOKEN", ValueFrom: &corev1.EnvVarSource{
@@ -152,6 +157,7 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		{Name: "home", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: HomeClaimName(s.Name)}}},
 		{Name: "shared", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: t.SharedClaim}}},
 		{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: ptr.To(resource.MustParse(tmpSizeLimit))}}},
+		{Name: "grants", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory, SizeLimit: ptr.To(resource.MustParse(grantsSizeLimit))}}},
 		{Name: "api-token", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
 			Sources: []corev1.VolumeProjection{{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
 				Audience: APITokenAudience, ExpirationSeconds: ptr.To[int64](apiTokenSeconds), Path: "token",
@@ -162,6 +168,7 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		{Name: "home", MountPath: templates.HomePath},
 		{Name: "shared", MountPath: templates.SharedPath},
 		{Name: "tmp", MountPath: templates.TmpPath},
+		{Name: "grants", MountPath: protocol.GrantsDir},
 		{Name: "api-token", MountPath: templates.APITokenDir, ReadOnly: true},
 	}
 	for _, m := range append(append([]templates.Mount{}, t.Mounts...), profile.Mounts...) {

@@ -884,13 +884,16 @@ per session from `dev-env-templates`, and never changes either after create.**
   up to 30 s for it (D-42), while the CLI flushes its transcript and archives its
   Remote Control entry (S-6). Rescue runs by exec before a pod is deleted, so the
   grace covers the shutdown only. Volumes: the session's claim at `/home/dev`,
-  `dev-env-shared` at `/home/dev/.shared`, `/tmp` (emptyDir, 8Gi), a projected token
+  `dev-env-shared` at `/home/dev/.shared`, `/tmp` (emptyDir, 8Gi), the grants tmpfs
+  at `/run/dev-env/grants` (emptyDir, Memory, 16Mi; D-63), a projected token
   for the audience `dev-env-operator` at `/var/run/secrets/dev-env/token` (D-05,
   agentd's default for `AGENTD_API_TOKEN_FILE`, D-41), then the templates' mounts. The
   environment: `HOME`, `XDG_RUNTIME_DIR`, `DEV_ENV_CPU_LIMIT` (7.2, the limit rounded
   up to whole CPUs), `AGENTD_SESSION` (D-40) with `AGENTD_SESSION_FILE` set empty,
   `AGENTD_API_URL` from the operator's `--api-url` flag (empty until plan 01 step 3
   serves the API, which keeps heartbeats off), `AGENTD_API_TOKEN_FILE`,
+  `DEV_ENV_GRANTS_DIR`, `KUBECONFIG`, and downward-API `DEV_ENV_POD_UID` and
+  `POD_NAMESPACE` for grant installation and the baseline context (D-63),
   `CLAUDE_CODE_OAUTH_TOKEN` from the static token's Secret for Claude task
   and local sessions only, then the templates' env (`AGENTD_API_CA_FILE` among it,
   with the CA's mount). The operator checks the session document with agentd's own rules first, so a
@@ -3012,6 +3015,42 @@ grants.** `internal/broker`; `dev-env-operator broker` (`cmd/dev-env-operator/br
   first guard: validation 3 read `request.namespace`, which a cluster-scoped request
   lacks, so every ClusterRoleBinding failed closed. haynes-ops #3531 fixed it.
 
+**D-63 (2026-10-07, plan 07 step 4). Installing kube grants in the session pod.**
+
+- **Memory only.** New session pods have an `emptyDir` volume with `medium: Memory`
+  at `/run/dev-env/grants`. `DEV_ENV_GRANTS_DIR` names it, and `KUBECONFIG` names its
+  `kubeconfig`. Existing pods keep their spec and process; they gain the volume only
+  on a later resume. agentd refuses to create a missing grants directory, so it
+  cannot fall back to writing a grant token on the session's disk.
+- **The commands.** `agentd ctl grant-install` takes the grant name, role,
+  namespaces and expiry as flags, and the token on stdin. It writes a private
+  directory per grant with `token` and token-free `grant.json`, and a kubeconfig
+  with a context named after the grant. The kubeconfig references token files,
+  rather than copying token values. Files are mode 0600 and grant directories 0700;
+  a file lock serializes changes, and file replacements are atomic.
+  `grant-list` shows scope and expiry, with JSON available; `grant-use` selects a
+  live grant or `default`; `grant-remove` deletes the grant and its context.
+- **The baseline context.** `default` uses the pod's own projected ServiceAccount
+  token, CA and namespace. The server comes from `KUBERNETES_SERVICE_HOST` and
+  `KUBERNETES_SERVICE_PORT`, because the pod's `ndots:1` cannot resolve
+  `kubernetes.default.svc`. Installing a grant does not select it. Removing the
+  selected grant returns to `default`; expired grants cannot be selected.
+- **Exec.** The broker installs in the session's own running container by exec,
+  with the token on stdin only. A downward-API pod UID is checked before stdin is
+  read, so a replacement pod cannot receive a token meant for its predecessor.
+  Neither the command, its output nor a transport
+  error may expose the token. A successful install records the pod UID; a new pod
+  gets another token and install, and a broker restart leaves an installed grant
+  alone. The broker records the TokenRequest response's actual expiry and refreshes
+  before it when the API server caps the requested lifetime. As D-61 requires, a
+  TokenRequest lasts at least 600 seconds: one minted near the grant's end can
+  outlive `expiresAt` if the broker is unavailable. Deleting the ServiceAccount at
+  the approved expiry remains the authoritative revoke. A pod that lacks the volume is retried three times, then the grant fails
+  and its ServiceAccount and bindings are revoked. Retry counts are recorded as
+  AccessGrant annotations for that pod UID, so a broker restart keeps the count. The broker never restarts a pod
+  to install a grant. Removing the file is best effort after the authoritative
+  revoke in D-61.
+
 **D-26. Approvals: a Pushover link to an approval page behind Authentik.**
 
 | Channel | Verdict |
@@ -4075,3 +4114,4 @@ credential grants) was answered on 2026-10-07 too. ADR-001 was Accepted on
 | D-60 | Suspend and resume are `POST /v1/sessions/{name}/suspend` and `/resume`, which set `spec.operatingMode` and the `suspended-by` annotation; the idle timer sets the same field when an agent that is not busy has had no activity for its window (`spec.lifecycle`, else the templates' optional `lifecycle` block, else D-09); the only spec write the operator makes | 4.3 |
 | D-61 | The broker mode of plan 07 step 3, kube and break-glass grants: checks repeated in Go; the policy match in name order, never for break-glass, `dev-env-grant-secrets-read` or profile `ops`; a 30-minute timeout; per grant a ServiceAccount and RoleBindings or one ClusterRoleBinding, labelled with the grant and deleted only by that label; a token not bound to the pod (the API server refuses it), lasting until `expiresAt` and at least 600 s, minted only for a new pod UID; deleting the ServiceAccount revokes; ended grants kept 90 days; `Decide`, `Notifier` and `Installer` as the seams of steps 4 and 6 | 6.12 |
 | D-62 | A suspended session's volume is archived at `status.suspendedAt` plus `archiveAfter` (spec, templates, else 168h), through the reap's archive path with a hold pod when no valid rescue exists; the session stays Archived (`status.archivedAt`), is never resumed, and goes when reaped | 4.4 |
+| D-63 | Installing kube grants through exec with a stdin-only token, a memory-backed grants volume, private atomic files and a kubeconfig with baseline and grant contexts; installation follows the session pod UID, never a pod restart; three missing-volume failures revoke the grant | 6.12 |
