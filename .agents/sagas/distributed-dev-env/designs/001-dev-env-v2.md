@@ -1428,8 +1428,9 @@ minutes, the operator stops creating them and reports `loop suspected`.
 - **A session's own timers at create.** `POST /v1/sessions` takes `lifecycle:
   {idleSuspendAfter, archiveAfter}` (positive Go durations; a bad one is a 422 on its
   field) into `spec.lifecycle`, and `agent-run` passes `--idle-suspend-after` and
-  `--archive-after`. D-09 says every timer is overridable per session, and a short
-  window is how the timers are checked live. `show` prints a session's own timers.
+  `--archive-after`; the idle timer (D-60) and the archive timer (D-62) read them. D-09
+  says every timer is overridable per session, and a short window is how the timers
+  are checked live. `show` prints a session's own timers.
 - **The one spec write.** D-39 says the operator never writes spec. The idle timer is
   the exception: it changes `operatingMode` only, exactly as a client's suspend does,
   on the session's own timer. Everything else the operator decides still goes into
