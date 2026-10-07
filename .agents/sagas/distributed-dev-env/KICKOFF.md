@@ -221,12 +221,12 @@ from a `v2.x.y` release tag, not from main, so the Kyverno subject must widen in
 paired haynes-ops PR (the first bullet below). D-53 records the choice and what the first
 `2.0.0` needs.
 
-B5 also has a haynes-ops follow-up. `dev-env-templates` (item 8.7, haynes-ops #3471)
-carries `image: ghcr.io/thaynes43/dev-env:2.0.0@sha256:000...0`, a placeholder with an
-all-zero digest that no node can pull, so no session can start from it. When B5
-publishes `ghcr.io/thaynes43/dev-env:2.x.y`, B5's follow-up PR in haynes-ops sets the
-real `name:tag@sha256` there (Renovate takes over afterwards). B5 is not done until
-that PR has merged.
+B5 also had a haynes-ops follow-up. `dev-env-templates` (item 8.7, haynes-ops #3471)
+carried `image: ghcr.io/thaynes43/dev-env:2.0.0@sha256:000...0`, a placeholder with an
+all-zero digest that no node can pull. Done 2026-10-07: haynes-ops #3501 replaced it
+with `ghcr.io/thaynes43/dev-env:2.0.0@sha256:8bab980d6beea9eb8f1576d38a3fd9837150193414728baf1bcc3e07e28a371a`,
+the first real image (released by #52, published and signed by `publish-agent.yml`).
+Renovate takes over from here. B5's follow-up is done.
 
 B5 has two preconditions:
 
@@ -319,8 +319,9 @@ PR per piece, in this order:
    6. the PriorityClass and the Kyverno CPU-limit policy. Done 2026-10-06: haynes-ops
       #3470. No LimitRange: the policy carries the 8 CPU / 24Gi ceiling (D-47);
    7. the templates and the shared volume (`prune: disabled`). Done 2026-10-06:
-      haynes-ops #3471. `dev-env-templates` carries an all-zero placeholder image digest
-      until B5 (section 3) publishes `dev-env:2.x.y`;
+      haynes-ops #3471. `dev-env-templates` carried an all-zero placeholder image digest
+      until 2026-10-07, when haynes-ops #3501 replaced it with `dev-env:2.0.0` and its
+      digest (B5's follow-up, section 3, is done);
    8. the ExternalSecrets, among them the keeper's App key and its empty Secrets
       (plan 01, "The keeper's inputs"; D-52). Done 2026-10-06: haynes-ops #3480, app
       `apps/dev-env-system/secrets/`, all four ExternalSecrets `SecretSynced`, no new
