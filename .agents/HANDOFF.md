@@ -99,8 +99,9 @@ the saga. To start building, follow
   `GET /api/oauth/usage` (7.3). S-15 passed: the CLI's archive call works on an
   access token and the entry leaves Tom's list; `claude --resume` alone unarchives
   it (6.7).
-- **Plan 01 step 8 has begun in haynes-ops** (2026-10-06). Items 8.1 to 8.7 and 8.8a
-  are merged and verified (#3458, #3462, #3463, #3468 to #3471, #3474, #3477, #3479).
+- **Plan 01 step 8 has begun in haynes-ops** (2026-10-06). Items 8.1 to 8.8, 8.8a and
+  8.10 are merged and verified (#3458, #3462, #3463, #3468 to #3471, #3474, #3477,
+  #3479, #3480, #3491); 8.9, the HelmReleases, is next.
   8.4 is the RBAC and the baseline guard: three ValidatingAdmissionPolicies and a
   Kyverno exec rule. Spike S-12 passed against it, 45 of 45 checks from a Job running
   as `dev-env-agent`, and the VAP sees `CONNECT` for exec (D-19). The v2
