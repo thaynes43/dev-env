@@ -368,16 +368,20 @@ func TestEnvtestAPI(t *testing.T) {
 		if err := l.k8s.Delete(ctx, pod); err != nil {
 			t.Fatal(err)
 		}
-		// The API refuses at once, because the pod is gone (403). The API
-		// server's own TokenReview follows once its 10-second cache of the
-		// review expires (401).
-		deadline := time.Now().Add(30 * time.Second)
+		// The API refuses as soon as its cache sees the delete, because the
+		// pod is gone (403). The pod is read from the informer cache first, so a
+		// call that races the watch event can still pass (204) for a moment.
+		// The API server's own TokenReview follows once its 10-second cache of
+		// the review expires (401).
+		start := time.Now()
+		deadline := start.Add(30 * time.Second)
 		for {
 			code, b := l.do(http.MethodPost, protocol.HeartbeatPath(sess.Name), agent, status(sess.Name))
 			if code == http.StatusUnauthorized {
 				break
 			}
-			if code != http.StatusForbidden || time.Now().After(deadline) {
+			cacheLag := code == http.StatusNoContent && time.Since(start) < 5*time.Second
+			if (code != http.StatusForbidden && !cacheLag) || time.Now().After(deadline) {
 				t.Fatalf("a deleted pod's token: %d %s", code, b)
 			}
 			time.Sleep(500 * time.Millisecond)
