@@ -82,6 +82,22 @@ run --entrypoint /bin/bash "${image}" -euc '
   test ! -e /opt/dev-env/github-app-token.sh
   # /etc/codex is a ConfigMap mount (D-49): the image must not ship a requirements file.
   test ! -e /etc/codex/requirements.toml
+  # The license texts the image must carry (#55): this repo license and the third-party
+  # list, the Go module and standard library texts, and one directory per downloaded tool.
+  test -s /usr/share/doc/dev-env/LICENSE
+  test -s /usr/share/doc/dev-env/THIRD_PARTY.md
+  test -s /usr/share/licenses/dev-env/go-stdlib/LICENSE
+  test -d /usr/share/licenses/dev-env/go-modules
+  for tool in kubectl flux gh helm kustomize sops age yq task tofu restic talosctl omnictl \
+              tini kubectl-cnpg codex uv; do
+    n="$(find "/usr/share/licenses/$tool" -type f -size +0 2>/dev/null | wc -l)"
+    test "$n" -gt 0 || { echo "no license text for $tool in /usr/share/licenses/$tool" >&2; exit 1; }
+  done
+  # Both licenses of omnictl (BSL 1.1 and its MPL-2.0 client library) and uv (MIT or Apache).
+  test -s /usr/share/licenses/omnictl/LICENSE
+  test -s /usr/share/licenses/omnictl/LICENSE.client-MPL-2.0
+  test -s /usr/share/licenses/uv/LICENSE-MIT
+  test -s /usr/share/licenses/uv/LICENSE-APACHE
   # The shell can write where the pod lets it.
   touch "$HOME/.writable" /tmp/.writable
 '
