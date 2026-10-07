@@ -3,7 +3,8 @@
 **Status:** paused after step 3 (2026-10-07; one plan at a time, Tom's ruling)
 **Depends on:** 01 (the baseline guard and egress tiers are in place); Q-07 (Tom
 2026-10-06: credential grants, A)
-**Parallel with:** 02
+**Parallel with:** 02 in the plan; in time, one plan at a time since 2026-10-07 (README
+decision 40)
 
 ## Goal
 
