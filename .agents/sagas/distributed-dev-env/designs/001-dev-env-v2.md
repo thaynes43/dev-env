@@ -2449,8 +2449,9 @@ Component policies:
 - Keeper: ingress only from operator and broker pods on 8443 (the login ceremony,
   status, archive); egress to the API server, `api.github.com`, the Claude and OpenAI
   token endpoints, `api.anthropic.com` (the profile fetch for seeding homes, and the
-  Remote Control archive call), and `api.pushover.net`. Nothing else. Credential
-  grants reach it as `AccessGrant` objects, not calls.
+  Remote Control archive call), and `api.pushover.net`, and port 22 to the Proxmox nodes (the SSH mint of a
+  Proxmox credential grant, Q-15; plan 07 H5). Nothing else. Credential grants reach
+  it as `AccessGrant` objects, not calls.
 - Tool pods: a clusterwide policy selects every `dev-tools` pod and allows only DNS
   and the operator's health checks, so each tool pod is default-deny before any
   namespaced policy exists; the rest is section 8.1.
@@ -2714,7 +2715,7 @@ Grant types:
 |---|---|---|---|
 | `kube` | ServiceAccount `grant-<id>` in `dev-agents`, RoleBindings (or a ClusterRoleBinding) to a role from the catalog, and a token from TokenRequest with the grant's TTL. agentd writes it to tmpfs as kube context `grant-<id>`; `agent-run grant use <id>` switches to it. | The token's own expiry; then the broker deletes the ServiceAccount and bindings, which invalidates its tokens at once. | 8 h |
 | `egress` | A CiliumNetworkPolicy selecting `dev-env.haynesops.com/session: <id>`, with `toFQDNs`, `toCIDR` or `toEndpoints` and ports. | Deleting the policy. | 8 h |
-| `credential` (Q-07, Tom 2026-10-06) | The keeper writes the file into the pod's tmpfs. The credential itself is short-lived: an SSH certificate from the keeper's CA for hw-ssh, valid for the grant's TTL; a Proxmox API token for `dev-env@pve` with `expire` set to the grant's end, minted by the keeper from the operator token it alone holds. If Proxmox refuses that mint, the grant fails closed: it is refused and Tom is told. The long-lived operator token never enters a session pod. | Removal, and the credential's own expiry. A value an agent has read cannot be un-read; that is why short-lived credentials come first. | 4 h |
+| `credential` (Q-07, Tom 2026-10-06) | The keeper writes the file into the pod's tmpfs. The credential itself is short-lived: an SSH certificate from the keeper's CA for hw-ssh, valid for the grant's TTL; a Proxmox API token for `dev-env@pve` with `expire` set to the grant's end, minted by the keeper over SSH (Q-15, Tom 2026-10-07): with a certificate from its own CA it runs `sudo pvesh create /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0` on a Proxmox node, and deletes the token when the grant ends. The operator token cannot mint one, and v2 never holds it. If the mint fails, the grant fails closed: it is refused and Tom is told. No long-lived Proxmox token enters a session pod. | Removal, and the credential's own expiry. A value an agent has read cannot be un-read; that is why short-lived credentials come first. | 4 h |
 | `breakglass` | A `kube` grant bound to ClusterRole `dev-env-grant-breakglass` cluster-wide (D-27). | As `kube`, then the keeper forces a refresh of both logins. | 1 h |
 | `lease` | The LLM lease of 8.3, approved through the same policies. | Label removal. | per pool |
 
