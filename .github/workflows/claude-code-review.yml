@@ -75,11 +75,15 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: "haynes-dev-bot"
           track_progress: true
-          show_full_output: true # TEMP: reveals the denied tool calls; the fix PR removes it
           use_sticky_comment: true
           # Automated surfaces pin the newest Opus explicitly, never an alias.
           # The Bash and inline-comment grants are needed for `gh` and line
           # comments; without them the review only ever leaves a summary.
+          # The verdict goes out through mcp__github_comment__update_claude_comment
+          # (the action allows it already), not `gh pr comment`: Claude Code's
+          # permission check refuses a Bash command whose quoted body holds a
+          # newline followed by `#` (a markdown heading), so a verdict written with
+          # `### MEDIUM` was denied and never posted (#74, #82: permission_denials_count above 0).
           claude_args: |
             --model claude-opus-5-5
             --max-turns 60
@@ -100,6 +104,8 @@ jobs:
             ## Step 1 - context
             - `gh pr diff ${{ github.event.pull_request.number }}` for the changes
             - `gh pr view ${{ github.event.pull_request.number }}` for intent
+            - Only `gh pr diff` and `gh pr view` are allowed in the shell: `git`,
+              pipes and `cd ... &&` chains are denied, so do not try them.
             - Read CLAUDE.md, and for design changes the saga README, ADRs and design
               under `.agents/sagas/` that the changed files belong to.
             - Do not repeat feedback already present on the PR.
@@ -170,9 +176,12 @@ jobs:
               `mcp__github_inline_comment__create_inline_comment` (`confirmed: true`),
               prefixing the body with its severity: `CRITICAL:`, `HIGH:` or `MEDIUM:`.
               Be concise: one or two sentences, the problem and the fix.
-            - Then post ONE summary comment with `gh pr comment` containing a verdict
+            - Then post ONE summary by calling
+              `mcp__github_comment__update_claude_comment` with a verdict
               (`Looks good` / `Needs changes` / `Has critical issues`) and the findings
-              grouped by severity, each naming the file and line. No praise.
+              grouped by severity, each naming the file and line. No praise. Do not
+              use `gh pr comment` for it and do not write files: shell commands with a
+              markdown heading in the body are denied, and the verdict is then lost.
             - If the diff is clean, say exactly "No findings." followed by one sentence
               on what you checked. Never invent a finding to look thorough.
             - Only review files changed in this PR. Post GitHub comments only; do not
