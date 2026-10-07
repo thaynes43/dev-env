@@ -174,8 +174,9 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 38 | S-8: where size L's session volume lives | **DECIDED** 2026-10-07 (spike S-8) | `gasha01-rbd` was 1.55 to 1.81 times slower than `ceph-block` for a clone, `pnpm install` and one test file, under D-22's line of two, so every size stays on `gasha01-rbd` ([00-spikes](backlog/00-spikes.md#s-8-gasha01-rbd-against-ceph-block-phase-1)). |
 | 39 | Who merges release-please release PRs | **DECIDED** 2026-10-07 (Tom: "Merge, and let agents merge releases") | Agents squash-merge a green release PR themselves, like any other PR, after checking the version and changelog are sane and `CI - Success` is green on its head. Replaces the earlier "Tom's call" rule in CLAUDE.md. |
 | 40 | Pacing while the weekly plan quota is high | **DECIDED** 2026-10-07 (Tom, through the coordinator: "one plan at a time") | Plan 02 continues alone; plan 07 pauses after step 3 with step 4's WIP on branch `agent/plan07-install`, and resumes when the coordinator says so (the quota resets 2026-10-12). Plans 02 and 07 stay parallel in the plan, not in time. |
+| 41 | Q-15: how a Proxmox credential grant gets its short-lived token | **DECIDED** 2026-10-07 (Tom) | A, the keeper mints it over SSH: "Keeper mints over SSH (Recommended)". With a certificate from its own SSH CA it runs `sudo pvesh create /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0` on a node and deletes the token at the grant's end. No new Proxmox user, no long-lived token in v2, port 22 from the keeper to the nodes. Unblocks plan 07 step 8 (paused, decision 40). |
 
-The full options, consequences and rulings for Q-01 to Q-14 are in
+The full options, consequences and rulings for Q-01 to Q-15 are in
 [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions).
 
 ## Plan backlog

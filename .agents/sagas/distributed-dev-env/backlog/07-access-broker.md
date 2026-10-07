@@ -63,8 +63,13 @@ In this repo:
 - [ ] 8. Credential grants (Q-07): the keeper mints the Proxmox token or signs an SSH
   certificate, installs it in the pod's `grants` volume, and removes it at expiry.
   The first check failed on 2026-10-07: the operator token cannot mint an expiring
-  token for its own user (Proxmox answered 403 to the list and the create). Until
-  Q-15 picks the minting identity, a Proxmox credential grant is refused (fails
+  token for its own user (Proxmox answered 403 to the list and the create). Q-15 is
+  ruled (Tom 2026-10-07, A), so this step is unblocked: the keeper signs itself an
+  SSH certificate from its own CA, runs `sudo pvesh create
+  /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0` on a Proxmox
+  node, installs the token in the pod, and deletes it at expiry. No new Proxmox user,
+  and the long-lived operator token is not needed by v2. The keeper needs port 22 to
+  the nodes. Until the step is built, a Proxmox credential grant is refused (fails
   closed); hw-ssh certificates do not wait for it.
 - [ ] 9. `POST /v1/fleet/nodes/{node}/evacuate` and `agent-run fleet evacuate`.
 - [ ] 10. The end of break-glass: the broker sends Tom the audit list of what the
@@ -84,9 +89,10 @@ In haynes-ops:
   holds both credentials today.
 - [ ] H4. The API server's audit lines for `grant-*` to Loki. Nothing ships the audit
   log today (Talos writes it on each control-plane node).
-- [ ] H5. Credential grants: the keeper's Proxmox operator token and SSH CA as
-  ExternalSecrets in `dev-env-system`; the CA's public key trusted by the Proxmox
-  nodes and HaynesTower. v2's `dev-agents` never had the token or the key: profile
+- [ ] H5. Credential grants: the keeper's SSH CA as an ExternalSecret in
+  `dev-env-system` (not the Proxmox operator token: Q-15 A mints over SSH); the CA's
+  public key trusted by the Proxmox nodes and HaynesTower; a network policy for the
+  keeper's egress on port 22 to the Proxmox nodes. v2's `dev-agents` never had the token or the key: profile
   `full` already leaves them out.
 - [ ] The acceptance run below, and the break-glass half of S-12.
 
@@ -113,10 +119,11 @@ In haynes-ops:
   - `credential` (Q-07, Tom 2026-10-06): the keeper installs a Proxmox API token for
     `dev-env@pve` that expires with the grant, or an hw-ssh certificate from its SSH
     CA valid for the grant's TTL, into the pod's tmpfs, and removes it at expiry.
-    First check that the operator token can mint expiring tokens for its own user;
-    if it cannot, credential grants for Proxmox fail closed (refused, Tom told) until
-    a narrower minting identity is designed. The long-lived operator token never
-    enters a session pod.
+    The operator token cannot mint expiring tokens (checked 2026-10-07), so Q-15
+    (Tom 2026-10-07, A) has the keeper mint over SSH with `sudo pvesh create
+    /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0`. Until that
+    is built, Proxmox credential grants fail closed (refused, Tom told). The
+    long-lived operator token never enters a session pod.
 - The operator's backstop: delete expired grants' network policies if the broker is
   down; re-install active grants after a drain.
 - agentd: `grant-install`, kube contexts, and the built-in `dev-env` MCP server's
