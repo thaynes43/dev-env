@@ -3,16 +3,17 @@
 **Status:** design, Accepted 2026-10-06. Tom ratified ADR-001 as written (drafted
 2026-10-05, his rulings folded in 2026-10-06): see the
 [ratification summary](adrs/001-distributed-dev-env.md#ratification-summary) at the
-top of ADR-001. The Go skeleton (KICKOFF B1), CI and the `AgentSession` CRD (plan 01
-step 1) are built; nothing runs yet. The architecture is in
+top of ADR-001. Phase 1 is built: plan 01 (task mode) is done since 2026-10-07. The
+operator and the keeper run in the cluster, the agent image 2.0.0 is released, and
+the first task session ran from the v1 pod and opened its PR. The architecture is in
 [ADR-001](adrs/001-distributed-dev-env.md) and the detail in
 [DESIGN-001](designs/001-dev-env-v2.md). Tom ruled on every question, Q-01 to Q-11,
 on 2026-10-06 and widened the scope: tool pods, a GPU budget, satellite inference
 workers, local models, access without in-pod prompts, summoned sessions kept as a
 first-class path, and one console for links, archives and the login renewal. Three
 repo-setup questions: Q-13 (public package) and Q-14 (a GitHub App key secret) were
-ruled on 2026-10-06, and Q-12 (branch protection) is open, to ask once the ruleset is
-created after B2. Research notes
+ruled on 2026-10-06, and Q-12 (branch protection) was settled on 2026-10-07, when Tom
+made the repo public. Research notes
 [R-01](research/R-01-summoned-agents-audit.md) (summoned agents) and [R-02](research/R-02-remote-control-identity.md) (Remote Control
 identity) are folded into the design. The spikes in
 [backlog 00](backlog/00-spikes.md) come first: S-1, S-3, S-6 and S-15 passed on 2026-10-06, S-7
@@ -133,7 +134,7 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 
 | # | Decision | Status | Outcome |
 |---|---|---|---|
-| 1 | Where v2's saga and code live | **DECIDED** 2026-10-05 (Tom) | A new private repo, **thaynes43/dev-env**, keeping the image name `ghcr.io/thaynes43/dev-env`. Manifests and pod config stay in haynes-ops (GitOps). Recorded in haynes-ops as ADR-001 of its dev-env saga. |
+| 1 | Where v2's saga and code live | **DECIDED** 2026-10-05 (Tom) | A new repo, **thaynes43/dev-env** (private at first, public since 2026-10-07, row 19), keeping the image name `ghcr.io/thaynes43/dev-env`. Manifests and pod config stay in haynes-ops (GitOps). Recorded in haynes-ops as ADR-001 of its dev-env saga. |
 | 2 | Architecture: one pod per session run by an operator | **DECIDED** 2026-10-06 (Tom) | [ADR-001](adrs/001-distributed-dev-env.md) |
 | 3 | Settled design decisions D-01 to D-37 (D-34 to D-37 added 2026-10-06) | **DECIDED** 2026-10-06 (Tom) with ADR-001; D-02, D-18, D-19 and D-20 **REVISED** 2026-10-06 | [DESIGN-001 section 16](designs/001-dev-env-v2.md#16-decisions-settled-in-this-design) |
 | 4 | Q-01: build the pod-and-volume layer, or adopt kubernetes-sigs/agent-sandbox | **DECIDED** 2026-10-06 (Tom) | Build a small operator modelled on agent-sandbox (A). |
@@ -151,7 +152,7 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 16 | Ratify ADR-001 | **DECIDED** 2026-10-06 (Tom: "Accept as written") | [Ratification summary](adrs/001-distributed-dev-env.md#ratification-summary) |
 | 17 | Q-11: which link that survives restarts did Tom mean? | **DECIDED** 2026-10-06 (Tom) | The Claude Code auth (the Max `/login` on the PVC). The keeper is its sole owner; pods get access tokens only; the monthly renewal is a console page behind Authentik, replacing the chat relay; the console lists every session's link and status with an archive button; the codex hub keeps its own single enrolment (D-11, D-37). |
 | 18 | Summoned sessions are a first-class requirement | **DECIDED** 2026-10-06 (Tom: "we need to preserve the functionality") | [DESIGN-001 3.7](designs/001-dev-env-v2.md#37-summoned-sessions), D-36, R-01 V-01 to V-17, plan 10 |
-| 19 | Q-12: branch protection on this private repo, if Tom's plan does not enforce rulesets | **OPEN** 2026-10-06, not asked yet: no ruleset exists, and the question is GitHub's warning when it is created, after B2 | [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions); recommended: GitHub Pro (A). |
+| 19 | Q-12: branch protection on this repo, if Tom's plan does not enforce rulesets on a private one | **DECIDED** 2026-10-07 (Tom) | B, public: "I made dev-env public so I can go to bed but make sure it's good and safe". Actions billing had stopped CI on the private repo. The ruleset is now enforced free; creating it stays Tom's (laptop handoff part 3). [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions). |
 | 20 | Q-13: visibility of `ghcr.io/thaynes43/dev-env-operator` | **DECIDED** 2026-10-06 (Tom) | A, public: "Public package write a prompt for an agent on my laptop to flip it". A laptop agent flips it after B3's first publish ([handoff](../../handoffs/2026-10-06-tom-laptop-settings.md)). |
 | 21 | Q-14: how release-please gets release PRs checked by CI | **DECIDED** 2026-10-06 (Tom) | A, a GitHub App key secret: "GitHub App key secret (Recommended)". Names for B4: variable `RELEASE_APP_ID`, secret `RELEASE_APP_PRIVATE_KEY`. The App also needs Issues read and write (release-please creates `autorelease:` labels). |
 | 22 | D-38: the keeper as its own binary or a mode of the operator | **DECIDED** 2026-10-06 (agent, delegated by KICKOFF B1) | Its own binary, `dev-env-keeper`, shipped in the operator image; the broker stays a mode of the operator ([DESIGN-001 3.1](designs/001-dev-env-v2.md#31-components)). |
@@ -169,6 +170,8 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 34 | D-50: `agent-run` v2 of plan 01 | **DECIDED** 2026-10-06 (agent, plan 01 step 7) | `-p`, `list`, `show`, `reap`, `fleet` with v1's verbs, flags and defaults; aliases and unhonoured effort levels refused before sending, from the API's own table; retries keep the idempotency key; the scheduler's reason printed at once; the API found in a session pod, minted for in any other pod, named by flags elsewhere; exit codes 0 to 5 ([DESIGN-001 3.5](designs/001-dev-env-v2.md#35-agent-run-v2)). |
 | 35 | D-51: how the operator rescues, suspends and archives | **DECIDED** 2026-10-06 (agent, plan 01 step 5) | `agentd ctl rescue --stop-agent` by exec before a suspend deletes a pod that ran; the verdict in `status.rescue` before the delete; a resume supersedes it; only a reap archives, after a verified rescue of the volume's last pod; a rescue pod and the archive timer are plan 02's ([DESIGN-001 4.4](designs/001-dev-env-v2.md#44-rescue-before-reap)). |
 | 36 | D-52: the minimal keeper | **DECIDED** 2026-10-06 (agent, plan 01 step 6) | The haynes-dev-bot token minted v1's way, from an App directory read at every mint, into `dev-agents/dev-env-gh-token` by one merge patch; every 40 minutes or two thirds of its life, retries 10 s to 5 minutes with jitter; one replica behind a Lease (plans 03 and 04 fence each refresh); Secrets `patch` only; ready while its token lives; nothing secret logged ([DESIGN-001 6.4](designs/001-dev-env-v2.md#64-github-app-token)). |
+| 37 | D-53: how the agent image is built and published | **DECIDED** 2026-10-06 (agent, KICKOFF B5) | `images/agent/Dockerfile`; smoke-tested in CI on PRs; `dev-env:2.x.y` only, from a release tag by `publish-agent.yml`, signed keyless; Kyverno trusts it on `refs/tags/v2.*` ([DESIGN-001 D-53](designs/001-dev-env-v2.md)) |
+| 38 | S-8: where size L's session volume lives | **DECIDED** 2026-10-07 (spike S-8) | `gasha01-rbd` was 1.55 to 1.81 times slower than `ceph-block` for a clone, `pnpm install` and one test file, under D-22's line of two, so every size stays on `gasha01-rbd` ([00-spikes](backlog/00-spikes.md#s-8-gasha01-rbd-against-ceph-block-phase-1)). |
 
 The full options, consequences and rulings for Q-01 to Q-14 are in
 [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions).
@@ -181,7 +184,7 @@ v1 stays live throughout. No v2 plan edits haynes-ops'
 | Plan | Depends on | Parallel? |
 |---|---|---|
 | [00: spikes](backlog/00-spikes.md) | nothing | yes, with Tom's answers |
-| [01: foundation, task mode](backlog/01-foundation.md) | Q-01, Q-02, Q-04, Q-05 (all decided); spikes S-7, S-8, S-12 | |
+| [01: foundation, task mode](backlog/01-foundation.md) (done 2026-10-07) | Q-01, Q-02, Q-04, Q-05 (all decided); spikes S-7, S-8, S-12 | |
 | [02: interactive sessions and lifecycle](backlog/02-interactive-lifecycle.md) | 01 | with 07 |
 | [07: access broker](backlog/07-access-broker.md) | 01; Q-07 (decided) | with 02 |
 | [03: Remote Control](backlog/03-remote-control.md) | 02, 07; spikes S-1, S-5, S-6, S-15 | |

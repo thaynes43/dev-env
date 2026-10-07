@@ -5,11 +5,11 @@
   every open question, Q-01 to Q-11, on 2026-10-06 and widened the scope (tool pods,
   a VRAM budget per card, satellite inference workers, local models, access without
   in-pod prompts, summoned sessions, the console). Q-13 and Q-14 (repo setup) were ruled
-  on 2026-10-06. Q-12 is open: to ask Tom once `CI - Success` has reported and he creates
-  the ruleset (section 15).
+  on 2026-10-06. Q-12 was settled on 2026-10-07, when Tom made the repo public (B,
+  section 15).
   Research notes [R-01](../research/R-01-summoned-agents-audit.md) and
   [R-02](../research/R-02-remote-control-identity.md) are folded in.
-- **Last updated:** 2026-10-06
+- **Last updated:** 2026-10-07
 - **Governed by:** [ADR-001](../adrs/001-distributed-dev-env.md) (Accepted 2026-10-06)
 - **Saga:** [README](../README.md)
 
@@ -1008,6 +1008,67 @@ a ConfigMap of their own.**
   retires them, a change to a rule both pods share, or to the MCP list, goes into both:
   the v2 copy in an ordinary PR, v1's as a held draft.
 
+**D-53 (2026-10-06, KICKOFF B5). The agent image `ghcr.io/thaynes43/dev-env:2.x.y` is
+built from `images/agent/Dockerfile` and published from a release tag by its own
+workflow, `publish-agent.yml`.**
+
+- **The image** is a copy of v1's Dockerfile with `tini`, agentd, `agent-run`, the
+  Codex standalone and `kubectl-cnpg` baked in (v1 installed the last two at boot),
+  `pve` and `hw-ssh` (v1's scripts, byte for byte, in `images/agent/tools/`), and no
+  code-server and no `github-app-token.sh`. It is multi-stage: a Go stage runs `make
+  build` on the repo's Go sources, and the Debian/Node final stage copies `agentd` and
+  `agent-run` in last, so a Go change rebuilds two layers. Every version is an
+  `ARG ..._VERSION` under a `# renovate:` annotation, the same shape as v1's, so
+  B4's Dockerfile manager tracks them. No model id is written in the image: agentd
+  takes the default from `DEV_ENV_CLAUDE_MODEL`, which the templates set (D-44).
+- **PID 1 and the entrypoint.** `ENTRYPOINT [tini, --, agentd]`, `CMD [run]`. The
+  operator's container sets no command (D-44), so the pod runs `agentd run`. No `-g`:
+  agentd forwards SIGTERM to the CLI and waits for its own shutdown (D-42), and a
+  group signal would reach the CLI first.
+- **Where things are.** The user is `dev`, uid 1000, `HOME=/home/dev` (the session
+  volume mounts over it). Binaries are in `/usr/local/bin` (`gh` there too, which
+  agentd's wrapper in `~/.local/bin` shadows). Codex's install tree is
+  `/opt/dev-env/codex`, outside `CODEX_HOME`, so the volume cannot hide it, and `codex`
+  is a symlink on PATH. The browsers stay staged at `/opt/dev-env/ms-playwright`.
+  `/opt/dev-env/config`, `/opt/dev-env/scripts` and `/etc/codex` are the ConfigMap
+  mounts of D-49; the image ships nothing at them.
+- **The build runs in CI only** (3.2 GB on disk, measured in CI). `ci.yml`'s `image-agent` job builds it
+  on PRs that touch `images/agent/**`, loads it, runs `images/agent/smoke-test.sh`
+  (v1's toolchain test run as uid 1000 on a read-only root with no network, plus the
+  default entrypoint, agentd's and agent-run's stamped commit, Codex's location, the
+  absence of code-server, and a zombie-reaping check under tini), and never pushes.
+- **Publish trigger: a release tag, not main.** The image's tag is the repo's release
+  version (section 10), and only release-please knows it. A push to main knows a
+  commit; publishing there would need a `sha-` tag or `latest`, and B5 publishes
+  `2.x.y` only. `publish-agent.yml` runs on a push of `v2.<n>.<n>` and on
+  `workflow_dispatch` on a tag ref; the job is skipped on any branch, requires the
+  tagged commit to be reachable from main, and refuses a tag that is not `v2.x.y`.
+  It pushes `dev-env:<x.y.z>` (no `v`), never `latest`, and never an existing tag: a
+  run for a tag whose image exists builds nothing and only signs it if unsigned. It
+  builds and smoke-tests first and pushes the image that passed, then signs the
+  digest keyless (cosign v3.1.3, as publish.yml and v1) and runs `cosign verify` with
+  the identity `publish-agent.yml@refs/tags/v2.x.y`. `packages: write` and
+  `id-token: write` are on that one job. The operator image stays on publish.yml
+  from main, as `sha-<short>` (B3).
+- **Kyverno.** The signature's subject ends `@refs/tags/v2.x.y`, which
+  `verify-dev-env-v2` (`...workflows/*@refs/heads/main`) does not match. The paired
+  haynes-ops change (#3478, merged 2026-10-07) splits the rule's `verifyImages` by image: the operator keeps the
+  main subject, and `dev-env:2.*` gets `.../workflows/publish-agent.yml@refs/tags/v2.*`.
+  Both rules are still Audit and still unverifying (haynes-ops #3092).
+- **The first `2.0.0`.** release-please opens the release PR, and merging it tags
+  `v2.0.0`. Until the repo setting "Allow GitHub Actions to create and approve pull
+  requests" is on (laptop handoff part 1, step 5), release-please fails on main and
+  there is no release PR and no tag, so no agent image. Until the release App secret
+  exists, release-please creates the tag with `GITHUB_TOKEN`, and GitHub starts no
+  workflow for it: run `gh workflow run publish-agent.yml --ref v2.0.0` by hand. The
+  GHCR grant (Write for this repo on the `dev-env` package) must also exist, or the
+  push fails with 403.
+- **Not decided here.** Tagging the operator image `2.x.y` as well (section 10 says
+  both images take the release version) is not part of B5: the operator is pinned by
+  `sha-<short>`, and the operator HelmRelease (KICKOFF 8.9, haynes-ops #3497) runs
+  `dev-env-operator:sha-8b388b2` as deployed. A retag needs no rebuild, so it can
+  follow if that pin ever moves to the release version.
+
 ### 3.7 Summoned sessions
 
 Automated callers in haynes-ops hand work to Claude Code sessions that bill the Max
@@ -1880,6 +1941,8 @@ haynes-ops data change, not code. One rule is set now: if S-8 shows a session's
 clone, install and one test file more than twice as slow on `gasha01-rbd` as on
 `ceph-block`, size L (heavy builds) defaults to `ceph-block` and S and M stay on
 gasha01.
+S-8 measured 1.55 to 1.81 times on 2026-10-07, so every size stays on
+`gasha01-rbd`.
 
 **Failure modes.**
 
@@ -3304,7 +3367,7 @@ this design does not repeat it.
 | Review verified on a later PR (step 5) | Done: PR #2 was the verification PR |
 
 Added by phase 1, in this repo: build, smoke-test and sign workflows for both images
-(publish from `main` only, cosign keyless); Go lint and tests (envtest); one
+(the operator image publishes from `main`, the agent image from a release tag, D-53; cosign keyless); Go lint and tests (envtest); one
 aggregate `… - Success` check to make required, as haynes-ops does; Renovate config
 with the Dockerfile `customManagers` copied from haynes-ops.
 
@@ -3355,7 +3418,7 @@ Backlog plans: [`../backlog/`](../backlog/).
 | S-5 | Does SendMessage reach a Remote Control session in another pod? | two pods, phase 3 | D-16 tier 2 |
 | S-6 | Does `claude --resume <id> --remote-control <name>` reattach the same phone entry? | v1 pod, scratch access-token-only home. **Passed 2026-10-06** (CLI 2.1.292): the same bridge session id after `--resume`, and the server's event list kept both turns. A SIGTERM to the CLI archives the entry (agentd forwards the pod's) and the resume unarchives it, so a drained entry is off the active list until resume. Seeding needs `oauthAccount` (6.2) | 6.7: a drain keeps the entry, through the unarchive |
 | S-7 | How long does `git clone --filter=blob:none` plus checkout take per repo? | v1 pod, one repo at a time. **Done 2026-10-06: no repo needs a mirror.** Clone plus checkout took 2.0 s (cigar-journal), 2.6 s (haynes-ops), 3.3 s (hass-sandbox), 10.9 s (haynesnetwork) and 22.9 s (haynes-quest); the limit is 120 s. Detail in [00-spikes](../backlog/00-spikes.md) | D-15: no mirror for any of the five |
-| S-8 | How much slower is a session's clone, install and one test file on `gasha01-rbd` than on `ceph-block`? | one phase-1 task pod at size M, one run per class | D-22's rule for size L |
+| S-8 | How much slower is a session's clone, install and one test file on `gasha01-rbd` than on `ceph-block`? | one phase-1 task pod at size M, one run per class. **Done 2026-10-07** (00-spikes.md): one Job at size M's limits on talosw02, one volume of each class, two runs in swapped order. `gasha01-rbd` took 25.7 s and 23.0 s against 14.2 s and 14.8 s, 1.55 to 1.81 times slower, most of it in `pnpm install` | D-22's rule for size L: under the line of two, so L stays on `gasha01-rbd` |
 | S-9 | Does the pinned device plugin count VRAM units with time-slicing (requests above 1, config chosen by an NFD-set label), and does a household-priority pod preempt an agent GPU pod? Is DRA consumable capacity usable with NVIDIA's driver on these cards yet? | talosw04 (nothing household runs there), one pod at a time | D-30 mechanism |
 | S-10 | Do Claude Code, Codex and opencode accept a loopback MCP server that answers `initialize` and `tools/list` from a cache, and pick up a server added mid-session? | one session pod, phase 2 | D-29 |
 | S-11 | Does the pinned opencode run headless, resume a session, use MCP over HTTP, allow everything by config, and make sound tool calls with a Qwen coder model on llama-server? | one session pod, one request at a time against the shared pool | D-33 |
@@ -3410,10 +3473,9 @@ suite, a busy loop or anything parallel (the 2026-10-05 incident rule).
 ## 15. Open questions
 
 Each blocks building. Ask Tom one at a time; fold the answer back in as a dated
-ruling. Q-01 to Q-11 were all answered on 2026-10-06, and so were Q-13 and Q-14. Q-12 is a
-repo-setup question for phase 1 and is still open: **ask Tom when he creates the
-ruleset**, after B2. ADR-001 was Accepted on 2026-10-06. Each blocks only the KICKOFF
-step it names.
+ruling. Q-01 to Q-11 were all answered on 2026-10-06, and so were Q-13 and Q-14. Q-12
+was settled on 2026-10-07: Tom made the repo public (B). ADR-001 was Accepted on
+2026-10-06. Each blocks only the KICKOFF step it names.
 
 | Id | Question | Options (recommended first) | Resolution |
 |---|---|---|---|
@@ -3428,8 +3490,8 @@ step it names.
 | Q-09 | Which household GPU apps may lend their burst VRAM to agents while they are idle? | **A. Only batch apps (ComfyUI, Immich ML); the voice stack and Ollama never lend**: agents get several more GiB on talosm03 and talosw01 when those apps are idle; the first render or Immich job after a lend may wait up to about two minutes, or fail once and be retried. **B. None; every declared burst is always reserved**: the house never waits; agents get only what no household app could ever use (talosm05's A2000, a few GiB elsewhere) plus the satellites. **C. All, Ollama and the voice stack included**: the largest agent share, but a voice or chat request can stall for up to a minute while agents release VRAM. | **Ruling, Tom 2026-10-06: B, none.** "None but I bring online more GPUs in cluster". No household app lends burst VRAM to agents; agents get only what is left above every household app's full reservation, and their share grows as GPUs are added, picked up automatically (D-34). |
 | Q-10 | When may agents use Tom's satellite machines? | **A. Only while they are awake and Tom is not using them, by the owner-first rules; never woken**: no surprise fan noise or power use; satellites serve mainly when Tom leaves them on. **B. As A, and the operator may wake the 5090 and 4090 PCs with Wake-on-LAN overnight (01:00 to 07:00) when leases are queued**: overnight agent runs get the fast cards, and the PCs wake and run at night; the Mac is never woken. **C. Only when Tom switches a machine to lend himself**: full control, but the machines sit unused unless he remembers. | **Ruling, Tom 2026-10-06: A.** Satellites are used only while they are awake and Tom is not using them; they are never woken (8.4). |
 | Q-11 | Which link that survives pod restarts did you mean, and what belongs in a front end? (R-02 section 9) | **A. The Codex computer `dev-env-574bdc9844-jhvfs` in the ChatGPT app**: survives because its enrolment is on the PVC; in v2 the codex hub keeps it; no front-end work. **B. A claude.ai/code session link**: each session has its own, bound to the account; the operator shows every session's link. **C. `dev-env.haynesops.com` (code-server)**: stable through DNS; the workbench keeps one host. | **Ruling, Tom 2026-10-06: the Claude Code auth**, the Max `/login` on the PVC that survives restarts, "something we just need baked into the front end". The keeper is its sole owner and session pods get access tokens only (D-11). The monthly renewal becomes a page in the console behind Authentik, replacing the chat relay; the same console lists every session's link and status with an archive button (D-37). Codex's enrolment also survives restarts but works differently: the codex hub keeps its single enrolment on its own volume (D-12). |
-| Q-12 | Branch protection on `main` of this private repo. Ask only if GitHub says the "Protect Main" ruleset will not be enforced on Tom's plan (KICKOFF, Tom's settings item 1). | **A. GitHub Pro on Tom's account**: the ruleset is enforced as on hass-sandbox, so `CI - Success` really gates every merge, at a monthly cost. **B. Make the repo public**: enforcement is free, but the saga and code become public (they hold no secrets; haynes-ops already is public). **C. Convention only**: no cost and no change, but nothing stops a red merge or a direct push to `main`. | **Open. Not asked yet.** On 2026-10-06 the repo had no ruleset (`GET /repos/thaynes43/dev-env/rulesets` returned `[]`), and this question's premise is GitHub's warning when the ruleset is created. That happens once `CI - Success` has reported, after B2. Ask Tom then, one question. Blocks the ruleset after B2. |
-| Q-13 | How does the cluster pull the new `ghcr.io/thaynes43/dev-env-operator` package? (B3) | **A. Make the package public**: the cluster pulls it anonymously, like `ghcr.io/thaynes43/dev-env` and every other image today; anyone can pull a binary that holds no secrets. **B. Keep it private, with an image pull secret**: the binary stays private, but a `read:packages` token in 1Password and an ExternalSecret become one more credential to rotate, and a lapsed one stops operator pods from starting. | **Ruling, Tom 2026-10-06: A, public.** "Public package write a prompt for an agent on my laptop to flip it". GitHub has no API for package visibility, so a laptop agent flips it in the browser after B3's first publish: [part 2 of the laptop handoff](../../../handoffs/2026-10-06-tom-laptop-settings.md). Until then the package is private and the HelmRelease cannot pull it. Blocks deploying the operator (plan 01's HelmRelease) until the flip. |
+| Q-12 | Branch protection on `main` of this private repo. Ask only if GitHub says the "Protect Main" ruleset will not be enforced on Tom's plan (KICKOFF, Tom's settings item 1). | **A. GitHub Pro on Tom's account**: the ruleset is enforced as on hass-sandbox, so `CI - Success` really gates every merge, at a monthly cost. **B. Make the repo public**: enforcement is free, but the saga and code become public (they hold no secrets; haynes-ops already is public). **C. Convention only**: no cost and no change, but nothing stops a red merge or a direct push to `main`. | **Ruling, Tom 2026-10-07: B, the repo is public.** He made it public himself, before the question was asked: "I made dev-env public so I can go to bed but make sure it's good and safe". The trigger was GitHub Actions billing, which stopped CI on the private repo. The same day an agent checked the full history and every PR ref for secrets (none found), gated the `@claude` workflow on the commenter's association, and added the MIT `LICENSE` and `images/THIRD_PARTY.md`. A public repo gets the ruleset enforced at no cost, so the "Protect Main" ruleset is free to create: part 3 of the [laptop handoff](../../../handoffs/2026-10-06-tom-laptop-settings.md), still Tom's to run. |
+| Q-13 | How does the cluster pull the new `ghcr.io/thaynes43/dev-env-operator` package? (B3) | **A. Make the package public**: the cluster pulls it anonymously, like `ghcr.io/thaynes43/dev-env` and every other image today; anyone can pull a binary that holds no secrets. **B. Keep it private, with an image pull secret**: the binary stays private, but a `read:packages` token in 1Password and an ExternalSecret become one more credential to rotate, and a lapsed one stops operator pods from starting. | **Ruling, Tom 2026-10-06: A, public.** "Public package write a prompt for an agent on my laptop to flip it". GitHub has no API for package visibility, so a laptop agent flips it in the browser after B3's first publish: [part 2 of the laptop handoff](../../../handoffs/2026-10-06-tom-laptop-settings.md). Until then the package is private and the HelmRelease cannot pull it. Blocks deploying the operator (plan 01's HelmRelease) until the flip. Done: the package allowed an anonymous pull on 2026-10-07, and 8.9 runs from it. |
 | Q-14 | How does release-please open release PRs that CI checks? A PR opened with the workflow's `GITHUB_TOKEN` starts no workflows, so `CI - Success` never reports on it. (B4) | **A. A GitHub App key as a repo secret** (a small App with contents and pull-request write on this repo only): release PRs run CI like any PR; one more secret, which only Tom can add. **B. haynes-dev-bot closes and reopens each release PR** from the pod (App tokens do start workflows): no new secret, but every release needs an agent step, and a forgotten one leaves the release PR stuck. **C. No release-please; tag releases by hand**: nothing to set up, but versioning (section 10) becomes manual and inconsistent. | **Ruling, Tom 2026-10-06: A, a GitHub App key secret.** "GitHub App key secret (Recommended)". B4 uses the repo variable `RELEASE_APP_ID` and the repo secret `RELEASE_APP_PRIVATE_KEY`, read by `actions/create-github-app-token`. Refinement of the option text: the App also needs Issues read and write, besides Contents and Pull requests write, because release-please creates its `autorelease:` labels. Tom or his laptop agent adds both ([part 1 of the laptop handoff](../../../handoffs/2026-10-06-tom-laptop-settings.md)). Blocks B4's release-please part until the secret exists. |
 
 ## 16. Decisions settled in this design
@@ -3488,3 +3550,4 @@ step it names.
 | D-50 | `agent-run` v2 of plan 01: `-p`, `list`, `show`, `reap` and `fleet`; v1's defaults and checks before a create, with the API's effort table moved to `apiv1`; a new idempotency key per run, kept across retries; it waits for the pod and prints the scheduler's reason; the API found from flags, `DEV_ENV_API_*`, the session pod's settings, or a token minted for the pod's own ServiceAccount; exit codes 0 to 5 | 3.5 |
 | D-51 | The operator rescues by exec (`agentd ctl rescue --stop-agent`) before a suspend deletes a pod that ran, writes the verdict to `status.rescue` first, marks it superseded when the session asks for its pod again, and archives only a reaped session's volume after a verified rescue of its last pod | 4.4 |
 | D-52 | The minimal keeper: the haynes-dev-bot token minted v1's way from an App directory read at every mint, merged into `dev-env-gh-token` by one patch, every 40 minutes or two thirds of its life, retried from 10 s to 5 minutes with jitter; one replica behind a Lease (not a fence: plans 03 and 04 fence each refresh); Secrets `patch` only; ready while its token lives; nothing secret logged | 6.4 |
+| D-53 | The agent image is built from `images/agent/Dockerfile` (v1's plus tini, agentd, agent-run, baked Codex and kubectl-cnpg, pve and hw-ssh; no code-server), smoke-tested in CI on every PR that touches it, and published as `dev-env:2.x.y` only, from a `v2.x.y` release tag by `publish-agent.yml`, signed keyless; the paired haynes-ops Kyverno change trusts that workflow on `refs/tags/v2.*` | 3.6 |
