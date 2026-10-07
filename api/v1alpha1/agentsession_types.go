@@ -349,13 +349,14 @@ type AgentSessionStatus struct {
 	// +optional
 	Usage *UsageStatus `json:"usage,omitempty"`
 
-	// Rescue records the session's rescue bundles (D-10).
+	// Rescue records the session's newest rescue (D-10, D-51).
 	// +optional
 	Rescue *RescueStatus `json:"rescue,omitempty"`
 
-	// TODO(plan 01 step 5): name the condition types, among them the
-	// rescueFailed mark of D-10 that blocks archive; QuotaExhausted (7.3)
-	// follows with agentd's quota detection.
+	// The operator's condition types are named in internal/controller:
+	// PodReady, Outdated, RemovalBlocked, and RescueFailed, the rescueFailed
+	// mark of D-10 that blocks archive (D-51). TODO(7.3): QuotaExhausted,
+	// with agentd's quota detection.
 
 	// Conditions are the standard conditions.
 	// +listType=map
@@ -506,15 +507,93 @@ type UsageStatus struct {
 	OutputTokens int64 `json:"outputTokens,omitempty"`
 }
 
-// RescueStatus records a session's rescue bundles on the shared volume (D-10).
+// RescueResult is a rescue's verdict (D-51).
+// +kubebuilder:validation:Enum=Verified;CleanAndPushed;Failed
+type RescueResult string
+
+const (
+	// RescueVerified: a bundle on the shared volume covers every ref origin
+	// lacked, and agentd checked it there (D-48).
+	RescueVerified RescueResult = "Verified"
+	// RescueCleanAndPushed: every clone fetched, every worktree clean and every
+	// ref on origin, so nothing needed a bundle.
+	RescueCleanAndPushed RescueResult = "CleanAndPushed"
+	// RescueFailed: the rescue ran and could not make the work safe: a refused
+	// worktree, a bundle that could not be written, a clone that could not
+	// fetch, or an agent that would not stop. The volume is kept and archive
+	// waits (D-10).
+	RescueFailed RescueResult = "Failed"
+)
+
+// RescueStatus records a session's newest rescue (D-10, D-51). The operator
+// writes it before it deletes the pod the rescue ran in, so a fresh operator
+// sees what the last one decided.
 type RescueStatus struct {
-	// LastBundle is the newest bundle's path on the shared volume, for example
-	// rescue/haynes-ops-1005-202504/20261006-0130.bundle.
+	// LastBundle is the newest rescue's manifest on the shared volume, for
+	// example rescue/haynes-ops-1005-202504/20261006-0130/manifest.json (D-48).
+	// It stays when a later rescue needed no bundle, or a new pod superseded
+	// it, because a restore starts from it.
 	// +optional
 	LastBundle string `json:"lastBundle,omitempty"`
 
-	// TODO(plan 01 step 5): the list of local refs that origin lacks at suspend
-	// time, which archive checks the bundle's manifest against (D-10 point 4).
+	// Result is the newest rescue's verdict.
+	// +optional
+	Result RescueResult `json:"result,omitempty"`
+
+	// Message says what the rescue saved, or why it failed.
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// Stamp is the rescue's stamp (UTC YYYYMMDD-HHMM); At is when the operator
+	// recorded it.
+	// +optional
+	Stamp string `json:"stamp,omitempty"`
+	// +optional
+	At *metav1.Time `json:"at,omitempty"`
+
+	// PodUID is the pod the rescue ran in. A suspend deletes that pod, and no
+	// other, on this record.
+	// +optional
+	PodUID string `json:"podUID,omitempty"`
+
+	// Generation is the session's metadata.generation when the rescue ran. A
+	// spec change since then (a resume, say) means the pod may have done more
+	// work, and its next removal needs a new rescue.
+	// +optional
+	Generation int64 `json:"generation,omitempty"`
+
+	// Superseded is set as soon as the session asks for its pod again (a
+	// resume), before the operator starts a new pod on the volume: from then
+	// on the rescue does not cover what the volume holds, and a pod delete or
+	// an archive needs a new one (D-10: an old bundle never counts).
+	// +optional
+	Superseded bool `json:"superseded,omitempty"`
+
+	// UnpushedRefs is D-10 step 4's list: the local refs origin lacked at the
+	// rescue, each with its clone and the bundle that holds it. At most 256 are
+	// kept; OmittedRefs counts the rest. The verdict covers all of them.
+	// +kubebuilder:validation:MaxItems=256
+	// +optional
+	UnpushedRefs []RescuedRef `json:"unpushedRefs,omitempty"`
+
+	// OmittedRefs is how many refs did not fit in UnpushedRefs.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	OmittedRefs int32 `json:"omittedRefs,omitempty"`
+}
+
+// RescuedRef is one local ref origin lacked at a rescue.
+type RescuedRef struct {
+	// Repo is the clone, for example /home/dev/repos/haynes-ops.
+	Repo string `json:"repo"`
+	// Name is the ref, for example refs/heads/rescue/haynes-ops-1005-202504-20261006-0130,
+	// or stash@{n} for a stash entry.
+	Name string `json:"name"`
+	// Commit is the commit it named.
+	Commit string `json:"commit"`
+	// Bundle is the bundle file on the shared volume that holds it.
+	// +optional
+	Bundle string `json:"bundle,omitempty"`
 }
 
 // AgentSession is one agent session: its pod, its volume and its lifecycle. The

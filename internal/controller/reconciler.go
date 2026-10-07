@@ -8,10 +8,12 @@
 //     and never one to the operator's Deployment (D-03).
 //   - The operator never updates a session's pod or volume, and deletes a pod
 //     only through deletePod, whose guard (guard.go) allows the Draining and
-//     Suspended transitions only, and a suspend only after a rescue. Rescue is
-//     plan 01 step 5 and drain plan 04, so today the guard refuses every time.
+//     Suspended transitions only, and a suspend of a pod that ran only after a
+//     rescue in it (D-51). Drain is plan 04, so the guard refuses it today.
 //   - A finalizer holds every session, and its volume, until rescue: deleting
-//     an AgentSession is a reap, never a cascade (D-45).
+//     an AgentSession is a reap, never a cascade (D-45). deleteVolume, the
+//     other guarded delete, archives a reaped session's volume only after a
+//     verified rescue of its last pod (D-10, D-51).
 //   - Reconcile is level-based: everything comes from the AgentSession, its pod,
 //     its volume and the templates, so a fresh operator resumes where the last
 //     one stopped. Nothing lives only in memory.
@@ -31,9 +33,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -55,9 +59,20 @@ const (
 	ConditionOutdated = "Outdated"
 	// ConditionRemovalBlocked is True while the session asks for its pod or
 	// volume to go (suspend, or delete, which is a reap) and 5.1's guard keeps
-	// them: no rescue yet (D-45).
+	// them: no rescue yet, or none that makes the volume safe (D-45, D-51).
 	ConditionRemovalBlocked = "RemovalBlocked"
+	// ConditionRescueFailed is D-10's rescueFailed mark: True when the newest
+	// rescue ran and could not make the work safe, which blocks archive and
+	// keeps the volume for a human; False when it succeeded (D-51).
+	ConditionRescueFailed = "RescueFailed"
 )
+
+// rescueRetry is how soon a rescue that could not run is tried again.
+const rescueRetry = time.Minute
+
+// MaxConcurrentReconciles lets a rescue, which can take minutes, run while other
+// sessions are reconciled. Reconciles of one session never overlap.
+const MaxConcurrentReconciles = 4
 
 // CacheOptions scopes the manager's cache to what the operator may read
 // (DESIGN-001 6.11, D-44): the sessions' namespace, and the one templates
@@ -83,10 +98,17 @@ type Reconciler struct {
 	// APIURL is the operator API's base URL, given to agentd for its heartbeat
 	// (D-41). Empty until the API is served (plan 01 step 3).
 	APIURL string
-	// APIReader reads from the API server, past the cache. The one decision
-	// that must not trust a cache that may lag, releasing a deleted session
-	// that has nothing to rescue, uses it.
+	// APIReader reads from the API server, past the cache. The decisions that
+	// must not trust a cache that may lag use it: that a rescued pod is still
+	// the one the rescue ran in, that no pod exists before archive deletes a
+	// volume, and that nothing is left before a deleted session is released.
 	APIReader client.Reader
+	// Rescuer runs agentd's rescue in a pod (D-51). Nil means no rescue can
+	// run, so a pod that ran is never removed.
+	Rescuer Rescuer
+	// Recorder emits the rescue's and the archive's events on the session; nil
+	// emits none.
+	Recorder events.EventRecorder
 }
 
 // SetupWithManager registers the reconciler. It watches sessions, the pods and
@@ -98,7 +120,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, opts ...func(*ctrl.Build
 		For(&v1alpha1.AgentSession{}).
 		Owns(&corev1.Pod{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
-		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.sessionsForTemplates))
+		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.sessionsForTemplates)).
+		WithOptions(controller.Options{MaxConcurrentReconciles: MaxConcurrentReconciles})
 	for _, o := range opts {
 		o(b)
 	}
@@ -122,7 +145,8 @@ func (r *Reconciler) sessionsForTemplates(ctx context.Context, o client.Object) 
 }
 
 // Reconcile creates what a session lacks and records what it sees. It never
-// deletes or updates a pod or a volume.
+// updates a pod or a volume, and deletes one only through the guard: a pod in
+// the Suspended transition after its rescue, a volume at archive (D-51).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var s v1alpha1.AgentSession
 	if err := r.Client.Get(ctx, req.NamespacedName, &s); err != nil {
@@ -154,46 +178,275 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	t, tErr := r.loadTemplates(ctx)
 	obs := observation{pod: pod, claim: claim, templates: t, templatesErr: tErr}
 
+	var result ctrl.Result
 	switch {
 	case !wantsPodGone(&s):
-		if tErr == nil {
-			if err := r.ensure(ctx, &s, t, &obs); err != nil {
-				return ctrl.Result{}, err
-			}
+		// A session that wants its pod can change its volume again: through
+		// a new pod, or through the rescued pod itself when a resume came
+		// before its delete. So the last rescue stops counting, and the
+		// record says so before anything else happens here, a new pod
+		// included (D-10: an old bundle never counts).
+		if rec := s.Status.Rescue; rec != nil && rec.Result != "" && !rec.Superseded {
+			rec.Superseded = true
+			setRescueCondition(&s, &s.Status, "")
+			return r.writeStatus(ctx, &s, ctrl.Result{RequeueAfter: time.Second})
 		}
-	case !obs.pod.missing && obs.pod.foreign == "":
-		// Suspend or delete asks for the pod to go; 5.1's guard decides.
-		if obs.removalBlocked = podRemovalAllowed(&s); obs.removalBlocked == nil {
-			if err := deletePod(ctx, r.Client, &s, obs.pod.obj); err != nil {
-				return ctrl.Result{}, err
-			}
+		if tErr != nil {
+			break
 		}
-	case !s.DeletionTimestamp.IsZero():
-		// A deleted session with no pod: its volume, if any, waits for
-		// the rescue; with neither, there is nothing to rescue.
-		released, err := r.releaseIfEmpty(ctx, &s)
-		if err != nil || released {
+		if err := r.ensure(ctx, &s, t, &obs); err != nil {
 			return ctrl.Result{}, err
 		}
-		if !obs.claim.missing {
-			obs.removalBlocked = errRescueNotBuilt
+	case !obs.pod.missing && obs.pod.foreign == "":
+		// Suspend or delete asks for the pod to go: rescue first, then 5.1's
+		// guard decides.
+		res, stop, err := r.removePod(ctx, &s, &obs)
+		if err != nil || stop {
+			return res, err
 		}
+		result = res
+	case !s.DeletionTimestamp.IsZero():
+		// A deleted session with no pod: archive its volume after a
+		// verified rescue, then let it go.
+		res, done, err := r.archive(ctx, &s, &obs)
+		if err != nil || done {
+			return res, err
+		}
+		result = res
 	}
 
 	next := s.Status.DeepCopy()
 	observe(&s, obs, next)
 	if !apiequality.Semantic.DeepEqual(&s.Status, next) {
 		s.Status = *next
-		if err := r.Client.Status().Update(ctx, &s); err != nil {
-			if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
-				// A newer version of the session is on its way through
-				// the cache; its event reconciles again.
-				return ctrl.Result{RequeueAfter: time.Second}, nil
-			}
-			return ctrl.Result{}, err
+		return r.writeStatus(ctx, &s, result)
+	}
+	return result, nil
+}
+
+// writeStatus writes the session's status. A conflict or a missing session
+// means a newer version is on its way through the cache; its event reconciles
+// again.
+func (r *Reconciler) writeStatus(ctx context.Context, s *v1alpha1.AgentSession, result ctrl.Result) (ctrl.Result, error) {
+	if err := r.Client.Status().Update(ctx, s); err != nil {
+		if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+			return ctrl.Result{RequeueAfter: time.Second}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	return result, nil
+}
+
+// removePod rescues the session's pod if an agent may run in it, records the
+// verdict before anything else happens, then deletes the pod if 5.1's guard
+// allows it (D-51). stop means the reconcile ends here with res.
+func (r *Reconciler) removePod(ctx context.Context, s *v1alpha1.AgentSession, obs *observation) (res ctrl.Result, stop bool, err error) {
+	pod := obs.pod.obj
+	if !pod.DeletionTimestamp.IsZero() {
+		// Going already; its last event reconciles again.
+		return ctrl.Result{}, false, nil
+	}
+	if needsRescue(s, pod) {
+		// A rescue takes minutes and stops the agent: run it only on the
+		// newest session and pod, not on a cache that has not caught up with
+		// the operator's own writes, so its record does not conflict.
+		if behind, err := r.cacheBehind(ctx, s, pod); err != nil || behind {
+			return ctrl.Result{RequeueAfter: time.Second}, true, client.IgnoreNotFound(err)
+		}
+		rec, reason, cur, err := r.rescue(ctx, s, pod)
+		if err != nil {
+			obs.removalBlocked = fmt.Errorf("the rescue could not run in pod %s, so the pod stays; retrying in %s: %w", pod.Name, rescueRetry, err)
+			return ctrl.Result{RequeueAfter: rescueRetry}, false, nil
+		}
+		// The record goes to the API server before the pod is deleted, so a
+		// fresh operator never deletes a pod on a rescue it cannot see.
+		if written, err := r.recordRescue(ctx, s, rec, reason); err != nil || !written {
+			// The session changed during the rescue in a way that matters:
+			// judge it again.
+			return ctrl.Result{RequeueAfter: time.Second}, true, err
+		}
+		r.event(s, eventType(rec), "Rescue", reason, rec.Message)
+		// Delete the pod as the API server has it now, so a status update the
+		// kubelet made during the rescue does not void the precondition.
+		pod = cur
+	}
+	if obs.removalBlocked = podRemovalAllowed(s, pod); obs.removalBlocked != nil {
+		return ctrl.Result{}, false, nil
+	}
+	if err := deletePod(ctx, r.Client, s, pod); err != nil {
+		if apierrors.IsConflict(err) {
+			// The pod changed since the read; judge it again.
+			return ctrl.Result{RequeueAfter: time.Second}, true, nil
+		}
+		return ctrl.Result{}, true, err
+	}
+	log.FromContext(ctx).Info("deleted the session pod", "pod", pod.Name, "uid", pod.UID, "suspend", s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended, "deleted", !s.DeletionTimestamp.IsZero())
+	return ctrl.Result{}, false, nil
+}
+
+// recordRescue writes the rescue record onto the newest version of the session
+// and, on success, makes s that version. agentd's heartbeat patches the
+// session's status every minute, so a session read before a rescue that took
+// minutes is out of date by the time the record is written. The record is
+// written only while the session is the one the rescue ran for: same UID, same
+// generation, still asking for its pod to go. Otherwise it reports false and
+// the next reconcile judges the session again.
+func (r *Reconciler) recordRescue(ctx context.Context, s *v1alpha1.AgentSession, rec *v1alpha1.RescueStatus, reason string) (bool, error) {
+	for range 5 {
+		var fresh v1alpha1.AgentSession
+		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &fresh); err != nil {
+			return false, client.IgnoreNotFound(err)
+		}
+		if fresh.UID != s.UID || fresh.Generation != rec.Generation || !wantsPodGone(&fresh) {
+			return false, nil
+		}
+		fresh.Status.Rescue = rec
+		setRescueCondition(&fresh, &fresh.Status, reason)
+		err := r.Client.Status().Update(ctx, &fresh)
+		if err == nil {
+			*s = fresh
+			return true, nil
+		}
+		if !apierrors.IsConflict(err) {
+			return false, client.IgnoreNotFound(err)
 		}
 	}
-	return ctrl.Result{}, nil
+	return false, nil
+}
+
+// cacheBehind reports whether the API server has a newer session or pod than
+// the cache gave this reconcile.
+func (r *Reconciler) cacheBehind(ctx context.Context, s *v1alpha1.AgentSession, pod *corev1.Pod) (bool, error) {
+	var fs v1alpha1.AgentSession
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &fs); err != nil {
+		return false, err
+	}
+	var fp corev1.Pod
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(pod), &fp); err != nil {
+		return false, err
+	}
+	return fs.ResourceVersion != s.ResourceVersion || fp.ResourceVersion != pod.ResourceVersion, nil
+}
+
+// rescue runs agentd's rescue in the pod and returns its verdict and the pod
+// as the API server has it afterwards. An error means it did not run, or ran
+// in a pod that has since been replaced.
+func (r *Reconciler) rescue(ctx context.Context, s *v1alpha1.AgentSession, pod *corev1.Pod) (*v1alpha1.RescueStatus, string, *corev1.Pod, error) {
+	if r.Rescuer == nil {
+		return nil, "", nil, errors.New("the operator has no rescuer")
+	}
+	log.FromContext(ctx).Info("rescuing the session pod", "pod", pod.Name, "uid", pod.UID)
+	rep, err := r.Rescuer.Rescue(ctx, pod)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	// exec reaches a pod by name: make sure the report came from this one.
+	var cur corev1.Pod
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(pod), &cur); err != nil {
+		return nil, "", nil, fmt.Errorf("read the pod after the rescue: %w", err)
+	}
+	if cur.UID != pod.UID {
+		return nil, "", nil, fmt.Errorf("the pod was replaced during the rescue (uid %s, now %s)", pod.UID, cur.UID)
+	}
+	rec, reason := verdict(s, pod, rep, metav1.Now())
+	log.FromContext(ctx).Info("rescued the session pod", "pod", pod.Name, "result", rec.Result, "reason", reason, "bundle", rec.LastBundle)
+	return rec, reason, &cur, nil
+}
+
+// archive deletes a reaped session's volume once the guard allows it, then
+// lets the session go when nothing of it is left (D-10, D-51). done means the
+// reconcile ends here with res.
+func (r *Reconciler) archive(ctx context.Context, s *v1alpha1.AgentSession, obs *observation) (res ctrl.Result, done bool, err error) {
+	if obs.claim.missing || obs.claim.foreign != "" {
+		// Nothing of the session's to archive: release it if the API server
+		// has no pod or volume of its names either.
+		released, err := r.releaseIfEmpty(ctx, s)
+		if err != nil || released {
+			return ctrl.Result{}, true, err
+		}
+		if obs.claim.foreign == "" {
+			// The cache has not seen the claim, or a pod, the API server
+			// has; their events reconcile again.
+			return ctrl.Result{RequeueAfter: time.Second}, false, nil
+		}
+		obs.removalBlocked = errors.New("a volume of the session's name is not the session's; the operator leaves it alone, and the session stays until a human removes it")
+		return ctrl.Result{}, false, nil
+	}
+	// Archive must not trust a cache that may not have seen a new pod yet.
+	podExists := true
+	if err := r.APIReader.Get(ctx, types.NamespacedName{Namespace: s.Namespace, Name: s.Name}, &corev1.Pod{}); apierrors.IsNotFound(err) {
+		podExists = false
+	} else if err != nil {
+		return ctrl.Result{}, true, err
+	}
+	if obs.removalBlocked = volumeRemovalAllowed(s, podExists); obs.removalBlocked != nil {
+		return ctrl.Result{}, false, nil
+	}
+	claim := obs.claim.obj
+	lifting := controllerutil.ContainsFinalizer(claim, Finalizer)
+	if err := deleteVolume(ctx, r.Client, s, claim, podExists); err != nil {
+		if apierrors.IsConflict(err) {
+			// The claim changed (the delete itself does that); lift the
+			// finalizer from its new version.
+			return ctrl.Result{RequeueAfter: time.Second}, true, nil
+		}
+		return ctrl.Result{}, true, err
+	}
+	obs.archived = true
+	if lifting {
+		log.FromContext(ctx).Info("archived the session volume", "claim", claim.Name, "rescue", s.Status.Rescue.Stamp, "bundle", s.Status.Rescue.LastBundle)
+		r.event(s, corev1.EventTypeNormal, "Archive", "Archived",
+			fmt.Sprintf("deleted volume %s after the rescue %s (%s): %s", claim.Name, s.Status.Rescue.Stamp, s.Status.Rescue.Result, s.Status.Rescue.Message))
+	}
+	// The claim goes once its other finalizers do; its delete event comes
+	// back here and releases the session.
+	return ctrl.Result{}, false, nil
+}
+
+func (r *Reconciler) event(s *v1alpha1.AgentSession, typ, action, reason, note string) {
+	if r.Recorder == nil {
+		return
+	}
+	r.Recorder.Eventf(s, nil, typ, reason, action, "%s", truncate(note))
+}
+
+func eventType(rec *v1alpha1.RescueStatus) string {
+	if rec.Result == v1alpha1.RescueFailed {
+		return corev1.EventTypeWarning
+	}
+	return corev1.EventTypeNormal
+}
+
+// rescueReason is the RescueFailed reason to keep: the one the verdict gave,
+// while the condition still matches the record, else one from the record.
+func rescueReason(st *v1alpha1.AgentSessionStatus) string {
+	r := st.Rescue
+	if r == nil {
+		return ""
+	}
+	if c := meta.FindStatusCondition(st.Conditions, ConditionRescueFailed); c != nil &&
+		(c.Status == metav1.ConditionTrue) == (r.Result == v1alpha1.RescueFailed) {
+		return c.Reason
+	}
+	if r.Result == v1alpha1.RescueFailed {
+		return "RescueFailed"
+	}
+	return string(r.Result)
+}
+
+// setRescueCondition sets RescueFailed from the newest rescue record.
+func setRescueCondition(s *v1alpha1.AgentSession, st *v1alpha1.AgentSessionStatus, reason string) {
+	r := st.Rescue
+	if r == nil || r.Result == "" || r.Superseded {
+		meta.RemoveStatusCondition(&st.Conditions, ConditionRescueFailed)
+		return
+	}
+	c := metav1.Condition{Type: ConditionRescueFailed, Status: metav1.ConditionFalse, Reason: conditionReason(reason),
+		Message: truncate(r.Message), ObservedGeneration: s.Generation}
+	if r.Result == v1alpha1.RescueFailed {
+		c.Status = metav1.ConditionTrue
+	}
+	meta.SetStatusCondition(&st.Conditions, c)
 }
 
 // releaseIfEmpty removes the finalizer from a deleted session that has no pod and
@@ -220,15 +473,16 @@ func (r *Reconciler) releaseIfEmpty(ctx context.Context, s *v1alpha1.AgentSessio
 	return true, releaseSession(ctx, r.Client, s)
 }
 
-// releaseSession removes the session's finalizer. It is the only place that
-// does, and only releaseIfEmpty calls it (TestOnlyTheGuardDeletes).
+// releaseSession removes the session's finalizer. With releaseVolume it is the
+// only place that lifts a finalizer, and only releaseIfEmpty calls it
+// (TestOnlyTheGuardDeletes).
 func releaseSession(ctx context.Context, c client.Client, s *v1alpha1.AgentSession) error {
 	orig := s.DeepCopy()
 	controllerutil.RemoveFinalizer(s, Finalizer)
 	if err := c.Patch(ctx, s, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})); err != nil {
 		return client.IgnoreNotFound(err)
 	}
-	log.FromContext(ctx).Info("released a deleted session that had no pod and no volume")
+	log.FromContext(ctx).Info("released a deleted session that has no pod and no volume left")
 	return nil
 }
 
@@ -335,6 +589,9 @@ type observation struct {
 	// removalBlocked is why the guard keeps a pod or volume the session asks
 	// to be rid of (suspend or delete).
 	removalBlocked error
+	// archived: this reconcile deleted the session's volume, or lifted its
+	// finalizer, after a verified rescue.
+	archived bool
 }
 
 // observe writes the session's status from what the reconcile found. It is a
@@ -361,6 +618,7 @@ func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessio
 	ready.ObservedGeneration = s.Generation
 	meta.SetStatusCondition(&st.Conditions, ready)
 
+	setRescueCondition(s, st, rescueReason(st))
 	if obs.removalBlocked != nil {
 		reason, what := "SuspendNeedsRescue", "suspend waits"
 		if !s.DeletionTimestamp.IsZero() {
@@ -429,6 +687,8 @@ func podPhase(s *v1alpha1.AgentSession, obs observation) (v1alpha1.SessionPhase,
 		return v1alpha1.PhasePending, notReady("NameTaken", fmt.Sprintf("a pod named %s exists and its controller is %s, not this session; the operator leaves it alone", s.Name, obs.pod.foreign))
 	case obs.claim.foreign != "":
 		return v1alpha1.PhasePending, notReady("NameTaken", fmt.Sprintf("a volume named %s exists and its controller is %s, not this session; the operator leaves it alone", HomeClaimName(s.Name), obs.claim.foreign))
+	case obs.pod.missing && !s.DeletionTimestamp.IsZero() && (obs.archived || (rescued(s) && volumeTerminating(obs))):
+		return v1alpha1.PhaseArchived, notReady("Archived", fmt.Sprintf("the volume %s was deleted after the rescue %s; the session goes once the volume is gone", HomeClaimName(s.Name), s.Status.Rescue.Stamp))
 	case obs.pod.missing && s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended:
 		return v1alpha1.PhaseSuspended, notReady("Suspended", "the session is suspended; its volume is kept")
 	case obs.pod.missing && !s.DeletionTimestamp.IsZero():

@@ -4,8 +4,10 @@
 // DESIGN-001 6.12), deployed as its own Deployment with its own ServiceAccount.
 //
 // Built so far: the AgentSession reconciler (plan 01 step 2), which creates each
-// session's pod and volume from dev-env-templates, and the /v1 API (plan 01 step
-// 3, internal/apiserver, D-46), which every replica serves on :8443. The broker
+// session's pod and volume from dev-env-templates, rescues a pod by exec before a
+// suspend deletes it and archives a reaped session's volume after a verified
+// rescue (plan 01 step 5, D-51), and the /v1 API (plan 01 step 3,
+// internal/apiserver, D-46), which every replica serves on :8443. The broker
 // mode arrives in plan 07.
 package main
 
@@ -152,11 +154,18 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Rescue runs agentd in the session's pod by exec (D-08, D-51).
+	rescuer, err := controller.NewExecRescuer(cfg)
+	if err != nil {
+		return err
+	}
 	r := &controller.Reconciler{
 		Client:    mgr.GetClient(),
 		Templates: templatesKey,
 		APIURL:    o.apiURL,
 		APIReader: mgr.GetAPIReader(),
+		Rescuer:   rescuer,
+		Recorder:  mgr.GetEventRecorder(binaryName),
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
 		return err

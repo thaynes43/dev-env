@@ -1,8 +1,9 @@
 # 01: foundation, task mode
 
-**Status:** in progress: KICKOFF B1 to B4 landed (#14, #15, #17, #18); steps 1 to 4,
-6 and 7 landed on 2026-10-06 (the CRD #24; pods and volumes #29, #30; the `/v1` API #31;
-agentd #25, #27, #28; the keeper #39; `agent-run` #34)
+**Status:** in progress: KICKOFF B1 to B4 landed (#14, #15, #17, #18); steps 1 to 7
+landed on 2026-10-06 (the CRD #24; pods and volumes #29, #30; the `/v1` API #31;
+agentd #25, #27, #28; rescue, suspend and archive #32, #36; the keeper #39;
+`agent-run` #34)
 **Depends on:** Q-01 (build), Q-02 (Go), Q-04 (requests and limits, no cap) and Q-05
 (storage), all decided 2026-10-06; spikes S-7 (clone path), S-8 (gasha01 speed) and
 S-12 (the guard)
@@ -47,15 +48,16 @@ step. Tick a step in the PR that lands it.
     (#27; D-41, D-42);
   - [x] `agentd ctl rescue`, the entry point step 5 extends with the bundle (#28;
     D-43).
-- [ ] 5. Rescue to a bundle on the shared volume (D-10), then suspend and archive.
+- [x] 5. Rescue to a bundle on the shared volume (D-10), then suspend and archive.
   The bundle extends `agentd ctl rescue` (D-43): it bundles the report's
   `unpushedRefs`, and archive trusts `cleanAndPushed`. In two PRs:
   - [x] the bundle: `agentd ctl rescue` writes one bundle per clone and a manifest
     to `rescue/<session>/<stamp>/` on the shared volume, checks them there, and
     with `--stop-agent` stops the CLI first (#32; D-48);
-  - [ ] the operator: it runs that rescue by exec before a suspend deletes the pod,
+  - [x] the operator: it runs that rescue by exec before a suspend deletes the pod,
     records the verdict in status, and archives a reaped session's volume only
-    after a verified rescue; `patch` on PVCs in its RBAC.
+    after a verified rescue; `patch` on PVCs in its RBAC (#36; D-51). A reaped session
+    whose last pod is gone, ended or never ran waits for plan 02's rescue pod.
 - [x] 6. The minimal keeper: mint the gh token every 40 minutes (#39; D-52).
   `dev-env-keeper` mints the haynes-dev-bot installation token v1's way and merges
   it into `dev-agents/dev-env-gh-token` (`gh_token`) by one patch, every 40 minutes
@@ -173,7 +175,7 @@ step. Tick a step in the PR that lands it.
   waits in `ContainerCreating` without them. The source is v1's
   `apps/dev/dev-env/app/resources/config/**` and `bashrc.sh`, copied into the v2 app
   `apps/dev-env-system/session-config/` and adapted (never editing v1's files), with a
-  new `CLAUDE.md` for a session pod.
+  new `CLAUDE.md` for a session pod. Done 2026-10-06: haynes-ops #3474 (KICKOFF 8.8a).
 - Kyverno `verify-thaynes43-images`: add the `thaynes43/dev-env` workflow identity.
 - Renovate: hold the v1 HelmRelease below `2.0.0`.
 - CNPs of in-cluster MCP services that admit only the v1 pod (the haynesnetwork hop,

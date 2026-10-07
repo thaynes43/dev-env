@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -10,53 +11,218 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
 
-// 5.1's guard refuses every state today: drain is plan 04, and nothing is rescued
-// before plan 01 step 5. The table covers every phase in both operating modes,
-// deleted or not.
-func TestTheGuardRefusesEverythingBeforeRescue(t *testing.T) {
-	phases := []v1alpha1.SessionPhase{"", v1alpha1.PhasePending, v1alpha1.PhaseRunning, v1alpha1.PhaseIdle,
-		v1alpha1.PhaseDraining, v1alpha1.PhaseSuspended, v1alpha1.PhaseArchived, v1alpha1.PhaseFailed}
+// The pods the guard judges, by what runs in them.
+var guardPods = map[string]func() *corev1.Pod{
+	"unscheduled": func() *corev1.Pod { return &corev1.Pod{} },
+	"never started": func() *corev1.Pod {
+		return &corev1.Pod{Spec: corev1.PodSpec{NodeName: "talosw02", Containers: []corev1.Container{{Name: ContainerName}}},
+			Status: corev1.PodStatus{Phase: corev1.PodPending, ContainerStatuses: []corev1.ContainerStatus{{
+				Name: ContainerName, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff"}}}}}}
+	},
+	"scheduled, no status yet": func() *corev1.Pod {
+		return &corev1.Pod{Spec: corev1.PodSpec{NodeName: "talosw02", Containers: []corev1.Container{{Name: ContainerName}}},
+			Status: corev1.PodStatus{Phase: corev1.PodPending}}
+	},
+	"running": func() *corev1.Pod {
+		return &corev1.Pod{Spec: corev1.PodSpec{NodeName: "talosw02", Containers: []corev1.Container{{Name: ContainerName}}},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{
+				Name: ContainerName, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}}}
+	},
+	"crash looping": func() *corev1.Pod {
+		return &corev1.Pod{Spec: corev1.PodSpec{NodeName: "talosw02", Containers: []corev1.Container{{Name: ContainerName}}},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{
+				Name: ContainerName, RestartCount: 3, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+				LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1}}}}}}
+	},
+	// Pending again after a run: the kubelet restarted it.
+	"pending after a run": func() *corev1.Pod {
+		return &corev1.Pod{Spec: corev1.PodSpec{NodeName: "talosw02", Containers: []corev1.Container{{Name: ContainerName}}},
+			Status: corev1.PodStatus{Phase: corev1.PodPending, ContainerStatuses: []corev1.ContainerStatus{{
+				Name: ContainerName, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}},
+				LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137}}}}}}
+	},
+	"evicted": func() *corev1.Pod {
+		return &corev1.Pod{Spec: corev1.PodSpec{NodeName: "talosw02"}, Status: corev1.PodStatus{Phase: corev1.PodFailed, Reason: "Evicted"}}
+	},
+	"succeeded": func() *corev1.Pod {
+		return &corev1.Pod{Spec: corev1.PodSpec{NodeName: "talosw02"}, Status: corev1.PodStatus{Phase: corev1.PodSucceeded}}
+	},
+}
+
+// An agent may run in these, so only a rescue lets them go.
+var livePods = map[string]bool{"scheduled, no status yet": true, "running": true, "crash looping": true, "pending after a run": true}
+
+// The rescue records the guard reads, relative to the pod and the session.
+var guardRecords = map[string]func(pod types.UID, gen int64) *v1alpha1.RescueStatus{
+	"none": func(types.UID, int64) *v1alpha1.RescueStatus { return nil },
+	"verified here": func(pod types.UID, gen int64) *v1alpha1.RescueStatus {
+		return &v1alpha1.RescueStatus{Result: v1alpha1.RescueVerified, PodUID: string(pod), Generation: gen}
+	},
+	"clean here": func(pod types.UID, gen int64) *v1alpha1.RescueStatus {
+		return &v1alpha1.RescueStatus{Result: v1alpha1.RescueCleanAndPushed, PodUID: string(pod), Generation: gen}
+	},
+	"failed here": func(pod types.UID, gen int64) *v1alpha1.RescueStatus {
+		return &v1alpha1.RescueStatus{Result: v1alpha1.RescueFailed, PodUID: string(pod), Generation: gen}
+	},
+	"verified here, older generation": func(pod types.UID, gen int64) *v1alpha1.RescueStatus {
+		return &v1alpha1.RescueStatus{Result: v1alpha1.RescueVerified, PodUID: string(pod), Generation: gen - 1}
+	},
+	"verified in another pod": func(_ types.UID, gen int64) *v1alpha1.RescueStatus {
+		return &v1alpha1.RescueStatus{Result: v1alpha1.RescueVerified, PodUID: "another-pod", Generation: gen}
+	},
+	"verified here, superseded": func(pod types.UID, gen int64) *v1alpha1.RescueStatus {
+		return &v1alpha1.RescueStatus{Result: v1alpha1.RescueVerified, PodUID: string(pod), Generation: gen, Superseded: true}
+	},
+	"no result": func(pod types.UID, gen int64) *v1alpha1.RescueStatus {
+		return &v1alpha1.RescueStatus{PodUID: string(pod), Generation: gen}
+	},
+}
+
+// rescuedHere are the records of a rescue that ran in the pod since the session
+// last changed, whatever its result: D-10 suspends after a failed rescue too.
+var rescuedHere = map[string]bool{"verified here": true, "clean here": true, "failed here": true}
+
+var allPhases = []v1alpha1.SessionPhase{"", v1alpha1.PhasePending, v1alpha1.PhaseRunning, v1alpha1.PhaseIdle,
+	v1alpha1.PhaseDraining, v1alpha1.PhaseSuspended, v1alpha1.PhaseArchived, v1alpha1.PhaseFailed}
+
+// TestPodGuardTable is 5.1's pod rule over every phase, operating mode, delete,
+// pod state and rescue record: a pod goes only in the Suspended transition, and
+// a pod an agent may run in only after a rescue in it at the session's current
+// generation. Drain (plan 04) is refused until it is built.
+func TestPodGuardTable(t *testing.T) {
 	now := metav1.Now()
-	for _, phase := range phases {
+	allowed := 0
+	for _, phase := range allPhases {
 		for _, mode := range []v1alpha1.OperatingMode{v1alpha1.OperatingModeRunning, v1alpha1.OperatingModeSuspended} {
 			for _, deleted := range []bool{false, true} {
-				s := &v1alpha1.AgentSession{Spec: v1alpha1.AgentSessionSpec{OperatingMode: mode}, Status: v1alpha1.AgentSessionStatus{Phase: phase}}
-				if deleted {
-					s.DeletionTimestamp = &now
-				}
-				err := podRemovalAllowed(s)
-				if err == nil {
-					t.Errorf("phase %q, %s, deleted %v: the guard allowed a pod delete", phase, mode, deleted)
-					continue
-				}
-				switch {
-				case phase == v1alpha1.PhaseDraining:
-					if !errors.Is(err, errDrainNotBuilt) {
-						t.Errorf("phase Draining: %v, want the drain reason", err)
-					}
-				case mode == v1alpha1.OperatingModeSuspended || deleted:
-					if !errors.Is(err, errRescueNotBuilt) {
-						t.Errorf("phase %q, %s, deleted %v: %v, want the rescue reason", phase, mode, deleted, err)
-					}
-				default:
-					if !strings.Contains(err.Error(), "neither draining nor suspending") {
-						t.Errorf("phase %q, running: %v", phase, err)
+				for podName, mkPod := range guardPods {
+					for recName, mkRec := range guardRecords {
+						pod := mkPod()
+						pod.UID = "this-pod"
+						s := &v1alpha1.AgentSession{Spec: v1alpha1.AgentSessionSpec{OperatingMode: mode}, Status: v1alpha1.AgentSessionStatus{Phase: phase}}
+						s.Generation = 7
+						if deleted {
+							s.DeletionTimestamp = &now
+						}
+						s.Status.Rescue = mkRec(pod.UID, s.Generation)
+						want := phase != v1alpha1.PhaseDraining &&
+							(mode == v1alpha1.OperatingModeSuspended || deleted) &&
+							(!livePods[podName] || rescuedHere[recName])
+						err := podRemovalAllowed(s, pod)
+						name := fmt.Sprintf("phase %q, %s, deleted %v, pod %s, rescue %s", phase, mode, deleted, podName, recName)
+						switch {
+						case want && err != nil:
+							t.Errorf("%s: refused: %v", name, err)
+						case !want && err == nil:
+							t.Errorf("%s: allowed a pod delete", name)
+						case !want && phase == v1alpha1.PhaseDraining && !errors.Is(err, errDrainNotBuilt):
+							t.Errorf("%s: %v, want the drain reason", name, err)
+						case !want && phase != v1alpha1.PhaseDraining && (mode == v1alpha1.OperatingModeSuspended || deleted) && !errors.Is(err, errNeedsRescue):
+							t.Errorf("%s: %v, want the rescue reason", name, err)
+						case !want && phase != v1alpha1.PhaseDraining && mode == v1alpha1.OperatingModeRunning && !deleted && !strings.Contains(err.Error(), "neither draining nor suspending"):
+							t.Errorf("%s: %v", name, err)
+						}
+						if want {
+							allowed++
+						}
 					}
 				}
 			}
 		}
 	}
+	if allowed == 0 {
+		t.Fatal("the table allows nothing, so it proves nothing")
+	}
+}
+
+// The heart of 5.1, said once more without the table: a pod an agent may run in
+// is never deleted while the session wants it, and never without a rescue in
+// it since the session last changed.
+func TestARunningPodNeedsARescueOfItsOwn(t *testing.T) {
+	now := metav1.Now()
+	for podName := range livePods {
+		for recName, mkRec := range guardRecords {
+			pod := guardPods[podName]()
+			pod.UID = "this-pod"
+			running := &v1alpha1.AgentSession{Spec: v1alpha1.AgentSessionSpec{OperatingMode: v1alpha1.OperatingModeRunning}}
+			running.Generation = 3
+			running.Status.Rescue = mkRec(pod.UID, running.Generation)
+			if err := podRemovalAllowed(running, pod); err == nil {
+				t.Errorf("pod %s, rescue %s: deleted the pod of a session that wants it", podName, recName)
+			}
+			reaped := running.DeepCopy()
+			reaped.DeletionTimestamp = &now
+			if err := podRemovalAllowed(reaped, pod); (err == nil) != rescuedHere[recName] {
+				t.Errorf("pod %s, rescue %s, reaped: %v", podName, recName, err)
+			}
+		}
+	}
+}
+
+// TestVolumeGuardTable is the archive rule (D-10, D-51): a volume goes only
+// when its session is deleted, no pod of it exists, and the newest rescue, of
+// the volume's last pod, was verified or found nothing to save.
+func TestVolumeGuardTable(t *testing.T) {
+	now := metav1.Now()
+	safe := map[string]bool{"verified here": true, "clean here": true, "verified here, older generation": true, "verified in another pod": true}
+	allowed := 0
+	for _, phase := range allPhases {
+		for _, mode := range []v1alpha1.OperatingMode{v1alpha1.OperatingModeRunning, v1alpha1.OperatingModeSuspended} {
+			for _, deleted := range []bool{false, true} {
+				for _, podExists := range []bool{false, true} {
+					for recName, mkRec := range guardRecords {
+						s := &v1alpha1.AgentSession{Spec: v1alpha1.AgentSessionSpec{OperatingMode: mode}, Status: v1alpha1.AgentSessionStatus{Phase: phase}}
+						s.Generation = 7
+						if deleted {
+							s.DeletionTimestamp = &now
+						}
+						s.Status.Rescue = mkRec("last-pod", s.Generation)
+						want := deleted && !podExists && safe[recName]
+						err := volumeRemovalAllowed(s, podExists)
+						if want != (err == nil) {
+							t.Errorf("phase %q, %s, deleted %v, pod exists %v, rescue %s: %v (want allowed %v)", phase, mode, deleted, podExists, recName, err, want)
+						}
+						if want {
+							allowed++
+						}
+					}
+				}
+			}
+		}
+	}
+	if allowed == 0 {
+		t.Fatal("the table allows nothing, so it proves nothing")
+	}
+}
+
+// guardedCalls are the calls TestOnlyTheGuardDeletes allows, each with the
+// one function it may appear in and the guard that function must ask first.
+var guardedCalls = []struct {
+	call, in, guard string
+}{
+	{"Delete", "deletePod", "podRemovalAllowed"},
+	{"Delete", "deleteVolume", "volumeRemovalAllowed"},
+	{"RemoveFinalizer", "releaseSession", ""},
+	{"RemoveFinalizer", "releaseVolume", "volumeRemovalAllowed"},
+	{"releaseSession", "releaseIfEmpty", ""},
+	{"releaseVolume", "deleteVolume", "volumeRemovalAllowed"},
+	{"deletePod", "removePod", "podRemovalAllowed"},
+	{"deleteVolume", "archive", "volumeRemovalAllowed"},
 }
 
 // TestOnlyTheGuardDeletes reads this package's source. A Delete or DeleteAllOf
-// call may appear only in deletePod, after its guard; RemoveFinalizer only in
-// releaseSession, which only releaseIfEmpty calls. A new delete path cannot slip
-// in without changing this test, which is where review looks (5.1).
+// call may appear only in deletePod, after podRemovalAllowed, and in
+// deleteVolume, after volumeRemovalAllowed; RemoveFinalizer only in
+// releaseSession, which only releaseIfEmpty calls, and in releaseVolume, which
+// asks volumeRemovalAllowed and which only deleteVolume calls. A new delete path
+// cannot slip in without changing this test, which is where review looks (5.1).
 func TestOnlyTheGuardDeletes(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {
@@ -81,7 +247,7 @@ func TestOnlyTheGuardDeletes(t *testing.T) {
 			if !ok || fn.Body == nil {
 				continue
 			}
-			guardAt := token.NoPos
+			first := map[string]token.Pos{}
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
 				call, ok := n.(*ast.CallExpr)
 				if !ok {
@@ -94,35 +260,38 @@ func TestOnlyTheGuardDeletes(t *testing.T) {
 				case *ast.Ident:
 					name = f.Name
 				}
+				if _, ok := first[name]; !ok {
+					first[name] = call.Pos()
+				}
 				at := fset.Position(call.Pos())
-				switch name {
-				case "podRemovalAllowed":
-					if fn.Name.Name == "deletePod" && guardAt == token.NoPos {
-						guardAt = call.Pos()
+				guarded := false
+				for _, g := range guardedCalls {
+					if g.call != name {
+						continue
 					}
-				case "Delete", "DeleteAllOf":
-					seen[name]++
-					if fn.Name.Name != "deletePod" {
-						t.Errorf("%s: %s in %s; only deletePod may delete (5.1)", at, name, fn.Name.Name)
-					} else if guardAt == token.NoPos || guardAt > call.Pos() {
-						t.Errorf("%s: deletePod deletes before it asks podRemovalAllowed", at)
+					guarded = true
+					if g.in != fn.Name.Name {
+						continue
 					}
-				case "RemoveFinalizer":
-					seen[name]++
-					if fn.Name.Name != "releaseSession" {
-						t.Errorf("%s: RemoveFinalizer in %s; only releaseSession may lift the finalizer (D-45)", at, fn.Name.Name)
+					seen[g.call+" in "+g.in]++
+					if g.guard != "" {
+						if pos, ok := first[g.guard]; !ok || pos > call.Pos() {
+							t.Errorf("%s: %s calls %s before it asks %s", at, fn.Name.Name, name, g.guard)
+						}
 					}
-				case "releaseSession":
-					if fn.Name.Name != "releaseIfEmpty" {
-						t.Errorf("%s: releaseSession called from %s; only releaseIfEmpty, which checks the API server, may", at, fn.Name.Name)
-					}
+					return true
+				}
+				if guarded || name == "DeleteAllOf" {
+					t.Errorf("%s: %s in %s; only the guarded functions may (5.1, D-51)", at, name, fn.Name.Name)
 				}
 				return true
 			})
 		}
 	}
-	// The test must see the calls it guards, or it proves nothing.
-	if seen["Delete"] != 1 || seen["RemoveFinalizer"] != 1 {
-		t.Errorf("found %d Delete and %d RemoveFinalizer calls; want exactly one each", seen["Delete"], seen["RemoveFinalizer"])
+	// The test must see every call it guards, once, or it proves nothing.
+	for _, g := range guardedCalls {
+		if n := seen[g.call+" in "+g.in]; n != 1 {
+			t.Errorf("%s in %s: seen %d times, want once", g.call, g.in, n)
+		}
 	}
 }

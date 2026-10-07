@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -34,6 +35,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/templates"
 	"github.com/thaynes43/dev-env/internal/testenv"
 )
@@ -140,7 +142,8 @@ func startOperator(t *testing.T) *operator {
 		t.Fatal(err)
 	}
 	rec := &recordingClient{Client: mgr.GetClient()}
-	r := &Reconciler{Client: rec, Templates: templatesKey, APIReader: mgr.GetAPIReader()}
+	r := &Reconciler{Client: rec, Templates: templatesKey, APIReader: mgr.GetAPIReader(),
+		Rescuer: rescuer, Recorder: mgr.GetEventRecorder("dev-env-operator")}
 	if err := r.SetupWithManager(mgr); err != nil {
 		t.Fatal(err)
 	}
@@ -149,6 +152,47 @@ func startOperator(t *testing.T) *operator {
 	go func() { op.done <- mgr.Start(ctx) }()
 	t.Cleanup(op.stop)
 	return op
+}
+
+// fakeRescuer plays agentd's rescue: envtest has no kubelet to exec into. A
+// session the test has not given an answer fails, as an exec into a pod with
+// no running container does.
+type fakeRescuer struct {
+	mu      sync.Mutex
+	answers map[string]func(*corev1.Pod) (protocol.RescueReport, error)
+	calls   map[string]int
+}
+
+var rescuer = &fakeRescuer{answers: map[string]func(*corev1.Pod) (protocol.RescueReport, error){}, calls: map[string]int{}}
+
+func (f *fakeRescuer) Rescue(_ context.Context, pod *corev1.Pod) (protocol.RescueReport, error) {
+	f.mu.Lock()
+	answer := f.answers[pod.Name]
+	f.calls[pod.Name]++
+	f.mu.Unlock()
+	if answer == nil {
+		return protocol.RescueReport{}, errors.New("unable to upgrade connection: container not found (\"agent\")")
+	}
+	return answer(pod)
+}
+
+// answer makes the rescue of the session's pod return report.
+func (f *fakeRescuer) answer(t *testing.T, session string, report func(*corev1.Pod) (protocol.RescueReport, error)) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.answers[session] = report
+	t.Cleanup(func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		delete(f.answers, session)
+	})
+}
+
+func (f *fakeRescuer) callsFor(session string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls[session]
 }
 
 // stop stops the manager and waits for it, as a pod deletion stops the
@@ -162,14 +206,24 @@ func (o *operator) stop() {
 }
 
 // recordingClient passes every call through and records each write to a pod or
-// a volume, and every delete of anything. The 5.1 tests read the record.
+// a volume, and every delete of anything. The 5.1 tests read the record. It
+// also keeps every write in order, with each status write that carries a
+// rescue record, so a test can check what came first.
 type recordingClient struct {
 	client.Client
 	mu     sync.Mutex
 	record []string
+	order  []string
 }
 
 func (c *recordingClient) note(verb string, o client.Object) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry := fmt.Sprintf("%s %T %s", verb, o, o.GetName())
+	if s, ok := o.(*v1alpha1.AgentSession); ok && verb == "update status" && s.Status.Rescue != nil && !s.Status.Rescue.Superseded {
+		entry = "record rescue of " + s.Status.Rescue.PodUID
+	}
+	c.order = append(c.order, entry)
 	switch o.(type) {
 	case *corev1.Pod, *corev1.PersistentVolumeClaim:
 	default:
@@ -177,9 +231,21 @@ func (c *recordingClient) note(verb string, o client.Object) {
 			return
 		}
 	}
+	c.record = append(c.record, entry)
+}
+
+func (c *recordingClient) orderLog() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.record = append(c.record, fmt.Sprintf("%s %T %s", verb, o, o.GetName()))
+	return append([]string(nil), c.order...)
+}
+
+// before reports whether the first write a came before the first write b.
+func (c *recordingClient) before(a, b string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ia, ib := slices.Index(c.order, a), slices.Index(c.order, b)
+	return ia >= 0 && ib >= 0 && ia < ib
 }
 
 func (c *recordingClient) writesTo() []string {
@@ -234,6 +300,23 @@ func assertNoPodOrVolumeWrites(t *testing.T, ops ...*operator) {
 	for _, o := range ops {
 		if w := o.writes.writesTo(); len(w) > 0 {
 			t.Errorf("the operator wrote to pods or volumes, or deleted something: %v", w)
+		}
+	}
+}
+
+// assertWritesOnly fails if the operator wrote to or deleted anything but
+// these, or if it never made one of them.
+func assertWritesOnly(t *testing.T, op *operator, allowed ...string) {
+	t.Helper()
+	got := op.writes.writesTo()
+	for _, w := range got {
+		if !slices.Contains(allowed, w) {
+			t.Errorf("unexpected write %q; all writes: %v", w, got)
+		}
+	}
+	for _, a := range allowed {
+		if !slices.Contains(got, a) {
+			t.Errorf("the operator never made %q; all writes: %v", a, got)
 		}
 	}
 }

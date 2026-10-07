@@ -238,7 +238,7 @@ status:
   remoteControl: { name: haynes-ops-1005-202504, sessionId: "session_…", url: "https://claude.ai/code/…", state: registered }  # 6.7
   outcome: { state: running, note: "", at: "" }   # summoned: pending | running | done | failed | escalated
   usage: { costUSD: "0", inputTokens: 0, outputTokens: 0 }  # 3.7, V-16; cost is a decimal string
-  rescue: { lastBundle: "rescue/haynes-ops-1005-202504/20261006-0130.bundle" }
+  rescue: { lastBundle: "rescue/haynes-ops-1005-202504/20261006-0130/manifest.json", result: Verified, podUID: "…", generation: 3, unpushedRefs: [] }  # D-51
   conditions: []
 ```
 
@@ -785,8 +785,8 @@ per clone, into a directory per rescue on the shared volume, and checks it there
 - **A clean rescue writes nothing to the shared volume.** When every clone is clean
   and pushed there is nothing to bundle, so `cleanAndPushed` is the proof, and a
   CephFS outage does not fail it.
-- **`--stop-agent`**, which the operator passes before it deletes a pod (plan 01
-  step 5, part 2). Before the rescue, agentd
+- **`--stop-agent`**, which the operator passes before it deletes a pod (D-51).
+  Before the rescue, agentd
   sends SIGTERM to the CLI that run-agent recorded, waits the 30 s grace, then
   SIGKILLs whatever is left of the CLI's process group: the CLI, or a background
   command it started. run-agent is outside that group and still writes the task's
@@ -1233,6 +1233,89 @@ not enough.
 files can hold secrets (`.env`, tokens pasted into a scratch file). The bundle stays
 inside the cluster, on the shared volume.
 
+**D-51 (2026-10-06, plan 01 step 5). The operator runs the rescue by exec before a
+suspend deletes a pod that ran, records a verdict in status first, and archives only
+a reaped session's volume, only after a verified rescue of the volume's last pod.**
+
+- **The trigger.** For a session that asks for its pod to go (suspended, or deleted,
+  which is a reap) the operator runs `agentd ctl rescue --stop-agent` in container
+  `agent` through `pods/exec` (D-08), over WebSocket with the SPDY fallback, with a
+  10-minute limit. agentd stops the agent first and writes the bundle (D-48). A
+  rescue can take minutes, so the controller runs up to four reconciles at a time;
+  one session's never overlap. Before the exec the operator checks that its cache
+  has the newest session and pod, so a lagging cache never costs a second rescue.
+  After the exec it reads the pod from the API server and drops a report whose pod
+  was replaced meanwhile, because exec reaches a pod by name.
+- **The verdict.** The operator turns the report into `status.rescue.result`:
+  `Verified` when every ref on the list is in a verified bundle at the same commit
+  and the manifest was written; `CleanAndPushed` when there was nothing to bundle
+  and agentd proved it; `Failed` otherwise. It also fails a report for another
+  session, one that does not say the agent stopped or says it still runs, one that
+  lacks the session's own clone (`NotProven`: agentd finds clones by looking, so an
+  empty or missing `~/repos`, or a clone that failed at boot, would otherwise read
+  as clean), and one where any clone could not fetch origin. That last check is stricter than D-43,
+  which keeps the list after a failed fetch: with stale remote refs, a local branch
+  whose commits only a since-deleted origin branch held is on no list and in no
+  bundle. The condition `RescueFailed` is D-10's `rescueFailed` mark: True with the
+  verdict's reason (`WorktreeRefused`, `BundleFailed`, `FetchFailed`,
+  `AgentStillRunning`, …) or False (`Verified`, `CleanAndPushed`).
+- **The record comes first.** `status.rescue` holds the verdict, its message, the
+  stamp, the manifest's path (`lastBundle`, kept through later rescues for a
+  restore), the pod's UID, the session's generation, and D-10 step 4's list of
+  refs, at most 256 with a count of the rest. The operator writes it to the API
+  server before it deletes the pod, so a fresh operator never deletes a pod on a
+  rescue it cannot see. It writes it onto the session as the API server has it
+  after the rescue, because agentd's heartbeat patches the status every minute
+  while a rescue runs, and only while that is still the session the rescue ran
+  for: same UID, same generation, still asking for its pod to go. The rescue's verdict and the archive are also events on the
+  session (`events.k8s.io`), which outlive a reaped session's object by the events'
+  TTL; the manifest on the shared volume outlives both.
+- **Suspend.** The pod goes once a rescue has run in it since the session's spec
+  last changed (same pod UID, same generation), whatever the verdict: D-10 suspends
+  after a failed rescue too, keeps the volume, and blocks archive. A resume between
+  the rescue and the delete changes the generation, so the next removal rescues
+  again. A pod in which no agent can run goes without a rescue, because none can
+  run in it and the volume stays: one never scheduled, one whose containers never
+  started, or one that ended (evicted). Every pod delete carries the UID and the
+  resourceVersion the guard judged, so a pod that was scheduled or started since
+  the read is judged again. A rescue that cannot run (agentd down, a crash-looping
+  container) keeps the pod, and the operator tries again every minute.
+- **An old rescue never counts.** As soon as the session asks for its pod again (a
+  resume), the operator marks the record `superseded` and writes that before it
+  does anything else, a new pod included. A superseded rescue lets no volume go and
+  lets no pod go, so a resumed session's new work is never archived on its old
+  bundle: not when a new pod vanishes before a rescue, and not when the rescued pod
+  itself kept running because the resume came before its delete (a conflict, or an
+  operator restart in between) and ended later.
+- **Archive, plan 01's part.** Only a reap archives. For a deleted session with no
+  pod (asked of the API server), whose newest rescue is not superseded and is
+  `Verified` or `CleanAndPushed`, the operator deletes the claim (with its UID as a
+  precondition), lifts its finalizer, reports phase `Archived`, and lets the session
+  go once the API server has neither pod nor claim. `gasha01-rbd` binds at once and
+  deletes the RBD image with the claim (`Immediate`, `Delete`, read on 2026-10-06),
+  so this is the one step that destroys data, and a claim that never had a pod is
+  already bound: "never bound" proves nothing here, and a volume whose last pod
+  never ran still needs a rescue.
+- **What waits, and for whom.** A reaped session whose volume has no valid rescue
+  stays, with `RemovalBlocked` saying why: its newest rescue failed (a session
+  whose clone failed at boot is `NotProven`), was superseded, or never ran because
+  its last pod was gone, ended or never started.
+  Plan 02 adds a rescue pod for that (it mounts the volume, runs agentd without the
+  agent, and lets the operator rescue it or retry a failed rescue), the archive timer
+  for suspended sessions (D-09's 7 days, from the templates) and what resume does
+  after an archive, the 30-day bundle pruning, and the page on `RescueFailed`. Until
+  then a human decides, with `kubectl` (D-45).
+- **The guard and its tests.** `podRemovalAllowed` and `volumeRemovalAllowed` are
+  the two guards; `deletePod` and `deleteVolume` are the only deletes, and
+  `releaseVolume`, which only `deleteVolume` calls, the second finalizer lift.
+  `TestOnlyTheGuardDeletes` checks the source for that. Table tests run each guard
+  over every phase, mode, delete, pod state and rescue record, and envtest cases
+  prove the flows. Each rule was broken once on purpose, and a test failed every
+  time (the PR that landed this lists them).
+- **RBAC** (6.11): `patch` on PVCs, to lift the volume's finalizer; `create` on
+  `events.k8s.io` events. `pods/exec` `create` was already in the row; it covers the
+  WebSocket and the SPDY path.
+
 ### 4.5 Resume and restore
 
 - `agent-run resume <id>`: same volume, new pod, `claude --resume <session-id>`. The
@@ -1276,9 +1359,9 @@ deletes pods.**
   it terminating with its data until archive lifts the finalizer.
 - **A deleted session is reaped, never cascaded:** rescue, then suspend (the pod
   goes), then archive (the volume goes once the bundle is verified, D-10), then the
-  finalizer comes off. Rescue is plan 01 step 5. Until it lands, a deleted or
-  suspended session keeps its pod and volume, and the condition `RemovalBlocked` says
-  why (`DeleteNeedsRescue` or `SuspendNeedsRescue`). A deleted session that never got
+  finalizer comes off. Rescue is plan 01 step 5 (D-48 and D-51 built it). Until it
+  lands, a deleted or suspended session keeps its pod and volume, and the condition
+  `RemovalBlocked` says why (`DeleteNeedsRescue` or `SuspendNeedsRescue`). A deleted session that never got
   a pod or a volume has nothing to rescue and goes at once. The operator checks that
   against the API server, not its cache, so a volume the cache has not seen yet
   cannot lose its owner.
@@ -2104,7 +2187,7 @@ anything more is a grant; nothing in the three dev-env namespaces.**
 |---|---|---|
 | `dev-agents/dev-env-agent` (session pods) | Cluster-wide read (v1's read rules, no Secrets) + `dev-env.haynesops.com` read. v1's write and proxy verbs cluster-wide, under `dev-env-agent-guard`. The `database` PVC-delete binding, as v1. | **At most v1's tier, minus the #3392 escalations, and nothing in the three dev-env namespaces.** No write to its own CRDs: every v2 write goes through the API. |
 | `dev-agents/grant-<id>` (one per kube grant) | Exactly the granted role, in the granted namespaces, until the grant expires, under `dev-env-identity-guard`. | Created and deleted by the broker. Its token lives in the session pod's tmpfs. Never valid in the three dev-env namespaces. |
-| `dev-env-system/dev-env-operator` | Roles in `dev-agents` and `dev-tools`: pods (create, delete, get, list, watch, patch), `pods/exec` create, `pods/log` get, `pods/eviction` create, PVCs and Services (create, delete, get, list, watch), namespaced CiliumNetworkPolicies in `dev-tools` (tool ingress and declared egress) and delete on namespaced CiliumNetworkPolicies in `dev-agents` (the expiry backstop; only grants live there), events. No write on `CiliumClusterwideNetworkPolicy`. ClusterRole: its own CRD group (with `agentsessions/finalizers` update), `tokenreviews` create. Leases in its own namespace, and `get`, `list`, `watch` on the ConfigMap `dev-env-templates` there by `resourceNames` (D-44). | No cluster-wide pod or PVC rights, no Secrets, no `bind`. |
+| `dev-env-system/dev-env-operator` | Roles in `dev-agents` and `dev-tools`: pods (create, delete, get, list, watch, patch), `pods/exec` create, `pods/log` get, `pods/eviction` create, PVCs (create, delete, get, list, watch, patch: archive lifts the volume's finalizer, D-51) and Services (create, delete, get, list, watch), namespaced CiliumNetworkPolicies in `dev-tools` (tool ingress and declared egress) and delete on namespaced CiliumNetworkPolicies in `dev-agents` (the expiry backstop; only grants live there), events (core, and `events.k8s.io` create and patch: the rescue and archive events, D-51). No write on `CiliumClusterwideNetworkPolicy`. ClusterRole: its own CRD group (with `agentsessions/finalizers` update), `tokenreviews` create. Leases in its own namespace, and `get`, `list`, `watch` on the ConfigMap `dev-env-templates` there by `resourceNames` (D-44). | No cluster-wide pod or PVC rights, no Secrets, no `bind`. |
 | `dev-env-system/dev-env-broker` | RoleBindings and ClusterRoleBindings (create, delete); `bind` only on the grant role catalog by `resourceNames`; ServiceAccounts and `serviceaccounts/token` in `dev-agents`; CiliumNetworkPolicies in `dev-agents`; `pods/exec` in `dev-agents` (installs grant tokens); status of `AccessGrant`; read on the `dev-env.haynesops.com` group for the console's session list. No write on `CiliumClusterwideNetworkPolicy`, admission policies or Secrets. | The most privileged v2 identity: it can hand out the break-glass role. It accepts approvals only from Tom's Authentik identity and runs where agents cannot write or exec. |
 | `dev-env-system/dev-env-keeper` | Role in `dev-agents`: Secrets get, update and patch on `resourceNames` `dev-env-gh-token`, `dev-env-ops-gh-token`, `dev-env-claude-live`, `dev-env-codex-live` only; for credential grants (Q-07), also `pods/exec` in `dev-agents` and read on `AccessGrant`. ClusterRole: `tokenreviews` create. Leases (get, create, update) and Events (create, patch) in its own namespace (D-52). Plan 01 grants the Secrets `patch` only (D-52). | The four Secrets are created empty by GitOps, so no `create` is needed. |
 | `dev-env-system/dev-env-gpu-guard` (DaemonSet on GPU nodes) | Role in `dev-tools`: pods get, list; `pods/eviction` create. Read on the budgeter's Lease in `dev-env-system`. | Evicts agent GPU pods only; works when the operator is down (8.2). |
@@ -3303,4 +3386,5 @@ step it names.
 | D-48 | `agentd ctl rescue` writes one bundle per clone of its unpushed refs, thin against `origin/HEAD`, to `rescue/<session>/<stamp>/` on the shared volume with `manifest.json` last; it checks each bundle there before it reports `ok`; `--stop-agent` stops the CLI first | 3.6 |
 | D-49 | The session config: four ConfigMaps in `dev-agents` built from v2 copies of v1's files, with a new `CLAUDE.md` for a session pod; `requirements.toml` keeps v1's floor, in its own ConfigMap at `/etc/codex` in every pod; `bashrc.sh` exports no `GH_TOKEN` | 3.6 |
 | D-50 | `agent-run` v2 of plan 01: `-p`, `list`, `show`, `reap` and `fleet`; v1's defaults and checks before a create, with the API's effort table moved to `apiv1`; a new idempotency key per run, kept across retries; it waits for the pod and prints the scheduler's reason; the API found from flags, `DEV_ENV_API_*`, the session pod's settings, or a token minted for the pod's own ServiceAccount; exit codes 0 to 5 | 3.5 |
+| D-51 | The operator rescues by exec (`agentd ctl rescue --stop-agent`) before a suspend deletes a pod that ran, writes the verdict to `status.rescue` first, marks it superseded when the session asks for its pod again, and archives only a reaped session's volume after a verified rescue of its last pod | 4.4 |
 | D-52 | The minimal keeper: the haynes-dev-bot token minted v1's way from an App directory read at every mint, merged into `dev-env-gh-token` by one patch, every 40 minutes or two thirds of its life, retried from 10 s to 5 minutes with jitter; one replica behind a Lease (not a fence: plans 03 and 04 fence each refresh); Secrets `patch` only; ready while its token lives; nothing secret logged | 6.4 |

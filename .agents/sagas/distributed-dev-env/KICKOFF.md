@@ -287,7 +287,9 @@ PR per piece, in this order:
    heartbeat, and what step 8 deploys for it.
 4. agentd: config rendering (a port of `dev-init.sh`), partial clone and worktree,
    tmux start, heartbeat, and `ctl status|rescue`.
-5. Rescue to a bundle on the shared volume (D-10), then suspend and archive.
+5. Rescue to a bundle on the shared volume (D-10), then suspend and archive. Done
+   in #32 and #36 (2026-10-06): D-48 records the bundle, D-51 the
+   operator's rescue, suspend and archive.
 6. The minimal keeper: mint the gh token every 40 minutes. Done in #39
    (2026-10-06): D-52 records the mint, the write, the schedule, the Lease and the
    readiness; plan 01's "In haynes-ops" list says what 8.8 and 8.9 give it.
@@ -322,7 +324,8 @@ PR per piece, in this order:
      before any session and before 8.9. No earlier item created them. It is a sub-item
      rather than a renumbering so that the haynes-ops comments that cite 8.8 and 8.9
      stay true. The other v1 scripts are gone: agentd and the image replace them
-     (DESIGN-001 3.6, D-40, the port of `dev-init.sh`).
+     (DESIGN-001 3.6, D-40, the port of `dev-init.sh`). Done 2026-10-06: haynes-ops
+     #3474;
    9. the operator and keeper HelmReleases, with the API's Service and Certificate
       and v1's own-token RBAC (D-46), and the keeper's Roles and Deployment (D-52). `agent-run` in the v1 pod also needs the
       Certificate's CA as a file it can name in `DEV_ENV_API_CA_FILE` (D-50); a new
