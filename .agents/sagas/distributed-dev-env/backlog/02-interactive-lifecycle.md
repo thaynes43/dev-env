@@ -96,7 +96,7 @@ the cluster.
 - [x] 5. **Idle detection** (4.2, D-59, this PR). agentd reads Claude's `sessions/<pid>.json` status,
   the attached tmux clients and v1's `wt_busy` signals, and the heartbeat reports
   them (the Codex signals come with plan 04's Codex pods).
-- [ ] 6. **Suspend, resume and the idle timer** (D-09). `POST
+- [x] 6. **Suspend, resume and the idle timer** (D-09, D-60, this PR). `POST
   /v1/sessions/{id}/suspend` and `/resume`, `agent-run suspend` and `resume`. The
   operator suspends a session idle past its window (a finished task after 1 h, an
   interactive session after 3 days), with the defaults in the templates and

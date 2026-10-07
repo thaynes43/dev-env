@@ -32,6 +32,7 @@ func view(s *v1alpha1.AgentSession, withPrompt bool) apiv1.Session {
 		OperatingMode:  string(s.Spec.OperatingMode),
 		CreatedAt:      s.CreationTimestamp.UTC(),
 		Reaping:        !s.DeletionTimestamp.IsZero(),
+		SuspendedBy:    s.Annotations[v1alpha1.AnnotationSuspendedBy],
 		Phase:          phaseOf(s),
 		Pending:        s.Status.PendingReason,
 		Node:           s.Status.NodeName,

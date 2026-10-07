@@ -104,6 +104,12 @@ func (s *Server) Handler() http.Handler {
 		http.MethodGet:    s.getSession,
 		http.MethodDelete: s.reapSession,
 	}}))
+	mux.Handle(apiv1.SessionsPath+"/{name}/suspend", s.serve(route{methods: map[string]handler{
+		http.MethodPost: s.suspendSession,
+	}}))
+	mux.Handle(apiv1.SessionsPath+"/{name}/resume", s.serve(route{methods: map[string]handler{
+		http.MethodPost: s.resumeSession,
+	}}))
 	mux.Handle(apiv1.SessionsPath+"/{name}/heartbeat", s.serve(route{quiet: true, methods: map[string]handler{
 		http.MethodPost: s.heartbeat,
 	}}))

@@ -34,6 +34,10 @@ const (
 	// AnnotationCaller is a summoned session's CallerPolicy, also too long for
 	// a label value.
 	AnnotationCaller = LabelPrefix + "caller"
+	// AnnotationSuspendedBy says who suspended the session (D-60): "idle-timer"
+	// for the operator's idle timer, else the API caller. The API removes it on
+	// a resume.
+	AnnotationSuspendedBy = LabelPrefix + "suspended-by"
 
 	// LabelAppName and LabelManagedBy are the well-known labels; session pods
 	// and volumes carry AppNameSession and ManagedByOperator.

@@ -20,9 +20,11 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 	kjson "sigs.k8s.io/json"
 	"sigs.k8s.io/yaml"
@@ -120,7 +122,73 @@ type Templates struct {
 	// Claude holds what the operator gives Claude sessions by mode.
 	Claude Claude `json:"claude"`
 
+	// Lifecycle holds D-09's timers. Each one is optional, and a missing one
+	// takes D-09's default (D-60). A session's spec.lifecycle overrides them.
+	// They decide nothing about a pod, so the revision leaves them out: a timer
+	// change marks no session Outdated.
+	Lifecycle *Lifecycle `json:"lifecycle,omitempty"`
+
 	revision string
+}
+
+// Lifecycle is D-09's timers (DESIGN-001 4.3, D-60).
+type Lifecycle struct {
+	// TaskIdleSuspendAfter suspends a task session that is not busy, once
+	// nothing has happened in it for this long: its task finished (D-09: 1h).
+	TaskIdleSuspendAfter *metav1.Duration `json:"taskIdleSuspendAfter,omitempty"`
+	// IdleSuspendAfter suspends an idle local or remote session (D-09: 72h).
+	IdleSuspendAfter *metav1.Duration `json:"idleSuspendAfter,omitempty"`
+	// ArchiveAfter archives a suspended session's volume, after a valid rescue
+	// (D-09: 168h; plan 02 step 7).
+	ArchiveAfter *metav1.Duration `json:"archiveAfter,omitempty"`
+	// BundleRetention keeps rescue bundles this long (D-09: 720h; plan 02
+	// step 11).
+	BundleRetention *metav1.Duration `json:"bundleRetention,omitempty"`
+}
+
+// D-09's defaults, for a timer the templates do not set.
+const (
+	DefaultTaskIdleSuspendAfter = time.Hour
+	DefaultIdleSuspendAfter     = 72 * time.Hour
+	DefaultArchiveAfter         = 168 * time.Hour
+	DefaultBundleRetention      = 720 * time.Hour
+)
+
+func durationOr(d *metav1.Duration, def time.Duration) time.Duration {
+	if d == nil {
+		return def
+	}
+	return d.Duration
+}
+
+// IdleSuspendAfter is how long a session of mode may be idle before the
+// operator suspends it: TaskIdleSuspendAfter for a task, IdleSuspendAfter for
+// the others.
+func (t *Templates) IdleSuspendAfter(mode v1alpha1.SessionMode) time.Duration {
+	var l Lifecycle
+	if t.Lifecycle != nil {
+		l = *t.Lifecycle
+	}
+	if mode == v1alpha1.ModeTask {
+		return durationOr(l.TaskIdleSuspendAfter, DefaultTaskIdleSuspendAfter)
+	}
+	return durationOr(l.IdleSuspendAfter, DefaultIdleSuspendAfter)
+}
+
+// ArchiveAfter is how long a session stays suspended before archive.
+func (t *Templates) ArchiveAfter() time.Duration {
+	if t.Lifecycle == nil {
+		return DefaultArchiveAfter
+	}
+	return durationOr(t.Lifecycle.ArchiveAfter, DefaultArchiveAfter)
+}
+
+// BundleRetention is how long rescue bundles are kept.
+func (t *Templates) BundleRetention() time.Duration {
+	if t.Lifecycle == nil {
+		return DefaultBundleRetention
+	}
+	return durationOr(t.Lifecycle.BundleRetention, DefaultBundleRetention)
 }
 
 // Size is one size class.
@@ -220,8 +288,11 @@ func Parse(data map[string]string) (*Templates, error) {
 func (t *Templates) Revision() string { return t.revision }
 
 func (t *Templates) computeRevision() (string, error) {
+	// The timers reach no pod, so they are not part of the revision.
+	c := *t
+	c.Lifecycle = nil
 	// Marshal sorts map keys, so equal content gives equal bytes.
-	b, err := json.Marshal(t)
+	b, err := json.Marshal(&c)
 	if err != nil {
 		return "", fmt.Errorf("hash the templates: %w", err)
 	}
@@ -290,6 +361,16 @@ func (t *Templates) Validate() error {
 		}
 	}
 
+	if l := t.Lifecycle; l != nil {
+		for name, d := range map[string]*metav1.Duration{
+			"taskIdleSuspendAfter": l.TaskIdleSuspendAfter, "idleSuspendAfter": l.IdleSuspendAfter,
+			"archiveAfter": l.ArchiveAfter, "bundleRetention": l.BundleRetention,
+		} {
+			if d != nil && d.Duration <= 0 {
+				add("lifecycle.%s must be a positive duration such as 1h", name)
+			}
+		}
+	}
 	if t.Home.StorageClassName == "" {
 		add("home.storageClassName is empty")
 	}
