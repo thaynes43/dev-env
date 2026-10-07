@@ -56,7 +56,7 @@ type Options struct {
 	// Notifier tells Tom a grant waits; nil tells no one.
 	Notifier Notifier
 	// Installer installs a grant's token in the session's pod; nil installs
-	// nothing (plan 07 step 4 brings one).
+	// nothing. The production broker uses ExecInstaller (D-63).
 	Installer Installer
 
 	// skipNameValidation lets one test process start several brokers.

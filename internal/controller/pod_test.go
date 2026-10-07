@@ -138,6 +138,17 @@ func TestPodShape(t *testing.T) {
 	if e := envOf(c, "HOME"); e == nil || e.Value != "/home/dev" {
 		t.Errorf("HOME %+v", e)
 	}
+	if e := envOf(c, protocol.GrantsDirEnv); e == nil || e.Value != protocol.GrantsDir {
+		t.Error("the grants store does not point at the operator's reserved volume")
+	}
+	if e := envOf(c, protocol.KubeconfigEnv); e == nil || e.Value != protocol.GrantsDir+"/"+protocol.KubeconfigName {
+		t.Error("KUBECONFIG does not name the grant store")
+	}
+	for env, field := range map[string]string{protocol.PodUIDEnv: "metadata.uid", protocol.PodNamespaceEnv: "metadata.namespace"} {
+		if e := envOf(c, env); e == nil || e.ValueFrom == nil || e.ValueFrom.FieldRef == nil || e.ValueFrom.FieldRef.FieldPath != field {
+			t.Errorf("%s must come from the downward API", env)
+		}
+	}
 	if e := envOf(c, "DEV_ENV_CLAUDE_MODEL"); e == nil || e.Value != "claude-opus-5-5" {
 		t.Errorf("the templates' env is missing: %+v", e)
 	}
@@ -151,7 +162,8 @@ func TestPodShape(t *testing.T) {
 	for path, vol := range map[string]string{
 		"/home/dev": "home", "/home/dev/.shared": "shared", "/tmp": "tmp",
 		"/var/run/secrets/dev-env": "api-token", "/opt/dev-env/config/claude": "config-claude", "/creds": "gh-token",
-		"/etc/codex": "codex-requirements",
+		"/etc/codex":       "codex-requirements",
+		protocol.GrantsDir: "grants",
 	} {
 		if m, ok := mounts[path]; !ok || m.Name != vol {
 			t.Errorf("mount at %s: %+v, want volume %s", path, m, vol)
@@ -170,6 +182,9 @@ func TestPodShape(t *testing.T) {
 	if v := vols["tmp"]; v.EmptyDir == nil || v.EmptyDir.SizeLimit.String() != "8Gi" {
 		t.Errorf("tmp volume %+v", v)
 	}
+	if v := vols["grants"]; v.EmptyDir == nil || v.EmptyDir.Medium != corev1.StorageMediumMemory || v.EmptyDir.SizeLimit.String() != "16Mi" {
+		t.Error("the grant token volume must be bounded and memory-backed")
+	}
 	if v := vols["api-token"]; v.Projected == nil || v.Projected.Sources[0].ServiceAccountToken.Audience != "dev-env-operator" {
 		t.Errorf("api-token volume %+v", v)
 	}
@@ -180,7 +195,7 @@ func TestPodShape(t *testing.T) {
 		t.Errorf("scripts volume %+v", v)
 	}
 	for _, m := range c.VolumeMounts {
-		if m.Name != "home" && m.Name != "shared" && m.Name != "tmp" && !m.ReadOnly {
+		if m.Name != "home" && m.Name != "shared" && m.Name != "tmp" && m.Name != "grants" && !m.ReadOnly {
 			t.Errorf("template mount %s is writable", m.Name)
 		}
 	}

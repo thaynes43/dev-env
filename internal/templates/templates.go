@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
 const (
@@ -48,10 +49,11 @@ const (
 	TmpPath        = "/tmp"
 	APITokenDir    = "/var/run/secrets/dev-env"
 	ServiceAccount = "/var/run/secrets/kubernetes.io/serviceaccount"
+	GrantsPath     = protocol.GrantsDir
 )
 
 // Volume names the operator uses itself.
-var reservedVolumeNames = []string{"home", "shared", "tmp", "api-token"}
+var reservedVolumeNames = []string{"home", "shared", "tmp", "api-token", "grants"}
 
 // ReservedEnv are the environment variables the operator owns. The templates' env
 // may not name them. A Secret or ConfigMap in a profile's envFrom is not checked,
@@ -70,6 +72,10 @@ var ReservedEnv = []string{
 	// The operator API's address and the token agentd calls it with (D-41).
 	"AGENTD_API_URL",
 	"AGENTD_API_TOKEN_FILE",
+	"DEV_ENV_GRANTS_DIR",
+	"KUBECONFIG",
+	"DEV_ENV_POD_UID",
+	"POD_NAMESPACE",
 	// The static token goes to task and local pods only, never remote ones
 	// (DESIGN-001 6.1, 6.2), so only the operator places it: see Claude.
 	"CLAUDE_CODE_OAUTH_TOKEN",
@@ -501,7 +507,7 @@ func validateMounts(where string, mounts []Mount, names map[string]string) []err
 			errs = append(errs, fmt.Errorf("%s: path %q is not a clean absolute path", at, m.Path))
 			continue
 		}
-		for _, r := range []string{HomePath, SharedPath, TmpPath, APITokenDir, ServiceAccount} {
+		for _, r := range []string{HomePath, SharedPath, TmpPath, APITokenDir, ServiceAccount, GrantsPath} {
 			if overlaps(m.Path, r) {
 				errs = append(errs, fmt.Errorf("%s: path %s overlaps %s, which the operator mounts", at, m.Path, r))
 			}

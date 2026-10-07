@@ -1,10 +1,10 @@
 # 07: access broker
 
-**Status:** paused after step 3 (2026-10-07; one plan at a time, Tom's ruling)
+**Status:** resumed by the coordinator on 2026-10-07; steps 1 to 4 built, H2 still pending
 **Depends on:** 01 (the baseline guard and egress tiers are in place); Q-07 (Tom
 2026-10-06: credential grants, A)
-**Parallel with:** 02 in the plan; in time, one plan at a time since 2026-10-07 (README
-decision 40)
+**Parallel with:** 02; the coordinator resumed plan 07 on Codex after the pause in
+README decision 40. Keep shared-code changes small and rebase before each push.
 
 ## Goal
 
@@ -38,18 +38,13 @@ In this repo:
   pod that runs as another ServiceAccount); revoke at expiry, on release and when
   the session ends. An envtest suite runs it under exactly the RBAC haynes-ops gives
   it: it binds catalog roles only, and a revoked grant's token is refused (D-61).
-- [ ] 4. Installing a kube grant: the pod gets a memory-backed `grants` volume;
-  `agentd ctl grant-install` and `grant-remove` write the token there and keep a
-  kubeconfig whose `grant-<id>` contexts use it; the broker installs by exec and
-  installs again in a session's new pod. **WIP** on branch `agent/plan07-install`
-  (7d60dff, 2026-10-07, on top of step 3's branch; rebase it onto main): the grant
-  store in `internal/agentd/grants.go` and its contract in `protocol/grants.go`
-  compile; `cmd/agentd/grant.go` is written but not yet called from `ctl()`. Left:
-  wire the four `ctl grant-*` commands, the pod's memory-backed `grants` volume with
-  `KUBECONFIG` and `DEV_ENV_GRANTS_DIR`, the broker's exec installer (a pod with no
-  `grants` directory fails the grant after 3 attempts), the tests and the docs. The
-  kubeconfig names the API server by `KUBERNETES_SERVICE_HOST` and `_PORT`, because
-  session pods use `ndots:1` and cannot resolve `kubernetes.default.svc`.
+- [x] 4. Installing a kube grant (D-63): new session pods get a memory-backed
+  `grants` volume and `KUBECONFIG`; `agentd ctl grant-install|grant-remove|grant-list|grant-use`
+  keep private grant files and a kubeconfig with `default` and grant contexts. The
+  broker installs by exec with the token on stdin, repeats for a new pod UID and
+  fails/revokes after three attempts when an older pod lacks the grants directory.
+  A broker upgrade never restarts a session. The kubeconfig names the API server by
+  `KUBERNETES_SERVICE_HOST` and `_PORT`, because session pods use `ndots:1`.
 - [ ] 5. Egress grants: one CiliumNetworkPolicy per grant, selecting the session's
   pod; the operator's backstop deletes an expired grant's policy when the broker is
   down.

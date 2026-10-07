@@ -63,16 +63,20 @@ func runBroker(args []string) error {
 	if err != nil {
 		return err
 	}
+	installer, err := broker.NewExecInstaller(cfg)
+	if err != nil {
+		return err
+	}
 	mgr, _, err := broker.NewManager(cfg, broker.Options{
 		SessionNamespace: o.sessionNamespace,
 		PolicyNamespace:  o.policyNamespace,
 		LeaderElect:      o.leaderElect,
 		MetricsAddr:      o.metricsAddr,
 		ProbeAddr:        o.probeAddr,
-		// Pushover (plan 07 step 6) and the token install (step 4) plug in
-		// here; until then the broker logs that Tom is wanted and installs
-		// nothing.
-		Notifier: broker.LogNotifier{Log: log.WithName("notify")},
+		// Pushover plugs in at plan 07 step 6; until then the broker logs
+		// that Tom is wanted.
+		Notifier:  broker.LogNotifier{Log: log.WithName("notify")},
+		Installer: installer,
 	})
 	if err != nil {
 		return err
