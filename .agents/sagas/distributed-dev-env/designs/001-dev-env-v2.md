@@ -2473,19 +2473,22 @@ sequenceDiagram
 apiVersion: dev-env.haynesops.com/v1alpha1
 kind: AccessGrant
 metadata:
-  name: g-1006-1342-91
-  namespace: dev-env-system
+  name: grant-1006-134210-9f1c         # also its ServiceAccount, bindings and policy (D-54)
+  namespace: dev-agents                  # beside the sessions (D-54)
 spec:
-  requester: haynes-ops-1006-1310        # from the caller's token, never from the body
-  type: kube                             # kube | egress | credential | breakglass | lease
+  requester:                             # from the caller's token, never from the body
+    session: haynes-ops-1006-1310
+    repo: haynes-ops
+    profile: full
+  type: kube                             # kube | egress | credential | breakglass (lease: plan 09)
   kube:
     role: dev-env-grant-workloads        # from the grant role catalog
     namespaces: [home-automation]
   ttl: 1h
   reason: "Patch zigbee2mqtt Deployment image to test 2.12.1 before the PR"   # agent-written
 status:
-  phase: Active                          # Pending | Active | Denied | Expired | Released
-  approvedBy: tom (authentik)            # or policy/<name>
+  phase: Active                          # Pending | Active | Denied | Expired | Released | Failed
+  approvedBy: authentik/tom              # or policy/<name>
   approvedAt: "2026-10-06T13:43:10Z"
   expiresAt: "2026-10-06T14:43:10Z"
 ```
@@ -2562,6 +2565,46 @@ which serves agents all day, holds none of these privileges. Agents cannot write
 outage stops new grants and nothing else: kube grants still die with their tokens,
 and the operator deletes expired grants' network policies as a backstop. Upgrading the broker
 never touches sessions (5.1 applies to it).
+
+**D-54 (2026-10-07, plan 07 step 1). The `AccessGrant` and `GrantPolicy` schema as
+built.** `api/v1alpha1/accessgrant_types.go`; an envtest suite proves each rule.
+
+- **Where they live.** AccessGrants live in `dev-agents`, beside their sessions, not
+  in `dev-env-system` as the example above showed. The operator's cache and its Role
+  for its own CRD group are in `dev-agents` (6.11, as built), and so are the grant
+  ServiceAccounts and network policies. Agents still cannot write them: their RBAC
+  reads the group only, and the identity guard refuses any write in `dev-agents`.
+  GrantPolicies live in `dev-env-system`, applied by Flux from haynes-ops.
+- **One name for everything.** A grant is named `grant-<MMDD>-<HHMMSS>-<4 hex>`. The
+  same name is its ServiceAccount, its bindings and its network policy, so the audit
+  log's `system:serviceaccount:dev-agents:grant-...` is the grant itself, and the
+  identity guard's `grant-` prefix (D-19, as built) already matches it.
+- **Spec.** `requester` (session, repo, profile, agent, parent: the API copies them
+  from the calling session, never from the body), `type`, one of `kube`, `egress`
+  or `credential` to match the type (`kube` for `breakglass` too), `ttl`, `reason`
+  (shown as agent-written) and `release`. Spec is immutable after create, except
+  `release`, which only goes from false to true: it is how the API asks the broker
+  to end a grant early, because the API holds no status write.
+- **Status is the broker's.** Only the broker writes `accessgrants/status`: phase,
+  who approved or denied it and when, the TTL it was approved for (Approve for less
+  time), expiry, end, when Tom was notified, the ServiceAccount, and the pod it was
+  last installed in. The operator's API cannot approve a grant, because it cannot
+  write status.
+- **TTL.** From 10 minutes, the shortest token TokenRequest issues, to the type's
+  longest: 8 h for `kube` and `egress`, 4 h for `credential`, 1 h for `breakglass`.
+- **Egress.** A grant names DNS names (exact, or one leading `*.`), CIDRs, or
+  in-cluster pods by namespace and labels, and at least one port. In-cluster
+  destinations go by endpoint, never by name: a `.local` name is refused, because
+  Cilium enforces in-cluster traffic by the destination pod's identity, which an
+  endpoint rule names.
+- **Credentials.** `proxmox` and `hw-ssh` (Q-07).
+- **GrantPolicy.** It matches a request when the type is its type, the requester's
+  profile, repo and agent are in each list it sets (it sets profiles, repos or both),
+  the request's scope lies inside its scope, and the TTL is at most `maxTTL`. A
+  `description` says what Tom accepts by it. The schema refuses type `breakglass`,
+  roles `dev-env-grant-breakglass` and `dev-env-grant-secrets-read`, profile `ops`,
+  a dev-env namespace, and a namespace that is not a plain name.
+- **Not yet.** Type `lease` joins with plan 09.
 
 **D-26. Approvals: a Pushover link to an approval page behind Authentik.**
 
@@ -3615,4 +3658,5 @@ was settled on 2026-10-07: Tom made the repo public (B). ADR-001 was Accepted on
 | D-51 | The operator rescues by exec (`agentd ctl rescue --stop-agent`) before a suspend deletes a pod that ran, writes the verdict to `status.rescue` first, marks it superseded when the session asks for its pod again, and archives only a reaped session's volume after a verified rescue of its last pod | 4.4 |
 | D-52 | The minimal keeper: the haynes-dev-bot token minted v1's way from an App directory read at every mint, merged into `dev-env-gh-token` by one patch, every 40 minutes or two thirds of its life, retried from 10 s to 5 minutes with jitter; one replica behind a Lease (not a fence: plans 03 and 04 fence each refresh); Secrets `patch` only; ready while its token lives; nothing secret logged | 6.4 |
 | D-53 | The agent image is built from `images/agent/Dockerfile` (v1's plus tini, agentd, agent-run, baked Codex and kubectl-cnpg, pve and hw-ssh; no code-server), smoke-tested in CI on every PR that touches it, and published as `dev-env:2.x.y` only, from a `v2.x.y` release tag by `publish-agent.yml`, signed keyless; the paired haynes-ops Kyverno change trusts that workflow on `refs/tags/v2.*` | 3.6 |
+| D-54 | `AccessGrant` lives in `dev-agents`, `GrantPolicy` in `dev-env-system`; a grant's name is its ServiceAccount, bindings and policy; spec immutable but a one-way `release`; status the broker's only; TTL 10 m to the type's longest; in-cluster egress by endpoint, never by name | 6.12 |
 | D-55 | A volume that needs a rescue and has no pod gets a hold pod: the session's pod running `agentd hold` at size S, with no agent credentials; the operator rescues in it, keeps it and retries every 15 minutes while the rescue fails, and archives once it passes; a volume with nothing but an empty `lost+found` is a valid rescue (`VolumeEmpty`) | 4.4 |

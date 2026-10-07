@@ -1,6 +1,6 @@
 # 07: access broker
 
-**Status:** backlog
+**Status:** in progress (step 1, the CRDs, 2026-10-07)
 **Depends on:** 01 (the baseline guard and egress tiers are in place); Q-07 (Tom
 2026-10-06: credential grants, A)
 **Parallel with:** 02
@@ -11,6 +11,71 @@ Agents ask for more than the baseline and get it for a while: a namespace role, 
 LAN or in-cluster destination, a credential, or break-glass. Tom approves from his
 phone, or a standing policy in git approves at once. Everything is time-boxed and
 audited, and the headlamp path is no longer needed. DESIGN-001 6.12, D-23 to D-27.
+
+## Progress
+
+One PR per step, in this order. Tick a step in the PR that lands it. The code lands
+dark: no grant can be issued until haynes-ops deploys the broker (H2), and the broker
+needs the catalog and its RBAC first (H1). Plan 02 changes the same reconciler, API
+and agentd, so each step stays small and rebases on main before it merges.
+
+In this repo:
+
+- [x] 1. The `AccessGrant` and `GrantPolicy` CRDs, with an envtest suite that proves
+  each rule, and this list (D-54).
+- [ ] 2. `/v1/grants` in the operator's API: `POST`, `GET` (list and one), `DELETE`
+  (release, by setting `spec.release`). The requester is the calling session; at
+  most 3 pending per session; an identical request returns the pending or active
+  grant it matches; the wire types in `apiv1`. The operator's `dev-agents` Role
+  gains AccessGrant create, get, list, watch and patch, and no status.
+- [ ] 3. The broker mode, kube grants: `dev-env-operator broker` with its own Lease;
+  the policy match (break-glass and profile `ops` never match); the 30-minute
+  timeout; the ServiceAccount, the bindings (RoleBindings per namespace, a
+  ClusterRoleBinding for the cluster-wide roles) and a TokenRequest bound to the
+  session's pod; revoke at expiry, on release and when the session ends. An envtest
+  suite runs it under exactly the RBAC haynes-ops gives it: it binds catalog roles
+  only, and a revoked grant's token is refused.
+- [ ] 4. Installing a kube grant: the pod gets a memory-backed `grants` volume;
+  `agentd ctl grant-install` and `grant-remove` write the token there and keep a
+  kubeconfig whose `grant-<id>` contexts use it; the broker installs by exec and
+  installs again in a session's new pod.
+- [ ] 5. Egress grants: one CiliumNetworkPolicy per grant, selecting the session's
+  pod; the operator's backstop deletes an expired grant's policy when the broker is
+  down.
+- [ ] 6. The approval page and Pushover: the broker's console port behind Authentik
+  (Approve, Approve for less time, Deny, the request as a GrantPolicy snippet), a
+  fresh login for break-glass, one Pushover message per request (high priority for
+  break-glass).
+- [ ] 7. `agent-run grant request|list|show|use|release` and `agent-run breakglass`;
+  agentd's built-in `dev-env` MCP server with `request_access`, `grant_status` and
+  `release_access`.
+- [ ] 8. Credential grants (Q-07): first the check that the operator token can mint
+  an expiring token for its own user; then the keeper mints the Proxmox token or
+  signs an SSH certificate, installs it in the pod's `grants` volume, and removes it
+  at expiry.
+- [ ] 9. `POST /v1/fleet/nodes/{node}/evacuate` and `agent-run fleet evacuate`.
+- [ ] 10. The end of break-glass: the broker sends Tom the audit list of what the
+  grant created, from Loki. The forced refresh of both logins waits for plans 03 and
+  04, which give the keeper the logins.
+
+In haynes-ops:
+
+- [ ] H1. The CRD copies; the grant role catalog, with `-breakglass` generated from
+  API discovery and a CI check; the broker's ServiceAccount and RBAC; the operator's
+  AccessGrant rights.
+- [ ] H2. The broker Deployment and its network policies; the Pushover ExternalSecret
+  (v1's item `upgrade-gate`); the approval page's IngressRoute on an external host,
+  with its Authentik blueprint.
+- [ ] H3. The day-one GrantPolicy set, which approves nothing beyond v1 (DESIGN-001
+  6.12): at most credential grants for haynes-ops sessions, since every v1 session
+  holds both credentials today.
+- [ ] H4. The API server's audit lines for `grant-*` to Loki. Nothing ships the audit
+  log today (Talos writes it on each control-plane node).
+- [ ] H5. Credential grants: the keeper's Proxmox operator token and SSH CA as
+  ExternalSecrets in `dev-env-system`; the CA's public key trusted by the Proxmox
+  nodes and HaynesTower. v2's `dev-agents` never had the token or the key: profile
+  `full` already leaves them out.
+- [ ] The acceptance run below, and the break-glass half of S-12.
 
 ## In this repo
 

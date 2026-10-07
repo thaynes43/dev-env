@@ -35,6 +35,10 @@ func addKnownTypes(s *runtime.Scheme) error {
 	s.AddKnownTypes(GroupVersion,
 		&AgentSession{},
 		&AgentSessionList{},
+		&AccessGrant{},
+		&AccessGrantList{},
+		&GrantPolicy{},
+		&GrantPolicyList{},
 	)
 	metav1.AddToGroupVersion(s, GroupVersion)
 	return nil

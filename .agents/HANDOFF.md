@@ -20,6 +20,10 @@ the saga. To start building, follow
   `ceph-block`, so every size stays on it. Plan 01's Acceptance lists the evidence
   (pod UIDs, nodes, the bundle path). The v1 pod and `dev-env-ops` did not restart.
   **Next is plan 02** ([interactive sessions and lifecycle](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md)).
+- **Plan 07, the access broker, runs alongside plan 02** (from 2026-10-07).
+  [backlog/07](sagas/distributed-dev-env/backlog/07-access-broker.md) lists its steps,
+  one PR each. Step 1 added the `AccessGrant` and `GrantPolicy` CRDs (D-54); nothing
+  issues a grant until haynes-ops deploys the broker.
 - **What the run found and fixed (2026-10-07).** haynes-ops still had #24's CRD, so
   the API server pruned the heartbeat's task result and the rescue verdict from
   status; haynes-ops #3502 synced it before any reap. A PR here that changes

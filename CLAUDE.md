@@ -37,7 +37,7 @@ v2 proves itself and Tom approves the cutover. The saga:
 .github/workflows/       ci.yml (lint, test, build, check-generated, image builds; aggregate `CI - Success`), publish.yml (operator image from main, signed), publish-agent.yml (agent image from a v2.x.y tag, signed), release-please.yml, Claude review + @claude
 .github/renovate.json5   Renovate config (gomod, Actions SHA pins, Dockerfile digests, ARG and Makefile pins)
 release-please-config.json, .release-please-manifest.json   one repo version, `go` type, first release 2.0.0
-api/v1alpha1/            CRD types, group dev-env.haynesops.com (AgentSession); depends on apimachinery only.
+api/v1alpha1/            CRD types, group dev-env.haynesops.com (AgentSession; AccessGrant and GrantPolicy, D-54); depends on apimachinery only.
                          Its envtest suite proves the schema's rules (D-39) on a real API server
 cmd/dev-env-operator/    the operator; the broker will be its second mode (DESIGN-001 3.1, 6.12)
 cmd/dev-env-keeper/      the keeper, its own binary in the operator image (D-38); main only, the work is internal/keeper
