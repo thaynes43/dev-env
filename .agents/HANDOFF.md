@@ -82,8 +82,9 @@ the saga. To start building, follow
   read and reap; `-o json` prints the API's own document, and the exit codes are in
   D-50. A session pod uses its projected token; any other pod, such as the v1 pod,
   mints a token for its own ServiceAccount (the v1 pod can since 8.4, for audience
-  `dev-env-operator` only), and reads the API's CA from ConfigMap
-  `dev-agents/dev-env-api-ca` into the file `DEV_ENV_API_CA_FILE` names (D-50); elsewhere, pass
+  `dev-env-operator` only). It trusts the API's CA from the file `DEV_ENV_API_CA_FILE`
+  names; in the v1 pod, write that file first from ConfigMap `dev-agents/dev-env-api-ca`
+  with `kubectl get configmap` (D-50; agent-run itself reads no ConfigMap); elsewhere, pass
   `--api-url` and `--token-file` until plan 02. v1's own `agent-run` is unchanged and
   still starts every session today.
 - **The v1 bounce landed on 2026-10-06.** haynes-ops #3381, #3342, #3336, #3294 and
