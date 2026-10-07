@@ -1,9 +1,12 @@
 // Package keeper is dev-env-keeper's work: it keeps short-lived credentials
 // fresh in Secrets that session pods mount (DESIGN-001 3.1, 6.4, D-13). It is the
 // only holder of the GitHub App keys and, from plan 03 on, of the rotating logins
-// (D-11, D-12). One replica runs, and leader election on a Lease makes sure that
-// even a second one would wait: a rotating refresh token must have exactly one
-// owner (CLAUDE.md, hard rules).
+// (D-11, D-12). One replica runs, and leader election on a Lease keeps a second
+// one waiting: a rotating refresh token must have exactly one owner (CLAUDE.md,
+// hard rules). The Lease does not fence writes, though: a keeper paused past its
+// renew deadline can finish a refresh in flight after the next leader started.
+// That is harmless for the gh token; plans 03 and 04 fence each login refresh by
+// re-reading the Lease right before the call (D-52).
 //
 // Plan 01 builds the first credential, the haynes-dev-bot installation token,
 // minted every 40 minutes into dev-agents/dev-env-gh-token (D-52). Each
@@ -99,6 +102,8 @@ type jobState struct {
 	failures int
 	// next is when the next attempt is due.
 	next time.Time
+	// attempts counts every attempt, set with next once the attempt is over.
+	attempts int
 }
 
 // NeedLeaderElection is true: only the leader refreshes.
@@ -161,7 +166,9 @@ func (k *Keeper) run(ctx context.Context, job Job) {
 			return
 		}
 		k.mu.Lock()
-		k.state[job.Name].next = k.clock().Now().Add(wait)
+		st := k.state[job.Name]
+		st.next = k.clock().Now().Add(wait)
+		st.attempts++
 		k.mu.Unlock()
 		select {
 		case <-ctx.Done():

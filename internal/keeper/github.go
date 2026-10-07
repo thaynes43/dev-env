@@ -116,6 +116,11 @@ func (e *GitHubError) Error() string {
 
 // Mint signs a JWT and exchanges it for an installation token.
 func (a *GitHubApp) Mint(ctx context.Context) (InstallationToken, error) {
+	// GitHub reads a missing or null permission set as "every permission of the
+	// App", which for haynes-dev-bot includes secrets: write.
+	if len(a.Permissions) == 0 {
+		return InstallationToken{}, errors.New("no permissions to down-scope the token to: an unscoped token would carry every permission of the App")
+	}
 	creds, err := a.load()
 	if err != nil {
 		return InstallationToken{}, err

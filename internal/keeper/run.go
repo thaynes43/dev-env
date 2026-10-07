@@ -18,9 +18,9 @@ import (
 )
 
 // LeaderElectionID is the keeper's Lease, in its own namespace. The keeper runs
-// one replica with the Recreate strategy; the Lease is what keeps a second
-// process (a pod on a partitioned node that has not stopped yet, a stray scale)
-// from refreshing too. A rotating refresh token must have one owner.
+// one replica with the Recreate strategy; the Lease keeps a second process (a pod
+// on a partitioned node that has not stopped yet, a stray scale) from starting to
+// refresh too. It is not a fence (see the package doc, D-52).
 const LeaderElectionID = "dev-env-keeper.dev-env.haynesops.com"
 
 // Options configure Run.

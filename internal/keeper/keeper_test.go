@@ -109,10 +109,20 @@ func (h *harness) nextWait() time.Duration {
 	return h.k.state["gh-token"].next.Sub(h.clock.Now())
 }
 
-// step moves the clock by d and waits until the loop has woken up.
+// step moves the clock by d and waits until the attempt it wakes is over. It
+// waits on the attempt count, which only goes up: the loop can finish the
+// attempt and sleep again before a check of HasWaiters would see it awake.
 func (h *harness) step(d time.Duration) {
+	h.t.Helper()
+	before := h.attempts()
 	h.clock.Step(d)
-	eventually(h.t, "the keeper to wake", func() bool { return !h.clock.HasWaiters() })
+	eventually(h.t, "the keeper to finish the attempt the step woke", func() bool { return h.attempts() > before })
+}
+
+func (h *harness) attempts() int {
+	h.k.mu.Lock()
+	defer h.k.mu.Unlock()
+	return h.k.state["gh-token"].attempts
 }
 
 func (h *harness) secret() *corev1.Secret {

@@ -25,9 +25,9 @@ const (
 // fields of a few well-known managers (kubectl's); this one is not among them.
 const FieldOwner = "dev-env-keeper"
 
-// SecretWriter writes credentials into Secrets that GitOps created empty
-// (DESIGN-001 6.11: the keeper's Role has get, update and patch on them by name,
-// and no create). It never reads a Secret.
+// SecretWriter writes credentials into Secrets that GitOps created empty. The
+// keeper's Role has patch on them by name and nothing else: no create, get,
+// list or watch (D-52). It never reads a Secret.
 type SecretWriter struct {
 	// Client must not be cache-backed for Secrets: the keeper's Role grants no
 	// list or watch, so an informer could never sync. The keeper only patches.

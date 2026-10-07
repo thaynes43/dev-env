@@ -2,8 +2,8 @@ package keeper
 
 // The envtest suite: Run, wired as cmd/dev-env-keeper wires it, against a real
 // kube-apiserver, as the keeper's ServiceAccount with exactly the Roles that
-// haynes-ops gives it (plan 01, "In haynes-ops"; DESIGN-001 6.11). It proves
-// that those Roles are enough (patch on the Secret by name, no create, no list),
+// haynes-ops gives it (plan 01, "In haynes-ops"; D-52). It shows that those
+// Roles are enough (patch on the Secret by name; no create, get, list or watch),
 // that the Lease admits one keeper at a time, and that a keeper that stops hands
 // the Lease straight to the next.
 //
@@ -61,7 +61,7 @@ const (
 	keeperSA = "dev-env-keeper"
 )
 
-// KeeperSecretNames are the four Secrets the keeper's Role names (DESIGN-001
+// keeperSecretNames are the four Secrets the keeper's Role names (DESIGN-001
 // 6.11). Plan 01 writes the first.
 var keeperSecretNames = []string{"dev-env-gh-token", "dev-env-ops-gh-token", "dev-env-claude-live", "dev-env-codex-live"}
 
@@ -73,7 +73,7 @@ func keeperRBAC() []client.Object {
 			ObjectMeta: metav1.ObjectMeta{Namespace: ghSecret.Namespace, Name: keeperSA},
 			Rules: []rbacv1.PolicyRule{{
 				APIGroups: []string{""}, Resources: []string{"secrets"},
-				Verbs: []string{"get", "update", "patch"}, ResourceNames: keeperSecretNames,
+				Verbs: []string{"patch"}, ResourceNames: keeperSecretNames,
 			}},
 		},
 		&rbacv1.RoleBinding{

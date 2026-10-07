@@ -124,8 +124,9 @@ step. Tick a step in the PR that lands it.
     never touches what the keeper writes (`data.gh_token` and the
     `dev-env.haynesops.com/expires-at` and `written-at` annotations).
   - RBAC for ServiceAccount `dev-env-system/dev-env-keeper`: a Role in `dev-agents`
-    with `secrets` get, update and patch on `resourceNames` `dev-env-gh-token`,
-    `dev-env-ops-gh-token`, `dev-env-claude-live` and `dev-env-codex-live`; a Role in
+    with `secrets` patch only on `resourceNames` `dev-env-gh-token`,
+    `dev-env-ops-gh-token`, `dev-env-claude-live` and `dev-env-codex-live` (6.11's
+    get and update wait for plan 03, D-52); a Role in
     `dev-env-system` with `coordination.k8s.io` `leases` get, create and update, and
     core `events` create and patch. No Secret `create`, list or watch anywhere; no
     ClusterRole until plan 03 (`tokenreviews` create, for its 8443 endpoint). The

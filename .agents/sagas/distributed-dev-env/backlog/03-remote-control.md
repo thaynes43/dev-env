@@ -22,6 +22,13 @@ post-ready does. DESIGN-001 3.8, 6.2, 6.7; R-02.
   writes `dev-env-claude-live` (access token, expiry, scopes, subscription type,
   rate-limit tier; no refresh token) the moment the refresh returns. Each refresh
   revokes the previous access token in every pod at once (S-1).
+  - **Fence each refresh (D-52).** The keeper's Lease alone does not fence writes: a
+    keeper paused past its renew deadline can finish a refresh after the next
+    leader has started, and two refreshes of one token revoke the family. Right
+    before the refresh call, the keeper re-reads its Lease and refreshes only if it
+    still holds it with more than the call's timeout left. Decide here whether the
+    Max login's writes need 6.11's `get` and `update` on the Secrets, which plan 01
+    left out; drop them from 6.11 if not.
   - agentd watches that Secret and merges those keys into the pod's own writable
     `~/.claude/.credentials.json` (0600, atomic rename, keeping the CLI's `mcpOAuth`)
     as soon as it changes; the Secret is never mounted as the file. Its merge latency

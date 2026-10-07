@@ -47,6 +47,19 @@ func TestMintSignsAJWTAndDownScopes(t *testing.T) {
 	}
 }
 
+func TestMintRefusesAnUnscopedToken(t *testing.T) {
+	k := keys(t)
+	gh := newFakeGitHub(t, &k[0].PublicKey, time.Now)
+	app := gh.app(writeAppDir(t, k[0]))
+	app.Permissions = nil
+	if _, err := app.Mint(context.Background()); err == nil || !strings.Contains(err.Error(), "unscoped") {
+		t.Fatalf("got %v, want a refusal", err)
+	}
+	if _, requests, _, _, _ := gh.snapshot(); requests != 0 {
+		t.Errorf("%d requests reached GitHub", requests)
+	}
+}
+
 func TestMintIssuerIsTheAppIDWithoutAClientID(t *testing.T) {
 	k := keys(t)
 	gh := newFakeGitHub(t, &k[0].PublicKey, time.Now)

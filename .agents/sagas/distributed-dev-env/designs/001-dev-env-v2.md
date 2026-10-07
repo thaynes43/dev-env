@@ -1680,13 +1680,19 @@ haynes-ops gives it.**
   Its state is in memory only. A new keeper mints at once and never trusts what an
   earlier one wrote; a mint costs nothing, and old tokens stay valid until they
   expire.
-- **One owner.** One replica with `Recreate`, and leader election on the Lease
-  `dev-env-keeper.dev-env.haynesops.com` in `dev-env-system` (15 s, renewed within
-  10 s). A second keeper, such as a pod on a partitioned node that has not stopped,
-  waits. A keeper that loses the Lease exits. One that stops releases it, so the
-  next takes over at once. For the gh token two owners would be harmless; for the
-  refresh token of plan 03 they are not, so the guarantee comes first. An envtest
-  suite proves it as the keeper's ServiceAccount, with exactly the Roles below.
+- **One owner, almost always.** One replica with `Recreate`, and leader election on
+  the Lease `dev-env-keeper.dev-env.haynesops.com` in `dev-env-system` (15 s,
+  renewed within 10 s). A second keeper, such as a pod on a partitioned node that
+  has not stopped, waits. A keeper that loses the Lease exits. One that stops
+  releases it, so the next takes over at once. An envtest suite shows this as the
+  keeper's ServiceAccount, with exactly the Roles below. Leader election does not
+  fence writes, so this makes a second owner unlikely, not impossible: a keeper
+  paused past its renew deadline with a refresh in flight can complete it after the
+  next leader has started. The window is the 5 s between the renew deadline and the
+  Lease's end, longer with clock skew. For the gh token that is harmless, since two
+  mints are two valid tokens. For a rotating refresh token it is not, so plans 03
+  and 04 fence each refresh: right before the call, the keeper re-reads its Lease
+  and refreshes only if it still holds it with more than the call's timeout left.
 - **Health.** `/healthz` and `/readyz` on 8081. Ready means every credential holds
   a value this process wrote and none has expired. A keeper that does not lead, or
   whose mints have failed for a token's whole life, is not ready, so the cluster's
@@ -1697,16 +1703,19 @@ haynes-ops gives it.**
   marshals and logs as `[redacted]`. A refusal from GitHub logs GitHub's `message`
   only, never the body. A write error is scrubbed of the token, raw and in base64.
   The tests search every log for the token, the JWT and each line of the key.
-- **RBAC.** 6.11's row, plus Events: a Role in `dev-agents` with Secrets get, update
-  and patch on the four names; a Role in `dev-env-system` with Leases get, create
-  and update, and Events create and patch (leader election records one when it
-  takes the Lease). No `create` on Secrets, no list, no watch. Plan 01's "In
-  haynes-ops" list carries this, the ExternalSecret and the Deployment for 8.8 and
-  8.9.
+- **RBAC, the least plan 01 needs.** A Role in `dev-agents` with Secrets `patch` only,
+  on the four names; a Role in `dev-env-system` with Leases get, create and update,
+  and Events create and patch (leader election records one when it takes the
+  Lease). No `create`, get, list or watch on Secrets. 6.11's row also names `get`
+  and `update` for the Secrets: plan 03 adds them if its writes of the Max login
+  need a read or a conditional update, and otherwise drops them from the row. Plan
+  01's "In haynes-ops" list carries this, the ExternalSecret and the Deployment for
+  8.8 and 8.9.
 
 Rationale: the protocol, the permission set and the file are v1's, so nothing in a
-session changes, and the PEM stays in one pod. The Lease turns "one replica" from a
-convention into a guarantee before the keeper holds a refresh token. Readiness
+session changes, and the PEM stays in one pod. The Lease backs "one replica" with
+more than a convention before the keeper holds a refresh token, and the fence that
+plans 03 and 04 add closes what is left. Readiness
 tied to the token, not to the process, makes a broken key or a GitHub outage show
 up where the cluster already alerts.
 
@@ -2097,7 +2106,7 @@ anything more is a grant; nothing in the three dev-env namespaces.**
 | `dev-agents/grant-<id>` (one per kube grant) | Exactly the granted role, in the granted namespaces, until the grant expires, under `dev-env-identity-guard`. | Created and deleted by the broker. Its token lives in the session pod's tmpfs. Never valid in the three dev-env namespaces. |
 | `dev-env-system/dev-env-operator` | Roles in `dev-agents` and `dev-tools`: pods (create, delete, get, list, watch, patch), `pods/exec` create, `pods/log` get, `pods/eviction` create, PVCs and Services (create, delete, get, list, watch), namespaced CiliumNetworkPolicies in `dev-tools` (tool ingress and declared egress) and delete on namespaced CiliumNetworkPolicies in `dev-agents` (the expiry backstop; only grants live there), events. No write on `CiliumClusterwideNetworkPolicy`. ClusterRole: its own CRD group (with `agentsessions/finalizers` update), `tokenreviews` create. Leases in its own namespace, and `get`, `list`, `watch` on the ConfigMap `dev-env-templates` there by `resourceNames` (D-44). | No cluster-wide pod or PVC rights, no Secrets, no `bind`. |
 | `dev-env-system/dev-env-broker` | RoleBindings and ClusterRoleBindings (create, delete); `bind` only on the grant role catalog by `resourceNames`; ServiceAccounts and `serviceaccounts/token` in `dev-agents`; CiliumNetworkPolicies in `dev-agents`; `pods/exec` in `dev-agents` (installs grant tokens); status of `AccessGrant`; read on the `dev-env.haynesops.com` group for the console's session list. No write on `CiliumClusterwideNetworkPolicy`, admission policies or Secrets. | The most privileged v2 identity: it can hand out the break-glass role. It accepts approvals only from Tom's Authentik identity and runs where agents cannot write or exec. |
-| `dev-env-system/dev-env-keeper` | Role in `dev-agents`: Secrets get, update and patch on `resourceNames` `dev-env-gh-token`, `dev-env-ops-gh-token`, `dev-env-claude-live`, `dev-env-codex-live` only; for credential grants (Q-07), also `pods/exec` in `dev-agents` and read on `AccessGrant`. ClusterRole: `tokenreviews` create. Leases (get, create, update) and Events (create, patch) in its own namespace (D-52). | The four Secrets are created empty by GitOps, so no `create` is needed. |
+| `dev-env-system/dev-env-keeper` | Role in `dev-agents`: Secrets get, update and patch on `resourceNames` `dev-env-gh-token`, `dev-env-ops-gh-token`, `dev-env-claude-live`, `dev-env-codex-live` only; for credential grants (Q-07), also `pods/exec` in `dev-agents` and read on `AccessGrant`. ClusterRole: `tokenreviews` create. Leases (get, create, update) and Events (create, patch) in its own namespace (D-52). Plan 01 grants the Secrets `patch` only (D-52). | The four Secrets are created empty by GitOps, so no `create` is needed. |
 | `dev-env-system/dev-env-gpu-guard` (DaemonSet on GPU nodes) | Role in `dev-tools`: pods get, list; `pods/eviction` create. Read on the budgeter's Lease in `dev-env-system`. | Evicts agent GPU pods only; works when the operator is down (8.2). |
 | `upgrade-agent/<caller>` (alert-responder, upgrade-shepherd, triage, health-gate, the curation CronJob) | No new Kubernetes rights. Their projected token for the `dev-env-operator` audience lets them call the API, within their `CallerPolicy` (3.7). | They no longer need write on the `upgrade-work-orders` ConfigMap once plan 10 moves them. |
 | `dev-agents/dev-env-workbench` | Role in `dev-agents`: pods get, list; `pods/exec` create. | Tom's IDE; runs no agents by default. |
@@ -3294,4 +3303,4 @@ step it names.
 | D-48 | `agentd ctl rescue` writes one bundle per clone of its unpushed refs, thin against `origin/HEAD`, to `rescue/<session>/<stamp>/` on the shared volume with `manifest.json` last; it checks each bundle there before it reports `ok`; `--stop-agent` stops the CLI first | 3.6 |
 | D-49 | The session config: four ConfigMaps in `dev-agents` built from v2 copies of v1's files, with a new `CLAUDE.md` for a session pod; `requirements.toml` keeps v1's floor, in its own ConfigMap at `/etc/codex` in every pod; `bashrc.sh` exports no `GH_TOKEN` | 3.6 |
 | D-50 | `agent-run` v2 of plan 01: `-p`, `list`, `show`, `reap` and `fleet`; v1's defaults and checks before a create, with the API's effort table moved to `apiv1`; a new idempotency key per run, kept across retries; it waits for the pod and prints the scheduler's reason; the API found from flags, `DEV_ENV_API_*`, the session pod's settings, or a token minted for the pod's own ServiceAccount; exit codes 0 to 5 | 3.5 |
-| D-52 | The minimal keeper: the haynes-dev-bot token minted v1's way from an App directory read at every mint, merged into `dev-env-gh-token` by one patch, every 40 minutes or two thirds of its life, retried from 10 s to 5 minutes with jitter; one replica behind a Lease; ready while its token lives; nothing secret logged | 6.4 |
+| D-52 | The minimal keeper: the haynes-dev-bot token minted v1's way from an App directory read at every mint, merged into `dev-env-gh-token` by one patch, every 40 minutes or two thirds of its life, retried from 10 s to 5 minutes with jitter; one replica behind a Lease (not a fence: plans 03 and 04 fence each refresh); Secrets `patch` only; ready while its token lives; nothing secret logged | 6.4 |
