@@ -214,6 +214,13 @@ in, plus `pve` and `hw-ssh`, and no code-server. Build it in CI only; it is abou
 1 GB, so never build it in the pod. Port v1's smoke test. Publish `2.x.y` tags only,
 never `latest` or v1's `0.6.x`.
 
+*As built (PR held, not merged until Tom grants the GHCR package access):*
+`images/agent/Dockerfile`, `images/agent/smoke-test.sh`, the `image-agent` job in
+`ci.yml` (build, load, smoke test, no push) and `publish-agent.yml`. The image publishes
+from a `v2.x.y` release tag, not from main, so the Kyverno subject must widen in a
+paired haynes-ops PR (the first bullet below). D-53 records the choice and what the first
+`2.0.0` needs.
+
 B5 also has a haynes-ops follow-up. `dev-env-templates` (item 8.7, haynes-ops #3471)
 carries `image: ghcr.io/thaynes43/dev-env:2.0.0@sha256:000...0`, a placeholder with an
 all-zero digest that no node can pull, so no session can start from it. When B5

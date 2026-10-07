@@ -2,7 +2,7 @@ name: Publish
 
 # Publishes the operator image, ghcr.io/thaynes43/dev-env-operator, from main and
 # signs it. (B3, .agents/sagas/distributed-dev-env/KICKOFF.md section 3.) The agent
-# image joins this workflow in B5.
+# image has its own workflow, publish-agent.yml, which runs from a release tag (B5, D-53).
 #
 # Tags: only sha-<short>. Never `latest`, and an existing tag is never pushed again.
 # A run for a commit whose tag already exists (a manual re-run) skips the build, so
