@@ -32,6 +32,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/activity"
 	"github.com/thaynes43/dev-env/internal/apiserver"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/grantexpiry"
@@ -198,6 +199,11 @@ func run(args []string) error {
 	// The sessions' metrics, read from the cache at scrape time on every
 	// replica: the RescueFailed page's source (D-57).
 	ctrlmetrics.Registry.MustRegister(&controller.SessionCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace})
+	// Expired declare-activity declarations go within a minute (D-17, D-66).
+	if err := mgr.Add(&activity.Reaper{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Namespace: o.templatesNamespace,
+		Log: ctrl.Log.WithName("activities")}); err != nil {
+		return err
+	}
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		return err
 	}
@@ -219,6 +225,9 @@ func run(args []string) error {
 				Clients:               o.clientSAs,
 				SessionNamespace:      o.sessionNamespace,
 				SessionServiceAccount: controller.ServiceAccountName,
+				// declare-activity's declarations live beside the operator
+				// (D-66).
+				ActivityNamespace: o.templatesNamespace,
 			},
 			Exec:             podExec,
 			Templates:        apiserver.TemplatesFrom(mgr.GetClient(), templatesKey),

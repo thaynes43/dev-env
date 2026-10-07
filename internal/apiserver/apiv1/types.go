@@ -59,6 +59,43 @@ type MessageResult struct {
 	Delivered bool   `json:"delivered"`
 }
 
+// ActivitiesPath is declare-activity's route (DESIGN-001 6.9, D-17, D-66):
+// GET lists the live declarations, POST declares one.
+const ActivitiesPath = "/v1/activities"
+
+// ActivityPath is one declaration's route: DELETE ends it.
+func ActivityPath(name string) string { return ActivitiesPath + "/" + name }
+
+// DeclareActivityRequest is the body of POST /v1/activities (D-17): what is
+// being done, what it can disturb, and for how long. The API takes the
+// declarer from the caller's token.
+type DeclareActivityRequest struct {
+	// Description says what is being done, at most 512 bytes.
+	Description string `json:"description"`
+	// Scope names what the work can disturb: namespaces, apps, nodes, or
+	// "cluster" (at most 2h). At least one, at most 32, each at most 63 bytes.
+	Scope []string `json:"scope"`
+	// TTL is a Go duration; empty is 45m. At most 8h, and 2h for cluster.
+	TTL string `json:"ttl,omitempty"`
+}
+
+// Activity is one live declaration.
+type Activity struct {
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Scope       []string  `json:"scope"`
+	DeclaredBy  string    `json:"declaredBy"`
+	Session     string    `json:"session,omitempty"`
+	DeclaredAt  time.Time `json:"declaredAt"`
+	ExpiresAt   time.Time `json:"expiresAt"`
+}
+
+// ActivityList is GET /v1/activities: the declarations that have not
+// expired, newest first.
+type ActivityList struct {
+	Activities []Activity `json:"activities"`
+}
+
 // TokenAudience is the audience of every token the API accepts (D-05). A token
 // for the API server's own audience is refused.
 const TokenAudience = "dev-env-operator"

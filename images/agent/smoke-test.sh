@@ -52,6 +52,8 @@ run --entrypoint /bin/bash "${image}" -euc '
   tini --version
   agentd version
   agent-run version
+  # declare-activity is agent-run by another name (D-66); its help needs no API.
+  declare-activity help | grep -q "Usage: agent-run declare-activity"
   tmux -V
   git --version
   gh --version

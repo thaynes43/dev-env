@@ -17,6 +17,7 @@ Usage:
   agent-run reap <name>...                        rescue, stop and archive sessions
   agent-run suspend <name>...                     rescue and stop sessions, keeping their volumes
   agent-run resume <name>                         start a suspended session again, conversation intact
+  declare-activity start "<what>" --scope <a,b>   declare dev work, so it is not taken for a fault
   agent-run attach <name>                         attach to a session's TUI (Tom only)
   agent-run detach <name>                         detach every client from it (Tom only)
   agent-run fleet                                 show what runs and waits, by node and revision
@@ -135,6 +136,22 @@ takes no messages; it reports through its log and its PR. Any session or person
 may message any session. agent-run sends a message once and never retries it, so
 it is never delivered twice.
 `,
+	"declare-activity": `Usage: agent-run declare-activity start "<what you are doing>" --scope <a,b,c> [--ttl 45m]
+       agent-run declare-activity end <id>
+       agent-run declare-activity list
+       (or the same as declare-activity, which the agent image links to agent-run)
+
+Tells the remediation agent "this is me, not a fault" (D-17). Before work in the
+cluster that can trip a critical alert (restarting a stateful app, suspending
+Flux, draining a node, deleting pods, rolling storage), declare it; end it as soon
+as you finish. A declaration is evidence the remediation lane weighs, never a
+mute: a real incident is still handled.
+
+--scope is required: the namespaces, apps or nodes your work can disturb, comma
+separated, or cluster for everything. --ttl defaults to 45m and is capped at 8h,
+and at 2h for cluster. The operator deletes a declaration when it expires. The
+declarer is recorded from your token, so the remediation lane can message you.
+`,
 	"attach": `Usage: agent-run attach <name>
 
 Attaches your terminal to the session's TUI: kubectl exec -it into the session's
@@ -193,6 +210,6 @@ Prints the version, the commit, the Go version and the platform.
 	"help": `Usage: agent-run help [<command>]
 
 Prints help for agent-run, or for one command: run, list, show, log, msg, reap,
-suspend, resume, attach, detach, fleet, version.
+suspend, resume, declare-activity, attach, detach, fleet, version.
 `,
 }

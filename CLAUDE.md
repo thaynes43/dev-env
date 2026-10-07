@@ -37,7 +37,7 @@ v2 proves itself and Tom approves the cutover. The saga:
 .github/workflows/       ci.yml (lint, test, build, check-generated, image builds; aggregate `CI - Success`), publish.yml (operator image from main, signed), publish-agent.yml (agent image from a v2.x.y tag, signed), release-please.yml, Claude review + @claude
 .github/renovate.json5   Renovate config (gomod, Actions SHA pins, Dockerfile digests, ARG and Makefile pins)
 release-please-config.json, .release-please-manifest.json   one repo version, `go` type, first release 2.0.0
-api/v1alpha1/            CRD types, group dev-env.haynesops.com (AgentSession; AccessGrant and GrantPolicy, D-54); depends on apimachinery only.
+api/v1alpha1/            CRD types, group dev-env.haynesops.com (AgentSession; AccessGrant and GrantPolicy, D-54; Activity, D-66); depends on apimachinery only.
                          Its envtest suite proves the schema's rules (D-39) on a real API server
 cmd/dev-env-operator/    the operator, and the access broker as its second mode, `dev-env-operator broker` (broker.go, D-61)
 cmd/dev-env-keeper/      the keeper, its own binary in the operator image (D-38); main only, the work is internal/keeper
@@ -54,11 +54,12 @@ internal/controller/     the AgentSession reconciler: each session's pod and vol
                          5.1 (no owner reference to the operator; no pod or volume write or delete outside the guards;
                          delete and suspend wait for rescue); a fake rescuer stands in for exec
 internal/apiserver/      the operator's /v1 API (D-46): HTTPS runnable, TokenReview auth, caller classes, sessions,
-                         heartbeat, fleet and grants (D-56) handlers. Unit tests use the fake client; its envtest suite mints real
+                         heartbeat, suspend and resume (D-60), fleet, grants (D-56) and activities (D-66) handlers. Unit tests use the fake client; its envtest suite mints real
                          tokens and serves through a manager wired as the operator's
 internal/podexec/        the one pods/exec client (WebSocket, SPDY fallback): the rescue, and the API's log and message routes (D-65)
 internal/apiserver/apiv1/  the API's wire types, error codes and Claude effort table, standard library only, for agent-run
-internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65): -p, --local, list, show, log, msg, reap, suspend, resume, attach, detach, fleet; finds the API and a token in a session
+internal/activity/       the reaper of expired declare-activity declarations (D-66), a leader-only runnable in the operator
+internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66): -p, --local, list, show, log, msg, reap, suspend, resume, declare-activity, attach, detach, fleet; finds the API and a token in a session
                          pod, in another pod (a minted token) or from flags; imports the standard library, apiv1 and
                          agentd's protocol only (`make build` checks); tests run against an httptest TLS server
 internal/keeper/         the keeper (D-52): mints the haynes-dev-bot token into dev-agents/dev-env-gh-token every 40 minutes

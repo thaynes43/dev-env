@@ -108,7 +108,7 @@ the cluster.
   /v1/sessions/{id}/log?tail=N` and `agent-run log`.
 - [x] 9. **Messages** (D-16 tier 3, D-65, this PR). `POST /v1/sessions/{id}/messages`, `agentd ctl
   deliver` (a paste into the Claude TUI; `codex queue` for Codex) and `agent-run msg`.
-- [ ] 10. **Activities** (D-17). The `Activity` CRD in `dev-env-system`,
+- [x] 10. **Activities** (D-17, D-66, this PR; the haynes-ops half follows). The `Activity` CRD in `dev-env-system`,
   `/v1/activities` with v1's limits enforced by the API, expiry, and `declare-activity`
   as a client of it. In haynes-ops: the CRD, the operator's rights, read on the group
   for v1's OPERATOR tier and `dev-env-ops`, and `dev-activity-check.sh` reading both
