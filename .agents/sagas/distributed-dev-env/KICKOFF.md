@@ -175,11 +175,12 @@ Makefile               generate, lint, test, build; test parallelism capped
   - gomod, GitHub Actions (`helpers:pinGitHubActionDigests`, SHA plus version
     comment) and Dockerfile digests (`docker:pinDigests`);
   - haynes-ops' nightly schedule (after 10pm, before 6am, America/New_York);
-  - **auto-merge is off.** Two rules cover it (minor and patch for Go modules
-    and for Actions; Actions pin and digest refreshes count with them) and set `automerge: false` until the Protect Main ruleset requires
-    `CI - Success`. With no required check, GitHub auto-merge has nothing to wait
-    for, so it would merge before CI reports. Turning it on is a flip of both rules in the
-    PR that records laptop handoff part 3 as done (HANDOFF checklist).
+  - **auto-merge was off at B4, and is on since 2026-10-07.** Two rules cover it
+    (minor and patch for Go modules and for Actions; Actions pin and digest refreshes
+    count with them). B4 set `automerge: false` because, with no required check,
+    GitHub auto-merge has nothing to wait for and would merge before CI reports. The
+    Protect Main ruleset now requires `CI - Success` (laptop handoff part 3), and the
+    PR that recorded it flipped both rules to `true`.
 - **release-please:** one version for the repo; both images are tagged with it
   (DESIGN-001 section 10). Manifest mode, `go` release type, and
   `initial-version: 2.0.0`: section 10 puts the agent image on the `2.x` line and B5

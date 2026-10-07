@@ -116,8 +116,9 @@ are sane and `CI - Success` is green on its head (Tom, 2026-10-07: "Merge, and l
 agents merge releases"). Merging it tags the release, so watch `publish-agent.yml` on
 the new tag and confirm its `cosign verify` step passed. If no run appears (a tag made
 with the `GITHUB_TOKEN` fallback starts none), start one with
-`gh workflow run publish-agent.yml --ref v2.x.y`. Renovate auto-merge is off until the ruleset requires `CI - Success`;
-`.github/renovate.json5` says how to turn it on.
+`gh workflow run publish-agent.yml --ref v2.x.y`. Renovate auto-merge is on (since the Protect Main ruleset began requiring
+`CI - Success`, 2026-10-07): minor and patch Go modules and GitHub Actions only;
+`.github/renovate.json5` has the rules.
 
 The agent image is `images/agent/Dockerfile` (D-53): v1's Dockerfile plus `tini`, agentd,
 `agent-run`, Codex and `kubectl-cnpg`, with `pve` and `hw-ssh` in `images/agent/tools/`.

@@ -23,7 +23,8 @@
   ],
   // PR-based auto-merge, never branch mode (haynes-ops' lesson: CI runs on
   // pull_request, so a branch-mode merge would skip it). The default is no
-  // auto-merge at all; the first two packageRules below (Go modules, GitHub Actions) say which updates may.
+  // auto-merge at all; the first two packageRules below (Go modules, GitHub Actions)
+  // say which updates may.
   automergeType: 'pr',
   // Each automerged PR is merged by GitHub itself once the required checks pass,
   // not by Renovate's own run (haynes-ops does the same). It needs "Allow
@@ -43,29 +44,28 @@
     'prIgnoreNotification',
   ],
   packageRules: [
-    // AUTO-MERGE IS OFF until the "Protect Main" ruleset requires `CI - Success`
-    // (laptop handoff part 3). Without a required check, GitHub has nothing to
-    // wait for: platform auto-merge would either fail to enable or merge before CI
-    // has reported, and Renovate's own fallback would judge by an empty status. To
-    // turn it on, flip `automerge` to true in BOTH of those two rules (Go modules and
-    // GitHub Actions) in the same PR that records the
-    // ruleset as done. Scope is minor and patch only, and only Go modules and
-    // GitHub Actions: no majors, no Docker digests, no Go toolchain, no tool pins.
-    // Everything not matched here never auto-merges.
+    // AUTO-MERGE IS ON for the first two rules (2026-10-07). The "Protect Main"
+    // ruleset requires `CI - Success` on the default branch (laptop handoff part 3),
+    // so GitHub's platform auto-merge waits for CI and merges only a green PR. If
+    // the ruleset is ever removed or loses that check, set `automerge` back to
+    // false in BOTH rules first: with no required check, GitHub has nothing to wait
+    // for and would merge before CI reports. Scope is minor and patch only, and
+    // only Go modules and GitHub Actions: no majors, no Docker digests, no Go
+    // toolchain, no tool pins. Everything not matched here never auto-merges.
     {
-      description: 'Go modules: minor and patch updates (auto-merge held, see above)',
+      description: 'Go modules: minor and patch updates (auto-merge on, see above)',
       matchManagers: ['gomod'],
       matchUpdateTypes: ['minor', 'patch'],
-      automerge: false,
+      automerge: true,
     },
     // Actions: the SHA pin and digest refreshes belong with their minor and patch
     // bumps. Go `digest` updates (pseudo-versions of untagged modules) do not: they
     // carry no semver promise, so they are left out of the rule above.
     {
-      description: 'GitHub Actions: minor, patch, pin and digest updates (auto-merge held, see above)',
+      description: 'GitHub Actions: minor, patch, pin and digest updates (auto-merge on, see above)',
       matchManagers: ['github-actions'],
       matchUpdateTypes: ['minor', 'patch', 'digest', 'pin', 'pinDigest'],
-      automerge: false,
+      automerge: true,
     },
     // The gomod manager also reads the `go` and `toolchain` lines. A human reviews
     // those, so this rule comes after the one above and wins.

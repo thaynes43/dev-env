@@ -65,8 +65,8 @@ the saga. To start building, follow
   PR. Agents squash-merge a green release PR themselves (Tom, 2026-10-07: "Merge, and
   let agents merge releases"; CLAUDE.md). #52 was merged on the overnight work order,
   before that ruling, to unblock the first end-to-end run; #61 (2.0.1) was merged under it.
-  Renovate
-  auto-merge is off until the ruleset exists.
+  Renovate auto-merge was off at B4 and is on since 2026-10-07 (the Protect Main
+  ruleset exists; minor and patch Go modules and GitHub Actions only).
 - **Plan 01 step 1, the `AgentSession` CRD, is built** (#24). The schema enforces
   the per-session rules as CEL, and spec is immutable after create except
   `operatingMode` and `lifecycle` (D-39). `make test` runs an envtest suite against
@@ -163,11 +163,8 @@ the saga. To start building, follow
 ## What happens first
 
 1. **The laptop handoff** ([`handoffs/2026-10-06-tom-laptop-settings.md`](handoffs/2026-10-06-tom-laptop-settings.md)).
-   Parts 1 and 2 are done (2026-10-07; the checklist below says how each was
-   checked). Part 3
-   (the Protect Main ruleset) can run now: `CI - Success` has reported, and since the
-   repo went public (Q-12, 2026-10-07) GitHub enforces the ruleset at no cost. It is
-   still Tom's to run.
+   All three parts are done (2026-10-07; the checklist below says how each was
+   checked). The Protect Main ruleset is live and Renovate auto-merge is on.
 2. **Plan 02: interactive sessions and lifecycle.** Plan 01, with KICKOFF B1 to B5,
    is done ([plan 01](sagas/distributed-dev-env/backlog/01-foundation.md)). Plan 02
    ([backlog/02](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md)) runs
@@ -249,11 +246,18 @@ which lists exactly what to change:
       release PR #52 on 2026-10-07.
 - [x] Part 2, after B3's first publish: make `ghcr.io/thaynes43/dev-env-operator`
       public (Q-13). Done: an anonymous pull works (checked 2026-10-07).
-- [ ] Part 3, after `CI - Success` has reported once (B2): the Protect Main ruleset on
-      the default branch, with `CI - Success` required. Ready now: the repo is public
-      (Q-12), so GitHub enforces it at no cost. **Then an agent flips Renovate's auto-merge
-      on:** set `automerge: true` in the first two `packageRules` entries of
-      `.github/renovate.json5` (Go modules and GitHub Actions) (B4 left it off).
+- [x] Part 3, after `CI - Success` has reported once (B2): the Protect Main ruleset on
+      the default branch, with `CI - Success` required. Done and checked 2026-10-07
+      with `gh api repos/thaynes43/dev-env/rulesets`: ruleset id 24655718 is active on
+      `~DEFAULT_BRANCH` with `deletion`, `non_fast_forward`, `required_linear_history`,
+      `pull_request` (0 approvals) and `required_status_checks` (`CI - Success`,
+      integration id 15368 = GitHub Actions, up-to-date off). Also checked: private
+      vulnerability reporting is enabled. Set by Tom but not visible to the bot (its
+      token reads `security_and_analysis` as null, and the fork-PR approval endpoint
+      answers 403): approval for all outside contributors' fork PRs, secret scanning
+      and push protection. Renovate's auto-merge was flipped on in the PR that
+      recorded this: `automerge: true` in the first two `packageRules` entries of
+      `.github/renovate.json5` (Go modules and GitHub Actions).
 
 ## Working rules (the summary; CLAUDE.md is the source)
 
@@ -286,7 +290,7 @@ The kubelet itself peaked at only 0.18 cores.
 
 | Capability | In the v1 dev-env pod | Outside (Tom's machine) |
 |---|---|---|
-| gh, git push, GHCR | Yes, as haynes-dev-bot. Prefix commands with `GH_TOKEN=$(cat /creds/gh_token)`. | Yes, with your own gh login, so PRs author as Tom. GHCR pulls of public images are anonymous. |
+| gh, git push, GHCR | Yes, as haynes-dev-bot. No prefix: `~/.local/bin/gh` reads `/creds/gh_token` on every call (haynes-ops #3476, 2026-10-07). | Yes, with your own gh login, so PRs author as Tom. GHCR pulls of public images are anonymous. |
 | Code, Go builds, unit tests, envtest | Yes, lightly, under the pod's CPU cap. | Yes. |
 | `kubectl`, `flux` | OPERATOR tier: read plus targeted runtime writes. | None. |
 | `declare-activity` | Yes. | No. It writes files on the pod's volume. |
