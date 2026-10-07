@@ -20,6 +20,25 @@ bundle. declare-activity moves to the API. Tom can run `agent-run` from his lapt
 - Operator: the timers of D-09, the reaper, `suspend`, `resume`, `restore`,
   `/v1/sessions/{id}/log` (logs also copied to the shared volume), the child-session
   limit (4 per parent, depth 2).
+- Operator, from plan 01 step 5 (D-51), which left these out:
+  - **A rescue pod.** A reaped session whose last pod is gone (preempted), ended
+    (evicted) or never started has no pod to rescue in, so its volume stays and the
+    session waits with `RemovalBlocked`. The rescue pod mounts the volume, the
+    shared volume and the gh token, runs agentd without starting the agent (a new
+    `agentd hold`, say, so no task runs twice, D-42), takes a small size, and lets
+    the operator run the same exec rescue; it also retries a rescue that failed for
+    a passing reason (CephFS down), and stays up while one fails so a human can exec
+    in and fix the worktree. It is the "Failed → Suspended: rescue what is on the
+    volume" edge of 4.1.
+  - **The archive timer** for a suspended session (D-09: 7 days, from the
+    templates, not code), and what `resume` does after an archive: a new volume
+    would start the task again, so an archived session should be refused and a
+    restore offered instead.
+  - **Bundles:** prune `rescue/<session>/` after D-09's 30 days, and list them for
+    `GET /v1/rescues` and `agent-run rescue list|restore` (the restore recipe is in
+    D-48).
+  - **The page on `RescueFailed`** (D-10 "blocks archive and pages"): a metric or
+    an alert on the condition, routed to Tom.
 - `agent-run attach|detach` for Tom through `kubectl exec` (workbench or laptop; not
   from agent pods, D-19); `suspend`, `resume`, `rescue list|restore`, `msg`.
 - Messaging tier 3 (D-16): `/v1/sessions/{id}/messages` → `agentd ctl deliver`

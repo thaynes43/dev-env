@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -44,8 +45,10 @@ func TestTheFinalizerComesFirst(t *testing.T) {
 }
 
 // 5.1, second rule, and D-45: deleting the AgentSession of a Running session is a
-// reap. The pod keeps running, the volume stays, the session stays (deleting)
-// and says why, and a fresh operator holds the same line.
+// reap. While no rescue can run in the pod (the fake rescuer fails, as an exec
+// into a pod with no running container does), the pod keeps running, the volume
+// stays, the session stays (deleting) and says why, and a fresh operator holds
+// the same line.
 func TestInvariantDeletingARunningSessionKeepsItsPodAndVolume(t *testing.T) {
 	first := startOperator(t)
 	s := newSession(t, nil)
@@ -58,6 +61,9 @@ func TestInvariantDeletingARunningSessionKeepsItsPodAndVolume(t *testing.T) {
 		t.Fatal(err)
 	}
 	live := waitStatus(t, s.Name, "the reap waits for rescue", blockedBy("DeleteNeedsRescue"))
+	if c := condition(&live.Status, ConditionRemovalBlocked); !strings.Contains(c.Message, "the rescue could not run") {
+		t.Errorf("RemovalBlocked %q", c.Message)
+	}
 	if live.DeletionTimestamp.IsZero() || !slices.Contains(live.Finalizers, Finalizer) {
 		t.Fatalf("session %+v, want deleting and held by the finalizer", live.ObjectMeta)
 	}
@@ -86,8 +92,8 @@ func TestInvariantDeletingARunningSessionKeepsItsPodAndVolume(t *testing.T) {
 	assertNoPodOrVolumeWrites(t, first, second)
 }
 
-// 5.1 and D-10: suspending a Running session keeps its pod until a rescue exists,
-// and resuming clears the block.
+// 5.1 and D-10: suspending a Running session keeps its pod while no rescue can
+// run in it, and resuming clears the block.
 func TestInvariantSuspendKeepsThePodUntilRescue(t *testing.T) {
 	op := startOperator(t)
 	s := newSession(t, nil)
@@ -173,30 +179,31 @@ func TestADeletedSessionWithNothingToRescueGoes(t *testing.T) {
 }
 
 // A deleted session whose pod is gone but whose volume holds its work stays until
-// the rescue.
+// a rescue. The pod here was never scheduled, so the suspend removes it without
+// a rescue (no process ever ran in it), and no rescue can run on the volume.
 func TestADeletedSessionWithOnlyAVolumeStays(t *testing.T) {
 	op := startOperator(t)
 	s := newSession(t, nil)
-	waitClaim(t, s.Name)
+	claim := waitClaim(t, s.Name)
 	pod := waitPod(t, s.Name)
-	// Suspend first, so no new pod replaces the one removed below (as a
-	// preemption or a node loss would remove it).
 	live := session(t, s.Name)
 	live.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
 	if err := k8s.Update(context.Background(), live); err != nil {
 		t.Fatal(err)
 	}
-	waitStatus(t, s.Name, "suspend waits", blockedBy("SuspendNeedsRescue"))
-	if err := k8s.Delete(context.Background(), pod, client.GracePeriodSeconds(0)); err != nil {
-		t.Fatal(err)
-	}
 	waitStatus(t, s.Name, "Suspended with its volume", phaseIs(v1alpha1.PhaseSuspended))
+	if n := rescuer.callsFor(s.Name); n != 0 {
+		t.Errorf("a rescue ran %d times in a pod that never started", n)
+	}
 	if err := k8s.Delete(context.Background(), session(t, s.Name)); err != nil {
 		t.Fatal(err)
 	}
-	waitStatus(t, s.Name, "the reap waits for rescue", blockedBy("DeleteNeedsRescue"))
-	if c := waitClaim(t, s.Name); !c.DeletionTimestamp.IsZero() {
+	got := waitStatus(t, s.Name, "the reap waits for rescue", blockedBy("DeleteNeedsRescue"))
+	if c := condition(&got.Status, ConditionRemovalBlocked); !strings.Contains(c.Message, "no rescue has run on the volume") {
+		t.Errorf("RemovalBlocked %q", c.Message)
+	}
+	if c := waitClaim(t, s.Name); !c.DeletionTimestamp.IsZero() || c.UID != claim.UID {
 		t.Error("the volume is being deleted")
 	}
-	assertNoPodOrVolumeWrites(t, op)
+	assertWritesOnly(t, op, "delete *v1.Pod "+pod.Name)
 }

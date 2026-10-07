@@ -287,7 +287,9 @@ PR per piece, in this order:
    heartbeat, and what step 8 deploys for it.
 4. agentd: config rendering (a port of `dev-init.sh`), partial clone and worktree,
    tmux start, heartbeat, and `ctl status|rescue`.
-5. Rescue to a bundle on the shared volume (D-10), then suspend and archive.
+5. Rescue to a bundle on the shared volume (D-10), then suspend and archive. Done
+   in #32 and #36 (2026-10-06): D-48 records the bundle, D-51 the
+   operator's rescue, suspend and archive.
 6. The minimal keeper: mint the gh token every 40 minutes.
 7. `agent-run` v2: `-p`, `list`, `reap` and `fleet`. Done in #34 (2026-10-06), with
    `show`: D-50 records the commands, the checks before a create, the retries and

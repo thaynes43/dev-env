@@ -562,13 +562,88 @@ spec:
                     type: string
                 type: object
               rescue:
-                description: Rescue records the session's rescue bundles (D-10).
+                description: Rescue records the session's newest rescue (D-10, D-51).
                 properties:
+                  at:
+                    format: date-time
+                    type: string
+                  generation:
+                    description: |-
+                      Generation is the session's metadata.generation when the rescue ran. A
+                      spec change since then (a resume, say) means the pod may have done more
+                      work, and its next removal needs a new rescue.
+                    format: int64
+                    type: integer
                   lastBundle:
                     description: |-
-                      LastBundle is the newest bundle's path on the shared volume, for example
-                      rescue/haynes-ops-1005-202504/20261006-0130.bundle.
+                      LastBundle is the newest rescue's manifest on the shared volume, for
+                      example rescue/haynes-ops-1005-202504/20261006-0130/manifest.json (D-48).
+                      It stays when a later rescue needed no bundle, or a new pod superseded
+                      it, because a restore starts from it.
                     type: string
+                  message:
+                    description: Message says what the rescue saved, or why it failed.
+                    type: string
+                  omittedRefs:
+                    description: OmittedRefs is how many refs did not fit in UnpushedRefs.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  podUID:
+                    description: |-
+                      PodUID is the pod the rescue ran in. A suspend deletes that pod, and no
+                      other, on this record.
+                    type: string
+                  result:
+                    description: Result is the newest rescue's verdict.
+                    enum:
+                    - Verified
+                    - CleanAndPushed
+                    - Failed
+                    type: string
+                  stamp:
+                    description: |-
+                      Stamp is the rescue's stamp (UTC YYYYMMDD-HHMM); At is when the operator
+                      recorded it.
+                    type: string
+                  superseded:
+                    description: |-
+                      Superseded is set as soon as the session asks for its pod again (a
+                      resume), before the operator starts a new pod on the volume: from then
+                      on the rescue does not cover what the volume holds, and a pod delete or
+                      an archive needs a new one (D-10: an old bundle never counts).
+                    type: boolean
+                  unpushedRefs:
+                    description: |-
+                      UnpushedRefs is D-10 step 4's list: the local refs origin lacked at the
+                      rescue, each with its clone and the bundle that holds it. At most 256 are
+                      kept; OmittedRefs counts the rest. The verdict covers all of them.
+                    items:
+                      description: RescuedRef is one local ref origin lacked at a
+                        rescue.
+                      properties:
+                        bundle:
+                          description: Bundle is the bundle file on the shared volume
+                            that holds it.
+                          type: string
+                        commit:
+                          description: Commit is the commit it named.
+                          type: string
+                        name:
+                          description: |-
+                            Name is the ref, for example refs/heads/rescue/haynes-ops-1005-202504-20261006-0130,
+                            or stash@{n} for a stash entry.
+                          type: string
+                        repo:
+                          description: Repo is the clone, for example /home/dev/repos/haynes-ops.
+                          type: string
+                      required:
+                      - commit
+                      - name
+                      - repo
+                      type: object
+                    maxItems: 256
+                    type: array
                 type: object
               revision:
                 description: Revision is the template revision the pod runs (DESIGN-001
