@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.3.0](https://github.com/thaynes43/dev-env/compare/v2.2.0...v2.3.0) (2026-10-07)
+
+
+### Features
+
+* **agentd,api,agent-run:** local sessions, resume on boot, attach (D-58) ([#73](https://github.com/thaynes43/dev-env/issues/73)) ([dbf32dc](https://github.com/thaynes43/dev-env/commit/dbf32dc235ddbb453337c30f8c721a9b1b4cc535))
+* **api:** /v1/grants, request, list, show and release (plan 07 step 2) ([#72](https://github.com/thaynes43/dev-env/issues/72)) ([06841c8](https://github.com/thaynes43/dev-env/commit/06841c83ac5a3bfcf22377cb3bf4c786e6007abc))
+* **api:** AccessGrant and GrantPolicy CRDs (plan 07 step 1) ([#66](https://github.com/thaynes43/dev-env/issues/66)) ([e588f29](https://github.com/thaynes43/dev-env/commit/e588f294d1aae983c3ce7354f6f52bcd354db46c))
+* **operator:** serve the RescueFailed metric for the page (D-57) ([#69](https://github.com/thaynes43/dev-env/issues/69)) ([6cd7adc](https://github.com/thaynes43/dev-env/commit/6cd7adcfae04297d33f91591825b6295f918103b))
+
 ## [2.2.0](https://github.com/thaynes43/dev-env/compare/v2.1.0...v2.2.0) (2026-10-07)
 
 
