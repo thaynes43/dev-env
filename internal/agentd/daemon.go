@@ -78,21 +78,36 @@ func (d *Daemon) Run(ctx context.Context) error {
 	return d.supervise(ctx)
 }
 
-// startAgent starts the task unless this volume already started it once
-// (D-42). It returns the boot step and, when the agent cannot run, why.
+// startAgent starts the session's agent. On the volume's first boot that is
+// the task (D-42) or a local session's TUI; on every later boot it is the TUI,
+// resuming the first launch's conversation, so a task's prompt never runs
+// twice and resume is the way back in (D-58). It returns the boot step and,
+// when the agent cannot run, why.
 func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Step, bootID string) (Step, string) {
 	const name = "agent"
 	if repo.State == StepFail {
 		why := "the repo step failed, so the agent was not started"
 		return newStep(name, nil, errors.New(why)), why
 	}
-	var res taskResult
-	if readJSONFile(d.S.statePath(resultFile), &res) == nil {
-		return skipStep(name, fmt.Sprintf("the task already finished (exit %d at %s); not started again", res.ExitCode, res.FinishedAt.Format(time.RFC3339))), ""
-	}
-	var l Launch
-	if readJSONFile(d.S.statePath(launchFile), &l) == nil {
-		return newStep(name, []string{fmt.Sprintf("WARN the task was started at %s by boot %s and left no result; agentd never starts a task twice (D-42)", l.CreatedAt.Format(time.RFC3339), l.BootID)}, nil), ""
+	var first Launch
+	if readJSONFile(d.S.statePath(launchFile), &first) == nil {
+		l, err := BuildResume(d.S, d.Session, ws, first, bootID, d.now())
+		if err != nil {
+			return newStep(name, nil, err), err.Error()
+		}
+		if err := StartAgent(ctx, d.R, d.S, l, d.Self); err != nil {
+			return newStep(name, nil, err), err.Error()
+		}
+		notes := []string{fmt.Sprintf("resumed conversation %s, first launched %s, in the TUI in tmux session %q", first.ConversationID, first.CreatedAt.Format(time.RFC3339), TmuxSession)}
+		if !first.TUI {
+			var res taskResult
+			ended := "it left no result"
+			if readJSONFile(d.S.statePath(resultFile), &res) == nil {
+				ended = fmt.Sprintf("it ended with exit %d at %s", res.ExitCode, res.FinishedAt.Format(time.RFC3339))
+			}
+			notes = append(notes, "the task's prompt is not run again (D-42); "+ended)
+		}
+		return newStep(name, notes, nil), ""
 	}
 	launch, err := BuildLaunch(d.S, d.Session, ws, bootID, d.now())
 	if err != nil {
@@ -101,7 +116,11 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 	if err := StartAgent(ctx, d.R, d.S, launch, d.Self); err != nil {
 		return newStep(name, nil, err), err.Error()
 	}
-	return newStep(name, []string{fmt.Sprintf("claude task started in tmux session %q, conversation %s", TmuxSession, launch.ConversationID)}, nil), ""
+	what := "claude task"
+	if launch.TUI {
+		what = "claude TUI"
+	}
+	return newStep(name, []string{fmt.Sprintf("%s started in tmux session %q, conversation %s", what, TmuxSession, launch.ConversationID)}, nil), ""
 }
 
 func (d *Daemon) supervise(ctx context.Context) error {
@@ -109,7 +128,7 @@ func (d *Daemon) supervise(ctx context.Context) error {
 	defer tick.Stop()
 	poll := time.NewTicker(d.Poll)
 	defer poll.Stop()
-	last := newestMtime(d.S.statePath(resultFile))
+	last := newestMtime(d.S.statePath(resultFile), d.S.statePath(tuiExitFile))
 	for {
 		select {
 		case <-ctx.Done():
@@ -118,9 +137,9 @@ func (d *Daemon) supervise(ctx context.Context) error {
 		case <-tick.C:
 			d.beat(ctx)
 		case <-poll.C:
-			if m := newestMtime(d.S.statePath(resultFile)); !m.Equal(last) {
+			if m := newestMtime(d.S.statePath(resultFile), d.S.statePath(tuiExitFile)); !m.Equal(last) {
 				last = m
-				d.Log.Info("the task finished")
+				d.Log.Info("the agent exited")
 				d.beat(ctx)
 			}
 		}

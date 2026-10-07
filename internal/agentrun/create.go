@@ -78,8 +78,15 @@ func (a *app) create(ctx context.Context, args []string) error {
 	if (interactive || local) && (prompt != "" || promptFile != "") {
 		return usageError("-p runs a task headless, so it cannot combine with --interactive or --local; pick one")
 	}
-	if interactive || local {
-		return usageError("--interactive and --local sessions arrive in plans 02 and 03; until then v1's agent-run in the dev-env pod starts them")
+	if interactive {
+		return usageError("--interactive (a TUI with Remote Control) arrives with plan 03; --local starts a TUI you attach to with agent-run attach")
+	}
+	if local && (timeout != "" || maxTurns != 0) {
+		return usageError("--timeout and --max-turns limit a task; a --local session has none")
+	}
+	mode := protocol.ModeTask
+	if local {
+		mode = protocol.ModeLocal
 	}
 	if promptFile != "" {
 		if prompt != "" {
@@ -89,8 +96,8 @@ func (a *app) create(ctx context.Context, args []string) error {
 			return err
 		}
 	}
-	if strings.TrimSpace(prompt) == "" {
-		return usageError("say what to run: -p \"<task>\" or --prompt-file <path>; agent-run help run lists the flags")
+	if strings.TrimSpace(prompt) == "" && !local {
+		return usageError("say what to run: -p \"<task>\" or --prompt-file <path>, or --local for a TUI; agent-run help run lists the flags")
 	}
 	if len(prompt) > protocol.MaxPromptBytes {
 		return usageError("the task is %d bytes, more than %d: a session's environment carries it (D-40)", len(prompt), protocol.MaxPromptBytes)
@@ -164,7 +171,7 @@ func (a *app) create(ctx context.Context, args []string) error {
 		Repo:           repo,
 		Base:           base,
 		Agent:          agent,
-		Mode:           protocol.ModeTask,
+		Mode:           mode,
 		Model:          model,
 		Effort:         effort,
 		Prompt:         prompt,
@@ -199,7 +206,11 @@ func (a *app) create(ctx context.Context, args []string) error {
 		if waitErr == nil {
 			a.outf("  %s\n", startLine(final, wait))
 		}
-		a.outf("Follow it with: agent-run show %s\n", sess.Name)
+		if local {
+			a.outf("Attach to its TUI with: agent-run attach %s (detach with ctrl-b d)\n", sess.Name)
+		} else {
+			a.outf("Follow it with: agent-run show %s\n", sess.Name)
+		}
 	}
 	if waitErr != nil {
 		a.errf("could not follow %s after it was created: %v", sess.Name, waitErr)

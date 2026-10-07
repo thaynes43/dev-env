@@ -68,7 +68,7 @@ func bodyError(err error, limit int64) error {
 }
 
 // newSession builds the AgentSession a create asks for, or refuses it. It checks
-// what only the API knows: what plan 01 serves, the effort levels per model,
+// what only the API knows: what the built plans serve, the effort levels per model,
 // the caller's rights and the profile. The schema's own rules (D-39) are left to
 // the API server, which refuses a bad object at create with the schema's
 // messages, and agentd's rules are checked by agentd's own code (D-40). So the
@@ -81,7 +81,8 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	var fields []apiv1.FieldError
 	add := func(field, format string, args ...any) { fields = append(fields, fieldError(field, format, args...)) }
 
-	// What plan 01 serves. Each later plan lifts its own line.
+	// What the built plans serve: Claude task sessions (plan 01) and local
+	// sessions (plan 02, D-58). Each later plan lifts its own line.
 	switch v1alpha1.AgentKind(req.Agent) {
 	case v1alpha1.AgentClaude:
 	case v1alpha1.AgentCodex:
@@ -94,13 +95,12 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 		add("agent", "%q is not claude, codex or opencode", req.Agent)
 	}
 	switch v1alpha1.SessionMode(req.Mode) {
-	case v1alpha1.ModeTask:
-	case v1alpha1.ModeLocal:
-		add("mode", "local sessions arrive in plan 02; plan 01 runs task sessions")
+	case v1alpha1.ModeTask, v1alpha1.ModeLocal:
+		// Local sessions run the TUI from plan 02 (D-58).
 	case v1alpha1.ModeRemote:
-		add("mode", "remote sessions arrive in plan 03; plan 01 runs task sessions")
+		add("mode", "remote sessions arrive in plan 03; task and local sessions run today")
 	case "":
-		add("mode", "required: task")
+		add("mode", "required: task or local")
 	default:
 		add("mode", "%q is not task, local or remote", req.Mode)
 	}

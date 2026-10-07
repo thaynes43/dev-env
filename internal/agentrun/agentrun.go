@@ -1,7 +1,8 @@
 // Package agentrun is agent-run v2, the dev-env CLI (DESIGN-001 3.5, D-06,
 // D-50): a client of the operator's /v1 API. Plan 01 builds `-p` (create a task
-// session), `list`, `show`, `reap` and `fleet`; the other verbs of 3.5 arrive
-// with the plans that build their routes.
+// session), `list`, `show`, `reap` and `fleet`; plan 02 adds `--local`,
+// `attach` and `detach` (D-58). The other verbs of 3.5 arrive with the plans
+// that build their routes.
 //
 // It imports the standard library, the API's wire types (internal/apiserver/apiv1)
 // and agentd's protocol constants only, never the Kubernetes libraries, so the
@@ -16,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -65,6 +67,11 @@ type Env struct {
 	// ServiceAccountDir holds a pod's own ServiceAccount token, namespace and
 	// the cluster's CA, as the kubelet mounts them.
 	ServiceAccountDir string
+	// LookPath finds a program on PATH (kubectl, for attach and detach).
+	LookPath func(string) (string, error)
+	// Run runs a program on the process's own terminal and returns its exit
+	// code; an error means it could not start.
+	Run func(ctx context.Context, argv []string) (int, error)
 }
 
 // DefaultEnv is the process's own environment.
@@ -79,6 +86,8 @@ func DefaultEnv() Env {
 		NewKey:            newKey,
 		SessionTokenFile:  DefaultSessionTokenFile,
 		ServiceAccountDir: DefaultServiceAccountDir,
+		LookPath:          exec.LookPath,
+		Run:               runProcess,
 	}
 }
 
@@ -170,6 +179,10 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return a.reap(ctx, rest)
 	case "fleet":
 		return a.fleet(ctx, rest)
+	case "attach":
+		return a.attach(ctx, rest)
+	case "detach":
+		return a.detach(ctx, rest)
 	}
 	if msg, ok := notYet[cmd]; ok {
 		return usageError("%s", msg)
@@ -220,10 +233,8 @@ func editDistance(a, b string) int {
 	return prev[len(b)]
 }
 
-// notYet answers v1's verbs that v2 does not build in plan 01.
+// notYet answers v1's verbs that v2 has not built yet, or dropped.
 var notYet = map[string]string{
-	"attach":       "attach arrives with interactive sessions (plan 02); a task session has no terminal to attach to, so follow it with agent-run show <name>",
-	"detach":       "detach arrives with interactive sessions (plan 02)",
 	"prune":        "prune is gone in v2: the operator reaps sessions itself (DESIGN-001 4.3), and agent-run reap <name> reaps one now",
 	"sweep":        "sweep is gone in v2: the operator reaps sessions itself (DESIGN-001 4.3), and agent-run reap <name> reaps one now",
 	"codex-remote": "codex-remote arrives with the codex hub (plan 04); v1's agent-run in the dev-env pod still runs it",

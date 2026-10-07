@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -142,25 +143,59 @@ func TestDaemonBootsStartsAndReports(t *testing.T) {
 	}
 }
 
-func TestDaemonNeverStartsATaskTwice(t *testing.T) {
+// A later boot of a volume whose session was launched resumes the
+// conversation in the TUI (D-58): the task's prompt is not run again (D-42),
+// and the first launch stays as it was.
+func TestDaemonResumesALaunchedSession(t *testing.T) {
+	r := newDaemonRig(t, map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "static"})
+	first := Launch{Session: "demo-1006-160000", Prompt: "p", ConversationID: "11111111-2222-4333-8444-555555555555", BootID: "earlier", CreatedAt: time.Now().Add(-time.Hour)}
+	if err := writeJSONFile(r.d.S.statePath(launchFile), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONFile(r.d.S.statePath(resultFile), taskResult{TaskResult: protocol.TaskResult{ExitCode: 0, Subtype: "success"}}); err != nil {
+		t.Fatal(err)
+	}
+	stop := r.start(t)
+	waitFor(t, r.tmuxStarted)
+	waitFor(t, func() bool { st, _ := r.beats.last(); return st.Boot == protocol.BootReady })
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	var resumed Launch
+	if err := readJSONFile(r.d.S.statePath(resumeFile), &resumed); err != nil || !resumed.Resume || !resumed.TUI || resumed.Prompt != "" ||
+		!slices.Contains(resumed.Argv, "--resume") || slices.Contains(resumed.Argv, "-p") {
+		t.Fatalf("resume launch %+v %v", resumed, err)
+	}
+	var kept Launch
+	if err := readJSONFile(r.d.S.statePath(launchFile), &kept); err != nil || kept.Prompt != "p" || kept.BootID != "earlier" {
+		t.Errorf("the first launch changed: %+v %v", kept, err)
+	}
+	if !slices.ContainsFunc(r.tmux.lines(), func(l string) bool { return strings.Contains(l, "run-agent --launch "+r.d.S.statePath(resumeFile)) }) {
+		t.Errorf("tmux did not run the resume: %q", r.tmux.lines())
+	}
+	st, _ := r.beats.last()
+	if st.Agent.State != protocol.AgentBusy || st.Agent.ConversationID != first.ConversationID || st.Agent.Task == nil || st.Agent.Task.Subtype != "success" {
+		t.Errorf("agent = %+v", st.Agent)
+	}
+}
+
+// A first launch that names no conversation cannot be resumed: the boot says
+// so, and nothing starts.
+func TestDaemonCannotResumeWithoutAConversation(t *testing.T) {
 	r := newDaemonRig(t, map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "static"})
 	if err := writeJSONFile(r.d.S.statePath(launchFile), Launch{BootID: "earlier", CreatedAt: time.Now().Add(-time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
 	stop := r.start(t)
-	waitFor(t, func() bool { st, _ := r.beats.last(); return st.Boot == protocol.BootReady })
+	waitFor(t, func() bool { st, _ := r.beats.last(); return st.Boot == protocol.BootFailed })
 	if err := stop(); err != nil {
 		t.Fatal(err)
 	}
 	if r.tmuxStarted() {
-		t.Error("the task was started a second time")
+		t.Error("an agent started without a conversation to resume")
 	}
-	st, _ := r.beats.last()
-	if st.Agent.State != protocol.AgentInterrupted {
+	if st, _ := r.beats.last(); st.Agent.State != protocol.AgentFailed || !strings.Contains(st.Agent.Error, "no conversation id") {
 		t.Errorf("agent = %+v", st.Agent)
-	}
-	if len(st.Problems) == 0 || st.Problems[len(st.Problems)-1].Name != "agent" {
-		t.Errorf("problems = %+v", st.Problems)
 	}
 }
 

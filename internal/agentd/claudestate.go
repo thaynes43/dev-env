@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -135,28 +136,52 @@ func mergeOAuthAccount(cur json.RawMessage, a oauthAccount) (json.RawMessage, er
 // re-asserts it on every boot (2026-08-29: the default silently became Opus
 // 4.8). Every other key stays.
 func assertDefaultModel(settingsPath, model string) (string, error) {
+	changed, err := assertSettingsKey(settingsPath, "model", model)
+	switch {
+	case err != nil:
+		return "", err
+	case !changed:
+		return "claude default model already " + model, nil
+	default:
+		return "claude default model set to " + model, nil
+	}
+}
+
+// keySkipBypassPrompt is settings.json's key that skips the CLI's warning
+// dialog for --dangerously-skip-permissions. Without it a TUI on a cold home
+// opens on "Bypass Permissions mode ... No, exit / Yes, I accept" instead of its
+// prompt (checked on CLI 2.1.292, 2026-10-07). A task (-p) never shows it.
+const keySkipBypassPrompt = "skipDangerousModePermissionPrompt"
+
+// assertSettingsKey sets one top-level key of settings.json to value, keeping
+// every other key the CLI or a human wrote. It reports whether it changed the
+// file. A file that is not a JSON object is left as it is.
+func assertSettingsKey(settingsPath, key string, value any) (bool, error) {
 	top := map[string]json.RawMessage{}
 	data, err := os.ReadFile(settingsPath)
 	switch {
 	case err == nil && len(strings.TrimSpace(string(data))) > 0:
 		if err := json.Unmarshal(data, &top); err != nil {
-			return "", fmt.Errorf("%s is not a JSON object, left as it is: %w", settingsPath, err)
+			return false, fmt.Errorf("%s is not a JSON object, left as it is: %w", settingsPath, err)
 		}
 	case err == nil, isNotExist(err):
 	default:
-		return "", err
+		return false, err
 	}
-	want, _ := json.Marshal(model)
-	if cur, ok := top["model"]; ok && string(cur) == string(want) {
-		return "claude default model already " + model, nil
+	want, err := json.Marshal(value)
+	if err != nil {
+		return false, err
 	}
-	top["model"] = want
+	if cur, ok := top[key]; ok && string(cur) == string(want) {
+		return false, nil
+	}
+	top[key] = want
 	out, err := json.MarshalIndent(top, "", "  ")
 	if err != nil {
-		return "", err
+		return false, err
 	}
-	if err := writeFileAtomic(settingsPath, append(out, '\n'), 0o644); err != nil {
-		return "", err
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		return false, err
 	}
-	return "claude default model set to " + model, nil
+	return true, writeFileAtomic(settingsPath, append(out, '\n'), 0o644)
 }

@@ -90,10 +90,12 @@ func TestCtl(t *testing.T) {
 	if code, _, _ := runArgs([]string{"ctl", "status"}, map[string]string{"HOME": home}); code != exitFailure {
 		t.Errorf("ctl status without a session: %d", code)
 	}
-	for _, c := range []string{"prepare-restart", "deliver"} {
-		if code, _, errOut := runArgs([]string{"ctl", c}, env); code != exitFailure || !strings.Contains(errOut, "not built yet") {
-			t.Errorf("ctl %s: %d %q", c, code, errOut)
-		}
+	if code, _, errOut := runArgs([]string{"ctl", "deliver"}, env); code != exitFailure || !strings.Contains(errOut, "not built yet") {
+		t.Errorf("ctl deliver: %d %q", code, errOut)
+	}
+	// Nothing launched yet: the next boot starts fresh, and no agent ran.
+	if code, out, errOut := runArgs([]string{"ctl", "prepare-restart"}, env); code != exitOK || !strings.Contains(out, `"resumable": false`) || !strings.Contains(out, `"wasRunning": false`) {
+		t.Errorf("ctl prepare-restart: %d %s %s", code, out, errOut)
 	}
 	if code, _, _ := runArgs([]string{"ctl"}, env); code != exitUsage {
 		t.Errorf("ctl: %d", code)

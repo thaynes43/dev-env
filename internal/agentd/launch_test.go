@@ -76,7 +76,6 @@ func TestBuildLaunchRefuses(t *testing.T) {
 		mutate func(*Settings, *protocol.Session)
 		want   string
 	}{
-		{"local", func(_ *Settings, s *protocol.Session) { s.Mode = protocol.ModeLocal }, "plan 02"},
 		{"remote", func(_ *Settings, s *protocol.Session) { s.Mode = protocol.ModeRemote }, "plan 03"},
 		{"codex", func(_ *Settings, s *protocol.Session) { s.Agent = protocol.AgentCodex }, "plan 04"},
 		{"alias", func(_ *Settings, s *protocol.Session) { s.Model = "opus" }, "aliases are refused"},
@@ -93,9 +92,62 @@ func TestBuildLaunchRefuses(t *testing.T) {
 		})
 	}
 	s, sess, ws := launchFixture(t)
-	sess.Mode = protocol.ModeLocal
+	sess.Mode = protocol.ModeRemote
 	if _, err := BuildLaunch(s, sess, ws, "b", time.Now()); !errors.Is(err, ErrNotInPlan01) {
 		t.Errorf("err = %v, want ErrNotInPlan01", err)
+	}
+}
+
+// A local session's first launch is the TUI (D-58): a new conversation id, the
+// interactive guard, and no prompt, -p or stream-json.
+func TestBuildLaunchLocal(t *testing.T) {
+	s, sess, ws := launchFixture(t)
+	sess.Mode, sess.Prompt, sess.Limits = protocol.ModeLocal, "", nil
+	l, err := BuildLaunch(s, sess, ws, "boot1", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv := strings.Join(l.Argv, " ")
+	if !l.TUI || l.Resume || l.Prompt != "" || l.Timeout != 0 {
+		t.Errorf("launch %+v", l)
+	}
+	if !strings.HasPrefix(argv, "claude --model claude-opus-5-5 --effort xhigh --dangerously-skip-permissions --session-id "+l.ConversationID+" --append-system-prompt ") ||
+		strings.Contains(argv, " -p") || strings.Contains(argv, "stream-json") || !strings.Contains(argv, "when the work is ready") {
+		t.Errorf("argv %q", l.Argv)
+	}
+}
+
+// Every later boot resumes the first launch's conversation in the TUI (D-58):
+// a task's prompt is never sent again (D-42), and it keeps the task's guard.
+func TestBuildResume(t *testing.T) {
+	s, sess, ws := launchFixture(t)
+	first, err := BuildLaunch(s, sess, ws, "boot1", time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	l, err := BuildResume(s, sess, ws, first, "boot2", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv := strings.Join(l.Argv, " ")
+	if !l.TUI || !l.Resume || l.Prompt != "" || l.ConversationID != first.ConversationID || l.BootID != "boot2" || !l.CreatedAt.Equal(now.UTC()) {
+		t.Errorf("resume %+v", l)
+	}
+	if !strings.HasPrefix(argv, "claude --model claude-opus-5-5 --effort xhigh --dangerously-skip-permissions --resume "+first.ConversationID+" --append-system-prompt ") ||
+		strings.Contains(argv, "--session-id") || strings.Contains(argv, " -p") || strings.Contains(argv, "--max-turns") || !strings.Contains(argv, "when the task is complete") {
+		t.Errorf("argv %q", l.Argv)
+	}
+	if _, err := BuildResume(s, sess, ws, Launch{}, "boot2", now); err == nil {
+		t.Error("a resume of a launch with no conversation id")
+	}
+	sess.Mode = protocol.ModeLocal
+	if l, err := BuildResume(s, sess, ws, first, "boot2", now); err != nil || !strings.Contains(strings.Join(l.Argv, " "), "when the work is ready") {
+		t.Errorf("a local resume: %v %q", err, l.Argv)
+	}
+	s.Getenv = envOf(nil)
+	if _, err := BuildResume(s, sess, ws, first, "boot2", now); err == nil || !strings.Contains(err.Error(), "plan credential unavailable") {
+		t.Errorf("no static token: %v", err)
 	}
 }
 
@@ -151,3 +203,20 @@ func TestStartAgentFailures(t *testing.T) {
 }
 
 func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
+
+// prepare-restart names the conversation the next boot resumes (D-58).
+func TestPrepareRestart(t *testing.T) {
+	s, _, _ := launchFixture(t)
+	if rep := PrepareRestart(s, "s-1", time.Second); rep.Resumable || rep.ConversationID != "" || rep.Agent == nil || rep.Agent.WasRunning {
+		t.Errorf("nothing launched: %+v", rep)
+	}
+	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONFile(s.statePath(launchFile), Launch{ConversationID: "conv-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if rep := PrepareRestart(s, "s-1", time.Second); !rep.Resumable || rep.ConversationID != "conv-1" || rep.Session != "s-1" {
+		t.Errorf("launched: %+v", rep)
+	}
+}

@@ -8,17 +8,20 @@ Each session is its own pod on a worker node.
 
 Usage:
   agent-run [--repo] <repo> -p "<task>" [flags]   start a task session
+  agent-run [--repo] <repo> --local [flags]       start an interactive session (a TUI)
   agent-run list [--repo <r>] [--state <s>] [--mine]
                                                   list sessions, newest first
   agent-run show <name>                           show one session, with its task
   agent-run reap <name>...                        rescue, stop and archive sessions
+  agent-run attach <name>                         attach to a session's TUI (Tom only)
+  agent-run detach <name>                         detach every client from it (Tom only)
   agent-run fleet                                 show what runs and waits, by node and revision
   agent-run version                               print the version
   agent-run help [<command>]                      print help for agent-run or one command
 
-agent-run run ... is the same as agent-run ... -p, as in v1. Interactive
-sessions, attach and detach arrive in plans 02 and 03; prune and sweep are gone,
-because the operator reaps sessions itself.
+agent-run run ... is the same as agent-run ... -p, as in v1. --interactive (a
+TUI with Remote Control) arrives with plan 03; prune and sweep are gone, because
+the operator reaps sessions itself.
 
 Every command but version and help takes these flags:
   -o, --output json       print the API's answer as JSON (list and run also take -o name)
@@ -46,16 +49,21 @@ Exit codes:
 
 var commandHelp = map[string]string{
 	"run": `Usage: agent-run [--repo] <repo> -p "<task>" [flags]
+       agent-run [--repo] <repo> --local [flags]
        agent-run run [--repo] <repo> -p "<task>" [flags]
 
-Starts a task session: a pod on a worker node clones the repository, runs the
-agent once on the task, headless, and keeps its work on the session's volume.
+Starts a session: a pod on a worker node clones the repository and keeps its
+work on the session's volume. With -p it runs the agent once on the task,
+headless. With --local it starts the agent's TUI in tmux, which Tom attaches to
+with agent-run attach. When a session's pod starts again later, the agent
+resumes the same conversation in the TUI; a task is never run twice.
 agent-run prints the session's name, then waits up to --wait for the pod to
 start. If the scheduler cannot place the pod, it prints the scheduler's reason
 as soon as it is clear; the session stays Pending and starts when room frees up.
 
 Flags:
   -p, --prompt <task>        the task, at most 64 KiB
+  --local                    an interactive session instead of a task: the TUI, no prompt
   --prompt-file <path>       read the task from a file instead; - reads stdin
   --repo <name>              the repository under the GitHub owner, such as haynes-ops;
                              or give it as the first argument
@@ -71,8 +79,8 @@ Flags:
   --size S|M|L               the pod's CPU and memory preset (default M)
   --profile <name>           a profile in dev-env-templates (default: the templates'
                              default; a session's child always runs on its parent's)
-  --timeout <duration>       stop the task after this long, such as 40m
-  --max-turns <n>            stop the task after this many turns
+  --timeout <duration>       stop the task after this long, such as 40m (tasks only)
+  --max-turns <n>            stop the task after this many turns (tasks only)
   --idempotency-key <key>    a repeat of the same request with the same key returns
                              the session the first one created, while it is
                              unfinished (default: a new key for each run, which
@@ -81,9 +89,24 @@ Flags:
                              0 returns as soon as the session is created)
   -o name|json               print only the name, or the session as JSON
 
-v1's --interactive and --local arrive in plans 02 and 03. --safe is gone: a
-session pod runs its agent without approval prompts, and the platform is the
-boundary.
+v1's --interactive (a TUI with Remote Control) arrives with plan 03. --safe is
+gone: a session pod runs its agent without approval prompts, and the platform is
+the boundary.
+`,
+	"attach": `Usage: agent-run attach <name>
+
+Attaches your terminal to the session's TUI: kubectl exec -it into the session's
+pod and tmux attach-session -t agent, with your own Kubernetes rights. Detach
+with ctrl-b d; the agent keeps running. The session must be Running.
+
+It is for Tom, from the workbench, a laptop or the v1 pod. An agent cannot exec
+into another session's pod (D-19), so inside a session pod attach refuses and
+points at agent-run msg. kubectl must be on PATH.
+`,
+	"detach": `Usage: agent-run detach <name>
+
+Detaches every client from the session's TUI (tmux detach-client -s agent in its
+pod, through kubectl exec). The agent keeps running. For Tom, as attach.
 `,
 	"list": `Usage: agent-run list [--repo <name>] [--state <phase>] [--mine] [-o name|json]
 
@@ -127,7 +150,7 @@ Prints the version, the commit, the Go version and the platform.
 `,
 	"help": `Usage: agent-run help [<command>]
 
-Prints help for agent-run, or for one command: run, list, show, reap, fleet,
-version.
+Prints help for agent-run, or for one command: run, list, show, reap, attach,
+detach, fleet, version.
 `,
 }
