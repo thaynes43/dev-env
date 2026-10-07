@@ -162,8 +162,9 @@ step. Tick a step in the PR that lands it.
   cluster was BestEffort. Before phase 1 adds sessions, check that this still holds.
 - ExternalSecrets in `dev-agents` mirroring v1's; the empty keeper-owned Secrets. Done
   2026-10-06: haynes-ops #3480 (KICKOFF 8.8), with the keeper's `dev-env-keeper-github-dev-bot`
-  in `dev-env-system`. `full` and `dev` profiles still lack `CIGAR_JOURNAL_TOKEN` (only
-  `ops` wires it): a templates follow-up.
+  in `dev-env-system`. `CIGAR_JOURNAL_TOKEN` was missing from `full` and `dev` (only `ops`
+  wired it); fixed 2026-10-06 in haynes-ops #3493, all three profiles now take it from
+  `dev-env-cigar-secret` (D-18).
 - The shared CephFS volume `dev-env-shared` on `ceph-filesystem`, `prune: disabled`.
 - `dev-env-templates` with `gasha01-rbd` as the session volume class. The shared volume
   and the templates are done (2026-10-06, haynes-ops #3471, KICKOFF 8.7). The templates
