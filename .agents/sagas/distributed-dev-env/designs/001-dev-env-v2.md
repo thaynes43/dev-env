@@ -157,8 +157,8 @@ vision, and it keeps the operator's upgrade path trivial.
 broker and keeper. `dev-agents` holds session pods, their volumes, the workbench and
 the Secrets agents mount. `dev-tools` holds tool pods, their volumes and the Secrets
 only tools use (for example a video vendor's API key). The operator's write access is
-limited to `dev-agents` and `dev-tools`. Rationale: least privilege, and a LimitRange
-and network policies that apply to agent and tool pods only. The v1 namespace `dev`
+limited to `dev-agents` and `dev-tools`. Rationale: least privilege, and a Kyverno limit policy
+(D-47) and network policies that apply to agent and tool pods only. The v1 namespace `dev`
 is left alone until cutover.
 
 **D-38 (2026-10-06, KICKOFF B1). The keeper is its own binary, `dev-env-keeper`,
@@ -2061,13 +2061,31 @@ is 0.09 cores and its normal peaks are 1 to 6 cores across all sessions together
 known memory-heavy job (haynesnetwork's parallel vitest with embedded Postgres)
 broke an 8Gi limit that it shared with other sessions, so it gets L. Requests are
 sized to typical use, so the scheduler's picture of each node is true; limits cap
-bursts. **CPU limits are mandatory**: a LimitRange in `dev-agents` sets M as the
-default and L as the most one pod may ask for, and a Kyverno policy rejects a session
-pod without a CPU limit. `/tmp` is an emptyDir with an 8Gi `sizeLimit`.
+bursts. **CPU limits are mandatory**: a Kyverno policy rejects a session
+pod without a CPU limit, or with a limit above L (D-47 replaced the LimitRange this
+paragraph first called for). `/tmp` is an emptyDir with an 8Gi `sizeLimit`.
 
 Each pod exports its CPU limit as `DEV_ENV_CPU_LIMIT`, and the pod CLAUDE.md tells
 agents to size test workers to it. A limit throttles a runaway; it does not stop
 `vitest` from starting 20 workers on a 4-CPU pod and timing out its own tests.
+
+**D-47 (2026-10-06, plan 01 step 8.6). The `dev-agents` ceiling is a Kyverno policy,
+not a LimitRange.** 7.2 called for a LimitRange that sets M as the default and L as
+the most one pod may ask for. haynes-ops #3470 did not ship it. A LimitRange `max`
+makes the API server default every unset limit to that max, before any webhook runs.
+So no pod would ever reach Kyverno without a CPU limit, and every container with no
+limit of its own would reserve the max (8 CPU, 24Gi). The ceiling lives in the
+ValidatingPolicy `dev-env-require-cpu-limit`. It is scoped to the `dev-agents`
+namespace, acts on pod CREATE, and denies a pod when a container (init containers
+are not checked, because the k8tz timezone init container has no limit) has no
+`limits.cpu`, a CPU limit above 8, or a memory limit above 24Gi. A container with
+no memory limit passes: the policy does not require one, and the operator sets every
+class's memory limit from `dev-env-templates` anyway. The policy is `failurePolicy:
+Ignore`, like the other policies in haynes-ops, so a Kyverno outage does not block
+pod creation; the operator also refuses a template with no CPU limit. Nothing sets a
+per-container default in `dev-agents`: the operator writes every request and limit
+from the size class (D-44). Q-08's LimitRange (50m default CPU request in non-system
+namespaces) is a different object and is unchanged.
 
 ### 7.3 Capacity: the scheduler, not a fleet cap
 
@@ -2736,9 +2754,9 @@ image name `ghcr.io/thaynes43/dev-env`. haynes-ops records it in its dev-env sag
 **Stays in haynes-ops (GitOps):** every manifest. v1 (`apps/dev/dev-env`), maintained
 as today until cutover; the new `dev-env-system`, `dev-agents` and `dev-tools` apps
 (namespaces, CRDs, operator, broker and keeper HelmReleases, RBAC with the grant role
-catalog and the baseline guard, CNPs, ExternalSecrets, LimitRange, PriorityClass, the
-Kyverno limit policy); the config the pods read (`CLAUDE.md`, `mcp.json`, Codex
-`config.toml` and `requirements.toml`, opencode's config, subagent definitions,
+catalog and the baseline guard, CNPs, ExternalSecrets, PriorityClass, the
+Kyverno limit policy; no LimitRange, D-47); the config the pods read (`CLAUDE.md`,
+`mcp.json`, Codex `config.toml` and `requirements.toml`, opencode's config, subagent definitions,
 `dev-env-templates`) and the ToolPools, GrantPolicies, CallerPolicies and LLM pools,
 because config is deploy-time data and belongs in the audited GitOps diff; the
 summoning callers (alert-responder, upgrade-shepherd, triage, health-gate, the
@@ -2804,7 +2822,7 @@ v2 work never edits
 | Phase | Delivers | Done when |
 |---|---|---|
 | **0. Design and spikes** | This saga; spikes S-1 to S-16 (S-2 answered) | Q-01 to Q-11 answered (done 2026-10-06), spike results recorded, ADR-001 Accepted |
-| **1. Foundation** | Repo CI; operator with `AgentSession`, pod and volume lifecycle; agentd boot; agent image `2.0` (tini, agentd, baked Codex and kubectl-cnpg); keeper minting the gh token; haynes-ops apps for namespaces, CRDs, operator, keeper, RBAC with the baseline guard (D-19), CNPs with the web and platform tiers (D-24), LimitRange, PriorityClass, Kyverno limit policy; session volumes on `gasha01-rbd` (D-22). No ResourceQuota. **Task mode only**, static token. | `agent-run -p` from the v1 pod creates a pod on a worker; the task opens a PR; reap leaves a verified bundle. An operator rollout mid-task leaves the task untouched. The guard refuses each #3392 path. |
+| **1. Foundation** | Repo CI; operator with `AgentSession`, pod and volume lifecycle; agentd boot; agent image `2.0` (tini, agentd, baked Codex and kubectl-cnpg); keeper minting the gh token; haynes-ops apps for namespaces, CRDs, operator, keeper, RBAC with the baseline guard (D-19), CNPs with the web and platform tiers (D-24), PriorityClass, Kyverno limit policy (no LimitRange, D-47); session volumes on `gasha01-rbd` (D-22). No ResourceQuota. **Task mode only**, static token. | `agent-run -p` from the v1 pod creates a pod on a worker; the task opens a PR; reap leaves a verified bundle. An operator rollout mid-task leaves the task untouched. The guard refuses each #3392 path. |
 | **2. Interactive and lifecycle** | `local` mode, attach, idle detection, timers, rescue, resume, restore; `/v1/activities` and dev-env-ops reading both sources; messaging tier 3; laptop access | A local session survives suspend and resume with its conversation; a declared activity is visible to dev-env-ops; Tom runs `agent-run` from his laptop. |
 | **7. Access broker** (after 1, alongside 2) | `AccessGrant`, `GrantPolicy`, the broker Deployment, the approval page and Pushover link, kube and egress grants, break-glass; credential grants (Q-07) | A grant request reaches Tom's phone, he approves it, the agent uses it, and it is gone at its TTL; a standing policy approves a matching request with no ping; break-glass works and the headlamp Job is refused. |
 | **3. Remote Control** | Keeper-owned Max login, made fresh with `/login` (or the coordinator host if S-1 fails); agentd merging the access token into a writable credentials file and seeding the home; links from the CLI registry; archive on reap (S-15); the console with sessions, links, archive and the login page; the standby; messaging tier 2 | Tom drives a v2 session from his phone; a coordinator dispatches v2 task pods; the monthly renewal works from the console page. |
@@ -2955,3 +2973,4 @@ step it names.
 | D-44 | The operator builds one bare pod and one volume per session from `dev-env-templates` (strict format, revision = hash of the parsed content), places it per D-20 in code, and never updates or deletes either; no probes, 60 s grace, `Outdated` reported for plan 04 | 3.6 |
 | D-45 | Deleting an `AgentSession` is a reap: a finalizer on the session and its volume holds both until rescue; one guarded function deletes pods (Draining, or Suspended after rescue); `RemovalBlocked` reports the wait | 5.1 |
 | D-46 | The `/v1` API of plan 01: HTTPS on 8443 on every replica; TokenReview per request; callers by class (human, client, session; the v1 pod a client until cutover); create checks what only the API knows and leaves the schema and agentd their own rules; idempotency by label per parent; children bounded by count, depth and the parent's profile; reap is a delete held by the rescue finalizer; heartbeat merged into `status.agent` | 3.4 |
+| D-47 | The `dev-agents` CPU and memory ceiling is a Kyverno policy, not a LimitRange, because a LimitRange `max` defaults every unset limit to the max | 7.2 |

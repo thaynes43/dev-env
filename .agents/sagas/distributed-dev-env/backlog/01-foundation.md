@@ -80,8 +80,8 @@ step. Tick a step in the PR that lands it.
 ## In haynes-ops (GitOps PRs; none touch `apps/dev/dev-env/app/resources/**`)
 
 - Namespaces `dev-env-system` and `dev-agents`; the CRDs in their own Kustomization
-  with `prune: disabled`.
-- Namespace `dev-tools` too (empty until plan 08).
+  with `prune: disabled`. Namespace `dev-tools` too (empty until plan 08). Done
+  2026-10-06: haynes-ops #3468 (KICKOFF 8.3).
 - The operator API's Service (`dev-env-operator`, port 8443) and its cert-manager
   Certificate, named for `dev-env-operator.dev-env-system.svc.cluster.local`; the
   operator's `--api-url` is that full name and `--client-service-accounts` adds the
@@ -95,16 +95,30 @@ step. Tick a step in the PR that lands it.
   `dev-env-identity-guard` admission policies and the Kyverno exec rule, nothing in
   the three dev-env namespaces), network policies (the web and platform tiers of D-24
   as `CiliumClusterwideNetworkPolicy` objects, the default-deny clusterwide policy for
-  `dev-tools`, operator, keeper), LimitRange,
+  `dev-tools`, operator, keeper; done 2026-10-06, haynes-ops #3469, KICKOFF 8.5),
   PriorityClass `dev-env-agent` (-10, `preemptionPolicy: Never`), a Kyverno policy
-  requiring CPU limits in `dev-agents`. No ResourceQuota (D-21).
+  requiring CPU limits in `dev-agents` (done 2026-10-06, haynes-ops #3470, KICKOFF 8.6).
+  No LimitRange here: a LimitRange `max` would default every unset limit to the max, so
+  the policy also carries the 8 CPU / 24Gi ceiling (D-47). No ResourceQuota (D-21).
 - Q-08's Kyverno LimitRange (50m default CPU request in every non-system namespace)
   is built in haynes-ops as a v1 fix, not by this plan. It went live on 2026-10-06
   (haynes-ops #3406, Kyverno `default-cpu-request`); at 03:34Z no Running pod in the
   cluster was BestEffort. Before phase 1 adds sessions, check that this still holds.
 - ExternalSecrets in `dev-agents` mirroring v1's; the empty keeper-owned Secrets.
 - The shared CephFS volume `dev-env-shared` on `ceph-filesystem`, `prune: disabled`.
-- `dev-env-templates` with `gasha01-rbd` as the session volume class.
+- `dev-env-templates` with `gasha01-rbd` as the session volume class. The shared volume
+  and the templates are done (2026-10-06, haynes-ops #3471, KICKOFF 8.7). The templates
+  carry an all-zero placeholder image digest until KICKOFF B5 publishes
+  `ghcr.io/thaynes43/dev-env:2.x.y`; B5's haynes-ops follow-up sets the real digest.
+- The three config ConfigMaps in `dev-agents`, before the HelmReleases (KICKOFF 8.8a):
+  `dev-env-config-claude` (`CLAUDE.md`, `mcp.json`, `agent-*.md`), `dev-env-config-codex`
+  (`config.toml`, `AGENTS.header.md`) and `dev-env-scripts` (`bashrc.sh`). The templates
+  mount them at `/opt/dev-env/config/claude`, `/opt/dev-env/config/codex` and
+  `/opt/dev-env/scripts`; a session pod waits in `ContainerCreating` without them. The
+  source is v1's `apps/dev/dev-env/app/resources/config/**` and `bashrc.sh`, copied
+  into a v2 app and adapted (never editing v1's files). Open in the design: the v2 text
+  of `CLAUDE.md` and `bashrc.sh`, and the mount for Codex's `requirements.toml`
+  (`/etc/codex/`, DESIGN-001 6.3).
 - Kyverno `verify-thaynes43-images`: add the `thaynes43/dev-env` workflow identity.
 - Renovate: hold the v1 HelmRelease below `2.0.0`.
 - CNPs of in-cluster MCP services that admit only the v1 pod (the haynesnetwork hop,
