@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.0](https://github.com/thaynes43/dev-env/compare/v2.3.0...v2.4.0) (2026-10-07)
+
+
+### Features
+
+* **agentd:** idle detection, Claude's status and the newest activity (D-59) ([#75](https://github.com/thaynes43/dev-env/issues/75)) ([ecb977d](https://github.com/thaynes43/dev-env/commit/ecb977dde43b526e34dd20ec82b7eedb0addbb5e))
+* **operator,api,agent-run:** suspend, resume and the idle timer (D-60) ([#76](https://github.com/thaynes43/dev-env/issues/76)) ([3e103b4](https://github.com/thaynes43/dev-env/commit/3e103b46f26940ee6879b4a2598ff8e0f288fc83))
+
 ## [2.3.0](https://github.com/thaynes43/dev-env/compare/v2.2.0...v2.3.0) (2026-10-07)
 
 
