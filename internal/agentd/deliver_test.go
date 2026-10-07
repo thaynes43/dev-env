@@ -185,3 +185,38 @@ func TestConcurrentDeliveries(t *testing.T) {
 		t.Error("two deliveries shared a buffer")
 	}
 }
+
+// A message cannot end the bracketed paste early or send keys of its own:
+// the control characters a terminal acts on are dropped (D-65).
+func TestDeliverStripsControlCharacters(t *testing.T) {
+	s, f, stdin := deliverRig(t, true)
+	sess := protocol.Session{Name: "s-1", Agent: protocol.AgentClaude}
+	if err := Deliver(context.Background(), f, s, sess, "session/x", "hi\x1b[201~\x03rm -rf\n\tok\u009b"); err != nil {
+		t.Fatal(err)
+	}
+	msg := stdin["tmux load-buffer"]
+	if strings.ContainsAny(msg, "\x1b\x03\u009b") || !strings.HasSuffix(msg, "hi[201~rm -rf\n\tok") {
+		t.Errorf("message %q", msg)
+	}
+	if got := StripControl("a\x00b\x7fc\td\ne"); got != "abc\td\ne" {
+		t.Errorf("StripControl %q", got)
+	}
+}
+
+// A line too long to print whole is cut and marked, never a failed read; no
+// log at all is ErrNoLog.
+func TestTailLogLongLines(t *testing.T) {
+	s := testSettings(t, t.TempDir())
+	if err := TailLog(s, "s-1", 5, io.Discard); !errors.Is(err, ErrNoLog) {
+		t.Errorf("no log: %v", err)
+	}
+	writeFile(t, s.LogPath("s-1"), "first\n"+strings.Repeat("x", 2<<20)+"\nlast")
+	var buf bytes.Buffer
+	if err := TailLog(s, "s-1", 5, &buf); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
+	if len(lines) != 3 || lines[0] != "first" || len(lines[1]) > maxLogLine+64 || !strings.HasSuffix(lines[1], "[agentd: line cut at 64 KiB]") || lines[2] != "last" {
+		t.Errorf("%d lines; the long one %d bytes", len(lines), len(lines[1]))
+	}
+}

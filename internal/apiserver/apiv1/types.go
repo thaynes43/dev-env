@@ -40,6 +40,9 @@ type SessionLog struct {
 	Session string `json:"session"`
 	Tail    int    `json:"tail"`
 	Text    string `json:"text"`
+	// Truncated is set when the lines asked for were more than the API sends
+	// (4 MiB): Text then holds the newest whole lines that fit.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // MessageRequest is the body of POST /v1/sessions/{name}/messages: the text,

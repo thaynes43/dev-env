@@ -105,6 +105,7 @@ func TestSendMessage(t *testing.T) {
 	ex.code = 0
 
 	wantError(t, f.do(http.MethodPost, apiv1.SessionMessagesPath("s-to"), tokHuman, apiv1.MessageRequest{Text: "  "}), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	wantError(t, f.do(http.MethodPost, apiv1.SessionMessagesPath("s-to"), tokHuman, apiv1.MessageRequest{Text: "hi\x1b[201~"}), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
 	wantError(t, f.do(http.MethodPost, apiv1.SessionMessagesPath("s-to"), tokHuman, apiv1.MessageRequest{Text: strings.Repeat("x", apiv1.MaxMessageBytes+1)}), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
 	// A session with no running pod of its own.
 	wantError(t, f.do(http.MethodPost, apiv1.SessionMessagesPath("s-from"), tokHuman, apiv1.MessageRequest{Text: "hi"}), http.StatusConflict, apiv1.CodeConflict)
@@ -118,4 +119,21 @@ func TestSendMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantError(t, f.do(http.MethodPost, apiv1.SessionMessagesPath("s-to"), tokHuman, apiv1.MessageRequest{Text: "hi"}), http.StatusConflict, apiv1.CodeConflict)
+}
+
+// A tail longer than the API sends keeps its newest whole lines and says so;
+// a session with no log yet is a 404.
+func TestSessionLogTruncatesAndNoLog(t *testing.T) {
+	f := newFixture(t)
+	big := strings.Repeat("old line\n", 10) + strings.Repeat(strings.Repeat("y", 1023)+"\n", maxLogBytes/1024+8) + "newest\n"
+	ex := &fakeExec{out: big}
+	f.srv.Exec = ex
+	f.sessionPod("s-big", "full", 0)
+	f.runPod("s-big")
+	l := decode[apiv1.SessionLog](t, f.do(http.MethodGet, apiv1.SessionLogPath("s-big"), tokHuman, nil))
+	if !l.Truncated || len(l.Text) > maxLogBytes || strings.Contains(l.Text, "old line") || !strings.HasSuffix(l.Text, "newest\n") || !strings.HasPrefix(l.Text, "yyy") {
+		t.Errorf("truncated %v, %d bytes", l.Truncated, len(l.Text))
+	}
+	ex.out, ex.code = "", 4
+	wantError(t, f.do(http.MethodGet, apiv1.SessionLogPath("s-big"), tokHuman, nil), http.StatusNotFound, apiv1.CodeNotFound)
 }

@@ -40,6 +40,9 @@ func (a *app) log(ctx context.Context, args []string) error {
 		return a.printJSON(l)
 	}
 	_, _ = io.WriteString(a.env.Stdout, l.Text)
+	if l.Truncated {
+		a.errf("the log's last %d lines are more than the API sends; this is the newest part of them", tail)
+	}
 	return nil
 }
 

@@ -38,9 +38,12 @@ const (
 	podCmdTimeout  = time.Minute
 )
 
-// exitNotAddressable is agentd ctl deliver's exit code for a session that
-// takes no message now.
-const exitNotAddressable = 3
+// agentd's exit codes: ctl deliver's for a session that takes no message now,
+// and ctl log's for a session with no log yet.
+const (
+	exitNotAddressable = 3
+	exitNoLog          = 4
+)
 
 // runningPod is the session's own pod, as the API server has it, when it runs
 // an agent: not a hold pod (D-55), Running and Ready. Otherwise it is a 409
@@ -93,6 +96,34 @@ func (s *Server) liveSession(ctx context.Context, r *http.Request) (*v1alpha1.Ag
 	return &sess, nil
 }
 
+// tailBuffer keeps the last max bytes written to it, and says whether it
+// dropped any: a log's tail is its newest lines.
+type tailBuffer struct {
+	buf       []byte
+	max       int
+	truncated bool
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	b.buf = append(b.buf, p...)
+	if over := len(b.buf) - b.max; over > 0 {
+		b.buf = append(b.buf[:0], b.buf[over:]...)
+		b.truncated = true
+	}
+	return len(p), nil
+}
+
+// String is the kept bytes, from the first whole line when some were dropped.
+func (b *tailBuffer) String() string {
+	s := string(b.buf)
+	if b.truncated {
+		if i := strings.IndexByte(s, '\n'); i >= 0 {
+			s = s[i+1:]
+		}
+	}
+	return s
+}
+
 // limitedBuffer keeps at most max bytes and drops the rest.
 type limitedBuffer struct {
 	bytes.Buffer
@@ -134,11 +165,16 @@ func (s *Server) sessionLog(ctx context.Context, _ http.ResponseWriter, r *http.
 	}
 	ctx, cancel := context.WithTimeout(ctx, podCmdTimeout)
 	defer cancel()
-	stdout, stderr := &limitedBuffer{max: maxLogBytes}, &limitedBuffer{max: 4 << 10}
-	if err := s.Exec.Run(ctx, pod.Namespace, pod.Name, controller.ContainerName, []string{"agentd", "ctl", "log", "--tail", strconv.Itoa(tail)}, nil, stdout, stderr); err != nil {
+	stdout, stderr := &tailBuffer{max: maxLogBytes}, &limitedBuffer{max: 4 << 10}
+	err = s.Exec.Run(ctx, pod.Namespace, pod.Name, controller.ContainerName, []string{"agentd", "ctl", "log", "--tail", strconv.Itoa(tail)}, nil, stdout, stderr)
+	var code utilexec.ExitError
+	if errors.As(err, &code) && code.ExitStatus() == exitNoLog {
+		return 0, nil, notFound("session %s has no log yet", sess.Name)
+	}
+	if err != nil {
 		return 0, nil, execError("read the log of "+sess.Name, err, stderr.String())
 	}
-	return http.StatusOK, apiv1.SessionLog{Session: sess.Name, Tail: tail, Text: stdout.String()}, nil
+	return http.StatusOK, apiv1.SessionLog{Session: sess.Name, Tail: tail, Text: stdout.String(), Truncated: stdout.truncated}, nil
 }
 
 // sendMessage serves POST /v1/sessions/{name}/messages: agentd ctl deliver in
@@ -152,6 +188,8 @@ func (s *Server) sendMessage(ctx context.Context, w http.ResponseWriter, r *http
 	}
 	text := strings.TrimSpace(req.Text)
 	switch {
+	case stripControl(text) != text:
+		return 0, nil, invalid(fieldError("text", "the text holds control characters other than newline and tab; a terminal would act on them"))
 	case text == "":
 		return 0, nil, invalid(fieldError("text", "the message is empty"))
 	case len(text) > apiv1.MaxMessageBytes:
@@ -199,4 +237,19 @@ func truncateText(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// stripControl is agentd.StripControl's rule (D-65): C0 but newline and tab,
+// DEL and C1 go. The API refuses a text with any, so the sender learns of it;
+// agentd strips them again.
+func stripControl(text string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' {
+			return r
+		}
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			return -1
+		}
+		return r
+	}, text)
 }

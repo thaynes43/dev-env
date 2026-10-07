@@ -96,7 +96,7 @@ func TestCtl(t *testing.T) {
 	if code, _, errOut := runArgs([]string{"ctl", "log", "--tail", "0"}, env); code != exitUsage {
 		t.Errorf("ctl log --tail 0: %d %q", code, errOut)
 	}
-	if code, _, errOut := runArgs([]string{"ctl", "log"}, env); code != exitFailure || !strings.Contains(errOut, "no log yet") {
+	if code, _, errOut := runArgs([]string{"ctl", "log"}, env); code != exitNoLog || !strings.Contains(errOut, "no log yet") {
 		t.Errorf("ctl log with no log: %d %q", code, errOut)
 	}
 	// Nothing launched yet: the next boot starts fresh, and no agent ran.

@@ -186,6 +186,10 @@ func hold(ctx context.Context, log *slog.Logger, getenv func(string) string) int
 // message now (agentd.ErrNotAddressable); the API answers it with a 409.
 const exitNotAddressable = 3
 
+// exitNoLog is ctl log's exit code for a session with no log yet; the API
+// answers it with a 404.
+const exitNoLog = 4
+
 // ctlMessageOrLog is `ctl deliver --from <caller>` (the message on stdin) and
 // `ctl log [--tail N]` (D-65).
 func ctlMessageOrLog(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, r agentd.Runner) int {
@@ -210,6 +214,9 @@ func ctlMessageOrLog(ctx context.Context, args []string, stdin io.Reader, stdout
 	if args[0] == "log" {
 		if err := agentd.TailLog(s, sess.Name, *tail, stdout); err != nil {
 			_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
+			if errors.Is(err, agentd.ErrNoLog) {
+				return exitNoLog
+			}
 			return exitFailure
 		}
 		return exitOK

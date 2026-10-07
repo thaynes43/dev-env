@@ -199,10 +199,26 @@ func (d *Daemon) shutdown() {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
-	// A last copy of the log, given at most a few seconds of the grace.
-	d.copyLog()
-	for i := 0; i < 30 && d.copying.Load(); i++ {
-		time.Sleep(100 * time.Millisecond)
+	// A last copy of the log, given at most a few seconds of the grace. A
+	// periodic copy still running holds an older log, so once it is done the
+	// last one starts.
+	deadline := time.Now().Add(3 * time.Second)
+	for started := false; time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if !started {
+			started = d.copying.CompareAndSwap(false, true)
+			if started {
+				go func() {
+					defer d.copying.Store(false)
+					if err := copyLogToShared(d.S, d.Session.Name); err != nil {
+						d.Log.Warn("copy the log to the shared volume", "err", err)
+					}
+				}()
+			}
+			continue
+		}
+		if !d.copying.Load() {
+			break
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

@@ -2382,7 +2382,10 @@ volume.**
   of its own, pastes it into the pane as one bracketed paste, and presses Enter, so
   a multi-line message is one prompt and no text passes through a shell. A lock in
   `~/.agentd` holds from the load to the Enter, so two messages sent at once are
-  delivered one after the other, never as one prompt. For Codex it
+  delivered one after the other, never as one prompt. The control characters a
+  terminal acts on (C0 but newline and tab, DEL, C1) are refused by the API (422)
+  and dropped again by agentd, so a message can never end the bracketed paste early
+  (`ESC [201~`) or send keys of its own. For Codex it
   runs `codex queue --thread <id> --message <text>`. The agent reads a first line
   saying who sent it, that it is information and not its user's instruction, and,
   for a session sender, how to answer (`agent-run msg <sender>`). A headless task or
@@ -2393,9 +2396,12 @@ volume.**
   agent-run would retry.
 - **Logs.** `GET /v1/sessions/{name}/log?tail=N` (1 to 5000, default 200) runs
   `agentd ctl log --tail N` in the running pod, which prints the end of the session's
-  log (`~/work/<name>.log`), else of its shared copy. agentd copies that log to
+  log (`~/work/<name>.log`), else of its shared copy; a line over 64 KiB is cut and
+  marked. The API sends at most 4 MiB, the newest whole lines, and sets `truncated`
+  when it cut. A session with no log yet is a 404 (agentd exits 4). agentd copies that log to
   `~/.shared/logs/<name>.log` every 5 minutes, when the agent exits, and at
-  shutdown, through a temporary file, in the background so a hung CephFS write never
+  shutdown (after any periodic copy still running, within 3 seconds), through a
+  temporary file, in the background so a hung CephFS write never
   blocks the daemon. With no running pod the API answers 409 and names the shared
   path, which any session pod reads. `agent-run log <name> [--tail N]` prints it.
 - **Exec.** `internal/podexec` is the one exec client (WebSocket with the SPDY
