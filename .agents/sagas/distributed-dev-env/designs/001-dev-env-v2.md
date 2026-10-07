@@ -440,11 +440,19 @@ call, what a create checks, and how a reap and a heartbeat reach the objects.**
   the DNS allowlist refuses search-expanded names, so `--api-url` is that full name.
   The CA reaches session pods through a templates mount and `AGENTD_API_CA_FILE`.
   The RBAC is 6.11's operator row as written (`tokenreviews` create, its CRD group,
-  pods read in `dev-agents`). The v1 pod mints its token with `kubectl create token
+  pods read in `dev-agents`); as built, the CRD group is in the `dev-agents` Role
+  (D-19's 2026-10-07 note). The v1 pod mints its token with `kubectl create token
   dev-env -n dev --audience dev-env-operator`, which needs `create` on
   `serviceaccounts/token` for its own ServiceAccount (`resourceNames: [dev-env]`) in
   v1's `rbac.yaml`. A token for the pod's own identity, for an audience only the
   operator accepts, adds no right in the cluster.
+  *As built (2026-10-07, KICKOFF 8.4):* a Role `dev-env-v2-api-token` in `dev`, from
+  the v2 RBAC app, not v1's `rbac.yaml`. Nothing in v1's app changes, so the v1 pod
+  cannot restart. RBAC cannot limit a TokenRequest's audience or lifetime. Without
+  more, this right could mint an unbound, long-lived API-server token of v1's tier. So
+  the ValidatingAdmissionPolicy `dev-env-v1-token-guard` admits the v1 pod's
+  TokenRequests only for the audience `dev-env-operator` and at most 3600 s
+  (`agent-run` asks for 600 s). That is what makes "adds no right" true.
 - **Not in plan 01:** the other routes of the table above, `CallerPolicy`, and a
   rate limit on TokenReviews. Only the platform tier and the v1 pod reach the API.
 
@@ -2183,11 +2191,78 @@ anything more is a grant; nothing in the three dev-env namespaces.**
 - **Accepted, as in v1:** sessions inside the coordinator host or the codex hub can
   read that pod's login file, because they run where it lives.
 
+**D-19 as built, and S-12 (2026-10-07, KICKOFF 8.4; haynes-ops #3477, #3479).**
+haynes-ops `apps/dev-env-system/rbac/` holds the ServiceAccounts, the Roles of the
+table below and three ValidatingAdmissionPolicies; `apps/kyverno/policies/app/` holds
+the Kyverno exec rule.
+
+- **Where each rule lives.** `dev-env-agent-guard` is #3392's option 1 in full for
+  the agent: Job create, workload restart, CronJob suspend, Flux reconcile and
+  suspend, ExternalSecret force-sync. It stands alone, so it can bind v1's identities
+  too if #3392 is mitigated for v1. `dev-env-identity-guard` repeats the Job, Flux and
+  ExternalSecret rules for grant identities. The Kyverno `ValidatingPolicy`
+  `dev-env-exec-guard` keeps only the part of the exec rule that needs the target pod:
+  a listed privileged ServiceAccount, or a privileged or host-PID pod.
+- **The VAP sees `CONNECT`** (S-12). Exec, attach and API-server proxy reach a
+  ValidatingAdmissionPolicy as `CONNECT` on `pods/exec`, `pods/attach` and
+  `pods/proxy`. So the identity guard refuses them in the three dev-env namespaces
+  itself. It also refuses exec and attach in the controller namespaces (`kube-system`,
+  `kyverno`, `flux-system`, `external-secrets`, `cert-manager`, `ceph-csi`,
+  `openebs-system`, `volsync-system`, `k8tz`). That part cannot live in Kyverno:
+  Kyverno never sees `kube-system` or `kyverno`, because its `resourceFilters` and its
+  webhook `namespaceSelector` skip them.
+- **Added to the design.** (1) A Job, and any pod spec a dev-agents identity creates or
+  changes, meets the Pod Security baseline: no added capability outside the baseline
+  set, no Unconfined seccomp or AppArmor, no hostPort, unsafe sysctl, unmasked proc or
+  custom SELinux label, besides "not privileged, no hostPath or host namespaces".
+  Kyverno's `pod-security-baseline` fails open, and its exceptions match Job names an
+  agent can choose (`volsync-src-*`). The PR review found this. (2) Exec into a
+  privileged or host-PID pod is refused, because that is root on its node. (3) The
+  privileged list was built from the cluster's ClusterRoleBindings. It holds v1's
+  `dev/dev-env` and `upgrade-agent/dev-env-ops`, which carry v1's unguarded tier. (4)
+  The identity guard also refuses TokenRequests, ephemeral containers, the node proxy
+  and CSR approval. This backs up the break-glass role's RBAC.
+- **What the guard cannot cover.** The API server never sends `admissionregistration.k8s.io`
+  objects to admission policies or webhooks: the policies, their bindings and webhook
+  configurations. So RBAC protects the guard, not the guard itself. No v2 role may
+  write those objects, and break-glass excludes them (6.12).
+- **Failure.** Every policy uses `failurePolicy: Fail` and has no `paramRef`. A
+  username match condition runs first and cannot fail, so an error refuses only a
+  `dev-agents` identity. A missing param object is checked *before* match conditions,
+  so a `paramRef` could refuse a request cluster-wide. The short lists are therefore
+  variables in the policy. Kyverno 1.19 copies a CEL policy's match conditions into
+  its own webhook, so the exec guard also fails closed only for `dev-agents`
+  identities.
+- **The table's rows, as built.** The operator's rights on its own CRD group are in
+  its `dev-agents` Role, not a ClusterRole. Its cache lists only `dev-agents`
+  (`controller.CacheOptions`), so nothing needs the group cluster-wide, and only
+  `tokenreviews` stays in a ClusterRole. Leases are get, create and update for the
+  operator and the keeper, the verbs client-go's LeaseLock uses. The keeper has
+  D-52's rights, with no TokenReview until plan 03. The RBAC app also creates the
+  ServiceAccounts, so the HelmReleases do not.
+- **The short lists.** A pod may run as `default` and as no other ServiceAccount. A
+  Job may mount only the volsync restic repositories (`<app>-volsync-aws-secret`),
+  which the unlock runbook needs.
+- **S-12** ran as Job `s12-baseline-guard-2` in `dev-agents` under `dev-env-agent`
+  (00 has every check). It refused 24 #3392 paths and 5 dev-env-namespace actions, and
+  allowed 16 runbook actions. A first run passed 44 of 45 checks. The one miss was the
+  test's: it picked a finished pod, and kubectl refused before sending anything.
+  Before merge, the same script ran against kube-apiserver 1.35 on the Flux,
+  ExternalSecret, volsync and `AgentSession` CRDs. The real `flux` 2.9.6 CLI passed
+  for suspend, resume, reconcile, `--with-source`, `--force` and `--reset`. The
+  Kyverno 1.19.1 CLI checked the exec rule.
+- **Not yet in the cluster:** the break-glass half of S-12, which needs plan 07's
+  `dev-env-grant-breakglass`. On the local API server, a cluster-admin-bound
+  `grant-test` identity was refused each of these: a `kube-system` write, a pod as
+  headlamp, a new Secret reference, a privileged patch, an RBAC write, a CRD delete, a
+  Flux spec patch, an ExternalSecret delete, a hostPath PV and a TokenRequest. It was
+  allowed a `kube-system` eviction and an image change that kept the pod's Secrets.
+
 | Identity | Grants | Note |
 |---|---|---|
 | `dev-agents/dev-env-agent` (session pods) | Cluster-wide read (v1's read rules, no Secrets) + `dev-env.haynesops.com` read. v1's write and proxy verbs cluster-wide, under `dev-env-agent-guard`. The `database` PVC-delete binding, as v1. | **At most v1's tier, minus the #3392 escalations, and nothing in the three dev-env namespaces.** No write to its own CRDs: every v2 write goes through the API. |
 | `dev-agents/grant-<id>` (one per kube grant) | Exactly the granted role, in the granted namespaces, until the grant expires, under `dev-env-identity-guard`. | Created and deleted by the broker. Its token lives in the session pod's tmpfs. Never valid in the three dev-env namespaces. |
-| `dev-env-system/dev-env-operator` | Roles in `dev-agents` and `dev-tools`: pods (create, delete, get, list, watch, patch), `pods/exec` create, `pods/log` get, `pods/eviction` create, PVCs (create, delete, get, list, watch, patch: archive lifts the volume's finalizer, D-51) and Services (create, delete, get, list, watch), namespaced CiliumNetworkPolicies in `dev-tools` (tool ingress and declared egress) and delete on namespaced CiliumNetworkPolicies in `dev-agents` (the expiry backstop; only grants live there), events (core, and `events.k8s.io` create and patch: the rescue and archive events, D-51). No write on `CiliumClusterwideNetworkPolicy`. ClusterRole: its own CRD group (with `agentsessions/finalizers` update), `tokenreviews` create. Leases in its own namespace, and `get`, `list`, `watch` on the ConfigMap `dev-env-templates` there by `resourceNames` (D-44). | No cluster-wide pod or PVC rights, no Secrets, no `bind`. |
+| `dev-env-system/dev-env-operator` | Roles in `dev-agents` and `dev-tools`: pods (create, delete, get, list, watch, patch), `pods/exec` create, `pods/log` get, `pods/eviction` create, PVCs (create, delete, get, list, watch, patch: archive lifts the volume's finalizer, D-51) and Services (create, delete, get, list, watch), namespaced CiliumNetworkPolicies in `dev-tools` (tool ingress and declared egress) and delete on namespaced CiliumNetworkPolicies in `dev-agents` (the expiry backstop; only grants live there), events (core, and `events.k8s.io` create and patch: the rescue and archive events, D-51). No write on `CiliumClusterwideNetworkPolicy`. Its own CRD group (with `agentsessions/finalizers` update) in the `dev-agents` Role, where the sessions live; ClusterRole: `tokenreviews` create. Leases (get, create, update) in its own namespace, and `get`, `list`, `watch` on the ConfigMap `dev-env-templates` there by `resourceNames` (D-44). | No cluster-wide pod or PVC rights, no Secrets, no `bind`. |
 | `dev-env-system/dev-env-broker` | RoleBindings and ClusterRoleBindings (create, delete); `bind` only on the grant role catalog by `resourceNames`; ServiceAccounts and `serviceaccounts/token` in `dev-agents`; CiliumNetworkPolicies in `dev-agents`; `pods/exec` in `dev-agents` (installs grant tokens); status of `AccessGrant`; read on the `dev-env.haynesops.com` group for the console's session list. No write on `CiliumClusterwideNetworkPolicy`, admission policies or Secrets. | The most privileged v2 identity: it can hand out the break-glass role. It accepts approvals only from Tom's Authentik identity and runs where agents cannot write or exec. |
 | `dev-env-system/dev-env-keeper` | Role in `dev-agents`: Secrets get, update and patch on `resourceNames` `dev-env-gh-token`, `dev-env-ops-gh-token`, `dev-env-claude-live`, `dev-env-codex-live` only; for credential grants (Q-07), also `pods/exec` in `dev-agents` and read on `AccessGrant`. ClusterRole: `tokenreviews` create. Leases (get, create, update) and Events (create, patch) in its own namespace (D-52). Plan 01 grants the Secrets `patch` only (D-52). | The four Secrets are created empty by GitOps, so no `create` is needed. |
 | `dev-env-system/dev-env-gpu-guard` (DaemonSet on GPU nodes) | Role in `dev-tools`: pods get, list; `pods/eviction` create. Read on the budgeter's Lease in `dev-env-system`. | Evicts agent GPU pods only; works when the operator is down (8.2). |
@@ -2198,7 +2273,9 @@ anything more is a grant; nothing in the three dev-env namespaces.**
 
 The v1 pod keeps its cluster-wide binding until cutover; it runs no v2 session and
 holds no v2 credential, but it can still reach the v2 namespaces. Phase 1 checks
-`kubectl auth can-i` and the guard from a session pod for each denied path.
+`kubectl auth can-i` and the guard from a session pod for each denied path. S-12 ran
+those checks from a Job as `dev-env-agent` (2026-10-07, passed). Plan 01's acceptance
+repeats them from the first task pod.
 
 Naming note: the ClusterRole `dev-env-operator` is v1's **OPERATOR tier** for agents.
 The new **operator** component runs as ServiceAccount `dev-env-operator` in another
@@ -3259,7 +3336,7 @@ Backlog plans: [`../backlog/`](../backlog/).
 | S-9 | Does the pinned device plugin count VRAM units with time-slicing (requests above 1, config chosen by an NFD-set label), and does a household-priority pod preempt an agent GPU pod? Is DRA consumable capacity usable with NVIDIA's driver on these cards yet? | talosw04 (nothing household runs there), one pod at a time | D-30 mechanism |
 | S-10 | Do Claude Code, Codex and opencode accept a loopback MCP server that answers `initialize` and `tools/list` from a cache, and pick up a server added mid-session? | one session pod, phase 2 | D-29 |
 | S-11 | Does the pinned opencode run headless, resume a session, use MCP over HTTP, allow everything by config, and make sound tool calls with a Qwen coder model on llama-server? | one session pod, one request at a time against the shared pool | D-33 |
-| S-12 | Does the baseline guard refuse each #3392 path (Job as another ServiceAccount, image patch, Flux spec patch, exec into the headlamp pod) and allow each runbook action (rollout restart, CronJob suspend, Flux reconcile and suspend, volsync unlock Job, ExternalSecret force-sync)? Does the admission policy see `CONNECT` for exec? | a scratch namespace, phase 1 | D-19 |
+| S-12 | Does the baseline guard refuse each #3392 path (Job as another ServiceAccount, image patch, Flux spec patch, exec into the headlamp pod) and allow each runbook action (rollout restart, CronJob suspend, Flux reconcile and suspend, volsync unlock Job, ExternalSecret force-sync)? Does the admission policy see `CONNECT` for exec? | a Job in `dev-agents` as `dev-env-agent`, every write a server-side dry run against real objects, phase 1. **Passed 2026-10-07** (haynes-ops #3477, #3479): 45 of 45 checks. Every #3392 path was refused, every write, exec and proxy into the dev-env namespaces was refused, and every runbook action was allowed, the real `flux reconcile` and the rook-toolbox exec included. **The ValidatingAdmissionPolicy sees `CONNECT`** for exec, attach and proxy, so it carries the namespace half of the exec rule; Kyverno carries the half that needs the target pod. Review added the Pod Security baseline to both guards. The break-glass half waits for plan 07 | D-19: built as written, with the additions in its 2026-10-07 note |
 | S-13 | Does a reserve pod at priority -1 make the scheduler preempt an agent GPU pod and keep the units, and does a household pod preempt the reserve pod? Can a gated pod's node affinity be narrowed before its gate is removed? Does a GPU node that joins (talosw04 with its lend label set) appear in the budget with no config change? | talosw04, one pod at a time | D-34 |
 | S-14 | On each satellite: does `llama-server` (Metal, CUDA on Windows) serve the pool models with the satellite agent in front; tokens per second for each pool model; MLX against llama.cpp on the M5; do the owner-first signals (a game's VRAM on Windows, battery and memory pressure on macOS) fire within seconds; model load time from local disk? | Tom's three machines, with Tom present, one machine at a time | D-35 |
 | S-15 | Does the CLI's archive call (`POST /v1/code/sessions/{id}/archive`, undocumented) with an access token take a finished session off the phone's active list, and does the documented way back (`claude --resume`, then `/remote-control`) still reopen it? Does `--resume` alone? | v1 pod, scratch config dir, one `spike-s15` session. **Passed 2026-10-06** (CLI 2.1.292): 200 on an offline entry, and 200 again on a repeat (not 409); Tom saw the entry leave his list. `claude --resume` alone unarchived and reattached it, with no `/remote-control` | 6.7 archive on reap: the keeper's call, after the CLI's own archive on SIGTERM |

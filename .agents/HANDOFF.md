@@ -67,7 +67,8 @@ the saga. To start building, follow
   their pod's token; the token sets a new session's parent, depth and profile. A
   reap deletes the session, which the rescue finalizer holds (D-45). `agent-run`
   (step 7) imports the wire types from `internal/apiserver/apiv1`; step 8 deploys
-  the Service, the Certificate and v1's own-token RBAC that D-46 lists.
+  the Service and the Certificate that D-46 lists (v1's own-token RBAC landed with
+  8.4).
 - **Plan 01 step 6, the minimal keeper, is built** (#39). `dev-env-keeper` mints
   the haynes-dev-bot installation token v1's way (same permission set) and merges it
   into `dev-agents/dev-env-gh-token`, key `gh_token`, every 40 minutes or two thirds of
@@ -81,8 +82,8 @@ the saga. To start building, follow
   on or the scheduler's reason; `list`, `show <name>`, `reap <name>...` and `fleet`
   read and reap; `-o json` prints the API's own document, and the exit codes are in
   D-50. A session pod uses its projected token; any other pod, such as the v1 pod,
-  mints a token for its own ServiceAccount, which the cluster refuses until step 8's
-  RBAC lands, and step 8 must also get the API's CA to the v1 pod; elsewhere, pass
+  mints a token for its own ServiceAccount (the v1 pod can since 8.4, for audience
+  `dev-env-operator` only), and step 8 must also get the API's CA to the v1 pod; elsewhere, pass
   `--api-url` and `--token-file` until plan 02. v1's own `agent-run` is unchanged and
   still starts every session today.
 - **The v1 bounce landed on 2026-10-06.** haynes-ops #3381, #3342, #3336, #3294 and
@@ -98,8 +99,13 @@ the saga. To start building, follow
   `GET /api/oauth/usage` (7.3). S-15 passed: the CLI's archive call works on an
   access token and the entry leaves Tom's list; `claude --resume` alone unarchives
   it (6.7).
-- **Plan 01 step 8 has begun in haynes-ops** (2026-10-06). Items 8.1 to 8.3, 8.5 to 8.7
-  and 8.8a are merged and verified (#3458, #3462, #3463, #3468 to #3471, #3474). Three
+- **Plan 01 step 8 has begun in haynes-ops** (2026-10-06). Items 8.1 to 8.8, 8.8a and
+  8.10 are merged and verified (#3458, #3462, #3463, #3468 to #3471, #3474, #3477,
+  #3479, #3480, #3491); 8.9, the HelmReleases, is next.
+  8.4 is the RBAC and the baseline guard: three ValidatingAdmissionPolicies and a
+  Kyverno exec rule. Spike S-12 passed against it, 45 of 45 checks from a Job running
+  as `dev-env-agent`, and the VAP sees `CONNECT` for exec (D-19). The v2
+  ServiceAccounts exist now, so 8.9 names them and does not create them. Three
   gaps came out of 8.1 to 8.7: the `dev-agents` ceiling is a Kyverno policy, not a
   LimitRange (D-47); the config ConfigMaps had no owner, so 8.8a (D-49) now builds
   four of them in `dev-agents`, with a v2 `CLAUDE.md` and Codex's `requirements.toml`
@@ -126,7 +132,8 @@ the saga. To start building, follow
 3. **Collect the spike results.** S-1, S-1b and S-7 are done, and S-2 is already
    answered (the static token cannot register Remote Control). S-6, S-15 and S-16
    are done, and S-3 passed (keeper-owned Codex auth, DESIGN-001 D-12 step 2), so
-   group 1 is complete. Group 2 (S-12, S-8) waits for its phase-1 haynes-ops PRs.
+   group 1 is complete. In group 2, S-12 passed on 2026-10-07 (its break-glass half
+   runs with plan 07); S-8 waits for the first task pod.
    Each result lands in its own PR. The order and pass criteria are in
    [KICKOFF section 2](sagas/distributed-dev-env/KICKOFF.md#2-track-a-spikes).
 4. **The rest of the MVP, then beyond it.** The MVP ends at the cutover (plan 05);
