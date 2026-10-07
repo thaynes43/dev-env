@@ -115,7 +115,7 @@ the saga. To start building, follow
   `dev-env-keeper` from `dev-env-operator:sha-8b388b2`, and the v2 `agent-run fleet`
   answers from the v1 pod. The API's CA is pinned as ConfigMap
   `dev-agents/dev-env-api-ca` (D-50, as built). Next is step 9, the first end-to-end
-  run, which needs B5's agent image in `dev-env-templates` first.
+  run. B5's agent image is in `dev-env-templates` since 2026-10-07 (haynes-ops #3501).
   8.4 is the RBAC and the baseline guard: three ValidatingAdmissionPolicies and a
   Kyverno exec rule. Spike S-12 passed against it, 45 of 45 checks from a Job running
   as `dev-env-agent`, and the VAP sees `CONNECT` for exec (D-19). The v2
@@ -123,8 +123,9 @@ the saga. To start building, follow
   gaps came out of 8.1 to 8.7: the `dev-agents` ceiling is a Kyverno policy, not a
   LimitRange (D-47); the config ConfigMaps had no owner, so 8.8a (D-49) now builds
   four of them in `dev-agents`, with a v2 `CLAUDE.md` and Codex's `requirements.toml`
-  at `/etc/codex` in every pod; and `dev-env-templates` holds a placeholder image
-  digest until B5's follow-up sets the real one.
+  at `/etc/codex` in every pod; and `dev-env-templates` held a placeholder image
+  digest until B5's follow-up, haynes-ops #3501 (2026-10-07), set `dev-env:2.0.0` and
+  its digest.
 - **v1 keeps running.** The single dev-env pod and the `dev-env-ops` executor are
   deployed from haynes-ops until the cutover (plan 05) and plan 10.
 - **Q-08 is live.** Kyverno `default-cpu-request` (haynes-ops #3406) went live on

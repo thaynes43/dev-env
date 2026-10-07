@@ -182,8 +182,9 @@ step. Tick a step in the PR that lands it.
 - The shared CephFS volume `dev-env-shared` on `ceph-filesystem`, `prune: disabled`.
 - `dev-env-templates` with `gasha01-rbd` as the session volume class. The shared volume
   and the templates are done (2026-10-06, haynes-ops #3471, KICKOFF 8.7). The templates
-  carry an all-zero placeholder image digest until KICKOFF B5 publishes
-  `ghcr.io/thaynes43/dev-env:2.x.y`; B5's haynes-ops follow-up sets the real digest.
+  carried an all-zero placeholder image digest until 2026-10-07, when haynes-ops #3501
+  replaced it with `ghcr.io/thaynes43/dev-env:2.0.0` and its digest. B5's haynes-ops
+  follow-up is done.
 - The four config ConfigMaps in `dev-agents`, before the HelmReleases (KICKOFF 8.8a,
   D-49): `dev-env-config-claude` (`CLAUDE.md`, `mcp.json`, `agent-*.md`),
   `dev-env-config-codex` (`config.toml`, `AGENTS.header.md`),
