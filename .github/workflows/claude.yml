@@ -10,7 +10,8 @@ name: Claude Code
 # collaborator (`author_association`), or the dev bot, `haynes-dev-bot[bot]`, which
 # opens agent issues and PRs and may summon Claude (`allowed_bots` below). A
 # stranger's @claude starts no job, and a stranger's issue stays unanswered even when
-# someone trusted assigns it later (the gate reads the issue's author).
+# someone trusted, the bot included, assigns it later: for issues the gate reads the
+# issue's author (`issue.user`), never the actor who assigned it.
 #
 # Source: haynes-ops .agents/templates/github/claude.yml, set up per haynes-ops
 # .agents/runbooks/new-repo-setup.md. SHA-pinned like claude-code-review.yml.
@@ -42,7 +43,7 @@ jobs:
          github.actor == 'haynes-dev-bot[bot]')) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) &&
         (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association) ||
-         github.actor == 'haynes-dev-bot[bot]'))
+         github.event.issue.user.login == 'haynes-dev-bot[bot]'))
     # One @claude run per thread: a follow-up mention waits for the run in flight.
     # Job-level, so a skipped (ungated) event never enters the group and cannot
     # displace a pending run.

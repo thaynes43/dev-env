@@ -17,7 +17,7 @@ source.
 | Component | License | Notes |
 |---|---|---|
 | `dev-env-operator`, `dev-env-keeper` | MIT | This repo. |
-| Go modules linked into the binaries | Apache-2.0, BSD-3-Clause, MIT, BSD-2-Clause, ISC | Kubernetes client libraries, controller-runtime and their dependencies, pinned in [`go.mod`](../go.mod) and [`go.sum`](../go.sum). On 2026-10-07 the four binaries linked 63 modules: 38 Apache-2.0, 16 BSD-3-Clause, 7 MIT, 1 BSD-2-Clause and 1 ISC. |
+| Go modules linked into the two binaries | Apache-2.0, BSD-3-Clause, MIT, BSD-2-Clause, ISC | Kubernetes client libraries, controller-runtime and their dependencies, pinned in [`go.mod`](../go.mod) and [`go.sum`](../go.sum). On 2026-10-07 the operator and keeper linked 63 modules: 38 Apache-2.0, 16 BSD-3-Clause, 7 MIT, 1 BSD-2-Clause and 1 ISC. |
 | Go standard library and runtime | BSD-3-Clause | [go.dev/LICENSE](https://go.dev/LICENSE) |
 | Base image `gcr.io/distroless/static:nonroot` | Apache-2.0 (the [distroless](https://github.com/GoogleContainerTools/distroless) project) | Its Debian files (`ca-certificates`, `tzdata`, `base-files`, `netbase`) keep their licenses in `/usr/share/doc/*/copyright` inside the image. |
 
@@ -43,7 +43,7 @@ Claude Code.
 
 | Component | License | Upstream |
 |---|---|---|
-| `agentd`, `agent-run` | MIT | This repo |
+| `agentd`, `agent-run` | MIT | This repo. They link only the Go standard library and runtime (BSD-3-Clause, [go.dev/LICENSE](https://go.dev/LICENSE)), no third-party module (checked 2026-10-07). |
 | `pve`, `hw-ssh` | MIT | This repo (copies of the v1 scripts from [thaynes43/haynes-ops](https://github.com/thaynes43/haynes-ops), also MIT) |
 | `tini` | MIT | [krallin/tini](https://github.com/krallin/tini) |
 | Codex CLI | Apache-2.0 | [openai/codex](https://github.com/openai/codex) |
