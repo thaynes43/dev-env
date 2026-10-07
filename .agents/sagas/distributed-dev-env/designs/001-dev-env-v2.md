@@ -3352,7 +3352,9 @@ audio-authoring build in haynes-ops today); a ToolPool pins any signed image.
 
 **Versioning:** semver with release-please (conventional commits). The operator and
 agent images are tagged with the release version and signed with cosign keyless;
-haynes-ops pins tag plus digest, and Renovate bumps it there.
+haynes-ops pins tag plus digest, and Renovate bumps it there. Agents squash-merge a
+green release PR themselves, after checking the version and changelog (Tom,
+2026-10-07: "Merge, and let agents merge releases").
 
 ## 11. Repo bootstrap
 

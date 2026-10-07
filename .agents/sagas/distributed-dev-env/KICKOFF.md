@@ -203,7 +203,9 @@ Makefile               generate, lint, test, build; test parallelism capped
   `gh pr close <n> && gh pr reopen <n>`. Repeat it after every update: release-please
   force-pushes the same PR branch after each push to main, and a push made with
   `GITHUB_TOKEN` starts no run, so `CI - Success` stays on the old head. Do not merge a release PR whose
-  `CI - Success` has not reported. The fallback also needs the repo setting "Allow
+  `CI - Success` has not reported. Agents merge a green release PR themselves after
+  checking the version and changelog (Tom, 2026-10-07: "Merge, and let agents merge
+  releases"). The fallback also needs the repo setting "Allow
   GitHub Actions to create and approve pull requests" (the App path does not); without
   it the first run on main failed at the PR-create call on 2026-10-06 (laptop handoff
   part 1, step 5).

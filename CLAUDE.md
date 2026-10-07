@@ -110,8 +110,11 @@ token is a GitHub App's (`thaynes43-dev-env-release`), from the repo variable
 PR; the advisory review skips them. If either goes missing, it falls back to
 `GITHUB_TOKEN`, and a PR opened that way starts no workflows: then close and reopen
 the release PR (`gh pr close <n> && gh pr reopen <n>`) as haynes-dev-bot so
-`CI - Success` runs, after every update to it. Merging a release PR is Tom's call, not
-an agent's. Renovate auto-merge is off until the ruleset requires `CI - Success`;
+`CI - Success` runs, after every update to it. Agents squash-merge a green release PR
+themselves, like any other PR, once they have checked that the version and changelog
+are sane and `CI - Success` is green on its head (Tom, 2026-10-07: "Merge, and let
+agents merge releases"). Merging it tags the release, so watch `publish-agent.yml` on
+the new tag and confirm its `cosign verify` step passed. Renovate auto-merge is off until the ruleset requires `CI - Success`;
 `.github/renovate.json5` says how to turn it on.
 
 The agent image is `images/agent/Dockerfile` (D-53): v1's Dockerfile plus `tini`, agentd,
