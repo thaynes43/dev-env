@@ -1250,8 +1250,10 @@ a reaped session's volume, only after a verified rescue of the volume's last pod
   `Verified` when every ref on the list is in a verified bundle at the same commit
   and the manifest was written; `CleanAndPushed` when there was nothing to bundle
   and agentd proved it; `Failed` otherwise. It also fails a report for another
-  session, one that does not say the agent stopped or says it still runs, and one
-  where any clone could not fetch origin. That last check is stricter than D-43,
+  session, one that does not say the agent stopped or says it still runs, one that
+  lacks the session's own clone (`NotProven`: agentd finds clones by looking, so an
+  empty or missing `~/repos`, or a clone that failed at boot, would otherwise read
+  as clean), and one where any clone could not fetch origin. That last check is stricter than D-43,
   which keeps the list after a failed fetch: with stale remote refs, a local branch
   whose commits only a since-deleted origin branch held is on no list and in no
   bundle. The condition `RescueFailed` is D-10's `rescueFailed` mark: True with the
@@ -1262,7 +1264,10 @@ a reaped session's volume, only after a verified rescue of the volume's last pod
   restore), the pod's UID, the session's generation, and D-10 step 4's list of
   refs, at most 256 with a count of the rest. The operator writes it to the API
   server before it deletes the pod, so a fresh operator never deletes a pod on a
-  rescue it cannot see. The rescue's verdict and the archive are also events on the
+  rescue it cannot see. It writes it onto the session as the API server has it
+  after the rescue, because agentd's heartbeat patches the status every minute
+  while a rescue runs, and only while that is still the session the rescue ran
+  for: same UID, same generation, still asking for its pod to go. The rescue's verdict and the archive are also events on the
   session (`events.k8s.io`), which outlive a reaped session's object by the events'
   TTL; the manifest on the shared volume outlives both.
 - **Suspend.** The pod goes once a rescue has run in it since the session's spec
@@ -1292,8 +1297,9 @@ a reaped session's volume, only after a verified rescue of the volume's last pod
   already bound: "never bound" proves nothing here, and a volume whose last pod
   never ran still needs a rescue.
 - **What waits, and for whom.** A reaped session whose volume has no valid rescue
-  stays, with `RemovalBlocked` saying why: its newest rescue failed, was
-  superseded, or never ran because its last pod was gone, ended or never started.
+  stays, with `RemovalBlocked` saying why: its newest rescue failed (a session
+  whose clone failed at boot is `NotProven`), was superseded, or never ran because
+  its last pod was gone, ended or never started.
   Plan 02 adds a rescue pod for that (it mounts the volume, runs agentd without the
   agent, and lets the operator rescue it or retry a failed rescue), the archive timer
   for suspended sessions (D-09's 7 days, from the templates) and what resume does
