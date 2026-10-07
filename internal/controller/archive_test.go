@@ -159,6 +159,36 @@ func TestSuspendRescuesThenDeletesThePod(t *testing.T) {
 	assertWritesOnly(t, op, "delete *v1.Pod "+pod.Name)
 }
 
+// agentd's heartbeat patches the session's status every minute, also while a
+// rescue runs. The record still lands, once, and the pod goes after it.
+func TestARescueOutlastsStatusWritesDuringIt(t *testing.T) {
+	op := startOperator(t)
+	s, pod, _ := runningSession(t, "talosw02")
+	rescuer.answer(t, s.Name, func(p *corev1.Pod) (protocol.RescueReport, error) {
+		// This runs in the operator's goroutine: no t.Fatal here.
+		live := &v1alpha1.AgentSession{}
+		if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(p), live); err != nil {
+			return protocol.RescueReport{}, err
+		}
+		base := live.DeepCopy()
+		live.Status.Agent = &v1alpha1.AgentStatus{Status: "exited"}
+		if err := k8s.Status().Patch(context.Background(), live, client.MergeFrom(base)); err != nil {
+			return protocol.RescueReport{}, err
+		}
+		return goodReport(p.Name), nil
+	})
+	setMode(t, s.Name, v1alpha1.OperatingModeSuspended)
+	finishPodDelete(t, pod)
+	got := waitStatus(t, s.Name, "Suspended and rescued", rescueIs(v1alpha1.RescueVerified))
+	if got.Status.Agent == nil || got.Status.Agent.Status != "exited" {
+		t.Errorf("the heartbeat's status was lost: %+v", got.Status.Agent)
+	}
+	if n := rescuer.callsFor(s.Name); n != 1 {
+		t.Errorf("%d rescues, want 1", n)
+	}
+	assertWritesOnly(t, op, "delete *v1.Pod "+pod.Name)
+}
+
 // D-10: a rescue that ran and failed still suspends, keeping the volume, and
 // RescueFailed blocks the archive of a later reap.
 func TestAFailedRescueStillSuspendsAndBlocksArchive(t *testing.T) {

@@ -260,14 +260,10 @@ func (r *Reconciler) removePod(ctx context.Context, s *v1alpha1.AgentSession, ob
 		}
 		// The record goes to the API server before the pod is deleted, so a
 		// fresh operator never deletes a pod on a rescue it cannot see.
-		s.Status.Rescue = rec
-		setRescueCondition(s, &s.Status, reason)
-		if err := r.Client.Status().Update(ctx, s); err != nil {
-			if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
-				// The rescue runs again; a second one is harmless.
-				return ctrl.Result{RequeueAfter: time.Second}, true, nil
-			}
-			return ctrl.Result{}, true, err
+		if written, err := r.recordRescue(ctx, s, rec, reason); err != nil || !written {
+			// The session changed during the rescue in a way that matters:
+			// judge it again.
+			return ctrl.Result{RequeueAfter: time.Second}, true, err
 		}
 		r.event(s, eventType(rec), "Rescue", reason, rec.Message)
 		// Delete the pod as the API server has it now, so a status update the
@@ -286,6 +282,36 @@ func (r *Reconciler) removePod(ctx context.Context, s *v1alpha1.AgentSession, ob
 	}
 	log.FromContext(ctx).Info("deleted the session pod", "pod", pod.Name, "uid", pod.UID, "suspend", s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended, "deleted", !s.DeletionTimestamp.IsZero())
 	return ctrl.Result{}, false, nil
+}
+
+// recordRescue writes the rescue record onto the newest version of the session
+// and, on success, makes s that version. agentd's heartbeat patches the
+// session's status every minute, so a session read before a rescue that took
+// minutes is out of date by the time the record is written. The record is
+// written only while the session is the one the rescue ran for: same UID, same
+// generation, still asking for its pod to go. Otherwise it reports false and
+// the next reconcile judges the session again.
+func (r *Reconciler) recordRescue(ctx context.Context, s *v1alpha1.AgentSession, rec *v1alpha1.RescueStatus, reason string) (bool, error) {
+	for range 5 {
+		var fresh v1alpha1.AgentSession
+		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &fresh); err != nil {
+			return false, client.IgnoreNotFound(err)
+		}
+		if fresh.UID != s.UID || fresh.Generation != rec.Generation || !wantsPodGone(&fresh) {
+			return false, nil
+		}
+		fresh.Status.Rescue = rec
+		setRescueCondition(&fresh, &fresh.Status, reason)
+		err := r.Client.Status().Update(ctx, &fresh)
+		if err == nil {
+			*s = fresh
+			return true, nil
+		}
+		if !apierrors.IsConflict(err) {
+			return false, client.IgnoreNotFound(err)
+		}
+	}
+	return false, nil
 }
 
 // cacheBehind reports whether the API server has a newer session or pod than

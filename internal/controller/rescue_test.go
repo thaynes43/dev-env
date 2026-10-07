@@ -51,7 +51,7 @@ func cleanReport(session string) protocol.RescueReport {
 }
 
 func verdictFor(rep protocol.RescueReport) (*v1alpha1.RescueStatus, string) {
-	s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: "s1", Generation: 4}}
+	s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: "s1", Generation: 4}, Spec: v1alpha1.AgentSessionSpec{Repo: "haynes-ops"}}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{UID: "pod-1"}}
 	return verdict(s, pod, rep, metav1.NewTime(time.Date(2026, 10, 6, 17, 31, 0, 0, time.UTC)))
 }
@@ -118,6 +118,14 @@ func TestVerdictFailures(t *testing.T) {
 			r.Bundle.Manifest, r.Bundle.Error = "", "manifest: write failed"
 		}},
 		{"not ok for no named reason", "RescueFailed", "not ok", func(r *protocol.RescueReport) { r.OK = false }},
+		{"no clones at all", "NotProven", "clone ~/repos/haynes-ops is not in the report", func(r *protocol.RescueReport) {
+			*r = cleanReport("s1")
+			r.Repos = nil
+		}},
+		{"only another clone", "NotProven", "clone ~/repos/haynes-ops is not in the report", func(r *protocol.RescueReport) {
+			*r = cleanReport("s1")
+			r.Repos[0].Path = "/home/dev/repos/other"
+		}},
 		{"nothing to bundle, nothing proven", "NotProven", "did not prove", func(r *protocol.RescueReport) {
 			*r = cleanReport("s1")
 			r.CleanAndPushed = false
@@ -141,7 +149,7 @@ func TestVerdictFailures(t *testing.T) {
 // A clean rescue keeps the newest bundle's path from an earlier rescue, for a
 // restore; status keeps at most 256 refs and counts the rest.
 func TestVerdictKeepsTheLastBundleAndCapsTheRefs(t *testing.T) {
-	s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: "s1"}}
+	s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: "s1"}, Spec: v1alpha1.AgentSessionSpec{Repo: "haynes-ops"}}
 	s.Status.Rescue = &v1alpha1.RescueStatus{LastBundle: "rescue/s1/20261005-0900/manifest.json"}
 	rec, _ := verdict(s, &corev1.Pod{}, cleanReport("s1"), metav1.Now())
 	if rec.LastBundle != "rescue/s1/20261005-0900/manifest.json" {

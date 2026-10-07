@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -176,6 +177,13 @@ func verdict(s *v1alpha1.AgentSession, pod *corev1.Pod, rep protocol.RescueRepor
 		add("the agent still ran after the stop, so it may have written more")
 	}
 	refs := 0
+	// The session's own clone must be on the report: agentd finds clones by
+	// looking, so a missing ~/repos, a clone that failed, or a .git that is not
+	// a directory would otherwise read as nothing to save.
+	if !slices.ContainsFunc(rep.Repos, func(r protocol.RepoRescue) bool { return path.Base(r.Path) == s.Spec.Repo }) {
+		setReason("NotProven")
+		add("the session's clone ~/repos/%s is not in the report, so nothing proves the volume holds no work", s.Spec.Repo)
+	}
 	for _, repo := range rep.Repos {
 		if repo.Error != "" {
 			setReason("RepoError")
