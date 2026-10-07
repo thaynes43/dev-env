@@ -2,7 +2,7 @@
 
 **Status:** in progress: KICKOFF B1 to B4 landed (#14, #15, #17, #18); steps 1 to 4,
 6 and 7 landed on 2026-10-06 (the CRD #24; pods and volumes #29, #30; the `/v1` API #31;
-agentd #25, #27, #28; the keeper #PRNUM; `agent-run` #34)
+agentd #25, #27, #28; the keeper #39; `agent-run` #34)
 **Depends on:** Q-01 (build), Q-02 (Go), Q-04 (requests and limits, no cap) and Q-05
 (storage), all decided 2026-10-06; spikes S-7 (clone path), S-8 (gasha01 speed) and
 S-12 (the guard)
@@ -56,7 +56,7 @@ step. Tick a step in the PR that lands it.
   - [ ] the operator: it runs that rescue by exec before a suspend deletes the pod,
     records the verdict in status, and archives a reaped session's volume only
     after a verified rescue; `patch` on PVCs in its RBAC.
-- [x] 6. The minimal keeper: mint the gh token every 40 minutes (#PRNUM; D-52).
+- [x] 6. The minimal keeper: mint the gh token every 40 minutes (#39; D-52).
   `dev-env-keeper` mints the haynes-dev-bot installation token v1's way and merges
   it into `dev-agents/dev-env-gh-token` (`gh_token`) by one patch, every 40 minutes
   or two thirds of its life, retrying from 10 s to 5 minutes with jitter. It reads

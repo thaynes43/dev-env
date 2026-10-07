@@ -288,7 +288,7 @@ PR per piece, in this order:
 4. agentd: config rendering (a port of `dev-init.sh`), partial clone and worktree,
    tmux start, heartbeat, and `ctl status|rescue`.
 5. Rescue to a bundle on the shared volume (D-10), then suspend and archive.
-6. The minimal keeper: mint the gh token every 40 minutes. Done in #PRNUM
+6. The minimal keeper: mint the gh token every 40 minutes. Done in #39
    (2026-10-06): D-52 records the mint, the write, the schedule, the Lease and the
    readiness; plan 01's "In haynes-ops" list says what 8.8 and 8.9 give it.
 7. `agent-run` v2: `-p`, `list`, `reap` and `fleet`. Done in #34 (2026-10-06), with

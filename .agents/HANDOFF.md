@@ -64,7 +64,7 @@ the saga. To start building, follow
   reap deletes the session, which the rescue finalizer holds (D-45). `agent-run`
   (step 7) imports the wire types from `internal/apiserver/apiv1`; step 8 deploys
   the Service, the Certificate and v1's own-token RBAC that D-46 lists.
-- **Plan 01 step 6, the minimal keeper, is built** (#PRNUM). `dev-env-keeper` mints
+- **Plan 01 step 6, the minimal keeper, is built** (#39). `dev-env-keeper` mints
   the haynes-dev-bot installation token v1's way (same permission set) and merges it
   into `dev-agents/dev-env-gh-token`, key `gh_token`, every 40 minutes or two thirds of
   its life, with retries from 10 s to 5 minutes. It reads the App's key from a
