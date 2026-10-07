@@ -75,6 +75,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: "haynes-dev-bot"
           track_progress: true
+          show_full_output: true # TEMP: reveals the denied tool calls; the fix PR removes it
           use_sticky_comment: true
           # Automated surfaces pin the newest Opus explicitly, never an alias.
           # The Bash and inline-comment grants are needed for `gh` and line
