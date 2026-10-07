@@ -164,6 +164,21 @@ func TestCreateRefusals(t *testing.T) {
 		})
 	}
 
+	// A session's own timers (D-60); a bad one is a 422 on its field.
+	timed := task()
+	timed.Lifecycle = &apiv1.Lifecycle{IdleSuspendAfter: "10m", ArchiveAfter: "2h"}
+	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, timed); w.Code != http.StatusCreated || decode[apiv1.Session](t, w).Lifecycle == nil {
+		t.Errorf("timers: %d %s", w.Code, w.Body.String())
+	} else if l := decode[apiv1.Session](t, w).Lifecycle; l.IdleSuspendAfter != "10m0s" || l.ArchiveAfter != "2h0m0s" {
+		t.Errorf("timers %+v", l)
+	}
+	bad := task()
+	bad.Lifecycle = &apiv1.Lifecycle{ArchiveAfter: "0s"}
+	e := wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, bad), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	if len(e.Fields) != 1 || e.Fields[0].Field != "lifecycle.archiveAfter" {
+		t.Errorf("fields %+v", e.Fields)
+	}
+
 	// Local sessions run from plan 02 (D-58).
 	local := task()
 	local.Mode, local.Prompt = "local", ""
@@ -182,7 +197,7 @@ func TestCreateRefusals(t *testing.T) {
 	}
 
 	var list v1alpha1.AgentSessionList
-	if err := f.c.List(context.Background(), &list); err != nil || len(list.Items) != 3 {
+	if err := f.c.List(context.Background(), &list); err != nil || len(list.Items) != 4 {
 		t.Errorf("a refused create left an object behind: %d, %v", len(list.Items), err)
 	}
 }

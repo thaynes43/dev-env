@@ -36,6 +36,7 @@ func (a *app) create(ctx context.Context, args []string) error {
 	fs := cmd.fs
 	var (
 		prompt, promptFile, repo, agent, model, effort, base, size, profile, timeout, key string
+		idleAfter, archiveAfter                                                           string
 		maxTurns                                                                          int
 		wait                                                                              time.Duration
 		interactive, local, safe                                                          bool
@@ -53,6 +54,8 @@ func (a *app) create(ctx context.Context, args []string) error {
 	fs.StringVar(&timeout, "timeout", "", "")
 	fs.IntVar(&maxTurns, "max-turns", 0, "")
 	fs.StringVar(&key, "idempotency-key", "", "")
+	fs.StringVar(&idleAfter, "idle-suspend-after", "", "")
+	fs.StringVar(&archiveAfter, "archive-after", "", "")
 	fs.DurationVar(&wait, "wait", defaultWait, "")
 	fs.BoolVar(&interactive, "interactive", false, "")
 	fs.BoolVar(&local, "local", false, "")
@@ -155,6 +158,18 @@ func (a *app) create(ctx context.Context, args []string) error {
 	if wait < 0 {
 		return usageError("--wait is a duration of 0 or more, not %s", wait)
 	}
+	var lifecycle *apiv1.Lifecycle
+	if idleAfter != "" || archiveAfter != "" {
+		lifecycle = &apiv1.Lifecycle{IdleSuspendAfter: idleAfter, ArchiveAfter: archiveAfter}
+		for flag, v := range map[string]string{"--idle-suspend-after": idleAfter, "--archive-after": archiveAfter} {
+			if v == "" {
+				continue
+			}
+			if d, err := time.ParseDuration(v); err != nil || d <= 0 {
+				return usageError("%s %q is not a positive duration such as 72h", flag, v)
+			}
+		}
+	}
 	// givenKey is a key the caller chose. A 200 for agent-run's own key is
 	// its own retry finding the session its first attempt created: that is
 	// still a create, and says so.
@@ -178,6 +193,7 @@ func (a *app) create(ctx context.Context, args []string) error {
 		Size:           size,
 		Profile:        profile,
 		Limits:         limits,
+		Lifecycle:      lifecycle,
 		IdempotencyKey: key,
 	}
 	var sess apiv1.Session

@@ -153,6 +153,9 @@ func (a *app) printSession(s apiv1.Session) {
 	if l := s.Limits; l != nil {
 		row("limits", "timeout %s, max turns %s", dash(l.Timeout), countOrNone(l.MaxTurns))
 	}
+	if l := s.Lifecycle; l != nil {
+		row("timers", "idle suspend after %s, archive after %s", firstOf(l.IdleSuspendAfter, "the templates'"), firstOf(l.ArchiveAfter, "the templates'"))
+	}
 	row("parent", "%s", dash(s.Parent))
 	row("created", "%s (%s ago)", s.CreatedAt.UTC().Format(time.RFC3339), age(now, s.CreatedAt))
 	if s.Revision != "" {

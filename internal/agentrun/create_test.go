@@ -364,3 +364,16 @@ func TestCreateOutputs(t *testing.T) {
 		t.Errorf("-o json printed %+v, want the session as last seen", s)
 	}
 }
+
+// A session's own timers go with the create (D-60), checked first.
+func TestCreateWithTimers(t *testing.T) {
+	h := newHarness(t)
+	serveCreate(h, runningOn(testSession(name, ""), "talosw02"))
+	h.mustRun(ExitOK, "haynes-ops", "--local", "--idle-suspend-after", "10m", "--archive-after", "2h")
+	got := decodeCreate(t, h.api.requests()[0].body)
+	if got.Lifecycle == nil || got.Lifecycle.IdleSuspendAfter != "10m" || got.Lifecycle.ArchiveAfter != "2h" {
+		t.Errorf("lifecycle %+v", got.Lifecycle)
+	}
+	h.mustRun(ExitUsage, "haynes-ops", "--local", "--idle-suspend-after", "-1m")
+	h.mustRun(ExitUsage, "haynes-ops", "--local", "--archive-after", "soon")
+}

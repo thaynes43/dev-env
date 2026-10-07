@@ -48,6 +48,15 @@ func view(s *v1alpha1.AgentSession, withPrompt bool) apiv1.Session {
 			v.Limits.Timeout = l.Timeout.Duration.String()
 		}
 	}
+	if l := s.Spec.Lifecycle; l != nil && (l.IdleSuspendAfter != nil || l.ArchiveAfter != nil) {
+		v.Lifecycle = &apiv1.Lifecycle{}
+		if l.IdleSuspendAfter != nil {
+			v.Lifecycle.IdleSuspendAfter = l.IdleSuspendAfter.Duration.String()
+		}
+		if l.ArchiveAfter != nil {
+			v.Lifecycle.ArchiveAfter = l.ArchiveAfter.Duration.String()
+		}
+	}
 	if a := s.Status.Agent; a != nil {
 		v.AgentStatus = &apiv1.AgentStatus{
 			State:          a.Status,
