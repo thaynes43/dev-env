@@ -863,7 +863,7 @@ a ConfigMap of their own.**
     the size class, the read-only root and the 8Gi `/tmp`, no ingress, no approval
     prompts, messages across pods); the session's own volume, partial clone and
     worktree, and `~/.shared`; suspend, rescue, resume, drain and archive (D-09, D-10,
-    D-42, D-43); `agent-run` v2 with the plan each command ships in; Kubernetes access
+    D-42, D-43, D-48); `agent-run` v2 with the plan each command ships in; Kubernetes access
     as `dev-env-agent` under the guard, nothing in the three dev-env namespaces, and
     more only by grant (D-19, D-25); the egress tiers (D-24); and the credentials a
     profile carries (D-18).
