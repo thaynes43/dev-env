@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -374,9 +375,14 @@ func TestReapOfAnEvictedPod(t *testing.T) {
 func TestARescueOfAReplacedPodIsNotTrusted(t *testing.T) {
 	op := startOperator(t)
 	s, pod, _ := runningSession(t, "talosw02")
+	var replaced atomic.Bool
 	rescuer.answer(t, s.Name, func(p *corev1.Pod) (protocol.RescueReport, error) {
+		if replaced.Swap(true) {
+			// The replacement has no agent to answer.
+			return protocol.RescueReport{}, errors.New("unable to upgrade connection: container not found")
+		}
 		// The pod goes during the rescue, and a new one takes its name.
-		if err := k8s.Delete(context.Background(), p, client.GracePeriodSeconds(0)); client.IgnoreNotFound(err) != nil {
+		if err := k8s.Delete(context.Background(), p, client.GracePeriodSeconds(0)); err != nil {
 			return protocol.RescueReport{}, err
 		}
 		replacement := p.DeepCopy()
@@ -391,15 +397,16 @@ func TestARescueOfAReplacedPodIsNotTrusted(t *testing.T) {
 		return goodReport(p.Name), nil
 	})
 	setMode(t, s.Name, v1alpha1.OperatingModeSuspended)
-	waitStatus(t, s.Name, "the replaced pod is not trusted", func(st *v1alpha1.AgentSessionStatus) error {
-		c := condition(st, ConditionRemovalBlocked)
-		if c == nil || !strings.Contains(c.Message, "replaced during the rescue") {
-			return fmt.Errorf("RemovalBlocked %+v", c)
+	// The operator turns to the replacement, which needs a rescue of its own.
+	eventually(t, "a rescue of the replacement", func() error {
+		if n := rescuer.callsFor(s.Name); n < 2 {
+			return fmt.Errorf("%d rescues", n)
 		}
 		return nil
 	})
-	if r := session(t, s.Name).Status.Rescue; r != nil {
-		t.Errorf("a rescue of a replaced pod was recorded: %+v", r)
+	got := waitStatus(t, s.Name, "the replacement waits", blockedBy("SuspendNeedsRescue"))
+	if got.Status.Rescue != nil {
+		t.Errorf("a rescue of a replaced pod was recorded: %+v", got.Status.Rescue)
 	}
 	if p := waitPod(t, s.Name); p.UID == pod.UID || !p.DeletionTimestamp.IsZero() {
 		t.Errorf("pod %s, deleting %v: want the replacement, untouched", p.UID, !p.DeletionTimestamp.IsZero())

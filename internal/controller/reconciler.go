@@ -247,7 +247,13 @@ func (r *Reconciler) removePod(ctx context.Context, s *v1alpha1.AgentSession, ob
 		return ctrl.Result{}, false, nil
 	}
 	if needsRescue(s, pod) {
-		rec, reason, err := r.rescue(ctx, s, pod)
+		// A rescue takes minutes and stops the agent: run it only on the
+		// newest session and pod, not on a cache that has not caught up with
+		// the operator's own writes, so its record does not conflict.
+		if behind, err := r.cacheBehind(ctx, s, pod); err != nil || behind {
+			return ctrl.Result{RequeueAfter: time.Second}, true, client.IgnoreNotFound(err)
+		}
+		rec, reason, cur, err := r.rescue(ctx, s, pod)
 		if err != nil {
 			obs.removalBlocked = fmt.Errorf("the rescue could not run in pod %s, so the pod stays; retrying in %s: %w", pod.Name, rescueRetry, err)
 			return ctrl.Result{RequeueAfter: rescueRetry}, false, nil
@@ -264,6 +270,9 @@ func (r *Reconciler) removePod(ctx context.Context, s *v1alpha1.AgentSession, ob
 			return ctrl.Result{}, true, err
 		}
 		r.event(s, eventType(rec), "Rescue", reason, rec.Message)
+		// Delete the pod as the API server has it now, so a status update the
+		// kubelet made during the rescue does not void the precondition.
+		pod = cur
 	}
 	if obs.removalBlocked = podRemovalAllowed(s, pod); obs.removalBlocked != nil {
 		return ctrl.Result{}, false, nil
@@ -279,28 +288,43 @@ func (r *Reconciler) removePod(ctx context.Context, s *v1alpha1.AgentSession, ob
 	return ctrl.Result{}, false, nil
 }
 
-// rescue runs agentd's rescue in the pod and returns its verdict. An error
-// means it did not run, or ran in a pod that has since been replaced.
-func (r *Reconciler) rescue(ctx context.Context, s *v1alpha1.AgentSession, pod *corev1.Pod) (*v1alpha1.RescueStatus, string, error) {
+// cacheBehind reports whether the API server has a newer session or pod than
+// the cache gave this reconcile.
+func (r *Reconciler) cacheBehind(ctx context.Context, s *v1alpha1.AgentSession, pod *corev1.Pod) (bool, error) {
+	var fs v1alpha1.AgentSession
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &fs); err != nil {
+		return false, err
+	}
+	var fp corev1.Pod
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(pod), &fp); err != nil {
+		return false, err
+	}
+	return fs.ResourceVersion != s.ResourceVersion || fp.ResourceVersion != pod.ResourceVersion, nil
+}
+
+// rescue runs agentd's rescue in the pod and returns its verdict and the pod
+// as the API server has it afterwards. An error means it did not run, or ran
+// in a pod that has since been replaced.
+func (r *Reconciler) rescue(ctx context.Context, s *v1alpha1.AgentSession, pod *corev1.Pod) (*v1alpha1.RescueStatus, string, *corev1.Pod, error) {
 	if r.Rescuer == nil {
-		return nil, "", errors.New("the operator has no rescuer")
+		return nil, "", nil, errors.New("the operator has no rescuer")
 	}
 	log.FromContext(ctx).Info("rescuing the session pod", "pod", pod.Name, "uid", pod.UID)
 	rep, err := r.Rescuer.Rescue(ctx, pod)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	// exec reaches a pod by name: make sure the report came from this one.
 	var cur corev1.Pod
 	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(pod), &cur); err != nil {
-		return nil, "", fmt.Errorf("read the pod after the rescue: %w", err)
+		return nil, "", nil, fmt.Errorf("read the pod after the rescue: %w", err)
 	}
 	if cur.UID != pod.UID {
-		return nil, "", fmt.Errorf("the pod was replaced during the rescue (uid %s, now %s)", pod.UID, cur.UID)
+		return nil, "", nil, fmt.Errorf("the pod was replaced during the rescue (uid %s, now %s)", pod.UID, cur.UID)
 	}
 	rec, reason := verdict(s, pod, rep, metav1.Now())
 	log.FromContext(ctx).Info("rescued the session pod", "pod", pod.Name, "result", rec.Result, "reason", reason, "bundle", rec.LastBundle)
-	return rec, reason, nil
+	return rec, reason, &cur, nil
 }
 
 // archive deletes a reaped session's volume once the guard allows it, then
