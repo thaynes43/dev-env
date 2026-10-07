@@ -81,7 +81,7 @@ probe after each Claude Code CLI bump (last run on 2.1.292, 2026-10-06: still re
 
 | Spike | When | Pass | On a fail |
 |---|---|---|---|
-| S-12: the baseline guard | After the RBAC and guard PR, and before any agent pod gets the role. Run it from a pod that uses the agent ServiceAccount: the first task pod, or a test Job the PR deploys with a CPU limit. An in-pod session reads the output. | Every #3392 path is refused and every runbook action is allowed. Record whether the ValidatingAdmissionPolicy sees `CONNECT` for exec. The break-glass half of S-12 (its exclusions refused, the `kube-system` eviction allowed) needs `dev-env-grant-breakglass`, which plan 07 ships, so it runs there. | Fix the guard before going further. D-19 records the change. |
+| S-12: the baseline guard. **Passed 2026-10-07** (00 and D-19): 45 of 45, and the VAP sees `CONNECT` | After the RBAC and guard PR, and before any agent pod gets the role. Run it from a pod that uses the agent ServiceAccount: the first task pod, or a test Job the PR deploys with a CPU limit. An in-pod session reads the output. | Every #3392 path is refused and every runbook action is allowed. Record whether the ValidatingAdmissionPolicy sees `CONNECT` for exec. The break-glass half of S-12 (its exclusions refused, the `kube-system` eviction allowed) needs `dev-env-grant-breakglass`, which plan 07 ships, so it runs there. | Fix the guard before going further. D-19 records the change. |
 | S-8: `gasha01-rbd` against `ceph-block` | Once the first task pod runs at size M. Do two runs, never at the same time. | The times for each step are recorded. | If gasha01 is more than twice as slow overall, size L defaults to `ceph-block` (D-22). |
 
 **Later, not phase 1:** S-10 before plan 08, S-5 in phase 3, S-4 in phase 4, and S-9,
@@ -304,11 +304,17 @@ PR per piece, in this order:
    `show`: D-50 records the commands, the checks before a create, the retries and
    the wait, how the CLI finds the API from each place, and the exit codes.
 8. The haynes-ops PRs, smallest first:
-   1. the Renovate v1 hold;
-   2. the Kyverno identity for `thaynes43/dev-env`;
+   1. the Renovate v1 hold. Done 2026-10-06: haynes-ops #3458;
+   2. the Kyverno identity for `thaynes43/dev-env`. Done 2026-10-06: haynes-ops #3462
+      (Audit);
    3. the namespaces, and the CRDs in their own Kustomization with `prune: disabled`.
       Done 2026-10-06: haynes-ops #3468;
-   4. RBAC with the guard (S-12 runs here);
+   4. RBAC with the guard (S-12 runs here). Done 2026-10-07: haynes-ops #3477 and
+      #3479; S-12 passed (D-19), and #3490 removed its Job. The ServiceAccounts
+      (`dev-env-agent`, `dev-env-operator`, `dev-env-keeper`, `dev-env-human`), the
+      operator's Roles, the keeper's Roles (D-52) and v1's own-token RBAC (D-46, with
+      `dev-env-v1-token-guard`) all live in `apps/dev-env-system/rbac/`, so 8.9's
+      HelmReleases name these ServiceAccounts and do not create them;
    5. the network policies. Done 2026-10-06: haynes-ops #3469;
    6. the PriorityClass and the Kyverno CPU-limit policy. Done 2026-10-06: haynes-ops
       #3470. No LimitRange: the policy carries the 8 CPU / 24Gi ceiling (D-47);
@@ -316,7 +322,9 @@ PR per piece, in this order:
       haynes-ops #3471. `dev-env-templates` carries an all-zero placeholder image digest
       until B5 (section 3) publishes `dev-env:2.x.y`;
    8. the ExternalSecrets, among them the keeper's App key and its empty Secrets
-      (plan 01, "The keeper's inputs"; D-52);
+      (plan 01, "The keeper's inputs"; D-52). Done 2026-10-06: haynes-ops #3480, app
+      `apps/dev-env-system/secrets/`, all four ExternalSecrets `SecretSynced`, no new
+      1Password field needed;
    - **8.8a:** the four config ConfigMaps in `dev-agents` of D-49:
      `dev-env-config-claude` (`CLAUDE.md`, `mcp.json`, `agent-*.md`),
      `dev-env-config-codex` (`config.toml`, `AGENTS.header.md`),
@@ -333,12 +341,24 @@ PR per piece, in this order:
      stay true. The other v1 scripts are gone: agentd and the image replace them
      (DESIGN-001 3.6, D-40, the port of `dev-init.sh`). Done 2026-10-06: haynes-ops
      #3474;
-   9. the operator and keeper HelmReleases, with the API's Service and Certificate
-      and v1's own-token RBAC (D-46), and the keeper's Roles and Deployment (D-52). `agent-run` in the v1 pod also needs the
+   9. the operator and keeper HelmReleases, with the API's Service and Certificate,
+      and the keeper's Deployment (D-52); their ServiceAccounts and Roles, and v1's
+      own-token RBAC, came with 8.4. `agent-run` in the v1 pod also needs the
       Certificate's CA as a file it can name in `DEV_ENV_API_CA_FILE` (D-50); a new
       mount on the v1 pod restarts it, so prefer a way that does not, or hold that PR
-      for Tom;
-   10. the MCP network policy admits for `dev-agents`.
+      for Tom. Done 2026-10-07: haynes-ops #3494 (`apps/dev-env-system/pki/`: a private
+      CA with namespaced Issuers and the API's Certificate) and #3497 (`operator/`,
+      `keeper/`, the CA ConfigMap, the templates' CA mount, and the network path from
+      the v1 pod). The CA certificate is pinned in git as ConfigMap
+      `dev-agents/dev-env-api-ca`, so the v1 pod reads it through the API and nothing on
+      that pod changed (D-50, as built). Verified: both HelmReleases Ready, the operator's
+      replicas on talosw01 and talosm05 with the Lease held and the controller started,
+      the keeper's first mint written, and `agent-run fleet` and `list` (v2) answered
+      from the v1 pod as `client/dev/dev-env`; the v1 pod and `dev-env-ops` did not
+      restart;
+   10. the MCP network policy admits for `dev-agents`. Done 2026-10-06: haynes-ops
+       #3491 (egress in `dev-env-session-platform`; ingress in the hop, audio and
+       Blender policies; a test Job reached all eight services and not four others).
 
    Write new Kyverno policies on the `policies.kyverno.io` CEL types where they can
    express them (haynes-ops #3405). An outside agent may author these PRs; an
