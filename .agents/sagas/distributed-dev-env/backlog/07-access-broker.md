@@ -27,7 +27,8 @@ In this repo:
   (release, by setting `spec.release`). The requester is the calling session; at
   most 3 pending per session; an identical request returns the pending or active
   grant it matches; the wire types in `apiv1`. The operator's `dev-agents` Role
-  gains AccessGrant create, get, list, watch and patch, and no status. (D-56)
+  gains AccessGrant create, get, list and patch, and no status (D-56). haynes-ops H1
+  grants `watch` with them, for step 5's backstop.
 - [ ] 3. The broker mode, kube grants: `dev-env-operator broker` with its own Lease;
   the policy match (break-glass and profile `ops` never match); the 30-minute
   timeout; the ServiceAccount, the bindings (RoleBindings per namespace, a
