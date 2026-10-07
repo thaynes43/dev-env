@@ -1,9 +1,10 @@
 # 01: foundation, task mode
 
-**Status:** in progress: KICKOFF B1 to B4 landed (#14, #15, #17, #18); steps 1 to 7
-landed on 2026-10-06 (the CRD #24; pods and volumes #29, #30; the `/v1` API #31;
-agentd #25, #27, #28; rescue, suspend and archive #32, #36; the keeper #39;
-`agent-run` #34)
+**Status:** done 2026-10-07 (#60). KICKOFF B1 to B5 landed (#14, #15, #17, #18,
+#40); steps 1 to 7 landed on 2026-10-06 (the CRD #24; pods and volumes #29, #30; the
+`/v1` API #31; agentd #25, #27, #28; rescue, suspend and archive #32, #36; the keeper
+#39; `agent-run` #34); step 8 in haynes-ops; the first release, 2.0.0, on 2026-10-07
+(#52); step 9, the first end-to-end run and every acceptance check, on 2026-10-07
 **Depends on:** Q-01 (build), Q-02 (Go), Q-04 (requests and limits, no cap) and Q-05
 (storage), all decided 2026-10-06; spikes S-7 (clone path), S-8 (gasha01 speed) and
 S-12 (the guard)
@@ -74,14 +75,19 @@ step. Tick a step in the PR that lands it.
 - [x] 8. The haynes-ops PRs (KICKOFF section 4, item 8), 2026-10-06 to 2026-10-07:
   haynes-ops #3458, #3462, #3463, #3468 to #3471, #3474, #3477, #3479, #3480, #3491,
   #3494 and #3497. The operator and the keeper run; the v1 pod reaches `/v1`.
-- [ ] 9. The first end-to-end run, then the acceptance checks below.
+- [x] 9. The first end-to-end run, then the acceptance checks below (2026-10-07,
+  #60). From the v1 pod, `agent-run` built from main ran a real docs task in this
+  repo; it opened #57, which merged. Every acceptance item passed; the evidence is under
+  each item below. The run found one defect: haynes-ops still carried #24's CRD, so
+  the API server pruned the heartbeat's task result and the rescue verdict from status.
+  haynes-ops #3502 synced it before any reap ran (see "In haynes-ops").
 
 ## In this repo
 
 - Everything in Go: the operator, agentd and `agent-run`.
 - CI: lint and tests (envtest for the operator), build, smoke-test and cosign-sign
   the agent image (`2.x`) and the operator image (`ghcr.io/thaynes43/dev-env-operator`),
-  publishing from `main` only; one aggregate `… - Success` check; release-please;
+  publishing the operator image from `main` and the agent image from a `v2.x.y` release tag (D-53); one aggregate `… - Success` check; release-please;
   Renovate with the Dockerfile `customManagers` copied from haynes-ops.
 - Agent image `2.0`: a copy of haynes-ops' `scripts/dev-env/Dockerfile` plus `tini`,
   `agentd`, the Codex standalone and `kubectl-cnpg` baked in (v1 downloads them at
@@ -102,7 +108,11 @@ step. Tick a step in the PR that lands it.
 
 - Namespaces `dev-env-system` and `dev-agents`; the CRDs in their own Kustomization
   with `prune: disabled`. Namespace `dev-tools` too (empty until plan 08). Done
-  2026-10-06: haynes-ops #3468 (KICKOFF 8.3).
+  2026-10-06: haynes-ops #3468 (KICKOFF 8.3). The CRD there is a copy of
+  `config/crd/` and must follow it: a PR here that changes `config/crd/` needs the
+  haynes-ops copy before, or with, the operator pin that writes the new fields. #31
+  and #36 changed it and no copy followed, so status lost fields silently until
+  haynes-ops #3502 (2026-10-07).
 - The operator API's Service (`dev-env-operator`, port 8443) and its cert-manager
   Certificate, named for `dev-env-operator.dev-env-system.svc.cluster.local`; the
   operator's `--api-url` is that full name and `--client-service-accounts` adds the
@@ -182,8 +192,9 @@ step. Tick a step in the PR that lands it.
 - The shared CephFS volume `dev-env-shared` on `ceph-filesystem`, `prune: disabled`.
 - `dev-env-templates` with `gasha01-rbd` as the session volume class. The shared volume
   and the templates are done (2026-10-06, haynes-ops #3471, KICKOFF 8.7). The templates
-  carry an all-zero placeholder image digest until KICKOFF B5 publishes
-  `ghcr.io/thaynes43/dev-env:2.x.y`; B5's haynes-ops follow-up sets the real digest.
+  carried an all-zero placeholder image digest until 2026-10-07, when haynes-ops #3501
+  replaced it with `ghcr.io/thaynes43/dev-env:2.0.0` and its digest. B5's haynes-ops
+  follow-up is done.
 - The four config ConfigMaps in `dev-agents`, before the HelmReleases (KICKOFF 8.8a,
   D-49): `dev-env-config-claude` (`CLAUDE.md`, `mcp.json`, `agent-*.md`),
   `dev-env-config-codex` (`config.toml`, `AGENTS.header.md`),
@@ -206,18 +217,62 @@ step. Tick a step in the PR that lands it.
 ## Acceptance
 
 - A task created from the v1 pod lands on talosw02 or talosw03 (or w01), runs with
-  the M class limits, and opens a PR.
+  the M class limits, and opens a PR. **Passed 2026-10-07.** Session
+  `dev-env-1007-045709` (`claude-sonnet-5-5`, effort high, size M) was created at
+  04:57:09Z. Its pod, UID `470e48b5-3061-4368-8a32-ed5f59e273f7`, ran on talosw02 with
+  requests 250m and 2Gi and limits 4 CPU and 8Gi, on
+  `dev-env:2.0.0@sha256:8bab980d…`. The task ended in 30 s (exit 0, `success`, 6
+  turns, $0.22) and opened #57, which merged after one review finding was fixed.
 - `kubectl rollout restart deploy/dev-env-operator -n dev-env-system` during the task
-  leaves the task's pod untouched (same pod UID, no restart).
+  leaves the task's pod untouched (same pod UID, no restart). **Passed 2026-10-07.**
+  The restart ran at 04:57:27Z while the task was busy. New operator pods
+  `c85bdc79-cd7b-48dc-8d51-5f8ed731b1b9` (talosw01) and
+  `9731d62c-3a66-42a9-bc32-6f47c5d408fe` (talosm02) replaced `d66ced96…` and
+  `aeadb0f9…`. The session pod kept UID `470e48b5…` with 0 restarts, and the task
+  finished normally.
 - Reap of a session with an uncommitted file produces a bundle on the shared volume
-  that restores the file.
+  that restores the file. **Passed 2026-10-07.** Session `dev-env-1007-050430` (size S,
+  pod UID `f1bcbd21-25e9-40c8-b5e1-10738bf87081`, talosw03) left the untracked file
+  `e2e-probe.txt`. `agent-run reap` at 05:06:07Z: the rescue was `Verified`, the pod
+  was deleted after it, and the volume was archived at 05:06:08Z. The bundle is
+  `rescue/dev-env-1007-050430/20261007-0506/dev-env.bundle` (1766 bytes, base
+  `origin/HEAD`, ref `rescue/dev-env-1007-050430-20261007-0506` at `516c76c`). A Job in
+  `dev-agents` mounted `dev-env-shared` read-only, `git bundle verify` passed, and
+  the ref fetched onto a fresh clone gave back `e2e-probe.txt` whole. The reap of
+  `dev-env-1007-045709`, whose work was pushed, came back `CleanAndPushed` with no
+  bundle, and its volume was archived too.
 - No session pod is ever scheduled on a control-plane node (checked with
-  `kubectl get pods -n dev-agents -o wide`).
+  `kubectl get pods -n dev-agents -o wide`). **Passed 2026-10-07.** The two pods ran on
+  talosw02 and talosw03. The scheduler's message for the size L session below names
+  the masters: "5 node(s) didn't match Pod's node affinity/selector".
 - A session that does not fit stays Pending, and `agent-run` prints the scheduler's
-  reason at once.
-- The session's PVC is on `gasha01-rbd`; S-8's numbers are recorded.
+  reason at once. **Passed 2026-10-07.** The workers had room for every real size, so
+  haynes-ops #3504 made size L ask for 100Ti of ephemeral storage, and #3505 reverted
+  it after the check. Session `dev-env-1007-050756` (size L) stayed Pending, and
+  `agent-run` printed this 4.1 s after the create: "0/9 nodes are available: 1 node(s)
+  had untolerated taint(s), 3 Insufficient ephemeral-storage, 5 node(s) didn't match
+  Pod's node affinity/selector. ... preemption: not eligible due to
+  preemptionPolicy=Never." Its pod never started, so its reap waits with
+  `RemovalBlocked` for plan 02's rescue pod (D-51), as designed; plan 02 lists it.
+- The session's PVC is on `gasha01-rbd`; S-8's numbers are recorded. **Passed
+  2026-10-07.** `home-dev-env-1007-045709` was a 20Gi RWO claim on `gasha01-rbd`. S-8
+  is recorded in [00-spikes.md](00-spikes.md#s-8-gasha01-rbd-against-ceph-block-phase-1):
+  `gasha01-rbd` was 1.55 to 1.81 times slower than `ceph-block`, under D-22's line of
+  two, so size L stays on `gasha01-rbd`.
 - A session pod fetches an arbitrary public web page, and cannot reach a LAN
-  address or an in-cluster service outside the platform tier.
+  address or an in-cluster service outside the platform tier. **Passed 2026-10-07**,
+  from `dev-env-1007-050430`'s pod (its results were the rescued `e2e-probe.txt`):
+  `https://example.com/` and `https://en.wikipedia.org/wiki/Kubernetes` answered 200;
+  two LAN hosts, one on port 80 and one on 443, timed out; TCP to
+  `postgres16-rw.database:5432`, `headlamp.frontend:80` and `dragonfly.database:6379`
+  was blocked; the platform tier's `haynesnetwork-mcp-hop.frontend:8080` answered
+  (405 to a GET).
 - From a session pod, `pods/exec`, pod delete, Job create and Deployment patch are
   refused in `dev-env-system`, `dev-agents` and `dev-tools`, and allowed elsewhere
-  within the guard (S-12's checks pass).
+  within the guard (S-12's checks pass). **Passed.** S-12 passed 45 of 45 on
+  2026-10-07 as `dev-env-agent` (00-spikes.md, D-19), the allowed runbook actions
+  included. The same day, from `dev-env-1007-050430`'s pod as
+  `system:serviceaccount:dev-agents:dev-env-agent`, server-side dry runs were refused:
+  Job create in all three namespaces and exec into `dev-env-operator` (exit 1 each), a
+  pod delete in `dev-agents` (`dev-env-identity-guard`), and a Deployment patch in
+  `dev-env-system` (`dev-env-agent-guard`).
