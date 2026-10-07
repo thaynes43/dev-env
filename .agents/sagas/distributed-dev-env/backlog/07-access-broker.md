@@ -1,9 +1,10 @@
 # 07: access broker
 
-**Status:** in progress (steps 1 and 2, the CRDs and `/v1/grants`, 2026-10-07)
+**Status:** paused after step 3 (2026-10-07; one plan at a time, Tom's ruling)
 **Depends on:** 01 (the baseline guard and egress tiers are in place); Q-07 (Tom
 2026-10-06: credential grants, A)
-**Parallel with:** 02
+**Parallel with:** 02 in the plan; in time, one plan at a time since 2026-10-07 (README
+decision 40)
 
 ## Goal
 
@@ -29,17 +30,26 @@ In this repo:
   grant it matches; the wire types in `apiv1`. The operator's `dev-agents` Role
   gains AccessGrant create, get, list and patch, and no status (D-56). haynes-ops H1
   grants `watch` with them, for step 5's backstop.
-- [ ] 3. The broker mode, kube grants: `dev-env-operator broker` with its own Lease;
+- [x] 3. The broker mode, kube grants: `dev-env-operator broker` with its own Lease;
   the policy match (break-glass and profile `ops` never match); the 30-minute
   timeout; the ServiceAccount, the bindings (RoleBindings per namespace, a
-  ClusterRoleBinding for the cluster-wide roles) and a TokenRequest bound to the
-  session's pod; revoke at expiry, on release and when the session ends. An envtest
-  suite runs it under exactly the RBAC haynes-ops gives it: it binds catalog roles
-  only, and a revoked grant's token is refused.
+  ClusterRoleBinding for the cluster-wide roles) and a TokenRequest for the grant's
+  ServiceAccount (not bound to the session's pod: the API server refuses that for a
+  pod that runs as another ServiceAccount); revoke at expiry, on release and when
+  the session ends. An envtest suite runs it under exactly the RBAC haynes-ops gives
+  it: it binds catalog roles only, and a revoked grant's token is refused (D-61).
 - [ ] 4. Installing a kube grant: the pod gets a memory-backed `grants` volume;
   `agentd ctl grant-install` and `grant-remove` write the token there and keep a
   kubeconfig whose `grant-<id>` contexts use it; the broker installs by exec and
-  installs again in a session's new pod.
+  installs again in a session's new pod. **WIP** on branch `agent/plan07-install`
+  (7d60dff, 2026-10-07, on top of step 3's branch; rebase it onto main): the grant
+  store in `internal/agentd/grants.go` and its contract in `protocol/grants.go`
+  compile; `cmd/agentd/grant.go` is written but not yet called from `ctl()`. Left:
+  wire the four `ctl grant-*` commands, the pod's memory-backed `grants` volume with
+  `KUBECONFIG` and `DEV_ENV_GRANTS_DIR`, the broker's exec installer (a pod with no
+  `grants` directory fails the grant after 3 attempts), the tests and the docs. The
+  kubeconfig names the API server by `KUBERNETES_SERVICE_HOST` and `_PORT`, because
+  session pods use `ndots:1` and cannot resolve `kubernetes.default.svc`.
 - [ ] 5. Egress grants: one CiliumNetworkPolicy per grant, selecting the session's
   pod; the operator's backstop deletes an expired grant's policy when the broker is
   down.
