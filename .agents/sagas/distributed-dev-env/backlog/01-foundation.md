@@ -98,8 +98,9 @@ step. Tick a step in the PR that lands it.
   `dev-tools`, operator, keeper; done 2026-10-06, haynes-ops #3469, KICKOFF 8.5),
   PriorityClass `dev-env-agent` (-10, `preemptionPolicy: Never`), a Kyverno policy
   requiring CPU limits in `dev-agents` (done 2026-10-06, haynes-ops #3470, KICKOFF 8.6).
-  No LimitRange here: a LimitRange `max` would default every unset limit to the max, so
-  the policy also carries the 8 CPU / 24Gi ceiling (D-47). No ResourceQuota (D-21).
+  No LimitRange here: it would fill every unset limit with its default, so a "no CPU
+  limit" rule could never fire; the policy also carries the
+  8 CPU / 24Gi ceiling (D-47). No ResourceQuota (D-21).
 - Q-08's Kyverno LimitRange (50m default CPU request in every non-system namespace)
   is built in haynes-ops as a v1 fix, not by this plan. It went live on 2026-10-06
   (haynes-ops #3406, Kyverno `default-cpu-request`); at 03:34Z no Running pod in the

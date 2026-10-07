@@ -2071,12 +2071,15 @@ agents to size test workers to it. A limit throttles a runaway; it does not stop
 
 **D-47 (2026-10-06, plan 01 step 8.6). The `dev-agents` ceiling is a Kyverno policy,
 not a LimitRange.** 7.2 called for a LimitRange that sets M as the default and L as
-the most one pod may ask for. haynes-ops #3470 did not ship it. A LimitRange `max`
-makes the API server default every unset limit to that max, before any webhook runs.
-So no pod would ever reach Kyverno without a CPU limit, and every container with no
-limit of its own would reserve the max (8 CPU, 24Gi). The ceiling lives in the
-ValidatingPolicy `dev-env-require-cpu-limit`. It is scoped to the `dev-agents`
-namespace, acts on pod CREATE, and denies a pod when a container (init containers
+the most one pod may ask for. haynes-ops #3470 did not ship it. A LimitRange
+makes the API server fill in every limit a container leaves unset, before any
+webhook runs: with only `max`, the default is the max; with a `default` of M, it is M.
+Either way no pod would ever reach Kyverno without a CPU limit, so the "no CPU limit"
+rule could never fire. A request left unset also defaults from the limit when
+`defaultRequest` is absent, so a container with no request of its own, such as the
+k8tz timezone init container, would reserve the default (M: 4 CPU and 8Gi), not
+nothing. The ceiling lives in the ValidatingPolicy `dev-env-require-cpu-limit`. It is
+scoped to the `dev-agents` namespace, acts on pod CREATE, and denies a pod when a container (init containers
 are not checked, because the k8tz timezone init container has no limit) has no
 `limits.cpu`, a CPU limit above 8, or a memory limit above 24Gi. A container with
 no memory limit passes: the policy does not require one, and the operator sets every
@@ -2973,4 +2976,4 @@ step it names.
 | D-44 | The operator builds one bare pod and one volume per session from `dev-env-templates` (strict format, revision = hash of the parsed content), places it per D-20 in code, and never updates or deletes either; no probes, 60 s grace, `Outdated` reported for plan 04 | 3.6 |
 | D-45 | Deleting an `AgentSession` is a reap: a finalizer on the session and its volume holds both until rescue; one guarded function deletes pods (Draining, or Suspended after rescue); `RemovalBlocked` reports the wait | 5.1 |
 | D-46 | The `/v1` API of plan 01: HTTPS on 8443 on every replica; TokenReview per request; callers by class (human, client, session; the v1 pod a client until cutover); create checks what only the API knows and leaves the schema and agentd their own rules; idempotency by label per parent; children bounded by count, depth and the parent's profile; reap is a delete held by the rescue finalizer; heartbeat merged into `status.agent` | 3.4 |
-| D-47 | The `dev-agents` CPU and memory ceiling is a Kyverno policy, not a LimitRange, because a LimitRange `max` defaults every unset limit to the max | 7.2 |
+| D-47 | The `dev-agents` CPU and memory ceiling is a Kyverno policy, not a LimitRange, because a LimitRange fills every unset limit with its default, so the "no CPU limit" rule could never fire | 7.2 |
