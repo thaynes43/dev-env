@@ -1,8 +1,8 @@
 # 02: interactive sessions and lifecycle
 
-**Status:** backlog
+**Status:** in progress (started 2026-10-07)
 **Depends on:** 01
-**Parallel with:** nothing
+**Parallel with:** 07 (the access broker)
 
 ## Goal
 
@@ -52,6 +52,71 @@ bundle. declare-activity moves to the API. Tom can run `agent-run` from his lapt
   ClusterRole gains read on `dev-env.haynesops.com`.
 - Laptop path (D-05): `agent-run` mints a `dev-env-human` token with the kubeconfig
   and port-forwards to the API.
+
+Already built by plan 01: the child-session limit (4 unfinished children per parent,
+two levels deep, D-46).
+
+## Progress
+
+One PR per step unless a step says otherwise, in this order. Tick a step in the PR
+that lands it. A step that changes `config/crd/` needs its haynes-ops copy before the
+operator pin that writes the new fields (CLAUDE.md). A step that changes agentd or
+`agent-run` ships in the agent image: the release PR, then `publish-agent.yml`, then
+the `dev-env-templates` pin in haynes-ops. Operator changes ship as the
+`dev-env-operator:sha-<short>` pin. A step is done when it is deployed and checked in
+the cluster.
+
+- [x] 1. This list (docs only, #65).
+- [ ] 2. **The rescue pod** (D-51's gap). `agentd hold` holds the volume and starts no
+  agent (D-42). `agentd ctl rescue` reports an empty volume, with no clone and no
+  worktree (what a pod that never started leaves), as a valid rescue with nothing
+  to save. The operator gives a reaped session whose
+  volume has no valid rescue and no pod a hold pod (the session's pod, size S, no
+  agent token), runs the usual exec rescue in it, retries a failed rescue, and keeps
+  the hold pod up while the rescue fails, so a human can exec in. A hold pod goes as
+  soon as nothing needs it. Done when `dev-agents/dev-env-1007-050756` is archived and
+  gone, checked with kubectl.
+- [ ] 3. **The `RescueFailed` page** (D-10). A metric or a kube-state-metrics series
+  on the condition, and an alert routed to Tom (haynes-ops).
+- [ ] 4. **Local sessions and resume on boot.** The API serves `mode: local` for
+  Claude. agentd starts the TUI in tmux session `agent` with a new conversation id.
+  On any later boot of a volume that has a launch record, task or local, it starts
+  `claude --resume <id>` as a TUI instead: a task's `-p` never runs twice (D-42).
+  `agentd ctl prepare-restart`. `agent-run --local`, and `attach` and `detach` through
+  `kubectl exec` for Tom.
+- [ ] 5. **Idle detection** (4.2). agentd reads Claude's `sessions/<pid>.json` status,
+  the attached tmux clients and v1's `wt_busy` signals, and the heartbeat reports
+  them (the Codex signals come with plan 04's Codex pods).
+- [ ] 6. **Suspend, resume and the idle timer** (D-09). `POST
+  /v1/sessions/{id}/suspend` and `/resume`, `agent-run suspend` and `resume`. The
+  operator suspends a session idle past its window (a finished task after 1 h, an
+  interactive session after 3 days), with the defaults in the templates and
+  `spec.lifecycle` per session.
+- [ ] 7. **The archive timer** (D-09: 7 days after suspension, from the templates).
+  It archives a suspended session's volume after a valid rescue (the hold pod of step
+  2 when it has none). `resume` refuses an archived session and points at a restore.
+- [ ] 8. **Logs.** agentd copies the task log to `~/.shared/logs/`; `GET
+  /v1/sessions/{id}/log?tail=N` and `agent-run log`.
+- [ ] 9. **Messages** (D-16 tier 3). `POST /v1/sessions/{id}/messages`, `agentd ctl
+  deliver` (a paste into the Claude TUI; `codex queue` for Codex) and `agent-run msg`.
+- [ ] 10. **Activities** (D-17). The `Activity` CRD in `dev-env-system`,
+  `/v1/activities` with v1's limits enforced by the API, expiry, and `declare-activity`
+  as a client of it. In haynes-ops: the CRD, the operator's rights, read on the group
+  for v1's OPERATOR tier and `dev-env-ops`, and `dev-activity-check.sh` reading both
+  sources.
+- [ ] 11. **Rescues: list, restore and pruning.** `GET /v1/rescues`, `POST
+  /v1/rescues/{id}/restore`, `agent-run rescue list|restore` (D-48's recipe), and
+  bundles pruned after D-09's 30 days.
+- [ ] 12. **The laptop path** (D-05). `agent-run` outside the cluster mints a
+  `dev-env-human` token and port-forwards with the kubeconfig, and checks the API's
+  certificate against the pinned CA by its service name. A handoff for an agent on
+  Tom's laptop runs the check.
+- [ ] 13. **The acceptance run** below, with the evidence under each item.
+
+**The Codex half of "`agent-run msg` reaches a Codex session".** No v2 pod can run
+Codex before plan 04, because the keeper owns its login there (D-12, S-3). Step 9
+builds and tests `deliver`'s Codex path; the live check runs with plan 04's first
+Codex session.
 
 ## Acceptance
 
