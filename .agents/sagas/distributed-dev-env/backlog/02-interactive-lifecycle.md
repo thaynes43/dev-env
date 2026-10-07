@@ -67,7 +67,7 @@ the `dev-env-templates` pin in haynes-ops. Operator changes ship as the
 the cluster.
 
 - [x] 1. This list (docs only, #65).
-- [x] 2. **The rescue pod** (D-51's gap; D-55, this PR; deployed when the evidence below is in). `agentd hold` holds the volume and starts no
+- [x] 2. **The rescue pod** (D-51's gap; D-55, #68; deployed when the evidence below is in). `agentd hold` holds the volume and starts no
   agent (D-42). `agentd ctl rescue` reports an empty volume, with no clone and no
   worktree (what a pod that never started leaves), as a valid rescue with nothing
   to save. The operator gives a reaped session whose
@@ -76,8 +76,9 @@ the cluster.
   the hold pod up while the rescue fails, so a human can exec in. A hold pod goes as
   soon as nothing needs it. Done when `dev-agents/dev-env-1007-050756` is archived and
   gone, checked with kubectl.
-- [ ] 3. **The `RescueFailed` page** (D-10). A metric or a kube-state-metrics series
-  on the condition, and an alert routed to Tom (haynes-ops).
+- [x] 3. **The `RescueFailed` page** (D-10, D-57, this PR). The operator serves
+  `dev_env_session_rescue_failed`; haynes-ops scrapes it and pages Tom with
+  `DevEnvRescueFailed` once the operator pin carries it.
 - [ ] 4. **Local sessions and resume on boot.** The API serves `mode: local` for
   Claude. agentd starts the TUI in tmux session `agent` with a new conversation id.
   On any later boot of a volume that has a launch record, task or local, it starts

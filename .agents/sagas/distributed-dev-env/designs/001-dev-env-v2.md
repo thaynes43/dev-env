@@ -1325,6 +1325,43 @@ not enough.
 files can hold secrets (`.env`, tokens pasted into a scratch file). The bundle stays
 inside the cluster, on the shared volume.
 
+**D-57 (2026-10-07, plan 02 step 3). D-10's page on `rescueFailed` is a Prometheus
+alert on a metric the operator serves.**
+
+- **The metric.** The operator's metrics endpoint (controller-runtime's, `:8080`)
+  serves `dev_env_session_rescue_failed{session, reason}`, 1 for each session whose
+  `RescueFailed` condition is True, and `dev_env_sessions{phase}`, the number of
+  sessions in each phase. Neither carries a `namespace` label: the scrape adds the
+  operator's own (`dev-env-system`), and every session is in `dev-agents` (D-02). A phase with no session reports 0,
+  so the series exist whenever the operator is scraped. `SessionCollector` reads both
+  from the cache at scrape time. So every replica reports the same values, a new
+  leader needs no warm-up, and a reaped session's series end with it (5.1: nothing
+  lives only in memory).
+- **The alert** lives in haynes-ops beside the operator: a ServiceMonitor on the
+  metrics port, ingress for Prometheus in the operator's network policy, and a
+  PrometheusRule `DevEnvRescueFailed` with severity `critical`, the one severity
+  Alertmanager sends to Tom's phone by Pushover. It fires on `max by (session)
+  (dev_env_session_rescue_failed) > 0` held for 20 minutes, and keeps firing for 30
+  minutes after (`keep_firing_for`). The `max` folds the two replicas' identical
+  series, and grouping by the session alone keeps a retry that fails for a new
+  reason from restarting the 20 minutes; `agent-run show` gives the reason. The 20 minutes let a hold pod's retry (D-55, every 15 minutes)
+  clear a passing failure without a page, and `keep_firing_for` rides over a short
+  scrape gap once the page is out. The description says what to do: read the condition with `agent-run show`, exec into
+  the hold pod if there is one, and never lift a finalizer or delete the volume
+  without a human's decision (D-45).
+- **A blind page pages too.** A scrape fails whole when the operator cannot list the
+  sessions (`SessionCollector` reports an invalid metric then, never a partial
+  list), and no scrape happens while the operator is down. Either way the series
+  vanish, and `DevEnvRescueFailed` would resolve on missing data. So a companion
+  rule, `DevEnvOperatorMetricsAbsent` (critical, 15 minutes), fires on
+  `absent(dev_env_sessions)`: the operator is down or blind, so no new session
+  starts, no reap finishes, and the rescue page cannot see.
+- **Not Pushover from the operator.** The operator keeps no state outside the
+  cluster's objects (5.1), so it could not remember that it had paged. Alertmanager
+  already folds repeats, re-sends every 12 hours and sends the resolve. The
+  operator's network policy still admits `api.pushover.net` for 5.2's drain notice
+  (plan 04).
+
 **D-51 (2026-10-06, plan 01 step 5). The operator runs the rescue by exec before a
 suspend deletes a pod that ran, records a verdict in status first, and archives only
 a reaped session's volume, only after a verified rescue of the volume's last pod.**
@@ -3727,3 +3764,4 @@ credential grants) is open. ADR-001 was Accepted on
 | D-54 | `AccessGrant` lives in `dev-agents`, `GrantPolicy` in `dev-env-system`; a grant's name is its ServiceAccount, bindings and policy; spec immutable but a one-way `release`; status the broker's only; TTL 10 m to the type's longest; in-cluster egress by endpoint, never by name | 6.12 |
 | D-55 | A volume that needs a rescue and has no pod gets a hold pod: the session's pod running `agentd hold` at size S, with no agent credentials; the operator rescues in it, keeps it and retries every 15 minutes while the rescue fails, and archives once it passes; a volume with nothing but an empty `lost+found` is a valid rescue (`VolumeEmpty`) | 4.4 |
 | D-56 | `/v1/grants` of plan 07 step 2: only a session requests, for its own pod, with the requester from its token; every caller reads; each type's own fields; TTL 30 m for break-glass and 1 h otherwise; identical pending or active requests merge; at most 3 pending per session, per replica; release by `spec.release`; an approval link from `--grant-approval-url` | 6.12 |
+| D-57 | The page on `RescueFailed` is a Prometheus alert: the operator serves `dev_env_session_rescue_failed` and `dev_env_sessions` from its cache at scrape time; haynes-ops' `DevEnvRescueFailed` (critical, 20 minutes) pages Tom through Alertmanager, and `DevEnvOperatorMetricsAbsent` pages when the series vanish | 4.4 |

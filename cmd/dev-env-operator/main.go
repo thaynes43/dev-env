@@ -26,6 +26,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -179,6 +180,9 @@ func run(args []string) error {
 	if err := r.SetupWithManager(mgr); err != nil {
 		return err
 	}
+	// The sessions' metrics, read from the cache at scrape time on every
+	// replica: the RescueFailed page's source (D-57).
+	ctrlmetrics.Registry.MustRegister(&controller.SessionCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace})
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		return err
 	}
