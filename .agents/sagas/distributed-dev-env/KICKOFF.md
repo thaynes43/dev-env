@@ -310,7 +310,7 @@ PR per piece, in this order:
       until B5 (section 3) publishes `dev-env:2.x.y`;
    8. the ExternalSecrets, among them the keeper's App key and its empty Secrets
       (plan 01, "The keeper's inputs"; D-52). Done 2026-10-06: haynes-ops #3480, app
-      `apps/dev-env-system/secrets/`, all five ExternalSecrets `SecretSynced`, no new
+      `apps/dev-env-system/secrets/`, all four ExternalSecrets `SecretSynced`, no new
       1Password field needed;
    - **8.8a:** the four config ConfigMaps in `dev-agents` of D-49:
      `dev-env-config-claude` (`CLAUDE.md`, `mcp.json`, `agent-*.md`),
