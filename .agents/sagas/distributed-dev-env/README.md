@@ -11,8 +11,8 @@ on 2026-10-06 and widened the scope: tool pods, a GPU budget, satellite inferenc
 workers, local models, access without in-pod prompts, summoned sessions kept as a
 first-class path, and one console for links, archives and the login renewal. Three
 repo-setup questions: Q-13 (public package) and Q-14 (a GitHub App key secret) were
-ruled on 2026-10-06, and Q-12 (branch protection) is open, to ask once the ruleset is
-created after B2. Research notes
+ruled on 2026-10-06, and Q-12 (branch protection) was settled on 2026-10-07, when Tom
+made the repo public. Research notes
 [R-01](research/R-01-summoned-agents-audit.md) (summoned agents) and [R-02](research/R-02-remote-control-identity.md) (Remote Control
 identity) are folded into the design. The spikes in
 [backlog 00](backlog/00-spikes.md) come first: S-1, S-3, S-6 and S-15 passed on 2026-10-06, S-7
@@ -133,7 +133,7 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 
 | # | Decision | Status | Outcome |
 |---|---|---|---|
-| 1 | Where v2's saga and code live | **DECIDED** 2026-10-05 (Tom) | A new private repo, **thaynes43/dev-env**, keeping the image name `ghcr.io/thaynes43/dev-env`. Manifests and pod config stay in haynes-ops (GitOps). Recorded in haynes-ops as ADR-001 of its dev-env saga. |
+| 1 | Where v2's saga and code live | **DECIDED** 2026-10-05 (Tom) | A new repo, **thaynes43/dev-env** (private at first, public since 2026-10-07, row 19), keeping the image name `ghcr.io/thaynes43/dev-env`. Manifests and pod config stay in haynes-ops (GitOps). Recorded in haynes-ops as ADR-001 of its dev-env saga. |
 | 2 | Architecture: one pod per session run by an operator | **DECIDED** 2026-10-06 (Tom) | [ADR-001](adrs/001-distributed-dev-env.md) |
 | 3 | Settled design decisions D-01 to D-37 (D-34 to D-37 added 2026-10-06) | **DECIDED** 2026-10-06 (Tom) with ADR-001; D-02, D-18, D-19 and D-20 **REVISED** 2026-10-06 | [DESIGN-001 section 16](designs/001-dev-env-v2.md#16-decisions-settled-in-this-design) |
 | 4 | Q-01: build the pod-and-volume layer, or adopt kubernetes-sigs/agent-sandbox | **DECIDED** 2026-10-06 (Tom) | Build a small operator modelled on agent-sandbox (A). |
@@ -151,7 +151,7 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 16 | Ratify ADR-001 | **DECIDED** 2026-10-06 (Tom: "Accept as written") | [Ratification summary](adrs/001-distributed-dev-env.md#ratification-summary) |
 | 17 | Q-11: which link that survives restarts did Tom mean? | **DECIDED** 2026-10-06 (Tom) | The Claude Code auth (the Max `/login` on the PVC). The keeper is its sole owner; pods get access tokens only; the monthly renewal is a console page behind Authentik, replacing the chat relay; the console lists every session's link and status with an archive button; the codex hub keeps its own single enrolment (D-11, D-37). |
 | 18 | Summoned sessions are a first-class requirement | **DECIDED** 2026-10-06 (Tom: "we need to preserve the functionality") | [DESIGN-001 3.7](designs/001-dev-env-v2.md#37-summoned-sessions), D-36, R-01 V-01 to V-17, plan 10 |
-| 19 | Q-12: branch protection on this private repo, if Tom's plan does not enforce rulesets | **OPEN** 2026-10-06, not asked yet: no ruleset exists, and the question is GitHub's warning when it is created, after B2 | [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions); recommended: GitHub Pro (A). |
+| 19 | Q-12: branch protection on this repo, if Tom's plan does not enforce rulesets on a private one | **DECIDED** 2026-10-07 (Tom) | B, public: "I made dev-env public so I can go to bed but make sure it's good and safe". Actions billing had stopped CI on the private repo. The ruleset is now enforced free; creating it stays Tom's (laptop handoff part 3). [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions). |
 | 20 | Q-13: visibility of `ghcr.io/thaynes43/dev-env-operator` | **DECIDED** 2026-10-06 (Tom) | A, public: "Public package write a prompt for an agent on my laptop to flip it". A laptop agent flips it after B3's first publish ([handoff](../../handoffs/2026-10-06-tom-laptop-settings.md)). |
 | 21 | Q-14: how release-please gets release PRs checked by CI | **DECIDED** 2026-10-06 (Tom) | A, a GitHub App key secret: "GitHub App key secret (Recommended)". Names for B4: variable `RELEASE_APP_ID`, secret `RELEASE_APP_PRIVATE_KEY`. The App also needs Issues read and write (release-please creates `autorelease:` labels). |
 | 22 | D-38: the keeper as its own binary or a mode of the operator | **DECIDED** 2026-10-06 (agent, delegated by KICKOFF B1) | Its own binary, `dev-env-keeper`, shipped in the operator image; the broker stays a mode of the operator ([DESIGN-001 3.1](designs/001-dev-env-v2.md#31-components)). |

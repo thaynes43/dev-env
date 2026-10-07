@@ -10,13 +10,19 @@ the saga. To start building, follow
 - **The dev-env v2 design is complete.** It covers the architecture (ADR-001), the
   details (DESIGN-001, D-01 onward), 16 spikes, backlog plans 00 to 10 and two
   research notes.
-- **Every design question is ruled except Q-12.** Tom answered Q-01 to Q-11, Q-13
-  and Q-14 on 2026-10-06 (index below). Q-12 (branch protection) is open but not
-  asked yet: the repo has no ruleset (`GET /repos/thaynes43/dev-env/rulesets`
-  returned `[]` on 2026-10-06), and the question's premise is GitHub's warning when
-  the ruleset is created, which happens once `CI - Success` has reported, after B2.
-  Ask Tom then. The settings only Tom can click are in a handoff for an agent on his
-  laptop (below).
+- **Every design question is ruled.** Tom answered Q-01 to Q-11, Q-13 and Q-14 on
+  2026-10-06 (index below). Q-12 (branch protection) was settled on 2026-10-07: Tom
+  made the repo public (B) after Actions billing stopped CI on the private repo. The
+  settings only Tom can click are in a handoff for an agent on his laptop (below).
+- **The repo is public since 2026-10-07.** Everything committed, history and PR
+  branches included, is published, so keep secrets, household details and
+  transcripts out (CLAUDE.md, hard rules). On 2026-10-07 gitleaks and a pattern grep
+  over every branch and PR ref found no secret. The `@claude` workflow now runs only
+  for the owner, members, collaborators and haynes-dev-bot. The code is MIT
+  ([`LICENSE`](../LICENSE)); [`images/THIRD_PARTY.md`](../images/THIRD_PARTY.md) lists
+  what the images bundle (the agent image carries proprietary Claude Code), and
+  [#55](https://github.com/thaynes43/dev-env/issues/55) puts the upstream license texts
+  into the images.
 - **ADR-001 is Accepted.** Tom ratified it on 2026-10-06: "Accept as written".
   DESIGN-001 is Accepted with it.
 - **KICKOFF B1, the Go skeleton, is built** (#14). The module, the `AgentSession` types and
@@ -26,7 +32,7 @@ the saga. To start building, follow
   `dev-env-operator:sha-<short>` from main. The agent image (B5, D-53) is built and
   smoke-tested by CI on PRs and published by `publish-agent.yml` from a `v2.x.y` release tag;
   it ships once the GHCR grant and the first release exist. The
-  operator package stays private until Tom flips it (laptop handoff, part 2).
+  operator package is public (Q-13; an anonymous pull works since 2026-10-07).
   **B4 added Renovate and release-please** (#18): the first release is 2.0.0 (one repo
   version on the agent image's `2.x` line). Until Tom adds the release App, the
   release PR is opened with `GITHUB_TOKEN`, so close and reopen it as haynes-dev-bot
@@ -128,9 +134,10 @@ the saga. To start building, follow
 
 1. **Tell Tom about the laptop handoff** ([`handoffs/2026-10-06-tom-laptop-settings.md`](handoffs/2026-10-06-tom-laptop-settings.md)).
    Part 1 (auto-merge, GHCR Actions access, Renovate, the release-please App) is
-   needed before B4 and B5. Part 2 (make the operator package public) waits for B3's
-   first publish. Part 3 (the Protect Main ruleset) waits for `CI - Success` to report
-   once, after B2. Q-12 is asked then, if GitHub will not enforce it.
+   needed before B4 and B5. Part 2 (make the operator package public) is done. Part 3
+   (the Protect Main ruleset) can run now: `CI - Success` has reported, and since the
+   repo went public (Q-12, 2026-10-07) GitHub enforces the ruleset at no cost. It is
+   still Tom's to run.
 2. **Track B, plan 01: the repo skeleton and CI.** B1 (the Go skeleton) is done;
    B2 (CI), B3 (`publish.yml`) and B4 (Renovate, release-please) are done; continue with B5 in
    [KICKOFF section 3](sagas/distributed-dev-env/KICKOFF.md#3-track-b-the-first-prs-in-this-repo).
@@ -189,14 +196,11 @@ the saga. To start building, follow
 | Q-09 | No household GPU app lends VRAM. Agents get only what is left, and that grows as GPUs are added. |
 | Q-10 | Satellites are used only while awake and not in use by Tom, and are never woken. |
 | Q-11 | The link that survives restarts is the Claude Max login. The keeper owns it, and the console renews it each month. |
+| Q-12 | The repo is public (B), so the ruleset is enforced free. Tom made it public himself on 2026-10-07: "I made dev-env public so I can go to bed but make sure it's good and safe". Actions billing had stopped CI on the private repo. |
 | Q-13 | Make `ghcr.io/thaynes43/dev-env-operator` public (A). "Public package write a prompt for an agent on my laptop to flip it": a laptop agent flips it after B3's first publish, because GitHub has no API for package visibility. |
 | Q-14 | A GitHub App key secret for release-please (A): "GitHub App key secret (Recommended)". Repo variable `RELEASE_APP_ID`, repo secret `RELEASE_APP_PRIVATE_KEY`; the App also needs Issues read and write for `autorelease:` labels. |
 
-**Open** (full entry in DESIGN-001 section 15):
-
-| Id | Question | Recommended |
-|---|---|---|
-| Q-12 | Branch protection on this private repo, if his plan does not enforce the ruleset. **Not asked yet:** the repo has no ruleset, and the premise is GitHub's warning when it is created, once `CI - Success` has reported (after B2). Ask Tom then, as one question. | A: GitHub Pro (B: make the repo public; C: convention only) |
+**Open:** none (full entries in DESIGN-001 section 15).
 
 **Settings only Tom can click** (no decision needed). An agent on his laptop does
 them from [`handoffs/2026-10-06-tom-laptop-settings.md`](handoffs/2026-10-06-tom-laptop-settings.md),
@@ -212,11 +216,11 @@ which lists exactly what to change:
       release-please part). Until then the workflow's `GITHUB_TOKEN` fallback cannot
       open the release PR at all (it failed on 2026-10-06), so also allow Actions to
       create PRs (handoff part 1, step 5).
-- [ ] Part 2, after B3's first publish: make `ghcr.io/thaynes43/dev-env-operator`
-      public (Q-13).
+- [x] Part 2, after B3's first publish: make `ghcr.io/thaynes43/dev-env-operator`
+      public (Q-13). Done: an anonymous pull works (checked 2026-10-07).
 - [ ] Part 3, after `CI - Success` has reported once (B2): the Protect Main ruleset on
-      the default branch, with `CI - Success` required. If GitHub will not enforce it
-      on this private repo, that is Q-12. **Then an agent flips Renovate's auto-merge
+      the default branch, with `CI - Success` required. Ready now: the repo is public
+      (Q-12), so GitHub enforces it at no cost. **Then an agent flips Renovate's auto-merge
       on:** set `automerge: true` in the first two `packageRules` entries of
       `.github/renovate.json5` (Go modules and GitHub Actions) (B4 left it off).
 
