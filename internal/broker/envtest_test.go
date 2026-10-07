@@ -439,7 +439,7 @@ func TestBrokerTokens(t *testing.T) {
 	}
 
 	// The API server will not bind a grant's token to the session's pod,
-	// because the pod runs as another ServiceAccount (D-58).
+	// because the pod runs as another ServiceAccount (D-61).
 	bc, err := client.New(brokerCfg, client.Options{Scheme: scheme})
 	if err != nil {
 		t.Fatal(err)

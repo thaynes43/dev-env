@@ -17,7 +17,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
 
-// The seams later steps of plan 07 plug into (D-58): Decide for the approval
+// The seams later steps of plan 07 plug into (D-61): Decide for the approval
 // page (step 6), Notifier for Pushover (step 6), Installer for the token in the
 // session's pod (step 4).
 

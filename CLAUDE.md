@@ -39,7 +39,7 @@ v2 proves itself and Tom approves the cutover. The saga:
 release-please-config.json, .release-please-manifest.json   one repo version, `go` type, first release 2.0.0
 api/v1alpha1/            CRD types, group dev-env.haynesops.com (AgentSession; AccessGrant and GrantPolicy, D-54); depends on apimachinery only.
                          Its envtest suite proves the schema's rules (D-39) on a real API server
-cmd/dev-env-operator/    the operator, and the access broker as its second mode, `dev-env-operator broker` (broker.go, D-58)
+cmd/dev-env-operator/    the operator, and the access broker as its second mode, `dev-env-operator broker` (broker.go, D-61)
 cmd/dev-env-keeper/      the keeper, its own binary in the operator image (D-38); main only, the work is internal/keeper
 cmd/agentd/              the in-pod supervisor: `run`, `hold` (the rescue pod, D-55), `run-agent` (a task, or a TUI, D-58), `render`,
                          `ctl status|rescue [--stop-agent]|prepare-restart` (D-40 to D-43, D-48, D-58)
@@ -63,7 +63,7 @@ internal/keeper/         the keeper (D-52): mints the haynes-dev-bot token into 
                          behind a Lease; one Job per credential, so plans 03, 04 and 10 add theirs. Unit tests use a fake
                          GitHub (httptest) and a fake clock; its envtest suite runs it as its ServiceAccount with exactly
                          the Roles haynes-ops gives it
-internal/broker/         the access broker (D-58): decides AccessGrants (GrantPolicy match, Decide for the approval page,
+internal/broker/         the access broker (D-61): decides AccessGrants (GrantPolicy match, Decide for the approval page,
                          a Notifier), makes kube and break-glass grants (a ServiceAccount and RoleBindings or a
                          ClusterRoleBinding per grant) and revokes them; Installer is plan 07 step 4's seam. Its envtest
                          suite runs it as dev-env-broker under haynes-ops' RBAC and broker guard, copied into testdata/

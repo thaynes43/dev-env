@@ -36,7 +36,7 @@ In this repo:
   ServiceAccount (not bound to the session's pod: the API server refuses that for a
   pod that runs as another ServiceAccount); revoke at expiry, on release and when
   the session ends. An envtest suite runs it under exactly the RBAC haynes-ops gives
-  it: it binds catalog roles only, and a revoked grant's token is refused (D-58).
+  it: it binds catalog roles only, and a revoked grant's token is refused (D-61).
 - [ ] 4. Installing a kube grant: the pod gets a memory-backed `grants` volume;
   `agentd ctl grant-install` and `grant-remove` write the token there and keep a
   kubeconfig whose `grant-<id>` contexts use it; the broker installs by exec and

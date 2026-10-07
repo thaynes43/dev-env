@@ -3,7 +3,7 @@ package broker
 // The envtest suite's harness: a real kube-apiserver (internal/testenv) with the
 // CRDs installed and the broker's RBAC and admission guard exactly as haynes-ops
 // deploys them, copied verbatim into testdata/haynes-ops/ from haynes-ops main
-// d3ef0e0c (#3528, plan 07 H1; #3531; #3533), kubernetes/main/apps/dev-env-system/
+// main after #3535 (#3528, plan 07 H1; #3531; #3533; #3535), kubernetes/main/apps/dev-env-system/
 // rbac/app/. Copy them again when haynes-ops changes them:
 //
 //   - broker.yaml: the broker's ClusterRole (bindings; bind on the catalog by

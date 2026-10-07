@@ -29,7 +29,7 @@ const (
 	LabelHold = LabelPrefix + "hold"
 
 	// LabelGrant is an AccessGrant's name, on what the broker makes for it: the
-	// grant's ServiceAccount and bindings, and its network policy (D-58). The
+	// grant's ServiceAccount and bindings, and its network policy (D-61). The
 	// broker deletes an object only when it carries this label with the
 	// grant's name. Such objects also carry LabelSession, the requester.
 	LabelGrant = LabelPrefix + "grant"

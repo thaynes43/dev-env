@@ -14,7 +14,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/version"
 )
 
-// brokerOptions are the flags of `dev-env-operator broker` (D-58).
+// brokerOptions are the flags of `dev-env-operator broker` (D-61).
 type brokerOptions struct {
 	sessionNamespace string
 	policyNamespace  string
@@ -48,7 +48,7 @@ func parseBrokerFlags(args []string) (brokerOptions, error) {
 	return o, nil
 }
 
-// runBroker runs the access broker (DESIGN-001 6.12, D-58): the same binary,
+// runBroker runs the access broker (DESIGN-001 6.12, D-61): the same binary,
 // its own Deployment, ServiceAccount and Lease.
 func runBroker(args []string) error {
 	o, err := parseBrokerFlags(args)

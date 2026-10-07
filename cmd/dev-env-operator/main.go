@@ -9,7 +9,7 @@
 // rescue (plan 01 step 5, D-51), and the /v1 API (plan 01 step 3,
 // internal/apiserver, D-46), which every replica serves on :8443, with its grant
 // routes (plan 07 step 2, D-56). The broker mode (broker.go, internal/broker,
-// D-58) decides, makes and revokes kube and break-glass grants (plan 07 step 3).
+// D-61) decides, makes and revokes kube and break-glass grants (plan 07 step 3).
 package main
 
 import (

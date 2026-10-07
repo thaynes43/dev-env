@@ -1,4 +1,4 @@
-// Package broker is the access broker (DESIGN-001 6.12, D-25, D-58): the second
+// Package broker is the access broker (DESIGN-001 6.12, D-25, D-61): the second
 // mode of the operator binary, `dev-env-operator broker`, deployed as its own
 // Deployment with its own ServiceAccount, so the operator that serves agents
 // holds none of its rights.
@@ -416,7 +416,7 @@ func (b *Broker) sessionPod(ctx context.Context, s *v1alpha1.AgentSession, runni
 // to a pod that runs as the same ServiceAccount, and session pods run as
 // dev-env-agent. Deleting the ServiceAccount at revoke is what ends every token
 // of the grant at once: the API server checks the ServiceAccount's UID on each
-// request (D-58).
+// request (D-61).
 func (b *Broker) mint(ctx context.Context, g *v1alpha1.AccessGrant, now metav1.Time) (string, time.Time, error) {
 	secs := tokenSeconds(g.Status.ExpiresAt.Sub(now.Time))
 	tr := &authenticationv1.TokenRequest{Spec: authenticationv1.TokenRequestSpec{ExpirationSeconds: &secs}}

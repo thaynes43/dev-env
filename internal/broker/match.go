@@ -14,7 +14,7 @@ import (
 const ProfileOps = "ops"
 
 // Match returns the first GrantPolicy, in name order, that approves g at once,
-// or nil when none does and the grant waits for Tom (DESIGN-001 6.12, D-58). A
+// or nil when none does and the grant waits for Tom (DESIGN-001 6.12, D-61). A
 // policy being deleted approves nothing. Match is a pure function: the broker
 // passes it the policies from its cache.
 func Match(g *v1alpha1.AccessGrant, policies []v1alpha1.GrantPolicy) *v1alpha1.GrantPolicy {
