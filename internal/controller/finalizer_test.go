@@ -101,20 +101,13 @@ func TestInvariantSuspendKeepsThePodUntilRescue(t *testing.T) {
 	waitStatus(t, s.Name, "Running", phaseIs(v1alpha1.PhaseRunning))
 	pod := waitPod(t, s.Name)
 
-	setMode := func(m v1alpha1.OperatingMode) {
-		live := session(t, s.Name)
-		live.Spec.OperatingMode = m
-		if err := k8s.Update(context.Background(), live); err != nil {
-			t.Fatal(err)
-		}
-	}
-	setMode(v1alpha1.OperatingModeSuspended)
+	setMode(t, s.Name, v1alpha1.OperatingModeSuspended)
 	waitStatus(t, s.Name, "suspend waits for rescue", blockedBy("SuspendNeedsRescue"))
 	if after := waitPod(t, s.Name); after.UID != pod.UID || !after.DeletionTimestamp.IsZero() {
 		t.Errorf("the pod was replaced or is being deleted")
 	}
 
-	setMode(v1alpha1.OperatingModeRunning)
+	setMode(t, s.Name, v1alpha1.OperatingModeRunning)
 	waitStatus(t, s.Name, "resume clears the block", func(st *v1alpha1.AgentSessionStatus) error {
 		if c := condition(st, ConditionRemovalBlocked); c != nil {
 			return fmt.Errorf("RemovalBlocked %+v", c)
@@ -186,11 +179,7 @@ func TestADeletedSessionWithOnlyAVolumeStays(t *testing.T) {
 	s := newSession(t, nil)
 	claim := waitClaim(t, s.Name)
 	pod := waitPod(t, s.Name)
-	live := session(t, s.Name)
-	live.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
-	if err := k8s.Update(context.Background(), live); err != nil {
-		t.Fatal(err)
-	}
+	setMode(t, s.Name, v1alpha1.OperatingModeSuspended)
 	waitStatus(t, s.Name, "Suspended with its volume", phaseIs(v1alpha1.PhaseSuspended))
 	if n := rescuer.callsFor(s.Name); n != 0 {
 		t.Errorf("a rescue ran %d times in a pod that never started", n)
