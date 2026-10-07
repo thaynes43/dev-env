@@ -25,6 +25,40 @@ func SessionSuspendPath(name string) string { return SessionPath(name) + "/suspe
 // SessionResumePath is a session's resume route; see SessionSuspendPath.
 func SessionResumePath(name string) string { return SessionPath(name) + "/resume" }
 
+// SessionLogPath is a session's log route, GET with ?tail=N (D-65).
+func SessionLogPath(name string) string { return SessionPath(name) + "/log" }
+
+// SessionMessagesPath is a session's message route, POST (D-16, D-65).
+func SessionMessagesPath(name string) string { return SessionPath(name) + "/messages" }
+
+// MaxMessageBytes caps a message's text (D-65).
+const MaxMessageBytes = 16 << 10
+
+// SessionLog is the answer of GET /v1/sessions/{name}/log: the last lines of
+// the session's log, read in its running pod.
+type SessionLog struct {
+	Session string `json:"session"`
+	Tail    int    `json:"tail"`
+	Text    string `json:"text"`
+	// Truncated is set when the lines asked for were more than the API sends
+	// (4 MiB): Text then holds the newest whole lines that fit.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// MessageRequest is the body of POST /v1/sessions/{name}/messages: the text,
+// at most MaxMessageBytes. The API adds who sent it, from the caller's token.
+type MessageRequest struct {
+	Text string `json:"text"`
+}
+
+// MessageResult is the answer of a delivered message.
+type MessageResult struct {
+	Session string `json:"session"`
+	// From is the sender as the session's agent reads it.
+	From      string `json:"from"`
+	Delivered bool   `json:"delivered"`
+}
+
 // TokenAudience is the audience of every token the API accepts (D-05). A token
 // for the API server's own audience is refused.
 const TokenAudience = "dev-env-operator"

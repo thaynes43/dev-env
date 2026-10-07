@@ -104,9 +104,9 @@ the cluster.
 - [x] 7. **The archive timer** (D-62, this PR) (D-09: 7 days after suspension, from the templates).
   It archives a suspended session's volume after a valid rescue (the hold pod of step
   2 when it has none). `resume` refuses an archived session and points at a restore.
-- [ ] 8. **Logs.** agentd copies the task log to `~/.shared/logs/`; `GET
+- [x] 8. **Logs** (D-65, this PR). agentd copies the task log to `~/.shared/logs/`; `GET
   /v1/sessions/{id}/log?tail=N` and `agent-run log`.
-- [ ] 9. **Messages** (D-16 tier 3). `POST /v1/sessions/{id}/messages`, `agentd ctl
+- [x] 9. **Messages** (D-16 tier 3, D-65, this PR). `POST /v1/sessions/{id}/messages`, `agentd ctl
   deliver` (a paste into the Claude TUI; `codex queue` for Codex) and `agent-run msg`.
 - [ ] 10. **Activities** (D-17). The `Activity` CRD in `dev-env-system`,
   `/v1/activities` with v1's limits enforced by the API, expiry, and `declare-activity`

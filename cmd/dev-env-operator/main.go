@@ -35,6 +35,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/grantexpiry"
+	"github.com/thaynes43/dev-env/internal/podexec"
 	"github.com/thaynes43/dev-env/internal/templates"
 	"github.com/thaynes43/dev-env/internal/version"
 )
@@ -203,6 +204,11 @@ func run(args []string) error {
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		return err
 	}
+	// The API's log and message routes run agentd in a session's pod (D-65).
+	podExec, err := podexec.New(cfg)
+	if err != nil {
+		return err
+	}
 	if o.apiAddr != "0" {
 		api := &apiserver.Server{
 			Client: mgr.GetClient(),
@@ -214,6 +220,7 @@ func run(args []string) error {
 				SessionNamespace:      o.sessionNamespace,
 				SessionServiceAccount: controller.ServiceAccountName,
 			},
+			Exec:             podExec,
 			Templates:        apiserver.TemplatesFrom(mgr.GetClient(), templatesKey),
 			Log:              ctrl.Log.WithName("api"),
 			GrantApprovalURL: o.grantApprovalURL,

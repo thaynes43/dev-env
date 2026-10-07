@@ -180,7 +180,12 @@ func TestBrokerEgressCollisionAndPolicyFinalizer(t *testing.T) {
 	if err := admin.Update(ctx, u); err != nil {
 		t.Fatal(err)
 	}
-	poke(t, n)
+	// The policy's own delete can wake the broker, which then lets the grant
+	// go before this poke lands: a grant already gone is the outcome waited for.
+	pokePatch := client.RawPatch(types.MergePatchType, []byte(`{"metadata":{"annotations":{"test/poke":"after-policy"}}}`))
+	if err := admin.Patch(ctx, &v1alpha1.AccessGrant{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: n}}, pokePatch); client.IgnoreNotFound(err) != nil {
+		t.Fatal(err)
+	}
 	waitGone(t, egress.Object(sessionNS, n), &v1alpha1.AccessGrant{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: n}})
 }
 

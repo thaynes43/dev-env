@@ -56,6 +56,9 @@ type Server struct {
 	Live client.Reader
 	// Auth authenticates bearer tokens.
 	Auth Authenticator
+	// Exec runs agentd's commands in a session's pod, for the log and message
+	// routes (D-08, D-65). Nil answers those routes with 503.
+	Exec PodExecutor
 	// Policy names the callers the API serves.
 	Policy Policy
 	// Templates returns the current templates, or why they are unusable. Nil
@@ -103,6 +106,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle(apiv1.SessionsPath+"/{name}", s.serve(route{methods: map[string]handler{
 		http.MethodGet:    s.getSession,
 		http.MethodDelete: s.reapSession,
+	}}))
+	mux.Handle(apiv1.SessionsPath+"/{name}/log", s.serve(route{methods: map[string]handler{
+		http.MethodGet: s.sessionLog,
+	}}))
+	mux.Handle(apiv1.SessionsPath+"/{name}/messages", s.serve(route{methods: map[string]handler{
+		http.MethodPost: s.sendMessage,
 	}}))
 	mux.Handle(apiv1.SessionsPath+"/{name}/suspend", s.serve(route{methods: map[string]handler{
 		http.MethodPost: s.suspendSession,

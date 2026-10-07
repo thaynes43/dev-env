@@ -5,12 +5,14 @@
 //
 // Built so far: the daemon (`run`), the rescue pod's `hold`, the agent runner
 // in the tmux pane (`run-agent`), `render`, `ctl status`, `ctl rescue` and
-// `ctl prepare-restart`. `ctl deliver` arrives with plan 02's messages.
+// `ctl prepare-restart`, `ctl deliver` and `ctl log`.
 package main
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -51,6 +53,12 @@ Commands:
                            worktree could not be rescued or a bundle could not
                            be written (D-43). --stop-agent stops the agent CLI
                            first, as the operator does before a suspend.
+  ctl deliver --from S     Deliver the message on stdin to the agent (D-65): a
+                           bracketed paste into the Claude TUI, or codex queue.
+                           Exit 3 when the agent takes no message (a headless
+                           task, or no agent running).
+  ctl log [--tail N]       Print the last N lines (default 200) of the session's
+                           log, or of its copy on the shared volume.
   ctl prepare-restart      Print what the next boot resumes (the conversation in
                            ~/.agentd/launch.json) as JSON, then stop the agent
                            CLI as the pod's SIGTERM would (D-58).
@@ -63,7 +71,7 @@ Commands:
   help                     Print this help.
 
 agentd reads the session from AGENTD_SESSION (JSON) or the file named by
-AGENTD_SESSION_FILE (D-40). ctl deliver arrives with plan 02's messages.
+AGENTD_SESSION_FILE (D-40).
 `
 
 // Daemon timings (DESIGN-001 3.6). stopGrace must fit inside the pod's
@@ -174,6 +182,60 @@ func hold(ctx context.Context, log *slog.Logger, getenv func(string) string) int
 	return exitOK
 }
 
+// exitNotAddressable is ctl deliver's exit code for a session that takes no
+// message now (agentd.ErrNotAddressable); the API answers it with a 409.
+const exitNotAddressable = 3
+
+// exitNoLog is ctl log's exit code for a session with no log yet; the API
+// answers it with a 404.
+const exitNoLog = 4
+
+// ctlMessageOrLog is `ctl deliver --from <caller>` (the message on stdin) and
+// `ctl log [--tail N]` (D-65).
+func ctlMessageOrLog(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, r agentd.Runner) int {
+	fs := flag.NewFlagSet("ctl "+args[0], flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	from := fs.String("from", "", "")
+	tail := fs.Int("tail", 200, "")
+	if err := fs.Parse(args[1:]); err != nil || fs.NArg() > 0 || (args[0] == "log" && (*from != "" || *tail < 1 || *tail > 5000)) || (args[0] == "deliver" && *from == "") {
+		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl deliver --from <sender> (the message on stdin) | ctl log [--tail N, 1 to 5000]\n", binaryName)
+		return exitUsage
+	}
+	s, err := agentd.LoadSettings(getenv)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
+		return exitFailure
+	}
+	sess, err := agentd.LoadSession(getenv)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
+		return exitFailure
+	}
+	if args[0] == "log" {
+		if err := agentd.TailLog(s, sess.Name, *tail, stdout); err != nil {
+			_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
+			if errors.Is(err, agentd.ErrNoLog) {
+				return exitNoLog
+			}
+			return exitFailure
+		}
+		return exitOK
+	}
+	text, err := io.ReadAll(io.LimitReader(stdin, agentd.MaxMessageBytes+1))
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: read the message: %v\n", binaryName, err)
+		return exitFailure
+	}
+	if err := agentd.Deliver(ctx, r, s, sess, *from, string(text)); err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: deliver: %v\n", binaryName, err)
+		if errors.Is(err, agentd.ErrNotAddressable) {
+			return exitNotAddressable
+		}
+		return exitFailure
+	}
+	return exitOK
+}
+
 func daemon(ctx context.Context, log *slog.Logger, getenv func(string) string, r agentd.Runner) int {
 	s, err := agentd.LoadSettings(getenv)
 	if err != nil {
@@ -210,6 +272,8 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		switch args[0] {
 		case "grant-install", "grant-remove", "grant-use", "grant-list":
 			return grantCtl(args, stdin, stdout, stderr, getenv)
+		case "deliver", "log":
+			return ctlMessageOrLog(ctx, args, stdin, stdout, stderr, getenv, r)
 		}
 	}
 	stopAgent := false
@@ -284,9 +348,6 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return exitFailure
 		}
 		return exitOK
-	case "deliver":
-		_, _ = fmt.Fprintf(stderr, "%s: ctl %s is not built yet; it arrives with plan 02's messages\n", binaryName, args[0])
-		return exitFailure
 	default:
 		_, _ = fmt.Fprintf(stderr, "%s: unknown ctl command %q\n", binaryName, args[0])
 		return exitUsage

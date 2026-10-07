@@ -31,6 +31,17 @@ const maxResponse = 8 << 20
 // returns the status code, or an *exitError that says what went wrong in
 // words, with the exit code for its kind.
 func (a *app) call(ctx context.Context, c *conn, method, path string, query url.Values, body, out any) (int, error) {
+	return a.callWith(ctx, c, method, path, query, body, out, true)
+}
+
+// callOnce is call without retries, for a request that must not be sent
+// twice: a message (D-65) may have reached its session even when the answer
+// is lost.
+func (a *app) callOnce(ctx context.Context, c *conn, method, path string, body, out any) (int, error) {
+	return a.callWith(ctx, c, method, path, nil, body, out, false)
+}
+
+func (a *app) callWith(ctx context.Context, c *conn, method, path string, query url.Values, body, out any, retry bool) (int, error) {
 	var payload []byte
 	if body != nil {
 		var err error
@@ -54,7 +65,7 @@ func (a *app) call(ctx context.Context, c *conn, method, path string, query url.
 			return 0, fail(ExitAuth, "the API at %s has a certificate agent-run does not trust: %v; give its CA with --ca-file or %s", c.url, certErr.Err, envCAFile)
 		}
 		retryable := err != nil || status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
-		if retryable && attempt < len(retryDelays) && ctx.Err() == nil && a.env.Sleep(ctx, retryDelays[attempt]) == nil {
+		if retry && retryable && attempt < len(retryDelays) && ctx.Err() == nil && a.env.Sleep(ctx, retryDelays[attempt]) == nil {
 			continue
 		}
 		if err != nil {

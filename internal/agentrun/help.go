@@ -12,6 +12,8 @@ Usage:
   agent-run list [--repo <r>] [--state <s>] [--mine]
                                                   list sessions, newest first
   agent-run show <name>                           show one session, with its task
+  agent-run log <name> [--tail N]                 print the end of a session's log
+  agent-run msg <name> "<text>"                   send a message into a session's TUI
   agent-run reap <name>...                        rescue, stop and archive sessions
   agent-run suspend <name>...                     rescue and stop sessions, keeping their volumes
   agent-run resume <name>                         start a suspended session again, conversation intact
@@ -116,6 +118,23 @@ resumes the same conversation in its TUI (claude --resume). A task's prompt is
 never run again. agent-run waits up to --wait (default 30s) for the pod, then
 prints how to attach. A reaped session cannot be resumed.
 `,
+	"log": `Usage: agent-run log <name> [--tail N] [-o json]
+
+Prints the last N lines (default 200, at most 5000) of the session's log, read in
+its running pod. A task's log is its readable event stream; a TUI's log has a line
+for each start and exit. Once the pod is gone, the log stays on the shared volume
+at logs/<name>.log, which every session pod mounts at ~/.shared.
+`,
+	"msg": `Usage: agent-run msg <name> "<text>" [-o json]
+       agent-run msg <name> -          (the text on stdin)
+
+Sends a message, at most 16 KiB, into the session's TUI: it arrives as one paste,
+with a line saying who sent it and that it is information, not the session user's
+instruction, and how to answer (agent-run msg <sender>). A headless task (-p)
+takes no messages; it reports through its log and its PR. Any session or person
+may message any session. agent-run sends a message once and never retries it, so
+it is never delivered twice.
+`,
 	"attach": `Usage: agent-run attach <name>
 
 Attaches your terminal to the session's TUI: kubectl exec -it into the session's
@@ -173,7 +192,7 @@ Prints the version, the commit, the Go version and the platform.
 `,
 	"help": `Usage: agent-run help [<command>]
 
-Prints help for agent-run, or for one command: run, list, show, reap, suspend,
-resume, attach, detach, fleet, version.
+Prints help for agent-run, or for one command: run, list, show, log, msg, reap,
+suspend, resume, attach, detach, fleet, version.
 `,
 }
