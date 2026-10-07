@@ -14,6 +14,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
@@ -40,12 +41,22 @@ type agentPid struct {
 	Start string `json:"start"`
 }
 
+// tuiExit is ~/.agentd/tui-exit.json: how the latest TUI run ended (D-58).
+type tuiExit struct {
+	ExitCode       int       `json:"exitCode"`
+	StartedAt      time.Time `json:"startedAt"`
+	FinishedAt     time.Time `json:"finishedAt"`
+	ConversationID string    `json:"conversationId"`
+	BootID         string    `json:"bootId"`
+}
+
 // RunAgent is `agentd run-agent --launch <file>`, the process in the tmux
 // pane (D-42). It runs the agent CLI with the prompt on stdin, writes a
 // readable log to the pane and the task log, keeps the raw stream-json, stops
 // the task at its timeout, forwards a SIGTERM, SIGINT or SIGHUP it receives to
 // the CLI, and writes the result file when the CLI exits. It returns the
-// CLI's exit code.
+// CLI's exit code. A TUI launch (D-58) runs the CLI on the pane's terminal
+// instead (runTUI).
 func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopGrace time.Duration) int {
 	var l Launch
 	if err := readJSONFile(launchPath, &l); err != nil {
@@ -57,6 +68,9 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		return 1
 	}
 	stateDir := filepath.Dir(launchPath)
+	if l.TUI {
+		return runTUI(l, stateDir, os.Stdin, pane, signals, stopGrace)
+	}
 
 	logf, err := os.OpenFile(l.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -186,6 +200,95 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	_ = os.Remove(filepath.Join(stateDir, pidFile))
 	_, _ = fmt.Fprintf(out, "TASK-EXIT:%d\n", code)
 	return code
+}
+
+// runTUI runs the agent CLI interactively on the pane's terminal (D-58): its
+// stdin, stdout and stderr are the pane's, and its process group becomes the
+// terminal's foreground group, so it reads the keyboard of whoever attaches.
+// Like a task, it records the CLI's pid for the pod's SIGTERM and the rescue's
+// stop, and forwards the signals run-agent gets; when the CLI exits it records
+// the exit in tui-exit.json. Nothing is parsed or logged from a TUI, whose
+// screen is not a log.
+func runTUI(l Launch, stateDir string, tty *os.File, pane io.Writer, signals <-chan os.Signal, stopGrace time.Duration) int {
+	note := func(format string, a ...any) {
+		line := "[agentd] " + fmt.Sprintf(format, a...) + "\n"
+		_, _ = io.WriteString(pane, line)
+		if f, err := os.OpenFile(l.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+			_, _ = io.WriteString(f, time.Now().UTC().Format(time.RFC3339)+" "+line)
+			_ = f.Close()
+		}
+	}
+	cmd := exec.Command(l.Argv[0], l.Argv[1:]...)
+	cmd.Dir = l.Dir
+	cmd.Env = agentEnv(os.Environ(), l)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, pane, pane
+	// Its own process group, so a stop reaches the CLI's children too, made
+	// the terminal's foreground group when there is a terminal: a background
+	// group that reads the terminal is stopped (SIGTTIN).
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if isTerminal(tty) {
+		cmd.SysProcAttr.Foreground = true
+		cmd.SysProcAttr.Ctty = 0
+	}
+	started := time.Now().UTC()
+	what := "started"
+	if l.Resume {
+		what = "resumed"
+	}
+	note("%s: conversation %s %s in the TUI", l.Session, l.ConversationID, what)
+	record := func(code int) {
+		_ = writeJSONFile(filepath.Join(stateDir, tuiExitFile), tuiExit{
+			ExitCode: code, StartedAt: started, FinishedAt: time.Now().UTC(), ConversationID: l.ConversationID, BootID: l.BootID,
+		})
+		_ = os.Remove(filepath.Join(stateDir, pidFile))
+	}
+	if err := cmd.Start(); err != nil {
+		note("start %s: %v", l.Argv[0], err)
+		record(127)
+		return 127
+	}
+	pid := cmd.Process.Pid
+	_ = writeJSONFile(filepath.Join(stateDir, pidFile), agentPid{Pid: pid, Start: procStartTime(pid)})
+
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- cmd.Wait() }()
+	exited := make(chan struct{})
+	var mu sync.Mutex
+	var killTimer *time.Timer
+	go func() {
+		for {
+			select {
+			case <-exited:
+				return
+			case sig := <-signals:
+				mu.Lock()
+				if killTimer == nil {
+					note("received %s: SIGTERM to the agent (pid %d)", sig, pid)
+					_ = syscall.Kill(pid, syscall.SIGTERM)
+					killTimer = time.AfterFunc(stopGrace, func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+				}
+				mu.Unlock()
+			}
+		}
+	}()
+	werr := <-waitDone
+	close(exited)
+	mu.Lock()
+	if killTimer != nil {
+		killTimer.Stop()
+	}
+	mu.Unlock()
+	code := exitCode(cmd, werr)
+	record(code)
+	note("%s: the TUI exited (%d)", l.Session, code)
+	return code
+}
+
+// isTerminal reports whether f is a terminal.
+func isTerminal(f *os.File) bool {
+	var t syscall.Termios
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), syscall.TCGETS, uintptr(unsafe.Pointer(&t)))
+	return errno == 0
 }
 
 // exitCode is the CLI's exit code, or 128+signal when a signal ended it.

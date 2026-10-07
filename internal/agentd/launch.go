@@ -21,11 +21,18 @@ const TmuxSession = "agent"
 // State files in ~/.agentd. They live on the session volume, so a resume sees
 // what the last pod did.
 const (
-	bootFile   = "boot.json"
+	bootFile = "boot.json"
+	// launchFile is the session's first launch: the record that its agent was
+	// started, and the conversation every later boot resumes (D-42, D-58).
 	launchFile = "launch.json"
+	// resumeFile is the launch of a later boot's TUI, which resumes the
+	// conversation of launchFile (D-58).
+	resumeFile = "resume.json"
 	resultFile = "task-result.json"
-	pidFile    = "agent.pid"
-	eventsFile = "task-events.jsonl"
+	// tuiExitFile records how a TUI run ended (D-58).
+	tuiExitFile = "tui-exit.json"
+	pidFile     = "agent.pid"
+	eventsFile  = "task-events.jsonl"
 )
 
 // Launch is everything `agentd run-agent` needs to run the agent: agentd
@@ -50,6 +57,12 @@ type Launch struct {
 	ConversationID string        `json:"conversationId"`
 	BootID         string        `json:"bootId"`
 	CreatedAt      time.Time     `json:"createdAt"`
+	// TUI runs the CLI interactively on the pane's terminal: a local session,
+	// or any session resumed after its first boot (D-58). A task (-p) runs
+	// with the prompt on stdin and its output parsed instead.
+	TUI bool `json:"tui,omitempty"`
+	// Resume is set on a later boot's launch: it resumes ConversationID.
+	Resume bool `json:"resume,omitempty"`
 }
 
 // ErrNotInPlan01 marks a session kind that a later plan builds.
@@ -74,6 +87,16 @@ var unsetForAgent = []string{
 	protocol.SessionEnv,
 }
 
+// interactiveGuard is the guard for an interactive session, appended to the
+// system prompt: v1's task guard without the task's ending.
+func interactiveGuard(ws protocol.Workspace, workDir string) string {
+	return fmt.Sprintf("You are working in an isolated git worktree (%s) on branch %s. "+
+		"Stay inside it. NEVER push to main: commit to %s, push that branch, and "+
+		"open a PR with 'gh pr create' when the work is ready. If the work needs extra "+
+		"git worktrees, create them under %s and 'git worktree remove' each once its PR "+
+		"merges; never leave stranded worktrees behind.", ws.Worktree, ws.Branch, ws.Branch, workDir)
+}
+
 // taskGuard is v1's guard for a task, appended to the system prompt.
 func taskGuard(ws protocol.Workspace, workDir string) string {
 	return fmt.Sprintf("You are working in an isolated git worktree (%s) on branch %s. "+
@@ -84,70 +107,128 @@ func taskGuard(ws protocol.Workspace, workDir string) string {
 		"reason as your final message.", ws.Worktree, ws.Branch, ws.Branch, workDir)
 }
 
-// BuildLaunch builds the task launch for a session (D-42). Plan 01 runs Claude
-// task sessions on the static token; local and remote modes arrive with plans
-// 02 and 03, Codex task pods with plan 04 (D-12: Codex runs in the hub until
-// the keeper owns its login), opencode with plan 09.
+// BuildLaunch builds a session's first launch: a Claude task (D-42) or a local
+// session's TUI (D-58), both on the static token. Remote mode arrives with plan
+// 03, Codex pods with plan 04 (D-12: Codex runs in the hub until the keeper
+// owns its login), opencode with plan 09.
 func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootID string, now time.Time) (Launch, error) {
-	switch {
-	case sess.Agent != protocol.AgentClaude:
-		return Launch{}, fmt.Errorf("%w: %s sessions run from plan 04 (codex) or 09 (opencode)", ErrNotInPlan01, sess.Agent)
-	case sess.Mode == protocol.ModeLocal:
-		return Launch{}, fmt.Errorf("%w: local mode arrives with plan 02", ErrNotInPlan01)
-	case sess.Mode == protocol.ModeRemote:
-		return Launch{}, fmt.Errorf("%w: remote mode arrives with plan 03 (Remote Control on the keeper's login)", ErrNotInPlan01)
-	case sess.Mode != protocol.ModeTask:
-		return Launch{}, fmt.Errorf("mode %q is not task, local or remote", sess.Mode)
-	}
-	if err := protocol.ValidateClaudeModel(sess.Model); err != nil {
+	if err := claudeOnStaticToken(s, sess); err != nil {
 		return Launch{}, err
-	}
-	// V-05: a task runs on the plan's static token or not at all.
-	if strings.TrimSpace(s.Getenv("CLAUDE_CODE_OAUTH_TOKEN")) == "" {
-		return Launch{}, errors.New("plan credential unavailable: CLAUDE_CODE_OAUTH_TOKEN is not set, and no session falls back to a metered key")
 	}
 	conv, err := newUUID()
 	if err != nil {
 		return Launch{}, err
 	}
-	argv := []string{s.ClaudeBin, "--model", sess.Model}
-	if sess.Effort != "" {
-		argv = append(argv, "--effort", sess.Effort)
-	}
-	argv = append(argv, "--dangerously-skip-permissions", "--session-id", conv)
-	if n := sess.MaxTurns(); n > 0 {
-		argv = append(argv, "--max-turns", strconv.Itoa(int(n)))
-	}
-	argv = append(argv,
-		"--append-system-prompt", taskGuard(ws, s.WorkDir()),
-		"--output-format", "stream-json", "--verbose",
-		"-p")
-	return Launch{
+	argv := claudeArgs(s, sess)
+	argv = append(argv, "--session-id", conv)
+	l := Launch{
 		Session:        sess.Name,
-		Argv:           argv,
-		Prompt:         sess.Prompt,
 		Dir:            ws.Worktree,
 		Env:            []string{"CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=dev-env"},
 		Unset:          unsetForAgent,
 		LogPath:        s.LogPath(sess.Name),
 		EventsPath:     s.statePath(eventsFile),
-		Timeout:        sess.TimeoutDuration(),
 		ConversationID: conv,
 		BootID:         bootID,
 		CreatedAt:      now.UTC(),
+	}
+	if sess.Mode == protocol.ModeLocal {
+		l.TUI = true
+		l.Argv = append(argv, "--append-system-prompt", interactiveGuard(ws, s.WorkDir()))
+		return l, nil
+	}
+	if n := sess.MaxTurns(); n > 0 {
+		argv = append(argv, "--max-turns", strconv.Itoa(int(n)))
+	}
+	l.Argv = append(argv,
+		"--append-system-prompt", taskGuard(ws, s.WorkDir()),
+		"--output-format", "stream-json", "--verbose",
+		"-p")
+	l.Prompt = sess.Prompt
+	l.Timeout = sess.TimeoutDuration()
+	return l, nil
+}
+
+// BuildResume builds a later boot's launch (D-58): the TUI, resuming the
+// conversation the first launch started. A task's prompt never runs again
+// (D-42); its conversation comes back as an interactive session instead, with
+// the task's guard. The model and effort are the session's, which spec fixes
+// at create (D-39).
+func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first Launch, bootID string, now time.Time) (Launch, error) {
+	if err := claudeOnStaticToken(s, sess); err != nil {
+		return Launch{}, err
+	}
+	if first.ConversationID == "" {
+		return Launch{}, errors.New("the first launch records no conversation id, so there is nothing to resume")
+	}
+	guard := interactiveGuard(ws, s.WorkDir())
+	if sess.Mode == protocol.ModeTask {
+		guard = taskGuard(ws, s.WorkDir())
+	}
+	argv := append(claudeArgs(s, sess), "--resume", first.ConversationID, "--append-system-prompt", guard)
+	return Launch{
+		Session:        sess.Name,
+		Argv:           argv,
+		Dir:            ws.Worktree,
+		Env:            []string{"CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=dev-env"},
+		Unset:          unsetForAgent,
+		LogPath:        s.LogPath(sess.Name),
+		EventsPath:     s.statePath(eventsFile),
+		ConversationID: first.ConversationID,
+		BootID:         bootID,
+		CreatedAt:      now.UTC(),
+		TUI:            true,
+		Resume:         true,
 	}, nil
 }
 
+// claudeArgs are the CLI's arguments every launch shares: the model, the
+// effort and no approval prompts (D-23).
+func claudeArgs(s Settings, sess protocol.Session) []string {
+	argv := []string{s.ClaudeBin, "--model", sess.Model}
+	if sess.Effort != "" {
+		argv = append(argv, "--effort", sess.Effort)
+	}
+	return append(argv, "--dangerously-skip-permissions")
+}
+
+// claudeOnStaticToken checks what agentd runs today: Claude task and local
+// sessions, on the plan's static token (V-05).
+func claudeOnStaticToken(s Settings, sess protocol.Session) error {
+	switch {
+	case sess.Agent != protocol.AgentClaude:
+		return fmt.Errorf("%w: %s sessions run from plan 04 (codex) or 09 (opencode)", ErrNotInPlan01, sess.Agent)
+	case sess.Mode == protocol.ModeRemote:
+		return fmt.Errorf("%w: remote mode arrives with plan 03 (Remote Control on the keeper's login)", ErrNotInPlan01)
+	case sess.Mode != protocol.ModeTask && sess.Mode != protocol.ModeLocal:
+		return fmt.Errorf("mode %q is not task, local or remote", sess.Mode)
+	}
+	if err := protocol.ValidateClaudeModel(sess.Model); err != nil {
+		return err
+	}
+	// V-05: a session runs on the plan's static token or not at all.
+	if strings.TrimSpace(s.Getenv("CLAUDE_CODE_OAUTH_TOKEN")) == "" {
+		return errors.New("plan credential unavailable: CLAUDE_CODE_OAUTH_TOKEN is not set, and no session falls back to a metered key")
+	}
+	return nil
+}
+
 // StartAgent writes the launch file and starts the tmux session that runs
-// `agentd run-agent` in the worktree. The launch file is the record that the
-// task was started: agentd never starts it a second time (D-42).
+// `agentd run-agent` in the worktree. A first launch goes to launch.json, the
+// record that the agent was started: agentd never runs a task's prompt a
+// second time (D-42), and every later boot resumes from it (D-58). A resume
+// goes to resume.json.
 func StartAgent(ctx context.Context, r Runner, s Settings, l Launch, self string) error {
+	file := launchFile
+	if l.Resume {
+		file = resumeFile
+	}
 	data, err := json.MarshalIndent(l, "", "  ")
 	if err != nil {
 		return err
 	}
 	// 0600: the launch holds the prompt.
-	if err := writeFileAtomic(s.statePath(launchFile), data, 0o600); err != nil {
+	if err := writeFileAtomic(s.statePath(file), data, 0o600); err != nil {
 		return err
 	}
 	if _, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"has-session", "-t", "=" + TmuxSession}}); err == nil {
@@ -155,11 +236,11 @@ func StartAgent(ctx context.Context, r Runner, s Settings, l Launch, self string
 	}
 	_, err = r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{
 		"new-session", "-d", "-s", TmuxSession, "-x", "200", "-y", "50", "-c", l.Dir,
-		self, "run-agent", "--launch", s.statePath(launchFile),
+		self, "run-agent", "--launch", s.statePath(file),
 	}})
 	if err != nil {
-		// The task never ran, so a later boot may start it.
-		_ = os.Remove(s.statePath(launchFile))
+		// The agent never ran, so a later boot may start it.
+		_ = os.Remove(s.statePath(file))
 		return fmt.Errorf("tmux: %s", cmdDetail(err))
 	}
 	return nil

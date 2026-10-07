@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"time"
 
@@ -56,36 +57,77 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, session string, no
 		}
 	}
 
-	var l Launch
-	launched := readJSONFile(s.statePath(launchFile), &l) == nil
+	// The first launch is the session's conversation; this boot's agent is a
+	// resume of it after the first boot (D-58).
+	var first Launch
+	launched := readJSONFile(s.statePath(launchFile), &first) == nil
 	var res taskResult
 	finished := readJSONFile(s.statePath(resultFile), &res) == nil
+	cur, hasCur := first, launched && first.BootID == boot.BootID
+	var resumed Launch
+	if readJSONFile(s.statePath(resumeFile), &resumed) == nil && resumed.BootID == boot.BootID && boot.BootID != "" {
+		cur, hasCur = resumed, true
+	}
 	switch {
-	case finished:
-		task := res.TaskResult
-		started := res.StartedAt
-		st.Agent = protocol.AgentState{State: protocol.AgentExited, ConversationID: res.ConversationID, StartedAt: &started, Task: &task}
-		st.Usage = res.Usage
 	case boot.AgentError != "":
 		st.Agent = protocol.AgentState{State: protocol.AgentFailed, Error: boot.AgentError}
+	case hasCur && cur.TUI:
+		st.Agent = tuiState(s, cur, now)
+	case finished:
+		started := res.StartedAt
+		st.Agent = protocol.AgentState{State: protocol.AgentExited, StartedAt: &started}
 	case launched:
-		created := l.CreatedAt
-		st.Agent = protocol.AgentState{ConversationID: l.ConversationID, StartedAt: &created}
+		created := first.CreatedAt
+		st.Agent = protocol.AgentState{StartedAt: &created}
 		var p agentPid
 		switch {
 		case readJSONFile(s.statePath(pidFile), &p) == nil && pidAlive(p):
 			st.Agent.State = protocol.AgentBusy
-		case l.BootID == boot.BootID && now.Sub(l.CreatedAt) < startWindow:
+		case first.BootID == boot.BootID && now.Sub(first.CreatedAt) < startWindow:
 			st.Agent.State = protocol.AgentBusy
 		default:
 			st.Agent.State = protocol.AgentInterrupted
-			st.Agent.Error = "the agent's process is gone and it left no result; agentd does not start a task twice (D-42)"
+			st.Agent.Error = "the agent's process is gone and it left no result; agentd does not run a task's prompt twice (D-42), and the next boot resumes it (D-58)"
 		}
 	}
 	if launched {
-		if t := newestMtime(l.LogPath, l.EventsPath); !t.IsZero() {
+		st.Agent.ConversationID = first.ConversationID
+	}
+	// How the task ended stays in the status after a resume.
+	if finished {
+		task := res.TaskResult
+		st.Agent.Task = &task
+		st.Usage = res.Usage
+	}
+	if launched {
+		if t := newestMtime(first.LogPath, first.EventsPath); !t.IsZero() {
 			st.Agent.LastActivity = &t
 		}
+	}
+	return st
+}
+
+// tuiState is the state of this boot's TUI (D-58): busy while its process
+// runs (plan 02's idle detection refines that), exited once it recorded its
+// exit, and interrupted when it is gone without one.
+func tuiState(s Settings, l Launch, now time.Time) protocol.AgentState {
+	created := l.CreatedAt
+	st := protocol.AgentState{StartedAt: &created}
+	var p agentPid
+	var exit tuiExit
+	switch {
+	case readJSONFile(s.statePath(pidFile), &p) == nil && pidAlive(p):
+		st.State = protocol.AgentBusy
+	case readJSONFile(s.statePath(tuiExitFile), &exit) == nil && exit.BootID == l.BootID && !exit.StartedAt.Before(l.CreatedAt.Truncate(time.Second)):
+		st.State = protocol.AgentExited
+		if exit.ExitCode != 0 {
+			st.Error = fmt.Sprintf("the TUI exited with code %d at %s", exit.ExitCode, exit.FinishedAt.Format(time.RFC3339))
+		}
+	case now.Sub(l.CreatedAt) < startWindow:
+		st.State = protocol.AgentBusy
+	default:
+		st.State = protocol.AgentInterrupted
+		st.Error = "the TUI's process is gone and it recorded no exit"
 	}
 	return st
 }

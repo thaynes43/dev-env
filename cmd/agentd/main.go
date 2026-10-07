@@ -3,9 +3,9 @@
 // resumes the agent in tmux, sends heartbeats, and answers
 // `agentd ctl status|rescue|prepare-restart|deliver` for the operator.
 //
-// Built so far: the daemon (`run`), the rescue pod's `hold`, the task runner
-// in the tmux pane (`run-agent`), `render`, `ctl status` and `ctl rescue`.
-// `ctl prepare-restart` and `ctl deliver` arrive with plan 02.
+// Built so far: the daemon (`run`), the rescue pod's `hold`, the agent runner
+// in the tmux pane (`run-agent`), `render`, `ctl status`, `ctl rescue` and
+// `ctl prepare-restart`. `ctl deliver` arrives with plan 02's messages.
 package main
 
 import (
@@ -51,13 +51,15 @@ Commands:
                            worktree could not be rescued or a bundle could not
                            be written (D-43). --stop-agent stops the agent CLI
                            first, as the operator does before a suspend.
+  ctl prepare-restart      Print what the next boot resumes (the conversation in
+                           ~/.agentd/launch.json) as JSON, then stop the agent
+                           CLI as the pod's SIGTERM would (D-58).
   run-agent --launch FILE  Run the agent CLI; agentd starts this in tmux.
   version                  Print the version, commit, Go version and platform.
   help                     Print this help.
 
 agentd reads the session from AGENTD_SESSION (JSON) or the file named by
-AGENTD_SESSION_FILE (D-40). ctl prepare-restart and ctl deliver arrive with
-plan 02.
+AGENTD_SESSION_FILE (D-40). ctl deliver arrives with plan 02's messages.
 `
 
 // Daemon timings (DESIGN-001 3.6). stopGrace must fit inside the pod's
@@ -206,7 +208,7 @@ func ctl(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	case len(args) == 2 && args[0] == "rescue" && args[1] == "--stop-agent":
 		stopAgent = true
 	default:
-		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl status | ctl rescue [--stop-agent]\n", binaryName)
+		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl status | ctl rescue [--stop-agent] | ctl prepare-restart\n", binaryName)
 		return exitUsage
 	}
 	switch args[0] {
@@ -256,8 +258,24 @@ func ctl(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 			return exitFailure
 		}
 		return exitOK
-	case "prepare-restart", "deliver":
-		_, _ = fmt.Fprintf(stderr, "%s: ctl %s is not built yet; it arrives with plan 02\n", binaryName, args[0])
+	case "prepare-restart":
+		s, err := agentd.LoadSettings(getenv)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
+			return exitFailure
+		}
+		name := ""
+		if sess, err := agentd.LoadSession(getenv); err == nil {
+			name = sess.Name
+		}
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(agentd.PrepareRestart(s, name, stopGrace)); err != nil {
+			return exitFailure
+		}
+		return exitOK
+	case "deliver":
+		_, _ = fmt.Fprintf(stderr, "%s: ctl %s is not built yet; it arrives with plan 02's messages\n", binaryName, args[0])
 		return exitFailure
 	default:
 		_, _ = fmt.Fprintf(stderr, "%s: unknown ctl command %q\n", binaryName, args[0])

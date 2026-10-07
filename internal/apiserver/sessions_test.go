@@ -132,7 +132,6 @@ func TestCreateRefusals(t *testing.T) {
 		code   string
 		field  string
 	}{
-		{"local mode is plan 02's", func(r *apiv1.CreateSessionRequest) { r.Mode, r.Prompt = "local", "" }, 422, apiv1.CodeInvalid, "mode"},
 		{"remote mode is plan 03's", func(r *apiv1.CreateSessionRequest) { r.Mode, r.Prompt = "remote", "" }, 422, apiv1.CodeInvalid, "mode"},
 		{"codex is plan 04's", func(r *apiv1.CreateSessionRequest) { r.Agent, r.Model, r.Effort = "codex", "gpt-6-astra", "" }, 422, apiv1.CodeInvalid, "agent"},
 		{"no agent", func(r *apiv1.CreateSessionRequest) { r.Agent = "" }, 422, apiv1.CodeInvalid, "agent"},
@@ -165,6 +164,12 @@ func TestCreateRefusals(t *testing.T) {
 		})
 	}
 
+	// Local sessions run from plan 02 (D-58).
+	local := task()
+	local.Mode, local.Prompt = "local", ""
+	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, local); w.Code != http.StatusCreated || decode[apiv1.Session](t, w).Mode != "local" {
+		t.Errorf("a local session: %d %s", w.Code, w.Body.String())
+	}
 	ok := task()
 	ok.Effort = "ultracode"
 	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, ok); w.Code != http.StatusCreated {
@@ -177,7 +182,7 @@ func TestCreateRefusals(t *testing.T) {
 	}
 
 	var list v1alpha1.AgentSessionList
-	if err := f.c.List(context.Background(), &list); err != nil || len(list.Items) != 2 {
+	if err := f.c.List(context.Background(), &list); err != nil || len(list.Items) != 3 {
 		t.Errorf("a refused create left an object behind: %d, %v", len(list.Items), err)
 	}
 }

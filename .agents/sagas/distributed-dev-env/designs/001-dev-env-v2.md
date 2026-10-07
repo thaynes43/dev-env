@@ -382,7 +382,7 @@ call, what a create checks, and how a reap and a heartbeat reach the objects.**
 - **Create.** `spec.parent` is the caller: a session's name, else
   `<namespace>/<name>`; the `mine` filter matches it. The API checks what only it
   knows: what plan 01 serves (agent `claude`, mode `task`, no `tools`, no `name` or
-  `lane`; each later plan lifts its own line); the effort level per model (v1
+  `lane`; each later plan lifts its own line, and plan 02 lifts `local`, D-58); the effort level per model (v1
   `agent-run`'s table: Haiku 4.5 and older take none, the 4.6 tier has no `xhigh`,
   `ultracode` goes wherever `xhigh` does, every newer model takes the full set); the
   prompt at most 64 KiB (D-40); the idempotency key a label value; the profile in the
@@ -521,7 +521,8 @@ each place, and what it prints.**
   `--model` and in `DEV_ENV_CLAUDE_MODEL` alike. A level the model would not honour
   is refused from the same table the API checks: it moved from `internal/apiserver`
   to `apiv1.ClaudeEffortLevels`, so the CLI and the API cannot drift. `--safe` is
-  refused (D-23), and so are `--interactive` and `--local` until plans 02 and 03.
+  refused (D-23), and so are `--interactive` and `--local` until plans 02 and 03
+  (`--local` since plan 02, D-58).
   `codex` and `opencode` need `--model` and are left to the API, which names the
   plan that serves them. `--base`, `--size`, `--profile`, `--timeout` and
   `--max-turns` pass through to the schema's rules (D-39). `--prompt-file` (`-` for
@@ -717,7 +718,9 @@ tmux session `agent`.**
 - **A task starts once per volume.** If `launch.json` exists and no result does (a
   container restart mid-task), agentd reports the agent `interrupted` and does not
   start it again: a second run of the same prompt could open a second PR. Resuming
-  the conversation (`--resume <conversation id>`) is plan 02's.
+  the conversation (`--resume <conversation id>`) is plan 02's. *Built (plan 02 step
+  4, D-58):* every later boot resumes the conversation in the TUI instead, and the
+  prompt still never runs again.
 - **The pod's SIGTERM reaches the CLI** (6.7, S-6). run-agent records the CLI's pid
   and its start time in `~/.agentd/agent.pid`. On its own SIGTERM, agentd sends
   SIGTERM to that pid and waits up to 30 s for it to exit. The pid comes from agentd's
@@ -1068,6 +1071,62 @@ workflow, `publish-agent.yml`.**
   `sha-<short>`, and the operator HelmRelease (KICKOFF 8.9, haynes-ops #3497) runs
   `dev-env-operator:sha-8b388b2` as deployed. A retag needs no rebuild, so it can
   follow if that pin ever moves to the release version.
+
+**D-58 (2026-10-07, plan 02 step 4). A local session runs Claude's TUI in tmux, and
+every later boot of a volume resumes the session's conversation in the TUI. A
+task's prompt still runs once.**
+
+- **Local mode.** The API serves `mode: local` for Claude. On a volume's first boot,
+  agentd runs `claude --model <id> [--effort <level>] --dangerously-skip-permissions
+  --session-id <uuid> --append-system-prompt <guard>` in tmux session `agent`, with
+  no prompt. The guard is v1's task guard without the task's ending: "open a PR when
+  the work is ready". A local session runs on the static token, as a task does
+  (6.1), so it has no Remote Control (plan 03).
+- **Resume on boot.** `~/.agentd/launch.json` is the session's first launch and
+  holds its conversation id. A later boot finds it: a resume after a suspend, a
+  drain (plan 04), or a container restart. agentd then starts `claude --resume <id>`
+  as a TUI, with the session's model and effort and the mode's guard. It writes
+  that launch to `resume.json` and leaves `launch.json` as it was. So a task's `-p`
+  never runs twice (D-42 holds), and a task session comes back as an interactive
+  session on its own conversation: Tom attaches, or a message reaches it (D-16). A
+  first launch without a conversation id cannot be resumed; the boot fails and says
+  so.
+- **The TUI under run-agent.** `agentd run-agent` runs a TUI launch on the pane's
+  terminal: the CLI's stdin, stdout and stderr are the pane's, and its process
+  group becomes the terminal's foreground group (a background group that reads the
+  terminal is stopped by SIGTTIN). run-agent still records the CLI's pid in
+  `agent.pid`, so the pod's SIGTERM (D-42) and the rescue's `--stop-agent` (D-48)
+  reach it. It forwards the signals it gets, and records the exit in
+  `tui-exit.json`. Nothing on a TUI's screen is logged; the task log gets one line
+  when the TUI starts and one when it exits.
+- **Status.** This boot's TUI is `busy` while its process runs and `exited` once it
+  has recorded its exit. How the first launch's task ended stays in
+  `status.agent.task`. Step 5's idle detection refines `busy` with Claude's own
+  status.
+- **No dialog in a cold home.** A TUI started with `--dangerously-skip-permissions`
+  opens on a "Bypass Permissions mode" warning whose default is "No, exit" (checked
+  with CLI 2.1.292 on 2026-10-07). Nobody is attached to answer it, and a message
+  pasted into the pane would answer it. So agentd's render sets
+  `skipDangerousModePermissionPrompt: true` in `settings.json`, beside the model
+  (D-40). With that key set, the same check opened at the prompt.
+- **`agentd ctl prepare-restart`** prints what the next boot resumes
+  (`protocol.RestartReport`: the conversation in `launch.json`), then stops the CLI
+  as the pod's SIGTERM would. The record is already on the volume, so plan 04's
+  drain needs nothing more from agentd.
+- **attach and detach** (3.5). `agent-run attach <name>` asks the API whether the
+  session is Running. If it is, agent-run runs `kubectl exec -it -n dev-agents <name> -c agent
+  -- env TERM=<$TERM> tmux attach-session -t agent` with the caller's own Kubernetes
+  rights. `agent-run detach <name>` runs `tmux detach-client -s agent` there. They
+  are for Tom: from the v1 pod (its ServiceAccount has exec in `dev-agents`), the
+  workbench, or a laptop (step 12). Agents have no exec there (D-19), so inside a
+  session pod agent-run refuses both (exit 3) and points at `msg`. `agent-run
+  --local` creates a local session and prints the attach command; `--interactive`
+  waits for plan 03.
+
+Rationale: resume is the one way back into a conversation, so every boot after the
+first does the same thing. The TUI makes the conversation reachable by Tom and by
+messages, and because the first launch is on the volume, a pod can go at any time
+without losing the thread.
 
 ### 3.7 Summoned sessions
 
@@ -3765,3 +3824,4 @@ credential grants) is open. ADR-001 was Accepted on
 | D-55 | A volume that needs a rescue and has no pod gets a hold pod: the session's pod running `agentd hold` at size S, with no agent credentials; the operator rescues in it, keeps it and retries every 15 minutes while the rescue fails, and archives once it passes; a volume with nothing but an empty `lost+found` is a valid rescue (`VolumeEmpty`) | 4.4 |
 | D-56 | `/v1/grants` of plan 07 step 2: only a session requests, for its own pod, with the requester from its token; every caller reads; each type's own fields; TTL 30 m for break-glass and 1 h otherwise; identical pending or active requests merge; at most 3 pending per session, per replica; release by `spec.release`; an approval link from `--grant-approval-url` | 6.12 |
 | D-57 | The page on `RescueFailed` is a Prometheus alert: the operator serves `dev_env_session_rescue_failed` and `dev_env_sessions` from its cache at scrape time; haynes-ops' `DevEnvRescueFailed` (critical, 20 minutes) pages Tom through Alertmanager, and `DevEnvOperatorMetricsAbsent` pages when the series vanish | 4.4 |
+| D-58 | Local sessions run Claude's TUI in tmux on the static token; every later boot resumes the first launch's conversation in the TUI (`claude --resume`), so a task's prompt still runs once; run-agent gives a TUI the pane's terminal and records its pid and exit; render seeds `skipDangerousModePermissionPrompt`; `ctl prepare-restart`; `agent-run --local`, and `attach` and `detach` through `kubectl exec` for Tom only | 3.6 |

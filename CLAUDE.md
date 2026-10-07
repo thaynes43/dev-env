@@ -41,7 +41,8 @@ api/v1alpha1/            CRD types, group dev-env.haynesops.com (AgentSession; A
                          Its envtest suite proves the schema's rules (D-39) on a real API server
 cmd/dev-env-operator/    the operator; the broker will be its second mode (DESIGN-001 3.1, 6.12)
 cmd/dev-env-keeper/      the keeper, its own binary in the operator image (D-38); main only, the work is internal/keeper
-cmd/agentd/              the in-pod supervisor: `run`, `hold` (the rescue pod, D-55), `run-agent`, `render`, `ctl status|rescue [--stop-agent]` (D-40 to D-43, D-48)
+cmd/agentd/              the in-pod supervisor: `run`, `hold` (the rescue pod, D-55), `run-agent` (a task, or a TUI, D-58), `render`,
+                         `ctl status|rescue [--stop-agent]|prepare-restart` (D-40 to D-43, D-48, D-58)
 cmd/agent-run/           the CLI, one static binary (CGO_ENABLED=0, D-06); main only, the commands are internal/agentrun
 internal/version/        the build identity every binary's `version` prints
 internal/testenv/        starts envtest (kube-apiserver + etcd) with config/crd/ installed, for test suites
@@ -55,7 +56,7 @@ internal/apiserver/      the operator's /v1 API (D-46): HTTPS runnable, TokenRev
                          heartbeat, fleet and grants (D-56) handlers. Unit tests use the fake client; its envtest suite mints real
                          tokens and serves through a manager wired as the operator's
 internal/apiserver/apiv1/  the API's wire types, error codes and Claude effort table, standard library only, for agent-run
-internal/agentrun/       agent-run's commands (D-50): -p, list, show, reap, fleet; finds the API and a token in a session
+internal/agentrun/       agent-run's commands (D-50, D-58): -p, --local, list, show, reap, attach, detach, fleet; finds the API and a token in a session
                          pod, in another pod (a minted token) or from flags; imports the standard library, apiv1 and
                          agentd's protocol only (`make build` checks); tests run against an httptest TLS server
 internal/keeper/         the keeper (D-52): mints the haynes-dev-bot token into dev-agents/dev-env-gh-token every 40 minutes

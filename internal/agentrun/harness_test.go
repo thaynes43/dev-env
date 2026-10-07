@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -53,6 +54,10 @@ type harness struct {
 	now            time.Time
 	sleeps         []time.Duration
 	dir            string
+	// kubectl answers the commands Env.Run runs with an exit code; nil means
+	// kubectl is not on PATH. ran records each command line.
+	kubectl func(argv []string) int
+	ran     []string
 }
 
 var testNow = time.Date(2026, 10, 6, 21, 0, 0, 0, time.UTC)
@@ -99,6 +104,19 @@ func newHarness(t *testing.T) *harness {
 		NewKey:            func() string { return "agent-run-testkey" },
 		SessionTokenFile:  filepath.Join(h.dir, "no-session-token"),
 		ServiceAccountDir: filepath.Join(h.dir, "no-serviceaccount"),
+		LookPath: func(name string) (string, error) {
+			if name == "kubectl" && h.kubectl != nil {
+				return "/usr/bin/kubectl", nil
+			}
+			return "", errors.New("not found")
+		},
+		Run: func(_ context.Context, argv []string) (int, error) {
+			h.ran = append(h.ran, strings.Join(argv, " "))
+			if h.kubectl == nil {
+				return 0, errors.New("no kubectl")
+			}
+			return h.kubectl(argv), nil
+		},
 	}
 	return h
 }

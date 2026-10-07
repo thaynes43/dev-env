@@ -20,7 +20,7 @@ const (
 )
 
 // Agent states. Claude's interactive states (busy, idle, waiting) arrive with
-// plan 02's idle detection; a task is busy while it runs.
+// plan 02's idle detection; a task, or a TUI (D-58), is busy while it runs.
 const (
 	// AgentPending: the boot has not started the agent yet.
 	AgentPending = "pending"
@@ -31,8 +31,8 @@ const (
 	// AgentFailed: agentd could not start the agent; Error says why.
 	AgentFailed = "failed"
 	// AgentInterrupted: the agent was started and its process is gone without
-	// a result, for example after a container restart. agentd never starts a
-	// task twice (D-42); resume is plan 02's.
+	// a result. agentd never runs a task's prompt twice (D-42); the next boot
+	// resumes the conversation in the TUI (D-58).
 	AgentInterrupted = "interrupted"
 )
 
@@ -104,4 +104,19 @@ type Usage struct {
 	OutputTokens             int64   `json:"outputTokens"`
 	CacheReadInputTokens     int64   `json:"cacheReadInputTokens,omitempty"`
 	CacheCreationInputTokens int64   `json:"cacheCreationInputTokens,omitempty"`
+}
+
+// RestartReport is what `agentd ctl prepare-restart` prints (DESIGN-001 5.2
+// step 2, D-58): what the next boot on the volume resumes, and what stopping
+// the agent did. The conversation is on the volume (~/.agentd/launch.json), so
+// a new pod on the same volume resumes it.
+type RestartReport struct {
+	Session string `json:"session"`
+	// ConversationID is the conversation the next boot resumes; empty when
+	// the agent was never launched, so the next boot starts it fresh.
+	ConversationID string `json:"conversationId,omitempty"`
+	// Resumable: the next boot resumes ConversationID in the TUI.
+	Resumable bool `json:"resumable"`
+	// Agent is what the stop did to the agent CLI.
+	Agent *AgentStop `json:"agent,omitempty"`
 }

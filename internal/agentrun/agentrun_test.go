@@ -31,8 +31,8 @@ func TestHelp(t *testing.T) {
 		t.Errorf("help sent %d requests", n)
 	}
 
-	h.mustRun(ExitUsage, "help", "attach")
-	contains(t, "stderr", h.stderr.String(), `no command "attach"`)
+	h.mustRun(ExitUsage, "help", "msg")
+	contains(t, "stderr", h.stderr.String(), `no command "msg"`)
 	h.mustRun(ExitUsage, "help", "a", "b")
 }
 
@@ -51,11 +51,11 @@ func TestDispatch(t *testing.T) {
 	h.mustRun(ExitUsage, "haynes-ops")
 	contains(t, "stderr", h.stderr.String(), `say what to run: -p "<task>"`)
 	h.mustRun(ExitUsage, "haynes-ops", "--interactive")
-	contains(t, "stderr", h.stderr.String(), "arrive in plans 02 and 03")
+	contains(t, "stderr", h.stderr.String(), "arrives with plan 03")
 
 	for verb, want := range map[string]string{
-		"attach":       "attach arrives with interactive sessions (plan 02)",
-		"detach":       "plan 02",
+		"attach":       "attach takes one session name",
+		"detach":       "detach takes one session name",
 		"prune":        "prune is gone in v2: the operator reaps sessions itself",
 		"sweep":        "sweep is gone in v2",
 		"codex-remote": "plan 04",

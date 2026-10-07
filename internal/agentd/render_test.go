@@ -108,8 +108,12 @@ func TestRenderFullPod(t *testing.T) {
 		t.Errorf("mcp adds = %q", adds)
 	}
 	// Default model from the session.
-	if m := readJSONMap(t, filepath.Join(s.ClaudeConfigDir, "settings.json")); m["model"] != "claude-opus-5-5" {
-		t.Errorf("settings model = %v", m["model"])
+	// No bypass warning in a TUI (D-58).
+	if m := readJSONMap(t, filepath.Join(s.ClaudeConfigDir, "settings.json")); m["model"] != "claude-opus-5-5" || m[keySkipBypassPrompt] != true {
+		t.Errorf("settings = %v", m)
+	}
+	if st := stepByName(t, Render(context.Background(), f, s, sess), "claude-bypass-prompt"); st.State != StepOK || !strings.Contains(strings.Join(st.Notes, " "), "already set") {
+		t.Errorf("a second render: %+v", st)
 	}
 	// Codex config: base + generated servers; 0600 because a URL path is expanded.
 	toml, _ := os.ReadFile(filepath.Join(s.Home, ".codex", "config.toml"))

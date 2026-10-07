@@ -262,3 +262,98 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// A TUI launch (D-58) runs the CLI with the pane as its terminal: no prompt on
+// stdin and no parsing. run-agent records its pid while it runs, forwards a
+// signal, and records the exit in tui-exit.json, not task-result.json.
+func TestRunAgentTUI(t *testing.T) {
+	s := testSettings(t, t.TempDir())
+	dir := t.TempDir()
+	if err := os.MkdirAll(s.WorkDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(dir, "ran")
+	cli := fakeCLI(t, dir, `
+[ -z "$ANTHROPIC_API_KEY" ] || exit 8
+echo "$@" > "`+marker+`"
+echo "the TUI draws here"
+exit 3`)
+	t.Setenv("ANTHROPIC_API_KEY", "metered")
+	l := Launch{
+		Session: "s-1", Argv: []string{cli, "--resume", "conv-1"}, Dir: dir, Unset: unsetForAgent,
+		LogPath: filepath.Join(s.WorkDir(), "s-1.log"), EventsPath: s.statePath(eventsFile), ConversationID: "conv-1", BootID: "b2",
+		CreatedAt: time.Now().UTC(), TUI: true, Resume: true,
+	}
+	path := s.statePath(resumeFile)
+	if err := writeJSONFile(path, l); err != nil {
+		t.Fatal(err)
+	}
+	pane := &syncBuffer{}
+	if code := RunAgent(path, pane, make(chan os.Signal), time.Second); code != 3 {
+		t.Fatalf("exit %d; pane:\n%s", code, pane.String())
+	}
+	if got, _ := os.ReadFile(marker); strings.TrimSpace(string(got)) != "--resume conv-1" {
+		t.Errorf("the CLI ran with %q", got)
+	}
+	if !strings.Contains(pane.String(), "the TUI draws here") || !strings.Contains(pane.String(), "conversation conv-1 resumed in the TUI") {
+		t.Errorf("pane:\n%s", pane.String())
+	}
+	var exit tuiExit
+	if err := readJSONFile(s.statePath(tuiExitFile), &exit); err != nil || exit.ExitCode != 3 || exit.BootID != "b2" || exit.ConversationID != "conv-1" {
+		t.Errorf("tui exit %+v %v", exit, err)
+	}
+	for _, f := range []string{resultFile, pidFile, eventsFile} {
+		if exists(s.statePath(f)) {
+			t.Errorf("%s exists after a TUI run", f)
+		}
+	}
+	if log, _ := os.ReadFile(l.LogPath); !strings.Contains(string(log), "the TUI exited (3)") || strings.Contains(string(log), "draws") {
+		t.Errorf("log:\n%s", log)
+	}
+
+	// A signal reaches the CLI; the pid is recorded while it runs.
+	l.Argv = []string{fakeCLI(t, dir, "exec sleep 30")}
+	if err := writeJSONFile(path, l); err != nil {
+		t.Fatal(err)
+	}
+	sigs := make(chan os.Signal, 1)
+	done := make(chan int, 1)
+	go func() { done <- RunAgent(path, &syncBuffer{}, sigs, 5*time.Second) }()
+	waitFor(t, func() bool {
+		var p agentPid
+		return readJSONFile(s.statePath(pidFile), &p) == nil && pidAlive(p)
+	})
+	sigs <- syscall.SIGTERM
+	if code := <-done; code != 128+int(syscall.SIGTERM) {
+		t.Errorf("exit %d after SIGTERM", code)
+	}
+}
+
+// The status of a TUI run: busy while its process runs, exited once it
+// recorded its exit, interrupted when it is gone without one (D-58).
+func TestTUIState(t *testing.T) {
+	s := testSettings(t, t.TempDir())
+	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	l := Launch{BootID: "b2", CreatedAt: now.Add(-time.Hour), TUI: true}
+	if st := tuiState(s, l, now); st.State != protocol.AgentInterrupted {
+		t.Errorf("no pid and no exit: %+v", st)
+	}
+	if st := tuiState(s, Launch{BootID: "b2", CreatedAt: now, TUI: true}, now); st.State != protocol.AgentBusy {
+		t.Errorf("just launched: %+v", st)
+	}
+	if err := writeJSONFile(s.statePath(tuiExitFile), tuiExit{ExitCode: 1, BootID: "b2", StartedAt: now.Add(-time.Minute), FinishedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if st := tuiState(s, l, now); st.State != protocol.AgentExited || !strings.Contains(st.Error, "code 1") {
+		t.Errorf("exited: %+v", st)
+	}
+	if st := tuiState(s, Launch{BootID: "b3", CreatedAt: now.Add(-time.Hour), TUI: true}, now); st.State != protocol.AgentInterrupted {
+		t.Errorf("an earlier boot's exit counted: %+v", st)
+	}
+}

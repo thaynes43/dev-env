@@ -62,6 +62,7 @@ func Render(ctx context.Context, r Runner, s Settings, sess protocol.Session) []
 	steps = append(steps, renderMCP(ctx, r, s, cfg))
 	steps = append(steps,
 		renderDefaultModel(s, sess),
+		renderBypassPrompt(s),
 		renderCodexConfig(s, cfg),
 		renderCodexAgentsMD(s, cfg),
 		renderGit(ctx, r, s),
@@ -185,6 +186,22 @@ func renderDefaultModel(s Settings, sess protocol.Session) Step {
 	}
 	note, err := assertDefaultModel(filepath.Join(s.ClaudeConfigDir, "settings.json"), model)
 	return newStep(name, []string{note}, err)
+}
+
+// renderBypassPrompt seeds settings.json's skipDangerousModePermissionPrompt,
+// so a TUI started with --dangerously-skip-permissions opens at its prompt
+// rather than on the bypass warning (D-23, D-58): nobody is attached to accept
+// it, and messages pasted into the pane would answer it.
+func renderBypassPrompt(s Settings) Step {
+	const name = "claude-bypass-prompt"
+	changed, err := assertSettingsKey(filepath.Join(s.ClaudeConfigDir, "settings.json"), keySkipBypassPrompt, true)
+	if err != nil {
+		return newStep(name, nil, err)
+	}
+	if !changed {
+		return newStep(name, []string{keySkipBypassPrompt + " already set"}, nil)
+	}
+	return newStep(name, []string{keySkipBypassPrompt + " set"}, nil)
 }
 
 // codexGeneratedHeader separates the GitOps config.toml from the generated

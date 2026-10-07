@@ -67,7 +67,7 @@ the `dev-env-templates` pin in haynes-ops. Operator changes ship as the
 the cluster.
 
 - [x] 1. This list (docs only, #65).
-- [x] 2. **The rescue pod** (D-51's gap; D-55, #68; deployed when the evidence below is in). `agentd hold` holds the volume and starts no
+- [x] 2. **The rescue pod** (D-51's gap; D-55, #68; deployed 2026-10-07). `agentd hold` holds the volume and starts no
   agent (D-42). `agentd ctl rescue` reports an empty volume, with no clone and no
   worktree (what a pod that never started leaves), as a valid rescue with nothing
   to save. The operator gives a reaped session whose
@@ -75,11 +75,19 @@ the cluster.
   agent token), runs the usual exec rescue in it, retries a failed rescue, and keeps
   the hold pod up while the rescue fails, so a human can exec in. A hold pod goes as
   soon as nothing needs it. Done when `dev-agents/dev-env-1007-050756` is archived and
-  gone, checked with kubectl.
-- [x] 3. **The `RescueFailed` page** (D-10, D-57, this PR). The operator serves
-  `dev_env_session_rescue_failed`; haynes-ops scrapes it and pages Tom with
-  `DevEnvRescueFailed` once the operator pin carries it.
-- [ ] 4. **Local sessions and resume on boot.** The API serves `mode: local` for
+  gone, checked with kubectl. **Done 2026-10-07:** agent image 2.2.0 went into the
+  templates (haynes-ops #3529), then the operator at `sha-06841c8`, which carries
+  #68, rolled out (plan 07's pin). At 21:21Z the operator created the hold pod
+  `dev-env-1007-050756` on talosw02 at size S. Its rescue `20261007-2121` found the
+  volume empty (`VolumeEmpty`, recorded `CleanAndPushed`). The hold pod went, and the
+  volume was archived; the events are `HoldPod`, `VolumeEmpty` and `Archived`.
+  `home-dev-env-1007-050756` is gone, and `agent-run show dev-env-1007-050756` answers
+  404.
+- [x] 3. **The `RescueFailed` page** (D-10, D-57, #69; haynes-ops #3532). The
+  operator serves `dev_env_session_rescue_failed`; haynes-ops scrapes it and pages
+  Tom with `DevEnvRescueFailed`, and with `DevEnvOperatorMetricsAbsent` when the
+  series vanish.
+- [x] 4. **Local sessions and resume on boot** (D-58, this PR). The API serves `mode: local` for
   Claude. agentd starts the TUI in tmux session `agent` with a new conversation id.
   On any later boot of a volume that has a launch record, task or local, it starts
   `claude --resume <id>` as a TUI instead: a task's `-p` never runs twice (D-42).
