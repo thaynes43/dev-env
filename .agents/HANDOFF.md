@@ -72,6 +72,11 @@ the saga. To start building, follow
   `GET /api/oauth/usage` (7.3). S-15 passed: the CLI's archive call works on an
   access token and the entry leaves Tom's list; `claude --resume` alone unarchives
   it (6.7).
+- **Plan 01 step 8 has begun in haynes-ops** (2026-10-06). Items 8.1 to 8.3 and 8.5 to 8.7
+  are merged and verified (#3458, #3462, #3463, #3468 to #3471). Three gaps came out of
+  them: the `dev-agents` ceiling is a Kyverno policy, not a LimitRange (D-47); the three
+  config ConfigMaps have no owner yet (KICKOFF 8.8a); and `dev-env-templates` holds a
+  placeholder image digest until B5's follow-up sets the real one.
 - **v1 keeps running.** The single dev-env pod and the `dev-env-ops` executor are
   deployed from haynes-ops until the cutover (plan 05) and plan 10.
 - **Q-08 is live.** Kyverno `default-cpu-request` (haynes-ops #3406) went live on
