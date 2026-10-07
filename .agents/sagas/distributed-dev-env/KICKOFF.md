@@ -319,7 +319,8 @@ PR per piece, in this order:
      before any session and before 8.9. No earlier item created them. It is a sub-item
      rather than a renumbering so that the haynes-ops comments that cite 8.8 and 8.9
      stay true. The other v1 scripts are gone: agentd and the image replace them
-     (DESIGN-001 3.6, D-40, the port of `dev-init.sh`).
+     (DESIGN-001 3.6, D-40, the port of `dev-init.sh`). Done 2026-10-06: haynes-ops
+     #3474;
    9. the operator and keeper HelmReleases, with the API's Service and Certificate
       and v1's own-token RBAC (D-46). `agent-run` in the v1 pod also needs the
       Certificate's CA as a file it can name in `DEV_ENV_API_CA_FILE` (D-50); a new

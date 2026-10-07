@@ -131,7 +131,7 @@ step. Tick a step in the PR that lands it.
   waits in `ContainerCreating` without them. The source is v1's
   `apps/dev/dev-env/app/resources/config/**` and `bashrc.sh`, copied into the v2 app
   `apps/dev-env-system/session-config/` and adapted (never editing v1's files), with a
-  new `CLAUDE.md` for a session pod.
+  new `CLAUDE.md` for a session pod. Done 2026-10-06: haynes-ops #3474 (KICKOFF 8.8a).
 - Kyverno `verify-thaynes43-images`: add the `thaynes43/dev-env` workflow identity.
 - Renovate: hold the v1 HelmRelease below `2.0.0`.
 - CNPs of in-cluster MCP services that admit only the v1 pod (the haynesnetwork hop,
