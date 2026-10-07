@@ -262,6 +262,14 @@ func (in *AgentSessionStatus) DeepCopyInto(out *AgentSessionStatus) {
 		*out = new(RescueStatus)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.SuspendedAt != nil {
+		in, out := &in.SuspendedAt, &out.SuspendedAt
+		*out = (*in).DeepCopy()
+	}
+	if in.ArchivedAt != nil {
+		in, out := &in.ArchivedAt, &out.ArchivedAt
+		*out = (*in).DeepCopy()
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]v1.Condition, len(*in))

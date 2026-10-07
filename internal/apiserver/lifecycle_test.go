@@ -3,8 +3,10 @@ package apiserver
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -49,6 +51,19 @@ func TestSuspendAndResume(t *testing.T) {
 	wantError(t, f.do(http.MethodPost, apiv1.SessionResumePath("nope"), tokHuman, nil), http.StatusNotFound, apiv1.CodeNotFound)
 	wantError(t, f.do(http.MethodGet, apiv1.SessionResumePath(created.Name), tokHuman, nil), http.StatusMethodNotAllowed, apiv1.CodeMethodNotAllowed)
 	wantError(t, f.do(http.MethodPost, apiv1.SessionSuspendPath(created.Name), tokStranger, nil), http.StatusForbidden, apiv1.CodeForbidden)
+
+	// An archived session is not resumed (D-62).
+	f.do(http.MethodPost, apiv1.SessionSuspendPath(created.Name), tokHuman, nil)
+	archived := live()
+	at := metav1.Now()
+	archived.Status.ArchivedAt = &at
+	if err := f.c.Status().Update(context.Background(), archived); err != nil {
+		t.Fatal(err)
+	}
+	e := wantError(t, f.do(http.MethodPost, apiv1.SessionResumePath(created.Name), tokHuman, nil), http.StatusConflict, apiv1.CodeConflict)
+	if !strings.Contains(e.Message, "restore it from its bundle") {
+		t.Errorf("message %q", e.Message)
+	}
 
 	// A reaped session cannot be resumed or suspended: a reap is final.
 	s := live()

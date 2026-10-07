@@ -192,7 +192,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	t, tErr := r.loadTemplates(ctx)
-	obs := observation{pod: pod, claim: claim, templates: t, templatesErr: tErr}
+	obs := observation{pod: pod, claim: claim, templates: t, templatesErr: tErr, now: time.Now()}
 
 	// A hold pod (D-55) is never the pod a session wants: when the session
 	// wants its pod again, the guard lets the hold pod go first.
@@ -200,6 +200,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	var result ctrl.Result
 	switch {
+	case !wantsPodGone(&s) && !hold && s.Status.ArchivedAt != nil:
+		// An archived session's volume is gone, so a new pod would start its
+		// task again on a new volume: it is never resumed (D-62). It stays
+		// Archived until it is reaped or restored from its bundle.
 	case !wantsPodGone(&s) && !hold:
 		// A session that wants its pod can change its volume again: through
 		// a new pod, or through the rescued pod itself when a resume came
@@ -233,7 +237,23 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	case !s.DeletionTimestamp.IsZero():
 		// A deleted session with no pod: archive its volume after a
 		// verified rescue, then let it go.
-		res, done, err := r.archive(ctx, &s, &obs)
+		res, done, err := r.archive(ctx, &s, &obs, true)
+		if err != nil || done {
+			return res, err
+		}
+		result = res
+	case !obs.claim.missing:
+		// A suspended session with no pod: its archive timer (D-09, D-62).
+		// Once the archive is recorded it is due whatever the clock says, so
+		// a delete that an operator restart interrupted is finished.
+		due, wait := r.archiveDue(&s, t, obs)
+		if !due && s.Status.ArchivedAt == nil {
+			if wait > 0 {
+				result = ctrl.Result{RequeueAfter: wait}
+			}
+			break
+		}
+		res, done, err := r.archive(ctx, &s, &obs, true)
 		if err != nil || done {
 			return res, err
 		}
@@ -390,7 +410,7 @@ func (r *Reconciler) holdWait(s *v1alpha1.AgentSession, pod *corev1.Pod, obs *ob
 	case errors.Is(obs.removalBlocked, errHoldStarting):
 		_, msg := pendingReason(pod)
 		obs.removalBlocked = fmt.Errorf("%w: %s", errHoldStarting, msg)
-		if why := volumeRemovalAllowed(s, false); why != nil {
+		if why := volumeRemovalAllowed(s, false, true); why != nil {
 			obs.removalBlocked = fmt.Errorf("%w; it is there because %w", obs.removalBlocked, why)
 		}
 	case rec != nil && rec.Result == v1alpha1.RescueFailed && rec.At != nil && rescueRanIn(s, pod):
@@ -499,10 +519,44 @@ func (r *Reconciler) rescue(ctx context.Context, s *v1alpha1.AgentSession, pod *
 	return rec, reason, &cur, nil
 }
 
-// archive deletes a reaped session's volume once the guard allows it, then
-// lets the session go when nothing of it is left (D-10, D-51). done means the
-// reconcile ends here with res.
-func (r *Reconciler) archive(ctx context.Context, s *v1alpha1.AgentSession, obs *observation) (res ctrl.Result, done bool, err error) {
+// archiveDue reports whether a suspended session's archive timer is due, and
+// otherwise how long until it is (D-62): status.suspendedAt plus
+// spec.lifecycle.archiveAfter, else the templates'. A session the operator has
+// not yet seen suspended has no timer yet. Without a spec override and with
+// templates that do not load, the timer is not due: their window may be longer
+// than D-09's default, and archive never runs early.
+func (r *Reconciler) archiveDue(s *v1alpha1.AgentSession, t *templates.Templates, obs observation) (bool, time.Duration) {
+	if s.Status.SuspendedAt == nil {
+		return false, time.Second
+	}
+	var after time.Duration
+	switch l := s.Spec.Lifecycle; {
+	case l != nil && l.ArchiveAfter != nil:
+		after = l.ArchiveAfter.Duration
+	case t != nil:
+		after = t.ArchiveAfter()
+	default:
+		return false, time.Minute
+	}
+	at := s.Status.SuspendedAt.Add(after)
+	if obs.now.Before(at) {
+		return false, at.Sub(obs.now) + time.Second
+	}
+	return true, 0
+}
+
+// archive deletes a session's volume once the guard allows it: a reaped
+// session's, which it then lets go when nothing of it is left (D-10, D-51), or
+// a suspended session's whose archive timer is due, which stays as an Archived
+// record (D-62). With no valid rescue and no pod, a hold pod rescues the volume
+// first (D-55). done means the reconcile ends here with res.
+func (r *Reconciler) archive(ctx context.Context, s *v1alpha1.AgentSession, obs *observation, archiveDue bool) (res ctrl.Result, done bool, err error) {
+	if (obs.claim.missing || obs.claim.foreign != "") && s.DeletionTimestamp.IsZero() {
+		if obs.claim.foreign != "" {
+			obs.removalBlocked = errors.New("a volume of the session's name is not the session's; the operator leaves it alone")
+		}
+		return ctrl.Result{}, false, nil
+	}
 	if obs.claim.missing || obs.claim.foreign != "" {
 		// Nothing of the session's to archive: release it if the API server
 		// has no pod or volume of its names either.
@@ -525,7 +579,17 @@ func (r *Reconciler) archive(ctx context.Context, s *v1alpha1.AgentSession, obs 
 	} else if err != nil {
 		return ctrl.Result{}, true, err
 	}
-	if obs.removalBlocked = volumeRemovalAllowed(s, podExists); obs.removalBlocked != nil {
+	obs.removalBlocked = volumeRemovalAllowed(s, podExists, archiveDue)
+	if errors.Is(obs.removalBlocked, errArchiveNotRecorded) {
+		// Record the archive before the volume goes, so a restart or a
+		// resume in between can never find the volume gone and the session
+		// resumable (D-62): a resume of an archived session is refused.
+		if written, err := r.recordArchive(ctx, s, obs.now); err != nil || !written {
+			return ctrl.Result{RequeueAfter: time.Second}, true, err
+		}
+		obs.removalBlocked = volumeRemovalAllowed(s, podExists, archiveDue)
+	}
+	if obs.removalBlocked != nil {
 		if !podExists && !rescued(s) {
 			// No valid rescue and no pod to run one in: a hold pod (D-55).
 			return ctrl.Result{}, false, r.startHoldPod(ctx, s, obs)
@@ -534,7 +598,7 @@ func (r *Reconciler) archive(ctx context.Context, s *v1alpha1.AgentSession, obs 
 	}
 	claim := obs.claim.obj
 	lifting := controllerutil.ContainsFinalizer(claim, Finalizer)
-	if err := deleteVolume(ctx, r.Client, s, claim, podExists); err != nil {
+	if err := deleteVolume(ctx, r.Client, s, claim, podExists, archiveDue); err != nil {
 		if apierrors.IsConflict(err) {
 			// The claim changed (the delete itself does that); lift the
 			// finalizer from its new version.
@@ -551,6 +615,39 @@ func (r *Reconciler) archive(ctx context.Context, s *v1alpha1.AgentSession, obs 
 	// The claim goes once its other finalizers do; its delete event comes
 	// back here and releases the session.
 	return ctrl.Result{}, false, nil
+}
+
+// recordArchive writes status.archivedAt onto the newest version of a
+// suspended session, before its volume is deleted, and on success makes s that
+// version (D-62). It writes only while the session is the one the archive was
+// judged for: same UID, still suspended and not deleted, and the same valid
+// rescue. Otherwise it reports false, and the next reconcile judges it again.
+func (r *Reconciler) recordArchive(ctx context.Context, s *v1alpha1.AgentSession, now time.Time) (bool, error) {
+	for range 5 {
+		var fresh v1alpha1.AgentSession
+		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &fresh); err != nil {
+			return false, client.IgnoreNotFound(err)
+		}
+		switch {
+		case fresh.UID != s.UID, !fresh.DeletionTimestamp.IsZero(), fresh.Spec.OperatingMode != v1alpha1.OperatingModeSuspended,
+			!rescued(&fresh), s.Status.Rescue == nil || fresh.Status.Rescue.PodUID != s.Status.Rescue.PodUID || fresh.Status.Rescue.Stamp != s.Status.Rescue.Stamp:
+			return false, nil
+		case fresh.Status.ArchivedAt != nil:
+			*s = fresh
+			return true, nil
+		}
+		t := metav1.NewTime(now)
+		fresh.Status.ArchivedAt = &t
+		err := r.Client.Status().Update(ctx, &fresh)
+		if err == nil {
+			*s = fresh
+			return true, nil
+		}
+		if !apierrors.IsConflict(err) {
+			return false, client.IgnoreNotFound(err)
+		}
+	}
+	return false, nil
 }
 
 func (r *Reconciler) event(s *v1alpha1.AgentSession, typ, action, reason, note string) {
@@ -742,6 +839,8 @@ type observation struct {
 	// archived: this reconcile deleted the session's volume, or lifted its
 	// finalizer, after a verified rescue.
 	archived bool
+	// now is the reconcile's clock, for the timers' status fields.
+	now time.Time
 }
 
 // observe writes the session's status from what the reconcile found. It is a
@@ -754,6 +853,20 @@ func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessio
 		st.PodName = pod.Name
 		st.NodeName = pod.Spec.NodeName
 		st.Revision = pod.Labels[v1alpha1.LabelRevision]
+	}
+
+	// The archive timer's clock (D-62): it starts when the operator first sees
+	// the session suspended with no pod of its own, and stops on a resume.
+	switch {
+	case s.Spec.OperatingMode != v1alpha1.OperatingModeSuspended || !s.DeletionTimestamp.IsZero():
+		st.SuspendedAt = nil
+	case st.SuspendedAt == nil && obs.pod.missing:
+		t := metav1.NewTime(obs.now)
+		st.SuspendedAt = &t
+	}
+	if obs.archived && s.DeletionTimestamp.IsZero() && st.ArchivedAt == nil {
+		t := metav1.NewTime(obs.now)
+		st.ArchivedAt = &t
 	}
 
 	phase, ready := podPhase(s, obs)
@@ -841,6 +954,12 @@ func podPhase(s *v1alpha1.AgentSession, obs observation) (v1alpha1.SessionPhase,
 		return v1alpha1.PhasePending, notReady("NameTaken", fmt.Sprintf("a volume named %s exists and its controller is %s, not this session; the operator leaves it alone", HomeClaimName(s.Name), obs.claim.foreign))
 	case obs.pod.missing && !s.DeletionTimestamp.IsZero() && (obs.archived || (rescued(s) && volumeTerminating(obs))):
 		return v1alpha1.PhaseArchived, notReady("Archived", fmt.Sprintf("the volume %s was deleted after the rescue %s; the session goes once the volume is gone", HomeClaimName(s.Name), s.Status.Rescue.Stamp))
+	case obs.pod.missing && s.DeletionTimestamp.IsZero() && (s.Status.ArchivedAt != nil || obs.archived || (volumeTerminating(obs) && s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended && rescued(s))):
+		stamp := ""
+		if s.Status.Rescue != nil {
+			stamp = s.Status.Rescue.Stamp
+		}
+		return v1alpha1.PhaseArchived, notReady("Archived", fmt.Sprintf("the archive timer deleted the volume %s after the rescue %s; an archived session is not resumed, because a new volume would start its task again: restore it from its bundle instead (D-62)", HomeClaimName(s.Name), stamp))
 	case obs.pod.missing && s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended:
 		return v1alpha1.PhaseSuspended, notReady("Suspended", "the session is suspended; its volume is kept")
 	case obs.pod.missing && !s.DeletionTimestamp.IsZero():

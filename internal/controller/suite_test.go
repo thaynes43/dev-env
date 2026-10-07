@@ -225,6 +225,9 @@ func (c *recordingClient) note(verb string, o client.Object) {
 	entry := fmt.Sprintf("%s %T %s", verb, o, o.GetName())
 	if s, ok := o.(*v1alpha1.AgentSession); ok && verb == "update status" && s.Status.Rescue != nil && !s.Status.Rescue.Superseded {
 		entry = "record rescue of " + s.Status.Rescue.PodUID
+		if s.Status.ArchivedAt != nil {
+			entry = "record archive of " + s.Name
+		}
 	}
 	c.order = append(c.order, entry)
 	switch o.(type) {

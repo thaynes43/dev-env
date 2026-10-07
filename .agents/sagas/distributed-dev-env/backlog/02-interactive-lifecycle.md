@@ -101,7 +101,7 @@ the cluster.
   operator suspends a session idle past its window (a finished task after 1 h, an
   interactive session after 3 days), with the defaults in the templates and
   `spec.lifecycle` per session.
-- [ ] 7. **The archive timer** (D-09: 7 days after suspension, from the templates).
+- [x] 7. **The archive timer** (D-62, this PR) (D-09: 7 days after suspension, from the templates).
   It archives a suspended session's volume after a valid rescue (the hold pod of step
   2 when it has none). `resume` refuses an archived session and points at a restore.
 - [ ] 8. **Logs.** agentd copies the task log to `~/.shared/logs/`; `GET

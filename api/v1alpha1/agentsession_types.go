@@ -353,6 +353,19 @@ type AgentSessionStatus struct {
 	// +optional
 	Rescue *RescueStatus `json:"rescue,omitempty"`
 
+	// SuspendedAt is when the operator first saw the session suspended with
+	// no pod of its own: the start of its archive timer (D-09, D-62). A resume
+	// clears it.
+	// +optional
+	SuspendedAt *metav1.Time `json:"suspendedAt,omitempty"`
+
+	// ArchivedAt is when the archive timer deleted the suspended session's
+	// volume, after a valid rescue (D-62). An archived session is never
+	// resumed: a new volume would start its task again, so it is restored
+	// from its bundle instead.
+	// +optional
+	ArchivedAt *metav1.Time `json:"archivedAt,omitempty"`
+
 	// The operator's condition types are named in internal/controller:
 	// PodReady, Outdated, RemovalBlocked, and RescueFailed, the rescueFailed
 	// mark of D-10 that blocks archive (D-51). TODO(7.3): QuotaExhausted,
@@ -368,11 +381,9 @@ type AgentSessionStatus struct {
 // AgentStatus is the agent's own state. The /v1 API copies it from agentd's
 // heartbeat (D-41, D-46); nothing else writes it.
 type AgentStatus struct {
-	// TODO(plan 02): fix the values with idle detection (DESIGN-001 4.2).
-
-	// Status is the agent's state. In plan 01 it is agentd's agent state:
-	// pending, busy, exited, failed or interrupted. Plan 02 adds Claude's own
-	// busy, idle and waiting; agentd derives them for Codex and opencode.
+	// Status is the agent's state, agentd's: pending, busy, idle, waiting,
+	// exited, failed or interrupted. idle and waiting are Claude's own, for a
+	// TUI (D-59); plan 04 derives them for Codex.
 	// +optional
 	Status string `json:"status,omitempty"`
 
