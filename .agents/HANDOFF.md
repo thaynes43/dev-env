@@ -20,18 +20,25 @@ the saga. To start building, follow
   `ceph-block`, so every size stays on it. Plan 01's Acceptance lists the evidence
   (pod UIDs, nodes, the bundle path). The v1 pod and `dev-env-ops` did not restart.
   **Next is plan 02** ([interactive sessions and lifecycle](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md)).
-- **Plan 07, the access broker, resumed on Codex** (2026-10-07, coordinator work
-  order after the pause in README decision 40). Steps 1 to 5 are built: the CRDs
-  (D-54), `/v1/grants` (D-56), broker mode (D-61) and installation into a session
-  pod's memory-backed grants volume (D-63), plus egress grants and the operator's
-  expiry backstop (D-64). Existing pods gain the volume on a
-  later resume; a broker rollout never restarts them. H1's RBAC and guards are
-  deployed. H2 still needs the broker Deployment, so no grant is issued yet.
-  Next is H2: pin the checked agent release and new operator image, grant the
-  operator CNP get/delete, then deploy and verify the broker. The approval page
-  and Pushover are step 6.
-  Q-15 is ruled (A), so step 8's Proxmox minting identity is settled.
-  [backlog/07](sagas/distributed-dev-env/backlog/07-access-broker.md) tracks each PR.
+- **Plan 07 round 1 is deployed and verified** (2026-10-07, coordinator work
+  order after README decision 40). Steps 1 to 5 are built: CRDs (D-54),
+  `/v1/grants` (D-56), broker mode (D-61), kube installation into a session's
+  memory-backed grants volume (D-63), and egress grants with the operator's expiry
+  backstop (D-64). Signed agent `2.5.0` and operator/broker `sha-763fe77` are
+  deployed ([haynes-ops #3542](https://github.com/thaynes43/haynes-ops/pull/3542)).
+  One idle local session verified baseline denials, private tmpfs files, kube
+  scope/context, token revocation and egress release. An actual ten-minute egress
+  grant expired with the broker stopped and the operator restarted after approval:
+  the operator deleted its policy at 23:32:14Z while the audit record stayed Active.
+  Restoring the broker ended it Expired; the session was reaped and its home PVC
+  and temporary fixtures removed ([haynes-ops #3544](https://github.com/thaynes43/haynes-ops/pull/3544)).
+  Session and v1 pod UIDs/restart counts were preserved through every rollout.
+  Existing pods gain the grants volume on a later resume; rollouts do not restart them.
+  Next is step 6: human approval, Pushover, Authentik ingress and the break-glass
+  catalog remainder. Standing policies are the only approval path until then;
+  the temporary smoke policies are gone. No new secret or Tom-only step was needed
+  for this round. Q-15 remains ruled (A), so step 8's minting identity is settled.
+  [backlog/07](sagas/distributed-dev-env/backlog/07-access-broker.md) tracks the remaining scope.
 - **What the run found and fixed (2026-10-07).** haynes-ops still had #24's CRD, so
   the API server pruned the heartbeat's task result and the rescue verdict from
   status; haynes-ops #3502 synced it before any reap. A PR here that changes

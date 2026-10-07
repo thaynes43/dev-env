@@ -1,6 +1,6 @@
 # 07: access broker
 
-**Status:** resumed by the coordinator on 2026-10-07; steps 1 to 5 built, H2 still pending
+**Status:** steps 1 to 5 built; H2 runtime deployed and verified on 2026-10-07; approval deployment follows step 6
 **Depends on:** 01 (the baseline guard and egress tiers are in place); Q-07 (Tom
 2026-10-06: credential grants, A)
 **Parallel with:** 02; the coordinator resumed plan 07 on Codex after the pause in
@@ -15,10 +15,11 @@ audited, and the headlamp path is no longer needed. DESIGN-001 6.12, D-23 to D-2
 
 ## Progress
 
-One PR per step, in this order. Tick a step in the PR that lands it. The code lands
-dark: no grant can be issued until haynes-ops deploys the broker (H2), and the broker
-needs the catalog and its RBAC first (H1). Plan 02 changes the same reconciler, API
-and agentd, so each step stays small and rebases on main before it merges.
+One PR per step, in this order. Tick a step in the PR that lands it. The broker
+runtime is deployed (H2), with its core catalog and RBAC (H1). Only standing
+policies in git can approve requests until step 6 provides human approval. Plan 02
+changes the same reconciler, API and agentd, so each step stays small and rebases
+on main before it merges.
 
 In this repo:
 
@@ -49,7 +50,7 @@ In this repo:
   session and excluding rescue hold pods; separate destination rules with the
   requested ports. The broker revokes on expiry/release/session end; the operator's
   separate backstop uses same-name reads and UID-precondition deletes at expiry
-  when the broker is unavailable. Its CNP Role needs `get, delete`, applied in H2
+  when the broker is unavailable. Its CNP Role has `get, delete`, applied in H2
   before the new operator pin. Unit/fake-clock and envtest cases prove ownership,
   restart, finalizer delays, late creation and the exact RBAC.
 - [ ] 6. The approval page and Pushover: the broker's console port behind Authentik
@@ -77,12 +78,16 @@ In this repo:
 
 In haynes-ops:
 
-- [ ] H1. The CRD copies; the grant role catalog, with `-breakglass` generated from
-  API discovery and a CI check; the broker's ServiceAccount and RBAC; the operator's
-  AccessGrant rights.
-- [ ] H2. The broker Deployment and its network policies; the Pushover ExternalSecret
-  (v1's item `upgrade-gate`); the approval page's IngressRoute on an external host,
-  with its Authentik blueprint.
+- [x] H1 core. The CRD copies; the namespace/cluster grant role catalog; the broker's
+  ServiceAccount and RBAC; the operator's AccessGrant rights.
+- [ ] H1 break-glass catalog. Generate `-breakglass` from API discovery with a CI
+  check before the human approval path can issue it.
+- [x] H2 runtime. The broker Deployment, its network policies and the operator's
+  CNP get/delete permission (haynes-ops #3542). Signed operator/broker
+  `sha-763fe77` and agent `2.5.0` are deployed; existing sessions are preserved.
+- [ ] H2 approval deployment (step 6). The Pushover ExternalSecret (v1's item
+  `upgrade-gate`); the approval page's IngressRoute on an external host, with its
+  Authentik blueprint.
 - [ ] H3. The day-one GrantPolicy set, which approves nothing beyond v1 (DESIGN-001
   6.12): at most credential grants for haynes-ops sessions, since every v1 session
   holds both credentials today.
@@ -94,6 +99,26 @@ In haynes-ops:
   keeper's egress on port 22 to the Proxmox nodes. v2's `dev-agents` never had the token or the key: profile
   `full` already leaves them out.
 - [ ] The acceptance run below, and the break-glass half of S-12.
+
+## Round 1 runtime verification (2026-10-07)
+
+Code PRs #84 (D-63) and #86 (D-64) shipped in signed agent `2.5.0` and
+operator/broker `sha-763fe77`. [haynes-ops #3542](https://github.com/thaynes43/haynes-ops/pull/3542)
+deployed the broker and bounded scratch policies; [#3543](https://github.com/thaynes43/haynes-ops/pull/3543)
+stopped it for the actual expiry test; [#3544](https://github.com/thaynes43/haynes-ops/pull/3544)
+restored two replicas/PDB minimum 1 and pruned the fixtures.
+
+One size-S idle local session proved baseline ConfigMap patch denial and blocked
+HTTP egress; actual tmpfs with private grant files; kube context access only to the
+scratch namespace; release invalidating the held token (401) and removing files;
+and egress release removing access. For `grant-1007-232214-4f02`, the operator was
+restarted after approval and the broker had zero pods through expiry. Its expiry
+controller deleted the policy at 23:32:14.018Z; the exact CNP was NotFound and HTTP
+was blocked while the audit phase stayed Active. The restored broker ended it
+Expired before the session was reaped. The session's home PVC and scratch namespace
+are gone; shared storage remains. Session/v1 UIDs and restart counts were unchanged
+through every rollout. Ended grants remain as audit records. This does not complete
+human approval, credential grants or the break-glass half of S-12.
 
 ## In this repo
 
