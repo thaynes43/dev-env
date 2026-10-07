@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 # ghcr.io/thaynes43/dev-env: the dev-env v2 agent image, tag line 2.x (KICKOFF B5).
 #
 # One image for every session pod in `dev-agents` (DESIGN-001 3.6, D-44): `tini` is

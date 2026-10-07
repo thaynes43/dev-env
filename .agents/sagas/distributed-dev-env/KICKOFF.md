@@ -82,7 +82,7 @@ probe after each Claude Code CLI bump (last run on 2.1.292, 2026-10-06: still re
 | Spike | When | Pass | On a fail |
 |---|---|---|---|
 | S-12: the baseline guard. **Passed 2026-10-07** (00 and D-19): 45 of 45, and the VAP sees `CONNECT` | After the RBAC and guard PR, and before any agent pod gets the role. Run it from a pod that uses the agent ServiceAccount: the first task pod, or a test Job the PR deploys with a CPU limit. An in-pod session reads the output. | Every #3392 path is refused and every runbook action is allowed. Record whether the ValidatingAdmissionPolicy sees `CONNECT` for exec. The break-glass half of S-12 (its exclusions refused, the `kube-system` eviction allowed) needs `dev-env-grant-breakglass`, which plan 07 ships, so it runs there. | Fix the guard before going further. D-19 records the change. |
-| S-8: `gasha01-rbd` against `ceph-block` | Once the first task pod runs at size M. Do two runs, never at the same time. | The times for each step are recorded. | If gasha01 is more than twice as slow overall, size L defaults to `ceph-block` (D-22). |
+| S-8: `gasha01-rbd` against `ceph-block`. **Done 2026-10-07** (00): 1.55 to 1.81 times slower, so L stays on `gasha01-rbd` | Once the first task pod runs at size M. Do two runs, never at the same time. | The times for each step are recorded. | If gasha01 is more than twice as slow overall, size L defaults to `ceph-block` (D-22). |
 
 **Later, not phase 1:** S-10 before plan 08, S-5 in phase 3, S-4 in phase 4, and S-9,
 S-13, S-11 and S-14 before plan 09. S-14 needs Tom at each machine.
@@ -221,12 +221,12 @@ from a `v2.x.y` release tag, not from main, so the Kyverno subject must widen in
 paired haynes-ops PR (the first bullet below). D-53 records the choice and what the first
 `2.0.0` needs.
 
-B5 also has a haynes-ops follow-up. `dev-env-templates` (item 8.7, haynes-ops #3471)
-carries `image: ghcr.io/thaynes43/dev-env:2.0.0@sha256:000...0`, a placeholder with an
-all-zero digest that no node can pull, so no session can start from it. When B5
-publishes `ghcr.io/thaynes43/dev-env:2.x.y`, B5's follow-up PR in haynes-ops sets the
-real `name:tag@sha256` there (Renovate takes over afterwards). B5 is not done until
-that PR has merged.
+B5 also had a haynes-ops follow-up. `dev-env-templates` (item 8.7, haynes-ops #3471)
+carried `image: ghcr.io/thaynes43/dev-env:2.0.0@sha256:000...0`, a placeholder with an
+all-zero digest that no node can pull. Done 2026-10-07: haynes-ops #3501 replaced it
+with `ghcr.io/thaynes43/dev-env:2.0.0@sha256:8bab980d6beea9eb8f1576d38a3fd9837150193414728baf1bcc3e07e28a371a`,
+the first real image (released by #52, published and signed by `publish-agent.yml`).
+Renovate takes over from here. B5's follow-up is done.
 
 B5 has two preconditions:
 
@@ -255,9 +255,9 @@ Audit only). The first is B5's; the second is done:
    blocks deletion and force-push, keeps linear history, and requires a PR with 0
    approvals and the status check `CI - Success` from GitHub Actions. Leave "require
    up to date" off, so parallel agent PRs do not re-run CI after every merge. Add it
-   once `CI - Success` has reported at least once. If GitHub says the ruleset will
-   not be enforced on a private repo on his plan, ask him DESIGN-001 Q-12 then, not
-   before: the repo has no ruleset yet, and that warning is the question's premise.
+   once `CI - Success` has reported at least once. DESIGN-001 Q-12 (enforcement on a
+   private repo) is settled: Tom made the repo public on 2026-10-07 (B), so GitHub
+   enforces the ruleset at no cost. Part 3 of the laptop handoff.
 2. **Settings:** allow auto-merge (Renovate's `platformAutomerge` needs it), and
    optionally auto-delete head branches.
 3. **GHCR access:** on the `dev-env` package, "Manage Actions access", give
@@ -271,8 +271,8 @@ Audit only). The first is B5's; the second is done:
 
 Items 2, 3 and 5 are plain settings; HANDOFF lists them as a checklist. Items 2 to 6
 are in [the laptop handoff](../../handoffs/2026-10-06-tom-laptop-settings.md), which
-Tom can give to an agent on his own machine. Q-12 is the only question left, asked
-when item 1 raises it.
+Tom can give to an agent on his own machine. No question is left open: Q-12 was
+settled on 2026-10-07.
 
 An agent working outside under Tom's own gh login could make changes 1 and 2 with
 `gh api`, but only after Tom says yes to that exact change.
@@ -319,8 +319,9 @@ PR per piece, in this order:
    6. the PriorityClass and the Kyverno CPU-limit policy. Done 2026-10-06: haynes-ops
       #3470. No LimitRange: the policy carries the 8 CPU / 24Gi ceiling (D-47);
    7. the templates and the shared volume (`prune: disabled`). Done 2026-10-06:
-      haynes-ops #3471. `dev-env-templates` carries an all-zero placeholder image digest
-      until B5 (section 3) publishes `dev-env:2.x.y`;
+      haynes-ops #3471. `dev-env-templates` carried an all-zero placeholder image digest
+      until 2026-10-07, when haynes-ops #3501 replaced it with `dev-env:2.0.0` and its
+      digest (B5's follow-up, section 3, is done);
    8. the ExternalSecrets, among them the keeper's App key and its empty Secrets
       (plan 01, "The keeper's inputs"; D-52). Done 2026-10-06: haynes-ops #3480, app
       `apps/dev-env-system/secrets/`, all four ExternalSecrets `SecretSynced`, no new
@@ -364,7 +365,11 @@ PR per piece, in this order:
    express them (haynes-ops #3405). An outside agent may author these PRs; an
    in-pod session merges and verifies them, because they are cluster-scoped.
 9. The first end-to-end run: from the v1 pod, `agent-run -p` a small real task, such
-   as a docs fix in this repo, then plan 01's acceptance checks.
+   as a docs fix in this repo, then plan 01's acceptance checks. Done 2026-10-07
+   (#60): session `dev-env-1007-045709` ran on talosw02 at size M, opened #57
+   and survived an operator restart; every acceptance check passed (plan 01 lists the
+   evidence). The run found that haynes-ops still had #24's CRD; haynes-ops #3502
+   synced it.
 
 ## 5. What "done" means for plan 01
 

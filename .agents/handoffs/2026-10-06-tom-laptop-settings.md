@@ -80,6 +80,11 @@ B2). Before that, the check does not exist and the ruleset would block every mer
 forever. It is the one required check; the Claude review stays advisory and is never
 added.
 
+**Ready to run (2026-10-07).** `CI - Success` has reported on many PRs, and Tom made
+the repo public on 2026-10-07 (DESIGN-001 Q-12, ruled B), so GitHub enforces the
+ruleset at no cost. On 2026-10-07 the repo still had no ruleset and `main` was
+unprotected. This part stays Tom's to run.
+
 1. Check that the check has reported:
    `gh api repos/thaynes43/dev-env/commits/main/check-runs -q '.check_runs[].name'`
    lists `CI - Success`. If it does not, stop and tell Tom. (The workflow also runs on
@@ -139,11 +144,11 @@ gh api -X POST repos/thaynes43/dev-env/rulesets --input /tmp/protect-main.json
 rm /tmp/protect-main.json
 ```
 
-   **If GitHub's response or the UI says the ruleset will not be enforced on a private
-   repo on Tom's plan** (the API answers 403 with "Upgrade to GitHub Pro or make this
-   repository public", or the ruleset page shows a not-enforced banner), stop and tell
-   Tom. That is DESIGN-001 Q-12, and the pod's agent asks it. Do not make the repo
-   public, and do not change the plan.
+   **If GitHub's response or the UI says the ruleset will not be enforced** (the API
+   answers 403 with "Upgrade to GitHub Pro or make this repository public", or the
+   ruleset page shows a not-enforced banner), stop and tell Tom. It should not happen
+   now that the repo is public (Q-12, 2026-10-07); if it does, check the repo's
+   visibility first. Do not change the visibility or the plan.
 4. Read it back: `gh api repos/thaynes43/dev-env/rulesets -q '.[] | select(.name ==
    "Protect Main") | .id'` gives the id; then `gh api
    repos/thaynes43/dev-env/rulesets/<id>`. Check that `enforcement` is `active`,
