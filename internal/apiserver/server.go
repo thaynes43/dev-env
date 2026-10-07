@@ -1,7 +1,7 @@
 // Package apiserver is the operator's /v1 API (DESIGN-001 3.4, D-46): HTTPS
 // with a cert-manager certificate, JSON, every call authenticated by a
 // TokenReview for the audience dev-env-operator (D-05) and authorized by the
-// caller's class (Policy). Plan 01 serves:
+// caller's class (Policy). It serves:
 //
 //	POST   /v1/sessions                    create a task session
 //	GET    /v1/sessions                    list, with filters
@@ -9,9 +9,14 @@
 //	DELETE /v1/sessions/{name}             reap: rescue, suspend, archive (D-45)
 //	POST   /v1/sessions/{name}/heartbeat   agentd's status (D-41), the session's own pod only
 //	GET    /v1/fleet                       what runs and waits, and on which revision
+//	POST   /v1/grants                      request an access grant, sessions only (D-56)
+//	GET    /v1/grants                      list, with filters
+//	GET    /v1/grants/{name}               one grant
+//	DELETE /v1/grants/{name}               release: set spec.release for the broker
 //
-// The API writes AgentSession objects and their status; it never touches a pod
-// or a volume. Agents have no write on AgentSessions (DESIGN-001 6.11), so every
+// The API writes AgentSession objects and their status, and AccessGrant specs
+// (never their status: the broker decides a grant); it never touches a pod or a
+// volume. Agents have no write on AgentSessions (DESIGN-001 6.11), so every
 // session they start comes through here, where its parent is taken from the
 // token. Every replica serves the API; only the leader reconciles.
 package apiserver
@@ -60,9 +65,12 @@ type Server struct {
 	Log logr.Logger
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// GrantApprovalURL is the base URL of the broker's approval page; a pending
+	// grant's view links to it plus the grant's name. Empty links nothing.
+	GrantApprovalURL string
 
-	// createMu serialises this replica's creates, so its idempotency and
-	// child-count checks see each other's writes.
+	// createMu serialises this replica's creates, so its idempotency,
+	// child-count, grant-merge and pending-grant checks see each other's writes.
 	createMu sync.Mutex
 }
 
@@ -98,6 +106,14 @@ func (s *Server) Handler() http.Handler {
 	}}))
 	mux.Handle(apiv1.SessionsPath+"/{name}/heartbeat", s.serve(route{quiet: true, methods: map[string]handler{
 		http.MethodPost: s.heartbeat,
+	}}))
+	mux.Handle(apiv1.GrantsPath, s.serve(route{methods: map[string]handler{
+		http.MethodGet:  s.listGrants,
+		http.MethodPost: s.createGrant,
+	}}))
+	mux.Handle(apiv1.GrantsPath+"/{name}", s.serve(route{methods: map[string]handler{
+		http.MethodGet:    s.getGrant,
+		http.MethodDelete: s.releaseGrant,
 	}}))
 	mux.Handle(apiv1.FleetPath, s.serve(route{methods: map[string]handler{
 		http.MethodGet: s.fleet,

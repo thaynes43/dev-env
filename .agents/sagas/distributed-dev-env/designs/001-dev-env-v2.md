@@ -2610,6 +2610,66 @@ built.** `api/v1alpha1/accessgrant_types.go`; an envtest suite proves each rule.
   DNS label of at most 63 characters, because a grant records it as `policy/<name>`.
 - **Not yet.** Type `lease` joins with plan 09.
 
+**D-56 (2026-10-07, plan 07 step 2). `/v1/grants` as built.**
+`internal/apiserver/grants.go`; the wire types are in `apiv1`.
+
+- **Routes.** `POST /v1/grants` requests a grant. `GET /v1/grants` lists every
+  grant, newest first, with the filters `session`, `phase` and `mine`. `phase` is
+  exact: `Pending`, `Active`, `Denied`, `Expired`, `Released` or `Failed`, and any
+  other value is a 400. A grant the broker has not seen yet shows as `Pending`.
+  `GET /v1/grants/{name}` shows one grant. `DELETE /v1/grants/{name}` releases it.
+  Every caller the API serves may read: agents can read AccessGrants anyway, and
+  `agent-run grant list --all` shows requester, approver and times.
+- **Who may request.** Only a session, because a grant is installed in a session's
+  pod. Tom and clients get a 403 that says grants are requested by sessions and
+  approved on the broker's page. A session being reaped gets a 409.
+- **Requester from the token.** `spec.requester` is the calling session: its name,
+  its `spec.repo`, the profile its pod was built with, its `spec.agent` and its
+  `spec.parent`. The body has no requester field, and unknown fields are refused.
+  The grant lives in `dev-agents`, carries the label `dev-env.haynesops.com/session`,
+  and is named `grant-<MMDD>-<HHMMSS>-<4 hex>` in UTC (D-54). A taken name is tried
+  again with new hex.
+- **The body.** `type`, `reason` (required), `ttl` (a Go duration), and the fields
+  of the type: `role` and `namespaces` for `kube`; `fqdns`, `cidrs`, `endpoints` and
+  `ports` for `egress`; `credential` for `credential`. A field of another type is a
+  422, because the API would otherwise drop it without a word. For `breakglass` the
+  API sets role `dev-env-grant-breakglass`; the body names that role or none. A port
+  with no protocol gets TCP, as the schema's default would.
+- **Defaults.** The TTL is 30 minutes for break-glass and 1 hour for the rest.
+- **Checks.** The API checks only what the schema cannot (D-46's split): the type,
+  the TTL's form, the fields each type needs, and no field of another type. The
+  schema's rules (D-54: the dev-env namespaces, the TTL bounds, the catalog roles,
+  CIDRs, label keys) run at create. The API server's Invalid causes come back as 422
+  fields under the request's names: `namespaces[1]`, `ports[0].port`, `credential`.
+- **Identical requests merge.** Before it creates, the API lists the session's
+  grants from the API server. If one is pending, or Active and not past
+  `status.expiresAt`, and not released, with the same type and scope, the API
+  returns it with 200 and its `Location`, and creates nothing. Scope is the role
+  and namespaces, the FQDNs, CIDRs, endpoints and ports, or the credential; each list
+  compares as a set, in any order. TTL and reason take no part. The merge comes
+  before the limit below, so asking again at the limit returns the grant.
+- **At most 3 pending per session.** A grant counts while it has no phase or
+  `Pending`, and is not released. A fourth is a 429 `limit_exceeded`. A replica
+  serialises its grant requests together with its session creates, and reads the
+  session's grants from the API server, so its checks see its own writes. **The
+  limit is per replica:** two replicas can race inside the same few milliseconds, so
+  two identical requests can make two grants, and a session can reach 4 pending for
+  that moment.
+- **Release.** `DELETE` merge-patches `spec.release: true` and answers 202 with the
+  grant. The broker then ends it and revokes what it made; the object stays as the
+  audit record. The requesting session, Tom and clients may release a grant; another
+  session gets a 403. A grant already released or ended is answered with 200,
+  unchanged. The API never writes status, so it can neither approve nor end a grant.
+- **Approval link.** `--grant-approval-url` is the base URL of the broker's page,
+  an https URL. While a grant is pending and not released, its view carries
+  `approvalURL`: that base plus the grant's name, which a coordinator shows Tom bare
+  (D-26). Empty, the default, links nothing.
+- **Reads.** The grant routes read from the API server, not the manager's cache: a
+  session polls its grant right after it asks, and the operator keeps no
+  AccessGrant informer. So the operator's `dev-agents` Role needs `create`, `get`,
+  `list` and `patch` on `accessgrants`, and nothing on `accessgrants/status`
+  (H1; `watch` waits for the backstop of step 5).
+
 **D-26. Approvals: a Pushover link to an approval page behind Authentik.**
 
 | Channel | Verdict |
@@ -3666,3 +3726,4 @@ credential grants) is open. ADR-001 was Accepted on
 | D-53 | The agent image is built from `images/agent/Dockerfile` (v1's plus tini, agentd, agent-run, baked Codex and kubectl-cnpg, pve and hw-ssh; no code-server), smoke-tested in CI on every PR that touches it, and published as `dev-env:2.x.y` only, from a `v2.x.y` release tag by `publish-agent.yml`, signed keyless; the paired haynes-ops Kyverno change trusts that workflow on `refs/tags/v2.*` | 3.6 |
 | D-54 | `AccessGrant` lives in `dev-agents`, `GrantPolicy` in `dev-env-system`; a grant's name is its ServiceAccount, bindings and policy; spec immutable but a one-way `release`; status the broker's only; TTL 10 m to the type's longest; in-cluster egress by endpoint, never by name | 6.12 |
 | D-55 | A volume that needs a rescue and has no pod gets a hold pod: the session's pod running `agentd hold` at size S, with no agent credentials; the operator rescues in it, keeps it and retries every 15 minutes while the rescue fails, and archives once it passes; a volume with nothing but an empty `lost+found` is a valid rescue (`VolumeEmpty`) | 4.4 |
+| D-56 | `/v1/grants` of plan 07 step 2: only a session requests, for its own pod, with the requester from its token; every caller reads; each type's own fields; TTL 30 m for break-glass and 1 h otherwise; identical pending or active requests merge; at most 3 pending per session, per replica; release by `spec.release`; an approval link from `--grant-approval-url` | 6.12 |

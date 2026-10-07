@@ -1,6 +1,6 @@
 # 07: access broker
 
-**Status:** in progress (step 1, the CRDs, 2026-10-07)
+**Status:** in progress (steps 1 and 2, the CRDs and `/v1/grants`, 2026-10-07)
 **Depends on:** 01 (the baseline guard and egress tiers are in place); Q-07 (Tom
 2026-10-06: credential grants, A)
 **Parallel with:** 02
@@ -23,11 +23,11 @@ In this repo:
 
 - [x] 1. The `AccessGrant` and `GrantPolicy` CRDs, with an envtest suite that proves
   each rule, and this list (D-54).
-- [ ] 2. `/v1/grants` in the operator's API: `POST`, `GET` (list and one), `DELETE`
+- [x] 2. `/v1/grants` in the operator's API: `POST`, `GET` (list and one), `DELETE`
   (release, by setting `spec.release`). The requester is the calling session; at
   most 3 pending per session; an identical request returns the pending or active
   grant it matches; the wire types in `apiv1`. The operator's `dev-agents` Role
-  gains AccessGrant create, get, list, watch and patch, and no status.
+  gains AccessGrant create, get, list, watch and patch, and no status. (D-56)
 - [ ] 3. The broker mode, kube grants: `dev-env-operator broker` with its own Lease;
   the policy match (break-glass and profile `ops` never match); the 30-minute
   timeout; the ServiceAccount, the bindings (RoleBindings per namespace, a
