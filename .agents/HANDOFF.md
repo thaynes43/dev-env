@@ -20,10 +20,15 @@ the saga. To start building, follow
   `ceph-block`, so every size stays on it. Plan 01's Acceptance lists the evidence
   (pod UIDs, nodes, the bundle path). The v1 pod and `dev-env-ops` did not restart.
   **Next is plan 02** ([interactive sessions and lifecycle](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md)).
-- **Plan 07, the access broker, runs alongside plan 02** (from 2026-10-07).
+- **Plan 07, the access broker, is paused after step 3** (2026-10-07; Tom's pacing
+  ruling: one plan at a time while plan 02 runs).
   [backlog/07](sagas/distributed-dev-env/backlog/07-access-broker.md) lists its steps,
-  one PR each. Step 1 added the `AccessGrant` and `GrantPolicy` CRDs (D-54); nothing
-  issues a grant until haynes-ops deploys the broker.
+  one PR each. Done: the `AccessGrant` and `GrantPolicy` CRDs (D-54), `/v1/grants`
+  (D-56, live in the operator since haynes-ops #3530), and the broker mode for kube
+  and break-glass grants (D-61); haynes-ops H1 (#3528, #3531) deployed the CRDs, the
+  grant role catalog, the broker's RBAC and `dev-env-broker-guard`. Nothing issues a
+  grant until haynes-ops H2 deploys the broker. Step 4 has a WIP commit on branch
+  `agent/plan07-install` (backlog/07 says what is left). Q-15 waits on Tom.
 - **What the run found and fixed (2026-10-07).** haynes-ops still had #24's CRD, so
   the API server pruned the heartbeat's task result and the rescue verdict from
   status; haynes-ops #3502 synced it before any reap. A PR here that changes
