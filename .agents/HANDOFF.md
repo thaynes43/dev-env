@@ -42,19 +42,23 @@ the saga. To start building, follow
   `agentd ctl status` and `ctl rescue` answer the operator (D-40 to D-43). The
   operator's heartbeat route is step 3's; the pod that sets agentd's inputs is
   step 2's.
-- **Plan 01 step 5, part 1, the rescue bundle, is built** (#32). `agentd ctl rescue`
-  writes one git bundle per clone of the refs origin lacks, and `manifest.json`
-  last, to `rescue/<session>/<stamp>/` on the shared volume, and checks them there
-  before it reports `ok`; `--stop-agent` stops the CLI first (D-48). Part 2 is the
-  operator's side: run it by exec before a suspend, then archive.
+- **Plan 01 step 5, rescue, suspend and archive, is built** (#32,
+  #36). `agentd ctl rescue` writes one git bundle per clone of the refs origin
+  lacks, and `manifest.json` last, to `rescue/<session>/<stamp>/` on the shared
+  volume, and checks them there; `--stop-agent` stops the CLI first (D-48). The
+  operator runs it by exec before a suspend deletes a pod that ran, writes the
+  verdict to `status.rescue` before the delete, supersedes it on a resume,
+  and archives only a reaped session's volume, after a verified rescue of its last
+  pod (D-51). A reaped session whose last pod is gone, ended or never started waits
+  with `RemovalBlocked` for plan 02's rescue pod; plan 02 also has the archive
+  timer, bundle pruning and the `RescueFailed` page.
 - **Plan 01 step 2 is built** (#29, #30). `dev-env-operator` runs a
   controller-runtime manager whose reconciler builds each session's pod and volume
   from `dev-env-templates` (D-44: the format, placement, no probes, 60 s grace). It
   creates what is missing and never updates a pod or volume; envtest proves that
   across an operator restart and a template change. Deleting a session is a reap
-  (D-45): a finalizer keeps the session and its volume until rescue, and the one
-  guarded delete path refuses until plan 01 step 5 builds `rescued()`. Until then a
-  deleted session stays, with `RemovalBlocked`, unless it never got a pod or volume.
+  (D-45): a finalizer keeps the session and its volume until rescue, and the
+  guarded deletes are the only ones; step 5 filled in the rescue (D-51).
 - **Plan 01 step 3, the `/v1` API, is built** (#31). Every operator replica serves
   `POST/GET /v1/sessions`, `GET/DELETE /v1/sessions/{name}`, agentd's heartbeat
   route and `GET /v1/fleet` over HTTPS on 8443, each call checked by a TokenReview

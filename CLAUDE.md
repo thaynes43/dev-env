@@ -22,7 +22,7 @@ this repo publishes signed images, haynes-ops pins and deploys them.
 **Status: ADR-001 Accepted 2026-10-06; the Go skeleton (KICKOFF B1), CI, the
 `AgentSession` CRD (plan 01 step 1), the operator's pod and volume reconciler (step 2),
 its `/v1` API (step 3), agentd's config rendering, clone, task runner, heartbeat
-and rescue report (step 4), agentd's rescue bundle (step 5, part 1) and
+and rescue report (step 4), rescue, suspend and archive (step 5) and
 `agent-run`'s `-p`, `list`, `show`, `reap` and `fleet` (step 7) are built.** The
 keeper is still an honest stub that says which plan step builds it. The build sessions follow
 [`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md). v1 keeps running from
@@ -48,8 +48,10 @@ internal/version/        the build identity every binary's `version` prints
 internal/testenv/        starts envtest (kube-apiserver + etcd) with config/crd/ installed, for test suites
 internal/templates/      parses and checks dev-env-templates, the GitOps data pods are built from; its revision (D-44)
 internal/controller/     the AgentSession reconciler: each session's pod and volume (D-44), the reap finalizer and the
-                         one guarded pod delete (D-45). Its envtest suite proves DESIGN-001 5.1 (no owner reference
-                         to the operator; no pod or volume write or delete; delete and suspend wait for rescue)
+                         guarded deletes (D-45): the rescue by exec before a suspend deletes a pod, and the archive of
+                         a reaped session's volume after a verified rescue (D-51). Its envtest suite proves DESIGN-001
+                         5.1 (no owner reference to the operator; no pod or volume write or delete outside the guards;
+                         delete and suspend wait for rescue); a fake rescuer stands in for exec
 internal/apiserver/      the operator's /v1 API (D-46): HTTPS runnable, TokenReview auth, caller classes, sessions,
                          heartbeat and fleet handlers. Unit tests use the fake client; its envtest suite mints real
                          tokens and serves through a manager wired as the operator's
