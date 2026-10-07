@@ -160,7 +160,10 @@ step. Tick a step in the PR that lands it.
   is built in haynes-ops as a v1 fix, not by this plan. It went live on 2026-10-06
   (haynes-ops #3406, Kyverno `default-cpu-request`); at 03:34Z no Running pod in the
   cluster was BestEffort. Before phase 1 adds sessions, check that this still holds.
-- ExternalSecrets in `dev-agents` mirroring v1's; the empty keeper-owned Secrets.
+- ExternalSecrets in `dev-agents` mirroring v1's; the empty keeper-owned Secrets. Done
+  2026-10-06: haynes-ops #3480 (KICKOFF 8.8), with the keeper's `dev-env-keeper-github-dev-bot`
+  in `dev-env-system`. `full` and `dev` profiles still lack `CIGAR_JOURNAL_TOKEN` (only
+  `ops` wires it): a templates follow-up.
 - The shared CephFS volume `dev-env-shared` on `ceph-filesystem`, `prune: disabled`.
 - `dev-env-templates` with `gasha01-rbd` as the session volume class. The shared volume
   and the templates are done (2026-10-06, haynes-ops #3471, KICKOFF 8.7). The templates
@@ -179,7 +182,8 @@ step. Tick a step in the PR that lands it.
 - Kyverno `verify-thaynes43-images`: add the `thaynes43/dev-env` workflow identity.
 - Renovate: hold the v1 HelmRelease below `2.0.0`.
 - CNPs of in-cluster MCP services that admit only the v1 pod (the haynesnetwork hop,
-  the authoring services) also admit `dev-agents` session pods.
+  the authoring services) also admit `dev-agents` session pods. Done 2026-10-06:
+  haynes-ops #3491 (KICKOFF 8.10).
 
 ## Acceptance
 

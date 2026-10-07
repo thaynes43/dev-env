@@ -309,7 +309,9 @@ PR per piece, in this order:
       haynes-ops #3471. `dev-env-templates` carries an all-zero placeholder image digest
       until B5 (section 3) publishes `dev-env:2.x.y`;
    8. the ExternalSecrets, among them the keeper's App key and its empty Secrets
-      (plan 01, "The keeper's inputs"; D-52);
+      (plan 01, "The keeper's inputs"; D-52). Done 2026-10-06: haynes-ops #3480, app
+      `apps/dev-env-system/secrets/`, all five ExternalSecrets `SecretSynced`, no new
+      1Password field needed;
    - **8.8a:** the four config ConfigMaps in `dev-agents` of D-49:
      `dev-env-config-claude` (`CLAUDE.md`, `mcp.json`, `agent-*.md`),
      `dev-env-config-codex` (`config.toml`, `AGENTS.header.md`),
@@ -331,7 +333,9 @@ PR per piece, in this order:
       Certificate's CA as a file it can name in `DEV_ENV_API_CA_FILE` (D-50); a new
       mount on the v1 pod restarts it, so prefer a way that does not, or hold that PR
       for Tom;
-   10. the MCP network policy admits for `dev-agents`.
+   10. the MCP network policy admits for `dev-agents`. Done 2026-10-06: haynes-ops
+       #3491 (egress in `dev-env-session-platform`; ingress in the hop, audio and
+       Blender policies; a test Job reached all eight services and not four others).
 
    Write new Kyverno policies on the `policies.kyverno.io` CEL types where they can
    express them (haynes-ops #3405). An outside agent may author these PRs; an
