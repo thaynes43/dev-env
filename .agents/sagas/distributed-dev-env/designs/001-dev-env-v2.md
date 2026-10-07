@@ -1242,9 +1242,10 @@ a reaped session's volume, only after a verified rescue of the volume's last pod
   `agent` through `pods/exec` (D-08), over WebSocket with the SPDY fallback, with a
   10-minute limit. agentd stops the agent first and writes the bundle (D-48). A
   rescue can take minutes, so the controller runs up to four reconciles at a time;
-  one session's never overlap. After the exec the operator reads the pod from the
-  API server, not the cache, and drops a report whose pod was replaced meanwhile,
-  because exec reaches a pod by name.
+  one session's never overlap. Before the exec the operator checks that its cache
+  has the newest session and pod, so a lagging cache never costs a second rescue.
+  After the exec it reads the pod from the API server and drops a report whose pod
+  was replaced meanwhile, because exec reaches a pod by name.
 - **The verdict.** The operator turns the report into `status.rescue.result`:
   `Verified` when every ref on the list is in a verified bundle at the same commit
   and the manifest was written; `CleanAndPushed` when there was nothing to bundle
