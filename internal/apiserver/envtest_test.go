@@ -407,3 +407,102 @@ func TestEnvtestAPI(t *testing.T) {
 		}
 	}
 }
+
+// TestEnvtestGrants runs the grant routes against the real AccessGrant schema
+// (D-54, D-56): the schema's refusals come back as 422 fields, the schema's
+// defaults do not split identical requests, and a release passes its rules.
+func TestEnvtestGrants(t *testing.T) {
+	l := startLive(t)
+	ctx := context.Background()
+	human := l.token(humanSA, []string{apiv1.TokenAudience}, nil)
+
+	created := unmarshal[apiv1.Session](t, l.want(http.MethodPost, apiv1.SessionsPath, human, task(), http.StatusCreated))
+	var sess v1alpha1.AgentSession
+	if err := l.k8s.Get(ctx, types.NamespacedName{Namespace: sessionNS, Name: created.Name}, &sess); err != nil {
+		t.Fatal(err)
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: sess.Name, Namespace: sessionNS,
+			Labels:          map[string]string{v1alpha1.LabelProfile: "dev"},
+			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(&sess, v1alpha1.GroupVersion.WithKind("AgentSession"))}},
+		Spec: corev1.PodSpec{ServiceAccountName: controller.ServiceAccountName, Containers: []corev1.Container{{Name: "agent", Image: "agent"}}},
+	}
+	if err := l.k8s.Create(ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = l.k8s.Delete(ctx, pod)
+		_ = l.k8s.Delete(ctx, &sess)
+	})
+	agent := l.token(sessionNS+"/"+controller.ServiceAccountName, []string{apiv1.TokenAudience}, pod)
+
+	t.Run("Tom does not request grants; sessions do", func(t *testing.T) {
+		l.want(http.MethodPost, apiv1.GrantsPath, human, kubeReq(), http.StatusForbidden)
+	})
+
+	t.Run("the schema refuses a dev-env namespace and an over-long TTL", func(t *testing.T) {
+		r := kubeReq()
+		r.Namespaces = []string{"frontend", "dev-agents"}
+		e := unmarshal[apiv1.ErrorResponse](t, l.want(http.MethodPost, apiv1.GrantsPath, agent, r, http.StatusUnprocessableEntity)).Error
+		found := false
+		for _, fe := range e.Fields {
+			found = found || (fe.Field == "namespaces[1]" && strings.Contains(fe.Message, "no grant reaches the dev-env namespaces (DESIGN-001 6.12)"))
+		}
+		if e.Code != apiv1.CodeInvalid || !found {
+			t.Errorf("dev-agents: %+v", e)
+		}
+		r = kubeReq()
+		r.TTL = "9h"
+		e = unmarshal[apiv1.ErrorResponse](t, l.want(http.MethodPost, apiv1.GrantsPath, agent, r, http.StatusUnprocessableEntity)).Error
+		if !strings.Contains(e.Message, "ttl runs from 10m to 8h") {
+			t.Errorf("9h: %+v", e)
+		}
+	})
+
+	var kube apiv1.Grant
+	t.Run("a request is created with its requester from the token", func(t *testing.T) {
+		kube = unmarshal[apiv1.Grant](t, l.want(http.MethodPost, apiv1.GrantsPath, agent, kubeReq(), http.StatusCreated))
+		var g v1alpha1.AccessGrant
+		if err := l.k8s.Get(ctx, types.NamespacedName{Namespace: sessionNS, Name: kube.Name}, &g); err != nil {
+			t.Fatal(err)
+		}
+		want := v1alpha1.GrantRequester{Session: sess.Name, Repo: "haynes-ops", Profile: "dev", Agent: "claude", Parent: humanSA}
+		if g.Spec.Requester != want || g.Labels[v1alpha1.LabelSession] != sess.Name || g.Spec.TTL.Duration != 15*time.Minute {
+			t.Errorf("spec %+v labels %v", g.Spec, g.Labels)
+		}
+		got := unmarshal[apiv1.Grant](t, l.want(http.MethodGet, apiv1.GrantPath(kube.Name), human, nil, http.StatusOK))
+		if got.Name != kube.Name || got.Phase != apiv1.GrantPending || got.Session != sess.Name {
+			t.Errorf("read back %+v", got)
+		}
+		mine := unmarshal[apiv1.GrantList](t, l.want(http.MethodGet, apiv1.GrantsPath+"?mine=true", agent, nil, http.StatusOK))
+		if len(mine.Items) != 1 || mine.Items[0].Name != kube.Name {
+			t.Errorf("mine %+v", mine)
+		}
+	})
+
+	t.Run("the schema's protocol default does not split identical requests", func(t *testing.T) {
+		r := egressReq()
+		r.Ports = []apiv1.GrantPort{{Port: 443}}
+		eg := unmarshal[apiv1.Grant](t, l.want(http.MethodPost, apiv1.GrantsPath, agent, r, http.StatusCreated))
+		if len(eg.Ports) != 1 || eg.Ports[0].Protocol != "TCP" {
+			t.Errorf("ports %+v", eg.Ports)
+		}
+		r.Ports = []apiv1.GrantPort{{Port: 443, Protocol: "TCP"}}
+		r.FQDNs = []string{"b.example.com", "a.example.com"}
+		if again := unmarshal[apiv1.Grant](t, l.want(http.MethodPost, apiv1.GrantsPath, agent, r, http.StatusOK)); again.Name != eg.Name {
+			t.Errorf("merge %s, want %s", again.Name, eg.Name)
+		}
+	})
+
+	t.Run("a release sets spec.release, which the schema allows", func(t *testing.T) {
+		v := unmarshal[apiv1.Grant](t, l.want(http.MethodDelete, apiv1.GrantPath(kube.Name), agent, nil, http.StatusAccepted))
+		var g v1alpha1.AccessGrant
+		if err := l.k8s.Get(ctx, types.NamespacedName{Namespace: sessionNS, Name: kube.Name}, &g); err != nil {
+			t.Fatal(err)
+		}
+		if !v.Release || !g.Spec.Release || g.Spec.Kube == nil || len(g.Spec.Kube.Namespaces) != 2 {
+			t.Errorf("view %+v spec %+v", v, g.Spec)
+		}
+		l.want(http.MethodDelete, apiv1.GrantPath(kube.Name), agent, nil, http.StatusOK)
+	})
+}

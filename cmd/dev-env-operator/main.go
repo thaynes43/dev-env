@@ -7,8 +7,8 @@
 // session's pod and volume from dev-env-templates, rescues a pod by exec before a
 // suspend deletes it and archives a reaped session's volume after a verified
 // rescue (plan 01 step 5, D-51), and the /v1 API (plan 01 step 3,
-// internal/apiserver, D-46), which every replica serves on :8443. The broker
-// mode arrives in plan 07.
+// internal/apiserver, D-46), which every replica serves on :8443, with its grant
+// routes (plan 07 step 2, D-56). The broker mode arrives later in plan 07.
 package main
 
 import (
@@ -16,6 +16,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 
@@ -68,6 +69,7 @@ type options struct {
 	apiTLSDir          string
 	humanSA            string
 	clientSAs          []string
+	grantApprovalURL   string
 }
 
 func parseFlags(args []string) (options, error) {
@@ -89,6 +91,7 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.apiAddr, "api-bind-address", ":8443", "address of the /v1 API (HTTPS, D-46); 0 turns it off")
 	fs.StringVar(&o.apiTLSDir, "api-tls-dir", "/etc/dev-env-operator/api-tls", "directory holding the /v1 API's tls.crt and tls.key, the cert-manager Secret's mount")
 	fs.StringVar(&o.humanSA, "human-service-account", ownNamespace+"/dev-env-human", "Tom's ServiceAccount, <namespace>/<name>, whose token his laptop mints (D-05)")
+	fs.StringVar(&o.grantApprovalURL, "grant-approval-url", "", "base URL of the broker's approval page, such as https://dev-env.example.com/grants/; a pending grant's view links to it plus the grant's name (D-56). Empty links nothing")
 	clients := fs.String("client-service-accounts", "dev-agents/dev-env-workbench", "comma-separated ServiceAccounts, <namespace>/<name>, of trusted clients that are not sessions: the workbench, and the v1 pod (dev/dev-env) until cutover (D-46)")
 	if err := fs.Parse(args); err != nil {
 		return o, err
@@ -111,6 +114,12 @@ func parseFlags(args []string) (options, error) {
 			return o, fmt.Errorf("--client-service-accounts: %w", err)
 		}
 		o.clientSAs = refs
+		if o.grantApprovalURL != "" {
+			u, err := url.Parse(o.grantApprovalURL)
+			if err != nil || u.Scheme != "https" || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
+				return o, fmt.Errorf("--grant-approval-url: %q is not an https URL with a host and no query", o.grantApprovalURL)
+			}
+		}
 	}
 	return o, nil
 }
@@ -187,8 +196,9 @@ func run(args []string) error {
 				SessionNamespace:      o.sessionNamespace,
 				SessionServiceAccount: controller.ServiceAccountName,
 			},
-			Templates: apiserver.TemplatesFrom(mgr.GetClient(), templatesKey),
-			Log:       ctrl.Log.WithName("api"),
+			Templates:        apiserver.TemplatesFrom(mgr.GetClient(), templatesKey),
+			Log:              ctrl.Log.WithName("api"),
+			GrantApprovalURL: o.grantApprovalURL,
 		}
 		runner := &apiserver.Runner{
 			Addr:     o.apiAddr,

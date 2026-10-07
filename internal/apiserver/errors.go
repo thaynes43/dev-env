@@ -48,6 +48,10 @@ func internal(format string, args ...any) *apiError {
 func invalid(fields ...apiv1.FieldError) *apiError {
 	msgs := make([]string, 0, len(fields))
 	for _, f := range fields {
+		if f.Field == "" {
+			msgs = append(msgs, f.Message)
+			continue
+		}
 		msgs = append(msgs, f.Field+": "+f.Message)
 	}
 	e := newError(http.StatusUnprocessableEntity, apiv1.CodeInvalid, "%s", strings.Join(msgs, "; "))
@@ -64,6 +68,18 @@ func fieldError(field, format string, args ...any) apiv1.FieldError {
 // the schema's own messages, renamed from spec.<field> to the request's names, so
 // the API reports the CEL rules rather than restating them.
 func fromKubeError(err error, what string) *apiError {
+	return kubeError(err, what, requestField)
+}
+
+// fromGrantKubeError is fromKubeError for AccessGrants: an Invalid from their
+// schema (D-54) names the fields of a grant request (grantRequestField).
+func fromGrantKubeError(err error, what string) *apiError {
+	return kubeError(err, what, grantRequestField)
+}
+
+// kubeError is fromKubeError with rename turning an object's field path into the
+// request's field name.
+func kubeError(err error, what string, rename func(string) string) *apiError {
 	var ae *apiError
 	if errors.As(err, &ae) {
 		return ae
@@ -75,7 +91,7 @@ func fromKubeError(err error, what string) *apiError {
 	st := status.Status()
 	switch {
 	case apierrors.IsInvalid(err):
-		return invalid(statusCauses(st)...)
+		return invalid(statusCauses(st, rename)...)
 	case apierrors.IsNotFound(err):
 		return notFound("%s: not found", what)
 	case apierrors.IsTimeout(err), apierrors.IsServerTimeout(err), apierrors.IsTooManyRequests(err), apierrors.IsServiceUnavailable(err):
@@ -88,11 +104,11 @@ func fromKubeError(err error, what string) *apiError {
 }
 
 // statusCauses lists an Invalid status's causes as request fields.
-func statusCauses(st metav1.Status) []apiv1.FieldError {
+func statusCauses(st metav1.Status, rename func(string) string) []apiv1.FieldError {
 	var out []apiv1.FieldError
 	if st.Details != nil {
 		for _, c := range st.Details.Causes {
-			out = append(out, apiv1.FieldError{Field: requestField(c.Field), Message: c.Message})
+			out = append(out, apiv1.FieldError{Field: rename(c.Field), Message: c.Message})
 		}
 	}
 	if len(out) == 0 {
@@ -113,6 +129,25 @@ func requestField(path string) string {
 		return "name"
 	}
 	return path
+}
+
+// grantRequestField renames an AccessGrant field path to a grant request's
+// name: spec.kube.namespaces[0] is namespaces[0], spec.egress.ports[0].port is
+// ports[0].port, spec.credential.name is credential, and a rule on spec, kube or
+// egress as a whole names no field.
+func grantRequestField(path string) string {
+	p := requestField(path)
+	switch {
+	case p == "kube", p == "egress":
+		return ""
+	case strings.HasPrefix(p, "kube."):
+		return strings.TrimPrefix(p, "kube.")
+	case strings.HasPrefix(p, "egress."):
+		return strings.TrimPrefix(p, "egress.")
+	case p == "credential", strings.HasPrefix(p, "credential."):
+		return "credential"
+	}
+	return p
 }
 
 // writeJSON writes v with the given status.

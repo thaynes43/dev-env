@@ -25,10 +25,17 @@ func TestParseFlagsAPI(t *testing.T) {
 		{"--human-service-account=dev-env-human"},
 		{"--human-service-account="},
 		{"--api-tls-dir="},
+		{"--grant-approval-url=http://dev-env.example.com/grants/"},
+		{"--grant-approval-url=dev-env.example.com/grants/"},
+		{"--grant-approval-url=https:///grants/"},
 	} {
 		if _, err := parseFlags(bad); err == nil {
 			t.Errorf("%v accepted", bad)
 		}
+	}
+	o, err = parseFlags([]string{"--grant-approval-url=https://dev-env.example.com/grants/"})
+	if err != nil || o.grantApprovalURL != "https://dev-env.example.com/grants/" {
+		t.Errorf("the approval page: %q %v", o.grantApprovalURL, err)
 	}
 	if _, err := parseFlags([]string{"--api-bind-address=0", "--api-tls-dir=", "--human-service-account="}); err != nil {
 		t.Errorf("with the API off its flags are not checked: %v", err)

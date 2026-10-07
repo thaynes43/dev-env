@@ -102,7 +102,7 @@ func newFixtureWith(t *testing.T, funcs interceptor.Funcs, objs ...client.Object
 	f.c = fake.NewClientBuilder().
 		WithScheme(testScheme).
 		WithObjects(objs...).
-		WithStatusSubresource(&v1alpha1.AgentSession{}).
+		WithStatusSubresource(&v1alpha1.AgentSession{}, &v1alpha1.AccessGrant{}).
 		WithInterceptorFuncs(funcs).
 		Build()
 	f.auth = fakeAuth{

@@ -52,7 +52,7 @@ internal/controller/     the AgentSession reconciler: each session's pod and vol
                          5.1 (no owner reference to the operator; no pod or volume write or delete outside the guards;
                          delete and suspend wait for rescue); a fake rescuer stands in for exec
 internal/apiserver/      the operator's /v1 API (D-46): HTTPS runnable, TokenReview auth, caller classes, sessions,
-                         heartbeat and fleet handlers. Unit tests use the fake client; its envtest suite mints real
+                         heartbeat, fleet and grants (D-56) handlers. Unit tests use the fake client; its envtest suite mints real
                          tokens and serves through a manager wired as the operator's
 internal/apiserver/apiv1/  the API's wire types, error codes and Claude effort table, standard library only, for agent-run
 internal/agentrun/       agent-run's commands (D-50): -p, list, show, reap, fleet; finds the API and a token in a session

@@ -1,6 +1,6 @@
 // Package apiv1 holds the wire types of the operator's /v1 API (DESIGN-001 3.4,
-// D-46): the requests and responses of /v1/sessions and /v1/fleet, and the error
-// document every refusal carries. agentd's heartbeat body is
+// D-46, D-56): the requests and responses of /v1/sessions, /v1/fleet and
+// /v1/grants, and the error document every refusal carries. agentd's heartbeat body is
 // protocol.Status (internal/agentd/protocol, D-41).
 //
 // It depends on the standard library only, so agent-run (plan 01 step 7), which
@@ -262,11 +262,12 @@ const (
 	CodeUnauthenticated = "unauthenticated"
 	// CodeForbidden (403): the caller may not do this.
 	CodeForbidden = "forbidden"
-	// CodeNotFound (404): no such session or route.
+	// CodeNotFound (404): no such session, grant or route.
 	CodeNotFound = "not_found"
 	// CodeMethodNotAllowed (405).
 	CodeMethodNotAllowed = "method_not_allowed"
-	// CodeConflict (409): the idempotency key was used for a different request.
+	// CodeConflict (409): the idempotency key was used for a different request,
+	// or a session being reaped asked for a grant.
 	CodeConflict = "conflict"
 	// CodeTooLarge (413): the body is over the route's limit.
 	CodeTooLarge = "too_large"
@@ -276,7 +277,7 @@ const (
 	// names each field at fault.
 	CodeInvalid = "invalid"
 	// CodeLimitExceeded (429): a limit that frees up later, such as a session's
-	// four running children.
+	// four running children or its three pending grants.
 	CodeLimitExceeded = "limit_exceeded"
 	// CodeInternal (500).
 	CodeInternal = "internal"
