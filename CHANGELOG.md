@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.0.1](https://github.com/thaynes43/dev-env/compare/v2.0.0...v2.0.1) (2026-10-07)
+
+
+### Bug Fixes
+
+* **deps:** update k8s.io/utils digest to cf1189d ([#47](https://github.com/thaynes43/dev-env/issues/47)) ([51bfdbf](https://github.com/thaynes43/dev-env/commit/51bfdbfcc670510a3be15bc358dd43fbc0cd103b))
+* **deps:** update module github.com/go-logr/logr to v1.4.4 ([#50](https://github.com/thaynes43/dev-env/issues/50)) ([7d74713](https://github.com/thaynes43/dev-env/commit/7d747131c188d1d87c80c0d07d72e2f54b95931c))
+* **deps:** update sigs.k8s.io/json digest to 11ed52e ([#48](https://github.com/thaynes43/dev-env/issues/48)) ([195a5b3](https://github.com/thaynes43/dev-env/commit/195a5b334f867611c74fff846b9c663751f2b9d1))
+
 ## 2.0.0 (2026-10-07)
 
 
