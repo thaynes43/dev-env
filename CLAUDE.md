@@ -114,7 +114,9 @@ the release PR (`gh pr close <n> && gh pr reopen <n>`) as haynes-dev-bot so
 themselves, like any other PR, once they have checked that the version and changelog
 are sane and `CI - Success` is green on its head (Tom, 2026-10-07: "Merge, and let
 agents merge releases"). Merging it tags the release, so watch `publish-agent.yml` on
-the new tag and confirm its `cosign verify` step passed. Renovate auto-merge is off until the ruleset requires `CI - Success`;
+the new tag and confirm its `cosign verify` step passed. If no run appears (a tag made
+with the `GITHUB_TOKEN` fallback starts none), start one with
+`gh workflow run publish-agent.yml --ref v2.x.y`. Renovate auto-merge is off until the ruleset requires `CI - Success`;
 `.github/renovate.json5` says how to turn it on.
 
 The agent image is `images/agent/Dockerfile` (D-53): v1's Dockerfile plus `tini`, agentd,
