@@ -1397,7 +1397,8 @@ minutes, the operator stops creating them and reports `loop suspected`.
 - **The routes.** `POST /v1/sessions/{name}/suspend` and `/resume` (3.4), with no
   body. Each patches `spec.operatingMode`, the field D-39 lets a client change, with
   the resourceVersion as a precondition. A suspend also writes the annotation
-  `dev-env.haynesops.com/suspended-by` (the caller), and a resume removes it. The
+  `dev-env.haynesops.com/suspended-by` (the caller); a resume removes it and writes
+  `dev-env.haynesops.com/resumed-at`. The
   answer is 202 with the session once the change is made, 200 when the session is
   already in that mode, and 409 for a session being reaped: a reap is final. Any
   caller may suspend or resume any session, as any caller may reap one (D-46),
@@ -1408,8 +1409,8 @@ minutes, the operator stops creating them and reports `loop suspected`.
   for the new pod, as a create does, and prints how to attach.
 - **The idle timer.** While a session's own pod runs and is Ready and its agent has
   reported a state other than `busy` (D-59), the operator computes a deadline. It is
-  the newest of the agent's `lastActivity`, the pod's start and the session's
-  creation, plus the window. The window is `spec.lifecycle.idleSuspendAfter`, else
+  the newest of the agent's `lastActivity`, the pod's start, the session's creation
+  and the API's last resume (`resumed-at`), plus the window. The window is `spec.lifecycle.idleSuspendAfter`, else
   the templates' `lifecycle.taskIdleSuspendAfter` for a task and
   `lifecycle.idleSuspendAfter` for the other modes, else D-09's defaults (1h and
   72h). Counting from the pod's start gives a resumed session a whole window. At the
@@ -1417,6 +1418,13 @@ minutes, the operator stops creating them and reports `loop suspected`.
   `idle-timer`, and emits an `IdleSuspend` event. Before it, it asks to be called
   back at the deadline; heartbeats reconcile the session every minute as well. An
   agent that is busy, or has never reported, is never suspended by the timer.
+- **A resume during an idle suspend's rescue.** The rescue takes minutes. A resume
+  that lands meanwhile keeps the old pod, and the rescue's record is dropped (D-51).
+  That pod's start and activity are old, so without `resumed-at` the timer would
+  suspend it again at once and undo the resume. The rescue's `--stop-agent` has
+  stopped the agent in that pod, though, so it runs without one until the timer
+  suspends it a window after the resume. A suspend and a resume then give it a new
+  pod that resumes the conversation. The race is narrow, and nothing is lost.
 - **The one spec write.** D-39 says the operator never writes spec. The idle timer is
   the exception: it changes `operatingMode` only, exactly as a client's suspend does,
   on the session's own timer. Everything else the operator decides still goes into

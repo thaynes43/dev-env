@@ -3,6 +3,7 @@ package apiserver
 import (
 	"context"
 	"net/http"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -62,6 +63,10 @@ func (s *Server) setOperatingMode(ctx context.Context, r *http.Request, c *calle
 			sess.Annotations[v1alpha1.AnnotationSuspendedBy] = c.String()
 		} else {
 			delete(sess.Annotations, v1alpha1.AnnotationSuspendedBy)
+			if sess.Annotations == nil {
+				sess.Annotations = map[string]string{}
+			}
+			sess.Annotations[v1alpha1.AnnotationResumedAt] = s.now().UTC().Format(time.RFC3339)
 		}
 		err := s.Client.Patch(ctx, &sess, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
 		if apierrors.IsConflict(err) {

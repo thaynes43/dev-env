@@ -352,8 +352,8 @@ func (r *Reconciler) idleTimer(ctx context.Context, s *v1alpha1.AgentSession, t 
 // reported a state that is not busy: a busy agent, or one that has not
 // reported yet, is never suspended. The window is spec.lifecycle's, else the
 // templates' for the mode (D-09: a task after 1h, the others after 72h). It
-// counts from the newest of the agent's lastActivity and the pod's start, so a
-// resumed session gets a whole window.
+// counts from the newest of the agent's lastActivity, the pod's start and the
+// API's last resume, so a resumed session gets a whole window.
 func idleDeadline(s *v1alpha1.AgentSession, t *templates.Templates, pod owned[*corev1.Pod]) (time.Time, string, bool) {
 	a := s.Status.Agent
 	if pod.missing || pod.foreign != "" || isHoldPod(pod.obj) || !pod.obj.DeletionTimestamp.IsZero() ||
@@ -370,6 +370,11 @@ func idleDeadline(s *v1alpha1.AgentSession, t *templates.Templates, pod owned[*c
 	}
 	if a.LastActivity != nil && a.LastActivity.After(last) {
 		last = a.LastActivity.Time
+	}
+	// A resume that landed while an idle suspend's rescue ran keeps the old
+	// pod, whose start and activity are old: count from the resume as well.
+	if at, err := time.Parse(time.RFC3339, s.Annotations[v1alpha1.AnnotationResumedAt]); err == nil && at.After(last) {
+		last = at
 	}
 	why := fmt.Sprintf("the agent was %s and nothing happened since %s, %s ago; the idle window is %s (D-09)",
 		a.Status, last.UTC().Format(time.RFC3339), time.Since(last).Round(time.Minute), window)

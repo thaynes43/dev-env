@@ -38,6 +38,11 @@ const (
 	// for the operator's idle timer, else the API caller. The API removes it on
 	// a resume.
 	AnnotationSuspendedBy = LabelPrefix + "suspended-by"
+	// AnnotationResumedAt is when the API last resumed the session (RFC 3339,
+	// D-60). The idle timer counts from it too, so a resume that lands while
+	// an idle suspend's rescue still runs, and keeps the old pod, is not
+	// suspended again at once.
+	AnnotationResumedAt = LabelPrefix + "resumed-at"
 
 	// LabelAppName and LabelManagedBy are the well-known labels; session pods
 	// and volumes carry AppNameSession and ManagedByOperator.
