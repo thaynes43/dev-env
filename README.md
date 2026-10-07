@@ -13,8 +13,19 @@ and memory limits, created, upgraded and pruned by an operator that the `agent-r
 CLI calls from anywhere. This repo will publish the operator, the CLI and the agent
 image (`ghcr.io/thaynes43/dev-env`); haynes-ops deploys them.
 
-**Status: ADR-001 Accepted 2026-10-06; the Go skeleton is built, nothing runs yet.**
+**Status: phase 1 built (2026-10-07).** ADR-001 was Accepted on 2026-10-06. Plan 01,
+task mode, is done: the operator and the keeper run in the cluster, the agent image
+`ghcr.io/thaynes43/dev-env:2.0.0` is released, and `agent-run -p` from the v1 pod
+starts a session pod on a worker that does its task and opens its PR. Plan 02
+(interactive sessions and lifecycle) is next.
 Start at [`.agents/HANDOFF.md`](.agents/HANDOFF.md); the saga is
 [`.agents/sagas/distributed-dev-env/`](.agents/sagas/distributed-dev-env/README.md).
 
 Agents: see [CLAUDE.md](CLAUDE.md) (Codex: [AGENTS.md](AGENTS.md)).
+
+## License
+
+The code and docs in this repo are under the [MIT License](LICENSE), copyright Tom
+Haynes. The published images also carry third-party software under its own licenses,
+listed in [`images/THIRD_PARTY.md`](images/THIRD_PARTY.md). The agent image bundles
+Claude Code, which is proprietary to Anthropic and not covered by this repo's license.

@@ -6,8 +6,11 @@ name: Claude Code Review
 # themselves once required checks are green.
 #
 # Safe by construction: plain `pull_request` only (never pull_request_target),
-# so fork PRs get no secrets and skip; the job also skips drafts and bot-authored
-# dependency PRs, and finishes green when CLAUDE_CODE_OAUTH_TOKEN is not set.
+# so fork PRs get no secrets and skip; the job also skips drafts, bot-authored
+# dependency PRs and release-please's release PRs, and finishes green when
+# CLAUDE_CODE_OAUTH_TOKEN is not set. A release PR holds only the generated changelog
+# and manifest, and claude-code-action refuses a PR its bot author opened (it failed
+# that way on #52, 2026-10-07).
 #
 # Source: haynes-ops .agents/templates/github/claude-code-review.yml, set up per
 # haynes-ops .agents/runbooks/new-repo-setup.md. Actions are SHA-pinned in the
@@ -31,7 +34,8 @@ jobs:
       ${{ !github.event.pull_request.draft
       && github.event.pull_request.head.repo.full_name == github.repository
       && github.event.pull_request.user.login != 'dependabot[bot]'
-      && github.event.pull_request.user.login != 'renovate[bot]' }}
+      && github.event.pull_request.user.login != 'renovate[bot]'
+      && github.event.pull_request.user.login != 'thaynes43-dev-env-release[bot]' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -57,15 +61,16 @@ jobs:
       - name: Checkout repository
         if: steps.gate.outputs.present == 'true'
         # Keep the default credential persistence: claude-code-action runs `git fetch origin
-        # <pr-branch>` before it sets up its own git auth, and this private repo refuses that
-        # without a credential. Do NOT add `persist-credentials: false`.
+        # <pr-branch>` before it sets up its own git auth, and a private repo refuses that
+        # without a credential (this one was private until 2026-10-07). Do NOT add
+        # `persist-credentials: false`.
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Run Claude Code Review
         if: steps.gate.outputs.present == 'true'
-        uses: anthropics/claude-code-action@cab360f6565aa35a51d6ce9e43f1f4287c0a32ea # v1.0.241
+        uses: anthropics/claude-code-action@58985842b834ed26087302ba27d07bc24ca8697a # v1.0.244
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: "haynes-dev-bot"
@@ -105,9 +110,10 @@ jobs:
             CLAUDE.md when they do.
 
             **CRITICAL - block the merge**
-            - Secrets or PII in code, docs, fixtures, logs or workflow files. In this
-              repo that includes Claude Max credentials (`.credentials.json`
-              contents, OAuth login URLs with `code_challenge`/`state`, pasted login
+            - Secrets or PII in code, docs, fixtures, logs or workflow files. The repo
+              is public, so this also covers household details, private addresses
+              and pasted session transcripts. In this repo that includes Claude Max
+              credentials (`.credentials.json` contents, OAuth login URLs with `code_challenge`/`state`, pasted login
               codes), `CLAUDE_CODE_OAUTH_TOKEN` values, Codex `auth.json` contents,
               GitHub App private keys or minted `ghs_` tokens, 1Password field
               values, SSH keys, and the Unraid/Proxmox tokens the agent pods use.
@@ -144,6 +150,8 @@ jobs:
               ids such as `claude-opus-5-5`.
             - Tool versions in a Dockerfile without a `# renovate:` annotation, or a
               version number placed between that annotation and its ARG.
+            - A Dockerfile that adds or removes a bundled component without the
+              matching change to `images/THIRD_PARTY.md`.
             - Boot-path scripts that can block or exit non-zero (the v1 boot path must
               stay fast and never fatal; slow work belongs after readiness).
             - Behavior change with no test change where the code has tests.
