@@ -120,6 +120,14 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	if len(req.Prompt) > protocol.MaxPromptBytes {
 		add("prompt", "%d bytes, more than %d: a session's environment carries it (D-40)", len(req.Prompt), protocol.MaxPromptBytes)
 	}
+	if req.Restore != "" {
+		if _, _, err := protocol.ParseRescueID(req.Restore); err != nil {
+			add("restore", "%v", err)
+		}
+	}
+	if protocol.IsRescueSnapshot(req.Base) {
+		add("base", "%q is a rescued snapshot of uncommitted work, which can hold secrets, and the session's branch may be pushed: a session never branches from one (D-67)", req.Base)
+	}
 	if req.IdempotencyKey != "" {
 		for _, msg := range validation.IsValidLabelValue(req.IdempotencyKey) {
 			add("idempotencyKey", "%s", msg)
@@ -137,6 +145,7 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 		Size:    v1alpha1.SizeClass(req.Size),
 		Profile: req.Profile,
 		Parent:  c.parent,
+		Restore: req.Restore,
 	}
 	if l := req.Limits; l != nil {
 		spec.Limits = &v1alpha1.SessionLimits{MaxTurns: l.MaxTurns}

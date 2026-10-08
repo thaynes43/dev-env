@@ -37,6 +37,12 @@ func (s *Server) createSession(ctx context.Context, w http.ResponseWriter, r *ht
 	if err != nil {
 		return 0, nil, err
 	}
+	// A restore is checked against the shelf before the lock: it execs.
+	if req.Restore != "" {
+		if err := s.checkRestore(ctx, req, sess); err != nil {
+			return 0, nil, err
+		}
+	}
 
 	s.createMu.Lock()
 	defer s.createMu.Unlock()

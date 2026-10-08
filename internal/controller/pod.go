@@ -351,6 +351,8 @@ func sessionDocument(s *v1alpha1.AgentSession) (string, error) {
 		Model:  s.Spec.Model,
 		Effort: s.Spec.Effort,
 		Prompt: s.Spec.Prompt,
+		// The rescue the session restores from (D-67).
+		Restore: s.Spec.Restore,
 	}
 	if l := s.Spec.Limits; l != nil {
 		d.Limits = &protocol.Limits{MaxTurns: l.MaxTurns}

@@ -32,7 +32,19 @@ const (
 )
 
 func (a *app) create(ctx context.Context, args []string) error {
-	cmd := newCommand("run", outputName, outputJSON)
+	return a.createSession(ctx, args, false)
+}
+
+// createSession is the create path of agent-run <repo> -p and of rescue
+// restore (D-67). A restore is a create with the rescue's id as its one
+// positional argument and Restore set on the request; every other flag, check
+// and printed line is create's own.
+func (a *app) createSession(ctx context.Context, args []string, restoring bool) error {
+	cmdName := "run"
+	if restoring {
+		cmdName = "rescue"
+	}
+	cmd := newCommand(cmdName, outputName, outputJSON)
 	fs := cmd.fs
 	var (
 		prompt, promptFile, repo, agent, model, effort, base, size, profile, timeout, key string
@@ -65,7 +77,17 @@ func (a *app) create(ctx context.Context, args []string) error {
 		return err
 	}
 
+	var rescueID, rescueSession string
 	switch {
+	case restoring:
+		if len(pos) != 1 {
+			return usageError("rescue restore takes one rescue id, <session>/<stamp>; agent-run rescue list shows them")
+		}
+		var perr error
+		if rescueSession, _, perr = protocol.ParseRescueID(pos[0]); perr != nil {
+			return usageError("rescue restore: %v; agent-run rescue list shows the ids", perr)
+		}
+		rescueID = pos[0]
 	case len(pos) > 1:
 		return usageError("one repository, got %q; quote the task: -p \"<task>\"", pos)
 	case len(pos) == 1 && isCommand(pos[0]):
@@ -105,7 +127,7 @@ func (a *app) create(ctx context.Context, args []string) error {
 	if len(prompt) > protocol.MaxPromptBytes {
 		return usageError("the task is %d bytes, more than %d: a session's environment carries it (D-40)", len(prompt), protocol.MaxPromptBytes)
 	}
-	if repo == "" {
+	if repo == "" && !restoring {
 		return usageError("say which repository: --repo <name>, for example --repo haynes-ops")
 	}
 	if strings.Contains(repo, "/") {
@@ -182,7 +204,17 @@ func (a *app) create(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	var hints []string
+	if restoring {
+		var rr apiv1.RescueRepo
+		if rr, err = a.resolveRestore(ctx, c, rescueID, rescueSession, repo); err != nil {
+			return err
+		}
+		repo = rr.Repo
+		hints = restoreHints(rescueID, rescueSession, rr, base != "")
+	}
 	req := apiv1.CreateSessionRequest{
+		Restore:        rescueID,
 		Repo:           repo,
 		Base:           base,
 		Agent:          agent,
@@ -226,6 +258,11 @@ func (a *app) create(ctx context.Context, args []string) error {
 			a.outf("Attach to its TUI with: agent-run attach %s (detach with ctrl-b d)\n", sess.Name)
 		} else {
 			a.outf("Follow it with: agent-run show %s\n", sess.Name)
+		}
+	}
+	if cmd.c.output == outputText {
+		for _, h := range hints {
+			a.outf("%s\n", h)
 		}
 	}
 	if waitErr != nil {

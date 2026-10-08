@@ -61,6 +61,9 @@ type Server struct {
 	Exec PodExecutor
 	// Policy names the callers the API serves.
 	Policy Policy
+	// Shelf lists the rescues on the shared volume, for GET /v1/rescues and a
+	// restore (D-67). Nil answers both with 503.
+	Shelf RescueShelf
 	// Templates returns the current templates, or why they are unusable. Nil
 	// skips the profile check and leaves the fleet's revision unknown.
 	Templates func(context.Context) (*templates.Templates, error)
@@ -136,6 +139,9 @@ func (s *Server) Handler() http.Handler {
 	}}))
 	mux.Handle(apiv1.ActivitiesPath+"/{name}", s.serve(route{methods: map[string]handler{
 		http.MethodDelete: s.endActivity,
+	}}))
+	mux.Handle(apiv1.RescuesPath, s.serve(route{methods: map[string]handler{
+		http.MethodGet: s.listRescues,
 	}}))
 	mux.Handle(apiv1.FleetPath, s.serve(route{methods: map[string]handler{
 		http.MethodGet: s.fleet,

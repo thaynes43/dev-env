@@ -126,7 +126,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.idempotencyKey) || has(self.caller)",message="idempotencyKey is for summoned sessions only: set caller and lane"
 // +kubebuilder:validation:XValidation:rule="!has(self.caller) || self.mode != 'local'",message="a summoned session runs in task or remote mode, never local"
 // +kubebuilder:validation:XValidation:rule="!has(self.caller) || (has(self.profile) && self.profile != 'full')",message="a summoned session names its profile, and it is never full (D-36)"
-// +kubebuilder:validation:XValidation:rule="has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort) && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size) && has(self.profile) == has(oldSelf.profile) && has(self.tools) == has(oldSelf.tools) && has(self.llm) == has(oldSelf.llm) && has(self.parent) == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller) && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey) == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits)",message="immutable after create: no spec field may be added or removed, except operatingMode and lifecycle"
+// +kubebuilder:validation:XValidation:rule="has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort) && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size) && has(self.profile) == has(oldSelf.profile) && has(self.tools) == has(oldSelf.tools) && has(self.llm) == has(oldSelf.llm) && has(self.parent) == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller) && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey) == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits) && has(self.restore) == has(oldSelf.restore)",message="immutable after create: no spec field may be added or removed, except operatingMode and lifecycle"
 type AgentSessionSpec struct {
 	// Repo is the repository the session works in, for example haynes-ops: a
 	// name, not a path (it becomes a directory in the pod).
@@ -263,6 +263,15 @@ type AgentSessionSpec struct {
 	// Lifecycle overrides the default timers of D-09.
 	// +optional
 	Lifecycle *Lifecycle `json:"lifecycle,omitempty"`
+
+	// Restore is a rescue on the shared volume, <session>/<stamp> (D-67). On
+	// the session's first boot agentd fetches that rescue's bundle for Repo
+	// into refs/rescued/*, after checking it against the rescue's manifest.
+	// +kubebuilder:validation:MaxLength=80
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?/[0-9]{8}-[0-9]{4}(-[0-9]+)?$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
+	// +optional
+	Restore string `json:"restore,omitempty"`
 }
 
 // LLMSpec names the LLM pool an opencode session leases.

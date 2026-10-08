@@ -37,6 +37,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/grantexpiry"
 	"github.com/thaynes43/dev-env/internal/podexec"
+	"github.com/thaynes43/dev-env/internal/shelf"
 	"github.com/thaynes43/dev-env/internal/templates"
 	"github.com/thaynes43/dev-env/internal/version"
 )
@@ -215,6 +216,13 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	// The shelf pod holds the shared volume: rescues are listed, restored
+	// from and pruned through it (D-67). The pruner runs in the leader.
+	rescueShelf := &shelf.Shelf{Reader: mgr.GetAPIReader(), Exec: podExec, Namespace: o.sessionNamespace}
+	if err := mgr.Add(&shelf.Pruner{Shelf: rescueShelf, Reader: mgr.GetAPIReader(), Namespace: o.sessionNamespace,
+		Templates: apiserver.TemplatesFrom(mgr.GetClient(), templatesKey), Log: ctrl.Log.WithName("shelf")}); err != nil {
+		return err
+	}
 	if o.apiAddr != "0" {
 		api := &apiserver.Server{
 			Client: mgr.GetClient(),
@@ -230,6 +238,7 @@ func run(args []string) error {
 				ActivityNamespace: o.templatesNamespace,
 			},
 			Exec:             podExec,
+			Shelf:            rescueShelf,
 			Templates:        apiserver.TemplatesFrom(mgr.GetClient(), templatesKey),
 			Log:              ctrl.Log.WithName("api"),
 			GrantApprovalURL: o.grantApprovalURL,

@@ -33,6 +33,7 @@ func view(s *v1alpha1.AgentSession, withPrompt bool) apiv1.Session {
 		CreatedAt:      s.CreationTimestamp.UTC(),
 		Reaping:        !s.DeletionTimestamp.IsZero(),
 		SuspendedBy:    s.Annotations[v1alpha1.AnnotationSuspendedBy],
+		Restore:        s.Spec.Restore,
 		Phase:          phaseOf(s),
 		Pending:        s.Status.PendingReason,
 		Node:           s.Status.NodeName,
@@ -41,6 +42,14 @@ func view(s *v1alpha1.AgentSession, withPrompt bool) apiv1.Session {
 	}
 	if withPrompt {
 		v.Prompt = s.Spec.Prompt
+	}
+	if t := s.Status.SuspendedAt; t != nil {
+		at := t.UTC()
+		v.SuspendedAt = &at
+	}
+	if t := s.Status.ArchivedAt; t != nil {
+		at := t.UTC()
+		v.ArchivedAt = &at
 	}
 	if l := s.Spec.Limits; l != nil {
 		v.Limits = &apiv1.Limits{MaxTurns: l.MaxTurns}

@@ -314,7 +314,7 @@ HTTPS with a cert-manager certificate, JSON, versioned under `/v1`.
 | `GET/POST/DELETE /v1/activities` | `declare-activity` ([6.9](#69-declare-activity)). |
 | `GET /v1/auth` | Status of each credential: present, expires, days left; for the static token, its mint date and days left (V-12). Never a value. |
 | `POST /v1/auth/{claude,codex}/login` and `…/login/code` | The login ceremony. The console (3.8) is the normal way in; this is the laptop fallback, Tom only ([6.2](#62-claude-max-login-and-its-monthly-renewal)). |
-| `GET /v1/rescues`, `POST /v1/rescues/{id}/restore` | List rescue bundles; start a new session from one. |
+| `GET /v1/rescues[?session=]` | List rescue bundles, read through the shelf pod (D-67). A restore is `POST /v1/sessions` with `restore` (D-67). |
 | `GET /v1/tools`, `POST /v1/tools/sessions`, `DELETE /v1/tools/sessions/{id}` | List tool pools; attach (create a ToolSession for the caller); release ([8.1](#81-tool-pods)). |
 | `POST /v1/grants`, `GET /v1/grants`, `GET/DELETE /v1/grants/{id}` | Request, list, inspect or release an access grant ([6.12](#612-access-no-prompts-in-the-pod-control-at-the-platform)). Approving is not in this API: it happens on the broker's page. |
 | `POST /v1/leases`, `GET /v1/leases`, `DELETE /v1/leases/{id}` | LLM leases ([8.3](#83-llm-pools-and-leases)). |
@@ -834,8 +834,8 @@ per clone, into a directory per rescue on the shared volume, and checks it there
   verify`, then `git fetch <bundle> 'refs/*:refs/rescued/*'`. The tests restore an
   uncommitted file this way, after origin has moved on, and a ref whose branch origin
   deleted, from a `blob:none` clone with origin gone.
-- Not here: pruning bundles after D-09's 30 days, and listing them (`GET
-  /v1/rescues`), go with plan 02's `rescue list|restore`.
+- Listing, pruning and restoring the bundles: D-67, with plan 02's
+  `rescue list|restore`.
 
 The agent runs with no approval prompts (D-23). Pod spec, inherited from v1 where
 the lesson still applies: non-root uid 1000,
@@ -1379,7 +1379,7 @@ sign of activity; the operator's timers judge the window.**
 | task session finished | suspended after 1 h | its log and branch are what matter |
 | interactive or remote session idle | suspended after 3 days | v1's sweep window (Tom, 2026-09-25) |
 | suspended session | archived after 7 days | resume window; RBD is thin, so a parked volume costs only its written bytes |
-| rescue bundle | kept 30 days | long enough to notice a loss |
+| rescue bundle | kept 30 days, and as long as its session exists (D-67) | long enough to notice a loss |
 | outdated revision | drained at the next idle moment (Q-03); summoned sessions are never drained | section 5.2, 3.7 |
 | summoned session, outcome `done` | kept joinable 1 day, then rescued and reaped | V-15 (3.7) |
 | summoned session, outcome `failed` or `escalated` | kept joinable 7 days, then rescued and reaped | V-15: Tom joins failures after the fact |
@@ -1698,8 +1698,81 @@ is never resumed.**
 - `agent-run resume <id>`: same volume, new pod, `claude --resume <session-id>`. The
   conversation, worktree and gitignored build output are all still there. An
   archived session is not resumed (D-62).
-- `agent-run rescue restore <bundle>`: a new session whose clone fetches the bundle.
-  Used after archive.
+- `agent-run rescue restore <session>/<stamp>`: a new session whose clone fetches the
+  bundle. Used after archive, or after a reap. D-67 has the details.
+
+**D-67 (2026-10-08, plan 02 step 11). A shelf pod lists and prunes the rescues; a
+restore is a new session that fetches one.**
+
+- **The shelf.** `dev-env-shelf` is a Deployment in `dev-agents`, from haynes-ops,
+  with one pod that runs `agentd shelf` from the agent image. It mounts only
+  `dev-env-shared`, at `/home/dev/.shared` as a session does. It has no
+  ServiceAccount token, no credentials, no network and a CPU limit. `agentd shelf`
+  refuses to start without the shared volume mounted (D-48's check), then waits.
+  The operator finds the pod by its label `app.kubernetes.io/name=dev-env-shelf`,
+  Running and Ready, and runs `agentd ctl rescues` and `agentd ctl prune` in it by
+  exec, as it rescues (D-51). It is a pod of its own because:
+  - the operator runs in `dev-env-system` and cannot mount a volume of `dev-agents`;
+  - a session pod may not exist, and it belongs to its session;
+  - a pod the operator made, like D-55's hold pod, would need its own guarded delete
+    and an upgrade path, which a Deployment already has.
+
+  Its image follows the templates' pin, under the same Renovate rule. Without a
+  shelf, `GET /v1/rescues` and a restore answer 503, and the pruner waits for the
+  next round.
+- **List.** `agentd ctl rescues [--session S]` prints every
+  `rescue/<session>/<name>/` as JSON, newest first. Each entry has its id
+  `<session>/<name>`, when it was made (the manifest's time, or the directory's for
+  a rescue without one), whether it finished (has a manifest, D-48), the manifest,
+  and its size. Paths that do not fit that layout are listed as unrecognized and
+  never touched. `GET /v1/rescues[?session=]` returns that list and adds, for each
+  rescue, whether its session still exists and, if not, when the pruner removes it.
+  Any caller that may list sessions may list rescues. The bundles themselves never
+  leave the cluster (D-10).
+- **Prune.** The operator's leader prunes every 6 hours, the first time 10 minutes
+  after it starts. It lists every AgentSession from the API server and reads
+  `lifecycle.bundleRetention` from the templates (D-09's 30 days). Then it sends
+  `agentd ctl prune` the retention and a keep list: every session, and every
+  session that one of them restores from, whose rescue a first boot may still need. agentd
+  removes each rescue directory, and each session log `logs/<session>.log` (D-65),
+  that is older than the retention and whose session is not on the list. A rescue's
+  age counts from the later of its manifest's time and its last change. A
+  session's emptied directory goes with its last rescue, and agentd refuses a
+  retention under 24 hours. A prune holds `.shelf.lock` on the shared volume's
+  root (`flock`, which CephFS keeps across clients) from its listing to its last
+  delete.
+  - **A bundle of a session that still exists is never pruned.** A suspended
+    session's archive relies on its bundle (D-62), and an archived session is
+    restored from it. So D-09's 30 days count from the rescue once its session is
+    gone. The newest rescue of a reaped session is the reap's own, so it gets all
+    30 days.
+- **Restore.** `POST /v1/sessions` with `restore: <session>/<name>` creates an
+  ordinary session: task or local, any agent. Whoever may create a session may
+  restore one. `spec.restore` (immutable) carries the id to agentd.
+  - **Before create.** The API checks the rescue through the shelf with `agentd ctl
+    hold-rescue <id>`. Under the same lock as a prune, the hold finds the rescue
+    and sets its directory's time to now. So a rescue is either gone before its
+    hold, and the restore is refused, or held before a prune reads its age, and
+    kept until the new session keeps it. The rescue must have finished, its manifest
+    must be complete, and it must hold a bundle for the session's repo. `agent-run rescue restore` takes the repo from the rescue
+    when it holds one clone.
+  - **First boot.** After the clone, agentd checks the bundle's size and SHA-256
+    against the manifest and runs `git bundle verify`. Then it fetches
+    `refs/*:refs/rescued/*` (D-48's recipe). A failure fails the boot step before
+    the worktree exists, so the next boot tries again.
+  - **Why a field on create.** The design's `POST /v1/rescues/{id}/restore`
+    became this field: a restore is a create, with the same checks, caller rules
+    and idempotency.
+- **The base.** The request may give a base. If it does not, and the bundle holds
+  the old session's branch `refs/heads/agent/<session>`, the new worktree starts at
+  `refs/rescued/heads/agent/<session>`. Otherwise it starts at origin's default
+  branch.
+  - A rescued snapshot is never the base, asked for or not: a rescue branch
+    (`refs/rescued/heads/rescue/…`, D-10 step 1's uncommitted work and untracked
+    files) or a stash entry (`refs/rescued/agentd-rescue/…`). It can hold secrets,
+    and the session's branch may be pushed. The API refuses such a base, and so does
+    agentd's check of the session document, which the operator runs before it builds
+    a pod. A snapshot stays a ref to look at, and `agent-run rescue restore` says so.
 
 ## 5. Rolling updates
 
@@ -4234,3 +4307,4 @@ credential grants) was answered on 2026-10-07 too. ADR-001 was Accepted on
 | D-64 | One scoped CiliumNetworkPolicy per egress grant, separate FQDN/CIDR/endpoint rules with requested ports, source excluding hold pods; verified ownership and UID-precondition revoke; a separate operator expiry controller reads policies by name with get/delete-only RBAC and preserves audit records when the broker is unavailable | 6.12 |
 | D-65 | Messages and logs run agentd by exec in the session's running pod: `POST /v1/sessions/{name}/messages` → `agentd ctl deliver` (one bracketed paste and Enter into the Claude TUI, `codex queue` for Codex, 409 for a headless task), never retried by agent-run; `GET .../log?tail=N` → `agentd ctl log`; the log is copied to `~/.shared/logs/` | 6.8 |
 | D-66 | `Activity` CRD in `dev-env-system`: created only by `POST /v1/activities` with v1's limits enforced (scope required, 45m default, 8h cap, 2h for `cluster`), the declarer from the token, deleted by the operator at expiry; `declare-activity` is agent-run by another name; dev-env-ops reads both v1's files and the CRD | 6.9 |
+| D-67 | A `dev-env-shelf` Deployment in `dev-agents` mounts only the shared volume and runs `agentd shelf`; the operator lists (`GET /v1/rescues`) and prunes (leader, every 6 h, `lifecycle.bundleRetention`, never a bundle of a session that still exists, logs too) there by exec; a restore is `POST /v1/sessions` with `restore`, checked and held through the shelf under the prune's lock, and agentd fetches the bundle into `refs/rescued/*` on the first boot; the base defaults to the old session's rescued branch and is never a rescued snapshot (rescue branch or stash) | 4.5 |

@@ -17,6 +17,9 @@ Usage:
   agent-run reap <name>...                        rescue, stop and archive sessions
   agent-run suspend <name>...                     rescue and stop sessions, keeping their volumes
   agent-run resume <name>                         start a suspended session again, conversation intact
+  agent-run rescue list [--session <name>]        list the rescues on the shelf
+  agent-run rescue restore <session>/<stamp> (--local | -p "<task>")
+                                                  start a session that fetches a rescue
   declare-activity start "<what>" --scope <a,b>   declare dev work, so it is not taken for a fault
   agent-run attach <name>                         attach to a session's TUI (Tom only)
   agent-run detach <name>                         detach every client from it (Tom only)
@@ -136,6 +139,32 @@ takes no messages; it reports through its log and its PR. Any session or person
 may message any session. agent-run sends a message once and never retries it, so
 it is never delivered twice.
 `,
+	"rescue": `Usage: agent-run rescue list [--session <name>] [-o json]
+       agent-run rescue restore <session>/<stamp> (--local | -p "<task>") [--repo <name>] [flags]
+
+A rescue is the bundle of a session's work, written to the shared volume when the
+session is suspended or reaped (D-10, D-48). The bundles never leave the cluster.
+
+rescue list shows them, newest first: id, when it was made (UTC), the repos it
+holds a bundle for, its size, its state, and how long it is kept. The state is
+complete (every bundle written and verified), incomplete (finished, but a bundle
+is missing), unfinished (no manifest yet) or an error in the manifest. A rescue of
+a session that still exists is kept; once the session is gone, the operator prunes
+the rescue after the retention (D-09, 30 days). Paths under rescue/ that do not fit
+the layout are listed as unrecognized and never pruned.
+  --session <name>   only this session's rescues
+  -o json            the API's list as JSON
+
+rescue restore starts a new session that fetches one rescue (D-67). It is a run:
+it takes the same flags (-p or --local, --agent, --model, --effort, --base, --size,
+--wait and the rest; agent-run help run lists them). Only a complete rescue can be
+restored. The repo is the rescue's only clone, or --repo <name> when it holds several.
+On its first boot the new session's clone fetches the bundle into refs/rescued/. If
+you give no --base and the bundle holds the old session's branch, the worktree
+starts at refs/rescued/heads/agent/<session>. A rescue branch (uncommitted work,
+refs/rescued/heads/rescue/...) is never the base: look at it and copy from it, and
+never push it, because it can hold secrets (D-10).
+`,
 	"declare-activity": `Usage: agent-run declare-activity start "<what you are doing>" --scope <a,b,c> [--ttl 45m]
        agent-run declare-activity end <id>
        agent-run declare-activity list
@@ -210,6 +239,6 @@ Prints the version, the commit, the Go version and the platform.
 	"help": `Usage: agent-run help [<command>]
 
 Prints help for agent-run, or for one command: run, list, show, log, msg, reap,
-suspend, resume, declare-activity, attach, detach, fleet, version.
+suspend, resume, rescue, declare-activity, attach, detach, fleet, version.
 `,
 }

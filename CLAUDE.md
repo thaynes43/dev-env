@@ -41,8 +41,9 @@ api/v1alpha1/            CRD types, group dev-env.haynesops.com (AgentSession; A
                          Its envtest suite proves the schema's rules (D-39) on a real API server
 cmd/dev-env-operator/    the operator, and the access broker as its second mode, `dev-env-operator broker` (broker.go, D-61)
 cmd/dev-env-keeper/      the keeper, its own binary in the operator image (D-38); main only, the work is internal/keeper
-cmd/agentd/              the in-pod supervisor: `run`, `hold` (the rescue pod, D-55), `run-agent` (a task, or a TUI, D-58), `render`,
-                         `ctl status|rescue [--stop-agent]|prepare-restart` (D-40 to D-43, D-48, D-58),
+cmd/agentd/              the in-pod supervisor: `run`, `hold` (the rescue pod, D-55), `shelf` (the shelf pod, D-67), `run-agent`
+                         (a task, or a TUI, D-58), `render`, `ctl status|rescue [--stop-agent]|prepare-restart` (D-40 to D-43,
+                         D-48, D-58), `ctl deliver|log` (D-65), `ctl rescues|hold-rescue|prune` (D-67),
                          `ctl grant-install|grant-remove|grant-list|grant-use` (D-63)
 cmd/agent-run/           the CLI, one static binary (CGO_ENABLED=0, D-06); main only, the commands are internal/agentrun
 internal/version/        the build identity every binary's `version` prints
@@ -54,12 +55,14 @@ internal/controller/     the AgentSession reconciler: each session's pod and vol
                          5.1 (no owner reference to the operator; no pod or volume write or delete outside the guards;
                          delete and suspend wait for rescue); a fake rescuer stands in for exec
 internal/apiserver/      the operator's /v1 API (D-46): HTTPS runnable, TokenReview auth, caller classes, sessions,
-                         heartbeat, suspend and resume (D-60), fleet, grants (D-56) and activities (D-66) handlers. Unit tests use the fake client; its envtest suite mints real
+                         heartbeat, suspend and resume (D-60), fleet, grants (D-56), activities (D-66) and rescues (D-67) handlers. Unit tests use the fake client; its envtest suite mints real
                          tokens and serves through a manager wired as the operator's
 internal/podexec/        the one pods/exec client (WebSocket, SPDY fallback): the rescue, and the API's log and message routes (D-65)
 internal/apiserver/apiv1/  the API's wire types, error codes and Claude effort table, standard library only, for agent-run
 internal/activity/       the reaper of expired declare-activity declarations (D-66), a leader-only runnable in the operator
-internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66): -p, --local, list, show, log, msg, reap, suspend, resume, declare-activity, attach, detach, fleet; finds the API and a token in a session
+internal/shelf/          the operator's side of the shelf pod (D-67): finds it, lists and prunes rescues there by exec; the pruner is
+                         a leader-only runnable
+internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66, D-67): -p, --local, list, show, log, msg, reap, suspend, resume, rescue list|restore, declare-activity, attach, detach, fleet; finds the API and a token in a session
                          pod, in another pod (a minted token) or from flags; imports the standard library, apiv1 and
                          agentd's protocol only (`make build` checks); tests run against an httptest TLS server
 internal/keeper/         the keeper (D-52): mints the haynes-dev-bot token into dev-agents/dev-env-gh-token every 40 minutes
