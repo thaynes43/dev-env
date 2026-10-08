@@ -75,8 +75,9 @@ the saga. To start building, follow
     shelf and shared volume remain. All five runtime Flux targets and Helm releases
     are Ready. Keeper GitHub readiness passed; no CredentialJobs exist. The scoped
     activity declaration was ended. Owner CA/trust and real provider acceptance
-    remain next after the pending Q-18 is answered; no second owner question has
-    been asked alongside it.
+    remain required. Q-18 controls the approval route; keeper work continues
+    independently. Under the one-question-at-a-time rule, the next CA provisioning
+    question is queued until the current Q-18 prompt is answered.
     The earlier baseline restore (#3584/#3583) remains applied and verified;
     PVE LAN access and the remaining service checks still block full closure.
     New dependency PRs appeared after the bench; green
