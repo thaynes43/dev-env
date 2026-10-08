@@ -38,13 +38,21 @@ Every command but version and help takes these flags:
                           (or DEV_ENV_API_TOKEN_FILE)
   --ca-file <path>        PEM CA certificates to trust for the API, besides the
                           system's (or DEV_ENV_API_CA_FILE)
+  --kubeconfig <path>     the kubeconfig for laptop access and attach/detach
+  --context <name>        the kubeconfig context to use for every Kubernetes call
 
 Finding the API. In a session pod agent-run uses the pod's projected token and
 AGENTD_API_URL. In any other pod of the cluster, such as the v1 dev-env pod, it
 mints a ten-minute token for the pod's own ServiceAccount and calls
 ` + DefaultAPIURL + `.
-Anywhere else, give --api-url and --token-file; Tom's laptop mints its token with
-kubectl create token dev-env-human -n dev-env-system --audience dev-env-operator.
+On a laptop, kubectl and a reachable admin kubeconfig supply access. agent-run
+reads the pinned CA, mints a ten-minute dev-env-human token in memory and opens
+a loopback port-forward. TLS checks the operator's service name. The forward
+ends with the command. --kubeconfig and --context select the cluster; explicit
+--api-url, --token-file and --ca-file settings still take precedence.
+In a pod, kubeconfig/context selectors need an explicit API URL and token;
+automatic pod discovery refuses them. With a manual API endpoint, select the
+kubeconfig context for that same cluster before attach or detach.
 
 Exit codes:
   0  done

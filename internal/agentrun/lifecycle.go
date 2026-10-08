@@ -24,7 +24,7 @@ func (a *app) suspend(ctx context.Context, args []string) error {
 	if len(pos) == 0 {
 		return usageError("suspend takes the names of the sessions to suspend; agent-run list shows them")
 	}
-	c, err := a.connect(cmd.c.conn)
+	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
 		return err
 	}
@@ -82,7 +82,7 @@ func (a *app) resume(ctx context.Context, args []string) error {
 	if wait < 0 {
 		return usageError("--wait is a duration of 0 or more, not %s", wait)
 	}
-	c, err := a.connect(cmd.c.conn)
+	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
 		return err
 	}

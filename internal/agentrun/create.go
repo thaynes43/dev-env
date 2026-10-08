@@ -200,7 +200,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		key = a.env.NewKey()
 	}
 
-	c, err := a.connect(cmd.c.conn)
+	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
 		return err
 	}

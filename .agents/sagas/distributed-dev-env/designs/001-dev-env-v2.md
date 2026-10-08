@@ -9,7 +9,7 @@
   section 15).
   Research notes [R-01](../research/R-01-summoned-agents-audit.md) and
   [R-02](../research/R-02-remote-control-identity.md) are folded in.
-- **Last updated:** 2026-10-07
+- **Last updated:** 2026-10-08
 - **Governed by:** [ADR-001](../adrs/001-distributed-dev-env.md) (Accepted 2026-10-06)
 - **Saga:** [README](../README.md)
 
@@ -604,6 +604,34 @@ carries over (3.5). The CLI refuses what the API would refuse only where it can
 use the API's own table, so the two cannot disagree, and it leaves the schema's
 rules to the schema. The exit codes let an agent tell a command to fix (2) from a
 wait (5) from a question for Tom (3).
+
+**D-68 (2026-10-08, plan 02 step 12). Laptop access uses the existing kubeconfig,
+with a token and port-forward owned by each `agent-run` invocation.**
+
+- Outside a pod, with no explicit API URL, `agent-run` reads the pinned CA from
+  `dev-agents/dev-env-api-ca`, mints a 600-second token for
+  `dev-env-system/dev-env-human` with audience `dev-env-operator`, and opens a
+  loopback-only port-forward to `dev-env-system/svc/dev-env-operator:8443`.
+  Tokens stay in memory and refresh after five minutes when a command needs one.
+- The connection goes to the forwarded loopback port, but TLS verifies
+  `dev-env-operator.dev-env-system.svc.cluster.local` against the pinned CA.
+  It never skips certificate verification. The tunnel does not use an HTTP proxy.
+- `--kubeconfig` and `--context` select the cluster. The invocation captures its
+  context once; CA reads, token requests, the port-forward and attach/detach exec
+  use that same context. Existing API URL, token-file and CA-file settings keep
+  their precedence, and in-pod discovery keeps its current path.
+  A pod connection that discovers its API or identity automatically refuses
+  kubeconfig/context selectors, so attach cannot look up a session in one
+  cluster and exec into another. A fully explicit API URL and token may use a
+  selected kubeconfig context; the caller must make those targets agree, and
+  the pod's automatic CA is not used for that external endpoint.
+- The forward ends and its process is reaped on success, failure or cancellation,
+  including when an attached TUI ends. Startup and cleanup are bounded.
+  Diagnostics never include minted tokens.
+- Tom needs `kubectl`, a reachable admin kubeconfig and the laptop binary. The
+  kubeconfig supplies the Kubernetes identity for port-forward and exec;
+  the short-lived human token supplies the operator API identity. No Claude or
+  Codex login is copied to the laptop.
 
 ### 3.6 agentd and the session pod
 
@@ -4213,11 +4241,12 @@ suite, a busy loop or anything parallel (the 2026-10-05 incident rule).
 
 ## 15. Open questions
 
-Each blocks building. Ask Tom one at a time; fold the answer back in as a dated
+Each gates the step it names. Ask Tom one at a time; fold the answer back in as a dated
 ruling. Q-01 to Q-11 were all answered on 2026-10-06, and so were Q-13 and Q-14. Q-12
 was settled on 2026-10-07: Tom made the repo public (B). Q-15 (plan 07, Proxmox
 credential grants) was answered on 2026-10-07 too. Q-16 (how the human-approval authority is protected and surfaced) was ruled on 2026-10-08. ADR-001 was Accepted on
-2026-10-06. Each blocks only the KICKOFF step it names.
+2026-10-06. Q-17 checks the laptop prerequisite for plan 02 acceptance; it does
+not block building the laptop client. Each blocks only the step it names.
 
 | Id | Question | Options (recommended first) | Resolution |
 |---|---|---|---|
@@ -4237,6 +4266,7 @@ credential grants) was answered on 2026-10-07 too. Q-16 (how the human-approval 
 | Q-14 | How does release-please open release PRs that CI checks? A PR opened with the workflow's `GITHUB_TOKEN` starts no workflows, so `CI - Success` never reports on it. (B4) | **A. A GitHub App key as a repo secret** (a small App with contents and pull-request write on this repo only): release PRs run CI like any PR; one more secret, which only Tom can add. **B. haynes-dev-bot closes and reopens each release PR** from the pod (App tokens do start workflows): no new secret, but every release needs an agent step, and a forgotten one leaves the release PR stuck. **C. No release-please; tag releases by hand**: nothing to set up, but versioning (section 10) becomes manual and inconsistent. | **Ruling, Tom 2026-10-06: A, a GitHub App key secret.** "GitHub App key secret (Recommended)". B4 uses the repo variable `RELEASE_APP_ID` and the repo secret `RELEASE_APP_PRIVATE_KEY`, read by `actions/create-github-app-token`. Refinement of the option text: the App also needs Issues read and write, besides Contents and Pull requests write, because release-please creates its `autorelease:` labels. Tom or his laptop agent adds both ([part 1 of the laptop handoff](../../../handoffs/2026-10-06-tom-laptop-settings.md)). Blocks B4's release-please part until the secret exists. |
 | Q-15 | How does a Proxmox credential grant get its short-lived token? Plan 07 step 8's first check failed on 2026-10-07: the operator token (`dev-env@pve!operator`, PVE 8.4.16) cannot mint an expiring token for its own user. Proxmox answered 403 to both the list and the create of `/access/users/dev-env@pve/token`, so Q-07's mint "from the operator token" does not work. Confirmed: `dev-env@pve` holds `DevEnvOperator` and `PVEAuditor` on `/`, and hw-ssh's `dev-env` user may run `sudo pvesh` as root on every Proxmox node. | **A. The keeper mints it over SSH**: with a certificate from its own SSH CA (the one hw-ssh grants use), it runs `sudo pvesh create /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0` on a Proxmox node, so the token carries `dev-env@pve`'s operator role and dies at the grant's end, and it deletes the token at expiry. No new Proxmox identity, and the long-lived operator token is not needed by v2 at all. The keeper gains egress to the Proxmox nodes on port 22, and Proxmox grants depend on the SSH CA. **B. A dedicated minting user**: `dev-env-minter@pve` with a password and `User.Modify` on `/access/users/dev-env@pve`; the keeper logs in for a ticket and mints over the API. One more Proxmox identity able to make operator tokens, a password in 1Password, and Tom creates the user and its ACL. **C. No Proxmox credential grants**: Proxmox writes go through hw-ssh certificates and `sudo qm` or `sudo pvesh` on a node. Simplest, but the `pve` CLI's operator tier stops working in v2 sessions and its runbook steps move to the SSH path. | **Ruling, Tom 2026-10-07: A, the keeper mints over SSH.** "Keeper mints over SSH (Recommended)". The keeper, with a certificate from its own SSH CA, runs `sudo pvesh create /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0` on a Proxmox node and deletes the token when the grant ends. No new Proxmox user is made, and v2 never holds the long-lived operator token. The keeper needs egress on port 22 to the Proxmox nodes, and the nodes trust the keeper's SSH CA (plan 07 H5). Unblocks plan 07 step 8. |
 | Q-16 | How should the approval authority be protected from agent access before plan 07 step 6 is enabled? Verified 2026-10-08: the guard protects Traefik ServiceAccounts, but not Authentik's server and outpost pods (`network/default`), its worker, or the shared `database/postgres16` state, so agents can change identity or login evidence through exec, workloads, blueprint ConfigMaps and routing objects. D-19's accepted trade-off therefore reaches the authority D-26 needs to trust. | As first drafted (closed PR #90), all ruled out by the Resolution: **A (was recommended). Protect the existing authority as enforcing infrastructure:** deny agents access to Authentik, its outposts, Traefik routing and `postgres16` through exec/attach, mutable workloads and configuration, routes and volumes; agents would lose operations on shared `postgres16`, and Tom would do them himself. **B. Isolate Authentik and its approval state** in enforcing namespaces with a dedicated database: a migration and a larger deployment first. **C. Defer human approval:** standing GrantPolicies only, console disabled. Costs no parity, and is the state until approvals ship. The approval surface is now the next design spike (issue #91): **(a)** an approver Remote Control session in a guarded pod, not in bypass mode and with a minimal toolset, whose permission prompts or AskUserQuestion answers reach Tom's phone, with a managed hook forwarding the recorded answer to the broker; **(b)** asking in the requesting session, which the agent can forge, so a soft gate only; **(c)** the coordinator session relays the request, also soft, and needing no new infrastructure. The spike records its own Q-NN. | **Ruled 2026-10-08 (Tom, from his phone).** His answers, quoted exactly: (1) "Agents handle all renovate upgrades and maintenance of the cluster via Haynes-ops we need to be extremely careful that we don't add guardrails I'll have to later peel back to reach parity with today's capabilities." (2) "The agents often have to wire new apps up to aithentik by creating or changing providers and applications." (3) "I am open to advanced security but I must be able to grant permission from my phone." (4) "There's some friction in getting a pushover then opening a website unless that website replaces Claude code app which is what I use today for both prompts : chat and approvals. Splitting it into two apps seems risky". The ruling: **Parity first.** No new guard cuts what agents do today: no Authentik, outpost, Traefik or postgres16 lockdown, no git review gate and no CODEOWNERS gate. Agents keep self-merging haynes-ops PRs, blueprint app wiring included. **Standing grants cover parity.** Auto-approved, short-lived grants must cover everything a v1 agent does today: the OPERATOR kube tier, Proxmox through the keeper's SSH minting (Q-15) and hw-ssh. Any gap blocks the cutover. **Human approval gates only capabilities beyond today's**, such as secret reads and break-glass above the OPERATOR tier. They stay unavailable until it ships, which costs no parity. **Approvals happen inside the Claude Code app**, not Pushover plus a web page; the surface is the next design spike. **Accepted residual risk:** Flux reconciles every Kustomization as cluster-admin and agents self-merge, so any agent can already change anything through git. A restricted Flux lane is a future option that only counts if it keeps full parity. The plan 07 build takes the D-NN. |
+| Q-17 | Does Tom's laptop already have a working admin kubeconfig for the main cluster? D-05 requires it; the cluster's human ServiceAccount, CA ConfigMap and operator Service already exist, but the laptop configuration has not been checked. | **A. Use an existing admin context (recommended):** verify its context and operator Service read locally, then use it for the acceptance check. No new cluster identity. **B. Set up laptop cluster access first:** Tom or his laptop agent configures an admin kubeconfig through the existing owner access path; the acceptance check waits for that prerequisite. No credential values are sent to this chat or committed. | **Asked 2026-10-08; awaiting Tom.** |
 
 ## 16. Decisions settled in this design
 
@@ -4309,3 +4339,4 @@ credential grants) was answered on 2026-10-07 too. Q-16 (how the human-approval 
 | D-65 | Messages and logs run agentd by exec in the session's running pod: `POST /v1/sessions/{name}/messages` → `agentd ctl deliver` (one bracketed paste and Enter into the Claude TUI, `codex queue` for Codex, 409 for a headless task), never retried by agent-run; `GET .../log?tail=N` → `agentd ctl log`; the log is copied to `~/.shared/logs/` | 6.8 |
 | D-66 | `Activity` CRD in `dev-env-system`: created only by `POST /v1/activities` with v1's limits enforced (scope required, 45m default, 8h cap, 2h for `cluster`), the declarer from the token, deleted by the operator at expiry; `declare-activity` is agent-run by another name; dev-env-ops reads both v1's files and the CRD | 6.9 |
 | D-67 | A `dev-env-shelf` Deployment in `dev-agents` mounts only the shared volume and runs `agentd shelf`; the operator lists (`GET /v1/rescues`) and prunes (leader, every 6 h, `lifecycle.bundleRetention`, never a bundle of a session that still exists, logs too) there by exec; a restore is `POST /v1/sessions` with `restore`, checked and held through the shelf under the prune's lock, and agentd fetches the bundle into `refs/rescued/*` on the first boot; the base defaults to the old session's rescued branch and is never a rescued snapshot (rescue branch or stash) | 4.5 |
+| D-68 | Laptop `agent-run` captures one kubeconfig context, reads the pinned CA, mints a short-lived human token in memory and owns a loopback port-forward; TLS checks the operator's service name; cleanup reaps the forward on every exit | 3.5 |

@@ -43,8 +43,8 @@ func TestAttachAndDetach(t *testing.T) {
 	h.mustRun(ExitOK, "attach", name)
 	h.mustRun(ExitOK, "detach", name)
 	want := []string{
-		"/usr/bin/kubectl exec -n dev-agents " + name + " -c agent -it -- env TERM=screen-256color tmux attach-session -t agent",
-		"/usr/bin/kubectl exec -n dev-agents " + name + " -c agent -- tmux detach-client -s agent",
+		"/usr/bin/kubectl --context test-context exec -n dev-agents " + name + " -c agent -it -- env TERM=screen-256color tmux attach-session -t agent",
+		"/usr/bin/kubectl --context test-context exec -n dev-agents " + name + " -c agent -- tmux detach-client -s agent",
 	}
 	if strings.Join(h.ran, "\n") != strings.Join(want, "\n") {
 		t.Errorf("ran\n%s\nwant\n%s", strings.Join(h.ran, "\n"), strings.Join(want, "\n"))

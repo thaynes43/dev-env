@@ -1,8 +1,8 @@
 # 02: interactive sessions and lifecycle
 
-**Status:** in progress (started 2026-10-07); benched from 2026-10-08 after step 11, with step 12 and 13 not started (see HANDOFF)
+**Status:** in progress (started 2026-10-07); resumed on Codex 2026-10-08 at step 12 (D-68). Step 13 still needs Tom's laptop check.
 **Depends on:** 01
-**Parallel with:** 07 (the access broker), which is benched too; run one plan at a time (README decision 40)
+**Parallel with:** 07 (the access broker) in the architecture; this run finishes 02 before resuming 07 (README decisions 40 and 44).
 
 ## Goal
 
@@ -138,7 +138,7 @@ the cluster.
   - The reap rescued the new session (`CleanAndPushed`) and archived its volume.
   - The leader's first prune ran ten minutes after start: retention 720h, 0
     removed, 3 kept.
-- [ ] 12. **The laptop path** (D-05). `agent-run` outside the cluster mints a
+- [ ] 12. **The laptop path** (D-05, D-68; in progress). `agent-run` outside the cluster mints a
   `dev-env-human` token and port-forwards with the kubeconfig, and checks the API's
   certificate against the pinned CA by its service name. A handoff for an agent on
   Tom's laptop runs the check.

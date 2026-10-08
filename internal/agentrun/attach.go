@@ -67,9 +67,16 @@ func (a *app) tmuxExec(ctx context.Context, verb string, args []string, interact
 	if err != nil {
 		return fail(ExitFailed, "%s runs kubectl exec, and kubectl is not on PATH", verb)
 	}
-	c, err := a.connect(cmd.c.conn)
+	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
 		return err
+	}
+	// Outside a pod, exec must use the context captured for CA/token/forward.
+	// connect rejects selectors with automatic in-pod API/identity discovery.
+	if a.env.Getenv(envKubeHost) == "" || cmd.c.conn.kubeconfig != "" || cmd.c.conn.context != "" {
+		if _, err := a.kubectl(ctx, cmd.c.conn); err != nil {
+			return err
+		}
 	}
 	var s apiv1.Session
 	if _, err := a.call(ctx, c, http.MethodGet, apiv1.SessionPath(url.PathEscape(pos[0])), nil, nil, &s); err != nil {
@@ -79,6 +86,9 @@ func (a *app) tmuxExec(ctx context.Context, verb string, args []string, interact
 		return fail(ExitFailed, "%s is %s, so it has no running agent to %s; agent-run show %s says why", s.Name, firstOf(s.Phase, "not observed yet"), verb, s.Name)
 	}
 	argv := []string{kubectl, "exec", "-n", SessionNamespace, s.Name, "-c", agentContainer}
+	if a.kube != nil {
+		argv = a.kube.argv("exec", "-n", SessionNamespace, s.Name, "-c", agentContainer)
+	}
 	if interactive {
 		// tmux needs a terminal type, and kubectl exec does not pass TERM.
 		term := firstOf(a.env.Getenv("TERM"), "xterm-256color")

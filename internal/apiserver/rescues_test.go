@@ -2,7 +2,9 @@ package apiserver
 
 import (
 	"context"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -55,7 +57,8 @@ func rescueEntry(session, name string, complete bool, repos map[string][]string)
 	e := protocol.RescueEntry{ID: session + "/" + name, Session: session, Name: name, Dir: "rescue/" + session + "/" + name,
 		CreatedAt: rescueAt, ModifiedAt: rescueAt, Finished: true, Bytes: 4096}
 	m := &protocol.RescueManifest{Version: 1, Session: session, Stamp: name, Dir: e.Dir, CreatedAt: rescueAt, Complete: complete}
-	for repo, refs := range repos {
+	for _, repo := range slices.Sorted(maps.Keys(repos)) {
+		refs := repos[repo]
 		r := protocol.ManifestRepo{Path: "/home/dev/repos/" + repo, Bundle: protocol.RepoBundle{File: e.Dir + "/" + repo + ".bundle", Size: 2048}}
 		for _, ref := range refs {
 			r.Bundle.Refs = append(r.Bundle.Refs, protocol.BundleRef{Name: ref, Source: ref, Commit: "abc"})

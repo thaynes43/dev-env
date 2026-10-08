@@ -68,11 +68,16 @@ type Env struct {
 	// ServiceAccountDir holds a pod's own ServiceAccount token, namespace and
 	// the cluster's CA, as the kubelet mounts them.
 	ServiceAccountDir string
-	// LookPath finds a program on PATH (kubectl, for attach and detach).
+	// LookPath finds a program on PATH (kubectl for laptop access and exec).
 	LookPath func(string) (string, error)
 	// Run runs a program on the process's own terminal and returns its exit
 	// code; an error means it could not start.
 	Run func(ctx context.Context, argv []string) (int, error)
+	// Output captures a bounded command response without exposing stderr.
+	Output func(ctx context.Context, argv []string) ([]byte, error)
+	// PortForward starts a loopback forward and waits for its readiness. Stop
+	// terminates and reaps it; the process also ends when ctx is canceled.
+	PortForward func(ctx context.Context, argv []string) (address string, stop func(), err error)
 }
 
 // DefaultEnv is the process's own environment.
@@ -89,6 +94,8 @@ func DefaultEnv() Env {
 		ServiceAccountDir: DefaultServiceAccountDir,
 		LookPath:          exec.LookPath,
 		Run:               runProcess,
+		Output:            commandOutput,
+		PortForward:       startPortForward,
 	}
 }
 
@@ -129,13 +136,23 @@ func usageError(format string, args ...any) error {
 
 // app is one run of the CLI.
 type app struct {
-	env Env
+	env      Env
+	kube     *kubectlClient
+	cleanups []func()
+}
+
+func (a *app) close() {
+	for i := len(a.cleanups) - 1; i >= 0; i-- {
+		a.cleanups[i]()
+	}
+	a.cleanups = nil
 }
 
 // Run runs the CLI on args, the arguments after the program name, and returns
 // the exit code.
 func Run(ctx context.Context, args []string, env Env) int {
 	a := &app{env: env}
+	defer a.close()
 	err := a.dispatch(ctx, args)
 	if err == nil {
 		return ExitOK
