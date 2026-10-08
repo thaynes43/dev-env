@@ -59,18 +59,18 @@ var _ Notifier = (*PushoverNotifier)(nil)
 // sending a request. consoleOrigin is the approval console's HTTPS origin.
 func NewPushoverNotifier(dir, consoleOrigin string) (*PushoverNotifier, error) {
 	if strings.TrimSpace(dir) == "" {
-		return nil, errors.New("Pushover credential directory is required")
+		return nil, errors.New("pushover credential directory is required")
 	}
 	u, err := url.Parse(consoleOrigin)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil ||
 		u.Opaque != "" || (u.Path != "" && u.Path != "/") || u.RawPath != "" ||
 		strings.ContainsAny(consoleOrigin, "?#") {
-		return nil, errors.New("Pushover approval console must be an HTTPS origin")
+		return nil, errors.New("pushover approval console must be an HTTPS origin")
 	}
 	origin := strings.TrimSuffix(u.String(), "/")
 	// Every schema-valid grant name must fit Pushover's supplementary URL.
 	if utf8.RuneCountInString(origin)+len("/approvals/")+validation.DNS1123LabelMaxLength > pushoverMaxURL {
-		return nil, errors.New("Pushover approval console origin is too long")
+		return nil, errors.New("pushover approval console origin is too long")
 	}
 	transport := &http.Transport{
 		Proxy:                  http.ProxyFromEnvironment,
@@ -97,16 +97,16 @@ func NewPushoverNotifier(dir, consoleOrigin string) (*PushoverNotifier, error) {
 // credential, filename, HTTP error, JSON error or response body.
 func (n *PushoverNotifier) NotifyPending(ctx context.Context, g *v1alpha1.AccessGrant) (notifyErr error) {
 	if n == nil || n.sending == nil || n.http == nil {
-		return errors.New("Pushover notifier is not configured")
+		return errors.New("pushover notifier is not configured")
 	}
 	if g == nil || !strings.HasPrefix(g.Name, "grant-") || len(g.Name) > validation.DNS1123LabelMaxLength ||
 		len(validation.IsDNS1123Label(g.Name)) > 0 {
-		return errors.New("Pushover notification needs a valid grant name")
+		return errors.New("pushover notification needs a valid grant name")
 	}
 	ctx, cancel := context.WithTimeout(ctx, pushoverTimeout)
 	defer cancel()
 	if ctx.Err() != nil {
-		return errors.New("Pushover notification canceled or timed out")
+		return errors.New("pushover notification canceled or timed out")
 	}
 	// One request per notifier, including its response read. Waiting for that
 	// request observes the same deadline and the caller's cancellation.
@@ -114,18 +114,18 @@ func (n *PushoverNotifier) NotifyPending(ctx context.Context, g *v1alpha1.Access
 	case n.sending <- struct{}{}:
 		defer func() { <-n.sending }()
 	case <-ctx.Done():
-		return errors.New("Pushover notification canceled or timed out")
+		return errors.New("pushover notification canceled or timed out")
 	}
 	if n.clock.Now().Before(n.retryAt) {
-		return errors.New("Pushover notification retry is delayed")
+		return errors.New("pushover notification retry is delayed")
 	}
 	token, err := n.credential(PushoverFileToken)
 	if err != nil {
-		return errors.New("Pushover application token is missing or invalid")
+		return errors.New("pushover application token is missing or invalid")
 	}
 	user, err := n.credential(PushoverFileUserKey)
 	if err != nil {
-		return errors.New("Pushover user key is missing or invalid")
+		return errors.New("pushover user key is missing or invalid")
 	}
 	priority, title := "0", "Access approval requested"
 	if g.Spec.Type == v1alpha1.GrantBreakglass {
@@ -137,11 +137,11 @@ func (n *PushoverNotifier) NotifyPending(ctx context.Context, g *v1alpha1.Access
 		"url": {n.consoleOrigin + "/approvals/" + g.Name}, "url_title": {"Review request"},
 	}.Encode()
 	if len(body) > pushoverMaxRequest {
-		return errors.New("Pushover notification is too large")
+		return errors.New("pushover notification is too large")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.endpoint, strings.NewReader(body))
 	if err != nil {
-		return errors.New("Pushover request could not be prepared")
+		return errors.New("pushover request could not be prepared")
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
@@ -157,27 +157,27 @@ func (n *PushoverNotifier) NotifyPending(ctx context.Context, g *v1alpha1.Access
 	}()
 	resp, err := client.Do(req)
 	if err != nil {
-		return errors.New("Pushover notification could not be delivered")
+		return errors.New("pushover notification could not be delivered")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Pushover refused notification: HTTP %d", resp.StatusCode)
+		return fmt.Errorf("pushover refused notification: HTTP %d", resp.StatusCode)
 	}
 	answer, err := io.ReadAll(io.LimitReader(resp.Body, pushoverMaxResponse+1))
 	if err != nil {
-		return errors.New("Pushover notification response could not be read")
+		return errors.New("pushover notification response could not be read")
 	}
 	if len(answer) > pushoverMaxResponse {
-		return errors.New("Pushover notification response is too large")
+		return errors.New("pushover notification response is too large")
 	}
 	var result struct {
 		Status int `json:"status"`
 	}
 	if err := json.Unmarshal(answer, &result); err != nil {
-		return errors.New("Pushover notification response is invalid")
+		return errors.New("pushover notification response is invalid")
 	}
 	if result.Status != 1 {
-		return errors.New("Pushover did not accept notification")
+		return errors.New("pushover did not accept notification")
 	}
 	return nil
 }
