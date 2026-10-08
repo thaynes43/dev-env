@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // AccessGrant and GrantPolicy are the access broker's resources (DESIGN-001
@@ -198,6 +199,14 @@ type GrantRequester struct {
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	// +required
 	Session string `json:"session"`
+
+	// SessionUID is captured by the API from the authenticated session. It is
+	// required for credential execution; older kube and egress requests omit it.
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=36
+	// +kubebuilder:validation:Pattern=`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`
+	// +optional
+	SessionUID types.UID `json:"sessionUID,omitempty"`
 
 	// Repo is the session's spec.repo.
 	// +kubebuilder:validation:MaxLength=100

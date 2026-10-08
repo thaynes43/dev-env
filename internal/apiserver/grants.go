@@ -146,11 +146,12 @@ func (s *Server) newGrant(req apiv1.CreateGrantRequest, c *caller) (*v1alpha1.Ac
 	typ := v1alpha1.GrantType(req.Type)
 	spec := v1alpha1.AccessGrantSpec{
 		Requester: v1alpha1.GrantRequester{
-			Session: c.parent,
-			Repo:    c.session.Spec.Repo,
-			Profile: c.profile,
-			Agent:   c.session.Spec.Agent,
-			Parent:  c.session.Spec.Parent,
+			Session:    c.parent,
+			SessionUID: c.session.UID,
+			Repo:       c.session.Spec.Repo,
+			Profile:    c.profile,
+			Agent:      c.session.Spec.Agent,
+			Parent:     c.session.Spec.Parent,
 		},
 		Type:   typ,
 		Reason: req.Reason,

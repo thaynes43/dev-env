@@ -98,7 +98,11 @@ func TestGrantRequest(t *testing.T) {
 		t.Errorf("view %+v", got)
 	}
 	g := f.grant(got.Name)
-	want := v1alpha1.GrantRequester{Session: "haynes-ops-1006-100000", Repo: "haynes-ops", Profile: "dev", Agent: "claude", Parent: humanSA}
+	var session v1alpha1.AgentSession
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "haynes-ops-1006-100000"}, &session); err != nil {
+		t.Fatal(err)
+	}
+	want := v1alpha1.GrantRequester{Session: "haynes-ops-1006-100000", SessionUID: session.UID, Repo: "haynes-ops", Profile: "dev", Agent: "claude", Parent: humanSA}
 	if g.Spec.Requester != want {
 		t.Errorf("requester %+v, want %+v", g.Spec.Requester, want)
 	}
@@ -124,6 +128,33 @@ func TestGrantRequest(t *testing.T) {
 	f.setGrantStatus(got.Name, v1alpha1.GrantActive, nil)
 	if v := decode[apiv1.Grant](t, f.do(http.MethodGet, apiv1.GrantPath(got.Name), tok, nil)); v.ApprovalURL != "" || v.Phase != "Active" {
 		t.Errorf("active view %+v", v)
+	}
+}
+
+func TestCredentialRequestKeepsAuthenticatedSessionUID(t *testing.T) {
+	f := newFixture(t)
+	const sessionName = "haynes-ops-1006-100000"
+	tok := f.sessionPod(sessionName, "full", 0)
+	got := f.request(tok, apiv1.CreateGrantRequest{Type: "credential", Credential: "proxmox", TTL: "15m", Reason: "maintain a guest"}, http.StatusCreated)
+	g := f.grant(got.Name)
+	var s v1alpha1.AgentSession
+	key := types.NamespacedName{Namespace: sessionNS, Name: sessionName}
+	if err := f.c.Get(context.Background(), key, &s); err != nil {
+		t.Fatal(err)
+	}
+	if g.Spec.Requester.SessionUID == "" || g.Spec.Requester.SessionUID != s.UID {
+		t.Fatal("credential request did not capture the authenticated session UID")
+	}
+	if err := f.c.Delete(context.Background(), &s); err != nil {
+		t.Fatal(err)
+	}
+	s.ResourceVersion = ""
+	s.UID = "replacement-session"
+	if err := f.c.Create(context.Background(), &s); err != nil {
+		t.Fatal(err)
+	}
+	if f.grant(got.Name).Spec.Requester.SessionUID == s.UID {
+		t.Fatal("a same-name session replacement inherited the outstanding credential request")
 	}
 }
 
