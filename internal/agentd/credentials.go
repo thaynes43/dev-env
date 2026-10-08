@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,12 +21,15 @@ import (
 )
 
 const (
-	credentialFile     = "credential.json"
-	maxCredentialBytes = 24 << 10
+	credentialFile      = "credential.json"
+	credentialOwnerFile = "credential-owner.json"
+	maxCredentialBytes  = 24 << 10
 )
 
 var ErrNoCredential = errors.New("no live credential installed")
 var credentialTempName = regexp.MustCompile(`^\.credential-[a-f0-9]{12}$`)
+var credentialOwnerTempName = regexp.MustCompile(`^\.credential-owner-[a-f0-9]{12}$`)
+var credentialHash = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 // CredentialSpec is the public metadata checked before reading private stdin.
 type CredentialSpec struct {
@@ -63,6 +67,28 @@ func CredentialsFromEnv(getenv func(string) string) Credentials {
 type installedCredential struct {
 	protocol.InstalledCredential
 	Payload protocol.CredentialPayload `json:"payload"`
+}
+
+// The owner is committed before the first token-bearing temporary file. Its
+// private fingerprint binds retries to the keeper's original provider value,
+// even if that file is empty or only partly written when agentd is killed.
+type credentialOwner struct {
+	Version int `json:"version"`
+	protocol.InstalledCredential
+	PayloadHash string `json:"payloadHash"`
+}
+
+func ownerOf(r installedCredential) credentialOwner {
+	b, _ := json.Marshal(r.Payload)
+	return credentialOwner{Version: 1, InstalledCredential: r.InstalledCredential, PayloadHash: fmt.Sprintf("%x", sha256.Sum256(b))}
+}
+
+func validCredentialMetadata(m protocol.InstalledCredential, name string) bool {
+	return protocol.ValidGrantName(m.Name) == nil && m.Name == name && validCredentialUID(m.GrantUID) && validCredentialUID(m.PodUID) && !m.Expires.IsZero() && !m.InstalledAt.IsZero() && !m.InstalledAt.After(m.Expires) && m.Credential == "proxmox"
+}
+
+func sameCredentialOwner(a, b credentialOwner) bool {
+	return a.Name == b.Name && a.GrantUID == b.GrantUID && a.PodUID == b.PodUID && a.Credential == b.Credential && a.Expires.Equal(b.Expires) && a.PayloadHash == b.PayloadHash
 }
 
 func (installedCredential) String() string   { return "installedCredential{redacted}" }
@@ -194,17 +220,18 @@ func readPrivateAt(dir *os.File, name string) (*os.File, error) {
 	return f, nil
 }
 
-func (c Credentials) readOne(name string) (installedCredential, error) {
+type credentialState struct {
+	record    installedCredential
+	owner     credentialOwner
+	committed bool
+	// Only an interrupted marker write remains: no token bytes have been
+	// written yet, so this metadata-only staging can be cleared safely.
+	unowned bool
+}
+
+func readCredentialAt(dir *os.File, file, name string) (installedCredential, error) {
 	var r installedCredential
-	dir, err := c.openGrant(name)
-	if err != nil {
-		return r, err
-	}
-	defer func() { _ = dir.Close() }()
-	if _, err := credentialEntries(dir); err != nil {
-		return r, err
-	}
-	f, err := readPrivateAt(dir, credentialFile)
+	f, err := readPrivateAt(dir, file)
 	if err != nil {
 		return r, err
 	}
@@ -212,51 +239,172 @@ func (c Credentials) readOne(name string) (installedCredential, error) {
 	if err := decodeCredential(f, &r); err != nil {
 		return installedCredential{}, err
 	}
-	s := CredentialSpec{Name: r.Name, GrantUID: r.GrantUID, PodUID: r.PodUID, Expires: r.Expires}
-	// Expiry is checked by callers, so expired credentials can be removed.
-	if protocol.ValidGrantName(s.Name) != nil || s.Name != name || !validCredentialUID(s.GrantUID) || !validCredentialUID(s.PodUID) || s.Expires.IsZero() || r.InstalledAt.IsZero() || r.InstalledAt.After(r.Expires) || r.Credential != "proxmox" || checkCredentialPayload(r.Payload, r.GrantUID) != nil {
+	if !validCredentialMetadata(r.InstalledCredential, name) || checkCredentialPayload(r.Payload, r.GrantUID) != nil {
 		return installedCredential{}, errors.New("invalid installed credential metadata")
 	}
 	return r, nil
 }
 
-// Interrupted replacements can leave a private temporary file beside the
-// previous valid document. Recognize only agentd's exact temporary names,
-// and validate their type, owner and mode before ignoring or removing them.
-func credentialEntries(dir *os.File) ([]string, error) {
+func readCredentialOwner(dir *os.File, name string) (credentialOwner, error) {
+	var owner credentialOwner
+	f, err := readPrivateAt(dir, credentialOwnerFile)
+	if err != nil {
+		return owner, err
+	}
+	defer func() { _ = f.Close() }()
+	if err := decodeCredential(f, &owner); err != nil {
+		return owner, err
+	}
+	if owner.Version != 1 || !validCredentialMetadata(owner.InstalledCredential, name) || !credentialHash.MatchString(owner.PayloadHash) {
+		return credentialOwner{}, errors.New("invalid credential ownership marker")
+	}
+	return owner, nil
+}
+
+// A complete token temp must agree with the durable marker. Empty/partial
+// writes are bound by that marker instead of trusting unfinished content.
+func checkPendingTemp(dir *os.File, file, name string, owner credentialOwner) error {
+	f, err := readPrivateAt(dir, file)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	b, err := io.ReadAll(io.LimitReader(f, maxCredentialBytes+1))
+	if err != nil || len(b) > maxCredentialBytes {
+		return errors.New("invalid temporary credential file")
+	}
+	if !json.Valid(b) {
+		return nil
+	}
+	var r installedCredential
+	if err := decodeCredential(bytes.NewReader(b), &r); err != nil {
+		return err
+	}
+	if !validCredentialMetadata(r.InstalledCredential, name) || checkCredentialPayload(r.Payload, r.GrantUID) != nil || !sameCredentialOwner(owner, ownerOf(r)) {
+		return errors.New("temporary credential conflicts with its ownership marker")
+	}
+	return nil
+}
+
+func (c Credentials) readState(name string) (credentialState, error) {
+	var state credentialState
+	dir, err := c.openGrant(name)
+	if err != nil {
+		return state, err
+	}
+	defer func() { _ = dir.Close() }()
+	layout, err := credentialEntries(dir)
+	if err != nil {
+		return state, err
+	}
+	if layout.final {
+		r, err := readCredentialAt(dir, credentialFile, name)
+		if err != nil {
+			return state, err
+		}
+		state.record, state.owner, state.committed = r, ownerOf(r), true
+		if layout.owner {
+			owner, err := readCredentialOwner(dir, name)
+			if err != nil {
+				return state, err
+			}
+			if !sameCredentialOwner(owner, state.owner) {
+				return state, errors.New("credential ownership marker conflicts with installed credential")
+			}
+		}
+		return state, nil
+	}
+	if layout.owner {
+		owner, err := readCredentialOwner(dir, name)
+		if err != nil {
+			return state, err
+		}
+		for _, file := range layout.tokenTemps {
+			if err := checkPendingTemp(dir, file, name, owner); err != nil {
+				return state, err
+			}
+		}
+		state.owner = owner
+		state.record.InstalledCredential = owner.InstalledCredential
+		return state, nil
+	}
+	// Before ownership markers existed, a complete first-write temp could
+	// be left behind. Recover only fully validated, consistent records.
+	for i, file := range layout.tokenTemps {
+		r, err := readCredentialAt(dir, file, name)
+		if err != nil {
+			return state, err
+		}
+		owner := ownerOf(r)
+		if i > 0 && !sameCredentialOwner(owner, state.owner) {
+			return state, errors.New("temporary credential ownership conflicts")
+		}
+		state.owner, state.record = owner, r
+	}
+	if len(layout.tokenTemps) > 0 {
+		return state, nil
+	}
+	if len(layout.ownerTemps) > 0 {
+		state.unowned = true
+		return state, nil
+	}
+	return state, errors.New("credential directory has no ownership record")
+}
+
+type credentialLayout struct {
+	final, owner           bool
+	tokenTemps, ownerTemps []string
+}
+
+// Recognize only agentd's exact staging names and validate private paths
+// before ignoring or removing them. Kube and unrelated entries are refused.
+func credentialEntries(dir *os.File) (credentialLayout, error) {
 	entries, err := dir.ReadDir(-1)
 	if err != nil {
-		return nil, errors.New("could not inspect credential directory")
+		return credentialLayout{}, errors.New("could not inspect credential directory")
 	}
-	var temps []string
+	var layout credentialLayout
 	for _, e := range entries {
 		if e.Name() == credentialFile {
+			layout.final = true
 			continue
 		}
-		if !credentialTempName.MatchString(e.Name()) {
-			return nil, errors.New("credential directory contains unrelated files")
+		if e.Name() == credentialOwnerFile {
+			layout.owner = true
+			continue
+		}
+		if !credentialTempName.MatchString(e.Name()) && !credentialOwnerTempName.MatchString(e.Name()) {
+			return layout, errors.New("credential directory contains unrelated files")
 		}
 		f, err := readPrivateAt(dir, e.Name())
 		if err != nil {
-			return nil, err
+			return layout, err
 		}
 		_ = f.Close()
-		temps = append(temps, e.Name())
+		if credentialTempName.MatchString(e.Name()) {
+			layout.tokenTemps = append(layout.tokenTemps, e.Name())
+		} else {
+			layout.ownerTemps = append(layout.ownerTemps, e.Name())
+		}
 	}
-	return temps, nil
+	return layout, nil
 }
 
-func (c Credentials) removeTemps(name string) error {
+func (c Credentials) removeStaging(name string, removeOwner bool) error {
 	dir, err := c.openGrant(name)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = dir.Close() }()
-	temps, err := credentialEntries(dir)
+	layout, err := credentialEntries(dir)
 	if err != nil {
 		return err
 	}
-	for _, tmp := range temps {
+	files := append(layout.tokenTemps, layout.ownerTemps...)
+	if removeOwner && layout.owner {
+		files = append(files, credentialOwnerFile)
+	}
+	for _, tmp := range files {
 		if err := syscall.Unlinkat(int(dir.Fd()), tmp); err != nil {
 			return errors.New("could not remove temporary private credential")
 		}
@@ -311,19 +459,35 @@ func (c Credentials) Install(s CredentialSpec, p protocol.CredentialPayload) err
 			return errors.New("could not inspect credential directory")
 		}
 		if len(entries) != 0 {
-			old, err := c.readOne(s.Name)
+			state, err := c.readState(s.Name)
 			if err != nil {
 				return err
 			}
-			if old.PodUID != c.PodUID {
+			if !state.unowned && state.record.PodUID != c.PodUID {
 				return errors.New("installed credential belongs to another pod")
 			}
-			if old.GrantUID == s.GrantUID && (!old.Expires.Equal(s.Expires) || old.Payload != p) {
+			if state.committed && state.record.GrantUID == s.GrantUID && (!state.record.Expires.Equal(s.Expires) || state.record.Payload != p) {
 				return errors.New("an existing provider credential cannot change its value or expiry")
 			}
-			if err := c.removeTemps(s.Name); err != nil {
+			if !state.committed && !state.unowned && !sameCredentialOwner(state.owner, ownerOf(r)) {
+				return errors.New("pending credential ownership conflicts with the install request")
+			}
+			if err := c.removeStaging(s.Name, state.committed); err != nil {
 				return err
 			}
+			if state.committed {
+				// The valid final record continues to own an interrupted
+				// replacement. Its value stays usable until atomic rename.
+				return writeCredentialAt(dir, append(b, '\n'))
+			}
+		}
+		owner, err := json.Marshal(ownerOf(r))
+		if err != nil {
+			return errors.New("could not encode credential ownership marker")
+		}
+		// Commit ownership before opening any token-bearing temporary file.
+		if err := writePrivateCredentialAt(dir, credentialOwnerFile, ".credential-owner-", append(owner, '\n')); err != nil {
+			return err
 		}
 		if err := writeCredentialAt(dir, append(b, '\n')); err != nil {
 			if created {
@@ -331,14 +495,18 @@ func (c Credentials) Install(s CredentialSpec, p protocol.CredentialPayload) err
 			}
 			return err
 		}
-		return nil
+		return c.removeStaging(s.Name, true)
 	})
 }
 
 // writeCredentialAt uses an opened private directory, so replacing a path
 // with a symlink cannot redirect the token to another directory.
 func writeCredentialAt(dir *os.File, b []byte) error {
-	name := ".credential-" + newBootID()
+	return writePrivateCredentialAt(dir, credentialFile, ".credential-", b)
+}
+
+func writePrivateCredentialAt(dir *os.File, target, prefix string, b []byte) error {
+	name := prefix + newBootID()
 	fd, err := syscall.Openat(int(dir.Fd()), name, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600)
 	if err != nil {
 		return errors.New("could not create private credential file")
@@ -350,7 +518,7 @@ func writeCredentialAt(dir *os.File, b []byte) error {
 	if err != nil || closeErr != nil {
 		return errors.New("could not write private credential file")
 	}
-	if err := syscall.Renameat(int(dir.Fd()), name, int(dir.Fd()), credentialFile); err != nil {
+	if err := syscall.Renameat(int(dir.Fd()), name, int(dir.Fd()), target); err != nil {
 		return errors.New("could not replace private credential file")
 	}
 	return nil
@@ -366,12 +534,30 @@ func (c Credentials) names() ([]string, error) {
 		if protocol.ValidGrantName(e.Name()) != nil {
 			continue
 		}
-		if _, err := os.Lstat(filepath.Join(c.Grants.Dir, e.Name(), credentialFile)); err == nil || !errors.Is(err, fs.ErrNotExist) {
+		if present, err := credentialDirectoryPresent(filepath.Join(c.Grants.Dir, e.Name())); present || err != nil {
 			names = append(names, e.Name())
 		}
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+// A marker or recognized temporary file also identifies a credential
+// directory. Kube operations must preserve it before the first final rename.
+func credentialDirectoryPresent(path string) (bool, error) {
+	entries, err := os.ReadDir(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, errors.New("could not inspect grant directory")
+	}
+	for _, e := range entries {
+		if e.Name() == credentialFile || e.Name() == credentialOwnerFile || credentialTempName.MatchString(e.Name()) || credentialOwnerTempName.MatchString(e.Name()) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // List never returns provider material. A wrong-pod or malformed entry fails
@@ -384,14 +570,18 @@ func (c Credentials) List() ([]protocol.InstalledCredential, error) {
 			return err
 		}
 		for _, name := range names {
-			r, err := c.readOne(name)
+			state, err := c.readState(name)
 			if err != nil {
 				return err
 			}
+			if state.unowned {
+				continue
+			}
+			r := state.record
 			if r.PodUID != c.PodUID {
 				return errors.New("installed credential belongs to another pod")
 			}
-			if c.Grants.now().Before(r.Expires) {
+			if state.committed && c.Grants.now().Before(r.Expires) {
 				out = append(out, r.InstalledCredential)
 			}
 		}
@@ -413,14 +603,18 @@ func (c Credentials) Use(credential string) (protocol.CredentialPayload, error) 
 			return err
 		}
 		for _, name := range names {
-			r, err := c.readOne(name)
+			state, err := c.readState(name)
 			if err != nil {
 				return err
 			}
+			if state.unowned {
+				continue
+			}
+			r := state.record
 			if r.PodUID != c.PodUID {
 				return errors.New("installed credential belongs to another pod")
 			}
-			if c.Grants.now().Before(r.Expires) {
+			if state.committed && c.Grants.now().Before(r.Expires) {
 				p = r.Payload
 				return nil
 			}
@@ -441,10 +635,14 @@ func (c Credentials) Remove(name, grantUID, podUID string) error {
 		if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
-		r, err := c.readOne(name)
+		state, err := c.readState(name)
 		if err != nil {
 			return err
 		}
+		if state.unowned {
+			return c.removeOne(name)
+		}
+		r := state.record
 		if r.GrantUID != grantUID || r.PodUID != podUID {
 			return nil
 		}
@@ -460,14 +658,18 @@ func (c Credentials) removeOne(name string) error {
 		return err
 	}
 	defer func() { _ = dir.Close() }()
-	temps, err := credentialEntries(dir)
+	layout, err := credentialEntries(dir)
 	if err != nil {
 		return err
 	}
-	if err := syscall.Unlinkat(int(dir.Fd()), credentialFile); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return errors.New("could not remove private credential")
+	files := append(layout.tokenTemps, layout.ownerTemps...)
+	if layout.final {
+		files = append(files, credentialFile)
 	}
-	for _, tmp := range temps {
+	if layout.owner {
+		files = append(files, credentialOwnerFile)
+	}
+	for _, tmp := range files {
 		if err := syscall.Unlinkat(int(dir.Fd()), tmp); err != nil {
 			return errors.New("could not remove temporary private credential")
 		}
@@ -488,11 +690,18 @@ func (c Credentials) Expire() error {
 		}
 		var failed error
 		for _, name := range names {
-			r, err := c.readOne(name)
+			state, err := c.readState(name)
 			if err != nil {
 				failed = err
 				continue
 			}
+			if state.unowned {
+				if err := c.removeOne(name); err != nil {
+					failed = err
+				}
+				continue
+			}
+			r := state.record
 			if r.PodUID != c.PodUID {
 				failed = errors.New("installed credential belongs to another pod")
 				continue
