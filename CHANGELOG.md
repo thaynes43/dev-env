@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.8.0](https://github.com/thaynes43/dev-env/compare/v2.7.1...v2.8.0) (2026-10-08)
+
+
+### Features
+
+* **cli:** connect from laptop kubeconfig through verified TLS ([#103](https://github.com/thaynes43/dev-env/issues/103)) ([12a97c4](https://github.com/thaynes43/dev-env/commit/12a97c402917d2fbd01ff78f114498411fb63a5d))
+
 ## [2.7.1](https://github.com/thaynes43/dev-env/compare/v2.7.0...v2.7.1) (2026-10-08)
 
 
