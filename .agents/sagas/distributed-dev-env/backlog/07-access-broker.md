@@ -1,6 +1,6 @@
 # 07: access broker
 
-**Status:** docs-only approval spike complete, Q-18 awaiting Tom's route choice (2026-10-08, [R-03](../research/R-03-claude-code-approvals.md)). Plan 02's corrected in-cluster acceptance passed; no laptop setup blocks progress (README decisions 44 and 45, Q-17). Steps 1 to 5 are built; H2 is deployed and verified. The v1 parity audit is complete ([R-04](../research/R-04-v1-capability-parity.md)); all twenty gaps below block cutover. Restore the omitted baseline credentials after [the rescue-mount fix (#108)](https://github.com/thaynes43/dev-env/pull/108), then build keeper SSH minting (step 8/H5, Q-15 A, D-69). Q-18 blocks only the human approval implementation; capabilities beyond today's tier remain unavailable. A possible management UI changes neither Q-16 nor this priority order. [Issue #91](https://github.com/thaynes43/dev-env/issues/91) tracks the spike. Draft branches `agent/plan07-approvals-round3` (dev-env) and `agent/plan07-catalog-round3` (haynes-ops) retain reusable pieces; #90 and haynes-ops #3550 remain closed.
+**Status:** docs-only approval spike complete, Q-18 awaiting Tom's route choice (2026-10-08, [R-03](../research/R-03-claude-code-approvals.md)). Plan 02's corrected in-cluster acceptance passed; no laptop setup blocks progress (README decisions 44 and 45, Q-17). Steps 1 to 5 are built; H2 is deployed and verified. The v1 parity audit is complete ([R-04](../research/R-04-v1-capability-parity.md)); all twenty gaps below block cutover. Baseline references and the rescue-mount fix are deployed (#108, haynes-ops #3584/#3583); a fresh full fixture passed presence/permission and read-only Omni/API checks. P-11/P-12 remain open for their complete service/network evidence. Build keeper SSH minting (step 8/H5, Q-15 A, D-69). Q-18 blocks only the human approval implementation; capabilities beyond today's tier remain unavailable. A possible management UI changes neither Q-16 nor this priority order. [Issue #91](https://github.com/thaynes43/dev-env/issues/91) tracks the spike. Draft branches `agent/plan07-approvals-round3` (dev-env) and `agent/plan07-catalog-round3` (haynes-ops) retain reusable pieces; #90 and haynes-ops #3550 remain closed.
 **Depends on:** 01 (the baseline guard and egress tiers are in place); Q-07 (Tom
 2026-10-06: credential grants, A)
 **Parallel with:** 02 in the architecture; this run finishes 02 first (README
@@ -124,9 +124,10 @@ acceptance passes; permission checks alone do not cover admission or networking.
 - [ ] P-08: full/dev internal Traefik HTTPS and browser check.
 - [ ] P-09: ops observability service ports and external destinations.
 - [ ] P-10: grant CLI/MCP request/use/release and re-request after expiry.
-- [ ] P-11: baseline Proxmox reader references and actual read-only access.
-- [ ] P-12: full Omni Reader/GCP/Cloudflare references and service checks;
-  rescue holds omit their credential mounts while retaining GitHub/home/shared.
+- [ ] P-11: references restored/SecretSynced; actual read-only access awaits P-13.
+- [ ] P-12: references restored/SecretSynced; fresh full presence/ADC permissions
+  and Omni read passed. Complete GCP/Cloudflare service checks remain. Rescue
+  credential exclusion is covered by controller tests; no runtime hold was needed.
 - [ ] P-13: both existing PVE API endpoints and all seven SSH network paths.
 - [ ] P-14: Q-15 keeper PVE mint/install/revoke, durable recovery and real test.
 - [ ] P-15: typed agentd store and per-call pve selection, expiry/redaction/flags.

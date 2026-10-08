@@ -36,9 +36,11 @@ the saga. To start building, follow
     guarded route's unresolved phone, authority and shared OAuth checks.
     **Q-18 awaits Tom's route choice.** No human approval path is enabled.
     The complete v1 parity audit is recorded in [R-04](sagas/distributed-dev-env/research/R-04-v1-capability-parity.md).
-    Twenty gaps in backlog/07 block cutover. Next: restore the omitted baseline
-    credentials after [the rescue-mount fix (#108)](https://github.com/thaynes43/dev-env/pull/108) ships, then keeper SSH minting under
-    D-69. The pending approval choice does not block them. Q-16 was ruled on 2026-10-08
+    Twenty gaps in backlog/07 block cutover. The omitted baseline references are restored and verified after the
+    rescue-mount fix (#108, haynes-ops #3584/#3583). A fresh full session passed
+    presence/ADC permission checks and read-only Omni/API calls, then was rescued
+    and removed. PVE LAN access and the remaining service checks still block
+    full closure. Keeper SSH minting is being built under D-69. The pending approval choice does not block them. Q-16 was ruled on 2026-10-08
     (parity first; approvals inside the Claude Code app), and PR #90 and haynes-ops
     #3550 were closed because their Pushover and web approval surface is ruled out.
     The resume point is the last coordinator comment on
@@ -47,12 +49,12 @@ the saga. To start building, follow
     approver; no v1 refresh token is copied. Draft code: branch
     `agent/plan07-approvals-round3` (dev-env) and `agent/plan07-catalog-round3`
     (haynes-ops).
-  - **Live state checked after deployment, 2026-10-08:** operator `sha-12a97c4`
+  - **Live state checked after deployment, 2026-10-08:** operator `sha-d4c48bc`
     (updated/ready/available 2/2), broker `sha-763fe77` (2/2), keeper
-    `sha-fac4751` (1/1), agent template `2.8.0`. Both Flux targets are Ready on
-    haynes-ops `8f3e104`; operator HelmRelease reports `UpgradeSucceeded`.
+    `sha-fac4751` (1/1), agent template `2.8.0`. Operator, secrets and templates Flux targets are Ready;
+    the baseline restore applied haynes-ops `4f1b9c52`; operator HelmRelease reports `UpgradeSucceeded`.
     A live v2 `agent-run fleet` query with v1's identity passed and reported
-    revision `2.8.0-dcdc99d358`, no sessions. `dev-agents` holds only the shelf
+    revision `2.8.0-c9a9406657`, no sessions after verification. `dev-agents` holds only the shelf
     pod. The shelf and v1 pod retained their initial UIDs and every container's
     zero restart count. The scoped rollout declaration was ended.
     New dependency PRs appeared after the bench; green
