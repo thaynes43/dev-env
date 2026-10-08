@@ -3331,6 +3331,10 @@ records the remaining cutover blockers.
   revocation. Provider expiry independently bounds API authentication during an
   outage. Leadership loss cancels work; revalidate leadership and live immutable
   identities before remote writes and installation. No session is restarted.
+  Before deleting a keeper-confirmed revoked job, the broker persists its job UID,
+  grant UID and revocation time on the grant. That receipt makes finalizer retries
+  safe after job deletion. An unexplained missing pinned job cannot claim early
+  revocation, and the receipt never authorizes another mint.
   The native SSH create path repeats live job, grant, session, pod and expiry
   checks after channel setup, immediately before dispatch, then refreshes the
   Lease check. Cleanup can still run after release or session disappearance.
