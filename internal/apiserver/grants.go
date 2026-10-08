@@ -56,7 +56,7 @@ func (s *Server) createGrant(ctx context.Context, w http.ResponseWriter, r *http
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
 
-	mine, err := s.sessionGrants(ctx, c.parent)
+	mine, err := s.sessionGrants(ctx, c.parent, c.session.UID)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -146,11 +146,12 @@ func (s *Server) newGrant(req apiv1.CreateGrantRequest, c *caller) (*v1alpha1.Ac
 	typ := v1alpha1.GrantType(req.Type)
 	spec := v1alpha1.AccessGrantSpec{
 		Requester: v1alpha1.GrantRequester{
-			Session: c.parent,
-			Repo:    c.session.Spec.Repo,
-			Profile: c.profile,
-			Agent:   c.session.Spec.Agent,
-			Parent:  c.session.Spec.Parent,
+			Session:    c.parent,
+			SessionUID: c.session.UID,
+			Repo:       c.session.Spec.Repo,
+			Profile:    c.profile,
+			Agent:      c.session.Spec.Agent,
+			Parent:     c.session.Spec.Parent,
 		},
 		Type:   typ,
 		Reason: req.Reason,
@@ -244,9 +245,10 @@ func grantName(now time.Time) (string, error) {
 	return "grant-" + now.UTC().Format("0102-150405") + "-" + hex.EncodeToString(b), nil
 }
 
-// sessionGrants lists a session's grants from the API server, so a request a
-// moment ago counts.
-func (s *Server) sessionGrants(ctx context.Context, session string) ([]v1alpha1.AccessGrant, error) {
+// sessionGrants lists this incarnation's requests from the API server, so a
+// request a moment ago counts. Historical non-credential grants without a UID
+// retain their name-based compatibility; credentials always require a UID.
+func (s *Server) sessionGrants(ctx context.Context, session string, uid types.UID) ([]v1alpha1.AccessGrant, error) {
 	var list v1alpha1.AccessGrantList
 	if err := s.Live.List(ctx, &list, client.InNamespace(s.Policy.SessionNamespace),
 		client.MatchingLabels{v1alpha1.LabelSession: session}); err != nil {
@@ -254,11 +256,23 @@ func (s *Server) sessionGrants(ctx context.Context, session string) ([]v1alpha1.
 	}
 	out := list.Items[:0]
 	for _, g := range list.Items {
-		if g.Spec.Requester.Session == session && g.DeletionTimestamp.IsZero() {
+		if grantRequestedBy(&g, session, uid) && g.DeletionTimestamp.IsZero() {
 			out = append(out, g)
 		}
 	}
 	return out, nil
+}
+
+// grantRequestedBy fences requester writes by authenticated session identity.
+// Only historical non-credential grants can match without a captured UID.
+func grantRequestedBy(g *v1alpha1.AccessGrant, session string, uid types.UID) bool {
+	if g.Spec.Requester.Session != session {
+		return false
+	}
+	if bound := g.Spec.Requester.SessionUID; bound != "" {
+		return bound == uid
+	}
+	return g.Spec.Type != v1alpha1.GrantCredential
 }
 
 // pending is a grant that waits for an answer: no phase yet or Pending, and not
@@ -454,8 +468,8 @@ func (s *Server) releaseGrant(ctx context.Context, _ http.ResponseWriter, r *htt
 	if err := s.Live.Get(ctx, key, &g); err != nil {
 		return 0, nil, fromGrantKubeError(err, "grant "+key.Name)
 	}
-	if c.kind == kindSession && g.Spec.Requester.Session != c.parent {
-		return 0, nil, forbidden("grant %s is session %s's; a session releases only its own grants", g.Name, g.Spec.Requester.Session)
+	if c.kind == kindSession && !grantRequestedBy(&g, c.parent, c.session.UID) {
+		return 0, nil, forbidden("grant %s belongs to another requesting session; a session releases only its own grants", g.Name)
 	}
 	if g.Spec.Release || g.Status.Phase.Ended() {
 		return http.StatusOK, s.grantView(&g), nil

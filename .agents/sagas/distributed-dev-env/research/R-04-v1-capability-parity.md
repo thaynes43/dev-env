@@ -82,6 +82,23 @@ still a gap; an authorization check alone cannot close it.
 P-11/P-12 are implementation regressions being corrected. The other rows include
 missing planned work and actual guard/network losses. None is waived by the audit.
 
+## Baseline restoration (2026-10-08)
+
+The rescue-mount fix (#108) shipped first as signed operator `sha-d4c48bc` through
+haynes-ops #3584. The operator Kustomization depends on templates, so combining
+both changes in one commit would have applied the GCP mount before the fix.
+After rollout verification, haynes-ops #3583 restored the references. All four
+ExternalSecrets are Ready/SecretSynced; secrets/templates applied `4f1b9c52`.
+
+Idle full S session `dev-env-1008-142013` verified environment presence without
+values and readable service-account ADC JSON at read-only `/etc/gcp` mode 0440.
+Bounded Omni Reader and own operator API calls exited zero with output discarded.
+It sent no prompt, was rescued as CleanAndPushed and removed with its home volume.
+V1 and shelf UIDs/readiness/all restart counts stayed unchanged; the declaration
+was ended. No natural hold pod was needed. No PVE LAN check or Cloudflare/GCP API
+mutation/token exchange was performed. P-11/P-12 remain unchecked for their full
+closure evidence; their missing-reference regressions are fixed.
+
 ## Scope that must remain distinct
 
 Q-07 removes only the Proxmox **operator** token and long-lived hardware SSH key

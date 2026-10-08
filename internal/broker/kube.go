@@ -140,6 +140,9 @@ func (b *Broker) ensureOne(ctx context.Context, g *v1alpha1.AccessGrant, want, h
 // success, so it can run again. Deleting the ServiceAccount ends every token
 // of the grant at once.
 func (b *Broker) revoke(ctx context.Context, g *v1alpha1.AccessGrant, why string) error {
+	if g.Spec.Type == v1alpha1.GrantCredential {
+		return b.revokeCredential(ctx, g)
+	}
 	var deleted, kept []string
 	var errs []error
 	del := func(o client.Object) {
@@ -179,7 +182,7 @@ func (b *Broker) revoke(ctx context.Context, g *v1alpha1.AccessGrant, why string
 		// Exec may have delivered a token before its installation status
 		// was persisted. Removal is idempotent and fences the current pod
 		// by UID, so even an empty InstalledPodUID must attempt cleanup.
-		if s, err := b.lookupSession(ctx, g.Spec.Requester.Session); err == nil && s != nil {
+		if s, err := b.requestingSession(ctx, g); err == nil && s != nil {
 			if pod := b.sessionPod(ctx, s, false); pod != nil {
 				// Best effort: the token is dead already, with its
 				// ServiceAccount.

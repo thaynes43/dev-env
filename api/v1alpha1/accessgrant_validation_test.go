@@ -111,6 +111,9 @@ func TestAccessGrantAccepts(t *testing.T) {
 		}},
 		{"an IPv6 range", egressGrant, func(g *v1alpha1.AccessGrant) { g.Spec.Egress.CIDRs = []string{"2001:db8::/64"} }},
 		{"a Proxmox credential for 4h", credentialGrant, func(g *v1alpha1.AccessGrant) { g.Spec.TTL = ttl(4 * time.Hour) }},
+		{"a credential with its authenticated session UID", credentialGrant, func(g *v1alpha1.AccessGrant) {
+			g.Spec.Requester.SessionUID = "11111111-1111-1111-1111-111111111111"
+		}},
 		{"an hw-ssh credential", credentialGrant, func(g *v1alpha1.AccessGrant) {
 			g.Spec.Credential.Name = v1alpha1.CredentialHWSSH
 		}},
@@ -251,6 +254,9 @@ func TestAccessGrantSpecImmutableExceptRelease(t *testing.T) {
 	}{
 		{"release", kubeGrant, func(s *v1alpha1.AccessGrantSpec) { s.Release = true }, ""},
 		{"change the requester", kubeGrant, func(s *v1alpha1.AccessGrantSpec) { s.Requester.Session = "other-session" }, immutable},
+		{"add a requester UID after creation", credentialGrant, func(s *v1alpha1.AccessGrantSpec) {
+			s.Requester.SessionUID = "11111111-1111-1111-1111-111111111111"
+		}, immutable},
 		{"change the role", kubeGrant, func(s *v1alpha1.AccessGrantSpec) { s.Kube.Role = v1alpha1.RoleStorage }, immutable},
 		{"add a namespace", kubeGrant, func(s *v1alpha1.AccessGrantSpec) {
 			s.Kube.Namespaces = append(s.Kube.Namespaces, "frontend")

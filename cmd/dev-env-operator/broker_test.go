@@ -12,6 +12,9 @@ func TestParseBrokerFlags(t *testing.T) {
 	if o != want {
 		t.Errorf("defaults %+v, want %+v", o, want)
 	}
+	if o, err := parseBrokerFlags([]string{"--enable-proxmox-grants"}); err != nil || !o.enableProxmoxGrants {
+		t.Fatalf("explicit Proxmox enable: %+v %v", o, err)
+	}
 	t.Setenv("POD_NAMESPACE", "")
 	if o, err := parseBrokerFlags([]string{"--leader-elect=false", "--session-namespace=agents"}); err != nil || o.leaderElect || o.sessionNamespace != "agents" || o.policyNamespace != "dev-env-system" {
 		t.Errorf("%+v %v", o, err)

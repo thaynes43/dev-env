@@ -2,13 +2,16 @@
 # pve — Proxmox VE API helper for the dev-env pod (saga dev-env backlog 14).
 # Manual: .agents/runbooks/proxmox-access.md (haynes-ops).
 #
-# Tiers (chosen from the environment, never from files):
+# Tiers (selected for each invocation):
 #   READ      PVE_TOKEN_ID / PVE_TOKEN_SECRET            prometheus@pve!exporter, PVEAuditor
-#   OPERATOR  PVE_OPERATOR_TOKEN_ID / _SECRET             dev-env@pve!operator, VM-scoped
+#   OPERATOR  PVE_OPERATOR_TOKEN_ID / _SECRET             dev-env@pve operator roles
+# In v2, agentd supplies an unexpired private credential grant when the v1
+# operator environment is absent. --ro always uses the baseline reader.
 # The operator token is used when present unless --ro is given. Writes need --yes and
 # print the resolved request first. Every privilege check is SERVER-SIDE (PVE ACLs) —
 # this script only makes the call.
 set -euo pipefail
+ORIGINAL_ARGS=("$@")
 
 PVE_API_URL="${PVE_API_URL:-https://pvedash.haynesnetwork}"
 RO=0; YES=0; RAW=0; ANY=0
@@ -36,7 +39,12 @@ usage: pve [--ro] [--yes] [--raw] [--any] [--node <name>] <command>
 USAGE
 }
 
-log()  { printf '%s\n' "$*" >&2; }
+redact() {
+  local value="$*"
+  if [[ -n "${SELECTED_SECRET:-}" ]]; then value="${value//"$SELECTED_SECRET"/[redacted]}"; fi
+  printf '%s' "$value"
+}
+log()  { redact "$*" >&2; printf '\n' >&2; }
 die()  { log "pve: $*"; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "missing $1"; }
 need curl; need jq
@@ -66,9 +74,30 @@ set -- ${ARGS[@]+"${ARGS[@]}"}   # bash 3.2 + set -u: see the note in api()
 
 # ---- token ------------------------------------------------------------------
 TIER=""
+# Re-enter this helper only through agentd, which validates the private file
+# and puts the value in its child's environment. The marker prevents a loop;
+# it never establishes operator authority without the actual token variables.
+if [[ $RO -eq 0 && ( -z "${PVE_OPERATOR_TOKEN_ID:-}" || -z "${PVE_OPERATOR_TOKEN_SECRET:-}" ) ]]; then
+  [[ "${PVE_GRANT_ACTIVE:-}" != 1 ]] || die "private operator credential was not supplied"
+  if command -v agentd >/dev/null 2>&1 && [[ -e "${DEV_ENV_GRANTS_DIR:-/run/dev-env/grants}" || -L "${DEV_ENV_GRANTS_DIR:-/run/dev-env/grants}" ]]; then
+    set +e
+    agentd ctl credential-available --credential proxmox
+    grant_exit=$?
+    set -e
+    # Only the metadata-only preflight may select reader fallback. Once
+    # execution starts, every exit (including 4) must propagate unchanged;
+    # retrying then could duplicate a write. An expiry race fails safely.
+    if [[ $grant_exit -eq 0 ]]; then
+      exec agentd ctl credential-use --credential proxmox -- "$0" ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}
+    fi
+    [[ $grant_exit -eq 4 ]] || exit "$grant_exit"
+  fi
+fi
 if [[ $RO -eq 0 && -n "${PVE_OPERATOR_TOKEN_ID:-}" && -n "${PVE_OPERATOR_TOKEN_SECRET:-}" ]]; then
+  SELECTED_SECRET="${PVE_OPERATOR_TOKEN_SECRET}"
   TOKEN="${PVE_OPERATOR_TOKEN_ID}=${PVE_OPERATOR_TOKEN_SECRET}"; TIER="operator"
 elif [[ -n "${PVE_TOKEN_ID:-}" && -n "${PVE_TOKEN_SECRET:-}" ]]; then
+  SELECTED_SECRET="${PVE_TOKEN_SECRET}"
   TOKEN="${PVE_TOKEN_ID}=${PVE_TOKEN_SECRET}"; TIER="read"
 else
   die "no PVE token in the environment (PVE_TOKEN_ID/_SECRET) — backlog 14 PR B not deployed yet? Do not copy one from another pod."
@@ -88,10 +117,11 @@ api() {
   local url="${PVE_API_URL}/api2/json${p}"
   local out code
   if [[ "$m" == "GET" ]]; then
-    out="$(curl -sS -k -G ${args[@]+"${args[@]}"} -H "Authorization: PVEAPIToken=${TOKEN}" -w '\n%{http_code}' "$url")"
+    out="$(printf 'Authorization: PVEAPIToken=%s\n' "$TOKEN" | curl -sS -k -G ${args[@]+"${args[@]}"} -H @- -w '\n%{http_code}' "$url")"
   else
-    out="$(curl -sS -k -X "$m" ${args[@]+"${args[@]}"} -H "Authorization: PVEAPIToken=${TOKEN}" -w '\n%{http_code}' "$url")"
+    out="$(printf 'Authorization: PVEAPIToken=%s\n' "$TOKEN" | curl -sS -k -X "$m" ${args[@]+"${args[@]}"} -H @- -w '\n%{http_code}' "$url")"
   fi
+  out="$(redact "$out")"
   code="${out##*$'\n'}"; out="${out%$'\n'*}"
   if [[ "$code" != 2* ]]; then
     local msg; msg="$(printf '%s' "$out" | jq -r '.message // .errors // empty' 2>/dev/null || true)"

@@ -200,6 +200,11 @@ func (g Grants) Install(spec GrantSpec, token []byte) error {
 		if !fi.IsDir() {
 			return errors.New("the grant path is not a directory, or is a symlink")
 		}
+		if present, err := credentialDirectoryPresent(dir); present {
+			return errors.New("the grant path already holds a provider credential")
+		} else if err != nil {
+			return errors.New("the grant path is unsafe")
+		}
 		if err := os.Chmod(dir, 0o700); err != nil {
 			return err
 		}
@@ -230,6 +235,11 @@ func (g Grants) Remove(name string) error {
 		return err
 	}
 	return g.locked(func() error {
+		if present, err := credentialDirectoryPresent(filepath.Join(g.Dir, name)); present {
+			return errors.New("the grant path holds a provider credential")
+		} else if err != nil {
+			return errors.New("the grant path is unsafe")
+		}
 		if err := os.RemoveAll(filepath.Join(g.Dir, name)); err != nil {
 			return err
 		}
@@ -301,11 +311,16 @@ func (g Grants) locked(f func() error) error {
 	if err := g.checkDir(); err != nil {
 		return err
 	}
-	lf, err := os.OpenFile(filepath.Join(g.Dir, grantsLock), os.O_CREATE|os.O_RDWR, 0o600)
+	fd, err := syscall.Open(filepath.Join(g.Dir, grantsLock), syscall.O_CREAT|syscall.O_RDWR|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600)
 	if err != nil {
-		return err
+		return errors.New("the grants lock is missing or unsafe")
 	}
+	lf := os.NewFile(uintptr(fd), "grants lock")
 	defer func() { _ = lf.Close() }()
+	fi, err := lf.Stat()
+	if err != nil || checkPrivate(fi, false) != nil {
+		return errors.New("the grants lock has an invalid type, owner, or permissions")
+	}
 	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX); err != nil {
 		return fmt.Errorf("lock %s: %w", g.Dir, err)
 	}
@@ -324,6 +339,11 @@ func (g Grants) read(now time.Time) ([]protocol.InstalledGrant, error) {
 	var list []protocol.InstalledGrant
 	for _, e := range entries {
 		if !e.IsDir() || protocol.ValidGrantName(e.Name()) != nil {
+			continue
+		}
+		// Provider credentials share this root but never belong in a
+		// kubeconfig. Leave their typed entries to the credential store.
+		if present, err := credentialDirectoryPresent(filepath.Join(g.Dir, e.Name())); present || err != nil {
 			continue
 		}
 		ig, ok := g.readOne(e.Name())
@@ -363,6 +383,9 @@ func (g Grants) rewrite(now time.Time, use string) error {
 	var live []protocol.InstalledGrant
 	for _, e := range entries {
 		if !e.IsDir() || protocol.ValidGrantName(e.Name()) != nil {
+			continue
+		}
+		if present, err := credentialDirectoryPresent(filepath.Join(g.Dir, e.Name())); present || err != nil {
 			continue
 		}
 		ig, ok := g.readOne(e.Name())

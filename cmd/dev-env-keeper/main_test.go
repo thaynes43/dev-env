@@ -47,3 +47,19 @@ func TestParseFlagsRefuses(t *testing.T) {
 		t.Errorf("overrides: %+v %v", o, err)
 	}
 }
+
+func TestProxmoxGrantsRequireExplicitEnableAndLeader(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.proxmoxGrants.Enabled {
+		t.Fatal("credential grants enabled by default")
+	}
+	for _, args := range [][]string{{"--enable-proxmox-grants", "--leader-elect=false"}, {"--enable-proxmox-grants", "--ssh-ca-dir="}, {"--enable-proxmox-grants", "--proxmox-ssh-targets-file="}} {
+		if _, err := parseFlags(args); err == nil {
+			t.Fatalf("accepted invalid configuration %v", args)
+		}
+	}
+	o, err = parseFlags([]string{"--enable-proxmox-grants"})
+	if err != nil || !o.proxmoxGrants.Enabled {
+		t.Fatal("explicit feature flag was not accepted")
+	}
+}

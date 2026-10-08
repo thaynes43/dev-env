@@ -43,6 +43,8 @@ type Options struct {
 	SessionNamespace string
 	// PolicyNamespace holds the GrantPolicies and the Lease.
 	PolicyNamespace string
+	// EnableProxmoxGrants is false until keeper/node trust and acceptance pass.
+	EnableProxmoxGrants bool
 	// LeaderElect elects one leader among the replicas; only it reconciles.
 	LeaderElect bool
 	// LeaseDuration, RenewDeadline and RetryPeriod tune leader election; zero
@@ -72,7 +74,8 @@ func CacheOptions(sessionNamespace, policyNamespace string) cache.Options {
 	return cache.Options{
 		DefaultNamespaces: map[string]cache.Config{sessionNamespace: {}},
 		ByObject: map[client.Object]cache.ByObject{
-			&v1alpha1.GrantPolicy{}: {Namespaces: map[string]cache.Config{policyNamespace: {}}},
+			&v1alpha1.GrantPolicy{}:   {Namespaces: map[string]cache.Config{policyNamespace: {}}},
+			&v1alpha1.CredentialJob{}: {Namespaces: map[string]cache.Config{policyNamespace: {}}},
 			&corev1.Pod{}: {Label: labels.SelectorFromSet(labels.Set{
 				v1alpha1.LabelAppName: v1alpha1.AppNameSession,
 			})},
@@ -127,14 +130,15 @@ func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 		clk = clock.RealClock{}
 	}
 	b := &Broker{
-		Client:           mgr.GetClient(),
-		APIReader:        mgr.GetAPIReader(),
-		SessionNamespace: o.SessionNamespace,
-		PolicyNamespace:  o.PolicyNamespace,
-		Clock:            clk,
-		Notifier:         o.Notifier,
-		Installer:        o.Installer,
-		Recorder:         mgr.GetEventRecorder(Name),
+		Client:              mgr.GetClient(),
+		APIReader:           mgr.GetAPIReader(),
+		SessionNamespace:    o.SessionNamespace,
+		PolicyNamespace:     o.PolicyNamespace,
+		EnableProxmoxGrants: o.EnableProxmoxGrants,
+		Clock:               clk,
+		Notifier:            o.Notifier,
+		Installer:           o.Installer,
+		Recorder:            mgr.GetEventRecorder(Name),
 	}
 	b.reconciled = o.reconciled
 	if err := b.SetupWithManager(mgr); err != nil {
@@ -150,6 +154,7 @@ func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 // grants it watches a session that ends (deleted, or being deleted) and a
 // session pod that appears or starts Running, which enqueue that session's
 // grants, and every GrantPolicy change, which enqueues every pending grant.
+// CredentialJob receipts enqueue their immutable grant reference too.
 func (b *Broker) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("accessgrant").
@@ -187,7 +192,19 @@ func (b *Broker) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, _ client.Object) []reconcile.Request {
 				return b.grantsOf(ctx, "", true)
 			})).
+		Watches(&v1alpha1.CredentialJob{}, handler.EnqueueRequestsFromMapFunc(b.grantOfCredentialJob)).
 		Complete(b)
+}
+
+// Job events only wake the named grant. Reconcile reads through the API server
+// and validates every immutable reference and receipt before accepting it.
+func (b *Broker) grantOfCredentialJob(_ context.Context, o client.Object) []reconcile.Request {
+	j := o.(*v1alpha1.CredentialJob)
+	if j.Namespace != b.PolicyNamespace || j.Spec.Grant.Namespace != b.SessionNamespace ||
+		j.Name != v1alpha1.CredentialJobName(j.Spec.Grant.UID) {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: b.SessionNamespace, Name: j.Spec.Grant.Name}}}
 }
 
 // grantsOf lists grants from the cache: a session's (by the session label the

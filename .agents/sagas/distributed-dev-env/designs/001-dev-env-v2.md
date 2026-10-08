@@ -3291,6 +3291,11 @@ records the remaining cutover blockers.
   Release is one-way. The broker alone decides and writes AccessGrant status.
   The keeper writes job execution/cleanup receipts, never approval or grant status.
   RBAC and admission enforce this division; a receipt contains no token.
+  The broker pins the created job UID on the grant before execution. Request
+  deduplication and pending quota use the authenticated session UID, so replacing
+  a session under the same name cannot inherit its grant. Newly UID-bound kube
+  and egress requests follow the same identity fence; historical unbound
+  non-credential grants retain their compatibility path.
 - A leader-only keeper worker uses native Go SSH with explicitly pinned hosts.
   It signs an ephemeral key from its own mounted Ed25519 CA for the existing
   Unix user `dev-env`, with principal `dev-env-keeper-proxmox-minter`, a critical
@@ -3303,6 +3308,9 @@ records the remaining cutover blockers.
   keeper gets/patches that name. The bounded journal holds at most 128 entries
   and 512 KiB serialized data; capacity causes backpressure before minting.
   No token is written to events, job/grant status, annotations or logs.
+  Before dispatch, a public receipt records the provider token identity without
+  its value. If the private journal disappears while that receipt or dispatch
+  marker survives, the worker reconstructs uncertain cleanup and never remints.
 - A persisted token is reinstalled after keeper restart or replacement session
   pod, without reminting. If dispatch may have occurred and its returned value
   was lost, the job fails closed. Cleanup retries deleting the possibly minted
@@ -3315,11 +3323,21 @@ records the remaining cutover blockers.
   helper selects an unexpired grant per call through a child process with its
   validated operator environment; it never prints the token. `--ro` retains
   baseline reader access, and existing flags/generic CRUD remain available.
+  A private ownership record is committed before the first temporary token file,
+  so recovery can remove an interrupted first installation without deleting a
+  different grant's material. A pending credential is never selectable.
 - Release, session end/deletion and expiry persist cleanup intent before provider
   deletion. Broker waits for the keeper's cleanup receipt before claiming early
   revocation. Provider expiry independently bounds API authentication during an
   outage. Leadership loss cancels work; revalidate leadership and live immutable
   identities before remote writes and installation. No session is restarted.
+  Before deleting a keeper-confirmed revoked job, the broker persists its job UID,
+  grant UID and revocation time on the grant. That receipt makes finalizer retries
+  safe after job deletion. An unexplained missing pinned job cannot claim early
+  revocation, and the receipt never authorizes another mint.
+  The native SSH create path repeats live job, grant, session, pod and expiry
+  checks after channel setup, immediately before dispatch, then refreshes the
+  Lease check. Cleanup can still run after release or session disappearance.
 
 Owner provisioning names: 1Password item `dev-env-ssh-ca`, fields
 `SSH_CA_PRIVATE_KEY_B64` and `SSH_CA_PUBLIC_KEY`; projected Secret

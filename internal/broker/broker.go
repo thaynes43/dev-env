@@ -24,8 +24,9 @@
 // grants (step 5, D-64) make a namespaced CiliumNetworkPolicy, without an
 // identity or token. Step 6 is the approval page (Decide) and Pushover (Notifier).
 //
-// 5.1 holds here too: the broker keeps nothing outside AccessGrant objects, so
-// a restart changes nothing for an active grant. The envtest suite in this
+// Approval and execution fences persist in AccessGrants. Credential execution
+// uses immutable CredentialJobs with keeper-owned receipts; a receipt never
+// approves a grant. A restart needs no in-memory grant state. The envtest suite in this
 // package runs the broker under exactly the RBAC and admission policy that
 // haynes-ops gives it.
 package broker
@@ -97,6 +98,9 @@ type Broker struct {
 	SessionNamespace string
 	// PolicyNamespace holds the GrantPolicies and the broker's Lease.
 	PolicyNamespace string
+	// EnableProxmoxGrants permits new PVE execution requests. Existing jobs
+	// still clean up when this is disabled.
+	EnableProxmoxGrants bool
 	// Clock is the broker's time; tests step a fake one.
 	Clock clock.PassiveClock
 	// Notifier tells Tom a grant waits for him; nil tells no one.
@@ -146,10 +150,13 @@ func (b *Broker) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 	if g.Status.Phase.Ended() {
 		return b.retain(ctx, &g, now)
 	}
-	if err := check(&g, b.SessionNamespace, b.PolicyNamespace); err != nil {
+	if err := checkCapabilities(&g, b.EnableProxmoxGrants || g.Status.Phase == v1alpha1.GrantActive, b.SessionNamespace, b.PolicyNamespace); err != nil {
 		return b.end(ctx, &g, v1alpha1.GrantDenied, DeniedByBroker, err.Error(), now)
 	}
-	sess, err := b.session(ctx, g.Spec.Requester.Session)
+	sess, err := b.requestingSession(ctx, &g)
+	if sess != nil && !sess.DeletionTimestamp.IsZero() {
+		sess = nil
+	}
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -240,6 +247,9 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 	if g.Spec.Release {
 		return b.end(ctx, g, v1alpha1.GrantReleased, "", "released by its session", now)
 	}
+	if g.Spec.Type == v1alpha1.GrantCredential {
+		return b.activeCredential(ctx, g, sess, now)
+	}
 
 	made, err := b.ensure(ctx, g)
 	if err != nil {
@@ -293,6 +303,9 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 func (b *Broker) end(ctx context.Context, g *v1alpha1.AccessGrant, phase v1alpha1.GrantPhase, deniedBy, msg string, now metav1.Time) (ctrl.Result, error) {
 	if g.Status.Phase == v1alpha1.GrantActive {
 		if err := b.revoke(ctx, g, string(phase)); err != nil {
+			if errors.Is(err, errCredentialCleanupPending) {
+				return ctrl.Result{RequeueAfter: installRetry}, nil
+			}
 			return ctrl.Result{}, err
 		}
 	}
@@ -333,6 +346,9 @@ func (b *Broker) finalize(ctx context.Context, g *v1alpha1.AccessGrant) (ctrl.Re
 		return ctrl.Result{}, nil
 	}
 	if err := b.revoke(ctx, g, "deleted"); err != nil {
+		if errors.Is(err, errCredentialCleanupPending) {
+			return ctrl.Result{RequeueAfter: installRetry}, nil
+		}
 		return ctrl.Result{}, err
 	}
 	orig := g.DeepCopy()
@@ -364,16 +380,26 @@ func retryOn(err error, what string) (ctrl.Result, error) {
 	return ctrl.Result{}, fmt.Errorf("%s: %w", what, err)
 }
 
-// session returns the requesting session, or nil when it is gone or being
-// deleted. A session the cache does not have is read from the API server
-// before the grant is ended for it: a session created a moment ago may not
-// have reached the cache.
-func (b *Broker) session(ctx context.Context, name string) (*v1alpha1.AgentSession, error) {
-	s, err := b.lookupSession(ctx, name)
-	if err != nil || s == nil || !s.DeletionTimestamp.IsZero() {
-		return nil, err
+// requestingSession includes a deleting session for token cleanup. UID-bound
+// requests bypass the cache: the authenticated session may have been replaced
+// before the broker first saw the grant. Unbound historical non-credential
+// grants retain their name-based lookup.
+func (b *Broker) requestingSession(ctx context.Context, g *v1alpha1.AccessGrant) (*v1alpha1.AgentSession, error) {
+	if g.Spec.Requester.SessionUID == "" && g.Spec.Type != v1alpha1.GrantCredential {
+		return b.lookupSession(ctx, g.Spec.Requester.Session)
 	}
-	return s, nil
+	var s v1alpha1.AgentSession
+	err := b.APIReader.Get(ctx, types.NamespacedName{Namespace: b.SessionNamespace, Name: g.Spec.Requester.Session}, &s)
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read the requesting session: %w", err)
+	}
+	if s.UID != g.Spec.Requester.SessionUID {
+		return nil, nil
+	}
+	return &s, nil
 }
 
 // lookupSession returns the session, being deleted or not, or nil when it is

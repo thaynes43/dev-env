@@ -54,6 +54,7 @@ type options struct {
 	leaderElect     bool
 	metricsAddr     string
 	probeAddr       string
+	proxmoxGrants   keeper.ProxmoxGrantOptions
 }
 
 func defaultPermissions() string {
@@ -84,6 +85,12 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.leaderElect, "leader-elect", true, "hold the keeper's Lease before refreshing anything (one owner per credential)")
 	fs.StringVar(&o.metricsAddr, "metrics-bind-address", ":8080", "address of the Prometheus metrics endpoint; 0 turns it off")
 	fs.StringVar(&o.probeAddr, "health-probe-bind-address", ":8081", "address of /healthz and /readyz")
+	fs.BoolVar(&o.proxmoxGrants.Enabled, "enable-proxmox-grants", false, "enable keeper PVE credential jobs; requires CA, pinned host trust and leader election")
+	fs.StringVar(&o.proxmoxGrants.SessionNamespace, "session-namespace", "dev-agents", "namespace containing credential grants and session pods")
+	fs.StringVar(&o.proxmoxGrants.JournalSecret, "credential-journal-secret", keeper.DefaultCredentialJournalSecret, "keeper-only durable credential journal Secret in its own namespace")
+	fs.StringVar(&o.proxmoxGrants.CADir, "ssh-ca-dir", keeper.DefaultSSHCAPath, "mounted Ed25519 CA directory (private-key/public-key)")
+	fs.StringVar(&o.proxmoxGrants.TargetsFile, "proxmox-ssh-targets-file", keeper.DefaultSSHTargetsFile, "mounted JSON list of explicit pinned SSH host:22 targets")
+	fs.StringVar(&o.proxmoxGrants.KnownHostsFile, "ssh-known-hosts-file", keeper.DefaultSSHKnownHostsFile, "mounted strict OpenSSH known-hosts file")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
@@ -98,6 +105,9 @@ func parseFlags(args []string) (options, error) {
 	}
 	if o.interval < time.Minute {
 		return o, fmt.Errorf("--refresh-interval %s: at least 1m", o.interval)
+	}
+	if o.proxmoxGrants.Enabled && (!o.leaderElect || o.proxmoxGrants.SessionNamespace == "" || o.proxmoxGrants.JournalSecret == "" || o.proxmoxGrants.CADir == "" || o.proxmoxGrants.TargetsFile == "" || o.proxmoxGrants.KnownHostsFile == "") {
+		return o, errors.New("proxmox grants require leader election and nonempty credential configuration paths")
 	}
 	p, err := keeper.ParsePermissions(*perms)
 	if err != nil {
@@ -132,10 +142,11 @@ func run(args []string) error {
 			Permissions: o.permissions,
 			UserAgent:   binaryName + "/" + info.Version,
 		},
-		Interval:    o.interval,
-		LeaderElect: o.leaderElect,
-		MetricsAddr: o.metricsAddr,
-		ProbeAddr:   o.probeAddr,
-		Log:         log,
+		ProxmoxGrants: o.proxmoxGrants,
+		Interval:      o.interval,
+		LeaderElect:   o.leaderElect,
+		MetricsAddr:   o.metricsAddr,
+		ProbeAddr:     o.probeAddr,
+		Log:           log,
 	})
 }

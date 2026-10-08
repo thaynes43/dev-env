@@ -466,7 +466,7 @@ func TestEnvtestGrants(t *testing.T) {
 		if err := l.k8s.Get(ctx, types.NamespacedName{Namespace: sessionNS, Name: kube.Name}, &g); err != nil {
 			t.Fatal(err)
 		}
-		want := v1alpha1.GrantRequester{Session: sess.Name, Repo: "haynes-ops", Profile: "dev", Agent: "claude", Parent: humanSA}
+		want := v1alpha1.GrantRequester{Session: sess.Name, SessionUID: sess.UID, Repo: "haynes-ops", Profile: "dev", Agent: "claude", Parent: humanSA}
 		if g.Spec.Requester != want || g.Labels[v1alpha1.LabelSession] != sess.Name || g.Spec.TTL.Duration != 15*time.Minute {
 			t.Errorf("spec %+v labels %v", g.Spec, g.Labels)
 		}
