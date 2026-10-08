@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/url"
 	"reflect"
@@ -13,11 +14,14 @@ import (
 
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
 	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
@@ -201,5 +205,98 @@ func TestCredentialLostPrivateValueReconstructsOnlyCleanup(t *testing.T) {
 	}
 	if e, ok := f.entry(t); !ok || !e.Uncertain || e.Stage != journalCleanup {
 		t.Fatal("lost material uncertainty was not retained")
+	}
+}
+
+func TestCredentialMarkerFailureResetsProvenPredispatchIntent(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		commit   bool
+		conflict bool
+	}{
+		{"conflict", false, true}, {"transient error", false, false}, {"committed before response loss", true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f := newCredentialFixture(t)
+			failed := false
+			f.w.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				j, ok := obj.(*v1alpha1.CredentialJob)
+				if !failed && sub == "status" && ok && j.Status.Phase == v1alpha1.CredentialPending && j.Status.ProviderID != "" {
+					failed = true
+					if test.commit {
+						if err := c.SubResource(sub).Update(ctx, obj, opts...); err != nil {
+							return err
+						}
+					}
+					if test.conflict {
+						return apierrors.NewConflict(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "credentialjobs"}, j.Name, errors.New(credentialCanary))
+					}
+					return errors.New(credentialCanary)
+				}
+				return c.SubResource(sub).Update(ctx, obj, opts...)
+			}})
+			if err := f.reconcile(t); err == nil || strings.Contains(err.Error(), credentialCanary) {
+				t.Fatal("marker failure ignored or raw error exposed")
+			}
+			if !failed || f.provider.creates != 0 || f.installer.installs != 0 {
+				t.Fatal("marker failure dispatched provider or installed")
+			}
+			if e, ok := f.entry(t); !ok || e.Stage != journalIntent || e.Uncertain {
+				t.Fatal("proven pre-dispatch intent was not durably reset")
+			}
+			if (f.status(t).ProviderID != "") != test.commit {
+				t.Fatal("committed-marker fixture failed")
+			}
+			if err := f.reconcile(t); err != nil {
+				t.Fatal(err)
+			}
+			if f.provider.creates != 1 || f.installer.installs != 1 || f.status(t).Phase != v1alpha1.CredentialInstalled {
+				t.Fatal("safe marker retry failed to install exactly once")
+			}
+		})
+	}
+}
+
+func TestCredentialMarkerFailedResetRemainsCleanupOnly(t *testing.T) {
+	for _, commit := range []bool{false, true} {
+		t.Run(fmt.Sprintf("committed=%v", commit), func(t *testing.T) {
+			f := newCredentialFixture(t)
+			failingJournal := &failCredentialPatch{Client: f.c}
+			f.w.Journal.Client = failingJournal
+			failed := false
+			f.w.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				j, ok := obj.(*v1alpha1.CredentialJob)
+				if !failed && sub == "status" && ok && j.Status.Phase == v1alpha1.CredentialPending && j.Status.ProviderID != "" {
+					failed = true
+					if commit {
+						if err := c.SubResource(sub).Update(ctx, obj, opts...); err != nil {
+							return err
+						}
+					}
+					failingJournal.fail = true
+					return errors.New(credentialCanary)
+				}
+				return c.SubResource(sub).Update(ctx, obj, opts...)
+			}})
+			if err := f.reconcile(t); err == nil || strings.Contains(err.Error(), credentialCanary) {
+				t.Fatal("failed reset was ignored or leaked")
+			}
+			if !failed || f.provider.creates != 0 || f.installer.installs != 0 {
+				t.Fatal("marker failure dispatched")
+			}
+			if e, ok := f.entry(t); !ok || e.Stage != journalIntent || !e.Uncertain {
+				t.Fatal("failed reset lost conservative uncertainty")
+			}
+			failingJournal.fail = false
+			if err := f.reconcile(t); err != nil {
+				t.Fatal(err)
+			}
+			if f.provider.creates != 0 || f.installer.installs != 0 || f.status(t).Phase != v1alpha1.CredentialCleanupPending || f.status(t).FailureCode != v1alpha1.CredentialAmbiguousMint {
+				t.Fatal("failed reset allowed create or ended uncertainty early")
+			}
+			if e, ok := f.entry(t); !ok || e.Stage != journalCleanup || !e.Uncertain {
+				t.Fatal("uncertain tombstone was not retained")
+			}
+		})
 	}
 }

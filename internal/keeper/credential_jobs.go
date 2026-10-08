@@ -247,7 +247,14 @@ func (w *credentialWorker) reconcile(ctx context.Context, job *v1alpha1.Credenti
 			job.Status.Phase = v1alpha1.CredentialPending
 			job.Status.ProviderID = providerID(e.Spec.Grant.UID)
 			if w.Client.Status().Update(ctx, job) != nil {
-				return errors.New("could not persist credential dispatch marker")
+				// The marker may have committed, but SSH has not been called.
+				// A durable reset permits retry; failed persistence or a crash
+				// leaves the original uncertain intent cleanup-only.
+				e.Uncertain = false
+				if err = w.Journal.update(ctx, job.UID, &e); err != nil {
+					return err
+				}
+				return errors.New("could not persist credential dispatch marker; create did not dispatch")
 			}
 		}
 		opctx, cancel := w.operationContext(ctx)
