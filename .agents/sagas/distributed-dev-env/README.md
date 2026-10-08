@@ -181,7 +181,7 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 45 | Session access follows Tom's current workflow | **DECIDED** 2026-10-08 (Tom, correcting Q-17) | Use the `agent-run` CLI or ask agents to start sessions; a web UI is another possible session-management client. No laptop kubeconfig ceremony or laptop test blocks plan 02. Validate the existing in-cluster CLI workflow instead. D-68 remains an optional external path whose real external-machine use is unverified. This supersedes decision 44's laptop acceptance requirement and preserves the remaining priority order and Q-16. |
 
 The full options, consequences and rulings for Q-01 to Q-16, and the withdrawal
-of Q-17 after Tom corrected its premise, are in
+of Q-17 after Tom corrected its premise, plus the pending approval choice Q-18, are in
 [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions).
 
 ## Plan backlog
@@ -195,7 +195,7 @@ v1 stays live throughout. No v2 plan edits haynes-ops'
 | [01: foundation, task mode](backlog/01-foundation.md) (done 2026-10-07) | Q-01, Q-02, Q-04, Q-05 (all decided); spikes S-7, S-8, S-12 | |
 | [02: interactive sessions and lifecycle](backlog/02-interactive-lifecycle.md) (done 2026-10-08 under Q-17's corrected scope) | 01 | with 07 |
 | [07: access broker](backlog/07-access-broker.md) | 01; Q-07 (decided) | with 02 |
-| [03: Remote Control](backlog/03-remote-control.md) | 02, 07; spikes S-1, S-5, S-6, S-15 | |
+| [03: Remote Control](backlog/03-remote-control.md) | 02, 07's deployed broker core; R-03/Q-18 propose separating login/Remote Control core from management UI; spikes S-1, S-5, S-6, S-15 | |
 | [04: rolling updates and Codex](backlog/04-rolling-updates-codex.md) | 02, Q-03 (decided); spikes S-3, S-4 | with 03 |
 | [05: cutover from v1](backlog/05-cutover.md) | 03, 04, 07; Q-08's LimitRange live in haynes-ops; Tom's approval | |
 | [08: tool pods](backlog/08-tool-pods.md) | 02; spike S-10 | with 03, 04 |
