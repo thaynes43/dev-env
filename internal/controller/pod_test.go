@@ -480,16 +480,18 @@ func TestHoldPodShape(t *testing.T) {
 
 func TestHoldPodExcludesAgentProfileMounts(t *testing.T) {
 	for _, tc := range []struct {
-		name, profile, resolvedProfile, githubSecret string
+		name, profile, resolvedProfile, githubSecret, githubMount string
 	}{
-		{"default", "", "full", "dev-env-gh-token"},
-		{"full", "full", "full", "dev-env-gh-token"},
-		{"dev", "dev", "dev", "dev-env-gh-token"},
-		{"ops", "ops", "ops", "dev-env-ops-gh-token"},
+		{"default", "", "full", "dev-env-gh-token", "gh-token"},
+		{"full", "full", "full", "dev-env-gh-token", "gh-token"},
+		{"dev", "dev", "dev", "dev-env-gh-token", "gh-token"},
+		{"ops", "ops", "ops", "dev-env-ops-gh-token", "gh-token"},
+		{"renamed-github", "full", "full", "dev-env-gh-token", "github-credentials"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tmpl := exampleTemplates(t)
 			profile := tmpl.Profiles[tc.resolvedProfile]
+			profile.Mounts[0].Name = tc.githubMount
 			profile.Env = append(profile.Env, corev1.EnvVar{Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/etc/gcp/sa_key.json"})
 			profile.EnvFrom = append(profile.EnvFrom, corev1.EnvFromSource{SecretRef: &corev1.SecretEnvSource{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-auth"},
@@ -528,13 +530,13 @@ func TestHoldPodExcludesAgentProfileMounts(t *testing.T) {
 				}
 			}
 			if !slices.ContainsFunc(hold.Spec.Volumes, func(v corev1.Volume) bool {
-				return v.Name == "gh-token" && v.Secret != nil && v.Secret.SecretName == tc.githubSecret
+				return v.Name == tc.githubMount && v.Secret != nil && v.Secret.SecretName == tc.githubSecret
 			}) {
 				t.Errorf("rescue lost its profile's GitHub token")
 			}
-			for name, path := range map[string]string{"home": templates.HomePath, "shared": templates.SharedPath, "gh-token": "/creds"} {
+			for name, path := range map[string]string{"home": templates.HomePath, "shared": templates.SharedPath, tc.githubMount: "/creds"} {
 				if !slices.ContainsFunc(holdContainer.VolumeMounts, func(m corev1.VolumeMount) bool {
-					return m.Name == name && m.MountPath == path && (name != "gh-token" || m.ReadOnly)
+					return m.Name == name && m.MountPath == path && (name != tc.githubMount || m.ReadOnly)
 				}) {
 					t.Errorf("rescue lost its %s mount at %s", name, path)
 				}

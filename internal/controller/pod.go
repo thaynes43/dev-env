@@ -56,6 +56,8 @@ const (
 	grantsSizeLimit   = "16Mi"
 	apiTokenSeconds   = 3600
 	runtimeDir        = "/dev/shm/run-1000"
+	// agentd's Git credential helper reads /creds/gh_token by default.
+	rescueGitHubMountPath = "/creds"
 )
 
 // HoldArgs are the rescue pod's container arguments (D-55): the image's
@@ -76,10 +78,10 @@ func buildPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string) (
 // buildHoldPod returns the session's rescue pod (D-55): the session's pod with
 // `agentd hold` in place of `agentd run`, the S class's requests and limits,
 // and no agent credentials: no static token, and no profile env or envFrom. It
-// keeps the volumes a rescue needs: the session volume, the shared volume, and
-// the templates' mounts, and the profile's gh-token mount for the rescue's
-// fetch. Other profile mounts are only for agents. Heartbeats are off,
-// because no agent runs in it.
+// keeps the volumes a rescue needs: the session volume, the shared volume,
+// the templates' mounts, and the profile mount at /creds for GitHub fetch.
+// Other profile mounts are only for agents. Heartbeats are off, because no
+// agent runs in it.
 func buildHoldPod(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.Pod, error) {
 	return buildSessionPod(s, t, "", true)
 }
@@ -174,7 +176,7 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 	}
 	templateMounts := append([]templates.Mount{}, t.Mounts...)
 	for _, m := range profile.Mounts {
-		if !hold || m.Name == "gh-token" {
+		if !hold || m.Path == rescueGitHubMountPath {
 			templateMounts = append(templateMounts, m)
 		}
 	}
