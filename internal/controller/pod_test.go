@@ -465,13 +465,98 @@ func TestHoldPodShape(t *testing.T) {
 	if e := envOf(c, protocol.SessionEnv); e == nil || !strings.Contains(e.Value, `"name":"`+s.Name+`"`) {
 		t.Errorf("the session document %+v", e)
 	}
-	// Every volume and mount of the session pod is there: the rescue needs the
-	// session volume, the shared volume and the gh token.
-	if !apiequality.Semantic.DeepEqual(pod.Spec.Volumes, full.Spec.Volumes) || !apiequality.Semantic.DeepEqual(c.VolumeMounts, full.Spec.Containers[0].VolumeMounts) {
-		t.Errorf("volumes differ from the session pod's")
+	// Rescue keeps the session data, shared bundle destination and GitHub token.
+	for _, name := range []string{"home", "shared", "gh-token"} {
+		if !slices.ContainsFunc(pod.Spec.Volumes, func(v corev1.Volume) bool { return v.Name == name }) ||
+			!slices.ContainsFunc(c.VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == name }) {
+			t.Errorf("rescue is missing volume or mount %s", name)
+		}
 	}
 	if !apiequality.Semantic.DeepEqual(pod.Spec.Affinity, full.Spec.Affinity) || !apiequality.Semantic.DeepEqual(c.SecurityContext, full.Spec.Containers[0].SecurityContext) || *pod.Spec.SecurityContext.RunAsUser != 1000 {
 		t.Error("placement or security differ from the session pod's")
 	}
 	assertOnlyOwnerIsSession(t, pod.OwnerReferences, s)
+}
+
+func TestHoldPodExcludesAgentProfileMounts(t *testing.T) {
+	for _, tc := range []struct {
+		name, profile, resolvedProfile, githubSecret string
+	}{
+		{"default", "", "full", "dev-env-gh-token"},
+		{"full", "full", "full", "dev-env-gh-token"},
+		{"dev", "dev", "dev", "dev-env-gh-token"},
+		{"ops", "ops", "ops", "dev-env-ops-gh-token"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpl := exampleTemplates(t)
+			profile := tmpl.Profiles[tc.resolvedProfile]
+			profile.Env = append(profile.Env, corev1.EnvVar{Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/etc/gcp/sa_key.json"})
+			profile.EnvFrom = append(profile.EnvFrom, corev1.EnvFromSource{SecretRef: &corev1.SecretEnvSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-auth"},
+			}})
+			profile.Mounts = append(profile.Mounts,
+				templates.Mount{Name: "gcp-sa", Secret: "dev-env-gcp-secret", Path: "/etc/gcp"},
+				templates.Mount{Name: "agent-settings", ConfigMap: "agent-settings", Path: "/etc/agent-settings"},
+			)
+			tmpl.Profiles[tc.resolvedProfile] = profile
+			s := taskSession()
+			s.Spec.Profile = tc.profile
+			agent, err := buildPod(s, tmpl, "https://api")
+			if err != nil {
+				t.Fatal(err)
+			}
+			hold, err := buildHoldPod(s, tmpl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			agentContainer, holdContainer := agent.Spec.Containers[0], hold.Spec.Containers[0]
+			for _, name := range []string{"gcp-sa", "agent-settings"} {
+				if !slices.ContainsFunc(agent.Spec.Volumes, func(v corev1.Volume) bool { return v.Name == name }) ||
+					!slices.ContainsFunc(agentContainer.VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == name && m.ReadOnly }) {
+					t.Errorf("agent lost its %s volume or read-only mount", name)
+				}
+				if slices.ContainsFunc(hold.Spec.Volumes, func(v corev1.Volume) bool { return v.Name == name }) ||
+					slices.ContainsFunc(holdContainer.VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == name }) {
+					t.Errorf("rescue retains the agent-only %s volume or mount", name)
+				}
+			}
+			for name, claim := range map[string]string{"home": "home-" + s.Name, "shared": tmpl.SharedClaim} {
+				if !slices.ContainsFunc(hold.Spec.Volumes, func(v corev1.Volume) bool {
+					return v.Name == name && v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == claim
+				}) {
+					t.Errorf("rescue lost its %s data volume", name)
+				}
+			}
+			if !slices.ContainsFunc(hold.Spec.Volumes, func(v corev1.Volume) bool {
+				return v.Name == "gh-token" && v.Secret != nil && v.Secret.SecretName == tc.githubSecret
+			}) {
+				t.Errorf("rescue lost its profile's GitHub token")
+			}
+			for name, path := range map[string]string{"home": templates.HomePath, "shared": templates.SharedPath, "gh-token": "/creds"} {
+				if !slices.ContainsFunc(holdContainer.VolumeMounts, func(m corev1.VolumeMount) bool {
+					return m.Name == name && m.MountPath == path && (name != "gh-token" || m.ReadOnly)
+				}) {
+					t.Errorf("rescue lost its %s mount at %s", name, path)
+				}
+			}
+			for _, common := range tmpl.Mounts {
+				if !slices.ContainsFunc(hold.Spec.Volumes, func(v corev1.Volume) bool { return v.Name == common.Name }) ||
+					!slices.ContainsFunc(holdContainer.VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == common.Name && m.MountPath == common.Path }) {
+					t.Errorf("rescue lost its common %s volume or mount", common.Name)
+				}
+			}
+			for _, name := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "CIGAR_JOURNAL_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS"} {
+				if envOf(holdContainer, name) != nil {
+					t.Errorf("rescue retains agent auth environment %s", name)
+				}
+			}
+			if envOf(agentContainer, "CLAUDE_CODE_OAUTH_TOKEN") == nil || envOf(agentContainer, "GOOGLE_APPLICATION_CREDENTIALS") == nil || len(agentContainer.EnvFrom) == 0 {
+				t.Error("ordinary session lost agent authentication")
+			}
+			apiURL := envOf(holdContainer, "AGENTD_API_URL")
+			if len(holdContainer.EnvFrom) != 0 || !slices.Equal(holdContainer.Args, HoldArgs) || apiURL == nil || apiURL.Value != "" {
+				t.Error("rescue enables agent credentials, execution or heartbeat")
+			}
+		})
+	}
 }

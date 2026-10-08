@@ -77,8 +77,9 @@ func buildPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string) (
 // `agentd hold` in place of `agentd run`, the S class's requests and limits,
 // and no agent credentials: no static token, and no profile env or envFrom. It
 // keeps the volumes a rescue needs: the session volume, the shared volume, and
-// the templates' and the profile's mounts (the gh token, for the rescue's
-// fetch). Heartbeats are off, because no agent runs in it.
+// the templates' mounts, and the profile's gh-token mount for the rescue's
+// fetch. Other profile mounts are only for agents. Heartbeats are off,
+// because no agent runs in it.
 func buildHoldPod(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.Pod, error) {
 	return buildSessionPod(s, t, "", true)
 }
@@ -171,7 +172,13 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		{Name: "grants", MountPath: protocol.GrantsDir},
 		{Name: "api-token", MountPath: templates.APITokenDir, ReadOnly: true},
 	}
-	for _, m := range append(append([]templates.Mount{}, t.Mounts...), profile.Mounts...) {
+	templateMounts := append([]templates.Mount{}, t.Mounts...)
+	for _, m := range profile.Mounts {
+		if !hold || m.Name == "gh-token" {
+			templateMounts = append(templateMounts, m)
+		}
+	}
+	for _, m := range templateMounts {
 		volumes = append(volumes, templateVolume(m))
 		mounts = append(mounts, corev1.VolumeMount{Name: m.Name, MountPath: m.Path, ReadOnly: true})
 	}
