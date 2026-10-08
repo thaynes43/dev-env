@@ -21,6 +21,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/uuid"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -148,7 +149,7 @@ func (f *fixture) sessionPod(name, profile string, depth int) string {
 	f.t.Helper()
 	ctx := context.Background()
 	s := &v1alpha1.AgentSession{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS,
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS, UID: uuid.NewUUID(),
 			Labels:     map[string]string{v1alpha1.LabelDepth: itoa(depth)},
 			Finalizers: []string{controller.Finalizer}},
 		Spec: v1alpha1.AgentSessionSpec{Repo: "haynes-ops", Agent: "claude", Mode: "task", Model: "claude-opus-5-5", Prompt: "p", Parent: humanSA},
@@ -157,7 +158,7 @@ func (f *fixture) sessionPod(name, profile string, depth int) string {
 		f.t.Fatal(err)
 	}
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS, UID: types.UID("pod-uid-" + name),
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS, UID: uuid.NewUUID(),
 			Labels:          map[string]string{v1alpha1.LabelProfile: profile},
 			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(s, v1alpha1.GroupVersion.WithKind("AgentSession"))}},
 		Spec: corev1.PodSpec{ServiceAccountName: controller.ServiceAccountName, Containers: []corev1.Container{{Name: "agent", Image: "x"}}},

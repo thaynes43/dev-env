@@ -153,12 +153,9 @@ func (b *Broker) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 	if err := checkCapabilities(&g, b.EnableProxmoxGrants || g.Status.Phase == v1alpha1.GrantActive, b.SessionNamespace, b.PolicyNamespace); err != nil {
 		return b.end(ctx, &g, v1alpha1.GrantDenied, DeniedByBroker, err.Error(), now)
 	}
-	var sess *v1alpha1.AgentSession
-	var err error
-	if g.Spec.Type == v1alpha1.GrantCredential {
-		sess, err = b.credentialSession(ctx, &g)
-	} else {
-		sess, err = b.session(ctx, g.Spec.Requester.Session)
+	sess, err := b.requestingSession(ctx, &g)
+	if sess != nil && !sess.DeletionTimestamp.IsZero() {
+		sess = nil
 	}
 	if err != nil {
 		return ctrl.Result{}, err
@@ -383,16 +380,26 @@ func retryOn(err error, what string) (ctrl.Result, error) {
 	return ctrl.Result{}, fmt.Errorf("%s: %w", what, err)
 }
 
-// session returns the requesting session, or nil when it is gone or being
-// deleted. A session the cache does not have is read from the API server
-// before the grant is ended for it: a session created a moment ago may not
-// have reached the cache.
-func (b *Broker) session(ctx context.Context, name string) (*v1alpha1.AgentSession, error) {
-	s, err := b.lookupSession(ctx, name)
-	if err != nil || s == nil || !s.DeletionTimestamp.IsZero() {
-		return nil, err
+// requestingSession includes a deleting session for token cleanup. UID-bound
+// requests bypass the cache: the authenticated session may have been replaced
+// before the broker first saw the grant. Unbound historical non-credential
+// grants retain their name-based lookup.
+func (b *Broker) requestingSession(ctx context.Context, g *v1alpha1.AccessGrant) (*v1alpha1.AgentSession, error) {
+	if g.Spec.Requester.SessionUID == "" && g.Spec.Type != v1alpha1.GrantCredential {
+		return b.lookupSession(ctx, g.Spec.Requester.Session)
 	}
-	return s, nil
+	var s v1alpha1.AgentSession
+	err := b.APIReader.Get(ctx, types.NamespacedName{Namespace: b.SessionNamespace, Name: g.Spec.Requester.Session}, &s)
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read the requesting session: %w", err)
+	}
+	if s.UID != g.Spec.Requester.SessionUID {
+		return nil, nil
+	}
+	return &s, nil
 }
 
 // lookupSession returns the session, being deleted or not, or nil when it is

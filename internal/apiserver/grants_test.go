@@ -3,6 +3,7 @@ package apiserver
 import (
 	"context"
 	"net/http"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -132,46 +134,150 @@ func TestGrantRequest(t *testing.T) {
 	}
 }
 
-func TestCredentialRequestKeepsAuthenticatedSessionUID(t *testing.T) {
-	f := newFixture(t)
-	const sessionName = "haynes-ops-1006-100000"
-	tok := f.sessionPod(sessionName, "full", 0)
-	// The fake API does not assign UIDs. Supply the same real-looking session
-	// UID to the session and its pod controller reference before authenticating.
-	session := f.session(sessionName)
-	session.UID = "11111111-1111-1111-1111-111111111111"
-	session.Finalizers = nil
-	if err := f.c.Update(context.Background(), session); err != nil {
-		t.Fatal(err)
+// replaceGrantSession creates a new authenticated session and pod with the same
+// names, rather than editing the old requester's identity in place.
+func replaceGrantSession(f *fixture, name string) string {
+	f.t.Helper()
+	ctx := context.Background()
+	s := f.session(name)
+	s.Finalizers = nil
+	if err := f.c.Update(ctx, s); err != nil {
+		f.t.Fatal(err)
 	}
-	var pod corev1.Pod
-	key := types.NamespacedName{Namespace: sessionNS, Name: sessionName}
-	if err := f.c.Get(context.Background(), key, &pod); err != nil {
-		t.Fatal(err)
+	if err := f.c.Delete(ctx, s); err != nil {
+		f.t.Fatal(err)
 	}
-	pod.OwnerReferences[0].UID = session.UID
-	if err := f.c.Update(context.Background(), &pod); err != nil {
-		t.Fatal(err)
+	if err := f.c.Delete(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: name}}); err != nil {
+		f.t.Fatal(err)
 	}
-	got := f.request(tok, apiv1.CreateGrantRequest{Type: "credential", Credential: "proxmox", TTL: "15m", Reason: "maintain a guest"}, http.StatusCreated)
-	g := f.grant(got.Name)
-	var s v1alpha1.AgentSession
-	if err := f.c.Get(context.Background(), key, &s); err != nil {
-		t.Fatal(err)
+	return f.sessionPod(name, "full", 0)
+}
+
+func TestGrantRequestReplacementSessionUID(t *testing.T) {
+	requests := []apiv1.CreateGrantRequest{
+		{Type: "credential", Credential: "proxmox", TTL: "15m", Reason: "maintain a guest"},
+		kubeReq(), egressReq(), {Type: "breakglass", Reason: "repair the cluster"},
 	}
-	if g.Spec.Requester.SessionUID == "" || g.Spec.Requester.SessionUID != s.UID {
-		t.Fatal("credential request did not capture the authenticated session UID")
+	for _, req := range requests {
+		for _, phase := range []v1alpha1.GrantPhase{v1alpha1.GrantPending, v1alpha1.GrantActive} {
+			t.Run(req.Type+"/"+string(phase), func(t *testing.T) {
+				// Stand in for API-assigned object UIDs as well as session UIDs.
+				f := newFixtureWith(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					if obj.GetUID() == "" {
+						obj.SetUID(uuid.NewUUID())
+					}
+					return c.Create(ctx, obj, opts...)
+				}})
+				const name = "haynes-ops-1006-100000"
+				tok := f.sessionPod(name, "full", 0)
+				original := f.request(tok, req, http.StatusCreated)
+				future := f.now.Add(time.Hour)
+				f.setGrantStatus(original.Name, phase, &future)
+				old := []*v1alpha1.AccessGrant{f.grant(original.Name)}
+				for _, ns := range []string{"old-a", "old-b"} {
+					r := kubeReq()
+					r.Namespaces = []string{ns}
+					old = append(old, f.grant(f.request(tok, r, http.StatusCreated).Name))
+				}
+				oldUID := f.session(name).UID
+				tok = replaceGrantSession(f, name)
+				newUID := f.session(name).UID
+				if oldUID == "" || newUID == "" || oldUID == newUID {
+					t.Fatal("fixture did not replace the authenticated session")
+				}
+				created := f.request(tok, req, http.StatusCreated)
+				g := f.grant(created.Name)
+				if g.Name == original.Name || g.UID == old[0].UID || g.Spec.Requester.SessionUID != newUID {
+					t.Fatal("replacement inherited the predecessor's grant or UID")
+				}
+				// Only requests from the new UID count toward its quota.
+				for _, ns := range []string{"new-a", "new-b"} {
+					r := kubeReq()
+					r.Namespaces = []string{ns}
+					f.request(tok, r, http.StatusCreated)
+				}
+				fourth := kubeReq()
+				fourth.Namespaces = []string{"new-c"}
+				wantError(t, f.do(http.MethodPost, apiv1.GrantsPath, tok, fourth), http.StatusTooManyRequests, apiv1.CodeLimitExceeded)
+				if again := f.request(tok, req, http.StatusOK); again.Name != created.Name {
+					t.Fatal("same-UID repeat did not return its own request at the limit")
+				}
+				for _, snapshot := range old {
+					if !reflect.DeepEqual(f.grant(snapshot.Name), snapshot) {
+						t.Fatal("replacement POST changed a predecessor's grant")
+					}
+				}
+				wantError(t, f.do(http.MethodDelete, apiv1.GrantPath(original.Name), tok, nil), http.StatusForbidden, apiv1.CodeForbidden)
+				if !reflect.DeepEqual(f.grant(original.Name), old[0]) {
+					t.Fatal("replacement DELETE changed the predecessor's grant")
+				}
+				// Audit listings continue to include both incarnations by name.
+				listed := decode[apiv1.GrantList](t, f.do(http.MethodGet, apiv1.GrantsPath+"?mine=true", tok, nil))
+				if len(listed.Items) != 6 {
+					t.Fatalf("audit list has %d grants, want all six", len(listed.Items))
+				}
+			})
+		}
 	}
-	if err := f.c.Delete(context.Background(), &s); err != nil {
-		t.Fatal(err)
-	}
-	s.ResourceVersion = ""
-	s.UID = "22222222-2222-2222-2222-222222222222"
-	if err := f.c.Create(context.Background(), &s); err != nil {
-		t.Fatal(err)
-	}
-	if f.grant(got.Name).Spec.Requester.SessionUID == s.UID {
-		t.Fatal("a same-name session replacement inherited the outstanding credential request")
+}
+
+func TestGrantRequestLegacyUIDCompatibility(t *testing.T) {
+	for _, req := range []apiv1.CreateGrantRequest{kubeReq(), egressReq(), {Type: "breakglass", Reason: "repair the cluster"}, {Type: "credential", Credential: "proxmox", Reason: "maintain a guest"}} {
+		t.Run(req.Type, func(t *testing.T) {
+			f := newFixture(t)
+			const name = "haynes-ops-1006-100000"
+			tok := f.sessionPod(name, "full", 0)
+			old := f.request(tok, req, http.StatusCreated)
+			legacy := f.grant(old.Name)
+			// Represent a grant written before requester.sessionUID existed.
+			legacy.Spec.Requester.SessionUID = ""
+			if err := f.c.Update(context.Background(), legacy); err != nil {
+				t.Fatal(err)
+			}
+			if req.Type == "credential" {
+				// Three unbound credential requests cannot consume a new UID's quota.
+				for _, suffix := range []string{"-a", "-b"} {
+					other := legacy.DeepCopy()
+					other.Name += suffix
+					other.ResourceVersion = ""
+					if err := f.c.Create(context.Background(), other); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			tok = replaceGrantSession(f, name)
+			status := http.StatusOK
+			if req.Type == "credential" {
+				status = http.StatusCreated
+			}
+			got := f.request(tok, req, status)
+			if req.Type == "credential" {
+				if got.Name == old.Name || f.grant(got.Name).Spec.Requester.SessionUID != f.session(name).UID {
+					t.Fatal("replacement inherited a legacy credential request")
+				}
+			} else if got.Name != old.Name {
+				t.Fatal("historical unbound non-credential grant lost name compatibility")
+			}
+			// A compatible legacy non-credential request still counts; excluded
+			// legacy credentials do not. Both leave room for exactly two more.
+			for _, ns := range []string{"fresh-a", "fresh-b"} {
+				r := kubeReq()
+				r.Namespaces = []string{ns}
+				f.request(tok, r, http.StatusCreated)
+			}
+			fourth := kubeReq()
+			fourth.Namespaces = []string{"fresh-c"}
+			wantError(t, f.do(http.MethodPost, apiv1.GrantsPath, tok, fourth), http.StatusTooManyRequests, apiv1.CodeLimitExceeded)
+			w := f.do(http.MethodDelete, apiv1.GrantPath(old.Name), tok, nil)
+			if req.Type == "credential" {
+				wantError(t, w, http.StatusForbidden, apiv1.CodeForbidden)
+				if f.grant(old.Name).Spec.Release {
+					t.Fatal("replacement released an unbound legacy credential grant")
+				}
+			} else if w.Code != http.StatusAccepted || !f.grant(old.Name).Spec.Release {
+				t.Fatal("legacy non-credential requester lost release compatibility")
+			}
+		})
 	}
 }
 
@@ -359,6 +465,34 @@ func TestGrantPendingLimit(t *testing.T) {
 	// The limit is per session.
 	other := f.sessionPod("haynes-ops-1006-100001", "dev", 0)
 	f.request(other, fifth, http.StatusCreated)
+}
+
+func TestGrantReleaseAuthenticatedUID(t *testing.T) {
+	for _, privileged := range []string{tokHuman, tokClient} {
+		t.Run(privileged, func(t *testing.T) {
+			f := newFixture(t)
+			const name = "haynes-ops-1006-100000"
+			tok := f.sessionPod(name, "full", 0)
+			req := apiv1.CreateGrantRequest{Type: "credential", Credential: "proxmox", Reason: "maintain a guest"}
+			first := f.request(tok, req, http.StatusCreated)
+			if w := f.do(http.MethodDelete, apiv1.GrantPath(first.Name), tok, nil); w.Code != http.StatusAccepted {
+				t.Fatal("authenticated original owner could not release its credential grant")
+			}
+			old := f.request(tok, req, http.StatusCreated)
+			requesterUID := f.grant(old.Name).Spec.Requester.SessionUID
+			tok = replaceGrantSession(f, name)
+			wantError(t, f.do(http.MethodDelete, apiv1.GrantPath(old.Name), tok, nil), http.StatusForbidden, apiv1.CodeForbidden)
+			if f.grant(old.Name).Spec.Release {
+				t.Fatal("replacement changed the predecessor's release state")
+			}
+			if w := f.do(http.MethodDelete, apiv1.GrantPath(old.Name), privileged, nil); w.Code != http.StatusAccepted {
+				t.Fatal("authorized human or client could not release the predecessor's grant")
+			}
+			if g := f.grant(old.Name); !g.Spec.Release || g.Spec.Requester.SessionUID != requesterUID {
+				t.Fatal("privileged release lost the recorded original requester UID")
+			}
+		})
+	}
 }
 
 func TestGrantRelease(t *testing.T) {
