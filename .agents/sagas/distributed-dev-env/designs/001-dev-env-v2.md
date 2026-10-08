@@ -2810,7 +2810,7 @@ every granted namespace. What each role allows, plainly:
 | `dev-env-grant-storage` | create, delete PVCs and VolumeSnapshots; delete StatefulSets | The observability and CNPG cases v1 solved with one-off Roles. |
 | `dev-env-grant-secrets-read` | get, list Secrets | Always shown with its namespaces in red on the page. |
 | `dev-env-grant-nodes` (cluster-wide) | cordon, uncordon, drain (evictions), node labels and taints | The talosw01 drain of 2026-09-25 was a headlamp job. Its evictions in the dev-env namespaces stay refused: before a drain, `agent-run fleet evacuate <node>` has the operator move that node's sessions and tool instances (below). |
-| `dev-env-grant-breakglass` (cluster-wide) | every verb on every resource except Secrets, `serviceaccounts/token`, `nodes/proxy` (the kubelet API bypasses admission), `pods/ephemeralcontainers`, the verbs `bind`, `escalate` and `impersonate`, RBAC objects, CSR approval, admission policies and webhooks, Kyverno policies, CustomResourceDefinitions, APIServices, Flux objects, `external-secrets.io` objects, `CiliumClusterwideNetworkPolicy` and the `dev-env.haynesops.com` CRDs | Built from API discovery minus that list; a CI check regenerates it when the cluster gains an API group. The identity guard applies on top. |
+| `dev-env-grant-breakglass` (cluster-wide) | every verb on every resource except Secrets, `serviceaccounts/token`, `nodes/proxy` (the kubelet API bypasses admission), `pods/ephemeralcontainers`, `pods/portforward`, `pods/proxy` and `services/proxy` (which bypass network isolation), the verbs `bind`, `escalate` and `impersonate`, RBAC objects, CSR approval, admission policies and webhooks, Kyverno policies, CustomResourceDefinitions, APIServices, Flux objects, `external-secrets.io` objects, `CiliumClusterwideNetworkPolicy` and the `dev-env.haynesops.com` CRDs | Built from API discovery minus that list, including excluded resources' subresources. CI checks the generated catalog against its discovery snapshot; a discovery-only cluster watcher flags live API drift for a snapshot refresh. The identity guard applies on top. |
 
 **Draining a node with sessions on it.** `agent-run fleet evacuate <node>` (API `POST
 /v1/fleet/nodes/{node}/evacuate`) asks the operator to move that node's sessions:
@@ -3166,6 +3166,64 @@ grants.** `internal/broker`; `dev-env-operator broker` (`cmd/dev-env-operator/br
   23:32:14.018Z; HTTP was blocked and the audit phase stayed Active. Restoring
   the broker ended it Expired. Session/v1 UIDs and restart counts were preserved;
   the dedicated session and fixtures were removed (haynes-ops #3542–#3544).
+
+**D-67 (2026-10-08, plan 07 step 6). The approval boundary and notification
+delivery.** The broker serves `/approvals` and `/approvals/<grant>` on its console
+port, on every replica. Decisions are POSTs on that port alone, never on the
+operator's `/v1` API. Reads use the live API reader; `Decide` retains its
+resourceVersion check. No session pod is restarted by the deployment.
+
+**Deployment is blocked by Q-16.** The console defaults to disabled. The existing
+guards leave Authentik and its shared database reachable by agent exec and mutable
+workload/configuration paths. An owner-only login and isolated HTTP port do not
+protect an authority agents can change. Do not configure the console listener or
+activate human grants until the ruling's enforcement is deployed and verified.
+
+- **Authentik is the authentication boundary.** A dedicated owner-only proxy
+  application and outpost authenticate the browser. Traefik removes incoming
+  Authentik identity headers before forward-auth and copies only the outpost's
+  response headers. A Cilium policy admits the console port from Traefik alone.
+  Deployment must enforce that isolation; it is not supplied by the Go server.
+  The broker requires the explicitly configured owner username and the outpost's
+  raw token. Authentik's proxy provider signs that token with its client secret
+  (HS256), not the public signing certificate; the broker does not claim to verify
+  it cryptographically. It trusts the isolated forward-auth path and parses the
+  token's `auth_time`, which Authentik obtains from the browser's login event.
+  `iat` is token issuance, and never proves a fresh login. A break-glass approval
+  requires a positive, non-future `auth_time` no older than five minutes at POST.
+  A dedicated MFA flow, without exemption or cached-validation policies, performs
+  a fresh login and returns to the outpost's authorization start. The existing
+  owner's WebAuthn and TOTP enrollment are sufficient; no new shared secret is
+  mounted by the broker for authentication.
+  Sources: pinned Authentik [proxy provider defaults](https://github.com/goauthentik/authentik/blob/version/2026.8.3/authentik/providers/proxy/models.py#L162)
+  and [login-event authentication time](https://github.com/goauthentik/authentik/blob/version/2026.8.3/authentik/providers/oauth2/views/authorize.py#L400).
+- **Browser decisions.** A private `__Host-` CSRF cookie is Secure, HttpOnly,
+  SameSite Strict, path `/`, with a random token also in the form. A POST needs
+  exactly the configured HTTPS Origin and equal tokens. Forms are bounded and
+  contain no approver identity. Both replicas can check them without shared
+  session state. HTML templates escape agent-written reasons and scope; responses
+  are not cached or framed. The page shows the parent, requester, repo, profile,
+  scope and TTL, and names workloads' mounted-Secret exposure and break-glass
+  residual risk. Forbidden standing policies have no GrantPolicy snippet.
+- **Break-glass catalog.** A normalized live API discovery snapshot is committed
+  in haynes-ops. A deterministic generator excludes D-27's resources and their
+  subresources, and never emits wildcards or escalation verbs. `pods/attach`
+  retains the same privileged-target lookup as exec; proxy and port-forward
+  subresources are excluded because they bypass network isolation. Hosted CI
+  regenerates and checks the role and verifies the snapshot covers repo-managed
+  CRDs. A bounded, discovery-only CronJob detects live discovery drift, so API
+  additions from Helm also require a snapshot refresh. CI gets no cluster
+  credentials. The refresh and live safety checks precede break-glass issuance.
+- **Pushover.** The notifier reads mounted `token` and `user-key` files on each
+  send, from the existing `upgrade-gate` item's `PUSHOVER_TOKEN` and
+  `PUSHOVER_USER_KEY`. It sends a bounded plain-text request and approval link to
+  `https://api.pushover.net/1/messages.json`, with priority 1 for break-glass and
+  0 otherwise. HTTP redirects are refused; errors never include credentials or
+  response bodies. One ordinary delivery is recorded by `status.notifiedAt`.
+  D-61's at-least-once behavior remains: an ambiguous delivery or a failed status
+  write may produce a duplicate. The broker waits at least five seconds before
+  retrying a failed notification. Existing log-only pending requests are checked
+  at deployment; they cannot silently be counted as a Pushover delivery.
 
 **D-26. Approvals: a Pushover link to an approval page behind Authentik.**
 
@@ -4163,6 +4221,7 @@ credential grants) was answered on 2026-10-07 too. ADR-001 was Accepted on
 | Q-13 | How does the cluster pull the new `ghcr.io/thaynes43/dev-env-operator` package? (B3) | **A. Make the package public**: the cluster pulls it anonymously, like `ghcr.io/thaynes43/dev-env` and every other image today; anyone can pull a binary that holds no secrets. **B. Keep it private, with an image pull secret**: the binary stays private, but a `read:packages` token in 1Password and an ExternalSecret become one more credential to rotate, and a lapsed one stops operator pods from starting. | **Ruling, Tom 2026-10-06: A, public.** "Public package write a prompt for an agent on my laptop to flip it". GitHub has no API for package visibility, so a laptop agent flips it in the browser after B3's first publish: [part 2 of the laptop handoff](../../../handoffs/2026-10-06-tom-laptop-settings.md). Until then the package is private and the HelmRelease cannot pull it. Blocks deploying the operator (plan 01's HelmRelease) until the flip. Done: the package allowed an anonymous pull on 2026-10-07, and 8.9 runs from it. |
 | Q-14 | How does release-please open release PRs that CI checks? A PR opened with the workflow's `GITHUB_TOKEN` starts no workflows, so `CI - Success` never reports on it. (B4) | **A. A GitHub App key as a repo secret** (a small App with contents and pull-request write on this repo only): release PRs run CI like any PR; one more secret, which only Tom can add. **B. haynes-dev-bot closes and reopens each release PR** from the pod (App tokens do start workflows): no new secret, but every release needs an agent step, and a forgotten one leaves the release PR stuck. **C. No release-please; tag releases by hand**: nothing to set up, but versioning (section 10) becomes manual and inconsistent. | **Ruling, Tom 2026-10-06: A, a GitHub App key secret.** "GitHub App key secret (Recommended)". B4 uses the repo variable `RELEASE_APP_ID` and the repo secret `RELEASE_APP_PRIVATE_KEY`, read by `actions/create-github-app-token`. Refinement of the option text: the App also needs Issues read and write, besides Contents and Pull requests write, because release-please creates its `autorelease:` labels. Tom or his laptop agent adds both ([part 1 of the laptop handoff](../../../handoffs/2026-10-06-tom-laptop-settings.md)). Blocks B4's release-please part until the secret exists. |
 | Q-15 | How does a Proxmox credential grant get its short-lived token? Plan 07 step 8's first check failed on 2026-10-07: the operator token (`dev-env@pve!operator`, PVE 8.4.16) cannot mint an expiring token for its own user. Proxmox answered 403 to both the list and the create of `/access/users/dev-env@pve/token`, so Q-07's mint "from the operator token" does not work. Confirmed: `dev-env@pve` holds `DevEnvOperator` and `PVEAuditor` on `/`, and hw-ssh's `dev-env` user may run `sudo pvesh` as root on every Proxmox node. | **A. The keeper mints it over SSH**: with a certificate from its own SSH CA (the one hw-ssh grants use), it runs `sudo pvesh create /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0` on a Proxmox node, so the token carries `dev-env@pve`'s operator role and dies at the grant's end, and it deletes the token at expiry. No new Proxmox identity, and the long-lived operator token is not needed by v2 at all. The keeper gains egress to the Proxmox nodes on port 22, and Proxmox grants depend on the SSH CA. **B. A dedicated minting user**: `dev-env-minter@pve` with a password and `User.Modify` on `/access/users/dev-env@pve`; the keeper logs in for a ticket and mints over the API. One more Proxmox identity able to make operator tokens, a password in 1Password, and Tom creates the user and its ACL. **C. No Proxmox credential grants**: Proxmox writes go through hw-ssh certificates and `sudo qm` or `sudo pvesh` on a node. Simplest, but the `pve` CLI's operator tier stops working in v2 sessions and its runbook steps move to the SSH path. | **Ruling, Tom 2026-10-07: A, the keeper mints over SSH.** "Keeper mints over SSH (Recommended)". The keeper, with a certificate from its own SSH CA, runs `sudo pvesh create /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0` on a Proxmox node and deletes the token when the grant ends. No new Proxmox user is made, and v2 never holds the long-lived operator token. The keeper needs egress on port 22 to the Proxmox nodes, and the nodes trust the keeper's SSH CA (plan 07 H5). Unblocks plan 07 step 8. |
+| Q-16 | How should the approval authority be protected from agent access before plan 07 step 6 is enabled? Verified on 2026-10-08: the current guard protects Traefik ServiceAccounts, but not Authentik server/outpost pods running as `network/default`, the worker as `network/authentik`, or Authentik's shared `database/postgres16` state. Agent exec/attach and allowed changes to default-ServiceAccount workloads, Authentik blueprint ConfigMaps and routing objects can change identity or login evidence. Blocking exec alone leaves workload, routing and volume/operator paths. D-19's accepted workload/exec trade-off therefore reaches the authority that D-26 needs to trust. | **A. Protect the existing authority as enforcing infrastructure (Recommended):** deny agents access to Authentik, its outposts, Traefik routing authority and the shared `postgres16` authentication state through exec/attach, mutable workloads/configuration, routes/endpoints and volume/operator paths. Reserve the authentication and approval hosts against agent-created conflicting routes. Scope the guard to these assets and their references, and prove it with admission and live negative tests before enabling the console. Agents lose operations that can modify the shared `postgres16` state; Tom performs those with his own identity. **B. Isolate Authentik and its approval state:** move the authentication components and a dedicated authentication database into enforcing namespaces, and protect the shared ingress authority/host reservations. Agents retain access to unrelated databases, but this adds an Authentik/database migration and a larger deployment before approval can ship. **C. Defer human approval:** keep standing GrantPolicies only and leave the console disabled while the authority boundary is redesigned. No broader enforcement or migration now; human, secrets-read and break-glass approvals remain unavailable. | **OPEN — blocked on Tom through the coordinator work order.** No Authentik, admission or deployment change was applied. D-67's code is prepared with its listener disabled; no human approval or break-glass acceptance is claimed. |
 
 ## 16. Decisions settled in this design
 
@@ -4234,3 +4293,4 @@ credential grants) was answered on 2026-10-07 too. ADR-001 was Accepted on
 | D-64 | One scoped CiliumNetworkPolicy per egress grant, separate FQDN/CIDR/endpoint rules with requested ports, source excluding hold pods; verified ownership and UID-precondition revoke; a separate operator expiry controller reads policies by name with get/delete-only RBAC and preserves audit records when the broker is unavailable | 6.12 |
 | D-65 | Messages and logs run agentd by exec in the session's running pod: `POST /v1/sessions/{name}/messages` → `agentd ctl deliver` (one bracketed paste and Enter into the Claude TUI, `codex queue` for Codex, 409 for a headless task), never retried by agent-run; `GET .../log?tail=N` → `agentd ctl log`; the log is copied to `~/.shared/logs/` | 6.8 |
 | D-66 | `Activity` CRD in `dev-env-system`: created only by `POST /v1/activities` with v1's limits enforced (scope required, 45m default, 8h cap, 2h for `cluster`), the declarer from the token, deleted by the operator at expiry; `declare-activity` is agent-run by another name; dev-env-ops reads both v1's files and the CRD | 6.9 |
+| D-67 | Broker approvals through an isolated owner-only Authentik forward-auth path; actual login `auth_time` within five minutes for break-glass; browser CSRF/Origin checks; bounded Pushover delivery from existing credentials | 6.12 |

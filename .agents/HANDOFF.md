@@ -38,7 +38,12 @@ the saga. To start building, follow
   catalog remainder. Standing policies are the only approval path until then;
   the temporary smoke policies are gone. No new secret or Tom-only step was needed
   for this round. Q-15 remains ruled (A), so step 8's minting identity is settled.
-  [backlog/07](sagas/distributed-dev-env/backlog/07-access-broker.md) tracks the remaining scope.
+  Round 2 prepared the approval handler/notifier and catalog on PR branches, but
+  stopped at **Q-16**: baseline exec and mutable workloads/configuration can reach
+  Authentik and its shared `postgres16` state. The console remains disabled.
+  Tom's authority-boundary ruling is needed before H2 approval deployment;
+  [backlog/07](sagas/distributed-dev-env/backlog/07-access-broker.md) and DESIGN-001
+  section 15 contain the verified premise, options and next steps.
 - **What the run found and fixed (2026-10-07).** haynes-ops still had #24's CRD, so
   the API server pruned the heartbeat's task result and the rescue verdict from
   status; haynes-ops #3502 synced it before any reap. A PR here that changes
@@ -52,7 +57,7 @@ the saga. To start building, follow
 - **The dev-env v2 design is complete.** It covers the architecture (ADR-001), the
   details (DESIGN-001, D-01 onward), 16 spikes, backlog plans 00 to 10 and two
   research notes.
-- **Every design question is ruled.** Tom answered Q-01 to Q-11, Q-13 and Q-14 on
+- **Q-16 is open; the earlier design questions are ruled.** Tom answered Q-01 to Q-11, Q-13 and Q-14 on
   2026-10-06 and Q-15 on 2026-10-07 (index below). Q-12 (branch protection) was settled on 2026-10-07: Tom
   made the repo public (B) after Actions billing stopped CI on the private repo. The
   settings only Tom can click are in a handoff for an agent on his laptop (below).
@@ -210,7 +215,7 @@ the saga. To start building, follow
 | [distributed-dev-env/README.md](sagas/distributed-dev-env/README.md) | Tom's vision, the architecture at a glance, the hard news, the decision log and the plan index. |
 | [distributed-dev-env/KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) | The work order for the first build session. |
 | [adrs/001-distributed-dev-env.md](sagas/distributed-dev-env/adrs/001-distributed-dev-env.md) | The architecture decision (Accepted 2026-10-06), with the ratification summary at the top and consequences C-01 to C-21. |
-| [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 to Q-14 with rulings in 15, the decisions (D-01 onward) in 16. |
+| [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 to Q-15 with rulings and open Q-16 in 15, the decisions (D-01 onward) in 16. |
 | [research/R-01](sagas/distributed-dev-env/research/R-01-summoned-agents-audit.md) | An audit of summoned agents today, with v2 requirements V-01 to V-17. |
 | [research/R-02](sagas/distributed-dev-env/research/R-02-remote-control-identity.md) | Remote Control identity, the evidence behind S-1, and proposals P-1 to P-12. |
 | [backlog/00-spikes.md](sagas/distributed-dev-env/backlog/00-spikes.md) | S-1 to S-16: steps, safety rules and pass criteria. |
@@ -247,7 +252,10 @@ the saga. To start building, follow
 | Q-14 | A GitHub App key secret for release-please (A): "GitHub App key secret (Recommended)". Repo variable `RELEASE_APP_ID`, repo secret `RELEASE_APP_PRIVATE_KEY`; the App also needs Issues read and write for `autorelease:` labels. |
 | Q-15 | The keeper mints a Proxmox grant's token over SSH (A): "Keeper mints over SSH (Recommended)". With a certificate from its own SSH CA it runs `sudo pvesh create /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0` on a node and deletes the token at the grant's end. No new Proxmox user, and v2 never holds the long-lived token. Port 22 from the keeper to the nodes. |
 
-**Open:** none.
+**Open:** Q-16, protecting Authentik and its shared authentication state before
+human approvals are enabled. Recommended: enforce the boundary around existing
+assets and references; consequence: agents lose mutations of shared `postgres16`
+state. Alternatives and their consequences are in DESIGN-001 section 15.
 
 **Settings only Tom can click** (no decision needed). An agent on his laptop does
 them from [`handoffs/2026-10-06-tom-laptop-settings.md`](handoffs/2026-10-06-tom-laptop-settings.md),

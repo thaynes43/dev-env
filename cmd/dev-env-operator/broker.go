@@ -5,7 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
+	"strings"
 
 	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -21,6 +23,13 @@ type brokerOptions struct {
 	leaderElect      bool
 	metricsAddr      string
 	probeAddr        string
+	consoleAddr      string
+	consoleOrigin    string
+	consoleOwner     string
+	consoleReauthURL string
+	consoleIssuer    string
+	consoleAudience  string
+	pushoverDir      string
 }
 
 func parseBrokerFlags(args []string) (brokerOptions, error) {
@@ -36,6 +45,13 @@ func parseBrokerFlags(args []string) (brokerOptions, error) {
 	fs.BoolVar(&o.leaderElect, "leader-elect", true, "elect one leader among the replicas; only the leader reconciles")
 	fs.StringVar(&o.metricsAddr, "metrics-bind-address", ":8080", "address of the Prometheus metrics endpoint; 0 turns it off")
 	fs.StringVar(&o.probeAddr, "health-probe-bind-address", ":8081", "address of /healthz and /readyz")
+	fs.StringVar(&o.consoleAddr, "console-bind-address", "0", "address of the approval console behind the isolated Authentik forward-auth path; 0 turns it off (D-67)")
+	fs.StringVar(&o.consoleOrigin, "console-origin", "", "exact external HTTPS origin of the approval console")
+	fs.StringVar(&o.consoleOwner, "console-owner", "", "explicit Authentik username that may read and decide grants")
+	fs.StringVar(&o.consoleReauthURL, "console-reauth-url", "", "fixed HTTPS URL of the dedicated fresh Authentik login flow")
+	fs.StringVar(&o.consoleIssuer, "console-auth-issuer", "", "optional exact issuer constraint for the trusted upstream proxy token")
+	fs.StringVar(&o.consoleAudience, "console-auth-audience", "", "optional audience constraint for the trusted upstream proxy token")
+	fs.StringVar(&o.pushoverDir, "pushover-secret-dir", "", "mounted directory holding the Pushover token and user-key files")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
@@ -44,6 +60,37 @@ func parseBrokerFlags(args []string) (brokerOptions, error) {
 	}
 	if o.sessionNamespace == "" || o.policyNamespace == "" {
 		return o, errors.New("--session-namespace and --policy-namespace must not be empty")
+	}
+	if o.consoleAddr == "" {
+		return o, errors.New("--console-bind-address must not be empty; use 0 to turn it off")
+	}
+	if o.consoleAddr == "0" {
+		if o.consoleOrigin != "" || o.consoleOwner != "" || o.consoleReauthURL != "" || o.consoleIssuer != "" || o.consoleAudience != "" || o.pushoverDir != "" {
+			return o, errors.New("console options require --console-bind-address")
+		}
+		return o, nil
+	}
+	var err error
+	if o.consoleOrigin, err = broker.ConsoleOrigin(o.consoleOrigin); err != nil {
+		return o, err
+	}
+	if err := broker.ValidateReauthURL(o.consoleReauthURL); err != nil {
+		return o, err
+	}
+	if _, err := broker.NewForwardAuthAuthenticator(o.consoleOwner, o.consoleIssuer, o.consoleAudience); err != nil {
+		return o, err
+	}
+	if o.consoleIssuer != "" {
+		u, err := url.Parse(o.consoleIssuer)
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return o, errors.New("--console-auth-issuer must be an exact HTTPS issuer URL")
+		}
+	}
+	if strings.TrimSpace(o.consoleAudience) != o.consoleAudience || len(o.consoleAudience) > 253 {
+		return o, errors.New("--console-auth-audience must be a plain audience identifier")
+	}
+	if o.pushoverDir == "" {
+		return o, errors.New("--pushover-secret-dir is required when the console is enabled")
 	}
 	return o, nil
 }
@@ -67,19 +114,41 @@ func runBroker(args []string) error {
 	if err != nil {
 		return err
 	}
-	mgr, _, err := broker.NewManager(cfg, broker.Options{
+	var notifier broker.Notifier = broker.LogNotifier{Log: log.WithName("notify")}
+	if o.consoleAddr != "0" {
+		notifier, err = broker.NewPushoverNotifier(o.pushoverDir, o.consoleOrigin)
+		if err != nil {
+			return err
+		}
+	}
+	mgr, b, err := broker.NewManager(cfg, broker.Options{
 		SessionNamespace: o.sessionNamespace,
 		PolicyNamespace:  o.policyNamespace,
 		LeaderElect:      o.leaderElect,
 		MetricsAddr:      o.metricsAddr,
 		ProbeAddr:        o.probeAddr,
-		// Pushover plugs in at plan 07 step 6; until then the broker logs
-		// that Tom is wanted.
-		Notifier:  broker.LogNotifier{Log: log.WithName("notify")},
-		Installer: installer,
+		Notifier:         notifier,
+		Installer:        installer,
 	})
 	if err != nil {
 		return err
+	}
+	if o.consoleAddr != "0" {
+		auth, err := broker.NewForwardAuthAuthenticator(o.consoleOwner, o.consoleIssuer, o.consoleAudience)
+		if err != nil {
+			return err
+		}
+		console, err := broker.NewConsole(b, auth, o.consoleOrigin, o.consoleReauthURL)
+		if err != nil {
+			return err
+		}
+		runner := &broker.ConsoleRunner{Addr: o.consoleAddr, Handler: console.Handler()}
+		if err := mgr.Add(runner); err != nil {
+			return err
+		}
+		if err := mgr.AddReadyzCheck("console", runner.ReadyCheck); err != nil {
+			return err
+		}
 	}
 	return mgr.Start(ctrl.SetupSignalHandler())
 }

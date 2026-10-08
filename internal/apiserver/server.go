@@ -235,6 +235,9 @@ type Runner struct {
 
 	ready atomic.Bool
 	bound atomic.Value // string: the bound address, once listening
+	// Focused lifecycle tests shorten the drain and wait on a listen event.
+	shutdownTimeout time.Duration
+	listening       func(string)
 }
 
 // NeedLeaderElection is false: every replica serves the API.
@@ -290,6 +293,10 @@ func (r *Runner) Start(ctx context.Context) error {
 	go func() { watchErr <- cw.Start(wctx) }()
 
 	var failure error
+	drain := 10 * time.Second
+	if r.shutdownTimeout > 0 {
+		drain = r.shutdownTimeout
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -302,13 +309,18 @@ func (r *Runner) Start(ctx context.Context) error {
 			failure = fmt.Errorf("the /v1 API's certificate watcher: %w", err)
 		}
 		r.ready.Store(false)
-		sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		sctx, cancel := context.WithTimeout(context.Background(), drain)
 		defer cancel()
-		_ = srv.Shutdown(sctx)
+		if err := srv.Shutdown(sctx); err != nil {
+			_ = srv.Close()
+		}
 	}()
 
 	r.bound.Store(ln.Addr().String())
 	r.ready.Store(true)
+	if r.listening != nil {
+		r.listening(ln.Addr().String())
+	}
 	err = srv.ServeTLS(ln, "", "")
 	if !errors.Is(err, http.ErrServerClosed) {
 		return err
