@@ -127,9 +127,9 @@ token is a GitHub App's (`thaynes43-dev-env-release`), from the repo variable
 `RELEASE_APP_ID` and secret `RELEASE_APP_PRIVATE_KEY`, so release PRs run CI like any
 PR; the automatic advisory review deliberately skips the release App's PRs.
 Request an actual review with `@claude` through `claude.yml`, then read and resolve
-its findings before merging. A skipped green job is not a review. If either goes
-missing, it falls back to
-`GITHUB_TOKEN`, and a PR opened that way starts no workflows: then close and reopen
+its findings before merging. A skipped green job is not a review. If
+`RELEASE_APP_ID` or `RELEASE_APP_PRIVATE_KEY` is missing, release-please falls back
+to `GITHUB_TOKEN`, and a PR opened that way starts no workflows: then close and reopen
 the release PR (`gh pr close <n> && gh pr reopen <n>`) as haynes-dev-bot so
 `CI - Success` runs, after every update to it. Agents squash-merge a green release PR
 themselves, like any other PR, once they have checked that the version and changelog
