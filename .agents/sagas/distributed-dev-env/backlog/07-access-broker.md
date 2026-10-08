@@ -1,6 +1,6 @@
 # 07: access broker
 
-**Status:** ready for the docs-only step 6 spike after plan 02's in-cluster CLI acceptance passed (2026-10-08), under Tom's Codex work order and workflow correction (README decisions 44 and 45, Q-17). No laptop setup or test blocks it. Steps 1 to 5 are built; H2 (the broker Deployment) is deployed and verified (2026-10-07). Resume with the approval spike inside the Claude Code app (Q-16), then the complete v1 capability parity check, then keeper SSH minting (step 8/H5, Q-15 A). A possible session-management web UI changes neither the approval ruling nor this priority order. The spike is in [issue #91](https://github.com/thaynes43/dev-env/issues/91). Draft code is on branch `agent/plan07-approvals-round3` (dev-env) and `agent/plan07-catalog-round3` (haynes-ops); PR #90 and haynes-ops #3550 remain closed.
+**Status:** docs-only approval spike complete, Q-18 awaiting Tom's route choice (2026-10-08, [R-03](../research/R-03-claude-code-approvals.md)). Plan 02's corrected in-cluster acceptance passed; no laptop setup blocks progress (README decisions 44 and 45, Q-17). Steps 1 to 5 are built; H2 is deployed and verified. Next is the complete v1 capability parity audit, then keeper SSH minting (step 8/H5, Q-15 A). Q-18 blocks only the human approval implementation; capabilities beyond today's tier remain unavailable. A possible management UI changes neither Q-16 nor this priority order. [Issue #91](https://github.com/thaynes43/dev-env/issues/91) tracks the spike. Draft branches `agent/plan07-approvals-round3` (dev-env) and `agent/plan07-catalog-round3` (haynes-ops) retain reusable pieces; #90 and haynes-ops #3550 remain closed.
 **Depends on:** 01 (the baseline guard and egress tiers are in place); Q-07 (Tom
 2026-10-06: credential grants, A)
 **Parallel with:** 02 in the architecture; this run finishes 02 first (README
@@ -22,6 +22,12 @@ changes the same reconciler, API and agentd, so each step stays small and rebase
 on main before it merges.
 
 In this repo:
+
+- [x] Step 6's **docs-only redesign spike** (2026-10-08, R-03, Q-18).
+  Native hook schemas, managed controls, candidate forgery paths and plan 03's
+  dependency cycle are recorded. Guarded approval remains unproven; an ordinary
+  requester/coordinator relay is a soft gate. No human adapter, new guard,
+  approval policy or break-glass grant ships from the spike.
 
 - [x] 1. The `AccessGrant` and `GrantPolicy` CRDs, with an envtest suite that proves
   each rule, and this list (D-54).

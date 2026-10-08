@@ -1,10 +1,18 @@
 # 03: Remote Control
 
 **Status:** backlog
-**Depends on:** 02; 07 (the console is the broker's web UI); spike S-1 (which auth
+**Depends on:** 02; 07's deployed broker core; spike S-1 (which auth
 path), S-5 (cross-pod messaging), S-6 (resume keeps the phone entry), S-15 (archive on
 reap). S-2 is answered: the static token cannot register Remote Control.
 **Parallel with:** 04
+
+**Dependency correction under design (2026-10-08, R-03/Q-18).** Q-16 rules out
+the web approval console. A guarded in-app approver would need this plan's login,
+refresh and Remote Control core first; making that core wait for human approvals
+would create a cycle. R-03 proposes separating the bounded core prerequisite from
+the management UI. Q-18 awaits Tom's choice; no plan 03 code or login is built by
+the spike. Preserve the current work order: approval design, parity audit, keeper
+SSH minting, then the prerequisite if chosen. Never copy v1's refresh token.
 
 ## Goal
 

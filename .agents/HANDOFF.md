@@ -30,13 +30,19 @@ the saga. To start building, follow
     [external CLI instructions](handoffs/2026-10-08-laptop-access.md)
     are optional.
   - **Plan 07:** steps 1 to 5 are built and H2 (the broker Deployment) is deployed
-    and verified. **Resume at step 6's docs-only design spike:** Q-16 was
-    ruled on 2026-10-08
+    and verified. **The docs-only approval spike is complete:**
+    [R-03](sagas/distributed-dev-env/research/R-03-claude-code-approvals.md)
+    records the native hooks, managed policy, forgeable soft gates and the
+    guarded route's unresolved phone, authority and shared OAuth checks.
+    **Q-18 awaits Tom's route choice.** No human approval path is enabled.
+    Next: the complete v1 parity audit, then keeper SSH minting. The pending
+    approval choice does not block them. Q-16 was ruled on 2026-10-08
     (parity first; approvals inside the Claude Code app), and PR #90 and haynes-ops
     #3550 were closed because their Pushover and web approval surface is ruled out.
     The resume point is the last coordinator comment on
-    [issue #91](https://github.com/thaynes43/dev-env/issues/91). The next step is a
-    docs-only design spike for the approval surface. Draft code: branch
+    [issue #91](https://github.com/thaynes43/dev-env/issues/91). The spike proposes
+    a bounded plan 03 login/Remote Control prerequisite before testing a guarded
+    approver; no v1 refresh token is copied. Draft code: branch
     `agent/plan07-approvals-round3` (dev-env) and `agent/plan07-catalog-round3`
     (haynes-ops).
   - **Live state checked after deployment, 2026-10-08:** operator `sha-12a97c4`
@@ -234,7 +240,8 @@ the saga. To start building, follow
    is done ([plan 01](sagas/distributed-dev-env/backlog/01-foundation.md)). Plan 02
    ([backlog/02](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md))
    is done with the corrected in-cluster CLI acceptance check (see State on
-   2026-10-08). Plan 07's docs-only approval spike is next. Run one plan at a
+   2026-10-08). Plan 07's docs-only approval spike is complete; Q-18 is pending, and the
+   parity audit is next. Run one plan at a
    time (README decisions 40, 44 and 45).
 3. **Collect the spike results.** S-1, S-1b and S-7 are done, and S-2 is already
    answered (the static token cannot register Remote Control). S-6, S-15 and S-16
@@ -257,9 +264,10 @@ the saga. To start building, follow
 | [distributed-dev-env/README.md](sagas/distributed-dev-env/README.md) | Tom's vision, the architecture at a glance, the hard news, the decision log and the plan index. |
 | [distributed-dev-env/KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) | The work order for the first build session. |
 | [adrs/001-distributed-dev-env.md](sagas/distributed-dev-env/adrs/001-distributed-dev-env.md) | The architecture decision (Accepted 2026-10-06), with the ratification summary at the top and consequences C-01 to C-21. |
-| [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 to Q-17 and their resolutions in 15, the decisions (D-01 onward) in 16. |
+| [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 to Q-18 and their resolutions in 15, the decisions (D-01 onward) in 16. |
 | [research/R-01](sagas/distributed-dev-env/research/R-01-summoned-agents-audit.md) | An audit of summoned agents today, with v2 requirements V-01 to V-17. |
 | [research/R-02](sagas/distributed-dev-env/research/R-02-remote-control-identity.md) | Remote Control identity, the evidence behind S-1, and proposals P-1 to P-12. |
+| [research/R-03](sagas/distributed-dev-env/research/R-03-claude-code-approvals.md) | Claude Code in-app approval spike: native hooks, managed policy, forgery paths, isolated authority and the plan 03 core dependency. Q-18 pending. |
 | [backlog/00-spikes.md](sagas/distributed-dev-env/backlog/00-spikes.md) | S-1 to S-16: steps, safety rules and pass criteria. |
 | [backlog/01-foundation.md](sagas/distributed-dev-env/backlog/01-foundation.md) | Plan 01: operator, agentd, `agent-run`, the agent image, task mode on the static token. |
 | [backlog/02](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md) | Plan 02: interactive sessions, idle detection, suspend, resume and optional external CLI access. Done under Tom's corrected scope. |
@@ -295,9 +303,11 @@ the saga. To start building, follow
 | Q-15 | The keeper mints a Proxmox grant's token over SSH (A): "Keeper mints over SSH (Recommended)". With a certificate from its own SSH CA it runs `sudo pvesh create /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0` on a node and deletes the token at the grant's end. No new Proxmox user, and v2 never holds the long-lived token. Port 22 from the keeper to the nodes. |
 | Q-16 | Parity first, approvals in the Claude Code app (Tom, 2026-10-08). "I am open to advanced security but I must be able to grant permission from my phone." No new guard cuts what agents do today (no Authentik, outpost, Traefik or postgres16 lockdown, no git review or CODEOWNERS gate); standing auto-approved grants cover everything a v1 agent does (OPERATOR kube tier, Proxmox via the keeper's SSH minting, hw-ssh), and any gap blocks the cutover. Human approval gates only capabilities beyond today's (secret reads, break-glass above OPERATOR). Approvals happen inside the Claude Code app, not Pushover plus a web page. Residual risk accepted: Flux is cluster-admin and agents self-merge. The approval surface is the next design spike (issue #91). |
 | Q-17 | Withdrawn after Tom corrected its premise (2026-10-08): use `agent-run` or ask agents to start sessions; a web UI is another possible session-management client. No laptop kubeconfig or test blocks plan 02. D-68 remains an optional external path whose real external-machine use is unverified. Q-16 remains in force. |
+| Q-18 | Awaiting Tom: staged guarded Claude Code approver (recommended), coordinator soft gate with explicit forgery-risk acceptance, or defer the human path and keep standing grants only. R-03 records evidence and tests; no human path or new guard is enabled. Parity audit and keeper SSH minting do not wait for this answer. |
 
-**No owner question is pending.** The approval surface is the next design spike
-(issue #91); it will record and ask its own Q-NN.
+**Open:** Q-18, the in-app approval route. The spike is complete; the complete
+v1 parity audit is next, then keeper SSH minting. Break-glass login freshness is
+unchanged and needs a separate ruling if the new route cannot establish it.
 
 **Settings only Tom can click** (no decision needed). An agent on his laptop does
 them from [`handoffs/2026-10-06-tom-laptop-settings.md`](handoffs/2026-10-06-tom-laptop-settings.md),
