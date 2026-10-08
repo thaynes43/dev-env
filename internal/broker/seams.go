@@ -135,6 +135,9 @@ func (b *Broker) decisionAllowed(g *v1alpha1.AccessGrant, d Decision, now time.T
 	if !d.Approve {
 		return 0, nil
 	}
+	if g.Spec.Type == v1alpha1.GrantCredential {
+		return 0, fmt.Errorf("%w: credential approvals require a matching standing policy", ErrRefused)
+	}
 	if err := check(g, b.SessionNamespace, b.PolicyNamespace); err != nil {
 		return 0, fmt.Errorf("%w: %w", ErrRefused, err)
 	}

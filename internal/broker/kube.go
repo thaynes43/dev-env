@@ -140,6 +140,9 @@ func (b *Broker) ensureOne(ctx context.Context, g *v1alpha1.AccessGrant, want, h
 // success, so it can run again. Deleting the ServiceAccount ends every token
 // of the grant at once.
 func (b *Broker) revoke(ctx context.Context, g *v1alpha1.AccessGrant, why string) error {
+	if g.Spec.Type == v1alpha1.GrantCredential {
+		return b.revokeCredential(ctx, g)
+	}
 	var deleted, kept []string
 	var errs []error
 	del := func(o client.Object) {

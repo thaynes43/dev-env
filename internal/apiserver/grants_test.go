@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -135,10 +136,26 @@ func TestCredentialRequestKeepsAuthenticatedSessionUID(t *testing.T) {
 	f := newFixture(t)
 	const sessionName = "haynes-ops-1006-100000"
 	tok := f.sessionPod(sessionName, "full", 0)
+	// The fake API does not assign UIDs. Supply the same real-looking session
+	// UID to the session and its pod controller reference before authenticating.
+	session := f.session(sessionName)
+	session.UID = "11111111-1111-1111-1111-111111111111"
+	session.Finalizers = nil
+	if err := f.c.Update(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	var pod corev1.Pod
+	key := types.NamespacedName{Namespace: sessionNS, Name: sessionName}
+	if err := f.c.Get(context.Background(), key, &pod); err != nil {
+		t.Fatal(err)
+	}
+	pod.OwnerReferences[0].UID = session.UID
+	if err := f.c.Update(context.Background(), &pod); err != nil {
+		t.Fatal(err)
+	}
 	got := f.request(tok, apiv1.CreateGrantRequest{Type: "credential", Credential: "proxmox", TTL: "15m", Reason: "maintain a guest"}, http.StatusCreated)
 	g := f.grant(got.Name)
 	var s v1alpha1.AgentSession
-	key := types.NamespacedName{Namespace: sessionNS, Name: sessionName}
 	if err := f.c.Get(context.Background(), key, &s); err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +166,7 @@ func TestCredentialRequestKeepsAuthenticatedSessionUID(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.ResourceVersion = ""
-	s.UID = "replacement-session"
+	s.UID = "22222222-2222-2222-2222-222222222222"
 	if err := f.c.Create(context.Background(), &s); err != nil {
 		t.Fatal(err)
 	}
