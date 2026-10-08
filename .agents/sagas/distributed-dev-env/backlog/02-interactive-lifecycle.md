@@ -177,5 +177,5 @@ Codex session.
     Haiku TUI.
   - The paste arrived framed as from `client/dev/dev-env`, and the agent replied
     `noted` as asked.
-  - The Codex half runs with plan 04 (below).
+  - The Codex half runs with plan 04 (above).
 - Tom lists and attaches to sessions from his laptop.
