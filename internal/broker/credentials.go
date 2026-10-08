@@ -2,9 +2,11 @@ package broker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,6 +20,50 @@ import (
 // The broker pins the first accepted execution object's UID before trusting any
 // receipt. A replacement cannot mint again or finish the old object's cleanup.
 const credentialJobUIDAnnotation = v1alpha1.LabelPrefix + "credential-job-uid"
+
+// This broker-owned receipt survives deletion of the keeper's execution object
+// so a conflicting grant-finalizer update can retry without losing proof of
+// revocation. It is cleanup evidence, never permission to install or remint.
+const credentialCleanupReceiptAnnotation = v1alpha1.LabelPrefix + "credential-cleanup-receipt"
+
+type credentialCleanupReceipt struct {
+	GrantUID  types.UID   `json:"grantUID"`
+	JobUID    types.UID   `json:"jobUID"`
+	RevokedAt metav1.Time `json:"revokedAt"`
+}
+
+func credentialCleanupConfirmed(g *v1alpha1.AccessGrant, now time.Time) bool {
+	pinned := g.Annotations[credentialJobUIDAnnotation]
+	if g.UID == "" || pinned == "" {
+		return false
+	}
+	var receipt credentialCleanupReceipt
+	if err := json.Unmarshal([]byte(g.Annotations[credentialCleanupReceiptAnnotation]), &receipt); err != nil {
+		return false
+	}
+	return receipt.GrantUID == g.UID && string(receipt.JobUID) == pinned &&
+		!receipt.RevokedAt.IsZero() && !receipt.RevokedAt.Before(&g.CreationTimestamp) && !receipt.RevokedAt.After(now)
+}
+
+func (b *Broker) recordCredentialCleanup(ctx context.Context, g *v1alpha1.AccessGrant, j *v1alpha1.CredentialJob) error {
+	receipt := credentialCleanupReceipt{GrantUID: g.UID, JobUID: j.UID, RevokedAt: *j.Status.RevokedAt}
+	encoded, err := json.Marshal(receipt)
+	if err != nil {
+		return fmt.Errorf("encode the credential cleanup receipt: %w", err)
+	}
+	if g.Annotations[credentialCleanupReceiptAnnotation] == string(encoded) {
+		return nil
+	}
+	orig := g.DeepCopy()
+	if g.Annotations == nil {
+		g.Annotations = map[string]string{}
+	}
+	g.Annotations[credentialCleanupReceiptAnnotation] = string(encoded)
+	if err := b.Client.Patch(ctx, g, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})); err != nil {
+		return fmt.Errorf("record the credential cleanup receipt: %w", err)
+	}
+	return nil
+}
 
 var errCredentialCleanupPending = errors.New("keeper credential cleanup is pending")
 
@@ -171,6 +217,9 @@ func (b *Broker) activeCredential(ctx context.Context, g *v1alpha1.AccessGrant, 
 
 func (b *Broker) revokeCredential(ctx context.Context, g *v1alpha1.AccessGrant) error {
 	j, err := b.credentialJob(ctx, g)
+	if apierrors.IsNotFound(err) && !g.DeletionTimestamp.IsZero() && credentialCleanupConfirmed(g, b.Clock.Now()) {
+		return nil
+	}
 	if err != nil || j == nil {
 		return err
 	}
@@ -185,10 +234,13 @@ func (b *Broker) revokeCredential(ctx context.Context, g *v1alpha1.AccessGrant) 
 		}
 	}
 	if j.Status.Phase != v1alpha1.CredentialRevoked || j.Status.RevokedAt == nil ||
-		j.Status.RevokedAt.Before(&j.CreationTimestamp) || j.Status.RevokedAt.After(b.Clock.Now()) {
+		j.Status.RevokedAt.Before(&j.CreationTimestamp) || j.Status.RevokedAt.Before(&g.CreationTimestamp) || j.Status.RevokedAt.After(b.Clock.Now()) {
 		return errCredentialCleanupPending
 	}
 	if !g.DeletionTimestamp.IsZero() {
+		if err := b.recordCredentialCleanup(ctx, g, j); err != nil {
+			return err
+		}
 		if err := b.Client.Delete(ctx, j, client.Preconditions{UID: &j.UID}); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete the revoked credential execution job: %w", err)
 		}
