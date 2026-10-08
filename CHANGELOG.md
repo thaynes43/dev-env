@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.7.1](https://github.com/thaynes43/dev-env/compare/v2.7.0...v2.7.1) (2026-10-08)
+
+
+### Bug Fixes
+
+* **deps:** update module github.com/prometheus/client_golang to v1.24.1 ([#99](https://github.com/thaynes43/dev-env/issues/99)) ([7e3b3ef](https://github.com/thaynes43/dev-env/commit/7e3b3ef66812de044a0d8dbeaaac40e62abc0a90))
+
 ## [2.7.0](https://github.com/thaynes43/dev-env/compare/v2.6.0...v2.7.0) (2026-10-08)
 
 
