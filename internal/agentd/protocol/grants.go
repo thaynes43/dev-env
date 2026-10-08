@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"log/slog"
 	"regexp"
 	"time"
 )
@@ -32,6 +33,11 @@ const (
 	// directory is missing: the pod was built before D-63. The broker stops
 	// trying such a pod after three attempts.
 	ExitNoGrantsDir = 3
+	// ExitNoCredential is credential-available's silent result when no live
+	// grant is installed. Helpers may then use their baseline read credential.
+	// credential-use may also return it when expiry raced the preflight, but
+	// its callers must propagate all execution exits without retrying.
+	ExitNoCredential = 4
 )
 
 // MaxGrantNameLength is a grant name's limit: it names a ServiceAccount, a
@@ -78,4 +84,42 @@ type InstalledGrant struct {
 	// Expires, and it is the kubeconfig's current context.
 	Expired bool `json:"expired,omitempty"`
 	Current bool `json:"current,omitempty"`
+}
+
+// CredentialInstallCommand installs a provider credential through exec. The
+// bounded CredentialPayload goes on stdin; argv contains metadata only.
+func CredentialInstallCommand(name, grantUID, podUID string, expires time.Time) []string {
+	return []string{"agentd", "ctl", "credential-install", "--name", name, "--grant-uid", grantUID, "--pod-uid", podUID, "--expires", expires.UTC().Format(time.RFC3339)}
+}
+
+// CredentialRemoveCommand fences cleanup against both replacement grants and
+// replacement pods. A stale grant UID must not delete the replacement's file.
+func CredentialRemoveCommand(name, grantUID, podUID string) []string {
+	return []string{"agentd", "ctl", "credential-remove", "--name", name, "--grant-uid", grantUID, "--pod-uid", podUID}
+}
+
+// CredentialPayload is the private stdin wire document. Never serialize it
+// into a status, log, or command argument. Its formatting methods redact it.
+type CredentialPayload struct {
+	Version     int    `json:"version"`
+	Credential  string `json:"credential"`
+	TokenID     string `json:"tokenID"`
+	TokenSecret string `json:"tokenSecret"`
+}
+
+func (CredentialPayload) String() string   { return "CredentialPayload{redacted}" }
+func (CredentialPayload) GoString() string { return "CredentialPayload{redacted}" }
+func (CredentialPayload) LogValue() slog.Value {
+	return slog.StringValue("CredentialPayload{redacted}")
+}
+
+// InstalledCredential is public metadata only. The private store keeps it
+// together with the payload in one atomic file, so they cannot drift apart.
+type InstalledCredential struct {
+	Name        string    `json:"name"`
+	GrantUID    string    `json:"grantUID"`
+	PodUID      string    `json:"podUID"`
+	Credential  string    `json:"credential"`
+	Expires     time.Time `json:"expires"`
+	InstalledAt time.Time `json:"installedAt"`
 }

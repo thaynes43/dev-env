@@ -82,6 +82,12 @@ Commands:
   ctl grant-remove         Remove a kube grant; pod UID required.
   ctl grant-list           List this pod's grants and their expiry.
   ctl grant-use            Select a grant context or default.
+  ctl credential-install  Install a private typed credential from JSON stdin.
+  ctl credential-remove   Remove a credential fenced by grant and pod UIDs.
+  ctl credential-list     List public credential metadata, with -o json.
+  ctl credential-available Check for a live credential without printing material.
+  ctl credential-use      Run a command with a live credential in its environment.
+  ctl credential-expire   Remove expired credential files from the grants volume.
   version                  Print the version, commit, Go version and platform.
   help                     Print this help.
 
@@ -372,6 +378,8 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		switch args[0] {
 		case "grant-install", "grant-remove", "grant-use", "grant-list":
 			return grantCtl(args, stdin, stdout, stderr, getenv)
+		case "credential-install", "credential-remove", "credential-list", "credential-available", "credential-use", "credential-expire":
+			return credentialCtl(ctx, args, stdin, stdout, stderr, getenv, r)
 		case "deliver", "log":
 			return ctlMessageOrLog(ctx, args, stdin, stdout, stderr, getenv, r)
 		case "rescues", "prune", "hold-rescue":
