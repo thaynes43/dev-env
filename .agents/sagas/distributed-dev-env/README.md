@@ -179,7 +179,8 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 43 | Q-16: parity first, approvals in the Claude Code app; dev-env v2 benched | **DECIDED** 2026-10-08 (Tom, from his phone) | No new guard may cut what agents do today (no Authentik, outpost, Traefik or postgres16 lockdown, no git review or CODEOWNERS gate); standing auto-approved grants cover the whole v1 capability set, and human approval gates only capabilities beyond it. Approvals happen inside the Claude Code app, not Pushover plus a web page. Plan 07 step 6 is redesigned; PR #90 and haynes-ops #3550 were closed with pointers (issue #91). v2 is benched from 2026-10-08 until the plan usage resets (the Claude weekly limit resets 2026-10-12). Full text: DESIGN-001 Q-16. |
 | 44 | Resume v2 with the Codex coordinator | **DECIDED** 2026-10-08 (Tom's work order) | Codex resumes after its usage reset. Finish plan 02 laptop access and acceptance first, then the docs-only Claude Code approval spike, the v1 capability parity check, and keeper SSH minting. Preserve Q-15 and Q-16; use GPT-6.1 Sol subagents, one task worktree each, and ask Tom one question at a time. Laptop access follows D-68. |
 
-The full options, consequences and rulings for Q-01 to Q-16 are in
+The full options, consequences and rulings for Q-01 to Q-16, and the pending
+laptop prerequisite Q-17, are in
 [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions).
 
 ## Plan backlog

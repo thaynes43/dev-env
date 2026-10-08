@@ -9,7 +9,7 @@
   section 15).
   Research notes [R-01](../research/R-01-summoned-agents-audit.md) and
   [R-02](../research/R-02-remote-control-identity.md) are folded in.
-- **Last updated:** 2026-10-07
+- **Last updated:** 2026-10-08
 - **Governed by:** [ADR-001](../adrs/001-distributed-dev-env.md) (Accepted 2026-10-06)
 - **Saga:** [README](../README.md)
 
@@ -4241,7 +4241,7 @@ suite, a busy loop or anything parallel (the 2026-10-05 incident rule).
 
 ## 15. Open questions
 
-Each blocks building. Ask Tom one at a time; fold the answer back in as a dated
+Each gates the step it names. Ask Tom one at a time; fold the answer back in as a dated
 ruling. Q-01 to Q-11 were all answered on 2026-10-06, and so were Q-13 and Q-14. Q-12
 was settled on 2026-10-07: Tom made the repo public (B). Q-15 (plan 07, Proxmox
 credential grants) was answered on 2026-10-07 too. Q-16 (how the human-approval authority is protected and surfaced) was ruled on 2026-10-08. ADR-001 was Accepted on
