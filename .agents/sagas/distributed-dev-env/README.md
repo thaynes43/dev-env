@@ -178,9 +178,10 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 42 | Resume plan 07 on Codex | **DECIDED** 2026-10-07 (Tom through the coordinator work order) | Codex resumes step 4, then builds egress grants and the operator expiry backstop, and deploys/verifies the broker. Plan 02 continues in parallel; each PR rebases on main. Step 4 installs kube grants in tmpfs with stdin-only, UID-fenced exec (D-63). Round 1 finished steps 4 and 5 (D-64) and verified H2 runtime, including real expiry with the broker stopped; temporary fixtures and the test session were removed. Human approval deployment follows step 6. |
 | 43 | Q-16: parity first, approvals in the Claude Code app; dev-env v2 benched | **DECIDED** 2026-10-08 (Tom, from his phone) | No new guard may cut what agents do today (no Authentik, outpost, Traefik or postgres16 lockdown, no git review or CODEOWNERS gate); standing auto-approved grants cover the whole v1 capability set, and human approval gates only capabilities beyond it. Approvals happen inside the Claude Code app, not Pushover plus a web page. Plan 07 step 6 is redesigned; PR #90 and haynes-ops #3550 were closed with pointers (issue #91). v2 is benched from 2026-10-08 until the plan usage resets (the Claude weekly limit resets 2026-10-12). Full text: DESIGN-001 Q-16. |
 | 44 | Resume v2 with the Codex coordinator | **DECIDED** 2026-10-08 (Tom's work order) | Codex resumes after its usage reset. Finish plan 02 laptop access and acceptance first, then the docs-only Claude Code approval spike, the v1 capability parity check, and keeper SSH minting. Preserve Q-15 and Q-16; use GPT-6.1 Sol subagents, one task worktree each, and ask Tom one question at a time. Laptop access follows D-68. |
+| 45 | Session access follows Tom's current workflow | **DECIDED** 2026-10-08 (Tom, correcting Q-17) | Use the `agent-run` CLI or ask agents to start sessions; a web UI is another possible session-management client. No laptop kubeconfig ceremony or laptop test blocks plan 02. Validate the existing in-cluster CLI workflow instead. D-68 remains an optional external path whose real external-machine use is unverified. This supersedes decision 44's laptop acceptance requirement and preserves the remaining priority order and Q-16. |
 
-The full options, consequences and rulings for Q-01 to Q-16, and the pending
-laptop prerequisite Q-17, are in
+The full options, consequences and rulings for Q-01 to Q-16, and the withdrawal
+of Q-17 after Tom corrected its premise, are in
 [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions).
 
 ## Plan backlog
@@ -192,7 +193,7 @@ v1 stays live throughout. No v2 plan edits haynes-ops'
 |---|---|---|
 | [00: spikes](backlog/00-spikes.md) | nothing | yes, with Tom's answers |
 | [01: foundation, task mode](backlog/01-foundation.md) (done 2026-10-07) | Q-01, Q-02, Q-04, Q-05 (all decided); spikes S-7, S-8, S-12 | |
-| [02: interactive sessions and lifecycle](backlog/02-interactive-lifecycle.md) | 01 | with 07 |
+| [02: interactive sessions and lifecycle](backlog/02-interactive-lifecycle.md) (done 2026-10-08 under Q-17's corrected scope) | 01 | with 07 |
 | [07: access broker](backlog/07-access-broker.md) | 01; Q-07 (decided) | with 02 |
 | [03: Remote Control](backlog/03-remote-control.md) | 02, 07; spikes S-1, S-5, S-6, S-15 | |
 | [04: rolling updates and Codex](backlog/04-rolling-updates-codex.md) | 02, Q-03 (decided); spikes S-3, S-4 | with 03 |

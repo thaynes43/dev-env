@@ -23,7 +23,10 @@ this repo publishes signed images, haynes-ops pins and deploys them.
 the operator's pod and volume reconciler and `/v1` API, agentd, rescue, suspend and
 archive, the minimal keeper, `agent-run` v2, CI, and the agent image `dev-env:2.0.0`
 (KICKOFF B1 to B5, plan 01 steps 1 to 9). The operator and the keeper run in the
-cluster, and the first end-to-end task ran on 2026-10-07. Plan 02 is next. The build sessions follow
+cluster, and the first end-to-end task ran on 2026-10-07. Plan 02 is done under
+Tom's 2026-10-08 correction: acceptance uses the existing in-cluster CLI, and
+external CLI access is optional (Q-17). Plan 07's docs-only approval design
+spike is next. The build sessions follow
 [`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md). v1 keeps running from
 haynes-ops (`kubernetes/main/apps/dev/dev-env/`, `scripts/dev-env/Dockerfile`) until
 v2 proves itself and Tom approves the cutover. The saga:

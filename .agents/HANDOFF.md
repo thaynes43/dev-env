@@ -16,13 +16,21 @@ the saga. To start building, follow
     Step 12's laptop client (D-68) is built in #103 and released as signed
     agent `2.8.0` (#104). Its operator image is signed `sha-12a97c4`.
     [haynes-ops #3579](https://github.com/thaynes43/haynes-ops/pull/3579)
-    deployed both pins; Flux, rollout and fleet checks passed. Steps 12 and 13
-    remain open until Tom's laptop
-    list-and-attach check passes. **Q-17 awaits his kubeconfig prerequisite
-    answer.** The exact commands are in
-    [the laptop handoff](handoffs/2026-10-08-laptop-access.md).
+    deployed both pins; Flux, rollout and fleet checks passed. **Tom corrected
+    the laptop requirement on 2026-10-08 (Q-17, README decision 45):** he uses
+    `agent-run` or asks agents to start sessions; a web UI is another possible
+    session-management client. Q-17 is withdrawn. Step 12 is delivered as an
+    optional external path, with no claim of a real external-machine run.
+    **Plan 02 is done under that corrected scope.** Step 13 passed with idle
+    local session `dev-env-1008-125420`: create, list, show, attach, detach and
+    reap through v1's existing CLI identity. Rescue `20261008-1256` was
+    `CleanAndPushed`; the operator archived it and removed its pod and home
+    volume. The v1 and shelf UIDs and every restart count were preserved.
+    No laptop kubeconfig ceremony or test blocks progress. The
+    [external CLI instructions](handoffs/2026-10-08-laptop-access.md)
+    are optional.
   - **Plan 07:** steps 1 to 5 are built and H2 (the broker Deployment) is deployed
-    and verified. Step 6's design spike follows plan 02 acceptance: Q-16 was
+    and verified. **Resume at step 6's docs-only design spike:** Q-16 was
     ruled on 2026-10-08
     (parity first; approvals inside the Claude Code app), and PR #90 and haynes-ops
     #3550 were closed because their Pushover and web approval surface is ruled out.
@@ -225,8 +233,9 @@ the saga. To start building, follow
 2. **Plan 02: interactive sessions and lifecycle.** Plan 01, with KICKOFF B1 to B5,
    is done ([plan 01](sagas/distributed-dev-env/backlog/01-foundation.md)). Plan 02
    ([backlog/02](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md))
-   resumes at laptop access (see State on 2026-10-08). Plan 07 follows its
-   acceptance check. Run one plan at a time (README decisions 40 and 44).
+   is done with the corrected in-cluster CLI acceptance check (see State on
+   2026-10-08). Plan 07's docs-only approval spike is next. Run one plan at a
+   time (README decisions 40, 44 and 45).
 3. **Collect the spike results.** S-1, S-1b and S-7 are done, and S-2 is already
    answered (the static token cannot register Remote Control). S-6, S-15 and S-16
    are done, and S-3 passed (keeper-owned Codex auth, DESIGN-001 D-12 step 2), so
@@ -253,7 +262,7 @@ the saga. To start building, follow
 | [research/R-02](sagas/distributed-dev-env/research/R-02-remote-control-identity.md) | Remote Control identity, the evidence behind S-1, and proposals P-1 to P-12. |
 | [backlog/00-spikes.md](sagas/distributed-dev-env/backlog/00-spikes.md) | S-1 to S-16: steps, safety rules and pass criteria. |
 | [backlog/01-foundation.md](sagas/distributed-dev-env/backlog/01-foundation.md) | Plan 01: operator, agentd, `agent-run`, the agent image, task mode on the static token. |
-| [backlog/02](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md) | Plan 02: interactive sessions, idle detection, suspend, resume, laptop access. |
+| [backlog/02](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md) | Plan 02: interactive sessions, idle detection, suspend, resume and optional external CLI access. Done under Tom's corrected scope. |
 | [backlog/03](sagas/distributed-dev-env/backlog/03-remote-control.md) | Plan 03: Remote Control, the keeper-owned Max login and the console. |
 | [backlog/04](sagas/distributed-dev-env/backlog/04-rolling-updates-codex.md) | Plan 04: drain on idle with resume, and the codex hub. |
 | [backlog/05](sagas/distributed-dev-env/backlog/05-cutover.md) | Plan 05: cutover from v1 (needs Tom's written approval). |
@@ -285,10 +294,10 @@ the saga. To start building, follow
 | Q-14 | A GitHub App key secret for release-please (A): "GitHub App key secret (Recommended)". Repo variable `RELEASE_APP_ID`, repo secret `RELEASE_APP_PRIVATE_KEY`; the App also needs Issues read and write for `autorelease:` labels. |
 | Q-15 | The keeper mints a Proxmox grant's token over SSH (A): "Keeper mints over SSH (Recommended)". With a certificate from its own SSH CA it runs `sudo pvesh create /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0` on a node and deletes the token at the grant's end. No new Proxmox user, and v2 never holds the long-lived token. Port 22 from the keeper to the nodes. |
 | Q-16 | Parity first, approvals in the Claude Code app (Tom, 2026-10-08). "I am open to advanced security but I must be able to grant permission from my phone." No new guard cuts what agents do today (no Authentik, outpost, Traefik or postgres16 lockdown, no git review or CODEOWNERS gate); standing auto-approved grants cover everything a v1 agent does (OPERATOR kube tier, Proxmox via the keeper's SSH minting, hw-ssh), and any gap blocks the cutover. Human approval gates only capabilities beyond today's (secret reads, break-glass above OPERATOR). Approvals happen inside the Claude Code app, not Pushover plus a web page. Residual risk accepted: Flux is cluster-admin and agents self-merge. The approval surface is the next design spike (issue #91). |
+| Q-17 | Withdrawn after Tom corrected its premise (2026-10-08): use `agent-run` or ask agents to start sessions; a web UI is another possible session-management client. No laptop kubeconfig or test blocks plan 02. D-68 remains an optional external path whose real external-machine use is unverified. Q-16 remains in force. |
 
-**Open:** Q-17, whether Tom's laptop already has a working main-cluster admin
-kubeconfig. The laptop acceptance check waits for that prerequisite. The
-approval surface remains the next design spike (issue #91).
+**No owner question is pending.** The approval surface is the next design spike
+(issue #91); it will record and ask its own Q-NN.
 
 **Settings only Tom can click** (no decision needed). An agent on his laptop does
 them from [`handoffs/2026-10-06-tom-laptop-settings.md`](handoffs/2026-10-06-tom-laptop-settings.md),
@@ -354,8 +363,8 @@ The kubelet itself peaked at only 0.18 cores.
 |---|---|---|
 | gh, git push, GHCR | Yes, as haynes-dev-bot. No prefix: `~/.local/bin/gh` reads `/creds/gh_token` on every call (haynes-ops #3476, 2026-10-07). | Yes, with your own gh login, so PRs author as Tom. GHCR pulls of public images are anonymous. |
 | Code, Go builds, unit tests, envtest | Yes, lightly, under the pod's CPU cap. | Yes. |
-| `kubectl`, `flux` | OPERATOR tier: read plus targeted runtime writes. | Laptop access needs Tom's existing admin kubeconfig (D-68); its presence is being checked in Q-17. No cluster credential is supplied by this repo. |
-| `declare-activity` | Yes. | No. It writes files on the pod's volume. |
+| `kubectl`, `flux` | OPERATOR tier: read plus targeted runtime writes. | Optional external CLI access needs a caller's existing admin kubeconfig (D-68). No cluster credential is supplied by this repo, and Tom's current workflow needs no laptop setup (Q-17). |
+| `declare-activity` | v1 writes files on the pod's volume; v2 `agent-run declare-activity` calls the operator API. | The v1 file command is unavailable. The v2 API command is available to an authenticated external CLI caller. |
 | MCP servers on cluster DNS (grafana-mcp, home-assistant, blender, audio, vexa, the haynesnetwork hop) | Yes. | No. |
 | The Claude Max login and Codex `auth.json` | Yes, on the pod's volume. Never copied out. | No. Never fetch them. |
 
