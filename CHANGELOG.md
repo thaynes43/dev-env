@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.7.0](https://github.com/thaynes43/dev-env/compare/v2.6.0...v2.7.0) (2026-10-08)
+
+
+### Features
+
+* rescues on a shelf pod: list, restore and pruning (D-67) ([#92](https://github.com/thaynes43/dev-env/issues/92)) ([035dfaa](https://github.com/thaynes43/dev-env/commit/035dfaa3b34777a04f2d643863bd7b0845ab132c))
+
 ## [2.6.0](https://github.com/thaynes43/dev-env/compare/v2.5.0...v2.6.0) (2026-10-07)
 
 
