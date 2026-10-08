@@ -200,9 +200,9 @@ func (g Grants) Install(spec GrantSpec, token []byte) error {
 		if !fi.IsDir() {
 			return errors.New("the grant path is not a directory, or is a symlink")
 		}
-		if _, err := os.Lstat(filepath.Join(dir, credentialFile)); err == nil {
+		if present, err := credentialDirectoryPresent(dir); present {
 			return errors.New("the grant path already holds a provider credential")
-		} else if !errors.Is(err, fs.ErrNotExist) {
+		} else if err != nil {
 			return errors.New("the grant path is unsafe")
 		}
 		if err := os.Chmod(dir, 0o700); err != nil {
@@ -235,9 +235,9 @@ func (g Grants) Remove(name string) error {
 		return err
 	}
 	return g.locked(func() error {
-		if _, err := os.Lstat(filepath.Join(g.Dir, name, credentialFile)); err == nil {
+		if present, err := credentialDirectoryPresent(filepath.Join(g.Dir, name)); present {
 			return errors.New("the grant path holds a provider credential")
-		} else if !errors.Is(err, fs.ErrNotExist) {
+		} else if err != nil {
 			return errors.New("the grant path is unsafe")
 		}
 		if err := os.RemoveAll(filepath.Join(g.Dir, name)); err != nil {
@@ -343,7 +343,7 @@ func (g Grants) read(now time.Time) ([]protocol.InstalledGrant, error) {
 		}
 		// Provider credentials share this root but never belong in a
 		// kubeconfig. Leave their typed entries to the credential store.
-		if _, err := os.Lstat(filepath.Join(g.Dir, e.Name(), credentialFile)); err == nil {
+		if present, err := credentialDirectoryPresent(filepath.Join(g.Dir, e.Name())); present || err != nil {
 			continue
 		}
 		ig, ok := g.readOne(e.Name())
@@ -385,7 +385,7 @@ func (g Grants) rewrite(now time.Time, use string) error {
 		if !e.IsDir() || protocol.ValidGrantName(e.Name()) != nil {
 			continue
 		}
-		if _, err := os.Lstat(filepath.Join(g.Dir, e.Name(), credentialFile)); err == nil {
+		if present, err := credentialDirectoryPresent(filepath.Join(g.Dir, e.Name())); present || err != nil {
 			continue
 		}
 		ig, ok := g.readOne(e.Name())
