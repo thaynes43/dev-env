@@ -35,8 +35,10 @@ the saga. To start building, follow
     records the native hooks, managed policy, forgeable soft gates and the
     guarded route's unresolved phone, authority and shared OAuth checks.
     **Q-18 awaits Tom's route choice.** No human approval path is enabled.
-    Next: the complete v1 parity audit, then keeper SSH minting. The pending
-    approval choice does not block them. Q-16 was ruled on 2026-10-08
+    The complete v1 parity audit is recorded in [R-04](sagas/distributed-dev-env/research/R-04-v1-capability-parity.md).
+    Twenty gaps in backlog/07 block cutover. Next: restore the omitted baseline
+    credentials after the rescue-mount fix ships, then keeper SSH minting under
+    D-69. The pending approval choice does not block them. Q-16 was ruled on 2026-10-08
     (parity first; approvals inside the Claude Code app), and PR #90 and haynes-ops
     #3550 were closed because their Pushover and web approval surface is ruled out.
     The resume point is the last coordinator comment on
@@ -268,6 +270,7 @@ the saga. To start building, follow
 | [research/R-01](sagas/distributed-dev-env/research/R-01-summoned-agents-audit.md) | An audit of summoned agents today, with v2 requirements V-01 to V-17. |
 | [research/R-02](sagas/distributed-dev-env/research/R-02-remote-control-identity.md) | Remote Control identity, the evidence behind S-1, and proposals P-1 to P-12. |
 | [research/R-03](sagas/distributed-dev-env/research/R-03-claude-code-approvals.md) | Claude Code in-app approval spike: native hooks, managed policy, forgery paths, isolated authority and the plan 03 core dependency. Q-18 pending. |
+| [research/R-04](sagas/distributed-dev-env/research/R-04-v1-capability-parity.md) | Complete v1 parity audit: twenty cutover blockers, exact scopes, fixes and runtime closure evidence. |
 | [backlog/00-spikes.md](sagas/distributed-dev-env/backlog/00-spikes.md) | S-1 to S-16: steps, safety rules and pass criteria. |
 | [backlog/01-foundation.md](sagas/distributed-dev-env/backlog/01-foundation.md) | Plan 01: operator, agentd, `agent-run`, the agent image, task mode on the static token. |
 | [backlog/02](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md) | Plan 02: interactive sessions, idle detection, suspend, resume and optional external CLI access. Done under Tom's corrected scope. |
@@ -305,8 +308,8 @@ the saga. To start building, follow
 | Q-17 | Withdrawn after Tom corrected its premise (2026-10-08): use `agent-run` or ask agents to start sessions; a web UI is another possible session-management client. No laptop kubeconfig or test blocks plan 02. D-68 remains an optional external path whose real external-machine use is unverified. Q-16 remains in force. |
 | Q-18 | Awaiting Tom: staged guarded Claude Code approver (recommended), coordinator soft gate with explicit forgery-risk acceptance, or defer the human path and keep standing grants only. R-03 records evidence and tests; no human path or new guard is enabled. Parity audit and keeper SSH minting do not wait for this answer. |
 
-**Open:** Q-18, the in-app approval route. The spike is complete; the complete
-v1 parity audit is next, then keeper SSH minting. Break-glass login freshness is
+**Open:** Q-18, the in-app approval route. The spike and v1 parity audit are complete;
+parity restoration and keeper SSH minting are in progress. No gap is waived. Break-glass login freshness is
 unchanged and needs a separate ruling if the new route cannot establish it.
 
 **Settings only Tom can click** (no decision needed). An agent on his laptop does

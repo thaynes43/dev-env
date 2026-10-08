@@ -3279,6 +3279,65 @@ grants.** `internal/broker`; `dev-env-operator broker` (`cmd/dev-env-operator/br
   the broker ended it Expired. Session/v1 UIDs and restart counts were preserved;
   the dedicated session and fixtures were removed (haynes-ops #3542–#3544).
 
+**D-69 (2026-10-08, plan 07 step 8). Keeper-owned Proxmox minting over SSH.**
+
+This implements Q-15 A. The Proxmox backend is disabled by default until owner
+CA/node trust, standing policies and the real acceptance pass. It does not enable
+human approval or general hw-ssh grants. [R-04](../research/R-04-v1-capability-parity.md)
+records the remaining cutover blockers.
+
+- The broker creates a `CredentialJob` in `dev-env-system` with immutable
+  AccessGrant/session namespace, name and UID, credential kind and fixed expiry.
+  Release is one-way. The broker alone decides and writes AccessGrant status.
+  The keeper writes job execution/cleanup receipts, never approval or grant status.
+  RBAC and admission enforce this division; a receipt contains no token.
+- A leader-only keeper worker uses native Go SSH with explicitly pinned hosts.
+  It signs an ephemeral key from its own mounted Ed25519 CA for the existing
+  Unix user `dev-env`, with principal `dev-env-keeper-proxmox-minter`, a critical
+  fixed command and no PTY/forwarding. The node must map that principal to the
+  account. This restriction applies only to keeper minting. The command uses
+  `sudo -n pvesh create /access/users/dev-env@pve/token/<grant> --expire <end>
+  --privsep 0`; deletion checks the matching ownership identity.
+- A private named Secret, `dev-env-keeper-credential-journal`, stores intent
+  before possible SSH dispatch and returned material before installation. Only
+  keeper gets/patches that name. The bounded journal holds at most 128 entries
+  and 512 KiB serialized data; capacity causes backpressure before minting.
+  No token is written to events, job/grant status, annotations or logs.
+- A persisted token is reinstalled after keeper restart or replacement session
+  pod, without reminting. If dispatch may have occurred and its returned value
+  was lost, the job fails closed and cleanup retries; it never automatically
+  deletes/remints the same token. A delayed first command might still complete.
+  A new grant has a new UID/token name. Uncertain intent survives through the
+  provider expiry and confirmed cleanup; a local error cannot claim revocation.
+- Private typed agentd files carry grant and pod UIDs and fixed expiry. Install
+  sends material on stdin to a freshly validated session pod; cleanup is fenced
+  against replacements. Kube contexts and typed credentials coexist. The `pve`
+  helper selects an unexpired grant per call through a child process with its
+  validated operator environment; it never prints the token. `--ro` retains
+  baseline reader access, and existing flags/generic CRUD remain available.
+- Release, session end/deletion and expiry persist cleanup intent before provider
+  deletion. Broker waits for the keeper's cleanup receipt before claiming early
+  revocation. Provider expiry independently bounds API authentication during an
+  outage. Leadership loss cancels work; revalidate leadership and live immutable
+  identities before remote writes and installation. No session is restarted.
+
+Owner provisioning names: 1Password item `dev-env-ssh-ca`, fields
+`SSH_CA_PRIVATE_KEY_B64` and `SSH_CA_PUBLIC_KEY`; projected Secret
+`dev-env-system/dev-env-keeper-ssh-ca`, keys `private-key` and `public-key`, mounted
+at `/etc/dev-env-keeper/ssh-ca`. The owner generates and stores the fresh CA.
+Never reuse v1's hardware private key or move its long-lived operator token.
+Pinned SSH target/trust files are explicit configuration, with no public default
+addresses. Missing/changed trust fails closed. These names are the design record,
+not a claim that owner provisioning or node trust is complete.
+
+Acceptance covers crashes at every persistence boundary, ambiguous results,
+provider ownership collisions, lease loss, released/expired/replaced identities,
+installation retries, typed-store coexistence and secret canaries. Use fake clocks
+and local fake providers at the shared-node CPU limits. GitOps applies CRD and
+exact RBAC/admission copies before image pins; agent changes require a signed
+release. The declared real test follows owner trust, with fixture cleanup and
+unchanged v1/session pod UIDs and restart counts.
+
 **D-26. Approvals: a Pushover link to an approval page behind Authentik.**
 
 **Superseded by Q-16, 2026-10-08.** The following is historical design, not a
@@ -4360,3 +4419,4 @@ minting. Each question blocks only the step it names.
 | D-66 | `Activity` CRD in `dev-env-system`: created only by `POST /v1/activities` with v1's limits enforced (scope required, 45m default, 8h cap, 2h for `cluster`), the declarer from the token, deleted by the operator at expiry; `declare-activity` is agent-run by another name; dev-env-ops reads both v1's files and the CRD | 6.9 |
 | D-67 | A `dev-env-shelf` Deployment in `dev-agents` mounts only the shared volume and runs `agentd shelf`; the operator lists (`GET /v1/rescues`) and prunes (leader, every 6 h, `lifecycle.bundleRetention`, never a bundle of a session that still exists, logs too) there by exec; a restore is `POST /v1/sessions` with `restore`, checked and held through the shelf under the prune's lock, and agentd fetches the bundle into `refs/rescued/*` on the first boot; the base defaults to the old session's rescued branch and is never a rescued snapshot (rescue branch or stash) | 4.5 |
 | D-68 | Optional external `agent-run` captures one kubeconfig context, reads the pinned CA, mints a short-lived human token in memory and owns a loopback port-forward; TLS checks the operator's service name; cleanup reaps the forward on every exit. Q-17 removes mandatory laptop acceptance. | 3.5 |
+| D-69 | Disabled-by-default PVE credential jobs: broker owns approval/grant status; keeper owns pinned SSH minting, bounded private journal and cleanup receipts; typed UID-fenced agentd files preserve pve behavior. Q-15 A; owner CA/trust and real acceptance remain required. | 6.12 |

@@ -1,6 +1,6 @@
 # 07: access broker
 
-**Status:** docs-only approval spike complete, Q-18 awaiting Tom's route choice (2026-10-08, [R-03](../research/R-03-claude-code-approvals.md)). Plan 02's corrected in-cluster acceptance passed; no laptop setup blocks progress (README decisions 44 and 45, Q-17). Steps 1 to 5 are built; H2 is deployed and verified. Next is the complete v1 capability parity audit, then keeper SSH minting (step 8/H5, Q-15 A). Q-18 blocks only the human approval implementation; capabilities beyond today's tier remain unavailable. A possible management UI changes neither Q-16 nor this priority order. [Issue #91](https://github.com/thaynes43/dev-env/issues/91) tracks the spike. Draft branches `agent/plan07-approvals-round3` (dev-env) and `agent/plan07-catalog-round3` (haynes-ops) retain reusable pieces; #90 and haynes-ops #3550 remain closed.
+**Status:** docs-only approval spike complete, Q-18 awaiting Tom's route choice (2026-10-08, [R-03](../research/R-03-claude-code-approvals.md)). Plan 02's corrected in-cluster acceptance passed; no laptop setup blocks progress (README decisions 44 and 45, Q-17). Steps 1 to 5 are built; H2 is deployed and verified. The v1 parity audit is complete ([R-04](../research/R-04-v1-capability-parity.md)); all twenty gaps below block cutover. Restore the omitted baseline credentials after the rescue-mount fix, then build keeper SSH minting (step 8/H5, Q-15 A, D-69). Q-18 blocks only the human approval implementation; capabilities beyond today's tier remain unavailable. A possible management UI changes neither Q-16 nor this priority order. [Issue #91](https://github.com/thaynes43/dev-env/issues/91) tracks the spike. Draft branches `agent/plan07-approvals-round3` (dev-env) and `agent/plan07-catalog-round3` (haynes-ops) retain reusable pieces; #90 and haynes-ops #3550 remain closed.
 **Depends on:** 01 (the baseline guard and egress tiers are in place); Q-07 (Tom
 2026-10-06: credential grants, A)
 **Parallel with:** 02 in the architecture; this run finishes 02 first (README
@@ -75,8 +75,9 @@ In this repo:
   /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0` on a Proxmox
   node, installs the token in the pod, and deletes it at expiry. No new Proxmox user,
   and the long-lived operator token is not needed by v2. The keeper needs port 22 to
-  the nodes. Until the step is built, a Proxmox credential grant is refused (fails
-  closed); hw-ssh certificates do not wait for it.
+  the nodes. D-69 defines the disabled-by-default backend. Until owner trust, standing
+  policies and acceptance pass, Proxmox grants remain refused. General hw-ssh
+  additionally needs P-19's copied-certificate/connection contract.
 - [ ] 9. `POST /v1/fleet/nodes/{node}/evacuate` and `agent-run fleet evacuate`.
 - [ ] 10. The end of break-glass: the broker sends Tom the audit list of what the
   grant created, from Loki. The forced refresh of both logins waits for plans 03 and
@@ -95,16 +96,49 @@ In haynes-ops:
   `upgrade-gate`); the approval page's IngressRoute on an external host, with its
   Authentik blueprint.
 - [ ] H3. The day-one GrantPolicy set, which approves nothing beyond v1 (DESIGN-001
-  6.12): at most credential grants for haynes-ops sessions, since every v1 session
-  holds both credentials today.
+  6.12): the complete OPERATOR and hardware parity set in R-04, across repos for full
+  sessions. Ops gets its actual remediation scope; v1 ops lacks hardware write keys.
+  Nothing beyond v1 is approved, and no parity operation waits on Tom.
 - [ ] H4. The API server's audit lines for `grant-*` to Loki. Nothing ships the audit
   log today (Talos writes it on each control-plane node).
 - [ ] H5. Credential grants: the keeper's SSH CA as an ExternalSecret in
   `dev-env-system` (not the Proxmox operator token: Q-15 A mints over SSH); the CA's
-  public key trusted by the Proxmox nodes and HaynesTower; a network policy for the
+  public key trusted by the Proxmox nodes, HaynesTower and PiKVM; a network policy for the
   keeper's egress on port 22 to the Proxmox nodes. v2's `dev-agents` never had the token or the key: profile
   `full` already leaves them out.
 - [ ] The acceptance run below, and the break-glass half of S-12.
+
+## V1 parity checklist (2026-10-08)
+
+The complete audit is [R-04](../research/R-04-v1-capability-parity.md). Each gap
+blocks cutover. Close a row only after its change deploys and its listed runtime
+acceptance passes; permission checks alone do not cover admission or networking.
+
+- [ ] P-01: complete OPERATOR catalog and standing short-lived GrantPolicies.
+- [ ] P-02: precise ops standing grants; retain its distinct remediation scope.
+- [ ] P-03: existing exec/proxy, controller and powerful-pod admission parity.
+- [ ] P-04: existing runtime maintenance in the three v2 namespaces.
+- [ ] P-05: existing named-SA/secret Job clones, including Recyclarr.
+- [ ] P-06: exact observability PVC/StatefulSet rights, without snapshot writes.
+- [ ] P-07: ops work-order ConfigMap create/update/patch.
+- [ ] P-08: full/dev internal Traefik HTTPS and browser check.
+- [ ] P-09: ops observability service ports and external destinations.
+- [ ] P-10: grant CLI/MCP request/use/release and re-request after expiry.
+- [ ] P-11: baseline Proxmox reader references and actual read-only access.
+- [ ] P-12: full Omni Reader/GCP/Cloudflare references and service checks;
+  rescue holds omit their credential mounts while retaining GitHub/home/shared.
+- [ ] P-13: both existing PVE API endpoints and all seven SSH network paths.
+- [ ] P-14: Q-15 keeper PVE mint/install/revoke, durable recovery and real test.
+- [ ] P-15: typed agentd store and per-call pve selection, expiry/redaction/flags.
+- [ ] P-16: full hw-ssh user/sudo/root/raw/PTY behavior with short certificates.
+- [ ] P-17: PiKVM trust/egress and standing full hardware grants across repos.
+- [ ] P-18: owner CA/node trust and keeper journal/job/SSH deployment.
+- [ ] P-19: explicit general SSH certificate/connection revocation contract.
+- [ ] P-20: actual read-only full MCP, browser and ops observability checks.
+
+R-04 gives the change and acceptance evidence for every row. Secret API reads,
+node drain, snapshots, broad workload creation and additional break-glass remain
+unavailable until the approved human path ships; they do not replace parity work.
 
 ## Round 1 runtime verification (2026-10-07)
 
@@ -126,7 +160,7 @@ are gone; shared storage remains. Session/v1 UIDs and restart counts were unchan
 through every rollout. Ended grants remain as audit records. This does not complete
 human approval, credential grants or the break-glass half of S-12.
 
-## In this repo
+## Target implementation (historical step 6 superseded by Q-16)
 
 - CRDs `AccessGrant` and `GrantPolicy`. Validation refuses any grant or policy that
   targets `dev-env-system`, `dev-agents` or `dev-tools`, and any GrantPolicy for type
@@ -136,16 +170,16 @@ human approval, credential grants or the break-glass half of S-12.
   caller's token, never the body. At most 3 pending requests per session; identical
   requests merge; unanswered requests are denied after 30 minutes.
 - The broker mode of the operator binary (`dev-env-operator broker`): policy match,
-  Pushover message with the approval link, the approval page (Approve, Approve for
-  less time, Deny; show as a GrantPolicy snippet), materialise and revoke:
+  materialise and revoke. Human approval is redesigned under R-03/Q-18; do not
+  build the old Pushover/web adapter:
   - `kube`: ServiceAccount `grant-<id>`, bindings to a catalog role, a TokenRequest
     token with the grant's TTL installed by `agentd ctl grant-install` as kube
     context `grant-<id>`; at expiry delete the ServiceAccount and bindings;
   - `egress`: a CiliumNetworkPolicy selecting the session's label;
-  - `breakglass`: a `kube` grant on `dev-env-grant-breakglass`, at most 1 h, Tom
-    only, fresh Authentik login (5 minutes), Pushover at high priority; at expiry the
-    keeper forces a refresh of both logins and the broker sends Tom the audit list of
-    objects the grant created;
+  - `breakglass`: additional capability, unavailable until Q-18's Claude Code
+    approval route and login-freshness test pass. The original Pushover/web
+    mechanism is historical. At expiry the planned audit/refresh behavior still
+    depends on keeper-owned logins;
   - `credential` (Q-07, Tom 2026-10-06): the keeper installs a Proxmox API token for
     `dev-env@pve` that expires with the grant, or an hw-ssh certificate from its SSH
     CA valid for the grant's TTL, into the pod's tmpfs, and removes it at expiry.
@@ -167,29 +201,31 @@ human approval, credential grants or the break-glass half of S-12.
 ## In haynes-ops (GitOps PRs; none touch `apps/dev/dev-env/app/resources/**`)
 
 - Broker Deployment and ServiceAccount in `dev-env-system`; its RBAC with `bind` on
-  the catalog by `resourceNames`; its CNPs (traefik to the approval port only, the
-  operator on 8443, egress to the API server and `api.pushover.net`).
+  the catalog by `resourceNames`; its API/cluster network paths.
+  The original approval-port and Pushover rules are superseded by Q-16.
 - The grant role catalog: ClusterRoles `dev-env-grant-workloads`, `-storage`,
   `-secrets-read`, `-nodes` and `-breakglass` (DESIGN-001 6.12; no `edit`, `admin` or
   `cluster-admin`). `-breakglass` is generated from API discovery minus its exclusion
   list, with a CI check that regenerates it when the cluster gains an API group.
 - `dev-env-identity-guard`, matching every `dev-agents` identity except the
   workbench, if plan 01 did not already ship it.
-- The approval page's ingress on an external host behind Authentik, and its
-  Authentik application.
-- The day-one GrantPolicy set (nothing beyond v1), and the Pushover credential for
-  the broker as an ExternalSecret.
+- The human adapter and its deployment only after Q-18 and R-03 acceptance;
+  no Pushover/web approval ingress or credential.
+- The day-one GrantPolicy set covering all v1 parity, and nothing beyond it.
 - Ship the API server audit lines for `system:serviceaccount:dev-agents:grant-*` to
   Loki, if they are not shipped already.
-- Credential grants (Q-07): the keeper's SSH CA public key trusted by the `dev-env`
-  user on the Proxmox nodes and by root on HaynesTower (`TrustedUserCAKeys`; Unraid
-  keeps its sshd config on the flash drive), set through hw-ssh with
-  `declare-activity`; the Proxmox operator token and the hw-ssh key moved from the
-  `dev-agents` Secrets to the keeper's namespace; profile `full` no longer mounts
-  them. A GrantPolicy may approve credential grants for named repos (for example
-  haynes-ops ops sessions), so routine Proxmox work does not ping Tom.
+- Credential grants (Q-07): the fresh keeper-owned SSH CA trusted on Proxmox,
+  HaynesTower and PiKVM, with persistent host configuration and pinned host keys.
+  The owner generates/stores the CA; neither v1 hardware private key nor its
+  long-lived PVE operator token moves into the keeper or a v2 session. Full
+  standing grants retain existing hardware scope across repos. Ops hardware
+  writes are not v1 parity. D-69 covers the PVE backend; P-19 covers general SSH.
 
 ## Acceptance
+
+**The original Pushover/web approval cases below are superseded by Q-16.**
+R-03/Q-18 define their replacement. The parity checklist and R-04 closure tests
+are mandatory; credential backend code with its feature off does not close them.
 
 - A session requests role `dev-env-grant-workloads` in one namespace for 15 minutes.
   Tom gets one Pushover message, approves on the page, the agent patches a
