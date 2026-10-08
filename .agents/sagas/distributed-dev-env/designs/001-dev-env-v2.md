@@ -4441,7 +4441,7 @@ blocks only the step it names.
 | D-16 | Three messaging tiers | 6.8 |
 | D-17 | `Activity` resource via the API | 6.9 |
 | D-18 | Profiles name Secrets, egress tier and standing grants: `full`, `dev`, and `ops` for summoned sessions (revised 2026-10-06) | 6.10 |
-| D-19 | Baseline = v1's verbs under a field-level admission guard; identity rules (no dev-env namespaces, no other ServiceAccounts, no privileged pods) bind grants too; more only by grant (revised 2026-10-06; was per-namespace bindings) | 6.11 |
+| D-19 | Historical field-level guard and identity restrictions; D-70 supersedes its full-parity claim wherever it blocks accepted Headlamp, stronger-identity exec or runtime maintenance. Those remain R-04 restoration requirements. | 6.11 |
 | D-20 | Sessions on workers only, GPU nodes avoided by label, low priority that never preempts (revised 2026-10-06) | 7.1 |
 | D-21 | Capacity is the scheduler's: requests and limits, no fleet quota, Pending is the queue; household pods need CPU requests (Q-08) | 7.3 |
 | D-22 | Session volumes and tool workspaces on `gasha01-rbd`; the shared RWX volume on Rook CephFS; model files on gasha01 NFS | 6.6 |

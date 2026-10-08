@@ -132,7 +132,8 @@ acceptance passes; permission checks alone do not cover admission or networking.
 - [ ] P-03: accepted Headlamp access, exec/proxy and powerful-pod admission parity.
 - [ ] P-04: existing runtime maintenance in the three v2 namespaces.
 - [ ] P-05: existing named-SA/secret Job clones, including Recyclarr.
-- [ ] P-06: exact observability PVC/StatefulSet rights, without snapshot writes.
+- [ ] P-06: exact direct observability PVC/StatefulSet scope; its ordinary role need
+  not add snapshots. Effective Headlamp snapshot access remains P-01/P-03 parity.
 - [ ] P-07: ops work-order ConfigMap create/update/patch.
 - [ ] P-08: full/dev internal Traefik HTTPS and browser check.
 - [ ] P-09: ops observability service ports and external destinations.
