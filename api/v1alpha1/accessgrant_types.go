@@ -113,8 +113,7 @@ type CredentialName string
 
 const (
 	// CredentialProxmox is a Proxmox API token for dev-env@pve that expires
-	// with the grant, minted by the keeper from the operator token only it
-	// holds.
+	// with the grant, minted by the keeper over SSH with its own CA (Q-15).
 	CredentialProxmox CredentialName = "proxmox"
 	// CredentialHWSSH is an SSH certificate from the keeper's CA for hw-ssh,
 	// valid for the grant's TTL.
