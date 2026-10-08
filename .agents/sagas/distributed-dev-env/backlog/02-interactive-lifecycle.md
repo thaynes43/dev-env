@@ -1,6 +1,6 @@
 # 02: interactive sessions and lifecycle
 
-**Status:** in progress (started 2026-10-07); resumed on Codex 2026-10-08 at step 12 (D-68). Step 13 still needs Tom's laptop check.
+**Status:** in progress (started 2026-10-07); step 12's client is built (#103, D-68), released as signed 2.8.0 (#104), and deployed and verified by haynes-ops #3579. Steps 12 and 13 still need Tom's laptop check; Q-17 awaits his kubeconfig prerequisite answer.
 **Depends on:** 01
 **Parallel with:** 07 (the access broker) in the architecture; this run finishes 02 before resuming 07 (README decisions 40 and 44).
 
@@ -138,10 +138,28 @@ the cluster.
   - The reap rescued the new session (`CleanAndPushed`) and archived its volume.
   - The leader's first prune ran ten minutes after start: retention 720h, 0
     removed, 3 kept.
-- [ ] 12. **The laptop path** (D-05, D-68; in progress). `agent-run` outside the cluster mints a
+- [ ] 12. **The laptop path** (D-05, D-68; client built, laptop check pending). `agent-run` outside the cluster mints a
   `dev-env-human` token and port-forwards with the kubeconfig, and checks the API's
   certificate against the pinned CA by its service name. A handoff for an agent on
   Tom's laptop runs the check.
+  - Built in #103; signed agent `2.8.0` shipped by #104 and
+    `publish-agent.yml` run `37776465007`. Signed operator `sha-12a97c4` was
+    published by run `37775926348`. Deployment pins: haynes-ops #3579.
+  - **Deployed and verified 2026-10-08:** templates and operator Flux targets
+    are Ready on `8f3e104`; operator is updated/ready/available 2/2, with both
+    running image IDs matching its signed digest. `agent-run fleet` with v1's
+    own identity returned revision `2.8.0-dcdc99d358`, no sessions. Shelf and
+    v1 pod UIDs and every container's zero restart count were preserved. The
+    scoped activity declaration was ended after verification.
+  - Focused unit tests prove context consistency, human token refresh,
+    service-name and CA refusal, proxy bypass, bounded forward startup and
+    cleanup. Linux static and darwin/arm64 builds passed, with no Kubernetes
+    dependency in the CLI. Full CI and Claude advisory review passed.
+  - A CI run exposed a map-order assumption in the rescue API test fixture.
+    #103 sorts the fixture's repo keys; its focused test and full CI passed.
+  - **Pending:** Q-17 (working laptop admin kubeconfig), then the real
+    list-and-attach check in
+    [the laptop handoff](../../../handoffs/2026-10-08-laptop-access.md).
 - [ ] 13. **The acceptance run** below, with the evidence under each item.
 
 **The Codex half of "`agent-run msg` reaches a Codex session".** No v2 pod can run
@@ -179,3 +197,7 @@ Codex session.
     `noted` as asked.
   - The Codex half runs with plan 04 (above).
 - Tom lists and attaches to sessions from his laptop.
+  **Pending:** the laptop client is built, signed and deployed, but this item requires
+  Tom's actual laptop. An in-pod fleet query with v1's identity passed; v1
+  cannot mint the human token or port-forward, so it cannot stand in for this
+  acceptance check. The earlier acceptance items remain verified as above.

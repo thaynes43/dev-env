@@ -13,10 +13,17 @@ the saga. To start building, follow
   The Claude weekly limit still resets 2026-10-12. Resume at:
   - **Plan 02:** steps 1 to 11 and acceptance items 1 to 3 are done and deployed
     (#94, [backlog/02](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md)).
-    Step 12 (laptop access, D-68) is in progress. Step 13 needs Tom's laptop
-    list-and-attach check before the plan can be marked done.
+    Step 12's laptop client (D-68) is built in #103 and released as signed
+    agent `2.8.0` (#104). Its operator image is signed `sha-12a97c4`.
+    [haynes-ops #3579](https://github.com/thaynes43/haynes-ops/pull/3579)
+    deployed both pins; Flux, rollout and fleet checks passed. Steps 12 and 13
+    remain open until Tom's laptop
+    list-and-attach check passes. **Q-17 awaits his kubeconfig prerequisite
+    answer.** The exact commands are in
+    [the laptop handoff](handoffs/2026-10-08-laptop-access.md).
   - **Plan 07:** steps 1 to 5 are built and H2 (the broker Deployment) is deployed
-    and verified. Step 6 (human approval) is blocked: Q-16 was ruled on 2026-10-08
+    and verified. Step 6's design spike follows plan 02 acceptance: Q-16 was
+    ruled on 2026-10-08
     (parity first; approvals inside the Claude Code app), and PR #90 and haynes-ops
     #3550 were closed because their Pushover and web approval surface is ruled out.
     The resume point is the last coordinator comment on
@@ -24,13 +31,17 @@ the saga. To start building, follow
     docs-only design spike for the approval surface. Draft code: branch
     `agent/plan07-approvals-round3` (dev-env) and `agent/plan07-catalog-round3`
     (haynes-ops).
-  - **Live state checked 2026-10-08:** operator `sha-035dfaa` (2/2), broker
-    `sha-763fe77` (2/2), keeper `sha-fac4751` (1/1), agent template `2.7.0`.
-    `dev-agents` holds only the shelf pod. The shelf and v1 pod had zero
-    container restarts. New dependency PRs appeared after the bench; the
-    coordinator merged green release PR #102 (2.7.1) and is tracking its publish
-    and deployment with the laptop change. Issue #91 remains open; #90 and
-    haynes-ops #3550 remain closed.
+  - **Live state checked after deployment, 2026-10-08:** operator `sha-12a97c4`
+    (updated/ready/available 2/2), broker `sha-763fe77` (2/2), keeper
+    `sha-fac4751` (1/1), agent template `2.8.0`. Both Flux targets are Ready on
+    haynes-ops `8f3e104`; operator HelmRelease reports `UpgradeSucceeded`.
+    A live v2 `agent-run fleet` query with v1's identity passed and reported
+    revision `2.8.0-dcdc99d358`, no sessions. `dev-agents` holds only the shelf
+    pod. The shelf and v1 pod retained their initial UIDs and every container's
+    zero restart count. The scoped rollout declaration was ended.
+    New dependency PRs appeared after the bench; green
+    release PR #102 (2.7.1) was merged, signed and included in the signed 2.8.0
+    release. Issue #91 remains open; #90 and haynes-ops #3550 remain closed.
 
 ## State on 2026-10-07
 
