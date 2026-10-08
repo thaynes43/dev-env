@@ -21,6 +21,7 @@ import (
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -169,6 +170,9 @@ func TestKeeperWithItsRolesOnARealAPIServer(t *testing.T) {
 	}
 	for _, o := range append(objs, keeperRBAC()...) {
 		if err := c.Create(ctx, o); err != nil {
+			if _, ok := o.(*corev1.Namespace); ok && apierrors.IsAlreadyExists(err) {
+				continue
+			}
 			t.Fatalf("create %T %s: %v", o, o.GetName(), err)
 		}
 	}
