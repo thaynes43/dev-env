@@ -53,7 +53,7 @@ In this repo:
   when the broker is unavailable. Its CNP Role has `get, delete`, applied in H2
   before the new operator pin. Unit/fake-clock and envtest cases prove ownership,
   restart, finalizer delays, late creation and the exact RBAC.
-- [ ] 6. The approval page and Pushover: the broker's console port behind Authentik
+- [ ] 6. **Superseded by Q-16 (2026-10-08): do not build as written.** Approvals move into the Claude Code app (design spike, issue #91); the Pushover and web page below are ruled out, and the approval surface is redesigned. The original text, for the parts that carry over (the request shape, the audit record, break-glass freshness): the approval page and Pushover: the broker's console port behind Authentik
   (Approve, Approve for less time, Deny, the request as a GrantPolicy snippet), a
   fresh login for break-glass, one Pushover message per request (high priority for
   break-glass).
@@ -85,7 +85,7 @@ In haynes-ops:
 - [x] H2 runtime. The broker Deployment, its network policies and the operator's
   CNP get/delete permission (haynes-ops #3542). Signed operator/broker
   `sha-763fe77` and agent `2.5.0` are deployed; existing sessions are preserved.
-- [ ] H2 approval deployment (step 6). The Pushover ExternalSecret (v1's item
+- [ ] H2 approval deployment (step 6). **Superseded by Q-16 (2026-10-08): do not deploy as written;** it follows the redesigned step 6. As first written: the Pushover ExternalSecret (v1's item
   `upgrade-gate`); the approval page's IngressRoute on an external host, with its
   Authentik blueprint.
 - [ ] H3. The day-one GrantPolicy set, which approves nothing beyond v1 (DESIGN-001
