@@ -206,9 +206,15 @@ func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, now metav
 	if err := b.Notifier.NotifyPending(ctx, g); err != nil {
 		b.event(g, corev1.EventTypeWarning, "Notify", "NotifyFailed", "could not tell Tom: "+err.Error())
 		log.FromContext(ctx).Error(err, "could not send the approval notification", "grant", g.Name)
-		// Pushover asks clients to wait at least five seconds after a
-		// failure. The controller's initial error backoff is shorter.
-		wait.RequeueAfter = min(wait.RequeueAfter, 5*time.Second)
+		// Honor the notifier's bounded retry advice, including through a
+		// wrapped error. Never retry sooner than five seconds, or defer the
+		// pending grant beyond its original thirty-minute deadline.
+		delay := 5 * time.Second
+		var advice interface{ RetryAfter() time.Duration }
+		if errors.As(err, &advice) {
+			delay = max(delay, advice.RetryAfter())
+		}
+		wait.RequeueAfter = min(wait.RequeueAfter, delay)
 		return wait, nil
 	}
 	g.Status.NotifiedAt = &now

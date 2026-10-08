@@ -2883,7 +2883,7 @@ every granted namespace. What each role allows, plainly:
 | `dev-env-grant-storage` | create, delete PVCs and VolumeSnapshots; delete StatefulSets | The observability and CNPG cases v1 solved with one-off Roles. |
 | `dev-env-grant-secrets-read` | get, list Secrets | Always shown with its namespaces in red on the page. |
 | `dev-env-grant-nodes` (cluster-wide) | cordon, uncordon, drain (evictions), node labels and taints | The talosw01 drain of 2026-09-25 was a headlamp job. Its evictions in the dev-env namespaces stay refused: before a drain, `agent-run fleet evacuate <node>` has the operator move that node's sessions and tool instances (below). |
-| `dev-env-grant-breakglass` (cluster-wide) | every verb on every resource except Secrets, `serviceaccounts/token`, `nodes/proxy` (the kubelet API bypasses admission), `pods/ephemeralcontainers`, `pods/portforward`, `pods/proxy` and `services/proxy` (which bypass network isolation), the verbs `bind`, `escalate` and `impersonate`, RBAC objects, CSR approval, admission policies and webhooks, Kyverno policies, CustomResourceDefinitions, APIServices, Flux objects, `external-secrets.io` objects, `CiliumClusterwideNetworkPolicy` and the `dev-env.haynesops.com` CRDs | Built from API discovery minus that list, including excluded resources' subresources. CI checks the generated catalog against its discovery snapshot; a discovery-only cluster watcher flags live API drift for a snapshot refresh. The identity guard applies on top. |
+| `dev-env-grant-breakglass` (cluster-wide) | every verb on every resource except Secrets, `serviceaccounts/token`, `nodes/proxy` (the kubelet API bypasses admission), `pods/ephemeralcontainers`, `pods/portforward`, `pods/proxy` and `services/proxy` (which bypass network isolation), the verbs `bind`, `escalate` and `impersonate`, RBAC objects, CSR approval, admission policies and webhooks, Kyverno policies, CustomResourceDefinitions, APIServices, Flux objects, `external-secrets.io` objects, Cilium resources other than namespaced `CiliumNetworkPolicy`, API priority/fairness controls (`flowcontrol.apiserver.k8s.io`) and the `dev-env.haynesops.com` CRDs | Built from API discovery minus that list, including excluded resources' subresources. CI checks the generated catalog against its discovery snapshot; a discovery-only cluster watcher flags live API drift for a snapshot refresh. The identity guard applies on top. |
 
 **Draining a node with sessions on it.** `agent-run fleet evacuate <node>` (API `POST
 /v1/fleet/nodes/{node}/evacuate`) asks the operator to move that node's sessions:
@@ -3287,6 +3287,13 @@ activate human grants until the ruling's enforcement is deployed and verified.
   CRDs. A bounded, discovery-only CronJob detects live discovery drift, so API
   additions from Helm also require a snapshot refresh. CI gets no cluster
   credentials. The refresh and live safety checks precede break-glass issuance.
+  Cilium identity/routing/allocation objects and API priority/fairness objects
+  are enforcing infrastructure too: granting them would bypass network isolation
+  or throttle the controllers that enforce the guard. Only namespaced CNPs remain
+  in the Cilium catalog. A new repo-managed CRD or served version can be added to
+  the metadata snapshot from its declaration before deployment; CI checks that
+  deterministic update, and the live watcher reports any gap until Flux installs
+  the declaration.
 - **Pushover.** The notifier reads mounted `token` and `user-key` files on each
   send, from the existing `upgrade-gate` item's `PUSHOVER_TOKEN` and
   `PUSHOVER_USER_KEY`. It sends a bounded plain-text request and approval link to
@@ -3294,8 +3301,12 @@ activate human grants until the ruling's enforcement is deployed and verified.
   0 otherwise. HTTP redirects are refused; errors never include credentials or
   response bodies. One ordinary delivery is recorded by `status.notifiedAt`.
   D-61's at-least-once behavior remains: an ambiguous delivery or a failed status
-  write may produce a duplicate. The broker waits at least five seconds before
-  retrying a failed notification. Existing log-only pending requests are checked
+  write may produce a duplicate. Transient delivery failures back off from five
+  seconds to five minutes; success resets that delay. A permanent 4xx rejection
+  (except 408/429), or a valid response with status 0, suppresses HTTP retries with
+  unchanged credentials. Only their SHA-256 fingerprint is retained; mounted-file
+  rotation clears that rejection and backoff. The controller honors the notifier's
+  retry delay, bounded by the request's timeout. Existing log-only pending requests are checked
   at deployment; they cannot silently be counted as a Pushover delivery.
 
 **D-26. Approvals: a Pushover link to an approval page behind Authentik.**

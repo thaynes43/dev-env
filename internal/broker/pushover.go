@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +33,7 @@ const (
 	pushoverAPIURL        = "https://api.pushover.net/1/messages.json"
 	pushoverTimeout       = 10 * time.Second
 	pushoverRetryInterval = 5 * time.Second
+	pushoverMaxRetry      = 5 * time.Minute
 	pushoverMaxCredential = 1024
 	pushoverMaxRequest    = 32 << 10
 	pushoverMaxResponse   = 16 << 10
@@ -42,7 +44,8 @@ const (
 // PushoverNotifier tells Tom a pending grant needs his decision (D-67). Sending
 // does not write the grant: the reconciler records notifiedAt after success. A
 // lost status write or an ambiguous HTTP outcome can therefore send it again.
-// It deliberately has no delivery retry; the reconciler owns that backoff.
+// The notifier enforces cooldown and rejected-credential state without sleeping;
+// its safe errors tell the reconciler when another attempt may be useful.
 type PushoverNotifier struct {
 	dir           string
 	consoleOrigin string
@@ -50,10 +53,26 @@ type PushoverNotifier struct {
 	http          *http.Client
 	sending       chan struct{}
 	clock         clock.PassiveClock
-	retryAt       time.Time // Protected by sending; watcher events cannot bypass backoff.
+	// Protected by sending; watcher events cannot bypass cooldown. Only the
+	// digest is retained, never the credential values used to compute it.
+	credentialsSeen bool
+	credentialsHash [sha256.Size]byte
+	rejected        bool
+	retryAt         time.Time
+	retryDelay      time.Duration
 }
 
 var _ Notifier = (*PushoverNotifier)(nil)
+
+// pushoverRetryError exposes safe scheduling information without retaining an
+// underlying transport error, response body or credential.
+type pushoverRetryError struct {
+	message string
+	after   time.Duration
+}
+
+func (e *pushoverRetryError) Error() string             { return e.message }
+func (e *pushoverRetryError) RetryAfter() time.Duration { return e.after }
 
 // NewPushoverNotifier configures a notifier without reading credentials or
 // sending a request. consoleOrigin is the approval console's HTTPS origin.
@@ -95,7 +114,7 @@ func NewPushoverNotifier(dir, consoleOrigin string) (*PushoverNotifier, error) {
 // NotifyPending sends one bounded, plain-text notification. Every returned
 // error is safe for the broker's logs and Kubernetes Events: it never copies a
 // credential, filename, HTTP error, JSON error or response body.
-func (n *PushoverNotifier) NotifyPending(ctx context.Context, g *v1alpha1.AccessGrant) (notifyErr error) {
+func (n *PushoverNotifier) NotifyPending(ctx context.Context, g *v1alpha1.AccessGrant) error {
 	if n == nil || n.sending == nil || n.http == nil {
 		return errors.New("pushover notifier is not configured")
 	}
@@ -116,9 +135,8 @@ func (n *PushoverNotifier) NotifyPending(ctx context.Context, g *v1alpha1.Access
 	case <-ctx.Done():
 		return errors.New("pushover notification canceled or timed out")
 	}
-	if n.clock.Now().Before(n.retryAt) {
-		return errors.New("pushover notification retry is delayed")
-	}
+	// Read even during cooldown or rejection, so Secret rotation can recover
+	// immediately. No unchanged rejected credentials reach Pushover again.
 	token, err := n.credential(PushoverFileToken)
 	if err != nil {
 		return errors.New("pushover application token is missing or invalid")
@@ -126,6 +144,17 @@ func (n *PushoverNotifier) NotifyPending(ctx context.Context, g *v1alpha1.Access
 	user, err := n.credential(PushoverFileUserKey)
 	if err != nil {
 		return errors.New("pushover user key is missing or invalid")
+	}
+	fingerprint := sha256.Sum256([]byte(token + "\x00" + user))
+	if !n.credentialsSeen || fingerprint != n.credentialsHash {
+		n.credentialsSeen, n.credentialsHash, n.rejected = true, fingerprint, false
+		n.retryAt, n.retryDelay = time.Time{}, 0
+	}
+	if n.rejected {
+		return &pushoverRetryError{message: "pushover rejected the configured credentials; update the mounted credentials before retrying", after: pushoverMaxRetry}
+	}
+	if now := n.clock.Now(); now.Before(n.retryAt) {
+		return &pushoverRetryError{message: "pushover notification retry is delayed", after: n.retryAt.Sub(now)}
 	}
 	priority, title := "0", "Access approval requested"
 	if g.Spec.Type == v1alpha1.GrantBreakglass {
@@ -150,36 +179,56 @@ func (n *PushoverNotifier) NotifyPending(ctx context.Context, g *v1alpha1.Access
 	client := *n.http
 	client.Timeout = pushoverTimeout
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	defer func() {
-		if notifyErr != nil {
-			n.retryAt = n.clock.Now().Add(pushoverRetryInterval)
-		}
-	}()
 	resp, err := client.Do(req)
 	if err != nil {
-		return errors.New("pushover notification could not be delivered")
+		return n.transientFailure("pushover notification could not be delivered")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("pushover refused notification: HTTP %d", resp.StatusCode)
+		message := fmt.Sprintf("pushover refused notification: HTTP %d", resp.StatusCode)
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusRequestTimeout && resp.StatusCode != http.StatusTooManyRequests {
+			return n.permanentFailure(message)
+		}
+		return n.transientFailure(message)
 	}
 	answer, err := io.ReadAll(io.LimitReader(resp.Body, pushoverMaxResponse+1))
 	if err != nil {
-		return errors.New("pushover notification response could not be read")
+		return n.transientFailure("pushover notification response could not be read")
 	}
 	if len(answer) > pushoverMaxResponse {
-		return errors.New("pushover notification response is too large")
+		return n.transientFailure("pushover notification response is too large")
 	}
 	var result struct {
-		Status int `json:"status"`
+		Status *int `json:"status"`
 	}
 	if err := json.Unmarshal(answer, &result); err != nil {
-		return errors.New("pushover notification response is invalid")
+		return n.transientFailure("pushover notification response is invalid")
 	}
-	if result.Status != 1 {
-		return errors.New("pushover did not accept notification")
+	if result.Status != nil && *result.Status == 0 {
+		return n.permanentFailure("pushover did not accept notification")
 	}
+	if result.Status == nil || *result.Status != 1 {
+		return n.transientFailure("pushover notification response is invalid")
+	}
+	n.retryAt, n.retryDelay = time.Time{}, 0
 	return nil
+}
+
+func (n *PushoverNotifier) transientFailure(message string) error {
+	if n.retryDelay == 0 {
+		n.retryDelay = pushoverRetryInterval
+	} else {
+		n.retryDelay = min(2*n.retryDelay, pushoverMaxRetry)
+	}
+	n.retryAt = n.clock.Now().Add(n.retryDelay)
+	return &pushoverRetryError{message: message, after: n.retryDelay}
+}
+
+func (n *PushoverNotifier) permanentFailure(message string) error {
+	// A valid status:0 also fails closed: an operator must correct the
+	// configuration and rotate the mounted credentials to clear this latch.
+	n.rejected = true
+	return &pushoverRetryError{message: message, after: pushoverMaxRetry}
 }
 
 func (n *PushoverNotifier) credential(name string) (string, error) {
