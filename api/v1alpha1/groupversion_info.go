@@ -41,6 +41,8 @@ func addKnownTypes(s *runtime.Scheme) error {
 		&GrantPolicyList{},
 		&Activity{},
 		&ActivityList{},
+		&CredentialJob{},
+		&CredentialJobList{},
 	)
 	metav1.AddToGroupVersion(s, GroupVersion)
 	return nil
