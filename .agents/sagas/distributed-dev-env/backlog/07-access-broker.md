@@ -1,6 +1,6 @@
 # 07: access broker
 
-**Status:** steps 1 to 5 built; H2 runtime deployed and verified on 2026-10-07; approval deployment follows step 6
+**Status:** steps 1 to 5 deployed; step 6 prepared, deployment blocked by Q-16's approval-authority boundary
 **Depends on:** 01 (the baseline guard and egress tiers are in place); Q-07 (Tom
 2026-10-06: credential grants, A)
 **Parallel with:** 02; the coordinator resumed plan 07 on Codex after the pause in
@@ -53,10 +53,16 @@ In this repo:
   when the broker is unavailable. Its CNP Role has `get, delete`, applied in H2
   before the new operator pin. Unit/fake-clock and envtest cases prove ownership,
   restart, finalizer delays, late creation and the exact RBAC.
-- [ ] 6. The approval page and Pushover: the broker's console port behind Authentik
+- [ ] 6. The approval page and Pushover (D-67): the broker's console port behind Authentik
   (Approve, Approve for less time, Deny, the request as a GrantPolicy snippet), a
   fresh login for break-glass, one Pushover message per request (high priority for
-  break-glass).
+  break-glass). The handler and notifier are prepared and tested, with the console
+  disabled by default. Q-16 blocks activation: agents can reach or modify the
+  existing Authentik authority and its shared database. The owner-only application,
+  fresh MFA flow, ingress and Pushover wiring must wait for the ruling's enforcement.
+  Human break-glass issuance also waits for the generated catalog and live S-12
+  checks. D-61's at-least-once notification behavior remains under an ambiguous
+  delivery or failed status write; ordinary retries do not send a second message.
 - [ ] 7. `agent-run grant request|list|show|use|release` and `agent-run breakglass`;
   agentd's built-in `dev-env` MCP server with `request_access`, `grant_status` and
   `release_access`.
@@ -99,6 +105,20 @@ In haynes-ops:
   keeper's egress on port 22 to the Proxmox nodes. v2's `dev-agents` never had the token or the key: profile
   `full` already leaves them out.
 - [ ] The acceptance run below, and the break-glass half of S-12.
+
+## Round 2 blocking question (2026-10-08)
+
+Q-16 in DESIGN-001 section 15 records the verified authority gap and three options.
+The recommendation protects existing authentication assets and their data/routing
+references as enforcing infrastructure. That also restricts agent operations on
+the shared `postgres16` database, so the coordinator needs Tom's ruling before
+deployment. An isolated console port alone does not close the gap.
+
+Existing owner WebAuthn/TOTP enrollment, Authentik blueprint management and the
+`upgrade-gate` Pushover fields are available. No new secret or enrollment was the
+blocker. No notification, grant, rollout or admission-policy change was made in
+this round. The prepared console and discovery-derived catalog remain reviewable
+on their PR branches; the running broker stays on its existing image.
 
 ## Round 1 runtime verification (2026-10-07)
 

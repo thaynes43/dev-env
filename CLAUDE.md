@@ -73,6 +73,8 @@ internal/broker/         the access broker (D-61): decides AccessGrants (GrantPo
                          a Notifier), makes kube, break-glass and egress grants (a ServiceAccount and RoleBindings or a
                          ClusterRoleBinding per grant) and revokes them; ExecInstaller installs kube tokens on stdin into the pod's grants tmpfs (D-63), guarded by pod UID; older pods fail/revoke after three attempts. Its envtest
                          suite runs it as dev-env-broker under haynes-ops' RBAC and broker guard, copied into testdata/
+                         The prepared approval console and Pushover notifier (D-67) default to disabled; Q-16 blocks
+                         deployment until Authentik and its authentication state are protected from agents.
 internal/egress/         the scoped CiliumNetworkPolicy builder and ownership checks (D-64), shared by broker and operator
 internal/grantexpiry/    the operator's separate egress expiry backstop (D-64), watches grants, reads CNPs by name only,
                          deletes by verified ownership and UID, and preserves the broker's grant audit record

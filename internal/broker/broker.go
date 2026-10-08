@@ -205,7 +205,11 @@ func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, now metav
 	// better than a request Tom never hears of.
 	if err := b.Notifier.NotifyPending(ctx, g); err != nil {
 		b.event(g, corev1.EventTypeWarning, "Notify", "NotifyFailed", "could not tell Tom: "+err.Error())
-		return ctrl.Result{}, fmt.Errorf("notify: %w", err)
+		log.FromContext(ctx).Error(err, "could not send the approval notification", "grant", g.Name)
+		// Pushover asks clients to wait at least five seconds after a
+		// failure. The controller's initial error backoff is shorter.
+		wait.RequeueAfter = min(wait.RequeueAfter, 5*time.Second)
+		return wait, nil
 	}
 	g.Status.NotifiedAt = &now
 	if written, err := b.writeStatus(ctx, g); !written || err != nil {
