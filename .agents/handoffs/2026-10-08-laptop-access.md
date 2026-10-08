@@ -43,9 +43,11 @@ clone is elsewhere, use its path. If it is missing, clone
 ## List and attach
 
 Use a terminal on the laptop for the attach check. Run these commands with the
-binary just built:
+binary just built, in a shell without API URL, token-file or CA-file overrides:
 
 ```sh
+unset DEV_ENV_API_URL DEV_ENV_API_TOKEN_FILE DEV_ENV_API_CA_FILE
+unset AGENTD_API_URL AGENTD_API_CA_FILE
 ./bin/agent-run-darwin-arm64 --context MAIN_CONTEXT fleet
 ./bin/agent-run-darwin-arm64 --context MAIN_CONTEXT list
 ./bin/agent-run-darwin-arm64 --context MAIN_CONTEXT --repo dev-env --local --model claude-haiku-4-5 --size S --wait 2m -o name

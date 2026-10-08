@@ -50,6 +50,9 @@ reads the pinned CA, mints a ten-minute dev-env-human token in memory and opens
 a loopback port-forward. TLS checks the operator's service name. The forward
 ends with the command. --kubeconfig and --context select the cluster; explicit
 --api-url, --token-file and --ca-file settings still take precedence.
+In a pod, kubeconfig/context selectors need an explicit API URL and token;
+automatic pod discovery refuses them. With a manual API endpoint, select the
+kubeconfig context for that same cluster before attach or detach.
 
 Exit codes:
   0  done

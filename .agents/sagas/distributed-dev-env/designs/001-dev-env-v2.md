@@ -620,6 +620,11 @@ with a token and port-forward owned by each `agent-run` invocation.**
   context once; CA reads, token requests, the port-forward and attach/detach exec
   use that same context. Existing API URL, token-file and CA-file settings keep
   their precedence, and in-pod discovery keeps its current path.
+  A pod connection that discovers its API or identity automatically refuses
+  kubeconfig/context selectors, so attach cannot look up a session in one
+  cluster and exec into another. A fully explicit API URL and token may use a
+  selected kubeconfig context; the caller must make those targets agree, and
+  the pod's automatic CA is not used for that external endpoint.
 - The forward ends and its process is reaped on success, failure or cancellation,
   including when an attached TUI ends. Startup and cleanup are bounded.
   Diagnostics never include minted tokens.
