@@ -251,7 +251,7 @@ func (w *credentialWorker) reconcile(ctx context.Context, job *v1alpha1.Credenti
 			}
 		}
 		opctx, cancel := w.operationContext(ctx)
-		result, merr := w.Provider.mint(opctx, e)
+		result, merr := w.Provider.mint(withSSHCreateGuard(opctx, w.createDispatchGuard(job)), e)
 		cancel()
 		if merr != nil {
 			if !result.PossibleDispatch {
@@ -469,6 +469,25 @@ func (w *credentialWorker) targetPod(ctx context.Context, ref v1alpha1.Credentia
 	}
 	return &pod, nil
 }
+
+// createDispatchGuard rechecks approval and immutable identities after SSH
+// setup, so a release, replacement or expiry during handshake prevents create.
+// The closure holds a copy of this request and is used only for this operation.
+func (w *credentialWorker) createDispatchGuard(job *v1alpha1.CredentialJob) func(context.Context) error {
+	expected := job.DeepCopy()
+	return func(ctx context.Context) error {
+		var current v1alpha1.CredentialJob
+		if w.Client.Get(ctx, client.ObjectKeyFromObject(expected), &current) != nil || current.UID != expected.UID || !sameCredentialRequest(current.Spec, expected.Spec) || current.Spec.Release || !current.DeletionTimestamp.IsZero() || current.Status.Phase == v1alpha1.CredentialCleanupPending || current.Status.Phase == v1alpha1.CredentialRevoked {
+			return errors.New("credential execution request changed before create")
+		}
+		active, pod, err := w.activeTarget(ctx, &current)
+		if err != nil || !active || pod == nil || !w.Clock.Now().Before(current.Spec.ExpiresAt.Time) {
+			return errors.New("credential approval or session changed before create")
+		}
+		return w.guard(ctx)
+	}
+}
+
 func (w *credentialWorker) guard(ctx context.Context) error {
 	if ctx.Err() != nil || w.Fence == nil {
 		return errors.New("credential leadership context is unavailable")
