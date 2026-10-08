@@ -78,6 +78,12 @@ In this repo:
   the nodes. D-69 defines the disabled-by-default backend. Until owner trust, standing
   policies and acceptance pass, Proxmox grants remain refused. General hw-ssh
   additionally needs P-19's copied-certificate/connection contract.
+  The Proxmox code is built under D-69 with broker and keeper minting disabled
+  by default. It includes immutable UID-bound jobs, a keeper-only durable journal,
+  final live checks before SSH dispatch, cleanup recovery, typed private agentd
+  files and PVE helper selection. API deduplication and quota follow the session
+  UID, and cleanup cannot exec into a same-name replacement. This is partial
+  progress: step 8 stays open until activation and the full hardware scope pass.
 - [ ] 9. `POST /v1/fleet/nodes/{node}/evacuate` and `agent-run fleet evacuate`.
 - [ ] 10. The end of break-glass: the broker sends Tom the audit list of what the
   grant created, from Loki. The forced refresh of both logins waits for plans 03 and
@@ -106,6 +112,10 @@ In haynes-ops:
   public key trusted by the Proxmox nodes, HaynesTower and PiKVM; a network policy for the
   keeper's egress on port 22 to the Proxmox nodes. v2's `dev-agents` never had the token or the key: profile
   `full` already leaves them out.
+  The CredentialJob schema, exact broker/keeper RBAC and admission split, and
+  empty keeper-only journal are prepared separately in haynes-ops #3589, before
+  the new image pins. That prerequisite does not provision a CA, trust, egress
+  or standing policies, and does not enable minting.
 - [ ] The acceptance run below, and the break-glass half of S-12.
 
 ## V1 parity checklist (2026-10-08)

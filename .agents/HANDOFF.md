@@ -35,12 +35,18 @@ the saga. To start building, follow
     records the native hooks, managed policy, forgeable soft gates and the
     guarded route's unresolved phone, authority and shared OAuth checks.
     **Q-18 awaits Tom's route choice.** No human approval path is enabled.
-    The complete v1 parity audit is recorded in [R-04](sagas/distributed-dev-env/research/R-04-v1-capability-parity.md).
-    Twenty gaps in backlog/07 block cutover. The omitted baseline references are restored and verified after the
+    The complete v1 parity audit is recorded in
+    [R-04](sagas/distributed-dev-env/research/R-04-v1-capability-parity.md).
+    Twenty gaps in backlog/07 block cutover. The omitted baseline references are
+    restored and verified after the
     rescue-mount fix (#108, haynes-ops #3584/#3583). A fresh full session passed
     presence/ADC permission checks and read-only Omni/API calls, then was rescued
     and removed. PVE LAN access and the remaining service checks still block
-    full closure. Keeper SSH minting is being built under D-69. The pending approval choice does not block them. Q-16 was ruled on 2026-10-08
+    full closure. D-69's Proxmox backend is built with minting disabled: broker
+    jobs, keeper SSH/journal/cleanup and typed agentd/PVE support. Owner CA and
+    node trust, standing policies and real provider acceptance still block its
+    activation. General hw-ssh also needs P-19's connection/revocation contract.
+    The pending approval choice does not block this work. Q-16 was ruled on 2026-10-08
     (parity first; approvals inside the Claude Code app), and PR #90 and haynes-ops
     #3550 were closed because their Pushover and web approval surface is ruled out.
     The resume point is the last coordinator comment on
