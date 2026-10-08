@@ -4,6 +4,12 @@
 cutover. The audit is complete; parity is not. The blocking checklist lives in
 [backlog/07](../backlog/07-access-broker.md#v1-parity-checklist-2026-10-08).
 
+**Baseline corrected later on 2026-10-08 (D-70).** Tom pointed out that agents
+already use the Headlamp pod. Parity includes their effective access through
+accepted pod exec, Headlamp ServiceAccount workloads and self-merged GitOps,
+alongside their direct OPERATOR permissions. Comparing only the OPERATOR role
+incorrectly classified existing Kubernetes powers as enhancements.
+
 ## Evidence and limits
 
 Read-only audits compared v1's live ServiceAccounts, RBAC, admission and network
@@ -18,6 +24,19 @@ observability storage rights. The remediation identity additionally writes its
 work-order ConfigMaps. All v2 profiles currently use `dev-agents/dev-env-agent`,
 with profile `full` the default. There are **zero live GrantPolicies**. Only the
 shelf runs in `dev-agents`; this audit did not create a session or a grant.
+
+The follow-up read-only check found live ClusterRoleBinding `headlamp-admin`
+binding `frontend/headlamp` to `cluster-admin`. The running Headlamp pod uses
+that ServiceAccount and mounts its projected credential; its GitOps init builds
+its kubeconfig from that identity. The role permits all API resources and verbs;
+admission controls and existing operating rules still apply. The query was at
+2026-10-08 23:55:40 UTC. Source: [Headlamp configuration](https://github.com/thaynes43/haynes-ops/blob/8ae3a2ff2f15156ee2df243b1cbd55403748cb05/kubernetes/main/apps/frontend/headlamp/app/helmrelease.yaml#L41)
+and [v1 exec RBAC](https://github.com/thaynes43/haynes-ops/blob/8ae3a2ff2f15156ee2df243b1cbd55403748cb05/kubernetes/main/apps/dev/dev-env/app/rbac.yaml#L81).
+Existing DESIGN-001 sections 6.11 and 6.12 already described Headlamp exec and
+ServiceAccount Jobs; haynes-ops' `.agents/reports/pushover-triage-2026-09-25.md` records a
+node drain through that route. No credential contents were read and no privileged
+operation was performed for this correction. These declarations establish the
+available identity; they do not claim a new end-to-end Headlamp exec test.
 
 Targeted `kubectl auth can-i --subresource=exec` checks confirmed v1's exec,
 proxy, Job, rollout, Flux and ExternalSecret operations and its scoped storage
@@ -58,9 +77,9 @@ still a gap; an authorization check alone cannot close it.
 
 | Id | Gap | Change and acceptance evidence |
 |---|---|---|
-| P-01 | No standing policies; the catalog lacks the complete OPERATOR tier. | Add exact parity catalog roles, validation/binding allowances and short-lived policies. Exercise every v1 runtime verb under an automatically approved grant, expiry and release. Do not substitute broader workload/storage/node roles. |
+| P-01 | No standing policies; the catalog lacks complete direct OPERATOR and effective Headlamp task scope. | Add precise parity roles, validation/binding allowances and short-lived policies, or retain an equivalent accepted route. Exercise direct runtime verbs and representative Headlamp-equivalent operations under the existing owner rules, including expiry and release for grants. Do not equate narrow OPERATOR rights with the full baseline or enable broad roles wholesale. |
 | P-02 | All standing grants reject profile `ops`. | Permit precise remediation parity scopes. Prove auto-approval for those scopes and denial for capabilities beyond v1. Separate the two v1 identities' additional permissions. |
-| P-03 | Exec/proxy parity is blocked by the catalog and admission. | Restore v1's existing exec/proxy operations, including controller namespaces, privileged/powerful-SA pods and the existing Traefik/CNPG paths. Verify authorization, actual admission and a bounded read-only command; Secret API reads remain unavailable. Exec into a secret-mounting pod was already accepted in v1. |
+| P-03 | Exec/proxy and effective Headlamp access are blocked by the catalog and admission. | Preserve accepted Headlamp pod exec/ServiceAccount-workload access or supply an equivalent route for the same tasks, alongside existing controller, Traefik and CNPG operations. Verify authorization, admission and bounded read-only execution. Direct Secret reads through the session's baseline identity remain absent; Secret access through Headlamp's cluster-admin identity is already within v1's effective scope. Do not read values in acceptance artifacts or add a new human gate to an existing capability. |
 | P-04 | Guards block maintenance in `dev-env-system`, `dev-agents` and `dev-tools`. | Preserve the existing v1 maintenance capability without a new human gate. Test admission for its targeted runtime writes. Session lifecycle API calls alone are not equivalent to platform maintenance. |
 | P-05 | Job admission allows only default-SA jobs and a narrow secret suffix. | Preserve existing job-clone operations, including Recyclarr's named SA and mounted secret. Use server dry-run and one bounded CPU-limited fixture; do not grant general workload creation. |
 | P-06 | v1's observability PVC create/delete and StatefulSet delete are absent. | Add the exact namespaced parity scope and closure test. VolumeSnapshot writes are beyond this v1 scope and must not hitchhike on it. |
@@ -146,10 +165,20 @@ Cloudflare DNS access. General SSH certificates need the existing hardware
 command scope; a forced command suitable for the keeper minter would cut parity
 if applied to ordinary hw-ssh grants.
 
-Secret API reads, node cordon/drain, snapshots, broad workload creation and
-above-OPERATOR break-glass are additional capabilities. Their unavailable human
-approval path does not itself create a parity gap. Do not reintroduce the old
-Pushover/web approval acceptance tests.
+Secret API reads, node cordon/drain, snapshots and broad workload operations are
+outside the direct OPERATOR identity, but already reachable through the accepted
+Headlamp cluster-admin path. Calling them additional effective powers was wrong.
+Direct broker grants for them would replace a detour; audit records, expiry and
+per-session attribution improve how existing access is managed. They are not
+evidence of a new capability requiring a new approval gate. Existing rules for
+owner-directed or disruptive work still apply. No blanket direct cluster-admin
+grant is authorized by this correction.
+
+No concrete additional Kubernetes power has been identified beyond that effective
+v1 scope. A proposed human approval route must name its actual new capability or
+workflow before asking Tom to choose an implementation. Q-18's original premise
+is withdrawn; no route has been selected. Do not reintroduce the old Pushover/web
+approval tests or make an unbuilt replacement approval path block existing tasks.
 
 SSH validity is checked at authentication. A server revocation list can reject a
 copied certificate on a new login, but does not terminate an existing channel.
@@ -166,7 +195,8 @@ claim that a copied helper already verifies their private CA.
 First restore the omitted baseline references after [the rescue-mount fix (#108)](https://github.com/thaynes43/dev-env/pull/108) ships.
 Then build the Proxmox backend under D-69 with the feature disabled until owner
 trust and standing-policy acceptance pass. Complete the remaining parity rows
-before requesting cutover. Q-18 waits separately for the in-app approval route.
+before requesting cutover. D-70 corrects the Headlamp baseline; any future approval
+proposal must preserve that scope and Q-16's Claude Code app requirement.
 
 All tests run at low parallelism under `nice -n 19`, `GOMAXPROCS=2`, `go test -p 2`,
 one local suite at a time. No stress tools, burners or looped suites. Every

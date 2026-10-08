@@ -1,8 +1,9 @@
 # 05: cutover from v1
 
 **Status:** backlog
-**Depends on:** 03, 04, 07 (break-glass must exist before v1 and its headlamp habit
-go), Q-08's LimitRange live in haynes-ops (no BestEffort household pods), and Tom's
+**Depends on:** 03, 04, 07 (verified effective v1 parity, including accepted
+Headlamp-equivalent tasks, before retiring v1; restricted break-glass alone is not
+a replacement), Q-08's LimitRange live in haynes-ops (no BestEffort household pods), and Tom's
 explicit approval
 **Parallel with:** nothing
 

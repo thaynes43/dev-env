@@ -54,14 +54,16 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
   API, `AgentSession`, `Activity`, `ToolPool`, `ToolSession`, `LLMLease` and
   `CallerPolicy` resources, idle detection, rescue, drain-and-resume, and the
   summoned-session lanes, watchdogs and digest that `dev-env-ops` runs today.
-- **dev-env-broker** (same namespace, same binary, own Deployment): access grants and
-  **the console**. Standing policies in git approve the routine; the rest goes to
-  Tom's phone as a Pushover link. The console, behind Authentik, lists every session
-  with its link and an archive button, takes approvals, and holds the monthly login
-  renewal page. Break-glass replaces the headlamp path.
-- **dev-env-keeper** (same namespace): the single owner of every rotating credential,
-  the one Max login included, and of the GitHub App keys. Agent pods only ever get
-  short-lived tokens.
+- **dev-env-broker** (same namespace, same binary, own Deployment): temporary access
+  grants. Standing policies in git can approve requests; none are currently live.
+  A management console is planned for sessions, links, archive and login renewal.
+  Human approvals, if implemented, belong inside the Claude Code app under Q-16;
+  no route is selected or deployed. D-70 requires effective Headlamp parity before
+  replacing that path, rather than treating its existing powers as new access.
+- **dev-env-keeper** (same namespace): designed as the single owner of rotating
+  credentials, the Max login and GitHub App keys. GitHub token issuance is built;
+  keeper-owned Max login remains future work. Sessions receive short-lived GitHub
+  and privileged grants; accepted reader/ADC baseline references remain under R-04.
 - **Session pods** (namespace `dev-agents`, worker nodes only): one agent each
   (Claude Code, Codex or opencode for local models), with no approval prompts,
   `tini`, an `agentd` supervisor, requests and mandatory limits from a size class,
@@ -115,10 +117,11 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
    burst. Today they pin cards by UUID and the scheduler sees nothing. Nothing is
    lent to agents (Q-09), so today the household reservations fill most cards and
    in-cluster agent GPU work stays small until Tom adds GPUs.
-8. **The broker is powerful.** It can grant break-glass: every verb outside the
-   dev-env namespaces except Secrets, token minting, RBAC and admission changes, for
-   up to an hour. It runs apart from the operator, binds only a named catalog of
-   roles, and approves only on Tom's Authentik login.
+8. **The broker is powerful.** It creates temporary identities and bindings to
+   named catalog roles. Human approval and the break-glass catalog are not deployed.
+   The original restricted break-glass proposal does not replace Headlamp's
+   cluster-admin task scope. Effective parity must be proved before removing that
+   route; a separate broker workload alone does not establish an approval boundary.
 9. **Session volumes live outside the cluster.** gasha01 is HDD-backed Proxmox Ceph.
    Its outage stops new sessions and stalls running ones (DESIGN-001 6.6).
 10. **No fleet cap means workers can saturate.** On 2026-10-05 the pods that failed
@@ -179,9 +182,10 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 43 | Q-16: parity first, approvals in the Claude Code app; dev-env v2 benched | **DECIDED** 2026-10-08 (Tom, from his phone) | No new guard may cut what agents do today (no Authentik, outpost, Traefik or postgres16 lockdown, no git review or CODEOWNERS gate); standing auto-approved grants cover the whole v1 capability set, and human approval gates only capabilities beyond it. Approvals happen inside the Claude Code app, not Pushover plus a web page. Plan 07 step 6 is redesigned; PR #90 and haynes-ops #3550 were closed with pointers (issue #91). v2 is benched from 2026-10-08 until the plan usage resets (the Claude weekly limit resets 2026-10-12). Full text: DESIGN-001 Q-16. |
 | 44 | Resume v2 with the Codex coordinator | **DECIDED** 2026-10-08 (Tom's work order) | Codex resumes after its usage reset. Finish plan 02 laptop access and acceptance first, then the docs-only Claude Code approval spike, the v1 capability parity check, and keeper SSH minting. Preserve Q-15 and Q-16; use GPT-6.1 Sol subagents, one task worktree each, and ask Tom one question at a time. Laptop access follows D-68. |
 | 45 | Session access follows Tom's current workflow | **DECIDED** 2026-10-08 (Tom, correcting Q-17) | Use the `agent-run` CLI or ask agents to start sessions; a web UI is another possible session-management client. No laptop kubeconfig ceremony or laptop test blocks plan 02. Validate the existing in-cluster CLI workflow instead. D-68 remains an optional external path whose real external-machine use is unverified. This supersedes decision 44's laptop acceptance requirement and preserves the remaining priority order and Q-16. |
+| 46 | Effective v1 parity includes Headlamp access | **RECORDED** 2026-10-08 (Tom's baseline correction, verified read-only; D-70) | Agents already use Headlamp's cluster-admin identity. Secret reads, drains, snapshots and broad workloads are existing reachable powers, not enhancements merely because the direct OPERATOR role lacks them. Parity preserves accepted tasks and existing owner rules through an equivalent route. Temporary identities, expiry, attribution and an approval workflow improve the access mechanism. No blanket direct admin grant or approval route is selected; the coordinator withdraws Q-18's earlier premise. |
 
-The full options, consequences and rulings for Q-01 to Q-16, and the withdrawal
-of Q-17 after Tom corrected its premise, plus the pending approval choice Q-18, are in
+The full options, consequences and rulings for Q-01 to Q-16, and the premise
+corrections withdrawing Q-17 and Q-18, are in
 [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions).
 
 ## Plan backlog

@@ -1,6 +1,7 @@
 # R-03: approvals inside the Claude Code app
 
-**Status:** docs-only spike, 2026-10-08; Q-18 awaits Tom's ruling. No approval
+**Status:** docs-only spike, 2026-10-08; Q-18's premise is corrected under D-70,
+with no approval route selected. No approval
 adapter, approver session, guard or grant policy is enabled by this document.
 Installed Claude Code is `2.1.292`. Documentation and CLI flag inspection establish
 available mechanisms; they do not establish a working phone approval boundary.
@@ -8,11 +9,19 @@ available mechanisms; they do not establish a working phone approval boundary.
 ## Constraints
 
 Q-16 requires approvals inside the Claude Code app and full v1 capability parity.
-Standing, short-lived grants cover today's operations. Human approval gates only
-additional capabilities. Agents retain haynes-ops self-merge, app maintenance and
+Standing, short-lived grants must preserve today's effective operations, including
+accepted Headlamp cluster-admin access. Secret reads, drains, snapshots and broad
+workload operations are already reachable through that identity; a direct grant
+would change their access mechanism rather than add a new effective power. No
+concrete additional Kubernetes capability is established by those examples, so
+the earlier Q-18 route question is withdrawn pending a specific use case. Existing
+owner rules still apply, and no blanket direct admin grant is authorized.
+Agents retain haynes-ops self-merge, app maintenance and
 Authentik blueprint wiring. No Authentik, Traefik or postgres lockdown, git review
 gate or CODEOWNERS gate is introduced. The existing GitOps bypass through
-cluster-admin Flux remains an accepted residual risk.
+cluster-admin Flux remains an accepted residual risk. An approval authority inside
+infrastructure agents effectively administer cannot claim a hard boundary against
+those administrators merely by separating its workload.
 
 Q-17 corrected session access: Tom uses `agent-run` or asks agents to start
 sessions. A management web UI is another possible client. That changes neither
@@ -77,8 +86,9 @@ and maximum TTL, broker nonce, decision and approved TTL, approver control-sessi
 and tool event, issue time and expiry. Recheck live state and consume the nonce
 atomically with the decision. Reject stale requests, replacements, changed inputs,
 replays and missing evidence. Keep bounded audit metadata rather than transcripts.
-The current requester record stores a session name without its UID, so this is a
-future implementation requirement, not a claim about today's schema.
+The current requester record includes a session UID, and new requests are fenced
+to it (#111). The complete human receipt, nonce and authority checks above remain
+future implementation requirements.
 [Grant types](../../../../api/v1alpha1/accessgrant_types.go).
 
 An ordinary `AgentSession` is unsuitable for the authority: current session
@@ -112,9 +122,10 @@ ruling before break-glass is enabled.
 There is a dependency cycle if plan 07 needs Remote Control while plan 03 waits for
 plan 07's old approval console. Separate **plan 03 core** from its management UI:
 
-1. Ask Q-18 and record its ruling when it arrives. Continue the instructed
-   parity audit and keeper SSH minting while the choice is pending. Additional
-   human-gated capabilities remain unavailable.
+1. Complete effective v1 parity and keeper SSH minting. Before asking about an
+   approval implementation, name the specific new capability or workflow it would
+   govern. D-70 withdraws Q-18's OPERATOR-only premise; no route is selected and
+   the old prompt does not hold the next owner provisioning step.
 2. If Tom chooses (a), build the bounded plan 03 prerequisite: a fresh
    keeper-owned Max login, fenced
    refresh, access-token-only distribution, cold-home account seeding and Remote
@@ -139,5 +150,7 @@ Pursue (a) in stages, with no new human-gated capability enabled until the phone
 receipt, isolation and parity tests pass. This preserves progress on standing
 grants and SSH minting while testing the in-app boundary honestly. Alternatives
 are an explicitly trusted coordinator soft gate or deferring the human path.
-Q-18 records the choice; it does not authorize a parity-reducing guard, a second
-approval app or a change to break-glass login freshness.
+This remains a design candidate, not a selected route. Q-18's earlier prompt is
+withdrawn after the effective-baseline correction. Any future proposal must name
+the concrete use case and preserve Q-16: no parity loss, second approval app or
+silent change to existing owner rules or login freshness.
