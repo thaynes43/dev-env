@@ -376,6 +376,173 @@ func TestPushoverFailureCooldownCannotBeBypassedByAnotherGrant(t *testing.T) {
 	}
 }
 
+func TestPushoverPermanentRejectionWaitsForCredentialRotation(t *testing.T) {
+	for _, file := range []string{PushoverFileToken, PushoverFileUserKey} {
+		t.Run(file, func(t *testing.T) {
+			n := newPushoverTestNotifier(t, nil)
+			clk := clocktesting.NewFakeClock(time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC))
+			n.clock = clk
+			requests := 0
+			var sent url.Values
+			n.http.Transport = pushoverTestTransport(func(r *http.Request) (*http.Response, error) {
+				requests++
+				if err := r.ParseForm(); err != nil {
+					t.Fatal(err)
+				}
+				sent = r.PostForm
+				status, body := http.StatusBadRequest, `{"status":0}`
+				if requests > 1 {
+					status, body = http.StatusOK, `{"status":1}`
+				}
+				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+			})
+			g := pushoverTestGrant()
+			if wait := pushoverRetryAfter(t, n.NotifyPending(context.Background(), g)); wait != pushoverMaxRetry {
+				t.Fatalf("permanent rejection wait %s, want %s", wait, pushoverMaxRetry)
+			}
+			clk.Step(10 * pushoverMaxRetry)
+			g.Name = "grant-another"
+			if wait := pushoverRetryAfter(t, n.NotifyPending(context.Background(), g)); wait != pushoverMaxRetry || requests != 1 {
+				t.Fatal("unchanged rejected credentials reached the API for another grant")
+			}
+			// Rejection does not cache the raw files: even invalid replacement
+			// credentials must be read before any rejection/cooldown check.
+			writePushoverTestFile(t, n.dir, file, "invalid")
+			assertPushoverSafeError(t, n.NotifyPending(context.Background(), g))
+			if requests != 1 {
+				t.Fatal("invalid replacement credential reached the API")
+			}
+			rotated := strings.Repeat("R", 30)
+			writePushoverTestFile(t, n.dir, file, rotated)
+			if err := n.NotifyPending(context.Background(), g); err != nil {
+				t.Fatal(err)
+			}
+			field := "token"
+			if file == PushoverFileUserKey {
+				field = "user"
+			}
+			if requests != 2 || sent.Get(field) != rotated || n.rejected {
+				t.Fatal("credential rotation did not clear the rejection")
+			}
+		})
+	}
+}
+
+func TestPushoverClassifiesPermanentAndTransientResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		status    int
+		body      string
+		permanent bool
+	}{
+		{"bad request", http.StatusBadRequest, `{"status":0}`, true},
+		{"unauthorized", http.StatusUnauthorized, "", true},
+		{"forbidden", http.StatusForbidden, "", true},
+		{"unprocessable", http.StatusUnprocessableEntity, "", true},
+		{"valid status zero", http.StatusOK, `{"status":0}`, true},
+		{"request timeout", http.StatusRequestTimeout, "", false},
+		{"rate limited", http.StatusTooManyRequests, "", false},
+		{"server failure", http.StatusInternalServerError, "", false},
+		{"bad gateway", http.StatusBadGateway, "", false},
+		{"redirect", http.StatusTemporaryRedirect, "", false},
+		{"malformed JSON", http.StatusOK, "invalid", false},
+		{"missing status", http.StatusOK, `{}`, false},
+		{"null status", http.StatusOK, `{"status":null}`, false},
+		{"string status zero", http.StatusOK, `{"status":"0"}`, false},
+		{"unexpected status", http.StatusOK, `{"status":2}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := newPushoverTestNotifier(t, nil)
+			clk := clocktesting.NewFakeClock(time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC))
+			n.clock = clk
+			requests := 0
+			n.http.Transport = pushoverTestTransport(func(*http.Request) (*http.Response, error) {
+				requests++
+				return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body)), Header: make(http.Header)}, nil
+			})
+			want := pushoverRetryInterval
+			if tc.permanent {
+				want = pushoverMaxRetry
+			}
+			if wait := pushoverRetryAfter(t, n.NotifyPending(context.Background(), pushoverTestGrant())); wait != want {
+				t.Fatalf("response wait %s, want %s", wait, want)
+			}
+			clk.Step(10 * pushoverMaxRetry)
+			g := pushoverTestGrant()
+			g.Name = "grant-another"
+			wait := pushoverRetryAfter(t, n.NotifyPending(context.Background(), g))
+			if tc.permanent {
+				if requests != 1 || wait != pushoverMaxRetry {
+					t.Fatal("permanent response was not suppressed globally")
+				}
+			} else if requests != 2 || wait != 2*pushoverRetryInterval {
+				t.Fatal("transient response did not retry with exponential delay")
+			}
+		})
+	}
+}
+
+func TestPushoverTransientBackoffDoublesCapsAndResetsOnSuccess(t *testing.T) {
+	n := newPushoverTestNotifier(t, nil)
+	clk := clocktesting.NewFakeClock(time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC))
+	n.clock = clk
+	requests, succeeds := 0, false
+	n.http.Transport = pushoverTestTransport(func(*http.Request) (*http.Response, error) {
+		requests++
+		if !succeeds {
+			return nil, errors.New("synthetic temporary transport failure")
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"status":1}`)), Header: make(http.Header)}, nil
+	})
+	g := pushoverTestGrant()
+	for i, seconds := range []int{5, 10, 20, 40, 80, 160, 300, 300} {
+		want := time.Duration(seconds) * time.Second
+		if wait := pushoverRetryAfter(t, n.NotifyPending(context.Background(), g)); wait != want || requests != i+1 {
+			t.Fatalf("attempt %d: delay %s, want %s; requests %d", i+1, wait, want, requests)
+		}
+		clk.Step(want - time.Nanosecond)
+		g.Name = "grant-watcher"
+		if wait := pushoverRetryAfter(t, n.NotifyPending(context.Background(), g)); wait != time.Nanosecond || requests != i+1 {
+			t.Fatal("watcher event bypassed exponential cooldown")
+		}
+		clk.Step(time.Nanosecond)
+	}
+	succeeds = true
+	if err := n.NotifyPending(context.Background(), g); err != nil {
+		t.Fatal(err)
+	}
+	if n.retryDelay != 0 || !n.retryAt.IsZero() {
+		t.Fatal("successful delivery retained exponential cooldown")
+	}
+	succeeds = false
+	if wait := pushoverRetryAfter(t, n.NotifyPending(context.Background(), g)); wait != pushoverRetryInterval {
+		t.Fatal("next transient failure did not restart at five seconds")
+	}
+}
+
+func TestPushoverCredentialRotationClearsTransientCooldownImmediately(t *testing.T) {
+	n := newPushoverTestNotifier(t, nil)
+	clk := clocktesting.NewFakeClock(time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC))
+	n.clock = clk
+	requests := 0
+	n.http.Transport = pushoverTestTransport(func(*http.Request) (*http.Response, error) {
+		requests++
+		return nil, errors.New("synthetic temporary transport failure")
+	})
+	g := pushoverTestGrant()
+	if wait := pushoverRetryAfter(t, n.NotifyPending(context.Background(), g)); wait != pushoverRetryInterval {
+		t.Fatal("initial transient delay is incorrect")
+	}
+	clk.Step(pushoverRetryInterval)
+	if wait := pushoverRetryAfter(t, n.NotifyPending(context.Background(), g)); wait != 2*pushoverRetryInterval {
+		t.Fatal("second transient delay did not double")
+	}
+	writePushoverTestFile(t, n.dir, PushoverFileUserKey, strings.Repeat("U", 30))
+	if wait := pushoverRetryAfter(t, n.NotifyPending(context.Background(), g)); wait != pushoverRetryInterval || requests != 3 {
+		t.Fatal("credential rotation did not immediately clear transient cooldown")
+	}
+}
+
 func TestPushoverRefusesInvalidGrantWithoutSending(t *testing.T) {
 	n := newPushoverTestNotifier(t, nil)
 	n.http.Transport = pushoverTestTransport(func(*http.Request) (*http.Response, error) {
@@ -436,6 +603,16 @@ func assertPushoverSafeError(t *testing.T, err error) {
 	if errors.Unwrap(err) != nil {
 		t.Fatal("notification error wraps an unsafe underlying error")
 	}
+}
+
+func pushoverRetryAfter(t *testing.T, err error) time.Duration {
+	t.Helper()
+	assertPushoverSafeError(t, err)
+	var retry interface{ RetryAfter() time.Duration }
+	if !errors.As(err, &retry) || retry.RetryAfter() <= 0 {
+		t.Fatal("notification error lacks a positive safe retry delay")
+	}
+	return retry.RetryAfter()
 }
 
 type pushoverTestTransport func(*http.Request) (*http.Response, error)
