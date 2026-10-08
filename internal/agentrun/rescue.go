@@ -45,7 +45,7 @@ func (a *app) rescueList(ctx context.Context, args []string) error {
 	if len(pos) > 0 {
 		return usageError("rescue list takes no arguments, got %q; --session <name> narrows it to one session", pos)
 	}
-	c, err := a.connect(cmd.c.conn)
+	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
 		return err
 	}

@@ -38,6 +38,8 @@ func newCommand(name string, outputs ...string) *command {
 	cmd.fs.StringVar(&cmd.c.conn.apiURL, "api-url", "", "")
 	cmd.fs.StringVar(&cmd.c.conn.tokenFile, "token-file", "", "")
 	cmd.fs.StringVar(&cmd.c.conn.caFile, "ca-file", "", "")
+	cmd.fs.StringVar(&cmd.c.conn.kubeconfig, "kubeconfig", "", "")
+	cmd.fs.StringVar(&cmd.c.conn.context, "context", "", "")
 	return cmd
 }
 

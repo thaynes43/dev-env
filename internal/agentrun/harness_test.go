@@ -117,6 +117,12 @@ func newHarness(t *testing.T) *harness {
 			}
 			return h.kubectl(argv), nil
 		},
+		Output: func(_ context.Context, argv []string) ([]byte, error) {
+			if h.kubectl == nil {
+				return nil, errors.New("no kubectl")
+			}
+			return []byte("test-context\n"), nil
+		},
 	}
 	return h
 }

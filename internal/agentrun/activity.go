@@ -61,7 +61,7 @@ func (a *app) activityStart(ctx context.Context, args []string) error {
 			req.Scope = append(req.Scope, tok)
 		}
 	}
-	c, err := a.connect(cmd.c.conn)
+	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
 		return err
 	}
@@ -86,7 +86,7 @@ func (a *app) activityEnd(ctx context.Context, args []string) error {
 	if len(pos) != 1 {
 		return usageError("declare-activity end takes one id; declare-activity list shows them")
 	}
-	c, err := a.connect(cmd.c.conn)
+	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
 		return err
 	}
@@ -110,7 +110,7 @@ func (a *app) activityList(ctx context.Context, args []string) error {
 	if len(pos) > 0 {
 		return usageError("declare-activity list takes no arguments")
 	}
-	c, err := a.connect(cmd.c.conn)
+	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
 		return err
 	}

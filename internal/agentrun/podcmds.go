@@ -28,7 +28,7 @@ func (a *app) log(ctx context.Context, args []string) error {
 	if tail < 1 || tail > 5000 {
 		return usageError("--tail is a number of lines from 1 to 5000, not %d", tail)
 	}
-	c, err := a.connect(cmd.c.conn)
+	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
 		return err
 	}
@@ -70,7 +70,7 @@ func (a *app) msg(ctx context.Context, args []string) error {
 	case len(text) > apiv1.MaxMessageBytes:
 		return usageError("the message is %d bytes, more than %d", len(text), apiv1.MaxMessageBytes)
 	}
-	c, err := a.connect(cmd.c.conn)
+	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
 		return err
 	}

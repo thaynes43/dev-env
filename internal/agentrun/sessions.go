@@ -41,7 +41,7 @@ func (a *app) list(ctx context.Context, args []string) error {
 	if mine {
 		q.Set(apiv1.FilterMine, "true")
 	}
-	c, err := a.connect(cmd.c.conn)
+	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
 		return err
 	}
@@ -107,7 +107,7 @@ func (a *app) show(ctx context.Context, args []string) error {
 	if len(pos) != 1 {
 		return usageError("show takes one session name; agent-run list shows them")
 	}
-	c, err := a.connect(cmd.c.conn)
+	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
 		return err
 	}
@@ -222,7 +222,7 @@ func (a *app) reap(ctx context.Context, args []string) error {
 	if force {
 		a.errf("--force changes nothing in v2: every reap rescues the session's work first, and nothing skips that (D-45)")
 	}
-	c, err := a.connect(cmd.c.conn)
+	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
 		return err
 	}
@@ -271,7 +271,7 @@ func (a *app) fleet(ctx context.Context, args []string) error {
 	if len(pos) > 0 {
 		return usageError("fleet takes no arguments, got %q", pos)
 	}
-	c, err := a.connect(cmd.c.conn)
+	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
 		return err
 	}

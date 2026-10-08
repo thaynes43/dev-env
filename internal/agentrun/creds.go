@@ -25,8 +25,8 @@ import (
 
 // Where agent-run finds the API and a token for it (D-06, D-50). A session
 // pod has both from the operator; another pod in the cluster (the v1 pod until
-// cutover) mints a token for its own ServiceAccount; anywhere else the caller
-// names them.
+// cutover) mints a token for its own ServiceAccount; a laptop uses kubectl and
+// its existing kubeconfig for a human token and a verified TLS port-forward.
 const (
 	// DefaultAPIURL is the API's Service by its full name: session pods use
 	// ndots:1 and the DNS allowlist refuses search-expanded names (D-46).
@@ -79,23 +79,35 @@ type conn struct {
 // connOpts are the connection flags.
 type connOpts struct {
 	apiURL, tokenFile, caFile string
+	kubeconfig, context       string
 }
 
 // connect finds the API's address, a token and the CA to trust.
-func (a *app) connect(o connOpts) (*conn, error) {
+func (a *app) connect(ctx context.Context, o connOpts) (*conn, error) {
 	env := a.env
 	inCluster := env.Getenv(envKubeHost) != "" && exists(filepath.Join(env.ServiceAccountDir, "token"))
 	sessionTokenFile := env.Getenv(envAgentdTokenFile)
 	if sessionTokenFile == "" && exists(env.SessionTokenFile) {
 		sessionTokenFile = env.SessionTokenFile
 	}
+	selectedKube := o.kubeconfig != "" || o.context != ""
+	// A kube selector must never move only exec to another cluster while API
+	// discovery or token minting still uses this pod's cluster. A fully explicit
+	// URL and token remain the caller's manual connection.
+	explicitURL := firstOf(o.apiURL, env.Getenv(envAPIURL))
+	explicitToken := firstOf(o.tokenFile, env.Getenv(envTokenFile))
+	if selectedKube && (inCluster || sessionTokenFile != "") && (explicitURL == "" || explicitToken == "") {
+		return nil, usageError("--context and --kubeconfig cannot select another cluster while using this pod's API or identity; omit them, or give an explicit --api-url and --token-file for that cluster")
+	}
 
 	base := firstOf(o.apiURL, env.Getenv(envAPIURL), env.Getenv(envAgentdURL))
+	laptop := !inCluster && sessionTokenFile == ""
+	forward := laptop && base == ""
 	if base == "" && (inCluster || sessionTokenFile != "") {
 		base = DefaultAPIURL
 	}
-	if base == "" {
-		return nil, fail(ExitAuth, "no API address: outside the cluster, pass --api-url or set %s (the laptop path that finds it from the kubeconfig is plan 02's)", envAPIURL)
+	if forward {
+		base = DefaultAPIURL
 	}
 	u, err := url.Parse(base)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
@@ -118,11 +130,17 @@ func (a *app) connect(o connOpts) (*conn, error) {
 		}
 		tok = m
 	default:
-		return nil, fail(ExitAuth, "no token for the API: outside a cluster pod, pass --token-file or set %s to a file holding a token for the audience %s, such as one from kubectl create token dev-env-human -n dev-env-system --audience %s",
-			envTokenFile, apiv1.TokenAudience, apiv1.TokenAudience)
+		k, err := a.kubectl(ctx, o)
+		if err != nil {
+			return nil, err
+		}
+		tok = &humanToken{kube: k, env: env}
 	}
 
 	caFile := firstOf(o.caFile, env.Getenv(envCAFile), env.Getenv(envAgentdCAFile))
+	if selectedKube && (inCluster || sessionTokenFile != "") {
+		caFile = firstOf(o.caFile, env.Getenv(envCAFile))
+	}
 	tlsConf := &tls.Config{MinVersion: tls.VersionTLS13}
 	if caFile != "" {
 		pool, err := certPool(caFile)
@@ -132,7 +150,31 @@ func (a *app) connect(o connOpts) (*conn, error) {
 		tlsConf.RootCAs = pool
 	}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
+	if forward {
+		k, err := a.kubectl(ctx, o)
+		if err != nil {
+			return nil, err
+		}
+		if caFile == "" {
+			pool, err := k.apiCA(ctx)
+			if err != nil {
+				return nil, err
+			}
+			tlsConf.RootCAs = pool
+		}
+		// Fail to mint/read a token before opening a long-lived subprocess.
+		if _, err := tok.Token(ctx); err != nil {
+			return nil, err
+		}
+		base, err = a.forwardAPI(ctx, k)
+		if err != nil {
+			return nil, err
+		}
+		tlsConf.ServerName = u.Hostname()
+		tr.Proxy = nil
+	}
 	tr.TLSClientConfig = tlsConf
+	a.cleanups = append(a.cleanups, tr.CloseIdleConnections)
 	return &conn{url: base, token: tok, http: &http.Client{Transport: tr, Timeout: requestTimeout}}, nil
 }
 

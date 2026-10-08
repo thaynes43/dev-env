@@ -61,7 +61,7 @@ func TestConnectDefaultsToTheService(t *testing.T) {
 	h := newHarness(t)
 	h.vars = map[string]string{}
 	h.write("no-session-token", "session-token")
-	c, err := (&app{env: h.env}).connect(connOpts{})
+	c, err := (&app{env: h.env}).connect(t.Context(), connOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,8 +100,8 @@ func TestConnectErrors(t *testing.T) {
 		exit int
 		want string
 	}{
-		{"nothing outside the cluster", map[string]string{}, nil, ExitAuth, "no API address: outside the cluster, pass --api-url or set DEV_ENV_API_URL"},
-		{"an address but no token", map[string]string{envAPIURL: "https://api.example"}, nil, ExitAuth, "no token for the API: outside a cluster pod, pass --token-file"},
+		{"nothing outside the cluster", map[string]string{}, nil, ExitAuth, "laptop access needs kubectl on PATH and an existing kubeconfig"},
+		{"an address but no token", map[string]string{envAPIURL: "https://api.example"}, nil, ExitAuth, "laptop access needs kubectl on PATH and an existing kubeconfig"},
 		{"plain http", map[string]string{envAPIURL: "http://api.example"}, nil, ExitUsage, `the API address "http://api.example" is not an https:// URL`},
 		{"no host", map[string]string{}, []string{"--api-url", "https://"}, ExitUsage, "is not an https:// URL with a host"},
 		{"a missing token file", map[string]string{envAPIURL: "https://127.0.0.1:1"}, []string{"--token-file", "/nonexistent/token"}, ExitAuth, "no token at /nonexistent/token (from --token-file)"},
@@ -210,7 +210,7 @@ func TestConnectMintsATokenInAPod(t *testing.T) {
 
 	// A minted token is used for five minutes, then minted again.
 	app := &app{env: h.env}
-	c, err := app.connect(connOpts{})
+	c, err := app.connect(t.Context(), connOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
