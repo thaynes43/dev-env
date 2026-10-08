@@ -2810,7 +2810,7 @@ every granted namespace. What each role allows, plainly:
 | `dev-env-grant-storage` | create, delete PVCs and VolumeSnapshots; delete StatefulSets | The observability and CNPG cases v1 solved with one-off Roles. |
 | `dev-env-grant-secrets-read` | get, list Secrets | Always shown with its namespaces in red on the page. |
 | `dev-env-grant-nodes` (cluster-wide) | cordon, uncordon, drain (evictions), node labels and taints | The talosw01 drain of 2026-09-25 was a headlamp job. Its evictions in the dev-env namespaces stay refused: before a drain, `agent-run fleet evacuate <node>` has the operator move that node's sessions and tool instances (below). |
-| `dev-env-grant-breakglass` (cluster-wide) | every verb on every resource except Secrets, `serviceaccounts/token`, `nodes/proxy` (the kubelet API bypasses admission), `pods/ephemeralcontainers`, `pods/portforward`, `pods/proxy` and `services/proxy` (which bypass network isolation), the verbs `bind`, `escalate` and `impersonate`, RBAC objects, CSR approval, admission policies and webhooks, Kyverno policies, CustomResourceDefinitions, APIServices, Flux objects, `external-secrets.io` objects, Cilium resources other than namespaced `CiliumNetworkPolicy`, API priority/fairness controls (`flowcontrol.apiserver.k8s.io`) and the `dev-env.haynesops.com` CRDs | Built from API discovery minus that list, including excluded resources' subresources. CI checks the generated catalog against its discovery snapshot; a discovery-only cluster watcher flags live API drift for a snapshot refresh. The identity guard applies on top. |
+| `dev-env-grant-breakglass` (cluster-wide) | every verb on every resource except Secrets, `serviceaccounts/token`, `nodes/proxy` (the kubelet API bypasses admission), `pods/ephemeralcontainers`, `pods/portforward`, `pods/proxy` and `services/proxy` (which bypass network isolation), the verbs `bind`, `escalate` and `impersonate`, RBAC objects, CSR approval, admission policies and webhooks, Kyverno policies, CustomResourceDefinitions, APIServices, Flux objects, `external-secrets.io` objects, Cilium resources other than namespaced `CiliumNetworkPolicy`, API priority/fairness controls (`flowcontrol.apiserver.k8s.io`), ingress authority (`traefik.io`, `gateway.networking.k8s.io`, `externaldns.k8s.io` and `networking.k8s.io/ingresses`) and the `dev-env.haynesops.com` CRDs | Built from API discovery minus that list, including excluded resources' subresources. CI checks the generated catalog against its discovery snapshot; a discovery-only cluster watcher flags live API drift for a snapshot refresh. The identity guard applies on top. |
 
 **Draining a node with sessions on it.** `agent-run fleet evacuate <node>` (API `POST
 /v1/fleet/nodes/{node}/evacuate`) asks the operator to move that node's sessions:
@@ -3217,7 +3217,12 @@ activate human grants until the ruling's enforcement is deployed and verified.
   Cilium identity/routing/allocation objects and API priority/fairness objects
   are enforcing infrastructure too: granting them would bypass network isolation
   or throttle the controllers that enforce the guard. Only namespaced CNPs remain
-  in the Cilium catalog. A new repo-managed CRD or served version can be added to
+  in the Cilium catalog. Traefik, Gateway, Ingress and external-DNS objects are
+  excluded too: writing routes or removing middleware can expose any internal
+  service publicly and bypass its authentication. The identity guard backs these
+  exclusions. This does not close Q-16's remaining authentication workload and
+  shared-state paths; approval deployment remains blocked. A new repo-managed CRD
+  or served version can be added to
   the metadata snapshot from its declaration before deployment; CI checks that
   deterministic update, and the live watcher reports any gap until Flux installs
   the declaration.
