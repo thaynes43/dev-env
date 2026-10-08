@@ -29,6 +29,7 @@ type CredentialObjectReference struct {
 
 // CredentialJobSpec is written by the broker, after approval. Keeper rechecks
 // the live grant before acting; a job is never itself an approval.
+// +kubebuilder:validation:XValidation:rule="self.credential == 'proxmox'",message="only proxmox credential execution is implemented"
 // +kubebuilder:validation:XValidation:rule="self.grant == oldSelf.grant && self.session == oldSelf.session && self.credential == oldSelf.credential && self.expiresAt == oldSelf.expiresAt",message="credential request is immutable; only release may change"
 // +kubebuilder:validation:XValidation:rule="!(has(oldSelf.release) && oldSelf.release) || (has(self.release) && self.release)",message="release cannot be taken back"
 type CredentialJobSpec struct {
