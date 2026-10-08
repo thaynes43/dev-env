@@ -36,6 +36,25 @@ type NativeSSH struct {
 	Now                                func() time.Time
 }
 
+// A per-request guard is carried in the operation context, rather than by
+// mutating the shared SSH runner's Lease fence. Cleanup ignores this guard.
+type sshCreateGuardKey struct{}
+
+func withSSHCreateGuard(ctx context.Context, guard func(context.Context) error) context.Context {
+	return context.WithValue(ctx, sshCreateGuardKey{}, guard)
+}
+
+func checkSSHCreateGuard(ctx context.Context, command string) error {
+	if strings.Fields(command)[3] != "create" {
+		return nil
+	}
+	guard, _ := ctx.Value(sshCreateGuardKey{}).(func(context.Context) error)
+	if guard == nil {
+		return errors.New("SSH create request has no identity guard")
+	}
+	return guard(ctx)
+}
+
 type sshTrust struct {
 	ca      ssh.Signer
 	targets []string
@@ -201,6 +220,12 @@ func (s *NativeSSH) Run(ctx context.Context, command string) ([]byte, bool, erro
 			_ = session.Close()
 			_ = clientSSH.Close()
 			return nil, false, errors.New("SSH leadership fence refused dispatch")
+		}
+		if checkSSHCreateGuard(ctx, command) != nil {
+			stop()
+			_ = session.Close()
+			_ = clientSSH.Close()
+			return nil, false, errors.New("SSH create identity guard refused dispatch")
 		}
 		if ctx.Err() != nil {
 			stop()
