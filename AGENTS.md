@@ -24,7 +24,9 @@ The short version:
 
 Every non-draft PR gets an advisory review from Claude Code
 (`.github/workflows/claude-code-review.yml`); `@claude` mentions are handled by
-`claude.yml`. The review is **advisory**: it is not a required check. Read its
+`claude.yml`. Release App PRs skip the automatic job and require an explicit
+`@claude` review before merge; follow CLAUDE.md's release procedure. The review is
+**advisory**: it is not a required check. Read its
 findings before merging. Fix each one, or answer it on the PR with a concrete reason
 it is wrong; never "merging anyway". Both workflows need the Claude GitHub App on the
 repo and the `CLAUDE_CODE_OAUTH_TOKEN` repo secret, otherwise they skip green and

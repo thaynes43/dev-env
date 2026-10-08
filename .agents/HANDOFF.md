@@ -55,14 +55,31 @@ the saga. To start building, follow
     approver; no v1 refresh token is copied. Draft code: branch
     `agent/plan07-approvals-round3` (dev-env) and `agent/plan07-catalog-round3`
     (haynes-ops).
-  - **Live state checked after deployment, 2026-10-08:** operator `sha-d4c48bc`
-    (updated/ready/available 2/2), broker `sha-763fe77` (2/2), keeper
-    `sha-fac4751` (1/1), agent template `2.8.0`. Operator, secrets and templates Flux targets are Ready;
-    the baseline restore applied haynes-ops `4f1b9c52`; operator HelmRelease reports `UpgradeSucceeded`.
-    A live v2 `agent-run fleet` query with v1's identity passed and reported
-    revision `2.8.0-c9a9406657`, no sessions after verification. `dev-agents` holds only the shelf
-    pod. The shelf and v1 pod retained their initial UIDs and every container's
-    zero restart count. The scoped rollout declaration was ended.
+  - **Latest deployment, 2026-10-08:** operator, broker and keeper use reviewed
+    main `sha-eeb15e3` (#111), signed/verified in publish run `37798469467`.
+    Their updated/ready/available counts are 2/2, 2/2 and 1/1. Agent template and
+    shelf use signed `2.9.0` (#110, publish run `37799418992`). The shelf's stale
+    2.7.0 pin was updated with the template, as its deployment instructions require.
+    Haynes-ops #3589 deployed and verified schema/RBAC/admission/journal first;
+    #3595 applied the image pins at `d7b845a6`. Minting stays disabled, with no CA
+    mount, trust, egress or policy enabled. P-14/P-15/P-18 remain open for activation
+    and real provider acceptance. General hw-ssh remains unbuilt.
+    An idle full S session on 2.8.0, `dev-env-1008-152312`, kept its pod UID and
+    zero restarts through the controller upgrade. It remained Running and was
+    correctly marked Outdated; v1 kept its original UID and zero restarts.
+    Fresh full S session `dev-env-1008-153405` started at `2.9.0-5030ab2483` with
+    zero restarts. Its grants directory is tmpfs; typed credential listing returned
+    `[]` and Proxmox availability exited 4 without provider access. No prompt or
+    inference was sent. Both fixtures were rescued as CleanAndPushed, archived and
+    removed with their pods and home volumes. The fleet is empty; only the Ready
+    shelf and shared volume remain. All five runtime Flux targets and Helm releases
+    are Ready. Keeper GitHub readiness passed; no CredentialJobs exist. The scoped
+    activity declaration was ended. Owner CA/trust and real provider acceptance
+    remain required. Q-18 controls the approval route; keeper work continues
+    independently. Under the one-question-at-a-time rule, the next CA provisioning
+    question is queued until the current Q-18 prompt is answered.
+    The earlier baseline restore (#3584/#3583) remains applied and verified;
+    PVE LAN access and the remaining service checks still block full closure.
     New dependency PRs appeared after the bench; green
     release PR #102 (2.7.1) was merged, signed and included in the signed 2.8.0
     release. Issue #91 remains open; #90 and haynes-ops #3550 remain closed.

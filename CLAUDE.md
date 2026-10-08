@@ -125,12 +125,16 @@ open (one version for the repo; both images are tagged with it, and the first re
 is 2.0.0 because the agent image line is 2.x; it shipped on 2026-10-07, #52). Its
 token is a GitHub App's (`thaynes43-dev-env-release`), from the repo variable
 `RELEASE_APP_ID` and secret `RELEASE_APP_PRIVATE_KEY`, so release PRs run CI like any
-PR; the advisory review skips them. If either goes missing, it falls back to
-`GITHUB_TOKEN`, and a PR opened that way starts no workflows: then close and reopen
+PR; the automatic advisory review deliberately skips the release App's PRs.
+Request an actual review with `@claude` through `claude.yml`, then read and resolve
+its findings before merging. A skipped green job is not a review. If
+`RELEASE_APP_ID` or `RELEASE_APP_PRIVATE_KEY` is missing, release-please falls back
+to `GITHUB_TOKEN`, and a PR opened that way starts no workflows: then close and reopen
 the release PR (`gh pr close <n> && gh pr reopen <n>`) as haynes-dev-bot so
 `CI - Success` runs, after every update to it. Agents squash-merge a green release PR
 themselves, like any other PR, once they have checked that the version and changelog
-are sane and `CI - Success` is green on its head (Tom, 2026-10-07: "Merge, and let
+are sane, the actual advisory review is resolved, and `CI - Success` is green on
+its head (Tom, 2026-10-07: "Merge, and let
 agents merge releases"). Merging it tags the release, so watch `publish-agent.yml` on
 the new tag and confirm its `cosign verify` step passed. If no run appears (a tag made
 with the `GITHUB_TOKEN` fallback starts none), start one with
@@ -203,7 +207,9 @@ repo this project creates.
 
 Every non-draft PR gets an advisory review from Claude Code
 (`.github/workflows/claude-code-review.yml`); `@claude` mentions are handled by
-`claude.yml`. The review is **advisory**: it is not a required check. Read its
+`claude.yml`. Release App PRs are excluded from the automatic job: explicitly
+request their review with `@claude` before merge, as described above. The review is
+**advisory**: it is not a required check. Read its
 findings before merging. Fix each one, or answer it on the PR with a concrete reason
 it is wrong; never "merging anyway". Both workflows need the Claude GitHub App on the
 repo and the `CLAUDE_CODE_OAUTH_TOKEN` repo secret, otherwise they skip green and
