@@ -72,6 +72,7 @@ func (d *Daemon) now() time.Time {
 // that fails is reported in the status, and the heartbeat goes on, so the
 // operator sees why a session is not working.
 func (d *Daemon) Run(ctx context.Context) error {
+	d.expireCredentials()
 	if err := os.MkdirAll(d.S.StateDir, 0o700); err != nil {
 		return fmt.Errorf("state dir: %w", err)
 	}
@@ -164,6 +165,7 @@ func (d *Daemon) supervise(ctx context.Context) error {
 		case <-logs.C:
 			d.copyLog()
 		case <-poll.C:
+			d.expireCredentials()
 			if m := newestMtime(d.S.statePath(resultFile), d.S.statePath(tuiExitFile)); !m.Equal(last) {
 				last = m
 				d.Log.Info("the agent exited")
@@ -171,6 +173,19 @@ func (d *Daemon) supervise(ctx context.Context) error {
 				d.copyLog()
 			}
 		}
+	}
+}
+
+// The daemon removes private credential files even while the keeper or broker
+// is unavailable. Missing grants volumes are normal for older session pods.
+func (d *Daemon) expireCredentials() {
+	if d.S.Getenv == nil {
+		return
+	}
+	c := CredentialsFromEnv(d.S.Getenv)
+	c.Grants.Now = d.now
+	if err := c.Expire(); err != nil && !errors.Is(err, ErrNoGrantsDir) {
+		d.Log.Warn("credential expiry cleanup failed")
 	}
 }
 
