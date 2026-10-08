@@ -1,10 +1,10 @@
 # 07: access broker
 
-**Status:** steps 1 to 5 built; H2 runtime deployed and verified on 2026-10-07; approval deployment follows step 6
+**Status:** benched from 2026-10-08 until the plan usage resets. Steps 1 to 5 are built; H2 (the broker Deployment) is deployed and verified (2026-10-07). Step 6 is redesigned for approvals inside the Claude Code app (Q-16, Tom 2026-10-08), not Pushover plus a web page; the resume point and the design spike are in [issue #91](https://github.com/thaynes43/dev-env/issues/91). Draft code is on branch `agent/plan07-approvals-round3` (dev-env) and `agent/plan07-catalog-round3` (haynes-ops); PR #90 and haynes-ops #3550 were closed.
 **Depends on:** 01 (the baseline guard and egress tiers are in place); Q-07 (Tom
 2026-10-06: credential grants, A)
-**Parallel with:** 02; the coordinator resumed plan 07 on Codex after the pause in
-README decision 40. Keep shared-code changes small and rebase before each push.
+**Parallel with:** 02, when both run again; the saga README decisions 40 and 43 explain the pacing
+and the bench. Keep shared-code changes small and rebase before each push.
 
 ## Goal
 
@@ -53,7 +53,7 @@ In this repo:
   when the broker is unavailable. Its CNP Role has `get, delete`, applied in H2
   before the new operator pin. Unit/fake-clock and envtest cases prove ownership,
   restart, finalizer delays, late creation and the exact RBAC.
-- [ ] 6. The approval page and Pushover: the broker's console port behind Authentik
+- [ ] 6. **Superseded by Q-16 (2026-10-08): do not build as written.** Approvals move into the Claude Code app (design spike, issue #91); the Pushover and web page below are ruled out, and the approval surface is redesigned. The original text, for the parts that carry over (the request shape, the audit record, break-glass freshness): the approval page and Pushover: the broker's console port behind Authentik
   (Approve, Approve for less time, Deny, the request as a GrantPolicy snippet), a
   fresh login for break-glass, one Pushover message per request (high priority for
   break-glass).
@@ -85,7 +85,7 @@ In haynes-ops:
 - [x] H2 runtime. The broker Deployment, its network policies and the operator's
   CNP get/delete permission (haynes-ops #3542). Signed operator/broker
   `sha-763fe77` and agent `2.5.0` are deployed; existing sessions are preserved.
-- [ ] H2 approval deployment (step 6). The Pushover ExternalSecret (v1's item
+- [ ] H2 approval deployment (step 6). **Superseded by Q-16 (2026-10-08): do not deploy as written;** it follows the redesigned step 6. As first written: the Pushover ExternalSecret (v1's item
   `upgrade-gate`); the approval page's IngressRoute on an external host, with its
   Authentik blueprint.
 - [ ] H3. The day-one GrantPolicy set, which approves nothing beyond v1 (DESIGN-001

@@ -1,8 +1,8 @@
 # 02: interactive sessions and lifecycle
 
-**Status:** in progress (started 2026-10-07)
+**Status:** in progress (started 2026-10-07); benched from 2026-10-08 after step 11, with step 12 and 13 not started (see HANDOFF)
 **Depends on:** 01
-**Parallel with:** 07 (the access broker)
+**Parallel with:** 07 (the access broker), which is benched too; run one plan at a time (README decision 40)
 
 ## Goal
 
