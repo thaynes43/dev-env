@@ -7,13 +7,14 @@ the saga. To start building, follow
 
 ## State on 2026-10-08
 
-- **dev-env v2 is benched from 2026-10-08** until Tom's Claude and Codex plan usage
-  resets (the Claude weekly limit resets 2026-10-12). **Nothing is in flight:** there
-  are no open PRs, and every merged change is deployed. Resume at:
+- **dev-env v2 resumed on Codex on 2026-10-08**, under Tom's coordinator work
+  order. Work proceeds in order: finish plan 02, assess approvals inside the
+  Claude Code app, check v1 capability parity, then build keeper SSH minting.
+  The Claude weekly limit still resets 2026-10-12. Resume at:
   - **Plan 02:** steps 1 to 11 and acceptance items 1 to 3 are done and deployed
     (#94, [backlog/02](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md)).
-    Step 12 (laptop access) and step 13 (the acceptance run and the update of this
-    page) are not started and have no branch.
+    Step 12 (laptop access, D-68) is in progress. Step 13 needs Tom's laptop
+    list-and-attach check before the plan can be marked done.
   - **Plan 07:** steps 1 to 5 are built and H2 (the broker Deployment) is deployed
     and verified. Step 6 (human approval) is blocked: Q-16 was ruled on 2026-10-08
     (parity first; approvals inside the Claude Code app), and PR #90 and haynes-ops
@@ -23,6 +24,13 @@ the saga. To start building, follow
     docs-only design spike for the approval surface. Draft code: branch
     `agent/plan07-approvals-round3` (dev-env) and `agent/plan07-catalog-round3`
     (haynes-ops).
+  - **Live state checked 2026-10-08:** operator `sha-035dfaa` (2/2), broker
+    `sha-763fe77` (2/2), keeper `sha-fac4751` (1/1), agent template `2.7.0`.
+    `dev-agents` holds only the shelf pod. The shelf and v1 pod had zero
+    container restarts. New dependency PRs appeared after the bench; the
+    coordinator merged green release PR #102 (2.7.1) and is tracking its publish
+    and deployment with the laptop change. Issue #91 remains open; #90 and
+    haynes-ops #3550 remain closed.
 
 ## State on 2026-10-07
 
@@ -205,9 +213,9 @@ the saga. To start building, follow
    checked). The Protect Main ruleset is live and Renovate auto-merge is on.
 2. **Plan 02: interactive sessions and lifecycle.** Plan 01, with KICKOFF B1 to B5,
    is done ([plan 01](sagas/distributed-dev-env/backlog/01-foundation.md)). Plan 02
-   ([backlog/02](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md)) is
-   benched after step 11 (see State on 2026-10-08), and plan 07, the access broker,
-   is benched with it. When unbenched, run one plan at a time (README decision 40).
+   ([backlog/02](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md))
+   resumes at laptop access (see State on 2026-10-08). Plan 07 follows its
+   acceptance check. Run one plan at a time (README decisions 40 and 44).
 3. **Collect the spike results.** S-1, S-1b and S-7 are done, and S-2 is already
    answered (the static token cannot register Remote Control). S-6, S-15 and S-16
    are done, and S-3 passed (keeper-owned Codex auth, DESIGN-001 D-12 step 2), so
@@ -333,7 +341,7 @@ The kubelet itself peaked at only 0.18 cores.
 |---|---|---|
 | gh, git push, GHCR | Yes, as haynes-dev-bot. No prefix: `~/.local/bin/gh` reads `/creds/gh_token` on every call (haynes-ops #3476, 2026-10-07). | Yes, with your own gh login, so PRs author as Tom. GHCR pulls of public images are anonymous. |
 | Code, Go builds, unit tests, envtest | Yes, lightly, under the pod's CPU cap. | Yes. |
-| `kubectl`, `flux` | OPERATOR tier: read plus targeted runtime writes. | None. |
+| `kubectl`, `flux` | OPERATOR tier: read plus targeted runtime writes. | Laptop access needs Tom's existing admin kubeconfig (D-68); its presence is being checked in Q-17. No cluster credential is supplied by this repo. |
 | `declare-activity` | Yes. | No. It writes files on the pod's volume. |
 | MCP servers on cluster DNS (grafana-mcp, home-assistant, blender, audio, vexa, the haynesnetwork hop) | Yes. | No. |
 | The Claude Max login and Codex `auth.json` | Yes, on the pod's volume. Never copied out. | No. Never fetch them. |
