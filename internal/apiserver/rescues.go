@@ -15,10 +15,12 @@ import (
 	"github.com/thaynes43/dev-env/internal/templates"
 )
 
-// RescueShelf lists the rescues on the shared volume: shelf.Shelf, which runs
-// `agentd ctl rescues` in the shelf pod (D-67).
+// RescueShelf lists the rescues on the shared volume and holds one for a
+// restore: shelf.Shelf, which runs `agentd ctl rescues` and `agentd ctl
+// hold-rescue` in the shelf pod (D-67).
 type RescueShelf interface {
 	List(ctx context.Context, session string) (protocol.RescueList, error)
+	Hold(ctx context.Context, id string) (protocol.HoldResult, error)
 }
 
 // listRescues is GET /v1/rescues[?session=] (D-67).
@@ -52,19 +54,29 @@ func (s *Server) listRescues(ctx context.Context, _ http.ResponseWriter, r *http
 	return http.StatusOK, out, nil
 }
 
-// rescues lists the shelf, mapping a missing shelf to a 503.
+// rescues lists the shelf.
 func (s *Server) rescues(ctx context.Context, session string) (protocol.RescueList, error) {
 	if s.Shelf == nil {
-		return protocol.RescueList{}, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "this API has no shelf to list rescues from (D-67)")
+		return protocol.RescueList{}, noShelf()
 	}
 	list, err := s.Shelf.List(ctx, session)
-	if errors.Is(err, shelf.ErrNoShelf) {
-		return list, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "%v: rescues are listed and restored through it (D-67)", err)
+	return list, shelfError(err)
+}
+
+func noShelf() error {
+	return newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "this API has no shelf to list or restore rescues through (D-67)")
+}
+
+// shelfError maps a missing shelf pod to a 503.
+func shelfError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, shelf.ErrNoShelf):
+		return newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "%v: rescues are listed and restored through it (D-67)", err)
+	default:
+		return internal("%v", err)
 	}
-	if err != nil {
-		return list, internal("%v", err)
-	}
-	return list, nil
 }
 
 func rescueView(e protocol.RescueEntry, sessionExists bool, retention time.Duration) apiv1.Rescue {
@@ -102,15 +114,18 @@ func (s *Server) checkRestore(ctx context.Context, req apiv1.CreateSessionReques
 	if err != nil {
 		return invalid(fieldError("restore", "%v", err))
 	}
-	list, err := s.rescues(ctx, from)
-	if err != nil {
-		return err
+	if s.Shelf == nil {
+		return noShelf()
 	}
-	var e *protocol.RescueEntry
-	for i := range list.Rescues {
-		if list.Rescues[i].ID == req.Restore {
-			e = &list.Rescues[i]
-		}
+	// The hold also sets the rescue's time, so no prune takes it before the
+	// new session keeps it.
+	held, err := s.Shelf.Hold(ctx, req.Restore)
+	if err != nil {
+		return shelfError(err)
+	}
+	e := held.Rescue
+	if !held.Found {
+		e = nil
 	}
 	switch {
 	case e == nil:

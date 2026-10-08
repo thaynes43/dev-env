@@ -66,6 +66,10 @@ Commands:
   ctl rescues [--session S]
                            List the rescues on the shared volume as JSON,
                            newest first (D-67).
+  ctl hold-rescue ID       A restore's check (D-67): find the rescue <session>/
+                           <stamp> under the shelf lock and set its directory's
+                           time to now, so no prune takes it before the new
+                           session keeps it; print {"found":...} as JSON.
   ctl prune                Remove rescues and session logs older than the
                            request's retention whose session is not in its keep
                            list; the request is JSON on stdin, the report JSON
@@ -218,13 +222,18 @@ func shelf(ctx context.Context, log *slog.Logger, getenv func(string) string) in
 	return exitOK
 }
 
-// shelfCtl is `ctl rescues [--session S]` and `ctl prune` (D-67).
+// shelfCtl is `ctl rescues [--session S]`, `ctl hold-rescue <id>` and `ctl
+// prune` (D-67).
 func shelfCtl(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) int {
 	fs := flag.NewFlagSet("ctl "+args[0], flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	session := fs.String("session", "", "")
-	if err := fs.Parse(args[1:]); err != nil || fs.NArg() > 0 || (args[0] == "prune" && *session != "") {
-		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl rescues [--session S] | ctl prune (the request on stdin)\n", binaryName)
+	wantArgs := 0
+	if args[0] == "hold-rescue" {
+		wantArgs = 1
+	}
+	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != wantArgs || (args[0] != "rescues" && *session != "") {
+		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl rescues [--session S] | ctl hold-rescue <session>/<stamp> | ctl prune (the request on stdin)\n", binaryName)
 		return exitUsage
 	}
 	s, err := agentd.LoadSettings(getenv)
@@ -233,14 +242,22 @@ func shelfCtl(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv f
 		return exitFailure
 	}
 	var out any
-	if args[0] == "rescues" {
+	switch args[0] {
+	case "hold-rescue":
+		res, err := agentd.HoldRescue(s, fs.Arg(0), time.Now())
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "%s: hold-rescue: %v\n", binaryName, err)
+			return exitFailure
+		}
+		out = res
+	case "rescues":
 		list, err := agentd.ListRescues(s, *session)
 		if err != nil {
 			_, _ = fmt.Fprintf(stderr, "%s: rescues: %v\n", binaryName, err)
 			return exitFailure
 		}
 		out = list
-	} else {
+	default:
 		var req protocol.PruneRequest
 		data, err := io.ReadAll(io.LimitReader(stdin, 1<<20))
 		if err == nil {
@@ -357,7 +374,7 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return grantCtl(args, stdin, stdout, stderr, getenv)
 		case "deliver", "log":
 			return ctlMessageOrLog(ctx, args, stdin, stdout, stderr, getenv, r)
-		case "rescues", "prune":
+		case "rescues", "prune", "hold-rescue":
 			return shelfCtl(args, stdin, stdout, stderr, getenv)
 		}
 	}

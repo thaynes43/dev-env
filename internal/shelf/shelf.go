@@ -98,6 +98,14 @@ func (s *Shelf) List(ctx context.Context, session string) (protocol.RescueList, 
 	return list, err
 }
 
+// Hold is `agentd ctl hold-rescue <id>` in the shelf: a restore's check,
+// which also keeps the rescue from the next prune (D-67).
+func (s *Shelf) Hold(ctx context.Context, id string) (protocol.HoldResult, error) {
+	var res protocol.HoldResult
+	err := s.run(ctx, []string{"agentd", "ctl", "hold-rescue", id}, nil, &res)
+	return res, err
+}
+
 // Prune is `agentd ctl prune` in the shelf, with the request on stdin.
 func (s *Shelf) Prune(ctx context.Context, req protocol.PruneRequest) (protocol.PruneReport, error) {
 	body, err := json.Marshal(req)

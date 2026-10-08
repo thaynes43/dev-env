@@ -125,6 +125,9 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 			add("restore", "%v", err)
 		}
 	}
+	if protocol.IsRescueSnapshot(req.Base) {
+		add("base", "%q is a rescued snapshot of uncommitted work, which can hold secrets, and the session's branch may be pushed: a session never branches from one (D-67)", req.Base)
+	}
 	if req.IdempotencyKey != "" {
 		for _, msg := range validation.IsValidLabelValue(req.IdempotencyKey) {
 			add("idempotencyKey", "%s", msg)

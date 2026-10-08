@@ -130,6 +130,9 @@ func (s Session) Validate() error {
 	if s.Base != "" && !gitRef.MatchString(s.Base) {
 		errs = append(errs, fmt.Errorf("base %q is not a ref", s.Base))
 	}
+	if IsRescueSnapshot(s.Base) {
+		errs = append(errs, fmt.Errorf("base %q is a rescued snapshot of uncommitted work, which can hold secrets; a session never branches from one (D-67)", s.Base))
+	}
 	if s.Restore != "" {
 		if _, _, err := ParseRescueID(s.Restore); err != nil {
 			errs = append(errs, err)

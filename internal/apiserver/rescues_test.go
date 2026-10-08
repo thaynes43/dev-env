@@ -18,6 +18,21 @@ type fakeShelf struct {
 	list  protocol.RescueList
 	err   error
 	asked []string
+	held  []string
+}
+
+func (f *fakeShelf) Hold(_ context.Context, id string) (protocol.HoldResult, error) {
+	f.held = append(f.held, id)
+	if f.err != nil {
+		return protocol.HoldResult{}, f.err
+	}
+	for i := range f.list.Rescues {
+		if f.list.Rescues[i].ID == id {
+			e := f.list.Rescues[i]
+			return protocol.HoldResult{Found: true, Rescue: &e}, nil
+		}
+	}
+	return protocol.HoldResult{}, nil
 }
 
 func (f *fakeShelf) List(_ context.Context, session string) (protocol.RescueList, error) {
@@ -95,13 +110,14 @@ func TestListRescues(t *testing.T) {
 func TestCreateRestore(t *testing.T) {
 	const old = "haynes-ops-1001-090000"
 	f := newFixture(t)
-	f.srv.Shelf = &fakeShelf{list: protocol.RescueList{Rescues: []protocol.RescueEntry{
+	sh := &fakeShelf{list: protocol.RescueList{Rescues: []protocol.RescueEntry{
 		rescueEntry(old, "20261001-1200", true, map[string][]string{
 			"haynes-ops": {"refs/heads/agent/" + old, "refs/heads/rescue/" + old + "-20261001-1200"},
 			"other":      {"refs/heads/main"},
 		}),
 		rescueEntry(old, "20261001-1100", false, map[string][]string{"haynes-ops": {"refs/heads/agent/" + old}}),
 	}}}
+	f.srv.Shelf = sh
 
 	req := task()
 	req.Restore = old + "/20261001-1200"
@@ -114,6 +130,10 @@ func TestCreateRestore(t *testing.T) {
 	// The old session's branch is the base; its rescue branch never is.
 	if s.Spec.Restore != req.Restore || s.Spec.Base != "refs/rescued/heads/agent/"+old || got.Restore != req.Restore {
 		t.Errorf("spec restore %q base %q, view restore %q", s.Spec.Restore, s.Spec.Base, got.Restore)
+	}
+	// The check is a hold, which keeps the rescue from the next prune.
+	if len(sh.held) != 1 || sh.held[0] != req.Restore {
+		t.Errorf("held %q", sh.held)
 	}
 
 	req.Base = "origin/feature"
@@ -144,6 +164,16 @@ func TestCreateRestore(t *testing.T) {
 				t.Errorf("fields %+v, want restore: %q", e.Fields, c.want)
 			}
 		})
+	}
+
+	// A rescued snapshot is never a base, asked for or not.
+	for _, base := range []string{"refs/rescued/heads/rescue/" + old + "-20261001-1200", "rescued/heads/rescue/x", "refs/rescued/agentd-rescue/stash/0"} {
+		r := task()
+		r.Restore, r.Base = old+"/20261001-1200", base
+		e := wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, r), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+		if len(e.Fields) != 1 || e.Fields[0].Field != "base" {
+			t.Errorf("base %q: fields %+v", base, e.Fields)
+		}
 	}
 
 	f.srv.Shelf = &fakeShelf{err: shelf.ErrNoShelf}

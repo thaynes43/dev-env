@@ -16,6 +16,10 @@ import (
 // logs/<session>.log.
 const LogsRoot = "logs"
 
+// ShelfLockFile is the lock on the shared volume's root that a prune and a
+// restore's hold take, so neither runs halfway through the other (D-67).
+const ShelfLockFile = ".shelf.lock"
+
 // MinPruneAge is the youngest age a prune may remove. A prune asked to remove
 // anything younger is refused: a misread retention must not empty the shelf.
 const MinPruneAge = 24 * time.Hour
@@ -79,6 +83,23 @@ func (e RescueEntry) Age(now time.Time) time.Duration {
 	}
 	return now.Sub(t)
 }
+
+// HoldResult is what `agentd ctl hold-rescue <id>` prints. A found rescue's
+// directory time is now the hold's, so a prune counts its age from the hold.
+type HoldResult struct {
+	Found  bool         `json:"found"`
+	Rescue *RescueEntry `json:"rescue,omitempty"`
+}
+
+// rescueSnapshot matches a ref a restore puts a rescue's snapshot under: a
+// rescue branch (D-10 step 1's uncommitted work and untracked files) or a stash
+// entry, by full name or by the short name git also resolves.
+var rescueSnapshot = regexp.MustCompile(`(^|/)rescued/(heads/rescue|agentd-rescue)/`)
+
+// IsRescueSnapshot reports whether a base names a rescued snapshot. A session
+// never branches from one (D-67): it can hold secrets, and the session's
+// branch may be pushed.
+func IsRescueSnapshot(ref string) bool { return rescueSnapshot.MatchString(ref) }
 
 // RescueList is what `agentd ctl rescues` prints, newest first.
 type RescueList struct {

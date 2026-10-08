@@ -113,6 +113,12 @@ func TestListAndPruneRunAgentdInTheShelf(t *testing.T) {
 		t.Errorf("prune ran %q", ex.cmds[1])
 	}
 
+	ex.out = `{"found":true,"rescue":{"id":"a/20261008-0024","session":"a","name":"20261008-0024"}}`
+	held, err := s.Hold(context.Background(), "a/20261008-0024")
+	if err != nil || !held.Found || held.Rescue.ID != "a/20261008-0024" || ex.cmds[2] != "agentd ctl hold-rescue a/20261008-0024" {
+		t.Errorf("hold = %+v, %v, ran %q", held, err, ex.cmds[2])
+	}
+
 	ex.out, ex.errOut, ex.err = "", "agentd: prune: olderThan 1h0m0s is below the floor", errors.New("exit 1")
 	if _, err := s.Prune(context.Background(), protocol.PruneRequest{OlderThan: "1h"}); err == nil || !strings.Contains(err.Error(), "below the floor") {
 		t.Errorf("a failed exec: err = %v, want agentd's stderr in it", err)

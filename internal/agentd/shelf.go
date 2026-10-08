@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -165,6 +166,17 @@ func Prune(s Settings, req protocol.PruneRequest, now time.Time) (protocol.Prune
 	for _, k := range req.Keep {
 		keep[k] = true
 	}
+	if err := sharedIsMounted(s.SharedDir, s.Home); err != nil {
+		return rep, err
+	}
+	// A restore's hold waits for the prune, or the prune for the hold: a
+	// rescue is either gone before its hold, or held before the prune reads
+	// its age.
+	unlock, err := lockShelf(s)
+	if err != nil {
+		return rep, err
+	}
+	defer unlock()
 	list, err := ListRescues(s, "")
 	if err != nil {
 		return rep, err
@@ -220,6 +232,58 @@ func Prune(s Settings, req protocol.PruneRequest, now time.Time) (protocol.Prune
 		rep.Removed = append(rep.Removed, protocol.PrunedPath{Path: rel, Session: session, Age: age.Round(time.Minute).String(), Bytes: fi.Size()})
 	}
 	return rep, nil
+}
+
+// lockShelf takes an exclusive lock on the shared volume's ShelfLockFile.
+// CephFS keeps flock across clients, so it holds across a rollout's two shelf
+// pods too.
+func lockShelf(s Settings) (func(), error) {
+	f, err := os.OpenFile(filepath.Join(s.SharedDir, protocol.ShelfLockFile), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("the shelf lock: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("the shelf lock: %w", err)
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}, nil
+}
+
+// HoldRescue is a restore's check (D-67): under the shelf lock, it finds the
+// rescue and sets its directory's time to now, so a prune counts its age from
+// the hold. The new session keeps it from then on.
+func HoldRescue(s Settings, id string, now time.Time) (protocol.HoldResult, error) {
+	session, name, err := protocol.ParseRescueID(id)
+	if err != nil {
+		return protocol.HoldResult{}, err
+	}
+	if err := sharedIsMounted(s.SharedDir, s.Home); err != nil {
+		return protocol.HoldResult{}, err
+	}
+	unlock, err := lockShelf(s)
+	if err != nil {
+		return protocol.HoldResult{}, err
+	}
+	defer unlock()
+	abs := filepath.Join(s.SharedDir, filepath.FromSlash(protocol.RescueDir(session, name)))
+	fi, err := os.Lstat(abs)
+	if errors.Is(err, fs.ErrNotExist) {
+		return protocol.HoldResult{}, nil
+	}
+	if err != nil {
+		return protocol.HoldResult{}, err
+	}
+	if !fi.IsDir() {
+		return protocol.HoldResult{}, fmt.Errorf("rescue %s is not a directory", id)
+	}
+	if err := os.Chtimes(abs, now, now); err != nil {
+		return protocol.HoldResult{}, err
+	}
+	e := readRescue(s, session, name)
+	return protocol.HoldResult{Found: true, Rescue: &e}, nil
 }
 
 // removeDir removes a rescue directory, after checking it is still a

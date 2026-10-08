@@ -43,7 +43,7 @@ cmd/dev-env-operator/    the operator, and the access broker as its second mode,
 cmd/dev-env-keeper/      the keeper, its own binary in the operator image (D-38); main only, the work is internal/keeper
 cmd/agentd/              the in-pod supervisor: `run`, `hold` (the rescue pod, D-55), `shelf` (the shelf pod, D-67), `run-agent`
                          (a task, or a TUI, D-58), `render`, `ctl status|rescue [--stop-agent]|prepare-restart` (D-40 to D-43,
-                         D-48, D-58), `ctl deliver|log` (D-65), `ctl rescues|prune` (D-67),
+                         D-48, D-58), `ctl deliver|log` (D-65), `ctl rescues|hold-rescue|prune` (D-67),
                          `ctl grant-install|grant-remove|grant-list|grant-use` (D-63)
 cmd/agent-run/           the CLI, one static binary (CGO_ENABLED=0, D-06); main only, the commands are internal/agentrun
 internal/version/        the build identity every binary's `version` prints

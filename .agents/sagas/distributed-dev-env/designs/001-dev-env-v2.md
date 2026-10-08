@@ -1738,7 +1738,9 @@ restore is a new session that fetches one.**
   that is older than the retention and whose session is not on the list. A rescue's
   age counts from the later of its manifest's time and its last change. A
   session's emptied directory goes with its last rescue, and agentd refuses a
-  retention under 24 hours.
+  retention under 24 hours. A prune holds `.shelf.lock` on the shared volume's
+  root (`flock`, which CephFS keeps across clients) from its listing to its last
+  delete.
   - **A bundle of a session that still exists is never pruned.** A suspended
     session's archive relies on its bundle (D-62), and an archived session is
     restored from it. So D-09's 30 days count from the rescue once its session is
@@ -1747,9 +1749,12 @@ restore is a new session that fetches one.**
 - **Restore.** `POST /v1/sessions` with `restore: <session>/<name>` creates an
   ordinary session: task or local, any agent. Whoever may create a session may
   restore one. `spec.restore` (immutable) carries the id to agentd.
-  - **Before create.** The API checks the rescue through the shelf. It must have
-    finished, its manifest must be complete, and it must hold a bundle for the
-    session's repo. `agent-run rescue restore` takes the repo from the rescue
+  - **Before create.** The API checks the rescue through the shelf with `agentd ctl
+    hold-rescue <id>`. Under the same lock as a prune, the hold finds the rescue
+    and sets its directory's time to now. So a rescue is either gone before its
+    hold, and the restore is refused, or held before a prune reads its age, and
+    kept until the new session keeps it. The rescue must have finished, its manifest
+    must be complete, and it must hold a bundle for the session's repo. `agent-run rescue restore` takes the repo from the rescue
     when it holds one clone.
   - **First boot.** After the clone, agentd checks the bundle's size and SHA-256
     against the manifest and runs `git bundle verify`. Then it fetches
@@ -1762,10 +1767,12 @@ restore is a new session that fetches one.**
   the old session's branch `refs/heads/agent/<session>`, the new worktree starts at
   `refs/rescued/heads/agent/<session>`. Otherwise it starts at origin's default
   branch.
-  - A rescue branch (`refs/rescued/heads/rescue/…`, D-10 step 1's uncommitted work
-    and untracked files) is never the base. It can hold secrets, and the session's
-    branch may be pushed. It stays a ref to look at, and `agent-run rescue restore`
-    says so.
+  - A rescued snapshot is never the base, asked for or not: a rescue branch
+    (`refs/rescued/heads/rescue/…`, D-10 step 1's uncommitted work and untracked
+    files) or a stash entry (`refs/rescued/agentd-rescue/…`). It can hold secrets,
+    and the session's branch may be pushed. The API refuses such a base, and so does
+    agentd's check of the session document, which the operator runs before it builds
+    a pod. A snapshot stays a ref to look at, and `agent-run rescue restore` says so.
 
 ## 5. Rolling updates
 
@@ -4300,4 +4307,4 @@ credential grants) was answered on 2026-10-07 too. ADR-001 was Accepted on
 | D-64 | One scoped CiliumNetworkPolicy per egress grant, separate FQDN/CIDR/endpoint rules with requested ports, source excluding hold pods; verified ownership and UID-precondition revoke; a separate operator expiry controller reads policies by name with get/delete-only RBAC and preserves audit records when the broker is unavailable | 6.12 |
 | D-65 | Messages and logs run agentd by exec in the session's running pod: `POST /v1/sessions/{name}/messages` → `agentd ctl deliver` (one bracketed paste and Enter into the Claude TUI, `codex queue` for Codex, 409 for a headless task), never retried by agent-run; `GET .../log?tail=N` → `agentd ctl log`; the log is copied to `~/.shared/logs/` | 6.8 |
 | D-66 | `Activity` CRD in `dev-env-system`: created only by `POST /v1/activities` with v1's limits enforced (scope required, 45m default, 8h cap, 2h for `cluster`), the declarer from the token, deleted by the operator at expiry; `declare-activity` is agent-run by another name; dev-env-ops reads both v1's files and the CRD | 6.9 |
-| D-67 | A `dev-env-shelf` Deployment in `dev-agents` mounts only the shared volume and runs `agentd shelf`; the operator lists (`GET /v1/rescues`) and prunes (leader, every 6 h, `lifecycle.bundleRetention`, never a bundle of a session that still exists, logs too) there by exec; a restore is `POST /v1/sessions` with `restore`, checked through the shelf, and agentd fetches the bundle into `refs/rescued/*` on the first boot; the base defaults to the old session's rescued branch, never a rescue branch | 4.5 |
+| D-67 | A `dev-env-shelf` Deployment in `dev-agents` mounts only the shared volume and runs `agentd shelf`; the operator lists (`GET /v1/rescues`) and prunes (leader, every 6 h, `lifecycle.bundleRetention`, never a bundle of a session that still exists, logs too) there by exec; a restore is `POST /v1/sessions` with `restore`, checked and held through the shelf under the prune's lock, and agentd fetches the bundle into `refs/rescued/*` on the first boot; the base defaults to the old session's rescued branch and is never a rescued snapshot (rescue branch or stash) | 4.5 |

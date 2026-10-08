@@ -167,6 +167,53 @@ func TestListRescuesAndPrune(t *testing.T) {
 	}
 }
 
+// A restore's hold resets a rescue's age, so the prune that follows keeps it;
+// a prune and a hold never run at once.
+func TestHoldRescueKeepsItFromThePrune(t *testing.T) {
+	s := shelfDir(t)
+	old := shelfNow.Add(-40 * 24 * time.Hour)
+	putRescue(t, s, "gone-1001-000000", "20260829-1200", old, true)
+	putRescue(t, s, "gone-1001-000000", "20260829-1300", old, true)
+	age(t, filepath.Join(s.SharedDir, "rescue", "gone-1001-000000"), old)
+
+	if res, err := HoldRescue(s, "gone-1001-000000/20260101-0000", shelfNow); err != nil || res.Found {
+		t.Fatalf("hold of a missing rescue = %+v, %v", res, err)
+	}
+	if _, err := HoldRescue(s, "../etc", shelfNow); err == nil {
+		t.Fatal("held a path outside rescue/")
+	}
+	res, err := HoldRescue(s, "gone-1001-000000/20260829-1200", shelfNow)
+	if err != nil || !res.Found || res.Rescue == nil || res.Rescue.Manifest == nil || !res.Rescue.ModifiedAt.Equal(shelfNow) {
+		t.Fatalf("hold = %+v, %v", res, err)
+	}
+	rep, err := Prune(s, protocol.PruneRequest{OlderThan: "720h"}, shelfNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Removed) != 1 || rep.Removed[0].Path != "rescue/gone-1001-000000/20260829-1300" {
+		t.Errorf("removed %+v, want only the rescue no one held", rep.Removed)
+	}
+
+	unlock, err := lockShelf(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := Prune(s, protocol.PruneRequest{OlderThan: "720h"}, shelfNow)
+		done <- err
+	}()
+	select {
+	case <-done:
+		t.Fatal("a prune ran while the shelf lock was held")
+	case <-time.After(100 * time.Millisecond):
+	}
+	unlock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestListRescuesNeedsTheSharedVolume(t *testing.T) {
 	home := t.TempDir()
 	s := Settings{Home: home, SharedDir: filepath.Join(home, ".shared")}
@@ -285,6 +332,20 @@ func TestParseRescueID(t *testing.T) {
 		if _, _, err := protocol.ParseRescueID(ok); err != nil {
 			t.Errorf("%q refused: %v", ok, err)
 		}
+	}
+	for ref, want := range map[string]bool{
+		"refs/rescued/heads/rescue/s-20261008-0024": true, "rescued/heads/rescue/x": true,
+		"refs/rescued/agentd-rescue/stash/0": true, "refs/rescued/heads/agent/s": false, "origin/main": false,
+		"refs/heads/rescue/x": false,
+	} {
+		if got := protocol.IsRescueSnapshot(ref); got != want {
+			t.Errorf("IsRescueSnapshot(%q) = %v", ref, got)
+		}
+	}
+	sess := cloneSession("demo-1008-090000")
+	sess.Base = "refs/rescued/heads/rescue/demo-1006-170000-20261006-1730"
+	if err := sess.Validate(); err == nil {
+		t.Error("a session document with a rescued snapshot as its base passed")
 	}
 	for _, bad := range []string{"", "x", "../20261008-0024", "a/../b", "a/20261008-0024/x", "A/20261008-0024", "a/2026", "a/20261008-0024-", "/20261008-0024"} {
 		if _, _, err := protocol.ParseRescueID(bad); err == nil {
