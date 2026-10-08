@@ -275,7 +275,9 @@ the saga. To start building, follow
 | Q-15 | The keeper mints a Proxmox grant's token over SSH (A): "Keeper mints over SSH (Recommended)". With a certificate from its own SSH CA it runs `sudo pvesh create /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0` on a node and deletes the token at the grant's end. No new Proxmox user, and v2 never holds the long-lived token. Port 22 from the keeper to the nodes. |
 | Q-16 | Parity first, approvals in the Claude Code app (Tom, 2026-10-08). "I am open to advanced security but I must be able to grant permission from my phone." No new guard cuts what agents do today (no Authentik, outpost, Traefik or postgres16 lockdown, no git review or CODEOWNERS gate); standing auto-approved grants cover everything a v1 agent does (OPERATOR kube tier, Proxmox via the keeper's SSH minting, hw-ssh), and any gap blocks the cutover. Human approval gates only capabilities beyond today's (secret reads, break-glass above OPERATOR). Approvals happen inside the Claude Code app, not Pushover plus a web page. Residual risk accepted: Flux is cluster-admin and agents self-merge. The approval surface is the next design spike (issue #91). |
 
-**Open:** none (the approval surface is a design spike, not a question yet; issue #91).
+**Open:** Q-17, whether Tom's laptop already has a working main-cluster admin
+kubeconfig. The laptop acceptance check waits for that prerequisite. The
+approval surface remains the next design spike (issue #91).
 
 **Settings only Tom can click** (no decision needed). An agent on his laptop does
 them from [`handoffs/2026-10-06-tom-laptop-settings.md`](handoffs/2026-10-06-tom-laptop-settings.md),

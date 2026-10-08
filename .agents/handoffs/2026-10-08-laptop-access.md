@@ -47,7 +47,7 @@ binary just built, in a shell without API URL, token-file or CA-file overrides:
 
 ```sh
 unset DEV_ENV_API_URL DEV_ENV_API_TOKEN_FILE DEV_ENV_API_CA_FILE
-unset AGENTD_API_URL AGENTD_API_CA_FILE
+unset AGENTD_API_URL AGENTD_API_TOKEN_FILE AGENTD_API_CA_FILE
 ./bin/agent-run-darwin-arm64 fleet --context MAIN_CONTEXT
 ./bin/agent-run-darwin-arm64 list --context MAIN_CONTEXT
 ./bin/agent-run-darwin-arm64 --context MAIN_CONTEXT --repo dev-env --local --model claude-haiku-4-5 --size S --wait 2m -o name

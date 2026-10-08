@@ -4245,7 +4245,8 @@ Each blocks building. Ask Tom one at a time; fold the answer back in as a dated
 ruling. Q-01 to Q-11 were all answered on 2026-10-06, and so were Q-13 and Q-14. Q-12
 was settled on 2026-10-07: Tom made the repo public (B). Q-15 (plan 07, Proxmox
 credential grants) was answered on 2026-10-07 too. Q-16 (how the human-approval authority is protected and surfaced) was ruled on 2026-10-08. ADR-001 was Accepted on
-2026-10-06. Each blocks only the KICKOFF step it names.
+2026-10-06. Q-17 checks the laptop prerequisite for plan 02 acceptance; it does
+not block building the laptop client. Each blocks only the step it names.
 
 | Id | Question | Options (recommended first) | Resolution |
 |---|---|---|---|
