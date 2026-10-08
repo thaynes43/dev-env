@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.9.0](https://github.com/thaynes43/dev-env/compare/v2.8.0...v2.9.0) (2026-10-08)
+
+
+### Features
+
+* add disabled keeper-owned Proxmox credential backend ([#111](https://github.com/thaynes43/dev-env/issues/111)) ([eeb15e3](https://github.com/thaynes43/dev-env/commit/eeb15e37ffdcc990f8ae780b7c73e7ce4b166e25))
+
+
+### Bug Fixes
+
+* omit agent credential mounts from rescue holds ([#108](https://github.com/thaynes43/dev-env/issues/108)) ([d4c48bc](https://github.com/thaynes43/dev-env/commit/d4c48bca5cbc0f0f114d14bf9a8b3194c67f09f3))
+
 ## [2.8.0](https://github.com/thaynes43/dev-env/compare/v2.7.1...v2.8.0) (2026-10-08)
 
 
