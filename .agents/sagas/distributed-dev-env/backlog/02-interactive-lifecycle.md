@@ -113,14 +113,31 @@ the cluster.
   as a client of it. In haynes-ops: the CRD, the operator's rights, read on the group
   for v1's OPERATOR tier and `dev-env-ops`, and `dev-activity-check.sh` reading both
   sources.
-- [ ] 11. **Rescues: list, restore and pruning.** `GET /v1/rescues`, `POST
+- [x] 11. **Rescues: list, restore and pruning.** `GET /v1/rescues`, `POST
   /v1/rescues/{id}/restore`, `agent-run rescue list|restore` (D-48's recipe), and
   bundles pruned after D-09's 30 days. *Built (D-67):* the shelf pod (`agentd
   shelf`, a haynes-ops Deployment) that the operator lists and prunes through,
   `GET /v1/rescues`, a restore as `restore` on `POST /v1/sessions` with the fetch on
   the first boot, the leader's pruner (logs too), and `agent-run rescue
-  list|restore`. Deploy: the CRD copy, the shelf, the agent image and the operator
-  pin in haynes-ops.
+  list|restore`. *Deployed 2026-10-08:*
+  - haynes-ops #3551 added the CRD with `spec.restore`.
+  - haynes-ops #3552 added the shelf Deployment, dev-env 2.7.0 and operator
+    sha-035dfaa.
+
+  *Verified 2026-10-08:*
+  - The shelf pod started and found the shared volume ("shelf ready",
+    `rescues=1`).
+  - `agent-run rescue list` showed `dev-env-1007-050430/20261007-0506`, complete,
+    kept until 2026-11-06.
+  - `agent-run rescue restore` of that rescue made session `dev-env-1008-011600`.
+    On its first boot, its clone held
+    `refs/rescued/heads/rescue/dev-env-1007-050430-20261007-0506`, carrying plan
+    01's uncommitted `e2e-probe.txt`. The worktree sat at origin/main, because the
+    bundle held no agent branch. The hold moved the rescue's keep date to
+    2026-11-07.
+  - The reap rescued the new session (`CleanAndPushed`) and archived its volume.
+  - The leader's first prune ran ten minutes after start: retention 720h, 0
+    removed, 3 kept.
 - [ ] 12. **The laptop path** (D-05). `agent-run` outside the cluster mints a
   `dev-env-human` token and port-forwards with the kubeconfig, and checks the API's
   certificate against the pinned CA by its service name. A handoff for an agent on
@@ -136,8 +153,29 @@ Codex session.
 
 - A `local` session is suspended after its idle window, resumed with
   `agent-run resume`, and `claude --resume` shows the earlier conversation.
+  *Verified 2026-10-08* (session `dev-env-1008-001530`, Haiku 4.5, `--local
+  --idle-suspend-after 4m`):
+  - The agent's last activity was at 00:20:29Z. The operator suspended the
+    session at 00:24:32Z with the event `IdleSuspend`. The rescue was
+    `CleanAndPushed`, and `suspendedBy` read `idle-timer`.
+  - `agent-run resume` started a new pod with `claude --resume` on the same
+    conversation id. Asked by `agent-run msg` for the code word given before the
+    suspend, the agent answered `PINEAPPLE-42`.
 - A declared activity shows up in dev-env-ops' check output with the declaring
-  session id.
+  session id. *Verified 2026-10-08:*
+  - `declare-activity start` ran in session `dev-env-1008-001530`'s pod, by exec.
+    The agent itself rightly declined the request, because it came by
+    `agent-run msg`, which it treats as information, not instructions.
+  - dev-env-ops' `dev-activity-check.sh dev-env-system` listed `act-002201-640020
+    by=session/dev-env-1008-001530` as matched (haynes-ops #3546).
+  - The run found jq 1.6 parsing `expiresAt` an hour late under the pod's New
+    York time zone. haynes-ops #3549 fixed that, and the same bug in
+    health-gate and alert-responder.
 - `agent-run msg <id> "…"` reaches a Claude TUI session and a Codex session in
-  another pod.
+  another pod. *Claude, verified 2026-10-08:*
+  - `agent-run msg dev-env-1008-001530` from the v1 pod delivered into the
+    Haiku TUI.
+  - The paste arrived framed as from `client/dev/dev-env`, and the agent replied
+    `noted` as asked.
+  - The Codex half runs with plan 04 (below).
 - Tom lists and attaches to sessions from his laptop.
