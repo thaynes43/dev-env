@@ -2,11 +2,13 @@ package broker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -15,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
@@ -452,6 +455,195 @@ func TestCredentialBrokerRestartAndLostCreateResponse(t *testing.T) {
 	}
 	if g := f.getGrant(); g.Status.InstalledPodUID != string(f.pod.UID) {
 		t.Fatal("restart did not accept validated receipt")
+	}
+}
+
+func TestCredentialBrokerCleanupFinalizerConflictAndRestart(t *testing.T) {
+	for _, replacement := range []bool{false, true} {
+		name := "restart"
+		if replacement {
+			name = "same-name job replacement"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := credentialCase(t)
+			f.start()
+			f.receipt(v1alpha1.CredentialRevoked)
+			j := f.job()
+			ctx := context.Background()
+			if err := f.c.Delete(ctx, f.getGrant()); err != nil {
+				t.Fatal(err)
+			}
+			original := f.b.Client
+			conflicted, deleted := false, false
+			f.b.Client = interceptor.NewClient(f.c, interceptor.Funcs{
+				Patch: func(ctx context.Context, c client.WithWatch, o client.Object, p client.Patch, opts ...client.PatchOption) error {
+					if g, ok := o.(*v1alpha1.AccessGrant); ok && !controllerutil.ContainsFinalizer(g, Finalizer) {
+						conflicted = true
+						return apierrors.NewConflict(v1alpha1.GroupVersion.WithResource("accessgrants").GroupResource(), g.Name, errors.New("fixture finalizer conflict"))
+					}
+					return c.Patch(ctx, o, p, opts...)
+				},
+				Delete: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.DeleteOption) error {
+					if _, ok := o.(*v1alpha1.CredentialJob); ok {
+						var persisted v1alpha1.AccessGrant
+						if err := c.Get(ctx, client.ObjectKeyFromObject(f.g), &persisted); err != nil {
+							t.Fatal(err)
+						}
+						var receipt credentialCleanupReceipt
+						if err := json.Unmarshal([]byte(persisted.Annotations[credentialCleanupReceiptAnnotation]), &receipt); err != nil ||
+							receipt.GrantUID != f.g.UID || receipt.JobUID != j.UID || !receipt.RevokedAt.Equal(j.Status.RevokedAt) {
+							t.Fatal("job deletion preceded its durable keeper-confirmed cleanup receipt")
+						}
+						deleted = true
+					}
+					return c.Delete(ctx, o, opts...)
+				},
+			})
+			if res, err := f.step(); err != nil || res.RequeueAfter == 0 || !conflicted || !deleted {
+				t.Fatalf("finalizer-conflict boundary: %+v %v, conflict=%t deletion=%t", res, err, conflicted, deleted)
+			}
+			if err := f.c.Get(ctx, client.ObjectKeyFromObject(j), &v1alpha1.CredentialJob{}); !apierrors.IsNotFound(err) {
+				t.Fatal("confirmed revoked job was not deleted before the finalizer conflict")
+			}
+			if !controllerutil.ContainsFinalizer(f.getGrant(), Finalizer) {
+				t.Fatal("conflicted finalizer update unexpectedly removed the grant")
+			}
+			// All in-memory state is lost, and feature-off cleanup must still finish.
+			f.b = &Broker{Client: original, APIReader: f.c, SessionNamespace: sessionNS, PolicyNamespace: systemNS, Clock: f.clk}
+			if replacement {
+				j.ResourceVersion, j.UID = "", "55555555-5555-5555-5555-555555555555"
+				if err := f.c.Create(ctx, j); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := f.step(); err == nil {
+					t.Fatal("matching cleanup receipt ignored a replacement execution object's UID")
+				}
+				if !controllerutil.ContainsFinalizer(f.getGrant(), Finalizer) || f.creates != 1 {
+					t.Fatal("replacement execution object finished cleanup or caused broker remint")
+				}
+				return
+			}
+			if _, err := f.step(); err != nil {
+				t.Fatalf("restart could not finish confirmed cleanup with a missing job: %v", err)
+			}
+			if err := f.c.Get(ctx, client.ObjectKeyFromObject(f.g), &v1alpha1.AccessGrant{}); !apierrors.IsNotFound(err) || f.creates != 1 {
+				t.Fatal("restart retained the grant or created another execution job")
+			}
+		})
+	}
+}
+
+func TestCredentialBrokerCleanupReceiptWriteConflict(t *testing.T) {
+	f := credentialCase(t)
+	f.start()
+	f.receipt(v1alpha1.CredentialRevoked)
+	ctx := context.Background()
+	if err := f.c.Delete(ctx, f.getGrant()); err != nil {
+		t.Fatal(err)
+	}
+	original := f.b.Client
+	f.b.Client = interceptor.NewClient(f.c, interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, o client.Object, p client.Patch, opts ...client.PatchOption) error {
+		if g, ok := o.(*v1alpha1.AccessGrant); ok && g.Annotations[credentialCleanupReceiptAnnotation] != "" {
+			return apierrors.NewConflict(v1alpha1.GroupVersion.WithResource("accessgrants").GroupResource(), g.Name, errors.New("fixture cleanup receipt conflict"))
+		}
+		return c.Patch(ctx, o, p, opts...)
+	}})
+	if _, err := f.step(); !apierrors.IsConflict(err) {
+		t.Fatalf("receipt-write conflict did not remain retryable: %v", err)
+	}
+	if g := f.getGrant(); g.Annotations[credentialCleanupReceiptAnnotation] != "" || !controllerutil.ContainsFinalizer(g, Finalizer) {
+		t.Fatal("failed receipt write claimed confirmed cleanup or removed the grant")
+	}
+	if j := f.job(); j.Status.Phase != v1alpha1.CredentialRevoked || !j.DeletionTimestamp.IsZero() {
+		t.Fatal("failed receipt persistence deleted its keeper proof")
+	}
+	f.b.Client = original
+	if _, err := f.step(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.Get(ctx, client.ObjectKeyFromObject(f.g), &v1alpha1.AccessGrant{}); !apierrors.IsNotFound(err) {
+		t.Fatal("successful receipt retry did not finish grant deletion")
+	}
+}
+
+func TestCredentialBrokerMissingJobRequiresCleanupReceipt(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*credentialCleanupReceipt)
+		raw  string
+	}{
+		{name: "no receipt"},
+		{name: "wrong grant UID", edit: func(r *credentialCleanupReceipt) { r.GrantUID = "another-grant-uid" }},
+		{name: "wrong job UID", edit: func(r *credentialCleanupReceipt) { r.JobUID = "another-job-uid" }},
+		{name: "no revoked time", edit: func(r *credentialCleanupReceipt) { r.RevokedAt = metav1.Time{} }},
+		{name: "revoked before grant", edit: func(r *credentialCleanupReceipt) { r.RevokedAt = metav1.NewTime(r.RevokedAt.Add(-time.Minute)) }},
+		{name: "future revoked time", edit: func(r *credentialCleanupReceipt) { r.RevokedAt = metav1.NewTime(r.RevokedAt.Add(time.Minute)) }},
+		{name: "malformed receipt", raw: "not-json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := credentialCase(t)
+			f.start()
+			j := f.job()
+			g := f.getGrant()
+			if tc.edit != nil {
+				receipt := credentialCleanupReceipt{GrantUID: g.UID, JobUID: j.UID, RevokedAt: metav1.NewTime(f.clk.Now())}
+				tc.edit(&receipt)
+				encoded, err := json.Marshal(receipt)
+				if err != nil {
+					t.Fatal(err)
+				}
+				g.Annotations[credentialCleanupReceiptAnnotation] = string(encoded)
+			} else if tc.raw != "" {
+				g.Annotations[credentialCleanupReceiptAnnotation] = tc.raw
+			}
+			ctx := context.Background()
+			if err := f.c.Update(ctx, g); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.c.Delete(ctx, j); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.c.Delete(ctx, g); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.step(); !apierrors.IsNotFound(err) {
+				t.Fatalf("unexplained missing pinned job lost its failure: %v", err)
+			}
+			if retained := f.getGrant(); !controllerutil.ContainsFinalizer(retained, Finalizer) || retained.Status.Phase != v1alpha1.GrantActive || retained.Status.EndedAt != nil || f.creates != 1 {
+				t.Fatal("unconfirmed cleanup ended the grant or created a replacement execution job")
+			}
+		})
+	}
+}
+
+func TestCredentialBrokerCleanupReceiptCannotRemintOrEndEarly(t *testing.T) {
+	for _, release := range []bool{false, true} {
+		t.Run(map[bool]string{false: "active install", true: "early release"}[release], func(t *testing.T) {
+			f := credentialCase(t)
+			f.start()
+			f.receipt(v1alpha1.CredentialRevoked)
+			j := f.job()
+			g := f.getGrant()
+			encoded, err := json.Marshal(credentialCleanupReceipt{GrantUID: g.UID, JobUID: j.UID, RevokedAt: *j.Status.RevokedAt})
+			if err != nil {
+				t.Fatal(err)
+			}
+			g.Annotations[credentialCleanupReceiptAnnotation] = string(encoded)
+			g.Spec.Release = release
+			ctx := context.Background()
+			if err := f.c.Update(ctx, g); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.c.Delete(ctx, j); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.step(); !apierrors.IsNotFound(err) {
+				t.Fatalf("non-deleting grant reused cleanup receipt for execution or release: %v", err)
+			}
+			if retained := f.getGrant(); retained.Status.Phase != v1alpha1.GrantActive || retained.Status.EndedAt != nil || f.creates != 1 {
+				t.Fatal("cleanup receipt reminted credentials or claimed early revocation")
+			}
+		})
 	}
 }
 
