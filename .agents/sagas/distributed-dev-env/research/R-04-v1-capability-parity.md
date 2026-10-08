@@ -99,6 +99,45 @@ was ended. No natural hold pod was needed. No PVE LAN check or Cloudflare/GCP AP
 mutation/token exchange was performed. P-11/P-12 remain unchecked for their full
 closure evidence; their missing-reference regressions are fixed.
 
+## Proxmox backend progress (2026-10-08)
+
+Dev-env [#111](https://github.com/thaynes43/dev-env/pull/111), main `eeb15e3`, built
+the disabled backend: immutable session/job identities, broker cleanup receipts,
+keeper pinned SSH and private journal recovery, typed agentd files and PVE
+selection. All ten affected packages passed together; the final recovery fixes
+passed focused regressions and full CI. Independent and Claude reviews have no
+remaining findings. The signed operator publish is run `37798469467`; signed
+agent 2.9.0 follows release #110.
+
+Haynes-ops [#3589](https://github.com/thaynes43/haynes-ops/pull/3589), `da983541`,
+applied the generated schemas, exact broker/keeper roles and admission policy,
+and keeper-only journal inventory before runtime pins. Both schema copies match
+the generated main files byte for byte apart from provenance comments. The CRD
+is Established, requester.sessionUID is present, admission has no type warnings
+and the four prerequisite Flux targets are Ready. Live component impersonation
+was unavailable: runtime RBAC evidence covers declarations, with authorization
+and admission exercised by the exact-role envtests. No Secret values were read.
+V1 and shelf identities and all restart counts were preserved; the declaration
+was ended.
+
+Haynes-ops [#3595](https://github.com/thaynes43/haynes-ops/pull/3595), `d7b845a6`,
+deployed those signed runtime pins. Operator/broker/keeper are updated, Ready and
+available 2/2, 2/2 and 1/1; Helm and all five Flux targets are Ready. Keeper GitHub
+readiness passed with minting off, no CA mount and zero jobs.
+
+Idle full S session `dev-env-1008-152312` stayed on 2.8.0 through the rollout with
+the same pod UID and zero restarts, marked Outdated without a restart. Fresh
+`dev-env-1008-153405` ran exact agent 2.9.0 at revision `2.9.0-5030ab2483`; its
+grants volume is memory-backed, typed listing was empty and Proxmox availability
+exited 4 without a provider command. Both fixtures were rescued CleanAndPushed,
+archived and removed with their pods/home PVCs. V1's UID and all restart counts
+remain unchanged. The shelf completed its planned 2.7.0-to-2.9.0 replacement and
+is Ready with zero restarts. The declaration was ended.
+
+P-14/P-15/P-18 remain open for owner CA/node trust, standing policy and real
+hardware/network activation and acceptance. No token was minted, no node trust
+changed, and general hw-ssh remains unbuilt under P-19's pending contract.
+
 ## Scope that must remain distinct
 
 Q-07 removes only the Proxmox **operator** token and long-lived hardware SSH key
