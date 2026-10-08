@@ -36,7 +36,7 @@ make build-agent-run-darwin
 ```
 
 That target builds for an Apple Silicon Mac. On another platform, build the
-CLI with `make bin/agent-run` and use `./bin/agent-run` below. If the canonical
+CLI with `make "$PWD/bin/agent-run"` and use `./bin/agent-run` below. If the canonical
 clone is elsewhere, use its path. If it is missing, clone
 `https://github.com/thaynes43/dev-env.git` into `~/repos/dev-env` first.
 
@@ -48,17 +48,17 @@ binary just built, in a shell without API URL, token-file or CA-file overrides:
 ```sh
 unset DEV_ENV_API_URL DEV_ENV_API_TOKEN_FILE DEV_ENV_API_CA_FILE
 unset AGENTD_API_URL AGENTD_API_CA_FILE
-./bin/agent-run-darwin-arm64 --context MAIN_CONTEXT fleet
-./bin/agent-run-darwin-arm64 --context MAIN_CONTEXT list
+./bin/agent-run-darwin-arm64 fleet --context MAIN_CONTEXT
+./bin/agent-run-darwin-arm64 list --context MAIN_CONTEXT
 ./bin/agent-run-darwin-arm64 --context MAIN_CONTEXT --repo dev-env --local --model claude-haiku-4-5 --size S --wait 2m -o name
 ```
 
 The create prints a session name. Replace `SESSION_NAME` below with it:
 
 ```sh
-./bin/agent-run-darwin-arm64 --context MAIN_CONTEXT show SESSION_NAME
-./bin/agent-run-darwin-arm64 --context MAIN_CONTEXT list --mine
-./bin/agent-run-darwin-arm64 --context MAIN_CONTEXT attach SESSION_NAME
+./bin/agent-run-darwin-arm64 show --context MAIN_CONTEXT SESSION_NAME
+./bin/agent-run-darwin-arm64 list --context MAIN_CONTEXT --mine
+./bin/agent-run-darwin-arm64 attach --context MAIN_CONTEXT SESSION_NAME
 ```
 
 `show` must report phase `Running` and parent `dev-env-system/dev-env-human`;
@@ -67,7 +67,7 @@ started. The attach must show the Claude TUI. Detach with **Ctrl-b, d**;
 the session keeps running. Then clean up only this test session:
 
 ```sh
-./bin/agent-run-darwin-arm64 --context MAIN_CONTEXT reap SESSION_NAME
+./bin/agent-run-darwin-arm64 reap --context MAIN_CONTEXT SESSION_NAME
 ```
 
 The operator rescues the session before removing its pod and volume. Report
