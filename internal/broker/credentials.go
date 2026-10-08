@@ -21,23 +21,6 @@ const credentialJobUIDAnnotation = v1alpha1.LabelPrefix + "credential-job-uid"
 
 var errCredentialCleanupPending = errors.New("keeper credential cleanup is pending")
 
-// credentialSession deliberately bypasses the session cache. The API captured
-// this UID when authenticating the request, before the broker first observed it.
-func (b *Broker) credentialSession(ctx context.Context, g *v1alpha1.AccessGrant) (*v1alpha1.AgentSession, error) {
-	var s v1alpha1.AgentSession
-	err := b.APIReader.Get(ctx, types.NamespacedName{Namespace: b.SessionNamespace, Name: g.Spec.Requester.Session}, &s)
-	if apierrors.IsNotFound(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read the credential requesting session: %w", err)
-	}
-	if s.UID != g.Spec.Requester.SessionUID || !s.DeletionTimestamp.IsZero() {
-		return nil, nil
-	}
-	return &s, nil
-}
-
 func credentialApproval(g *v1alpha1.AccessGrant) bool {
 	return strings.HasPrefix(g.Status.ApprovedBy, PolicyApprover) && strings.TrimPrefix(g.Status.ApprovedBy, PolicyApprover) != "" &&
 		g.Status.ApprovedAt != nil && g.Status.ApprovedTTL != nil && g.Status.ExpiresAt != nil &&
