@@ -173,6 +173,15 @@ func startSuite() error {
 			return err
 		}
 	}
+	credentialFiles, err := filepath.Glob(filepath.Join("testdata", "credentials", "*.yaml"))
+	if err != nil {
+		return err
+	}
+	for _, f := range credentialFiles {
+		if err := apply(ctx, f); err != nil {
+			return err
+		}
+	}
 	// The emitted policy surface, projected from the live Cilium schema. No
 	// Cilium controller or dataplane runs in envtest.
 	if err := apply(ctx, filepath.Join("testdata", "cilium", "ciliumnetworkpolicies.yaml")); err != nil {
@@ -259,7 +268,7 @@ type running struct {
 
 // startBroker runs a broker as its ServiceAccount until the test ends. A nil
 // clock is a fake one at the real time; a nil installer installs nothing.
-func startBroker(t *testing.T, clk *clocktesting.FakePassiveClock, inst *recorder) *running {
+func startBroker(t *testing.T, clk *clocktesting.FakePassiveClock, inst *recorder, configure ...func(*Options)) *running {
 	t.Helper()
 	if clk == nil {
 		clk = clocktesting.NewFakePassiveClock(time.Now())
@@ -280,6 +289,9 @@ func startBroker(t *testing.T, clk *clocktesting.FakePassiveClock, inst *recorde
 	}
 	if inst != nil {
 		o.Installer = inst
+	}
+	for _, edit := range configure {
+		edit(&o)
 	}
 	mgr, b, err := NewManager(brokerCfg, o)
 	if err != nil {
@@ -508,7 +520,7 @@ func newGrant(t *testing.T, s *v1alpha1.AgentSession, opts ...grantOpt) string {
 			Labels: map[string]string{v1alpha1.LabelSession: s.Name},
 		},
 		Spec: v1alpha1.AccessGrantSpec{
-			Requester: v1alpha1.GrantRequester{Session: s.Name, Repo: s.Spec.Repo, Profile: s.Spec.Profile, Agent: s.Spec.Agent},
+			Requester: v1alpha1.GrantRequester{Session: s.Name, SessionUID: s.UID, Repo: s.Spec.Repo, Profile: s.Spec.Profile, Agent: s.Spec.Agent},
 			Type:      v1alpha1.GrantKube,
 			Kube:      &v1alpha1.KubeGrant{Role: v1alpha1.RoleWorkloads, Namespaces: []string{"home-automation"}},
 			TTL:       metav1.Duration{Duration: time.Hour},
