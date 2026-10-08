@@ -1,10 +1,10 @@
 # 07: access broker
 
-**Status:** steps 1 to 5 built; H2 runtime deployed and verified on 2026-10-07; approval deployment follows step 6
+**Status:** benched from 2026-10-08 until the plan usage resets. Steps 1 to 5 are built; H2 (the broker Deployment) is deployed and verified (2026-10-07). Step 6 is redesigned for approvals inside the Claude Code app (Q-16, Tom 2026-10-08), not Pushover plus a web page; the resume point and the design spike are in [issue #91](https://github.com/thaynes43/dev-env/issues/91). Draft code is on branch `agent/plan07-approvals-round3` (dev-env) and `agent/plan07-catalog-round3` (haynes-ops); PR #90 and haynes-ops #3550 were closed.
 **Depends on:** 01 (the baseline guard and egress tiers are in place); Q-07 (Tom
 2026-10-06: credential grants, A)
-**Parallel with:** 02; the coordinator resumed plan 07 on Codex after the pause in
-README decision 40. Keep shared-code changes small and rebase before each push.
+**Parallel with:** 02, when both run again; the saga README decisions 40 and 43 explain the pacing
+and the bench. Keep shared-code changes small and rebase before each push.
 
 ## Goal
 

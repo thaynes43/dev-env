@@ -5,6 +5,25 @@ Tom's own machine. Read this page, then [CLAUDE.md](../CLAUDE.md) (the rules), t
 the saga. To start building, follow
 [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md).
 
+## State on 2026-10-08
+
+- **dev-env v2 is benched from 2026-10-08** until Tom's Claude and Codex plan usage
+  resets (the Claude weekly limit resets 2026-10-12). **Nothing is in flight:** there
+  are no open PRs, and every merged change is deployed. Resume at:
+  - **Plan 02:** steps 1 to 11 and acceptance items 1 to 3 are done and deployed
+    (#94, [backlog/02](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md)).
+    Step 12 (laptop access) and step 13 (the acceptance run and the update of this
+    page) are not started and have no branch.
+  - **Plan 07:** steps 1 to 5 are built and H2 (the broker Deployment) is deployed
+    and verified. Step 6 (human approval) is blocked: Q-16 was ruled on 2026-10-08
+    (parity first; approvals inside the Claude Code app), and PR #90 and haynes-ops
+    #3550 were closed because their Pushover and web approval surface is ruled out.
+    The resume point is the last coordinator comment on
+    [issue #91](https://github.com/thaynes43/dev-env/issues/91). The next step is a
+    docs-only design spike for the approval surface. Draft code: branch
+    `agent/plan07-approvals-round3` (dev-env) and `agent/plan07-catalog-round3`
+    (haynes-ops).
+
 ## State on 2026-10-07
 
 - **Phase 1 is built: plan 01 is done (2026-10-07, #60).** From the v1 pod,
@@ -20,7 +39,7 @@ the saga. To start building, follow
   `ceph-block`, so every size stays on it. Plan 01's Acceptance lists the evidence
   (pod UIDs, nodes, the bundle path). The v1 pod and `dev-env-ops` did not restart.
   **Next is plan 02** ([interactive sessions and lifecycle](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md)).
-- **Plan 07 round 1 is deployed and verified** (2026-10-07, coordinator work
+- **Plan 07 round 1 was deployed and verified** (2026-10-07, coordinator work
   order after README decision 40). Steps 1 to 5 are built: CRDs (D-54),
   `/v1/grants` (D-56), broker mode (D-61), kube installation into a session's
   memory-backed grants volume (D-63), and egress grants with the operator's expiry
@@ -34,8 +53,8 @@ the saga. To start building, follow
   and temporary fixtures removed ([haynes-ops #3544](https://github.com/thaynes43/haynes-ops/pull/3544)).
   Session and v1 pod UIDs/restart counts were preserved through every rollout.
   Existing pods gain the grants volume on a later resume; rollouts do not restart them.
-  Next is step 6: human approval, Pushover, Authentik ingress and the break-glass
-  catalog remainder. Standing policies are the only approval path until then;
+  Step 6 (human approval and the break-glass catalog remainder) was the next step;
+  since 2026-10-08 it is redesigned (Q-16, see State above). Standing policies are the only approval path until then;
   the temporary smoke policies are gone. No new secret or Tom-only step was needed
   for this round. Q-15 remains ruled (A), so step 8's minting identity is settled.
   [backlog/07](sagas/distributed-dev-env/backlog/07-access-broker.md) tracks the remaining scope.
@@ -45,15 +64,14 @@ the saga. To start building, follow
   `config/crd/` now needs its haynes-ops copy before the operator pin that writes the
   new fields (CLAUDE.md, layout). The advisory review failed on release PRs, and
   release-please used the deprecated `app-id` input; #59 fixed both.
-- **One session waits for plan 02.** `dev-agents/dev-env-1007-050756` was the Pending
-  check (size L, via haynes-ops #3504, reverted by #3505). Its pod never started, so
-  its reap shows `RemovalBlocked` and keeps an empty 20Gi volume until plan 02's rescue
-  pod archives it (D-51). Plan 02 lists it.
+- **The session that waited for plan 02 is archived.** `dev-agents/dev-env-1007-050756`
+  was the Pending check (size L, via haynes-ops #3504, reverted by #3505). Plan 02's
+  step 11 rescued and archived it (D-51); its home volume is gone.
 - **The dev-env v2 design is complete.** It covers the architecture (ADR-001), the
   details (DESIGN-001, D-01 onward), 16 spikes, backlog plans 00 to 10 and two
   research notes.
 - **Every design question is ruled.** Tom answered Q-01 to Q-11, Q-13 and Q-14 on
-  2026-10-06 and Q-15 on 2026-10-07 (index below). Q-12 (branch protection) was settled on 2026-10-07: Tom
+  2026-10-06, Q-15 on 2026-10-07 and Q-16 on 2026-10-08 (index below). Q-12 (branch protection) was settled on 2026-10-07: Tom
   made the repo public (B) after Actions billing stopped CI on the private repo. The
   settings only Tom can click are in a handoff for an agent on his laptop (below).
 - **The repo is public since 2026-10-07.** Everything committed, history and PR
@@ -187,8 +205,9 @@ the saga. To start building, follow
    checked). The Protect Main ruleset is live and Renovate auto-merge is on.
 2. **Plan 02: interactive sessions and lifecycle.** Plan 01, with KICKOFF B1 to B5,
    is done ([plan 01](sagas/distributed-dev-env/backlog/01-foundation.md)). Plan 02
-   ([backlog/02](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md)) runs
-   in parallel with plan 07, the access broker.
+   ([backlog/02](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md)) is
+   benched after step 11 (see State on 2026-10-08), and plan 07, the access broker,
+   is benched with it. When unbenched, run one plan at a time (README decision 40).
 3. **Collect the spike results.** S-1, S-1b and S-7 are done, and S-2 is already
    answered (the static token cannot register Remote Control). S-6, S-15 and S-16
    are done, and S-3 passed (keeper-owned Codex auth, DESIGN-001 D-12 step 2), so
@@ -227,7 +246,7 @@ the saga. To start building, follow
 | [.github/workflows/](../.github/workflows/) | CI (`ci.yml`, with the aggregate `CI - Success`), the operator image (`publish.yml`, from main), the agent image (`publish-agent.yml`, from a `v2.x.y` tag), release-please, the Claude advisory review and the `@claude` handler. |
 | haynes-ops [`.agents/sagas/dev-env/adrs/001-v2-lives-in-own-repo.md`](https://github.com/thaynes43/haynes-ops/blob/main/.agents/sagas/dev-env/adrs/001-v2-lives-in-own-repo.md) | Accepted: v2 lives here, and v1 and every manifest stay in haynes-ops. |
 
-## Rulings (Tom, 2026-10-06; full text in DESIGN-001 section 15)
+## Rulings (Tom, 2026-10-06 to 2026-10-08; full text in DESIGN-001 section 15)
 
 | Id | Ruling |
 |---|---|
@@ -246,8 +265,9 @@ the saga. To start building, follow
 | Q-13 | Make `ghcr.io/thaynes43/dev-env-operator` public (A). "Public package write a prompt for an agent on my laptop to flip it": a laptop agent flips it after B3's first publish, because GitHub has no API for package visibility. |
 | Q-14 | A GitHub App key secret for release-please (A): "GitHub App key secret (Recommended)". Repo variable `RELEASE_APP_ID`, repo secret `RELEASE_APP_PRIVATE_KEY`; the App also needs Issues read and write for `autorelease:` labels. |
 | Q-15 | The keeper mints a Proxmox grant's token over SSH (A): "Keeper mints over SSH (Recommended)". With a certificate from its own SSH CA it runs `sudo pvesh create /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0` on a node and deletes the token at the grant's end. No new Proxmox user, and v2 never holds the long-lived token. Port 22 from the keeper to the nodes. |
+| Q-16 | Parity first, approvals in the Claude Code app (Tom, 2026-10-08). "I am open to advanced security but I must be able to grant permission from my phone." No new guard cuts what agents do today (no Authentik, outpost, Traefik or postgres16 lockdown, no git review or CODEOWNERS gate); standing auto-approved grants cover everything a v1 agent does (OPERATOR kube tier, Proxmox via the keeper's SSH minting, hw-ssh), and any gap blocks the cutover. Human approval gates only capabilities beyond today's (secret reads, break-glass above OPERATOR). Approvals happen inside the Claude Code app, not Pushover plus a web page. Residual risk accepted: Flux is cluster-admin and agents self-merge. The approval surface is the next design spike (issue #91). |
 
-**Open:** none.
+**Open:** none (the approval surface is a design spike, not a question yet; issue #91).
 
 **Settings only Tom can click** (no decision needed). An agent on his laptop does
 them from [`handoffs/2026-10-06-tom-laptop-settings.md`](handoffs/2026-10-06-tom-laptop-settings.md),
