@@ -17,7 +17,9 @@ image (`ghcr.io/thaynes43/dev-env`); haynes-ops deploys them.
 task mode, is done: the operator and the keeper run in the cluster, the agent image
 `ghcr.io/thaynes43/dev-env:2.0.0` is released, and `agent-run -p` from the v1 pod
 starts a session pod on a worker that does its task and opens its PR. Plan 02
-(interactive sessions and lifecycle) is next.
+(interactive sessions and lifecycle) is done under Tom's 2026-10-08 correction:
+the existing in-cluster CLI workflow passed acceptance, and external CLI access
+is optional. Plan 07's approval design spike is next.
 Start at [`.agents/HANDOFF.md`](.agents/HANDOFF.md); the saga is
 [`.agents/sagas/distributed-dev-env/`](.agents/sagas/distributed-dev-env/README.md).
 

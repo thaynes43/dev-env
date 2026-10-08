@@ -1,14 +1,17 @@
 # 02: interactive sessions and lifecycle
 
-**Status:** in progress (started 2026-10-07); step 12's client is built (#103, D-68), released as signed 2.8.0 (#104), and deployed and verified by haynes-ops #3579. Steps 12 and 13 still need Tom's laptop check; Q-17 awaits his kubeconfig prerequisite answer.
+**Status:** done under Tom's corrected scope (2026-10-08). Step 12's optional external client is built (#103, D-68), released as signed 2.8.0 (#104), and deployed and verified by haynes-ops #3579. Tom withdrew the laptop prerequisite (Q-17, README decision 45). Step 13 passed through the existing in-cluster CLI and agent-created session `dev-env-1008-125420`; no laptop setup or test blocks it. Real external-machine use remains unverified.
 **Depends on:** 01
-**Parallel with:** 07 (the access broker) in the architecture; this run finishes 02 before resuming 07 (README decisions 40 and 44).
+**Parallel with:** 07 (the access broker) in the architecture; this run finishes 02 before resuming 07 (README decisions 40, 44 and 45).
 
 ## Goal
 
 Interactive (`local`) sessions in their own pods, with the full lifecycle: idle
 detection, timers, suspend, resume with the conversation intact, restore from a
-bundle. declare-activity moves to the API. Tom can run `agent-run` from his laptop.
+bundle. declare-activity moves to the API. Sessions are created and managed with
+`agent-run`, directly or by an agent at Tom's request. External CLI access is
+optional; a web UI is another possible session-management client, not part of
+this plan's implementation (Tom's 2026-10-08 correction, Q-17).
 
 ## Scope
 
@@ -50,7 +53,7 @@ bundle. declare-activity moves to the API. Tom can run `agent-run` from his lapt
   `declare-activity` v2 client. In haynes-ops: dev-env-ops' `dev-activity-check.sh`
   reads both the v1 files and `kubectl get activities`; the OPERATOR-tier
   ClusterRole gains read on `dev-env.haynesops.com`.
-- Laptop path (D-05): `agent-run` mints a `dev-env-human` token with the kubeconfig
+- Optional external CLI path (D-05): `agent-run` mints a `dev-env-human` token with the kubeconfig
   and port-forwards to the API.
 
 Already built by plan 01: the child-session limit (4 unfinished children per parent,
@@ -138,10 +141,11 @@ the cluster.
   - The reap rescued the new session (`CleanAndPushed`) and archived its volume.
   - The leader's first prune ran ten minutes after start: retention 720h, 0
     removed, 3 kept.
-- [ ] 12. **The laptop path** (D-05, D-68; client built, laptop check pending). `agent-run` outside the cluster mints a
+- [x] 12. **The optional external CLI path** (D-05, D-68; delivered). `agent-run` outside the cluster mints a
   `dev-env-human` token and port-forwards with the kubeconfig, and checks the API's
-  certificate against the pinned CA by its service name. A handoff for an agent on
-  Tom's laptop runs the check.
+  certificate against the pinned CA by its service name. The optional
+  [external CLI handoff](../../../handoffs/2026-10-08-laptop-access.md)
+  describes a real external-machine check if this path is later needed.
   - Built in #103; signed agent `2.8.0` shipped by #104 and
     `publish-agent.yml` run `37776465007`. Signed operator `sha-12a97c4` was
     published by run `37775926348`. Deployment pins: haynes-ops #3579.
@@ -157,10 +161,13 @@ the cluster.
     dependency in the CLI. Full CI and Claude advisory review passed.
   - A CI run exposed a map-order assumption in the rescue API test fixture.
     #103 sorts the fixture's repo keys; its focused test and full CI passed.
-  - **Pending:** Q-17 (working laptop admin kubeconfig), then the real
-    list-and-attach check in
-    [the laptop handoff](../../../handoffs/2026-10-08-laptop-access.md).
-- [ ] 13. **The acceptance run** below, with the evidence under each item.
+  - **Scope corrected 2026-10-08 (Tom, Q-17):** use the existing in-cluster
+    `agent-run` CLI or ask agents to start sessions. No laptop setup or test
+    blocks this plan. The real external-machine path remains unverified;
+    its implementation, tests and deployment are not a claim of that test.
+- [x] 13. **The acceptance run** below, with the evidence under each item.
+  Done 2026-10-08 under Q-17's corrected scope. The live Codex messaging half
+  remains assigned to plan 04, as already specified below.
 
 **The Codex half of "`agent-run msg` reaches a Codex session".** No v2 pod can run
 Codex before plan 04, because the keeper owns its login there (D-12, S-3). Step 9
@@ -196,8 +203,24 @@ Codex session.
   - The paste arrived framed as from `client/dev/dev-env`, and the agent replied
     `noted` as asked.
   - The Codex half runs with plan 04 (above).
-- Tom lists and attaches to sessions from his laptop.
-  **Pending:** the laptop client is built, signed and deployed, but this item requires
-  Tom's actual laptop. An in-pod fleet query with v1's identity passed; v1
-  cannot mint the human token or port-forward, so it cannot stand in for this
-  acceptance check. The earlier acceptance items remain verified as above.
+- Sessions are created, listed, attached to and reaped with the existing
+  in-cluster `agent-run` CLI, directly or by an agent at Tom's request.
+  **Scope corrected 2026-10-08 (Tom, Q-17):** this replaces the mandatory laptop
+  check. It does not exercise the optional external human-token or port-forward
+  path. The earlier acceptance items remain verified as above.
+  *Verified 2026-10-08* (session `dev-env-1008-125420`, Haiku 4.5, local, size S):
+  - The clean CLI built from main `01c1bdd` returned fleet revision
+    `2.8.0-dcdc99d358`. Create reached `Running` on talosw02 in 35 seconds,
+    with parent `dev/dev-env`, signed image `2.8.0`, and limits of 2 CPUs and
+    4 GiB memory. `list --mine` included it.
+  - `agent-run attach` in a PTY showed the Claude Code Haiku TUI and one
+    remote tmux client. Ctrl-b, d detached with exit 0. The separate
+    `agent-run detach` command also returned 0. Both kept the test pod's UID
+    and zero restart count. No task or prompt was sent.
+  - `agent-run reap` recorded `CleanAndPushed` rescue `20261008-1256`, then
+    `Archived`. The session, pod and `home-dev-env-1008-125420` volume were
+    removed. No bundle was needed for its clean, pushed worktree; `list`
+    returned no sessions.
+  - Existing v1 and shelf pod UIDs, readiness and every init and regular
+    container restart count matched their baseline. The scoped declaration
+    `act-125420-391275` was ended, and the test PTY was removed.

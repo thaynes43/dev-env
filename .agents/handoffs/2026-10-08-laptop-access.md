@@ -1,7 +1,13 @@
-# dev-env v2: laptop access check
+# dev-env v2: optional external CLI check
 
-Run this on Tom's laptop after plan 02's laptop-access PR merges. The check
-finishes plan 02 steps 12 and 13. It needs `git`, `make`, Go, `kubectl`, and a
+**Optional, following Tom's 2026-10-08 correction (Q-17).** Tom's current workflow
+uses `agent-run` or asks agents to start sessions. This external-machine check
+does not block plan 02; no laptop setup or test is requested from Tom.
+The client is built, signed and deployed (#103, #104, haynes-ops #3579), but
+an actual external-machine run remains unverified.
+
+Use these instructions if an external CLI caller later needs the path. It needs
+`git`, `make`, Go, `kubectl`, and a
 working admin kubeconfig for the main cluster. Keep the kubeconfig, tokens and
 agent login files on their current machines; share only pass/fail results.
 
