@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -204,8 +205,8 @@ func TestParseRescueOutput(t *testing.T) {
 		}
 	}
 	c := &cappedBuffer{max: 4}
-	if n, err := c.Write([]byte("12345")); n != 5 || err != nil || c.err == nil || c.Len() != 0 {
-		t.Errorf("overflow: %d %v %v %d", n, err, c.err, c.Len())
+	if n, err := c.Write([]byte("12345")); n != 5 || err != nil || c.err == nil || len(c.Bytes()) != 0 {
+		t.Errorf("overflow: %d %v %v %d", n, err, c.err, len(c.Bytes()))
 	}
 }
 
@@ -239,5 +240,20 @@ func TestVerdictVolumeEmpty(t *testing.T) {
 	other.Session = "s2"
 	if rec, _ := verdictFor(other); rec.Result != v1alpha1.RescueFailed {
 		t.Errorf("another session's report: %s", rec.Result)
+	}
+}
+
+// io.Copy, which the exec stream uses, must not get past the report's cap
+// through an io.ReaderFrom.
+func TestCappedBufferHoldsUnderIOCopy(t *testing.T) {
+	b := &cappedBuffer{max: 8}
+	if _, ok := any(b).(io.ReaderFrom); ok {
+		t.Fatal("cappedBuffer is an io.ReaderFrom; io.Copy would bypass its Write")
+	}
+	if _, err := io.Copy(b, strings.NewReader(strings.Repeat("x", 100))); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Bytes()) > 8 || b.err == nil {
+		t.Errorf("kept %d bytes, err %v", len(b.Bytes()), b.err)
 	}
 }

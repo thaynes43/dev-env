@@ -59,6 +59,11 @@ type MessageResult struct {
 	Delivered bool   `json:"delivered"`
 }
 
+// RescuesPath lists the rescues on the shared volume, read through the shelf
+// pod (D-67). ?session= narrows it to one session's. A restore is a create:
+// CreateSessionRequest.Restore.
+const RescuesPath = "/v1/rescues"
+
 // ActivitiesPath is declare-activity's route (DESIGN-001 6.9, D-17, D-66):
 // GET lists the live declarations, POST declares one.
 const ActivitiesPath = "/v1/activities"
@@ -135,6 +140,12 @@ type CreateSessionRequest struct {
 	// Lifecycle sets this session's own timers (D-09, D-60); the templates'
 	// apply to the rest.
 	Lifecycle *Lifecycle `json:"lifecycle,omitempty"`
+	// Restore is a rescue's id, <session>/<stamp> (D-67): the new session's
+	// clone fetches that rescue's bundle for Repo into refs/rescued/* on its
+	// first boot. The rescue must be complete and hold a bundle for Repo. With
+	// no Base, the worktree starts at the old session's rescued branch when the
+	// bundle holds it.
+	Restore string `json:"restore,omitempty"`
 	// IdempotencyKey makes a retry safe: a repeated key, from the same caller,
 	// returns the session the first request created while it is unfinished. A
 	// label value: at most 63 characters of letters, digits, '-', '_' and '.',
@@ -193,6 +204,12 @@ type Session struct {
 	// operator's idle timer (D-60), else the API caller.
 	SuspendedBy string    `json:"suspendedBy,omitempty"`
 	CreatedAt   time.Time `json:"createdAt"`
+	// SuspendedAt is when the operator last suspended the session, and
+	// ArchivedAt when it archived the volume (D-60, D-62).
+	SuspendedAt *time.Time `json:"suspendedAt,omitempty"`
+	ArchivedAt  *time.Time `json:"archivedAt,omitempty"`
+	// Restore is the rescue the session was restored from (D-67).
+	Restore string `json:"restore,omitempty"`
 	// Reaping is set once the session is deleted: the operator rescues it,
 	// suspends it and archives it (D-10, D-45).
 	Reaping bool `json:"reaping,omitempty"`
@@ -381,3 +398,48 @@ const (
 	// CodeUnavailable (503): the API server could not be reached; retry.
 	CodeUnavailable = "unavailable"
 )
+
+// Rescue is one rescue on the shared volume, as GET /v1/rescues lists it (D-48,
+// D-67). The bundles never leave the cluster; this is what they hold.
+type Rescue struct {
+	// ID is <session>/<stamp>, what a restore names.
+	ID      string `json:"id"`
+	Session string `json:"session"`
+	// CreatedAt is the manifest's time, or the directory's for a rescue that
+	// wrote none.
+	CreatedAt time.Time `json:"createdAt"`
+	// Finished: the rescue wrote its manifest. Complete: every bundle in it
+	// was written and verified. Only a complete rescue can be restored.
+	Finished bool `json:"finished"`
+	Complete bool `json:"complete"`
+	// Repos are the clones it holds a bundle for.
+	Repos []RescueRepo `json:"repos,omitempty"`
+	// Bytes is the size of the rescue's files.
+	Bytes int64 `json:"bytes"`
+	// Error says what is wrong with the rescue's manifest, if anything.
+	Error string `json:"error,omitempty"`
+	// SessionExists: the session still exists, so the rescue is kept.
+	SessionExists bool `json:"sessionExists"`
+	// PruneAfter is when the operator's pruner may remove the rescue: its
+	// age passes the templates' bundleRetention (D-09). Empty while its
+	// session exists.
+	PruneAfter *time.Time `json:"pruneAfter,omitempty"`
+}
+
+// RescueRepo is one clone's bundle in a rescue.
+type RescueRepo struct {
+	// Repo is the clone's directory name, the session's repo.
+	Repo string `json:"repo"`
+	// Refs are the refs the bundle holds, such as refs/heads/agent/<session>.
+	// A restore fetches them under refs/rescued/.
+	Refs  []string `json:"refs"`
+	Bytes int64    `json:"bytes"`
+}
+
+// RescueList is GET /v1/rescues, newest first.
+type RescueList struct {
+	Rescues []Rescue `json:"rescues"`
+	// Unrecognized are paths under rescue/ that do not fit the layout; they
+	// are never pruned.
+	Unrecognized []string `json:"unrecognized,omitempty"`
+}

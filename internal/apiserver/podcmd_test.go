@@ -137,3 +137,18 @@ func TestSessionLogTruncatesAndNoLog(t *testing.T) {
 	ex.out, ex.code = "", 4
 	wantError(t, f.do(http.MethodGet, apiv1.SessionLogPath("s-big"), tokHuman, nil), http.StatusNotFound, apiv1.CodeNotFound)
 }
+
+// io.Copy, which the exec stream uses, must not get past stderr's cap through
+// an io.ReaderFrom.
+func TestLimitedBufferHoldsUnderIOCopy(t *testing.T) {
+	b := &limitedBuffer{max: 8}
+	if _, ok := any(b).(io.ReaderFrom); ok {
+		t.Fatal("limitedBuffer is an io.ReaderFrom; io.Copy would bypass its Write")
+	}
+	if _, err := io.Copy(b, strings.NewReader(strings.Repeat("x", 100))); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.String(); len(got) != 8 {
+		t.Errorf("kept %d bytes", len(got))
+	}
+}

@@ -131,22 +131,26 @@ func (b *tailBuffer) String() string {
 	return s
 }
 
-// limitedBuffer keeps at most max bytes and drops the rest.
+// limitedBuffer keeps at most max bytes and drops the rest. Its buffer is a
+// field, not embedded: an embedded bytes.Buffer brings ReadFrom, which io.Copy
+// in the exec stream would call instead of Write, past the cap.
 type limitedBuffer struct {
-	bytes.Buffer
+	buf bytes.Buffer
 	max int
 }
 
 func (b *limitedBuffer) Write(p []byte) (int, error) {
-	if room := b.max - b.Len(); room > 0 {
+	if room := b.max - b.buf.Len(); room > 0 {
 		if len(p) > room {
-			_, _ = b.Buffer.Write(p[:room])
+			_, _ = b.buf.Write(p[:room])
 		} else {
-			_, _ = b.Buffer.Write(p)
+			_, _ = b.buf.Write(p)
 		}
 	}
 	return len(p), nil
 }
+
+func (b *limitedBuffer) String() string { return b.buf.String() }
 
 // sessionLog serves GET /v1/sessions/{name}/log?tail=N: agentd ctl log in the
 // running pod.

@@ -194,6 +194,7 @@ func TestCreateAccepts(t *testing.T) {
 			s.Spec.Parent = "haynes-ops-1005-195501"
 			s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
 			s.Spec.Lifecycle = &v1alpha1.Lifecycle{IdleSuspendAfter: dur(72 * time.Hour), ArchiveAfter: dur(168 * time.Hour)}
+			s.Spec.Restore = "haynes-ops-1005-195501/20261005-2010-2"
 			return s
 		}(),
 		"a local Codex session": func() *v1alpha1.AgentSession {
@@ -265,6 +266,9 @@ func TestCreateRejects(t *testing.T) {
 		{"a repo that is a path", func(s *v1alpha1.AgentSession) { s.Spec.Repo = ".." }, "repo is a repository name, not a path"},
 		{"a base that git would read as an option", func(s *v1alpha1.AgentSession) { s.Spec.Base = "--upload-pack=touch /tmp/x" }, "spec.base"},
 		{"a base with a space", func(s *v1alpha1.AgentSession) { s.Spec.Base = "origin/main extra" }, "spec.base"},
+		{"a restore that is a path", func(s *v1alpha1.AgentSession) { s.Spec.Restore = "../20261008-0024" }, "spec.restore"},
+		{"a restore without a stamp", func(s *v1alpha1.AgentSession) { s.Spec.Restore = "dev-env-1008-001530" }, "spec.restore"},
+		{"a restore with a third part", func(s *v1alpha1.AgentSession) { s.Spec.Restore = "a/20261008-0024/x" }, "spec.restore"},
 
 		// Enums.
 		{"an unknown agent", func(s *v1alpha1.AgentSession) { s.Spec.Agent = "gemini" }, "spec.agent: Unsupported value"},
@@ -448,6 +452,12 @@ func TestSpecImmutableExceptOperatingModeAndLifecycle(t *testing.T) {
 			s.Spec.Tools = []string{"blender", "audio"}
 			return s
 		}, func(s *v1alpha1.AgentSessionSpec) { s.Tools = []string{"audio", "blender"} }, ""},
+		{"change the restore", func() *v1alpha1.AgentSession {
+			s := remoteSession()
+			s.Spec.Restore = "dev-env-1008-001530/20261008-0024"
+			return s
+		}, func(s *v1alpha1.AgentSessionSpec) { s.Restore = "dev-env-1008-001530/20261008-0025" }, "spec.restore"},
+		{"add a restore", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Restore = "dev-env-1008-001530/20261008-0024" }, presence},
 		{"add an effort", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Effort = "high" }, presence},
 		{"add a profile", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Profile = "dev" }, presence},
 		{"add a tool", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Tools = []string{"blender"} }, presence},

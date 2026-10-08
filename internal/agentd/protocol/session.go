@@ -55,6 +55,10 @@ type Session struct {
 	// Prompt is the task. Task mode only.
 	Prompt string  `json:"prompt,omitempty"`
 	Limits *Limits `json:"limits,omitempty"`
+	// Restore names a rescue on the shared volume, <session>/<name> (D-67).
+	// On the first boot, after the clone, agentd fetches that rescue's bundle
+	// for this repo into refs/rescued/*.
+	Restore string `json:"restore,omitempty"`
 }
 
 // Limits caps a task session (V-02).
@@ -125,6 +129,11 @@ func (s Session) Validate() error {
 	}
 	if s.Base != "" && !gitRef.MatchString(s.Base) {
 		errs = append(errs, fmt.Errorf("base %q is not a ref", s.Base))
+	}
+	if s.Restore != "" {
+		if _, _, err := ParseRescueID(s.Restore); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	switch s.Agent {
 	case AgentClaude:

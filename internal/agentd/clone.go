@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,6 +78,19 @@ func PrepareRepo(ctx context.Context, r Runner, s Settings, sess protocol.Sessio
 			return ws, newStep(name, notes, err)
 		}
 		notes = append(notes, fmt.Sprintf("cloned %s (blob:none) in %s", s.RemoteURL(sess.Repo), took.Round(100*time.Millisecond)))
+	}
+
+	// A restore runs on the first boot only, before the worktree exists: its
+	// base may be a rescued branch (D-67). A failure leaves no worktree, so the
+	// next boot tries again.
+	if sess.Restore != "" {
+		if _, err := os.Lstat(ws.Worktree); errors.Is(err, fs.ErrNotExist) {
+			note, err := restoreRescue(ctx, r, s, sess, ws.Clone)
+			if err != nil {
+				return ws, newStep(name, notes, err)
+			}
+			notes = append(notes, note)
+		}
 	}
 
 	base, err := resolveBase(ctx, r, s, ws.Clone, sess.Base)

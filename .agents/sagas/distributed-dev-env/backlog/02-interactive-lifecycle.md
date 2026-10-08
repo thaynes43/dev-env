@@ -115,7 +115,12 @@ the cluster.
   sources.
 - [ ] 11. **Rescues: list, restore and pruning.** `GET /v1/rescues`, `POST
   /v1/rescues/{id}/restore`, `agent-run rescue list|restore` (D-48's recipe), and
-  bundles pruned after D-09's 30 days.
+  bundles pruned after D-09's 30 days. *Built (D-67):* the shelf pod (`agentd
+  shelf`, a haynes-ops Deployment) that the operator lists and prunes through,
+  `GET /v1/rescues`, a restore as `restore` on `POST /v1/sessions` with the fetch on
+  the first boot, the leader's pruner (logs too), and `agent-run rescue
+  list|restore`. Deploy: the CRD copy, the shelf, the agent image and the operator
+  pin in haynes-ops.
 - [ ] 12. **The laptop path** (D-05). `agent-run` outside the cluster mints a
   `dev-env-human` token and port-forwards with the kubeconfig, and checks the API's
   certificate against the pinned CA by its service name. A handoff for an agent on

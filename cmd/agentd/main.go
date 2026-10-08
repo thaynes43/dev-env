@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/version"
 )
 
@@ -43,6 +44,9 @@ Commands:
   hold                     The rescue pod's command (D-55): hold the session
                            volume for the operator's rescue and start nothing
                            (no config, clone, agent or heartbeat), until SIGTERM.
+  shelf                    The shelf pod's command (D-67): check that the shared
+                           volume is mounted, then wait until SIGTERM. The
+                           operator lists and prunes rescues here by exec.
   render                   Render the GitOps config into $HOME (boot step 1).
   ctl status               Print the session's status as JSON.
   ctl rescue [--stop-agent]
@@ -59,6 +63,13 @@ Commands:
                            task, or no agent running).
   ctl log [--tail N]       Print the last N lines (default 200) of the session's
                            log, or of its copy on the shared volume.
+  ctl rescues [--session S]
+                           List the rescues on the shared volume as JSON,
+                           newest first (D-67).
+  ctl prune                Remove rescues and session logs older than the
+                           request's retention whose session is not in its keep
+                           list; the request is JSON on stdin, the report JSON
+                           on stdout (D-67).
   ctl prepare-restart      Print what the next boot resumes (the conversation in
                            ~/.agentd/launch.json) as JSON, then stop the agent
                            CLI as the pod's SIGTERM would (D-58).
@@ -119,6 +130,12 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return exitUsage
 		}
 		return daemon(ctx, log, getenv, r)
+	case "shelf":
+		if len(args) > 1 {
+			_, _ = fmt.Fprintf(stderr, "%s: shelf takes no arguments, got %q\n", binaryName, args[1:])
+			return exitUsage
+		}
+		return shelf(ctx, log, getenv)
 	case "hold":
 		if len(args) > 1 {
 			_, _ = fmt.Fprintf(stderr, "%s: hold takes no arguments, got %q\n", binaryName, args[1:])
@@ -179,6 +196,72 @@ func hold(ctx context.Context, log *slog.Logger, getenv func(string) string) int
 	log.Info("holding the session volume for the operator's rescue; no agent starts in this pod", "session", name)
 	<-ctx.Done()
 	log.Info("hold ends", "session", name)
+	return exitOK
+}
+
+// shelf is the shelf pod's command (D-67). It refuses to run without the
+// shared volume, so a shelf that cannot see the rescues never looks healthy.
+func shelf(ctx context.Context, log *slog.Logger, getenv func(string) string) int {
+	s, err := agentd.LoadSettings(getenv)
+	if err != nil {
+		log.Error("settings", "err", err)
+		return exitFailure
+	}
+	list, err := agentd.ListRescues(s, "")
+	if err != nil {
+		log.Error("the shelf needs the shared volume", "err", err)
+		return exitFailure
+	}
+	log.Info("shelf ready; the operator lists and prunes rescues here by exec", "shared", s.SharedDir, "rescues", len(list.Rescues))
+	<-ctx.Done()
+	log.Info("shelf ends")
+	return exitOK
+}
+
+// shelfCtl is `ctl rescues [--session S]` and `ctl prune` (D-67).
+func shelfCtl(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) int {
+	fs := flag.NewFlagSet("ctl "+args[0], flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	session := fs.String("session", "", "")
+	if err := fs.Parse(args[1:]); err != nil || fs.NArg() > 0 || (args[0] == "prune" && *session != "") {
+		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl rescues [--session S] | ctl prune (the request on stdin)\n", binaryName)
+		return exitUsage
+	}
+	s, err := agentd.LoadSettings(getenv)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
+		return exitFailure
+	}
+	var out any
+	if args[0] == "rescues" {
+		list, err := agentd.ListRescues(s, *session)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "%s: rescues: %v\n", binaryName, err)
+			return exitFailure
+		}
+		out = list
+	} else {
+		var req protocol.PruneRequest
+		data, err := io.ReadAll(io.LimitReader(stdin, 1<<20))
+		if err == nil {
+			err = json.Unmarshal(data, &req)
+		}
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "%s: prune: read the request: %v\n", binaryName, err)
+			return exitUsage
+		}
+		rep, err := agentd.Prune(s, req, time.Now())
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "%s: prune: %v\n", binaryName, err)
+			return exitFailure
+		}
+		out = rep
+	}
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(out); err != nil {
+		return exitFailure
+	}
 	return exitOK
 }
 
@@ -274,6 +357,8 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return grantCtl(args, stdin, stdout, stderr, getenv)
 		case "deliver", "log":
 			return ctlMessageOrLog(ctx, args, stdin, stdout, stderr, getenv, r)
+		case "rescues", "prune":
+			return shelfCtl(args, stdin, stdout, stderr, getenv)
 		}
 	}
 	stopAgent := false
@@ -282,7 +367,7 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	case len(args) == 2 && args[0] == "rescue" && args[1] == "--stop-agent":
 		stopAgent = true
 	default:
-		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl status | rescue [--stop-agent] | prepare-restart | grant-install | grant-remove | grant-list | grant-use\n", binaryName)
+		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl status | rescue [--stop-agent] | rescues [--session S] | prune | prepare-restart | grant-install | grant-remove | grant-list | grant-use\n", binaryName)
 		return exitUsage
 	}
 	switch args[0] {

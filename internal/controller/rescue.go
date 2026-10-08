@@ -104,21 +104,27 @@ func parseRescueOutput(stdout *cappedBuffer, stderr string, runErr error) (proto
 	}
 }
 
-// cappedBuffer keeps at most max bytes and remembers that it overflowed.
+// cappedBuffer keeps at most max bytes and remembers that it overflowed. It
+// holds its buffer in a field rather than embedding it: an embedded
+// bytes.Buffer brings ReadFrom and WriteString, and io.Copy, which the exec
+// stream uses, would call ReadFrom and pass the cap.
 type cappedBuffer struct {
-	bytes.Buffer
+	buf bytes.Buffer
 	max int
 	err error
 }
 
 func (b *cappedBuffer) Write(p []byte) (int, error) {
-	if b.Len()+len(p) > b.max {
+	if b.buf.Len()+len(p) > b.max {
 		b.err = fmt.Errorf("more than %d bytes", b.max)
 		// Keep reading, so the stream ends normally.
 		return len(p), nil
 	}
-	return b.Buffer.Write(p)
+	return b.buf.Write(p)
 }
+
+func (b *cappedBuffer) Bytes() []byte  { return b.buf.Bytes() }
+func (b *cappedBuffer) String() string { return b.buf.String() }
 
 // verdict turns agentd's report into the rescue record (D-51). agentd checked
 // its own bundles (D-48); the operator checks that the report adds up: it is
