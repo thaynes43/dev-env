@@ -3305,8 +3305,8 @@ records the remaining cutover blockers.
   No token is written to events, job/grant status, annotations or logs.
 - A persisted token is reinstalled after keeper restart or replacement session
   pod, without reminting. If dispatch may have occurred and its returned value
-  was lost, the job fails closed and cleanup retries; it never automatically
-  deletes/remints the same token. A delayed first command might still complete.
+  was lost, the job fails closed. Cleanup retries deleting the possibly minted
+  token until removal is confirmed; it never remints under that token name. A delayed first command might still complete.
   A new grant has a new UID/token name. Uncertain intent survives through the
   provider expiry and confirmed cleanup; a local error cannot claim revocation.
 - Private typed agentd files carry grant and pod UIDs and fixed expiry. Install

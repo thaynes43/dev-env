@@ -37,7 +37,7 @@ the saga. To start building, follow
     **Q-18 awaits Tom's route choice.** No human approval path is enabled.
     The complete v1 parity audit is recorded in [R-04](sagas/distributed-dev-env/research/R-04-v1-capability-parity.md).
     Twenty gaps in backlog/07 block cutover. Next: restore the omitted baseline
-    credentials after the rescue-mount fix ships, then keeper SSH minting under
+    credentials after [the rescue-mount fix (#108)](https://github.com/thaynes43/dev-env/pull/108) ships, then keeper SSH minting under
     D-69. The pending approval choice does not block them. Q-16 was ruled on 2026-10-08
     (parity first; approvals inside the Claude Code app), and PR #90 and haynes-ops
     #3550 were closed because their Pushover and web approval surface is ruled out.

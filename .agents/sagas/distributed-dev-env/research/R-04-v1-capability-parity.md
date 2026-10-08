@@ -107,7 +107,7 @@ claim that a copied helper already verifies their private CA.
 
 ## Resume and safeguards
 
-First restore the omitted baseline references after the rescue-mount fix ships.
+First restore the omitted baseline references after [the rescue-mount fix (#108)](https://github.com/thaynes43/dev-env/pull/108) ships.
 Then build the Proxmox backend under D-69 with the feature disabled until owner
 trust and standing-policy acceptance pass. Complete the remaining parity rows
 before requesting cutover. Q-18 waits separately for the in-app approval route.
