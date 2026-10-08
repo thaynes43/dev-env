@@ -109,7 +109,7 @@ ARG TALOSCTL_VERSION=v1.14.2
 # omnictl — read-only Omni machine/cluster status against SaaS Omni (the self-hosted
 # instance was decommissioned 2026-09-22); tracks upstream siderolabs/omni releases,
 # which stay API-compatible with nearby omnictl versions. renovate: datasource=github-releases depName=siderolabs/omni
-ARG OMNICTL_VERSION=v1.12.3
+ARG OMNICTL_VERSION=v1.12.4
 # renovate: datasource=github-releases depName=astral-sh/uv
 ARG UV_VERSION=0.12.23
 # tini is PID 1 in every session pod (D-07): it reaps, which v1's PID 1 (code-server)
