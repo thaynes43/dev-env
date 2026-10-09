@@ -96,10 +96,19 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 		}
 	}
 	var snapshot []byte
+	var workspace *v1alpha1.WorkspaceSpec
 	if req.Project != "" {
 		if s.Projects == nil {
 			return nil, invalid(fieldError("project", "accepted project catalog is not configured"))
 		}
+		if s.Templates == nil {
+			return nil, invalid(fieldError("project", "accepted shared workspace is not enabled"))
+		}
+		t, err := s.Templates(ctx)
+		if err != nil || t.Workspace == nil || !t.Workspace.Enabled || t.Workspace.Claim == "" || t.Workspace.ID == "" {
+			return nil, invalid(fieldError("project", "accepted shared workspace is not enabled"))
+		}
+		workspace = &v1alpha1.WorkspaceSpec{ID: t.Workspace.ID}
 		raw, selected, err := s.Projects.snapshot(ctx, s.Live, req.Project, req.Repo)
 		if err != nil {
 			return nil, invalid(fieldError("project", "accepted project/repository is unavailable or invalid"))
@@ -203,6 +212,7 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 			}
 		}
 	}
+	spec.Workspace = workspace
 
 	if l := req.Lifecycle; l != nil {
 		spec.Lifecycle = &v1alpha1.Lifecycle{}
@@ -272,7 +282,15 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 
 // checkAgentd runs agentd's own check on the session, with its final name.
 func checkAgentd(sess *v1alpha1.AgentSession) error {
-	if err := controller.CheckAgentdSession(sess); err != nil {
+	check := sess
+	if sess.UID == "" && sess.Spec.Workspace != nil {
+		// Kubernetes assigns the real UID only after Create. This copy checks
+		// document syntax and size; its validation-only UID is never persisted
+		// or transported. The controller builds the pod with the actual API UID.
+		check = sess.DeepCopy()
+		check.UID = "00000000-0000-0000-0000-000000000000"
+	}
+	if err := controller.CheckAgentdSession(check); err != nil {
 		return invalid(fieldError("", "%v", err))
 	}
 	return nil

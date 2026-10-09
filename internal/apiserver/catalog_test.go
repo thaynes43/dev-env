@@ -12,7 +12,9 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
+	"github.com/thaynes43/dev-env/internal/templates"
 )
 
 const apiProjectCatalog = `{"version":1,"repositories":{"alias":{"github":"thaynes43/actual-source","defaultBranch":"stable"},"second":{"github":"thaynes43/second"}},"projects":{"sample":{"repositories":[{"name":"alias"},{"name":"second"}],"rules":"EXACT_ACCEPTED_RULES"}}}`
@@ -26,6 +28,7 @@ func bindCatalogFixture(t *testing.T, f *fixture) {
 	}
 	f.srv.Projects = &CatalogBinding{Key: key, CloneOwner: "thaynes43"}
 	f.srv.ManagedCodexTasks = true
+	f.tmpl.Workspace = &templates.Workspace{Enabled: true, Claim: "accepted-projects", ID: "projects-v2"}
 }
 
 func coordinatorTask() apiv1.CreateSessionRequest {
@@ -48,12 +51,52 @@ func TestCoordinatorProjectAdmissionDerivesDeclaredSourceAndRules(t *testing.T) 
 			t.Fatal("accepted project task refused", w.Code, w.Body.String())
 		}
 		s := f.session(decode[apiv1.Session](t, w).Name)
-		if s.Spec.Parent != coordinatorSA || s.Spec.Repo != "alias" || s.Spec.Base != "stable" || s.Spec.Profile != "dev" {
+		if s.Spec.Parent != coordinatorSA || s.Spec.Repo != "alias" || s.Spec.Base != "stable" || s.Spec.Profile != "dev" || s.Spec.Workspace == nil || s.Spec.Workspace.ID != "projects-v2" {
 			t.Fatal("caller overrode child identity or declared source")
 		}
 		snapshot, err := projectcatalog.ParseSnapshot([]byte(s.Annotations[v1alpha1.AnnotationProjectSnapshot]))
 		if err != nil || snapshot.Rules() != "EXACT_ACCEPTED_RULES" || snapshot.Selected().GitHub != "thaynes43/actual-source" {
 			t.Fatal("server snapshot lost accepted catalog authority")
+		}
+		// The fake client does not assign an API UID; model that assignment only
+		// for the controller's actual runtime-document check.
+		s.UID = "allocated-api-session-uid"
+		if err := controller.CheckAgentdSession(s); err != nil {
+			t.Fatal("admitted shared project task did not bind the actual Session UID", err)
+		}
+	}
+}
+
+func TestProjectAdmissionRefusesUnavailableSharedWorkspace(t *testing.T) {
+	for _, provider := range []string{"claude", "codex"} {
+		for _, kind := range []string{"missing", "disabled", "claim", "id", "templates"} {
+			t.Run(provider+"/"+kind, func(t *testing.T) {
+				f := coordinatorFixture(t)
+				bindCatalogFixture(t, f)
+				switch kind {
+				case "missing":
+					f.tmpl.Workspace = nil
+				case "disabled":
+					f.tmpl.Workspace.Enabled = false
+				case "claim":
+					f.tmpl.Workspace.Claim = ""
+				case "id":
+					f.tmpl.Workspace.ID = ""
+				case "templates":
+					f.tmplOK = false
+				}
+				r := coordinatorTask()
+				r.Agent = provider
+				if provider == "codex" {
+					r.Model = "gpt-6.1-sol"
+				}
+				w := f.do(http.MethodPost, apiv1.SessionsPath, tokClient, r)
+				wantError(t, w, http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+				var sessions v1alpha1.AgentSessionList
+				if err := f.c.List(context.Background(), &sessions); err != nil || len(sessions.Items) != 0 {
+					t.Fatal("unavailable shared workspace silently created a private task")
+				}
+			})
 		}
 	}
 }

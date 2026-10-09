@@ -67,10 +67,6 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		_, _ = fmt.Fprintln(pane, "agentd run-agent: the launch has no command")
 		return 1
 	}
-	if err := validateWorkspaceLaunch(l); err != nil {
-		_, _ = fmt.Fprintf(pane, "agentd run-agent: shared writer admission: %v\n", err)
-		return 1
-	}
 	if l.Provider == protocol.AgentCodex {
 		if err := verifyManagedCodexCLI(l); err != nil {
 			_, _ = fmt.Fprintln(pane, err)
