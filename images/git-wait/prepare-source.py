@@ -38,17 +38,45 @@ def extract(path, directory):
         entries = archive.getmembers()
         if len(entries) > 12000 or sum(e.size for e in entries) > 128 * 1024 * 1024:
             raise ValueError('source archive exceeds extraction cap')
-        names = set()
+        approved = {'RelNotes':'Documentation/RelNotes/2.39.5.txt'}
+        if LOCK['sourceSymlinks'] != approved:
+            raise ValueError('source symlink policy differs from reviewed literal')
+        inventory, roots = {}, set()
         for entry in entries:
             parts = PurePosixPath(entry.name)
-            if parts.is_absolute() or '..' in parts.parts or not (
-                    entry.isfile() or entry.isdir()) or parts in names:
+            if not parts.parts or parts.is_absolute() or '..' in parts.parts or parts in inventory:
                 raise ValueError('unsafe source archive entry')
-            names.add(parts)
+            inventory[parts] = entry
+            roots.add(parts.parts[0])
+        if len(roots) != 1:
+            raise ValueError('source archive must have one root')
+        root = PurePosixPath(next(iter(roots)))
+        links = []
+        # Validate ALL members and ancestor relationships before writing any
+        # bytes. This sole pinned literal is not general symlink extraction.
+        for parts, entry in inventory.items():
+            for parent in parts.parents:
+                ancestor = inventory.get(parent)
+                if ancestor is not None and not ancestor.isdir():
+                    raise ValueError('source archive has non-directory ancestor')
+            if entry.isfile() or entry.isdir():
+                if parts == root and not entry.isdir():
+                    raise ValueError('source archive root is not a directory')
+                continue
+            if not entry.issym() or approved.get(parts.relative_to(root).as_posix()) != entry.linkname:
+                raise ValueError('unsafe source archive entry')
+            target = inventory.get(parts.parent / entry.linkname)
+            if target is None or not target.isfile():
+                raise ValueError('pinned source link target is not an ordinary file')
+            links.append(entry)
+        if directory.is_symlink() or not directory.is_dir() or any(directory.iterdir()):
+            raise ValueError('source extraction requires a fresh ordinary directory')
         # Python in the exact base predates tarfile's extraction-filter API.
-        # Do not fall back to extractall: allow only validated regular files/dirs,
-        # never links/devices/owners/set-id bits, and preserve executable bits.
+        # Do not fall back to extractall. Write regular files/directories first,
+        # then only the reviewed RelNotes link; no devices, owners or set-id bits.
         for entry in entries:
+            if entry.issym():
+                continue
             path = directory / entry.name
             if entry.isdir():
                 path.mkdir(parents=True, exist_ok=True)
@@ -57,6 +85,8 @@ def extract(path, directory):
                 with archive.extractfile(entry) as source, path.open('xb') as target:
                     shutil.copyfileobj(source, target, length=16384)
                 os.chmod(path, entry.mode & 0o777)
+        for entry in links:
+            os.symlink(entry.linkname, directory / entry.name)
 
 
 def checksums(dsc):
@@ -74,6 +104,8 @@ def checksums(dsc):
 
 
 def main():
+    if os.environ.get('BASE_IMAGE') != LOCK['baseImage']:
+        raise ValueError('actual build base image differs from source lock')
     target = Path(sys.argv[1]).resolve()
     target.mkdir(parents=True)
     artifacts = target / 'artifacts'
@@ -145,7 +177,7 @@ def main():
         if (control / name).read_bytes() != (orig_root / name).read_bytes():
             raise ValueError('Debian patch changed reviewed marker callsite')
     instrumented = target / 'instrumented'
-    shutil.copytree(control, instrumented)
+    shutil.copytree(control, instrumented, symlinks=True)
     patch = HERE / 'git-marker.patch'
     subprocess.run(['patch', '--batch', '--fuzz=0', '-p1', '-i', str(patch)],
                    cwd=instrumented, check=True, timeout=15)
@@ -155,7 +187,7 @@ def main():
     # before compilation, so this never packages object files or build logs.
     package = target / 'source-package'
     package.mkdir()
-    shutil.copytree(control, package / 'git')
+    shutil.copytree(control, package / 'git', symlinks=True)
     shutil.copytree(HERE, package / 'recipe')
     record = dict(abiVersion=1, baseImage=LOCK['baseImage'], upstreamCommit=LOCK['upstreamCommit'],
                   upstreamTagObject=LOCK['upstreamTagObject'],
@@ -168,6 +200,7 @@ def main():
                   omittedUpstreamFiles=len(omitted), markerPatchSHA256=sha(patch),
                   markerSourceSHA256=sha(HERE / 'marker.c'),
                   markerHeaderSHA256=sha(HERE / 'marker.h'),
+                  sourceSymlinks=LOCK['sourceSymlinks'],
                   artifactVerification='hostedArtifactVerified',
                   historicalCompilerEquivalence=False)
     (target / 'source-provenance.json').write_text(json.dumps(record, sort_keys=True) + '\n')

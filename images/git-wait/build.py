@@ -24,10 +24,16 @@ def digest(path):
 
 
 def main():
+    actual_base = os.environ.get('BASE_IMAGE')
+    if actual_base != json.loads((HERE / 'source.lock.json').read_text())['baseImage']:
+        raise ValueError('actual build base image differs from source lock')
     root, output = map(lambda s: Path(s).resolve(), sys.argv[1:])
     commit = os.environ.get('COMMIT', '')
     if not re.fullmatch('[0-9a-f]{40}', commit):
         raise ValueError('exact recipe source commit required')
+    provenance = json.loads((root / 'source-provenance.json').read_text())
+    if provenance['baseImage'] != actual_base:
+        raise ValueError('prepared source provenance differs from actual build base')
     output.mkdir()
     env = dict(os.environ, DEB_BUILD_OPTIONS='parallel=2 nocheck nodoc', LC_ALL='C')
     control, instrumented = root / 'control', root / 'instrumented'
@@ -80,7 +86,6 @@ def main():
         if active is not None and current != active:
             raise ValueError('control/instrumented platform stat macros differ')
         active = current
-    provenance = json.loads((root / 'source-provenance.json').read_text())
     provenance.update(sourceCommit=commit,
                       buildOptionsSHA256=hashlib.sha256('\n'.join(options).encode()).hexdigest(),
                       compiler=run(['gcc', '-dumpfullversion'], timeout=5).stdout.strip(),

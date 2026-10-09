@@ -3,11 +3,13 @@
 import hashlib
 import importlib.util
 import io
+import json
 from pathlib import Path
 import tarfile
 import tempfile
 import unittest
 import sys
+import re
 from unittest import mock
 
 sys.dont_write_bytecode = True
@@ -16,13 +18,72 @@ recipe = Path(__file__).resolve().parents[2] / 'images/git-wait/prepare-source.p
 spec = importlib.util.spec_from_file_location('git_wait_source_recipe', recipe)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+build_spec = importlib.util.spec_from_file_location('git_wait_build_recipe',recipe.with_name('build.py'))
+build_module = importlib.util.module_from_spec(build_spec)
+build_spec.loader.exec_module(build_module)
 
 
 class SourceRecipeChecks(unittest.TestCase):
+    def test_actual_docker_base_arg_binds_both_stages_and_workflows_never_override(self):
+        dockerfile=recipe.with_name('Dockerfile').read_text()
+        defaults=re.findall(r'^ARG BASE_IMAGE=(.*)$',dockerfile,re.MULTILINE)
+        self.assertEqual(defaults,[module.LOCK['baseImage']])
+        stages=re.findall(r'^FROM ([^\n]+)$',dockerfile,re.MULTILINE)
+        self.assertEqual(stages,['${BASE_IMAGE} AS builder','${BASE_IMAGE}'])
+        builder=dockerfile.split('FROM ${BASE_IMAGE} AS builder',1)[1].split('FROM ${BASE_IMAGE}',1)[0]
+        self.assertIn('\nARG BASE_IMAGE\n',builder)
+        self.assertEqual(builder.count('env BASE_IMAGE="${BASE_IMAGE}" nice'),2)
+        workflows=recipe.parents[2]/'.github/workflows'
+        for name in ['ci.yml','publish-git-wait.yml']:
+            self.assertNotIn('BASE_IMAGE=',(workflows/name).read_text())
+
+    def test_changed_or_missing_actual_base_refuses_before_download_or_compile(self):
+        with tempfile.TemporaryDirectory(prefix='git-wait-base-refusal-') as directory:
+            root=Path(directory)
+            for actual in ['',module.LOCK['baseImage'].replace(':2.9.1@',':unreviewed@')]:
+                with mock.patch.dict(module.os.environ,BASE_IMAGE=actual), \
+                        mock.patch.object(sys,'argv',['recipe',str(root/'source')]), \
+                        mock.patch.object(module,'download') as download:
+                    with self.assertRaisesRegex(ValueError,'actual build base'):
+                        module.main()
+                    download.assert_not_called()
+                    self.assertFalse((root/'source').exists())
+                with mock.patch.dict(build_module.os.environ,BASE_IMAGE=actual), \
+                        mock.patch.object(sys,'argv',['build',str(root/'source'),str(root/'out')]), \
+                        mock.patch.object(build_module,'run') as compile_call:
+                    with self.assertRaisesRegex(ValueError,'actual build base'):
+                        build_module.main()
+                    compile_call.assert_not_called()
+                    self.assertFalse((root/'out').exists())
+
+    def test_exact_actual_base_reaches_only_mocked_first_build_call(self):
+        with tempfile.TemporaryDirectory(prefix='git-wait-base-admission-') as directory:
+            root=Path(directory)
+            (root/'source-provenance.json').write_text(json.dumps({'baseImage':module.LOCK['baseImage']}))
+            with mock.patch.dict(build_module.os.environ,BASE_IMAGE=module.LOCK['baseImage'],COMMIT='a'*40), \
+                    mock.patch.object(sys,'argv',['build',str(root),str(root/'out')]), \
+                    mock.patch.object(build_module,'run',side_effect=RuntimeError('mock first make')) as compile_call:
+                with self.assertRaisesRegex(RuntimeError,'mock first make'):
+                    build_module.main()
+                self.assertEqual(compile_call.call_count,1)
+
+    def test_prepared_provenance_mismatch_refuses_before_build(self):
+        with tempfile.TemporaryDirectory(prefix='git-wait-prepared-base-refusal-') as directory:
+            root=Path(directory)
+            (root/'source-provenance.json').write_text(json.dumps({'baseImage':'unverified'}))
+            with mock.patch.dict(build_module.os.environ,BASE_IMAGE=module.LOCK['baseImage'],COMMIT='a'*40), \
+                    mock.patch.object(sys,'argv',['build',str(root),str(root/'out')]), \
+                    mock.patch.object(build_module,'run') as compile_call:
+                with self.assertRaisesRegex(ValueError,'prepared source provenance'):
+                    build_module.main()
+                compile_call.assert_not_called()
+                self.assertFalse((root/'out').exists())
+
     def test_source_root_creates_missing_parent_but_refuses_existing_target(self):
         with tempfile.TemporaryDirectory(prefix='git-wait-root-mock-') as directory:
             target=Path(directory)/'missing-parent/native'
-            with mock.patch.object(sys,'argv',['recipe',str(target)]), \
+            with mock.patch.dict(module.os.environ,BASE_IMAGE=module.LOCK['baseImage']), \
+                    mock.patch.object(sys,'argv',['recipe',str(target)]), \
                     mock.patch.object(module,'download',side_effect=RuntimeError('mock first download')) as download:
                 with self.assertRaisesRegex(RuntimeError,'mock first download'):
                     module.main()
@@ -105,6 +166,75 @@ class SourceRecipeChecks(unittest.TestCase):
             output.mkdir()
             module.extract(archive, output)
             self.assertEqual((output / 'root/tiny').read_bytes(), b'x')
+
+    def test_only_pinned_internal_relnotes_link_is_retained_after_regular_files(self):
+        with tempfile.TemporaryDirectory(prefix='git-wait-relnotes-mock-') as directory:
+            root=Path(directory)
+            archive=root/'allowed.tar'
+            with tarfile.open(archive,'w') as stream:
+                link=tarfile.TarInfo('root/RelNotes')
+                link.type,link.linkname=tarfile.SYMTYPE,'Documentation/RelNotes/2.39.5.txt'
+                stream.addfile(link)  # Link deliberately precedes its declared target.
+                target=tarfile.TarInfo('root/Documentation/RelNotes/2.39.5.txt')
+                target.size=1
+                stream.addfile(target,io.BytesIO(b'x'))
+            output=root/'output'
+            output.mkdir()
+            module.extract(archive,output)
+            self.assertTrue((output/'root/RelNotes').is_symlink())
+            self.assertEqual((output/'root/RelNotes').read_bytes(),b'x')
+            copied=root/'copied'
+            module.shutil.copytree(output/'root',copied,symlinks=True)
+            self.assertTrue((copied/'RelNotes').is_symlink())
+            self.assertEqual((copied/'RelNotes').read_bytes(),b'x')
+
+    def test_relnotes_exception_refuses_wrong_missing_nonregular_and_colliding_inventory(self):
+        literal='Documentation/RelNotes/2.39.5.txt'
+        link=('root/RelNotes',tarfile.SYMTYPE,literal)
+        target=('root/'+literal,tarfile.REGTYPE,'')
+        # Fixed tiny inventories, not archive fuzzing or a wide test loop.
+        cases=[
+            [('root/RelNotes',tarfile.SYMTYPE,'Documentation/RelNotes/2.39.4.txt'),target],
+            [link],
+            [link,('root/'+literal,tarfile.DIRTYPE,'')],
+            [link,target,('root/Documentation',tarfile.REGTYPE,'')],
+            [link,target,('root/RelNotes/descendant',tarfile.REGTYPE,'')],
+            [link,target,('root/RelNotes',tarfile.REGTYPE,'')],
+            [link,target,('root/other-link',tarfile.SYMTYPE,literal)],
+            [('root/RelNotes',tarfile.LNKTYPE,literal),target],
+            [link,target,('another-root/tiny',tarfile.REGTYPE,'')],
+        ]
+        with tempfile.TemporaryDirectory(prefix='git-wait-relnotes-refusal-') as directory:
+            root=Path(directory)
+            for index,entries in enumerate(cases):
+                archive=root/(str(index)+'.tar')
+                with tarfile.open(archive,'w') as stream:
+                    for name,kind,destination in entries:
+                        entry=tarfile.TarInfo(name)
+                        entry.type,entry.linkname=kind,destination
+                        entry.size=1 if entry.isfile() else 0
+                        stream.addfile(entry,io.BytesIO(b'x') if entry.isfile() else None)
+                output=root/('out'+str(index))
+                output.mkdir()
+                with self.assertRaises(ValueError):
+                    module.extract(archive,output)
+                self.assertEqual(list(output.iterdir()),[])  # Whole validation precedes mutation.
+
+    def test_extract_refuses_preexisting_destination_state(self):
+        with tempfile.TemporaryDirectory(prefix='git-wait-destination-mock-') as directory:
+            root=Path(directory)
+            archive=root/'source.tar'
+            with tarfile.open(archive,'w') as stream:
+                entry=tarfile.TarInfo('root/tiny')
+                entry.size=1
+                stream.addfile(entry,io.BytesIO(b'x'))
+            output=root/'output'
+            output.mkdir()
+            (output/'preserved').write_bytes(b'unchanged')
+            with self.assertRaises(ValueError):
+                module.extract(archive,output)
+            self.assertEqual(sorted(path.name for path in output.iterdir()),['preserved'])
+            self.assertEqual((output/'preserved').read_bytes(),b'unchanged')
 
 
 if __name__ == '__main__':
