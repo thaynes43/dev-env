@@ -3350,7 +3350,8 @@ records the remaining cutover blockers.
   checks after channel setup, immediately before dispatch, then refreshes the
   Lease check. Cleanup can still run after release or session disappearance.
 
-Owner provisioning names: 1Password item `dev-env-ssh-ca`, fields
+Owner provisioning names (corrected by D-72): vault `HaynesKube`, existing
+1Password item `dev-env`, fields
 `SSH_CA_PRIVATE_KEY_B64` and `SSH_CA_PUBLIC_KEY`; projected Secret
 `dev-env-system/dev-env-keeper-ssh-ca`, keys `private-key` and `public-key`, mounted
 at `/etc/dev-env-keeper/ssh-ca`. The owner generates and stores the fresh CA.
@@ -3427,6 +3428,69 @@ replacement's guardrail tests must both pass. Preserve existing owner rules;
 no blanket standing admin grant or Q-18 implementation is selected by this target.
 The old Q-18 premise remains withdrawn, while R-03's candidate approval mechanisms
 remain relevant to a concrete guarded replacement workflow.
+
+**D-72 (2026-10-08 America/New_York, storage correction prompted by Tom). Reuse
+the existing 1Password item.**
+
+Tom asked why the CA needed a new item when `dev-env` already exists, and asked
+for explicit copy-paste instructions. The earlier `dev-env-ssh-ca` item name was
+a documentation choice, not a keeper requirement. Use the existing
+`HaynesKube/dev-env` item. This supersedes Q-19's originally proposed item name;
+its fresh CA requirement and field names remain.
+
+Source verification at haynes-ops `04c611e7ccf6d057f5b6b466dc4d52f5bb5672c8`
+confirmed that v1 and current v2 ExternalSecrets select individual item
+properties. No current mapping selects either CA field. Adding these fields
+therefore does not add them to the current v1 or session Secrets. Provision a
+separate keeper-only ExternalSecret with `remoteRef.key: dev-env`: decode
+`SSH_CA_PRIVATE_KEY_B64` once with `decodingStrategy: Base64` into `private-key`,
+and map `SSH_CA_PUBLIC_KEY` unchanged into `public-key`. Use the planned
+destination `dev-env-system/dev-env-keeper-ssh-ca` and planned read-only keeper
+mount at `/etc/dev-env-keeper/ssh-ca`. The CA projection is not deployed yet and
+minting remains disabled.
+Do not add the fields to v1's consumed Secrets or session profiles.
+
+Owner instructions: open a terminal on a trusted Mac or Linux computer and paste
+the whole block below from any working directory. It creates the private folder
+`dev-env-keeper-ca` under the owner's home and prints its location; all generated
+files stay there until the owner has saved them. If that folder already exists,
+the block stops before key generation. The keeper loads the key unattended, so
+the private key has an empty passphrase.
+
+```bash
+(
+  set -eu
+  set -o pipefail
+  umask 077
+  ca_dir="$HOME/dev-env-keeper-ca"
+  mkdir -m 700 "$ca_dir"
+  ssh-keygen -q -t ed25519 -N '' -C dev-env-keeper-ssh-ca \
+    -f "$ca_dir/ssh_ca"
+  base64 < "$ca_dir/ssh_ca" | tr -d '\r\n' \
+    > "$ca_dir/private-key.b64"
+  printf 'Files saved in: %s\n' "$ca_dir"
+)
+```
+
+Open the files locally and add these exact fields to the existing item:
+
+| Field | Contents |
+|---|---|
+| `SSH_CA_PRIVATE_KEY_B64` | Entire `private-key.b64` file; concealed field |
+| `SSH_CA_PUBLIC_KEY` | Entire `ssh_ca.pub` public-key line |
+
+After verifying both fields saved, paste this second block to remove the two
+local private-key files. It keeps `ssh_ca.pub` for the subsequent node-trust step:
+
+```bash
+rm -- "$HOME/dev-env-keeper-ca/ssh_ca" \
+  "$HOME/dev-env-keeper-ca/private-key.b64"
+```
+
+Send only saved confirmation in chat, never key contents. The existing Proxmox `dev-env`
+accounts and sudo access are reused; accepting the fresh CA with the required
+principal/command restrictions and keeper host-key trust remains a subsequent
+provisioning step. No owner completion is claimed and minting remains disabled.
 
 **D-26. Approvals: a Pushover link to an approval page behind Authentik.**
 
@@ -4448,7 +4512,7 @@ blocks only the step it names.
 | Q-16 | How should the approval authority be protected from agent access before plan 07 step 6 is enabled? Verified 2026-10-08: the guard protects Traefik ServiceAccounts, but not Authentik's server and outpost pods (`network/default`), its worker, or the shared `database/postgres16` state, so agents can change identity or login evidence through exec, workloads, blueprint ConfigMaps and routing objects. D-19's accepted trade-off therefore reaches the authority D-26 needs to trust. | As first drafted (closed PR #90), all ruled out by the Resolution: **A (was recommended). Protect the existing authority as enforcing infrastructure:** deny agents access to Authentik, its outposts, Traefik routing and `postgres16` through exec/attach, mutable workloads and configuration, routes and volumes; agents would lose operations on shared `postgres16`, and Tom would do them himself. **B. Isolate Authentik and its approval state** in enforcing namespaces with a dedicated database: a migration and a larger deployment first. **C. Defer human approval:** standing GrantPolicies only, console disabled. Costs no parity, and is the state until approvals ship. The approval surface is now the next design spike (issue #91): **(a)** an approver Remote Control session in a guarded pod, not in bypass mode and with a minimal toolset, whose permission prompts or AskUserQuestion answers reach Tom's phone, with a managed hook forwarding the recorded answer to the broker; **(b)** asking in the requesting session, which the agent can forge, so a soft gate only; **(c)** the coordinator session relays the request, also soft, and needing no new infrastructure. The spike records its own Q-NN. | **Ruled 2026-10-08 (Tom, from his phone).** His answers, quoted exactly: (1) "Agents handle all renovate upgrades and maintenance of the cluster via Haynes-ops we need to be extremely careful that we don't add guardrails I'll have to later peel back to reach parity with today's capabilities." (2) "The agents often have to wire new apps up to aithentik by creating or changing providers and applications." (3) "I am open to advanced security but I must be able to grant permission from my phone." (4) "There's some friction in getting a pushover then opening a website unless that website replaces Claude code app which is what I use today for both prompts : chat and approvals. Splitting it into two apps seems risky". The ruling: **Parity first.** No new guard cuts what agents do today: no Authentik, outpost, Traefik or postgres16 lockdown, no git review gate and no CODEOWNERS gate. Agents keep self-merging haynes-ops PRs, blueprint app wiring included. **Standing grants cover parity.** Auto-approved, short-lived grants must cover everything a v1 agent does today: the OPERATOR kube tier, Proxmox through the keeper's SSH minting (Q-15) and hw-ssh. Any gap blocks the cutover. **Human approval gates only capabilities beyond today's**, such as secret reads and break-glass above the OPERATOR tier. They stay unavailable until it ships, which costs no parity. **Approvals happen inside the Claude Code app**, not Pushover plus a web page; the surface is the next design spike. **Accepted residual risk:** Flux reconciles every Kustomization as cluster-admin and agents self-merge, so any agent can already change anything through git. A restricted Flux lane is a future option that only counts if it keeps full parity. The plan 07 build takes the D-NN. **Coordinator correction, later 2026-10-08 (D-70):** the OPERATOR-only examples above omit accepted Headlamp cluster-admin access. Those operations are existing reachable powers, with Tom's live directive still required for the Headlamp task or access scope. This factual correction is appended to the original ruling; it is not a new owner ruling or blanket standing admin authorization. |
 | Q-17 | Does Tom's laptop already have a working admin kubeconfig for the main cluster? D-05 requires it for the external CLI path; the cluster's human ServiceAccount, CA ConfigMap and operator Service already exist, but the laptop configuration has not been checked. | **A. Use an existing admin context (was recommended):** verify its context and operator Service read locally, then use it for the external check. No new cluster identity. **B. Set up laptop cluster access first:** Tom or his laptop agent configures an admin kubeconfig through the existing owner access path. No credential values are sent to this chat or committed. | **Withdrawn 2026-10-08: Tom corrected the premise.** He would use a CLI such as `agent-run`, ask agents to start sessions, or consider a web UI for session management. Neither prerequisite option was chosen. No laptop setup or test blocks plan 02; acceptance uses the existing in-cluster CLI and agent-created sessions. D-68 remains an optional external path, with no claim of a real external-machine acceptance run. A web UI is an option, not an instruction to build one now. Q-16's approval and parity rulings remain in force. |
 | Q-18 | Which approval route should plan 07 pursue for capabilities beyond today's v1 tier? [R-03](../research/R-03-claude-code-approvals.md) verified hook schemas and managed permission controls, but no route yet proves an isolated phone decision. Ordinary relays are forgeable; guarded execution still needs phone, complete authority, shared OAuth and parity tests. | **A. Staged guarded approver (recommended):** pursue a separate Claude Code control workload after plan 03's keeper-owned login and Remote Control core. Additional human-gated capabilities stay disabled until phone/receipt/isolation tests pass without reducing parity. **B. Coordinator soft gate:** use a Claude Code coordinator relay with explicit acceptance that its agent can forge the answer; less infrastructure, no independent human-provenance boundary. **C. Standing grants only for now:** finish parity and SSH minting, and defer the human path; capabilities beyond today's tier remain unavailable. | **Earlier prompt withdrawn by the coordinator, 2026-10-08, after Tom's baseline correction.** No route or blanket direct cluster-admin grant is selected. Preserve effective parity and existing owner rules. The withdrawal does not mean Tom chose to defer approvals; it removes a question built on an incomplete baseline. Parity and keeper provisioning continue. |
-| Q-19 | Can Tom provision the fresh keeper SSH CA in the agreed 1Password location, or does he need generation instructions? This is the first owner step already required by the work order and D-69, not a new approval of Q-15 A. | **A. Provision and confirm saved (recommended):** fresh unencrypted Ed25519 OpenSSH CA in vault `HaynesKube`, item `dev-env-ssh-ca`, fields `SSH_CA_PRIVATE_KEY_B64` (base64 private-key file) and `SSH_CA_PUBLIC_KEY` (public-key line). **B. Request generation instructions:** walk through that same owner step. Never send values to the coordinator chat. | **Awaiting owner completion or request for instructions, 2026-10-09 UTC.** The owner generates/stores the CA; no v1 hardware key is reused. Keeper minting remains disabled. Node trust and activation are subsequent steps, not bundled into this prompt. |
+| Q-19 | Can Tom provision the fresh keeper SSH CA in the agreed 1Password location, or does he need generation instructions? This is the first owner step already required by the work order and D-69, not a new approval of Q-15 A. | **A. Provision and confirm saved (recommended):** fresh unencrypted Ed25519 OpenSSH CA in vault `HaynesKube`, item `dev-env-ssh-ca`, fields `SSH_CA_PRIVATE_KEY_B64` (base64 private-key file) and `SSH_CA_PUBLIC_KEY` (public-key line). **B. Request generation instructions:** walk through that same owner step. Never send values to the coordinator chat. | **Instructions requested; awaiting saved confirmation.** Tom requested generation steps and reuse of the existing item on 2026-10-08 America/New_York. D-72 corrects the originally proposed item to `HaynesKube/dev-env` and supplies instructions that run from any directory. The owner generates/stores the fresh CA; no v1 hardware key is reused. Keeper minting remains disabled. Node trust and activation are subsequent steps. |
 
 ## 16. Decisions settled in this design
 
@@ -4525,3 +4589,4 @@ blocks only the step it names.
 | D-69 | Disabled-by-default PVE credential jobs: broker owns approval/grant status; keeper owns pinned SSH minting, bounded private journal and cleanup receipts; typed UID-fenced agentd files preserve pve behavior. Q-15 A; owner CA/trust and real acceptance remain required. | 6.12 |
 | D-70 | Effective parity includes accepted Headlamp cluster-admin and GitOps paths. The five proposed extra Kubernetes categories are existing reachable powers; direct grants, expiry and attribution improve the mechanism. Q-18's earlier prompt is withdrawn, with no approval route or blanket direct admin grant selected. | 6.12 |
 | D-71 | Tom's target: replace Headlamp with guarded access preserving accepted v1 tasks and owner rules; prove parity and guardrails, migrate callers, then retire Headlamp through GitOps. No approval implementation or blanket standing admin grant is selected. | 6.12 |
+| D-72 | Reuse existing `HaynesKube/dev-env` for the fresh keeper CA. Current mappings select explicit fields; a separate keeper-only Secret selects the CA fields. Q-19 instructions run from any directory; owner completion and node trust remain pending. | 6.12 |
