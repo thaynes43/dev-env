@@ -79,10 +79,11 @@ management UI and credential migration remain unselected.
    private provider homes, enrollment/socket state and appropriate cache isolation.
    The bounded storage trial is a feasibility check; normal rollout still needs
    acceptance. Today's per-session RWO homes are not the shared workspace.
-4. Define at least two stable Codex logical-host identities, each with private
-   enrollment state surviving replacement. Preserve one keeper refresh owner.
-   Reassess S-4 forwarding as a possible mechanism; one hub is not the requested
-   topology. Run bounded acceptance on the actual pinned Linux CLI.
+4. Implement D-80's [two persistent coordinator hosts](../../../../docs/codex-coordinator-hosts.md),
+   each with private enrollment surviving idle replacement and read-only shared
+   files. Use a dedicated child-scoped API identity to request managed Claude/
+   Codex executors. Native app threads remain host-local; S-4 forwarding is later
+   work. Preserve one keeper refresh owner and prove the pinned Linux CLI route.
 5. Bind both providers to each project: generated Codex trust, Claude repo scope,
    one rule source, and a reliable task rule propagation mechanism. R4's nested
    `.work` option conflicts with R5's explicit sweep boundary; prefer a project
@@ -122,15 +123,18 @@ D-77 divides the implementation while runtime acceptance remains gated:
 1. **Source merged #135 (`316c03c`):** disabled shared mounts/identity, common Git locks, durable writer records and
    owned-task rescue. Old private sessions retain their behavior. This initial
    core refuses post-launch shared rescue until the next unit supplies stop proof.
-2. **Source in review #140:** shared-only supervisor stop/preserve and a distinct bounded hold-rescue pod,
+2. **Source merged #140 (`7b3ce4c`):** shared-only supervisor stop/preserve and a distinct bounded hold-rescue pod,
    with controller proof of the exact old executor's genuine termination before
-   any cleanup. Missing/deleted/partitioned owners remain refused. Shared
-   private-home archive/reap stays blocked until a retained-home detach route
-   preserves enrollment/history independently of task-only rescue.
-3. Catalog/API/CLI, fresh source and actual both-provider project/repo rule loading.
-4. **Auth source merged #138 (`bcb2599`), runtime off:** keeper-owned fresh Codex login/refresh/reload, two retained remote hosts and
-   managed Codex tasks; explicit transfer follows the proven stop contract.
-5. Complete storage, client, phone, lifecycle and cleanup acceptance for the
+   any cleanup. Missing/deleted/partitioned owners remain refused.
+3. D-81's [retained-private-home receipt and detach](../../../../docs/shared-private-home-retention.md)
+   after verified rescue and both-pod absence, before Session finalization. This
+   keeps private provider state without enabling automatic home destruction.
+4. Catalog/API/CLI, fresh source and actual both-provider project/repo rule loading.
+5. **Auth source merged #138 (`bcb2599`), runtime off:** keeper-owned fresh Codex
+   login/refresh/reload, D-80's scoped coordinator class,
+   managed Codex launch/resume and two retained remote hosts;
+   explicit transfer follows the proven stop contract.
+6. Complete storage, client, phone, lifecycle and cleanup acceptance for the
    [owner test milestone](../../../handoffs/2026-10-09-testable-v2.md).
 
 The template/session feature stays off until its relevant source, deployment and
