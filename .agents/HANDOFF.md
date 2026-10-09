@@ -5,6 +5,17 @@ Tom's own machine. Read this page, then [CLAUDE.md](../CLAUDE.md) (the rules), t
 the saga. To start building, follow
 [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md).
 
+## Active delivery to an owner-testable v2, 2026-10-09
+
+Tom clarified that Codex must continue until v2 provides a workflow he can test.
+The documentation checkpoint did not end that assignment. Read the
+[active delivery milestone](handoffs/2026-10-09-testable-v2.md): existing native
+apps/CLI, two distinct Codex hosts sharing projects, managed fresh-source tasks,
+real project/repo rule loading, owner-safe resume/rescue and phone questions.
+Source work proceeds disabled by default while #130's storage diagnosis and
+acceptance are completed. V1 remains available; full parity and cutover gates
+still apply. Codex owns this work rather than leaving it for another implementer.
+
 ## Workflow guide, revised projects and shipped freshness, 2026-10-09
 
 Read the [workflow guide](../docs/workflow-guide.md) before further architecture
