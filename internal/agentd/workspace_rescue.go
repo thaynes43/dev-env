@@ -42,7 +42,7 @@ func rescueSharedTask(ctx context.Context, r Runner, s Settings, task string, no
 		return protocol.RescueReport{}, lockErr
 	}
 	defer writer()
-	unlock, err := workspaceAdminLock(s, sess.Repo)
+	unlock, err := workspaceAdminLock(ctx, s, sess.Repo)
 	if err != nil {
 		return protocol.RescueReport{}, err
 	}
@@ -144,7 +144,7 @@ func ownedUnpushedRefs(ctx context.Context, r Runner, s Settings, clone, task st
 	for scan.Scan() {
 		commit, name, ok := strings.Cut(scan.Text(), " ")
 		if !ok || (name != branch && !strings.HasPrefix(name, wip)) {
-			return nil, errors.New("Git returned a ref outside the task's ownership namespace")
+			return nil, errors.New("git returned a ref outside the task's ownership namespace")
 		}
 		extra, err := s.git(ctx, r, clone, "rev-list", "-n", "1", commit, "--not", "--remotes=origin")
 		if err != nil {

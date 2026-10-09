@@ -3,6 +3,7 @@ package agentd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -220,7 +221,7 @@ func TestSharedRescueSnapshotsOnlyOwnedTaskAndRefusesBusyWriter(t *testing.T) {
 	if stopped.State != "stopped" || stopped.StoppedAt.IsZero() {
 		t.Fatalf("no durable receipt %+v", stopped)
 	}
-	if err := admitWorkspaceLaunch(s, sess, &Launch{}, rescueNow); err == nil {
+	if err := admitWorkspaceLaunch(context.Background(), s, sess, &Launch{}); err == nil {
 		t.Fatal("stopped task launched after rescue")
 	}
 }
@@ -235,7 +236,11 @@ func TestSharedLaunchedRescueRefusesAndPreservesReceipt(t *testing.T) {
 	}
 	defer w.unlock()
 	s.writer = w
-	if err := admitWorkspaceLaunch(s, sess, &Launch{}, rescueNow); err != nil {
+	launch := Launch{Session: sess.Name, Dir: s.WorktreePath(sess.Name)}
+	if err := admitWorkspaceLaunch(context.Background(), s, sess, &launch); err != nil {
+		t.Fatal(err)
+	}
+	if err := finalizeWorkspaceLaunch(s, sess, launch, rescueNow); err != nil {
 		t.Fatal(err)
 	}
 	w.unlock()
@@ -271,6 +276,52 @@ func TestWorkspaceLockRefusesNonregularFile(t *testing.T) {
 	if unlock, err := workspaceLock(s, "writer-task-a"); err == nil {
 		unlock()
 		t.Fatal("FIFO accepted as a lock file")
+	}
+}
+
+func TestWorkspaceAdminLockWaitRespectsContext(t *testing.T) {
+	g := newGitFixture(t, "demo")
+	s, _ := g.settings(t)
+	s, _ = sharedSettings(t, s, "task-a")
+	unlock, err := workspaceAdminLock(context.Background(), s, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if _, err := workspaceAdminLock(ctx, s, "demo"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("busy administrative lock did not wait for bounded context: %v", err)
+	}
+}
+
+func TestWorkspaceLatePaneCannotLaunchAfterStoppedReceipt(t *testing.T) {
+	g := newGitFixture(t, "demo")
+	s, r := g.settings(t)
+	s, sess := sharedSettings(t, s, "task-a")
+	w, err := acquireWorkspaceWriter(context.Background(), r, s, sess, rescueNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.unlock()
+	s.writer = w
+	launch := Launch{Session: sess.Name, Dir: s.WorktreePath(sess.Name)}
+	if err := admitWorkspaceLaunch(context.Background(), s, sess, &launch); err != nil {
+		t.Fatal(err)
+	}
+	var pending taskOwner
+	if err := readWorkspaceJSON(s.ownerPath(sess.Name), &pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending.Launched {
+		t.Fatal("daemon reservation marked a CLI admitted before pane validation")
+	}
+	pending.State, pending.StoppedAt, pending.StopReason = "stopped", rescueNow, "no-agent-admitted"
+	if err := writeWorkspaceJSON(s.ownerPath(sess.Name), pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := finalizeWorkspaceLaunch(s, sess, launch, rescueNow); err == nil {
+		t.Fatal("late pane admitted after stopped receipt changed")
 	}
 }
 

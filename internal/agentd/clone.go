@@ -67,7 +67,7 @@ func PrepareRepo(ctx context.Context, r Runner, s Settings, sess protocol.Sessio
 		if s.writer == nil {
 			return ws, newStep(name, nil, errors.New("shared Git preparation requires the daemon's writer lock"))
 		}
-		unlock, err := workspaceAdminLock(s, sess.Repo)
+		unlock, err := workspaceAdminLock(ctx, s, sess.Repo)
 		if err != nil {
 			return ws, newStep(name, nil, err)
 		}

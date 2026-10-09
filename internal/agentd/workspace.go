@@ -188,7 +188,7 @@ func readWorkspaceJSON(path string, dst any) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	fi, err := f.Stat()
 	if err != nil {
 		return err
@@ -229,7 +229,7 @@ func workspaceLock(s Settings, name string) (func(), error) {
 		return nil, errors.New("workspace lock is not a regular file")
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("workspace %s is busy or lock ownership is uncertain: %w", name, err)
 	}
 	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
@@ -237,9 +237,30 @@ func workspaceLock(s Settings, name string) (func(), error) {
 
 // The key is the expected common Git directory, not the worktree's private
 // .git pointer. It also serializes the initial clone before that directory exists.
-func workspaceAdminLock(s Settings, repo string) (func(), error) {
+func workspaceAdminLock(ctx context.Context, s Settings, repo string) (func(), error) {
 	key := sha256.Sum256([]byte(filepath.Join(s.ClonePath(repo), ".git")))
-	return workspaceLock(s, "git-"+hex.EncodeToString(key[:]))
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	name := "git-" + hex.EncodeToString(key[:])
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		unlock, err := workspaceLock(s, name)
+		if err == nil {
+			return unlock, nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, err
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, fmt.Errorf("shared Git administration lock wait: %w", ctx.Err())
+		case <-timer.C:
+		}
+	}
 }
 
 func acquireWorkspaceWriter(ctx context.Context, r Runner, s Settings, sess protocol.Session, now time.Time) (*writerLease, error) {
@@ -254,7 +275,7 @@ func acquireWorkspaceWriter(ctx context.Context, r Runner, s Settings, sess prot
 		return nil, err
 	}
 	fail := func(err error) (*writerLease, error) { unlock(); return nil, err }
-	admin, err := workspaceAdminLock(s, sess.Repo)
+	admin, err := workspaceAdminLock(ctx, s, sess.Repo)
 	if err != nil {
 		return fail(err)
 	}
@@ -336,9 +357,9 @@ func ownerMatches(s Settings, sess protocol.Session, owner taskOwner, pod bool) 
 	return nil
 }
 
-// admitWorkspaceLaunch runs before tmux can spawn a writer. Rescue takes the
-// same administration lock and refuses every record for which admission ran.
-func admitWorkspaceLaunch(s Settings, sess protocol.Session, launch *Launch, now time.Time) error {
+// admitWorkspaceLaunch reserves the exact generation before tmux starts.
+// run-agent rechecks it and durably marks launched before any writer starts.
+func admitWorkspaceLaunch(ctx context.Context, s Settings, sess protocol.Session, launch *Launch) error {
 	if sess.Workspace == nil && s.WorkspaceID == "" {
 		return nil
 	}
@@ -348,7 +369,7 @@ func admitWorkspaceLaunch(s Settings, sess protocol.Session, launch *Launch, now
 	if err := workspacePreflight(s, sess); err != nil {
 		return err
 	}
-	unlock, err := workspaceAdminLock(s, sess.Repo)
+	unlock, err := workspaceAdminLock(ctx, s, sess.Repo)
 	if err != nil {
 		return err
 	}
@@ -360,14 +381,9 @@ func admitWorkspaceLaunch(s Settings, sess protocol.Session, launch *Launch, now
 	if err := ownerMatches(s, sess, owner, true); err != nil {
 		return err
 	}
-	if owner.State != "owned" || owner.Generation != s.writer.owner.Generation {
+	if owner.State != "owned" || owner.Launched || owner.Generation != s.writer.owner.Generation {
 		return errors.New("writer receipt changed before launch")
 	}
-	owner.Launched, owner.UpdatedAt = true, now.UTC()
-	if err := writeWorkspaceJSON(s.ownerPath(sess.Name), owner); err != nil {
-		return err
-	}
-	s.writer.owner = owner
 	launch.WorkspaceOwner = &owner
 	return nil
 }
@@ -390,7 +406,11 @@ func validateWorkspaceLaunch(l Launch) error {
 	if l.WorkspaceOwner == nil || l.Session != sess.Name || l.Dir != s.WorktreePath(sess.Name) {
 		return errors.New("launch does not carry the admitted shared task")
 	}
-	unlock, err := workspaceAdminLock(s, sess.Repo)
+	return finalizeWorkspaceLaunch(s, sess, l, time.Now())
+}
+
+func finalizeWorkspaceLaunch(s Settings, sess protocol.Session, l Launch, now time.Time) error {
+	unlock, err := workspaceAdminLock(context.Background(), s, sess.Repo)
 	if err != nil {
 		return err
 	}
@@ -402,10 +422,11 @@ func validateWorkspaceLaunch(l Launch) error {
 	if err := ownerMatches(s, sess, owner, true); err != nil {
 		return err
 	}
-	if owner.State != "owned" || !owner.Launched || owner != *l.WorkspaceOwner {
+	if l.WorkspaceOwner == nil || owner.State != "owned" || owner.Launched || owner != *l.WorkspaceOwner {
 		return errors.New("writer receipt no longer matches the admitted launch")
 	}
-	return nil
+	owner.Launched, owner.UpdatedAt = true, now.UTC()
+	return writeWorkspaceJSON(s.ownerPath(sess.Name), owner)
 }
 
 // validateSharedClone rejects symlinked or foreign Git administration before
@@ -457,17 +478,17 @@ func writeWorkspaceJSON(path string, value any) error {
 		return err
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp)
+	defer func() { _ = os.Remove(tmp) }()
 	if err := f.Chmod(0o600); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	if _, err := f.Write(append(data, '\n')); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	if err := f.Close(); err != nil {
@@ -480,7 +501,7 @@ func writeWorkspaceJSON(path string, value any) error {
 	if err != nil {
 		return err
 	}
-	defer parent.Close()
+	defer func() { _ = parent.Close() }()
 	return parent.Sync()
 }
 
@@ -495,6 +516,6 @@ func ensureWorkspaceDirectory(dir string) error {
 	if err != nil {
 		return err
 	}
-	defer parent.Close()
+	defer func() { _ = parent.Close() }()
 	return parent.Sync()
 }

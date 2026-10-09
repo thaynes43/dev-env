@@ -107,6 +107,44 @@ func (r daemonRig) tmuxStarted() bool {
 	return false
 }
 
+func TestDaemonSharedSamePodRestartReportsRefusedWriter(t *testing.T) {
+	r := newDaemonRig(t, nil)
+	s, sess := sharedSettings(t, r.d.S, r.d.Session.Name)
+	w, err := acquireWorkspaceWriter(context.Background(), r.d.R, s, sess, rescueNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := w.owner
+	owner.Launched = true
+	if err := writeWorkspaceJSON(s.ownerPath(sess.Name), owner); err != nil {
+		t.Fatal(err)
+	}
+	w.unlock()
+	r.d.S, r.d.Session = s, sess
+	stop := r.start(t)
+	waitFor(t, func() bool { status, count := r.beats.last(); return status.Boot == protocol.BootFailed && count >= 3 })
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if r.tmuxStarted() || !r.d.writerRefused {
+		t.Fatal("uncertain same-Pod restart started an agent or claimed a writer")
+	}
+	var rec bootRecord
+	if err := readJSONFile(s.statePath(bootFile), &rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Workspace != nil || len(rec.Steps) != 1 || rec.Steps[0].Name != "workspace" || !strings.Contains(rec.AgentError, "not proven stopped") {
+		t.Fatalf("failed admission record %+v", rec)
+	}
+	var after taskOwner
+	if err := readWorkspaceJSON(s.ownerPath(sess.Name), &after); err != nil {
+		t.Fatal(err)
+	}
+	if after != owner {
+		t.Fatal("failed same-Pod restart changed the shared owner")
+	}
+}
+
 func TestDaemonBootsStartsAndReports(t *testing.T) {
 	r := newDaemonRig(t, map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "static"})
 	stop := r.start(t)

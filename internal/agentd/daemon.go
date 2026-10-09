@@ -40,6 +40,8 @@ type Daemon struct {
 	// copying is set while a copy of the log to the shared volume runs, so a
 	// hung CephFS write never stacks copies (D-65).
 	copying atomic.Bool
+	// writerRefused keeps an uncertain shared writer observational only.
+	writerRefused bool
 }
 
 // logCopyEvery is how often the session's log is copied to the shared volume,
@@ -74,9 +76,7 @@ func (d *Daemon) now() time.Time {
 func (d *Daemon) Run(ctx context.Context) error {
 	d.expireCredentials()
 	writer, err := acquireWorkspaceWriter(ctx, d.R, d.S, d.Session, d.now())
-	if err != nil {
-		return fmt.Errorf("workspace writer admission: %w", err)
-	}
+	writerErr := err
 	if writer != nil {
 		d.S.writer = writer
 		defer writer.unlock()
@@ -90,6 +90,16 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	d.Log.Info("boot", "session", d.Session.Name, "boot", rec.BootID, "repo", d.Session.Repo, "agent", d.Session.Agent, "mode", d.Session.Mode, "model", d.Session.Model, "promptBytes", len(d.Session.Prompt))
 	d.beat(ctx)
+	if writerErr != nil {
+		d.writerRefused = true
+		rec.Boot, rec.AgentError = protocol.BootFailed, "workspace writer admission: "+writerErr.Error()
+		rec.Steps = []Step{newStep("workspace", nil, writerErr)}
+		if err := writeJSONFile(d.S.statePath(bootFile), rec); err != nil {
+			return fmt.Errorf("failed admission boot record: %w", err)
+		}
+		d.beat(ctx)
+		return d.supervise(ctx)
+	}
 
 	steps := Render(ctx, d.R, d.S, d.Session)
 	ws, repoStep := PrepareRepo(ctx, d.R, d.S, d.Session)
@@ -127,7 +137,7 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 		if err != nil {
 			return newStep(name, nil, err), err.Error()
 		}
-		if err := admitWorkspaceLaunch(d.S, d.Session, &l, d.now()); err != nil {
+		if err := admitWorkspaceLaunch(ctx, d.S, d.Session, &l); err != nil {
 			return newStep(name, nil, err), err.Error()
 		}
 		if err := StartAgent(ctx, d.R, d.S, l, d.Self); err != nil {
@@ -148,7 +158,7 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 	if err != nil {
 		return newStep(name, nil, err), err.Error()
 	}
-	if err := admitWorkspaceLaunch(d.S, d.Session, &launch, d.now()); err != nil {
+	if err := admitWorkspaceLaunch(ctx, d.S, d.Session, &launch); err != nil {
 		return newStep(name, nil, err), err.Error()
 	}
 	if err := StartAgent(ctx, d.R, d.S, launch, d.Self); err != nil {
@@ -172,14 +182,21 @@ func (d *Daemon) supervise(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			d.shutdown()
+			if !d.writerRefused {
+				d.shutdown()
+			}
 			return nil
 		case <-tick.C:
 			d.beat(ctx)
 		case <-logs.C:
-			d.copyLog()
+			if !d.writerRefused {
+				d.copyLog()
+			}
 		case <-poll.C:
 			d.expireCredentials()
+			if d.writerRefused {
+				continue
+			}
 			if m := newestMtime(d.S.statePath(resultFile), d.S.statePath(tuiExitFile)); !m.Equal(last) {
 				last = m
 				d.Log.Info("the agent exited")
