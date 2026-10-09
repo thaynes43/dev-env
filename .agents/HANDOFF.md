@@ -25,7 +25,23 @@ trust, both-provider project rules, task-rule propagation, cross-pod ownership
 and shared workspace storage are not built. [Plan 11](sagas/distributed-dev-env/backlog/11-project-workspaces.md)
 and D-74 require revision of plan 04's single-hub and D-15/D-22's private Git/task
 assumptions. Do not implement a single replacement hub as if it satisfied R7.
-No shared backend, new primary UI or credential migration was selected.
+The primary management UI and credential migration are not selected.
+
+Read [Accepted ADR-002](sagas/distributed-dev-env/adrs/002-shared-project-workspaces.md)
+for the concrete topology and storage alternatives. Q-21 ratified dedicated RWX
+workspace storage with private provider homes and explicit task ownership.
+Expiry alone cannot fence a partitioned writer; uncertain ownership blocks
+transfer and reap. Tom answered the structured Q-21 prompt on 2026-10-09:
+"Accept ADR-002 and the bounded CephFS trial (Recommended)". The bounded trial
+is authorized first; normal rollout requires the delivery gates. ADR-001 is
+unchanged, with its affected storage/cloning decisions superseded by ADR-002.
+Phone delivery remains unverified; an owner answer does not establish device
+delivery, and the earlier probe explicitly had a desktop reply.
+
+[Owner node-trust instructions](../docs/keeper-node-trust.md) are prepared and
+syntax-checked, with metadata verified read-only on all five nodes; they have
+not been executed. That owner step remains distinct from the keeper-only CA
+projection and from the shared-workspace decision.
 
 The independent stale-start fix is **shipped**: dev-env #124 merged
 `759f084f`, release #123 produced **2.9.1** at `b6c0f3c`, and publish-agent run
@@ -52,7 +68,22 @@ counts unchanged. Controller pins remain `sha-eeb15e3`. This is v2 agentd
 fresh-source/resume protection, not acceptance of the new shared-project flow.
 Full [delivery and scope record](handoffs/2026-10-09-workflow-session-guide.md).
 
-CA storage remains owner-confirmed complete; projection/trust/minting are off.
+**Keeper CA projection shipped:** haynes-ops
+[#3642](https://github.com/thaynes43/haynes-ops/pull/3642) merged `4bccaa899` at
+`2026-10-09T16:15:42Z`. The keeper-only ExternalSecret selects the existing
+item's private Base64 field once and public field unchanged; it became
+`Ready=True / SecretSynced` at `16:16:02Z`. Keeper-only Flux/Helm reconciliation
+passed. New keeper UID `8b5be82c-e9f3-437a-821e-328a15a0330a` is Ready, zero
+restarts, unchanged controller image, with the read-only `/etc/dev-env-keeper/ssh-ca`
+mount, mode `0440`, and no injected init container. Its existing CPU limit is
+`200m`. Both PVE enable flags remain absent/default false. V1, shelf, operator
+and broker UIDs/images/restarts were preserved; sessions/jobs/policies remain
+zero. The activity declaration ended; no fixture was created and no key values
+were accessed. The root check confirmed ESO status, keeper readiness and v1 UID.
+
+CA storage and projection are complete. Key-pair parsing, owner node trust,
+private target/host-key/egress configuration and real-provider acceptance remain
+pending. Disabled keeper readiness proves GitHub issuance, not CA validity.
 All twenty parity closures remain open. Headlamp migration/retirement and Q-16
 remain under their existing owner rulings. No v1/session restart occurred.
 The historical parking evidence below remains dated baseline context.
@@ -377,7 +408,8 @@ no values in chat.
 | [distributed-dev-env/README.md](sagas/distributed-dev-env/README.md) | Tom's vision, the architecture at a glance, the hard news, the decision log and the plan index. |
 | [distributed-dev-env/KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) | The work order for the first build session. |
 | [adrs/001-distributed-dev-env.md](sagas/distributed-dev-env/adrs/001-distributed-dev-env.md) | The architecture decision (Accepted 2026-10-06), with the ratification summary at the top and consequences C-01 to C-21. |
-| [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 to Q-20 and their resolutions in 15, the decisions (D-01 onward) in 16. |
+| [adrs/002-shared-project-workspaces.md](sagas/distributed-dev-env/adrs/002-shared-project-workspaces.md) | Accepted shared workspace/private runtime topology; bounded CephFS trial authorized, normal rollout gated on acceptance. |
+| [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 onward and their resolutions in 15, the decisions (D-01 onward) in 16. |
 | [research/R-01](sagas/distributed-dev-env/research/R-01-summoned-agents-audit.md) | An audit of summoned agents today, with v2 requirements V-01 to V-17. |
 | [research/R-02](sagas/distributed-dev-env/research/R-02-remote-control-identity.md) | Remote Control identity, the evidence behind S-1, and proposals P-1 to P-12. |
 | [research/R-03](sagas/distributed-dev-env/research/R-03-claude-code-approvals.md) | Claude Code in-app approval research: hooks, managed policy, forgery paths and the plan 03 core dependency. D-70 withdraws Q-18's earlier premise; no route selected. |
@@ -386,7 +418,7 @@ no values in chat.
 | [backlog/01-foundation.md](sagas/distributed-dev-env/backlog/01-foundation.md) | Plan 01: operator, agentd, `agent-run`, the agent image, task mode on the static token. |
 | [backlog/02](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md) | Plan 02: interactive sessions, idle detection, suspend, resume and optional external CLI access. Done under Tom's corrected scope. |
 | [backlog/03](sagas/distributed-dev-env/backlog/03-remote-control.md) | Plan 03: Remote Control, the keeper-owned Max login and the console. |
-| [backlog/04](sagas/distributed-dev-env/backlog/04-rolling-updates-codex.md) | Plan 04: drain on idle with resume, and the codex hub. |
+| [backlog/04](sagas/distributed-dev-env/backlog/04-rolling-updates-codex.md) | Plan 04: drain on idle with resume, multiple Codex remote hosts and one refresh owner. |
 | [backlog/05](sagas/distributed-dev-env/backlog/05-cutover.md) | Plan 05: cutover from v1 (needs Tom's written approval). |
 | [backlog/06](sagas/distributed-dev-env/backlog/06-later.md) | Later items, each a future plan. |
 | [backlog/07](sagas/distributed-dev-env/backlog/07-access-broker.md) | Plan 07: the access broker, grants and break-glass. |
@@ -468,8 +500,11 @@ which lists exactly what to change:
 - **Merge your own green PRs** with a squash merge, once required checks pass and
   every finding is handled.
 - **Only questions wait on Tom.** Ask one at a time, when it comes up, with the
-  recommended option first. Claude Code uses AskUserQuestion; Codex asks in its
-  conversation. Record each question as a `Q-NN` in the design, then fold Tom's
+  recommended option first. Claude Code uses AskUserQuestion; Codex uses the
+  available native question tool, with phone delivery verified before relying
+  on that route. If unavailable, report the capability gap and keep only the
+  dependent decision pending; prose in the stream is not delivery. Record each
+  question as a `Q-NN` in the design, then fold Tom's
   answer back in as a dated ruling and update the decision log. Check a question's
   premise before you ask it.
 - **Docs first.** A behaviour change starts in the saga and lands in the same PR as

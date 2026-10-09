@@ -34,6 +34,11 @@ links sharing workspace files. [Plan 11](backlog/11-project-workspaces.md) and
 D-74 revise the earlier single-hub/private-Git assumptions. R2 supersedes Q-20;
 management workflows must be drawn/reviewed before further implementation.
 
+[Accepted ADR-002](adrs/002-shared-project-workspaces.md) records Tom's structured
+Q-21 ruling: shared workspace/private agent homes and a bounded CephFS trial.
+No workspace, remote enrollment or runtime migration is accepted as deployed
+by that ruling; normal rollout still needs the gates in plan 11.
+
 **v1** is the single dev-env pod deployed from haynes-ops
 (`kubernetes/main/apps/dev/dev-env/`; saga `.agents/sagas/dev-env/` there). It keeps
 running, maintained in haynes-ops as today, until Tom approves the cutover in phase 5.
@@ -196,6 +201,8 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 48 | Reuse existing 1Password item for keeper CA | **RECORDED** 2026-10-08 America/New_York (Tom's correction, D-72) | Use `HaynesKube/dev-env` with the same two fresh CA fields. Current ExternalSecrets select individual properties; the CA will use a separate keeper-only Secret. Tom confirmed the fields saved; Q-19 is complete by owner confirmation. CA projection, node trust and real acceptance remain pending. |
 | 49 | Workflow guide, Codex project homes and current source | **REQUESTED** 2026-10-09 America/New_York (Tom) | Before project finalization, provide a detailed high-level Markdown quick start and feature set with diagrams. Discuss Codex session management, v1 `/work/codex` project folders and protection from stale shared repositories. The initial `/work/codex` shorthand and app-choice premise were corrected by the supplied R1–R7 requirements below. Q-20 is superseded. The guide draws working and requested paths separately; no project/client rollout or new approval route is claimed. |
 | 50 | Joint projects and multiple Codex remote pods | **REQUIRED** 2026-10-09 America/New_York (Tom) | Supplied R1–R6 define GitOps catalog, both providers, common/task rules, persistent clean-refreshed roots, task-only sweep and lossless canonical repair. R7 adds multiple Codex remote links spanning pods and sharing workspace files. R2 supersedes Q-20. D-74 requires revision of single-hub/private-Git assumptions. Operator API/controller is the built orchestration service; a coordinator agent is a requester role. Management surface/storage backend remain under workflow review; no new implementation is selected. |
+| 51 | Shared-workspace topology and bounded CephFS trial | **ACCEPTED** 2026-10-09 America/New_York (Tom, Q-21/D-75) | Structured answer: "Accept ADR-002 and the bounded CephFS trial (Recommended)". Shared project/reference/task files, private provider homes, multiple remote hosts and explicit ownership supersede affected ADR-001/D-15/D-22/D-12 decisions. Trial first; normal rollout needs acceptance. No v1 restart, cutover or management-app selection. |
+| 52 | Keeper-only saved CA projection | **SHIPPED** 2026-10-09 America/New_York | Haynes-ops #3642 (`4bccaa899`) projects the existing private/public fields into the keeper-only read-only mount. ESO and keeper Ready; minting flags false. Key-pair validation, owner node trust/private configuration/provider acceptance still required; all twenty parity rows remain open. |
 
 The full options, consequences and rulings for Q-01 to Q-16, and the premise
 corrections withdrawing Q-17 and Q-18, plus Q-19's first owner CA provisioning

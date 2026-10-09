@@ -2464,6 +2464,18 @@ No shared-workspace backend, auth migration, blanket grant, approval route or
 v1 restart is selected here. Prove R1–R7 and revise plan 04 before calling the
 Codex/project workflow complete.
 
+**D-75 (2026-10-09 America/New_York, Q-21). ADR-002 accepted; bounded CephFS
+trial first.** Tom answered the structured question: "Accept ADR-002 and the
+bounded CephFS trial (Recommended)". [ADR-002](../adrs/002-shared-project-workspaces.md)
+supersedes ADR-001's affected Storage/C-09 decisions, D-15/D-22's private Git/task
+placement and D-12's single remote host as the sole topology. Share real project,
+reference and task files at consistent paths; retain private provider homes and
+one refresh owner, explicit writer ownership and no uncertainty-based takeover.
+The existing CephFS trial is authorized first; normal rollout requires the
+storage, actual client/rule loading, ownership, recovery and phone gates.
+Current code still uses private session clones. No v1 restart, auth copying,
+cutover, primary management app or privileged approval route is selected.
+
 ### 6.7 Remote Control and phone sessions
 
 - `remote` mode is opt-in per session, as `--interactive` is today. Tom's rule stands
@@ -3578,6 +3590,16 @@ by owner confirmation; the coordinator received/read no key values. CA format
 and delivery validation, node trust and real acceptance remain pending, and
 minting remains disabled.
 
+**Keeper CA delivery update, 2026-10-09 America/New_York.** Haynes-ops
+[#3642](https://github.com/thaynes43/haynes-ops/pull/3642), `4bccaa899`, projected
+the saved fields into the separate keeper-only Secret and read-only mount.
+ESO is Ready/SecretSynced; the replacement keeper is Ready on its unchanged
+image with minting off. V1 and all other protected runtime identities were
+preserved. No key values were accessed. Key-pair parsing, owner node trust and
+the remaining private configuration/provider acceptance still precede enabling.
+[Owner trust instructions](../../../../docs/keeper-node-trust.md) are prepared
+and have not been executed. This completes projection, not P-18 closure.
+
 **D-26. Approvals: a Pushover link to an approval page behind Authentik.**
 
 **Superseded by Q-16, 2026-10-08.** The following is historical design, not a
@@ -4600,6 +4622,7 @@ blocks only the step it names.
 | Q-18 | Which approval route should plan 07 pursue for capabilities beyond today's v1 tier? [R-03](../research/R-03-claude-code-approvals.md) verified hook schemas and managed permission controls, but no route yet proves an isolated phone decision. Ordinary relays are forgeable; guarded execution still needs phone, complete authority, shared OAuth and parity tests. | **A. Staged guarded approver (recommended):** pursue a separate Claude Code control workload after plan 03's keeper-owned login and Remote Control core. Additional human-gated capabilities stay disabled until phone/receipt/isolation tests pass without reducing parity. **B. Coordinator soft gate:** use a Claude Code coordinator relay with explicit acceptance that its agent can forge the answer; less infrastructure, no independent human-provenance boundary. **C. Standing grants only for now:** finish parity and SSH minting, and defer the human path; capabilities beyond today's tier remain unavailable. | **Earlier prompt withdrawn by the coordinator, 2026-10-08, after Tom's baseline correction.** No route or blanket direct cluster-admin grant is selected. Preserve effective parity and existing owner rules. The withdrawal does not mean Tom chose to defer approvals; it removes a question built on an incomplete baseline. Parity and keeper provisioning continue. |
 | Q-19 | Can Tom provision the fresh keeper SSH CA in the agreed 1Password location, or does he need generation instructions? This is the first owner step already required by the work order and D-69, not a new approval of Q-15 A. | **A. Provision and confirm saved (recommended):** fresh unencrypted Ed25519 OpenSSH CA in vault `HaynesKube`, item `dev-env-ssh-ca`, fields `SSH_CA_PRIVATE_KEY_B64` (base64 private-key file) and `SSH_CA_PUBLIC_KEY` (public-key line). **B. Request generation instructions:** walk through that same owner step. Never send values to the coordinator chat. | **Complete by owner confirmation, 2026-10-08 America/New_York.** After receiving instructions, Tom confirmed both CA fields saved. D-72 corrects the originally proposed item to existing `HaynesKube/dev-env`. No values were sent to or read by the coordinator; format and delivery validation are still pending. Do not ask to generate/store the CA again. Keeper minting remains disabled. Node trust and activation are subsequent steps. |
 | Q-20 | Which app should register the initially proposed v1 project folders? | The earlier Codex-only/both/Claude-only choice was premature; it assumed an app choice before the management workflows were drawn. | **Superseded by Tom's explicit R2 on 2026-10-09:** both Claude Code and Codex use one project concept. The supplied baseline is `~/codex`; R7 adds multiple remote pod links sharing workspace files. The primary management surface remains under workflow review. No answer to the old options is required; this is not an owner deferral. See D-74. |
+| Q-21 | Accept [ADR-002](../adrs/002-shared-project-workspaces.md): shared project/task files with private agent homes, two Codex remote hosts and explicit writer transfer, starting with a bounded trial of existing CephFS? | **A. Accept design and bounded trial (recommended):** test household impact, real client/preflight behavior, locking and recovery before normal rollout. **B. Keep the shared/private topology but design external RWX first:** additional storage setup to keep workspace IO off in-cluster disks. **C. Refine the user workflows before choosing:** preserve the current topology while reviewing the proposal. | **Accepted by Tom through the structured native prompt, 2026-10-09 America/New_York:** "Accept ADR-002 and the bounded CephFS trial (Recommended)". D-75 records the ruling. ADR-002 supersedes the affected architecture decisions; bounded trial first, normal rollout gated on acceptance. No v1 restart/cutover is included. Phone push remains unverified; receipt of the owner answer does not establish its device. Keeper projection and owner node trust are separate steps. |
 
 ## 16. Decisions settled in this design
 
@@ -4679,3 +4702,4 @@ blocks only the step it names.
 | D-72 | Reuse existing `HaynesKube/dev-env` for the fresh keeper CA. Current mappings select explicit fields; a separate keeper-only Secret will select the CA fields. Q-19 storage is owner-confirmed complete; projection, node trust and acceptance remain pending. | 6.12 |
 | D-73 | New remote-based branch creation requires a successful clone/refresh and uses a pinned commit. Verify existing clone/path/HEAD identity, warn on changed branch or detached state, preserve WIP/branch recovery, fail when saved-launch workspace and branch are lost, and separate verified historical rescue restore from current remote source. Broader project/client integration remains plan 11. | 6.6 |
 | D-74 | Joint Claude/Codex project catalog/rules/freshness, supplied `~/codex` baseline, multiple remote pod links sharing workspace files; revise single-hub/private-Git assumptions with tested ownership, storage and phone delivery. Management surface/backend remain under review. | 6.3/6.6, plan 11 |
+| D-75 | Q-21 accepts ADR-002's shared workspace/private runtime topology and the bounded existing-CephFS trial first. Explicitly supersedes affected ADR-001/D-15/D-22/D-12 choices; normal rollout requires acceptance and v1 stays untouched. | 6.6, ADR-002 |
