@@ -1,7 +1,7 @@
 # Keeper-owned Codex authentication
 
-**Status: implementation in progress; disabled until source, deployment and
-real-client acceptance pass.** This is the authentication path for the first
+**Status: keeper-only authentication deployed; first sign-in and real-client
+acceptance pending.** This is the authentication path for the first
 v2 owner test with two distinct Codex computer links and shared project files.
 It preserves each host's private enrollment and makes the keeper the sole owner
 of the rotating refresh token.
@@ -22,7 +22,9 @@ flowchart LR
 
 The initial test uses the pinned Codex 0.160.1 native device-login ceremony in a
 bounded helper inside the keeper trust boundary. Each attempt has a fresh
-private `CODEX_HOME` and a fifteen-minute deadline. The helper shares only a
+private `CODEX_HOME`, a private writable temporary directory and a fifteen-minute
+deadline. Startup has a separate sixty-second bound until the sign-in challenge
+is presented; it does not extend the owner's fifteen-minute ceremony. The helper shares only a
 dedicated temporary staging area with the keeper; it receives no CA, GitHub App
 credential, remote-host enrollment or live auth home. It runs no agent or daemon.
 
@@ -31,6 +33,23 @@ the native actionable question tool. Challenge and token material never enter
 pod logs, Kubernetes events/status, public issues, git or a handoff. If device
 login is unavailable, verify that failure before asking Tom for the required
 account setting or supported alternate ceremony.
+
+The first deployed attempt stopped before producing a challenge and adopted no
+credential generation. A bounded unauthenticated connection check and the actual
+Cilium DNS cache identified a search-suffixed answer that did not match the exact
+`auth.openai.com` egress selector. The scoped deployment correction is keeper
+`dnsConfig.options: [{name: ndots, value: "1"}]`, retaining the exact provider URL
+and allowlist. It requires a reviewed rollout; no account-setting action follows
+from this network failure. Neither coordinator hosts nor managed Codex sessions
+are enabled by the keeper-only deployment.
+
+On failure the helper returns fixed phase, failure, native-exit and cleanup
+metadata. Raw native diagnostics remain filtered. It reaps the native leader
+and requires observed absence of its exact process group before removing the
+attempt's temporary files. Unconfirmed group termination preserves staging and
+the reservation. An uncertain
+cancellation acknowledgement leaves the durable reservation fenced until expiry;
+local file cleanup alone does not prove the reservation was cleared.
 
 The keeper accepts only the completed attempt bound to the current keeper and
 attempt identity, validates it, persists it privately and removes staging. It
@@ -45,9 +64,10 @@ a fenced, confirmed save; it cannot revive an ambiguous refresh. A different
 account is refused before adoption for this first test.
 
 The reservation lasts fifteen minutes and is busy for every leader while live.
-After expiry, a fenced leader may restore the retained usable credential only
-when the durable record explicitly permits it. A new login first resolves an
-expired reservation. If a restore save is not acknowledged, halt the worker and
+After expiry, a fenced leader clears every expired reservation, including one
+created before the first successful sign-in. It may restore a retained usable
+credential only when the durable record explicitly permits it. A new login first
+resolves an expired reservation. If a restore save is not acknowledged, halt the worker and
 attempt a fenced `NeedsLogin` tombstone; never publish or resume from an
 unconfirmed save. Storage failure can prevent that tombstone from persisting,
 so the record remains a visible unresolved condition rather than proof that
