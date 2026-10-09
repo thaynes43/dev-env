@@ -19,6 +19,8 @@ import (
 
 const codexCeremonyLifetime = 15 * time.Minute
 const CodexControlSocket = "control.sock"
+const codexRefreshControlBound = 30 * time.Second
+const codexRefreshResponseWait = codexRefreshControlBound + 5*time.Second
 
 // The socket exists only in the keeper/helper's mode-0700 tmpfs, with mode 0600.
 // Reachability is the authenticated pods/exec/control boundary; no network port
@@ -82,8 +84,16 @@ func (w *codexWorker) serveControl(ctx context.Context) (*http.Server, error) {
 						response = w.controlStatus(req.Context())
 					}
 				case "/refresh-once":
-					if in.AttemptUID == "" && in.ExpectedGeneration > 0 {
-						response = w.refreshOnce(req.Context(), in.ExpectedGeneration)
+					if in.AttemptUID == "" && in.ExpectedGeneration > 0 && req.Context().Err() == nil {
+						if http.NewResponseController(out).SetWriteDeadline(time.Now().Add(codexRefreshResponseWait)) != nil {
+							response.Code = "Unavailable"
+							break
+						}
+						// Once admitted, a lost HTTP reply must not cancel durability
+						// after consuming the token. Leadership loss still cancels it.
+						transaction, cancel := context.WithTimeout(ctx, codexRefreshControlBound)
+						response = w.refreshOnce(transaction, in.ExpectedGeneration)
+						cancel()
 					}
 				}
 			}

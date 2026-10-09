@@ -30,7 +30,7 @@ func CodexControl(ctx context.Context, dir, action, attempt string) (CodexContro
 	if !filepath.IsAbs(dir) || (action != "begin" && action != "adopt" && action != "status" && action != "cancel") || (attempt != "" && !validUID(attempt)) {
 		return CodexControlResponse{}, ErrCodexHelper
 	}
-	return codexControl(ctx, dir, action, codexControlRequest{AttemptUID: attempt})
+	return codexControl(ctx, dir, action, codexControlRequest{AttemptUID: attempt}, 10*time.Second)
 }
 
 // CodexRefreshOnce never retries a control request whose response is lost. A
@@ -39,13 +39,13 @@ func CodexRefreshOnce(ctx context.Context, dir string, expected uint64) (CodexCo
 	if !filepath.IsAbs(dir) || expected == 0 {
 		return CodexControlResponse{}, ErrCodexHelper
 	}
-	return codexControl(ctx, dir, "refresh-once", codexControlRequest{ExpectedGeneration: expected})
+	return codexControl(ctx, dir, "refresh-once", codexControlRequest{ExpectedGeneration: expected}, codexRefreshResponseWait)
 }
 
-func codexControl(ctx context.Context, dir, action string, input codexControlRequest) (CodexControlResponse, error) {
-	c, cancel := context.WithTimeout(ctx, 10*time.Second)
+func codexControl(ctx context.Context, dir, action string, input codexControlRequest, timeout time.Duration) (CodexControlResponse, error) {
+	c, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	h := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _ string, _ string) (net.Conn, error) {
+	h := &http.Client{Timeout: timeout, Transport: &http.Transport{DialContext: func(ctx context.Context, _ string, _ string) (net.Conn, error) {
 		return (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "unix", filepath.Join(dir, CodexControlSocket))
 	}, DisableKeepAlives: true}}
 	raw, _ := json.Marshal(input)

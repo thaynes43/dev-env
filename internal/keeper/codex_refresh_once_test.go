@@ -148,3 +148,92 @@ func TestCodexRefreshOnceAmbiguousCASCannotReplay(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexRefreshOnceRequesterDisconnectAndLeaderCancellation(t *testing.T) {
+	for _, kind := range []string{"caller-disconnect", "leader-loss"} {
+		t.Run(kind, func(t *testing.T) {
+			w, x, p := codexFixture(t)
+			saveCodexFixture(t, w, freshCodexRecord(t, w))
+			leaderCtx, leaderCancel := context.WithCancel(context.Background())
+			defer leaderCancel()
+			s, err := w.serveControl(leaderCtx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = s.Close() }()
+			started := make(chan context.Context, 1)
+			release := make(chan struct{})
+			n := syntheticCodexAccess(t, w.Clock.Now(), 2, "synthetic-account", 10*24*time.Hour)
+			x.Run = func(ctx context.Context, _ secretValue) (secretValue, secretValue, secretValue, error) {
+				started <- ctx // A rotating POST has been dispatched.
+				select {
+				case <-release:
+					return newSecretValue(n.IDToken), newSecretValue(n.AccessToken), newSecretValue("next-refresh-synthetic-canary"), nil
+				case <-ctx.Done():
+					return secretValue{}, secretValue{}, secretValue{}, ctx.Err()
+				}
+			}
+			callerCtx, callerCancel := context.WithCancel(context.Background())
+			defer callerCancel()
+			returned := make(chan error, 1)
+			go func() {
+				_, err := CodexRefreshOnce(callerCtx, w.LoginDir, 1)
+				returned <- err
+			}()
+			var transaction context.Context
+			select {
+			case transaction = <-started:
+			case <-time.After(time.Second):
+				t.Fatal("accepted transaction did not dispatch")
+			}
+			deadline, ok := transaction.Deadline()
+			if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > codexRefreshControlBound {
+				t.Fatal("transaction lacks the ratified overall bound")
+			}
+			if kind == "caller-disconnect" {
+				callerCancel()
+			} else {
+				leaderCancel()
+			}
+			select {
+			case err := <-returned:
+				if err == nil {
+					t.Fatal("disconnected caller unexpectedly received a success")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("disconnected control request did not return")
+			}
+			if kind == "caller-disconnect" {
+				if transaction.Err() != nil {
+					t.Fatal("caller disconnect cancelled the admitted transaction")
+				}
+				close(release)
+			}
+			// The shared lock waits for the admitted operation to finish; no polling.
+			w.mu.Lock()
+			d, err := w.load(context.Background())
+			calls, published, halted := x.Calls, p.Calls, w.halted
+			w.mu.Unlock()
+			if err != nil || calls != 1 {
+				t.Fatal("transaction was not durably inspectable")
+			}
+			if kind == "caller-disconnect" {
+				if d.Record.Stage != codexReady || d.Record.Access.Generation != 2 || d.Record.Refresh.Reveal() != "next-refresh-synthetic-canary" || published != 1 || halted {
+					t.Fatal("lost caller reply interrupted replacement durability/publication")
+				}
+				result, err := CodexRefreshOnce(context.Background(), w.LoginDir, 1)
+				if err != nil || result.OK || result.Code != "GenerationMismatch" || x.Calls != 1 {
+					t.Fatal("lost-reply duplicate dispatched another POST")
+				}
+			} else {
+				if d.Record.Stage != codexIntent || published != 0 || !halted || transaction.Err() == nil {
+					t.Fatal("leadership loss failed to cancel and fence the intent")
+				}
+				newLeader := &codexWorker{Journal: w.Journal, Transport: x, Publisher: p, Fence: w.Fence, Clock: w.Clock}
+				if result := newLeader.refreshOnce(context.Background(), 1); result.OK || x.Calls != 1 || p.Calls != 0 {
+					t.Fatal("new leader replayed a consumed intent")
+				}
+			}
+		})
+	}
+}
