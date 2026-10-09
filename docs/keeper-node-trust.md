@@ -21,16 +21,21 @@ Secret metadata showing the public target absent and keeper CA target present;
 no Secret values were read. Protected v1/controller/shelf identities and
 restart counts were preserved. No key values were exposed.
 
-Certificate authentication and private/public pair validation are still pending.
-Standing-key success does not prove those checks. PVE minting remains disabled.
+Private/public pair validation passed inside the keeper after source
+[#133](https://github.com/thaynes43/dev-env/pull/133), `3b0d043`, and keeper-only
+image rollout [#3669](https://github.com/thaynes43/haynes-ops/pull/3669), `ab023471`.
+One offline invocation returned exit 0 and all four validation booleans true,
+with no failure code. The other six protected pod identities/images/restarts
+were preserved and the scoped activity ended. Certificate authentication and
+provider acceptance remain pending; PVE minting stays disabled.
 The new `dev-env-keeper validate-ssh-ca` command checks only the local saved
 private/public pair and exits before Kubernetes, journal or network setup.
 Run it inside the keeper after its reviewed image is deployed; never copy the
 CA out to run the check. The command defaults to `/etc/dev-env-keeper/ssh-ca`,
 prints only validation booleans and a predefined failure code, and returns
 nonzero for missing, invalid, encrypted, wrong-type or mismatched material.
-The validator's source checks use synthetic keys. Live pair validation remains
-pending until that deployment and in-keeper execution are recorded.
+The validator's source checks use synthetic keys. The live check exposes only
+the fixed validation report; it does not exercise targets, egress or a provider.
 
 The reviewed automation is retained under
 [`scripts/keeper-node-trust/`](https://github.com/thaynes43/haynes-ops/tree/main/scripts/keeper-node-trust).

@@ -139,8 +139,11 @@ standing admin access is selected. The existing owner requirements remain. The
 Q-19 owner storage step is complete: Tom confirmed both fresh CA fields saved
 in the existing `HaynesKube/dev-env` item (D-72). Instructions are in DESIGN-001
 section 6.12. Projection and delegated PVE trust are now delivered, as recorded
-above. Key-pair validation, configuration and provider acceptance still gate
-activation; send no values in chat.
+above. Offline key-pair validation has now passed after keeper-only source
+#133 (`3b0d043`) and deployment haynes-ops #3669 (`ab023471`): one invocation
+returned exit 0/all validation booleans true, with other six protected pods
+unchanged and activity ended. Configuration and real certificate/provider
+acceptance still gate activation; no key values are exposed.
 
 ## State on 2026-10-08
 

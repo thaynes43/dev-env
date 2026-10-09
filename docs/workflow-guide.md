@@ -149,7 +149,7 @@ guide is describing the target.
 | Optional external CLI | Built, plan 02 | Token and loopback forwarding path; real external-machine use is unverified and optional |
 | GitHub installation tokens | Working | Keeper issuance; App private key stays out of session pods |
 | Kubernetes and egress grant core | Built and smoke-tested | Temporary identities, private installation, release/expiry; complete standing policies and parity still missing |
-| Proxmox credential backend | Built, disabled | Keeper CA projection and five-node trust delivered; typed PVE files/helper built; pair validation, network/policy wiring and real certificate/provider acceptance remain |
+| Proxmox credential backend | Built, disabled | Keeper CA pair validated and five-node trust delivered; typed PVE files/helper built; network/policy wiring and real certificate/provider acceptance remain |
 | General hw-ssh grants | Unbuilt | Must retain existing targets, command classes, PTY/stdin behavior, and owner rules |
 | V2 Claude phone sessions and Max refresh owner | Planned, plan 03 | Keeper-owned login, Remote Control registration/resume, renewal and archive |
 | V2 Codex remote hosts and shared projects | Required, plans 04/11 | Multiple stable pod links, joint Claude/Codex projects, sole refresh owner, shared files with distinct task ownership |
@@ -585,20 +585,21 @@ Q-19's CA storage step is complete by owner confirmation in existing
 ESO is SecretSynced and the keeper is Ready with a read-only CA mount. Minting
 stays disabled. Q-22's delegated trust installation is complete on all five PVE
 nodes, with original key bytes and existing v1 access preserved. Do not generate
-another CA or item. Remaining activation order:
+another CA or item. One offline in-keeper validation now confirms its saved
+private/public pair is valid, after the keeper-only #3669 rollout. Existing
+v1/controller/broker/shelf pod identities and restart counts were preserved.
+Remaining activation order:
 
-1. Validate format and key match without exposing values. Secret synchronization
-   and disabled keeper readiness do not prove the CA pair valid.
-2. Supply private targets, pinned host keys, keeper TCP22 access and accepted
+1. Supply private targets, pinned host keys, keeper TCP22 access and accepted
    policies. Keep actual trust material and private addresses out of public docs.
-3. Enable keeper and broker together only after prerequisites pass. Declare
+2. Enable keeper and broker together only after prerequisites pass. Declare
    activity; test real mint/install/use/release/expiry/recovery and cleanup.
-4. Remove fixtures and compare v1/existing session UIDs and restart counts.
+3. Remove fixtures and compare v1/existing session UIDs and restart counts.
 
 [Node-trust guide](keeper-node-trust.md) records the restricted CA installation
 and guarded rollback. Temporary delivery cleanup is merged and deployed.
-Certificate/provider acceptance remains separate. Secret
-synchronization and standing-key access do not prove the CA key pair valid.
+Certificate/provider acceptance remains separate from the successful local pair
+check. The validator neither connects to nodes nor mints a credential.
 
 General hw-ssh certificates are a separate unfinished feature. Certificate
 expiry alone does not terminate an existing SSH connection; P-19 needs its
