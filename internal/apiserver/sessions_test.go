@@ -123,6 +123,26 @@ func TestCreateAsHuman(t *testing.T) {
 	}
 }
 
+func TestProjectSelectionRefusesUntilTrustedAdmissionIsConfigured(t *testing.T) {
+	f := newFixture(t)
+	for _, token := range []string{tokHuman, tokClient} {
+		req := task()
+		req.Project = "dev-env"
+		req.IdempotencyKey = "project-request"
+		e := wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, token, req), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+		if len(e.Fields) != 1 || e.Fields[0].Field != "project" || !strings.Contains(e.Message, "project admission is not configured") {
+			t.Fatalf("unconfigured project did not refuse explicitly: %+v", e)
+		}
+	}
+	var sessions v1alpha1.AgentSessionList
+	if err := f.c.List(context.Background(), &sessions); err != nil || len(sessions.Items) != 0 {
+		t.Fatalf("project request silently became a private task: %v, %+v", err, sessions.Items)
+	}
+	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, task()); w.Code != http.StatusCreated {
+		t.Fatalf("legacy task admission changed: %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestCreateRefusals(t *testing.T) {
 	f := newFixture(t)
 	for _, tc := range []struct {

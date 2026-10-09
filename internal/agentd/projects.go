@@ -20,7 +20,10 @@ import (
 // ProjectSyncOptions is intentionally not read from environment or templates.
 // There are no production call sites until management authorization, storage
 // acceptance and provider acceptance are separately wired and proved.
-type ProjectSyncOptions struct{ Enabled bool }
+type ProjectSyncOptions struct {
+	Enabled         bool
+	AcceptedCatalog *ProjectCatalogSource
+}
 
 const projectSyncBudget = 10 * time.Minute
 
@@ -50,6 +53,10 @@ func SyncProjects(ctx context.Context, r Runner, s Settings, catalog *projectcat
 	}
 	ctx, cancel := context.WithTimeout(ctx, projectSyncBudget)
 	defer cancel()
+	authority, err := captureProjectCatalogAuthority(ctx, options.AcceptedCatalog, catalog)
+	if err != nil {
+		return report, err
+	}
 	report.CatalogRevision = catalog.Revision()
 	add := func(path, state, detail string) {
 		report.Findings = append(report.Findings, ProjectFinding{path, state, detail})
@@ -75,7 +82,7 @@ func SyncProjects(ctx context.Context, r Runner, s Settings, catalog *projectcat
 		if err != nil {
 			return report, err
 		}
-		findings, err := syncProject(ctx, r, s, catalog, snapshot, global)
+		findings, err := syncProject(ctx, r, s, catalog, snapshot, global, authority)
 		report.Findings = append(report.Findings, findings...)
 		if err != nil {
 			add(filepath.Join(s.Home, "codex", name), "preserved", err.Error())
@@ -101,7 +108,7 @@ func withProjectAdmin(ctx context.Context, s Settings, repo string, run func(con
 	return run(ctx)
 }
 
-func syncProject(ctx context.Context, r Runner, s Settings, catalog *projectcatalog.Catalog, snapshot projectcatalog.Snapshot, global map[string]projectcatalog.Repository) ([]ProjectFinding, error) {
+func syncProject(ctx context.Context, r Runner, s Settings, catalog *projectcatalog.Catalog, snapshot projectcatalog.Snapshot, global map[string]projectcatalog.Repository, authority *projectCatalogAuthority) ([]ProjectFinding, error) {
 	repos := snapshot.Repositories()
 	primary := repos[0].Name
 	root := filepath.Join(s.Home, "codex", snapshot.Project())
@@ -152,7 +159,7 @@ func syncProject(ctx context.Context, r Runner, s Settings, catalog *projectcata
 	// Publication is serialized by the deterministic primary's existing Git
 	// lock. A future server must serialize accepted catalog replacement across
 	// this operation; no client revision or new filesystem lock has authority.
-	err := withProjectAdmin(ctx, s, primary, func(context.Context) error {
+	err := withProjectAdmin(ctx, s, primary, func(ctx context.Context) error {
 		if err := ensurePlainProjectRoot(root); err != nil {
 			return err
 		}
@@ -183,6 +190,9 @@ func syncProject(ctx context.Context, r Runner, s Settings, catalog *projectcata
 			if !slices.Contains(declared, entry.Name()) {
 				findings = append(findings, ProjectFinding{filepath.Join(root, entry.Name()), "undeclared", "preserved"})
 			}
+		}
+		if err := authority.confirm(ctx); err != nil {
+			return err
 		}
 		if err := writeProjectWrappers(s, accepted, root); err != nil {
 			return err

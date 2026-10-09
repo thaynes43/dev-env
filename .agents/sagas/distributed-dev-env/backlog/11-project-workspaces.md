@@ -49,8 +49,11 @@ management UI and credential migration remain unselected.
 - Haynes-ops #3633 is open/unmerged; its mounted instructions are not a catalog,
   sync command, trust renderer or health checker. Mounted-resource changes follow
   the existing held-draft/natural-break rule.
-- Current v1 and v2 launchers take `--repo`, not `--project`; the built API accepts
-  `repo` and rejects unknown `project` fields. Codex v2 creation remains disabled.
+- V1 and the deployed v2 launcher still use `--repo`. New v2 CLI source accepts
+  task-only `--project` selection. The standalone API recognizes that field but
+  returns 422 `project admission is not configured` before creating a Session.
+  Concrete catalog/provider integration and runtime acceptance remain pending;
+  Codex v2 creation remains disabled.
 - Project rules are not bound to both agents or propagated to flat task worktrees;
   these anchors have no generated Codex trust entries.
 - The sweeper deletes eligible directories only under `~/work`; it also runs

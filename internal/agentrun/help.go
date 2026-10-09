@@ -8,6 +8,8 @@ Each session is its own pod on a worker node.
 
 Usage:
   agent-run [--repo] <repo> -p "<task>" [flags]   start a task session
+  agent-run --project <project> [--repo <repo>] -p "<task>" [flags]
+                                                  start a task in a declared project
   agent-run [--repo] <repo> --local [flags]       start an interactive session (a TUI)
   agent-run list [--repo <r>] [--state <s>] [--mine]
                                                   list sessions, newest first
@@ -65,6 +67,7 @@ Exit codes:
 
 var commandHelp = map[string]string{
 	"run": `Usage: agent-run [--repo] <repo> -p "<task>" [flags]
+       agent-run --project <project> [--repo <repo>] -p "<task>" [flags]
        agent-run [--repo] <repo> --local [flags]
        agent-run run [--repo] <repo> -p "<task>" [flags]
 
@@ -77,12 +80,21 @@ agent-run prints the session's name, then waits up to --wait for the pod to
 start. If the scheduler cannot place the pod, it prints the scheduler's reason
 as soon as it is clear; the session stays Pending and starts when room frees up.
 
+With --project, the operator selects the repository and rules from its accepted
+project catalog. The task uses a shared worktree and keeps the agent's state in
+its private home. Omit --repo for a project with one repository; select --repo
+for a project with several. Declared projects take task mode only. Their rules
+and catalog revision come from the server.
+
 Flags:
   -p, --prompt <task>        the task, at most 64 KiB
   --local                    an interactive session instead of a task: the TUI, no prompt
   --prompt-file <path>       read the task from a file instead; - reads stdin
   --repo <name>              the repository under the GitHub owner, such as haynes-ops;
-                             or give it as the first argument
+                             or give it as the first argument. With --project,
+                             this selects a repository declared in that project.
+  --project <name>           a project declared in the operator's accepted catalog
+                             (tasks only; cannot combine with rescue restore)
   --agent claude             the agent (default claude; codex and opencode arrive
                              in plans 04 and 09)
   --model <id>               a full model id, never an alias such as opus (default
@@ -91,7 +103,9 @@ Flags:
                              model takes them (default xhigh, or the highest level
                              below it the model takes; none on models without effort
                              control, such as Haiku 4.5)
-  --base <ref>               the ref the session's branch starts from (default origin/main)
+  --base <ref>               the ref the session's branch starts from (default origin/main).
+                             With --project, omit it to use the repository's
+                             declared default branch; an explicit ref must match.
   --size S|M|L               the pod's CPU and memory preset (default M)
   --profile <name>           a profile in dev-env-templates (default: the templates'
                              default; a session's child always runs on its parent's)
