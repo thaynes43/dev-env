@@ -2114,7 +2114,7 @@ with a link to the console page.
 
 **Target update, 2026-10-09 (D-74):** Tom now requires multiple Codex remote pod
 links with shared project/workspace files. The single-hub stages below record
-the earlier plan; plan 04/11 must revise them before implementation. Current v2
+the earlier plan; D-80 defines the first two-coordinator route. Current v2
 Codex creation remains disabled. Private enrollments and one refresh owner are
 still required; a shared provider home is not the requested workspace.
 
@@ -2141,6 +2141,19 @@ generation, live login reservation, unresolved intent or halted worker refuses;
 duplicate requests cannot rotate an already advanced generation. Expiry and the
 automatic schedule stay unchanged. Source tests and actual running-client
 propagation are required before calling refresh accepted.
+
+**D-80 (2026-10-09 America/New_York). Two persistent Codex coordinators.**
+The first owner test uses two independently enrolled, private-home Codex hosts
+with read-only shared project/task mounts. Native app threads run on the chosen
+host; they request managed writable Claude/Codex tasks through the operator API,
+not assumed automatic tool forwarding. Two GitOps `OnDelete` StatefulSets keep
+stable hostnames and retained RWO homes without automatic active-host rollouts.
+Pinned native startup, version/updater checks, access-only reload, scoped
+coordinator API identity, task native resume and actual phone-question acceptance
+are defined in [the host workflow](../../../../docs/codex-coordinator-hosts.md).
+The pilot keeps existing task OPERATOR rights and explicit dev-profile mounts;
+it does not register hosts as broad trusted Clients or reduce effective parity.
+No runtime host is enabled by this design.
 
 **What we know** (pinned Codex 0.160.1; observed S-3 results):
 
@@ -2599,6 +2612,17 @@ the management route must pass before these commands are advertised as usable.
 This implements ADR-002/R1–R6 without selecting a management UI, changing the
 accepted storage gate or authorizing a v1 restart. Source implementation remains
 pending and can be delivered while shared runtime stays disabled.
+
+**D-81 (2026-10-09 America/New_York). Retain shared tasks' private homes.**
+A task-only shared rescue cannot establish that private provider files are
+empty, exported or safe to destroy. Shared archive/reap therefore refuses the
+legacy home-delete route. The next source unit uses an exact PVC/Session/source
+UID and rescue-bound receipt, guarded owner-reference detach and independent
+retention before finalization, as defined in
+[the retained-home contract](../../../../docs/shared-private-home-retention.md).
+Both executor and hold must remain absent; uncertainty preserves everything.
+No automatic expiry, destruction, provider enrollment retirement or home reuse
+is authorized. This design is not source or runtime acceptance.
 
 ### 6.7 Remote Control and phone sessions
 
@@ -4867,3 +4891,5 @@ blocks only the step it names.
 | D-77 | Disabled-by-default shared core: explicit template/session opt-in, verified real mounts, shared Git locks, durable task writer identity, owned rescue and no global prune; stopped-executor proof is required before real resume/cleanup. | 6.6, plan 11 |
 | D-78 | Disabled keeper-owned fresh Codex login, bounded private durable refresh intent/replacement and ambiguity refusal; access-only atomic host reload, independent private enrollment and actual two-host/refresh gates. | 6.3, plan 04 |
 | D-79 | One accepted GitOps catalog, permanent project roots, explicit v2 sync/add route, immutable task rule/map snapshot with provider injection and native repo rules; conservative shared reference repair and actual-client acceptance. | 6.6, docs/shared-project-catalog.md |
+| D-80 | Two retained Codex coordinator hosts with read-only shared files, scoped management identity and managed Claude/Codex executors; native threads remain host-local and real link/phone/refresh acceptance is required. | 6.3, docs/codex-coordinator-hosts.md |
+| D-81 | Shared task rescue cannot delete private provider homes; UID-bound retained-PVC receipt/detach precedes Session finalization, with no automatic home expiry or destruction. | 6.6, docs/shared-private-home-retention.md |

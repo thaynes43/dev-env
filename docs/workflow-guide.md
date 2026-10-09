@@ -80,6 +80,14 @@ session, or perform an explicit fenced handoff before another session edits it.
 Shared files do not automatically transfer chat history or allow two writers.
 The exact cross-host conversation/handoff behavior remains to be designed/tested.
 
+The [first two-host route](codex-coordinator-hosts.md) uses persistent Codex
+coordinators with read-only shared project/task mounts. Native app conversations
+run on the computer you selected. A coordinator starts writable Claude/Codex
+tasks through the management API and follows their recorded owners. Native app
+threads do not automatically become task pods. Independent private enrollment
+and conversation state stay with each host; actual link, resume and phone
+acceptance remain pending.
+
 **Finish and maintain:** review/merge/deploy → record durable results → rescue
 unfinished work before task cleanup. Project roots persist independently of task
 sweeping. Boot/daily sync refreshes clean anchors, checks canonical health, and
