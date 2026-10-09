@@ -649,6 +649,64 @@ spec:
                     - NoWorkAdmitted
                     - Failed
                     type: string
+                  sharedProof:
+                    description: |-
+                      SharedProof binds a typed shared rescue to its admitted writer and private
+                      home. Older records without it cannot release a retained private home.
+                    properties:
+                      kind:
+                        enum:
+                        - TaskWorkPreserved
+                        - NoWorkAdmitted
+                        - OwnedRefsPreserved
+                        type: string
+                      manifest:
+                        description: Manifest is this rescue's verified manifest,
+                          never an inherited LastBundle.
+                        maxLength: 512
+                        type: string
+                      noOwner:
+                        description: NoOwner is true only after verified refused admission
+                          with no durable owner.
+                        type: boolean
+                      privateHomeUID:
+                        maxLength: 128
+                        type: string
+                      repo:
+                        maxLength: 100
+                        type: string
+                      sessionUID:
+                        maxLength: 128
+                        type: string
+                      sourcePodUID:
+                        maxLength: 128
+                        type: string
+                      task:
+                        maxLength: 63
+                        type: string
+                      version:
+                        enum:
+                        - 1
+                        type: integer
+                      workspace:
+                        maxLength: 128
+                        type: string
+                      writerGeneration:
+                        format: int64
+                        minimum: 0
+                        type: integer
+                    required:
+                    - kind
+                    - noOwner
+                    - privateHomeUID
+                    - repo
+                    - sessionUID
+                    - sourcePodUID
+                    - task
+                    - version
+                    - workspace
+                    - writerGeneration
+                    type: object
                   sourcePodUID:
                     description: SourcePodUID is the retained shared executor that
                       the hold Pod rescued.
@@ -700,6 +758,12 @@ spec:
               revision:
                 description: Revision is the template revision the pod runs (DESIGN-001
                   5.2).
+                type: string
+              sharedPrivateHomeUID:
+                description: |-
+                  SharedPrivateHomeUID is bound durably before the first shared executor
+                  is admitted. A replacement claim is never adopted into this lifecycle.
+                maxLength: 128
                 type: string
               suspendedAt:
                 description: |-

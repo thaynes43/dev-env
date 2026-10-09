@@ -39,6 +39,7 @@ func stoppedWorkspaceFixture() workspaceStopFixture {
 	s.Spec.Workspace = &v1alpha1.WorkspaceSpec{ID: "projects-v2"}
 	s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
 	s.Status.PodName = s.Name
+	s.Status.SharedPrivateHomeUID = "home-1"
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: s.Name, Namespace: s.Namespace, UID: "executor-1", ResourceVersion: "10", OwnerReferences: []metav1.OwnerReference{ownerRef(s)}},
 		Spec: corev1.PodSpec{NodeName: "worker-a", RestartPolicy: corev1.RestartPolicyNever,
 			Containers: []corev1.Container{{Name: ContainerName}}, InitContainers: []corev1.Container{{Name: "init"}},
@@ -358,7 +359,7 @@ func TestWorkspaceGuardBindsBothPodUIDsAndHoldBlocksArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hold, err := buildWorkspaceHoldPod(f.s, obs.templates, proof)
+	hold, err := buildWorkspaceHoldPod(f.s, obs.templates, proof, f.home.UID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,11 +395,12 @@ func TestWorkspaceGuardBindsBothPodUIDsAndHoldBlocksArchive(t *testing.T) {
 
 func workspacePreparationReport(s *v1alpha1.AgentSession, p *protocol.WorkspaceStopProof, kind string) protocol.RescueReport {
 	rep := protocol.RescueReport{SourcePodUID: p.PodUID, Session: s.Name, Stamp: "preparation", OK: true, Agent: &protocol.AgentStop{},
-		WorkspacePreservation: &protocol.WorkspacePreservation{Version: 1, Workspace: s.Spec.Workspace.ID, Task: s.Name, SessionUID: string(s.UID), SourcePodUID: p.PodUID, Kind: kind},
+		WorkspacePreservation: &protocol.WorkspacePreservation{Version: 1, Workspace: s.Spec.Workspace.ID, Task: s.Name, SessionUID: string(s.UID), SourcePodUID: p.PodUID, Kind: kind, NoOwner: kind == "NoWorkAdmitted"},
 		Repos: []protocol.RepoRescue{{Path: "/home/dev/repos/" + s.Spec.Repo, Absent: true,
 			Worktrees: []protocol.WorktreeRescue{{Path: "/home/dev/work/" + s.Name, Absent: true}}}}}
 	if kind == "OwnedRefsPreserved" {
 		rep.WorkspacePreservation.OwnerGeneration = 1
+		rep.WorkspacePreservation.NoOwner = false
 		rr := &rep.Repos[0]
 		rr.Absent, rr.FullBundle = false, true
 		rr.UnpushedRefs = []protocol.Ref{{Name: "refs/heads/agent/" + s.Name, Commit: "aaaa"}}
@@ -416,7 +418,7 @@ func TestWorkspacePreparationVerdictIsTypedAndSharedOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hold, err := buildWorkspaceHoldPod(f.s, obs.templates, p)
+	hold, err := buildWorkspaceHoldPod(f.s, obs.templates, p, f.home.UID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -445,6 +447,8 @@ func TestWorkspacePreparationVerdictIsTypedAndSharedOnly(t *testing.T) {
 		{"empty home claim", func(rep *protocol.RescueReport) { rep.VolumeEmpty = true }},
 		{"wrong source", func(rep *protocol.RescueReport) { rep.WorkspacePreservation.SourcePodUID = "peer" }},
 		{"unknown kind", func(rep *protocol.RescueReport) { rep.WorkspacePreservation.Kind = "Unknown" }},
+		{"zero writer without no-owner", func(rep *protocol.RescueReport) { rep.WorkspacePreservation.NoOwner = false }},
+		{"admitted writer with no-owner", func(rep *protocol.RescueReport) { rep.WorkspacePreservation.OwnerGeneration = 1 }},
 		{"missing typed result", func(rep *protocol.RescueReport) { rep.WorkspacePreservation = nil }},
 		{"nonabsent worktree", func(rep *protocol.RescueReport) { rep.Repos[0].Worktrees[0].Absent = false }},
 		{"task work remains", func(rep *protocol.RescueReport) { rep.Repos[0].Worktrees[0].Dirty = true }},
@@ -463,6 +467,80 @@ func TestWorkspacePreparationVerdictIsTypedAndSharedOnly(t *testing.T) {
 				t.Fatal("unknown report kind makes the failure status invalid under its API enum")
 			}
 		})
+	}
+}
+
+func TestWorkspaceAdmittedTypedRescueRecordsWriterForCleanPushedTask(t *testing.T) {
+	f := stoppedWorkspaceFixture()
+	r, obs := workspaceFixtureController(t, f, f.client())
+	proof, _, err := r.verifyWorkspaceStop(context.Background(), f.s, f.pod.UID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold, err := buildWorkspaceHoldPod(f.s, obs.templates, proof, f.home.UID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold.UID = "hold-1"
+	rep := cleanReport(f.s.Name)
+	rep.SourcePodUID = proof.PodUID
+	rep.WorkspacePreservation = &protocol.WorkspacePreservation{Version: 1, Workspace: f.s.Spec.Workspace.ID,
+		Task: f.s.Name, SessionUID: string(f.s.UID), SourcePodUID: proof.PodUID, OwnerGeneration: 7, Kind: "TaskWorkPreserved"}
+	rec, reason := verdict(f.s, hold, rep, metav1.NewTime(f.now))
+	if rec.Result != v1alpha1.RescueCleanAndPushed || reason != string(rec.Result) || rec.SharedProof == nil ||
+		rec.SharedProof.WriterGeneration != 7 || rec.SharedProof.NoOwner || rec.SharedProof.PrivateHomeUID != string(f.home.UID) || rec.SharedProof.Manifest != "" {
+		t.Fatalf("typed admitted rescue rejected or lost original proof: %+v reason=%s", rec, reason)
+	}
+}
+
+func TestWorkspaceOriginalHomeReplacementBeforeHoldCreationIsRefused(t *testing.T) {
+	f := stoppedWorkspaceFixture()
+	f.home.UID = "replacement-home"
+	c := f.client()
+	r, obs := workspaceFixtureController(t, f, c)
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if obs.removalBlocked == nil {
+		t.Fatal("replacement home admitted a hold Pod")
+	}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: f.s.Namespace, Name: workspaceHoldName(f.s)}, &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("hold Pod created for replaced home: %v", err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.pod), &corev1.Pod{}); err != nil {
+		t.Fatal("executor removed despite uncertain original home", err)
+	}
+}
+
+func TestWorkspaceMutableHoldHomeBindingCannotAuthorizeRescue(t *testing.T) {
+	f := stoppedWorkspaceFixture()
+	c := f.client()
+	r, obs := workspaceFixtureController(t, f, c)
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	hold := readyWorkspaceHold(t, c, f.s)
+	r.Rescuer = &workspaceFixtureRescuer{answer: func(p *protocol.WorkspaceStopProof) protocol.RescueReport {
+		var changed corev1.Pod
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(hold), &changed); err != nil {
+			t.Fatal(err)
+		}
+		changed.Annotations[privateHomeUIDAnnotation] = "another-home"
+		if err := c.Update(context.Background(), &changed); err != nil {
+			t.Fatal(err)
+		}
+		return workspacePreparationReport(f.s, p, "NoWorkAdmitted")
+	}}
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if f.s.Status.Rescue != nil || obs.removalBlocked == nil {
+		t.Fatal("mutated hold annotation created durable rescue authority")
+	}
+	for _, pod := range []*corev1.Pod{f.pod, hold} {
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(pod), &corev1.Pod{}); err != nil {
+			t.Fatal("uncertain rescue removed Pod", err)
+		}
 	}
 }
 
@@ -686,7 +764,7 @@ func TestWorkspaceHistoricalCleanupRejectsUncertainRecordsAndLivePods(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			hold, err := buildWorkspaceHoldPod(f.s, obs.templates, proof)
+			hold, err := buildWorkspaceHoldPod(f.s, obs.templates, proof, f.home.UID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -724,7 +802,7 @@ func TestWorkspaceHoldPinsEveryRequiredNodeTermAndPreservesPrivateHold(t *testin
 	tmpl.Workspace = &templates.Workspace{Enabled: true, Claim: "retained-projects", ID: f.s.Spec.Workspace.ID}
 	proof := &protocol.WorkspaceStopProof{Version: 1, Workspace: f.s.Spec.Workspace.ID, Task: f.s.Name, SessionUID: string(f.s.UID), PodName: f.pod.Name, PodUID: string(f.pod.UID),
 		PodResourceVersion: "10", NodeName: f.node.Name, NodeUID: string(f.node.UID), LeaseResourceVersion: "20", LeaseRenewedAt: f.now.Add(-time.Second), VerifiedAt: f.now}
-	hold, err := buildWorkspaceHoldPod(f.s, tmpl, proof)
+	hold, err := buildWorkspaceHoldPod(f.s, tmpl, proof, f.home.UID)
 	if err != nil {
 		t.Fatal(err)
 	}

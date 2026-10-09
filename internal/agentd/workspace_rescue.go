@@ -169,6 +169,9 @@ func rescueSharedTask(ctx context.Context, r Runner, s Settings, task string, no
 	}
 	if proof != nil {
 		rep.SourcePodUID = proof.PodUID
+		rep.WorkspacePreservation = &protocol.WorkspacePreservation{Version: workspaceVersion,
+			Workspace: s.WorkspaceID, Task: task, SessionUID: sess.Workspace.SessionUID,
+			SourcePodUID: proof.PodUID, OwnerGeneration: owner.Generation, Kind: "TaskWorkPreserved"}
 	}
 	rep.FinishedAt = time.Now().UTC()
 	return rep, nil

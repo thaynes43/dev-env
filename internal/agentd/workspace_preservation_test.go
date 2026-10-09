@@ -60,7 +60,7 @@ func TestWorkspaceNoWorkPreservationResumesAbsentPreparation(t *testing.T) {
 			}
 			p := rep.WorkspacePreservation
 			if !rep.OK || rep.CleanAndPushed || rep.VolumeEmpty || rep.Bundle != nil || p == nil || p.Kind != "NoWorkAdmitted" ||
-				(p.OwnerGeneration == 0) == admitted || !rep.Repos[0].Absent || !rep.Repos[0].Worktrees[0].Absent {
+				(p.OwnerGeneration == 0) == admitted || p.NoOwner == admitted || !rep.Repos[0].Absent || !rep.Repos[0].Worktrees[0].Absent {
 				t.Fatalf("report %+v", rep)
 			}
 			if !admitted && exists(s.ownerPath(sess.Name)) {

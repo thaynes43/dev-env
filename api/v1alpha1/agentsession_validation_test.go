@@ -604,6 +604,45 @@ func TestStatusSubresource(t *testing.T) {
 	}
 }
 
+func TestSharedRetentionEvidenceSurvivesTheStatusSchema(t *testing.T) {
+	s := taskSession()
+	s.Spec.Workspace = &v1alpha1.WorkspaceSpec{ID: "projects-v2"}
+	if err := k8s.Create(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	now := metav1.NewTime(time.Now().Truncate(time.Second))
+	p := &v1alpha1.SharedRescueProof{Version: 1, Workspace: s.Spec.Workspace.ID, Task: s.Name, Repo: s.Spec.Repo,
+		SessionUID: string(s.UID), SourcePodUID: "executor", PrivateHomeUID: "original-home", WriterGeneration: 7, Kind: "TaskWorkPreserved",
+		Manifest: "rescue/" + s.Name + "/20261009-1200/manifest.json"}
+	s.Status.SharedPrivateHomeUID = p.PrivateHomeUID
+	s.Status.Rescue = &v1alpha1.RescueStatus{SharedProof: p, Generation: s.Generation, SourcePodUID: p.SourcePodUID, PodUID: "hold",
+		Result: v1alpha1.RescueVerified, Stamp: "20261009-1200", At: &now, LastBundle: p.Manifest}
+	if err := k8s.Status().Update(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	got := get(t, s)
+	if got.Status.SharedPrivateHomeUID != p.PrivateHomeUID || got.Status.Rescue.SharedProof == nil || *got.Status.Rescue.SharedProof != *p {
+		t.Fatalf("retention evidence was pruned: %+v", got.Status)
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*v1alpha1.SharedRescueProof)
+	}{
+		{"unknown proof version", func(p *v1alpha1.SharedRescueProof) { p.Version = 2 }},
+		{"unknown preservation result", func(p *v1alpha1.SharedRescueProof) { p.Kind = "EmptyHome" }},
+		{"negative writer generation", func(p *v1alpha1.SharedRescueProof) { p.WriterGeneration = -1 }},
+		{"unbounded manifest", func(p *v1alpha1.SharedRescueProof) { p.Manifest = strings.Repeat("a", 513) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := get(t, s)
+			tc.edit(bad.Status.Rescue.SharedProof)
+			if err := k8s.Status().Update(ctx(t), bad); !apierrors.IsInvalid(err) {
+				t.Fatalf("unsupported evidence accepted: %v", err)
+			}
+		})
+	}
+}
+
 // TestPrinterColumns reads the object the way `kubectl get` does, as a Table.
 func TestPrinterColumns(t *testing.T) {
 	s := summonedRemote()

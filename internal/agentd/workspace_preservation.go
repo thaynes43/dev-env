@@ -81,6 +81,8 @@ func preserveWorkspacePreparation(ctx context.Context, r Runner, s Settings, ses
 		SessionUID: sess.Workspace.SessionUID, SourcePodUID: proof.PodUID, Kind: "NoWorkAdmitted"}
 	if owner != nil {
 		p.OwnerGeneration = owner.Generation
+	} else {
+		p.NoOwner = true
 	}
 	rep := protocol.RescueReport{WorkspacePreservation: p, SourcePodUID: proof.PodUID, Session: sess.Name,
 		Stamp: now.UTC().Format("20060102-1504"), StartedAt: now.UTC(), Repos: []protocol.RepoRescue{rr}, Agent: &protocol.AgentStop{}, OK: true}

@@ -352,6 +352,12 @@ type AgentSessionStatus struct {
 	// +optional
 	PodName string `json:"podName,omitempty"`
 
+	// SharedPrivateHomeUID is bound durably before the first shared executor
+	// is admitted. A replacement claim is never adopted into this lifecycle.
+	// +kubebuilder:validation:MaxLength=128
+	// +optional
+	SharedPrivateHomeUID string `json:"sharedPrivateHomeUID,omitempty"`
+
 	// NodeName is the node the pod runs on.
 	// +optional
 	NodeName string `json:"nodeName,omitempty"`
@@ -567,6 +573,10 @@ const (
 // writes it before it deletes the pod the rescue ran in, so a fresh operator
 // sees what the last one decided.
 type RescueStatus struct {
+	// SharedProof binds a typed shared rescue to its admitted writer and private
+	// home. Older records without it cannot release a retained private home.
+	// +optional
+	SharedProof *SharedRescueProof `json:"sharedProof,omitempty"`
 	// PreservationKind records the distinct shared preparation result.
 	// +kubebuilder:validation:Enum=NoWorkAdmitted;OwnedRefsPreserved
 	// +optional
@@ -625,6 +635,35 @@ type RescueStatus struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	OmittedRefs int32 `json:"omittedRefs,omitempty"`
+}
+
+// SharedRescueProof is the controller-checked evidence for retaining a shared
+// task's private home. It contains identities and rescue locations only.
+type SharedRescueProof struct {
+	// +kubebuilder:validation:Enum=1
+	Version int `json:"version"`
+	// +kubebuilder:validation:MaxLength=128
+	Workspace string `json:"workspace"`
+	// +kubebuilder:validation:MaxLength=63
+	Task string `json:"task"`
+	// +kubebuilder:validation:MaxLength=100
+	Repo string `json:"repo"`
+	// +kubebuilder:validation:MaxLength=128
+	SessionUID string `json:"sessionUID"`
+	// +kubebuilder:validation:MaxLength=128
+	SourcePodUID string `json:"sourcePodUID"`
+	// +kubebuilder:validation:MaxLength=128
+	PrivateHomeUID string `json:"privateHomeUID"`
+	// +kubebuilder:validation:Minimum=0
+	WriterGeneration int64 `json:"writerGeneration"`
+	// NoOwner is true only after verified refused admission with no durable owner.
+	NoOwner bool `json:"noOwner"`
+	// +kubebuilder:validation:Enum=TaskWorkPreserved;NoWorkAdmitted;OwnedRefsPreserved
+	Kind string `json:"kind"`
+	// Manifest is this rescue's verified manifest, never an inherited LastBundle.
+	// +kubebuilder:validation:MaxLength=512
+	// +optional
+	Manifest string `json:"manifest,omitempty"`
 }
 
 // RescuedRef is one local ref origin lacked at a rescue.
