@@ -2438,9 +2438,14 @@ supersedes Q-20's premature app-selection question. Use the supplied v1
 `~/codex/<project>` baseline, outside `~/work` task sweeping, rather than treating
 the earlier `/work/codex` shorthand as a selected mount design.
 
-These requirements revise D-12's single-hub target and D-15/D-22's private Git/task
-workspace assumptions. Those remain the historical/current implementation, not
-proof of the new topology. Preserve private agent runtime/enrollment state and
+These requirements require revision of D-12's single-hub target and D-15/D-22's
+private Git/task workspace assumptions. Accepted ADR-001 also specifies per-session
+block storage and fresh per-session cloning (Storage decision and C-09). It is
+immutable. **Required before any new storage/workspace implementation: draft and
+ratify ADR-002, shared project/workspace topology, explicitly superseding those
+parts of ADR-001.** D-74 records requirements; it does not itself supersede that
+ADR or authorize a backend. The old choices remain historical/current
+implementation, not proof of the new topology. Preserve private agent runtime/enrollment state and
 one rotating refresh owner while designing genuine common project/task storage,
 consistent Git paths, cross-pod locks, task ownership, instruction propagation
 and cleanup. R4's nested-task option conflicts with R5's explicit `~/work`-only

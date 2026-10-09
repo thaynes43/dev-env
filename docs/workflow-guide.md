@@ -80,7 +80,8 @@ pod. V2 separates the control services from agent work. The current working impl
 pod on a worker, its own persistent home, and a branch/worktree. The new shared
 project/workspace requirement changes where repository/task files must live;
 private agent runtime homes remain distinct. Storage and remote-host topology
-must be revised explicitly before implementing that part. The scheduler
+must be revised in a ratified ADR-002 superseding ADR-001's Storage/C-09
+decisions before implementing that part. The scheduler
 places it using its resource requests. If there is no room, it stays Pending
 with a visible reason.
 
@@ -422,7 +423,9 @@ The earlier single-hub plan and private per-session Git workspace choices
 (D-12/D-15/D-22) need revision under D-74. The current RWO homes plus small shared
 memory/rescue volume do not satisfy this topology. Choose and test a genuine
 cross-node shared workspace backend, keeping household-service load bounded;
-no storage backend or migration is selected by this guide.
+ADR-001 remains immutable; ADR-002 must supersede its affected storage/cloning
+decisions before implementation. No storage backend or migration is selected
+by this guide.
 
 Official documentation describes multiple paired hosts, but does not establish
 our simultaneous access-token-only Linux-pod enrollment. Prove two pod links,

@@ -17,7 +17,8 @@ The short version:
   Deploy manifests live in thaynes43/haynes-ops, not here.
 - Docs first; one native phone-delivered question prompt at a time to Tom,
   recommended option first, recorded as `Q-NN` in the design. Use the provider's
-  user-question tool; a question buried in commentary is not delivery.
+  user-question tool once phone delivery is verified. Codex phone delivery is
+  currently unverified; a question buried in commentary is not delivery.
 - Worktree per task, branch `agent/<task>`, ready PR, never push to main.
 - No CPU burners on any shared node; a CPU limit on anything you run in the
   cluster. No secrets in git. One owner per rotating refresh token. Full model ids.

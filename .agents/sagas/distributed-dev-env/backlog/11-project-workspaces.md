@@ -3,8 +3,9 @@
 **Status:** owner requirements R1–R7 recorded; architecture/client implementation
 pending workflow review. The separate v2 fresh-start bug fix shipped in agent
 2.9.1 (#124/#123, haynes-ops #3636); it does not implement this project contract.
-**Depends on:** plan 04 revision for Codex remote hosts/refresh; explicit D-15/D-22
-storage revision for shared Git/task files. R2 supersedes Q-20; there is no
+**Depends on:** plan 04 revision for Codex remote hosts/refresh; ratified ADR-002
+superseding ADR-001's Storage/C-09 decisions and explicit D-15/D-22 revision for
+shared Git/task files. R2 supersedes Q-20; there is no
 remaining app-choice gate.
 **Delivery gate:** prove the supported user journeys before advertising them.
 No v1 or active session restart is authorized here.
@@ -63,7 +64,10 @@ not select a storage backend, primary management UI or credential migration.
 2. Define catalog reconciliation and `project add` through the normal GitOps
    branch/PR/Flux workflow, with one authoritative list and no undeclared-root
    deletion. Catalog updates must not restart active hosts to reload declarations.
-3. Define persistent shared project/reference/task mounts with identical absolute
+3. Draft and ratify **ADR-002, shared project/workspace topology**, explicitly
+   superseding Accepted ADR-001's Storage decision and C-09 (fresh clone per
+   session). Do not edit ADR-001 or implement the changed topology before this
+   superseding decision is accepted. Define shared project/reference/task mounts with identical absolute
    Git paths in every participating pod. Preserve private provider homes, daemon
    enrollment/socket state and caches as appropriate. Revise D-15/D-22 explicitly;
    do not call today's per-session RWO homes a shared workspace.
@@ -103,6 +107,8 @@ not select a storage backend, primary management UI or credential migration.
 
 ## Acceptance
 
+- [ ] ADR-002 explicitly supersedes ADR-001's affected storage/cloning decisions
+      and is ratified before new storage/workspace implementation.
 - [ ] Empty-PVC boot produces every declared project with the correct repositories;
       sync is idempotent; undeclared roots are reported and never deleted.
 - [ ] `project add` declares and materializes through GitOps as one user workflow;

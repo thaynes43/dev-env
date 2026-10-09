@@ -173,8 +173,10 @@ Directories still to come: later controllers (ToolSession, LLMLease) beside
   PR as the behaviour they describe. An Accepted ADR is never edited; a new ADR
   supersedes it.
 - **Questions go to Tom one at a time through the native phone prompt**, at the
-  moment the decision arises. Claude uses AskUserQuestion; Codex uses its native
-  user-question tool with verified phone delivery. Plain commentary, final-message
+  moment the decision arises. Claude uses AskUserQuestion. Codex must use an
+  available native user-question tool **once phone delivery is verified**; that
+  delivery is currently unverified for this client and is a plan 11 acceptance
+  requirement. Plain commentary, final-message
   lists, PR comments and a `Q-NN` record are not delivery. Record the question in
   the design, push the prompt, then fold the answer back as a dated ruling.
   Verify the premise before asking. If the available client cannot deliver the
