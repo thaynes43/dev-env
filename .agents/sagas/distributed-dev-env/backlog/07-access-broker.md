@@ -1,6 +1,6 @@
 # 07: access broker
 
-**Status:** docs-only approval spike complete, Q-18's earlier premise withdrawn under D-70; no route selected (2026-10-08, [R-03](../research/R-03-claude-code-approvals.md)). Plan 02's corrected in-cluster acceptance passed; no laptop setup blocks progress (README decisions 44 and 45, Q-17). Steps 1 to 5 are built; H2 is deployed and verified. The v1 parity audit is complete ([R-04](../research/R-04-v1-capability-parity.md)); all twenty gaps below block cutover. Baseline references and the rescue-mount fix are deployed (#108, haynes-ops #3584/#3583); a fresh full fixture passed presence/permission and read-only Omni/API checks. P-11/P-12 remain open for their complete service/network evidence. Build keeper SSH minting (step 8/H5, Q-15 A, D-69). D-70 corrects the effective Headlamp baseline; no human approval route or blanket direct admin grant is selected. The earlier route prompt does not block parity or keeper provisioning. A possible management UI changes neither Q-16 nor this priority order. [Issue #91](https://github.com/thaynes43/dev-env/issues/91) tracks the spike. Draft branches `agent/plan07-approvals-round3` (dev-env) and `agent/plan07-catalog-round3` (haynes-ops) retain reusable pieces; #90 and haynes-ops #3550 remain closed.
+**Status:** docs-only approval spike complete, Q-18's earlier premise withdrawn under D-70; no route selected (2026-10-08, [R-03](../research/R-03-claude-code-approvals.md)). Plan 02's corrected in-cluster acceptance passed; no laptop setup blocks progress (README decisions 44 and 45, Q-17). Steps 1 to 5 are built; H2 is deployed and verified. The v1 parity audit is complete ([R-04](../research/R-04-v1-capability-parity.md)); all twenty gaps below block cutover. Baseline references and the rescue-mount fix are deployed (#108, haynes-ops #3584/#3583); a fresh full fixture passed presence/permission and read-only Omni/API checks. P-11/P-12 remain open for their complete service/network evidence. Finish keeper activation and acceptance (step 8/H5, Q-15 A, D-69). D-70 corrects the effective Headlamp baseline; no human approval route or blanket direct admin grant is selected. The earlier route prompt does not block parity or keeper provisioning. A possible management UI changes neither Q-16 nor this priority order. [Issue #91](https://github.com/thaynes43/dev-env/issues/91) tracks the spike. Draft branches `agent/plan07-approvals-round3` (dev-env) and `agent/plan07-catalog-round3` (haynes-ops) retain reusable pieces; #90 and haynes-ops #3550 remain closed.
 **Depends on:** 01 (the baseline guard and egress tiers are in place); Q-07 (Tom
 2026-10-06: credential grants, A)
 **Parallel with:** 02 in the architecture; this run finishes 02 first (README
@@ -85,8 +85,9 @@ In this repo:
   /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0` on a Proxmox
   node, installs the token in the pod, and deletes it at expiry. No new Proxmox user,
   and the long-lived operator token is not needed by v2. The keeper needs port 22 to
-  the nodes. D-69 defines the disabled-by-default backend. Until owner trust, standing
-  policies and acceptance pass, Proxmox grants remain refused. General hw-ssh
+  the nodes. D-69 defines the disabled-by-default backend. PVE node trust is now
+  installed; key-pair validation, private targets/host keys/egress, standing policies
+  and provider acceptance still gate Proxmox grants. General hw-ssh
   additionally needs P-19's copied-certificate/connection contract.
   The Proxmox code is built under D-69 with broker and keeper minting disabled
   by default. It includes immutable UID-bound jobs, a keeper-only durable journal,
@@ -128,7 +129,10 @@ In haynes-ops:
   or standing policies, and does not enable minting.
   **2026-10-09 delivery:** haynes-ops #3642 projects the saved CA into its
   keeper-only read-only mount; ESO/keeper are Ready with minting off. Pair
-  validation, owner trust, private configuration and real acceptance remain.
+  validation, private configuration and real acceptance remain. Q-22 delegated
+  PVE node trust; #3647 installed it on all five nodes with original bytes and
+  standing v1 access preserved. #3651 removed the temporary public delivery app.
+  HaynesTower/PiKVM and general hardware certificates remain separate.
 - [ ] The acceptance run below, and the break-glass half of S-12.
 
 ## V1 parity checklist (2026-10-08)
@@ -155,8 +159,9 @@ acceptance passes; permission checks alone do not cover admission or networking.
 - [ ] P-13: both existing PVE API endpoints and all seven SSH network paths.
 - [ ] P-14: Q-15 keeper PVE mint/install/revoke and durable recovery code built
   (#111), disabled by default. CA storage is owner-confirmed complete (Q-19);
-  keeper-only CA projection is delivered (#3642). Key-pair validation, owner
-  node trust, policies and real test remain.
+  keeper-only CA projection is delivered (#3642); delegated trust is installed
+  on all five PVE nodes (#3647/#3651). Key-pair validation, configuration,
+  policies and real test remain.
 - [ ] P-15: typed agentd store and per-call pve selection built/tested (#111),
   including expiry, redaction, interrupted installs and flags. Signed agent 2.9.0
   is deployed (#3595); a fresh session passed empty-store/default-unavailable
@@ -166,7 +171,8 @@ acceptance passes; permission checks alone do not cover admission or networking.
 - [ ] P-18: CA projection/owner node trust and keeper journal/job/SSH deployment.
   The CRDs, exact RBAC/admission and journal inventory are deployed in
   haynes-ops #3589; owner CA storage is complete (Q-19), and projection is
-  Ready on keeper only (#3642). Key-pair validation, node trust, SSH
+  Ready on keeper only (#3642), with PVE node trust installed (#3647/#3651).
+  Key-pair validation, pinned target/host trust, SSH
   configuration/egress and activation remain; do not close this composite row.
 - [ ] P-19: explicit general SSH certificate/connection revocation contract.
 - [ ] P-20: actual read-only full MCP, browser and ops observability checks.

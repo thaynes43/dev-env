@@ -1,7 +1,10 @@
 # 11: shared projects, workspace freshness and remote pods
 
-**Status:** R1–R7 and ADR-002 accepted; bounded CephFS trial authorized by Q-21.
-Workspace/client implementation and acceptance remain pending. The separate v2 fresh-start bug fix shipped in agent
+**Status:** R1–R7 and ADR-002 accepted; the authorized CephFS trial produced two
+incomplete attempts, both cleaned up. Shared Git/storage acceptance is unproved.
+[Issue #130](https://github.com/thaynes43/dev-env/issues/130) holds the slow peer
+Git check, evidence and next bounded diagnostic proposal. Workspace/client
+implementation and normal rollout remain gated. The separate v2 fresh-start bug fix shipped in agent
 2.9.1 (#124/#123, haynes-ops #3636); it does not implement this project contract.
 The [Accepted ADR-002](../adrs/002-shared-project-workspaces.md) draws the concrete
 topology and storage choice, with trial and normal-rollout gates.
@@ -67,13 +70,12 @@ management UI and credential migration remain unselected.
 2. Define catalog reconciliation and `project add` through the normal GitOps
    branch/PR/Flux workflow, with one authoritative list and no undeclared-root
    deletion. Catalog updates must not restart active hosts to reload declarations.
-3. Draft and ratify **ADR-002, shared project/workspace topology**, explicitly
-   superseding Accepted ADR-001's Storage decision and C-09 (fresh clone per
-   session). Do not edit ADR-001 or implement the changed topology before this
-   superseding decision is accepted. Define shared project/reference/task mounts with identical absolute
-   Git paths in every participating pod. Preserve private provider homes, daemon
-   enrollment/socket state and caches as appropriate. Revise D-15/D-22 explicitly;
-   do not call today's per-session RWO homes a shared workspace.
+3. **Decision complete: Accepted ADR-002** supersedes ADR-001's affected Storage/
+   C-09 and D-15/D-22 assumptions. Preserve both accepted records. Deliver shared
+   project/reference/task mounts with identical absolute Git paths in every pod,
+   private provider homes, enrollment/socket state and appropriate cache isolation.
+   The bounded storage trial is a feasibility check; normal rollout still needs
+   acceptance. Today's per-session RWO homes are not the shared workspace.
 4. Define at least two stable Codex logical-host identities, each with private
    enrollment state surviving replacement. Preserve one keeper refresh owner.
    Reassess S-4 forwarding as a possible mechanism; one hub is not the requested

@@ -183,6 +183,27 @@ accessed and no node trust changed. Key-pair validation, private SSH trust/
 targets/egress/policies and real mint/install/expiry/recovery/cleanup acceptance
 still block P-14/P-15/P-18 closure. All twenty composite parity rows stay open.
 
+### Delegated PVE node-trust delivery, 2026-10-09
+
+Q-22/D-76 delegated the public-key-only installation to Codex. Haynes-ops #3647
+(`9dabb4d5`) delivered the saved public field through a bounded 100m worker Job,
+then installed the restricted CA line as the existing account on all five PVE
+nodes. Each receipt verifies exact original key bytes preserved; existing v1 SSH
+and read-only PVE access passed after each update. No sudo/sshd changes or reload
+occurred. Backups and guarded metadata receipts remain on the nodes.
+
+#3651 (`b8f83ff9`) removed the temporary public delivery app through GitOps;
+Job/pods, child Kustomization and ExternalSecret are gone. Owner-policy target
+cleanup is corroborated by fresh Secret metadata showing the public target
+absent and keeper CA target present; no Secret API/values were read. All seven
+protected pod UIDs/images/restarts and disabled minting flags matched baseline.
+The driver independently verified one node's installed/original receipt digests.
+
+This proves delegated trust delivery and preserved standing access. It does not
+prove CA pair match, certificate authentication, pinned private targets/egress,
+standing policies or mint/install/expiry/recovery/revocation acceptance. All
+twenty composite parity rows remain open.
+
 ## Scope that must remain distinct
 
 Q-07 removes only the Proxmox **operator** token and long-lived hardware SSH key

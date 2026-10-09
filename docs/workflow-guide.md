@@ -60,6 +60,12 @@ private agent homes, two remote hosts and explicit task transfer. It compares
 available storage. Tom accepted it and the bounded CephFS trial through Q-21;
 normal rollout still needs acceptance. A
 new PVC does not isolate workspace IO from the household's storage services.
+The [trial record](trials/2026-10-09-cephfs-feasibility.md) preserves two incomplete
+attempts and complete cleanup. A startup defect was fixed; the corrected run
+exceeded the original peer Git status limit and recorded a recovery latency
+warning. [Issue #130](https://github.com/thaynes43/dev-env/issues/130) holds the
+remaining diagnosis. Shared-workspace feasibility and workload/device gates
+remain open; this result does not select a different backend automatically.
 
 ### The three main journeys
 
@@ -143,7 +149,7 @@ guide is describing the target.
 | Optional external CLI | Built, plan 02 | Token and loopback forwarding path; real external-machine use is unverified and optional |
 | GitHub installation tokens | Working | Keeper issuance; App private key stays out of session pods |
 | Kubernetes and egress grant core | Built and smoke-tested | Temporary identities, private installation, release/expiry; complete standing policies and parity still missing |
-| Proxmox credential backend | Built, disabled | Keeper SSH minting and recovery, typed PVE files/helper; CA delivery, node trust, network/policy wiring and real provider acceptance remain |
+| Proxmox credential backend | Built, disabled | Keeper CA projection and five-node trust delivered; typed PVE files/helper built; pair validation, network/policy wiring and real certificate/provider acceptance remain |
 | General hw-ssh grants | Unbuilt | Must retain existing targets, command classes, PTY/stdin behavior, and owner rules |
 | V2 Claude phone sessions and Max refresh owner | Planned, plan 03 | Keeper-owned login, Remote Control registration/resume, renewal and archive |
 | V2 Codex remote hosts and shared projects | Required, plans 04/11 | Multiple stable pod links, joint Claude/Codex projects, sole refresh owner, shared files with distinct task ownership |
@@ -577,23 +583,22 @@ logins; copying v1's live authentication would create competing refresh owners.
 Q-19's CA storage step is complete by owner confirmation in existing
 `HaynesKube/dev-env`. Keeper-only projection shipped through haynes-ops #3642:
 ESO is SecretSynced and the keeper is Ready with a read-only CA mount. Minting
-stays disabled. Do not generate another CA or item. Remaining order:
+stays disabled. Q-22's delegated trust installation is complete on all five PVE
+nodes, with original key bytes and existing v1 access preserved. Do not generate
+another CA or item. Remaining activation order:
 
 1. Validate format and key match without exposing values. Secret synchronization
    and disabled keeper readiness do not prove the CA pair valid.
-2. Prepare exact node trust and restricted minter-principal instructions using
-   the existing account. Tom performs that owner step unless he delegates it.
-3. Supply private targets, pinned host keys, keeper TCP22 access and accepted
+2. Supply private targets, pinned host keys, keeper TCP22 access and accepted
    policies. Keep actual trust material and private addresses out of public docs.
-4. Enable keeper and broker together only after prerequisites pass. Declare
+3. Enable keeper and broker together only after prerequisites pass. Declare
    activity; test real mint/install/use/release/expiry/recovery and cleanup.
-5. Remove fixtures and compare v1/existing session UIDs and restart counts.
+4. Remove fixtures and compare v1/existing session UIDs and restart counts.
 
-[Owner node-trust instructions](keeper-node-trust.md) are now prepared from
-read-only checks on all five nodes. They append the restricted CA entry using
-the saved public key, preserve v1's existing key and include guarded rollback.
-They have not been executed; installed trust and provider acceptance remain
-pending. Secret synchronization will not by itself prove the CA key pair valid.
+[Node-trust guide](keeper-node-trust.md) records the restricted CA installation
+and guarded rollback. Temporary delivery cleanup is merged and deployed.
+Certificate/provider acceptance remains separate. Secret
+synchronization and standing-key access do not prove the CA key pair valid.
 
 General hw-ssh certificates are a separate unfinished feature. Certificate
 expiry alone does not terminate an existing SSH connection; P-19 needs its

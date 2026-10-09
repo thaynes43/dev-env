@@ -1,16 +1,35 @@
-# Keeper SSH CA: owner node-trust quick start
+# Keeper SSH CA: node-trust guide
 
-Prepared 2026-10-09, America/New_York. This is the next owner provisioning step
-after saving the fresh CA in `HaynesKube/dev-env`. It is a reviewable recipe,
-not evidence that trust is installed. The reset work order assigns node trust
-to Tom unless he explicitly delegates it. No agent has changed the nodes.
+**Installed 2026-10-09, America/New_York.** Tom delegated this step through Q-22:
+"Delegate the trust installation to Codex". The saved public CA was installed
+on all five PVE nodes; each preserved the original SSH-key bytes and passed
+existing v1 SSH/read-only PVE access afterward. Guarded backups and metadata
+receipts remain on each node. The driver independently checked one receipt.
 
 This uses the existing Unix `dev-env` account on each of the five PVE nodes.
 It appends a restricted CA trust entry and preserves the existing v1 SSH key.
 It changes no sudo rule and needs no sshd reload/restart. Keeper and broker
 Proxmox minting stay disabled after this step.
 
-The read-only audit found OpenSSH 9.2 on all five nodes, the expected account,
+Delivery [PR #3647](https://github.com/thaynes43/haynes-ops/pull/3647), `9dabb4d5`,
+used a bounded 100m/128Mi worker Job selecting only `SSH_CA_PUBLIC_KEY`, then a
+pipe to the existing non-root accounts. The private CA never left keeper.
+Cleanup [PR #3651](https://github.com/thaynes43/haynes-ops/pull/3651), `b8f83ff9`,
+removed the temporary GitOps app. Its Job/pods, child Kustomization and
+ExternalSecret are gone. Owner-policy target cleanup is corroborated by fresh
+Secret metadata showing the public target absent and keeper CA target present;
+no Secret values were read. Protected v1/controller/shelf identities and
+restart counts were preserved. No key values were exposed.
+
+Certificate authentication and private/public pair validation are still pending.
+Standing-key success does not prove those checks. PVE minting remains disabled.
+The reviewed automation is retained under
+[`scripts/keeper-node-trust/`](https://github.com/thaynes43/haynes-ops/tree/main/scripts/keeper-node-trust).
+Its guarded rollback refuses later edits rather than replacing them. The manual
+root recipe below is an owner fallback; its rollback applies to a backup made by
+that recipe. Use the automation's receipt-based rollback for its installed entry.
+
+Before installation, the read-only audit found OpenSSH 9.2 on all five nodes, the expected account,
 `.ssh` mode 0700 and `authorized_keys` mode 0600, owned by `dev-env`; one existing
 plain key and no CA entry; `/usr/bin/pvesh` and the required noninteractive sudo
 inspection scope. The commands below recheck the relevant filesystem facts.
