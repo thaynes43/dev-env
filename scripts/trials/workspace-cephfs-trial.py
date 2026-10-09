@@ -60,10 +60,18 @@ def run(argv, *, expected=0, env=None, timeout=15):
     start = time.monotonic()
     result = subprocess.run(argv, text=True, capture_output=True,
                             env=env or ENV, timeout=min(timeout, remaining()))
-    MEASUREMENTS.append({'operation': ' '.join(argv[:3]),
-                         'seconds': time.monotonic()-start, 'exit': result.returncode})
+    measurement = {'operation': ' '.join(argv[:3]), 'argv': argv,
+                   'seconds': time.monotonic()-start, 'exit': result.returncode,
+                   'expectedExit': expected}
+    MEASUREMENTS.append(measurement)
     if expected is not None:
-        assert result.returncode == expected, 'fixture command unexpected exit'
+        if result.returncode != expected:
+            # Every command here targets only the synthetic local fixture. Keep
+            # bounded diagnostics so a failed trial does not hide the actual call.
+            measurement['stderr'] = result.stderr[:400]
+            measurement['stdout'] = result.stdout[:400]
+            raise AssertionError('fixture command unexpected exit: expected %s, actual %s' %
+                                 (expected, result.returncode))
     return result
 
 def git(path, *args, **kwargs):
@@ -89,6 +97,21 @@ def wait(name, timeout=30):
         # Bounded coordination wait, not a CPU/load loop.
         time.sleep(0.2)
     raise TimeoutError('peer did not complete ' + name)
+
+def startup_barrier():
+    # Separate mount/container startup skew from the 30s lock-phase budget. No
+    # lock is held until both peers are actually executing the helper.
+    CONTROL.mkdir(exist_ok=True)
+    peer = 'b' if ROLE == 'a' else 'a'
+    flag('ready-' + ROLE, {'podUID':os.environ['TRIAL_POD_UID'],
+                          'node':os.environ['TRIAL_NODE']})
+    start = time.monotonic()
+    ready = wait('ready-' + peer, timeout=60)
+    assert ready['podUID'] != os.environ['TRIAL_POD_UID']
+    assert ready['node'] != os.environ['TRIAL_NODE'], 'peers require different nodes'
+    MEASUREMENTS.append({'operation':'peer-startup-barrier',
+                         'seconds':time.monotonic()-start, 'budgetSeconds':60,
+                         'peerPodUID':ready['podUID'], 'peerNode':ready['node']})
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -355,12 +378,16 @@ def role_reconnect():
 
 try:
     mounted_paths()
+    if ROLE in {'a', 'b'}:
+        startup_barrier()
     {'a':role_a,'b':role_b,'reconnect':role_reconnect}[ROLE]()
 except BaseException as error:
     for proc in PROCESSES:
         if proc.poll() is None:
             os.killpg(proc.pid,signal.SIGTERM)
     print(json.dumps({'runID':RUN_ID,'role':ROLE,'result':'FAIL',
+                      'podUID':os.environ['TRIAL_POD_UID'],
+                      'node':os.environ['TRIAL_NODE'],'commands':MEASUREMENTS,
                       'errorType':type(error).__name__,
                       'reason':str(error)[:160],'elapsedSeconds':time.monotonic()-START}),flush=True)
     raise SystemExit(1)

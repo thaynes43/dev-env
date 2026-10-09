@@ -22,6 +22,8 @@
     "maxEntries": 2048,
     "maxLogicalBytes": 16777216,
     "ordinaryCommandDeadlineSeconds": 15,
+    "peerStartupBarrierDeadlineSeconds": 60,
+    "initialHelperDeadlineSecondsIncludingStartup": 145,
     "heldGitTransactionDeadlineSeconds": 35,
     "gitHookWaitDeadlineSeconds": 30,
     "sourceWriteAndInstallArchiveDeadlineSeconds": 30
@@ -124,7 +126,7 @@
   "executionOrder": [
     "Freeze baseline and declare narrow20m activity",
     "Merge/reconcile only approved disposable PVC app via GitOps; record Bound claim/PV UIDs without CSI handles or secrets",
-    "Create A/B only; inspect actual admitted resources then collect receipts and telemetry",
+    "Create A/B only; inspect actual admitted resources, require bounded mutual startup barrier before held-lock phases, then collect receipts including expected/actual command failure diagnostics and telemetry",
     "Require successful terminated processes, save both receipts/logs, delete both Jobs normally and wait original podUIDs absent without force",
     "Create reconnect only; verify new podUID and exact retained fixture state, save receipt/log and delete Job normally",
     "Monitor five minutes afterward",
