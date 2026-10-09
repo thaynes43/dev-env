@@ -22,6 +22,7 @@ def namespace(fake_run, clock, budget=145):
     return {'subprocess':SimpleNamespace(run=fake_run, TimeoutExpired=subprocess.TimeoutExpired),
             'time':SimpleNamespace(monotonic=lambda:next(clock)), 'remaining':lambda:budget,
             'ENV':{}, 'MEASUREMENTS':[], 'PROCESSES':[], 'STARTUP_METADATA':{},
+            'DIAGNOSTIC_METADATA':{}, 'PHASES':{},
             'RUN_ID':'synthetic', 'ROLE':'b', 'START':100, 'DEADLINE':100+budget,
             'os':SimpleNamespace(environ={'TRIAL_POD_UID':'synthetic-pod', 'TRIAL_NODE':'worker'}),
             'json':json}
