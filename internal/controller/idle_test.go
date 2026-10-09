@@ -11,9 +11,38 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/templates"
 )
 
 // The envtest cases of D-60, the idle timer.
+
+func TestSharedIdleDeadlineExcludesBootAndAdmissionWait(t *testing.T) {
+	now := time.Now().UTC()
+	pod := owned[*corev1.Pod]{obj: &corev1.Pod{Status: corev1.PodStatus{
+		Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+	}}}
+	s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))},
+		Spec: v1alpha1.AgentSessionSpec{Workspace: &v1alpha1.WorkspaceSpec{ID: "w"},
+			Lifecycle: &v1alpha1.Lifecycle{IdleSuspendAfter: &metav1.Duration{Duration: time.Second}}}}
+	for _, a := range []v1alpha1.AgentStatus{
+		{Boot: protocol.BootBooting, Status: protocol.AgentIdle},
+		{Boot: protocol.BootReady, Status: protocol.AgentPending},
+	} {
+		s.Status.Agent = &a
+		if _, _, ok := idleDeadline(s, &templates.Templates{}, pod); ok {
+			t.Fatalf("shared boot/admission wait was eligible for idle suspension: %+v", a)
+		}
+	}
+	s.Status.Agent = &v1alpha1.AgentStatus{Boot: protocol.BootReady, Status: protocol.AgentIdle}
+	if _, _, ok := idleDeadline(s, &templates.Templates{}, pod); !ok {
+		t.Fatal("shared ready idle session lost its idle timer")
+	}
+	s.Spec.Workspace = nil
+	s.Status.Agent = &v1alpha1.AgentStatus{Boot: protocol.BootBooting, Status: protocol.AgentPending}
+	if _, _, ok := idleDeadline(s, &templates.Templates{}, pod); !ok {
+		t.Fatal("private pending-session behavior changed")
+	}
+}
 
 // setAgent writes what a heartbeat would: the agent's state and last activity.
 func setAgent(t *testing.T, name, state string, last time.Time) {

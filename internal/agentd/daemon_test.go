@@ -145,6 +145,31 @@ func TestDaemonSharedSamePodRestartReportsRefusedWriter(t *testing.T) {
 	}
 }
 
+func TestDaemonSharedAdmissionWaitHeartbeatsAndJoinsOnCancellation(t *testing.T) {
+	r := newDaemonRig(t, nil)
+	s, sess := sharedSettings(t, r.d.S, r.d.Session.Name)
+	unlock, err := workspaceAdminLock(context.Background(), s, sess.Repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	r.d.S, r.d.Session = s, sess
+	stop := r.start(t)
+	waitFor(t, func() bool {
+		st, count := r.beats.last()
+		return count >= 3 && st.Boot == protocol.BootBooting && st.Agent.State == protocol.AgentPending
+	})
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := r.beats.last(); st.Boot != protocol.BootFailed {
+		t.Fatalf("a stale boot heartbeat followed the final status: %+v", st)
+	}
+	if !r.d.writerRefused || r.tmuxStarted() || exists(s.ownerPath(sess.Name)) || exists(s.statePath(launchFile)) {
+		t.Fatal("cancelled admission wait claimed or launched a writer")
+	}
+}
+
 func TestDaemonBootsStartsAndReports(t *testing.T) {
 	r := newDaemonRig(t, map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "static"})
 	stop := r.start(t)

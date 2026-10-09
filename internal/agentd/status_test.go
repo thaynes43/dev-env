@@ -94,3 +94,42 @@ func TestCollectStatusStates(t *testing.T) {
 		})
 	}
 }
+
+func TestSharedStatusPendingRequiresExactUnlaunchedReceipt(t *testing.T) {
+	now := rescueNow.Add(time.Hour)
+	s, sess := sharedSettings(t, testSettings(t, t.TempDir()), "task-a")
+	owner := taskOwner{Version: 1, Workspace: s.WorkspaceID, Task: sess.Name, Repo: sess.Repo,
+		Clone: s.ClonePath(sess.Repo), Worktree: s.WorktreePath(sess.Name),
+		SessionUID: sess.Workspace.SessionUID, PodUID: s.PodUID, Generation: 1, State: "owned", UpdatedAt: now.Add(-2 * time.Minute)}
+	launch := Launch{Session: sess.Name, Dir: owner.Worktree, BootID: "b1", TUI: true, CreatedAt: owner.UpdatedAt, WorkspaceOwner: &owner}
+	if err := writeJSONFile(s.statePath(bootFile), bootRecord{BootID: "b1", Boot: protocol.BootReady}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONFile(s.statePath(launchFile), launch); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		edit  func(*taskOwner)
+		at    time.Time
+		state string
+	}{
+		{"queued admission", func(*taskOwner) {}, now, protocol.AgentPending},
+		{"changed generation", func(o *taskOwner) { o.Generation++ }, now, protocol.AgentInterrupted},
+		{"already admitted", func(o *taskOwner) { o.Launched = true }, now, protocol.AgentInterrupted},
+		{"foreign Pod", func(o *taskOwner) { o.PodUID = "another-pod" }, now, protocol.AgentInterrupted},
+		{"expired queue", func(*taskOwner) {}, launch.CreatedAt.Add(sharedGitAdminBudget + startWindow), protocol.AgentInterrupted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current := owner
+			tc.edit(&current)
+			if err := writeWorkspaceJSON(s.ownerPath(sess.Name), current); err != nil {
+				t.Fatal(err)
+			}
+			st := CollectStatus(context.Background(), &fakeRunner{}, s, sess.Name, tc.at)
+			if st.Agent.State != tc.state {
+				t.Fatalf("state %q, want %q: %+v", st.Agent.State, tc.state, st.Agent)
+			}
+		})
+	}
+}

@@ -21,8 +21,9 @@ import (
 
 const workspaceVersion = 1
 
-// Shared preparation includes token wait, clone retries/backoff and worktree
-// administration. A queued administrator covers that complete bound and the
+// Shared preparation and rescue each bound their complete locked Git section,
+// including token wait, clone retries/backoff, worktree and bundle commands.
+// A queued administrator covers that complete bound and the
 // runner's pipe-drain allowance, while a shorter caller deadline still wins.
 const (
 	sharedGitPrepareBudget = 2 * time.Minute

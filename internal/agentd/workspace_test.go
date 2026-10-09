@@ -366,6 +366,49 @@ type contextRecordingRunner struct {
 	onRun func(context.Context, Cmd)
 }
 
+func TestSharedRescueBoundsBundleAndPreservesOwnerOnCancellation(t *testing.T) {
+	g := newGitFixture(t, "demo")
+	s, r := g.settings(t)
+	s, sess := sharedSettings(t, s, "task-a")
+	w, err := acquireWorkspaceWriter(context.Background(), r, s, sess, rescueNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.unlock()
+	s.writer = w
+	ws, step := PrepareRepo(context.Background(), r, s, sess)
+	if step.State != StepOK {
+		t.Fatalf("prepare %v", step.Notes)
+	}
+	writeFile(t, filepath.Join(ws.Worktree, "README.md"), "owned dirty work")
+	rig := rescueRig{g: g, s: s, r: r, ws: ws}
+	rig.sharedVolume(t)
+	w.unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var sawBundle bool
+	bounded := &contextRecordingRunner{Runner: r, onRun: func(runCtx context.Context, c Cmd) {
+		if slices.Contains(c.Args, "bundle") {
+			sawBundle = true
+			deadline, ok := runCtx.Deadline()
+			if !ok || time.Until(deadline) > sharedGitPrepareBudget {
+				t.Error("shared rescue bundle lacks the whole locked-section bound")
+			}
+			cancel()
+		}
+	}}
+	if _, err := Rescue(ctx, bounded, s, sess.Name, rescueNow, RescueOptions{StopAgent: true}); !errors.Is(err, context.Canceled) || !sawBundle {
+		t.Fatalf("bundle cancellation did not fail safely: sawBundle=%t, err=%v", sawBundle, err)
+	}
+	var after taskOwner
+	if err := readWorkspaceJSON(s.ownerPath(sess.Name), &after); err != nil {
+		t.Fatal(err)
+	}
+	if after != w.owner {
+		t.Fatal("cancelled rescue wrote a stopped or changed owner receipt")
+	}
+}
+
 func (r *contextRecordingRunner) Run(ctx context.Context, c Cmd) (Result, error) {
 	r.onRun(ctx, c)
 	if err := ctx.Err(); err != nil {

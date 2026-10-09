@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/version"
 )
 
 // Daemon is `agentd run`, the session pod's supervisor under tini (DESIGN-001
@@ -75,12 +76,6 @@ func (d *Daemon) now() time.Time {
 // operator sees why a session is not working.
 func (d *Daemon) Run(ctx context.Context) error {
 	d.expireCredentials()
-	writer, err := acquireWorkspaceWriter(ctx, d.R, d.S, d.Session, d.now())
-	writerErr := err
-	if writer != nil {
-		d.S.writer = writer
-		defer writer.unlock()
-	}
 	if err := os.MkdirAll(d.S.StateDir, 0o700); err != nil {
 		return fmt.Errorf("state dir: %w", err)
 	}
@@ -89,8 +84,18 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("boot record: %w", err)
 	}
 	d.Log.Info("boot", "session", d.Session.Name, "boot", rec.BootID, "repo", d.Session.Repo, "agent", d.Session.Agent, "mode", d.Session.Mode, "model", d.Session.Model, "promptBytes", len(d.Session.Prompt))
-	d.beat(ctx)
+	stopBootHeartbeat := d.workspaceBootHeartbeat(ctx, rec)
+	defer stopBootHeartbeat()
+	if d.S.WorkspaceID == "" {
+		d.beat(ctx)
+	}
+	writer, writerErr := acquireWorkspaceWriter(ctx, d.R, d.S, d.Session, d.now())
+	if writer != nil {
+		d.S.writer = writer
+		defer writer.unlock()
+	}
 	if writerErr != nil {
+		stopBootHeartbeat()
 		d.writerRefused = true
 		rec.Boot, rec.AgentError = protocol.BootFailed, "workspace writer admission: "+writerErr.Error()
 		rec.Steps = []Step{newStep("workspace", nil, writerErr)}
@@ -107,6 +112,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	agentStep, agentErr := d.startAgent(ctx, ws, repoStep, rec.BootID)
 	steps = append(steps, agentStep)
 	LogSteps(d.Log, steps)
+	stopBootHeartbeat()
 
 	rec.Steps, rec.Workspace, rec.AgentError = steps, &ws, agentErr
 	rec.Boot = protocol.BootReady
@@ -118,6 +124,40 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	d.beat(ctx)
 	return d.supervise(ctx)
+}
+
+// workspaceBootHeartbeat observes an admission or Git preparation wait. It
+// never reads the shared worktree, runs another command, or claims a writer.
+// Its sender is joined before the final boot status and normal supervision,
+// so heartbeat state has one owner and cancellation leaves no boot goroutine.
+func (d *Daemon) workspaceBootHeartbeat(ctx context.Context, rec bootRecord) func() {
+	if d.S.WorkspaceID == "" || d.Send == nil {
+		return func() {}
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	beat := func() {
+		d.sendHeartbeat(ctx, protocol.Status{
+			Session: d.Session.Name, Agentd: version.Get().String("agentd"),
+			BootID: rec.BootID, BootedAt: rec.BootedAt, Boot: protocol.BootBooting,
+			Agent: protocol.AgentState{State: protocol.AgentPending}, ObservedAt: d.now().UTC(),
+		})
+	}
+	beat()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tick := time.NewTicker(d.Interval)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				beat()
+			}
+		}
+	}()
+	return func() { cancel(); <-done }
 }
 
 // startAgent starts the session's agent. On the volume's first boot that is
@@ -279,6 +319,10 @@ func (d *Daemon) beat(ctx context.Context) {
 		return
 	}
 	st := CollectStatus(ctx, d.R, d.S, d.Session.Name, d.now())
+	d.sendHeartbeat(ctx, st)
+}
+
+func (d *Daemon) sendHeartbeat(ctx context.Context, st protocol.Status) {
 	err := d.Send(ctx, st)
 	switch {
 	case err == nil && d.failures > 0:

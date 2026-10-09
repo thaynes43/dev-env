@@ -47,6 +47,10 @@ func rescueSharedTask(ctx context.Context, r Runner, s Settings, task string, no
 		return protocol.RescueReport{}, err
 	}
 	defer unlock()
+	// Rescue retains administration protection through its final Git writes,
+	// but cannot hold it longer than the maximum peer queue budget covers.
+	ctx, cancelGit := context.WithTimeout(ctx, sharedGitPrepareBudget)
+	defer cancelGit()
 	var owner taskOwner
 	if err := readWorkspaceJSON(s.ownerPath(task), &owner); err != nil {
 		return protocol.RescueReport{}, fmt.Errorf("shared rescue owner: %w", err)
@@ -122,6 +126,9 @@ func rescueSharedTask(ctx context.Context, r Runner, s Settings, task string, no
 	// Final Git/bundle writes happen before the durable stop receipt, with
 	// the administration and task writer protection still held. A failure
 	// keeps the owner unchanged and therefore refuses future takeover.
+	if err := ctx.Err(); err != nil {
+		return rep, fmt.Errorf("shared rescue Git budget: %w", err)
+	}
 	if rep.OK && (rep.CleanAndPushed || rep.Bundle != nil && rep.Bundle.Error == "") {
 		owner.State, owner.StopReason = "stopped", "no-agent-admitted"
 		owner.UpdatedAt, owner.StoppedAt = now.UTC(), now.UTC()
