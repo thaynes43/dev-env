@@ -2,10 +2,12 @@ package agentrun
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -23,6 +25,8 @@ const (
 	defaultWait  = 30 * time.Second
 	pollInterval = 2 * time.Second
 )
+
+var projectName = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // conditionPodReady is the reconciler's condition for the session's pod, and
 // unschedulable the scheduler's reason when it cannot place one.
@@ -47,16 +51,17 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	cmd := newCommand(cmdName, outputName, outputJSON)
 	fs := cmd.fs
 	var (
-		prompt, promptFile, repo, agent, model, effort, base, size, profile, timeout, key string
-		idleAfter, archiveAfter                                                           string
-		maxTurns                                                                          int
-		wait                                                                              time.Duration
-		interactive, local, safe                                                          bool
+		prompt, promptFile, repo, project, agent, model, effort, base, size, profile, timeout, key string
+		idleAfter, archiveAfter                                                                    string
+		maxTurns                                                                                   int
+		wait                                                                                       time.Duration
+		interactive, local, safe                                                                   bool
 	)
 	fs.StringVar(&prompt, "p", "", "")
 	fs.StringVar(&prompt, "prompt", "", "")
 	fs.StringVar(&promptFile, "prompt-file", "", "")
 	fs.StringVar(&repo, "repo", "", "")
+	fs.StringVar(&project, "project", "", "")
 	fs.StringVar(&agent, "agent", protocol.AgentClaude, "")
 	fs.StringVar(&model, "model", "", "")
 	fs.StringVar(&effort, "effort", "", "")
@@ -75,6 +80,14 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	pos, err := cmd.parse(a, args)
 	if err != nil {
 		return err
+	}
+	projectGiven := false
+	fs.Visit(func(f *flag.Flag) { projectGiven = projectGiven || f.Name == "project" })
+	if projectGiven && !projectName.MatchString(project) {
+		return usageError("--project must be a declared project name: 1 to 63 lowercase letters, digits or '-', starting and ending with a letter or digit")
+	}
+	if project != "" && (restoring || local || interactive) {
+		return usageError("--project selects a new task; it cannot combine with rescue restore, --local or --interactive")
 	}
 
 	var rescueID, rescueSession string
@@ -127,7 +140,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	if len(prompt) > protocol.MaxPromptBytes {
 		return usageError("the task is %d bytes, more than %d: a session's environment carries it (D-40)", len(prompt), protocol.MaxPromptBytes)
 	}
-	if repo == "" && !restoring {
+	if repo == "" && project == "" && !restoring {
 		return usageError("say which repository: --repo <name>, for example --repo haynes-ops")
 	}
 	if strings.Contains(repo, "/") {
@@ -216,6 +229,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	req := apiv1.CreateSessionRequest{
 		Restore:        rescueID,
 		Repo:           repo,
+		Project:        project,
 		Base:           base,
 		Agent:          agent,
 		Mode:           mode,
