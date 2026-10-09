@@ -587,6 +587,137 @@ func TestWorkspaceResumeDuringHoldRescueCreatesNewExecutorAfterCleanup(t *testin
 	}
 }
 
+func TestWorkspaceGenerationChangeAfterVerifiedDeleteResumes(t *testing.T) {
+	f := stoppedWorkspaceFixture()
+	c := f.client()
+	r, obs := workspaceFixtureController(t, f, c)
+	r.Rescuer = &workspaceFixtureRescuer{answer: func(p *protocol.WorkspaceStopProof) protocol.RescueReport {
+		return workspacePreparationReport(f.s, p, "NoWorkAdmitted")
+	}}
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	readyWorkspaceHold(t, c, f.s)
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.pod), &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Fatal("executor not cleaned", err)
+	}
+	// Resume races the first missing observation after the controller's
+	// verified delete, leaving the completed rescue's generation behind.
+	f.s.Spec.OperatingMode = v1alpha1.OperatingModeRunning
+	f.s.Generation++
+	if err := c.Update(context.Background(), f.s); err != nil {
+		t.Fatal(err)
+	}
+	if sharedRescued(f.s) || !sharedCleanupRescueRecorded(f.s) {
+		t.Fatal("historical proof escaped its missing-Pod-only predicate")
+	}
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	var fresh v1alpha1.AgentSession
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.s), &fresh); err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Status.PodName != "" || !fresh.Status.Rescue.Superseded {
+		t.Fatal("historical completed cleanup did not atomically supersede the old name")
+	}
+	f.s = &fresh
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.pod), &corev1.Pod{}); err != nil {
+		t.Fatal("resumed executor absent", err)
+	}
+}
+
+func TestWorkspaceHistoricalCleanupRejectsUncertainRecordsAndLivePods(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*v1alpha1.RescueStatus)
+	}{
+		{"future", func(r *v1alpha1.RescueStatus) { r.Generation = 4 }},
+		{"zero generation", func(r *v1alpha1.RescueStatus) { r.Generation = 0 }},
+		{"failed", func(r *v1alpha1.RescueStatus) { r.Result = v1alpha1.RescueFailed }},
+		{"superseded", func(r *v1alpha1.RescueStatus) { r.Superseded = true }},
+		{"same UIDs", func(r *v1alpha1.RescueStatus) { r.PodUID = r.SourcePodUID }},
+		{"missing source", func(r *v1alpha1.RescueStatus) { r.SourcePodUID = "" }},
+		{"missing hold", func(r *v1alpha1.RescueStatus) { r.PodUID = "" }},
+		{"untyped no-work", func(r *v1alpha1.RescueStatus) { r.PreservationKind = "" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := stoppedWorkspaceFixture()
+			f.s.Spec.OperatingMode = v1alpha1.OperatingModeRunning
+			f.s.Status.Rescue = &v1alpha1.RescueStatus{Result: v1alpha1.RescueNoWorkAdmitted, PreservationKind: "NoWorkAdmitted", Generation: 2, SourcePodUID: string(f.pod.UID), PodUID: "hold-1"}
+			tc.edit(f.s.Status.Rescue)
+			c := f.client()
+			if err := c.Delete(context.Background(), f.pod); err != nil {
+				t.Fatal(err)
+			}
+			r, obs := workspaceFixtureController(t, f, c)
+			if sharedCleanupRescueRecorded(f.s) {
+				t.Fatal("uncertain historical record accepted")
+			}
+			if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+				t.Fatal(err)
+			}
+			if obs.removalBlocked == nil || f.s.Status.PodName == "" {
+				t.Fatal("uncertain disappearance became resume proof")
+			}
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.pod), &corev1.Pod{}); !apierrors.IsNotFound(err) {
+				t.Fatal("uncertain owner got a new executor", err)
+			}
+		})
+	}
+	for _, sourcePresent := range []bool{false, true} {
+		t.Run(fmt.Sprintf("older record with live source=%t", sourcePresent), func(t *testing.T) {
+			f := stoppedWorkspaceFixture()
+			c := f.client()
+			r, obs := workspaceFixtureController(t, f, c)
+			proof, _, err := r.verifyWorkspaceStop(context.Background(), f.s, f.pod.UID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hold, err := buildWorkspaceHoldPod(f.s, obs.templates, proof)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hold.UID = "hold-1"
+			if err := c.Create(context.Background(), hold); err != nil {
+				t.Fatal(err)
+			}
+			if !sourcePresent {
+				if err := c.Delete(context.Background(), f.pod); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.s.Status.Rescue = &v1alpha1.RescueStatus{Result: v1alpha1.RescueNoWorkAdmitted, PreservationKind: "NoWorkAdmitted", Generation: 2, SourcePodUID: string(f.pod.UID), PodUID: string(hold.UID)}
+			if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+				t.Fatal(err)
+			}
+			if sharedRescued(f.s) || obs.removalBlocked == nil {
+				t.Fatal("older record authorized live-Pod cleanup")
+			}
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(hold), &corev1.Pod{}); err != nil {
+				t.Fatal("live hold deleted by historical proof", err)
+			}
+			if sourcePresent {
+				if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.pod), &corev1.Pod{}); err != nil {
+					t.Fatal("live source deleted by historical proof", err)
+				}
+			}
+		})
+	}
+}
+
 func TestWorkspaceHoldPinsEveryRequiredNodeTermAndPreservesPrivateHold(t *testing.T) {
 	f := stoppedWorkspaceFixture()
 	tmpl := exampleTemplates(t)

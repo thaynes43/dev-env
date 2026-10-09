@@ -139,7 +139,7 @@ func (r *Reconciler) reconcileSharedWorkspace(ctx context.Context, s *v1alpha1.A
 		if !hold.missing {
 			return block(errors.New("shared executor is missing while its hold Pod remains; stop proof is uncertain"))
 		}
-		if !sharedRescued(s) && s.Status.PodName != "" {
+		if !sharedCleanupRescueRecorded(s) && s.Status.PodName != "" {
 			return block(errors.New("shared executor is missing without a verified owned rescue; deleted or partitioned owners cannot be taken over"))
 		}
 		if wantsPodGone(s) {
@@ -295,4 +295,28 @@ func sharedRescued(s *v1alpha1.AgentSession) bool {
 	r := s.Status.Rescue
 	return r != nil && !r.Superseded && r.PodUID != "" && r.SourcePodUID != "" && r.Generation == s.Generation &&
 		(rescued(s) || r.Result == v1alpha1.RescueNoWorkAdmitted && r.PreservationKind == "NoWorkAdmitted")
+}
+
+// Only the uncached both-Pods-absent branch uses this historical record. The
+// controller already verified the immutable workspace/task/session binding,
+// exact permanently terminated source and owned preservation when recording
+// it. A later spec generation can supersede that completed rescue after cleanup;
+// disappearance alone never creates proof. Live-Pod guards still use the exact
+// current-generation sharedRescued predicate.
+func sharedCleanupRescueRecorded(s *v1alpha1.AgentSession) bool {
+	r := s.Status.Rescue
+	if s.Spec.Workspace == nil || r == nil || r.Superseded || r.Generation <= 0 || r.Generation > s.Generation ||
+		r.SourcePodUID == "" || r.PodUID == "" || r.SourcePodUID == r.PodUID {
+		return false
+	}
+	switch r.Result {
+	case v1alpha1.RescueVerified:
+		return r.PreservationKind == "" || r.PreservationKind == "OwnedRefsPreserved"
+	case v1alpha1.RescueCleanAndPushed:
+		return r.PreservationKind == ""
+	case v1alpha1.RescueNoWorkAdmitted:
+		return r.PreservationKind == "NoWorkAdmitted"
+	default:
+		return false
+	}
 }
