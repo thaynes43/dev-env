@@ -5,31 +5,57 @@ Tom's own machine. Read this page, then [CLAUDE.md](../CLAUDE.md) (the rules), t
 the saga. To start building, follow
 [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md).
 
-## Workflow/session guide requested, 2026-10-09 America/New_York
+## Workflow guide, revised projects and shipped freshness, 2026-10-09
 
-Tom resumed from the reset handoff and requested a detailed high-level Markdown
-workflow/feature guide before project finalization, plus discussion of Codex
-sessions, v1 `/work/codex` project homes and stale shared repositories. Read the
-[workflow guide](../docs/workflow-guide.md) before resuming implementation. It
-separates working features from disabled and planned ones, with quick-start
-commands and diagrams. [Plan 11](sagas/distributed-dev-env/backlog/11-project-workspaces.md)
-records the proposed home/worktree contract and remaining client protections;
-Q-20 asks which app registers these folders. No folder/client rollout, v1
-restart or approval-route change is implied.
+Read the [workflow guide](../docs/workflow-guide.md) before further architecture
+work. It now draws the user journeys first, with two rendered images and four
+Mermaid diagrams, working quick starts, feature states, and cutover gates.
+The built orchestrator is the operator API/controller; `agent-run` or an agent
+is its requester. There is no separate requester-agent service. The planned
+console is unbuilt; the normal management surface still needs workflow review.
+Owner questions must arrive as native phone prompts, not get buried in comments
+or documentation.
 
-The read-only resume audit matched the parked controller/agent image pins.
-V1 and shelf UIDs were unchanged, all restart counts zero; no sessions,
-CredentialJobs or standing GrantPolicies existed. All thirteen v2 Flux
-Kustomizations and three controller HelmReleases were Ready. CA storage remains
-owner-confirmed complete, projection/trust/minting off, and all twenty parity
-closures open. The historical parking record below remains the starting evidence;
-deployment changes after this guide must update this section.
+Tom supplied [project requirements R1–R6](sagas/distributed-dev-env/requirements/2026-10-09-project-roots.md)
+and added R7: multiple Codex remote links across pods sharing workspace files.
+Both providers use one project concept; R2 supersedes Q-20. The supplied v1
+baseline is `~/codex/<project>`, outside swept `~/work` tasks. Manual anchors
+exist; haynes-ops #3633 was open/unmerged at audit. Catalog/sync/add, generated
+trust, both-provider project rules, task-rule propagation, cross-pod ownership
+and shared workspace storage are not built. [Plan 11](sagas/distributed-dev-env/backlog/11-project-workspaces.md)
+and D-74 require revision of plan 04's single-hub and D-15/D-22's private Git/task
+assumptions. Do not implement a single replacement hub as if it satisfied R7.
+No shared backend, new primary UI or credential migration was selected.
 
-The audit found an agentd stale-start defect: a reused clone could fail its fetch
-and still create a new task branch. The guide change fixes fresh branch creation
-and pins its base commit while preserving verified existing-workspace recovery.
-Broader shared locks, task provenance and phone/client launch integration remain
-in plan 11. Do not represent those as deployed protections.
+The independent stale-start fix is **shipped**: dev-env #124 merged
+`759f084f`, release #123 produced **2.9.1** at `b6c0f3c`, and publish-agent run
+`37944933337` passed smoke and exact-tag signing verification. Haynes-ops #3636
+merged `b6e858b5` and reconciled only agent templates/shelf. Both use:
+
+```text
+ghcr.io/thaynes43/dev-env:2.9.1@sha256:a975de7dbc40c6f33048a38a327a2db2b9698a7615f5b2b9897abbb1d04df0cf
+```
+
+A CPU-limited worker Job ran the published `agentd` binary against local Git
+fixtures: failed fresh fetch produced zero launches, creation used a pinned
+commit across a moving ref, offline resume preserved WIP/conversation, and
+stopped-rebase resume preserved detached HEAD and operation state. All four
+passed in five seconds at the stubbed model-launch boundary. The admitted final
+pod had no injected init, no credentials/token/PVC, and no model/API calls.
+Both trial Jobs/pods were removed and both activity declarations ended.
+
+At final runtime verification `2026-10-09T14:52:53Z`, templates/shelf were Ready;
+new shelf UID `572bd232-c8b4-4caa-8a68-8bdc8b0891eb` had zero restarts. V1 UID
+`cf7abc47-0363-491a-9420-12db9731ea8d` and all five controller identities/images
+were preserved, Ready, zero restarts. Sessions remained zero and grant/policy/job
+counts unchanged. Controller pins remain `sha-eeb15e3`. This is v2 agentd
+fresh-source/resume protection, not acceptance of the new shared-project flow.
+Full [delivery and scope record](handoffs/2026-10-09-workflow-session-guide.md).
+
+CA storage remains owner-confirmed complete; projection/trust/minting are off.
+All twenty parity closures remain open. Headlamp migration/retirement and Q-16
+remain under their existing owner rulings. No v1/session restart occurred.
+The historical parking evidence below remains dated baseline context.
 
 ## Parked for the Codex reset, 2026-10-08 America/New_York
 
@@ -367,7 +393,7 @@ no values in chat.
 | [backlog/08](sagas/distributed-dev-env/backlog/08-tool-pods.md) | Plan 08: tool pods (Blender, audio, image, whisper, printer, video). |
 | [backlog/09](sagas/distributed-dev-env/backlog/09-gpu-local-llm.md) | Plan 09: the VRAM budget, LLM pools, satellites and opencode. |
 | [backlog/10](sagas/distributed-dev-env/backlog/10-summoned-sessions.md) | Plan 10: summoned sessions move into v2 and `dev-env-ops` retires. |
-| [backlog/11](sagas/distributed-dev-env/backlog/11-project-workspaces.md) | Proposed project homes, new-task freshness and safe resume across Codex/client entry points. |
+| [backlog/11](sagas/distributed-dev-env/backlog/11-project-workspaces.md) | R1–R7 joint projects, shared workspace/remote pods, rules, freshness, lossless repair and cross-pod cleanup acceptance. |
 | [workflow guide](../docs/workflow-guide.md) | High-level quick start, architecture/flow diagrams, features, current limits and cutover gates. |
 | [.github/workflows/](../.github/workflows/) | CI (`ci.yml`, with the aggregate `CI - Success`), the operator image (`publish.yml`, from main), the agent image (`publish-agent.yml`, from a `v2.x.y` tag), release-please, the Claude advisory review and the `@claude` handler. |
 | haynes-ops [`.agents/sagas/dev-env/adrs/001-v2-lives-in-own-repo.md`](https://github.com/thaynes43/haynes-ops/blob/main/.agents/sagas/dev-env/adrs/001-v2-lives-in-own-repo.md) | Accepted: v2 lives here, and v1 and every manifest stay in haynes-ops. |

@@ -1,6 +1,6 @@
 # 04: rolling updates and Codex
 
-**Status:** backlog
+**Status:** architecture revision required by D-74/R7; implementation backlog
 **Depends on:** 02; Q-03 (drain on idle, then resume: decided 2026-10-06); spikes
 S-3 and S-4
 **Parallel with:** 03
@@ -8,7 +8,9 @@ S-3 and S-4
 ## Goal
 
 A new image or config reaches running sessions without cutting a busy turn, and Codex
-gets its v2 home: one hub for the phone, then sessions in their own pods.
+gets multiple stable remote pod links that reach the same project/workspace files,
+with private enrollment/runtime state and one refresh owner. The earlier one-hub
+plan is superseded as the sole topology by owner requirement R7.
 
 ## Scope
 
@@ -21,28 +23,38 @@ gets its v2 home: one hub for the phone, then sessions in their own pods.
 - **Renovate:** with drain live, the `2.x` image may auto-merge (haynes-ops
   `.renovate/autoMerge.json5`: the v2 package gets the normal own-image rule; the v1
   carve-out stays until cutover).
-- **Codex hub:** a `codex-hub` session runs the remote-control daemon, owns the
-  enrolment and (step 1) `auth.json`; the phone keeps one computer entry across
-  drains. `agent-run codex-remote` manages it.
-- **Codex step 2 (S-3 passed 2026-10-06):** the keeper owns the Codex refresh and
+- **Codex remote hosts (D-74):** at least two logical hosts/pods, each owning its
+  private enrollment/daemon state. Phone links survive host replacement and both
+  see the same project/workspace data. A single replacement hub is insufficient.
+  Revise the agentd/operator/project contract and prove the actual pinned CLI
+  path before enrollment or shared-storage implementation.
+- **Planned Codex auth (S-3 passed 2026-10-06):** the keeper owns the Codex refresh and
   writes `dev-env-codex-live` (`id_token`, `access_token`, `account_id`, `exp`; no
   refresh token). agentd writes each pod's `auth.json` from it with an empty
-  `refresh_token`, by atomic rename; the hub runs on one too. The keeper's login comes
-  from the codex login ceremony, never a copy of the hub's or v1's `auth.json`, and
-  the hub switches to its access-token-only file on a drain. The keeper makes the
+  `refresh_token`, by atomic rename. Remote hosts must be validated on these too.
+  The keeper's login comes from a fresh Codex login ceremony, never a copy of
+  v1's or another live host's `auth.json`. Each remote host must use a validated
+  access-token-only path. The keeper makes the
   refresh call itself, about a day before `exp`, because codex would wait until 5
   minutes before it (DESIGN-001 6.3). The refresh is fenced as plan 03 fences the
   Max login's (D-52): the keeper calls only while it holds its Lease with time to
   spare. Codex task and local sessions run in their own pods.
-- **Codex step 3 (if S-4 passed):** hub threads execute in per-session pods through
-  `codex exec-server`.
+- **Codex forwarding (S-4):** `codex exec-server` remains a possible mechanism;
+  reassess it against multiple remote hosts and R7 before implementation.
 
 ## Acceptance
 
 - An image bump PR in haynes-ops reaches every idle session within an hour of
   merge; each resumes its conversation; no busy session restarts.
-- A drain of the codex hub leaves the phone's entry working without re-pairing.
-- A keeper refresh reaches a running Codex session and the hub without a restart,
-  and no pod calls the refresh endpoint.
+- Two independently enrolled Codex pods have usable phone links; shared project
+  and task files resolve through consistent Git paths; a one-host drain leaves
+  both links usable without competing enrollment or refresh state.
+- A keeper refresh reaches a running Codex session and all remote hosts without
+  a restart, and no pod calls the refresh endpoint.
 - `requirements.toml` holds in every pod that runs Codex (approval `never`, sandbox
   `danger-full-access`).
+
+Project catalog, common rules, task ownership, canonical health and shared
+workspace acceptance live in [plan 11](11-project-workspaces.md). D-15/D-22 need
+an explicit storage revision; do not share writable provider homes. No new
+management UI or v1/auth migration is selected by this plan update.

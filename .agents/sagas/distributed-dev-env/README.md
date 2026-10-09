@@ -28,9 +28,11 @@ design and the decision log below with its date.
 The [workflow guide](../../../docs/workflow-guide.md) is the product-level quick
 start: diagrams, current/planned features, session management and cutover gates.
 Plans 01/02 are working; plan 07 has twenty open parity closures and disabled
-PVE minting. Plans 03/04 and the Codex hub remain unbuilt. The guide's proposed
-`/work/codex` project homes and remaining freshness integration are tracked in
-[plan 11](backlog/11-project-workspaces.md), with app registration in Q-20.
+PVE minting. Plans 03/04 remain unbuilt. Tom's R1–R7 now require joint Claude/Codex
+projects under the supplied `~/codex` baseline and multiple Codex remote pod
+links sharing workspace files. [Plan 11](backlog/11-project-workspaces.md) and
+D-74 revise the earlier single-hub/private-Git assumptions. R2 supersedes Q-20;
+management workflows must be drawn/reviewed before further implementation.
 
 **v1** is the single dev-env pod deployed from haynes-ops
 (`kubernetes/main/apps/dev/dev-env/`; saga `.agents/sagas/dev-env/` there). It keeps
@@ -192,7 +194,8 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 46 | Effective v1 parity includes Headlamp access | **RECORDED** 2026-10-08 (coordinator fact-check prompted by Tom's question; D-70) | Agents already use Headlamp's cluster-admin identity. Secret reads, drains, snapshots and broad workloads are existing reachable powers, not enhancements merely because the direct OPERATOR role lacks them. Parity preserves accepted tasks through an equivalent route, including Tom's live directive for Headlamp work; this is not blanket standing admin access or a new owner ruling. Temporary identities, expiry, attribution and an approval workflow improve the access mechanism. No blanket direct admin grant or approval route is selected; the coordinator withdraws Q-18's earlier premise. |
 | 47 | Retire Headlamp after guarded parity | **DECIDED** 2026-10-09 UTC (Tom, D-71) | Guardrails may be necessary parts of the replacement. Replace Headlamp with guarded access preserving accepted v1 tasks and existing owner rules; prove parity and guardrails, migrate callers, then retire it through GitOps. Headlamp is a migration fallback, not the final architecture. No specific approval implementation or blanket standing admin grant is selected. |
 | 48 | Reuse existing 1Password item for keeper CA | **RECORDED** 2026-10-08 America/New_York (Tom's correction, D-72) | Use `HaynesKube/dev-env` with the same two fresh CA fields. Current ExternalSecrets select individual properties; the CA will use a separate keeper-only Secret. Tom confirmed the fields saved; Q-19 is complete by owner confirmation. CA projection, node trust and real acceptance remain pending. |
-| 49 | Workflow guide, Codex project homes and current source | **REQUESTED** 2026-10-09 America/New_York (Tom) | Before project finalization, provide a detailed high-level Markdown quick start and feature set with diagrams. Discuss Codex session management, v1 `/work/codex` project folders and protection from stale shared repositories. Plan 11 records remaining client integration; Q-20 clarifies which app registers the folders. The managed home/worktree arrangement is a proposal, not a deployed feature or new approval route. |
+| 49 | Workflow guide, Codex project homes and current source | **REQUESTED** 2026-10-09 America/New_York (Tom) | Before project finalization, provide a detailed high-level Markdown quick start and feature set with diagrams. Discuss Codex session management, v1 `/work/codex` project folders and protection from stale shared repositories. The initial `/work/codex` shorthand and app-choice premise were corrected by the supplied R1–R7 requirements below. Q-20 is superseded. The guide draws working and requested paths separately; no project/client rollout or new approval route is claimed. |
+| 50 | Joint projects and multiple Codex remote pods | **REQUIRED** 2026-10-09 America/New_York (Tom) | Supplied R1–R6 define GitOps catalog, both providers, common/task rules, persistent clean-refreshed roots, task-only sweep and lossless canonical repair. R7 adds multiple Codex remote links spanning pods and sharing workspace files. R2 supersedes Q-20. D-74 requires revision of single-hub/private-Git assumptions. Operator API/controller is the built orchestration service; a coordinator agent is a requester role. Management surface/storage backend remain under workflow review; no new implementation is selected. |
 
 The full options, consequences and rulings for Q-01 to Q-16, and the premise
 corrections withdrawing Q-17 and Q-18, plus Q-19's first owner CA provisioning
@@ -217,7 +220,7 @@ v1 stays live throughout. No v2 plan edits haynes-ops'
 | [09: GPUs, satellites and local LLMs](backlog/09-gpu-local-llm.md) | 08; Q-06, Q-09, Q-10 (decided); spikes S-9, S-11, S-13, S-14 | |
 | [10: summoned sessions](backlog/10-summoned-sessions.md) | 02, 03, 07; spike S-16 | with 04, 08 |
 | [06: later](backlog/06-later.md) | 05 | each item on its own |
-| [11: project homes and repository freshness](backlog/11-project-workspaces.md) | Q-20 for client registration; 04 for v2 Codex execution | v1 protections can be prepared separately |
+| [11: shared projects and freshness](backlog/11-project-workspaces.md) | R1–R7/D-74; 04 revision for multiple remote hosts; storage revision | workflow review before implementation |
 
 **MVP, and what comes after it.** The MVP is v2 replacing v1: plans 01, 02, 07, 03 and
 04, ending with the cutover in plan 05, which needs Tom's written approval. Phase 1

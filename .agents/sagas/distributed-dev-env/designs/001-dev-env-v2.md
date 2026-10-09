@@ -9,9 +9,15 @@
   section 15).
   Research notes [R-01](../research/R-01-summoned-agents-audit.md) and
   [R-02](../research/R-02-remote-control-identity.md) are folded in.
-- **Last updated:** 2026-10-08
+- **Last updated:** 2026-10-09
 - **Governed by:** [ADR-001](../adrs/001-distributed-dev-env.md) (Accepted 2026-10-06)
 - **Saga:** [README](../README.md)
+
+**2026-10-09 requirement update:** [R1–R7](../requirements/2026-10-09-project-roots.md)
+and D-74 require joint Claude/Codex projects, multiple remote pod links and shared
+workspace files. The single-hub/private-Git sections below record the earlier
+accepted/current implementation and need explicit revision before this new
+workflow is built. Private agent state and one refresh owner remain required.
 
 Decisions settled in this design carry a `D-NN` id. Questions only Tom can answer
 carry a `Q-NN` id and are listed in full in [section 15](#15-open-questions). The
@@ -2106,6 +2112,12 @@ with a link to the console page.
 
 ### 6.3 Codex
 
+**Target update, 2026-10-09 (D-74):** Tom now requires multiple Codex remote pod
+links with shared project/workspace files. The single-hub stages below record
+the earlier plan; plan 04/11 must revise them before implementation. Current v2
+Codex creation remains disabled. Private enrollments and one refresh owner are
+still required; a shared provider home is not the requested workspace.
+
 **What we know** (codex 0.160.0):
 
 - `auth.json` refreshes with a rotating token. The binary carries the error "Your
@@ -2379,8 +2391,9 @@ the two-minute limit, so the build adds no mirror now. The `mirrors/` directory 
 clone from a session pod on gasha01 once (S-8) before treating this as final for
 that storage class: S-7 measured the v1 pod's disk.
 
-The "canonical clones are fetch-only" rule needs no enforcement any more: each
-clone belongs to one session.
+For the current private-clone implementation, each clone belongs to one session.
+D-74's shared references require explicit canonical health, ownership and
+administrative mutation controls; the old private-clone assumption does not cover them.
 
 **D-73 (2026-10-09 America/New_York). Fresh branch creation fails closed on a
 failed clone refresh; verified workspace recovery preserves unfinished work.**
@@ -2411,13 +2424,40 @@ recovery:
   recovery, not a claim of current remote source; unrelated cached refs do not
   qualify. Bundle checksum, verification and exact imported ref checks apply.
 
-Task provenance, v1 shared-reference locks, stable `/work/codex` project homes
-and phone/app launch integration remain proposed work in
-[plan 11](../backlog/11-project-workspaces.md). The high-level
-[workflow guide](../../../../docs/workflow-guide.md) describes their contract.
-Tom requested those paths and stale-repository protection on 2026-10-09; Q-20
-clarifies which app registers them. No v1 rollout or client registration is
-performed by the agentd fix.
+Task provenance, shared-reference locks, common project roots/rules and all
+client launch integration remain in [plan 11](../backlog/11-project-workspaces.md).
+The [workflow guide](../../../../docs/workflow-guide.md) draws their contract.
+No v1/client/project rollout was performed by the agentd fix.
+
+**D-74 (2026-10-09 America/New_York). One project concept for both agents;
+multiple Codex remote pod links share project/workspace files.**
+
+Tom supplied [R1–R6](../requirements/2026-10-09-project-roots.md) and explicitly
+added R7: multiple Codex remote links across pods, with a shared workspace. R2
+supersedes Q-20's premature app-selection question. Use the supplied v1
+`~/codex/<project>` baseline, outside `~/work` task sweeping, rather than treating
+the earlier `/work/codex` shorthand as a selected mount design.
+
+These requirements revise D-12's single-hub target and D-15/D-22's private Git/task
+workspace assumptions. Those remain the historical/current implementation, not
+proof of the new topology. Preserve private agent runtime/enrollment state and
+one rotating refresh owner while designing genuine common project/task storage,
+consistent Git paths, cross-pod locks, task ownership, instruction propagation
+and cleanup. R4's nested-task option conflicts with R5's explicit `~/work`-only
+sweep rule; verify a flat-task project pointer or launch composition/injection
+before changing that boundary.
+
+The operator API/controller is the built orchestration service; `agent-run` or an
+agent/client requests sessions. No separate requester-agent service exists.
+Project/sync/add API/CLI support and Codex v2 sessions are unbuilt. D-37's console
+remains planned; this requirement does not select it as the primary management
+surface. Owner questions must arrive as native phone prompts, one at a time,
+with a verified answer round-trip; commentary/document records are not delivery.
+
+The guide is for workflow review before further architecture implementation.
+No shared-workspace backend, auth migration, blanket grant, approval route or
+v1 restart is selected here. Prove R1–R7 and revise plan 04 before calling the
+Codex/project workflow complete.
 
 ### 6.7 Remote Control and phone sessions
 
@@ -4554,7 +4594,7 @@ blocks only the step it names.
 | Q-17 | Does Tom's laptop already have a working admin kubeconfig for the main cluster? D-05 requires it for the external CLI path; the cluster's human ServiceAccount, CA ConfigMap and operator Service already exist, but the laptop configuration has not been checked. | **A. Use an existing admin context (was recommended):** verify its context and operator Service read locally, then use it for the external check. No new cluster identity. **B. Set up laptop cluster access first:** Tom or his laptop agent configures an admin kubeconfig through the existing owner access path. No credential values are sent to this chat or committed. | **Withdrawn 2026-10-08: Tom corrected the premise.** He would use a CLI such as `agent-run`, ask agents to start sessions, or consider a web UI for session management. Neither prerequisite option was chosen. No laptop setup or test blocks plan 02; acceptance uses the existing in-cluster CLI and agent-created sessions. D-68 remains an optional external path, with no claim of a real external-machine acceptance run. A web UI is an option, not an instruction to build one now. Q-16's approval and parity rulings remain in force. |
 | Q-18 | Which approval route should plan 07 pursue for capabilities beyond today's v1 tier? [R-03](../research/R-03-claude-code-approvals.md) verified hook schemas and managed permission controls, but no route yet proves an isolated phone decision. Ordinary relays are forgeable; guarded execution still needs phone, complete authority, shared OAuth and parity tests. | **A. Staged guarded approver (recommended):** pursue a separate Claude Code control workload after plan 03's keeper-owned login and Remote Control core. Additional human-gated capabilities stay disabled until phone/receipt/isolation tests pass without reducing parity. **B. Coordinator soft gate:** use a Claude Code coordinator relay with explicit acceptance that its agent can forge the answer; less infrastructure, no independent human-provenance boundary. **C. Standing grants only for now:** finish parity and SSH minting, and defer the human path; capabilities beyond today's tier remain unavailable. | **Earlier prompt withdrawn by the coordinator, 2026-10-08, after Tom's baseline correction.** No route or blanket direct cluster-admin grant is selected. Preserve effective parity and existing owner rules. The withdrawal does not mean Tom chose to defer approvals; it removes a question built on an incomplete baseline. Parity and keeper provisioning continue. |
 | Q-19 | Can Tom provision the fresh keeper SSH CA in the agreed 1Password location, or does he need generation instructions? This is the first owner step already required by the work order and D-69, not a new approval of Q-15 A. | **A. Provision and confirm saved (recommended):** fresh unencrypted Ed25519 OpenSSH CA in vault `HaynesKube`, item `dev-env-ssh-ca`, fields `SSH_CA_PRIVATE_KEY_B64` (base64 private-key file) and `SSH_CA_PUBLIC_KEY` (public-key line). **B. Request generation instructions:** walk through that same owner step. Never send values to the coordinator chat. | **Complete by owner confirmation, 2026-10-08 America/New_York.** After receiving instructions, Tom confirmed both CA fields saved. D-72 corrects the originally proposed item to existing `HaynesKube/dev-env`. No values were sent to or read by the coordinator; format and delivery validation are still pending. Do not ask to generate/store the CA again. Keeper minting remains disabled. Node trust and activation are subsequent steps. |
-| Q-20 | Which app should register the proposed v1 `/work/codex/<project>` folders? Tom requested Codex session management but also named Claude Code when describing project links. | **A. Codex/ChatGPT (recommended):** stable project homes for Codex chats, with separate task worktrees; Claude Code keeps its existing launcher. **B. Both:** share project discovery and fresh repository references, while keeping provider sessions and task worktrees separate. **C. Claude Code only:** document Codex's session path separately; the folder links apply to Claude Code. | **Asked 2026-10-09 America/New_York; awaiting clarification.** This identifies the intended client; it authorizes no daemon restart, shared refresh-token owner or v1 rollout. The workflow guide can proceed with the folder/session contract marked as a proposal. |
+| Q-20 | Which app should register the initially proposed v1 project folders? | The earlier Codex-only/both/Claude-only choice was premature; it assumed an app choice before the management workflows were drawn. | **Superseded by Tom's explicit R2 on 2026-10-09:** both Claude Code and Codex use one project concept. The supplied baseline is `~/codex`; R7 adds multiple remote pod links sharing workspace files. The primary management surface remains under workflow review. No answer to the old options is required; this is not an owner deferral. See D-74. |
 
 ## 16. Decisions settled in this design
 
@@ -4571,7 +4611,7 @@ blocks only the step it names.
 | D-09 | Lifecycle timers | 4.3 |
 | D-10 | Rescue before reap; bundles in-cluster; never pushed | 4.4 |
 | D-11 | Keeper is the sole owner of the one Max login (absorbing v1's two); pods get access tokens that agentd merges into a writable file; coordinator host only if S-1 fails (revised 2026-10-06). S-1 passed on 2026-10-06, so the build takes the target | 6.2 |
-| D-12 | Codex hub, then keeper-owned auth, then exec-server | 6.3 |
+| D-12 | Earlier Codex hub/auth/exec-server stages; multiple-host target updated by D-74 | 6.3 |
 | D-13 | Keeper mints the gh token into a Secret | 6.4 |
 | D-14 | MCP registration per pod | 6.5 |
 | D-15 | Fresh partial clone per session, v1 paths | 6.6 |
@@ -4633,3 +4673,4 @@ blocks only the step it names.
 | D-71 | Tom's target: replace Headlamp with guarded access preserving accepted v1 tasks and owner rules; prove parity and guardrails, migrate callers, then retire Headlamp through GitOps. No approval implementation or blanket standing admin grant is selected. | 6.12 |
 | D-72 | Reuse existing `HaynesKube/dev-env` for the fresh keeper CA. Current mappings select explicit fields; a separate keeper-only Secret will select the CA fields. Q-19 storage is owner-confirmed complete; projection, node trust and acceptance remain pending. | 6.12 |
 | D-73 | New remote-based branch creation requires a successful clone/refresh and uses a pinned commit. Verify existing clone/path/HEAD identity, warn on changed branch or detached state, preserve WIP/branch recovery, fail when saved-launch workspace and branch are lost, and separate verified historical rescue restore from current remote source. Broader project/client integration remains plan 11. | 6.6 |
+| D-74 | Joint Claude/Codex project catalog/rules/freshness, supplied `~/codex` baseline, multiple remote pod links sharing workspace files; revise single-hub/private-Git assumptions with tested ownership, storage and phone delivery. Management surface/backend remain under review. | 6.3/6.6, plan 11 |
