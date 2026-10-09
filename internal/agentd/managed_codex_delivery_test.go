@@ -13,8 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"golang.org/x/sys/unix"
+
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
 func saveManagedDelivery(t *testing.T, s Settings) protocol.Session {

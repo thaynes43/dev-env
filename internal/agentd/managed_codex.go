@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
+
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
@@ -129,20 +130,6 @@ func managedCodexAdmission(s Settings, sess protocol.Session, now time.Time) err
 	}
 	if sess.MaxTurns() != 0 {
 		return errors.New("native Codex exec has no exact max-turns contract; use limits.timeout")
-	}
-	if !strings.HasPrefix(s.CodexHome, s.Home+string(filepath.Separator)) {
-		return errors.New("managed Codex requires a private provider home")
-	}
-	for _, shared := range []string{s.ReposDir(), s.WorkDir(), filepath.Join(s.Home, "codex"), s.workspaceDir()} {
-		if s.CodexHome == shared || strings.HasPrefix(s.CodexHome, shared+string(filepath.Separator)) {
-			return errors.New("Codex provider state must remain private")
-		}
-	}
-	// Validate the private destination before installing any access material.
-	// A fresh missing directory is allowed only after its existing ancestors
-	// have passed the same absolute, clean, no-symlink check.
-	if err := noSymlinkComponents(s.CodexHome); err != nil && !os.IsNotExist(err) {
-		return errors.New("managed Codex requires a private provider home")
 	}
 	if s.CodexAccessFile == "" || SyncCodexAccess(s, now) != nil {
 		return ErrCodexAccess

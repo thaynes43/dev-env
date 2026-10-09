@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
+
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/codexauth"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
@@ -136,6 +138,11 @@ func TestManagedCodexAdmissionAndExactResume(t *testing.T) {
 			}
 			if (kind == "shared-auth" || kind == "symlink-auth") && exists(filepath.Join(s.CodexHome, "auth.json")) {
 				t.Fatal("private destination refusal installed access material")
+			}
+			if kind == "shared-auth" || kind == "symlink-auth" {
+				if !errors.Is(SyncCodexAccess(s, now), ErrCodexAccess) || exists(filepath.Join(s.CodexHome, "auth.json")) {
+					t.Fatal("render/periodic access sync bypassed the private destination fence")
+				}
 			}
 		})
 	}

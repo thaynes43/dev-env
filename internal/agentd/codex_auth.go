@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -53,6 +54,9 @@ func SyncCodexAccess(s Settings, now time.Time) error {
 		return nil
 	}
 	if !filepath.IsAbs(s.CodexAccessFile) || !filepath.IsAbs(s.CodexHome) || !filepath.IsAbs(s.StateDir) {
+		return ErrCodexAccess
+	}
+	if err := privateCodexHome(s); err != nil {
 		return ErrCodexAccess
 	}
 	raw, err := readCodexAccessFile(s.CodexAccessFile)
@@ -106,6 +110,24 @@ func SyncCodexAccess(s Settings, now time.Time) error {
 	}
 	if writeCodexPrivateAtomic(dest, auth) != nil {
 		return ErrCodexAccess
+	}
+	return nil
+}
+
+// Check the private destination before any render, launch or periodic sync can
+// install access material. Missing directories are allowed only after existing
+// ancestors have passed the absolute, clean, no-symlink check.
+func privateCodexHome(s Settings) error {
+	if !strings.HasPrefix(s.CodexHome, s.Home+string(filepath.Separator)) {
+		return errors.New("managed Codex requires a private provider home")
+	}
+	for _, shared := range []string{s.ReposDir(), s.WorkDir(), filepath.Join(s.Home, "codex"), s.workspaceDir()} {
+		if s.CodexHome == shared || strings.HasPrefix(s.CodexHome, shared+string(filepath.Separator)) {
+			return errors.New("codex provider state must remain private")
+		}
+	}
+	if err := noSymlinkComponents(s.CodexHome); err != nil && !os.IsNotExist(err) {
+		return errors.New("managed Codex requires a private provider home")
 	}
 	return nil
 }
