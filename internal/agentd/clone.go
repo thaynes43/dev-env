@@ -155,7 +155,8 @@ func resolveBase(ctx context.Context, r Runner, s Settings, clone, base string) 
 
 // ensureWorktree keeps surviving session work even when origin is unavailable.
 // A new branch needs a successful refresh or an explicitly restored rescue
-// base. Existing worktrees must belong to the session's clone and branch.
+// base. Existing worktrees must belong to the session's clone; branch changes
+// and detached HEAD are preserved with a warning.
 func ensureWorktree(ctx context.Context, r Runner, s Settings, ws protocol.Workspace, sess protocol.Session, fetchErr error) ([]string, error) {
 	var notes []string
 	if fi, err := os.Lstat(ws.Worktree); err == nil {
@@ -170,9 +171,13 @@ func ensureWorktree(ctx context.Context, r Runner, s Settings, ws protocol.Works
 		if err != nil || !sameDirectory(common, filepath.Join(ws.Clone, ".git")) {
 			return notes, fmt.Errorf("%s does not belong to the session's clone; left as it is", ws.Worktree)
 		}
-		branch, err := s.git(ctx, r, ws.Worktree, "symbolic-ref", "--quiet", "HEAD")
-		if err != nil || branch != "refs/heads/"+ws.Branch {
-			return notes, fmt.Errorf("%s is not on the session branch %s; left as it is", ws.Worktree, ws.Branch)
+		branch, branchErr := s.git(ctx, r, ws.Worktree, "symbolic-ref", "--quiet", "HEAD")
+		if branchErr != nil && ExitCodeOf(branchErr) == 1 {
+			notes = append(notes, "WARN the existing worktree has detached HEAD; expected session branch "+ws.Branch+"; preserving it as it is")
+		} else if branchErr != nil {
+			return notes, fmt.Errorf("identify the worktree branch: %s; left as it is", cmdDetail(branchErr))
+		} else if branch != "refs/heads/"+ws.Branch {
+			notes = append(notes, "WARN the existing worktree is on "+strings.TrimPrefix(branch, "refs/heads/")+"; expected session branch "+ws.Branch+"; preserving it as it is")
 		}
 		if fetchErr != nil {
 			notes = append(notes, "WARN fetch failed; preserving the existing worktree without moving its branch: "+cmdDetail(fetchErr))

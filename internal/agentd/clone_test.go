@@ -3,6 +3,7 @@ package agentd
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -234,8 +235,137 @@ func TestPrepareRepoLeavesAStrangerDirectory(t *testing.T) {
 	}
 }
 
+// gitResumeSnapshot captures work and transient operation state using the
+// current worktree's Git paths. A resume may fetch, but must change none of it.
+func gitResumeSnapshot(t *testing.T, g gitFixture, ws protocol.Workspace) map[string]string {
+	t.Helper()
+	snapshot := map[string]string{
+		"status":     gitRun(t, g.env, ws.Worktree, "status", "--porcelain=v1"),
+		"HEAD":       gitRun(t, g.env, ws.Worktree, "rev-parse", "HEAD"),
+		"branch tip": gitRun(t, g.env, ws.Worktree, "rev-parse", "refs/heads/"+ws.Branch),
+		"conflicts":  gitRun(t, g.env, ws.Worktree, "ls-files", "--unmerged"),
+	}
+	for _, file := range []string{"README.md", "staged.txt", "untracked.txt", "chain.txt"} {
+		data, err := os.ReadFile(filepath.Join(ws.Worktree, file))
+		if !isNotExist(err) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot["worktree/"+file] = string(data)
+		}
+	}
+	for _, file := range []string{
+		"HEAD", "index", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD",
+		"rebase-merge/head-name", "rebase-merge/orig-head", "rebase-merge/onto", "rebase-merge/git-rebase-todo", "rebase-merge/done",
+		"rebase-apply/head-name", "rebase-apply/orig-head", "rebase-apply/onto", "rebase-apply/next", "rebase-apply/last", "rebase-apply/patch",
+		"BISECT_START", "BISECT_LOG", "BISECT_NAMES",
+	} {
+		path := gitRun(t, g.env, ws.Worktree, "rev-parse", "--path-format=absolute", "--git-path", file)
+		data, err := os.ReadFile(path)
+		if !isNotExist(err) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot["git/"+file] = string(data)
+		}
+	}
+	return snapshot
+}
+
+func TestPrepareRepoPreservesPendingOperationsAndCheckouts(t *testing.T) {
+	for _, operation := range []string{"rebase", "rebase-apply", "bisect", "other branch", "detached", "merge", "cherry-pick", "revert", "am"} {
+		t.Run(operation, func(t *testing.T) {
+			g := newGitFixture(t, "demo")
+			s, r := g.settings(t)
+			sess := cloneSession("demo-1009-operation")
+			ws, step := PrepareRepo(context.Background(), r, s, sess)
+			if step.State != StepOK {
+				t.Fatal(step.Notes)
+			}
+			base := ws.Head
+			writeFile(t, filepath.Join(ws.Worktree, "README.md"), "local\n")
+			gitRun(t, g.env, ws.Worktree, "commit", "-qam", "local work")
+			warnCheckout := true
+			switch operation {
+			case "bisect":
+				for i := 0; i < 2; i++ {
+					writeFile(t, filepath.Join(ws.Worktree, "chain.txt"), fmt.Sprintf("%d\n", i))
+					gitRun(t, g.env, ws.Worktree, "add", "chain.txt")
+					gitRun(t, g.env, ws.Worktree, "commit", "-qm", "chain")
+				}
+				gitRun(t, g.env, ws.Worktree, "bisect", "start", "HEAD", base)
+			case "other branch":
+				gitRun(t, g.env, ws.Worktree, "checkout", "-qb", "owner-requested")
+			case "detached":
+				gitRun(t, g.env, ws.Worktree, "checkout", "-q", "--detach", base)
+			default:
+				writeFile(t, filepath.Join(g.seed, "README.md"), "upstream\n")
+				gitRun(t, g.env, g.seed, "commit", "-qam", "upstream")
+				gitRun(t, g.env, g.seed, "push", "-q", "origin", "HEAD:main")
+				gitRun(t, g.env, ws.Clone, "fetch", "-q", "origin")
+				c := Cmd{Name: "git", Args: []string{"-C", ws.Worktree}}
+				switch operation {
+				case "rebase":
+					c.Args = append(c.Args, "rebase", "origin/main")
+				case "rebase-apply":
+					c.Args = append(c.Args, "rebase", "--apply", "origin/main")
+				case "merge", "cherry-pick", "revert":
+					c.Args = append(c.Args, operation, "origin/main")
+					warnCheckout = false
+				case "am":
+					patch := gitRun(t, g.env, g.seed, "format-patch", "-1", "--stdout")
+					c.Args = append(c.Args, "am", "--quiet")
+					c.Stdin = strings.NewReader(patch + "\n")
+					warnCheckout = false
+				}
+				if _, err := r.Run(context.Background(), c); err == nil {
+					t.Fatal("the fixture operation did not stop at a conflict")
+				}
+			}
+			// Record real detached states, rather than only synthetic markers.
+			if operation != "other branch" {
+				_, err := r.Run(context.Background(), Cmd{Name: "git", Args: []string{"-C", ws.Worktree, "symbolic-ref", "--quiet", "HEAD"}})
+				if warnCheckout && ExitCodeOf(err) != 1 || !warnCheckout && err != nil {
+					t.Fatalf("unexpected fixture branch state: %v", err)
+				}
+			}
+			writeFile(t, filepath.Join(ws.Worktree, "staged.txt"), "staged\n")
+			gitRun(t, g.env, ws.Worktree, "add", "staged.txt")
+			writeFile(t, filepath.Join(ws.Worktree, "untracked.txt"), "untracked\n")
+			before := gitResumeSnapshot(t, g, ws)
+			for _, offline := range []bool{false, true} {
+				var runner Runner = r
+				wantState := StepOK
+				if offline {
+					runner = failOriginFetch(r)
+				}
+				if warnCheckout || offline {
+					wantState = StepWarn
+				}
+				resumed, step := PrepareRepo(context.Background(), runner, s, sess)
+				if step.State != wantState || resumed.Head != before["HEAD"] {
+					t.Fatalf("offline %v: head %s, want %s; %s %q", offline, resumed.Head, before["HEAD"], step.State, step.Notes)
+				}
+				if warnCheckout && !strings.Contains(strings.Join(step.Notes, "\n"), "expected session branch "+ws.Branch) {
+					t.Errorf("offline %v: no branch warning: %q", offline, step.Notes)
+				}
+				if after := gitResumeSnapshot(t, g, ws); !maps.Equal(before, after) {
+					for path, data := range before {
+						if after[path] != data {
+							t.Errorf("offline %v: resume changed %s", offline, path)
+						}
+					}
+					if len(after) != len(before) {
+						t.Errorf("offline %v: resume changed the set of worktree or operation files", offline)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestPrepareRepoRejectsMismatchedWorktrees(t *testing.T) {
-	for _, mismatch := range []string{"other clone", "other branch", "detached", "broken git file", "missing branch ref", "symlink"} {
+	for _, mismatch := range []string{"other clone", "broken git file", "missing branch ref", "symlink"} {
 		t.Run(mismatch, func(t *testing.T) {
 			g := newGitFixture(t, "demo")
 			s, r := g.settings(t)
@@ -253,10 +383,6 @@ func TestPrepareRepoRejectsMismatchedWorktrees(t *testing.T) {
 				gitRun(t, g.env, g.root, "clone", "-q", g.remote, ws.Worktree)
 				gitRun(t, g.env, ws.Worktree, "checkout", "-q", "-b", ws.Branch)
 				want = "does not belong to the session's clone"
-			case "other branch":
-				gitRun(t, g.env, ws.Worktree, "checkout", "-q", "-b", "other")
-			case "detached":
-				gitRun(t, g.env, ws.Worktree, "checkout", "-q", "--detach")
 			case "broken git file":
 				writeFile(t, filepath.Join(ws.Worktree, ".git"), "gitdir: /missing-fixture-git\n")
 				want = "not a git worktree"
