@@ -9,6 +9,7 @@ import (
 
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -388,5 +389,53 @@ func TestWorkspaceGuardBindsBothPodUIDsAndHoldBlocksArchive(t *testing.T) {
 	}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.home), &corev1.PersistentVolumeClaim{}); err != nil {
 		t.Fatal("hold allowed home cleanup", err)
+	}
+}
+
+func TestWorkspaceHoldPinsEveryRequiredNodeTermAndPreservesPrivateHold(t *testing.T) {
+	f := stoppedWorkspaceFixture()
+	tmpl := exampleTemplates(t)
+	tmpl.Workspace = &templates.Workspace{Enabled: true, Claim: "retained-projects", ID: f.s.Spec.Workspace.ID}
+	proof := &protocol.WorkspaceStopProof{Version: 1, Workspace: f.s.Spec.Workspace.ID, Task: f.s.Name, SessionUID: string(f.s.UID), PodName: f.pod.Name, PodUID: string(f.pod.UID),
+		PodResourceVersion: "10", NodeName: f.node.Name, NodeUID: string(f.node.UID), LeaseResourceVersion: "20", LeaseRenewedAt: f.now.Add(-time.Second), VerifiedAt: f.now}
+	hold, err := buildWorkspaceHoldPod(f.s, tmpl, proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hold.Spec.NodeName != "" {
+		t.Fatal("hold bypassed normal scheduler admission")
+	}
+	terms := hold.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	if len(terms) != 1 || len(terms[0].MatchFields) != 1 || terms[0].MatchFields[0].Key != "metadata.name" || terms[0].MatchFields[0].Values[0] != f.node.Name {
+		t.Fatal("hold was not constrained to verified old node")
+	}
+	privateSession := f.s.DeepCopy()
+	privateSession.Spec.Workspace = nil
+	private, err := buildHoldPod(privateSession, tmpl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(private.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchFields) != 0 {
+		t.Fatal("private hold placement changed")
+	}
+	custom := private.DeepCopy()
+	custom.Spec.NodeSelector = map[string]string{"disk": "ssd"}
+	custom.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms = append(custom.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms,
+		corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{{Key: "disk", Operator: corev1.NodeSelectorOpIn, Values: []string{"ssd"}}}, MatchFields: []corev1.NodeSelectorRequirement{{Key: "metadata.name", Operator: corev1.NodeSelectorOpNotIn, Values: []string{"other-node"}}}})
+	before := custom.DeepCopy()
+	constrainWorkspaceHoldNode(custom, f.node.Name)
+	for i, term := range custom.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms {
+		old := before.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[i]
+		if !apiequality.Semantic.DeepEqual(term.MatchExpressions, old.MatchExpressions) || len(term.MatchFields) != len(old.MatchFields)+1 || term.MatchFields[len(old.MatchFields)].Values[0] != f.node.Name {
+			t.Fatal("node pin broadened or replaced a required OR term")
+		}
+		if len(old.MatchFields) > 0 && !apiequality.Semantic.DeepEqual(term.MatchFields[:len(old.MatchFields)], old.MatchFields) {
+			t.Fatal("node pin replaced existing field selectors")
+		}
+		term.MatchFields = old.MatchFields
+		custom.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[i] = term
+	}
+	if !apiequality.Semantic.DeepEqual(custom, before) {
+		t.Fatal("node pin changed selectors, preferred placement, requests or limits")
 	}
 }

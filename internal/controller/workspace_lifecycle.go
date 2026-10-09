@@ -45,6 +45,7 @@ func buildWorkspaceHoldPod(s *v1alpha1.AgentSession, t *templates.Templates, pro
 		return nil, err
 	}
 	pod.Name = workspaceHoldName(s)
+	constrainWorkspaceHoldNode(pod, proof.NodeName)
 	for i, e := range pod.Spec.Containers[0].Env {
 		if e.Name != protocol.SessionEnv {
 			continue
@@ -62,6 +63,32 @@ func buildWorkspaceHoldPod(s *v1alpha1.AgentSession, t *templates.Templates, pro
 		return pod, nil
 	}
 	return nil, errors.New("shared hold Pod lacks its operator session document")
+}
+
+// Retained RWO homes remain attached to the old executor's healthy node.
+// Add a conjunct to every existing required OR term; keep normal scheduling,
+// worker/GPU preferences, selectors, tolerations and resource admission.
+func constrainWorkspaceHoldNode(pod *corev1.Pod, node string) {
+	if pod.Spec.Affinity == nil {
+		pod.Spec.Affinity = &corev1.Affinity{}
+	}
+	if pod.Spec.Affinity.NodeAffinity == nil {
+		pod.Spec.Affinity.NodeAffinity = &corev1.NodeAffinity{}
+	}
+	affinity := pod.Spec.Affinity.NodeAffinity
+	match := corev1.NodeSelectorRequirement{Key: "metadata.name", Operator: corev1.NodeSelectorOpIn, Values: []string{node}}
+	if affinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		affinity.RequiredDuringSchedulingIgnoredDuringExecution = &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchFields: []corev1.NodeSelectorRequirement{match}}}}
+		return
+	}
+	for i := range affinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms {
+		term := &affinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[i]
+		// An existing empty term matches no nodes; never broaden it.
+		if len(term.MatchFields) == 0 && len(term.MatchExpressions) == 0 {
+			continue
+		}
+		term.MatchFields = append(term.MatchFields, match)
+	}
 }
 
 func workspaceHoldProof(pod *corev1.Pod) (*protocol.WorkspaceStopProof, error) {
@@ -210,7 +237,8 @@ func (r *Reconciler) reconcileSharedWorkspace(ctx context.Context, s *v1alpha1.A
 	}
 	if !sharedRescued(s) || s.Status.Rescue.SourcePodUID != string(old.UID) || s.Status.Rescue.PodUID != string(hp.UID) {
 		if !podReady(hp) {
-			return block(errors.New("shared hold Pod is not ready for bounded rescue"))
+			reason, message := pendingReason(hp)
+			return block(fmt.Errorf("shared hold Pod is not ready for bounded rescue: %s: %s", reason, message))
 		}
 		if rescueRanIn(s, hp) && s.Status.Rescue.Result == v1alpha1.RescueFailed && !holdRetryDue(s, obs.now, r.holdRetry()) {
 			next := s.Status.Rescue.At.Add(r.holdRetry())
