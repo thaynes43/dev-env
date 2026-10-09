@@ -16,14 +16,16 @@ Source work proceeds disabled by default while #130's storage diagnosis and
 acceptance are completed. V1 remains available; full parity and cutover gates
 still apply. Codex owns this work rather than leaving it for another implementer.
 
-**Latest delivery checkpoint, 2026-10-09 21:30Z:** shared-workspace core #135
-merged `316c03c`; keeper-owned Codex auth #138 merged `bcb2599`. Both are source
-units with runtime opt-ins still off. Strict executor-stop rescue #140 is under
-review. Its private-home archive/reap is deliberately blocked: task-only rescue
+**Latest delivery checkpoint, 2026-10-09 22:13Z:** shared-workspace core #135
+merged `316c03c`; keeper-owned Codex auth #138 merged `bcb2599` and bounded
+single-refresh #143 merged `f810766`. These are source
+units with runtime opt-ins still off. Strict executor-stop rescue #140 merged
+`7b3ce4c`. Its private-home archive/reap is deliberately blocked: task-only rescue
 does not preserve provider enrollment/history. A retained-home detach route is
 still required before shared reap acceptance. Catalog/rule implementation follows
-[D-79](../docs/shared-project-catalog.md); managed Codex execution and two retained
-coordinator hosts remain unbuilt. No running agent or v1 restart follows from
+[D-79](../docs/shared-project-catalog.md); catalog primitives merged #145 `084b66a`;
+management/provider integration is in progress. Managed Codex execution and two
+retained coordinator hosts remain unbuilt. No running agent or v1 restart follows from
 these source merges.
 
 The [third storage diagnostic result](../docs/trials/2026-10-09-cephfs-cost-result.md)
@@ -34,6 +36,15 @@ protected pods were preserved and activity ended. Missing required telemetry and
 60–70s household sampling intervals keep household acceptance open. #139 fixes
 interrupted measurement receipts source-only. The older two-trial/prepared
 statements below are dated history; no further run launches automatically.
+
+D-80's [first host route](../docs/codex-coordinator-hosts.md) defines two retained
+Codex coordinators with read-only shared files and dedicated child-scoped API
+identities. Build that caller boundary, managed Codex native launch/resume,
+retained host supervision and actual pairing/phone acceptance under plans 04/11.
+Native app threads remain on their selected host; forwarding is later work.
+D-81's [private-home retention](../docs/shared-private-home-retention.md) must be
+implemented before shared reap: verified task rescue does not export provider
+state. V1 stays available; no runtime host, drain or cutover is accepted here.
 
 ## Workflow guide, revised projects and shipped freshness, 2026-10-09
 

@@ -6,6 +6,10 @@ open. A task is a separately owned worktree created from freshly fetched source.
 The management API/controller performs lifecycle operations; a coordinator agent
 can request those operations. This does not select a new management app.
 
+Catalog/sync/snapshot primitives merged in [#145](https://github.com/thaynes43/dev-env/pull/145).
+Their management and provider integration remains in progress and disabled;
+live acceptance is pending.
+
 ```mermaid
 flowchart TD
     GitOps[One GitOps catalog: projects, repositories, rules] --> Sync[Bounded managed sync]
@@ -38,6 +42,9 @@ as unknown fields. Limits are 256KiB per document, 64 projects, 128 repositories
 16 repositories per project and 16KiB of rules per project. Names are single DNS
 components of at most 63 characters; Git branches cannot contain revision
 expressions. HTTPS clone URLs are derived from the validated GitHub identity.
+An omitted `defaultBranch` means `main`. The add workflow verifies the repository's
+actual GitHub default and records it explicitly when it differs; it cannot turn
+a failed fetch of `main` into authority to use a cached branch.
 
 The initial catalog includes `dev-env` and the multi-repository `sigo-alumni`
 project. Its three repository names are `sigo-alumni`, `sigoalumni-org` and
@@ -80,6 +87,15 @@ commit, fetch time and writer identity before sending the implementation prompt.
 Failed fetch admits no new implementation. Opening an old anchor cannot select
 stale source for a new task.
 
+For the first API route, the operator reads the explicitly configured
+`dev-env-system/dev-env-project-catalog` ConfigMap's `catalog.json` through an
+uncached read. Missing or invalid accepted data refuses creation. The API records
+a reserved server-authored snapshot annotation of at most 128KiB; clients cannot
+supply that authority. This bounded platform metadata transports the public
+GitOps rules and map to private task state. It is not a repository instruction
+file or a place for secrets. The controller validates the selected identity/base
+against the task, and resume retains the original snapshot.
+
 Task worktrees remain flat under `/home/dev/work`. Their project snapshot is
 private platform state, not an added or overwritten repository file. For Claude,
 inject the snapshot with `--append-system-prompt-file` and retain the platform
@@ -104,7 +120,12 @@ supported operation. A second computer link cannot claim the first one's task.
 
 Boot, daily maintenance and explicit sync share the common-Git administrative
 lock protocol. Clone, fetch, anchor refresh and worktree registration are
-serialized and bounded. Task cleanup stays under `/home/dev/work`; global Git
+serialized and bounded per repository. Each holder retains the two-minute
+administrative budget and 130-second queue bound. A project sync reports partial
+repository results; publishing its plain-root rules requires a fresh storage and
+accepted-catalog check under the primary repository's same lock. Shared Git
+operations disable automatic maintenance and pruning so they cannot discard a
+peer's references. Task cleanup stays under `/home/dev/work`; global Git
 pruning cannot discard a temporarily unavailable project or peer worktree.
 
 Health checks report wrong branch, detached HEAD, dirty index/files and behind

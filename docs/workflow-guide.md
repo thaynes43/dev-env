@@ -80,6 +80,14 @@ session, or perform an explicit fenced handoff before another session edits it.
 Shared files do not automatically transfer chat history or allow two writers.
 The exact cross-host conversation/handoff behavior remains to be designed/tested.
 
+The [first two-host route](codex-coordinator-hosts.md) uses persistent Codex
+coordinators with read-only shared project/task mounts. Native app conversations
+run on the computer you selected. A coordinator starts writable Claude/Codex
+tasks through the management API and follows their recorded owners. Native app
+threads do not automatically become task pods. Independent private enrollment
+and conversation state stay with each host; actual link, resume and phone
+acceptance remain pending.
+
 **Finish and maintain:** review/merge/deploy → record durable results → rescue
 unfinished work before task cleanup. Project roots persist independently of task
 sweeping. Boot/daily sync refreshes clean anchors, checks canonical health, and
@@ -153,7 +161,10 @@ guide is describing the target.
 | General hw-ssh grants | Unbuilt | Must retain existing targets, command classes, PTY/stdin behavior, and owner rules |
 | V2 Claude phone sessions and Max refresh owner | Planned, plan 03 | Keeper-owned login, Remote Control registration/resume, renewal and archive |
 | V2 Codex remote hosts and shared projects | Required, plans 04/11 | Multiple stable pod links, joint Claude/Codex projects, sole refresh owner, shared files with distinct task ownership |
-| Codex phone execution across pods | Unverified, plan 04 revision | Two-host enrollment/renewal and shared workspace acceptance required; S-4 forwarding is an optional mechanism to reassess |
+| Shared writer and stop/rescue core | Source merged #135/#140; runtime off | Bounded common Git administration and verified old-writer stop; private-home retention and live acceptance remain |
+| Joint project catalog and rules | Primitives merged #145; integration pending | Conservative sync/repair, immutable private snapshots and provider input helpers; API/CLI wiring and actual-client loading remain |
+| Keeper-owned Codex authentication | Source merged #138/#143; rollout in review | Isolated fresh login and one-shot fenced refresh; fresh owner sign-in and running-host propagation remain |
+| Codex phone execution across pods | Unverified, [first coordinator route](codex-coordinator-hosts.md) | Two independently enrolled hosts request scoped managed tasks; real renewal/shared workspace/phone acceptance remain, and S-4 forwarding is later work |
 | Automatic drain onto new images/config | Planned, plan 04 | Wait for idle, preserve conversation, resume on a new revision |
 | Management console | Planned, plan 03 | Sessions, links, archive and login renewal; a separate web approval flow is not selected |
 | Guarded replacement for Headlamp | Required, unfinished | Preserve accepted task scope and owner directives; prove replacement and migrate callers before removal |
@@ -510,7 +521,9 @@ The remaining joint-project and cross-pod contract needs these checks:
 Record repo identity, selected ref, immutable start SHA, successful fetch time,
 project/rules revision, branch/worktree and session/host owner. Background daily
 fetches help project discovery; every new task still needs its own verified
-source transaction. Those project/cross-pod records and locks are **unbuilt**.
+source transaction. Shared ownership/lock and catalog/snapshot primitives are
+merged source. API/provider integration and actual cross-pod acceptance remain
+pending; their runtime opt-ins are off.
 
 ### Canonical health and lossless repair (R6)
 
