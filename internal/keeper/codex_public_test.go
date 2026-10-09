@@ -31,7 +31,7 @@ func (c *codexPublicationRaceClient) Get(ctx context.Context, key client.ObjectK
 		}
 		newer.Data = map[string][]byte{codexauth.LiveKey: c.Replacement}
 		c.Replacement = nil
-		return c.Client.Update(ctx, &newer)
+		return c.Update(ctx, &newer)
 	}
 	return nil
 }

@@ -109,8 +109,19 @@ func (w *codexWorker) begin(ctx context.Context) CodexControlResponse {
 	if err != nil {
 		return fail
 	}
+	if w.expiredLoginReservation(d.Record) {
+		if w.finishExpiredLogin(ctx, d) != nil {
+			_ = w.needsLogin(ctx)
+			return fail
+		}
+		d, err = w.load(ctx)
+		if err != nil {
+			_ = w.needsLogin(ctx)
+			return fail
+		}
+	}
 	r := d.Record
-	if !r.LoginUntil.IsZero() && r.LoginOwner == w.Identity && w.Clock.Now().Before(r.LoginUntil) {
+	if !r.LoginUntil.IsZero() && w.Clock.Now().Before(r.LoginUntil) {
 		return CodexControlResponse{Code: "Busy"}
 	}
 	if r.AttemptUID != "" {
@@ -269,4 +280,33 @@ func (w *codexWorker) cancelLogin(ctx context.Context, id string) CodexControlRe
 		w.halted, w.published = false, 0
 	}
 	return CodexControlResponse{OK: true, Code: "Cancelled"}
+}
+
+func (w *codexWorker) expiredLoginReservation(r codexRecord) bool {
+	return r.Stage == codexNeedsLogin && r.ResumeOnCancel && !r.LoginUntil.IsZero() && !w.Clock.Now().Before(r.LoginUntil)
+}
+
+// An expired reservation, unlike a recovered refresh/material intent, durably
+// proves this is the previously known unused credential. Any current leader may
+// finish it, but only a confirmed fenced save resumes a still-valid old login.
+func (w *codexWorker) finishExpiredLogin(ctx context.Context, d *codexLoaded) error {
+	if !w.expiredLoginReservation(d.Record) || w.Fence(ctx, codexSaveTimeout+codexSafetyMargin) != nil {
+		return errCodexRefresh
+	}
+	r := d.Record
+	id := r.AttemptUID
+	restore := !r.Refresh.Empty() && r.Access.Validate(w.Clock.Now()) == nil
+	r.AttemptUID, r.LoginUntil, r.LoginOwner, r.ResumeOnCancel = "", time.Time{}, "", false
+	if restore {
+		r.Stage = codexReady
+	} else {
+		r.Refresh = secretValue{}
+	}
+	if w.Journal.save(ctx, d.Secret, r) != nil {
+		return errCodexJournal
+	}
+	_ = os.RemoveAll(filepath.Join(w.LoginDir, id))
+	w.halted, w.published = !restore, 0
+	w.ready.Store(false)
+	return nil
 }

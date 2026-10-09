@@ -87,13 +87,22 @@ func (w *codexWorker) load(ctx context.Context) (*codexLoaded, error) {
 }
 
 func (w *codexWorker) tick(ctx context.Context) error {
-	if w.halted {
-		return errCodexRefresh
-	}
 	d, err := w.load(ctx)
 	if err != nil {
 		w.ready.Store(false)
 		return err
+	}
+	if w.expiredLoginReservation(d.Record) {
+		if w.finishExpiredLogin(ctx, d) != nil {
+			return w.needsLogin(ctx)
+		}
+		d, err = w.load(ctx)
+		if err != nil {
+			return w.needsLogin(ctx)
+		}
+	}
+	if w.halted {
+		return errCodexRefresh
 	}
 	r := d.Record
 	if r.Stage == codexIntent {

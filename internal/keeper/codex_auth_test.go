@@ -264,6 +264,68 @@ func TestCodexPrePOSTRollbackRequiresConfirmedCAS(t *testing.T) {
 	}
 }
 
+func TestCodexExpiredReservationSurvivesHelperFailureAndLeaderChange(t *testing.T) {
+	for _, kind := range []string{"helper-failure", "leader-change", "new-begin", "expired-access", "partial-adoption", "unconfirmed-save"} {
+		t.Run(kind, func(t *testing.T) {
+			w, x, p := codexFixture(t)
+			old := codexRecord{Access: syntheticCodexAccess(t, w.Clock.Now(), 1, "synthetic-account", 10*24*time.Hour), Refresh: newSecretValue("confirmed-refresh-synthetic-canary"), Stage: codexReady}
+			saveCodexFixture(t, w, old)
+			attempt := w.begin(context.Background())
+			if !attempt.OK {
+				t.Fatal("reservation failed")
+			}
+			if kind == "leader-change" || kind == "new-begin" {
+				w.Identity, w.halted = "new-synthetic-keeper", false
+			}
+			if w.begin(context.Background()).Code != "Busy" {
+				t.Fatal("live reservation bypassed by leader change")
+			}
+			if kind == "partial-adoption" {
+				d, err := w.load(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				r := d.Record
+				r.ResumeOnCancel = false
+				r.Refresh = newSecretValue("unconfirmed-replacement-synthetic-canary")
+				if err := w.Journal.save(context.Background(), d.Secret, r); err != nil {
+					t.Fatal(err)
+				}
+			}
+			w.Clock.(*clocktesting.FakeClock).Step(codexCeremonyLifetime + time.Second)
+			if kind == "expired-access" {
+				w.Clock.(*clocktesting.FakeClock).Step(11 * 24 * time.Hour)
+			}
+			if kind == "unconfirmed-save" {
+				w.Journal.Client = &codexRollbackAmbiguousClient{Client: w.Journal.Client}
+			}
+			if kind == "new-begin" {
+				r := w.begin(context.Background())
+				d, err := w.load(context.Background())
+				if !r.OK || r.AttemptUID == attempt.AttemptUID || err != nil || !d.Record.ResumeOnCancel || !sameCodexMaterial(old, d.Record) {
+					t.Fatal("new attempt discarded expired known Ready credential")
+				}
+			} else {
+				err := w.tick(context.Background())
+				d, lerr := w.load(context.Background())
+				if lerr != nil {
+					t.Fatal(lerr)
+				}
+				if kind == "helper-failure" || kind == "leader-change" {
+					if err != nil || d.Record.Stage != codexReady || !sameCodexMaterial(old, d.Record) || !w.ready.Load() || p.Calls != 1 {
+						t.Fatal("expired reservation did not restore confirmed usable login")
+					}
+				} else if err == nil || !w.halted || p.Calls != 0 {
+					t.Fatal("unconfirmed or expired credential restored")
+				}
+			}
+			if x.Calls != 0 {
+				t.Fatal("reservation recovery invoked auth provider")
+			}
+		})
+	}
+}
+
 type codexAmbiguousClient struct {
 	client.Client
 	Stage          string
