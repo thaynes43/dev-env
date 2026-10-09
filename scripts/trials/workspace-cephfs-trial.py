@@ -34,6 +34,7 @@ ADMIN_LOCK = REF / '.git' / 'fixture-admin.lock'
 RUN_ID = 'workspace-cephfs-trial-20261009-v1'
 PROCESSES = []
 MEASUREMENTS = []
+STARTUP_METADATA = {}
 ENV = dict(os.environ)
 ENV.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null',
            GIT_TERMINAL_PROMPT='0', GIT_OPTIONAL_LOCKS='0', GIT_AUTHOR_NAME='CephFS fixture',
@@ -60,10 +61,18 @@ def run(argv, *, expected=0, env=None, timeout=15):
     start = time.monotonic()
     result = subprocess.run(argv, text=True, capture_output=True,
                             env=env or ENV, timeout=min(timeout, remaining()))
-    MEASUREMENTS.append({'operation': ' '.join(argv[:3]),
-                         'seconds': time.monotonic()-start, 'exit': result.returncode})
+    measurement = {'operation': ' '.join(argv[:3]), 'argv': argv,
+                   'seconds': time.monotonic()-start, 'exit': result.returncode,
+                   'expectedExit': expected}
+    MEASUREMENTS.append(measurement)
     if expected is not None:
-        assert result.returncode == expected, 'fixture command unexpected exit'
+        if result.returncode != expected:
+            # Every command here targets only the synthetic local fixture. Keep
+            # bounded diagnostics so a failed trial does not hide the actual call.
+            measurement['stderr'] = result.stderr[:400]
+            measurement['stdout'] = result.stdout[:400]
+            raise AssertionError('fixture command unexpected exit: expected %s, actual %s' %
+                                 (expected, result.returncode))
     return result
 
 def git(path, *args, **kwargs):
@@ -89,6 +98,25 @@ def wait(name, timeout=30):
         # Bounded coordination wait, not a CPU/load loop.
         time.sleep(0.2)
     raise TimeoutError('peer did not complete ' + name)
+
+def startup_barrier():
+    # Separate mount/container startup skew from the 30s lock-phase budget. No
+    # lock is held until both peers are actually executing the helper.
+    CONTROL.mkdir(exist_ok=True)
+    peer = 'b' if ROLE == 'a' else 'a'
+    flag('ready-' + ROLE, {'podUID':os.environ['TRIAL_POD_UID'],
+                          'node':os.environ['TRIAL_NODE']})
+    start = time.monotonic()
+    STARTUP_METADATA['budgetSeconds'] = 60
+    try:
+        ready = wait('ready-' + peer, timeout=60)
+    finally:
+        STARTUP_METADATA['seconds'] = time.monotonic()-start
+        STARTUP_METADATA['remainingHelperSeconds'] = max(0, DEADLINE-time.monotonic())
+    assert STARTUP_METADATA['seconds'] <= 60, 'peer startup barrier exceeded 60s'
+    assert ready['podUID'] != os.environ['TRIAL_POD_UID']
+    assert ready['node'] != os.environ['TRIAL_NODE'], 'peers require different nodes'
+    STARTUP_METADATA.update(peerPodUID=ready['podUID'], peerNode=ready['node'])
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -137,10 +165,11 @@ def wip(path):
 
 def receipt(checks, metadata):
     assert max([m['seconds'] for m in MEASUREMENTS] or [0]) <= 15
+    assert STARTUP_METADATA.get('seconds', 0) <= 60
     result = {'runID':RUN_ID, 'role':ROLE, 'podUID':os.environ['TRIAL_POD_UID'],
               'node':os.environ['TRIAL_NODE'], 'elapsedSeconds':time.monotonic()-START,
               'mounts':mounted_paths(), 'checks':checks, 'metadata':metadata,
-              'commands':MEASUREMENTS, 'caps':size_cap(),
+              'commands':MEASUREMENTS, 'startup':STARTUP_METADATA, 'caps':size_cap(),
               'scope':'synthetic storage/Git mechanics only; no platform fencing, real agent, auth, household/device latency or outage-recovery acceptance'}
     write_json(CONTROL/('result-'+ROLE+'.json'), result)
     print(json.dumps(result, sort_keys=True), flush=True)
@@ -355,12 +384,18 @@ def role_reconnect():
 
 try:
     mounted_paths()
+    if ROLE in {'a', 'b'}:
+        startup_barrier()
     {'a':role_a,'b':role_b,'reconnect':role_reconnect}[ROLE]()
 except BaseException as error:
     for proc in PROCESSES:
         if proc.poll() is None:
             os.killpg(proc.pid,signal.SIGTERM)
     print(json.dumps({'runID':RUN_ID,'role':ROLE,'result':'FAIL',
+                      'podUID':os.environ['TRIAL_POD_UID'],
+                      'node':os.environ['TRIAL_NODE'],'commands':MEASUREMENTS,
+                      'startup':STARTUP_METADATA,
+                      'remainingGlobalBudgetSeconds':max(0,DEADLINE-time.monotonic()),
                       'errorType':type(error).__name__,
                       'reason':str(error)[:160],'elapsedSeconds':time.monotonic()-START}),flush=True)
     raise SystemExit(1)
