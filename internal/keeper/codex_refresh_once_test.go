@@ -175,10 +175,14 @@ func TestCodexRefreshOnceRequesterDisconnectAndLeaderCancellation(t *testing.T) 
 			}
 			callerCtx, callerCancel := context.WithCancel(context.Background())
 			defer callerCancel()
-			returned := make(chan error, 1)
+			type controlResult struct {
+				response CodexControlResponse
+				err      error
+			}
+			returned := make(chan controlResult, 1)
 			go func() {
-				_, err := CodexRefreshOnce(callerCtx, w.LoginDir, 1)
-				returned <- err
+				response, err := CodexRefreshOnce(callerCtx, w.LoginDir, 1)
+				returned <- controlResult{response: response, err: err}
 			}()
 			var transaction context.Context
 			select {
@@ -196,9 +200,12 @@ func TestCodexRefreshOnceRequesterDisconnectAndLeaderCancellation(t *testing.T) 
 				leaderCancel()
 			}
 			select {
-			case err := <-returned:
-				if err == nil {
-					t.Fatal("disconnected caller unexpectedly received a success")
+			case result := <-returned:
+				if kind == "caller-disconnect" && result.err == nil {
+					t.Fatal("disconnected caller unexpectedly received a response")
+				}
+				if kind == "leader-loss" && result.response.OK {
+					t.Fatal("cancelled leadership unexpectedly completed the refresh")
 				}
 			case <-time.After(time.Second):
 				t.Fatal("disconnected control request did not return")
