@@ -2610,8 +2610,9 @@ supported provider injection while retaining native repository instructions;
 resume preserves its original snapshot. Actual Claude/Codex rule loading and
 the management route must pass before these commands are advertised as usable.
 This implements ADR-002/R1–R6 without selecting a management UI, changing the
-accepted storage gate or authorizing a v1 restart. Source implementation remains
-pending and can be delivered while shared runtime stays disabled.
+accepted storage gate or authorizing a v1 restart. Catalog primitives (#145),
+trusted catalog/CLI integration (#150) and scoped managed tasks (#152) are merged
+source units; shared runtime and actual-provider acceptance remain pending.
 
 **D-81 (2026-10-09 America/New_York). Retain shared tasks' private homes.**
 A task-only shared rescue cannot establish that private provider files are
@@ -2622,7 +2623,46 @@ retention before finalization, as defined in
 [the retained-home contract](../../../../docs/shared-private-home-retention.md).
 Both executor and hold must remain absent; uncertainty preserves everything.
 No automatic expiry, destruction, provider enrollment retirement or home reuse
-is authorized. This design is not source or runtime acceptance.
+is authorized. Source #147 implements this contract; runtime acceptance remains
+pending.
+
+**D-82 (2026-10-09 UTC). Fixed model-free project preparation actor.**
+This implementation refinement of D-79/ADR-002 supplies the production caller
+for shared sync without giving a coordinator a shared writer or Kubernetes
+capability. The disabled `agentd project-sync` route requires an explicitly
+configured one-attempt GitOps Job, its live Pod and owning Job UIDs, the fixed
+command, read-only keeper GitHub access projection and literal shared mounts.
+The original Job deadline is at most ten minutes and never renews. Boot, daily
+and explicit maintenance use this same actor; their deployment and scheduling
+remain pending storage acceptance.
+
+Its dedicated `dev-env-project-sync` ServiceAccount has a narrow read tier:
+GET Pods and Jobs in its configured workspace namespace, plus GET only the
+named accepted catalog ConfigMap in its configured catalog namespace. Kubernetes
+RBAC permits namespace GET for dynamic Pod/Job names; the runner issues only
+named reads of its own live actor and owner. It has no list/watch, API writes,
+Secret reads, exec, grants or model authority. Default token automount is off.
+An explicit API-audience token/public CA projection supplies these reads; the
+audience is omitted so Kubernetes selects its API audience. The token lasts at
+most one hour. Coordinator hosts retain their separate operator-audience tokens
+and child-scoped API class, with no Kubernetes RoleBinding.
+
+A separate retained `dev-env-project-sync-home` claim stores private operation
+receipts and Git configuration. A confirmed Started receipt precedes shared
+writes, binding the actual actor, original deadline and exact accepted catalog
+UID/resourceVersion/bytes. Actor checks run under each Git administration lock
+and before every Git command. Confirmed terminal results can be read without
+replay; Started, uncertain or replaced actors refuse replay. No provider home,
+enrollment, native history, refresher or session launch belongs to this Job.
+
+Only the trusted initial Job may request `--initialize-new-workspace`: verify
+all four real shared mounts and exclusively create/confirm the marker on empty
+unmarked storage. Wrong markers, nonempty/v1 layouts, symlinks and uncertain
+writes preserve files and refuse. Tasks and hosts never initialize or repair
+the marker. The runner guide records exact mount, security and command admission
+and [runtime acceptance](../../../../docs/project-sync-runner.md).
+This source ruling does not accept storage, deploy identities/Jobs, broaden
+standing agent powers or change either accepted ADR.
 
 ### 6.7 Remote Control and phone sessions
 
@@ -4893,3 +4933,4 @@ blocks only the step it names.
 | D-79 | One accepted GitOps catalog, permanent project roots, explicit v2 sync/add route, immutable task rule/map snapshot with provider injection and native repo rules; conservative shared reference repair and actual-client acceptance. | 6.6, docs/shared-project-catalog.md |
 | D-80 | Two retained Codex coordinator hosts with read-only shared files, scoped management identity and managed Claude/Codex executors; native threads remain host-local and real link/phone/refresh acceptance is required. | 6.3, docs/codex-coordinator-hosts.md |
 | D-81 | Shared task rescue cannot delete private provider homes; UID-bound retained-PVC receipt/detach precedes Session finalization, with no automatic home expiry or destruction. | 6.6, docs/shared-private-home-retention.md |
+| D-82 | Disabled fixed model-free project Job, dedicated namespace GET/named-catalog read tier and retained operation home; exact live actor/original deadline, trusted empty-storage initializer and no uncertain replay. | 6.6, docs/project-sync-runner.md |

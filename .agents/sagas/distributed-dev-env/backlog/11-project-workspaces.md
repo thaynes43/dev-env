@@ -49,11 +49,11 @@ management UI and credential migration remain unselected.
 - Haynes-ops #3633 is open/unmerged; its mounted instructions are not a catalog,
   sync command, trust renderer or health checker. Mounted-resource changes follow
   the existing held-draft/natural-break rule.
-- V1 and the deployed v2 launcher still use `--repo`. New v2 CLI source accepts
-  task-only `--project` selection. The standalone API recognizes that field but
-  returns 422 `project admission is not configured` before creating a Session.
-  Concrete catalog/provider integration and runtime acceptance remain pending;
-  Codex v2 creation remains disabled.
+- V1 and the deployed v2 launcher still use `--repo`. Source #150 accepts task-only
+  `--project`; #152 resolves it through the explicitly enabled accepted catalog
+  and shared template, snapshots rules, and supports managed Codex execution.
+  Missing configuration refuses before creating a Session. These source routes
+  are not deployed/accepted; Codex v2 creation remains disabled.
 - Project rules are not bound to both agents or propagated to flat task worktrees;
   these anchors have no generated Codex trust entries.
 - The sweeper deletes eligible directories only under `~/work`; it also runs
@@ -71,7 +71,7 @@ management UI and credential migration remain unselected.
    phone question, status/link discovery, finish/suspend and maintenance journeys.
    Keep operator API/controller distinct from a coordinator agent role. D-37's
    console is planned; no additional requester-agent service exists today.
-2. **D-79 contract defined; implementation pending:** see the
+2. **D-79 primitives and managed-task source merged; runtime pending:** see the
    [catalog and task-rule contract](../../../../docs/shared-project-catalog.md).
    Implement catalog reconciliation and `project add` through the normal GitOps
    branch/PR/Flux workflow, with one authoritative list and no undeclared-root
@@ -133,11 +133,19 @@ D-77 divides the implementation while runtime acceptance remains gated:
    [retained-private-home receipt and detach](../../../../docs/shared-private-home-retention.md)
    after verified rescue and both-pod absence, before Session finalization. This
    keeps private provider state without enabling automatic home destruction.
-4. **Catalog primitives merged #145 (`084b66a`), integration pending:** API/CLI,
-   fresh source and actual both-provider project/repo rule loading.
-5. **Auth source merged #138 (`bcb2599`) and #143 (`f810766`):** keeper-only fresh
-   Codex authentication was enabled through haynes-ops #3679. Initial login failed
-   before producing a challenge; no credential generation was adopted. Managed
+4. **Catalog source merged #145, #150 and #152:** primitives, accepted-catalog
+   authority, project CLI, server snapshots and both-provider task injection.
+   D-82 defines the disabled model-free preparation Job, its dedicated read tier,
+   retained operation home and trusted empty-storage initializer. Its
+   [runner guide](../../../../docs/project-sync-runner.md) supplies the production
+   command; deployment, boot/daily scheduling, one-operation add and actual
+   both-provider project/repo rule loading remain pending.
+5. **Auth source merged #138/#143/#148; scoped managed tasks merged #152:**
+   keeper-only fresh auth corrections deployed through haynes-ops #3687. A fresh
+   device challenge was presented, then expired without adoption. Group absence,
+   staging cleanup and reservation clearance passed; auth remains `NeedsLogin`.
+   Its pending owner prompt has an expired code; a new ceremony needs the owner
+   available. Managed
    Codex sessions and remote hosts remain disabled. Complete keeper-owned fresh Codex
    login/refresh/reload, D-80's scoped coordinator class,
    managed Codex launch/resume and two retained remote hosts;

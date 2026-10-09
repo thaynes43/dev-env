@@ -323,3 +323,19 @@ func TestJobActorRechecksBeforeEachGitProcess(t *testing.T) {
 		t.Fatal("unconfirmed actor rewrote its durable operation result")
 	}
 }
+
+func TestJobActorEarlyFailurePrecedesPreservedFindingsAndRecoversExactly(t *testing.T) {
+	a, _, syncs := actorFixture(t)
+	a.sync = func(context.Context, agentd.Runner, agentd.Settings, *projectcatalog.Catalog, agentd.ProjectSyncOptions) (agentd.ProjectSyncReport, error) {
+		*syncs++
+		return agentd.ProjectSyncReport{Findings: []agentd.ProjectFinding{{Path: "prepared-anchor", State: "preserved", Detail: "kept previous work"}}}, errors.New("fixture stopped before later projects")
+	}
+	result, err := a.run(context.Background())
+	if err == nil || result.State != "Terminal" || result.Failure != "sync stopped with preserved partial work" || len(result.Report.Findings) != 1 || *syncs != 1 {
+		t.Fatalf("early failure was reported as completion: %+v, %v", result, err)
+	}
+	recovered, err := a.run(context.Background())
+	if err == nil || recovered.Failure != result.Failure || recovered.Report.Findings[0] != result.Report.Findings[0] || *syncs != 1 {
+		t.Fatal("terminal early-failure recovery changed or replayed the saved result")
+	}
+}

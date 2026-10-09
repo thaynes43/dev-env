@@ -148,9 +148,11 @@ func (a actor) run(ctx context.Context) (Result, error) {
 	if syncErr != nil {
 		result.Failure = "sync stopped with preserved partial work"
 	}
-	for _, finding := range report.Findings {
-		if finding.State == "preserved" {
-			result.Failure = "sync completed with preserved partial work"
+	if syncErr == nil {
+		for _, finding := range report.Findings {
+			if finding.State == "preserved" {
+				result.Failure = "sync completed with preserved partial work"
+			}
 		}
 	}
 	if err := b.confirm(ctx); err != nil {
