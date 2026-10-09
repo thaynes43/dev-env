@@ -223,6 +223,7 @@ def run(argv, *, expected=0, env=None, timeout=15):
         cgroup_before = own_cpu_stat()
     start = time.monotonic()
     measurement = {'operation':' '.join(argv[:3]), 'argv':argv, 'expectedExit':expected}
+    effective_timeout = None
     try:
         effective_timeout = min(timeout, remaining())
         result = subprocess.run(argv, text=True, capture_output=True,
@@ -231,6 +232,13 @@ def run(argv, *, expected=0, env=None, timeout=15):
         measurement.update(seconds=time.monotonic()-start, exit=None, errorType='TimeoutExpired',
                            effectiveTimeoutSeconds=effective_timeout,
                            stdout=bounded_output(error.stdout), stderr=bounded_output(error.stderr))
+        MEASUREMENTS.append(measurement)
+        raise
+    except Exception as error:
+        # The helper's signal handler raises TimeoutError. Retain the in-flight
+        # command before finally attaches its bounded Trace2/CPU diagnostics.
+        measurement.update(seconds=time.monotonic()-start, exit=None,
+                           errorType=type(error).__name__, effectiveTimeoutSeconds=effective_timeout)
         MEASUREMENTS.append(measurement)
         raise
     else:
