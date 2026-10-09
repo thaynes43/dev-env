@@ -3610,6 +3610,18 @@ not sudo/sshd changes, node restarts, actual token minting or activation flags.
 No additional owner approval is required for that reviewed scope. Installation
 and certificate/provider acceptance remain distinct evidence.
 
+**Delivery update, 2026-10-09 America/New_York:** haynes-ops #3647 (`9dabb4d5`)
+installed the saved public CA on all five PVE nodes at `17:08:59–17:09:07 UTC`.
+Each guarded append preserved the exact original key bytes and passed existing
+v1 SSH/read-only PVE access afterward. #3651 (`b8f83ff9`) removed the temporary
+public delivery app; Job/pods, child Kustomization and ExternalSecret are gone,
+and fresh metadata corroborates public-target cleanup. Backups/receipts remain
+on nodes; protected pod identities/images/restarts and disabled minting flags
+were preserved. Private CA stayed keeper-only. Pair validation, certificate
+authentication, private targets/pinned host keys/egress/policies and actual
+mint/install/expiry/recovery/revocation acceptance remain pending. This does
+not close P-14/P-15/P-18 or the general hardware certificate contract.
+
 **D-26. Approvals: a Pushover link to an approval page behind Authentik.**
 
 **Superseded by Q-16, 2026-10-08.** The following is historical design, not a
