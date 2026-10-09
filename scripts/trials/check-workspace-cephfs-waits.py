@@ -79,7 +79,7 @@ assert unavailable['wchanReason'] == 'runningOrHidden'
 assert 'private error' not in json.dumps(unavailable)
 proc_values.update(syscall=b'4 '+b'X'*1024,wchan=FileNotFoundError())
 unavailable = ns['status_wait_observation'](owned)
-assert unavailable['syscallReason'] == 'oversized' and unavailable['wchanReason'] == 'exitedOrMissing'
+assert unavailable['syscallReason'] == 'capped' and unavailable['wchanReason'] == 'exitedOrMissing'
 
 # Reaping/exit races and unexpected child ownership never read a numeric proc path.
 events.clear()

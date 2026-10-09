@@ -238,9 +238,9 @@ def status_wait_observation(process):
     for name, cap in [('syscall',1024),('wchan',128)]:
         try:
             with open('/proc/%d/%s' % (process.pid,name),'rb') as stream:
-                raw = stream.read(cap+1)
-            if len(raw) > cap:
-                result[name+'Reason'] = 'oversized'
+                raw = stream.read(cap)
+            if len(raw) == cap:
+                result[name+'Reason'] = 'capped'
                 continue
             value = raw.decode('ascii').strip()
             if name == 'syscall':
@@ -391,6 +391,7 @@ def run_status_child(argv, env, timeout, start, measurement, **kwargs):
                     raise
                 measurement['waitObservation'] = status_wait_observation(process)
                 measurement['waitObservation']['elapsedSeconds'] = time.monotonic()-start
+                assert len(json.dumps(measurement['waitObservation']).encode()) <= 1024
                 stdout, stderr = process.communicate(timeout=max(0,deadline-time.monotonic()))
         except subprocess.TimeoutExpired as error:
             process.kill()
