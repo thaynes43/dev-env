@@ -384,11 +384,123 @@ func TestWorkspaceGuardBindsBothPodUIDsAndHoldBlocksArchive(t *testing.T) {
 	if _, _, err := r.archive(context.Background(), f.s, &obs, true); err != nil {
 		t.Fatal(err)
 	}
-	if obs.removalBlocked == nil || !strings.Contains(obs.removalBlocked.Error(), "pod of the session still exists") {
+	if obs.removalBlocked == nil || !strings.Contains(obs.removalBlocked.Error(), "private home") {
 		t.Fatalf("hold did not block archive: %v", obs.removalBlocked)
 	}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.home), &corev1.PersistentVolumeClaim{}); err != nil {
 		t.Fatal("hold allowed home cleanup", err)
+	}
+}
+
+func workspacePreparationReport(s *v1alpha1.AgentSession, p *protocol.WorkspaceStopProof, kind string) protocol.RescueReport {
+	rep := protocol.RescueReport{SourcePodUID: p.PodUID, Session: s.Name, Stamp: "preparation", OK: true, Agent: &protocol.AgentStop{},
+		WorkspacePreservation: &protocol.WorkspacePreservation{Version: 1, Workspace: s.Spec.Workspace.ID, Task: s.Name, SessionUID: string(s.UID), SourcePodUID: p.PodUID, Kind: kind},
+		Repos: []protocol.RepoRescue{{Path: "/home/dev/repos/" + s.Spec.Repo, Absent: true,
+			Worktrees: []protocol.WorktreeRescue{{Path: "/home/dev/work/" + s.Name, Absent: true}}}}}
+	if kind == "OwnedRefsPreserved" {
+		rep.WorkspacePreservation.OwnerGeneration = 1
+		rr := &rep.Repos[0]
+		rr.Absent, rr.FullBundle = false, true
+		rr.UnpushedRefs = []protocol.Ref{{Name: "refs/heads/agent/" + s.Name, Commit: "aaaa"}}
+		rr.Bundle = &protocol.RepoBundle{File: "rescue/task/preparation/repo.bundle", Verified: true,
+			Refs: []protocol.BundleRef{{Name: rr.UnpushedRefs[0].Name, Source: rr.UnpushedRefs[0].Name, Commit: "aaaa"}}}
+		rep.Bundle = &protocol.BundleReport{Dir: "rescue/task/preparation", Manifest: "rescue/task/preparation/manifest.json"}
+	}
+	return rep
+}
+
+func TestWorkspacePreparationVerdictIsTypedAndSharedOnly(t *testing.T) {
+	f := stoppedWorkspaceFixture()
+	r, obs := workspaceFixtureController(t, f, f.client())
+	p, _, err := r.verifyWorkspaceStop(context.Background(), f.s, f.pod.UID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold, err := buildWorkspaceHoldPod(f.s, obs.templates, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold.UID = "hold-1"
+	for _, kind := range []string{"NoWorkAdmitted", "OwnedRefsPreserved"} {
+		rep := workspacePreparationReport(f.s, p, kind)
+		rec, reason := verdict(f.s, hold, rep, metav1.NewTime(f.now))
+		want := v1alpha1.RescueNoWorkAdmitted
+		if kind == "OwnedRefsPreserved" {
+			want = v1alpha1.RescueVerified
+		}
+		if rec.Result != want || rec.PreservationKind != kind || reason != string(want) {
+			t.Fatalf("%s: %+v reason=%s", kind, rec, reason)
+		}
+		private := f.s.DeepCopy()
+		private.Spec.Workspace = nil
+		if got, _ := verdict(private, hold, rep, metav1.NewTime(f.now)); got.Result != v1alpha1.RescueFailed {
+			t.Fatal("private rescue accepted shared preparation proof")
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*protocol.RescueReport)
+	}{
+		{"clean pushed claim", func(rep *protocol.RescueReport) { rep.CleanAndPushed = true }},
+		{"empty home claim", func(rep *protocol.RescueReport) { rep.VolumeEmpty = true }},
+		{"wrong source", func(rep *protocol.RescueReport) { rep.WorkspacePreservation.SourcePodUID = "peer" }},
+		{"missing typed result", func(rep *protocol.RescueReport) { rep.WorkspacePreservation = nil }},
+		{"nonabsent worktree", func(rep *protocol.RescueReport) { rep.Repos[0].Worktrees[0].Absent = false }},
+		{"task work remains", func(rep *protocol.RescueReport) { rep.Repos[0].Worktrees[0].Dirty = true }},
+		{"unowned refs", func(rep *protocol.RescueReport) {
+			rep.Repos[0].UnpushedRefs = []protocol.Ref{{Name: "refs/heads/peer", Commit: "aaaa"}}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rep := workspacePreparationReport(f.s, p, "NoWorkAdmitted")
+			tc.edit(&rep)
+			if rec, _ := verdict(f.s, hold, rep, metav1.NewTime(f.now)); rec.Result != v1alpha1.RescueFailed {
+				t.Fatalf("contradictory report accepted: %+v", rec)
+			}
+		})
+	}
+}
+
+func TestWorkspaceNoWorkLifecycleRetainsPrivateHomeAfterPodCleanup(t *testing.T) {
+	f := stoppedWorkspaceFixture()
+	c := f.client()
+	r, obs := workspaceFixtureController(t, f, c)
+	r.Rescuer = &workspaceFixtureRescuer{answer: func(p *protocol.WorkspaceStopProof) protocol.RescueReport {
+		return workspacePreparationReport(f.s, p, "NoWorkAdmitted")
+	}}
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	hold := readyWorkspaceHold(t, c, f.s)
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if !sharedRescued(f.s) || rescued(f.s) || f.s.Status.Rescue.Result != v1alpha1.RescueNoWorkAdmitted {
+		t.Fatalf("distinct shared result: %+v", f.s.Status.Rescue)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.pod), &corev1.Pod{}); err != nil {
+		t.Fatal("executor removed before durable result")
+	}
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(hold), &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("hold removal: %v", err)
+	}
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.pod), &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("executor removal: %v", err)
+	}
+	if _, _, err := r.archive(context.Background(), f.s, &obs, true); err != nil {
+		t.Fatal(err)
+	}
+	if obs.removalBlocked == nil || f.s.Status.ArchivedAt != nil {
+		t.Fatal("task absence became private-home archive proof")
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.home), &corev1.PersistentVolumeClaim{}); err != nil {
+		t.Fatal("private home deleted", err)
 	}
 }
 

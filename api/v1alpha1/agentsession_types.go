@@ -543,7 +543,7 @@ type UsageStatus struct {
 }
 
 // RescueResult is a rescue's verdict (D-51).
-// +kubebuilder:validation:Enum=Verified;CleanAndPushed;Failed
+// +kubebuilder:validation:Enum=Verified;CleanAndPushed;NoWorkAdmitted;Failed
 type RescueResult string
 
 const (
@@ -553,6 +553,9 @@ const (
 	// RescueCleanAndPushed: every clone fetched, every worktree clean and every
 	// ref on origin, so nothing needed a bundle.
 	RescueCleanAndPushed RescueResult = "CleanAndPushed"
+	// RescueNoWorkAdmitted is shared-only proof of absent task work and refs,
+	// never proof of an empty private home or a clean pushed worktree.
+	RescueNoWorkAdmitted RescueResult = "NoWorkAdmitted"
 	// RescueFailed: the rescue ran and could not make the work safe: a refused
 	// worktree, a bundle that could not be written, a clone that could not
 	// fetch, or an agent that would not stop. The volume is kept and archive
@@ -564,6 +567,10 @@ const (
 // writes it before it deletes the pod the rescue ran in, so a fresh operator
 // sees what the last one decided.
 type RescueStatus struct {
+	// PreservationKind records the distinct shared preparation result.
+	// +kubebuilder:validation:Enum=NoWorkAdmitted;OwnedRefsPreserved
+	// +optional
+	PreservationKind string `json:"preservationKind,omitempty"`
 	// SourcePodUID is the retained shared executor that the hold Pod rescued.
 	// +optional
 	SourcePodUID string `json:"sourcePodUID,omitempty"`

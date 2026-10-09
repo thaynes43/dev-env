@@ -288,5 +288,7 @@ func removeSharedPod(ctx context.Context, c client.Client, s *v1alpha1.AgentSess
 }
 
 func sharedRescued(s *v1alpha1.AgentSession) bool {
-	return rescued(s) && s.Status.Rescue.SourcePodUID != "" && s.Status.Rescue.Generation == s.Generation
+	r := s.Status.Rescue
+	return r != nil && !r.Superseded && r.PodUID != "" && r.SourcePodUID != "" && r.Generation == s.Generation &&
+		(rescued(s) || r.Result == v1alpha1.RescueNoWorkAdmitted && r.PreservationKind == "NoWorkAdmitted")
 }

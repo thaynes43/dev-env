@@ -183,6 +183,7 @@ func verdict(s *v1alpha1.AgentSession, pod *corev1.Pod, rep protocol.RescueRepor
 		setReason("ReportMismatch")
 		add("the report is for session %q", rep.Session)
 	}
+	noWork, ownedRefs := false, false
 	if s.Spec.Workspace != nil {
 		proof, err := workspaceHoldProof(pod)
 		if err != nil || proof == nil || proof.SessionUID != string(s.UID) || proof.Workspace != s.Spec.Workspace.ID || rep.SourcePodUID != proof.PodUID {
@@ -190,6 +191,19 @@ func verdict(s *v1alpha1.AgentSession, pod *corev1.Pod, rep protocol.RescueRepor
 			add("shared rescue does not match the distinct hold Pod's exact retained executor proof")
 		} else {
 			rec.SourcePodUID = proof.PodUID
+		}
+		if p := rep.WorkspacePreservation; p != nil {
+			if proof == nil || p.Version != 1 || p.Workspace != s.Spec.Workspace.ID || p.Task != s.Name || p.SessionUID != string(s.UID) ||
+				p.SourcePodUID != rep.SourcePodUID || p.SourcePodUID != proof.PodUID || rep.CleanAndPushed || rep.VolumeEmpty {
+				setReason("ReportMismatch")
+				add("shared preparation result has contradictory identity or clean/empty claims")
+			}
+			noWork, ownedRefs = p.Kind == "NoWorkAdmitted", p.Kind == "OwnedRefsPreserved"
+			if !noWork && !ownedRefs || ownedRefs && p.OwnerGeneration == 0 {
+				setReason("ReportMismatch")
+				add("shared preparation result has an unknown kind or no owned generation")
+			}
+			rec.PreservationKind = p.Kind
 		}
 		if rep.VolumeEmpty || len(rep.Repos) != 1 || rep.Repos[0].Path != "/home/dev/repos/"+s.Spec.Repo ||
 			len(rep.Repos[0].Worktrees) != 1 || rep.Repos[0].Worktrees[0].Path != "/home/dev/work/"+s.Name {
@@ -200,6 +214,23 @@ func verdict(s *v1alpha1.AgentSession, pod *corev1.Pod, rep protocol.RescueRepor
 			return ref == "refs/heads/agent/"+s.Name || strings.HasPrefix(ref, "refs/heads/rescue/"+s.Name+"/")
 		}
 		for _, repo := range rep.Repos {
+			if noWork || ownedRefs {
+				if len(repo.Worktrees) == 1 {
+					w := repo.Worktrees[0]
+					if !w.Absent || w.Branch != "" || w.Head != "" || w.Dirty || w.RescueBranch != "" || w.Refused != "" {
+						setReason("ReportMismatch")
+						add("absent preparation reports contradictory worktree data")
+					}
+				}
+				if noWork && (len(repo.UnpushedRefs) != 0 || repo.Bundle != nil || repo.FullBundle || rep.Bundle != nil) ||
+					ownedRefs && (repo.Absent || len(repo.UnpushedRefs) == 0 || !repo.FullBundle || repo.Bundle == nil || repo.Bundle.Base != "") {
+					setReason("ReportMismatch")
+					add("shared preparation must prove no refs or preserve every owned ref in a full bundle")
+				}
+			} else if repo.Absent || repo.FullBundle || slices.ContainsFunc(repo.Worktrees, func(w protocol.WorktreeRescue) bool { return w.Absent }) {
+				setReason("ReportMismatch")
+				add("absent task data requires a typed shared preservation result")
+			}
 			for _, ref := range repo.UnpushedRefs {
 				if !ownedRef(ref.Name) {
 					setReason("ReportMismatch")
@@ -215,6 +246,11 @@ func verdict(s *v1alpha1.AgentSession, pod *corev1.Pod, rep protocol.RescueRepor
 				}
 			}
 		}
+	} else if rep.WorkspacePreservation != nil || slices.ContainsFunc(rep.Repos, func(repo protocol.RepoRescue) bool {
+		return repo.Absent || repo.FullBundle || slices.ContainsFunc(repo.Worktrees, func(w protocol.WorktreeRescue) bool { return w.Absent })
+	}) {
+		setReason("ReportMismatch")
+		add("private rescue cannot use shared preparation proof")
 	}
 	switch {
 	case rep.Agent == nil:
@@ -244,7 +280,7 @@ func verdict(s *v1alpha1.AgentSession, pod *corev1.Pod, rep protocol.RescueRepor
 			setReason("RepoError")
 			add("%s: %s", repo.Path, repo.Error)
 		}
-		if !repo.Fetched {
+		if !repo.Fetched && !noWork && !ownedRefs {
 			// With stale remote refs, a local branch that only a since-deleted
 			// origin branch held is on no list and in no bundle.
 			setReason("FetchFailed")
@@ -308,6 +344,10 @@ func verdict(s *v1alpha1.AgentSession, pod *corev1.Pod, rep protocol.RescueRepor
 		rec.Result = v1alpha1.RescueCleanAndPushed
 		rec.Message = fmt.Sprintf("the rescue %s found the volume empty: nothing but lost+found, so no pod ever wrote to it", rep.Stamp)
 		return rec, "VolumeEmpty"
+	case noWork && refs == 0:
+		rec.Result = v1alpha1.RescueNoWorkAdmitted
+		rec.Message = "the rescue " + rep.Stamp + " proved no task worktree or owned refs were admitted; private home remains retained"
+		return rec, string(v1alpha1.RescueNoWorkAdmitted)
 	case refs == 0 && rep.CleanAndPushed:
 		rec.Result = v1alpha1.RescueCleanAndPushed
 		rec.Message = fmt.Sprintf("the rescue %s found every clone clean and pushed; %s", rep.Stamp, stopped)
@@ -319,6 +359,9 @@ func verdict(s *v1alpha1.AgentSession, pod *corev1.Pod, rep protocol.RescueRepor
 	default:
 		rec.Result = v1alpha1.RescueVerified
 		rec.Message = fmt.Sprintf("the rescue %s bundled %d refs origin lacks into %s; %s", rep.Stamp, refs, rep.Bundle.Dir, stopped)
+		if ownedRefs {
+			rec.Message = fmt.Sprintf("the rescue %s preserved every owned ref (%d) in %s with an absent task worktree; private home remains retained", rep.Stamp, refs, rep.Bundle.Dir)
+		}
 		return rec, string(v1alpha1.RescueVerified)
 	}
 }

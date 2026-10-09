@@ -153,7 +153,11 @@ func cloneRepo(ctx context.Context, r Runner, s Settings, repo, dst string) (tim
 				return 0, err
 			}
 		}
-		if err := os.RemoveAll(tmp); err != nil {
+		if s.WorkspaceID != "" {
+			if _, err := os.Lstat(tmp); !errors.Is(err, os.ErrNotExist) {
+				return 0, fmt.Errorf("shared staging clone %s is partial or uncertain; preserved and refused", tmp)
+			}
+		} else if err := os.RemoveAll(tmp); err != nil {
 			return 0, err
 		}
 		start := time.Now()
@@ -165,8 +169,15 @@ func cloneRepo(ctx context.Context, r Runner, s Settings, repo, dst string) (tim
 			return time.Since(start), nil
 		}
 		lastErr = err
+		if s.WorkspaceID != "" {
+			if _, statErr := os.Lstat(tmp); !errors.Is(statErr, os.ErrNotExist) {
+				return 0, fmt.Errorf("shared clone failed with partial or uncertain staging data preserved: %s", cmdDetail(err))
+			}
+		}
 	}
-	_ = os.RemoveAll(tmp)
+	if s.WorkspaceID == "" {
+		_ = os.RemoveAll(tmp)
+	}
 	return 0, fmt.Errorf("clone of %s failed %d times: %s", s.RemoteURL(repo), cloneAttempts, cmdDetail(lastErr))
 }
 

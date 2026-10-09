@@ -336,7 +336,25 @@ func pauseWorkspaceAdmission(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func acquireWorkspaceWriter(ctx context.Context, r Runner, s Settings, sess protocol.Session, now time.Time) (*writerLease, error) {
+func acquireWorkspaceWriter(ctx context.Context, r Runner, s Settings, sess protocol.Session, now time.Time) (lease *writerLease, resultErr error) {
+	mayRefuse := false
+	if sess.Workspace != nil && s.WorkspaceID == sess.Workspace.ID && s.PodUID != "" {
+		if err := sess.Validate(); err != nil {
+			return nil, err
+		}
+		var err error
+		mayRefuse, err = beginWorkspaceAdmission(ctx, s, sess, now)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if resultErr != nil && mayRefuse {
+				if err := refuseWorkspaceAdmission(s, sess, now); err != nil {
+					resultErr = fmt.Errorf("%w; private non-admission result: %v", resultErr, err)
+				}
+			}
+		}()
+	}
 	if err := workspacePreflight(s, sess); err != nil {
 		return nil, err
 	}
@@ -421,7 +439,16 @@ func acquireWorkspaceWriter(ctx context.Context, r Runner, s Settings, sess prot
 	if stop, err := workspaceStopForOwner(s, sess, owner); err != nil || stop {
 		return fail(errors.New("shared supervisor stop is requested or uncertain; writer admission refused"))
 	}
+	// Persist intent before the owner write. Any ambiguous write or later
+	// private marker failure remains OwnerWriteStarted, never Refused.
+	mayRefuse = false
+	if err := writeAdmissionPhase(s, sess, "OwnerWriteStarted", now); err != nil {
+		return fail(err)
+	}
 	if err := writeWorkspaceJSON(s.ownerPath(sess.Name), owner); err != nil {
+		return fail(err)
+	}
+	if err := writeAdmissionPhase(s, sess, "OwnerAdmitted", now); err != nil {
 		return fail(err)
 	}
 	return &writerLease{owner: owner, unlock: unlock}, nil

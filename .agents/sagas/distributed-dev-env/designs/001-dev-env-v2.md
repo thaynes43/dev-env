@@ -2535,6 +2535,9 @@ scheduler, preserving existing constraints and allowing its retained RWO home
 to mount there. The hold itself is idle; each bounded rescue invocation receives
 new controller-verified proof on stdin, capped at 16KiB. Its initial environment
 binds the old executor and cannot substitute for fresh proof on a later retry.
+The receiving hold allows at most five seconds of future VerifiedAt clock skew
+and forty seconds of observed receipt age; operator-local Node/Lease freshness
+and future-timestamp rejection stay unchanged.
 Writer and common-Git locks protect only this task's owned rescue. A stopped
 receipt follows verified bundles and the final Git writes. SourcePodUID records
 the original executor separately from the hold pod that performed rescue.
@@ -2546,6 +2549,13 @@ hold, and the hold must actually disappear before deleting the original pod.
 Archive and finalizer guards cover both names. Deployment requires the generated
 CRD before the new operator, cluster-scoped Node GET, and Lease GET in
 kube-node-lease; no list, watch or node mutation is needed for this verifier.
+
+A never-admitted task has a distinct NoWorkAdmitted result after proof of owner,
+path and task-ref absence. An absent task worktree with owned refs requires a
+verified bundle of every owned ref. Neither result claims a clean pushed worktree
+or an empty private home. Partial, foreign or unreadable preparation is preserved
+and refused. Private admission markers bracket owner writes; an ambiguous write
+cannot become proof of non-admission.
 
 Source and synthetic fixtures do not establish live shared lifecycle acceptance.
 Catalog/rules, managed Codex execution, retained remote hosts, refresh and explicit
