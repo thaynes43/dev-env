@@ -10,11 +10,16 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import resource
+import select
 import shutil
 import signal
 import subprocess
 import sys
 import tarfile
+import tempfile
+import threading
 import time
 
 ROLE = os.environ.get('TRIAL_ROLE')
@@ -35,6 +40,9 @@ RUN_ID = 'workspace-cephfs-trial-20261009-v1'
 PROCESSES = []
 MEASUREMENTS = []
 STARTUP_METADATA = {}
+DIAGNOSTIC_METADATA = {}
+PHASES = {}
+STAT_SAMPLES = set()
 ENV = dict(os.environ)
 ENV.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null',
            GIT_TERMINAL_PROMPT='0', GIT_OPTIONAL_LOCKS='0', GIT_AUTHOR_NAME='CephFS fixture',
@@ -64,24 +72,175 @@ def bounded_output(value):
         value = value.decode('utf-8', errors='replace')
     return value[:400]
 
-def run(argv, *, expected=0, env=None, timeout=15):
-    start = time.monotonic()
-    effective_timeout = min(timeout, remaining())
+def own_cpu_stat():
+    # Resolve this process's cgroup through its mount root. Reading the root
+    # cpu.stat by assumption can accidentally measure the whole node instead.
     try:
+        member = next(line[3:] for line in Path('/proc/self/cgroup').read_text().splitlines()
+                      if line.startswith('0::'))
+        for line in Path('/proc/self/mountinfo').read_text().splitlines():
+            left, right = line.split(' - ', 1)
+            if right.split()[0] != 'cgroup2':
+                continue
+            fields = left.split()
+            relative = Path(member).relative_to(fields[3])
+            directory = Path(fields[4]) / relative
+            values = {}
+            for entry in (directory/'cpu.stat').read_text()[:4096].splitlines():
+                key, value = entry.split()
+                if key in {'usage_usec','user_usec','system_usec','nr_periods',
+                           'nr_throttled','throttled_usec'}:
+                    values[key] = int(value)
+            assert 'usage_usec' in values
+            return {'values':values, 'identity':str(directory),
+                    'cpuMax':(directory/'cpu.max').read_text()[:80].strip()}
+    except (OSError, ValueError, StopIteration, AssertionError):
+        pass
+    return None
+
+def cpu_delta(child_before, child_after, before, after):
+    value = {'childUserSeconds':child_after.ru_utime-child_before.ru_utime,
+             'childSystemSeconds':child_after.ru_stime-child_before.ru_stime}
+    if before and after and before['identity'] == after['identity']:
+        delta = {key:after['values'][key]-number for key,number in before['values'].items()
+                 if key in after['values']}
+        value['ownCgroupV2'] = {'available':all(number >= 0 for number in delta.values()),
+                               'cpuMax':after['cpuMax'], 'delta':delta}
+    else:
+        value['ownCgroupV2'] = {'available':False, 'reason':'own cgroup v2 counters unavailable'}
+    return value
+
+class StatusTrace:
+    """Drain native Trace2 under the command deadline; retain at most 64KiB.
+
+    The blocking pipe reader never generates load and stops when Git exits or
+    the command is killed. /tmp is private; no trace writes touch CephFS.
+    """
+    def __init__(self):
+        self.read_fd, self.write_fd = os.pipe()
+        self.file = tempfile.TemporaryFile(dir='/tmp',buffering=0)
+        self.stop = threading.Event()
+        self.total = 0
+        self.kept = 0
+        self.error = False
+        self.drain_truncated = False
+        self.thread = threading.Thread(target=self.collect, daemon=True)
+        self.thread.start()
+
+    def collect(self):
+        drained_after_stop = 0
+        try:
+            # Only the command owner stops this reader, after subprocess.run
+            # has terminated/reaped Git. Closing at the global deadline can
+            # SIGPIPE a still-running Git before its original timeout arrives.
+            while True:
+                if not select.select([self.read_fd], [], [], 0.1)[0]:
+                    if self.stop.is_set():
+                        break
+                    continue
+                chunk = os.read(self.read_fd, 8192)
+                if not chunk:
+                    break
+                self.total += len(chunk)
+                retained = chunk[:max(0, 65536-self.kept)]
+                if not self.error:
+                    try:
+                        self.file.write(retained)
+                        self.kept += len(retained)
+                    except (OSError, ValueError):
+                        # Retention is an observer. Keep draining/discarding
+                        # until Git's owner stops it; never SIGPIPE live Git
+                        # because the private diagnostic file failed.
+                        self.error = True
+                if self.stop.is_set():
+                    drained_after_stop += len(chunk)
+                    if drained_after_stop >= 65536:
+                        self.drain_truncated = True
+                        break
+        except (OSError, ValueError):
+            self.error = True
+        finally:
+            os.close(self.read_fd)
+
+    def finish(self):
+        os.close(self.write_fd)
+        self.stop.set()
+        self.thread.join(timeout=0.5)
+        if self.thread.is_alive():
+            self.file.close()
+            return {'available':False, 'reason':'bounded Trace2 collector did not finish'}
+        try:
+            self.file.seek(0)
+            raw = self.file.read(65536)
+        except (OSError, ValueError):
+            self.error = True
+            raw = b''
+        finally:
+            self.file.close()
+        events = []
+        event_count = 0
+        for line in raw.splitlines():
+            try:
+                native = json.loads(line)
+            except (ValueError, UnicodeDecodeError):
+                continue
+            kind = native.get('event')
+            if kind not in {'region_enter','region_leave','data','exit'}:
+                continue
+            event = {'event':kind}
+            # No SID/hostname, arbitrary config/env values, paths or raw argv.
+            for key in ['category','label','key']:
+                item = native.get(key)
+                if isinstance(item,str) and re.fullmatch(r'[A-Za-z0-9_./-]{1,80}',item) and not item.startswith('/'):
+                    event[key] = item
+            for key in ['t_abs','t_rel','nesting','code']:
+                if isinstance(native.get(key),(int,float)):
+                    event[key] = native[key]
+            if kind == 'data':
+                item = str(native.get('value',''))
+                if not re.fullmatch(r'[0-9]+(?:\.[0-9]+)?',item):
+                    continue
+                event['value'] = float(item) if '.' in item else int(item)
+            event_count += 1
+            events.append(event)
+            events = events[-48:]
+        return {'available':not self.error and self.total > 0,
+                'nativeBytes':self.total, 'retainedBytes':self.kept,
+                'byteCap':65536, 'truncated':self.total > self.kept,
+                'drainTruncated':self.drain_truncated,
+                'eventCap':48, 'omittedEvents':max(0,event_count-48), 'events':events}
+
+def run(argv, *, expected=0, env=None, timeout=15):
+    trace = None
+    command_env = env or ENV
+    kwargs = {}
+    if argv[:2] == ['git','-C'] and argv[3:] == ['status','--porcelain=v1','--untracked-files=all']:
+        trace = StatusTrace()
+        command_env = dict(command_env, GIT_TRACE2_EVENT='/dev/fd/'+str(trace.write_fd),
+                           GIT_TRACE2_CONFIG_PARAMS='', GIT_TRACE2_ENV_VARS='')
+        kwargs['pass_fds'] = (trace.write_fd,)
+        child_before = resource.getrusage(resource.RUSAGE_CHILDREN)
+        cgroup_before = own_cpu_stat()
+    start = time.monotonic()
+    measurement = {'operation':' '.join(argv[:3]), 'argv':argv, 'expectedExit':expected}
+    try:
+        effective_timeout = min(timeout, remaining())
         result = subprocess.run(argv, text=True, capture_output=True,
-                                env=env or ENV, timeout=effective_timeout)
+                                env=command_env, timeout=effective_timeout, **kwargs)
     except subprocess.TimeoutExpired as error:
-        MEASUREMENTS.append({'operation':' '.join(argv[:3]), 'argv':argv,
-                             'seconds':time.monotonic()-start, 'exit':None,
-                             'expectedExit':expected, 'errorType':'TimeoutExpired',
-                             'effectiveTimeoutSeconds':effective_timeout,
-                             'stdout':bounded_output(error.stdout),
-                             'stderr':bounded_output(error.stderr)})
+        measurement.update(seconds=time.monotonic()-start, exit=None, errorType='TimeoutExpired',
+                           effectiveTimeoutSeconds=effective_timeout,
+                           stdout=bounded_output(error.stdout), stderr=bounded_output(error.stderr))
+        MEASUREMENTS.append(measurement)
         raise
-    measurement = {'operation': ' '.join(argv[:3]), 'argv': argv,
-                   'seconds': time.monotonic()-start, 'exit': result.returncode,
-                   'expectedExit': expected}
-    MEASUREMENTS.append(measurement)
+    else:
+        measurement.update(seconds=time.monotonic()-start, exit=result.returncode)
+        MEASUREMENTS.append(measurement)
+    finally:
+        if trace:
+            measurement['cpu'] = cpu_delta(child_before, resource.getrusage(resource.RUSAGE_CHILDREN),
+                                           cgroup_before, own_cpu_stat())
+            measurement['trace2'] = trace.finish()
     if expected is not None:
         if result.returncode != expected:
             # Every command here targets only the synthetic local fixture. Keep
@@ -104,14 +263,23 @@ def write_json(path, value):
     os.replace(temporary, path)
 
 def flag(name, value=None):
-    write_json(CONTROL / (name + '.json'), value or {'role':ROLE, 'elapsed':time.monotonic()-START})
+    value = value or {'role':ROLE, 'elapsed':time.monotonic()-START}
+    write_json(CONTROL / (name + '.json'), value)
+    record_phase(name, value, 'publish')
+
+def record_phase(name, value, action):
+    if name in {'inputs','build-done'}:
+        PHASES.setdefault(name, {'action':action,'elapsedSeconds':time.monotonic()-START,
+                                'value':value})
 
 def wait(name, timeout=30):
     end = min(DEADLINE, time.monotonic()+timeout)
     path = CONTROL / (name + '.json')
     while time.monotonic() < end:
         if path.exists():
-            return json.loads(path.read_text())
+            value = json.loads(path.read_text())
+            record_phase(name, value, 'observe')
+            return value
         # Bounded coordination wait, not a CPU/load loop.
         time.sleep(0.2)
     raise TimeoutError('peer did not complete ' + name)
@@ -176,6 +344,21 @@ def wip(path):
     index = Path(git(path,'rev-parse','--git-path','index').stdout.strip())
     if not index.is_absolute():
         index = path / index
+    phase = 'postFileIO' if 'build-done' in PHASES else 'initialWIP'
+    sample_key = (phase,str(path))
+    if ROLE in {'a','b'} and sample_key not in STAT_SAMPLES:
+        STAT_SAMPLES.add(sample_key)
+        assert len(STAT_SAMPLES) <= 3, 'diagnostic sample cap exceeded'
+        samples = []
+        for name in ['src/000.txt','src/001.txt']:
+            stat = (path/name).stat()
+            samples.append({'path':name,'device':stat.st_dev,'inode':stat.st_ino,
+                            'mode':stat.st_mode,'size':stat.st_size,
+                            'mtimeNs':stat.st_mtime_ns,'ctimeNs':stat.st_ctime_ns})
+        debug = git(path,'ls-files','--debug','--','src/000.txt','src/001.txt').stdout
+        DIAGNOSTIC_METADATA.setdefault('indexStatSamples',[]).append(
+            {'task':path.name,'phase':phase,'indexDebug':bounded_output(debug),
+             'indexDebugTruncated':len(debug) > 400, 'stat':samples})
     return {'status':status, 'fileHash':digest(path/'src'/'000.txt'),
             'indexFileSHA256':digest(index),
             'head':git(path,'rev-parse','HEAD').stdout.strip(), 'commonDir':common(path)}
@@ -187,6 +370,7 @@ def receipt(checks, metadata):
               'node':os.environ['TRIAL_NODE'], 'elapsedSeconds':time.monotonic()-START,
               'mounts':mounted_paths(), 'checks':checks, 'metadata':metadata,
               'commands':MEASUREMENTS, 'startup':STARTUP_METADATA, 'caps':size_cap(),
+              'diagnostics':DIAGNOSTIC_METADATA, 'phases':PHASES,
               'scope':'synthetic storage/Git mechanics only; no platform fencing, real agent, auth, household/device latency or outage-recovery acceptance'}
     write_json(CONTROL/('result-'+ROLE+'.json'), result)
     print(json.dumps(result, sort_keys=True), flush=True)
@@ -403,6 +587,7 @@ try:
     mounted_paths()
     if ROLE in {'a', 'b'}:
         startup_barrier()
+    DIAGNOSTIC_METADATA['gitVersionBuild'] = bounded_output(run(['git','--version','--build-options']).stdout)
     {'a':role_a,'b':role_b,'reconnect':role_reconnect}[ROLE]()
 except BaseException as error:
     for proc in PROCESSES:
@@ -412,6 +597,7 @@ except BaseException as error:
                       'podUID':os.environ['TRIAL_POD_UID'],
                       'node':os.environ['TRIAL_NODE'],'commands':MEASUREMENTS,
                       'startup':STARTUP_METADATA,
+                      'diagnostics':DIAGNOSTIC_METADATA, 'phases':PHASES,
                       'remainingGlobalBudgetSeconds':max(0,DEADLINE-time.monotonic()),
                       'errorType':type(error).__name__,
                       'reason':str(error)[:160],'elapsedSeconds':time.monotonic()-START}),flush=True)

@@ -33,6 +33,23 @@
     "renderer": "render-workspace-cephfs-trial.py --output-dir <private dir> --source-commit <merged 40-character commit>",
     "requiredBeforeLaunch": "Job annotations exact source commit/SHA256; decoded main args exactly match merged helper source; signed image digest unchanged; actual admitted bounds/placement/mounts/token absence verified"
   },
+  "finiteDiagnostics": {
+    "commandsInstrumented": ["git -C <synthetic task> status --porcelain=v1 --untracked-files=all"],
+    "gitOptionalLocks": "0",
+    "trace2PrivateFileByteCap": 65536,
+    "trace2ReceiptEventCapPerCommand": 48,
+    "trace2Lifecycle": "reader remains open until bounded command owner terminates/reaps Git, discarding if private retention writes fail; after owner stop at most64KiB additional drain,0.5s join, early-return file close; truncation/unavailability explicit",
+    "trace2ReceiptFields": ["event", "category", "label", "key", "t_abs", "t_rel", "nesting", "code", "numeric value"],
+    "trace2Excluded": ["SID/hostname", "argv", "config/environment values", "absolute paths"],
+    "cpuMeasurements": ["RUSAGE_CHILDREN user/system deltas", "resolved own cgroup-v2 cpu.stat deltas and cpu.max; unavailable is explicit"],
+    "gitBuildMetadata": "one bounded git --version --build-options per role; does not prove USE_STDEV compile selection",
+    "indexStatSamplePaths": ["src/000.txt", "src/001.txt"],
+    "indexStatSamplesPerRoleCap": 3,
+    "indexStatPhases": ["initialWIP for own task", "postFileIO for own and peer tasks"],
+    "indexStatSamplingOrder": "after successful exact status, once per task/phase, native ls-files --debug and os.stat; no warmup or failure retry",
+    "phaseReceipts": ["inputs source write duration", "build-done copy/archive duration and bulk-file-write quiescence"],
+    "bounds": "original command/global/Job/resource/data caps; no Git configuration, change-detection, WIP, storage or launch-order change"
+  },
   "observability": {
     "prometheusDatasourceUID": "prometheus",
     "lokiDatasourceUID": "loki",
