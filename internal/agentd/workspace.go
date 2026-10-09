@@ -21,6 +21,14 @@ import (
 
 const workspaceVersion = 1
 
+// Shared preparation includes token wait, clone retries/backoff and worktree
+// administration. A queued administrator covers that complete bound and the
+// runner's pipe-drain allowance, while a shorter caller deadline still wins.
+const (
+	sharedGitPrepareBudget = 2 * time.Minute
+	sharedGitAdminBudget   = sharedGitPrepareBudget + 10*time.Second
+)
+
 // The marker is provisioned with the retained claim. agentd never creates or
 // repairs it: an ordinary home directory must not masquerade as shared storage.
 type workspaceMarker struct {
@@ -239,7 +247,7 @@ func workspaceLock(s Settings, name string) (func(), error) {
 // .git pointer. It also serializes the initial clone before that directory exists.
 func workspaceAdminLock(ctx context.Context, s Settings, repo string) (func(), error) {
 	key := sha256.Sum256([]byte(filepath.Join(s.ClonePath(repo), ".git")))
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, sharedGitAdminBudget)
 	defer cancel()
 	name := "git-" + hex.EncodeToString(key[:])
 	for {

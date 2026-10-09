@@ -325,6 +325,55 @@ func TestWorkspaceLatePaneCannotLaunchAfterStoppedReceipt(t *testing.T) {
 	}
 }
 
+func TestSharedPrepareBoundsGitAndHonorsCallerCancellation(t *testing.T) {
+	g := newGitFixture(t, "demo")
+	s, r := g.settings(t)
+	s, sess := sharedSettings(t, s, "task-a")
+	if _, err := cloneRepo(context.Background(), r, s, sess.Repo, s.ClonePath(sess.Repo)); err != nil {
+		t.Fatal(err)
+	}
+	w, err := acquireWorkspaceWriter(context.Background(), r, s, sess, rescueNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.unlock()
+	s.writer = w
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var deadline time.Time
+	fake := &fakeRunner{handle: func(c Cmd) (Result, error) { return r.Run(context.Background(), c) }}
+	bounded := &contextRecordingRunner{Runner: fake, onRun: func(runCtx context.Context, c Cmd) {
+		if len(c.Args) > 2 && c.Args[2] == "fetch" {
+			var ok bool
+			deadline, ok = runCtx.Deadline()
+			if !ok || time.Until(deadline) > sharedGitPrepareBudget {
+				t.Error("shared Git preparation lacks its finite whole-step budget")
+			}
+			cancel()
+		}
+	}}
+	_, step := PrepareRepo(ctx, bounded, s, sess)
+	if deadline.IsZero() || step.State != StepFail {
+		t.Fatalf("canceled preparation did not fail safely: %v", step.Notes)
+	}
+	if sharedGitAdminBudget <= sharedGitPrepareBudget || sharedGitAdminBudget > sharedGitPrepareBudget+10*time.Second {
+		t.Fatal("queue does not cover the complete preparation bound plus explicit headroom")
+	}
+}
+
+type contextRecordingRunner struct {
+	Runner
+	onRun func(context.Context, Cmd)
+}
+
+func (r *contextRecordingRunner) Run(ctx context.Context, c Cmd) (Result, error) {
+	r.onRun(ctx, c)
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
+	return r.Runner.Run(ctx, c)
+}
+
 func TestSharedPrepareNeverPrunesMissingPeerRegistrations(t *testing.T) {
 	g := newGitFixture(t, "demo")
 	s, r := g.settings(t)

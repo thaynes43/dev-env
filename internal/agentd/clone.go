@@ -72,6 +72,9 @@ func PrepareRepo(ctx context.Context, r Runner, s Settings, sess protocol.Sessio
 			return ws, newStep(name, nil, err)
 		}
 		defer unlock()
+		bounded, cancel := context.WithTimeout(ctx, sharedGitPrepareBudget)
+		defer cancel()
+		ctx = bounded
 		var owner taskOwner
 		if err := readWorkspaceJSON(s.ownerPath(sess.Name), &owner); err != nil {
 			return ws, newStep(name, nil, err)
