@@ -187,7 +187,11 @@ func (s *Server) listSessions(ctx context.Context, _ http.ResponseWriter, r *htt
 		return 0, nil, err
 	}
 	var list v1alpha1.AgentSessionList
-	if err := s.Client.List(ctx, &list, client.InNamespace(s.Policy.SessionNamespace)); err != nil {
+	reader := client.Reader(s.Client)
+	if c.kind == kindCoordinator {
+		reader = s.Live
+	}
+	if err := reader.List(ctx, &list, client.InNamespace(s.Policy.SessionNamespace)); err != nil {
 		return 0, nil, fromKubeError(err, "list sessions")
 	}
 	items := list.Items
@@ -199,7 +203,7 @@ func (s *Server) listSessions(ctx context.Context, _ http.ResponseWriter, r *htt
 	})
 	out := apiv1.SessionList{Sessions: []apiv1.Session{}}
 	for i := range items {
-		if f.match(&items[i], c) {
+		if (c.kind != kindCoordinator || items[i].Spec.Parent == c.parent) && f.match(&items[i], c) {
 			out.Sessions = append(out.Sessions, view(&items[i], false))
 		}
 	}
@@ -280,10 +284,17 @@ func (s *Server) sessionKey(r *http.Request) (types.NamespacedName, error) {
 }
 
 // getSession serves GET /v1/sessions/{name}.
-func (s *Server) getSession(ctx context.Context, _ http.ResponseWriter, r *http.Request, _ *caller) (int, any, error) {
+func (s *Server) getSession(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
 	key, err := s.sessionKey(r)
 	if err != nil {
 		return 0, nil, err
+	}
+	if c.kind == kindCoordinator {
+		sess, err := s.childForCoordinator(ctx, key, c, "")
+		if err != nil {
+			return 0, nil, err
+		}
+		return http.StatusOK, view(sess, true), nil
 	}
 	var sess v1alpha1.AgentSession
 	if err := s.get(ctx, key, &sess); err != nil {
@@ -306,7 +317,16 @@ func (s *Server) reapSession(ctx context.Context, _ http.ResponseWriter, r *http
 	// cache that lags.
 	var sess v1alpha1.AgentSession
 	if err := s.Live.Get(ctx, key, &sess); err != nil {
+		if c.kind == kindCoordinator {
+			return 0, nil, coordinatorDenied()
+		}
 		return 0, nil, fromKubeError(err, "session "+key.Name)
+	}
+	if c.kind == kindCoordinator && (sess.Spec.Parent != c.parent || sess.UID == "") {
+		return 0, nil, coordinatorDenied()
+	}
+	if err := s.authorizeChildMutation(ctx, &sess, c); err != nil {
+		return 0, nil, err
 	}
 	if !sess.DeletionTimestamp.IsZero() {
 		return http.StatusAccepted, view(&sess, false), nil
@@ -328,7 +348,7 @@ func (s *Server) reapSession(ctx context.Context, _ http.ResponseWriter, r *http
 	}
 	s.Log.Info("session reap requested", "session", sess.Name, "caller", c.String())
 	var after v1alpha1.AgentSession
-	if err := s.Live.Get(ctx, key, &after); err == nil {
+	if err := s.Live.Get(ctx, key, &after); err == nil && (c.kind != kindCoordinator || (after.UID == sess.UID && after.Spec.Parent == c.parent)) {
 		return http.StatusAccepted, view(&after, false), nil
 	}
 	v := view(&sess, false)

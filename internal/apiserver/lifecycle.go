@@ -41,7 +41,16 @@ func (s *Server) setOperatingMode(ctx context.Context, r *http.Request, c *calle
 	for range 5 {
 		var sess v1alpha1.AgentSession
 		if err := s.Live.Get(ctx, key, &sess); err != nil {
+			if c.kind == kindCoordinator {
+				return 0, nil, coordinatorDenied()
+			}
 			return 0, nil, fromKubeError(err, "session "+key.Name)
+		}
+		if c.kind == kindCoordinator && (sess.Spec.Parent != c.parent || sess.UID == "") {
+			return 0, nil, coordinatorDenied()
+		}
+		if err := s.authorizeChildMutation(ctx, &sess, c); err != nil {
+			return 0, nil, err
 		}
 		if !sess.DeletionTimestamp.IsZero() {
 			return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict,

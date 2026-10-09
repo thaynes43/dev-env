@@ -27,7 +27,8 @@ const (
 	// the v1 pod until cutover.
 	kindClient callerKind = "client"
 	// kindSession is a session pod, by its projected token.
-	kindSession callerKind = "session"
+	kindSession     callerKind = "session"
+	kindCoordinator callerKind = "coordinator"
 )
 
 // maxSessionDepth is the deepest a session may sit (DESIGN-001 3.4, "two levels
@@ -55,6 +56,9 @@ type Policy struct {
 	// ActivityNamespace holds the Activity declarations (dev-env-system, D-66).
 	// Empty answers /v1/activities with 503.
 	ActivityNamespace string
+	// Coordinators are separately configured host identities, never trusted Clients.
+	CoordinatorEnabled bool
+	Coordinators       []CoordinatorHost
 }
 
 // caller is an authenticated, classified caller.
@@ -96,6 +100,13 @@ func (s *Server) resolveCaller(ctx context.Context, id Identity) (*caller, error
 		return &caller{kind: kindClient, identity: id, parent: ref}, nil
 	case id.Namespace == s.Policy.SessionNamespace && id.ServiceAccount == s.Policy.SessionServiceAccount:
 		return s.resolveSession(ctx, id)
+	}
+	if s.Policy.CoordinatorEnabled {
+		for _, host := range s.Policy.Coordinators {
+			if host.ServiceAccount == ref {
+				return s.resolveCoordinator(ctx, id, host)
+			}
+		}
 	}
 	return nil, forbidden("%s may not call this API: it is not Tom's, a client's or a session's ServiceAccount, and summoning callers (CallerPolicy) arrive in plan 10", ref)
 }
