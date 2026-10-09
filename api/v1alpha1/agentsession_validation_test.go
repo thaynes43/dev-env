@@ -20,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -600,6 +601,87 @@ func TestStatusSubresource(t *testing.T) {
 			got := get(t, s)
 			c.mutate(&got.Status)
 			wantInvalid(t, k8s.Status().Update(ctx(t), got), c.want)
+		})
+	}
+}
+
+func TestSharedAdmissionEvidenceIsDurableAndOneWay(t *testing.T) {
+	s := taskSession()
+	s.Spec.Workspace = &v1alpha1.WorkspaceSpec{ID: "projects-v2"}
+	if err := k8s.Create(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	s.Status.SharedAdmission = &v1alpha1.SharedAdmissionStatus{Version: 1, SessionUID: string(s.UID), State: "NeverStarted"}
+	if err := k8s.Status().Update(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	got := get(t, s)
+	if got.Status.SharedAdmission == nil || *got.Status.SharedAdmission != *s.Status.SharedAdmission {
+		t.Fatal("admission evidence was pruned")
+	}
+	got.Status.SharedAdmission.State = "Started"
+	if err := k8s.Status().Update(ctx(t), got); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*v1alpha1.AgentSessionStatus)
+	}{
+		{"remove marker", func(st *v1alpha1.AgentSessionStatus) { st.SharedAdmission = nil }},
+		{"reverse Started", func(st *v1alpha1.AgentSessionStatus) { st.SharedAdmission.State = "NeverStarted" }},
+		{"change Session UID", func(st *v1alpha1.AgentSessionStatus) { st.SharedAdmission.SessionUID = "other-session" }},
+		{"unknown version", func(st *v1alpha1.AgentSessionStatus) { st.SharedAdmission.Version = 2 }},
+		{"unknown state", func(st *v1alpha1.AgentSessionStatus) { st.SharedAdmission.State = "EmptyHome" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := get(t, s)
+			tc.edit(&bad.Status)
+			if err := k8s.Status().Update(ctx(t), bad); !apierrors.IsInvalid(err) {
+				t.Fatalf("invalid admission transition accepted: %v", err)
+			}
+		})
+	}
+	got = get(t, s)
+	if err := k8s.Status().Patch(ctx(t), got, client.RawPatch(types.JSONPatchType, []byte(`[{"op":"remove","path":"/status"}]`))); !apierrors.IsInvalid(err) {
+		t.Fatalf("dropping the entire status erased recorded admission: %v", err)
+	}
+}
+
+func TestSharedRetentionEvidenceSurvivesTheStatusSchema(t *testing.T) {
+	s := taskSession()
+	s.Spec.Workspace = &v1alpha1.WorkspaceSpec{ID: "projects-v2"}
+	if err := k8s.Create(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	now := metav1.NewTime(time.Now().Truncate(time.Second))
+	p := &v1alpha1.SharedRescueProof{Version: 1, Workspace: s.Spec.Workspace.ID, Task: s.Name, Repo: s.Spec.Repo,
+		SessionUID: string(s.UID), SourcePodUID: "executor", PrivateHomeUID: "original-home", WriterGeneration: 7, Kind: "TaskWorkPreserved",
+		Manifest: "rescue/" + s.Name + "/20261009-1200/manifest.json"}
+	s.Status.SharedPrivateHomeUID = p.PrivateHomeUID
+	s.Status.Rescue = &v1alpha1.RescueStatus{SharedProof: p, Generation: s.Generation, SourcePodUID: p.SourcePodUID, PodUID: "hold",
+		Result: v1alpha1.RescueVerified, Stamp: "20261009-1200", At: &now, LastBundle: p.Manifest}
+	if err := k8s.Status().Update(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	got := get(t, s)
+	if got.Status.SharedPrivateHomeUID != p.PrivateHomeUID || got.Status.Rescue.SharedProof == nil || *got.Status.Rescue.SharedProof != *p {
+		t.Fatalf("retention evidence was pruned: %+v", got.Status)
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*v1alpha1.SharedRescueProof)
+	}{
+		{"unknown proof version", func(p *v1alpha1.SharedRescueProof) { p.Version = 2 }},
+		{"unknown preservation result", func(p *v1alpha1.SharedRescueProof) { p.Kind = "EmptyHome" }},
+		{"negative writer generation", func(p *v1alpha1.SharedRescueProof) { p.WriterGeneration = -1 }},
+		{"unbounded manifest", func(p *v1alpha1.SharedRescueProof) { p.Manifest = strings.Repeat("a", 513) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := get(t, s)
+			tc.edit(bad.Status.Rescue.SharedProof)
+			if err := k8s.Status().Update(ctx(t), bad); !apierrors.IsInvalid(err) {
+				t.Fatalf("unsupported evidence accepted: %v", err)
+			}
 		})
 	}
 }

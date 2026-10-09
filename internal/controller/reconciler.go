@@ -176,6 +176,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// The finalizer goes on before the session has anything to lose, so no
 	// pod or volume of it ever exists without it (D-45).
 	if s.DeletionTimestamp.IsZero() && !controllerutil.ContainsFinalizer(&s, Finalizer) {
+		if s.Spec.Workspace != nil {
+			if err := r.initializeSharedAdmission(ctx, &s); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		orig := s.DeepCopy()
 		controllerutil.AddFinalizer(&s, Finalizer)
 		if err := r.Client.Patch(ctx, &s, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})); err != nil {
@@ -556,6 +561,14 @@ func (r *Reconciler) rescueWithProof(ctx context.Context, s *v1alpha1.AgentSessi
 	if cur.UID != pod.UID {
 		return nil, "", nil, fmt.Errorf("the pod was replaced during the rescue (uid %s, now %s)", pod.UID, cur.UID)
 	}
+	if s.Spec.Workspace != nil {
+		currentProof, err := workspaceHoldProof(&cur)
+		if err != nil || currentProof == nil || currentProof.Validate(s.Spec.Workspace.ID, s.Name, string(s.UID), proof.PodUID) != nil ||
+			!controlledBySession(&cur, s) || !cur.DeletionTimestamp.IsZero() ||
+			cur.Annotations[privateHomeUIDAnnotation] != s.Status.SharedPrivateHomeUID || cur.Annotations[privateHomeUIDAnnotation] != pod.Annotations[privateHomeUIDAnnotation] {
+			return nil, "", nil, errors.New("shared hold ownership or original home binding changed during rescue")
+		}
+	}
 	rec, reason := verdict(s, pod, rep, metav1.Now())
 	log.FromContext(ctx).Info("rescued the session pod", "pod", pod.Name, "result", rec.Result, "reason", reason, "bundle", rec.LastBundle)
 	return rec, reason, &cur, nil
@@ -593,6 +606,12 @@ func (r *Reconciler) archiveDue(s *v1alpha1.AgentSession, t *templates.Templates
 // record (D-62). With no valid rescue and no pod, a hold pod rescues the volume
 // first (D-55). done means the reconcile ends here with res.
 func (r *Reconciler) archive(ctx context.Context, s *v1alpha1.AgentSession, obs *observation, archiveDue bool) (res ctrl.Result, done bool, err error) {
+	if s.Spec.Workspace != nil {
+		// Even a missing/foreign claim must not reach legacy empty-session
+		// release. Shared reap has one independent retention proof path.
+		obs.removalBlocked = errors.New("shared task rescue does not archive its private home; the home and workspace claim stay retained")
+		return ctrl.Result{}, false, nil
+	}
 	if (obs.claim.missing || obs.claim.foreign != "") && s.DeletionTimestamp.IsZero() {
 		if obs.claim.foreign != "" {
 			obs.removalBlocked = errors.New("a volume of the session's name is not the session's; the operator leaves it alone")
@@ -620,14 +639,6 @@ func (r *Reconciler) archive(ctx context.Context, s *v1alpha1.AgentSession, obs 
 		podExists = false
 	} else if err != nil {
 		return ctrl.Result{}, true, err
-	}
-	if s.Spec.Workspace != nil {
-		err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: workspaceHoldName(s)}, &corev1.Pod{})
-		if err == nil {
-			podExists = true
-		} else if !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, true, err
-		}
 	}
 	obs.removalBlocked = volumeRemovalAllowed(s, podExists, archiveDue)
 	if errors.Is(obs.removalBlocked, errArchiveNotRecorded) {
@@ -798,6 +809,12 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 	if !obs.pod.missing {
 		return nil
 	}
+	if s.Spec.Workspace != nil && s.Status.SharedPrivateHomeUID != "" {
+		if _, err := r.workspacePrivateHome(ctx, s, types.UID(s.Status.SharedPrivateHomeUID)); err != nil {
+			obs.removalBlocked = err
+			return nil
+		}
+	}
 	pod, err := buildPod(s, t, r.APIURL)
 	if err != nil {
 		obs.buildErr = err
@@ -809,6 +826,12 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 			obs.buildErr = err
 			return nil
 		}
+		if s.Spec.Workspace != nil {
+			if err := r.startSharedAdmission(ctx, s); err != nil {
+				obs.removalBlocked = err
+				return nil
+			}
+		}
 		if err := r.create(ctx, "volume", claim); err != nil {
 			return err
 		}
@@ -817,6 +840,16 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 	}
 	if obs.claim.foreign != "" || volumeTerminating(*obs) {
 		return nil
+	}
+	if s.Spec.Workspace != nil {
+		if err := r.startSharedAdmission(ctx, s); err != nil {
+			obs.removalBlocked = err
+			return nil
+		}
+		if err := r.bindSharedPrivateHome(ctx, s); err != nil {
+			obs.removalBlocked = err
+			return nil
+		}
 	}
 	if err := r.create(ctx, "pod", pod); err != nil {
 		return err

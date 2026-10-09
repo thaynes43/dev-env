@@ -126,12 +126,16 @@ D-77 divides the implementation while runtime acceptance remains gated:
 2. **Source merged #140 (`7b3ce4c`):** shared-only supervisor stop/preserve and a distinct bounded hold-rescue pod,
    with controller proof of the exact old executor's genuine termination before
    any cleanup. Missing/deleted/partitioned owners remain refused.
-3. D-81's [retained-private-home receipt and detach](../../../../docs/shared-private-home-retention.md)
+3. **D-81 implemented in source; runtime acceptance pending:** the
+   [retained-private-home receipt and detach](../../../../docs/shared-private-home-retention.md)
    after verified rescue and both-pod absence, before Session finalization. This
    keeps private provider state without enabling automatic home destruction.
 4. **Catalog primitives merged #145 (`084b66a`), integration pending:** API/CLI,
    fresh source and actual both-provider project/repo rule loading.
-5. **Auth source merged #138 (`bcb2599`) and #143 (`f810766`), runtime off:** keeper-owned fresh Codex
+5. **Auth source merged #138 (`bcb2599`) and #143 (`f810766`):** keeper-only fresh
+   Codex authentication was enabled through haynes-ops #3679. Initial login failed
+   before producing a challenge; no credential generation was adopted. Managed
+   Codex sessions and remote hosts remain disabled. Complete keeper-owned fresh Codex
    login/refresh/reload, D-80's scoped coordinator class,
    managed Codex launch/resume and two retained remote hosts;
    explicit transfer follows the proven stop contract.

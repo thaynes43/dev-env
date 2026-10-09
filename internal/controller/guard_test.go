@@ -225,6 +225,9 @@ var guardedCalls = []struct {
 	{"deletePod", "removePod", "podRemovalAllowed"},
 	{"deletePod", "removeSharedPod", "podRemovalAllowed"},
 	{"deleteVolume", "archive", "volumeRemovalAllowed"},
+	{"detachPrivateHome", "retainSharedPrivateHome", "sharedPodsAbsent"},
+	{"releaseRetainedSharedSession", "retainSharedPrivateHome", "confirmedRetention"},
+	{"releaseNeverStartedSharedSession", "retainSharedPrivateHome", "sharedAdmissionIs"},
 }
 
 // TestOnlyTheGuardDeletes reads this package's source. A Delete or DeleteAllOf

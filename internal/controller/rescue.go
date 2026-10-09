@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"path"
 	"slices"
 	"strings"
@@ -194,17 +195,28 @@ func verdict(s *v1alpha1.AgentSession, pod *corev1.Pod, rep protocol.RescueRepor
 		}
 		if p := rep.WorkspacePreservation; p != nil {
 			if proof == nil || p.Version != 1 || p.Workspace != s.Spec.Workspace.ID || p.Task != s.Name || p.SessionUID != string(s.UID) ||
-				p.SourcePodUID != rep.SourcePodUID || p.SourcePodUID != proof.PodUID || rep.CleanAndPushed || rep.VolumeEmpty {
+				p.SourcePodUID != rep.SourcePodUID || p.SourcePodUID != proof.PodUID || rep.VolumeEmpty || p.Kind != "TaskWorkPreserved" && rep.CleanAndPushed {
 				setReason("ReportMismatch")
 				add("shared preparation result has contradictory identity or clean/empty claims")
 			}
 			noWork, ownedRefs = p.Kind == "NoWorkAdmitted", p.Kind == "OwnedRefsPreserved"
-			if !noWork && !ownedRefs || ownedRefs && p.OwnerGeneration == 0 {
+			if !noWork && !ownedRefs && p.Kind != "TaskWorkPreserved" ||
+				p.OwnerGeneration > math.MaxInt64 || p.OwnerGeneration == 0 && (!noWork || !p.NoOwner) || p.NoOwner && (!noWork || p.OwnerGeneration != 0) {
 				setReason("ReportMismatch")
-				add("shared preparation result has an unknown kind or no owned generation")
+				add("shared preservation has an unknown kind or contradictory writer admission")
 			}
 			if noWork || ownedRefs {
 				rec.PreservationKind = p.Kind
+			}
+			rec.SharedProof = &v1alpha1.SharedRescueProof{Version: p.Version, Workspace: p.Workspace,
+				Task: p.Task, Repo: s.Spec.Repo, SessionUID: p.SessionUID, SourcePodUID: p.SourcePodUID,
+				PrivateHomeUID: pod.Annotations[privateHomeUIDAnnotation], WriterGeneration: int64(p.OwnerGeneration), NoOwner: p.NoOwner, Kind: p.Kind}
+			if rep.Bundle != nil {
+				rec.SharedProof.Manifest = rep.Bundle.Manifest
+			}
+			if rec.SharedProof.PrivateHomeUID == "" || rec.SharedProof.PrivateHomeUID != s.Status.SharedPrivateHomeUID {
+				setReason("ReportMismatch")
+				add("shared preservation lacks its hold's original private home UID")
 			}
 		}
 		if rep.VolumeEmpty || len(rep.Repos) != 1 || rep.Repos[0].Path != "/home/dev/repos/"+s.Spec.Repo ||
@@ -339,6 +351,9 @@ func verdict(s *v1alpha1.AgentSession, pod *corev1.Pod, rep protocol.RescueRepor
 	}
 	switch {
 	case len(problems) > 0:
+		// Failed reports must not persist a schema-invalid or contradictory
+		// typed proof. Their diagnostic verdict still keeps all storage.
+		rec.SharedProof = nil
 		rec.Result = v1alpha1.RescueFailed
 		rec.Message = truncate("the rescue " + rep.Stamp + " failed: " + strings.Join(problems, "; "))
 		return rec, reason

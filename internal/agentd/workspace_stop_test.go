@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -178,6 +179,10 @@ func TestWorkspaceHoldRescueNeedsFreshProofAndPreservesPeers(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, s.statePath(launchFile), `{}`)
+	privateFiles := map[string]string{".codex/auth.json": "fixture auth remains private", ".codex/history.sqlite": "fixture conversation bytes", ".claude/enrollment": "fixture native enrollment"}
+	for file, content := range privateFiles {
+		writeFile(t, filepath.Join(s.Home, file), content)
+	}
 	rig := rescueRig{g: g, s: s, r: r, ws: ws}
 	rig.sharedVolume(t)
 	w.unlock()
@@ -219,6 +224,15 @@ func TestWorkspaceHoldRescueNeedsFreshProofAndPreservesPeers(t *testing.T) {
 	}
 	if !rep.OK || rep.SourcePodUID != owner.PodUID || rep.Bundle == nil || rep.Bundle.Error != "" {
 		t.Fatalf("report %+v", rep)
+	}
+	if p := rep.WorkspacePreservation; p == nil || p.Kind != "TaskWorkPreserved" || p.NoOwner || p.OwnerGeneration != owner.Generation || p.SessionUID != sess.Workspace.SessionUID {
+		t.Fatalf("admitted writer proof %+v", p)
+	}
+	for file, content := range privateFiles {
+		data, err := os.ReadFile(filepath.Join(s.Home, file))
+		if err != nil || string(data) != content {
+			t.Fatalf("private provider file %s changed: %v", file, err)
+		}
 	}
 	var stopped taskOwner
 	if err := readWorkspaceJSON(s.ownerPath(sess.Name), &stopped); err != nil {

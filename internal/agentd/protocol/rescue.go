@@ -39,8 +39,8 @@ type RescueReport struct {
 	Bundle *BundleReport `json:"bundle,omitempty"`
 }
 
-// WorkspacePreservation distinguishes absent preparation from a clean pushed
-// worktree. Generation zero means no durable task owner was ever admitted.
+// WorkspacePreservation binds shared task preservation to an admitted writer,
+// or to explicit verified no-owner admission. It never proves an empty home.
 type WorkspacePreservation struct {
 	Version         int    `json:"version"`
 	Workspace       string `json:"workspace"`
@@ -48,7 +48,10 @@ type WorkspacePreservation struct {
 	SessionUID      string `json:"sessionUID"`
 	SourcePodUID    string `json:"sourcePodUID"`
 	OwnerGeneration uint64 `json:"ownerGeneration"`
-	Kind            string `json:"kind"`
+	// NoOwner is set only when refused private admission and absent shared
+	// ownership were both verified under the task and Git locks.
+	NoOwner bool   `json:"noOwner"`
+	Kind    string `json:"kind"`
 }
 
 // RepoRescue is one clone under ~/repos.

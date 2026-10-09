@@ -33,7 +33,7 @@ func workspaceHoldName(s *v1alpha1.AgentSession) string {
 	return prefix + "-rescue-" + hex.EncodeToString(key[:5])
 }
 
-func buildWorkspaceHoldPod(s *v1alpha1.AgentSession, t *templates.Templates, proof *protocol.WorkspaceStopProof) (*corev1.Pod, error) {
+func buildWorkspaceHoldPod(s *v1alpha1.AgentSession, t *templates.Templates, proof *protocol.WorkspaceStopProof, homeUID types.UID) (*corev1.Pod, error) {
 	if proof == nil || s.Spec.Workspace == nil {
 		return nil, errors.New("shared hold Pod requires an explicit stop proof")
 	}
@@ -45,6 +45,10 @@ func buildWorkspaceHoldPod(s *v1alpha1.AgentSession, t *templates.Templates, pro
 		return nil, err
 	}
 	pod.Name = workspaceHoldName(s)
+	if homeUID == "" {
+		return nil, errors.New("shared hold Pod requires the private home UID")
+	}
+	pod.Annotations[privateHomeUIDAnnotation] = string(homeUID)
 	constrainWorkspaceHoldNode(pod, proof.NodeName)
 	for i, e := range pod.Spec.Containers[0].Env {
 		if e.Name != protocol.SessionEnv {
@@ -144,7 +148,7 @@ func (r *Reconciler) reconcileSharedWorkspace(ctx context.Context, s *v1alpha1.A
 		}
 		if wantsPodGone(s) {
 			if !s.DeletionTimestamp.IsZero() {
-				res, _, err := r.archive(ctx, s, obs, true)
+				res, err := r.retainSharedPrivateHome(ctx, s, obs)
 				return res, err
 			}
 			due, wait := r.archiveDue(s, obs.templates, *obs)
@@ -216,14 +220,24 @@ func (r *Reconciler) reconcileSharedWorkspace(ctx context.Context, s *v1alpha1.A
 		if obs.templatesErr != nil {
 			return block(obs.templatesErr)
 		}
-		if obs.claim.missing || obs.claim.foreign != "" || volumeTerminating(*obs) {
-			return block(errors.New("shared rescue's private home is missing, foreign or deleting"))
+		if s.Status.SharedPrivateHomeUID == "" {
+			return block(errors.New("shared executor has no durable original private home binding; preservation required"))
 		}
-		pod, err := buildWorkspaceHoldPod(s, obs.templates, proof)
+		home, err := r.workspacePrivateHome(ctx, s, types.UID(s.Status.SharedPrivateHomeUID))
+		if err != nil {
+			return block(err)
+		}
+		pod, err := buildWorkspaceHoldPod(s, obs.templates, proof, home.UID)
 		if err != nil {
 			return block(err)
 		}
 		if _, _, err := r.verifyWorkspaceStop(ctx, s, old.UID); err != nil {
+			return block(err)
+		}
+		if _, err := r.workspacePrivateHome(ctx, s, home.UID); err != nil {
+			return block(err)
+		}
+		if err := r.startSharedAdmission(ctx, s); err != nil {
 			return block(err)
 		}
 		if err := r.create(ctx, "shared hold Pod", pod); err != nil {
@@ -253,12 +267,22 @@ func (r *Reconciler) reconcileSharedWorkspace(ctx context.Context, s *v1alpha1.A
 		if err != nil {
 			return block(err)
 		}
+		homeUID := types.UID(hp.Annotations[privateHomeUIDAnnotation])
+		if homeUID == "" || string(homeUID) != s.Status.SharedPrivateHomeUID {
+			return block(errors.New("shared hold has no original private home UID binding"))
+		}
+		if _, err := r.workspacePrivateHome(ctx, s, homeUID); err != nil {
+			return block(err)
+		}
 		rec, reason, _, err := r.rescueWithProof(ctx, s, hp, freshProof)
 		if err != nil {
 			obs.removalBlocked = fmt.Errorf("shared owned rescue could not finish; both Pods stay and retry in %s: %w", rescueRetry, err)
 			return ctrl.Result{RequeueAfter: rescueRetry}, nil
 		}
 		if _, _, err := r.verifyWorkspaceStop(ctx, s, old.UID); err != nil {
+			return block(err)
+		}
+		if _, err := r.workspacePrivateHome(ctx, s, homeUID); err != nil {
 			return block(err)
 		}
 		if rec.SourcePodUID != string(old.UID) {
