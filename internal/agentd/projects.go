@@ -18,11 +18,14 @@ import (
 )
 
 // ProjectSyncOptions is intentionally not read from environment or templates.
-// There are no production call sites until management authorization, storage
-// acceptance and provider acceptance are separately wired and proved.
+// The fixed management actor supplies accepted authority and live identity;
+// deployments and storage acceptance remain separate from explicit enablement.
 type ProjectSyncOptions struct {
 	Enabled         bool
 	AcceptedCatalog *ProjectCatalogSource
+	// BeforeMutation is the fixed management actor's uncached live identity
+	// check. It runs after a queued lock and storage check, before shared writes.
+	BeforeMutation func(context.Context) error
 }
 
 const projectSyncBudget = 10 * time.Minute
@@ -82,7 +85,7 @@ func SyncProjects(ctx context.Context, r Runner, s Settings, catalog *projectcat
 		if err != nil {
 			return report, err
 		}
-		findings, err := syncProject(ctx, r, s, catalog, snapshot, global, authority)
+		findings, err := syncProject(ctx, r, s, catalog, snapshot, global, authority, options.BeforeMutation)
 		report.Findings = append(report.Findings, findings...)
 		if err != nil {
 			add(filepath.Join(s.Home, "codex", name), "preserved", err.Error())
@@ -94,7 +97,7 @@ func SyncProjects(ctx context.Context, r Runner, s Settings, catalog *projectcat
 	return report, nil
 }
 
-func withProjectAdmin(ctx context.Context, s Settings, repo string, run func(context.Context) error) error {
+func withProjectAdmin(ctx context.Context, s Settings, repo string, beforeMutation func(context.Context) error, run func(context.Context) error) error {
 	unlock, err := workspaceAdminLock(ctx, s, repo)
 	if err != nil {
 		return err
@@ -105,21 +108,26 @@ func withProjectAdmin(ctx context.Context, s Settings, repo string, run func(con
 	if err := workspaceStoragePreflight(s); err != nil {
 		return err
 	}
+	if beforeMutation != nil {
+		if err := beforeMutation(ctx); err != nil {
+			return err
+		}
+	}
 	return run(ctx)
 }
 
-func syncProject(ctx context.Context, r Runner, s Settings, catalog *projectcatalog.Catalog, snapshot projectcatalog.Snapshot, global map[string]projectcatalog.Repository, authority *projectCatalogAuthority) ([]ProjectFinding, error) {
+func syncProject(ctx context.Context, r Runner, s Settings, catalog *projectcatalog.Catalog, snapshot projectcatalog.Snapshot, global map[string]projectcatalog.Repository, authority *projectCatalogAuthority, beforeMutation func(context.Context) error) ([]ProjectFinding, error) {
 	repos := snapshot.Repositories()
 	primary := repos[0].Name
 	root := filepath.Join(s.Home, "codex", snapshot.Project())
-	if err := withProjectAdmin(ctx, s, primary, func(context.Context) error { return ensurePlainProjectRoot(root) }); err != nil {
+	if err := withProjectAdmin(ctx, s, primary, beforeMutation, func(context.Context) error { return ensurePlainProjectRoot(root) }); err != nil {
 		return nil, err
 	}
 	var findings []ProjectFinding
 	ready := 0
 	for _, repo := range repos {
 		clone := s.ClonePath(repo.Name)
-		err := withProjectAdmin(ctx, s, repo.Name, func(ctx context.Context) error {
+		err := withProjectAdmin(ctx, s, repo.Name, beforeMutation, func(ctx context.Context) error {
 			if err := ensurePlainProjectRoot(root); err != nil {
 				return err
 			}
@@ -159,7 +167,7 @@ func syncProject(ctx context.Context, r Runner, s Settings, catalog *projectcata
 	// Publication is serialized by the deterministic primary's existing Git
 	// lock. A future server must serialize accepted catalog replacement across
 	// this operation; no client revision or new filesystem lock has authority.
-	err := withProjectAdmin(ctx, s, primary, func(ctx context.Context) error {
+	err := withProjectAdmin(ctx, s, primary, beforeMutation, func(ctx context.Context) error {
 		if err := ensurePlainProjectRoot(root); err != nil {
 			return err
 		}

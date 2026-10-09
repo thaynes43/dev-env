@@ -161,6 +161,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 		defer signal.Stop(sigs)
 		return agentd.RunAgent(args[2], stdout, sigs, stopGrace)
+	case "project-sync":
+		return projectSync(ctx, args[1:], stdout, stderr, getenv, r)
 	case "ctl":
 		return ctl(ctx, args[1:], stdin, stdout, stderr, getenv, r)
 	default:

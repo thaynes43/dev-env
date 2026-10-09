@@ -112,6 +112,20 @@ func workspacePreflight(s Settings, sess protocol.Session) error {
 // workspaceStoragePreflight is also the entry guard for explicitly enabled
 // catalog synchronization, which has no task session or writer to impersonate.
 func workspaceStoragePreflight(s Settings) error {
+	if err := workspaceMountPreflight(s); err != nil {
+		return err
+	}
+	var marker workspaceMarker
+	if err := readWorkspaceJSON(filepath.Join(s.workspaceDir(), "marker.json"), &marker); err != nil {
+		return fmt.Errorf("workspace marker: %w", err)
+	}
+	if marker.Version != workspaceVersion || marker.ID != s.WorkspaceID {
+		return errors.New("workspace marker does not match the operator binding")
+	}
+	return nil
+}
+
+func workspaceMountPreflight(s Settings) error {
 	if s.WorkspaceID == "" || s.PodUID == "" {
 		return errors.New("shared storage requires an operator workspace binding and Pod UID")
 	}
@@ -126,13 +140,6 @@ func workspaceStoragePreflight(s Settings) error {
 	}
 	if err := verifyWorkspaceMounts(s.Home, data); err != nil {
 		return err
-	}
-	var marker workspaceMarker
-	if err := readWorkspaceJSON(filepath.Join(s.workspaceDir(), "marker.json"), &marker); err != nil {
-		return fmt.Errorf("workspace marker: %w", err)
-	}
-	if marker.Version != workspaceVersion || marker.ID != s.WorkspaceID {
-		return errors.New("workspace marker does not match the operator binding")
 	}
 	return nil
 }
