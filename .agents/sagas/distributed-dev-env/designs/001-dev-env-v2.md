@@ -2545,6 +2545,20 @@ deleted, partitioned or otherwise uncertain executors remain blocked. Existing
 private-session behavior stays unchanged. Catalog/rules, managed Codex execution,
 retained remote hosts, refresh and explicit transfer remain subsequent units.
 
+**D-79 (2026-10-09 America/New_York). Catalog and task-rule delivery contract.**
+The [shared-project catalog contract](../../../../docs/shared-project-catalog.md)
+defines one accepted GitOps document, stable project folders, bounded shared
+sync, conservative reference repair and one-step add through PR/Flux. The v2
+command is explicit and cannot replace v1's launcher during coexistence.
+New tasks snapshot server-resolved project rules/map/revisions alongside their
+fresh immutable source commit. Flat task worktrees receive that snapshot through
+supported provider injection while retaining native repository instructions;
+resume preserves its original snapshot. Actual Claude/Codex rule loading and
+the management route must pass before these commands are advertised as usable.
+This implements ADR-002/R1–R6 without selecting a management UI, changing the
+accepted storage gate or authorizing a v1 restart. Source implementation remains
+pending and can be delivered while shared runtime stays disabled.
+
 ### 6.7 Remote Control and phone sessions
 
 - `remote` mode is opt-in per session, as `--interactive` is today. Tom's rule stands
@@ -4811,3 +4825,4 @@ blocks only the step it names.
 | D-76 | Q-22 delegates reviewed keeper CA node trust to Codex using public-key-only delivery, guarded preservation and v1 access checks; temporary cleanup included, private CA/flags/provider acceptance unchanged. | 6.12 |
 | D-77 | Disabled-by-default shared core: explicit template/session opt-in, verified real mounts, shared Git locks, durable task writer identity, owned rescue and no global prune; stopped-executor proof is required before real resume/cleanup. | 6.6, plan 11 |
 | D-78 | Disabled keeper-owned fresh Codex login, bounded private durable refresh intent/replacement and ambiguity refusal; access-only atomic host reload, independent private enrollment and actual two-host/refresh gates. | 6.3, plan 04 |
+| D-79 | One accepted GitOps catalog, permanent project roots, explicit v2 sync/add route, immutable task rule/map snapshot with provider injection and native repo rules; conservative shared reference repair and actual-client acceptance. | 6.6, docs/shared-project-catalog.md |

@@ -67,7 +67,9 @@ management UI and credential migration remain unselected.
    phone question, status/link discovery, finish/suspend and maintenance journeys.
    Keep operator API/controller distinct from a coordinator agent role. D-37's
    console is planned; no additional requester-agent service exists today.
-2. Define catalog reconciliation and `project add` through the normal GitOps
+2. **D-79 contract defined; implementation pending:** see the
+   [catalog and task-rule contract](../../../../docs/shared-project-catalog.md).
+   Implement catalog reconciliation and `project add` through the normal GitOps
    branch/PR/Flux workflow, with one authoritative list and no undeclared-root
    deletion. Catalog updates must not restart active hosts to reload declarations.
 3. **Decision complete: Accepted ADR-002** supersedes ADR-001's affected Storage/
