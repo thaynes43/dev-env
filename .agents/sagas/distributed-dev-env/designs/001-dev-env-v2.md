@@ -3629,8 +3629,11 @@ an unencrypted Ed25519 private key and one matching plain public key, and emits
 only versioned validation booleans and predefined failure codes. It enables no
 grant and performs no certificate/provider operation. Execute it only inside
 the keeper after the signed image is deployed; private CA material stays there.
-Source checks use synthetic keys; live pair validation and provider acceptance
-remain separate delivery checkpoints.
+Source checks use synthetic keys. Live pair validation passed after source #133
+(`3b0d043`) and keeper-only haynes-ops #3669 (`ab023471`): one offline invocation
+returned exit 0/all validation booleans true. The other six protected pod
+identities/images/restarts were preserved and activity ended. Real certificate
+and provider acceptance remain separate gates; minting stays off.
 
 **D-26. Approvals: a Pushover link to an approval page behind Authentik.**
 

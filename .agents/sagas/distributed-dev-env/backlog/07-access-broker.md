@@ -128,8 +128,10 @@ In haynes-ops:
   the new image pins. That prerequisite does not provision a CA, trust, egress
   or standing policies, and does not enable minting.
   **2026-10-09 delivery:** haynes-ops #3642 projects the saved CA into its
-  keeper-only read-only mount; ESO/keeper are Ready with minting off. Pair
-  validation, private configuration and real acceptance remain. Q-22 delegated
+  keeper-only read-only mount; ESO/keeper are Ready with minting off. Offline
+  pair validation passed after source #133 and keeper-only haynes-ops #3669,
+  preserving the other protected pods. Private configuration and real acceptance
+  remain. Q-22 delegated
   PVE node trust; #3647 installed it on all five nodes with original bytes and
   standing v1 access preserved. #3651 removed the temporary public delivery app.
   HaynesTower/PiKVM and general hardware certificates remain separate.
@@ -172,7 +174,7 @@ acceptance passes; permission checks alone do not cover admission or networking.
   The CRDs, exact RBAC/admission and journal inventory are deployed in
   haynes-ops #3589; owner CA storage is complete (Q-19), and projection is
   Ready on keeper only (#3642), with PVE node trust installed (#3647/#3651).
-  Key-pair validation, pinned target/host trust, SSH
+  The offline key-pair check passed (#133/#3669). Pinned target/host trust, SSH
   configuration/egress and activation remain; do not close this composite row.
 - [ ] P-19: explicit general SSH certificate/connection revocation contract.
 - [ ] P-20: actual read-only full MCP, browser and ops observability checks.
