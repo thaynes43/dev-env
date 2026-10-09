@@ -186,7 +186,7 @@ ARG CLAUDE_CODE_VERSION=2.1.292
 # CLAUDE.md since 2026-10-03 and does not exist to an older client: 0.158.0's cache
 # never lists it.
 # renovate: datasource=npm depName=@openai/codex
-ARG CODEX_VERSION=0.160.1
+ARG CODEX_VERSION=0.162.1
 # renovate: datasource=npm depName=tsx
 ARG TSX_VERSION=4.23.15
 # ── pnpm ── prose ABOVE the annotation on purpose (see the warning above).
