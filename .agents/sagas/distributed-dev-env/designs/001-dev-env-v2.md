@@ -2519,15 +2519,37 @@ writer ownership through its execution and final rescue writes. The first core
 refuses post-launch rescue until the following stop-proof unit is implemented;
 source presence is not acceptance of real shared resume or cleanup.
 
-For that next unit, stop the shared supervisor without deleting its pod/volumes,
-retain the exact old pod and verify every container genuinely Terminated under
-RestartPolicyNever. A distinct bounded hold-rescue pod receives controller-issued
-proof bound to workspace/task/session/old pod UID, acquires the writer lock and
-checks the owner record. It may write a stopped receipt only after its owned
-bundle and final Git writes are verified. Cleanup follows rescue. Missing,
-deleted, partitioned or otherwise uncertain executors remain blocked. Existing
-private-session behavior stays unchanged. Catalog/rules, managed Codex execution,
-retained remote hosts, refresh and explicit transfer remain subsequent units.
+**Shared stop and rescue source unit.** A private stop request is serialized with
+final agent admission. The supervisor stops and exits while its exact executor
+pod and volumes remain. Shared executors use RestartPolicyNever. The controller
+uses uncached reads to verify the original pod UID and session owner, no pending
+deletion, and genuine current termination with finished timestamps for every
+admitted regular, init and ephemeral container. Containers that can restart are
+refused. The original node must be Ready and its matching node-UID Lease must
+have renewed within forty seconds, without a future timestamp. Deleted, missing,
+partitioned or otherwise uncertain executors remain blocked.
+
+A distinct UID-derived hold pod keeps the original executor present. Required
+node affinity places the hold on the verified original node through the normal
+scheduler, preserving existing constraints and allowing its retained RWO home
+to mount there. The hold itself is idle; each bounded rescue invocation receives
+new controller-verified proof on stdin, capped at 16KiB. Its initial environment
+binds the old executor and cannot substitute for fresh proof on a later retry.
+Writer and common-Git locks protect only this task's owned rescue. A stopped
+receipt follows verified bundles and the final Git writes. SourcePodUID records
+the original executor separately from the hold pod that performed rescue.
+
+The controller rechecks the old pod, node and Lease after rescue before accepting
+its result. Failed or uncertain rescue retains both pods and volumes; a later
+retry receives fresh proof. A verified rescue is durable before deleting the
+hold, and the hold must actually disappear before deleting the original pod.
+Archive and finalizer guards cover both names. Deployment requires the generated
+CRD before the new operator, cluster-scoped Node GET, and Lease GET in
+kube-node-lease; no list, watch or node mutation is needed for this verifier.
+
+Source and synthetic fixtures do not establish live shared lifecycle acceptance.
+Catalog/rules, managed Codex execution, retained remote hosts, refresh and explicit
+transfer remain subsequent units. Private-session behavior stays unchanged.
 
 ### 6.7 Remote Control and phone sessions
 
