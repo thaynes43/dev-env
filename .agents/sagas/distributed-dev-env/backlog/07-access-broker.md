@@ -85,8 +85,9 @@ In this repo:
   /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0` on a Proxmox
   node, installs the token in the pod, and deletes it at expiry. No new Proxmox user,
   and the long-lived operator token is not needed by v2. The keeper needs port 22 to
-  the nodes. D-69 defines the disabled-by-default backend. Until owner trust, standing
-  policies and acceptance pass, Proxmox grants remain refused. General hw-ssh
+  the nodes. D-69 defines the disabled-by-default backend. PVE node trust is now
+  installed; key-pair validation, private targets/host keys/egress, standing policies
+  and provider acceptance still gate Proxmox grants. General hw-ssh
   additionally needs P-19's copied-certificate/connection contract.
   The Proxmox code is built under D-69 with broker and keeper minting disabled
   by default. It includes immutable UID-bound jobs, a keeper-only durable journal,

@@ -55,6 +55,10 @@ peer Git status cap. [Issue #130](https://github.com/thaynes43/dev-env/issues/13
 holds the specific diagnosis and next bounded proposal. No third run or normal
 workspace rollout follows automatically. Neither task advances composite parity
 rows by itself; provider/rule/host/fencing and household acceptance remain open.
+Source-only [#131](https://github.com/thaynes43/dev-env/pull/131), `191b8c9e`,
+now preserves timed-out command measurements in failure receipts. Its finite
+simulated checks passed; this revised helper has not run in the cluster and does
+not resolve the slow Git operation.
 
 The independent stale-start fix is **shipped**: dev-env #124 merged
 `759f084f`, release #123 produced **2.9.1** at `b6c0f3c`, and publish-agent run
@@ -123,8 +127,9 @@ and migrate callers before retiring it through GitOps. No approval route or blan
 standing admin access is selected. The existing owner requirements remain. The
 Q-19 owner storage step is complete: Tom confirmed both fresh CA fields saved
 in the existing `HaynesKube/dev-env` item (D-72). Instructions are in DESIGN-001
-section 6.12. Node trust and keeper projection/activation remain pending; send
-no values in chat.
+section 6.12. Projection and delegated PVE trust are now delivered, as recorded
+above. Key-pair validation, configuration and provider acceptance still gate
+activation; send no values in chat.
 
 ## State on 2026-10-08
 
@@ -171,9 +176,10 @@ no values in chat.
     presence/ADC permission checks and read-only Omni/API calls, then was rescued
     and removed. PVE LAN access and the remaining service checks still block
     full closure. D-69's Proxmox backend is built with minting disabled: broker
-    jobs, keeper SSH/journal/cleanup and typed agentd/PVE support. CA projection,
-    owner node trust, standing policies and real provider acceptance still block its
-    activation. General hw-ssh also needs P-19's connection/revocation contract.
+    jobs, keeper SSH/journal/cleanup and typed agentd/PVE support. Key-pair validation,
+    private targets/host keys/egress, standing policies and real provider acceptance
+    still block its activation. General hw-ssh also needs P-19's connection/revocation
+    contract. See the 2026-10-09 delivery checkpoint above for installed node trust.
     No approval implementation choice blocks this work. Q-16 was ruled on 2026-10-08
     (parity first; approvals inside the Claude Code app), and PR #90 and haynes-ops
     #3550 were closed because their Pushover and web approval surface is ruled out.

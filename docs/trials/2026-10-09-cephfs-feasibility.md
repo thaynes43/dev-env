@@ -192,6 +192,12 @@ relax budgets, change Git detection semantics or switch storage to obtain a
 pass. Provider/rules, two-host auth, task fencing, real workloads, household
 tails and node/storage-failure recovery still need their own acceptance.
 
+Source-only [#131](https://github.com/thaynes43/dev-env/pull/131), merged
+`191b8c9e`, fixes the missing timed-out-command measurement in failure receipts.
+Finite simulated checks cover the original exception, elapsed/effective cap and
+bounded partial output. No third cluster run or deployment occurred; the slow
+Git operation and workspace acceptance remain unresolved.
+
 Keeper CA projection and Q-22's delegated five-node trust are separately
 delivered with minting disabled. Certificate/provider acceptance remains open.
 
