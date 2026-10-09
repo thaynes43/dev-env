@@ -3451,9 +3451,10 @@ minting remains disabled.
 Do not add the fields to v1's consumed Secrets or session profiles.
 
 Owner instructions: open a terminal on a trusted Mac or Linux computer and paste
-the whole block below from any working directory. It creates a fresh private
-folder under the owner's home and prints its location; all generated files stay
-there until the owner has saved them. The keeper loads the key unattended, so
+the whole block below from any working directory. It creates the private folder
+`dev-env-keeper-ca` under the owner's home and prints its location; all generated
+files stay there until the owner has saved them. If that folder already exists,
+the block stops before key generation. The keeper loads the key unattended, so
 the private key has an empty passphrase.
 
 ```bash
@@ -3461,7 +3462,8 @@ the private key has an empty passphrase.
   set -eu
   set -o pipefail
   umask 077
-  ca_dir="$(mktemp -d "$HOME/dev-env-keeper-ca.XXXXXX")"
+  ca_dir="$HOME/dev-env-keeper-ca"
+  mkdir -m 700 "$ca_dir"
   ssh-keygen -q -t ed25519 -N '' -C dev-env-keeper-ssh-ca \
     -f "$ca_dir/ssh_ca"
   base64 < "$ca_dir/ssh_ca" | tr -d '\r\n' \
@@ -3477,8 +3479,15 @@ Open the files locally and add these exact fields to the existing item:
 | `SSH_CA_PRIVATE_KEY_B64` | Entire `private-key.b64` file; concealed field |
 | `SSH_CA_PUBLIC_KEY` | Entire `ssh_ca.pub` public-key line |
 
-Verify both fields saved before removing the local private-key files. Send only
-saved confirmation in chat, never key contents. The existing Proxmox `dev-env`
+After verifying both fields saved, paste this second block to remove the two
+local private-key files. It keeps `ssh_ca.pub` for the subsequent node-trust step:
+
+```bash
+rm -- "$HOME/dev-env-keeper-ca/ssh_ca" \
+  "$HOME/dev-env-keeper-ca/private-key.b64"
+```
+
+Send only saved confirmation in chat, never key contents. The existing Proxmox `dev-env`
 accounts and sudo access are reused; accepting the fresh CA with the required
 principal/command restrictions and keeper host-key trust remains a subsequent
 provisioning step. No owner completion is claimed and minting remains disabled.
