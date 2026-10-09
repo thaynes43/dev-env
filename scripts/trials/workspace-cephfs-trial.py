@@ -118,7 +118,7 @@ class StatusTrace:
     """
     def __init__(self):
         self.read_fd, self.write_fd = os.pipe()
-        self.file = tempfile.TemporaryFile(dir='/tmp')
+        self.file = tempfile.TemporaryFile(dir='/tmp',buffering=0)
         self.stop = threading.Event()
         self.total = 0
         self.kept = 0
@@ -143,8 +143,15 @@ class StatusTrace:
                     break
                 self.total += len(chunk)
                 retained = chunk[:max(0, 65536-self.kept)]
-                self.file.write(retained)
-                self.kept += len(retained)
+                if not self.error:
+                    try:
+                        self.file.write(retained)
+                        self.kept += len(retained)
+                    except (OSError, ValueError):
+                        # Retention is an observer. Keep draining/discarding
+                        # until Git's owner stops it; never SIGPIPE live Git
+                        # because the private diagnostic file failed.
+                        self.error = True
                 if self.stop.is_set():
                     drained_after_stop += len(chunk)
                     if drained_after_stop >= 65536:
@@ -162,10 +169,17 @@ class StatusTrace:
         if self.thread.is_alive():
             self.file.close()
             return {'available':False, 'reason':'bounded Trace2 collector did not finish'}
-        self.file.seek(0)
+        try:
+            self.file.seek(0)
+            raw = self.file.read(65536)
+        except (OSError, ValueError):
+            self.error = True
+            raw = b''
+        finally:
+            self.file.close()
         events = []
         event_count = 0
-        for line in self.file.read(65536).splitlines():
+        for line in raw.splitlines():
             try:
                 native = json.loads(line)
             except (ValueError, UnicodeDecodeError):
@@ -190,7 +204,6 @@ class StatusTrace:
             event_count += 1
             events.append(event)
             events = events[-48:]
-        self.file.close()
         return {'available':not self.error and self.total > 0,
                 'nativeBytes':self.total, 'retainedBytes':self.kept,
                 'byteCap':65536, 'truncated':self.total > self.kept,

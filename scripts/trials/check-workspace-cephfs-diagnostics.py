@@ -51,6 +51,28 @@ finished = past_deadline.finish()
 assert finished['available'] and finished['events'][0]['label'] == 'refresh'
 assert past_deadline.file.closed and not past_deadline.thread.is_alive()
 
+# A private retention failure must not close the live writer's pipe. The native
+# collector keeps draining/discarding; only EOF/owner finish may end its lifetime.
+write_failed = threading.Event()
+class FailedRetention:
+    def __init__(self):
+        self.file = tempfile.TemporaryFile(dir='/tmp',buffering=0)
+    def write(self,value):
+        write_failed.set()
+        raise OSError('injected synthetic retention failure')
+    def __getattr__(self,name):
+        return getattr(self.file,name)
+ns['tempfile'] = SimpleNamespace(TemporaryFile=lambda **kwargs:FailedRetention())
+failed_retention = ns['StatusTrace']()
+assert os.write(failed_retention.write_fd,payload) == len(payload)
+assert write_failed.wait(timeout=2), 'retention failure was not exercised'
+assert os.write(failed_retention.write_fd,payload) == len(payload), 'observer closed live writer'
+discarded = failed_retention.finish()
+assert discarded['available'] is False and discarded['nativeBytes'] == 2*len(payload)
+assert discarded['retainedBytes'] == 0 and failed_retention.file.closed
+assert not failed_retention.thread.is_alive()
+ns['tempfile'] = tempfile
+
 # Exercise the actual early-return cleanup branch with an inert stuck-thread
 # stand-in; its read fd is owned and cleaned by this stand-in, never another writer.
 stuck = object.__new__(ns['StatusTrace'])
@@ -179,6 +201,7 @@ assert len(ns['DIAGNOSTIC_METADATA']['indexStatSamples']) == 2
 assert ns['PHASES']['build-done']['value']['installArchiveSeconds'] == 0.5
 print(json.dumps({'result':'PASS','checks':['64KiB native Trace2/48 sanitized events',
     'past-global-deadline reader preserves writer until owner finish',
+    'retention write failure discards without closing live writer',
     'join-timeout branch closes native temporary file',
     'own cgroup resolution and unavailable result','original timeout/argv/global cap unchanged',
     'child CPU and own throttling deltas survive timeout','exact staged/untracked WIP unchanged',

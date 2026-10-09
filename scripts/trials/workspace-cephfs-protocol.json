@@ -38,7 +38,7 @@
     "gitOptionalLocks": "0",
     "trace2PrivateFileByteCap": 65536,
     "trace2ReceiptEventCapPerCommand": 48,
-    "trace2Lifecycle": "reader remains open until bounded command owner terminates/reaps Git; after owner stop at most64KiB additional drain,0.5s join, early-return file close; truncation/unavailability explicit",
+    "trace2Lifecycle": "reader remains open until bounded command owner terminates/reaps Git, discarding if private retention writes fail; after owner stop at most64KiB additional drain,0.5s join, early-return file close; truncation/unavailability explicit",
     "trace2ReceiptFields": ["event", "category", "label", "key", "t_abs", "t_rel", "nesting", "code", "numeric value"],
     "trace2Excluded": ["SID/hostname", "argv", "config/environment values", "absolute paths"],
     "cpuMeasurements": ["RUSAGE_CHILDREN user/system deltas", "resolved own cgroup-v2 cpu.stat deltas and cpu.max; unavailable is explicit"],
