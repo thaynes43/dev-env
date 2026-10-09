@@ -165,6 +165,26 @@ ns['subprocess'].run = successful_run
 assert ns['run'](argv) is normal
 assert ns['MEASUREMENTS'][1]['seconds'] == 0.25 and ns['MEASUREMENTS'][1]['exit'] == 0
 assert trace_mock.finishes == 2
+clock = iter([100,101])
+child = iter([SimpleNamespace(ru_utime=0,ru_stime=0),SimpleNamespace(ru_utime=0.01,ru_stime=0.02)])
+cgroups = iter([before,after])
+interrupted = TimeoutError('fixture deadline or termination')
+def interrupted_run(actual,**kwargs):
+    assert actual == argv and kwargs['timeout'] == 15 and kwargs['pass_fds'] == (7,)
+    raise interrupted
+ns['subprocess'].run = interrupted_run
+try:
+    ns['run'](argv)
+except TimeoutError as observed:
+    assert observed is interrupted
+else:
+    raise AssertionError('helper interruption was replaced')
+record = ns['MEASUREMENTS'][2]
+assert len(ns['MEASUREMENTS']) == 3 and record['argv'] == argv
+assert record['seconds'] == 1 and record['effectiveTimeoutSeconds'] == 15
+assert record['exit'] is None and record['errorType'] == 'TimeoutError'
+assert record['cpu']['childUserSeconds'] == 0.01 and record['cpu']['childSystemSeconds'] == 0.02
+assert record['trace2']['events'][0]['label'] == 'refresh' and trace_mock.finishes == 3
 unavailable = ns['cpu_delta'](SimpleNamespace(ru_utime=0,ru_stime=0),
                             SimpleNamespace(ru_utime=0,ru_stime=0),None,None)
 assert unavailable['ownCgroupV2']['available'] is False
@@ -205,5 +225,6 @@ print(json.dumps({'result':'PASS','checks':['64KiB native Trace2/48 sanitized ev
     'join-timeout branch closes native temporary file',
     'own cgroup resolution and unavailable result','original timeout/argv/global cap unchanged',
     'child CPU and own throttling deltas survive timeout','exact staged/untracked WIP unchanged',
+    'original helper interruption retains in-flight command/CPU/Trace2 and rethrows',
     'two-path stat samples deduplicated after status','bulk phase durations retained'],
     'runtime':'fixed pipe payload and mocks only; no Git fixture or cluster'}))
