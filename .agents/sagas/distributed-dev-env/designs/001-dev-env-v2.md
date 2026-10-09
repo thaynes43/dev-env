@@ -2382,6 +2382,43 @@ that storage class: S-7 measured the v1 pod's disk.
 The "canonical clones are fetch-only" rule needs no enforcement any more: each
 clone belongs to one session.
 
+**D-73 (2026-10-09 America/New_York). Fresh branch creation fails closed on a
+failed clone refresh; verified workspace recovery preserves unfinished work.**
+
+The workflow/session audit found that a clone surviving interrupted bootstrap
+could fail its fetch and still create the first session branch from cached refs.
+Private storage prevents cross-session sharing; it does not establish that a
+cached remote ref is current. Agentd now distinguishes new source selection from
+recovery:
+
+- A new remote-based branch requires a successful clone or refresh. Resolve the
+  selected base to a commit SHA before `worktree add`; a moving remote ref cannot
+  change that start commit between resolution and creation.
+- Existing worktrees are reused only after their Git common directory, valid
+  commit HEAD and path match the intended session. A different current branch
+  or detached HEAD is reported as a warning, not overwritten or rejected:
+  deliberate checkouts, rebase and bisect are legitimate task state. Refuse a
+  foreign clone/path or broken HEAD without changing files. Preserve in-progress
+  Git operations and never reset/rebase WIP on resume.
+- A surviving session branch can recreate its worktree at its existing tip.
+  Failed refresh is a warning in these recovery paths; neither the configured
+  old base nor a repeat rescue import overrides retained work.
+- A saved launch whose worktree and session branch are both missing fails with
+  restoration instructions. It must not resume an old conversation on a newly
+  manufactured branch from today's source.
+- An intentional rescue restore can use its freshly verified imported
+  `refs/rescued/*` base while remote refresh is unavailable. This is historical
+  recovery, not a claim of current remote source; unrelated cached refs do not
+  qualify. Bundle checksum, verification and exact imported ref checks apply.
+
+Task provenance, v1 shared-reference locks, stable `/work/codex` project homes
+and phone/app launch integration remain proposed work in
+[plan 11](../backlog/11-project-workspaces.md). The high-level
+[workflow guide](../../../../docs/workflow-guide.md) describes their contract.
+Tom requested those paths and stale-repository protection on 2026-10-09; Q-20
+clarifies which app registers them. No v1 rollout or client registration is
+performed by the agentd fix.
+
 ### 6.7 Remote Control and phone sessions
 
 - `remote` mode is opt-in per session, as `--interactive` is today. Tom's rule stands
@@ -4517,6 +4554,7 @@ blocks only the step it names.
 | Q-17 | Does Tom's laptop already have a working admin kubeconfig for the main cluster? D-05 requires it for the external CLI path; the cluster's human ServiceAccount, CA ConfigMap and operator Service already exist, but the laptop configuration has not been checked. | **A. Use an existing admin context (was recommended):** verify its context and operator Service read locally, then use it for the external check. No new cluster identity. **B. Set up laptop cluster access first:** Tom or his laptop agent configures an admin kubeconfig through the existing owner access path. No credential values are sent to this chat or committed. | **Withdrawn 2026-10-08: Tom corrected the premise.** He would use a CLI such as `agent-run`, ask agents to start sessions, or consider a web UI for session management. Neither prerequisite option was chosen. No laptop setup or test blocks plan 02; acceptance uses the existing in-cluster CLI and agent-created sessions. D-68 remains an optional external path, with no claim of a real external-machine acceptance run. A web UI is an option, not an instruction to build one now. Q-16's approval and parity rulings remain in force. |
 | Q-18 | Which approval route should plan 07 pursue for capabilities beyond today's v1 tier? [R-03](../research/R-03-claude-code-approvals.md) verified hook schemas and managed permission controls, but no route yet proves an isolated phone decision. Ordinary relays are forgeable; guarded execution still needs phone, complete authority, shared OAuth and parity tests. | **A. Staged guarded approver (recommended):** pursue a separate Claude Code control workload after plan 03's keeper-owned login and Remote Control core. Additional human-gated capabilities stay disabled until phone/receipt/isolation tests pass without reducing parity. **B. Coordinator soft gate:** use a Claude Code coordinator relay with explicit acceptance that its agent can forge the answer; less infrastructure, no independent human-provenance boundary. **C. Standing grants only for now:** finish parity and SSH minting, and defer the human path; capabilities beyond today's tier remain unavailable. | **Earlier prompt withdrawn by the coordinator, 2026-10-08, after Tom's baseline correction.** No route or blanket direct cluster-admin grant is selected. Preserve effective parity and existing owner rules. The withdrawal does not mean Tom chose to defer approvals; it removes a question built on an incomplete baseline. Parity and keeper provisioning continue. |
 | Q-19 | Can Tom provision the fresh keeper SSH CA in the agreed 1Password location, or does he need generation instructions? This is the first owner step already required by the work order and D-69, not a new approval of Q-15 A. | **A. Provision and confirm saved (recommended):** fresh unencrypted Ed25519 OpenSSH CA in vault `HaynesKube`, item `dev-env-ssh-ca`, fields `SSH_CA_PRIVATE_KEY_B64` (base64 private-key file) and `SSH_CA_PUBLIC_KEY` (public-key line). **B. Request generation instructions:** walk through that same owner step. Never send values to the coordinator chat. | **Complete by owner confirmation, 2026-10-08 America/New_York.** After receiving instructions, Tom confirmed both CA fields saved. D-72 corrects the originally proposed item to existing `HaynesKube/dev-env`. No values were sent to or read by the coordinator; format and delivery validation are still pending. Do not ask to generate/store the CA again. Keeper minting remains disabled. Node trust and activation are subsequent steps. |
+| Q-20 | Which app should register the proposed v1 `/work/codex/<project>` folders? Tom requested Codex session management but also named Claude Code when describing project links. | **A. Codex/ChatGPT (recommended):** stable project homes for Codex chats, with separate task worktrees; Claude Code keeps its existing launcher. **B. Both:** share project discovery and fresh repository references, while keeping provider sessions and task worktrees separate. **C. Claude Code only:** document Codex's session path separately; the folder links apply to Claude Code. | **Asked 2026-10-09 America/New_York; awaiting clarification.** This identifies the intended client; it authorizes no daemon restart, shared refresh-token owner or v1 rollout. The workflow guide can proceed with the folder/session contract marked as a proposal. |
 
 ## 16. Decisions settled in this design
 
@@ -4594,3 +4632,4 @@ blocks only the step it names.
 | D-70 | Effective parity includes accepted Headlamp cluster-admin and GitOps paths. The five proposed extra Kubernetes categories are existing reachable powers; direct grants, expiry and attribution improve the mechanism. Q-18's earlier prompt is withdrawn, with no approval route or blanket direct admin grant selected. | 6.12 |
 | D-71 | Tom's target: replace Headlamp with guarded access preserving accepted v1 tasks and owner rules; prove parity and guardrails, migrate callers, then retire Headlamp through GitOps. No approval implementation or blanket standing admin grant is selected. | 6.12 |
 | D-72 | Reuse existing `HaynesKube/dev-env` for the fresh keeper CA. Current mappings select explicit fields; a separate keeper-only Secret will select the CA fields. Q-19 storage is owner-confirmed complete; projection, node trust and acceptance remain pending. | 6.12 |
+| D-73 | New remote-based branch creation requires a successful clone/refresh and uses a pinned commit. Verify existing clone/path/HEAD identity, warn on changed branch or detached state, preserve WIP/branch recovery, fail when saved-launch workspace and branch are lost, and separate verified historical rescue restore from current remote source. Broader project/client integration remains plan 11. | 6.6 |

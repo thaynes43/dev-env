@@ -3,6 +3,11 @@
 Guidance for Claude Code and other agents working in this repository. Codex reads
 `AGENTS.md`, which points here: this file is the one source of the rules.
 
+The [workflow guide](docs/workflow-guide.md) gives the high-level feature set,
+working quick start, Codex session model, freshness contract and delivery gates.
+The proposed v1 project homes and remaining client protections are tracked in
+[plan 11](.agents/sagas/distributed-dev-env/backlog/11-project-workspaces.md).
+
 **Start with [`.agents/HANDOFF.md`](.agents/HANDOFF.md).** It gives the current
 state, what happens next, where every file is, the ruling index, and what an agent
 can and cannot do outside the cluster.

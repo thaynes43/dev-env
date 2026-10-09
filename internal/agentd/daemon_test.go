@@ -148,6 +148,9 @@ func TestDaemonBootsStartsAndReports(t *testing.T) {
 // and the first launch stays as it was.
 func TestDaemonResumesALaunchedSession(t *testing.T) {
 	r := newDaemonRig(t, map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "static"})
+	if _, step := PrepareRepo(context.Background(), r.d.R, r.d.S, r.d.Session); step.State != StepOK {
+		t.Fatal(step.Notes)
+	}
 	first := Launch{Session: "demo-1006-160000", Prompt: "p", ConversationID: "11111111-2222-4333-8444-555555555555", BootID: "earlier", CreatedAt: time.Now().Add(-time.Hour)}
 	if err := writeJSONFile(r.d.S.statePath(launchFile), first); err != nil {
 		t.Fatal(err)
@@ -183,6 +186,9 @@ func TestDaemonResumesALaunchedSession(t *testing.T) {
 // so, and nothing starts.
 func TestDaemonCannotResumeWithoutAConversation(t *testing.T) {
 	r := newDaemonRig(t, map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "static"})
+	if _, step := PrepareRepo(context.Background(), r.d.R, r.d.S, r.d.Session); step.State != StepOK {
+		t.Fatal(step.Notes)
+	}
 	if err := writeJSONFile(r.d.S.statePath(launchFile), Launch{BootID: "earlier", CreatedAt: time.Now().Add(-time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
@@ -196,6 +202,41 @@ func TestDaemonCannotResumeWithoutAConversation(t *testing.T) {
 	}
 	if st, _ := r.beats.last(); st.Agent.State != protocol.AgentFailed || !strings.Contains(st.Agent.Error, "no conversation id") {
 		t.Errorf("agent = %+v", st.Agent)
+	}
+}
+
+func TestDaemonRefusesResumeAfterWorkspaceAndBranchLoss(t *testing.T) {
+	r := newDaemonRig(t, map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "static"})
+	ws, step := PrepareRepo(context.Background(), r.d.R, r.d.S, r.d.Session)
+	if step.State != StepOK {
+		t.Fatal(step.Notes)
+	}
+	first := Launch{Session: r.d.Session.Name, ConversationID: "11111111-2222-4333-8444-555555555555", BootID: "earlier"}
+	if err := writeJSONFile(r.d.S.statePath(launchFile), first); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, r.g.env, ws.Clone, "worktree", "remove", ws.Worktree)
+	gitRun(t, r.g.env, ws.Clone, "branch", "-D", ws.Branch)
+	stop := r.start(t)
+	waitFor(t, func() bool { st, _ := r.beats.last(); return st.Boot == protocol.BootFailed })
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if r.tmuxStarted() || exists(ws.Worktree) || exists(r.d.S.statePath(resumeFile)) {
+		t.Error("lost workspace was recreated or its old conversation resumed")
+	}
+	if refs := gitRun(t, r.g.env, ws.Clone, "for-each-ref", "--format=%(refname)", "refs/heads/"+ws.Branch); refs != "" {
+		t.Errorf("lost session branch was recreated: %s", refs)
+	}
+	var boot bootRecord
+	if err := readJSONFile(r.d.S.statePath(bootFile), &boot); err != nil || !slices.ContainsFunc(boot.Steps, func(step Step) bool {
+		return step.Name == "repo" && strings.Contains(strings.Join(step.Notes, "\n"), "restore its saved work in a new session")
+	}) {
+		t.Errorf("boot failed without a restore instruction: %v %+v", err, boot)
+	}
+	var kept Launch
+	if err := readJSONFile(r.d.S.statePath(launchFile), &kept); err != nil || kept.ConversationID != first.ConversationID || kept.BootID != "earlier" {
+		t.Errorf("first launch record changed: %v %+v", err, kept)
 	}
 }
 
