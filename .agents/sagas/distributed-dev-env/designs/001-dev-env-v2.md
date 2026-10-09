@@ -3622,6 +3622,16 @@ authentication, private targets/pinned host keys/egress/policies and actual
 mint/install/expiry/recovery/revocation acceptance remain pending. This does
 not close P-14/P-15/P-18 or the general hardware certificate contract.
 
+**Local CA validation:** `dev-env-keeper validate-ssh-ca` exits before the normal
+keeper's Kubernetes, journal, leadership or network initialization. It reads one
+projected CA generation through the same bounded parser as SSH issuance, checks
+an unencrypted Ed25519 private key and one matching plain public key, and emits
+only versioned validation booleans and predefined failure codes. It enables no
+grant and performs no certificate/provider operation. Execute it only inside
+the keeper after the signed image is deployed; private CA material stays there.
+Source checks use synthetic keys; live pair validation and provider acceptance
+remain separate delivery checkpoints.
+
 **D-26. Approvals: a Pushover link to an approval page behind Authentik.**
 
 **Superseded by Q-16, 2026-10-08.** The following is historical design, not a

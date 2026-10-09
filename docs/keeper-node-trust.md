@@ -23,6 +23,15 @@ restart counts were preserved. No key values were exposed.
 
 Certificate authentication and private/public pair validation are still pending.
 Standing-key success does not prove those checks. PVE minting remains disabled.
+The new `dev-env-keeper validate-ssh-ca` command checks only the local saved
+private/public pair and exits before Kubernetes, journal or network setup.
+Run it inside the keeper after its reviewed image is deployed; never copy the
+CA out to run the check. The command defaults to `/etc/dev-env-keeper/ssh-ca`,
+prints only validation booleans and a predefined failure code, and returns
+nonzero for missing, invalid, encrypted, wrong-type or mismatched material.
+The validator's source checks use synthetic keys. Live pair validation remains
+pending until that deployment and in-keeper execution are recorded.
+
 The reviewed automation is retained under
 [`scripts/keeper-node-trust/`](https://github.com/thaynes43/haynes-ops/tree/main/scripts/keeper-node-trust).
 Its guarded rollback refuses later edits rather than replacing them. The manual

@@ -17,6 +17,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -33,6 +34,9 @@ import (
 const binaryName = "dev-env-keeper"
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "validate-ssh-ca" {
+		os.Exit(validateSSHCA(os.Args[2:], os.Stdout))
+	}
 	if len(os.Args) == 2 && (os.Args[1] == "version" || os.Args[1] == "--version") {
 		fmt.Println(version.Get().String(binaryName))
 		return
@@ -41,6 +45,22 @@ func main() {
 		_, _ = fmt.Fprintf(os.Stderr, "%s: %v\n", binaryName, err)
 		os.Exit(1)
 	}
+}
+
+// validateSSHCA exits before the normal keeper's Kubernetes and credential setup.
+// Flag parsing and validation errors are represented only by fixed failure codes.
+func validateSSHCA(args []string, out io.Writer) int {
+	result := keeper.SSHCAValidation{Version: 1, FailureCode: keeper.SSHCAInvalidArguments}
+	fs := flag.NewFlagSet("validate-ssh-ca", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	caDir := fs.String("ssh-ca-dir", keeper.DefaultSSHCAPath, "local CA projection")
+	if fs.Parse(args) == nil && fs.NArg() == 0 && *caDir != "" {
+		result = keeper.ValidateSSHCA(*caDir)
+	}
+	if json.NewEncoder(out).Encode(result) != nil || !result.Valid {
+		return 1
+	}
+	return 0
 }
 
 type options struct {

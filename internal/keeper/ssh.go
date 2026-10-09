@@ -11,7 +11,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -80,32 +79,9 @@ func readBoundedFile(path string, limit int64) ([]byte, error) {
 	return raw, nil
 }
 func (s *NativeSSH) trust() (*sshTrust, error) {
-	// Resolve the projected mount once, keeping the private/public pair in one
-	// generation while ExternalSecret atomically rotates its ..data link.
-	dir, err := filepath.EvalSymlinks(s.CADir)
-	if err != nil {
-		return nil, errors.New("SSH CA files are unavailable")
-	}
-	// Kubernetes projected volumes keep the generation behind ..data. Plain test
-	// directories have no ..data; those still read one stable directory.
-	if generation, e := filepath.EvalSymlinks(filepath.Join(dir, "..data")); e == nil {
-		dir = generation
-	}
-	raw, err := readBoundedFile(filepath.Join(dir, "private-key"), 16<<10)
+	ca, _, err := loadSSHCA(s.CADir)
 	if err != nil {
 		return nil, err
-	}
-	ca, err := ssh.ParsePrivateKey(raw)
-	if err != nil || ca.PublicKey().Type() != ssh.KeyAlgoED25519 {
-		return nil, errors.New("SSH CA must be an unencrypted Ed25519 private key")
-	}
-	pubraw, err := readBoundedFile(filepath.Join(dir, "public-key"), 8<<10)
-	if err != nil {
-		return nil, err
-	}
-	pub, _, opts, rest, err := ssh.ParseAuthorizedKey(pubraw)
-	if err != nil || len(opts) > 0 || len(bytes.TrimSpace(rest)) > 0 || !bytes.Equal(pub.Marshal(), ca.PublicKey().Marshal()) {
-		return nil, errors.New("SSH CA public and private keys do not match")
 	}
 	targetraw, err := readBoundedFile(s.TargetsFile, 8<<10)
 	if err != nil {
