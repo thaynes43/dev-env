@@ -132,6 +132,9 @@ func TestProjectSyncIdempotentFreshAnchorsAndPreservedPeer(t *testing.T) {
 	}
 	anchor := filepath.Join(s.Home, "codex", "sample", "demo")
 	first := gitRun(t, g.env, anchor, "rev-parse", "HEAD")
+	if gitRun(t, g.env, s.ClonePath("demo"), "config", "--local", "--get", "gc.auto") != "0" || gitRun(t, g.env, s.ClonePath("demo"), "config", "--local", "--get", "maintenance.auto") != "false" {
+		t.Fatal("native task Git can automatically maintain shared metadata")
+	}
 	agents, err := os.ReadFile(filepath.Join(s.Home, "codex", "sample", "AGENTS.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -339,8 +342,17 @@ func TestProjectCloneStagingPreservation(t *testing.T) {
 				r.cloneFailure = "empty"
 			}
 			report := syncProjectFixture(t, s, r, c)
-			if !slices.ContainsFunc(report.Findings, func(f ProjectFinding) bool { return f.Path == s.ClonePath("demo") && f.State == "preserved" }) {
+			state := "staging-preserved"
+			if scenario == "no staging" {
+				state = "preserved"
+			}
+			if !slices.ContainsFunc(report.Findings, func(f ProjectFinding) bool { return f.Path == s.ClonePath("demo") && f.State == state }) {
 				t.Fatal("failed clone not reported")
+			}
+			if !slices.ContainsFunc(report.Findings, func(f ProjectFinding) bool {
+				return f.Path == filepath.Join(s.Home, "codex", "sample") && f.State == "partial"
+			}) {
+				t.Fatal("failed repository was reported as whole-project ready")
 			}
 			want := cloneAttempts
 			switch scenario {
@@ -484,21 +496,39 @@ func TestProjectSyncPreservesExistingGitRoot(t *testing.T) {
 	}
 }
 
-func TestProjectLockSetReleasesPartialAcquisition(t *testing.T) {
-	_, s, _, _ := projectFixture(t)
-	unlock, err := workspaceAdminLock(context.Background(), s, "z")
+func TestProjectPerRepositoryBudgetsAndPartialSuccess(t *testing.T) {
+	_, s, r, _ := projectFixture(t)
+	c, err := projectcatalog.Parse([]byte(`{"version":1,"repositories":{"demo":{"github":"fixture/demo"},"other":{"github":"fixture/other"}},"projects":{"sample":{"repositories":[{"name":"demo"},{"name":"other"}],"rules":""}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	if _, err := workspaceAdminLocks(ctx, s, []string{"z", "a"}); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatal("uncertain multi-lock acquisition accepted")
+	var deadlines []time.Time
+	recorded := &contextRecordingRunner{Runner: r, onRun: func(ctx context.Context, cmd Cmd) {
+		if slices.Contains(cmd.Args, "clone") {
+			deadline, ok := ctx.Deadline()
+			if !ok || time.Until(deadline) > sharedGitPrepareBudget {
+				t.Fatal("clone has no per-repository Git holder bound")
+			}
+			deadlines = append(deadlines, deadline)
+			if slices.Contains(cmd.Args, "https://github.com/fixture/other") {
+				r.cloneFailure = "partial"
+			}
+		}
+	}}
+	report := syncProjectFixture(t, s, recorded, c)
+	if len(deadlines) != 2 || !deadlines[1].After(deadlines[0]) {
+		t.Fatal("repositories share a single shrinking Git deadline")
 	}
-	free, err := workspaceAdminLock(context.Background(), s, "a")
-	if err != nil {
-		t.Fatal("partial set retained a lock", err)
+	root := filepath.Join(s.Home, "codex", "sample")
+	if !slices.ContainsFunc(report.Findings, func(f ProjectFinding) bool { return f.Path == filepath.Join(root, "demo") && f.State == "ready" }) {
+		t.Fatal("successful repository was not retained")
 	}
-	free()
+	if !slices.ContainsFunc(report.Findings, func(f ProjectFinding) bool { return f.Path == s.ClonePath("other") && f.State == "staging-preserved" }) {
+		t.Fatal("partial staging does not have a distinct operator result")
+	}
+	if !slices.ContainsFunc(report.Findings, func(f ProjectFinding) bool {
+		return f.Path == root && f.State == "partial" && strings.Contains(f.Detail, "1 of 2")
+	}) {
+		t.Fatal("one successful repo became whole-project ready")
+	}
 }

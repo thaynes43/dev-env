@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -74,7 +75,7 @@ func SyncProjects(ctx context.Context, r Runner, s Settings, catalog *projectcat
 		if err != nil {
 			return report, err
 		}
-		findings, err := syncProject(ctx, r, s, snapshot, global)
+		findings, err := syncProject(ctx, r, s, catalog, snapshot, global)
 		report.Findings = append(report.Findings, findings...)
 		if err != nil {
 			add(filepath.Join(s.Home, "codex", name), "preserved", err.Error())
@@ -86,68 +87,114 @@ func SyncProjects(ctx context.Context, r Runner, s Settings, catalog *projectcat
 	return report, nil
 }
 
-func syncProject(ctx context.Context, r Runner, s Settings, snapshot projectcatalog.Snapshot, global map[string]projectcatalog.Repository) ([]ProjectFinding, error) {
-	// Sorted repo names prevent deadlock when projects share references.
-	repos := snapshot.Repositories()
-	names := make([]string, 0, len(repos))
-	for _, repo := range repos {
-		names = append(names, repo.Name)
-	}
-	unlock, err := workspaceAdminLocks(ctx, s, names)
+func withProjectAdmin(ctx context.Context, s Settings, repo string, run func(context.Context) error) error {
+	unlock, err := workspaceAdminLock(ctx, s, repo)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer unlock()
 	ctx, cancel := context.WithTimeout(ctx, sharedGitPrepareBudget)
 	defer cancel()
 	if err := workspaceStoragePreflight(s); err != nil {
-		return nil, err
+		return err
 	}
+	return run(ctx)
+}
+
+func syncProject(ctx context.Context, r Runner, s Settings, catalog *projectcatalog.Catalog, snapshot projectcatalog.Snapshot, global map[string]projectcatalog.Repository) ([]ProjectFinding, error) {
+	repos := snapshot.Repositories()
+	primary := repos[0].Name
 	root := filepath.Join(s.Home, "codex", snapshot.Project())
-	if err := ensurePlainProjectRoot(root); err != nil {
+	if err := withProjectAdmin(ctx, s, primary, func(context.Context) error { return ensurePlainProjectRoot(root) }); err != nil {
 		return nil, err
 	}
 	var findings []ProjectFinding
+	ready := 0
 	for _, repo := range repos {
 		clone := s.ClonePath(repo.Name)
-		canonical := global[repo.Name]
-		target, fetched, err := syncProjectReference(ctx, r, s, canonical, &findings)
-		if err != nil {
-			findings = append(findings, ProjectFinding{clone, "preserved", err.Error()})
-			continue
-		}
-		findings = append(findings, ProjectFinding{clone, "healthy", "fresh target " + target})
-		if repo.DefaultBranch != canonical.DefaultBranch {
-			target, fetched, err = fetchProjectTarget(ctx, r, s, repo)
+		err := withProjectAdmin(ctx, s, repo.Name, func(ctx context.Context) error {
+			if err := ensurePlainProjectRoot(root); err != nil {
+				return err
+			}
+			canonical := global[repo.Name]
+			target, fetched, err := syncProjectReference(ctx, r, s, canonical, &findings)
 			if err != nil {
-				findings = append(findings, ProjectFinding{clone, "preserved", err.Error()})
-				continue
+				return err
+			}
+			findings = append(findings, ProjectFinding{clone, "healthy", "fresh target " + target})
+			if repo.DefaultBranch != canonical.DefaultBranch {
+				target, fetched, err = fetchProjectTarget(ctx, r, s, repo)
+				if err != nil {
+					return err
+				}
+			}
+			anchor := filepath.Join(root, repo.Name)
+			if err := syncProjectAnchor(ctx, r, s, repo, anchor, target); err != nil {
+				findings = append(findings, ProjectFinding{anchor, "preserved", err.Error()})
+				return nil
+			}
+			ready++
+			findings = append(findings, ProjectFinding{anchor, "ready", "detached at " + target + " fetched " + fetched.Format(time.RFC3339Nano)})
+			return nil
+		})
+		if err != nil {
+			state := "preserved"
+			var staging *projectStagingPreserved
+			if errors.As(err, &staging) {
+				state = "staging-preserved"
+			}
+			findings = append(findings, ProjectFinding{clone, state, err.Error()})
+		}
+		if ctx.Err() != nil {
+			return findings, ctx.Err()
+		}
+	}
+	// Publication is serialized by the deterministic primary's existing Git
+	// lock. A future server must serialize accepted catalog replacement across
+	// this operation; no client revision or new filesystem lock has authority.
+	err := withProjectAdmin(ctx, s, primary, func(context.Context) error {
+		if err := ensurePlainProjectRoot(root); err != nil {
+			return err
+		}
+		accepted, err := catalog.ProjectSnapshot(snapshot.Project())
+		if err != nil {
+			return err
+		}
+		before, err := json.Marshal(snapshot)
+		if err != nil {
+			return err
+		}
+		now, err := json.Marshal(accepted)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(before, now) {
+			return errors.New("accepted project snapshot changed before publication")
+		}
+		declared := []string{"AGENTS.md", "CLAUDE.md"}
+		for _, repo := range repos {
+			declared = append(declared, repo.Name)
+		}
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if !slices.Contains(declared, entry.Name()) {
+				findings = append(findings, ProjectFinding{filepath.Join(root, entry.Name()), "undeclared", "preserved"})
 			}
 		}
-		anchor := filepath.Join(root, repo.Name)
-		if err := syncProjectAnchor(ctx, r, s, repo, anchor, target); err != nil {
-			findings = append(findings, ProjectFinding{anchor, "preserved", err.Error()})
-		} else {
-			findings = append(findings, ProjectFinding{anchor, "ready", "detached at " + target + " fetched " + fetched.Format(time.RFC3339Nano)})
+		if err := writeProjectWrappers(s, accepted, root); err != nil {
+			return err
 		}
-	}
-	declared := []string{"AGENTS.md", "CLAUDE.md"}
-	for _, repo := range repos {
-		declared = append(declared, repo.Name)
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return findings, err
-	}
-	for _, entry := range entries {
-		if !slices.Contains(declared, entry.Name()) {
-			findings = append(findings, ProjectFinding{filepath.Join(root, entry.Name()), "undeclared", "preserved"})
+		state := "partial"
+		if ready == len(repos) {
+			state = "ready"
 		}
-	}
-	if err := writeProjectWrappers(s, snapshot, root); err != nil {
-		return findings, err
-	}
-	return findings, nil
+		findings = append(findings, ProjectFinding{root, state, fmt.Sprintf("%d of %d repository anchors ready at catalog %s", ready, len(repos), accepted.CatalogRevision())})
+		return nil
+	})
+	return findings, err
 }
 
 func ensurePlainProjectRoot(root string) error {
@@ -175,7 +222,7 @@ func ensurePlainProjectRoot(root string) error {
 
 func projectGit(ctx context.Context, r Runner, s Settings, dir string, args ...string) (string, error) {
 	// Administrative checkouts do not execute a clone's local hooks or fsmonitor.
-	full := append([]string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"}, args...)
+	full := append([]string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.fsync=reference", "-c", "core.fsyncMethod=fsync", "-c", "core.useReplaceRefs=false"}, args...)
 	return s.git(ctx, r, dir, full...)
 }
 
@@ -203,13 +250,19 @@ func validateProjectReference(ctx context.Context, r Runner, s Settings, repo pr
 	return nil
 }
 
+type projectStagingPreserved struct{ path, reason string }
+
+func (e *projectStagingPreserved) Error() string {
+	return e.reason + "; staging preserved at " + e.path + "; inspect it before another clone attempt"
+}
+
 func cloneProjectReference(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository) error {
 	clone := s.ClonePath(repo.Name)
 	tmp := filepath.Join(s.ReposDir(), "."+repo.Name+".agentd-clone")
 	for attempt := 0; attempt < cloneAttempts; attempt++ {
 		// Never delete an earlier or failed partial clone, even on retry.
 		if _, err := os.Lstat(tmp); !errors.Is(err, os.ErrNotExist) {
-			return errors.New("reference clone staging exists or is uncertain; preserved")
+			return &projectStagingPreserved{tmp, "reference clone staging exists or is uncertain"}
 		}
 		if _, err := os.Lstat(clone); !errors.Is(err, os.ErrNotExist) {
 			return errors.New("reference destination exists or is uncertain; preserved")
@@ -217,15 +270,21 @@ func cloneProjectReference(ctx context.Context, r Runner, s Settings, repo proje
 		_, err := r.Run(ctx, Cmd{Name: "git", Args: []string{"-c", "core.hooksPath=/dev/null", "clone", "--filter=blob:none", "--quiet", "--branch", repo.DefaultBranch, repo.URL(), tmp}, Env: gitEnv})
 		if err == nil {
 			if err := noSymlinkComponents(filepath.Join(tmp, ".git")); err != nil {
-				return err
+				return &projectStagingPreserved{tmp, "successful clone has uncertain Git administration"}
+			}
+			if err := configureSharedGitPolicy(ctx, r, s, tmp); err != nil {
+				return &projectStagingPreserved{tmp, "clone configuration cannot be safely provisioned"}
 			}
 			if _, err := os.Lstat(clone); !errors.Is(err, os.ErrNotExist) {
-				return errors.New("reference destination appeared; staging preserved")
+				return &projectStagingPreserved{tmp, "reference destination appeared"}
 			}
-			return os.Rename(tmp, clone)
+			if err := os.Rename(tmp, clone); err != nil {
+				return &projectStagingPreserved{tmp, "reference publication failed"}
+			}
+			return nil
 		}
 		if _, stagingErr := os.Lstat(tmp); !errors.Is(stagingErr, os.ErrNotExist) {
-			return errors.New("clone failed and staging was preserved")
+			return &projectStagingPreserved{tmp, "clone failed"}
 		}
 		if attempt == cloneAttempts-1 {
 			return errors.New("bounded reference clone attempts failed")
@@ -249,6 +308,9 @@ func syncProjectReference(ctx context.Context, r Runner, s Settings, repo projec
 	if err := validateProjectReference(ctx, r, s, repo); err != nil {
 		return "", time.Time{}, err
 	}
+	if err := configureSharedGitPolicy(ctx, r, s, clone); err != nil {
+		return "", time.Time{}, err
+	}
 	target, fetched, err := fetchProjectTarget(ctx, r, s, repo)
 	if err != nil {
 		return "", fetched, err
@@ -261,7 +323,7 @@ func syncProjectReference(ctx context.Context, r Runner, s Settings, repo projec
 
 func fetchProjectTarget(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository) (string, time.Time, error) {
 	ref := "refs/remotes/origin/" + repo.DefaultBranch
-	if _, err := projectGit(ctx, r, s, s.ClonePath(repo.Name), "fetch", "--no-tags", "origin", "+refs/heads/"+repo.DefaultBranch+":"+ref); err != nil {
+	if _, err := projectGit(ctx, r, s, s.ClonePath(repo.Name), "fetch", "--no-auto-maintenance", "--no-prune", "--no-recurse-submodules", "--no-tags", "origin", "+refs/heads/"+repo.DefaultBranch+":"+ref); err != nil {
 		return "", time.Time{}, errors.New("fresh reference fetch failed; preserved")
 	}
 	fetched := time.Now().UTC()
@@ -333,7 +395,7 @@ func projectIndexProof(ctx context.Context, r Runner, s Settings, dir string) (s
 			return "", errors.New("tracked path is missing or has symlink components; preserved")
 		}
 		fi, err := os.Lstat(fullPath)
-		if err != nil || !fi.Mode().IsRegular() || (fi.Mode().Perm()&0o111 != 0) != (fields[0] == "100755") {
+		if err != nil || !fi.Mode().IsRegular() || (fi.Mode().Perm()&0o100 != 0) != (fields[0] == "100755") {
 			return "", errors.New("tracked file mode differs from index; preserved")
 		}
 		paths.WriteString(path)

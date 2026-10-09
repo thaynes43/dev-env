@@ -438,7 +438,7 @@ func TestSharedPrepareBoundsGitAndHonorsCallerCancellation(t *testing.T) {
 	var deadline time.Time
 	fake := &fakeRunner{handle: func(c Cmd) (Result, error) { return r.Run(context.Background(), c) }}
 	bounded := &contextRecordingRunner{Runner: fake, onRun: func(runCtx context.Context, c Cmd) {
-		if len(c.Args) > 2 && c.Args[2] == "fetch" {
+		if slices.Contains(c.Args, "fetch") {
 			var ok bool
 			deadline, ok = runCtx.Deadline()
 			if !ok || time.Until(deadline) > sharedGitPrepareBudget {

@@ -67,6 +67,8 @@ func TestCatalogRejectsUntrustedShapes(t *testing.T) {
 		"unknown nested":        strings.Replace(validCatalog, `"github":"owner/demo"`, `"github":"owner/demo","path":"/tmp"`, 1),
 		"duplicate top":         strings.Replace(validCatalog, `"version":1`, `"version":1,"version":1`, 1),
 		"escaped duplicate":     strings.Replace(validCatalog, `"github":"owner/demo"`, `"github":"owner/demo","\u0067ithub":"owner/demo"`, 1),
+		"case alias duplicate":  strings.Replace(validCatalog, `"github":"owner/demo"`, `"github":"owner/demo","GitHub":"foreign/demo"`, 1),
+		"single case alias":     strings.Replace(validCatalog, `"defaultBranch":"stable"`, `"defaultbranch":"stable"`, 1),
 		"duplicate identity":    strings.Replace(validCatalog, "owner/other", "OWNER/DEMO", 1),
 		"credentials":           strings.Replace(validCatalog, "owner/demo", "https://user:pass@github.com/owner/demo", 1),
 		"path name":             strings.Replace(validCatalog, `"sample":`, `"../sample":`, 1),
@@ -167,6 +169,14 @@ func TestSavedSnapshotRejectsMissingRulesAndChangedRuleDigest(t *testing.T) {
 	}
 	if _, err := ParseSnapshot(data); err == nil {
 		t.Fatal("saved rules digest mismatch accepted")
+	}
+	original, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliased := strings.Replace(string(original), `"rules":`, `"Rules":"shadowed","rules":`, 1)
+	if _, err := ParseSnapshot([]byte(aliased)); err == nil {
+		t.Fatal("saved snapshot accepts case-insensitive rule alias")
 	}
 }
 

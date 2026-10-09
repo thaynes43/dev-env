@@ -16,6 +16,10 @@ import (
 // gitEnv keeps git from ever waiting on a terminal prompt.
 var gitEnv = []string{"GIT_TERMINAL_PROMPT=0"}
 
+// A shared command must not start implicit repository-wide maintenance. Git
+// propagates these command options to its internal promisor fetches too.
+var sharedGitPolicyArgs = []string{"-c", "gc.auto=0", "-c", "maintenance.auto=false"}
+
 // cloneAttempts and cloneBackoff bound the clone's retries: S-7 measured every
 // repo under 25 s, so three tries cover a passing network blip.
 var (
@@ -36,7 +40,11 @@ var sleepFunc = func(ctx context.Context, d time.Duration) error {
 }
 
 func (s Settings) git(ctx context.Context, r Runner, dir string, args ...string) (string, error) {
-	full := append([]string{"-C", dir}, args...)
+	full := []string{"-C", dir}
+	if s.WorkspaceID != "" {
+		full = append(full, sharedGitPolicyArgs...)
+	}
+	full = append(full, args...)
 	res, err := r.Run(ctx, Cmd{Name: "git", Args: full, Env: gitEnv})
 	if err != nil {
 		var ce *CmdError
@@ -47,6 +55,36 @@ func (s Settings) git(ctx context.Context, r Runner, dir string, args ...string)
 		return "", err
 	}
 	return strings.TrimSpace(string(res.Stdout)), nil
+}
+
+// Managed references retain this local policy for native task Git commands,
+// whose commits otherwise may implicitly prune shared worktree registration.
+// Call only while holding the common-Git administrative lock (or before a new
+// staging clone is published). Private clone behavior remains unchanged.
+func configureSharedGitPolicy(ctx context.Context, r Runner, s Settings, clone string) error {
+	if s.WorkspaceID == "" {
+		return nil
+	}
+	config := filepath.Join(clone, ".git", "config")
+	if err := noSymlinkComponents(config); err != nil {
+		return err
+	}
+	fi, err := os.Lstat(config)
+	if err != nil || !fi.Mode().IsRegular() {
+		return errors.New("shared Git configuration is not a regular file")
+	}
+	for _, policy := range [][2]string{{"gc.auto", "0"}, {"maintenance.auto", "false"}} {
+		current, err := s.git(ctx, r, clone, "config", "--local", "--get", policy[0])
+		if err != nil && ExitCodeOf(err) != 1 {
+			return err
+		}
+		if current != policy[1] {
+			if _, err := s.git(ctx, r, clone, "config", "--local", "--replace-all", policy[0], policy[1]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // PrepareRepo is boot step 2 (DESIGN-001 3.6, D-15): a partial clone into
@@ -93,7 +131,14 @@ func PrepareRepo(ctx context.Context, r Runner, s Settings, sess protocol.Sessio
 	var fetchErr error
 
 	if _, err := os.Stat(filepath.Join(ws.Clone, ".git")); err == nil {
-		if _, fetchErr = s.git(ctx, r, ws.Clone, "fetch", "--prune", "origin"); fetchErr == nil {
+		if err := configureSharedGitPolicy(ctx, r, s, ws.Clone); err != nil {
+			return ws, newStep(name, notes, err)
+		}
+		fetchArgs := []string{"fetch", "--prune", "origin"}
+		if s.WorkspaceID != "" {
+			fetchArgs = []string{"fetch", "--no-auto-maintenance", "--no-prune", "origin"}
+		}
+		if _, fetchErr = s.git(ctx, r, ws.Clone, fetchArgs...); fetchErr == nil {
 			notes = append(notes, "reused the clone and fetched origin")
 		}
 	} else {
@@ -163,6 +208,9 @@ func cloneRepo(ctx context.Context, r Runner, s Settings, repo, dst string) (tim
 		start := time.Now()
 		_, err := r.Run(ctx, Cmd{Name: "git", Args: []string{"clone", "--filter=blob:none", "--quiet", s.RemoteURL(repo), tmp}, Env: gitEnv})
 		if err == nil {
+			if err := configureSharedGitPolicy(ctx, r, s, tmp); err != nil {
+				return 0, err
+			}
 			if err := os.Rename(tmp, dst); err != nil {
 				return 0, err
 			}

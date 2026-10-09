@@ -12,7 +12,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -261,48 +260,19 @@ func workspaceFileLock(dir, name string) (func(), error) {
 // The key is the expected common Git directory, not the worktree's private
 // .git pointer. It also serializes the initial clone before that directory exists.
 func workspaceAdminLock(ctx context.Context, s Settings, repo string) (func(), error) {
-	return workspaceAdminLocks(ctx, s, []string{repo})
-}
-
-// Multi-repository project sync acquires the same administrative locks as task
-// preparation. Release a partial set before waiting: a queued peer must not
-// extend any already-held lock beyond the shared holder's Git budget.
-func workspaceAdminLocks(ctx context.Context, s Settings, repos []string) (func(), error) {
+	key := sha256.Sum256([]byte(filepath.Join(s.ClonePath(repo), ".git")))
 	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, sharedGitAdminBudget)
 	defer cancel()
-	names := make([]string, 0, len(repos))
-	repos = slices.Clone(repos)
-	slices.Sort(repos)
-	repos = slices.Compact(repos)
-	for _, repo := range repos {
-		key := sha256.Sum256([]byte(filepath.Join(s.ClonePath(repo), ".git")))
-		names = append(names, "git-"+hex.EncodeToString(key[:]))
-	}
-	// A set never waits while keeping earlier locks held.
+	name := "git-" + hex.EncodeToString(key[:])
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, workspaceAdminWaitFailure(caller, ctx)
 		}
-		var held []func()
-		release := func() {
-			for i := len(held) - 1; i >= 0; i-- {
-				held[i]()
-			}
-		}
-		var err error
-		for _, name := range names {
-			var unlock func()
-			unlock, err = workspaceLock(s, name)
-			if err != nil {
-				break
-			}
-			held = append(held, unlock)
-		}
+		unlock, err := workspaceLock(s, name)
 		if err == nil {
-			return release, nil
+			return unlock, nil
 		}
-		release()
 		if !errors.Is(err, syscall.EWOULDBLOCK) {
 			return nil, err
 		}

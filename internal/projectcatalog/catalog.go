@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -282,9 +283,68 @@ func decodeStrict(data []byte, dst any) error {
 	if _, err := d.Token(); !errors.Is(err, io.EOF) {
 		return errors.New("JSON must contain exactly one document")
 	}
+	var shape any
+	if err := json.Unmarshal(data, &shape); err != nil {
+		return err
+	}
+	if err := exactJSONFields(shape, reflect.TypeOf(dst)); err != nil {
+		return err
+	}
 	d = json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()
 	return d.Decode(dst)
+}
+
+// encoding/json accepts case-insensitive aliases for struct fields even with
+// DisallowUnknownFields. Require the exact schema tag before decoding, while
+// allowing dynamic map keys to be validated separately as repository names.
+func exactJSONFields(value any, schema reflect.Type) error {
+	for schema.Kind() == reflect.Pointer {
+		schema = schema.Elem()
+	}
+	switch schema.Kind() {
+	case reflect.Struct:
+		object, ok := value.(map[string]any)
+		if !ok {
+			return errors.New("JSON schema requires an object")
+		}
+		fields := map[string]reflect.Type{}
+		for i := 0; i < schema.NumField(); i++ {
+			field := schema.Field(i)
+			name := strings.Split(field.Tag.Get("json"), ",")[0]
+			fields[name] = field.Type
+		}
+		for key, nested := range object {
+			field, ok := fields[key]
+			if !ok {
+				return fmt.Errorf("unknown JSON field %q", key)
+			}
+			if err := exactJSONFields(nested, field); err != nil {
+				return err
+			}
+		}
+	case reflect.Map:
+		object, ok := value.(map[string]any)
+		if !ok {
+			return errors.New("JSON schema requires a map")
+		}
+		for _, nested := range object {
+			if err := exactJSONFields(nested, schema.Elem()); err != nil {
+				return err
+			}
+		}
+	case reflect.Slice:
+		array, ok := value.([]any)
+		if !ok {
+			return errors.New("JSON schema requires an array")
+		}
+		for _, nested := range array {
+			if err := exactJSONFields(nested, schema.Elem()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // Walk JSON tokens recursively before struct decoding (which otherwise accepts
