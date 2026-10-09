@@ -64,11 +64,26 @@ Starting or syncing a project creates missing references and anchors. It reports
 undeclared roots, dirty anchors and unsafe reference state while preserving them.
 It never removes a project because it disappeared from the declaration.
 
-`dev-env project sync` is the explicit v2 management operation. The first v2
-test must provide a verified v2 executable or alias without replacing v1's
-existing `agent-run` on PATH. The v2 launcher also accepts `--project`; a task
-in a multi-repository project selects one repository explicitly. The quick start
-will publish executable commands after the CLI/API route is built and tested.
+The v2 launcher has a task-only `--project` request field. The standalone server
+refuses these requests until its concrete catalog resolver is integrated, so a
+project request cannot silently create an ordinary private task. A project with
+one repository can omit `--repo`; a project with several must select one. An
+omitted `--base` uses the server's accepted default branch. An explicit base must
+match that default. Clients supply no rule text or catalog revision.
+
+The first v2 test must provide a verified v2 executable or alias without replacing
+v1's existing `agent-run` on PATH. The planned task command is:
+
+```sh
+/path/to/v2-agent-run --project dev-env -p 'Describe the task' \
+  --agent claude --model claude-opus-5-5 --effort xhigh \
+  --profile dev --size S --wait 0 -o json
+```
+
+This example describes the completed route; the current standalone server
+refusal and pending runtime acceptance mean it is not yet an owner quick-start
+command. Explicit project sync will use a bounded model-free management runner.
+Its production command and management route are the next source unit.
 
 `project add <name> <repo>...` is one operation: stage the declaration on an
 isolated branch, open a PR, complete its checks/review, merge through the normal
@@ -127,6 +142,15 @@ accepted-catalog check under the primary repository's same lock. Shared Git
 operations disable automatic maintenance and pruning so they cannot discard a
 peer's references. Task cleanup stays under `/home/dev/work`; global Git
 pruning cannot discard a temporarily unavailable project or peer worktree.
+
+The sync primitive requires a trusted reader for the configured accepted
+ConfigMap. Before Git writes, it captures the resource namespace, name, UID,
+resourceVersion and exact catalog bytes and confirms that the parsed catalog
+matches. Immediately before publishing a project's rules and receipt, it reads
+that same resource again under the primary repository lock. Changed identity,
+revision or bytes, or an unavailable read, preserves prepared work and refuses
+publication. A caller's matching hash is not a replacement for this authority.
+Production boot, daily and explicit runners still need to wire that reader.
 
 Health checks report wrong branch, detached HEAD, dirty index/files and behind
 state. Automatic repair needs a fresh fetched target, verified repository
