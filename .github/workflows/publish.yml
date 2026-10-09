@@ -46,6 +46,7 @@ on:
     # appears, for example an embedded directory.
     paths:
       - 'images/operator/**'
+      - 'images/codex-login/**'
       - 'images/THIRD_PARTY.md'
       - 'LICENSE'
       - 'cmd/**'
@@ -70,7 +71,17 @@ concurrency:
 
 jobs:
   operator:
-    name: Publish (operator)
+    name: Publish (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: operator
+            image: dev-env-operator
+            dockerfile: images/operator/Dockerfile
+          - name: codex-login
+            image: dev-env-codex-login
+            dockerfile: images/codex-login/Dockerfile
     # workflow_dispatch can be started on any branch; only main publishes.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -81,7 +92,7 @@ jobs:
       packages: write
       id-token: write # keyless cosign signing: proves the image came from THIS workflow
     env:
-      IMAGE: ghcr.io/${{ github.repository_owner }}/dev-env-operator
+      IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
       # The keyless signing identity: this workflow, on main. Used to sign-check and verify.
       IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/publish.yml@refs/heads/main
     steps:
@@ -146,7 +157,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          file: ./images/operator/Dockerfile
+          file: ./${{ matrix.dockerfile }}
           push: true
           provenance: false
           sbom: false
@@ -154,8 +165,8 @@ jobs:
           build-args: |
             COMMIT=${{ github.sha }}
             VERSION=${{ steps.meta.outputs.version }}
-          cache-from: type=gha,scope=dev-env-operator
-          cache-to: type=gha,mode=max,scope=dev-env-operator
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
 
       - name: Sign the image (keyless)
         env:

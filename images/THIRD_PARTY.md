@@ -1,7 +1,7 @@
 # Third-party software in the published images
 
-This repo's own code is MIT-licensed ([LICENSE](../LICENSE)). The two images it
-publishes also carry other people's software, and each component stays under its own
+This repo's own code is MIT-licensed ([LICENSE](../LICENSE)). Its published images
+also carry other people's software, and each component stays under its own
 license. This page lists them. The license that ships with each component is the one
 that governs; this list is a guide to it.
 
@@ -71,9 +71,22 @@ Claude Code.
 The source for the MPL-2.0 components is in their upstream repositories, at the tag
 the Dockerfile pins.
 
+## Codex login helper: `ghcr.io/thaynes43/dev-env-codex-login`
+
+Built from [`codex-login/Dockerfile`](codex-login/Dockerfile). This bounded helper
+contains the keeper control binary and pinned native Codex CLI for a fresh login
+ceremony. It contains no Claude Code or other agent-image tools.
+
+| Component | License | Notes |
+|---|---|---|
+| `dev-env-keeper` and its linked Go modules/runtime | MIT plus the module/runtime licenses listed for the operator image | This repo's helper control and the same keeper dependency inventory. |
+| Codex CLI | Apache-2.0 | [openai/codex](https://github.com/openai/codex); the pinned upstream `LICENSE` and `NOTICE` are retained under `/usr/share/licenses/codex/`. |
+| Node.js, npm and Yarn from `node:24-slim` | The component licenses listed for the agent base above | The helper uses the same pinned Node base. |
+| Debian base, `ca-certificates`, `curl` and their dependencies | Each package's own license | Copyright/license files remain under `/usr/share/doc/<package>/copyright`; Debian source archives are linked above. |
+
 ## Where the license texts are in the images
 
-Both images carry the same two paths for this repo's own material:
+Every image carries the same two paths for this repo's own material:
 
 * `/usr/share/doc/dev-env/LICENSE` and `/usr/share/doc/dev-env/THIRD_PARTY.md`: this
   repo's license and this page.
@@ -95,5 +108,5 @@ files, the BSL 1.1 text (`LICENSE`) and its client library's MPL-2.0 text
 `kubectl-cnpg` also keeps the `licenses/` tree of the modules it links. The npm
 packages and the Debian packages keep their own license files, as above.
 
-Both CI image jobs check that these paths exist, so a Dockerfile change that drops one
+The CI image jobs check that these paths exist, so a Dockerfile change that drops one
 fails the PR.

@@ -57,6 +57,10 @@ type Settings struct {
 	// JSON file with accountUuid and organizationUuid from the keeper's
 	// Secret. When it exists, agentd seeds oauthAccount in .claude.json.
 	OAuthAccountFile string
+	// CodexAccessFile opts into the keeper's single access.json projection.
+	// Empty leaves provider auth untouched; CodexHome stays host-private.
+	CodexAccessFile string
+	CodexHome       string
 	// HWSSHKeyB64 is the hw-ssh private key, base64 on one line
 	// (HW_SSH_PRIVATE_KEY_B64). A secret: never logged.
 	HWSSHKeyB64 string
@@ -118,6 +122,8 @@ func LoadSettings(getenv func(string) string) (Settings, error) {
 		PodUID:            getenv("DEV_ENV_POD_UID"),
 		StateDir:          filepath.Join(home, ".agentd"),
 		OAuthAccountFile:  getenv("AGENTD_OAUTH_ACCOUNT_FILE"),
+		CodexAccessFile:   getenv("AGENTD_CODEX_ACCESS_FILE"),
+		CodexHome:         or("CODEX_HOME", filepath.Join(home, ".codex")),
 		HWSSHKeyB64:       getenv("HW_SSH_PRIVATE_KEY_B64"),
 		UserBin:           filepath.Join(home, ".local", "bin"),
 		SystemBin:         "/usr/local/bin",

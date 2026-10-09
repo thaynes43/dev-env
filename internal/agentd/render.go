@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
@@ -46,7 +47,8 @@ func skipStep(name, why string) Step { return Step{Name: name, State: StepSkip, 
 // Render is boot step 1 (DESIGN-001 3.6), a port of v1's dev-init.sh: it links
 // and renders the GitOps config into the session's home. Every step is
 // idempotent, so a resume on the same volume runs it again. It never touches
-// the CLI's credentials file, ~/.codex/auth.json, history or caches.
+// provider history or caches. Codex auth changes only when its keeper access
+// projection is explicitly configured (D-78).
 //
 // Dropped from dev-init, because the agent image bakes them in (plan 01): the
 // Codex standalone and kubectl-cnpg downloads, and the agent-run,
@@ -65,6 +67,7 @@ func Render(ctx context.Context, r Runner, s Settings, sess protocol.Session) []
 		renderBypassPrompt(s),
 		renderCodexConfig(s, cfg),
 		renderCodexAgentsMD(s, cfg),
+		renderCodexAccess(s, time.Now()),
 		renderGit(ctx, r, s),
 		renderGHWrapper(s),
 		renderPlaywright(s),
