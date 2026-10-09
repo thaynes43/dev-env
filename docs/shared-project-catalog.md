@@ -1,14 +1,17 @@
 # Shared projects and task rules
 
-**Design contract for the first v2 test; implementation and live acceptance are
-pending.** A project is a permanent folder that both Claude Code and Codex can
+**Source contract for the first v2 test; live acceptance is pending.** A project
+is a permanent folder that both Claude Code and Codex can
 open. A task is a separately owned worktree created from freshly fetched source.
 The management API/controller performs lifecycle operations; a coordinator agent
 can request those operations. This does not select a new management app.
 
-Catalog/sync/snapshot primitives merged in [#145](https://github.com/thaynes43/dev-env/pull/145).
-Their management and provider integration remains in progress and disabled;
-live acceptance is pending.
+Catalog/sync/snapshot primitives merged in [#145](https://github.com/thaynes43/dev-env/pull/145),
+trusted catalog and CLI integration in [#150](https://github.com/thaynes43/dev-env/pull/150),
+and scoped managed tasks in [#152](https://github.com/thaynes43/dev-env/pull/152).
+The model-free [project preparation Job](project-sync-runner.md) connects the
+sync primitive to explicit runtime identity and named API reads. All new routes
+remain disabled by default; live acceptance is pending.
 
 ```mermaid
 flowchart TD
@@ -65,14 +68,15 @@ undeclared roots, dirty anchors and unsafe reference state while preserving them
 It never removes a project because it disappeared from the declaration.
 
 The v2 launcher has a task-only `--project` request field. The standalone server
-refuses these requests until its concrete catalog resolver is integrated, so a
-project request cannot silently create an ordinary private task. A project with
+resolves it through its explicitly enabled accepted-catalog binding and shared
+workspace template; missing configuration refuses creation. A project request
+cannot silently create an ordinary private task. A project with
 one repository can omit `--repo`; a project with several must select one. An
 omitted `--base` uses the server's accepted default branch. An explicit base must
 match that default. Clients supply no rule text or catalog revision.
 
 The first v2 test must provide a verified v2 executable or alias without replacing
-v1's existing `agent-run` on PATH. The planned task command is:
+v1's existing `agent-run` on PATH. The task command after runtime acceptance is:
 
 ```sh
 /path/to/v2-agent-run --project dev-env -p 'Describe the task' \
@@ -80,10 +84,9 @@ v1's existing `agent-run` on PATH. The planned task command is:
   --profile dev --size S --wait 0 -o json
 ```
 
-This example describes the completed route; the current standalone server
-refusal and pending runtime acceptance mean it is not yet an owner quick-start
-command. Explicit project sync will use a bounded model-free management runner.
-Its production command and management route are the next source unit.
+This example describes the source implementation. Pending runtime deployment
+and acceptance mean it is not yet an owner quick-start command. Explicit project
+sync uses the bounded model-free Job described in the linked runner guide.
 
 `project add <name> <repo>...` is one operation: stage the declaration on an
 isolated branch, open a PR, complete its checks/review, merge through the normal
@@ -150,7 +153,8 @@ matches. Immediately before publishing a project's rules and receipt, it reads
 that same resource again under the primary repository lock. Changed identity,
 revision or bytes, or an unavailable read, preserves prepared work and refuses
 publication. A caller's matching hash is not a replacement for this authority.
-Production boot, daily and explicit runners still need to wire that reader.
+The fixed project Job supplies that reader for boot, daily and explicit runs;
+deployment and scheduling remain pending storage acceptance.
 This check records the accepted revision at confirmation; it is not a transaction
 with a concurrent GitOps ConfigMap update. Materialized revisions remain explicit,
 and the management integration must handle later catalog changes.

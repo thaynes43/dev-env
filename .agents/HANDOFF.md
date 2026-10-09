@@ -16,22 +16,26 @@ Source work proceeds disabled by default while #130's storage diagnosis and
 acceptance are completed. V1 remains available; full parity and cutover gates
 still apply. Codex owns this work rather than leaving it for another implementer.
 
-**Actual keeper rollout, 2026-10-09:** signed auth source #138/#143 is enabled
-for the keeper only through haynes-ops #3679. Admission, exact artifact checks
-and offline CA validation passed; minting remains disabled. The first fresh
-device login failed before producing a challenge or adopting a credential
-generation. One bounded unauthenticated connection check and the realized
-Cilium DNS cache identified a search-suffix/exact-hostname policy mismatch.
-The keeper-only DNS correction and helper startup diagnostics are being fixed;
-no owner login answer is pending and no second native attempt has run. Failed
-staging was cleaned, six protected peers stayed unchanged, and the activity ended.
-Managed Codex sessions and the two remote hosts remain disabled.
+**Actual keeper rollout, 2026-10-09 23:46Z:** signed source #148 and haynes-ops
+#3687 delivered keeper-only DNS and login-helper corrections. Exact artifacts,
+admission and bounded connectivity checks passed; PVE minting remains disabled.
+The fresh native device login presented a challenge, then expired without
+credential adoption. Process-group absence, staging cleanup and reservation
+clearance were verified; auth status is `NeedsLogin`, protected peers stayed
+unchanged, and the activity ended. The owner prompt has no reply and its code
+has expired. Start a fresh ceremony when the owner is available, rather than
+reusing that code or automatically repeating login attempts. Managed Codex
+runtime sessions and the two remote hosts remain disabled.
 
-Strict-stop source #140 and catalog/rule primitives #145 are merged. Private-home
-retention #147 and the child-scoped API/managed Codex route are in progress. Node
-Yama policy prevents the syscall evidence prepared in #146; a separate in-process
-Git-marker fixture is being prepared for hosted CI. No new storage trial follows
-from these source changes. Resolve #130 and the independent real-client,
+Strict-stop #140, catalog/rules #145, private-home retention #147, project CLI
+and trusted catalog checks #150, and child-scoped API/managed Codex #152 are
+merged source units. The model-free project Job is under final source review;
+durable child decisions and retained Codex host supervision remain in progress.
+Node Yama policy prevents the syscall evidence prepared in #146. The separate
+in-process Git-marker fixture #149/#151 passed hosted checks and publication at
+source `0e0931ad`; independent signature/admission/telemetry checks remain before
+a bounded storage observation. No new storage trial follows automatically from
+these source changes. Resolve #130 and the independent real-client,
 lifecycle, host and phone gates before claiming the owner-test milestone.
 
 **Latest delivery checkpoint, 2026-10-09 22:13Z:** shared-workspace core #135

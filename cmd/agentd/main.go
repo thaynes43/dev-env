@@ -48,6 +48,8 @@ Commands:
                            volume is mounted, then wait until SIGTERM. The
                            operator lists and prunes rescues here by exec.
   render                   Render the GitOps config into $HOME (boot step 1).
+  project-sync --enabled   Run one explicitly configured, model-free GitOps Job
+                           to prepare declared shared references/project roots.
   ctl status               Print the session's status as JSON.
   ctl rescue [--stop-agent]
                            Commit every worktree's uncommitted work to a local

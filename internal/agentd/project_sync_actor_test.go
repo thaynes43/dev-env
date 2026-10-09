@@ -125,7 +125,7 @@ func TestProjectSyncGitIsPrivateStrictAndDoesNotRenderProviders(t *testing.T) {
 	}
 	gitRun(t, g.env, g.seed, "config", "core.askPass", "untrusted-shared-askpass")
 	askPass, err := guarded.Run(context.Background(), Cmd{Name: "git", Args: []string{"-C", g.seed, "config", "--get", "core.askPass"}})
-	if err != nil || strings.TrimSpace(askPass.Stdout) != "" {
+	if err != nil || strings.TrimSpace(string(askPass.Stdout)) != "" {
 		t.Fatal("repository configuration supplied a credential launcher")
 	}
 	hooks := filepath.Join(s.Home, "fixture-hooks")
