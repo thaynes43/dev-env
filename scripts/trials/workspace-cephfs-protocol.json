@@ -24,6 +24,7 @@
     "ordinaryCommandDeadlineSeconds": 15,
     "peerStartupBarrierDeadlineSeconds": 60,
     "initialHelperDeadlineSecondsIncludingStartup": 145,
+    "startupHeadroom": "The peer barrier consumes the original 145s total helper budget; the clock is never reset. Combined startup/phase duration can abort the fixture even if each individual phase cap is met. Such a run is incomplete, not a storage pass or rejection. Startup timing is separate from the ordinary15s command measurements.",
     "heldGitTransactionDeadlineSeconds": 35,
     "gitHookWaitDeadlineSeconds": 30,
     "sourceWriteAndInstallArchiveDeadlineSeconds": 30

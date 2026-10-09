@@ -34,6 +34,7 @@ ADMIN_LOCK = REF / '.git' / 'fixture-admin.lock'
 RUN_ID = 'workspace-cephfs-trial-20261009-v1'
 PROCESSES = []
 MEASUREMENTS = []
+STARTUP_METADATA = {}
 ENV = dict(os.environ)
 ENV.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null',
            GIT_TERMINAL_PROMPT='0', GIT_OPTIONAL_LOCKS='0', GIT_AUTHOR_NAME='CephFS fixture',
@@ -106,12 +107,16 @@ def startup_barrier():
     flag('ready-' + ROLE, {'podUID':os.environ['TRIAL_POD_UID'],
                           'node':os.environ['TRIAL_NODE']})
     start = time.monotonic()
-    ready = wait('ready-' + peer, timeout=60)
+    STARTUP_METADATA['budgetSeconds'] = 60
+    try:
+        ready = wait('ready-' + peer, timeout=60)
+    finally:
+        STARTUP_METADATA['seconds'] = time.monotonic()-start
+        STARTUP_METADATA['remainingHelperSeconds'] = max(0, DEADLINE-time.monotonic())
+    assert STARTUP_METADATA['seconds'] <= 60, 'peer startup barrier exceeded 60s'
     assert ready['podUID'] != os.environ['TRIAL_POD_UID']
     assert ready['node'] != os.environ['TRIAL_NODE'], 'peers require different nodes'
-    MEASUREMENTS.append({'operation':'peer-startup-barrier',
-                         'seconds':time.monotonic()-start, 'budgetSeconds':60,
-                         'peerPodUID':ready['podUID'], 'peerNode':ready['node']})
+    STARTUP_METADATA.update(peerPodUID=ready['podUID'], peerNode=ready['node'])
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -160,10 +165,11 @@ def wip(path):
 
 def receipt(checks, metadata):
     assert max([m['seconds'] for m in MEASUREMENTS] or [0]) <= 15
+    assert STARTUP_METADATA.get('seconds', 0) <= 60
     result = {'runID':RUN_ID, 'role':ROLE, 'podUID':os.environ['TRIAL_POD_UID'],
               'node':os.environ['TRIAL_NODE'], 'elapsedSeconds':time.monotonic()-START,
               'mounts':mounted_paths(), 'checks':checks, 'metadata':metadata,
-              'commands':MEASUREMENTS, 'caps':size_cap(),
+              'commands':MEASUREMENTS, 'startup':STARTUP_METADATA, 'caps':size_cap(),
               'scope':'synthetic storage/Git mechanics only; no platform fencing, real agent, auth, household/device latency or outage-recovery acceptance'}
     write_json(CONTROL/('result-'+ROLE+'.json'), result)
     print(json.dumps(result, sort_keys=True), flush=True)
@@ -388,6 +394,8 @@ except BaseException as error:
     print(json.dumps({'runID':RUN_ID,'role':ROLE,'result':'FAIL',
                       'podUID':os.environ['TRIAL_POD_UID'],
                       'node':os.environ['TRIAL_NODE'],'commands':MEASUREMENTS,
+                      'startup':STARTUP_METADATA,
+                      'remainingGlobalBudgetSeconds':max(0,DEADLINE-time.monotonic()),
                       'errorType':type(error).__name__,
                       'reason':str(error)[:160],'elapsedSeconds':time.monotonic()-START}),flush=True)
     raise SystemExit(1)
