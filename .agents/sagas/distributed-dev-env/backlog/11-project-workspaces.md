@@ -1,7 +1,8 @@
 # 11: shared projects, workspace freshness and remote pods
 
-**Status:** R1–R7 and ADR-002 accepted; the authorized CephFS trial produced two
-incomplete attempts, both cleaned up. Shared Git/storage acceptance is unproved.
+**Status:** R1–R7 and ADR-002 accepted; two feasibility attempts and the subsequent
+[cost diagnostic](../../../../docs/trials/2026-10-09-cephfs-cost-result.md) are
+incomplete and cleaned up. Shared Git/storage acceptance is unproved.
 [Issue #130](https://github.com/thaynes43/dev-env/issues/130) holds the slow peer
 Git check, evidence and next bounded diagnostic proposal. Workspace/client
 implementation and normal rollout remain gated. The separate v2 fresh-start bug fix shipped in agent
@@ -118,14 +119,16 @@ management UI and credential migration remain unselected.
 
 D-77 divides the implementation while runtime acceptance remains gated:
 
-1. Disabled shared mounts/identity, common Git locks, durable writer records and
+1. **Source merged #135 (`316c03c`):** disabled shared mounts/identity, common Git locks, durable writer records and
    owned-task rescue. Old private sessions retain their behavior. This initial
    core refuses post-launch shared rescue until the next unit supplies stop proof.
-2. Shared-only supervisor stop/preserve and a distinct bounded hold-rescue pod,
+2. **Source in review #140:** shared-only supervisor stop/preserve and a distinct bounded hold-rescue pod,
    with controller proof of the exact old executor's genuine termination before
-   any cleanup. Missing/deleted/partitioned owners remain refused.
+   any cleanup. Missing/deleted/partitioned owners remain refused. Shared
+   private-home archive/reap stays blocked until a retained-home detach route
+   preserves enrollment/history independently of task-only rescue.
 3. Catalog/API/CLI, fresh source and actual both-provider project/repo rule loading.
-4. Keeper-owned fresh Codex login/refresh/reload, two retained remote hosts and
+4. **Auth source merged #138 (`bcb2599`), runtime off:** keeper-owned fresh Codex login/refresh/reload, two retained remote hosts and
    managed Codex tasks; explicit transfer follows the proven stop contract.
 5. Complete storage, client, phone, lifecycle and cleanup acceptance for the
    [owner test milestone](../../../handoffs/2026-10-09-testable-v2.md).

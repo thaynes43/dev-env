@@ -1,6 +1,9 @@
 # Bounded cross-pod Git status diagnosis, 2026-10-09
 
-**Status: prepared; execution awaits the gates below.** This is the next
+**Status: executed once; incomplete and cleaned up.** The
+[cost result](2026-10-09-cephfs-cost-result.md) records the timeout, CPU/Trace2
+evidence and monitoring limits. The protocol below is the predeclared record;
+it does not authorize another run. This was the next
 diagnostic step for [#130](https://github.com/thaynes43/dev-env/issues/130), within
 Tom's accepted bounded CephFS trial and instruction to deliver an owner-testable
 v2. It measures the cause of the previous slow status operation. A completed

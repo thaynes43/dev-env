@@ -16,6 +16,25 @@ Source work proceeds disabled by default while #130's storage diagnosis and
 acceptance are completed. V1 remains available; full parity and cutover gates
 still apply. Codex owns this work rather than leaving it for another implementer.
 
+**Latest delivery checkpoint, 2026-10-09 21:30Z:** shared-workspace core #135
+merged `316c03c`; keeper-owned Codex auth #138 merged `bcb2599`. Both are source
+units with runtime opt-ins still off. Strict executor-stop rescue #140 is under
+review. Its private-home archive/reap is deliberately blocked: task-only rescue
+does not preserve provider enrollment/history. A retained-home detach route is
+still required before shared reap acceptance. Catalog/rule implementation follows
+[D-79](../docs/shared-project-catalog.md); managed Codex execution and two retained
+coordinator hosts remain unbuilt. No running agent or v1 restart follows from
+these source merges.
+
+The [third storage diagnostic result](../docs/trials/2026-10-09-cephfs-cost-result.md)
+is incomplete. Peer Git status timed out inside index refresh without CPU
+throttling; its exact filesystem wait is unproved. Normal UID-safe Job cleanup,
+GitOps claim/PV cleanup and a five-minute post-window completed; all seven
+protected pods were preserved and activity ended. Missing required telemetry and
+60–70s household sampling intervals keep household acceptance open. #139 fixes
+interrupted measurement receipts source-only. The older two-trial/prepared
+statements below are dated history; no further run launches automatically.
+
 ## Workflow guide, revised projects and shipped freshness, 2026-10-09
 
 Read the [workflow guide](../docs/workflow-guide.md) before further architecture

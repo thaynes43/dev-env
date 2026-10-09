@@ -30,6 +30,15 @@ paths. Unknown fields, duplicate identities, invalid branches and oversized
 documents are refused. The catalog revision is the digest of the exact accepted
 document; the rule revision is the digest of that project's exact rules.
 
+Version 1 has a `repositories` map keyed by repository name. Each entry contains
+`github` as `owner/name` and an optional `defaultBranch`. Its `projects` map has
+named entries containing a `repositories` list of repository names and optional
+branch overrides, plus `rules` as Markdown. Reject duplicate JSON keys as well
+as unknown fields. Limits are 256KiB per document, 64 projects, 128 repositories,
+16 repositories per project and 16KiB of rules per project. Names are single DNS
+components of at most 63 characters; Git branches cannot contain revision
+expressions. HTTPS clone URLs are derived from the validated GitHub identity.
+
 The initial catalog includes `dev-env` and the multi-repository `sigo-alumni`
 project. Its three repository names are `sigo-alumni`, `sigoalumni-org` and
 `sigmaphiomicron-com`. Their GitHub default branches were verified as `main` on
