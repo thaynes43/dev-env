@@ -323,6 +323,24 @@ spec:
                 - message: immutable after create; only operatingMode and lifecycle
                     may change
                   rule: self == oldSelf
+              workspace:
+                description: |-
+                  Workspace explicitly opts this session into a pre-provisioned workspace.
+                  Omission retains private repositories, even when later templates enable one.
+                properties:
+                  id:
+                    description: ID must match the enabled template and the mounted
+                      workspace marker.
+                    maxLength: 63
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                required:
+                - id
+                type: object
+                x-kubernetes-validations:
+                - message: immutable after create
+                  rule: self == oldSelf
             required:
             - agent
             - mode
@@ -361,7 +379,8 @@ spec:
                 == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller)
                 && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey)
                 == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits)
-                && has(self.restore) == has(oldSelf.restore)
+                && has(self.restore) == has(oldSelf.restore) && has(self.workspace)
+                == has(oldSelf.workspace)
           status:
             description: |-
               AgentSessionStatus is what the operator and agentd observed. Reconcile is

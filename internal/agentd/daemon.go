@@ -73,6 +73,14 @@ func (d *Daemon) now() time.Time {
 // operator sees why a session is not working.
 func (d *Daemon) Run(ctx context.Context) error {
 	d.expireCredentials()
+	writer, err := acquireWorkspaceWriter(ctx, d.R, d.S, d.Session, d.now())
+	if err != nil {
+		return fmt.Errorf("workspace writer admission: %w", err)
+	}
+	if writer != nil {
+		d.S.writer = writer
+		defer writer.unlock()
+	}
 	if err := os.MkdirAll(d.S.StateDir, 0o700); err != nil {
 		return fmt.Errorf("state dir: %w", err)
 	}
@@ -119,6 +127,9 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 		if err != nil {
 			return newStep(name, nil, err), err.Error()
 		}
+		if err := admitWorkspaceLaunch(d.S, d.Session, &l, d.now()); err != nil {
+			return newStep(name, nil, err), err.Error()
+		}
 		if err := StartAgent(ctx, d.R, d.S, l, d.Self); err != nil {
 			return newStep(name, nil, err), err.Error()
 		}
@@ -135,6 +146,9 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 	}
 	launch, err := BuildLaunch(d.S, d.Session, ws, bootID, d.now())
 	if err != nil {
+		return newStep(name, nil, err), err.Error()
+	}
+	if err := admitWorkspaceLaunch(d.S, d.Session, &launch, d.now()); err != nil {
 		return newStep(name, nil, err), err.Error()
 	}
 	if err := StartAgent(ctx, d.R, d.S, launch, d.Self); err != nil {

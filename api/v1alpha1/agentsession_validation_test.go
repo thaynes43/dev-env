@@ -426,6 +426,17 @@ func TestSpecImmutableExceptOperatingModeAndLifecycle(t *testing.T) {
 			s.Lifecycle = &v1alpha1.Lifecycle{IdleSuspendAfter: dur(24 * time.Hour)}
 		}, ""},
 		{"change repo", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Repo = "haynesnetwork" }, "spec.repo"},
+		{"add a workspace", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Workspace = &v1alpha1.WorkspaceSpec{ID: "projects-v2"} }, presence},
+		{"change workspace", func() *v1alpha1.AgentSession {
+			s := remoteSession()
+			s.Spec.Workspace = &v1alpha1.WorkspaceSpec{ID: "projects-v2"}
+			return s
+		}, func(s *v1alpha1.AgentSessionSpec) { s.Workspace.ID = "foreign" }, "spec.workspace"},
+		{"remove workspace", func() *v1alpha1.AgentSession {
+			s := remoteSession()
+			s.Spec.Workspace = &v1alpha1.WorkspaceSpec{ID: "projects-v2"}
+			return s
+		}, func(s *v1alpha1.AgentSessionSpec) { s.Workspace = nil }, presence},
 		{"change agent", remoteSession, func(s *v1alpha1.AgentSessionSpec) {
 			s.Agent, s.Model = v1alpha1.AgentCodex, "gpt-6-astra"
 		}, "spec.agent"},

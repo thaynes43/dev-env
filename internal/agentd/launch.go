@@ -39,7 +39,10 @@ const (
 // writes it, and the tmux pane reads it, so no prompt is ever quoted through a
 // shell (v1 passed it through `tmux send-keys`).
 type Launch struct {
-	Session string `json:"session"`
+	// WorkspaceOwner is the admitted writer generation. It is absent for
+	// every existing private workspace launch.
+	WorkspaceOwner *taskOwner `json:"workspaceOwner,omitempty"`
+	Session        string     `json:"session"`
 	// Argv is the agent CLI and its arguments. The prompt is not among them:
 	// it goes to the CLI's stdin.
 	Argv   []string `json:"argv"`

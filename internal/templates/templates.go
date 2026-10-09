@@ -44,16 +44,18 @@ const (
 // Paths the operator mounts itself. Template mounts may not sit at, above or below
 // any of them.
 const (
-	HomePath       = "/home/dev"
-	SharedPath     = "/home/dev/.shared"
-	TmpPath        = "/tmp"
-	APITokenDir    = "/var/run/secrets/dev-env"
-	ServiceAccount = "/var/run/secrets/kubernetes.io/serviceaccount"
-	GrantsPath     = protocol.GrantsDir
+	HomePath              = "/home/dev"
+	SharedPath            = "/home/dev/.shared"
+	TmpPath               = "/tmp"
+	APITokenDir           = "/var/run/secrets/dev-env"
+	ServiceAccount        = "/var/run/secrets/kubernetes.io/serviceaccount"
+	GrantsPath            = protocol.GrantsDir
+	WorkspaceMetadataPath = "/home/dev/.workspace"
+	WorkspaceIDEnv        = "AGENTD_WORKSPACE_ID"
 )
 
 // Volume names the operator uses itself.
-var reservedVolumeNames = []string{"home", "shared", "tmp", "api-token", "grants"}
+var reservedVolumeNames = []string{"home", "shared", "tmp", "api-token", "grants", "workspace"}
 
 // ReservedEnv are the environment variables the operator owns. The templates' env
 // may not name them. A Secret or ConfigMap in a profile's envFrom is not checked,
@@ -79,6 +81,7 @@ var ReservedEnv = []string{
 	// The static token goes to task and local pods only, never remote ones
 	// (DESIGN-001 6.1, 6.2), so only the operator places it: see Claude.
 	"CLAUDE_CODE_OAUTH_TOKEN",
+	WorkspaceIDEnv,
 }
 
 // Environment variables no session pod may set (DESIGN-001 6.2, "Environment
@@ -94,6 +97,9 @@ var forbiddenEnv = []string{
 
 // Templates is the parsed templates document.
 type Templates struct {
+	// Workspace is disabled by default. A matching immutable session opt-in
+	// is also required; existing private homes are never migrated implicitly.
+	Workspace *Workspace `json:"workspace,omitempty"`
 	// Image is the agent image, pinned by digest
 	// (ghcr.io/thaynes43/dev-env:2.0.3@sha256:...). Renovate bumps it.
 	Image string `json:"image"`
@@ -135,6 +141,13 @@ type Templates struct {
 	Lifecycle *Lifecycle `json:"lifecycle,omitempty"`
 
 	revision string
+}
+
+// Workspace names a retained, pre-provisioned claim. The operator only mounts it.
+type Workspace struct {
+	Enabled bool   `json:"enabled,omitempty"`
+	Claim   string `json:"claim,omitempty"`
+	ID      string `json:"id,omitempty"`
 }
 
 // Lifecycle is D-09's timers (DESIGN-001 4.3, D-60).
@@ -346,6 +359,19 @@ func (t *Templates) StorageClassFor(class v1alpha1.SizeClass) string {
 func (t *Templates) Validate() error {
 	var errs []error
 	add := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
+	if w := t.Workspace; w != nil {
+		if w.Enabled || w.Claim != "" || w.ID != "" {
+			if msgs := validation.IsDNS1123Subdomain(w.Claim); len(msgs) > 0 {
+				add("workspace.claim: %s", strings.Join(msgs, "; "))
+			}
+			if msgs := validation.IsDNS1123Label(w.ID); len(msgs) > 0 {
+				add("workspace.id: %s", strings.Join(msgs, "; "))
+			}
+			if w.Claim == t.SharedClaim {
+				add("workspace.claim must be separate from the rescue shelf")
+			}
+		}
+	}
 
 	if t.Image == "" {
 		add("image is empty")

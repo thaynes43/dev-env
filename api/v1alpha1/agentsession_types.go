@@ -126,8 +126,13 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.idempotencyKey) || has(self.caller)",message="idempotencyKey is for summoned sessions only: set caller and lane"
 // +kubebuilder:validation:XValidation:rule="!has(self.caller) || self.mode != 'local'",message="a summoned session runs in task or remote mode, never local"
 // +kubebuilder:validation:XValidation:rule="!has(self.caller) || (has(self.profile) && self.profile != 'full')",message="a summoned session names its profile, and it is never full (D-36)"
-// +kubebuilder:validation:XValidation:rule="has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort) && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size) && has(self.profile) == has(oldSelf.profile) && has(self.tools) == has(oldSelf.tools) && has(self.llm) == has(oldSelf.llm) && has(self.parent) == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller) && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey) == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits) && has(self.restore) == has(oldSelf.restore)",message="immutable after create: no spec field may be added or removed, except operatingMode and lifecycle"
+// +kubebuilder:validation:XValidation:rule="has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort) && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size) && has(self.profile) == has(oldSelf.profile) && has(self.tools) == has(oldSelf.tools) && has(self.llm) == has(oldSelf.llm) && has(self.parent) == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller) && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey) == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits) && has(self.restore) == has(oldSelf.restore) && has(self.workspace) == has(oldSelf.workspace)",message="immutable after create: no spec field may be added or removed, except operatingMode and lifecycle"
 type AgentSessionSpec struct {
+	// Workspace explicitly opts this session into a pre-provisioned workspace.
+	// Omission retains private repositories, even when later templates enable one.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create"
+	// +optional
+	Workspace *WorkspaceSpec `json:"workspace,omitempty"`
 	// Repo is the repository the session works in, for example haynes-ops: a
 	// name, not a path (it becomes a directory in the pod).
 	// +kubebuilder:validation:MinLength=1
@@ -272,6 +277,16 @@ type AgentSessionSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +optional
 	Restore string `json:"restore,omitempty"`
+}
+
+// WorkspaceSpec identifies retained workspace storage, never session-owned.
+type WorkspaceSpec struct {
+	// ID must match the enabled template and the mounted workspace marker.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +required
+	ID string `json:"id"`
 }
 
 // LLMSpec names the LLM pool an opencode session leases.

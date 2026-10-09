@@ -2,6 +2,7 @@ package templates
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -63,6 +64,33 @@ func TestParseExample(t *testing.T) {
 func TestParseNeedsTheKey(t *testing.T) {
 	if _, err := Parse(map[string]string{"other.yaml": example(t)}); err == nil || !strings.Contains(err.Error(), Key) {
 		t.Fatalf("want an error naming %s, got %v", Key, err)
+	}
+}
+
+func TestWorkspaceTemplateDisabledDefaultAndReservedBindings(t *testing.T) {
+	tmpl, err := parse(t, example(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tmpl.Workspace != nil {
+		t.Fatal("workspace enabled in existing templates")
+	}
+	for name, addition := range map[string]string{
+		"enabled without claim": "\nworkspace:\n  enabled: true\n  id: projects-v2\n",
+		"shelf reused":          "\nworkspace:\n  enabled: true\n  claim: dev-env-shared\n  id: projects-v2\n",
+		"foreign id":            "\nworkspace:\n  enabled: true\n  claim: retained-projects\n  id: ../wrong\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parse(t, example(t)+addition); err == nil {
+				t.Fatal("invalid workspace parsed")
+			}
+		})
+	}
+	if _, err := parse(t, example(t)+"\nworkspace:\n  enabled: false\n  claim: retained-projects\n  id: projects-v2\n"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(ReservedEnv, WorkspaceIDEnv) || !slices.Contains(reservedVolumeNames, "workspace") {
+		t.Fatal("workspace operator bindings are not reserved")
 	}
 }
 

@@ -55,6 +55,56 @@ func envOf(c corev1.Container, name string) *corev1.EnvVar {
 	return nil
 }
 
+func TestWorkspacePodRequiresBothOptInsAndRetainsPrivateHome(t *testing.T) {
+	tmpl := exampleTemplates(t)
+	s := taskSession()
+	tmpl.Workspace = &templates.Workspace{Enabled: true, Claim: "retained-projects", ID: "projects-v2"}
+	private, err := buildPod(s, tmpl, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if private.Name != s.Name || slices.ContainsFunc(private.Spec.Volumes, func(v corev1.Volume) bool { return v.Name == "workspace" }) {
+		t.Fatal("template change silently migrated a private session")
+	}
+	s.Spec.Workspace = &v1alpha1.WorkspaceSpec{ID: "projects-v2"}
+	shared, err := buildPod(s, tmpl, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shared.Name != private.Name || shared.Spec.Volumes[0].PersistentVolumeClaim.ClaimName != HomeClaimName(s.Name) {
+		t.Fatal("shared opt-in changed Pod identity or private home")
+	}
+	for _, sub := range []string{"repos", "codex", "work"} {
+		if !slices.ContainsFunc(shared.Spec.Containers[0].VolumeMounts, func(m corev1.VolumeMount) bool {
+			return m.Name == "workspace" && m.MountPath == "/home/dev/"+sub && m.SubPath == sub && !m.ReadOnly
+		}) {
+			t.Fatalf("missing literal mount %s", sub)
+		}
+	}
+	if !slices.ContainsFunc(shared.Spec.Containers[0].VolumeMounts, func(m corev1.VolumeMount) bool {
+		return m.Name == "workspace" && m.MountPath == templates.WorkspaceMetadataPath && m.SubPath == "metadata"
+	}) {
+		t.Fatal("missing marker/ownership metadata mount")
+	}
+	if got := envOf(shared.Spec.Containers[0], templates.WorkspaceIDEnv); got == nil || got.Value != "projects-v2" {
+		t.Fatal("workspace binding not operator-owned")
+	}
+	doc, err := sessionDocument(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := protocol.ParseSession([]byte(doc))
+	if err != nil || sess.Workspace == nil || sess.Workspace.SessionUID != string(s.UID) {
+		t.Fatalf("session binding %+v, %v", sess.Workspace, err)
+	}
+	for _, change := range []func(){func() { tmpl.Workspace.Enabled = false }, func() { tmpl.Workspace.Enabled = true; tmpl.Workspace.ID = "foreign" }, func() { tmpl.Workspace.ID = "projects-v2"; tmpl.Workspace.Claim = "" }} {
+		change()
+		if _, err := buildPod(s, tmpl, ""); err == nil {
+			t.Fatal("unmatched or disabled workspace built")
+		}
+	}
+}
+
 func TestPodShape(t *testing.T) {
 	tmpl := exampleTemplates(t)
 	s := taskSession()
