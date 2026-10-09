@@ -46,6 +46,12 @@ project. Its three repository names are `sigo-alumni`, `sigoalumni-org` and
 per repository, plus generated `AGENTS.md` and `CLAUDE.md` from the same rules
 and repository map. A one-repository project uses the same layout.
 
+This is v2's new-workspace layout. V1's existing one-repo anchor at the root
+remains historical baseline; no in-place migration is performed. Sync detects
+and preserves an existing root that is itself a Git worktree rather than writing
+generated rules into its repository. A later conversion needs a supported
+lossless migration and cannot silently rename/prune live registrations.
+
 Catalog updates arrive through a directory mount and reconcile in place.
 Starting or syncing a project creates missing references and anchors. It reports
 undeclared roots, dirty anchors and unsafe reference state while preserving them.
