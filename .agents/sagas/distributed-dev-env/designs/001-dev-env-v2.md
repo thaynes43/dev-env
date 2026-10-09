@@ -1927,7 +1927,7 @@ tool group keeps its single grouped PR.
 | declare-activity | JSON files on the PVC, read by dev-env-ops over `kubectl exec` | `Activity` resource via the API (6.9) | Limits enforced server-side. |
 | Summoned sessions | `dev-env-ops` executor polling the `upgrade-work-orders` ConfigMap; unauthenticated writers | The operator API, authorized per caller by `CallerPolicy`; lanes, watchdogs and the digest in the operator (3.7) | Callers change their scripts to call the API, one at a time (plan 10). |
 | Egress | one CNP for the pod, about 115 names | Web and platform tiers for every pod; the controlled tier by grant (6.10) | Web fetch works; what a tricked agent can leak depends on what the pod holds (Q-07). |
-| Existing Headlamp task scope | accepted Headlamp exec or ServiceAccount Job under the current owner rules | equivalent accepted access before removing the route; direct broker grants are a proposed mechanism, with no human route selected (D-70) | Attribution and expiry improve the mechanism; the Kubernetes powers already exist. |
+| Existing Headlamp task scope | accepted Headlamp exec or ServiceAccount Job on Tom's live directive for the task or access scope | equivalent access with the same live-directive requirement before removing the route; direct broker grants are a proposed mechanism, with no human route selected (D-70) | Attribution and expiry improve the mechanism; the Kubernetes powers already exist. |
 | Specialised tools | fixed Deployments in `dev` (Blender, audio) | `ToolPool` and `ToolSession` in `dev-tools` (8.1) | Start on demand, stop when idle. |
 
 ### 6.1 Claude static token
