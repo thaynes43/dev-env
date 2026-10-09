@@ -35,6 +35,12 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, session string, no
 		Agent:      protocol.AgentState{State: protocol.AgentPending},
 		ObservedAt: now.UTC(),
 	}
+	if s.ManagedChildDecisions {
+		if result, err := ReadDecision(ctx, s); err == nil && result.Decision != nil && result.Decision.State != "Delivered" {
+			record := result.Decision
+			st.Decision = &protocol.DecisionOutcome{ID: record.ID, SessionUID: record.SessionUID, PodUID: record.PodUID, WriterGeneration: record.WriterGeneration, At: record.CreatedAt}
+		}
+	}
 	var boot bootRecord
 	if readJSONFile(s.statePath(bootFile), &boot) == nil {
 		st.BootID, st.BootedAt, st.Boot = boot.BootID, boot.BootedAt, boot.Boot

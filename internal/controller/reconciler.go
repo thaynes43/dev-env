@@ -103,8 +103,9 @@ type Reconciler struct {
 	Templates types.NamespacedName
 	// APIURL is the operator API's base URL, given to agentd for its heartbeat
 	// (D-41). Empty until the API is served (plan 01 step 3).
-	APIURL            string
-	ManagedCodexTasks bool
+	APIURL                string
+	ManagedCodexTasks     bool
+	ManagedChildDecisions bool
 	// APIReader reads from the API server, past the cache. The decisions that
 	// must not trust a cache that may lag use it: that a rescued pod is still
 	// the one the rescue ran in, that no pod exists before archive deletes a
@@ -816,7 +817,7 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 			return nil
 		}
 	}
-	pod, err := buildPod(s, t, r.APIURL, r.ManagedCodexTasks)
+	pod, err := buildPod(s, t, r.APIURL, r.ManagedCodexTasks, r.ManagedChildDecisions)
 	if err != nil {
 		obs.buildErr = err
 		return nil

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -363,5 +364,54 @@ read -r prompt
 				}
 			}
 		})
+	}
+}
+
+func TestManagedChildDecisionGuardReachesNativeChildOnlyWhenEnabled(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		s, sess, ws, now := managedCodexFixture(t)
+		s.ManagedChildDecisions, s.PodUID = enabled, "pod-synthetic"
+		if enabled {
+			sess.Workspace = &protocol.WorkspaceBinding{ID: "projects", SessionUID: sess.SessionUID}
+		}
+		s.CodexBin = fakeCLI(t, t.TempDir(), `for arg do
+case "$arg" in *"agentd ask-decision"*) printf '%s' 'decision-helper-discovered';; esac
+done
+cat >/dev/null
+`)
+		first, err := BuildLaunch(s, sess, ws, "boot", now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first.NativeThreadConfirmed, first.ConversationID = true, "12345678-1234-1234-1234-123456789abc"
+		resume, err := BuildResume(s, sess, ws, first, "boot", now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range []Launch{first, resume} {
+			var scalar map[string]any
+			for _, arg := range l.Argv {
+				if strings.HasPrefix(arg, "developer_instructions=") && toml.Unmarshal([]byte(arg), &scalar) != nil {
+					t.Fatal("invalid native scalar")
+				}
+			}
+			developer, _ := scalar["developer_instructions"].(string)
+			if strings.Contains(developer, managedChildDecisionGuard) != enabled || l.ChildDecisions != enabled {
+				t.Fatal("guard and runtime feature disagree")
+			}
+			if enabled && (!strings.Contains(developer, "256 bytes") || strings.Contains(developer, "512 bytes")) {
+				t.Fatal("discovery guard misstated accepted option bound")
+			}
+			cmd := exec.Command(l.Argv[0], l.Argv[1:]...)
+			cmd.Env = agentEnv(os.Environ(), l)
+			cmd.Stdin = strings.NewReader(l.Prompt)
+			output, err := cmd.Output()
+			if err != nil || (string(output) == "decision-helper-discovered") != enabled {
+				t.Fatal("native child did not discover the enabled helper through its scalar", err)
+			}
+			if l.Resume && (l.Prompt != "" || !slices.Contains(l.Argv, "--no-daemon")) {
+				t.Fatal("decision discovery replayed initial prompt")
+			}
+		}
 	}
 }

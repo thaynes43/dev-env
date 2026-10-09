@@ -16,7 +16,8 @@ import (
 
 func syntheticAgentCodexAccess(t *testing.T, now time.Time, generation uint64) codexauth.Access {
 	t.Helper()
-	exp := now.Add(10 * 24 * time.Hour)
+	// JWT exp has second precision; its publication timestamp must match exactly.
+	exp := now.Add(10 * 24 * time.Hour).Truncate(time.Second)
 	raw, _ := json.Marshal(map[string]any{"exp": exp.Unix(), "https://api.openai.com/auth": map[string]string{"chatgpt_account_id": "synthetic-account"}})
 	jwt := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"synthetic"}`)) + "." + base64.RawURLEncoding.EncodeToString(raw) + ".synthetic-signature"
 	return codexauth.Access{Generation: generation, AccountID: "synthetic-account", IDToken: jwt, AccessToken: jwt, ExpiresAt: exp, LastRefresh: now}

@@ -74,8 +74,16 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		}
 	}
 	stateDir := filepath.Dir(launchPath)
+	nativeLease, err := beginNativeInvocation(l, stateDir)
+	if err != nil {
+		_, _ = fmt.Fprintln(pane, "agentd run-agent: native invocation admission refused")
+		return 1
+	}
+	if nativeLease != nil {
+		defer nativeLease.unlock()
+	}
 	if l.TUI {
-		return runTUI(l, stateDir, os.Stdin, pane, signals, stopGrace)
+		return runTUI(l, stateDir, os.Stdin, pane, signals, stopGrace, nativeLease)
 	}
 
 	logf, err := os.OpenFile(l.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
@@ -112,7 +120,7 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	started := time.Now().UTC()
 	_, _ = fmt.Fprintf(out, "[agentd] task %s started %s, conversation %s\n", l.Session, started.Format(time.RFC3339), l.ConversationID)
-	if err := validateWorkspaceLaunch(l); err != nil {
+	if err := nativeLease.beforeSpawn(l, started); err != nil {
 		_ = pr.Close()
 		_ = pw.Close()
 		_, _ = fmt.Fprintln(out, "agentd: shared writer proof changed before spawn")
@@ -129,6 +137,15 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	_ = pw.Close()
 	pid := cmd.Process.Pid
 	_ = writeJSONFile(filepath.Join(stateDir, pidFile), agentPid{Pid: pid, Start: procStartTime(pid)})
+	if err := nativeLease.recordStarted(l, pid); err != nil {
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+		_ = nativeLease.afterWait(l, cmd.ProcessState, pid, time.Now())
+		_ = pr.Close()
+		_ = os.Remove(filepath.Join(stateDir, pidFile))
+		_, _ = fmt.Fprintln(out, "[agentd] native startup receipt is unconfirmed")
+		return 1
+	}
 
 	var res streamResult
 	var codex codexStream
@@ -250,6 +267,12 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	mu.Lock()
 	to := timedOut
 	mu.Unlock()
+	if err := nativeLease.afterWait(l, cmd.ProcessState, pid, time.Now()); err != nil {
+		_, _ = fmt.Fprintln(out, "[agentd] native continuation receipt is unconfirmed")
+		if code == 0 {
+			code = 1
+		}
+	}
 	writeResult(stateDir, l, started, code, to, res)
 	_ = os.Remove(filepath.Join(stateDir, pidFile))
 	_, _ = fmt.Fprintf(out, "TASK-EXIT:%d\n", code)
@@ -263,7 +286,7 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 // stop, and forwards the signals run-agent gets; when the CLI exits it records
 // the exit in tui-exit.json. Nothing is parsed or logged from a TUI, whose
 // screen is not a log.
-func runTUI(l Launch, stateDir string, tty *os.File, pane io.Writer, signals <-chan os.Signal, stopGrace time.Duration) int {
+func runTUI(l Launch, stateDir string, tty *os.File, pane io.Writer, signals <-chan os.Signal, stopGrace time.Duration, nativeLease *nativeInvocationLease) int {
 	note := func(format string, a ...any) {
 		line := "[agentd] " + fmt.Sprintf(format, a...) + "\n"
 		_, _ = io.WriteString(pane, line)
@@ -296,7 +319,7 @@ func runTUI(l Launch, stateDir string, tty *os.File, pane io.Writer, signals <-c
 		})
 		_ = os.Remove(filepath.Join(stateDir, pidFile))
 	}
-	if err := validateWorkspaceLaunch(l); err != nil {
+	if err := nativeLease.beforeSpawn(l, started); err != nil {
 		note("shared writer proof changed before spawn")
 		record(1)
 		return 1
@@ -308,6 +331,14 @@ func runTUI(l Launch, stateDir string, tty *os.File, pane io.Writer, signals <-c
 	}
 	pid := cmd.Process.Pid
 	_ = writeJSONFile(filepath.Join(stateDir, pidFile), agentPid{Pid: pid, Start: procStartTime(pid)})
+	if err := nativeLease.recordStarted(l, pid); err != nil {
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+		_ = nativeLease.afterWait(l, cmd.ProcessState, pid, time.Now())
+		record(1)
+		note("native startup receipt is unconfirmed")
+		return 1
+	}
 
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- cmd.Wait() }()
@@ -338,6 +369,12 @@ func runTUI(l Launch, stateDir string, tty *os.File, pane io.Writer, signals <-c
 	}
 	mu.Unlock()
 	code := exitCode(cmd, werr)
+	if err := nativeLease.afterWait(l, cmd.ProcessState, pid, time.Now()); err != nil {
+		note("native continuation receipt is unconfirmed")
+		if code == 0 {
+			code = 1
+		}
+	}
 	record(code)
 	note("%s: the TUI exited (%d)", l.Session, code)
 	return code

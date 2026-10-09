@@ -31,6 +31,8 @@ func SessionLogPath(name string) string { return SessionPath(name) + "/log" }
 // SessionMessagesPath is a session's message route, POST (D-16, D-65).
 func SessionMessagesPath(name string) string { return SessionPath(name) + "/messages" }
 
+func SessionDecisionPath(name string) string { return SessionPath(name) + "/decision" }
+
 // MaxMessageBytes caps a message's text (D-65).
 const MaxMessageBytes = 16 << 10
 

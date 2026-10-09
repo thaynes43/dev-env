@@ -46,7 +46,7 @@ func TestTaskFeatureFlagsRequireConcreteAuthority(t *testing.T) {
 	binding := []string{"--project-catalog=dev-env-system/dev-env-project-catalog", "--project-clone-owner=thaynes43"}
 	hosts := `--coordinator-hosts=[{"serviceAccount":"dev-env-system/host-a","podName":"host-a","hostID":"codex-a"}]`
 	o, err := parseFlags(nil)
-	if err != nil || o.coordinatorEnabled || o.managedCodexTasks || o.catalogBinding != nil || len(o.coordinatorHosts) != 0 {
+	if err != nil || o.coordinatorEnabled || o.managedCodexTasks || o.managedChildDecisions || o.catalogBinding != nil || len(o.coordinatorHosts) != 0 {
 		t.Fatal("task features or catalog authority enabled by default")
 	}
 	for _, args := range [][]string{
@@ -64,5 +64,21 @@ func TestTaskFeatureFlagsRequireConcreteAuthority(t *testing.T) {
 	o, err = parseFlags(append(binding, "--enable-coordinator-callers", "--enable-managed-codex-tasks", hosts))
 	if err != nil || !o.coordinatorEnabled || !o.managedCodexTasks || o.catalogBinding == nil || len(o.coordinatorHosts) != 1 {
 		t.Fatal("fully bound task feature configuration refused")
+	}
+}
+
+func TestDecisionFeatureRequiresConfiguredManagedParent(t *testing.T) {
+	for _, args := range [][]string{
+		{"--enable-managed-child-decisions"},
+		{"--enable-managed-child-decisions", "--enable-managed-codex-tasks", "--project-catalog=dev-env-system/dev-env-project-catalog", "--project-clone-owner=thaynes43"},
+		{"--enable-managed-child-decisions", "--enable-coordinator-callers"},
+	} {
+		if _, err := parseFlags(args); err == nil {
+			t.Fatal("decision feature accepted missing configured parent/provider authority", args)
+		}
+	}
+	args := []string{"--enable-managed-child-decisions", "--enable-coordinator-callers", "--enable-managed-codex-tasks", "--project-catalog=dev-env-system/dev-env-project-catalog", "--project-clone-owner=thaynes43", `--coordinator-hosts=[{"serviceAccount":"dev-env-system/host-a","podName":"host-a","hostID":"codex-a"}]`}
+	if o, err := parseFlags(args); err != nil || !o.managedChildDecisions {
+		t.Fatal("configured decision feature was refused", err)
 	}
 }

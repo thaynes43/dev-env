@@ -1,12 +1,17 @@
 package apiserver
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/thaynes43/dev-env/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
@@ -107,5 +112,82 @@ func TestHeartbeatCaps(t *testing.T) {
 	}
 	if u := usageStatus(protocol.Usage{CostUSD: 0.0000001}); u.CostUSD != "0.0000001" {
 		t.Errorf("a small cost became %q, which the schema's pattern refuses", u.CostUSD)
+	}
+}
+
+func TestDecisionHeartbeatDiscoveryUsesExistingOutcomeWithoutPrivateContext(t *testing.T) {
+	for _, change := range []string{"valid", "disabled", "private", "claude", "wrong-session", "wrong-pod", "zero-generation", "malformed-id", "future"} {
+		t.Run(change, func(t *testing.T) {
+			f := newFixture(t)
+			const name = "decision-task"
+			token := f.sessionPod(name, "dev", 0)
+			sess := f.session(name)
+			sess.Spec.Agent = v1alpha1.AgentCodex
+			sess.Spec.Workspace = &v1alpha1.WorkspaceSpec{ID: "projects"}
+			switch change {
+			case "private":
+				sess.Spec.Workspace = nil
+			case "claude":
+				sess.Spec.Agent = v1alpha1.AgentClaude
+			}
+			if err := f.c.Update(context.Background(), sess); err != nil {
+				t.Fatal(err)
+			}
+			var pod corev1.Pod
+			if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: sessionNS, Name: name}, &pod); err != nil {
+				t.Fatal(err)
+			}
+			f.srv.ManagedChildDecisions = change != "disabled"
+			st := status(name)
+			st.Decision = &protocol.DecisionOutcome{ID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", SessionUID: string(sess.UID), PodUID: string(pod.UID), WriterGeneration: 3, At: f.now}
+			switch change {
+			case "wrong-session":
+				st.Decision.SessionUID = "changed"
+			case "wrong-pod":
+				st.Decision.PodUID = "changed"
+			case "zero-generation":
+				st.Decision.WriterGeneration = 0
+			case "malformed-id":
+				st.Decision.ID = strings.Repeat("x", 36)
+			case "future":
+				st.Decision.At = f.now.Add(time.Second)
+			}
+			w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st)
+			switch change {
+			case "wrong-session", "wrong-pod", "zero-generation", "malformed-id", "future":
+				wantError(t, w, http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+				if f.session(name).Status.Outcome != nil {
+					t.Fatal("foreign decision outcome persisted")
+				}
+			case "valid":
+				if w.Code != http.StatusNoContent {
+					t.Fatal(w.Code, w.Body.String())
+				}
+				got := f.session(name).Status.Outcome
+				if got == nil || got.State != v1alpha1.OutcomeEscalated || got.Note != "decision/"+st.Decision.ID {
+					t.Fatal("existing escalated Outcome did not discover exact question")
+				}
+				raw, _ := json.Marshal(got)
+				if strings.Contains(string(raw), "question") || strings.Contains(string(raw), "answer") || strings.Contains(string(raw), "context") {
+					t.Fatal("private decision context escaped into status")
+				}
+				st.Decision = nil
+				if f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st).Code != http.StatusNoContent || f.session(name).Status.Outcome != nil {
+					t.Fatal("completed decision outcome did not clear")
+				}
+				saved := f.session(name)
+				saved.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeEscalated, Note: "unrelated escalation"}
+				if err := f.c.Status().Update(context.Background(), saved); err != nil {
+					t.Fatal(err)
+				}
+				if f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st).Code != http.StatusNoContent || f.session(name).Status.Outcome.Note != "unrelated escalation" {
+					t.Fatal("decision heartbeat cleared unrelated Outcome")
+				}
+			default:
+				if w.Code != http.StatusNoContent || f.session(name).Status.Outcome != nil {
+					t.Fatal("disabled/inapplicable decision changed legacy status")
+				}
+			}
+		})
 	}
 }

@@ -53,6 +53,18 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 		return 0, nil, forbidden("session %s was replaced; the pod belongs to the earlier one", key.Name)
 	}
 	base := sess.DeepCopy()
+	if s.ManagedChildDecisions && sess.Spec.Agent == v1alpha1.AgentCodex && sess.Spec.Mode == v1alpha1.ModeTask && sess.Spec.Workspace != nil {
+		if outcome := st.Decision; outcome != nil {
+			if c.pod == nil || outcome.SessionUID != string(sess.UID) || outcome.PodUID != string(c.pod.UID) || outcome.WriterGeneration == 0 ||
+				!protocol.ValidDecisionID(outcome.ID) || outcome.At.IsZero() || outcome.At.After(s.now()) {
+				return 0, nil, invalid(fieldError("decision", "decision outcome must bind this exact session and pod"))
+			}
+			at := metav1.NewTime(outcome.At)
+			sess.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeEscalated, Note: "decision/" + outcome.ID, At: &at}
+		} else if sess.Status.Outcome != nil && strings.HasPrefix(sess.Status.Outcome.Note, "decision/") {
+			sess.Status.Outcome = nil
+		}
+	}
 	sess.Status.Agent = agentStatus(st, metav1.NewTime(s.now()))
 	if st.Usage != nil {
 		sess.Status.Usage = usageStatus(*st.Usage)
