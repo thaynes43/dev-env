@@ -302,8 +302,9 @@ func removeDir(p string) error {
 // restoreRescue fetches the bundle a rescue holds for this session's repo into
 // refs/rescued/* of the clone (D-48's recipe, D-67): the manifest must be
 // complete and name this repo, and the bundle must match the manifest's size
-// and SHA-256 and pass `git bundle verify` before anything is fetched.
-func restoreRescue(ctx context.Context, r Runner, s Settings, sess protocol.Session, clone string) (string, error) {
+// and SHA-256 and pass `git bundle verify` before anything is fetched. When
+// origin could not be refreshed, offlineBase must name a ref this bundle holds.
+func restoreRescue(ctx context.Context, r Runner, s Settings, sess protocol.Session, clone, offlineBase string) (string, error) {
 	dir, err := protocol.RescueDirOf(sess.Restore)
 	if err != nil {
 		return "", err
@@ -343,6 +344,23 @@ func restoreRescue(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 	}
 	if _, err := s.git(ctx, r, clone, "bundle", "verify", "--quiet", file); err != nil {
 		return "", fmt.Errorf("restore %s: git bundle verify: %s", sess.Restore, cmdDetail(err))
+	}
+	if offlineBase != "" {
+		heads, err := s.git(ctx, r, clone, "bundle", "list-heads", file)
+		if err != nil {
+			return "", fmt.Errorf("restore %s: list bundle refs: %s", sess.Restore, cmdDetail(err))
+		}
+		found := false
+		for _, line := range strings.Split(heads, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) == 2 && strings.HasPrefix(fields[1], "refs/") && offlineBase == "refs/rescued/"+strings.TrimPrefix(fields[1], "refs/") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return "", fmt.Errorf("restore %s: offline base %s is not a ref in this rescue's bundle", sess.Restore, offlineBase)
+		}
 	}
 	if _, err := s.git(ctx, r, clone, "fetch", "--quiet", file, "refs/*:refs/rescued/*"); err != nil {
 		return "", fmt.Errorf("restore %s: fetch the bundle: %s", sess.Restore, cmdDetail(err))

@@ -279,6 +279,87 @@ func TestRestoreRescueIntoANewSession(t *testing.T) {
 	}
 }
 
+func TestRestoreRescueAfterFailedOriginFetch(t *testing.T) {
+	for _, base := range []string{"rescued branch", "origin/main", "unrelated rescued ref", "mislabeled ref"} {
+		t.Run(base, func(t *testing.T) {
+			rig, rep, s, r, id := restoreRig(t)
+			sess := cloneSession("demo-1009-restore")
+			sess.Restore = id
+			// Simulate the previous boot stopping after the clone was saved.
+			if _, err := cloneRepo(context.Background(), r, s, sess.Repo, s.ClonePath(sess.Repo)); err != nil {
+				t.Fatal(err)
+			}
+			switch base {
+			case "rescued branch":
+				sess.Base = "refs/rescued/heads/" + rig.ws.Branch
+			case "origin/main":
+				sess.Base = base
+			case "unrelated rescued ref", "mislabeled ref":
+				sess.Base = "refs/rescued/heads/unrelated"
+				gitRun(t, gitTestEnv(s.Home), s.ClonePath(sess.Repo), "update-ref", sess.Base, "HEAD")
+				if base == "mislabeled ref" {
+					// A manifest naming an old local ref cannot stand in for a
+					// ref actually held by the verified bundle.
+					mp := filepath.Join(s.SharedDir, rep.Bundle.Manifest)
+					m, err := readManifest(mp)
+					if err != nil {
+						t.Fatal(err)
+					}
+					m.Repos[0].Bundle.Refs[0].Name = "refs/heads/unrelated"
+					if err := writeJSONFile(mp, m); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			ws, step := PrepareRepo(context.Background(), failOriginFetch(r), s, sess)
+			if base != "rescued branch" {
+				if step.State != StepFail || exists(ws.Worktree) {
+					t.Fatalf("stale base accepted: %s %q", step.State, step.Notes)
+				}
+				return
+			}
+			if step.State != StepWarn || !strings.Contains(strings.Join(step.Notes, "\n"), "verified rescue base") {
+				t.Fatalf("%s %q", step.State, step.Notes)
+			}
+			if got := gitRun(t, gitTestEnv(s.Home), ws.Worktree, "show", "HEAD:done.txt"); got != "done" {
+				t.Errorf("restored work = %q", got)
+			}
+		})
+	}
+}
+
+func TestRestoreRefusesAnUnimportedBundleHead(t *testing.T) {
+	rig, rep, s, r, id := restoreRig(t)
+	sess := cloneSession("demo-1009-head")
+	sess.Restore, sess.Base = id, "refs/rescued/HEAD"
+	if _, err := cloneRepo(context.Background(), r, s, sess.Repo, s.ClonePath(sess.Repo)); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, gitTestEnv(s.Home), s.ClonePath(sess.Repo), "update-ref", sess.Base, "HEAD")
+	mp := filepath.Join(s.SharedDir, rep.Bundle.Manifest)
+	m, err := readManifest(mp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &m.Repos[0].Bundle
+	file := filepath.Join(s.SharedDir, b.File)
+	// A valid bundle can advertise HEAD, but refs/*:refs/rescued/* cannot
+	// import it. It must not authorize the stale refs/rescued/HEAD above.
+	gitRun(t, rig.g.env, rig.ws.Worktree, "bundle", "create", "--quiet", file, "HEAD")
+	b.Refs = []protocol.BundleRef{{Name: "HEAD", Source: "HEAD", Commit: gitRun(t, rig.g.env, rig.ws.Worktree, "rev-parse", "HEAD")}}
+	b.SHA256, b.Size, err = hashFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONFile(mp, m); err != nil {
+		t.Fatal(err)
+	}
+	ws, step := PrepareRepo(context.Background(), failOriginFetch(r), s, sess)
+	if step.State != StepFail || exists(ws.Worktree) || !strings.Contains(strings.Join(step.Notes, "\n"), "not a ref in this rescue's bundle") {
+		t.Fatalf("unimported HEAD accepted: %s %q", step.State, step.Notes)
+	}
+}
+
 func TestRestoreRefusesABundleThatDoesNotMatch(t *testing.T) {
 	cases := map[string]struct {
 		edit func(t *testing.T, s Settings, m *protocol.RescueManifest)

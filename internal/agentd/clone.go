@@ -61,11 +61,10 @@ func PrepareRepo(ctx context.Context, r Runner, s Settings, sess protocol.Sessio
 		Branch:   "agent/" + sess.Name,
 	}
 	var notes []string
+	var fetchErr error
 
 	if _, err := os.Stat(filepath.Join(ws.Clone, ".git")); err == nil {
-		if _, err := s.git(ctx, r, ws.Clone, "fetch", "--prune", "origin"); err != nil {
-			notes = append(notes, "WARN fetch failed, using what the clone has: "+cmdDetail(err))
-		} else {
+		if _, fetchErr = s.git(ctx, r, ws.Clone, "fetch", "--prune", "origin"); fetchErr == nil {
 			notes = append(notes, "reused the clone and fetched origin")
 		}
 	} else {
@@ -80,31 +79,16 @@ func PrepareRepo(ctx context.Context, r Runner, s Settings, sess protocol.Sessio
 		notes = append(notes, fmt.Sprintf("cloned %s (blob:none) in %s", s.RemoteURL(sess.Repo), took.Round(100*time.Millisecond)))
 	}
 
-	// A restore runs on the first boot only, before the worktree exists: its
-	// base may be a rescued branch (D-67). A failure leaves no worktree, so the
-	// next boot tries again.
-	if sess.Restore != "" {
-		if _, err := os.Lstat(ws.Worktree); errors.Is(err, fs.ErrNotExist) {
-			note, err := restoreRescue(ctx, r, s, sess, ws.Clone)
-			if err != nil {
-				return ws, newStep(name, notes, err)
-			}
-			notes = append(notes, note)
-		}
-	}
-
-	base, err := resolveBase(ctx, r, s, ws.Clone, sess.Base)
+	workspaceNotes, err := ensureWorktree(ctx, r, s, ws, sess, fetchErr)
+	notes = append(notes, workspaceNotes...)
 	if err != nil {
 		return ws, newStep(name, notes, err)
 	}
-	note, err := ensureWorktree(ctx, r, s, ws, base)
+	head, err := s.git(ctx, r, ws.Worktree, "rev-parse", "--verify", "HEAD^{commit}")
 	if err != nil {
-		return ws, newStep(name, notes, err)
+		return ws, newStep(name, notes, fmt.Errorf("verify the workspace HEAD: %s", cmdDetail(err)))
 	}
-	notes = append(notes, note)
-	if head, err := s.git(ctx, r, ws.Worktree, "rev-parse", "HEAD"); err == nil {
-		ws.Head = head
-	}
+	ws.Head = head
 	return ws, newStep(name, notes, nil)
 }
 
@@ -169,36 +153,114 @@ func resolveBase(ctx context.Context, r Runner, s Settings, clone, base string) 
 	return head, nil
 }
 
-// ensureWorktree reuses ~/work/<name> when it is a worktree, recreates it on
-// its branch when only the branch survived, and otherwise adds it on a new
-// branch from base. A directory there that is not a worktree is never touched.
-func ensureWorktree(ctx context.Context, r Runner, s Settings, ws protocol.Workspace, base string) (string, error) {
-	if fi, err := os.Stat(ws.Worktree); err == nil {
+// ensureWorktree keeps surviving session work even when origin is unavailable.
+// A new branch needs a successful refresh or an explicitly restored rescue
+// base. Existing worktrees must belong to the session's clone and branch.
+func ensureWorktree(ctx context.Context, r Runner, s Settings, ws protocol.Workspace, sess protocol.Session, fetchErr error) ([]string, error) {
+	var notes []string
+	if fi, err := os.Lstat(ws.Worktree); err == nil {
 		if !fi.IsDir() {
-			return "", fmt.Errorf("%s exists and is not a directory", ws.Worktree)
+			return notes, fmt.Errorf("%s exists and is not a directory; left as it is", ws.Worktree)
 		}
 		top, err := s.git(ctx, r, ws.Worktree, "rev-parse", "--show-toplevel")
-		if err == nil && filepath.Clean(top) == filepath.Clean(ws.Worktree) {
-			return "reused the worktree " + ws.Worktree, nil
+		if err != nil || !sameDirectory(top, ws.Worktree) {
+			return notes, fmt.Errorf("%s exists and is not a git worktree; left as it is", ws.Worktree)
 		}
-		return "", fmt.Errorf("%s exists and is not a git worktree; left as it is", ws.Worktree)
+		common, err := s.git(ctx, r, ws.Worktree, "rev-parse", "--path-format=absolute", "--git-common-dir")
+		if err != nil || !sameDirectory(common, filepath.Join(ws.Clone, ".git")) {
+			return notes, fmt.Errorf("%s does not belong to the session's clone; left as it is", ws.Worktree)
+		}
+		branch, err := s.git(ctx, r, ws.Worktree, "symbolic-ref", "--quiet", "HEAD")
+		if err != nil || branch != "refs/heads/"+ws.Branch {
+			return notes, fmt.Errorf("%s is not on the session branch %s; left as it is", ws.Worktree, ws.Branch)
+		}
+		if fetchErr != nil {
+			notes = append(notes, "WARN fetch failed; preserving the existing worktree without moving its branch: "+cmdDetail(fetchErr))
+		}
+		return append(notes, "reused the worktree "+ws.Worktree), nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return notes, err
 	}
+
+	_, branchErr := s.git(ctx, r, ws.Clone, "show-ref", "--verify", "--quiet", "refs/heads/"+ws.Branch)
+	if branchErr != nil && ExitCodeOf(branchErr) != 1 {
+		return notes, fmt.Errorf("check the session branch %s: %s", ws.Branch, cmdDetail(branchErr))
+	}
+	if branchErr == nil {
+		if fetchErr != nil {
+			notes = append(notes, "WARN fetch failed; recovering the existing session branch without moving it: "+cmdDetail(fetchErr))
+		}
+		if err := prepareWorktreePath(ctx, r, s, ws); err != nil {
+			return notes, err
+		}
+		if _, err := s.git(ctx, r, ws.Clone, "worktree", "add", ws.Worktree, ws.Branch); err != nil {
+			return notes, fmt.Errorf("worktree add on the existing branch %s: %s", ws.Branch, cmdDetail(err))
+		}
+		return append(notes, "recreated the worktree on the existing branch "+ws.Branch), nil
+	}
+	if _, err := os.Lstat(s.statePath(launchFile)); err == nil {
+		return notes, fmt.Errorf("the session was already launched, but its worktree and branch are missing; restore its saved work in a new session before continuing")
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return notes, fmt.Errorf("check the first launch record: %w", err)
+	}
+
+	base, err := resolveBase(ctx, r, s, ws.Clone, sess.Base)
+	if err != nil {
+		return notes, err
+	}
+	var offlineBase string
+	if fetchErr != nil {
+		if sess.Restore == "" || !strings.HasPrefix(base, "refs/rescued/") {
+			return notes, fmt.Errorf("fetch origin failed; refusing a new session branch from %s: %s", base, cmdDetail(fetchErr))
+		}
+		offlineBase = base
+	}
+	// A restore is only for a new branch. A surviving session branch already
+	// holds its own work, even if its old rescue has since been pruned.
+	if sess.Restore != "" {
+		note, err := restoreRescue(ctx, r, s, sess, ws.Clone, offlineBase)
+		if err != nil {
+			return notes, err
+		}
+		notes = append(notes, note)
+	}
+	if fetchErr != nil {
+		notes = append(notes, "WARN fetch failed; creating the session from the verified rescue base: "+cmdDetail(fetchErr))
+	}
+	// Resolve once: worktree add must receive the same commit even if the ref
+	// changes between these commands. Tags must peel to a commit too.
+	head, err := s.git(ctx, r, ws.Clone, "rev-parse", "--verify", "--end-of-options", base+"^{commit}")
+	if err != nil {
+		return notes, fmt.Errorf("resolve base %s to a commit: %s", base, cmdDetail(err))
+	}
+	if err := prepareWorktreePath(ctx, r, s, ws); err != nil {
+		return notes, err
+	}
+	if _, err := s.git(ctx, r, ws.Clone, "worktree", "add", "-b", ws.Branch, ws.Worktree, head); err != nil {
+		return notes, fmt.Errorf("worktree add from %s at %s: %s", base, head, cmdDetail(err))
+	}
+	return append(notes, "worktree "+ws.Worktree+" on "+ws.Branch+" from "+base+" at "+head), nil
+}
+
+func sameDirectory(a, b string) bool {
+	fi, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	other, err := os.Stat(b)
+	return err == nil && fi.IsDir() && other.IsDir() && os.SameFile(fi, other)
+}
+
+func prepareWorktreePath(ctx context.Context, r Runner, s Settings, ws protocol.Workspace) error {
 	if err := os.MkdirAll(filepath.Dir(ws.Worktree), 0o755); err != nil {
-		return "", err
+		return err
 	}
 	// A worktree whose directory went away is still registered; prune it so
 	// its branch can be checked out again.
-	_, _ = s.git(ctx, r, ws.Clone, "worktree", "prune")
-	if _, err := s.git(ctx, r, ws.Clone, "rev-parse", "--verify", "--quiet", "refs/heads/"+ws.Branch); err == nil {
-		if _, err := s.git(ctx, r, ws.Clone, "worktree", "add", ws.Worktree, ws.Branch); err != nil {
-			return "", fmt.Errorf("worktree add on the existing branch %s: %s", ws.Branch, cmdDetail(err))
-		}
-		return "recreated the worktree on the existing branch " + ws.Branch, nil
+	if _, err := s.git(ctx, r, ws.Clone, "worktree", "prune"); err != nil {
+		return fmt.Errorf("prune missing worktrees: %s", cmdDetail(err))
 	}
-	if _, err := s.git(ctx, r, ws.Clone, "worktree", "add", "-b", ws.Branch, ws.Worktree, base); err != nil {
-		return "", fmt.Errorf("worktree add from %s: %s", base, cmdDetail(err))
-	}
-	return "worktree " + ws.Worktree + " on " + ws.Branch + " from " + base, nil
+	return nil
 }
 
 // cmdDetail is CmdError.Detail for any error. git's stderr holds no secret:
