@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -38,6 +39,7 @@ type Options struct {
 	GitHubApp *GitHubApp
 	// ProxmoxGrants is disabled by default and never enables general hw-ssh.
 	ProxmoxGrants ProxmoxGrantOptions
+	CodexAuth     CodexOptions
 	// Interval is the longest wait between two refreshes; DefaultInterval when
 	// zero.
 	Interval time.Duration
@@ -60,6 +62,9 @@ type Options struct {
 func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 	if o.Namespace == "" || o.GHTokenSecret.Namespace == "" || o.GHTokenSecret.Name == "" || o.GitHubApp == nil {
 		return errors.New("keeper: the namespace, the gh token Secret and the GitHub App are required")
+	}
+	if o.CodexAuth.Enabled && (o.Namespace == o.GHTokenSecret.Namespace || (o.CodexAuth.LoginDir != "" && !filepath.IsAbs(o.CodexAuth.LoginDir))) {
+		return errors.New("codex auth requires separate private/public namespaces and absolute private staging")
 	}
 	scheme := runtime.NewScheme()
 	if err := errors.Join(clientgoscheme.AddToScheme(scheme), v1alpha1.AddToScheme(scheme)); err != nil {
@@ -94,6 +99,9 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 	if o.ProxmoxGrants.Enabled && !o.LeaderElect {
 		return errors.New("proxmox grants require keeper leader election")
 	}
+	if o.CodexAuth.Enabled && !o.LeaderElect {
+		return errors.New("codex auth requires keeper leader election")
+	}
 	if o.LeaderElect {
 		identity := "keeper-" + string(uuid.NewUUID())
 		deadline := o.RenewDeadline
@@ -127,6 +135,26 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 	}
 	if err := mgr.Add(k); err != nil {
 		return err
+	}
+	if o.CodexAuth.Enabled {
+		a := o.CodexAuth
+		if a.JournalSecret == "" {
+			a.JournalSecret = DefaultCodexJournalSecret
+		}
+		if a.LiveSecret == "" {
+			a.LiveSecret = DefaultCodexLiveSecret
+		}
+		if a.LoginDir == "" {
+			a.LoginDir = DefaultCodexLoginDir
+		}
+		clk := o.Clock
+		if clk == nil {
+			clk = clock.RealClock{}
+		}
+		worker := &codexWorker{Journal: &codexJournal{Client: c, Secret: types.NamespacedName{Namespace: o.Namespace, Name: a.JournalSecret}}, Transport: newCodexHTTPRefresh(), Publisher: &codexPublicSecret{Client: c, Secret: types.NamespacedName{Namespace: o.GHTokenSecret.Namespace, Name: a.LiveSecret}}, Fence: credentialFence.CheckBudget, Clock: clk, LoginDir: a.LoginDir, Identity: credentialFence.Identity, Log: o.Log.WithName("codex-auth")}
+		if err := mgr.Add(worker); err != nil {
+			return err
+		}
 	}
 	{
 		g := o.ProxmoxGrants

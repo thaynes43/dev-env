@@ -20,6 +20,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -36,6 +37,9 @@ const binaryName = "dev-env-keeper"
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "validate-ssh-ca" {
 		os.Exit(validateSSHCA(os.Args[2:], os.Stdout))
+	}
+	if len(os.Args) > 1 && (os.Args[1] == "codex-login" || os.Args[1] == "codex-auth-status" || os.Args[1] == "codex-login-idle") {
+		os.Exit(codexLoginCommand(os.Args[1:], os.Stdin, os.Stdout))
 	}
 	if len(os.Args) == 2 && (os.Args[1] == "version" || os.Args[1] == "--version") {
 		fmt.Println(version.Get().String(binaryName))
@@ -75,6 +79,7 @@ type options struct {
 	metricsAddr     string
 	probeAddr       string
 	proxmoxGrants   keeper.ProxmoxGrantOptions
+	codexAuth       keeper.CodexOptions
 }
 
 func defaultPermissions() string {
@@ -106,6 +111,10 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.metricsAddr, "metrics-bind-address", ":8080", "address of the Prometheus metrics endpoint; 0 turns it off")
 	fs.StringVar(&o.probeAddr, "health-probe-bind-address", ":8081", "address of /healthz and /readyz")
 	fs.BoolVar(&o.proxmoxGrants.Enabled, "enable-proxmox-grants", false, "enable keeper PVE credential jobs; requires CA, pinned host trust and leader election")
+	fs.BoolVar(&o.codexAuth.Enabled, "enable-codex-auth", false, "enable the dedicated keeper-only Codex auth worker; requires reviewed named-secret RBAC and isolated login helper")
+	fs.StringVar(&o.codexAuth.JournalSecret, "codex-auth-journal-secret", keeper.DefaultCodexJournalSecret, "keeper-only private Codex auth journal Secret")
+	fs.StringVar(&o.codexAuth.LiveSecret, "codex-live-secret", keeper.DefaultCodexLiveSecret, "access-only Codex projection Secret in secret-namespace")
+	fs.StringVar(&o.codexAuth.LoginDir, "codex-login-dir", keeper.DefaultCodexLoginDir, "keeper/helper-only tmpfs staging and private control socket")
 	fs.StringVar(&o.proxmoxGrants.SessionNamespace, "session-namespace", "dev-agents", "namespace containing credential grants and session pods")
 	fs.StringVar(&o.proxmoxGrants.JournalSecret, "credential-journal-secret", keeper.DefaultCredentialJournalSecret, "keeper-only durable credential journal Secret in its own namespace")
 	fs.StringVar(&o.proxmoxGrants.CADir, "ssh-ca-dir", keeper.DefaultSSHCAPath, "mounted Ed25519 CA directory (private-key/public-key)")
@@ -128,6 +137,9 @@ func parseFlags(args []string) (options, error) {
 	}
 	if o.proxmoxGrants.Enabled && (!o.leaderElect || o.proxmoxGrants.SessionNamespace == "" || o.proxmoxGrants.JournalSecret == "" || o.proxmoxGrants.CADir == "" || o.proxmoxGrants.TargetsFile == "" || o.proxmoxGrants.KnownHostsFile == "") {
 		return o, errors.New("proxmox grants require leader election and nonempty credential configuration paths")
+	}
+	if o.codexAuth.Enabled && (!o.leaderElect || o.codexAuth.JournalSecret == "" || o.codexAuth.LiveSecret == "" || !filepath.IsAbs(o.codexAuth.LoginDir) || o.namespace == o.secretNamespace) {
+		return o, errors.New("codex auth requires leader election, separate private/public namespaces and nonempty named configuration")
 	}
 	p, err := keeper.ParsePermissions(*perms)
 	if err != nil {
@@ -163,6 +175,7 @@ func run(args []string) error {
 			UserAgent:   binaryName + "/" + info.Version,
 		},
 		ProxmoxGrants: o.proxmoxGrants,
+		CodexAuth:     o.codexAuth,
 		Interval:      o.interval,
 		LeaderElect:   o.leaderElect,
 		MetricsAddr:   o.metricsAddr,

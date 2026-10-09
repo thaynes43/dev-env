@@ -169,6 +169,9 @@ func (d *Daemon) workspaceBootHeartbeat(ctx context.Context, rec bootRecord) fun
 // when the agent cannot run, why.
 func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Step, bootID string) (Step, string) {
 	const name = "agent"
+	if d.Session.Agent == protocol.AgentCodex && (d.S.CodexAccessFile == "" || SyncCodexAccess(d.S, d.now()) != nil) {
+		return newStep(name, nil, ErrCodexAccess), ErrCodexAccess.Error()
+	}
 	if repo.State == StepFail {
 		why := "the repo step failed, so the agent was not started"
 		return newStep(name, nil, errors.New(why)), why
@@ -238,6 +241,9 @@ func (d *Daemon) supervise(ctx context.Context) error {
 			d.expireCredentials()
 			if d.writerRefused {
 				continue
+			}
+			if err := SyncCodexAccess(d.S, d.now()); err != nil {
+				d.Log.Warn("Codex authentication requires renewal or publication")
 			}
 			if m := newestMtime(d.S.statePath(resultFile), d.S.statePath(tuiExitFile)); !m.Equal(last) {
 				last = m

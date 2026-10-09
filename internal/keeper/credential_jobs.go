@@ -92,6 +92,37 @@ func (f *LeaseFence) Check(ctx context.Context) error {
 	return nil
 }
 
+// CheckBudget is the rotating-token fence. A fresh Lease alone is insufficient:
+// the earlier Lease expiry/local renewal-loss deadline must cover the request,
+// durable replacement save and safety margin. This does not change PVE fencing.
+func (f *LeaseFence) CheckBudget(ctx context.Context, required time.Duration) error {
+	if ctx.Err() != nil || required <= 0 || f.Clock == nil {
+		return errors.New("codex leadership budget refused the operation")
+	}
+	c, cancel := context.WithTimeout(ctx, codexSaveTimeout)
+	defer cancel()
+	var lease coordinationv1.Lease
+	if f.Reader.Get(c, f.Lease, &lease) != nil || lease.Spec.HolderIdentity == nil || *lease.Spec.HolderIdentity != f.Identity || lease.Spec.RenewTime == nil || lease.Spec.LeaseDurationSeconds == nil || *lease.Spec.LeaseDurationSeconds <= 0 {
+		return errors.New("codex leadership budget refused the operation")
+	}
+	now := f.Clock.Now()
+	if lease.Spec.RenewTime.After(now.Add(time.Second)) {
+		return errors.New("codex leadership clock skew refused the operation")
+	}
+	maxAge := f.MaxAge
+	if maxAge <= 0 {
+		maxAge = 10 * time.Second
+	}
+	deadline := lease.Spec.RenewTime.Add(min(maxAge, time.Duration(*lease.Spec.LeaseDurationSeconds)*time.Second))
+	if callerDeadline, ok := ctx.Deadline(); ok && callerDeadline.Before(deadline) {
+		deadline = callerDeadline
+	}
+	if !now.Add(required).Before(deadline) {
+		return errors.New("codex leadership budget refused the operation")
+	}
+	return nil
+}
+
 type credentialInstaller interface {
 	Install(context.Context, *corev1.Pod, credentialEntry) error
 	Remove(context.Context, *corev1.Pod, credentialEntry) error

@@ -2118,7 +2118,22 @@ the earlier plan; plan 04/11 must revise them before implementation. Current v2
 Codex creation remains disabled. Private enrollments and one refresh owner are
 still required; a shared provider home is not the requested workspace.
 
-**What we know** (codex 0.160.0):
+**D-78 (2026-10-09 America/New_York). Keeper-owned Codex auth delivery.**
+Implement the S-3 access-only path for multiple private remote hosts, disabled
+until reviewed deployment and actual acceptance. A bounded pinned native-login
+helper shares only dedicated temporary staging with the keeper. Each fresh
+attempt is privately bound to the current keeper; the main keeper adopts the
+completed login and becomes its sole refresher. It never copies v1 auth.
+Persist refresh intent before dispatch, prove sufficient remaining Lease budget,
+cancel on loss, and persist replacement material before access publication.
+Ambiguous dispatch/response/persistence requires fresh login without replay.
+Only access tokens and generation metadata reach hosts; agentd replaces private
+auth files atomically without restarting their daemons. The initial CLI ceremony
+preserves the target console renewal ruling. Exact helper, journal, control and
+acceptance boundaries are recorded in
+[the authentication workflow](../../../../docs/keeper-codex-auth.md).
+
+**What we know** (pinned Codex 0.160.1; observed S-3 results):
 
 - `auth.json` refreshes with a rotating token. The binary carries the error "Your
   access token could not be refreshed because your refresh token was already used",
@@ -2130,7 +2145,8 @@ still required; a shared provider home is not the requested workspace.
   exec` and the remote-control app-server (S-3, codex 0.160.1). `codex login
   --with-access-token` and `CODEX_ACCESS_TOKEN` do not take that token: they take an
   Agent Identity JWT or an `at-` personal access token. (Corrected 2026-10-06 by S-3;
-  this bullet said they ran on an access token alone.) The access token lives 10 days.
+  this bullet said they ran on an access token alone.) The tested access token
+  lived 10 days; future refresh timing must use the actual observed expiry.
   Codex refreshes it within 5 minutes of its `exp`, or after a 401, and reloads
   `auth.json` from disk before either.
 - `codex queue` puts a message into an existing session. `codex exec-server`
@@ -4794,3 +4810,4 @@ blocks only the step it names.
 | D-75 | Q-21 accepts ADR-002's shared workspace/private runtime topology and the bounded existing-CephFS trial first. Explicitly supersedes affected ADR-001/D-15/D-22/D-12 choices; normal rollout requires acceptance and v1 stays untouched. | 6.6, ADR-002 |
 | D-76 | Q-22 delegates reviewed keeper CA node trust to Codex using public-key-only delivery, guarded preservation and v1 access checks; temporary cleanup included, private CA/flags/provider acceptance unchanged. | 6.12 |
 | D-77 | Disabled-by-default shared core: explicit template/session opt-in, verified real mounts, shared Git locks, durable task writer identity, owned rescue and no global prune; stopped-executor proof is required before real resume/cleanup. | 6.6, plan 11 |
+| D-78 | Disabled keeper-owned fresh Codex login, bounded private durable refresh intent/replacement and ambiguity refusal; access-only atomic host reload, independent private enrollment and actual two-host/refresh gates. | 6.3, plan 04 |

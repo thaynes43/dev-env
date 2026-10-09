@@ -45,6 +45,13 @@ plan is superseded as the sole topology by owner requirement R7.
 
 ## Acceptance
 
+D-78's [authentication workflow](../../../../docs/keeper-codex-auth.md) is being
+implemented as a disabled source unit: bounded fresh helper login, private
+durable refresh ownership and access-only agentd reload. Source tests precede
+reviewed GitOps deployment and a real owner sign-in. Two paired hosts, rotation
+and replacement remain acceptance work; this is not a claim that Codex creation
+is already enabled.
+
 - An image bump PR in haynes-ops reaches every idle session within an hour of
   merge; each resumes its conversation; no busy session restarts.
 - Two independently enrolled Codex pods have usable phone links; shared project
