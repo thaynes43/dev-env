@@ -419,7 +419,7 @@ def run(argv, *, expected=0, env=None, timeout=15):
     effective_timeout = None
     try:
         effective_timeout = min(timeout, remaining())
-        if trace:
+        if trace and ROLE in {'a','b'}:
             result = run_status_child(argv,command_env,effective_timeout,start,measurement,**kwargs)
         else:
             result = subprocess.run(argv, text=True, capture_output=True,

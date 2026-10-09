@@ -32,7 +32,8 @@ env = {'PATH':os.environ['PATH'],'LC_ALL':'C','GIT_CONFIG_NOSYSTEM':'1',
        'GIT_AUTHOR_EMAIL':'fixture@example.invalid','GIT_COMMITTER_EMAIL':'fixture@example.invalid'}
 ns = dict(os=os,Path=Path,re=re,resource=resource,select=select,signal=signal,subprocess=subprocess,
           tempfile=tempfile,threading=threading,time=time,json=json,DEADLINE=deadline,
-          remaining=remaining,ENV=env,MEASUREMENTS=[],ROLE='reconnect')
+          remaining=remaining,ENV=env,MEASUREMENTS=[],ROLE='b',
+          TASK_A=Path('/home/dev/work/cephfs-trial-a'),TASK_B=Path('/home/dev/work/cephfs-trial-b'))
 selected = ['bounded_output','own_cpu_stat','cpu_delta','StatusTrace','status_wait_observation',
             'post_timeout_peer_metadata','run_status_child','run']
 exec(compile(ast.Module(body=[nodes[name] for name in selected],type_ignores=[]),

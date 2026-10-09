@@ -126,6 +126,7 @@ class FakeTrace:
 trace_mock = FakeTrace()
 ns['StatusTrace'] = lambda:trace_mock
 ns['ENV'] = {'GIT_OPTIONAL_LOCKS':'0'}
+ns['ROLE'] = 'b'
 ns['remaining'] = lambda:3
 ns['MEASUREMENTS'] = []
 ns['time'] = SimpleNamespace(monotonic=lambda:next(clock))

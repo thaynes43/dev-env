@@ -269,6 +269,21 @@ assert [e for e in events if e[0] == 'communicate'] == [('communicate',1),('comm
 assert measurement['waitObservation']['elapsedSeconds'] == 5.400000000000006
 ns['status_wait_observation'] = real_observer
 
+# Reconnect retains its old subprocess.run path and gets no new wait observer.
+def reconnect_run(actual,**kwargs):
+    assert actual == argv and kwargs['timeout'] == 15 and kwargs['pass_fds'] == (7,)
+    events.append(('unchangedReconnectRun',))
+    clock.value += 0.25
+    return subprocess.CompletedProcess(actual,0,'M  src/000.txt\n','')
+ns['subprocess'].run = reconnect_run
+ns['ROLE'] = 'reconnect'
+clock.value = 100
+events.clear()
+assert ns['run'](argv).returncode == 0
+assert events == [('unchangedReconnectRun',),('cpuSnapshot',),('traceFinish',)]
+assert 'waitObservation' not in ns['MEASUREMENTS'][-1]
+ns['ROLE'] = 'b'
+
 # One-second metadata budget is global, not a fresh allowance after expiry.
 ns['post_timeout_peer_metadata'] = real_peer_sampler
 metadata_calls = []
