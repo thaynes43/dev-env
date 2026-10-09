@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/version"
 )
 
 // Daemon is `agentd run`, the session pod's supervisor under tini (DESIGN-001
@@ -40,6 +41,8 @@ type Daemon struct {
 	// copying is set while a copy of the log to the shared volume runs, so a
 	// hung CephFS write never stacks copies (D-65).
 	copying atomic.Bool
+	// writerRefused keeps an uncertain shared writer observational only.
+	writerRefused bool
 }
 
 // logCopyEvery is how often the session's log is copied to the shared volume,
@@ -81,7 +84,29 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("boot record: %w", err)
 	}
 	d.Log.Info("boot", "session", d.Session.Name, "boot", rec.BootID, "repo", d.Session.Repo, "agent", d.Session.Agent, "mode", d.Session.Mode, "model", d.Session.Model, "promptBytes", len(d.Session.Prompt))
-	d.beat(ctx)
+	stopBootHeartbeat := d.workspaceBootHeartbeat(ctx, rec)
+	defer stopBootHeartbeat()
+	if d.S.WorkspaceID == "" {
+		d.beat(ctx)
+	}
+	writer, writerErr := retryWorkspaceWriterAdmission(ctx, func() (*writerLease, error) {
+		return acquireWorkspaceWriter(ctx, d.R, d.S, d.Session, d.now())
+	}, pauseWorkspaceAdmission)
+	if writer != nil {
+		d.S.writer = writer
+		defer writer.unlock()
+	}
+	if writerErr != nil {
+		stopBootHeartbeat()
+		d.writerRefused = true
+		rec.Boot, rec.AgentError = protocol.BootFailed, "workspace writer admission: "+writerErr.Error()
+		rec.Steps = []Step{newStep("workspace", nil, writerErr)}
+		if err := writeJSONFile(d.S.statePath(bootFile), rec); err != nil {
+			return fmt.Errorf("failed admission boot record: %w", err)
+		}
+		d.beat(ctx)
+		return d.supervise(ctx)
+	}
 
 	steps := Render(ctx, d.R, d.S, d.Session)
 	ws, repoStep := PrepareRepo(ctx, d.R, d.S, d.Session)
@@ -89,6 +114,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	agentStep, agentErr := d.startAgent(ctx, ws, repoStep, rec.BootID)
 	steps = append(steps, agentStep)
 	LogSteps(d.Log, steps)
+	stopBootHeartbeat()
 
 	rec.Steps, rec.Workspace, rec.AgentError = steps, &ws, agentErr
 	rec.Boot = protocol.BootReady
@@ -100,6 +126,40 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	d.beat(ctx)
 	return d.supervise(ctx)
+}
+
+// workspaceBootHeartbeat observes an admission or Git preparation wait. It
+// never reads the shared worktree, runs another command, or claims a writer.
+// Its sender is joined before the final boot status and normal supervision,
+// so heartbeat state has one owner and cancellation leaves no boot goroutine.
+func (d *Daemon) workspaceBootHeartbeat(ctx context.Context, rec bootRecord) func() {
+	if d.S.WorkspaceID == "" || d.Send == nil {
+		return func() {}
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	beat := func() {
+		d.sendHeartbeat(ctx, protocol.Status{
+			Session: d.Session.Name, Agentd: version.Get().String("agentd"),
+			BootID: rec.BootID, BootedAt: rec.BootedAt, Boot: protocol.BootBooting,
+			Agent: protocol.AgentState{State: protocol.AgentPending}, ObservedAt: d.now().UTC(),
+		})
+	}
+	beat()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tick := time.NewTicker(d.Interval)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				beat()
+			}
+		}
+	}()
+	return func() { cancel(); <-done }
 }
 
 // startAgent starts the session's agent. On the volume's first boot that is
@@ -119,6 +179,9 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 		if err != nil {
 			return newStep(name, nil, err), err.Error()
 		}
+		if err := admitWorkspaceLaunch(ctx, d.S, d.Session, &l); err != nil {
+			return newStep(name, nil, err), err.Error()
+		}
 		if err := StartAgent(ctx, d.R, d.S, l, d.Self); err != nil {
 			return newStep(name, nil, err), err.Error()
 		}
@@ -135,6 +198,9 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 	}
 	launch, err := BuildLaunch(d.S, d.Session, ws, bootID, d.now())
 	if err != nil {
+		return newStep(name, nil, err), err.Error()
+	}
+	if err := admitWorkspaceLaunch(ctx, d.S, d.Session, &launch); err != nil {
 		return newStep(name, nil, err), err.Error()
 	}
 	if err := StartAgent(ctx, d.R, d.S, launch, d.Self); err != nil {
@@ -158,14 +224,21 @@ func (d *Daemon) supervise(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			d.shutdown()
+			if !d.writerRefused {
+				d.shutdown()
+			}
 			return nil
 		case <-tick.C:
 			d.beat(ctx)
 		case <-logs.C:
-			d.copyLog()
+			if !d.writerRefused {
+				d.copyLog()
+			}
 		case <-poll.C:
 			d.expireCredentials()
+			if d.writerRefused {
+				continue
+			}
 			if m := newestMtime(d.S.statePath(resultFile), d.S.statePath(tuiExitFile)); !m.Equal(last) {
 				last = m
 				d.Log.Info("the agent exited")
@@ -248,6 +321,10 @@ func (d *Daemon) beat(ctx context.Context) {
 		return
 	}
 	st := CollectStatus(ctx, d.R, d.S, d.Session.Name, d.now())
+	d.sendHeartbeat(ctx, st)
+}
+
+func (d *Daemon) sendHeartbeat(ctx context.Context, st protocol.Status) {
 	err := d.Send(ctx, st)
 	switch {
 	case err == nil && d.failures > 0:

@@ -47,6 +47,10 @@ type Settings struct {
 	// SharedDir is the dev-env-shared mount (AGENTD_SHARED_DIR, default
 	// ~/.shared, D-22): memory/, rescue/, logs/.
 	SharedDir string
+	// WorkspaceID is operator-owned and empty for private session workspaces.
+	WorkspaceID string
+	// PodUID comes from the downward API, never a persisted PID or hostname.
+	PodUID string
 	// StateDir is agentd's own state on the session volume, ~/.agentd.
 	StateDir string
 	// OAuthAccountFile is the seam for plan 03 (AGENTD_OAUTH_ACCOUNT_FILE): a
@@ -82,6 +86,8 @@ type Settings struct {
 	APICAFile string
 	// Getenv reads the pod's environment, for ${VAR} references in mcp.json.
 	Getenv func(string) string
+	// writer is held only by the daemon, never inferred from the owner JSON.
+	writer *writerLease
 }
 
 // LoadSettings builds Settings from an environment lookup, usually os.Getenv.
@@ -108,6 +114,8 @@ func LoadSettings(getenv func(string) string) (Settings, error) {
 		GitUserName:       or("AGENTD_GIT_USER_NAME", "haynes-dev-bot[bot]"),
 		GitUserEmail:      or("AGENTD_GIT_USER_EMAIL", "304655321+haynes-dev-bot[bot]@users.noreply.github.com"),
 		SharedDir:         or("AGENTD_SHARED_DIR", filepath.Join(home, ".shared")),
+		WorkspaceID:       getenv("AGENTD_WORKSPACE_ID"),
+		PodUID:            getenv("DEV_ENV_POD_UID"),
 		StateDir:          filepath.Join(home, ".agentd"),
 		OAuthAccountFile:  getenv("AGENTD_OAUTH_ACCOUNT_FILE"),
 		HWSSHKeyB64:       getenv("HW_SSH_PRIVATE_KEY_B64"),

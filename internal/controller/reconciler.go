@@ -380,6 +380,11 @@ func idleDeadline(s *v1alpha1.AgentSession, t *templates.Templates, pod owned[*c
 		pod.obj.Status.Phase != corev1.PodRunning || !podReady(pod.obj) || a == nil || a.Status == "" || a.Status == protocol.AgentBusy {
 		return time.Time{}, "", false
 	}
+	// Shared boot and final run-agent admission may queue for the common Git
+	// lock. Their observational heartbeat is progress, not idle activity.
+	if s.Spec.Workspace != nil && (a.Boot == protocol.BootBooting || a.Status == protocol.AgentPending) {
+		return time.Time{}, "", false
+	}
 	window := t.IdleSuspendAfter(s.Spec.Mode)
 	if l := s.Spec.Lifecycle; l != nil && l.IdleSuspendAfter != nil {
 		window = l.IdleSuspendAfter.Duration

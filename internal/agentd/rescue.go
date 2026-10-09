@@ -47,6 +47,14 @@ const rescueLockFile = "rescue.lock"
 // nothing else: the rescue writes nothing to it, so it stays empty for the
 // next look (D-55).
 func Rescue(ctx context.Context, r Runner, s Settings, session string, now time.Time, opt RescueOptions) (protocol.RescueReport, error) {
+	if s.WorkspaceID != "" {
+		return rescueSharedTask(ctx, r, s, session, now, opt)
+	}
+	if s.Getenv != nil {
+		if sess, err := LoadSession(s.Getenv); err == nil && sess.Workspace != nil {
+			return protocol.RescueReport{}, errors.New("shared session lacks its operator workspace binding; refusing private rescue")
+		}
+	}
 	empty, err := volumeEmpty(s)
 	if err != nil {
 		return protocol.RescueReport{}, err
@@ -432,6 +440,11 @@ func commitWIP(ctx context.Context, r Runner, s Settings, wt, gitDir string, w p
 // minute gets a numeric suffix.
 func createRescueRef(ctx context.Context, r Runner, s Settings, wt, stamp, commit string) (string, error) {
 	base := "rescue/" + filepath.Base(wt) + "-" + stamp
+	if s.WorkspaceID != "" {
+		// The slash bounds the namespace: task a cannot snapshot a peer
+		// named a-b through a common string prefix.
+		base = "rescue/" + filepath.Base(wt) + "/" + stamp
+	}
 	var lastErr error
 	for i := 1; i <= 20; i++ {
 		name := base

@@ -56,6 +56,14 @@ jobs:
           filters: |
             agent_image:
               - 'images/agent/**'
+              # The Go stage copies these and make build compiles agentd/agent-run.
+              - 'cmd/**'
+              - 'internal/**'
+              - 'api/**'
+              - 'go.mod'
+              - 'go.sum'
+              - 'Makefile'
+              - '.dockerignore'
               # Copied into the image (#55): a change to either is a change to the image.
               - 'LICENSE'
               - 'images/THIRD_PARTY.md'
@@ -161,6 +169,10 @@ jobs:
           persist-credentials: false
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       - name: Build the operator image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -187,12 +199,10 @@ jobs:
           grep -q '^usr/share/licenses/dev-env/go-modules/.*LICEN[CS]E' "${RUNNER_TEMP}/operator-files" \
             || { echo "no Go module license texts in the image" >&2; exit 1; }
 
-  # Only when images/agent/** changes (the Dockerfile, its tools, the smoke test). ~3 GB
-  # image: CI only, never in the pod. Builds, loads and smoke-tests it; never pushes
-  # (publish-agent.yml pushes from a release tag). The `commit` here is the PR head, so
-  # the smoke test also proves COMMIT reaches agentd. Changes to the Go code alone do
-  # not trigger this job: the operator image job builds the same Go sources, and a
-  # Go-only break reaches the agent image only through `make build`, which `build` runs.
+  # Agent image inputs include its Dockerfile/tools and Go sources/dependencies.
+  # This ~3 GB image builds, loads and smoke-tests only in hosted CI; it never
+  # pushes (publish-agent.yml pushes from a release tag). The PR head COMMIT
+  # also lets the smoke test prove the image contains the current agentd.
   image-agent:
     name: Image (agent)
     needs: changes
@@ -206,6 +216,10 @@ jobs:
           persist-credentials: false
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       - name: Build the agent image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:

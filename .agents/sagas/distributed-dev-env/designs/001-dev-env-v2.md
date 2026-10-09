@@ -2476,6 +2476,59 @@ storage, actual client/rule loading, ownership, recovery and phone gates.
 Current code still uses private session clones. No v1 restart, auth copying,
 cutover, primary management app or privileged approval route is selected.
 
+**D-77 (2026-10-09 America/New_York). Guarded shared-workspace source core.**
+Deliver ADR-002 in opt-in units while storage and real-client acceptance remain
+open. A template's `workspace:{enabled,claim,id}` and a new session's immutable
+`workspace:{id}` must both opt in with the same ID. Existing private sessions
+cannot become shared on a later template update or resume. The claim is
+pre-provisioned and retained, outside AgentSession ownership and deletion.
+
+The controller reserves the workspace volume and literal mounts at
+`/home/dev/repos`, `/home/dev/codex`, `/home/dev/work` and `/home/dev/.workspace`,
+using `repos`, `codex`, `work` and `metadata` subpaths. Provider homes stay private.
+Before Git or launch, agentd verifies real shared mounts, a distinct private-home
+filesystem and the provisioned metadata marker `{version:1,id}`. Missing,
+foreign or symlinked paths fail closed; agentd does not silently initialize an
+empty private replacement. The session document carries `workspace:{id,sessionUID}`;
+the pod UID comes from the Downward API.
+
+Metadata holds an administrative lock per validated common Git path and a
+writer lock plus durable task owner record. The record binds workspace/task,
+repo/clone/worktree, AgentSession UID, pod UID, ownership generation and state.
+Durable updates sync the temporary file, rename and sync its parent. A free lock,
+expired heartbeat, deleted pod or NodeNotReady never proves the previous writer
+stopped. A different session UID cannot take even a stopped record without a
+future explicit transfer operation. Same-session resume into a new pod also
+requires a verified stopped receipt and a new ownership generation.
+
+Shared preparation and rescue each cap their complete locked Git section at two
+minutes; the common-Git wait is two minutes plus ten seconds of headroom, respecting
+a shorter caller deadline. Before owner admission only, the daemon retries a typed
+administrative-wait timeout up to three total attempts with cancellable sleeps of
+one then two seconds, releasing the task lock and revalidating identity each time.
+Task-writer contention, uncertain receipts, mount failures and caller cancellation
+never retry. The cap does not guarantee FIFO service or cancellation of a stuck
+kernel filesystem call; exhaustion remains observable and uncertain owners stay
+protected. Shared boot and admission waits send observational pending heartbeats
+and do not trigger the idle timer.
+
+Shared rescue is restricted to the owned task branch and its WIP rescue refs;
+it never scans or snapshots canonical, anchor, tag, stash or peer work. Shared
+preparation does not globally prune worktree registrations. The supervisor holds
+writer ownership through its execution and final rescue writes. The first core
+refuses post-launch rescue until the following stop-proof unit is implemented;
+source presence is not acceptance of real shared resume or cleanup.
+
+For that next unit, stop the shared supervisor without deleting its pod/volumes,
+retain the exact old pod and verify every container genuinely Terminated under
+RestartPolicyNever. A distinct bounded hold-rescue pod receives controller-issued
+proof bound to workspace/task/session/old pod UID, acquires the writer lock and
+checks the owner record. It may write a stopped receipt only after its owned
+bundle and final Git writes are verified. Cleanup follows rescue. Missing,
+deleted, partitioned or otherwise uncertain executors remain blocked. Existing
+private-session behavior stays unchanged. Catalog/rules, managed Codex execution,
+retained remote hosts, refresh and explicit transfer remain subsequent units.
+
 ### 6.7 Remote Control and phone sessions
 
 - `remote` mode is opt-in per session, as `--interactive` is today. Tom's rule stands
@@ -4740,3 +4793,4 @@ blocks only the step it names.
 | D-74 | Joint Claude/Codex project catalog/rules/freshness, supplied `~/codex` baseline, multiple remote pod links sharing workspace files; revise single-hub/private-Git assumptions with tested ownership, storage and phone delivery. Management surface/backend remain under review. | 6.3/6.6, plan 11 |
 | D-75 | Q-21 accepts ADR-002's shared workspace/private runtime topology and the bounded existing-CephFS trial first. Explicitly supersedes affected ADR-001/D-15/D-22/D-12 choices; normal rollout requires acceptance and v1 stays untouched. | 6.6, ADR-002 |
 | D-76 | Q-22 delegates reviewed keeper CA node trust to Codex using public-key-only delivery, guarded preservation and v1 access checks; temporary cleanup included, private CA/flags/provider acceptance unchanged. | 6.12 |
+| D-77 | Disabled-by-default shared core: explicit template/session opt-in, verified real mounts, shared Git locks, durable task writer identity, owned rescue and no global prune; stopped-executor proof is required before real resume/cleanup. | 6.6, plan 11 |

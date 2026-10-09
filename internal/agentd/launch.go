@@ -39,7 +39,10 @@ const (
 // writes it, and the tmux pane reads it, so no prompt is ever quoted through a
 // shell (v1 passed it through `tmux send-keys`).
 type Launch struct {
-	Session string `json:"session"`
+	// WorkspaceOwner is the admitted writer generation. It is absent for
+	// every existing private workspace launch.
+	WorkspaceOwner *taskOwner `json:"workspaceOwner,omitempty"`
+	Session        string     `json:"session"`
 	// Argv is the agent CLI and its arguments. The prompt is not among them:
 	// it goes to the CLI's stdin.
 	Argv   []string `json:"argv"`
@@ -107,6 +110,27 @@ func taskGuard(ws protocol.Workspace, workDir string) string {
 		"reason as your final message.", ws.Worktree, ws.Branch, ws.Branch, workDir)
 }
 
+// sharedGuard restricts this writer to the worktree covered by its durable
+// owner record. Other worktrees need a separate managed task and owner.
+func sharedGuard(ws protocol.Workspace, task bool) string {
+	guard := fmt.Sprintf("This task owns only the git worktree %s and branch %s in a workspace shared with other pods. "+
+		"Make this task's edits, commits and pushes inside that worktree and on that branch. "+
+		"Open a PR when the work is ready, read its review and merge it after the required checks pass. "+
+		"Never push directly to main. Preserve every other task's files, branch and worktree. "+
+		"The reference clones under /home/dev/repos and project roots under /home/dev/codex are managed shared paths; "+
+		"do not edit those clones or create, remove, move, prune or repair git worktrees yourself. "+
+		"Use the managed task workflow for another worktree and the managed Git operation for a shared-clone fetch or administrative change. "+
+		"If that operation is unavailable, report the need and stop that dependent step. "+
+		"Do not run shared-clone garbage collection, delete locks, change remotes or global repository configuration, "+
+		"or claim another task because its pod, heartbeat or lock disappeared. "+
+		"Use managed stop-and-preserve before suspending, transferring or cleaning up this task. "+
+		"A successful PR merge does not authorize deleting this worktree or its ownership record.", ws.Worktree, ws.Branch)
+	if task {
+		guard += " If blocked, write BLOCKED and the concrete reason as your final message."
+	}
+	return guard
+}
+
 // BuildLaunch builds a session's first launch: a Claude task (D-42) or a local
 // session's TUI (D-58), both on the static token. Remote mode arrives with plan
 // 03, Codex pods with plan 04 (D-12: Codex runs in the hub until the keeper
@@ -134,14 +158,22 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 	}
 	if sess.Mode == protocol.ModeLocal {
 		l.TUI = true
-		l.Argv = append(argv, "--append-system-prompt", interactiveGuard(ws, s.WorkDir()))
+		guard := interactiveGuard(ws, s.WorkDir())
+		if sess.Workspace != nil {
+			guard = sharedGuard(ws, false)
+		}
+		l.Argv = append(argv, "--append-system-prompt", guard)
 		return l, nil
 	}
 	if n := sess.MaxTurns(); n > 0 {
 		argv = append(argv, "--max-turns", strconv.Itoa(int(n)))
 	}
+	guard := taskGuard(ws, s.WorkDir())
+	if sess.Workspace != nil {
+		guard = sharedGuard(ws, true)
+	}
 	l.Argv = append(argv,
-		"--append-system-prompt", taskGuard(ws, s.WorkDir()),
+		"--append-system-prompt", guard,
 		"--output-format", "stream-json", "--verbose",
 		"-p")
 	l.Prompt = sess.Prompt
@@ -164,6 +196,9 @@ func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first
 	guard := interactiveGuard(ws, s.WorkDir())
 	if sess.Mode == protocol.ModeTask {
 		guard = taskGuard(ws, s.WorkDir())
+	}
+	if sess.Workspace != nil {
+		guard = sharedGuard(ws, sess.Mode == protocol.ModeTask)
 	}
 	argv := append(claudeArgs(s, sess), "--resume", first.ConversationID, "--append-system-prompt", guard)
 	return Launch{

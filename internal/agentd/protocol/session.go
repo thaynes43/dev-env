@@ -40,6 +40,9 @@ const MaxPromptBytes = 64 << 10
 // the spec's (DESIGN-001 3.3), plus the session's name. Unknown fields are
 // ignored, so a newer operator can add fields an older agentd does not read.
 type Session struct {
+	// Workspace is the operator's explicit shared-storage binding. SessionUID
+	// distinguishes an existing session from another created with the same name.
+	Workspace *WorkspaceBinding `json:"workspace,omitempty"`
 	// Name is the AgentSession's name: the pod name, the hostname, the
 	// worktree directory and the branch suffix (agent/<name>).
 	Name string `json:"name"`
@@ -59,6 +62,12 @@ type Session struct {
 	// On the first boot, after the clone, agentd fetches that rescue's bundle
 	// for this repo into refs/rescued/*.
 	Restore string `json:"restore,omitempty"`
+}
+
+// WorkspaceBinding is immutable session metadata, not a storage provisioning request.
+type WorkspaceBinding struct {
+	ID         string `json:"id"`
+	SessionUID string `json:"sessionUID"`
 }
 
 // Limits caps a task session (V-02).
@@ -121,6 +130,14 @@ var (
 // Validate checks the fields agentd relies on.
 func (s Session) Validate() error {
 	var errs []error
+	if s.Workspace != nil {
+		if len(s.Workspace.ID) == 0 || len(s.Workspace.ID) > 63 || !dnsLabel.MatchString(s.Workspace.ID) {
+			errs = append(errs, errors.New("workspace.id must be a DNS label of at most 63 characters"))
+		}
+		if len(s.Workspace.SessionUID) == 0 || len(s.Workspace.SessionUID) > 128 || !repoName.MatchString(s.Workspace.SessionUID) {
+			errs = append(errs, errors.New("workspace.sessionUID must identify the existing session"))
+		}
+	}
 	if len(s.Name) == 0 || len(s.Name) > 63 || !dnsLabel.MatchString(s.Name) {
 		errs = append(errs, fmt.Errorf("name %q is not a DNS label of at most 63 characters", s.Name))
 	}

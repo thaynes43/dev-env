@@ -60,6 +60,35 @@ func PrepareRepo(ctx context.Context, r Runner, s Settings, sess protocol.Sessio
 		Worktree: s.WorktreePath(sess.Name),
 		Branch:   "agent/" + sess.Name,
 	}
+	if s.WorkspaceID != "" || sess.Workspace != nil {
+		if err := workspacePreflight(s, sess); err != nil {
+			return ws, newStep(name, nil, err)
+		}
+		if s.writer == nil {
+			return ws, newStep(name, nil, errors.New("shared Git preparation requires the daemon's writer lock"))
+		}
+		unlock, err := workspaceAdminLock(ctx, s, sess.Repo)
+		if err != nil {
+			return ws, newStep(name, nil, err)
+		}
+		defer unlock()
+		bounded, cancel := context.WithTimeout(ctx, sharedGitPrepareBudget)
+		defer cancel()
+		ctx = bounded
+		var owner taskOwner
+		if err := readWorkspaceJSON(s.ownerPath(sess.Name), &owner); err != nil {
+			return ws, newStep(name, nil, err)
+		}
+		if err := ownerMatches(s, sess, owner, true); err != nil {
+			return ws, newStep(name, nil, err)
+		}
+		if owner.State != "owned" || owner.Generation != s.writer.owner.Generation {
+			return ws, newStep(name, nil, errors.New("writer receipt changed before Git preparation"))
+		}
+		if err := validateSharedClone(ctx, r, s, sess.Repo); err != nil {
+			return ws, newStep(name, nil, err)
+		}
+	}
 	var notes []string
 	var fetchErr error
 
@@ -163,6 +192,11 @@ func ensureWorktree(ctx context.Context, r Runner, s Settings, ws protocol.Works
 		if !fi.IsDir() {
 			return notes, fmt.Errorf("%s exists and is not a directory; left as it is", ws.Worktree)
 		}
+		if s.WorkspaceID != "" {
+			if err := noSymlinkComponents(ws.Worktree); err != nil {
+				return notes, err
+			}
+		}
 		top, err := s.git(ctx, r, ws.Worktree, "rev-parse", "--show-toplevel")
 		if err != nil || !sameDirectory(top, ws.Worktree) {
 			return notes, fmt.Errorf("%s exists and is not a git worktree; left as it is", ws.Worktree)
@@ -259,6 +293,11 @@ func sameDirectory(a, b string) bool {
 func prepareWorktreePath(ctx context.Context, r Runner, s Settings, ws protocol.Workspace) error {
 	if err := os.MkdirAll(filepath.Dir(ws.Worktree), 0o755); err != nil {
 		return err
+	}
+	if s.WorkspaceID != "" {
+		// A missing peer path may be an unavailable mount, not an abandoned
+		// worktree. Shared mode never removes another task's Git registration.
+		return nil
 	}
 	// A worktree whose directory went away is still registered; prune it so
 	// its branch can be checked out again.

@@ -71,6 +71,9 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, session string, no
 	switch {
 	case boot.AgentError != "":
 		st.Agent = protocol.AgentState{State: protocol.AgentFailed, Error: boot.AgentError}
+	case hasCur && workspaceLaunchPending(s, cur, now):
+		created := cur.CreatedAt
+		st.Agent = protocol.AgentState{State: protocol.AgentPending, StartedAt: &created}
 	case hasCur && cur.TUI:
 		st.Agent = tuiState(s, cur, now)
 	case finished:
@@ -111,6 +114,23 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, session string, no
 	}
 	applyActivity(ctx, r, s, &st, pid, hasCur && cur.TUI, now)
 	return st
+}
+
+// A shared run-agent can queue for the common Git lock before its final
+// admission. Report pending only for the exact current unlaunched receipt,
+// and bound the observation so an exited pane does not stay pending forever.
+// This status is never stop proof or authority to take over its writer.
+func workspaceLaunchPending(s Settings, l Launch, now time.Time) bool {
+	if s.WorkspaceID == "" || s.Getenv == nil || l.WorkspaceOwner == nil || now.Before(l.CreatedAt) || now.Sub(l.CreatedAt) >= sharedGitAdminBudget+startWindow {
+		return false
+	}
+	sess, err := LoadSession(s.Getenv)
+	if err != nil || l.Session != sess.Name || l.Dir != s.WorktreePath(sess.Name) || workspacePreflight(s, sess) != nil {
+		return false
+	}
+	var owner taskOwner
+	return readWorkspaceJSON(s.ownerPath(sess.Name), &owner) == nil && ownerMatches(s, sess, owner, true) == nil &&
+		owner.State == "owned" && !owner.Launched && owner == *l.WorkspaceOwner
 }
 
 // tuiState is the state of this boot's TUI (D-58): busy while its process

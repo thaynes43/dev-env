@@ -112,6 +112,25 @@ management UI and credential migration remain unselected.
 
 ## Acceptance
 
+### Source delivery units
+
+D-77 divides the implementation while runtime acceptance remains gated:
+
+1. Disabled shared mounts/identity, common Git locks, durable writer records and
+   owned-task rescue. Old private sessions retain their behavior. This initial
+   core refuses post-launch shared rescue until the next unit supplies stop proof.
+2. Shared-only supervisor stop/preserve and a distinct bounded hold-rescue pod,
+   with controller proof of the exact old executor's genuine termination before
+   any cleanup. Missing/deleted/partitioned owners remain refused.
+3. Catalog/API/CLI, fresh source and actual both-provider project/repo rule loading.
+4. Keeper-owned fresh Codex login/refresh/reload, two retained remote hosts and
+   managed Codex tasks; explicit transfer follows the proven stop contract.
+5. Complete storage, client, phone, lifecycle and cleanup acceptance for the
+   [owner test milestone](../../../handoffs/2026-10-09-testable-v2.md).
+
+The template/session feature stays off until its relevant source, deployment and
+acceptance gates pass. Source units do not close the checks below by themselves.
+
 - [x] ADR-002 explicitly supersedes ADR-001's affected storage/cloning decisions;
       Tom ratified it through structured Q-21 before workspace implementation.
 - [ ] Empty-PVC boot produces every declared project with the correct repositories;

@@ -90,6 +90,9 @@ func buildHoldPod(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.Pod
 func isHoldPod(p *corev1.Pod) bool { return p.Labels[v1alpha1.LabelHold] == "true" }
 
 func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, hold bool) (*corev1.Pod, error) {
+	if w := s.Spec.Workspace; w != nil && (t.Workspace == nil || !t.Workspace.Enabled || t.Workspace.Claim == "" || t.Workspace.ID != w.ID) {
+		return nil, fmt.Errorf("session workspace %q does not match an enabled template", w.ID)
+	}
 	profileName, profile, err := t.Profile(s.Spec.Profile)
 	if err != nil {
 		return nil, err
@@ -117,6 +120,7 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 
 	env := []corev1.EnvVar{
 		{Name: "HOME", Value: templates.HomePath},
+		{Name: templates.WorkspaceIDEnv, Value: ""},
 		// Claude refuses a group-writable socket directory; agentd creates
 		// this one 0700 (DESIGN-001 3.6).
 		{Name: "XDG_RUNTIME_DIR", Value: runtimeDir},
@@ -173,6 +177,18 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		{Name: "tmp", MountPath: templates.TmpPath},
 		{Name: "grants", MountPath: protocol.GrantsDir},
 		{Name: "api-token", MountPath: templates.APITokenDir, ReadOnly: true},
+	}
+	if s.Spec.Workspace != nil {
+		for i := range env {
+			if env[i].Name == templates.WorkspaceIDEnv {
+				env[i].Value = t.Workspace.ID
+			}
+		}
+		volumes = append(volumes, corev1.Volume{Name: "workspace", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: t.Workspace.Claim}}})
+		for _, sub := range []string{"repos", "codex", "work"} {
+			mounts = append(mounts, corev1.VolumeMount{Name: "workspace", MountPath: templates.HomePath + "/" + sub, SubPath: sub})
+		}
+		mounts = append(mounts, corev1.VolumeMount{Name: "workspace", MountPath: templates.WorkspaceMetadataPath, SubPath: "metadata"})
 	}
 	templateMounts := append([]templates.Mount{}, t.Mounts...)
 	for _, m := range profile.Mounts {
@@ -362,6 +378,9 @@ func sessionDocument(s *v1alpha1.AgentSession) (string, error) {
 		Prompt: s.Spec.Prompt,
 		// The rescue the session restores from (D-67).
 		Restore: s.Spec.Restore,
+	}
+	if s.Spec.Workspace != nil {
+		d.Workspace = &protocol.WorkspaceBinding{ID: s.Spec.Workspace.ID, SessionUID: string(s.UID)}
 	}
 	if l := s.Spec.Limits; l != nil {
 		d.Limits = &protocol.Limits{MaxTurns: l.MaxTurns}
