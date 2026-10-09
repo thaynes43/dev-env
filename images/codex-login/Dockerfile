@@ -1,7 +1,7 @@
 # Login-only keeper helper (D-78). It runs no daemon or agent and receives only
 # private tmpfs staging/control; no CA, App, ServiceAccount or provider-home mount.
 # Build/publish in GitHub Actions, never in the shared dev-env pod.
-FROM golang:1.27.1@sha256:162be5298a40ed317005c8339c6de4d10d3eef336d66dc8e9259b03ab9d3a6d2 AS build
+FROM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS build
 WORKDIR /src
 # renovate: datasource=github-releases depName=google/go-licenses
 ARG GO_LICENSES_VERSION=v2.0.1
