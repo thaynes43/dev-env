@@ -1,6 +1,7 @@
 # 04: rolling updates and Codex
 
-**Status:** architecture revision required by D-74/R7; implementation backlog
+**Status:** multiple-host/shared-file topology accepted in ADR-002/Q-21;
+implementation and actual client/refresh acceptance remain backlog
 **Depends on:** 02; Q-03 (drain on idle, then resume: decided 2026-10-06); spikes
 S-3 and S-4
 **Parallel with:** 03

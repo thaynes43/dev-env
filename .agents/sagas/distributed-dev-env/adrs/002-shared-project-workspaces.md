@@ -1,9 +1,11 @@
 # ADR-002: Shared projects across agent pods, with private agent state
 
-- **Status:** Proposed; no owner ratification or workspace deployment yet
+- **Status:** Accepted; target architecture, not deployed-workflow acceptance
 - **Date:** 2026-10-09, America/New_York
 - **Decider:** Tom Haynes
-- **Supersedes on acceptance:** ADR-001's Storage decision and C-09's fresh
+- **Ratified:** Tom, 2026-10-09, through the structured Q-21 prompt:
+  "Accept ADR-002 and the bounded CephFS trial (Recommended)"
+- **Supersedes:** ADR-001's Storage decision and C-09's fresh
   clone per session; DESIGN-001 D-15/D-22 for repository/task storage and D-12's
   single Codex remote host as the sole topology. ADR-001 remains unchanged.
 - **Requirements:** [owner R1–R7](../requirements/2026-10-09-project-roots.md)
@@ -11,7 +13,7 @@
   [plan 04](../backlog/04-rolling-updates-codex.md) for remote hosts and refresh
 - **User guide:** [workflow and quick start](../../../../docs/workflow-guide.md)
 
-## The proposed user experience
+## The target user experience
 
 Open **sigo-alumni** in Claude Code or Codex. Both see the same permanent project
 folder, its three repositories and the same project rules. Start a task: the
@@ -27,7 +29,7 @@ writer. Finishing or cleaning up a task never removes the permanent project.
 
 The operator remains an API/controller. A coordinator agent understands the
 request and uses that API; `agent-run`, automations and a future management
-client can do the same. This proposal does not choose the owner's management
+client can do the same. This decision does not choose the owner's management
 app or create a separate requester-agent service. The console remains planned.
 
 ```mermaid
@@ -46,7 +48,7 @@ flowchart TB
     Keeper -. "access tokens only" .-> B
 ```
 
-All new elements in this diagram are proposed. Today's v2 still uses private
+The new elements in this diagram are the accepted target. Today's v2 still uses private
 session clones; Codex v2 creation and these multiple remote hosts are unbuilt.
 
 ## Why a new decision is needed
@@ -65,7 +67,7 @@ The v1 anchors under `~/codex` are manual worktrees on one RWO home. They prove
 the folder concept, not GitOps sync, both-agent rule loading or multi-pod use.
 The v2 2.9.1 fresh-source fix is useful groundwork, not this implementation.
 
-## Proposed decision
+## Decision
 
 Use one dedicated RWX workspace volume for shared reference clones, permanent
 project anchors and task worktrees. Keep each remote host's and task executor's
@@ -73,9 +75,10 @@ agent state on its own persistent home. Keep the existing rescue shelf separate
 from the live workspace volume. Every managed launch, reference mutation,
 transfer and cleanup consults platform ownership, rather than only local PIDs.
 
-**Proposed storage starting point:** a dedicated PVC on the existing Rook
+**Accepted trial starting point:** a dedicated PVC on the existing Rook
 `ceph-filesystem` StorageClass, subject to a bounded acceptance trial before
-normal use. This is a proposal, not an approved backend. A new PVC separates
+normal use. Tom authorized this bounded trial first; normal rollout still needs
+the gates below. A new PVC separates
 workspace data logically; it does not isolate MDS or disk load from household
 volumes. If the trial fails the household-impact gate, stop and choose an
 external RWX backend; do not switch storage silently.
@@ -91,7 +94,7 @@ Audit date: 2026-10-09. These are availability facts, not performance acceptance
 
 | Choice | Meets literal shared workspace? | Practical consequence |
 |---|---|---|
-| Dedicated PVC on current Rook `ceph-filesystem` | Yes, with cross-node path/locking acceptance | Expandable RWX is already offered. It shares the filesystem services and OSDs used by household apps, including zigbee2mqtt and zwave. Proposed bounded trial first. |
+| Dedicated PVC on current Rook `ceph-filesystem` | Yes, with cross-node path/locking acceptance | Expandable RWX is already offered. It shares the filesystem services and OSDs used by household apps, including zigbee2mqtt and zwave. Accepted for a bounded trial before normal use. |
 | External RWX storage using gasha01 NFS or a separately configured CephFS driver | Potentially; unverified for this workload | Keeps workspace IO off the in-cluster OSDs. Current Kubernetes storage exposes gasha01 as RBD; no external CephFS or NFS StorageClass exists. Provisioning, mount recovery and lock semantics need design and trials. Existing direct NFS model/output mounts, some writable, do not prove Git locking or recovery. |
 | Existing per-session `gasha01-rbd` homes plus replicated clones | No | Preserves today's IO placement but produces independent files. Useful for private homes/caches, not a substitute for R7. |
 | Share the complete agent home across pods | Files are shared, but fails runtime/auth requirements | Couples enrollment, sockets, conversation registries and rotating credentials. Reject this topology. |
@@ -105,7 +108,7 @@ Participating v2 hosts/executors mount the workspace claim in `dev-agents`.
 PVCs are namespace-scoped; v1 in `dev` cannot simply mount that claim. V1
 coexistence/migration needs an explicit later plan. Workspace retention belongs
 to the platform/project, not any individual AgentSession. Current storage
-classes reclaim with `Delete`; provision the proposed workspace with explicit
+classes reclaim with `Delete`; provision the permanent workspace with explicit
 `Retain` behavior and GitOps prune protection, without changing household
 classes. Task archival must never delete the shared workspace claim.
 
@@ -205,7 +208,7 @@ Lock acquisition/release and storage reconnect behavior need cross-node tests.
 
 Each task has a durable record of its executor identity, pod UID, ownership
 generation, project/repo, worktree and conversation reference. The exact resource
-schema is implementation work, not a new CRD accepted by this proposal.
+schema is implementation work, not a new CRD accepted by this decision.
 
 ```mermaid
 stateDiagram-v2
@@ -253,16 +256,17 @@ this reader-release behavior, not just with an unused directory fixture.
 
 ## Delivery gates and consequences
 
-Accept this ADR before implementing the changed workspace topology. Then deliver
-in reviewable stages; none is permission to restart v1 or a busy session:
+Tom accepted this ADR before workspace implementation and authorized the bounded
+storage trial first. Deliver in reviewable stages; none is permission to restart
+v1 or a busy session:
 
-1. Prove two distinct logical Codex hosts, access-token refresh ownership,
-   enrollment persistence, question delivery and the execution/preflight route.
-2. Run one bounded, CPU-limited worker storage trial, using representative Git
+1. Run one bounded, CPU-limited worker storage trial, using representative Git
    and build operations at low concurrency. Assess household latency/alerts,
    cross-node locks and mount reconnects; define pass thresholds before running.
    No burners, stress loops or wide tests. A failed gate returns to a backend
    decision, not an automatic rollout.
+2. Prove two distinct logical Codex hosts, access-token refresh ownership,
+   enrollment persistence, question delivery and the execution/preflight route.
 3. Build the catalog and both-provider root/task rule loading; prove empty-PVC
    boot, live catalog reload and retained undeclared roots.
 4. Prove pinned fresh starts, offline resume, simultaneous administrative calls,
@@ -286,13 +290,14 @@ separate Q-16 requirement; a text answer from an agent is not a broker decision.
 - [ADR-001](001-distributed-dev-env.md), immutable Accepted baseline.
 - [DESIGN-001 D-74 and current fresh-source behavior](../designs/001-dev-env-v2.md#66-repos-worktrees-and-storage).
 - [Plan 11 acceptance](../backlog/11-project-workspaces.md#acceptance).
-- Live storage audit: `ceph-filesystem` supports expandable RWX;
+- Live storage audit at ratification: `ceph-filesystem` supports expandable RWX;
   `dev-agents/dev-env-shared` is Bound; current gasha01 class is RBD. No new PVC,
   enrollment, credentials, launcher route or project catalog was created.
 - `client-go` v0.37.1 `tools/leaderelection/leaderelection.go` explicitly states
   leader election does not guarantee fencing; `internal/keeper/run.go` already
   treats its Lease as insufficient fencing.
 
-Owner ratification and the deployed evidence must be recorded here when they
-exist. Until then, this is a reviewable proposal and the existing topology stays
-the implementation baseline.
+Q-21 ratifies this target and the bounded trial; it does not claim two-host,
+rules, storage-performance or cutover acceptance. Record subsequent deployed
+evidence in plan 11 and HANDOFF. This Accepted ADR stays immutable; later
+architecture changes require a superseding ADR.

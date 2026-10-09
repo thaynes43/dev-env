@@ -173,6 +173,16 @@ standing policy and real
 hardware/network activation and acceptance. No token was minted, no node trust
 changed, and general hw-ssh remains unbuilt under P-19's pending contract.
 
+### Keeper CA delivery update, 2026-10-09
+
+Haynes-ops #3642 (`4bccaa899`) delivered a separate keeper-only ExternalSecret
+and read-only CA mount. ESO is Ready/SecretSynced and keeper is Ready on the
+unchanged signed image; broker/keeper minting flags remain false. V1, shelf,
+operator and broker identities/restarts were preserved. No key values were
+accessed and no node trust changed. Key-pair validation, private SSH trust/
+targets/egress/policies and real mint/install/expiry/recovery/cleanup acceptance
+still block P-14/P-15/P-18 closure. All twenty composite parity rows stay open.
+
 ## Scope that must remain distinct
 
 Q-07 removes only the Proxmox **operator** token and long-lived hardware SSH key

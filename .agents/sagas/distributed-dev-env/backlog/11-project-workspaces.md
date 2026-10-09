@@ -1,11 +1,10 @@
 # 11: shared projects, workspace freshness and remote pods
 
-**Status:** owner requirements R1–R7 recorded; architecture/client implementation
-pending workflow review. The separate v2 fresh-start bug fix shipped in agent
+**Status:** R1–R7 and ADR-002 accepted; bounded CephFS trial authorized by Q-21.
+Workspace/client implementation and acceptance remain pending. The separate v2 fresh-start bug fix shipped in agent
 2.9.1 (#124/#123, haynes-ops #3636); it does not implement this project contract.
-The [ADR-002 proposal](../adrs/002-shared-project-workspaces.md) now draws the
-concrete topology and compares storage choices; owner ratification and trials
-remain pending.
+The [Accepted ADR-002](../adrs/002-shared-project-workspaces.md) draws the concrete
+topology and storage choice, with trial and normal-rollout gates.
 **Depends on:** plan 04 revision for Codex remote hosts/refresh; ratified ADR-002
 superseding ADR-001's Storage/C-09 decisions and explicit D-15/D-22 revision for
 shared Git/task files. R2 supersedes Q-20; there is no
@@ -32,8 +31,9 @@ not require common agent runtime/auth state.
 | R7 | Multiple independently addressable Codex pod links share project/workspace files |
 
 Read the [workflow guide](../../../../docs/workflow-guide.md#start-here-how-you-would-use-it)
-for the owner journeys and rendered diagrams. D-74 changes the target; it does
-not select a storage backend, primary management UI or credential migration.
+for the owner journeys and rendered diagrams. D-74 recorded the target change;
+Q-21/D-75 now accept ADR-002 and the bounded existing-CephFS trial. The primary
+management UI and credential migration remain unselected.
 
 ## Verified baseline, 2026-10-09
 
@@ -110,8 +110,8 @@ not select a storage backend, primary management UI or credential migration.
 
 ## Acceptance
 
-- [ ] ADR-002 explicitly supersedes ADR-001's affected storage/cloning decisions
-      and is ratified before new storage/workspace implementation.
+- [x] ADR-002 explicitly supersedes ADR-001's affected storage/cloning decisions;
+      Tom ratified it through structured Q-21 before workspace implementation.
 - [ ] Empty-PVC boot produces every declared project with the correct repositories;
       sync is idempotent; undeclared roots are reported and never deleted.
 - [ ] `project add` declares and materializes through GitOps as one user workflow;

@@ -52,9 +52,12 @@ the original key file's bytes are still present after the atomic replacement.
 
   test "$(id -u)" -eq 0
   test "$(getent passwd dev-env | cut -d: -f6)" = /home/dev-env
-  test -d "$ssh_dir" && test ! -L "$ssh_dir"
-  test -f "$authorized" && test ! -L "$authorized"
-  test -f "$ca_file" && test ! -L "$ca_file"
+  test -d "$ssh_dir"
+  test ! -L "$ssh_dir"
+  test -f "$authorized"
+  test ! -L "$authorized"
+  test -f "$ca_file"
+  test ! -L "$ca_file"
   test "$(stat -c '%a %U:%G' "$ssh_dir")" = '700 dev-env:dev-env'
   test "$(stat -c '%a %U:%G' "$authorized")" = '600 dev-env:dev-env'
 
@@ -153,9 +156,12 @@ expected installation. Later edits cause it to stop rather than overwrite them.
   backup='<PRINTED-BACKUP-PATH>'
   ca_file=/root/dev-env-keeper-ssh-ca.pub
   test "$(id -u)" -eq 0
-  test -f "$authorized" && test ! -L "$authorized"
-  test -f "$backup" && test ! -L "$backup"
-  test -f "$ca_file" && test ! -L "$ca_file"
+  test -f "$authorized"
+  test ! -L "$authorized"
+  test -f "$backup"
+  test ! -L "$backup"
+  test -f "$ca_file"
+  test ! -L "$ca_file"
   ca_key=$(awk 'NF { print $1 " " $2 }' "$ca_file")
   keeper_line='restrict,cert-authority,principals="dev-env-keeper-proxmox-minter" '"$ca_key"' dev-env-keeper-proxmox-minter-ca'
   staged=$(mktemp /home/dev-env/.ssh/.authorized_keys.rollback.XXXXXX)

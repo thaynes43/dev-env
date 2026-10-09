@@ -54,10 +54,11 @@ primary workflow. Q-16 removed approvals from that console: privileged approvals
 remain a separate Claude Code app design requirement. Ordinary design questions
 must also reach the phone; a paragraph in a status stream is not a delivered ask.
 
-[Proposed ADR-002](../.agents/sagas/distributed-dev-env/adrs/002-shared-project-workspaces.md)
+[Accepted ADR-002](../.agents/sagas/distributed-dev-env/adrs/002-shared-project-workspaces.md)
 now makes the workspace choice reviewable: shared project/reference/task files,
 private agent homes, two remote hosts and explicit task transfer. It compares
-available storage and proposes a bounded CephFS trial. It is not ratified; a
+available storage. Tom accepted it and the bounded CephFS trial through Q-21;
+normal rollout still needs acceptance. A
 new PVC does not isolate workspace IO from the household's storage services.
 
 ### The three main journeys
@@ -86,8 +87,8 @@ pod. V2 separates the control services from agent work. The current working impl
 pod on a worker, its own persistent home, and a branch/worktree. The new shared
 project/workspace requirement changes where repository/task files must live;
 private agent runtime homes remain distinct. Storage and remote-host topology
-must be revised in a ratified ADR-002 superseding ADR-001's Storage/C-09
-decisions before implementing that part. The scheduler
+are revised by Accepted ADR-002, superseding ADR-001's Storage/C-09 decisions.
+The bounded trial is authorized; the new workspace is not implemented yet. The scheduler
 places it using its resource requests. If there is no room, it stays Pending
 with a visible reason.
 
@@ -429,8 +430,8 @@ The earlier single-hub plan and private per-session Git workspace choices
 (D-12/D-15/D-22) need revision under D-74. The current RWO homes plus small shared
 memory/rescue volume do not satisfy this topology. Choose and test a genuine
 cross-node shared workspace backend, keeping household-service load bounded;
-ADR-001 remains immutable; ADR-002 must supersede its affected storage/cloning
-decisions before implementation. No storage backend or migration is selected
+ADR-001 remains immutable; Accepted ADR-002 supersedes its affected storage/cloning
+decisions and authorizes a bounded existing-CephFS trial before normal use. No migration is selected
 by this guide.
 
 Official documentation describes multiple paired hosts, but does not establish
@@ -574,10 +575,12 @@ logins; copying v1's live authentication would create competing refresh owners.
 ### Proxmox activation checkpoint
 
 Q-19's CA storage step is complete by owner confirmation in existing
-`HaynesKube/dev-env`. Do not generate another CA or item. Remaining order:
+`HaynesKube/dev-env`. Keeper-only projection shipped through haynes-ops #3642:
+ESO is SecretSynced and the keeper is Ready with a read-only CA mount. Minting
+stays disabled. Do not generate another CA or item. Remaining order:
 
-1. Project those fields into a **keeper-only** Secret/mount with minting off;
-   validate format and key match without exposing values.
+1. Validate format and key match without exposing values. Secret synchronization
+   and disabled keeper readiness do not prove the CA pair valid.
 2. Prepare exact node trust and restricted minter-principal instructions using
    the existing account. Tom performs that owner step unless he delegates it.
 3. Supply private targets, pinned host keys, keeper TCP22 access and accepted

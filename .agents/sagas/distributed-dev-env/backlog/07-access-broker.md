@@ -126,6 +126,9 @@ In haynes-ops:
   empty keeper-only journal are prepared separately in haynes-ops #3589, before
   the new image pins. That prerequisite does not provision a CA, trust, egress
   or standing policies, and does not enable minting.
+  **2026-10-09 delivery:** haynes-ops #3642 projects the saved CA into its
+  keeper-only read-only mount; ESO/keeper are Ready with minting off. Pair
+  validation, owner trust, private configuration and real acceptance remain.
 - [ ] The acceptance run below, and the break-glass half of S-12.
 
 ## V1 parity checklist (2026-10-08)
@@ -152,7 +155,8 @@ acceptance passes; permission checks alone do not cover admission or networking.
 - [ ] P-13: both existing PVE API endpoints and all seven SSH network paths.
 - [ ] P-14: Q-15 keeper PVE mint/install/revoke and durable recovery code built
   (#111), disabled by default. CA storage is owner-confirmed complete (Q-19);
-  CA projection, owner node trust, policies and real test remain.
+  keeper-only CA projection is delivered (#3642). Key-pair validation, owner
+  node trust, policies and real test remain.
 - [ ] P-15: typed agentd store and per-call pve selection built/tested (#111),
   including expiry, redaction, interrupted installs and flags. Signed agent 2.9.0
   is deployed (#3595); a fresh session passed empty-store/default-unavailable
@@ -161,8 +165,9 @@ acceptance passes; permission checks alone do not cover admission or networking.
 - [ ] P-17: PiKVM trust/egress and standing full hardware grants across repos.
 - [ ] P-18: CA projection/owner node trust and keeper journal/job/SSH deployment.
   The CRDs, exact RBAC/admission and journal inventory are deployed in
-  haynes-ops #3589; owner CA storage is confirmed complete (Q-19), while CA
-  projection/node trust, SSH configuration/egress and activation remain.
+  haynes-ops #3589; owner CA storage is complete (Q-19), and projection is
+  Ready on keeper only (#3642). Key-pair validation, node trust, SSH
+  configuration/egress and activation remain; do not close this composite row.
 - [ ] P-19: explicit general SSH certificate/connection revocation contract.
 - [ ] P-20: actual read-only full MCP, browser and ops observability checks.
 
