@@ -1,0 +1,2 @@
+# Unified patch context preserves upstream tabs and blank context lines.
+images/git-wait/git-marker.patch whitespace=-blank-at-eol,-space-before-tab
