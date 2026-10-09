@@ -229,6 +229,9 @@ func (s Session) Validate() error {
 		if err := ValidateCodexModel(s.Model); err != nil {
 			errs = append(errs, err)
 		}
+		if err := ValidateCodexEffort(s.Model, s.Effort); err != nil {
+			errs = append(errs, err)
+		}
 	case AgentOpencode:
 		if strings.TrimSpace(s.Model) == "" {
 			errs = append(errs, errors.New("model is empty"))
@@ -288,4 +291,25 @@ func ValidateCodexModel(id string) error {
 	default:
 		return fmt.Errorf("model must be a full supported Codex model id")
 	}
+}
+
+// ValidateCodexEffort follows the pinned native model manifest. An empty
+// effort preserves the model default; native aliases never receive a fallback.
+func ValidateCodexEffort(model, effort string) error {
+	if err := ValidateCodexModel(model); err != nil {
+		return err
+	}
+	switch effort {
+	case "", "low", "medium", "high", "xhigh":
+		return nil
+	case "max":
+		if model != "gpt-5.5" {
+			return nil
+		}
+	case "ultra":
+		if model != "gpt-5.5" && model != "gpt-6-luna" && model != "gpt-5.6-luna" {
+			return nil
+		}
+	}
+	return fmt.Errorf("model %s does not support Codex reasoning effort %q", model, effort)
 }

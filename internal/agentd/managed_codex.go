@@ -119,7 +119,7 @@ func managedCodexAdmission(s Settings, sess protocol.Session, now time.Time) err
 	if !s.ManagedCodexTasks || sess.Mode != protocol.ModeTask || len(sess.ProjectSnapshot) == 0 {
 		return errors.New("managed codex tasks are disabled or lack an accepted project snapshot")
 	}
-	if err := protocol.ValidateCodexModel(sess.Model); err != nil {
+	if err := protocol.ValidateCodexEffort(sess.Model, sess.Effort); err != nil {
 		return err
 	}
 	if sess.SessionUID == "" || (sess.Workspace != nil && sess.Workspace.SessionUID != sess.SessionUID) {
@@ -170,11 +170,6 @@ func buildCodexLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, 
 	argv = append(argv, "--model", sess.Model, "--dangerously-bypass-approvals-and-sandbox",
 		"-c", `model_provider="openai"`, "-c", `openai_base_url=""`, "-c", `chatgpt_base_url="https://chatgpt.com/backend-api/"`, "-c", `forced_login_method="chatgpt"`, "-c", `cli_auth_credentials_store="file"`)
 	if sess.Effort != "" {
-		switch sess.Effort {
-		case "low", "medium", "high", "xhigh", "max", "ultra":
-		default:
-			return Launch{}, errors.New("unsupported Codex reasoning effort")
-		}
 		value, _ := json.Marshal(sess.Effort)
 		argv = append(argv, "-c", "model_reasoning_effort="+string(value))
 	}

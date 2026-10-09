@@ -37,6 +37,41 @@ func coordinatorTask() apiv1.CreateSessionRequest {
 	return r
 }
 
+func TestProjectCodexModelEffortAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		model, effort string
+		accepted      bool
+	}{
+		{"gpt-6.1-sol", "ultra", true}, {"gpt-6-luna", "max", true},
+		{"gpt-6-luna", "ultra", false}, {"gpt-5.6-luna", "ultra", false},
+		{"gpt-5.5", "max", false}, {"gpt-5.5", "ultra", false},
+		{"gpt-5.5", "", true},
+	} {
+		t.Run(tc.model+"/"+tc.effort, func(t *testing.T) {
+			f := coordinatorFixture(t)
+			bindCatalogFixture(t, f)
+			r := coordinatorTask()
+			r.Agent, r.Model, r.Effort = "codex", tc.model, tc.effort
+			r.Limits = &apiv1.Limits{Timeout: "1m"}
+			w := f.do(http.MethodPost, apiv1.SessionsPath, tokCoordinator, r)
+			if tc.accepted {
+				if w.Code != http.StatusCreated {
+					t.Fatal("pinned model/effort refused", w.Code, w.Body.String())
+				}
+				return
+			}
+			e := wantError(t, w, http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+			if len(e.Fields) != 1 || e.Fields[0].Field != "effort" {
+				t.Fatal("unsupported effort did not refuse before Session admission", e)
+			}
+			var sessions v1alpha1.AgentSessionList
+			if err := f.c.List(context.Background(), &sessions); err != nil || len(sessions.Items) != 0 {
+				t.Fatal("unsupported model/effort wrote a Session", err)
+			}
+		})
+	}
+}
+
 func TestCoordinatorProjectAdmissionDerivesDeclaredSourceAndRules(t *testing.T) {
 	f := coordinatorFixture(t)
 	bindCatalogFixture(t, f)

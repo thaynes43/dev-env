@@ -50,6 +50,37 @@ func managedCodexFixture(t *testing.T) (Settings, protocol.Session, protocol.Wor
 	return s, sess, ws, now
 }
 
+func TestManagedCodexModelEffortAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		model, effort string
+		accepted      bool
+	}{
+		{"gpt-6-astra", "ultra", true}, {"gpt-6.1-sol", "ultra", true},
+		{"gpt-6-luna", "max", true}, {"gpt-6-luna", "ultra", false},
+		{"gpt-5.6-luna", "ultra", false}, {"gpt-5.5", "xhigh", true},
+		{"gpt-5.5", "max", false}, {"gpt-5.5", "ultra", false},
+		{"gpt-5.5", "", true},
+	} {
+		t.Run(tc.model+"/"+tc.effort, func(t *testing.T) {
+			s, sess, ws, now := managedCodexFixture(t)
+			sess.Model, sess.Effort = tc.model, tc.effort
+			l, err := BuildLaunch(s, sess, ws, "boot", now)
+			if (err == nil) != tc.accepted {
+				t.Fatalf("native launch acceptance=%v, want %v: %v", err == nil, tc.accepted, err)
+			}
+			if err == nil {
+				args := strings.Join(l.Argv, " ")
+				if tc.effort == "" && strings.Contains(args, "model_reasoning_effort=") {
+					t.Fatal("empty effort overrode the native default")
+				}
+				if tc.effort != "" && !strings.Contains(args, `model_reasoning_effort="`+tc.effort+`"`) {
+					t.Fatal("accepted native effort was not preserved")
+				}
+			}
+		})
+	}
+}
+
 func TestManagedCodexNativeInputsAndEnvironment(t *testing.T) {
 	s, sess, ws, now := managedCodexFixture(t)
 	config := "developer_instructions = \"root developer\"\nproject_doc_fallback_filenames = [\"ROOT.md\"]\nprofile = \"task\"\n[profiles.task]\ndeveloper_instructions = \"profile developer\"\nproject_doc_fallback_filenames = [\"REPO_RULES.md\"]\n"

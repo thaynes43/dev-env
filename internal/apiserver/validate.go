@@ -162,10 +162,8 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 		}
 	}
 	if req.Agent == "codex" && req.Effort != "" {
-		switch req.Effort {
-		case "low", "medium", "high", "xhigh", "max", "ultra":
-		default:
-			add("effort", "unsupported native Codex reasoning effort")
+		if err := protocol.ValidateCodexEffort(req.Model, req.Effort); err != nil {
+			add("effort", "%v", err)
 		}
 	}
 	if len(req.Prompt) > protocol.MaxPromptBytes {
