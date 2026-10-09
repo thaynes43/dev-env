@@ -186,7 +186,8 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 47 | Retire Headlamp after guarded parity | **DECIDED** 2026-10-09 UTC (Tom, D-71) | Guardrails may be needed changes. Replace Headlamp with guarded access preserving accepted v1 tasks and existing owner rules; prove parity and guardrails, migrate callers, then retire it through GitOps. Headlamp is a migration fallback, not the final architecture. No specific approval implementation or blanket standing admin grant is selected. |
 
 The full options, consequences and rulings for Q-01 to Q-16, and the premise
-corrections withdrawing Q-17 and Q-18, are in
+corrections withdrawing Q-17 and Q-18, plus Q-19's first owner CA provisioning
+step, are in
 [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions).
 
 ## Plan backlog
