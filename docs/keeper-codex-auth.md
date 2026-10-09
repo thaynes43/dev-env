@@ -44,6 +44,15 @@ credential. Cancelling may restore a previously confirmed usable login through
 a fenced, confirmed save; it cannot revive an ambiguous refresh. A different
 account is refused before adoption for this first test.
 
+The reservation lasts fifteen minutes and is busy for every leader while live.
+After expiry, a fenced leader may restore the retained usable credential only
+when the durable record explicitly permits it. A new login first resolves an
+expired reservation. If a restore save is not acknowledged, halt the worker and
+attempt a fenced `NeedsLogin` tombstone; never publish or resume from an
+unconfirmed save. Storage failure can prevent that tombstone from persisting,
+so the record remains a visible unresolved condition rather than proof that
+token material was deleted.
+
 ## Rotation and delivery
 
 The keeper privately stores one bounded versioned record in the named
