@@ -10,6 +10,13 @@ accepted pod exec, Headlamp ServiceAccount workloads and self-merged GitOps,
 alongside their direct OPERATOR permissions. Comparing only the OPERATOR role
 incorrectly classified existing Kubernetes powers as enhancements.
 
+Headlamp's technical reach is not a standing authorization to use it. Historical
+Headlamp work required Tom's live directive for the task or access scope; an
+equivalent route must preserve that requirement. Standing policies cover the
+already preapproved direct OPERATOR and accepted credential scopes, not blanket
+Headlamp cluster-admin access. A directive that already authorizes the task need
+not be requested again; this correction adds no new approval step.
+
 ## Evidence and limits
 
 Read-only audits compared v1's live ServiceAccounts, RBAC, admission and network

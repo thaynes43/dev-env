@@ -9,8 +9,10 @@ available mechanisms; they do not establish a working phone approval boundary.
 ## Constraints
 
 Q-16 requires approvals inside the Claude Code app and full v1 capability parity.
-Standing, short-lived grants must preserve today's effective operations, including
-accepted Headlamp cluster-admin access. Secret reads, drains, snapshots and broad
+The access design must preserve today's effective operations. Standing grants
+cover preapproved direct OPERATOR and accepted credential scopes; Headlamp access
+keeps Tom's existing live directive for its task or access scope. It is not blanket
+standing admin access. Secret reads, drains, snapshots and broad
 workload operations are already reachable through that identity; a direct grant
 would change their access mechanism rather than add a new effective power. No
 concrete additional Kubernetes capability is established by those examples, so

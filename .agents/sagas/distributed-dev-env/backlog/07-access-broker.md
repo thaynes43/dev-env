@@ -9,10 +9,12 @@ decisions 40, 44 and 45). Keep shared-code changes small and rebase before each 
 ## Goal
 
 Agents obtain temporary, attributable access for their work: a namespace role, a
-LAN or in-cluster destination, or a credential. Standing policies preserve v1's
-effective task scope, including its accepted Headlamp and GitOps paths. A direct
-grant can replace the Headlamp detour only when it preserves the same tasks and
-existing owner rules. Phone approval is a proposed workflow, not evidence that
+LAN or in-cluster destination, or a credential. Standing policies cover the
+preapproved direct OPERATOR and accepted credential scopes. Headlamp access keeps
+its existing requirement for Tom's live directive for the task or access scope;
+it is not blanket standing admin access. A direct grant can replace that detour
+only when it preserves the same tasks and owner directives. Phone approval is a
+proposed workflow, not evidence that
 those Kubernetes powers are new. D-70 corrects the earlier OPERATOR-only baseline;
 no approval route or blanket direct cluster-admin grant is selected.
 
