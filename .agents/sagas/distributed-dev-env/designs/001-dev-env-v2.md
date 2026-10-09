@@ -2501,6 +2501,17 @@ stopped. A different session UID cannot take even a stopped record without a
 future explicit transfer operation. Same-session resume into a new pod also
 requires a verified stopped receipt and a new ownership generation.
 
+Shared preparation and rescue each cap their complete locked Git section at two
+minutes; the common-Git wait is two minutes plus ten seconds of headroom, respecting
+a shorter caller deadline. Before owner admission only, the daemon retries a typed
+administrative-wait timeout up to three total attempts with cancellable sleeps of
+one then two seconds, releasing the task lock and revalidating identity each time.
+Task-writer contention, uncertain receipts, mount failures and caller cancellation
+never retry. The cap does not guarantee FIFO service or cancellation of a stuck
+kernel filesystem call; exhaustion remains observable and uncertain owners stay
+protected. Shared boot and admission waits send observational pending heartbeats
+and do not trigger the idle timer.
+
 Shared rescue is restricted to the owned task branch and its WIP rescue refs;
 it never scans or snapshots canonical, anchor, tag, stash or peer work. Shared
 preparation does not globally prune worktree registrations. The supervisor holds

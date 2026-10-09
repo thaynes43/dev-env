@@ -89,7 +89,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if d.S.WorkspaceID == "" {
 		d.beat(ctx)
 	}
-	writer, writerErr := acquireWorkspaceWriter(ctx, d.R, d.S, d.Session, d.now())
+	writer, writerErr := retryWorkspaceWriterAdmission(ctx, func() (*writerLease, error) {
+		return acquireWorkspaceWriter(ctx, d.R, d.S, d.Session, d.now())
+	}, pauseWorkspaceAdmission)
 	if writer != nil {
 		d.S.writer = writer
 		defer writer.unlock()

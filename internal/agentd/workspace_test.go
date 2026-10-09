@@ -295,6 +295,101 @@ func TestWorkspaceAdminLockWaitRespectsContext(t *testing.T) {
 	}
 }
 
+func TestWorkspaceAdmissionRetryOnlyLocalAdminTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		failure   error
+		succeedAt int
+		calls     int
+		delays    []time.Duration
+	}{
+		{"second try", &workspaceAdminWaitTimeout{}, 2, 2, []time.Duration{time.Second}},
+		{"third try", &workspaceAdminWaitTimeout{}, 3, 3, []time.Duration{time.Second, 2 * time.Second}},
+		{"exhausted", &workspaceAdminWaitTimeout{}, 0, 3, []time.Duration{time.Second, 2 * time.Second}},
+		{"busy writer", syscall.EWOULDBLOCK, 0, 1, nil},
+		{"caller deadline", context.DeadlineExceeded, 0, 1, nil},
+		{"uncertain receipt", errors.New("uncertain receipt"), 0, 1, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			var delays []time.Duration
+			writer, err := retryWorkspaceWriterAdmission(context.Background(), func() (*writerLease, error) {
+				calls++
+				if calls == tc.succeedAt {
+					return &writerLease{}, nil
+				}
+				return nil, tc.failure
+			}, func(_ context.Context, d time.Duration) error { delays = append(delays, d); return nil })
+			if calls != tc.calls || !slices.Equal(delays, tc.delays) || (err == nil) != (tc.succeedAt > 0) || (writer != nil) != (tc.succeedAt > 0) {
+				t.Fatalf("calls=%d delays=%v writer=%v err=%v", calls, delays, writer, err)
+			}
+			if tc.name == "exhausted" && !strings.Contains(err.Error(), "3 admission attempts") {
+				t.Fatal("exhaustion is not observable")
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	_, err := retryWorkspaceWriterAdmission(ctx, func() (*writerLease, error) { calls++; cancel(); return nil, &workspaceAdminWaitTimeout{} }, func(context.Context, time.Duration) error {
+		t.Fatal("cancelled caller reached a retry sleep")
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) || calls != 1 {
+		t.Fatalf("cancellation: calls=%d err=%v", calls, err)
+	}
+}
+
+func TestWorkspaceAdminWaitFailureDistinguishesCallerDeadline(t *testing.T) {
+	caller, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	expired, end := context.WithDeadline(context.Background(), time.Time{})
+	defer end()
+	var timeout *workspaceAdminWaitTimeout
+	if !errors.As(workspaceAdminWaitFailure(caller, expired), &timeout) {
+		t.Fatal("local wait timeout lost its type")
+	}
+	if errors.As(workspaceAdminWaitFailure(expired, expired), &timeout) {
+		t.Fatal("caller deadline became retryable")
+	}
+	cancel()
+	if errors.As(workspaceAdminWaitFailure(caller, expired), &timeout) {
+		t.Fatal("caller cancellation became retryable")
+	}
+}
+
+func TestWorkspaceInitialAdmissionBoundsIdentityGit(t *testing.T) {
+	g := newGitFixture(t, "demo")
+	s, r := g.settings(t)
+	s, sess := sharedSettings(t, s, "task-a")
+	if _, err := cloneRepo(context.Background(), r, s, sess.Repo, s.ClonePath(sess.Repo)); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sawGit := false
+	bounded := &contextRecordingRunner{Runner: r, onRun: func(runCtx context.Context, c Cmd) {
+		if c.Name == "git" {
+			sawGit = true
+			deadline, ok := runCtx.Deadline()
+			if !ok || time.Until(deadline) > sharedGitPrepareBudget {
+				t.Error("initial admission identity Git lacks its lock-section bound")
+			}
+			cancel()
+		}
+	}}
+	if _, err := acquireWorkspaceWriter(ctx, bounded, s, sess, rescueNow); err == nil || !sawGit {
+		t.Fatalf("cancelled identity admission: sawGit=%t err=%v", sawGit, err)
+	}
+	if exists(s.ownerPath(sess.Name)) {
+		t.Fatal("cancelled identity admission wrote an owner")
+	}
+	unlock, err := workspaceLock(s, "writer-"+sess.Name)
+	if err != nil {
+		t.Fatal("failed identity admission kept the task lock", err)
+	}
+	unlock()
+}
+
 func TestWorkspaceLatePaneCannotLaunchAfterStoppedReceipt(t *testing.T) {
 	g := newGitFixture(t, "demo")
 	s, r := g.settings(t)

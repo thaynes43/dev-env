@@ -248,12 +248,13 @@ func workspaceLock(s Settings, name string) (func(), error) {
 // .git pointer. It also serializes the initial clone before that directory exists.
 func workspaceAdminLock(ctx context.Context, s Settings, repo string) (func(), error) {
 	key := sha256.Sum256([]byte(filepath.Join(s.ClonePath(repo), ".git")))
+	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, sharedGitAdminBudget)
 	defer cancel()
 	name := "git-" + hex.EncodeToString(key[:])
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, workspaceAdminWaitFailure(caller, ctx)
 		}
 		unlock, err := workspaceLock(s, name)
 		if err == nil {
@@ -266,9 +267,68 @@ func workspaceAdminLock(ctx context.Context, s Settings, repo string) (func(), e
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, fmt.Errorf("shared Git administration lock wait: %w", ctx.Err())
+			return nil, workspaceAdminWaitFailure(caller, ctx)
 		case <-timer.C:
 		}
+	}
+}
+
+// Only this local administrative deadline is retryable before owner admission.
+// Caller cancellation/deadline, task-writer contention and uncertain receipts
+// remain ordinary failures and never acquire retry authority from this type.
+type workspaceAdminWaitTimeout struct{}
+
+func (*workspaceAdminWaitTimeout) Error() string { return "shared Git administrative wait timed out" }
+func (*workspaceAdminWaitTimeout) Unwrap() error { return context.DeadlineExceeded }
+
+func workspaceAdminWaitFailure(caller, wait context.Context) error {
+	if err := caller.Err(); err != nil {
+		return fmt.Errorf("shared Git administration lock wait: %w", err)
+	}
+	if errors.Is(wait.Err(), context.DeadlineExceeded) {
+		return &workspaceAdminWaitTimeout{}
+	}
+	return fmt.Errorf("shared Git administration lock wait: %w", wait.Err())
+}
+
+const workspaceAdmissionAttempts = 3
+
+func retryWorkspaceWriterAdmission(ctx context.Context, acquire func() (*writerLease, error), pause func(context.Context, time.Duration) error) (*writerLease, error) {
+	for attempt := 1; attempt <= workspaceAdmissionAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		writer, err := acquire()
+		if err == nil {
+			return writer, nil
+		}
+		var timeout *workspaceAdminWaitTimeout
+		if !errors.As(err, &timeout) {
+			return nil, err
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if attempt == workspaceAdmissionAttempts {
+			return nil, fmt.Errorf("shared administrative wait exhausted after %d admission attempts: %w", attempt, err)
+		}
+		// acquireWorkspaceWriter releases its task lock on every failure.
+		// The next attempt reruns all mount and receipt identity checks.
+		if err := pause(ctx, time.Duration(attempt)*time.Second); err != nil {
+			return nil, err
+		}
+	}
+	panic("unreachable admission attempt bound")
+}
+
+func pauseWorkspaceAdmission(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 
@@ -289,6 +349,10 @@ func acquireWorkspaceWriter(ctx context.Context, r Runner, s Settings, sess prot
 		return fail(err)
 	}
 	defer admin()
+	// Initial admission also reads common Git identity and branch existence.
+	// Keep those commands within the same maximum as other shared holders.
+	ctx, cancelGit := context.WithTimeout(ctx, sharedGitPrepareBudget)
+	defer cancelGit()
 	owner := taskOwner{Version: workspaceVersion, Workspace: s.WorkspaceID, Task: sess.Name, Repo: sess.Repo,
 		Clone: s.ClonePath(sess.Repo), Worktree: s.WorktreePath(sess.Name), SessionUID: sess.Workspace.SessionUID,
 		PodUID: s.PodUID, Generation: 1, State: "owned", UpdatedAt: now.UTC()}
@@ -338,6 +402,9 @@ func acquireWorkspaceWriter(ctx context.Context, r Runner, s Settings, sess prot
 		default:
 			return fail(errors.New("unknown task ownership state; takeover refused"))
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return fail(err)
 	}
 	if err := writeWorkspaceJSON(s.ownerPath(sess.Name), owner); err != nil {
 		return fail(err)
