@@ -8,6 +8,7 @@ import tarfile
 import tempfile
 import unittest
 import sys
+from unittest import mock
 
 sys.dont_write_bytecode = True
 
@@ -18,6 +19,19 @@ spec.loader.exec_module(module)
 
 
 class SourceRecipeChecks(unittest.TestCase):
+    def test_source_root_creates_missing_parent_but_refuses_existing_target(self):
+        with tempfile.TemporaryDirectory(prefix='git-wait-root-mock-') as directory:
+            target=Path(directory)/'missing-parent/native'
+            with mock.patch.object(sys,'argv',['recipe',str(target)]), \
+                    mock.patch.object(module,'download',side_effect=RuntimeError('mock first download')) as download:
+                with self.assertRaisesRegex(RuntimeError,'mock first download'):
+                    module.main()
+                self.assertTrue((target/'artifacts').is_dir())
+                self.assertEqual(download.call_count,1)
+                with self.assertRaises(FileExistsError):
+                    module.main()
+                self.assertEqual(download.call_count,1)
+
     def test_download_is_one_bounded_read_and_rejects_wrong_pin(self):
         reads = []
         calls = []

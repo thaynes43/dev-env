@@ -99,6 +99,7 @@ def main():
                       reader='/opt/dev-env/trials/libgit-wait-reader.so')
     if provenance['baseSystemGitPackage'] != provenance['debianVersion']:
         raise ValueError('exact base distro Git differs from reviewed u3')
+    (output / 'git-wait-LICENSE').write_bytes((control / 'COPYING').read_bytes())
     serialized = json.dumps(provenance, sort_keys=True) + '\n'
     if len(serialized.encode()) > 4096:
         raise ValueError('provenance exceeds actual helper image-file cap')

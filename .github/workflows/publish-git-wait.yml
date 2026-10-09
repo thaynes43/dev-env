@@ -30,6 +30,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Check offline source, helper and renderer boundaries
+        timeout-minutes: 1
+        run: |
+          nice -n 19 python3 scripts/trials/check-git-wait-source.py
+          nice -n 19 python3 scripts/trials/check-git-wait-helper.py
+          nice -n 19 python3 scripts/trials/check-git-wait-render.py
       - name: Set immutable fixture tag
         id: meta
         run: echo "tag=git-wait-sha-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"

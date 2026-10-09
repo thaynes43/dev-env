@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import signal
 import subprocess
+import tarfile
 import tempfile
 import time
 
@@ -41,6 +42,36 @@ for path, field, cap in [(ROOT / 'git-wait', 'executableSHA256', 8*1024*1024),
     assert 0 < len(content) <= cap
     assert hashlib.sha256(content).hexdigest() == PROVENANCE[field]
 assert len(json.dumps(PROVENANCE).encode()) <= 4096
+# Retain license text and the complete corresponding source, including the
+# actual native marker and declared options, in this same distributed artifact.
+with Path('/usr/share/licenses/git-wait/COPYING').open('rb') as stream:
+    license_text = stream.read(65537)
+assert 0 < len(license_text) <= 65536 and b'GNU GENERAL PUBLIC LICENSE' in license_text
+with Path('/usr/share/doc/dev-env/THIRD_PARTY.md').open('rb') as stream:
+    third_party = stream.read(65537)
+assert len(third_party) <= 65536 and b'git-wait-source.tar.gz' in third_party
+required = {'git-wait-source/git/COPYING', 'git-wait-source/git/debian/patches/series',
+            'git-wait-source/recipe/marker.c', 'git-wait-source/recipe/marker.h',
+            'git-wait-source/recipe/marker-test.c', 'git-wait-source/recipe/git-marker.patch',
+            'git-wait-source/build-options.json', 'git-wait-source/provenance.json'}
+retained = {}
+with tarfile.open(ROOT / 'git-wait-source.tar.gz', 'r|gz') as archive:
+    members = total = 0
+    for entry in archive:
+        members += 1
+        total += entry.size
+        assert members <= 12000 and total <= 128*1024*1024
+        if entry.name in required:
+            assert entry.isfile() and entry.name not in retained and entry.size <= 256*1024
+            retained[entry.name] = archive.extractfile(entry).read(256*1024+1)
+assert retained.keys() == required
+assert retained['git-wait-source/git/COPYING'] == license_text
+assert json.loads(retained['git-wait-source/provenance.json']) == PROVENANCE
+options = json.loads(retained['git-wait-source/build-options.json'])
+assert hashlib.sha256('\n'.join(options).encode()).hexdigest() == PROVENANCE['buildOptionsSHA256']
+for name, field in [('marker.c','markerSourceSHA256'), ('marker.h','markerHeaderSHA256'),
+                    ('git-marker.patch','markerPatchSHA256')]:
+    assert hashlib.sha256(retained['git-wait-source/recipe/'+name]).hexdigest() == PROVENANCE[field]
 # Exercise the actual rendered helper interface, not a parallel ctypes setup.
 # CI supplies the expected exact source commit and helper digest from checkout;
 # the image's own provenance cannot supply its expected identity to itself.

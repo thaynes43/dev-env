@@ -17,6 +17,8 @@ LABEL org.opencontainers.image.source="https://github.com/thaynes43/dev-env" \
 USER root
 COPY --from=builder /build/out/git-wait /build/out/git-control /build/out/libgit-wait-reader.so /build/out/marker-test /build/out/git-wait-provenance.json /opt/dev-env/trials/
 COPY --from=builder /build/out/git-wait-source.tar.gz /opt/dev-env/trials/
+COPY --from=builder /build/out/git-wait-LICENSE /usr/share/licenses/git-wait/COPYING
+COPY images/THIRD_PARTY.md /usr/share/doc/dev-env/THIRD_PARTY.md
 COPY scripts/trials /opt/dev-env/trials/checks/
 COPY images/git-wait /opt/dev-env/trials/recipe/
 USER dev

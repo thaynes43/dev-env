@@ -75,7 +75,7 @@ def checksums(dsc):
 
 def main():
     target = Path(sys.argv[1]).resolve()
-    target.mkdir()
+    target.mkdir(parents=True)
     artifacts = target / 'artifacts'
     artifacts.mkdir()
     # Resolve the published tag separately from installed package metadata.

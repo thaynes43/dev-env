@@ -57,6 +57,7 @@ jobs:
           filters: |
             git_wait_image:
               - 'images/git-wait/**'
+              - 'images/THIRD_PARTY.md'
               - 'scripts/trials/**'
               - '.github/workflows/publish-git-wait.yml'
               - '.dockerignore'
@@ -309,6 +310,12 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+      - name: Check offline source, helper and renderer boundaries
+        timeout-minutes: 1
+        run: |
+          nice -n 19 python3 scripts/trials/check-git-wait-source.py
+          nice -n 19 python3 scripts/trials/check-git-wait-helper.py
+          nice -n 19 python3 scripts/trials/check-git-wait-render.py
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:

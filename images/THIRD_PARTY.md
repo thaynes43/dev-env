@@ -1,7 +1,8 @@
 # Third-party software in the published images
 
-This repo's own code is MIT-licensed ([LICENSE](../LICENSE)). Its published images
-also carry other people's software, and each component stays under its own
+This repo's own code is MIT-licensed ([LICENSE](../LICENSE)), except files with an
+explicit different license, including the diagnostic marker listed below. Its
+published images also carry other people's software, and each component stays under its own
 license. This page lists them. The license that ships with each component is the one
 that governs; this list is a guide to it.
 
@@ -83,6 +84,26 @@ ceremony. It contains no Claude Code or other agent-image tools.
 | Codex CLI | Apache-2.0 | [openai/codex](https://github.com/openai/codex); the pinned upstream `LICENSE` and `NOTICE` are retained under `/usr/share/licenses/codex/`. |
 | Node.js, npm and Yarn from `node:24-slim` | The component licenses listed for the agent base above | The helper uses the same pinned Node base. |
 | Debian base, `ca-certificates`, `curl` and their dependencies | Each package's own license | Copyright/license files remain under `/usr/share/doc/<package>/copyright`; Debian source archives are linked above. |
+
+## Git wait diagnostic: `ghcr.io/thaynes43/dev-env:git-wait-sha-*`
+
+Built from [`git-wait/Dockerfile`](git-wait/Dockerfile). This fixture inherits the
+agent image and its component licenses above. It adds a separate modified Git
+binary for a bounded storage diagnostic. The installed `/usr/bin/git` remains the
+base image's Debian Git.
+
+| Component | License | Notes |
+|---|---|---|
+| `git-control` and modified `git-wait` | GPL-2.0, with the upstream file notices retained | Built from the pinned Debian Git source and its patch set. Git's [COPYING at the pinned upstream revision](https://github.com/git/git/blob/cc7d11c16782041a6bb73e2fb56417b7d4c6d186/COPYING) supplies the license. The diagnostic patch is included with the source. |
+| Native marker, reader library and marker test (`marker.c`, `marker.h`, `marker-test.c`) | GPL-2.0-only | These files carry explicit SPDX notices. The reader is `/opt/dev-env/trials/libgit-wait-reader.so`; the test is `/opt/dev-env/trials/marker-test`. They are not covered by this repo's MIT license. |
+
+The fixture retains the full corresponding source in
+`/opt/dev-env/trials/git-wait-source.tar.gz`: the complete patched Git tree,
+marker sources, diagnostic patch, build recipe, exact build options and
+provenance. The recipe is also available under `/opt/dev-env/trials/recipe/`.
+The upstream license text is `/usr/share/licenses/git-wait/COPYING`, and this
+inventory is `/usr/share/doc/dev-env/THIRD_PARTY.md`. Hosted image checks verify
+the retained license and source inventory alongside the binary and recipe hashes.
 
 ## Where the license texts are in the images
 
