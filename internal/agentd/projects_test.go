@@ -83,9 +83,20 @@ func projectFixture(t *testing.T) (gitFixture, Settings, *projectFixtureRunner, 
 	return g, s, &projectFixtureRunner{ExecRunner: execRunner, remote: g.remote}, c
 }
 
-func syncProjectFixture(t *testing.T, s Settings, r Runner, c *projectcatalog.Catalog) ProjectSyncReport {
+func projectSyncFixtureOptions(raw ...string) ProjectSyncOptions {
+	data := projectTestCatalog
+	if len(raw) != 0 {
+		data = raw[0]
+	}
+	return ProjectSyncOptions{Enabled: true, AcceptedCatalog: &ProjectCatalogSource{Namespace: "dev-env-system", Name: "dev-env-project-catalog",
+		Read: func(context.Context) (ProjectCatalogResource, error) {
+			return ProjectCatalogResource{Namespace: "dev-env-system", Name: "dev-env-project-catalog", UID: "catalog-1", ResourceVersion: "1", Data: []byte(data)}, nil
+		}}}
+}
+
+func syncProjectFixture(t *testing.T, s Settings, r Runner, c *projectcatalog.Catalog, raw ...string) ProjectSyncReport {
 	t.Helper()
-	report, err := SyncProjects(context.Background(), r, s, c, ProjectSyncOptions{Enabled: true})
+	report, err := SyncProjects(context.Background(), r, s, c, projectSyncFixtureOptions(raw...))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +124,7 @@ func TestProjectSyncDisabledAndMountIdentity(t *testing.T) {
 		t.Fatal("zero value catalog accepted as server authority")
 	}
 	writeFile(t, filepath.Join(s.workspaceDir(), "marker.json"), `{"version":1,"id":"foreign"}`)
-	if _, err := SyncProjects(context.Background(), r, s, c, ProjectSyncOptions{Enabled: true}); err == nil {
+	if _, err := SyncProjects(context.Background(), r, s, c, projectSyncFixtureOptions()); err == nil {
 		t.Fatal("foreign mount identity accepted")
 	}
 	if r.cloneCalls != 0 {
@@ -223,11 +234,12 @@ func TestProjectSyncMultiRepoOverrideAndRepositoryInstructions(t *testing.T) {
 	gitRun(t, g.env, g.seed, "commit", "-q", "-m", "stable")
 	gitRun(t, g.env, g.seed, "push", "-q", "origin", "stable")
 	stable := gitRun(t, g.env, g.seed, "rev-parse", "HEAD")
-	c, err := projectcatalog.Parse([]byte(`{"version":1,"repositories":{"demo":{"github":"fixture/demo"},"other":{"github":"fixture/other"}},"projects":{"sample":{"repositories":[{"name":"demo","defaultBranch":"stable"},{"name":"other"}],"rules":""}}}`))
+	data := `{"version":1,"repositories":{"demo":{"github":"fixture/demo"},"other":{"github":"fixture/other"}},"projects":{"sample":{"repositories":[{"name":"demo","defaultBranch":"stable"},{"name":"other"}],"rules":""}}}`
+	c, err := projectcatalog.Parse([]byte(data))
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertNoPreservedProject(t, syncProjectFixture(t, s, r, c))
+	assertNoPreservedProject(t, syncProjectFixture(t, s, r, c, data))
 	if gitRun(t, g.env, s.ClonePath("demo"), "rev-parse", "HEAD") != main {
 		t.Fatal("project override moved canonical global default")
 	}
@@ -243,7 +255,7 @@ func TestProjectSyncMultiRepoOverrideAndRepositoryInstructions(t *testing.T) {
 	}
 	// A branch deleted upstream cannot be admitted from its cached remote ref.
 	gitRun(t, g.env, g.seed, "push", "-q", "origin", ":stable")
-	report := syncProjectFixture(t, s, r, c)
+	report := syncProjectFixture(t, s, r, c, data)
 	if !slices.ContainsFunc(report.Findings, func(f ProjectFinding) bool { return f.State == "preserved" && strings.Contains(f.Detail, "fetch") }) || gitRun(t, g.env, filepath.Join(root, "demo"), "rev-parse", "HEAD") != stable {
 		t.Fatal("deleted remote branch selected cached source")
 	}
@@ -461,7 +473,7 @@ func TestProjectSyncUsesExistingCommonGitLock(t *testing.T) {
 	defer unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	_, err = SyncProjects(ctx, r, s, c, ProjectSyncOptions{Enabled: true})
+	_, err = SyncProjects(ctx, r, s, c, projectSyncFixtureOptions())
 	if !errors.Is(err, context.DeadlineExceeded) || r.cloneCalls != 0 {
 		t.Fatal("sync bypassed common Git lock or ignored cancellation")
 	}
@@ -498,7 +510,8 @@ func TestProjectSyncPreservesExistingGitRoot(t *testing.T) {
 
 func TestProjectPerRepositoryBudgetsAndPartialSuccess(t *testing.T) {
 	_, s, r, _ := projectFixture(t)
-	c, err := projectcatalog.Parse([]byte(`{"version":1,"repositories":{"demo":{"github":"fixture/demo"},"other":{"github":"fixture/other"}},"projects":{"sample":{"repositories":[{"name":"demo"},{"name":"other"}],"rules":""}}}`))
+	data := `{"version":1,"repositories":{"demo":{"github":"fixture/demo"},"other":{"github":"fixture/other"}},"projects":{"sample":{"repositories":[{"name":"demo"},{"name":"other"}],"rules":""}}}`
+	c, err := projectcatalog.Parse([]byte(data))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -515,7 +528,7 @@ func TestProjectPerRepositoryBudgetsAndPartialSuccess(t *testing.T) {
 			}
 		}
 	}}
-	report := syncProjectFixture(t, s, recorded, c)
+	report := syncProjectFixture(t, s, recorded, c, data)
 	if len(deadlines) != 2 || !deadlines[1].After(deadlines[0]) {
 		t.Fatal("repositories share a single shrinking Git deadline")
 	}
