@@ -10,6 +10,12 @@ It appends a restricted CA trust entry and preserves the existing v1 SSH key.
 It changes no sudo rule and needs no sshd reload/restart. Keeper and broker
 Proxmox minting stay disabled after this step.
 
+**Owner update:** on 2026-10-09 Tom answered structured Q-22, "Delegate the trust
+installation to Codex". The agent is preparing a reviewed public-key-only
+delivery path and guarded updates; installed trust is not yet claimed. The
+manual root recipe below remains the owner fallback. Private CA material stays
+keeper-only and this delegation does not enable PVE grants.
+
 The read-only audit found OpenSSH 9.2 on all five nodes, the expected account,
 `.ssh` mode 0700 and `authorized_keys` mode 0600, owned by `dev-env`; one existing
 plain key and no CA entry; `/usr/bin/pvesh` and the required noninteractive sudo

@@ -60,6 +60,8 @@ private agent homes, two remote hosts and explicit task transfer. It compares
 available storage. Tom accepted it and the bounded CephFS trial through Q-21;
 normal rollout still needs acceptance. A
 new PVC does not isolate workspace IO from the household's storage services.
+The [trial plan and outcome](trials/2026-10-09-cephfs-feasibility.md) records
+limits and tripwires before execution, with full workload/device gates retained.
 
 ### The three main journeys
 
@@ -581,19 +583,20 @@ stays disabled. Do not generate another CA or item. Remaining order:
 
 1. Validate format and key match without exposing values. Secret synchronization
    and disabled keeper readiness do not prove the CA pair valid.
-2. Prepare exact node trust and restricted minter-principal instructions using
-   the existing account. Tom performs that owner step unless he delegates it.
+2. Install the restricted minter-principal trust using the existing account.
+   Q-22 delegates this to Codex through a reviewed public-key-only delivery path,
+   guarded updates and v1 read-only access checks on each node.
 3. Supply private targets, pinned host keys, keeper TCP22 access and accepted
    policies. Keep actual trust material and private addresses out of public docs.
 4. Enable keeper and broker together only after prerequisites pass. Declare
    activity; test real mint/install/use/release/expiry/recovery and cleanup.
 5. Remove fixtures and compare v1/existing session UIDs and restart counts.
 
-[Owner node-trust instructions](keeper-node-trust.md) are now prepared from
+[Node-trust instructions](keeper-node-trust.md) are now prepared from
 read-only checks on all five nodes. They append the restricted CA entry using
 the saved public key, preserve v1's existing key and include guarded rollback.
-They have not been executed; installed trust and provider acceptance remain
-pending. Secret synchronization will not by itself prove the CA key pair valid.
+Installation is pending under the Q-22 delegation; provider acceptance remains
+separate. Secret synchronization will not by itself prove the CA key pair valid.
 
 General hw-ssh certificates are a separate unfinished feature. Certificate
 expiry alone does not terminate an existing SSH connection; P-19 needs its

@@ -38,10 +38,15 @@ unchanged, with its affected storage/cloning decisions superseded by ADR-002.
 Phone delivery remains unverified; an owner answer does not establish device
 delivery, and the earlier probe explicitly had a desktop reply.
 
-[Owner node-trust instructions](../docs/keeper-node-trust.md) are prepared and
-syntax-checked, with metadata verified read-only on all five nodes; they have
-not been executed. That owner step remains distinct from the keeper-only CA
-projection and from the shared-workspace decision.
+[Node-trust instructions](../docs/keeper-node-trust.md) are prepared and
+syntax-checked, with metadata verified read-only on all five nodes. Tom answered
+Q-22, "Delegate the trust installation to Codex" (D-76). Prepare and review a
+public-key-only delivery path, preserve the existing account and v1 SSH key,
+verify v1 read-only access per node, and clean temporary delivery resources.
+Installation is pending; minting stays off and the private CA stays keeper-only.
+The [bounded CephFS trial record](../docs/trials/2026-10-09-cephfs-feasibility.md)
+predeclares the fixture, household tripwires and cleanup. Neither task advances
+the composite parity rows by itself.
 
 The independent stale-start fix is **shipped**: dev-env #124 merged
 `759f084f`, release #123 produced **2.9.1** at `b6c0f3c`, and publish-agent run
