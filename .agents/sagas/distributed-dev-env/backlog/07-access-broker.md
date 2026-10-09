@@ -151,16 +151,18 @@ acceptance passes; permission checks alone do not cover admission or networking.
   credential exclusion is covered by controller tests; no runtime hold was needed.
 - [ ] P-13: both existing PVE API endpoints and all seven SSH network paths.
 - [ ] P-14: Q-15 keeper PVE mint/install/revoke and durable recovery code built
-  (#111), disabled by default. Owner CA/trust, policies and real test remain.
+  (#111), disabled by default. CA storage is owner-confirmed complete (Q-19);
+  CA projection, owner node trust, policies and real test remain.
 - [ ] P-15: typed agentd store and per-call pve selection built/tested (#111),
   including expiry, redaction, interrupted installs and flags. Signed agent 2.9.0
   is deployed (#3595); a fresh session passed empty-store/default-unavailable
   checks. Real grant/helper acceptance is required for closure.
 - [ ] P-16: full hw-ssh user/sudo/root/raw/PTY behavior with short certificates.
 - [ ] P-17: PiKVM trust/egress and standing full hardware grants across repos.
-- [ ] P-18: owner CA/node trust and keeper journal/job/SSH deployment.
+- [ ] P-18: CA projection/owner node trust and keeper journal/job/SSH deployment.
   The CRDs, exact RBAC/admission and journal inventory are deployed in
-  haynes-ops #3589; CA/trust, SSH configuration/egress and activation remain.
+  haynes-ops #3589; owner CA storage is confirmed complete (Q-19), while CA
+  projection/node trust, SSH configuration/egress and activation remain.
 - [ ] P-19: explicit general SSH certificate/connection revocation contract.
 - [ ] P-20: actual read-only full MCP, browser and ops observability checks.
 
