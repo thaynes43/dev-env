@@ -3444,8 +3444,10 @@ properties. No current mapping selects either CA field. Adding these fields
 therefore does not add them to the current v1 or session Secrets. Provision a
 separate keeper-only ExternalSecret with `remoteRef.key: dev-env`: decode
 `SSH_CA_PRIVATE_KEY_B64` once with `decodingStrategy: Base64` into `private-key`,
-and map `SSH_CA_PUBLIC_KEY` unchanged into `public-key`. Keep the destination
-`dev-env-system/dev-env-keeper-ssh-ca` and read-only keeper mount unchanged.
+and map `SSH_CA_PUBLIC_KEY` unchanged into `public-key`. Use the planned
+destination `dev-env-system/dev-env-keeper-ssh-ca` and planned read-only keeper
+mount at `/etc/dev-env-keeper/ssh-ca`. The CA projection is not deployed yet and
+minting remains disabled.
 Do not add the fields to v1's consumed Secrets or session profiles.
 
 Owner instructions: open a terminal on a trusted Mac or Linux computer and paste
