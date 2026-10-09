@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.9.1](https://github.com/thaynes43/dev-env/compare/v2.9.0...v2.9.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* **deps:** update module github.com/prometheus/client_golang to v1.25.0 ([#121](https://github.com/thaynes43/dev-env/issues/121)) ([4a55a5d](https://github.com/thaynes43/dev-env/commit/4a55a5dc4002519340655efa1e81b5fe467fd43f))
+* require current source for new tasks and document dev-env workflows ([#124](https://github.com/thaynes43/dev-env/issues/124)) ([759f084](https://github.com/thaynes43/dev-env/commit/759f084f52099cda258b5cd9f1a0eebecce5d284))
+
 ## [2.9.0](https://github.com/thaynes43/dev-env/compare/v2.8.0...v2.9.0) (2026-10-08)
 
 
