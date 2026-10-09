@@ -56,6 +56,14 @@ jobs:
           filters: |
             agent_image:
               - 'images/agent/**'
+              # The Go stage copies these and make build compiles agentd/agent-run.
+              - 'cmd/**'
+              - 'internal/**'
+              - 'api/**'
+              - 'go.mod'
+              - 'go.sum'
+              - 'Makefile'
+              - '.dockerignore'
               # Copied into the image (#55): a change to either is a change to the image.
               - 'LICENSE'
               - 'images/THIRD_PARTY.md'
