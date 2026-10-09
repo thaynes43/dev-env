@@ -5,6 +5,18 @@ Tom's own machine. Read this page, then [CLAUDE.md](../CLAUDE.md) (the rules), t
 the saga. To start building, follow
 [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md).
 
+## Parked for the Codex reset, 2026-10-08 America/New_York
+
+Tom requested a safe stopping point and a reset handoff with 7% usage remaining.
+Read the [reset work order](handoffs/2026-10-08-codex-reset.md) before resuming.
+Q-19 is complete by owner confirmation: the fresh CA fields are saved in existing
+`HaynesKube/dev-env`. No values were sent to or read by this coordinator. Do not
+ask for another CA or another item. The next owner step is Proxmox node CA trust,
+after concrete instructions are prepared; the original work order assigns that
+step to Tom unless he delegates it. Keeper CA projection and minting remain off.
+Twenty parity gaps still block cutover; Headlamp stays until guarded parity and
+caller migration are proven.
+
 ## Target clarification on 2026-10-09 UTC
 
 Tom confirmed that guardrails may be needed and Headlamp should go away once
@@ -13,9 +25,10 @@ replacement for every accepted v1 task, including owner-directed Headlamp work.
 Headlamp is a migration fallback, not the final architecture. Prove the replacement
 and migrate callers before retiring it through GitOps. No approval route or blanket
 standing admin access is selected. The existing owner requirements remain. The
-active owner step is Q-19: Tom requested generation instructions and reuse of
-the existing `HaynesKube/dev-env` item (D-72). Instructions are in DESIGN-001
-section 6.12; await saved confirmation and send no values in chat.
+Q-19 owner storage step is complete: Tom confirmed both fresh CA fields saved
+in the existing `HaynesKube/dev-env` item (D-72). Instructions are in DESIGN-001
+section 6.12. Node trust and keeper projection/activation remain pending; send
+no values in chat.
 
 ## State on 2026-10-08
 
@@ -62,8 +75,8 @@ section 6.12; await saved confirmation and send no values in chat.
     presence/ADC permission checks and read-only Omni/API calls, then was rescued
     and removed. PVE LAN access and the remaining service checks still block
     full closure. D-69's Proxmox backend is built with minting disabled: broker
-    jobs, keeper SSH/journal/cleanup and typed agentd/PVE support. Owner CA and
-    node trust, standing policies and real provider acceptance still block its
+    jobs, keeper SSH/journal/cleanup and typed agentd/PVE support. CA projection,
+    owner node trust, standing policies and real provider acceptance still block its
     activation. General hw-ssh also needs P-19's connection/revocation contract.
     No approval implementation choice blocks this work. Q-16 was ruled on 2026-10-08
     (parity first; approvals inside the Claude Code app), and PR #90 and haynes-ops
@@ -93,9 +106,10 @@ section 6.12; await saved confirmation and send no values in chat.
     removed with their pods and home volumes. The fleet is empty; only the Ready
     shelf and shared volume remain. All five runtime Flux targets and Helm releases
     are Ready. Keeper GitHub readiness passed; no CredentialJobs exist. The scoped
-    activity declaration was ended. Owner CA/trust and real provider acceptance
-    remain required. Q-18's old prompt is withdrawn, with no route selected; it
-    does not hold the next owner CA provisioning question. Ask the owner steps one
+    activity declaration was ended. CA projection, owner node trust and real provider
+    acceptance remain required; CA storage is now owner-confirmed complete. Q-18's
+    old prompt is withdrawn, with no route selected; it does not hold the next owner
+    node-trust step. Ask the owner steps one
     at a time when they arise, with exact item/field names and no secret values.
     The earlier baseline restore (#3584/#3583) remains applied and verified;
     PVE LAN access and the remaining service checks still block full closure.
@@ -352,7 +366,7 @@ section 6.12; await saved confirmation and send no values in chat.
 | Q-16 | Parity first, approvals in the Claude Code app (Tom, 2026-10-08). "I am open to advanced security but I must be able to grant permission from my phone." No new guard cuts what agents do today (no Authentik, outpost, Traefik or postgres16 lockdown, no git review or CODEOWNERS gate); standing auto-approved grants cover everything a v1 agent does (OPERATOR kube tier, Proxmox via the keeper's SSH minting, hw-ssh), and any gap blocks the cutover. Human approval gates only capabilities beyond today's (secret reads, break-glass above OPERATOR). Approvals happen inside the Claude Code app, not Pushover plus a web page. Residual risk accepted: Flux is cluster-admin and agents self-merge. The approval surface is the next design spike (issue #91). **Coordinator correction, later 2026-10-08 (D-70):** the OPERATOR-only examples above omit accepted Headlamp cluster-admin access. Those operations are existing reachable powers, with Tom's live directive still required for the Headlamp task or access scope. This factual correction is appended to the original ruling; it is not a new owner ruling or blanket standing admin authorization. |
 | Q-17 | Withdrawn after Tom corrected its premise (2026-10-08): use `agent-run` or ask agents to start sessions; a web UI is another possible session-management client. No laptop kubeconfig or test blocks plan 02. D-68 remains an optional external path whose real external-machine use is unverified. Q-16 remains in force. |
 | Q-18 | Earlier prompt withdrawn by the coordinator after Tom corrected its OPERATOR-only premise (2026-10-08, D-70). Headlamp's cluster-admin route already exposes the claimed additional Kubernetes powers. No approval route or blanket direct admin grant is selected. Any future approval question must name an actual new capability or workflow and preserve effective parity and existing owner rules. R-03 remains design research; no human path or new guard is enabled. |
-| Q-19 | First owner provisioning step: fresh unencrypted Ed25519 OpenSSH CA in existing `HaynesKube/dev-env`, fields `SSH_CA_PRIVATE_KEY_B64` and `SSH_CA_PUBLIC_KEY` (D-72 corrects the originally proposed separate item). Generation instructions requested on 2026-10-08 America/New_York; awaiting saved confirmation, no values in chat. Already required by the work order and D-69; no new Q-15 A approval. Minting stays disabled; trust and activation follow separately. |
+| Q-19 | **Complete by owner confirmation, 2026-10-08 America/New_York:** fresh CA fields `SSH_CA_PRIVATE_KEY_B64` and `SSH_CA_PUBLIC_KEY` saved in existing `HaynesKube/dev-env` (D-72 corrects the originally proposed separate item). No values were sent to or read by this coordinator; format and delivery validation still belong to keeper provisioning. Do not ask to generate/store it again. Minting stays disabled; node trust and activation follow separately. |
 
 **Next:** effective parity and keeper activation prerequisites. Q-18's earlier
 prompt is withdrawn; no approval route is selected. The spike and corrected v1 parity audit are complete;

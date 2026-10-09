@@ -167,7 +167,9 @@ archived and removed with their pods/home PVCs. V1's UID and all restart counts
 remain unchanged. The shelf completed its planned 2.7.0-to-2.9.0 replacement and
 is Ready with zero restarts. The declaration was ended.
 
-P-14/P-15/P-18 remain open for owner CA/node trust, standing policy and real
+CA storage was subsequently confirmed by the owner (Q-19, 2026-10-08
+America/New_York). P-14/P-15/P-18 remain open for CA projection/owner node trust,
+standing policy and real
 hardware/network activation and acceptance. No token was minted, no node trust
 changed, and general hw-ssh remains unbuilt under P-19's pending contract.
 
