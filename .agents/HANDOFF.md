@@ -45,12 +45,16 @@ pipe to the existing accounts. Each guarded append preserved the original key
 bytes and passed standing-key SSH/read-only PVE checks. #3651 (`b8f83ff9`) removed
 the temporary delivery app; its Job/pods, child Kustomization and ExternalSecret
 are gone. Owner-policy cleanup is corroborated by fresh Secret metadata: the
-public target is absent while the keeper-only CA target remains present. No
-Secret values were read. Backups/receipts remain on the nodes. Seven protected pod identities,
+public target is absent while the keeper-only CA target remains present. Cleanup
+checks used metadata only. Backups/receipts remain on the nodes. Seven protected pod identities,
 images and restart counts were preserved; minting stays off, private CA keeper-only.
 The [bounded CephFS trial record](../docs/trials/2026-10-09-cephfs-feasibility.md)
-predeclares the fixture, household tripwires and cleanup. Neither task advances
-the composite parity rows by itself.
+records two incomplete attempts, cleanup and positive latency signals. The first
+harness startup defect is fixed; the corrected run exceeded the original 15s
+peer Git status cap. [Issue #130](https://github.com/thaynes43/dev-env/issues/130)
+holds the specific diagnosis and next bounded proposal. No third run or normal
+workspace rollout follows automatically. Neither task advances composite parity
+rows by itself; provider/rule/host/fencing and household acceptance remain open.
 
 The independent stale-start fix is **shipped**: dev-env #124 merged
 `759f084f`, release #123 produced **2.9.1** at `b6c0f3c`, and publish-agent run

@@ -1,9 +1,13 @@
 # CephFS workspace feasibility trial, 2026-10-09
 
-**Status:** first attempt incomplete and cleaned up; a corrected bounded check
-is prepared. Tom accepted ADR-002 and this trial through structured Q-21.
-Normal workspace rollout remains gated on acceptance. The gates below were
-committed before execution in `b18f0166f89bcc91c0eddadf7945746dfa12ddfb`.
+**Status:** two incomplete attempts; cleanup complete. Shared Git/storage
+feasibility and normal-rollout acceptance remain open. Tom accepted ADR-002
+and this trial through structured Q-21.
+Normal workspace rollout remains gated on acceptance. The
+[predeclared gates](https://github.com/thaynes43/dev-env/blob/a83abbf3b4194b938ab9f78b57e6c2008b5ff218/docs/trials/2026-10-09-cephfs-feasibility.md)
+were published before execution in PR #128's
+[initial review run](https://github.com/thaynes43/dev-env/actions/runs/37962890145),
+created at `16:58:03 UTC`. The linked copy is retained in this PR's history.
 
 ## Scope and fixture
 
@@ -33,8 +37,9 @@ uses 256 files of at most 8KiB. Total fixture caps are 2,048 entries and 16MiB.
 Ordinary subprocess calls have a 15-second cap; the deliberate Git transaction
 hook has a 30-second deadline and its measured process a 35-second cap.
 Initial Jobs have a 180-second Kubernetes deadline; the remount Job has 60
-seconds. The corrected helper has a 60-second peer-ready barrier before locks;
-that consumes its original 145-second total budget. Combined startup/phases may
+seconds. The corrected helper has a separate 60-second peer-ready wait cap before
+locks. Time spent waiting counts against the original 145-second total helper
+deadline; the clock is never reset. Combined startup/phases may
 exhaust the global budget even within individual phase caps. There are no
 automatic retries or enlarged resource budgets.
 
@@ -118,8 +123,10 @@ each had 180 raw samples; six HTTP probes each had 30 samples/actual checks.
 All 39 monitored critical pods were Ready with stable UIDs/restart totals.
 Fourteen one-minute observations stayed clear through the five-minute post-window
 and cleanup; their maxima were 2.60ms MDS/7.09ms OSD five-minute means and 543ms
-HTTP duration, below frozen tripwires. A later ten-second range query found an
-11.35ms MDS mean at `17:12:27`, between those observations. It did not produce
+HTTP duration, below frozen tripwires. A later ten-second range query found
+three MDS means above 10ms at `17:12:07`, `17:12:17` and `17:12:27` (10.82,
+10.71 and 11.35ms). The adjacent grid points were below the limit; exact crossing
+duration was not measured. These fell between minute observations and did not produce
 two consecutive above-limit one-minute samples; this concretely demonstrates
 the sampling limitation and leaves household-impact acceptance open.
 Existing unrelated alerts were recorded.
@@ -134,10 +141,56 @@ baseline. Monitoring ended clear at `17:14:39`; the activity declaration ended.
 
 The follow-up fixes only the demonstrated harness startup coordination and
 missing diagnostics: [#129](https://github.com/thaynes43/dev-env/pull/129).
-Its finite fake-clock check includes final receipt handling with a 31-second
-skew; ordinary command and startup timings have separate caps. One new bounded
-run requires the reviewed fix, a fresh empty claim, fresh telemetry and explicit
-driver launch authorization. The failed attempt remains part of this record.
+It merged as `747c1800`; its finite fake-clock check includes final receipt
+handling with a 31-second skew. Ordinary command and startup timings have
+separate caps. The failed attempt remains part of this record.
+
+## Corrected attempt: incomplete, cleanup complete
+
+The driver authorized one new bounded check after review of the corrected
+source, fresh baseline and stricter limits. Provisioning
+[#3652](https://github.com/thaynes43/haynes-ops/pull/3652), `b3996aed`, created a
+fresh empty claim; no old markers were reused. The reviewed image, mounts,
+worker placement, no-credential/token rule and CPU/deadline/data caps stayed
+unchanged. Startup synchronization passed: A waited 0.007s and B 4.621s.
+
+Partial traces reached real flock/mkdir exclusion/release, an actual Git
+ref-lock collision/release, serialized worktree adds, staged WIP and the bounded
+copy/fsync/archive. B then exceeded the original 15s cap on a real read-only
+`git status --porcelain=v1 --untracked-files=all` against A's task worktree.
+B failed at `17:28:21 UTC` after 29.15s; A's peer-completion wait failed at
+`17:28:53` after 57.07s. Both had ample global budget left. Full final receipts
+and remount acceptance did not complete; no reconnect or third run occurred.
+
+A's peer Git status took 11.740s. Its own status also slowed from 0.024s to
+5.463s; B's local status took 0.204s. The cause is unproved. Sparse CPU samples
+(two for B, four for A) show some throttled periods but lack throttled-duration
+data; they cannot attribute the timeout to the 250m limit. Git/index-cache and
+filesystem behavior remain hypotheses, not a demonstrated backend defect.
+
+The second baseline covered `16:49:57–17:19:57 UTC`, including preceding trial
+and CA work; it had complete required coverage. The effective limits used the
+lesser of each original quiet-baseline limit and new formula limit, retaining
+10ms MDS/50ms OSD caps. A real MDS five-minute mean warning at `17:33:08` reached
+32.453ms, then fell to 0.655ms at the next minute. Only one ten-second grid point
+was above the cap; exact crossing duration was not measured. The two-consecutive
+stop rule did not fire. All other hard health, Ready/UID/restart, MQTT and related
+alert gates stayed clear. This is observed recovery, not proof of no latency
+impact or full household/device acceptance.
+
+Both Jobs terminated before graceful removal. Cleanup
+[#3655](https://github.com/thaynes43/haynes-ops/pull/3655), `595cf392`, pruned only
+the corrected trial inventory. Jobs/pods, claim/PV and Flux app were absent at
+`17:35:16 UTC`. The five-minute recovery observation completed clear at
+`17:36:08`, with the earlier warning retained. Protected identities, images,
+readiness, restarts and session/grant counts matched baseline. The second
+activity declaration ended at `17:39:30`.
+
+[Issue #130](https://github.com/thaynes43/dev-env/issues/130) preserves the
+diagnosis and a finite next proposal before any further cluster run. Do not
+relax budgets, change Git detection semantics or switch storage to obtain a
+pass. Provider/rules, two-host auth, task fencing, real workloads, household
+tails and node/storage-failure recovery still need their own acceptance.
 
 Keeper CA projection and Q-22's delegated five-node trust are separately
 delivered with minting disabled. Certificate/provider acceptance remains open.

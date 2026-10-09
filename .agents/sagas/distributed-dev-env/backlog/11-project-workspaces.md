@@ -1,7 +1,10 @@
 # 11: shared projects, workspace freshness and remote pods
 
-**Status:** R1–R7 and ADR-002 accepted; bounded CephFS trial authorized by Q-21.
-Workspace/client implementation and acceptance remain pending. The separate v2 fresh-start bug fix shipped in agent
+**Status:** R1–R7 and ADR-002 accepted; the authorized CephFS trial produced two
+incomplete attempts, both cleaned up. Shared Git/storage acceptance is unproved.
+[Issue #130](https://github.com/thaynes43/dev-env/issues/130) holds the slow peer
+Git check, evidence and next bounded diagnostic proposal. Workspace/client
+implementation and normal rollout remain gated. The separate v2 fresh-start bug fix shipped in agent
 2.9.1 (#124/#123, haynes-ops #3636); it does not implement this project contract.
 The [Accepted ADR-002](../adrs/002-shared-project-workspaces.md) draws the concrete
 topology and storage choice, with trial and normal-rollout gates.
