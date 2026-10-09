@@ -26,6 +26,10 @@ ns = dict(os=os, Path=Path, re=re, resource=resource, select=select,
 selected = ['bounded_output','own_cpu_stat','cpu_delta','StatusTrace','run','record_phase','wip']
 exec(compile(ast.Module(body=[nodes[name] for name in selected],type_ignores=[]),
              '<actual-helper-diagnostics>', 'exec'), ns)
+# This existing receipt fixture isolates run() from the status Popen ownership
+# seam, which has its own finite fake-clock/PID checker.
+ns['run_status_child'] = lambda argv,env,timeout,start,measurement,**kwargs: ns['subprocess'].run(
+    argv,text=True,capture_output=True,env=env,timeout=timeout,**kwargs)
 
 # Exercise the real pipe reader and native-file cap with a fixed <100KiB input.
 trace = ns['StatusTrace']()

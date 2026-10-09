@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import resource
 import select
+import signal
 import subprocess
 import tempfile
 import threading
@@ -29,10 +30,11 @@ env = {'PATH':os.environ['PATH'],'LC_ALL':'C','GIT_CONFIG_NOSYSTEM':'1',
        'GIT_CONFIG_GLOBAL':'/dev/null','GIT_TERMINAL_PROMPT':'0','GIT_OPTIONAL_LOCKS':'0',
        'GIT_AUTHOR_NAME':'Synthetic fixture','GIT_COMMITTER_NAME':'Synthetic fixture',
        'GIT_AUTHOR_EMAIL':'fixture@example.invalid','GIT_COMMITTER_EMAIL':'fixture@example.invalid'}
-ns = dict(os=os,Path=Path,re=re,resource=resource,select=select,subprocess=subprocess,
+ns = dict(os=os,Path=Path,re=re,resource=resource,select=select,signal=signal,subprocess=subprocess,
           tempfile=tempfile,threading=threading,time=time,json=json,DEADLINE=deadline,
-          remaining=remaining,ENV=env,MEASUREMENTS=[])
-selected = ['bounded_output','own_cpu_stat','cpu_delta','StatusTrace','run']
+          remaining=remaining,ENV=env,MEASUREMENTS=[],ROLE='reconnect')
+selected = ['bounded_output','own_cpu_stat','cpu_delta','StatusTrace','status_wait_observation',
+            'post_timeout_peer_metadata','run_status_child','run']
 exec(compile(ast.Module(body=[nodes[name] for name in selected],type_ignores=[]),
              '<actual-helper-native-trace>', 'exec'), ns)
 traces = []

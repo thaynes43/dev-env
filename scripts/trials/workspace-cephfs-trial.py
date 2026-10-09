@@ -210,6 +210,199 @@ class StatusTrace:
                 'drainTruncated':self.drain_truncated,
                 'eventCap':48, 'omittedEvents':max(0,event_count-48), 'events':events}
 
+def status_wait_observation(process):
+    # Only this calling parent can reap its status child. No poll/wait or timer
+    # thread runs between the communicate checkpoint and these proc reads.
+    # A just-exited, unreaped child may be unavailable, but cannot be PID-reused.
+    result = {'syscallCategory':'unavailable', 'wchanCategory':'unavailable'}
+    if process.returncode is not None:
+        return dict(result, reason='alreadyReaped')
+    if signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL:
+        return dict(result, reason='uncertainReaper')
+    try:
+        # Prove it remains our unreaped child without consuming its exit status.
+        exited = os.waitid(os.P_PID,process.pid,os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except TimeoutError:
+        raise
+    except (ChildProcessError,OSError):
+        return dict(result, reason='childOwnershipUnavailable')
+    if exited is not None:
+        return dict(result, reason='exitedBeforeObservation')
+    if os.uname().machine != 'x86_64':
+        return dict(result, reason='unsupportedArchitecture')
+    categories = {
+        'metadata':{4,5,6,21,89,191,192,193,194,195,196,262,332},
+        'open':{2,257,437}, 'read':{0,17,19,295,327},
+        'directory':{78,217}, 'memoryMap':{9,25}, 'futex':{202},
+    }
+    for name, cap in [('syscall',1024),('wchan',128)]:
+        try:
+            with open('/proc/%d/%s' % (process.pid,name),'rb') as stream:
+                raw = stream.read(cap+1)
+            if len(raw) > cap:
+                result[name+'Reason'] = 'oversized'
+                continue
+            value = raw.decode('ascii').strip()
+            if name == 'syscall':
+                # Discard all arguments, register addresses and pointers.
+                token = value.split()[0]
+                if token in {'running','-1'}:
+                    result['syscallCategory'] = 'running'
+                else:
+                    number = int(token)
+                    result['syscallCategory'] = next(
+                        (key for key, numbers in categories.items() if number in numbers),'other')
+            elif value in {'0',''}:
+                result['wchanReason'] = 'runningOrHidden'
+            elif value.startswith(('ceph_mdsc_','__ceph_mdsc_')):
+                result['wchanCategory'] = 'cephMetadata'
+            elif value.startswith(('ceph_','__ceph_')):
+                result['wchanCategory'] = 'cephOther'
+            elif value.startswith(('folio_wait','wait_on_page','io_schedule')):
+                result['wchanCategory'] = 'pageOrIOWait'
+            elif value in {'wait_woken','schedule','schedule_timeout','futex_wait_queue'}:
+                result['wchanCategory'] = 'wait'
+            else:
+                result['wchanCategory'] = 'other'
+        except TimeoutError:
+            # The helper's alarm/termination signal must still abort the owner.
+            raise
+        except PermissionError:
+            result[name+'Reason'] = 'permissionDenied'
+        except FileNotFoundError:
+            result[name+'Reason'] = 'exitedOrMissing'
+        except (OSError,ValueError,IndexError,UnicodeError):
+            result[name+'Reason'] = 'unavailable'
+    assert len(json.dumps(result).encode()) <= 1024
+    return result
+
+# One post-timeout metadata child, never a warmup. It reads the exact synthetic
+# linked-worktree index (bounded SHA-1 v2/v3 format) and two fixed peer paths.
+# No Git command or descendants, raw index bytes, arbitrary paths or PID output.
+# Format: https://github.com/git/git/blob/v2.39.5/Documentation/gitformat-index.txt
+PEER_METADATA_SCRIPT = r'''
+import hashlib,json,os,struct,sys
+from pathlib import Path
+task=sys.argv[1]
+assert task in {'cephfs-trial-a','cephfs-trial-b'}
+base=Path('/home/dev/work')/task
+index=Path('/home/dev/repos/cephfs-fixture/.git/worktrees')/task/'index'
+result={'available':False,'samples':[],'indexByteCap':65536,'sampleCap':2}
+try:
+    with (base/'.git').open('rb') as stream:
+        pointer=stream.read(513)
+    assert pointer == ('gitdir: '+str(index.parent)+'\n').encode()
+    with index.open('rb') as stream:
+        data=stream.read(65537)
+    assert 32 <= len(data) <= 65536
+    assert data[:4] == b'DIRC' and hashlib.sha1(data[:-20]).digest() == data[-20:]
+    version,count=struct.unpack_from('!II',data,4)
+    assert version in {2,3} and count <= 2048
+    offset=12
+    tuples={}
+    for _ in range(count):
+        begin=offset
+        assert offset+62 <= len(data)-20
+        fields=struct.unpack_from('!10I',data,offset)
+        flags=struct.unpack_from('!H',data,offset+60)[0]
+        offset+=62
+        if flags & 0x4000:
+            assert version == 3 and offset+2 <= len(data)-20
+            offset+=2
+        end=data.index(b'\0',offset,len(data)-20)
+        name=data[offset:end]
+        if name in {b'src/000.txt',b'src/001.txt'}:
+            assert name not in tuples and not flags & 0x3000
+            tuples[name]=dict(zip(['ctimeSeconds','ctimeNs','mtimeSeconds','mtimeNs',
+                                  'device','inodeLow32','mode','uid','gid','size'],fields))
+        offset=begin+((end+1-begin+7)//8)*8
+        assert offset <= len(data)-20
+    while offset < len(data)-20:
+        assert offset+8 <= len(data)-20
+        signature,length=struct.unpack_from('!4sI',data,offset)
+        # Split/sparse/unknown mandatory extensions cannot be interpreted here.
+        assert b'A' <= signature[:1] <= b'Z'
+        offset+=8+length
+        assert offset <= len(data)-20
+    for name in ['src/000.txt','src/001.txt']:
+        sample={'path':name,'index':tuples.get(name.encode())}
+        try:
+            st=(base/name).lstat()
+            sample['stat']={'device':st.st_dev,'inodeLow32':st.st_ino & 0xffffffff,
+                            'mode':st.st_mode,'uid':st.st_uid,'gid':st.st_gid,
+                            'size':st.st_size,'mtimeNs':st.st_mtime_ns,'ctimeNs':st.st_ctime_ns}
+        except FileNotFoundError:
+            sample['statReason']='missing'
+        except OSError:
+            sample['statReason']='unavailable'
+        result['samples'].append(sample)
+    result['available']=all(s.get('index') is not None and 'stat' in s for s in result['samples'])
+except FileNotFoundError:
+    result['reason']='missing'
+except PermissionError:
+    result['reason']='permissionDenied'
+except (OSError,ValueError,AssertionError,struct.error):
+    result['reason']='invalidOrUnavailable'
+print(json.dumps(result,sort_keys=True))
+'''
+
+def post_timeout_peer_metadata(argv):
+    result = {'available':False, 'samples':[], 'budgetSeconds':1}
+    peer = TASK_B if ROLE == 'a' else TASK_A if ROLE == 'b' else None
+    if peer is None or argv[2] != str(peer):
+        return dict(result, reason='notPeerStatus')
+    start = time.monotonic()
+    if DEADLINE-start < 1:
+        return dict(result, reason='insufficientOriginalHelperBudget')
+    try:
+        sampled = subprocess.run([sys.executable,'-c',PEER_METADATA_SCRIPT,peer.name],
+                                 text=True,capture_output=True,env=ENV,
+                                 timeout=min(1,DEADLINE-start))
+        if sampled.returncode != 0 or len(sampled.stdout.encode()) > 4096:
+            result['reason'] = 'childFailedOrOversized'
+        else:
+            result.update(json.loads(sampled.stdout))
+    except subprocess.TimeoutExpired:
+        # subprocess.run kills and genuinely reaps its own metadata child.
+        result['reason'] = 'metadataTimeout'
+    except TimeoutError:
+        raise
+    except (OSError,ValueError,TypeError):
+        result['reason'] = 'unavailable'
+    finally:
+        result['seconds'] = time.monotonic()-start
+    return result
+
+def run_status_child(argv, env, timeout, start, measurement, **kwargs):
+    # One sleeping communicate checkpoint, not polling or a second Git command.
+    # This parent is the only reaper; the pipe collector never owns this PID.
+    measurement['waitObservation'] = {'syscallCategory':'unavailable',
+                                     'wchanCategory':'unavailable','reason':'checkpointNotReached'}
+    with subprocess.Popen(argv,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                          env=env,**kwargs) as process:
+        deadline = min(DEADLINE,start+timeout)
+        try:
+            until_checkpoint = min(deadline,start+5)-time.monotonic()
+            try:
+                stdout, stderr = process.communicate(timeout=max(0,until_checkpoint))
+                measurement['waitObservation']['reason'] = 'completedBeforeCheckpoint'
+            except subprocess.TimeoutExpired:
+                if deadline-time.monotonic() <= 0:
+                    raise
+                measurement['waitObservation'] = status_wait_observation(process)
+                measurement['waitObservation']['elapsedSeconds'] = time.monotonic()-start
+                stdout, stderr = process.communicate(timeout=max(0,deadline-time.monotonic()))
+        except subprocess.TimeoutExpired as error:
+            process.kill()
+            process.wait()  # Reaping precedes every optional peer sample.
+            measurement['statusChildReaped'] = process.returncode is not None
+            raise subprocess.TimeoutExpired(argv,timeout,output=error.output,stderr=error.stderr) from None
+        except BaseException:
+            process.kill()
+            # Popen.__exit__ reaps even a helper alarm/cancellation; no samples.
+            raise
+        return subprocess.CompletedProcess(argv,process.returncode,stdout,stderr)
+
 def run(argv, *, expected=0, env=None, timeout=15):
     trace = None
     command_env = env or ENV
@@ -226,8 +419,11 @@ def run(argv, *, expected=0, env=None, timeout=15):
     effective_timeout = None
     try:
         effective_timeout = min(timeout, remaining())
-        result = subprocess.run(argv, text=True, capture_output=True,
-                                env=command_env, timeout=effective_timeout, **kwargs)
+        if trace:
+            result = run_status_child(argv,command_env,effective_timeout,start,measurement,**kwargs)
+        else:
+            result = subprocess.run(argv, text=True, capture_output=True,
+                                    env=command_env, timeout=effective_timeout, **kwargs)
     except subprocess.TimeoutExpired as error:
         measurement.update(seconds=time.monotonic()-start, exit=None, errorType='TimeoutExpired',
                            effectiveTimeoutSeconds=effective_timeout,
@@ -249,6 +445,15 @@ def run(argv, *, expected=0, env=None, timeout=15):
             measurement['cpu'] = cpu_delta(child_before, resource.getrusage(resource.RUSAGE_CHILDREN),
                                            cgroup_before, own_cpu_stat())
             measurement['trace2'] = trace.finish()
+            # CPU/Trace2 and command duration belong only to the original Git,
+            # not the optional metadata child. Generic interruptions never sample.
+            if measurement.get('errorType') == 'TimeoutExpired' and measurement.get('statusChildReaped'):
+                try:
+                    measurement['postTimeoutPeerMetadata'] = post_timeout_peer_metadata(argv)
+                except TimeoutError:
+                    measurement['postTimeoutPeerMetadata'] = {
+                        'available':False,'samples':[],'reason':'helperInterrupted'}
+                    raise
     if expected is not None:
         if result.returncode != expected:
             # Every command here targets only the synthetic local fixture. Keep
