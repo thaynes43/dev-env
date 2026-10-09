@@ -38,6 +38,9 @@ as unknown fields. Limits are 256KiB per document, 64 projects, 128 repositories
 16 repositories per project and 16KiB of rules per project. Names are single DNS
 components of at most 63 characters; Git branches cannot contain revision
 expressions. HTTPS clone URLs are derived from the validated GitHub identity.
+An omitted `defaultBranch` means `main`. The add workflow verifies the repository's
+actual GitHub default and records it explicitly when it differs; it cannot turn
+a failed fetch of `main` into authority to use a cached branch.
 
 The initial catalog includes `dev-env` and the multi-repository `sigo-alumni`
 project. Its three repository names are `sigo-alumni`, `sigoalumni-org` and
@@ -104,7 +107,12 @@ supported operation. A second computer link cannot claim the first one's task.
 
 Boot, daily maintenance and explicit sync share the common-Git administrative
 lock protocol. Clone, fetch, anchor refresh and worktree registration are
-serialized and bounded. Task cleanup stays under `/home/dev/work`; global Git
+serialized and bounded per repository. Each holder retains the two-minute
+administrative budget and 130-second queue bound. A project sync reports partial
+repository results; publishing its plain-root rules requires a fresh storage and
+accepted-catalog check under the primary repository's same lock. Shared Git
+operations disable automatic maintenance and pruning so they cannot discard a
+peer's references. Task cleanup stays under `/home/dev/work`; global Git
 pruning cannot discard a temporarily unavailable project or peer worktree.
 
 Health checks report wrong branch, detached HEAD, dirty index/files and behind

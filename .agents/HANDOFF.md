@@ -16,8 +16,9 @@ Source work proceeds disabled by default while #130's storage diagnosis and
 acceptance are completed. V1 remains available; full parity and cutover gates
 still apply. Codex owns this work rather than leaving it for another implementer.
 
-**Latest delivery checkpoint, 2026-10-09 21:55Z:** shared-workspace core #135
-merged `316c03c`; keeper-owned Codex auth #138 merged `bcb2599`. Both are source
+**Latest delivery checkpoint, 2026-10-09 22:05Z:** shared-workspace core #135
+merged `316c03c`; keeper-owned Codex auth #138 merged `bcb2599` and bounded
+single-refresh #143 merged `f810766`. These are source
 units with runtime opt-ins still off. Strict executor-stop rescue #140 merged
 `7b3ce4c`. Its private-home archive/reap is deliberately blocked: task-only rescue
 does not preserve provider enrollment/history. A retained-home detach route is
