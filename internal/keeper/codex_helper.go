@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/thaynes43/dev-env/internal/codexauth"
 )
 
 const CodexLoginVersion = "0.160.1"
@@ -28,12 +30,25 @@ func CodexControl(ctx context.Context, dir, action, attempt string) (CodexContro
 	if !filepath.IsAbs(dir) || (action != "begin" && action != "adopt" && action != "status" && action != "cancel") || (attempt != "" && !validUID(attempt)) {
 		return CodexControlResponse{}, ErrCodexHelper
 	}
-	c, cancel := context.WithTimeout(ctx, 10*time.Second)
+	return codexControl(ctx, dir, action, codexControlRequest{AttemptUID: attempt}, 10*time.Second)
+}
+
+// CodexRefreshOnce never retries a control request whose response is lost. A
+// later deliberate call with the same generation cannot spend a replacement.
+func CodexRefreshOnce(ctx context.Context, dir string, expected uint64) (CodexControlResponse, error) {
+	if !filepath.IsAbs(dir) || expected == 0 {
+		return CodexControlResponse{}, ErrCodexHelper
+	}
+	return codexControl(ctx, dir, "refresh-once", codexControlRequest{ExpectedGeneration: expected}, codexRefreshResponseWait)
+}
+
+func codexControl(ctx context.Context, dir, action string, input codexControlRequest, timeout time.Duration) (CodexControlResponse, error) {
+	c, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	h := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _ string, _ string) (net.Conn, error) {
+	h := &http.Client{Timeout: timeout, Transport: &http.Transport{DialContext: func(ctx context.Context, _ string, _ string) (net.Conn, error) {
 		return (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "unix", filepath.Join(dir, CodexControlSocket))
 	}, DisableKeepAlives: true}}
-	raw, _ := json.Marshal(codexControlRequest{AttemptUID: attempt})
+	raw, _ := json.Marshal(input)
 	req, err := http.NewRequestWithContext(c, http.MethodPost, "http://keeper/"+action, bytes.NewReader(raw))
 	if err != nil {
 		return CodexControlResponse{}, ErrCodexHelper
@@ -45,12 +60,18 @@ func CodexControl(ctx context.Context, dir, action, attempt string) (CodexContro
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1025))
 	var result CodexControlResponse
-	if err != nil || len(data) > 1024 || json.Unmarshal(data, &result) != nil || (result.AttemptUID != "" && !validUID(result.AttemptUID)) {
+	if err != nil || len(data) > 1024 || codexauth.DecodeStrict(data, &result) != nil || (result.AttemptUID != "" && !validUID(result.AttemptUID)) {
 		return CodexControlResponse{}, ErrCodexHelper
 	}
 	switch result.Code {
-	case "Started", "Adopted", "AdoptedPendingPublication", "Cancelled", "Ready", "NeedsLogin", "Unavailable", "InvalidRequest", "Busy", "AccountMismatch":
+	case "Started", "Adopted", "AdoptedPendingPublication", "Cancelled", "Ready", "PendingPublication", "Refreshed", "NeedsLogin", "Unavailable", "InvalidRequest", "Busy", "AccountMismatch", "GenerationMismatch":
 	default:
+		return CodexControlResponse{}, ErrCodexHelper
+	}
+	if (result.Code == "Ready" || result.Code == "PendingPublication" || result.Code == "Refreshed") && result.Generation == 0 {
+		return CodexControlResponse{}, ErrCodexHelper
+	}
+	if result.Code == "Refreshed" && (input.ExpectedGeneration == 0 || result.Generation <= input.ExpectedGeneration) {
 		return CodexControlResponse{}, ErrCodexHelper
 	}
 	return result, nil

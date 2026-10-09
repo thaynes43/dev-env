@@ -19,17 +19,21 @@ import (
 
 const codexCeremonyLifetime = 15 * time.Minute
 const CodexControlSocket = "control.sock"
+const codexRefreshControlBound = 30 * time.Second
+const codexRefreshResponseWait = codexRefreshControlBound + 5*time.Second
 
 // The socket exists only in the keeper/helper's mode-0700 tmpfs, with mode 0600.
 // Reachability is the authenticated pods/exec/control boundary; no network port
 // or service is exposed. It never accepts or returns token-bearing JSON.
 type codexControlRequest struct {
-	AttemptUID string `json:"attemptUID"`
+	AttemptUID         string `json:"attemptUID"`
+	ExpectedGeneration uint64 `json:"expectedGeneration,omitempty"`
 }
 type CodexControlResponse struct {
 	OK         bool   `json:"ok"`
 	Code       string `json:"code"`
 	AttemptUID string `json:"attemptUID,omitempty"`
+	Generation uint64 `json:"generation,omitempty"`
 }
 
 func (w *codexWorker) serveControl(ctx context.Context) (*http.Server, error) {
@@ -64,19 +68,32 @@ func (w *codexWorker) serveControl(ctx context.Context) (*http.Server, error) {
 				defer w.mu.Unlock()
 				switch req.URL.Path {
 				case "/begin":
-					if in.AttemptUID == "" {
+					if in.AttemptUID == "" && in.ExpectedGeneration == 0 {
 						response = w.begin(req.Context())
 					}
 				case "/adopt":
-					response = w.adopt(req.Context(), in.AttemptUID)
+					if in.ExpectedGeneration == 0 {
+						response = w.adopt(req.Context(), in.AttemptUID)
+					}
 				case "/cancel":
-					response = w.cancelLogin(req.Context(), in.AttemptUID)
+					if in.ExpectedGeneration == 0 {
+						response = w.cancelLogin(req.Context(), in.AttemptUID)
+					}
 				case "/status":
-					if in.AttemptUID == "" {
-						response = CodexControlResponse{OK: true, Code: "NeedsLogin"}
-						if w.ready.Load() {
-							response.Code = "Ready"
+					if in.AttemptUID == "" && in.ExpectedGeneration == 0 {
+						response = w.controlStatus(req.Context())
+					}
+				case "/refresh-once":
+					if in.AttemptUID == "" && in.ExpectedGeneration > 0 && req.Context().Err() == nil {
+						if http.NewResponseController(out).SetWriteDeadline(time.Now().Add(codexRefreshResponseWait)) != nil {
+							response.Code = "Unavailable"
+							break
 						}
+						// Once admitted, a lost HTTP reply must not cancel durability
+						// after consuming the token. Leadership loss still cancels it.
+						transaction, cancel := context.WithTimeout(ctx, codexRefreshControlBound)
+						response = w.refreshOnce(transaction, in.ExpectedGeneration)
+						cancel()
 					}
 				}
 			}
@@ -87,6 +104,45 @@ func (w *codexWorker) serveControl(ctx context.Context) (*http.Server, error) {
 	go func() { _ = s.Serve(l) }()
 	go func() { <-ctx.Done(); _ = s.Close(); _ = os.Remove(path) }()
 	return s, nil
+}
+
+func (w *codexWorker) controlStatus(ctx context.Context) CodexControlResponse {
+	if w.Fence(ctx, codexSaveTimeout+codexSafetyMargin) != nil {
+		return CodexControlResponse{Code: "Unavailable"}
+	}
+	d, err := w.load(ctx)
+	if err != nil {
+		return CodexControlResponse{Code: "Unavailable"}
+	}
+	result := CodexControlResponse{OK: true, Code: "NeedsLogin"}
+	if !w.halted && d.Record.Stage == codexReady && d.Record.Access.Validate(w.Clock.Now()) == nil {
+		result.Generation = d.Record.Access.Generation
+		result.Code = "PendingPublication"
+		if w.ready.Load() {
+			result.Code = "Ready"
+		}
+	}
+	return result
+}
+
+// The handler holds the same mutex as scheduled refresh/adoption. The caller's
+// generation fences a duplicate request after a lost successful response.
+func (w *codexWorker) refreshOnce(ctx context.Context, expected uint64) CodexControlResponse {
+	if expected == 0 {
+		return CodexControlResponse{Code: "InvalidRequest"}
+	}
+	err := w.tickExpected(ctx, expected)
+	if errors.Is(err, errCodexGenerationMismatch) {
+		return CodexControlResponse{Code: "GenerationMismatch"}
+	}
+	if err != nil {
+		code := "Unavailable"
+		if w.halted || errors.Is(err, errCodexRefresh) {
+			code = "NeedsLogin"
+		}
+		return CodexControlResponse{Code: code}
+	}
+	return CodexControlResponse{OK: true, Code: "Refreshed", Generation: w.published}
 }
 
 func privateCodexDir(path string) error {

@@ -50,6 +50,8 @@ type codexLoaded struct {
 	Record codexRecord
 }
 
+var errCodexGenerationMismatch = errors.New("codex generation does not match")
+
 func (*codexWorker) NeedLeaderElection() bool { return true }
 
 func (w *codexWorker) Start(ctx context.Context) error {
@@ -87,10 +89,24 @@ func (w *codexWorker) load(ctx context.Context) (*codexLoaded, error) {
 }
 
 func (w *codexWorker) tick(ctx context.Context) error {
+	return w.tickExpected(ctx, 0)
+}
+
+// A positive expected generation is an explicit acceptance request. It uses
+// the normal transaction and bypasses only its due-time test.
+func (w *codexWorker) tickExpected(ctx context.Context, expected uint64) error {
 	d, err := w.load(ctx)
 	if err != nil {
 		w.ready.Store(false)
 		return err
+	}
+	if expected != 0 {
+		if d.Record.Access.Generation != expected {
+			return errCodexGenerationMismatch
+		}
+		if w.halted || d.Record.Stage != codexReady || d.Record.Access.Generation == ^uint64(0) || d.Record.Access.Validate(w.Clock.Now()) != nil {
+			return errCodexRefresh
+		}
 	}
 	if w.expiredLoginReservation(d.Record) {
 		if w.finishExpiredLogin(ctx, d) != nil {
@@ -120,7 +136,7 @@ func (w *codexWorker) tick(ctx context.Context) error {
 	// from each actual lifetime. Even the minimum lifetime leaves >5m plus
 	// projection/poll latency before native clients try their empty refresh.
 	lead := min(24*time.Hour, r.Access.ExpiresAt.Sub(r.Access.LastRefresh)/3)
-	if !now.Before(r.Access.ExpiresAt.Add(-lead)) {
+	if expected != 0 || !now.Before(r.Access.ExpiresAt.Add(-lead)) {
 		if w.Fence(ctx, codexRequestBudget) != nil {
 			w.ready.Store(false)
 			return errors.New("codex leadership budget is unavailable")
