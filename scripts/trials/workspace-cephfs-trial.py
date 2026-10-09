@@ -246,8 +246,10 @@ def status_wait_observation(process):
             if name == 'syscall':
                 # Discard all arguments, register addresses and pointers.
                 token = value.split()[0]
-                if token in {'running','-1'}:
+                if token == 'running':
                     result['syscallCategory'] = 'running'
+                elif token == '-1':
+                    result['syscallCategory'] = 'blockedOutsideSyscall'
                 else:
                     number = int(token)
                     result['syscallCategory'] = next(

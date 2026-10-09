@@ -68,7 +68,7 @@ assert events == [('ownedWithoutReap',),('procRead','syscall'),('procRead','wcha
 # Fixed category coverage; raw unknown symbol/number is never retained.
 for raw, category in [(b'0 0xSECRET','read'),(b'257 0xSECRET','open'),
                       (b'217 0xSECRET','directory'),(b'running','running'),
-                      (b'-1 0xSECRET','running'),(b'999999 0xSECRET','other')]:
+                      (b'-1 0xSECRET','blockedOutsideSyscall'),(b'999999 0xSECRET','other')]:
     proc_values.update(syscall=raw,wchan=b'ARBITRARY_PRIVATE_SYMBOL')
     observation = ns['status_wait_observation'](owned)
     assert observation == {'syscallCategory':category,'wchanCategory':'other'}
