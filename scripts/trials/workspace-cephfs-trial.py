@@ -123,12 +123,17 @@ class StatusTrace:
         self.total = 0
         self.kept = 0
         self.error = False
+        self.drain_truncated = False
         self.thread = threading.Thread(target=self.collect, daemon=True)
         self.thread.start()
 
     def collect(self):
+        drained_after_stop = 0
         try:
-            while time.monotonic() < DEADLINE:
+            # Only the command owner stops this reader, after subprocess.run
+            # has terminated/reaped Git. Closing at the global deadline can
+            # SIGPIPE a still-running Git before its original timeout arrives.
+            while True:
                 if not select.select([self.read_fd], [], [], 0.1)[0]:
                     if self.stop.is_set():
                         break
@@ -140,7 +145,12 @@ class StatusTrace:
                 retained = chunk[:max(0, 65536-self.kept)]
                 self.file.write(retained)
                 self.kept += len(retained)
-        except OSError:
+                if self.stop.is_set():
+                    drained_after_stop += len(chunk)
+                    if drained_after_stop >= 65536:
+                        self.drain_truncated = True
+                        break
+        except (OSError, ValueError):
             self.error = True
         finally:
             os.close(self.read_fd)
@@ -150,6 +160,7 @@ class StatusTrace:
         self.stop.set()
         self.thread.join(timeout=0.5)
         if self.thread.is_alive():
+            self.file.close()
             return {'available':False, 'reason':'bounded Trace2 collector did not finish'}
         self.file.seek(0)
         events = []
@@ -183,6 +194,7 @@ class StatusTrace:
         return {'available':not self.error and self.total > 0,
                 'nativeBytes':self.total, 'retainedBytes':self.kept,
                 'byteCap':65536, 'truncated':self.total > self.kept,
+                'drainTruncated':self.drain_truncated,
                 'eventCap':48, 'omittedEvents':max(0,event_count-48), 'events':events}
 
 def run(argv, *, expected=0, env=None, timeout=15):

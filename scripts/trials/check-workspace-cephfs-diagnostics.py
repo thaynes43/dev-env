@@ -40,6 +40,29 @@ assert captured['retainedBytes'] == captured['byteCap'] == 65536
 assert len(captured['events']) == captured['eventCap'] == 48 and captured['omittedEvents'] > 0
 assert 'excluded-' not in json.dumps(captured) and trace.file.closed
 
+# The observer stays open while its bounded command owner is still alive, even
+# after the helper deadline. Only finish/EOF may close the reader and stop Git's
+# writer; a clock-based reader exit would turn the original timeout into SIGPIPE.
+ns['DEADLINE'] = time.monotonic()-1
+past_deadline = ns['StatusTrace']()
+payload = (json.dumps(native)+'\n').encode()
+assert os.write(past_deadline.write_fd,payload) == len(payload)
+finished = past_deadline.finish()
+assert finished['available'] and finished['events'][0]['label'] == 'refresh'
+assert past_deadline.file.closed and not past_deadline.thread.is_alive()
+
+# Exercise the actual early-return cleanup branch with an inert stuck-thread
+# stand-in; its read fd is owned and cleaned by this stand-in, never another writer.
+stuck = object.__new__(ns['StatusTrace'])
+stuck.read_fd, stuck.write_fd = os.pipe()
+stuck.file = tempfile.TemporaryFile(dir='/tmp')
+stuck.stop = threading.Event()
+joins = []
+stuck.thread = SimpleNamespace(join=lambda **kwargs:joins.append(kwargs),is_alive=lambda:True)
+assert stuck.finish()['available'] is False and stuck.file.closed and stuck.stop.is_set()
+assert joins == [{'timeout':0.5}]
+os.close(stuck.read_fd)
+
 # Resolve namespaced and host-style own-cgroup paths, never an assumed root.
 files = {'/proc/self/cgroup':'0::/parent/own\n',
          '/proc/self/mountinfo':'1 0 0:1 /parent /sys/fs/cgroup rw - cgroup2 cgroup rw\n',
@@ -155,6 +178,8 @@ assert ns['wip'](StatPath('/synthetic/task')) == first
 assert len(ns['DIAGNOSTIC_METADATA']['indexStatSamples']) == 2
 assert ns['PHASES']['build-done']['value']['installArchiveSeconds'] == 0.5
 print(json.dumps({'result':'PASS','checks':['64KiB native Trace2/48 sanitized events',
+    'past-global-deadline reader preserves writer until owner finish',
+    'join-timeout branch closes native temporary file',
     'own cgroup resolution and unavailable result','original timeout/argv/global cap unchanged',
     'child CPU and own throttling deltas survive timeout','exact staged/untracked WIP unchanged',
     'two-path stat samples deduplicated after status','bulk phase durations retained'],
