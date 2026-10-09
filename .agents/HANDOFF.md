@@ -36,6 +36,15 @@ ratification or permission to provision shared workspaces. Accepted ADR-001 is
 unchanged. Phone delivery remains unverified: the structured question received
 a desktop reply, not a verified phone round-trip.
 
+Q-21 is now recorded in DESIGN and submitted through one structured native
+question: accept Proposed ADR-002 and the bounded CephFS trial, choose external
+RWX design first, or refine the workflows. No answer is inferred from tool
+acceptance. Only the new workspace implementation/trial depends on that ruling.
+[Owner node-trust instructions](../docs/keeper-node-trust.md) are prepared and
+syntax-checked, with metadata verified read-only on all five nodes; they have
+not been executed. That owner step remains distinct from the disabled keeper
+CA projection and from the shared-workspace decision.
+
 The independent stale-start fix is **shipped**: dev-env #124 merged
 `759f084f`, release #123 produced **2.9.1** at `b6c0f3c`, and publish-agent run
 `37944933337` passed smoke and exact-tag signing verification. Haynes-ops #3636
@@ -387,7 +396,7 @@ no values in chat.
 | [distributed-dev-env/KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) | The work order for the first build session. |
 | [adrs/001-distributed-dev-env.md](sagas/distributed-dev-env/adrs/001-distributed-dev-env.md) | The architecture decision (Accepted 2026-10-06), with the ratification summary at the top and consequences C-01 to C-21. |
 | [adrs/002-shared-project-workspaces.md](sagas/distributed-dev-env/adrs/002-shared-project-workspaces.md) | Proposed shared workspace/private runtime topology and storage choices; unratified, with ownership and deployment gates. |
-| [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 to Q-20 and their resolutions in 15, the decisions (D-01 onward) in 16. |
+| [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 onward and their resolutions in 15, the decisions (D-01 onward) in 16. |
 | [research/R-01](sagas/distributed-dev-env/research/R-01-summoned-agents-audit.md) | An audit of summoned agents today, with v2 requirements V-01 to V-17. |
 | [research/R-02](sagas/distributed-dev-env/research/R-02-remote-control-identity.md) | Remote Control identity, the evidence behind S-1, and proposals P-1 to P-12. |
 | [research/R-03](sagas/distributed-dev-env/research/R-03-claude-code-approvals.md) | Claude Code in-app approval research: hooks, managed policy, forgery paths and the plan 03 core dependency. D-70 withdraws Q-18's earlier premise; no route selected. |
