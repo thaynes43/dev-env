@@ -8,11 +8,14 @@ import (
 // RescueReport is what `agentd ctl rescue` prints (D-43, D-48): step 1 of D-10's
 // rescue, the list of refs a bundle must cover, and the bundle that covers them.
 type RescueReport struct {
-	Session    string       `json:"session"`
-	Stamp      string       `json:"stamp"`
-	StartedAt  time.Time    `json:"startedAt"`
-	FinishedAt time.Time    `json:"finishedAt"`
-	Repos      []RepoRescue `json:"repos"`
+	// SourcePodUID is the retained executor proven terminated before a
+	// distinct hold Pod rescued its shared task.
+	SourcePodUID string       `json:"sourcePodUID,omitempty"`
+	Session      string       `json:"session"`
+	Stamp        string       `json:"stamp"`
+	StartedAt    time.Time    `json:"startedAt"`
+	FinishedAt   time.Time    `json:"finishedAt"`
+	Repos        []RepoRescue `json:"repos"`
 	// OK is set when every worktree is clean or rescued, no repo failed, and
 	// every bundle that was needed was written and verified. A rescue that is
 	// not OK still leaves the volume as it was; the operator marks the

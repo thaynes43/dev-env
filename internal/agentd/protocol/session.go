@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 	"time"
@@ -68,6 +69,54 @@ type Session struct {
 type WorkspaceBinding struct {
 	ID         string `json:"id"`
 	SessionUID string `json:"sessionUID"`
+	// StopProof is issued only by the controller for a distinct hold-rescue Pod.
+	StopProof *WorkspaceStopProof `json:"stopProof,omitempty"`
+}
+
+// WorkspaceStopProof records the controller's uncached termination and node
+// health verification. The old Pod remains available for a fresh recheck.
+type WorkspaceStopProof struct {
+	Version              int       `json:"version"`
+	Workspace            string    `json:"workspace"`
+	Task                 string    `json:"task"`
+	SessionUID           string    `json:"sessionUID"`
+	PodName              string    `json:"podName"`
+	PodUID               string    `json:"podUID"`
+	PodResourceVersion   string    `json:"podResourceVersion"`
+	NodeName             string    `json:"nodeName"`
+	NodeUID              string    `json:"nodeUID"`
+	LeaseResourceVersion string    `json:"leaseResourceVersion"`
+	LeaseRenewedAt       time.Time `json:"leaseRenewedAt"`
+	VerifiedAt           time.Time `json:"verifiedAt"`
+}
+
+func (p WorkspaceStopProof) Validate(workspace, task, sessionUID, podUID string) error {
+	if p.Version != 1 || p.Workspace != workspace || p.Task != task || p.SessionUID != sessionUID || p.PodName != task || p.PodUID != podUID ||
+		p.PodUID == "" || p.PodResourceVersion == "" || p.NodeName == "" || p.NodeUID == "" || p.LeaseResourceVersion == "" ||
+		p.VerifiedAt.IsZero() || p.LeaseRenewedAt.IsZero() || p.LeaseRenewedAt.After(p.VerifiedAt) || p.VerifiedAt.Sub(p.LeaseRenewedAt) > 40*time.Second {
+		return errors.New("workspace stop proof does not verify the exact task, session, old Pod and fresh node lease")
+	}
+	return nil
+}
+
+// ReadWorkspaceStopProof reads the controller's bounded exec input. The
+// immutable hold environment binds the task; it is never fresh stop proof.
+func ReadWorkspaceStopProof(r io.Reader) (*WorkspaceStopProof, error) {
+	const limit = 16 << 10
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil || len(data) > limit {
+		return nil, errors.New("workspace stop proof input is unreadable or exceeds 16 KiB")
+	}
+	dec := json.NewDecoder(strings.NewReader(string(data)))
+	dec.DisallowUnknownFields()
+	var proof WorkspaceStopProof
+	if err := dec.Decode(&proof); err != nil {
+		return nil, err
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		return nil, errors.New("workspace stop proof input has trailing data")
+	}
+	return &proof, nil
 }
 
 // Limits caps a task session (V-02).
@@ -136,6 +185,11 @@ func (s Session) Validate() error {
 		}
 		if len(s.Workspace.SessionUID) == 0 || len(s.Workspace.SessionUID) > 128 || !repoName.MatchString(s.Workspace.SessionUID) {
 			errs = append(errs, errors.New("workspace.sessionUID must identify the existing session"))
+		}
+		if proof := s.Workspace.StopProof; proof != nil {
+			if err := proof.Validate(s.Workspace.ID, s.Name, s.Workspace.SessionUID, proof.PodUID); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 	if len(s.Name) == 0 || len(s.Name) > 63 || !dnsLabel.MatchString(s.Name) {

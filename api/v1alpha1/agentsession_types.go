@@ -564,6 +564,9 @@ const (
 // writes it before it deletes the pod the rescue ran in, so a fresh operator
 // sees what the last one decided.
 type RescueStatus struct {
+	// SourcePodUID is the retained shared executor that the hold Pod rescued.
+	// +optional
+	SourcePodUID string `json:"sourcePodUID,omitempty"`
 	// LastBundle is the newest rescue's manifest on the shared volume, for
 	// example rescue/haynes-ops-1005-202504/20261006-0130/manifest.json (D-48).
 	// It stays when a later rescue needed no bundle, or a new pod superseded

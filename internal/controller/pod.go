@@ -260,6 +260,9 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 			}},
 		},
 	}
+	if s.Spec.Workspace != nil && !hold {
+		pod.Spec.RestartPolicy = corev1.RestartPolicyNever
+	}
 	return pod, nil
 }
 

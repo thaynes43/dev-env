@@ -179,12 +179,13 @@ func run(args []string) error {
 		return err
 	}
 	r := &controller.Reconciler{
-		Client:    mgr.GetClient(),
-		Templates: templatesKey,
-		APIURL:    o.apiURL,
-		APIReader: mgr.GetAPIReader(),
-		Rescuer:   rescuer,
-		Recorder:  mgr.GetEventRecorder(binaryName),
+		Client:           mgr.GetClient(),
+		Templates:        templatesKey,
+		APIURL:           o.apiURL,
+		APIReader:        mgr.GetAPIReader(),
+		Rescuer:          rescuer,
+		WorkspaceStopper: rescuer,
+		Recorder:         mgr.GetEventRecorder(binaryName),
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
 		return err

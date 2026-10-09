@@ -32,6 +32,18 @@ func rescueSharedTask(ctx context.Context, r Runner, s Settings, task string, no
 	if !opt.StopAgent {
 		return protocol.RescueReport{}, errors.New("shared rescue requires explicit stop-and-preserve")
 	}
+	proof, bound := opt.WorkspaceStopProof, sess.Workspace.StopProof
+	if bound != nil || proof != nil {
+		if bound == nil || proof == nil || proof.PodUID != bound.PodUID || proof.NodeName != bound.NodeName || proof.NodeUID != bound.NodeUID {
+			return protocol.RescueReport{}, errors.New("shared hold rescue requires fresh controller input for its immutable executor binding")
+		}
+		if err := proof.Validate(s.WorkspaceID, task, sess.Workspace.SessionUID, bound.PodUID); err != nil {
+			return protocol.RescueReport{}, err
+		}
+		if proof.VerifiedAt.After(now) || now.Sub(proof.VerifiedAt) > 40*time.Second {
+			return protocol.RescueReport{}, errors.New("shared rescue controller proof is stale or future at receipt")
+		}
+	}
 	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
 		return protocol.RescueReport{}, err
 	}
@@ -55,8 +67,16 @@ func rescueSharedTask(ctx context.Context, r Runner, s Settings, task string, no
 	if err := readWorkspaceJSON(s.ownerPath(task), &owner); err != nil {
 		return protocol.RescueReport{}, fmt.Errorf("shared rescue owner: %w", err)
 	}
-	if err := ownerMatches(s, sess, owner, true); err != nil {
+	if err := ownerMatches(s, sess, owner, proof == nil); err != nil {
 		return protocol.RescueReport{}, err
+	}
+	if proof != nil {
+		if err := proof.Validate(s.WorkspaceID, task, sess.Workspace.SessionUID, owner.PodUID); err != nil {
+			return protocol.RescueReport{}, err
+		}
+		if proof.PodUID == s.PodUID {
+			return protocol.RescueReport{}, errors.New("hold rescue requires a distinct Pod UID")
+		}
 	}
 	if owner.State != "owned" && owner.State != "stopped" {
 		return protocol.RescueReport{}, errors.New("shared rescue owner has an uncertain state")
@@ -72,7 +92,7 @@ func rescueSharedTask(ctx context.Context, r Runner, s Settings, task string, no
 			uncertain = true
 		}
 	}
-	if uncertain {
+	if uncertain && proof == nil {
 		rep.OK, rep.CleanAndPushed, rep.Agent.Running = false, false, true
 		rep.Repos = append(rep.Repos, protocol.RepoRescue{Path: owner.Clone, Error: "shared writers require verified container termination; local PID and process-group stop are insufficient"})
 		rep.FinishedAt = time.Now().UTC()
@@ -131,10 +151,16 @@ func rescueSharedTask(ctx context.Context, r Runner, s Settings, task string, no
 	}
 	if rep.OK && (rep.CleanAndPushed || rep.Bundle != nil && rep.Bundle.Error == "") {
 		owner.State, owner.StopReason = "stopped", "no-agent-admitted"
+		if proof != nil {
+			owner.StopReason, owner.StopProof = "terminated-pod-rescue", proof
+		}
 		owner.UpdatedAt, owner.StoppedAt = now.UTC(), now.UTC()
 		if err := writeWorkspaceJSON(s.ownerPath(task), owner); err != nil {
 			return protocol.RescueReport{}, err
 		}
+	}
+	if proof != nil {
+		rep.SourcePodUID = proof.PodUID
 	}
 	rep.FinishedAt = time.Now().UTC()
 	return rep, nil

@@ -1,0 +1,392 @@
+package controller
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	coordinationv1 "k8s.io/api/coordination/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/templates"
+)
+
+type workspaceStopFixture struct {
+	s     *v1alpha1.AgentSession
+	pod   *corev1.Pod
+	node  *corev1.Node
+	lease *coordinationv1.Lease
+	home  *corev1.PersistentVolumeClaim
+	now   time.Time
+}
+
+func stoppedWorkspaceFixture() workspaceStopFixture {
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	s := taskSession()
+	s.Generation = 3
+	s.Spec.Workspace = &v1alpha1.WorkspaceSpec{ID: "projects-v2"}
+	s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+	s.Status.PodName = s.Name
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: s.Name, Namespace: s.Namespace, UID: "executor-1", ResourceVersion: "10", OwnerReferences: []metav1.OwnerReference{ownerRef(s)}},
+		Spec: corev1.PodSpec{NodeName: "worker-a", RestartPolicy: corev1.RestartPolicyNever,
+			Containers: []corev1.Container{{Name: ContainerName}}, InitContainers: []corev1.Container{{Name: "init"}},
+			EphemeralContainers: []corev1.EphemeralContainer{{EphemeralContainerCommon: corev1.EphemeralContainerCommon{Name: "debug"}}}},
+		Status: corev1.PodStatus{Phase: corev1.PodSucceeded}}
+	terminated := func(name string) corev1.ContainerStatus {
+		return corev1.ContainerStatus{Name: name, State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{FinishedAt: metav1.NewTime(now.Add(-time.Second))}}}
+	}
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{terminated(ContainerName)}
+	pod.Status.InitContainerStatuses = []corev1.ContainerStatus{terminated("init")}
+	pod.Status.EphemeralContainerStatuses = []corev1.ContainerStatus{terminated("debug")}
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-a", UID: "node-1", ResourceVersion: "20"}, Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}}}
+	lease := &coordinationv1.Lease{ObjectMeta: metav1.ObjectMeta{Name: node.Name, Namespace: "kube-node-lease", UID: "lease-1", ResourceVersion: "30",
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: "v1", Kind: "Node", Name: node.Name, UID: node.UID}}},
+		Spec: coordinationv1.LeaseSpec{HolderIdentity: ptr.To(node.Name), RenewTime: &metav1.MicroTime{Time: now.Add(-time.Second)}}}
+	home := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: HomeClaimName(s.Name), Namespace: s.Namespace, UID: "home-1", OwnerReferences: []metav1.OwnerReference{ownerRef(s)}, Finalizers: []string{Finalizer}}}
+	return workspaceStopFixture{s, pod, node, lease, home, now}
+}
+
+func (f workspaceStopFixture) client(extra ...client.Object) client.Client {
+	objects := []client.Object{f.s, f.pod, f.node, f.lease, f.home}
+	objects = append(objects, extra...)
+	return fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.AgentSession{}, &corev1.Pod{}, &corev1.Node{}).WithObjects(objects...).Build()
+}
+
+func TestWorkspaceStopVerifierRequiresExactTerminationAndHealthyNode(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*workspaceStopFixture)
+	}{
+		{"valid", func(*workspaceStopFixture) {}},
+		{"different UID", func(f *workspaceStopFixture) { f.pod.UID = "replacement" }},
+		{"different owner", func(f *workspaceStopFixture) { f.pod.OwnerReferences[0].UID = "other-session" }},
+		{"deleting", func(f *workspaceStopFixture) {
+			at := metav1.NewTime(f.now)
+			f.pod.DeletionTimestamp = &at
+			f.pod.Finalizers = []string{"keep"}
+		}},
+		{"Always", func(f *workspaceStopFixture) { f.pod.Spec.RestartPolicy = corev1.RestartPolicyAlways }},
+		{"phase alone", func(f *workspaceStopFixture) {
+			f.pod.Status.ContainerStatuses[0].State = corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}
+		}},
+		{"missing init", func(f *workspaceStopFixture) { f.pod.Status.InitContainerStatuses = nil }},
+		{"missing ephemeral", func(f *workspaceStopFixture) { f.pod.Status.EphemeralContainerStatuses = nil }},
+		{"zero FinishedAt", func(f *workspaceStopFixture) {
+			f.pod.Status.EphemeralContainerStatuses[0].State.Terminated.FinishedAt = metav1.Time{}
+		}},
+		{"duplicate status", func(f *workspaceStopFixture) {
+			f.pod.Status.ContainerStatuses = append(f.pod.Status.ContainerStatuses, f.pod.Status.ContainerStatuses[0])
+		}},
+		{"restartable container", func(f *workspaceStopFixture) {
+			f.pod.Spec.InitContainers[0].RestartPolicy = ptr.To(corev1.ContainerRestartPolicyAlways)
+		}},
+		{"node unknown", func(f *workspaceStopFixture) { f.node.Status.Conditions[0].Status = corev1.ConditionUnknown }},
+		{"node not ready", func(f *workspaceStopFixture) { f.node.Status.Conditions[0].Status = corev1.ConditionFalse }},
+		{"stale lease", func(f *workspaceStopFixture) {
+			f.lease.Spec.RenewTime.Time = f.now.Add(-40*time.Second - time.Nanosecond)
+		}},
+		{"future lease", func(f *workspaceStopFixture) { f.lease.Spec.RenewTime.Time = f.now.Add(time.Second) }},
+		{"missing renewal", func(f *workspaceStopFixture) { f.lease.Spec.RenewTime = nil }},
+		{"foreign lease", func(f *workspaceStopFixture) { f.lease.OwnerReferences[0].UID = "another-node" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := stoppedWorkspaceFixture()
+			tc.edit(&f)
+			v := PodWorkspaceStopVerifier{Reader: f.client(), Now: func() time.Time { return f.now }}
+			proof, old, err := v.Verify(context.Background(), f.s, "executor-1")
+			if tc.name != "valid" {
+				if err == nil {
+					t.Fatal("uncertain stop accepted")
+				}
+				return
+			}
+			if err != nil || proof.PodUID != string(old.UID) || proof.NodeUID != string(f.node.UID) || proof.LeaseResourceVersion == "" {
+				t.Fatalf("proof=%+v, err=%v", proof, err)
+			}
+		})
+	}
+	for _, missing := range []string{"pod", "node", "lease"} {
+		t.Run("missing "+missing, func(t *testing.T) {
+			f := stoppedWorkspaceFixture()
+			c := f.client()
+			var o client.Object = f.pod
+			if missing == "node" {
+				o = f.node
+			}
+			if missing == "lease" {
+				o = f.lease
+			}
+			if err := c.Delete(context.Background(), o); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := (PodWorkspaceStopVerifier{Reader: c, Now: func() time.Time { return f.now }}).Verify(context.Background(), f.s, f.pod.UID); err == nil {
+				t.Fatal("missing evidence accepted")
+			}
+		})
+	}
+}
+
+type workspaceFixtureRescuer struct {
+	calls  int
+	proofs []*protocol.WorkspaceStopProof
+	answer func(*protocol.WorkspaceStopProof) protocol.RescueReport
+}
+
+func (r *workspaceFixtureRescuer) Rescue(context.Context, *corev1.Pod) (protocol.RescueReport, error) {
+	return protocol.RescueReport{}, fmt.Errorf("private rescue route used")
+}
+func (r *workspaceFixtureRescuer) RescueWorkspace(_ context.Context, _ *corev1.Pod, p *protocol.WorkspaceStopProof) (protocol.RescueReport, error) {
+	r.calls++
+	copy := *p
+	r.proofs = append(r.proofs, &copy)
+	return r.answer(p), nil
+}
+
+type workspaceFixtureStopper struct {
+	calls int
+	uid   types.UID
+}
+
+func (s *workspaceFixtureStopper) StopWorkspace(_ context.Context, p *corev1.Pod) error {
+	s.calls++
+	s.uid = p.UID
+	return nil
+}
+
+func workspaceFixtureController(t *testing.T, f workspaceStopFixture, c client.Client) (*Reconciler, observation) {
+	t.Helper()
+	tmpl := exampleTemplates(t)
+	tmpl.Workspace = &templates.Workspace{Enabled: true, Claim: "retained-projects", ID: f.s.Spec.Workspace.ID}
+	r := &Reconciler{Client: c, APIReader: c, StopVerifier: PodWorkspaceStopVerifier{Reader: c, Now: func() time.Time { return f.now }}}
+	return r, observation{pod: owned[*corev1.Pod]{obj: f.pod}, claim: owned[*corev1.PersistentVolumeClaim]{obj: f.home}, templates: tmpl, now: f.now}
+}
+
+func readyWorkspaceHold(t *testing.T, c client.Client, s *v1alpha1.AgentSession) *corev1.Pod {
+	t.Helper()
+	var p corev1.Pod
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: s.Namespace, Name: workspaceHoldName(s)}, &p); err != nil {
+		t.Fatal(err)
+	}
+	p.UID = "hold-1"
+	if err := c.Update(context.Background(), &p); err != nil {
+		t.Fatal(err)
+	}
+	p.Status.Phase = corev1.PodRunning
+	p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+	if err := c.Status().Update(context.Background(), &p); err != nil {
+		t.Fatal(err)
+	}
+	return &p
+}
+
+func TestWorkspaceStopLifecycleKeepsExecutorUntilSeparateHoldRescue(t *testing.T) {
+	f := stoppedWorkspaceFixture()
+	c := f.client()
+	r, obs := workspaceFixtureController(t, f, c)
+	rescue := &workspaceFixtureRescuer{answer: func(p *protocol.WorkspaceStopProof) protocol.RescueReport {
+		rep := cleanReport(f.s.Name)
+		rep.SourcePodUID = p.PodUID
+		return rep
+	}}
+	r.Rescuer = rescue
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	hold := readyWorkspaceHold(t, c, f.s)
+	if hold.Name == f.pod.Name || hold.Spec.RestartPolicy != corev1.RestartPolicyAlways || hold.Spec.Containers[0].Args[0] != "hold" {
+		t.Fatalf("hold is not a distinct idle holder: %+v", hold.Spec)
+	}
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if rescue.calls != 1 || !sharedRescued(f.s) || f.s.Status.Rescue.SourcePodUID != string(f.pod.UID) || f.s.Status.Rescue.PodUID != string(hold.UID) {
+		t.Fatalf("rescue not bound: %+v", f.s.Status.Rescue)
+	}
+	for _, name := range []string{f.pod.Name, hold.Name} {
+		if err := c.Get(context.Background(), client.ObjectKey{Namespace: f.s.Namespace, Name: name}, &corev1.Pod{}); err != nil {
+			t.Fatal("Pod removed before owned rescue was recorded", err)
+		}
+	}
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.pod), &corev1.Pod{}); err != nil {
+		t.Fatal("executor was removed before hold absence", err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(hold), &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("hold cleanup: %v", err)
+	}
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.pod), &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("executor cleanup: %v", err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.home), &corev1.PersistentVolumeClaim{}); err != nil {
+		t.Fatal("home removed before archive", err)
+	}
+}
+
+func TestWorkspaceStopLifecycleRequestsExitWithoutDeletion(t *testing.T) {
+	f := stoppedWorkspaceFixture()
+	f.pod.Status.Phase = corev1.PodRunning
+	f.pod.Status.ContainerStatuses[0].State = corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}
+	c := f.client()
+	r, obs := workspaceFixtureController(t, f, c)
+	stopper := &workspaceFixtureStopper{}
+	r.WorkspaceStopper = stopper
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if stopper.calls != 1 || stopper.uid != f.pod.UID || obs.removalBlocked == nil {
+		t.Fatal("exact supervisor stop was not requested")
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.pod), &corev1.Pod{}); err != nil {
+		t.Fatal("stop request deleted executor", err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: f.s.Namespace, Name: workspaceHoldName(f.s)}, &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Fatal("hold created before actual termination")
+	}
+}
+
+func TestWorkspaceStopLifecycleRetriesWithFreshProofAndPreservesPartition(t *testing.T) {
+	f := stoppedWorkspaceFixture()
+	c := f.client()
+	r, obs := workspaceFixtureController(t, f, c)
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	readyWorkspaceHold(t, c, f.s)
+	rescue := &workspaceFixtureRescuer{answer: func(p *protocol.WorkspaceStopProof) protocol.RescueReport {
+		rep := cleanReport(f.s.Name)
+		rep.SourcePodUID = p.PodUID
+		rep.OK = false
+		return rep
+	}}
+	r.Rescuer = rescue
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	obs.now = f.s.Status.Rescue.At.Add(time.Second)
+	if result, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil || result.RequeueAfter < 14*time.Minute || rescue.calls != 1 {
+		t.Fatalf("failed rescue bypassed retry window: %+v, %v, calls=%d", result, err, rescue.calls)
+	}
+	newNow := f.now.Add(16 * time.Minute)
+	var lease coordinationv1.Lease
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.lease), &lease); err != nil {
+		t.Fatal(err)
+	}
+	lease.Spec.RenewTime = &metav1.MicroTime{Time: newNow.Add(-time.Second)}
+	if err := c.Update(context.Background(), &lease); err != nil {
+		t.Fatal(err)
+	}
+	r.StopVerifier = PodWorkspaceStopVerifier{Reader: c, Now: func() time.Time { return newNow }}
+	obs.now = f.s.Status.Rescue.At.Add(16 * time.Minute)
+	rescue.answer = func(p *protocol.WorkspaceStopProof) protocol.RescueReport {
+		rep := cleanReport(f.s.Name)
+		rep.SourcePodUID = p.PodUID
+		var node corev1.Node
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.node), &node); err != nil {
+			t.Fatal(err)
+		}
+		node.Status.Conditions[0].Status = corev1.ConditionUnknown
+		if err := c.Status().Update(context.Background(), &node); err != nil {
+			t.Fatal(err)
+		}
+		return rep
+	}
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if rescue.calls != 2 || !rescue.proofs[1].VerifiedAt.Equal(newNow) || sharedRescued(f.s) || obs.removalBlocked == nil {
+		t.Fatal("retry reused immutable proof or accepted a partitioned source")
+	}
+	for _, name := range []string{f.pod.Name, workspaceHoldName(f.s)} {
+		if err := c.Get(context.Background(), client.ObjectKey{Namespace: f.s.Namespace, Name: name}, &corev1.Pod{}); err != nil {
+			t.Fatal("partition removed retained Pod", err)
+		}
+	}
+}
+
+func TestWorkspaceMissingExecutorStaysRememberedAndNoPrivateHold(t *testing.T) {
+	f := stoppedWorkspaceFixture()
+	f.s.Finalizers = []string{Finalizer}
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: systemNS, Name: templates.DefaultName}, Data: map[string]string{templates.Key: exampleDoc + "\nworkspace:\n  enabled: true\n  claim: retained-projects\n  id: projects-v2\n"}}
+	c := f.client(cm)
+	if err := c.Delete(context.Background(), f.pod); err != nil {
+		t.Fatal(err)
+	}
+	r := &Reconciler{Client: c, APIReader: c, Templates: templatesKey}
+	for range 2 {
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.s)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var s v1alpha1.AgentSession
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.s), &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.Status.PodName != f.s.Name {
+		t.Fatal("missing executor was forgotten on later reconcile")
+	}
+	var pods corev1.PodList
+	if err := c.List(context.Background(), &pods); err != nil {
+		t.Fatal(err)
+	}
+	if len(pods.Items) != 0 {
+		t.Fatal("uncertain missing executor produced a fallback Pod")
+	}
+}
+
+func TestWorkspaceGuardBindsBothPodUIDsAndHoldBlocksArchive(t *testing.T) {
+	f := stoppedWorkspaceFixture()
+	c := f.client()
+	r, obs := workspaceFixtureController(t, f, c)
+	proof, _, err := r.verifyWorkspaceStop(context.Background(), f.s, f.pod.UID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold, err := buildWorkspaceHoldPod(f.s, obs.templates, proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold.UID = "hold-1"
+	f.s.Status.Rescue = &v1alpha1.RescueStatus{Result: v1alpha1.RescueCleanAndPushed, SourcePodUID: string(f.pod.UID), PodUID: string(hold.UID), Generation: f.s.Generation}
+	if err := podRemovalAllowed(f.s, f.pod); err != nil {
+		t.Fatal(err)
+	}
+	if err := podRemovalAllowed(f.s, hold); err != nil {
+		t.Fatal(err)
+	}
+	wrong := f.pod.DeepCopy()
+	wrong.UID = "replacement"
+	if err := podRemovalAllowed(f.s, wrong); err == nil {
+		t.Fatal("different executor cleanup allowed")
+	}
+	if err := c.Create(context.Background(), hold); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Delete(context.Background(), f.pod); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.archive(context.Background(), f.s, &obs, true); err != nil {
+		t.Fatal(err)
+	}
+	if obs.removalBlocked == nil || !strings.Contains(obs.removalBlocked.Error(), "pod of the session still exists") {
+		t.Fatalf("hold did not block archive: %v", obs.removalBlocked)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.home), &corev1.PersistentVolumeClaim{}); err != nil {
+		t.Fatal("hold allowed home cleanup", err)
+	}
+}
