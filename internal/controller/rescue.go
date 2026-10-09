@@ -203,7 +203,9 @@ func verdict(s *v1alpha1.AgentSession, pod *corev1.Pod, rep protocol.RescueRepor
 				setReason("ReportMismatch")
 				add("shared preparation result has an unknown kind or no owned generation")
 			}
-			rec.PreservationKind = p.Kind
+			if noWork || ownedRefs {
+				rec.PreservationKind = p.Kind
+			}
 		}
 		if rep.VolumeEmpty || len(rep.Repos) != 1 || rep.Repos[0].Path != "/home/dev/repos/"+s.Spec.Repo ||
 			len(rep.Repos[0].Worktrees) != 1 || rep.Repos[0].Worktrees[0].Path != "/home/dev/work/"+s.Name {

@@ -444,6 +444,7 @@ func TestWorkspacePreparationVerdictIsTypedAndSharedOnly(t *testing.T) {
 		{"clean pushed claim", func(rep *protocol.RescueReport) { rep.CleanAndPushed = true }},
 		{"empty home claim", func(rep *protocol.RescueReport) { rep.VolumeEmpty = true }},
 		{"wrong source", func(rep *protocol.RescueReport) { rep.WorkspacePreservation.SourcePodUID = "peer" }},
+		{"unknown kind", func(rep *protocol.RescueReport) { rep.WorkspacePreservation.Kind = "Unknown" }},
 		{"missing typed result", func(rep *protocol.RescueReport) { rep.WorkspacePreservation = nil }},
 		{"nonabsent worktree", func(rep *protocol.RescueReport) { rep.Repos[0].Worktrees[0].Absent = false }},
 		{"task work remains", func(rep *protocol.RescueReport) { rep.Repos[0].Worktrees[0].Dirty = true }},
@@ -454,8 +455,12 @@ func TestWorkspacePreparationVerdictIsTypedAndSharedOnly(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rep := workspacePreparationReport(f.s, p, "NoWorkAdmitted")
 			tc.edit(&rep)
-			if rec, _ := verdict(f.s, hold, rep, metav1.NewTime(f.now)); rec.Result != v1alpha1.RescueFailed {
+			rec, _ := verdict(f.s, hold, rep, metav1.NewTime(f.now))
+			if rec.Result != v1alpha1.RescueFailed {
 				t.Fatalf("contradictory report accepted: %+v", rec)
+			}
+			if tc.name == "unknown kind" && rec.PreservationKind != "" {
+				t.Fatal("unknown report kind makes the failure status invalid under its API enum")
 			}
 		})
 	}
