@@ -10,7 +10,9 @@ next steps, and what works outside the cluster. The first build session follows
 
 The short version:
 
-- **Status: ADR-001 Accepted 2026-10-06; the Go skeleton (KICKOFF B1) is built.** The saga is
+- **Status: plans 01/02 are working; capability parity and plans 03/04 remain
+  unfinished.** The [workflow guide](docs/workflow-guide.md) separates current
+  features from planned ones. ADR-001 was Accepted 2026-10-06. The saga is
   [`.agents/sagas/distributed-dev-env/`](.agents/sagas/distributed-dev-env/README.md).
   Deploy manifests live in thaynes43/haynes-ops, not here.
 - Docs first; one question at a time to Tom, recommended option first, recorded as

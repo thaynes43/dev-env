@@ -9,9 +9,9 @@ inside the `main` Kubernetes cluster.
 running until v2 replaces it.
 
 **v2**, built here, is distributed: one pod per agent session, each with its own CPU
-and memory limits, created, upgraded and pruned by an operator that the `agent-run`
-CLI calls from anywhere. This repo will publish the operator, the CLI and the agent
-image (`ghcr.io/thaynes43/dev-env`); haynes-ops deploys them.
+and memory limits, created and pruned by an operator that the `agent-run` CLI calls.
+Automatic image drains are still planned. This repo publishes the operator, CLI
+and agent image (`ghcr.io/thaynes43/dev-env`); haynes-ops deploys them.
 
 **Status: phase 1 built (2026-10-07).** ADR-001 was Accepted on 2026-10-06. Plan 01,
 task mode, is done: the operator and the keeper run in the cluster, the agent image
@@ -27,6 +27,15 @@ Start at [`.agents/HANDOFF.md`](.agents/HANDOFF.md); the saga is
 [`.agents/sagas/distributed-dev-env/`](.agents/sagas/distributed-dev-env/README.md).
 
 Agents: see [CLAUDE.md](CLAUDE.md) (Codex: [AGENTS.md](AGENTS.md)).
+
+## Workflow and quick start
+
+Read the [workflow guide](docs/workflow-guide.md) for architecture diagrams,
+the feature set, working v1/v2 commands, Codex session management, repository
+freshness and cutover gates. V2 currently starts Claude task/local sessions;
+Codex, phone sessions and automatic drains remain unfinished. The proposed
+`/work/codex` project layout and client protections are tracked in
+[plan 11](.agents/sagas/distributed-dev-env/backlog/11-project-workspaces.md).
 
 ## License
 

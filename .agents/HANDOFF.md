@@ -5,6 +5,32 @@ Tom's own machine. Read this page, then [CLAUDE.md](../CLAUDE.md) (the rules), t
 the saga. To start building, follow
 [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md).
 
+## Workflow/session guide requested, 2026-10-09 America/New_York
+
+Tom resumed from the reset handoff and requested a detailed high-level Markdown
+workflow/feature guide before project finalization, plus discussion of Codex
+sessions, v1 `/work/codex` project homes and stale shared repositories. Read the
+[workflow guide](../docs/workflow-guide.md) before resuming implementation. It
+separates working features from disabled and planned ones, with quick-start
+commands and diagrams. [Plan 11](sagas/distributed-dev-env/backlog/11-project-workspaces.md)
+records the proposed home/worktree contract and remaining client protections;
+Q-20 asks which app registers these folders. No folder/client rollout, v1
+restart or approval-route change is implied.
+
+The read-only resume audit matched the parked controller/agent image pins.
+V1 and shelf UIDs were unchanged, all restart counts zero; no sessions,
+CredentialJobs or standing GrantPolicies existed. All thirteen v2 Flux
+Kustomizations and three controller HelmReleases were Ready. CA storage remains
+owner-confirmed complete, projection/trust/minting off, and all twenty parity
+closures open. The historical parking record below remains the starting evidence;
+deployment changes after this guide must update this section.
+
+The audit found an agentd stale-start defect: a reused clone could fail its fetch
+and still create a new task branch. The guide change fixes fresh branch creation
+and pins its base commit while preserving verified existing-workspace recovery.
+Broader shared locks, task provenance and phone/client launch integration remain
+in plan 11. Do not represent those as deployed protections.
+
 ## Parked for the Codex reset, 2026-10-08 America/New_York
 
 Tom requested a safe stopping point and a reset handoff with 7% usage remaining.
@@ -325,7 +351,7 @@ no values in chat.
 | [distributed-dev-env/README.md](sagas/distributed-dev-env/README.md) | Tom's vision, the architecture at a glance, the hard news, the decision log and the plan index. |
 | [distributed-dev-env/KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) | The work order for the first build session. |
 | [adrs/001-distributed-dev-env.md](sagas/distributed-dev-env/adrs/001-distributed-dev-env.md) | The architecture decision (Accepted 2026-10-06), with the ratification summary at the top and consequences C-01 to C-21. |
-| [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 to Q-19 and their resolutions in 15, the decisions (D-01 onward) in 16. |
+| [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 to Q-20 and their resolutions in 15, the decisions (D-01 onward) in 16. |
 | [research/R-01](sagas/distributed-dev-env/research/R-01-summoned-agents-audit.md) | An audit of summoned agents today, with v2 requirements V-01 to V-17. |
 | [research/R-02](sagas/distributed-dev-env/research/R-02-remote-control-identity.md) | Remote Control identity, the evidence behind S-1, and proposals P-1 to P-12. |
 | [research/R-03](sagas/distributed-dev-env/research/R-03-claude-code-approvals.md) | Claude Code in-app approval research: hooks, managed policy, forgery paths and the plan 03 core dependency. D-70 withdraws Q-18's earlier premise; no route selected. |
@@ -341,6 +367,8 @@ no values in chat.
 | [backlog/08](sagas/distributed-dev-env/backlog/08-tool-pods.md) | Plan 08: tool pods (Blender, audio, image, whisper, printer, video). |
 | [backlog/09](sagas/distributed-dev-env/backlog/09-gpu-local-llm.md) | Plan 09: the VRAM budget, LLM pools, satellites and opencode. |
 | [backlog/10](sagas/distributed-dev-env/backlog/10-summoned-sessions.md) | Plan 10: summoned sessions move into v2 and `dev-env-ops` retires. |
+| [backlog/11](sagas/distributed-dev-env/backlog/11-project-workspaces.md) | Proposed project homes, new-task freshness and safe resume across Codex/client entry points. |
+| [workflow guide](../docs/workflow-guide.md) | High-level quick start, architecture/flow diagrams, features, current limits and cutover gates. |
 | [.github/workflows/](../.github/workflows/) | CI (`ci.yml`, with the aggregate `CI - Success`), the operator image (`publish.yml`, from main), the agent image (`publish-agent.yml`, from a `v2.x.y` tag), release-please, the Claude advisory review and the `@claude` handler. |
 | haynes-ops [`.agents/sagas/dev-env/adrs/001-v2-lives-in-own-repo.md`](https://github.com/thaynes43/haynes-ops/blob/main/.agents/sagas/dev-env/adrs/001-v2-lives-in-own-repo.md) | Accepted: v2 lives here, and v1 and every manifest stay in haynes-ops. |
 
