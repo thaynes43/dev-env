@@ -53,6 +53,10 @@ func TestWorkspaceNoWorkPreservationResumesAbsentPreparation(t *testing.T) {
 				}
 				writeFile(t, marker, `{"version":1,"id":"test-workspace"}`)
 			}
+			privateFiles := map[string]string{".codex/auth.json": "fixture private auth", ".codex/history.sqlite": "fixture nonempty history"}
+			for file, content := range privateFiles {
+				writeFile(t, filepath.Join(s.Home, file), content)
+			}
 			hold, proof := preparationHold(t, s, sess)
 			rep, err := Rescue(context.Background(), r, hold, sess.Name, rescueNow, RescueOptions{StopAgent: true, WorkspaceStopProof: proof})
 			if err != nil {
@@ -65,6 +69,12 @@ func TestWorkspaceNoWorkPreservationResumesAbsentPreparation(t *testing.T) {
 			}
 			if !admitted && exists(s.ownerPath(sess.Name)) {
 				t.Fatal("generation-zero preservation invented an owner")
+			}
+			for file, content := range privateFiles {
+				data, err := os.ReadFile(filepath.Join(s.Home, file))
+				if err != nil || string(data) != content {
+					t.Fatalf("no-work result changed private provider file %s: %v", file, err)
+				}
 			}
 			resume := s
 			resume.PodUID = "pod-2"
