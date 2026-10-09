@@ -164,7 +164,7 @@ guide is describing the target.
 | Shared writer and stop/rescue core | Source merged #135/#140; runtime off | Bounded common Git administration and verified old-writer stop; private-home retention and live acceptance remain |
 | Joint project catalog and rules | Primitives merged #145; integration pending | Conservative sync/repair, immutable private snapshots and provider input helpers; API/CLI wiring and actual-client loading remain |
 | Keeper-owned Codex authentication | Source merged #138/#143; rollout in review | Isolated fresh login and one-shot fenced refresh; fresh owner sign-in and running-host propagation remain |
-| Codex phone execution across pods | Unverified, plan 04 revision | Two-host enrollment/renewal and shared workspace acceptance required; S-4 forwarding is an optional mechanism to reassess |
+| Codex phone execution across pods | Unverified, [first coordinator route](codex-coordinator-hosts.md) | Two independently enrolled hosts request scoped managed tasks; real renewal/shared workspace/phone acceptance remain, and S-4 forwarding is later work |
 | Automatic drain onto new images/config | Planned, plan 04 | Wait for idle, preserve conversation, resume on a new revision |
 | Management console | Planned, plan 03 | Sessions, links, archive and login renewal; a separate web approval flow is not selected |
 | Guarded replacement for Headlamp | Required, unfinished | Preserve accepted task scope and owner directives; prove replacement and migrate callers before removal |
