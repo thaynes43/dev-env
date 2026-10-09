@@ -3,6 +3,7 @@ package agentd
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 
@@ -14,7 +15,12 @@ import (
 // AGENTD_SESSION (D-40).
 func LoadSession(getenv func(string) string) (protocol.Session, error) {
 	if path := getenv(protocol.SessionFileEnv); path != "" {
-		data, err := os.ReadFile(path)
+		f, err := os.Open(path)
+		if err != nil {
+			return protocol.Session{}, fmt.Errorf("%s: %w", protocol.SessionFileEnv, err)
+		}
+		defer func() { _ = f.Close() }()
+		data, err := io.ReadAll(io.LimitReader(f, protocol.MaxSessionBytes+1))
 		if err != nil {
 			return protocol.Session{}, fmt.Errorf("%s: %w", protocol.SessionFileEnv, err)
 		}

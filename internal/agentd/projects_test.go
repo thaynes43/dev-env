@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -461,6 +462,45 @@ func TestProjectSnapshotPrivateImmutableAndProviderInputs(t *testing.T) {
 	}
 	if strings.Contains(controlInputs[1], `\x`) || strings.Contains(controlInputs[1], `\a`) || strings.Contains(controlInputs[1], `\v`) {
 		t.Fatal("Codex scalar contains non-TOML Go escapes")
+	}
+}
+
+func TestSavedProjectSnapshotRequiresPrivateExactFiles(t *testing.T) {
+	for _, file := range []string{"project-snapshot.json", "project-rules.md"} {
+		t.Run(file, func(t *testing.T) {
+			_, s, _, c := projectFixture(t)
+			snapshot, err := c.Snapshot("sample", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := StoreProjectSnapshot(s, snapshot); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(s.StateDir, file)
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, 0o640); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := StoreProjectSnapshot(s, snapshot); err == nil {
+				t.Fatal("group-readable saved project state accepted")
+			}
+			if err := os.Chmod(path, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, append(before, ' '), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := StoreProjectSnapshot(s, snapshot); err == nil {
+				t.Fatal("changed private bytes accepted on resume")
+			}
+			after, _ := os.ReadFile(path)
+			if !bytes.Equal(after, append(before, ' ')) {
+				t.Fatal("rejected saved project state was replaced")
+			}
+		})
 	}
 }
 

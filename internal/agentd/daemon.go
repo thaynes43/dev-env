@@ -108,6 +108,17 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return d.supervise(ctx)
 	}
 
+	if err := prepareProjectTask(&d.S, d.Session); err != nil {
+		stopBootHeartbeat()
+		d.writerRefused = true
+		rec.Boot, rec.AgentError = protocol.BootFailed, "project admission: "+err.Error()
+		rec.Steps = []Step{newStep("project", nil, err)}
+		if err := writeJSONFile(d.S.statePath(bootFile), rec); err != nil {
+			return fmt.Errorf("failed project boot record: %w", err)
+		}
+		d.beat(ctx)
+		return d.supervise(ctx)
+	}
 	steps := Render(ctx, d.R, d.S, d.Session)
 	ws, repoStep := PrepareRepo(ctx, d.R, d.S, d.Session)
 	steps = append(steps, repoStep)
@@ -182,7 +193,12 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 		return newStep(name, nil, errors.New(why)), why
 	}
 	var first Launch
-	if readJSONFile(d.S.statePath(launchFile), &first) == nil {
+	firstErr := readJSONFile(d.S.statePath(launchFile), &first)
+	if firstErr != nil && !errors.Is(firstErr, os.ErrNotExist) {
+		why := "saved launch is unreadable or invalid; initial prompt cannot be replayed"
+		return newStep(name, nil, errors.New(why)), why
+	}
+	if firstErr == nil {
 		l, err := BuildResume(d.S, d.Session, ws, first, bootID, d.now())
 		if err != nil {
 			return newStep(name, nil, err), err.Error()

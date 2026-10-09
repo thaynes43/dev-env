@@ -41,3 +41,28 @@ func TestParseFlagsAPI(t *testing.T) {
 		t.Errorf("with the API off its flags are not checked: %v", err)
 	}
 }
+
+func TestTaskFeatureFlagsRequireConcreteAuthority(t *testing.T) {
+	binding := []string{"--project-catalog=dev-env-system/dev-env-project-catalog", "--project-clone-owner=thaynes43"}
+	hosts := `--coordinator-hosts=[{"serviceAccount":"dev-env-system/host-a","podName":"host-a","hostID":"codex-a"}]`
+	o, err := parseFlags(nil)
+	if err != nil || o.coordinatorEnabled || o.managedCodexTasks || o.catalogBinding != nil || len(o.coordinatorHosts) != 0 {
+		t.Fatal("task features or catalog authority enabled by default")
+	}
+	for _, args := range [][]string{
+		{"--enable-managed-codex-tasks"},
+		{"--enable-coordinator-callers"},
+		append(slices.Clone(binding), "--enable-managed-codex-tasks", "--api-bind-address=0"),
+		append(slices.Clone(binding), "--enable-coordinator-callers", hosts),
+		append(slices.Clone(binding), "--enable-coordinator-callers", "--enable-managed-codex-tasks"),
+		{"--project-catalog=unknown/catalog", "--project-clone-owner=thaynes43", "--enable-managed-codex-tasks"},
+	} {
+		if _, err := parseFlags(args); err == nil {
+			t.Fatalf("task features accepted missing concrete authority: %v", args)
+		}
+	}
+	o, err = parseFlags(append(binding, "--enable-coordinator-callers", "--enable-managed-codex-tasks", hosts))
+	if err != nil || !o.coordinatorEnabled || !o.managedCodexTasks || o.catalogBinding == nil || len(o.coordinatorHosts) != 1 {
+		t.Fatal("fully bound task feature configuration refused")
+	}
+}

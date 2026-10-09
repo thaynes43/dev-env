@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +37,36 @@ func TestParseSessionRoundTrip(t *testing.T) {
 	}
 	if got := s.MaxTurns(); got != 5 {
 		t.Errorf("MaxTurns = %d, want 5", got)
+	}
+}
+
+func TestSessionUIDTransportPreservesLegacyDocuments(t *testing.T) {
+	legacy := validTask()
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := ParseSession(data)
+	if err != nil || current.SessionUID != "" {
+		t.Fatal("new optional UID broke legacy session parsing")
+	}
+	current.SessionUID = "existing-session-uid"
+	current.ProjectSnapshot = json.RawMessage(`{"version":1,"publicRules":"synthetic"}`)
+	data, err = json.Marshal(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The legacy protocol intentionally ignores future fields. Its core
+	// launch fields remain unchanged when the controller adds platform metadata.
+	var oldReader struct {
+		Name, Repo, Base, Agent, Mode, Model, Effort, Prompt string
+		Limits                                               *Limits
+	}
+	if json.Unmarshal(data, &oldReader) != nil || oldReader.Name != legacy.Name || oldReader.Prompt != legacy.Prompt || oldReader.Model != legacy.Model {
+		t.Fatal("new session metadata changed the legacy launch contract")
+	}
+	if _, err := ParseSession([]byte(strings.Repeat(" ", MaxSessionBytes+1))); err == nil {
+		t.Fatal("oversized session document accepted")
 	}
 }
 

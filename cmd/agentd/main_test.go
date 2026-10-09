@@ -127,6 +127,32 @@ func TestCtl(t *testing.T) {
 	}
 }
 
+func TestCtlTargetUIDFencePrecedesLogAndDelivery(t *testing.T) {
+	home := t.TempDir()
+	env := map[string]string{"HOME": home, "DEV_ENV_POD_UID": "pod-current", "AGENTD_SESSION": `{"sessionUID":"session-current","name":"r-1","repo":"r","agent":"claude","mode":"task","model":"claude-opus-5-5","prompt":"p"}`}
+	for _, target := range []struct{ pod, session string }{{"pod-old", "session-current"}, {"pod-current", "session-old"}, {"pod-current", ""}, {"", "session-current"}} {
+		for _, action := range []string{"log", "deliver"} {
+			args := []string{"ctl", action, "--expected-pod-uid", target.pod, "--expected-session-uid", target.session}
+			if action == "deliver" {
+				args = append(args, "--from", "coordinator/host")
+			}
+			var out, stderr bytes.Buffer
+			code := run(context.Background(), args, refuseRead{}, &out, &stderr, func(k string) string { return env[k] }, noRunner{})
+			if code != exitFailure || out.Len() != 0 || !strings.Contains(stderr.String(), "target identity does not match") {
+				t.Fatal("target UID fence did not precede log or message access")
+			}
+		}
+	}
+	code, _, errOut := runArgs([]string{"ctl", "log", "--expected-pod-uid", "pod-current", "--expected-session-uid", "session-current"}, env)
+	if code != exitNoLog || strings.Contains(errOut, "identity") {
+		t.Fatal("current exact UID could not reach normal log handling")
+	}
+	env["AGENTD_SESSION"] = `{"name":"r-1","repo":"r","agent":"claude","mode":"task","model":"claude-opus-5-5","prompt":"p"}`
+	if code, _, _ := runArgs([]string{"ctl", "log"}, env); code != exitNoLog {
+		t.Fatal("legacy human log call gained a required UID argument")
+	}
+}
+
 func TestRunNeedsASession(t *testing.T) {
 	if code, _, errOut := runArgs([]string{"run"}, map[string]string{"HOME": t.TempDir()}); code != exitFailure || !strings.Contains(errOut, "AGENTD_SESSION is not set") {
 		t.Errorf("run: %d %s", code, errOut)

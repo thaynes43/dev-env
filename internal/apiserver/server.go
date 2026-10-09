@@ -48,6 +48,9 @@ import (
 
 // Server holds the API's handlers and what they read and write.
 type Server struct {
+	// Projects is a concrete uncached named ConfigMap binding, never a caller-supplied resolver.
+	Projects          *CatalogBinding
+	ManagedCodexTasks bool
 	// Client reads from the manager's cache and writes to the API server.
 	Client client.Client
 	// Live reads straight from the API server (the manager's APIReader). A
@@ -96,30 +99,31 @@ type handler func(ctx context.Context, w http.ResponseWriter, r *http.Request, c
 type route struct {
 	methods map[string]handler
 	// quiet logs the route at debug level: heartbeats come every minute.
-	quiet bool
+	quiet       bool
+	coordinator bool
 }
 
 // Handler returns the API's HTTP handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle(apiv1.SessionsPath, s.serve(route{methods: map[string]handler{
+	mux.Handle(apiv1.SessionsPath, s.serve(route{coordinator: true, methods: map[string]handler{
 		http.MethodGet:  s.listSessions,
 		http.MethodPost: s.createSession,
 	}}))
-	mux.Handle(apiv1.SessionsPath+"/{name}", s.serve(route{methods: map[string]handler{
+	mux.Handle(apiv1.SessionsPath+"/{name}", s.serve(route{coordinator: true, methods: map[string]handler{
 		http.MethodGet:    s.getSession,
 		http.MethodDelete: s.reapSession,
 	}}))
-	mux.Handle(apiv1.SessionsPath+"/{name}/log", s.serve(route{methods: map[string]handler{
+	mux.Handle(apiv1.SessionsPath+"/{name}/log", s.serve(route{coordinator: true, methods: map[string]handler{
 		http.MethodGet: s.sessionLog,
 	}}))
-	mux.Handle(apiv1.SessionsPath+"/{name}/messages", s.serve(route{methods: map[string]handler{
+	mux.Handle(apiv1.SessionsPath+"/{name}/messages", s.serve(route{coordinator: true, methods: map[string]handler{
 		http.MethodPost: s.sendMessage,
 	}}))
-	mux.Handle(apiv1.SessionsPath+"/{name}/suspend", s.serve(route{methods: map[string]handler{
+	mux.Handle(apiv1.SessionsPath+"/{name}/suspend", s.serve(route{coordinator: true, methods: map[string]handler{
 		http.MethodPost: s.suspendSession,
 	}}))
-	mux.Handle(apiv1.SessionsPath+"/{name}/resume", s.serve(route{methods: map[string]handler{
+	mux.Handle(apiv1.SessionsPath+"/{name}/resume", s.serve(route{coordinator: true, methods: map[string]handler{
 		http.MethodPost: s.resumeSession,
 	}}))
 	mux.Handle(apiv1.SessionsPath+"/{name}/heartbeat", s.serve(route{quiet: true, methods: map[string]handler{
@@ -181,6 +185,9 @@ func (s *Server) serve(rt route) http.Handler {
 			if c, err = s.resolveCaller(r.Context(), id); err != nil {
 				return 0, err
 			}
+			if err := coordinatorAllowed(c, rt.coordinator); err != nil {
+				return 0, err
+			}
 			status, body, err := h(r.Context(), w, r, c)
 			if err != nil {
 				return 0, err
@@ -195,7 +202,7 @@ func (s *Server) serve(rt route) http.Handler {
 		if err != nil {
 			var ae *apiError
 			if !errors.As(err, &ae) {
-				s.Log.Error(err, "request failed", "method", r.Method, "path", r.URL.Path)
+				s.Log.Error(err, "request failed", "method", r.Method, "path", coordinatorLogPath(r, c))
 				ae = internal("the operator failed this request; its log has the cause")
 			}
 			status = ae.status
@@ -209,7 +216,7 @@ func (s *Server) serve(rt route) http.Handler {
 		if rt.quiet && err == nil {
 			lg = lg.V(1)
 		}
-		lg.Info("request", "method", r.Method, "path", r.URL.Path, "status", status, "caller", who,
+		lg.Info("request", "method", r.Method, "path", coordinatorLogPath(r, c), "status", status, "caller", who,
 			"durationMs", s.now().Sub(start).Milliseconds())
 	})
 }

@@ -83,9 +83,9 @@ func currentLaunch(s Settings) (Launch, bool) {
 // Deliver is `agentd ctl deliver --from <caller>`, with the text on stdin
 // (D-65). For a Claude TUI it pastes the message into the pane as one
 // bracketed paste and presses Enter, as v1 handed a session its first
-// instruction, but without passing the text through a shell. For Codex it runs
-// `codex queue` on the session's thread. A headless task, or an agent that is
-// not running, is ErrNotAddressable.
+// instruction, but without passing the text through a shell. A managed Codex
+// resume uses its owned native TUI; legacy Codex uses `codex queue` on its thread.
+// A headless task, or an agent that is not running, is ErrNotAddressable.
 func Deliver(ctx context.Context, r Runner, s Settings, sess protocol.Session, from, text string) error {
 	text = strings.TrimSpace(StripControl(text))
 	switch {
@@ -115,7 +115,17 @@ func Deliver(ctx context.Context, r Runner, s Settings, sess protocol.Session, f
 		return err
 	}
 	defer unlock()
-	if sess.Agent == protocol.AgentCodex {
+	if sess.Agent == protocol.AgentCodex && l.Provider == protocol.AgentCodex {
+		var first Launch
+		if !l.Resume || !l.NativeThreadConfirmed || l.Session != sess.Name || l.SessionUID == "" || l.SessionUID != sess.SessionUID ||
+			!nativeThreadID.MatchString(l.ConversationID) || readJSONFile(s.statePath(launchFile), &first) != nil || !first.NativeThreadConfirmed ||
+			first.Provider != protocol.AgentCodex || first.Session != l.Session || first.SessionUID != l.SessionUID || first.ConversationID != l.ConversationID || first.Dir != l.Dir {
+			return fmt.Errorf("%w: managed native TUI identity is uncertain", ErrNotAddressable)
+		}
+		// This private embedded TUI already owns the confirmed native thread.
+		// Paste into it directly; codex queue would require discovering another
+		// app-server rather than preserving this --no-daemon ownership route.
+	} else if sess.Agent == protocol.AgentCodex {
 		if _, err := r.Run(ctx, Cmd{Name: "codex", Args: []string{"queue", "--thread", l.ConversationID, "--message", msg}}); err != nil {
 			return fmt.Errorf("codex queue: %s", cmdDetail(err))
 		}
@@ -126,7 +136,14 @@ func Deliver(ctx context.Context, r Runner, s Settings, sess protocol.Session, f
 	if _, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"load-buffer", "-b", buffer, "-"}, Stdin: strings.NewReader(msg)}); err != nil {
 		return fmt.Errorf("tmux load-buffer: %s", cmdDetail(err))
 	}
-	if _, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"paste-buffer", "-b", buffer, "-d", "-p", "-t", "=" + TmuxSession + ":"}}); err != nil {
+	pasteArgs := []string{"paste-buffer", "-b", buffer, "-d", "-p"}
+	if sess.Agent == protocol.AgentCodex && l.Provider == protocol.AgentCodex {
+		// Preserve the exact multiline message inside bracketed paste instead of
+		// tmux's default newline-to-carriage-return conversion.
+		pasteArgs = append(pasteArgs, "-r")
+	}
+	pasteArgs = append(pasteArgs, "-t", "="+TmuxSession+":")
+	if _, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: pasteArgs}); err != nil {
 		return fmt.Errorf("tmux paste-buffer: %s", cmdDetail(err))
 	}
 	// Let the TUI take the paste in before Enter submits it.

@@ -84,10 +84,13 @@ func firstOf(a ...string) string {
 }
 
 // liveSession reads the session in the path from the API server.
-func (s *Server) liveSession(ctx context.Context, r *http.Request) (*v1alpha1.AgentSession, error) {
+func (s *Server) liveSession(ctx context.Context, r *http.Request, c *caller) (*v1alpha1.AgentSession, error) {
 	key, err := s.sessionKey(r)
 	if err != nil {
 		return nil, err
+	}
+	if c.kind == kindCoordinator {
+		return s.childForCoordinator(ctx, key, c, "")
 	}
 	var sess v1alpha1.AgentSession
 	if err := s.Live.Get(ctx, key, &sess); err != nil {
@@ -154,7 +157,7 @@ func (b *limitedBuffer) String() string { return b.buf.String() }
 
 // sessionLog serves GET /v1/sessions/{name}/log?tail=N: agentd ctl log in the
 // running pod.
-func (s *Server) sessionLog(ctx context.Context, _ http.ResponseWriter, r *http.Request, _ *caller) (int, any, error) {
+func (s *Server) sessionLog(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
 	tail := defaultLogTail
 	if v := r.URL.Query().Get("tail"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -163,7 +166,7 @@ func (s *Server) sessionLog(ctx context.Context, _ http.ResponseWriter, r *http.
 		}
 		tail = n
 	}
-	sess, err := s.liveSession(ctx, r)
+	sess, err := s.liveSession(ctx, r, c)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -177,7 +180,10 @@ func (s *Server) sessionLog(ctx context.Context, _ http.ResponseWriter, r *http.
 	ctx, cancel := context.WithTimeout(ctx, podCmdTimeout)
 	defer cancel()
 	stdout, stderr := &tailBuffer{max: maxLogBytes}, &limitedBuffer{max: 4 << 10}
-	err = s.Exec.Run(ctx, pod.Namespace, pod.Name, controller.ContainerName, []string{"agentd", "ctl", "log", "--tail", strconv.Itoa(tail)}, nil, stdout, stderr)
+	if err := s.authorizeChildExec(ctx, sess, pod, c); err != nil {
+		return 0, nil, err
+	}
+	err = s.Exec.Run(ctx, pod.Namespace, pod.Name, controller.ContainerName, coordinatorExecArgs([]string{"agentd", "ctl", "log", "--tail", strconv.Itoa(tail)}, sess, pod, c), nil, stdout, stderr)
 	var code utilexec.ExitError
 	if errors.As(err, &code) && code.ExitStatus() == exitNoLog {
 		return 0, nil, notFound("session %s has no log yet", sess.Name)
@@ -207,7 +213,7 @@ func (s *Server) sendMessage(ctx context.Context, w http.ResponseWriter, r *http
 	case len(text) > apiv1.MaxMessageBytes:
 		return 0, nil, invalid(fieldError("text", "%d bytes, more than %d", len(text), apiv1.MaxMessageBytes))
 	}
-	sess, err := s.liveSession(ctx, r)
+	sess, err := s.liveSession(ctx, r, c)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -222,7 +228,10 @@ func (s *Server) sendMessage(ctx context.Context, w http.ResponseWriter, r *http
 	ctx, cancel := context.WithTimeout(ctx, podCmdTimeout)
 	defer cancel()
 	stderr := &limitedBuffer{max: 4 << 10}
-	err = s.Exec.Run(ctx, pod.Namespace, pod.Name, controller.ContainerName, []string{"agentd", "ctl", "deliver", "--from", from}, strings.NewReader(text), io.Discard, stderr)
+	if err := s.authorizeChildExec(ctx, sess, pod, c); err != nil {
+		return 0, nil, err
+	}
+	err = s.Exec.Run(ctx, pod.Namespace, pod.Name, controller.ContainerName, coordinatorExecArgs([]string{"agentd", "ctl", "deliver", "--from", from}, sess, pod, c), strings.NewReader(text), io.Discard, stderr)
 	var code utilexec.ExitError
 	if errors.As(err, &code) && code.ExitStatus() == exitNotAddressable {
 		return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "session %s takes no message now: %s", sess.Name, strings.TrimSpace(stderr.String()))
@@ -264,4 +273,13 @@ func stripControl(text string) string {
 		}
 		return r
 	}, text)
+}
+
+// The target checks these values before reading logs or delivering input, closing
+// the name-only pods/exec race after the final API reads.
+func coordinatorExecArgs(args []string, sess *v1alpha1.AgentSession, pod *corev1.Pod, c *caller) []string {
+	if c.kind == kindCoordinator {
+		return append(args, "--expected-pod-uid", string(pod.UID), "--expected-session-uid", string(sess.UID))
+	}
+	return args
 }

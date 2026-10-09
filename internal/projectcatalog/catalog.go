@@ -23,6 +23,8 @@ const (
 	MaxRepositories        = 128
 	MaxProjectRepositories = 16
 	MaxRulesBytes          = 16 << 10
+	// MaxSnapshotBytes bounds the server-authored snapshot transport and saved private state.
+	MaxSnapshotBytes = 128 << 10
 )
 
 var (
@@ -230,7 +232,7 @@ func (s Snapshot) MarshalJSON() ([]byte, error) { return json.Marshal(s.document
 // ParseSnapshot validates a saved private receipt for resume. It cannot replace
 // server catalog resolution for a new task.
 func ParseSnapshot(data []byte) (Snapshot, error) {
-	if len(data) > 64<<10 || !utf8.Valid(data) {
+	if len(data) > MaxSnapshotBytes || !utf8.Valid(data) {
 		return Snapshot{}, errors.New("invalid snapshot size or encoding")
 	}
 	var doc snapshotDocument

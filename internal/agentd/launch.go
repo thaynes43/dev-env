@@ -39,6 +39,9 @@ const (
 // writes it, and the tmux pane reads it, so no prompt is ever quoted through a
 // shell (v1 passed it through `tmux send-keys`).
 type Launch struct {
+	NativeThreadConfirmed bool   `json:"nativeThreadConfirmed,omitempty"`
+	Provider              string `json:"provider,omitempty"`
+	SessionUID            string `json:"sessionUID,omitempty"`
 	// WorkspaceOwner is the admitted writer generation. It is absent for
 	// every existing private workspace launch.
 	WorkspaceOwner *taskOwner `json:"workspaceOwner,omitempty"`
@@ -131,11 +134,13 @@ func sharedGuard(ws protocol.Workspace, task bool) string {
 	return guard
 }
 
-// BuildLaunch builds a session's first launch: a Claude task (D-42) or a local
-// session's TUI (D-58), both on the static token. Remote mode arrives with plan
-// 03, Codex pods with plan 04 (D-12: Codex runs in the hub until the keeper
-// owns its login), opencode with plan 09.
+// BuildLaunch builds a first Claude launch on its admitted static token, or an
+// explicitly enabled project task on native Codex with keeper access material.
+// Managed Codex never admits interactive first launches or enrollment reuse.
 func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootID string, now time.Time) (Launch, error) {
+	if sess.Agent == protocol.AgentCodex {
+		return buildCodexLaunch(s, sess, ws, nil, bootID, now)
+	}
 	if err := claudeOnStaticToken(s, sess); err != nil {
 		return Launch{}, err
 	}
@@ -162,7 +167,11 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 		if sess.Workspace != nil {
 			guard = sharedGuard(ws, false)
 		}
-		l.Argv = append(argv, "--append-system-prompt", guard)
+		rules, err := providerProjectArgs(s, sess, guard)
+		if err != nil {
+			return Launch{}, err
+		}
+		l.Argv = append(argv, rules...)
 		return l, nil
 	}
 	if n := sess.MaxTurns(); n > 0 {
@@ -172,8 +181,12 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 	if sess.Workspace != nil {
 		guard = sharedGuard(ws, true)
 	}
+	rules, err := providerProjectArgs(s, sess, guard)
+	if err != nil {
+		return Launch{}, err
+	}
+	argv = append(argv, rules...)
 	l.Argv = append(argv,
-		"--append-system-prompt", guard,
 		"--output-format", "stream-json", "--verbose",
 		"-p")
 	l.Prompt = sess.Prompt
@@ -187,6 +200,9 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 // the task's guard. The model and effort are the session's, which spec fixes
 // at create (D-39).
 func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first Launch, bootID string, now time.Time) (Launch, error) {
+	if sess.Agent == protocol.AgentCodex {
+		return buildCodexLaunch(s, sess, ws, &first, bootID, now)
+	}
 	if err := claudeOnStaticToken(s, sess); err != nil {
 		return Launch{}, err
 	}
@@ -200,7 +216,12 @@ func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first
 	if sess.Workspace != nil {
 		guard = sharedGuard(ws, sess.Mode == protocol.ModeTask)
 	}
-	argv := append(claudeArgs(s, sess), "--resume", first.ConversationID, "--append-system-prompt", guard)
+	rules, err := providerProjectArgs(s, sess, guard)
+	if err != nil {
+		return Launch{}, err
+	}
+	argv := append(claudeArgs(s, sess), "--resume", first.ConversationID)
+	argv = append(argv, rules...)
 	return Launch{
 		Session:        sess.Name,
 		Argv:           argv,
@@ -258,13 +279,26 @@ func StartAgent(ctx context.Context, r Runner, s Settings, l Launch, self string
 	if l.Resume {
 		file = resumeFile
 	}
+	if l.Provider == protocol.AgentCodex && !l.Resume {
+		if _, err := os.Lstat(s.statePath(file)); err == nil {
+			return errors.New("existing native Codex launch requires its confirmed resume identity")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
 	data, err := json.MarshalIndent(l, "", "  ")
 	if err != nil {
 		return err
 	}
 	// 0600: the launch holds the prompt.
-	if err := writeFileAtomic(s.statePath(file), data, 0o600); err != nil {
-		return err
+	var writeErr error
+	if l.Provider == protocol.AgentCodex {
+		writeErr = writeWorkspaceJSON(s.statePath(file), l)
+	} else {
+		writeErr = writeFileAtomic(s.statePath(file), data, 0o600)
+	}
+	if writeErr != nil {
+		return writeErr
 	}
 	if _, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"has-session", "-t", "=" + TmuxSession}}); err == nil {
 		return fmt.Errorf("tmux session %q already exists", TmuxSession)
@@ -274,8 +308,12 @@ func StartAgent(ctx context.Context, r Runner, s Settings, l Launch, self string
 		self, "run-agent", "--launch", s.statePath(file),
 	}})
 	if err != nil {
-		// The agent never ran, so a later boot may start it.
-		_ = os.Remove(s.statePath(file))
+		// Legacy starts retain their existing retry behavior. A native Codex
+		// start may have succeeded despite an ambiguous tmux response, so its
+		// durable unconfirmed launch must survive and prevent prompt replay.
+		if l.Provider != protocol.AgentCodex {
+			_ = os.Remove(s.statePath(file))
+		}
 		return fmt.Errorf("tmux: %s", cmdDetail(err))
 	}
 	return nil
