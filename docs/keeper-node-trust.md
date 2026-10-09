@@ -111,7 +111,7 @@ From v1's existing pod, use each configured hardware alias:
 
 ```bash
 hw-ssh <NODE-ALIAS> id -un
-hw-ssh <NODE-ALIAS> sudo -n /usr/bin/pvesh version >/dev/null
+hw-ssh <NODE-ALIAS> sudo -n /usr/bin/pvesh get /version --output-format json >/dev/null
 ```
 
 The first command should report `dev-env`; the second should succeed. These are
