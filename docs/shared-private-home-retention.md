@@ -42,6 +42,12 @@ receipt and makes no empty-home claim. It is separate from `NoWorkAdmitted`, whi
 describes verified task admission after resources exist. `Started` or unknown
 tasks still require the retained-home proof above.
 
+A `Started` task whose resource creation failed, or a legacy task with unknown
+admission, keeps its finalizer while the operator investigates its admission and
+preservation evidence. Present-day pod/PVC absence cannot prove that an earlier
+write was never accepted. Manual finalizer removal based only on that absence
+is not a supported completion route.
+
 Do not call the home archived, empty or backed up. This is retained storage whose
 contents are unchanged. No automatic retention expiry, home destruction, native
 enrollment retirement or reuse by another task is authorized by this source
