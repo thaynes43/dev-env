@@ -208,8 +208,9 @@ human approval, credential grants or the break-glass half of S-12.
     context `grant-<id>`; at expiry delete the ServiceAccount and bindings;
   - `egress`: a CiliumNetworkPolicy selecting the session's label;
   - `breakglass`: a proposed direct grant replacing some existing Headlamp access.
-    Its original restrictions and new approval requirement are historical, not
-    proof of effective parity. D-70 requires the same accepted task scope before
+    Its original Pushover/web approval route and restrictive role are historical,
+    not proof of effective parity. Tom's live directive remains required; a
+    replacement approval mechanism is unselected. D-70 requires the same accepted task scope before
     removing Headlamp; no route is selected. Planned audit/refresh behavior still
     depends on keeper-owned logins;
   - `credential` (Q-07, Tom 2026-10-06): the keeper installs a Proxmox API token for
