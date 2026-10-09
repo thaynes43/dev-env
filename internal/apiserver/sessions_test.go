@@ -130,7 +130,7 @@ func TestProjectSelectionRefusesUntilTrustedAdmissionIsConfigured(t *testing.T) 
 		req.Project = "dev-env"
 		req.IdempotencyKey = "project-request"
 		e := wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, token, req), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
-		if len(e.Fields) != 1 || e.Fields[0].Field != "project" || !strings.Contains(e.Message, "project admission is not configured") {
+		if len(e.Fields) != 1 || e.Fields[0].Field != "project" || !strings.Contains(e.Message, "accepted project catalog is not configured") {
 			t.Fatalf("unconfigured project did not refuse explicitly: %+v", e)
 		}
 	}
