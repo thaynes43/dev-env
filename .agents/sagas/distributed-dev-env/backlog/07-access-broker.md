@@ -18,6 +18,11 @@ proposed workflow, not evidence that
 those Kubernetes powers are new. D-70 corrects the earlier OPERATOR-only baseline;
 no approval route or blanket direct cluster-admin grant is selected.
 
+D-71 clarifies the target: replace Headlamp with guarded access supporting the
+same accepted tasks, then retire it after parity acceptance and caller migration.
+Keeping Headlamp is a temporary fallback. Guardrails may be necessary parts of
+that replacement; calling the existing powers parity does not waive those controls.
+
 ## Progress
 
 One PR per step, in this order. Tick a step in the PR that lands it. The broker
@@ -258,6 +263,10 @@ accepted v1 tasks or add a new approval gate to existing access. These cases rec
 the original proposal, not current parity acceptance. No replacement approval
 route is selected. The parity checklist and R-04 closure tests remain mandatory;
 credential backend code with its feature off does not close them.
+
+D-71 requires the replacement's task parity and guardrail tests to pass together.
+Headlamp denial or retirement is a target after that proof and caller migration;
+denial alone is not acceptance. Do not preserve the Headlamp fallback permanently.
 
 - A session requests role `dev-env-grant-workloads` in one namespace for 15 minutes.
   Tom gets one Pushover message, approves on the page, the agent patches a

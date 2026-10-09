@@ -3409,6 +3409,25 @@ withdraws Q-18's earlier prompt until a concrete new capability or workflow is
 specified; Tom has selected no approval route. Q-16 still governs any future
 approval implementation. Keeper provisioning and the parity checklist continue.
 
+**D-71 (2026-10-09 UTC, Tom). Retire Headlamp after guarded parity.**
+
+Tom clarified: "They may be needed changes though and headlamp should go away once
+parity with guardrails is reached". The target is to replace the Headlamp detour
+with guarded access that supports every accepted v1 task, including its existing
+owner-directed work. Retain Headlamp only as a migration fallback until that
+replacement passes parity acceptance and callers have a migration path, then
+retire it through GitOps. Do not remove it now or treat the fallback as the final
+architecture.
+
+Guardrails may be necessary changes to how existing powers are exercised: precise
+scope, temporary credentials, expiry, attribution and an approval mechanism where
+the owner directive is required. Classifying those powers as parity does not
+waive controls or select an implementation. Functional task parity and the
+replacement's guardrail tests must both pass. Preserve existing owner rules;
+no blanket standing admin grant or Q-18 implementation is selected by this target.
+The old Q-18 premise remains withdrawn, while R-03's candidate approval mechanisms
+remain relevant to a concrete guarded replacement workflow.
+
 **D-26. Approvals: a Pushover link to an approval page behind Authentik.**
 
 **Superseded by Q-16, 2026-10-08.** The following is historical design, not a
@@ -4504,3 +4523,4 @@ blocks only the step it names.
 | D-68 | Optional external `agent-run` captures one kubeconfig context, reads the pinned CA, mints a short-lived human token in memory and owns a loopback port-forward; TLS checks the operator's service name; cleanup reaps the forward on every exit. Q-17 removes mandatory laptop acceptance. | 3.5 |
 | D-69 | Disabled-by-default PVE credential jobs: broker owns approval/grant status; keeper owns pinned SSH minting, bounded private journal and cleanup receipts; typed UID-fenced agentd files preserve pve behavior. Q-15 A; owner CA/trust and real acceptance remain required. | 6.12 |
 | D-70 | Effective parity includes accepted Headlamp cluster-admin and GitOps paths. The five proposed extra Kubernetes categories are existing reachable powers; direct grants, expiry and attribution improve the mechanism. Q-18's earlier prompt is withdrawn, with no approval route or blanket direct admin grant selected. | 6.12 |
+| D-71 | Tom's target: replace Headlamp with guarded access preserving accepted v1 tasks and owner rules; prove parity and guardrails, migrate callers, then retire Headlamp through GitOps. No approval implementation or blanket standing admin grant is selected. | 6.12 |

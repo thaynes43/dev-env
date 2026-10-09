@@ -5,6 +5,15 @@ Tom's own machine. Read this page, then [CLAUDE.md](../CLAUDE.md) (the rules), t
 the saga. To start building, follow
 [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md).
 
+## Target clarification on 2026-10-09 UTC
+
+Tom confirmed that guardrails may be needed and Headlamp should go away once
+guarded parity is reached (D-71, README decision 47). The target is a guarded
+replacement for every accepted v1 task, including owner-directed Headlamp work.
+Headlamp is a migration fallback, not the final architecture. Prove the replacement
+and migrate callers before retiring it through GitOps. No approval route or blanket
+standing admin access is selected. The existing owner requirements remain.
+
 ## State on 2026-10-08
 
 - **dev-env v2 resumed on Codex on 2026-10-08**, under Tom's coordinator work
@@ -35,7 +44,9 @@ the saga. To start building, follow
     records the native hooks, managed policy, forgeable soft gates and the
     guarded route's unresolved phone, authority and shared OAuth checks.
     **Q-18's earlier premise is withdrawn (D-70):** the Headlamp route already
-    gives agents cluster-admin task scope. No approval route is selected or enabled.
+    gives agents cluster-admin task scope on Tom's live directive for the task or
+    access scope. D-71 targets a guarded replacement, then Headlamp retirement.
+    No approval route is selected or enabled.
     The complete v1 parity audit is recorded in
     [R-04](sagas/distributed-dev-env/research/R-04-v1-capability-parity.md).
     Twenty gaps in backlog/07 block cutover. The audit's OPERATOR-only distinction

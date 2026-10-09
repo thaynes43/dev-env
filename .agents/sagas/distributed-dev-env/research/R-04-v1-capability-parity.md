@@ -17,6 +17,13 @@ already preapproved direct OPERATOR and accepted credential scopes, not blanket
 Headlamp cluster-admin access. A directive that already authorizes the task need
 not be requested again; this correction adds no new approval step.
 
+**Target clarified 2026-10-09 UTC (D-71).** Tom wants Headlamp retired once parity
+with guardrails is reached. The target is to replace its task scope with tested,
+guarded access. Keeping the old path is only a migration fallback. Guardrails may
+change the mechanism while preserving accepted tasks and owner requirements;
+conditional Headlamp retirement is part of the target, not an optional claim of
+new Kubernetes power.
+
 ## Evidence and limits
 
 Read-only audits compared v1's live ServiceAccounts, RBAC, admission and network
@@ -86,7 +93,7 @@ still a gap; an authorization check alone cannot close it.
 |---|---|---|
 | P-01 | No standing policies; the catalog lacks complete direct OPERATOR and effective Headlamp task scope. | Add precise parity roles, validation/binding allowances and short-lived policies, or retain an equivalent accepted route. Exercise direct runtime verbs and representative Headlamp-equivalent operations under the existing owner rules, including expiry and release for grants. Do not equate narrow OPERATOR rights with the full baseline or enable broad roles wholesale. |
 | P-02 | All standing grants reject profile `ops`. | Permit precise remediation parity scopes. Prove auto-approval for those scopes and denial for capabilities beyond v1. Separate the two v1 identities' additional permissions. |
-| P-03 | Exec/proxy and effective Headlamp access are blocked by the catalog and admission. | Preserve accepted Headlamp pod exec/ServiceAccount-workload access or supply an equivalent route for the same tasks, alongside existing controller, Traefik and CNPG operations. Verify authorization, admission and bounded read-only execution. Direct Secret reads through the session's baseline identity remain absent; Secret access through Headlamp's cluster-admin identity is already within v1's effective scope. Do not read values in acceptance artifacts or add a new human gate to an existing capability. |
+| P-03 | Exec/proxy and effective Headlamp task scope are blocked by the catalog and admission. | Supply a guarded replacement for accepted Headlamp tasks; retain the old route only as a migration fallback until equivalence is proved. Preserve existing controller, Traefik and CNPG operations. Verify authorization, admission and bounded read-only execution. Direct Secret reads through the session's baseline identity remain absent; owner-directed Secret access through Headlamp is already within effective v1 scope. Preserve that owner requirement and do not read values in acceptance artifacts. D-71 requires retiring Headlamp after guarded parity and caller migration. |
 | P-04 | Guards block maintenance in `dev-env-system`, `dev-agents` and `dev-tools`. | Preserve the existing v1 maintenance capability without a new human gate. Test admission for its targeted runtime writes. Session lifecycle API calls alone are not equivalent to platform maintenance. |
 | P-05 | Job admission allows only default-SA jobs and a narrow secret suffix. | Preserve existing job-clone operations, including Recyclarr's named SA and mounted secret. Use server dry-run and one bounded CPU-limited fixture; do not grant general workload creation. |
 | P-06 | v1's observability PVC create/delete and StatefulSet delete are absent. | Add the exact namespaced parity scope and closure test. VolumeSnapshot writes are beyond this v1 scope and must not hitchhike on it. |

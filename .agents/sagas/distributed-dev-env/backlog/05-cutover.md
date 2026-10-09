@@ -13,6 +13,11 @@ v2 carries all agent work. v1 is retired without losing anything on its volume.
 
 ## Scope
 
+- **Headlamp retirement (D-71):** prove that guarded replacement access supports
+  its accepted v1 tasks and existing owner directives, migrate callers, then
+  remove the Headlamp app and its privileged identity through GitOps. Retain it
+  only as a migration fallback until that proof; a restricted break-glass role
+  that omits existing tasks is not enough.
 - **Workbench:** a small Deployment in `dev-agents` with code-server, `agent-run`
   and `kubectl`, behind traefik-internal and Authentik like v1. It runs no agents by
   default.

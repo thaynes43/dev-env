@@ -30,6 +30,12 @@ sessions. A management web UI is another possible client. That changes neither
 the approval surface nor the priority order. Plan 02's corrected acceptance passed;
 the next work is this spike, the parity audit, then keeper SSH minting.
 
+D-71 clarifies the concrete target: replace owner-directed Headlamp access with a
+guarded route preserving accepted tasks, then retire Headlamp after parity and
+guardrail acceptance. These approval candidates remain relevant to that workflow;
+calling its existing powers parity does not make replacement controls optional.
+No candidate is selected, and no authority-isolation claim has been proved.
+
 ## What the harness exposes
 
 | Mechanism | Evidence and limit |
