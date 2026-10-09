@@ -109,7 +109,15 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 
 	if err := prepareProjectTask(&d.S, d.Session); err != nil {
-		return fmt.Errorf("project admission: %w", err)
+		stopBootHeartbeat()
+		d.writerRefused = true
+		rec.Boot, rec.AgentError = protocol.BootFailed, "project admission: "+err.Error()
+		rec.Steps = []Step{newStep("project", nil, err)}
+		if err := writeJSONFile(d.S.statePath(bootFile), rec); err != nil {
+			return fmt.Errorf("failed project boot record: %w", err)
+		}
+		d.beat(ctx)
+		return d.supervise(ctx)
 	}
 	steps := Render(ctx, d.R, d.S, d.Session)
 	ws, repoStep := PrepareRepo(ctx, d.R, d.S, d.Session)
