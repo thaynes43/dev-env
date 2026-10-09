@@ -50,7 +50,8 @@ The first test uses two separate GitOps StatefulSets, one replica each, on worke
 nodes. `OnDelete` update strategy preserves active conversations when image or
 config declarations change. Each host has a retained RWO home, a stable
 StatefulSet-derived hostname, private `CODEX_HOME`, installation ID, SQLite state
-and control socket. All containers and init containers have CPU limits. Shared
+and control socket. All containers and init containers have CPU and memory
+requests and limits. Shared
 `repos`, `codex`, `work` and workspace metadata mounts are read-only on hosts.
 
 Use pinned Codex 0.160.1's persistent daemon lifecycle. Before startup, preserve

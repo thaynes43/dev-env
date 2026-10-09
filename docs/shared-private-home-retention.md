@@ -12,6 +12,12 @@ to Session UID, original executor UID, private PVC UID, writer generation and
 rescue result/locator. A `NoWorkAdmitted` result is distinct from an empty home;
 its generation may be zero only for verified no-owner admission.
 
+Bind the private PVC UID durably when the original executor is admitted. Check
+that binding before and after hold rescue; capturing a UID only when the hold is
+created cannot detect an earlier replacement. Pod annotations are mutable and
+cannot supply that authority by themselves. Old untyped rescue evidence or a
+missing original home binding refuses retention rather than inventing a proof.
+
 Under a conditional write, remove only that exact AgentSession controller owner
 reference from its owned PVC. Preserve all other metadata, owner references and
 data. Label the retained home for discovery; record its receipt without secrets

@@ -161,6 +161,9 @@ guide is describing the target.
 | General hw-ssh grants | Unbuilt | Must retain existing targets, command classes, PTY/stdin behavior, and owner rules |
 | V2 Claude phone sessions and Max refresh owner | Planned, plan 03 | Keeper-owned login, Remote Control registration/resume, renewal and archive |
 | V2 Codex remote hosts and shared projects | Required, plans 04/11 | Multiple stable pod links, joint Claude/Codex projects, sole refresh owner, shared files with distinct task ownership |
+| Shared writer and stop/rescue core | Source merged #135/#140; runtime off | Bounded common Git administration and verified old-writer stop; private-home retention and live acceptance remain |
+| Joint project catalog and rules | Primitives merged #145; integration pending | Conservative sync/repair, immutable private snapshots and provider input helpers; API/CLI wiring and actual-client loading remain |
+| Keeper-owned Codex authentication | Source merged #138/#143; rollout in review | Isolated fresh login and one-shot fenced refresh; fresh owner sign-in and running-host propagation remain |
 | Codex phone execution across pods | Unverified, plan 04 revision | Two-host enrollment/renewal and shared workspace acceptance required; S-4 forwarding is an optional mechanism to reassess |
 | Automatic drain onto new images/config | Planned, plan 04 | Wait for idle, preserve conversation, resume on a new revision |
 | Management console | Planned, plan 03 | Sessions, links, archive and login renewal; a separate web approval flow is not selected |
@@ -518,7 +521,9 @@ The remaining joint-project and cross-pod contract needs these checks:
 Record repo identity, selected ref, immutable start SHA, successful fetch time,
 project/rules revision, branch/worktree and session/host owner. Background daily
 fetches help project discovery; every new task still needs its own verified
-source transaction. Those project/cross-pod records and locks are **unbuilt**.
+source transaction. Shared ownership/lock and catalog/snapshot primitives are
+merged source. API/provider integration and actual cross-pod acceptance remain
+pending; their runtime opt-ins are off.
 
 ### Canonical health and lossless repair (R6)
 
