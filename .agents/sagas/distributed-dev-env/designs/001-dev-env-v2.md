@@ -1927,7 +1927,7 @@ tool group keeps its single grouped PR.
 | declare-activity | JSON files on the PVC, read by dev-env-ops over `kubectl exec` | `Activity` resource via the API (6.9) | Limits enforced server-side. |
 | Summoned sessions | `dev-env-ops` executor polling the `upgrade-work-orders` ConfigMap; unauthenticated writers | The operator API, authorized per caller by `CallerPolicy`; lanes, watchdogs and the digest in the operator (3.7) | Callers change their scripts to call the API, one at a time (plan 10). |
 | Egress | one CNP for the pod, about 115 names | Web and platform tiers for every pod; the controlled tier by grant (6.10) | Web fetch works; what a tricked agent can leak depends on what the pod holds (Q-07). |
-| Access beyond the baseline | ask Tom in chat; a headlamp Job on his live directive | `AccessGrant` through the broker, approved on Tom's phone or by a policy in git (6.12) | Audited and time-boxed. |
+| Existing Headlamp task scope | accepted Headlamp exec or ServiceAccount Job on Tom's live directive for the task or access scope | equivalent access with the same live-directive requirement before removing the route; direct broker grants are a proposed mechanism, with no human route selected (D-70) | Attribution and expiry improve the mechanism; the Kubernetes powers already exist. |
 | Specialised tools | fixed Deployments in `dev` (Blender, audio) | `ToolPool` and `ToolSession` in `dev-tools` (8.1) | Start on demand, stop when idle. |
 
 ### 6.1 Claude static token
@@ -2668,6 +2668,15 @@ every sibling session pod holds someone's work.
 **D-19 (revised 2026-10-06). The baseline keeps v1's verbs with a field-level guard;
 anything more is a grant; nothing in the three dev-env namespaces.**
 
+**Effective-parity correction, D-70 (2026-10-08):** the following records the
+original guard and its deployed tests. Its claim to retain all v1 access is
+superseded wherever it blocks accepted Headlamp identities, powerful-pod exec or
+runtime maintenance. Those are parity gaps, not new powers awaiting human
+approval. Passing S-12 proves that the guard denies its original cases; it does
+not prove the guarded system can replace v1. R-04 P-01/P-03/P-04/P-05 govern
+restoration. No change to v1 or new blanket direct admin grant follows from this
+correction.
+
 - **Reads stay cluster-wide**, exactly as v1 (everything except Secrets), plus the
   `dev-env.haynesops.com` group.
 - **The baseline write and proxy verbs are v1's**, bound cluster-wide again, so no
@@ -2954,8 +2963,10 @@ role `dev-env-grant-breakglass` or `dev-env-grant-secrets-read`, or for a dev-en
 namespace, so no policy can approve those. It also rejects a GrantPolicy for
 `dev-env-grant-workloads` whose namespaces are a wildcard or a pattern: each
 namespace is named. The day-one policy set
-approves nothing beyond what v1 already allowed, because the baseline (6.11) already
-covers v1.
+covers preapproved OPERATOR and accepted credential scopes. Preserve accepted
+Headlamp tasks through the existing owner-directed route or an equivalent route
+with the same directive requirement. The deployed baseline (6.11) does not yet
+preserve effective parity; R-04 records the blocking gaps.
 
 **Limits and audit.** At most 3 pending requests per session; identical requests
 merge. A request nobody answers in 30 minutes ends as `Denied` (timeout). Every grant
@@ -3356,12 +3367,74 @@ exact RBAC/admission copies before image pins; agent changes require a signed
 release. The declared real test follows owner trust, with fixture cleanup and
 unchanged v1/session pod UIDs and restart counts.
 
+**D-70 (2026-10-08, coordinator correction). Parity measures effective access,
+including Headlamp.**
+
+Tom challenged the premise: "Today agents just jump into my headlamp pod and do
+whatever they want, you can look and see for yourself, so what exactly is parity
+here and what is enhancements?" The read-only check found `headlamp-admin` binding
+ServiceAccount `frontend/headlamp` to `cluster-admin`; the running Headlamp pod
+uses that identity and its GitOps init builds a kubeconfig from its projected
+credential. DESIGN-001 already recorded this route and a drain performed through
+it. No credential values were read or privileged operation performed by the
+follow-up check.
+
+Parity means retaining the tasks agents can already accomplish through accepted
+OPERATOR, pod-exec, Headlamp ServiceAccount-workload and self-merged GitOps paths,
+under the existing owner directives and disruptive-work rules. It is not limited
+to permissions on the agents' direct ServiceAccount. Secret reads, node drains,
+snapshots, workload creation and RBAC changes already fall within Headlamp's
+cluster-admin scope. Calling them new effective Kubernetes powers was incorrect.
+
+Technical reach does not remove the existing owner gate. Headlamp work retains
+Tom's live directive for the requested task or access scope. An equivalent direct
+route must preserve that requirement; standing GrantPolicies cover the already
+preapproved direct OPERATOR and accepted credential scopes, not blanket Headlamp
+admin access. A task already authorized by Tom's live directive does not need a
+second request. This is a coordinator's factual correction, not a new owner
+ruling or permission expansion.
+
+Distributed sessions, direct access without the Headlamp detour, temporary
+credentials, expiry and per-session attribution are operational or security
+enhancements to the mechanism. A phone approval workflow is another proposed
+mechanism. None establishes a hard boundary against administrators of the
+infrastructure hosting its authority. No concrete additional Kubernetes power
+has been identified by the earlier five-category list.
+
+This corrects the baseline rather than authorizing a blanket direct cluster-admin
+grant. Preserve an equivalent accepted route before removing Headlamp access;
+restricted break-glass alone is not full parity. Do not add a new approval gate
+to an existing capability or remove existing owner requirements. The coordinator
+withdraws Q-18's earlier prompt until a concrete new capability or workflow is
+specified; Tom has selected no approval route. Q-16 still governs any future
+approval implementation. Keeper provisioning and the parity checklist continue.
+
+**D-71 (2026-10-09 UTC, Tom). Retire Headlamp after guarded parity.**
+
+Tom clarified: "They may be needed changes though and headlamp should go away once
+parity with guardrails is reached". The target is to replace the Headlamp detour
+with guarded access that supports every accepted v1 task, including its existing
+owner-directed work. Retain Headlamp only as a migration fallback until that
+replacement passes parity acceptance and callers have a migration path, then
+retire it through GitOps. Do not remove it now or treat the fallback as the final
+architecture.
+
+Guardrails may be necessary changes to how existing powers are exercised: precise
+scope, temporary credentials, expiry, attribution and an approval mechanism where
+the owner directive is required. Classifying those powers as parity does not
+waive controls or select an implementation. Functional task parity and the
+replacement's guardrail tests must both pass. Preserve existing owner rules;
+no blanket standing admin grant or Q-18 implementation is selected by this target.
+The old Q-18 premise remains withdrawn, while R-03's candidate approval mechanisms
+remain relevant to a concrete guarded replacement workflow.
+
 **D-26. Approvals: a Pushover link to an approval page behind Authentik.**
 
 **Superseded by Q-16, 2026-10-08.** The following is historical design, not a
 build instruction. Approvals must happen inside the Claude Code app and preserve
 v1 parity. The docs-only spike is [R-03](../research/R-03-claude-code-approvals.md);
-Q-18 awaits the implementation-route ruling. No human approval path is enabled.
+Q-18's earlier premise is withdrawn under D-70; no route is selected and no human
+approval path is enabled.
 
 | Channel | Verdict |
 |---|---|
@@ -3376,7 +3449,14 @@ other apps. A break-glass approval needs an Authentik login from the last 5 minu
 The page can show a request as a GrantPolicy snippet, so an approval Tom keeps
 giving becomes a standing policy through a haynes-ops PR.
 
-**D-27. Break-glass replaces the headlamp path.** Agents have reached cluster-admin
+**D-27. Original restricted break-glass replacement (historical).**
+
+**Superseded by Q-16/D-70 wherever it reduces effective parity.** The proposed
+role below omits powers Headlamp already supplies, and no approval adapter is
+deployed. It cannot be called a complete replacement for the accepted Headlamp
+route. The original proposal follows for context, not as a cutover requirement.
+
+Agents have reached cluster-admin
 by running a Job as `frontend/headlamp` or exec-ing into the headlamp pod, only on
 Tom's live directive (2026-08-21, 2026-09-22). In v2 both paths are closed by the
 guards (6.11), and the sanctioned path is `agent-run breakglass --reason "…" --ttl
@@ -3416,7 +3496,9 @@ the escalation class. v2 takes its option 1 as the baseline guard (D-19). The po
 is written once with the matched ServiceAccounts as a parameter, so if Tom picks
 "mitigate" for v1, the same policy can also match `dev/dev-env` and
 `upgrade-agent/dev-env-ops` before cutover. Once break-glass exists, closing the
-headlamp path costs no capability. Nothing in this design changes haynes-ops today.
+headlamp path is safe only after equivalent accepted tasks pass R-04. The earlier
+claim that restricted break-glass costs no capability is superseded by D-70.
+Nothing in this correction changes haynes-ops today.
 
 ### 6.13 Local-model agents
 
@@ -4258,7 +4340,7 @@ v2 work never edits
 | **0. Design and spikes** | This saga; spikes S-1 to S-16 (S-2 answered) | Q-01 to Q-11 answered (done 2026-10-06), spike results recorded, ADR-001 Accepted |
 | **1. Foundation** | Repo CI; operator with `AgentSession`, pod and volume lifecycle; agentd boot; agent image `2.0` (tini, agentd, baked Codex and kubectl-cnpg); keeper minting the gh token; haynes-ops apps for namespaces, CRDs, operator, keeper, RBAC with the baseline guard (D-19), CNPs with the web and platform tiers (D-24), PriorityClass, Kyverno limit policy (no LimitRange, D-47); session volumes on `gasha01-rbd` (D-22). No ResourceQuota. **Task mode only**, static token. | `agent-run -p` from the v1 pod creates a pod on a worker; the task opens a PR; reap leaves a verified bundle. An operator rollout mid-task leaves the task untouched. The guard refuses each #3392 path. |
 | **2. Interactive and lifecycle** | `local` mode, attach, idle detection, timers, rescue, resume, restore; `/v1/activities` and dev-env-ops reading both sources; messaging tier 3; optional external CLI access | A local session survives suspend and resume with its conversation; a declared activity is visible to dev-env-ops; sessions can be created and managed through the existing in-cluster `agent-run` CLI. Tom's 2026-10-08 correction removes the mandatory laptop test (Q-17). |
-| **7. Access broker** (after 1; one plan at a time, README decisions 40/44/45) | `AccessGrant`, `GrantPolicy`, broker, kube and egress grants, credential grants; in-app human approval under Q-16/R-03/Q-18, not Pushover or web approval | Standing short-lived grants preserve the complete v1 capability set. Additional capabilities stay disabled until the chosen Claude Code approval route passes its phone, receipt, isolation and parity tests. |
+| **7. Access broker** (after 1; one plan at a time, README decisions 40/44/45) | `AccessGrant`, `GrantPolicy`, broker, kube and egress grants, credential grants; in-app human approval under Q-16/R-03/Q-18, not Pushover or web approval | Standing grants or equivalent accepted routes must preserve effective v1 task scope, including Headlamp. D-70 withdraws Q-18's earlier prompt; no human route is selected. Future approval proposals require a concrete use case, owner choice and phone/receipt/isolation/parity tests. |
 | **3. Remote Control** | Keeper-owned Max login, made fresh with `/login` (or the coordinator host if S-1 fails); agentd merging the access token into a writable credentials file and seeding the home; links from the CLI registry; archive on reap (S-15); the console with sessions, links, archive and the login page; the standby; messaging tier 2 | Tom drives a v2 session from his phone; a coordinator dispatches v2 task pods; the monthly renewal works from the console page. |
 | **4. Rolling updates and Codex** | Revisions; drain-on-idle and resume (per Q-03); codex hub; keeper-owned Codex auth (S-3 passed); image pre-pull DaemonSet; Renovate auto-merge for `2.x` | An image bump reaches every idle session with its conversation intact and interrupts no busy turn; the phone's Codex entry survives a hub drain. |
 | **5. Cutover** (needs 3, 4, 7 and Q-08 applied) | Workbench pod; dev-env-ops reads only `Activity`; v1 scaled to zero, its Max login retired with it (it lapses; nothing is copied), its PVC kept 30 days, then removed with its build and Renovate carve-outs | Tom approves the cutover. |
@@ -4284,7 +4366,7 @@ Backlog plans: [`../backlog/`](../backlog/).
 | S-9 | Does the pinned device plugin count VRAM units with time-slicing (requests above 1, config chosen by an NFD-set label), and does a household-priority pod preempt an agent GPU pod? Is DRA consumable capacity usable with NVIDIA's driver on these cards yet? | talosw04 (nothing household runs there), one pod at a time | D-30 mechanism |
 | S-10 | Do Claude Code, Codex and opencode accept a loopback MCP server that answers `initialize` and `tools/list` from a cache, and pick up a server added mid-session? | one session pod, phase 2 | D-29 |
 | S-11 | Does the pinned opencode run headless, resume a session, use MCP over HTTP, allow everything by config, and make sound tool calls with a Qwen coder model on llama-server? | one session pod, one request at a time against the shared pool | D-33 |
-| S-12 | Does the baseline guard refuse each #3392 path (Job as another ServiceAccount, image patch, Flux spec patch, exec into the headlamp pod) and allow each runbook action (rollout restart, CronJob suspend, Flux reconcile and suspend, volsync unlock Job, ExternalSecret force-sync)? Does the admission policy see `CONNECT` for exec? | a Job in `dev-agents` as `dev-env-agent`, every write a server-side dry run against real objects, phase 1. **Passed 2026-10-07** (haynes-ops #3477, #3479): 45 of 45 checks. Every #3392 path was refused, every write, exec and proxy into the dev-env namespaces was refused, and every runbook action was allowed, the real `flux reconcile` and the rook-toolbox exec included. **The ValidatingAdmissionPolicy sees `CONNECT`** for exec, attach and proxy, so it carries the namespace half of the exec rule; Kyverno carries the half that needs the target pod. Review added the Pod Security baseline to both guards. The break-glass half waits for plan 07 | D-19: built as written, with the additions in its 2026-10-07 note |
+| S-12 | Does the baseline guard refuse each #3392 path (Job as another ServiceAccount, image patch, Flux spec patch, exec into the headlamp pod) and allow each runbook action (rollout restart, CronJob suspend, Flux reconcile and suspend, volsync unlock Job, ExternalSecret force-sync)? Does the admission policy see `CONNECT` for exec? | a Job in `dev-agents` as `dev-env-agent`, every write a server-side dry run against real objects, phase 1. **Passed 2026-10-07** (haynes-ops #3477, #3479): 45 of 45 checks. **D-70 correction:** this is historical guard-denial evidence, not effective-parity acceptance; accepted Headlamp and stronger-identity tasks remain mandatory. Every #3392 path was refused, every write, exec and proxy into the dev-env namespaces was refused, and every runbook action was allowed, the real `flux reconcile` and the rook-toolbox exec included. **The ValidatingAdmissionPolicy sees `CONNECT`** for exec, attach and proxy, so it carries the namespace half of the exec rule; Kyverno carries the half that needs the target pod. Review added the Pod Security baseline to both guards. The break-glass half waits for plan 07 | D-19: built as written, with the additions in its 2026-10-07 note |
 | S-13 | Does a reserve pod at priority -1 make the scheduler preempt an agent GPU pod and keep the units, and does a household pod preempt the reserve pod? Can a gated pod's node affinity be narrowed before its gate is removed? Does a GPU node that joins (talosw04 with its lend label set) appear in the budget with no config change? | talosw04, one pod at a time | D-34 |
 | S-14 | On each satellite: does `llama-server` (Metal, CUDA on Windows) serve the pool models with the satellite agent in front; tokens per second for each pool model; MLX against llama.cpp on the M5; do the owner-first signals (a game's VRAM on Windows, battery and memory pressure on macOS) fire within seconds; model load time from local disk? | Tom's three machines, with Tom present, one machine at a time | D-35 |
 | S-15 | Does the CLI's archive call (`POST /v1/code/sessions/{id}/archive`, undocumented) with an access token take a finished session off the phone's active list, and does the documented way back (`claude --resume`, then `/remote-control`) still reopen it? Does `--resume` alone? | v1 pod, scratch config dir, one `spike-s15` session. **Passed 2026-10-06** (CLI 2.1.292): 200 on an offline entry, and 200 again on a repeat (not 409); Tom saw the entry leave his list. `claude --resume` alone unarchived and reattached it, with no `/remote-control` | 6.7 archive on reap: the keeper's call, after the CLI's own archive on SIGTERM |
@@ -4340,9 +4422,11 @@ was settled on 2026-10-07: Tom made the repo public (B). Q-15 (plan 07, Proxmox
 credential grants) was answered on 2026-10-07 too. Q-16 (how the human-approval authority is protected and surfaced) was ruled on 2026-10-08. ADR-001 was Accepted on
 2026-10-06. Q-17 was withdrawn on 2026-10-08 after Tom corrected its premise:
 laptop access is optional, and plan 02 acceptance uses the existing in-cluster
-CLI. Q-18 is the approval-spike choice, awaiting Tom. It blocks the human
-approval implementation, not the standing-grant parity audit or keeper SSH
-minting. Each question blocks only the step it names.
+CLI. Q-18's earlier approval-route prompt was withdrawn by the coordinator after
+Tom corrected its OPERATOR-only premise (D-70). No route was selected. Future
+approval questions must name a concrete new capability or workflow before asking;
+this old prompt blocks neither parity nor keeper provisioning. Each live question
+blocks only the step it names.
 
 | Id | Question | Options (recommended first) | Resolution |
 |---|---|---|---|
@@ -4361,9 +4445,10 @@ minting. Each question blocks only the step it names.
 | Q-13 | How does the cluster pull the new `ghcr.io/thaynes43/dev-env-operator` package? (B3) | **A. Make the package public**: the cluster pulls it anonymously, like `ghcr.io/thaynes43/dev-env` and every other image today; anyone can pull a binary that holds no secrets. **B. Keep it private, with an image pull secret**: the binary stays private, but a `read:packages` token in 1Password and an ExternalSecret become one more credential to rotate, and a lapsed one stops operator pods from starting. | **Ruling, Tom 2026-10-06: A, public.** "Public package write a prompt for an agent on my laptop to flip it". GitHub has no API for package visibility, so a laptop agent flips it in the browser after B3's first publish: [part 2 of the laptop handoff](../../../handoffs/2026-10-06-tom-laptop-settings.md). Until then the package is private and the HelmRelease cannot pull it. Blocks deploying the operator (plan 01's HelmRelease) until the flip. Done: the package allowed an anonymous pull on 2026-10-07, and 8.9 runs from it. |
 | Q-14 | How does release-please open release PRs that CI checks? A PR opened with the workflow's `GITHUB_TOKEN` starts no workflows, so `CI - Success` never reports on it. (B4) | **A. A GitHub App key as a repo secret** (a small App with contents and pull-request write on this repo only): release PRs run CI like any PR; one more secret, which only Tom can add. **B. haynes-dev-bot closes and reopens each release PR** from the pod (App tokens do start workflows): no new secret, but every release needs an agent step, and a forgotten one leaves the release PR stuck. **C. No release-please; tag releases by hand**: nothing to set up, but versioning (section 10) becomes manual and inconsistent. | **Ruling, Tom 2026-10-06: A, a GitHub App key secret.** "GitHub App key secret (Recommended)". B4 uses the repo variable `RELEASE_APP_ID` and the repo secret `RELEASE_APP_PRIVATE_KEY`, read by `actions/create-github-app-token`. Refinement of the option text: the App also needs Issues read and write, besides Contents and Pull requests write, because release-please creates its `autorelease:` labels. Tom or his laptop agent adds both ([part 1 of the laptop handoff](../../../handoffs/2026-10-06-tom-laptop-settings.md)). Blocks B4's release-please part until the secret exists. |
 | Q-15 | How does a Proxmox credential grant get its short-lived token? Plan 07 step 8's first check failed on 2026-10-07: the operator token (`dev-env@pve!operator`, PVE 8.4.16) cannot mint an expiring token for its own user. Proxmox answered 403 to both the list and the create of `/access/users/dev-env@pve/token`, so Q-07's mint "from the operator token" does not work. Confirmed: `dev-env@pve` holds `DevEnvOperator` and `PVEAuditor` on `/`, and hw-ssh's `dev-env` user may run `sudo pvesh` as root on every Proxmox node. | **A. The keeper mints it over SSH**: with a certificate from its own SSH CA (the one hw-ssh grants use), it runs `sudo pvesh create /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0` on a Proxmox node, so the token carries `dev-env@pve`'s operator role and dies at the grant's end, and it deletes the token at expiry. No new Proxmox identity, and the long-lived operator token is not needed by v2 at all. The keeper gains egress to the Proxmox nodes on port 22, and Proxmox grants depend on the SSH CA. **B. A dedicated minting user**: `dev-env-minter@pve` with a password and `User.Modify` on `/access/users/dev-env@pve`; the keeper logs in for a ticket and mints over the API. One more Proxmox identity able to make operator tokens, a password in 1Password, and Tom creates the user and its ACL. **C. No Proxmox credential grants**: Proxmox writes go through hw-ssh certificates and `sudo qm` or `sudo pvesh` on a node. Simplest, but the `pve` CLI's operator tier stops working in v2 sessions and its runbook steps move to the SSH path. | **Ruling, Tom 2026-10-07: A, the keeper mints over SSH.** "Keeper mints over SSH (Recommended)". The keeper, with a certificate from its own SSH CA, runs `sudo pvesh create /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0` on a Proxmox node and deletes the token when the grant ends. No new Proxmox user is made, and v2 never holds the long-lived operator token. The keeper needs egress on port 22 to the Proxmox nodes, and the nodes trust the keeper's SSH CA (plan 07 H5). Unblocks plan 07 step 8. |
-| Q-16 | How should the approval authority be protected from agent access before plan 07 step 6 is enabled? Verified 2026-10-08: the guard protects Traefik ServiceAccounts, but not Authentik's server and outpost pods (`network/default`), its worker, or the shared `database/postgres16` state, so agents can change identity or login evidence through exec, workloads, blueprint ConfigMaps and routing objects. D-19's accepted trade-off therefore reaches the authority D-26 needs to trust. | As first drafted (closed PR #90), all ruled out by the Resolution: **A (was recommended). Protect the existing authority as enforcing infrastructure:** deny agents access to Authentik, its outposts, Traefik routing and `postgres16` through exec/attach, mutable workloads and configuration, routes and volumes; agents would lose operations on shared `postgres16`, and Tom would do them himself. **B. Isolate Authentik and its approval state** in enforcing namespaces with a dedicated database: a migration and a larger deployment first. **C. Defer human approval:** standing GrantPolicies only, console disabled. Costs no parity, and is the state until approvals ship. The approval surface is now the next design spike (issue #91): **(a)** an approver Remote Control session in a guarded pod, not in bypass mode and with a minimal toolset, whose permission prompts or AskUserQuestion answers reach Tom's phone, with a managed hook forwarding the recorded answer to the broker; **(b)** asking in the requesting session, which the agent can forge, so a soft gate only; **(c)** the coordinator session relays the request, also soft, and needing no new infrastructure. The spike records its own Q-NN. | **Ruled 2026-10-08 (Tom, from his phone).** His answers, quoted exactly: (1) "Agents handle all renovate upgrades and maintenance of the cluster via Haynes-ops we need to be extremely careful that we don't add guardrails I'll have to later peel back to reach parity with today's capabilities." (2) "The agents often have to wire new apps up to aithentik by creating or changing providers and applications." (3) "I am open to advanced security but I must be able to grant permission from my phone." (4) "There's some friction in getting a pushover then opening a website unless that website replaces Claude code app which is what I use today for both prompts : chat and approvals. Splitting it into two apps seems risky". The ruling: **Parity first.** No new guard cuts what agents do today: no Authentik, outpost, Traefik or postgres16 lockdown, no git review gate and no CODEOWNERS gate. Agents keep self-merging haynes-ops PRs, blueprint app wiring included. **Standing grants cover parity.** Auto-approved, short-lived grants must cover everything a v1 agent does today: the OPERATOR kube tier, Proxmox through the keeper's SSH minting (Q-15) and hw-ssh. Any gap blocks the cutover. **Human approval gates only capabilities beyond today's**, such as secret reads and break-glass above the OPERATOR tier. They stay unavailable until it ships, which costs no parity. **Approvals happen inside the Claude Code app**, not Pushover plus a web page; the surface is the next design spike. **Accepted residual risk:** Flux reconciles every Kustomization as cluster-admin and agents self-merge, so any agent can already change anything through git. A restricted Flux lane is a future option that only counts if it keeps full parity. The plan 07 build takes the D-NN. |
+| Q-16 | How should the approval authority be protected from agent access before plan 07 step 6 is enabled? Verified 2026-10-08: the guard protects Traefik ServiceAccounts, but not Authentik's server and outpost pods (`network/default`), its worker, or the shared `database/postgres16` state, so agents can change identity or login evidence through exec, workloads, blueprint ConfigMaps and routing objects. D-19's accepted trade-off therefore reaches the authority D-26 needs to trust. | As first drafted (closed PR #90), all ruled out by the Resolution: **A (was recommended). Protect the existing authority as enforcing infrastructure:** deny agents access to Authentik, its outposts, Traefik routing and `postgres16` through exec/attach, mutable workloads and configuration, routes and volumes; agents would lose operations on shared `postgres16`, and Tom would do them himself. **B. Isolate Authentik and its approval state** in enforcing namespaces with a dedicated database: a migration and a larger deployment first. **C. Defer human approval:** standing GrantPolicies only, console disabled. Costs no parity, and is the state until approvals ship. The approval surface is now the next design spike (issue #91): **(a)** an approver Remote Control session in a guarded pod, not in bypass mode and with a minimal toolset, whose permission prompts or AskUserQuestion answers reach Tom's phone, with a managed hook forwarding the recorded answer to the broker; **(b)** asking in the requesting session, which the agent can forge, so a soft gate only; **(c)** the coordinator session relays the request, also soft, and needing no new infrastructure. The spike records its own Q-NN. | **Ruled 2026-10-08 (Tom, from his phone).** His answers, quoted exactly: (1) "Agents handle all renovate upgrades and maintenance of the cluster via Haynes-ops we need to be extremely careful that we don't add guardrails I'll have to later peel back to reach parity with today's capabilities." (2) "The agents often have to wire new apps up to aithentik by creating or changing providers and applications." (3) "I am open to advanced security but I must be able to grant permission from my phone." (4) "There's some friction in getting a pushover then opening a website unless that website replaces Claude code app which is what I use today for both prompts : chat and approvals. Splitting it into two apps seems risky". The ruling: **Parity first.** No new guard cuts what agents do today: no Authentik, outpost, Traefik or postgres16 lockdown, no git review gate and no CODEOWNERS gate. Agents keep self-merging haynes-ops PRs, blueprint app wiring included. **Standing grants cover parity.** Auto-approved, short-lived grants must cover everything a v1 agent does today: the OPERATOR kube tier, Proxmox through the keeper's SSH minting (Q-15) and hw-ssh. Any gap blocks the cutover. **Human approval gates only capabilities beyond today's**, such as secret reads and break-glass above the OPERATOR tier. They stay unavailable until it ships, which costs no parity. **Approvals happen inside the Claude Code app**, not Pushover plus a web page; the surface is the next design spike. **Accepted residual risk:** Flux reconciles every Kustomization as cluster-admin and agents self-merge, so any agent can already change anything through git. A restricted Flux lane is a future option that only counts if it keeps full parity. The plan 07 build takes the D-NN. **Coordinator correction, later 2026-10-08 (D-70):** the OPERATOR-only examples above omit accepted Headlamp cluster-admin access. Those operations are existing reachable powers, with Tom's live directive still required for the Headlamp task or access scope. This factual correction is appended to the original ruling; it is not a new owner ruling or blanket standing admin authorization. |
 | Q-17 | Does Tom's laptop already have a working admin kubeconfig for the main cluster? D-05 requires it for the external CLI path; the cluster's human ServiceAccount, CA ConfigMap and operator Service already exist, but the laptop configuration has not been checked. | **A. Use an existing admin context (was recommended):** verify its context and operator Service read locally, then use it for the external check. No new cluster identity. **B. Set up laptop cluster access first:** Tom or his laptop agent configures an admin kubeconfig through the existing owner access path. No credential values are sent to this chat or committed. | **Withdrawn 2026-10-08: Tom corrected the premise.** He would use a CLI such as `agent-run`, ask agents to start sessions, or consider a web UI for session management. Neither prerequisite option was chosen. No laptop setup or test blocks plan 02; acceptance uses the existing in-cluster CLI and agent-created sessions. D-68 remains an optional external path, with no claim of a real external-machine acceptance run. A web UI is an option, not an instruction to build one now. Q-16's approval and parity rulings remain in force. |
-| Q-18 | Which approval route should plan 07 pursue for capabilities beyond today's v1 tier? [R-03](../research/R-03-claude-code-approvals.md) verified hook schemas and managed permission controls, but no route yet proves an isolated phone decision. Ordinary relays are forgeable; guarded execution still needs phone, complete authority, shared OAuth and parity tests. | **A. Staged guarded approver (recommended):** pursue a separate Claude Code control workload after plan 03's keeper-owned login and Remote Control core. Additional human-gated capabilities stay disabled until phone/receipt/isolation tests pass without reducing parity. **B. Coordinator soft gate:** use a Claude Code coordinator relay with explicit acceptance that its agent can forge the answer; less infrastructure, no independent human-provenance boundary. **C. Standing grants only for now:** finish parity and SSH minting, and defer the human path; capabilities beyond today's tier remain unavailable. | **Awaiting Tom, 2026-10-08.** The choice does not authorize a parity-reducing guard, another approval app, or replacing break-glass login freshness with tool-event freshness. The parity audit and keeper SSH minting continue in the work-order sequence. |
+| Q-18 | Which approval route should plan 07 pursue for capabilities beyond today's v1 tier? [R-03](../research/R-03-claude-code-approvals.md) verified hook schemas and managed permission controls, but no route yet proves an isolated phone decision. Ordinary relays are forgeable; guarded execution still needs phone, complete authority, shared OAuth and parity tests. | **A. Staged guarded approver (recommended):** pursue a separate Claude Code control workload after plan 03's keeper-owned login and Remote Control core. Additional human-gated capabilities stay disabled until phone/receipt/isolation tests pass without reducing parity. **B. Coordinator soft gate:** use a Claude Code coordinator relay with explicit acceptance that its agent can forge the answer; less infrastructure, no independent human-provenance boundary. **C. Standing grants only for now:** finish parity and SSH minting, and defer the human path; capabilities beyond today's tier remain unavailable. | **Earlier prompt withdrawn by the coordinator, 2026-10-08, after Tom's baseline correction.** No route or blanket direct cluster-admin grant is selected. Preserve effective parity and existing owner rules. The withdrawal does not mean Tom chose to defer approvals; it removes a question built on an incomplete baseline. Parity and keeper provisioning continue. |
+| Q-19 | Can Tom provision the fresh keeper SSH CA in the agreed 1Password location, or does he need generation instructions? This is the first owner step already required by the work order and D-69, not a new approval of Q-15 A. | **A. Provision and confirm saved (recommended):** fresh unencrypted Ed25519 OpenSSH CA in vault `HaynesKube`, item `dev-env-ssh-ca`, fields `SSH_CA_PRIVATE_KEY_B64` (base64 private-key file) and `SSH_CA_PUBLIC_KEY` (public-key line). **B. Request generation instructions:** walk through that same owner step. Never send values to the coordinator chat. | **Awaiting owner completion or request for instructions, 2026-10-09 UTC.** The owner generates/stores the CA; no v1 hardware key is reused. Keeper minting remains disabled. Node trust and activation are subsequent steps, not bundled into this prompt. |
 
 ## 16. Decisions settled in this design
 
@@ -4387,15 +4472,15 @@ minting. Each question blocks only the step it names.
 | D-16 | Three messaging tiers | 6.8 |
 | D-17 | `Activity` resource via the API | 6.9 |
 | D-18 | Profiles name Secrets, egress tier and standing grants: `full`, `dev`, and `ops` for summoned sessions (revised 2026-10-06) | 6.10 |
-| D-19 | Baseline = v1's verbs under a field-level admission guard; identity rules (no dev-env namespaces, no other ServiceAccounts, no privileged pods) bind grants too; more only by grant (revised 2026-10-06; was per-namespace bindings) | 6.11 |
+| D-19 | Historical field-level guard and identity restrictions; D-70 supersedes its full-parity claim wherever it blocks accepted Headlamp, stronger-identity exec or runtime maintenance. Those remain R-04 restoration requirements. | 6.11 |
 | D-20 | Sessions on workers only, GPU nodes avoided by label, low priority that never preempts (revised 2026-10-06) | 7.1 |
 | D-21 | Capacity is the scheduler's: requests and limits, no fleet quota, Pending is the queue; household pods need CPU requests (Q-08) | 7.3 |
 | D-22 | Session volumes and tool workspaces on `gasha01-rbd`; the shared RWX volume on Rook CephFS; model files on gasha01 NFS | 6.6 |
 | D-23 | No approval prompts inside a session pod; the platform is the boundary | 6.12 |
 | D-24 | Egress tiers: web baseline (not for `ops`), platform baseline, ops tier for `ops`, controlled by grant; baseline as clusterwide policies; Cilium and Hubble, no proxy | 6.10 |
 | D-25 | Access broker: `AccessGrant` and `GrantPolicy`, a separate Deployment, an identity per kube grant, a CNP per egress grant | 6.12 |
-| D-26 | Original Pushover/web approval design superseded by Q-16; approvals belong inside Claude Code. R-03 is the docs-only spike; Q-18 pending, no human path enabled. | 6.12 |
-| D-27 | Break-glass grant (a role short of `cluster-admin`) replaces the headlamp path | 6.12 |
+| D-26 | Original Pushover/web approval design superseded by Q-16; approvals belong inside Claude Code. R-03 is the docs-only spike; D-70 withdraws Q-18's earlier prompt, no human path selected or enabled. | 6.12 |
+| D-27 | Historical restricted break-glass proposal; its claimed full Headlamp parity is superseded by Q-16/D-70 | 6.12 |
 | D-28 | `ToolPool` and `ToolSession` in `dev-tools`: on demand, scale to zero | 8.1 |
 | D-29 | Tools reach agents through agentd's loopback MCP gateway with cached manifests | 8.1 |
 | D-30 | GPU capacity counted in VRAM units through the device plugin, by household and agents alike | 8.2 |
@@ -4438,3 +4523,5 @@ minting. Each question blocks only the step it names.
 | D-67 | A `dev-env-shelf` Deployment in `dev-agents` mounts only the shared volume and runs `agentd shelf`; the operator lists (`GET /v1/rescues`) and prunes (leader, every 6 h, `lifecycle.bundleRetention`, never a bundle of a session that still exists, logs too) there by exec; a restore is `POST /v1/sessions` with `restore`, checked and held through the shelf under the prune's lock, and agentd fetches the bundle into `refs/rescued/*` on the first boot; the base defaults to the old session's rescued branch and is never a rescued snapshot (rescue branch or stash) | 4.5 |
 | D-68 | Optional external `agent-run` captures one kubeconfig context, reads the pinned CA, mints a short-lived human token in memory and owns a loopback port-forward; TLS checks the operator's service name; cleanup reaps the forward on every exit. Q-17 removes mandatory laptop acceptance. | 3.5 |
 | D-69 | Disabled-by-default PVE credential jobs: broker owns approval/grant status; keeper owns pinned SSH minting, bounded private journal and cleanup receipts; typed UID-fenced agentd files preserve pve behavior. Q-15 A; owner CA/trust and real acceptance remain required. | 6.12 |
+| D-70 | Effective parity includes accepted Headlamp cluster-admin and GitOps paths. The five proposed extra Kubernetes categories are existing reachable powers; direct grants, expiry and attribution improve the mechanism. Q-18's earlier prompt is withdrawn, with no approval route or blanket direct admin grant selected. | 6.12 |
+| D-71 | Tom's target: replace Headlamp with guarded access preserving accepted v1 tasks and owner rules; prove parity and guardrails, migrate callers, then retire Headlamp through GitOps. No approval implementation or blanket standing admin grant is selected. | 6.12 |

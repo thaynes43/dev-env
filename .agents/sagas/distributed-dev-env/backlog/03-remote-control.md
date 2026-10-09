@@ -10,8 +10,10 @@ reap). S-2 is answered: the static token cannot register Remote Control.
 the web approval console. A guarded in-app approver would need this plan's login,
 refresh and Remote Control core first; making that core wait for human approvals
 would create a cycle. R-03 proposes separating the bounded core prerequisite from
-the management UI. Q-18 awaits Tom's choice; no plan 03 code or login is built by
-the spike. Preserve the current work order: approval design, parity audit, keeper
+the management UI. D-70 withdraws Q-18's earlier premise; no route is selected.
+D-71 targets guarded Headlamp replacement, to which these approval candidates
+remain relevant. No plan 03 code or login is built by the spike. Preserve the
+current work order: approval design, parity audit, keeper
 SSH minting, then the prerequisite if chosen. Never copy v1's refresh token.
 
 ## Goal

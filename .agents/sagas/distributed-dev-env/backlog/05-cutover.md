@@ -1,8 +1,9 @@
 # 05: cutover from v1
 
 **Status:** backlog
-**Depends on:** 03, 04, 07 (break-glass must exist before v1 and its headlamp habit
-go), Q-08's LimitRange live in haynes-ops (no BestEffort household pods), and Tom's
+**Depends on:** 03, 04, 07 (verified effective v1 parity, including accepted
+Headlamp-equivalent tasks, before retiring v1; restricted break-glass alone is not
+a replacement), Q-08's LimitRange live in haynes-ops (no BestEffort household pods), and Tom's
 explicit approval
 **Parallel with:** nothing
 
@@ -12,6 +13,11 @@ v2 carries all agent work. v1 is retired without losing anything on its volume.
 
 ## Scope
 
+- **Headlamp retirement (D-71):** prove that guarded replacement access supports
+  its accepted v1 tasks and existing owner directives, migrate callers, then
+  remove the Headlamp app and its privileged identity through GitOps. Retain it
+  only as a migration fallback until that proof; a restricted break-glass role
+  that omits existing tasks is not enough.
 - **Workbench:** a small Deployment in `dev-agents` with code-server, `agent-run`
   and `kubectl`, behind traefik-internal and Authentik like v1. It runs no agents by
   default.

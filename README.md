@@ -19,8 +19,10 @@ task mode, is done: the operator and the keeper run in the cluster, the agent im
 starts a session pod on a worker that does its task and opens its PR. Plan 02
 (interactive sessions and lifecycle) is done under Tom's 2026-10-08 correction:
 the existing in-cluster CLI workflow passed acceptance, and external CLI access
-is optional. Plan 07's approval spike is complete (R-03, Q-18 pending); the v1
-capability parity audit is next.
+is optional. Plan 07's approval spike and corrected v1 capability audit are complete
+(R-03/R-04). D-70 withdraws Q-18's earlier premise, with no approval route selected;
+D-71 targets a guarded replacement before Headlamp retirement. Parity restoration
+and keeper activation prerequisites remain.
 Start at [`.agents/HANDOFF.md`](.agents/HANDOFF.md); the saga is
 [`.agents/sagas/distributed-dev-env/`](.agents/sagas/distributed-dev-env/README.md).
 

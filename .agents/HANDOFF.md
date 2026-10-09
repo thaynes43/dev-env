@@ -5,6 +5,17 @@ Tom's own machine. Read this page, then [CLAUDE.md](../CLAUDE.md) (the rules), t
 the saga. To start building, follow
 [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md).
 
+## Target clarification on 2026-10-09 UTC
+
+Tom confirmed that guardrails may be needed and Headlamp should go away once
+guarded parity is reached (D-71, README decision 47). The target is a guarded
+replacement for every accepted v1 task, including owner-directed Headlamp work.
+Headlamp is a migration fallback, not the final architecture. Prove the replacement
+and migrate callers before retiring it through GitOps. No approval route or blanket
+standing admin access is selected. The existing owner requirements remain. The
+next owner prompt is Q-19: provision the fresh keeper SSH CA in the agreed
+1Password item, or request generation instructions; send no values in chat.
+
 ## State on 2026-10-08
 
 - **dev-env v2 resumed on Codex on 2026-10-08**, under Tom's coordinator work
@@ -34,10 +45,17 @@ the saga. To start building, follow
     [R-03](sagas/distributed-dev-env/research/R-03-claude-code-approvals.md)
     records the native hooks, managed policy, forgeable soft gates and the
     guarded route's unresolved phone, authority and shared OAuth checks.
-    **Q-18 awaits Tom's route choice.** No human approval path is enabled.
+    **Q-18's earlier premise is withdrawn (D-70):** the Headlamp route already
+    gives agents cluster-admin task scope on Tom's live directive for the task or
+    access scope. D-71 targets a guarded replacement, then Headlamp retirement.
+    No approval route is selected or enabled.
     The complete v1 parity audit is recorded in
     [R-04](sagas/distributed-dev-env/research/R-04-v1-capability-parity.md).
-    Twenty gaps in backlog/07 block cutover. The omitted baseline references are
+    Twenty gaps in backlog/07 block cutover. The audit's OPERATOR-only distinction
+    was corrected after Tom pointed to Headlamp: effective parity includes accepted
+    Headlamp exec/ServiceAccount workloads and GitOps self-merge. Direct grants,
+    expiry and attribution are mechanism enhancements, not new Kubernetes powers.
+    No blanket direct admin grant is authorized. The omitted baseline references are
     restored and verified after the
     rescue-mount fix (#108, haynes-ops #3584/#3583). A fresh full session passed
     presence/ADC permission checks and read-only Omni/API calls, then was rescued
@@ -46,7 +64,7 @@ the saga. To start building, follow
     jobs, keeper SSH/journal/cleanup and typed agentd/PVE support. Owner CA and
     node trust, standing policies and real provider acceptance still block its
     activation. General hw-ssh also needs P-19's connection/revocation contract.
-    The pending approval choice does not block this work. Q-16 was ruled on 2026-10-08
+    No approval implementation choice blocks this work. Q-16 was ruled on 2026-10-08
     (parity first; approvals inside the Claude Code app), and PR #90 and haynes-ops
     #3550 were closed because their Pushover and web approval surface is ruled out.
     The resume point is the last coordinator comment on
@@ -75,9 +93,9 @@ the saga. To start building, follow
     shelf and shared volume remain. All five runtime Flux targets and Helm releases
     are Ready. Keeper GitHub readiness passed; no CredentialJobs exist. The scoped
     activity declaration was ended. Owner CA/trust and real provider acceptance
-    remain required. Q-18 controls the approval route; keeper work continues
-    independently. Under the one-question-at-a-time rule, the next CA provisioning
-    question is queued until the current Q-18 prompt is answered.
+    remain required. Q-18's old prompt is withdrawn, with no route selected; it
+    does not hold the next owner CA provisioning question. Ask the owner steps one
+    at a time when they arise, with exact item/field names and no secret values.
     The earlier baseline restore (#3584/#3583) remains applied and verified;
     PVE LAN access and the remaining service checks still block full closure.
     New dependency PRs appeared after the bench; green
@@ -267,9 +285,10 @@ the saga. To start building, follow
    is done ([plan 01](sagas/distributed-dev-env/backlog/01-foundation.md)). Plan 02
    ([backlog/02](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md))
    is done with the corrected in-cluster CLI acceptance check (see State on
-   2026-10-08). Plan 07's docs-only approval spike is complete; Q-18 is pending, and the
-   parity audit is next. Run one plan at a
-   time (README decisions 40, 44 and 45).
+   2026-10-08). Plan 07's docs-only approval spike and corrected parity audit are
+   complete. Q-18's earlier prompt is withdrawn under D-70; parity restoration and
+   keeper activation prerequisites remain. Run one plan at a time (README
+   decisions 40, 44, 45 and 46).
 3. **Collect the spike results.** S-1, S-1b and S-7 are done, and S-2 is already
    answered (the static token cannot register Remote Control). S-6, S-15 and S-16
    are done, and S-3 passed (keeper-owned Codex auth, DESIGN-001 D-12 step 2), so
@@ -291,10 +310,10 @@ the saga. To start building, follow
 | [distributed-dev-env/README.md](sagas/distributed-dev-env/README.md) | Tom's vision, the architecture at a glance, the hard news, the decision log and the plan index. |
 | [distributed-dev-env/KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) | The work order for the first build session. |
 | [adrs/001-distributed-dev-env.md](sagas/distributed-dev-env/adrs/001-distributed-dev-env.md) | The architecture decision (Accepted 2026-10-06), with the ratification summary at the top and consequences C-01 to C-21. |
-| [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 to Q-18 and their resolutions in 15, the decisions (D-01 onward) in 16. |
+| [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 to Q-19 and their resolutions in 15, the decisions (D-01 onward) in 16. |
 | [research/R-01](sagas/distributed-dev-env/research/R-01-summoned-agents-audit.md) | An audit of summoned agents today, with v2 requirements V-01 to V-17. |
 | [research/R-02](sagas/distributed-dev-env/research/R-02-remote-control-identity.md) | Remote Control identity, the evidence behind S-1, and proposals P-1 to P-12. |
-| [research/R-03](sagas/distributed-dev-env/research/R-03-claude-code-approvals.md) | Claude Code in-app approval spike: native hooks, managed policy, forgery paths, isolated authority and the plan 03 core dependency. Q-18 pending. |
+| [research/R-03](sagas/distributed-dev-env/research/R-03-claude-code-approvals.md) | Claude Code in-app approval research: hooks, managed policy, forgery paths and the plan 03 core dependency. D-70 withdraws Q-18's earlier premise; no route selected. |
 | [research/R-04](sagas/distributed-dev-env/research/R-04-v1-capability-parity.md) | Complete v1 parity audit: twenty cutover blockers, exact scopes, fixes and runtime closure evidence. |
 | [backlog/00-spikes.md](sagas/distributed-dev-env/backlog/00-spikes.md) | S-1 to S-16: steps, safety rules and pass criteria. |
 | [backlog/01-foundation.md](sagas/distributed-dev-env/backlog/01-foundation.md) | Plan 01: operator, agentd, `agent-run`, the agent image, task mode on the static token. |
@@ -329,13 +348,16 @@ the saga. To start building, follow
 | Q-13 | Make `ghcr.io/thaynes43/dev-env-operator` public (A). "Public package write a prompt for an agent on my laptop to flip it": a laptop agent flips it after B3's first publish, because GitHub has no API for package visibility. |
 | Q-14 | A GitHub App key secret for release-please (A): "GitHub App key secret (Recommended)". Repo variable `RELEASE_APP_ID`, repo secret `RELEASE_APP_PRIVATE_KEY`; the App also needs Issues read and write for `autorelease:` labels. |
 | Q-15 | The keeper mints a Proxmox grant's token over SSH (A): "Keeper mints over SSH (Recommended)". With a certificate from its own SSH CA it runs `sudo pvesh create /access/users/dev-env@pve/token/<grant> --expire <end> --privsep 0` on a node and deletes the token at the grant's end. No new Proxmox user, and v2 never holds the long-lived token. Port 22 from the keeper to the nodes. |
-| Q-16 | Parity first, approvals in the Claude Code app (Tom, 2026-10-08). "I am open to advanced security but I must be able to grant permission from my phone." No new guard cuts what agents do today (no Authentik, outpost, Traefik or postgres16 lockdown, no git review or CODEOWNERS gate); standing auto-approved grants cover everything a v1 agent does (OPERATOR kube tier, Proxmox via the keeper's SSH minting, hw-ssh), and any gap blocks the cutover. Human approval gates only capabilities beyond today's (secret reads, break-glass above OPERATOR). Approvals happen inside the Claude Code app, not Pushover plus a web page. Residual risk accepted: Flux is cluster-admin and agents self-merge. The approval surface is the next design spike (issue #91). |
+| Q-16 | Parity first, approvals in the Claude Code app (Tom, 2026-10-08). "I am open to advanced security but I must be able to grant permission from my phone." No new guard cuts what agents do today (no Authentik, outpost, Traefik or postgres16 lockdown, no git review or CODEOWNERS gate); standing auto-approved grants cover everything a v1 agent does (OPERATOR kube tier, Proxmox via the keeper's SSH minting, hw-ssh), and any gap blocks the cutover. Human approval gates only capabilities beyond today's (secret reads, break-glass above OPERATOR). Approvals happen inside the Claude Code app, not Pushover plus a web page. Residual risk accepted: Flux is cluster-admin and agents self-merge. The approval surface is the next design spike (issue #91). **Coordinator correction, later 2026-10-08 (D-70):** the OPERATOR-only examples above omit accepted Headlamp cluster-admin access. Those operations are existing reachable powers, with Tom's live directive still required for the Headlamp task or access scope. This factual correction is appended to the original ruling; it is not a new owner ruling or blanket standing admin authorization. |
 | Q-17 | Withdrawn after Tom corrected its premise (2026-10-08): use `agent-run` or ask agents to start sessions; a web UI is another possible session-management client. No laptop kubeconfig or test blocks plan 02. D-68 remains an optional external path whose real external-machine use is unverified. Q-16 remains in force. |
-| Q-18 | Awaiting Tom: staged guarded Claude Code approver (recommended), coordinator soft gate with explicit forgery-risk acceptance, or defer the human path and keep standing grants only. R-03 records evidence and tests; no human path or new guard is enabled. Parity audit and keeper SSH minting do not wait for this answer. |
+| Q-18 | Earlier prompt withdrawn by the coordinator after Tom corrected its OPERATOR-only premise (2026-10-08, D-70). Headlamp's cluster-admin route already exposes the claimed additional Kubernetes powers. No approval route or blanket direct admin grant is selected. Any future approval question must name an actual new capability or workflow and preserve effective parity and existing owner rules. R-03 remains design research; no human path or new guard is enabled. |
+| Q-19 | First owner provisioning step: fresh unencrypted Ed25519 OpenSSH CA in `HaynesKube` / `dev-env-ssh-ca`, fields `SSH_CA_PRIVATE_KEY_B64` and `SSH_CA_PUBLIC_KEY`. Awaiting saved confirmation or a request for generation instructions (2026-10-09 UTC); no values in chat. Already required by the work order and D-69; no new Q-15 A approval. Minting stays disabled; trust and activation follow separately. |
 
-**Open:** Q-18, the in-app approval route. The spike and v1 parity audit are complete;
-parity restoration and keeper SSH minting are in progress. No gap is waived. Break-glass login freshness is
-unchanged and needs a separate ruling if the new route cannot establish it.
+**Next:** effective parity and keeper activation prerequisites. Q-18's earlier
+prompt is withdrawn; no approval route is selected. The spike and corrected v1 parity audit are complete;
+parity restoration and keeper SSH minting are in progress. No gap is waived. Any future
+approval proposal must preserve existing owner requirements; a change to the
+historical break-glass login-freshness requirement needs its own explicit ruling.
 
 **Settings only Tom can click** (no decision needed). An agent on his laptop does
 them from [`handoffs/2026-10-06-tom-laptop-settings.md`](handoffs/2026-10-06-tom-laptop-settings.md),
