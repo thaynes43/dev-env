@@ -45,21 +45,24 @@ directly in chat; repository housekeeping must not delay that answer.
   migration fallback. No blanket standing admin policy is authorized.
 - Q-18's abstract additional-powers prompt was withdrawn by the coordinator.
   No approval route was selected; this is not an owner ruling to defer it.
-  Q-16's phone/app requirement remains. PR90 and haynes-ops3550 stay closed;
+  Q-16's phone/app requirement remains. [PR #90](https://github.com/thaynes43/dev-env/pull/90)
+  and [haynes-ops #3550](https://github.com/thaynes43/haynes-ops/pull/3550) stay closed;
   their Pushover/web approval design is superseded. Do not replay those branches.
 
 ## What is already shipped
 
-1. Plan02 CLI workflow/acceptance is complete (#106), incorporating the owner
+1. Plan 02 CLI workflow/acceptance is complete (#106), incorporating the owner
    correction above. No laptop test holds it open.
 2. The docs-only approval spike is complete (#107), with D-70/D-71 corrections
    in #113. R-03 remains candidate research, not an enabled human adapter.
-3. R-04 is complete (#109); all twenty backlog07 parity rows remain open for
+3. R-04 is complete (#109); all twenty backlog 07 parity rows remain open for
    their mandatory closure tests. Presence checks or denial checks alone do not
    close them.
 4. Keeper PVE backend, broker credential jobs, UID-fenced agentd store and pve
    helper behavior are built, tested and deployed **disabled** (#111/#110;
-   haynes-ops3589 schema/RBAC/admission/journal and3595 image pins).
+   [haynes-ops #3589](https://github.com/thaynes43/haynes-ops/pull/3589)
+   schema/RBAC/admission/journal and
+   [#3595](https://github.com/thaynes43/haynes-ops/pull/3595) image pins).
 5. #113 corrected the Headlamp baseline and retirement target. #114 merged as
    `29bea15d5ad96ce13d5cba15e0c44d213cae3c97`, with green CI and actual Claude
    review, and corrected existing-item storage plus owner-run generation and
@@ -121,18 +124,18 @@ runtime writes. The read-only snapshot is
    then remove fixtures/grants and end the declaration. Compare v1 and existing
    AgentSession pod UIDs/restarts before and after. General hw-ssh leaf issuance
    remains a separate unbuilt gap, pending P-19's connection/revocation contract.
-6. Continue the twenty parity restorations and remaining plan03 login/Remote
-   Control and plan04 Codex core. Only propose an approval choice around a
+6. Continue the twenty parity restorations and remaining plan 03 login/Remote
+   Control and plan 04 Codex core. Only propose an approval choice around a
    concrete workflow after its premise is verified. No cutover or Headlamp
    removal until acceptance and caller migration are complete.
 
 ## Sources and operating constraints
 
 - [DESIGN D-69/D-70/D-71/D-72 and Q-19](../sagas/distributed-dev-env/designs/001-dev-env-v2.md)
-- [Backlog07 H5 and P-01 through P-20](../sagas/distributed-dev-env/backlog/07-access-broker.md)
+- [Backlog 07 H5 and P-01 through P-20](../sagas/distributed-dev-env/backlog/07-access-broker.md)
 - [R-04 parity evidence](../sagas/distributed-dev-env/research/R-04-v1-capability-parity.md)
 - [R-03 approval research](../sagas/distributed-dev-env/research/R-03-claude-code-approvals.md)
-- [Issue91](https://github.com/thaynes43/dev-env/issues/91), including the last
+- [Issue #91](https://github.com/thaynes43/dev-env/issues/91), including the last
   coordinator parking comment, is the GitHub resume index.
 - Pod-local machine contract: `/home/dev/work/orders/keeper-pve-contract-1008.md`.
 - Pod-local metadata: `/home/dev/work/state-snapshots/headlamp-effective-parity-20261008.json`,
