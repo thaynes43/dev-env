@@ -298,7 +298,7 @@ def role_b():
     git(TASK_B,'add','src/000.txt')
     flag('wip-b',wip(TASK_B))
     wait('wip-a')
-    inputs = wait('inputs')
+    inputs = wait('inputs',timeout=40)
     installed = TASK_B/'.fixture-build'/'installed'
     installed.mkdir(parents=True)
     start = time.monotonic()
