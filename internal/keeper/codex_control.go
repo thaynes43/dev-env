@@ -30,10 +30,25 @@ type codexControlRequest struct {
 	ExpectedGeneration uint64 `json:"expectedGeneration,omitempty"`
 }
 type CodexControlResponse struct {
-	OK         bool   `json:"ok"`
-	Code       string `json:"code"`
-	AttemptUID string `json:"attemptUID,omitempty"`
-	Generation uint64 `json:"generation,omitempty"`
+	OK         bool              `json:"ok"`
+	Code       string            `json:"code"`
+	AttemptUID string            `json:"attemptUID,omitempty"`
+	Generation uint64            `json:"generation,omitempty"`
+	Login      *CodexLoginReport `json:"login,omitempty"`
+}
+
+// CodexLoginReport contains fixed local flow metadata only. Native errors,
+// headers, response bodies, attempt IDs and credential values are never included.
+type CodexLoginReport struct {
+	Phase              string `json:"phase"`
+	FailureCode        string `json:"failureCode,omitempty"`
+	NativeStarted      bool   `json:"nativeStarted"`
+	NativeExitCode     *int   `json:"nativeExitCode,omitempty"`
+	NativeGroupAbsent  bool   `json:"nativeGroupAbsent"`
+	ChallengePresented bool   `json:"challengePresented"`
+	ReservationState   string `json:"reservationState"`
+	CleanupComplete    bool   `json:"cleanupComplete"`
+	ReservationCleared bool   `json:"reservationCleared"`
 }
 
 func (w *codexWorker) serveControl(ctx context.Context) (*http.Server, error) {
@@ -339,19 +354,20 @@ func (w *codexWorker) cancelLogin(ctx context.Context, id string) CodexControlRe
 }
 
 func (w *codexWorker) expiredLoginReservation(r codexRecord) bool {
-	return r.Stage == codexNeedsLogin && r.ResumeOnCancel && !r.LoginUntil.IsZero() && !w.Clock.Now().Before(r.LoginUntil)
+	return r.Stage == codexNeedsLogin && !r.LoginUntil.IsZero() && !w.Clock.Now().Before(r.LoginUntil)
 }
 
-// An expired reservation, unlike a recovered refresh/material intent, durably
-// proves this is the previously known unused credential. Any current leader may
-// finish it, but only a confirmed fenced save resumes a still-valid old login.
+// Every expired login reservation releases its staging, including a fresh empty
+// journal. Only ResumeOnCancel proves a previously known unused credential; a
+// confirmed fenced save may restore that credential while an empty or uncertain
+// reservation stays NeedsLogin without a provider request.
 func (w *codexWorker) finishExpiredLogin(ctx context.Context, d *codexLoaded) error {
 	if !w.expiredLoginReservation(d.Record) || w.Fence(ctx, codexSaveTimeout+codexSafetyMargin) != nil {
 		return errCodexRefresh
 	}
 	r := d.Record
 	id := r.AttemptUID
-	restore := !r.Refresh.Empty() && r.Access.Validate(w.Clock.Now()) == nil
+	restore := r.ResumeOnCancel && !r.Refresh.Empty() && r.Access.Validate(w.Clock.Now()) == nil
 	r.AttemptUID, r.LoginUntil, r.LoginOwner, r.ResumeOnCancel = "", time.Time{}, "", false
 	if restore {
 		r.Stage = codexReady

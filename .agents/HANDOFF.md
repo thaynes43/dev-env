@@ -16,6 +16,24 @@ Source work proceeds disabled by default while #130's storage diagnosis and
 acceptance are completed. V1 remains available; full parity and cutover gates
 still apply. Codex owns this work rather than leaving it for another implementer.
 
+**Actual keeper rollout, 2026-10-09:** signed auth source #138/#143 is enabled
+for the keeper only through haynes-ops #3679. Admission, exact artifact checks
+and offline CA validation passed; minting remains disabled. The first fresh
+device login failed before producing a challenge or adopting a credential
+generation. One bounded unauthenticated connection check and the realized
+Cilium DNS cache identified a search-suffix/exact-hostname policy mismatch.
+The keeper-only DNS correction and helper startup diagnostics are being fixed;
+no owner login answer is pending and no second native attempt has run. Failed
+staging was cleaned, six protected peers stayed unchanged, and the activity ended.
+Managed Codex sessions and the two remote hosts remain disabled.
+
+Strict-stop source #140 and catalog/rule primitives #145 are merged. Private-home
+retention #147 and the child-scoped API/managed Codex route are in progress. Node
+Yama policy prevents the syscall evidence prepared in #146; a separate in-process
+Git-marker fixture is being prepared for hosted CI. No new storage trial follows
+from these source changes. Resolve #130 and the independent real-client,
+lifecycle, host and phone gates before claiming the owner-test milestone.
+
 **Latest delivery checkpoint, 2026-10-09 22:13Z:** shared-workspace core #135
 merged `316c03c`; keeper-owned Codex auth #138 merged `bcb2599` and bounded
 single-refresh #143 merged `f810766`. These are source
