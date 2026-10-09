@@ -88,7 +88,11 @@ are refused. The API derives parent identity from the authenticated host.
 
 List/show/log/message/suspend/resume/reap are limited to direct child sessions
 whose parent is that host's namespace/ServiceAccount identity. Mutations and exec
-recheck the live child's UID. Filtering with `mine=true` is not authorization.
+recheck the live child's UID. Because Kubernetes exec addresses a pod by name,
+coordinator log/message calls also carry expected Pod and Session UIDs that
+agentd checks inside the target before accessing private state. An older agentd
+that cannot enforce this check refuses the call. Filtering with `mine=true` is
+not authorization.
 Global fleet/rescue/restore and grant creation/approval/release are unavailable
 to this pilot host class. Existing human, trusted client and session policies
 retain their current behavior.

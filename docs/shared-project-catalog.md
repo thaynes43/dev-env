@@ -6,6 +6,10 @@ open. A task is a separately owned worktree created from freshly fetched source.
 The management API/controller performs lifecycle operations; a coordinator agent
 can request those operations. This does not select a new management app.
 
+Catalog/sync/snapshot primitives merged in [#145](https://github.com/thaynes43/dev-env/pull/145).
+Their management and provider integration remains in progress and disabled;
+live acceptance is pending.
+
 ```mermaid
 flowchart TD
     GitOps[One GitOps catalog: projects, repositories, rules] --> Sync[Bounded managed sync]
@@ -82,6 +86,15 @@ repository, resolves the declared base to an immutable commit, and records the
 commit, fetch time and writer identity before sending the implementation prompt.
 Failed fetch admits no new implementation. Opening an old anchor cannot select
 stale source for a new task.
+
+For the first API route, the operator reads the explicitly configured
+`dev-env-system/dev-env-project-catalog` ConfigMap's `catalog.json` through an
+uncached read. Missing or invalid accepted data refuses creation. The API records
+a reserved server-authored snapshot annotation of at most 128KiB; clients cannot
+supply that authority. This bounded platform metadata transports the public
+GitOps rules and map to private task state. It is not a repository instruction
+file or a place for secrets. The controller validates the selected identity/base
+against the task, and resume retains the original snapshot.
 
 Task worktrees remain flat under `/home/dev/work`. Their project snapshot is
 private platform state, not an added or overwritten repository file. For Claude,

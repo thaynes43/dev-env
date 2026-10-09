@@ -129,8 +129,9 @@ D-77 divides the implementation while runtime acceptance remains gated:
 3. D-81's [retained-private-home receipt and detach](../../../../docs/shared-private-home-retention.md)
    after verified rescue and both-pod absence, before Session finalization. This
    keeps private provider state without enabling automatic home destruction.
-4. Catalog/API/CLI, fresh source and actual both-provider project/repo rule loading.
-5. **Auth source merged #138 (`bcb2599`), runtime off:** keeper-owned fresh Codex
+4. **Catalog primitives merged #145 (`084b66a`), integration pending:** API/CLI,
+   fresh source and actual both-provider project/repo rule loading.
+5. **Auth source merged #138 (`bcb2599`) and #143 (`f810766`), runtime off:** keeper-owned fresh Codex
    login/refresh/reload, D-80's scoped coordinator class,
    managed Codex launch/resume and two retained remote hosts;
    explicit transfer follows the proven stop contract.
