@@ -74,6 +74,9 @@ func bodyError(err error, limit int64) error {
 // messages, and agentd's rules are checked by agentd's own code (D-40). So the
 // API restates neither.
 func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest, c *caller) (*v1alpha1.AgentSession, error) {
+	if req.Project != "" {
+		return nil, invalid(fieldError("project", "project admission is not configured"))
+	}
 	if req.Name != "" || req.Lane != "" {
 		return nil, forbidden("name and lane are for summoning callers, by their CallerPolicy (DESIGN-001 3.7), which arrive in plan 10")
 	}
