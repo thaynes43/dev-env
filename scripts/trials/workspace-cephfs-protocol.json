@@ -1,0 +1,141 @@
+{
+  "schemaVersion": 1,
+  "scope": "Limited synthetic cross-node Git/storage feasibility and observed service health. Not device/MQTT latency tails, real agents, platform fencing, storage/node outage recovery or build acceptance.",
+  "launchGates": [
+    "Owner Q21 accepted ADR002 and bounded trial",
+    "Accepted ADR002 merged (dev-env 2883164)",
+    "Root approves exact helper diff, rendered Jobs, isolated PVC diff and measured tripwires",
+    "Both PRs current required checks and actual advisory findings resolved",
+    "Freeze complete last30m baseline immediately before launch, adequate coverage, safe initial state, expected series known",
+    "Scoped activity before GitOps provision or runtime Jobs"
+  ],
+  "resources": {
+    "pvcNamespace": "dev-agents",
+    "pvcName": "dev-env-workspace-cephfs-trial",
+    "fluxNamespace": "dev-env-system",
+    "fluxName": "dev-env-workspace-trial",
+    "maxPods": 2,
+    "initialJobDeadlineSeconds": 180,
+    "reconnectJobDeadlineSeconds": 60,
+    "maxAppMilliCPU": 250,
+    "maxInitMilliCPU": 100,
+    "maxEntries": 2048,
+    "maxLogicalBytes": 16777216,
+    "ordinaryCommandDeadlineSeconds": 15,
+    "heldGitTransactionDeadlineSeconds": 35,
+    "gitHookWaitDeadlineSeconds": 30,
+    "sourceWriteAndInstallArchiveDeadlineSeconds": 30
+  },
+  "provenance": {
+    "renderer": "render-workspace-cephfs-trial.py --output-dir <private dir> --source-commit <merged 40-character commit>",
+    "requiredBeforeLaunch": "Job annotations exact source commit/SHA256; decoded main args exactly match merged helper source; signed image digest unchanged; actual admitted bounds/placement/mounts/token absence verified"
+  },
+  "observability": {
+    "prometheusDatasourceUID": "prometheus",
+    "lokiDatasourceUID": "loki",
+    "sampleEverySeconds": 60,
+    "baselineWindowSeconds": 1800,
+    "postWindowSeconds": 300,
+    "minimumCoverage": {
+      "cephSamplesPerDaemon": 171,
+      "gatusSamplesPerEndpoint": 28,
+      "gatusEndpointCount": 6
+    },
+    "latencyAbortAfterConsecutiveFreshObservations": 2,
+    "latencyThresholds": {
+      "mds": "max(2*baseline per-series MAX,0.010s)",
+      "osd": "max(2*baseline per-series MAX,0.050s)",
+      "gatus": "max(2*baseline per-series MAX,baseline per-series MAX+0.500s)"
+    },
+    "freshnessAbortSeconds": {
+      "ceph": 30,
+      "gatusAndKubeState": 150
+    },
+    "instantAbort": [
+      "ceph health worse",
+      "OSD up<1",
+      "MDS slow reply increase>0",
+      "critical Ready<1, UID change, or restart increase>0",
+      "new relevant pending/firing alert",
+      "Zigbee MQTT disconnect",
+      "missing expected metric series or insufficient freshness/coverage",
+      "fixture deadline/assertion/file-byte-cap/resource admission failure"
+    ],
+    "prometheusQueries": {
+      "mdsLatency": "sum by(ceph_daemon)(rate(ceph_mds_reply_latency_sum[5m])) / sum by(ceph_daemon)(rate(ceph_mds_reply_latency_count[5m]))",
+      "mdsOperations": "sum by(ceph_daemon)(increase(ceph_mds_reply_latency_count[5m]))",
+      "osdLatency": "sum by(ceph_daemon)(rate(ceph_osd_op_latency_sum[5m])) / sum by(ceph_daemon)(rate(ceph_osd_op_latency_count[5m]))",
+      "osdOperations": "sum by(ceph_daemon)(increase(ceph_osd_op_latency_count[5m]))",
+      "gatusDuration": "max by(name,group)(gatus_results_duration_seconds{name=~\"home-assistant|zigbee2mqtt|zwave|authentik|traefik-internal-dashboard|traefik-external-dashboard\"})",
+      "gatusSuccess": "min by(name,group)(gatus_results_endpoint_success{name=~\"home-assistant|zigbee2mqtt|zwave|authentik|traefik-internal-dashboard|traefik-external-dashboard\"})",
+      "cephHealth": "max(ceph_health_status)",
+      "cephHealthDetails": "max by(name,severity)(ceph_health_detail{name=~\"MDS_.*|FS_.*|SLOW_OPS|OSD_DOWN|BLUESTORE_SLOW_OP_ALERT\"})",
+      "osdUp": "min(ceph_osd_up)",
+      "mdsSlowReply": "sum by(ceph_daemon)(increase(ceph_mds_slow_reply[2m]))",
+      "relatedAlerts": "sum by(alertname,alertstate,severity,namespace)(ALERTS{alertname=~\"Ceph.*|NodeLoadSaturated|OOMKilled|KubePodCrashLooping|KubePodNotReady|ZigbeeMQTTUnreachable|BlackboxProbeFailed|.*CNPG.*|.*Postgres.*\"})",
+      "allBaselineAlerts": "sum by(alertname,alertstate,severity,namespace)(ALERTS)",
+      "criticalReady": "min by(namespace,pod)(kube_pod_status_ready{namespace=~\"rook-ceph|home-automation|network|database\",pod=~\"rook-ceph-(mds|mon|mgr)-.*|rook-ceph-osd-[0-9]+-.*|traefik-.*|authentik-(server|worker)-.*|home-assistant-[a-z0-9]+-[a-z0-9]+|zigbee2mqtt-[a-z0-9]+-[a-z0-9]+|zwave-[a-z0-9]+-[a-z0-9]+|postgres16(-pgvecto)?-[0-9]+|mosquitto-.*\",condition=\"true\"})",
+      "criticalRestartIncrease": "sum by(namespace,pod)(increase(kube_pod_container_status_restarts_total{namespace=~\"rook-ceph|home-automation|network|database\",pod=~\"rook-ceph-(mds|mon|mgr)-.*|rook-ceph-osd-[0-9]+-.*|traefik-.*|authentik-(server|worker)-.*|home-assistant-[a-z0-9]+-[a-z0-9]+|zigbee2mqtt-[a-z0-9]+-[a-z0-9]+|zwave-[a-z0-9]+-[a-z0-9]+|postgres16(-pgvecto)?-[0-9]+|mosquitto-.*\"}[2m]))",
+      "criticalRestartTotal": "sum by(namespace,pod)(kube_pod_container_status_restarts_total{namespace=~\"rook-ceph|home-automation|network|database\",pod=~\"rook-ceph-(mds|mon|mgr)-.*|rook-ceph-osd-[0-9]+-.*|traefik-.*|authentik-(server|worker)-.*|home-assistant-[a-z0-9]+-[a-z0-9]+|zigbee2mqtt-[a-z0-9]+-[a-z0-9]+|zwave-[a-z0-9]+-[a-z0-9]+|postgres16(-pgvecto)?-[0-9]+|mosquitto-.*\"})",
+      "criticalPodUIDs": "count by(namespace,pod,uid)(kube_pod_info{namespace=~\"rook-ceph|home-automation|network|database\",pod=~\"rook-ceph-(mds|mon|mgr)-.*|rook-ceph-osd-[0-9]+-.*|traefik-.*|authentik-(server|worker)-.*|home-assistant-[a-z0-9]+-[a-z0-9]+|zigbee2mqtt-[a-z0-9]+-[a-z0-9]+|zwave-[a-z0-9]+-[a-z0-9]+|postgres16(-pgvecto)?-[0-9]+|mosquitto-.*\"})",
+      "mdsAgeSeconds": "max by(ceph_daemon)(time()-timestamp(ceph_mds_reply_latency_count))",
+      "osdAgeSeconds": "max by(ceph_daemon)(time()-timestamp(ceph_osd_op_latency_count))",
+      "gatusAgeSeconds": "max by(name,group)(time()-timestamp(gatus_results_endpoint_success{name=~\"home-assistant|zigbee2mqtt|zwave|authentik|traefik-internal-dashboard|traefik-external-dashboard\"}))",
+      "criticalAgeSeconds": "max by(namespace,pod)(time()-timestamp(kube_pod_status_ready{namespace=~\"rook-ceph|home-automation|network|database\",pod=~\"rook-ceph-(mds|mon|mgr)-.*|rook-ceph-osd-[0-9]+-.*|traefik-.*|authentik-(server|worker)-.*|home-assistant-[a-z0-9]+-[a-z0-9]+|zigbee2mqtt-[a-z0-9]+-[a-z0-9]+|zwave-[a-z0-9]+-[a-z0-9]+|postgres16(-pgvecto)?-[0-9]+|mosquitto-.*\",condition=\"true\"}))",
+      "mdsCoverage": "min by(ceph_daemon)(count_over_time(ceph_mds_reply_latency_count[30m]))",
+      "osdCoverage": "min by(ceph_daemon)(count_over_time(ceph_osd_op_latency_count[30m]))",
+      "gatusCoverage": "min by(name,group)(count_over_time(gatus_results_duration_seconds{name=~\"home-assistant|zigbee2mqtt|zwave|authentik|traefik-internal-dashboard|traefik-external-dashboard\"}[30m]))",
+      "gatusActualChecks": "sum by(name,group)(increase(gatus_results_total{name=~\"home-assistant|zigbee2mqtt|zwave|authentik|traefik-internal-dashboard|traefik-external-dashboard\"}[30m]))"
+    },
+    "baselineRangeQueries": [
+      "mdsLatency",
+      "osdLatency",
+      "gatusDuration",
+      "gatusSuccess",
+      "cephHealth",
+      "osdUp",
+      "criticalReady"
+    ],
+    "baselineRangeStepSeconds": {
+      "mdsLatency": 10,
+      "osdLatency": 10,
+      "gatusDuration": 60,
+      "default": 60
+    },
+    "lokiMQTTDisconnectCounter": "sum(count_over_time({app=\"zigbee2mqtt\"} |~ \"(?i)not connected to mqtt server\"[2m])) or vector(0)",
+    "labelsPermittedInReports": [
+      "ceph_daemon",
+      "name",
+      "group",
+      "namespace",
+      "pod",
+      "uid",
+      "alertname",
+      "alertstate",
+      "severity"
+    ],
+    "limitations": [
+      "MDS/OSD rate means are not tails; standby NaN means no operations",
+      "Gatus last-check gauges may terminate at SSO and are not device/application SLOs",
+      "Alert/log absence requires freshness and known instrumentation; empty MDS log index proves nothing",
+      "Full household-impact gate stays open after a successful limited trial"
+    ]
+  },
+  "executionOrder": [
+    "Freeze baseline and declare narrow20m activity",
+    "Merge/reconcile only approved disposable PVC app via GitOps; record Bound claim/PV UIDs without CSI handles or secrets",
+    "Create A/B only; inspect actual admitted resources then collect receipts and telemetry",
+    "Require successful terminated processes, save both receipts/logs, delete both Jobs normally and wait original podUIDs absent without force",
+    "Create reconnect only; verify new podUID and exact retained fixture state, save receipt/log and delete Job normally",
+    "Monitor five minutes afterward",
+    "Cleanup GitOps PR removes registration and all three workspace-trial manifests after fixture pods gone; required checks plus actual advisory review then root review if required; merge/reconcile parent to prune only trial inventory",
+    "Verify fixture Jobs/pods/PVC/PV/Flux KS absent and protected workloads/volumes unchanged; end activity early on completion or failure"
+  ],
+  "cleanupForbidden": [
+    "No direct PVC/PV delete",
+    "No force pod deletion or node/storage disruption",
+    "No existing shared/v1 claim cleanup",
+    "No automatic retry or backend switch"
+  ],
+  "privateEvidence": "Save safe baseline/runtime/metrics/logs/receipts under /home/dev/work/state-snapshots; public report contains no credentials, addresses or raw household logs"
+}
