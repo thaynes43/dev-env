@@ -159,6 +159,10 @@ func (r *Reconciler) reconcileSharedWorkspace(ctx context.Context, s *v1alpha1.A
 		}
 		if rec := s.Status.Rescue; rec != nil && !rec.Superseded {
 			rec.Superseded = true
+			// Both old Pods are genuinely absent after verified cleanup. Clear
+			// that old executor's remembered name atomically with supersession,
+			// so the next reconcile can create the requested new generation.
+			s.Status.PodName = ""
 			setRescueCondition(s, &s.Status, "")
 			return r.writeStatus(ctx, s, ctrl.Result{RequeueAfter: time.Second})
 		}
@@ -264,7 +268,7 @@ func (r *Reconciler) reconcileSharedWorkspace(ctx context.Context, s *v1alpha1.A
 		if err != nil || !written {
 			return retry, err
 		}
-		if !rescued(s) {
+		if !sharedRescued(s) {
 			return block(errors.New("shared owned rescue failed; executor, hold Pod and both volumes stay"))
 		}
 		return retry, nil

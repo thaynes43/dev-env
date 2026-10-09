@@ -509,6 +509,84 @@ func TestWorkspaceNoWorkLifecycleRetainsPrivateHomeAfterPodCleanup(t *testing.T)
 	}
 }
 
+func TestWorkspaceResumeDuringHoldRescueCreatesNewExecutorAfterCleanup(t *testing.T) {
+	f := stoppedWorkspaceFixture()
+	c := f.client()
+	r, obs := workspaceFixtureController(t, f, c)
+	resumed := false
+	r.Rescuer = &workspaceFixtureRescuer{answer: func(p *protocol.WorkspaceStopProof) protocol.RescueReport {
+		if !resumed {
+			var fresh v1alpha1.AgentSession
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.s), &fresh); err != nil {
+				t.Fatal(err)
+			}
+			fresh.Spec.OperatingMode = v1alpha1.OperatingModeRunning
+			fresh.Generation++
+			if err := c.Update(context.Background(), &fresh); err != nil {
+				t.Fatal(err)
+			}
+			resumed = true
+		}
+		return workspacePreparationReport(f.s, p, "NoWorkAdmitted")
+	}}
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	hold := readyWorkspaceHold(t, c, f.s)
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	// The in-flight old-generation report cannot authorize cleanup. Reload
+	// the resumed generation and run its fresh verified rescue instead.
+	var fresh v1alpha1.AgentSession
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.s), &fresh); err != nil {
+		t.Fatal(err)
+	}
+	f.s = &fresh
+	if f.s.Status.Rescue != nil || !resumed {
+		t.Fatal("old-generation rescue was accepted during resume")
+	}
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if !sharedRescued(f.s) || f.s.Status.PodName == "" {
+		t.Fatal("current generation rescue lost the retained executor identity")
+	}
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(hold), &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Fatal("hold was not removed first", err)
+	}
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.pod), &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Fatal("old executor was not removed after hold absence", err)
+	}
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	var superseded v1alpha1.AgentSession
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.s), &superseded); err != nil {
+		t.Fatal(err)
+	}
+	if !superseded.Status.Rescue.Superseded || superseded.Status.PodName != "" {
+		t.Fatal("supersession did not atomically clear the cleaned executor identity")
+	}
+	f.s = &superseded
+	if _, err := r.reconcileSharedWorkspace(context.Background(), f.s, &obs); err != nil {
+		t.Fatal(err)
+	}
+	var replacement corev1.Pod
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.pod), &replacement); err != nil {
+		t.Fatal("resume failed to create the next executor", err)
+	}
+	if isHoldPod(&replacement) || replacement.Spec.RestartPolicy != corev1.RestartPolicyNever || replacement.UID == f.pod.UID {
+		t.Fatal("replacement is not a new shared executor")
+	}
+}
+
 func TestWorkspaceHoldPinsEveryRequiredNodeTermAndPreservesPrivateHold(t *testing.T) {
 	f := stoppedWorkspaceFixture()
 	tmpl := exampleTemplates(t)

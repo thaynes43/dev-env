@@ -24,6 +24,13 @@ type workspaceAdmission struct {
 
 var writeWorkspaceAdmission = writeWorkspaceJSON
 
+// A failed private result publication is an ordinary admission failure, even
+// if the original shared-lock wait expired. It must not acquire retry authority
+// merely by wrapping that distinct administrative timeout.
+func workspaceAdmissionResultFailure(admission, publication error) error {
+	return fmt.Errorf("workspace admission failed (%s); private non-admission result: %w", admission.Error(), publication)
+}
+
 func admissionMatches(s Settings, sess protocol.Session, a workspaceAdmission, podUID string) error {
 	if sess.Workspace == nil || a.Version != workspaceVersion || a.Workspace != s.WorkspaceID || a.Task != sess.Name ||
 		a.SessionUID != sess.Workspace.SessionUID || a.PodUID != podUID || a.UpdatedAt.IsZero() {

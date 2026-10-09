@@ -305,3 +305,23 @@ func TestWorkspacePreOwnerRefsCannotBecomeNoWorkProof(t *testing.T) {
 		t.Fatal("unowned refs or ownership changed")
 	}
 }
+
+func TestWorkspacePrivateResultFailureCannotRetryAdminWait(t *testing.T) {
+	publication := errors.New("private result publication failed")
+	failure := workspaceAdmissionResultFailure(&workspaceAdminWaitTimeout{}, publication)
+	var timeout *workspaceAdminWaitTimeout
+	if errors.As(failure, &timeout) || !errors.Is(failure, publication) {
+		t.Fatal("private result failure inherited administrative retry authority", failure)
+	}
+	calls := 0
+	_, err := retryWorkspaceWriterAdmission(context.Background(), func() (*writerLease, error) {
+		calls++
+		return nil, failure
+	}, func(context.Context, time.Duration) error {
+		t.Fatal("private publication failure entered retry backoff")
+		return nil
+	})
+	if !errors.Is(err, publication) || calls != 1 {
+		t.Fatalf("calls=%d err=%v", calls, err)
+	}
+}

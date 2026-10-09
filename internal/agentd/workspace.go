@@ -350,7 +350,7 @@ func acquireWorkspaceWriter(ctx context.Context, r Runner, s Settings, sess prot
 		defer func() {
 			if resultErr != nil && mayRefuse {
 				if err := refuseWorkspaceAdmission(s, sess, now); err != nil {
-					resultErr = fmt.Errorf("%w; private non-admission result: %v", resultErr, err)
+					resultErr = workspaceAdmissionResultFailure(resultErr, err)
 				}
 			}
 		}()
