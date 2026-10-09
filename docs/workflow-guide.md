@@ -145,7 +145,7 @@ guide is describing the target.
 | Optional external CLI | Built, plan 02 | Token and loopback forwarding path; real external-machine use is unverified and optional |
 | GitHub installation tokens | Working | Keeper issuance; App private key stays out of session pods |
 | Kubernetes and egress grant core | Built and smoke-tested | Temporary identities, private installation, release/expiry; complete standing policies and parity still missing |
-| Proxmox credential backend | Built, disabled | Keeper SSH minting and recovery, typed PVE files/helper; CA delivery, node trust, network/policy wiring and real provider acceptance remain |
+| Proxmox credential backend | Built, disabled | Keeper CA projection and five-node trust delivered; typed PVE files/helper built; pair validation, network/policy wiring and real certificate/provider acceptance remain |
 | General hw-ssh grants | Unbuilt | Must retain existing targets, command classes, PTY/stdin behavior, and owner rules |
 | V2 Claude phone sessions and Max refresh owner | Planned, plan 03 | Keeper-owned login, Remote Control registration/resume, renewal and archive |
 | V2 Codex remote hosts and shared projects | Required, plans 04/11 | Multiple stable pod links, joint Claude/Codex projects, sole refresh owner, shared files with distinct task ownership |
@@ -595,8 +595,10 @@ stays disabled. Do not generate another CA or item. Remaining order:
 [Node-trust instructions](keeper-node-trust.md) are now prepared from
 read-only checks on all five nodes. They append the restricted CA entry using
 the saved public key, preserve v1's existing key and include guarded rollback.
-Installation is pending under the Q-22 delegation; provider acceptance remains
-separate. Secret synchronization will not by itself prove the CA key pair valid.
+Q-22's delegated installation is complete on all five PVE nodes, with original
+key bytes and existing v1 access preserved; temporary delivery cleanup is merged
+and deployed. Certificate/provider acceptance remains separate. Secret
+synchronization and standing-key access do not prove the CA key pair valid.
 
 General hw-ssh certificates are a separate unfinished feature. Certificate
 expiry alone does not terminate an existing SSH connection; P-19 needs its

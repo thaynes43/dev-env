@@ -38,12 +38,16 @@ unchanged, with its affected storage/cloning decisions superseded by ADR-002.
 Phone delivery remains unverified; an owner answer does not establish device
 delivery, and the earlier probe explicitly had a desktop reply.
 
-[Node-trust instructions](../docs/keeper-node-trust.md) are prepared and
-syntax-checked, with metadata verified read-only on all five nodes. Tom answered
-Q-22, "Delegate the trust installation to Codex" (D-76). Prepare and review a
-public-key-only delivery path, preserve the existing account and v1 SSH key,
-verify v1 read-only access per node, and clean temporary delivery resources.
-Installation is pending; minting stays off and the private CA stays keeper-only.
+[Node trust](../docs/keeper-node-trust.md) is installed on all five PVE nodes.
+Tom answered Q-22, "Delegate the trust installation to Codex" (D-76). Haynes-ops
+#3647 (`9dabb4d5`) delivered only the saved public key through a bounded Job and
+pipe to the existing accounts. Each guarded append preserved the original key
+bytes and passed standing-key SSH/read-only PVE checks. #3651 (`b8f83ff9`) removed
+the temporary delivery app; its Job/pods, child Kustomization and ExternalSecret
+are gone. Owner-policy cleanup is corroborated by fresh Secret metadata: the
+public target is absent while the keeper-only CA target remains present. No
+Secret values were read. Backups/receipts remain on the nodes. Seven protected pod identities,
+images and restart counts were preserved; minting stays off, private CA keeper-only.
 The [bounded CephFS trial record](../docs/trials/2026-10-09-cephfs-feasibility.md)
 predeclares the fixture, household tripwires and cleanup. Neither task advances
 the composite parity rows by itself.
@@ -86,7 +90,7 @@ and broker UIDs/images/restarts were preserved; sessions/jobs/policies remain
 zero. The activity declaration ended; no fixture was created and no key values
 were accessed. The root check confirmed ESO status, keeper readiness and v1 UID.
 
-CA storage and projection are complete. Key-pair parsing, owner node trust,
+CA storage, projection and PVE node trust are complete. Key-pair parsing,
 private target/host-key/egress configuration and real-provider acceptance remain
 pending. Disabled keeper readiness proves GitHub issuance, not CA validity.
 All twenty parity closures remain open. Headlamp migration/retirement and Q-16

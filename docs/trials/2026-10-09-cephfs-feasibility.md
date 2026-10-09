@@ -1,8 +1,9 @@
 # CephFS workspace feasibility trial, 2026-10-09
 
-**Status:** prepared; not launched. Tom accepted ADR-002 and this bounded trial
-through structured Q-21. Normal workspace rollout remains gated on acceptance.
-This record defines the tripwires before execution and will hold the outcome.
+**Status:** first attempt incomplete and cleaned up; a corrected bounded check
+is prepared. Tom accepted ADR-002 and this trial through structured Q-21.
+Normal workspace rollout remains gated on acceptance. The gates below were
+committed before execution in `b18f0166f89bcc91c0eddadf7945746dfa12ddfb`.
 
 ## Scope and fixture
 
@@ -31,8 +32,11 @@ staged WIP/index/HEAD preservation. A capped copy/fsync/rename/archive workload
 uses 256 files of at most 8KiB. Total fixture caps are 2,048 entries and 16MiB.
 Ordinary subprocess calls have a 15-second cap; the deliberate Git transaction
 hook has a 30-second deadline and its measured process a 35-second cap.
-Initial Jobs have a 180-second Kubernetes
-deadline; the remount Job has 60 seconds. There are no automatic retries.
+Initial Jobs have a 180-second Kubernetes deadline; the remount Job has 60
+seconds. The corrected helper has a 60-second peer-ready barrier before locks;
+that consumes its original 145-second total budget. Combined startup/phases may
+exhaust the global budget even within individual phase caps. There are no
+automatic retries or enlarged resource budgets.
 
 This is not a package installation benchmark or a real build. Graceful removal
 of completed pods proves a fresh mount, not recovery from node/storage failure.
@@ -58,6 +62,13 @@ trial tripwires, not household SLOs:
 | Active MDS reply mean | Two consecutive fresh observations above `max(2 × frozen baseline maximum, 10ms)` |
 | OSD latency mean | Two consecutive fresh observations above `max(2 × frozen baseline maximum, 50ms)` |
 | Selected household HTTP checks | Two consecutive fresh observations above `max(2 × frozen baseline maximum, baseline maximum + 500ms)` |
+
+For the corrected attempt, the fresh baseline includes the preceding failed
+fixture and CA delivery. Preserve the stricter per-series limit: use the lesser
+of the original quiet-baseline limit and the new formula's limit. Recent trial
+activity must not raise its own stop threshold. This retains the original 10ms
+MDS/50ms OSD limits and any stricter original HTTP limits. Record both baselines
+and effective limits before launch.
 
 Available probes cover storage metrics and six HTTP checks: Home Assistant,
 Zigbee, Z-Wave, authentication and the internal/external Traefik dashboards.
@@ -87,8 +98,49 @@ Keep raw telemetry and cluster snapshots private. Publish a concise result with
 the actual limits, observations, tripwire outcome and remaining gates. A failed
 fixture or missing observability is recorded as such; neither is a rollout pass.
 
-The current result is pending execution. The keeper CA projection is separately
-delivered with minting disabled; Q-22 separately delegates node trust to Codex.
+## First attempt: incomplete, cleanup complete
+
+Reviewed helper [#127](https://github.com/thaynes43/dev-env/pull/127), `853dae77`,
+ran after disposable claim [#3646](https://github.com/thaynes43/haynes-ops/pull/3646),
+`47729a52`, became Bound. Admission verified the exact signed image/source,
+distinct worker placement, stated CPU limits, and absence of credentials/tokens
+or other PVCs. The synthetic seed became visible; later checks did not complete.
+
+A ran `17:07:08–17:07:39 UTC`; B started at `17:07:39` and failed at `17:07:40`.
+The 31-second startup skew exceeded A's 30-second peer wait during the first
+held-lock phase. A timed out and B reported an unexpected command exit. Its
+generic failure receipt omitted the exact command/status, so that detail cannot
+be reconstructed as proof of a particular lock behavior. No remount was run.
+Storage feasibility was unproved; this is not a backend rejection.
+
+The frozen baseline covered `16:28:21–16:58:21 UTC`: two MDS and ten OSD series
+each had 180 raw samples; six HTTP probes each had 30 samples/actual checks.
+All 39 monitored critical pods were Ready with stable UIDs/restart totals.
+Fourteen one-minute observations stayed clear through the five-minute post-window
+and cleanup; their maxima were 2.60ms MDS/7.09ms OSD five-minute means and 543ms
+HTTP duration, below frozen tripwires. A later ten-second range query found an
+11.35ms MDS mean at `17:12:27`, between those observations. It did not produce
+two consecutive above-limit one-minute samples; this concretely demonstrates
+the sampling limitation and leaves household-impact acceptance open.
+Existing unrelated alerts were recorded.
+The separate public-CA delivery overlapped recovery, not the failed A/B workload;
+this limits attribution. No device latency or tail-SLO acceptance is claimed.
+
+Jobs/pods were removed gracefully. Cleanup
+[#3650](https://github.com/thaynes43/haynes-ops/pull/3650), `64de075b`, pruned only
+the disposable claim/PV/app; all were absent at `17:14:31 UTC`. Protected
+v1/controller/shelf identities, images, restarts and grant/session counts matched
+baseline. Monitoring ended clear at `17:14:39`; the activity declaration ended.
+
+The follow-up fixes only the demonstrated harness startup coordination and
+missing diagnostics: [#129](https://github.com/thaynes43/dev-env/pull/129).
+Its finite fake-clock check includes final receipt handling with a 31-second
+skew; ordinary command and startup timings have separate caps. One new bounded
+run requires the reviewed fix, a fresh empty claim, fresh telemetry and explicit
+driver launch authorization. The failed attempt remains part of this record.
+
+Keeper CA projection and Q-22's delegated five-node trust are separately
+delivered with minting disabled. Certificate/provider acceptance remains open.
 
 - [Accepted ADR-002](../../.agents/sagas/distributed-dev-env/adrs/002-shared-project-workspaces.md)
 - [Plan 11 acceptance](../../.agents/sagas/distributed-dev-env/backlog/11-project-workspaces.md#acceptance)
