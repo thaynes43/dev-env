@@ -57,10 +57,27 @@ def remaining():
         raise TimeoutError('fixture deadline')
     return value
 
+def bounded_output(value):
+    if value is None:
+        return ''
+    if isinstance(value, bytes):
+        value = value.decode('utf-8', errors='replace')
+    return value[:400]
+
 def run(argv, *, expected=0, env=None, timeout=15):
     start = time.monotonic()
-    result = subprocess.run(argv, text=True, capture_output=True,
-                            env=env or ENV, timeout=min(timeout, remaining()))
+    effective_timeout = min(timeout, remaining())
+    try:
+        result = subprocess.run(argv, text=True, capture_output=True,
+                                env=env or ENV, timeout=effective_timeout)
+    except subprocess.TimeoutExpired as error:
+        MEASUREMENTS.append({'operation':' '.join(argv[:3]), 'argv':argv,
+                             'seconds':time.monotonic()-start, 'exit':None,
+                             'expectedExit':expected, 'errorType':'TimeoutExpired',
+                             'effectiveTimeoutSeconds':effective_timeout,
+                             'stdout':bounded_output(error.stdout),
+                             'stderr':bounded_output(error.stderr)})
+        raise
     measurement = {'operation': ' '.join(argv[:3]), 'argv': argv,
                    'seconds': time.monotonic()-start, 'exit': result.returncode,
                    'expectedExit': expected}
@@ -69,8 +86,8 @@ def run(argv, *, expected=0, env=None, timeout=15):
         if result.returncode != expected:
             # Every command here targets only the synthetic local fixture. Keep
             # bounded diagnostics so a failed trial does not hide the actual call.
-            measurement['stderr'] = result.stderr[:400]
-            measurement['stdout'] = result.stdout[:400]
+            measurement['stderr'] = bounded_output(result.stderr)
+            measurement['stdout'] = bounded_output(result.stdout)
             raise AssertionError('fixture command unexpected exit: expected %s, actual %s' %
                                  (expected, result.returncode))
     return result
