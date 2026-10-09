@@ -48,6 +48,9 @@ import (
 
 // Server holds the API's handlers and what they read and write.
 type Server struct {
+	// Projects is a concrete uncached named ConfigMap binding, never a caller-supplied resolver.
+	Projects          *CatalogBinding
+	ManagedCodexTasks bool
 	// Client reads from the manager's cache and writes to the API server.
 	Client client.Client
 	// Live reads straight from the API server (the manager's APIReader). A

@@ -15,7 +15,8 @@ import (
 func PrepareRestart(s Settings, session string, grace time.Duration) protocol.RestartReport {
 	rep := protocol.RestartReport{Session: session}
 	var first Launch
-	if readJSONFile(s.statePath(launchFile), &first) == nil && first.ConversationID != "" {
+	if readJSONFile(s.statePath(launchFile), &first) == nil && first.ConversationID != "" &&
+		(first.Provider != protocol.AgentCodex || first.NativeThreadConfirmed && first.Session == session && nativeThreadID.MatchString(first.ConversationID)) {
 		rep.ConversationID, rep.Resumable = first.ConversationID, true
 	}
 	rep.Agent = stopAgent(s, grace)

@@ -303,6 +303,8 @@ func ctlMessageOrLog(ctx context.Context, args []string, stdin io.Reader, stdout
 	fs.SetOutput(io.Discard)
 	from := fs.String("from", "", "")
 	tail := fs.Int("tail", 200, "")
+	expectedPod := fs.String("expected-pod-uid", "", "")
+	expectedSession := fs.String("expected-session-uid", "", "")
 	if err := fs.Parse(args[1:]); err != nil || fs.NArg() > 0 || (args[0] == "log" && (*from != "" || *tail < 1 || *tail > 5000)) || (args[0] == "deliver" && *from == "") {
 		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl deliver --from <sender> (the message on stdin) | ctl log [--tail N, 1 to 5000]\n", binaryName)
 		return exitUsage
@@ -316,6 +318,12 @@ func ctlMessageOrLog(ctx context.Context, args []string, stdin io.Reader, stdout
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
 		return exitFailure
+	}
+	if *expectedPod != "" || *expectedSession != "" {
+		if *expectedPod == "" || *expectedSession == "" || s.PodUID != *expectedPod || sess.SessionUID != *expectedSession {
+			_, _ = fmt.Fprintln(stderr, "agentd: target identity does not match")
+			return exitFailure
+		}
 	}
 	if args[0] == "log" {
 		if err := agentd.TailLog(s, sess.Name, *tail, stdout); err != nil {

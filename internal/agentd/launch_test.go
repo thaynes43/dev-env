@@ -114,7 +114,7 @@ func TestBuildLaunchRefuses(t *testing.T) {
 		want   string
 	}{
 		{"remote", func(_ *Settings, s *protocol.Session) { s.Mode = protocol.ModeRemote }, "plan 03"},
-		{"codex", func(_ *Settings, s *protocol.Session) { s.Agent = protocol.AgentCodex }, "plan 04"},
+		{"codex", func(_ *Settings, s *protocol.Session) { s.Agent = protocol.AgentCodex }, "managed codex tasks are disabled"},
 		{"alias", func(_ *Settings, s *protocol.Session) { s.Model = "opus" }, "aliases are refused"},
 		{"no static token", func(st *Settings, _ *protocol.Session) { st.Getenv = envOf(nil) }, "plan credential unavailable"},
 	}

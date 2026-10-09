@@ -691,9 +691,12 @@ func StoreProjectSnapshot(s Settings, snapshot projectcatalog.Snapshot) (string,
 	if err != nil {
 		return "", err
 	}
+	if len(data)+1 > projectcatalog.MaxSnapshotBytes {
+		return "", errors.New("task snapshot exceeds the transport bound")
+	}
 	path := filepath.Join(s.StateDir, "project-snapshot.json")
 	if fi, err := os.Lstat(path); err == nil {
-		if !fi.Mode().IsRegular() || fi.Size() > 64<<10 {
+		if !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 || fi.Size() > projectcatalog.MaxSnapshotBytes {
 			return "", errors.New("saved task snapshot is not a bounded regular file")
 		}
 		if err := noSymlinkComponents(path); err != nil {
@@ -703,7 +706,7 @@ func StoreProjectSnapshot(s Settings, snapshot projectcatalog.Snapshot) (string,
 		if err != nil {
 			return "", err
 		}
-		if !bytes.Equal(bytes.TrimSpace(cur), data) {
+		if !bytes.Equal(cur, append(data, '\n')) {
 			return "", errors.New("saved project snapshot differs; resume must preserve it")
 		}
 	} else if errors.Is(err, os.ErrNotExist) {
@@ -716,7 +719,7 @@ func StoreProjectSnapshot(s Settings, snapshot projectcatalog.Snapshot) (string,
 	rulesPath := filepath.Join(s.StateDir, "project-rules.md")
 	rules := []byte(snapshot.ProjectRules())
 	if fi, err := os.Lstat(rulesPath); err == nil {
-		if !fi.Mode().IsRegular() || fi.Size() > 64<<10 {
+		if !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 || fi.Size() > projectcatalog.MaxSnapshotBytes {
 			return "", errors.New("saved task rules are not a regular file")
 		}
 		cur, err := os.ReadFile(rulesPath)

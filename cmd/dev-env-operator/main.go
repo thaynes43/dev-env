@@ -80,6 +80,10 @@ type options struct {
 	humanSA            string
 	clientSAs          []string
 	grantApprovalURL   string
+	coordinatorEnabled bool
+	managedCodexTasks  bool
+	coordinatorHosts   []apiserver.CoordinatorHost
+	catalogBinding     *apiserver.CatalogBinding
 }
 
 func parseFlags(args []string) (options, error) {
@@ -102,6 +106,11 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.apiTLSDir, "api-tls-dir", "/etc/dev-env-operator/api-tls", "directory holding the /v1 API's tls.crt and tls.key, the cert-manager Secret's mount")
 	fs.StringVar(&o.humanSA, "human-service-account", ownNamespace+"/dev-env-human", "Tom's ServiceAccount, <namespace>/<name>, whose token his laptop mints (D-05)")
 	fs.StringVar(&o.grantApprovalURL, "grant-approval-url", "", "base URL of the broker's approval page, such as https://dev-env.example.com/grants/; a pending grant's view links to it plus the grant's name (D-56). Empty links nothing")
+	fs.BoolVar(&o.coordinatorEnabled, "enable-coordinator-callers", false, "enable configured live-bound scoped coordinator callers")
+	fs.BoolVar(&o.managedCodexTasks, "enable-managed-codex-tasks", false, "enable accepted-project managed Codex task admission")
+	hosts := fs.String("coordinator-hosts", "", "explicit JSON host bindings; empty configures none")
+	catalog := fs.String("project-catalog", "", "explicit accepted namespace/name ConfigMap binding")
+	cloneOwner := fs.String("project-clone-owner", "", "configured GitHub clone owner for accepted project tasks")
 	clients := fs.String("client-service-accounts", "dev-agents/dev-env-workbench", "comma-separated ServiceAccounts, <namespace>/<name>, of trusted clients that are not sessions: the workbench, and the v1 pod (dev/dev-env) until cutover (D-46)")
 	if err := fs.Parse(args); err != nil {
 		return o, err
@@ -130,6 +139,29 @@ func parseFlags(args []string) (options, error) {
 				return o, fmt.Errorf("--grant-approval-url: %q is not an https URL with a host and no query", o.grantApprovalURL)
 			}
 		}
+	}
+	policy := apiserver.Policy{Human: o.humanSA, Clients: o.clientSAs, SessionNamespace: o.sessionNamespace, SessionServiceAccount: controller.ServiceAccountName}
+	var err error
+	o.coordinatorHosts, err = apiserver.ParseCoordinatorHosts(*hosts, policy)
+	if err != nil {
+		return o, err
+	}
+	if *catalog != "" || *cloneOwner != "" {
+		parts := strings.Split(*catalog, "/")
+		if len(parts) != 2 {
+			return o, errors.New("project-catalog must be the explicit namespace/name")
+		}
+		b := &apiserver.CatalogBinding{Key: types.NamespacedName{Namespace: parts[0], Name: parts[1]}, CloneOwner: *cloneOwner}
+		if err := b.Validate(); err != nil {
+			return o, err
+		}
+		o.catalogBinding = b
+	}
+	if (o.coordinatorEnabled || o.managedCodexTasks) && (o.apiAddr == "0" || o.catalogBinding == nil) {
+		return o, errors.New("enabled task features require the API and a concrete accepted catalog binding")
+	}
+	if o.coordinatorEnabled && (!o.managedCodexTasks || len(o.coordinatorHosts) == 0) {
+		return o, errors.New("coordinators require managed task support and explicit host bindings")
 	}
 	return o, nil
 }
@@ -179,13 +211,14 @@ func run(args []string) error {
 		return err
 	}
 	r := &controller.Reconciler{
-		Client:           mgr.GetClient(),
-		Templates:        templatesKey,
-		APIURL:           o.apiURL,
-		APIReader:        mgr.GetAPIReader(),
-		Rescuer:          rescuer,
-		WorkspaceStopper: rescuer,
-		Recorder:         mgr.GetEventRecorder(binaryName),
+		Client:            mgr.GetClient(),
+		Templates:         templatesKey,
+		APIURL:            o.apiURL,
+		ManagedCodexTasks: o.managedCodexTasks,
+		APIReader:         mgr.GetAPIReader(),
+		Rescuer:           rescuer,
+		WorkspaceStopper:  rescuer,
+		Recorder:          mgr.GetEventRecorder(binaryName),
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
 		return err
@@ -234,10 +267,12 @@ func run(args []string) error {
 				Clients:               o.clientSAs,
 				SessionNamespace:      o.sessionNamespace,
 				SessionServiceAccount: controller.ServiceAccountName,
+				CoordinatorEnabled:    o.coordinatorEnabled, Coordinators: o.coordinatorHosts,
 				// declare-activity's declarations live beside the operator
 				// (D-66).
 				ActivityNamespace: o.templatesNamespace,
 			},
+			Projects: o.catalogBinding, ManagedCodexTasks: o.managedCodexTasks,
 			Exec:             podExec,
 			Shelf:            rescueShelf,
 			Templates:        apiserver.TemplatesFrom(mgr.GetClient(), templatesKey),

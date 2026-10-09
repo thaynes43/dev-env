@@ -71,6 +71,12 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		_, _ = fmt.Fprintf(pane, "agentd run-agent: shared writer admission: %v\n", err)
 		return 1
 	}
+	if l.Provider == protocol.AgentCodex {
+		if err := verifyManagedCodexCLI(l); err != nil {
+			_, _ = fmt.Fprintln(pane, err)
+			return 1
+		}
+	}
 	stateDir := filepath.Dir(launchPath)
 	if l.TUI {
 		return runTUI(l, stateDir, os.Stdin, pane, signals, stopGrace)
@@ -102,10 +108,20 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	cmd.Env = agentEnv(os.Environ(), l)
 	cmd.Stdin = strings.NewReader(l.Prompt)
 	cmd.Stdout, cmd.Stderr = pw, pw
+	if l.Provider == protocol.AgentCodex {
+		cmd.Stderr = out
+		cmd.WaitDelay = drainWait
+	}
 	// Its own process group, so a timeout can stop the CLI's children too.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	started := time.Now().UTC()
 	_, _ = fmt.Fprintf(out, "[agentd] task %s started %s, conversation %s\n", l.Session, started.Format(time.RFC3339), l.ConversationID)
+	if err := validateWorkspaceLaunch(l); err != nil {
+		_ = pr.Close()
+		_ = pw.Close()
+		_, _ = fmt.Fprintln(out, "agentd: shared writer proof changed before spawn")
+		return 1
+	}
 	if err := cmd.Start(); err != nil {
 		_ = pr.Close()
 		_ = pw.Close()
@@ -119,17 +135,40 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	_ = writeJSONFile(filepath.Join(stateDir, pidFile), agentPid{Pid: pid, Start: procStartTime(pid)})
 
 	var res streamResult
+	var codex codexStream
+	protocolRefused := false
+	parseFailed := make(chan error, 1)
 	readDone := make(chan struct{})
 	go func() {
 		defer close(readDone)
 		sc := bufio.NewScanner(pr)
+		if l.Provider == protocol.AgentCodex {
+			sc.Split(codexJSONLine)
+		}
 		sc.Buffer(make([]byte, 0, min(64<<10, maxStreamLine)), maxStreamLine)
 		for sc.Scan() {
 			line := sc.Bytes()
 			_, _ = events.Write(append(append([]byte(nil), line...), '\n'))
-			renderStreamLine(line, out, &res)
+			if l.Provider == protocol.AgentCodex {
+				if err := codex.line(line, launchPath, &l, out, &res); err != nil {
+					codex.failed = true
+					protocolRefused = true
+					parseFailed <- err
+					_, _ = io.Copy(io.Discard, pr)
+					return
+				}
+			} else {
+				renderStreamLine(line, out, &res)
+			}
 		}
 		if err := sc.Err(); err != nil {
+			if l.Provider == protocol.AgentCodex {
+				codex.failed = true
+				protocolRefused = true
+				parseFailed <- errors.New("native Codex output is truncated or exceeds the line bound")
+				_, _ = io.Copy(io.Discard, pr)
+				return
+			}
 			// A line too long to parse: keep the rest of the output in the
 			// events file, unparsed, so the CLI never blocks on a full pipe.
 			_, _ = fmt.Fprintf(out, "[agentd] output no longer parsed: %v\n", err)
@@ -176,7 +215,13 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		}
 	}()
 
-	werr := <-waitDone
+	var werr error
+	select {
+	case werr = <-waitDone:
+	case <-parseFailed:
+		stop("native Codex protocol refused")
+		werr = <-waitDone
+	}
 	close(exited)
 	mu.Lock()
 	if killTimer != nil {
@@ -197,6 +242,15 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	}
 	_ = pr.Close()
 	code := exitCode(cmd, werr)
+	if l.Provider == protocol.AgentCodex && (protocolRefused || !codex.thread || !codex.terminal) {
+		res.Seen, res.IsError, res.Subtype = true, true, "native_protocol_refused"
+		if code == 0 {
+			code = 1
+		}
+	}
+	if l.Provider == protocol.AgentCodex && codex.failed && code == 0 {
+		code = 1
+	}
 	mu.Lock()
 	to := timedOut
 	mu.Unlock()
@@ -245,6 +299,11 @@ func runTUI(l Launch, stateDir string, tty *os.File, pane io.Writer, signals <-c
 			ExitCode: code, StartedAt: started, FinishedAt: time.Now().UTC(), ConversationID: l.ConversationID, BootID: l.BootID,
 		})
 		_ = os.Remove(filepath.Join(stateDir, pidFile))
+	}
+	if err := validateWorkspaceLaunch(l); err != nil {
+		note("shared writer proof changed before spawn")
+		record(1)
+		return 1
 	}
 	if err := cmd.Start(); err != nil {
 		note("start %s: %v", l.Argv[0], err)

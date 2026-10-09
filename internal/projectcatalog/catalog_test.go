@@ -11,6 +11,41 @@ import (
 
 const validCatalog = `{"version":1,"repositories":{"demo":{"github":"owner/demo"},"other":{"github":"owner/other","defaultBranch":"stable"}},"projects":{"sample":{"repositories":[{"name":"other","defaultBranch":"release/one"},{"name":"demo"}],"rules":"Rule identifier α\nKeep this exact trailing space. "}}}`
 
+func TestSnapshotBoundRoundTripsEscapedRulesAndSixteenRepositories(t *testing.T) {
+	rules := strings.Repeat("\x01", MaxRulesBytes)
+	d := declaration{Version: 1, Repositories: map[string]repositoryDeclaration{}, Projects: map[string]projectDeclaration{}}
+	project := projectDeclaration{Rules: &rules}
+	for i := range MaxProjectRepositories {
+		name := fmt.Sprintf("repo-%02d", i)
+		d.Repositories[name] = repositoryDeclaration{GitHub: "owner/" + name}
+		project.Repositories = append(project.Repositories, selection{Name: name})
+	}
+	d.Projects["sample"] = project
+	raw, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := catalog.Snapshot("sample", "repo-00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(snapshot)
+	if err != nil || len(data) <= 64<<10 || len(data) >= MaxSnapshotBytes || MaxSnapshotBytes != 128<<10 {
+		t.Fatal("escaped valid snapshot did not exercise the shared 128 KiB bound")
+	}
+	resumed, err := ParseSnapshot(data)
+	if err != nil || resumed.Rules() != rules || len(resumed.Repositories()) != MaxProjectRepositories || resumed.Selected() != snapshot.Selected() {
+		t.Fatal("maximum escaped rules or declared repositories changed on resume")
+	}
+	if _, err := ParseSnapshot(append(data, []byte(strings.Repeat(" ", MaxSnapshotBytes-len(data)+1))...)); err == nil {
+		t.Fatal("snapshot parser accepted transport larger than its shared bound")
+	}
+}
+
 func TestCatalogExactBytesAndImmutableSnapshots(t *testing.T) {
 	c, err := Parse([]byte(validCatalog))
 	if err != nil {

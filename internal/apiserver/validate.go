@@ -13,8 +13,10 @@ import (
 	"strings"
 	"time"
 
+	metavalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -74,13 +76,39 @@ func bodyError(err error, limit int64) error {
 // messages, and agentd's rules are checked by agentd's own code (D-40). So the
 // API restates neither.
 func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest, c *caller) (*v1alpha1.AgentSession, error) {
-	if req.Project != "" {
-		return nil, invalid(fieldError("project", "project admission is not configured"))
-	}
 	if req.Name != "" || req.Lane != "" {
 		return nil, forbidden("name and lane are for summoning callers, by their CallerPolicy (DESIGN-001 3.7), which arrive in plan 10")
 	}
 
+	if c.kind == kindCoordinator {
+		if req.Profile != "dev" || (req.Size != "S" && req.Size != "M") || req.Mode != "task" || req.Restore != "" || req.Base != "" || req.Project == "" || (req.Agent != "claude" && req.Agent != "codex") {
+			return nil, coordinatorDenied()
+		}
+		if s.Templates == nil {
+			return nil, coordinatorDenied()
+		}
+		t, err := s.Templates(ctx)
+		if err != nil {
+			return nil, coordinatorDenied()
+		}
+		if _, _, err := t.Profile("dev"); err != nil {
+			return nil, coordinatorDenied()
+		}
+	}
+	var snapshot []byte
+	if req.Project != "" {
+		if s.Projects == nil {
+			return nil, invalid(fieldError("project", "accepted project catalog is not configured"))
+		}
+		raw, selected, err := s.Projects.snapshot(ctx, s.Live, req.Project, req.Repo)
+		if err != nil {
+			return nil, invalid(fieldError("project", "accepted project/repository is unavailable or invalid"))
+		}
+		if req.Base != "" && req.Base != selected.DefaultBranch {
+			return nil, forbidden("project tasks use the accepted repository default")
+		}
+		req.Repo, req.Base, snapshot = selected.Name, selected.DefaultBranch, raw
+	}
 	var fields []apiv1.FieldError
 	add := func(field, format string, args ...any) { fields = append(fields, fieldError(field, format, args...)) }
 
@@ -89,7 +117,11 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	switch v1alpha1.AgentKind(req.Agent) {
 	case v1alpha1.AgentClaude:
 	case v1alpha1.AgentCodex:
-		add("agent", "codex sessions arrive in plan 04; plan 01 runs claude")
+		if !s.ManagedCodexTasks || req.Mode != "task" || len(snapshot) == 0 {
+			add("agent", "managed codex tasks require the enabled feature and an accepted project snapshot")
+		} else if err := protocol.ValidateCodexModel(req.Model); err != nil {
+			add("model", "%v", err)
+		}
 	case v1alpha1.AgentOpencode:
 		add("agent", "opencode sessions arrive in plan 09; plan 01 runs claude")
 	case "":
@@ -118,6 +150,13 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 			add("effort", "model %s has no effort control; leave effort empty", req.Model)
 		} else {
 			add("effort", "model %s takes %s (or ultracode where it takes xhigh), not %q", req.Model, strings.Join(levels, ", "), req.Effort)
+		}
+	}
+	if req.Agent == "codex" && req.Effort != "" {
+		switch req.Effort {
+		case "low", "medium", "high", "xhigh", "max", "ultra":
+		default:
+			add("effort", "unsupported native Codex reasoning effort")
 		}
 	}
 	if len(req.Prompt) > protocol.MaxPromptBytes {
@@ -151,6 +190,9 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 		Restore: req.Restore,
 	}
 	if l := req.Limits; l != nil {
+		if req.Agent == "codex" && l.MaxTurns != 0 {
+			add("limits.maxTurns", "native Codex exec has no exact max-turns contract; use limits.timeout")
+		}
 		spec.Limits = &v1alpha1.SessionLimits{MaxTurns: l.MaxTurns}
 		if l.Timeout != "" {
 			d, err := time.ParseDuration(l.Timeout)
@@ -212,9 +254,18 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 		},
 		Spec: spec,
 	}
+	if len(snapshot) != 0 {
+		sess.Annotations = map[string]string{v1alpha1.AnnotationProjectSnapshot: string(snapshot)}
+	}
 	if req.IdempotencyKey != "" {
 		sess.Labels[v1alpha1.LabelIdempotencyKey] = req.IdempotencyKey
-		sess.Annotations = map[string]string{v1alpha1.AnnotationRequestHash: requestHash(req)}
+		if sess.Annotations == nil {
+			sess.Annotations = map[string]string{}
+		}
+		sess.Annotations[v1alpha1.AnnotationRequestHash] = requestHash(req)
+	}
+	if errs := metavalidation.ValidateAnnotations(sess.Annotations, field.NewPath("metadata", "annotations")); len(errs) != 0 {
+		return nil, invalid(fieldError("project", "snapshot exceeds the aggregate annotation bound"))
 	}
 	return sess, nil
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/projectcatalog"
 	"github.com/thaynes43/dev-env/internal/templates"
 )
 
@@ -71,8 +72,8 @@ func HomeClaimName(session string) string { return "home-" + session }
 // agentd's heartbeat (D-41); empty turns the heartbeat off. The pod is never
 // updated after create: a change in the templates reaches a session only through
 // a drain (5.2).
-func buildPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string) (*corev1.Pod, error) {
-	return buildSessionPod(s, t, apiURL, false)
+func buildPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, managedCodex ...bool) (*corev1.Pod, error) {
+	return buildSessionPod(s, t, apiURL, false, len(managedCodex) > 0 && managedCodex[0])
 }
 
 // buildHoldPod returns the session's rescue pod (D-55): the session's pod with
@@ -83,13 +84,13 @@ func buildPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string) (
 // Other profile mounts are only for agents. Heartbeats are off, because no
 // agent runs in it.
 func buildHoldPod(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.Pod, error) {
-	return buildSessionPod(s, t, "", true)
+	return buildSessionPod(s, t, "", true, false)
 }
 
 // isHoldPod reports whether the pod is a session's rescue pod (D-55).
 func isHoldPod(p *corev1.Pod) bool { return p.Labels[v1alpha1.LabelHold] == "true" }
 
-func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, hold bool) (*corev1.Pod, error) {
+func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, hold bool, managedCodex bool) (*corev1.Pod, error) {
 	if w := s.Spec.Workspace; w != nil && (t.Workspace == nil || !t.Workspace.Enabled || t.Workspace.Claim == "" || t.Workspace.ID != w.ID) {
 		return nil, fmt.Errorf("session workspace %q does not match an enabled template", w.ID)
 	}
@@ -155,6 +156,8 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		env = append(env, profile.Env...)
 		envFrom = append(envFrom, profile.EnvFrom...)
 	}
+	// Controller-owned feature gate cannot be widened by template/profile env.
+	env = append(env, corev1.EnvVar{Name: "AGENTD_ENABLE_CODEX_TASKS", Value: fmt.Sprint(managedCodex && !hold)})
 	var args []string
 	if hold {
 		args = append(args, HoldArgs...)
@@ -371,16 +374,24 @@ func CheckAgentdSession(s *v1alpha1.AgentSession) error {
 // starts a pod whose agentd would refuse its session at boot.
 func sessionDocument(s *v1alpha1.AgentSession) (string, error) {
 	d := protocol.Session{
-		Name:   s.Name,
-		Repo:   s.Spec.Repo,
-		Base:   s.Spec.Base,
-		Agent:  string(s.Spec.Agent),
-		Mode:   string(s.Spec.Mode),
-		Model:  s.Spec.Model,
-		Effort: s.Spec.Effort,
-		Prompt: s.Spec.Prompt,
+		SessionUID: string(s.UID),
+		Name:       s.Name,
+		Repo:       s.Spec.Repo,
+		Base:       s.Spec.Base,
+		Agent:      string(s.Spec.Agent),
+		Mode:       string(s.Spec.Mode),
+		Model:      s.Spec.Model,
+		Effort:     s.Spec.Effort,
+		Prompt:     s.Spec.Prompt,
 		// The rescue the session restores from (D-67).
 		Restore: s.Spec.Restore,
+	}
+	if raw := s.Annotations[v1alpha1.AnnotationProjectSnapshot]; raw != "" {
+		snapshot, err := projectcatalog.ParseSnapshot([]byte(raw))
+		if err != nil || snapshot.Selected().Name != s.Spec.Repo || snapshot.Selected().DefaultBranch != s.Spec.Base {
+			return "", sessionInvalidError{fmt.Errorf("project snapshot does not bind the selected repository and base")}
+		}
+		d.ProjectSnapshot = json.RawMessage(raw)
 	}
 	if s.Spec.Workspace != nil {
 		d.Workspace = &protocol.WorkspaceBinding{ID: s.Spec.Workspace.ID, SessionUID: string(s.UID)}
@@ -397,6 +408,9 @@ func sessionDocument(s *v1alpha1.AgentSession) (string, error) {
 	b, err := json.Marshal(d)
 	if err != nil {
 		return "", fmt.Errorf("session document: %w", err)
+	}
+	if len(b) > protocol.MaxSessionBytes {
+		return "", sessionInvalidError{fmt.Errorf("session document exceeds the bounded transport")}
 	}
 	return string(b), nil
 }

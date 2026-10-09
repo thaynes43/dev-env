@@ -37,6 +37,8 @@ const (
 	// AnnotationRepo is spec.repo. It is an annotation because a repository
 	// name can be longer than a label value.
 	AnnotationRepo = LabelPrefix + "repo"
+	// AnnotationProjectSnapshot is authored only by the accepted catalog resolver.
+	AnnotationProjectSnapshot = LabelPrefix + "project-snapshot"
 	// AnnotationCaller is a summoned session's CallerPolicy, also too long for
 	// a label value.
 	AnnotationCaller = LabelPrefix + "caller"

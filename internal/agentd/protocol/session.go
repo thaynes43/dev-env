@@ -37,10 +37,15 @@ const (
 // (Linux MAX_ARG_STRLEN), and the rest of the document must fit beside it.
 const MaxPromptBytes = 64 << 10
 
+// MaxSessionBytes leaves room for the environment key and terminating NUL.
+const MaxSessionBytes = (128 << 10) - 64
+
 // Session is the part of an AgentSession that agentd needs. The JSON names are
 // the spec's (DESIGN-001 3.3), plus the session's name. Unknown fields are
 // ignored, so a newer operator can add fields an older agentd does not read.
 type Session struct {
+	SessionUID      string          `json:"sessionUID,omitempty"`
+	ProjectSnapshot json.RawMessage `json:"projectSnapshot,omitempty"`
 	// Workspace is the operator's explicit shared-storage binding. SessionUID
 	// distinguishes an existing session from another created with the same name.
 	Workspace *WorkspaceBinding `json:"workspace,omitempty"`
@@ -150,6 +155,9 @@ func (s Session) MaxTurns() int32 {
 
 // ParseSession decodes and validates a session document.
 func ParseSession(data []byte) (Session, error) {
+	if len(data) > MaxSessionBytes {
+		return Session{}, errors.New("session document exceeds the bounded transport")
+	}
 	var s Session
 	if err := json.Unmarshal(data, &s); err != nil {
 		return Session{}, fmt.Errorf("session document: %w", err)
@@ -179,6 +187,9 @@ var (
 // Validate checks the fields agentd relies on.
 func (s Session) Validate() error {
 	var errs []error
+	if s.SessionUID != "" && (len(s.SessionUID) > 128 || !repoName.MatchString(s.SessionUID)) {
+		errs = append(errs, errors.New("sessionUID must identify the existing session"))
+	}
 	if s.Workspace != nil {
 		if len(s.Workspace.ID) == 0 || len(s.Workspace.ID) > 63 || !dnsLabel.MatchString(s.Workspace.ID) {
 			errs = append(errs, errors.New("workspace.id must be a DNS label of at most 63 characters"))
@@ -214,7 +225,11 @@ func (s Session) Validate() error {
 		if err := ValidateClaudeModel(s.Model); err != nil {
 			errs = append(errs, err)
 		}
-	case AgentCodex, AgentOpencode:
+	case AgentCodex:
+		if err := ValidateCodexModel(s.Model); err != nil {
+			errs = append(errs, err)
+		}
+	case AgentOpencode:
 		if strings.TrimSpace(s.Model) == "" {
 			errs = append(errs, errors.New("model is empty"))
 		}
@@ -260,4 +275,17 @@ func ValidateClaudeModel(id string) error {
 		return fmt.Errorf("model %q is not a full Claude model id (for example claude-opus-5-5); aliases are refused", id)
 	}
 	return nil
+}
+
+// ValidateCodexModel accepts the full pinned GPT ids, never client aliases.
+func ValidateCodexModel(id string) error {
+	if strings.TrimSpace(id) == "" {
+		return errors.New("model is empty")
+	}
+	switch id {
+	case "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5":
+		return nil
+	default:
+		return fmt.Errorf("model must be a full supported Codex model id")
+	}
 }

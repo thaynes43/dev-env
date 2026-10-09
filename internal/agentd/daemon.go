@@ -108,6 +108,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return d.supervise(ctx)
 	}
 
+	if err := prepareProjectTask(&d.S, d.Session); err != nil {
+		return fmt.Errorf("project admission: %w", err)
+	}
 	steps := Render(ctx, d.R, d.S, d.Session)
 	ws, repoStep := PrepareRepo(ctx, d.R, d.S, d.Session)
 	steps = append(steps, repoStep)
@@ -182,7 +185,12 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 		return newStep(name, nil, errors.New(why)), why
 	}
 	var first Launch
-	if readJSONFile(d.S.statePath(launchFile), &first) == nil {
+	firstErr := readJSONFile(d.S.statePath(launchFile), &first)
+	if firstErr != nil && !errors.Is(firstErr, os.ErrNotExist) {
+		why := "saved launch is unreadable or invalid; initial prompt cannot be replayed"
+		return newStep(name, nil, errors.New(why)), why
+	}
+	if firstErr == nil {
 		l, err := BuildResume(d.S, d.Session, ws, first, bootID, d.now())
 		if err != nil {
 			return newStep(name, nil, err), err.Error()

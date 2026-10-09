@@ -183,7 +183,7 @@ func (s *Server) sessionLog(ctx context.Context, _ http.ResponseWriter, r *http.
 	if err := s.authorizeChildExec(ctx, sess, pod, c); err != nil {
 		return 0, nil, err
 	}
-	err = s.Exec.Run(ctx, pod.Namespace, pod.Name, controller.ContainerName, []string{"agentd", "ctl", "log", "--tail", strconv.Itoa(tail)}, nil, stdout, stderr)
+	err = s.Exec.Run(ctx, pod.Namespace, pod.Name, controller.ContainerName, coordinatorExecArgs([]string{"agentd", "ctl", "log", "--tail", strconv.Itoa(tail)}, sess, pod, c), nil, stdout, stderr)
 	var code utilexec.ExitError
 	if errors.As(err, &code) && code.ExitStatus() == exitNoLog {
 		return 0, nil, notFound("session %s has no log yet", sess.Name)
@@ -231,7 +231,7 @@ func (s *Server) sendMessage(ctx context.Context, w http.ResponseWriter, r *http
 	if err := s.authorizeChildExec(ctx, sess, pod, c); err != nil {
 		return 0, nil, err
 	}
-	err = s.Exec.Run(ctx, pod.Namespace, pod.Name, controller.ContainerName, []string{"agentd", "ctl", "deliver", "--from", from}, strings.NewReader(text), io.Discard, stderr)
+	err = s.Exec.Run(ctx, pod.Namespace, pod.Name, controller.ContainerName, coordinatorExecArgs([]string{"agentd", "ctl", "deliver", "--from", from}, sess, pod, c), strings.NewReader(text), io.Discard, stderr)
 	var code utilexec.ExitError
 	if errors.As(err, &code) && code.ExitStatus() == exitNotAddressable {
 		return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "session %s takes no message now: %s", sess.Name, strings.TrimSpace(stderr.String()))
@@ -273,4 +273,13 @@ func stripControl(text string) string {
 		}
 		return r
 	}, text)
+}
+
+// The target checks these values before reading logs or delivering input, closing
+// the name-only pods/exec race after the final API reads.
+func coordinatorExecArgs(args []string, sess *v1alpha1.AgentSession, pod *corev1.Pod, c *caller) []string {
+	if c.kind == kindCoordinator {
+		return append(args, "--expected-pod-uid", string(pod.UID), "--expected-session-uid", string(sess.UID))
+	}
+	return args
 }

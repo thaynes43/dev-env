@@ -78,7 +78,7 @@ func (s *Server) createSession(ctx context.Context, w http.ResponseWriter, r *ht
 		}
 	}
 
-	base := generatedName(req.Repo, s.now())
+	base := generatedName(sess.Spec.Repo, s.now())
 	for i := 1; i <= nameAttempts; i++ {
 		sess.Name = base
 		if i > 1 {
