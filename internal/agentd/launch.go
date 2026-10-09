@@ -134,10 +134,9 @@ func sharedGuard(ws protocol.Workspace, task bool) string {
 	return guard
 }
 
-// BuildLaunch builds a session's first launch: a Claude task (D-42) or a local
-// session's TUI (D-58), both on the static token. Remote mode arrives with plan
-// 03, Codex pods with plan 04 (D-12: Codex runs in the hub until the keeper
-// owns its login), opencode with plan 09.
+// BuildLaunch builds a first Claude launch on its admitted static token, or an
+// explicitly enabled project task on native Codex with keeper access material.
+// Managed Codex never admits interactive first launches or enrollment reuse.
 func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootID string, now time.Time) (Launch, error) {
 	if sess.Agent == protocol.AgentCodex {
 		return buildCodexLaunch(s, sess, ws, nil, bootID, now)

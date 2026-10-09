@@ -69,6 +69,12 @@ func (s *codexStream) line(raw []byte, path string, l *Launch, out io.Writer, re
 		}
 		s.turn = true
 	case "item.started", "item.updated", "item.completed":
+		// Pinned startup/configuration warnings and deprecation notices are
+		// completed error items, and can arrive before turn.started. They do
+		// not create a turn, terminal result or native identity.
+		if e.Type == "item.completed" && e.Item.Type == "error" {
+			return nil
+		}
 		if !s.turn || s.terminal {
 			return errors.New("native Codex item outside a turn")
 		}

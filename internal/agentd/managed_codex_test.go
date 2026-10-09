@@ -100,6 +100,28 @@ func TestManagedCodexNativeInputsAndEnvironment(t *testing.T) {
 	}
 }
 
+func TestManagedCodexPinnedWarningDoesNotManufactureTurn(t *testing.T) {
+	s, sess, ws, now := managedCodexFixture(t)
+	l, err := BuildLaunch(s, sess, ws, "boot", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := s.statePath(launchFile)
+	if err := writeWorkspaceJSON(path, l); err != nil {
+		t.Fatal(err)
+	}
+	var stream codexStream
+	var result streamResult
+	var output bytes.Buffer
+	if stream.line([]byte(`{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123456789abc"}`), path, &l, &output, &result) != nil ||
+		stream.line([]byte(`{"type":"item.completed","item":{"id":"item_0","type":"error","message":"synthetic startup warning"}}`), path, &l, &output, &result) != nil || stream.turn || stream.terminal || result.Seen {
+		t.Fatal("pinned warning changed the native turn or resume identity contract")
+	}
+	if stream.line([]byte(`{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"synthetic misplaced output"}}`), path, &l, &output, &result) == nil {
+		t.Fatal("real turn output accepted before turn.started")
+	}
+}
+
 func TestManagedCodexAdmissionAndExactResume(t *testing.T) {
 	for _, kind := range []string{"disabled", "mode", "model", "snapshot", "repo", "base", "owner", "uid", "max-turns", "projection", "shared-auth", "symlink-auth"} {
 		t.Run(kind, func(t *testing.T) {
