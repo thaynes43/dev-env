@@ -28,17 +28,18 @@ const (
 	codexSaveTimeout          = 2 * time.Second
 )
 
-var errCodexJournal = errors.New("Codex private journal is unavailable")
+var errCodexJournal = errors.New("codex private journal is unavailable")
 
 // codexRecord is never a generic Keeper.Job: replaying a possibly spent rotating
 // token is forbidden. Only explicit private-journal serialization reveals it.
 type codexRecord struct {
-	Access     codexauth.Access
-	Refresh    secretValue
-	Stage      string
-	AttemptUID string
-	LoginUntil time.Time
-	LoginOwner string
+	Access         codexauth.Access
+	Refresh        secretValue
+	Stage          string
+	AttemptUID     string
+	LoginUntil     time.Time
+	LoginOwner     string
+	ResumeOnCancel bool
 }
 
 func (codexRecord) Format(f fmt.State, _ rune)   { _, _ = io.WriteString(f, redacted) }
@@ -47,23 +48,24 @@ func (codexRecord) LogValue() slog.Value         { return slog.StringValue(redac
 func (codexRecord) MarshalLog() any              { return redacted }
 
 type codexRecordWire struct {
-	Version      int       `json:"version"`
-	Generation   uint64    `json:"generation"`
-	AccountID    string    `json:"account_id"`
-	IDToken      string    `json:"id_token"`
-	AccessToken  string    `json:"access_token"`
-	RefreshToken string    `json:"refresh_token"`
-	ExpiresAt    time.Time `json:"exp"`
-	LastRefresh  time.Time `json:"last_refresh"`
-	Stage        string    `json:"stage"`
-	AttemptUID   string    `json:"attemptUID"`
-	LoginUntil   time.Time `json:"loginUntil"`
-	LoginOwner   string    `json:"loginOwner"`
+	Version        int       `json:"version"`
+	Generation     uint64    `json:"generation"`
+	AccountID      string    `json:"account_id"`
+	IDToken        string    `json:"id_token"`
+	AccessToken    string    `json:"access_token"`
+	RefreshToken   string    `json:"refresh_token"`
+	ExpiresAt      time.Time `json:"exp"`
+	LastRefresh    time.Time `json:"last_refresh"`
+	Stage          string    `json:"stage"`
+	AttemptUID     string    `json:"attemptUID"`
+	LoginUntil     time.Time `json:"loginUntil"`
+	LoginOwner     string    `json:"loginOwner"`
+	ResumeOnCancel bool      `json:"resumeOnCancel"`
 }
 
 func recordWire(r codexRecord) codexRecordWire {
 	a := r.Access
-	return codexRecordWire{1, a.Generation, a.AccountID, a.IDToken, a.AccessToken, r.Refresh.Reveal(), a.ExpiresAt, a.LastRefresh, r.Stage, r.AttemptUID, r.LoginUntil, r.LoginOwner}
+	return codexRecordWire{1, a.Generation, a.AccountID, a.IDToken, a.AccessToken, r.Refresh.Reveal(), a.ExpiresAt, a.LastRefresh, r.Stage, r.AttemptUID, r.LoginUntil, r.LoginOwner, r.ResumeOnCancel}
 }
 
 func validCodexRecord(r codexRecord) bool {
@@ -83,6 +85,9 @@ func validCodexRecord(r codexRecord) bool {
 		return false
 	}
 	if len(r.Refresh.Reveal()) > codexauth.MaxTokenBytes {
+		return false
+	}
+	if r.ResumeOnCancel && (r.Stage != codexNeedsLogin || r.LoginUntil.IsZero() || r.Refresh.Empty()) {
 		return false
 	}
 	if r.Access.Generation == 0 {
@@ -120,7 +125,7 @@ func (j *codexJournal) load(ctx context.Context) (*corev1.Secret, codexRecord, e
 	if codexauth.DecodeStrict(raw, &w) != nil || w.Version != 1 {
 		return nil, codexRecord{}, errCodexJournal
 	}
-	r := codexRecord{Access: codexauth.Access{Generation: w.Generation, AccountID: w.AccountID, IDToken: w.IDToken, AccessToken: w.AccessToken, ExpiresAt: w.ExpiresAt, LastRefresh: w.LastRefresh}, Refresh: newSecretValue(w.RefreshToken), Stage: w.Stage, AttemptUID: w.AttemptUID, LoginUntil: w.LoginUntil, LoginOwner: w.LoginOwner}
+	r := codexRecord{Access: codexauth.Access{Generation: w.Generation, AccountID: w.AccountID, IDToken: w.IDToken, AccessToken: w.AccessToken, ExpiresAt: w.ExpiresAt, LastRefresh: w.LastRefresh}, Refresh: newSecretValue(w.RefreshToken), Stage: w.Stage, AttemptUID: w.AttemptUID, LoginUntil: w.LoginUntil, LoginOwner: w.LoginOwner, ResumeOnCancel: w.ResumeOnCancel}
 	if !validCodexRecord(r) {
 		return nil, codexRecord{}, errCodexJournal
 	}

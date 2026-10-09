@@ -133,9 +133,9 @@ func TestCodexRefreshBudgetAndAmbiguousResponse(t *testing.T) {
 			w, x, p := codexFixture(t)
 			saveCodexFixture(t, w, dueCodexRecord(t, w))
 			fences := 0
-			w.Fence = func(context.Context, time.Duration) error {
+			w.Fence = func(_ context.Context, budget time.Duration) error {
 				fences++
-				if kind == "no-budget" || (kind == "lost-before-post" && fences == 2) {
+				if kind == "no-budget" || (kind == "lost-before-post" && fences > 1 && budget == codexRequestBudget) {
 					return errors.New("synthetic leadership loss")
 				}
 				return nil
@@ -171,6 +171,96 @@ func TestCodexRefreshBudgetAndAmbiguousResponse(t *testing.T) {
 				t.Fatal("ambiguous request was replayed")
 			}
 		})
+	}
+}
+
+func TestCodexLoginCancellationRestoresOnlyKnownReady(t *testing.T) {
+	for _, kind := range []string{"ready", "expired", "recovered-intent", "halted", "cas-error", "budget-loss"} {
+		t.Run(kind, func(t *testing.T) {
+			w, x, p := codexFixture(t)
+			old := dueCodexRecord(t, w)
+			if kind == "recovered-intent" {
+				old.Stage, old.AttemptUID = codexIntent, "00000000-0000-0000-0000-000000000001"
+			}
+			saveCodexFixture(t, w, old)
+			w.halted = kind == "halted"
+			r := w.begin(context.Background())
+			if !r.OK {
+				t.Fatal("reservation failed")
+			}
+			_ = w.tick(context.Background())
+			if x.Calls != 0 || p.Calls != 0 {
+				t.Fatal("reserved ceremony did not pause refresh")
+			}
+			if kind == "expired" {
+				w.Clock.(*clocktesting.FakeClock).Step(2 * 24 * time.Hour)
+			}
+			if kind == "cas-error" {
+				w.Journal.Client = &codexAmbiguousClient{Client: w.Journal.Client, Failed: true, BlockTombstone: true}
+			}
+			if kind == "budget-loss" {
+				w.Fence = func(context.Context, time.Duration) error { return errors.New("synthetic loss") }
+			}
+			result := w.cancelLogin(context.Background(), r.AttemptUID)
+			d, err := w.load(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kind == "ready" {
+				if !result.OK || d.Record.Stage != codexReady || !sameCodexMaterial(old, d.Record) || w.halted {
+					t.Fatal("known unused credential was not restored")
+				}
+			} else if d.Record.Stage == codexReady || !w.halted {
+				t.Fatal("uncertain, expired or unfenced credential restored")
+			}
+		})
+	}
+}
+
+type codexRollbackAmbiguousClient struct {
+	client.Client
+	Failed bool
+}
+
+func (c *codexRollbackAmbiguousClient) Patch(ctx context.Context, obj client.Object, p client.Patch, opts ...client.PatchOption) error {
+	if c.Failed {
+		return errors.New("synthetic offline journal")
+	}
+	raw, _ := p.Data(obj)
+	var patch struct {
+		Data map[string][]byte `json:"data"`
+	}
+	_ = json.Unmarshal(raw, &patch)
+	var state codexRecordWire
+	_ = json.Unmarshal(patch.Data[codexJournalKey], &state)
+	if err := c.Client.Patch(ctx, obj, p, opts...); err != nil {
+		return err
+	}
+	if state.Stage == codexReady {
+		c.Failed = true
+		return errors.New("synthetic lost rollback acknowledgement")
+	}
+	return nil
+}
+
+func TestCodexPrePOSTRollbackRequiresConfirmedCAS(t *testing.T) {
+	w, x, p := codexFixture(t)
+	saveCodexFixture(t, w, dueCodexRecord(t, w))
+	w.Journal.Client = &codexRollbackAmbiguousClient{Client: w.Journal.Client}
+	calls := 0
+	w.Fence = func(_ context.Context, budget time.Duration) error {
+		calls++
+		if calls > 1 && budget == codexRequestBudget {
+			return errors.New("synthetic short budget")
+		}
+		return nil
+	}
+	if w.tick(context.Background()) == nil || !w.halted {
+		t.Fatal("unacknowledged rollback resumed worker")
+	}
+	_ = w.tick(context.Background())
+	if x.Calls != 0 || p.Calls != 0 {
+		t.Fatal("pre-POST rollback ambiguity dispatched or published")
 	}
 }
 
@@ -277,6 +367,43 @@ func TestCodexFreshAttemptAdoptionAndOwnerFence(t *testing.T) {
 	d, err := w.load(context.Background())
 	if err != nil || d.Record.Stage != codexReady || d.Record.Access.Generation != 1 || d.Record.Refresh.Reveal() != "fresh-refresh-synthetic-canary" {
 		t.Fatal("adopted login is not private and durable")
+	}
+}
+
+func TestCodexAdoptionAccountMismatchIsActionableAndPrivate(t *testing.T) {
+	w, x, p := codexFixture(t)
+	old := dueCodexRecord(t, w)
+	saveCodexFixture(t, w, old)
+	r := w.begin(context.Background())
+	if !r.OK {
+		t.Fatal("reservation failed")
+	}
+	next := syntheticCodexAccess(t, w.Clock.Now(), 2, "other-synthetic-account", 10*24*time.Hour)
+	raw, err := codexauth.NativeJSON(next, w.Clock.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var native map[string]any
+	_ = json.Unmarshal(raw, &native)
+	native["tokens"].(map[string]any)["refresh_token"] = "fresh-refresh-synthetic-canary"
+	raw, _ = json.Marshal(native)
+	if err := os.WriteFile(filepath.Join(w.LoginDir, r.AttemptUID, "auth.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := w.adopt(context.Background(), r.AttemptUID)
+	if result.OK || result.Code != "AccountMismatch" || x.Calls != 0 || p.Calls != 0 {
+		t.Fatal("different account was adopted or lacked fixed status")
+	}
+	status, _ := json.Marshal(result)
+	if bytes.Contains(status, []byte("synthetic-account")) || bytes.Contains(status, []byte("canary")) {
+		t.Fatal("account status leaked identity or material")
+	}
+	if !w.cancelLogin(context.Background(), r.AttemptUID).OK {
+		t.Fatal("cancel failed")
+	}
+	d, err := w.load(context.Background())
+	if err != nil || d.Record.Stage != codexReady || !sameCodexMaterial(old, d.Record) {
+		t.Fatal("account mismatch replaced the previous login")
 	}
 }
 

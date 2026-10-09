@@ -64,7 +64,7 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 		return errors.New("keeper: the namespace, the gh token Secret and the GitHub App are required")
 	}
 	if o.CodexAuth.Enabled && (o.Namespace == o.GHTokenSecret.Namespace || (o.CodexAuth.LoginDir != "" && !filepath.IsAbs(o.CodexAuth.LoginDir))) {
-		return errors.New("Codex auth requires separate private/public namespaces and absolute private staging")
+		return errors.New("codex auth requires separate private/public namespaces and absolute private staging")
 	}
 	scheme := runtime.NewScheme()
 	if err := errors.Join(clientgoscheme.AddToScheme(scheme), v1alpha1.AddToScheme(scheme)); err != nil {
@@ -100,7 +100,7 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 		return errors.New("proxmox grants require keeper leader election")
 	}
 	if o.CodexAuth.Enabled && !o.LeaderElect {
-		return errors.New("Codex auth requires keeper leader election")
+		return errors.New("codex auth requires keeper leader election")
 	}
 	if o.LeaderElect {
 		identity := "keeper-" + string(uuid.NewUUID())
@@ -151,11 +151,8 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 		if clk == nil {
 			clk = clock.RealClock{}
 		}
-		worker := &codexWorker{Journal: &codexJournal{Client: c, Secret: types.NamespacedName{Namespace: o.Namespace, Name: a.JournalSecret}}, Transport: newCodexHTTPRefresh(), Publisher: &codexPublicSecret{Writer: &SecretWriter{Client: c}, Namespace: o.GHTokenSecret.Namespace, Name: a.LiveSecret}, Fence: credentialFence.CheckBudget, Clock: clk, LoginDir: a.LoginDir, Identity: credentialFence.Identity, Log: o.Log.WithName("codex-auth")}
+		worker := &codexWorker{Journal: &codexJournal{Client: c, Secret: types.NamespacedName{Namespace: o.Namespace, Name: a.JournalSecret}}, Transport: newCodexHTTPRefresh(), Publisher: &codexPublicSecret{Client: c, Secret: types.NamespacedName{Namespace: o.GHTokenSecret.Namespace, Name: a.LiveSecret}}, Fence: credentialFence.CheckBudget, Clock: clk, LoginDir: a.LoginDir, Identity: credentialFence.Identity, Log: o.Log.WithName("codex-auth")}
 		if err := mgr.Add(worker); err != nil {
-			return err
-		}
-		if err := mgr.AddReadyzCheck("codex-auth", worker.ReadyCheck); err != nil {
 			return err
 		}
 	}

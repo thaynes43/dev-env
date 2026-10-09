@@ -3,14 +3,12 @@ package keeper
 import (
 	"context"
 	"errors"
-	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/utils/clock"
 
@@ -28,23 +26,6 @@ type CodexOptions struct {
 
 type codexPublisher interface {
 	publish(context.Context, codexauth.Access, time.Time) error
-}
-type codexPublicSecret struct {
-	Writer          *SecretWriter
-	Namespace, Name string
-}
-
-func (p *codexPublicSecret) publish(ctx context.Context, a codexauth.Access, now time.Time) error {
-	raw, err := codexauth.Encode(a, now)
-	if err != nil {
-		return errCodexRefresh
-	}
-	c, cancel := context.WithTimeout(ctx, codexSaveTimeout)
-	defer cancel()
-	if p.Writer.Write(c, types.NamespacedName{Namespace: p.Namespace, Name: p.Name}, codexauth.LiveKey, raw, a.ExpiresAt, now) != nil {
-		return errors.New("Codex access publication is unavailable")
-	}
-	return nil
 }
 
 // codexWorker serializes login/adoption and rotating-token requests. It is a
@@ -70,12 +51,6 @@ type codexLoaded struct {
 }
 
 func (*codexWorker) NeedLeaderElection() bool { return true }
-func (w *codexWorker) ReadyCheck(_ *http.Request) error {
-	if !w.ready.Load() {
-		return errors.New("Codex authentication requires renewal or publication")
-	}
-	return nil
-}
 
 func (w *codexWorker) Start(ctx context.Context) error {
 	server, err := w.serveControl(ctx)
@@ -139,7 +114,7 @@ func (w *codexWorker) tick(ctx context.Context) error {
 	if !now.Before(r.Access.ExpiresAt.Add(-lead)) {
 		if w.Fence(ctx, codexRequestBudget) != nil {
 			w.ready.Store(false)
-			return errors.New("Codex leadership budget is unavailable")
+			return errors.New("codex leadership budget is unavailable")
 		}
 		r.Stage, r.AttemptUID = codexIntent, string(uuid.NewUUID())
 		r.LoginUntil = time.Time{}
@@ -149,8 +124,21 @@ func (w *codexWorker) tick(ctx context.Context) error {
 		// Re-read the journal and Lease after intent; never POST unless the
 		// durable state and the complete remaining budget still match.
 		d, err = w.load(ctx)
-		if err != nil || d.Record.Stage != codexIntent || d.Record.AttemptUID != r.AttemptUID || w.Fence(ctx, codexRequestBudget) != nil {
+		if err != nil || d.Record.Stage != codexIntent || d.Record.AttemptUID != r.AttemptUID || !sameCodexMaterial(d.Record, r) {
 			return w.needsLogin(ctx)
+		}
+		if w.Fence(ctx, codexRequestBudget) != nil {
+			// This same serialized attempt has not called the transport. Only a
+			// confirmed shorter-budget CAS may restore its known unused token.
+			if w.Fence(ctx, codexSaveTimeout+codexSafetyMargin) != nil {
+				return w.needsLogin(ctx)
+			}
+			r.Stage, r.AttemptUID = codexReady, ""
+			if w.Journal.save(ctx, d.Secret, r) != nil {
+				return w.needsLogin(ctx)
+			}
+			w.ready.Store(false)
+			return errors.New("codex refresh deferred for leadership budget")
 		}
 		id, access, refresh, rerr := w.Transport.refresh(ctx, r.Refresh)
 		if rerr != nil || ctx.Err() != nil {
@@ -186,7 +174,7 @@ func (w *codexWorker) tick(ctx context.Context) error {
 	if w.published != r.Access.Generation {
 		if w.Fence(ctx, codexSaveTimeout+codexSafetyMargin) != nil {
 			w.ready.Store(false)
-			return errors.New("Codex leadership budget is unavailable")
+			return errors.New("codex leadership budget is unavailable")
 		}
 		if err = w.Publisher.publish(ctx, r.Access, w.Clock.Now()); err != nil {
 			w.ready.Store(false)
@@ -208,6 +196,7 @@ func (w *codexWorker) needsLogin(ctx context.Context) error {
 		if d, err := w.load(ctx); err == nil {
 			r := d.Record
 			r.Stage, r.Refresh, r.LoginUntil, r.LoginOwner = codexNeedsLogin, secretValue{}, time.Time{}, ""
+			r.ResumeOnCancel = false
 			_ = w.Journal.save(ctx, d.Secret, r)
 		}
 	}

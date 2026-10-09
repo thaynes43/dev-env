@@ -24,7 +24,7 @@ const (
 	codexRequestBudget  = codexRequestTimeout + codexSaveTimeout + codexSafetyMargin
 )
 
-var errCodexRefresh = errors.New("Codex refresh requires a fresh login")
+var errCodexRefresh = errors.New("codex refresh requires a fresh login")
 
 type codexRefreshTransport interface {
 	refresh(context.Context, secretValue) (secretValue, secretValue, secretValue, error)

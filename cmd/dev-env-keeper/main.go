@@ -139,7 +139,7 @@ func parseFlags(args []string) (options, error) {
 		return o, errors.New("proxmox grants require leader election and nonempty credential configuration paths")
 	}
 	if o.codexAuth.Enabled && (!o.leaderElect || o.codexAuth.JournalSecret == "" || o.codexAuth.LiveSecret == "" || !filepath.IsAbs(o.codexAuth.LoginDir) || o.namespace == o.secretNamespace) {
-		return o, errors.New("Codex auth requires leader election, separate private/public namespaces and nonempty named configuration")
+		return o, errors.New("codex auth requires leader election, separate private/public namespaces and nonempty named configuration")
 	}
 	p, err := keeper.ParsePermissions(*perms)
 	if err != nil {

@@ -20,7 +20,7 @@ import (
 
 const CodexLoginVersion = "0.160.1"
 
-var ErrCodexHelper = errors.New("Codex login helper requires a fresh authenticated ceremony")
+var ErrCodexHelper = errors.New("codex login helper requires a fresh authenticated ceremony")
 
 // CodexControl calls the private local socket. Only fixed status and attempt
 // metadata cross it; bearer material remains in staging/the private journal.
@@ -49,7 +49,7 @@ func CodexControl(ctx context.Context, dir, action, attempt string) (CodexContro
 		return CodexControlResponse{}, ErrCodexHelper
 	}
 	switch result.Code {
-	case "Started", "Adopted", "AdoptedPendingPublication", "Cancelled", "Ready", "NeedsLogin", "Unavailable", "InvalidRequest", "Busy":
+	case "Started", "Adopted", "AdoptedPendingPublication", "Cancelled", "Ready", "NeedsLogin", "Unavailable", "InvalidRequest", "Busy", "AccountMismatch":
 	default:
 		return CodexControlResponse{}, ErrCodexHelper
 	}

@@ -39,18 +39,18 @@ func (w *codexWorker) serveControl(ctx context.Context) (*http.Server, error) {
 	path := filepath.Join(w.LoginDir, CodexControlSocket)
 	if fi, err := os.Lstat(path); err == nil {
 		if fi.Mode()&os.ModeSocket == 0 || os.Remove(path) != nil {
-			return nil, errors.New("Codex control socket is unavailable")
+			return nil, errors.New("codex control socket is unavailable")
 		}
 	} else if !os.IsNotExist(err) {
-		return nil, errors.New("Codex control socket is unavailable")
+		return nil, errors.New("codex control socket is unavailable")
 	}
 	l, err := net.Listen("unix", path)
 	if err != nil {
-		return nil, errors.New("Codex control socket is unavailable")
+		return nil, errors.New("codex control socket is unavailable")
 	}
 	if os.Chmod(path, 0o600) != nil {
 		_ = l.Close()
-		return nil, errors.New("Codex control socket is unavailable")
+		return nil, errors.New("codex control socket is unavailable")
 	}
 	s := &http.Server{ReadHeaderTimeout: time.Second, ReadTimeout: 2 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: time.Second, MaxHeaderBytes: 4096, BaseContext: func(net.Listener) context.Context { return ctx }}
 	s.Handler = http.HandlerFunc(func(out http.ResponseWriter, req *http.Request) {
@@ -91,11 +91,11 @@ func (w *codexWorker) serveControl(ctx context.Context) (*http.Server, error) {
 
 func privateCodexDir(path string) error {
 	if !filepath.IsAbs(path) || os.MkdirAll(path, 0o700) != nil {
-		return errors.New("Codex private staging is unavailable")
+		return errors.New("codex private staging is unavailable")
 	}
 	fi, err := os.Lstat(path)
 	if err != nil || !fi.IsDir() || fi.Mode()&os.ModeSymlink != 0 || os.Chmod(path, 0o700) != nil {
-		return errors.New("Codex private staging is unavailable")
+		return errors.New("codex private staging is unavailable")
 	}
 	return nil
 }
@@ -121,7 +121,13 @@ func (w *codexWorker) begin(ctx context.Context) CodexControlResponse {
 	if os.Mkdir(path, 0o700) != nil {
 		return fail
 	}
-	r.Stage, r.Refresh, r.AttemptUID, r.LoginUntil = codexNeedsLogin, secretValue{}, id, w.Clock.Now().Add(codexCeremonyLifetime)
+	// Preserve only a known Ready, never ambiguously refreshed credential. The
+	// durable reservation pauses all refreshes until adoption or explicit cancel.
+	r.ResumeOnCancel = r.Stage == codexReady && !w.halted && !r.Refresh.Empty() && r.Access.Validate(w.Clock.Now()) == nil
+	if !r.ResumeOnCancel {
+		r.Refresh = secretValue{}
+	}
+	r.Stage, r.AttemptUID, r.LoginUntil = codexNeedsLogin, id, w.Clock.Now().Add(codexCeremonyLifetime)
 	r.LoginOwner = w.Identity
 	if w.Journal.save(ctx, d.Secret, r) != nil {
 		_ = os.RemoveAll(path)
@@ -195,8 +201,11 @@ func (w *codexWorker) adopt(ctx context.Context, id string) CodexControlResponse
 		return fail
 	}
 	next, err := nativeCodexLogin(raw, d.Record.Access.Generation+1, w.Clock.Now())
-	if err != nil || (d.Record.Access.AccountID != "" && next.Access.AccountID != d.Record.Access.AccountID) {
+	if err != nil {
 		return fail
+	}
+	if d.Record.Access.AccountID != "" && next.Access.AccountID != d.Record.Access.AccountID {
+		return CodexControlResponse{Code: "AccountMismatch"}
 	}
 	if w.Fence(ctx, codexSaveTimeout+codexSafetyMargin) != nil {
 		return fail
@@ -241,10 +250,23 @@ func (w *codexWorker) cancelLogin(ctx context.Context, id string) CodexControlRe
 		return fail
 	}
 	r := d.Record
-	r.LoginUntil, r.LoginOwner = time.Time{}, ""
+	restore := r.ResumeOnCancel && !r.Refresh.Empty() && r.Access.Validate(w.Clock.Now()) == nil
+	r.LoginUntil, r.LoginOwner, r.AttemptUID, r.ResumeOnCancel = time.Time{}, "", "", false
+	if restore {
+		r.Stage = codexReady
+	} else {
+		r.Refresh = secretValue{}
+	}
+	if w.Fence(ctx, codexSaveTimeout+codexSafetyMargin) != nil {
+		return fail
+	}
 	if w.Journal.save(ctx, d.Secret, r) != nil {
+		_ = w.needsLogin(ctx)
 		return fail
 	}
 	_ = os.RemoveAll(filepath.Join(w.LoginDir, id))
+	if restore {
+		w.halted, w.published = false, 0
+	}
 	return CodexControlResponse{OK: true, Code: "Cancelled"}
 }

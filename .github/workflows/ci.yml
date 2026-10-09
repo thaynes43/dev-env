@@ -241,6 +241,8 @@ jobs:
                    usr/share/licenses/codex/NOTICE; do
             grep -qx "${f}" "${RUNNER_TEMP}/codex-login-files" || exit 1
           done
+          grep -q '^usr/share/licenses/dev-env/go-modules/.*LICEN[CS]E' "${RUNNER_TEMP}/codex-login-files" \
+            || { echo "no keeper Go module license texts in helper image" >&2; exit 1; }
 
   # Agent image inputs include its Dockerfile/tools and Go sources/dependencies.
   # This ~3 GB image builds, loads and smoke-tests only in hosted CI; it never

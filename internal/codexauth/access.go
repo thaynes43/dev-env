@@ -21,7 +21,7 @@ const (
 	LiveKey       = "access.json"
 )
 
-var ErrInvalid = errors.New("Codex access material is invalid")
+var ErrInvalid = errors.New("codex access material is invalid")
 
 // Access contains bearer material. Generic formatting and JSON are redacted;
 // Encode and NativeJSON are the two explicit publication boundaries.
@@ -170,12 +170,22 @@ func Encode(a Access, now time.Time) ([]byte, error) {
 }
 
 func Decode(raw []byte, now time.Time) (Access, error) {
+	a, err := DecodeStored(raw)
+	if err != nil || a.Validate(now) != nil {
+		return Access{}, ErrInvalid
+	}
+	return a, nil
+}
+
+// DecodeStored validates durable material at its original issuance time, so an
+// expired publication still fences lower or changed credential generations.
+func DecodeStored(raw []byte) (Access, error) {
 	var w accessWire
 	if DecodeStrict(raw, &w) != nil || w.Version != 1 {
 		return Access{}, ErrInvalid
 	}
 	a := Access{w.Generation, w.AccountID, w.IDToken, w.AccessToken, w.ExpiresAt, w.LastRefresh}
-	if a.Validate(now) != nil {
+	if a.Validate(a.LastRefresh) != nil {
 		return Access{}, ErrInvalid
 	}
 	return a, nil

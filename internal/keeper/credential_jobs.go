@@ -97,17 +97,17 @@ func (f *LeaseFence) Check(ctx context.Context) error {
 // durable replacement save and safety margin. This does not change PVE fencing.
 func (f *LeaseFence) CheckBudget(ctx context.Context, required time.Duration) error {
 	if ctx.Err() != nil || required <= 0 || f.Clock == nil {
-		return errors.New("Codex leadership budget refused the operation")
+		return errors.New("codex leadership budget refused the operation")
 	}
 	c, cancel := context.WithTimeout(ctx, codexSaveTimeout)
 	defer cancel()
 	var lease coordinationv1.Lease
 	if f.Reader.Get(c, f.Lease, &lease) != nil || lease.Spec.HolderIdentity == nil || *lease.Spec.HolderIdentity != f.Identity || lease.Spec.RenewTime == nil || lease.Spec.LeaseDurationSeconds == nil || *lease.Spec.LeaseDurationSeconds <= 0 {
-		return errors.New("Codex leadership budget refused the operation")
+		return errors.New("codex leadership budget refused the operation")
 	}
 	now := f.Clock.Now()
 	if lease.Spec.RenewTime.After(now.Add(time.Second)) {
-		return errors.New("Codex leadership clock skew refused the operation")
+		return errors.New("codex leadership clock skew refused the operation")
 	}
 	maxAge := f.MaxAge
 	if maxAge <= 0 {
@@ -118,7 +118,7 @@ func (f *LeaseFence) CheckBudget(ctx context.Context, required time.Duration) er
 		deadline = callerDeadline
 	}
 	if !now.Add(required).Before(deadline) {
-		return errors.New("Codex leadership budget refused the operation")
+		return errors.New("codex leadership budget refused the operation")
 	}
 	return nil
 }

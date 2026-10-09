@@ -3,6 +3,7 @@
 # Build/publish in GitHub Actions, never in the shared dev-env pod.
 FROM golang:1.27.1@sha256:162be5298a40ed317005c8339c6de4d10d3eef336d66dc8e9259b03ab9d3a6d2 AS build
 WORKDIR /src
+# renovate: datasource=github-releases depName=google/go-licenses
 ARG GO_LICENSES_VERSION=v2.0.1
 RUN CGO_ENABLED=0 go install "github.com/google/go-licenses/v2@${GO_LICENSES_VERSION}"
 COPY go.mod go.sum ./

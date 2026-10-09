@@ -14,7 +14,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/codexauth"
 )
 
-var ErrCodexAccess = errors.New("Codex authentication requires renewal or a current keeper projection")
+var ErrCodexAccess = errors.New("codex authentication requires renewal or a current keeper projection")
 
 type codexReceipt struct {
 	Generation  uint64 `json:"generation"`

@@ -39,6 +39,11 @@ pairing is a later, separate action: each private enrollment gets its own
 computer link. This initial CLI ceremony does not replace the recorded target
 of authenticated console renewal.
 
+Starting a replacement login pauses refresh while preserving the prior private
+credential. Cancelling may restore a previously confirmed usable login through
+a fenced, confirmed save; it cannot revive an ambiguous refresh. A different
+account is refused before adoption for this first test.
+
 ## Rotation and delivery
 
 The keeper privately stores one bounded versioned record in the named
@@ -53,6 +58,12 @@ margin. Cancel on leadership loss. There are no redirected requests or automatic
 retries after possible dispatch. A successful response must preserve account
 identity and supply valid replacement material; CAS-persist the replacement
 before publishing access tokens. If publication fails, retry publication only.
+
+Replacement material is durably confirmed before a separate save makes it
+`Ready`. An unfinished intent cannot dispatch again. Only the same attempt that
+can prove it never dispatched may restore the known-unused token when its
+pre-dispatch time budget expires. The public projection also uses a bounded
+conditional write: an old publisher cannot replace a newer generation.
 
 A transport, response or persistence ambiguity remains durable and requires a
 fresh login. A new leader cannot replay a possibly consumed refresh token.
@@ -71,6 +82,10 @@ projection/reload latency and the client's five-minute refresh window. The
 ten-day lifetime observed in S-3 is evidence from that login, not a guaranteed
 lifetime for future logins. Expired/stale/unavailable authentication blocks new
 launches and is reported as a concrete renewal need.
+
+Codex readiness is reported separately from the keeper's GitHub service health.
+The first interactive login must not make the keeper's deployment wait forever
+to become ready. Missing Codex auth still blocks new Codex launches.
 
 ## What must pass before Tom tests it
 
