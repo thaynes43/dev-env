@@ -182,7 +182,12 @@ def role_a():
 import json, os, pathlib, sys, time
 if sys.argv[1] == 'prepared' and os.environ.get('TRIAL_HOLD_REF') == '1':
     control = pathlib.Path('/home/dev/repos/.cephfs-trial')
-    (control/'git-held.json').write_text(json.dumps({'actualGitPreparedHook':True}))
+    temporary = control/'git-held.tmp'
+    with temporary.open('w') as stream:
+        json.dump({'actualGitPreparedHook':True},stream)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary,control/'git-held.json')
     end = time.monotonic()+30
     while time.monotonic()<end:
         if (control/'git-continue.json').exists():
@@ -237,7 +242,7 @@ if sys.argv[1] == 'prepared' and os.environ.get('TRIAL_HOLD_REF') == '1':
     assert elapsed <= 30, 'bounded source write phase exceeded 30s'
     flag('inputs', {'count':256,'bytes':sum(p.stat().st_size for p in inputs.iterdir()),
                     'sourceWriteSeconds':elapsed})
-    wait('build-done')
+    wait('build-done',timeout=40)
     assert wip(TASK_A) == wait('wip-a')
     assert wip(TASK_B) == wait('wip-b')
     assert common(TASK_A) == common(TASK_B) == str(REF/'.git')
