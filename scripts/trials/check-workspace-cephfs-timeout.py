@@ -22,7 +22,7 @@ def namespace(fake_run, clock, budget=145):
     return {'subprocess':SimpleNamespace(run=fake_run, TimeoutExpired=subprocess.TimeoutExpired),
             'time':SimpleNamespace(monotonic=lambda:next(clock)), 'remaining':lambda:budget,
             'ENV':{}, 'MEASUREMENTS':[], 'PROCESSES':[], 'STARTUP_METADATA':{},
-            'RUN_ID':'synthetic', 'ROLE':'b', 'START':100, 'DEADLINE':245,
+            'RUN_ID':'synthetic', 'ROLE':'b', 'START':100, 'DEADLINE':100+budget,
             'os':SimpleNamespace(environ={'TRIAL_POD_UID':'synthetic-pod', 'TRIAL_NODE':'worker'}),
             'json':json}
 
@@ -58,6 +58,7 @@ def timeout_payload(stdout, stderr, budget=145):
     assert record['argv'] == argv and record['expectedExit'] == 73 and record['exit'] is None
     assert record['errorType'] == 'TimeoutExpired' and record['effectiveTimeoutSeconds'] == cap
     assert record['seconds'] == cap and payload['elapsedSeconds'] == cap
+    assert payload['remainingGlobalBudgetSeconds'] == max(0, budget-cap)
     assert isinstance(record['stdout'], str) and isinstance(record['stderr'], str)
     assert len(record['stdout']) <= 400 and len(record['stderr']) <= 400
     return record
