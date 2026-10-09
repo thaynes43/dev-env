@@ -40,6 +40,8 @@ func stoppedWorkspaceFixture() workspaceStopFixture {
 	s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
 	s.Status.PodName = s.Name
 	s.Status.SharedPrivateHomeUID = "home-1"
+	s.Status.SharedAdmission = &v1alpha1.SharedAdmissionStatus{Version: 1, SessionUID: string(s.UID), State: sharedStarted}
+	s.Finalizers = []string{Finalizer}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: s.Name, Namespace: s.Namespace, UID: "executor-1", ResourceVersion: "10", OwnerReferences: []metav1.OwnerReference{ownerRef(s)}},
 		Spec: corev1.PodSpec{NodeName: "worker-a", RestartPolicy: corev1.RestartPolicyNever,
 			Containers: []corev1.Container{{Name: ContainerName}}, InitContainers: []corev1.Container{{Name: "init"}},

@@ -176,6 +176,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// The finalizer goes on before the session has anything to lose, so no
 	// pod or volume of it ever exists without it (D-45).
 	if s.DeletionTimestamp.IsZero() && !controllerutil.ContainsFinalizer(&s, Finalizer) {
+		if s.Spec.Workspace != nil {
+			if err := r.initializeSharedAdmission(ctx, &s); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		orig := s.DeepCopy()
 		controllerutil.AddFinalizer(&s, Finalizer)
 		if err := r.Client.Patch(ctx, &s, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})); err != nil {
@@ -821,6 +826,12 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 			obs.buildErr = err
 			return nil
 		}
+		if s.Spec.Workspace != nil {
+			if err := r.startSharedAdmission(ctx, s); err != nil {
+				obs.removalBlocked = err
+				return nil
+			}
+		}
 		if err := r.create(ctx, "volume", claim); err != nil {
 			return err
 		}
@@ -831,6 +842,10 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 		return nil
 	}
 	if s.Spec.Workspace != nil {
+		if err := r.startSharedAdmission(ctx, s); err != nil {
+			obs.removalBlocked = err
+			return nil
+		}
 		if err := r.bindSharedPrivateHome(ctx, s); err != nil {
 			obs.removalBlocked = err
 			return nil

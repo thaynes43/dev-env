@@ -100,7 +100,7 @@ func (r *Reconciler) bindSharedPrivateHome(ctx context.Context, s *v1alpha1.Agen
 	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &fresh); err != nil {
 		return err
 	}
-	if fresh.UID != s.UID || fresh.Generation != s.Generation || fresh.Spec.Workspace == nil || wantsPodGone(&fresh) {
+	if fresh.UID != s.UID || fresh.Generation != s.Generation || fresh.Spec.Workspace == nil || wantsPodGone(&fresh) || !sharedAdmissionIs(&fresh, sharedStarted) {
 		return errors.New("shared Session changed before private home admission")
 	}
 	home, err := r.workspacePrivateHome(ctx, &fresh, types.UID(fresh.Status.SharedPrivateHomeUID))
@@ -139,7 +139,7 @@ func (r *Reconciler) bindSharedPrivateHome(ctx context.Context, s *v1alpha1.Agen
 func sharedRetentionProof(s *v1alpha1.AgentSession) error {
 	rec := s.Status.Rescue
 	if s.Spec.Workspace == nil || s.Spec.Mode != v1alpha1.ModeTask || s.DeletionTimestamp.IsZero() || s.Status.ArchivedAt != nil ||
-		!controllerutil.ContainsFinalizer(s, Finalizer) || !sharedRescued(s) || rec.At == nil || rec.At.IsZero() || !protocol.ValidRescueName(rec.Stamp) || rec.PodUID == rec.SourcePodUID {
+		!controllerutil.ContainsFinalizer(s, Finalizer) || !sharedAdmissionIs(s, sharedStarted) || !sharedRescued(s) || rec.At == nil || rec.At.IsZero() || !protocol.ValidRescueName(rec.Stamp) || rec.PodUID == rec.SourcePodUID {
 		return errors.New("shared reap requires a durable current-generation task rescue and deleting Session")
 	}
 	p := rec.SharedProof
@@ -249,8 +249,17 @@ func (r *Reconciler) retainSharedPrivateHome(ctx context.Context, s *v1alpha1.Ag
 	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &fresh); err != nil {
 		return block(err)
 	}
-	if fresh.UID != s.UID || fresh.Generation != s.Generation || !apiequality.Semantic.DeepEqual(fresh.Status.Rescue, s.Status.Rescue) || fresh.Status.SharedPrivateHomeUID != s.Status.SharedPrivateHomeUID {
+	if fresh.UID != s.UID || fresh.Generation != s.Generation || !apiequality.Semantic.DeepEqual(fresh.Status.Rescue, s.Status.Rescue) ||
+		!apiequality.Semantic.DeepEqual(fresh.Status.SharedAdmission, s.Status.SharedAdmission) || fresh.Status.SharedPrivateHomeUID != s.Status.SharedPrivateHomeUID {
 		return block(errors.New("shared Session changed before retention"))
+	}
+	if sharedAdmissionIs(&fresh, sharedNeverStarted) {
+		if err := r.releaseNeverStartedSharedSession(ctx, &fresh); err != nil {
+			return block(err)
+		}
+		*s = fresh
+		obs.removalBlocked = nil
+		return ctrl.Result{}, nil
 	}
 	if err := sharedRetentionProof(&fresh); err != nil {
 		return block(err)

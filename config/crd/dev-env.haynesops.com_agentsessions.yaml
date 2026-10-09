@@ -759,6 +759,38 @@ spec:
                 description: Revision is the template revision the pod runs (DESIGN-001
                   5.2).
                 type: string
+              sharedAdmission:
+                description: |-
+                  SharedAdmission records whether this exact fresh shared lifecycle has
+                  attempted a resource write. Absence is unknown, never NeverStarted.
+                properties:
+                  sessionUID:
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                    x-kubernetes-validations:
+                    - message: admission Session UID is immutable
+                      rule: self == oldSelf
+                  state:
+                    enum:
+                    - NeverStarted
+                    - Started
+                    type: string
+                    x-kubernetes-validations:
+                    - message: Started admission cannot be reversed
+                      rule: oldSelf != 'Started' || self == 'Started'
+                  version:
+                    enum:
+                    - 1
+                    type: integer
+                    x-kubernetes-validations:
+                    - message: admission version is immutable
+                      rule: self == oldSelf
+                required:
+                - sessionUID
+                - state
+                - version
+                type: object
               sharedPrivateHomeUID:
                 description: |-
                   SharedPrivateHomeUID is bound durably before the first shared executor
@@ -793,6 +825,9 @@ spec:
                     type: integer
                 type: object
             type: object
+            x-kubernetes-validations:
+            - message: shared admission evidence cannot be removed
+              rule: '!has(oldSelf.sharedAdmission) || has(self.sharedAdmission)'
         required:
         - spec
         type: object
@@ -803,6 +838,9 @@ spec:
         - message: 'metadata.name must be a DNS label (lowercase letters, digits and
             ''-'', no dots): it is the pod''s hostname'
           rule: self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+        - message: recorded shared admission cannot be erased with status
+          rule: '!has(oldSelf.status) || !has(oldSelf.status.sharedAdmission) || (has(self.status)
+            && has(self.status.sharedAdmission))'
     served: true
     storage: true
     subresources:

@@ -20,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -601,6 +602,48 @@ func TestStatusSubresource(t *testing.T) {
 			c.mutate(&got.Status)
 			wantInvalid(t, k8s.Status().Update(ctx(t), got), c.want)
 		})
+	}
+}
+
+func TestSharedAdmissionEvidenceIsDurableAndOneWay(t *testing.T) {
+	s := taskSession()
+	s.Spec.Workspace = &v1alpha1.WorkspaceSpec{ID: "projects-v2"}
+	if err := k8s.Create(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	s.Status.SharedAdmission = &v1alpha1.SharedAdmissionStatus{Version: 1, SessionUID: string(s.UID), State: "NeverStarted"}
+	if err := k8s.Status().Update(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	got := get(t, s)
+	if got.Status.SharedAdmission == nil || *got.Status.SharedAdmission != *s.Status.SharedAdmission {
+		t.Fatal("admission evidence was pruned")
+	}
+	got.Status.SharedAdmission.State = "Started"
+	if err := k8s.Status().Update(ctx(t), got); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*v1alpha1.AgentSessionStatus)
+	}{
+		{"remove marker", func(st *v1alpha1.AgentSessionStatus) { st.SharedAdmission = nil }},
+		{"reverse Started", func(st *v1alpha1.AgentSessionStatus) { st.SharedAdmission.State = "NeverStarted" }},
+		{"change Session UID", func(st *v1alpha1.AgentSessionStatus) { st.SharedAdmission.SessionUID = "other-session" }},
+		{"unknown version", func(st *v1alpha1.AgentSessionStatus) { st.SharedAdmission.Version = 2 }},
+		{"unknown state", func(st *v1alpha1.AgentSessionStatus) { st.SharedAdmission.State = "EmptyHome" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := get(t, s)
+			tc.edit(&bad.Status)
+			if err := k8s.Status().Update(ctx(t), bad); !apierrors.IsInvalid(err) {
+				t.Fatalf("invalid admission transition accepted: %v", err)
+			}
+		})
+	}
+	got = get(t, s)
+	if err := k8s.Status().Patch(ctx(t), got, client.RawPatch(types.JSONPatchType, []byte(`[{"op":"remove","path":"/status"}]`))); !apierrors.IsInvalid(err) {
+		t.Fatalf("dropping the entire status erased recorded admission: %v", err)
 	}
 }
 

@@ -237,6 +237,9 @@ func (r *Reconciler) reconcileSharedWorkspace(ctx context.Context, s *v1alpha1.A
 		if _, err := r.workspacePrivateHome(ctx, s, home.UID); err != nil {
 			return block(err)
 		}
+		if err := r.startSharedAdmission(ctx, s); err != nil {
+			return block(err)
+		}
 		if err := r.create(ctx, "shared hold Pod", pod); err != nil {
 			return retry, err
 		}

@@ -334,6 +334,7 @@ type Lifecycle struct {
 // AgentSessionStatus is what the operator and agentd observed. Reconcile is
 // level-based (DESIGN-001 5.1): everything a fresh operator needs is here, not
 // in its memory.
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.sharedAdmission) || has(self.sharedAdmission)",message="shared admission evidence cannot be removed"
 type AgentSessionStatus struct {
 	// Phase is the lifecycle state.
 	// +optional
@@ -351,6 +352,11 @@ type AgentSessionStatus struct {
 	// PodName is the session's pod. It equals the session's name.
 	// +optional
 	PodName string `json:"podName,omitempty"`
+
+	// SharedAdmission records whether this exact fresh shared lifecycle has
+	// attempted a resource write. Absence is unknown, never NeverStarted.
+	// +optional
+	SharedAdmission *SharedAdmissionStatus `json:"sharedAdmission,omitempty"`
 
 	// SharedPrivateHomeUID is bound durably before the first shared executor
 	// is admitted. A replacement claim is never adopted into this lifecycle.
@@ -406,6 +412,23 @@ type AgentSessionStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// SharedAdmissionStatus is initialized only before D-45 adds the finalizer.
+// Started is recorded and confirmed before any shared PVC or Pod write.
+type SharedAdmissionStatus struct {
+	// +kubebuilder:validation:Enum=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="admission version is immutable"
+	Version int `json:"version"`
+
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="admission Session UID is immutable"
+	SessionUID string `json:"sessionUID"`
+
+	// +kubebuilder:validation:Enum=NeverStarted;Started
+	// +kubebuilder:validation:XValidation:rule="oldSelf != 'Started' || self == 'Started'",message="Started admission cannot be reversed"
+	State string `json:"state"`
 }
 
 // AgentStatus is the agent's own state. The /v1 API copies it from agentd's
@@ -698,6 +721,7 @@ type RescuedRef struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 63",message="metadata.name must be at most 63 characters: it is the pod's hostname"
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')",message="metadata.name must be a DNS label (lowercase letters, digits and '-', no dots): it is the pod's hostname"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.sharedAdmission) || (has(self.status) && has(self.status.sharedAdmission))",message="recorded shared admission cannot be erased with status"
 type AgentSession struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
