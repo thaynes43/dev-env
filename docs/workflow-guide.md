@@ -388,7 +388,9 @@ failure; preserving unfinished work is different from selecting fresh source.
 A verified rescue restore can intentionally start from its imported historical
 branch offline. A saved conversation with both its worktree and branch missing
 must be restored rather than silently paired with a new branch from today's code.
-See D-73 in the design for the implemented boundary.
+Existing-workspace branch changes or detached HEAD also warn rather than block
+resume; deliberate checkouts and in-progress rebase/bisect state remain intact.
+A foreign clone/path or broken HEAD still fails. See D-73 for the boundary.
 
 Folder layout is only discovery. The remaining managed v1/Codex launch contract
 needs these checks:

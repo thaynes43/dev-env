@@ -2395,10 +2395,11 @@ recovery:
   selected base to a commit SHA before `worktree add`; a moving remote ref cannot
   change that start commit between resolution and creation.
 - Existing worktrees are reused only after their Git common directory, valid
-  HEAD and path match the intended session. The expected branch or a verified
-  in-progress rebase/bisect belonging to it establishes branch identity. Refuse
-  unrelated branches or detached checkouts without changing their files; preserve
-  in-progress Git operations and never reset/rebase WIP on resume.
+  commit HEAD and path match the intended session. A different current branch
+  or detached HEAD is reported as a warning, not overwritten or rejected:
+  deliberate checkouts, rebase and bisect are legitimate task state. Refuse a
+  foreign clone/path or broken HEAD without changing files. Preserve in-progress
+  Git operations and never reset/rebase WIP on resume.
 - A surviving session branch can recreate its worktree at its existing tip.
   Failed refresh is a warning in these recovery paths; neither the configured
   old base nor a repeat rescue import overrides retained work.
@@ -4631,4 +4632,4 @@ blocks only the step it names.
 | D-70 | Effective parity includes accepted Headlamp cluster-admin and GitOps paths. The five proposed extra Kubernetes categories are existing reachable powers; direct grants, expiry and attribution improve the mechanism. Q-18's earlier prompt is withdrawn, with no approval route or blanket direct admin grant selected. | 6.12 |
 | D-71 | Tom's target: replace Headlamp with guarded access preserving accepted v1 tasks and owner rules; prove parity and guardrails, migrate callers, then retire Headlamp through GitOps. No approval implementation or blanket standing admin grant is selected. | 6.12 |
 | D-72 | Reuse existing `HaynesKube/dev-env` for the fresh keeper CA. Current mappings select explicit fields; a separate keeper-only Secret will select the CA fields. Q-19 storage is owner-confirmed complete; projection, node trust and acceptance remain pending. | 6.12 |
-| D-73 | New remote-based branch creation requires a successful clone/refresh and uses a pinned commit. Verify existing worktree identity, preserve WIP/branch recovery, fail when saved-launch workspace and branch are lost, and separate verified historical rescue restore from current remote source. Broader project/client integration remains plan 11. | 6.6 |
+| D-73 | New remote-based branch creation requires a successful clone/refresh and uses a pinned commit. Verify existing clone/path/HEAD identity, warn on changed branch or detached state, preserve WIP/branch recovery, fail when saved-launch workspace and branch are lost, and separate verified historical rescue restore from current remote source. Broader project/client integration remains plan 11. | 6.6 |

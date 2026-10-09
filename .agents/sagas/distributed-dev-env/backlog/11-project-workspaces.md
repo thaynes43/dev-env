@@ -84,8 +84,9 @@ session homes retain the accepted storage/isolation architecture (D-15/D-22).
       the recorded base identity matches the commit used for worktree creation.
 - [ ] Phone/app/CLI/native-delegation entry points each use preflight or are
       explicitly coordinator-only; bypass paths are not advertised as protected.
-- [ ] Offline resume preserves staged, unstaged and untracked work; wrong
-      repo/branch/foreign directories are refused without modification.
+- [ ] Offline resume preserves staged, unstaged and untracked work; foreign
+      repo/path or broken HEAD is refused without modification. Changed branch
+      and detached/in-progress Git state warn and remain intact.
 - [ ] A saved chat with both branch and worktree missing does not resume against
       a freshly manufactured branch. Verified rescue/restore remains usable.
 - [ ] Main advancing after task creation produces a visible integration check;
