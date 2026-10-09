@@ -24,6 +24,43 @@ func launchFixture(t *testing.T) (Settings, protocol.Session, protocol.Workspace
 	return s, sess, ws
 }
 
+func TestSharedLaunchAndResumeUseOwnedTaskGuard(t *testing.T) {
+	for _, mode := range []string{protocol.ModeTask, protocol.ModeLocal} {
+		t.Run(mode, func(t *testing.T) {
+			s, sess, ws := launchFixture(t)
+			sess.Mode = mode
+			sess.Workspace = &protocol.WorkspaceBinding{ID: "projects-v2", SessionUID: "session-1"}
+			first, err := BuildLaunch(s, sess, ws, "first", rescueNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resume, err := BuildResume(s, sess, ws, first, "resume", rescueNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, launch := range []Launch{first, resume} {
+				argv := strings.Join(launch.Argv, " ")
+				if strings.Contains(argv, "If the task needs extra") || strings.Contains(argv, "If the work needs extra") {
+					t.Fatal("shared guard allows unmanaged extra worktrees")
+				}
+				for _, text := range []string{"owns only the git worktree " + ws.Worktree + " and branch " + ws.Branch, "managed stop-and-preserve", "Preserve every other task's files"} {
+					if !strings.Contains(argv, text) {
+						t.Fatalf("guard lacks %q", text)
+					}
+				}
+			}
+			sess.Workspace = nil
+			private, err := BuildLaunch(s, sess, ws, "private", rescueNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(strings.Join(private.Argv, " "), "git worktrees, create them under") {
+				t.Fatal("private guard changed")
+			}
+		})
+	}
+}
+
 func TestBuildLaunchTask(t *testing.T) {
 	s, sess, ws := launchFixture(t)
 	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)

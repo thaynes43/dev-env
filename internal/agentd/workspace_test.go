@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -163,7 +164,7 @@ func TestWorkspaceOwnerReceiptRequiresExplicitAdmissionFields(t *testing.T) {
 	}
 }
 
-func TestSharedRescueSnapshotsOnlyOwnedTaskAndRetainsDaemonProtection(t *testing.T) {
+func TestSharedRescueSnapshotsOnlyOwnedTaskAndRefusesBusyWriter(t *testing.T) {
 	g := newGitFixture(t, "demo")
 	s, r := g.settings(t)
 	s, sess := sharedSettings(t, s, "task-a")
@@ -190,6 +191,10 @@ func TestSharedRescueSnapshotsOnlyOwnedTaskAndRetainsDaemonProtection(t *testing
 	before := gitRun(t, g.env, ws.Worktree, "status", "--porcelain")
 	rig := rescueRig{g: g, s: s, r: r, ws: ws}
 	rig.sharedVolume(t)
+	if _, err := Rescue(context.Background(), r, s, sess.Name, rescueNow, RescueOptions{StopAgent: true}); err == nil {
+		t.Fatal("busy writer lock bypassed without holder proof")
+	}
+	w.unlock()
 	rep, err := Rescue(context.Background(), r, s, sess.Name, rescueNow, RescueOptions{StopAgent: true})
 	if err != nil {
 		t.Fatal(err)
@@ -215,9 +220,6 @@ func TestSharedRescueSnapshotsOnlyOwnedTaskAndRetainsDaemonProtection(t *testing
 	if stopped.State != "stopped" || stopped.StoppedAt.IsZero() {
 		t.Fatalf("no durable receipt %+v", stopped)
 	}
-	if _, err := workspaceLock(s, "writer-"+sess.Name); err == nil {
-		t.Fatal("rescue released the daemon's writer lock")
-	}
 	if err := admitWorkspaceLaunch(s, sess, &Launch{}, rescueNow); err == nil {
 		t.Fatal("stopped task launched after rescue")
 	}
@@ -236,6 +238,7 @@ func TestSharedLaunchedRescueRefusesAndPreservesReceipt(t *testing.T) {
 	if err := admitWorkspaceLaunch(s, sess, &Launch{}, rescueNow); err != nil {
 		t.Fatal(err)
 	}
+	w.unlock()
 	before, err := os.ReadFile(s.ownerPath(sess.Name))
 	if err != nil {
 		t.Fatal(err)
@@ -250,6 +253,24 @@ func TestSharedLaunchedRescueRefusesAndPreservesReceipt(t *testing.T) {
 	after, err := os.ReadFile(s.ownerPath(sess.Name))
 	if err != nil || string(before) != string(after) {
 		t.Fatal("refused rescue changed durable ownership")
+	}
+}
+
+func TestWorkspaceLockRefusesNonregularFile(t *testing.T) {
+	g := newGitFixture(t, "demo")
+	s, _ := g.settings(t)
+	s, _ = sharedSettings(t, s, "task-a")
+	dir := filepath.Join(s.workspaceDir(), "locks")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "writer-task-a.lock")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if unlock, err := workspaceLock(s, "writer-task-a"); err == nil {
+		unlock()
+		t.Fatal("FIFO accepted as a lock file")
 	}
 }
 

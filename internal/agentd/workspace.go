@@ -216,9 +216,17 @@ func workspaceLock(s Settings, name string) (func(), error) {
 		return nil, err
 	}
 	path := filepath.Join(dir, name+".lock")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
 	if err != nil {
 		return nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() {
+		_ = f.Close()
+		if err != nil {
+			return nil, err
+		}
+		return nil, errors.New("workspace lock is not a regular file")
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()

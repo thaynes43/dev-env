@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -36,15 +35,13 @@ func rescueSharedTask(ctx context.Context, r Runner, s Settings, task string, no
 	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
 		return protocol.RescueReport{}, err
 	}
-	// If the daemon still holds this task's writer lock it protects rescue
-	// throughout its Git writes. Otherwise rescue holds the lock itself.
+	// Rescue must acquire writer protection itself. A busy lock does not
+	// identify its holder and cannot prove the daemon is protecting rescue.
 	writer, lockErr := workspaceLock(s, "writer-"+task)
-	if lockErr == nil {
-		defer writer()
-	}
-	if lockErr != nil && !errors.Is(lockErr, syscall.EWOULDBLOCK) {
+	if lockErr != nil {
 		return protocol.RescueReport{}, lockErr
 	}
+	defer writer()
 	unlock, err := workspaceAdminLock(s, sess.Repo)
 	if err != nil {
 		return protocol.RescueReport{}, err
