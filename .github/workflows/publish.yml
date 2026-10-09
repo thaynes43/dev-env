@@ -1,8 +1,8 @@
 name: Publish
 
-# Publishes the operator image, ghcr.io/thaynes43/dev-env-operator, from main and
-# signs it. (B3, .agents/sagas/distributed-dev-env/KICKOFF.md section 3.) The agent
-# image has its own workflow, publish-agent.yml, which runs from a release tag (B5, D-53).
+# Publishes and signs ghcr.io/thaynes43/dev-env-operator and
+# ghcr.io/thaynes43/dev-env-codex-login from main. The agent image has its own
+# workflow, publish-agent.yml, which runs from a release tag (B5, D-53).
 #
 # Tags: only sha-<short>. Never `latest`, and an existing tag is never pushed again.
 # A run for a commit whose tag already exists (a manual re-run) skips the build, so
@@ -41,9 +41,9 @@ on:
   push:
     branches:
       - main
-    # Everything the operator image build reads (images/operator/Dockerfile runs
-    # `make build` on a COPY of the whole repo). Add a path here when a new input
-    # appears, for example an embedded directory.
+    # Inputs for both operator and Codex login helper images; each Dockerfile
+    # builds Go binaries from a COPY of the whole repo. Add a path here when a
+    # new input appears, for example an embedded directory.
     paths:
       - 'images/operator/**'
       - 'images/codex-login/**'
@@ -155,7 +155,7 @@ jobs:
 
       # provenance and sbom are off so the pushed digest is one plain image manifest,
       # as v1's `docker push` produced, and not an index with attestation manifests.
-      - name: Build and push the operator image
+      - name: Build and push ${{ matrix.name }} image
         id: build
         if: steps.existing.outputs.exists != 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
