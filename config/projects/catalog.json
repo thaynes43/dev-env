@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "repositories": {
+    "dev-env": { "github": "thaynes43/dev-env", "defaultBranch": "main" },
+    "sigo-alumni": { "github": "thaynes43/sigo-alumni", "defaultBranch": "main" },
+    "sigoalumni-org": { "github": "thaynes43/sigoalumni-org", "defaultBranch": "main" },
+    "sigmaphiomicron-com": { "github": "thaynes43/sigmaphiomicron-com", "defaultBranch": "main" }
+  },
+  "projects": {
+    "dev-env": {
+      "repositories": [{ "name": "dev-env" }],
+      "rules": ""
+    },
+    "sigo-alumni": {
+      "repositories": [
+        { "name": "sigo-alumni" },
+        { "name": "sigoalumni-org" },
+        { "name": "sigmaphiomicron-com" }
+      ],
+      "rules": ""
+    }
+  }
+}

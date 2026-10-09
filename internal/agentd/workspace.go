@@ -106,6 +106,15 @@ func workspacePreflight(s Settings, sess protocol.Session) error {
 	if err := sess.Validate(); err != nil {
 		return err
 	}
+	return workspaceStoragePreflight(s)
+}
+
+// workspaceStoragePreflight is also the entry guard for explicitly enabled
+// catalog synchronization, which has no task session or writer to impersonate.
+func workspaceStoragePreflight(s Settings) error {
+	if s.WorkspaceID == "" || s.PodUID == "" {
+		return errors.New("shared storage requires an operator workspace binding and Pod UID")
+	}
 	for _, p := range []string{s.Home, s.workspaceDir(), s.ReposDir(), filepath.Join(s.Home, "codex"), s.WorkDir()} {
 		if err := noSymlinkComponents(p); err != nil {
 			return fmt.Errorf("workspace path %s: %w", p, err)
