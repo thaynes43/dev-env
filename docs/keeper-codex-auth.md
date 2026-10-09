@@ -92,6 +92,15 @@ ten-day lifetime observed in S-3 is evidence from that login, not a guaranteed
 lifetime for future logins. Expired/stale/unavailable authentication blocks new
 launches and is reported as a concrete renewal need.
 
+For immediate acceptance, an authenticated `refresh-once` control action uses
+the same serialized, fenced and durable refresh path, bypassing only its due-time
+check. The caller supplies the observed positive generation. A changed generation,
+live login reservation, unresolved intent or unavailable leadership budget
+refuses the action. Repeating that generation cannot dispatch another refresh
+after it advances. One action sends at most one POST; lost responses do not
+authorize replay. This verifies propagation to running clients without changing
+token expiry or waiting for the normal early-refresh schedule.
+
 Codex readiness is reported separately from the keeper's GitHub service health.
 The first interactive login must not make the keeper's deployment wait forever
 to become ready. Missing Codex auth still blocks new Codex launches.

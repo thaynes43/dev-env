@@ -32,13 +32,23 @@ func codexLoginCommand(args []string, in, out *os.File) int {
 	fs.SetOutput(io.Discard)
 	dir := fs.String("codex-login-dir", keeper.DefaultCodexLoginDir, "keeper/helper private staging")
 	method := fs.String("method", "device", "pinned native ceremony: device or browser")
+	expected := fs.Uint64("expected-generation", 0, "one confirmed keeper generation")
 	if fs.Parse(args[1:]) == nil && fs.NArg() == 0 && len(args) > 0 {
 		switch args[0] {
 		case "codex-auth-status":
-			if r, err := keeper.CodexControl(ctx, *dir, "status", ""); err == nil {
+			if *expected == 0 {
+				if r, err := keeper.CodexControl(ctx, *dir, "status", ""); err == nil {
+					result = r
+				}
+			}
+		case "codex-auth-refresh-once":
+			if r, err := keeper.CodexRefreshOnce(ctx, *dir, *expected); err == nil {
 				result = r
 			}
 		case "codex-login":
+			if *expected != 0 {
+				break
+			}
 			_, ierr := unix.IoctlGetTermios(int(in.Fd()), unix.TCGETS)
 			_, oerr := unix.IoctlGetTermios(int(out.Fd()), unix.TCGETS)
 			if ierr == nil && oerr == nil {

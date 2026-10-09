@@ -38,7 +38,7 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "validate-ssh-ca" {
 		os.Exit(validateSSHCA(os.Args[2:], os.Stdout))
 	}
-	if len(os.Args) > 1 && (os.Args[1] == "codex-login" || os.Args[1] == "codex-auth-status" || os.Args[1] == "codex-login-idle") {
+	if len(os.Args) > 1 && (os.Args[1] == "codex-login" || os.Args[1] == "codex-auth-status" || os.Args[1] == "codex-auth-refresh-once" || os.Args[1] == "codex-login-idle") {
 		os.Exit(codexLoginCommand(os.Args[1:], os.Stdin, os.Stdout))
 	}
 	if len(os.Args) == 2 && (os.Args[1] == "version" || os.Args[1] == "--version") {

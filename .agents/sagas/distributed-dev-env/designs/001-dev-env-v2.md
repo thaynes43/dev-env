@@ -2133,6 +2133,15 @@ preserves the target console renewal ruling. Exact helper, journal, control and
 acceptance boundaries are recorded in
 [the authentication workflow](../../../../docs/keeper-codex-auth.md).
 
+Immediate real-refresh acceptance uses a private authenticated `refresh-once`
+action with the caller's expected positive generation. It bypasses only the
+normal due-time check and uses the same serialized intent, Lease budget,
+one-shot transport, confirmed replacement and publication transitions. A changed
+generation, live login reservation, unresolved intent or halted worker refuses;
+duplicate requests cannot rotate an already advanced generation. Expiry and the
+automatic schedule stay unchanged. Source tests and actual running-client
+propagation are required before calling refresh accepted.
+
 **What we know** (pinned Codex 0.160.1; observed S-3 results):
 
 - `auth.json` refreshes with a rotating token. The binary carries the error "Your
