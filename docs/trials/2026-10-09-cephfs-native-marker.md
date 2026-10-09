@@ -69,10 +69,13 @@ remain. The feature defaults off.
 
 ## Before any later execution
 
-Review current-head CI and advisory findings, then explicitly publish from
-reviewed main and verify the signed immutable diagnostic digest. Existing
-unsigned or uncertain tags cannot acquire provenance through a retry. Publication
-does not launch a trial.
+Review current-head CI and advisory findings before merging. A main-branch push
+that changes a declared fixture input publishes a separate immutable diagnostic
+tag for that exact commit. Verify its signed digest before selecting it for any
+execution. Manual dispatch remains available to an authorized operator; the
+dev bot's token cannot dispatch Actions workflows, so the reviewed main-branch
+change supplies the publication path. Existing unsigned or uncertain tags cannot
+acquire provenance through a retry. Publication does not launch a trial.
 
 A later execution review still requires the exact helper/image, decoded Jobs,
 fresh accepted telemetry baseline, required series, fixed household sampling

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Finite source-recipe mocks only, nice19: no network, child or native compile."""
 import hashlib
+import fnmatch
 import importlib.util
 import io
 import json
@@ -24,6 +25,53 @@ build_spec.loader.exec_module(build_module)
 
 
 class SourceRecipeChecks(unittest.TestCase):
+    def test_publication_events_require_main_and_relevant_source_paths(self):
+        workflow=(recipe.parents[2]/'.github/workflows/publish-git-wait.yml').read_text()
+        event_block=re.search(r'^on:\n(.*?)^permissions:',workflow,re.MULTILINE|re.DOTALL).group(1)
+        self.assertEqual(re.findall(r'^  ([a-z_]+):$',event_block,re.MULTILINE),
+                         ['push','workflow_dispatch'])
+        push_block=event_block.split('  push:\n',1)[1].split('  workflow_dispatch:',1)[0]
+        self.assertEqual(re.findall(r'^    ([a-z_]+):$',push_block,re.MULTILINE),
+                         ['branches','paths'])
+        branch_block,path_block=push_block.split('    paths:\n',1)
+        branches=re.findall(r"^      - '([^']+)'$",branch_block,re.MULTILINE)
+        paths=re.findall(r"^      - '([^']+)'$",path_block,re.MULTILINE)
+        self.assertEqual(branches,['main'])
+        self.assertEqual(set(paths),{'images/git-wait/**','images/THIRD_PARTY.md',
+                                    'scripts/trials/**','.github/workflows/publish-git-wait.yml',
+                                    '.dockerignore'})
+        self.assertEqual(len(paths),5)
+        self.assertIn("\n    if: github.ref == 'refs/heads/main'\n",workflow)
+
+        # These fixed cases model the documented AND of branch/path filters plus
+        # the unchanged job ref guard. No network, dispatch, build or runtime.
+        def eligible(event,ref,changed):
+            if ref!='refs/heads/main':
+                return False
+            if event=='workflow_dispatch':
+                return True
+            return event=='push' and any(fnmatch.fnmatchcase(path,pattern)
+                                         for path in changed for pattern in paths)
+
+        cases=[
+            ('push','refs/heads/main',['images/git-wait/marker.c'],True),
+            ('push','refs/heads/main',['images/THIRD_PARTY.md'],True),
+            ('push','refs/heads/main',['scripts/trials/workspace-cephfs-trial.py'],True),
+            ('push','refs/heads/main',['.github/workflows/publish-git-wait.yml'],True),
+            ('push','refs/heads/main',['.dockerignore'],True),
+            ('push','refs/heads/main',['internal/agentd/daemon.go'],False),
+            ('push','refs/heads/main',['docs/trials/plan.md'],False),
+            ('push','refs/heads/main',[],False),
+            ('push','refs/heads/agent/fixture',['images/git-wait/marker.c'],False),
+            ('push','refs/tags/v2.9.1',['images/git-wait/marker.c'],False),
+            ('workflow_dispatch','refs/heads/main',[],True),
+            ('workflow_dispatch','refs/heads/agent/fixture',[],False),
+            ('pull_request','refs/heads/main',['images/git-wait/marker.c'],False),
+        ]
+        for event,ref,changed,expected in cases:
+            with self.subTest(event=event,ref=ref,changed=changed):
+                self.assertEqual(eligible(event,ref,changed),expected)
+
     def test_actual_docker_base_arg_binds_both_stages_and_workflows_never_override(self):
         dockerfile=recipe.with_name('Dockerfile').read_text()
         defaults=re.findall(r'^ARG BASE_IMAGE=(.*)$',dockerfile,re.MULTILINE)

@@ -1,8 +1,17 @@
 name: Publish Git wait fixture
 
-# Explicit dispatch from reviewed main only. Publication never launches a trial.
+# Relevant reviewed-main pushes or optional dispatch; never launches a trial.
 # Existing dev-env package, separate immutable diagnostic tag; no v1/release tag.
 on:
+  push:
+    branches:
+      - 'main'
+    paths:
+      - 'images/git-wait/**'
+      - 'images/THIRD_PARTY.md'
+      - 'scripts/trials/**'
+      - '.github/workflows/publish-git-wait.yml'
+      - '.dockerignore'
   workflow_dispatch:
 
 permissions:
