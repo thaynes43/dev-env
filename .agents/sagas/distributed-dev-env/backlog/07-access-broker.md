@@ -238,7 +238,9 @@ human approval, credential grants or the break-glass half of S-12.
   workbench, if plan 01 did not already ship it.
 - A human adapter only after a concrete use case, owner route choice and R-03 acceptance;
   no Pushover/web approval ingress or credential.
-- The day-one GrantPolicy set covering all v1 parity, and nothing beyond it.
+- The day-one GrantPolicy set covering preapproved OPERATOR and accepted
+  credential scopes. Preserve Headlamp-equivalent tasks through the existing
+  owner-directed route or an equivalent route with the same directive requirement.
 - Ship the API server audit lines for `system:serviceaccount:dev-agents:grant-*` to
   Loki, if they are not shipped already.
 - Credential grants (Q-07): the fresh keeper-owned SSH CA trusted on Proxmox,

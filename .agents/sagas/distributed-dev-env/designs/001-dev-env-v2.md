@@ -2963,8 +2963,10 @@ role `dev-env-grant-breakglass` or `dev-env-grant-secrets-read`, or for a dev-en
 namespace, so no policy can approve those. It also rejects a GrantPolicy for
 `dev-env-grant-workloads` whose namespaces are a wildcard or a pattern: each
 namespace is named. The day-one policy set
-must preserve v1's effective task scope, including accepted Headlamp access. The
-deployed baseline (6.11) does not yet do that; R-04 records the blocking gaps.
+covers preapproved OPERATOR and accepted credential scopes. Preserve accepted
+Headlamp tasks through the existing owner-directed route or an equivalent route
+with the same directive requirement. The deployed baseline (6.11) does not yet
+preserve effective parity; R-04 records the blocking gaps.
 
 **Limits and audit.** At most 3 pending requests per session; identical requests
 merge. A request nobody answers in 30 minutes ends as `Denied` (timeout). Every grant
