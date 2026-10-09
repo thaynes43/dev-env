@@ -210,11 +210,114 @@ class StatusTrace:
                 'drainTruncated':self.drain_truncated,
                 'eventCap':48, 'omittedEvents':max(0,event_count-48), 'events':events}
 
-def status_wait_observation(process):
+class GitWaitMarker:
+    """Fixture-only 64-byte parent-owned memfd; same-ABI C reads atomic storage.
+
+    Initialization reads private immutable image files only. There are no marker
+    writes to CephFS, reader child, sampling thread or raw-memory Python reads.
+    """
+    _verified = None
+    retained = []
+    executable = '/opt/dev-env/trials/git-wait'
+    reader = '/opt/dev-env/trials/libgit-wait-reader.so'
+    fields = ['sourceCommit','baseImage','debianVersion','upstreamCommit',
+              'debianDSCSHA256','debianOrigSHA256','debianOverlaySHA256',
+              'debianSeriesSHA256','markerPatchSHA256','markerSourceSHA256',
+              'markerHeaderSHA256','buildOptionsSHA256','executableSHA256',
+              'readerSHA256','helperSHA256','statMacros','postLinkStrip',
+              'executableByteCap','readerByteCap']
+
+    @classmethod
+    def interface(cls):
+        if cls._verified is None:
+            import ctypes
+            with open('/opt/dev-env/trials/git-wait-provenance.json','rb') as stream:
+                raw = stream.read(4097)
+            assert len(raw) <= 4096
+            record = json.loads(raw)
+            assert record['abiVersion'] == 1 and record['platform'] == 'linux-amd64'
+            assert record['artifactVerification'] == 'hostedArtifactVerified'
+            assert record['debianVersion'] == '1:2.39.5-0+deb12u3'
+            assert record['baseImage'] == ('ghcr.io/thaynes43/dev-env:2.9.1@sha256:'
+                'a975de7dbc40c6f33048a38a327a2db2b9698a7615f5b2b9897abbb1d04df0cf')
+            assert record['executable'] == cls.executable and record['reader'] == cls.reader
+            assert record['debianPatchCount'] == 7 and not record['historicalCompilerEquivalence']
+            assert re.fullmatch('[0-9a-f]{40}',record['sourceCommit'])
+            assert record['sourceCommit'] == os.environ.get('TRIAL_HELPER_SOURCE_COMMIT')
+            assert re.fullmatch('[0-9a-f]{40}',record['upstreamCommit'])
+            assert record['helperSHA256'] == os.environ.get('TRIAL_HELPER_SHA256')
+            assert record['postLinkStrip'] == '--strip-unneeded'
+            assert record['executableByteCap'] == 8*1024*1024
+            assert record['readerByteCap'] == 256*1024
+            assert record['statMacros'].keys() == {'USE_STDEV','USE_NSEC'}
+            assert all(type(value) is bool for value in record['statMacros'].values())
+            for field in cls.fields:
+                if field.endswith('SHA256'):
+                    assert re.fullmatch('[0-9a-f]{64}',record[field])
+            for path, field, cap in [(cls.executable,'executableSHA256',8*1024*1024),
+                                     (cls.reader,'readerSHA256',256*1024)]:
+                with open(path,'rb') as stream:
+                    content = stream.read(cap+1)
+                assert len(content) <= cap and hashlib.sha256(content).hexdigest() == record[field]
+            library = ctypes.CDLL(cls.reader)
+            library.gwm_parent_create.argtypes = [ctypes.c_int]
+            library.gwm_parent_create.restype = ctypes.c_void_p
+            library.gwm_parent_close.argtypes = [ctypes.c_void_p]
+            library.gwm_parent_close.restype = None
+            library.gwm_snapshot.argtypes = [ctypes.c_void_p,ctypes.POINTER(ctypes.c_uint32)]
+            library.gwm_snapshot.restype = ctypes.c_int
+            metadata = {field:record[field] for field in cls.fields}
+            metadata['executable'] = cls.executable
+            metadata['markerBytes'] = 64
+            assert len(json.dumps(metadata).encode()) <= 4096
+            cls._verified = (ctypes,library,metadata)
+        return cls._verified
+
+    def __init__(self):
+        self.fd, self.mapping, self.library = None, None, None
+        self.sampled = False
+        try:
+            self.ctypes, self.library, self.metadata = self.interface()
+            self.fd = os.memfd_create('git-wait',os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+            os.ftruncate(self.fd,64)
+            fcntl.fcntl(self.fd,fcntl.F_ADD_SEALS,
+                        fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SEAL)
+            self.mapping = self.library.gwm_parent_create(self.fd)
+            if not self.mapping:
+                raise RuntimeError('native marker mapping unavailable')
+        except BaseException:
+            self.close()
+            raise
+
+    def snapshot(self):
+        if self.sampled:
+            return {'available':False,'reason':'alreadySampled'}
+        self.sampled = True
+        operation = self.ctypes.c_uint32()
+        result = self.library.gwm_snapshot(self.mapping,self.ctypes.byref(operation))
+        scopes = {1:'refreshLstat',2:'contentOpenWrapper',3:'smallFileContentRead'}
+        if result == 0 and operation.value in scopes:
+            return {'available':True,'scope':scopes[operation.value],'abiVersion':1}
+        reasons = {1:'missing',2:'unsupported',3:'invalidABI',4:'transitionInProgress',
+                   5:'changedDuringRead',6:'sequenceWrap',7:'writerOverlapOrFault',8:'idle'}
+        return {'available':False,'reason':reasons.get(result,'unsupportedResult')}
+
+    def close(self):
+        if self.mapping is not None:
+            self.library.gwm_parent_close(self.mapping)
+            self.mapping = None
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+
+
+def status_wait_observation(process, marker=None):
     # Only this calling parent can reap its status child. No poll/wait or timer
     # thread runs between the communicate checkpoint and these proc reads.
     # A just-exited, unreaped child may be unavailable, but cannot be PID-reused.
     result = {'syscallCategory':'unavailable', 'wchanCategory':'unavailable'}
+    if marker is not None:
+        result['gitOperation'] = {'available':False,'reason':'childOwnershipUnavailable'}
     if process.returncode is not None:
         return dict(result, reason='alreadyReaped')
     if signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL:
@@ -230,6 +333,10 @@ def status_wait_observation(process):
         return dict(result, reason='exitedBeforeObservation')
     if os.uname().machine != 'x86_64':
         return dict(result, reason='unsupportedArchitecture')
+    if marker is not None:
+        # ONE same-ABI atomic snapshot after this parent's exact unreaped-child
+        # gate. No retry, raw memory decoding, PID/proc polling or reader child.
+        result['gitOperation'] = marker.snapshot()
     categories = {
         'metadata':{4,5,6,21,89,191,192,193,194,195,196,262,332},
         'open':{2,257,437}, 'read':{0,17,19,295,327},
@@ -380,36 +487,56 @@ def run_status_child(argv, env, timeout, start, measurement, **kwargs):
     # This parent is the only reaper; the pipe collector never owns this PID.
     measurement['waitObservation'] = {'syscallCategory':'unavailable',
                                      'wchanCategory':'unavailable','reason':'checkpointNotReached'}
-    with subprocess.Popen(argv,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
-                          env=env,**kwargs) as process:
-        deadline = min(DEADLINE,start+timeout)
-        try:
-            until_checkpoint = min(deadline,start+5)-time.monotonic()
+    marker, process = None, None
+    try:
+        if env.get('TRIAL_GIT_WAIT_MARKER') == '1':
+            marker = GitWaitMarker()
+            measurement['diagnosticGit'] = marker.metadata
+            env = dict(env,DEV_ENV_GIT_WAIT_FD=str(marker.fd))
+            kwargs['pass_fds'] = (*kwargs.get('pass_fds',()),marker.fd)
+            kwargs['executable'] = marker.executable
+        with subprocess.Popen(argv,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                              env=env,**kwargs) as process:
+            deadline = min(DEADLINE,start+timeout)
             try:
-                stdout, stderr = process.communicate(timeout=max(0,until_checkpoint))
-                measurement['waitObservation']['reason'] = 'completedBeforeCheckpoint'
-            except subprocess.TimeoutExpired:
-                if deadline-time.monotonic() <= 0:
-                    raise
-                measurement['waitObservation'] = status_wait_observation(process)
-                measurement['waitObservation']['elapsedSeconds'] = time.monotonic()-start
-                assert len(json.dumps(measurement['waitObservation']).encode()) <= 1024
-                stdout, stderr = process.communicate(timeout=max(0,deadline-time.monotonic()))
-        except subprocess.TimeoutExpired as error:
-            process.kill()
-            process.wait()  # Reaping precedes every optional peer sample.
-            measurement['statusChildReaped'] = process.returncode is not None
-            raise subprocess.TimeoutExpired(argv,timeout,output=error.output,stderr=error.stderr) from None
-        except BaseException:
-            process.kill()
-            # Popen.__exit__ reaps even a helper alarm/cancellation; no samples.
-            raise
-        return subprocess.CompletedProcess(argv,process.returncode,stdout,stderr)
+                until_checkpoint = min(deadline,start+5)-time.monotonic()
+                try:
+                    stdout, stderr = process.communicate(timeout=max(0,until_checkpoint))
+                    measurement['waitObservation']['reason'] = 'completedBeforeCheckpoint'
+                except subprocess.TimeoutExpired:
+                    if deadline-time.monotonic() <= 0:
+                        raise
+                    measurement['waitObservation'] = (status_wait_observation(process,marker)
+                        if marker is not None else status_wait_observation(process))
+                    measurement['waitObservation']['elapsedSeconds'] = time.monotonic()-start
+                    assert len(json.dumps(measurement['waitObservation']).encode()) <= 1024
+                    stdout, stderr = process.communicate(timeout=max(0,deadline-time.monotonic()))
+            except subprocess.TimeoutExpired as error:
+                process.kill()
+                process.wait()  # Reaping precedes every optional peer sample.
+                measurement['statusChildReaped'] = process.returncode is not None
+                raise subprocess.TimeoutExpired(argv,timeout,output=error.output,stderr=error.stderr) from None
+            except BaseException:
+                process.kill()
+                # Popen.__exit__ reaps even a helper alarm/cancellation; no samples.
+                raise
+            return subprocess.CompletedProcess(argv,process.returncode,stdout,stderr)
+    finally:
+        if marker is not None:
+            if process is None or process.returncode is not None:
+                marker.close()
+            else:
+                # A stuck/uncertain child is not proof of stop. Retain its private
+                # map/FD until helper exit; never sample/reassign/claim cleanup.
+                GitWaitMarker.retained.append(marker)
+                measurement['markerCleanup'] = 'unreapedChildRetained'
 
 def run(argv, *, expected=0, env=None, timeout=15):
     trace = None
     command_env = env or ENV
     kwargs = {}
+    if argv[0] == 'git':
+        kwargs['executable'] = '/usr/bin/git'
     if argv[:2] == ['git','-C'] and argv[3:] == ['status','--porcelain=v1','--untracked-files=all']:
         trace = StatusTrace()
         command_env = dict(command_env, GIT_TRACE2_EVENT='/dev/fd/'+str(trace.write_fd),

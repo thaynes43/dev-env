@@ -44,6 +44,7 @@ jobs:
       pull-requests: read
     outputs:
       agent_image: ${{ steps.filter.outputs.agent_image }}
+      git_wait_image: ${{ steps.filter.outputs.git_wait_image }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -54,6 +55,11 @@ jobs:
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           filters: |
+            git_wait_image:
+              - 'images/git-wait/**'
+              - 'scripts/trials/**'
+              - '.github/workflows/publish-git-wait.yml'
+              - '.dockerignore'
             agent_image:
               - 'images/agent/**'
               # The Go stage copies these and make build compiles agentd/agent-run.
@@ -289,6 +295,52 @@ jobs:
           size="$(docker image inspect --format '{{.Size}}' dev-env-agent:ci)"
           echo "Agent image: $((size / 1024 / 1024)) MiB uncompressed (${size} bytes)" | tee -a "$GITHUB_STEP_SUMMARY"
 
+  # Fixture-only native compilation is hosted here, never in the shared pod.
+  # make -j2/nice19 and one finite serial check; no provider or runtime trial.
+  image-git-wait:
+    name: Image (Git wait fixture)
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.git_wait_image == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+      - name: Build paired u3 Git binaries and same-ABI reader
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./images/git-wait/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: dev-env-git-wait:ci
+          build-args: |
+            COMMIT=${{ github.event.pull_request.head.sha }}
+          cache-from: type=gha,scope=dev-env-git-wait
+          cache-to: type=gha,mode=max,scope=dev-env-git-wait
+      - name: Check finite ABI and tiny Git equivalence
+        timeout-minutes: 3
+        env:
+          TRIAL_HELPER_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha }}
+        run: |
+          helper_sha="$(sha256sum scripts/trials/workspace-cephfs-trial.py)"
+          helper_sha="${helper_sha%% *}"
+          docker run --rm --cpus=2 --memory=512m --pids-limit=64 --ulimit core=0 \
+            --network=none --read-only --tmpfs /tmp:rw,mode=1777,size=64m \
+            --env TRIAL_HELPER_SOURCE_COMMIT --env TRIAL_HELPER_SHA256="${helper_sha}" \
+            --entrypoint /usr/bin/nice dev-env-git-wait:ci \
+            -n 19 python3 /opt/dev-env/trials/checks/check-git-wait-image.py
+
   # The one required check. Skipped jobs (the image jobs on push, the agent image
   # when it did not change) are fine; failed or cancelled ones are not.
   success:
@@ -303,6 +355,7 @@ jobs:
       - image-operator
       - image-codex-login
       - image-agent
+      - image-git-wait
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

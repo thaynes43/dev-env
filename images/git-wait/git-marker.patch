@@ -1,0 +1,104 @@
+--- a/read-cache.c
++++ b/read-cache.c
+@@ -4,6 +4,7 @@
+  * Copyright (C) Linus Torvalds, 2005
+  */
+ #include "cache.h"
++#include "marker.h"
+ #include "config.h"
+ #include "diff.h"
+ #include "diffcore.h"
+@@ -241,7 +242,9 @@
+ 			   struct stat *st)
+ {
+ 	int match = -1;
++	int marker = gwm_begin(GWM_CONTENT_OPEN_WRAPPER);
+ 	int fd = git_open_cloexec(ce->name, O_RDONLY);
++	gwm_end(marker);
+ 
+ 	if (fd >= 0) {
+ 		struct object_id oid;
+@@ -1418,7 +1421,7 @@
+  * For example, you'd want to do this after doing a "git-read-tree",
+  * to link up the stat cache details with the proper files.
+  */
+-static struct cache_entry *refresh_cache_ent(struct index_state *istate,
++static struct cache_entry *refresh_cache_ent_inner(struct index_state *istate,
+ 					     struct cache_entry *ce,
+ 					     unsigned int options, int *err,
+ 					     int *changed_ret,
+@@ -1427,7 +1430,7 @@
+ {
+ 	struct stat st;
+ 	struct cache_entry *updated;
+-	int changed;
++	int changed, stat_result, marker;
+ 	int refresh = options & CE_MATCH_REFRESH;
+ 	int ignore_valid = options & CE_MATCH_IGNORE_VALID;
+ 	int ignore_skip_worktree = options & CE_MATCH_IGNORE_SKIP_WORKTREE;
+@@ -1467,7 +1470,10 @@
+ 
+ 	if (t2_did_lstat)
+ 		*t2_did_lstat = 1;
+-	if (lstat(ce->name, &st) < 0) {
++	marker = gwm_begin(GWM_REFRESH_LSTAT);
++	stat_result = lstat(ce->name, &st);
++	gwm_end(marker);
++	if (stat_result < 0) {
+ 		if (ignore_missing && errno == ENOENT)
+ 			return ce;
+ 		if (err)
+@@ -1527,6 +1533,21 @@
+ 
+ 	/* istate->cache_changed is updated in the caller */
+ 	return updated;
++}
++
++static struct cache_entry *refresh_cache_ent(struct index_state *istate,
++                                             struct cache_entry *ce,
++                                             unsigned int options, int *err,
++                                             int *changed_ret,
++                                             int *t2_did_lstat,
++                                             int *t2_did_scan)
++{
++	int scope = gwm_scope_enter();
++	struct cache_entry *result = refresh_cache_ent_inner(istate, ce, options,
++							   err, changed_ret,
++							   t2_did_lstat, t2_did_scan);
++	gwm_scope_leave(scope);
++	return result;
+ }
+ 
+ static void show_file(const char * fmt, const char * name, int in_porcelain,
+--- a/object-file.c
++++ b/object-file.c
+@@ -7,6 +7,7 @@
+  * creation etc.
+  */
+ #include "cache.h"
++#include "marker.h"
+ #include "config.h"
+ #include "string-list.h"
+ #include "lockfile.h"
+@@ -2428,7 +2429,9 @@
+ 		ret = index_mem(istate, oid, "", size, type, path, flags);
+ 	} else if (size <= SMALL_FILE_SIZE) {
+ 		char *buf = xmalloc(size);
++		int marker = gwm_begin(GWM_SMALL_FILE_CONTENT_READ);
+ 		ssize_t read_result = read_in_full(fd, buf, size);
++		gwm_end(marker);
+ 		if (read_result < 0)
+ 			ret = error_errno(_("read error while indexing %s"),
+ 					  path ? path : "<unknown>");
+--- a/Makefile
++++ b/Makefile
+@@ -962,6 +962,9 @@
+ COCCI_SOURCES = $(filter-out $(THIRD_PARTY_SOURCES),$(FOUND_C_SOURCES))
+ 
+ LIB_H = $(FOUND_H_SOURCES)
++
++LIB_OBJS += marker.o
++marker.o: EXTRA_CPPFLAGS += -std=c11
+ 
+ LIB_OBJS += abspath.o
+ LIB_OBJS += add-interactive.o
