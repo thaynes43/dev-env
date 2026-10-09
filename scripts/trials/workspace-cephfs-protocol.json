@@ -127,7 +127,7 @@
   "executionOrder": [
     "Freeze baseline and declare narrow20m activity",
     "Merge/reconcile only approved disposable PVC app via GitOps; record Bound claim/PV UIDs without CSI handles or secrets",
-    "Create A/B only; inspect actual admitted resources, require bounded mutual startup barrier before held-lock phases, then collect receipts including expected/actual command failure diagnostics and telemetry",
+    "Create A/B only; inspect actual admitted resources, require bounded mutual startup barrier before held-lock phases, then collect receipts including expected/actual command failure diagnostics and telemetry. Timed-out commands retain exact synthetic argv, effective timeout, elapsed time, expected exit, null actual exit and partial stdout/stderr normalized to strings and capped at400characters, then re-raise the original timeout.",
     "Require successful terminated processes, save both receipts/logs, delete both Jobs normally and wait original podUIDs absent without force",
     "Create reconnect only; verify new podUID and exact retained fixture state, save receipt/log and delete Job normally",
     "Monitor five minutes afterward",
