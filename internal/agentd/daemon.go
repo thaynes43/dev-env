@@ -111,6 +111,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 	steps := Render(ctx, d.R, d.S, d.Session)
 	ws, repoStep := PrepareRepo(ctx, d.R, d.S, d.Session)
 	steps = append(steps, repoStep)
+	if stop, err := workspaceStopRequested(d.S, d.Session); err != nil || stop {
+		stopBootHeartbeat()
+		d.shutdown()
+		return err
+	}
 	agentStep, agentErr := d.startAgent(ctx, ws, repoStep, rec.BootID)
 	steps = append(steps, agentStep)
 	LogSteps(d.Log, steps)
@@ -238,6 +243,12 @@ func (d *Daemon) supervise(ctx context.Context) error {
 				d.copyLog()
 			}
 		case <-poll.C:
+			if stop, err := workspaceStopRequested(d.S, d.Session); err != nil || stop {
+				if !d.writerRefused {
+					d.shutdown()
+				}
+				return err
+			}
 			d.expireCredentials()
 			if d.writerRefused {
 				continue

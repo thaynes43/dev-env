@@ -32,6 +32,20 @@ func rescueSharedTask(ctx context.Context, r Runner, s Settings, task string, no
 	if !opt.StopAgent {
 		return protocol.RescueReport{}, errors.New("shared rescue requires explicit stop-and-preserve")
 	}
+	proof, bound := opt.WorkspaceStopProof, sess.Workspace.StopProof
+	if bound != nil || proof != nil {
+		if bound == nil || proof == nil || proof.PodUID != bound.PodUID || proof.NodeName != bound.NodeName || proof.NodeUID != bound.NodeUID {
+			return protocol.RescueReport{}, errors.New("shared hold rescue requires fresh controller input for its immutable executor binding")
+		}
+		if err := proof.Validate(s.WorkspaceID, task, sess.Workspace.SessionUID, bound.PodUID); err != nil {
+			return protocol.RescueReport{}, err
+		}
+		// Only the receiving hold permits small cross-node clock skew. The
+		// controller still rejects future/stale Node Lease renewal locally.
+		if proof.VerifiedAt.After(now.Add(5*time.Second)) || now.Sub(proof.VerifiedAt) > 40*time.Second {
+			return protocol.RescueReport{}, errors.New("shared rescue controller proof is stale or future at receipt")
+		}
+	}
 	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
 		return protocol.RescueReport{}, err
 	}
@@ -53,10 +67,21 @@ func rescueSharedTask(ctx context.Context, r Runner, s Settings, task string, no
 	defer cancelGit()
 	var owner taskOwner
 	if err := readWorkspaceJSON(s.ownerPath(task), &owner); err != nil {
+		if errors.Is(err, os.ErrNotExist) && proof != nil {
+			return preserveWorkspacePreparation(ctx, r, s, sess, nil, proof, now)
+		}
 		return protocol.RescueReport{}, fmt.Errorf("shared rescue owner: %w", err)
 	}
-	if err := ownerMatches(s, sess, owner, true); err != nil {
+	if err := ownerMatches(s, sess, owner, proof == nil); err != nil {
 		return protocol.RescueReport{}, err
+	}
+	if proof != nil {
+		if err := proof.Validate(s.WorkspaceID, task, sess.Workspace.SessionUID, owner.PodUID); err != nil {
+			return protocol.RescueReport{}, err
+		}
+		if proof.PodUID == s.PodUID {
+			return protocol.RescueReport{}, errors.New("hold rescue requires a distinct Pod UID")
+		}
 	}
 	if owner.State != "owned" && owner.State != "stopped" {
 		return protocol.RescueReport{}, errors.New("shared rescue owner has an uncertain state")
@@ -72,11 +97,14 @@ func rescueSharedTask(ctx context.Context, r Runner, s Settings, task string, no
 			uncertain = true
 		}
 	}
-	if uncertain {
+	if uncertain && proof == nil {
 		rep.OK, rep.CleanAndPushed, rep.Agent.Running = false, false, true
 		rep.Repos = append(rep.Repos, protocol.RepoRescue{Path: owner.Clone, Error: "shared writers require verified container termination; local PID and process-group stop are insufficient"})
 		rep.FinishedAt = time.Now().UTC()
 		return rep, nil
+	}
+	if _, err := os.Lstat(owner.Worktree); errors.Is(err, os.ErrNotExist) {
+		return preserveWorkspacePreparation(ctx, r, s, sess, &owner, proof, now)
 	}
 	if err := validateSharedClone(ctx, r, s, sess.Repo); err != nil {
 		return protocol.RescueReport{}, err
@@ -131,16 +159,26 @@ func rescueSharedTask(ctx context.Context, r Runner, s Settings, task string, no
 	}
 	if rep.OK && (rep.CleanAndPushed || rep.Bundle != nil && rep.Bundle.Error == "") {
 		owner.State, owner.StopReason = "stopped", "no-agent-admitted"
+		if proof != nil {
+			owner.StopReason, owner.StopProof = "terminated-pod-rescue", proof
+		}
 		owner.UpdatedAt, owner.StoppedAt = now.UTC(), now.UTC()
 		if err := writeWorkspaceJSON(s.ownerPath(task), owner); err != nil {
 			return protocol.RescueReport{}, err
 		}
+	}
+	if proof != nil {
+		rep.SourcePodUID = proof.PodUID
 	}
 	rep.FinishedAt = time.Now().UTC()
 	return rep, nil
 }
 
 func ownedUnpushedRefs(ctx context.Context, r Runner, s Settings, clone, task string) ([]protocol.Ref, error) {
+	return ownedTaskRefs(ctx, r, s, clone, task, true)
+}
+
+func ownedTaskRefs(ctx context.Context, r Runner, s Settings, clone, task string, unpushedOnly bool) ([]protocol.Ref, error) {
 	branch, wip := "refs/heads/agent/"+task, "refs/heads/rescue/"+task+"/"
 	out, err := s.git(ctx, r, clone, "for-each-ref", "--format=%(objectname) %(refname)", branch, wip)
 	if err != nil {
@@ -152,6 +190,10 @@ func ownedUnpushedRefs(ctx context.Context, r Runner, s Settings, clone, task st
 		commit, name, ok := strings.Cut(scan.Text(), " ")
 		if !ok || (name != branch && !strings.HasPrefix(name, wip)) {
 			return nil, errors.New("git returned a ref outside the task's ownership namespace")
+		}
+		if !unpushedOnly {
+			refs = append(refs, protocol.Ref{Name: name, Commit: commit})
+			continue
 		}
 		extra, err := s.git(ctx, r, clone, "rev-list", "-n", "1", commit, "--not", "--remotes=origin")
 		if err != nil {

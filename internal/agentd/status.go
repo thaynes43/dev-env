@@ -130,7 +130,7 @@ func workspaceLaunchPending(s Settings, l Launch, now time.Time) bool {
 	}
 	var owner taskOwner
 	return readWorkspaceJSON(s.ownerPath(sess.Name), &owner) == nil && ownerMatches(s, sess, owner, true) == nil &&
-		owner.State == "owned" && !owner.Launched && owner == *l.WorkspaceOwner
+		owner.State == "owned" && !owner.Launched && sameOwner(owner, *l.WorkspaceOwner)
 }
 
 // tuiState is the state of this boot's TUI (D-58): busy while its process

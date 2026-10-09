@@ -223,6 +223,7 @@ var guardedCalls = []struct {
 	{"releaseSession", "releaseIfEmpty", ""},
 	{"releaseVolume", "deleteVolume", "volumeRemovalAllowed"},
 	{"deletePod", "removePod", "podRemovalAllowed"},
+	{"deletePod", "removeSharedPod", "podRemovalAllowed"},
 	{"deleteVolume", "archive", "volumeRemovalAllowed"},
 }
 

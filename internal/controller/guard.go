@@ -61,6 +61,21 @@ func wantsPodGone(s *v1alpha1.AgentSession) bool {
 //
 // A hold pod (D-55) runs no agent, so holdRemovalAllowed judges it instead.
 func podRemovalAllowed(s *v1alpha1.AgentSession, pod *corev1.Pod) error {
+	if s.Spec.Workspace != nil {
+		rec := s.Status.Rescue
+		if !sharedRescued(s) || !controlledBySession(pod, s) {
+			return errors.New("shared Pod stays until its owned rescue and retained executor proof are recorded")
+		}
+		if isHoldPod(pod) {
+			proof, err := workspaceHoldProof(pod)
+			if err != nil || proof == nil || rec.PodUID != string(pod.UID) || proof.Validate(s.Spec.Workspace.ID, s.Name, string(s.UID), rec.SourcePodUID) != nil {
+				return errors.New("shared hold Pod does not match the verified rescue")
+			}
+		} else if rec.SourcePodUID != string(pod.UID) {
+			return errors.New("shared executor does not match the rescued source Pod UID")
+		}
+		return nil
+	}
 	switch {
 	case isHoldPod(pod):
 		return holdRemovalAllowed(s, pod)
@@ -151,6 +166,9 @@ func holdRetryDue(s *v1alpha1.AgentSession, now time.Time, retry time.Duration) 
 // rescue, of the volume's last pod, is verified or proved there was nothing to
 // save. podExists must come from the API server, not the cache.
 func volumeRemovalAllowed(s *v1alpha1.AgentSession, podExists, archiveDue bool) error {
+	if s.Spec.Workspace != nil {
+		return errors.New("shared task rescue does not archive its private home; the home and workspace claim stay retained")
+	}
 	r := s.Status.Rescue
 	switch {
 	case s.DeletionTimestamp.IsZero() && s.Spec.OperatingMode != v1alpha1.OperatingModeSuspended:

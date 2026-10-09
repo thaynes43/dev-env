@@ -38,6 +38,22 @@ func TestVersion(t *testing.T) {
 	}
 }
 
+func TestWorkspaceStopCommandsRefusePrivateAndUnboundedInput(t *testing.T) {
+	home := t.TempDir()
+	env := map[string]string{"HOME": home, "AGENTD_SESSION": `{"name":"r-1","repo":"r","agent":"claude","mode":"task","model":"claude-opus-5-5","prompt":"p"}`}
+	if code, _, errOut := runArgs([]string{"ctl", "stop-workspace"}, env); code != exitFailure || !strings.Contains(errOut, "shared executor") {
+		t.Fatalf("private stop: code=%d,err=%q", code, errOut)
+	}
+	var out, stderr bytes.Buffer
+	code := run(context.Background(), []string{"ctl", "rescue", "--stop-agent", "--workspace-stop-proof-stdin"}, strings.NewReader(strings.Repeat("x", (16<<10)+1)), &out, &stderr, func(k string) string { return env[k] }, noRunner{})
+	if code != exitFailure || !strings.Contains(stderr.String(), "16 KiB") {
+		t.Fatalf("proof input: code=%d,err=%q", code, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agentd", "workspace-stop-request.json")); !os.IsNotExist(err) {
+		t.Fatal("private stop mutated the workspace")
+	}
+}
+
 func TestUsage(t *testing.T) {
 	if code, _, errOut := runArgs(nil, nil); code != exitUsage || !strings.Contains(errOut, "Usage: agentd") {
 		t.Errorf("no args: %d %q", code, errOut)

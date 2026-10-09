@@ -634,12 +634,24 @@ spec:
                       PodUID is the pod the rescue ran in. A suspend deletes that pod, and no
                       other, on this record.
                     type: string
+                  preservationKind:
+                    description: PreservationKind records the distinct shared preparation
+                      result.
+                    enum:
+                    - NoWorkAdmitted
+                    - OwnedRefsPreserved
+                    type: string
                   result:
                     description: Result is the newest rescue's verdict.
                     enum:
                     - Verified
                     - CleanAndPushed
+                    - NoWorkAdmitted
                     - Failed
+                    type: string
+                  sourcePodUID:
+                    description: SourcePodUID is the retained shared executor that
+                      the hold Pod rescued.
                     type: string
                   stamp:
                     description: |-

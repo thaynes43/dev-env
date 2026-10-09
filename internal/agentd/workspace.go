@@ -38,20 +38,21 @@ type workspaceMarker struct {
 }
 
 type taskOwner struct {
-	Version    int       `json:"version"`
-	Workspace  string    `json:"workspace"`
-	Task       string    `json:"task"`
-	Repo       string    `json:"repo"`
-	Clone      string    `json:"clone"`
-	Worktree   string    `json:"worktree"`
-	SessionUID string    `json:"sessionUID"`
-	PodUID     string    `json:"podUID"`
-	Generation uint64    `json:"generation"`
-	State      string    `json:"state"`
-	Launched   bool      `json:"launched"`
-	UpdatedAt  time.Time `json:"updatedAt"`
-	StoppedAt  time.Time `json:"stoppedAt,omitempty"`
-	StopReason string    `json:"stopReason,omitempty"`
+	Version    int                          `json:"version"`
+	Workspace  string                       `json:"workspace"`
+	Task       string                       `json:"task"`
+	Repo       string                       `json:"repo"`
+	Clone      string                       `json:"clone"`
+	Worktree   string                       `json:"worktree"`
+	SessionUID string                       `json:"sessionUID"`
+	PodUID     string                       `json:"podUID"`
+	Generation uint64                       `json:"generation"`
+	State      string                       `json:"state"`
+	Launched   bool                         `json:"launched"`
+	UpdatedAt  time.Time                    `json:"updatedAt"`
+	StoppedAt  time.Time                    `json:"stoppedAt,omitempty"`
+	StopReason string                       `json:"stopReason,omitempty"`
+	StopProof  *protocol.WorkspaceStopProof `json:"stopProof,omitempty"`
 }
 
 func (o *taskOwner) UnmarshalJSON(data []byte) error {
@@ -217,7 +218,10 @@ func readWorkspaceJSON(path string, dst any) error {
 }
 
 func workspaceLock(s Settings, name string) (func(), error) {
-	dir := filepath.Join(s.workspaceDir(), "locks")
+	return workspaceFileLock(filepath.Join(s.workspaceDir(), "locks"), name)
+}
+
+func workspaceFileLock(dir, name string) (func(), error) {
 	if err := ensureWorkspaceDirectory(dir); err != nil {
 		return nil, err
 	}
@@ -332,7 +336,25 @@ func pauseWorkspaceAdmission(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func acquireWorkspaceWriter(ctx context.Context, r Runner, s Settings, sess protocol.Session, now time.Time) (*writerLease, error) {
+func acquireWorkspaceWriter(ctx context.Context, r Runner, s Settings, sess protocol.Session, now time.Time) (lease *writerLease, resultErr error) {
+	mayRefuse := false
+	if sess.Workspace != nil && s.WorkspaceID == sess.Workspace.ID && s.PodUID != "" {
+		if err := sess.Validate(); err != nil {
+			return nil, err
+		}
+		var err error
+		mayRefuse, err = beginWorkspaceAdmission(ctx, s, sess, now)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if resultErr != nil && mayRefuse {
+				if err := refuseWorkspaceAdmission(s, sess, now); err != nil {
+					resultErr = workspaceAdmissionResultFailure(resultErr, err)
+				}
+			}
+		}()
+	}
 	if err := workspacePreflight(s, sess); err != nil {
 		return nil, err
 	}
@@ -406,7 +428,27 @@ func acquireWorkspaceWriter(ctx context.Context, r Runner, s Settings, sess prot
 	if err := ctx.Err(); err != nil {
 		return fail(err)
 	}
+	// A private stop request can arrive while admission waits on shared Git.
+	// Serialize only the final owner write, without giving the stopper shared
+	// ownership or making an observational daemon depend on a healthy mount.
+	stopGate, err := workspaceSupervisorLock(ctx, s)
+	if err != nil {
+		return fail(err)
+	}
+	defer stopGate()
+	if stop, err := workspaceStopForOwner(s, sess, owner); err != nil || stop {
+		return fail(errors.New("shared supervisor stop is requested or uncertain; writer admission refused"))
+	}
+	// Persist intent before the owner write. Any ambiguous write or later
+	// private marker failure remains OwnerWriteStarted, never Refused.
+	mayRefuse = false
+	if err := writeAdmissionPhase(s, sess, "OwnerWriteStarted", now); err != nil {
+		return fail(err)
+	}
 	if err := writeWorkspaceJSON(s.ownerPath(sess.Name), owner); err != nil {
+		return fail(err)
+	}
+	if err := writeAdmissionPhase(s, sess, "OwnerAdmitted", now); err != nil {
 		return fail(err)
 	}
 	return &writerLease{owner: owner, unlock: unlock}, nil
@@ -420,11 +462,18 @@ func ownerMatches(s Settings, sess protocol.Session, owner taskOwner, pod bool) 
 	}
 	switch owner.State {
 	case "owned":
-		if !owner.StoppedAt.IsZero() || owner.StopReason != "" {
+		if !owner.StoppedAt.IsZero() || owner.StopReason != "" || owner.StopProof != nil {
 			return errors.New("owned receipt contains contradictory stop proof")
 		}
 	case "stopped":
-		if owner.Launched || owner.StoppedAt.IsZero() || owner.StopReason != "no-agent-admitted" {
+		if owner.StoppedAt.IsZero() {
+			return errors.New("stopped receipt lacks a durable stop time")
+		}
+		if owner.StopReason == "terminated-pod-rescue" && owner.StopProof != nil {
+			if err := owner.StopProof.Validate(owner.Workspace, owner.Task, owner.SessionUID, owner.PodUID); err != nil {
+				return err
+			}
+		} else if owner.Launched || owner.StopReason != "no-agent-admitted" || owner.StopProof != nil {
 			return errors.New("stopped receipt lacks a supported proof; takeover refused")
 		}
 	default:
@@ -491,6 +540,11 @@ func finalizeWorkspaceLaunch(s Settings, sess protocol.Session, l Launch, now ti
 		return err
 	}
 	defer unlock()
+	stopGate, err := workspaceSupervisorLock(context.Background(), s)
+	if err != nil {
+		return err
+	}
+	defer stopGate()
 	var owner taskOwner
 	if err := readWorkspaceJSON(s.ownerPath(sess.Name), &owner); err != nil {
 		return err
@@ -498,11 +552,23 @@ func finalizeWorkspaceLaunch(s Settings, sess protocol.Session, l Launch, now ti
 	if err := ownerMatches(s, sess, owner, true); err != nil {
 		return err
 	}
-	if l.WorkspaceOwner == nil || owner.State != "owned" || owner.Launched || owner != *l.WorkspaceOwner {
+	if l.WorkspaceOwner == nil || owner.State != "owned" || owner.Launched || !sameOwner(owner, *l.WorkspaceOwner) {
 		return errors.New("writer receipt no longer matches the admitted launch")
+	}
+	if stop, err := workspaceStopForOwner(s, sess, owner); err != nil || stop {
+		return errors.New("shared supervisor stop is requested or uncertain; launch refused")
 	}
 	owner.Launched, owner.UpdatedAt = true, now.UTC()
 	return writeWorkspaceJSON(s.ownerPath(sess.Name), owner)
+}
+
+func sameOwner(a, b taskOwner) bool {
+	x, err := json.Marshal(a)
+	if err != nil {
+		return false
+	}
+	y, err := json.Marshal(b)
+	return err == nil && bytes.Equal(x, y)
 }
 
 // validateSharedClone rejects symlinked or foreign Git administration before

@@ -8,11 +8,15 @@ import (
 // RescueReport is what `agentd ctl rescue` prints (D-43, D-48): step 1 of D-10's
 // rescue, the list of refs a bundle must cover, and the bundle that covers them.
 type RescueReport struct {
-	Session    string       `json:"session"`
-	Stamp      string       `json:"stamp"`
-	StartedAt  time.Time    `json:"startedAt"`
-	FinishedAt time.Time    `json:"finishedAt"`
-	Repos      []RepoRescue `json:"repos"`
+	WorkspacePreservation *WorkspacePreservation `json:"workspacePreservation,omitempty"`
+	// SourcePodUID is the retained executor proven terminated before a
+	// distinct hold Pod rescued its shared task.
+	SourcePodUID string       `json:"sourcePodUID,omitempty"`
+	Session      string       `json:"session"`
+	Stamp        string       `json:"stamp"`
+	StartedAt    time.Time    `json:"startedAt"`
+	FinishedAt   time.Time    `json:"finishedAt"`
+	Repos        []RepoRescue `json:"repos"`
 	// OK is set when every worktree is clean or rescued, no repo failed, and
 	// every bundle that was needed was written and verified. A rescue that is
 	// not OK still leaves the volume as it was; the operator marks the
@@ -35,8 +39,24 @@ type RescueReport struct {
 	Bundle *BundleReport `json:"bundle,omitempty"`
 }
 
+// WorkspacePreservation distinguishes absent preparation from a clean pushed
+// worktree. Generation zero means no durable task owner was ever admitted.
+type WorkspacePreservation struct {
+	Version         int    `json:"version"`
+	Workspace       string `json:"workspace"`
+	Task            string `json:"task"`
+	SessionUID      string `json:"sessionUID"`
+	SourcePodUID    string `json:"sourcePodUID"`
+	OwnerGeneration uint64 `json:"ownerGeneration"`
+	Kind            string `json:"kind"`
+}
+
 // RepoRescue is one clone under ~/repos.
 type RepoRescue struct {
+	Absent bool `json:"absent,omitempty"`
+	// FullBundle preserves all listed owned refs, including already pushed
+	// refs, without making origin a prerequisite of this bundle.
+	FullBundle bool   `json:"fullBundle,omitempty"`
 	Path       string `json:"path"`
 	Fetched    bool   `json:"fetched"`
 	FetchError string `json:"fetchError,omitempty"`
@@ -45,7 +65,8 @@ type RepoRescue struct {
 	// UnpushedRefs are the local refs with commits origin lacks, rescue
 	// branches included, after the rescue: what the bundle must hold (D-10
 	// step 4). Stash entries are named stash@{n}, because only the newest has
-	// a ref. Empty when origin has everything.
+	// a ref. FullBundle shared preservation instead lists every owned ref,
+	// including refs already on origin, because the task worktree is absent.
 	UnpushedRefs []Ref  `json:"unpushedRefs,omitempty"`
 	Error        string `json:"error,omitempty"`
 	// Bundle is this clone's bundle, when it has unpushed refs (D-48).
@@ -54,7 +75,8 @@ type RepoRescue struct {
 
 // WorktreeRescue is one worktree.
 type WorktreeRescue struct {
-	Path string `json:"path"`
+	Absent bool   `json:"absent,omitempty"`
+	Path   string `json:"path"`
 	// Branch is empty for a detached HEAD.
 	Branch string `json:"branch,omitempty"`
 	Head   string `json:"head,omitempty"`

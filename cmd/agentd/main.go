@@ -376,6 +376,25 @@ func daemon(ctx context.Context, log *slog.Logger, getenv func(string) string, r
 func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, r agentd.Runner) int {
 	if len(args) > 0 {
 		switch args[0] {
+		case "stop-workspace":
+			if len(args) != 1 {
+				return exitUsage
+			}
+			s, err := agentd.LoadSettings(getenv)
+			if err != nil {
+				_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
+				return exitFailure
+			}
+			sess, err := agentd.LoadSession(getenv)
+			if err != nil {
+				_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
+				return exitFailure
+			}
+			if err := agentd.RequestWorkspaceStop(ctx, s, sess, time.Now()); err != nil {
+				_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
+				return exitFailure
+			}
+			return exitOK
 		case "grant-install", "grant-remove", "grant-use", "grant-list":
 			return grantCtl(args, stdin, stdout, stderr, getenv)
 		case "credential-install", "credential-remove", "credential-list", "credential-available", "credential-use", "credential-expire":
@@ -387,10 +406,13 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		}
 	}
 	stopAgent := false
+	proofStdin := false
 	switch {
 	case len(args) == 1:
 	case len(args) == 2 && args[0] == "rescue" && args[1] == "--stop-agent":
 		stopAgent = true
+	case len(args) == 3 && args[0] == "rescue" && args[1] == "--stop-agent" && args[2] == "--workspace-stop-proof-stdin":
+		stopAgent, proofStdin = true, true
 	default:
 		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl status | rescue [--stop-agent] | rescues [--session S] | prune | prepare-restart | grant-install | grant-remove | grant-list | grant-use\n", binaryName)
 		return exitUsage
@@ -426,6 +448,14 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			name = sess.Name
 		}
 		opt := agentd.RescueOptions{StopAgent: stopAgent, StopGrace: stopGrace}
+		if proofStdin {
+			proof, err := protocol.ReadWorkspaceStopProof(stdin)
+			if err != nil {
+				_, _ = fmt.Fprintf(stderr, "%s: workspace stop proof: %v\n", binaryName, err)
+				return exitFailure
+			}
+			opt.WorkspaceStopProof = proof
+		}
 		rep, err := agentd.Rescue(ctx, r, s, name, time.Now(), opt)
 		if err != nil {
 			_, _ = fmt.Fprintf(stderr, "%s: rescue: %v\n", binaryName, err)

@@ -50,6 +50,9 @@ func Rescue(ctx context.Context, r Runner, s Settings, session string, now time.
 	if s.WorkspaceID != "" {
 		return rescueSharedTask(ctx, r, s, session, now, opt)
 	}
+	if opt.WorkspaceStopProof != nil {
+		return protocol.RescueReport{}, errors.New("workspace stop proof cannot authorize a private rescue")
+	}
 	if s.Getenv != nil {
 		if sess, err := LoadSession(s.Getenv); err == nil && sess.Workspace != nil {
 			return protocol.RescueReport{}, errors.New("shared session lacks its operator workspace binding; refusing private rescue")
@@ -145,6 +148,9 @@ func volumeEmpty(s Settings) (bool, error) {
 
 // RescueOptions are `agentd ctl rescue`'s flags.
 type RescueOptions struct {
+	// WorkspaceStopProof is fresh controller input for a distinct hold Pod,
+	// supplied through bounded stdin on every shared rescue attempt.
+	WorkspaceStopProof *protocol.WorkspaceStopProof
 	// StopAgent stops the agent CLI before the rescue (--stop-agent, D-48).
 	StopAgent bool
 	// StopGrace is how long the stop waits after SIGTERM before SIGKILL.

@@ -166,9 +166,11 @@ func bundleRepo(ctx context.Context, r Runner, s Settings, rr protocol.RepoRescu
 	// Thin against origin's default branch, which is never rewritten; a
 	// feature branch on origin may be deleted after its merge, and a
 	// bundle that needed its commits could no longer be restored.
-	rb.Base = "refs/remotes/origin/HEAD"
-	if _, err := s.git(ctx, r, rr.Path, "rev-parse", "--verify", "--quiet", rb.Base); err != nil {
-		rb.Base = "--remotes=origin"
+	if !rr.FullBundle {
+		rb.Base = "refs/remotes/origin/HEAD"
+		if _, err := s.git(ctx, r, rr.Path, "rev-parse", "--verify", "--quiet", rb.Base); err != nil {
+			rb.Base = "--remotes=origin"
+		}
 	}
 
 	tmp, err := os.CreateTemp(s.StateDir, "rescue-*.bundle")
@@ -182,7 +184,9 @@ func bundleRepo(ctx context.Context, r Runner, s Settings, rr protocol.RepoRescu
 	for _, br := range rb.Refs {
 		args = append(args, br.Name)
 	}
-	args = append(args, "--not", rb.Base)
+	if rb.Base != "" {
+		args = append(args, "--not", rb.Base)
+	}
 	bctx, cancel := context.WithTimeout(ctx, bundleTimeout)
 	_, err = r.Run(bctx, Cmd{Name: "git", Args: args, Env: gitEnv})
 	cancel()

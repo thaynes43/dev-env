@@ -112,6 +112,10 @@ type Reconciler struct {
 	// Rescuer runs agentd's rescue in a pod (D-51). Nil means no rescue can
 	// run, so a pod that ran is never removed.
 	Rescuer Rescuer
+	// WorkspaceStopper requests exit only for shared executors. StopVerifier
+	// supplies uncached typed Pod/Node/Lease reads; nil uses APIReader.
+	WorkspaceStopper WorkspaceStopper
+	StopVerifier     WorkspaceStopVerifier
 	// Recorder emits the rescue's and the archive's events on the session; nil
 	// emits none.
 	Recorder events.EventRecorder
@@ -193,6 +197,25 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	t, tErr := r.loadTemplates(ctx)
 	obs := observation{pod: pod, claim: claim, templates: t, templatesErr: tErr, now: time.Now()}
+	if s.Spec.Workspace != nil {
+		result, err := r.reconcileSharedWorkspace(ctx, &s, &obs)
+		if err != nil {
+			return result, err
+		}
+		next := s.Status.DeepCopy()
+		observe(&s, obs, next)
+		// A disappeared shared executor is uncertain. Preserve the durable
+		// memory that it existed so a later reconcile cannot treat it as a
+		// fresh session merely because observation cleared PodName.
+		if obs.pod.missing && !sharedRescued(&s) && s.Status.PodName != "" {
+			next.PodName = s.Status.PodName
+		}
+		if !apiequality.Semantic.DeepEqual(&s.Status, next) {
+			s.Status = *next
+			return r.writeStatus(ctx, &s, result)
+		}
+		return result, nil
+	}
 
 	// A hold pod (D-55) is never the pod a session wants: when the session
 	// wants its pod again, the guard lets the hold pod go first.
@@ -468,7 +491,7 @@ func (r *Reconciler) recordRescue(ctx context.Context, s *v1alpha1.AgentSession,
 		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &fresh); err != nil {
 			return false, client.IgnoreNotFound(err)
 		}
-		if fresh.UID != s.UID || fresh.Generation != rec.Generation || !wantsPodGone(&fresh) {
+		if fresh.UID != s.UID || fresh.Generation != rec.Generation || (!wantsPodGone(&fresh) && fresh.Spec.Workspace == nil) {
 			return false, nil
 		}
 		fresh.Status.Rescue = rec
@@ -503,11 +526,25 @@ func (r *Reconciler) cacheBehind(ctx context.Context, s *v1alpha1.AgentSession, 
 // as the API server has it afterwards. An error means it did not run, or ran
 // in a pod that has since been replaced.
 func (r *Reconciler) rescue(ctx context.Context, s *v1alpha1.AgentSession, pod *corev1.Pod) (*v1alpha1.RescueStatus, string, *corev1.Pod, error) {
+	return r.rescueWithProof(ctx, s, pod, nil)
+}
+
+func (r *Reconciler) rescueWithProof(ctx context.Context, s *v1alpha1.AgentSession, pod *corev1.Pod, proof *protocol.WorkspaceStopProof) (*v1alpha1.RescueStatus, string, *corev1.Pod, error) {
 	if r.Rescuer == nil {
 		return nil, "", nil, errors.New("the operator has no rescuer")
 	}
 	log.FromContext(ctx).Info("rescuing the session pod", "pod", pod.Name, "uid", pod.UID)
-	rep, err := r.Rescuer.Rescue(ctx, pod)
+	var rep protocol.RescueReport
+	var err error
+	if s.Spec.Workspace != nil {
+		shared, ok := r.Rescuer.(WorkspaceRescuer)
+		if !ok || proof == nil {
+			return nil, "", nil, errors.New("shared rescue has no fresh-proof executor")
+		}
+		rep, err = shared.RescueWorkspace(ctx, pod, proof)
+	} else {
+		rep, err = r.Rescuer.Rescue(ctx, pod)
+	}
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -584,6 +621,14 @@ func (r *Reconciler) archive(ctx context.Context, s *v1alpha1.AgentSession, obs 
 	} else if err != nil {
 		return ctrl.Result{}, true, err
 	}
+	if s.Spec.Workspace != nil {
+		err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: workspaceHoldName(s)}, &corev1.Pod{})
+		if err == nil {
+			podExists = true
+		} else if !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, true, err
+		}
+	}
 	obs.removalBlocked = volumeRemovalAllowed(s, podExists, archiveDue)
 	if errors.Is(obs.removalBlocked, errArchiveNotRecorded) {
 		// Record the archive before the volume goes, so a restart or a
@@ -595,7 +640,7 @@ func (r *Reconciler) archive(ctx context.Context, s *v1alpha1.AgentSession, obs 
 		obs.removalBlocked = volumeRemovalAllowed(s, podExists, archiveDue)
 	}
 	if obs.removalBlocked != nil {
-		if !podExists && !rescued(s) {
+		if !podExists && !rescued(s) && s.Spec.Workspace == nil {
 			// No valid rescue and no pod to run one in: a hold pod (D-55).
 			return ctrl.Result{}, false, r.startHoldPod(ctx, s, obs)
 		}
@@ -710,10 +755,17 @@ func (r *Reconciler) releaseIfEmpty(ctx context.Context, s *v1alpha1.AgentSessio
 	if !controllerutil.ContainsFinalizer(s, Finalizer) {
 		return false, nil
 	}
-	for _, o := range []struct {
+	objects := []struct {
 		name string
 		obj  client.Object
-	}{{s.Name, &corev1.Pod{}}, {HomeClaimName(s.Name), &corev1.PersistentVolumeClaim{}}} {
+	}{{s.Name, &corev1.Pod{}}, {HomeClaimName(s.Name), &corev1.PersistentVolumeClaim{}}}
+	if s.Spec.Workspace != nil {
+		objects = append(objects, struct {
+			name string
+			obj  client.Object
+		}{workspaceHoldName(s), &corev1.Pod{}})
+	}
+	for _, o := range objects {
 		err := r.APIReader.Get(ctx, types.NamespacedName{Namespace: s.Namespace, Name: o.name}, o.obj)
 		if err == nil {
 			return false, nil
@@ -811,7 +863,7 @@ type owned[T client.Object] struct {
 	foreign string
 }
 
-func getOwned[T client.Object](ctx context.Context, c client.Client, s *v1alpha1.AgentSession, name string, obj T) (owned[T], error) {
+func getOwned[T client.Object](ctx context.Context, c client.Reader, s *v1alpha1.AgentSession, name string, obj T) (owned[T], error) {
 	if err := c.Get(ctx, types.NamespacedName{Namespace: s.Namespace, Name: name}, obj); err != nil {
 		if apierrors.IsNotFound(err) {
 			return owned[T]{missing: true}, nil
