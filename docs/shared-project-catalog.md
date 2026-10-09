@@ -151,6 +151,9 @@ that same resource again under the primary repository lock. Changed identity,
 revision or bytes, or an unavailable read, preserves prepared work and refuses
 publication. A caller's matching hash is not a replacement for this authority.
 Production boot, daily and explicit runners still need to wire that reader.
+This check records the accepted revision at confirmation; it is not a transaction
+with a concurrent GitOps ConfigMap update. Materialized revisions remain explicit,
+and the management integration must handle later catalog changes.
 
 Health checks report wrong branch, detached HEAD, dirty index/files and behind
 state. Automatic repair needs a fresh fetched target, verified repository
