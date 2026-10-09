@@ -218,7 +218,10 @@ func readWorkspaceJSON(path string, dst any) error {
 }
 
 func workspaceLock(s Settings, name string) (func(), error) {
-	dir := filepath.Join(s.workspaceDir(), "locks")
+	return workspaceFileLock(filepath.Join(s.workspaceDir(), "locks"), name)
+}
+
+func workspaceFileLock(dir, name string) (func(), error) {
 	if err := ensureWorkspaceDirectory(dir); err != nil {
 		return nil, err
 	}
@@ -407,6 +410,17 @@ func acquireWorkspaceWriter(ctx context.Context, r Runner, s Settings, sess prot
 	if err := ctx.Err(); err != nil {
 		return fail(err)
 	}
+	// A private stop request can arrive while admission waits on shared Git.
+	// Serialize only the final owner write, without giving the stopper shared
+	// ownership or making an observational daemon depend on a healthy mount.
+	stopGate, err := workspaceSupervisorLock(ctx, s)
+	if err != nil {
+		return fail(err)
+	}
+	defer stopGate()
+	if stop, err := workspaceStopForOwner(s, sess, owner); err != nil || stop {
+		return fail(errors.New("shared supervisor stop is requested or uncertain; writer admission refused"))
+	}
 	if err := writeWorkspaceJSON(s.ownerPath(sess.Name), owner); err != nil {
 		return fail(err)
 	}
@@ -499,6 +513,11 @@ func finalizeWorkspaceLaunch(s Settings, sess protocol.Session, l Launch, now ti
 		return err
 	}
 	defer unlock()
+	stopGate, err := workspaceSupervisorLock(context.Background(), s)
+	if err != nil {
+		return err
+	}
+	defer stopGate()
 	var owner taskOwner
 	if err := readWorkspaceJSON(s.ownerPath(sess.Name), &owner); err != nil {
 		return err

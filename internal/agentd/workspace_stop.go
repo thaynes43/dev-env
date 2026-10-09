@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"syscall"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -23,49 +24,63 @@ type workspaceStopRequest struct {
 }
 
 // RequestWorkspaceStop requests supervisor exit without deleting the Pod or
-// volumes. Only the controller can later turn actual termination into proof.
+// volumes. It uses only exact operator bindings and private state, so even a
+// refused mount/owner admission can stop. It never changes shared ownership;
+// only the controller can later turn actual container termination into proof.
 func RequestWorkspaceStop(ctx context.Context, s Settings, sess protocol.Session, now time.Time) error {
-	if err := workspacePreflight(s, sess); err != nil {
-		return err
-	}
-	if sess.Workspace == nil || sess.Workspace.StopProof != nil {
+	if sess.Workspace == nil || sess.Workspace.StopProof != nil || s.WorkspaceID == "" || sess.Workspace.ID != s.WorkspaceID || s.PodUID == "" {
 		return errors.New("stop request requires a shared executor, not a hold Pod")
 	}
-	// The controller's exec budget is 35 seconds. A stop request never waits
-	// longer than 30 seconds for admission serialization; it can retry later.
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	unlock, err := workspaceAdminLock(ctx, s, sess.Repo)
+	if err := sess.Validate(); err != nil {
+		return err
+	}
+	unlock, err := workspaceSupervisorLock(ctx, s)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	var owner taskOwner
-	if err := readWorkspaceJSON(s.ownerPath(sess.Name), &owner); err != nil {
-		return err
-	}
-	if err := ownerMatches(s, sess, owner, true); err != nil {
-		return err
-	}
-	if owner.State != "owned" {
-		return errors.New("task is already stopped")
-	}
 	var old workspaceStopRequest
-	if readWorkspaceJSON(s.statePath(workspaceStopRequestFile), &old) == nil && old.Version == workspaceVersion && old.Workspace == s.WorkspaceID && old.Task == sess.Name && old.SessionUID == sess.Workspace.SessionUID && old.PodUID == s.PodUID && old.Generation == owner.Generation && !old.RequestedAt.IsZero() {
+	if readWorkspaceJSON(s.statePath(workspaceStopRequestFile), &old) == nil && old.Version == workspaceVersion && old.Workspace == s.WorkspaceID && old.Task == sess.Name && old.SessionUID == sess.Workspace.SessionUID && old.PodUID == s.PodUID && old.Generation == 0 && !old.RequestedAt.IsZero() {
 		return nil
 	}
-	request := workspaceStopRequest{workspaceVersion, s.WorkspaceID, sess.Name, sess.Workspace.SessionUID, s.PodUID, owner.Generation, now.UTC()}
+	// Generation zero requests this exact supervisor Pod, including the case
+	// where no shared owner was ever admitted. A later Pod UID ignores it.
+	request := workspaceStopRequest{workspaceVersion, s.WorkspaceID, sess.Name, sess.Workspace.SessionUID, s.PodUID, 0, now.UTC()}
 	return writeWorkspaceJSON(s.statePath(workspaceStopRequestFile), request)
+}
+
+// This private gate is never held during shared Git commands. Admission and
+// final CLI launch take shared administration first, then this gate; the stop
+// requester takes only the gate, so it cannot wait on or mutate a peer owner.
+func workspaceSupervisorLock(ctx context.Context, s Settings) (func(), error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		unlock, err := workspaceFileLock(s.StateDir, "workspace-supervisor")
+		if err == nil {
+			return unlock, nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, err
+		}
+		if err := pauseWorkspaceAdmission(ctx, 100*time.Millisecond); err != nil {
+			return nil, err
+		}
+	}
 }
 
 func workspaceStopRequested(s Settings, sess protocol.Session) (bool, error) {
 	if sess.Workspace == nil {
 		return false, nil
 	}
-	if s.writer == nil {
-		return false, nil
+	owner := taskOwner{}
+	if s.writer != nil {
+		owner = s.writer.owner
 	}
-	return workspaceStopForOwner(s, sess, s.writer.owner)
+	return workspaceStopForOwner(s, sess, owner)
 }
 
 func workspaceStopForOwner(s Settings, sess protocol.Session, owner taskOwner) (bool, error) {
@@ -83,7 +98,7 @@ func workspaceStopForOwner(s Settings, sess protocol.Session, owner taskOwner) (
 		return false, nil
 	}
 	if sess.Workspace == nil || request.Version != workspaceVersion || request.Workspace != s.WorkspaceID || request.Task != sess.Name ||
-		request.SessionUID != sess.Workspace.SessionUID || request.Generation != owner.Generation || request.RequestedAt.IsZero() {
+		request.SessionUID != sess.Workspace.SessionUID || (request.Generation != 0 && request.Generation != owner.Generation) || request.RequestedAt.IsZero() {
 		return false, errors.New("stop request does not match this writer generation")
 	}
 	return true, nil

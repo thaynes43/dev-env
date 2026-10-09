@@ -65,7 +65,7 @@ func TestWorkspaceStopRequestIsScopedDurableAndDeniesLatePane(t *testing.T) {
 	if stop, err := workspaceStopRequested(newPod, sess); err != nil || stop {
 		t.Fatal("old private stop request stopped the new Pod generation")
 	}
-	before.Generation++
+	before.Generation = owner.Generation + 1
 	if err := writeWorkspaceJSON(s.statePath(workspaceStopRequestFile), before); err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestWorkspaceStopRequestIsScopedDurableAndDeniesLatePane(t *testing.T) {
 	}
 }
 
-func TestWorkspaceStopRequestRespectsCanceledAdminWait(t *testing.T) {
+func TestWorkspaceStopRequestRespectsCanceledPrivateGate(t *testing.T) {
 	g := newGitFixture(t, "demo")
 	s, r := g.settings(t)
 	s, sess := sharedSettings(t, s, "task-a")
@@ -83,7 +83,7 @@ func TestWorkspaceStopRequestRespectsCanceledAdminWait(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.unlock()
-	unlock, err := workspaceAdminLock(context.Background(), s, sess.Repo)
+	unlock, err := workspaceSupervisorLock(context.Background(), s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +95,61 @@ func TestWorkspaceStopRequestRespectsCanceledAdminWait(t *testing.T) {
 	}
 	if exists(s.statePath(workspaceStopRequestFile)) {
 		t.Fatal("cancelled stop admission wrote a request")
+	}
+}
+
+func TestWorkspaceStopBeforeOwnerNeedsNoSharedMountOrGit(t *testing.T) {
+	g := newGitFixture(t, "demo")
+	s, r := g.settings(t)
+	s, sess := sharedSettings(t, s, "task-a")
+	admin, err := workspaceAdminLock(context.Background(), s, sess.Repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior := readWorkspaceMountInfo
+	t.Cleanup(func() { readWorkspaceMountInfo = prior })
+	readWorkspaceMountInfo = func() ([]byte, error) { return nil, errors.New("mount unavailable") }
+	if err := RequestWorkspaceStop(context.Background(), s, sess, rescueNow); err != nil {
+		t.Fatal(err)
+	}
+	if stop, err := workspaceStopRequested(s, sess); err != nil || !stop {
+		t.Fatalf("observational stop=%t, err=%v", stop, err)
+	}
+	readWorkspaceMountInfo = prior
+	admin()
+	if _, err := acquireWorkspaceWriter(context.Background(), r, s, sess, rescueNow); err == nil {
+		t.Fatal("late owner admission ignored private stop")
+	}
+	if exists(s.ownerPath(sess.Name)) {
+		t.Fatal("private stop wrote shared ownership")
+	}
+}
+
+func TestWorkspaceRefusedDaemonAcceptsPrivateStop(t *testing.T) {
+	r := newDaemonRig(t, nil)
+	s, sess := sharedSettings(t, r.d.S, r.d.Session.Name)
+	r.d.S, r.d.Session = s, sess
+	prior := readWorkspaceMountInfo
+	readWorkspaceMountInfo = func() ([]byte, error) { return nil, errors.New("mount unavailable") }
+	t.Cleanup(func() { readWorkspaceMountInfo = prior })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- r.d.Run(ctx) }()
+	waitFor(t, func() bool { st, _ := r.beats.last(); return st.Boot == protocol.BootFailed })
+	if err := RequestWorkspaceStop(context.Background(), s, sess, rescueNow); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("refused observational daemon ignored exact private stop")
+	}
+	if r.tmuxStarted() || exists(s.ownerPath(sess.Name)) || exists(s.statePath(launchFile)) {
+		t.Fatal("private stop admitted shared ownership or launched an agent")
 	}
 }
 
