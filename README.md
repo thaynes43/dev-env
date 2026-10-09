@@ -33,8 +33,8 @@ Agents: see [CLAUDE.md](CLAUDE.md) (Codex: [AGENTS.md](AGENTS.md)).
 Read the [workflow guide](docs/workflow-guide.md) for architecture diagrams,
 the feature set, working v1/v2 commands, Codex session management, repository
 freshness and cutover gates. V2 currently starts Claude task/local sessions;
-Codex, phone sessions and automatic drains remain unfinished. The proposed
-`/work/codex` project layout and client protections are tracked in
+Codex, phone sessions and automatic drains remain unfinished. Joint Claude/Codex projects and multiple remote pod links with shared
+workspaces are owner requirements; their implementation is tracked in
 [plan 11](.agents/sagas/distributed-dev-env/backlog/11-project-workspaces.md).
 
 ## License

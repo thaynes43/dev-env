@@ -3,15 +3,16 @@
 Updated 2026-10-09, America/New_York. This guide describes the product, the
 working paths, and the evidence still required before v2 replaces v1.
 
-**The goal:** give each agent task its own workspace and resource limits, keep
-project conversations easy to find from a phone, preserve today's maintenance
-capabilities, and recover unfinished work before removing a session.
+**The goal:** one project concept for Claude Code and Codex, with shared rules
+and repositories, stable project roots, separate task worktrees, and multiple
+Codex remote links across pods that can reach the same workspace. Keep resource
+limits, today's maintenance capabilities, and recovery before session removal.
 
 **Today:** v1 still runs normal work. V2's foundation and Claude task/terminal
 lifecycle are working. Temporary Kubernetes and network grants are built, but
 no standing grant policies are live. Proxmox credential minting is built and
-disabled. V2 phone sessions, the Codex hub, automatic image drains, and the
-management console are unfinished. All twenty capability parity checks remain
+disabled. V2 phone sessions, multiple Codex remote hosts, shared task workspaces, automatic
+image drains, and the management console are unfinished. All twenty capability parity checks remain
 open. This is a quick start for the working subset, not cutover approval.
 
 Read [HANDOFF](../.agents/HANDOFF.md) for current deployment evidence and
@@ -20,11 +21,67 @@ Read [HANDOFF](../.agents/HANDOFF.md) for current deployment evidence and
 [plan index](../.agents/sagas/distributed-dev-env/README.md#plan-backlog) remain
 the sources for decisions and acceptance criteria.
 
+## Start here: how you would use it
+
+The following drawings describe the requested workflow. Solid boxes show the
+working services or existing agent roles; dashed boxes include unfinished
+behavior. A drawing is not acceptance evidence or a selected management tool.
+
+![How you request and manage work](diagrams/management-workflow.png)
+
+**The orchestrator is the operator API and Kubernetes controller.** It creates
+and manages sessions; it does not reason about a task. The requester is a client:
+`agent-run`, a future management UI, an automation, or a coordinator agent using
+those interfaces. There is no separate built requester-agent service. A
+coordinator is a Claude/Codex session role that understands your request, starts
+work, reads results, asks questions, and ships the result.
+
+| Your action | Proposed visible workflow | What is built today |
+|---|---|---|
+| Open a project | Choose the same stable project root in Claude or Codex; see its repos and common rules | Manual Codex anchors exist; joint registration and rule propagation are missing |
+| Ask for work | Tell a coordinator what outcome you want, or use a management client; it requests the agent, project, size and mode | V1 launcher; v2 CLI/API requests Claude tasks or local sessions by repo |
+| Open another Codex pod | Choose a distinct remote computer link; the pod sees the same project/workspace files | V1 has one daemon; multi-pod enrollment and shared workspaces are required new work |
+| Begin a task | Managed preflight fetches, pins source, creates a separate worktree, loads project plus repo rules, and records its owner | V1 fetches; v2 agent 2.9.1 fetch-gates and pins new branches; project/cross-pod contract is missing |
+| Continue a task | Open its owning session/link and exact worktree; preserve files, index, branch and conversation | V2 Claude resume works; cross-host task ownership/transfer is unbuilt |
+| Answer a decision question | One native question prompt arrives in the phone app; answer there; record the ruling and continue | Required workflow; phone delivery must be verified for each supported agent path |
+| See progress | Status, outcome, task identity and the appropriate phone/terminal link are visible through the client | CLI/fleet lifecycle works; management console and v2 phone links are unbuilt |
+| Finish or suspend | Review and deploy the PR; suspend retains work; archive verifies rescue before removing task storage | Working v2 Claude subset; shared-project cleanup needs cross-pod ownership checks |
+
+The earlier design includes a **planned console** for session links/status,
+archiving and login renewal (D-37). It is not built. Your normal management
+surface still needs review; this guide does not choose a new website as the
+primary workflow. Q-16 removed approvals from that console: privileged approvals
+remain a separate Claude Code app design requirement. Ordinary design questions
+must also reach the phone; a paragraph in a status stream is not a delivered ask.
+
+### The three main journeys
+
+**Open and start:** open project X in either agent → see the same repository map
+and rules → request task Y → successfully fetch and pin its source → make a task
+worktree → run the chosen agent in the requested pod → show the task status/link.
+No task edits the project anchor or canonical clone.
+
+**Resume from another pod:** select that pod's Codex remote link → discover the
+same project/task files → check the task's existing owner → resume in its owning
+session, or perform an explicit fenced handoff before another session edits it.
+Shared files do not automatically transfer chat history or allow two writers.
+The exact cross-host conversation/handoff behavior remains to be designed/tested.
+
+**Finish and maintain:** review/merge/deploy → record durable results → rescue
+unfinished work before task cleanup. Project roots persist independently of task
+sweeping. Boot/daily sync refreshes clean anchors, checks canonical health, and
+reports dirty or unsafe states. Removing a project from the catalog reports it;
+it never automatically deletes its files.
+
 ## 1. What we are building
 
 V1 puts sessions, repositories, authentication, and tools in one long-running
-pod. V2 separates the control services from agent work. A task gets a session
-pod on a worker, its own persistent home, and a branch/worktree. The scheduler
+pod. V2 separates the control services from agent work. The current working implementation gives a task a session
+pod on a worker, its own persistent home, and a branch/worktree. The new shared
+project/workspace requirement changes where repository/task files must live;
+private agent runtime homes remain distinct. Storage and remote-host topology
+must be revised in a ratified ADR-002 superseding ADR-001's Storage/C-09
+decisions before implementing that part. The scheduler
 places it using its resource requests. If there is no room, it stays Pending
 with a visible reason.
 
@@ -34,7 +91,8 @@ flowchart TB
     Client --> Operator["Operator: session API and lifecycle"]
     Operator --> Session["AgentSession: identity, desired state, status"]
     Session --> Pod["Worker pod: agentd, tmux, agent"]
-    Pod --> Home["Private persistent home: repo, worktree, conversation"]
+    Pod --> Home["Private persistent home: agent runtime and conversation"]
+    Pod -. "new shared-workspace requirement" .-> Projects["Shared projects, references and task worktrees: planned"]
     Pod --> Shared["Shared storage: memory, logs, verified rescue bundles"]
     Pod --> Broker["Broker: bounded access grants"]
     Broker --> Keeper["Keeper: credential issuance and cleanup"]
@@ -54,7 +112,7 @@ refresh are still planned. PVE issuance remains off.
 | agentd | Prepare the workspace, supervise the agent, report status, rescue work | Home volume, conversation identity, branch and files |
 | Broker | Decide and revoke scoped access grants | Grant status and expiry; an independent egress expiry backstop exists |
 | Keeper | Own credential issuance and provider cleanup | Durable credential state and cleanup journal; one owner per rotating login |
-| Codex hub, planned | Keep one phone computer entry and route Codex work | Its enrollment and state on its own volume |
+| Codex remote hosts, required | Expose multiple stable pod links reaching the same project workspace | Each host's private enrollment/state; shared files separate |
 | Shelf | List, verify, restore and prune rescue bundles | Shared storage, separate from session-home storage |
 | Workbench/console, planned | Give people a place to manage sessions | Stable access paths; no agent work required by default |
 
@@ -81,8 +139,8 @@ guide is describing the target.
 | Proxmox credential backend | Built, disabled | Keeper SSH minting and recovery, typed PVE files/helper; CA delivery, node trust, network/policy wiring and real provider acceptance remain |
 | General hw-ssh grants | Unbuilt | Must retain existing targets, command classes, PTY/stdin behavior, and owner rules |
 | V2 Claude phone sessions and Max refresh owner | Planned, plan 03 | Keeper-owned login, Remote Control registration/resume, renewal and archive |
-| V2 Codex hub and per-session Codex | Planned, plan 04 | Stable phone enrollment, sole refresh owner, isolated task/local pods |
-| Phone Codex execution in separate session pods | Conditional, plan 04 | Requires S-4 to prove the exec-server path on the pinned CLI |
+| V2 Codex remote hosts and shared projects | Required, plans 04/11 | Multiple stable pod links, joint Claude/Codex projects, sole refresh owner, shared files with distinct task ownership |
+| Codex phone execution across pods | Unverified, plan 04 revision | Two-host enrollment/renewal and shared workspace acceptance required; S-4 forwarding is an optional mechanism to reassess |
 | Automatic drain onto new images/config | Planned, plan 04 | Wait for idle, preserve conversation, resume on a new revision |
 | Management console | Planned, plan 03 | Sessions, links, archive and login renewal; a separate web approval flow is not selected |
 | Guarded replacement for Headlamp | Required, unfinished | Preserve accepted task scope and owner directives; prove replacement and migrate callers before removal |
@@ -272,117 +330,138 @@ drain waits for idle and resumes the same conversation on the same home.
 “Outdated image,” “branch behind main,” and “old chat context” are separate
 conditions; fixing one does not fix the others.
 
-## 5. Codex sessions and `/work/codex`
+## 5. One project for both agents, across pods
 
-### The objects we need to keep separate
+The [owner requirements](../.agents/sagas/distributed-dev-env/requirements/2026-10-09-project-roots.md)
+settle the earlier app question: **both Claude Code and Codex use the same project
+concept**. R1–R6 define project creation, shared rules, freshness and cleanup;
+R7 adds multiple Codex remote links spanning pods with shared workspace files.
+Q-20's app-choice premise is superseded. The initial `/work/codex` shorthand is
+replaced here by the supplied v1 layout, `~/codex` (`/home/dev/codex`).
 
-| Object | Purpose | Owner / lifetime |
-|---|---|---|
-| Connected computer / hub | Reach the environment from the phone | One enrollment per hub; persists on its volume |
-| Project folder | Give a project a stable entry point | Project lifetime; implementation goes into task worktrees |
-| Chat | Preserve the conversation, intent and decisions | May outlive a task; does not update source files |
-| Task worktree | Hold one implementation branch and its files | One task owner; kept until merge or verified rescue |
-| Reference repository | Fetch objects and refs for new worktrees | Managed shared reference in v1; private clone per v2 session |
-| AgentSession | Let v2 own a pod, home, lifecycle and status | Platform resource; does not yet map phone Codex chats into pods |
+![Multiple Codex links reaching one shared project workspace](diagrams/shared-project-workspace.png)
 
-Codex CLI uses its working directory as the project context. A saved conversation
-has its own transcript and recorded directory, while reads use the current files.
-Local folder projects differ from ChatGPT projects containing uploaded sources.
-See [official Projects and chats documentation](https://learn.chatgpt.com/docs/projects).
+### What a project contains
 
-Codex-managed worktrees start from the selected branch's local HEAD and normally
-use detached HEAD. Their creation alone does not guarantee a recent fetch. For
-our workflow, select a freshly verified base and create an `agent/<task>` branch
-before publishing. See [official worktree documentation](https://learn.chatgpt.com/docs/environments/git-worktrees).
-
-### Recommended v1 folder contract — proposed, not deployed
-
-Tom requested `/work/codex` as the project entry point. The audit found that
-neither `/work` nor `/work/codex` currently exists. The existing launcher uses
-`/home/dev/repos` and `/home/dev/work`. Preserve those reference/task locations
-while adding stable project homes on persistent storage:
+A project is a stable entry point plus a repository map and common rules. It can
+contain one repo or several. It is not a disposable task worktree, an agent
+process, or a remote computer enrollment.
 
 ```text
-/work/codex/
-  dev-env/                 managed Git project/coordinator home
-  haynes-ops/              managed Git project/coordinator home
-  another-project/         one stable entry per project
+/home/dev/codex/                 permanent project roots; never swept
+  hass-sandbox/                 detached repo anchor
+  sigo-alumni/                  multi-repo project root
+    AGENTS.md                   shared project rules rendered for Codex
+    CLAUDE.md                   same rules / import for Claude
+    sigo-alumni/                detached repo anchor
+    sigoalumni-org/             detached repo anchor
+    sigmaphiomicron-com/        detached repo anchor
 
-/home/dev/repos/
-  dev-env/                 reference clone; Git administration only
-  haynes-ops/               reference clone; Git administration only
+/home/dev/repos/                canonical references; no implementation edits
+  sigo-alumni/
+  sigoalumni-org/
+  sigmaphiomicron-com/
 
-/home/dev/work/
-  dev-env-task-a/           branch agent/task-a; one implementation owner
-  dev-env-task-b/           branch agent/task-b; another implementation owner
+/home/dev/work/                 task worktrees; eligible for safe rescue/sweep
+  sigo-task-a/                  branch agent/task-a; one owner
+  sigo-task-b/                  branch agent/task-b; another owner
 ```
 
-The project home should be a managed Git-backed checkout so clients that expect
-a repository can discover it. It is the coordinator's entry, with source
-revision visible. New task worktrees must come from a newly fetched, pinned
-reference commit, independently of that project's cached HEAD. Refresh a project
-home only when its local users are at a safe boundary and it is clean; never
-reset a chat's active implementation worktree to make a sidebar project look fresh.
+R1 declares project names, repos, default branches and rules once in GitOps.
+Boot or the future `dev-env project sync` materializes missing repos/roots and
+reports undeclared roots without deletion. A future `project add` performs the
+GitOps declaration and materialization workflow as one user operation; it must
+honor branch/PR/Flux rules and avoid restarting active hosts to reload a catalog.
+Neither command exists today.
 
-The implementation must make `/work/codex` resolve to persistent storage and
-teach the relevant launcher/client how to register and use it. A symlink alone
-does not supply a freshness check. Existing chats keep their current directories
-until explicitly migrated; their histories and authentication are not copied.
-Q-20 records the clarification about which app registers these folders.
+R2 binds that project to both providers. Codex trust entries are generated from
+the catalog; Claude gets all project repos in scope. The intended command is
+`agent-run --project sigo-alumni`; it is **not supported by either current
+launcher**. Repo-based quick starts in section 3 remain the working path.
 
-```mermaid
-flowchart TB
-    Phone["Phone selects project/chat"] --> Hub["V1 daemon; future v2 Codex hub"]
-    Hub --> Project["Stable /work/codex/project home"]
-    Project --> Start["Managed task-start preflight"]
-    Ref["Reference repository"] --> Start
-    Start --> Fresh{"Fetch succeeded + base pinned?"}
-    Fresh -->|no| Stop["Stop new task; preserve existing work"]
-    Fresh -->|yes| Task["Separate task worktree + agent branch"]
-    Task --> Review["PR and deployment workflow"]
-```
+R3 renders both providers' project instructions from one source. R4 carries
+those rules into each task alongside that repo's own rules. Keep tasks under
+`~/work` to satisfy R5's explicit sweep boundary; use a verified project pointer
+or launch-time instruction composition/injection. Placing a linked Git worktree
+under a project directory alone does not prove rule inheritance. Test the actual
+instructions received by both agents at project and task roots, including
+multi-repo children. Never replace repo rules with project rules.
 
-### How Codex differs from Claude Code here
+### Current v1 baseline
+
+Manual detached anchors exist for hass-sandbox, haynesnetwork and the three-repo
+sigo-alumni project. They are on v1's ext4 **RWO** home volume, and their linked
+Git administration directories are under `~/repos`. The multi-repo root has an
+`AGENTS.md`, but no common Claude project-rule binding. No generated Codex trust
+entries for these roots, project catalog, sync/add commands or task-rule
+propagation were found.
+
+[haynes-ops PR #3633](https://github.com/thaynes43/haynes-ops/pull/3633) was still
+open/unmerged at the audit. Its instructions do not implement reconciliation.
+The attachment's staged-index problem was historical; the two named clones were
+clean at this audit. Other canonical/anchor snapshots lagged their cached refs;
+one fetched canonical was far behind. Cached comparisons are not successful
+fresh-fetch evidence. No clones or anchors were repaired for this documentation.
+
+### Shared files and private remote hosts
+
+The target has at least two independently addressable Codex remote hosts/pods.
+Both mount the same project roots, canonical Git directories and task workspace
+files at consistent absolute paths. A project can be opened from either link;
+a task has one active writer and a recorded session/host owner. Git linked
+worktrees require their common directory as well as checkout files to be visible.
+Sharing just an anchor checkout is insufficient.
+
+Each logical remote host retains its own enrollment, socket/PID state, agent
+runtime home and conversation ownership. Its persistent identity must survive
+pod replacement. Keep rotating refresh-token ownership in one keeper; do not
+share a writable `~/.codex` or `~/.claude` directory between pods. Shared files
+are not shared chat transcripts. Session history transfer requires an explicit
+supported workflow rather than copying live auth/runtime state.
+
+The earlier single-hub plan and private per-session Git workspace choices
+(D-12/D-15/D-22) need revision under D-74. The current RWO homes plus small shared
+memory/rescue volume do not satisfy this topology. Choose and test a genuine
+cross-node shared workspace backend, keeping household-service load bounded;
+ADR-001 remains immutable; ADR-002 must supersede its affected storage/cloning
+decisions before implementation. No storage backend or migration is selected
+by this guide.
+
+Official documentation describes multiple paired hosts, but does not establish
+our simultaneous access-token-only Linux-pod enrollment. Prove two pod links,
+keeper refresh/reload, one-host drain, shared Git metadata, cross-pod locks and
+live-peer cleanup protection on the pinned CLI before advertising this workflow.
+[Official remote connections](https://learn.chatgpt.com/docs/remote-connections),
+[advanced configuration](https://learn.chatgpt.com/docs/config-file/config-advanced).
+
+### Session management
 
 | Concern | Claude Code | Codex |
 |---|---|---|
-| Phone control in v1 | A Remote Control entry per opted-in session | One machine daemon hosting multiple chats |
-| Project context | Session launched into its task workspace | Chat's project/cwd must point to the intended workspace |
-| New task from phone | Existing launcher creates the worktree | A phone chat can bypass that launcher; it needs equivalent preflight |
-| Delegation | Provider-native subagents | Native collaboration children; separate CLI sessions use `agent-run` |
-| V2 identity target | Keeper-owned Max login; access tokens to pods | Stable hub enrollment; keeper-owned Codex refresh; access tokens to pods |
-| Distribution status | Task and local supported; phone path unbuilt | V2 creation rejected today; hub and isolated execution unbuilt |
+| Phone control today | Remote Control entry per opted-in session | One v1 computer daemon hosting many chats |
+| Requested project concept | Same stable root/repo map/rules | Same stable root/repo map/rules |
+| Requested v2 remote topology | Session links across pods | Multiple remote computer links across pods, shared project/workspace files |
+| Task start | Managed fresh-source worktree plus project and repo rules | Equivalent preflight for app, remote and CLI paths |
+| Resume | Exact session/worktree identity; preserve local state | Exact chat/host/worktree identity; shared files alone do not migrate the chat |
+| Credential target | Keeper owns Max refresh | Keeper owns Codex refresh; hosts get short-lived results |
+| Today in v2 | Task/local supported; phone unfinished | Session creation rejected; remote/shared topology unbuilt |
 
-The pod's pinned CLI and GitOps scripts establish its current daemon behavior.
-General OpenAI documentation also describes desktop/SSH remote projects; that
-does not establish acceptance of our Linux-pod hub or cross-pod executor. See
-[official remote connections documentation](https://learn.chatgpt.com/docs/remote-connections).
-
-### Session management recommendations
-
-- Keep a named coordinator chat per project for decisions and progress. Give
-  each concrete implementation outcome a separate task workspace; do not let two
-  independent agents edit the same branch/worktree.
-- Resume an existing chat when continuing the same task. Use its exact chat ID
-  and worktree identity for managed CLI resume; a global “last chat” can select
-  the wrong project. Resume checks repository, branch and local work first.
-- Start a new chat for a new outcome or a reset handoff. Read the durable handoff
-  from current source and the old task's explicit branch/PR evidence.
-- Keep enrollment, transcripts and workspace lifetimes distinct. Archiving a
-  chat is not Git rescue or platform reap; reaping a pod is not deleting the
-  phone's computer entry.
-- In v2, implement the accepted hub and keeper ownership first. Prove the S-4
-  execution path before claiming that a phone chat runs in its own worker pod.
+Keep coordinator chats for project decisions and progress. Give each concrete
+implementation outcome its own task worktree. Resume the same session for the
+same task; use an explicit ownership handoff to move work. Archiving a chat,
+reaping a task pod, removing a project declaration and deleting a remote computer
+entry are distinct actions with distinct lifetimes. A quiet project survives
+all normal task cleanup.
 
 ## 6. Protection from stale repositories
 
 ### What exists and what the launch contract must add
 
 V1's `agent-run` fetches the canonical repository and stops on failure before
-adding a worktree. Phone-started Codex chats bypass that path. V2 privately clones
+adding a worktree. Phone-started Codex chats bypass that path. Current v2 privately clones
 each session, which avoids sharing a mutable clone between session pods, but
 its old reused-clone path warned and continued even before a new branch existed.
-This change closes that new-branch failure path and pins its base commit.
+Agent 2.9.1 closes that new-branch failure path and pins its base commit.
 Existing branch/worktree recovery remains allowed with a warning after fetch
 failure; preserving unfinished work is different from selecting fresh source.
 A verified rescue restore can intentionally start from its imported historical
@@ -392,35 +471,51 @@ Existing-workspace branch changes or detached HEAD also warn rather than block
 resume; deliberate checkouts and in-progress rebase/bisect state remain intact.
 A foreign clone/path or broken HEAD still fails. See D-73 for the boundary.
 
-Folder layout is only discovery. The remaining managed v1/Codex launch contract
-needs these checks:
+The remaining joint-project and cross-pod contract needs these checks:
 
 | Moment | Required behavior | If the check fails |
 |---|---|---|
-| New task | Verify repository identity; successfully fetch; resolve the selected remote base to a full commit SHA; create the worktree from that SHA | Stop before sending an implementation prompt |
-| Shared reference mutation | Hold one per-repository lock across fetch, base resolution and worktree registration | Wait with a bounded error; do not race another launcher |
-| Project-home use | Show the cached revision; read current rules/handoff from verified source; refresh the clean home at a safe boundary | Report stale source; route new work through preflight |
-| Resume | Match chat/worktree/repo/branch; inspect local modifications; fetch and report divergence when possible | Preserve WIP; never auto-reset, auto-rebase or silently substitute another checkout |
-| Long-running task | Fetch before integration and report commits behind/ahead of the chosen remote base | Review and merge/rebase deliberately, then rerun affected checks |
-| PR publication/merge | Refresh target branch, inspect actual diff, resolve conflicts and review findings; require CI on the current PR head | Block merge until relevant validation is current |
+| New task | Verify repo identity; successfully fetch; pin selected base SHA; create separate worktree; compose current project/repo rules | Stop before an implementation prompt; preserve existing work |
+| Shared Git mutation | Serialize sync, fetch, ref resolution, worktree creation and prune by common Git directory across all pods | Bounded wait/error; local PID files are insufficient |
+| Project refresh | Boot/daily refresh clean anchors to the declared remote default; respect ownership and in-progress Git operations | Report dirty/busy/unsafe state; never reset task files |
+| Resume or host transfer | Match chat, host, repo and worktree; preserve index/WIP and acquire the task's writer ownership | Never silently create unrelated source or permit two writers |
+| Long-running integration | Fetch chosen target; show ahead/behind and actual diff; resolve deliberately; validate current PR head | Block publication/merge on unresolved source or review failures |
+| Task sweep | Scan `~/work` only; protect live owners on every pod; rescue before eligible deletion | Do not use this pod's `/proc` to declare a peer dead |
+| Git registration prune | Protect managed anchors and paths absent during mount failures | Directory exclusion alone must not allow `git worktree prune` to forget an anchor |
 
-Resolve once and use the SHA, rather than a moving `origin/main`, for creation.
-Record repository, selected base ref, full start SHA, successful fetch time,
-branch/worktree, and owner/session identity in the managed task record. A daily
-background fetch can help, but it cannot replace the per-task check. The full
-record and shared lock are **remaining work**, not existing v2 status fields.
+Record repo identity, selected ref, immutable start SHA, successful fetch time,
+project/rules revision, branch/worktree and session/host owner. Background daily
+fetches help project discovery; every new task still needs its own verified
+source transaction. Those project/cross-pod records and locks are **unbuilt**.
 
-A fetch updates remote refs; it does not update a checked-out branch or an old
-conversation. A branch deliberately based on an older feature branch can be
-valid: record that explicit choice rather than treating every difference from
-main as corruption. Failed refresh during resume must be visible and must not
-be represented as fresh evidence for deployment or integration.
+### Canonical health and lossless repair (R6)
 
-These controls prevent accidental stale starts. On v1's shared filesystem they
-are not an isolation boundary against an agent bypassing the launcher. V2's
-private session homes provide stronger separation. The
-[session workspace plan](../.agents/sagas/distributed-dev-env/backlog/11-project-workspaces.md)
-tracks the missing launch paths and acceptance tests.
+At boot/daily maintenance, report a canonical checkout that is on the wrong
+branch, detached, staged/unstaged dirty, or behind the freshly fetched default.
+Fetch failure is a reported failure, not a claim that cached refs are current.
+An old index can make hundreds of apparent staged reverts; do not pass that
+state into an agent task or mistake it for a clean new checkout.
+
+Auto-repair only a proven lossless case, under the same cross-pod administrative
+lock and after rechecking ownership/state. Pin the fetched target. Verify the
+index tree matches a commit in that fetched remote history, working files match
+the index, and there are **no untracked files, including ignored files**.
+Even unrelated untracked files block automatic repair under R6. Preserve local-only HEAD/branch commits; index equality alone does not
+prove those safe. Refuse conflicts, pending Git operations, unexplained index
+flags, foreign repository identity or a branch in use by another worktree.
+Retain a repair receipt and enough pre-repair refs/state to recover the action.
+
+A clean, behind default branch can fast-forward; the proven stale-index/detached
+case can be restored to the fetched default under R6. Any unsafe or ambiguous
+case is reported and preserved. No broad `reset --hard`, `clean -fd`, ref deletion
+or worktree deletion is part of project sync.
+
+These are accidental-staleness protections. Agents with shared filesystem
+access can bypass a wrapper; the contract is not a security boundary. The
+[project/workspace plan](../.agents/sagas/distributed-dev-env/backlog/11-project-workspaces.md)
+tracks entry-point integration and acceptance. Every supported app/remote/CLI
+start must use the preflight, or be explicitly coordinator-only and request
+implementation through the managed path.
 
 ## 7. Access, credentials and approval
 
@@ -532,8 +627,10 @@ supports the Codex work and must be tested on the launch paths it introduces.
   expiry/recovery/cleanup evidence, under existing owner rules.
 - Prove phone session registration, continuation and archive, plus keeper
   credential refresh and failure recovery without competing refresh owners.
-- Prove Codex hub enrollment survives a drain and the promised execution
-  isolation works on the pinned CLI. State any stage that still runs in the hub.
+- Prove multiple Codex remote pod links survive renewal and replacement, reach
+  the same shared workspace, and respect task/daemon ownership on the pinned CLI.
+- Prove R1–R6: catalog boot/sync, joint project/rule loading in both agents,
+  permanent root retention, cross-pod cleanup and lossless canonical repair.
 - Prove image/config drains wait for idle and resume conversations without
   cutting busy work. Ordinary controller upgrades still leave sessions alone.
 - Exercise new-task freshness, offline WIP resume, concurrent project tasks,
@@ -558,8 +655,9 @@ owner, bounded checks, acceptance evidence and deploy path. For tests, include
 the shared-node CPU rule: no burners or wide/looped tests, low parallelism under
 `nice -n 19`, one suite at a time, and a CPU limit on cluster Jobs.
 
-Questions go to Tom one at a time with their verified premise and concrete
-tradeoffs. Record the question and dated answer in DESIGN. An unanswered
+Questions go to Tom one at a time through a verified native phone prompt, with
+their checked premise and concrete tradeoffs. A question buried in commentary
+is not a delivered ask. Record the question and dated answer in DESIGN. An unanswered
 question blocks only the work that depends on it.
 
 Keep four protections visible in every release: current source, preserved

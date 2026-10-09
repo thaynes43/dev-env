@@ -5,7 +5,8 @@ Guidance for Claude Code and other agents working in this repository. Codex read
 
 The [workflow guide](docs/workflow-guide.md) gives the high-level feature set,
 working quick start, Codex session model, freshness contract and delivery gates.
-The proposed v1 project homes and remaining client protections are tracked in
+Joint Claude/Codex projects, multiple remote pod links and shared workspaces
+are required; remaining design/client implementation is tracked in
 [plan 11](.agents/sagas/distributed-dev-env/backlog/11-project-workspaces.md).
 
 **Start with [`.agents/HANDOFF.md`](.agents/HANDOFF.md).** It gives the current
@@ -171,14 +172,22 @@ Directories still to come: later controllers (ToolSession, LLMLease) beside
   design for the how, a backlog plan for the steps, then code. Docs change in the same
   PR as the behaviour they describe. An Accepted ADR is never edited; a new ADR
   supersedes it.
-- **Questions go to Tom one at a time**, with the AskUserQuestion tool, at the moment
-  they come up. Record each one as a `Q-NN` entry in the design (options with the
-  recommended one first, each with its consequence), then fold his answer back in as
-  a dated ruling. Check a question's premise before you ask it.
+- **Questions go to Tom one at a time through the native phone prompt**, at the
+  moment the decision arises. Claude uses AskUserQuestion. Codex must use an
+  available native user-question tool **once phone delivery is verified**; that
+  delivery is currently unverified for this client and is a plan 11 acceptance
+  requirement. Plain commentary, final-message
+  lists, PR comments and a `Q-NN` record are not delivery. Record the question in
+  the design, push the prompt, then fold the answer back as a dated ruling.
+  Verify the premise before asking. If the available client cannot deliver the
+  phone prompt, report that capability gap and keep the dependent decision pending;
+  continue independent authorized work and do not invent a notification channel.
+
 - **Worktree per task, never push to main.** Branch `agent/<task>`, open a ready PR,
   squash-merge it yourself once required checks are green and the review findings
   are handled.
-- **Plain writing.** Short sentences, concrete nouns, no filler. Diagrams as mermaid.
+- **Plain writing.** Short sentences, concrete nouns, no filler. Use Mermaid for editable
+  engineering diagrams; SVG/PNG workflow drawings are also supported.
 
 ## Hard rules
 
