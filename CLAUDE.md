@@ -25,7 +25,9 @@ archive, the minimal keeper, `agent-run` v2, CI, and the agent image `dev-env:2.
 (KICKOFF B1 to B5, plan 01 steps 1 to 9). The operator and the keeper run in the
 cluster, and the first end-to-end task ran on 2026-10-07. Plan 02 is done under
 Tom's 2026-10-08 correction: acceptance uses the existing in-cluster CLI, and
-external CLI access is optional (Q-17). Plan 07's docs-only approval spike is complete (R-03, Q-18 pending);
+external CLI access is optional (Q-17). Plan 07's docs-only approval spike is complete
+(R-03); D-70 withdraws Q-18's earlier premise, with no route selected. D-71 targets
+a guarded replacement for accepted Headlamp tasks before its retirement.
 the v1 capability parity audit is complete (R-04); all twenty gaps block cutover. The build sessions follow
 [`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md). v1 keeps running from
 haynes-ops (`kubernetes/main/apps/dev/dev-env/`, `scripts/dev-env/Dockerfile`) until

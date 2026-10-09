@@ -16,7 +16,8 @@ standing admin access. Secret reads, drains, snapshots and broad
 workload operations are already reachable through that identity; a direct grant
 would change their access mechanism rather than add a new effective power. No
 concrete additional Kubernetes capability is established by those examples, so
-the earlier Q-18 route question is withdrawn pending a specific use case. Existing
+the earlier Q-18 question about new powers is withdrawn. D-71 names the concrete
+guarded replacement workflow; its approval implementation remains unselected. Existing
 owner rules still apply, and no blanket direct admin grant is authorized.
 Agents retain haynes-ops self-merge, app maintenance and
 Authentik blueprint wiring. No Authentik, Traefik or postgres lockdown, git review
