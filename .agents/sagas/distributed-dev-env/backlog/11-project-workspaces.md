@@ -3,6 +3,9 @@
 **Status:** owner requirements R1–R7 recorded; architecture/client implementation
 pending workflow review. The separate v2 fresh-start bug fix shipped in agent
 2.9.1 (#124/#123, haynes-ops #3636); it does not implement this project contract.
+The [ADR-002 proposal](../adrs/002-shared-project-workspaces.md) now draws the
+concrete topology and compares storage choices; owner ratification and trials
+remain pending.
 **Depends on:** plan 04 revision for Codex remote hosts/refresh; ratified ADR-002
 superseding ADR-001's Storage/C-09 decisions and explicit D-15/D-22 revision for
 shared Git/task files. R2 supersedes Q-20; there is no

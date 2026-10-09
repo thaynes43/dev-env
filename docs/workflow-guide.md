@@ -54,6 +54,12 @@ primary workflow. Q-16 removed approvals from that console: privileged approvals
 remain a separate Claude Code app design requirement. Ordinary design questions
 must also reach the phone; a paragraph in a status stream is not a delivered ask.
 
+[Proposed ADR-002](../.agents/sagas/distributed-dev-env/adrs/002-shared-project-workspaces.md)
+now makes the workspace choice reviewable: shared project/reference/task files,
+private agent homes, two remote hosts and explicit task transfer. It compares
+available storage and proposes a bounded CephFS trial. It is not ratified; a
+new PVC does not isolate workspace IO from the household's storage services.
+
 ### The three main journeys
 
 **Open and start:** open project X in either agent → see the same repository map
@@ -579,6 +585,12 @@ Q-19's CA storage step is complete by owner confirmation in existing
 4. Enable keeper and broker together only after prerequisites pass. Declare
    activity; test real mint/install/use/release/expiry/recovery and cleanup.
 5. Remove fixtures and compare v1/existing session UIDs and restart counts.
+
+[Owner node-trust instructions](keeper-node-trust.md) are now prepared from
+read-only checks on all five nodes. They append the restricted CA entry using
+the saved public key, preserve v1's existing key and include guarded rollback.
+They have not been executed; installed trust and provider acceptance remain
+pending. Secret synchronization will not by itself prove the CA key pair valid.
 
 General hw-ssh certificates are a separate unfinished feature. Certificate
 expiry alone does not terminate an existing SSH connection; P-19 needs its

@@ -27,6 +27,15 @@ and D-74 require revision of plan 04's single-hub and D-15/D-22's private Git/ta
 assumptions. Do not implement a single replacement hub as if it satisfied R7.
 No shared backend, new primary UI or credential migration was selected.
 
+Read [Proposed ADR-002](sagas/distributed-dev-env/adrs/002-shared-project-workspaces.md)
+for the concrete topology and storage alternatives. It proposes dedicated RWX
+workspace storage with private provider homes and explicit task ownership.
+Expiry alone cannot fence a partitioned writer; uncertain ownership blocks
+transfer and reap. The existing CephFS trial is a proposal, not owner
+ratification or permission to provision shared workspaces. Accepted ADR-001 is
+unchanged. Phone delivery remains unverified: the structured question received
+a desktop reply, not a verified phone round-trip.
+
 The independent stale-start fix is **shipped**: dev-env #124 merged
 `759f084f`, release #123 produced **2.9.1** at `b6c0f3c`, and publish-agent run
 `37944933337` passed smoke and exact-tag signing verification. Haynes-ops #3636
@@ -377,6 +386,7 @@ no values in chat.
 | [distributed-dev-env/README.md](sagas/distributed-dev-env/README.md) | Tom's vision, the architecture at a glance, the hard news, the decision log and the plan index. |
 | [distributed-dev-env/KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) | The work order for the first build session. |
 | [adrs/001-distributed-dev-env.md](sagas/distributed-dev-env/adrs/001-distributed-dev-env.md) | The architecture decision (Accepted 2026-10-06), with the ratification summary at the top and consequences C-01 to C-21. |
+| [adrs/002-shared-project-workspaces.md](sagas/distributed-dev-env/adrs/002-shared-project-workspaces.md) | Proposed shared workspace/private runtime topology and storage choices; unratified, with ownership and deployment gates. |
 | [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 to Q-20 and their resolutions in 15, the decisions (D-01 onward) in 16. |
 | [research/R-01](sagas/distributed-dev-env/research/R-01-summoned-agents-audit.md) | An audit of summoned agents today, with v2 requirements V-01 to V-17. |
 | [research/R-02](sagas/distributed-dev-env/research/R-02-remote-control-identity.md) | Remote Control identity, the evidence behind S-1, and proposals P-1 to P-12. |
@@ -386,7 +396,7 @@ no values in chat.
 | [backlog/01-foundation.md](sagas/distributed-dev-env/backlog/01-foundation.md) | Plan 01: operator, agentd, `agent-run`, the agent image, task mode on the static token. |
 | [backlog/02](sagas/distributed-dev-env/backlog/02-interactive-lifecycle.md) | Plan 02: interactive sessions, idle detection, suspend, resume and optional external CLI access. Done under Tom's corrected scope. |
 | [backlog/03](sagas/distributed-dev-env/backlog/03-remote-control.md) | Plan 03: Remote Control, the keeper-owned Max login and the console. |
-| [backlog/04](sagas/distributed-dev-env/backlog/04-rolling-updates-codex.md) | Plan 04: drain on idle with resume, and the codex hub. |
+| [backlog/04](sagas/distributed-dev-env/backlog/04-rolling-updates-codex.md) | Plan 04: drain on idle with resume, multiple Codex remote hosts and one refresh owner. |
 | [backlog/05](sagas/distributed-dev-env/backlog/05-cutover.md) | Plan 05: cutover from v1 (needs Tom's written approval). |
 | [backlog/06](sagas/distributed-dev-env/backlog/06-later.md) | Later items, each a future plan. |
 | [backlog/07](sagas/distributed-dev-env/backlog/07-access-broker.md) | Plan 07: the access broker, grants and break-glass. |
@@ -468,8 +478,11 @@ which lists exactly what to change:
 - **Merge your own green PRs** with a squash merge, once required checks pass and
   every finding is handled.
 - **Only questions wait on Tom.** Ask one at a time, when it comes up, with the
-  recommended option first. Claude Code uses AskUserQuestion; Codex asks in its
-  conversation. Record each question as a `Q-NN` in the design, then fold Tom's
+  recommended option first. Claude Code uses AskUserQuestion; Codex uses the
+  available native question tool, with phone delivery verified before relying
+  on that route. If unavailable, report the capability gap and keep only the
+  dependent decision pending; prose in the stream is not delivery. Record each
+  question as a `Q-NN` in the design, then fold Tom's
   answer back in as a dated ruling and update the decision log. Check a question's
   premise before you ask it.
 - **Docs first.** A behaviour change starts in the saga and lands in the same PR as

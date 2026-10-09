@@ -34,6 +34,10 @@ links sharing workspace files. [Plan 11](backlog/11-project-workspaces.md) and
 D-74 revise the earlier single-hub/private-Git assumptions. R2 supersedes Q-20;
 management workflows must be drawn/reviewed before further implementation.
 
+[Proposed ADR-002](adrs/002-shared-project-workspaces.md) provides that reviewable
+topology and compares shared-storage options. It is not ratified; no new
+workspace volume, remote enrollment or runtime migration is deployed by it.
+
 **v1** is the single dev-env pod deployed from haynes-ops
 (`kubernetes/main/apps/dev/dev-env/`; saga `.agents/sagas/dev-env/` there). It keeps
 running, maintained in haynes-ops as today, until Tom approves the cutover in phase 5.
