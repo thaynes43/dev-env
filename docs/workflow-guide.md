@@ -149,12 +149,14 @@ guide_base=$(git -C /home/dev/repos/dev-env rev-parse 'origin/main^{commit}')
 git -C /home/dev/repos/dev-env worktree add \
   "$guide_checkout" -b "agent/$guide_task" "$guide_base"
 cd "$guide_checkout"
-make build
+PATH="/home/dev/.local/go/bin:$PATH" make build
 v2run=("$guide_checkout/bin/agent-run")
 "${v2run[@]}" version
 ```
 
-`make build` uses the repository's bounded Go settings. Build once; reuse that
+The current pod's Go installation is `/home/dev/.local/go/bin`; the command
+above makes it available even in a shell that did not load the interactive
+profile. `make build` uses the repository's bounded Go settings. Build once; reuse that
 binary for the steps below. On this shared pod, do not run CPU burners or wide
 test/build loops. Images build in CI.
 
