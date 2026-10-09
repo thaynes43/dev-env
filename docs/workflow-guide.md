@@ -362,7 +362,10 @@ process, or a remote computer enrollment.
 
 ```text
 /home/dev/codex/                 permanent project roots; never swept
-  hass-sandbox/                 detached repo anchor
+  dev-env/                      one-repo project root
+    AGENTS.md                   shared project rules rendered for Codex
+    CLAUDE.md                   same generated rules
+    dev-env/                    detached repo anchor
   sigo-alumni/                  multi-repo project root
     AGENTS.md                   shared project rules rendered for Codex
     CLAUDE.md                   same rules / import for Claude
@@ -371,6 +374,7 @@ process, or a remote computer enrollment.
     sigmaphiomicron-com/        detached repo anchor
 
 /home/dev/repos/                canonical references; no implementation edits
+  dev-env/
   sigo-alumni/
   sigoalumni-org/
   sigmaphiomicron-com/
@@ -386,6 +390,13 @@ reports undeclared roots without deletion. A future `project add` performs the
 GitOps declaration and materialization workflow as one user operation; it must
 honor branch/PR/Flux rules and avoid restarting active hosts to reload a catalog.
 Neither command exists today.
+
+D-79 uses a plain project folder with generated rules and one child anchor per
+repository, even for one-repository projects. V2 starts in its new shared
+workspace; it does not convert v1's existing anchor-at-root layout. Sync reports
+and preserves an existing root that is itself a Git worktree. Any conversion
+needs a separately supported lossless migration; it cannot overwrite repository
+instructions, rename live worktrees or prune their registrations automatically.
 
 R2 binds that project to both providers. Codex trust entries are generated from
 the catalog; Claude gets all project repos in scope. The intended command is
