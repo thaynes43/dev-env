@@ -5,7 +5,8 @@ and task files with Claude Code while keeping each host's login, enrollment
 and conversation state private. A task has one writer, fresh pinned source,
 a bounded budget and a recoverable result.
 
-The existing v2 Claude task and terminal workflow can be tested now. The full
+One real v2 Claude task has passed execution and cleanup. The existing Claude
+task and terminal workflow can be tested now. The full
 shared-project Codex MVP still has open acceptance gates. The overnight work
 released the budget and native-host foundations as **2.11.0** and staged the
 isolated operator profile. It does not yet establish two working Codex links
@@ -41,14 +42,32 @@ flowchart TD
 
 Use the [v2 CLI setup and session commands](workflow-guide.md#3-quick-start-with-the-working-paths).
 The command named `agent-run` already installed in the v1 pod is the v1 shell
-launcher. Build the v2 client in the separate worktree described by that guide,
-load the public operator CA, then run its `fleet` and `help run` commands.
+launcher. A v2 client has already been built and checked in this pod:
+
+```bash
+v2run=(/home/dev/work/v2-morning-claude-cli/bin/agent-run)
+export DEV_ENV_API_CA_FILE=/home/dev/work/orders/morning-claude-cli-verification-2026-10-10/operator-ca.crt
+"${v2run[@]}" version
+"${v2run[@]}" fleet
+"${v2run[@]}" help run
+```
+
+This binary was built from `739872fc`; the ordinary worker template is still
+2.9.1. The signed 2.11.0 image was used for the separate native fixture, not
+rolled out to every session. The CA file is public trust material. If these
+paths no longer exist, use the fresh worktree/build steps in the workflow guide.
 
 Choose one small Claude task or one local terminal session. Check its reported
 source commit, owner, status and result. For a local session, test attach,
 detach and a message. Suspend it, verify the retained state and rescue result,
 then resume. Reap only after the result or rescue is confirmed; follow cleanup
 until it completes. The guide contains the exact supported commands.
+
+The overnight read-only Claude smoke finished successfully with two turns
+and exit code 0. Its Pod had no init containers and CPU 2 / memory 4 GiB limits; supported
+cleanup removed the session, Pod and PVC. Its final sentence was not retained
+and its rescue list was empty. Test rescue explicitly before trusting this
+path with work that must survive archive or transfer.
 
 A Pending pod is a capacity result. Launching another copy does not fix it.
 The v2 phone and shared-project examples are acceptance targets rather than
@@ -59,18 +78,21 @@ commands to use against disabled features.
 | Piece | Established | Still required |
 |---|---|---|
 | Schema and release | Current schema applied; signed agent 2.11.0 published | General feature opt-ins remain disabled |
-| Operator | 2/2 Ready, no injected init or restarts; fixed native profile staged | Actual native startup/readiness/deadline-stop result |
+| Claude task | One real task succeeded; admitted container limits and final cleanup verified | Owner terminal exercise and verified rescue/retention |
+| Operator | 2/2 Ready, no injected init or restarts; initial native profile deployed; private-home source fix reviewed | One-shot client failed; native readiness/owned stop remains unverified |
 | Task budgets | Retained ledger/API and owned/managed stop implementation released | Whole-campaign stop, native/tool failure classification, verified progress and phone escalation |
 | Keeper | Fresh independent account login Ready | Live two-host adoption and refresh propagation; separate computer pairing |
-| NFS discovery | Read-only NFS4.2 access as UID1000; all disposable discovery resources retired | Quiet baseline, bounded writes/Git/locks, remount and recovery |
+| NFS discovery | Read-only NFS4.2 access as UID 1000; all disposable discovery resources retired | Quiet baseline, bounded writes/Git/locks, remount and recovery |
 | External Ceph | About 109 TiB replica-adjusted free; successful cache publication witnessed | Free capacity is not a directory quota or workload acceptance |
-| Storage observer | First incomplete window preserved; fixed-schedule replacement prepared | Complete fresh window with required coverage and tripwires |
+| Storage observer | Three setup/delivery failures preserved; route stopped | Recorded next decision and complete fresh window with required coverage and tripwires |
 | Shared projects | Catalog, rule and preparation source released | Both-provider rule loading and actual cross-pod workspace ownership |
 
-The first storage baseline missed observation slots; that is an observer
-delivery failure, not a demonstrated NFS failure. One fresh external OSD
-latency warning was recorded. It is not two consecutive breaches. Thresholds
-remain unchanged; no writable test follows from an incomplete baseline.
+The storage observer stopped after three delivery/setup failures; no complete
+baseline passed. The NFS helper also stopped after three related review failures
+and no writable trial ran. These are observer/helper failures, not a demonstrated
+NFS failure. One fresh external OSD latency warning was recorded; it is not two
+consecutive breaches. Thresholds remain unchanged. Read the
+[overnight result and timing table](trials/2026-10-10-overnight-results.md).
 
 Missing provider counters are labelled Unknown or estimated. Time, attempts
 and checkpoints still apply. Changing the pod, agent or diagnostic method

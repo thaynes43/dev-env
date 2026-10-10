@@ -7,13 +7,36 @@ the saga. To start building, follow
 
 ## Overnight delivery, 2026-10-10 UTC
 
-**07:52 UTC checkpoint:** source release **2.11.0** is published and signed.
+**08:37 UTC execution checkpoint:** source release **2.11.0** is published and signed.
 The v2 operator is deployed, 2/2 Ready with zero restarts. Retained budget
 storage and the isolated native-host admission profile are installed. The
-native fixture remains suspended: this is staged deployment, not a successful
-Codex lifecycle, phone or shared-workspace test. Read the
+one-shot native fixture ran and failed: preflight/profile checks and budget
+creation passed, but the client returned no valid native acceptance result.
+Its original container terminated; the failed Pod and ledger are retained.
+Missing captured stderr leaves the failed stage Unknown. No native readiness,
+owned-stop or ledger StopConfirmed is claimed. Read the
 [morning test guide](../docs/morning-test-guide.md) for the usable subset and
-the remaining MVP gates.
+the remaining MVP gates, and the
+[overnight results](../docs/trials/2026-10-10-overnight-results.md) for timings
+and failures. Storage observer and helper repair routes are stopped after
+three failures each; native owner questions are pending, with no claimed
+phone delivery or answer. Do not start a fourth attempt or erase their history.
+
+One real v2 Claude task succeeded with two turns and exit code 0, using exact source
+`739872fc`. The reviewed namespace injection fix
+[haynes-ops#3741](https://github.com/thaynes43/haynes-ops/pull/3741) was applied;
+the admitted task had zero init containers and CPU/memory limits. Supported
+cleanup verified the session, Pod and PVC absent. Its final sentence was not
+retained and rescue list was empty, so rescue and private-home retention remain
+unverified. The morning guide names the existing built CLI and public CA.
+
+The signed native image inherits `/home/dev/.codex`; the fixture's private HOME
+requires its own explicit CODEX_HOME. [#170](https://github.com/thaynes43/dev-env/pull/170)
+fixes the source profile and adds independent regression checks. This concrete
+defect does not identify the discarded historical error. Do not claim a new
+native pass: no replacement fixture or campaign was run and the deployed
+profile has not been updated. A private source-only diagnostic candidate
+preserves bounded redacted stderr for a future reviewed trial.
 
 Tom authorized continued work overnight toward a morning-testable MVP. Codex owns
 implementation, review, delivery and the test guide. Do not wait on the earlier
