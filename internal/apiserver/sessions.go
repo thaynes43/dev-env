@@ -21,6 +21,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/controller"
+	"github.com/thaynes43/dev-env/internal/taskbudget"
 )
 
 // nameAttempts bounds the suffixes a generated name tries (-2 to -9) when
@@ -86,6 +87,27 @@ func (s *Server) createSession(ctx context.Context, w http.ResponseWriter, r *ht
 		}
 		if err := checkAgentd(sess); err != nil {
 			return 0, nil, err
+		}
+		if s.callerHasTaskBudget(c) {
+			b, err := s.budgetForDispatch(ctx, c)
+			if err != nil {
+				return 0, nil, err
+			}
+			l, err := s.TaskBudgets.Observe(ctx, b)
+			if err != nil {
+				return 0, nil, budgetError(err)
+			}
+			if l.Latched {
+				return 0, nil, budgetError(taskbudget.ErrDenied)
+			}
+			// Reserve effort before dispatch. An uncertain create preserves the
+			// reservation; absence of a Pod cannot erase its ownership/history.
+			worker := "child:" + sess.Name
+			_, err = s.TaskBudgets.Record(ctx, apiv1.TaskBudgetEvent{Binding: b, ID: "dispatch:" + sess.Name, Kind: "worker-start", WorkerID: worker})
+			if err != nil {
+				return 0, nil, budgetError(err)
+			}
+			annotateTaskBudget(sess, b)
 		}
 		err := s.Client.Create(ctx, sess)
 		if apierrors.IsAlreadyExists(err) {

@@ -52,6 +52,11 @@ func (s *Server) setOperatingMode(ctx context.Context, r *http.Request, c *calle
 		if err := s.authorizeChildMutation(ctx, &sess, c); err != nil {
 			return 0, nil, err
 		}
+		if mode == v1alpha1.OperatingModeRunning {
+			if err := s.checkSessionTaskBudget(ctx, &sess); err != nil {
+				return 0, nil, err
+			}
+		}
 		if !sess.DeletionTimestamp.IsZero() {
 			return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict,
 				"session %s is being reaped: rescued, suspended and archived (D-45); a reap is final", sess.Name)

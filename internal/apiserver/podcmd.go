@@ -217,6 +217,9 @@ func (s *Server) sendMessage(ctx context.Context, w http.ResponseWriter, r *http
 	if err != nil {
 		return 0, nil, err
 	}
+	if err := s.checkSessionTaskBudget(ctx, sess); err != nil {
+		return 0, nil, err
+	}
 	pod, err := s.runningPod(ctx, sess)
 	if err != nil {
 		return 0, nil, err

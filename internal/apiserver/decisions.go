@@ -95,6 +95,11 @@ func decisionConflict(message string) error {
 
 func (s *Server) execChildDecision(ctx context.Context, sess *v1alpha1.AgentSession, pod *corev1.Pod, c *caller, input *protocol.DecisionAnswer) (protocol.DecisionResult, error) {
 	var result protocol.DecisionResult
+	if input != nil {
+		if err := s.checkSessionTaskBudget(ctx, sess); err != nil {
+			return result, err
+		}
+	}
 	cmd := []string{"agentd", "ctl", "decision-read"}
 	var stdin io.Reader
 	if input != nil {
