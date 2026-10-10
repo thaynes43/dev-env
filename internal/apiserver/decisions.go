@@ -10,6 +10,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -155,6 +156,16 @@ func (s *Server) writeDecisionAuthority(ctx context.Context, sess *v1alpha1.Agen
 			return err
 		}
 		base := sess.DeepCopy()
+		prior, authority := sess.Status.Outcome, sess.Status.DecisionAnswer
+		if expected == nil && next.Phase == "Reserved" && prior != nil && prior.State == v1alpha1.OutcomeEscalated && authority != nil && authority.Phase == "Confirmed" &&
+			prior.Note == "decision/"+authority.DecisionID && authority.DecisionID != next.DecisionID &&
+			authority.Session == sess.Name && next.Session == sess.Name && authority.SessionUID == string(sess.UID) && authority.SessionUID == next.SessionUID &&
+			authority.PodUID == string(pod.UID) && authority.PodUID == next.PodUID && authority.ThreadID == next.ThreadID && authority.WriterGeneration == next.WriterGeneration {
+			// Reserve discovery of the next question atomically with its answer
+			// authority, before a heartbeat can lose the previous authority.
+			at := metav1.NewTime(s.now().Truncate(time.Second))
+			sess.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeEscalated, Note: "decision/" + next.DecisionID, At: &at}
+		}
 		converted := v1alpha1.DecisionAnswerStatus(next)
 		sess.Status.DecisionAnswer = &converted
 		if err := s.Client.Status().Patch(ctx, sess, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {

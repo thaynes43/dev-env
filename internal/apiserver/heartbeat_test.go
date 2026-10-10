@@ -376,3 +376,88 @@ func TestDecisionDeliveredHeartbeatAfterClearAcceptsConcurrentStatusUpdate(t *te
 		t.Fatal("unchanged delivered outcome blocked liveness or changed concurrent outcome", w.Code)
 	}
 }
+
+func TestDecisionNextQuestionSupersedesOnlyConfirmedSameWriterEscalation(t *testing.T) {
+	for _, boundary := range []string{"confirmed", "reserve-before-heartbeat", "reserved", "session-name", "session-uid", "pod-uid", "thread", "writer", "completed"} {
+		t.Run(boundary, func(t *testing.T) {
+			f, ex, sess, _ := decisionAPIFixture(t)
+			var result protocol.DecisionResult
+			_ = json.Unmarshal([]byte(ex.out), &result)
+			record := *result.Decision
+			record.Answer = "SYNTHETIC-ANSWER-A"
+			a := v1alpha1.DecisionAnswerStatus(protocol.AnswerAuthority(record, record.Answer))
+			oldAt := metav1.NewTime(f.now.Add(-time.Minute))
+			old := &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeEscalated, Note: "decision/" + record.ID, At: &oldAt}
+			switch boundary {
+			case "reserved":
+				a.Phase = "Reserved"
+			case "session-name":
+				a.Session = "other"
+			case "session-uid":
+				a.SessionUID = "other"
+			case "pod-uid":
+				a.PodUID = "other"
+			case "thread":
+				a.ThreadID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+			case "writer":
+				a.WriterGeneration++
+			case "completed":
+				old.State = v1alpha1.OutcomeDone
+			}
+			saved := f.session(sess.Name)
+			saved.Status.Outcome, saved.Status.DecisionAnswer = old, &a
+			if err := f.c.Status().Update(context.Background(), saved); err != nil {
+				t.Fatal(err)
+			}
+			record.ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+			record.CreatedAt = f.now
+			record.Answer = ""
+			st := status(sess.Name)
+			st.Decision = &protocol.DecisionOutcome{ID: record.ID, SessionUID: record.SessionUID, PodUID: record.PodUID, ThreadID: record.ThreadID, WriterGeneration: record.WriterGeneration, State: "Open", At: f.now}
+			path, token := protocol.HeartbeatPath(sess.Name), "tok-session-"+sess.Name
+			if boundary == "reserve-before-heartbeat" {
+				data, _ := json.Marshal(protocol.DecisionResult{Decision: &record})
+				ex.out = string(data)
+				answer := protocol.DecisionAnswer{ID: record.ID, Text: "SYNTHETIC-ANSWER-B"}
+				if w := f.do(http.MethodPost, apiv1.SessionDecisionPath(sess.Name), tokCoordinator, answer); w.Code != http.StatusAccepted {
+					t.Fatal("parent could not record B before its heartbeat", w.Code)
+				}
+				if got := f.session(sess.Name).Status.Outcome; got == nil || got.Note != "decision/"+record.ID || got.State != v1alpha1.OutcomeEscalated {
+					t.Fatal("reserve B stranded A or invented delivery")
+				}
+			}
+			if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusNoContent {
+				t.Fatal("B heartbeat refused", w.Code)
+			}
+			got := f.session(sess.Name).Status.Outcome
+			if boundary != "confirmed" && boundary != "reserve-before-heartbeat" {
+				if got == nil || got.State != old.State || got.Note != old.Note || got.At == nil || !got.At.Time.Equal(oldAt.Time) {
+					t.Fatal("unconfirmed or foreign authority superseded A")
+				}
+				return
+			}
+			if got == nil || got.State != v1alpha1.OutcomeEscalated || got.Note != "decision/"+record.ID || got.At == nil || !got.At.Time.Equal(f.now) {
+				t.Fatal("confirmed A did not surface B with its own first observation")
+			}
+			firstBAt := got.At.Time
+			f.now = f.now.Add(time.Minute)
+			if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusNoContent {
+				t.Fatal("repeated B heartbeat refused", w.Code)
+			}
+			if got := f.session(sess.Name).Status.Outcome; got == nil || !got.At.Time.Equal(firstBAt) {
+				t.Fatal("repeated B refreshed its first observation")
+			}
+			record.Answer = "SYNTHETIC-ANSWER-B"
+			b := v1alpha1.DecisionAnswerStatus(protocol.AnswerAuthority(record, record.Answer))
+			saved = f.session(sess.Name)
+			saved.Status.DecisionAnswer = &b
+			if err := f.c.Status().Update(context.Background(), saved); err != nil {
+				t.Fatal(err)
+			}
+			st.Decision.State, st.Decision.AnswerDigest = "Delivered", b.Digest
+			if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusNoContent || f.session(sess.Name).Status.Outcome != nil {
+				t.Fatal("B's own confirmed delivery did not clear B", w.Code)
+			}
+		})
+	}
+}

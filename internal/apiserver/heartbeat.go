@@ -66,11 +66,19 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 				observedAt = s.now()
 			}
 			note := "decision/" + outcome.ID
-			if sess.Status.Outcome == nil || sess.Status.Outcome.Note == note {
+			prior, authority := sess.Status.Outcome, sess.Status.DecisionAnswer
+			// A new question from this same writer may supersede its earlier
+			// escalation even if the earlier Delivered heartbeat was not observed.
+			// Only the operator's confirmed authority permits that transition.
+			supersedesConfirmed := prior != nil && prior.State == v1alpha1.OutcomeEscalated && authority != nil && authority.Phase == "Confirmed" &&
+				prior.Note == "decision/"+authority.DecisionID && authority.DecisionID != outcome.ID &&
+				authority.Session == sess.Name && authority.SessionUID == outcome.SessionUID && authority.PodUID == outcome.PodUID &&
+				authority.ThreadID == outcome.ThreadID && outcome.WriterGeneration <= math.MaxInt64 && authority.WriterGeneration == int64(outcome.WriterGeneration)
+			if prior == nil || prior.Note == note || supersedesConfirmed {
 				// Keep the first escalation observation and its age stable across
 				// repeated heartbeats, including future-clock clamps. metav1.Time
 				// serializes at whole-second precision.
-				if sess.Status.Outcome == nil || sess.Status.Outcome.State != v1alpha1.OutcomeEscalated {
+				if prior == nil || prior.State != v1alpha1.OutcomeEscalated || prior.Note != note {
 					at := metav1.NewTime(observedAt.Truncate(time.Second))
 					sess.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeEscalated, Note: note, At: &at}
 				}
