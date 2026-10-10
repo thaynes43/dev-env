@@ -27,17 +27,16 @@ design and the decision log below with its date.
 
 The [workflow guide](../../../docs/workflow-guide.md) is the product-level quick
 start: diagrams, current/planned features, session management and cutover gates.
-Plans 01/02 are working; plan 07 has twenty open parity closures and disabled
-PVE minting. Plans 03/04 remain unbuilt. Tom's R1–R7 now require joint Claude/Codex
-projects under the supplied `~/codex` baseline and multiple Codex remote pod
-links sharing workspace files. [Plan 11](backlog/11-project-workspaces.md) and
-D-74 revise the earlier single-hub/private-Git assumptions. R2 supersedes Q-20;
-management workflows must be drawn/reviewed before further implementation.
+Plans 01/02 provide the tested Claude task/terminal subset. Budget/native source
+foundations are released, with remaining runtime acceptance in the handoff.
 
-[Accepted ADR-002](adrs/002-shared-project-workspaces.md) records Tom's structured
-Q-21 ruling: shared workspace/private agent homes and a bounded CephFS trial.
-No workspace, remote enrollment or runtime migration is accepted as deployed
-by that ruling; normal rollout still needs the gates in plan 11.
+**Controlling scope, 2026-10-10:** [ADR-003](adrs/003-session-coordination-private-repositories.md)
+records the owner's clarification: common rules and authorized context, peer
+communication and task ownership, with independent per-pod repos/worktrees.
+Bootstrap/fetch reference repositories and pin fresh source before new tasks.
+Shared Git/RWX and its trial no longer gate delivery. [Plan 11](backlog/11-project-workspaces.md)
+and [session coordination](../../../docs/session-coordination.md) define the first
+coherent pilot. ADR-001/002 remain historical; ADR-003 controls conflicts.
 
 **v1** is the single dev-env pod deployed from haynes-ops
 (`kubernetes/main/apps/dev/dev-env/`; saga `.agents/sagas/dev-env/` there). It keeps
@@ -205,12 +204,14 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 52 | Keeper-only saved CA projection | **SHIPPED** 2026-10-09 America/New_York | Haynes-ops #3642 (`4bccaa899`) projects the existing private/public fields into the keeper-only read-only mount. ESO and keeper Ready; minting flags false. Key-pair validation, owner node trust/private configuration/provider acceptance still required; all twenty parity rows remain open. |
 | 53 | Keeper node trust delegated to Codex | **DELEGATED** 2026-10-09 America/New_York (Tom, Q-22/D-76) | Structured answer: "Delegate the trust installation to Codex". Review public-key-only delivery, preserve the existing account/key, verify v1 access per node and clean temporary resources. Private CA stays keeper-only; no sudo/sshd changes, node restart, token minting or enabling is included. Installation and certificate/provider acceptance require separate evidence. |
 | 54 | Keeper PVE node trust delivered | **SHIPPED** 2026-10-09 America/New_York | Haynes-ops #3647/#3651 installed the saved public CA on all five PVE nodes and removed temporary delivery resources. Exact original key bytes and standing v1 access preserved; private CA keeper-only, minting off. Certificate/pair/provider acceptance remains open. |
-| 55 | Task budgets and stalled-work escalation | **ACCEPTED** 2026-10-09 America/New_York (Tom, Q-23/D-84) | Structured answer: "60 minutes without progress or 3 failed attempts at the same blocker". History carries across agents, pods and resumes; children count toward their parent's budget. Stop, preserve work and ask one native phone question before further attempts. [Budget contract](requirements/2026-10-09-task-budgets.md). Enforcement #154 remains unbuilt and is required for the first owner test. |
+| 55 | Task budgets and stalled-work escalation | **ACCEPTED** 2026-10-09 America/New_York (Tom, Q-23/D-84) | Structured answer: "60 minutes without progress or 3 failed attempts at the same blocker". History carries across agents, pods and resumes; children count toward their parent's budget. Stop, preserve work and ask one native phone question before further attempts. [Budget contract](requirements/2026-10-09-task-budgets.md). Ledger/stop foundations later shipped in 2.11.0; complete campaign enforcement and phone acceptance remain open in #154. |
+| 56 | Owner scope correction | **ACCEPTED** 2026-10-10 America/New_York (Tom, D-85/ADR-003) | Share rules, coordination and authorized live/stopped context; keep per-pod repos and task worktrees. Five outcomes: safe upgrades, distributed load, guarded access, session visibility, model usage/cost and later local LLMs. Supersedes mandatory shared Git/RWX and its trial. Pilot acceptance differs from full v1 retirement; no runtime change or storage retry is authorized. |
 
 The full options, consequences and rulings for Q-01 to Q-16, and the premise
 corrections withdrawing Q-17 and Q-18, plus Q-19's first owner CA provisioning
 step, are in
 [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions).
+
 
 ## Plan backlog
 
@@ -230,11 +231,15 @@ v1 stays live throughout. No v2 plan edits haynes-ops'
 | [09: GPUs, satellites and local LLMs](backlog/09-gpu-local-llm.md) | 08; Q-06, Q-09, Q-10 (decided); spikes S-9, S-11, S-13, S-14 | |
 | [10: summoned sessions](backlog/10-summoned-sessions.md) | 02, 03, 07; spike S-16 | with 04, 08 |
 | [06: later](backlog/06-later.md) | 05 | each item on its own |
-| [11: shared projects and freshness](backlog/11-project-workspaces.md) | R1–R7/D-74; 04 revision for multiple remote hosts; storage revision | workflow review before implementation |
+| [11: rules, session context and private repo freshness](backlog/11-project-workspaces.md) | ADR-003; existing lifecycle/API/catalog foundations | independent units with bounded acceptance |
 
-**MVP, and what comes after it.** The MVP is v2 replacing v1: plans 01, 02, 07, 03 and
-04, ending with the cutover in plan 05, which needs Tom's written approval. Phase 1
-(plan 01, task mode) is its first slice. The cutover does not wait for plan 10:
-`dev-env-ops` keeps serving every summoned lane listed in plan 10 until plan 10
-moves it. Everything after the MVP stays in this saga: 08 (tool pods),
-10 (summoned sessions), 09 (GPUs and local LLMs) and the 06 items.
+**Pilot and full replacement.** First demonstrate a coherent coordination workflow:
+independent bounded pods, common loaded rules, fresh task starts, peer discovery,
+messages and readable stopped-session context. Complete native recovery/budgets,
+guarded required access and truthful usage under their own acceptance contracts.
+The frontend and local-model backend remain visible follow-on work.
+
+Full v1 retirement is plan 05 and requires usable replacements for the owner’s
+required workflows and explicit approval. The twenty-row historical audit is a
+migration inventory, not a universal gate for every pilot. Tool pods (08), summoned
+sessions (10), GPUs/local LLMs (09) and later items (06) retain their own scope.

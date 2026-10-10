@@ -1,5 +1,10 @@
 # AGENTS.md
 
+**Controlling scope, 2026-10-10:** [ADR-003](.agents/sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md) supersedes mandatory
+shared Git/RWX. Share rules, task coordination and authorized live/stopped context;
+keep repositories and worktrees per pod. Read the updated guide before selecting
+implementation work. Source foundations are not runtime acceptance.
+
 Codex and other agents: the rules for this repository live in
 [`CLAUDE.md`](CLAUDE.md). Read it before you change anything; it is the single
 source, kept in one file so the two never drift.

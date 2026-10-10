@@ -1,5 +1,11 @@
 # Overnight delivery results — 2026-10-10 UTC
 
+**Historical timing and result record.** The owner subsequently corrected scope
+in [ADR-003](../../.agents/sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md).
+Mandatory shared Git/RWX, its trial gates and the remaining 7–14 hour estimate below
+are superseded. Preserve the measurements and failed-route receipts; they establish
+no NAS failure and authorize no retry. Current roadmap: [workflow guide](../workflow-guide.md).
+
 This records the campaign that began at 05:29 UTC. Source, deployment and
 provider acceptance are separate results. The full shared-project Codex MVP
 has not passed acceptance. Use the [morning test guide](../morning-test-guide.md)

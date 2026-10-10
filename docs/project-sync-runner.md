@@ -1,5 +1,12 @@
 # Materialize the shared project catalog
 
+**Historical shared-workspace source contract, superseded in scope 2026-10-10.**
+[ADR-003](../.agents/sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md)
+requires common rules/context and per-pod repos/worktrees. Reuse relevant source,
+but decouple catalog/rules and provider-home retention from RWX. Shared-only gates,
+mounts and deployment examples below are not the current rollout instructions.
+Current delivery is [plan 11](../.agents/sagas/distributed-dev-env/backlog/11-project-workspaces.md).
+
 The project sync runner turns the accepted GitOps catalog into shared reference
 clones and permanent project folders. It is a bounded job that uses no model and
 starts no Claude or Codex session. Boot preparation, daily maintenance and an

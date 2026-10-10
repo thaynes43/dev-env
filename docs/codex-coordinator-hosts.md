@@ -1,70 +1,57 @@
-# Two Codex computer links and managed tasks
+# Two Codex computer links and session coordination
 
-**Design for the first v2 owner test. The catalog, scoped coordinator and
-managed-task source foundation is merged; runtime and real-client acceptance
-remain pending.** Each computer link is a persistent Codex coordinator. Both links see
-the same project files. Implementation runs in managed task pods with separate
-worktrees and recorded writers. The operator is the API/controller that performs
-those operations; it is not another reasoning agent.
+**Scope corrected 2026-10-10; runtime acceptance remains open.**
+[ADR-003](../.agents/sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md)
+keeps distinct hosts, private enrollment and one refresh owner while removing
+shared Git. Both links discover common rules, tasks and authorized prior context.
+Native chats execute on their selected host; only explicit managed dispatch
+creates another worker pod.
 
 ```mermaid
 flowchart TB
-    Tom[Tom selects a computer in the Codex app] --> A[Codex host A: private conversations]
-    Tom --> B[Codex host B: private conversations]
-    A -->|read-only| Files[(Shared projects, references and task files)]
-    B -->|read-only| Files
-    A -->|authenticated task request| API[Operator API and controller]
-    B -->|authenticated task request| API
-    API --> Pin[Resolve project, fetch source, pin commit and rules]
-    Pin --> Claude[Managed Claude task]
-    Pin --> Codex[Managed Codex task]
-    Claude -->|one owned writer| Files
-    Codex -->|one owned writer| Files
-    Keeper[Keeper: sole Codex refresh owner] --> Auth[Access-only projection]
+    Tom["Tom selects a computer link"] --> A["Host A: private Codex state and local repos"]
+    Tom --> B["Host B: private Codex state and local repos"]
+    A --> API["Operator and coordination API"]
+    B --> API
+    API --> Context["Common rules, task claims, messages and permitted history"]
+    API --> Worker["Managed Claude or Codex task: own local worktree"]
+    Keeper["Keeper: sole refresh owner"] --> Auth["Access-only projection"]
     Auth --> A
     Auth --> B
-    Auth --> Codex
+    Auth --> Worker
 ```
 
 ## What the first test will establish
 
-The morning test starts with one bounded campaign per computer link. Every
-conversation and native child on that link belongs to that campaign. Managed
-implementation tasks inherit it. This restriction gives the supervisor a clear
-set of work to stop; separate unrelated work needs another host during the pilot.
-It is a temporary test boundary, not the final session-management experience.
+Two independent links, real credential adoption, loaded rules, fresh local task
+starts, actual execution placement, peer discovery/message and a stopped-session
+history read. A budget test is a finite explicit campaign; it does not turn all
+unrelated future host conversations into one permanent task. Integrate task/thread
+identities and owned stop before claiming complete campaign enforcement.
 
-The test must prove that both links see the same declared project, each managed
-task starts from a fresh pinned commit with the project and repository rules,
-and only the recorded task writer can continue implementation. It must also
-exercise a real budget stop, retain WIP and history, and present an actionable
-owner question in the controlling app. Pairing a computer is one step in that
-test, not evidence that the complete workflow passed.
-
-Until the ledger, owned executor and independent accounting are integrated,
-this route remains disabled. Source tests do not establish provider login
-renewal, remote conversation recovery or phone delivery. The exact enabled
-commands and remaining acceptance steps belong in the current delivery record;
-do not use future design commands as a deployed quick start.
+The last isolated native fixture failed and remains retained. No replacement or
+fourth storage attempt is authorized by this scope document. Source tests do not
+prove native startup, renewal, interrupted recovery or phone delivery. Publish
+actual commands after the supported route passes.
 
 ## Open, request and continue work
 
-Choose host A or B in the Codex app, then open the declared project root. The
-coordinator reads its repository map and rules, discusses the outcome and submits
-a managed task request. The API resolves the accepted catalog and records the
-fresh source and rule snapshot before the task receives an implementation prompt.
-The coordinator follows task status and results through its management client.
+Open the project on host A or B. The project provides a repository map and rules;
+its files are local. The coordinator first discovers existing task claims and
+reads authorized context. It may request managed work with a fresh pinned source
+and rule snapshot. The API is a lifecycle/coordination service, not a reasoning agent.
 
-Native app threads execute on the chosen host. They do not automatically allocate
-an AgentSession or forward tools to a task pod. Read-only workspace mounts make
-the boundary enforceable: writable implementation needs the managed launcher.
-Each host still has its own writable provider home and resource limit.
+Selecting B does not transfer A’s conversation or active task ownership. Use
+attributed messages to coordinate, and verify the previous executor stopped before
+an explicit handoff. Restore committed/rescued Git work into B’s own worktree.
+Reading A’s retained context must work without resuming A; exact native-thread
+import is a separate capability. Archive must preserve history before home deletion.
 
-Selecting B exposes the same project and task files; it does not transfer A's
-conversation or a task's writer. Follow-up work uses the recorded task owner and
-native conversation ID. Suspension/resume uses the verified stopped-executor
-contract. Explicit cross-session transfer remains a later supported operation;
-neither a free lock nor a lost link authorizes takeover.
+The existing direct-child coordinator mutation policy below remains a restricted
+source contract. Add authorized peer metadata/history reads separately; fleet
+visibility must not silently confer fleet-wide session control. The initial task
+launcher restrictions describe the managed pilot, not a requirement that all native
+host implementation use a shared filesystem.
 
 ## Persistent host and login
 
@@ -73,8 +60,8 @@ nodes. `OnDelete` update strategy preserves active conversations when image or
 config declarations change. Each host has a retained RWO home, a stable
 StatefulSet-derived hostname, private `CODEX_HOME`, installation ID, SQLite state
 and control socket. All containers and init containers have CPU and memory
-requests and limits. Shared
-`repos`, `codex`, `work` and workspace metadata mounts are read-only on hosts.
+requests and limits. Each host has its own repo cache and task worktrees, with
+common rules and authorized context supplied through the platform.
 
 Use pinned Codex 0.160.1's persistent daemon lifecycle. Before startup, preserve
 its settings while setting `updater.autoUpdateEnabled=false`; verify CLI and
@@ -198,8 +185,8 @@ thread on each independently paired host. Privileged approvals retain Q-16.
 
 Test source freshness, both-provider rule identifiers, status, owner-safe resume,
 two distinct computer links, access refresh, one-host replacement and the native
-phone round trip before calling the workflow usable. The storage gate in
-[#130](https://github.com/thaynes43/dev-env/issues/130) remains open. Actual
+phone round trip before calling the workflow usable. Shared-Git issue #130 is superseded. Add peer metadata/context read scopes
+separately from mutation rights; retain history independent of RWX. Actual
 commands and link discovery will enter the quick start after these routes pass.
 
 Pinned primary references:

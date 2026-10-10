@@ -1,5 +1,12 @@
 # From a Codex conversation to a managed task
 
+**Historical shared-workspace source contract, superseded in scope 2026-10-10.**
+[ADR-003](../.agents/sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md)
+requires common rules/context and per-pod repos/worktrees. Reuse relevant source,
+but decouple catalog/rules and provider-home retention from RWX. Shared-only gates,
+mounts and deployment examples below are not the current rollout instructions.
+Current delivery is [plan 11](../.agents/sagas/distributed-dev-env/backlog/11-project-workspaces.md).
+
 This is the delivery contract for the first testable v2 workflow. Source support,
 deployed support and a successful owner test are separate checkpoints. See the
 [workflow guide](workflow-guide.md) for the whole feature set and

@@ -1,5 +1,9 @@
 # dev-env
 
+**Current scope:** [ADR-003](.agents/sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md) controls conflicts with earlier
+shared-workspace plans. Source release 2.11.0 and the exact runtime acceptance
+are recorded in [HANDOFF](.agents/HANDOFF.md); the phase-1 status below is historical.
+
 The development environment where Tom's AI coding agents (Claude Code, Codex) work,
 inside the `main` Kubernetes cluster.
 
@@ -8,8 +12,9 @@ inside the `main` Kubernetes cluster.
 (`kubernetes/main/apps/dev/dev-env/`, `scripts/dev-env/Dockerfile`), and it keeps
 running until v2 replaces it.
 
-**v2**, built here, is distributed: one pod per agent session, each with its own CPU
-and memory limits, created and pruned by an operator that the `agent-run` CLI calls.
+**v2**, built here, distributes bounded managed sessions and persistent agent
+hosts across workers. An operator/API manages them through `agent-run` and future
+clients. Native threads execute on their selected host unless explicitly dispatched.
 Automatic image drains are still planned. This repo publishes the operator, CLI
 and agent image (`ghcr.io/thaynes43/dev-env`); haynes-ops deploys them.
 
@@ -32,10 +37,16 @@ Agents: see [CLAUDE.md](CLAUDE.md) (Codex: [AGENTS.md](AGENTS.md)).
 
 Read the [workflow guide](docs/workflow-guide.md) for architecture diagrams,
 the feature set, working v1/v2 commands, Codex session management, repository
-freshness and cutover gates. V2 currently starts Claude task/local sessions;
-Codex, phone sessions and automatic drains remain unfinished. Joint Claude/Codex projects and multiple remote pod links with shared
-workspaces are owner requirements; their implementation is tracked in
-[plan 11](.agents/sagas/distributed-dev-env/backlog/11-project-workspaces.md).
+freshness and cutover gates. The [2026-10-10 owner scope](.agents/sagas/distributed-dev-env/requirements/2026-10-10-owner-scope.md)
+centers five outcomes: upgrades preserve sessions, load spreads, access is guarded,
+sessions/context are visible, and usage/cost is attributable. Agents share rules,
+messages and authorized history; repos and task worktrees stay per pod.
+[ADR-003](.agents/sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md)
+withdraws mandatory shared Git/storage trials. The tested Claude task/local
+subset is usable; cross-pod coordination, Codex/device acceptance, archive
+history, safe agent drains, frontend and local models remain work to deliver.
+[Plan 11](.agents/sagas/distributed-dev-env/backlog/11-project-workspaces.md)
+and the [coordination audit](docs/session-coordination.md) define the next slice.
 
 ## License
 
