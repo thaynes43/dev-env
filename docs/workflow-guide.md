@@ -321,7 +321,7 @@ already finished. An archived session is restored into a new session, not resume
 Rescue preserves Git work. It is not a backup of ignored files, build caches or
 every file in the home. Rescue snapshots stay private and are never pushed.
 
-V2 `--interactive`, automatic image drains, grant CLI and login commands remain
+V2 `--interactive`, `restart`, automatic image drains, grant CLI and login commands remain
 unfinished. Codex and declared-project task requests exist in released 2.10.0,
 but their shared-workspace runtime opt-ins are still off. Use `help` on the
 selected binary and current deployment evidence before choosing a route.
