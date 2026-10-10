@@ -92,6 +92,32 @@ for its coordinator conversations to become idle. Do not infer idle from a
 process being quiet or a remote link being disconnected. Automatic busy-host
 drain and native tool forwarding are not part of this first route.
 
+### Startup that needs review
+
+The supervisor reports `NeedsReview` with the retained lifecycle phase when the
+daemon is positively absent but its private receipt is `Attempting`, `Confirmed`
+or `Stopping`. These phases mean an earlier start or stop lacks complete evidence.
+A malformed or unreadable receipt reports `Unknown`. Neither state authorizes
+another native start, even after a pod replacement. A missing receipt or a verified
+`Stopped` receipt is distinct from an interrupted operation.
+
+Review the private `codex-host-start-intent.json` in agentd's state directory and
+preserve its original bytes. Match the recorded Pod UID, process boot/start identity,
+native version and host workspace to the intended host. Check the live pod and
+daemon through the passive status path; a disconnected computer entry, missing PID
+or unavailable pod is insufficient stop evidence. Keep its retained provider home
+and conversation state intact.
+
+The supported stop path requires the original confirmed daemon in its current
+pod, observed idle turns, an explicitly declared shutdown, the matching native
+`stopped` acknowledgment and fresh positive absence within the shutdown budget.
+Only this path writes `Stopped` and permits a later cold start. Already-absent
+history without that receipt has no implemented reset route. It remains stopped
+for an explicit recovery design with independently verified fencing; do not delete
+the receipt, invent `Stopped`, clear rendezvous files or automatically retry.
+Unplanned-loss recovery remains an acceptance gate separate from a clean idle
+host replacement.
+
 ## Management identity
 
 Each host gets a dedicated ServiceAccount with `automountServiceAccountToken=false`,
