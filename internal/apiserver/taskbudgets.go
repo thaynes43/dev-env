@@ -17,12 +17,12 @@ import (
 )
 
 const (
-	TaskBudgetUIDAnnotation      = "dev-env.haynesops.com/task-budget-uid"
-	TaskBudgetEpochAnnotation    = "dev-env.haynesops.com/task-budget-epoch"
-	TaskBudgetDeadlineAnnotation = "dev-env.haynesops.com/task-budget-deadline"
-	TaskBudgetHostAnnotation     = "dev-env.haynesops.com/task-budget-host"
-	TaskBudgetPodAnnotation      = "dev-env.haynesops.com/task-budget-pod"
-	TaskBudgetWorkerAnnotation   = "dev-env.haynesops.com/task-budget-worker"
+	TaskBudgetUIDAnnotation      = taskbudget.UIDAnnotation
+	TaskBudgetEpochAnnotation    = taskbudget.EpochAnnotation
+	TaskBudgetDeadlineAnnotation = taskbudget.DeadlineAnnotation
+	TaskBudgetHostAnnotation     = taskbudget.HostAnnotation
+	TaskBudgetPodAnnotation      = taskbudget.PodAnnotation
+	TaskBudgetWorkerAnnotation   = taskbudget.WorkerAnnotation
 )
 
 func budgetError(err error) error {
@@ -130,6 +130,8 @@ func (s *Server) taskBudgetControl(ctx context.Context, w http.ResponseWriter, r
 	var err error
 	if admit {
 		l, err = s.TaskBudgets.Admit(ctx, req.Binding)
+	} else if c.kind == kindCoordinator {
+		l, err = s.TaskBudgets.ObserveNative(ctx, req.Binding)
 	} else {
 		l, err = s.TaskBudgets.Observe(ctx, req.Binding)
 	}
@@ -270,7 +272,16 @@ func (s *Server) checkSessionTaskBudget(ctx context.Context, sess *v1alpha1.Agen
 	if l.Latched {
 		return budgetError(taskbudget.ErrDenied)
 	}
-	return nil
+
+	for _, worker := range l.Workers {
+		if worker.ID == sess.Annotations[TaskBudgetWorkerAnnotation] && worker.Active {
+			if worker.Managed != nil && worker.Managed.SessionUID != string(sess.UID) {
+				return budgetError(taskbudget.ErrDenied)
+			}
+			return nil
+		}
+	}
+	return budgetError(taskbudget.ErrDenied)
 }
 
 func (s *Server) liveTaskBudgetHost(ctx context.Context, b apiv1.TaskBudgetBinding) error {

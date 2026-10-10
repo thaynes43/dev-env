@@ -14,6 +14,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
+	"github.com/thaynes43/dev-env/internal/taskbudget"
 	"github.com/thaynes43/dev-env/internal/templates"
 )
 
@@ -150,6 +151,20 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		{Name: protocol.PodUIDEnv, ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.uid"}}},
 		{Name: protocol.PodNamespaceEnv, ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}},
 	}
+
+	// An explicit empty value overrides envFrom on legacy and hold Pods.
+	budgetEnv := ""
+	if budgetBound(s) && !hold {
+		b, err := taskbudget.BindingFromAnnotations(s.Annotations)
+		if err != nil || s.UID == "" || s.Spec.Workspace == nil {
+			return nil, fmt.Errorf("invalid bound task budget")
+		}
+		encoded, err := json.Marshal(protocol.TaskBudgetDeadline{Version: 1, TaskUID: b.TaskUID, Epoch: b.Epoch, Deadline: b.Deadline, HostID: b.HostID, RootPodUID: b.PodUID, SessionUID: string(s.UID)})
+		if err != nil {
+			return nil, err
+		}
+		budgetEnv = string(encoded)
+	}
 	if staticTokenFor(s) && !hold {
 		env = append(env, corev1.EnvVar{Name: "CLAUDE_CODE_OAUTH_TOKEN", ValueFrom: &corev1.EnvVarSource{
 			SecretKeyRef: &corev1.SecretKeySelector{
@@ -164,6 +179,8 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		env = append(env, profile.Env...)
 		envFrom = append(envFrom, profile.EnvFrom...)
 	}
+	// Controller-owned deadline and feature gates follow template/profile env.
+	env = append(env, corev1.EnvVar{Name: protocol.TaskBudgetEnv, Value: budgetEnv})
 	// Controller-owned feature gate cannot be widened by template/profile env.
 	env = append(env, corev1.EnvVar{Name: "AGENTD_ENABLE_CODEX_TASKS", Value: fmt.Sprint(managedCodex && !hold)})
 	env = append(env, corev1.EnvVar{Name: "AGENTD_ENABLE_CHILD_DECISIONS", Value: fmt.Sprint(childDecisions && managedCodex && !hold && s.Spec.Agent == v1alpha1.AgentCodex && s.Spec.Mode == v1alpha1.ModeTask && s.Spec.Workspace != nil)})
@@ -271,6 +288,9 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 				},
 			}},
 		},
+	}
+	if budgetBound(s) {
+		pod.Annotations["k8tz.io/inject"] = "false"
 	}
 	if s.Spec.Workspace != nil && !hold {
 		pod.Spec.RestartPolicy = corev1.RestartPolicyNever

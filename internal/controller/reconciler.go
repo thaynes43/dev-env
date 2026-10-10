@@ -21,6 +21,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -45,6 +46,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/taskbudget"
 	"github.com/thaynes43/dev-env/internal/templates"
 )
 
@@ -120,6 +122,10 @@ type Reconciler struct {
 	// supplies uncached typed Pod/Node/Lease reads; nil uses APIReader.
 	WorkspaceStopper WorkspaceStopper
 	StopVerifier     WorkspaceStopVerifier
+	// TaskBudgets is opt-in retained authority. Bound sessions refuse delayed
+	// launch when unavailable; unbound legacy sessions keep their lifecycle.
+	TaskBudgets           *taskbudget.Service
+	TaskBudgetWorkerImage string
 	// Recorder emits the rescue's and the archive's events on the session; nil
 	// emits none.
 	Recorder events.EventRecorder
@@ -171,10 +177,17 @@ func (r *Reconciler) sessionsForTemplates(ctx context.Context, o client.Object) 
 // Reconcile creates what a session lacks and records what it sees. It never
 // updates a pod or a volume, and deletes one only through the guard: a pod in
 // the Suspended transition after its rescue, a volume at archive (D-51).
-func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.Result, outcomeErr error) {
 	var s v1alpha1.AgentSession
 	if err := r.Client.Get(ctx, req.NamespacedName, &s); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	if budgetBound(&s) {
+		defer func() {
+			if outcomeErr == nil && (out.RequeueAfter == 0 || out.RequeueAfter > taskBudgetPoll) {
+				out.RequeueAfter = taskBudgetPoll
+			}
+		}()
 	}
 
 	// The finalizer goes on before the session has anything to lose, so no
@@ -198,6 +211,56 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	pod, err := getOwned(ctx, r.Client, &s, s.Name, &corev1.Pod{})
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if budgetBound(&s) {
+		// Unsupported bound topology preserves everything; never fall back
+		// to the weaker legacy group-stop cleanup path.
+		if s.Spec.Workspace == nil {
+			taskBudgetStopping(&s, "bound managed budget requires owned shared stop-and-preserve topology")
+			return r.writeStatus(ctx, &s, ctrl.Result{RequeueAfter: taskBudgetPoll})
+		}
+		fresh := pod
+		var readErr error
+		if r.APIReader == nil {
+			_, stopErr := r.suspendTaskBudget(ctx, &s, "uncached budget reader unavailable; all resources retained")
+			return ctrl.Result{RequeueAfter: taskBudgetPoll}, stopErr
+		}
+		if r.APIReader != nil {
+			fresh, readErr = getOwned(ctx, r.APIReader, &s, s.Name, &corev1.Pod{})
+		}
+		if readErr != nil {
+			_, stopErr := r.suspendTaskBudget(ctx, &s, "uncached executor observation unavailable; all resources retained")
+			return ctrl.Result{RequeueAfter: taskBudgetPoll}, stopErr
+		}
+		pod = fresh
+		if changed, budgetErr := r.enforceTaskBudget(ctx, &s, pod.obj); changed || budgetErr != nil {
+			if errors.Is(budgetErr, taskbudget.ErrConflict) {
+				return ctrl.Result{RequeueAfter: time.Second}, nil
+			}
+			return ctrl.Result{RequeueAfter: time.Second}, budgetErr
+		}
+		if err := r.recordTaskBudgetFailure(ctx, &s, pod.obj); err != nil {
+			if errors.Is(err, taskbudget.ErrConflict) && !errors.Is(err, taskbudget.ErrHistoryConflict) {
+				return ctrl.Result{RequeueAfter: time.Second}, nil
+			}
+			changed, stopErr := r.suspendTaskBudget(ctx, &s, "managed failure proof remains unavailable; retained executor cannot be replaced")
+			if changed || stopErr != nil {
+				return ctrl.Result{RequeueAfter: time.Second}, stopErr
+			}
+			// Uncertainty still requests stop; independent proof/rescue guards cleanup.
+		}
+		if managedBudgetExecutorExited(pod.obj) {
+			changed, stopErr := r.suspendTaskBudget(ctx, &s, "managed executor exited; waiting for whole executor proof and workspace rescue")
+			if changed || stopErr != nil {
+				return ctrl.Result{RequeueAfter: time.Second}, stopErr
+			}
+		}
+		if changed, budgetErr := r.enforceTaskBudget(ctx, &s, pod.obj); changed || budgetErr != nil {
+			if errors.Is(budgetErr, taskbudget.ErrConflict) {
+				return ctrl.Result{RequeueAfter: time.Second}, nil
+			}
+			return ctrl.Result{RequeueAfter: time.Second}, budgetErr
+		}
 	}
 	claim, err := getOwned(ctx, r.Client, &s, HomeClaimName(s.Name), &corev1.PersistentVolumeClaim{})
 	if err != nil {
@@ -851,6 +914,51 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 			return nil
 		}
 		if err := r.bindSharedPrivateHome(ctx, s); err != nil {
+			obs.removalBlocked = err
+			return nil
+		}
+	}
+	if budgetBound(s) {
+		l, err := r.observeTaskBudget(ctx, s, nil)
+		if err != nil || l.Latched {
+			obs.removalBlocked = taskbudget.ErrUnavailable
+			return nil
+		}
+		if r.TaskBudgetWorkerImage == "" || len(pod.Spec.Containers) != 1 || pod.Spec.Containers[0].Image != r.TaskBudgetWorkerImage {
+			obs.removalBlocked = taskbudget.ErrUnavailable
+			return nil
+		}
+
+		// No automated progress adapter exists: the first checkpoint is a strict
+		// immutable local deadline too, so operator loss cannot turn it into 45m.
+		deadline := l.Binding.Deadline
+		if l.NextCheckpoint.Before(deadline) {
+			deadline = l.NextCheckpoint
+		}
+		seconds := int64((deadline.Sub(l.AccountedAt) + time.Second - 1) / time.Second)
+		if seconds <= 0 {
+			obs.removalBlocked = taskbudget.ErrDenied
+			return nil
+		}
+		pod.Spec.ActiveDeadlineSeconds = &seconds
+		grace := int64(5)
+		pod.Spec.TerminationGracePeriodSeconds = &grace
+		for i := range pod.Spec.Containers[0].Env {
+			if pod.Spec.Containers[0].Env[i].Name != protocol.TaskBudgetEnv {
+				continue
+			}
+			var budget protocol.TaskBudgetDeadline
+			if err := json.Unmarshal([]byte(pod.Spec.Containers[0].Env[i].Value), &budget); err != nil {
+				return err
+			}
+			budget.Deadline = deadline
+			encoded, err := json.Marshal(budget)
+			if err != nil {
+				return err
+			}
+			pod.Spec.Containers[0].Env[i].Value = string(encoded)
+		}
+		if _, err = r.TaskBudgets.ReserveManagedLaunch(ctx, l.Binding, s.Annotations[taskbudget.WorkerAnnotation]); err != nil {
 			obs.removalBlocked = err
 			return nil
 		}
