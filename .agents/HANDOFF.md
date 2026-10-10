@@ -18,7 +18,14 @@ The owner considers this minor; do not make it a v2 prerequisite.
 Project preparation #153 is source-merged at `2e1c395`. Fresh keeper account
 login succeeded and reports `Ready`, generation 1; native process-group absence
 and private staging/reservation cleanup passed. Remote host pairing is a
-separate pending step. Child-decision source is under review in #155. Required
+separate pending step. Child-decision source is under review in #155 at
+`417c929`; local test/lint/build/generated checks pass after teardown and exact
+parent-scope fixes. Retained-host source is draft #157; native lifecycle,
+passive readiness and finite fixtures are built, with typed stop-acknowledgment
+review still in progress. Automatic Claude advisory delivery failed three times
+and stopped, tracked in #158. One native owner question requests an explicit
+bounded separate Claude review; do not retry or interpret silence as approval.
+Workflow updates are draft #156. Required
 [task-budget and escalation enforcement](sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md)
 is tracked in #154: 60 minutes without progress OR three failed attempts at the
 same blocker, whichever comes first, across agents/pods/resumes. It is unbuilt
@@ -31,7 +38,9 @@ one down OSD must be accounted for before a trial. The
 [bounded NFS comparison](../docs/trials/2026-10-09-external-storage-comparison.md)
 records export-access and external-telemetry preflight blockers; a fresh TCP
 probe alone is insufficient. Resolve those before more Rook diagnosis. No new storage or host
-runtime was provisioned. These facts supersede the dated `NeedsLogin` and
+runtime was provisioned. Draft haynes-ops #3693 proposes one exact external
+manager TCP/9283 allowance; it is not deployed and does not prove endpoint
+readiness or replace missing gateway observations. These facts supersede the dated `NeedsLogin` and
 project-Job review status below; other runtime/cutover gates remain open.
 
 Tom clarified that Codex must continue until v2 provides a workflow he can test.

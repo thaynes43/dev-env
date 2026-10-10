@@ -44,6 +44,14 @@ belong to Rook, and no matching external NFS gateway performance series were
 found. A successful port probe cannot replace the missing external health and
 latency observations. Access and monitoring are concrete preflight blockers.
 
+The external manager advertises a Prometheus service. One bounded direct read
+timed out; current source policy has no allowance for its exact target/port.
+[Draft egress proposal #3693](https://github.com/thaynes43/haynes-ops/pull/3693)
+adds only that target on TCP/9283. Render validation changes only the policy,
+with no configuration or workload change. It is not deployed; endpoint readiness
+and the actual live drop cause remain unverified. It installs no scrape or
+gateway telemetry and does not grant gateway shell access.
+
 ## Proposed first comparison
 
 ```mermaid
