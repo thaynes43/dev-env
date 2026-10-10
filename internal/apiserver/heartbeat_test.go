@@ -236,6 +236,10 @@ func TestDecisionHeartbeatsPreserveUnrelatedOutcomesAndChangeOnlyOwnedNote(t *te
 						if got != nil {
 							t.Fatal("matching confirmed delivered decision did not clear its own outcome")
 						}
+					} else if state == v1alpha1.OutcomeEscalated && note != "absent-outcome" {
+						if got == nil || *got != *original {
+							t.Fatal("repeated open decision changed first escalation")
+						}
 					} else if got == nil || got.State != v1alpha1.OutcomeEscalated || got.Note != "decision/"+record.Decision.ID || !got.At.Time.Equal(f.now) {
 						t.Fatal("open decision did not update its own outcome")
 					}
@@ -256,7 +260,7 @@ func TestDecisionHeartbeatCannotClobberOutcomeAcquiredAfterLiveRead(t *testing.T
 			authority := v1alpha1.DecisionAnswerStatus(protocol.AnswerAuthority(*record.Decision, record.Decision.Answer))
 			saved := f.session(sess.Name)
 			saved.Status.DecisionAnswer = &authority
-			saved.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeEscalated, Note: "decision/" + record.Decision.ID}
+			saved.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeDone, Note: "decision/" + record.Decision.ID}
 			if err := f.c.Status().Update(context.Background(), saved); err != nil {
 				t.Fatal(err)
 			}
@@ -280,6 +284,56 @@ func TestDecisionHeartbeatCannotClobberOutcomeAcquiredAfterLiveRead(t *testing.T
 			// as internal errors; the write must still refuse and preserve ownership.
 			if !conflicted || w.Code != http.StatusInternalServerError || got == nil || *got != *concurrent {
 				t.Fatal("stale heartbeat clobbered concurrently acquired outcome", w.Code)
+			}
+		})
+	}
+}
+
+func TestDecisionRepeatedOpenHeartbeatPreservesFirstObservationAcrossClockPrecision(t *testing.T) {
+	for _, clock := range []string{"subsecond", "future-clamped"} {
+		t.Run(clock, func(t *testing.T) {
+			f, ex, sess, _ := decisionAPIFixture(t)
+			var record protocol.DecisionResult
+			_ = json.Unmarshal([]byte(ex.out), &record)
+			f.now = f.now.Add(900 * time.Millisecond)
+			incomingAt := f.now.Add(-time.Minute + 123*time.Millisecond)
+			firstAt := incomingAt.Truncate(time.Second)
+			if clock == "future-clamped" {
+				incomingAt = f.now.Add(time.Hour)
+				firstAt = f.now.Truncate(time.Second)
+			}
+			st := status(sess.Name)
+			st.Decision = &protocol.DecisionOutcome{ID: record.Decision.ID, SessionUID: record.Decision.SessionUID, PodUID: record.Decision.PodUID, ThreadID: record.Decision.ThreadID, WriterGeneration: record.Decision.WriterGeneration, State: "Open", At: incomingAt}
+			path, token := protocol.HeartbeatPath(sess.Name), "tok-session-"+sess.Name
+			if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusNoContent {
+				t.Fatal("initial open heartbeat refused", w.Code)
+			}
+			saved := f.session(sess.Name)
+			if saved.Status.Outcome == nil || saved.Status.Outcome.At == nil || !saved.Status.Outcome.At.Time.Equal(firstAt) {
+				t.Fatal("initial escalation did not use serialized whole-second precision")
+			}
+			// Explicitly seed serialized precision: the fake client can otherwise
+			// preserve nanoseconds rather than exercising a real JSON round-trip.
+			seedAt := metav1.NewTime(firstAt)
+			saved.Status.Outcome.At = &seedAt
+			if err := f.c.Status().Update(context.Background(), saved); err != nil {
+				t.Fatal(err)
+			}
+			f.now = f.now.Add(time.Minute)
+			patches := 0
+			f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				patches++
+				fresh := f.session(sess.Name)
+				fresh.Status.Conditions = []metav1.Condition{{Type: "ConcurrentFixture", Status: metav1.ConditionTrue, Reason: "Synthetic", LastTransitionTime: metav1.NewTime(f.now)}}
+				if err := f.c.Status().Update(ctx, fresh); err != nil {
+					return err
+				}
+				return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+			}})
+			w := f.do(http.MethodPost, path, token, st)
+			got := f.session(sess.Name)
+			if w.Code != http.StatusNoContent || patches != 1 || got.Status.Agent == nil || got.Status.Agent.LastHeartbeat == nil || !got.Status.Agent.LastHeartbeat.Time.Equal(f.now.Truncate(time.Second)) || got.Status.Outcome == nil || got.Status.Outcome.At == nil || !got.Status.Outcome.At.Time.Equal(firstAt) || len(got.Status.Conditions) != 1 || got.Status.Conditions[0].Type != "ConcurrentFixture" {
+				t.Fatal("repeated open heartbeat lost liveness, original age, or concurrent status", w.Code)
 			}
 		})
 	}

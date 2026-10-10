@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
@@ -66,8 +67,13 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 			}
 			note := "decision/" + outcome.ID
 			if sess.Status.Outcome == nil || sess.Status.Outcome.Note == note {
-				at := metav1.NewTime(observedAt)
-				sess.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeEscalated, Note: note, At: &at}
+				// Keep the first escalation observation and its age stable across
+				// repeated heartbeats, including future-clock clamps. metav1.Time
+				// serializes at whole-second precision.
+				if sess.Status.Outcome == nil || sess.Status.Outcome.State != v1alpha1.OutcomeEscalated {
+					at := metav1.NewTime(observedAt.Truncate(time.Second))
+					sess.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeEscalated, Note: note, At: &at}
+				}
 				if answer := sess.Status.DecisionAnswer; answer != nil && answer.Phase == "Confirmed" &&
 					answer.Session == sess.Name && answer.SessionUID == outcome.SessionUID && answer.PodUID == outcome.PodUID &&
 					answer.DecisionID == outcome.ID && answer.ThreadID == outcome.ThreadID && outcome.WriterGeneration <= math.MaxInt64 && answer.WriterGeneration == int64(outcome.WriterGeneration) &&
