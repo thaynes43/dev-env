@@ -182,6 +182,10 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 		defer signal.Stop(sigs)
 		return agentd.RunAgent(args[2], stdout, sigs, stopGrace)
+	case "owned-codex-host":
+		return ownedCodexHost(stderr)
+	case "owned-codex-host-helper":
+		return ownedCodexHostHelper(stderr)
 	case "codex-host":
 		return codexHost(ctx, args[1:], stdout, stderr, getenv)
 	case "project-sync":
