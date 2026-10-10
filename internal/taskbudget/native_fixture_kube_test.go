@@ -68,6 +68,14 @@ func TestNativeFixtureRejectsCapabilityAndAuthorityDrift(t *testing.T) {
 		{"container-restart", func(_ *Ledger, p *corev1.Pod, _ *unstructured.Unstructured) {
 			p.Status.ContainerStatuses[0].RestartCount = 1
 		}},
+		{"late-container-campaign", func(l *Ledger, p *corev1.Pod, _ *unstructured.Unstructured) {
+			p.CreationTimestamp = metav1.NewTime(l.CreatedAt.Add(-85 * time.Second))
+			p.Status.ContainerStatuses[0].State.Running.StartedAt = p.CreationTimestamp
+		}},
+		{"late-pod-campaign", func(l *Ledger, p *corev1.Pod, _ *unstructured.Unstructured) {
+			p.CreationTimestamp = metav1.NewTime(l.CreatedAt.Add(-100 * time.Second))
+			p.Status.ContainerStatuses[0].State.Running.StartedAt = metav1.NewTime(l.CreatedAt.Add(-10 * time.Second))
+		}},
 		{"later-deadline", func(l *Ledger, _ *corev1.Pod, _ *unstructured.Unstructured) {
 			l.Binding.Deadline = l.Binding.Deadline.Add(time.Second)
 		}},
@@ -159,11 +167,11 @@ func TestNativeFixtureRealLedgerAdmissionAndLatch(t *testing.T) {
 		t.Fatal("trusted finite profile not charged", err)
 	}
 	now = l.Binding.Deadline
-	if _, err = svc.Admit(context.Background(), l.Binding); !errors.Is(err, ErrDenied) {
-		t.Fatal("deadline admitted", err)
-	}
-	latched, err := svc.Observe(context.Background(), l.Binding)
+	latched, err := svc.ObserveNative(context.Background(), l.Binding)
 	if err != nil || !latched.Latched || latched.Reason != "OverallBudget" {
 		t.Fatal("deadline did not retain latch", err)
+	}
+	if _, err = svc.Admit(context.Background(), l.Binding); !errors.Is(err, ErrDenied) {
+		t.Fatal("latched deadline admitted", err)
 	}
 }

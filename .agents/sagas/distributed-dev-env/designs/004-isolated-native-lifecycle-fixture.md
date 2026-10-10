@@ -1,7 +1,7 @@
 # Isolated native lifecycle fixture
 
 Technical implementation contract for the bounded zero-task fixture. This is a
-source candidate under D84 and [design 002](002-task-budget-execution.md), not
+source candidate under D-84 and [design 002](002-task-budget-execution.md), not
 production native-host enablement or phone acceptance.
 
 `KubeNativeFixtureInspector` uses the operator's uncached reader. Its operator
@@ -12,7 +12,9 @@ fixed `dev-agents/dev-env-owned-native-lifecycle` Pod and dedicated ServiceAccou
 checkpoint budget, the literal zero-task success condition, and at most the exact
 active native host worker are admitted. Extensions, history and managed children
 refuse. Missing authority, changed identity, image, container capability, volume,
-command, limit or policy refuses. Native readiness is checked after launch by the
+command, limit or policy refuses. The campaign deadline must also leave ten
+seconds before both the actual container start plus its 100-second sleep and
+the conservative Pod creation plus its 120-second lifetime. Native readiness is checked after launch by the
 owned executor, avoiding a circular prelaunch readiness requirement.
 
 The exported `NativeFixturePod` and `NativeFixturePolicy` are the exact GitOps

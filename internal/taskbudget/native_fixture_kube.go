@@ -82,6 +82,13 @@ func (i *KubeNativeFixtureInspector) InspectNativeAdmission(ctx context.Context,
 		status.LastTerminationState.Terminated != nil || !strings.HasSuffix(status.ImageID, "@"+digest) {
 		return ErrDenied
 	}
+	// Leave ten seconds for the fixed three-second owned stop and scheduling
+	// before either PID 1's sleep100 or the Pod's lifetime can remove the tree.
+	started := status.State.Running.StartedAt.Time
+	if started.IsZero() || now.Before(started) || b.Deadline.After(started.Add(90*time.Second)) ||
+		b.Deadline.After(pod.CreationTimestamp.Add(110*time.Second)) {
+		return ErrDenied
+	}
 	expected := NativeFixturePod(i.Image)
 	got := pod.Spec.DeepCopy()
 	// These two fields are populated by the scheduler and the API's legacy
