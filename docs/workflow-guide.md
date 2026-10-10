@@ -15,6 +15,9 @@ disabled. V2 phone sessions, multiple Codex remote hosts, shared task workspaces
 image drains, and the management console are unfinished. All twenty capability parity checks remain
 open. This is a quick start for the working subset, not cutover approval.
 
+The [morning test guide](morning-test-guide.md) gives the current test order,
+what overnight delivery actually established, and the remaining MVP work.
+
 Read [HANDOFF](../.agents/HANDOFF.md) for current deployment evidence and
 [CLAUDE.md](../CLAUDE.md) for operating rules. The
 [design](../.agents/sagas/distributed-dev-env/designs/001-dev-env-v2.md) and
@@ -175,7 +178,7 @@ guide is describing the target.
 | Keeper-owned Codex authentication | Deployed #148; fresh login passed | Keeper reports Ready, generation 1; actual live-host adoption, one-shot refresh and two-host propagation remain |
 | Managed Codex and scoped coordinator requests | Source merged #152; runtime off | Recorded native thread identity and direct-child management; real-provider and lifecycle acceptance remain |
 | Child decisions | Source merged #155; schema applied [haynes-ops#3722](https://github.com/thaynes43/haynes-ops/pull/3722); runtime off | One durable child question, parent routing and owned continuation; native phone round trip remains unverified |
-| Task budgets and stalled-work escalation | Accepted requirement #154; implementation in progress, runtime off | Retained ledger and owned-executor stop need integrated runtime and phone acceptance; the default remains 60 minutes without progress or three failures |
+| Task budgets and stalled-work escalation | Source released 2.11.0; isolated operator profile staged | Retained ledger, managed stop controls and owned native executor are implemented; actual native/whole-campaign/phone acceptance remains. Production opt-ins are off. Default: 60 minutes without progress or three failures |
 | Codex phone execution across pods | Unverified, [first coordinator route](codex-coordinator-hosts.md) | Two independently enrolled hosts request scoped managed tasks; real renewal/shared workspace/phone acceptance remain, and S-4 forwarding is later work |
 | Automatic drain onto new images/config | Planned, plan 04 | Wait for idle, preserve conversation, resume on a new revision |
 | Management console | Planned, plan 03 | Sessions, links, archive and login renewal; a separate web approval flow is not selected |
@@ -534,7 +537,16 @@ The coordinator records the answer before continuing. No answer leaves the task
 stopped without repeated model calls. This flow is a required owner-test feature
 tracked in [#154](https://github.com/thaynes43/dev-env/issues/154); runtime enforcement and
 verified phone delivery remain open. See the [budget contract](../.agents/sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md) and [execution design](../.agents/sagas/distributed-dev-env/designs/002-task-budget-execution.md). The
-[ledger/API contract](https://github.com/thaynes43/dev-env/blob/b6f980196417c1735834b5cbc3aadd7df8cf7236/.agents/sagas/distributed-dev-env/designs/003-task-budget-api.md) records the implementation boundary and stricter pilot limits.
+[ledger/API contract](../.agents/sagas/distributed-dev-env/designs/003-task-budget-api.md) records the implementation boundary and stricter pilot limits.
+
+Release 2.11.0 includes the retained ledger, owned executor, authenticated local
+readiness and managed-worker enforcement. The deployed operator has a separate
+20-second, zero-task native test profile; ordinary coordinator and project
+opt-ins remain off. It is a test of startup and owned stop, not the full
+60-minute/three-failure workflow. Current failure classification covers nonzero
+managed-container exit. Native/tool failures, verified progress and delivered
+phone decisions remain required. Provider usage is reported when available;
+an Unknown value does not turn off the time or attempt limits.
 
 ## 6. Protection from stale repositories
 
