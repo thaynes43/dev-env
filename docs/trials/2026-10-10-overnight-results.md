@@ -79,7 +79,10 @@ preserved; it is not two consecutive breaches. No thresholds were weakened.
 whole-tree scan handoff races. The proposal remains unmerged at
 [haynes-ops#3737](https://github.com/thaynes43/haynes-ops/pull/3737), with suspended
 Jobs and no writable execution. The final already-in-flight source change is
-saved. Root-export RW exposure is disclosed and has no launch sign-off.
+saved. Its already-running final review also found that 15-second handoff
+waits can expire during the peer's finite Git/archive work. That finding is
+recorded for the next bounded design decision; no further repair was started.
+Root-export RW exposure is disclosed and has no launch sign-off.
 
 The two stopped storage routes carry their original failure history. Native
 question cards request bounded next decisions; arrival on the owner's phone
