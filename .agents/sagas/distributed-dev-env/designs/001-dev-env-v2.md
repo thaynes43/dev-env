@@ -2806,12 +2806,16 @@ volume.**
 
 Managed Codex children may record one bounded private question through an explicit,
 default-off route. Existing Outcome metadata carries only a decision reference.
-The live direct parent reads the private context and records one answer through
+Only children of exact validated configured coordinator ServiceAccounts enable
+this route. The live direct parent reads private context and records one answer through
 Session/Pod UID-fenced routes. The owning daemon delivers that recorded answer to
 the exact confirmed native UUID. A new invocation requires the genuine owned
 `cmd.Wait` result, observed exact process-group absence, an fsynced receipt and a
 noninherited private lifetime flock. Admission and one-use consumption preserve
-the same launched shared writer and its unchanged generation. Unknown identity,
+the same launched shared writer and its unchanged generation. Before reserving
+an answer, a bounded wait requires the prior wrapper's flock release and exact
+tmux absence; readiness never replaces the causal receipt. A readiness timeout
+retains the unconsumed answer. Unknown identity,
 stop, receipt or delivery acknowledgment fails closed and cannot automatically
 replay the answer. This proves only local same-Pod continuation; native parent
 relay, owner phone delivery and cross-Pod lifecycle acceptance remain separate.

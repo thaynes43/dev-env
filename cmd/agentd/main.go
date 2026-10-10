@@ -5,7 +5,7 @@
 //
 // Built so far: the daemon (`run`), the rescue pod's `hold`, the agent runner
 // in the tmux pane (`run-agent`), `render`, `ctl status`, `ctl rescue` and
-// `ctl prepare-restart`, `ctl deliver` and `ctl log`.
+// `ctl prepare-restart`, `ctl deliver`, `ctl log` and managed child decisions.
 package main
 
 import (
@@ -50,6 +50,9 @@ Commands:
   render                   Render the GitOps config into $HOME (boot step 1).
   project-sync --enabled   Run one explicitly configured, model-free GitOps Job
                            to prepare declared shared references/project roots.
+  ask-decision             Save one bounded question from JSON stdin for the
+                           configured direct parent. Print its durable record.
+                           The parent must present it through its question tool.
   ctl status               Print the session's status as JSON.
   ctl rescue [--stop-agent]
                            Commit every worktree's uncommitted work to a local
@@ -65,6 +68,13 @@ Commands:
                            task, or no agent running).
   ctl log [--tail N]       Print the last N lines (default 200) of the session's
                            log, or of its copy on the shared volume.
+  ctl decision-read --expected-session-uid UID --expected-pod-uid UID
+                           Read the current private child question only when
+                           both expected identities match this running pod.
+  ctl decision-answer --expected-session-uid UID --expected-pod-uid UID
+                           Record one bounded answer from JSON stdin for the
+                           exact question and identities. An uncertain native
+                           delivery is retained and must not be replayed.
   ctl rescues [--session S]
                            List the rescues on the shared volume as JSON,
                            newest first (D-67).

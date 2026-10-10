@@ -4,7 +4,9 @@ D-83 extends the managed shared Codex task route from D-80. Operator
 `--enable-managed-child-decisions` and agentd `AGENTD_ENABLE_CHILD_DECISIONS`
 default false. The operator requires configured coordinator callers and managed
 Codex task support. The controller's final flag enables only eligible managed
-shared Codex task pods; templates cannot widen it to private, hold or Claude pods.
+shared Codex task pods whose exact direct Parent is a validated configured
+coordinator ServiceAccount reference. Human, client, session and absent parents
+are ineligible. Templates cannot widen it to private, hold or Claude pods.
 
 `agentd ask-decision` accepts bounded question, options and context input. Platform
 identity comes from the private current launch and current launched shared writer.
@@ -23,6 +25,12 @@ separate bounded observation of exact process-group absence. Its fsynced receipt
 binds invocation ID, launch digest, confirmed native UUID, boot, Session UID, Pod
 UID and writer generation. A private noninherited lifetime flock protects producer
 and consumer; a free lock or missing PID is never an exit receipt.
+
+Before reserving an answered decision, the daemon uses a five-second deadline for
+the prior wrapper's lifetime lock to be available and exact tmux session to be
+absent. These observations establish teardown readiness only. Unknown status or
+an expired wait retains Answered without consuming the receipt or starting a
+successor; continuation admission still requires the genuine causal receipt.
 
 Continuation admission and final one-use consumption run under the common Git to
 supervisor-stop ordering. They preserve the same launched shared writer and its

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -53,6 +55,11 @@ func (d *Daemon) dispatchDecision(ctx context.Context) error {
 	if !validNativeExit(result, binding) {
 		return d.uncertainDecision(ctx, record.ID)
 	}
+	// The owned Wait receipt precedes the old wrapper's final cleanup. Wait
+	// before reserving the answer; no ambiguous new start has happened yet.
+	if err := waitDecisionTeardown(ctx, d.R, d.S); err != nil {
+		return err
+	}
 	ws := protocol.Workspace{Clone: d.S.ClonePath(d.Session.Repo), Worktree: current.Dir, Branch: "agent/" + d.Session.Name}
 	next, err := BuildResume(d.S, d.Session, ws, current, current.BootID, d.now())
 	if err != nil {
@@ -73,6 +80,51 @@ func (d *Daemon) dispatchDecision(ctx context.Context) error {
 		return d.uncertainDecision(ctx, record.ID)
 	}
 	return d.pasteDecisionAnswer(ctx, record.ID, next)
+}
+
+// Lock availability and exact tmux absence prove teardown readiness only.
+// They never replace the causal receipt checked before and after this wait.
+func waitDecisionTeardown(ctx context.Context, r Runner, s Settings) error {
+	ctx, cancel := context.WithTimeout(ctx, decisionStartupBound)
+	defer cancel()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if ctx.Err() != nil {
+			return errors.New("previous native teardown did not finish within its bound; answer remains recorded")
+		}
+		unlock, err := nativeInvocationLock(s)
+		if err == nil {
+			unlock()
+			result, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"has-session", "-t", "=" + TmuxSession}})
+			if err != nil {
+				if ctx.Err() != nil || !decisionTmuxAbsent(result, err) {
+					return errors.New("previous native tmux teardown is unconfirmed; answer remains recorded")
+				}
+				return nil
+			}
+		} else if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			return errors.New("previous native lifetime teardown is unconfirmed; answer remains recorded")
+		}
+		select {
+		case <-ctx.Done():
+			return errors.New("previous native teardown did not finish within its bound; answer remains recorded")
+		case <-tick.C:
+		}
+	}
+}
+
+func decisionTmuxAbsent(result Result, err error) bool {
+	var ce *CmdError
+	if !errors.As(err, &ce) || ce.ExitCode != 1 {
+		return false
+	}
+	detail := strings.TrimSpace(string(result.Stderr))
+	if detail == "" {
+		detail = strings.TrimSpace(ce.Stderr)
+	}
+	return strings.HasPrefix(detail, "can't find session:") || strings.HasPrefix(detail, "no server running on ") ||
+		(strings.HasPrefix(detail, "error connecting to ") && strings.HasSuffix(detail, "(No such file or directory)"))
 }
 
 func (d *Daemon) reserveDecisionResume(ctx context.Context, expected privateDecision, next Launch) error {

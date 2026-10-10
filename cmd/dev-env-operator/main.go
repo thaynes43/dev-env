@@ -215,16 +215,23 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	var decisionParents []string
+	if o.coordinatorEnabled && o.managedChildDecisions {
+		for _, host := range o.coordinatorHosts {
+			decisionParents = append(decisionParents, host.ServiceAccount)
+		}
+	}
 	r := &controller.Reconciler{
-		Client:                mgr.GetClient(),
-		Templates:             templatesKey,
-		APIURL:                o.apiURL,
-		ManagedCodexTasks:     o.managedCodexTasks,
-		ManagedChildDecisions: o.managedChildDecisions,
-		APIReader:             mgr.GetAPIReader(),
-		Rescuer:               rescuer,
-		WorkspaceStopper:      rescuer,
-		Recorder:              mgr.GetEventRecorder(binaryName),
+		Client:                      mgr.GetClient(),
+		Templates:                   templatesKey,
+		APIURL:                      o.apiURL,
+		ManagedCodexTasks:           o.managedCodexTasks,
+		ManagedChildDecisions:       o.managedChildDecisions,
+		ManagedChildDecisionParents: decisionParents,
+		APIReader:                   mgr.GetAPIReader(),
+		Rescuer:                     rescuer,
+		WorkspaceStopper:            rescuer,
+		Recorder:                    mgr.GetEventRecorder(binaryName),
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
 		return err

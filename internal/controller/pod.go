@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -73,7 +74,14 @@ func HomeClaimName(session string) string { return "home-" + session }
 // updated after create: a change in the templates reaches a session only through
 // a drain (5.2).
 func buildPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, managedCodex ...bool) (*corev1.Pod, error) {
-	return buildSessionPod(s, t, apiURL, false, len(managedCodex) > 0 && managedCodex[0], len(managedCodex) > 1 && managedCodex[1])
+	return buildManagedPod(s, t, apiURL, len(managedCodex) > 0 && managedCodex[0], false, nil)
+}
+
+func buildManagedPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, managedCodex, childDecisions bool, coordinatorParents []string) (*corev1.Pod, error) {
+	// The API assigns Parent from authenticated caller identity. Only exact
+	// configured coordinator SAs can use the coordinator-only decision route.
+	childDecisions = childDecisions && s.Spec.Parent != "" && slices.Contains(coordinatorParents, s.Spec.Parent)
+	return buildSessionPod(s, t, apiURL, false, managedCodex, childDecisions)
 }
 
 // buildHoldPod returns the session's rescue pod (D-55): the session's pod with

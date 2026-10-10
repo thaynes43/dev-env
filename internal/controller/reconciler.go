@@ -106,6 +106,8 @@ type Reconciler struct {
 	APIURL                string
 	ManagedCodexTasks     bool
 	ManagedChildDecisions bool
+	// ManagedChildDecisionParents are exact validated coordinator namespace/SA refs.
+	ManagedChildDecisionParents []string
 	// APIReader reads from the API server, past the cache. The decisions that
 	// must not trust a cache that may lag use it: that a rescued pod is still
 	// the one the rescue ran in, that no pod exists before archive deletes a
@@ -817,7 +819,7 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 			return nil
 		}
 	}
-	pod, err := buildPod(s, t, r.APIURL, r.ManagedCodexTasks, r.ManagedChildDecisions)
+	pod, err := buildManagedPod(s, t, r.APIURL, r.ManagedCodexTasks, r.ManagedChildDecisions, r.ManagedChildDecisionParents)
 	if err != nil {
 		obs.buildErr = err
 		return nil

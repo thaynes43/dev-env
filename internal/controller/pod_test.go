@@ -614,7 +614,7 @@ func TestHoldPodExcludesAgentProfileMounts(t *testing.T) {
 }
 
 func TestDecisionPodFeatureCannotBeEnabledByTemplateOrPrivateTask(t *testing.T) {
-	for _, kind := range []string{"default", "enabled", "managed-off", "private", "claude", "local", "hold"} {
+	for _, kind := range []string{"default", "enabled", "managed-off", "private", "claude", "local", "hold", "human", "client", "session", "no-parent", "unconfigured-coordinator", "foreign-namespace", "no-configured-parents"} {
 		t.Run(kind, func(t *testing.T) {
 			tmpl := exampleTemplates(t)
 			tmpl.Workspace = &templates.Workspace{Enabled: true, Claim: "retained-projects", ID: "projects-v2"}
@@ -622,6 +622,8 @@ func TestDecisionPodFeatureCannotBeEnabledByTemplateOrPrivateTask(t *testing.T) 
 			s := taskSession()
 			s.Spec.Agent, s.Spec.Model, s.Spec.Effort, s.Spec.Limits = v1alpha1.AgentCodex, "gpt-6.1-sol", "xhigh", nil
 			s.Spec.Workspace = &v1alpha1.WorkspaceSpec{ID: "projects-v2"}
+			s.Spec.Parent = "dev/configured-coordinator"
+			parents := []string{s.Spec.Parent}
 			managed, enabled := true, true
 			switch kind {
 			case "default":
@@ -635,8 +637,22 @@ func TestDecisionPodFeatureCannotBeEnabledByTemplateOrPrivateTask(t *testing.T) 
 			case "local":
 				s.Spec.Mode = v1alpha1.ModeLocal
 				s.Spec.Prompt = ""
+			case "human":
+				s.Spec.Parent = "dev/human"
+			case "client":
+				s.Spec.Parent = "dev/client"
+			case "session":
+				s.Spec.Parent = "parent-session"
+			case "no-parent":
+				s.Spec.Parent = ""
+			case "unconfigured-coordinator":
+				s.Spec.Parent = "dev/other-coordinator"
+			case "foreign-namespace":
+				s.Spec.Parent = "other/configured-coordinator"
+			case "no-configured-parents":
+				parents = nil
 			}
-			p, err := buildPod(s, tmpl, "", managed, enabled)
+			p, err := buildManagedPod(s, tmpl, "", managed, enabled, parents)
 			if kind == "hold" {
 				p, err = buildHoldPod(s, tmpl)
 			}
