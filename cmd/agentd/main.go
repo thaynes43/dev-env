@@ -48,6 +48,8 @@ Commands:
                            volume is mounted, then wait until SIGTERM. The
                            operator lists and prunes rescues here by exec.
   render                   Render the GitOps config into $HOME (boot step 1).
+  project-sync --enabled   Run one explicitly configured, model-free GitOps Job
+                           to prepare declared shared references/project roots.
   ctl status               Print the session's status as JSON.
   ctl rescue [--stop-agent]
                            Commit every worktree's uncommitted work to a local
@@ -161,6 +163,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 		defer signal.Stop(sigs)
 		return agentd.RunAgent(args[2], stdout, sigs, stopGrace)
+	case "project-sync":
+		return projectSync(ctx, args[1:], stdout, stderr, getenv, r)
 	case "ctl":
 		return ctl(ctx, args[1:], stdin, stdout, stderr, getenv, r)
 	default:
