@@ -32,7 +32,9 @@ children, and signals exact pidfds. Process and thread enumeration have caps.
 After termination it observes the root's `Wait`, reaps adopted descendants until
 `ECHILD`, and exits. The supervisor must also observe successful helper `Wait`
 before writing `Stopped`. No process-group disappearance is accepted as proof.
-Unsupported pidfds, permission errors, changed identity/ancestry, enumeration caps
+A reused root number is recognized as the original root being gone, and its
+replacement is never opened or signaled; original native Wait and ECHILD remain
+mandatory. Unsupported pidfds, permission errors, changed descendant identity/ancestry, enumeration caps
 or elapsed stop budget produce an uncertain stop, retained as `Stopping` rather
 than `Stopped`. Independent helpers cannot reap another executor's descendants.
 

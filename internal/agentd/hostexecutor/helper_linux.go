@@ -200,15 +200,18 @@ func stopTree(root Identity, rootDone <-chan error, budget time.Duration) error 
 		if err != nil {
 			return err
 		}
+		// A different immutable identity at the original root number proves
+		// the owned root is gone. Never open or signal its replacement. The
+		// original cmd.Wait and final ECHILD are still mandatory below.
+		if pid == root.PID && !same(before, root) {
+			return nil
+		}
 		gone, err := checkParent(pid, parent, owner)
 		if gone {
 			return nil
 		}
 		if err != nil {
 			return err
-		}
-		if pid == root.PID && !same(before, root) {
-			return errors.New("root process identity changed")
 		}
 		fd, err := unix.PidfdOpen(pid, 0)
 		if errors.Is(err, unix.ESRCH) {
@@ -227,6 +230,9 @@ func stopTree(root Identity, rootDone <-chan error, budget time.Duration) error 
 		}
 		if !same(before, after) {
 			_ = unix.Close(fd)
+			if pid == root.PID {
+				return nil
+			}
 			return errors.New("process identity changed while opening pidfd")
 		}
 		gone, err = checkParent(pid, parent, owner)
@@ -253,6 +259,9 @@ func stopTree(root Identity, rootDone <-chan error, budget time.Duration) error 
 				return e
 			}
 			if !same(current, before) {
+				if pid == root.PID {
+					return nil
+				}
 				return errors.New("process identity changed during freeze")
 			}
 			stopped, e := threadsStopped(pid, until)
@@ -285,6 +294,9 @@ func stopTree(root Identity, rootDone <-chan error, budget time.Duration) error 
 			return e
 		}
 		if !same(current, before) {
+			if pid == root.PID {
+				return nil
+			}
 			return errors.New("parent identity changed during enumeration")
 		}
 		for _, child := range children {

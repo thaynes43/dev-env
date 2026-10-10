@@ -209,14 +209,17 @@ func TestUnknownAndImmutableIdentity(t *testing.T) {
 	if same(self, wrong) {
 		t.Fatal("PID reuse identity accepted")
 	}
-	// The root mismatch is rejected before any signal can target this process.
+	// Model numeric PID reuse without allocating/wrapping PIDs: the original
+	// owned Wait is already observed, while a different start identity exists
+	// at that number. That replacement must remain unsignaled.
 	wrong.PID = os.Getpid()
-	if err = stopTree(wrong, ch, time.Second); err == nil {
-		t.Fatal("wrong root identity accepted")
+	if err = stopTree(wrong, ch, time.Second); err != nil {
+		t.Fatal(err)
 	}
 	if _, err = os.Stat("/proc/" + strconv.Itoa(os.Getpid())); err != nil {
 		t.Fatal(fmt.Errorf("unrelated process signaled: %w", err))
 	}
+
 }
 
 func TestStopDeadlineIsUnknown(t *testing.T) {
@@ -344,6 +347,10 @@ func TestWrongStartIdentityCannotSignalLiveChild(t *testing.T) {
 	current, err := identity(id.PID)
 	if err != nil || !same(current, id) {
 		t.Fatal("unmatched child was signaled")
+	}
+	stopped, err := threadsStopped(id.PID, time.Now().Add(time.Second))
+	if err != nil || stopped {
+		t.Fatal("unmatched child was frozen")
 	}
 }
 
