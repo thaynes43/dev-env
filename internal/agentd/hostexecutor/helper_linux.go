@@ -68,7 +68,7 @@ func Helper() error {
 	deadline := time.NewTimer(time.Until(c.Binding.Deadline))
 	defer deadline.Stop()
 	cmd := exec.Command(c.NativeBinary, "app-server", "--remote-control", "--managed-daemon", "--listen", "unix://"+c.SocketPath)
-	cmd.Env = append(os.Environ(), "HOME="+c.Home, "CODEX_HOME="+c.Home+"/.codex")
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + c.Home, "CODEX_HOME=" + c.Home + "/.codex", "TMPDIR=/tmp", "LANG=C.UTF-8", "LC_ALL=C.UTF-8"}
 	cmd.Dir = c.Home
 	if err = cmd.Start(); err != nil {
 		return err

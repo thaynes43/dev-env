@@ -1,9 +1,9 @@
 # Owned native executor contract
 
 This Linux-only package is an isolated candidate for D-84. The legacy `codex-host`
-implementation is unchanged. `agentd owned-codex-host` refuses execution until a
-trusted off-pod authority adapter is wired; local flags and environment variables
-cannot turn that command on. The package refuses a nil `Gate` before writing a
+implementation is unchanged. `agentd owned-codex-host` is selected only by explicit pod configuration and
+requires the real operator HTTPS authority. Configuration selects a route, not
+admission. No local flag or permit file can replace authority. The package refuses a nil `Gate` before writing a
 receipt. This source unit does not enroll a computer or run a real Codex turn.
 
 The adapter supplies an immutable `Binding` (`TaskUID`, `Epoch`, `Deadline`,
@@ -45,7 +45,7 @@ completed one. An interrupted receipt is retained byte-for-byte and requires
 explicit review; neither a restart nor a fresh epoch automatically rearms it.
 Home, enrollment, native snapshots and shared WIP are never removed or rewritten
 by this package. A forced tree stop does not promise a completed native recovery
-snapshot. Pairing, native version/socket-peer verification, normal conversation
+snapshot. Pairing, real native lifecycle acceptance, normal conversation
 recovery, owner notification and authentic progress/failure accounting remain
 separate acceptance work. The native capability gate stays off until those
 required seams are integrated and proved.
@@ -66,3 +66,50 @@ The caller must bind this private home's preexisting native recovery state to th
 same admitted campaign. The pinned managed daemon can consume a saved snapshot
 at startup; this package does not interpret that snapshot or authenticate its
 thread/task provenance. A fresh receipt must not license unrelated saved work.
+
+
+## HTTPS authority and authenticated readiness
+
+The CLI accepts no arguments. It requires `AGENTD_OWNED_CODEX_HOST_ENABLED=true`,
+the fixed operator Service HTTPS URL, `/var/run/secrets/dev-env/token`,
+`/opt/dev-env/api-ca/ca.crt`, and the read-only keeper access-only projection at
+`/opt/dev-env/codex-access/access.json`. `AGENTD_API_URL`,
+`AGENTD_API_TOKEN_FILE`, `AGENTD_API_CA_FILE` and `AGENTD_CODEX_ACCESS_FILE` must
+match those projections. The API token is reread for rotation; token and CA
+reads accept bounded regular files only. The HTTPS client trusts the projected
+CA, refuses redirects and proxies, and bounds every request.
+
+`AGENTD_OWNED_TASK_UID`, `AGENTD_OWNED_TASK_EPOCH`,
+`AGENTD_OWNED_TASK_DEADLINE`, `AGENTD_OWNED_HOST_ID` and downward-API
+`DEV_ENV_POD_UID` declare the expected immutable binding. The adapter first reads
+`GET /v1/task-budgets/{uid}` and requires observed, unlatched authority with all
+five fields equal. It never creates a ledger or substitutes a later deadline.
+`Run` then acquires its receipt lock and refuses old receipts before the real
+`Admit` call. Only positive admission permits keeper access adoption. Each valid,
+unlatched observation revalidates access; any authority or access error stops.
+This adapter cannot create provider refresh credentials. The helper inherits
+only PATH, private HOME/CODEX_HOME, fixed TMPDIR and locale, excluding alternate
+ambient auth, storage and transport settings.
+
+The CLI forces the image's `/usr/local/bin/codex` and version `0.160.1`. After
+confirmed launch, a two-second readiness context permits at most 40 paced startup
+socket connects, retrying only absent/refused sockets. It authenticates Unix
+SO_PEERCRED UID/PID against the original boot/start identity and verifies the
+original process is still live through a pidfd. It then performs the pinned Unix
+WebSocket `initialize` / `initialized` exchange and verifies the version in
+`userAgent`. RPCs are never retried. Only this success sets `NativeReady` and
+`NativeVersion` in the private receipt. Readiness failure stops the owned tree,
+retains the receipt, and returns failure even if termination is proven.
+`NativeReady` records this bounded observation; it does not assert current
+readiness, remote connection, enrollment, pairing or model/task recovery.
+
+The production GitOps enablement remains OFF. The operator still requires an independent inspector of the finite campaign,
+exact host/pod deadline, owned readiness/stop evidence and native home provenance.
+A nonnil authority callback alone is insufficient. Native/provider internal usage
+may remain unknown or estimated and must be reported that way; missing estimates
+must never disable time or attempt limits. Real lifecycle
+acceptance requires a separately reviewed finite authority whose admissible
+workload excludes owner clients, prompts, model turns and child inference. A
+fresh local permit file or permissive fake Gate is not that acceptance. Source
+checks use only synthetic TLS projections and inert native socket/process
+fixtures. They do not close the real native or accounting gates.

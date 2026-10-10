@@ -68,6 +68,11 @@ func TestMain(m *testing.M) {
 			}
 			os.Exit(0)
 		case "app-server":
+			if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), "fixture-readiness")); err == nil {
+				if serveReadinessFixture(os.Getenv("HOME")) != nil {
+					os.Exit(2)
+				}
+			}
 			if err := os.WriteFile(filepath.Join(os.Getenv("HOME"), "wip"), []byte("uncommitted work\n"), 0o600); err != nil {
 				os.Exit(2)
 			}

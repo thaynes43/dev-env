@@ -39,6 +39,7 @@ type Config struct {
 	SocketPath   string
 	ReceiptPath  string
 	StopTimeout  time.Duration
+	ReadyVersion string
 }
 
 type Identity struct {
@@ -58,6 +59,8 @@ type Receipt struct {
 	RootWaitObserved bool      `json:"rootWaitObserved"`
 	TreeReaped       bool      `json:"treeReaped"`
 	Reason           string    `json:"reason,omitempty"`
+	NativeReady      bool      `json:"nativeReady"`
+	NativeVersion    string    `json:"nativeVersion,omitempty"`
 }
 
 type message struct {
@@ -97,6 +100,9 @@ func (c Config) validate() error {
 	}
 	if c.StopTimeout < time.Millisecond || c.StopTimeout > 5*time.Second {
 		return errors.New("stop timeout must be positive and at most five seconds")
+	}
+	if c.ReadyVersion != "" && c.ReadyVersion != PinnedNativeVersion {
+		return errors.New("unsupported native readiness version")
 	}
 	// The socket is confined to the private home. No listener is opened to the network.
 	rel, err := filepath.Rel(c.Home, c.SocketPath)
@@ -206,6 +212,25 @@ func Run(ctx context.Context, c Config, gate Gate) (Receipt, error) {
 			err = errors.New("owned launch confirmation timed out")
 		}
 	}
+	var startupErr error
+	if err == nil && c.ReadyVersion != "" {
+		probeCtx, cancelProbe := context.WithTimeout(ctx, 2*time.Second)
+		startupErr = probeNative(probeCtx, c.SocketPath, receipt.Root, c.ReadyVersion)
+		cancelProbe()
+		if startupErr == nil {
+			receipt.NativeReady = true
+			receipt.NativeVersion = c.ReadyVersion
+			receipt.Updated = time.Now().UTC()
+			startupErr = save(c.ReceiptPath, receipt)
+		}
+		if startupErr != nil {
+			err = startupErr
+			reason = "native readiness refused"
+		}
+	}
+	if err != nil && startupErr == nil {
+		startupErr = err
+	}
 	if err == nil {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
@@ -264,7 +289,8 @@ func Run(ctx context.Context, c Config, gate Gate) (Receipt, error) {
 				return receipt, errors.New("owned process tree stop unknown: control closed")
 			}
 			if m.Kind == "stopped" || m.Kind == "unknown" {
-				return finish(c, receipt, m, helperDone)
+				result, stopErr := finish(c, receipt, m, helperDone)
+				return result, errors.Join(startupErr, stopErr)
 			}
 		case <-timeout.C:
 			return receipt, errors.New("owned process tree stop unknown: helper deadline")
