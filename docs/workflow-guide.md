@@ -38,10 +38,10 @@ work, reads results, asks questions, and ships the result.
 
 | Your action | Proposed visible workflow | What is built today |
 |---|---|---|
-| Open a project | Choose the same stable project root in Claude or Codex; see its repos and common rules | Manual Codex anchors exist; joint registration and rule propagation are missing |
+| Open a project | Choose the same stable project root in Claude or Codex; see its repos and common rules | Catalog/rule source and model-free project preparation are merged; shared runtime and actual-client loading remain pending |
 | Ask for work | Tell a coordinator what outcome you want, or use a management client; it requests the agent, project, size and mode | V1 launcher; v2 CLI/API requests Claude tasks or local sessions by repo |
 | Open another Codex pod | Choose a distinct remote computer link; the pod sees the same project/workspace files | V1 has one daemon; multi-pod enrollment and shared workspaces are required new work |
-| Begin a task | Managed preflight fetches, pins source, creates a separate worktree, loads project plus repo rules, and records its owner | V1 fetches; v2 agent 2.9.1 fetch-gates and pins new branches; project/cross-pod contract is missing |
+| Begin a task | Managed preflight fetches, pins source, creates a separate worktree, loads project plus repo rules, and records its owner | V1 fetches; v2 agent 2.9.1 fetch-gates and pins new branches; disabled shared/project task source is merged but not deployed |
 | Continue a task | Open its owning session/link and exact worktree; preserve files, index, branch and conversation | V2 Claude resume works; cross-host task ownership/transfer is unbuilt |
 | Answer a decision question | One native question prompt arrives in the phone app; answer there; record the ruling and continue | Required workflow; phone delivery must be verified for each supported agent path |
 | See progress | Status, outcome, task identity and the appropriate phone/terminal link are visible through the client | CLI/fleet lifecycle works; management console and v2 phone links are unbuilt |
@@ -60,12 +60,15 @@ private agent homes, two remote hosts and explicit task transfer. It compares
 available storage. Tom accepted it and the bounded CephFS trial through Q-21;
 normal rollout still needs acceptance. A
 new PVC does not isolate workspace IO from the household's storage services.
-The [trial record](trials/2026-10-09-cephfs-feasibility.md) preserves two incomplete
-attempts and complete cleanup. A startup defect was fixed; the corrected run
-exceeded the original peer Git status limit and recorded a recovery latency
-warning. [Issue #130](https://github.com/thaynes43/dev-env/issues/130) holds the
-remaining diagnosis. Shared-workspace feasibility and workload/device gates
-remain open; this result does not select a different backend automatically.
+The [trial record](trials/2026-10-09-cephfs-feasibility.md) and
+[cost result](trials/2026-10-09-cephfs-cost-result.md) preserve three incomplete
+attempts and cleanup. Peer Git status exceeded the original limit; the exact
+blocking filesystem call remains unresolved. The
+[external storage comparison](trials/2026-10-09-external-storage-comparison.md)
+proposes existing NFS as the next bounded comparison, with direct external
+CephFS also available server-side. [Issue #130](https://github.com/thaynes43/dev-env/issues/130)
+holds the workspace gate. Shared-workspace feasibility and workload/device gates
+remain open; no permanent backend has been selected by these results.
 
 ### The three main journeys
 
@@ -87,6 +90,11 @@ tasks through the management API and follows their recorded owners. Native app
 threads do not automatically become task pods. Independent private enrollment
 and conversation state stay with each host; actual link, resume and phone
 acceptance remain pending.
+
+Keeper account login and computer pairing use different codes. The browser
+account login succeeded; it lets the keeper manage Codex credentials. Each v2
+computer still needs its own remote pairing flow before your PC or phone can
+connect to it. See the [login and pairing diagram](codex-coordinator-hosts.md#persistent-host-and-login).
 
 **Finish and maintain:** review/merge/deploy → record durable results → rescue
 unfinished work before task cleanup. Project roots persist independently of task
@@ -124,8 +132,9 @@ flowchart TB
 ```
 
 The diagram shows the target. It does not imply every connection is enabled.
-The keeper issues GitHub tokens today; keeper-owned Claude and Codex login
-refresh are still planned. PVE issuance remains off.
+The keeper issues GitHub tokens today. Fresh keeper-owned Codex login passed;
+live two-host refresh adoption remains untested. Keeper-owned Claude login
+refresh is still planned. PVE issuance remains off.
 
 | Part | Responsibility | What must survive a restart |
 |---|---|---|
@@ -161,9 +170,12 @@ guide is describing the target.
 | General hw-ssh grants | Unbuilt | Must retain existing targets, command classes, PTY/stdin behavior, and owner rules |
 | V2 Claude phone sessions and Max refresh owner | Planned, plan 03 | Keeper-owned login, Remote Control registration/resume, renewal and archive |
 | V2 Codex remote hosts and shared projects | Required, plans 04/11 | Multiple stable pod links, joint Claude/Codex projects, sole refresh owner, shared files with distinct task ownership |
-| Shared writer and stop/rescue core | Source merged #135/#140; runtime off | Bounded common Git administration and verified old-writer stop; private-home retention and live acceptance remain |
-| Joint project catalog and rules | Primitives merged #145; integration pending | Conservative sync/repair, immutable private snapshots and provider input helpers; API/CLI wiring and actual-client loading remain |
-| Keeper-owned Codex authentication | Source merged #138/#143; rollout in review | Isolated fresh login and one-shot fenced refresh; fresh owner sign-in and running-host propagation remain |
+| Shared writer, stop/rescue and private-home retention | Source merged #135/#140/#147; runtime off | Bounded common Git administration, verified old-writer stop and retained private homes; live acceptance remains |
+| Joint project catalog and rules | Source merged #145/#150/#153; runtime pending | Accepted catalog, CLI/API preparation and model-free Job; actual shared mounts and both-provider rule loading remain |
+| Keeper-owned Codex authentication | Deployed #148; fresh login passed | Keeper reports Ready, generation 1; actual live-host adoption, one-shot refresh and two-host propagation remain |
+| Managed Codex and scoped coordinator requests | Source merged #152; runtime off | Recorded native thread identity and direct-child management; real-provider and lifecycle acceptance remain |
+| Child decisions | Source under review #155 | One durable child question, parent routing and owned continuation; native phone round trip remains unverified |
+| Task budgets and stalled-work escalation | Accepted requirement #154; unbuilt | Stop at 60 minutes without progress or three failures; retain history across agents/pods and ask once on the phone |
 | Codex phone execution across pods | Unverified, [first coordinator route](codex-coordinator-hosts.md) | Two independently enrolled hosts request scoped managed tasks; real renewal/shared workspace/phone acceptance remain, and S-4 forwarding is later work |
 | Automatic drain onto new images/config | Planned, plan 04 | Wait for idle, preserve conversation, resume on a new revision |
 | Management console | Planned, plan 03 | Sessions, links, archive and login renewal; a separate web approval flow is not selected |
@@ -487,6 +499,38 @@ same task; use an explicit ownership handoff to move work. Archiving a chat,
 reaping a task pod, removing a project declaration and deleting a remote computer
 entry are distinct actions with distinct lifetimes. A quiet project survives
 all normal task cleanup.
+
+If a remote chat is visible but its project is missing from a desktop sidebar,
+check the Projects view and add the same existing folder through the connected
+host. An owner device check found that Windows-created projects appeared on all
+three clients, while Mac-created projects were missing from Windows. Registering
+the existing folder on Windows is the current workaround; the pod's remote
+connection continued working.
+
+### When a task stops making progress
+
+The accepted default is **60 minutes without progress or three failed attempts
+at the same blocker**, whichever comes first. It applies to the logical task
+across agents, pods and resumes. The task also has an overall work budget and
+checkpoints; another diagnostic script or a heartbeat cannot justify unlimited
+investigation.
+
+```mermaid
+flowchart LR
+    A[Task with success condition and budget] --> B[Work toward checkpoint]
+    B --> C{Progress and attempts within limits?}
+    C -->|Yes| B
+    C -->|No| D[Stop attempts; preserve work and ownership]
+    D --> E[One phone question: evidence and bounded next step]
+    E --> F{Owner decision}
+    F -->|Change approach or extend| B
+    F -->|Stop, defer or no answer| G[Recoverable stopped task]
+```
+
+The coordinator records the answer before continuing. No answer leaves the task
+stopped without repeated model calls. This flow is a required owner-test feature
+tracked in [#154](https://github.com/thaynes43/dev-env/issues/154); enforcement and
+verified phone delivery are still unbuilt. See the [budget contract](../.agents/sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md).
 
 ## 6. Protection from stale repositories
 

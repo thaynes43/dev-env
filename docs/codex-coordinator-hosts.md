@@ -61,9 +61,28 @@ hostname. Pairing is a separate authenticated owner action for each host, with
 challenge material kept out of logs/events/git. A replacement mounts that same
 host's home; it never copies enrollment from its peer or v1.
 
-The keeper supplies access-only authentication, and host supervision follows
-new generations without restarting the daemon. Missing or expired access blocks
-new work and reports renewal. First sign-in, immediate one-shot refresh and
+Account login and computer pairing are separate:
+
+```mermaid
+flowchart LR
+    L[Browser account login code] --> K[Keeper obtains Codex credentials]
+    K --> R[Keeper ready]
+    A[Host A computer pairing code] --> PA[PC or phone connects to host A]
+    B[Host B computer pairing code] --> PB[PC or phone connects to host B]
+```
+
+The account login code belongs on the browser verification page. Each computer
+pairing code belongs in the controlling client's remote-connections flow. A
+successful keeper login does not create a computer link. The fresh keeper login
+passed on 2026-10-09 America/New_York; v2 computer pairing remains pending.
+
+The keeper supplies access-only authentication. The intended contract is to
+follow new generations without restarting a busy daemon. Pinned native Codex
+can cache authentication; writing a new projection alone does not prove live
+adoption or immediate revocation. Actual generation adoption remains an
+acceptance gate, and an invented reload RPC cannot satisfy it. Missing or expired
+access blocks admission where the supervisor can verify it and reports renewal.
+First sign-in, immediate one-shot refresh and
 two-host propagation follow the
 [keeper authentication contract](keeper-codex-auth.md). Native shutdown is a host
 operation, not proof that a managed task writer stopped.
