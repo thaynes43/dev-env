@@ -165,7 +165,6 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		}
 		budgetEnv = string(encoded)
 	}
-	env = append(env, corev1.EnvVar{Name: protocol.TaskBudgetEnv, Value: budgetEnv})
 	if staticTokenFor(s) && !hold {
 		env = append(env, corev1.EnvVar{Name: "CLAUDE_CODE_OAUTH_TOKEN", ValueFrom: &corev1.EnvVarSource{
 			SecretKeyRef: &corev1.SecretKeySelector{
@@ -180,6 +179,8 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		env = append(env, profile.Env...)
 		envFrom = append(envFrom, profile.EnvFrom...)
 	}
+	// Controller-owned deadline and feature gates follow template/profile env.
+	env = append(env, corev1.EnvVar{Name: protocol.TaskBudgetEnv, Value: budgetEnv})
 	// Controller-owned feature gate cannot be widened by template/profile env.
 	env = append(env, corev1.EnvVar{Name: "AGENTD_ENABLE_CODEX_TASKS", Value: fmt.Sprint(managedCodex && !hold)})
 	env = append(env, corev1.EnvVar{Name: "AGENTD_ENABLE_CHILD_DECISIONS", Value: fmt.Sprint(childDecisions && managedCodex && !hold && s.Spec.Agent == v1alpha1.AgentCodex && s.Spec.Mode == v1alpha1.ModeTask && s.Spec.Workspace != nil)})

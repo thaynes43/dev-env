@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	corev1 "k8s.io/api/core/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -157,13 +158,14 @@ func TestManagedBudgetPodEnvironmentIsFixedAndHoldHasNoTimer(t *testing.T) {
 	_, b := budgetService(t, c, f.now)
 	f.s.Annotations = budgetAnnotations(b, "child")
 	_, obs := workspaceFixtureController(t, f, c)
+	obs.templates.Env = append(obs.templates.Env, corev1.EnvVar{Name: protocol.TaskBudgetEnv, Value: "arbitrary profile override"})
 	pod, err := buildManagedPod(f.s, obs.templates, "", true, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	found := false
 	for _, env := range pod.Spec.Containers[0].Env {
-		if env.Name == protocol.TaskBudgetEnv {
+		if env.Name == protocol.TaskBudgetEnv && env.Value != "arbitrary profile override" {
 			deadline, err := protocol.ParseTaskBudgetDeadline(env.Value, string(f.s.UID), "created-pod", f.now)
 			if err != nil || !deadline.Deadline.Equal(b.Deadline) || deadline.RootPodUID != b.PodUID {
 				t.Fatal("binding changed", err)
@@ -178,10 +180,14 @@ func TestManagedBudgetPodEnvironmentIsFixedAndHoldHasNoTimer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	effective := "missing"
 	for _, env := range hold.Spec.Containers[0].Env {
-		if env.Name == protocol.TaskBudgetEnv && env.Value != "" {
-			t.Fatal("rescue armed executor timer")
+		if env.Name == protocol.TaskBudgetEnv {
+			effective = env.Value
 		}
+	}
+	if effective != "" {
+		t.Fatal("rescue armed executor timer")
 	}
 }
 
@@ -307,5 +313,39 @@ func TestManagedBudgetUnknownFailureProofRequestsSuspendAndRetainsPod(t *testing
 	l, err := svc.Observe(ctx, b)
 	if err != nil || !l.Workers[0].Active || len(l.Events) != 1 {
 		t.Fatal("unproved exit counted or uncharged", err)
+	}
+}
+
+func TestManagedRecordedFailureSuspendsThroughReconcileBeforeCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	f := stoppedWorkspaceFixture()
+	f.s.Spec.Parent = "system/parent"
+	f.s.Spec.OperatingMode = v1alpha1.OperatingModeRunning
+	c := f.client()
+	svc, b := budgetService(t, c, f.now)
+	f.s.Annotations = budgetAnnotations(b, "child")
+	if err := c.Update(ctx, f.s); err != nil {
+		t.Fatal(err)
+	}
+	f.pod.Status.ContainerStatuses[0].State.Terminated.ExitCode = 1
+	if err := c.Status().Update(ctx, f.pod); err != nil {
+		t.Fatal(err)
+	}
+	bindBudgetWorker(t, svc, b, f, "child")
+	r := &Reconciler{Client: c, APIReader: c, TaskBudgets: svc}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.s)}); err != nil {
+		t.Fatal(err)
+	}
+	var stopped v1alpha1.AgentSession
+	if err := c.Get(ctx, client.ObjectKeyFromObject(f.s), &stopped); err != nil || stopped.Spec.OperatingMode != v1alpha1.OperatingModeSuspended {
+		t.Fatal("recorded failure not suspended", err)
+	}
+	l, err := svc.Observe(ctx, b)
+	if err != nil || l.Latched || len(l.Events) != 2 || !l.Workers[0].Active {
+		t.Fatal("failure/charge history invalid", err)
+	}
+	var retained corev1.Pod
+	if err := c.Get(ctx, client.ObjectKeyFromObject(f.pod), &retained); err != nil {
+		t.Fatal("executor lost before rescue", err)
 	}
 }

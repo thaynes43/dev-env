@@ -71,6 +71,7 @@ var ReservedEnv = []string{
 	"DEV_ENV_CPU_LIMIT",
 	"AGENTD_SESSION",
 	"AGENTD_SESSION_FILE",
+	"AGENTD_TASK_BUDGET",
 	// The operator API's address and the token agentd calls it with (D-41).
 	"AGENTD_API_URL",
 	"AGENTD_API_TOKEN_FILE",

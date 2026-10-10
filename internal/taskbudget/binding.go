@@ -4,6 +4,8 @@ import (
 	"context"
 	"strconv"
 	"time"
+
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
 const (
@@ -25,7 +27,7 @@ func BindingFromAnnotations(a map[string]string) (Binding, error) {
 		return Binding{}, ErrDenied
 	}
 	b := Binding{TaskUID: a[UIDAnnotation], Epoch: epoch, Deadline: deadline, HostID: a[HostAnnotation], PodUID: a[PodAnnotation]}
-	if !identifier.MatchString(b.TaskUID) || !identifier.MatchString(b.HostID) || !identifier.MatchString(b.PodUID) {
+	if !protocol.ValidTaskBudgetIdentifier(b.TaskUID) || !protocol.ValidTaskBudgetIdentifier(b.HostID) || !protocol.ValidTaskBudgetIdentifier(b.PodUID) {
 		return Binding{}, ErrDenied
 	}
 	return b, nil
@@ -42,8 +44,8 @@ type ManagedWorkerRef struct {
 }
 
 func (s *Service) BindManagedWorker(ctx context.Context, b Binding, id string, ref ManagedWorkerRef) (*Ledger, error) {
-	if !identifier.MatchString(id) || !identifier.MatchString(ref.Namespace) || !identifier.MatchString(ref.Name) || !identifier.MatchString(ref.SessionUID) ||
-		(ref.PodUID != "" && !identifier.MatchString(ref.PodUID)) {
+	if !protocol.ValidTaskBudgetIdentifier(id) || !protocol.ValidTaskBudgetIdentifier(ref.Namespace) || !protocol.ValidTaskBudgetIdentifier(ref.Name) || !protocol.ValidTaskBudgetIdentifier(ref.SessionUID) ||
+		(ref.PodUID != "" && !protocol.ValidTaskBudgetIdentifier(ref.PodUID)) {
 		return nil, ErrDenied
 	}
 	return s.mutate(ctx, b, func(l *Ledger, _ time.Time) error {

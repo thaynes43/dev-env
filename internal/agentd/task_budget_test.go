@@ -10,7 +10,7 @@ import (
 
 func TestTaskBudgetDeadlineArmedBeforeWorkAndCannotReset(t *testing.T) {
 	now := time.Date(2026, 10, 10, 6, 0, 0, 0, time.UTC)
-	b := protocol.TaskBudgetDeadline{Version: 1, TaskUID: "campaign", Epoch: 1, Deadline: now.Add(time.Minute), HostID: "host", RootPodUID: "root-pod", SessionUID: "session"}
+	b := protocol.TaskBudgetDeadline{Version: 1, TaskUID: "campaign:step", Epoch: 1, Deadline: now.Add(time.Minute), HostID: "host", RootPodUID: "root-pod", SessionUID: "session"}
 	raw, _ := json.Marshal(b)
 	var callback func()
 	var delay time.Duration

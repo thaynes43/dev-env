@@ -221,11 +221,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 		}
 		fresh := pod
 		var readErr error
+		if r.APIReader == nil {
+			_, stopErr := r.suspendTaskBudget(ctx, &s, "uncached budget reader unavailable; all resources retained")
+			return ctrl.Result{RequeueAfter: taskBudgetPoll}, stopErr
+		}
 		if r.APIReader != nil {
 			fresh, readErr = getOwned(ctx, r.APIReader, &s, s.Name, &corev1.Pod{})
 		}
 		if readErr != nil {
-			return ctrl.Result{}, readErr
+			_, stopErr := r.suspendTaskBudget(ctx, &s, "uncached executor observation unavailable; all resources retained")
+			return ctrl.Result{RequeueAfter: taskBudgetPoll}, stopErr
 		}
 		pod = fresh
 		if changed, budgetErr := r.enforceTaskBudget(ctx, &s, pod.obj); changed || budgetErr != nil {
@@ -235,7 +240,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 			return ctrl.Result{RequeueAfter: time.Second}, budgetErr
 		}
 		if err := r.recordTaskBudgetFailure(ctx, &s, pod.obj); err != nil {
-			if errors.Is(err, taskbudget.ErrConflict) {
+			if errors.Is(err, taskbudget.ErrConflict) && !errors.Is(err, taskbudget.ErrHistoryConflict) {
 				return ctrl.Result{RequeueAfter: time.Second}, nil
 			}
 			changed, stopErr := r.suspendTaskBudget(ctx, &s, "managed failure proof remains unavailable; retained executor cannot be replaced")
@@ -243,6 +248,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 				return ctrl.Result{RequeueAfter: time.Second}, stopErr
 			}
 			// Uncertainty still requests stop; independent proof/rescue guards cleanup.
+		}
+		if managedBudgetExecutorExited(pod.obj) {
+			changed, stopErr := r.suspendTaskBudget(ctx, &s, "managed executor exited; waiting for whole executor proof and workspace rescue")
+			if changed || stopErr != nil {
+				return ctrl.Result{RequeueAfter: time.Second}, stopErr
+			}
 		}
 		if changed, budgetErr := r.enforceTaskBudget(ctx, &s, pod.obj); changed || budgetErr != nil {
 			if errors.Is(budgetErr, taskbudget.ErrConflict) {

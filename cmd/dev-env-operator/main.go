@@ -36,6 +36,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/activity"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/grantexpiry"
@@ -196,7 +197,7 @@ func parseFlags(args []string) (options, error) {
 					known = true
 				}
 			}
-			if !known || !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9:._-]{0,127}$`).MatchString(uid) {
+			if !known || !protocol.ValidTaskBudgetIdentifier(uid) {
 				return o, errors.New("task budget assignment requires a known configured host and bounded task UID")
 			}
 		}

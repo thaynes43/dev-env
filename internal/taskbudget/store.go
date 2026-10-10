@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -78,7 +80,7 @@ func (s KubeStore) Create(ctx context.Context, l *Ledger) error {
 }
 
 func (s KubeStore) Read(ctx context.Context, uid string) (*Ledger, string, error) {
-	if !s.ready() || !identifier.MatchString(uid) {
+	if !s.ready() || !protocol.ValidTaskBudgetIdentifier(uid) {
 		return nil, "", ErrUnavailable
 	}
 	var cm corev1.ConfigMap

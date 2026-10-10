@@ -207,6 +207,18 @@ func (r *Reconciler) recordTaskBudgetStop(ctx context.Context, s *v1alpha1.Agent
 	return err
 }
 
+func managedBudgetExecutorExited(pod *corev1.Pod) bool {
+	if pod == nil {
+		return false
+	}
+	for _, status := range pod.Status.ContainerStatuses {
+		if status.Name == ContainerName && status.State.Terminated != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Reconciler) recordTaskBudgetFailure(ctx context.Context, s *v1alpha1.AgentSession, pod *corev1.Pod) error {
 	if !budgetBound(s) || pod == nil {
 		return nil

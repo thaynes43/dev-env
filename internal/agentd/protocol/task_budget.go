@@ -4,11 +4,16 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"regexp"
 	"strings"
 	"time"
 )
 
 const TaskBudgetEnv = "AGENTD_TASK_BUDGET"
+
+var taskBudgetIdentifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$`)
+
+func ValidTaskBudgetIdentifier(id string) bool { return taskBudgetIdentifier.MatchString(id) }
 
 // TaskBudgetDeadline is immutable Pod environment assigned by the controller.
 // It authorizes no extension, progress, resume or resource cleanup.
@@ -42,7 +47,7 @@ func ParseTaskBudgetDeadline(raw string, sessionUID, podUID string, now time.Tim
 		return nil, errors.New("task budget identity or finite future deadline unavailable")
 	}
 	for _, id := range []string{b.TaskUID, b.HostID, b.RootPodUID, b.SessionUID, podUID} {
-		if len(id) > 128 || !repoName.MatchString(id) {
+		if !ValidTaskBudgetIdentifier(id) {
 			return nil, errors.New("invalid task budget identity")
 		}
 	}

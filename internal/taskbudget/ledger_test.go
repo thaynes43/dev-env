@@ -541,3 +541,17 @@ func TestManagedResourceBindingAndUnknownLaunchAreSticky(t *testing.T) {
 		t.Fatal("Pod identity reset", err)
 	}
 }
+
+func TestImmutableFailureHistoryConflictIsDistinctFromCAS(t *testing.T) {
+	s, _, _, b := setup(t, time.Hour, time.Hour, time.Hour)
+	ctx := context.Background()
+	e := failureEvent(b, "coordinator-event", "attempt-1", "blocker")
+	if _, err := s.Record(ctx, e); err != nil {
+		t.Fatal(err)
+	}
+	e.ID = "controller-event"
+	l, err := s.Record(ctx, e)
+	if !errors.Is(err, ErrHistoryConflict) || !errors.Is(err, ErrConflict) || len(l.Events) != 1 {
+		t.Fatal("semantic history conflict lost stable attempt or API conflict mapping", err)
+	}
+}

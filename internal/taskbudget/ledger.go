@@ -8,10 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"regexp"
 	"sort"
 	"time"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
@@ -23,10 +23,10 @@ const (
 )
 
 var (
-	ErrDenied      = errors.New("task budget admission denied")
-	ErrConflict    = errors.New("task budget authority changed")
-	ErrUnavailable = errors.New("task budget authority unavailable")
-	identifier     = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$`)
+	ErrDenied          = errors.New("task budget admission denied")
+	ErrConflict        = errors.New("task budget authority changed")
+	ErrUnavailable     = errors.New("task budget authority unavailable")
+	ErrHistoryConflict = fmt.Errorf("%w: immutable task budget event conflicts", ErrConflict)
 )
 
 type Binding = apiv1.TaskBudgetBinding
@@ -127,15 +127,15 @@ func validSpec(spec Spec) bool {
 }
 
 func validBinding(b Binding) bool {
-	return identifier.MatchString(b.TaskUID) && identifier.MatchString(b.HostID) &&
-		identifier.MatchString(b.PodUID) && b.Epoch > 0 && !b.Deadline.IsZero()
+	return protocol.ValidTaskBudgetIdentifier(b.TaskUID) && protocol.ValidTaskBudgetIdentifier(b.HostID) &&
+		protocol.ValidTaskBudgetIdentifier(b.PodUID) && b.Epoch > 0 && !b.Deadline.IsZero()
 }
 
 func (s *Service) Create(ctx context.Context, taskUID, hostID, podUID, parent string, spec Spec) (*Ledger, error) {
 	if s == nil || s.Store == nil {
 		return nil, ErrUnavailable
 	}
-	if !identifier.MatchString(taskUID) || !identifier.MatchString(hostID) || !identifier.MatchString(podUID) || parent == "" || !validSpec(spec) {
+	if !protocol.ValidTaskBudgetIdentifier(taskUID) || !protocol.ValidTaskBudgetIdentifier(hostID) || !protocol.ValidTaskBudgetIdentifier(podUID) || parent == "" || !validSpec(spec) {
 		return nil, ErrDenied
 	}
 	now := s.now()
@@ -323,26 +323,26 @@ func (s *Service) Admit(ctx context.Context, b Binding) (*Ledger, error) {
 }
 
 func validEvent(e apiv1.TaskBudgetEvent) bool {
-	if !identifier.MatchString(e.ID) {
+	if !protocol.ValidTaskBudgetIdentifier(e.ID) {
 		return false
 	}
 	switch e.Kind {
 	case "activity", "heartbeat":
 		return true
 	case "failure":
-		return identifier.MatchString(e.AttemptID) && identifier.MatchString(e.BlockerID) && validEvidence(e.Evidence)
+		return protocol.ValidTaskBudgetIdentifier(e.AttemptID) && protocol.ValidTaskBudgetIdentifier(e.BlockerID) && validEvidence(e.Evidence)
 	case "worker-start":
-		return identifier.MatchString(e.WorkerID)
+		return protocol.ValidTaskBudgetIdentifier(e.WorkerID)
 	case "progress", "resolved", "worker-stop", "notification-delivered", "notification-failed":
 		return validEvidence(e.Evidence) &&
-			(e.Kind != "resolved" || identifier.MatchString(e.BlockerID)) &&
-			(e.Kind != "worker-stop" || identifier.MatchString(e.WorkerID))
+			(e.Kind != "resolved" || protocol.ValidTaskBudgetIdentifier(e.BlockerID)) &&
+			(e.Kind != "worker-stop" || protocol.ValidTaskBudgetIdentifier(e.WorkerID))
 	}
 	return false
 }
 
 func validEvidence(e apiv1.TaskBudgetEvidence) bool {
-	return identifier.MatchString(e.ID) && len(e.Reference) > 0 && len(e.Reference) <= 256 && len(e.Kind) > 0 && len(e.Kind) <= 64
+	return protocol.ValidTaskBudgetIdentifier(e.ID) && len(e.Reference) > 0 && len(e.Reference) <= 256 && len(e.Kind) > 0 && len(e.Kind) <= 64
 }
 
 func (s *Service) Record(ctx context.Context, e apiv1.TaskBudgetEvent) (*Ledger, error) {
@@ -355,11 +355,11 @@ func (s *Service) Record(ctx context.Context, e apiv1.TaskBudgetEvent) (*Ledger,
 				if reflect.DeepEqual(prior.Request, e) {
 					return nil
 				}
-				return ErrConflict
+				return ErrHistoryConflict
 			}
 			if (e.Kind == "progress" || e.Kind == "resolved") && (prior.Request.Kind == "progress" || prior.Request.Kind == "resolved") &&
 				(prior.Request.Evidence.ID == e.Evidence.ID || prior.Request.Evidence.Reference == e.Evidence.Reference) {
-				return ErrConflict
+				return ErrHistoryConflict
 			}
 		}
 		if len(l.Events) >= MaxEvents {
@@ -444,7 +444,7 @@ func (l *Ledger) stopped() bool {
 // decision. This seam stays unusable until real native question provenance and
 // phone-delivery evidence are integrated; a free-form request is not authority.
 func (s *Service) Extend(ctx context.Context, e apiv1.TaskBudgetExtension, authenticatedOwner string) (*Ledger, error) {
-	if authenticatedOwner == "" || !identifier.MatchString(e.DecisionID) || !validEvidence(e.Evidence) || len(e.NextStep) == 0 || len(e.NextStep) > 1024 ||
+	if authenticatedOwner == "" || !protocol.ValidTaskBudgetIdentifier(e.DecisionID) || !validEvidence(e.Evidence) || len(e.NextStep) == 0 || len(e.NextStep) > 1024 ||
 		!validSpec(Spec{SuccessCondition: e.NextStep, OverallSeconds: e.OverallSeconds, EffortSeconds: e.EffortSeconds, CheckpointSeconds: e.CheckpointSeconds}) {
 		return nil, ErrDenied
 	}
