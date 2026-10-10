@@ -33,11 +33,12 @@ type Binding = apiv1.TaskBudgetBinding
 type Spec = apiv1.TaskBudgetSpec
 
 type Worker struct {
-	ID           string    `json:"id"`
-	Active       bool      `json:"active"`
-	StartedAt    time.Time `json:"startedAt"`
-	StoppedAt    time.Time `json:"stoppedAt,omitempty"`
-	StopEvidence string    `json:"stopEvidence,omitempty"`
+	ID           string            `json:"id"`
+	Active       bool              `json:"active"`
+	StartedAt    time.Time         `json:"startedAt"`
+	StoppedAt    time.Time         `json:"stoppedAt,omitempty"`
+	StopEvidence string            `json:"stopEvidence,omitempty"`
+	Managed      *ManagedWorkerRef `json:"managed,omitempty"`
 }
 
 type Event struct {
@@ -96,10 +97,19 @@ type Validator interface {
 	ValidateOwnerDecision(context.Context, *Ledger, apiv1.TaskBudgetExtension, string) error
 }
 
+// NativeAdmissionInspector checks independent off-Pod campaign/home ownership
+// and a finite immutable deadline with owned stop and readiness. Receipt validation alone is not
+// native readiness. Inspectors are read-only; none is supplied in production.
+type NativeAdmissionInspector interface {
+	InspectNativeAdmission(context.Context, *Ledger, Binding) error
+}
+
 type Service struct {
-	Store     Store
-	Validator Validator
-	Now       func() time.Time
+	Store            Store
+	Validator        Validator
+	NativeInspector  NativeAdmissionInspector
+	ManagedInspector ManagedAdmissionInspector
+	Now              func() time.Time
 }
 
 func (s *Service) now() time.Time {
@@ -243,15 +253,60 @@ func (s *Service) Observe(ctx context.Context, b Binding) (*Ledger, error) {
 	return s.mutate(ctx, b, func(*Ledger, time.Time) error { return nil })
 }
 
+// ObserveNative fails closed when a running host's independent authority is
+// removed or unknown. Ordinary status observation still exposes a durable latch.
+func (s *Service) ObserveNative(ctx context.Context, b Binding) (*Ledger, error) {
+	return s.mutate(ctx, b, func(l *Ledger, _ time.Time) error {
+		if l.Latched {
+			return nil
+		}
+		refuse := func(err error) error {
+			for _, w := range l.Workers {
+				if w.ID == fmt.Sprintf("host:%s:%d", b.HostID, b.Epoch) && w.Active {
+					now := s.now()
+					if err := l.account(now); err != nil {
+						return err
+					}
+					l.latch(now, "NativeAuthorityUnavailable")
+				}
+			}
+			return err
+		}
+		if s.NativeInspector == nil {
+			return refuse(ErrUnavailable)
+		}
+		if err := s.NativeInspector.InspectNativeAdmission(ctx, l, b); err != nil {
+			return refuse(err)
+		}
+		now := s.now()
+		if err := l.account(now); err != nil {
+			return err
+		}
+		l.evaluate(now)
+		return nil
+	})
+}
+
 // Admit never clears a latch. Its exact confirmation is necessary before
 // model work, continuation, child dispatch or executor creation.
 func (s *Service) Admit(ctx context.Context, b Binding) (*Ledger, error) {
-	return s.mutate(ctx, b, func(l *Ledger, now time.Time) error {
+	return s.mutate(ctx, b, func(l *Ledger, _ time.Time) error {
 		if l.Latched {
 			return ErrDenied
 		}
-		if s.Validator == nil {
+		if s.Validator == nil || s.NativeInspector == nil {
 			return ErrUnavailable
+		}
+		if err := s.NativeInspector.InspectNativeAdmission(ctx, l, b); err != nil {
+			return err
+		}
+		now := s.now()
+		if err := l.account(now); err != nil {
+			return err
+		}
+		l.evaluate(now)
+		if l.Latched {
+			return ErrDenied
 		}
 		id := fmt.Sprintf("host:%s:%d", b.HostID, b.Epoch)
 		for _, w := range l.Workers {

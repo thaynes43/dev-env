@@ -82,3 +82,19 @@ func TestDecisionFeatureRequiresConfiguredManagedParent(t *testing.T) {
 		t.Fatal("configured decision feature was refused", err)
 	}
 }
+
+func TestBudgetFlagsDefaultOffAndRequireProtectedAuthority(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.taskBudgetsEnabled || o.assignedTaskBudgets != nil {
+		t.Fatal("budget enabled by default", err)
+	}
+	base := []string{"--enable-task-budgets", "--enable-coordinator-callers", "--enable-managed-codex-tasks", "--project-catalog=dev-env-system/dev-env-project-catalog", "--project-clone-owner=thaynes43", `--coordinator-hosts=[{"serviceAccount":"dev-env-system/host-a","podName":"host-a","hostID":"codex-a"}]`, `--assigned-task-budgets={"codex-a":"campaign"}`, "--task-budget-namespace=protected-budgets", "--task-budget-worker-image=example/worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	if o, err := parseFlags(base); err != nil || !o.taskBudgetsEnabled || o.assignedTaskBudgets["codex-a"] != "campaign" {
+		t.Fatal("concrete authority refused", err)
+	}
+	for _, args := range [][]string{{"--enable-task-budgets"}, {"--task-budget-namespace=protected-budgets"}, append(slices.Clone(base), "--task-budget-namespace=dev-agents"), append(slices.Clone(base), "--task-budget-worker-image=worker:latest"), append(slices.Clone(base), `--assigned-task-budgets={"unknown":"campaign"}`)} {
+		if _, err := parseFlags(args); err == nil {
+			t.Fatal("unsupported budget authority accepted", args)
+		}
+	}
+}

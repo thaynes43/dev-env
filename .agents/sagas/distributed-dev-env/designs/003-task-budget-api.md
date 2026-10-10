@@ -165,3 +165,61 @@ the failed-delivery event, so an agent cannot irrevocably prevent owner control.
 No native notification adapter, owner adapter, universal failure classifier or
 complete native aggregate-effort proof ships with this source unit. Unknown
 authority must refuse admission and remain stopped.
+
+## Independent native admission and managed stop backstop
+
+The next source unit separates receipt validation from native readiness.
+`NativeAdmissionInspector.InspectNativeAdmission(context.Context, *Ledger,
+Binding) error` must inspect the exact retained task/epoch, frozen private native
+home and finite campaign, immutable deadline, owned stop and readiness. Precise
+native internal usage may remain unknown; elapsed host time plus reserved managed
+child elapsed time is an estimate and still enforces time and attempt limits.
+Admit calls it before charging a host worker; native Observe calls it again while
+unlatched. A non-nil Validator is insufficient. Nil inspector or inspection error
+refuses work. A restricted model-free fixture inspector is a separate source unit; this unit
+keeps production native admission closed. Native model/tool failure observations
+and real owner notification remain acceptance gaps. Unavailable precise internal
+usage does not disable elapsed-time or independently observed attempt limits.
+
+Existing `agentd ctl status` reads private state files in a newly exec'd process;
+it cannot provide the original run-agent's in-memory `cmd.Wait` result. The private
+invocation file also shares the agent's Unix identity. Neither is independent
+budget evidence. The existing whole-container stop verifier instead reads the
+exact retained Pod UID, every admitted container's termination, its healthy Node
+UID and a fresh owned node Lease through the uncached APIReader. A missing Pod or
+unknown node remains uncertain. Its stop-and-preserve flow retains the old executor
+and writer until a separate bounded hold rescue succeeds.
+
+The managed controller budget backstop checks the ledger before delayed Pod
+creation, periodically while running, and before cleanup. A latched or unavailable
+budget requests the existing suspended stop-and-preserve transition; uncertainty
+retains the resources. Stop accounting requires fresh whole-container proof plus
+the exact independently recorded successful rescue. Nonzero whole-container exit
+can conservatively count one stable attempt against a server-assigned task/epoch
+blocker. Native model/tool failures inside a live container remain unsupported;
+there is no synthetic progress or owner-extension validator.
+
+
+The operator wiring is explicitly off by default. Enabling `--enable-task-budgets`
+requires `--task-budget-namespace`, a dedicated namespace distinct from sessions
+and templates, `--task-budget-worker-image` pinned to the reviewed digest, and
+`--assigned-task-budgets` mapping only configured coordinator HostIDs to TaskUIDs.
+The namespace Role permits only ConfigMap get/create/update for the operator;
+agents, coordinators and clients receive no write/delete access. The controller
+uses its existing uncached Pod, Node and node-Lease reads. Missing permission
+retains the executor and writer rather than bypassing stop proof. No RBAC grants
+or runtime activation are made by this source unit.
+
+Managed admission checks exact server-assigned SessionUID, root binding, shared
+workspace and live approved template image before reserving one Pod create. An
+unknown create remains reserved and charged; absence cannot authorize replay.
+The immutable Pod environment `AGENTD_TASK_BUDGET` carries version 1, TaskUID,
+epoch, finite deadline, HostID, root PodUID and SessionUID. Agentd validates it
+against the session and downward Pod identity before boot side effects, then arms
+a non-resettable hard exit. The controller conservatively selects the earlier
+of the overall deadline and first checkpoint, because no progress adapter is
+available. Kubernetes ActiveDeadlineSeconds and a five-second termination grace
+provide a separate finite backstop; late startup still checks the absolute
+deadline before any native work. Budget-bound executors never restart, and budget
+hold rescue Pods explicitly receive an empty timer and opt out of k8tz injection.
+A stop intent, deadline exit or missing Pod is never a confirmed stop receipt.

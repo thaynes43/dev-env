@@ -65,6 +65,19 @@ func (m *memoryStore) Update(_ context.Context, l *Ledger, rv string) error {
 // permissive validator and refuses every evidence/extension claim by default.
 type receiptValidator struct{ owner string }
 
+type fixtureNativeAdmission struct {
+	err   error
+	calls int
+}
+
+func (f *fixtureNativeAdmission) InspectNativeAdmission(_ context.Context, l *Ledger, b Binding) error {
+	f.calls++
+	if l.Binding != b {
+		return ErrDenied
+	}
+	return f.err
+}
+
 func failureEvent(b Binding, id, attempt, blocker string) apiv1.TaskBudgetEvent {
 	return apiv1.TaskBudgetEvent{Binding: b, ID: id, Kind: "failure", AttemptID: attempt, BlockerID: blocker,
 		Evidence: apiv1.TaskBudgetEvidence{ID: "receipt:" + attempt, Kind: "supervised-failure", Reference: "fixture:failure:" + blocker + ":" + attempt}}
@@ -111,7 +124,7 @@ func setup(t *testing.T, overall, effort, checkpoint time.Duration) (*Service, *
 	t.Helper()
 	now := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
 	m := &memoryStore{}
-	s := &Service{Store: m, Now: func() time.Time { return now }, Validator: receiptValidator{}}
+	s := &Service{Store: m, Now: func() time.Time { return now }, Validator: receiptValidator{}, NativeInspector: &fixtureNativeAdmission{}}
 	l, err := s.Create(context.Background(), "task-a", "host-a", "pod-a", "system/parent", Spec{SuccessCondition: "verified result", OverallSeconds: int64(overall / time.Second), EffortSeconds: int64(effort / time.Second), CheckpointSeconds: int64(checkpoint / time.Second)})
 	if err != nil {
 		t.Fatal(err)
@@ -239,6 +252,35 @@ func TestMissingValidatorCannotAdmitWork(t *testing.T) {
 	l, err := s.Observe(context.Background(), b)
 	if err != nil || len(l.Workers) != 0 {
 		t.Fatal("failed admission created executor accounting", err)
+	}
+}
+
+func TestNativeInspectorIsRequiredAndRecheckedBeforeCharge(t *testing.T) {
+	s, _, _, b := setup(t, time.Hour, time.Hour, time.Hour)
+	s.NativeInspector = nil
+	l, err := s.Admit(context.Background(), b)
+	if !errors.Is(err, ErrUnavailable) || len(l.Workers) != 0 {
+		t.Fatal("validator presence admitted native host", err)
+	}
+	inspection := &fixtureNativeAdmission{err: ErrDenied}
+	s.NativeInspector = inspection
+	l, err = s.Admit(context.Background(), b)
+	if !errors.Is(err, ErrDenied) || len(l.Workers) != 0 || inspection.calls != 1 {
+		t.Fatal("failed inspection charged native host", err)
+	}
+	inspection.err = nil
+	if _, err = s.Admit(context.Background(), b); err != nil {
+		t.Fatal(err)
+	}
+	inspection.err = ErrUnavailable
+	if _, err = s.ObserveNative(context.Background(), b); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("running native host ignored unknown inspection", err)
+	}
+	if inspection.calls != 3 {
+		t.Fatal("native authority not rechecked", inspection.calls)
+	}
+	if _, err = s.Observe(context.Background(), b); err != nil {
+		t.Fatal("generic status became unavailable", err)
 	}
 }
 
@@ -451,5 +493,51 @@ func TestOwnerExtensionRetainsAllHistory(t *testing.T) {
 	}
 	if _, err := s.Admit(context.Background(), l.Binding); err != nil {
 		t.Fatal("verified bounded next epoch refused", err)
+	}
+}
+
+type fixtureManagedAdmission struct{}
+
+func (fixtureManagedAdmission) InspectManagedAdmission(context.Context, *Ledger, ManagedWorkerRef) error {
+	return nil
+}
+
+func TestManagedResourceBindingAndUnknownLaunchAreSticky(t *testing.T) {
+	s, m, _, b := setup(t, time.Hour, time.Hour, time.Hour)
+	ctx := context.Background()
+	if _, err := s.Record(ctx, apiv1.TaskBudgetEvent{Binding: b, ID: "dispatch", Kind: "worker-start", WorkerID: "child"}); err != nil {
+		t.Fatal(err)
+	}
+	ref := ManagedWorkerRef{Namespace: "agents", Name: "child", SessionUID: "session"}
+	if _, err := s.BindManagedWorker(ctx, b, "child", ref); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ReserveManagedLaunch(ctx, b, "child"); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("nil inspector admitted", err)
+	}
+	s.ManagedInspector = fixtureManagedAdmission{}
+	m.unknownOnce = true
+	if _, err := s.ReserveManagedLaunch(ctx, b, "child"); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("unknown CAS admitted launch", err)
+	}
+	l, err := s.Observe(ctx, b)
+	if err != nil || !l.Workers[0].Managed.LaunchRequested {
+		t.Fatal("unknown launch reservation lost", err)
+	}
+	if _, err := s.ReserveManagedLaunch(ctx, b, "child"); !errors.Is(err, ErrDenied) {
+		t.Fatal("unknown create replay admitted", err)
+	}
+	changed := ref
+	changed.SessionUID = "replacement"
+	if _, err := s.BindManagedWorker(ctx, b, "child", changed); !errors.Is(err, ErrConflict) {
+		t.Fatal("session identity reset", err)
+	}
+	ref.PodUID = "pod"
+	if l, err := s.BindManagedWorker(ctx, b, "child", ref); err != nil || !l.Workers[0].Managed.LaunchRequested {
+		t.Fatal("one-time Pod binding failed", err)
+	}
+	ref.PodUID = "replacement"
+	if _, err := s.BindManagedWorker(ctx, b, "child", ref); !errors.Is(err, ErrConflict) {
+		t.Fatal("Pod identity reset", err)
 	}
 }

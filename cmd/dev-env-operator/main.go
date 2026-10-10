@@ -14,12 +14,15 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -38,6 +41,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/grantexpiry"
 	"github.com/thaynes43/dev-env/internal/podexec"
 	"github.com/thaynes43/dev-env/internal/shelf"
+	"github.com/thaynes43/dev-env/internal/taskbudget"
 	"github.com/thaynes43/dev-env/internal/templates"
 	"github.com/thaynes43/dev-env/internal/version"
 )
@@ -68,6 +72,10 @@ func main() {
 }
 
 type options struct {
+	taskBudgetsEnabled    bool
+	taskBudgetNamespace   string
+	taskBudgetWorkerImage string
+	assignedTaskBudgets   map[string]string
 	sessionNamespace      string
 	templatesNamespace    string
 	templatesName         string
@@ -110,6 +118,10 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.coordinatorEnabled, "enable-coordinator-callers", false, "enable configured live-bound scoped coordinator callers")
 	fs.BoolVar(&o.managedCodexTasks, "enable-managed-codex-tasks", false, "enable accepted-project managed Codex task admission")
 	fs.BoolVar(&o.managedChildDecisions, "enable-managed-child-decisions", false, "enable private recorded child decisions and same-writer native continuation")
+	fs.BoolVar(&o.taskBudgetsEnabled, "enable-task-budgets", false, "enable retained finite managed task budget authority; native admission requires a separate trusted inspector")
+	fs.StringVar(&o.taskBudgetNamespace, "task-budget-namespace", "", "dedicated protected namespace for retained budget ConfigMaps")
+	fs.StringVar(&o.taskBudgetWorkerImage, "task-budget-worker-image", "", "reviewed immutable worker image containing pre-boot budget deadline")
+	assignedBudgets := fs.String("assigned-task-budgets", "", "explicit JSON configured HostID to TaskUID map")
 	hosts := fs.String("coordinator-hosts", "", "explicit JSON host bindings; empty configures none")
 	catalog := fs.String("project-catalog", "", "explicit accepted namespace/name ConfigMap binding")
 	cloneOwner := fs.String("project-clone-owner", "", "configured GitHub clone owner for accepted project tasks")
@@ -168,6 +180,34 @@ func parseFlags(args []string) (options, error) {
 	if o.managedChildDecisions && (!o.coordinatorEnabled || !o.managedCodexTasks) {
 		return o, errors.New("managed child decisions require enabled configured coordinators and managed native tasks")
 	}
+
+	if *assignedBudgets != "" {
+		if len(*assignedBudgets) > 4096 {
+			return o, errors.New("task budget assignment exceeds bound")
+		}
+		d := json.NewDecoder(strings.NewReader(*assignedBudgets))
+		if d.Decode(&o.assignedTaskBudgets) != nil || d.Decode(new(any)) != io.EOF || len(o.assignedTaskBudgets) > 32 {
+			return o, errors.New("invalid task budget assignment")
+		}
+		for host, uid := range o.assignedTaskBudgets {
+			known := false
+			for _, h := range o.coordinatorHosts {
+				if h.HostID == host {
+					known = true
+				}
+			}
+			if !known || !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9:._-]{0,127}$`).MatchString(uid) {
+				return o, errors.New("task budget assignment requires a known configured host and bounded task UID")
+			}
+		}
+	}
+	if o.taskBudgetsEnabled {
+		if !o.coordinatorEnabled || !o.managedCodexTasks || len(o.assignedTaskBudgets) == 0 || o.taskBudgetNamespace == "" || o.taskBudgetNamespace == o.sessionNamespace || o.taskBudgetNamespace == o.templatesNamespace || !regexp.MustCompile(`^.+@sha256:[a-f0-9]{64}$`).MatchString(o.taskBudgetWorkerImage) {
+			return o, errors.New("task budgets require configured coordinators, assignments, dedicated protected namespace and reviewed worker image digest")
+		}
+	} else if o.taskBudgetNamespace != "" || o.taskBudgetWorkerImage != "" || len(o.assignedTaskBudgets) > 0 {
+		return o, errors.New("task budget configuration requires explicit enable-task-budgets")
+	}
 	return o, nil
 }
 
@@ -221,8 +261,15 @@ func run(args []string) error {
 			decisionParents = append(decisionParents, host.ServiceAccount)
 		}
 	}
+	var budgets *taskbudget.Service
+	if o.taskBudgetsEnabled {
+		budgets = &taskbudget.Service{Store: taskbudget.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.taskBudgetNamespace}, Validator: controller.ManagedBudgetEvidenceValidator{Reader: mgr.GetAPIReader()}, ManagedInspector: controller.ManagedPodAdmissionInspector{Reader: mgr.GetAPIReader(), Templates: templatesKey, Image: o.taskBudgetWorkerImage}}
+		// NativeInspector stays nil until an independently reviewed campaign factory
+		// is wired. A non-nil managed receipt validator cannot admit native hosts.
+	}
 	r := &controller.Reconciler{
-		Client:                      mgr.GetClient(),
+		Client:      mgr.GetClient(),
+		TaskBudgets: budgets, TaskBudgetWorkerImage: o.taskBudgetWorkerImage,
 		Templates:                   templatesKey,
 		APIURL:                      o.apiURL,
 		ManagedCodexTasks:           o.managedCodexTasks,
@@ -272,9 +319,10 @@ func run(args []string) error {
 	}
 	if o.apiAddr != "0" {
 		api := &apiserver.Server{
-			Client: mgr.GetClient(),
-			Live:   mgr.GetAPIReader(),
-			Auth:   apiserver.TokenReviewer{Client: mgr.GetClient()},
+			Client:      mgr.GetClient(),
+			TaskBudgets: budgets, AssignedTaskBudgets: o.assignedTaskBudgets,
+			Live: mgr.GetAPIReader(),
+			Auth: apiserver.TokenReviewer{Client: mgr.GetClient()},
 			Policy: apiserver.Policy{
 				Human:                 o.humanSA,
 				Clients:               o.clientSAs,

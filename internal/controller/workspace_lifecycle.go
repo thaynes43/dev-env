@@ -212,6 +212,9 @@ func (r *Reconciler) reconcileSharedWorkspace(ctx context.Context, s *v1alpha1.A
 	obs.pod.obj = freshOld
 	if hold.missing {
 		if sharedRescued(s) && s.Status.Rescue.SourcePodUID == string(old.UID) {
+			if err := r.recordTaskBudgetStop(ctx, s, freshOld); err != nil {
+				return block(err)
+			}
 			if err := removeSharedPod(ctx, r.Client, s, freshOld); err != nil {
 				return retry, err
 			}
@@ -300,6 +303,9 @@ func (r *Reconciler) reconcileSharedWorkspace(ctx context.Context, s *v1alpha1.A
 	// The hold Pod goes only after its exact rescue is durable; keep the
 	// old executor until the hold is actually absent. Every deletion remains
 	// in deletePod with UID/resourceVersion preconditions.
+	if err := r.recordTaskBudgetStop(ctx, s, freshOld); err != nil {
+		return block(err)
+	}
 	if err := removeSharedPod(ctx, r.Client, s, hp); err != nil && !apierrors.IsNotFound(err) {
 		return retry, err
 	}

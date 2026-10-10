@@ -19,6 +19,13 @@ import (
 
 type apiBudgetValidator struct{}
 
+func (apiBudgetValidator) InspectNativeAdmission(_ context.Context, l *taskbudget.Ledger, b apiv1.TaskBudgetBinding) error {
+	if l.Binding != b {
+		return taskbudget.ErrDenied
+	}
+	return nil // Independent readiness fixture; no production inspector exists.
+}
+
 func (apiBudgetValidator) Validate(_ context.Context, _ *taskbudget.Ledger, e apiv1.TaskBudgetEvent) error {
 	// Supervised fixture receipts have one canonical unresolved checkpoint.
 	known := map[string]string{"fixture:attempt-a": "attempt-a", "fixture:attempt-b": "attempt-b", "fixture:attempt-c": "attempt-c"}
@@ -39,6 +46,7 @@ func budgetFixture(t *testing.T) (*fixture, apiv1.TaskBudgetBinding) {
 	f.srv.AssignedTaskBudgets = map[string]string{"host-a": "campaign-a"}
 	f.srv.TaskBudgets = &taskbudget.Service{Store: taskbudget.KubeStore{Client: f.c, Live: f.c, Namespace: "budget-system"}, Now: func() time.Time { return f.now }}
 	f.srv.TaskBudgets.Validator = apiBudgetValidator{}
+	f.srv.TaskBudgets.NativeInspector = apiBudgetValidator{}
 	w := f.do(http.MethodPost, apiv1.TaskBudgetsPath, tokCoordinator, apiv1.CreateTaskBudgetRequest{TaskUID: "campaign-a", Spec: apiv1.TaskBudgetSpec{SuccessCondition: "verified result", OverallSeconds: 2700, EffortSeconds: 3600, CheckpointSeconds: 600}})
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create budget: %d %s", w.Code, w.Body.String())
@@ -51,7 +59,7 @@ func budgetFixture(t *testing.T) (*fixture, apiv1.TaskBudgetBinding) {
 }
 
 func TestBudgetAPIExactLiveHostBindingAndDisabledDefault(t *testing.T) {
-	for _, scenario := range []string{"ready", "unknown-campaign", "unavailable", "old-pod", "later-deadline", "client", "extension-by-agent"} {
+	for _, scenario := range []string{"ready", "unknown-campaign", "unavailable", "missing-native-inspector", "old-pod", "later-deadline", "client", "extension-by-agent"} {
 		t.Run(scenario, func(t *testing.T) {
 			f, b := budgetFixture(t)
 			token := tokCoordinator
@@ -61,6 +69,8 @@ func TestBudgetAPIExactLiveHostBindingAndDisabledDefault(t *testing.T) {
 				f.srv.AssignedTaskBudgets["host-a"] = "other"
 			case "unavailable":
 				f.srv.TaskBudgets = nil
+			case "missing-native-inspector":
+				f.srv.TaskBudgets.NativeInspector = nil
 			case "old-pod":
 				b.PodUID = "old-pod"
 			case "later-deadline":
