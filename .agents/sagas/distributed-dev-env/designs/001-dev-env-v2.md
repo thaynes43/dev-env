@@ -2830,6 +2830,29 @@ relay, owner phone delivery and cross-Pod lifecycle acceptance remain separate.
 Technical contract: [managed child decisions](../../../../docs/managed-child-decisions.md).
 The no-progress/three-identical-blocker watchdog in issue #154 is separate work.
 
+**D-84 (2026-10-09 America/New_York, Q-23). Stop stalled tasks and escalate once.**
+
+The owner's accepted default is **60 minutes without progress or three failed
+attempts at the same blocker**, whichever comes first. The logical task carries
+its history across pods, child agents, reassignment and resume. Child effort
+consumes the parent's explicit overall budget. Checkpoints and evidenced progress
+must advance the success condition; heartbeats and another diagnostic script do
+not grant unlimited investigation.
+
+At the limit, deterministic API/controller/supervisor enforcement blocks further
+model work, retries and dispatch, preserves WIP and ownership, and establishes
+actual executor stop. Uncertain termination does not permit a replacement writer.
+The direct parent presents ONE actionable native owner question with evidence,
+effort, the recommended alternative and a bounded next step. Phone delivery and
+the answer must be recorded. Missing delivery or response leaves work stopped,
+without model polling or silent budget/provider extensions. Help requests confer
+no additional privileged grants.
+
+The [full contract and acceptance checks](../requirements/2026-10-09-task-budgets.md)
+are required for the first owner test, tracked in #154. Existing optional
+timeouts/max-turns and saved child-decision source do not implement this contract.
+Runtime enforcement and phone acceptance remain unbuilt.
+
 ### 6.9 declare-activity
 
 **D-17.** A declaration becomes an `Activity` resource in `dev-env-system`, created
@@ -4875,6 +4898,7 @@ blocks only the step it names.
 | Q-20 | Which app should register the initially proposed v1 project folders? | The earlier Codex-only/both/Claude-only choice was premature; it assumed an app choice before the management workflows were drawn. | **Superseded by Tom's explicit R2 on 2026-10-09:** both Claude Code and Codex use one project concept. The supplied baseline is `~/codex`; R7 adds multiple remote pod links sharing workspace files. The primary management surface remains under workflow review. No answer to the old options is required; this is not an owner deferral. See D-74. |
 | Q-21 | Accept [ADR-002](../adrs/002-shared-project-workspaces.md): shared project/task files with private agent homes, two Codex remote hosts and explicit writer transfer, starting with a bounded trial of existing CephFS? | **A. Accept design and bounded trial (recommended):** test household impact, real client/preflight behavior, locking and recovery before normal rollout. **B. Keep the shared/private topology but design external RWX first:** additional storage setup to keep workspace IO off in-cluster disks. **C. Refine the user workflows before choosing:** preserve the current topology while reviewing the proposal. | **Accepted by Tom through the structured native prompt, 2026-10-09 America/New_York:** "Accept ADR-002 and the bounded CephFS trial (Recommended)". D-75 records the ruling. ADR-002 supersedes the affected architecture decisions; bounded trial first, normal rollout gated on acceptance. No v1 restart/cutover is included. Phone push remains unverified; receipt of the owner answer does not establish its device. Keeper projection and owner node trust are separate steps. |
 | Q-22 | Who performs the prepared keeper CA node-trust step? The reset work order explicitly assigns it to Tom unless he delegates; the reviewed guide preserves the existing account/key and minting stays off. | **A. Tom installs using the reviewed guide (recommended):** use the retained public key locally on each node and report completion only. **B. Delegate trust installation to Codex:** prepare and verify an execution path using only the public CA, preserve existing keys and confirm read-only access; no private CA delivery to v1 or sessions and no minting activation. | **Delegated by Tom through the structured native prompt, 2026-10-09 America/New_York:** "Delegate the trust installation to Codex". D-76 records the scope. Prepare/review a public-key-only delivery path and guarded updates, verify v1 access per node, and clean temporary delivery resources. No private CA delivery, sudo/sshd edits, node restart, PVE token mint or enable flag is included. Workspace trial proceeds independently. Phone push remains unverified. |
+| Q-23 | When must stalled work stop attempts and ask Tom for help? | **A. 30 minutes without progress or 3 failed attempts (recommended). B. 15 minutes or 2 failed attempts. C. 60 minutes or 3 failed attempts.** Counters carry across agents and pods. | **Accepted through the structured native prompt, 2026-10-09 America/New_York:** "60 minutes without progress or 3 failed attempts at the same blocker". D-84 records the stop, evidence, ownership, one-question escalation and bounded continuation contract. Required for the first owner test; enforcement and phone delivery remain unbuilt. |
 
 ## 16. Decisions settled in this design
 
@@ -4963,3 +4987,4 @@ blocks only the step it names.
 | D-81 | Shared task rescue cannot delete private provider homes; UID-bound retained-PVC receipt/detach precedes Session finalization, with no automatic home expiry or destruction. | 6.6, docs/shared-private-home-retention.md |
 | D-82 | Disabled fixed model-free project Job, dedicated namespace GET/named-catalog read tier and retained operation home; exact live actor/original deadline, trusted empty-storage initializer and no uncertain replay. | 6.6, docs/project-sync-runner.md |
 | D-83 | Default-off private child questions, live direct-parent UID-fenced answers with operator-owned identity/content digest authority, exact native UUID continuation with genuine owned Wait/group-absence receipt and one-use same-writer consumption; local transport acknowledgment only. | 6.8, docs/managed-child-decisions.md |
+| D-84 | Q-23: 60 minutes without progress or three failed attempts at the same blocker; durable parent/child budget history, actual stop and preserved ownership, one native phone escalation and explicit bounded continuation. Implementation #154 remains required. | 6.8, requirements/2026-10-09-task-budgets.md |

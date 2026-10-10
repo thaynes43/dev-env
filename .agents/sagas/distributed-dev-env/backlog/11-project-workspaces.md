@@ -185,6 +185,11 @@ acceptance gates pass. Source units do not close the checks below by themselves.
       coordinator-only route; cached primary project HEAD cannot select new source.
 - [ ] Native phone decision prompt and answer round-trip works for the supported
       Claude/Codex paths; logs/doc questions do not satisfy this check.
+- [ ] [Task-budget enforcement](../requirements/2026-10-09-task-budgets.md)
+      stops at 60 minutes without progress or three failed attempts at the same
+      blocker, preserves cumulative child/agent/pod/resume history and WIP,
+      and delivers one owner phone question before a bounded continuation.
+      Missing answers and delivery failure cannot trigger model polling.
 - [ ] Current-source integration, rescue/restore, cleanup and no-active-restart
       behavior pass before this workflow or v2 cutover is called complete.
 
