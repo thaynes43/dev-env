@@ -9,8 +9,10 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -187,6 +189,96 @@ func TestDecisionHeartbeatDiscoveryUsesExistingOutcomeWithoutPrivateContext(t *t
 				if w.Code != http.StatusNoContent || f.session(name).Status.Outcome != nil {
 					t.Fatal("disabled/inapplicable decision changed legacy status")
 				}
+			}
+		})
+	}
+}
+
+func TestDecisionHeartbeatsPreserveUnrelatedOutcomesAndChangeOnlyOwnedNote(t *testing.T) {
+	for _, state := range []v1alpha1.OutcomeState{v1alpha1.OutcomeEscalated, v1alpha1.OutcomeDone} {
+		for _, note := range []string{"unrelated outcome", "decision/cccccccc-cccc-4ccc-8ccc-cccccccccccc", "decision/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "", "absent-outcome"} {
+			for _, decisionState := range []string{"Open", "Delivered", "Omitted"} {
+				t.Run(string(state)+"/"+note+"/"+decisionState, func(t *testing.T) {
+					f, ex, sess, _ := decisionAPIFixture(t)
+					var record protocol.DecisionResult
+					_ = json.Unmarshal([]byte(ex.out), &record)
+					at := record.Decision.CreatedAt.Add(time.Second)
+					record.Decision.State, record.Decision.Answer, record.Decision.AnsweredAt = "Delivered", "SYNTHETIC-ANSWER", &at
+					authority := v1alpha1.DecisionAnswerStatus(protocol.AnswerAuthority(*record.Decision, record.Decision.Answer))
+					saved := f.session(sess.Name)
+					saved.Status.DecisionAnswer = &authority
+					original := &v1alpha1.OutcomeStatus{State: state, Note: note}
+					if note != "absent-outcome" {
+						saved.Status.Outcome = original
+					}
+					if err := f.c.Status().Update(context.Background(), saved); err != nil {
+						t.Fatal(err)
+					}
+					st := status(sess.Name)
+					if decisionState != "Omitted" {
+						st.Decision = &protocol.DecisionOutcome{ID: record.Decision.ID, SessionUID: record.Decision.SessionUID, PodUID: record.Decision.PodUID, ThreadID: record.Decision.ThreadID, WriterGeneration: record.Decision.WriterGeneration, State: decisionState, AnswerDigest: authority.Digest, At: f.now}
+					}
+					w := f.do(http.MethodPost, protocol.HeartbeatPath(sess.Name), "tok-session-"+sess.Name, st)
+					if w.Code != http.StatusNoContent {
+						t.Fatal("valid decision heartbeat refused", w.Code)
+					}
+					got := f.session(sess.Name).Status.Outcome
+					owned := note == "absent-outcome" || note == "decision/"+record.Decision.ID
+					if !owned || decisionState == "Omitted" {
+						if note == "absent-outcome" {
+							if got != nil {
+								t.Fatal("omission created outcome")
+							}
+						} else if got == nil || *got != *original {
+							t.Fatal("heartbeat changed an unrelated or omitted outcome")
+						}
+					} else if decisionState == "Delivered" {
+						if got != nil {
+							t.Fatal("matching confirmed delivered decision did not clear its own outcome")
+						}
+					} else if got == nil || got.State != v1alpha1.OutcomeEscalated || got.Note != "decision/"+record.Decision.ID || !got.At.Time.Equal(f.now) {
+						t.Fatal("open decision did not update its own outcome")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestDecisionHeartbeatCannotClobberOutcomeAcquiredAfterLiveRead(t *testing.T) {
+	for _, state := range []string{"Open", "Delivered"} {
+		t.Run(state, func(t *testing.T) {
+			f, ex, sess, _ := decisionAPIFixture(t)
+			var record protocol.DecisionResult
+			_ = json.Unmarshal([]byte(ex.out), &record)
+			at := record.Decision.CreatedAt.Add(time.Second)
+			record.Decision.State, record.Decision.Answer, record.Decision.AnsweredAt = "Delivered", "SYNTHETIC-ANSWER", &at
+			authority := v1alpha1.DecisionAnswerStatus(protocol.AnswerAuthority(*record.Decision, record.Decision.Answer))
+			saved := f.session(sess.Name)
+			saved.Status.DecisionAnswer = &authority
+			if err := f.c.Status().Update(context.Background(), saved); err != nil {
+				t.Fatal(err)
+			}
+			concurrent := &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeDone, Note: "concurrent unrelated completion"}
+			conflicted := false
+			f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				fresh := f.session(sess.Name)
+				fresh.Status.Outcome = concurrent
+				if err := f.c.Status().Update(ctx, fresh); err != nil {
+					return err
+				}
+				err := c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+				conflicted = apierrors.IsConflict(err)
+				return err
+			}})
+			st := status(sess.Name)
+			st.Decision = &protocol.DecisionOutcome{ID: record.Decision.ID, SessionUID: record.Decision.SessionUID, PodUID: record.Decision.PodUID, ThreadID: record.Decision.ThreadID, WriterGeneration: record.Decision.WriterGeneration, State: state, AnswerDigest: authority.Digest, At: f.now}
+			w := f.do(http.MethodPost, protocol.HeartbeatPath(sess.Name), "tok-session-"+sess.Name, st)
+			got := f.session(sess.Name).Status.Outcome
+			// The existing Kubernetes error mapper reports status-patch conflicts
+			// as internal errors; the write must still refuse and preserve ownership.
+			if !conflicted || w.Code != http.StatusInternalServerError || got == nil || *got != *concurrent {
+				t.Fatal("stale heartbeat clobbered concurrently acquired outcome", w.Code)
 			}
 		})
 	}

@@ -369,3 +369,92 @@ func TestDecisionAuthorityRequiresParentStillLiveBeforeReservation(t *testing.T)
 		t.Fatal("departed parent wrote authority or answer", w.Code)
 	}
 }
+
+func TestDecisionAuthorityAcceptsUnrelatedStatusUpdatesAtBothExecWindows(t *testing.T) {
+	f, ex, sess, _ := decisionAPIFixture(t)
+	handler := ex.handle
+	reads, answers := 0, 0
+	ex.handle = func(cmd []string, input string) (string, int) {
+		out, code := handler(cmd, input)
+		saved := f.session(sess.Name)
+		before := saved.ResourceVersion
+		phase := "after-first-read"
+		if cmd[2] == "decision-answer" {
+			answers++
+			phase = "after-answer-before-confirm"
+		} else {
+			reads++
+		}
+		saved.Status.Agent = &v1alpha1.AgentStatus{Status: "busy", Message: phase}
+		saved.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeDone, Note: phase}
+		if err := f.c.Status().Update(context.Background(), saved); err != nil {
+			t.Fatal(err)
+		}
+		if f.session(sess.Name).ResourceVersion == before {
+			t.Fatal("fixture did not create unrelated RV change")
+		}
+		return out, code
+	}
+	answer := protocol.DecisionAnswer{ID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Text: "SYNTHETIC-ANSWER"}
+	w := f.do(http.MethodPost, apiv1.SessionDecisionPath(sess.Name), tokCoordinator, answer)
+	if w.Code != http.StatusAccepted {
+		t.Fatal("unrelated heartbeat/controller update blocked authority", w.Code, w.Body.String())
+	}
+	result := decode[protocol.DecisionResult](t, w)
+	saved := f.session(sess.Name)
+	if reads != 1 || answers != 1 || saved.Status.DecisionAnswer == nil || !protocol.DecisionAuthority(*saved.Status.DecisionAnswer).Confirms(*result.Decision) {
+		t.Fatal("authority did not confirm exactly one recorded answer")
+	}
+	if saved.Status.Agent == nil || saved.Status.Agent.Message != "after-answer-before-confirm" || saved.Status.Outcome == nil || saved.Status.Outcome.State != v1alpha1.OutcomeDone || saved.Status.Outcome.Note != "after-answer-before-confirm" {
+		t.Fatal("fresh authority patch clobbered unrelated status")
+	}
+}
+
+func TestDecisionAuthorityConcurrentFieldChangeStillRefusesAtBothExecWindows(t *testing.T) {
+	for _, stage := range []string{"reserve", "confirm"} {
+		t.Run(stage, func(t *testing.T) {
+			f, ex, sess, _ := decisionAPIFixture(t)
+			handler := ex.handle
+			answers := 0
+			var conflicting v1alpha1.DecisionAnswerStatus
+			ex.handle = func(cmd []string, input string) (string, int) {
+				out, code := handler(cmd, input)
+				isAnswer := cmd[2] == "decision-answer"
+				if isAnswer {
+					answers++
+				}
+				if (stage == "reserve" && !isAnswer) || (stage == "confirm" && isAnswer) {
+					saved := f.session(sess.Name)
+					if saved.Status.DecisionAnswer != nil {
+						conflicting = *saved.Status.DecisionAnswer
+					} else {
+						var record protocol.DecisionResult
+						_ = json.Unmarshal([]byte(out), &record)
+						conflicting = v1alpha1.DecisionAnswerStatus(protocol.AnswerAuthority(*record.Decision, "DIFFERENT-ANSWER"))
+						conflicting.Phase = "Reserved"
+					}
+					conflicting.Digest = strings.Repeat("b", 64)
+					saved.Status.DecisionAnswer = &conflicting
+					if err := f.c.Status().Update(context.Background(), saved); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return out, code
+			}
+			answer := protocol.DecisionAnswer{ID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Text: "SYNTHETIC-ANSWER"}
+			w := f.do(http.MethodPost, apiv1.SessionDecisionPath(sess.Name), tokCoordinator, answer)
+			saved := f.session(sess.Name)
+			want := 0
+			if stage == "confirm" {
+				want = 1
+			}
+			if w.Code != http.StatusConflict || answers != want || saved.Status.DecisionAnswer == nil || *saved.Status.DecisionAnswer != conflicting {
+				t.Fatal("authority CAS accepted or overwrote a concurrent answer", w.Code, answers)
+			}
+			_ = f.do(http.MethodPost, apiv1.SessionDecisionPath(sess.Name), tokCoordinator, answer)
+			if answers != want {
+				t.Fatal("concurrent authority conflict replayed answer exec")
+			}
+		})
+	}
+}

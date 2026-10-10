@@ -53,6 +53,7 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 		return 0, nil, forbidden("session %s was replaced; the pod belongs to the earlier one", key.Name)
 	}
 	base := sess.DeepCopy()
+	decisionOutcomePatch := false
 	if s.ManagedChildDecisions && sess.Spec.Agent == v1alpha1.AgentCodex && sess.Spec.Mode == v1alpha1.ModeTask && sess.Spec.Workspace != nil {
 		if outcome := st.Decision; outcome != nil {
 			if c.pod == nil || outcome.SessionUID != string(sess.UID) || outcome.PodUID != string(c.pod.UID) || outcome.WriterGeneration == 0 ||
@@ -63,14 +64,19 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 			if observedAt.After(s.now()) {
 				observedAt = s.now()
 			}
-			at := metav1.NewTime(observedAt)
-			sess.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeEscalated, Note: "decision/" + outcome.ID, At: &at}
-			if answer := sess.Status.DecisionAnswer; answer != nil && answer.Phase == "Confirmed" &&
-				answer.Session == sess.Name && answer.SessionUID == outcome.SessionUID && answer.PodUID == outcome.PodUID &&
-				answer.DecisionID == outcome.ID && answer.ThreadID == outcome.ThreadID && outcome.WriterGeneration <= math.MaxInt64 && answer.WriterGeneration == int64(outcome.WriterGeneration) &&
-				answer.Digest == outcome.AnswerDigest && outcome.State == "Delivered" {
-				sess.Status.Outcome = nil
+			note := "decision/" + outcome.ID
+			if sess.Status.Outcome == nil || sess.Status.Outcome.Note == note {
+				decisionOutcomePatch = true
+				at := metav1.NewTime(observedAt)
+				sess.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeEscalated, Note: note, At: &at}
+				if answer := sess.Status.DecisionAnswer; answer != nil && answer.Phase == "Confirmed" &&
+					answer.Session == sess.Name && answer.SessionUID == outcome.SessionUID && answer.PodUID == outcome.PodUID &&
+					answer.DecisionID == outcome.ID && answer.ThreadID == outcome.ThreadID && outcome.WriterGeneration <= math.MaxInt64 && answer.WriterGeneration == int64(outcome.WriterGeneration) &&
+					answer.Digest == outcome.AnswerDigest && outcome.State == "Delivered" {
+					sess.Status.Outcome = nil
+				}
 			}
+
 		} // Omission cannot erase a pending or locally fabricated decision.
 
 	}
@@ -78,7 +84,14 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 	if st.Usage != nil {
 		sess.Status.Usage = usageStatus(*st.Usage)
 	}
-	if err := s.Client.Status().Patch(ctx, &sess, client.MergeFrom(base)); err != nil {
+	patch := client.MergeFrom(base)
+	// An outcome acquired by another writer after this read must not be replaced
+	// or cleared by a stale decision heartbeat. Ordinary heartbeat fields keep
+	// their existing merge behavior when no decision outcome is being changed.
+	if decisionOutcomePatch {
+		patch = client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
+	}
+	if err := s.Client.Status().Patch(ctx, &sess, patch); err != nil {
 		return 0, nil, fromKubeError(err, "session "+key.Name+" status")
 	}
 	return http.StatusNoContent, nil, nil

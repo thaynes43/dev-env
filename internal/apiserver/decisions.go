@@ -120,7 +120,9 @@ func (s *Server) execChildDecision(ctx context.Context, sess *v1alpha1.AgentSess
 }
 
 // The optimistic status write, uncached readback and direct-parent recheck
-// precede every exec/confirmation. No caller-provided heartbeat writes this field.
+// precede every exec/confirmation. Unrelated status writes may change the old
+// snapshot RV; compare only the expected authority, then patch from fresh live
+// state. No caller-provided heartbeat writes this field.
 func (s *Server) writeDecisionAuthority(ctx context.Context, sess *v1alpha1.AgentSession, pod *corev1.Pod, c *caller, expected *protocol.DecisionAuthority, next protocol.DecisionAuthority) error {
 	if err := s.liveDecisionCoordinator(ctx, c); err != nil {
 		return err
@@ -129,7 +131,7 @@ func (s *Server) writeDecisionAuthority(ctx context.Context, sess *v1alpha1.Agen
 	if err := s.Live.Get(ctx, client.ObjectKeyFromObject(sess), &live); err != nil {
 		return fromKubeError(err, "decision authority")
 	}
-	if live.UID != sess.UID || live.ResourceVersion != sess.ResourceVersion {
+	if live.UID != sess.UID || live.Generation != sess.Generation {
 		return coordinatorDenied()
 	}
 	if expected != nil {
