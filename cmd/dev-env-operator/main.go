@@ -73,6 +73,8 @@ func main() {
 }
 
 type options struct {
+	nativeFixtureEnabled  bool
+	nativeFixtureImage    string
 	taskBudgetsEnabled    bool
 	taskBudgetNamespace   string
 	taskBudgetWorkerImage string
@@ -120,6 +122,8 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.managedCodexTasks, "enable-managed-codex-tasks", false, "enable accepted-project managed Codex task admission")
 	fs.BoolVar(&o.managedChildDecisions, "enable-managed-child-decisions", false, "enable private recorded child decisions and same-writer native continuation")
 	fs.BoolVar(&o.taskBudgetsEnabled, "enable-task-budgets", false, "enable retained finite managed task budget authority; native admission requires a separate trusted inspector")
+	fs.BoolVar(&o.nativeFixtureEnabled, "enable-native-lifecycle-fixture", false, "admit only the fixed isolated zero-task native lifecycle fixture")
+	fs.StringVar(&o.nativeFixtureImage, "native-fixture-image", "", "signature-verified immutable agent image for the isolated fixture")
 	fs.StringVar(&o.taskBudgetNamespace, "task-budget-namespace", "", "dedicated protected namespace for retained budget ConfigMaps")
 	fs.StringVar(&o.taskBudgetWorkerImage, "task-budget-worker-image", "", "reviewed immutable worker image containing pre-boot budget deadline")
 	assignedBudgets := fs.String("assigned-task-budgets", "", "explicit JSON configured HostID to TaskUID map")
@@ -209,6 +213,9 @@ func parseFlags(args []string) (options, error) {
 	} else if o.taskBudgetNamespace != "" || o.taskBudgetWorkerImage != "" || len(o.assignedTaskBudgets) > 0 {
 		return o, errors.New("task budget configuration requires explicit enable-task-budgets")
 	}
+	if err := validateNativeFixtureOptions(o); err != nil {
+		return o, err
+	}
 	return o, nil
 }
 
@@ -265,8 +272,10 @@ func run(args []string) error {
 	var budgets *taskbudget.Service
 	if o.taskBudgetsEnabled {
 		budgets = &taskbudget.Service{Store: taskbudget.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.taskBudgetNamespace}, Validator: controller.ManagedBudgetEvidenceValidator{Reader: mgr.GetAPIReader()}, ManagedInspector: controller.ManagedPodAdmissionInspector{Reader: mgr.GetAPIReader(), Templates: templatesKey, Image: o.taskBudgetWorkerImage}}
-		// NativeInspector stays nil until an independently reviewed campaign factory
-		// is wired. A non-nil managed receipt validator cannot admit native hosts.
+		budgets.NativeInspector, err = newNativeFixtureInspector(mgr.GetAPIReader(), o.nativeFixtureImage, o.nativeFixtureEnabled)
+		if err != nil {
+			return err
+		}
 	}
 	r := &controller.Reconciler{
 		Client:      mgr.GetClient(),
