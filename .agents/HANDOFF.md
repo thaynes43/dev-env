@@ -12,7 +12,9 @@ The v2 operator is deployed, 2/2 Ready with zero restarts. Retained budget
 storage and the isolated native-host admission profile are installed. The
 one-shot native fixture ran and failed: preflight/profile checks and budget
 creation passed, but the client returned no valid native acceptance result.
-Its original container terminated; the failed Pod and ledger are retained.
+The client ran through a separate `kubectl exec`; PID 1 was a finite sleep,
+so the container's exit code does not report client acceptance. Its original
+container terminated; the failed Pod and ledger are retained.
 Missing captured stderr leaves the failed stage Unknown. No native readiness,
 owned-stop or ledger StopConfirmed is claimed. Read the
 [morning test guide](../docs/morning-test-guide.md) for the usable subset and
@@ -32,7 +34,8 @@ unverified. The morning guide names the existing built CLI and public CA.
 
 The signed native image inherits `/home/dev/.codex`; the fixture's private HOME
 requires its own explicit CODEX_HOME. [#170](https://github.com/thaynes43/dev-env/pull/170)
-fixes the source profile and adds independent regression checks. This concrete
+merged after required checks and actual advisory passed; it fixes the source
+profile and adds independent regression checks. This concrete
 defect does not identify the discarded historical error. Do not claim a new
 native pass: no replacement fixture or campaign was run and the deployed
 profile has not been updated. A private source-only diagnostic candidate

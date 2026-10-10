@@ -50,7 +50,9 @@ moved the unchanged identity into the existing RBAC prerequisite. Corrected
 GitOps delivery then created the exact fixed Pod. Its preflight and admitted
 profile passed, and one budget creation was recorded. The sole acceptance
 client exited unsuccessfully; its wrapper discarded captured stderr, so the
-failed stage and cause remain Unknown. Native readiness and owned stop did
+failed stage and cause remain Unknown. The client ran through a separate
+`kubectl exec`; the container's PID 1 was a finite sleep. Its exit code does
+not report the client's result. Native readiness and owned stop did
 not pass acceptance. The original container terminated with exit code 0 and no
 restart; the failed Pod and ledger are retained. Container termination does
 not establish ledger `StopConfirmed` or the complete campaign-stop requirement.
@@ -59,7 +61,7 @@ A subsequent read-only audit found a concrete profile defect: the immutable
 signed image sets `CODEX_HOME=/home/dev/.codex`, while the fixture overrides
 `HOME=/fixture/home` and omits `CODEX_HOME`. The owned CLI requires its Codex
 home to match the private home before its first authority GET. The source fix
-in [dev-env#170](https://github.com/thaynes43/dev-env/pull/170) explicitly sets
+merged in [dev-env#170](https://github.com/thaynes43/dev-env/pull/170) explicitly sets
 the private `CODEX_HOME` and adds independent profile and admission regressions.
 It does not recover the discarded historic error or prove
 which check actually failed in that run. A source-only diagnostic candidate
