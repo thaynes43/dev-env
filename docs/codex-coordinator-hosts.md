@@ -1,7 +1,8 @@
 # Two Codex computer links and managed tasks
 
-**Design for the first v2 owner test; source and real-client acceptance are
-pending.** Each computer link is a persistent Codex coordinator. Both links see
+**Design for the first v2 owner test. The catalog, scoped coordinator and
+managed-task source foundation is merged; runtime and real-client acceptance
+remain pending.** Each computer link is a persistent Codex coordinator. Both links see
 the same project files. Implementation runs in managed task pods with separate
 worktrees and recorded writers. The operator is the API/controller that performs
 those operations; it is not another reasoning agent.
@@ -24,6 +25,27 @@ flowchart TB
     Auth --> B
     Auth --> Codex
 ```
+
+## What the first test will establish
+
+The morning test starts with one bounded campaign per computer link. Every
+conversation and native child on that link belongs to that campaign. Managed
+implementation tasks inherit it. This restriction gives the supervisor a clear
+set of work to stop; separate unrelated work needs another host during the pilot.
+It is a temporary test boundary, not the final session-management experience.
+
+The test must prove that both links see the same declared project, each managed
+task starts from a fresh pinned commit with the project and repository rules,
+and only the recorded task writer can continue implementation. It must also
+exercise a real budget stop, retain WIP and history, and present an actionable
+owner question in the controlling app. Pairing a computer is one step in that
+test, not evidence that the complete workflow passed.
+
+Until the ledger, owned executor and independent accounting are integrated,
+this route remains disabled. Source tests do not establish provider login
+renewal, remote conversation recovery or phone delivery. The exact enabled
+commands and remaining acceptance steps belong in the current delivery record;
+do not use future design commands as a deployed quick start.
 
 ## Open, request and continue work
 

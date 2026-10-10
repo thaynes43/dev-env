@@ -5,6 +5,67 @@ Tom's own machine. Read this page, then [CLAUDE.md](../CLAUDE.md) (the rules), t
 the saga. To start building, follow
 [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md).
 
+## Overnight delivery, 2026-10-10 UTC
+
+Tom authorized continued work overnight toward a morning-testable MVP. Codex owns
+implementation, review, delivery and the test guide. Do not wait on the earlier
+hosted-CI or gateway-account question cards for ordinary authorized work.
+Computer pairing and a real phone question/answer remain owner acceptance steps;
+do not start an expiring challenge while he is asleep. The Windows project-list
+visibility issue is a minor client workaround, not a delivery prerequisite.
+
+The complete reviewed AgentSession schema is applied through
+[haynes-ops#3722](https://github.com/thaynes43/haynes-ops/pull/3722), with exact source
+schema equality and unchanged protected pod identities, images and restart counts.
+The earlier three local Flux-selection failures remain closed history; one
+reviewed hosted-CI route delivered the update. Shared-workspace, scoped-host and
+child-decision runtime features remain off until their dependencies and actual
+acceptance pass. The keeper stays independently pinned and Ready; account login
+is separate from computer pairing.
+
+Existing Proxmox SSH and its documented read-only sudo route work. The gasha01
+VM is running, but QEMU guest-agent ping is unavailable and the existing hardware
+key was refused once each for the two documented candidate guest accounts. Those
+routes are closed; do not guess another username or repeat them. Guest SSH is
+not required to inspect an existing NFS export from a disposable client.
+[Haynes-ops#3725](https://github.com/thaynes43/haynes-ops/pull/3725) is reviewed and
+merged for one CPU-limited, read-only NFS metadata Job. It writes no export files,
+has no provider credentials, and preserves uncertain termination as Unknown.
+The actual read-only check passed for UID1000 over NFS4.2; root mode permits
+write/search in DAC, while server write authorization and quota remain untested.
+A webhook injected an init container without limits; both containers terminated,
+but the capsule did not meet the every-container-limit contract. Preserve that
+deviation and disable injection in a reviewed successor. The separate writable
+comparison must pass before selecting storage. Capacity alone is not a permissions, quota or
+performance pass.
+
+The accepted [budget requirement](sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md)
+remains mandatory: 60 minutes without evidenced progress or three failures at the
+same unresolved blocker, across agents, pods and resumes. Owned foreground
+executor source merged in [#162](https://github.com/thaynes43/dev-env/pull/162),
+and the retained operator-side ledger/API is reviewed in
+[#163](https://github.com/thaynes43/dev-env/pull/163). Its
+[API design](https://github.com/thaynes43/dev-env/blob/b6f980196417c1735834b5cbc3aadd7df8cf7236/.agents/sagas/distributed-dev-env/designs/003-task-budget-api.md)
+records the protected namespace, exact binding and finite pilot limits. Both
+stay disabled until trustworthy accounting, actual process stop and native
+integration are proven. A successful fake process test is not a native-host
+acceptance result. Native phone delivery and answer provenance still need the
+owner's real client; repeated parent model polling is not an adapter.
+
+Use the [workflow guide](../docs/workflow-guide.md) for the product and feature
+set. Each further implementation unit needs a finite outcome, deadline and
+checkpoint. Preserve blocker history; do not restart the same investigation with
+a fresh agent or pod. Keep v1, its enrollment, the keeper refresh owner and the
+existing shelf unchanged. Source changes require reviewed PRs, exact-head checks
+and GitOps delivery; no local image builds or CPU burners on shared nodes.
+
+The coordinator's current delivery window is 05:29–09:30 UTC with at most eight
+hours of aggregate child effort. At the morning checkpoint, report the verified
+workflow and precise remaining gates, preserve WIP and stop new implementation
+unless Tom steers further. This is a finite delivery window, not permission for
+silent extensions. Earlier checkpoint records below are historical wherever
+this section supplies newer evidence.
+
 ## Active delivery to an owner-testable v2, 2026-10-09
 
 **Resumed checkpoint, 2026-10-09 America/New_York:** the owner refreshed usage
