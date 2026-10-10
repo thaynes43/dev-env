@@ -11,6 +11,25 @@ import (
 
 const validCatalog = `{"version":1,"repositories":{"demo":{"github":"owner/demo"},"other":{"github":"owner/other","defaultBranch":"stable"}},"projects":{"sample":{"repositories":[{"name":"other","defaultBranch":"release/one"},{"name":"demo"}],"rules":"Rule identifier α\nKeep this exact trailing space. "}}}`
 
+func TestLegacyProjectRulesPreservesHistoricalBytes(t *testing.T) {
+	catalog, err := Parse([]byte(validCatalog))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := catalog.Snapshot("sample", "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# Project sample\n\nThis is the permanent sample project. Repository anchors are read-only. Start implementation through the managed task launcher, which fetches and pins source.\n\nProject repositories:\n" +
+		"- demo -> demo (default branch: main)\n" +
+		"- other -> other (default branch: release/one)\n" +
+		fmt.Sprintf("\n<!-- dev-env-project catalog-sha256=%s rules-sha256=%s -->\n\n## Project rules\n\n", catalog.Revision(), Digest([]byte("Rule identifier α\nKeep this exact trailing space. "))) +
+		"Rule identifier α\nKeep this exact trailing space. \n"
+	if snapshot.LegacyProjectRules() != want || snapshot.ProjectRules() == want {
+		t.Fatal("historical saved rules no longer have their exact original bytes")
+	}
+}
+
 func TestSnapshotBoundRoundTripsEscapedRulesAndSixteenRepositories(t *testing.T) {
 	rules := strings.Repeat("\x01", MaxRulesBytes)
 	d := declaration{Version: 1, Repositories: map[string]repositoryDeclaration{}, Projects: map[string]projectDeclaration{}}
@@ -73,8 +92,20 @@ func TestCatalogExactBytesAndImmutableSnapshots(t *testing.T) {
 		t.Fatal("foreign repo selected")
 	}
 	wrapper := s.ProjectRules()
-	if !strings.HasSuffix(wrapper, s.Rules()+"\n") || !strings.Contains(wrapper, "catalog-sha256="+c.Revision()) {
+	if !strings.HasSuffix(wrapper, s.Rules()+"\n") || !strings.Contains(wrapper, "catalog-sha256="+c.Revision()) || !strings.Contains(wrapper, "rules-sha256="+s.RulesRevision()) {
 		t.Fatal("wrapper lost exact rules or metadata")
+	}
+	for _, instruction := range []string{
+		"Repositories and task worktrees are local to each pod.",
+		"implement in a task worktree",
+		"freshly fetched, pinned source",
+		"resume preserves existing work",
+		"- demo -> owner/demo (default branch: main)",
+		"- other -> owner/other (default branch: release/one)",
+	} {
+		if !strings.Contains(wrapper, instruction) {
+			t.Fatalf("project wrapper lost task preparation or repository identity: %q", instruction)
+		}
 	}
 	data, err := json.Marshal(s)
 	if err != nil {

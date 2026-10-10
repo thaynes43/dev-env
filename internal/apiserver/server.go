@@ -54,7 +54,10 @@ type Server struct {
 	TaskBudgets         *taskbudget.Service
 	AssignedTaskBudgets map[string]string // configured HostID -> logical TaskUID
 	// Projects is a concrete uncached named ConfigMap binding, never a caller-supplied resolver.
-	Projects              *CatalogBinding
+	Projects *CatalogBinding
+	// PrivateProjectTasks admits new catalog tasks into private repositories.
+	// It is independent of the provider and shared-workspace feature gates.
+	PrivateProjectTasks   bool
 	ManagedCodexTasks     bool
 	ManagedChildDecisions bool
 	// Client reads from the manager's cache and writes to the API server.

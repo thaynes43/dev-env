@@ -30,6 +30,24 @@ and truthful usage. Publish no private transcript bodies or authentication state
 The prior 7–14 hour shared-storage MVP estimate is withdrawn; new units require
 concrete acceptance and bounded checkpoints under the unchanged stall policy.
 
+## First #173 source slice — 2026-10-10, America/New_York
+
+[DESIGN-005](sagas/distributed-dev-env/designs/005-private-project-tasks.md)
+defines private declared-project admission/preparation. Catalog snapshots supply
+source identity and rules without assigning shared storage. New tasks validate
+the selected clone and pin a freshly fetched remote commit; resume preserves
+WIP and its original snapshot. Unsupported new budget-bound private dispatch
+is refused before reservation. Existing shared/budget authorization stays guarded.
+
+Focused source checks, independent review, required CI and image/GitOps receipts
+are recorded on [#173](https://github.com/thaynes43/dev-env/issues/173). Source
+tests do not establish actual provider rule loading. Promotion keeps the new
+private-project admission flag disabled and preserves running sessions, the failed fixture and
+its ledger. Catalog-wide startup/bootstrap, permanent local project roots,
+remaining clients and both-provider/two-pod acceptance keep #173 open. The next
+finite source slice is local startup catalog bootstrap/refresh with preservation
+checks. No retired storage investigation or native fixture is rerun.
+
 ---
 
 The front door for any agent that opens this repo, in the cluster's dev-env pod or on

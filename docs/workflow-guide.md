@@ -75,7 +75,7 @@ A released feature is not automatically enabled or accepted on live sessions.
 | Distribute load | Bounded task Pods scheduled on workers; real Claude task ran with CPU/memory limits | Prove placement across nodes; native Codex threads still share their host’s resources |
 | Claude task and terminal workflows | Task, attach/detach, TUI messages, suspend/resume and Git rescue exercised | Owner pilot and history-preserving archive |
 | Codex sessions across pods | Keeper login, scoped-host/task and owned-native source foundations released | Two live distinct links, refresh adoption, native execution/recovery and device acceptance |
-| Common rules and projects | Catalog parser, provider rule rendering and preparation source | Decouple preparation from RWX; bootstrap/refresh local repo catalogs; prove actual rules loaded by both providers |
+| Common rules and projects | Catalog parser, private declared-project admission/preparation and provider rule composition source | Bootstrap/refresh local repo catalogs; permanent project roots; prove actual rules loaded by both providers |
 | See live and stopped work | Managed Session list/show and fleet placement exist | Durable registry after reap; native host/thread indexing and accurate activity |
 | Communicate and avoid duplicates | Attributed live TUI message route; same-parent request idempotency | Durable inbox and acknowledgements; explicit task claims across independent parents |
 | Read prior context | Provider artifacts exist; running task log tails available | Authorized transcript/memory/handoff reads without the source Pod; retain history before reap |
@@ -220,10 +220,16 @@ Archive/history retention is a remaining feature. Rescue does not back up ignore
 stay private and are never pushed.
 
 V2 `--interactive`, automatic image drains and the complete grant/login CLI
-remain unfinished. Codex/catalog foundations are released, but the two-host
-and both-provider coordination workflow is unaccepted. Some current project
-routes are still coupled to disabled shared-workspace opt-ins; that coupling
-will be removed. Use the selected binary’s help and current deployment evidence.
+remain unfinished. The first #173 source slice admits declared project tasks
+into private worktrees and supplies project rules without RWX. New budget-bound
+private dispatch remains refused pending separate integration. GitOps delivery
+and actual-provider acceptance are recorded separately on
+[#173](https://github.com/thaynes43/dev-env/issues/173). The new private-project
+admission flag stays disabled for that promotion; existing fixture/coordinator
+flags remain unchanged. The two-host and both-provider coordination
+workflow is unaccepted. Use the selected binary’s help and current deployment
+evidence. [DESIGN-005](../.agents/sagas/distributed-dev-env/designs/005-private-project-tasks.md)
+defines the bounded contract.
 
 ## 4. The everyday workflow
 

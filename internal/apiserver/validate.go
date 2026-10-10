@@ -96,19 +96,13 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 		}
 	}
 	var snapshot []byte
-	var workspace *v1alpha1.WorkspaceSpec
 	if req.Project != "" {
 		if s.Projects == nil {
 			return nil, invalid(fieldError("project", "accepted project catalog is not configured"))
 		}
-		if s.Templates == nil {
-			return nil, invalid(fieldError("project", "accepted shared workspace is not enabled"))
-		}
-		t, err := s.Templates(ctx)
-		if err != nil || t.Workspace == nil || !t.Workspace.Enabled || t.Workspace.Claim == "" || t.Workspace.ID == "" {
-			return nil, invalid(fieldError("project", "accepted shared workspace is not enabled"))
-		}
-		workspace = &v1alpha1.WorkspaceSpec{ID: t.Workspace.ID}
+		// Catalog authority supplies source identity and rules independently of
+		// storage. New project tasks keep private repositories and worktrees;
+		// an enabled shared template is never an implicit session opt-in.
 		raw, selected, err := s.Projects.snapshot(ctx, s.Live, req.Project, req.Repo)
 		if err != nil {
 			return nil, invalid(fieldError("project", "accepted project/repository is unavailable or invalid"))
@@ -210,8 +204,6 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 			}
 		}
 	}
-	spec.Workspace = workspace
-
 	if l := req.Lifecycle; l != nil {
 		spec.Lifecycle = &v1alpha1.Lifecycle{}
 		for field, v := range map[string]struct {

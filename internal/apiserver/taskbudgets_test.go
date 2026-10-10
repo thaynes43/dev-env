@@ -2,6 +2,8 @@ package apiserver
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,12 +11,12 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
+	"github.com/thaynes43/dev-env/internal/templates"
 )
 
 type apiBudgetValidator struct{}
@@ -198,18 +200,40 @@ func TestBudgetAPILatchBeforeDispatchResumeAndContinuation(t *testing.T) {
 	}
 }
 
-func TestBudgetAPIChildReservationIsIdempotentAndShared(t *testing.T) {
+// retainedBudgetChild represents a child created before project admission was
+// changed to private worktrees. The fake client seeds its historical immutable
+// shared binding; no new API request can opt into that workspace.
+func retainedBudgetChild(t *testing.T, f *fixture, b apiv1.TaskBudgetBinding, req apiv1.CreateSessionRequest) *v1alpha1.AgentSession {
+	t.Helper()
+	child, err := f.srv.newSession(context.Background(), req, &caller{kind: kindCoordinator, parent: coordinatorSA, depth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child.Name, child.UID = generatedName(req.Repo, f.now), "historical-shared-child"
+	child.Spec.Workspace = &v1alpha1.WorkspaceSpec{ID: "projects-v2"}
+	h := sha256.Sum256([]byte(coordinatorSA + "\x00" + req.IdempotencyKey))
+	dispatch := hex.EncodeToString(h[:16])
+	worker := "child:" + dispatch
+	if _, err := f.srv.TaskBudgets.Record(context.Background(), apiv1.TaskBudgetEvent{Binding: b, ID: "dispatch:" + dispatch, Kind: "worker-start", WorkerID: worker, AttemptID: "historical-dispatch"}); err != nil {
+		t.Fatal(err)
+	}
+	annotateTaskBudget(child, b)
+	child.Annotations[TaskBudgetWorkerAnnotation] = worker
+	if err := f.c.Create(context.Background(), child); err != nil {
+		t.Fatal(err)
+	}
+	return child
+}
+
+func TestBudgetAPIExistingSharedChildReservationRemainsIdempotent(t *testing.T) {
 	f, b := budgetFixture(t)
 	bindCatalogFixture(t, f)
 	r := coordinatorTask()
 	r.IdempotencyKey = "child-a"
-	w := f.do(http.MethodPost, apiv1.SessionsPath, tokCoordinator, r)
-	if w.Code != http.StatusCreated {
-		t.Fatal("create bound child", w.Code, w.Body.String())
-	}
-	created := decode[apiv1.Session](t, w)
+	created := retainedBudgetChild(t, f, b, r)
+	f.srv.PrivateProjectTasks = false
 	for range 2 {
-		w = f.do(http.MethodPost, apiv1.SessionsPath, tokCoordinator, r)
+		w := f.do(http.MethodPost, apiv1.SessionsPath, tokCoordinator, r)
 		if w.Code != http.StatusOK || decode[apiv1.Session](t, w).Name != created.Name {
 			t.Fatal("idempotent child differs", w.Code, w.Body.String())
 		}
@@ -219,6 +243,9 @@ func TestBudgetAPIChildReservationIsIdempotentAndShared(t *testing.T) {
 		t.Fatal("child effort reservation duplicated", err)
 	}
 	child := f.session(created.Name)
+	if child.Spec.Workspace == nil || child.Spec.Workspace.ID != "projects-v2" {
+		t.Fatal("private admission changed an existing shared child")
+	}
 	actual, err := f.srv.bindingForSession(child)
 	if err != nil || actual != b {
 		t.Fatal("child lost root budget binding", err)
@@ -230,29 +257,52 @@ func TestBudgetAPIChildReservationIsIdempotentAndShared(t *testing.T) {
 	}
 }
 
-func TestBudgetAPIChildNameCollisionHasOneReservation(t *testing.T) {
+func TestBudgetAPIPrivateProjectDispatchRefusesWithoutReservation(t *testing.T) {
+	for _, provider := range []string{"claude", "codex"} {
+		for _, sharedEnabled := range []bool{false, true} {
+			t.Run(provider+"/shared="+map[bool]string{false: "off", true: "on"}[sharedEnabled], func(t *testing.T) {
+				f, b := budgetFixture(t)
+				bindCatalogFixture(t, f)
+				if sharedEnabled {
+					f.tmpl.Workspace = &templates.Workspace{Enabled: true, ID: "projects-v2", Claim: "accepted-projects"}
+				}
+				r := coordinatorTask()
+				r.Agent, r.IdempotencyKey = provider, "unsupported-private"
+				if provider == "codex" {
+					r.Model = "gpt-6.1-sol"
+				}
+				w := f.do(http.MethodPost, apiv1.SessionsPath, tokCoordinator, r)
+				e := wantError(t, w, http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+				if len(e.Fields) != 1 || e.Fields[0].Field != "project" {
+					t.Fatal("unsupported private budget binding did not refuse explicitly", e)
+				}
+				var sessions v1alpha1.AgentSessionList
+				if err := f.c.List(context.Background(), &sessions); err != nil || len(sessions.Items) != 0 {
+					t.Fatal("unsupported private budget dispatch created a session", err)
+				}
+				l, _, err := f.srv.TaskBudgets.Store.Read(context.Background(), b.TaskUID)
+				if err != nil || len(l.Workers) != 0 || len(l.Events) != 0 || l.EffortMilliseconds != 0 {
+					t.Fatal("unsupported private budget dispatch reserved effort", err)
+				}
+			})
+		}
+	}
+}
+
+func TestBudgetAPIDisabledPrivateProjectGateDoesNotReserveDispatch(t *testing.T) {
 	f, b := budgetFixture(t)
 	bindCatalogFixture(t, f)
-	base := generatedName("alias", f.now)
-	if err := f.c.Create(context.Background(), &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: base}}); err != nil {
-		t.Fatal(err)
-	}
-	w := f.do(http.MethodPost, apiv1.SessionsPath, tokCoordinator, coordinatorTask())
-	if w.Code != http.StatusCreated {
-		t.Fatal(w.Code, w.Body.String())
-	}
-	created := decode[apiv1.Session](t, w)
-	if created.Name != base+"-2" {
-		t.Fatal("fixture did not force name collision", created.Name)
+	f.srv.PrivateProjectTasks = false
+	r := coordinatorTask()
+	r.IdempotencyKey = "disabled-private"
+	wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, tokCoordinator, r), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	var sessions v1alpha1.AgentSessionList
+	if err := f.c.List(context.Background(), &sessions); err != nil || len(sessions.Items) != 0 {
+		t.Fatal("disabled private task gate created a session", err)
 	}
 	l, _, err := f.srv.TaskBudgets.Store.Read(context.Background(), b.TaskUID)
-	if err != nil || len(l.Workers) != 1 || len(l.Events) != 1 || f.session(created.Name).Annotations[TaskBudgetWorkerAnnotation] != l.Workers[0].ID {
-		t.Fatal("collision charged a phantom worker or lost stable dispatch binding", err)
-	}
-	f.now = f.now.Add(time.Minute)
-	l, err = f.srv.TaskBudgets.Observe(context.Background(), b)
-	if err != nil || l.EffortMilliseconds != 60000 {
-		t.Fatal("name collision inflated effort", err, l.EffortMilliseconds)
+	if err != nil || len(l.Workers) != 0 || len(l.Events) != 0 || l.EffortMilliseconds != 0 {
+		t.Fatal("disabled private task gate reserved effort", err)
 	}
 }
 
@@ -261,17 +311,13 @@ func TestBudgetAPIUnknownDispatchCannotReplayOrReuseFinishedKey(t *testing.T) {
 	bindCatalogFixture(t, f)
 	r := coordinatorTask()
 	r.IdempotencyKey = "retained-dispatch"
-	w := f.do(http.MethodPost, apiv1.SessionsPath, tokCoordinator, r)
-	if w.Code != http.StatusCreated {
-		t.Fatal(w.Code, w.Body.String())
-	}
-	created := decode[apiv1.Session](t, w)
+	created := retainedBudgetChild(t, f, b, r)
 	sess := f.session(created.Name)
 	sess.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
 	if err := f.c.Update(context.Background(), sess); err != nil {
 		t.Fatal(err)
 	}
-	w = f.do(http.MethodPost, apiv1.SessionsPath, tokCoordinator, r)
+	w := f.do(http.MethodPost, apiv1.SessionsPath, tokCoordinator, r)
 	if w.Code != http.StatusOK || decode[apiv1.Session](t, w).Name != created.Name {
 		t.Fatal("finished request silently relaunched", w.Code, w.Body.String())
 	}
