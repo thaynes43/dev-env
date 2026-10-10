@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.11.0](https://github.com/thaynes43/dev-env/compare/v2.10.0...v2.11.0) (2026-10-10)
+
+
+### Features
+
+* **agentd:** add disabled owned foreground Codex executor ([#162](https://github.com/thaynes43/dev-env/issues/162)) ([a196280](https://github.com/thaynes43/dev-env/commit/a196280dba966ffa9ec84828bd775a7578c2ce31))
+* **agentd:** wire owned host HTTPS gate and authenticated readiness ([#166](https://github.com/thaynes43/dev-env/issues/166)) ([d47bd0d](https://github.com/thaynes43/dev-env/commit/d47bd0d0d1e0be010ddf564a6f399c5c12c0145b))
+* enforce finite budgets for managed executors ([#167](https://github.com/thaynes43/dev-env/issues/167)) ([079c0a2](https://github.com/thaynes43/dev-env/commit/079c0a227431b8ed7d15ea75c311e1e21c84a4ae))
+* **operator:** admit isolated native lifecycle fixture ([#168](https://github.com/thaynes43/dev-env/issues/168)) ([cc8ba3c](https://github.com/thaynes43/dev-env/commit/cc8ba3cdace348befced9a039ffd188086b7dca4))
+* retain logical task budgets and gate assigned host work ([#163](https://github.com/thaynes43/dev-env/issues/163)) ([53d7dea](https://github.com/thaynes43/dev-env/commit/53d7dea7531e1640a90333562af3a80c605cbead))
+
 ## [2.10.0](https://github.com/thaynes43/dev-env/compare/v2.9.1...v2.10.0) (2026-10-10)
 
 
