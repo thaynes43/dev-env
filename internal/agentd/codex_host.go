@@ -158,6 +158,20 @@ func observeCodexHost(ctx context.Context, s Settings, o CodexHostOptions, d cod
 		return unknown, errCodexHostUnknown
 	}
 	status := CodexHostStatus{Code: "Observed", Process: "Live", Connection: remote.Connection, Idle: remote.Idle}
+	saved, err := hostLifecycle(s)
+	if errors.Is(err, os.ErrNotExist) {
+		status.Code = "NeedsReview"
+		return status, nil
+	}
+	if err != nil {
+		return unknown, errCodexHostUnknown
+	}
+	// Live RPC readiness does not complete a retained lifecycle intent. Only our
+	// confirmed start in this Pod may claim ownership of the exact current daemon.
+	if saved.Phase != "Confirmed" || saved.PodUID != s.PodUID || !sameHostProcess(saved.Process, final) {
+		status.Code, status.Phase = "NeedsReview", saved.Phase
+		return status, nil
+	}
 	if codexHostAccessReady(s, time.Now()) != nil {
 		status.Code = "NeedsLogin"
 	}
@@ -202,8 +216,8 @@ func saveHostLifecycle(s Settings, phase string, process codexHostProcess) error
 }
 
 // Start intent is durable before the single native invocation. Lost/failed ACK
-// never licenses another automatic start. A later confirmed daemon can still be
-// observed; recovery of an absent/uncertain attempted start is explicit review.
+// never licenses another automatic start. An unconfirmed live daemon remains
+// NeedsReview; passive observation never promotes an uncertain start receipt.
 func startCodexHost(ctx context.Context, s Settings, o CodexHostOptions, d codexHostDeps) error {
 	first, err := d.process(s)
 	if err != nil || first.State != "Absent" {
@@ -315,7 +329,7 @@ func runCodexHost(ctx context.Context, s Settings, o CodexHostOptions, report fu
 		if startupFailed && status.Code == "Absent" {
 			status.Code = "NeedsReview"
 		}
-		if d.preflight(s) == nil && d.sync(s, time.Now()) != nil && err == nil && status.Process == "Live" {
+		if d.preflight(s) == nil && d.sync(s, time.Now()) != nil && err == nil && status.Process == "Live" && status.Code == "Observed" {
 			status.Code = "NeedsLogin"
 		}
 		// Broken supervisory stdout is not permission to kill native active chats.

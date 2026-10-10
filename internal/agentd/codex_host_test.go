@@ -274,6 +274,10 @@ func TestCodexHostLiveNeverStartsAndVersionFailureNeverBecomesAbsence(t *testing
 	s, o := hostFixture(t)
 	hostLiveConfig(t, s, o)
 	d, calls := hostDeps(t, s, o)
+	live, err := d.process(s)
+	if err != nil || saveHostLifecycle(s, "Confirmed", live) != nil {
+		t.Fatal("confirmed fixture")
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if err := runCodexHost(ctx, s, o, func(status CodexHostStatus) error {
@@ -314,6 +318,154 @@ func TestCodexHostFailedStartIsNotAutomaticallyRetried(t *testing.T) {
 	second := startCodexHost(context.Background(), s, o, d)
 	if first == nil || second == nil || starts != 1 {
 		t.Fatal("uncertain startup retried")
+	}
+}
+
+func TestCodexHostLiveObservationRequiresConfirmedLifecycle(t *testing.T) {
+	for _, mode := range []string{"no-history", "Confirmed", "Attempting", "Stopping", "Stopped", "previous-pod", "different-pid", "different-identity", "malformed", "nonprivate", "unreadable-directory", "failed-rpc"} {
+		t.Run(mode, func(t *testing.T) {
+			s, o := hostFixture(t)
+			hostLiveConfig(t, s, o)
+			d, calls := hostDeps(t, s, o)
+			live, err := d.process(s)
+			if err != nil {
+				t.Fatal("live fixture")
+			}
+			path := s.statePath("codex-host-start-intent.json")
+			phase := "Confirmed"
+			switch mode {
+			case "Attempting", "Stopping", "Stopped":
+				phase = mode
+			case "no-history", "malformed", "unreadable-directory":
+				phase = ""
+			case "different-pid":
+				live.PID++
+			case "different-identity":
+				live.Identity.StartTicks++
+			}
+			if phase != "" && saveHostLifecycle(s, phase, live) != nil {
+				t.Fatal("lifecycle fixture")
+			}
+			switch mode {
+			case "previous-pod":
+				s.PodUID = "replacement-private-pod"
+			case "malformed":
+				writeHostFixture(t, path, "PRIVATE_MALFORMED_RECEIPT")
+			case "nonprivate":
+				if os.Chmod(path, 0o644) != nil {
+					t.Fatal("nonprivate fixture")
+				}
+			case "unreadable-directory":
+				if os.Mkdir(path, 0o700) != nil {
+					t.Fatal("unreadable fixture")
+				}
+			case "failed-rpc":
+				d.remote = func(context.Context, Settings, bool, int) (codexHostRemote, error) {
+					return codexHostRemote{Connection: "PRIVATE_UNPROVED", Idle: true}, errors.New("PRIVATE_RPC_ERROR")
+				}
+			}
+			before, beforeErr := os.ReadFile(path)
+			status, err := observeCodexHost(context.Background(), s, o, d)
+			invalid := mode == "malformed" || mode == "nonprivate" || mode == "unreadable-directory" || mode == "failed-rpc"
+			if invalid {
+				if !errors.Is(err, errCodexHostUnknown) || status != (CodexHostStatus{Code: "Unknown"}) {
+					t.Fatal("invalid proof exposed live readiness or lifecycle metadata")
+				}
+			} else {
+				want := CodexHostStatus{Code: "NeedsReview", Process: "Live", Phase: phase, Connection: "connected", Idle: true}
+				if mode == "Confirmed" {
+					want.Code, want.Phase = "Observed", ""
+				}
+				if err != nil || status != want {
+					t.Fatal("live readiness ignored lifecycle ownership")
+				}
+			}
+			assertCodexHostStatusPrivate(t, status)
+			for _, call := range *calls {
+				if call != "--version" {
+					t.Fatal("passive observation changed native lifecycle")
+				}
+			}
+			after, afterErr := os.ReadFile(path)
+			if beforeErr == nil && (afterErr != nil || !bytes.Equal(before, after)) || errors.Is(beforeErr, os.ErrNotExist) && !errors.Is(afterErr, os.ErrNotExist) {
+				t.Fatal("passive observation changed lifecycle receipt")
+			}
+		})
+	}
+}
+
+func TestCodexHostLiveAfterUnconfirmedStartRemainsNeedsReview(t *testing.T) {
+	for _, mode := range []string{"warming", "lost-ack"} {
+		t.Run(mode, func(t *testing.T) {
+			s, o := hostFixture(t)
+			hostLiveConfig(t, s, o)
+			d, _ := hostDeps(t, s, o)
+			process := codexHostProcess{State: "Absent"}
+			d.process = func(Settings) (codexHostProcess, error) { return process, nil }
+			starts, stops, probes := 0, 0, 0
+			var original []byte
+			d.native = func(_ context.Context, _ Settings, _ string, args []string, _ io.Writer) ([]byte, error) {
+				switch strings.Join(args, " ") {
+				case "--version":
+					return []byte("codex-cli 0.160.1"), nil
+				case "remote-control start --json":
+					starts++
+					var err error
+					original, err = os.ReadFile(s.statePath("codex-host-start-intent.json"))
+					if err != nil {
+						t.Fatal("durable start intent missing")
+					}
+					process = codexHostProcess{State: "Live", PID: 123, Identity: codexHostIdentity{BootID: "fixture", StartTicks: 45}}
+					if mode == "lost-ack" {
+						return nil, errors.New("PRIVATE_LOST_ACK")
+					}
+					return nil, nil
+				case "remote-control stop --json":
+					stops++
+				}
+				return nil, errors.New("unexpected native action")
+			}
+			d.remote = func(context.Context, Settings, bool, int) (codexHostRemote, error) {
+				probes++
+				if mode == "warming" && probes == 1 {
+					return codexHostRemote{}, errors.New("PRIVATE_WARMING_PROBE")
+				}
+				return codexHostRemote{Version: managedCodexVersion, Connection: "connected", Idle: true}, nil
+			}
+			// Startup may sync successfully; later projection failure must not hide
+			// the unresolved lifecycle behind NeedsLogin.
+			d.sync = func(Settings, time.Time) error {
+				if starts > 0 {
+					return errors.New("PRIVATE_SYNC_ERROR")
+				}
+				return nil
+			}
+			d.wait = func(context.Context) {}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			reports := 0
+			if runCodexHost(ctx, s, o, func(status CodexHostStatus) error {
+				reports++
+				if status != (CodexHostStatus{Code: "NeedsReview", Process: "Live", Phase: "Attempting", Connection: "connected", Idle: true}) {
+					t.Fatal("unconfirmed live daemon became ordinary readiness")
+				}
+				assertCodexHostStatusPrivate(t, status)
+				if reports == 2 {
+					cancel()
+				}
+				return nil
+			}, d) != nil || reports != 2 || starts != 1 || stops != 0 {
+				t.Fatal("uncertain live start retried or changed daemon lifecycle")
+			}
+			o.DeclaredShutdown, o.TerminationGrace = true, 90*time.Second
+			if stopCodexHost(context.Background(), s, o, d) == nil || starts != 1 || stops != 0 {
+				t.Fatal("unconfirmed owned stop accepted or native action repeated")
+			}
+			after, err := os.ReadFile(s.statePath("codex-host-start-intent.json"))
+			if err != nil || !bytes.Equal(original, after) {
+				t.Fatal("monitor promoted or replaced original Attempting receipt")
+			}
+		})
 	}
 }
 
@@ -484,6 +636,10 @@ func TestCodexHostPairOutputIsOnlyExplicitCallerAndStopBudget(t *testing.T) {
 	s, o := hostFixture(t)
 	hostLiveConfig(t, s, o)
 	d, calls := hostDeps(t, s, o)
+	live, err := d.process(s)
+	if err != nil || saveHostLifecycle(s, "Confirmed", live) != nil {
+		t.Fatal("confirmed fixture")
+	}
 	var caller bytes.Buffer
 	if pairCodexHost(context.Background(), s, o, &caller, d) != nil || caller.String() != "SYNTHETIC_PRIVATE_PAIR_CODE" {
 		t.Fatal("pair caller route")
@@ -734,6 +890,10 @@ func TestCodexHostTransientObservationPreservesDaemon(t *testing.T) {
 			s, o := hostFixture(t)
 			hostLiveConfig(t, s, o)
 			d, calls := hostDeps(t, s, o)
+			live, err := d.process(s)
+			if err != nil || saveHostLifecycle(s, "Confirmed", live) != nil {
+				t.Fatal("confirmed fixture")
+			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			phase := 0
@@ -753,7 +913,7 @@ func TestCodexHostTransientObservationPreservesDaemon(t *testing.T) {
 			}
 			d.wait = func(context.Context) { phase++ }
 			statuses := []string{}
-			err := runCodexHost(ctx, s, o, func(status CodexHostStatus) error {
+			err = runCodexHost(ctx, s, o, func(status CodexHostStatus) error {
 				statuses = append(statuses, status.Code)
 				if len(statuses) == 2 {
 					cancel()
@@ -773,10 +933,6 @@ func TestCodexHostTransientObservationPreservesDaemon(t *testing.T) {
 				if call != "--version" {
 					t.Fatal("transient observation restarted/stopped/replaced native")
 				}
-			}
-			live, _ := originalProcess(s)
-			if saveHostLifecycle(s, "Confirmed", live) != nil {
-				t.Fatal("confirmed fixture")
 			}
 			d.remote = func(context.Context, Settings, bool, int) (codexHostRemote, error) {
 				return codexHostRemote{Version: managedCodexVersion, Connection: "connected", Idle: false}, nil

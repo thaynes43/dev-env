@@ -55,6 +55,9 @@ func codexHost(ctx context.Context, args []string, stdout, stderr io.Writer, get
 		if encode(status) != nil {
 			return exitFailure
 		}
+		if err != nil {
+			return exitFailure
+		}
 	case "run":
 		err = agentd.RunCodexHost(ctx, settings, options, encode)
 	case "pair":
