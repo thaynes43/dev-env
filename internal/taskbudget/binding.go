@@ -55,7 +55,7 @@ func (s *Service) BindManagedWorker(ctx context.Context, b Binding, id string, r
 			if prior := w.Managed; prior != nil {
 				if prior.Namespace != ref.Namespace || prior.Name != ref.Name || prior.SessionUID != ref.SessionUID ||
 					(prior.PodUID != "" && prior.PodUID != ref.PodUID) {
-					return ErrConflict
+					return ErrDenied
 				}
 				ref.LaunchRequested = prior.LaunchRequested
 			}

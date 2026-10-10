@@ -239,3 +239,73 @@ func TestManagedDelayedLaunchUsesFirstCheckpointAndCannotReplay(t *testing.T) {
 		t.Fatal("launch replay not refused", err)
 	}
 }
+
+// A known CAS conflict is contention, not unknown authority. It must retry
+// without irreversibly suspending an admitted executor.
+type conflictingBudgetStore struct{ taskbudget.Store }
+
+func (conflictingBudgetStore) Update(context.Context, *taskbudget.Ledger, string) error {
+	return taskbudget.ErrConflict
+}
+
+func TestManagedBudgetCASConflictRetriesWithoutPermanentSuspend(t *testing.T) {
+	ctx := context.Background()
+	f := stoppedWorkspaceFixture()
+	c := f.client()
+	svc, b := budgetService(t, c, f.now)
+	f.s.Annotations = budgetAnnotations(b, "child")
+	f.s.Spec.Parent = "system/parent"
+	f.s.Spec.OperatingMode = v1alpha1.OperatingModeRunning
+	if err := c.Update(ctx, f.s); err != nil {
+		t.Fatal(err)
+	}
+	bindBudgetWorker(t, svc, b, f, "child")
+	svc.Store = conflictingBudgetStore{svc.Store}
+	r := &Reconciler{Client: c, APIReader: c, TaskBudgets: svc}
+	changed, err := r.enforceTaskBudget(ctx, f.s, f.pod)
+	if changed || !errors.Is(err, taskbudget.ErrConflict) || f.s.Spec.OperatingMode != v1alpha1.OperatingModeRunning {
+		t.Fatal("contention suspended worker", changed, err)
+	}
+}
+
+func TestManagedBudgetUnknownFailureProofRequestsSuspendAndRetainsPod(t *testing.T) {
+	ctx := context.Background()
+	f := stoppedWorkspaceFixture()
+	c := f.client()
+	svc, b := budgetService(t, c, f.now)
+	f.s.Annotations = budgetAnnotations(b, "child")
+	f.s.Spec.Parent = "system/parent"
+	f.s.Spec.OperatingMode = v1alpha1.OperatingModeRunning
+	if err := c.Update(ctx, f.s); err != nil {
+		t.Fatal(err)
+	}
+	f.pod.Status.ContainerStatuses[0].State.Terminated.ExitCode = 1
+	if err := c.Status().Update(ctx, f.pod); err != nil {
+		t.Fatal(err)
+	}
+	bindBudgetWorker(t, svc, b, f, "child")
+	f.lease.Spec.RenewTime.Time = f.now.Add(-time.Minute)
+	if err := c.Update(ctx, f.lease); err != nil {
+		t.Fatal(err)
+	}
+	r := &Reconciler{Client: c, APIReader: c, TaskBudgets: svc}
+	proofErr := r.recordTaskBudgetFailure(ctx, f.s, f.pod)
+	if proofErr == nil {
+		t.Fatal("stale proof accepted")
+	}
+	if changed, err := r.suspendTaskBudget(ctx, f.s, "failure proof unavailable"); err != nil || !changed {
+		t.Fatal("unknown failure did not request suspend", err)
+	}
+	var suspended v1alpha1.AgentSession
+	if err := c.Get(ctx, client.ObjectKeyFromObject(f.s), &suspended); err != nil || suspended.Spec.OperatingMode != v1alpha1.OperatingModeSuspended || condition(&suspended.Status, ConditionTaskBudget) == nil {
+		t.Fatal("stop intent/uncertainty not durable", err)
+	}
+	var retained corev1.Pod
+	if err := c.Get(ctx, client.ObjectKeyFromObject(f.pod), &retained); err != nil {
+		t.Fatal("uncertain executor deleted", err)
+	}
+	l, err := svc.Observe(ctx, b)
+	if err != nil || !l.Workers[0].Active || len(l.Events) != 1 {
+		t.Fatal("unproved exit counted or uncharged", err)
+	}
+}

@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -142,6 +144,9 @@ func (r *Reconciler) enforceTaskBudget(ctx context.Context, s *v1alpha1.AgentSes
 		return false, nil
 	}
 	l, err := r.observeTaskBudget(ctx, s, pod)
+	if errors.Is(err, taskbudget.ErrConflict) {
+		return false, err
+	}
 	stop := err != nil || l == nil || l.Latched
 	if !stop {
 		for _, w := range l.Workers {
@@ -153,16 +158,28 @@ func (r *Reconciler) enforceTaskBudget(ctx context.Context, s *v1alpha1.AgentSes
 	if !stop {
 		return false, nil
 	}
-	taskBudgetStopping(s, "budget latched or authority unavailable; waiting for whole executor stop and workspace rescue")
+	return r.suspendTaskBudget(ctx, s, "budget latched or authority unavailable; waiting for whole executor stop and workspace rescue")
+}
+
+func (r *Reconciler) suspendTaskBudget(ctx context.Context, s *v1alpha1.AgentSession, message string) (bool, error) {
+	changed := false
 	if s.Spec.OperatingMode != v1alpha1.OperatingModeSuspended && s.DeletionTimestamp.IsZero() {
 		before := s.DeepCopy()
 		s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
-		if patchErr := r.Client.Patch(ctx, s, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); patchErr != nil {
-			return true, patchErr
+		if err := r.Client.Patch(ctx, s, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+			return true, err
 		}
-		return true, nil
+		changed = true
 	}
-	return false, nil
+	before := s.DeepCopy()
+	taskBudgetStopping(s, message)
+	if !apiequality.Semantic.DeepEqual(before.Status, s.Status) {
+		if err := r.Client.Status().Patch(ctx, s, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+			return changed, err
+		}
+	}
+	// A status-only observation must not delay the existing stop/rescue flow.
+	return changed, nil
 }
 
 func (r *Reconciler) recordTaskBudgetStop(ctx context.Context, s *v1alpha1.AgentSession, pod *corev1.Pod) error {

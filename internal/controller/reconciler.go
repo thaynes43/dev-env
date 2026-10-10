@@ -229,13 +229,25 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 		}
 		pod = fresh
 		if changed, budgetErr := r.enforceTaskBudget(ctx, &s, pod.obj); changed || budgetErr != nil {
+			if errors.Is(budgetErr, taskbudget.ErrConflict) {
+				return ctrl.Result{RequeueAfter: time.Second}, nil
+			}
 			return ctrl.Result{RequeueAfter: time.Second}, budgetErr
 		}
 		if err := r.recordTaskBudgetFailure(ctx, &s, pod.obj); err != nil {
-			taskBudgetStopping(&s, "managed failure proof remains unavailable; retained executor cannot be replaced")
-			// Stop intent must still proceed when failure classification is unknown.
+			if errors.Is(err, taskbudget.ErrConflict) {
+				return ctrl.Result{RequeueAfter: time.Second}, nil
+			}
+			changed, stopErr := r.suspendTaskBudget(ctx, &s, "managed failure proof remains unavailable; retained executor cannot be replaced")
+			if changed || stopErr != nil {
+				return ctrl.Result{RequeueAfter: time.Second}, stopErr
+			}
+			// Uncertainty still requests stop; independent proof/rescue guards cleanup.
 		}
 		if changed, budgetErr := r.enforceTaskBudget(ctx, &s, pod.obj); changed || budgetErr != nil {
+			if errors.Is(budgetErr, taskbudget.ErrConflict) {
+				return ctrl.Result{RequeueAfter: time.Second}, nil
+			}
 			return ctrl.Result{RequeueAfter: time.Second}, budgetErr
 		}
 	}

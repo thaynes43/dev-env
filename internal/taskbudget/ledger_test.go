@@ -529,7 +529,7 @@ func TestManagedResourceBindingAndUnknownLaunchAreSticky(t *testing.T) {
 	}
 	changed := ref
 	changed.SessionUID = "replacement"
-	if _, err := s.BindManagedWorker(ctx, b, "child", changed); !errors.Is(err, ErrConflict) {
+	if _, err := s.BindManagedWorker(ctx, b, "child", changed); !errors.Is(err, ErrDenied) {
 		t.Fatal("session identity reset", err)
 	}
 	ref.PodUID = "pod"
@@ -537,7 +537,7 @@ func TestManagedResourceBindingAndUnknownLaunchAreSticky(t *testing.T) {
 		t.Fatal("one-time Pod binding failed", err)
 	}
 	ref.PodUID = "replacement"
-	if _, err := s.BindManagedWorker(ctx, b, "child", ref); !errors.Is(err, ErrConflict) {
+	if _, err := s.BindManagedWorker(ctx, b, "child", ref); !errors.Is(err, ErrDenied) {
 		t.Fatal("Pod identity reset", err)
 	}
 }
