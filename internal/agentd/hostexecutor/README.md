@@ -1,6 +1,6 @@
 # Owned native executor contract
 
-This Linux-only package is an isolated candidate for D84. The legacy `codex-host`
+This Linux-only package is an isolated candidate for D-84. The legacy `codex-host`
 implementation is unchanged. `agentd owned-codex-host` refuses execution until a
 trusted off-pod authority adapter is wired; local flags and environment variables
 cannot turn that command on. The package refuses a nil `Gate` before writing a
@@ -59,3 +59,8 @@ network, credential, model, real-provider or cluster operations. Run serially:
 ```
 nice -n 19 env GOMAXPROCS=2 go test -p 2 ./internal/agentd/hostexecutor -count=1 -timeout=35s
 ```
+
+The caller must bind this private home's preexisting native recovery state to the
+same admitted campaign. The pinned managed daemon can consume a saved snapshot
+at startup; this package does not interpret that snapshot or authenticate its
+thread/task provenance. A fresh receipt must not license unrelated saved work.

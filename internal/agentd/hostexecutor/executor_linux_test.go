@@ -346,3 +346,53 @@ func TestWrongStartIdentityCannotSignalLiveChild(t *testing.T) {
 		t.Fatal("unmatched child was signaled")
 	}
 }
+
+func TestReapedChildAfterPidfdOpenIsGone(t *testing.T) {
+	c := config(t)
+	cmd := exec.Command(c.NativeBinary, "fixture-leaf")
+	cmd.Env = append(os.Environ(), "HOME="+c.Home)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill() }()
+	fd, err := unix.PidfdOpen(cmd.Process.Pid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = unix.Close(fd) }()
+	if err = cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err = cmd.Wait(); err == nil {
+		t.Fatal("fixture was not killed")
+	}
+	owner, err := identity(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone, err := checkParent(cmd.Process.Pid, owner, owner)
+	if err != nil || !gone {
+		t.Fatalf("reaped pidfd child became uncertain ancestry: gone=%v err=%v", gone, err)
+	}
+}
+
+type noAdmissionGate struct{ called bool }
+
+func (g *noAdmissionGate) Admit(context.Context, Binding) error {
+	g.called = true
+	return errors.New("must not admit")
+}
+func (*noAdmissionGate) Observe(context.Context, Binding) (bool, error) { return true, nil }
+func TestInterruptedReceiptRefusesBeforeAuthorityAdmission(t *testing.T) {
+	c := config(t)
+	if err := os.WriteFile(c.ReceiptPath, []byte(`{"state":"Attempting"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gate := &noAdmissionGate{}
+	if _, err := Run(context.Background(), c, gate); !errors.Is(err, ErrNeedsReview) {
+		t.Fatal(err)
+	}
+	if gate.called {
+		t.Fatal("authority mutated before interrupted receipt refusal")
+	}
+}

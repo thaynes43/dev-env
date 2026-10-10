@@ -117,12 +117,6 @@ func Run(ctx context.Context, c Config, gate Gate) (Receipt, error) {
 	if err := c.validate(); err != nil {
 		return Receipt{}, err
 	}
-	admitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	err := admit(admitCtx, gate, c.Binding)
-	cancel()
-	if err != nil {
-		return Receipt{}, fmt.Errorf("budget admission: %w", err)
-	}
 	fd, err := unix.Open(c.ReceiptPath+".lock", unix.O_CREAT|unix.O_RDWR|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
 	if err != nil {
 		return Receipt{}, err
@@ -136,6 +130,12 @@ func Run(ctx context.Context, c Config, gate Gate) (Receipt, error) {
 		return Receipt{}, ErrNeedsReview
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Receipt{}, err
+	}
+	admitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	err = admit(admitCtx, gate, c.Binding)
+	cancel()
+	if err != nil {
+		return Receipt{}, fmt.Errorf("budget admission: %w", err)
 	}
 	if err = save(c.ReceiptPath, receipt); err != nil {
 		return receipt, err

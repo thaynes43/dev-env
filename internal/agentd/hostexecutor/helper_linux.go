@@ -172,14 +172,18 @@ type tracked struct {
 // this dedicated subreaper; a root PID or process group disappearing is not proof.
 func stopTree(root Identity, rootDone <-chan error, budget time.Duration) error {
 	until := time.Now().Add(budget)
+	owner, err := identity(os.Getpid())
+	if err != nil {
+		return err
+	}
 	seen := map[int]tracked{}
 	defer func() {
 		for _, p := range seen {
 			_ = unix.Close(p.fd)
 		}
 	}()
-	var freeze func(int, int) error
-	freeze = func(pid, parent int) error {
+	var freeze func(int, Identity) error
+	freeze = func(pid int, parent Identity) error {
 		if time.Now().After(until) {
 			return errors.New("tree freeze deadline")
 		}
@@ -196,15 +200,12 @@ func stopTree(root Identity, rootDone <-chan error, budget time.Duration) error 
 		if err != nil {
 			return err
 		}
-		ppid, err := parentPID(pid)
-		if errors.Is(err, os.ErrNotExist) {
+		gone, err := checkParent(pid, parent, owner)
+		if gone {
 			return nil
 		}
 		if err != nil {
 			return err
-		}
-		if ppid != parent && ppid != os.Getpid() {
-			return errors.New("child ancestry changed")
 		}
 		if pid == root.PID && !same(before, root) {
 			return errors.New("root process identity changed")
@@ -228,16 +229,32 @@ func stopTree(root Identity, rootDone <-chan error, budget time.Duration) error 
 			_ = unix.Close(fd)
 			return errors.New("process identity changed while opening pidfd")
 		}
-		ppid, err = parentPID(pid)
-		if err != nil || ppid != parent && ppid != os.Getpid() {
+		gone, err = checkParent(pid, parent, owner)
+		if gone {
 			_ = unix.Close(fd)
-			return errors.New("child ancestry changed while opening pidfd")
+			return nil
+		}
+		if err != nil {
+			_ = unix.Close(fd)
+			return err
 		}
 		seen[pid] = tracked{before, fd}
-		if err = unix.PidfdSendSignal(fd, unix.SIGSTOP, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
+		if err = unix.PidfdSendSignal(fd, unix.SIGSTOP, nil, 0); errors.Is(err, unix.ESRCH) {
+			return nil
+		} else if err != nil {
 			return err
 		}
 		for {
+			current, e := identity(pid)
+			if errors.Is(e, os.ErrNotExist) {
+				return nil
+			}
+			if e != nil {
+				return e
+			}
+			if !same(current, before) {
+				return errors.New("process identity changed during freeze")
+			}
 			stopped, e := threadsStopped(pid, until)
 			if errors.Is(e, os.ErrNotExist) {
 				break
@@ -260,8 +277,18 @@ func stopTree(root Identity, rootDone <-chan error, budget time.Duration) error 
 		if err != nil {
 			return err
 		}
+		current, e := identity(pid)
+		if errors.Is(e, os.ErrNotExist) {
+			return nil
+		}
+		if e != nil {
+			return e
+		}
+		if !same(current, before) {
+			return errors.New("parent identity changed during enumeration")
+		}
 		for _, child := range children {
-			if err = freeze(child, pid); err != nil {
+			if err = freeze(child, before); err != nil {
 				return err
 			}
 		}
@@ -269,13 +296,13 @@ func stopTree(root Identity, rootDone <-chan error, budget time.Duration) error 
 	}
 	// Root can have exited already; adopted descendants are enumerated from the
 	// helper too, including children created by any native worker thread.
-	err := freeze(root.PID, os.Getpid())
+	err = freeze(root.PID, owner)
 	if err == nil {
 		var children []int
 		children, err = childPIDs(os.Getpid(), until)
 		if err == nil {
 			for _, p := range children {
-				if err = freeze(p, os.Getpid()); err != nil {
+				if err = freeze(p, owner); err != nil {
 					break
 				}
 			}
@@ -401,4 +428,31 @@ func threadsStopped(pid int, until time.Time) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// A child can disappear after pidfd open because the native Wait goroutine has
+// reaped it. That clean exit is not an ancestry failure. A reused numeric parent
+// is also rejected, even when the child's PPID happens to match the old number.
+func checkParent(pid int, parent, owner Identity) (bool, error) {
+	ppid, err := parentPID(pid)
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	expected := parent
+	if ppid == owner.PID {
+		expected = owner
+	} else if ppid != parent.PID {
+		return false, errors.New("child ancestry changed")
+	}
+	current, err := identity(ppid)
+	if err != nil {
+		return false, errors.New("parent identity unavailable")
+	}
+	if !same(current, expected) {
+		return false, errors.New("parent identity changed")
+	}
+	return false, nil
 }
