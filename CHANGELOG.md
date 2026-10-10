@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.10.0](https://github.com/thaynes43/dev-env/compare/v2.9.1...v2.10.0) (2026-10-10)
+
+
+### Features
+
+* add disabled shared project catalog core ([#145](https://github.com/thaynes43/dev-env/issues/145)) ([084b66a](https://github.com/thaynes43/dev-env/commit/084b66ac064e337e361713ae6dd7d73bd72290d4))
+* add retained Codex host lifecycle and recovery status ([#157](https://github.com/thaynes43/dev-env/issues/157)) ([ed64941](https://github.com/thaynes43/dev-env/commit/ed64941d6d91c0e32727f9f2f50eb5ebc256f4e2))
+* guard opt-in shared workspace ownership ([#135](https://github.com/thaynes43/dev-env/issues/135)) ([316c03c](https://github.com/thaynes43/dev-env/commit/316c03c08a4ef174aa60d53d86ca7f509eb3a566))
+* prepare bounded Git wait observations ([#146](https://github.com/thaynes43/dev-env/issues/146)) ([a5ae4a0](https://github.com/thaynes43/dev-env/commit/a5ae4a09cf89c49c185b35e11d3284fe8c7e698d))
+* record authoritative child answers and resume exact Codex threads ([#155](https://github.com/thaynes43/dev-env/issues/155)) ([43972bd](https://github.com/thaynes43/dev-env/commit/43972bd8a725aaa1918fb2e938ee6bf550e84999))
+* rescue shared tasks after verified executor stop ([#140](https://github.com/thaynes43/dev-env/issues/140)) ([7b3ce4c](https://github.com/thaynes43/dev-env/commit/7b3ce4cd4fbf314fd8633764d914401961dabfab))
+
+
+### Bug Fixes
+
+* **deps:** update module golang.org/x/crypto to v0.58.0 ([#122](https://github.com/thaynes43/dev-env/issues/122)) ([41e2497](https://github.com/thaynes43/dev-env/commit/41e2497f70808604a6f881d2239eaf77c1dea63f))
+* publish Git wait fixture from reviewed main inputs ([#151](https://github.com/thaynes43/dev-env/issues/151)) ([0e0931a](https://github.com/thaynes43/dev-env/commit/0e0931ad3e4a733f3a4064251b9b548c164abcab))
+* **trials:** retain diagnostics on helper interruption ([#139](https://github.com/thaynes43/dev-env/issues/139)) ([a222a69](https://github.com/thaynes43/dev-env/commit/a222a69311940bc7efd3b8b1f58352e7ddc40cdc))
+
 ## [2.9.1](https://github.com/thaynes43/dev-env/compare/v2.9.0...v2.9.1) (2026-10-09)
 
 
