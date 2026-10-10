@@ -429,6 +429,10 @@ func TestCodexHostPassiveRPCBoundsRedactionAndChurn(t *testing.T) {
 	}
 }
 
+func hostStopACK(s Settings) []byte {
+	raw, _ := json.Marshal(map[string]any{"status": "stopped", "backend": "pid", "managedCodexPath": filepath.Join(s.CodexHome, "packages", "app-server-daemon", "current", "bin", "codex"), "managedCodexVersion": managedCodexVersion, "socketPath": filepath.Join(s.CodexHome, "app-server-control", "app-server-control.sock"), "cliVersion": managedCodexVersion})
+	return raw
+}
 func TestCodexHostCompletedLifecyclePermitsExactlyOneNewStart(t *testing.T) {
 	s, o := hostFixture(t)
 	hostLiveConfig(t, s, o)
@@ -447,7 +451,7 @@ func TestCodexHostCompletedLifecyclePermitsExactlyOneNewStart(t *testing.T) {
 		case "remote-control stop --json":
 			stops++
 			process = codexHostProcess{State: "Absent"}
-			return nil, nil
+			return hostStopACK(s), nil
 		}
 		return nil, errors.New("unexpected native action")
 	}
@@ -483,7 +487,7 @@ func TestCodexHostCompletedLifecyclePermitsExactlyOneNewStart(t *testing.T) {
 	}
 }
 func TestCodexHostFailedOrUnknownStopCannotCompleteOrReplay(t *testing.T) {
-	for _, mode := range []string{"failed-ack", "unknown-absence", "changed-owner"} {
+	for _, mode := range []string{"failed-ack", "unknown-absence", "changed-owner", "not-running", "empty", "truncated", "wrong-backend", "unexpected-pid", "wrong-version"} {
 		t.Run(mode, func(t *testing.T) {
 			s, o := hostFixture(t)
 			hostLiveConfig(t, s, o)
@@ -509,9 +513,24 @@ func TestCodexHostFailedOrUnknownStopCannotCompleteOrReplay(t *testing.T) {
 					stopCalls++
 					if mode == "unknown-absence" {
 						unknown = true
-						return nil, nil
+						return hostStopACK(s), nil
 					}
 					process = codexHostProcess{State: "Absent"}
+					ack := hostStopACK(s)
+					switch mode {
+					case "not-running":
+						return []byte(`{"status":"notRunning"}`), nil
+					case "empty":
+						return nil, nil
+					case "truncated":
+						return ack[:len(ack)-1], nil
+					case "wrong-backend":
+						return bytes.Replace(ack, []byte(`"pid"`), []byte(`"other"`), 1), nil
+					case "unexpected-pid":
+						return bytes.Replace(ack, []byte(`"status"`), []byte(`"pid":999,"status"`), 1), nil
+					case "wrong-version":
+						return bytes.ReplaceAll(ack, []byte(managedCodexVersion), []byte("0.159.1")), nil
+					}
 					return nil, errors.New("lost stop ACK")
 				}
 				startCalls++
@@ -609,5 +628,31 @@ func TestCodexHostTransientObservationPreservesDaemon(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCodexHostStopMustFitRemainingPodBudget(t *testing.T) {
+	s, o := hostFixture(t)
+	hostLiveConfig(t, s, o)
+	d, calls := hostDeps(t, s, o)
+	live, err := d.process(s)
+	if err != nil || saveHostLifecycle(s, "Confirmed", live) != nil {
+		t.Fatal("confirmed fixture")
+	}
+	o.DeclaredShutdown = true
+	o.TerminationGrace = 90 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if stopCodexHost(ctx, s, o, d) == nil {
+		t.Fatal("native grace exceeds remaining pod deadline")
+	}
+	for _, call := range *calls {
+		if strings.Contains(call, "stop") {
+			t.Fatal("stop started without enough remaining pod budget")
+		}
+	}
+	receipt, err := hostLifecycle(s)
+	if err != nil || receipt.Phase != "Confirmed" {
+		t.Fatal("refused preflight consumed stop receipt")
 	}
 }

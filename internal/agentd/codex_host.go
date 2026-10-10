@@ -381,6 +381,36 @@ func codexHostAccessReady(s Settings, now time.Time) error {
 	return nil
 }
 
+// Native 0.160.1 LifecycleOutput reports stopped/backend=pid after
+// stop_with_grace, with no PID or appServerVersion. notRunning is also exit 0
+// and supplies no causal stop proof. Bind the typed ACK to the already verified
+// selected installation/socket; process identity remains the exact pre-bound
+// PID/boot/startTicks plus fresh absence, never an invented ACK identity.
+func verifyHostStopACK(s Settings, raw []byte) error {
+	var ack struct {
+		Status           string  `json:"status"`
+		Backend          *string `json:"backend,omitempty"`
+		PID              *uint32 `json:"pid,omitempty"`
+		ManagedPath      string  `json:"managedCodexPath"`
+		ManagedVersion   string  `json:"managedCodexVersion"`
+		SocketPath       string  `json:"socketPath"`
+		CLIVersion       string  `json:"cliVersion,omitempty"`
+		AppServerVersion *string `json:"appServerVersion,omitempty"`
+	}
+	if len(raw) == 0 || len(raw) > 64<<10 || decodeHostJSON(raw, &ack) != nil || ack.Status != "stopped" || ack.Backend == nil || *ack.Backend != "pid" || ack.PID != nil || ack.AppServerVersion != nil || ack.CLIVersion != managedCodexVersion || ack.ManagedVersion != managedCodexVersion || ack.SocketPath != filepath.Join(s.CodexHome, "app-server-control", "app-server-control.sock") || filepath.Clean(ack.ManagedPath) != ack.ManagedPath || !strings.HasPrefix(ack.ManagedPath, filepath.Join(s.CodexHome, "packages")+string(filepath.Separator)) {
+		return errCodexHostUnknown
+	}
+	expected, err := codexHostManagedBin(s)
+	if err != nil {
+		return errCodexHostUnknown
+	}
+	actual, err := filepath.EvalSymlinks(ack.ManagedPath)
+	if err != nil || actual != expected {
+		return errCodexHostUnknown
+	}
+	return nil
+}
+
 // StopCodexHost is an explicit declared host shutdown, never task stop proof.
 func StopCodexHost(ctx context.Context, s Settings, o CodexHostOptions) error {
 	if !o.Enabled || !o.DeclaredShutdown || codexHostPreflight(s) != nil {
@@ -394,9 +424,14 @@ func StopCodexHost(ctx context.Context, s Settings, o CodexHostOptions) error {
 	return stopCodexHost(ctx, s, o, realCodexHostDeps())
 }
 func stopCodexHost(ctx context.Context, s Settings, o CodexHostOptions, d codexHostDeps) error {
-	if !o.Enabled || !o.DeclaredShutdown {
+	if !o.Enabled || !o.DeclaredShutdown || o.TerminationGrace <= 5*time.Second {
 		return errCodexHostUnknown
 	}
+	// The entire proof/stop pipeline shares the pod shutdown deadline; retain a
+	// final five-second supervisor exit margin. Slow probes cannot consume the
+	// selected native grace/forced-wait budget and then start an unbounded stop.
+	ctx, outerCancel := context.WithTimeout(ctx, o.TerminationGrace-5*time.Second)
+	defer outerCancel()
 	status, err := observeCodexHost(ctx, s, o, d)
 	if err != nil || status.Process != "Live" || !status.Idle {
 		return errCodexHostUnknown
@@ -414,7 +449,8 @@ func stopCodexHost(ctx context.Context, s Settings, o CodexHostOptions, d codexH
 		return errCodexHostUnknown
 	}
 	budget := time.Duration(grace)*time.Second + 15*time.Second
-	if o.TerminationGrace <= budget {
+	deadline, ok := ctx.Deadline()
+	if !ok || time.Until(deadline) < budget {
 		return errCodexHostUnknown
 	}
 	latest, err := d.process(s)
@@ -426,8 +462,8 @@ func stopCodexHost(ctx context.Context, s Settings, o CodexHostOptions, d codexH
 	}
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
-	_, err = d.native(ctx, s, s.CodexBin, []string{"remote-control", "stop", "--json"}, nil)
-	if err != nil {
+	ack, err := d.native(ctx, s, s.CodexBin, []string{"remote-control", "stop", "--json"}, nil)
+	if err != nil || verifyHostStopACK(s, ack) != nil {
 		return errCodexHostUnknown
 	}
 	final, err := d.process(s)
