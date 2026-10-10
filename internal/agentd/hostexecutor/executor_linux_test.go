@@ -30,6 +30,28 @@ func TestMain(m *testing.M) {
 				os.Exit(1)
 			}
 			os.Exit(0)
+		case "fixture-root-reuse-check":
+			if unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != nil {
+				os.Exit(2)
+			}
+			data, err := os.ReadFile(os.Args[2])
+			if err != nil {
+				os.Exit(2)
+			}
+			var root Identity
+			if json.Unmarshal(data, &root) != nil {
+				os.Exit(2)
+			}
+			done := make(chan error, 1)
+			proof := os.Args[3] == "wait-observed"
+			if proof {
+				done <- nil
+			}
+			err = stopTree(root, done, 100*time.Millisecond)
+			if (err == nil) != proof {
+				os.Exit(2)
+			}
+			os.Exit(0)
 		case "fixture-supervisor":
 			data, err := os.ReadFile(os.Args[2])
 			if err != nil {
@@ -209,15 +231,8 @@ func TestUnknownAndImmutableIdentity(t *testing.T) {
 	if same(self, wrong) {
 		t.Fatal("PID reuse identity accepted")
 	}
-	// Model numeric PID reuse without allocating/wrapping PIDs: the original
-	// owned Wait is already observed, while a different start identity exists
-	// at that number. That replacement must remain unsignaled.
-	wrong.PID = os.Getpid()
-	if err = stopTree(wrong, ch, time.Second); err != nil {
-		t.Fatal(err)
-	}
 	if _, err = os.Stat("/proc/" + strconv.Itoa(os.Getpid())); err != nil {
-		t.Fatal(fmt.Errorf("unrelated process signaled: %w", err))
+		t.Fatal(fmt.Errorf("unrelated process disappeared: %w", err))
 	}
 
 }
@@ -326,7 +341,11 @@ func TestHelperDeadlineStopsTreeWithoutLatch(t *testing.T) {
 		t.Fatalf("independent deadline: %+v %v", r, err)
 	}
 }
-func TestWrongStartIdentityCannotSignalLiveChild(t *testing.T) {
+
+// Numeric reuse is modeled by an expected old start identity, avoiding PID
+// allocation loops. Only a dedicated checker subreaper runs stopTree; the live
+// replacement belongs to the outer test process and is outside that lineage.
+func TestRootReuseCannotSignalUnrelatedLiveReplacement(t *testing.T) {
 	c := config(t)
 	cmd := exec.Command(c.NativeBinary, "fixture-leaf")
 	cmd.Env = append(os.Environ(), "HOME="+c.Home)
@@ -338,19 +357,32 @@ func TestWrongStartIdentityCannotSignalLiveChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrong := id
-	wrong.StartTicks++
-	done := make(chan error, 1)
-	if err = stopTree(wrong, done, time.Second); err == nil {
-		t.Fatal("PID with changed start identity accepted")
+	old := id
+	old.StartTicks++
+	data, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
 	}
-	current, err := identity(id.PID)
-	if err != nil || !same(current, id) {
-		t.Fatal("unmatched child was signaled")
+	path := filepath.Join(c.Home, "old-root.json")
+	if err = os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	stopped, err := threadsStopped(id.PID, time.Now().Add(time.Second))
-	if err != nil || stopped {
-		t.Fatal("unmatched child was frozen")
+	for _, mode := range []string{"wait-missing", "wait-observed"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		checker := exec.CommandContext(ctx, c.HelperBinary, "fixture-root-reuse-check", path, mode)
+		err = checker.Run()
+		cancel()
+		if err != nil {
+			t.Fatalf("isolated replacement check %s: %v", mode, err)
+		}
+		current, e := identity(id.PID)
+		if e != nil || !same(current, id) {
+			t.Fatal("unrelated replacement was killed")
+		}
+		stopped, e := threadsStopped(id.PID, time.Now().Add(time.Second))
+		if e != nil || stopped {
+			t.Fatal("unrelated replacement was frozen")
+		}
 	}
 }
 
