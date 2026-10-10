@@ -27,13 +27,16 @@ answer provenance and heartbeat clock skew in #155, and startup recovery status
 in #157. Host source #157 merged at `ed64941` after all required checks and a clean
 actual final advisory review. Child #155 fixes passed focused checks, but the
 automatic review found an additional status-concurrency race and unrelated-outcome
-clobber. The fix must preserve unrelated status writes while comparing the exact
-answer authority, and change only an outcome owned by that decision. Final
-integration and actual advisory review remain required before merge. Ordinary
+clobber. Child source now preserves unrelated status writes while comparing the
+exact answer authority, and changes only an outcome owned by that decision.
+Repeated question heartbeats must preserve the first escalation timestamp and
+avoid optimistic locking when their final outcome does not change. Required
+checks and actual advisory findings govern source merge; runtime and phone
+acceptance remain separate. Ordinary
 automatic reviews then completed with actual public findings for #156 and
 haynes-ops #3693. Review delivery #158 is resolved; the three prior failures
 remain history and were not rerun. The missing Q-23/D-84 saga decision-log row
-found by the automatic documentation review is being added with #155.
+found by the automatic documentation review is included with #155.
 
 Retained host source distinguishes incomplete startup history as `NeedsReview`.
 It cannot safely rearm an already-absent host by inventing a stop acknowledgment
