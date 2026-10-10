@@ -183,7 +183,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		defer signal.Stop(sigs)
 		return agentd.RunAgent(args[2], stdout, sigs, stopGrace)
 	case "owned-codex-host":
-		return ownedCodexHost(stderr)
+		return ownedCodexHost(ctx, args[1:], stderr, getenv)
 	case "owned-codex-host-helper":
 		return ownedCodexHostHelper(stderr)
 	case "codex-host":
