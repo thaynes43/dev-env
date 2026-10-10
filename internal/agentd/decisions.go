@@ -46,7 +46,7 @@ func readPrivateDecision(s Settings) (privateDecision, error) {
 	if d.Decode(&record) != nil || d.Decode(new(any)) != io.EOF {
 		return record, errors.New("decision record is invalid")
 	}
-	if record.DecisionRecord.Validate() != nil ||
+	if record.Validate() != nil ||
 		record.Session != record.Source.Session || record.SessionUID != record.Source.SessionUID || record.PodUID != record.Source.PodUID ||
 		record.ThreadID != record.Source.ThreadID || record.WriterGeneration != record.Source.Generation || record.WriterGeneration == 0 {
 		return record, errors.New("decision record lacks exact platform identity")

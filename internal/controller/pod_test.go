@@ -634,6 +634,7 @@ func TestDecisionPodFeatureCannotBeEnabledByTemplateOrPrivateTask(t *testing.T) 
 				s.Spec.Agent, s.Spec.Model = v1alpha1.AgentClaude, "claude-opus-5-5"
 			case "local":
 				s.Spec.Mode = v1alpha1.ModeLocal
+				s.Spec.Prompt = ""
 			}
 			p, err := buildPod(s, tmpl, "", managed, enabled)
 			if kind == "hold" {
