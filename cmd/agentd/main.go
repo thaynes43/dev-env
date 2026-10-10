@@ -50,6 +50,15 @@ Commands:
   render                   Render the GitOps config into $HOME (boot step 1).
   project-sync --enabled   Run one explicitly configured, model-free GitOps Job
                            to prepare declared shared references/project roots.
+  codex-host --enabled --catalog-file FILE --instructions-file FILE <operation>
+                           Supervise a retained Codex computer, separate from a
+                           managed task. Operations: run, status, pair, stop.
+                           Status never starts or replaces the native daemon.
+                           Pair requires an explicit private terminal and shows
+                           the computer code there; it does not log into Codex.
+                           Stop also requires --declared-shutdown and a matching
+                           --termination-grace-seconds N from pod configuration,
+                           and refuses a busy or uncertain host.
   ctl status               Print the session's status as JSON.
   ctl rescue [--stop-agent]
                            Commit every worktree's uncommitted work to a local
@@ -163,6 +172,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 		defer signal.Stop(sigs)
 		return agentd.RunAgent(args[2], stdout, sigs, stopGrace)
+	case "codex-host":
+		return codexHost(ctx, args[1:], stdout, stderr, getenv)
 	case "project-sync":
 		return projectSync(ctx, args[1:], stdout, stderr, getenv, r)
 	case "ctl":
