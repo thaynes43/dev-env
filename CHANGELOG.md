@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.12.0](https://github.com/thaynes43/dev-env/compare/v2.11.0...v2.12.0) (2026-10-10)
+
+
+### Features
+
+* prepare declared projects in private task worktrees ([#178](https://github.com/thaynes43/dev-env/issues/178)) ([7a634e5](https://github.com/thaynes43/dev-env/commit/7a634e5ec7ff8ffa91e504a83defe258dacca85c))
+
+
+### Bug Fixes
+
+* **taskbudget:** pin fixture Codex state to its private home ([#170](https://github.com/thaynes43/dev-env/issues/170)) ([3e16e2f](https://github.com/thaynes43/dev-env/commit/3e16e2ff96744d0b3ae3ce366b3a0f7bffb84cab))
+
 ## [2.11.0](https://github.com/thaynes43/dev-env/compare/v2.10.0...v2.11.0) (2026-10-10)
 
 
