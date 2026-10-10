@@ -195,6 +195,8 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens
 	if _, err := AnswerDecision(ctx, s, answer, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	answered, _ := ReadDecision(ctx, s)
+	serveDecisionAuthority(t, &s, *answered.Decision)
 	self := fakeCLI(t, t.TempDir(), `exec /usr/bin/env DECISION_JOURNEY_STAGE=run-agent DECISION_JOURNEY_LAUNCH="$3" "$DECISION_JOURNEY_TESTBIN" -test.run=^TestDecisionActualHeadlessToOwnedTTYJourney$
 `)
 	socket := filepath.Join(s.Home, "decision-tmux.sock")

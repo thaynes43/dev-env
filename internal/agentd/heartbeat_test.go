@@ -94,3 +94,32 @@ func TestHeartbeatPathEscapes(t *testing.T) {
 		t.Errorf("path = %q", got)
 	}
 }
+
+func TestDecisionAuthorityHTTPReadRefusesRedirectOverflowAndInvalidJSON(t *testing.T) {
+	for _, failure := range []string{"redirect", "overflow", "unknown-field", "trailing"} {
+		t.Run(failure, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				switch failure {
+				case "redirect":
+					w.Header().Set("Location", "/redirected")
+					w.WriteHeader(http.StatusFound)
+				case "overflow":
+					_, _ = w.Write([]byte(strings.Repeat("x", 2049)))
+				case "unknown-field":
+					_, _ = w.Write([]byte(`{"authority":null,"forged":true}`))
+				case "trailing":
+					_, _ = w.Write([]byte(`{} {}`))
+				}
+			}))
+			t.Cleanup(server.Close)
+			token := filepath.Join(t.TempDir(), "token")
+			writeFile(t, token, "SYNTHETIC-TOKEN")
+			h := &HeartbeatClient{URL: server.URL, Session: "synthetic-task", TokenFile: token, HTTP: server.Client()}
+			if _, err := h.ReadDecisionAuthority(context.Background()); err == nil || calls != 1 {
+				t.Fatal("unsafe authority response was trusted or request followed a redirect", err, calls)
+			}
+		})
+	}
+}

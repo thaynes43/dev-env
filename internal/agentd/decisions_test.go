@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -114,6 +116,8 @@ func TestDecisionDispatchFencePastesOnceAndRefusesUncertainReplay(t *testing.T) 
 			if _, err := AnswerDecision(context.Background(), s, protocol.DecisionAnswer{ID: record.ID, Text: "EXACT-SYNTHETIC-ANSWER\nsecond line"}, time.Now()); err != nil {
 				t.Fatal(err)
 			}
+			answered, _ := ReadDecision(context.Background(), s)
+			serveDecisionAuthority(t, &s, *answered.Decision)
 			var delivered string
 			enter := 0
 			runner := &fakeRunner{handle: func(c Cmd) (Result, error) {
@@ -223,6 +227,8 @@ func TestDecisionFinalDispatchRechecksStopAndWriterAfterResumeReservation(t *tes
 			if _, err := AnswerDecision(context.Background(), s, answer, time.Now()); err != nil {
 				t.Fatal(err)
 			}
+			answered, _ := ReadDecision(context.Background(), s)
+			serveDecisionAuthority(t, &s, *answered.Decision)
 			pending, err := readPrivateDecision(s)
 			if err != nil {
 				t.Fatal(err)
@@ -258,6 +264,103 @@ func TestDecisionFinalDispatchRechecksStopAndWriterAfterResumeReservation(t *tes
 			}
 			if err := d.dispatchDecision(context.Background()); err != nil {
 				t.Fatal("uncertain answer was reconsidered", err)
+			}
+		})
+	}
+}
+
+// The concrete production client exercises authenticated, bounded off-pod
+// observation; this helper never reads local state to invent authority.
+func serveDecisionAuthority(t *testing.T, s *Settings, record protocol.DecisionRecord) *protocol.DecisionAuthority {
+	t.Helper()
+	authority := protocol.AnswerAuthority(record, record.Answer)
+	token := filepath.Join(t.TempDir(), "synthetic-api-token")
+	writeFile(t, token, "SYNTHETIC-API-TOKEN")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != protocol.DecisionAuthorityPath(record.Session) || r.Header.Get("Authorization") != "Bearer SYNTHETIC-API-TOKEN" {
+			t.Error("authority request lacked own path or authenticated projected token")
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(protocol.DecisionAuthorityResult{Authority: &authority})
+	}))
+	t.Cleanup(server.Close)
+	s.APIURL, s.APITokenFile = server.URL, token
+	return &authority
+}
+
+func TestDecisionForgedLocalAnswerCannotResumeOrArchiveWithoutOperatorAuthority(t *testing.T) {
+	s, sess, current := liveDecisionFixture(t)
+	asked, err := AskDecision(context.Background(), s, protocol.DecisionQuestion{Question: "Synthetic provenance choice?"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AnswerDecision(context.Background(), s, protocol.DecisionAnswer{ID: asked.ID, Text: "FORGED-LOCAL-ANSWER"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{handle: func(c Cmd) (Result, error) {
+		t.Fatal("local-only answer reached native transport", c.Name)
+		return Result{}, nil
+	}}
+	d := &Daemon{S: s, Session: sess, R: runner}
+	if err := d.dispatchDecision(context.Background()); err == nil {
+		t.Fatal("local-only answer authorized resume")
+	}
+	stored, err := readPrivateDecision(s)
+	if err != nil || stored.State != "Answered" {
+		t.Fatal("missing authority consumed answer", err)
+	}
+	stored.State = "Delivered"
+	stored.ResumeInvocationID = current.NativeInvocationID
+	if err := writePrivateDecision(s, stored); err != nil {
+		t.Fatal(err)
+	}
+	st := CollectStatus(context.Background(), &fakeRunner{handle: func(Cmd) (Result, error) { return Result{}, nil }}, s, sess.Name, time.Now())
+	if st.Decision == nil || st.Decision.State != "Delivered" {
+		t.Fatal("fabricated local Delivered disappeared from discovery")
+	}
+	if _, err := AskDecision(context.Background(), s, protocol.DecisionQuestion{Question: "Forged replacement?"}, time.Now()); err == nil {
+		t.Fatal("local-only Delivered archived without parent authority")
+	}
+}
+
+func TestDecisionAuthorityRecheckedAtReservationAndFinalPaste(t *testing.T) {
+	for _, stage := range []string{"reservation", "paste"} {
+		t.Run(stage, func(t *testing.T) {
+			s, sess, current := liveDecisionFixture(t)
+			asked, err := AskDecision(context.Background(), s, protocol.DecisionQuestion{Question: "Synthetic authority fence?"}, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			answered, err := AnswerDecision(context.Background(), s, protocol.DecisionAnswer{ID: asked.ID, Text: "SYNTHETIC-APPROVED-ANSWER"}, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			authority := serveDecisionAuthority(t, &s, *answered.Decision)
+			runner := &fakeRunner{handle: func(c Cmd) (Result, error) { t.Fatal("changed authority reached paste", c.Name); return Result{}, nil }}
+			d := &Daemon{S: s, Session: sess, R: runner}
+			stored, _ := readPrivateDecision(s)
+			if stage == "reservation" {
+				authority.Phase = "Reserved"
+				if d.reserveDecisionResume(context.Background(), stored, current) == nil {
+					t.Fatal("Reserved authority admitted resume")
+				}
+			} else {
+				if err := d.reserveDecisionResume(context.Background(), stored, current); err != nil {
+					t.Fatal(err)
+				}
+				authority.Digest = strings.Repeat("0", 64)
+				if d.pasteDecisionAnswer(context.Background(), asked.ID, current) == nil {
+					t.Fatal("changed final authority pasted answer")
+				}
+			}
+			after, _ := readPrivateDecision(s)
+			want := "Answered"
+			if stage == "paste" {
+				want = "Uncertain"
+			}
+			if after.State != want {
+				t.Fatal("authority refusal lost one-shot state", after.State)
 			}
 		})
 	}

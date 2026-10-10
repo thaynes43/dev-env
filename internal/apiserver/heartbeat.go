@@ -56,14 +56,23 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 	if s.ManagedChildDecisions && sess.Spec.Agent == v1alpha1.AgentCodex && sess.Spec.Mode == v1alpha1.ModeTask && sess.Spec.Workspace != nil {
 		if outcome := st.Decision; outcome != nil {
 			if c.pod == nil || outcome.SessionUID != string(sess.UID) || outcome.PodUID != string(c.pod.UID) || outcome.WriterGeneration == 0 ||
-				!protocol.ValidDecisionID(outcome.ID) || outcome.At.IsZero() || outcome.At.After(s.now()) {
+				!protocol.ValidDecisionID(outcome.ID) || outcome.At.IsZero() {
 				return 0, nil, invalid(fieldError("decision", "decision outcome must bind this exact session and pod"))
 			}
-			at := metav1.NewTime(outcome.At)
+			observedAt := outcome.At
+			if observedAt.After(s.now()) {
+				observedAt = s.now()
+			}
+			at := metav1.NewTime(observedAt)
 			sess.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeEscalated, Note: "decision/" + outcome.ID, At: &at}
-		} else if sess.Status.Outcome != nil && strings.HasPrefix(sess.Status.Outcome.Note, "decision/") {
-			sess.Status.Outcome = nil
-		}
+			if answer := sess.Status.DecisionAnswer; answer != nil && answer.Phase == "Confirmed" &&
+				answer.Session == sess.Name && answer.SessionUID == outcome.SessionUID && answer.PodUID == outcome.PodUID &&
+				answer.DecisionID == outcome.ID && answer.ThreadID == outcome.ThreadID && outcome.WriterGeneration <= math.MaxInt64 && answer.WriterGeneration == int64(outcome.WriterGeneration) &&
+				answer.Digest == outcome.AnswerDigest && outcome.State == "Delivered" {
+				sess.Status.Outcome = nil
+			}
+		} // Omission cannot erase a pending or locally fabricated decision.
+
 	}
 	sess.Status.Agent = agentStatus(st, metav1.NewTime(s.now()))
 	if st.Usage != nil {

@@ -8,6 +8,9 @@ import (
 	"net/http"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
@@ -37,44 +40,175 @@ func (s *Server) childDecision(ctx context.Context, r *http.Request, c *caller, 
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
+	result, err := s.execChildDecision(ctx, sess, pod, c, nil)
+	if err != nil || input == nil {
+		return http.StatusOK, result, err
+	}
+	if result.Decision == nil || result.Decision.ID != input.ID {
+		return 0, nil, decisionConflict("child decision answer recording is unconfirmed")
+	}
+	record := result.Decision
+	authority := protocol.AnswerAuthority(*record, input.Text)
+	if prior := sess.Status.DecisionAnswer; prior != nil {
+		saved := protocol.DecisionAuthority(*prior)
+		if saved.Phase != "Confirmed" {
+			return 0, nil, decisionConflict("prior decision answer reservation is uncertain; no replay")
+		}
+		if saved.DecisionID == record.ID {
+			if saved != authority || !saved.Confirms(*record) {
+				return 0, nil, decisionConflict("recorded answer differs from confirmed authority")
+			}
+			return http.StatusAccepted, result, nil
+		}
+	}
+	if record.State != "Open" {
+		return 0, nil, decisionConflict("local answer has no coordinator authority")
+	}
+	authority.Phase = "Reserved"
+	if err := s.writeDecisionAuthority(ctx, sess, pod, c, nil, authority); err != nil {
+		return 0, nil, err
+	}
+	// A reservation is never repeated after an unknown exec or response. The local
+	// daemon cannot dispatch it until the operator confirms the durable response.
+	result, err = s.execChildDecision(ctx, sess, pod, c, input)
+	if err != nil {
+		return 0, nil, err
+	}
+	if result.Decision == nil || !protocol.AnswerAuthority(*result.Decision, result.Decision.Answer).Confirms(*result.Decision) ||
+		result.Decision.ID != input.ID || result.Decision.Answer != input.Text ||
+		protocol.AnswerAuthority(*result.Decision, input.Text).Digest != authority.Digest {
+		return 0, nil, decisionConflict("child decision answer recording is unconfirmed")
+	}
+	expected := authority
+	authority.Phase = "Confirmed"
+	if err := s.writeDecisionAuthority(ctx, sess, pod, c, &expected, authority); err != nil {
+		return 0, nil, err
+	}
+	return http.StatusAccepted, result, nil
+}
+
+func decisionConflict(message string) error {
+	return newError(http.StatusConflict, apiv1.CodeConflict, "%s", message)
+}
+
+func (s *Server) execChildDecision(ctx context.Context, sess *v1alpha1.AgentSession, pod *corev1.Pod, c *caller, input *protocol.DecisionAnswer) (protocol.DecisionResult, error) {
+	var result protocol.DecisionResult
 	cmd := []string{"agentd", "ctl", "decision-read"}
 	var stdin io.Reader
 	if input != nil {
 		cmd[2] = "decision-answer"
-		body, err := json.Marshal(input)
-		if err != nil {
-			return 0, nil, internal("decision answer encoding failed")
-		}
+		body, _ := json.Marshal(input)
 		stdin = bytes.NewReader(body)
 	}
 	if err := s.authorizeChildExec(ctx, sess, pod, c); err != nil {
-		return 0, nil, err
+		return result, err
 	}
 	stdout := &decisionOutput{limit: protocol.MaxDecisionRecordBytes}
-	err = s.Exec.Run(ctx, pod.Namespace, pod.Name, controller.ContainerName, coordinatorExecArgs(cmd, sess, pod, c), stdin, stdout, io.Discard)
+	err := s.Exec.Run(ctx, pod.Namespace, pod.Name, controller.ContainerName, coordinatorExecArgs(cmd, sess, pod, c), stdin, stdout, io.Discard)
 	if err != nil || stdout.overflow {
-		return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "exact child decision is unavailable or uncertain")
+		return result, decisionConflict("exact child decision is unavailable or uncertain")
 	}
-	var result protocol.DecisionResult
 	d := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
 	d.DisallowUnknownFields()
 	if d.Decode(&result) != nil || d.Decode(new(any)) != io.EOF {
-		return 0, nil, internal("child decision response is invalid")
+		return result, internal("child decision response is invalid")
 	}
-	if input != nil && result.Decision == nil {
-		return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "child decision answer recording is unconfirmed")
+	if r := result.Decision; r != nil && (r.Validate() != nil || r.Session != sess.Name || r.SessionUID != string(sess.UID) || r.PodUID != string(pod.UID)) {
+		return protocol.DecisionResult{}, decisionConflict("child decision identity changed")
 	}
-	if decision := result.Decision; decision != nil {
-		if decision.Validate() != nil || decision.Session != sess.Name || decision.SessionUID != string(sess.UID) || decision.PodUID != string(pod.UID) ||
-			(input != nil && (decision.ID != input.ID || decision.Answer != input.Text || decision.State == "Open")) {
-			return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "child decision identity changed")
+	return result, nil
+}
+
+// The optimistic status write, uncached readback and direct-parent recheck
+// precede every exec/confirmation. No caller-provided heartbeat writes this field.
+func (s *Server) writeDecisionAuthority(ctx context.Context, sess *v1alpha1.AgentSession, pod *corev1.Pod, c *caller, expected *protocol.DecisionAuthority, next protocol.DecisionAuthority) error {
+	if err := s.liveDecisionCoordinator(ctx, c); err != nil {
+		return err
+	}
+	var live v1alpha1.AgentSession
+	if err := s.Live.Get(ctx, client.ObjectKeyFromObject(sess), &live); err != nil {
+		return fromKubeError(err, "decision authority")
+	}
+	if live.UID != sess.UID || live.ResourceVersion != sess.ResourceVersion {
+		return coordinatorDenied()
+	}
+	if expected != nil {
+		if live.Status.DecisionAnswer == nil || protocol.DecisionAuthority(*live.Status.DecisionAnswer) != *expected {
+			return decisionConflict("decision authority changed")
+		}
+	} else {
+		prior, current := sess.Status.DecisionAnswer, live.Status.DecisionAnswer
+		if (prior == nil) != (current == nil) || (prior != nil && *prior != *current) || (current != nil && current.Phase != "Confirmed") {
+			return decisionConflict("decision authority changed or is already reserved")
 		}
 	}
-	status := http.StatusOK
-	if input != nil {
-		status = http.StatusAccepted
+	*sess = live
+	if err := s.authorizeChildExec(ctx, sess, pod, c); err != nil {
+		return err
 	}
-	return status, result, nil
+	base := sess.DeepCopy()
+	converted := v1alpha1.DecisionAnswerStatus(next)
+	sess.Status.DecisionAnswer = &converted
+	if err := s.Client.Status().Patch(ctx, sess, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
+		return fromKubeError(err, "decision authority write")
+	}
+	if err := s.Live.Get(ctx, client.ObjectKeyFromObject(sess), &live); err != nil {
+		return fromKubeError(err, "decision authority confirmation")
+	}
+	if live.UID != sess.UID || live.Generation != sess.Generation || live.Status.DecisionAnswer == nil || protocol.DecisionAuthority(*live.Status.DecisionAnswer) != next {
+		return decisionConflict("decision authority write is unconfirmed")
+	}
+	*sess = live
+	if err := s.liveDecisionCoordinator(ctx, c); err != nil {
+		return err
+	}
+	return s.authorizeChildExec(ctx, sess, pod, c)
+}
+
+// Recheck the configured parent's own live Pod at the authority write/readback,
+// rather than relying on the TokenReview's earlier classification alone.
+func (s *Server) liveDecisionCoordinator(ctx context.Context, c *caller) error {
+	if !s.ManagedChildDecisions || !s.Policy.CoordinatorEnabled || c.kind != kindCoordinator {
+		return coordinatorDenied()
+	}
+	for _, host := range s.Policy.Coordinators {
+		if host.ServiceAccount == c.parent {
+			if _, err := s.resolveCoordinator(ctx, c.identity, host); err != nil {
+				return err
+			}
+			return nil
+		}
+	}
+	return coordinatorDenied()
+}
+
+// This narrowly scoped read needs no Session status-write grant and never
+// returns private question/answer text. Both identities are freshly rechecked.
+func (s *Server) ownDecisionAuthority(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+	key, err := s.sessionKey(r)
+	if err != nil {
+		return 0, nil, err
+	}
+	if !s.ManagedChildDecisions || c.kind != kindSession || c.session.Name != key.Name || c.pod == nil {
+		return 0, nil, forbidden("only this decision task's own pod may read answer authority")
+	}
+	var sess v1alpha1.AgentSession
+	if err := s.Live.Get(ctx, key, &sess); err != nil {
+		return 0, nil, fromKubeError(err, "decision authority")
+	}
+	pod, err := s.runningPod(ctx, &sess)
+	if err != nil {
+		return 0, nil, err
+	}
+	if !sess.DeletionTimestamp.IsZero() || pod.Spec.ServiceAccountName != s.Policy.SessionServiceAccount || sess.UID != c.session.UID || pod.UID != c.pod.UID || string(pod.UID) != c.identity.PodUID || sess.Spec.Agent != v1alpha1.AgentCodex || sess.Spec.Mode != v1alpha1.ModeTask || sess.Spec.Workspace == nil {
+		return 0, nil, forbidden("decision authority identity changed")
+	}
+	result := protocol.DecisionAuthorityResult{}
+	if sess.Status.DecisionAnswer != nil {
+		authority := protocol.DecisionAuthority(*sess.Status.DecisionAnswer)
+		result.Authority = &authority
+	}
+	return http.StatusOK, result, nil
 }
 
 func (s *Server) readChildDecision(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {

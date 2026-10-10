@@ -154,17 +154,17 @@ func TestDecisionHeartbeatDiscoveryUsesExistingOutcomeWithoutPrivateContext(t *t
 			}
 			w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st)
 			switch change {
-			case "wrong-session", "wrong-pod", "zero-generation", "malformed-id", "future":
+			case "wrong-session", "wrong-pod", "zero-generation", "malformed-id":
 				wantError(t, w, http.StatusUnprocessableEntity, apiv1.CodeInvalid)
 				if f.session(name).Status.Outcome != nil {
 					t.Fatal("foreign decision outcome persisted")
 				}
-			case "valid":
+			case "valid", "future":
 				if w.Code != http.StatusNoContent {
 					t.Fatal(w.Code, w.Body.String())
 				}
 				got := f.session(name).Status.Outcome
-				if got == nil || got.State != v1alpha1.OutcomeEscalated || got.Note != "decision/"+st.Decision.ID {
+				if got == nil || got.State != v1alpha1.OutcomeEscalated || got.Note != "decision/"+st.Decision.ID || !got.At.Time.Equal(f.now) {
 					t.Fatal("existing escalated Outcome did not discover exact question")
 				}
 				raw, _ := json.Marshal(got)
@@ -172,8 +172,8 @@ func TestDecisionHeartbeatDiscoveryUsesExistingOutcomeWithoutPrivateContext(t *t
 					t.Fatal("private decision context escaped into status")
 				}
 				st.Decision = nil
-				if f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st).Code != http.StatusNoContent || f.session(name).Status.Outcome != nil {
-					t.Fatal("completed decision outcome did not clear")
+				if f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st).Code != http.StatusNoContent || f.session(name).Status.Outcome == nil {
+					t.Fatal("omitted decision cleared pending escalation")
 				}
 				saved := f.session(name)
 				saved.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeEscalated, Note: "unrelated escalation"}

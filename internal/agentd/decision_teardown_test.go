@@ -118,6 +118,8 @@ func TestDecisionWaitsForWrapperAndTmuxTeardownBeforeReservation(t *testing.T) {
 			return Result{}, errors.New("unexpected synthetic transport")
 		}
 	}}
+	answered, _ := ReadDecision(context.Background(), s)
+	serveDecisionAuthority(t, &s, *answered.Decision)
 	d := &Daemon{S: s, Session: sess, R: runner}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

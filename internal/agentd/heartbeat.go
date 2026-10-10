@@ -89,3 +89,52 @@ func (h *HeartbeatClient) Send(ctx context.Context, st protocol.Status) error {
 	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
 	return fmt.Errorf("heartbeat refused: %s: %s", resp.Status, strings.TrimSpace(string(snippet)))
 }
+
+// ReadDecisionAuthority uses the pod's rotating authenticated API token and an
+// uncached own-UID-bound route. Local files never supply answer authority.
+func (h *HeartbeatClient) ReadDecisionAuthority(ctx context.Context) (protocol.DecisionAuthorityResult, error) {
+	var result protocol.DecisionAuthorityResult
+	tok, err := os.ReadFile(h.TokenFile)
+	if err != nil {
+		return result, errors.New("decision authority token unavailable")
+	}
+	ctx, cancel := context.WithTimeout(ctx, heartbeatTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.URL+protocol.DecisionAuthorityPath(h.Session), nil)
+	if err != nil {
+		return result, err
+	}
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(tok)))
+	httpClient := *h.HTTP
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return result, errors.New("decision authority observation unavailable")
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return result, errors.New("decision authority observation refused")
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 2049))
+	if err != nil || len(data) > 2048 {
+		return result, errors.New("decision authority response exceeds bound")
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if dec.Decode(&result) != nil || dec.Decode(new(any)) != io.EOF {
+		return result, errors.New("decision authority response invalid")
+	}
+	return result, nil
+}
+
+func confirmDecisionAuthority(ctx context.Context, s Settings, r protocol.DecisionRecord) error {
+	h, err := NewHeartbeatClient(s, r.Session)
+	if err != nil {
+		return errors.New("decision answer has no authenticated operator authority")
+	}
+	result, err := h.ReadDecisionAuthority(ctx)
+	if err != nil || result.Authority == nil || !result.Authority.Confirms(r) {
+		return errors.New("decision answer lacks exact confirmed coordinator authority")
+	}
+	return nil
+}

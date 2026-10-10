@@ -30,6 +30,9 @@ func (d *Daemon) dispatchDecision(ctx context.Context) error {
 	if record.State != "Answered" {
 		return nil
 	}
+	if err := confirmDecisionAuthority(ctx, d.S, record.DecisionRecord); err != nil {
+		return err
+	}
 	current, binding, err := decisionAuthority(d.S)
 	if err != nil || !decisionBindingMatches(record, binding) || record.Source != binding {
 		return d.uncertainDecision(ctx, record.ID)
@@ -142,6 +145,9 @@ func (d *Daemon) reserveDecisionResume(ctx context.Context, expected privateDeci
 	if err != nil || record.ID != expected.ID || record.State != "Answered" || record.Answer != expected.Answer || record.Source != expected.Source {
 		return errors.New("answered decision changed before native resume")
 	}
+	if err := confirmDecisionAuthority(ctx, d.S, record.DecisionRecord); err != nil {
+		return err
+	}
 	if stop, err := workspaceStopRequested(d.S, d.Session); err != nil || stop {
 		return errors.New("decision continuation refuses a requested or uncertain supervisor stop")
 	}
@@ -217,11 +223,14 @@ func (d *Daemon) pasteDecisionAnswer(ctx context.Context, id string, expected La
 	if stop, err := workspaceStopRequested(d.S, d.Session); err != nil || stop {
 		return refuseDecisionDispatch(d.S, record)
 	}
+	if err := confirmDecisionAuthority(ctx, d.S, record.DecisionRecord); err != nil {
+		return refuseDecisionDispatch(d.S, record)
+	}
 	record.State = "Dispatching"
 	if err := writePrivateDecision(d.S, record); err != nil {
 		return err
 	}
-	if err := Deliver(ctx, d.R, d.S, d.Session, "coordinator/recorded-owner-answer", decisionAnswerText(record)); err != nil {
+	if err := Deliver(ctx, d.R, d.S, d.Session, "coordinator/recorded-answer", decisionAnswerText(record)); err != nil {
 		record.State = "Uncertain"
 		if err := writePrivateDecision(d.S, record); err != nil {
 			return err

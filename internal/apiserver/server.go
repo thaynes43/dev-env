@@ -131,6 +131,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle(apiv1.SessionsPath+"/{name}/resume", s.serve(route{coordinator: true, methods: map[string]handler{
 		http.MethodPost: s.resumeSession,
 	}}))
+	mux.Handle(apiv1.SessionsPath+"/{name}/decision-authority", s.serve(route{methods: map[string]handler{http.MethodGet: s.ownDecisionAuthority}}))
 	mux.Handle(apiv1.SessionsPath+"/{name}/heartbeat", s.serve(route{quiet: true, methods: map[string]handler{
 		http.MethodPost: s.heartbeat,
 	}}))

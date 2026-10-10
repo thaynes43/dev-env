@@ -36,9 +36,9 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, session string, no
 		ObservedAt: now.UTC(),
 	}
 	if s.ManagedChildDecisions {
-		if result, err := ReadDecision(ctx, s); err == nil && result.Decision != nil && result.Decision.State != "Delivered" {
+		if result, err := ReadDecision(ctx, s); err == nil && result.Decision != nil {
 			record := result.Decision
-			st.Decision = &protocol.DecisionOutcome{ID: record.ID, SessionUID: record.SessionUID, PodUID: record.PodUID, WriterGeneration: record.WriterGeneration, At: record.CreatedAt}
+			st.Decision = &protocol.DecisionOutcome{ID: record.ID, SessionUID: record.SessionUID, PodUID: record.PodUID, WriterGeneration: record.WriterGeneration, ThreadID: record.ThreadID, State: record.State, AnswerDigest: protocol.AnswerAuthority(*record, record.Answer).Digest, At: record.CreatedAt}
 		}
 	}
 	var boot bootRecord

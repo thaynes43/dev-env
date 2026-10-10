@@ -132,6 +132,9 @@ func AskDecision(ctx context.Context, s Settings, question protocol.DecisionQues
 		if old.State != "Delivered" || !decisionBindingMatches(old, binding) {
 			return protocol.DecisionRecord{}, errors.New("a pending or uncertain decision cannot be replaced")
 		}
+		if err := confirmDecisionAuthority(ctx, s, old.DecisionRecord); err != nil {
+			return protocol.DecisionRecord{}, err
+		}
 		if err := archiveDeliveredDecision(s, old); err != nil {
 			return protocol.DecisionRecord{}, err
 		}
@@ -264,5 +267,5 @@ func AnswerDecision(ctx context.Context, s Settings, answer protocol.DecisionAns
 }
 
 func decisionAnswerText(record privateDecision) string {
-	return "[Recorded owner answer for decision " + record.ID + "]\n\nQuestion:\n" + record.Question.Question + "\n\nAnswer:\n" + record.Answer
+	return "[Coordinator-recorded answer for decision " + record.ID + "]\n\nQuestion:\n" + record.Question.Question + "\n\nAnswer:\n" + record.Answer
 }

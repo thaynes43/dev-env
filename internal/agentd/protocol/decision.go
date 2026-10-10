@@ -2,9 +2,12 @@ package protocol
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -62,6 +65,9 @@ type DecisionOutcome struct {
 	SessionUID       string    `json:"sessionUID"`
 	PodUID           string    `json:"podUID"`
 	WriterGeneration uint64    `json:"writerGeneration"`
+	ThreadID         string    `json:"threadID,omitempty"`
+	State            string    `json:"state,omitempty"`
+	AnswerDigest     string    `json:"answerDigest,omitempty"`
 	At               time.Time `json:"at"`
 }
 
@@ -98,7 +104,7 @@ func (a DecisionAnswer) Validate() error {
 
 func (r DecisionRecord) Validate() error {
 	if r.Version != 1 || !ValidDecisionID(r.ID) || !ValidDecisionID(r.ThreadID) || r.Session == "" || r.SessionUID == "" || r.PodUID == "" ||
-		r.WriterGeneration == 0 || r.CreatedAt.IsZero() || r.Question.Validate() != nil {
+		r.WriterGeneration == 0 || r.WriterGeneration > math.MaxInt64 || r.CreatedAt.IsZero() || r.Question.Validate() != nil {
 		return errors.New("decision record lacks exact bounded platform identity")
 	}
 	switch r.State {
@@ -143,4 +149,49 @@ func readDecisionJSON(r io.Reader, bound int64, target any) error {
 		return errors.New("decision input is invalid or claims unsupported fields")
 	}
 	return nil
+}
+
+// DecisionAuthority is operator-owned metadata. It carries no question or answer
+// text. Confirmed proves a configured direct parent recorded this exact answer;
+// it is not an attestation that a phone owner supplied it.
+type DecisionAuthority struct {
+	Version          int    `json:"version"`
+	Session          string `json:"session"`
+	SessionUID       string `json:"sessionUID"`
+	PodUID           string `json:"podUID"`
+	DecisionID       string `json:"decisionID"`
+	ThreadID         string `json:"threadID"`
+	WriterGeneration int64  `json:"writerGeneration"`
+	Digest           string `json:"digest"`
+	Phase            string `json:"phase"`
+}
+
+type DecisionAuthorityResult struct {
+	Authority *DecisionAuthority `json:"authority,omitempty"`
+}
+
+func DecisionAuthorityPath(session string) string {
+	return "/v1/sessions/" + session + "/decision-authority"
+}
+
+// AnswerAuthority uses a versioned domain and JSON's unambiguous field/length
+// encoding. Options order, context, creation time, all identity and answer text
+// are covered; state and local delivery timestamps are deliberately excluded.
+func AnswerAuthority(r DecisionRecord, answer string) DecisionAuthority {
+	payload := struct {
+		Domain                                    string
+		Version                                   int
+		ID, Session, SessionUID, PodUID, ThreadID string
+		WriterGeneration                          uint64
+		Question                                  DecisionQuestion
+		CreatedAt                                 time.Time
+		Answer                                    string
+	}{"dev-env/child-decision-answer/v1", r.Version, r.ID, r.Session, r.SessionUID, r.PodUID, r.ThreadID, r.WriterGeneration, r.Question, r.CreatedAt.UTC(), answer}
+	data, _ := json.Marshal(payload)
+	sum := sha256.Sum256(data)
+	return DecisionAuthority{1, r.Session, r.SessionUID, r.PodUID, r.ID, r.ThreadID, int64(r.WriterGeneration), hex.EncodeToString(sum[:]), "Confirmed"}
+}
+
+func (a DecisionAuthority) Confirms(r DecisionRecord) bool {
+	return r.Validate() == nil && r.State != "Open" && a == AnswerAuthority(r, r.Answer)
 }
