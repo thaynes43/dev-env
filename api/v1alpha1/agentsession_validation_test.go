@@ -763,3 +763,54 @@ func get(t *testing.T, s *v1alpha1.AgentSession) *v1alpha1.AgentSession {
 	}
 	return got
 }
+
+func TestDecisionAuthorityStatusSchemaIsBoundedAndRetainsProvenance(t *testing.T) {
+	s := taskSession()
+	if err := k8s.Create(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	valid := v1alpha1.DecisionAnswerStatus{Version: 1, Session: s.Name, SessionUID: string(s.UID), PodUID: "synthetic-pod-uid", DecisionID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", ThreadID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", WriterGeneration: 3, Digest: strings.Repeat("a", 64), Phase: "Reserved"}
+	s.Status.DecisionAnswer = &valid
+	if err := k8s.Status().Update(ctx(t), s); err != nil {
+		t.Fatal("bounded reservation refused", err)
+	}
+	s.Status.DecisionAnswer.Phase = "Confirmed"
+	if err := k8s.Status().Update(ctx(t), s); err != nil {
+		t.Fatal("bounded confirmation refused", err)
+	}
+	var saved v1alpha1.AgentSession
+	if err := k8s.Get(ctx(t), client.ObjectKeyFromObject(s), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Status.DecisionAnswer == nil || *saved.Status.DecisionAnswer != *s.Status.DecisionAnswer {
+		t.Fatal("schema pruned authoritative identity/digest")
+	}
+	for _, change := range []string{"version", "session", "session-uid", "pod-uid", "decision", "thread", "generation", "digest", "phase"} {
+		t.Run(change, func(t *testing.T) {
+			bad := saved.DeepCopy()
+			switch change {
+			case "version":
+				bad.Status.DecisionAnswer.Version = 2
+			case "session":
+				bad.Status.DecisionAnswer.Session = strings.Repeat("s", 64)
+			case "session-uid":
+				bad.Status.DecisionAnswer.SessionUID = strings.Repeat("s", 129)
+			case "pod-uid":
+				bad.Status.DecisionAnswer.PodUID = ""
+			case "decision":
+				bad.Status.DecisionAnswer.DecisionID = "malformed"
+			case "thread":
+				bad.Status.DecisionAnswer.ThreadID = "malformed"
+			case "generation":
+				bad.Status.DecisionAnswer.WriterGeneration = 0
+			case "digest":
+				bad.Status.DecisionAnswer.Digest = strings.Repeat("x", 64)
+			case "phase":
+				bad.Status.DecisionAnswer.Phase = "LocallyApproved"
+			}
+			if err := k8s.Status().Update(ctx(t), bad); !apierrors.IsInvalid(err) {
+				t.Fatal("schema accepted invalid provenance", change, err)
+			}
+		})
+	}
+}

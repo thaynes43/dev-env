@@ -15,33 +15,69 @@ their chats remain accessible. Registering the existing remote folder from
 Windows is a workaround. The working pod host was not restarted or re-paired.
 The owner considers this minor; do not make it a v2 prerequisite.
 
-Project preparation #153 is source-merged at `2e1c395`. Fresh keeper account
-login succeeded and reports `Ready`, generation 1; native process-group absence
-and private staging/reservation cleanup passed. Remote host pairing is a
-separate pending step. Child-decision source is under review in #155 at
-`417c929`; local test/lint/build/generated checks pass after teardown and exact
-parent-scope fixes. Retained-host source is draft #157; native lifecycle,
-passive readiness and finite fixtures are built, with typed stop-acknowledgment
-review still in progress. Automatic Claude advisory delivery failed three times
-and stopped, tracked in #158. One native owner question requests an explicit
-bounded separate Claude review; do not retry or interpret silence as approval.
-Workflow updates are draft #156. Required
-[task-budget and escalation enforcement](sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md)
-is tracked in #154: 60 minutes without progress OR three failed attempts at the
-same blocker, whichever comes first, across agents/pods/resumes. It is unbuilt
-and is now part of the first owner test.
+Project preparation #153 is source-merged at `2e1c395`. The workflow guide and
+owner-test budget contract merged in #156 (`4c2df47`). Fresh keeper account login
+succeeded and reports `Ready`, generation 1; native process-group absence and
+private staging/reservation cleanup passed. Computer pairing remains separate
+and pending. The v1 host was not restarted or re-paired.
 
-External-storage comparison is read-only so far. The separate Proxmox Ceph
-cluster has active CephFS filesystems and existing NFS clients; Kubernetes has
-its RBD CSI driver but no exposed external CephFS class. A health warning and
-one down OSD must be accounted for before a trial. The
-[bounded NFS comparison](../docs/trials/2026-10-09-external-storage-comparison.md)
-records export-access and external-telemetry preflight blockers; a fresh TCP
-probe alone is insufficient. Resolve those before more Rook diagnosis. No new storage or host
-runtime was provisioned. Draft haynes-ops #3693 proposes one exact external
-manager TCP/9283 allowance; it is not deployed and does not prove endpoint
-readiness or replace missing gateway observations. These facts supersede the dated `NeedsLogin` and
-project-Job review status below; other runtime/cutover gates remain open.
+**Funded review checkpoint, 2026-10-09 America/New_York:** one authorized Claude
+Code reviewer finished in 5m54s within its 20-minute cap. It identified child
+answer provenance and heartbeat clock skew in #155, and startup recovery status
+in #157. Host source #157 merged at `ed64941` after all required checks and a clean
+actual final advisory review. Child #155 fixes passed focused checks, but the
+automatic review found an additional status-concurrency race and unrelated-outcome
+clobber. Child source now preserves unrelated status writes while comparing the
+exact answer authority, and changes only an outcome owned by that decision.
+Repeated question heartbeats must preserve the first escalation timestamp and
+avoid optimistic locking when their final outcome does not change. Required
+checks and actual advisory findings govern source merge; runtime and phone
+acceptance remain separate. Ordinary
+automatic reviews then completed with actual public findings for #156 and
+haynes-ops #3693. Review delivery #158 is resolved; the three prior failures
+remain history and were not rerun. The missing Q-23/D-84 saga decision-log row
+found by the automatic documentation review is included with #155.
+
+Retained host source distinguishes incomplete startup history as `NeedsReview`.
+It cannot safely rearm an already-absent host by inventing a stop acknowledgment
+or deleting its receipt. [Issue #160](https://github.com/thaynes43/dev-env/issues/160)
+records the separate evidence-bound recovery decision. Computer pairing and
+runtime host acceptance remain pending.
+
+Required [task-budget enforcement](sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md)
+remains open in #154: 60 minutes without progress OR three failed attempts at the
+same blocker, whichever comes first, across agents/pods/resumes. A retained
+managed-task ledger is a useful next source unit but cannot cover native
+coordinator turns alone. A bounded pinned-source check found that native hooks
+and selected-turn cancellation do not establish universal future admission
+control. Do not call the first owner workflow ready until coordinator coverage,
+trusted accounting and native phone escalation are proven.
+
+The [bounded NFS comparison](../docs/trials/2026-10-09-external-storage-comparison.md)
+is the next storage candidate. Reviewed haynes-ops #3693 merged and its exact
+TCP/9283 rule is observed in the live policy. One bounded external Ceph metrics
+read returned HTTP 200 in 21 ms: WARN health, 31/32 OSDs up/in, and observed OSD
+latency gauges of 0–4 ms. Current reachability is proven; continuous sample
+freshness and gateway metrics are not. Export settings, permissions/quota and
+approved gateway access remain preflight gates. A native question requests that
+specific read-only access path; no answer or phone-delivery confirmation is yet
+recorded. Do not start another storage trial automatically.
+
+The runtime audit found a stale AgentSession CRD: GitOps/live lack merged
+workspace and private-home retention fields. Synchronize the complete reviewed
+source CRD before the operator pin that needs it. Accepted project catalog,
+its named GET permission, workspace settings and test-host manifests are absent;
+shared/coordinator/Codex/decision features remain disabled. Preserve the keeper's
+independent `sha-257287a` pin, broker, v1 and shelf during promotion. This checkpoint
+supersedes the dated `NeedsLogin`, stopped-review and draft-#3693 facts below;
+other runtime and cutover gates remain open.
+
+The exact source CRD copy is prepared locally. Direct rendering and source schema
+tests passed, but three attempts to select its local Flux test failed. That route
+stopped under Q-23/D-84. A native owner question proposes one hosted Flux CI run
+with a ten-minute checkpoint; its answer is pending. Do not silently substitute
+another test route, publish the schema PR or deploy it before that bounded next
+step is authorized and required checks pass.
 
 Tom clarified that Codex must continue until v2 provides a workflow he can test.
 The documentation checkpoint did not end that assignment. Read the

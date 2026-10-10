@@ -612,3 +612,66 @@ func TestHoldPodExcludesAgentProfileMounts(t *testing.T) {
 		})
 	}
 }
+
+func TestDecisionPodFeatureCannotBeEnabledByTemplateOrPrivateTask(t *testing.T) {
+	for _, kind := range []string{"default", "enabled", "managed-off", "private", "claude", "local", "hold", "human", "client", "session", "no-parent", "unconfigured-coordinator", "foreign-namespace", "no-configured-parents"} {
+		t.Run(kind, func(t *testing.T) {
+			tmpl := exampleTemplates(t)
+			tmpl.Workspace = &templates.Workspace{Enabled: true, Claim: "retained-projects", ID: "projects-v2"}
+			tmpl.Env = append(tmpl.Env, corev1.EnvVar{Name: "AGENTD_ENABLE_CHILD_DECISIONS", Value: "true"})
+			s := taskSession()
+			s.Spec.Agent, s.Spec.Model, s.Spec.Effort, s.Spec.Limits = v1alpha1.AgentCodex, "gpt-6.1-sol", "xhigh", nil
+			s.Spec.Workspace = &v1alpha1.WorkspaceSpec{ID: "projects-v2"}
+			s.Spec.Parent = "dev/configured-coordinator"
+			parents := []string{s.Spec.Parent}
+			managed, enabled := true, true
+			switch kind {
+			case "default":
+				enabled = false
+			case "managed-off":
+				managed = false
+			case "private":
+				s.Spec.Workspace = nil
+			case "claude":
+				s.Spec.Agent, s.Spec.Model = v1alpha1.AgentClaude, "claude-opus-5-5"
+			case "local":
+				s.Spec.Mode = v1alpha1.ModeLocal
+				s.Spec.Prompt = ""
+			case "human":
+				s.Spec.Parent = "dev/human"
+			case "client":
+				s.Spec.Parent = "dev/client"
+			case "session":
+				s.Spec.Parent = "parent-session"
+			case "no-parent":
+				s.Spec.Parent = ""
+			case "unconfigured-coordinator":
+				s.Spec.Parent = "dev/other-coordinator"
+			case "foreign-namespace":
+				s.Spec.Parent = "other/configured-coordinator"
+			case "no-configured-parents":
+				parents = nil
+			}
+			p, err := buildManagedPod(s, tmpl, "", managed, enabled, parents)
+			if kind == "hold" {
+				p, err = buildHoldPod(s, tmpl)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var final string
+			for _, e := range p.Spec.Containers[0].Env {
+				if e.Name == "AGENTD_ENABLE_CHILD_DECISIONS" {
+					final = e.Value
+				}
+			}
+			want := "false"
+			if kind == "enabled" {
+				want = "true"
+			}
+			if final != want {
+				t.Fatal("template widened child-decision admission", final, want)
+			}
+		})
+	}
+}

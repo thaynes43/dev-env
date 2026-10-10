@@ -381,6 +381,11 @@ type AgentSessionStatus struct {
 	// +optional
 	Outcome *OutcomeStatus `json:"outcome,omitempty"`
 
+	// DecisionAnswer is written only by the authenticated direct-parent API route.
+	// Heartbeat reports cannot create or modify it. No private text is stored.
+	// +optional
+	DecisionAnswer *DecisionAnswerStatus `json:"decisionAnswer,omitempty"`
+
 	// Usage is the session's cost record (DESIGN-001 3.7, V-16).
 	// +optional
 	Usage *UsageStatus `json:"usage,omitempty"`
@@ -740,4 +745,30 @@ type AgentSessionList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []AgentSession `json:"items"`
+}
+
+// DecisionAnswerStatus is bounded operator-owned answer provenance. Reserved is
+// a durable one-shot fence; only a verified local write permits Confirmed.
+type DecisionAnswerStatus struct {
+	// +kubebuilder:validation:Enum=1
+	Version int `json:"version"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	Session string `json:"session"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	SessionUID string `json:"sessionUID"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	PodUID string `json:"podUID"`
+	// +kubebuilder:validation:Pattern="^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+	DecisionID string `json:"decisionID"`
+	// +kubebuilder:validation:Pattern="^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+	ThreadID string `json:"threadID"`
+	// +kubebuilder:validation:Minimum=1
+	WriterGeneration int64 `json:"writerGeneration"`
+	// +kubebuilder:validation:Pattern="^[0-9a-f]{64}$"
+	Digest string `json:"digest"`
+	// +kubebuilder:validation:Enum=Reserved;Confirmed
+	Phase string `json:"phase"`
 }

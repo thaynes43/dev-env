@@ -19,22 +19,29 @@ import (
 // fakeExec plays a pod's agentd: it records each command and its stdin, and
 // answers with out and code.
 type fakeExec struct {
-	cmds  []string
-	stdin []string
-	out   string
-	code  int
+	cmds   []string
+	stdin  []string
+	out    string
+	code   int
+	handle func([]string, string) (string, int)
 }
 
 func (e *fakeExec) Run(_ context.Context, ns, pod, container string, cmd []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	e.cmds = append(e.cmds, ns+"/"+pod+"/"+container+": "+strings.Join(cmd, " "))
+	input := ""
 	if stdin != nil {
 		b, _ := io.ReadAll(stdin)
+		input = string(b)
 		e.stdin = append(e.stdin, string(b))
 	}
-	_, _ = io.WriteString(stdout, e.out)
-	if e.code != 0 {
+	out, code := e.out, e.code
+	if e.handle != nil {
+		out, code = e.handle(cmd, input)
+	}
+	_, _ = io.WriteString(stdout, out)
+	if code != 0 {
 		_, _ = io.WriteString(stderr, "agentd: deliver: not addressable: a headless task (-p) reads no messages")
-		return utilexec.CodeExitError{Err: errors.New("command terminated with non-zero exit code"), Code: e.code}
+		return utilexec.CodeExitError{Err: errors.New("command terminated with non-zero exit code"), Code: code}
 	}
 	return nil
 }

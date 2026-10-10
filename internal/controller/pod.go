@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -73,7 +74,14 @@ func HomeClaimName(session string) string { return "home-" + session }
 // updated after create: a change in the templates reaches a session only through
 // a drain (5.2).
 func buildPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, managedCodex ...bool) (*corev1.Pod, error) {
-	return buildSessionPod(s, t, apiURL, false, len(managedCodex) > 0 && managedCodex[0])
+	return buildManagedPod(s, t, apiURL, len(managedCodex) > 0 && managedCodex[0], false, nil)
+}
+
+func buildManagedPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, managedCodex, childDecisions bool, coordinatorParents []string) (*corev1.Pod, error) {
+	// The API assigns Parent from authenticated caller identity. Only exact
+	// configured coordinator SAs can use the coordinator-only decision route.
+	childDecisions = childDecisions && s.Spec.Parent != "" && slices.Contains(coordinatorParents, s.Spec.Parent)
+	return buildSessionPod(s, t, apiURL, false, managedCodex, childDecisions)
 }
 
 // buildHoldPod returns the session's rescue pod (D-55): the session's pod with
@@ -84,13 +92,13 @@ func buildPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, m
 // Other profile mounts are only for agents. Heartbeats are off, because no
 // agent runs in it.
 func buildHoldPod(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.Pod, error) {
-	return buildSessionPod(s, t, "", true, false)
+	return buildSessionPod(s, t, "", true, false, false)
 }
 
 // isHoldPod reports whether the pod is a session's rescue pod (D-55).
 func isHoldPod(p *corev1.Pod) bool { return p.Labels[v1alpha1.LabelHold] == "true" }
 
-func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, hold bool, managedCodex bool) (*corev1.Pod, error) {
+func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, hold bool, managedCodex bool, childDecisions bool) (*corev1.Pod, error) {
 	if w := s.Spec.Workspace; w != nil && (t.Workspace == nil || !t.Workspace.Enabled || t.Workspace.Claim == "" || t.Workspace.ID != w.ID) {
 		return nil, fmt.Errorf("session workspace %q does not match an enabled template", w.ID)
 	}
@@ -158,6 +166,7 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 	}
 	// Controller-owned feature gate cannot be widened by template/profile env.
 	env = append(env, corev1.EnvVar{Name: "AGENTD_ENABLE_CODEX_TASKS", Value: fmt.Sprint(managedCodex && !hold)})
+	env = append(env, corev1.EnvVar{Name: "AGENTD_ENABLE_CHILD_DECISIONS", Value: fmt.Sprint(childDecisions && managedCodex && !hold && s.Spec.Agent == v1alpha1.AgentCodex && s.Spec.Mode == v1alpha1.ModeTask && s.Spec.Workspace != nil)})
 	var args []string
 	if hold {
 		args = append(args, HoldArgs...)

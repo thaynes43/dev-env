@@ -62,11 +62,12 @@ type Status struct {
 	BootedAt time.Time `json:"bootedAt"`
 	Boot     string    `json:"boot"`
 	// Problems are the boot steps that warned or failed.
-	Problems   []Step     `json:"problems,omitempty"`
-	Workspace  *Workspace `json:"workspace,omitempty"`
-	Agent      AgentState `json:"agent"`
-	Usage      *Usage     `json:"usage,omitempty"`
-	ObservedAt time.Time  `json:"observedAt"`
+	Problems   []Step           `json:"problems,omitempty"`
+	Workspace  *Workspace       `json:"workspace,omitempty"`
+	Agent      AgentState       `json:"agent"`
+	Usage      *Usage           `json:"usage,omitempty"`
+	Decision   *DecisionOutcome `json:"decision,omitempty"`
+	ObservedAt time.Time        `json:"observedAt"`
 }
 
 // Workspace is the session's clone and worktree (D-15).

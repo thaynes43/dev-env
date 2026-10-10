@@ -68,22 +68,23 @@ func main() {
 }
 
 type options struct {
-	sessionNamespace   string
-	templatesNamespace string
-	templatesName      string
-	leaderElect        bool
-	metricsAddr        string
-	probeAddr          string
-	apiURL             string
-	apiAddr            string
-	apiTLSDir          string
-	humanSA            string
-	clientSAs          []string
-	grantApprovalURL   string
-	coordinatorEnabled bool
-	managedCodexTasks  bool
-	coordinatorHosts   []apiserver.CoordinatorHost
-	catalogBinding     *apiserver.CatalogBinding
+	sessionNamespace      string
+	templatesNamespace    string
+	templatesName         string
+	leaderElect           bool
+	metricsAddr           string
+	probeAddr             string
+	apiURL                string
+	apiAddr               string
+	apiTLSDir             string
+	humanSA               string
+	clientSAs             []string
+	grantApprovalURL      string
+	coordinatorEnabled    bool
+	managedCodexTasks     bool
+	managedChildDecisions bool
+	coordinatorHosts      []apiserver.CoordinatorHost
+	catalogBinding        *apiserver.CatalogBinding
 }
 
 func parseFlags(args []string) (options, error) {
@@ -108,6 +109,7 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.grantApprovalURL, "grant-approval-url", "", "base URL of the broker's approval page, such as https://dev-env.example.com/grants/; a pending grant's view links to it plus the grant's name (D-56). Empty links nothing")
 	fs.BoolVar(&o.coordinatorEnabled, "enable-coordinator-callers", false, "enable configured live-bound scoped coordinator callers")
 	fs.BoolVar(&o.managedCodexTasks, "enable-managed-codex-tasks", false, "enable accepted-project managed Codex task admission")
+	fs.BoolVar(&o.managedChildDecisions, "enable-managed-child-decisions", false, "enable private recorded child decisions and same-writer native continuation")
 	hosts := fs.String("coordinator-hosts", "", "explicit JSON host bindings; empty configures none")
 	catalog := fs.String("project-catalog", "", "explicit accepted namespace/name ConfigMap binding")
 	cloneOwner := fs.String("project-clone-owner", "", "configured GitHub clone owner for accepted project tasks")
@@ -163,6 +165,9 @@ func parseFlags(args []string) (options, error) {
 	if o.coordinatorEnabled && (!o.managedCodexTasks || len(o.coordinatorHosts) == 0) {
 		return o, errors.New("coordinators require managed task support and explicit host bindings")
 	}
+	if o.managedChildDecisions && (!o.coordinatorEnabled || !o.managedCodexTasks) {
+		return o, errors.New("managed child decisions require enabled configured coordinators and managed native tasks")
+	}
 	return o, nil
 }
 
@@ -210,15 +215,23 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	var decisionParents []string
+	if o.coordinatorEnabled && o.managedChildDecisions {
+		for _, host := range o.coordinatorHosts {
+			decisionParents = append(decisionParents, host.ServiceAccount)
+		}
+	}
 	r := &controller.Reconciler{
-		Client:            mgr.GetClient(),
-		Templates:         templatesKey,
-		APIURL:            o.apiURL,
-		ManagedCodexTasks: o.managedCodexTasks,
-		APIReader:         mgr.GetAPIReader(),
-		Rescuer:           rescuer,
-		WorkspaceStopper:  rescuer,
-		Recorder:          mgr.GetEventRecorder(binaryName),
+		Client:                      mgr.GetClient(),
+		Templates:                   templatesKey,
+		APIURL:                      o.apiURL,
+		ManagedCodexTasks:           o.managedCodexTasks,
+		ManagedChildDecisions:       o.managedChildDecisions,
+		ManagedChildDecisionParents: decisionParents,
+		APIReader:                   mgr.GetAPIReader(),
+		Rescuer:                     rescuer,
+		WorkspaceStopper:            rescuer,
+		Recorder:                    mgr.GetEventRecorder(binaryName),
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
 		return err
@@ -272,7 +285,7 @@ func run(args []string) error {
 				// (D-66).
 				ActivityNamespace: o.templatesNamespace,
 			},
-			Projects: o.catalogBinding, ManagedCodexTasks: o.managedCodexTasks,
+			Projects: o.catalogBinding, ManagedCodexTasks: o.managedCodexTasks, ManagedChildDecisions: o.managedChildDecisions,
 			Exec:             podExec,
 			Shelf:            rescueShelf,
 			Templates:        apiserver.TemplatesFrom(mgr.GetClient(), templatesKey),

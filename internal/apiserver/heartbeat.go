@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -53,11 +55,56 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 		return 0, nil, forbidden("session %s was replaced; the pod belongs to the earlier one", key.Name)
 	}
 	base := sess.DeepCopy()
+	if s.ManagedChildDecisions && sess.Spec.Agent == v1alpha1.AgentCodex && sess.Spec.Mode == v1alpha1.ModeTask && sess.Spec.Workspace != nil {
+		if outcome := st.Decision; outcome != nil {
+			if c.pod == nil || outcome.SessionUID != string(sess.UID) || outcome.PodUID != string(c.pod.UID) || outcome.WriterGeneration == 0 ||
+				!protocol.ValidDecisionID(outcome.ID) || outcome.At.IsZero() {
+				return 0, nil, invalid(fieldError("decision", "decision outcome must bind this exact session and pod"))
+			}
+			observedAt := outcome.At
+			if observedAt.After(s.now()) {
+				observedAt = s.now()
+			}
+			note := "decision/" + outcome.ID
+			prior, authority := sess.Status.Outcome, sess.Status.DecisionAnswer
+			// A new question from this same writer may supersede its earlier
+			// escalation even if the earlier Delivered heartbeat was not observed.
+			// Only the operator's confirmed authority permits that transition.
+			supersedesConfirmed := prior != nil && prior.State == v1alpha1.OutcomeEscalated && authority != nil && authority.Phase == "Confirmed" &&
+				prior.Note == "decision/"+authority.DecisionID && authority.DecisionID != outcome.ID &&
+				authority.Session == sess.Name && authority.SessionUID == outcome.SessionUID && authority.PodUID == outcome.PodUID &&
+				authority.ThreadID == outcome.ThreadID && outcome.WriterGeneration <= math.MaxInt64 && authority.WriterGeneration == int64(outcome.WriterGeneration)
+			if prior == nil || prior.Note == note || supersedesConfirmed {
+				// Keep the first escalation observation and its age stable across
+				// repeated heartbeats, including future-clock clamps. metav1.Time
+				// serializes at whole-second precision.
+				if prior == nil || prior.State != v1alpha1.OutcomeEscalated || prior.Note != note {
+					at := metav1.NewTime(observedAt.Truncate(time.Second))
+					sess.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeEscalated, Note: note, At: &at}
+				}
+				if answer := sess.Status.DecisionAnswer; answer != nil && answer.Phase == "Confirmed" &&
+					answer.Session == sess.Name && answer.SessionUID == outcome.SessionUID && answer.PodUID == outcome.PodUID &&
+					answer.DecisionID == outcome.ID && answer.ThreadID == outcome.ThreadID && outcome.WriterGeneration <= math.MaxInt64 && answer.WriterGeneration == int64(outcome.WriterGeneration) &&
+					answer.Digest == outcome.AnswerDigest && outcome.State == "Delivered" {
+					sess.Status.Outcome = nil
+				}
+			}
+
+		} // Omission cannot erase a pending or locally fabricated decision.
+
+	}
 	sess.Status.Agent = agentStatus(st, metav1.NewTime(s.now()))
 	if st.Usage != nil {
 		sess.Status.Usage = usageStatus(*st.Usage)
 	}
-	if err := s.Client.Status().Patch(ctx, &sess, client.MergeFrom(base)); err != nil {
+	patch := client.MergeFrom(base)
+	// An outcome acquired by another writer after this read must not be replaced
+	// or cleared by a stale decision heartbeat. Ordinary heartbeat fields keep
+	// their existing merge behavior when no decision outcome is being changed.
+	if !apiequality.Semantic.DeepEqual(base.Status.Outcome, sess.Status.Outcome) {
+		patch = client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
+	}
+	if err := s.Client.Status().Patch(ctx, &sess, patch); err != nil {
 		return 0, nil, fromKubeError(err, "session "+key.Name+" status")
 	}
 	return http.StatusNoContent, nil, nil

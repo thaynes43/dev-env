@@ -42,6 +42,12 @@ type Launch struct {
 	NativeThreadConfirmed bool   `json:"nativeThreadConfirmed,omitempty"`
 	Provider              string `json:"provider,omitempty"`
 	SessionUID            string `json:"sessionUID,omitempty"`
+	PodUID                string `json:"podUID,omitempty"`
+	// NativeInvocationID identifies one platform-authored native invocation.
+	// A continuation has its own ID and a consumed causal predecessor proof.
+	NativeInvocationID string              `json:"nativeInvocationID,omitempty"`
+	ChildDecisions     bool                `json:"childDecisions,omitempty"`
+	Continuation       *nativeContinuation `json:"continuation,omitempty"`
 	// WorkspaceOwner is the admitted writer generation. It is absent for
 	// every existing private workspace launch.
 	WorkspaceOwner *taskOwner `json:"workspaceOwner,omitempty"`

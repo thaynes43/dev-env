@@ -63,7 +63,10 @@ type Settings struct {
 	CodexHome         string
 	CodexBin          string
 	ManagedCodexTasks bool
-	TaskRepositoryURL string
+	// ManagedChildDecisions opts a managed native task into private decision
+	// records and same-owner sequential continuation. It defaults off.
+	ManagedChildDecisions bool
+	TaskRepositoryURL     string
 	// HWSSHKeyB64 is the hw-ssh private key, base64 on one line
 	// (HW_SSH_PRIVATE_KEY_B64). A secret: never logged.
 	HWSSHKeyB64 string
@@ -128,17 +131,18 @@ func LoadSettings(getenv func(string) string) (Settings, error) {
 		CodexAccessFile:   getenv("AGENTD_CODEX_ACCESS_FILE"),
 		CodexHome:         or("CODEX_HOME", filepath.Join(home, ".codex")),
 		CodexBin:          "codex", ManagedCodexTasks: getenv("AGENTD_ENABLE_CODEX_TASKS") == "true",
-		HWSSHKeyB64:  getenv("HW_SSH_PRIVATE_KEY_B64"),
-		UserBin:      filepath.Join(home, ".local", "bin"),
-		SystemBin:    "/usr/local/bin",
-		ClaudeBin:    "claude",
-		TmuxBin:      "tmux",
-		RemoteBase:   strings.TrimSuffix(or("AGENTD_REMOTE_BASE", "https://github.com/thaynes43"), "/"),
-		TokenWait:    90 * time.Second,
-		APIURL:       strings.TrimSuffix(getenv("AGENTD_API_URL"), "/"),
-		APITokenFile: or("AGENTD_API_TOKEN_FILE", "/var/run/secrets/dev-env/token"),
-		APICAFile:    getenv("AGENTD_API_CA_FILE"),
-		Getenv:       getenv,
+		ManagedChildDecisions: getenv("AGENTD_ENABLE_CHILD_DECISIONS") == "true",
+		HWSSHKeyB64:           getenv("HW_SSH_PRIVATE_KEY_B64"),
+		UserBin:               filepath.Join(home, ".local", "bin"),
+		SystemBin:             "/usr/local/bin",
+		ClaudeBin:             "claude",
+		TmuxBin:               "tmux",
+		RemoteBase:            strings.TrimSuffix(or("AGENTD_REMOTE_BASE", "https://github.com/thaynes43"), "/"),
+		TokenWait:             90 * time.Second,
+		APIURL:                strings.TrimSuffix(getenv("AGENTD_API_URL"), "/"),
+		APITokenFile:          or("AGENTD_API_TOKEN_FILE", "/var/run/secrets/dev-env/token"),
+		APICAFile:             getenv("AGENTD_API_CA_FILE"),
+		Getenv:                getenv,
 	}
 	if dir := getenv("CLAUDE_CONFIG_DIR"); dir != "" {
 		s.ClaudeConfigDir = dir

@@ -148,6 +148,9 @@ func buildCodexLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, 
 	if sess.Workspace != nil {
 		guard = sharedGuard(ws, true)
 	}
+	if s.ManagedChildDecisions {
+		guard += "\n\n" + managedChildDecisionGuard
+	}
 	projectArgs, err := providerProjectArgs(s, sess, guard)
 	if err != nil {
 		return Launch{}, err
@@ -155,6 +158,16 @@ func buildCodexLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, 
 	l := Launch{Provider: protocol.AgentCodex, Session: sess.Name, SessionUID: sess.SessionUID, Dir: ws.Worktree,
 		Env: []string{"CODEX_HOME=" + s.CodexHome}, Unset: append(append([]string{}, unsetForAgent...), codexUnset...),
 		LogPath: s.LogPath(sess.Name), EventsPath: s.statePath(eventsFile), BootID: bootID, CreatedAt: now.UTC()}
+	if s.ManagedChildDecisions {
+		if sess.Workspace == nil || s.PodUID == "" {
+			return Launch{}, errors.New("managed child decisions require an exact shared task and Pod binding")
+		}
+		id, err := newUUID()
+		if err != nil {
+			return Launch{}, err
+		}
+		l.NativeInvocationID, l.PodUID, l.ChildDecisions = id, s.PodUID, true
+	}
 	argv := []string{s.CodexBin, "exec", "--json", "--color", "never"}
 	if first != nil {
 		if !first.NativeThreadConfirmed || first.Provider != protocol.AgentCodex || first.Session != sess.Name || first.SessionUID != sess.SessionUID || first.Dir != ws.Worktree || !nativeThreadID.MatchString(first.ConversationID) {

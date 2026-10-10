@@ -49,8 +49,9 @@ import (
 // Server holds the API's handlers and what they read and write.
 type Server struct {
 	// Projects is a concrete uncached named ConfigMap binding, never a caller-supplied resolver.
-	Projects          *CatalogBinding
-	ManagedCodexTasks bool
+	Projects              *CatalogBinding
+	ManagedCodexTasks     bool
+	ManagedChildDecisions bool
 	// Client reads from the manager's cache and writes to the API server.
 	Client client.Client
 	// Live reads straight from the API server (the manager's APIReader). A
@@ -120,12 +121,17 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle(apiv1.SessionsPath+"/{name}/messages", s.serve(route{coordinator: true, methods: map[string]handler{
 		http.MethodPost: s.sendMessage,
 	}}))
+	mux.Handle(apiv1.SessionsPath+"/{name}/decision", s.serve(route{coordinator: true, methods: map[string]handler{
+		http.MethodGet:  s.readChildDecision,
+		http.MethodPost: s.answerChildDecision,
+	}}))
 	mux.Handle(apiv1.SessionsPath+"/{name}/suspend", s.serve(route{coordinator: true, methods: map[string]handler{
 		http.MethodPost: s.suspendSession,
 	}}))
 	mux.Handle(apiv1.SessionsPath+"/{name}/resume", s.serve(route{coordinator: true, methods: map[string]handler{
 		http.MethodPost: s.resumeSession,
 	}}))
+	mux.Handle(apiv1.SessionsPath+"/{name}/decision-authority", s.serve(route{methods: map[string]handler{http.MethodGet: s.ownDecisionAuthority}}))
 	mux.Handle(apiv1.SessionsPath+"/{name}/heartbeat", s.serve(route{quiet: true, methods: map[string]handler{
 		http.MethodPost: s.heartbeat,
 	}}))

@@ -537,6 +537,56 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              decisionAnswer:
+                description: |-
+                  DecisionAnswer is written only by the authenticated direct-parent API route.
+                  Heartbeat reports cannot create or modify it. No private text is stored.
+                properties:
+                  decisionID:
+                    pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                    type: string
+                  digest:
+                    pattern: ^[0-9a-f]{64}$
+                    type: string
+                  phase:
+                    enum:
+                    - Reserved
+                    - Confirmed
+                    type: string
+                  podUID:
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  session:
+                    maxLength: 63
+                    minLength: 1
+                    type: string
+                  sessionUID:
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  threadID:
+                    pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                    type: string
+                  version:
+                    enum:
+                    - 1
+                    type: integer
+                  writerGeneration:
+                    format: int64
+                    minimum: 1
+                    type: integer
+                required:
+                - decisionID
+                - digest
+                - phase
+                - podUID
+                - session
+                - sessionUID
+                - threadID
+                - version
+                - writerGeneration
+                type: object
               nodeName:
                 description: NodeName is the node the pod runs on.
                 type: string
