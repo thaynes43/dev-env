@@ -2808,8 +2808,16 @@ Managed Codex children may record one bounded private question through an explic
 default-off route. Existing Outcome metadata carries only a decision reference.
 Only children of exact validated configured coordinator ServiceAccounts enable
 this route. The live direct parent reads private context and records one answer through
-Session/Pod UID-fenced routes. The owning daemon delivers that recorded answer to
-the exact confirmed native UUID. A new invocation requires the genuine owned
+Session/Pod UID-fenced routes. Operator-owned status reserves then confirms a digest
+binding the exact question, context, options and answer to Session, Pod, native
+thread and writer generation, without publishing their text. Confirmation follows
+a matching durable child response; an uncertain reservation cannot replay exec.
+The daemon checks live authority before reservation and final paste. Same-UID
+private files establish no owner provenance, and local heartbeat claims cannot
+write authority or clear escalation without matching confirmed answer authority.
+The owning daemon delivers the coordinator-recorded answer to the exact confirmed
+native UUID. This proves parent authorization, not a phone-answer attestation.
+A new invocation requires the genuine owned
 `cmd.Wait` result, observed exact process-group absence, an fsynced receipt and a
 noninherited private lifetime flock. Admission and one-use consumption preserve
 the same launched shared writer and its unchanged generation. Before reserving
@@ -4954,4 +4962,4 @@ blocks only the step it names.
 | D-80 | Two retained Codex coordinator hosts with read-only shared files, scoped management identity and managed Claude/Codex executors; native threads remain host-local and real link/phone/refresh acceptance is required. | 6.3, docs/codex-coordinator-hosts.md |
 | D-81 | Shared task rescue cannot delete private provider homes; UID-bound retained-PVC receipt/detach precedes Session finalization, with no automatic home expiry or destruction. | 6.6, docs/shared-private-home-retention.md |
 | D-82 | Disabled fixed model-free project Job, dedicated namespace GET/named-catalog read tier and retained operation home; exact live actor/original deadline, trusted empty-storage initializer and no uncertain replay. | 6.6, docs/project-sync-runner.md |
-| D-83 | Default-off private child questions, live direct-parent UID-fenced answer routes, exact native UUID continuation with genuine owned Wait/group-absence receipt and one-use same-writer consumption; local transport acknowledgment only. | 6.8, docs/managed-child-decisions.md |
+| D-83 | Default-off private child questions, live direct-parent UID-fenced answers with operator-owned identity/content digest authority, exact native UUID continuation with genuine owned Wait/group-absence receipt and one-use same-writer consumption; local transport acknowledgment only. | 6.8, docs/managed-child-decisions.md |

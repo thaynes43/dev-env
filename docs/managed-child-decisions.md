@@ -14,11 +14,27 @@ The model cannot supply Session, Pod, native thread, generation or path authorit
 One unresolved record is retained in private 0600 state; a different second answer
 is rejected. Completed context is archived privately before the next question.
 The existing status/Outcome discovery route publishes only the decision reference.
+Private files share the native child's Unix identity. Their permissions protect
+privacy, but do not establish who authorized an answer.
 
 GET/POST `/v1/sessions/{name}/decision` requires the configured live direct parent.
 The API repeats uncached Session/Pod ownership checks and executes target commands
 with expected Session UID and Pod UID. Target checks precede private context reads
-and answer stdin consumption. POST 202 acknowledges durable answer recording.
+and answer stdin consumption. Before recording an answer in the child, the API
+reserves a bounded authority record in operator-owned Session status. Its digest
+binds the exact question, context, options and answer to the Session, Pod, native
+thread and writer generation. It contains no question or answer text. The API
+confirms that authority only after reading a matching durable child response.
+POST 202 acknowledges both confirmations. A lost response leaves a reserved,
+uncertain operation and does not authorize another answer exec.
+
+The daemon checks the live authority through its authenticated API before answer
+reservation and final paste. A locally written answer cannot authorize delivery.
+A heartbeat cannot write that authority. Omission or a local delivery claim
+lacking matching confirmed authority cannot clear escalation. This establishes
+direct-parent authorization.
+It does not attest that an answer came from Tom's phone: the parent must perform
+the native question round trip, which still requires real-client acceptance.
 
 The owning daemon waits for an initial native invocation's genuine owned Wait and
 separate bounded observation of exact process-group absence. Its fsynced receipt
