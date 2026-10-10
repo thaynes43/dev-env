@@ -97,9 +97,13 @@ drain and native tool forwarding are not part of this first route.
 The supervisor reports `NeedsReview` with the retained lifecycle phase when the
 daemon is positively absent but its private receipt is `Attempting`, `Confirmed`
 or `Stopping`. These phases mean an earlier start or stop lacks complete evidence.
-A malformed or unreadable receipt reports `Unknown`. Neither state authorizes
-another native start, even after a pod replacement. A missing receipt or a verified
-`Stopped` receipt is distinct from an interrupted operation.
+A live daemon also reports `NeedsReview` unless its receipt is `Confirmed` for
+the exact current Pod and process identity. A successful start command followed
+by an incomplete readiness probe retains `Attempting`; later observation does
+not invent the missing lifecycle proof. A malformed or unreadable receipt reports
+`Unknown`. Neither state authorizes another native start, even after a pod
+replacement. Positive absence with a missing receipt or verified `Stopped`
+receipt is distinct from an interrupted operation.
 
 Review the private `codex-host-start-intent.json` in agentd's state directory and
 preserve its original bytes. Match the recorded Pod UID, process boot/start identity,
