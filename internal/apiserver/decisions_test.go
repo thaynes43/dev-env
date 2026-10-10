@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -61,6 +63,58 @@ func decisionAPIFixture(t *testing.T) (*fixture, *fakeExec, *v1alpha1.AgentSessi
 	}
 	f.srv.Exec, f.srv.ManagedChildDecisions = ex, true
 	return f, ex, sess, &pod
+}
+
+func TestDecisionConfirmationRetriesOnlyKnownConflictWithinBound(t *testing.T) {
+	for _, mode := range []string{"one-conflict", "exhausted", "authority-changed"} {
+		t.Run(mode, func(t *testing.T) {
+			f, ex, sess, _ := decisionAPIFixture(t)
+			attempts := 0
+			f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				candidate := obj.(*v1alpha1.AgentSession)
+				if candidate.Status.DecisionAnswer != nil && candidate.Status.DecisionAnswer.Phase == "Confirmed" {
+					attempts++
+					if mode != "one-conflict" || attempts == 1 {
+						fresh := f.session(sess.Name)
+						fresh.Status.Agent = &v1alpha1.AgentStatus{Status: "busy", Message: fmt.Sprintf("concurrent-%d", attempts)}
+						if mode == "authority-changed" {
+							fresh.Status.DecisionAnswer.Digest = strings.Repeat("b", 64)
+						}
+						if err := f.c.Status().Update(ctx, fresh); err != nil {
+							return err
+						}
+					}
+				}
+				return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+			}})
+			answer := protocol.DecisionAnswer{ID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Text: "SYNTHETIC-ANSWER"}
+			w := f.do(http.MethodPost, apiv1.SessionDecisionPath(sess.Name), tokCoordinator, answer)
+			answers := 0
+			for _, cmd := range ex.cmds {
+				if strings.Contains(cmd, "decision-answer") {
+					answers++
+				}
+			}
+			saved := f.session(sess.Name)
+			wantAttempts, wantPhase, wantUpdate := 2, "Confirmed", 1
+			switch mode {
+			case "exhausted":
+				wantAttempts, wantPhase, wantUpdate = 3, "Reserved", 3
+			case "authority-changed":
+				wantAttempts, wantPhase = 1, "Reserved"
+			}
+			if attempts != wantAttempts || answers != 1 || saved.Status.DecisionAnswer == nil || saved.Status.DecisionAnswer.Phase != wantPhase || saved.Status.Agent == nil || saved.Status.Agent.Message != fmt.Sprintf("concurrent-%d", wantUpdate) {
+				t.Fatal("confirmation retry lost bounded CAS, single exec, or unrelated update", w.Code, attempts, answers)
+			}
+			if mode == "one-conflict" {
+				if w.Code != http.StatusAccepted || !protocol.DecisionAuthority(*saved.Status.DecisionAnswer).Confirms(*decode[protocol.DecisionResult](t, w).Decision) {
+					t.Fatal("known conflict did not confirm the actual recorded answer", w.Code)
+				}
+			} else if w.Code == http.StatusAccepted {
+				t.Fatal("exhausted or changed authority incorrectly confirmed")
+			}
+		})
+	}
 }
 
 func TestDecisionAPIRoutesBindDirectChildAndTargetUIDs(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -124,47 +125,59 @@ func (s *Server) execChildDecision(ctx context.Context, sess *v1alpha1.AgentSess
 // snapshot RV; compare only the expected authority, then patch from fresh live
 // state. No caller-provided heartbeat writes this field.
 func (s *Server) writeDecisionAuthority(ctx context.Context, sess *v1alpha1.AgentSession, pod *corev1.Pod, c *caller, expected *protocol.DecisionAuthority, next protocol.DecisionAuthority) error {
-	if err := s.liveDecisionCoordinator(ctx, c); err != nil {
-		return err
-	}
-	var live v1alpha1.AgentSession
-	if err := s.Live.Get(ctx, client.ObjectKeyFromObject(sess), &live); err != nil {
-		return fromKubeError(err, "decision authority")
-	}
-	if live.UID != sess.UID || live.Generation != sess.Generation {
-		return coordinatorDenied()
-	}
+	attempts := 1
 	if expected != nil {
-		if live.Status.DecisionAnswer == nil || protocol.DecisionAuthority(*live.Status.DecisionAnswer) != *expected {
-			return decisionConflict("decision authority changed")
+		attempts = 3
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
+		if err := s.liveDecisionCoordinator(ctx, c); err != nil {
+			return err
 		}
-	} else {
-		prior, current := sess.Status.DecisionAnswer, live.Status.DecisionAnswer
-		if (prior == nil) != (current == nil) || (prior != nil && *prior != *current) || (current != nil && current.Phase != "Confirmed") {
-			return decisionConflict("decision authority changed or is already reserved")
+		var live v1alpha1.AgentSession
+		if err := s.Live.Get(ctx, client.ObjectKeyFromObject(sess), &live); err != nil {
+			return fromKubeError(err, "decision authority")
 		}
+		if live.UID != sess.UID || live.Generation != sess.Generation {
+			return coordinatorDenied()
+		}
+		if expected != nil {
+			if live.Status.DecisionAnswer == nil || protocol.DecisionAuthority(*live.Status.DecisionAnswer) != *expected {
+				return decisionConflict("decision authority changed")
+			}
+		} else {
+			prior, current := sess.Status.DecisionAnswer, live.Status.DecisionAnswer
+			if (prior == nil) != (current == nil) || (prior != nil && *prior != *current) || (current != nil && current.Phase != "Confirmed") {
+				return decisionConflict("decision authority changed or is already reserved")
+			}
+		}
+		*sess = live
+		if err := s.authorizeChildExec(ctx, sess, pod, c); err != nil {
+			return err
+		}
+		base := sess.DeepCopy()
+		converted := v1alpha1.DecisionAnswerStatus(next)
+		sess.Status.DecisionAnswer = &converted
+		if err := s.Client.Status().Patch(ctx, sess, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
+			// A typed Conflict proves this patch was not applied. Only the
+			// confirmation CAS may repeat; unknown writes and reservation cannot.
+			if expected != nil && apierrors.IsConflict(err) && attempt+1 < attempts {
+				continue
+			}
+			return fromKubeError(err, "decision authority write")
+		}
+		if err := s.Live.Get(ctx, client.ObjectKeyFromObject(sess), &live); err != nil {
+			return fromKubeError(err, "decision authority confirmation")
+		}
+		if live.UID != sess.UID || live.Generation != sess.Generation || live.Status.DecisionAnswer == nil || protocol.DecisionAuthority(*live.Status.DecisionAnswer) != next {
+			return decisionConflict("decision authority write is unconfirmed")
+		}
+		*sess = live
+		if err := s.liveDecisionCoordinator(ctx, c); err != nil {
+			return err
+		}
+		return s.authorizeChildExec(ctx, sess, pod, c)
 	}
-	*sess = live
-	if err := s.authorizeChildExec(ctx, sess, pod, c); err != nil {
-		return err
-	}
-	base := sess.DeepCopy()
-	converted := v1alpha1.DecisionAnswerStatus(next)
-	sess.Status.DecisionAnswer = &converted
-	if err := s.Client.Status().Patch(ctx, sess, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
-		return fromKubeError(err, "decision authority write")
-	}
-	if err := s.Live.Get(ctx, client.ObjectKeyFromObject(sess), &live); err != nil {
-		return fromKubeError(err, "decision authority confirmation")
-	}
-	if live.UID != sess.UID || live.Generation != sess.Generation || live.Status.DecisionAnswer == nil || protocol.DecisionAuthority(*live.Status.DecisionAnswer) != next {
-		return decisionConflict("decision authority write is unconfirmed")
-	}
-	*sess = live
-	if err := s.liveDecisionCoordinator(ctx, c); err != nil {
-		return err
-	}
-	return s.authorizeChildExec(ctx, sess, pod, c)
+	return decisionConflict("decision authority confirmation exhausted")
 }
 
 // Recheck the configured parent's own live Pod at the authority write/readback,
