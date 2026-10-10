@@ -44,13 +44,19 @@ belong to Rook, and no matching external NFS gateway performance series were
 found. A successful port probe cannot replace the missing external health and
 latency observations. Access and monitoring are concrete preflight blockers.
 
-The external manager advertises a Prometheus service. One bounded direct read
-timed out; current source policy has no allowance for its exact target/port.
-[Draft egress proposal #3693](https://github.com/thaynes43/haynes-ops/pull/3693)
-adds only that target on TCP/9283. Render validation changes only the policy,
-with no configuration or workload change. It is not deployed; endpoint readiness
-and the actual live drop cause remain unverified. It installs no scrape or
-gateway telemetry and does not grant gateway shell access.
+The external manager advertises a Prometheus service. The initial bounded read
+timed out while the dev-env policy lacked its exact target/port allowance.
+[Reviewed egress change #3693](https://github.com/thaynes43/haynes-ops/pull/3693)
+merged and its unique TCP/9283 rule was observed in the live policy. One subsequent
+bounded read returned HTTP 200 in 21 ms. It exposed external Ceph health, OSD and
+MDS metrics: health was WARN, 31 of 32 OSDs were up/in, and observed OSD latency
+gauges were 0–4 ms. This establishes current read reachability, without proving
+the cause of the earlier timeout or storage performance acceptance.
+
+No NFS metric families, explicit sample timestamps or freshness metrics were
+exposed. Continuous scraping, sample freshness and gateway observations remain
+preflight gates. The change installs no scrape or gateway telemetry, grants no
+gateway shell access and changes no pod configuration.
 
 ## Proposed first comparison
 
