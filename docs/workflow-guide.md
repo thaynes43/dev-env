@@ -1,6 +1,6 @@
 # dev-env workflow and quick start
 
-Updated 2026-10-09, America/New_York. This guide describes the product, the
+Updated 2026-10-10 UTC. This guide describes the product, the
 working paths, and the evidence still required before v2 replaces v1.
 
 **The goal:** one project concept for Claude Code and Codex, with shared rules
@@ -174,8 +174,8 @@ guide is describing the target.
 | Joint project catalog and rules | Source merged #145/#150/#153; runtime pending | Accepted catalog, CLI/API preparation and model-free Job; actual shared mounts and both-provider rule loading remain |
 | Keeper-owned Codex authentication | Deployed #148; fresh login passed | Keeper reports Ready, generation 1; actual live-host adoption, one-shot refresh and two-host propagation remain |
 | Managed Codex and scoped coordinator requests | Source merged #152; runtime off | Recorded native thread identity and direct-child management; real-provider and lifecycle acceptance remain |
-| Child decisions | Source under review #155 | One durable child question, parent routing and owned continuation; native phone round trip remains unverified |
-| Task budgets and stalled-work escalation | Accepted requirement #154; unbuilt | Stop at 60 minutes without progress or three failures; retain history across agents/pods and ask once on the phone |
+| Child decisions | Source merged #155; schema applied [haynes-ops#3722](https://github.com/thaynes43/haynes-ops/pull/3722); runtime off | One durable child question, parent routing and owned continuation; native phone round trip remains unverified |
+| Task budgets and stalled-work escalation | Accepted requirement #154; implementation in progress, runtime off | Retained ledger and owned-executor stop need integrated runtime and phone acceptance; the default remains 60 minutes without progress or three failures |
 | Codex phone execution across pods | Unverified, [first coordinator route](codex-coordinator-hosts.md) | Two independently enrolled hosts request scoped managed tasks; real renewal/shared workspace/phone acceptance remain, and S-4 forwarding is later work |
 | Automatic drain onto new images/config | Planned, plan 04 | Wait for idle, preserve conversation, resume on a new revision |
 | Management console | Planned, plan 03 | Sessions, links, archive and login renewal; a separate web approval flow is not selected |
@@ -321,9 +321,10 @@ already finished. An archived session is restored into a new session, not resume
 Rescue preserves Git work. It is not a backup of ignored files, build caches or
 every file in the home. Rescue snapshots stay private and are never pushed.
 
-V2 `--interactive`, Codex creation, `restart`, grant CLI and login commands are
-unfinished. Use `help` on the selected binary rather than the target design's
-future command list.
+V2 `--interactive`, automatic image drains, grant CLI and login commands remain
+unfinished. Codex and declared-project task requests exist in released 2.10.0,
+but their shared-workspace runtime opt-ins are still off. Use `help` on the
+selected binary and current deployment evidence before choosing a route.
 
 ## 4. The everyday workflow
 
@@ -408,11 +409,11 @@ process, or a remote computer enrollment.
 ```
 
 R1 declares project names, repos, default branches and rules once in GitOps.
-Boot or the future `dev-env project sync` materializes missing repos/roots and
-reports undeclared roots without deletion. A future `project add` performs the
-GitOps declaration and materialization workflow as one user operation; it must
-honor branch/PR/Flux rules and avoid restarting active hosts to reload a catalog.
-Neither command exists today.
+The model-free project preparation implementation materializes missing
+repos/roots and reports undeclared roots without deletion; its runtime Job is
+not deployed yet. The requested `project sync` and `project add` user commands
+remain unfinished. `project add` must declare and materialize through GitOps
+without restarting active hosts to reload a catalog.
 
 D-79 uses a plain project folder with generated rules and one child anchor per
 repository, even for one-repository projects. V2 starts in its new shared
@@ -422,9 +423,11 @@ needs a separately supported lossless migration; it cannot overwrite repository
 instructions, rename live worktrees or prune their registrations automatically.
 
 R2 binds that project to both providers. Codex trust entries are generated from
-the catalog; Claude gets all project repos in scope. The intended command is
-`agent-run --project sigo-alumni`; it is **not supported by either current
-launcher**. Repo-based quick starts in section 3 remain the working path.
+the catalog; Claude gets all project repos in scope. Released v2 supports
+`agent-run --project sigo-alumni [--repo REPO] -p "TASK"` for a declared task;
+the operator catalog, shared mounts and opt-ins still need deployment and
+acceptance. V1 does not support `--project`. Repo-based quick starts in section 3
+remain the verified working path.
 
 R3 renders both providers' project instructions from one source. R4 carries
 those rules into each task alongside that repo's own rules. Keep tasks under
@@ -529,8 +532,8 @@ flowchart LR
 
 The coordinator records the answer before continuing. No answer leaves the task
 stopped without repeated model calls. This flow is a required owner-test feature
-tracked in [#154](https://github.com/thaynes43/dev-env/issues/154); enforcement and
-verified phone delivery are still unbuilt. See the [budget contract](../.agents/sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md).
+tracked in [#154](https://github.com/thaynes43/dev-env/issues/154); runtime enforcement and
+verified phone delivery remain open. See the [budget contract](../.agents/sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md) and [execution design](../.agents/sagas/distributed-dev-env/designs/002-task-budget-execution.md).
 
 ## 6. Protection from stale repositories
 
