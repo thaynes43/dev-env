@@ -42,8 +42,11 @@ performance pass.
 The accepted [budget requirement](sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md)
 remains mandatory: 60 minutes without evidenced progress or three failures at the
 same unresolved blocker, across agents, pods and resumes. Owned foreground
-executor source is under review in [#162](https://github.com/thaynes43/dev-env/pull/162),
-and a retained operator-side ledger/API is being implemented separately. Both
+executor source merged in [#162](https://github.com/thaynes43/dev-env/pull/162),
+and the retained operator-side ledger/API is reviewed in
+[#163](https://github.com/thaynes43/dev-env/pull/163). Its
+[API design](https://github.com/thaynes43/dev-env/blob/b6f980196417c1735834b5cbc3aadd7df8cf7236/.agents/sagas/distributed-dev-env/designs/003-task-budget-api.md)
+records the protected namespace, exact binding and finite pilot limits. Both
 stay disabled until trustworthy accounting, actual process stop and native
 integration are proven. A successful fake process test is not a native-host
 acceptance result. Native phone delivery and answer provenance still need the

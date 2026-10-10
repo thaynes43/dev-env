@@ -533,7 +533,8 @@ flowchart LR
 The coordinator records the answer before continuing. No answer leaves the task
 stopped without repeated model calls. This flow is a required owner-test feature
 tracked in [#154](https://github.com/thaynes43/dev-env/issues/154); runtime enforcement and
-verified phone delivery remain open. See the [budget contract](../.agents/sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md) and [execution design](../.agents/sagas/distributed-dev-env/designs/002-task-budget-execution.md).
+verified phone delivery remain open. See the [budget contract](../.agents/sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md) and [execution design](../.agents/sagas/distributed-dev-env/designs/002-task-budget-execution.md). The
+[ledger/API contract](https://github.com/thaynes43/dev-env/blob/b6f980196417c1735834b5cbc3aadd7df8cf7236/.agents/sagas/distributed-dev-env/designs/003-task-budget-api.md) records the implementation boundary and stricter pilot limits.
 
 ## 6. Protection from stale repositories
 
