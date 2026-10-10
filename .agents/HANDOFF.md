@@ -7,6 +7,14 @@ the saga. To start building, follow
 
 ## Overnight delivery, 2026-10-10 UTC
 
+**07:52 UTC checkpoint:** source release **2.11.0** is published and signed.
+The v2 operator is deployed, 2/2 Ready with zero restarts. Retained budget
+storage and the isolated native-host admission profile are installed. The
+native fixture remains suspended: this is staged deployment, not a successful
+Codex lifecycle, phone or shared-workspace test. Read the
+[morning test guide](../docs/morning-test-guide.md) for the usable subset and
+the remaining MVP gates.
+
 Tom authorized continued work overnight toward a morning-testable MVP. Codex owns
 implementation, review, delivery and the test guide. Do not wait on the earlier
 hosted-CI or gateway-account question cards for ordinary authorized work.
@@ -35,22 +43,33 @@ The actual read-only check passed for UID1000 over NFS4.2; root mode permits
 write/search in DAC, while server write authorization and quota remain untested.
 A webhook injected an init container without limits; both containers terminated,
 but the capsule did not meet the every-container-limit contract. Preserve that
-deviation and disable injection in a reviewed successor. The separate writable
+deviation and disable injection in a reviewed successor. Its Job, pods, PVC,
+PV and child Kustomization are now verified absent after reviewed inventory
+recovery and retirement in [haynes-ops#3730](https://github.com/thaynes43/haynes-ops/pull/3730)
+and [#3735](https://github.com/thaynes43/haynes-ops/pull/3735). The separate writable
 comparison must pass before selecting storage. Capacity alone is not a permissions, quota or
 performance pass.
 
 The accepted [budget requirement](sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md)
 remains mandatory: 60 minutes without evidenced progress or three failures at the
 same unresolved blocker, across agents, pods and resumes. Owned foreground
-executor source merged in [#162](https://github.com/thaynes43/dev-env/pull/162),
-and the retained operator-side ledger/API is reviewed in
-[#163](https://github.com/thaynes43/dev-env/pull/163). Its
-[API design](https://github.com/thaynes43/dev-env/blob/b6f980196417c1735834b5cbc3aadd7df8cf7236/.agents/sagas/distributed-dev-env/designs/003-task-budget-api.md)
-records the protected namespace, exact binding and finite pilot limits. Both
-stay disabled until trustworthy accounting, actual process stop and native
-integration are proven. A successful fake process test is not a native-host
-acceptance result. Native phone delivery and answer provenance still need the
-owner's real client; repeated parent model polling is not an adapter.
+executor, retained ledger/API, authenticated native readiness, managed-worker
+enforcement and isolated inspector merged in
+[#162](https://github.com/thaynes43/dev-env/pull/162),
+[#163](https://github.com/thaynes43/dev-env/pull/163),
+[#166](https://github.com/thaynes43/dev-env/pull/166),
+[#167](https://github.com/thaynes43/dev-env/pull/167) and
+[#168](https://github.com/thaynes43/dev-env/pull/168).
+The [API design](sagas/distributed-dev-env/designs/003-task-budget-api.md) and
+[isolated profile](sagas/distributed-dev-env/designs/004-isolated-native-lifecycle-fixture.md)
+record the exact binding and pilot limits. Production opt-ins remain off;
+the staged operator admits only the fixed zero-task fixture. Missing provider
+usage is labelled Unknown or estimated and cannot disable time/attempt limits.
+Current managed failure evidence covers nonzero container exit; arbitrary
+native/tool failures, progress provenance, whole-campaign stop and actual phone
+delivery still need acceptance. A successful fake process test is not a
+native-host result. Keep [#154](https://github.com/thaynes43/dev-env/issues/154)
+open until the full requirement passes.
 
 Use the [workflow guide](../docs/workflow-guide.md) for the product and feature
 set. Each further implementation unit needs a finite outcome, deadline and
