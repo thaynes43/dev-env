@@ -32,6 +32,7 @@ type CodexHostOptions struct {
 type CodexHostStatus struct {
 	Code       string `json:"code"`
 	Process    string `json:"process,omitempty"`
+	Phase      string `json:"phase,omitempty"`
 	Connection string `json:"connection,omitempty"`
 	Idle       bool   `json:"idle"`
 }
@@ -119,7 +120,21 @@ func observeCodexHost(ctx context.Context, s Settings, o CodexHostOptions, d cod
 		return unknown, errCodexHostUnknown
 	}
 	if first.State == "Absent" {
-		return CodexHostStatus{Code: "Absent", Process: "Absent"}, nil
+		status := CodexHostStatus{Code: "Absent", Process: "Absent"}
+		saved, err := hostLifecycle(s)
+		if errors.Is(err, os.ErrNotExist) {
+			return status, nil
+		}
+		if err != nil {
+			return unknown, errCodexHostUnknown
+		}
+		// Absence does not complete a retained start/stop intent, including one
+		// written by a previous Pod. Publish only the validated bounded phase.
+		status.Phase = saved.Phase
+		if saved.Phase != "Stopped" {
+			status.Code = "NeedsReview"
+		}
+		return status, nil
 	}
 	if first.State != "Live" || hostVersion(ctx, s, d, s.CodexBin) != nil {
 		return unknown, errCodexHostUnknown
@@ -284,17 +299,23 @@ func runCodexHost(ctx context.Context, s Settings, o CodexHostOptions, report fu
 	}
 	defer release()
 	first, err := d.process(s)
+	startupFailed := false
 	// Exactly one initial absence decision may start native. Unknown first state,
 	// failed/lost startup ACK and all later probes only monitor, never retry start.
 	if err == nil && first.State == "Absent" {
-		_ = startCodexHost(ctx, s, o, d)
+		startupFailed = startCodexHost(ctx, s, o, d) != nil
 	}
 	for {
 		status, err := observeCodexHost(ctx, s, o, d)
 		if err != nil {
 			status = CodexHostStatus{Code: "Unknown"}
 		}
-		if d.preflight(s) == nil && d.sync(s, time.Now()) != nil && err == nil {
+		// A failure before durable intent creation must also remain visible;
+		// monitoring never retries the initial start or publishes raw errors.
+		if startupFailed && status.Code == "Absent" {
+			status.Code = "NeedsReview"
+		}
+		if d.preflight(s) == nil && d.sync(s, time.Now()) != nil && err == nil && status.Process == "Live" {
 			status.Code = "NeedsLogin"
 		}
 		// Broken supervisory stdout is not permission to kill native active chats.

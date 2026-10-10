@@ -316,6 +316,170 @@ func TestCodexHostFailedStartIsNotAutomaticallyRetried(t *testing.T) {
 		t.Fatal("uncertain startup retried")
 	}
 }
+
+func TestCodexHostAbsentObservationRetainsLifecyclePhase(t *testing.T) {
+	for _, phase := range []string{"", "Attempting", "Confirmed", "Stopping", "Stopped"} {
+		name := phase
+		if name == "" {
+			name = "no-history"
+		}
+		t.Run(name, func(t *testing.T) {
+			s, o := hostFixture(t)
+			if phase != "" {
+				live := codexHostProcess{State: "Live", PID: 987654, Identity: codexHostIdentity{BootID: "PRIVATE_BOOT_ID", StartTicks: 123456}}
+				if saveHostLifecycle(s, phase, live) != nil {
+					t.Fatal("retained lifecycle fixture")
+				}
+			}
+			// Retained intent remains binding after the owning Pod is replaced.
+			s.PodUID = "replacement-private-pod"
+			d, calls := hostDeps(t, s, o)
+			d.process = func(Settings) (codexHostProcess, error) { return codexHostProcess{State: "Absent"}, nil }
+			status, err := observeCodexHost(context.Background(), s, o, d)
+			want := "Absent"
+			blocked := phase != "" && phase != "Stopped"
+			if blocked {
+				want = "NeedsReview"
+			}
+			if err != nil || status.Code != want || status.Process != "Absent" || status.Phase != phase || len(*calls) != 0 {
+				t.Fatal("absence lost retained lifecycle or invoked native")
+			}
+			assertCodexHostStatusPrivate(t, status)
+			if !blocked {
+				return
+			}
+			before, err := os.ReadFile(s.statePath("codex-host-start-intent.json"))
+			if err != nil {
+				t.Fatal("retained fixture read")
+			}
+			// A private projection failure must not obscure the startup block.
+			d.sync = func(Settings, time.Time) error { return errors.New("PRIVATE_SYNC_ERROR") }
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			d.wait = func(context.Context) {}
+			reports := 0
+			if runCodexHost(ctx, s, o, func(status CodexHostStatus) error {
+				reports++
+				if status.Code != "NeedsReview" || status.Phase != phase || status.Process != "Absent" {
+					t.Fatal("monitor hid retained startup block")
+				}
+				assertCodexHostStatusPrivate(t, status)
+				if reports == 2 {
+					cancel()
+				}
+				return errors.New("PRIVATE_REPORT_ERROR")
+			}, d) != nil || reports != 2 || len(*calls) != 0 {
+				t.Fatal("monitor retried retained intent or exited on report failure")
+			}
+			after, err := os.ReadFile(s.statePath("codex-host-start-intent.json"))
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatal("monitor changed retained causal intent")
+			}
+		})
+	}
+}
+
+func TestCodexHostInvalidLifecycleObservationIsUnknown(t *testing.T) {
+	for _, mode := range []string{"malformed", "invalid-phase", "unreadable-directory", "nonprivate"} {
+		t.Run(mode, func(t *testing.T) {
+			s, o := hostFixture(t)
+			path := s.statePath("codex-host-start-intent.json")
+			switch mode {
+			case "unreadable-directory":
+				if os.Mkdir(path, 0o700) != nil {
+					t.Fatal("unreadable fixture")
+				}
+			case "invalid-phase":
+				if saveHostLifecycle(s, "PRIVATE_INVALID_PHASE", codexHostProcess{}) != nil {
+					t.Fatal("invalid phase fixture")
+				}
+			case "nonprivate":
+				if saveHostLifecycle(s, "Attempting", codexHostProcess{}) != nil || os.Chmod(path, 0o644) != nil {
+					t.Fatal("nonprivate fixture")
+				}
+			default:
+				writeHostFixture(t, path, "PRIVATE_MALFORMED_RECEIPT")
+			}
+			d, calls := hostDeps(t, s, o)
+			d.process = func(Settings) (codexHostProcess, error) { return codexHostProcess{State: "Absent"}, nil }
+			status, err := observeCodexHost(context.Background(), s, o, d)
+			if !errors.Is(err, errCodexHostUnknown) || status.Code != "Unknown" || status.Phase != "" {
+				t.Fatal("invalid lifecycle inferred routine absence or a phase")
+			}
+			assertCodexHostStatusPrivate(t, status)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			d.wait = func(context.Context) {}
+			if runCodexHost(ctx, s, o, func(status CodexHostStatus) error {
+				cancel()
+				if status.Code != "Unknown" || status.Phase != "" {
+					t.Fatal("monitor hid invalid lifecycle")
+				}
+				assertCodexHostStatusPrivate(t, status)
+				return nil
+			}, d) != nil || len(*calls) != 0 {
+				t.Fatal("invalid lifecycle invoked native or killed monitor")
+			}
+		})
+	}
+}
+
+func TestCodexHostMonitorRetainsInitialStartFailure(t *testing.T) {
+	for _, mode := range []string{"before-intent", "lost-ack"} {
+		t.Run(mode, func(t *testing.T) {
+			s, o := hostFixture(t)
+			d, _ := hostDeps(t, s, o)
+			d.process = func(Settings) (codexHostProcess, error) { return codexHostProcess{State: "Absent"}, nil }
+			starts, versions := 0, 0
+			d.native = func(_ context.Context, _ Settings, _ string, args []string, _ io.Writer) ([]byte, error) {
+				if args[0] == "--version" {
+					versions++
+					if mode == "lost-ack" {
+						return []byte("codex-cli 0.160.1"), nil
+					}
+				} else {
+					starts++
+				}
+				return nil, errors.New("PRIVATE_NATIVE_ERROR")
+			}
+			d.wait = func(context.Context) {}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			reports := 0
+			wantPhase := ""
+			wantStarts := 0
+			if mode == "lost-ack" {
+				wantPhase, wantStarts = "Attempting", 1
+			}
+			if runCodexHost(ctx, s, o, func(status CodexHostStatus) error {
+				reports++
+				if status.Code != "NeedsReview" || status.Phase != wantPhase || status.Process != "Absent" {
+					t.Fatal("initial startup failure became routine absence")
+				}
+				assertCodexHostStatusPrivate(t, status)
+				if reports == 2 {
+					cancel()
+				}
+				return nil
+			}, d) != nil || reports != 2 || starts != wantStarts || versions != 1 {
+				t.Fatal("failed startup retried or raw native failure escaped")
+			}
+		})
+	}
+}
+
+func assertCodexHostStatusPrivate(t *testing.T, status CodexHostStatus) {
+	encoded, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal("status encode")
+	}
+	for _, private := range []string{"PRIVATE", "987654", "123456", "replacement-private-pod", "fixture-workspace", "podUID", "workspaceID", "identity", "pid", "startTicks"} {
+		if bytes.Contains(encoded, []byte(private)) {
+			t.Fatal("private lifecycle or diagnostics leaked into public status")
+		}
+	}
+}
+
 func TestCodexHostPairOutputIsOnlyExplicitCallerAndStopBudget(t *testing.T) {
 	s, o := hostFixture(t)
 	hostLiveConfig(t, s, o)
