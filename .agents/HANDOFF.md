@@ -1,5 +1,37 @@
 # HANDOFF: start here
 
+## Owner scope reset — 2026-10-10, America/New_York
+
+Tom clarified the purpose: upgrades preserve sessions, work spreads across nodes,
+powerful access has guardrails, sessions/context are visible, and model usage/cost
+is attributable. **Share rules, messages, task claims and authorized transcripts,
+memory and handoffs; keep repos and task worktrees per pod.** Bootstrap missing
+repos and fetch safely, with another selected-repo fetch/pin before each new task.
+
+[ADR-003](sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md)
+controls conflicting earlier shared-Git prescriptions. The
+[workflow guide](../docs/workflow-guide.md), [coordination audit](../docs/session-coordination.md)
+and [plan 11](sagas/distributed-dev-env/backlog/11-project-workspaces.md) are the new
+product map. A coordination pilot is distinct from v1 retirement. This reset
+changes no live access, deployment, login or session.
+
+Retire shared-Git issue #130 and unmerged haynes-ops#3737 as superseded; preserve
+receipts and branches. Do not retry their stopped routes or claim a NAS failure.
+The earlier retry cards received owner replies expressing confusion, not bounded
+extension approval. The pending-question language in the historical checkpoint
+below describes that earlier moment only. Native recovery #160 and task budgets
+#154 remain relevant. Preserve the failed native fixture and original ledger.
+
+The source audit found that live TUI messaging is not a durable inbox, current
+log reads need a Ready pod, private reap preserves Git but deletes provider history,
+and unavailable Codex cost can appear as zero. Next delivery decouples catalog/rules
+and history retention from RWX, then builds peer discovery/context, claims/messages
+and truthful usage. Publish no private transcript bodies or authentication state.
+The prior 7–14 hour shared-storage MVP estimate is withdrawn; new units require
+concrete acceptance and bounded checkpoints under the unchanged stall policy.
+
+---
+
 The front door for any agent that opens this repo, in the cluster's dev-env pod or on
 Tom's own machine. Read this page, then [CLAUDE.md](../CLAUDE.md) (the rules), then
 the saga. To start building, follow

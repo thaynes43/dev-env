@@ -5,8 +5,9 @@ Guidance for Claude Code and other agents working in this repository. Codex read
 
 The [workflow guide](docs/workflow-guide.md) gives the high-level feature set,
 working quick start, Codex session model, freshness contract and delivery gates.
-Joint Claude/Codex projects, multiple remote pod links and shared workspaces
-are required; remaining design/client implementation is tracked in
+**Controlling scope: [ADR-003](.agents/sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md).** Agents share rules, coordination
+and authorized live/stopped context. Repositories and task worktrees stay per pod.
+Shared Git/RWX and its storage trial are no longer prerequisites. Delivery is in
 [plan 11](.agents/sagas/distributed-dev-env/backlog/11-project-workspaces.md).
 
 **Start with [`.agents/HANDOFF.md`](.agents/HANDOFF.md).** It gives the current
@@ -17,29 +18,25 @@ can and cannot do outside the cluster.
 
 **dev-env v2**: the distributed version of the in-cluster development environment
 where Tom's AI coding agents (Claude Code, Codex) work. v1 is one big pod in the
-`main` cluster; v2 runs one pod per agent session, created and pruned by an operator
-that agents and humans call through the `agent-run` CLI.
+`main` cluster. V2 has bounded managed session pods and persistent Codex hosts,
+managed through the operator/API. Native threads remain on their actual host;
+only supported dispatch creates a separate worker pod.
 
 This repo will hold the operator, the CLI, the agent container image
 (`ghcr.io/thaynes43/dev-env`) and their CI. The **deploy manifests stay in
 [thaynes43/haynes-ops](https://github.com/thaynes43/haynes-ops)** (GitOps via Flux):
 this repo publishes signed images, haynes-ops pins and deploys them.
 
-**Status: phase 1 built (2026-10-07).** Plan 01 is done: the `AgentSession` CRD,
-the operator's pod and volume reconciler and `/v1` API, agentd, rescue, suspend and
-archive, the minimal keeper, `agent-run` v2, CI, and the agent image `dev-env:2.0.0`
-(KICKOFF B1 to B5, plan 01 steps 1 to 9). The operator and the keeper run in the
-cluster, and the first end-to-end task ran on 2026-10-07. Plan 02 is done under
-Tom's 2026-10-08 correction: acceptance uses the existing in-cluster CLI, and
-external CLI access is optional (Q-17). Plan 07's docs-only approval spike is complete
-(R-03); D-70 withdraws Q-18's earlier premise, with no route selected. D-71 targets
-a guarded replacement for accepted Headlamp tasks before its retirement.
-The v1 capability parity audit is complete (R-04); all twenty gaps block cutover.
-The build sessions follow
-[`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md). v1 keeps running from
-haynes-ops (`kubernetes/main/apps/dev/dev-env/`, `scripts/dev-env/Dockerfile`) until
-v2 proves itself and Tom approves the cutover. The saga:
-[`.agents/sagas/distributed-dev-env/`](.agents/sagas/distributed-dev-env/README.md).
+**Current scope, 2026-10-10:** preserve sessions through upgrades, distribute
+load, guard powerful access, expose live/stopped work and context, and attribute
+model usage/cost. Plans 01/02 provide the tested Claude task/terminal subset.
+Source release 2.11.0 includes budget/native foundations; full Codex coordination,
+history-preserving archive, guarded access and truthful cost reporting remain
+unaccepted. Read the handoff for exact deployed versions and evidence. The
+historical twenty-row audit guides migration; it is not a universal pilot gate.
+V1 stays running until required workflows have replacements and Tom explicitly
+approves retirement. Build sessions follow
+[`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md); deploys remain GitOps.
 
 ## Layout
 

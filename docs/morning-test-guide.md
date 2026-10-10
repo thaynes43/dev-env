@@ -1,16 +1,14 @@
 # Morning test guide — 2026-10-10 UTC
 
-The goal is two stable Codex computer links in different pods, sharing project
-and task files with Claude Code while keeping each host's login, enrollment
-and conversation state private. A task has one writer, fresh pinned source,
-a bounded budget and a recoverable result.
+The updated goal is independent Claude/Codex environments that share rules,
+coordinate tasks and read each other’s authorized live/stopped context. Repos
+and worktrees remain local to each pod. [ADR-003](../.agents/sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md)
+withdraws the shared-Git/storage prerequisite and the old remaining-work estimate.
 
-One real v2 Claude task has passed execution and cleanup. The existing Claude
-task and terminal workflow can be tested now. The full
-shared-project Codex MVP still has open acceptance gates. The overnight work
-released the budget and native-host foundations as **2.11.0** and staged the
-isolated operator profile. It does not yet establish two working Codex links
-or an actionable v2 phone question.
+One real v2 Claude task passed execution and cleanup. The Claude task/terminal
+subset can be tested now. Cross-pod coordination, provider history retention and
+two Codex computer links still require acceptance. Source 2.11.0 provides
+budget/native foundations; it does not establish a working phone or host journey.
 
 ## What to open
 
@@ -30,7 +28,8 @@ flowchart TD
     Owner["Tom: desktop or phone"] --> Coordinator["Claude or Codex coordinator"]
     Coordinator --> API["Operator API: identity, budget and task ownership"]
     API --> Worker["Managed task pod: one writer, finite deadline"]
-    Worker --> Shared["Shared project and task files"]
+    Worker --> Local["Private local repo and task worktree"]
+    Coordinator --> Context["Common rules, task index and authorized history: remaining integration"]
     Coordinator --> Private["Private host enrollment and conversations"]
     Worker --> Result["PR, result or verified rescue"]
     API --> Limit{"Limit reached?"}
@@ -60,8 +59,11 @@ paths no longer exist, use the fresh worktree/build steps in the workflow guide.
 Choose one small Claude task or one local terminal session. Check its reported
 source commit, owner, status and result. For a local session, test attach,
 detach and a message. Suspend it, verify the retained state and rescue result,
-then resume. Reap only after the result or rescue is confirmed; follow cleanup
-until it completes. The guide contains the exact supported commands.
+then resume. Private reap preserves Git rescue but deletes the provider home;
+it does not archive the conversation. Suspension retains the home temporarily, until configured
+`archiveAfter` (default 168 hours). Verify required history retention before
+that deadline. Reap only disposable tests or after separately verifying required
+history retention. The guide contains the exact supported commands.
 
 The overnight read-only Claude smoke finished successfully with two turns
 and exit code 0. Its Pod had no init containers and CPU 2 / memory 4 GiB limits; supported
@@ -70,7 +72,7 @@ and its rescue list was empty. Test rescue explicitly before trusting this
 path with work that must survive archive or transfer.
 
 A Pending pod is a capacity result. Launching another copy does not fix it.
-The v2 phone and shared-project examples are acceptance targets rather than
+The v2 phone and coordination journeys are acceptance targets rather than
 commands to use against disabled features.
 
 ## Overnight results and limits
@@ -82,10 +84,10 @@ commands to use against disabled features.
 | Operator | 2/2 Ready, no injected init or restarts; initial native profile deployed; private-home source fix reviewed | One-shot client failed; native readiness/owned stop remains unverified |
 | Task budgets | Retained ledger/API and owned/managed stop implementation released | Whole-campaign stop, native/tool failure classification, verified progress and phone escalation |
 | Keeper | Fresh independent account login Ready | Live two-host adoption and refresh propagation; separate computer pairing |
-| NFS discovery | Read-only NFS4.2 access as UID 1000; all disposable discovery resources retired | Quiet baseline, bounded writes/Git/locks, remount and recovery |
+| NFS discovery | Read-only NFS4.2 access as UID 1000; disposable resources retired | Historical result; shared-Git trial no longer required |
 | External Ceph | About 109 TiB replica-adjusted free; successful cache publication witnessed | Free capacity is not a directory quota or workload acceptance |
-| Storage observer | Three setup/delivery failures preserved; route stopped | Recorded next decision and complete fresh window with required coverage and tripwires |
-| Shared projects | Catalog, rule and preparation source released | Both-provider rule loading and actual cross-pod workspace ownership |
+| Storage observer | Three setup/delivery failures preserved; route stopped | Historical route; no retry under current scope |
+| Rules/context | Catalog/rule source released | Decouple from RWX; actual rule loading, context retention, claims and messages |
 
 The storage observer stopped after three delivery/setup failures; no complete
 baseline passed. The NFS helper also stopped after three related review failures
@@ -101,22 +103,18 @@ itself prove an entire campaign stopped or that a phone question arrived.
 
 ## Finish the shared-project Codex MVP
 
-These are planning estimates in engineering hours, not provider billing or
-an unattended authorization to retry. Each implementation unit needs its own
-30–60 minute checkpoint and concrete result. Failed gates stop that route.
+This heading is retained for older links; its shared-Git interpretation is
+superseded. The current [workflow roadmap](workflow-guide.md#8-remaining-work-and-the-cutover-gate)
+and [plan 11](../.agents/sagas/distributed-dev-env/backlog/11-project-workspaces.md)
+cover local catalog/rules, session history, authorized discovery, task claims,
+durable messages and both-provider owner acceptance. Native recovery/budgets,
+guarded required access and truthful usage/cost remain explicit work.
 
-| Work remaining | Estimate | Completion evidence |
-|---|---:|---|
-| Select and qualify shared storage | 1–3 hours after a healthy baseline | Finite NFS/Git/lock test, verified stop, remount and rescue; reviewed backend decision |
-| Enable the first two retained Codex hosts | 2–4 hours | Distinct links/private homes, shared read-only project discovery, keeper adoption and refresh |
-| Complete task budget and child-decision integration | 3–5 hours | Actual native failures/progress, campaign stop, durable escalation and owned continuation |
-| Exercise task ownership and provider rules | 1–2 hours | Claude/Codex composed rules, stale-source refusal, one writer and explicit transfer |
-| Owner device acceptance | 20–40 minutes | Pair each computer, resume on the intended host, receive and answer one real phone question |
+The old 7–14 engineering hour estimate included storage work that is no longer
+required. Do not use it as a current forecast or retry authorization. Size each
+new unit against its concrete acceptance contract with a 30–60 minute checkpoint;
+the accepted stall/failure rule continues across pods and agents.
 
-Allow roughly **7–14 engineering hours plus the owner device check** for this
-remaining MVP scope if the storage baseline passes. Some work can overlap.
-Storage health failures or provider behavior can change that estimate and
-must produce a bounded next decision. Full capability parity, the management
-console, image drains and v1 cutover are additional work; they are not included
-in this MVP estimate. The detailed [feature table](workflow-guide.md#2-feature-set-and-delivery-state)
-keeps that larger scope visible.
+Full v1 retirement still needs required workflow migration and explicit owner
+approval. Frontend, safe image drains and local LLMs are separately visible in the
+[feature table](workflow-guide.md#2-feature-set-and-delivery-state).

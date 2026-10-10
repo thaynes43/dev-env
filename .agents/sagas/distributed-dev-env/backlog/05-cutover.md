@@ -1,5 +1,12 @@
 # 05: cutover from v1
 
+**Scope correction, 2026-10-10:** [ADR-003](../adrs/003-session-coordination-private-repositories.md)
+separates a testable coordination pilot from retiring v1. Required owner workflows
+need guarded usable replacements; the historical twenty-row inventory is migration
+planning, not a universal pilot gate. Before retiring old homes, preserve and verify
+readable transcripts, memory and handoffs as well as Git work. Approval of this
+scope does not approve a cutover or remove v1 access.
+
 **Status:** backlog
 **Depends on:** 03, 04, 07 (verified effective v1 parity, including accepted
 Headlamp-equivalent tasks, before retiring v1; restricted break-glass alone is not

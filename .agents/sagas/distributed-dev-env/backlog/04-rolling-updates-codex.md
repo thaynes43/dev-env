@@ -1,6 +1,6 @@
 # 04: rolling updates and Codex
 
-**Status:** multiple-host/shared-file topology accepted in ADR-002/Q-21;
+**Status:** multiple hosts with common rules/context and private repos under ADR-003;
 implementation and actual client/refresh acceptance remain backlog
 **Depends on:** 02; Q-03 (drain on idle, then resume: decided 2026-10-06); spikes
 S-3 for the first coordinator route; S-4 for later native forwarding
@@ -9,9 +9,9 @@ S-3 for the first coordinator route; S-4 for later native forwarding
 ## Goal
 
 A new image or config reaches running sessions without cutting a busy turn, and Codex
-gets multiple stable remote pod links that reach the same project/workspace files,
-with private enrollment/runtime state and one refresh owner. The earlier one-hub
-plan is superseded as the sole topology by owner requirement R7.
+gets multiple stable remote pod links, common rules and authorized session context,
+with private repos/worktrees, enrollment/runtime state and one refresh owner.
+[ADR-003](../adrs/003-session-coordination-private-repositories.md) supersedes shared-Git dependencies.
 
 ## Scope
 
@@ -25,10 +25,10 @@ plan is superseded as the sole topology by owner requirement R7.
   `.renovate/autoMerge.json5`: the v2 package gets the normal own-image rule; the v1
   carve-out stays until cutover).
 - **Codex remote hosts (D-74/D-80):** at least two logical hosts/pods, each owning its
-  private enrollment/daemon state. Phone links survive host replacement and both
-  see the same project/workspace data. A single replacement hub is insufficient.
+  private enrollment/daemon state. Phone links survive supported host replacement and both
+  discover the same rules, tasks and permitted context. Git remains local to each pod.
   The [first route](../../../../docs/codex-coordinator-hosts.md) uses two GitOps
-  `OnDelete` StatefulSets with retained private homes and read-only shared files.
+  `OnDelete` StatefulSets with retained private homes and per-host repo caches.
   Native app threads stay on their host and request writable Claude/Codex task
   pods through a dedicated child-scoped coordinator API identity. Implement and
   prove pinned startup, independent pairing and idle replacement before use.
@@ -57,14 +57,15 @@ plan is superseded as the sole topology by owner requirement R7.
 3. Add managed Codex launch/JSONL identity/resume and access-only admission. Do not
    replay an unconfirmed initial prompt. Bind the accepted catalog/rule snapshot.
 4. Add retained native host supervision/version/updater checks and authenticated
-   pairing/status. Deploy the two bounded worker hosts only after storage gates.
+   pairing/status. Deploy the two bounded worker hosts after native lifecycle,
+   credential adoption and retained-state prerequisites; shared-Git trials are not gates.
 5. Prove real link, project/task rules, refresh, idle one-host replacement and
    native phone-prompt/answer acceptance. Publish the exact quick-start commands.
 
 Automatic image drains and S-4 forwarding continue under the broader plan after
-this route; an `OnDelete` declaration alone is not drain acceptance. Shared task
-reap also needs [D-81 private-home retention](../../../../docs/shared-private-home-retention.md)
-and its live preservation test in plan 11.
+this route; an `OnDelete` declaration alone is not drain acceptance. Every provider-home archive needs retained history independent of Git topology.
+The [old shared-only retention contract](../../../../docs/shared-private-home-retention.md)
+is reusable source, not acceptance of the new private-session requirement.
 
 ## Acceptance
 
@@ -77,15 +78,15 @@ is already enabled.
 
 - An image bump PR in haynes-ops reaches every idle session within an hour of
   merge; each resumes its conversation; no busy session restarts.
-- Two independently enrolled Codex pods have usable phone links; shared project
-  and task files resolve through consistent Git paths; a one-host drain leaves
+- Two independently enrolled Codex pods have usable phone links; common rules,
+  task discovery and stopped-history reads work with independent Git paths; a one-host drain leaves
   both links usable without competing enrollment or refresh state.
 - A keeper refresh reaches a running Codex session and all remote hosts without
   a restart, and no pod calls the refresh endpoint.
 - `requirements.toml` holds in every pod that runs Codex (approval `never`, sandbox
   `danger-full-access`).
 
-Project catalog, common rules, task ownership, canonical health and shared
-workspace acceptance live in [plan 11](11-project-workspaces.md). D-15/D-22 need
-an explicit storage revision; do not share writable provider homes. No new
+Project catalog, common rules, task coordination, history retention and local
+repo freshness live in [plan 11](11-project-workspaces.md). No shared Git rollout
+is needed; do not share writable provider homes. No new
 management UI or v1/auth migration is selected by this plan update.

@@ -1,212 +1,112 @@
-# 11: shared projects, workspace freshness and remote pods
+# Plan 11: common rules, session coordination and fresh per-pod repositories
 
-**Status:** R1–R7 and ADR-002 accepted; two feasibility attempts and the subsequent
-[cost diagnostic](../../../../docs/trials/2026-10-09-cephfs-cost-result.md) are
-incomplete and cleaned up. Shared Git/storage acceptance is unproved.
-[Issue #130](https://github.com/thaynes43/dev-env/issues/130) holds the slow peer
-Git check, evidence and next bounded diagnostic proposal. Workspace/client
-implementation and normal rollout remain gated. The separate v2 fresh-start bug fix shipped in agent
-2.9.1 (#124/#123, haynes-ops #3636); it does not implement this project contract.
-The [Accepted ADR-002](../adrs/002-shared-project-workspaces.md) draws the concrete
-topology and storage choice, with trial and normal-rollout gates.
-**Depends on:** plan 04 revision for Codex remote hosts/refresh; ratified ADR-002
-superseding ADR-001's Storage/C-09 decisions and explicit D-15/D-22 revision for
-shared Git/task files. R2 supersedes Q-20; there is no
-remaining app-choice gate.
-**Delivery gate:** prove the supported user journeys before advertising them.
-No v1 or active session restart is authorized here.
+**Status:** scope corrected by the owner on 2026-10-10, America/New_York;
+implementation and real-client acceptance remain open.
+**Governing decision:** [ADR-003](../adrs/003-session-coordination-private-repositories.md).
+**Requirements:** [owner's five outcomes](../requirements/2026-10-10-owner-scope.md).
 
-## Goal and authoritative requirements
+This plan replaces the mandatory shared-Git/RWX plan. Reuse useful catalog,
+rule, freshness and retention code; do not enable old workspace opt-ins merely
+to obtain those capabilities. Prior storage trials and their stopped routes
+remain historical. No new backend selection or storage benchmark is a prerequisite.
 
-The [owner requirement](../requirements/2026-10-09-project-roots.md) defines one
-project concept for both Claude Code and Codex. Stable roots live outside the
-swept task directory. Multiple Codex remote links span pods and reach the same
-workspace. Keep one task writer and one rotating refresh owner; common files do
-not require common agent runtime/auth state.
+## Goal
 
-| Requirement | Outcome |
-|---|---|
-| R1 | GitOps catalog declares project/repo/default/rules; boot/sync makes missing roots; removal reports rather than deletes; add is one user operation |
-| R2 | Both agents open the same project/repo map; declared Codex trust and Claude multi-repo scope; launcher accepts `--project` |
-| R3 | One project-rule source renders to both providers |
-| R4 | Project rules reach task worktrees alongside repository rules; actual session loading is tested |
-| R5 | Roots persist and refresh cleanly at boot/daily; task sweep stays under `~/work` |
-| R6 | Canonical health is checked; automatic repair requires proof that nothing is lost |
-| R7 | Multiple independently addressable Codex pod links share project/workspace files |
+Claude and Codex agents on different pods load common rules, discover each
+other's work, communicate, avoid duplicate task claims and read authorized live
+or stopped-session context. Each implements in its own fresh task worktree.
 
-Read the [workflow guide](../../../../docs/workflow-guide.md#start-here-how-you-would-use-it)
-for the owner journeys and rendered diagrams. D-74 recorded the target change;
-Q-21/D-75 now accept ADR-002 and the bounded existing-CephFS trial. The primary
-management UI and credential migration remain unselected.
+## Reusable source and gaps
 
-## Verified baseline, 2026-10-09
+- Private clone/worktree preparation already fetches and pins a base commit.
+  Full catalog preparation at each pod's startup is not delivered.
+- Project catalog and provider rule composition are built, but their current
+  admission/preparation depends on the old shared workspace identity. Decouple it.
+- CLI/API list, show, live TUI messages and log tails exist. These do not provide
+  a complete native-thread directory, durable offline messages or stopped-history
+  reading.
+- Claude shared memory support exists. Provider transcript indexing/export and
+  authorized peer-context access remain missing.
+- Normal private-session reap deletes the home after Git-only rescue. The newer
+  retained-home receipt is gated on shared tasks. Preserve provider history
+  independently of repository topology before advertising archive/history parity.
 
-- Manual detached anchors exist under `/home/dev/codex`, including the three-repo
-  sigo-alumni project. Canonical common Git directories are under `/home/dev/repos`;
-  task worktrees are under `/home/dev/work`.
-- These paths and the one Codex daemon state currently share v1's ext4 RWO home
-  PVC. Sharing only anchor checkouts would omit linked Git dependencies.
-- Haynes-ops #3633 is open/unmerged; its mounted instructions are not a catalog,
-  sync command, trust renderer or health checker. Mounted-resource changes follow
-  the existing held-draft/natural-break rule.
-- V1 and the deployed v2 launcher still use `--repo`. Source #150 accepts task-only
-  `--project`; #152 resolves it through the explicitly enabled accepted catalog
-  and shared template, snapshots rules, and supports managed Codex execution.
-  Missing configuration refuses before creating a Session. These source routes
-  are not deployed/accepted; Codex v2 creation remains disabled.
-- Project rules are not bound to both agents or propagated to flat task worktrees;
-  these anchors have no generated Codex trust entries.
-- The sweeper deletes eligible directories only under `~/work`; it also runs
-  repository-wide `git worktree prune`. Protecting root directories alone does
-  not protect registration if an anchor is temporarily missing/unmounted.
-- Local `/proc`/PID checks cannot prove another pod's session is dead. A clean
-  anchor can have active cwd users; cleanliness is not an ownership signal.
-- The supplied stale-index symptoms were historical, not reproduced in the two
-  named repos at this audit. Behind/detached/index failures remain required tests.
-  Comparisons using cached origin refs are not fresh source evidence.
+The [coordination contract](../../../../docs/session-coordination.md) records
+exact source evidence and the new read/mutation boundaries.
 
-## Design to complete before implementation
+## Delivery units
 
-1. Draw and review project open, task start, second remote host, resume/transfer,
-   phone question, status/link discovery, finish/suspend and maintenance journeys.
-   Keep operator API/controller distinct from a coordinator agent role. D-37's
-   console is planned; no additional requester-agent service exists today.
-2. **D-79 primitives and managed-task source merged; runtime pending:** see the
-   [catalog and task-rule contract](../../../../docs/shared-project-catalog.md).
-   Implement catalog reconciliation and `project add` through the normal GitOps
-   branch/PR/Flux workflow, with one authoritative list and no undeclared-root
-   deletion. Catalog updates must not restart active hosts to reload declarations.
-3. **Decision complete: Accepted ADR-002** supersedes ADR-001's affected Storage/
-   C-09 and D-15/D-22 assumptions. Preserve both accepted records. Deliver shared
-   project/reference/task mounts with identical absolute Git paths in every pod,
-   private provider homes, enrollment/socket state and appropriate cache isolation.
-   The bounded storage trial is a feasibility check; normal rollout still needs
-   acceptance. Today's per-session RWO homes are not the shared workspace.
-4. Implement D-80's [two persistent coordinator hosts](../../../../docs/codex-coordinator-hosts.md),
-   each with private enrollment surviving idle replacement and read-only shared
-   files. Use a dedicated child-scoped API identity to request managed Claude/
-   Codex executors. Native app threads remain host-local; S-4 forwarding is later
-   work. Preserve one keeper refresh owner and prove the pinned Linux CLI route.
-5. Bind both providers to each project: generated Codex trust, Claude repo scope,
-   one rule source, and a reliable task rule propagation mechanism. R4's nested
-   `.work` option conflicts with R5's explicit sweep boundary; prefer a project
-   pointer/composed provider documents or verified launch injection with flat
-   `~/work` tasks. Nested directory ancestry alone cannot prove Git-root rules
-   loading. Preserve repository instructions and record the project-rule revision.
-6. Serialize reference mutations by common Git directory across pods: sync,
-   initialization, fetch/ref resolution, anchor update, worktree creation and prune.
-   Fetch successfully and pin the base SHA before a new implementation prompt.
-   Protect managed anchor registration during missing mounts; test cross-node
-   locking rather than assuming local `flock`/PID behavior is sufficient.
-7. Define task writer ownership/fencing and explicit host handoff. Existing
-   worktree/index/WIP and conversation identity are preserved on resume. Sharing
-   files does not automatically share conversations or authorize simultaneous
-   edits. All app/remote/CLI starts use preflight or remain coordinator-only.
-8. Implement boot/daily canonical health and conservative R6 repair: fresh pinned
-   target; canonical identity; no conflicts/in-progress operations; index matches
-   a commit reachable from fetched remote history; files match index; no untracked
-   files at all, including ignored files; local-only HEAD/default commits and
-   other worktrees' branches remain recoverable. Recheck under ownership/lock and
-   retain a repair receipt. Unsafe states report and preserve, not broad hard reset.
-9. Implement root refresh/removal reporting, task-only rescue/sweep and protection
-   of live sessions on other pods. Before integration, fetch the target and inspect
-   the actual diff; relevant review/CI belongs to the current PR head.
-10. Verify native owner-question delivery and answer round-trip on each phone path.
-    A question recorded in DESIGN or a status stream is not delivery. Ask one
-    verified, concrete decision at a time; keep privileged approvals under Q-16.
-11. Update quick start and HANDOFF with actual acceptance/deployment evidence.
-    V1 mounted-resource changes remain held drafts because they bounce the pod.
+1. **Per-pod catalog and rules.** Clone missing declared repos, refresh clean
+   reference views, materialize permanent local project roots and compose both
+   providers' instructions in task worktrees. Preserve dirty/undeclared roots.
+   Record catalog/rule revisions; apply updates without rolling busy sessions.
+2. **Session identity and retained history.** Index managed sessions and provider
+   conversations with actual execution state. Preserve transcript/memory/handoff
+   locators when the executor stops and when a session is archived. No home
+   deletion until the required retained context is verified.
+3. **Discovery and context reads.** Provide authorized fleet-wide metadata and
+   bounded history/memory reads. Reading a stopped session must work without a
+   Ready source pod or new provider/model turn. Do not export credentials or
+   enrollment state. Keep mutation rights separate from peer read rights.
+4. **Task claims and durable messages.** Atomically claim an explicit logical
+   task; expose its repo/issue/branch, owner, current activity and related sessions.
+   Attribute messages and preserve an offline inbox and acknowledgements. Permit
+   assistance/delegation without creating a second task owner.
+5. **Handoff and recovery.** Verify the old executor stopped before ownership
+   transfer. Restore commits or rescued WIP into the recipient's local worktree
+   and give it the retained transcript/handoff context. Preserve uncertainty;
+   a stale heartbeat is not stop proof. Exact native conversation import is a
+   separate supported-provider test.
+6. **Owner workflow.** Demonstrate both providers on distinct limited pods with
+   current source/rules, peer discovery/message, stopped-history read, controlled
+   transfer and preservation through operator upgrade. Publish actual commands
+   and limits before claiming the pilot usable.
 
 ## Acceptance
 
-### Source delivery units
+- Two pods have independent Git administrative directories and task worktrees.
+  Each new task records a successful fetch and exact immutable base commit.
+- Both providers load the same declared global/project rules plus native repo
+  instructions at project root and task path; file presence alone is not proof.
+- A second agent sees an existing claim and assists or takes different work.
+  Concurrent claims for the same explicit task return the existing owner.
+- A message to a stopped session is durably recorded and acknowledged on a
+  supported later delivery/read; it is not silently injected as a duplicate prompt.
+- An authorized peer reads a stopped session's transcript, memory and handoff
+  without resuming it. Unrelated or privileged state is refused.
+- Archive retains those artifacts and a discoverable session record. Git-only
+  rescue and a deleted PVC are insufficient evidence.
+- Handoff preserves WIP and budget history, proves old-writer stop and starts a
+  fresh recipient worktree with explicit source/rescue provenance.
+- Operator updates preserve active pod identities. Agent replacement occurs at
+  a safe boundary with retained state, not as a consequence of rule refresh.
+- Missing provider usage/cost remains Unknown. The 60-minute stall/three-failure
+  default carries across pods and children.
 
-D-77 divides the implementation while runtime acceptance remains gated:
+Each implementation unit gets an outcome, deadline, checkpoint and proof. No
+CPU burners, load tools or wide test loops; bounded tests under `nice -n 19`.
+Every admitted cluster container, including init containers, needs resource limits.
 
-1. **Source merged #135 (`316c03c`):** disabled shared mounts/identity, common Git locks, durable writer records and
-   owned-task rescue. Old private sessions retain their behavior. This initial
-   core refuses post-launch shared rescue until the next unit supplies stop proof.
-2. **Source merged #140 (`7b3ce4c`):** shared-only supervisor stop/preserve and a distinct bounded hold-rescue pod,
-   with controller proof of the exact old executor's genuine termination before
-   any cleanup. Missing/deleted/partitioned owners remain refused.
-3. **D-81 implemented in source; runtime acceptance pending:** the
-   [retained-private-home receipt and detach](../../../../docs/shared-private-home-retention.md)
-   after verified rescue and both-pod absence, before Session finalization. This
-   keeps private provider state without enabling automatic home destruction.
-4. **Catalog source merged #145, #150 and #152:** primitives, accepted-catalog
-   authority, project CLI, server snapshots and both-provider task injection.
-   D-82 defines the disabled model-free preparation Job, its dedicated read tier,
-   retained operation home and trusted empty-storage initializer. Its
-   [runner guide](../../../../docs/project-sync-runner.md) supplies the production
-   command; deployment, boot/daily scheduling, one-operation add and actual
-   both-provider project/repo rule loading remain pending.
-5. **Auth source merged #138/#143/#148; scoped managed tasks merged #152:**
-   keeper-only fresh auth corrections deployed through haynes-ops #3687. A fresh
-   device challenge was presented, then expired without adoption. Group absence,
-   staging cleanup and reservation clearance passed; auth remains `NeedsLogin`.
-   Its pending owner prompt has an expired code; a new ceremony needs the owner
-   available. Managed
-   Codex sessions and remote hosts remain disabled. Complete keeper-owned fresh Codex
-   login/refresh/reload, D-80's scoped coordinator class,
-   managed Codex launch/resume and two retained remote hosts;
-   explicit transfer follows the proven stop contract.
-6. Complete storage, client, phone, lifecycle and cleanup acceptance for the
-   [owner test milestone](../../../handoffs/2026-10-09-testable-v2.md).
+## Historical code and migration
 
-The template/session feature stays off until its relevant source, deployment and
-acceptance gates pass. Source units do not close the checks below by themselves.
+Shared workspace/stop/private-home source (#135/#140/#147), catalog and sync
+(#145/#150/#153), auth/scoped tasks (#138/#143/#148/#152), child decisions (#155)
+and budget/native source (#162/#163/#166/#167/#168/#170) are inventory, not proof
+of this corrected workflow. Keep auth, ownership and preservation controls;
+adapt useful pieces and retire unneeded gates through reviewed changes.
 
-- [x] ADR-002 explicitly supersedes ADR-001's affected storage/cloning decisions;
-      Tom ratified it through structured Q-21 before workspace implementation.
-- [ ] Empty-PVC boot produces every declared project with the correct repositories;
-      sync is idempotent; undeclared roots are reported and never deleted.
-- [ ] `project add` declares and materializes through GitOps as one user workflow;
-      catalog updates preserve all active hosts/sessions.
-- [ ] Claude and Codex open the same multi-repo project, see all intended repos,
-      trust/scope settings, and identical project rules.
-- [ ] Both real agents load project plus repo rules from a task worktree; prove
-      actual instruction loading, not only file presence. Flat sweep paths remain.
-- [ ] A root idle thirty days survives task cleanup and refreshes to the declared
-      default when safe; a dirty root is reported and left intact.
-- [ ] Canonical wrong branch, detached HEAD, stale index, dirty files and behind
-      states are reported. Safe fixtures repair; local-only commits, ignored-file
-      collisions, conflicts and active owners are refused/preserved.
-- [ ] Two simultaneous Codex remote links in different pods reach the same roots,
-      common Git metadata and task files, with distinct enrollment/daemon state.
-- [ ] Keeper refresh/reload and one-host replacement preserve both links without
-      competing refresh calls or live credential copying.
-- [ ] Cross-pod concurrent sync/task starts serialize by Git common directory and
-      record immutable start SHAs, fetch times, rules revisions and task owners.
-- [ ] Failed fresh fetch launches no task; explicit historical restore stays
-      distinguishable from fresh source. Offline resume preserves WIP/Git state.
-- [ ] Task transfer fences the previous writer; peer cleanup never reaps live work;
-      missing shared mounts cannot prune permanent anchor registration.
-- [ ] App/remote/CLI/delegation starts each use verified preflight or a documented
-      coordinator-only route; cached primary project HEAD cannot select new source.
-- [ ] Native phone decision prompt and answer round-trip works for the supported
-      Claude/Codex paths; logs/doc questions do not satisfy this check.
-- [ ] [Task-budget enforcement](../requirements/2026-10-09-task-budgets.md)
-      stops at 60 minutes without progress or three failed attempts at the same
-      blocker, preserves cumulative child/agent/pod/resume history and WIP,
-      and delivers one owner phone question before a bounded continuation.
-      Missing answers and delivery failure cannot trigger model polling.
-- [ ] Current-source integration, rescue/restore, cleanup and no-active-restart
-      behavior pass before this workflow or v2 cutover is called complete.
+V1 remains available. This plan authorizes no v1 bounce, cutover, credential
+copying or storage retry. Eventual frontend and local LLM execution remain
+visible in the owner outcome map, not prerequisites for every private Git task.
 
-## Checks and sources
+## Durable implementation tracking
 
-No CPU burners, stress tools, busy loops or wide/looped tests on shared nodes.
-Use bounded Git/fake-provider fixtures. Go checks use `nice -n 19`, GOMAXPROCS=2,
-`-p 2`, one suite at a time, at most two compiling agents. Every cluster fixture
-container, including injected init containers, must have CPU limits.
+- [#173](https://github.com/thaynes43/dev-env/issues/173): independent catalog/rules and local repo startup.
+- [#174](https://github.com/thaynes43/dev-env/issues/174): retained session directory and authorized live/stopped context.
+- [#175](https://github.com/thaynes43/dev-env/issues/175): cross-parent task claims and durable messages.
+- [#176](https://github.com/thaynes43/dev-env/issues/176): cost Unknown/provenance and model attribution.
+- [#154](https://github.com/thaynes43/dev-env/issues/154) and [#160](https://github.com/thaynes43/dev-env/issues/160): task budgets and interrupted native recovery.
 
-- [Owner requirements R1–R7](../requirements/2026-10-09-project-roots.md)
-- [Workflow guide](../../../../docs/workflow-guide.md)
-- [DESIGN-001 6.3/6.6, D-74](../designs/001-dev-env-v2.md#63-codex)
-- [Plan 04](04-rolling-updates-codex.md)
-- V1 GitOps launcher: haynes-ops `kubernetes/main/apps/dev/dev-env/app/resources/agent-run.sh`
-- V2: `internal/agentd/clone.go`, `internal/agentd/render.go`,
-  `internal/apiserver/apiv1/types.go`, `internal/apiserver/validate.go`
-- [Official instruction discovery](https://learn.chatgpt.com/docs/agent-configuration/agents-md),
-  [project behavior](https://learn.chatgpt.com/docs/projects),
-  [remote connections](https://learn.chatgpt.com/docs/remote-connections)
+[Issue #91](https://github.com/thaynes43/dev-env/issues/91) remains the resume index.
+Each parent issue must be delivered through finite slices with its own checkpoint;
+its size does not authorize an unbounded investigation.

@@ -1,5 +1,10 @@
 # Plan 12: owned native host executor source seam
 
+**2026-10-10 scope:** [ADR-003](../adrs/003-session-coordination-private-repositories.md)
+removes shared Git as a dependency. Native ownership, stop evidence, interrupted
+recovery and budgets remain required for their execution path. Preserve provider
+history independently of repository topology; do not revive the failed fixture.
+
 Technical source contract for D-84, #154 and #160. The root-authored
 [task budget execution design](../designs/002-task-budget-execution.md) records the
 conservative campaign/host scope and remaining owner acceptance. The isolated

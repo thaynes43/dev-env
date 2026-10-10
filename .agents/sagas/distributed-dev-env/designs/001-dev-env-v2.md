@@ -9,15 +9,19 @@
   section 15).
   Research notes [R-01](../research/R-01-summoned-agents-audit.md) and
   [R-02](../research/R-02-remote-control-identity.md) are folded in.
-- **Last updated:** 2026-10-09
+- **Last updated:** 2026-10-10
 - **Governed by:** [ADR-001](../adrs/001-distributed-dev-env.md) (Accepted 2026-10-06)
 - **Saga:** [README](../README.md)
 
-**2026-10-09 requirement update:** [R1–R7](../requirements/2026-10-09-project-roots.md)
-and D-74 require joint Claude/Codex projects, multiple remote pod links and shared
-workspace files. The single-hub/private-Git sections below record the earlier
-accepted/current implementation and need explicit revision before this new
-workflow is built. Private agent state and one refresh owner remain required.
+**2026-10-10 controlling scope correction (D-85):**
+[ADR-003](../adrs/003-session-coordination-private-repositories.md) and
+[the owner scope](../requirements/2026-10-10-owner-scope.md) supersede mandatory
+shared Git/RWX and its storage trial. Share rules, messages, task ownership and
+authorized live/stopped transcripts/memory; keep local repos/worktrees per pod.
+The five product outcomes and pilot/migration distinction control conflicts with
+D-74/D-75/D-77/D-79/D-80/D-81/D-82 and historical sections below. Existing credential
+ownership, stop/retention proof and budget limits remain. No new runtime access or
+rollout follows. Current delivery is [plan 11](../backlog/11-project-workspaces.md).
 
 Decisions settled in this design carry a `D-NN` id. Questions only Tom can answer
 carry a `Q-NN` id and are listed in full in [section 15](#15-open-questions). The
@@ -4988,3 +4992,4 @@ blocks only the step it names.
 | D-82 | Disabled fixed model-free project Job, dedicated namespace GET/named-catalog read tier and retained operation home; exact live actor/original deadline, trusted empty-storage initializer and no uncertain replay. | 6.6, docs/project-sync-runner.md |
 | D-83 | Default-off private child questions, live direct-parent UID-fenced answers with operator-owned identity/content digest authority, exact native UUID continuation with genuine owned Wait/group-absence receipt and one-use same-writer consumption; local transport acknowledgment only. | 6.8, docs/managed-child-decisions.md |
 | D-84 | Q-23: 60 minutes without progress or three failed attempts at the same blocker; durable parent/child budget history, actual stop and preserved ownership, one native phone escalation and explicit bounded continuation. Implementation #154 remains required. | 6.8, requirements/2026-10-09-task-budgets.md |
+| D-85 | Owner scope correction: rules/context/coordination shared; repos/worktrees per pod; five outcomes and bounded pilot before full migration. Supersedes mandatory shared Git/RWX and trials; no runtime authority change. | ADR-003, plan 11 |

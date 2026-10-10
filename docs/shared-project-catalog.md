@@ -1,5 +1,12 @@
 # Shared projects and task rules
 
+**Historical shared-workspace source contract, superseded in scope 2026-10-10.**
+[ADR-003](../.agents/sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md)
+requires common rules/context and per-pod repos/worktrees. Reuse relevant source,
+but decouple catalog/rules and provider-home retention from RWX. Shared-only gates,
+mounts and deployment examples below are not the current rollout instructions.
+Current delivery is [plan 11](../.agents/sagas/distributed-dev-env/backlog/11-project-workspaces.md).
+
 **Source contract for the first v2 test; live acceptance is pending.** A project
 is a permanent folder that both Claude Code and Codex can
 open. A task is a separately owned worktree created from freshly fetched source.

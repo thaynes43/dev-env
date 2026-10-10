@@ -1,5 +1,11 @@
 # Owner requirements: shared projects and Codex remote pods
 
+**Historical requirement interpretation.** The owner clarified on 2026-10-10
+that agents need common rules, communication and prior context, rather than shared
+Git files. [Current owner scope](2026-10-10-owner-scope.md) and
+[ADR-003](../adrs/003-session-coordination-private-repositories.md) supersede conflicting
+R1–R7 storage/path prescriptions below. Preserve the original record for provenance.
+
 Received 2026-10-09 America/New_York. R1–R6 below preserve Tom's supplied
 requirement text. They supersede the earlier Q-20 app-choice premise: the project
 concept must serve both Claude Code and Codex.
