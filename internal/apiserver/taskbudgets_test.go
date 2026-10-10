@@ -9,6 +9,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -216,6 +217,64 @@ func TestBudgetAPIChildReservationIsIdempotentAndShared(t *testing.T) {
 	l, err = f.srv.TaskBudgets.Observe(context.Background(), b)
 	if err != nil || l.EffortMilliseconds != 60000 {
 		t.Fatal("child effort omitted", err)
+	}
+}
+
+func TestBudgetAPIChildNameCollisionHasOneReservation(t *testing.T) {
+	f, b := budgetFixture(t)
+	bindCatalogFixture(t, f)
+	base := generatedName("alias", f.now)
+	if err := f.c.Create(context.Background(), &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: base}}); err != nil {
+		t.Fatal(err)
+	}
+	w := f.do(http.MethodPost, apiv1.SessionsPath, tokCoordinator, coordinatorTask())
+	if w.Code != http.StatusCreated {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	created := decode[apiv1.Session](t, w)
+	if created.Name != base+"-2" {
+		t.Fatal("fixture did not force name collision", created.Name)
+	}
+	l, _, err := f.srv.TaskBudgets.Store.Read(context.Background(), b.TaskUID)
+	if err != nil || len(l.Workers) != 1 || len(l.Events) != 1 || f.session(created.Name).Annotations[TaskBudgetWorkerAnnotation] != l.Workers[0].ID {
+		t.Fatal("collision charged a phantom worker or lost stable dispatch binding", err)
+	}
+	f.now = f.now.Add(time.Minute)
+	l, err = f.srv.TaskBudgets.Observe(context.Background(), b)
+	if err != nil || l.EffortMilliseconds != 60000 {
+		t.Fatal("name collision inflated effort", err, l.EffortMilliseconds)
+	}
+}
+
+func TestBudgetAPIUnknownDispatchCannotReplayOrReuseFinishedKey(t *testing.T) {
+	f, b := budgetFixture(t)
+	bindCatalogFixture(t, f)
+	r := coordinatorTask()
+	r.IdempotencyKey = "retained-dispatch"
+	w := f.do(http.MethodPost, apiv1.SessionsPath, tokCoordinator, r)
+	if w.Code != http.StatusCreated {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	created := decode[apiv1.Session](t, w)
+	sess := f.session(created.Name)
+	sess.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+	if err := f.c.Update(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+	w = f.do(http.MethodPost, apiv1.SessionsPath, tokCoordinator, r)
+	if w.Code != http.StatusOK || decode[apiv1.Session](t, w).Name != created.Name {
+		t.Fatal("finished request silently relaunched", w.Code, w.Body.String())
+	}
+	if err := f.c.Delete(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+	w = f.do(http.MethodPost, apiv1.SessionsPath, tokCoordinator, r)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatal("unknown prior dispatch replayed", w.Code, w.Body.String())
+	}
+	l, _, err := f.srv.TaskBudgets.Store.Read(context.Background(), b.TaskUID)
+	if err != nil || len(l.Workers) != 1 || len(l.Events) != 1 {
+		t.Fatal("unknown replay discarded reservation", err)
 	}
 }
 

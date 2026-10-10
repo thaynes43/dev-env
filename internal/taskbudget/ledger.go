@@ -278,12 +278,10 @@ func validEvent(e apiv1.TaskBudgetEvent) bool {
 		return identifier.MatchString(e.AttemptID) && identifier.MatchString(e.BlockerID) && validEvidence(e.Evidence)
 	case "worker-start":
 		return identifier.MatchString(e.WorkerID)
-	case "progress", "resolved", "worker-stop", "notification-delivered":
+	case "progress", "resolved", "worker-stop", "notification-delivered", "notification-failed":
 		return validEvidence(e.Evidence) &&
 			(e.Kind != "resolved" || identifier.MatchString(e.BlockerID)) &&
 			(e.Kind != "worker-stop" || identifier.MatchString(e.WorkerID))
-	case "notification-failed":
-		return true
 	}
 	return false
 }
@@ -318,7 +316,7 @@ func (s *Service) Record(ctx context.Context, e apiv1.TaskBudgetEvent) (*Ledger,
 		if e.Kind == "worker-start" && s.Validator == nil {
 			return ErrUnavailable
 		}
-		if e.Kind == "failure" || e.Kind == "progress" || e.Kind == "resolved" || e.Kind == "worker-stop" || e.Kind == "notification-delivered" {
+		if e.Kind == "failure" || e.Kind == "progress" || e.Kind == "resolved" || e.Kind == "worker-stop" || e.Kind == "notification-delivered" || e.Kind == "notification-failed" {
 			if s.Validator == nil {
 				return ErrUnavailable
 			}
@@ -357,7 +355,11 @@ func (s *Service) Record(ctx context.Context, e apiv1.TaskBudgetEvent) (*Ledger,
 				l.NextCheckpoint = l.Binding.Deadline
 			}
 		case "notification-delivered", "notification-failed":
-			if l.Escalation == nil || l.Escalation.Delivery != "Pending" {
+			if l.Escalation == nil {
+				return ErrDenied
+			}
+			canDeliver := l.Escalation.Delivery == "Pending" || (e.Kind == "notification-delivered" && l.Escalation.Delivery == "Failed")
+			if !canDeliver {
 				return ErrDenied
 			}
 			if e.Kind == "notification-delivered" {

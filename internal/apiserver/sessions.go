@@ -2,6 +2,8 @@ package apiserver
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -13,6 +15,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -80,6 +83,16 @@ func (s *Server) createSession(ctx context.Context, w http.ResponseWriter, r *ht
 	}
 
 	base := generatedName(sess.Spec.Repo, s.now())
+	// One dispatch reservation spans name collisions. An idempotency key binds
+	// the same stable dispatch on an explicit client retry; unknown creates
+	// remain charged rather than being mistaken for a proved non-launch.
+	dispatchAttemptID := string(uuid.NewUUID())
+	dispatchID := dispatchAttemptID
+	if req.IdempotencyKey != "" {
+		h := sha256.Sum256([]byte(c.parent + "\x00" + req.IdempotencyKey))
+		dispatchID = hex.EncodeToString(h[:16])
+	}
+	reserved := false
 	for i := 1; i <= nameAttempts; i++ {
 		sess.Name = base
 		if i > 1 {
@@ -102,12 +115,25 @@ func (s *Server) createSession(ctx context.Context, w http.ResponseWriter, r *ht
 			}
 			// Reserve effort before dispatch. An uncertain create preserves the
 			// reservation; absence of a Pod cannot erase its ownership/history.
-			worker := "child:" + sess.Name
-			_, err = s.TaskBudgets.Record(ctx, apiv1.TaskBudgetEvent{Binding: b, ID: "dispatch:" + sess.Name, Kind: "worker-start", WorkerID: worker})
-			if err != nil {
-				return 0, nil, budgetError(err)
+			worker := "child:" + dispatchID
+			if !reserved {
+				// A retained reservation without a found Session is an unknown
+				// prior create, not permission to launch the same request again.
+				for _, known := range l.Workers {
+					if known.ID == worker {
+						return 0, nil, budgetError(taskbudget.ErrUnavailable)
+					}
+				}
+				// The server-owned attempt nonce makes a concurrent request for
+				// the same key conflict in CAS rather than share one reservation.
+				_, err = s.TaskBudgets.Record(ctx, apiv1.TaskBudgetEvent{Binding: b, ID: "dispatch:" + dispatchID, Kind: "worker-start", WorkerID: worker, AttemptID: dispatchAttemptID})
+				if err != nil {
+					return 0, nil, budgetError(err)
+				}
+				reserved = true
 			}
 			annotateTaskBudget(sess, b)
+			sess.Annotations[TaskBudgetWorkerAnnotation] = worker
 		}
 		err := s.Client.Create(ctx, sess)
 		if apierrors.IsAlreadyExists(err) {
@@ -142,7 +168,8 @@ func (s *Server) runningChildren(ctx context.Context, parent string) (int, error
 }
 
 // byIdempotencyKey finds the caller's unfinished session created with key, the
-// newest if there are several.
+// newest if there are several. Budget-bound requests retain their identity after
+// completion too: a finished task cannot silently dispatch that request again.
 func (s *Server) byIdempotencyKey(ctx context.Context, parent, key string) (*v1alpha1.AgentSession, error) {
 	var list v1alpha1.AgentSessionList
 	if err := s.Live.List(ctx, &list, client.InNamespace(s.Policy.SessionNamespace),
@@ -152,7 +179,7 @@ func (s *Server) byIdempotencyKey(ctx context.Context, parent, key string) (*v1a
 	var found *v1alpha1.AgentSession
 	for i := range list.Items {
 		it := &list.Items[i]
-		if it.Spec.Parent != parent || !unfinished(it) {
+		if it.Spec.Parent != parent || (!unfinished(it) && it.Annotations[TaskBudgetUIDAnnotation] == "") {
 			continue
 		}
 		if found == nil || it.CreationTimestamp.After(found.CreationTimestamp.Time) {

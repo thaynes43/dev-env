@@ -242,6 +242,23 @@ func TestMissingValidatorCannotAdmitWork(t *testing.T) {
 	}
 }
 
+func TestConcurrentDispatchCannotShareOneReservation(t *testing.T) {
+	s, _, _, b := setup(t, time.Hour, time.Hour, time.Hour)
+	first := apiv1.TaskBudgetEvent{Binding: b, ID: "dispatch:stable-request", Kind: "worker-start", WorkerID: "child:stable-request", AttemptID: "server-attempt-a"}
+	if _, err := s.Record(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.AttemptID = "server-attempt-b"
+	if _, err := s.Record(context.Background(), second); !errors.Is(err, ErrConflict) {
+		t.Fatal("two requests shared one reservation", err)
+	}
+	l, err := s.Record(context.Background(), first)
+	if err != nil || len(l.Workers) != 1 || len(l.Events) != 1 {
+		t.Fatal("same known attempt lost idempotency", err)
+	}
+}
+
 func TestThirdFailureAcrossChildrenAndServiceRestart(t *testing.T) {
 	s, m, _, b := setup(t, 2*time.Hour, 2*time.Hour, 2*time.Hour)
 	for i := 1; i <= 3; i++ {
@@ -366,15 +383,30 @@ func TestStickyNotificationAndUncertainStop(t *testing.T) {
 	if _, err := s.Admit(context.Background(), b); err != nil {
 		t.Fatal(err)
 	}
-	s.Validator = nil
 	*now = now.Add(time.Minute)
-	l, err := record(t, s, b, "notification-1", "notification-failed")
+	failure := apiv1.TaskBudgetEvent{Binding: b, ID: "notification-1", Kind: "notification-failed", Evidence: apiv1.TaskBudgetEvidence{ID: "delivery-attempt-1", Kind: "native-delivery-result", Reference: "fixture:verified:notification-failed"}}
+	if _, err := record(t, s, b, "unproved-notification", "notification-failed"); !errors.Is(err, ErrDenied) {
+		t.Fatal("unproved notification failure accepted")
+	}
+	s.Validator = nil
+	if _, err := s.Record(context.Background(), failure); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("unknown notification authority accepted failure")
+	}
+	s.Validator = receiptValidator{}
+	l, err := s.Record(context.Background(), failure)
 	if err != nil || l.Escalation.Delivery != "Failed" {
 		t.Fatal("notification failure not retained")
 	}
-	if _, err := record(t, s, b, "notification-2", "notification-failed"); !errors.Is(err, ErrDenied) {
+	failure.ID = "notification-2"
+	if _, err := s.Record(context.Background(), failure); !errors.Is(err, ErrDenied) {
 		t.Fatal("second pending escalation allowed")
 	}
+	escalationID := l.Escalation.ID
+	l, err = s.Record(context.Background(), apiv1.TaskBudgetEvent{Binding: b, ID: "delivered", Kind: "notification-delivered", Evidence: apiv1.TaskBudgetEvidence{ID: "delivery-retry", Kind: "native-delivery-result", Reference: "fixture:verified:notification-delivered"}})
+	if err != nil || l.Escalation.ID != escalationID || l.Escalation.Delivery != "Delivered" || len(l.Events) != 2 {
+		t.Fatal("verified retry did not recover the same escalation", err)
+	}
+	s.Validator = nil
 	stop := apiv1.TaskBudgetEvent{Binding: b, ID: "stop", Kind: "worker-stop", WorkerID: "host:host-a:1", Evidence: apiv1.TaskBudgetEvidence{ID: "stop", Kind: "missing-pod", Reference: "pod-absent"}}
 	if _, err := s.Record(context.Background(), stop); !errors.Is(err, ErrUnavailable) {
 		t.Fatal("missing Pod became stop proof")

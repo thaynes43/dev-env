@@ -22,6 +22,7 @@ const (
 	TaskBudgetDeadlineAnnotation = "dev-env.haynesops.com/task-budget-deadline"
 	TaskBudgetHostAnnotation     = "dev-env.haynesops.com/task-budget-host"
 	TaskBudgetPodAnnotation      = "dev-env.haynesops.com/task-budget-pod"
+	TaskBudgetWorkerAnnotation   = "dev-env.haynesops.com/task-budget-worker"
 )
 
 func budgetError(err error) error {
