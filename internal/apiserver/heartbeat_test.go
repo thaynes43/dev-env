@@ -256,6 +256,7 @@ func TestDecisionHeartbeatCannotClobberOutcomeAcquiredAfterLiveRead(t *testing.T
 			authority := v1alpha1.DecisionAnswerStatus(protocol.AnswerAuthority(*record.Decision, record.Decision.Answer))
 			saved := f.session(sess.Name)
 			saved.Status.DecisionAnswer = &authority
+			saved.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeEscalated, Note: "decision/" + record.Decision.ID}
 			if err := f.c.Status().Update(context.Background(), saved); err != nil {
 				t.Fatal(err)
 			}
@@ -281,5 +282,43 @@ func TestDecisionHeartbeatCannotClobberOutcomeAcquiredAfterLiveRead(t *testing.T
 				t.Fatal("stale heartbeat clobbered concurrently acquired outcome", w.Code)
 			}
 		})
+	}
+}
+
+func TestDecisionDeliveredHeartbeatAfterClearAcceptsConcurrentStatusUpdate(t *testing.T) {
+	f, ex, sess, _ := decisionAPIFixture(t)
+	var record protocol.DecisionResult
+	_ = json.Unmarshal([]byte(ex.out), &record)
+	at := record.Decision.CreatedAt.Add(time.Second)
+	record.Decision.State, record.Decision.Answer, record.Decision.AnsweredAt = "Delivered", "SYNTHETIC-ANSWER", &at
+	authority := v1alpha1.DecisionAnswerStatus(protocol.AnswerAuthority(*record.Decision, record.Decision.Answer))
+	saved := f.session(sess.Name)
+	saved.Status.DecisionAnswer = &authority
+	saved.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeEscalated, Note: "decision/" + record.Decision.ID}
+	if err := f.c.Status().Update(context.Background(), saved); err != nil {
+		t.Fatal(err)
+	}
+	st := status(sess.Name)
+	st.Decision = &protocol.DecisionOutcome{ID: record.Decision.ID, SessionUID: record.Decision.SessionUID, PodUID: record.Decision.PodUID, ThreadID: record.Decision.ThreadID, WriterGeneration: record.Decision.WriterGeneration, State: "Delivered", AnswerDigest: authority.Digest, At: f.now}
+	path, token := protocol.HeartbeatPath(sess.Name), "tok-session-"+sess.Name
+	if w := f.do(http.MethodPost, path, token, st); w.Code != http.StatusNoContent || f.session(sess.Name).Status.Outcome != nil {
+		t.Fatal("first delivered heartbeat did not clear owned outcome", w.Code)
+	}
+	f.now = f.now.Add(time.Minute)
+	concurrent := &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeDone, Note: "concurrent unrelated completion"}
+	patches := 0
+	f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+		patches++
+		fresh := f.session(sess.Name)
+		fresh.Status.Outcome = concurrent
+		if err := f.c.Status().Update(ctx, fresh); err != nil {
+			return err
+		}
+		return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+	}})
+	w := f.do(http.MethodPost, path, token, st)
+	got := f.session(sess.Name)
+	if w.Code != http.StatusNoContent || patches != 1 || got.Status.Agent == nil || got.Status.Agent.LastHeartbeat == nil || !got.Status.Agent.LastHeartbeat.Time.Equal(f.now) || got.Status.Outcome == nil || *got.Status.Outcome != *concurrent {
+		t.Fatal("unchanged delivered outcome blocked liveness or changed concurrent outcome", w.Code)
 	}
 }
