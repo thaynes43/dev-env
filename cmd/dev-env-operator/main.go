@@ -92,6 +92,7 @@ type options struct {
 	clientSAs             []string
 	grantApprovalURL      string
 	coordinatorEnabled    bool
+	privateProjectTasks   bool
 	managedCodexTasks     bool
 	managedChildDecisions bool
 	coordinatorHosts      []apiserver.CoordinatorHost
@@ -119,6 +120,7 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.humanSA, "human-service-account", ownNamespace+"/dev-env-human", "Tom's ServiceAccount, <namespace>/<name>, whose token his laptop mints (D-05)")
 	fs.StringVar(&o.grantApprovalURL, "grant-approval-url", "", "base URL of the broker's approval page, such as https://dev-env.example.com/grants/; a pending grant's view links to it plus the grant's name (D-56). Empty links nothing")
 	fs.BoolVar(&o.coordinatorEnabled, "enable-coordinator-callers", false, "enable configured live-bound scoped coordinator callers")
+	fs.BoolVar(&o.privateProjectTasks, "enable-private-project-tasks", false, "enable new accepted-project tasks with private repositories and worktrees")
 	fs.BoolVar(&o.managedCodexTasks, "enable-managed-codex-tasks", false, "enable accepted-project managed Codex task admission")
 	fs.BoolVar(&o.managedChildDecisions, "enable-managed-child-decisions", false, "enable private recorded child decisions and same-writer native continuation")
 	fs.BoolVar(&o.taskBudgetsEnabled, "enable-task-budgets", false, "enable retained finite managed task budget authority; native admission requires a separate trusted inspector")
@@ -176,7 +178,7 @@ func parseFlags(args []string) (options, error) {
 		}
 		o.catalogBinding = b
 	}
-	if (o.coordinatorEnabled || o.managedCodexTasks) && (o.apiAddr == "0" || o.catalogBinding == nil) {
+	if (o.coordinatorEnabled || o.managedCodexTasks || o.privateProjectTasks) && (o.apiAddr == "0" || o.catalogBinding == nil) {
 		return o, errors.New("enabled task features require the API and a concrete accepted catalog binding")
 	}
 	if o.coordinatorEnabled && (!o.managedCodexTasks || len(o.coordinatorHosts) == 0) {
@@ -343,7 +345,7 @@ func run(args []string) error {
 				// (D-66).
 				ActivityNamespace: o.templatesNamespace,
 			},
-			Projects: o.catalogBinding, ManagedCodexTasks: o.managedCodexTasks, ManagedChildDecisions: o.managedChildDecisions,
+			Projects: o.catalogBinding, PrivateProjectTasks: o.privateProjectTasks, ManagedCodexTasks: o.managedCodexTasks, ManagedChildDecisions: o.managedChildDecisions,
 			Exec:             podExec,
 			Shelf:            rescueShelf,
 			Templates:        apiserver.TemplatesFrom(mgr.GetClient(), templatesKey),

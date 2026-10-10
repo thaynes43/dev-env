@@ -98,6 +98,9 @@ type Settings struct {
 	Getenv func(string) string
 	// writer is held only by the daemon, never inferred from the owner JSON.
 	writer *writerLease
+	// privateProjectGit applies the catalog's administrative Git policy only
+	// within accepted private project preparation, including materialization.
+	privateProjectGit bool
 }
 
 // LoadSettings builds Settings from an environment lookup, usually os.Getenv.

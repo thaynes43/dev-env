@@ -46,7 +46,7 @@ func TestTaskFeatureFlagsRequireConcreteAuthority(t *testing.T) {
 	binding := []string{"--project-catalog=dev-env-system/dev-env-project-catalog", "--project-clone-owner=thaynes43"}
 	hosts := `--coordinator-hosts=[{"serviceAccount":"dev-env-system/host-a","podName":"host-a","hostID":"codex-a"}]`
 	o, err := parseFlags(nil)
-	if err != nil || o.coordinatorEnabled || o.managedCodexTasks || o.managedChildDecisions || o.catalogBinding != nil || len(o.coordinatorHosts) != 0 {
+	if err != nil || o.coordinatorEnabled || o.privateProjectTasks || o.managedCodexTasks || o.managedChildDecisions || o.catalogBinding != nil || len(o.coordinatorHosts) != 0 {
 		t.Fatal("task features or catalog authority enabled by default")
 	}
 	for _, args := range [][]string{
@@ -64,6 +64,22 @@ func TestTaskFeatureFlagsRequireConcreteAuthority(t *testing.T) {
 	o, err = parseFlags(append(binding, "--enable-coordinator-callers", "--enable-managed-codex-tasks", hosts))
 	if err != nil || !o.coordinatorEnabled || !o.managedCodexTasks || o.catalogBinding == nil || len(o.coordinatorHosts) != 1 {
 		t.Fatal("fully bound task feature configuration refused")
+	}
+}
+
+func TestPrivateProjectTaskFeatureRequiresAcceptedCatalog(t *testing.T) {
+	for _, args := range [][]string{
+		{"--enable-private-project-tasks"},
+		{"--enable-private-project-tasks", "--project-catalog=dev-env-system/dev-env-project-catalog"},
+		{"--enable-private-project-tasks", "--project-catalog=dev-env-system/dev-env-project-catalog", "--project-clone-owner=thaynes43", "--api-bind-address=0"},
+	} {
+		if _, err := parseFlags(args); err == nil {
+			t.Fatal("private project admission accepted unavailable catalog/API authority", args)
+		}
+	}
+	o, err := parseFlags([]string{"--enable-private-project-tasks", "--project-catalog=dev-env-system/dev-env-project-catalog", "--project-clone-owner=thaynes43"})
+	if err != nil || !o.privateProjectTasks || o.coordinatorEnabled || o.managedCodexTasks || o.taskBudgetsEnabled || o.catalogBinding == nil {
+		t.Fatal("private project gate widened independent provider/coordinator/budget gates or refused catalog authority", err)
 	}
 }
 

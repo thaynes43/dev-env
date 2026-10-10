@@ -101,6 +101,25 @@ visible in the owner outcome map, not prerequisites for every private Git task.
 
 ## Durable implementation tracking
 
+### First #173 slice: private declared-project tasks
+
+[DESIGN-005](../designs/005-private-project-tasks.md) defines the first bounded
+source contract. Project admission supplies a catalog snapshot without shared
+storage. Selected-repo preparation validates identity, fetches the declared
+remote branch and pins a private task worktree; resume preserves WIP and saved
+rules. New budget-bound private dispatch remains refused until its separate
+budget integration is delivered. The legacy shared paths stay guarded.
+The separate private-project admission flag defaults off; source promotion
+preserves the existing fixture/coordinator/budget flag contract.
+
+Source checks and image/GitOps delivery have separate receipts on #173. Actual
+provider loading is still unaccepted. The next finite source slice is local
+catalog-wide startup bootstrap/refresh, preserving dirty and ambiguous roots.
+Permanent project roots, remaining clients and both-provider/two-pod acceptance
+remain on the parent issue. No retired storage route is reopened.
+
+### Parent issues
+
 - [#173](https://github.com/thaynes43/dev-env/issues/173): independent catalog/rules and local repo startup.
 - [#174](https://github.com/thaynes43/dev-env/issues/174): retained session directory and authorized live/stopped context.
 - [#175](https://github.com/thaynes43/dev-env/issues/175): cross-parent task claims and durable messages.

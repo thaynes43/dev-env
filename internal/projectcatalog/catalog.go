@@ -267,6 +267,20 @@ func ParseSnapshot(data []byte) (Snapshot, error) {
 // ProjectRules is the driver-ratified wrapper, with exact rules bytes preserved.
 func (s Snapshot) ProjectRules() string {
 	var b strings.Builder
+	fmt.Fprintf(&b, "# Project %s\n\nRepositories and task worktrees are local to each pod. Keep reference clones for source preparation and implement in a task worktree. New tasks use freshly fetched, pinned source; resume preserves existing work.\n\nProject repositories:\n", s.Project())
+	for _, repo := range s.Repositories() {
+		fmt.Fprintf(&b, "- %s -> %s (default branch: %s)\n", repo.Name, repo.GitHub, repo.DefaultBranch)
+	}
+	fmt.Fprintf(&b, "\n<!-- dev-env-project catalog-sha256=%s rules-sha256=%s -->\n\n## Project rules\n\n", s.CatalogRevision(), s.RulesRevision())
+	b.WriteString(s.Rules())
+	b.WriteByte('\n')
+	return b.String()
+}
+
+// LegacyProjectRules reproduces the historical wrapper exactly. It recognizes
+// existing private session receipts; new tasks use ProjectRules.
+func (s Snapshot) LegacyProjectRules() string {
+	var b strings.Builder
 	fmt.Fprintf(&b, "# Project %s\n\nThis is the permanent %s project. Repository anchors are read-only. Start implementation through the managed task launcher, which fetches and pins source.\n\nProject repositories:\n", s.Project(), s.Project())
 	for _, repo := range s.Repositories() {
 		fmt.Fprintf(&b, "- %s -> %s (default branch: %s)\n", repo.Name, repo.Name, repo.DefaultBranch)

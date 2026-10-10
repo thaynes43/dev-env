@@ -67,6 +67,9 @@ func (s *Server) createSession(ctx context.Context, w http.ResponseWriter, r *ht
 			return http.StatusOK, view(existing, false), nil
 		}
 	}
+	if !s.PrivateProjectTasks && sess.Spec.Workspace == nil && sess.Annotations[v1alpha1.AnnotationProjectSnapshot] != "" {
+		return 0, nil, invalid(fieldError("project", "private project tasks are not enabled"))
+	}
 
 	if c.kind == kindSession {
 		if c.depth > maxSessionDepth {
@@ -123,6 +126,13 @@ func (s *Server) createSession(ctx context.Context, w http.ResponseWriter, r *ht
 					if known.ID == worker {
 						return 0, nil, budgetError(taskbudget.ErrUnavailable)
 					}
+				}
+				// The current budget controller requires shared executor stop
+				// evidence. Private project admission must not create a child
+				// that it cannot run, or charge effort for that non-dispatch.
+				// Existing idempotent children were returned above unchanged.
+				if sess.Spec.Workspace == nil {
+					return 0, nil, invalid(fieldError("project", "private project dispatch with an assigned task budget is not supported"))
 				}
 				// The server-owned attempt nonce makes a concurrent request for
 				// the same key conflict in CAS rather than share one reservation.

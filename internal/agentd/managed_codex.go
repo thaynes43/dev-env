@@ -30,20 +30,28 @@ func prepareProjectTask(s *Settings, sess protocol.Session) error {
 	if len(sess.ProjectSnapshot) == 0 {
 		return nil
 	}
-	snapshot, err := projectcatalog.ParseSnapshot(sess.ProjectSnapshot)
+	snapshot, err := acceptedProjectTask(*s, sess)
 	if err != nil {
-		return errors.New("invalid accepted project snapshot")
-	}
-	repo := snapshot.Selected()
-	parts := strings.Split(repo.GitHub, "/")
-	if repo.Name != sess.Repo || repo.DefaultBranch != sess.Base || len(parts) != 2 || s.RemoteBase != "https://github.com/"+parts[0] {
-		return errors.New("accepted project snapshot does not bind the configured clone and base")
+		return err
 	}
 	if _, err := StoreProjectSnapshot(*s, snapshot); err != nil {
 		return err
 	}
-	s.TaskRepositoryURL = repo.URL()
+	s.TaskRepositoryURL = snapshot.Selected().URL()
 	return nil
+}
+
+func acceptedProjectTask(s Settings, sess protocol.Session) (projectcatalog.Snapshot, error) {
+	snapshot, err := projectcatalog.ParseSnapshot(sess.ProjectSnapshot)
+	if err != nil {
+		return projectcatalog.Snapshot{}, errors.New("invalid accepted project snapshot")
+	}
+	repo := snapshot.Selected()
+	parts := strings.Split(repo.GitHub, "/")
+	if repo.Name != sess.Repo || repo.DefaultBranch != sess.Base || len(parts) != 2 || s.RemoteBase != "https://github.com/"+parts[0] {
+		return projectcatalog.Snapshot{}, errors.New("accepted project snapshot does not bind the configured clone and base")
+	}
+	return snapshot, nil
 }
 
 func providerProjectArgs(s Settings, sess protocol.Session, guard string) ([]string, error) {
@@ -65,7 +73,11 @@ func providerProjectArgs(s Settings, sess protocol.Session, guard string) ([]str
 	if err != nil {
 		return nil, err
 	}
-	return ProjectRuleInputs(sess.Agent, path, developer, guard, snapshot, fallbacks...)
+	rules, err := readSavedProjectRules(path, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return projectRuleInputs(sess.Agent, path, developer, guard, snapshot, string(rules), fallbacks...)
 }
 
 // Read native configuration without rewriting it. A configured native profile

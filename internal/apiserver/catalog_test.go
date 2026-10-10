@@ -27,8 +27,8 @@ func bindCatalogFixture(t *testing.T, f *fixture) {
 		t.Fatal(err)
 	}
 	f.srv.Projects = &CatalogBinding{Key: key, CloneOwner: "thaynes43"}
+	f.srv.PrivateProjectTasks = true
 	f.srv.ManagedCodexTasks = true
-	f.tmpl.Workspace = &templates.Workspace{Enabled: true, Claim: "accepted-projects", ID: "projects-v2"}
 }
 
 func coordinatorTask() apiv1.CreateSessionRequest {
@@ -72,6 +72,38 @@ func TestProjectCodexModelEffortAdmission(t *testing.T) {
 	}
 }
 
+func TestPrivateProjectTaskAdmissionDisabledDefault(t *testing.T) {
+	for _, token := range []string{tokHuman, tokClient, tokCoordinator} {
+		for _, provider := range []string{"claude", "codex"} {
+			t.Run(token+"/"+provider, func(t *testing.T) {
+				f := coordinatorFixture(t)
+				if f.srv.PrivateProjectTasks {
+					t.Fatal("private project task admission was enabled by default")
+				}
+				bindCatalogFixture(t, f)
+				f.srv.PrivateProjectTasks = false
+				r := coordinatorTask()
+				r.Agent = provider
+				if provider == "codex" {
+					r.Model = "gpt-6.1-sol"
+				}
+				e := wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, token, r), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+				if len(e.Fields) != 1 || e.Fields[0].Field != "project" || !strings.Contains(e.Message, "private project tasks are not enabled") {
+					t.Fatal("disabled private project gate did not refuse explicitly", e)
+				}
+				var sessions v1alpha1.AgentSessionList
+				if err := f.c.List(context.Background(), &sessions); err != nil || len(sessions.Items) != 0 {
+					t.Fatal("disabled private project task admission wrote a session", err)
+				}
+			})
+		}
+	}
+	f := newFixture(t)
+	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, task()); w.Code != http.StatusCreated {
+		t.Fatal("private project gate changed legacy task admission", w.Code, w.Body.String())
+	}
+}
+
 func TestCoordinatorProjectAdmissionDerivesDeclaredSourceAndRules(t *testing.T) {
 	f := coordinatorFixture(t)
 	bindCatalogFixture(t, f)
@@ -86,7 +118,7 @@ func TestCoordinatorProjectAdmissionDerivesDeclaredSourceAndRules(t *testing.T) 
 			t.Fatal("accepted project task refused", w.Code, w.Body.String())
 		}
 		s := f.session(decode[apiv1.Session](t, w).Name)
-		if s.Spec.Parent != coordinatorSA || s.Spec.Repo != "alias" || s.Spec.Base != "stable" || s.Spec.Profile != "dev" || s.Spec.Workspace == nil || s.Spec.Workspace.ID != "projects-v2" {
+		if s.Spec.Parent != coordinatorSA || s.Spec.Repo != "alias" || s.Spec.Base != "stable" || s.Spec.Profile != "dev" || s.Spec.Workspace != nil {
 			t.Fatal("caller overrode child identity or declared source")
 		}
 		snapshot, err := projectcatalog.ParseSnapshot([]byte(s.Annotations[v1alpha1.AnnotationProjectSnapshot]))
@@ -97,39 +129,109 @@ func TestCoordinatorProjectAdmissionDerivesDeclaredSourceAndRules(t *testing.T) 
 		// for the controller's actual runtime-document check.
 		s.UID = "allocated-api-session-uid"
 		if err := controller.CheckAgentdSession(s); err != nil {
-			t.Fatal("admitted shared project task did not bind the actual Session UID", err)
+			t.Fatal("admitted private project task did not bind the actual Session UID", err)
 		}
 	}
 }
 
-func TestProjectAdmissionRefusesUnavailableSharedWorkspace(t *testing.T) {
+func TestProjectAdmissionIndependentOfSharedWorkspace(t *testing.T) {
 	for _, provider := range []string{"claude", "codex"} {
-		for _, kind := range []string{"missing", "disabled", "claim", "id", "templates"} {
-			t.Run(provider+"/"+kind, func(t *testing.T) {
+		for _, kind := range []string{"missing", "disabled", "claim", "id", "enabled"} {
+			for _, token := range []string{tokHuman, tokClient, tokCoordinator} {
+				t.Run(provider+"/"+kind+"/"+token, func(t *testing.T) {
+					f := coordinatorFixture(t)
+					bindCatalogFixture(t, f)
+					f.tmpl.Workspace = &templates.Workspace{Enabled: true, Claim: "accepted-projects", ID: "projects-v2"}
+					switch kind {
+					case "missing":
+						f.tmpl.Workspace = nil
+					case "disabled":
+						f.tmpl.Workspace.Enabled = false
+					case "claim":
+						f.tmpl.Workspace.Claim = ""
+					case "id":
+						f.tmpl.Workspace.ID = ""
+					}
+					r := coordinatorTask()
+					r.Agent = provider
+					if provider == "codex" {
+						r.Model = "gpt-6.1-sol"
+					}
+					w := f.do(http.MethodPost, apiv1.SessionsPath, token, r)
+					if w.Code != http.StatusCreated {
+						t.Fatal("private project admission depended on shared workspace", w.Code, w.Body.String())
+					}
+					s := f.session(decode[apiv1.Session](t, w).Name)
+					if s.Spec.Workspace != nil || s.Annotations[v1alpha1.AnnotationProjectSnapshot] == "" {
+						t.Fatal("project admission enabled shared storage or lost the accepted snapshot")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestProjectAdmissionPreservesCoordinatorTemplateRequirement(t *testing.T) {
+	for _, kind := range []string{"missing", "unavailable"} {
+		for _, token := range []string{tokHuman, tokClient, tokCoordinator} {
+			t.Run(kind+"/"+token, func(t *testing.T) {
 				f := coordinatorFixture(t)
 				bindCatalogFixture(t, f)
-				switch kind {
-				case "missing":
-					f.tmpl.Workspace = nil
-				case "disabled":
-					f.tmpl.Workspace.Enabled = false
-				case "claim":
-					f.tmpl.Workspace.Claim = ""
-				case "id":
-					f.tmpl.Workspace.ID = ""
-				case "templates":
+				if kind == "missing" {
+					f.srv.Templates = nil
+				} else {
 					f.tmplOK = false
 				}
-				r := coordinatorTask()
-				r.Agent = provider
-				if provider == "codex" {
-					r.Model = "gpt-6.1-sol"
+				w := f.do(http.MethodPost, apiv1.SessionsPath, token, coordinatorTask())
+				if token == tokCoordinator {
+					wantError(t, w, http.StatusForbidden, apiv1.CodeForbidden)
+					return
 				}
-				w := f.do(http.MethodPost, apiv1.SessionsPath, tokClient, r)
-				wantError(t, w, http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+				if w.Code != http.StatusCreated {
+					t.Fatal("trusted private project admission depended on templates", w.Code, w.Body.String())
+				}
+				if f.session(decode[apiv1.Session](t, w).Name).Spec.Workspace != nil {
+					t.Fatal("private admission enabled shared storage")
+				}
+			})
+		}
+	}
+}
+
+func TestPrivateProjectAdmissionPreservesDeclaredSourceRestrictions(t *testing.T) {
+	for _, token := range []string{tokHuman, tokClient} {
+		for _, kind := range []string{"default-base", "foreign-base", "actual-name", "github-identity", "ambiguous-repo"} {
+			t.Run(token+"/"+kind, func(t *testing.T) {
+				f := newFixture(t)
+				bindCatalogFixture(t, f)
+				r := coordinatorTask()
+				switch kind {
+				case "default-base":
+					r.Base = "stable"
+				case "foreign-base":
+					r.Base = "foreign"
+				case "actual-name":
+					r.Repo = "actual-source"
+				case "github-identity":
+					r.Repo = "thaynes43/actual-source"
+				case "ambiguous-repo":
+					r.Repo = ""
+				}
+				w := f.do(http.MethodPost, apiv1.SessionsPath, token, r)
+				if kind == "default-base" {
+					if w.Code != http.StatusCreated {
+						t.Fatal("declared default base was refused", w.Code, w.Body.String())
+					}
+					return
+				}
+				if kind == "foreign-base" {
+					wantError(t, w, http.StatusForbidden, apiv1.CodeForbidden)
+				} else {
+					wantError(t, w, http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+				}
 				var sessions v1alpha1.AgentSessionList
 				if err := f.c.List(context.Background(), &sessions); err != nil || len(sessions.Items) != 0 {
-					t.Fatal("unavailable shared workspace silently created a private task")
+					t.Fatal("source override created a private project session", err)
 				}
 			})
 		}

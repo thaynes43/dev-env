@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -238,10 +240,14 @@ func ensurePlainProjectRoot(root string) error {
 	return nil
 }
 
+var projectGitPolicyArgs = []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.fsync=reference", "-c", "core.fsyncMethod=fsync", "-c", "core.useReplaceRefs=false"}
+
 func projectGit(ctx context.Context, r Runner, s Settings, dir string, args ...string) (string, error) {
 	// Administrative checkouts do not execute a clone's local hooks or fsmonitor.
-	full := append([]string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.fsync=reference", "-c", "core.fsyncMethod=fsync", "-c", "core.useReplaceRefs=false"}, args...)
-	return s.git(ctx, r, dir, full...)
+	if s.privateProjectGit {
+		return s.git(ctx, r, dir, args...)
+	}
+	return s.git(ctx, r, dir, append(slices.Clone(projectGitPolicyArgs), args...)...)
 }
 
 func validateProjectReference(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository) error {
@@ -703,6 +709,7 @@ func StoreProjectSnapshot(s Settings, snapshot projectcatalog.Snapshot) (string,
 		return "", errors.New("task snapshot exceeds the transport bound")
 	}
 	path := filepath.Join(s.StateDir, "project-snapshot.json")
+	savedSnapshot := false
 	if fi, err := os.Lstat(path); err == nil {
 		if !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 || fi.Size() > projectcatalog.MaxSnapshotBytes {
 			return "", errors.New("saved task snapshot is not a bounded regular file")
@@ -717,34 +724,60 @@ func StoreProjectSnapshot(s Settings, snapshot projectcatalog.Snapshot) (string,
 		if !bytes.Equal(cur, append(data, '\n')) {
 			return "", errors.New("saved project snapshot differs; resume must preserve it")
 		}
-	} else if errors.Is(err, os.ErrNotExist) {
-		if err := writeWorkspaceJSON(path, snapshot); err != nil {
-			return "", err
-		}
-	} else {
+		savedSnapshot = true
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
 	rulesPath := filepath.Join(s.StateDir, "project-rules.md")
 	rules := []byte(snapshot.ProjectRules())
-	if fi, err := os.Lstat(rulesPath); err == nil {
-		if !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 || fi.Size() > projectcatalog.MaxSnapshotBytes {
-			return "", errors.New("saved task rules are not a regular file")
-		}
-		cur, err := os.ReadFile(rulesPath)
-		if err != nil {
-			return "", err
-		}
-		if !bytes.Equal(cur, rules) {
-			return "", errors.New("saved task rules differ; preserved")
+	writeRules := false
+	if cur, err := readSavedProjectRules(rulesPath, snapshot); err == nil {
+		if !savedSnapshot && !bytes.Equal(cur, rules) {
+			return "", errors.New("legacy task rules require the unchanged saved project snapshot")
 		}
 	} else if errors.Is(err, os.ErrNotExist) {
-		if err := writeFileAtomic(rulesPath, rules, 0o600); err != nil {
-			return "", err
-		}
+		writeRules = true
 	} else {
 		return "", err
 	}
+	// Validate existing rules before publishing a new snapshot. A refusal
+	// cannot create the receipt that would authorize legacy rules on retry.
+	if !savedSnapshot {
+		if err := writeWorkspaceJSON(path, snapshot); err != nil {
+			return "", err
+		}
+	}
+	if writeRules {
+		if err := writeFileAtomic(rulesPath, rules, 0o600); err != nil {
+			return "", err
+		}
+	}
 	return rulesPath, nil
+}
+
+// Only a recognized wrapper for the exact accepted snapshot is instruction
+// authority. Return its saved bytes so a provider resume cannot re-render them.
+func readSavedProjectRules(path string, snapshot projectcatalog.Snapshot) ([]byte, error) {
+	if err := noSymlinkComponents(path); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 || fi.Size() > projectcatalog.MaxSnapshotBytes {
+		return nil, errors.New("saved task rules are not a bounded private regular file")
+	}
+	cur, err := io.ReadAll(io.LimitReader(f, projectcatalog.MaxSnapshotBytes+1))
+	if err != nil || len(cur) > projectcatalog.MaxSnapshotBytes {
+		return nil, errors.New("saved task rules exceed their bound or cannot be read")
+	}
+	if !bytes.Equal(cur, []byte(snapshot.ProjectRules())) && !bytes.Equal(cur, []byte(snapshot.LegacyProjectRules())) {
+		return nil, errors.New("saved task rules differ; preserved")
+	}
+	return cur, nil
 }
 
 // ProjectRuleInputs is a disabled integration seam, not a provider launch.
@@ -752,6 +785,10 @@ func StoreProjectSnapshot(s Settings, snapshot projectcatalog.Snapshot) (string,
 // gets exactly one scalar developer_instructions override while configured
 // developer text and repository instruction discovery stay intact.
 func ProjectRuleInputs(provider, rulesPath, configuredDeveloper, guard string, snapshot projectcatalog.Snapshot, configuredFallbacks ...string) ([]string, error) {
+	return projectRuleInputs(provider, rulesPath, configuredDeveloper, guard, snapshot, snapshot.ProjectRules(), configuredFallbacks...)
+}
+
+func projectRuleInputs(provider, rulesPath, configuredDeveloper, guard string, snapshot projectcatalog.Snapshot, renderedRules string, configuredFallbacks ...string) ([]string, error) {
 	if guard == "" || snapshot.Selected().Name == "" {
 		return nil, errors.New("project rules require the platform guard and a task snapshot")
 	}
@@ -762,7 +799,7 @@ func ProjectRuleInputs(provider, rulesPath, configuredDeveloper, guard string, s
 		}
 		return []string{"--append-system-prompt-file", rulesPath, "--append-system-prompt", guard}, nil
 	case "codex":
-		parts := []string{configuredDeveloper, snapshot.ProjectRules(), guard}
+		parts := []string{configuredDeveloper, renderedRules, guard}
 		developer := strings.Join(parts, "\n\n")
 		if !utf8.ValidString(developer) {
 			return nil, errors.New("developer instructions must be UTF-8")

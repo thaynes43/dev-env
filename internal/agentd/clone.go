@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
 
 // gitEnv keeps git from ever waiting on a terminal prompt.
@@ -43,6 +44,9 @@ func (s Settings) git(ctx context.Context, r Runner, dir string, args ...string)
 	full := []string{"-C", dir}
 	if s.WorkspaceID != "" {
 		full = append(full, sharedGitPolicyArgs...)
+	}
+	if s.privateProjectGit {
+		full = append(full, projectGitPolicyArgs...)
 	}
 	full = append(full, args...)
 	res, err := r.Run(ctx, Cmd{Name: "git", Args: full, Env: gitEnv})
@@ -98,6 +102,26 @@ func PrepareRepo(ctx context.Context, r Runner, s Settings, sess protocol.Sessio
 		Worktree: s.WorktreePath(sess.Name),
 		Branch:   "agent/" + sess.Name,
 	}
+	var privateProject *projectcatalog.Repository
+	if len(sess.ProjectSnapshot) != 0 && s.WorkspaceID == "" && sess.Workspace == nil {
+		snapshot, err := acceptedProjectTask(s, sess)
+		if err != nil {
+			return ws, newStep(name, nil, err)
+		}
+		repo := snapshot.Selected()
+		privateProject = &repo
+		s.TaskRepositoryURL = repo.URL()
+		s.privateProjectGit = true
+		// A reused private reference must carry the accepted identity before
+		// any fetch. A foreign or ambiguous directory is never a clone target.
+		if _, err := os.Lstat(ws.Clone); err == nil {
+			if err := validateProjectReference(ctx, r, s, repo); err != nil {
+				return ws, newStep(name, nil, err)
+			}
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return ws, newStep(name, nil, err)
+		}
+	}
 	if s.WorkspaceID != "" || sess.Workspace != nil {
 		if err := workspacePreflight(s, sess); err != nil {
 			return ws, newStep(name, nil, err)
@@ -134,12 +158,14 @@ func PrepareRepo(ctx context.Context, r Runner, s Settings, sess protocol.Sessio
 		if err := configureSharedGitPolicy(ctx, r, s, ws.Clone); err != nil {
 			return ws, newStep(name, notes, err)
 		}
-		fetchArgs := []string{"fetch", "--prune", "origin"}
-		if s.WorkspaceID != "" {
-			fetchArgs = []string{"fetch", "--no-auto-maintenance", "--no-prune", "origin"}
-		}
-		if _, fetchErr = s.git(ctx, r, ws.Clone, fetchArgs...); fetchErr == nil {
-			notes = append(notes, "reused the clone and fetched origin")
+		if privateProject == nil {
+			fetchArgs := []string{"fetch", "--prune", "origin"}
+			if s.WorkspaceID != "" {
+				fetchArgs = []string{"fetch", "--no-auto-maintenance", "--no-prune", "origin"}
+			}
+			if _, fetchErr = s.git(ctx, r, ws.Clone, fetchArgs...); fetchErr == nil {
+				notes = append(notes, "reused the clone and fetched origin")
+			}
 		}
 	} else {
 		waited := waitForFile(ctx, s.GHTokenFile, s.TokenWait)
@@ -151,6 +177,20 @@ func PrepareRepo(ctx context.Context, r Runner, s Settings, sess protocol.Sessio
 			return ws, newStep(name, notes, err)
 		}
 		notes = append(notes, fmt.Sprintf("cloned %s (blob:none) in %s", s.RemoteURL(sess.Repo), took.Round(100*time.Millisecond)))
+	}
+	if privateProject != nil {
+		if err := validateProjectReference(ctx, r, s, *privateProject); err != nil {
+			return ws, newStep(name, notes, err)
+		}
+		// Fetch the declared branch explicitly; a configured fetch refspec or
+		// stale local branch must not select a different base for a new task.
+		target, fetched, err := fetchProjectTarget(ctx, r, s, *privateProject)
+		fetchErr = err
+		sess.Base = "refs/remotes/origin/" + privateProject.DefaultBranch
+		if err == nil {
+			sess.Base = target
+			notes = append(notes, fmt.Sprintf("fetched accepted repository %s branch %s at %s on %s", privateProject.GitHub, privateProject.DefaultBranch, target, fetched.Format(time.RFC3339Nano)))
+		}
 	}
 
 	workspaceNotes, err := ensureWorktree(ctx, r, s, ws, sess, fetchErr)
