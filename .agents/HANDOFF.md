@@ -7,6 +7,33 @@ the saga. To start building, follow
 
 ## Active delivery to an owner-testable v2, 2026-10-09
 
+**Resumed checkpoint, 2026-10-09 America/New_York:** the owner refreshed usage
+and released the temporary PC-visibility hold. A device test found asymmetric
+project-list visibility: Windows-created remote projects appear on Windows,
+MacBook and iPhone; MacBook-created projects are missing from Windows while
+their chats remain accessible. Registering the existing remote folder from
+Windows is a workaround. The working pod host was not restarted or re-paired.
+The owner considers this minor; do not make it a v2 prerequisite.
+
+Project preparation #153 is source-merged at `2e1c395`. Fresh keeper account
+login succeeded and reports `Ready`, generation 1; native process-group absence
+and private staging/reservation cleanup passed. Remote host pairing is a
+separate pending step. Child-decision source is under review in #155. Required
+[task-budget and escalation enforcement](sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md)
+is tracked in #154: 60 minutes without progress OR three failed attempts at the
+same blocker, whichever comes first, across agents/pods/resumes. It is unbuilt
+and is now part of the first owner test.
+
+External-storage comparison is read-only so far. The separate Proxmox Ceph
+cluster has active CephFS filesystems and existing NFS clients; Kubernetes has
+its RBD CSI driver but no exposed external CephFS class. A health warning and
+one down OSD must be accounted for before a trial. The
+[bounded NFS comparison](../docs/trials/2026-10-09-external-storage-comparison.md)
+records export-access and external-telemetry preflight blockers; a fresh TCP
+probe alone is insufficient. Resolve those before more Rook diagnosis. No new storage or host
+runtime was provisioned. These facts supersede the dated `NeedsLogin` and
+project-Job review status below; other runtime/cutover gates remain open.
+
 Tom clarified that Codex must continue until v2 provides a workflow he can test.
 The documentation checkpoint did not end that assignment. Read the
 [active delivery milestone](handoffs/2026-10-09-testable-v2.md): existing native
