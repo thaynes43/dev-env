@@ -18,6 +18,17 @@ import (
 
 const fixtureTestImage = "ghcr.io/thaynes43/dev-env:2.15.0@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
+func TestNativeFixtureCodexHomeFollowsPrivateHome(t *testing.T) {
+	pod := NativeFixturePod(fixtureTestImage)
+	env := make(map[string]string)
+	for _, v := range pod.Spec.Containers[0].Env {
+		env[v.Name] = v.Value
+	}
+	if !strings.HasPrefix(env["HOME"], "/fixture/") || env["CODEX_HOME"] != env["HOME"]+"/.codex" {
+		t.Fatal("fixture must explicitly keep Codex state under its private HOME")
+	}
+}
+
 func fixtureAdmissionObjects(t *testing.T) (*Ledger, *corev1.Pod, *unstructured.Unstructured, *runtime.Scheme, time.Time) {
 	t.Helper()
 	now := time.Date(2026, 10, 10, 7, 0, 0, 0, time.UTC)
@@ -61,6 +72,13 @@ func TestNativeFixtureRejectsCapabilityAndAuthorityDrift(t *testing.T) {
 		name   string
 		mutate func(*Ledger, *corev1.Pod, *unstructured.Unstructured)
 	}{
+		{"inherited-codex-home", func(_ *Ledger, p *corev1.Pod, _ *unstructured.Unstructured) {
+			for n := range p.Spec.Containers[0].Env {
+				if p.Spec.Containers[0].Env[n].Name == "CODEX_HOME" {
+					p.Spec.Containers[0].Env[n].Value = "/home/dev/.codex"
+				}
+			}
+		}},
 		{"foreign-pod", func(_ *Ledger, p *corev1.Pod, _ *unstructured.Unstructured) { p.UID = types.UID("replaced") }},
 		{"runtime-digest", func(_ *Ledger, p *corev1.Pod, _ *unstructured.Unstructured) {
 			p.Status.ContainerStatuses[0].ImageID = "ghcr.io/thaynes43/dev-env@sha256:other"
