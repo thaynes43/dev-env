@@ -103,9 +103,11 @@ retains the receipt, and returns failure even if termination is proven.
 `NativeReady` records this bounded observation; it does not assert current
 readiness, remote connection, enrollment, pairing or model/task recovery.
 
-The production GitOps enablement remains OFF. The operator has no production
-independent validator for campaign/snapshot provenance or complete native worker
-effort. A nonnil authority callback alone is insufficient. Real lifecycle
+The production GitOps enablement remains OFF. The operator still requires an independent inspector of the finite campaign,
+exact host/pod deadline, owned readiness/stop evidence and native home provenance.
+A nonnil authority callback alone is insufficient. Native/provider internal usage
+may remain unknown or estimated and must be reported that way; missing estimates
+must never disable time or attempt limits. Real lifecycle
 acceptance requires a separately reviewed finite authority whose admissible
 workload excludes owner clients, prompts, model turns and child inference. A
 fresh local permit file or permissive fake Gate is not that acceptance. Source

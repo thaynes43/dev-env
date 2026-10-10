@@ -21,7 +21,7 @@ candidate boundary while preserving WIP and fixture private-home artifacts.
 
 The CLI now wires the real HTTPS budget Gate and exact five-field binding,
 fixed credential projections, access-only adoption, and mandatory pinned-version
-Unix socket readiness. The production independent inspector, complete native
-effort accounting, retained-home recovery provenance, actual native lifecycle,
+Unix socket readiness. The production independent inspector, reliable time/attempt enforcement with
+visible unavailable/estimated native usage, retained-home recovery provenance, actual native lifecycle,
 normal recovery and native owner notification remain separate gates. This source-only unit performs no provider startup, model turn, pairing,
 credential ownership change, cluster deployment or v1 cutover.
