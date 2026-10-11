@@ -76,3 +76,10 @@ Validation packet SHA256
 `189bf28fa7733cb85e2aa71d5b38f2011e865252b24605545d1206d82e7d84e7`
 retains the failed fixture and all earlier evidence. Final Cost200 integration,
 exact-head native review/CI and signed deployment are still gates.
+
+Integration source `3cd61b8d` on merged Cost200 `a0ba2ee4` retains the four source/
+test hashes and exact combined Directory/Usage schemas. No third local TestMain
+startup, lint or generation repeat. Packet
+`92cb9dcf525d4aeeb39ee2a61ec48f8f3c1493ebabcfc557755b7218c860ee12`
+preserves 565 main incoming files and 102 older artifacts. Final native review
+and required CI remain gates; installed operator source predates this correction.
