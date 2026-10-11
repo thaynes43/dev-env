@@ -46,6 +46,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
 	"github.com/thaynes43/dev-env/internal/templates"
 )
@@ -108,9 +109,11 @@ type Reconciler struct {
 	APIURL string
 	// PrivateHistoryRetention opts new/observed private lifecycles into a durable
 	// fail-closed preservation boundary. Existing Pods are never restarted.
-	PrivateHistoryRetention bool
-	ManagedCodexTasks       bool
-	ManagedChildDecisions   bool
+	PrivateHistoryRetention  bool
+	PrivateProjectCanaries   *projectcanary.Policy
+	PrivateProjectCloneOwner string
+	ManagedCodexTasks        bool
+	ManagedChildDecisions    bool
 	// ManagedChildDecisionParents are exact validated coordinator namespace/SA refs.
 	ManagedChildDecisionParents []string
 	// APIReader reads from the API server, past the cache. The decisions that
@@ -917,6 +920,10 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 	if !obs.pod.missing {
 		return nil
 	}
+	if err := r.validateProjectCanary(ctx, s, t); err != nil {
+		obs.removalBlocked = err
+		return nil
+	}
 	if s.Spec.Workspace != nil && s.Status.SharedPrivateHomeUID != "" {
 		if _, err := r.workspacePrivateHome(ctx, s, types.UID(s.Status.SharedPrivateHomeUID)); err != nil {
 			obs.removalBlocked = err
@@ -1021,6 +1028,10 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 			obs.removalBlocked = err
 			return nil
 		}
+	}
+	if err := r.validateProjectCanary(ctx, s, t); err != nil {
+		obs.removalBlocked = err
+		return nil
 	}
 	if err := r.create(ctx, "pod", pod); err != nil {
 		return err

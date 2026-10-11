@@ -12,15 +12,17 @@ remain historical. No new backend selection or storage benchmark is a prerequisi
 
 ## Goal
 
-Claude and Codex agents on different pods load common rules, discover each
+Claude, Codex and future local-model agents on different pods load common rules, discover each
 other's work, communicate, avoid duplicate task claims and read authorized live
 or stopped-session context. Each implements in its own fresh task worktree.
 
 ## Reusable source and gaps
 
-- Private clone/worktree preparation fetches and pins a base commit. Opt-in
-  catalog bootstrap covers managed-daemon startup and explicit private refresh;
-  native-host entrypoints and permanent roots still need integration.
+- Private clone/worktree preparation fetches and pins a base commit. Trusted
+  catalog bootstrap covers managed-daemon startup and explicit private refresh.
+  Owned private roots are released; installed model-free checks cover one public
+  repository. Private native preflight is released, with API/profile/native
+  instruction loading still unaccepted.
 - Private declared-project admission/preparation and provider rule composition
   are built independently of shared storage. Admission remains disabled and
   actual provider rule loading remains unaccepted.
@@ -29,9 +31,11 @@ or stopped-session context. Each implements in its own fresh task worktree.
   reading.
 - Claude shared memory support exists. Provider transcript indexing/export and
   authorized peer-context access remain missing.
-- Normal private-session reap deletes the home after Git-only rescue. The newer
-  retained-home receipt is gated on shared tasks. Preserve provider history
-  independently of repository topology before advertising archive/history parity.
+- The independent private-history retention guard is installed. It retains an
+  original Session/HOME/executor identity across uncertainty and upgrades;
+  pre-guard operator downgrade is not established safe once latches exist.
+  Actual history export/directory/stopped reads remain unaccepted. Explicit
+  published-context source is under review and does not prove native history.
 
 The [coordination contract](../../../../docs/session-coordination.md) records
 exact source evidence and the new read/mutation boundaries.

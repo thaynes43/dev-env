@@ -44,6 +44,7 @@ import (
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/contextpublication"
+	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
 	"github.com/thaynes43/dev-env/internal/templates"
@@ -68,6 +69,10 @@ type Server struct {
 	PrivateProjectTasks   bool
 	ManagedCodexTasks     bool
 	ManagedChildDecisions bool
+	// Canaries remain independent of ordinary private task admission. Nil is off.
+	PrivateProjectCanaries  *projectcanary.Policy
+	PrivateHistoryRetention bool
+	PrivateCanaryTemplates  types.NamespacedName
 	// Client reads from the manager's cache and writes to the API server.
 	Client client.Client
 	// Live reads straight from the API server (the manager's APIReader). A

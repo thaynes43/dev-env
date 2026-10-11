@@ -13,6 +13,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
 	"github.com/thaynes43/dev-env/internal/templates"
@@ -100,6 +101,12 @@ func buildHoldPod(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.Pod
 func isHoldPod(p *corev1.Pod) bool { return p.Labels[v1alpha1.LabelHold] == "true" }
 
 func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, hold bool, managedCodex bool, childDecisions bool) (*corev1.Pod, error) {
+	if s.Spec.ProjectCanary != nil {
+		if validateProjectCanaryPod(s, t, !hold && (s.Spec.Agent != v1alpha1.AgentCodex || managedCodex)) != nil {
+			return nil, projectcanary.ErrRefused
+		}
+		childDecisions = false
+	}
 	if w := s.Spec.Workspace; w != nil && (t.Workspace == nil || !t.Workspace.Enabled || t.Workspace.Claim == "" || t.Workspace.ID != w.ID) {
 		return nil, fmt.Errorf("session workspace %q does not match an enabled template", w.ID)
 	}
@@ -294,6 +301,16 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 	}
 	if s.Spec.Workspace != nil && !hold {
 		pod.Spec.RestartPolicy = corev1.RestartPolicyNever
+	}
+	if s.Spec.ProjectCanary != nil {
+		if len(pod.Spec.Containers) != 1 || len(pod.Spec.InitContainers) != 0 || len(pod.Spec.EphemeralContainers) != 0 {
+			return nil, projectcanary.ErrRefused
+		}
+		pod.Labels[v1alpha1.LabelProjectCanary] = s.Spec.ProjectCanary.ID
+		pod.Annotations["k8tz.io/inject"] = "false"
+		pod.Spec.RestartPolicy = corev1.RestartPolicyNever
+		pod.Spec.ActiveDeadlineSeconds = ptr.To(projectcanary.ActiveDeadlineSeconds)
+		pod.Spec.TerminationGracePeriodSeconds = ptr.To(projectcanary.TerminationGraceSeconds)
 	}
 	return pod, nil
 }
