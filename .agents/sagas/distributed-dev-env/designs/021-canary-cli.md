@@ -82,3 +82,16 @@ annotations against checked Deployment template metadata plus the verified RS
 hash, without filtering/normalization or new permissions/reads. Counters stay
 three until explicit additional authorization, with original evidence retained.
 Independent D21 source work proceeds; no provider canary has been invoked.
+
+## Built source candidate — 2026-10-11 UTC
+
+The integrated candidate d4ebcfe69afeed1906353b07d6951b4980a3efd4 is based
+on merged D20 c9493db0ab9f5b899e78e5617b650f0bd7077d9e. The first bounded
+combined Canary/Directory dispatch suite passed in 1.535 seconds; affected lint
+passed in 0.942 seconds. No TestMain, build, runtime GET, API or provider
+invocation occurred. Validation packet
+`6b8aa213720f31b516c3b69a7f76e784e698d4aa0e07524d53f47fdb4631fa3c`
+retains the original pre-integration freeze, new combined-source freeze and
+571 preserved incoming paths. D20's original failed fixture and corrected PASS
+remain retained. This paragraph changes only source status: final native review,
+required CI and merge remain gates; the actual fixed campaign is unstarted.

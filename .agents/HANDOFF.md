@@ -7,8 +7,10 @@
 generic create sends extra fields/retries and is not a safe substitute. Use the
 ordinary caller and existing callOnce, ID-only JSON, no redirect/retry/wait/poll,
 and a validated original receipt distinguishing HTTP201 from200 without claiming
-provider execution. Source tests/review/CI and a merged-source bound client are
-gates. Before EACH first create, require D20's fresh complete authorized page.
+provider execution. The first integrated Canary/Directory focused suite and
+affected lint passed; packet6b8aa213 preserves both freezes and all 571 incoming
+paths. Final native review/required CI/merge and a merged-source bound client
+remain gates. Before EACH first create, require D20's fresh complete authorized page.
 Actual fixed-provider campaign remains UNSTARTED; no global admission/fleet UX.
 Source D20 #204 merged at c9493db0 with required CI38180555833 and native309d
 passed; its actual Directory read/bound build remain unaccepted. Ops3824 config
@@ -25,7 +27,9 @@ command, because the dispatcher can reach creation. Reuse ordinary auth and
 existing no-retry callWith, refuse redirects and expose typed continuation.
 Corrected focused routing/query/single-request tests and affected lint passed;
 packet925a5b93 retains the present-null output regression and original failed
-fixture. Final native review and required CI precede merge. No schema, runtime read, provider attempt or authority change is included.
+fixture. Source #204 merged at c9493db0 after required CI38180555833 and native
+309d passed; the actual bound build/API read remain unaccepted. No schema, runtime
+read, provider attempt or authority change is included.
 After a bound client build, require a fresh complete authorized page before each
 first fixed canary create. Actual directory and both-provider rules remain
 unaccepted. Preserve original observer/counters; optional Claude is not a gate.
