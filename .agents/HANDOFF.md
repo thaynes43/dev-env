@@ -37,7 +37,13 @@ protected CRD and narrow operator Role. Receipt at 17:57:25 UTC
 proves guard installation and preservation of all 11 other Pods, four Jobs,
 old schema/catalog/template identities and native ledger. Runtime claims remain
 unaccepted; context source #190 is merged and release #192 shipped v2.17.0; its
-separate GitOps deployment and actual workflow acceptance remain pending.
+GitOps #3819 installed at `f316532ab00d4dd4edbf5f2918f5fa1baff825ca`.
+Receipt `cd911ef5e9e474a9cd54f2a951f65d748e6ac9d9ea83395231ddd4ca2641a06f`
+proves exact context CRD/narrow Role/signed image/two Ready replicas and
+preservation of all 11 other Pods, four retained Jobs, prior schema/claim
+authority/catalog/templates/native ledger. Zero AgentSessions existed; actual
+publication/stopped-read and live-session upgrade acceptance remain pending.
+Scoped activity ended.
 
 ## Next #175 source unit: durable offline inbox — 2026-10-11 UTC
 
