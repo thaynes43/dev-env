@@ -14,7 +14,9 @@ Only the existing client identity can request a fixed canary ID; requests cannot
 choose its project, repo, profile, model, effort, size, source, rules or limits.
 The trusted record fixes the client namespace/ServiceAccount and exact accepted
 project/repo/provider/profile/full-model/effort/size-S tuple, catalog/rules
-revision and idempotency key. No wildcard, unknown field, duplicate or caller
+revision, exact template revision, verified immutable image, fixed bounded
+prompt/timeout/turns and idempotency key. The request contains the canary ID only;
+the fixed prompt does not contain validation marker values. No wildcard, unknown field, duplicate or caller
 override is accepted. API disabled or missing prerequisites means no creation.
 
 Require trusted named catalog/clone authority, private-history retention and
@@ -29,8 +31,15 @@ Derive one deterministic retained Session identity from caller and canary ID.
 Exact retries return that original record even when terminal. Concurrent API
 replicas, lost create acknowledgements and uncertain state cannot generate a
 second name or executor. Persist an immutable canary binding in the Session.
+Attach a distinct permanent canary-retention finalizer at the initial atomic
+Create. Early deletion before controller reconciliation burns that original
+identity without allowing a replacement; normal history-retention initialization
+cannot remove this finalizer. Never release or rearm it in this unit.
 The controller independently validates the policy/binding and confirms the
 retention latch before creating its one permitted Pod.
+An authenticated canary Session cannot create other Sessions through legacy
+dispatch routes. Heartbeat and observation remain available. Disabling child
+decision rendering alone does not establish the one-executor boundary.
 
 The execution is one container, no init/sidecar/ephemeral container,
 RestartNever, 600-second active deadline, five-second termination grace and
