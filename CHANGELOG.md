@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.15.1](https://github.com/thaynes43/dev-env/compare/v2.15.0...v2.15.1) (2026-10-11)
+
+
+### Bug Fixes
+
+* **agentd:** preserve owned wrapper modes under private umask ([#186](https://github.com/thaynes43/dev-env/issues/186)) ([9c5cd87](https://github.com/thaynes43/dev-env/commit/9c5cd87fadacee98fd79edc97c6a74def76b198b))
+
 ## [2.15.0](https://github.com/thaynes43/dev-env/compare/v2.14.0...v2.15.0) (2026-10-11)
 
 
