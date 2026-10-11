@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.20.0](https://github.com/thaynes43/dev-env/compare/v2.19.0...v2.20.0) (2026-10-11)
+
+
+### Features
+
+* retain bounded private session directory metadata ([#199](https://github.com/thaynes43/dev-env/issues/199)) ([7fa1705](https://github.com/thaynes43/dev-env/commit/7fa1705e4981632f15580996c303848930913dbd))
+* retain truthful initial invocation usage provenance ([#200](https://github.com/thaynes43/dev-env/issues/200)) ([a0ba2ee](https://github.com/thaynes43/dev-env/commit/a0ba2ee413d38e8368e99f6bb95809d85b214aff))
+
+
+### Bug Fixes
+
+* **controller:** retain protected private executor pods ([#202](https://github.com/thaynes43/dev-env/issues/202)) ([a44b5b1](https://github.com/thaynes43/dev-env/commit/a44b5b1e0b92b4c1a146254e03202617a58b7a01))
+
 ## [2.19.0](https://github.com/thaynes43/dev-env/compare/v2.18.0...v2.19.0) (2026-10-11)
 
 
