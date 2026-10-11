@@ -1,0 +1,105 @@
+# DESIGN-014: Attributed durable offline inbox
+
+**Scope:** next bounded #175 source unit after atomic task claims (#187).
+**Decision:** ADR-003. Default off; no provider prompt delivery or fleet UX follows.
+
+## Contract
+
+Use immutable `InboxMessage` and `InboxReadAck` resources in the protected
+`coordination.dev-env.haynesops.com` group. The operator gets namespaced
+get/create/list only, using uncached reads. Workers get no direct access to
+these resources. Do not use ConfigMaps, provider homes, shared repositories or
+the existing broadly readable API group as the message store. No owner
+references, expiry, garbage collection, replacement or background consumer
+is part of this unit.
+
+An authenticated original live sender Session with a currently controlled,
+non-deleting executor Pod may publish one bounded UTF-8 text message, at most
+16 KiB. The request specifies an explicit project, recipient namespace/name/UID,
+logical idempotency key and text. Derive sender Session UID, authenticated actor,
+provider/requested model and saved catalog/rules provenance on the server.
+Do not accept caller-supplied provenance or infer actual model, initial source
+pin, recipient readiness or provider delivery from it. The contracts cover the
+future local-model provider without starting inference or reserving a GPU.
+
+Sender UID and logical key determine one full-digest identity. Recipient, text
+and source/rules revisions are immutable intent, not uniqueness inputs. Atomic
+Create and uncached confirmation return 201 for a new confirmed message and
+200 for an identical confirmed retry. A changed intent returns 409; an
+unconfirmed acknowledgement returns 503/Unknown, with the same key retained.
+Do not allocate a suffix, retarget a message or inject a prompt after uncertainty.
+
+For a new message, uncached recipient lookup must prove the original UID and
+saved project identity. A stopped or deleting recipient is allowed; a missing,
+replaced or ambiguous recipient is refused. For an already accepted identical
+retry, confirm the stored immutable intent even if that recipient has since
+disappeared. The existing object must be checked before requiring new-recipient
+existence. Operator reconstruction and source Session deletion leave accepted
+messages intact.
+
+## Authorization and acknowledgements
+
+Routes have an independent explicit project content scope. Claim metadata scope
+and legacy broad Session read/reap rights grant no inbox text access. Only the
+original recipient UID, verified against its current controlled, non-deleting
+Pod, can read its inbox and acknowledge a message. A deleting Session can still
+read/ack while that proof remains valid; do not loosen the existing claim caller
+helper to implement this. A replacement Session with the same name cannot
+adopt the old inbox. An absent Session/Pod cannot authenticate as that recipient.
+
+A configured coordinator may read authorized project content, including messages
+whose original sender or recipient is stopped, deleting or absent. It may not
+publish or acknowledge on another Session's behalf. Unauthorized or foreign
+reads return uniform 404 without exposing message metadata or text. Session-less
+native hosts are not assigned a synthetic Session UID; their publication and
+recipient identity remain separate work.
+
+An immutable acknowledgement binds message UID and original recipient UID,
+with the authenticated actor and API creation time derived by the server.
+Atomic creation and uncached confirmation make an identical retry safe. It
+proves an API read acknowledgement only; it does not prove provider consumption,
+phone notification, human reading or prompt delivery. GET never creates an ack.
+Lists return bounded metadata, and individual authorized GET returns text. No
+provider runner, model call, automatic prompt injection or polling loop runs.
+
+## Paths and acceptance
+
+- `api/coordination/v1alpha1/`: immutable bounded message/ack types, deepcopy
+  and generated CRDs under `config/crd/`.
+- `internal/inbox/`: strict identity/intent, atomic create and uncached
+  confirmation/read/list; no controller or informer.
+- `internal/apiserver/inbox.go`, `apiv1` wire types and dedicated routes:
+  publish/list/read and explicit ack/read-ack under `/v1/inbox`.
+- `cmd/operator`: default-off `enable-durable-inbox`, explicit enabled projects
+  and a separate coordinator content-read scope; scheme/store wiring.
+- `internal/agentd/inbox.go`, `cmd/agentd/inbox.go`: explicit bounded stdin JSON
+  publish plus list/read/ack commands. Use projected-token rotation and verified
+  TLS, refuse redirects and response overflow. Do not open provider files.
+- A later GitOps PR installs both CRDs and narrow operator grants before a
+  signed operator enables the route. No worker grant or elevated access follows.
+
+Focused tests must prove two API instances, retries/lost acknowledgements,
+operator reconstruction, immutable changed-intent refusal, stopped/deleting
+recipient publication, identical retry after recipient deletion, replacement
+UID refusal, original-recipient read/ack, scoped coordinator read without
+publish/ack, legacy/project text denial and no provider invocation. Validate
+ASCII and multibyte UTF-8 byte bounds; schema character limits alone do not prove
+the byte contract. Verify schema immutability and CLI token rotation/TLS/redirect
+refusal with meaningful fixtures.
+
+Use sequential focused checks at `nice -n 19`, `GOMAXPROCS=2`, `go test -p 2` and
+cached envtest tools. No burners, stress, wide/looped tests, local image build,
+runtime credential copy or fixture cleanup. Required CI and native independent
+review gate merge. Claude reviews are optional and currently unavailable; read
+any available findings and record failed/skipped outcomes without a pass claim.
+
+## Remaining acceptance
+
+This unit provides durable attributed API publication/read/ack, not automatic
+provider inbox consumption. After signed deployment, run one reviewed disposable
+two-parent offline-message trial, with effective unauthorized text denial and
+preservation across an operator upgrade. Actual one-time provider delivery,
+native host identity, task-budget linkage and the owner pilot remain unaccepted.
+Keep #175/#91 open. Preserve current Sessions, failed native/roots fixtures and
+ledgers. Q-24's native routing question remains pending; it does not block this
+provider-neutral source contract or authorize a fleet UX choice.

@@ -1,6 +1,27 @@
 # HANDOFF: start here
 
-## Reviewable #173 one-attempt managed canaries — 2026-10-11 UTC
+## Next #175 source unit: durable offline inbox — 2026-10-11 UTC
+
+[DESIGN-014](sagas/distributed-dev-env/designs/014-durable-offline-inbox.md)
+defines immutable attributed messages and explicit read acknowledgements in the
+protected coordination API group. Original Session UIDs fence publication and
+recipient ownership; separate project content scopes permit stopped-context
+reads without legacy broad-read access. Accepted retries survive recipient
+deletion; acknowledgements prove API receipt only. No provider prompt injection,
+native host identity or runtime delivery is claimed. Source implementation,
+native independent review, required CI, signed publication, narrow GitOps grants
+and a disposable offline trial remain gates. Claude review stays optional.
+
+#175 atomic task-claim source #187 merged as
+`d95e8fbe7b3e1c07eed75959819cd35f90a155c4`; GitOps PR #3818 merged as `8e17a394` and installed the exact protected CRD,
+narrow operator-only Role and signed `d95e8fb` image. The 17:57:25 UTC receipt
+`69c25fd40a14cc052abac7987feb255782bff20ee4960608c258496eacababba`
+proves installation and preservation of all 11 other Pods, four terminal Jobs,
+old schema/catalog/template identities and the native ledger. Actual claim
+contention and live authorization remain unaccepted. Private admission remains false;
+neither source merge closes #175 or establishes the MVP.
+
+## Built #173 one-attempt managed canaries — 2026-10-11 UTC
 
 [DESIGN-011](sagas/distributed-dev-env/designs/011-private-managed-rule-canaries.md)
 adds a separate default-off policy with at most two fixed Claude/Codex records,
@@ -18,14 +39,16 @@ subscription credential paths remain; Codex uses keeper access-only delivery,
 never enrollment/refresh copies or paid API fallback. Focused parser/API/schema/
 controller/command checks, affected lint and reproducible generation passed.
 Rebase onto released main `296c3d7` retains claims/history wiring. Independent native review and required CI passed on the original candidate;
-the integration rebase onto #190 is receiving a focused independent review and
-new exact-head CI. Claude review is optional/down.
+the integration rebase onto #190 passed native review and exact-head required
+CI38162585232. PR #191 merged as `c062e9897d95aa5da7643250a5b9811c4ecc8cae`.
+Claude review failed before a verdict and remains optional/down.
 
 DESIGN-015 retained common-rule inputs must land before activation. Signed
 publication and separately reviewed GitOps profiles/policy/nonempty rules
 must precede any actual canary. No trial, native rule loading, pairing or fleet UX
 is accepted here. Q-24 remains pending. Provider output must prove loaded markers
 without marker values in the task prompt. Keep #173/#91 and the MVP open.
+
 
 ## Built #174 published context source — 2026-10-11 UTC
 
@@ -50,8 +73,15 @@ all 19 frozen source files and eight unaffected claim files. Native independent 
 source PR #190 merged as `5cfcf0e` on 2026-10-11. A native finding about
 bounded token-file reads was fixed across publication, heartbeat, project-sync
 and access minting. Claude review was unavailable and remains optional/down.
-Signed source/schema/narrow Role deployment and explicit publish-stop-read
-acceptance follow. Provider capture, complete retention, native directory,
+
+Release #192 shipped v2.17.0 with a signed agent image. GitOps #3819 merged
+as `f316532ab00d4dd4edbf5f2918f5fa1baff825ca`; installation and operator
+preservation passed at 18:20:46 UTC in receipt
+`cd911ef5e9e474a9cd54f2a951f65d748e6ac9d9ea83395231ddd4ca2641a06f`.
+Exact CRD/narrow Role/signed image/two Ready replicas were verified. All 11 other
+Pods, four terminal Jobs, prior schemas/claims authority/catalog/templates and
+failed native ledger stayed unchanged; there were zero AgentSessions. The scoped
+activity ended. Actual publish-stop-read acceptance remains separate. Provider capture, complete retention, native directory,
 genuine stopped history and the owner pilot remain unaccepted; keep #174/#91 open.
 
 

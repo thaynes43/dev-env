@@ -44,6 +44,7 @@ import (
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/contextpublication"
+	"github.com/thaynes43/dev-env/internal/inbox"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
@@ -53,8 +54,11 @@ import (
 // Server holds the API's handlers and what they read and write.
 type Server struct {
 	// Separate payload scope; neither legacy reads nor TaskClaim metadata grants it.
-	PublishedContexts   *contextpublication.KubeStore
-	ContextReadProjects []string
+	PublishedContexts            *contextpublication.KubeStore
+	ContextReadProjects          []string
+	Inbox                        *inbox.KubeStore
+	InboxProjects                []string
+	InboxCoordinatorReadProjects []string
 	// Nil leaves immutable coordination routes disabled. This store always reads Live.
 	TaskClaims            *taskclaim.KubeStore
 	TaskClaimReadProjects []string
@@ -123,6 +127,8 @@ type route struct {
 	// quiet logs the route at debug level: heartbeats come every minute.
 	quiet       bool
 	coordinator bool
+	// New private content routes hide authenticated classification refusals.
+	inbox bool
 }
 
 // Handler returns the API's HTTP handler.
@@ -130,6 +136,9 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle(apiv1.PublishedContextsPath, s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.publishContext, http.MethodGet: s.listPublishedContexts}}))
 	mux.Handle(apiv1.PublishedContextsPath+"/{context}", s.serve(route{coordinator: true, methods: map[string]handler{http.MethodGet: s.getPublishedContext}}))
+	mux.Handle(apiv1.InboxPath, s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodPost: s.publishInbox, http.MethodGet: s.listInbox}}))
+	mux.Handle(apiv1.InboxPath+"/{message}", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.readInbox}}))
+	mux.Handle(apiv1.InboxPath+"/{message}/ack", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodPost: s.ackInbox, http.MethodGet: s.readInboxAck}}))
 	mux.Handle(apiv1.TaskClaimsPath, s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.createTaskClaim, http.MethodGet: s.listTaskClaims}}))
 	mux.Handle(apiv1.TaskClaimsPath+"/{claim}", s.serve(route{coordinator: true, methods: map[string]handler{http.MethodGet: s.getTaskClaim}}))
 	mux.Handle(apiv1.TaskBudgetsPath, s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.createTaskBudget}}))
@@ -220,6 +229,10 @@ func (s *Server) serve(rt route) http.Handler {
 				return 0, err
 			}
 			if c, err = s.resolveCaller(r.Context(), id); err != nil {
+				var refusal *apiError
+				if rt.inbox && errors.As(err, &refusal) && (refusal.status == http.StatusForbidden || refusal.status == http.StatusNotFound) {
+					return 0, inboxHidden()
+				}
 				return 0, err
 			}
 			if err := coordinatorAllowed(c, rt.coordinator); err != nil {
