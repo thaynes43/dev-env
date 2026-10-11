@@ -125,3 +125,11 @@ fields. Real API null/removal negatives preserve exact UID/RV/spec/full witness,
 while witness-free initialization/removal and valid original-Pod advances remain
 allowed. Original failing fixture and native HOLD receipt are retained. No
 stateless store invents prior witness data for legacy empty status.
+
+DIRECTORY-R2 found that embedding coordination CRD types in the wire DTO linked
+Kubernetes into agent-run, violating the existing static CLI build guard. Wire
+types now use the standard library and the server explicitly projects approved
+metadata. The guard remains unchanged. A bounded cached CLI build/module check,
+affected API/store checks and seven JSON projection cases passed; generated
+schemas and unrelated incoming paths remain unchanged. Original HOLD evidence
+is retained, and corrected native review and required CI still gate merge.

@@ -18,7 +18,13 @@ removal could erase a last witness. The root schema guard and real API negatives
 are corrected at `f610029a`; original HOLD/source/failed fixture remain retained.
 Corrective packet `40baa50b91b82cab6fd16e09de82d772112e3b1c5e6564824a014fc0abc040d6`
 binds the three-path correction and untouched twenty-path union. Corrected exact
-native review, CI, signed promotion and actual directory/pilot remain gates.
+native review also found DIRECTORY-R2: CRD types linked Kubernetes into agent-run
+through the wire DTO. Standard-library DTOs and explicit server projection are
+corrected at `5ceabbc6`; the unchanged build guard, bounded cached CLI build and
+affected API/store checks passed. Packet
+`b9bb67ebfac2b923d0eec23a6fdf7d54dcfb3756d9ff291f1dc54ec13732836a`
+retains earlier findings/artifacts and unchanged generated/incoming paths.
+Final native review, CI, signed promotion and actual directory/pilot remain gates.
 
 
 ## Built #174 source unit: partial managed output capture
