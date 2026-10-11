@@ -8,7 +8,9 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kjson "sigs.k8s.io/json"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
@@ -115,6 +117,61 @@ func directoryQuery(r *http.Request, paged bool) (string, int64, error) {
 	}
 	return query.Get("project"), limit, nil
 }
+
+// Preserve the retained Kubernetes timestamp representation: UTC seconds and
+// null for an observation or task timestamp that has not been recorded.
+func directoryRecordedTime(value metav1.Time) *time.Time {
+	if value.IsZero() {
+		return nil
+	}
+	stamp := value.UTC().Truncate(time.Second)
+	return &stamp
+}
+
+func directoryReportedTime(value *metav1.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	stamp := value.UTC().Truncate(time.Second)
+	return &stamp
+}
+
+func directoryCommonSource(source *coord.DirectoryCommonSource) *apiv1.DirectoryCommonSource {
+	if source == nil {
+		return nil
+	}
+	return &apiv1.DirectoryCommonSource{Namespace: string(source.Namespace), Name: string(source.Name), Key: string(source.Key), UID: string(source.UID), ResourceVersion: string(source.ResourceVersion), SHA256: string(source.SHA256)}
+}
+
+func directoryOriginal(spec coord.SessionDirectorySpec) apiv1.DirectoryOriginal {
+	r := spec.Revisions
+	c := r.Common
+	view := apiv1.DirectoryOriginal{Version: spec.Version, Source: apiv1.TaskClaimOwner{Namespace: spec.Source.Namespace, Name: spec.Source.Name, UID: spec.Source.UID}, SourceCreatedAt: spec.SourceCreatedAt.UTC().Truncate(time.Second), Project: spec.Project,
+		Repository: string(spec.Repository), Base: string(spec.Base), Parent: spec.Parent, TaskKey: string(spec.TaskKey),
+		Request: apiv1.DirectoryRequest{Provider: spec.Request.Provider, CLI: string(spec.Request.CLI), Model: string(spec.Request.Model), Effort: string(spec.Request.Effort)},
+		Revisions: apiv1.DirectoryRevisions{CanaryPolicy: string(r.CanaryPolicy), CaptureOutput: r.CaptureOutput, CatalogUID: string(r.CatalogUID), CatalogResourceVersion: string(r.CatalogResourceVersion), Catalog: string(r.Catalog), Rules: string(r.Rules), Template: string(r.Template), Image: string(r.Image), ProjectSnapshot: string(r.ProjectSnapshot),
+			Common: apiv1.DirectoryCommon{State: c.State, Revision: string(c.Revision), SnapshotDigest: string(c.SnapshotDigest), Common: directoryCommonSource(c.Common), Header: directoryCommonSource(c.Header)}},
+	}
+	if local := spec.Request.Local; local != nil {
+		view.Request.Local = &apiv1.DirectoryLocalProvider{Backend: local.Backend, ActualModelState: local.ActualModelState, BackendReadinessState: local.BackendReadinessState, GPUReadinessState: local.GPUReadinessState, HouseholdReservationState: local.HouseholdReservationState, Pool: string(local.Pool), RequestedModel: string(local.RequestedModel), RuntimeAdapter: local.RuntimeAdapter}
+	}
+	return view
+}
+
+func directoryWitness(witness *coord.DirectoryWitness) *apiv1.DirectoryWitness {
+	if witness == nil {
+		return nil
+	}
+	view := &apiv1.DirectoryWitness{SourceGeneration: witness.SourceGeneration, SourceResourceVersion: string(witness.SourceResourceVersion), ObservedAt: witness.ObservedAt.UTC().Truncate(time.Second), PodName: string(witness.PodName), PodUID: witness.PodUID,
+		Node: string(witness.Node), Template: string(witness.Template), Image: string(witness.Image), PodPhase: witness.PodPhase, Ready: witness.Ready, ReportedState: string(witness.ReportedState), DeclaredConversationID: string(witness.DeclaredConversationID),
+		ReportedHeartbeatAt: directoryReportedTime(witness.ReportedHeartbeatAt), ReportedTaskFinishedAt: directoryReportedTime(witness.ReportedTaskFinishedAt),
+	}
+	if task := witness.ReportedTask; task != nil {
+		view.ReportedTask = &apiv1.DirectoryTaskReport{ExitCode: task.ExitCode, FinishedAt: directoryRecordedTime(task.FinishedAt), TimedOut: task.TimedOut, Subtype: string(task.Subtype), IsError: task.IsError}
+	}
+	return view
+}
+
 func (s *Server) directoryView(ctx context.Context, d *coord.SessionDirectory) apiv1.SessionDirectory {
 	c := s.SessionDirectory.Current(ctx, d, s.now())
 	retained := d.Status
@@ -125,8 +182,9 @@ func (s *Server) directoryView(ctx context.Context, d *coord.SessionDirectory) a
 		retained.UsageState = "Unknown"
 		retained.CostState = "Unknown"
 	}
-	return apiv1.SessionDirectory{Name: d.Name, UID: string(d.UID), ResourceVersion: d.ResourceVersion, Original: d.Spec, Retained: retained,
-		Current: apiv1.DirectoryCurrent{SourceState: c.SourceState, PlacementState: c.PlacementState, ObservedAt: c.ObservedAt.Time, SourceResourceVersion: c.SourceResourceVersion, Witness: c.Witness, StopState: c.StopState}}
+	return apiv1.SessionDirectory{Name: d.Name, UID: string(d.UID), ResourceVersion: d.ResourceVersion, Original: directoryOriginal(d.Spec),
+		Retained: apiv1.DirectoryRetained{LastWitness: directoryWitness(retained.LastWitness), SourceState: retained.SourceState, ObservedAt: directoryRecordedTime(retained.ObservedAt), StopState: retained.StopState, ActualModelState: retained.ActualModelState, UsageState: retained.UsageState, CostState: retained.CostState},
+		Current:  apiv1.DirectoryCurrent{SourceState: c.SourceState, PlacementState: c.PlacementState, ObservedAt: c.ObservedAt.Time, SourceResourceVersion: c.SourceResourceVersion, Witness: directoryWitness(c.Witness), StopState: c.StopState}}
 }
 func (s *Server) getDirectory(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
 	project, _, err := directoryQuery(r, false)

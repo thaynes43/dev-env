@@ -2,9 +2,12 @@ package apiserver
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -70,6 +73,72 @@ func TestDirectoryIndependentDiscoveryAndMissingSource(t *testing.T) {
 		t.Fatal("unauthenticated classification hidden", w.Code)
 	}
 }
+
+func TestDirectoryWireProjectionPreservesMetadataJSON(t *testing.T) {
+	f := newFixture(t)
+	d := directoryFixture(t, f, "")
+	assertJSON := func(t *testing.T, original, projected any) {
+		t.Helper()
+		var values [2]any
+		for i, input := range []any{original, projected} {
+			encoded, err := json.Marshal(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(encoded, &values[i]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if !reflect.DeepEqual(values[0], values[1]) {
+			t.Fatalf("metadata JSON contract changed: original=%v projected=%v", values[0], values[1])
+		}
+	}
+	t.Run("managed-original-unknown-common", func(t *testing.T) {
+		assertJSON(t, d.Spec, directoryOriginal(d.Spec))
+	})
+	t.Run("local-original-bound-common", func(t *testing.T) {
+		spec := d.Spec
+		spec.SourceCreatedAt = metav1.NewTime(f.now.Add(123456789 * time.Nanosecond).In(time.FixedZone("offset", 3600)))
+		spec.Request.Provider = "local"
+		spec.Request.Local = &coord.DirectoryLocalProvider{Backend: "local-model", ActualModelState: "Unknown", BackendReadinessState: "Unknown", GPUReadinessState: "Unknown", HouseholdReservationState: "Unknown", Pool: "requested-pool", RequestedModel: spec.Request.Model, RuntimeAdapter: "Disabled"}
+		spec.Revisions.Common = coord.DirectoryCommon{State: "Bound", Revision: coord.DirectoryDigest(strings.Repeat("a", 64)), SnapshotDigest: coord.DirectoryDigest(strings.Repeat("b", 64)),
+			Common: &coord.DirectoryCommonSource{Namespace: "dev-env-system", Name: "common", Key: "rules", UID: "common-uid", ResourceVersion: "7", SHA256: coord.DirectoryDigest(strings.Repeat("c", 64))},
+			Header: &coord.DirectoryCommonSource{Namespace: "dev-env-system", Name: "header", Key: "rules", UID: "header-uid", ResourceVersion: "8", SHA256: coord.DirectoryDigest(strings.Repeat("d", 64))},
+		}
+		assertJSON(t, spec, directoryOriginal(spec))
+	})
+	stamp := metav1.NewTime(f.now.Add(123456789 * time.Nanosecond).In(time.FixedZone("offset", 3600)))
+	witness := &coord.DirectoryWitness{SourceGeneration: 9, SourceResourceVersion: "19", ObservedAt: stamp, PodName: "original-pod", PodUID: "original-pod-uid", Node: "original-node", Template: "original-template", Image: "original-image", PodPhase: "Succeeded", Ready: false,
+		ReportedState: "finished", DeclaredConversationID: "declared-thread", ReportedHeartbeatAt: &stamp, ReportedTaskFinishedAt: &stamp, ReportedTask: &coord.DirectoryTaskReport{ExitCode: 1, FinishedAt: stamp, TimedOut: true, Subtype: "declared-result", IsError: true}}
+	t.Run("retained-and-current-full-witness", func(t *testing.T) {
+		assertJSON(t, witness, directoryWitness(witness))
+	})
+	t.Run("witness-without-optional-reports", func(t *testing.T) {
+		minimal := witness.DeepCopy()
+		minimal.ReportedHeartbeatAt, minimal.ReportedTaskFinishedAt, minimal.ReportedTask = nil, nil, nil
+		assertJSON(t, minimal, directoryWitness(minimal))
+		assertJSON(t, (*coord.DirectoryWitness)(nil), directoryWitness(nil))
+	})
+	t.Run("unknown-task-finish-time", func(t *testing.T) {
+		unknown := witness.DeepCopy()
+		unknown.ReportedTask.FinishedAt = metav1.Time{}
+		assertJSON(t, unknown, directoryWitness(unknown))
+	})
+	t.Run("initial-retained-unknown-null-observation", func(t *testing.T) {
+		view := f.srv.directoryView(context.Background(), d)
+		expected := coord.SessionDirectoryStatus{SourceState: "Unknown", StopState: "Unknown", ActualModelState: "Unknown", UsageState: "Unknown", CostState: "Unknown"}
+		assertJSON(t, expected, view.Retained)
+	})
+	t.Run("retained-full-witness-and-provenance", func(t *testing.T) {
+		d.Status = coord.SessionDirectoryStatus{LastWitness: witness, SourceState: "Present", ObservedAt: stamp, StopState: "Unknown", ActualModelState: "Unknown", UsageState: "Unknown", CostState: "Unknown"}
+		view := f.srv.directoryView(context.Background(), d)
+		assertJSON(t, d.Status, view.Retained)
+		if view.Current.SourceState != "SourceMissing" || view.Current.Witness != nil || view.Current.StopState != "Unknown" {
+			t.Fatal("retained witness was projected as fresh placement or stop proof", view.Current)
+		}
+	})
+}
+
 func TestDirectoryContextReferenceWhitelistAndSparseBoundedPage(t *testing.T) {
 	f := newFixture(t)
 	bindCatalogFixture(t, f)
