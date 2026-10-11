@@ -104,10 +104,13 @@ Finite pilot audit `5aff018d28cfd115a8a5704b85e8a2fd200ad358bb0b638b0d75c088261c
 keeps the fixed rule pair unstarted. Public dev-env cloning into private homes/
 worktrees cannot prove private GitHub repository authorization. Short no-tools
 marker invocations do not guarantee a concurrent interaction/upgrade window.
-Discovery alone grants no claims, payload or inbox rights. The private-history
-Pod-removal guard remains intact; suspend/reap intent and absence are not a
-termination proof. A bounded original-executor stop-and-preserve source proof
-must precede the later termination pilot, with no archive/delete/rearm.
+Discovery alone grants no claims, payload or inbox rights. The original audit
+misattributed the private volume-removal guard to Pod removal. Exact source
+instead requires a full suspended/reaped removal-path audit before claiming Pod
+retention. Preserve the original audit and correction; no runtime deletion was
+attempted. Suspend/reap intent and absence are not a termination proof. A bounded
+original-executor stop-and-preserve source proof must precede the termination
+pilot, preserving original HOME/Pod evidence without archive/delete/rearm.
 
 ## Installed common-rule canary prerequisites, admission disabled
 
