@@ -67,6 +67,12 @@ type Settings struct {
 	// records and same-owner sequential continuation. It defaults off.
 	ManagedChildDecisions bool
 	TaskRepositoryURL     string
+	// PrivateProjectBootstrap is trusted pod configuration, independent of
+	// shared workspaces and task admission. The accepted catalog is a named API
+	// resource, never a task-supplied file or snapshot.
+	PrivateProjectBootstrap bool
+	ProjectCatalog          string
+	ProjectCloneOwner       string
 	// HWSSHKeyB64 is the hw-ssh private key, base64 on one line
 	// (HW_SSH_PRIVATE_KEY_B64). A secret: never logged.
 	HWSSHKeyB64 string
@@ -134,18 +140,21 @@ func LoadSettings(getenv func(string) string) (Settings, error) {
 		CodexAccessFile:   getenv("AGENTD_CODEX_ACCESS_FILE"),
 		CodexHome:         or("CODEX_HOME", filepath.Join(home, ".codex")),
 		CodexBin:          "codex", ManagedCodexTasks: getenv("AGENTD_ENABLE_CODEX_TASKS") == "true",
-		ManagedChildDecisions: getenv("AGENTD_ENABLE_CHILD_DECISIONS") == "true",
-		HWSSHKeyB64:           getenv("HW_SSH_PRIVATE_KEY_B64"),
-		UserBin:               filepath.Join(home, ".local", "bin"),
-		SystemBin:             "/usr/local/bin",
-		ClaudeBin:             "claude",
-		TmuxBin:               "tmux",
-		RemoteBase:            strings.TrimSuffix(or("AGENTD_REMOTE_BASE", "https://github.com/thaynes43"), "/"),
-		TokenWait:             90 * time.Second,
-		APIURL:                strings.TrimSuffix(getenv("AGENTD_API_URL"), "/"),
-		APITokenFile:          or("AGENTD_API_TOKEN_FILE", "/var/run/secrets/dev-env/token"),
-		APICAFile:             getenv("AGENTD_API_CA_FILE"),
-		Getenv:                getenv,
+		ManagedChildDecisions:   getenv("AGENTD_ENABLE_CHILD_DECISIONS") == "true",
+		PrivateProjectBootstrap: getenv("AGENTD_ENABLE_PRIVATE_PROJECT_BOOTSTRAP") == "true",
+		ProjectCatalog:          getenv("AGENTD_PROJECT_CATALOG"),
+		ProjectCloneOwner:       getenv("AGENTD_PROJECT_CLONE_OWNER"),
+		HWSSHKeyB64:             getenv("HW_SSH_PRIVATE_KEY_B64"),
+		UserBin:                 filepath.Join(home, ".local", "bin"),
+		SystemBin:               "/usr/local/bin",
+		ClaudeBin:               "claude",
+		TmuxBin:                 "tmux",
+		RemoteBase:              strings.TrimSuffix(or("AGENTD_REMOTE_BASE", "https://github.com/thaynes43"), "/"),
+		TokenWait:               90 * time.Second,
+		APIURL:                  strings.TrimSuffix(getenv("AGENTD_API_URL"), "/"),
+		APITokenFile:            or("AGENTD_API_TOKEN_FILE", "/var/run/secrets/dev-env/token"),
+		APICAFile:               getenv("AGENTD_API_CA_FILE"),
+		Getenv:                  getenv,
 	}
 	if dir := getenv("CLAUDE_CONFIG_DIR"); dir != "" {
 		s.ClaudeConfigDir = dir

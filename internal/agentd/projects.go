@@ -251,7 +251,10 @@ func projectGit(ctx context.Context, r Runner, s Settings, dir string, args ...s
 }
 
 func validateProjectReference(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository) error {
-	clone := s.ClonePath(repo.Name)
+	return validateProjectReferenceAt(ctx, r, s, repo, s.ClonePath(repo.Name))
+}
+
+func validateProjectReferenceAt(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository, clone string) error {
 	if err := noSymlinkComponents(filepath.Join(clone, ".git")); err != nil {
 		return err
 	}
@@ -280,7 +283,7 @@ func (e *projectStagingPreserved) Error() string {
 	return e.reason + "; staging preserved at " + e.path + "; inspect it before another clone attempt"
 }
 
-func cloneProjectReference(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository) error {
+func cloneProjectReference(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository, beforePublication ...func(context.Context) error) error {
 	clone := s.ClonePath(repo.Name)
 	tmp := filepath.Join(s.ReposDir(), "."+repo.Name+".agentd-clone")
 	for attempt := 0; attempt < cloneAttempts; attempt++ {
@@ -291,13 +294,26 @@ func cloneProjectReference(ctx context.Context, r Runner, s Settings, repo proje
 		if _, err := os.Lstat(clone); !errors.Is(err, os.ErrNotExist) {
 			return errors.New("reference destination exists or is uncertain; preserved")
 		}
-		_, err := r.Run(ctx, Cmd{Name: "git", Args: []string{"-c", "core.hooksPath=/dev/null", "clone", "--filter=blob:none", "--quiet", "--branch", repo.DefaultBranch, repo.URL(), tmp}, Env: gitEnv})
+		args := []string{"-c", "core.hooksPath=/dev/null"}
+		if s.privateProjectGit {
+			args = append(args, sharedGitPolicyArgs...)
+		}
+		args = append(args, "clone", "--filter=blob:none", "--quiet", "--branch", repo.DefaultBranch, repo.URL(), tmp)
+		_, err := r.Run(ctx, Cmd{Name: "git", Args: args, Env: gitEnv})
 		if err == nil {
 			if err := noSymlinkComponents(filepath.Join(tmp, ".git")); err != nil {
 				return &projectStagingPreserved{tmp, "successful clone has uncertain Git administration"}
 			}
 			if err := configureSharedGitPolicy(ctx, r, s, tmp); err != nil {
 				return &projectStagingPreserved{tmp, "clone configuration cannot be safely provisioned"}
+			}
+			if err := validateProjectReferenceAt(ctx, r, s, repo, tmp); err != nil {
+				return &projectStagingPreserved{tmp, "successful clone has unconfirmed repository identity"}
+			}
+			for _, confirm := range beforePublication {
+				if confirm != nil && confirm(ctx) != nil {
+					return &projectStagingPreserved{tmp, "accepted catalog changed or is unconfirmed before clone publication"}
+				}
 			}
 			if _, err := os.Lstat(clone); !errors.Is(err, os.ErrNotExist) {
 				return &projectStagingPreserved{tmp, "reference destination appeared"}
@@ -375,7 +391,7 @@ func projectGitOperationClear(ctx context.Context, r Runner, s Settings, dir str
 
 // projectIndexProof hashes every tracked file through Git's index filters. It
 // does not trust cached stat data, assume-unchanged or sparse-checkout bits.
-func projectIndexProof(ctx context.Context, r Runner, s Settings, dir string) (string, error) {
+func projectIndexProof(ctx context.Context, r Runner, s Settings, dir string, readOnly ...bool) (string, error) {
 	if err := projectGitOperationClear(ctx, r, s, dir); err != nil {
 		return "", err
 	}
@@ -432,6 +448,14 @@ func projectIndexProof(ctx context.Context, r Runner, s Settings, dir string) (s
 	result, err := r.Run(ctx, Cmd{Name: "git", Args: []string{"-C", dir, "-c", "core.fsmonitor=false", "hash-object", "--stdin-paths"}, Env: gitEnv, Stdin: strings.NewReader(paths.String())})
 	if err != nil || !slices.Equal(strings.Fields(string(result.Stdout)), expected) {
 		return "", errors.New("tracked files differ from the index; preserved")
+	}
+	if len(readOnly) != 0 && readOnly[0] {
+		// A private refresh must not rewrite even the cache-tree extension of
+		// an owner's index. Prove equality to HEAD without write-tree.
+		if _, err := projectGit(ctx, r, s, dir, "diff", "--cached", "--quiet", "--no-ext-diff", "--no-textconv", "HEAD", "--"); err != nil {
+			return "", errors.New("index differs from HEAD or is uncertain; preserved")
+		}
+		return projectGit(ctx, r, s, dir, "rev-parse", "--verify", "HEAD^{tree}")
 	}
 	return projectGit(ctx, r, s, dir, "write-tree")
 }

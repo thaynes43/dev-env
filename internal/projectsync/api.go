@@ -24,8 +24,22 @@ import (
 // list/watch, mutation or redirect route. API failures never include raw bodies,
 // server addresses or bearer material in public errors.
 func NewReader(host, port, tokenFile, caFile string) (Reader, error) {
+	if tokenFile != APITokenFile || caFile != APICAFile {
+		return nil, errors.New("sync requires its explicit projected Kubernetes identity and Service address")
+	}
+	return newReader(host, port, tokenFile, caFile)
+}
+
+// NewPrivateCatalogReader reuses the uncached named-GET transport with the
+// pod's standard Kubernetes API projection. It does not use the operator's
+// audience token, a kubeconfig or the legacy shared sync Job's credentials.
+func NewPrivateCatalogReader(host, port string) (Reader, error) {
+	return newReader(host, port, "/var/run/secrets/kubernetes.io/serviceaccount/token", "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+}
+
+func newReader(host, port, tokenFile, caFile string) (Reader, error) {
 	p, err := strconv.ParseUint(port, 10, 16)
-	if net.ParseIP(host) == nil || err != nil || p == 0 || tokenFile != APITokenFile || caFile != APICAFile {
+	if net.ParseIP(host) == nil || err != nil || p == 0 {
 		return nil, errors.New("sync requires its explicit projected Kubernetes identity and Service address")
 	}
 	ca, err := os.ReadFile(caFile)

@@ -1,5 +1,31 @@
 # HANDOFF: start here
 
+## Active #173 bootstrap slice — 2026-10-11 UTC
+
+The fresh task branch starts at v2.12.0 (`1a83e9f`), including delivered #178.
+[DESIGN-006](sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md)
+defines the next source PR: trusted catalog-wide private startup/bootstrap and
+safe refresh, independent of shared preflight and locks. Preserve dirty/index
+state, ignored files, local commits, worktrees, operation markers and ambiguous
+authority. Record catalog/source revisions. Every new task still fetches and
+pins its selected source; resume preserves WIP and saved rules.
+
+Read-only live verification confirms operator `sha-7a634e5` and worker template
+2.12.0, two Ready operator replicas, private-project admission disabled and no
+AgentSessions. The trusted catalog exists with one dev-env repository and empty
+common-rule text. This does not establish actual provider rule loading.
+Protected runtime identities and the failed fixture ledger have a private
+baseline for delivery verification; no fixture or storage route is restarted.
+
+The parallel finite Codex routing audit must distinguish complete native chat
+isolation from isolated command executors. One display name retained across
+sequential replacement is not concurrent routing proof. No enrollment or
+credential copying, pairing challenge or daemon change is authorized by that
+audit. Record its supported contract and ask one owner question if the fleet
+UX needs a tradeoff. Claude, Codex and a future local provider each retain
+independent session failure boundaries; local inference waits for GPU readiness
+and household reservations.
+
 ## Owner scope reset — 2026-10-10, America/New_York
 
 Tom clarified the purpose: upgrades preserve sessions, work spreads across nodes,
