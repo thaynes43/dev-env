@@ -189,7 +189,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	case "owned-codex-host-helper":
 		return ownedCodexHostHelper(stderr)
 	case "codex-host":
-		return codexHost(ctx, args[1:], stdout, stderr, getenv)
+		return codexHost(ctx, args[1:], stdout, stderr, getenv, r)
 	case "project-sync":
 		return projectSync(ctx, args[1:], stdout, stderr, getenv, r)
 	case "project-refresh":
