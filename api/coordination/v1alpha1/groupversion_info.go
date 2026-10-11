@@ -1,4 +1,4 @@
-// Package v1alpha1 holds private coordination metadata, separate from the
+// Package v1alpha1 holds protected coordination records, separate from the
 // dev-env group that existing workers can read.
 // +kubebuilder:object:generate=true
 // +groupName=coordination.dev-env.haynesops.com
@@ -13,7 +13,7 @@ import (
 var (
 	GroupVersion  = schema.GroupVersion{Group: "coordination.dev-env.haynesops.com", Version: "v1alpha1"}
 	SchemeBuilder = runtime.NewSchemeBuilder(func(s *runtime.Scheme) error {
-		s.AddKnownTypes(GroupVersion, &TaskClaim{}, &TaskClaimList{}, &PublishedContext{}, &PublishedContextList{})
+		s.AddKnownTypes(GroupVersion, &TaskClaim{}, &TaskClaimList{}, &PublishedContext{}, &PublishedContextList{}, &InboxMessage{}, &InboxMessageList{}, &InboxReadAck{}, &InboxReadAckList{})
 		metav1.AddToGroupVersion(s, GroupVersion)
 		return nil
 	})

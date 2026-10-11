@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -43,6 +44,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/contextpublication"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/grantexpiry"
+	"github.com/thaynes43/dev-env/internal/inbox"
 	"github.com/thaynes43/dev-env/internal/podexec"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/shelf"
@@ -80,6 +82,9 @@ func main() {
 type options struct {
 	contextsEnabled               bool
 	contextReadProjects           []string
+	inboxEnabled                  bool
+	inboxProjects                 []string
+	inboxCoordinatorReadProjects  []string
 	taskClaimsEnabled             bool
 	taskClaimReadProjects         []string
 	nativeFixtureEnabled          bool
@@ -143,6 +148,9 @@ func parseFlags(args []string) (options, error) {
 	claimProjects := fs.String("task-claims-read-projects", "", "explicit comma-separated projects for bounded TaskClaim metadata discovery")
 	fs.BoolVar(&o.contextsEnabled, "enable-published-contexts", false, "enable immutable explicitly published context in the protected coordination API group")
 	contextProjects := fs.String("context-payload-read-projects", "", "explicit comma-separated projects granting published context payload reads")
+	fs.BoolVar(&o.inboxEnabled, "enable-durable-inbox", false, "enable immutable API inbox messages and explicit read acknowledgements")
+	inboxProjects := fs.String("inbox-projects", "", "explicit comma-separated projects enabled for durable Session inbox access")
+	inboxCoordinatorProjects := fs.String("inbox-coordinator-read-projects", "", "separate explicit projects granting configured coordinators inbox content read only")
 	fs.BoolVar(&o.nativeFixtureEnabled, "enable-native-lifecycle-fixture", false, "admit only the fixed isolated zero-task native lifecycle fixture")
 	fs.StringVar(&o.nativeFixtureImage, "native-fixture-image", "", "signature-verified immutable agent image for the isolated fixture")
 	fs.StringVar(&o.taskBudgetNamespace, "task-budget-namespace", "", "dedicated protected namespace for retained budget ConfigMaps")
@@ -243,6 +251,27 @@ func parseFlags(args []string) (options, error) {
 		}
 	} else if len(o.contextReadProjects) != 0 {
 		return o, errors.New("context payload scope requires explicit enable-published-contexts")
+	}
+
+	o.inboxProjects, err = apiserver.ParseTaskClaimReadProjects(*inboxProjects)
+	if err != nil {
+		return o, err
+	}
+	o.inboxCoordinatorReadProjects, err = apiserver.ParseTaskClaimReadProjects(*inboxCoordinatorProjects)
+	if err != nil {
+		return o, err
+	}
+	if o.inboxEnabled {
+		if o.apiAddr == "0" || o.catalogBinding == nil || len(o.inboxProjects) == 0 || len(validation.IsDNS1123Label(o.templatesNamespace)) != 0 {
+			return o, errors.New("durable inbox requires API, accepted catalog and explicit project content scope")
+		}
+		for _, project := range o.inboxCoordinatorReadProjects {
+			if !slices.Contains(o.inboxProjects, project) || !o.coordinatorEnabled {
+				return o, errors.New("inbox coordinator content scope requires an enabled configured coordinator and enabled project")
+			}
+		}
+	} else if len(o.inboxProjects) != 0 || len(o.inboxCoordinatorReadProjects) != 0 {
+		return o, errors.New("inbox scopes require explicit enable-durable-inbox")
 	}
 
 	if *assignedBudgets != "" {
@@ -405,8 +434,13 @@ func run(args []string) error {
 		if o.contextsEnabled {
 			contexts = &contextpublication.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.templatesNamespace}
 		}
+		var inboxStore *inbox.KubeStore
+		if o.inboxEnabled {
+			inboxStore = &inbox.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.templatesNamespace}
+		}
 		api := &apiserver.Server{
 			PublishedContexts: contexts, ContextReadProjects: o.contextReadProjects,
+			Inbox: inboxStore, InboxProjects: o.inboxProjects, InboxCoordinatorReadProjects: o.inboxCoordinatorReadProjects,
 			TaskClaims: claims, TaskClaimReadProjects: o.taskClaimReadProjects,
 			Client:      mgr.GetClient(),
 			TaskBudgets: budgets, AssignedTaskBudgets: o.assignedTaskBudgets,

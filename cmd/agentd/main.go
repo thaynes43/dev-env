@@ -198,6 +198,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return ctl(ctx, args[1:], stdin, stdout, stderr, getenv, r)
 	case "ask-decision":
 		return askDecision(ctx, args[1:], stdin, stdout, stderr, getenv)
+	case "inbox-publish", "inbox-list", "inbox-read", "inbox-ack":
+		return inboxCommand(ctx, args[0], args[1:], stdin, stdout, stderr, getenv)
 	default:
 		_, _ = fmt.Fprintf(stderr, "%s: unknown command %q\n\n%s", binaryName, args[0], usage)
 		return exitUsage
