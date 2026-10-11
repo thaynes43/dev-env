@@ -106,3 +106,11 @@ require any generated fields to have a separate finite reviewed binding. No
 checker candidate, runtime read, source-code change or verification rerun follows
 from this docs correction; original native evidence and the three-attempt stop
 remain retained.
+
+## Source shipping record — 2026-10-11
+
+Source #206 merged562d7df2 after corrected full nativeb82 and required
+CI38181882755. Releasev2.21.0 includes D20/D21. The one bound cached client
+build passed, with runtime invocation still held. See [client evidence](../verification/clients-2026-10-11.md)
+for original failures, local/source/release proof and remaining gates. Q-26's
+three-attempt STOP remains pending; no fourth checker or provider was started.
