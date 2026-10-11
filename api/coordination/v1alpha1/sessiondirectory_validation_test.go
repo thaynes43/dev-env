@@ -18,7 +18,11 @@ import (
 func TestDirectoryRealSchemaOriginalBoundedImmutableAndWitness(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	source := testutil.New(t, "codex", "dev/client").Session
+	fixture := testutil.New(t, "codex", "dev/client")
+	fixture.Record.CaptureOutput = true
+	source := fixture.Session
+	source.Spec.ProjectCanary.CaptureOutput = true
+	source.Spec.ProjectCanary.PolicyDigest = fixture.Record.Digest()
 	source.CreationTimestamp = metav1.NewTime(time.Date(2026, 10, 11, 19, 0, 0, 0, time.UTC))
 	source.Spec.SessionDirectory = &v1alpha1.SessionDirectoryEnrollment{Version: 1, Project: "sample"}
 	spec, err := sessiondirectory.Spec(source)

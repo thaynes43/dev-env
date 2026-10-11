@@ -234,7 +234,7 @@ func TestDirectoryLocalProviderIsExplicitAndDisabled(t *testing.T) {
 	if sessiondirectory.ValidSpec(spec) {
 		t.Fatal("untyped local inference admitted")
 	}
-	spec.Request.Local = &coord.DirectoryLocalProvider{Pool: "fixture", Model: "declared", RuntimeAdapter: "Disabled"}
+	spec.Request.Local = &coord.DirectoryLocalProvider{Pool: "fixture", RequestedModel: spec.Request.Model, Backend: "local-model", ActualModelState: "Unknown", BackendReadinessState: "Unknown", GPUReadinessState: "Unknown", HouseholdReservationState: "Unknown", RuntimeAdapter: "Disabled"}
 	if !sessiondirectory.ValidSpec(spec) {
 		t.Fatal("explicit disabled local metadata refused")
 	}

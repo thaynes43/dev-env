@@ -95,6 +95,39 @@ func TestDirectoryContextReferenceWhitelistAndSparseBoundedPage(t *testing.T) {
 	if w = f.do(http.MethodGet, apiv1.PublishedContextsPath+"/"+publication.Metadata.Name+"?project=sample", reader, nil); w.Code != http.StatusForbidden {
 		t.Fatal("discovery granted payload", w.Code)
 	}
+	// The metadata-only adapter also retains a partial managed publisher's
+	// declared thread and original actor provenance, without exposing its text.
+	managed, err := f.srv.PublishedContexts.Get(context.Background(), publication.Metadata.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := apiv1.ManagedInvocation(managed.Spec.Source.UID, managed.Spec.Actor.PodUID)
+	managed.Name = apiv1.ContextName(managed.Spec.Source.UID, "transcript-excerpt", apiv1.ManagedOutputKey(invocation, 0))
+	managed.UID = "managed-publication"
+	managed.ResourceVersion = ""
+	managed.Spec.Identity.Kind, managed.Spec.Identity.Key = "transcript-excerpt", apiv1.ManagedOutputKey(invocation, 0)
+	managed.Spec.Origin, managed.Spec.Completeness = "ManagedOutputAssertion", "PartialManagedOutput"
+	managed.Spec.Attribution.Provider = "codex"
+	managed.Spec.ManagedOutput = &coord.ManagedOutputAssertion{Invocation: invocation, Ordinal: 0, ConversationID: "11111111-1111-4111-8111-111111111111"}
+	if err := f.c.Create(context.Background(), managed); err != nil {
+		t.Fatal(err)
+	}
+	managedPage := f.do(http.MethodGet, apiv1.SessionDirectoryPath+"/"+d.Name+"/contexts?project=sample", reader, nil)
+	if managedPage.Code != http.StatusOK {
+		t.Fatal(managedPage.Code, managedPage.Body.String())
+	}
+	found := false
+	for _, ref := range decode[apiv1.DirectoryContextReferences](t, managedPage).Items {
+		if ref.DeclaredThread != nil {
+			found = true
+			if ref.DeclaredThread.ConversationID != managed.Spec.ManagedOutput.ConversationID || ref.DeclaredThread.PodUID != managed.Spec.Actor.PodUID || ref.DeclaredThread.SourceUID != d.Spec.Source.UID || ref.Completeness != "PartialManagedOutput" {
+				t.Fatal("assertion lost original provenance", ref)
+			}
+		}
+	}
+	if !found || strings.Contains(managedPage.Body.String(), contextReq().Text) {
+		t.Fatal("partial assertion omitted or text exposed")
+	}
 	p, err := f.srv.PublishedContexts.Get(context.Background(), publication.Metadata.Name)
 	if err != nil {
 		t.Fatal(err)

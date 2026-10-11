@@ -9,10 +9,11 @@ import (
 	"slices"
 	"strconv"
 
+	kjson "sigs.k8s.io/json"
+
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
-	kjson "sigs.k8s.io/json"
 )
 
 func directoryHidden() error { return notFound("session directory not found") }
@@ -212,7 +213,11 @@ func (s *Server) listDirectoryContexts(ctx context.Context, _ http.ResponseWrite
 		if p.Spec.Source.Namespace != d.Spec.Source.Namespace || p.Spec.Source.UID != d.Spec.Source.UID || p.Spec.Project != project {
 			continue
 		}
-		refs = append(refs, apiv1.DirectoryContextReference{Name: p.Name, UID: string(p.UID), ResourceVersion: p.ResourceVersion, Kind: p.Spec.Identity.Kind, Key: p.Spec.Identity.Key, ContentSHA256: p.Spec.ContentSHA256, ByteCount: p.Spec.ByteCount, Origin: p.Spec.Origin, Completeness: p.Spec.Completeness, PublishedAt: p.CreationTimestamp.Time})
+		ref := apiv1.DirectoryContextReference{Name: p.Name, UID: string(p.UID), ResourceVersion: p.ResourceVersion, Kind: p.Spec.Identity.Kind, Key: p.Spec.Identity.Key, ContentSHA256: p.Spec.ContentSHA256, ByteCount: p.Spec.ByteCount, Origin: p.Spec.Origin, Completeness: p.Spec.Completeness, PublishedAt: p.CreationTimestamp.Time}
+		if assertion := p.Spec.ManagedOutput; assertion != nil {
+			ref.DeclaredThread = &apiv1.DirectoryThreadAssertion{ConversationID: assertion.ConversationID, Invocation: assertion.Invocation, SourceNamespace: p.Spec.Source.Namespace, SourceUID: p.Spec.Source.UID, PodName: p.Spec.Actor.PodName, PodUID: p.Spec.Actor.PodUID, PublishedAt: p.CreationTimestamp.Time}
+		}
+		refs = append(refs, ref)
 	}
 	return http.StatusOK, apiv1.DirectoryContextReferences{Items: refs, DirectoryResourceVersion: d.ResourceVersion, Continue: encoded}, nil
 }

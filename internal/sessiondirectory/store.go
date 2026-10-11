@@ -71,12 +71,12 @@ func ValidSpec(s coord.SessionDirectorySpec) bool {
 		s.Source.UID == "" || !bounded(s.Source.UID, 128) || s.SourceCreatedAt.IsZero() || len(validation.IsDNS1123Label(s.Project)) != 0 ||
 		s.Repository == "" || !bounded(string(s.Repository), 256) || s.Base == "" || !bounded(string(s.Base), 256) ||
 		!bounded(s.Parent, 317) || !bounded(string(s.TaskKey), 256) || s.Request.CLI == "" || s.Request.Model == "" ||
-		!commonrules.ValidDigest(string(s.Revisions.Catalog)) || !commonrules.ValidDigest(string(s.Revisions.Rules)) || !commonrules.ValidDigest(string(s.Revisions.ProjectSnapshot)) ||
+		!commonrules.ValidDigest(string(s.Revisions.CanaryPolicy)) || !commonrules.ValidDigest(string(s.Revisions.Catalog)) || !commonrules.ValidDigest(string(s.Revisions.Rules)) || !commonrules.ValidDigest(string(s.Revisions.ProjectSnapshot)) ||
 		s.Revisions.CatalogUID == "" || s.Revisions.CatalogResourceVersion == "" || s.Revisions.Template == "" || s.Revisions.Image == "" {
 		return false
 	}
 	if s.Request.Provider == "local" {
-		if s.Request.Local == nil || s.Request.Local.Pool == "" || s.Request.Local.Model == "" || s.Request.Local.RuntimeAdapter != "Disabled" {
+		if s.Request.Local == nil || s.Request.Local.Pool == "" || s.Request.Local.RequestedModel != s.Request.Model || s.Request.Local.Backend != "local-model" || s.Request.Local.ActualModelState != "Unknown" || s.Request.Local.BackendReadinessState != "Unknown" || s.Request.Local.GPUReadinessState != "Unknown" || s.Request.Local.HouseholdReservationState != "Unknown" || s.Request.Local.RuntimeAdapter != "Disabled" {
 			return false
 		}
 	} else if s.Request.Local != nil || (s.Request.Provider != "claude" && s.Request.Provider != "codex" && s.Request.Provider != "Unknown") {
@@ -107,7 +107,7 @@ func Spec(s *v1alpha1.AgentSession) (coord.SessionDirectorySpec, error) {
 	out = coord.SessionDirectorySpec{Version: 1, Source: coord.SessionIdentity{Namespace: s.Namespace, Name: s.Name, UID: string(s.UID)}, SourceCreatedAt: s.CreationTimestamp,
 		Project: r.Project, Repository: coord.DirectoryText(s.Spec.Repo), Base: coord.DirectoryText(s.Spec.Base), Parent: s.Spec.Parent, TaskKey: coord.DirectoryText("canary:" + r.ID),
 		Request:   coord.DirectoryRequest{Provider: r.Provider, CLI: coord.DirectoryText(s.Spec.Agent), Model: coord.DirectoryText(s.Spec.Model), Effort: coord.DirectoryText(s.Spec.Effort)},
-		Revisions: coord.DirectoryRevisions{CatalogUID: coord.DirectoryText(b.CatalogUID), CatalogResourceVersion: coord.DirectoryText(b.CatalogResourceVersion), Catalog: coord.DirectoryDigest(b.CatalogRevision), Rules: coord.DirectoryDigest(b.RulesRevision), Template: coord.DirectoryText(b.TemplateRevision), Image: coord.DirectoryImage(b.Image), ProjectSnapshot: coord.DirectoryDigest(b.SnapshotDigest), Common: coord.DirectoryCommon{State: "Unknown"}}}
+		Revisions: coord.DirectoryRevisions{CanaryPolicy: coord.DirectoryDigest(b.PolicyDigest), CaptureOutput: b.CaptureOutput, CatalogUID: coord.DirectoryText(b.CatalogUID), CatalogResourceVersion: coord.DirectoryText(b.CatalogResourceVersion), Catalog: coord.DirectoryDigest(b.CatalogRevision), Rules: coord.DirectoryDigest(b.RulesRevision), Template: coord.DirectoryText(b.TemplateRevision), Image: coord.DirectoryImage(b.Image), ProjectSnapshot: coord.DirectoryDigest(b.SnapshotDigest), Common: coord.DirectoryCommon{State: "Unknown"}}}
 	if s.Spec.CommonRules != nil {
 		snapshot, err := commonrules.BoundSession(s)
 		if err != nil {

@@ -43,8 +43,19 @@ type DirectoryRequest struct {
 }
 
 type DirectoryLocalProvider struct {
-	Pool  DirectoryText `json:"pool"`
-	Model DirectoryText `json:"model"`
+	// Backend is an explicit declaration, never inferred from OpenCode.
+	// +kubebuilder:validation:Enum=local-model
+	Backend string `json:"backend"`
+	// +kubebuilder:validation:Enum=Unknown
+	ActualModelState string `json:"actualModelState"`
+	// +kubebuilder:validation:Enum=Unknown
+	BackendReadinessState string `json:"backendReadinessState"`
+	// +kubebuilder:validation:Enum=Unknown
+	GPUReadinessState string `json:"gpuReadinessState"`
+	// +kubebuilder:validation:Enum=Unknown
+	HouseholdReservationState string        `json:"householdReservationState"`
+	Pool                      DirectoryText `json:"pool"`
+	RequestedModel            DirectoryText `json:"requestedModel"`
 	// +kubebuilder:validation:Enum=Disabled
 	RuntimeAdapter string `json:"runtimeAdapter"`
 }
@@ -73,6 +84,8 @@ type DirectoryCommon struct {
 }
 
 type DirectoryRevisions struct {
+	CanaryPolicy           DirectoryDigest `json:"canaryPolicy"`
+	CaptureOutput          bool            `json:"captureOutput"`
 	CatalogUID             DirectoryText   `json:"catalogUID"`
 	CatalogResourceVersion DirectoryText   `json:"catalogResourceVersion"`
 	Catalog                DirectoryDigest `json:"catalog"`
@@ -85,6 +98,7 @@ type DirectoryRevisions struct {
 
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="original directory identity and accepted request/revisions are immutable"
 // +kubebuilder:validation:XValidation:rule="(self.request.provider == 'local') == has(self.request.local)",message="local provider metadata must be explicitly typed"
+// +kubebuilder:validation:XValidation:rule="!has(self.request.local) || self.request.local.requestedModel == self.request.model",message="local requested model must equal the exact accepted request"
 type SessionDirectorySpec struct {
 	// +kubebuilder:validation:Enum=1
 	Version         int             `json:"version"`

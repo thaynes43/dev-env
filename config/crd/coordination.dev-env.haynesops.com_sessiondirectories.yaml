@@ -65,10 +65,32 @@ spec:
                     description: Local is explicit metadata; the runtime adapter stays
                       disabled.
                     properties:
-                      model:
-                        maxLength: 256
+                      actualModelState:
+                        enum:
+                        - Unknown
+                        type: string
+                      backend:
+                        description: Backend is an explicit declaration, never inferred
+                          from OpenCode.
+                        enum:
+                        - local-model
+                        type: string
+                      backendReadinessState:
+                        enum:
+                        - Unknown
+                        type: string
+                      gpuReadinessState:
+                        enum:
+                        - Unknown
+                        type: string
+                      householdReservationState:
+                        enum:
+                        - Unknown
                         type: string
                       pool:
+                        maxLength: 256
+                        type: string
+                      requestedModel:
                         maxLength: 256
                         type: string
                       runtimeAdapter:
@@ -76,8 +98,13 @@ spec:
                         - Disabled
                         type: string
                     required:
-                    - model
+                    - actualModelState
+                    - backend
+                    - backendReadinessState
+                    - gpuReadinessState
+                    - householdReservationState
                     - pool
+                    - requestedModel
                     - runtimeAdapter
                     type: object
                   model:
@@ -98,6 +125,12 @@ spec:
                 type: object
               revisions:
                 properties:
+                  canaryPolicy:
+                    maxLength: 64
+                    pattern: ^[a-f0-9]{64}$
+                    type: string
+                  captureOutput:
+                    type: boolean
                   catalog:
                     maxLength: 64
                     pattern: ^[a-f0-9]{64}$
@@ -204,6 +237,8 @@ spec:
                     maxLength: 256
                     type: string
                 required:
+                - canaryPolicy
+                - captureOutput
                 - catalog
                 - catalogResourceVersion
                 - catalogUID
@@ -263,6 +298,9 @@ spec:
               rule: self == oldSelf
             - message: local provider metadata must be explicitly typed
               rule: (self.request.provider == 'local') == has(self.request.local)
+            - message: local requested model must equal the exact accepted request
+              rule: '!has(self.request.local) || self.request.local.requestedModel
+                == self.request.model'
           status:
             properties:
               actualModelState:
