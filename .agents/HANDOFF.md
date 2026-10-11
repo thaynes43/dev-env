@@ -81,7 +81,8 @@ controller/command checks, affected lint and reproducible generation passed.
 Rebase onto released main `296c3d7` retains claims/history wiring. Independent native review and required CI passed on the original candidate;
 the integration rebase onto #190 passed native review and exact-head required
 CI38162585232. PR #191 merged as `c062e9897d95aa5da7643250a5b9811c4ecc8cae`.
-Claude review failed before a verdict and remains optional/down.
+Claude review failed before a verdict and is optional/down; its receipt was read.
+
 
 DESIGN-015 retained common-rule inputs must land before activation. Signed
 publication and separately reviewed GitOps profiles/policy/nonempty rules

@@ -123,3 +123,11 @@ This projection needs no per-session ConfigMap, create permission or admission
 policy. The existing original Session/retention/one-executor fences govern the
 retained input and Pod identity. Only named GET access to the two trusted common
 source ConfigMaps is added; the caller cannot override annotation, file or mount.
+
+
+The typed common source revision and retained launch-input contract also applies
+to the local-model provider. This increment activates only the two existing
+subscription CLI adapters. The local adapter remains disabled until its private
+instruction projection, exact model identity and household GPU reservation gates
+are implemented and accepted; it must not infer readiness or substitute a paid
+API. No local inference is launched by this slice.
