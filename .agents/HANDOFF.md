@@ -1,5 +1,19 @@
 # HANDOFF: start here
 
+## #174 directory CLI prerequisite for #173 rule probes
+
+[DESIGN-020](sagas/distributed-dev-env/designs/020-directory-cli.md) ratifies the
+explicit `directory list --project dev-env --limit 20 --json --once` route.
+The shipped pre-D20 binary has no Directory verb; do not invoke an unknown
+command, because the dispatcher can reach creation. Reuse ordinary auth and
+existing no-retry callWith, refuse redirects and expose typed continuation.
+Corrected focused routing/query/single-request tests and affected lint passed;
+packet925a5b93 retains the present-null output regression and original failed
+fixture. Final native review and required CI precede merge. No schema, runtime read, provider attempt or authority change is included.
+After a bound client build, require a fresh complete authorized page before each
+first fixed canary create. Actual directory and both-provider rules remain
+unaccepted. Preserve original observer/counters; optional Claude is not a gate.
+
 ## Latest installed state and acceptance gates — 2026-10-11 22:00 UTC
 
 This entry supersedes the historical “pending release/install” paragraphs below.

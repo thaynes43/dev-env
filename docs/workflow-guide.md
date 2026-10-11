@@ -465,3 +465,21 @@ it. Avoid replacing a real product outcome with an infrastructure benchmark.
 Keep decisions in the ADR, tasks in durable issues and actual workflow evidence
 in delivery records. The guide is the owner’s product map; update it whenever a
 scope decision changes the experience.
+
+### Read retained session metadata
+
+The source directory client reads through the operator/API with the caller's
+existing project authorization. It does not grant access to private payloads
+or session control:
+
+```sh
+agent-run directory list --project dev-env --limit 20 --json --once
+```
+
+The command makes one request and refuses redirects and retries. Its JSON page
+includes a continuation when more metadata remains; use `--continue <cursor>`
+for a separate page. A failed or incomplete read does not prove zero records.
+Metadata can retain original identities after the source Session stops, while
+fresh observations may remain Unknown. Source/installation alone does not prove
+actual authorized discovery or full native-history retention. See
+[the directory client contract](../.agents/sagas/distributed-dev-env/designs/020-directory-cli.md).
