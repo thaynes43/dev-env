@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
+
 	"github.com/thaynes43/dev-env/internal/codexauth"
 )
 
@@ -140,7 +141,11 @@ func TestPrivateCodexHostPreflightRefusesSharedAndRedirectedPaths(t *testing.T) 
 				if os.Symlink(filepath.Join(s.Home, "foreign-history"), p) != nil {
 					t.Fatal("symlink")
 				}
-				defer os.Remove(p)
+				defer func() {
+					if err := os.Remove(p); err != nil {
+						t.Fatal(err)
+					}
+				}()
 			case "nested mount":
 				readWorkspaceMountInfo = func() ([]byte, error) {
 					return []byte("1 0 8:1 /private " + s.Home + " rw - ext4 private rw\n2 1 0:42 /shared " + s.ReposDir() + " rw - ceph shared rw"), nil

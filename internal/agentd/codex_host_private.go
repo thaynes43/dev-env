@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/pelletier/go-toml/v2"
+
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
 
@@ -102,7 +103,7 @@ func privateCodexHostPreflight(s Settings) error {
 		}
 		entries, err := f.ReadDir(257)
 		_ = f.Close()
-		if err != nil && err != io.EOF || len(entries) > 256 {
+		if err != nil && !errors.Is(err, io.EOF) || len(entries) > 256 {
 			return errCodexHostUnknown
 		}
 		for _, entry := range entries {
