@@ -35,6 +35,18 @@ client/coordinator identities; it is not a per-SA map. Live Session readers must
 also prove their own accepted project. Future pilot identity/project bindings
 remain separate and do not select Q-24 fleet UX.
 
+## Next bounded #176 source unit: truthful initial usage
+
+[DESIGN-018](sagas/distributed-dev-env/designs/018-initial-invocation-usage-provenance.md)
+fixes the evidenced missing-cost-to-$0 defect through typed presence/provenance
+and one retained initial-invocation snapshot. Legacy raw status stays preserved;
+new API responses omit unqualified legacy Usage so old clients cannot invent a
+free cost. New clients show Unknown without typed evidence, explicit observed
+zero with CLI estimate provenance, requested exact model and actual Unknown.
+No parent/child sums, billing inference, API substitution or budget changes.
+Finite audit SHA256 `9c96d404956f661f1a09f5361a1ffa6f9e1874f8a5e3e1a7848b00808db197e8`.
+Source implementation, native review, CI, signed promotion and actual-provider
+acceptance remain gates. Existing sessions must not restart for reporting alone.
 
 ## Built #174 source unit: partial managed output capture
 

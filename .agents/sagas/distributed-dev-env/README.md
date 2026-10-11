@@ -50,6 +50,10 @@ Claude/Codex rule acceptance; empty rules, wrapper presence and source tests do
 not satisfy that acceptance. Retention and task-claim guards are installed, but
 actual history, claims, messaging and the concurrent owner pilot remain open.
 
+[DESIGN-018](designs/018-initial-invocation-usage-provenance.md) defines the bounded
+initial invocation cost fix: explicit Unknown/observed metrics, exact requested
+identity and CLI estimate provenance, with no inferred billing or aggregation.
+
 **v1** is the single dev-env pod deployed from haynes-ops
 (`kubernetes/main/apps/dev/dev-env/`; saga `.agents/sagas/dev-env/` there). It keeps
 running, maintained in haynes-ops as today, until Tom approves the cutover in phase 5.
