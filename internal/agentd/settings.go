@@ -71,6 +71,7 @@ type Settings struct {
 	// shared workspaces and task admission. The accepted catalog is a named API
 	// resource, never a task-supplied file or snapshot.
 	PrivateProjectBootstrap bool
+	PrivateProjectRoots     bool
 	ProjectCatalog          string
 	ProjectCloneOwner       string
 	// HWSSHKeyB64 is the hw-ssh private key, base64 on one line
@@ -142,6 +143,7 @@ func LoadSettings(getenv func(string) string) (Settings, error) {
 		CodexBin:          "codex", ManagedCodexTasks: getenv("AGENTD_ENABLE_CODEX_TASKS") == "true",
 		ManagedChildDecisions:   getenv("AGENTD_ENABLE_CHILD_DECISIONS") == "true",
 		PrivateProjectBootstrap: getenv("AGENTD_ENABLE_PRIVATE_PROJECT_BOOTSTRAP") == "true",
+		PrivateProjectRoots:     getenv("AGENTD_ENABLE_PRIVATE_PROJECT_ROOTS") == "true",
 		ProjectCatalog:          getenv("AGENTD_PROJECT_CATALOG"),
 		ProjectCloneOwner:       getenv("AGENTD_PROJECT_CLONE_OWNER"),
 		HWSSHKeyB64:             getenv("HW_SSH_PRIVATE_KEY_B64"),

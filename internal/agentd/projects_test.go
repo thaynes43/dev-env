@@ -53,7 +53,7 @@ func (r *projectFixtureRunner) Run(ctx context.Context, cmd Cmd) (Result, error)
 		cmd.Args = slices.DeleteFunc(cmd.Args, func(arg string) bool { return arg == "--filter=blob:none" })
 		result, err := r.ExecRunner.Run(ctx, cmd)
 		if err == nil {
-			_, err = r.ExecRunner.Run(ctx, Cmd{Name: "git", Args: []string{"-C", cmd.Args[len(cmd.Args)-1], "remote", "set-url", "origin", identity}})
+			_, err = r.ExecRunner.Run(ctx, Cmd{Name: "git", Args: []string{"-C", cmd.Args[len(cmd.Args)-1], "remote", "set-url", "origin", identity}, Env: cmd.Env, UnsetEnv: cmd.UnsetEnv})
 		}
 		return result, err
 	}

@@ -25,6 +25,15 @@ func TestProjectRefreshDisabledReadsNoSettingsOrCredentials(t *testing.T) {
 	}
 }
 
+func TestPrivateProjectCatalogSourceRejectsRootsWithoutBootstrap(t *testing.T) {
+	if _, err := privateProjectCatalogSource(agentd.Settings{PrivateProjectRoots: true}, func(key string) string {
+		t.Fatalf("invalid configuration read identity %s", key)
+		return ""
+	}); err == nil {
+		t.Fatal("roots without trusted bootstrap accepted")
+	}
+}
+
 func TestProjectRefreshRefusesCallerAuthorityAndSharedSettings(t *testing.T) {
 	for _, mode := range []string{"caller file", "missing binding", "wrong binding", "missing owner", "shared workspace"} {
 		t.Run(mode, func(t *testing.T) {

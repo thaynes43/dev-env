@@ -163,6 +163,76 @@ func TestPrivateCatalogBootstrapPreservesPeerOnDefaultBranch(t *testing.T) {
 	}
 }
 
+func TestPrivateCatalogBootstrapRefusesSymbolicFetchDestination(t *testing.T) {
+	for _, branch := range []string{"main", "stable"} {
+		t.Run(branch, func(t *testing.T) {
+			declaration := projectTestCatalog
+			if branch == "stable" {
+				declaration = strings.Replace(declaration, `[{"name":"demo"}]`, `[{"name":"demo","defaultBranch":"stable"}]`, 1)
+			}
+			g, s, r, source := privateRootsFixture(t, declaration)
+			if branch == "stable" {
+				gitRun(t, g.env, g.seed, "checkout", "-qb", branch)
+				gitRun(t, g.env, g.seed, "push", "-q", "origin", branch)
+			}
+			rootReceipt := requirePrivateRootReady(t, s, r, source)
+			clone := s.ClonePath("demo")
+			writeFile(t, filepath.Join(clone, "README.md"), "owner staged reference\n")
+			gitRun(t, g.env, clone, "add", "README.md")
+			gitRun(t, g.env, clone, "symbolic-ref", "refs/remotes/origin/"+branch, "refs/heads/main")
+			head := gitRun(t, g.env, clone, "rev-parse", "HEAD")
+			index := mustRead(t, filepath.Join(clone, ".git", "index"))
+			writeFile(t, filepath.Join(g.seed, "README.md"), "fresh branch content\n")
+			gitRun(t, g.env, g.seed, "commit", "-qam", "fresh selected branch")
+			gitRun(t, g.env, g.seed, "push", "-q", "origin", branch)
+			report, err := RefreshPrivateProjects(context.Background(), r, s, source)
+			if err == nil || report.State == "Ready" || report.Projects[0].State != "Failed" || gitRun(t, g.env, clone, "rev-parse", "HEAD") != head || !bytes.Equal(index, mustRead(t, filepath.Join(clone, ".git", "index"))) || string(mustRead(t, filepath.Join(clone, "README.md"))) != "owner staged reference\n" || gitRun(t, g.env, privateRootPath(s), "rev-parse", "HEAD") != rootReceipt.Head || gitRun(t, g.env, clone, "symbolic-ref", "refs/remotes/origin/"+branch) != "refs/heads/main" {
+				t.Fatalf("symbolic fetch destination changed owner state: %v %+v", err, report)
+			}
+		})
+	}
+}
+
+func TestPrivateCatalogBootstrapRejectsFilesystemStorageAliases(t *testing.T) {
+	for _, mode := range []string{"refs", "objects"} {
+		t.Run(mode, func(t *testing.T) {
+			g, s, r, source := privateBootstrapFixture(t, projectTestCatalog)
+			requirePrivateBootstrapReady(t, s, r, source)
+			clone, peer := s.ClonePath("demo"), filepath.Join(s.Home, "independent-peer")
+			gitRun(t, g.env, s.Home, "clone", "-q", clone, peer)
+			writeFile(t, filepath.Join(clone, "README.md"), "owner staged reference\n")
+			gitRun(t, g.env, clone, "add", "README.md")
+			writeFile(t, filepath.Join(peer, "README.md"), "peer staged reference\n")
+			gitRun(t, g.env, peer, "add", "README.md")
+			head := gitRun(t, g.env, clone, "rev-parse", "HEAD")
+			index := mustRead(t, filepath.Join(clone, ".git", "index"))
+			peerIndex := mustRead(t, filepath.Join(peer, ".git", "index"))
+			pushBootstrapChange(t, g)
+			relative := "refs/heads"
+			if mode == "objects" {
+				blob := gitRun(t, g.env, g.seed, "hash-object", "README.md")
+				relative = "objects/" + blob[:2]
+			}
+			path, target := filepath.Join(clone, ".git", relative), filepath.Join(peer, ".git", relative)
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.RemoveAll(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, path); err != nil {
+				t.Fatal(err)
+			}
+			before, _ := os.ReadDir(target)
+			report, err := RefreshPrivateProjects(context.Background(), r, s, source)
+			after, _ := os.ReadDir(target)
+			if err == nil || report.State != "Partial" || report.Repositories[0].State != "Preserved" || gitRun(t, g.env, clone, "rev-parse", "HEAD") != head || gitRun(t, g.env, peer, "rev-parse", "HEAD") != head || !bytes.Equal(index, mustRead(t, filepath.Join(clone, ".git", "index"))) || !bytes.Equal(peerIndex, mustRead(t, filepath.Join(peer, ".git", "index"))) || string(mustRead(t, filepath.Join(clone, "README.md"))) != "owner staged reference\n" || string(mustRead(t, filepath.Join(peer, "README.md"))) != "peer staged reference\n" || len(before) != len(after) {
+				t.Fatalf("private reference wrote through aliased storage: %v %+v", err, report)
+			}
+		})
+	}
+}
+
 func TestPrivateCatalogBootstrapRefusesAuthorityBeforeGitAndPreservesStaging(t *testing.T) {
 	for _, mode := range []string{"disabled", "missing source", "wrong owner", "missing UID", "read error", "changed before clone publication", "symlink repos", "staging exists"} {
 		t.Run(mode, func(t *testing.T) {
@@ -232,6 +302,7 @@ func TestPrivateCatalogBootstrapRefusesAuthorityBeforeGitAndPreservesStaging(t *
 func TestPrivateCatalogBootstrapDoesNotReplaceTaskFreshnessOrResumeWIP(t *testing.T) {
 	g, s, r, sess := privateProjectFixture(t, projectTestCatalog)
 	s.PrivateProjectBootstrap, s.ProjectCatalog, s.ProjectCloneOwner = true, "dev-env-system/dev-env-project-catalog", "fixture"
+	s.PrivateProjectRoots = true
 	source := projectSyncFixtureOptions().AcceptedCatalog
 	requirePrivateBootstrapReady(t, s, r, source)
 	target := pushBootstrapChange(t, g)
@@ -251,9 +322,12 @@ func TestPrivateCatalogBootstrapDoesNotReplaceTaskFreshnessOrResumeWIP(t *testin
 	gitRun(t, g.env, ws.Worktree, "add", "README.md")
 	indexPath := gitRun(t, g.env, ws.Worktree, "rev-parse", "--path-format=absolute", "--git-path", "index")
 	index := mustRead(t, indexPath)
+	savedRules := mustRead(t, s.statePath("project-snapshot.json"))
+	changed := strings.Replace(projectTestCatalog, "Exact rules.", "Refreshed permanent rules.", 1)
+	requirePrivateBootstrapReady(t, s, r, projectSyncFixtureOptions(changed).AcceptedCatalog)
 	r.failFetch = true
 	resumed, step := PrepareRepo(context.Background(), r, s, sess)
-	if step.State == StepFail || resumed.Head != target || !bytes.Equal(index, mustRead(t, indexPath)) || string(mustRead(t, filepath.Join(ws.Worktree, "README.md"))) != "resume WIP\n" {
+	if step.State == StepFail || resumed.Head != target || !bytes.Equal(index, mustRead(t, indexPath)) || string(mustRead(t, filepath.Join(ws.Worktree, "README.md"))) != "resume WIP\n" || !bytes.Equal(savedRules, mustRead(t, s.statePath("project-snapshot.json"))) {
 		t.Fatal("resume destroyed WIP or required startup freshness")
 	}
 }
@@ -284,6 +358,7 @@ func TestPrivateCatalogBootstrapReportsFailureAsSeparateBootStep(t *testing.T) {
 
 func TestPrivateCatalogBootstrapBoundsGitPreparation(t *testing.T) {
 	_, s, r, source := privateBootstrapFixture(t, projectTestCatalog)
+	s.PrivateProjectRoots = true
 	runner := &deadlineBootstrapRunner{Runner: r, t: t}
 	requirePrivateBootstrapReady(t, s, runner, source)
 }

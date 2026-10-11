@@ -326,8 +326,10 @@ Before each new task:
 
 Private clone/worktree task-start fetch and pinning already exist. Opt-in
 catalog-wide bootstrap now covers managed-daemon startup and explicit private
-refresh. Native hosts, permanent project roots and other client entry points
-still need integration.
+refresh. The [private roots contract](../.agents/sagas/distributed-dev-env/designs/007-private-project-roots.md)
+adds owned Git-backed project folders and pinned private repo anchors, default
+off. Native hosts and other client entry points still need integration. Git/file
+discovery is separate from actual provider rule loading.
 Resume preserves existing WIP; it does not reset the worktree to the latest main.
 No broad reset, clean or deletion of ambiguous local state is a freshness policy.
 

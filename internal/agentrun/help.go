@@ -81,7 +81,7 @@ start. If the scheduler cannot place the pod, it prints the scheduler's reason
 as soon as it is clear; the session stays Pending and starts when room frees up.
 
 With --project, the operator selects the repository and rules from its accepted
-project catalog. The task uses a shared worktree and keeps the agent's state in
+project catalog. The task uses a private task worktree and the project rules, and keeps the agent's state in
 its private home. Omit --repo for a project with one repository; select --repo
 for a project with several. Declared projects take task mode only. Their rules
 and catalog revision come from the server.

@@ -22,6 +22,9 @@ type Cmd struct {
 	// Env is added to the runner's base environment, as KEY=VALUE. A later
 	// entry wins over an earlier one with the same key.
 	Env []string
+	// UnsetEnv removes these keys from the inherited environment before Env
+	// is applied. Private Git commands use it to prevent storage redirection.
+	UnsetEnv []string
 	// Stdin is the command's input; nil means /dev/null.
 	Stdin io.Reader
 }
@@ -119,7 +122,21 @@ func (r ExecRunner) Run(ctx context.Context, c Cmd) (Result, error) {
 	if base == nil {
 		base = os.Environ()
 	}
-	cmd.Env = append(append([]string(nil), base...), c.Env...)
+	cmd.Env = make([]string, 0, len(base)+len(c.Env))
+	for _, entry := range base {
+		key, _, _ := strings.Cut(entry, "=")
+		remove := false
+		for _, unset := range c.UnsetEnv {
+			if key == unset {
+				remove = true
+				break
+			}
+		}
+		if !remove {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	cmd.Env = append(cmd.Env, c.Env...)
 	cmd.Stdin = c.Stdin
 	// When ctx ends, kill the whole process group, not only the direct child,
 	// and stop waiting for output soon after: a grandchild (node starts some)

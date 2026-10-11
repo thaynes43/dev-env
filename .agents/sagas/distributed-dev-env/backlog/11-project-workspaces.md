@@ -129,6 +129,15 @@ state. Neither path replaces selected-task fetch/pinning or resume provenance.
 Promotion changes new-session settings only and retains the private-task gate.
 Real-provider loading, project roots and other clients remain separate acceptance.
 
+### Private permanent roots
+
+[DESIGN-007](../designs/007-private-project-roots.md) adds default-off managed
+Git-backed project roots and detached private repository anchors. Ownership,
+index/files, ignored entries, local commits, operation state and catalog/source
+revisions must be proved before safe fast-forward. Existing tasks keep their
+saved rules and WIP. Native-host conversion and actual provider loading remain
+separate acceptance; the pending Q-24 routing choice is not silently decided.
+
 ### Parent issues
 
 - [#173](https://github.com/thaynes43/dev-env/issues/173): independent catalog/rules and local repo startup.

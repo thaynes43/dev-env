@@ -1,6 +1,22 @@
 # HANDOFF: start here
 
-## Active #173 bootstrap slice — 2026-10-11 UTC
+**Review ruling (Tom, 2026-10-11):** Claude Code reviews are down and optional,
+including releases. Record unavailable/failed/skipped outcomes without a pass
+claim. Required CI and native independent review remain merge gates; do not
+retry or repair Claude authentication as a prerequisite.
+
+## Active #173 permanent-roots slice — 2026-10-11 UTC
+
+[DESIGN-007](sagas/distributed-dev-env/designs/007-private-project-roots.md)
+defines the next bounded source unit in a fresh worktree based on merged #179.
+Create owned Git-backed project roots and detached private repo anchors, retain
+catalog/rule/source provenance, and use safe fast-forwards only after ownership
+and preservation proof. Foreign, edited, ignored, divergent and interrupted
+state is preserved. The roots flag defaults off; no native-host/UI conversion
+or actual provider loading is claimed. Q-24 remains pending through the native
+question tool; no phone-delivery receipt or owner ruling is inferred.
+
+## Built, deployed and bounded refresh accepted — #173 bootstrap — 2026-10-11 UTC
 
 The fresh task branch starts at v2.12.0 (`1a83e9f`), including delivered #178.
 [DESIGN-006](sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md)
@@ -10,8 +26,47 @@ state, ignored files, local commits, worktrees, operation markers and ambiguous
 authority. Record catalog/source revisions. Every new task still fetches and
 pins its selected source; resume preserves WIP and saved rules.
 
-Read-only live verification confirms operator `sha-7a634e5` and worker template
-2.12.0, two Ready operator replicas, private-project admission disabled and no
+Source [#179](https://github.com/thaynes43/dev-env/pull/179) merged as
+`951eeafa43871825e6eb00ac2240fa31970b86ee` after exact-head required CI and
+native independent review. The peer-worktree preservation finding was fixed.
+The automatic Claude advisory failed before a verdict; its result/findings were
+read, with no inferred cause or retry. Release
+[#180](https://github.com/thaynes43/dev-env/pull/180) tags v2.13.0 at
+`68c76e3c725a7478529ba061eb572994956bd966`. [Agent publication run38150512129](https://github.com/thaynes43/dev-env/actions/runs/38150512129)
+passed smoke, keyless signing and exact-tag signature verification. Image digest
+is `4ef99b35266064f9af5f1f4b86629001c56e6a47d9948707f09ff0ddee3e743a`.
+[GitOps #3807](https://github.com/thaynes43/haynes-ops/pull/3807) merged as
+`040101107e6122eb27ffb3d469709fb8ce3ec90b`; network, projects and new-session
+templates reconciled Ready at that revision. Native independent bound-artifact
+review and required CI passed. The GitOps advisory failed before a verdict.
+
+The corrected [GitOps #3809](https://github.com/thaynes43/haynes-ops/pull/3809)
+merged as `553367814d60ad9e15ebda2b05e921e7591bd3d6` after required CI and native
+independent review. Installed explicit `agentd project-refresh` is accepted:
+second one-shot check exit 0, exact full release commit/version, trusted catalog
+UID/resourceVersion/content revision, clean fresh private dev-env source
+`68c76e3c725a7478529ba061eb572994956bd966`, and receipt hash
+`b6bbf6b7f049c642c506fd663976e980db9d45b087246cf3f899faeab97c4e9b`.
+The admitted pod had no init containers, provider state or model turn and kept
+its resource/deadline/placement/access constraints. Check Flux is Ready; a later
+main revision may retain the same manifest bytes.
+
+Attempt 1 is retained Failed: its verifier expected a 12-character commit,
+while the released binary reports all 40. Attempt 2 passed; logical count is
+2 of 3 and no further trial was run. Both terminal model-free fixtures remain
+as explicit evidence. Protected pod identities/images/imageIDs/main and init
+restarts and the original ledger UID/resourceVersion/hash match the baseline.
+Both activity declarations ended after evidence capture. Private artifacts are
+under `/home/dev/work/orders/dev-env-bootstrap-1011-runtime-2/`; publish no
+private transcripts or authentication state.
+
+This accepts the explicit refresh path against the current one-public-repo
+catalog. It does not accept managed daemon startup, private GitHub auth,
+permanent roots, native routing or actual Claude/Codex rule loading. Private
+project admission remains disabled. #173 and #91 remain open.
+
+Initial read-only verification confirmed operator `sha-7a634e5` and worker template
+2.12.0 (the template is now 2.13.0 above), two Ready operator replicas, private-project admission disabled and no
 AgentSessions. The trusted catalog exists with one dev-env repository and empty
 common-rule text. This does not establish actual provider rule loading.
 Protected runtime identities and the failed fixture ledger have a private

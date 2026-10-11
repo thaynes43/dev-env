@@ -14,11 +14,11 @@ import (
 )
 
 func privateProjectCatalogSource(s agentd.Settings, getenv func(string) string) (*agentd.ProjectCatalogSource, error) {
-	if !s.PrivateProjectBootstrap {
-		return nil, nil
-	}
 	if err := agentd.ValidatePrivateProjectBootstrap(s); err != nil {
 		return nil, err
+	}
+	if !s.PrivateProjectBootstrap {
+		return nil, nil
 	}
 	namespace, name, _ := strings.Cut(s.ProjectCatalog, "/")
 	var once sync.Once

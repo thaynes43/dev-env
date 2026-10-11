@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -16,6 +17,78 @@ import (
 
 // gitEnv keeps git from ever waiting on a terminal prompt.
 var gitEnv = []string{"GIT_TERMINAL_PROMPT=0"}
+
+// Private administrative Git must use the proved repository's storage,
+// never an index, object directory or repository selected by the caller's
+// shell. Credential helpers and their normal environment remain available.
+var privateGitUnsetEnv = []string{
+	"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+	"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_QUARANTINE_PATH", "GIT_IMPLICIT_WORK_TREE",
+	"GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "GIT_REPLACE_REF_BASE", "GIT_NO_REPLACE_OBJECTS",
+	"GIT_PREFIX", "GIT_INTERNAL_SUPER_PREFIX", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+}
+
+func privateGitCommand(s Settings, cmd Cmd) Cmd {
+	if s.privateProjectGit {
+		cmd.UnsetEnv = privateGitUnsetEnv
+	}
+	return cmd
+}
+
+// Prove the directories where administrative Git creates objects and the
+// exact refs/index/reflogs it may replace. Inspect only the object directory's
+// bounded fanout entries, not a repository-wide object walk.
+func privateGitStorageClear(gitDir string, paths ...string) error {
+	objects := filepath.Join(gitDir, "objects")
+	if noSymlinkComponents(objects) != nil {
+		return errors.New("private Git object storage is uncertain")
+	}
+	dir, err := os.Open(objects)
+	if err != nil {
+		return errors.New("private Git object storage is unavailable")
+	}
+	defer func() { _ = dir.Close() }()
+	entries, err := dir.ReadDir(260)
+	if err != nil && !errors.Is(err, io.EOF) || len(entries) > 258 {
+		return errors.New("private Git object fanout is uncertain")
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			return errors.New("private Git object directory is redirected or uncertain")
+		}
+	}
+	for _, name := range []string{"info/alternates", "info/http-alternates"} {
+		if _, err := os.Lstat(filepath.Join(objects, name)); !errors.Is(err, os.ErrNotExist) {
+			return errors.New("private Git alternate storage is present or uncertain")
+		}
+	}
+	for _, name := range append([]string{"HEAD", "index", "config", "packed-refs", "ORIG_HEAD"}, paths...) {
+		path := filepath.Join(gitDir, name)
+		if err := noSymlinkComponents(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return errors.New("private Git write path is redirected or uncertain")
+		}
+		if fi, err := os.Lstat(path); err == nil && !fi.Mode().IsRegular() || err != nil && !errors.Is(err, os.ErrNotExist) {
+			return errors.New("private Git write path is not a regular file")
+		}
+	}
+	return privateOrigHeadClear(gitDir)
+}
+
+func privateOrigHeadClear(gitDir string) error {
+	path := filepath.Join(gitDir, "ORIG_HEAD")
+	fi, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() > 65 || noSymlinkComponents(path) != nil {
+		return errors.New("private original HEAD is redirected or uncertain")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || !rootObjectID.MatchString(strings.TrimSpace(string(data))) {
+		return errors.New("private original HEAD is symbolic or uncertain")
+	}
+	return nil
+}
 
 // A shared command must not start implicit repository-wide maintenance. Git
 // propagates these command options to its internal promisor fetches too.
@@ -53,7 +126,7 @@ func (s Settings) git(ctx context.Context, r Runner, dir string, args ...string)
 	if s.privateProjectGit {
 		env = append(append([]string(nil), gitEnv...), "GIT_OPTIONAL_LOCKS=0")
 	}
-	res, err := r.Run(ctx, Cmd{Name: "git", Args: full, Env: env})
+	res, err := r.Run(ctx, privateGitCommand(s, Cmd{Name: "git", Args: full, Env: env}))
 	if err != nil {
 		var ce *CmdError
 		if errors.As(err, &ce) {
