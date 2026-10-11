@@ -46,6 +46,7 @@ var templateRevisionPattern = regexp.MustCompile(`^(?:[A-Za-z0-9_.-]+-)?[a-f0-9]
 // Record is trusted operator configuration. Requests supply only its ID.
 type Record struct {
 	CommonRevision   string `json:"commonRevision,omitempty"`
+	CaptureOutput    bool   `json:"captureOutput,omitempty"`
 	ID               string `json:"id"`
 	Client           string `json:"client"`
 	Project          string `json:"project"`
@@ -288,7 +289,7 @@ func BoundRecord(s *v1alpha1.AgentSession) (Record, error) {
 	if err != nil {
 		return Record{}, ErrRefused
 	}
-	r := Record{CommonRevision: b.CommonRevision, ID: b.ID, Client: b.Client, Project: snapshot.Project(), Repository: s.Spec.Repo, Provider: string(s.Spec.Agent), Profile: s.Spec.Profile, Model: s.Spec.Model, Effort: s.Spec.Effort, Size: string(s.Spec.Size), CatalogRevision: b.CatalogRevision, RulesRevision: b.RulesRevision, TemplateRevision: b.TemplateRevision, Image: b.Image, IdempotencyKey: s.Labels[v1alpha1.LabelIdempotencyKey], Prompt: s.Spec.Prompt, Timeout: s.Spec.Limits.Timeout.Duration.String(), MaxTurns: s.Spec.Limits.MaxTurns}
+	r := Record{CaptureOutput: b.CaptureOutput, CommonRevision: b.CommonRevision, ID: b.ID, Client: b.Client, Project: snapshot.Project(), Repository: s.Spec.Repo, Provider: string(s.Spec.Agent), Profile: s.Spec.Profile, Model: s.Spec.Model, Effort: s.Spec.Effort, Size: string(s.Spec.Size), CatalogRevision: b.CatalogRevision, RulesRevision: b.RulesRevision, TemplateRevision: b.TemplateRevision, Image: b.Image, IdempotencyKey: s.Labels[v1alpha1.LabelIdempotencyKey], Prompt: s.Spec.Prompt, Timeout: s.Spec.Limits.Timeout.Duration.String(), MaxTurns: s.Spec.Limits.MaxTurns}
 	if r.MatchSession(s, b.CloneOwner) != nil {
 		return Record{}, ErrRefused
 	}
@@ -296,7 +297,7 @@ func BoundRecord(s *v1alpha1.AgentSession) (Record, error) {
 }
 
 func (r Record) Binding(e CatalogEvidence, owner string) *v1alpha1.ProjectCanaryBinding {
-	return &v1alpha1.ProjectCanaryBinding{CommonRevision: r.CommonRevision, Version: 1, ID: r.ID, Client: r.Client, PolicyDigest: r.Digest(), SnapshotDigest: projectcatalog.Digest(e.Snapshot), CatalogUID: e.UID, CatalogResourceVersion: e.ResourceVersion, CatalogRevision: r.CatalogRevision, RulesRevision: r.RulesRevision, TemplateRevision: r.TemplateRevision, Image: r.Image, CloneOwner: owner}
+	return &v1alpha1.ProjectCanaryBinding{CaptureOutput: r.CaptureOutput, CommonRevision: r.CommonRevision, Version: 1, ID: r.ID, Client: r.Client, PolicyDigest: r.Digest(), SnapshotDigest: projectcatalog.Digest(e.Snapshot), CatalogUID: e.UID, CatalogResourceVersion: e.ResourceVersion, CatalogRevision: r.CatalogRevision, RulesRevision: r.RulesRevision, TemplateRevision: r.TemplateRevision, Image: r.Image, CloneOwner: owner}
 }
 
 // MatchSession uses only retained immutable inputs, so a terminal retry needs
@@ -319,7 +320,7 @@ func (r Record) MatchSession(s *v1alpha1.AgentSession, owner string) error {
 			return ErrRefused
 		}
 	}
-	if b.Version != 1 || b.ID != r.ID || b.Client != r.Client || b.PolicyDigest != r.Digest() || b.TemplateRevision != r.TemplateRevision || b.Image != r.Image || b.CloneOwner != owner || b.CatalogRevision != r.CatalogRevision || b.RulesRevision != r.RulesRevision || b.CatalogUID == "" || b.CatalogResourceVersion == "" || s.Name != r.SessionName() || !slices.Contains(s.Finalizers, v1alpha1.ProjectCanaryFinalizer) || s.Spec.Parent != r.Client || s.Spec.Agent != v1alpha1.AgentKind(r.Provider) || s.Spec.Mode != v1alpha1.ModeTask || s.Spec.Repo != r.Repository || s.Spec.Model != r.Model || s.Spec.Effort != r.Effort || s.Spec.Profile != r.Profile || s.Spec.Size != v1alpha1.SizeS || s.Spec.Prompt != r.Prompt || s.Spec.Workspace != nil || s.Spec.Restore != "" || len(s.Spec.Tools) != 0 || s.Spec.LLM != nil || s.Spec.Caller != "" || s.Spec.Lane != "" || s.Spec.IdempotencyKey != "" || s.Spec.Lifecycle != nil || s.Labels[v1alpha1.LabelIdempotencyKey] != r.IdempotencyKey {
+	if b.CaptureOutput != r.CaptureOutput || b.Version != 1 || b.ID != r.ID || b.Client != r.Client || b.PolicyDigest != r.Digest() || b.TemplateRevision != r.TemplateRevision || b.Image != r.Image || b.CloneOwner != owner || b.CatalogRevision != r.CatalogRevision || b.RulesRevision != r.RulesRevision || b.CatalogUID == "" || b.CatalogResourceVersion == "" || s.Name != r.SessionName() || !slices.Contains(s.Finalizers, v1alpha1.ProjectCanaryFinalizer) || s.Spec.Parent != r.Client || s.Spec.Agent != v1alpha1.AgentKind(r.Provider) || s.Spec.Mode != v1alpha1.ModeTask || s.Spec.Repo != r.Repository || s.Spec.Model != r.Model || s.Spec.Effort != r.Effort || s.Spec.Profile != r.Profile || s.Spec.Size != v1alpha1.SizeS || s.Spec.Prompt != r.Prompt || s.Spec.Workspace != nil || s.Spec.Restore != "" || len(s.Spec.Tools) != 0 || s.Spec.LLM != nil || s.Spec.Caller != "" || s.Spec.Lane != "" || s.Spec.IdempotencyKey != "" || s.Spec.Lifecycle != nil || s.Labels[v1alpha1.LabelIdempotencyKey] != r.IdempotencyKey {
 		return ErrRefused
 	}
 	d, _ := time.ParseDuration(r.Timeout)
@@ -348,4 +349,16 @@ func (p *Policy) ValidateCommon(enabled bool) error {
 		}
 	}
 	return nil
+}
+
+func (p *Policy) OutputCaptureEnabled() bool {
+	if p == nil {
+		return false
+	}
+	for _, r := range p.records {
+		if r.CaptureOutput {
+			return true
+		}
+	}
+	return false
 }

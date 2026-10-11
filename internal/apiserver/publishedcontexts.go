@@ -102,6 +102,26 @@ func (s *Server) publishContext(ctx context.Context, w http.ResponseWriter, r *h
 		Attribution: coord.ContextAttribution{Provider: string(owner.Spec.Agent), RequestedModel: owner.Spec.Model, ObservedModelState: "Unknown", UsageState: "Unknown", CostState: "Unknown"},
 		Origin:      "ExplicitPublished", Completeness: "ExplicitExcerpt", StopState: "Unknown", Text: req.Text, ContentSHA256: apiv1.ContextHash(req.Text), ByteCount: int32(len(req.Text)),
 	}
+	if m := req.ManagedOutput; m != nil {
+		b := owner.Spec.ProjectCanary
+		history := owner.Status.PrivateHistory
+		if history == nil || history.SessionUID != string(owner.UID) || history.LastExecutor == nil || history.LastExecutor.PodUID != c.identity.PodUID {
+			return 0, nil, contextDenied()
+		}
+		if b == nil || !b.CaptureOutput || !s.PrivateHistoryRetention || owner.Spec.Mode != v1alpha1.ModeTask || owner.Spec.Workspace != nil || s.Projects == nil {
+			return 0, nil, contextDenied()
+		}
+		record, ok := s.PrivateProjectCanaries.Lookup(b.ID)
+		if !ok || !record.CaptureOutput || record.MatchSession(owner, s.Projects.CloneOwner) != nil {
+			return 0, nil, contextDenied()
+		}
+		invocation := apiv1.ManagedInvocation(string(owner.UID), c.identity.PodUID)
+		if req.Key != apiv1.ManagedOutputKey(invocation, m.Ordinal) {
+			return 0, nil, contextDenied()
+		}
+		spec.ManagedOutput = &coord.ManagedOutputAssertion{Invocation: invocation, Ordinal: m.Ordinal, ConversationID: m.ConversationID}
+		spec.Origin, spec.Completeness = "ManagedOutputAssertion", m.Completeness
+	}
 	if !contextpublication.ValidSpec(spec) {
 		return 0, nil, contextDenied()
 	}
@@ -180,7 +200,11 @@ func contextMetadata(c *coord.PublishedContext) apiv1.ContextMetadata {
 	a := p.Actor
 	v := p.Provenance
 	m := p.Attribution
-	return apiv1.ContextMetadata{Name: c.Name, UID: string(c.UID), Kind: p.Identity.Kind, Key: p.Identity.Key, Source: apiv1.TaskClaimOwner{Namespace: s.Namespace, Name: s.Name, UID: s.UID}, SourceGeneration: p.SourceGeneration, SourceParent: p.SourceParent, Project: p.Project, Repository: p.Repository,
+	result := apiv1.ContextMetadata{Name: c.Name, UID: string(c.UID), Kind: p.Identity.Kind, Key: p.Identity.Key, Source: apiv1.TaskClaimOwner{Namespace: s.Namespace, Name: s.Name, UID: s.UID}, SourceGeneration: p.SourceGeneration, SourceParent: p.SourceParent, Project: p.Project, Repository: p.Repository,
 		Actor: apiv1.TaskClaimActor{Kind: a.Kind, ServiceAccount: a.ServiceAccount, PodName: a.PodName, PodUID: a.PodUID}, Provenance: apiv1.TaskClaimProvenance{CatalogRevision: v.CatalogRevision, RulesRevision: v.RulesRevision, GitHub: v.GitHub, DefaultBranch: v.DefaultBranch, InitialPinState: v.InitialPinState},
 		Attribution: apiv1.ContextAttribution{Provider: m.Provider, RequestedModel: m.RequestedModel, ObservedModelState: m.ObservedModelState, UsageState: m.UsageState, CostState: m.CostState}, ContentSHA256: p.ContentSHA256, ByteCount: p.ByteCount, PublishedAt: c.CreationTimestamp.Time, Origin: p.Origin, Completeness: p.Completeness, StopState: p.StopState}
+	if m := p.ManagedOutput; m != nil {
+		result.ManagedOutput = &apiv1.ManagedOutputAssertion{Invocation: m.Invocation, Ordinal: m.Ordinal, ConversationID: m.ConversationID}
+	}
+	return result
 }

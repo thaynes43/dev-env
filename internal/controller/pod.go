@@ -480,6 +480,9 @@ func sessionDocument(s *v1alpha1.AgentSession) (string, error) {
 		}
 		d.CommonRules = json.RawMessage(raw)
 	}
+	if s.Spec.ProjectCanary != nil {
+		d.CaptureOutput = s.Spec.ProjectCanary.CaptureOutput
+	}
 	if raw := s.Annotations[v1alpha1.AnnotationProjectSnapshot]; raw != "" {
 		snapshot, err := projectcatalog.ParseSnapshot([]byte(raw))
 		if err != nil || snapshot.Selected().Name != s.Spec.Repo || snapshot.Selected().DefaultBranch != s.Spec.Base {

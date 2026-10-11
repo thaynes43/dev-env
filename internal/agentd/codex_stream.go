@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"unicode/utf8"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
 type codexStream struct {
+	capture  *managedCapture
 	thread   bool
 	turn     bool
 	terminal bool
@@ -30,6 +32,12 @@ func codexJSONLine(data []byte, atEOF bool) (int, []byte, error) {
 // The pinned exec protocol emits thread.started first. Only native stdout is
 // parsed, so stderr cannot manufacture the durable resume identity.
 func (s *codexStream) line(raw []byte, path string, l *Launch, out io.Writer, result *streamResult) error {
+	if !utf8.Valid(raw) {
+		if s.capture != nil {
+			s.capture.unknown = true
+		}
+		return errors.New("native Codex JSONL is not UTF-8")
+	}
 	var e struct {
 		Type     string `json:"type"`
 		ThreadID string `json:"thread_id"`
@@ -62,6 +70,9 @@ func (s *codexStream) line(raw []byte, path string, l *Launch, out io.Writer, re
 			return err
 		}
 		s.thread = true
+		if s.capture != nil {
+			s.capture.confirmed = true
+		}
 		_, _ = fmt.Fprintln(out, "[agentd] native Codex thread confirmed")
 	case "turn.started":
 		if s.turn || s.terminal {
@@ -82,6 +93,7 @@ func (s *codexStream) line(raw []byte, path string, l *Launch, out io.Writer, re
 			switch e.Item.Type {
 			case "agent_message":
 				_, _ = fmt.Fprintln(out, e.Item.Text)
+				s.capture.text(e.Item.Text)
 			case "command_execution":
 				_, _ = fmt.Fprintln(out, e.Item.AggregatedOutput)
 			}

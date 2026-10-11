@@ -80,7 +80,7 @@ func validContextMetadata(m apiv1.ContextMetadata) bool {
 		contextProjectPattern.MatchString(m.Attribution.Provider) && len(m.Attribution.RequestedModel) > 0 && len(m.Attribution.RequestedModel) <= 256 &&
 		contextDigestPattern.MatchString(m.ContentSHA256) && m.ByteCount > 0 && m.ByteCount <= apiv1.MaxContextBytes && !m.PublishedAt.IsZero() &&
 		contextDigestPattern.MatchString(m.Provenance.CatalogRevision) && contextDigestPattern.MatchString(m.Provenance.RulesRevision) && m.Provenance.InitialPinState == "Unknown" && m.Provenance.ReportedHead == "" && m.Provenance.ReportedAt == nil &&
-		m.Attribution.ObservedModelState == "Unknown" && m.Attribution.UsageState == "Unknown" && m.Attribution.CostState == "Unknown" && m.StopState == "Unknown" && m.Origin == "ExplicitPublished" && m.Completeness == "ExplicitExcerpt"
+		m.Attribution.ObservedModelState == "Unknown" && m.Attribution.UsageState == "Unknown" && m.Attribution.CostState == "Unknown" && m.StopState == "Unknown" && validContextOrigin(m)
 }
 
 type contextIntent struct {
@@ -91,6 +91,14 @@ type contextIntent struct {
 	Key           string `json:"key"`
 	ContentSHA256 string `json:"contentSHA256"`
 	ByteCount     int    `json:"byteCount"`
+}
+
+func validContextOrigin(m apiv1.ContextMetadata) bool {
+	if m.ManagedOutput == nil {
+		return m.Origin == "ExplicitPublished" && m.Completeness == "ExplicitExcerpt"
+	}
+	a := m.ManagedOutput
+	return m.Origin == "ManagedOutputAssertion" && (m.Completeness == "PartialManagedOutput" || m.Completeness == "Unknown") && apiv1.ValidManagedOutput(a) && a.Invocation == apiv1.ManagedInvocation(m.Source.UID, m.Actor.PodUID) && m.Kind == "transcript-excerpt" && m.Key == apiv1.ManagedOutputKey(a.Invocation, a.Ordinal) && (m.Attribution.Provider == "claude" || m.Attribution.Provider == "codex")
 }
 
 func retainContextIntent(s Settings, sess protocol.Session, req apiv1.PublishContextRequest) error {
@@ -141,7 +149,7 @@ func retainContextIntent(s Settings, sess protocol.Session, req apiv1.PublishCon
 // native RPC and imports no path. Its durable intent contains no text or token.
 func PublishContext(ctx context.Context, s Settings, sess protocol.Session, h *HeartbeatClient, req apiv1.PublishContextRequest) (apiv1.PublishContextResult, error) {
 	var result apiv1.PublishContextResult
-	if !apiv1.ValidContextRequest(req) || !apiv1.ValidContextUID(sess.SessionUID) || !apiv1.ValidContextUID(s.PodUID) || h == nil || h.Session != sess.Name {
+	if req.ManagedOutput != nil || !apiv1.ValidContextRequest(req) || !apiv1.ValidContextUID(sess.SessionUID) || !apiv1.ValidContextUID(s.PodUID) || h == nil || h.Session != sess.Name {
 		return result, errors.New("publication requires bounded text and this pod's original session identity")
 	}
 	unlock, err := privateNativeLock(s, "published-context.lock")
@@ -156,7 +164,7 @@ func PublishContext(ctx context.Context, s Settings, sess protocol.Session, h *H
 		return result, err
 	}
 	m := result.Metadata
-	if (result.Outcome != "Created" && result.Outcome != "Confirmed") || !validContextMetadata(m) || m.Source.Name != sess.Name || m.Source.UID != sess.SessionUID || m.Actor.PodUID != s.PodUID || m.Kind != req.Kind || m.Key != req.Key ||
+	if (result.Outcome != "Created" && result.Outcome != "Confirmed") || !validContextMetadata(m) || m.ManagedOutput != nil || m.Origin != "ExplicitPublished" || m.Source.Name != sess.Name || m.Source.UID != sess.SessionUID || m.Actor.PodUID != s.PodUID || m.Kind != req.Kind || m.Key != req.Key ||
 		m.ContentSHA256 != apiv1.ContextHash(req.Text) || int(m.ByteCount) != len(req.Text) || m.Attribution.Provider != sess.Agent || m.Attribution.RequestedModel != sess.Model {
 		return apiv1.PublishContextResult{}, errors.New("publication acknowledgement does not confirm original content and identity")
 	}

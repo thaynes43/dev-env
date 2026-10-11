@@ -74,6 +74,8 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		}
 	}
 	stateDir := filepath.Dir(launchPath)
+	var res streamResult
+	protocolRefused := false
 	nativeLease, err := beginNativeInvocation(l, stateDir)
 	if err != nil {
 		_, _ = fmt.Fprintln(pane, "agentd run-agent: native invocation admission refused")
@@ -82,6 +84,16 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	if nativeLease != nil {
 		defer nativeLease.unlock()
 	}
+	capture, err := beginManagedCapture(l, stateDir)
+	if err != nil {
+		_, _ = fmt.Fprintln(pane, "agentd: managed output invocation is unconfirmed")
+		return 1
+	}
+	defer func() {
+		if capture.finish(l, res.Seen && !res.IsError && !protocolRefused) != nil {
+			_, _ = fmt.Fprintln(pane, "agentd: managed output retention or publication is unconfirmed")
+		}
+	}()
 	if l.TUI {
 		return runTUI(l, stateDir, os.Stdin, pane, signals, stopGrace, nativeLease)
 	}
@@ -100,8 +112,8 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	defer func() { _ = events.Close() }()
 	out := &lockedWriter{w: io.MultiWriter(pane, logf)}
 
-	// stdout and stderr share one pipe that agentd owns, so a child of the CLI
-	// that keeps it open cannot hold up the result once the CLI has exited.
+	// Only native stdout enters the event parser. Stderr remains diagnostic,
+	// with bounded draining even when a child inherits the descriptor.
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		_, _ = fmt.Fprintf(out, "agentd run-agent: %v\n", err)
@@ -111,11 +123,8 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	cmd.Dir = l.Dir
 	cmd.Env = agentEnv(os.Environ(), l)
 	cmd.Stdin = strings.NewReader(l.Prompt)
-	cmd.Stdout, cmd.Stderr = pw, pw
-	if l.Provider == protocol.AgentCodex {
-		cmd.Stderr = out
-		cmd.WaitDelay = drainWait
-	}
+	cmd.Stdout, cmd.Stderr = pw, out
+	cmd.WaitDelay = drainWait
 	// Its own process group, so a timeout can stop the CLI's children too.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	started := time.Now().UTC()
@@ -147,9 +156,7 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		return 1
 	}
 
-	var res streamResult
-	var codex codexStream
-	protocolRefused := false
+	codex := codexStream{capture: capture}
 	parseFailed := make(chan error, 1)
 	readDone := make(chan struct{})
 	go func() {
@@ -172,9 +179,13 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 				}
 			} else {
 				renderStreamLine(line, out, &res)
+				capture.claude(line)
 			}
 		}
 		if err := sc.Err(); err != nil {
+			if capture != nil {
+				capture.unknown = true
+			}
 			if l.Provider == protocol.AgentCodex {
 				codex.failed = true
 				protocolRefused = true
@@ -267,6 +278,9 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	mu.Lock()
 	to := timedOut
 	mu.Unlock()
+	if capture != nil && (code != 0 || to) {
+		capture.unknown = true
+	}
 	if err := nativeLease.afterWait(l, cmd.ProcessState, pid, time.Now()); err != nil {
 		_, _ = fmt.Fprintln(out, "[agentd] native continuation receipt is unconfirmed")
 		if code == 0 {

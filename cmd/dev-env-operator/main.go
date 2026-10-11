@@ -282,6 +282,9 @@ func parseFlags(args []string) (options, error) {
 		return o, errors.New("inbox scopes require explicit enable-durable-inbox")
 	}
 
+	if o.privateProjectCanaries.OutputCaptureEnabled() && !o.contextsEnabled {
+		return o, errors.New("managed output requires enabled protected context publication")
+	}
 	if *assignedBudgets != "" {
 		if len(*assignedBudgets) > 4096 {
 			return o, errors.New("task budget assignment exceeds bound")

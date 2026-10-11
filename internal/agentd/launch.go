@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
 // TmuxSession is the tmux session the agent runs in (DESIGN-001 3.6). Tom
@@ -44,6 +45,8 @@ type Launch struct {
 	Provider              string                    `json:"provider,omitempty"`
 	SessionUID            string                    `json:"sessionUID,omitempty"`
 	PodUID                string                    `json:"podUID,omitempty"`
+	CaptureOutput         bool                      `json:"captureOutput,omitempty"`
+	CaptureModel          string                    `json:"captureModel,omitempty"`
 	// NativeInvocationID identifies one platform-authored native invocation.
 	// A continuation has its own ID and a consumed causal predecessor proof.
 	NativeInvocationID string              `json:"nativeInvocationID,omitempty"`
@@ -167,6 +170,12 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 		ConversationID: conv,
 		BootID:         bootID,
 		CreatedAt:      now.UTC(),
+	}
+	if sess.CaptureOutput {
+		if sess.Validate() != nil || !apiv1.ValidContextUID(s.PodUID) {
+			return Launch{}, errors.New("managed capture requires original task and pod")
+		}
+		l.CaptureOutput, l.CaptureModel, l.SessionUID, l.PodUID, l.Provider = true, sess.Model, sess.SessionUID, s.PodUID, protocol.AgentClaude
 	}
 	if sess.Mode == protocol.ModeLocal {
 		l.TUI = true

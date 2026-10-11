@@ -302,6 +302,8 @@ spec:
                   ProjectCanary is authored by the strict operator-owned canary route.
                   It permanently binds the original accepted source and reviewed policy.
                 properties:
+                  captureOutput:
+                    type: boolean
                   catalogResourceVersion:
                     maxLength: 128
                     minLength: 1

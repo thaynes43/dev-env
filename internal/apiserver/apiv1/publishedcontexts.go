@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"time"
 	"unicode/utf8"
 )
@@ -13,13 +14,29 @@ const PublishedContextsPath = "/v1/published-contexts"
 const MaxContextBytes = 64 << 10
 const MaxContextRequestBytes = 6*MaxContextBytes + 4096
 
+var contextDigestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
+var managedConversationPattern = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
+
 var contextKeyPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,126}[a-z0-9])?$`)
 var contextUIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)
 var contextNamePattern = regexp.MustCompile(`^published-context\.[a-f0-9]{32}\.[a-f0-9]{32}$`)
 
 func ValidContextRequest(r PublishContextRequest) bool {
+	if m := r.ManagedOutput; m != nil && (r.Kind != "transcript-excerpt" || m.Ordinal < 0 || m.Ordinal > 3 || !managedConversationPattern.MatchString(m.ConversationID) || (m.Completeness != "PartialManagedOutput" && m.Completeness != "Unknown")) {
+		return false
+	}
 	return (r.Kind == "transcript-excerpt" || r.Kind == "result" || r.Kind == "memory" || r.Kind == "handoff") &&
 		contextKeyPattern.MatchString(r.Key) && len(r.Text) > 0 && len(r.Text) <= MaxContextBytes && utf8.ValidString(r.Text)
+}
+
+func ManagedInvocation(sessionUID, podUID string) string {
+	return ContextHash(sessionUID + "\x00" + podUID)
+}
+func ManagedOutputKey(invocation string, ordinal int32) string {
+	return "capture-" + invocation + "-" + strconv.Itoa(int(ordinal))
+}
+func ValidManagedOutput(m *ManagedOutputAssertion) bool {
+	return m != nil && contextDigestPattern.MatchString(m.Invocation) && m.Ordinal >= 0 && m.Ordinal < 4 && managedConversationPattern.MatchString(m.ConversationID)
 }
 
 func ContextHash(text string) string {
@@ -41,10 +58,22 @@ func ValidContextUID(uid string) bool   { return contextUIDPattern.MatchString(u
 func ValidContextName(name string) bool { return contextNamePattern.MatchString(name) }
 
 // The sender supplies no authority, attribution, path or artifact URL.
+type ManagedOutputRequest struct {
+	Ordinal        int32  `json:"ordinal"`
+	ConversationID string `json:"conversationID"`
+	Completeness   string `json:"completeness"`
+}
+type ManagedOutputAssertion struct {
+	Invocation     string `json:"invocation"`
+	Ordinal        int32  `json:"ordinal"`
+	ConversationID string `json:"conversationID"`
+}
+
 type PublishContextRequest struct {
-	Kind string `json:"kind"`
-	Key  string `json:"key"`
-	Text string `json:"text"`
+	ManagedOutput *ManagedOutputRequest `json:"managedOutput,omitempty"`
+	Kind          string                `json:"kind"`
+	Key           string                `json:"key"`
+	Text          string                `json:"text"`
 }
 
 type ContextAttribution struct {
@@ -57,24 +86,25 @@ type ContextAttribution struct {
 
 // Metadata lists and publication acknowledgements never include the text.
 type ContextMetadata struct {
-	Name             string              `json:"name"`
-	UID              string              `json:"uid"`
-	Kind             string              `json:"kind"`
-	Key              string              `json:"key"`
-	Source           TaskClaimOwner      `json:"source"`
-	SourceGeneration int64               `json:"sourceGeneration"`
-	SourceParent     string              `json:"sourceParent"`
-	Project          string              `json:"project"`
-	Repository       string              `json:"repository"`
-	Actor            TaskClaimActor      `json:"actor"`
-	Provenance       TaskClaimProvenance `json:"provenance"`
-	Attribution      ContextAttribution  `json:"attribution"`
-	ContentSHA256    string              `json:"contentSHA256"`
-	ByteCount        int32               `json:"byteCount"`
-	PublishedAt      time.Time           `json:"publishedAt"`
-	Origin           string              `json:"origin"`
-	Completeness     string              `json:"completeness"`
-	StopState        string              `json:"stopState"`
+	ManagedOutput    *ManagedOutputAssertion `json:"managedOutput,omitempty"`
+	Name             string                  `json:"name"`
+	UID              string                  `json:"uid"`
+	Kind             string                  `json:"kind"`
+	Key              string                  `json:"key"`
+	Source           TaskClaimOwner          `json:"source"`
+	SourceGeneration int64                   `json:"sourceGeneration"`
+	SourceParent     string                  `json:"sourceParent"`
+	Project          string                  `json:"project"`
+	Repository       string                  `json:"repository"`
+	Actor            TaskClaimActor          `json:"actor"`
+	Provenance       TaskClaimProvenance     `json:"provenance"`
+	Attribution      ContextAttribution      `json:"attribution"`
+	ContentSHA256    string                  `json:"contentSHA256"`
+	ByteCount        int32                   `json:"byteCount"`
+	PublishedAt      time.Time               `json:"publishedAt"`
+	Origin           string                  `json:"origin"`
+	Completeness     string                  `json:"completeness"`
+	StopState        string                  `json:"stopState"`
 }
 
 type PublishedContext struct {

@@ -311,6 +311,7 @@ type CommonRuleBinding struct {
 
 // ProjectCanaryBinding retains the causal inputs of one finite managed task.
 type ProjectCanaryBinding struct {
+	CaptureOutput bool `json:"captureOutput,omitempty"`
 	// +kubebuilder:validation:MaxLength=64
 	// +kubebuilder:validation:Pattern=`^[a-f0-9]{64}$`
 	// +optional

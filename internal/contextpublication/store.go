@@ -41,7 +41,7 @@ func ValidSpec(s coord.PublishedContextSpec) bool {
 		apiv1.ValidContextRequest(apiv1.PublishContextRequest{Kind: i.Kind, Key: i.Key, Text: s.Text}) && s.SourceGeneration >= 1 && boundedText(s.SourceParent, 317) &&
 		len(validation.IsDNS1123Label(s.Attribution.Provider)) == 0 && boundedText(s.Attribution.RequestedModel, 256) &&
 		s.Attribution.ObservedModelState == "Unknown" && s.Attribution.UsageState == "Unknown" && s.Attribution.CostState == "Unknown" &&
-		s.Provenance.ReportedHead == "" && s.Provenance.ReportedAt == nil && s.Origin == "ExplicitPublished" && s.Completeness == "ExplicitExcerpt" && s.StopState == "Unknown" &&
+		s.Provenance.ReportedHead == "" && s.Provenance.ReportedAt == nil && validOrigin(s) && s.StopState == "Unknown" &&
 		s.ContentSHA256 == apiv1.ContextHash(s.Text) && int(s.ByteCount) == len(s.Text)
 }
 
@@ -127,4 +127,13 @@ func (s KubeStore) List(ctx context.Context, project string, limit int64, cursor
 		}
 	}
 	return list.Items, list.Continue, nil
+}
+
+func validOrigin(s coord.PublishedContextSpec) bool {
+	if s.ManagedOutput == nil {
+		return s.Origin == "ExplicitPublished" && s.Completeness == "ExplicitExcerpt"
+	}
+	m := s.ManagedOutput
+	assertion := &apiv1.ManagedOutputAssertion{Invocation: m.Invocation, Ordinal: m.Ordinal, ConversationID: m.ConversationID}
+	return s.Origin == "ManagedOutputAssertion" && (s.Completeness == "PartialManagedOutput" || s.Completeness == "Unknown") && apiv1.ValidManagedOutput(assertion) && m.Invocation == apiv1.ManagedInvocation(s.Source.UID, s.Actor.PodUID) && s.Identity.Kind == "transcript-excerpt" && s.Identity.Key == apiv1.ManagedOutputKey(m.Invocation, m.Ordinal) && (s.Attribution.Provider == "claude" || s.Attribution.Provider == "codex")
 }

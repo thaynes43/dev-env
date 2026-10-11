@@ -25,6 +25,7 @@ type ContextIdentity struct {
 	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9-]+$`
 	SessionUID string `json:"sessionUID"`
 	// +kubebuilder:validation:Enum=transcript-excerpt;result;memory;handoff
+	// +kubebuilder:validation:MaxLength=32
 	Kind string `json:"kind"`
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=128
@@ -53,9 +54,11 @@ type ContextAttribution struct {
 // The API and store enforce UTF-8 byte bounds too: CRD MaxLength counts characters.
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="published context and original provenance are immutable"
 // +kubebuilder:validation:XValidation:rule="self.identity.sessionUID == self.source.uid",message="source UID must equal original publication identity"
+// +kubebuilder:validation:XValidation:rule="self.origin == 'ExplicitPublished' ? (self.completeness == 'ExplicitExcerpt' && !has(self.managedOutput)) : (has(self.managedOutput) && self.completeness in ['PartialManagedOutput', 'Unknown'] && self.attribution.provider in ['claude', 'codex'] && self.identity.kind == 'transcript-excerpt' && self.identity.key == 'capture-' + self.managedOutput.invocation + '-' + (self.managedOutput.ordinal == 0 ? '0' : self.managedOutput.ordinal == 1 ? '1' : self.managedOutput.ordinal == 2 ? '2' : '3'))",message="managed assertions require their bounded fixed identity and truthful partial state"
 type PublishedContextSpec struct {
-	Identity ContextIdentity `json:"identity"`
-	Source   SessionIdentity `json:"source"`
+	ManagedOutput *ManagedOutputAssertion `json:"managedOutput,omitempty"`
+	Identity      ContextIdentity         `json:"identity"`
+	Source        SessionIdentity         `json:"source"`
 	// +kubebuilder:validation:Minimum=1
 	SourceGeneration int64 `json:"sourceGeneration"`
 	// +kubebuilder:validation:MinLength=1
@@ -72,9 +75,11 @@ type PublishedContextSpec struct {
 	Actor       ClaimActor         `json:"actor"`
 	Provenance  ClaimProvenance    `json:"provenance"`
 	Attribution ContextAttribution `json:"attribution"`
-	// +kubebuilder:validation:Enum=ExplicitPublished
+	// +kubebuilder:validation:Enum=ExplicitPublished;ManagedOutputAssertion
+	// +kubebuilder:validation:MaxLength=32
 	Origin string `json:"origin"`
-	// +kubebuilder:validation:Enum=ExplicitExcerpt
+	// +kubebuilder:validation:Enum=ExplicitExcerpt;PartialManagedOutput;Unknown
+	// +kubebuilder:validation:MaxLength=32
 	Completeness string `json:"completeness"`
 	// +kubebuilder:validation:Enum=Unknown
 	StopState string `json:"stopState"`
@@ -87,4 +92,17 @@ type PublishedContextSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65536
 	ByteCount int32 `json:"byteCount"`
+}
+
+// ManagedOutputAssertion is publisher-declared output, not transcript attestation.
+type ManagedOutputAssertion struct {
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[a-f0-9]{64}$`
+	Invocation string `json:"invocation"`
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=3
+	Ordinal int32 `json:"ordinal"`
+	// +kubebuilder:validation:MaxLength=36
+	// +kubebuilder:validation:Pattern=`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`
+	ConversationID string `json:"conversationID"`
 }
