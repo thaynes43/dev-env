@@ -15,6 +15,8 @@ Usage:
                                                   list sessions, newest first
   agent-run directory list --project <p> --once [-o json]
                                                   read one authorized directory page
+  agent-run canary create --id <id> --once [-o json]
+                                                  create or report a trusted fixed original
   agent-run show <name>                           show one session, with its task
   agent-run log <name> [--tail N]                 print the end of a session's log
   agent-run msg <name> "<text>"                   send a message into a session's TUI
@@ -83,6 +85,23 @@ Flags:
 
 A nonempty continuation means more records remain. An incomplete or refused
 read cannot establish an empty directory. JSON preserves Unknown observations.
+Common API URL, token, CA and context flags use ordinary caller access.
+`,
+	"canary": `Usage: agent-run canary create --id <fixedID> --once [flags]
+
+Calls the operator's trusted ID-only canary route once. The server selects the
+provider, task and bounded profile from its approved record. This command cannot
+choose a prompt, model, repository, new key or replacement executor.
+
+Flags:
+  --id <fixedID>   the server's approved permanent record ID (required)
+  --once           acknowledge one request with no retry (required)
+  --json, -o json  print the original Session receipt as JSON
+
+The receipt distinguishes new original creation from an existing original.
+It does not prove provider execution or loaded rules. The command does not wait,
+poll, retry or follow redirects. A failed or uncertain acknowledgement requires
+safe observation of the retained original, rather than another create attempt.
 Common API URL, token, CA and context flags use ordinary caller access.
 `,
 	"run": `Usage: agent-run [--repo] <repo> -p "<task>" [flags]

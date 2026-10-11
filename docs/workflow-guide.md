@@ -483,3 +483,20 @@ Metadata can retain original identities after the source Session stops, while
 fresh observations may remain Unknown. Source/installation alone does not prove
 actual authorized discovery or full native-history retention. See
 [the directory client contract](../.agents/sagas/distributed-dev-env/designs/020-directory-cli.md).
+
+### Invoke an approved fixed rule probe
+
+Use the server-selected ID-only route after the reviewed configuration and
+fresh complete authorized directory gate. Each permanent record permits one
+initial provider attempt:
+
+```sh
+agent-run canary create --id rule-canary-claude-1011 --json --once
+```
+
+The receipt distinguishes original creation from an existing original; neither
+proves the provider ran or loaded instructions. The client sends one request and
+does not retry, redirect or poll. Preserve an uncertain response for observation
+without creating another Session or changing the key. This source client does
+not enable general private admission or select Codex fleet routing. See
+[the ID-only client contract](../.agents/sagas/distributed-dev-env/designs/021-canary-cli.md).
