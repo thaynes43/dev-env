@@ -28,7 +28,8 @@ remain Unknown without independent evidence. Mark completeness ExplicitExcerpt
 or Partial; never infer complete retention from one chunk or a missing Pod.
 Retain a content hash, byte count and original publication time/provenance.
 
-Original Session UID and logical key determine immutable identity; retries
+Original Session UID, typed kind and logical key determine immutable identity;
+kind namespaces the key for separate result/memory/handoff publications. Retries
 confirm only identical original content/metadata. Atomic Create and uncached
 exact confirmation preserve uncertainty on lost acknowledgement. A changed body
 cannot replace an existing publication or create a silent second revision.
@@ -79,3 +80,8 @@ open. Do not call explicit stdin text a proven provider transcript. Track built,
 deployed and accepted separately in #174/#91/HANDOFF. Keep Q-24 pending and local
 inference behind GPU readiness/household reservations. No v1 restart/cutover,
 elevation, credential copy, destructive cleanup or retired storage retry.
+
+Provider attribution remains neutral across Claude, Codex and the planned local
+provider. A trusted Session supplies its requested provider/model; current
+runtime/schema limitations are recorded separately. Qwen is a candidate, not
+accepted inference; GPU readiness and household reservations still gate launch.
