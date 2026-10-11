@@ -1,6 +1,6 @@
 # HANDOFF: start here
 
-## Next #174 durable directory source increment
+## Built #174 durable directory source increment
 
 [DESIGN-017](sagas/distributed-dev-env/designs/017-durable-session-directory.md)
 ratifies one default-off protected directory record per original namespace/UID,
@@ -24,7 +24,8 @@ corrected at `5ceabbc6`; the unchanged build guard, bounded cached CLI build and
 affected API/store checks passed. Packet
 `b9bb67ebfac2b923d0eec23a6fdf7d54dcfb3756d9ff291f1dc54ec13732836a`
 retains earlier findings/artifacts and unchanged generated/incoming paths.
-Final native review, CI, signed promotion and actual directory/pilot remain gates.
+Final native review and required CI passed; signed promotion and actual
+directory/pilot remain gates.
 DIRECTORY-R3 present-zero optional report timestamps are corrected at
 `b3b3b9a5` with standard-library nullable JSON encoding/decoding. Eleven projection
 cases, static CLI module guard and lint passed; corrected packet
@@ -34,6 +35,15 @@ explicit global project grant for all existing exact configured trusted human/
 client/coordinator identities; it is not a per-SA map. Live Session readers must
 also prove their own accepted project. Future pilot identity/project bindings
 remain separate and do not select Q-24 fleet UX.
+
+Source #199 squash-merged as `7fa1705e4981632f15580996c303848930913dbd`
+at 20:40 UTC. Exact head `0afed31a` passed required CI 38172562777 and final
+native review `7447409850fb3d0c6567d4e12b77225704b86a84924f65c93578fa2b6087d045`.
+Optional Claude run 38172562788 failed before a verdict; its error-only receipt
+and protected log were read without retry. Combine the directory and D18 usage
+schemas before signed promotion; neither standalone schema contains both.
+Directory activation is prospective and remains disabled until narrow access
+and the admission guard are installed. Actual history/discovery is unaccepted.
 
 ## Next bounded #176 source unit: truthful initial usage
 
@@ -59,6 +69,45 @@ raw results and generated schemas stay preserved. Corrected packet
 `192b9a2ccc1bc0d022419fe2090f1ebfbe6c0187e94b709c4ba5aff06187c525`
 retains the original native HOLD. Final independent review and CI still gate
 merge, followed by signed installation and separate actual-provider acceptance.
+
+Standalone Cost head `a3d44d5e` passed native corrected review
+`063da43dfee9faa4485dc6e435c24dcbee1a2fa0a0047d00e233a99af4229a41`
+and required CI 38172643863. Optional Claude run 38172643851 failed before a
+verdict; log `77fb4eb7ea5d02d49dd5ab557b28c1368cbdbf8b7993c60f74ae4a089ac05367`
+was read. The active #200 rebase on merged Directory7fa preserves all original
+source/failed reviews/fixtures. Combined-schema, receipt/CAS validation and
+exact integrated-head native review/CI remain required before merge.
+
+Integrated source `35f2f4bf` on merged Directory7fa passed focused receipt/CAS/
+replay and combined real-schema negatives, lint, static CLI guard and reproducible
+generation. Packet `9aa9a031b96eaa720e69606180dfc760809deb7d568ff2c7ba4a4ae68817ccbe`
+preserves 541 main incoming paths and 98 earlier artifacts. Combined AgentSession
+schema is `32b2c3e3f40258694e3693a3f5ba3631b71fa729b1708a3cfb6f9e4828155703`.
+Final exact-head native review and CI gate #200; signed promotion is separate.
+
+## Finite #154/#160 source audit, runtime unchanged
+
+Audit `949b9d839601a90660389ec27a71ba4d3dc43429b11a59acb07e8c7b88a8f9fa`
+preserves 39 source hashes and 24 budget/recovery seams. Current private budget
+refusals remain intact. Next bounded candidate is a default-off private direct-
+child adapter reusing the same logical-task ledger, reservation/deadline/counters
+and original private Session/HOME/executor/directory binding. Exact retained
+Pod/all-container/Node/Lease termination must support a distinct private proof;
+absence/partition/foreign ownership remains uncertain with effort/WIP retained.
+No native routing/rearm/rescue is included. Exceptional lost-native-host recovery
+still lacks accepted fence/one-use authorization/history ownership. Original
+#170 fixture/ledger and stopped Q-25 schema route remain preserved; Q-24 pending.
+Audit performed no tests, runtime GETs/writes, provider turns or private reads.
+The #173 rule acceptance and current D17/D18 promotion/pilot remain in flight.
+
+Finite pilot audit `5aff018d28cfd115a8a5704b85e8a2fd200ad358bb0b638b0d75c088261c0fba`
+keeps the fixed rule pair unstarted. Public dev-env cloning into private homes/
+worktrees cannot prove private GitHub repository authorization. Short no-tools
+marker invocations do not guarantee a concurrent interaction/upgrade window.
+Discovery alone grants no claims, payload or inbox rights. The private-history
+Pod-removal guard remains intact; suspend/reap intent and absence are not a
+termination proof. A bounded original-executor stop-and-preserve source proof
+must precede the later termination pilot, with no archive/delete/rearm.
 
 ## Installed common-rule canary prerequisites, admission disabled
 

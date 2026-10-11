@@ -99,6 +99,19 @@ generated schemas remain intact. Packet
 preserves the original HOLD and prior fixtures. Final native review and CI remain
 gates; this is a source correction, without provider or deployment acceptance.
 
+Corrected standalone native review passed at `a3d44d5e` with receipt
+`063da43dfee9faa4485dc6e435c24dcbee1a2fa0a0047d00e233a99af4229a41`;
+required CI 38172643863 passed. Integration onto merged directory source #199
+`7fa1705e` retains both schema additions and requires a fresh exact-head review
+and CI. Optional Claude failed before a verdict; no retry or auth repair.
+
+Integrated source `35f2f4bf` passed receipt/CAS/replay, the combined real-schema
+case, affected lint, static CLI guard and exact-head generation. Packet
+`9aa9a031b96eaa720e69606180dfc760809deb7d568ff2c7ba4a4ae68817ccbe`
+preserves all incoming source/prior artifacts. Exact combined AgentSession CRD
+SHA256 `32b2c3e3f40258694e3693a3f5ba3631b71fa729b1708a3cfb6f9e4828155703`.
+The integrated exact-head native review/CI and signed deployment remain gates.
+
 New CLI/parser wording labels Unknown cost, explicit reported zero/nonzero,
 USD CLI equivalent estimate provenance, initial invocation coverage, requested
 exact model and actual-model Unknown. Context/capture assertions retain their
