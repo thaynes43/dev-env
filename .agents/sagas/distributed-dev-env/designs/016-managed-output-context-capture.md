@@ -101,3 +101,8 @@ Actual capture and authorized stopped-source reads require a separate bounded
 installed pilot, with the provider output and original identities observed.
 Source tests and file presence do not accept native history, session directory,
 resume/recovery or the multi-provider MVP. Keep #174/#91 open.
+
+Malformed raw provider protocol UTF-8 refuses before JSON parsing can substitute
+characters. Mark capture Unknown and preserve any already accepted private
+prefix; a complete=true event cannot override this uncertainty. CAPTURE-R1
+regression and Common195 integration retain the original failed/uncertain packets.
