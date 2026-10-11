@@ -62,7 +62,9 @@ ledger match the prepromotion baseline. The activity declaration ended.
 `04fb03be3325065a27ff6e8894e6610d772fffed`. Operator and agent publications
 passed signing/verification. The operator/CRD GitOps candidate is under native
 review; installed retention and stopped-context reads remain unaccepted.
-Preserve the retention schema across image rollback once latches exist.
+After latches exist, preserve both the retention schema and a retention-aware
+operator across rollback. Flag disable preserves latches; a pre-guard operator
+downgrade is not established safe.
 
 ## Built #174 private-history preservation guard — 2026-10-11 UTC
 
