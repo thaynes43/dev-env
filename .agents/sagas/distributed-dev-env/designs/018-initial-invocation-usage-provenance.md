@@ -11,7 +11,9 @@ pricing engine, paid API calls, provider history importer or whole-session total
 Add a versioned optional UsageObservation alongside retained legacy raw Usage in
 the private task result, heartbeat protocol and AgentSession status. The new API
 Session DTO exposes the typed observation. Preserve existing legacy raw status
-and wire fields for compatibility, without migrating old values into observations.
+and wire field definitions for compatibility, without migrating old values into
+observations. New agents omit deprecated unqualified raw Usage from outgoing
+heartbeats; private task results and already-stored raw evidence remain intact.
 
 A valid observation records original initial invocation identity, original
 Session UID and Pod UID, requested provider/full model and original receipt time.
@@ -77,6 +79,16 @@ values shown must be labelled unclassified. Old schema pruning cannot promote a
 raw numeric zero to Reported. Already-running old binaries are not retroactively
 fixed; installation acceptance identifies upgraded surfaces without restarting
 existing session Pods solely to update reporting.
+
+Native review COST-R1 establishes the remaining mixed-version path: a new agent
+sending token-only legacy Usage to an old operator still manufactures numeric
+zero, and an old CLI displays dollars. Root therefore requires new agents to
+omit raw Usage from every outgoing heartbeat, including CLI estimates and
+Unknown results. An old operator can ignore the additive typed observation
+without acquiring a new unqualified cost row. Ordinary heartbeat, liveness and
+budget fields must continue; test the actual outgoing JSON against the old
+decoder. Preserve private results and existing stored legacy values, without
+migration or restart of existing agents.
 
 New CLI/parser wording labels Unknown cost, explicit reported zero/nonzero,
 USD CLI equivalent estimate provenance, initial invocation coverage, requested

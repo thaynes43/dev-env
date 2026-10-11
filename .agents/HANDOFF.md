@@ -44,6 +44,10 @@ new API responses omit unqualified legacy Usage so old clients cannot invent a
 free cost. New clients show Unknown without typed evidence, explicit observed
 zero with CLI estimate provenance, requested exact model and actual Unknown.
 No parent/child sums, billing inference, API substitution or budget changes.
+Native COST-R1 also proves new-agent raw heartbeats could fabricate zero through
+an old operator/client. New agents must omit deprecated raw Usage from outgoing
+heartbeats while preserving private results, stored legacy evidence and ordinary
+liveness/budget processing. The original failed review remains retained.
 Finite audit SHA256 `9c96d404956f661f1a09f5361a1ffa6f9e1874f8a5e3e1a7848b00808db197e8`.
 Source implementation, native review, CI, signed promotion and actual-provider
 acceptance remain gates. Existing sessions must not restart for reporting alone.
