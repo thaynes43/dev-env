@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.19.0](https://github.com/thaynes43/dev-env/compare/v2.18.0...v2.19.0) (2026-10-11)
+
+
+### Features
+
+* **agentd:** retain bounded partial managed output context ([#198](https://github.com/thaynes43/dev-env/issues/198)) ([24960dc](https://github.com/thaynes43/dev-env/commit/24960dc128b219c48f4a32ba9f25e778f20e9a66))
+* **agentd:** retain common rules and private canary instruction inputs ([#195](https://github.com/thaynes43/dev-env/issues/195)) ([f1bb6ca](https://github.com/thaynes43/dev-env/commit/f1bb6ca26937557f6c823fc74b0ba385661f360a))
+
 ## [2.18.0](https://github.com/thaynes43/dev-env/compare/v2.17.0...v2.18.0) (2026-10-11)
 
 
