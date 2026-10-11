@@ -17,6 +17,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/commonrules"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
@@ -221,6 +222,12 @@ func buildCodexLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, 
 			return Launch{}, err
 		}
 		l.NativeInvocationID, l.PodUID, l.ChildDecisions = id, s.PodUID, true
+	}
+	if sess.CaptureOutput && first == nil {
+		if sess.Validate() != nil || !apiv1.ValidContextUID(s.PodUID) {
+			return Launch{}, errors.New("managed capture requires original task and pod")
+		}
+		l.CaptureOutput, l.CaptureModel, l.PodUID = true, sess.Model, s.PodUID
 	}
 	argv := []string{s.CodexBin, "exec", "--json", "--color", "never"}
 	if first != nil {

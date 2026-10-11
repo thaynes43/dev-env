@@ -104,7 +104,7 @@ exit 0`)
 	if log, _ := os.ReadFile(l.LogPath); string(log) != out {
 		t.Errorf("the log differs from the pane:\n%s", log)
 	}
-	if ev, _ := os.ReadFile(l.EventsPath); strings.Count(string(ev), "\n") != 6 || !strings.Contains(string(ev), `"total_cost_usd":0.0123`) {
+	if ev, _ := os.ReadFile(l.EventsPath); strings.Count(string(ev), "\n") != 5 || strings.Contains(string(ev), "a warning on stderr") || !strings.Contains(string(ev), `"total_cost_usd":0.0123`) {
 		t.Errorf("events file:\n%s", ev)
 	}
 	var res taskResult

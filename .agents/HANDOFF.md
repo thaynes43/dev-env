@@ -1,15 +1,47 @@
 # HANDOFF: start here
 
-## Next #173 common instruction snapshot — 2026-10-11 UTC
+## Reviewable #174 source unit: partial managed output capture
+
+[DESIGN-016](sagas/distributed-dev-env/designs/016-managed-output-context-capture.md)
+uses existing assistant-event parsers and protected context storage. Separate
+Claude stdout/stderr first; capture only bounded initial managed task output,
+with original private invocation intent and truthful publisher-asserted partial
+provenance. No raw prompts/tools/provider HOME/database imports or model replay.
+Native/TUI/resumed full history and the session directory remain unaccepted.
+
+The corrected source and Common195 integration are frozen after focused parser,
+API/store/policy/controller/schema/lint/generation checks. Raw invalid Codex
+UTF-8 refuses before JSON substitution, marks Unknown and preserves an accepted
+prefix. Original CAPTURE-R1 packet/review and corrected/integration packets
+remain retained. Integration validation SHA256
+`124166ea8424ff92f5884f8099faa06dddb1b6ea49f7472c0248117542545371`.
+Final native integration review, exact-head hosted CI, signed release and
+separate GitOps/actual capture acceptance remain gates. Claude is optional/down.
+
+Context guard GitOps #3819 installed at `f316532a`; receipt
+`cd911ef5e9e474a9cd54f2a951f65d748e6ac9d9ea83395231ddd4ca2641a06f`
+proves exact signed operator/CRD/Role and preservation of 11 other Pods, four
+retained Jobs and all prior schemas/claims authority/catalog/templates/native
+ledger. Zero AgentSessions existed, so actual session upgrade acceptance still
+needs the owner pilot. Scoped activity ended; no provider trial occurred.
+
+## Built #173 common instruction snapshot — 2026-10-11 UTC
 
 [DESIGN-015](sagas/distributed-dev-env/designs/015-retained-common-rule-inputs.md)
 closes an evidenced gap: catalog/project snapshots do not record global common
 configuration content, and resume can reread changed global/developer inputs.
-The default-off new managed route will retain bounded named source bytes,
+Source #195 merged as `f1bb6ca26937557f6c823fc74b0ba385661f360a` after
+exact-head required CI and native review. The default-off new managed route
+retains bounded named source bytes,
 source UID/RV/hash, CommonRevision and a separately derived effective instruction
 projection. Owned private globals and resume use the original accepted inputs;
 foreign/partial/changed state refuses while preserving WIP. Actual canary
-activation waits for this source contract, signed deployment and native review.
+activation waits for signed release/deployment and reviewed narrow config/
+profile/network/required-access changes. COMMON-R1 was fixed with the durable
+original projection digest and Fresh/Preparing/Confirmed latch, including
+first-launch refusal before launch.json exists. Native correction receipt
+`6fca81709bfaf74d6d22aecf580884ccc82c3fbc02d3839221a35f7628e3dc29`
+and both original/revised packets are retained; actual provider loading is pending.
 Legacy/common provenance remains Unknown; Q-24 is pending.
 
 ## Installed #173 owned roots, narrow acceptance — 2026-10-11 UTC
@@ -84,7 +116,6 @@ contention and live authorization remain unaccepted. Private admission remains f
 neither source merge closes #175 or establishes the MVP.
 
 ## Built #173 one-attempt managed canaries — 2026-10-11 UTC
-
 
 [DESIGN-011](sagas/distributed-dev-env/designs/011-private-managed-rule-canaries.md)
 adds a separate default-off policy with at most two fixed Claude/Codex records,

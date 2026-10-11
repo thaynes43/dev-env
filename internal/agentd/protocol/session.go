@@ -51,6 +51,7 @@ const SessionInputAnnotation = "dev-env.haynesops.com/retained-session-input"
 // ignored, so a newer operator can add fields an older agentd does not read.
 type Session struct {
 	CommonRules     json.RawMessage `json:"commonRules,omitempty"`
+	CaptureOutput   bool            `json:"captureOutput,omitempty"`
 	SessionUID      string          `json:"sessionUID,omitempty"`
 	ProjectSnapshot json.RawMessage `json:"projectSnapshot,omitempty"`
 	// Workspace is the operator's explicit shared-storage binding. SessionUID
@@ -213,6 +214,9 @@ var (
 // Validate checks the fields agentd relies on.
 func (s Session) Validate() error {
 	var errs []error
+	if s.CaptureOutput && (s.Mode != ModeTask || (s.Agent != AgentClaude && s.Agent != AgentCodex) || s.SessionUID == "" || len(s.ProjectSnapshot) == 0 || s.Workspace != nil) {
+		errs = append(errs, errors.New("managed output requires an original private project task identity"))
+	}
 	if s.SessionUID != "" && (len(s.SessionUID) > 128 || !repoName.MatchString(s.SessionUID)) {
 		errs = append(errs, errors.New("sessionUID must identify the existing session"))
 	}
