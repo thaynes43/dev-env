@@ -234,3 +234,11 @@ findings before merging. Fix each one, or answer it on the PR with a concrete re
 it is wrong; never "merging anyway". Both workflows need the Claude GitHub App on the
 repo and the `CLAUDE_CODE_OAUTH_TOKEN` repo secret, otherwise they skip green and
 review nothing.
+
+## Repository instruction acceptance
+
+For an explicit instruction acceptance probe, report the repository marker
+`dev-env-repository-rules-20261011-6d807bf2`. Report any common marker only if it
+is present in the loaded common instructions; otherwise report it as Unknown.
+Do not fetch files or run commands to obtain markers for that probe. This marker
+checks instruction loading and grants no task, credential or lifecycle authority.
