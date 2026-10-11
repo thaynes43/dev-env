@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.13.0](https://github.com/thaynes43/dev-env/compare/v2.12.0...v2.13.0) (2026-10-11)
+
+
+### Features
+
+* **agentd:** bootstrap trusted private project catalogs ([#179](https://github.com/thaynes43/dev-env/issues/179)) ([951eeaf](https://github.com/thaynes43/dev-env/commit/951eeafa43871825e6eb00ac2240fa31970b86ee))
+
 ## [2.12.0](https://github.com/thaynes43/dev-env/compare/v2.11.0...v2.12.0) (2026-10-10)
 
 
