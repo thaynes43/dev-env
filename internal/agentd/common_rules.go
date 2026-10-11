@@ -26,12 +26,14 @@ const commonProjectionLimit = 2 << 20
 const commonOwnershipLimit = commonrules.MaxSnapshotBytes + (32 << 10)
 
 type commonOwnership struct {
-	Version    int             `json:"version"`
-	State      string          `json:"state"`
-	Session    string          `json:"session"`
-	SessionUID string          `json:"sessionUID"`
-	Home       string          `json:"home"`
-	Snapshot   json.RawMessage `json:"snapshot"`
+	Version          int             `json:"version"`
+	State            string          `json:"state"`
+	Session          string          `json:"session"`
+	SessionUID       string          `json:"sessionUID"`
+	Home             string          `json:"home"`
+	Snapshot         json.RawMessage `json:"snapshot"`
+	ProjectionState  string          `json:"projectionState"`
+	ProjectionDigest string          `json:"projectionDigest"`
 }
 
 // CommonInstructionBinding distinguishes accepted source from the separately
@@ -140,6 +142,52 @@ func proveCommonGlobals(s Settings, snapshot commonrules.Snapshot) error {
 	return nil
 }
 
+func freshCommonOwnership(s Settings, sess protocol.Session, snapshot commonrules.Snapshot) commonOwnership {
+	canonical, _ := snapshot.Bytes()
+	return commonOwnership{Version: 2, State: "Confirmed", Session: sess.Name, SessionUID: sess.SessionUID, Home: s.Home, Snapshot: canonical, ProjectionState: "Fresh"}
+}
+
+// Fresh is explicit evidence that this receipt has never attempted projection
+// creation. Older or interrupted receipts cannot acquire that evidence on retry.
+func validateCommonOwnership(s Settings, sess protocol.Session, snapshot commonrules.Snapshot, owned commonOwnership) error {
+	want := freshCommonOwnership(s, sess, snapshot)
+	identity := owned
+	identity.ProjectionState, identity.ProjectionDigest = want.ProjectionState, want.ProjectionDigest
+	if !reflect.DeepEqual(identity, want) || proveCommonGlobals(s, snapshot) != nil {
+		return commonrules.ErrRefused
+	}
+	switch owned.ProjectionState {
+	case "Fresh":
+		if owned.ProjectionDigest != "" {
+			return commonrules.ErrRefused
+		}
+		for _, path := range []string{s.statePath(commonProjectionFile), s.statePath(launchFile)} {
+			if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+				return commonrules.ErrRefused
+			}
+		}
+	case "Confirmed":
+		if _, err := readCommonProjection(s, owned); err != nil {
+			return err
+		}
+	default:
+		return commonrules.ErrRefused
+	}
+	return nil
+}
+
+func readCommonProjection(s Settings, owned commonOwnership) (commonProjection, error) {
+	var projection commonProjection
+	if owned.ProjectionState != "Confirmed" || !commonrules.ValidDigest(owned.ProjectionDigest) || readCommonJSON(s.statePath(commonProjectionFile), commonProjectionLimit, &projection) != nil {
+		return commonProjection{}, commonrules.ErrRefused
+	}
+	data, err := json.Marshal(projection)
+	if err != nil || commonrules.Digest(data) != owned.ProjectionDigest {
+		return commonProjection{}, commonrules.ErrRefused
+	}
+	return projection, nil
+}
+
 // Preparing precedes either global write. Partial publication is deliberately
 // not repaired or adopted on retry; the original files and intent stay intact.
 func prepareCommonTask(s Settings, sess protocol.Session) error {
@@ -158,50 +206,92 @@ func prepareCommonTask(s Settings, sess protocol.Session) error {
 		return commonrules.ErrRefused
 	}
 	defer unlock()
+	_, err = prepareCommonTaskLocked(s, sess, snapshot)
+	return err
+}
+
+// The common-rules lock covers both globals and the projection state machine.
+func prepareCommonTaskLocked(s Settings, sess protocol.Session, snapshot commonrules.Snapshot) (commonOwnership, error) {
 	for _, dir := range []string{s.ClaudeConfigDir, s.CodexHome} {
 		if privateCommonDir(dir) != nil {
-			return commonrules.ErrRefused
+			return commonOwnership{}, commonrules.ErrRefused
 		}
 	}
-	canonical, _ := snapshot.Bytes()
-	want := commonOwnership{Version: 1, State: "Confirmed", Session: sess.Name, SessionUID: sess.SessionUID, Home: s.Home, Snapshot: canonical}
+	want := freshCommonOwnership(s, sess, snapshot)
 	path := s.statePath(commonOwnershipFile)
 	var owned commonOwnership
 	if err := readCommonJSON(path, commonOwnershipLimit, &owned); err == nil {
-		if !reflect.DeepEqual(owned, want) || proveCommonGlobals(s, snapshot) != nil {
-			return commonrules.ErrRefused
+		if err := validateCommonOwnership(s, sess, snapshot, owned); err != nil {
+			return commonOwnership{}, err
 		}
-		return nil
+		return owned, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return commonrules.ErrRefused
+		return commonOwnership{}, commonrules.ErrRefused
 	}
 	if _, err := os.Lstat(s.statePath(launchFile)); !errors.Is(err, os.ErrNotExist) {
-		return commonrules.ErrRefused
+		return commonOwnership{}, commonrules.ErrRefused
 	}
 	for _, p := range []string{filepath.Join(s.ClaudeConfigDir, "CLAUDE.md"), filepath.Join(s.CodexHome, "AGENTS.md"), s.statePath(commonProjectionFile)} {
 		if _, err := os.Lstat(p); !errors.Is(err, os.ErrNotExist) {
-			return commonrules.ErrRefused
+			return commonOwnership{}, commonrules.ErrRefused
 		}
 	}
 	intent := want
 	intent.State = "Preparing"
 	data, _ := json.Marshal(intent)
 	if projectSyncExclusiveFile(path, append(data, '\n')) != nil {
-		return commonrules.ErrRefused
+		return commonOwnership{}, commonrules.ErrRefused
 	}
 	var retained commonOwnership
 	if readCommonJSON(path, commonOwnershipLimit, &retained) != nil || !reflect.DeepEqual(retained, intent) {
-		return commonrules.ErrRefused
+		return commonOwnership{}, commonrules.ErrRefused
 	}
 	for path, text := range map[string]string{filepath.Join(s.ClaudeConfigDir, "CLAUDE.md"): snapshot.Common.Text, filepath.Join(s.CodexHome, "AGENTS.md"): snapshot.CodexGlobal()} {
 		if projectSyncExclusiveFile(path, []byte(text)) != nil {
-			return commonrules.ErrRefused
+			return commonOwnership{}, commonrules.ErrRefused
 		}
 	}
 	if proveCommonGlobals(s, snapshot) != nil || writeWorkspaceJSON(s.statePath(commonOwnershipFile), want) != nil {
-		return commonrules.ErrRefused
+		return commonOwnership{}, commonrules.ErrRefused
 	}
 	if readCommonJSON(s.statePath(commonOwnershipFile), commonOwnershipLimit, &retained) != nil || !reflect.DeepEqual(retained, want) {
+		return commonOwnership{}, commonrules.ErrRefused
+	}
+	return want, nil
+}
+
+type commonProjectionWrites struct {
+	ownership  func(string, any) error
+	projection func(string, []byte) error
+}
+
+// The original digest is durably acknowledged before projection creation.
+// Preparing survives every uncertain boundary and is never repaired on retry.
+func sealCommonProjection(s Settings, owned commonOwnership, projection commonProjection, writes commonProjectionWrites) error {
+	data, err := json.Marshal(projection)
+	if err != nil || len(data)+1 > commonProjectionLimit || owned.ProjectionState != "Fresh" || owned.ProjectionDigest != "" {
+		return commonrules.ErrRefused
+	}
+	intent := owned
+	intent.ProjectionState, intent.ProjectionDigest = "Preparing", commonrules.Digest(data)
+	path := s.statePath(commonOwnershipFile)
+	if writes.ownership(path, intent) != nil {
+		return commonrules.ErrRefused
+	}
+	var observed commonOwnership
+	if readCommonJSON(path, commonOwnershipLimit, &observed) != nil || !reflect.DeepEqual(observed, intent) {
+		return commonrules.ErrRefused
+	}
+	if writes.projection(s.statePath(commonProjectionFile), append(data, '\n')) != nil {
+		return commonrules.ErrRefused
+	}
+	var retained commonProjection
+	if readCommonJSON(s.statePath(commonProjectionFile), commonProjectionLimit, &retained) != nil || !reflect.DeepEqual(retained, projection) {
+		return commonrules.ErrRefused
+	}
+	confirmed := intent
+	confirmed.ProjectionState = "Confirmed"
+	if writes.ownership(path, confirmed) != nil || readCommonJSON(path, commonOwnershipLimit, &observed) != nil || !reflect.DeepEqual(observed, confirmed) {
 		return commonrules.ErrRefused
 	}
 	return nil
@@ -227,13 +317,17 @@ func retainedCommonArgs(s Settings, sess protocol.Session, guard string, resume 
 	if err != nil {
 		return nil, err
 	}
-	if prepareCommonTask(s, sess) != nil {
+	unlock, err := privateNativeLock(s, "common-rules.lock")
+	if err != nil {
 		return nil, commonrules.ErrRefused
 	}
-	path := s.statePath(commonProjectionFile)
+	defer unlock()
+	owned, err := prepareCommonTaskLocked(s, sess, accepted)
+	if err != nil {
+		return nil, err
+	}
 	var projection commonProjection
-	err = readCommonJSON(path, commonProjectionLimit, &projection)
-	if errors.Is(err, os.ErrNotExist) {
+	if owned.ProjectionState == "Fresh" {
 		if resume {
 			return nil, commonrules.ErrRefused
 		}
@@ -248,16 +342,14 @@ func retainedCommonArgs(s Settings, sess protocol.Session, guard string, resume 
 			}
 		}
 		projection = commonProjection{Version: 1, Session: sess.Name, SessionUID: sess.SessionUID, Provider: sess.Agent, SnapshotDigest: commonrules.Digest(sess.CommonRules), ProjectDigest: accepted.ProjectDigest, RenderedRulesDigest: commonrules.Digest([]byte(snapshotRules)), ConfiguredDeveloper: developer, Fallbacks: fallbacks, DocMaxBytes: docMax, Guard: guard}
-		data, err := json.Marshal(projection)
-		if err != nil || len(data)+1 > commonProjectionLimit || projectSyncExclusiveFile(path, append(data, '\n')) != nil {
+		if sealCommonProjection(s, owned, projection, commonProjectionWrites{ownership: writeWorkspaceJSON, projection: projectSyncExclusiveFile}) != nil {
 			return nil, commonrules.ErrRefused
 		}
-		var observed commonProjection
-		if readCommonJSON(path, commonProjectionLimit, &observed) != nil || !reflect.DeepEqual(observed, projection) {
-			return nil, commonrules.ErrRefused
+	} else {
+		projection, err = readCommonProjection(s, owned)
+		if err != nil {
+			return nil, err
 		}
-	} else if err != nil {
-		return nil, commonrules.ErrRefused
 	}
 	if projection.Version != 1 || projection.Session != sess.Name || projection.SessionUID != sess.SessionUID || projection.Provider != sess.Agent || projection.SnapshotDigest != commonrules.Digest(sess.CommonRules) || projection.ProjectDigest != accepted.ProjectDigest || projection.RenderedRulesDigest != commonrules.Digest([]byte(snapshotRules)) || projection.Guard == "" || !utf8.ValidString(projection.ConfiguredDeveloper) || len(projection.Fallbacks) > 64 {
 		return nil, commonrules.ErrRefused
@@ -294,12 +386,16 @@ func commonLaunchBinding(s Settings, sess protocol.Session) (*CommonInstructionB
 	if err != nil {
 		return nil, err
 	}
-	var projection commonProjection
-	if readCommonJSON(s.statePath(commonProjectionFile), commonProjectionLimit, &projection) != nil {
+	unlock, err := privateNativeLock(s, "common-rules.lock")
+	if err != nil {
 		return nil, commonrules.ErrRefused
 	}
-	data, _ := json.Marshal(projection)
-	return &CommonInstructionBinding{CommonRevision: snapshot.CommonRevision, SnapshotDigest: commonrules.Digest(sess.CommonRules), EffectiveDigest: commonrules.Digest(data), Derivation: "RetainedLocalInstructionProjection"}, nil
+	defer unlock()
+	var owned commonOwnership
+	if readCommonJSON(s.statePath(commonOwnershipFile), commonOwnershipLimit, &owned) != nil || owned.ProjectionState != "Confirmed" || validateCommonOwnership(s, sess, snapshot, owned) != nil {
+		return nil, commonrules.ErrRefused
+	}
+	return &CommonInstructionBinding{CommonRevision: snapshot.CommonRevision, SnapshotDigest: commonrules.Digest(sess.CommonRules), EffectiveDigest: owned.ProjectionDigest, Derivation: "RetainedLocalInstructionProjection"}, nil
 }
 
 func validateCommonResume(s Settings, sess protocol.Session, first Launch) error {
