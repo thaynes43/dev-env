@@ -1,5 +1,30 @@
 # HANDOFF: start here
 
+## Reviewable #174 published context source — 2026-10-11 UTC
+
+[DESIGN-013](sagas/distributed-dev-env/designs/013-published-stopped-context.md)
+adds default-off immutable explicit publication and authorized stopped-source
+reads in the protected coordination group. Original Session UID/kind/key binds
+one publication; atomic confirmation preserves lost-ACK uncertainty and refuses
+changed content. The server derives actor, requested provider/model and saved
+catalog/rules identity. Actual model/usage/cost/initial pin/stop remain Unknown.
+Explicit stdin text is an excerpt, not a verified provider transcript.
+
+Separate project payload scopes authorize own live readers or configured
+coordinators; legacy broad read and claim metadata scopes grant no text access.
+Lists omit text, and reads do not require a stopped/absent source to be Ready or
+invoke exec/resume. The CLI retains a private immutable intent before HTTP,
+uses projected-token rotation and verified TLS, and refuses redirects.
+
+Focused store/API/client/command and real cached schema checks passed, affected
+lint has zero issues, and generation reproduces exact bytes. Rebase from the
+reviewed claim stack onto main `296c3d7ac0fb56600c30508d29ee066bb1baad27` preserves
+all 19 frozen source files and eight unaffected claim files. Native independent
+review and required CI are pending. Claude review remains optional/down.
+Signed source/schema/narrow Role deployment and explicit publish-stop-read
+acceptance follow. Provider capture, complete retention, native directory,
+genuine stopped history and the owner pilot remain unaccepted; keep #174/#91 open.
+
 **Review ruling (Tom, 2026-10-11):** Claude Code reviews are down and optional,
 including releases. Record unavailable/failed/skipped outcomes without a pass
 claim. Required CI and native independent review remain merge gates; do not

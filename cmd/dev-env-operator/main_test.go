@@ -5,6 +5,23 @@ import (
 	"testing"
 )
 
+func TestPublishedContextFlagsDefaultOffAndIndependentScope(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.contextsEnabled || len(o.contextReadProjects) != 0 {
+		t.Fatal("context enabled by default", err)
+	}
+	bound := []string{"--enable-published-contexts", "--project-catalog=dev-env-system/dev-env-project-catalog", "--project-clone-owner=thaynes43", "--context-payload-read-projects=sample"}
+	o, err = parseFlags(bound)
+	if err != nil || !o.contextsEnabled || o.taskClaimsEnabled || len(o.taskClaimReadProjects) != 0 || o.privateProjectTasks || o.managedCodexTasks || o.privateHistoryRetention {
+		t.Fatal("context widened other gates", err)
+	}
+	for _, args := range [][]string{{"--enable-published-contexts"}, {"--context-payload-read-projects=sample"}, append(slices.Clone(bound), "--api-bind-address=0"), append(slices.Clone(bound), "--context-payload-read-projects=*"), append(slices.Clone(bound), "--context-payload-read-projects=sample,sample")} {
+		if _, err := parseFlags(args); err == nil {
+			t.Fatal("missing/broad context authority accepted", args)
+		}
+	}
+}
+
 func TestTaskClaimFlagsDefaultOffAndExplicitScope(t *testing.T) {
 	o, err := parseFlags(nil)
 	if err != nil || o.taskClaimsEnabled || len(o.taskClaimReadProjects) != 0 {

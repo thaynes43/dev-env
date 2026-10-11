@@ -451,6 +451,8 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return ctlMessageOrLog(ctx, args, stdin, stdout, stderr, getenv, r)
 		case "decision-read", "decision-answer":
 			return decisionCtl(ctx, args, stdin, stdout, stderr, getenv)
+		case "context-publish", "context-read", "context-list":
+			return contextCtl(ctx, args, stdin, stdout, stderr, getenv)
 		case "rescues", "prune", "hold-rescue":
 			return shelfCtl(args, stdin, stdout, stderr, getenv)
 		}

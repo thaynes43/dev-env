@@ -17,6 +17,8 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+
+	"github.com/thaynes43/dev-env/internal/tokenfile"
 )
 
 // NewReader accepts only the in-cluster Service address, public CA and explicit
@@ -60,7 +62,7 @@ type apiReader struct {
 }
 
 func (r *apiReader) named(ctx context.Context, prefix, namespace, resource, name string, out any) error {
-	token, err := os.ReadFile(r.tokenFile)
+	token, err := tokenfile.Read(r.tokenFile, tokenfile.MaxBytes)
 	if err != nil || len(token) == 0 || len(token) > 64<<10 {
 		return errors.New("sync API identity is unavailable")
 	}

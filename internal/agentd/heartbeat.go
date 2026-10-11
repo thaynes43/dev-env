@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/tokenfile"
 )
 
 // HeartbeatClient posts agentd's status to the operator (D-08, D-41).
@@ -61,7 +62,7 @@ func NewHeartbeatClient(s Settings, session string) (*HeartbeatClient, error) {
 // kubelet rotates the projected token. Errors name the status code, never the
 // token.
 func (h *HeartbeatClient) Send(ctx context.Context, st protocol.Status) error {
-	tok, err := os.ReadFile(h.TokenFile)
+	tok, err := tokenfile.Read(h.TokenFile, tokenfile.MaxBytes)
 	if err != nil {
 		return fmt.Errorf("API token: %w", err)
 	}
@@ -94,7 +95,7 @@ func (h *HeartbeatClient) Send(ctx context.Context, st protocol.Status) error {
 // uncached own-UID-bound route. Local files never supply answer authority.
 func (h *HeartbeatClient) ReadDecisionAuthority(ctx context.Context) (protocol.DecisionAuthorityResult, error) {
 	var result protocol.DecisionAuthorityResult
-	tok, err := os.ReadFile(h.TokenFile)
+	tok, err := tokenfile.Read(h.TokenFile, tokenfile.MaxBytes)
 	if err != nil {
 		return result, errors.New("decision authority token unavailable")
 	}

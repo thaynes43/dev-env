@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/tokenfile"
 )
 
 // Where agent-run finds the API and a token for it (D-06, D-50). A session
@@ -219,7 +220,7 @@ type fileToken struct {
 }
 
 func (f *fileToken) Token(context.Context) (string, error) {
-	b, err := os.ReadFile(f.path)
+	b, err := tokenfile.Read(f.path, tokenfile.MaxBytes)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return "", fail(ExitAuth, "no token at %s (%s)", f.path, f.from)
@@ -255,7 +256,7 @@ type minter struct {
 
 func newMinter(env Env) (*minter, error) {
 	dir := env.ServiceAccountDir
-	own, err := os.ReadFile(filepath.Join(dir, "token"))
+	own, err := tokenfile.Read(filepath.Join(dir, "token"), tokenfile.MaxBytes)
 	if err != nil {
 		return nil, fail(ExitAuth, "the pod's ServiceAccount token: %v", err)
 	}
@@ -290,7 +291,7 @@ func (m *minter) Token(ctx context.Context) (string, error) {
 	if m.tok != "" && m.env.Now().Sub(m.at) < mintReuse {
 		return m.tok, nil
 	}
-	own, err := os.ReadFile(filepath.Join(m.env.ServiceAccountDir, "token"))
+	own, err := tokenfile.Read(filepath.Join(m.env.ServiceAccountDir, "token"), tokenfile.MaxBytes)
 	if err != nil {
 		return "", fail(ExitAuth, "the pod's ServiceAccount token: %v", err)
 	}

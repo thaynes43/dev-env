@@ -40,6 +40,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/activity"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver"
+	"github.com/thaynes43/dev-env/internal/contextpublication"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/grantexpiry"
 	"github.com/thaynes43/dev-env/internal/podexec"
@@ -76,6 +77,8 @@ func main() {
 }
 
 type options struct {
+	contextsEnabled         bool
+	contextReadProjects     []string
 	taskClaimsEnabled       bool
 	taskClaimReadProjects   []string
 	nativeFixtureEnabled    bool
@@ -133,6 +136,8 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.taskBudgetsEnabled, "enable-task-budgets", false, "enable retained finite managed task budget authority; native admission requires a separate trusted inspector")
 	fs.BoolVar(&o.taskClaimsEnabled, "enable-task-claims", false, "enable immutable explicit TaskClaim ownership in the separate coordination API group")
 	claimProjects := fs.String("task-claims-read-projects", "", "explicit comma-separated projects for bounded TaskClaim metadata discovery")
+	fs.BoolVar(&o.contextsEnabled, "enable-published-contexts", false, "enable immutable explicitly published context in the protected coordination API group")
+	contextProjects := fs.String("context-payload-read-projects", "", "explicit comma-separated projects granting published context payload reads")
 	fs.BoolVar(&o.nativeFixtureEnabled, "enable-native-lifecycle-fixture", false, "admit only the fixed isolated zero-task native lifecycle fixture")
 	fs.StringVar(&o.nativeFixtureImage, "native-fixture-image", "", "signature-verified immutable agent image for the isolated fixture")
 	fs.StringVar(&o.taskBudgetNamespace, "task-budget-namespace", "", "dedicated protected namespace for retained budget ConfigMaps")
@@ -206,6 +211,18 @@ func parseFlags(args []string) (options, error) {
 		}
 	} else if len(o.taskClaimReadProjects) != 0 {
 		return o, errors.New("task claim read scope requires explicit enable-task-claims")
+	}
+
+	o.contextReadProjects, err = apiserver.ParseContextReadProjects(*contextProjects)
+	if err != nil {
+		return o, err
+	}
+	if o.contextsEnabled {
+		if o.apiAddr == "0" || o.catalogBinding == nil || len(o.contextReadProjects) == 0 || len(validation.IsDNS1123Label(o.templatesNamespace)) != 0 {
+			return o, errors.New("published context requires the API, accepted catalog and explicit payload read scope")
+		}
+	} else if len(o.contextReadProjects) != 0 {
+		return o, errors.New("context payload scope requires explicit enable-published-contexts")
 	}
 
 	if *assignedBudgets != "" {
@@ -358,7 +375,12 @@ func run(args []string) error {
 		if o.taskClaimsEnabled {
 			claims = &taskclaim.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.templatesNamespace}
 		}
+		var contexts *contextpublication.KubeStore
+		if o.contextsEnabled {
+			contexts = &contextpublication.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.templatesNamespace}
+		}
 		api := &apiserver.Server{
+			PublishedContexts: contexts, ContextReadProjects: o.contextReadProjects,
 			TaskClaims: claims, TaskClaimReadProjects: o.taskClaimReadProjects,
 			Client:      mgr.GetClient(),
 			TaskBudgets: budgets, AssignedTaskBudgets: o.assignedTaskBudgets,
