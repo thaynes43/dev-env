@@ -47,6 +47,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/inbox"
 	"github.com/thaynes43/dev-env/internal/podexec"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
+	"github.com/thaynes43/dev-env/internal/sessiondirectory"
 	"github.com/thaynes43/dev-env/internal/shelf"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
@@ -80,6 +81,9 @@ func main() {
 }
 
 type options struct {
+	directoryEnabled              bool
+	directoryProjects             []string
+	metadataDiscoveryProjects     []string
 	retainedCommonRules           bool
 	contextsEnabled               bool
 	contextReadProjects           []string
@@ -149,6 +153,9 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.taskClaimsEnabled, "enable-task-claims", false, "enable immutable explicit TaskClaim ownership in the separate coordination API group")
 	claimProjects := fs.String("task-claims-read-projects", "", "explicit comma-separated projects for bounded TaskClaim metadata discovery")
 	fs.BoolVar(&o.contextsEnabled, "enable-published-contexts", false, "enable immutable explicitly published context in the protected coordination API group")
+	fs.BoolVar(&o.directoryEnabled, "enable-session-directory", false, "enable prospective immutable managed-canary session metadata directory")
+	directoryProjects := fs.String("session-directory-projects", "", "explicit prospective directory enrollment projects")
+	discoveryProjects := fs.String("metadata-discovery-projects", "", "separate explicit projects granting directory and retained context metadata discovery")
 	contextProjects := fs.String("context-payload-read-projects", "", "explicit comma-separated projects granting published context payload reads")
 	fs.BoolVar(&o.inboxEnabled, "enable-durable-inbox", false, "enable immutable API inbox messages and explicit read acknowledgements")
 	inboxProjects := fs.String("inbox-projects", "", "explicit comma-separated projects enabled for durable Session inbox access")
@@ -261,6 +268,26 @@ func parseFlags(args []string) (options, error) {
 		return o, errors.New("context payload scope requires explicit enable-published-contexts")
 	}
 
+	o.directoryProjects, err = apiserver.ParseTaskClaimReadProjects(*directoryProjects)
+	if err != nil {
+		return o, err
+	}
+	o.metadataDiscoveryProjects, err = apiserver.ParseTaskClaimReadProjects(*discoveryProjects)
+	if err != nil {
+		return o, err
+	}
+	if o.directoryEnabled {
+		if o.apiAddr == "0" || o.catalogBinding == nil || o.privateProjectCanaries == nil || !o.privateHistoryRetention || len(o.directoryProjects) == 0 || len(o.metadataDiscoveryProjects) == 0 || len(validation.IsDNS1123Label(o.templatesNamespace)) != 0 {
+			return o, errors.New("session directory requires API, accepted catalog, private managed canaries, retention and explicit enrollment/discovery projects")
+		}
+		for _, project := range o.directoryProjects {
+			if !slices.Contains(o.metadataDiscoveryProjects, project) {
+				return o, errors.New("directory enrollment project requires explicit metadata discovery scope")
+			}
+		}
+	} else if len(o.directoryProjects) != 0 || len(o.metadataDiscoveryProjects) != 0 {
+		return o, errors.New("directory scopes require enable-session-directory")
+	}
 	o.inboxProjects, err = apiserver.ParseTaskClaimReadProjects(*inboxProjects)
 	if err != nil {
 		return o, err
@@ -383,9 +410,11 @@ func run(args []string) error {
 			return err
 		}
 	}
+	directoryStore := &sessiondirectory.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.templatesNamespace}
 	r := &controller.Reconciler{
-		Client:      mgr.GetClient(),
-		TaskBudgets: budgets, TaskBudgetWorkerImage: o.taskBudgetWorkerImage,
+		SessionDirectory: directoryStore,
+		Client:           mgr.GetClient(),
+		TaskBudgets:      budgets, TaskBudgetWorkerImage: o.taskBudgetWorkerImage,
 		Templates:                   templatesKey,
 		APIURL:                      o.apiURL,
 		ManagedCodexTasks:           o.managedCodexTasks,
@@ -450,7 +479,14 @@ func run(args []string) error {
 		if o.inboxEnabled {
 			inboxStore = &inbox.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.templatesNamespace}
 		}
+		var directories *sessiondirectory.KubeStore
+		var directoryContexts *contextpublication.KubeStore
+		if o.directoryEnabled {
+			directories = directoryStore
+			directoryContexts = &contextpublication.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.templatesNamespace}
+		}
 		api := &apiserver.Server{
+			SessionDirectory: directories, SessionDirectoryProjects: o.directoryProjects, MetadataDiscoveryProjects: o.metadataDiscoveryProjects, DirectoryContexts: directoryContexts,
 			PublishedContexts: contexts, ContextReadProjects: o.contextReadProjects,
 			Inbox: inboxStore, InboxProjects: o.inboxProjects, InboxCoordinatorReadProjects: o.inboxCoordinatorReadProjects,
 			TaskClaims: claims, TaskClaimReadProjects: o.taskClaimReadProjects,

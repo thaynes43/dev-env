@@ -126,10 +126,15 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.idempotencyKey) || has(self.caller)",message="idempotencyKey is for summoned sessions only: set caller and lane"
 // +kubebuilder:validation:XValidation:rule="!has(self.caller) || self.mode != 'local'",message="a summoned session runs in task or remote mode, never local"
 // +kubebuilder:validation:XValidation:rule="!has(self.caller) || (has(self.profile) && self.profile != 'full')",message="a summoned session names its profile, and it is never full (D-36)"
-// +kubebuilder:validation:XValidation:rule="has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort) && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size) && has(self.profile) == has(oldSelf.profile) && has(self.tools) == has(oldSelf.tools) && has(self.llm) == has(oldSelf.llm) && has(self.parent) == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller) && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey) == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits) && has(self.restore) == has(oldSelf.restore) && has(self.workspace) == has(oldSelf.workspace) && has(self.projectCanary) == has(oldSelf.projectCanary) && has(self.commonRules) == has(oldSelf.commonRules)",message="immutable after create: no spec field may be added or removed, except operatingMode and lifecycle"
+// +kubebuilder:validation:XValidation:rule="has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort) && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size) && has(self.profile) == has(oldSelf.profile) && has(self.tools) == has(oldSelf.tools) && has(self.llm) == has(oldSelf.llm) && has(self.parent) == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller) && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey) == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits) && has(self.restore) == has(oldSelf.restore) && has(self.workspace) == has(oldSelf.workspace) && has(self.projectCanary) == has(oldSelf.projectCanary) && has(self.commonRules) == has(oldSelf.commonRules) && has(self.sessionDirectory) == has(oldSelf.sessionDirectory)",message="immutable after create: no spec field may be added or removed, except operatingMode and lifecycle"
 // +kubebuilder:validation:XValidation:rule="!has(self.projectCanary) || (self.mode == 'task' && self.agent in ['claude', 'codex'] && self.size == 'S' && has(self.parent) && self.parent == self.projectCanary.client && !has(self.workspace) && !has(self.restore) && !has(self.tools) && !has(self.llm) && !has(self.caller) && !has(self.lane) && !has(self.lifecycle) && has(self.limits) && has(self.limits.timeout) && duration(self.limits.timeout) <= duration('180s') && (self.agent == 'codex' ? (!has(self.limits.maxTurns) || self.limits.maxTurns == 0) : (has(self.limits.maxTurns) && self.limits.maxTurns > 0 && self.limits.maxTurns <= 3)))",message="project canaries require their fixed private bounded subscription task contract"
 // +kubebuilder:validation:XValidation:rule="!has(self.commonRules) || (has(self.projectCanary) && has(self.projectCanary.commonRevision) && self.projectCanary.commonRevision == self.commonRules.commonRevision)",message="common rules require the matching managed canary binding"
+// +kubebuilder:validation:XValidation:rule="!has(self.sessionDirectory) || has(self.projectCanary)",message="directory enrollment requires a managed canary"
 type AgentSessionSpec struct {
+	// SessionDirectory is selected only by the prospective operator canary route.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="directory enrollment is immutable"
+	// +optional
+	SessionDirectory *SessionDirectoryEnrollment `json:"sessionDirectory,omitempty"`
 	// CommonRules is authored only by the enabled managed common-input route.
 	// Absence is legacy Unknown provenance, never an inferred current snapshot.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="common instruction binding is immutable"
@@ -291,6 +296,34 @@ type AgentSessionSpec struct {
 	Restore string `json:"restore,omitempty"`
 }
 
+// SessionDirectoryReceipt prevents reconstructing a lost pre-executor record.
+// +kubebuilder:validation:XValidation:rule="oldSelf.state != 'Confirmed' || self.state == 'Confirmed'",message="directory confirmation is permanent"
+// +kubebuilder:validation:XValidation:rule="self.state == 'Confirmed' ? size(self.uid) > 0 : size(self.uid) == 0",message="directory confirmation requires original record UID"
+type SessionDirectoryReceipt struct {
+	// +kubebuilder:validation:Enum=Preparing;Confirmed
+	State string `json:"state"`
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="original directory name is immutable"
+	Name string `json:"name"`
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[a-f0-9]{64}$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="original directory digest is immutable"
+	SpecDigest string `json:"specDigest"`
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:XValidation:rule="oldSelf == '' || self == oldSelf",message="original directory UID cannot change"
+	UID string `json:"uid"`
+}
+
+// SessionDirectoryEnrollment records prospective admission before execution.
+type SessionDirectoryEnrollment struct {
+	// +kubebuilder:validation:Enum=1
+	Version int `json:"version"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`
+	Project string `json:"project"`
+}
+
 // CommonRuleBinding retains only nonsecret accepted instruction source bytes.
 type CommonRuleBinding struct {
 	// +kubebuilder:validation:Enum=1
@@ -412,7 +445,10 @@ type Lifecycle struct {
 // in its memory.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.sharedAdmission) || has(self.sharedAdmission)",message="shared admission evidence cannot be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.privateHistory) || has(self.privateHistory)",message="private history retention cannot be removed"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.sessionDirectory) || has(self.sessionDirectory)",message="directory creation evidence cannot be removed"
 type AgentSessionStatus struct {
+	// +optional
+	SessionDirectory *SessionDirectoryReceipt `json:"sessionDirectory,omitempty"`
 	// Phase is the lifecycle state.
 	// +optional
 	Phase SessionPhase `json:"phase,omitempty"`
@@ -877,6 +913,7 @@ type RescuedRef struct {
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 63",message="metadata.name must be at most 63 characters: it is the pod's hostname"
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')",message="metadata.name must be a DNS label (lowercase letters, digits and '-', no dots): it is the pod's hostname"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.sharedAdmission) || (has(self.status) && has(self.status.sharedAdmission))",message="recorded shared admission cannot be erased with status"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.sessionDirectory) || (has(self.status) && has(self.status.sessionDirectory))",message="directory evidence cannot be erased with status"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.privateHistory) || (has(self.status) && has(self.status.privateHistory))",message="private history retention cannot be erased with status"
 type AgentSession struct {
 	metav1.TypeMeta   `json:",inline"`

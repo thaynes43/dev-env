@@ -410,6 +410,26 @@ spec:
                 - message: immutable after create; only operatingMode and lifecycle
                     may change
                   rule: self == oldSelf
+              sessionDirectory:
+                description: SessionDirectory is selected only by the prospective
+                  operator canary route.
+                properties:
+                  project:
+                    maxLength: 63
+                    minLength: 1
+                    pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
+                    type: string
+                  version:
+                    enum:
+                    - 1
+                    type: integer
+                required:
+                - project
+                - version
+                type: object
+                x-kubernetes-validations:
+                - message: directory enrollment is immutable
+                  rule: self == oldSelf
               size:
                 default: M
                 description: Size picks the requests and limits preset.
@@ -495,7 +515,8 @@ spec:
                 == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits)
                 && has(self.restore) == has(oldSelf.restore) && has(self.workspace)
                 == has(oldSelf.workspace) && has(self.projectCanary) == has(oldSelf.projectCanary)
-                && has(self.commonRules) == has(oldSelf.commonRules)
+                && has(self.commonRules) == has(oldSelf.commonRules) && has(self.sessionDirectory)
+                == has(oldSelf.sessionDirectory)
             - message: project canaries require their fixed private bounded subscription
                 task contract
               rule: '!has(self.projectCanary) || (self.mode == ''task'' && self.agent
@@ -510,6 +531,8 @@ spec:
             - message: common rules require the matching managed canary binding
               rule: '!has(self.commonRules) || (has(self.projectCanary) && has(self.projectCanary.commonRevision)
                 && self.projectCanary.commonRevision == self.commonRules.commonRevision)'
+            - message: directory enrollment requires a managed canary
+              rule: '!has(self.sessionDirectory) || has(self.projectCanary)'
           status:
             description: |-
               AgentSessionStatus is what the operator and agentd observed. Reconcile is
@@ -1077,6 +1100,46 @@ spec:
                 description: Revision is the template revision the pod runs (DESIGN-001
                   5.2).
                 type: string
+              sessionDirectory:
+                description: SessionDirectoryReceipt prevents reconstructing a lost
+                  pre-executor record.
+                properties:
+                  name:
+                    maxLength: 128
+                    type: string
+                    x-kubernetes-validations:
+                    - message: original directory name is immutable
+                      rule: self == oldSelf
+                  specDigest:
+                    maxLength: 64
+                    pattern: ^[a-f0-9]{64}$
+                    type: string
+                    x-kubernetes-validations:
+                    - message: original directory digest is immutable
+                      rule: self == oldSelf
+                  state:
+                    enum:
+                    - Preparing
+                    - Confirmed
+                    type: string
+                  uid:
+                    maxLength: 128
+                    type: string
+                    x-kubernetes-validations:
+                    - message: original directory UID cannot change
+                      rule: oldSelf == '' || self == oldSelf
+                required:
+                - name
+                - specDigest
+                - state
+                - uid
+                type: object
+                x-kubernetes-validations:
+                - message: directory confirmation is permanent
+                  rule: oldSelf.state != 'Confirmed' || self.state == 'Confirmed'
+                - message: directory confirmation requires original record UID
+                  rule: 'self.state == ''Confirmed'' ? size(self.uid) > 0 : size(self.uid)
+                    == 0'
               sharedAdmission:
                 description: |-
                   SharedAdmission records whether this exact fresh shared lifecycle has
@@ -1148,6 +1211,8 @@ spec:
               rule: '!has(oldSelf.sharedAdmission) || has(self.sharedAdmission)'
             - message: private history retention cannot be removed
               rule: '!has(oldSelf.privateHistory) || has(self.privateHistory)'
+            - message: directory creation evidence cannot be removed
+              rule: '!has(oldSelf.sessionDirectory) || has(self.sessionDirectory)'
         required:
         - spec
         type: object
@@ -1161,6 +1226,9 @@ spec:
         - message: recorded shared admission cannot be erased with status
           rule: '!has(oldSelf.status) || !has(oldSelf.status.sharedAdmission) || (has(self.status)
             && has(self.status.sharedAdmission))'
+        - message: directory evidence cannot be erased with status
+          rule: '!has(oldSelf.status) || !has(oldSelf.status.sessionDirectory) ||
+            (has(self.status) && has(self.status.sessionDirectory))'
         - message: private history retention cannot be erased with status
           rule: '!has(oldSelf.status) || !has(oldSelf.status.privateHistory) || (has(self.status)
             && has(self.status.privateHistory))'

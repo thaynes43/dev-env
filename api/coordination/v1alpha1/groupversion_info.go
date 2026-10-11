@@ -13,7 +13,7 @@ import (
 var (
 	GroupVersion  = schema.GroupVersion{Group: "coordination.dev-env.haynesops.com", Version: "v1alpha1"}
 	SchemeBuilder = runtime.NewSchemeBuilder(func(s *runtime.Scheme) error {
-		s.AddKnownTypes(GroupVersion, &TaskClaim{}, &TaskClaimList{}, &PublishedContext{}, &PublishedContextList{}, &InboxMessage{}, &InboxMessageList{}, &InboxReadAck{}, &InboxReadAckList{})
+		s.AddKnownTypes(GroupVersion, &TaskClaim{}, &TaskClaimList{}, &PublishedContext{}, &PublishedContextList{}, &InboxMessage{}, &InboxMessageList{}, &InboxReadAck{}, &InboxReadAckList{}, &SessionDirectory{}, &SessionDirectoryList{})
 		metav1.AddToGroupVersion(s, GroupVersion)
 		return nil
 	})
