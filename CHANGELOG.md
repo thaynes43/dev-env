@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.18.0](https://github.com/thaynes43/dev-env/compare/v2.17.0...v2.18.0) (2026-10-11)
+
+
+### Features
+
+* **coordination:** retain durable offline inbox and read acknowledgements ([#194](https://github.com/thaynes43/dev-env/issues/194)) ([f02d0ad](https://github.com/thaynes43/dev-env/commit/f02d0ad276d007105795dd8611d0725c5176869b))
+* **operator:** admit one-attempt private managed rule canaries ([#191](https://github.com/thaynes43/dev-env/issues/191)) ([c062e98](https://github.com/thaynes43/dev-env/commit/c062e9897d95aa5da7643250a5b9811c4ecc8cae))
+
 ## [2.17.0](https://github.com/thaynes43/dev-env/compare/v2.16.0...v2.17.0) (2026-10-11)
 
 
