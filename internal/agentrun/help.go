@@ -13,6 +13,8 @@ Usage:
   agent-run [--repo] <repo> --local [flags]       start an interactive session (a TUI)
   agent-run list [--repo <r>] [--state <s>] [--mine]
                                                   list sessions, newest first
+  agent-run directory list --project <p> --once [-o json]
+                                                  read one authorized directory page
   agent-run show <name>                           show one session, with its task
   agent-run log <name> [--tail N]                 print the end of a session's log
   agent-run msg <name> "<text>"                   send a message into a session's TUI
@@ -66,6 +68,23 @@ Exit codes:
 `
 
 var commandHelp = map[string]string{
+	"directory": `Usage: agent-run directory list --project <project> --once [flags]
+
+Reads one authorized page of retained session metadata through the operator.
+This command makes one API request. It does not retry or follow redirects.
+It cannot create or control a session, or read its private history.
+
+Flags:
+  --project <name>      the authorized project to read (required)
+  --once               acknowledge one request with no retry (required)
+  --limit <1..20>       maximum records in this page (default 20)
+  --continue <cursor>  the opaque continuation from a previous page
+  --json, -o json      print the complete validated page as JSON
+
+A nonempty continuation means more records remain. An incomplete or refused
+read cannot establish an empty directory. JSON preserves Unknown observations.
+Common API URL, token, CA and context flags use ordinary caller access.
+`,
 	"run": `Usage: agent-run [--repo] <repo> -p "<task>" [flags]
        agent-run --project <project> [--repo <repo>] -p "<task>" [flags]
        agent-run [--repo] <repo> --local [flags]

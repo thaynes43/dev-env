@@ -1,5 +1,10 @@
 # Saga: distributed-dev-env (dev-env v2)
 
+The [explicit directory client slice](designs/020-directory-cli.md) supplies the
+safe read prerequisite for the fixed rule probes: one authorized API request,
+no create fallback/retries/redirects, truthful continuation and Unknown state.
+Source verification remains separate from actual discovery/provider acceptance.
+
 **Latest delivery, 2026-10-11:** signed v2.20.0 directory/usage/private-Pod
 retention prerequisites are deployed through haynes-ops #3823. Global private
 admission and fixed-rule/discovery activation remain off. Directory cardinality
