@@ -54,6 +54,11 @@ actual history, claims, messaging and the concurrent owner pilot remain open.
 initial invocation cost fix: explicit Unknown/observed metrics, exact requested
 identity and CLI estimate provenance, with no inferred billing or aggregation.
 
+[DESIGN-019](designs/019-private-pod-retention-guard.md) corrects the source-
+reachable original private Pod removal path with guards before legacy rescue
+and deletion. Volume retention alone does not preserve executor evidence; this
+source protection is separate from a stop proof and actual owner-pilot acceptance.
+
 **v1** is the single dev-env pod deployed from haynes-ops
 (`kubernetes/main/apps/dev/dev-env/`; saga `.agents/sagas/dev-env/` there). It keeps
 running, maintained in haynes-ops as today, until Tom approves the cutover in phase 5.

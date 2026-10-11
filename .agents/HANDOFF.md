@@ -1,5 +1,33 @@
 # HANDOFF: start here
 
+## Urgent #174 original private Pod retention source correction
+
+[DESIGN-019](sagas/distributed-dev-env/designs/019-private-pod-retention-guard.md)
+ratifies PRIVATE-POD-R1: the private check protects volume removal, while a
+suspended/reaped owned terminal/never-started Pod can reach UID/RV-conditioned
+deletion before private Unknown conditions are applied. Complete source audit
+`05765bfe3f5ce589d8f02f9de2b044361b9b6ee1e2a73cff29cdacfb9899a5a8`
+and corrected pilot audit
+`92a3997e5c198038d1f8de3fadc0028e08fd156a39763bb4db26ed1b84797bb9`
+preserve the original mistaken premise/evidence; no runtime deletion was tried.
+Add the existing protected-private-history refusal both in podRemovalAllowed
+and before removePod enters legacy rescue/exec/deletion. No API/schema/flag or
+cleanup change; retain exact original Pod/HOME/latches and Unknown stop/history.
+Meaningful pre-fix regression, corrected controls, native review and CI remain
+gates. Ship before provider activation via the pending combined D17/D18 release;
+actual original-executor stop and the concurrent owner pilot remain unaccepted.
+
+Source correction `cf0a708c` adds only the two existing private-history refusal
+boundaries and two focused test paths. Pre-fix full Reconcile removed the exact
+original owned Pod UID; the immutable failed fixture remains preserved. Two
+required cached TestMain startups completed; corrected sixteen suspend/reap
+state cases, partial/unknown/canary and shared/legacy controls passed. Affected
+lint passed after one PATH-preparation correction. Packet
+`189bf28fa7733cb85e2aa71d5b38f2011e865252b24605545d1206d82e7d84e7`
+preserves 555 incoming paths and 102 earlier artifacts. Rebase onto Cost200
+`a0ba2ee4` must preserve the four source hashes; final native review/CI remain gates.
+
+
 ## Built #174 durable directory source increment
 
 [DESIGN-017](sagas/distributed-dev-env/designs/017-durable-session-directory.md)
