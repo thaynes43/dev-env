@@ -77,9 +77,12 @@ labels/annotations are unchecked. Preserve inert R1/R2/R3 and native HOLD
 A native one-question ask requests one final focused correction plus independent
 review and the same bounded checks, or hold activation. Owner answer is pending.
 No further checker attempt or rollout is authorized by this source CLI change.
-The concrete proposed predicate compares complete Pod and owned-RS labels/
-annotations against checked Deployment template metadata plus the verified RS
-hash, without filtering/normalization or new permissions/reads. Counters stay
+The complete metadata predicate remains unimplemented and pending review. It
+must check source-controlled template metadata and the owned RS identity; any
+generated metadata must follow an explicit finite, separately reviewed contract
+bound to saved real-API evidence. Template-plus-RS-hash equality alone is not a
+verified predicate: the saved original Pods contain other generated metadata.
+No broad filtering, new permissions or extra reads are authorized. Counters stay
 three until explicit additional authorization, with original evidence retained.
 Independent D21 source work proceeds; no provider canary has been invoked.
 
@@ -95,3 +98,11 @@ retains the original pre-integration freeze, new combined-source freeze and
 571 preserved incoming paths. D20's original failed fixture and corrected PASS
 remain retained. This paragraph changes only source status: final native review,
 required CI and merge remain gates; the actual fixed campaign is unstarted.
+
+Native D21-DOC-R1 at original review head058b7df91f09797c44c7f6a5af60bcf5fa40baa4
+found that the proposed Q-26 metadata wording omitted known generated Pod
+metadata. The contract is corrected to mark the complete predicate pending and
+require any generated fields to have a separate finite reviewed binding. No
+checker candidate, runtime read, source-code change or verification rerun follows
+from this docs correction; original native evidence and the three-attempt stop
+remain retained.
