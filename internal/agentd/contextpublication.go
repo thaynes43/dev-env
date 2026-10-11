@@ -17,6 +17,7 @@ import (
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/tokenfile"
 )
 
 var contextProjectPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
@@ -29,7 +30,7 @@ func (h *HeartbeatClient) contextRequest(ctx context.Context, method, path strin
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") || h.HTTP == nil {
 		return errors.New("published context endpoint unavailable")
 	}
-	tok, err := os.ReadFile(h.TokenFile)
+	tok, err := tokenfile.Read(h.TokenFile, 16<<10)
 	if err != nil || len(tok) == 0 || len(tok) > 16<<10 {
 		return errors.New("published context identity unavailable")
 	}
