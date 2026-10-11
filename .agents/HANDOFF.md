@@ -52,7 +52,8 @@ The first installed model-free roots check failed at
 `first-project-refresh-command`, before verifier acceptance, with zero
 restarts. Its Job/Pod and private receipt are retained; the internal cause is
 Unknown. Offline Git proof separately establishes an umask 077/generated-mode
-mismatch. A fresh bounded correction is in progress; roots count is 1 of 3,
+mismatch. Source correction #186 merged as
+`9c5cd87fadacee98fd79edc97c6a74def76b198b`; roots count is 1 of 3,
 with no retry. All 11 protected Pods, both earlier Jobs and the original native
 ledger match the prepromotion baseline. The activity declaration ended.
 
@@ -60,8 +61,14 @@ ledger match the prepromotion baseline. The activity declaration ended.
 `af80cfc8bc2bcb4cb28290ac110eff924308be76`; release
 [#184](https://github.com/thaynes43/dev-env/pull/184) tags v2.15.0 at
 `04fb03be3325065a27ff6e8894e6610d772fffed`. Operator and agent publications
-passed signing/verification. The operator/CRD GitOps candidate is under native
-review; installed retention and stopped-context reads remain unaccepted.
+passed signing/verification. GitOps haynes-ops #3816 merged as
+`52d2bbc3ac8b1647e0abaf092a68516934235e80`. At 16:59:24 UTC the exact generated
+schema was established and both operator replicas were Ready on signed digest
+`def7dac13c94da7a31b943f4b8944c327aa0508e3cbbb9423bfe0c32021dc120`, with
+retention=true as the sole flag delta. Ten non-operator Pods, all three retained
+Jobs and the original ledger were unchanged; activity ended. Private admission
+is false and AgentSessions zero. This accepts guard installation and upgrade
+preservation, not actual retention or stopped-context reads.
 After latches exist, preserve both the retention schema and a retention-aware
 operator across rollback. Flag disable preserves latches; a pre-guard operator
 downgrade is not established safe.
