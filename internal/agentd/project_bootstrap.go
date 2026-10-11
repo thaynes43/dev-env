@@ -25,17 +25,18 @@ type PrivateProjectSource struct {
 }
 
 type PrivateProjectReport struct {
-	Version                int                    `json:"version"`
-	State                  string                 `json:"state"`
-	CatalogNamespace       string                 `json:"catalogNamespace,omitempty"`
-	CatalogName            string                 `json:"catalogName,omitempty"`
-	CatalogUID             string                 `json:"catalogUID,omitempty"`
-	CatalogResourceVersion string                 `json:"catalogResourceVersion,omitempty"`
-	CatalogRevision        string                 `json:"catalogRevision,omitempty"`
-	StartedAt              time.Time              `json:"startedAt"`
-	FinishedAt             time.Time              `json:"finishedAt"`
-	Repositories           []PrivateProjectSource `json:"repositories,omitempty"`
-	Failure                string                 `json:"failure,omitempty"`
+	Version                int                        `json:"version"`
+	State                  string                     `json:"state"`
+	CatalogNamespace       string                     `json:"catalogNamespace,omitempty"`
+	CatalogName            string                     `json:"catalogName,omitempty"`
+	CatalogUID             string                     `json:"catalogUID,omitempty"`
+	CatalogResourceVersion string                     `json:"catalogResourceVersion,omitempty"`
+	CatalogRevision        string                     `json:"catalogRevision,omitempty"`
+	StartedAt              time.Time                  `json:"startedAt"`
+	FinishedAt             time.Time                  `json:"finishedAt"`
+	Repositories           []PrivateProjectSource     `json:"repositories,omitempty"`
+	Projects               []PrivateProjectRootReport `json:"projects,omitempty"`
+	Failure                string                     `json:"failure,omitempty"`
 }
 
 var errPrivateProjectBootstrap = errors.New("private project bootstrap is incomplete; inspect its private report")
@@ -43,6 +44,9 @@ var errPrivateProjectBootstrap = errors.New("private project bootstrap is incomp
 // ValidatePrivateProjectBootstrap checks pod-owned configuration without
 // reading a catalog, token or filesystem. It does not enable task admission.
 func ValidatePrivateProjectBootstrap(s Settings) error {
+	if s.PrivateProjectRoots && !s.PrivateProjectBootstrap {
+		return errors.New("private project roots require trusted private catalog bootstrap")
+	}
 	if !s.PrivateProjectBootstrap {
 		return nil
 	}
@@ -57,11 +61,11 @@ func ValidatePrivateProjectBootstrap(s Settings) error {
 // serialization is a nonblocking lock inside this pod's private state.
 func RefreshPrivateProjects(ctx context.Context, r Runner, s Settings, source *ProjectCatalogSource) (report PrivateProjectReport, resultErr error) {
 	report = PrivateProjectReport{Version: 1, State: "Disabled"}
-	if !s.PrivateProjectBootstrap {
-		return report, nil
-	}
 	if err := ValidatePrivateProjectBootstrap(s); err != nil {
 		return report, err
+	}
+	if !s.PrivateProjectBootstrap {
+		return report, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, projectSyncBudget)
 	defer cancel()
@@ -150,6 +154,19 @@ func RefreshPrivateProjects(ctx context.Context, r Runner, s Settings, source *P
 			return report, errPrivateProjectBootstrap
 		}
 	}
+	if s.PrivateProjectRoots {
+		for _, project := range catalog.ProjectNames() {
+			bounded, stop := context.WithTimeout(ctx, sharedGitPrepareBudget)
+			snapshot, _ := catalog.ProjectSnapshot(project)
+			observed := refreshPrivateProjectRoot(bounded, r, s, snapshot, authority)
+			stop()
+			report.Projects = append(report.Projects, observed)
+			if ctx.Err() != nil {
+				report.Failure = "project root time budget ended; remaining projects preserved"
+				return report, errPrivateProjectBootstrap
+			}
+		}
+	}
 	if authority.confirm(ctx) != nil {
 		report.Failure = "accepted catalog changed or became unconfirmed before report publication"
 		return report, errPrivateProjectBootstrap
@@ -157,6 +174,12 @@ func RefreshPrivateProjects(ctx context.Context, r Runner, s Settings, source *P
 	report.State = "Ready"
 	for _, repo := range report.Repositories {
 		if repo.State != "Ready" {
+			report.State = "Partial"
+			return report, errPrivateProjectBootstrap
+		}
+	}
+	for _, project := range report.Projects {
+		if project.State != "Ready" {
 			report.State = "Partial"
 			return report, errPrivateProjectBootstrap
 		}

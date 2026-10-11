@@ -258,6 +258,15 @@ func validateProjectReferenceAt(ctx context.Context, r Runner, s Settings, repo 
 	if err := noSymlinkComponents(filepath.Join(clone, ".git")); err != nil {
 		return err
 	}
+	if s.privateProjectGit {
+		if err := privateGitStorageClear(filepath.Join(clone, ".git"), "refs/heads/"+repo.DefaultBranch, "refs/remotes/origin/"+repo.DefaultBranch, "logs/HEAD", "logs/refs/heads/"+repo.DefaultBranch, "logs/refs/remotes/origin/"+repo.DefaultBranch); err != nil {
+			return err
+		}
+		format, err := projectGit(ctx, r, s, clone, "config", "--local", "--get", "extensions.refStorage")
+		if err != nil && ExitCodeOf(err) != 1 || err == nil && format != "files" {
+			return errors.New("private reference storage format is unsupported or uncertain")
+		}
+	}
 	common, err := projectGit(ctx, r, s, clone, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil || filepath.Clean(common) != filepath.Join(clone, ".git") {
 		return errors.New("reference has unexpected common Git administration")
@@ -299,7 +308,7 @@ func cloneProjectReference(ctx context.Context, r Runner, s Settings, repo proje
 			args = append(args, sharedGitPolicyArgs...)
 		}
 		args = append(args, "clone", "--filter=blob:none", "--quiet", "--branch", repo.DefaultBranch, repo.URL(), tmp)
-		_, err := r.Run(ctx, Cmd{Name: "git", Args: args, Env: gitEnv})
+		_, err := r.Run(ctx, privateGitCommand(s, Cmd{Name: "git", Args: args, Env: gitEnv}))
 		if err == nil {
 			if err := noSymlinkComponents(filepath.Join(tmp, ".git")); err != nil {
 				return &projectStagingPreserved{tmp, "successful clone has uncertain Git administration"}
@@ -363,7 +372,13 @@ func syncProjectReference(ctx context.Context, r Runner, s Settings, repo projec
 
 func fetchProjectTarget(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository) (string, time.Time, error) {
 	ref := "refs/remotes/origin/" + repo.DefaultBranch
-	if _, err := projectGit(ctx, r, s, s.ClonePath(repo.Name), "fetch", "--no-auto-maintenance", "--no-prune", "--no-recurse-submodules", "--no-tags", "origin", "+refs/heads/"+repo.DefaultBranch+":"+ref); err != nil {
+	// A symbolic destination can route this forced fetch into an owner's
+	// local branch before any clean-worktree proof. Only the exact fetched
+	// destination must be direct; normal origin/HEAD discovery remains valid.
+	if _, err := projectGit(ctx, r, s, s.ClonePath(repo.Name), "symbolic-ref", "--quiet", ref); ExitCodeOf(err) != 1 {
+		return "", time.Time{}, errors.New("fresh reference destination is symbolic or uncertain; preserved")
+	}
+	if _, err := projectGit(ctx, r, s, s.ClonePath(repo.Name), "fetch", "--no-auto-maintenance", "--no-prune", "--no-write-fetch-head", "--no-recurse-submodules", "--no-tags", "origin", "+refs/heads/"+repo.DefaultBranch+":"+ref); err != nil {
 		return "", time.Time{}, errors.New("fresh reference fetch failed; preserved")
 	}
 	fetched := time.Now().UTC()
@@ -445,7 +460,7 @@ func projectIndexProof(ctx context.Context, r Runner, s Settings, dir string, re
 			return "", errors.New("reference index exceeds the repair proof bound")
 		}
 	}
-	result, err := r.Run(ctx, Cmd{Name: "git", Args: []string{"-C", dir, "-c", "core.fsmonitor=false", "hash-object", "--stdin-paths"}, Env: gitEnv, Stdin: strings.NewReader(paths.String())})
+	result, err := r.Run(ctx, privateGitCommand(s, Cmd{Name: "git", Args: []string{"-C", dir, "-c", "core.fsmonitor=false", "hash-object", "--stdin-paths"}, Env: gitEnv, Stdin: strings.NewReader(paths.String())}))
 	if err != nil || !slices.Equal(strings.Fields(string(result.Stdout)), expected) {
 		return "", errors.New("tracked files differ from the index; preserved")
 	}

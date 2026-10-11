@@ -207,6 +207,10 @@ func noSymlinkComponents(path string) error {
 }
 
 func readWorkspaceJSON(path string, dst any) error {
+	return readWorkspaceJSONBounded(path, dst, 64<<10)
+}
+
+func readWorkspaceJSONBounded(path string, dst any, limit int64) error {
 	if err := noSymlinkComponents(path); err != nil {
 		return err
 	}
@@ -219,10 +223,10 @@ func readWorkspaceJSON(path string, dst any) error {
 	if err != nil {
 		return err
 	}
-	if !fi.Mode().IsRegular() || fi.Size() > 64<<10 {
+	if !fi.Mode().IsRegular() || fi.Size() > limit {
 		return errors.New("workspace record is not a bounded regular file")
 	}
-	d := json.NewDecoder(io.LimitReader(f, 64<<10))
+	d := json.NewDecoder(io.LimitReader(f, limit))
 	d.DisallowUnknownFields()
 	if err := d.Decode(dst); err != nil {
 		return err

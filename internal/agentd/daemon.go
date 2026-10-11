@@ -78,6 +78,9 @@ func (d *Daemon) now() time.Time {
 // that fails is reported in the status, and the heartbeat goes on, so the
 // operator sees why a session is not working.
 func (d *Daemon) Run(ctx context.Context) error {
+	if err := ValidatePrivateProjectBootstrap(d.S); err != nil {
+		return err
+	}
 	stopDeadline, err := d.armTaskBudgetDeadline()
 	if err != nil {
 		return fmt.Errorf("task budget: %w", err)
