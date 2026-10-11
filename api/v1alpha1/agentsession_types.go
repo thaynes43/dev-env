@@ -335,6 +335,7 @@ type Lifecycle struct {
 // level-based (DESIGN-001 5.1): everything a fresh operator needs is here, not
 // in its memory.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.sharedAdmission) || has(self.sharedAdmission)",message="shared admission evidence cannot be removed"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.privateHistory) || has(self.privateHistory)",message="private history retention cannot be removed"
 type AgentSessionStatus struct {
 	// Phase is the lifecycle state.
 	// +optional
@@ -363,6 +364,11 @@ type AgentSessionStatus struct {
 	// +kubebuilder:validation:MaxLength=128
 	// +optional
 	SharedPrivateHomeUID string `json:"sharedPrivateHomeUID,omitempty"`
+
+	// PrivateHistory is the operator-latched private HOME preservation boundary.
+	// It is provenance only; it grants no context access or private stop proof.
+	// +optional
+	PrivateHistory *PrivateHistoryStatus `json:"privateHistory,omitempty"`
 
 	// NodeName is the node the pod runs on.
 	// +optional
@@ -417,6 +423,74 @@ type AgentSessionStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// PrivateHistoryStatus retains private identity independently of live Pod fields.
+// No transition in this slice releases the retention boundary.
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.lastExecutor) || has(self.lastExecutor)",message="last private executor cannot be erased"
+// +kubebuilder:validation:XValidation:rule="self.admission == 'Started' || size(self.homeUID) == 0",message="unknown original HOME cannot be inferred"
+// +kubebuilder:validation:XValidation:rule="!self.executorAttempted || (self.admission == 'Started' && size(self.executorIntent) > 0)",message="executor attempt requires one durable causal intent"
+type PrivateHistoryStatus struct {
+	// +kubebuilder:validation:Enum=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="retention version is immutable"
+	Version int `json:"version"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="retention Session UID is immutable"
+	SessionUID string `json:"sessionUID"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="original HOME name is immutable"
+	HomeClaim string `json:"homeClaim"`
+	// Empty means the original claim was not proven before executor admission.
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:XValidation:rule="oldSelf == '' || self == oldSelf",message="original HOME UID cannot change"
+	HomeUID string `json:"homeUID"`
+	// BindingGeneration is the Session generation of fresh resource admission.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="binding generation is immutable"
+	BindingGeneration int64 `json:"bindingGeneration"`
+	// Unknown old lifecycles cannot be migrated by guessing their original HOME.
+	// +kubebuilder:validation:Enum=Unknown;NeverStarted;Started
+	// +kubebuilder:validation:XValidation:rule="oldSelf == 'NeverStarted' || self == oldSelf",message="retention admission cannot be reversed or inferred"
+	Admission string `json:"admission"`
+	// ExecutorAttempted is latched before the first private Pod create.
+	// Missing or unacknowledged executors never authorize a replacement model.
+	// +kubebuilder:validation:XValidation:rule="!oldSelf || self",message="executor attempt cannot be reversed"
+	ExecutorAttempted bool `json:"executorAttempted"`
+	// ExecutorIntent identifies this single causal Pod creation attempt.
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:XValidation:rule="oldSelf == '' || self == oldSelf",message="executor intent cannot change"
+	ExecutorIntent string `json:"executorIntent"`
+	// Provider identifies the configured provider without starting it.
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="retention provider is immutable"
+	Provider string `json:"provider"`
+	// This slice has no independent private executor termination proof.
+	// +kubebuilder:validation:Enum=Unknown
+	StopState string `json:"stopState"`
+	// +optional
+	LastExecutor *PrivateExecutorStatus `json:"lastExecutor,omitempty"`
+}
+
+// PrivateExecutorStatus is an owned executor observation, not a stop receipt.
+type PrivateExecutorStatus struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="original private executor UID cannot change"
+	PodUID string `json:"podUID"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	PodName string `json:"podName"`
+	// +kubebuilder:validation:MaxLength=253
+	NodeName string `json:"nodeName,omitempty"`
+	// +kubebuilder:validation:MaxLength=128
+	Revision string `json:"revision,omitempty"`
+	// Generation is the Session generation at observation, not stop evidence.
+	// +kubebuilder:validation:Minimum=1
+	Generation int64 `json:"generation"`
+	// +kubebuilder:validation:MaxLength=256
+	ConversationID string `json:"conversationId,omitempty"`
 }
 
 // SharedAdmissionStatus is initialized only before D-45 adds the finalizer.
@@ -727,6 +801,7 @@ type RescuedRef struct {
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 63",message="metadata.name must be at most 63 characters: it is the pod's hostname"
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')",message="metadata.name must be a DNS label (lowercase letters, digits and '-', no dots): it is the pod's hostname"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.sharedAdmission) || (has(self.status) && has(self.status.sharedAdmission))",message="recorded shared admission cannot be erased with status"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.privateHistory) || (has(self.status) && has(self.status.privateHistory))",message="private history retention cannot be erased with status"
 type AgentSession struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

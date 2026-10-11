@@ -79,7 +79,7 @@ storage, but it does not require shared Git directories or NFS Git benchmarks.
 
 ## 2. Feature set and delivery state
 
-This table reflects source and recorded runtime evidence as of 2026-10-10.
+This table reflects source and recorded runtime evidence as of 2026-10-11.
 A released feature is not automatically enabled or accepted on live sessions.
 
 | Goal or capability | Available evidence | Remaining work |
@@ -88,21 +88,32 @@ A released feature is not automatically enabled or accepted on live sessions.
 | Distribute load | Bounded task Pods scheduled on workers; real Claude task ran with CPU/memory limits | Prove placement across nodes; native Codex threads still share their host’s resources |
 | Claude task and terminal workflows | Task, attach/detach, TUI messages, suspend/resume and Git rescue exercised | Owner pilot and history-preserving archive |
 | Codex sessions across pods | Keeper login, scoped-host/task and owned-native source foundations released | Two live distinct links, refresh adoption, native execution/recovery and device acceptance |
-| Common rules and projects | Catalog parser, private declared-project admission/preparation and provider rule composition source | Bootstrap/refresh local repo catalogs; permanent project roots; prove actual rules loaded by both providers |
-| See live and stopped work | Managed Session list/show and fleet placement exist | Durable registry after reap; native host/thread indexing and accurate activity |
+| Common rules and projects | Private preparation and rule composition; installed explicit trusted refresh accepted; private roots source released in 2.14.0 | Installed roots/startup and native client integration; prove actual rules loaded by both providers |
+| See live and stopped work | Managed Session list/show and fleet placement; default-off private retention/provenance guard source | Deploy preservation guard; native host/thread indexing and accurate activity |
 | Communicate and avoid duplicates | Attributed live TUI message route; same-parent request idempotency | Durable inbox and acknowledgements; explicit task claims across independent parents |
-| Read prior context | Provider artifacts exist; running task log tails available | Authorized transcript/memory/handoff reads without the source Pod; retain history before reap |
+| Read prior context | Provider artifacts and running task log tails; private HOME/identity preservation guard source | Installed retention and authorized transcript/memory/handoff reads without the source Pod |
 | Guard powerful access | Scoped broker/grant foundations; keeper-only CA and node trust prepared | Usable guarded Headlamp/hardware replacements, approved policies and use/revocation acceptance |
 | Stop wasted attempts | Accepted 60-minute stall/three-failure policy; retained ledger and stop foundations released | Whole-task accounting, real progress/failure signals, verified stop and phone escalation |
 | Model usage and cost | Exact model identity; provider-specific token/cost parsers | Provenance, Unknown values, fleet aggregation and no parent/child double counting |
 | Frontend | Existing management API and CLI | Console for sessions, nodes, tasks, messages, retained history, renewal and cost |
 | Local LLMs and GPUs | Design/backlog exists | GPU availability, household-safe allocation and a provider backend under the same contracts |
 
-Read-only verification on 2026-10-11 confirms the ordinary worker template is
-2.12.0 and private-project admission remains disabled. The trusted catalog has
+The ordinary worker template was promoted to signed 2.13.0 without replacing
+existing sessions. A bounded model-free check accepted installed explicit
+catalog refresh against the current public repository. Roots source is released
+in 2.14.0; its installed acceptance remains separate. Private-project admission
+remains disabled. The trusted catalog has
 one declared repository and empty common-rule text. Actual provider loading
-remains unaccepted. The [next bootstrap contract](../.agents/sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md)
-adds private catalog preparation without shared preflight or locks.
+remains unaccepted. The [bootstrap contract](../.agents/sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md)
+prepares private catalogs without shared preflight or locks.
+
+The [private retention guard](../.agents/sagas/distributed-dev-env/designs/008-private-provider-history-retention.md)
+preserves HOME and Session identity rather than declaring archive complete.
+Its latch survives flag disable; absent executors remain Unknown and cannot
+start replacements. This adds no stopped-history reader or expiry policy.
+Existing coordinator scope is preserved; the legacy ordinary-session ACL is
+not a new authorization contract for peer context. Claude review is optional,
+including releases; required CI and native independent review remain gates.
 
 The ordinary worker template was still 2.9.1 at the historical overnight checkpoint;
 2.11.0 was signed and used for a separate native fixture. That fixture failed

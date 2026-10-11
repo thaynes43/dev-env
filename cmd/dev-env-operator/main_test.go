@@ -114,3 +114,14 @@ func TestBudgetFlagsDefaultOffAndRequireProtectedAuthority(t *testing.T) {
 		}
 	}
 }
+
+func TestPrivateHistoryRetentionFlagIsExplicitAndDefaultOff(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.privateHistoryRetention {
+		t.Fatal("private retention enabled by default")
+	}
+	o, err = parseFlags([]string{"--enable-private-history-retention"})
+	if err != nil || !o.privateHistoryRetention {
+		t.Fatal("explicit retention setting missing")
+	}
+}

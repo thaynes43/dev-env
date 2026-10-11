@@ -105,9 +105,12 @@ type Reconciler struct {
 	Templates types.NamespacedName
 	// APIURL is the operator API's base URL, given to agentd for its heartbeat
 	// (D-41). Empty until the API is served (plan 01 step 3).
-	APIURL                string
-	ManagedCodexTasks     bool
-	ManagedChildDecisions bool
+	APIURL string
+	// PrivateHistoryRetention opts new/observed private lifecycles into a durable
+	// fail-closed preservation boundary. Existing Pods are never restarted.
+	PrivateHistoryRetention bool
+	ManagedCodexTasks       bool
+	ManagedChildDecisions   bool
 	// ManagedChildDecisionParents are exact validated coordinator namespace/SA refs.
 	ManagedChildDecisionParents []string
 	// APIReader reads from the API server, past the cache. The decisions that
@@ -188,6 +191,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 				out.RequeueAfter = taskBudgetPoll
 			}
 		}()
+	}
+
+	if s.Spec.Workspace == nil && (r.PrivateHistoryRetention || privateHistoryProtected(&s)) {
+		if err := r.initializePrivateHistory(ctx, &s); err != nil {
+			return ctrl.Result{RequeueAfter: time.Second}, err
+		}
 	}
 
 	// The finalizer goes on before the session has anything to lose, so no
@@ -287,6 +296,25 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 			return r.writeStatus(ctx, &s, result)
 		}
 		return result, nil
+	}
+
+	if privateHistoryProtected(&s) {
+		before := s.Status.PrivateHistory.DeepCopy()
+		r.observePrivateHistory(ctx, &s, &obs)
+		if !apiequality.Semantic.DeepEqual(before, s.Status.PrivateHistory) {
+			fresh, err := r.privateHistorySession(ctx, &s)
+			if err != nil {
+				return ctrl.Result{RequeueAfter: time.Second}, err
+			}
+			if fresh.ResourceVersion != s.ResourceVersion || !apiequality.Semantic.DeepEqual(before, fresh.Status.PrivateHistory) {
+				return ctrl.Result{RequeueAfter: time.Second}, nil
+			}
+			fresh.Status.PrivateHistory = s.Status.PrivateHistory.DeepCopy()
+			if err := r.writePrivateHistory(ctx, &s, fresh); err != nil {
+				return ctrl.Result{RequeueAfter: time.Second}, err
+			}
+			return ctrl.Result{RequeueAfter: time.Second}, nil
+		}
 	}
 
 	// A hold pod (D-55) is never the pod a session wants: when the session
@@ -673,6 +701,10 @@ func (r *Reconciler) archiveDue(s *v1alpha1.AgentSession, t *templates.Templates
 // record (D-62). With no valid rescue and no pod, a hold pod rescues the volume
 // first (D-55). done means the reconcile ends here with res.
 func (r *Reconciler) archive(ctx context.Context, s *v1alpha1.AgentSession, obs *observation, archiveDue bool) (res ctrl.Result, done bool, err error) {
+	if r.privateHistoryEnabled(s) {
+		obs.removalBlocked = errPrivateHistoryRetained
+		return ctrl.Result{}, false, nil
+	}
 	if s.Spec.Workspace != nil {
 		// Even a missing/foreign claim must not reach legacy empty-session
 		// release. Shared reap has one independent retention proof path.
@@ -751,6 +783,9 @@ func (r *Reconciler) archive(ctx context.Context, s *v1alpha1.AgentSession, obs 
 // judged for: same UID, still suspended and not deleted, and the same valid
 // rescue. Otherwise it reports false, and the next reconcile judges it again.
 func (r *Reconciler) recordArchive(ctx context.Context, s *v1alpha1.AgentSession, now time.Time) (bool, error) {
+	if r.privateHistoryEnabled(s) {
+		return false, errPrivateHistoryRetained
+	}
 	for range 5 {
 		var fresh v1alpha1.AgentSession
 		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &fresh); err != nil {
@@ -830,6 +865,9 @@ func setRescueCondition(s *v1alpha1.AgentSession, st *v1alpha1.AgentSessionStatu
 // (D-45). Any pod or volume of the session's names keeps the finalizer, whoever
 // controls it.
 func (r *Reconciler) releaseIfEmpty(ctx context.Context, s *v1alpha1.AgentSession) (bool, error) {
+	if r.privateHistoryEnabled(s) {
+		return false, errPrivateHistoryRetained
+	}
 	if !controllerutil.ContainsFinalizer(s, Finalizer) {
 		return false, nil
 	}
@@ -859,6 +897,9 @@ func (r *Reconciler) releaseIfEmpty(ctx context.Context, s *v1alpha1.AgentSessio
 // only place that lifts a finalizer, and only releaseIfEmpty calls it
 // (TestOnlyTheGuardDeletes).
 func releaseSession(ctx context.Context, c client.Client, s *v1alpha1.AgentSession) error {
+	if privateHistoryProtected(s) {
+		return errPrivateHistoryRetained
+	}
 	orig := s.DeepCopy()
 	controllerutil.RemoveFinalizer(s, Finalizer)
 	if err := c.Patch(ctx, s, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})); err != nil {
@@ -878,6 +919,12 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 	}
 	if s.Spec.Workspace != nil && s.Status.SharedPrivateHomeUID != "" {
 		if _, err := r.workspacePrivateHome(ctx, s, types.UID(s.Status.SharedPrivateHomeUID)); err != nil {
+			obs.removalBlocked = err
+			return nil
+		}
+	}
+	if privateHistoryProtected(s) {
+		if err := r.admitPrivateHistory(ctx, s); err != nil {
 			obs.removalBlocked = err
 			return nil
 		}
@@ -917,6 +964,18 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 			obs.removalBlocked = err
 			return nil
 		}
+	}
+	if privateHistoryProtected(s) {
+		if err := r.bindPrivateHistoryHome(ctx, s); err != nil {
+			obs.removalBlocked = err
+			return nil
+		}
+		if err := r.reservePrivateExecutor(ctx, s); err != nil {
+			obs.removalBlocked = err
+			return nil
+		}
+		pod.Annotations[privateHistoryHomeAnnotation] = s.Status.PrivateHistory.HomeUID
+		pod.Annotations[privateHistoryExecutorAnnotation] = s.Status.PrivateHistory.ExecutorIntent
 	}
 	if budgetBound(s) {
 		l, err := r.observeTaskBudget(ctx, s, nil)
@@ -1040,7 +1099,8 @@ type observation struct {
 	removalBlocked error
 	// archived: this reconcile deleted the session's volume, or lifted its
 	// finalizer, after a verified rescue.
-	archived bool
+	archived              bool
+	privateHistoryUnknown error
 	// now is the reconcile's clock, for the timers' status fields.
 	now time.Time
 }
@@ -1094,6 +1154,7 @@ func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessio
 	} else {
 		meta.RemoveStatusCondition(&st.Conditions, ConditionRemovalBlocked)
 	}
+	setPrivateHistoryConditions(s, obs, st)
 
 	// A hold pod runs no agent, so no drain is due for it (D-55).
 	agentPod := hasPod && !isHoldPod(pod)
@@ -1150,6 +1211,16 @@ func podPhase(s *v1alpha1.AgentSession, obs observation) (v1alpha1.SessionPhase,
 	}
 	pod := obs.pod.obj
 	switch {
+	case privateHistoryProtected(s) && obs.pod.missing && obs.privateHistoryUnknown != nil:
+		if s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended && s.DeletionTimestamp.IsZero() {
+			return v1alpha1.PhaseSuspended, notReady("PreservationUnknown", obs.privateHistoryUnknown.Error())
+		}
+		return v1alpha1.PhasePending, notReady("PreservationUnknown", obs.privateHistoryUnknown.Error())
+	case privateHistoryProtected(s) && wantsPodGone(s):
+		if s.DeletionTimestamp.IsZero() {
+			return v1alpha1.PhaseSuspended, notReady("RetentionPending", "private HOME and durable identity remain retained; private stop evidence is unknown")
+		}
+		return v1alpha1.PhasePending, notReady("RetentionPending", "reap preserves private HOME and durable identity; private stop evidence is unknown")
 	case obs.pod.foreign != "":
 		return v1alpha1.PhasePending, notReady("NameTaken", fmt.Sprintf("a pod named %s exists and its controller is %s, not this session; the operator leaves it alone", s.Name, obs.pod.foreign))
 	case obs.claim.foreign != "":

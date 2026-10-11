@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -519,5 +520,40 @@ func TestGeneratedName(t *testing.T) {
 		if len(got)+2 > 63 {
 			t.Errorf("%q: %d characters leave no room for a suffix", repo, len(got))
 		}
+	}
+}
+
+func TestPrivateHistoryReapRemainsDiscoverableAndIdempotentWithoutSourcePod(t *testing.T) {
+	f := newFixture(t)
+	f.sessionPod("retained-private", "full", 0)
+	s := f.session("retained-private")
+	s.Status.PrivateHistory = &v1alpha1.PrivateHistoryStatus{Version: 1, SessionUID: string(s.UID), HomeClaim: "original-home", HomeUID: "original-home-uid", BindingGeneration: 1, Admission: "Started", ExecutorAttempted: true, ExecutorIntent: "synthetic-intent", Provider: string(s.Spec.Agent), StopState: "Unknown", LastExecutor: &v1alpha1.PrivateExecutorStatus{PodUID: "original-executor", PodName: s.Name, NodeName: "worker-a", Revision: "original-template", Generation: 1, ConversationID: "synthetic-conversation"}}
+	if err := f.c.Status().Update(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	var pod corev1.Pod
+	if err := f.c.Get(context.Background(), client.ObjectKeyFromObject(s), &pod); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.Delete(context.Background(), &pod); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		w := f.do(http.MethodDelete, apiv1.SessionPath(s.Name), tokHuman, nil)
+		if w.Code != http.StatusAccepted {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		v := decode[apiv1.Session](t, w)
+		if !v.Reaping || v.UID != string(s.UID) || v.PrivateHistory == nil || v.PrivateHistory.LastExecutor.PodUID != "original-executor" || v.PrivateHistory.StopState != "Unknown" || v.PrivateHistory.ExecutorIntent != "synthetic-intent" || v.ArchivedAt != nil {
+			t.Fatal("retained identity was lost or archive/stop was claimed")
+		}
+	}
+	w := f.do(http.MethodGet, apiv1.SessionPath(s.Name), tokHuman, nil)
+	if w.Code != http.StatusOK || decode[apiv1.Session](t, w).PrivateHistory.LastExecutor.ConversationID != "synthetic-conversation" {
+		t.Fatal("retained metadata required a live source")
+	}
+	w = f.do(http.MethodGet, apiv1.SessionsPath, tokHuman, nil)
+	if w.Code != http.StatusOK || len(decode[apiv1.SessionList](t, w).Sessions) != 1 {
+		t.Fatal("retained identity disappeared from inventory")
 	}
 }

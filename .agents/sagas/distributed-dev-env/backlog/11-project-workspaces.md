@@ -140,6 +140,14 @@ separate acceptance; the pending Q-24 routing choice is not silently decided.
 
 ### Parent issues
 
+The first #174 source guard is defined by
+[DESIGN-008](../designs/008-private-provider-history-retention.md): default-off
+private HOME/Session retention, immutable provenance and a one-way executor
+attempt. Retention survives flag disable; missing executors remain Unknown.
+Source review/tests do not prove installed GC/storage behavior. Deploy the
+operator/schema, then deliver separate provider-context adapters and scoped
+stopped reads. No shared-Git TTL or broad legacy peer mutation right is adopted.
+
 - [#173](https://github.com/thaynes43/dev-env/issues/173): independent catalog/rules and local repo startup.
 - [#174](https://github.com/thaynes43/dev-env/issues/174): retained session directory and authorized live/stopped context.
 - [#175](https://github.com/thaynes43/dev-env/issues/175): cross-parent task claims and durable messages.

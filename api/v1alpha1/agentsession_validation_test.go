@@ -814,3 +814,63 @@ func TestDecisionAuthorityStatusSchemaIsBoundedAndRetainsProvenance(t *testing.T
 		})
 	}
 }
+
+func TestPrivateHistoryRetentionIsDurableBoundedAndCannotAssertPrivateStop(t *testing.T) {
+	s := taskSession()
+	if err := k8s.Create(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	s.Status.PrivateHistory = &v1alpha1.PrivateHistoryStatus{Version: 1, SessionUID: string(s.UID), HomeClaim: "original-home", HomeUID: "original-home-uid", BindingGeneration: s.Generation, Admission: "Started", ExecutorAttempted: true, ExecutorIntent: "synthetic-intent", Provider: string(s.Spec.Agent), StopState: "Unknown", LastExecutor: &v1alpha1.PrivateExecutorStatus{PodUID: "original-executor", PodName: s.Name, NodeName: "worker-a", Revision: "original-template", Generation: s.Generation, ConversationID: "synthetic-conversation"}}
+	if err := k8s.Status().Update(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	got := get(t, s)
+	if got.Status.PrivateHistory == nil || got.Status.PrivateHistory.LastExecutor.ConversationID != "synthetic-conversation" {
+		t.Fatal("retention metadata pruned")
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*v1alpha1.AgentSessionStatus)
+	}{
+		{"erase latch", func(st *v1alpha1.AgentSessionStatus) { st.PrivateHistory = nil }},
+		{"erase executor", func(st *v1alpha1.AgentSessionStatus) { st.PrivateHistory.LastExecutor = nil }},
+		{"replace executor", func(st *v1alpha1.AgentSessionStatus) { st.PrivateHistory.LastExecutor.PodUID = "replacement" }},
+		{"replace home", func(st *v1alpha1.AgentSessionStatus) { st.PrivateHistory.HomeUID = "replacement" }},
+		{"erase home", func(st *v1alpha1.AgentSessionStatus) { st.PrivateHistory.HomeUID = "" }},
+		{"change session", func(st *v1alpha1.AgentSessionStatus) { st.PrivateHistory.SessionUID = "replacement" }},
+		{"reverse admission", func(st *v1alpha1.AgentSessionStatus) { st.PrivateHistory.Admission = "NeverStarted" }},
+		{"replace executor intent", func(st *v1alpha1.AgentSessionStatus) { st.PrivateHistory.ExecutorIntent = "replacement" }},
+		{"reverse executor attempt", func(st *v1alpha1.AgentSessionStatus) { st.PrivateHistory.ExecutorAttempted = false }},
+		{"claim private stop", func(st *v1alpha1.AgentSessionStatus) { st.PrivateHistory.StopState = "Confirmed" }},
+		{"unbounded conversation", func(st *v1alpha1.AgentSessionStatus) {
+			st.PrivateHistory.LastExecutor.ConversationID = strings.Repeat("x", 257)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := get(t, s)
+			tc.edit(&bad.Status)
+			if err := k8s.Status().Update(ctx(t), bad); !apierrors.IsInvalid(err) {
+				t.Fatalf("invalid retention change accepted: %v", err)
+			}
+		})
+	}
+	if err := k8s.Status().Patch(ctx(t), get(t, s), client.RawPatch(types.JSONPatchType, []byte(`[{"op":"remove","path":"/status"}]`))); !apierrors.IsInvalid(err) {
+		t.Fatal("dropping status erased retention latch")
+	}
+}
+
+func TestPrivateHistoryUnknownOriginalHomeCannotBeBackfilled(t *testing.T) {
+	s := taskSession()
+	if err := k8s.Create(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	s.Status.PrivateHistory = &v1alpha1.PrivateHistoryStatus{Version: 1, SessionUID: string(s.UID), HomeClaim: "original-home", BindingGeneration: s.Generation, Admission: "Unknown", Provider: string(s.Spec.Agent), StopState: "Unknown"}
+	if err := k8s.Status().Update(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	got := get(t, s)
+	got.Status.PrivateHistory.HomeUID = "guessed-home"
+	if err := k8s.Status().Update(ctx(t), got); !apierrors.IsInvalid(err) {
+		t.Fatal("historical Unknown binding was silently backfilled")
+	}
+}

@@ -183,17 +183,19 @@ type Lifecycle struct {
 // Session is one session as the API shows it: GET /v1/sessions/{name}, the
 // items of GET /v1/sessions, and the answer to a create or a reap.
 type Session struct {
-	Name    string   `json:"name"`
-	Repo    string   `json:"repo"`
-	Base    string   `json:"base,omitempty"`
-	Agent   string   `json:"agent"`
-	Mode    string   `json:"mode"`
-	Model   string   `json:"model"`
-	Effort  string   `json:"effort,omitempty"`
-	Size    string   `json:"size,omitempty"`
-	Profile string   `json:"profile,omitempty"`
-	Tools   []string `json:"tools,omitempty"`
-	Limits  *Limits  `json:"limits,omitempty"`
+	UID            string          `json:"uid,omitempty"`
+	PrivateHistory *PrivateHistory `json:"privateHistory,omitempty"`
+	Name           string          `json:"name"`
+	Repo           string          `json:"repo"`
+	Base           string          `json:"base,omitempty"`
+	Agent          string          `json:"agent"`
+	Mode           string          `json:"mode"`
+	Model          string          `json:"model"`
+	Effort         string          `json:"effort,omitempty"`
+	Size           string          `json:"size,omitempty"`
+	Profile        string          `json:"profile,omitempty"`
+	Tools          []string        `json:"tools,omitempty"`
+	Limits         *Limits         `json:"limits,omitempty"`
 	// Lifecycle is the session's own timers, when it has any.
 	Lifecycle      *Lifecycle `json:"lifecycle,omitempty"`
 	Parent         string     `json:"parent,omitempty"`
@@ -229,6 +231,31 @@ type Session struct {
 	Outcome       *Outcome       `json:"outcome,omitempty"`
 	Usage         *Usage         `json:"usage,omitempty"`
 	Conditions    []Condition    `json:"conditions,omitempty"`
+}
+
+// PrivateHistory is bounded retained provenance under the existing Session ACL.
+// It is not provider history, a private stop receipt or an access grant.
+type PrivateHistory struct {
+	Version           int              `json:"version"`
+	SessionUID        string           `json:"sessionUID"`
+	HomeClaim         string           `json:"homeClaim"`
+	HomeUID           string           `json:"homeUID"`
+	BindingGeneration int64            `json:"bindingGeneration"`
+	Admission         string           `json:"admission"`
+	ExecutorAttempted bool             `json:"executorAttempted"`
+	ExecutorIntent    string           `json:"executorIntent"`
+	Provider          string           `json:"provider"`
+	StopState         string           `json:"stopState"`
+	LastExecutor      *PrivateExecutor `json:"lastExecutor,omitempty"`
+}
+
+type PrivateExecutor struct {
+	PodUID         string `json:"podUID"`
+	PodName        string `json:"podName"`
+	NodeName       string `json:"nodeName,omitempty"`
+	Revision       string `json:"revision,omitempty"`
+	Generation     int64  `json:"generation"`
+	ConversationID string `json:"conversationId,omitempty"`
 }
 
 // AgentStatus is the agent's state from agentd's last heartbeat.

@@ -148,6 +148,7 @@ func TestBrokerRequesterUIDCleanupDeletingOriginal(t *testing.T) {
 	}
 	reconcileInstallation(t, b, g)
 	s.Finalizers = []string{"fixture/rescue"}
+	s.Status.PrivateHistory = &v1alpha1.PrivateHistoryStatus{Version: 1, SessionUID: string(s.UID), HomeClaim: "retained-home", HomeUID: "retained-home-uid", BindingGeneration: 1, Admission: "Started", ExecutorAttempted: true, ExecutorIntent: "synthetic-intent", Provider: "claude", StopState: "Unknown"}
 	if err := b.Client.Update(ctx, &s); err != nil {
 		t.Fatal(err)
 	}

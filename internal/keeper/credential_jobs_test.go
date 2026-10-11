@@ -413,3 +413,31 @@ func TestCredentialWaitsForBrokerExecutionUIDPin(t *testing.T) {
 		t.Fatal("replacement execution dispatched")
 	}
 }
+
+func TestPrivateHistoryDeletingSessionCannotInstallCredential(t *testing.T) {
+	f := newCredentialFixture(t)
+	f.provider.afterCreate = func() {
+		var s v1alpha1.AgentSession
+		if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: "dev-agents", Name: "session-example"}, &s); err != nil {
+			t.Fatal(err)
+		}
+		s.Finalizers = []string{v1alpha1.LabelPrefix + "rescue"}
+		s.Status.PrivateHistory = &v1alpha1.PrivateHistoryStatus{Version: 1, SessionUID: string(s.UID), HomeClaim: "retained-home", HomeUID: "retained-home-uid", BindingGeneration: 1, Admission: "Started", ExecutorAttempted: true, ExecutorIntent: "synthetic-intent", Provider: "claude", StopState: "Unknown"}
+		if err := f.c.Update(context.Background(), &s); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.c.Delete(context.Background(), &s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.reconcile(t); err != nil {
+		t.Fatal(err)
+	}
+	if f.installer.installs != 0 || f.provider.present || f.status(t).Phase != v1alpha1.CredentialRevoked {
+		t.Fatal("retention kept credential access after deletion")
+	}
+	var s v1alpha1.AgentSession
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: "dev-agents", Name: "session-example"}, &s); err != nil || s.DeletionTimestamp.IsZero() || s.Status.PrivateHistory == nil {
+		t.Fatal("synthetic deleting retained Session was not preserved")
+	}
+}

@@ -16,6 +16,7 @@ import (
 func view(s *v1alpha1.AgentSession, withPrompt bool) apiv1.Session {
 	v := apiv1.Session{
 		Name:           s.Name,
+		UID:            string(s.UID),
 		Repo:           s.Spec.Repo,
 		Base:           s.Spec.Base,
 		Agent:          string(s.Spec.Agent),
@@ -39,6 +40,14 @@ func view(s *v1alpha1.AgentSession, withPrompt bool) apiv1.Session {
 		Node:           s.Status.NodeName,
 		Revision:       s.Status.Revision,
 		Outdated:       meta.IsStatusConditionTrue(s.Status.Conditions, controller.ConditionOutdated),
+	}
+	if h := s.Status.PrivateHistory; h != nil {
+		v.PrivateHistory = &apiv1.PrivateHistory{Version: h.Version, SessionUID: h.SessionUID, HomeClaim: h.HomeClaim,
+			HomeUID: h.HomeUID, BindingGeneration: h.BindingGeneration, Admission: h.Admission, Provider: h.Provider, StopState: h.StopState, ExecutorAttempted: h.ExecutorAttempted, ExecutorIntent: h.ExecutorIntent}
+		if e := h.LastExecutor; e != nil {
+			v.PrivateHistory.LastExecutor = &apiv1.PrivateExecutor{PodUID: e.PodUID, PodName: e.PodName, NodeName: e.NodeName,
+				Revision: e.Revision, Generation: e.Generation, ConversationID: e.ConversationID}
+		}
 	}
 	if withPrompt {
 		v.Prompt = s.Spec.Prompt
