@@ -28,12 +28,14 @@ import (
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/activity"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -43,6 +45,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/podexec"
 	"github.com/thaynes43/dev-env/internal/shelf"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
+	"github.com/thaynes43/dev-env/internal/taskclaim"
 	"github.com/thaynes43/dev-env/internal/templates"
 	"github.com/thaynes43/dev-env/internal/version"
 )
@@ -73,6 +76,8 @@ func main() {
 }
 
 type options struct {
+	taskClaimsEnabled       bool
+	taskClaimReadProjects   []string
 	nativeFixtureEnabled    bool
 	nativeFixtureImage      string
 	taskBudgetsEnabled      bool
@@ -126,6 +131,8 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.privateHistoryRetention, "enable-private-history-retention", false, "retain private managed HOME and durable Session identity on reap and suspended autoarchive")
 	fs.BoolVar(&o.managedChildDecisions, "enable-managed-child-decisions", false, "enable private recorded child decisions and same-writer native continuation")
 	fs.BoolVar(&o.taskBudgetsEnabled, "enable-task-budgets", false, "enable retained finite managed task budget authority; native admission requires a separate trusted inspector")
+	fs.BoolVar(&o.taskClaimsEnabled, "enable-task-claims", false, "enable immutable explicit TaskClaim ownership in the separate coordination API group")
+	claimProjects := fs.String("task-claims-read-projects", "", "explicit comma-separated projects for bounded TaskClaim metadata discovery")
 	fs.BoolVar(&o.nativeFixtureEnabled, "enable-native-lifecycle-fixture", false, "admit only the fixed isolated zero-task native lifecycle fixture")
 	fs.StringVar(&o.nativeFixtureImage, "native-fixture-image", "", "signature-verified immutable agent image for the isolated fixture")
 	fs.StringVar(&o.taskBudgetNamespace, "task-budget-namespace", "", "dedicated protected namespace for retained budget ConfigMaps")
@@ -189,6 +196,17 @@ func parseFlags(args []string) (options, error) {
 	if o.managedChildDecisions && (!o.coordinatorEnabled || !o.managedCodexTasks) {
 		return o, errors.New("managed child decisions require enabled configured coordinators and managed native tasks")
 	}
+	o.taskClaimReadProjects, err = apiserver.ParseTaskClaimReadProjects(*claimProjects)
+	if err != nil {
+		return o, err
+	}
+	if o.taskClaimsEnabled {
+		if o.apiAddr == "0" || o.catalogBinding == nil || len(o.taskClaimReadProjects) == 0 || len(validation.IsDNS1123Label(o.templatesNamespace)) != 0 {
+			return o, errors.New("task claims require the API, accepted catalog and explicit project metadata read scope")
+		}
+	} else if len(o.taskClaimReadProjects) != 0 {
+		return o, errors.New("task claim read scope requires explicit enable-task-claims")
+	}
 
 	if *assignedBudgets != "" {
 		if len(*assignedBudgets) > 4096 {
@@ -239,6 +257,9 @@ func run(args []string) error {
 		return err
 	}
 	if err := v1alpha1.AddToScheme(scheme); err != nil {
+		return err
+	}
+	if err := coord.AddToScheme(scheme); err != nil {
 		return err
 	}
 
@@ -333,7 +354,12 @@ func run(args []string) error {
 		return err
 	}
 	if o.apiAddr != "0" {
+		var claims *taskclaim.KubeStore
+		if o.taskClaimsEnabled {
+			claims = &taskclaim.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.templatesNamespace}
+		}
 		api := &apiserver.Server{
+			TaskClaims: claims, TaskClaimReadProjects: o.taskClaimReadProjects,
 			Client:      mgr.GetClient(),
 			TaskBudgets: budgets, AssignedTaskBudgets: o.assignedTaskBudgets,
 			Live: mgr.GetAPIReader(),

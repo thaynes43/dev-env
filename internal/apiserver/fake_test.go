@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/controller"
@@ -50,6 +51,9 @@ var testScheme = func() *runtime.Scheme {
 		panic(err)
 	}
 	if err := v1alpha1.AddToScheme(s); err != nil {
+		panic(err)
+	}
+	if err := coord.AddToScheme(s); err != nil {
 		panic(err)
 	}
 	return s
@@ -95,6 +99,9 @@ func newFixtureWith(t *testing.T, funcs interceptor.Funcs, objs ...client.Object
 	create := funcs.Create
 	funcs.Create = func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 		obj.SetCreationTimestamp(metav1.NewTime(f.now))
+		if _, ok := obj.(*coord.TaskClaim); ok && obj.GetUID() == "" {
+			obj.SetUID(uuid.NewUUID())
+		}
 		if create != nil {
 			return create(ctx, c, obj, opts...)
 		}

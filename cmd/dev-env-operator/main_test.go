@@ -5,6 +5,27 @@ import (
 	"testing"
 )
 
+func TestTaskClaimFlagsDefaultOffAndExplicitScope(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.taskClaimsEnabled || len(o.taskClaimReadProjects) != 0 {
+		t.Fatal("claims enabled by default", err)
+	}
+	bound := []string{"--enable-task-claims", "--project-catalog=dev-env-system/dev-env-project-catalog", "--project-clone-owner=thaynes43", "--task-claims-read-projects=sample"}
+	o, err = parseFlags(bound)
+	if err != nil || !o.taskClaimsEnabled || len(o.taskClaimReadProjects) != 1 || o.coordinatorEnabled || o.privateProjectTasks || o.taskBudgetsEnabled {
+		t.Fatal("claim gate widened unrelated features", err)
+	}
+	for _, args := range [][]string{
+		{"--enable-task-claims"}, {"--task-claims-read-projects=sample"}, append(slices.Clone(bound), "--api-bind-address=0"),
+		append(slices.Clone(bound), "--task-claims-read-projects="), append(slices.Clone(bound), "--task-claims-read-projects=sample,sample"),
+		append(slices.Clone(bound), "--task-claims-read-projects=*"),
+	} {
+		if _, err := parseFlags(args); err == nil {
+			t.Fatal("claims accepted missing/nonnarrow scope", args)
+		}
+	}
+}
+
 func TestParseFlagsAPI(t *testing.T) {
 	t.Setenv("POD_NAMESPACE", "dev-env-system")
 	o, err := parseFlags(nil)
