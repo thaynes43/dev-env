@@ -36,7 +36,8 @@ protected CRD and narrow operator Role. Receipt at 17:57:25 UTC
 `69c25fd40a14cc052abac7987feb255782bff20ee4960608c258496eacababba`
 proves guard installation and preservation of all 11 other Pods, four Jobs,
 old schema/catalog/template identities and native ledger. Runtime claims remain
-unaccepted; context source #190 is merged but its deployment remains pending.
+unaccepted; context source #190 is merged and release #192 shipped v2.17.0; its
+separate GitOps deployment and actual workflow acceptance remain pending.
 
 ## Next #175 source unit: durable offline inbox — 2026-10-11 UTC
 
