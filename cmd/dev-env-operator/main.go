@@ -73,30 +73,31 @@ func main() {
 }
 
 type options struct {
-	nativeFixtureEnabled  bool
-	nativeFixtureImage    string
-	taskBudgetsEnabled    bool
-	taskBudgetNamespace   string
-	taskBudgetWorkerImage string
-	assignedTaskBudgets   map[string]string
-	sessionNamespace      string
-	templatesNamespace    string
-	templatesName         string
-	leaderElect           bool
-	metricsAddr           string
-	probeAddr             string
-	apiURL                string
-	apiAddr               string
-	apiTLSDir             string
-	humanSA               string
-	clientSAs             []string
-	grantApprovalURL      string
-	coordinatorEnabled    bool
-	privateProjectTasks   bool
-	managedCodexTasks     bool
-	managedChildDecisions bool
-	coordinatorHosts      []apiserver.CoordinatorHost
-	catalogBinding        *apiserver.CatalogBinding
+	nativeFixtureEnabled    bool
+	nativeFixtureImage      string
+	taskBudgetsEnabled      bool
+	taskBudgetNamespace     string
+	taskBudgetWorkerImage   string
+	assignedTaskBudgets     map[string]string
+	sessionNamespace        string
+	templatesNamespace      string
+	templatesName           string
+	leaderElect             bool
+	metricsAddr             string
+	probeAddr               string
+	apiURL                  string
+	apiAddr                 string
+	apiTLSDir               string
+	humanSA                 string
+	clientSAs               []string
+	grantApprovalURL        string
+	coordinatorEnabled      bool
+	privateProjectTasks     bool
+	managedCodexTasks       bool
+	privateHistoryRetention bool
+	managedChildDecisions   bool
+	coordinatorHosts        []apiserver.CoordinatorHost
+	catalogBinding          *apiserver.CatalogBinding
 }
 
 func parseFlags(args []string) (options, error) {
@@ -122,6 +123,7 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.coordinatorEnabled, "enable-coordinator-callers", false, "enable configured live-bound scoped coordinator callers")
 	fs.BoolVar(&o.privateProjectTasks, "enable-private-project-tasks", false, "enable new accepted-project tasks with private repositories and worktrees")
 	fs.BoolVar(&o.managedCodexTasks, "enable-managed-codex-tasks", false, "enable accepted-project managed Codex task admission")
+	fs.BoolVar(&o.privateHistoryRetention, "enable-private-history-retention", false, "retain private managed HOME and durable Session identity on reap and suspended autoarchive")
 	fs.BoolVar(&o.managedChildDecisions, "enable-managed-child-decisions", false, "enable private recorded child decisions and same-writer native continuation")
 	fs.BoolVar(&o.taskBudgetsEnabled, "enable-task-budgets", false, "enable retained finite managed task budget authority; native admission requires a separate trusted inspector")
 	fs.BoolVar(&o.nativeFixtureEnabled, "enable-native-lifecycle-fixture", false, "admit only the fixed isolated zero-task native lifecycle fixture")
@@ -285,6 +287,7 @@ func run(args []string) error {
 		Templates:                   templatesKey,
 		APIURL:                      o.apiURL,
 		ManagedCodexTasks:           o.managedCodexTasks,
+		PrivateHistoryRetention:     o.privateHistoryRetention,
 		ManagedChildDecisions:       o.managedChildDecisions,
 		ManagedChildDecisionParents: decisionParents,
 		APIReader:                   mgr.GetAPIReader(),

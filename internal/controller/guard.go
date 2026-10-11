@@ -166,6 +166,9 @@ func holdRetryDue(s *v1alpha1.AgentSession, now time.Time, retry time.Duration) 
 // rescue, of the volume's last pod, is verified or proved there was nothing to
 // save. podExists must come from the API server, not the cache.
 func volumeRemovalAllowed(s *v1alpha1.AgentSession, podExists, archiveDue bool) error {
+	if privateHistoryProtected(s) {
+		return errPrivateHistoryRetained
+	}
 	if s.Spec.Workspace != nil {
 		return errors.New("shared task rescue does not archive its private home; the home and workspace claim stay retained")
 	}

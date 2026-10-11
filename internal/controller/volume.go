@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"strconv"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -21,12 +23,16 @@ func buildHomeClaim(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.P
 	if _, err := t.Size(s.Spec.Size); err != nil {
 		return nil, err
 	}
+	annotations := sessionAnnotations(s)
+	if privateHistoryProtected(s) {
+		annotations[privateHistoryAdmissionAnnotation] = strconv.FormatInt(s.Status.PrivateHistory.BindingGeneration, 10)
+	}
 	return &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            HomeClaimName(s.Name),
 			Namespace:       s.Namespace,
 			Labels:          sessionLabels(s, profile),
-			Annotations:     sessionAnnotations(s),
+			Annotations:     annotations,
 			OwnerReferences: []metav1.OwnerReference{ownerRef(s)},
 			// The volume outlives any delete until its session is rescued
 			// and archived (D-45): a direct delete, or the garbage

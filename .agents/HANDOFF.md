@@ -5,16 +5,52 @@ including releases. Record unavailable/failed/skipped outcomes without a pass
 claim. Required CI and native independent review remain merge gates; do not
 retry or repair Claude authentication as a prerequisite.
 
-## Active #173 permanent-roots slice — 2026-10-11 UTC
+## Built #174 private-history preservation guard — 2026-10-11 UTC
+
+[DESIGN-008](sagas/distributed-dev-env/designs/008-private-provider-history-retention.md)
+defines the first retention source unit. Default-off
+`--enable-private-history-retention` protects private HOME PVCs and durable
+AgentSession identity on reap and suspended autoarchive. A persisted latch
+survives flag disable. Original Session/HOME/executor identity cannot be erased
+or rebound; one confirmed causal executor intent precedes creation. A lost
+acknowledgement can adopt only that same verified executor. An absent attempted
+executor remains PreservationUnknown, with its original record retained, and
+cannot authorize replacement. No private stop proof or new retention TTL is added.
+
+Focused checks across six affected packages, affected lint, schema/deepcopy
+reproducibility and native independent review passed. Review corrected an
+absent-executor status that misleadingly said Creating. Envtest has no GC
+controller: tests use real API finalizer/deletion semantics and explicitly
+model dependent deletes. Operator/schema publication and installed preservation
+remain separate gates. No runtime, keeper lease, credential, failed-fixture or
+ledger change follows from source tests.
+
+The existing API adds bounded retention/provenance metadata under its current
+ACL. Coordinator direct-child/sibling denial is preserved; ordinary session
+callers still have legacy broader read/reap behavior. This is not a new peer
+read-only authorization contract. Separate authorized stopped-context routes,
+provider history adapters and broader discovery remain required for #174.
+Do not close #174 or #91 from the guard alone.
+
+## Built and released #173 permanent roots — 2026-10-11 UTC
 
 [DESIGN-007](sagas/distributed-dev-env/designs/007-private-project-roots.md)
-defines the next bounded source unit in a fresh worktree based on merged #179.
-Create owned Git-backed project roots and detached private repo anchors, retain
-catalog/rule/source provenance, and use safe fast-forwards only after ownership
+defines the source unit merged in
+[#181](https://github.com/thaynes43/dev-env/pull/181) as
+`e34ad2c07ab2c93b77e14f882adb058251ff8f90`. It creates owned Git-backed project
+roots and detached private repo anchors, retains
+catalog/rule/source provenance, and uses safe fast-forwards only after ownership
 and preservation proof. Foreign, edited, ignored, divergent and interrupted
 state is preserved. The roots flag defaults off; no native-host/UI conversion
 or actual provider loading is claimed. Q-24 remains pending through the native
 question tool; no phone-delivery receipt or owner ruling is inferred.
+
+Release [#182](https://github.com/thaynes43/dev-env/pull/182) tags v2.14.0 at
+`2b6d59682499456998200535caa2df5af74609b2`. Native exact-head review and required
+CI passed; the optional Claude release review skipped without findings.
+Signed image publication, new-session GitOps promotion and the model-free roots
+check remain distinct from that release metadata. A private native Codex
+preflight source slice is in progress with no pairing or fleet UX change.
 
 ## Built, deployed and bounded refresh accepted — #173 bootstrap — 2026-10-11 UTC
 
