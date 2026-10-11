@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.21.0](https://github.com/thaynes43/dev-env/compare/v2.20.0...v2.21.0) (2026-10-11)
+
+
+### Features
+
+* **cli:** add single-request ID-only canary creation ([#206](https://github.com/thaynes43/dev-env/issues/206)) ([562d7df](https://github.com/thaynes43/dev-env/commit/562d7df2a059eb268a879edbb7c32fdda4065d47))
+* **cli:** add single-request session directory reads ([#204](https://github.com/thaynes43/dev-env/issues/204)) ([c9493db](https://github.com/thaynes43/dev-env/commit/c9493db0ab9f5b899e78e5617b650f0bd7077d9e))
+
 ## [2.20.0](https://github.com/thaynes43/dev-env/compare/v2.19.0...v2.20.0) (2026-10-11)
 
 
