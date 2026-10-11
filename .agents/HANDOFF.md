@@ -76,8 +76,12 @@ and access minting. Claude review was unavailable and remains optional/down.
 
 Release #192 shipped v2.17.0 with a signed agent image. GitOps #3819 merged
 as `f316532ab00d4dd4edbf5f2918f5fa1baff825ca`; installation and operator
-preservation verification is in progress. Explicit publish-stop-read acceptance
-remains separate. Provider capture, complete retention, native directory,
+preservation passed at 18:20:46 UTC in receipt
+`cd911ef5e9e474a9cd54f2a951f65d748e6ac9d9ea83395231ddd4ca2641a06f`.
+Exact CRD/narrow Role/signed image/two Ready replicas were verified. All 11 other
+Pods, four terminal Jobs, prior schemas/claims authority/catalog/templates and
+failed native ledger stayed unchanged; there were zero AgentSessions. The scoped
+activity ended. Actual publish-stop-read acceptance remains separate. Provider capture, complete retention, native directory,
 genuine stopped history and the owner pilot remain unaccepted; keep #174/#91 open.
 
 
