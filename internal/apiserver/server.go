@@ -44,11 +44,15 @@ import (
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
+	"github.com/thaynes43/dev-env/internal/taskclaim"
 	"github.com/thaynes43/dev-env/internal/templates"
 )
 
 // Server holds the API's handlers and what they read and write.
 type Server struct {
+	// Nil leaves immutable coordination routes disabled. This store always reads Live.
+	TaskClaims            *taskclaim.KubeStore
+	TaskClaimReadProjects []string
 	// Nil keeps the first durable ledger unit inactive. Runtime activation also
 	// needs protected storage, independently validated receipts and owned stop.
 	TaskBudgets         *taskbudget.Service
@@ -115,6 +119,8 @@ type route struct {
 // Handler returns the API's HTTP handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle(apiv1.TaskClaimsPath, s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.createTaskClaim, http.MethodGet: s.listTaskClaims}}))
+	mux.Handle(apiv1.TaskClaimsPath+"/{claim}", s.serve(route{coordinator: true, methods: map[string]handler{http.MethodGet: s.getTaskClaim}}))
 	mux.Handle(apiv1.TaskBudgetsPath, s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.createTaskBudget}}))
 	mux.Handle(apiv1.TaskBudgetsPath+"/{uid}", s.serve(route{coordinator: true, methods: map[string]handler{http.MethodGet: s.getTaskBudget}}))
 	mux.Handle(apiv1.TaskBudgetsPath+"/{uid}/admit", s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.admitTaskBudget}}))

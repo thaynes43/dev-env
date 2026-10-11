@@ -73,6 +73,31 @@ After latches exist, preserve both the retention schema and a retention-aware
 operator across rollback. Flag disable preserves latches; a pre-guard operator
 downgrade is not established safe.
 
+## Built #175 atomic explicit task ownership — 2026-10-11 UTC
+
+[DESIGN-010](sagas/distributed-dev-env/designs/010-atomic-task-claims.md) defines
+the first default-off ownership API. A separate coordination API group holds
+immutable bounded claims, outside existing worker read grants. Explicit project,
+repo and logical task key determine one full-digest identity across parents.
+Atomic Create and uncached confirmation return 201/200/409 without transferring
+ownership on a lost acknowledgement, stale heartbeat or absent/stopped owner.
+Original Session UID, authenticated actor and saved catalog/rules are immutable.
+Initial fetch pin and executor stop remain Unknown; heartbeat HEAD is reported.
+
+An independent explicit project scope grants bounded claim metadata only.
+Own live Session or verified coordinator direct-child identity can create;
+legacy broad read/reap does not grant this route. No prompt, rules text,
+transcript or authentication body is returned. No expiry, release, transfer,
+automatic launch gate or inbox is implemented by this first unit.
+
+Focused store/API/operator checks, necessary real CRD checks, affected lint,
+codegen reproducibility and native independent review passed. Rebase preserves
+#174 retention wiring; the operator command suite passed again after the two
+mechanical wiring-file deltas. Signed publication, protected namespaced Role
+and exact generated schema/API GitOps delivery remain separate. Installed
+two-parent contention and durable messages/offline acknowledgements are still
+required for #175. Keep #175/#91 open and preserve all sessions/fixtures/ledgers.
+
 ## Built #174 private-history preservation guard — 2026-10-11 UTC
 
 [DESIGN-008](sagas/distributed-dev-env/designs/008-private-provider-history-retention.md)

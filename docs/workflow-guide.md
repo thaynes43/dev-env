@@ -316,6 +316,12 @@ Two Codex links may expose similarly named project folders backed by different
 local clones. Each link has private enrollment and a stable host identity.
 Choosing the other link must still show who is doing the work and provide
 context reads; it must not silently launch another copy or steal an active task.
+The [first atomic claim source unit](../.agents/sagas/distributed-dev-env/designs/010-atomic-task-claims.md)
+retains explicit project/repo/task ownership and original Session UID across
+retries and stopped owners. Its own project read scope exposes bounded claim
+metadata; it does not grant session mutation or transcript access. Deployment
+and real cross-parent contention remain acceptance gates. Durable offline
+messages, acknowledgements and verified ownership transfer follow separately.
 See [session coordination](session-coordination.md) for the source audit and
 [two Codex hosts](codex-coordinator-hosts.md) for the host lifecycle boundary.
 

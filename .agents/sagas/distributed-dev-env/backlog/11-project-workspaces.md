@@ -149,6 +149,18 @@ The deployed model-free roots check failed before verifier acceptance; preserve
 attempt 1 and its Unknown internal cause. Offline umask mismatch proof supports
 a separate small source correction and fresh named check, without a retry here.
 
+### First explicit claims source unit
+
+[DESIGN-010](../designs/010-atomic-task-claims.md) adds immutable full-identity
+TaskClaim ownership in a separate protected coordination group. Atomic Create
+and uncached confirmation preserve one original owner across parents, retries
+and stopped/deleting/absent/replaced Session observations. A separate project
+ACL exposes bounded metadata without inheriting broad legacy mutation rights.
+Focused/schema/lint/codegen checks and native review passed. Protected schema,
+namespaced operator get/create/list Role and signed API promotion are delivery
+gates; installed contention, inbox/acknowledgements and budget/handoff linkage
+remain separate. Initial fetch pin and executor stop are Unknown.
+
 ### Parent issues
 
 [DESIGN-012](../designs/012-owned-root-wrapper-permissions.md) corrects generated
