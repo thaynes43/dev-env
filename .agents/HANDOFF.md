@@ -1,5 +1,37 @@
 # HANDOFF: start here
 
+## Urgent #174 original private Pod retention source correction
+
+[DESIGN-019](sagas/distributed-dev-env/designs/019-private-pod-retention-guard.md)
+ratifies PRIVATE-POD-R1: the private check protects volume removal, while a
+suspended/reaped owned terminal/never-started Pod can reach UID/RV-conditioned
+deletion before private Unknown conditions are applied. Complete source audit
+`05765bfe3f5ce589d8f02f9de2b044361b9b6ee1e2a73cff29cdacfb9899a5a8`
+and corrected pilot audit
+`92a3997e5c198038d1f8de3fadc0028e08fd156a39763bb4db26ed1b84797bb9`
+preserve the original mistaken premise/evidence; no runtime deletion was tried.
+Add the existing protected-private-history refusal both in podRemovalAllowed
+and before removePod enters legacy rescue/exec/deletion. No API/schema/flag or
+cleanup change; retain exact original Pod/HOME/latches and Unknown stop/history.
+Meaningful pre-fix regression, corrected controls, native review and CI remain
+gates. Ship before provider activation via the pending combined D17/D18 release;
+actual original-executor stop and the concurrent owner pilot remain unaccepted.
+
+Source correction `cf0a708c` adds only the two existing private-history refusal
+boundaries and two focused test paths. Pre-fix full Reconcile removed the exact
+original owned Pod UID; the immutable failed fixture remains preserved. Two
+required cached TestMain startups completed; corrected sixteen suspend/reap
+state cases, partial/unknown/canary and shared/legacy controls passed. Affected
+lint passed after one PATH-preparation correction. Packet
+`189bf28fa7733cb85e2aa71d5b38f2011e865252b24605545d1206d82e7d84e7`
+preserves 555 incoming paths and 102 earlier artifacts. Integration on Cost200
+`a0ba2ee4` is complete at source `3cd61b8d`: all four source/test hashes, 565 main
+incoming paths, 102 earlier artifacts and combined schemas remain unchanged.
+Packet `92cb9dcf525d4aeeb39ee2a61ec48f8f3c1493ebabcfc557755b7218c860ee12`
+records the rebase without a third local TestMain startup. Final native review/CI
+remain gates; the current installed operator still predates this source fix.
+
+
 ## Built #174 durable directory source increment
 
 [DESIGN-017](sagas/distributed-dev-env/designs/017-durable-session-directory.md)
@@ -45,7 +77,7 @@ schemas before signed promotion; neither standalone schema contains both.
 Directory activation is prospective and remains disabled until narrow access
 and the admission guard are installed. Actual history/discovery is unaccepted.
 
-## Next bounded #176 source unit: truthful initial usage
+## Built #176 source unit: truthful initial usage
 
 [DESIGN-018](sagas/distributed-dev-env/designs/018-initial-invocation-usage-provenance.md)
 fixes the evidenced missing-cost-to-$0 defect through typed presence/provenance
@@ -59,16 +91,18 @@ an old operator/client. New agents must omit deprecated raw Usage from outgoing
 heartbeats while preserving private results, stored legacy evidence and ordinary
 liveness/budget processing. The original failed review remains retained.
 Finite audit SHA256 `9c96d404956f661f1a09f5361a1ffa6f9e1874f8a5e3e1a7848b00808db197e8`.
-Source implementation, native review, CI, signed promotion and actual-provider
-acceptance remain gates. Existing sessions must not restart for reporting alone.
+Source implementation, native review and required CI passed. Signed promotion
+and actual-provider acceptance remain gates. Existing sessions must not restart
+for reporting alone.
 
 COST-R1 source correction `c97f800c` removes raw forwarding at collection and
 at the final heartbeat Send boundary. Actual old-decoder wire cases, incoming
 legacy/typed liveness and stable-counter/deadline budget cases passed; private
 raw results and generated schemas stay preserved. Corrected packet
 `192b9a2ccc1bc0d022419fe2090f1ebfbe6c0187e94b709c4ba5aff06187c525`
-retains the original native HOLD. Final independent review and CI still gate
-merge, followed by signed installation and separate actual-provider acceptance.
+retains the original native HOLD. Final independent review and required CI
+passed before source merge; signed installation and actual-provider acceptance
+remain separate.
 
 Standalone Cost head `a3d44d5e` passed native corrected review
 `063da43dfee9faa4485dc6e435c24dcbee1a2fa0a0047d00e233a99af4229a41`
@@ -83,7 +117,13 @@ replay and combined real-schema negatives, lint, static CLI guard and reproducib
 generation. Packet `9aa9a031b96eaa720e69606180dfc760809deb7d568ff2c7ba4a4ae68817ccbe`
 preserves 541 main incoming paths and 98 earlier artifacts. Combined AgentSession
 schema is `32b2c3e3f40258694e3693a3f5ba3631b71fa729b1708a3cfb6f9e4828155703`.
-Final exact-head native review and CI gate #200; signed promotion is separate.
+Source #200 squash-merged as `a0ba2ee413d38e8368e99f6bb95809d85b214aff`
+at 21:10 UTC. Exact final `647f114f` passed CI 38174709908 and integrated native
+review `e2f980ca4928f1e7f82870c4eefd6827447af07c03b0305478ab41cd669f2196`.
+Optional Claude 38174709818 failed before a verdict; error-only/empty findings
+and log `63c15af014f0fda76b24ba8740ba8ab19afb1a39746199279bb4a31b4a4e57c9`
+were read without retry. Pending release #201 proposes v2.20.0 with directory,
+usage and this private Pod guard; publication/install/actual pilot remain gates.
 
 ## Finite #154/#160 source audit, runtime unchanged
 

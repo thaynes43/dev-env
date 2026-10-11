@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -44,6 +45,115 @@ func privateHistoryFixture() (*v1alpha1.AgentSession, *corev1.PersistentVolumeCl
 
 func privateHistoryClient(objects ...client.Object) client.WithWatch {
 	return fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.AgentSession{}, &corev1.Pod{}).WithObjects(objects...).Build()
+}
+
+func TestPrivateHistoryRetainsOriginalPodBeforeLegacyCleanup(t *testing.T) {
+	for _, lifecycle := range []string{"suspend", "reap"} {
+		for _, state := range []string{"terminal", "never-started", "running", "running-rescued", "unknown-home", "unknown-causal", "unknown-admission", "canary-missing-history"} {
+			t.Run(lifecycle+"-"+state, func(t *testing.T) {
+				s, home := privateHistoryFixture()
+				s.Status.Rescue = nil
+				h := s.Status.PrivateHistory
+				h.ExecutorAttempted, h.ExecutorIntent = true, "original-intent"
+				pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: s.Name, Namespace: s.Namespace, UID: "original-executor",
+					OwnerReferences: []metav1.OwnerReference{ownerRef(s)}, Labels: map[string]string{v1alpha1.LabelRevision: "original-template"},
+					Annotations: map[string]string{privateHistoryExecutorAnnotation: h.ExecutorIntent, privateHistoryHomeAnnotation: h.HomeUID}},
+					Spec: corev1.PodSpec{NodeName: "worker-a", RestartPolicy: corev1.RestartPolicyNever, Containers: []corev1.Container{{Name: ContainerName}},
+						Volumes: []corev1.Volume{{Name: "home", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: home.Name}}}}},
+					Status: corev1.PodStatus{Phase: corev1.PodSucceeded}}
+				switch state {
+				case "never-started", "unknown-admission":
+					pod.Status = corev1.PodStatus{Phase: corev1.PodPending, ContainerStatuses: []corev1.ContainerStatus{{Name: ContainerName,
+						State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}}}}}
+				case "running", "running-rescued", "unknown-causal":
+					pod.Status = corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Name: ContainerName,
+						State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}}
+				}
+				switch state {
+				case "running-rescued":
+					s.Status.Rescue = &v1alpha1.RescueStatus{Result: v1alpha1.RescueVerified, Generation: s.Generation, PodUID: string(pod.UID)}
+				case "unknown-home":
+					home.UID = "unconfirmed-home"
+				case "unknown-causal":
+					pod.Annotations[privateHistoryExecutorAnnotation] = "unconfirmed-intent"
+				case "unknown-admission":
+					h.Admission, h.HomeUID, h.ExecutorIntent, h.ExecutorAttempted = "Unknown", "", "", false
+				case "canary-missing-history":
+					s.Spec.ProjectCanary = &v1alpha1.ProjectCanaryBinding{}
+					s.Status.PrivateHistory = nil
+				}
+				if lifecycle == "reap" {
+					at := metav1.Now()
+					s.DeletionTimestamp = &at
+				}
+				originalSession := s.DeepCopy()
+				base := privateHistoryClient(s, home, pod)
+				originalPod, originalHome := pod.DeepCopy(), home.DeepCopy()
+				ctx := context.Background()
+				if err := base.Get(ctx, client.ObjectKeyFromObject(pod), originalPod); err != nil {
+					t.Fatal(err)
+				}
+				if err := base.Get(ctx, client.ObjectKeyFromObject(home), originalHome); err != nil {
+					t.Fatal(err)
+				}
+				if lifecycle == "suspend" && state == "terminal" {
+					fixture, err := json.Marshal(struct {
+						Session *v1alpha1.AgentSession
+						Pod     *corev1.Pod
+						Home    *corev1.PersistentVolumeClaim
+					}{originalSession, originalPod, originalHome})
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Logf("preserved synthetic fixture: %s", fixture)
+				}
+				var deletedPodUIDs []string
+				deletes := 0
+				c := interceptor.NewClient(base, interceptor.Funcs{Delete: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.DeleteOption) error {
+					deletes++
+					if p, ok := o.(*corev1.Pod); ok {
+						deletedPodUIDs = append(deletedPodUIDs, string(p.UID))
+					}
+					// Forward the delete: the pre-fix regression proves actual loss.
+					return c.Delete(ctx, o, opts...)
+				}})
+				rescue := &fakeRescuer{calls: map[string]int{}}
+				for range 2 {
+					// Reconstruct with retention/canary flags off: the latch must suffice.
+					r := &Reconciler{Client: c, APIReader: base, Rescuer: rescue}
+					if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(s)}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var currentPod corev1.Pod
+				if err := base.Get(ctx, client.ObjectKeyFromObject(pod), &currentPod); err != nil {
+					t.Fatalf("original Pod UID %s was lost: %v; forwarded delete UIDs=%v, deletes=%d", originalPod.UID, err, deletedPodUIDs, deletes)
+				}
+				var currentHome corev1.PersistentVolumeClaim
+				var currentSession v1alpha1.AgentSession
+				if err := base.Get(ctx, client.ObjectKeyFromObject(home), &currentHome); err != nil {
+					t.Fatal(err)
+				}
+				if err := base.Get(ctx, client.ObjectKeyFromObject(s), &currentSession); err != nil {
+					t.Fatal(err)
+				}
+				if deletes != 0 || rescue.callsFor(pod.Name) != 0 || !apiequality.Semantic.DeepEqual(originalPod, &currentPod) || !apiequality.Semantic.DeepEqual(originalHome, &currentHome) {
+					t.Fatalf("retained Pod/HOME changed or legacy cleanup ran: deletes=%d, rescues=%d", deletes, rescue.callsFor(pod.Name))
+				}
+				if currentSession.UID != originalSession.UID || !apiequality.Semantic.DeepEqual(currentSession.Spec, originalSession.Spec) || !apiequality.Semantic.DeepEqual(currentSession.Finalizers, originalSession.Finalizers) ||
+					!apiequality.Semantic.DeepEqual(currentSession.Status.Rescue, originalSession.Status.Rescue) || currentSession.Status.ArchivedAt != nil || currentSession.Status.PrivateHistory.StopState != "Unknown" {
+					t.Fatal("retention changed Session identity/rescue or claimed stop/archive")
+				}
+				if state == "canary-missing-history" {
+					if currentSession.Status.PrivateHistory.Admission != "Unknown" || currentSession.Status.PrivateHistory.HomeUID != "" || currentSession.Status.PrivateHistory.ExecutorAttempted || currentSession.Status.PrivateHistory.ExecutorIntent != "" {
+						t.Fatal("missing history was replaced with guessed admission")
+					}
+				} else if !apiequality.Semantic.DeepEqual(currentSession.Status.PrivateHistory, originalSession.Status.PrivateHistory) {
+					t.Fatal("retention changed the private history latch or original executor")
+				}
+			})
+		}
+	}
 }
 
 func TestPrivateHistoryReapAndTimerPreserveIdentityAcrossOperatorReconstruction(t *testing.T) {

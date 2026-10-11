@@ -420,6 +420,12 @@ func (r *Reconciler) writeStatus(ctx context.Context, s *v1alpha1.AgentSession, 
 // verdict before anything else happens, then deletes the pod if 5.1's guard
 // allows it (D-51). stop means the reconcile ends here with res.
 func (r *Reconciler) removePod(ctx context.Context, s *v1alpha1.AgentSession, obs *observation) (res ctrl.Result, stop bool, err error) {
+	if privateHistoryProtected(s) {
+		// Legacy rescue may exec and change provider HOME. Retain the original
+		// executor before either rescue or deletion, including uncertain history.
+		obs.removalBlocked = errPrivateHistoryRetained
+		return ctrl.Result{}, false, nil
+	}
 	pod := obs.pod.obj
 	if !pod.DeletionTimestamp.IsZero() {
 		// Going already; its last event reconciles again.
