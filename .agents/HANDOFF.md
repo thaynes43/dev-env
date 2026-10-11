@@ -45,14 +45,23 @@ authority/catalog/templates/native ledger. Zero AgentSessions existed; actual
 publication/stopped-read and live-session upgrade acceptance remain pending.
 Scoped activity ended.
 
-## Built #175 source: durable offline inbox — 2026-10-11 UTC
+## Installed #175 durable offline inbox guards — 2026-10-11 UTC
 
 Source PR #194 merged as `f02d0ad276d007105795dd8611d0725c5176869b` after
 required CI and native original/integration reviews passed. Corrected validation
 provenance retained the original uncertain packet without source changes. Claude
 review failed before a verdict and remains optional; its receipt was read.
-The feature remains default-off; signed schema/operator promotion and actual
-offline recipient/API acknowledgement acceptance are pending.
+Release #193 shipped signed v2.18.0. GitOps #3820 merged as
+`271f8efef3085353cb42b0968913e1faf2b3adda` and installed signed f02d0ad
+with only the three explicit inbox flags. The 18:59:38 UTC observation
+`3654a185c965e6b8a5bcd941883ad9d39ce1c0938051dc8e4bb07854bb43f722`
+proves exact Established schemas, narrow operator-only grants and two Ready
+replicas, with all eleven other Pods/restart counts, four Jobs, prior schemas/
+authority, catalog/templates and failed native ledger preserved. Original
+observer findings and baseline were retained; a separately reviewed corrected
+helper pins the baseline and complete CRD specs. Scoped activity ended.
+Zero AgentSessions existed, so actual offline recipient/API acknowledgement
+and live-provider upgrade preservation remain unaccepted.
 
 [DESIGN-014](sagas/distributed-dev-env/designs/014-durable-offline-inbox.md)
 defines immutable attributed messages and explicit read acknowledgements in the
@@ -61,8 +70,9 @@ recipient ownership; separate project content scopes permit stopped-context
 reads without legacy broad-read access. Accepted retries survive recipient
 deletion; acknowledgements prove API receipt only. No provider prompt injection,
 native host identity or runtime delivery is claimed. Source implementation,
-native independent review, required CI, signed publication, narrow GitOps grants
-and a disposable offline trial remain gates. Claude review stays optional.
+native independent review, required CI, signed publication and narrow GitOps
+guards are delivered; a disposable offline trial remains an acceptance gate.
+Claude review stays optional.
 
 #175 atomic task-claim source #187 merged as
 `d95e8fbe7b3e1c07eed75959819cd35f90a155c4`; GitOps PR #3818 merged as `8e17a394` and installed the exact protected CRD,

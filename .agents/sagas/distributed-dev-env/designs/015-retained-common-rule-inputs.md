@@ -59,6 +59,14 @@ native repository instruction discovery and compose the saved common/project
 inputs with the separately pinned repository. Do not copy whole configuration
 or silently drop configured instructions.
 
+Projection creation has a durable original digest and an explicit Fresh,
+Preparing or Confirmed latch in the private ownership receipt. Persist and
+verify Preparing before exclusive creation; only full Confirmed original inputs
+may be reused. Missing, partial or unknown historical projection state refuses,
+including a repeated first-launch call before launch.json exists. Configuration
+drift cannot reconstruct lost inputs. The unreleased receipt format does not
+migrate uncertain older receipts; preserve their bytes and WIP.
+
 Resume uses the original retained global bytes and effective projection.
 Changed source ConfigMaps or current configuration cannot rewrite them. Foreign,
 partial, ambiguous or mismatched files/receipts refuse while preserving WIP;
