@@ -1,6 +1,9 @@
 package apiv1
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 const SessionDirectoryPath = "/v1/session-directory"
 
@@ -86,22 +89,43 @@ type DirectoryRevisions struct {
 	Common                 DirectoryCommon `json:"common"`
 }
 
+// A present zero report has an unknown timestamp, encoded as null. A nil report
+// pointer remains omitted; recorded values use the retained UTC seconds format.
+type DirectoryReportedTime struct {
+	time.Time
+}
+
+func (t DirectoryReportedTime) MarshalJSON() ([]byte, error) {
+	if t.IsZero() {
+		return []byte("null"), nil
+	}
+	return json.Marshal(t.UTC().Format(time.RFC3339))
+}
+
+func (t *DirectoryReportedTime) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		t.Time = time.Time{}
+		return nil
+	}
+	return t.Time.UnmarshalJSON(data)
+}
+
 type DirectoryWitness struct {
-	SourceGeneration       int64                `json:"sourceGeneration"`
-	SourceResourceVersion  string               `json:"sourceResourceVersion"`
-	ObservedAt             time.Time            `json:"observedAt"`
-	PodName                string               `json:"podName"`
-	PodUID                 string               `json:"podUID"`
-	Node                   string               `json:"node"`
-	Template               string               `json:"template"`
-	Image                  string               `json:"image"`
-	PodPhase               string               `json:"podPhase"`
-	Ready                  bool                 `json:"ready"`
-	ReportedState          string               `json:"reportedState"`
-	DeclaredConversationID string               `json:"declaredConversationID"`
-	ReportedHeartbeatAt    *time.Time           `json:"reportedHeartbeatAt,omitempty"`
-	ReportedTaskFinishedAt *time.Time           `json:"reportedTaskFinishedAt,omitempty"`
-	ReportedTask           *DirectoryTaskReport `json:"reportedTask,omitempty"`
+	SourceGeneration       int64                  `json:"sourceGeneration"`
+	SourceResourceVersion  string                 `json:"sourceResourceVersion"`
+	ObservedAt             time.Time              `json:"observedAt"`
+	PodName                string                 `json:"podName"`
+	PodUID                 string                 `json:"podUID"`
+	Node                   string                 `json:"node"`
+	Template               string                 `json:"template"`
+	Image                  string                 `json:"image"`
+	PodPhase               string                 `json:"podPhase"`
+	Ready                  bool                   `json:"ready"`
+	ReportedState          string                 `json:"reportedState"`
+	DeclaredConversationID string                 `json:"declaredConversationID"`
+	ReportedHeartbeatAt    *DirectoryReportedTime `json:"reportedHeartbeatAt,omitempty"`
+	ReportedTaskFinishedAt *DirectoryReportedTime `json:"reportedTaskFinishedAt,omitempty"`
+	ReportedTask           *DirectoryTaskReport   `json:"reportedTask,omitempty"`
 }
 
 type DirectoryTaskReport struct {

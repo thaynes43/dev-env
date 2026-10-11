@@ -119,6 +119,55 @@ func TestDirectoryWireProjectionPreservesMetadataJSON(t *testing.T) {
 		assertJSON(t, minimal, directoryWitness(minimal))
 		assertJSON(t, (*coord.DirectoryWitness)(nil), directoryWitness(nil))
 	})
+	for _, tc := range []struct {
+		name  string
+		stamp *metav1.Time
+		json  string
+	}{
+		{"nil-report-times-omit", nil, ""},
+		{"present-zero-report-times-null", &metav1.Time{}, "null"},
+		{"recorded-report-times-UTC-seconds", &stamp, `"` + stamp.UTC().Format(time.RFC3339) + `"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reported := witness.DeepCopy()
+			reported.ReportedHeartbeatAt, reported.ReportedTaskFinishedAt = tc.stamp, tc.stamp
+			projected := directoryWitness(reported)
+			assertJSON(t, reported, projected)
+			encoded, err := json.Marshal(projected)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &fields); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"reportedHeartbeatAt", "reportedTaskFinishedAt"} {
+				if raw, present := fields[key]; present != (tc.json != "") || string(raw) != tc.json {
+					t.Fatalf("%s changed report presence/time: got=%s present=%v want=%s", key, raw, present, tc.json)
+				}
+			}
+			// agent-run decodes these DTOs with the standard JSON decoder.
+			var decoded apiv1.DirectoryWitness
+			if err := json.Unmarshal(encoded, &decoded); err != nil {
+				t.Fatal("wire timestamps could not be decoded", err)
+			}
+			for _, value := range []*apiv1.DirectoryReportedTime{decoded.ReportedHeartbeatAt, decoded.ReportedTaskFinishedAt} {
+				if tc.stamp == nil || tc.stamp.IsZero() {
+					if value != nil {
+						t.Fatal("omitted/null report decoded as a recorded time", value)
+					}
+				} else if value == nil || !value.Equal(tc.stamp.UTC().Truncate(time.Second)) {
+					t.Fatal("recorded timestamp lost during wire decoding", value)
+				}
+			}
+		})
+	}
+	t.Run("report-time-null-decoder-clears-value", func(t *testing.T) {
+		value := apiv1.DirectoryReportedTime{Time: stamp.Time}
+		if err := json.Unmarshal([]byte("null"), &value); err != nil || !value.IsZero() {
+			t.Fatal("null did not reset a previously recorded timestamp", value, err)
+		}
+	})
 	t.Run("unknown-task-finish-time", func(t *testing.T) {
 		unknown := witness.DeepCopy()
 		unknown.ReportedTask.FinishedAt = metav1.Time{}

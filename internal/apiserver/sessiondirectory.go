@@ -128,12 +128,11 @@ func directoryRecordedTime(value metav1.Time) *time.Time {
 	return &stamp
 }
 
-func directoryReportedTime(value *metav1.Time) *time.Time {
+func directoryReportedTime(value *metav1.Time) *apiv1.DirectoryReportedTime {
 	if value == nil {
 		return nil
 	}
-	stamp := value.UTC().Truncate(time.Second)
-	return &stamp
+	return &apiv1.DirectoryReportedTime{Time: value.Time}
 }
 
 func directoryCommonSource(source *coord.DirectoryCommonSource) *apiv1.DirectoryCommonSource {
