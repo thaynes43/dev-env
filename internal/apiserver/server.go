@@ -43,6 +43,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/contextpublication"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
 	"github.com/thaynes43/dev-env/internal/templates"
@@ -50,6 +51,9 @@ import (
 
 // Server holds the API's handlers and what they read and write.
 type Server struct {
+	// Separate payload scope; neither legacy reads nor TaskClaim metadata grants it.
+	PublishedContexts   *contextpublication.KubeStore
+	ContextReadProjects []string
 	// Nil leaves immutable coordination routes disabled. This store always reads Live.
 	TaskClaims            *taskclaim.KubeStore
 	TaskClaimReadProjects []string
@@ -119,6 +123,8 @@ type route struct {
 // Handler returns the API's HTTP handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle(apiv1.PublishedContextsPath, s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.publishContext, http.MethodGet: s.listPublishedContexts}}))
+	mux.Handle(apiv1.PublishedContextsPath+"/{context}", s.serve(route{coordinator: true, methods: map[string]handler{http.MethodGet: s.getPublishedContext}}))
 	mux.Handle(apiv1.TaskClaimsPath, s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.createTaskClaim, http.MethodGet: s.listTaskClaims}}))
 	mux.Handle(apiv1.TaskClaimsPath+"/{claim}", s.serve(route{coordinator: true, methods: map[string]handler{http.MethodGet: s.getTaskClaim}}))
 	mux.Handle(apiv1.TaskBudgetsPath, s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.createTaskBudget}}))

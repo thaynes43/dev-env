@@ -102,6 +102,9 @@ func newFixtureWith(t *testing.T, funcs interceptor.Funcs, objs ...client.Object
 		if _, ok := obj.(*coord.TaskClaim); ok && obj.GetUID() == "" {
 			obj.SetUID(uuid.NewUUID())
 		}
+		if _, ok := obj.(*coord.PublishedContext); ok && obj.GetUID() == "" {
+			obj.SetUID(uuid.NewUUID())
+		}
 		if create != nil {
 			return create(ctx, c, obj, opts...)
 		}
