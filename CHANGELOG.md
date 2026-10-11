@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.16.0](https://github.com/thaynes43/dev-env/compare/v2.15.1...v2.16.0) (2026-10-11)
+
+
+### Features
+
+* **agentd:** guard private native Codex host preparation ([#185](https://github.com/thaynes43/dev-env/issues/185)) ([284e697](https://github.com/thaynes43/dev-env/commit/284e69762c48edc1370b12273d91ebbc758e436f))
+* **coordination:** retain atomic explicit task ownership ([#187](https://github.com/thaynes43/dev-env/issues/187)) ([d95e8fb](https://github.com/thaynes43/dev-env/commit/d95e8fbe7b3e1c07eed75959819cd35f90a155c4))
+
 ## [2.15.1](https://github.com/thaynes43/dev-env/compare/v2.15.0...v2.15.1) (2026-10-11)
 
 
