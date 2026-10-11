@@ -44,6 +44,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/grantexpiry"
 	"github.com/thaynes43/dev-env/internal/podexec"
+	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/shelf"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
@@ -77,35 +78,37 @@ func main() {
 }
 
 type options struct {
-	contextsEnabled         bool
-	contextReadProjects     []string
-	taskClaimsEnabled       bool
-	taskClaimReadProjects   []string
-	nativeFixtureEnabled    bool
-	nativeFixtureImage      string
-	taskBudgetsEnabled      bool
-	taskBudgetNamespace     string
-	taskBudgetWorkerImage   string
-	assignedTaskBudgets     map[string]string
-	sessionNamespace        string
-	templatesNamespace      string
-	templatesName           string
-	leaderElect             bool
-	metricsAddr             string
-	probeAddr               string
-	apiURL                  string
-	apiAddr                 string
-	apiTLSDir               string
-	humanSA                 string
-	clientSAs               []string
-	grantApprovalURL        string
-	coordinatorEnabled      bool
-	privateProjectTasks     bool
-	managedCodexTasks       bool
-	privateHistoryRetention bool
-	managedChildDecisions   bool
-	coordinatorHosts        []apiserver.CoordinatorHost
-	catalogBinding          *apiserver.CatalogBinding
+	contextsEnabled               bool
+	contextReadProjects           []string
+	taskClaimsEnabled             bool
+	taskClaimReadProjects         []string
+	nativeFixtureEnabled          bool
+	nativeFixtureImage            string
+	taskBudgetsEnabled            bool
+	taskBudgetNamespace           string
+	taskBudgetWorkerImage         string
+	assignedTaskBudgets           map[string]string
+	sessionNamespace              string
+	templatesNamespace            string
+	templatesName                 string
+	leaderElect                   bool
+	metricsAddr                   string
+	probeAddr                     string
+	apiURL                        string
+	apiAddr                       string
+	apiTLSDir                     string
+	humanSA                       string
+	clientSAs                     []string
+	grantApprovalURL              string
+	coordinatorEnabled            bool
+	privateProjectTasks           bool
+	managedCodexTasks             bool
+	privateHistoryRetention       bool
+	privateProjectCanariesEnabled bool
+	privateProjectCanaries        *projectcanary.Policy
+	managedChildDecisions         bool
+	coordinatorHosts              []apiserver.CoordinatorHost
+	catalogBinding                *apiserver.CatalogBinding
 }
 
 func parseFlags(args []string) (options, error) {
@@ -132,6 +135,8 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.privateProjectTasks, "enable-private-project-tasks", false, "enable new accepted-project tasks with private repositories and worktrees")
 	fs.BoolVar(&o.managedCodexTasks, "enable-managed-codex-tasks", false, "enable accepted-project managed Codex task admission")
 	fs.BoolVar(&o.privateHistoryRetention, "enable-private-history-retention", false, "retain private managed HOME and durable Session identity on reap and suspended autoarchive")
+	fs.BoolVar(&o.privateProjectCanariesEnabled, "enable-private-project-canaries", false, "enable only two explicitly configured private managed subscription rule canaries")
+	canaries := fs.String("private-project-canaries", "", "strict operator-owned JSON records for at most two fixed private managed canaries")
 	fs.BoolVar(&o.managedChildDecisions, "enable-managed-child-decisions", false, "enable private recorded child decisions and same-writer native continuation")
 	fs.BoolVar(&o.taskBudgetsEnabled, "enable-task-budgets", false, "enable retained finite managed task budget authority; native admission requires a separate trusted inspector")
 	fs.BoolVar(&o.taskClaimsEnabled, "enable-task-claims", false, "enable immutable explicit TaskClaim ownership in the separate coordination API group")
@@ -197,6 +202,21 @@ func parseFlags(args []string) (options, error) {
 	}
 	if o.coordinatorEnabled && (!o.managedCodexTasks || len(o.coordinatorHosts) == 0) {
 		return o, errors.New("coordinators require managed task support and explicit host bindings")
+	}
+	o.privateProjectCanaries, err = projectcanary.Parse(*canaries)
+	if err != nil {
+		return o, err
+	}
+	if o.privateProjectCanariesEnabled {
+		if o.apiAddr == "0" || o.apiURL == "" || o.catalogBinding == nil || !o.privateHistoryRetention || o.privateProjectTasks || o.privateProjectCanaries.ValidateClients(o.clientSAs, o.managedCodexTasks, o.humanSA, o.sessionNamespace+"/"+controller.ServiceAccountName) != nil {
+			return o, errors.New("private canaries require enabled API, fixed catalog, retention, exact client policy and disabled general private admission")
+		}
+		apiURL, err := url.Parse(o.apiURL)
+		if err != nil || apiURL.Scheme != "https" || apiURL.Host == "" || apiURL.RawQuery != "" || apiURL.Fragment != "" {
+			return o, errors.New("private canaries require a concrete HTTPS operator API URL")
+		}
+	} else {
+		o.privateProjectCanaries = nil
 	}
 	if o.managedChildDecisions && (!o.coordinatorEnabled || !o.managedCodexTasks) {
 		return o, errors.New("managed child decisions require enabled configured coordinators and managed native tasks")
@@ -306,6 +326,10 @@ func run(args []string) error {
 		return err
 	}
 	var decisionParents []string
+	cloneOwner := ""
+	if o.catalogBinding != nil {
+		cloneOwner = o.catalogBinding.CloneOwner
+	}
 	if o.coordinatorEnabled && o.managedChildDecisions {
 		for _, host := range o.coordinatorHosts {
 			decisionParents = append(decisionParents, host.ServiceAccount)
@@ -326,6 +350,8 @@ func run(args []string) error {
 		APIURL:                      o.apiURL,
 		ManagedCodexTasks:           o.managedCodexTasks,
 		PrivateHistoryRetention:     o.privateHistoryRetention,
+		PrivateProjectCanaries:      o.privateProjectCanaries,
+		PrivateProjectCloneOwner:    cloneOwner,
 		ManagedChildDecisions:       o.managedChildDecisions,
 		ManagedChildDecisionParents: decisionParents,
 		APIReader:                   mgr.GetAPIReader(),
@@ -397,6 +423,7 @@ func run(args []string) error {
 				ActivityNamespace: o.templatesNamespace,
 			},
 			Projects: o.catalogBinding, PrivateProjectTasks: o.privateProjectTasks, ManagedCodexTasks: o.managedCodexTasks, ManagedChildDecisions: o.managedChildDecisions,
+			PrivateProjectCanaries: o.privateProjectCanaries, PrivateHistoryRetention: o.privateHistoryRetention, PrivateCanaryTemplates: templatesKey,
 			Exec:             podExec,
 			Shelf:            rescueShelf,
 			Templates:        apiserver.TemplatesFrom(mgr.GetClient(), templatesKey),

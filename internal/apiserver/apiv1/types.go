@@ -115,7 +115,10 @@ const TokenAudience = "dev-env-operator"
 // agents arrive with plans 02, 03, 04 and 09, summoning (name, lane) with plan 10
 // and tool pools with plan 08.
 type CreateSessionRequest struct {
-	Project string `json:"project,omitempty"`
+	// CanaryID selects one fixed operator-owned private managed rule canary.
+	// A canary request contains this field only; its policy supplies the task.
+	CanaryID string `json:"canaryID,omitempty"`
+	Project  string `json:"project,omitempty"`
 	// Repo is the repository name under the GitHub owner, for example haynes-ops.
 	Repo string `json:"repo"`
 	// Base is the ref the worktree branches from. Empty means origin/main.

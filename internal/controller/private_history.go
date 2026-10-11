@@ -30,7 +30,9 @@ var errPrivateHistoryRetained = errors.New("private provider HOME and durable Se
 // The persisted latch remains authoritative across operator reconstruction and
 // flag changes. An invalid record is still protected, never a legacy fallback.
 func privateHistoryProtected(s *v1alpha1.AgentSession) bool {
-	return s.Spec.Workspace == nil && s.Status.PrivateHistory != nil
+	// The immutable canary binding protects its original HOME even when a
+	// status read/schema is uncertain or the global retention flag is disabled.
+	return s.Spec.ProjectCanary != nil || s.Spec.Workspace == nil && s.Status.PrivateHistory != nil
 }
 
 func (r *Reconciler) privateHistoryEnabled(s *v1alpha1.AgentSession) bool {
@@ -105,7 +107,7 @@ func (r *Reconciler) initializePrivateHistory(ctx context.Context, s *v1alpha1.A
 
 func privateHistoryIdentity(s *v1alpha1.AgentSession) error {
 	h := s.Status.PrivateHistory
-	if !privateHistoryProtected(s) || h.Version != 1 || h.SessionUID != string(s.UID) || h.HomeClaim != HomeClaimName(s.Name) ||
+	if !privateHistoryProtected(s) || h == nil || h.Version != 1 || h.SessionUID != string(s.UID) || h.HomeClaim != HomeClaimName(s.Name) ||
 		h.BindingGeneration < 1 || h.Provider != string(s.Spec.Agent) || h.StopState != "Unknown" || !controllerutil.ContainsFinalizer(s, Finalizer) {
 		return errors.New("private retention identity or protective Session finalizer is unconfirmed")
 	}
@@ -223,6 +225,10 @@ func (r *Reconciler) reservePrivateExecutor(ctx context.Context, s *v1alpha1.Age
 // Observe only uncached exact owners. Absence never erases an executor or turns
 // legacy rescue, heartbeat expiry or a PID boolean into private stop proof.
 func (r *Reconciler) observePrivateHistory(ctx context.Context, s *v1alpha1.AgentSession, obs *observation) {
+	if s.Status.PrivateHistory == nil || r.APIReader == nil {
+		obs.privateHistoryUnknown = errors.New("private retention or executor observation is unconfirmed")
+		return
+	}
 	if _, err := r.privateHistoryHome(ctx, s); err != nil {
 		obs.privateHistoryUnknown = err
 	}

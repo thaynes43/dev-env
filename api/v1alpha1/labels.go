@@ -4,6 +4,10 @@ package v1alpha1
 // (D-44). Clients select on the labels (the network policies, the broker's
 // standing policies, `agent-run fleet`); no template profile may set them.
 const (
+	// ProjectCanaryFinalizer protects the deterministic Session at atomic Create,
+	// before the private-history latch is established. This slice never releases it.
+	ProjectCanaryFinalizer = LabelPrefix + "project-canary-retained"
+	LabelProjectCanary     = LabelPrefix + "project-canary"
 	// LabelPrefix starts every label and annotation key the operator owns.
 	LabelPrefix = "dev-env.haynesops.com/"
 

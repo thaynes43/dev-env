@@ -1,9 +1,11 @@
 package apiserver
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -19,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	kjson "sigs.k8s.io/json"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -33,9 +36,34 @@ const nameAttempts = 9
 
 // createSession serves POST /v1/sessions.
 func (s *Server) createSession(ctx context.Context, w http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
-	var req apiv1.CreateSessionRequest
-	if err := decodeJSON(w, r, maxCreateBody, &req, true); err != nil {
+	// A canary is one retained executor. Its projected session token keeps
+	// heartbeats/observation but cannot dispatch a second task through the
+	// legacy create route either.
+	if c.kind == kindSession && c.session != nil && c.session.Spec.ProjectCanary != nil {
+		return 0, nil, forbidden("a private managed canary cannot create another executor")
+	}
+	var raw json.RawMessage
+	if err := decodeJSON(w, r, maxCreateBody, &raw, true); err != nil {
 		return 0, nil, err
+	}
+	var req apiv1.CreateSessionRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		return 0, nil, bodyError(err, maxCreateBody)
+	}
+	var keys map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &keys)
+	canaryRequest := req.CanaryID != ""
+	for key := range keys {
+		canaryRequest = canaryRequest || strings.EqualFold(key, "canaryID")
+	}
+	if canaryRequest {
+		strict, err := kjson.UnmarshalStrict(raw, &req)
+		if err != nil || len(strict) != 0 || len(keys) != 1 || keys["canaryID"] == nil || req.CanaryID == "" {
+			return 0, nil, invalid(fieldError("canaryID", "a canary create contains only its fixed canaryID"))
+		}
+		return s.createProjectCanary(ctx, w, c, req.CanaryID)
 	}
 	sess, err := s.newSession(ctx, req, c)
 	if err != nil {
