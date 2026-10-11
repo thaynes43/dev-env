@@ -47,6 +47,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
+	"github.com/thaynes43/dev-env/internal/sessiondirectory"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
 	"github.com/thaynes43/dev-env/internal/templates"
 )
@@ -111,6 +112,7 @@ type Reconciler struct {
 	// fail-closed preservation boundary. Existing Pods are never restarted.
 	PrivateHistoryRetention  bool
 	RetainedCommonRules      bool
+	SessionDirectory         *sessiondirectory.KubeStore
 	PrivateProjectCanaries   *projectcanary.Policy
 	PrivateProjectCloneOwner string
 	ManagedCodexTasks        bool
@@ -321,6 +323,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 		}
 	}
 
+	if s.Spec.SessionDirectory != nil {
+		if err := r.observeSessionDirectory(ctx, &s); err != nil {
+			return ctrl.Result{RequeueAfter: time.Second}, err
+		}
+	}
 	// A hold pod (D-55) is never the pod a session wants: when the session
 	// wants its pod again, the guard lets the hold pod go first.
 	hold := !obs.pod.missing && obs.pod.foreign == "" && isHoldPod(obs.pod.obj)
@@ -924,6 +931,12 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 	if err := r.validateProjectCanary(ctx, s, t); err != nil {
 		obs.removalBlocked = err
 		return nil
+	}
+	if s.Spec.SessionDirectory != nil {
+		if r.SessionDirectory == nil || r.SessionDirectory.Ensure(ctx, s) != nil {
+			obs.removalBlocked = sessiondirectory.ErrUnavailable
+			return nil
+		}
 	}
 	if s.Spec.Workspace != nil && s.Status.SharedPrivateHomeUID != "" {
 		if _, err := r.workspacePrivateHome(ctx, s, types.UID(s.Status.SharedPrivateHomeUID)); err != nil {

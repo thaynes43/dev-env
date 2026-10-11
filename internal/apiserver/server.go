@@ -46,6 +46,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/contextpublication"
 	"github.com/thaynes43/dev-env/internal/inbox"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
+	"github.com/thaynes43/dev-env/internal/sessiondirectory"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
 	"github.com/thaynes43/dev-env/internal/templates"
@@ -53,6 +54,10 @@ import (
 
 // Server holds the API's handlers and what they read and write.
 type Server struct {
+	SessionDirectory          *sessiondirectory.KubeStore
+	SessionDirectoryProjects  []string
+	MetadataDiscoveryProjects []string
+	DirectoryContexts         *contextpublication.KubeStore
 	// Separate payload scope; neither legacy reads nor TaskClaim metadata grants it.
 	PublishedContexts            *contextpublication.KubeStore
 	ContextReadProjects          []string
@@ -129,12 +134,16 @@ type route struct {
 	quiet       bool
 	coordinator bool
 	// New private content routes hide authenticated classification refusals.
-	inbox bool
+	inbox     bool
+	directory bool
 }
 
 // Handler returns the API's HTTP handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle(apiv1.SessionDirectoryPath, s.serve(route{directory: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.listDirectory}}))
+	mux.Handle(apiv1.SessionDirectoryPath+"/{directory}", s.serve(route{directory: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.getDirectory}}))
+	mux.Handle(apiv1.SessionDirectoryPath+"/{directory}/contexts", s.serve(route{directory: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.listDirectoryContexts}}))
 	mux.Handle(apiv1.PublishedContextsPath, s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.publishContext, http.MethodGet: s.listPublishedContexts}}))
 	mux.Handle(apiv1.PublishedContextsPath+"/{context}", s.serve(route{coordinator: true, methods: map[string]handler{http.MethodGet: s.getPublishedContext}}))
 	mux.Handle(apiv1.InboxPath, s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodPost: s.publishInbox, http.MethodGet: s.listInbox}}))
@@ -230,6 +239,9 @@ func (s *Server) serve(rt route) http.Handler {
 				return 0, err
 			}
 			if c, err = s.resolveCaller(r.Context(), id); err != nil {
+				if rt.directory {
+					return 0, directoryHidden()
+				}
 				var refusal *apiError
 				if rt.inbox && errors.As(err, &refusal) && (refusal.status == http.StatusForbidden || refusal.status == http.StatusNotFound) {
 					return 0, inboxHidden()

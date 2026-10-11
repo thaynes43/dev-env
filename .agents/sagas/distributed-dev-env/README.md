@@ -256,3 +256,5 @@ Full v1 retirement is plan 05 and requires usable replacements for the owner’s
 required workflows and explicit approval. The twenty-row historical audit is a
 migration inventory, not a universal gate for every pilot. Tool pods (08), summoned
 sessions (10), GPUs/local LLMs (09) and later items (06) retain their own scope.
+
+Next bounded #174 directory contract: [DESIGN-017](designs/017-durable-session-directory.md); default-off prospective managed enrollment, independent metadata discovery and retained exact-source context references. Source, installation and live acceptance remain separate.

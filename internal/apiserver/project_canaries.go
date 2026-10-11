@@ -3,6 +3,7 @@ package apiserver
 import (
 	"context"
 	"net/http"
+	"slices"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -53,6 +54,9 @@ func (s *Server) createProjectCanary(ctx context.Context, w http.ResponseWriter,
 	}
 	sess.Name = key.Name
 	sess.Spec.ProjectCanary = record.Binding(evidence, s.Projects.CloneOwner)
+	if s.SessionDirectory != nil && slices.Contains(s.SessionDirectoryProjects, record.Project) {
+		sess.Spec.SessionDirectory = &v1alpha1.SessionDirectoryEnrollment{Version: 1, Project: record.Project}
+	}
 	var common commonrules.Snapshot
 	if s.RetainedCommonRules {
 		common, err = commonrules.Resolve(ctx, s.Live, commonrules.Digest(evidence.Snapshot))

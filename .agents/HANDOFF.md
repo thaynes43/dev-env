@@ -1,6 +1,42 @@
 # HANDOFF: start here
 
-## Reviewable #174 source unit: partial managed output capture
+## Next #174 durable directory source increment
+
+[DESIGN-017](sagas/distributed-dev-env/designs/017-durable-session-directory.md)
+ratifies one default-off protected directory record per original namespace/UID,
+prospective managed enrollment before first executor, CAS last witnesses and
+fresh current state kept separate. Independent paged metadata discovery and
+exact-source context references grant no payload/control authority. No provider
+HOME/history import, migration, expiry or reaping; full native history and
+actual live/stopped discovery remain unaccepted. Local metadata is typed with
+runtime inference still GPU/household gated. Native source audit receipt
+`b9c92c9120cb5d579beebac08c5983d2108b932d1409f487e594322f49ee3c59`.
+
+Source implementation passed focused API/store/controller/common/capture/schema
+checks on released main. Native review found DIRECTORY-R1: whole optional status
+removal could erase a last witness. The root schema guard and real API negatives
+are corrected at `f610029a`; original HOLD/source/failed fixture remain retained.
+Corrective packet `40baa50b91b82cab6fd16e09de82d772112e3b1c5e6564824a014fc0abc040d6`
+binds the three-path correction and untouched twenty-path union. Corrected exact
+native review also found DIRECTORY-R2: CRD types linked Kubernetes into agent-run
+through the wire DTO. Standard-library DTOs and explicit server projection are
+corrected at `5ceabbc6`; the unchanged build guard, bounded cached CLI build and
+affected API/store checks passed. Packet
+`b9bb67ebfac2b923d0eec23a6fdf7d54dcfb3756d9ff291f1dc54ec13732836a`
+retains earlier findings/artifacts and unchanged generated/incoming paths.
+Final native review, CI, signed promotion and actual directory/pilot remain gates.
+DIRECTORY-R3 present-zero optional report timestamps are corrected at
+`b3b3b9a5` with standard-library nullable JSON encoding/decoding. Eleven projection
+cases, static CLI module guard and lint passed; corrected packet
+`423663ecc3b36ae3ae71fefe256da3b731ca2d4b71f7e6fa9f1f00374fc6a0c8`
+preserves all prior evidence and generated/incoming paths. Discovery uses an
+explicit global project grant for all existing exact configured trusted human/
+client/coordinator identities; it is not a per-SA map. Live Session readers must
+also prove their own accepted project. Future pilot identity/project bindings
+remain separate and do not select Q-24 fleet UX.
+
+
+## Built #174 source unit: partial managed output capture
 
 [DESIGN-016](sagas/distributed-dev-env/designs/016-managed-output-context-capture.md)
 uses existing assistant-event parsers and protected context storage. Separate
@@ -15,8 +51,14 @@ UTF-8 refuses before JSON substitution, marks Unknown and preserves an accepted
 prefix. Original CAPTURE-R1 packet/review and corrected/integration packets
 remain retained. Integration validation SHA256
 `124166ea8424ff92f5884f8099faa06dddb1b6ea49f7472c0248117542545371`.
-Final native integration review, exact-head hosted CI, signed release and
-separate GitOps/actual capture acceptance remain gates. Claude is optional/down.
+Final native review and exact-head required CI passed; #198 squash-merged as
+`24960dc128b219c48f4a32ba9f25e778f20e9a66` at 19:30:45 UTC. Native final
+receipt `4f5e0415f9d6fb10e369cfcd978423e9169b5b8141fbb82aedfba3f579cf395a`
+is retained. Release #197 merged as `fb53eb971da1beec1abc513fb1f251bb0926d0a6`
+and signed v2.19.0 published digest
+`4cf24d0c0bff7a9174a8a453340e3800d99fd9282b8787b6f7274f3474903210`
+is verified. Separate GitOps/actual capture acceptance remain gates. Claude
+failed before a verdict and is optional.
 
 Context guard GitOps #3819 installed at `f316532a`; receipt
 `cd911ef5e9e474a9cd54f2a951f65d748e6ac9d9ea83395231ddd4ca2641a06f`
@@ -43,6 +85,15 @@ first-launch refusal before launch.json exists. Native correction receipt
 `6fca81709bfaf74d6d22aecf580884ccc82c3fbc02d3839221a35f7628e3dc29`
 and both original/revised packets are retained; actual provider loading is pending.
 Legacy/common provenance remains Unknown; Q-24 is pending.
+
+Required common-source GET access installed through haynes-ops #3821 merge
+`519252fc05ca448f37c081a8d6b4ad32bdd593fe`. A separate namespaced Role grants
+only the operator GET on two fixed public v2 rule ConfigMaps. The 19:39:12 UTC
+receipt `bcaab45c470fcc2ce47c3c5fde0d1253a9406c9cdf2cbd3ed7f5e61c444b6d0f`
+proves exact Flux/grant and preservation of all thirteen Pods including both
+operators, four Jobs, nine schemas, sixty prior authority records, catalog/
+templates and native ledger. No rollout, provider turn or session was created.
+Common/canary/capture activation remains separate; global admission stays false.
 
 ## Installed #173 owned roots, narrow acceptance — 2026-10-11 UTC
 
