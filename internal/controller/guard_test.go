@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -15,6 +16,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
@@ -92,6 +94,37 @@ var rescuedHere = map[string]bool{"verified here": true, "clean here": true, "fa
 
 var allPhases = []v1alpha1.SessionPhase{"", v1alpha1.PhasePending, v1alpha1.PhaseRunning, v1alpha1.PhaseIdle,
 	v1alpha1.PhaseDraining, v1alpha1.PhaseSuspended, v1alpha1.PhaseArchived, v1alpha1.PhaseFailed}
+
+func TestPrivateHistoryPodDeletionBoundaryRetainsUncertainIdentity(t *testing.T) {
+	for _, state := range []string{"recorded", "partial", "unknown-version", "canary-missing-history"} {
+		t.Run(state, func(t *testing.T) {
+			s, _ := privateHistoryFixture()
+			switch state {
+			case "partial":
+				s.Status.PrivateHistory = &v1alpha1.PrivateHistoryStatus{StopState: "Unknown"}
+			case "unknown-version":
+				s.Status.PrivateHistory.Version = 99
+			case "canary-missing-history":
+				s.Spec.ProjectCanary = &v1alpha1.ProjectCanaryBinding{}
+				s.Status.PrivateHistory = nil
+			}
+			pod := guardPods["succeeded"]()
+			pod.Name, pod.Namespace, pod.UID = s.Name, s.Namespace, "original-executor"
+			pod.OwnerReferences = []metav1.OwnerReference{ownerRef(s)}
+			if err := podRemovalAllowed(s, pod); !errors.Is(err, errPrivateHistoryRetained) {
+				t.Fatalf("private removal boundary: %v", err)
+			}
+			c := privateHistoryClient(s, pod)
+			if err := deletePod(context.Background(), c, s, pod); !errors.Is(err, errPrivateHistoryRetained) {
+				t.Fatalf("direct deletion bypassed private retention: %v", err)
+			}
+			var retained corev1.Pod
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(pod), &retained); err != nil || retained.UID != pod.UID {
+				t.Fatalf("original Pod was lost: %v", err)
+			}
+		})
+	}
+}
 
 // TestPodGuardTable is 5.1's pod rule over every phase, operating mode, delete,
 // pod state and rescue record: a pod goes only in the Suspended transition, and

@@ -60,7 +60,12 @@ func wantsPodGone(s *v1alpha1.AgentSession) bool {
 // keeps it too, until drain is built.
 //
 // A hold pod (D-55) runs no agent, so holdRemovalAllowed judges it instead.
+// Private history protection retains the original pod regardless of legacy
+// rescue or process state; neither is private stop or preservation proof.
 func podRemovalAllowed(s *v1alpha1.AgentSession, pod *corev1.Pod) error {
+	if privateHistoryProtected(s) {
+		return errPrivateHistoryRetained
+	}
 	if s.Spec.Workspace != nil {
 		rec := s.Status.Rescue
 		if !sharedRescued(s) || !controlledBySession(pod, s) {
