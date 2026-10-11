@@ -52,6 +52,32 @@ Finite audit SHA256 `9c96d404956f661f1a09f5361a1ffa6f9e1874f8a5e3e1a7848b00808db
 Source implementation, native review, CI, signed promotion and actual-provider
 acceptance remain gates. Existing sessions must not restart for reporting alone.
 
+COST-R1 source correction `c97f800c` removes raw forwarding at collection and
+at the final heartbeat Send boundary. Actual old-decoder wire cases, incoming
+legacy/typed liveness and stable-counter/deadline budget cases passed; private
+raw results and generated schemas stay preserved. Corrected packet
+`192b9a2ccc1bc0d022419fe2090f1ebfbe6c0187e94b709c4ba5aff06187c525`
+retains the original native HOLD. Final independent review and CI still gate
+merge, followed by signed installation and separate actual-provider acceptance.
+
+## Installed common-rule canary prerequisites, admission disabled
+
+[haynes-ops #3822](https://github.com/thaynes43/haynes-ops/pull/3822) merged as
+`1a386bd136e13928b5e82f9546c04fab3fd3793b`. Exact signed source24960dc operator,
+v2.19.0 templates, AgentSession/PublishedContext schemas, minimal provider
+profiles, versioned catalog/common sources and narrow policies installed with
+all admission flags unchanged/off and no provider record/task. Native source
+and observer reviews and required CI passed; optional Claude failed before a
+verdict and was read without retry. One 21-GET observation passed:
+`31b6e674f275c544e0710aa97453c64c757a68462c2052e0c66b77d8c0b07e48`.
+All six affected Flux Kustomizations reached the exact merge, both operator
+replicas are Ready, and all 11 other Pod UIDs/restarts/specs, four Jobs, CRD UIDs/
+unrelated schemas, existing authority/guards, source identities and failed-native
+ledger remain preserved. The scoped activity ended. This accepts prerequisite
+installation only; actual both-provider instruction loading, private task pins,
+prospective directory/usage and the disposable owner pilot remain unaccepted.
+Install their final source/guards before separate fixed-record activation.
+
 ## Built #174 source unit: partial managed output capture
 
 [DESIGN-016](sagas/distributed-dev-env/designs/016-managed-output-context-capture.md)

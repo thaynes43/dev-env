@@ -90,6 +90,15 @@ budget fields must continue; test the actual outgoing JSON against the old
 decoder. Preserve private results and existing stored legacy values, without
 migration or restart of existing agents.
 
+COST-R1 is corrected at `c97f800c`: collection stops forwarding raw Usage and
+the final Send boundary removes it on a value copy, including direct callers.
+Actual outgoing JSON/old-decoder, incoming legacy compatibility, typed/liveness
+and stable-counter/deadline budget cases passed; private raw results and existing
+generated schemas remain intact. Packet
+`192b9a2ccc1bc0d022419fe2090f1ebfbe6c0187e94b709c4ba5aff06187c525`
+preserves the original HOLD and prior fixtures. Final native review and CI remain
+gates; this is a source correction, without provider or deployment acceptance.
+
 New CLI/parser wording labels Unknown cost, explicit reported zero/nonzero,
 USD CLI equivalent estimate provenance, initial invocation coverage, requested
 exact model and actual-model Unknown. Context/capture assertions retain their
