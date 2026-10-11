@@ -18,11 +18,13 @@ occurred.
 
 The latest accepted deployment evidence is the v2.20 prerequisite observation
 from 22:00 UTC, separately evaluated offline. This client release changes no
-GitOps pins and requires no session restart. Ops #3824 is still unmerged: Q-26
-holds the activation-checker route at three unsuccessful preparations. The
-complete Pod metadata predicate remains unimplemented/pending a finite reviewed
-generated-field contract. No fourth checker, baseline or rollout without an
-explicit owner answer. Q-24 also remains pending; no Codex fleet UX is chosen.
+GitOps pins and requires no session restart. Ops #3824 is still unmerged. Q-26's
+owner answer authorizes ONE final focused R4 metadata correction, preserving the
+three unsuccessful preparations and their counter. Its complete finite source/
+generated metadata predicate remains unimplemented, pending root ratification
+and independent preparation review before the same bounded checks. No fifth
+candidate, alternate method or automatic retry if R4 fails. No new baseline,
+rollout or provider attempt yet. Q-24 remains pending; no fleet UX is chosen.
 
 Before EACH first fixed probe: reviewed configuration installed/preserved, a
 bound merged-source client and one fresh complete authorized Directory page.

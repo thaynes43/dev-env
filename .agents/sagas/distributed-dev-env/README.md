@@ -290,5 +290,6 @@ Next bounded #174 directory contract: [DESIGN-017](designs/017-durable-session-d
 Client source/release update: #204/#206 are merged and v2.21.0 includes explicit
 single-request Directory and ID-only canary clients. [Evidence and remaining acceptance](verification/clients-2026-10-11.md)
 keeps bound build, publication, historical v2.20 installation and runtime gates
-separate. Actual both-provider rules/pilot remain unaccepted; Q-26 STOP3 and
-Q-24 routing are pending. Claude reviews remain optional while unavailable.
+separate. Actual both-provider rules/pilot remain unaccepted. Q-26 now authorizes
+ONE final focused correction with the three failed preparations preserved;
+Q-24 routing remains pending. Claude reviews remain optional while unavailable.
