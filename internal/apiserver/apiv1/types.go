@@ -3,7 +3,7 @@
 // /v1/grants, and the error document every refusal carries. agentd's heartbeat body is
 // protocol.Status (internal/agentd/protocol, D-41).
 //
-// It depends on the standard library only, so agent-run (plan 01 step 7), which
+// It depends on the standard library and agentd's standard-library protocol, so agent-run (plan 01 step 7), which
 // is one static binary (D-06), imports it without the Kubernetes libraries.
 package apiv1
 
@@ -228,12 +228,14 @@ type Session struct {
 	Node     string `json:"node,omitempty"`
 	Revision string `json:"revision,omitempty"`
 	// Outdated is set when the pod runs an older template revision.
-	Outdated      bool           `json:"outdated,omitempty"`
-	AgentStatus   *AgentStatus   `json:"agentStatus,omitempty"`
-	RemoteControl *RemoteControl `json:"remoteControl,omitempty"`
-	Outcome       *Outcome       `json:"outcome,omitempty"`
-	Usage         *Usage         `json:"usage,omitempty"`
-	Conditions    []Condition    `json:"conditions,omitempty"`
+	Outdated         bool              `json:"outdated,omitempty"`
+	AgentStatus      *AgentStatus      `json:"agentStatus,omitempty"`
+	RemoteControl    *RemoteControl    `json:"remoteControl,omitempty"`
+	Outcome          *Outcome          `json:"outcome,omitempty"`
+	Usage            *Usage            `json:"usage,omitempty"`
+	UsageObservation *UsageObservation `json:"usageObservation,omitempty"`
+	UsageConflict    *UsageConflict    `json:"usageConflict,omitempty"`
+	Conditions       []Condition       `json:"conditions,omitempty"`
 }
 
 // PrivateHistory is bounded retained provenance under the existing Session ACL.

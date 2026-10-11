@@ -508,6 +508,13 @@ type AgentSessionStatus struct {
 	// +optional
 	Usage *UsageStatus `json:"usage,omitempty"`
 
+	// UsageObservation retains one explicitly attributed initial CLI snapshot.
+	// +optional
+	UsageObservation *UsageObservationStatus `json:"usageObservation,omitempty"`
+	// UsageConflict is a bounded unavailable/conflict receipt, never a new total.
+	// +optional
+	UsageConflict *UsageConflictStatus `json:"usageConflict,omitempty"`
+
 	// Rescue records the session's newest rescue (D-10, D-51).
 	// +optional
 	Rescue *RescueStatus `json:"rescue,omitempty"`
@@ -762,6 +769,122 @@ type UsageStatus struct {
 	OutputTokens int64 `json:"outputTokens,omitempty"`
 }
 
+// TokenObservationStatus preserves independent metric presence.
+// +kubebuilder:validation:XValidation:rule="(self.state == 'Reported') == has(self.amount)",message="reported token count requires an amount; Unknown omits it"
+type TokenObservationStatus struct {
+	// +kubebuilder:validation:Enum=Unknown;Reported
+	// +kubebuilder:validation:MaxLength=64
+	State string `json:"state"`
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=1000000000000000
+	// +optional
+	Amount *int64 `json:"amount,omitempty"`
+}
+
+// CostObservationStatus is a CLI equivalent estimate, never billed dollars.
+// +kubebuilder:validation:XValidation:rule="self.state == 'Reported' ? (has(self.amount) && has(self.unit) && self.unit == 'USD' && self.kind == 'ProviderCLIEquivalentEstimate') : (!has(self.amount) && !has(self.unit) && self.kind == 'Unknown')",message="cost requires explicit presence and CLI estimate provenance"
+type CostObservationStatus struct {
+	// +kubebuilder:validation:Enum=Unknown;Reported
+	// +kubebuilder:validation:MaxLength=64
+	State string `json:"state"`
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$`
+	// +optional
+	Amount string `json:"amount,omitempty"`
+	// +kubebuilder:validation:Enum=USD
+	// +kubebuilder:validation:MaxLength=64
+	// +optional
+	Unit string `json:"unit,omitempty"`
+	// +kubebuilder:validation:Enum=Unknown;ProviderCLIEquivalentEstimate
+	// +kubebuilder:validation:MaxLength=64
+	Kind string `json:"kind"`
+}
+
+type UsageSourceStatus struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	SessionUID string `json:"sessionUID"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	PodUID string `json:"podUID"`
+	// +kubebuilder:validation:Enum=claude;codex
+	// +kubebuilder:validation:MaxLength=64
+	Provider string `json:"provider"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	RequestedModel string `json:"requestedModel"`
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
+	AttemptID string `json:"attemptID"`
+}
+
+// UsageObservationStatus is immutable publisher evidence for the first
+// managed invocation. It does not attest actual model, billing or child totals.
+// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="original usage observation cannot change"
+// +kubebuilder:validation:XValidation:rule="has(self.logicalTaskUID) == has(self.logicalTaskEpoch) && has(self.logicalTaskUID) == has(self.workerID)",message="logical task provenance requires one complete server binding"
+// +kubebuilder:validation:XValidation:rule="self.source.provider != 'codex' || self.cost.state == 'Unknown'",message="Codex token-only usage cannot assert cost"
+type UsageObservationStatus struct {
+	// +kubebuilder:validation:Enum=1
+	Version int32 `json:"version"`
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
+	ID         string            `json:"id"`
+	Source     UsageSourceStatus `json:"source"`
+	ObservedAt metav1.Time       `json:"observedAt"`
+	// +kubebuilder:validation:Enum=InitialManagedInvocation
+	// +kubebuilder:validation:MaxLength=64
+	Coverage string `json:"coverage"`
+	// +kubebuilder:validation:Enum=InvocationFinalTotal
+	// +kubebuilder:validation:MaxLength=64
+	CounterSemantics string `json:"counterSemantics"`
+	// +kubebuilder:validation:Enum=Final;Partial
+	// +kubebuilder:validation:MaxLength=64
+	ResultState              string                 `json:"resultState"`
+	InputTokens              TokenObservationStatus `json:"inputTokens"`
+	OutputTokens             TokenObservationStatus `json:"outputTokens"`
+	CacheReadInputTokens     TokenObservationStatus `json:"cacheReadInputTokens"`
+	CacheCreationInputTokens TokenObservationStatus `json:"cacheCreationInputTokens"`
+	Cost                     CostObservationStatus  `json:"cost"`
+	// +kubebuilder:validation:Enum=Unknown
+	// +kubebuilder:validation:MaxLength=64
+	AggregationScope string `json:"aggregationScope"`
+	// +kubebuilder:validation:Enum=Unknown
+	// +kubebuilder:validation:MaxLength=64
+	ActualModelState string `json:"actualModelState"`
+	// +kubebuilder:validation:Enum=Unknown
+	// +kubebuilder:validation:MaxLength=64
+	SubscriptionQuotaState string `json:"subscriptionQuotaState"`
+	// +kubebuilder:validation:Enum=Unknown
+	// +kubebuilder:validation:MaxLength=64
+	APIBillingState string `json:"apiBillingState"`
+	// +kubebuilder:validation:Enum=Unknown
+	// +kubebuilder:validation:MaxLength=64
+	LocalResourceState string `json:"localResourceState"`
+	// +kubebuilder:validation:MaxLength=128
+	// +optional
+	LogicalTaskUID string `json:"logicalTaskUID,omitempty"`
+	// +kubebuilder:validation:MaxLength=20
+	// +kubebuilder:validation:Pattern=`^[1-9][0-9]*$`
+	// +optional
+	LogicalTaskEpoch string `json:"logicalTaskEpoch,omitempty"`
+	// +kubebuilder:validation:MaxLength=128
+	// +optional
+	WorkerID string `json:"workerID,omitempty"`
+}
+
+type UsageConflictStatus struct {
+	// +kubebuilder:validation:Enum=Unknown
+	// +kubebuilder:validation:MaxLength=64
+	State string `json:"state"`
+	// +kubebuilder:validation:Enum=InvalidIdentity;InvalidPayload;ConflictingSnapshot
+	// +kubebuilder:validation:MaxLength=64
+	Reason string `json:"reason"`
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
+	IncomingSHA256 string      `json:"incomingSHA256"`
+	ObservedAt     metav1.Time `json:"observedAt"`
+}
+
 // RescueResult is a rescue's verdict (D-51).
 // +kubebuilder:validation:Enum=Verified;CleanAndPushed;NoWorkAdmitted;Failed
 type RescueResult string
@@ -915,6 +1038,7 @@ type RescuedRef struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.sharedAdmission) || (has(self.status) && has(self.status.sharedAdmission))",message="recorded shared admission cannot be erased with status"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.sessionDirectory) || (has(self.status) && has(self.status.sessionDirectory))",message="directory evidence cannot be erased with status"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.privateHistory) || (has(self.status) && has(self.status.privateHistory))",message="private history retention cannot be erased with status"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.usageObservation) || (has(self.status) && has(self.status.usageObservation))",message="original usage observation cannot be erased"
 type AgentSession struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

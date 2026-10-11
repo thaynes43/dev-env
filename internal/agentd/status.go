@@ -107,6 +107,9 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, session string, no
 		task := res.TaskResult
 		st.Agent.Task = &task
 		st.Usage = res.Usage
+		if launched {
+			st.UsageObservation = collectedInitialUsage(first, s.StateDir, res.UsageObservation)
+		}
 	}
 	if launched {
 		if t := newestMtime(first.LogPath, first.EventsPath); !t.IsZero() {

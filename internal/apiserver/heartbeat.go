@@ -94,7 +94,7 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 
 	}
 	sess.Status.Agent = agentStatus(st, metav1.NewTime(s.now()))
-	if st.Usage != nil {
+	if st.Usage != nil && st.UsageObservation == nil && sess.Status.UsageObservation == nil {
 		sess.Status.Usage = usageStatus(*st.Usage)
 	}
 	patch := client.MergeFrom(base)
@@ -106,6 +106,9 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 	}
 	if err := s.Client.Status().Patch(ctx, &sess, patch); err != nil {
 		return 0, nil, fromKubeError(err, "session "+key.Name+" status")
+	}
+	if err := s.recordUsageObservation(ctx, &sess, c.pod, st.UsageObservation); err != nil {
+		return 0, nil, fromKubeError(err, "session "+key.Name+" usage observation")
 	}
 	return http.StatusNoContent, nil, nil
 }
