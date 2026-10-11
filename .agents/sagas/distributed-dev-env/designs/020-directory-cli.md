@@ -74,3 +74,11 @@ invalid UTF-8 refusal, one-request failure, redirect refusal and existing retry
 controls passed. No TestMain, schema-host retry, runtime API or provider call
 occurred. Final integrated-head native review and required CI remain gates.
 A bound client build and actual scoped read remain separate runtime acceptance.
+
+## Source shipping record — 2026-10-11
+
+Source #204 mergedc9493db0 after native309d/CI38180555833. Releasev2.21.0
+includes it with D21's ID-only client. See [client evidence](../verification/clients-2026-10-11.md)
+for the bound build and separate publication/deployment/runtime gates. The
+original null-presence regression and corrected packet925a5b93 remain retained;
+actual authorized Directory reads and provider campaign remain unaccepted.

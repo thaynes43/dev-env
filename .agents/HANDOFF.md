@@ -1,5 +1,45 @@
 # HANDOFF: start here
 
+## Latest client increment — 2026-10-11 UTC
+
+Source #204 (`c9493db0`) and #206 (`562d7df2`) are merged after focused checks,
+required CI and native independent review. Release #205 (`42fb8bf2`) publishes
+[v2.21.0](https://github.com/thaynes43/dev-env/releases/tag/v2.21.0) with both
+explicit single-request clients. These source/release facts supersede the
+historical pending-merge entries below.
+
+[Client evidence and remaining acceptance](sagas/distributed-dev-env/verification/clients-2026-10-11.md)
+binds the cached dev client to actual merged source. Its one build and metadata
+guards passed without executing it, changing global PATH or using runtime auth.
+Native saved-result reviews18502c6e (build) andbb3b7547 (publication) passed.
+v2.21 is a verified signed artifact; it is not a runtime rollout.
+Neither new client has called the operator API; no fixed provider attempt has
+occurred.
+
+The latest accepted deployment evidence is the v2.20 prerequisite observation
+from 22:00 UTC, separately evaluated offline. This client release changes no
+GitOps pins and requires no session restart. Ops #3824 is still unmerged. Q-26's
+owner answer authorizes ONE final focused R4 metadata correction, preserving the
+three unsuccessful preparations and their counter. Its complete finite source/
+generated metadata predicate remains unimplemented, pending root ratification
+and independent preparation review before the same bounded checks. No fifth
+candidate, alternate method or automatic retry if R4 fails. No new baseline,
+rollout or provider attempt yet. Q-24 remains pending; no fleet UX is chosen.
+
+Before EACH first fixed probe: reviewed configuration installed/preserved, a
+bound merged-source client and one fresh complete authorized Directory page.
+Keep the permanent IDs, original receipts and one initial attempt per provider.
+Global private admission remains disabled in the last verified configuration.
+Actual both-provider loaded rules, private GitHub authorization, live/stopped
+discovery, full native history, claims/inbox consumer behavior, whole-task
+budget/recovery integration and the concurrent owner pilot remain unaccepted.
+Local-provider contracts remain in scope; live inference waits for GPU readiness
+and household reservations. Claude review is optional while down; required CI
+and independent native review remain gates. Parent issues stay open.
+
+Q-25 needs no decision: the local DNS/schema route stopped, and shipping uses
+authorized hosted CI plus saved real-API evidence. No DNS investigation opened.
+
 ## #173 ID-only canary client prerequisite
 
 [DESIGN-021](sagas/distributed-dev-env/designs/021-canary-cli.md) ratifies explicit
