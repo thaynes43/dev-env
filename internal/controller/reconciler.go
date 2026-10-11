@@ -110,6 +110,7 @@ type Reconciler struct {
 	// PrivateHistoryRetention opts new/observed private lifecycles into a durable
 	// fail-closed preservation boundary. Existing Pods are never restarted.
 	PrivateHistoryRetention  bool
+	RetainedCommonRules      bool
 	PrivateProjectCanaries   *projectcanary.Policy
 	PrivateProjectCloneOwner string
 	ManagedCodexTasks        bool

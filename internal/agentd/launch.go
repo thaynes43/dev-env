@@ -39,10 +39,11 @@ const (
 // writes it, and the tmux pane reads it, so no prompt is ever quoted through a
 // shell (v1 passed it through `tmux send-keys`).
 type Launch struct {
-	NativeThreadConfirmed bool   `json:"nativeThreadConfirmed,omitempty"`
-	Provider              string `json:"provider,omitempty"`
-	SessionUID            string `json:"sessionUID,omitempty"`
-	PodUID                string `json:"podUID,omitempty"`
+	CommonInputs          *CommonInstructionBinding `json:"commonInputs,omitempty"`
+	NativeThreadConfirmed bool                      `json:"nativeThreadConfirmed,omitempty"`
+	Provider              string                    `json:"provider,omitempty"`
+	SessionUID            string                    `json:"sessionUID,omitempty"`
+	PodUID                string                    `json:"podUID,omitempty"`
 	// NativeInvocationID identifies one platform-authored native invocation.
 	// A continuation has its own ID and a consumed causal predecessor proof.
 	NativeInvocationID string              `json:"nativeInvocationID,omitempty"`
@@ -192,6 +193,10 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 		return Launch{}, err
 	}
 	argv = append(argv, rules...)
+	l.CommonInputs, err = commonLaunchBinding(s, sess)
+	if err != nil {
+		return Launch{}, err
+	}
 	l.Argv = append(argv,
 		"--output-format", "stream-json", "--verbose",
 		"-p")
@@ -212,6 +217,9 @@ func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first
 	if err := claudeOnStaticToken(s, sess); err != nil {
 		return Launch{}, err
 	}
+	if err := validateCommonResume(s, sess, first); err != nil {
+		return Launch{}, err
+	}
 	if first.ConversationID == "" {
 		return Launch{}, errors.New("the first launch records no conversation id, so there is nothing to resume")
 	}
@@ -222,14 +230,18 @@ func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first
 	if sess.Workspace != nil {
 		guard = sharedGuard(ws, sess.Mode == protocol.ModeTask)
 	}
-	rules, err := providerProjectArgs(s, sess, guard)
+	rules, err := providerProjectArgs(s, sess, guard, true)
 	if err != nil {
 		return Launch{}, err
 	}
 	argv := append(claudeArgs(s, sess), "--resume", first.ConversationID)
 	argv = append(argv, rules...)
+	common, err := commonLaunchBinding(s, sess)
+	if err != nil {
+		return Launch{}, err
+	}
 	return Launch{
-		Session:        sess.Name,
+		CommonInputs: common, Session: sess.Name,
 		Argv:           argv,
 		Dir:            ws.Worktree,
 		Env:            []string{"CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=dev-env"},

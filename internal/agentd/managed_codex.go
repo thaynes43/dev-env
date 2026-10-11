@@ -11,11 +11,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/commonrules"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
 
@@ -28,6 +30,9 @@ var nativeThreadID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 // server's named catalog resolver admits a new task.
 func prepareProjectTask(s *Settings, sess protocol.Session) error {
 	if len(sess.ProjectSnapshot) == 0 {
+		if len(sess.CommonRules) != 0 || s.RetainedCommonRules {
+			return commonrules.ErrRefused
+		}
 		return nil
 	}
 	snapshot, err := acceptedProjectTask(*s, sess)
@@ -35,6 +40,9 @@ func prepareProjectTask(s *Settings, sess protocol.Session) error {
 		return err
 	}
 	if _, err := StoreProjectSnapshot(*s, snapshot); err != nil {
+		return err
+	}
+	if err := prepareCommonTask(*s, sess); err != nil {
 		return err
 	}
 	s.TaskRepositoryURL = snapshot.Selected().URL()
@@ -54,7 +62,7 @@ func acceptedProjectTask(s Settings, sess protocol.Session) (projectcatalog.Snap
 	return snapshot, nil
 }
 
-func providerProjectArgs(s Settings, sess protocol.Session, guard string) ([]string, error) {
+func providerProjectArgs(s Settings, sess protocol.Session, guard string, resumes ...bool) ([]string, error) {
 	if len(sess.ProjectSnapshot) == 0 {
 		return []string{"--append-system-prompt", guard}, nil
 	}
@@ -65,6 +73,14 @@ func providerProjectArgs(s Settings, sess protocol.Session, guard string) ([]str
 	path, err := StoreProjectSnapshot(s, snapshot)
 	if err != nil {
 		return nil, err
+	}
+	if len(sess.CommonRules) != 0 {
+		rules, err := readSavedProjectRules(path, snapshot)
+		if err != nil {
+			return nil, err
+		}
+		resume := len(resumes) > 0 && resumes[0]
+		return retainedCommonArgs(s, sess, guard, resume, string(rules))
 	}
 	if sess.Agent == protocol.AgentClaude {
 		return ProjectRuleInputs(sess.Agent, path, "", guard, snapshot)
@@ -83,40 +99,61 @@ func providerProjectArgs(s Settings, sess protocol.Session, guard string) ([]str
 // Read native configuration without rewriting it. A configured native profile
 // can contribute developer text and fallback discovery just like the root.
 func codexConfiguredInstructions(s Settings) (string, []string, error) {
+	developer, fallbacks, _, err := codexConfiguredInputs(s)
+	return developer, fallbacks, err
+}
+
+func codexConfiguredInputs(s Settings) (string, []string, int, error) {
+	return codexConfiguredInputsAt(filepath.Join(s.CodexHome, "config.toml"))
+}
+
+func codexConfiguredInputsAt(path string) (string, []string, int, error) {
 	type instructions struct {
-		Developer string   `toml:"developer_instructions"`
-		Fallbacks []string `toml:"project_doc_fallback_filenames"`
+		Developer   string   `toml:"developer_instructions"`
+		Fallbacks   []string `toml:"project_doc_fallback_filenames"`
+		DocMaxBytes *int     `toml:"project_doc_max_bytes"`
 	}
 	var cfg struct {
 		instructions
 		Profile  string                  `toml:"profile"`
 		Profiles map[string]instructions `toml:"profiles"`
 	}
-	f, err := os.Open(filepath.Join(s.CodexHome, "config.toml"))
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
 	if errors.Is(err, os.ErrNotExist) {
-		return "", nil, nil
+		return "", nil, 0, nil
 	}
 	if err != nil {
-		return "", nil, errors.New("native Codex configuration is unreadable")
+		return "", nil, 0, errors.New("native Codex configuration is unreadable")
 	}
 	defer func() { _ = f.Close() }()
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() || st.Size() > 256<<10 {
+		return "", nil, 0, errors.New("native Codex configuration type or size is unconfirmed")
+	}
 	data, err := io.ReadAll(io.LimitReader(f, (256<<10)+1))
 	if err != nil || len(data) > 256<<10 || toml.Unmarshal(data, &cfg) != nil {
-		return "", nil, errors.New("native Codex configuration is invalid or exceeds its bound")
+		return "", nil, 0, errors.New("native Codex configuration is invalid or exceeds its bound")
 	}
 	if cfg.Profile != "" {
 		p, ok := cfg.Profiles[cfg.Profile]
 		if !ok {
-			return "", nil, errors.New("native Codex configuration names an unknown profile")
+			return "", nil, 0, errors.New("native Codex configuration names an unknown profile")
 		}
 		if p.Developer != "" {
 			cfg.Developer = p.Developer
+		}
+		if p.DocMaxBytes != nil {
+			cfg.DocMaxBytes = p.DocMaxBytes
 		}
 		if p.Fallbacks != nil {
 			cfg.Fallbacks = p.Fallbacks
 		}
 	}
-	return cfg.Developer, cfg.Fallbacks, nil
+	docMax := 0
+	if cfg.DocMaxBytes != nil {
+		docMax = *cfg.DocMaxBytes
+	}
+	return cfg.Developer, cfg.Fallbacks, docMax, nil
 }
 
 var codexUnset = []string{
@@ -163,7 +200,12 @@ func buildCodexLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, 
 	if s.ManagedChildDecisions {
 		guard += "\n\n" + managedChildDecisionGuard
 	}
-	projectArgs, err := providerProjectArgs(s, sess, guard)
+	if first != nil {
+		if err := validateCommonResume(s, sess, *first); err != nil {
+			return Launch{}, err
+		}
+	}
+	projectArgs, err := providerProjectArgs(s, sess, guard, first != nil)
 	if err != nil {
 		return Launch{}, err
 	}
@@ -199,6 +241,10 @@ func buildCodexLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, 
 		argv = append(argv, "-c", "model_reasoning_effort="+string(value))
 	}
 	l.Argv = append(argv, projectArgs...)
+	l.CommonInputs, err = commonLaunchBinding(s, sess)
+	if err != nil {
+		return Launch{}, err
+	}
 	return l, nil
 }
 

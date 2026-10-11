@@ -9,6 +9,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/commonrules"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 )
 
@@ -16,6 +17,9 @@ func (s *Server) createProjectCanary(ctx context.Context, w http.ResponseWriter,
 	record, ok := s.PrivateProjectCanaries.Lookup(id)
 	if !ok || s.PrivateProjectTasks || !s.PrivateHistoryRetention || s.Projects == nil || s.Projects.Validate() != nil || s.Live == nil || s.PrivateCanaryTemplates.Name == "" || s.PrivateCanaryTemplates.Namespace == "" || record.Provider == "codex" && !s.ManagedCodexTasks {
 		return 0, nil, invalid(fieldError("canaryID", "private managed canary admission or its prerequisites are not enabled"))
+	}
+	if s.RetainedCommonRules != (record.CommonRevision != "") {
+		return 0, nil, invalid(fieldError("canaryID", "retained common rule authority is disabled or mismatched"))
 	}
 	if c.kind != kindClient || c.parent != record.Client || record.Client == s.Policy.SessionNamespace+"/"+s.Policy.SessionServiceAccount || s.callerHasTaskBudget(c) {
 		return 0, nil, forbidden("the fixed canary is unavailable to this caller")
@@ -49,6 +53,17 @@ func (s *Server) createProjectCanary(ctx context.Context, w http.ResponseWriter,
 	}
 	sess.Name = key.Name
 	sess.Spec.ProjectCanary = record.Binding(evidence, s.Projects.CloneOwner)
+	var common commonrules.Snapshot
+	if s.RetainedCommonRules {
+		common, err = commonrules.Resolve(ctx, s.Live, commonrules.Digest(evidence.Snapshot))
+		if err != nil || common.CommonRevision != record.CommonRevision {
+			return 0, nil, invalid(fieldError("canaryID", "accepted common sources changed or are unavailable"))
+		}
+		sess.Spec.CommonRules, err = common.Binding()
+		if err != nil {
+			return 0, nil, invalid(fieldError("canaryID", "common rule snapshot is unconfirmed"))
+		}
+	}
 	// This separate permanent guard closes delete-before-first-reconcile. The
 	// existing private-history freshness proof still adds its own finalizer.
 	sess.Finalizers = append(sess.Finalizers, v1alpha1.ProjectCanaryFinalizer)
@@ -67,6 +82,9 @@ func (s *Server) createProjectCanary(ctx context.Context, w http.ResponseWriter,
 	t, err = projectcanary.ReadTemplates(ctx, s.Live, s.PrivateCanaryTemplates)
 	if err != nil || record.ValidateTemplate(t, s.Projects.CloneOwner) != nil {
 		return 0, nil, invalid(fieldError("canaryID", "reviewed template changed before create"))
+	}
+	if s.RetainedCommonRules && common.Confirm(ctx, s.Live) != nil {
+		return 0, nil, invalid(fieldError("canaryID", "accepted common authority changed before create"))
 	}
 	createErr := s.Client.Create(ctx, sess)
 	// A lost acknowledgement or another replica's atomic create is resolved

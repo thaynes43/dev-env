@@ -35,6 +35,18 @@ func TestProjectCanaryPodWholeExecutorBounds(t *testing.T) {
 					t.Fatal("unbounded canary resources")
 				}
 			}
+			ownPVC := 0
+			for _, v := range pod.Spec.Volumes {
+				if v.PersistentVolumeClaim != nil {
+					ownPVC++
+					if v.Name != "home" || v.PersistentVolumeClaim.ClaimName != HomeClaimName(f.Session.Name) {
+						t.Fatal("canary exposed another PVC")
+					}
+				}
+			}
+			if ownPVC != 1 || slices.ContainsFunc(pod.Spec.Containers[0].VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == "shared" || m.MountPath == "/home/dev/.shared" }) {
+				t.Fatal("canary still exposes shared scratch")
+			}
 			if envOf(pod.Spec.Containers[0], "AGENTD_WORKSPACE_ID").Value != "" || slices.ContainsFunc(pod.Spec.Volumes, func(v corev1.Volume) bool { return v.Name == "workspace" }) {
 				t.Fatal("canary acquired shared project storage")
 			}
@@ -255,5 +267,34 @@ func TestProjectCanaryAuthorityLossAfterIntentNeverRearms(t *testing.T) {
 	var home corev1.PersistentVolumeClaim
 	if err := base.Get(context.Background(), client.ObjectKey{Namespace: f.Session.Namespace, Name: HomeClaimName(f.Session.Name)}, &home); err != nil || home.UID != "original-home" || !slices.Contains(home.Finalizers, Finalizer) {
 		t.Fatal("late refusal lost retained original HOME", err)
+	}
+}
+
+func TestProjectCanaryFinalExecutorRefusesForeignPVCAndMountAliases(t *testing.T) {
+	f := testutil.New(t, "claude", "dev/dev-env")
+	pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*corev1.Pod){
+		func(p *corev1.Pod) {
+			p.Spec.Volumes = append(p.Spec.Volumes, corev1.Volume{Name: "foreign", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "other-home"}}})
+		},
+		func(p *corev1.Pod) {
+			p.Spec.Volumes = append(p.Spec.Volumes, corev1.Volume{Name: "alias", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: HomeClaimName(f.Session.Name)}}})
+		},
+		func(p *corev1.Pod) {
+			p.Spec.Containers[0].VolumeMounts = append(p.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{Name: "home", MountPath: "/alias"})
+		},
+		func(p *corev1.Pod) {
+			p.Spec.Containers[0].VolumeMounts = append(p.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{Name: "tmp", MountPath: "/home/dev/.shared"})
+		},
+		func(p *corev1.Pod) { p.Spec.Volumes = append(p.Spec.Volumes, corev1.Volume{Name: "workspace"}) },
+	} {
+		copy := pod.DeepCopy()
+		mutate(copy)
+		if validateProjectCanaryExecutor(f.Session, copy) == nil {
+			t.Fatal("foreign/alias executor storage accepted")
+		}
 	}
 }

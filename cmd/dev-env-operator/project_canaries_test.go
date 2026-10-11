@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/thaynes43/dev-env/internal/projectcanary"
@@ -39,5 +40,31 @@ func TestPrivateProjectCanaryFlagsDefaultOffAndConcretePrerequisites(t *testing.
 	raw, _ = json.Marshal([]projectcanary.Record{reserved})
 	if _, err := parseFlags(append(slices.Clone(base), "--client-service-accounts="+reserved.Client, "--private-project-canaries="+string(raw))); err == nil {
 		t.Fatal("projected worker identity accepted as an external canary client")
+	}
+}
+
+func TestRetainedCommonFlagsRequireExactCanaryRevision(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.retainedCommonRules {
+		t.Fatal("common snapshots enabled by default", err)
+	}
+	if _, err := parseFlags([]string{"--enable-retained-common-rules"}); err == nil {
+		t.Fatal("common route accepted without canaries")
+	}
+	f := testutil.New(t, "claude", "dev/dev-env")
+	f.Record.CommonRevision = strings.Repeat("a", 64)
+	raw, _ := json.Marshal([]projectcanary.Record{f.Record})
+	base := []string{"--enable-retained-common-rules", "--enable-private-project-canaries", "--private-project-canaries=" + string(raw), "--client-service-accounts=dev/dev-env", "--project-catalog=dev-env-system/dev-env-project-catalog", "--project-clone-owner=fixture", "--enable-private-history-retention", "--api-url=https://operator.example"}
+	o, err = parseFlags(base)
+	if err != nil || !o.retainedCommonRules || o.privateProjectTasks {
+		t.Fatal("exact common route refused/widened", err)
+	}
+	if _, err := parseFlags(slices.DeleteFunc(slices.Clone(base), func(s string) bool { return s == "--enable-retained-common-rules" })); err == nil {
+		t.Fatal("revision admitted on disabled route")
+	}
+	f.Record.CommonRevision = ""
+	raw, _ = json.Marshal([]projectcanary.Record{f.Record})
+	if _, err := parseFlags(append(slices.Clone(base), "--private-project-canaries="+string(raw))); err == nil {
+		t.Fatal("enabled common route accepted Unknown revision")
 	}
 }

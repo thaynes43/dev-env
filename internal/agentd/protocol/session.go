@@ -40,10 +40,17 @@ const MaxPromptBytes = 64 << 10
 // MaxSessionBytes leaves room for the environment key and terminating NUL.
 const MaxSessionBytes = (128 << 10) - 64
 
+// The explicit retained-common route uses a source-owned DownwardAPI file.
+// Its serialized document must also fit in the Pod's bounded annotations.
+const MaxSessionFileBytes = 192 << 10
+const SessionInputPath = "/opt/dev-env/session/session.json"
+const SessionInputAnnotation = "dev-env.haynesops.com/retained-session-input"
+
 // Session is the part of an AgentSession that agentd needs. The JSON names are
 // the spec's (DESIGN-001 3.3), plus the session's name. Unknown fields are
 // ignored, so a newer operator can add fields an older agentd does not read.
 type Session struct {
+	CommonRules     json.RawMessage `json:"commonRules,omitempty"`
 	SessionUID      string          `json:"sessionUID,omitempty"`
 	ProjectSnapshot json.RawMessage `json:"projectSnapshot,omitempty"`
 	// Workspace is the operator's explicit shared-storage binding. SessionUID
@@ -158,6 +165,25 @@ func ParseSession(data []byte) (Session, error) {
 	if len(data) > MaxSessionBytes {
 		return Session{}, errors.New("session document exceeds the bounded transport")
 	}
+	return parseSession(data)
+}
+
+// ParseSessionFile extends only the explicitly bound common-input route.
+func ParseSessionFile(data []byte) (Session, error) {
+	if len(data) > MaxSessionFileBytes {
+		return Session{}, errors.New("session file exceeds the bounded transport")
+	}
+	s, err := parseSession(data)
+	if err != nil {
+		return Session{}, err
+	}
+	if len(s.CommonRules) == 0 && len(data) > MaxSessionBytes {
+		return Session{}, errors.New("legacy session file exceeds its transport")
+	}
+	return s, nil
+}
+
+func parseSession(data []byte) (Session, error) {
 	var s Session
 	if err := json.Unmarshal(data, &s); err != nil {
 		return Session{}, fmt.Errorf("session document: %w", err)
