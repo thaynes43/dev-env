@@ -1,5 +1,21 @@
 # HANDOFF: start here
 
+## Next #174 source unit: partial managed output capture
+
+[DESIGN-016](sagas/distributed-dev-env/designs/016-managed-output-context-capture.md)
+uses existing assistant-event parsers and protected context storage. Separate
+Claude stdout/stderr first; capture only bounded initial managed task output,
+with original private invocation intent and truthful publisher-asserted partial
+provenance. No raw prompts/tools/provider HOME/database imports or model replay.
+Native/TUI/resumed full history and the session directory remain unaccepted.
+
+Context guard GitOps #3819 installed at `f316532a`; receipt
+`cd911ef5e9e474a9cd54f2a951f65d748e6ac9d9ea83395231ddd4ca2641a06f`
+proves exact signed operator/CRD/Role and preservation of 11 other Pods, four
+retained Jobs and all prior schemas/claims authority/catalog/templates/native
+ledger. Zero AgentSessions existed, so actual session upgrade acceptance still
+needs the owner pilot. Scoped activity ended; no provider trial occurred.
+
 ## Next #173 common instruction snapshot — 2026-10-11 UTC
 
 [DESIGN-015](sagas/distributed-dev-env/designs/015-retained-common-rule-inputs.md)
@@ -84,7 +100,6 @@ contention and live authorization remain unaccepted. Private admission remains f
 neither source merge closes #175 or establishes the MVP.
 
 ## Built #173 one-attempt managed canaries — 2026-10-11 UTC
-
 
 [DESIGN-011](sagas/distributed-dev-env/designs/011-private-managed-rule-canaries.md)
 adds a separate default-off policy with at most two fixed Claude/Codex records,

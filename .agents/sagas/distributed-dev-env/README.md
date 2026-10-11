@@ -39,6 +39,9 @@ The bounded next #175 source contract is
 Shared Git/RWX and its trial no longer gate delivery. [Plan 11](backlog/11-project-workspaces.md)
 and [session coordination](../../../docs/session-coordination.md) define the first
 coherent pilot. ADR-001/002 remain historical; ADR-003 controls conflicts.
+[DESIGN-016](designs/016-managed-output-context-capture.md) defines the bounded
+initial managed-output capture seam. Its partial publisher assertion is distinct
+from complete/native history and preserves the independent payload ACL.
 
 [DESIGN-015](designs/015-retained-common-rule-inputs.md) binds common instruction
 bytes and their source provenance to new managed private tasks, and preserves
