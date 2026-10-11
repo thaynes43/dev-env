@@ -1,5 +1,43 @@
 # HANDOFF: start here
 
+## Next #173 common instruction snapshot — 2026-10-11 UTC
+
+[DESIGN-015](sagas/distributed-dev-env/designs/015-retained-common-rule-inputs.md)
+closes an evidenced gap: catalog/project snapshots do not record global common
+configuration content, and resume can reread changed global/developer inputs.
+The default-off new managed route will retain bounded named source bytes,
+source UID/RV/hash, CommonRevision and a separately derived effective instruction
+projection. Owned private globals and resume use the original accepted inputs;
+foreign/partial/changed state refuses while preserving WIP. Actual canary
+activation waits for this source contract, signed deployment and native review.
+Legacy/common provenance remains Unknown; Q-24 is pending.
+
+## Installed #173 owned roots, narrow acceptance — 2026-10-11 UTC
+
+Source #186/release #188 v2.15.1 and haynes-ops #3817 merged at
+`a85d0f2ae6324bcd7029efeaa8909ecc94b9ed76`. New templates pin signed digest
+`b44f676305bab133b32e9d53d108a43a8da45379829024d3068e8dafc778c04d`.
+Attempt 2's separately named Job has UID `e13a226e-7024-4294-9183-58b975a6922a`,
+one Pod on talosw01, exit0 and zero restarts. Exact admitted script/image/limits/
+private emptyDirs/token scope/egress matched review. Two reports are Ready:
+FirstRefresh then Unchanged, with stable owned root/tree/wrappers and exact
+catalog provenance. Selected source is pinned to `296c3d7`; build source is
+`2da15bf`. Flux targets are Ready at the reviewed merge. All 12 protected Pods,
+three prior Jobs, old schema/catalog and original ledger were unchanged;
+activity ended. Retained receipt SHA256
+`693c2684172315153e6fb80ebb41ee8217b4926c26d37c723d71a284b8447024`.
+
+This accepts installed explicit roots refresh for one public repository. The
+first failed roots fixture remains retained; logical count is 2, with no further
+trial. Common rules are empty, so private authentication, daemon/native startup,
+actual provider loading and MVP acceptance remain open. Global admission stays
+false. Task-claim GitOps #3818 (`8e17a394`) installed signed `d95e8fb`, the exact
+protected CRD and narrow operator Role. Receipt at 17:57:25 UTC
+`69c25fd40a14cc052abac7987feb255782bff20ee4960608c258496eacababba`
+proves guard installation and preservation of all 11 other Pods, four Jobs,
+old schema/catalog/template identities and native ledger. Runtime claims remain
+unaccepted; context source #190 is merged but its deployment remains pending.
+
 ## Next #175 source unit: durable offline inbox — 2026-10-11 UTC
 
 [DESIGN-014](sagas/distributed-dev-env/designs/014-durable-offline-inbox.md)
@@ -22,6 +60,7 @@ contention and live authorization remain unaccepted. Private admission remains f
 neither source merge closes #175 or establishes the MVP.
 
 ## Built #173 one-attempt managed canaries — 2026-10-11 UTC
+
 
 [DESIGN-011](sagas/distributed-dev-env/designs/011-private-managed-rule-canaries.md)
 adds a separate default-off policy with at most two fixed Claude/Codex records,
