@@ -65,6 +65,12 @@ configured host authority and explicit project discovery scope; direct-child
 control does not grant sibling discovery. Legacy session read/reap, claim
 metadata and context payload scopes grant no directory access. Directory
 access grants no task mutation, claim write, inbox content or context payload.
+MetadataDiscoveryProjects is an explicit global project grant to all already
+configured exact trusted human/client identities and freshly verified configured
+coordinator hosts. It is not a per-ServiceAccount project map. Live Session
+readers additionally prove their own accepted project. A later pilot binds the
+single dev-env project and unchanged named identities; no fleet identity or
+Q-24 ruling is implied.
 Authenticated unauthorized named probes hide existence; unauthenticated calls
 remain unauthorized. Worker ServiceAccounts receive no direct CRD rights.
 
@@ -133,3 +139,13 @@ metadata. The guard remains unchanged. A bounded cached CLI build/module check,
 affected API/store checks and seven JSON projection cases passed; generated
 schemas and unrelated incoming paths remain unchanged. Original HOLD evidence
 is retained, and corrected native review and required CI still gate merge.
+
+DIRECTORY-R3 found that a permitted present zero optional reported timestamp
+could turn Unknown into a year-0001 date during projection. Standard-library
+nullable reported-time DTOs now preserve nil omission, present-zero explicit
+null and nonzero UTC seconds, with JSON decoding for strings/null. All eleven
+projection cases, the unchanged static CLI module guard and affected lint passed
+at `b3b3b9a5`; packet
+`423663ecc3b36ae3ae71fefe256da3b731ca2d4b71f7e6fa9f1f00374fc6a0c8`
+retains original R1/R2/R3 evidence and unchanged generated/schema/history data.
+Final native review and exact-head required CI remain gates.

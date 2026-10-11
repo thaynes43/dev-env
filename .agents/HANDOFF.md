@@ -25,6 +25,15 @@ affected API/store checks passed. Packet
 `b9bb67ebfac2b923d0eec23a6fdf7d54dcfb3756d9ff291f1dc54ec13732836a`
 retains earlier findings/artifacts and unchanged generated/incoming paths.
 Final native review, CI, signed promotion and actual directory/pilot remain gates.
+DIRECTORY-R3 present-zero optional report timestamps are corrected at
+`b3b3b9a5` with standard-library nullable JSON encoding/decoding. Eleven projection
+cases, static CLI module guard and lint passed; corrected packet
+`423663ecc3b36ae3ae71fefe256da3b731ca2d4b71f7e6fa9f1f00374fc6a0c8`
+preserves all prior evidence and generated/incoming paths. Discovery uses an
+explicit global project grant for all existing exact configured trusted human/
+client/coordinator identities; it is not a per-SA map. Live Session readers must
+also prove their own accepted project. Future pilot identity/project bindings
+remain separate and do not select Q-24 fleet UX.
 
 
 ## Built #174 source unit: partial managed output capture
