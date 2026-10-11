@@ -74,7 +74,7 @@ func TestCollectStatusStates(t *testing.T) {
 			_ = writeJSONFile(s.statePath(launchFile), Launch{BootID: "b1"})
 			_ = writeJSONFile(s.statePath(resultFile), taskResult{TaskResult: protocol.TaskResult{ExitCode: 0, Subtype: "success"}, ConversationID: "conv", Usage: &protocol.Usage{CostUSD: 1.5}})
 		}, func(t *testing.T, st protocol.Status) {
-			if st.Agent.State != protocol.AgentExited || st.Agent.Task == nil || st.Agent.Task.Subtype != "success" || st.Usage == nil || st.Usage.CostUSD != 1.5 {
+			if st.Agent.State != protocol.AgentExited || st.Agent.Task == nil || st.Agent.Task.Subtype != "success" || st.Usage != nil {
 				t.Errorf("%+v %+v", st.Agent, st.Usage)
 			}
 		}},

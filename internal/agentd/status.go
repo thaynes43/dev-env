@@ -106,7 +106,8 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, session string, no
 	if finished {
 		task := res.TaskResult
 		st.Agent.Task = &task
-		st.Usage = res.Usage
+		// Unclassified raw usage stays in the private result. Reporting it to an
+		// older operator can manufacture dollars when only tokens were observed.
 		if launched {
 			st.UsageObservation = collectedInitialUsage(first, s.StateDir, res.UsageObservation)
 		}
