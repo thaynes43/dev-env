@@ -1,5 +1,10 @@
 # DESIGN-018: initial invocation usage and cost provenance
 
+Delivery update, 2026-10-11: source and signed v2.20.0 prerequisites are deployed
+through haynes-ops #3823. Actual provider/pilot acceptance remains separate. The
+[installation note](../verification/installation-2026-10-11.md) preserves the
+observer refusal, Directory Unknown state and remaining activation/read gates.
+
 Contract published 2026-10-11 UTC. Parent #176; ADR-003 controls privacy and
 coordination. One source PR fixes the parser-to-display defect identified by the
 finite source audit. Token-only Codex results currently acquire numeric cost zero

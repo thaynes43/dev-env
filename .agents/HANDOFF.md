@@ -1,5 +1,29 @@
 # HANDOFF: start here
 
+## Latest installed state and acceptance gates — 2026-10-11 22:00 UTC
+
+This entry supersedes the historical “pending release/install” paragraphs below.
+Source #199/#200/#202 and release #201 are merged; signed v2.20.0 prerequisites
+are deployed through haynes-ops #3823 at `29cd8811`. Both new operator replicas
+are Ready. Global private admission and common/canary/directory flags remain off;
+no provider attempt or managed Session was created. Claude reviews are optional
+while unavailable; required CI and native independent review remain gates.
+
+[Installation evidence and corrected observation contract](sagas/distributed-dev-env/verification/installation-2026-10-11.md)
+records the original 22-read refusal and separate offline verification. Directory
+cardinality is Unknown: the direct list was Forbidden under the intended
+operator-only authority. Preserve the failed observer/raw artifacts and counter;
+do not retry, switch identity or grant broad reads. The separately reviewed offline adapter passed all 26 preservation/installation
+checks without a new runtime read, and independent saved-result review passed.
+Installation/preservation is accepted; actual Directory reads are unaccepted.
+
+Next: bounded trusted fixed-record activation, then a fresh authorized
+project-scoped Directory API read before EACH first canary creation. Retain
+permanent IDs and one attempt per provider. Actual both-provider rule loading and
+the concurrent owner pilot remain unaccepted. Q-24 is pending; no fleet UX choice.
+Q-25 needs no owner decision: local schema DNS route stopped; use authorized CI
+and saved real-API schema evidence without opening a DNS investigation.
+
 ## Urgent #174 original private Pod retention source correction
 
 [DESIGN-019](sagas/distributed-dev-env/designs/019-private-pod-retention-guard.md)

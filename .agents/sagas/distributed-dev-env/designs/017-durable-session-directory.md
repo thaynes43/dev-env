@@ -1,5 +1,10 @@
 # DESIGN-017: durable bounded session metadata discovery
 
+Delivery update, 2026-10-11: source and signed v2.20.0 prerequisites are deployed
+through haynes-ops #3823. Actual provider/pilot acceptance remains separate. The
+[installation note](../verification/installation-2026-10-11.md) preserves the
+observer refusal, Directory Unknown state and remaining activation/read gates.
+
 Status: ratified source contract, 2026-10-11. This is one default-off #174 PR.
 It starts from the finite native source audit b9c92c9120cb5d579beebac08c5983d2108b932d1409f487e594322f49ee3c59.
 Existing list/get requires an extant AgentSession and inherits legacy control
