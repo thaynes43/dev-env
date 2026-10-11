@@ -22,6 +22,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/commonrules"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 	"github.com/thaynes43/dev-env/internal/templates"
 )
@@ -44,6 +45,7 @@ var templateRevisionPattern = regexp.MustCompile(`^(?:[A-Za-z0-9_.-]+-)?[a-f0-9]
 
 // Record is trusted operator configuration. Requests supply only its ID.
 type Record struct {
+	CommonRevision   string `json:"commonRevision,omitempty"`
 	ID               string `json:"id"`
 	Client           string `json:"client"`
 	Project          string `json:"project"`
@@ -113,6 +115,9 @@ func (p *Policy) ValidateClients(clients []string, managedCodex bool, reserved .
 }
 
 func (r Record) Validate() error {
+	if r.CommonRevision != "" && !commonrules.ValidDigest(r.CommonRevision) {
+		return ErrRefused
+	}
 	parts := strings.Split(r.Client, "/")
 	if len(parts) != 2 || !projectcatalog.ValidName(parts[0]) || !projectcatalog.ValidName(parts[1]) || !projectcatalog.ValidName(r.ID) || !projectcatalog.ValidName(r.Project) || !projectcatalog.ValidName(r.Repository) || !projectcatalog.ValidName(r.Profile) || r.Profile == "full" || r.Size != "S" || len(validation.IsValidLabelValue(r.IdempotencyKey)) != 0 || r.IdempotencyKey == "" || !digestPattern.MatchString(r.CatalogRevision) || !digestPattern.MatchString(r.RulesRevision) || len(r.TemplateRevision) > 63 || !templateRevisionPattern.MatchString(r.TemplateRevision) || len(r.Image) > 512 || !imagePattern.MatchString(r.Image) || len(r.Prompt) == 0 || len(r.Prompt) > MaxPromptBytes || !utf8.ValidString(r.Prompt) || strings.IndexByte(r.Prompt, 0) >= 0 {
 		return ErrRefused
@@ -283,7 +288,7 @@ func BoundRecord(s *v1alpha1.AgentSession) (Record, error) {
 	if err != nil {
 		return Record{}, ErrRefused
 	}
-	r := Record{ID: b.ID, Client: b.Client, Project: snapshot.Project(), Repository: s.Spec.Repo, Provider: string(s.Spec.Agent), Profile: s.Spec.Profile, Model: s.Spec.Model, Effort: s.Spec.Effort, Size: string(s.Spec.Size), CatalogRevision: b.CatalogRevision, RulesRevision: b.RulesRevision, TemplateRevision: b.TemplateRevision, Image: b.Image, IdempotencyKey: s.Labels[v1alpha1.LabelIdempotencyKey], Prompt: s.Spec.Prompt, Timeout: s.Spec.Limits.Timeout.Duration.String(), MaxTurns: s.Spec.Limits.MaxTurns}
+	r := Record{CommonRevision: b.CommonRevision, ID: b.ID, Client: b.Client, Project: snapshot.Project(), Repository: s.Spec.Repo, Provider: string(s.Spec.Agent), Profile: s.Spec.Profile, Model: s.Spec.Model, Effort: s.Spec.Effort, Size: string(s.Spec.Size), CatalogRevision: b.CatalogRevision, RulesRevision: b.RulesRevision, TemplateRevision: b.TemplateRevision, Image: b.Image, IdempotencyKey: s.Labels[v1alpha1.LabelIdempotencyKey], Prompt: s.Spec.Prompt, Timeout: s.Spec.Limits.Timeout.Duration.String(), MaxTurns: s.Spec.Limits.MaxTurns}
 	if r.MatchSession(s, b.CloneOwner) != nil {
 		return Record{}, ErrRefused
 	}
@@ -291,7 +296,7 @@ func BoundRecord(s *v1alpha1.AgentSession) (Record, error) {
 }
 
 func (r Record) Binding(e CatalogEvidence, owner string) *v1alpha1.ProjectCanaryBinding {
-	return &v1alpha1.ProjectCanaryBinding{Version: 1, ID: r.ID, Client: r.Client, PolicyDigest: r.Digest(), SnapshotDigest: projectcatalog.Digest(e.Snapshot), CatalogUID: e.UID, CatalogResourceVersion: e.ResourceVersion, CatalogRevision: r.CatalogRevision, RulesRevision: r.RulesRevision, TemplateRevision: r.TemplateRevision, Image: r.Image, CloneOwner: owner}
+	return &v1alpha1.ProjectCanaryBinding{CommonRevision: r.CommonRevision, Version: 1, ID: r.ID, Client: r.Client, PolicyDigest: r.Digest(), SnapshotDigest: projectcatalog.Digest(e.Snapshot), CatalogUID: e.UID, CatalogResourceVersion: e.ResourceVersion, CatalogRevision: r.CatalogRevision, RulesRevision: r.RulesRevision, TemplateRevision: r.TemplateRevision, Image: r.Image, CloneOwner: owner}
 }
 
 // MatchSession uses only retained immutable inputs, so a terminal retry needs
@@ -301,6 +306,19 @@ func (r Record) MatchSession(s *v1alpha1.AgentSession, owner string) error {
 		return ErrRefused
 	}
 	b := s.Spec.ProjectCanary
+	if b.CommonRevision != r.CommonRevision {
+		return ErrRefused
+	}
+	if r.CommonRevision == "" {
+		if s.Spec.CommonRules != nil {
+			return ErrRefused
+		}
+	} else {
+		snapshot, err := commonrules.BoundSession(s)
+		if err != nil || snapshot.CommonRevision != r.CommonRevision {
+			return ErrRefused
+		}
+	}
 	if b.Version != 1 || b.ID != r.ID || b.Client != r.Client || b.PolicyDigest != r.Digest() || b.TemplateRevision != r.TemplateRevision || b.Image != r.Image || b.CloneOwner != owner || b.CatalogRevision != r.CatalogRevision || b.RulesRevision != r.RulesRevision || b.CatalogUID == "" || b.CatalogResourceVersion == "" || s.Name != r.SessionName() || !slices.Contains(s.Finalizers, v1alpha1.ProjectCanaryFinalizer) || s.Spec.Parent != r.Client || s.Spec.Agent != v1alpha1.AgentKind(r.Provider) || s.Spec.Mode != v1alpha1.ModeTask || s.Spec.Repo != r.Repository || s.Spec.Model != r.Model || s.Spec.Effort != r.Effort || s.Spec.Profile != r.Profile || s.Spec.Size != v1alpha1.SizeS || s.Spec.Prompt != r.Prompt || s.Spec.Workspace != nil || s.Spec.Restore != "" || len(s.Spec.Tools) != 0 || s.Spec.LLM != nil || s.Spec.Caller != "" || s.Spec.Lane != "" || s.Spec.IdempotencyKey != "" || s.Spec.Lifecycle != nil || s.Labels[v1alpha1.LabelIdempotencyKey] != r.IdempotencyKey {
 		return ErrRefused
 	}
@@ -312,6 +330,22 @@ func (r Record) MatchSession(s *v1alpha1.AgentSession, owner string) error {
 	snapshot, err := projectcatalog.ParseSnapshot(raw)
 	if err != nil || b.SnapshotDigest != projectcatalog.Digest(raw) || snapshot.Project() != r.Project || snapshot.CatalogRevision() != r.CatalogRevision || snapshot.RulesRevision() != r.RulesRevision || snapshot.Selected().Name != r.Repository || snapshot.Selected().DefaultBranch != s.Spec.Base || strings.Split(snapshot.Selected().GitHub, "/")[0] != owner {
 		return ErrRefused
+	}
+	return nil
+}
+
+// ValidateCommon keeps this route independent and disabled without exact revisions.
+func (p *Policy) ValidateCommon(enabled bool) error {
+	if p == nil {
+		if enabled {
+			return ErrRefused
+		}
+		return nil
+	}
+	for _, r := range p.records {
+		if enabled != (r.CommonRevision != "") {
+			return ErrRefused
+		}
 	}
 	return nil
 }

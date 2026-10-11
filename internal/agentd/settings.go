@@ -59,10 +59,11 @@ type Settings struct {
 	OAuthAccountFile string
 	// CodexAccessFile opts into the keeper's single access.json projection.
 	// Empty leaves provider auth untouched; CodexHome stays host-private.
-	CodexAccessFile   string
-	CodexHome         string
-	CodexBin          string
-	ManagedCodexTasks bool
+	CodexAccessFile     string
+	CodexHome           string
+	CodexBin            string
+	RetainedCommonRules bool
+	ManagedCodexTasks   bool
 	// ManagedChildDecisions opts a managed native task into private decision
 	// records and same-owner sequential continuation. It defaults off.
 	ManagedChildDecisions bool
@@ -142,6 +143,7 @@ func LoadSettings(getenv func(string) string) (Settings, error) {
 		CodexAccessFile:   getenv("AGENTD_CODEX_ACCESS_FILE"),
 		CodexHome:         or("CODEX_HOME", filepath.Join(home, ".codex")),
 		CodexBin:          "codex", ManagedCodexTasks: getenv("AGENTD_ENABLE_CODEX_TASKS") == "true",
+		RetainedCommonRules:     getenv("AGENTD_ENABLE_RETAINED_COMMON_RULES") == "true",
 		ManagedChildDecisions:   getenv("AGENTD_ENABLE_CHILD_DECISIONS") == "true",
 		PrivateProjectBootstrap: getenv("AGENTD_ENABLE_PRIVATE_PROJECT_BOOTSTRAP") == "true",
 		PrivateProjectRoots:     getenv("AGENTD_ENABLE_PRIVATE_PROJECT_ROOTS") == "true",

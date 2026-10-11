@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/commonrules"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
@@ -186,6 +188,18 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		env = append(env, profile.Env...)
 		envFrom = append(envFrom, profile.EnvFrom...)
 	}
+	// Only the accepted common route receives a fixed file transport.
+	if s.Spec.CommonRules != nil {
+		for i := range env {
+			if env[i].Name == protocol.SessionEnv {
+				env[i].Value = ""
+			}
+			if env[i].Name == protocol.SessionFileEnv {
+				env[i].Value = protocol.SessionInputPath
+			}
+		}
+	}
+	env = append(env, corev1.EnvVar{Name: "AGENTD_ENABLE_RETAINED_COMMON_RULES", Value: fmt.Sprint(s.Spec.CommonRules != nil && !hold)})
 	// Controller-owned deadline and feature gates follow template/profile env.
 	env = append(env, corev1.EnvVar{Name: protocol.TaskBudgetEnv, Value: budgetEnv})
 	// Controller-owned feature gate cannot be widened by template/profile env.
@@ -214,6 +228,15 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		{Name: "grants", MountPath: protocol.GrantsDir},
 		{Name: "api-token", MountPath: templates.APITokenDir, ReadOnly: true},
 	}
+	if s.Spec.ProjectCanary != nil {
+		// Canary coordination is API-only. Never expose the cross-session scratch PVC.
+		volumes = slices.DeleteFunc(volumes, func(v corev1.Volume) bool { return v.Name == "shared" })
+		mounts = slices.DeleteFunc(mounts, func(m corev1.VolumeMount) bool { return m.Name == "shared" })
+	}
+	if s.Spec.CommonRules != nil {
+		volumes = append(volumes, corev1.Volume{Name: "session-input", VolumeSource: corev1.VolumeSource{DownwardAPI: &corev1.DownwardAPIVolumeSource{DefaultMode: ptr.To[int32](0444), Items: []corev1.DownwardAPIVolumeFile{{Path: "session.json", FieldRef: &corev1.ObjectFieldSelector{APIVersion: "v1", FieldPath: "metadata.annotations['" + protocol.SessionInputAnnotation + "']"}}}}}})
+		mounts = append(mounts, corev1.VolumeMount{Name: "session-input", MountPath: "/opt/dev-env/session", ReadOnly: true})
+	}
 	if s.Spec.Workspace != nil {
 		for i := range env {
 			if env[i].Name == templates.WorkspaceIDEnv {
@@ -237,6 +260,17 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		mounts = append(mounts, corev1.VolumeMount{Name: m.Name, MountPath: m.Path, ReadOnly: true})
 	}
 
+	annotations := sessionAnnotations(s)
+	if s.Spec.CommonRules != nil {
+		annotations[protocol.SessionInputAnnotation] = doc
+		total := 0
+		for k, v := range annotations {
+			total += len(k) + len(v)
+		}
+		if total > 256<<10 {
+			return nil, commonrules.ErrRefused
+		}
+	}
 	resources := corev1.ResourceRequirements{Requests: size.Requests.DeepCopy(), Limits: size.Limits.DeepCopy()}
 
 	pod := &corev1.Pod{
@@ -244,7 +278,7 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 			Name:            s.Name,
 			Namespace:       s.Namespace,
 			Labels:          labels,
-			Annotations:     sessionAnnotations(s),
+			Annotations:     annotations,
 			OwnerReferences: []metav1.OwnerReference{ownerRef(s)},
 		},
 		Spec: corev1.PodSpec{
@@ -311,6 +345,9 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		pod.Spec.RestartPolicy = corev1.RestartPolicyNever
 		pod.Spec.ActiveDeadlineSeconds = ptr.To(projectcanary.ActiveDeadlineSeconds)
 		pod.Spec.TerminationGracePeriodSeconds = ptr.To(projectcanary.TerminationGraceSeconds)
+	}
+	if validateProjectCanaryExecutor(s, pod) != nil {
+		return nil, projectcanary.ErrRefused
 	}
 	return pod, nil
 }
@@ -432,6 +469,17 @@ func sessionDocument(s *v1alpha1.AgentSession) (string, error) {
 		// The rescue the session restores from (D-67).
 		Restore: s.Spec.Restore,
 	}
+	if s.Spec.CommonRules != nil {
+		common, err := commonrules.BoundSession(s)
+		if err != nil || len(s.UID) > 128 || s.Spec.ProjectCanary == nil || s.Spec.Workspace != nil || s.Spec.Mode != v1alpha1.ModeTask {
+			return "", sessionInvalidError{commonrules.ErrRefused}
+		}
+		raw, err := common.Bytes()
+		if err != nil {
+			return "", sessionInvalidError{err}
+		}
+		d.CommonRules = json.RawMessage(raw)
+	}
 	if raw := s.Annotations[v1alpha1.AnnotationProjectSnapshot]; raw != "" {
 		snapshot, err := projectcatalog.ParseSnapshot([]byte(raw))
 		if err != nil || snapshot.Selected().Name != s.Spec.Repo || snapshot.Selected().DefaultBranch != s.Spec.Base {
@@ -455,7 +503,20 @@ func sessionDocument(s *v1alpha1.AgentSession) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("session document: %w", err)
 	}
-	if len(b) > protocol.MaxSessionBytes {
+	bound := protocol.MaxSessionBytes
+	if s.Spec.CommonRules != nil {
+		bound = protocol.MaxSessionFileBytes
+		if s.UID == "" {
+			// Reserve the bounded original UID before Kubernetes assigns it.
+			preview := d
+			preview.SessionUID = strings.Repeat("x", 128)
+			withUID, _ := json.Marshal(preview)
+			if len(withUID) > bound {
+				return "", sessionInvalidError{commonrules.ErrRefused}
+			}
+		}
+	}
+	if len(b) > bound {
 		return "", sessionInvalidError{fmt.Errorf("session document exceeds the bounded transport")}
 	}
 	return string(b), nil

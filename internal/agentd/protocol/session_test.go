@@ -120,3 +120,28 @@ func TestParseSessionRejectsBadJSON(t *testing.T) {
 		t.Fatal("ParseSession accepted truncated JSON")
 	}
 }
+
+func TestCommonSessionFileExactBoundsPreserveLegacyEnvLimit(t *testing.T) {
+	task := validTask()
+	task.CommonRules = json.RawMessage(`{"retained":"synthetic"}`)
+	raw, err := json.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exact := append(raw, []byte(strings.Repeat(" ", MaxSessionFileBytes-len(raw)))...)
+	if _, err := ParseSessionFile(exact); err != nil {
+		t.Fatal("exact file bound refused", err)
+	}
+	if _, err := ParseSessionFile(append(exact, ' ')); err == nil {
+		t.Fatal("over file bound accepted")
+	}
+	if _, err := ParseSession(exact); err == nil {
+		t.Fatal("legacy env bound widened")
+	}
+	task.CommonRules = nil
+	raw, _ = json.Marshal(task)
+	legacyOversize := append(raw, []byte(strings.Repeat(" ", MaxSessionBytes+1-len(raw)))...)
+	if _, err := ParseSessionFile(legacyOversize); err == nil {
+		t.Fatal("legacy file widened without common binding")
+	}
+}

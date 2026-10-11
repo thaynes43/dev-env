@@ -40,6 +40,13 @@ Shared Git/RWX and its trial no longer gate delivery. [Plan 11](backlog/11-proje
 and [session coordination](../../../docs/session-coordination.md) define the first
 coherent pilot. ADR-001/002 remain historical; ADR-003 controls conflicts.
 
+[DESIGN-015](designs/015-retained-common-rule-inputs.md) binds common instruction
+bytes and their source provenance to new managed private tasks, and preserves
+the original effective instructions on resume. It is a prerequisite for actual
+Claude/Codex rule acceptance; empty rules, wrapper presence and source tests do
+not satisfy that acceptance. Retention and task-claim guards are installed, but
+actual history, claims, messaging and the concurrent owner pilot remain open.
+
 **v1** is the single dev-env pod deployed from haynes-ops
 (`kubernetes/main/apps/dev/dev-env/`; saga `.agents/sagas/dev-env/` there). It keeps
 running, maintained in haynes-ops as today, until Tom approves the cutover in phase 5.

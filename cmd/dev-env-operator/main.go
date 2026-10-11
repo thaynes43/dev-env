@@ -80,6 +80,7 @@ func main() {
 }
 
 type options struct {
+	retainedCommonRules           bool
 	contextsEnabled               bool
 	contextReadProjects           []string
 	inboxEnabled                  bool
@@ -140,6 +141,7 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.privateProjectTasks, "enable-private-project-tasks", false, "enable new accepted-project tasks with private repositories and worktrees")
 	fs.BoolVar(&o.managedCodexTasks, "enable-managed-codex-tasks", false, "enable accepted-project managed Codex task admission")
 	fs.BoolVar(&o.privateHistoryRetention, "enable-private-history-retention", false, "retain private managed HOME and durable Session identity on reap and suspended autoarchive")
+	fs.BoolVar(&o.retainedCommonRules, "enable-retained-common-rules", false, "retain reviewed common instruction inputs for new fixed private managed canaries")
 	fs.BoolVar(&o.privateProjectCanariesEnabled, "enable-private-project-canaries", false, "enable only two explicitly configured private managed subscription rule canaries")
 	canaries := fs.String("private-project-canaries", "", "strict operator-owned JSON records for at most two fixed private managed canaries")
 	fs.BoolVar(&o.managedChildDecisions, "enable-managed-child-decisions", false, "enable private recorded child decisions and same-writer native continuation")
@@ -215,7 +217,13 @@ func parseFlags(args []string) (options, error) {
 	if err != nil {
 		return o, err
 	}
+	if o.retainedCommonRules && !o.privateProjectCanariesEnabled {
+		return o, errors.New("retained common rules require the enabled fixed private canary route")
+	}
 	if o.privateProjectCanariesEnabled {
+		if o.privateProjectCanaries.ValidateCommon(o.retainedCommonRules) != nil {
+			return o, errors.New("common rule policy revisions do not match the enabled route")
+		}
 		if o.apiAddr == "0" || o.apiURL == "" || o.catalogBinding == nil || !o.privateHistoryRetention || o.privateProjectTasks || o.privateProjectCanaries.ValidateClients(o.clientSAs, o.managedCodexTasks, o.humanSA, o.sessionNamespace+"/"+controller.ServiceAccountName) != nil {
 			return o, errors.New("private canaries require enabled API, fixed catalog, retention, exact client policy and disabled general private admission")
 		}
@@ -378,6 +386,7 @@ func run(args []string) error {
 		Templates:                   templatesKey,
 		APIURL:                      o.apiURL,
 		ManagedCodexTasks:           o.managedCodexTasks,
+		RetainedCommonRules:         o.retainedCommonRules,
 		PrivateHistoryRetention:     o.privateHistoryRetention,
 		PrivateProjectCanaries:      o.privateProjectCanaries,
 		PrivateProjectCloneOwner:    cloneOwner,
@@ -457,7 +466,8 @@ func run(args []string) error {
 				ActivityNamespace: o.templatesNamespace,
 			},
 			Projects: o.catalogBinding, PrivateProjectTasks: o.privateProjectTasks, ManagedCodexTasks: o.managedCodexTasks, ManagedChildDecisions: o.managedChildDecisions,
-			PrivateProjectCanaries: o.privateProjectCanaries, PrivateHistoryRetention: o.privateHistoryRetention, PrivateCanaryTemplates: templatesKey,
+			PrivateProjectCanaries: o.privateProjectCanaries, RetainedCommonRules: o.retainedCommonRules,
+			PrivateHistoryRetention: o.privateHistoryRetention, PrivateCanaryTemplates: templatesKey,
 			Exec:             podExec,
 			Shelf:            rescueShelf,
 			Templates:        apiserver.TemplatesFrom(mgr.GetClient(), templatesKey),

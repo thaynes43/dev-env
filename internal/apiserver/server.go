@@ -76,6 +76,7 @@ type Server struct {
 	// Canaries remain independent of ordinary private task admission. Nil is off.
 	PrivateProjectCanaries  *projectcanary.Policy
 	PrivateHistoryRetention bool
+	RetainedCommonRules     bool
 	PrivateCanaryTemplates  types.NamespacedName
 	// Client reads from the manager's cache and writes to the API server.
 	Client client.Client

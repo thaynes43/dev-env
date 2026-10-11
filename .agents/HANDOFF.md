@@ -1,6 +1,67 @@
 # HANDOFF: start here
 
-## Next #175 source unit: durable offline inbox — 2026-10-11 UTC
+## Next #173 common instruction snapshot — 2026-10-11 UTC
+
+[DESIGN-015](sagas/distributed-dev-env/designs/015-retained-common-rule-inputs.md)
+closes an evidenced gap: catalog/project snapshots do not record global common
+configuration content, and resume can reread changed global/developer inputs.
+The default-off new managed route will retain bounded named source bytes,
+source UID/RV/hash, CommonRevision and a separately derived effective instruction
+projection. Owned private globals and resume use the original accepted inputs;
+foreign/partial/changed state refuses while preserving WIP. Actual canary
+activation waits for this source contract, signed deployment and native review.
+Legacy/common provenance remains Unknown; Q-24 is pending.
+
+## Installed #173 owned roots, narrow acceptance — 2026-10-11 UTC
+
+Source #186/release #188 v2.15.1 and haynes-ops #3817 merged at
+`a85d0f2ae6324bcd7029efeaa8909ecc94b9ed76`. New templates pin signed digest
+`b44f676305bab133b32e9d53d108a43a8da45379829024d3068e8dafc778c04d`.
+Attempt 2's separately named Job has UID `e13a226e-7024-4294-9183-58b975a6922a`,
+one Pod on talosw01, exit0 and zero restarts. Exact admitted script/image/limits/
+private emptyDirs/token scope/egress matched review. Two reports are Ready:
+FirstRefresh then Unchanged, with stable owned root/tree/wrappers and exact
+catalog provenance. Selected source is pinned to `296c3d7`; build source is
+`2da15bf`. Flux targets are Ready at the reviewed merge. All 12 protected Pods,
+three prior Jobs, old schema/catalog and original ledger were unchanged;
+activity ended. Retained receipt SHA256
+`693c2684172315153e6fb80ebb41ee8217b4926c26d37c723d71a284b8447024`.
+
+This accepts installed explicit roots refresh for one public repository. The
+first failed roots fixture remains retained; logical count is 2, with no further
+trial. Common rules are empty, so private authentication, daemon/native startup,
+actual provider loading and MVP acceptance remain open. Global admission stays
+false. Task-claim GitOps #3818 (`8e17a394`) installed signed `d95e8fb`, the exact
+protected CRD and narrow operator Role. Receipt at 17:57:25 UTC
+`69c25fd40a14cc052abac7987feb255782bff20ee4960608c258496eacababba`
+proves guard installation and preservation of all 11 other Pods, four Jobs,
+old schema/catalog/template identities and native ledger. Runtime claims remain
+unaccepted; context source #190 is merged and release #192 shipped v2.17.0; its
+GitOps #3819 installed at `f316532ab00d4dd4edbf5f2918f5fa1baff825ca`.
+Receipt `cd911ef5e9e474a9cd54f2a951f65d748e6ac9d9ea83395231ddd4ca2641a06f`
+proves exact context CRD/narrow Role/signed image/two Ready replicas and
+preservation of all 11 other Pods, four retained Jobs, prior schema/claim
+authority/catalog/templates/native ledger. Zero AgentSessions existed; actual
+publication/stopped-read and live-session upgrade acceptance remain pending.
+Scoped activity ended.
+
+## Installed #175 durable offline inbox guards — 2026-10-11 UTC
+
+Source PR #194 merged as `f02d0ad276d007105795dd8611d0725c5176869b` after
+required CI and native original/integration reviews passed. Corrected validation
+provenance retained the original uncertain packet without source changes. Claude
+review failed before a verdict and remains optional; its receipt was read.
+Release #193 shipped signed v2.18.0. GitOps #3820 merged as
+`271f8efef3085353cb42b0968913e1faf2b3adda` and installed signed f02d0ad
+with only the three explicit inbox flags. The 18:59:38 UTC observation
+`3654a185c965e6b8a5bcd941883ad9d39ce1c0938051dc8e4bb07854bb43f722`
+proves exact Established schemas, narrow operator-only grants and two Ready
+replicas, with all eleven other Pods/restart counts, four Jobs, prior schemas/
+authority, catalog/templates and failed native ledger preserved. Original
+observer findings and baseline were retained; a separately reviewed corrected
+helper pins the baseline and complete CRD specs. Scoped activity ended.
+Zero AgentSessions existed, so actual offline recipient/API acknowledgement
+and live-provider upgrade preservation remain unaccepted.
 
 [DESIGN-014](sagas/distributed-dev-env/designs/014-durable-offline-inbox.md)
 defines immutable attributed messages and explicit read acknowledgements in the
@@ -9,8 +70,9 @@ recipient ownership; separate project content scopes permit stopped-context
 reads without legacy broad-read access. Accepted retries survive recipient
 deletion; acknowledgements prove API receipt only. No provider prompt injection,
 native host identity or runtime delivery is claimed. Source implementation,
-native independent review, required CI, signed publication, narrow GitOps grants
-and a disposable offline trial remain gates. Claude review stays optional.
+native independent review, required CI, signed publication and narrow GitOps
+guards are delivered; a disposable offline trial remains an acceptance gate.
+Claude review stays optional.
 
 #175 atomic task-claim source #187 merged as
 `d95e8fbe7b3e1c07eed75959819cd35f90a155c4`; GitOps PR #3818 merged as `8e17a394` and installed the exact protected CRD,
@@ -22,6 +84,7 @@ contention and live authorization remain unaccepted. Private admission remains f
 neither source merge closes #175 or establishes the MVP.
 
 ## Built #173 one-attempt managed canaries — 2026-10-11 UTC
+
 
 [DESIGN-011](sagas/distributed-dev-env/designs/011-private-managed-rule-canaries.md)
 adds a separate default-off policy with at most two fixed Claude/Codex records,
@@ -41,7 +104,8 @@ controller/command checks, affected lint and reproducible generation passed.
 Rebase onto released main `296c3d7` retains claims/history wiring. Independent native review and required CI passed on the original candidate;
 the integration rebase onto #190 passed native review and exact-head required
 CI38162585232. PR #191 merged as `c062e9897d95aa5da7643250a5b9811c4ecc8cae`.
-Claude review failed before a verdict and remains optional/down.
+Claude review failed before a verdict and is optional/down; its receipt was read.
+
 
 DESIGN-015 retained common-rule inputs must land before activation. Signed
 publication and separately reviewed GitOps profiles/policy/nonempty rules

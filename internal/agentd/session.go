@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"syscall"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
@@ -15,22 +16,43 @@ import (
 // AGENTD_SESSION (D-40).
 func LoadSession(getenv func(string) string) (protocol.Session, error) {
 	if path := getenv(protocol.SessionFileEnv); path != "" {
-		f, err := os.Open(path)
-		if err != nil {
-			return protocol.Session{}, fmt.Errorf("%s: %w", protocol.SessionFileEnv, err)
+		if getenv("AGENTD_ENABLE_RETAINED_COMMON_RULES") == "true" && path != protocol.SessionInputPath {
+			return protocol.Session{}, errors.New("retained session requires its fixed private input projection")
 		}
-		defer func() { _ = f.Close() }()
-		data, err := io.ReadAll(io.LimitReader(f, protocol.MaxSessionBytes+1))
-		if err != nil {
-			return protocol.Session{}, fmt.Errorf("%s: %w", protocol.SessionFileEnv, err)
+		bound := protocol.MaxSessionBytes
+		if getenv("AGENTD_ENABLE_RETAINED_COMMON_RULES") == "true" {
+			bound = protocol.MaxSessionFileBytes
 		}
-		return protocol.ParseSession(data)
+		data, err := readSessionFile(path, bound)
+		if err != nil {
+			return protocol.Session{}, err
+		}
+		return protocol.ParseSessionFile(data)
 	}
 	doc := getenv(protocol.SessionEnv)
 	if doc == "" {
 		return protocol.Session{}, errors.New(protocol.SessionEnv + " is not set: the operator passes the session there")
 	}
 	return protocol.ParseSession([]byte(doc))
+}
+
+// Kubernetes DownwardAPI uses projected symlinks. Open their resolved target
+// nonblocking, prove regular type/size before allocating, and reread at boot.
+func readSessionFile(path string, bound int) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, errors.New("session input is unavailable")
+	}
+	defer func() { _ = f.Close() }()
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() || st.Size() > int64(bound) {
+		return nil, errors.New("session input type or size is unconfirmed")
+	}
+	data, err := io.ReadAll(io.LimitReader(f, int64(bound)+1))
+	if err != nil || len(data) > bound {
+		return nil, errors.New("session input exceeds its bound or is unreadable")
+	}
+	return data, nil
 }
 
 // LogSteps writes one log line per boot step.

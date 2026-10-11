@@ -55,7 +55,7 @@ const (
 )
 
 // Volume names the operator uses itself.
-var reservedVolumeNames = []string{"home", "shared", "tmp", "api-token", "grants", "workspace"}
+var reservedVolumeNames = []string{"home", "shared", "tmp", "api-token", "grants", "workspace", "session-input"}
 
 // ReservedEnv are the environment variables the operator owns. The templates' env
 // may not name them. A Secret or ConfigMap in a profile's envFrom is not checked,
@@ -66,6 +66,7 @@ var reservedVolumeNames = []string{"home", "shared", "tmp", "api-token", "grants
 // mode: an empty value is not the same as an unset one to every program, so the
 // operator leaves it out there, and agentd's remote mode unsets it (plan 03).
 var ReservedEnv = []string{
+	"AGENTD_ENABLE_RETAINED_COMMON_RULES",
 	"HOME",
 	"XDG_RUNTIME_DIR",
 	"DEV_ENV_CPU_LIMIT",
@@ -534,7 +535,7 @@ func validateMounts(where string, mounts []Mount, names map[string]string) []err
 			errs = append(errs, fmt.Errorf("%s: path %q is not a clean absolute path", at, m.Path))
 			continue
 		}
-		for _, r := range []string{HomePath, SharedPath, TmpPath, APITokenDir, ServiceAccount, GrantsPath} {
+		for _, r := range []string{HomePath, SharedPath, TmpPath, APITokenDir, ServiceAccount, GrantsPath, "/opt/dev-env/session"} {
 			if overlaps(m.Path, r) {
 				errs = append(errs, fmt.Errorf("%s: path %s overlaps %s, which the operator mounts", at, m.Path, r))
 			}
