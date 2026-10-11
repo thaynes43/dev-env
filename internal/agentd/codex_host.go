@@ -25,6 +25,10 @@ type CodexHostOptions struct {
 	InstructionsFile string
 	DeclaredShutdown bool
 	TerminationGrace time.Duration
+	AcceptedCatalog  *ProjectCatalogSource
+	Runner           Runner
+	privateInput     *codexHostPrivateInput
+	privateAbsent    func() error
 }
 
 // CodexHostStatus contains fixed readiness metadata only. Native identifiers,
@@ -143,7 +147,7 @@ func observeCodexHost(ctx context.Context, s Settings, o CodexHostOptions, d cod
 	if err != nil || hostVersion(ctx, s, d, managed) != nil {
 		return unknown, errCodexHostUnknown
 	}
-	if codexHostConfig(s, o, false) != nil {
+	if codexHostConfigContext(ctx, s, o, false) != nil {
 		return unknown, errCodexHostUnknown
 	}
 	if _, err := codexHostSettings(s, false); err != nil {
@@ -172,6 +176,12 @@ func observeCodexHost(ctx context.Context, s Settings, o CodexHostOptions, d cod
 		status.Code, status.Phase = "NeedsReview", saved.Phase
 		return status, nil
 	}
+	if s.PrivateCodexHost {
+		if _, err := os.Lstat(s.statePath(privateHostPreparationFile)); !errors.Is(err, os.ErrNotExist) {
+			status.Code = "NeedsReview"
+			return status, nil
+		}
+	}
 	if codexHostAccessReady(s, time.Now()) != nil {
 		status.Code = "NeedsLogin"
 	}
@@ -179,12 +189,14 @@ func observeCodexHost(ctx context.Context, s Settings, o CodexHostOptions, d cod
 }
 
 type codexHostLifecycle struct {
-	Version     int              `json:"version"`
-	Phase       string           `json:"phase"`
-	PodUID      string           `json:"podUID"`
-	WorkspaceID string           `json:"workspaceID"`
-	CLI         string           `json:"cli"`
-	Process     codexHostProcess `json:"process"`
+	Version     int                      `json:"version"`
+	Phase       string                   `json:"phase"`
+	PodUID      string                   `json:"podUID"`
+	WorkspaceID string                   `json:"workspaceID"`
+	CLI         string                   `json:"cli"`
+	Process     codexHostProcess         `json:"process"`
+	Private     *codexHostPrivateBinding `json:"private,omitempty"`
+	Preparation json.RawMessage          `json:"preparation,omitempty"`
 }
 
 func hostLifecycle(s Settings) (codexHostLifecycle, error) {
@@ -196,9 +208,18 @@ func hostLifecycle(s Settings) (codexHostLifecycle, error) {
 	if decodeHostJSON(raw, &saved) != nil || saved.Version != 1 || saved.CLI != managedCodexVersion || saved.WorkspaceID != s.WorkspaceID || saved.PodUID == "" {
 		return codexHostLifecycle{}, errCodexHostUnknown
 	}
+	if s.PrivateCodexHost != (saved.Private != nil) || saved.Private != nil && (!saved.Private.valid(s) || !privateHostPreparationMatches(saved)) || saved.Private == nil && len(saved.Preparation) != 0 {
+		return saved, errCodexHostUnknown
+	}
 	switch saved.Phase {
-	case "Attempting":
-	case "Confirmed", "Stopping", "Stopped":
+	case "Preparing", "Attempting":
+		if saved.Phase == "Preparing" && !s.PrivateCodexHost {
+			return saved, errCodexHostUnknown
+		}
+	case "Confirming", "Confirmed", "Stopping", "Stopped":
+		if saved.Phase == "Confirming" && !s.PrivateCodexHost {
+			return saved, errCodexHostUnknown
+		}
 		if saved.Process.State != "Live" || saved.Process.PID <= 0 || saved.Process.Identity.BootID == "" || saved.Process.Identity.StartTicks == 0 {
 			return codexHostLifecycle{}, errCodexHostUnknown
 		}
@@ -208,7 +229,15 @@ func hostLifecycle(s Settings) (codexHostLifecycle, error) {
 	return saved, nil
 }
 func saveHostLifecycle(s Settings, phase string, process codexHostProcess) error {
-	data, err := json.Marshal(codexHostLifecycle{Version: 1, Phase: phase, PodUID: s.PodUID, WorkspaceID: s.WorkspaceID, CLI: managedCodexVersion, Process: process})
+	saved := codexHostLifecycle{Version: 1, Phase: phase, PodUID: s.PodUID, WorkspaceID: s.WorkspaceID, CLI: managedCodexVersion, Process: process}
+	if s.PrivateCodexHost {
+		prior, err := hostLifecycle(s)
+		if err != nil || prior.Private == nil {
+			return errCodexHostUnknown
+		}
+		saved.Private, saved.Preparation = prior.Private, prior.Preparation
+	}
+	data, err := json.Marshal(saved)
 	if err != nil || writeCodexPrivateAtomic(s.statePath("codex-host-start-intent.json"), data) != nil {
 		return errCodexHostUnknown
 	}
@@ -231,6 +260,11 @@ func startCodexHost(ctx context.Context, s Settings, o CodexHostOptions, d codex
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return errCodexHostUnknown
 	}
+	if s.PrivateCodexHost {
+		if _, err := os.Lstat(s.statePath(privateHostPreparationFile)); !errors.Is(err, os.ErrNotExist) {
+			return errCodexHostUnknown
+		}
+	}
 	if hostVersion(ctx, s, d, s.CodexBin) != nil {
 		return errCodexHostUnknown
 	}
@@ -250,10 +284,34 @@ func startCodexHost(ctx context.Context, s Settings, o CodexHostOptions, d codex
 			}
 		}
 	}
+	if s.PrivateCodexHost {
+		absent, err := d.process(s)
+		if err != nil || absent.State != "Absent" {
+			return errCodexHostUnknown
+		}
+		o.privateAbsent = func() error {
+			current, err := d.process(s)
+			if err != nil || current.State != "Absent" {
+				return errCodexHostUnknown
+			}
+			return nil
+		}
+		o.privateInput, err = preparePrivateCodexHost(ctx, s, o)
+		if err != nil {
+			return errCodexHostUnknown
+		}
+		absent, err = d.process(s)
+		if err != nil || absent.State != "Absent" {
+			return errCodexHostUnknown
+		}
+	}
 	if d.sync(s, time.Now()) != nil {
 		return ErrCodexAccess
 	}
-	if codexHostConfig(s, o, true) != nil {
+	if codexHostConfigContext(ctx, s, o, true) != nil {
+		return errCodexHostUnknown
+	}
+	if s.PrivateCodexHost && o.privateAbsent() != nil {
 		return errCodexHostUnknown
 	}
 	if _, err := codexHostSettings(s, true); err != nil {
@@ -283,11 +341,19 @@ func startCodexHost(ctx context.Context, s Settings, o CodexHostOptions, d codex
 	if err != nil || !sameHostProcess(expected, confirmed) {
 		return errCodexHostUnknown
 	}
+	if s.PrivateCodexHost {
+		// Keep readiness unconfirmed until reservation cleanup is durable. A
+		// cleanup failure leaves the original binding and never permits rearm.
+		if saveHostLifecycle(s, "Confirming", confirmed) != nil || finishPrivateCodexHostPreparation(s, o.privateInput) != nil {
+			return errCodexHostUnknown
+		}
+	}
 	return saveHostLifecycle(s, "Confirmed", confirmed)
 }
 
 // RunCodexHost owns only the private native host lifecycle/auth installation.
-// It never enters Session daemon/task-writer/clone/render/sync code. Projection
+// Private opt-in prepares trusted catalog roots only after confirmed absence.
+// It never enters Session daemon/task-writer/shared-workspace code. Projection
 // failure reports renewal; native cached auth is not claimed to be revoked.
 func RunCodexHost(ctx context.Context, s Settings, o CodexHostOptions, report func(CodexHostStatus) error) error {
 	return runCodexHost(ctx, s, o, report, realCodexHostDeps())
@@ -329,6 +395,8 @@ func runCodexHost(ctx context.Context, s Settings, o CodexHostOptions, report fu
 		if startupFailed && status.Code == "Absent" {
 			status.Code = "NeedsReview"
 		}
+		// Existing keeper access-only renewal remains independent of catalog/root
+		// preparation and config composition; passive observation never installs auth.
 		if d.preflight(s) == nil && d.sync(s, time.Now()) != nil && err == nil && status.Process == "Live" && status.Code == "Observed" {
 			status.Code = "NeedsLogin"
 		}

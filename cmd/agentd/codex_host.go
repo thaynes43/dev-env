@@ -13,7 +13,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
-func codexHost(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+func codexHost(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string, runner agentd.Runner) int {
 	flags := flag.NewFlagSet("codex-host", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	options := agentd.CodexHostOptions{}
@@ -47,6 +47,16 @@ func codexHost(ctx context.Context, args []string, stdout, stderr io.Writer, get
 	settings, err := agentd.LoadSettings(getenv)
 	if err != nil {
 		return exitUsage
+	}
+	if settings.PrivateCodexHost {
+		if options.CatalogFile != "" || agentd.ValidatePrivateCodexHost(settings) != nil {
+			return exitUsage
+		}
+		options.AcceptedCatalog, err = privateProjectCatalogSource(settings, getenv)
+		if err != nil {
+			return exitUsage
+		}
+		options.Runner = runner
 	}
 	switch flags.Arg(0) {
 	case "status":

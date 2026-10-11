@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,16 +19,21 @@ import (
 )
 
 type codexHostConfigReceipt struct {
-	Version           int      `json:"version"`
-	CatalogDigest     string   `json:"catalogDigest"`
-	GuardDigest       string   `json:"guardDigest"`
-	OriginalDeveloper string   `json:"originalDeveloper"`
-	AppliedDeveloper  string   `json:"appliedDeveloper"`
-	TrustRoots        []string `json:"trustRoots"`
-	OwnedTrustRoots   []string `json:"ownedTrustRoots"`
+	Version           int                      `json:"version"`
+	CatalogDigest     string                   `json:"catalogDigest"`
+	GuardDigest       string                   `json:"guardDigest"`
+	OriginalDeveloper string                   `json:"originalDeveloper"`
+	AppliedDeveloper  string                   `json:"appliedDeveloper"`
+	TrustRoots        []string                 `json:"trustRoots"`
+	OwnedTrustRoots   []string                 `json:"ownedTrustRoots"`
+	Private           *codexHostPrivateBinding `json:"private,omitempty"`
+	ProjectProofs     map[string]string        `json:"projectProofs,omitempty"`
 }
 
 func codexHostPreflight(s Settings) error {
+	if s.PrivateCodexHost {
+		return privateCodexHostPreflight(s)
+	}
 	if s.Home == "" || s.WorkspaceID == "" || s.PodUID == "" || s.CodexAccessFile == "" || s.APIURL == "" {
 		return errCodexHostUnknown
 	}
@@ -164,9 +170,32 @@ func codexHostSettings(s Settings, prepare bool) (uint32, error) {
 // host trust input, never API task-admission authority. Private provenance owns
 // only generated entries; all unrelated settings/MCP/history remain untouched.
 func codexHostConfig(s Settings, o CodexHostOptions, prepare bool) error {
-	catalogBytes, err := boundedHostProjection(o.CatalogFile, projectcatalog.MaxBytes)
-	if err != nil {
-		return errCodexHostUnknown
+	return codexHostConfigContext(context.Background(), s, o, prepare)
+}
+func codexHostConfigContext(ctx context.Context, s Settings, o CodexHostOptions, prepare bool) error {
+	var catalogBytes []byte
+	var private *codexHostPrivateInput
+	var err error
+	if s.PrivateCodexHost {
+		private = o.privateInput
+		if private == nil {
+			if prepare {
+				return errCodexHostUnknown
+			}
+			private, err = capturePrivateCodexHostInput(ctx, s, o)
+			if err != nil {
+				return errCodexHostUnknown
+			}
+		}
+		if provePrivateCodexHostRoots(ctx, s, o, private) != nil {
+			return errCodexHostUnknown
+		}
+		catalogBytes = private.authority.accepted.Data
+	} else {
+		catalogBytes, err = boundedHostProjection(o.CatalogFile, projectcatalog.MaxBytes)
+		if err != nil {
+			return errCodexHostUnknown
+		}
 	}
 	catalog, err := projectcatalog.Parse(catalogBytes)
 	if err != nil {
@@ -180,6 +209,9 @@ func codexHostConfig(s Settings, o CodexHostOptions, prepare bool) error {
 		if r < 0x20 && r != '\n' && r != '\t' || r == 0x7f {
 			return errCodexHostUnknown
 		}
+	}
+	if private != nil && prepare && !privateHostConfigInputsMatch(s, private, nil) {
+		return errCodexHostUnknown
 	}
 	cfg := map[string]any{}
 	path := filepath.Join(s.CodexHome, "config.toml")
@@ -267,12 +299,40 @@ func codexHostConfig(s Settings, o CodexHostOptions, prepare bool) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return errCodexHostUnknown
 	}
+	if s.PrivateCodexHost {
+		if prior.Version != 0 && (prior.Private == nil || !privateHostOwnedConfig(cfg, prior)) {
+			return errCodexHostUnknown
+		}
+	} else if prior.Private != nil {
+		return errCodexHostUnknown
+	}
 	next := codexHostConfigReceipt{Version: 1, CatalogDigest: projectcatalog.Digest(catalogBytes), GuardDigest: projectcatalog.Digest(guard), OriginalDeveloper: developer}
+	if private != nil {
+		binding := private.binding
+		next.Private, next.ProjectProofs = &binding, private.projectProofs
+		if next.GuardDigest != binding.GuardDigest {
+			return errCodexHostUnknown
+		}
+	}
 	next.AppliedDeveloper = strings.TrimSpace(developer + "\n\n" + string(guard))
 	for _, project := range catalog.ProjectNames() {
 		next.TrustRoots = append(next.TrustRoots, filepath.Join(s.Home, "codex", project))
 	}
+	if private != nil {
+		allowed := slices.Clone(next.TrustRoots)
+		if prepare {
+			allowed = append(allowed, prior.OwnedTrustRoots...)
+		}
+		for root, value := range projects {
+			if table, ok := value.(map[string]any); ok && table["trust_level"] == "trusted" && !slices.Contains(allowed, root) {
+				return errCodexHostUnknown
+			}
+		}
+	}
 	if !prepare {
+		if private != nil && (prior.Private == nil || *prior.Private != *next.Private || !equalPrivateProjectProofs(prior.ProjectProofs, next.ProjectProofs)) {
+			return errCodexHostUnknown
+		}
 		if cfg["model_provider"] != "openai" || cfg["forced_login_method"] != "chatgpt" || cfg["cli_auth_credentials_store"] != "file" || cfg["chatgpt_base_url"] != "https://chatgpt.com/backend-api/" {
 			return errCodexHostUnknown
 		}
@@ -346,7 +406,18 @@ func codexHostConfig(s Settings, o CodexHostOptions, prepare bool) error {
 	}
 	// Intent precedes config replacement. A crash/mismatch refuses future start;
 	// it does not guess or regenerate an unknown earlier developer instruction.
-	if writeCodexPrivateAtomic(receipt, saved) != nil || writeCodexPrivateAtomic(path, out) != nil {
+	if private != nil && (private.authority.confirm(ctx) != nil || o.privateAbsent == nil || o.privateAbsent() != nil || !privateHostConfigInputsMatch(s, private, nil)) {
+		return errCodexHostUnknown
+	}
+	if writeCodexPrivateAtomic(receipt, saved) != nil {
+		return errCodexHostUnknown
+	}
+	// Receipt fsync/publication can stall. Its success never carries an earlier
+	// absence observation across the next provider configuration mutation.
+	if private != nil && (private.authority.confirm(ctx) != nil || o.privateAbsent() != nil || !privateHostConfigInputsMatch(s, private, saved)) {
+		return errCodexHostUnknown
+	}
+	if writeCodexPrivateAtomic(path, out) != nil {
 		return errCodexHostUnknown
 	}
 	return nil
