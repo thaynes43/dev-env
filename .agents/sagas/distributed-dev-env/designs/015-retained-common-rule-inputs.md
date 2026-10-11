@@ -131,3 +131,19 @@ subscription CLI adapters. The local adapter remains disabled until its private
 instruction projection, exact model identity and household GPU reservation gates
 are implemented and accepted; it must not infer readiness or substitute a paid
 API. No local inference is launched by this slice.
+
+
+Privacy prerequisite from the finite source audit: explicit canaries currently
+mount the entire shared scratch PVC at `/home/dev/.shared` without a subpath.
+The same UID can reach peer memories, task-log copies and rescue Git bundles;
+source documentation warns those bundles can contain private untracked work or
+secrets. Actual contents remain Unknown and were never inspected. No direct
+mount of another private HOME or enrollment is established.
+
+Omit that shared volume and mount only for explicit project canaries, and refuse
+any rendered canary PVC other than its exact own HOME. Assert both Claude and
+Codex shapes have exactly one own PVC, with no shared/workspace/alias mount.
+Preserve all existing legacy/native/noncanary and hold rendering. This narrow
+source correction removes peer artifact access before any rule-loading trial;
+it is not a storage investigation, migration, cleanup or running-Pod change.
+Coordination stays on the protected API.
