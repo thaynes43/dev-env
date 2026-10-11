@@ -138,6 +138,17 @@ revisions must be proved before safe fast-forward. Existing tasks keep their
 saved rules and WIP. Native-host conversion and actual provider loading remain
 separate acceptance; the pending Q-24 routing choice is not silently decided.
 
+### Private native startup guard
+
+[DESIGN-009](../designs/009-private-native-codex-preflight.md) adds default-off
+trusted private-root/configuration preparation. Durable reservation, repeated
+absence/authority checks and original input identity prevent a live or uncertain
+host from being refreshed or replaced. Native review and focused tests passed;
+private API/profile and actual native instruction loading remain separate.
+The deployed model-free roots check failed before verifier acceptance; preserve
+attempt 1 and its Unknown internal cause. Offline umask mismatch proof supports
+a separate small source correction and fresh named check, without a retry here.
+
 ### Parent issues
 
 [DESIGN-012](../designs/012-owned-root-wrapper-permissions.md) corrects generated

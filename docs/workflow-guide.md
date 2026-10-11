@@ -341,6 +341,13 @@ refresh. The [private roots contract](../.agents/sagas/distributed-dev-env/desig
 adds owned Git-backed project folders and pinned private repo anchors, default
 off. Native hosts and other client entry points still need integration. Git/file
 discovery is separate from actual provider rule loading.
+The [private native Codex preflight](../.agents/sagas/distributed-dev-env/designs/009-private-native-codex-preflight.md)
+is a default-off source guard for trusted roots and private provider state.
+It preserves live/uncertain startup state and checks daemon absence and
+configuration identity before writing. A private native API/profile and actual
+native instruction loading still need acceptance. The installed model-free
+roots check failed before its verifier; its fixture is retained and no runtime
+pass is claimed. Private-project admission remains disabled.
 Resume preserves existing WIP; it does not reset the worktree to the latest main.
 No broad reset, clean or deletion of ambiguous local state is a freshness policy.
 
