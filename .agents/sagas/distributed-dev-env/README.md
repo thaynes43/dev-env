@@ -1,5 +1,14 @@
 # Saga: distributed-dev-env (dev-env v2)
 
+**Latest delivery, 2026-10-11:** signed v2.20.0 directory/usage/private-Pod
+retention prerequisites are deployed through haynes-ops #3823. Global private
+admission and fixed-rule/discovery activation remain off. Directory cardinality
+is Unknown after the expected operator-only Kubernetes list refusal; the frozen
+observer and all failed evidence remain preserved. See the
+[installation verification and next acceptance gates](verification/installation-2026-10-11.md).
+Actual provider rules and the concurrent owner pilot remain unaccepted. Claude
+reviews are optional while unavailable; required CI and native review still apply.
+
 **Status:** design, Accepted 2026-10-06. Tom ratified ADR-001 as written (drafted
 2026-10-05, his rulings folded in 2026-10-06): see the
 [ratification summary](adrs/001-distributed-dev-env.md#ratification-summary) at the

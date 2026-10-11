@@ -1,5 +1,10 @@
 # DESIGN-019: retain the original private executor Pod
 
+Delivery update, 2026-10-11: source and signed v2.20.0 prerequisites are deployed
+through haynes-ops #3823. Actual provider/pilot acceptance remains separate. The
+[installation note](../verification/installation-2026-10-11.md) preserves the
+observer refusal, Directory Unknown state and remaining activation/read gates.
+
 The complete source audit found PRIVATE-POD-R1: an unbound private Session with
 retained history and suspended/reaped intent can lose its original terminal or
 never-started Pod. The existing private check protects volume removal. Unknown
