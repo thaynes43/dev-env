@@ -433,6 +433,10 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: retained executor witness cannot be erased with status
+          rule: '!has(oldSelf.status) || !has(oldSelf.status.lastWitness) || (has(self.status)
+            && has(self.status.lastWitness))'
     served: true
     storage: true
     subresources:
