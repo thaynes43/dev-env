@@ -117,3 +117,11 @@ pairing UX or MVP claim. Q-24 and the stopped Q-25 route remain pending/held.
 Actual cross-pod live/stopped discovery, unauthorized payload refusal and
 operator upgrade during live work remain the disposable owner pilot. Keep
 #174/#91 open.
+
+DIRECTORY-R1 demonstrated that nested status CEL alone permits removal of the
+optional whole status and loss of a retained witness. The directory root now
+requires status presence once a last witness exists; nested checks preserve its
+fields. Real API null/removal negatives preserve exact UID/RV/spec/full witness,
+while witness-free initialization/removal and valid original-Pod advances remain
+allowed. Original failing fixture and native HOLD receipt are retained. No
+stateless store invents prior witness data for legacy empty status.

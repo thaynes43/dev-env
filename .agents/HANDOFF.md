@@ -12,6 +12,14 @@ actual live/stopped discovery remain unaccepted. Local metadata is typed with
 runtime inference still GPU/household gated. Native source audit receipt
 `b9c92c9120cb5d579beebac08c5983d2108b932d1409f487e594322f49ee3c59`.
 
+Source implementation passed focused API/store/controller/common/capture/schema
+checks on released main. Native review found DIRECTORY-R1: whole optional status
+removal could erase a last witness. The root schema guard and real API negatives
+are corrected at `f610029a`; original HOLD/source/failed fixture remain retained.
+Corrective packet `40baa50b91b82cab6fd16e09de82d772112e3b1c5e6564824a014fc0abc040d6`
+binds the three-path correction and untouched twenty-path union. Corrected exact
+native review, CI, signed promotion and actual directory/pilot remain gates.
+
 
 ## Built #174 source unit: partial managed output capture
 
@@ -32,8 +40,10 @@ Final native review and exact-head required CI passed; #198 squash-merged as
 `24960dc128b219c48f4a32ba9f25e778f20e9a66` at 19:30:45 UTC. Native final
 receipt `4f5e0415f9d6fb10e369cfcd978423e9169b5b8141fbb82aedfba3f579cf395a`
 is retained. Release #197 merged as `fb53eb971da1beec1abc513fb1f251bb0926d0a6`
-and v2.19.0 tag exists; signed agent publication and separate GitOps/actual
-capture acceptance remain gates. Claude failed before a verdict and is optional.
+and signed v2.19.0 published digest
+`4cf24d0c0bff7a9174a8a453340e3800d99fd9282b8787b6f7274f3474903210`
+is verified. Separate GitOps/actual capture acceptance remain gates. Claude
+failed before a verdict and is optional.
 
 Context guard GitOps #3819 installed at `f316532a`; receipt
 `cd911ef5e9e474a9cd54f2a951f65d748e6ac9d9ea83395231ddd4ca2641a06f`
