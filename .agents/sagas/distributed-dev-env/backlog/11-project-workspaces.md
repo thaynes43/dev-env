@@ -140,6 +140,12 @@ separate acceptance; the pending Q-24 routing choice is not silently decided.
 
 ### Parent issues
 
+[DESIGN-012](../designs/012-owned-root-wrapper-permissions.md) corrects generated
+wrapper modes independently of a private umask, only after ownership/authority
+proof. Focused checks and native review passed; the first installed roots failure
+is retained with Unknown internal cause. A signed image and new reviewed named
+check are required; source checks are not operational retry or roots acceptance.
+
 The first #174 source guard is defined by
 [DESIGN-008](../designs/008-private-provider-history-retention.md): default-off
 private HOME/Session retention, immutable provenance and a one-way executor

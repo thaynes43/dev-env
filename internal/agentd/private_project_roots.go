@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
@@ -168,6 +170,9 @@ func refreshPrivateProjectRoot(ctx context.Context, r Runner, s Settings, snapsh
 			if _, err := rootGit(ctx, r, s, root, nil, "-c", "merge.autostash=false", "merge", "--ff-only", "--no-edit", "--no-autostash", next.Head); err != nil {
 				return report
 			}
+			if setGeneratedRootWrapperModes(ctx, root, snapshot.ProjectRules(), authority) != nil {
+				return report
+			}
 		}
 		if old.Exclusion != next.Exclusion && writeFileAtomic(filepath.Join(next.GitDir, "info", "exclude"), []byte(next.Exclusion), 0o644) != nil {
 			return report
@@ -237,6 +242,9 @@ func preparePrivateRoot(ctx context.Context, r Runner, s Settings, next *private
 	if _, err := rootGit(ctx, r, s, staging, nil, "checkout", "--quiet", "-b", privateRootBranch, head); err != nil {
 		return err
 	}
+	if err := setGeneratedRootWrapperModes(ctx, staging, rules, authority); err != nil {
+		return err
+	}
 	if writeFileAtomic(filepath.Join(staging, ".git", "dev-env-project-id"), []byte(next.ID), 0o600) != nil || writeFileAtomic(filepath.Join(staging, ".git", "info", "exclude"), []byte(next.Exclusion), 0o644) != nil {
 		return errPrivateRoot
 	}
@@ -250,6 +258,64 @@ func preparePrivateRoot(ctx context.Context, r Runner, s Settings, next *private
 		return err
 	}
 	next.Head, next.Tree = head, tree
+	return nil
+}
+
+// Git creates these two generated files through the process umask. Only a
+// successful owned checkout or proved-clean fast-forward calls this helper;
+// existing roots must already prove their exact modes before either write.
+func setGeneratedRootWrapperModes(ctx context.Context, dir, rules string, authority *projectCatalogAuthority) error {
+	var files []*os.File
+	defer func() {
+		for _, f := range files {
+			_ = f.Close()
+		}
+	}()
+	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
+		path := filepath.Join(dir, name)
+		if noSymlinkComponents(path) != nil {
+			return errPrivateRoot
+		}
+		f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			return errPrivateRoot
+		}
+		files = append(files, f)
+		if proveGeneratedRootWrapper(f, rules) != nil {
+			return errPrivateRoot
+		}
+	}
+	if authority.confirm(ctx) != nil {
+		return errPrivateRoot
+	}
+	for _, f := range files {
+		if proveGeneratedRootWrapper(f, rules) != nil || f.Chmod(0o644) != nil || f.Sync() != nil {
+			return errPrivateRoot
+		}
+		if fi, err := f.Stat(); err != nil || fi.Mode().Perm() != 0o644 {
+			return errPrivateRoot
+		}
+	}
+	return nil
+}
+
+func proveGeneratedRootWrapper(f *os.File, rules string) error {
+	fi, err := f.Stat()
+	current, pathErr := os.Lstat(f.Name())
+	if err != nil || pathErr != nil || !fi.Mode().IsRegular() || fi.Mode() & ^os.FileMode(0o644) != 0 || fi.Size() != int64(len(rules)) || !os.SameFile(fi, current) || noSymlinkComponents(f.Name()) != nil {
+		return errPrivateRoot
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok || st.Uid != uint32(os.Geteuid()) || st.Nlink != 1 {
+		return errPrivateRoot
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return errPrivateRoot
+	}
+	data, err := io.ReadAll(io.LimitReader(f, int64(len(rules))+1))
+	if err != nil || string(data) != rules {
+		return errPrivateRoot
+	}
 	return nil
 }
 

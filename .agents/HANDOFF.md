@@ -5,6 +5,27 @@ including releases. Record unavailable/failed/skipped outcomes without a pass
 claim. Required CI and native independent review remain merge gates; do not
 retry or repair Claude authentication as a prerequisite.
 
+## Built #173 owned wrapper permission correction — 2026-10-11 UTC
+
+[DESIGN-012](sagas/distributed-dev-env/designs/012-owned-root-wrapper-permissions.md)
+fixes a bounded source mismatch: Git checkout inherits umask 077, while owned
+generated wrappers require 0644. Only newly generated AGENTS.md/CLAUDE.md after
+fresh owned checkout or proved-clean rules fast-forward receive that mode.
+Exact bytes, UID, inode/link/path identity and current authority are proved
+before fd chmod/fsync. Existing mode drift, foreign files and edited roots
+remain preserved/refused. Private parents, repo/provider files and peer Git
+state keep their permissions and state.
+
+The full focused roots suite passed in 34.975s, refusal regressions in 1.294s;
+gofmt, diff checks and native independent review passed. Signed publication
+and a separately named reviewed model-free check remain delivery gates.
+The first installed roots Job from haynes-ops #3815 failed before verifier
+acceptance with zero restarts. Its internal cause remains Unknown; this offline
+mismatch does not identify it. Attempt 1, both earlier bootstrap Jobs and the
+native fixture/ledger remain retained. Protected runtime comparison passed and
+activity ended. Logical roots count stays 1 of 3, with no retry from this source
+change. Private admission/provider rule acceptance/MVP remain unaccepted.
+
 ## Built #174 private-history preservation guard — 2026-10-11 UTC
 
 [DESIGN-008](sagas/distributed-dev-env/designs/008-private-provider-history-retention.md)
