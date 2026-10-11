@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.17.0](https://github.com/thaynes43/dev-env/compare/v2.16.0...v2.17.0) (2026-10-11)
+
+
+### Features
+
+* **coordination:** publish immutable context with scoped stopped reads ([#190](https://github.com/thaynes43/dev-env/issues/190)) ([5cfcf0e](https://github.com/thaynes43/dev-env/commit/5cfcf0e02f9d16d11b3a9d92bd9f56fde748d3d2))
+
 ## [2.16.0](https://github.com/thaynes43/dev-env/compare/v2.15.1...v2.16.0) (2026-10-11)
 
 
