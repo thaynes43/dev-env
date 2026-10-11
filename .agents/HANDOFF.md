@@ -1,6 +1,33 @@
 # HANDOFF: start here
 
-## Reviewable #174 published context source — 2026-10-11 UTC
+## Reviewable #173 one-attempt managed canaries — 2026-10-11 UTC
+
+[DESIGN-011](sagas/distributed-dev-env/designs/011-private-managed-rule-canaries.md)
+adds a separate default-off policy with at most two fixed Claude/Codex records,
+while global private admission remains false. Existing clients submit only an
+ID. Trusted records bind exact project/repo/catalog/rules/template/image/model,
+fixed prompt and finite limits. Original retained identity survives concurrency,
+lost acknowledgements, early deletion and terminal retries. A permanent finalizer
+at initial Create prevents replacement before the first reconcile.
+
+The controller independently proves authority and retained execution intent
+before one bounded Pod. Canary Sessions cannot dispatch legacy child Sessions.
+One container, no init/sidecars, RestartNever, 600-second deadline, size-S caps,
+worker placement and at most 180-second provider execution are enforced. Existing
+subscription credential paths remain; Codex uses keeper access-only delivery,
+never enrollment/refresh copies or paid API fallback. Focused parser/API/schema/
+controller/command checks, affected lint and reproducible generation passed.
+Rebase onto released main `296c3d7` retains claims/history wiring. Independent native review and required CI passed on the original candidate;
+the integration rebase onto #190 is receiving a focused independent review and
+new exact-head CI. Claude review is optional/down.
+
+DESIGN-015 retained common-rule inputs must land before activation. Signed
+publication and separately reviewed GitOps profiles/policy/nonempty rules
+must precede any actual canary. No trial, native rule loading, pairing or fleet UX
+is accepted here. Q-24 remains pending. Provider output must prove loaded markers
+without marker values in the task prompt. Keep #173/#91 and the MVP open.
+
+## Built #174 published context source — 2026-10-11 UTC
 
 [DESIGN-013](sagas/distributed-dev-env/designs/013-published-stopped-context.md)
 adds default-off immutable explicit publication and authorized stopped-source
@@ -19,11 +46,14 @@ uses projected-token rotation and verified TLS, and refuses redirects.
 Focused store/API/client/command and real cached schema checks passed, affected
 lint has zero issues, and generation reproduces exact bytes. Rebase from the
 reviewed claim stack onto main `296c3d7ac0fb56600c30508d29ee066bb1baad27` preserves
-all 19 frozen source files and eight unaffected claim files. Native independent
-review and required CI are pending. Claude review remains optional/down.
+all 19 frozen source files and eight unaffected claim files. Native independent review and required CI passed at exact head `4cc602f`;
+source PR #190 merged as `5cfcf0e` on 2026-10-11. A native finding about
+bounded token-file reads was fixed across publication, heartbeat, project-sync
+and access minting. Claude review was unavailable and remains optional/down.
 Signed source/schema/narrow Role deployment and explicit publish-stop-read
 acceptance follow. Provider capture, complete retention, native directory,
 genuine stopped history and the owner pilot remain unaccepted; keep #174/#91 open.
+
 
 **Review ruling (Tom, 2026-10-11):** Claude Code reviews are down and optional,
 including releases. Record unavailable/failed/skipped outcomes without a pass
