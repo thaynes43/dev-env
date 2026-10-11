@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -28,10 +29,11 @@ var maxStreamLine = 16 << 20
 // taskResult is ~/.agentd/task-result.json, written when the agent exits.
 type taskResult struct {
 	protocol.TaskResult
-	StartedAt      time.Time       `json:"startedAt"`
-	ConversationID string          `json:"conversationId"`
-	BootID         string          `json:"bootId"`
-	Usage          *protocol.Usage `json:"usage,omitempty"`
+	StartedAt        time.Time                  `json:"startedAt"`
+	ConversationID   string                     `json:"conversationId"`
+	BootID           string                     `json:"bootId"`
+	Usage            *protocol.Usage            `json:"usage,omitempty"`
+	UsageObservation *protocol.UsageObservation `json:"usageObservation,omitempty"`
 }
 
 // agentPid is ~/.agentd/agent.pid: the agent CLI's pid and its start time, so
@@ -97,6 +99,10 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	if l.TUI {
 		return runTUI(l, stateDir, os.Stdin, pane, signals, stopGrace, nativeLease)
 	}
+	if err := beginInitialUsage(l, stateDir); err != nil {
+		_, _ = fmt.Fprintln(pane, "agentd: original initial usage intent is unconfirmed")
+		return 1
+	}
 
 	logf, err := os.OpenFile(l.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -129,6 +135,9 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	started := time.Now().UTC()
 	_, _ = fmt.Fprintf(out, "[agentd] task %s started %s, conversation %s\n", l.Session, started.Format(time.RFC3339), l.ConversationID)
+	if l.UsageSource != nil {
+		_, _ = fmt.Fprintf(out, "[agentd] requested model %s; actual model Unknown\n", l.UsageSource.RequestedModel)
+	}
 	if err := nativeLease.beforeSpawn(l, started); err != nil {
 		_ = pr.Close()
 		_ = pw.Close()
@@ -434,7 +443,15 @@ func writeResult(stateDir string, l Launch, started time.Time, code int, timedOu
 		u := res.Usage
 		tr.Usage = &u
 	}
-	_ = writeJSONFile(filepath.Join(stateDir, resultFile), tr)
+	tr.UsageObservation = retainInitialUsage(l, stateDir, res, tr.FinishedAt, code != 0 || timedOut)
+	if l.UsageSource != nil {
+		data, err := json.Marshal(tr)
+		if err == nil {
+			_ = projectSyncExclusiveFile(filepath.Join(stateDir, resultFile), data)
+		}
+	} else {
+		_ = writeJSONFile(filepath.Join(stateDir, resultFile), tr)
+	}
 }
 
 // agentEnv is the pane's environment minus Launch.Unset, plus Launch.Env.

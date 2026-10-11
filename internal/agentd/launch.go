@@ -40,6 +40,7 @@ const (
 // writes it, and the tmux pane reads it, so no prompt is ever quoted through a
 // shell (v1 passed it through `tmux send-keys`).
 type Launch struct {
+	UsageSource           *protocol.UsageSource     `json:"usageSource,omitempty"`
 	CommonInputs          *CommonInstructionBinding `json:"commonInputs,omitempty"`
 	NativeThreadConfirmed bool                      `json:"nativeThreadConfirmed,omitempty"`
 	Provider              string                    `json:"provider,omitempty"`
@@ -211,6 +212,9 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 		"-p")
 	l.Prompt = sess.Prompt
 	l.Timeout = sess.TimeoutDuration()
+	if err := bindInitialUsage(&l, sess, s.PodUID); err != nil {
+		return Launch{}, err
+	}
 	return l, nil
 }
 

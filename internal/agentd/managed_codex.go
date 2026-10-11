@@ -252,6 +252,11 @@ func buildCodexLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, 
 	if err != nil {
 		return Launch{}, err
 	}
+	if first == nil {
+		if err := bindInitialUsage(&l, sess, s.PodUID); err != nil {
+			return Launch{}, err
+		}
+	}
 	return l, nil
 }
 

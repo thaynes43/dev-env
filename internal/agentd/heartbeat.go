@@ -66,6 +66,9 @@ func (h *HeartbeatClient) Send(ctx context.Context, st protocol.Status) error {
 	if err != nil {
 		return fmt.Errorf("API token: %w", err)
 	}
+	// Guard the final wire boundary too: callers can construct Status directly.
+	// Keep the caller's raw evidence intact; this value copy sends typed usage only.
+	st.Usage = nil
 	body, err := json.Marshal(st)
 	if err != nil {
 		return err

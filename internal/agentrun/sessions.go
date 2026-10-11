@@ -14,6 +14,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
@@ -193,8 +194,31 @@ func (a *app) printSession(s apiv1.Session) {
 			row("problem", "%s", p)
 		}
 	}
-	if u := s.Usage; u != nil && (u.CostUSD != "" || u.InputTokens != 0 || u.OutputTokens != 0) {
-		row("usage", "$%s, %d tokens in, %d out", firstOf(u.CostUSD, "0"), u.InputTokens, u.OutputTokens)
+	row("Actual model", "Unknown")
+	if u := s.UsageObservation; u != nil && u.Validate() == nil {
+		cost := "Unknown"
+		if u.Cost.State == protocol.UsageReported {
+			cost = u.Cost.Amount + " USD (CLI equivalent estimate)"
+		}
+		row("Initial task cost", "%s", cost)
+		row("Usage scope", "Initial managed invocation")
+		row("Usage result", "%s; child inclusion Unknown", u.ResultState)
+		row("Requested model", "%s", u.Source.RequestedModel)
+		row("Input tokens", "%s", usageTokenText(u.InputTokens))
+		row("Output tokens", "%s", usageTokenText(u.OutputTokens))
+		row("Cache read tokens", "%s", usageTokenText(u.CacheReadInputTokens))
+		row("Cache create tokens", "%s", usageTokenText(u.CacheCreationInputTokens))
+		row("Subscription quota", "Unknown")
+	} else {
+		row("Requested model", "%s", firstOf(s.Model, "Unknown"))
+		row("Initial task cost", "Unknown")
+		row("Input tokens", "Unknown")
+		row("Output tokens", "Unknown")
+		row("Cache read tokens", "Unknown")
+		row("Cache create tokens", "Unknown")
+	}
+	if issue := s.UsageConflict; issue != nil {
+		row("usage conflict", "Unknown (%s); original observation retained", issue.Reason)
 	}
 	for _, c := range s.Conditions {
 		row("condition", "%s=%s %s: %s", c.Type, c.Status, c.Reason, c.Message)
@@ -206,6 +230,13 @@ func (a *app) printSession(s apiv1.Session) {
 			a.outf("  %s\n", line)
 		}
 	}
+}
+
+func usageTokenText(metric protocol.TokenObservation) string {
+	if metric.State == protocol.UsageReported && metric.Valid() {
+		return fmt.Sprintf("%d", *metric.Amount)
+	}
+	return "Unknown"
 }
 
 func (a *app) reap(ctx context.Context, args []string) error {

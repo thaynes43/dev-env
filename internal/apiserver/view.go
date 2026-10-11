@@ -101,8 +101,14 @@ func view(s *v1alpha1.AgentSession, withPrompt bool) apiv1.Session {
 	if o := s.Status.Outcome; o != nil {
 		v.Outcome = &apiv1.Outcome{State: string(o.State), Note: o.Note, At: timeOf(o.At)}
 	}
-	if u := s.Status.Usage; u != nil {
-		v.Usage = &apiv1.Usage{CostUSD: u.CostUSD, InputTokens: u.InputTokens, OutputTokens: u.OutputTokens}
+	// Raw legacy values remain in the CRD. Emitting them without provenance
+	// makes already-deployed clients invent zero or present an estimate as paid.
+	v.UsageObservation = usageObservationView(s.Status.UsageObservation)
+	if u := v.UsageObservation; u != nil && (u.Source.SessionUID != string(s.UID) || u.Source.Provider != string(s.Spec.Agent) || u.Source.RequestedModel != s.Spec.Model || s.Spec.Mode != v1alpha1.ModeTask) {
+		v.UsageObservation = nil
+	}
+	if issue := s.Status.UsageConflict; issue != nil {
+		v.UsageConflict = &apiv1.UsageConflict{State: issue.State, Reason: issue.Reason, IncomingSHA256: issue.IncomingSHA256, ObservedAt: issue.ObservedAt.UTC()}
 	}
 	for _, c := range s.Status.Conditions {
 		v.Conditions = append(v.Conditions, apiv1.Condition{

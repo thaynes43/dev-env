@@ -62,6 +62,7 @@ func TestRunAgentTask(t *testing.T) {
 
 	// The fake CLI checks its environment and stdin, then prints the stream.
 	cli := fakeCLI(t, dir, `
+[ -f "`+filepath.Join(s.StateDir, initialUsageDir, "intent.json")+`" ] || exit 5
 read -r prompt
 [ "$prompt" = "fix the docs" ] || { echo "bad prompt: $prompt" >&2; exit 9; }
 [ -z "$ANTHROPIC_API_KEY" ] || { echo "metered key leaked" >&2; exit 8; }
@@ -80,6 +81,9 @@ exit 0`)
 	if err := os.MkdirAll(s.WorkDir(), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := bindInitialUsage(&l, protocol.Session{SessionUID: "original-session", Agent: protocol.AgentClaude, Mode: protocol.ModeTask, Model: "claude-opus-5-5"}, "original-pod"); err != nil {
+		t.Fatal(err)
+	}
 	pane := &syncBuffer{}
 	code := RunAgent(writeLaunch(t, s, l), pane, make(chan os.Signal), time.Second)
 	if code != 0 {
@@ -89,12 +93,12 @@ exit 0`)
 	out := pane.String()
 	for _, want := range []string{
 		"[agentd] task s-1 started",
-		"[agentd] claude session conv-1, model claude-opus-5-5",
+		"[agentd] claude session conv-1, CLI-reported model claude-opus-5-5; actual model Unknown",
 		"Looking at the README.",
 		"-> Bash: git status --short",
 		"not json at all",
 		"a warning on stderr",
-		"[agentd] result success after 3 turns, cost $0.0123",
+		"[agentd] result success after 3 turns, initial invocation cost 0.0123 USD (CLI equivalent estimate)",
 		"TASK-EXIT:0",
 	} {
 		if !strings.Contains(out, want) {
@@ -114,6 +118,17 @@ exit 0`)
 	want := protocol.Usage{CostUSD: 0.0123, InputTokens: 100, OutputTokens: 20, CacheReadInputTokens: 5000, CacheCreationInputTokens: 300}
 	if res.ExitCode != 0 || res.Subtype != "success" || res.NumTurns != 3 || res.Usage == nil || *res.Usage != want || res.ConversationID != "conv-1" {
 		t.Errorf("result = %+v usage %+v", res, res.Usage)
+	}
+	if res.UsageObservation == nil || res.UsageObservation.Validate() != nil || res.UsageObservation.Source != *l.UsageSource || res.UsageObservation.Cost.Amount != "0.0123" || res.UsageObservation.ActualModelState != "Unknown" {
+		t.Fatal("original source/observed estimate lost", res.UsageObservation)
+	}
+	before, _ := os.ReadFile(s.statePath(resultFile))
+	if code := RunAgent(s.statePath(launchFile), &syncBuffer{}, make(chan os.Signal), time.Second); code != 1 {
+		t.Fatal("initial task executed twice", code)
+	}
+	after, _ := os.ReadFile(s.statePath(resultFile))
+	if !bytes.Equal(before, after) {
+		t.Fatal("original initial result replaced")
 	}
 	if fileExists(s.statePath(pidFile)) {
 		t.Error("pid file left after exit")

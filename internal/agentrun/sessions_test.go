@@ -117,7 +117,7 @@ func TestShow(t *testing.T) {
 		"agent/fix-typo at abc1234",
 		"last heartbeat:", "30s ago",
 		"exit 0 at 2026-10-06T20:59:00Z, 12 turns",
-		"$1.25, 1000 tokens in, 200 out",
+		"Initial task cost:", "Unknown", "Actual model:", "Unknown",
 		"condition:", "PodReady=True",
 		"prompt:\n  fix the typo\n  then open a PR\n")
 

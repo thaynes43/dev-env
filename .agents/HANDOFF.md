@@ -1,6 +1,6 @@
 # HANDOFF: start here
 
-## Next #174 durable directory source increment
+## Built #174 durable directory source increment
 
 [DESIGN-017](sagas/distributed-dev-env/designs/017-durable-session-directory.md)
 ratifies one default-off protected directory record per original namespace/UID,
@@ -24,7 +24,8 @@ corrected at `5ceabbc6`; the unchanged build guard, bounded cached CLI build and
 affected API/store checks passed. Packet
 `b9bb67ebfac2b923d0eec23a6fdf7d54dcfb3756d9ff291f1dc54ec13732836a`
 retains earlier findings/artifacts and unchanged generated/incoming paths.
-Final native review, CI, signed promotion and actual directory/pilot remain gates.
+Final native review and required CI passed; signed promotion and actual
+directory/pilot remain gates.
 DIRECTORY-R3 present-zero optional report timestamps are corrected at
 `b3b3b9a5` with standard-library nullable JSON encoding/decoding. Eleven projection
 cases, static CLI module guard and lint passed; corrected packet
@@ -35,6 +36,99 @@ client/coordinator identities; it is not a per-SA map. Live Session readers must
 also prove their own accepted project. Future pilot identity/project bindings
 remain separate and do not select Q-24 fleet UX.
 
+Source #199 squash-merged as `7fa1705e4981632f15580996c303848930913dbd`
+at 20:40 UTC. Exact head `0afed31a` passed required CI 38172562777 and final
+native review `7447409850fb3d0c6567d4e12b77225704b86a84924f65c93578fa2b6087d045`.
+Optional Claude run 38172562788 failed before a verdict; its error-only receipt
+and protected log were read without retry. Combine the directory and D18 usage
+schemas before signed promotion; neither standalone schema contains both.
+Directory activation is prospective and remains disabled until narrow access
+and the admission guard are installed. Actual history/discovery is unaccepted.
+
+## Next bounded #176 source unit: truthful initial usage
+
+[DESIGN-018](sagas/distributed-dev-env/designs/018-initial-invocation-usage-provenance.md)
+fixes the evidenced missing-cost-to-$0 defect through typed presence/provenance
+and one retained initial-invocation snapshot. Legacy raw status stays preserved;
+new API responses omit unqualified legacy Usage so old clients cannot invent a
+free cost. New clients show Unknown without typed evidence, explicit observed
+zero with CLI estimate provenance, requested exact model and actual Unknown.
+No parent/child sums, billing inference, API substitution or budget changes.
+Native COST-R1 also proves new-agent raw heartbeats could fabricate zero through
+an old operator/client. New agents must omit deprecated raw Usage from outgoing
+heartbeats while preserving private results, stored legacy evidence and ordinary
+liveness/budget processing. The original failed review remains retained.
+Finite audit SHA256 `9c96d404956f661f1a09f5361a1ffa6f9e1874f8a5e3e1a7848b00808db197e8`.
+Source implementation, native review, CI, signed promotion and actual-provider
+acceptance remain gates. Existing sessions must not restart for reporting alone.
+
+COST-R1 source correction `c97f800c` removes raw forwarding at collection and
+at the final heartbeat Send boundary. Actual old-decoder wire cases, incoming
+legacy/typed liveness and stable-counter/deadline budget cases passed; private
+raw results and generated schemas stay preserved. Corrected packet
+`192b9a2ccc1bc0d022419fe2090f1ebfbe6c0187e94b709c4ba5aff06187c525`
+retains the original native HOLD. Final independent review and CI still gate
+merge, followed by signed installation and separate actual-provider acceptance.
+
+Standalone Cost head `a3d44d5e` passed native corrected review
+`063da43dfee9faa4485dc6e435c24dcbee1a2fa0a0047d00e233a99af4229a41`
+and required CI 38172643863. Optional Claude run 38172643851 failed before a
+verdict; log `77fb4eb7ea5d02d49dd5ab557b28c1368cbdbf8b7993c60f74ae4a089ac05367`
+was read. The active #200 rebase on merged Directory7fa preserves all original
+source/failed reviews/fixtures. Combined-schema, receipt/CAS validation and
+exact integrated-head native review/CI remain required before merge.
+
+Integrated source `35f2f4bf` on merged Directory7fa passed focused receipt/CAS/
+replay and combined real-schema negatives, lint, static CLI guard and reproducible
+generation. Packet `9aa9a031b96eaa720e69606180dfc760809deb7d568ff2c7ba4a4ae68817ccbe`
+preserves 541 main incoming paths and 98 earlier artifacts. Combined AgentSession
+schema is `32b2c3e3f40258694e3693a3f5ba3631b71fa729b1708a3cfb6f9e4828155703`.
+Final exact-head native review and CI gate #200; signed promotion is separate.
+
+## Finite #154/#160 source audit, runtime unchanged
+
+Audit `949b9d839601a90660389ec27a71ba4d3dc43429b11a59acb07e8c7b88a8f9fa`
+preserves 39 source hashes and 24 budget/recovery seams. Current private budget
+refusals remain intact. Next bounded candidate is a default-off private direct-
+child adapter reusing the same logical-task ledger, reservation/deadline/counters
+and original private Session/HOME/executor/directory binding. Exact retained
+Pod/all-container/Node/Lease termination must support a distinct private proof;
+absence/partition/foreign ownership remains uncertain with effort/WIP retained.
+No native routing/rearm/rescue is included. Exceptional lost-native-host recovery
+still lacks accepted fence/one-use authorization/history ownership. Original
+#170 fixture/ledger and stopped Q-25 schema route remain preserved; Q-24 pending.
+Audit performed no tests, runtime GETs/writes, provider turns or private reads.
+The #173 rule acceptance and current D17/D18 promotion/pilot remain in flight.
+
+Finite pilot audit `5aff018d28cfd115a8a5704b85e8a2fd200ad358bb0b638b0d75c088261c0fba`
+keeps the fixed rule pair unstarted. Public dev-env cloning into private homes/
+worktrees cannot prove private GitHub repository authorization. Short no-tools
+marker invocations do not guarantee a concurrent interaction/upgrade window.
+Discovery alone grants no claims, payload or inbox rights. The original audit
+misattributed the private volume-removal guard to Pod removal. Exact source
+instead requires a full suspended/reaped removal-path audit before claiming Pod
+retention. Preserve the original audit and correction; no runtime deletion was
+attempted. Suspend/reap intent and absence are not a termination proof. A bounded
+original-executor stop-and-preserve source proof must precede the termination
+pilot, preserving original HOME/Pod evidence without archive/delete/rearm.
+
+## Installed common-rule canary prerequisites, admission disabled
+
+[haynes-ops #3822](https://github.com/thaynes43/haynes-ops/pull/3822) merged as
+`1a386bd136e13928b5e82f9546c04fab3fd3793b`. Exact signed source24960dc operator,
+v2.19.0 templates, AgentSession/PublishedContext schemas, minimal provider
+profiles, versioned catalog/common sources and narrow policies installed with
+all admission flags unchanged/off and no provider record/task. Native source
+and observer reviews and required CI passed; optional Claude failed before a
+verdict and was read without retry. One 21-GET observation passed:
+`31b6e674f275c544e0710aa97453c64c757a68462c2052e0c66b77d8c0b07e48`.
+All six affected Flux Kustomizations reached the exact merge, both operator
+replicas are Ready, and all 11 other Pod UIDs/restarts/specs, four Jobs, CRD UIDs/
+unrelated schemas, existing authority/guards, source identities and failed-native
+ledger remain preserved. The scoped activity ended. This accepts prerequisite
+installation only; actual both-provider instruction loading, private task pins,
+prospective directory/usage and the disposable owner pilot remain unaccepted.
+Install their final source/guards before separate fixed-record activation.
 
 ## Built #174 source unit: partial managed output capture
 

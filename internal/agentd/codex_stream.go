@@ -47,10 +47,10 @@ func (s *codexStream) line(raw []byte, path string, l *Launch, out io.Writer, re
 			AggregatedOutput string `json:"aggregated_output"`
 		} `json:"item"`
 		Usage *struct {
-			Input      int64 `json:"input_tokens"`
-			Output     int64 `json:"output_tokens"`
-			Cached     int64 `json:"cached_input_tokens"`
-			CacheWrite int64 `json:"cache_write_input_tokens"`
+			Input      json.RawMessage `json:"input_tokens"`
+			Output     json.RawMessage `json:"output_tokens"`
+			Cached     json.RawMessage `json:"cached_input_tokens"`
+			CacheWrite json.RawMessage `json:"cache_write_input_tokens"`
 		} `json:"usage"`
 	}
 	if json.Unmarshal(raw, &e) != nil || e.Type == "" {
@@ -99,14 +99,33 @@ func (s *codexStream) line(raw []byte, path string, l *Launch, out io.Writer, re
 			}
 		}
 	case "turn.completed":
-		if !s.turn || s.terminal || e.Usage == nil || e.Usage.Input < 0 || e.Usage.Output < 0 || e.Usage.Cached < 0 || e.Usage.CacheWrite < 0 {
+		if !s.turn || s.terminal || e.Usage == nil {
 			return errors.New("invalid native Codex completion")
 		}
+		// Preserve the pinned protocol's refusal of explicitly negative counts.
+		for _, raw := range []json.RawMessage{e.Usage.Input, e.Usage.Output, e.Usage.Cached, e.Usage.CacheWrite} {
+			var n int64
+			if json.Unmarshal(raw, &n) == nil && n < 0 {
+				return errors.New("invalid native Codex completion")
+			}
+		}
 		s.terminal = true
-		*result = streamResult{Seen: true, Subtype: "success", NumTurns: 1, Usage: protocol.Usage{InputTokens: e.Usage.Input, OutputTokens: e.Usage.Output, CacheReadInputTokens: e.Usage.Cached, CacheCreationInputTokens: e.Usage.CacheWrite}}
+		u := protocol.UnknownUsage()
+		u.ResultState = "Final"
+		u.InputTokens, u.OutputTokens = reportedTokens(e.Usage.Input), reportedTokens(e.Usage.Output)
+		u.CacheReadInputTokens, u.CacheCreationInputTokens = reportedTokens(e.Usage.Cached), reportedTokens(e.Usage.CacheWrite)
+		*result = streamResult{Seen: true, Subtype: "success", NumTurns: 1, Usage: legacyUsage(u), Observation: u}
 	case "turn.failed", "error":
+		if s.terminal {
+			return errors.New("native Codex emitted a second terminal event")
+		}
 		s.terminal, s.failed = true, true
-		*result = streamResult{Seen: true, Subtype: "provider_error", IsError: true}
+		u := protocol.UnknownUsage()
+		if e.Usage != nil {
+			u.InputTokens, u.OutputTokens = reportedTokens(e.Usage.Input), reportedTokens(e.Usage.Output)
+			u.CacheReadInputTokens, u.CacheCreationInputTokens = reportedTokens(e.Usage.Cached), reportedTokens(e.Usage.CacheWrite)
+		}
+		*result = streamResult{Seen: true, Subtype: "provider_error", IsError: true, Observation: u, Usage: legacyUsage(u)}
 		_, _ = fmt.Fprintln(out, "[agentd] native Codex turn failed")
 	default:
 		return errors.New("unknown pinned native Codex event")
