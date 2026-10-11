@@ -45,7 +45,14 @@ authority/catalog/templates/native ledger. Zero AgentSessions existed; actual
 publication/stopped-read and live-session upgrade acceptance remain pending.
 Scoped activity ended.
 
-## Next #175 source unit: durable offline inbox — 2026-10-11 UTC
+## Built #175 source: durable offline inbox — 2026-10-11 UTC
+
+Source PR #194 merged as `f02d0ad276d007105795dd8611d0725c5176869b` after
+required CI and native original/integration reviews passed. Corrected validation
+provenance retained the original uncertain packet without source changes. Claude
+review failed before a verdict and remains optional; its receipt was read.
+The feature remains default-off; signed schema/operator promotion and actual
+offline recipient/API acknowledgement acceptance are pending.
 
 [DESIGN-014](sagas/distributed-dev-env/designs/014-durable-offline-inbox.md)
 defines immutable attributed messages and explicit read acknowledgements in the
