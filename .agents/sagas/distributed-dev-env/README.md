@@ -1,5 +1,10 @@
 # Saga: distributed-dev-env (dev-env v2)
 
+The [ID-only canary client slice](designs/021-canary-cli.md) makes the fixed
+instruction-probe route safely callable: one trusted-ID POST, original receipt,
+no create defaults, retry, redirect or polling. Actual rule acceptance stays gated
+on reviewed configuration and a fresh authorized directory page per first create.
+
 The [explicit directory client slice](designs/020-directory-cli.md) supplies the
 safe read prerequisite for the fixed rule probes: one authorized API request,
 no create fallback/retries/redirects, truthful continuation and Unknown state.
