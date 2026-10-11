@@ -36,6 +36,9 @@ type Daemon struct {
 	StopGrace time.Duration
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
+	// ProjectCatalog is constructed from trusted pod configuration by the
+	// command. Disabled private bootstrap never invokes its reader.
+	ProjectCatalog *ProjectCatalogSource
 
 	failures int
 	// copying is set while a copy of the log to the shared volume runs, so a
@@ -125,6 +128,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return d.supervise(ctx)
 	}
 	steps := Render(ctx, d.R, d.S, d.Session)
+	if d.S.PrivateProjectBootstrap {
+		report, err := RefreshPrivateProjects(ctx, d.R, d.S, d.ProjectCatalog)
+		steps = append(steps, newStep("project-bootstrap", []string{"catalog bootstrap outcome " + report.State}, err))
+	}
 	ws, repoStep := PrepareRepo(ctx, d.R, d.S, d.Session)
 	steps = append(steps, repoStep)
 	if stop, err := workspaceStopRequested(d.S, d.Session); err != nil || stop {

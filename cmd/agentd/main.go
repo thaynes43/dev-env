@@ -50,6 +50,8 @@ Commands:
   render                   Render the GitOps config into $HOME (boot step 1).
   project-sync --enabled   Run one explicitly configured, model-free GitOps Job
                            to prepare declared shared references/project roots.
+  project-refresh          Bootstrap/fetch the trusted catalog in this private
+                           pod using its enabled startup settings; print report.
   ask-decision             Save one bounded question from JSON stdin for the
                            configured direct parent. Print its durable record.
                            The parent must present it through its question tool.
@@ -190,6 +192,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return codexHost(ctx, args[1:], stdout, stderr, getenv)
 	case "project-sync":
 		return projectSync(ctx, args[1:], stdout, stderr, getenv, r)
+	case "project-refresh":
+		return projectRefresh(ctx, args[1:], stdout, stderr, getenv, r)
 	case "ctl":
 		return ctl(ctx, args[1:], stdin, stdout, stderr, getenv, r)
 	case "ask-decision":
@@ -400,6 +404,11 @@ func daemon(ctx context.Context, log *slog.Logger, getenv func(string) string, r
 		return exitFailure
 	}
 	d := &agentd.Daemon{S: s, R: r, Log: log, Session: sess, Self: self, Interval: heartbeatInterval, Poll: resultPoll, StopGrace: stopGrace}
+	d.ProjectCatalog, err = privateProjectCatalogSource(s, getenv)
+	if err != nil {
+		log.Error("private project bootstrap configuration", "err", err)
+		return exitFailure
+	}
 	if hb, err := agentd.NewHeartbeatClient(s, sess.Name); err != nil {
 		log.Warn("heartbeats are off", "why", err)
 	} else {

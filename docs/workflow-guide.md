@@ -3,8 +3,9 @@
 **Scope corrected 2026-10-10, America/New_York.** V2 solves five problems with
 v1: upgrades kill sessions, work concentrates on one node, agents have broad
 access, session management is difficult, and model usage/cost is unclear.
-Agents share rules and authorized context and coordinate tasks. Each pod keeps
-its own repositories and ordinary task worktrees.
+Agents share rules and authorized context and coordinate tasks. Each independent
+Claude Code, Codex or local-model session has its own bounded pod and failure
+boundary, private provider home, repositories and ordinary task worktrees.
 
 The controlling decision is [ADR-003](../.agents/sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md).
 It supersedes the shared-Git/RWX prerequisite. The original ADRs and storage
@@ -39,7 +40,7 @@ request and assigning work. A future frontend uses the same API.
 
 ```mermaid
 flowchart TB
-    Owner["Tom: desktop or phone"] --> Agent["Claude or Codex coordinator"]
+    Owner["Tom: desktop or phone"] --> Agent["Claude, Codex or future local-model session"]
     Owner --> UI["Future session console"]
     Agent --> API["Operator and coordination API"]
     UI --> API
@@ -58,6 +59,18 @@ A Codex computer link identifies a persistent host. Native chats and children
 run on that host unless a supported dispatch route creates another worker pod.
 Multiple links remain distinct; shared context does not merge enrollment or
 move a chat automatically. Keep actual thread, host, executor and node visible.
+
+The [pinned routing audit](../.agents/sagas/distributed-dev-env/research/R-05-codex-native-routing.md)
+did not establish complete native-chat federation behind one paired entry.
+Independent native-session failure boundaries need independent app-servers;
+isolated command executors alone do not provide that boundary. The owner routing
+choice is pending in DESIGN-006 Q-24.
+
+The local-model adapter has the same task, source/rules, context, claim/message,
+access, budget and placement contracts. Live inference is disabled until GPUs
+are ready, with every household reservation preserved. Qwen is a candidate,
+not an accepted running backend. Claude/Codex keep subscription-backed execution;
+the platform must not silently switch them to paid APIs.
 
 Provider homes contain credentials and native state and remain private. The
 coordination service exposes authorized context; peers do not mount each
@@ -85,7 +98,13 @@ A released feature is not automatically enabled or accepted on live sessions.
 | Frontend | Existing management API and CLI | Console for sessions, nodes, tasks, messages, retained history, renewal and cost |
 | Local LLMs and GPUs | Design/backlog exists | GPU availability, household-safe allocation and a provider backend under the same contracts |
 
-The ordinary worker template was still 2.9.1 at the overnight checkpoint;
+Read-only verification on 2026-10-11 confirms the ordinary worker template is
+2.12.0 and private-project admission remains disabled. The trusted catalog has
+one declared repository and empty common-rule text. Actual provider loading
+remains unaccepted. The [next bootstrap contract](../.agents/sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md)
+adds private catalog preparation without shared preflight or locks.
+
+The ordinary worker template was still 2.9.1 at the historical overnight checkpoint;
 2.11.0 was signed and used for a separate native fixture. That fixture failed
 without a valid acceptance result. A later reviewed source fix does not count
 as a new runtime pass. See [HANDOFF](../.agents/HANDOFF.md) and
@@ -305,8 +324,10 @@ Before each new task:
 4. Load project/repository rules and record the revision actually supplied.
 5. Publish source/rule identities with the task so peers can assess its context.
 
-Private clone/worktree task-start fetch and pinning already exist. Full catalog
-bootstrap at startup and all supported client entry points still need integration.
+Private clone/worktree task-start fetch and pinning already exist. Opt-in
+catalog-wide bootstrap now covers managed-daemon startup and explicit private
+refresh. Native hosts, permanent project roots and other client entry points
+still need integration.
 Resume preserves existing WIP; it does not reset the worktree to the latest main.
 No broad reset, clean or deletion of ambiguous local state is a freshness policy.
 

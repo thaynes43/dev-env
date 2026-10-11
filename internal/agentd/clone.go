@@ -42,14 +42,18 @@ var sleepFunc = func(ctx context.Context, d time.Duration) error {
 
 func (s Settings) git(ctx context.Context, r Runner, dir string, args ...string) (string, error) {
 	full := []string{"-C", dir}
-	if s.WorkspaceID != "" {
+	if s.WorkspaceID != "" || s.privateProjectGit {
 		full = append(full, sharedGitPolicyArgs...)
 	}
 	if s.privateProjectGit {
 		full = append(full, projectGitPolicyArgs...)
 	}
 	full = append(full, args...)
-	res, err := r.Run(ctx, Cmd{Name: "git", Args: full, Env: gitEnv})
+	env := gitEnv
+	if s.privateProjectGit {
+		env = append(append([]string(nil), gitEnv...), "GIT_OPTIONAL_LOCKS=0")
+	}
+	res, err := r.Run(ctx, Cmd{Name: "git", Args: full, Env: env})
 	if err != nil {
 		var ce *CmdError
 		if errors.As(err, &ce) {

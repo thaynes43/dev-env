@@ -51,6 +51,16 @@ run --entrypoint /bin/bash "${image}" -euc '
   # tools the Go code calls by name (agentd: git, tmux, claude; the gh wrapper: gh).
   tini --version
   agentd version
+  agentd help | grep -q "project-refresh"
+  # Private catalog preparation is explicitly off in this credential-free
+  # image; disabled command dispatch reads no catalog or provider state.
+  if agentd project-refresh >/tmp/project-refresh.out 2>/tmp/project-refresh.err; then
+    echo "disabled project-refresh unexpectedly succeeded" >&2
+    exit 1
+  fi
+  test ! -s /tmp/project-refresh.out
+  grep -q "private project bootstrap is disabled" /tmp/project-refresh.err
+  test ! -d "$HOME/.agentd"
   agent-run version
   # declare-activity is agent-run by another name (D-66); its help needs no API.
   declare-activity help | grep -q "Usage: agent-run declare-activity"

@@ -18,10 +18,12 @@ or stopped-session context. Each implements in its own fresh task worktree.
 
 ## Reusable source and gaps
 
-- Private clone/worktree preparation already fetches and pins a base commit.
-  Full catalog preparation at each pod's startup is not delivered.
-- Project catalog and provider rule composition are built, but their current
-  admission/preparation depends on the old shared workspace identity. Decouple it.
+- Private clone/worktree preparation fetches and pins a base commit. Opt-in
+  catalog bootstrap covers managed-daemon startup and explicit private refresh;
+  native-host entrypoints and permanent roots still need integration.
+- Private declared-project admission/preparation and provider rule composition
+  are built independently of shared storage. Admission remains disabled and
+  actual provider rule loading remains unaccepted.
 - CLI/API list, show, live TUI messages and log tails exist. These do not provide
   a complete native-thread directory, durable offline messages or stopped-history
   reading.
@@ -117,6 +119,15 @@ provider loading is still unaccepted. The next finite source slice is local
 catalog-wide startup bootstrap/refresh, preserving dirty and ambiguous roots.
 Permanent project roots, remaining clients and both-provider/two-pod acceptance
 remain on the parent issue. No retired storage route is reopened.
+
+### Next #173 slice: private catalog startup and refresh
+
+[DESIGN-006](../designs/006-private-catalog-bootstrap.md) defines catalog-wide
+private bootstrap and safe refresh through a trusted named catalog read. Startup
+and explicit refresh record revisions/outcomes and preserve unsafe reference
+state. Neither path replaces selected-task fetch/pinning or resume provenance.
+Promotion changes new-session settings only and retains the private-task gate.
+Real-provider loading, project roots and other clients remain separate acceptance.
 
 ### Parent issues
 
