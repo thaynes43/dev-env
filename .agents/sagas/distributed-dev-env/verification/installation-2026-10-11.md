@@ -52,10 +52,11 @@ The scoped upgrade activity ended after verification.
 
 The observed window was 22:00:58–22:01:03 UTC. Both exact new operator replicas
 were Ready; all 11 non-operator Pod UIDs/restarts/specs, four retained Jobs, the
-failed native ledger, nine prior schemas, 62 prior authority records, 12 prior
+failed native ledger, nine prior CRD UIDs and eight unrelated schemas,
+62 prior authority records, 12 prior
 guard objects, 15 network policies and catalog/common ConfigMap identities were
-preserved. Only the reviewed Directory schema/grant/guard and signed operator/
-future-template delta appeared. All affected Flux revisions matched the merge.
+preserved. The reviewed combined AgentSession schema, new Directory schema/
+grant/guard and signed operator/future-template delta appeared. All affected Flux revisions matched the merge.
 
 ## Next fixed rule acceptance
 
