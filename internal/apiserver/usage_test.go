@@ -183,12 +183,28 @@ func TestUsageHeartbeatConcurrentSnapshotPreservesLiveness(t *testing.T) {
 	concurrent := u
 	concurrent.Cost.Amount = "7"
 	want := usageObservationStatus(concurrent)
+	receipt := &v1alpha1.SessionDirectoryReceipt{State: "Preparing", Name: "session-directory." + strings.Repeat("b", 64), SpecDigest: strings.Repeat("c", 64)}
+	confirmed := receipt.DeepCopy()
+	confirmed.State, confirmed.UID = "Confirmed", "original-directory"
 	patches := 0
 	f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
 		patches++
+		if patches == 1 {
+			// The Directory writer acquires its receipt after the heartbeat's
+			// read. Its ordinary merge patch must retain this unrelated field.
+			fresh := f.session(name)
+			fresh.Status.SessionDirectory = receipt
+			if err := f.c.Status().Update(ctx, fresh); err != nil {
+				return err
+			}
+		}
 		if patches == 2 {
 			fresh := f.session(name)
+			if !apiequality.Semantic.DeepEqual(receipt, fresh.Status.SessionDirectory) {
+				t.Fatal("heartbeat merge erased concurrent Directory receipt", fresh.Status)
+			}
 			fresh.Status.UsageObservation = want
+			fresh.Status.SessionDirectory = confirmed
 			fresh.Status.Outcome = &v1alpha1.OutcomeStatus{State: v1alpha1.OutcomeDone, Note: "concurrent unrelated outcome"}
 			if err := f.c.Status().Update(ctx, fresh); err != nil {
 				return err
@@ -200,12 +216,12 @@ func TestUsageHeartbeatConcurrentSnapshotPreservesLiveness(t *testing.T) {
 		t.Fatal("usage CAS conflict blocked liveness", w.Code, w.Body.String())
 	}
 	got := f.session(name)
-	if patches != 2 || !apiequality.Semantic.DeepEqual(want, got.Status.UsageObservation) || got.Status.Agent == nil || got.Status.Agent.LastHeartbeat == nil || got.Status.Outcome == nil {
+	if patches != 2 || !apiequality.Semantic.DeepEqual(want, got.Status.UsageObservation) || !apiequality.Semantic.DeepEqual(confirmed, got.Status.SessionDirectory) || got.Status.Agent == nil || got.Status.Agent.LastHeartbeat == nil || got.Status.Outcome == nil {
 		t.Fatal("concurrent snapshot/fields lost", got.Status)
 	}
 	f.srv.Client = f.c
 	f.now = f.now.Add(time.Minute)
-	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusNoContent || f.session(name).Status.UsageConflict == nil || !apiequality.Semantic.DeepEqual(want, f.session(name).Status.UsageObservation) {
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st); w.Code != http.StatusNoContent || f.session(name).Status.UsageConflict == nil || !apiequality.Semantic.DeepEqual(want, f.session(name).Status.UsageObservation) || !apiequality.Semantic.DeepEqual(confirmed, f.session(name).Status.SessionDirectory) || !f.session(name).Status.Agent.LastHeartbeat.Equal(&metav1.Time{Time: f.now}) {
 		t.Fatal("retained replay replaced concurrent original")
 	}
 }
