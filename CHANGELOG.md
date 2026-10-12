@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.24.1](https://github.com/thaynes43/dev-env/compare/v2.24.0...v2.24.1) (2026-10-12)
+
+
+### Bug Fixes
+
+* **agentd:** recover an interrupted private project-root advance ([#220](https://github.com/thaynes43/dev-env/issues/220)) ([81ba6f6](https://github.com/thaynes43/dev-env/commit/81ba6f6af54deae79ef1e89b136cad8f3eb2efea))
+* **agentd:** task source record, explicit refmap, resume after identity drift, staged task clone ([#225](https://github.com/thaynes43/dev-env/issues/225)) ([6e0d934](https://github.com/thaynes43/dev-env/commit/6e0d93480eca5059fcb463b8f329418f5f3a8b66))
+* **apiserver:** coordination fences, GitHub case, directory Unknown and object caps ([#223](https://github.com/thaynes43/dev-env/issues/223)) ([6644d8f](https://github.com/thaynes43/dev-env/commit/6644d8f8cb9b6f6dd757d8cc3928eff61dfad8ef))
+* **canary-result:** keep retained canary results readable; once-only client fences ([#219](https://github.com/thaynes43/dev-env/issues/219)) ([3753b13](https://github.com/thaynes43/dev-env/commit/3753b1396a161253e35b76c04ef917262daae4b9))
+* refuse canary prompts that repeat bound rules; widen the guard scan ([#229](https://github.com/thaynes43/dev-env/issues/229)) ([31fb105](https://github.com/thaynes43/dev-env/commit/31fb10593e28d139b01e627184f40ab405bab921))
+* **taskbudget:** confirm accepted ledger writes, bound history, tolerate skew, close unlaunched children ([#221](https://github.com/thaynes43/dev-env/issues/221)) ([0a63581](https://github.com/thaynes43/dev-env/commit/0a6358133de1bcdb93b245783d0392be8d3d284b))
+* truthful canary task result, resumable known non-attempt, capture gap freeze ([#222](https://github.com/thaynes43/dev-env/issues/222)) ([538c4f6](https://github.com/thaynes43/dev-env/commit/538c4f6e771a4fdeeb09586b560a5d2f4efe647c))
+
 ## [2.24.0](https://github.com/thaynes43/dev-env/compare/v2.23.0...v2.24.0) (2026-10-12)
 
 
