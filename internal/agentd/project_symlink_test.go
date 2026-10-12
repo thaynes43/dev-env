@@ -368,12 +368,15 @@ func TestPrivateCatalogBootstrapStillRefusesSubmodules(t *testing.T) {
 	}
 }
 
-// refuseTrackedSymlinks reproduces the 2.24.1 proof: any index listing a
-// symlink is refused, at the point the old mode check refused it.
-func refuseTrackedSymlinks(r Runner) Runner {
+// refuseTrackedSymlinks reproduces the 2.24.1 proof: an index listing a
+// symlink is refused, at the point the old mode check refused it. With a
+// non-empty under, only a checkout whose path ends in it is refused, so a
+// repository without symlinks in the real catalog can be modelled as passing.
+func refuseTrackedSymlinks(r Runner, under string) Runner {
 	return &fakeRunner{handle: func(c Cmd) (Result, error) {
 		result, err := r.Run(context.Background(), c)
-		if err == nil && slices.Contains(c.Args, "ls-files") && slices.Contains(c.Args, "--stage") && bytes.Contains(result.Stdout, []byte("120000 ")) {
+		if err == nil && slices.Contains(c.Args, "ls-files") && slices.Contains(c.Args, "--stage") && bytes.Contains(result.Stdout, []byte("120000 ")) &&
+			(under == "" || slices.ContainsFunc(c.Args, func(a string) bool { return strings.HasSuffix(a, under) })) {
 			return Result{}, &CmdError{Name: "git", Sub: "ls-files", ExitCode: 1}
 		}
 		return result, err
@@ -387,7 +390,7 @@ func TestPrivateRootsResumeAnchorLeftBySymlinkRefusal(t *testing.T) {
 			target := pushTrackedSymlinks(t, g)
 			root := privateRootPath(s)
 			demo, extra := filepath.Join(root, "demo"), filepath.Join(root, "extra")
-			report, err := RefreshPrivateProjects(context.Background(), refuseTrackedSymlinks(r), s, source)
+			report, err := RefreshPrivateProjects(context.Background(), refuseTrackedSymlinks(r, ""), s, source)
 			var pending privateRootPending
 			if err == nil || report.State != "Partial" || report.Repositories[0].State != "Preserved" || report.Repositories[1].State != "Preserved" || report.Projects[0].State != "Failed" ||
 				readWorkspaceJSONBounded(privateRootPendingPath(s), &pending, privateRootPendingLimit) != nil || pending.From.Head != "" || pending.To.Anchors["demo"].Identity != nil ||
@@ -434,6 +437,56 @@ func TestPrivateRootsResumeAnchorLeftBySymlinkRefusal(t *testing.T) {
 				if string(mustRead(t, filepath.Join(demo, "README.md"))) != "owner work\n" {
 					t.Fatal("owner file changed")
 				}
+			}
+		})
+	}
+}
+
+// The Q-30 canary's own shape: only one repository tracks a symlink, so under
+// 2.24.1 the other reference reached Ready and its anchor was recorded, while
+// the symlink repository's reference was preserved and its anchor was created
+// but left unrecorded. Here only extra is refused, for the same effect.
+func TestPrivateRootsResumeCanaryShapeAfterSymlinkRefusal(t *testing.T) {
+	for _, mode := range []string{"resumes", "second anchor dirty", "second anchor untracked"} {
+		t.Run(mode, func(t *testing.T) {
+			g, s, r, source := privateRootsFixture(t, twoRepoProjectCatalog)
+			target := pushTrackedSymlinks(t, g)
+			root := privateRootPath(s)
+			demo, extra := filepath.Join(root, "demo"), filepath.Join(root, "extra")
+			report, err := RefreshPrivateProjects(context.Background(), refuseTrackedSymlinks(r, "/extra"), s, source)
+			var pending privateRootPending
+			if err == nil || report.State != "Partial" || report.Repositories[0].State != "Ready" || report.Repositories[1].State != "Preserved" || report.Projects[0].State != "Failed" ||
+				readWorkspaceJSONBounded(privateRootPendingPath(s), &pending, privateRootPendingLimit) != nil || pending.To.Anchors["demo"].Identity == nil || pending.To.Anchors["extra"].Identity != nil ||
+				gitRun(t, g.env, demo, "rev-parse", "HEAD") != target || gitRun(t, g.env, extra, "rev-parse", "HEAD") != target || exists(privateRootReceiptPath(s)) {
+				t.Fatalf("fixture did not leave the canary shape: %v %+v pending=%+v", err, report, pending)
+			}
+			owner := ""
+			switch mode {
+			case "second anchor dirty":
+				owner = filepath.Join(extra, "README.md")
+			case "second anchor untracked":
+				owner = filepath.Join(extra, "new.txt")
+			}
+			if owner == "" {
+				updated := requirePrivateRootReady(t, s, r, source)
+				if updated.ID != pending.ID || updated.Anchors["demo"].GitDir == "" || updated.Anchors["extra"].GitDir == "" || exists(privateRootPendingPath(s)) {
+					t.Fatalf("canary-shaped root was not resumed: %+v", updated)
+				}
+				for _, dir := range []string{demo, extra} {
+					requireTrackedLinks(t, dir)
+					if gitRun(t, g.env, dir, "rev-parse", "HEAD") != target {
+						t.Fatalf("%s is not at the target", dir)
+					}
+				}
+				return
+			}
+			writeFile(t, owner, "owner work\n")
+			report, err = RefreshPrivateProjects(context.Background(), r, s, source)
+			if err == nil || report.Projects[0].State != "Failed" || !exists(privateRootPendingPath(s)) || exists(privateRootReceiptPath(s)) {
+				t.Fatalf("changed unrecorded anchor admitted: %v %+v", err, report)
+			}
+			if string(mustRead(t, owner)) != "owner work\n" || gitRun(t, g.env, extra, "rev-parse", "HEAD") != target {
+				t.Fatal("changed unrecorded anchor was adopted or moved")
 			}
 		})
 	}

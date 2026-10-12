@@ -115,6 +115,11 @@ Added 2026-10-12 for review findings roots-2 to roots-5 (#173).
   - Reap the session and create the task again. A task refused here never got
     a worktree or started its agent, so it has no work to lose.
 
+The contract is provider-neutral: Claude Code, Codex and a future local-model
+adapter use private repositories and the same source/rules provenance. This
+slice adds no local inference or GPU allocation. Subscription-backed execution
+continues through its existing providers.
+
 ## Tracked symlinks in the clean-checkout proof
 
 Added 2026-10-12 after the Q-30 private-repo canary. That bootstrap ended
@@ -155,6 +160,13 @@ keep the existing proof through Git's filters. The 10,000-entry bound counts
 symlinks too. The final index-equals-HEAD check (read-only callers) and
 `write-tree` (shared callers) are unchanged.
 
+A tracked `.gitattributes` that is a symlink is now accepted like any other
+symlink. It cannot hide an edit to a regular file, because Git 2.32 and later
+does not read an in-tree `.gitattributes` through a symlink, so a linked file
+cannot add a normalizing attribute such as `* text`. The proof assumes that Git
+version. The agent image installs Git from Debian (2.39.5 on the current
+bookworm base); an image with an older Git would need this proof revisited.
+
 Recovery from the earlier refusal needs no operator step. The preserved
 reference is unchanged and advances on the next refresh. The project root keeps
 its pending record, and a new anchor's worktree may exist without a recorded
@@ -163,11 +175,6 @@ the worktree is adopted only as the self-consistent detached worktree at its
 recorded `to` target that passes the full post-create proof, which now includes
 its symlinks. A changed target, dirty or staged files, or a moved HEAD stay
 preserved, and the project reports `Failed`.
-
-The contract is provider-neutral: Claude Code, Codex and a future local-model
-adapter use private repositories and the same source/rules provenance. This
-slice adds no local inference or GPU allocation. Subscription-backed execution
-continues through its existing providers.
 
 ## Affected paths
 
