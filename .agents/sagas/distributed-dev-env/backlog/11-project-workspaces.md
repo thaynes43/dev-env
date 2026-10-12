@@ -123,6 +123,9 @@ provider loading is still unaccepted. The next finite source slice is local
 catalog-wide startup bootstrap/refresh, preserving dirty and ambiguous roots.
 Permanent project roots, remaining clients and both-provider/two-pod acceptance
 remain on the parent issue. No retired storage route is reopened.
+*Update, 2026-10-12: the Codex original's result returned both rule markers; see
+the [Codex original result record](../verification/codex-original-result-2026-10-12.md).
+Claude loading remains unproven.*
 
 ### Next #173 slice: private catalog startup and refresh
 

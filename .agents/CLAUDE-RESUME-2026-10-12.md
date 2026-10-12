@@ -14,6 +14,9 @@ fixed list of already accepted evidence. Then it allows exactly one named read a
 one result read of the Codex original, with no retries and no counter reset.
 The Q-27 "pending" text below is the original record; the ruling sits under it.
 Q-24 is still pending.
+The correction then passed its tests and review, and both Codex reads ran once.
+The Codex original returned both rule markers; see the dated counters update
+below and the [Codex original result record](sagas/distributed-dev-env/verification/codex-original-result-2026-10-12.md).
 
 ## Your assignment
 
@@ -147,6 +150,14 @@ Create. Create completed within 0.194240 seconds of page capture finish.
 That page's Directory UID was `c7b87417-f221-4f8c-9de1-a86688979244`; source
 generation was 1. Directory generation was not exposed; post-Create cardinality
 remains Unknown. Configured private/bounded pods are not observed executor proof.
+
+**Counters update, 2026-10-12.** The counters paragraph above is the original record. Under
+Q-27, the one Codex named read and the one result read then ran, with no retries.
+Counters are now Directory **5**; Claude Create **1**, Codex Create **1**; Claude
+named/result **1 each**; Codex named/result **1 each**. The Codex output returned
+both the common and the repository marker. The
+[Codex original result record](sagas/distributed-dev-env/verification/codex-original-result-2026-10-12.md)
+has the details and what remains Unknown.
 
 ## Next bounded work and the six-step roadmap
 

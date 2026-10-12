@@ -145,6 +145,15 @@ counter reset or widened cap. It also grants no second correction, no retry of a
 failed read, no new canary, no credential or auth repair and no cleanup of the
 original.
 
+**Result, 2026-10-12.** The one correction passed its focused tests and
+independent native review. The one named read and the one result read then ran,
+with no retries. The retained output is exactly the common and repository
+markers, so the Codex original loaded both rule sets in its private pod. Root
+acceptance `48637874` records this. Served model, usage, cost, history, stop and
+Claude's rule loading remain Unknown or unaccepted. See the
+[Codex original result record](codex-original-result-2026-10-12.md). The text
+above is the original record and stays as written.
+
 Global private-project admission remains disabled. Actual both-provider rules,
 fresh private GitHub worktrees, claims/inbox, authorized full stopped native
 history, private dispatch/recovery, exact served-model/usage/cost provenance and

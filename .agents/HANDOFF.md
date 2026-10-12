@@ -7,6 +7,27 @@ the saga. To continue building, follow the
 in the Claude pickup brief. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## Codex original result read under Q-27 — 2026-10-12 UTC
+
+The one Q-27 reader correction passed 23 focused tests and independent native
+review. Then exactly one named read (15:55:52 UTC) and one fixed result read
+(15:56:02 UTC) ran, with no retries. The Codex original's retained output is
+exactly two lines: the common marker and the repository marker. So Codex loaded
+both rule sets in its private pod. Root acceptance `48637874` binds the receipts;
+the [Codex original result record](sagas/distributed-dev-env/verification/codex-original-result-2026-10-12.md)
+has the details.
+
+The task exited 0 after one turn, but the Session reads `Failed` because its Pod
+later hit the deadline (finding history-04, fix in draft PR #222). Served model,
+usage, cost, full history, physical stop, capture completeness, private GitHub
+authorization and a fresh task pin remain Unknown or unaccepted. Claude's rule
+loading is still unproven; its original returned a weekly-limit response.
+
+Counters now: Directory 5; Claude Create 1, Codex Create 1; Claude named/result
+1 each; Codex named/result 1 each. Both permanent IDs and both Q-27 reads are
+consumed. No further read, retry, Create or cleanup is authorized. Q-24 is still
+pending. The Q-27 entry below and every older entry keep their original text.
+
 ## Q-27 ruling and stale-guidance labels — 2026-10-12
 
 Tom answered Q-27 on 2026-10-12 through the Claude native prompt:
@@ -27,6 +48,8 @@ is one line in italics or a quoted note and points to the current state. The pag
 is long, so an unlabelled entry is not thereby current: the newest entries and the
 pickup brief control. Original text and receipts are kept. Retitled headings
 record their first title, and the front-door paragraph moved to the top.
+*Update: the correction and both Codex reads ran later on 2026-10-12; see the
+entry above.*
 
 ## Claude pickup and controlling roadmap — 2026-10-12, America/New_York
 
@@ -44,6 +67,8 @@ This pickup does not reset counters or authorize retries, pairing or cutover.
 Older entries below, including “What happens first” and shared-RWX prescriptions,
 are historical; later owner requirements and ADR-003 control conflicting guidance.
 *Update: Tom answered Q-27 later on 2026-10-12; see the ruling above.*
+*Update: both Codex reads ran later on 2026-10-12 and returned both markers; see
+the top entry.*
 
 ## Original Codex canary and stopped reader preparation — 2026-10-12 UTC
 
@@ -69,6 +94,7 @@ uncertain lifecycle receipts remain preserved. Q-24, actual both-provider rules
 and the owner pilot remain open; Claude advisory is optional/down. Earlier
 entries below are historical and must not restore zero-Create or unstarted IDs.
 *Historical: Q-27 was answered later on 2026-10-12; see the ruling at the top.*
+*Update: both Codex reads then ran and returned both markers; see the top entry.*
 
 ## First original Claude canary and released ownership seam — 2026-10-12 UTC
 
@@ -1728,7 +1754,7 @@ DESIGN-001 section 15; later rows link their own record. This heading first read
 | Q-24 | **Pending.** Codex native routing for the MVP: separate paired session hosts (recommended) or one coordinator with isolated workers sharing a native failure boundary. The native question went out 2026-10-11; no owner answer is recorded and phone delivery is unverified. Do not ask again; check for an actual answer first. [DESIGN-006 Q-24](sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md#q-24-codex-mvp-native-routing), README decision 57. |
 | Q-25 | **No decision needed.** The local schema-host DNS route stopped after three attempts. Shipping uses hosted CI and saved real-API schema evidence; no DNS investigation or retry ([installation record](sagas/distributed-dev-env/verification/installation-2026-10-11.md#owner-questions-and-stopped-checks)). |
 | Q-26 | **Answered 2026-10-11:** "Allow one correction (Recommended)". One final R4 checker correction ran and Ops #3824 activation was accepted. No R5, alternate method or retry ([fixed-rule activation record](sagas/distributed-dev-env/verification/fixed-rule-activation-2026-10-11.md), [DESIGN-021](sagas/distributed-dev-env/designs/021-canary-cli.md)). |
-| Q-27 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Fix once, then read (Recommended)". One offline correction of the Codex reader preparation, with a fixed list of already accepted evidence, focused tests and independent review. Then exactly one named read and one result read of the Codex original. No retries and no counter reset ([Codex probe record](sagas/distributed-dev-env/verification/codex-fixed-rule-probe-2026-10-12.md#q-27-one-final-reader-preparation-correction)). |
+| Q-27 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Fix once, then read (Recommended)". One offline correction of the Codex reader preparation, with a fixed list of already accepted evidence, focused tests and independent review. Then exactly one named read and one result read of the Codex original. No retries and no counter reset ([Codex probe record](sagas/distributed-dev-env/verification/codex-fixed-rule-probe-2026-10-12.md#q-27-one-final-reader-preparation-correction)). Carried out 2026-10-12: both reads ran once and returned both markers ([result record](sagas/distributed-dev-env/verification/codex-original-result-2026-10-12.md)). |
 
 **Next (historical, 2026-10-08; the current order is the pickup brief's
 [six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap)):**

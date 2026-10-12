@@ -8,6 +8,18 @@ actual both-provider rules/MVP acceptance remains open. Earlier checkpoints
 below are historical; they do not reauthorize old next steps or reset counters.
 *Update: Q-27 was answered later on 2026-10-12; see the next paragraph.*
 
+**#173 Codex rule markers accepted, 2026-10-12.** Under Q-27, the one reader
+correction passed its tests and independent review. Then the one named read and
+the one result read of the Codex original ran, with no retries. Its retained
+output is exactly the common and the repository marker, so the Codex original
+loaded both rule sets in its private pod. The
+[Codex original result record](verification/codex-original-result-2026-10-12.md)
+binds Root acceptance `48637874`. This accepts the markers only. Served model,
+usage, cost, history, stop, private GitHub authorization and a fresh task pin
+remain Unknown. Claude's rule loading is still unproven, so actual both-provider
+rules and the #173 MVP stay open. Counters: Directory 5; Create 1 each; named
+and result reads 1 each per provider. Nothing further is authorized.
+
 **Q-27 answered, 2026-10-12.** Tom answered through the Claude native prompt:
 "Fix once, then read (Recommended)". The ruling allows one offline correction of
 the Codex reader preparation, with a fixed list of already accepted evidence,
