@@ -163,3 +163,15 @@ func TestPrivateHistoryRetentionFlagIsExplicitAndDefaultOff(t *testing.T) {
 		t.Fatal("explicit retention setting missing")
 	}
 }
+
+// DESIGN-025 13: the terminal record is default off and turned on explicitly.
+func TestPrivateTerminalRecordFlagIsExplicitAndDefaultOff(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.privateTerminalRecord {
+		t.Fatal("the private terminal record is on by default")
+	}
+	o, err = parseFlags([]string{"--enable-private-terminal-record"})
+	if err != nil || !o.privateTerminalRecord {
+		t.Fatal("explicit terminal record setting missing")
+	}
+}

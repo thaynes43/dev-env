@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -943,4 +944,163 @@ func TestPrivateHistoryExecutorNotCreatedMark(t *testing.T) {
 	if err := k8s.Status().Update(ctx(t), newIntent); !apierrors.IsInvalid(err) {
 		t.Fatalf("a non-attempt mark replaced the intent: %v", err)
 	}
+}
+
+// DESIGN-025 T16 (record part): the terminal record names the recorded
+// executor, never changes or goes, never coexists with the missed marker, and
+// survives a rebuild of lastExecutor.
+func TestPrivateHistoryExecutorTerminalRecordIsImmutableAndBound(t *testing.T) {
+	at := metav1.NewTime(time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC))
+	retained := func(s *v1alpha1.AgentSession) *v1alpha1.PrivateHistoryStatus {
+		return &v1alpha1.PrivateHistoryStatus{Version: 1, SessionUID: string(s.UID), HomeClaim: "original-home", HomeUID: "original-home-uid",
+			BindingGeneration: s.Generation, Admission: "Started", ExecutorAttempted: true, ExecutorIntent: "synthetic-intent", Provider: string(s.Spec.Agent), StopState: "Unknown",
+			LastExecutor: &v1alpha1.PrivateExecutorStatus{PodUID: "original-executor", PodName: s.Name, NodeName: "worker-a", Revision: "original-template", Generation: s.Generation}}
+	}
+	terminal := func() *v1alpha1.PrivateExecutorTerminalStatus {
+		return &v1alpha1.PrivateExecutorTerminalStatus{Version: 1, PodUID: "original-executor", Phase: "Failed", Reason: "DeadlineExceeded", PodResourceVersion: "42",
+			NodeName: "worker-a", NodeUID: "node-uid", LeaseRenewedAt: at, ObservedAt: at, ClaudeConfigDir: ".claude", CodexHome: ".codex",
+			Containers: []v1alpha1.PrivateExecutorContainerTermination{{Name: "agent", ExitCode: 0, Reason: "Completed", FinishedAt: at}}}
+	}
+	missed := func() *v1alpha1.PrivateExecutorMissedStatus {
+		return &v1alpha1.PrivateExecutorMissedStatus{Version: 1, PodUID: "original-executor", ObservedAt: at}
+	}
+
+	t.Run("refused at creation", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			edit func(*v1alpha1.PrivateHistoryStatus)
+		}{
+			{"terminal without an executor", func(h *v1alpha1.PrivateHistoryStatus) { h.LastExecutor = nil; h.ExecutorTerminal = terminal() }},
+			{"terminal for another UID", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.ExecutorTerminal = terminal()
+				h.ExecutorTerminal.PodUID = "forged"
+			}},
+			{"missed without an executor", func(h *v1alpha1.PrivateHistoryStatus) { h.LastExecutor = nil; h.ExecutorMissed = missed() }},
+			{"missed for another UID", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.ExecutorMissed = missed()
+				h.ExecutorMissed.PodUID = "forged"
+			}},
+			{"both", func(h *v1alpha1.PrivateHistoryStatus) { h.ExecutorTerminal, h.ExecutorMissed = terminal(), missed() }},
+			{"running phase", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.ExecutorTerminal = terminal()
+				h.ExecutorTerminal.Phase = "Running"
+			}},
+			{"version 2", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.ExecutorTerminal = terminal()
+				h.ExecutorTerminal.Version = 2
+			}},
+			{"no containers", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.ExecutorTerminal = terminal()
+				h.ExecutorTerminal.Containers = nil
+			}},
+			{"too many containers", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.ExecutorTerminal = terminal()
+				for i := 0; i < 16; i++ {
+					h.ExecutorTerminal.Containers = append(h.ExecutorTerminal.Containers, v1alpha1.PrivateExecutorContainerTermination{Name: fmt.Sprintf("c%d", i), FinishedAt: at})
+				}
+			}},
+			{"unbounded reason", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.ExecutorTerminal = terminal()
+				h.ExecutorTerminal.Reason = strings.Repeat("R", 129)
+			}},
+			{"unbounded provider dir", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.ExecutorTerminal = terminal()
+				h.ExecutorTerminal.CodexHome = strings.Repeat("d", 257)
+			}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				s := taskSession()
+				if err := k8s.Create(ctx(t), s); err != nil {
+					t.Fatal(err)
+				}
+				s.Status.PrivateHistory = retained(s)
+				tc.edit(s.Status.PrivateHistory)
+				if err := k8s.Status().Update(ctx(t), s); !apierrors.IsInvalid(err) {
+					t.Fatalf("invalid record accepted: %v", err)
+				}
+			})
+		}
+	})
+
+	t.Run("terminal", func(t *testing.T) {
+		s := taskSession()
+		if err := k8s.Create(ctx(t), s); err != nil {
+			t.Fatal(err)
+		}
+		s.Status.PrivateHistory = retained(s)
+		if err := k8s.Status().Update(ctx(t), s); err != nil {
+			t.Fatal(err)
+		}
+		withRecord := get(t, s)
+		withRecord.Status.PrivateHistory.ExecutorTerminal = terminal()
+		if err := k8s.Status().Update(ctx(t), withRecord); err != nil {
+			t.Fatal("a valid terminal record refused:", err)
+		}
+		if got := get(t, s); !apiequality.Semantic.DeepEqual(got.Status.PrivateHistory.ExecutorTerminal, terminal()) {
+			t.Fatalf("terminal record pruned or changed: %+v", got.Status.PrivateHistory.ExecutorTerminal)
+		}
+		// A rebuild of lastExecutor (a new node name, a later generation, a
+		// conversation id) keeps the terminal record, and the write succeeds.
+		rebuilt := get(t, s)
+		rebuilt.Status.PrivateHistory.LastExecutor = &v1alpha1.PrivateExecutorStatus{PodUID: "original-executor", PodName: s.Name, NodeName: "worker-b", Revision: "original-template", Generation: s.Generation + 1, ConversationID: "later"}
+		if err := k8s.Status().Update(ctx(t), rebuilt); err != nil {
+			t.Fatal("a lastExecutor rebuild beside the terminal record refused:", err)
+		}
+		for _, tc := range []struct {
+			name string
+			edit func(*v1alpha1.PrivateHistoryStatus)
+		}{
+			{"remove", func(h *v1alpha1.PrivateHistoryStatus) { h.ExecutorTerminal = nil }},
+			{"change phase", func(h *v1alpha1.PrivateHistoryStatus) { h.ExecutorTerminal.Phase = "Succeeded" }},
+			{"change observedAt", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.ExecutorTerminal.ObservedAt = metav1.NewTime(at.Add(time.Hour))
+			}},
+			{"change a container", func(h *v1alpha1.PrivateHistoryStatus) { h.ExecutorTerminal.Containers[0].ExitCode = 1 }},
+			{"change the UID", func(h *v1alpha1.PrivateHistoryStatus) { h.ExecutorTerminal.PodUID = "replacement" }},
+			{"add missed", func(h *v1alpha1.PrivateHistoryStatus) { h.ExecutorMissed = missed() }},
+			{"drop with status", func(h *v1alpha1.PrivateHistoryStatus) { *h = *retained(s) }},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				bad := get(t, s)
+				tc.edit(bad.Status.PrivateHistory)
+				if err := k8s.Status().Update(ctx(t), bad); !apierrors.IsInvalid(err) {
+					t.Fatalf("terminal record change accepted: %v", err)
+				}
+			})
+		}
+	})
+
+	t.Run("missed", func(t *testing.T) {
+		s := taskSession()
+		if err := k8s.Create(ctx(t), s); err != nil {
+			t.Fatal(err)
+		}
+		s.Status.PrivateHistory = retained(s)
+		s.Status.PrivateHistory.ExecutorMissed = missed()
+		if err := k8s.Status().Update(ctx(t), s); err != nil {
+			t.Fatal("a valid missed marker refused:", err)
+		}
+		if got := get(t, s); !apiequality.Semantic.DeepEqual(got.Status.PrivateHistory.ExecutorMissed, missed()) {
+			t.Fatalf("missed marker pruned or changed: %+v", got.Status.PrivateHistory.ExecutorMissed)
+		}
+		for _, tc := range []struct {
+			name string
+			edit func(*v1alpha1.PrivateHistoryStatus)
+		}{
+			{"remove", func(h *v1alpha1.PrivateHistoryStatus) { h.ExecutorMissed = nil }},
+			{"change observedAt", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.ExecutorMissed.ObservedAt = metav1.NewTime(at.Add(time.Hour))
+			}},
+			{"add terminal", func(h *v1alpha1.PrivateHistoryStatus) { h.ExecutorTerminal = terminal() }},
+			{"replace with terminal", func(h *v1alpha1.PrivateHistoryStatus) { h.ExecutorMissed, h.ExecutorTerminal = nil, terminal() }},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				bad := get(t, s)
+				tc.edit(bad.Status.PrivateHistory)
+				if err := k8s.Status().Update(ctx(t), bad); !apierrors.IsInvalid(err) {
+					t.Fatalf("missed marker change accepted: %v", err)
+				}
+			})
+		}
+	})
 }

@@ -27,6 +27,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -111,7 +112,17 @@ type Reconciler struct {
 	APIURL string
 	// PrivateHistoryRetention opts new/observed private lifecycles into a durable
 	// fail-closed preservation boundary. Existing Pods are never restarted.
-	PrivateHistoryRetention  bool
+	PrivateHistoryRetention bool
+	// PrivateTerminalRecord writes the durable terminal record of a private
+	// executor and the missed marker (DESIGN-025 3, --enable-private-terminal-record).
+	// Off, no new marks are written; existing ones stay and still count.
+	PrivateTerminalRecord bool
+	// PrivateExecutorTerminal counts the marks (MetricPrivateExecutorTerminal);
+	// nil counts nothing.
+	PrivateExecutorTerminal *prometheus.CounterVec
+	// Now is the clock of the terminal record and its lease check; nil is
+	// time.Now.
+	Now                      func() time.Time
 	RetainedCommonRules      bool
 	SessionDirectory         *sessiondirectory.KubeStore
 	PrivateProjectCanaries   *projectcanary.Policy
@@ -327,10 +338,28 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 				return ctrl.Result{RequeueAfter: time.Second}, nil
 			}
 			fresh.Status.PrivateHistory = s.Status.PrivateHistory.DeepCopy()
-			if err := r.writePrivateHistory(ctx, &s, fresh); err != nil {
+			// The terminal record or missed marker is written here, before
+			// anything else in this reconcile, by the confirmed write. It is
+			// counted once the API server acknowledges the update with it: the
+			// schema keeps a stored mark for good, and a later reconcile that
+			// finds it stored writes and counts nothing, so a re-read that
+			// another write overtook must not lose the count.
+			acknowledged, err := r.writePrivateHistoryAcknowledged(ctx, &s, fresh)
+			if acknowledged && obs.privateTerminal != "" {
+				r.countTerminal(obs.privateTerminal)
+				log.FromContext(ctx).Info("stored a private executor mark", "mark", obs.privateTerminal, "confirmed", err == nil)
+			}
+			if err != nil {
 				return ctrl.Result{RequeueAfter: time.Second}, err
 			}
 			return ctrl.Result{RequeueAfter: time.Second}, nil
+		}
+		if obs.privateTerminalRetry {
+			defer func() {
+				if outcomeErr == nil && (out.RequeueAfter == 0 || out.RequeueAfter > privateTerminalRetry) {
+					out.RequeueAfter = privateTerminalRetry
+				}
+			}()
 		}
 	}
 
@@ -1160,6 +1189,16 @@ type observation struct {
 	// finalizer, after a verified rescue.
 	archived              bool
 	privateHistoryUnknown error
+	// privateTerminal is the mark this observation added to the private
+	// retention record (terminalRecorded or terminalMissed), counted once its
+	// confirmed write lands (DESIGN-025 3).
+	privateTerminal string
+	// privateTerminalRetry: the recorded executor is terminal but a check
+	// failed; the reconcile asks again within privateTerminalRetry.
+	privateTerminalRetry bool
+	// privateExecutorEnded: the recorded executor is gone after its confirmed
+	// terminal record, so its absence is ExecutorEnded, not Unknown.
+	privateExecutorEnded bool
 	// now is the reconcile's clock, for the timers' status fields.
 	now time.Time
 }
@@ -1291,6 +1330,9 @@ func podPhase(s *v1alpha1.AgentSession, obs observation) (v1alpha1.SessionPhase,
 			return v1alpha1.PhaseSuspended, notReady("PreservationUnknown", obs.privateHistoryUnknown.Error())
 		}
 		return v1alpha1.PhasePending, notReady("PreservationUnknown", obs.privateHistoryUnknown.Error())
+	case privateHistoryProtected(s) && obs.pod.missing && obs.privateExecutorEnded && !wantsPodGone(s):
+		rec := s.Status.PrivateHistory.ExecutorTerminal
+		return v1alpha1.PhaseFailed, notReady("ExecutorEnded", fmt.Sprintf("the recorded private executor ended (%s %s) and its Pod is gone; its HOME is kept and no replacement starts", rec.Phase, rec.Reason))
 	case privateHistoryProtected(s) && wantsPodGone(s):
 		if s.DeletionTimestamp.IsZero() {
 			return v1alpha1.PhaseSuspended, notReady("RetentionPending", "private HOME and durable identity remain retained; private stop evidence is unknown")

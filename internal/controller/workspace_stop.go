@@ -44,40 +44,13 @@ func (v PodWorkspaceStopVerifier) Verify(ctx context.Context, s *v1alpha1.AgentS
 	if pod.Spec.NodeName == "" {
 		return nil, nil, errors.New("terminated executor lacks its admitted node identity")
 	}
-	var node corev1.Node
-	if err := v.Reader.Get(ctx, client.ObjectKey{Name: pod.Spec.NodeName}, &node); err != nil {
-		return nil, nil, fmt.Errorf("executor node: %w", err)
+	clock := v.Now
+	if clock == nil {
+		clock = time.Now
 	}
-	ready, readyConditions := false, 0
-	for _, c := range node.Status.Conditions {
-		if c.Type == corev1.NodeReady {
-			readyConditions++
-			ready = c.Status == corev1.ConditionTrue
-		}
-	}
-	if node.Name != pod.Spec.NodeName || node.UID == "" || !node.DeletionTimestamp.IsZero() || readyConditions != 1 || !ready {
-		return nil, nil, errors.New("executor node is missing, deleting, unready or unknown")
-	}
-	var lease coordinationv1.Lease
-	if err := v.Reader.Get(ctx, client.ObjectKey{Namespace: "kube-node-lease", Name: pod.Spec.NodeName}, &lease); err != nil {
-		return nil, nil, fmt.Errorf("executor node lease: %w", err)
-	}
-	now := time.Now().UTC()
-	if v.Now != nil {
-		now = v.Now().UTC()
-	}
-	if !lease.DeletionTimestamp.IsZero() || lease.Spec.RenewTime == nil || lease.Spec.HolderIdentity == nil || *lease.Spec.HolderIdentity != node.Name ||
-		lease.Spec.RenewTime.After(now) || now.Sub(lease.Spec.RenewTime.Time) > 40*time.Second {
-		return nil, nil, errors.New("executor node lease is missing, stale, future or foreign; stop proof refused")
-	}
-	matchingNode := false
-	for _, owner := range lease.OwnerReferences {
-		if owner.APIVersion == "v1" && owner.Kind == "Node" && owner.Name == node.Name && owner.UID == node.UID {
-			matchingNode = true
-		}
-	}
-	if !matchingNode {
-		return nil, nil, errors.New("executor node lease belongs to a different node UID")
+	node, lease, now, err := executorNodeLive(ctx, v.Reader, pod.Spec.NodeName, clock)
+	if err != nil {
+		return nil, nil, err
 	}
 	proof := &protocol.WorkspaceStopProof{Version: 1, Workspace: s.Spec.Workspace.ID, Task: s.Name, SessionUID: string(s.UID), PodName: pod.Name, PodUID: string(pod.UID),
 		PodResourceVersion: pod.ResourceVersion, NodeName: node.Name, NodeUID: string(node.UID), LeaseResourceVersion: lease.ResourceVersion,
@@ -86,6 +59,55 @@ func (v PodWorkspaceStopVerifier) Verify(ctx context.Context, s *v1alpha1.AgentS
 		return nil, nil, err
 	}
 	return proof, &pod, nil
+}
+
+// executorNodeLive checks that a live kubelet wrote a Pod's terminated status
+// (DESIGN-025 3.2 points 2 and 3), for the shared stop verifier and the private
+// terminal record alike. The node exists, is not deleting and has exactly one
+// Ready condition, which is True; its lease in kube-node-lease is held by that
+// node, owned by that node's UID, renewed within the last 40 seconds and not in
+// the future. When the Pod garbage collector marks a Pod Failed for a lost node,
+// that node is not Ready, so its status never counts. Reads go through reader,
+// which must be uncached. A read the operator has no rights for (Nodes and
+// Leases until haynes-ops grants them) is an error: it fails closed.
+//
+// clock is read once, after the lease read, and that reading is returned as the
+// verification time. A kubelet renewal that lands during the reads is then
+// never mistaken for a future one.
+func executorNodeLive(ctx context.Context, reader client.Reader, nodeName string, clock func() time.Time) (*corev1.Node, *coordinationv1.Lease, time.Time, error) {
+	var node corev1.Node
+	if err := reader.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
+		return nil, nil, time.Time{}, fmt.Errorf("executor node: %w", err)
+	}
+	ready, readyConditions := false, 0
+	for _, c := range node.Status.Conditions {
+		if c.Type == corev1.NodeReady {
+			readyConditions++
+			ready = c.Status == corev1.ConditionTrue
+		}
+	}
+	if node.Name != nodeName || node.UID == "" || !node.DeletionTimestamp.IsZero() || readyConditions != 1 || !ready {
+		return nil, nil, time.Time{}, errors.New("executor node is missing, deleting, unready or unknown")
+	}
+	var lease coordinationv1.Lease
+	if err := reader.Get(ctx, client.ObjectKey{Namespace: "kube-node-lease", Name: nodeName}, &lease); err != nil {
+		return nil, nil, time.Time{}, fmt.Errorf("executor node lease: %w", err)
+	}
+	now := clock().UTC()
+	if !lease.DeletionTimestamp.IsZero() || lease.Spec.RenewTime == nil || lease.Spec.HolderIdentity == nil || *lease.Spec.HolderIdentity != node.Name ||
+		lease.Spec.RenewTime.After(now) || now.Sub(lease.Spec.RenewTime.Time) > 40*time.Second {
+		return nil, nil, time.Time{}, errors.New("executor node lease is missing, stale, future or foreign; stop proof refused")
+	}
+	matchingNode := false
+	for _, owner := range lease.OwnerReferences {
+		if owner.APIVersion == "v1" && owner.Kind == "Node" && owner.Name == node.Name && owner.UID == node.UID {
+			matchingNode = true
+		}
+	}
+	if !matchingNode {
+		return nil, nil, time.Time{}, errors.New("executor node lease belongs to a different node UID")
+	}
+	return &node, &lease, now, nil
 }
 
 func controlledBySession(p *corev1.Pod, s *v1alpha1.AgentSession) bool {

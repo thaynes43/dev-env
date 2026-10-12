@@ -571,6 +571,11 @@ type AgentSessionStatus struct {
 // +kubebuilder:validation:XValidation:rule="self.admission == 'Started' || size(self.homeUID) == 0",message="unknown original HOME cannot be inferred"
 // +kubebuilder:validation:XValidation:rule="!self.executorAttempted || (self.admission == 'Started' && size(self.executorIntent) > 0)",message="executor attempt requires one durable causal intent"
 // +kubebuilder:validation:XValidation:rule="!has(self.executorNotCreated) || !self.executorNotCreated || (self.executorAttempted && !has(self.lastExecutor))",message="only an executor attempt with no observed executor can be recorded as not created"
+// +kubebuilder:validation:XValidation:rule="!has(self.executorTerminal) || (has(self.lastExecutor) && self.executorTerminal.podUID == self.lastExecutor.podUID)",message="the executor terminal record must name the recorded executor"
+// +kubebuilder:validation:XValidation:rule="!has(self.executorMissed) || (has(self.lastExecutor) && self.executorMissed.podUID == self.lastExecutor.podUID)",message="the missed executor marker must name the recorded executor"
+// +kubebuilder:validation:XValidation:rule="!has(self.executorTerminal) || !has(self.executorMissed)",message="an executor cannot be both recorded terminal and missed"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.executorTerminal) || (has(self.executorTerminal) && self.executorTerminal == oldSelf.executorTerminal)",message="the executor terminal record cannot change or be removed"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.executorMissed) || (has(self.executorMissed) && self.executorMissed == oldSelf.executorMissed)",message="the missed executor marker cannot change or be removed"
 type PrivateHistoryStatus struct {
 	// +kubebuilder:validation:Enum=1
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="retention version is immutable"
@@ -614,11 +619,98 @@ type PrivateHistoryStatus struct {
 	// +kubebuilder:validation:MaxLength=128
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="retention provider is immutable"
 	Provider string `json:"provider"`
-	// This slice has no independent private executor termination proof.
+	// StopState stays Unknown: executorTerminal is evidence for HOME expiry
+	// only, never DESIGN-010's stop contract (DESIGN-025 3.1).
 	// +kubebuilder:validation:Enum=Unknown
 	StopState string `json:"stopState"`
 	// +optional
 	LastExecutor *PrivateExecutorStatus `json:"lastExecutor,omitempty"`
+	// ExecutorTerminal is the durable terminal record of the recorded executor
+	// (DESIGN-025 section 3): the operator's own uncached observation that the
+	// Pod named by lastExecutor.podUID reached a terminal phase, every container
+	// terminated, on a Ready node with a fresh lease. It sits beside
+	// lastExecutor, which every observation rebuilds. It is evidence for HOME
+	// expiry only: stopState stays Unknown, and it authorizes no claim
+	// transfer, resume or replacement. Once written it never changes or goes.
+	// +optional
+	ExecutorTerminal *PrivateExecutorTerminalStatus `json:"executorTerminal,omitempty"`
+	// ExecutorMissed records once that an uncached read found the recorded
+	// executor gone before its terminal record was written. It never changes
+	// or goes, and no terminal record is ever written beside it: absence never
+	// proves stop.
+	// +optional
+	ExecutorMissed *PrivateExecutorMissedStatus `json:"executorMissed,omitempty"`
+}
+
+// PrivateExecutorTerminalStatus is the operator's confirmed observation that
+// the recorded private executor ended (DESIGN-025 3.1).
+type PrivateExecutorTerminalStatus struct {
+	// +kubebuilder:validation:Enum=1
+	Version int `json:"version"`
+	// PodUID must equal lastExecutor.podUID.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	PodUID string `json:"podUID"`
+	// Phase is the Pod's terminal phase.
+	// +kubebuilder:validation:Enum=Succeeded;Failed
+	Phase string `json:"phase"`
+	// Reason is the Pod's status.reason, such as DeadlineExceeded or Evicted.
+	// +kubebuilder:validation:MaxLength=128
+	// +optional
+	Reason string `json:"reason,omitempty"`
+	// PodResourceVersion is the observed Pod revision.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	PodResourceVersion string `json:"podResourceVersion"`
+	// NodeName and NodeUID are the Ready node that reported the termination.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	NodeName string `json:"nodeName"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	NodeUID string `json:"nodeUID"`
+	// LeaseRenewedAt is the node lease's renew time at the observation.
+	LeaseRenewedAt metav1.Time `json:"leaseRenewedAt"`
+	// ObservedAt is the operator's clock at the observation.
+	ObservedAt metav1.Time `json:"observedAt"`
+	// Containers are the regular, init and ephemeral containers' terminations.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=atomic
+	Containers []PrivateExecutorContainerTermination `json:"containers"`
+	// ClaudeConfigDir and CodexHome are the executor's provider directories,
+	// relative to HOME, recorded only when the agent container's env sets each
+	// literally to a path inside the HOME volume; empty otherwise (6.3).
+	// +kubebuilder:validation:MaxLength=256
+	// +optional
+	ClaudeConfigDir string `json:"claudeConfigDir,omitempty"`
+	// +kubebuilder:validation:MaxLength=256
+	// +optional
+	CodexHome string `json:"codexHome,omitempty"`
+}
+
+// PrivateExecutorContainerTermination is one container's terminated state.
+type PrivateExecutorContainerTermination struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	Name     string `json:"name"`
+	ExitCode int32  `json:"exitCode"`
+	// +kubebuilder:validation:MaxLength=128
+	// +optional
+	Reason     string      `json:"reason,omitempty"`
+	FinishedAt metav1.Time `json:"finishedAt"`
+}
+
+// PrivateExecutorMissedStatus records once that the recorded executor was
+// found gone with no terminal record (DESIGN-025 3.4).
+type PrivateExecutorMissedStatus struct {
+	// +kubebuilder:validation:Enum=1
+	Version int `json:"version"`
+	// PodUID must equal lastExecutor.podUID.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	PodUID     string      `json:"podUID"`
+	ObservedAt metav1.Time `json:"observedAt"`
 }
 
 // PrivateExecutorStatus is an owned executor observation, not a stop receipt.

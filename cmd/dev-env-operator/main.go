@@ -114,6 +114,7 @@ type options struct {
 	privateProjectTasks           bool
 	managedCodexTasks             bool
 	privateHistoryRetention       bool
+	privateTerminalRecord         bool
 	privateProjectCanariesEnabled bool
 	privateProjectCanaries        *projectcanary.Policy
 	managedChildDecisions         bool
@@ -145,6 +146,7 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.privateProjectTasks, "enable-private-project-tasks", false, "enable new accepted-project tasks with private repositories and worktrees")
 	fs.BoolVar(&o.managedCodexTasks, "enable-managed-codex-tasks", false, "enable accepted-project managed Codex task admission")
 	fs.BoolVar(&o.privateHistoryRetention, "enable-private-history-retention", false, "retain private managed HOME and durable Session identity on reap and suspended autoarchive")
+	fs.BoolVar(&o.privateTerminalRecord, "enable-private-terminal-record", false, "record the durable terminal observation of a private executor, and the missed marker, in its Session's status (DESIGN-025 3); records only, deletes nothing")
 	fs.BoolVar(&o.retainedCommonRules, "enable-retained-common-rules", false, "retain reviewed common instruction inputs for new fixed private managed canaries")
 	fs.BoolVar(&o.privateProjectCanariesEnabled, "enable-private-project-canaries", false, "enable only two explicitly configured private managed subscription rule canaries")
 	canaries := fs.String("private-project-canaries", "", "strict operator-owned JSON records for at most two fixed private managed canaries")
@@ -411,6 +413,9 @@ func run(args []string) error {
 		}
 	}
 	directoryStore := &sessiondirectory.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.templatesNamespace}
+	// Registered whatever the flag says, so the series exist at 0 (DESIGN-025 10).
+	terminalCounter := controller.NewPrivateExecutorTerminalCounter()
+	ctrlmetrics.Registry.MustRegister(terminalCounter)
 	r := &controller.Reconciler{
 		SessionDirectory: directoryStore,
 		Client:           mgr.GetClient(),
@@ -420,6 +425,8 @@ func run(args []string) error {
 		ManagedCodexTasks:           o.managedCodexTasks,
 		RetainedCommonRules:         o.retainedCommonRules,
 		PrivateHistoryRetention:     o.privateHistoryRetention,
+		PrivateTerminalRecord:       o.privateTerminalRecord,
+		PrivateExecutorTerminal:     terminalCounter,
 		PrivateProjectCanaries:      o.privateProjectCanaries,
 		PrivateProjectCloneOwner:    cloneOwner,
 		ManagedChildDecisions:       o.managedChildDecisions,

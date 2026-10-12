@@ -141,6 +141,20 @@ func TestWorkspaceStopVerifierRequiresExactTerminationAndHealthyNode(t *testing.
 	}
 }
 
+// The clock is read after the lease read (executorNodeLive): a kubelet renewal
+// that lands during the reads is fresh, not future, and the proof's
+// verifiedAt is that later reading, so Validate accepts it.
+func TestWorkspaceStopVerifierReadsTheClockAfterTheLease(t *testing.T) {
+	f := stoppedWorkspaceFixture()
+	clock := f.now
+	reader := renewDuringTheReads(f.client().(client.WithWatch), &clock)
+	proof, _, err := (PodWorkspaceStopVerifier{Reader: reader, Now: func() time.Time { return clock }}).Verify(context.Background(), f.s, f.pod.UID)
+	renewed := f.now.Add(time.Second)
+	if err != nil || !proof.LeaseRenewedAt.Equal(renewed) || !proof.VerifiedAt.Equal(renewed) {
+		t.Fatalf("a renewal during the reads was refused or misdated: proof=%+v err=%v", proof, err)
+	}
+}
+
 type workspaceFixtureRescuer struct {
 	calls  int
 	proofs []*protocol.WorkspaceStopProof

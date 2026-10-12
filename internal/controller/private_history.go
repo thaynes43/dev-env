@@ -64,19 +64,32 @@ var errPrivateHistoryUnacknowledged = errors.New("private retention write is unc
 // to write, not with the server's response: Update copies the response into
 // fresh, so a field a stale CRD schema prunes would otherwise confirm as written.
 func (r *Reconciler) writePrivateHistory(ctx context.Context, s, fresh *v1alpha1.AgentSession) error {
+	_, err := r.writePrivateHistoryAcknowledged(ctx, s, fresh)
+	return err
+}
+
+// writePrivateHistoryAcknowledged is writePrivateHistory that also reports
+// whether the API server acknowledged the update with the intended record: its
+// response, which Update copies into fresh, holds exactly that record. Only
+// the confirming re-read lets the caller act on the record. The acknowledgement
+// says the record was stored, even when another write to the Session lands
+// before the re-read and the confirmation fails; the terminal counter counts
+// from it (DESIGN-025 3.6).
+func (r *Reconciler) writePrivateHistoryAcknowledged(ctx context.Context, s, fresh *v1alpha1.AgentSession) (acknowledged bool, err error) {
 	intended := fresh.Status.PrivateHistory.DeepCopy()
 	if err := r.Client.Status().Update(ctx, fresh); err != nil {
-		return fmt.Errorf("%w: %w", errPrivateHistoryUnacknowledged, err)
+		return false, fmt.Errorf("%w: %w", errPrivateHistoryUnacknowledged, err)
 	}
+	acknowledged = apiequality.Semantic.DeepEqual(fresh.Status.PrivateHistory, intended)
 	confirmed, err := r.privateHistorySession(ctx, fresh)
 	if err != nil {
-		return err
+		return acknowledged, err
 	}
 	if confirmed.ResourceVersion != fresh.ResourceVersion || !apiequality.Semantic.DeepEqual(confirmed.Status.PrivateHistory, intended) {
-		return errors.New("private retention acknowledgement changed, dropped a field or is unconfirmed")
+		return acknowledged, errors.New("private retention acknowledgement changed, dropped a field or is unconfirmed")
 	}
 	*s = *confirmed
-	return nil
+	return acknowledged, nil
 }
 
 func (r *Reconciler) privateResourcesAbsent(ctx context.Context, s *v1alpha1.AgentSession) error {
@@ -305,12 +318,16 @@ func (r *Reconciler) observePrivateHistory(ctx context.Context, s *v1alpha1.Agen
 	if _, err := r.privateHistoryHome(ctx, s); err != nil {
 		obs.privateHistoryUnknown = err
 	}
+	// DESIGN-025 3: whether a terminal record or missed marker may be added,
+	// judged on the record as stored, before this observation changes it.
+	applies := r.terminalRecordApplies(s)
+	recorded := s.Status.PrivateHistory.LastExecutor
 	var pod corev1.Pod
 	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &pod); err != nil {
 		if !apierrors.IsNotFound(err) {
 			obs.privateHistoryUnknown = errors.New("private executor observation is unconfirmed")
-		} else if s.Status.PrivateHistory.ExecutorAttempted && !s.Status.PrivateHistory.ExecutorNotCreated {
-			obs.privateHistoryUnknown = errors.New("the recorded private executor is absent; absence cannot authorize a retry or prove stop")
+		} else {
+			r.observeExecutorAbsent(s, applies, obs)
 		}
 		return
 	}
@@ -346,6 +363,7 @@ func (r *Reconciler) observePrivateHistory(ctx context.Context, s *v1alpha1.Agen
 		last.ConversationID = s.Status.Agent.ConversationID
 	}
 	h.LastExecutor = last
+	r.observeExecutorTerminal(ctx, s, applies, recorded, &pod, obs)
 }
 
 func privateExecutorUsesHome(pod *corev1.Pod, claim string) bool {
@@ -366,12 +384,20 @@ func setPrivateHistoryConditions(s *v1alpha1.AgentSession, obs observation, st *
 	if wantsPodGone(s) {
 		c.Reason = "RetentionPending"
 	}
+	removal := c
+	if obs.privateExecutorEnded {
+		// DESIGN-025 3.4: with the terminal record confirmed, a missing
+		// executor Pod is expected. The HOME stays protected.
+		c.Reason = "ExecutorEnded"
+		c.Message = "original private HOME and durable Session identity remain protected; the recorded private executor ended (executorTerminal); private stop state is Unknown"
+	}
 	if obs.privateHistoryUnknown != nil {
 		c.Status, c.Reason, c.Message = metav1.ConditionUnknown, "PreservationUnknown", truncate(obs.privateHistoryUnknown.Error())
+		removal = c
 	}
 	meta.SetStatusCondition(&st.Conditions, c)
 	if wantsPodGone(s) {
 		meta.SetStatusCondition(&st.Conditions, metav1.Condition{Type: ConditionRemovalBlocked, Status: metav1.ConditionTrue,
-			Reason: c.Reason, Message: c.Message, ObservedGeneration: s.Generation})
+			Reason: removal.Reason, Message: removal.Message, ObservedGeneration: s.Generation})
 	}
 }
