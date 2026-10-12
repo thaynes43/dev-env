@@ -156,7 +156,7 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.directoryEnabled, "enable-session-directory", false, "enable prospective immutable managed-canary session metadata directory")
 	directoryProjects := fs.String("session-directory-projects", "", "explicit prospective directory enrollment projects")
 	discoveryProjects := fs.String("metadata-discovery-projects", "", "separate explicit projects granting directory and retained context metadata discovery")
-	contextProjects := fs.String("context-payload-read-projects", "", "explicit comma-separated projects granting published context payload reads")
+	contextProjects := fs.String("context-payload-read-projects", "", "explicit comma-separated projects whose sessions may publish context and whose published context payloads may be read")
 	fs.BoolVar(&o.inboxEnabled, "enable-durable-inbox", false, "enable immutable API inbox messages and explicit read acknowledgements")
 	inboxProjects := fs.String("inbox-projects", "", "explicit comma-separated projects enabled for durable Session inbox access")
 	inboxCoordinatorProjects := fs.String("inbox-coordinator-read-projects", "", "separate explicit projects granting configured coordinators inbox content read only")
@@ -478,6 +478,21 @@ func run(args []string) error {
 		var inboxStore *inbox.KubeStore
 		if o.inboxEnabled {
 			inboxStore = &inbox.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.templatesNamespace}
+		}
+		// Coordination records are never deleted, so their bounds are lifetime
+		// bounds; the counts are exported beside them (#175 review).
+		var recordKinds []taskclaim.RecordKind
+		if claims != nil {
+			recordKinds = append(recordKinds, taskclaim.RecordKind{Kind: "TaskClaim", Limits: claims.Limits.Effective(taskclaim.DefaultLimits)})
+		}
+		if contexts != nil {
+			recordKinds = append(recordKinds, taskclaim.RecordKind{Kind: "PublishedContext", Limits: contexts.Limits.Effective(contextpublication.DefaultLimits)})
+		}
+		if inboxStore != nil {
+			recordKinds = append(recordKinds, taskclaim.RecordKind{Kind: "InboxMessage", Limits: inboxStore.Limits.Effective(inbox.DefaultLimits)})
+		}
+		if len(recordKinds) > 0 {
+			ctrlmetrics.Registry.MustRegister(&taskclaim.RecordCollector{Reader: mgr.GetAPIReader(), Namespace: o.templatesNamespace, Kinds: recordKinds})
 		}
 		var directories *sessiondirectory.KubeStore
 		var directoryContexts *contextpublication.KubeStore

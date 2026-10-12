@@ -64,6 +64,13 @@ func (s *Server) contextReadScope(ctx context.Context, c *caller, project string
 	return nil
 }
 
+// managedExecutor reports whether the Session's retained private history names
+// this exact Pod as its last executor, the binding a managed output relies on.
+func managedExecutor(sess *v1alpha1.AgentSession, podUID string) bool {
+	h := sess.Status.PrivateHistory
+	return h != nil && h.SessionUID == string(sess.UID) && h.LastExecutor != nil && h.LastExecutor.PodUID == podUID
+}
+
 func (s *Server) publishContext(ctx context.Context, w http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
 	if err := s.contextsAvailable(); err != nil {
 		return 0, nil, err
@@ -86,7 +93,9 @@ func (s *Server) publishContext(ctx context.Context, w http.ResponseWriter, r *h
 		return 0, nil, badRequest("expected kind, logical key and UTF-8 text of at most 64KiB")
 	}
 	snapshot, err := claimSnapshot(owner)
-	if err != nil {
+	// Publication, like the inbox, is enabled per explicit project: the payload
+	// project list that readers need is also the list a publisher may write to.
+	if err != nil || !slices.Contains(s.ContextReadProjects, snapshot.Project()) {
 		return 0, nil, contextDenied()
 	}
 	_, selected, err := s.Projects.snapshot(ctx, s.Live, snapshot.Project(), snapshot.Selected().Name)
@@ -98,14 +107,13 @@ func (s *Server) publishContext(ctx context.Context, w http.ResponseWriter, r *h
 		Source:   coord.SessionIdentity{Namespace: owner.Namespace, Name: owner.Name, UID: string(owner.UID)}, SourceGeneration: owner.Generation, SourceParent: owner.Spec.Parent,
 		Project: snapshot.Project(), Repository: snapshot.Selected().Name,
 		Actor:       coord.ClaimActor{Kind: "session", ServiceAccount: c.identity.serviceAccountRef(), PodName: c.identity.PodName, PodUID: c.identity.PodUID},
-		Provenance:  coord.ClaimProvenance{CatalogRevision: snapshot.CatalogRevision(), RulesRevision: snapshot.RulesRevision(), GitHub: snapshot.Selected().GitHub, DefaultBranch: snapshot.Selected().DefaultBranch, InitialPinState: "Unknown"},
+		Provenance:  coord.ClaimProvenance{CatalogRevision: snapshot.CatalogRevision(), RulesRevision: snapshot.RulesRevision(), GitHub: strings.ToLower(snapshot.Selected().GitHub), DefaultBranch: snapshot.Selected().DefaultBranch, InitialPinState: "Unknown"},
 		Attribution: coord.ContextAttribution{Provider: string(owner.Spec.Agent), RequestedModel: owner.Spec.Model, ObservedModelState: "Unknown", UsageState: "Unknown", CostState: "Unknown"},
 		Origin:      "ExplicitPublished", Completeness: "ExplicitExcerpt", StopState: "Unknown", Text: req.Text, ContentSHA256: apiv1.ContextHash(req.Text), ByteCount: int32(len(req.Text)),
 	}
 	if m := req.ManagedOutput; m != nil {
 		b := owner.Spec.ProjectCanary
-		history := owner.Status.PrivateHistory
-		if history == nil || history.SessionUID != string(owner.UID) || history.LastExecutor == nil || history.LastExecutor.PodUID != c.identity.PodUID {
+		if !managedExecutor(owner, c.identity.PodUID) {
 			return 0, nil, contextDenied()
 		}
 		if b == nil || !b.CaptureOutput || !s.PrivateHistoryRetention || owner.Spec.Mode != v1alpha1.ModeTask || owner.Spec.Workspace != nil || s.Projects == nil {
@@ -127,11 +135,16 @@ func (s *Server) publishContext(ctx context.Context, w http.ResponseWriter, r *h
 	}
 	// Recheck the original live source after request/catalog I/O, immediately
 	// before the one atomic mutation. Reads never check the stored source.
+	// Status is not compared, so a heartbeat between the reads is no refusal; the
+	// fresh live caller check and the managed executor recheck cover status.
 	fresh, err := s.contextCaller(ctx, c)
-	if err != nil || fresh.UID != owner.UID || fresh.ResourceVersion != owner.ResourceVersion {
+	if err != nil || !sameSessionBinding(fresh, owner) || (spec.ManagedOutput != nil && !managedExecutor(fresh, c.identity.PodUID)) {
 		return 0, nil, contextDenied()
 	}
 	publication, created, err := s.PublishedContexts.Create(ctx, spec)
+	if errors.Is(err, contextpublication.ErrLimit) {
+		return 0, nil, newError(http.StatusTooManyRequests, apiv1.CodeLimitExceeded, "published context limit reached for this source Session or project; nothing was published")
+	}
 	if errors.Is(err, contextpublication.ErrConflict) {
 		return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "publication key already has different immutable content or provenance")
 	}

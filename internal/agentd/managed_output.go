@@ -280,7 +280,9 @@ func (c *managedCapture) publish(ctx context.Context, l Launch, intent managedOu
 		}
 		r := apiv1.PublishContextRequest{Kind: "transcript-excerpt", Key: chunk.Key, Text: string(b), ManagedOutput: &apiv1.ManagedOutputRequest{Ordinal: chunk.Ordinal, ConversationID: intent.ConversationID, Completeness: intent.Completeness}}
 		var result apiv1.PublishContextResult
-		if h.contextRequest(ctx, http.MethodPost, apiv1.PublishedContextsPath, r, &result) != nil {
+		if err := h.contextRequest(ctx, http.MethodPost, apiv1.PublishedContextsPath, r, &result); errors.Is(err, ErrContextLimit) {
+			return ErrContextLimit
+		} else if err != nil {
 			return errManagedOutput
 		}
 		m := result.Metadata

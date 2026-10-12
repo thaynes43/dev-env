@@ -8,8 +8,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"maps"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -28,6 +30,13 @@ const (
 	MaxRequestBytes = 6*MaxTextBytes + 4096
 	RecipientLabel  = "coordination.dev-env.haynesops.com/recipient"
 )
+
+// ErrLimit means a new message would exceed its sender's or its project's
+// bound. Text is at most 16 KiB and nothing is deleted, so DefaultLimits keeps
+// one project's retained text near 64 MiB at most.
+var ErrLimit = taskclaim.ErrLimit
+
+var DefaultLimits = taskclaim.Limits{PerSession: 512, PerProject: 4096}
 
 var (
 	ErrUnavailable = errors.New("inbox observation is unconfirmed")
@@ -97,21 +106,34 @@ type KubeStore struct {
 	Client    client.Client
 	Live      client.Reader
 	Namespace string
+	Limits    taskclaim.Limits // zero fields take DefaultLimits; they bound messages, not acks
 }
 
 func (s KubeStore) ready() bool {
 	return s.Client != nil && s.Live != nil && len(validation.IsDNS1123Label(s.Namespace)) == 0
 }
-func (s KubeStore) validObject(o client.Object, name, project string) bool {
+func (s KubeStore) validObject(o client.Object, name string, labels ...map[string]string) bool {
 	created := o.GetCreationTimestamp()
 	return o.GetNamespace() == s.Namespace && o.GetName() == name && o.GetUID() != "" && o.GetResourceVersion() != "" && !created.IsZero() && o.GetDeletionTimestamp().IsZero() &&
-		len(o.GetOwnerReferences()) == 0 && len(o.GetFinalizers()) == 0 && len(o.GetAnnotations()) == 0 && len(o.GetLabels()) == 2 && o.GetLabels()[taskclaim.ProjectLabel] == project
+		len(o.GetOwnerReferences()) == 0 && len(o.GetFinalizers()) == 0 && len(o.GetAnnotations()) == 0 &&
+		slices.ContainsFunc(labels, func(want map[string]string) bool { return maps.Equal(o.GetLabels(), want) })
 }
+func recipientLabels(project string, recipient coord.SessionIdentity) map[string]string {
+	return map[string]string{taskclaim.ProjectLabel: project, RecipientLabel: recipientLabel(recipient)}
+}
+func messageLabels(spec coord.InboxMessageSpec) map[string]string {
+	l := recipientLabels(spec.Project, spec.Recipient)
+	l[taskclaim.SourceLabel] = taskclaim.SessionLabel(spec.Sender)
+	return l
+}
+
+// A message from before the sender's source label carries project and
+// recipient labels only; it stays valid.
 func (s KubeStore) validMessage(m *coord.InboxMessage) bool {
-	return m != nil && ValidMessage(m.Spec) && s.validObject(m, MessageName(m.Spec.Sender, m.Spec.Key), m.Spec.Project) && m.Labels[RecipientLabel] == recipientLabel(m.Spec.Recipient)
+	return m != nil && ValidMessage(m.Spec) && s.validObject(m, MessageName(m.Spec.Sender, m.Spec.Key), recipientLabels(m.Spec.Project, m.Spec.Recipient), messageLabels(m.Spec))
 }
 func (s KubeStore) validAck(a *coord.InboxReadAck) bool {
-	return ValidAck(a.Spec) && s.validObject(a, AckName(a.Spec.MessageUID, a.Spec.Recipient.UID), a.Spec.Project) && a.Labels[RecipientLabel] == recipientLabel(a.Spec.Recipient)
+	return ValidAck(a.Spec) && s.validObject(a, AckName(a.Spec.MessageUID, a.Spec.Recipient.UID), recipientLabels(a.Spec.Project, a.Spec.Recipient))
 }
 
 func (s KubeStore) Get(ctx context.Context, name string) (*coord.InboxMessage, error) {
@@ -137,7 +159,18 @@ func (s KubeStore) Create(ctx context.Context, spec coord.InboxMessageSpec) (*co
 	if !s.ready() || !ValidMessage(spec) {
 		return nil, false, ErrUnavailable
 	}
-	m := &coord.InboxMessage{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: MessageName(spec.Sender, spec.Key), Labels: map[string]string{taskclaim.ProjectLabel: spec.Project, RecipientLabel: recipientLabel(spec.Recipient)}}, Spec: spec}
+	// Only a new message counts against the bounds; a retry still confirms.
+	if _, err := s.Get(ctx, MessageName(spec.Sender, spec.Key)); errors.Is(err, ErrNotFound) {
+		if err := taskclaim.CheckRoom(ctx, s.Live, "InboxMessageList", s.Namespace, spec.Project, spec.Sender, s.Limits.Effective(DefaultLimits)); err != nil {
+			if errors.Is(err, ErrLimit) {
+				return nil, false, ErrLimit
+			}
+			return nil, false, ErrUnavailable
+		}
+	} else if err != nil {
+		return nil, false, ErrUnavailable
+	}
+	m := &coord.InboxMessage{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: MessageName(spec.Sender, spec.Key), Labels: messageLabels(spec)}, Spec: spec}
 	createErr := s.Client.Create(ctx, m)
 	observed, err := s.Get(ctx, m.Name)
 	if err != nil || observed.Spec.Sender != spec.Sender || observed.Spec.Key != spec.Key {
@@ -174,7 +207,7 @@ func (s KubeStore) Ack(ctx context.Context, m *coord.InboxMessage, actor coord.C
 	if !s.ready() || !s.validMessage(m) || !validActor(actor) {
 		return nil, false, ErrUnavailable
 	}
-	a := &coord.InboxReadAck{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: AckName(string(m.UID), m.Spec.Recipient.UID), Labels: map[string]string{taskclaim.ProjectLabel: m.Spec.Project, RecipientLabel: recipientLabel(m.Spec.Recipient)}}, Spec: coord.InboxReadAckSpec{Project: m.Spec.Project, MessageName: m.Name, MessageUID: string(m.UID), Recipient: m.Spec.Recipient, Actor: actor}}
+	a := &coord.InboxReadAck{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: AckName(string(m.UID), m.Spec.Recipient.UID), Labels: recipientLabels(m.Spec.Project, m.Spec.Recipient)}, Spec: coord.InboxReadAckSpec{Project: m.Spec.Project, MessageName: m.Name, MessageUID: string(m.UID), Recipient: m.Spec.Recipient, Actor: actor}}
 	createErr := s.Client.Create(ctx, a)
 	observed, err := s.ReadAck(ctx, m)
 	if err != nil {

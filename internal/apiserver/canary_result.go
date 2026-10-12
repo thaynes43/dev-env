@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/types"
 
@@ -120,10 +121,11 @@ func (s *Server) getCanaryResult(ctx context.Context, _ http.ResponseWriter, r *
 	if err != nil || !s.canaryResultPublication(original, record, p) {
 		return 0, nil, canaryResultDenied()
 	}
-	// Recheck caller, original UID/RV and named revision authorities after the
-	// payload read. A changed or ambiguous observation never returns the text.
+	// Recheck caller, original UID and binding, the publication against the fresh
+	// status and named revision authorities after the payload read. A status-only
+	// write is no refusal; a changed or ambiguous binding never returns the text.
 	fresh, _, err := s.canaryResultAuthority(ctx, c, id, uid)
-	if err != nil || fresh.ResourceVersion != original.ResourceVersion {
+	if err != nil || !sameSessionBinding(fresh, original) || !s.canaryResultPublication(fresh, record, p) {
 		return 0, nil, canaryResultDenied()
 	}
 	return http.StatusOK, apiv1.CanaryResult{CanaryID: id, SessionUID: uid, Context: apiv1.PublishedContext{Metadata: contextMetadata(p), Text: p.Spec.Text}}, nil
@@ -139,7 +141,7 @@ func (s *Server) canaryResultPublication(original *v1alpha1.AgentSession, record
 	snapshot, err := claimSnapshot(original)
 	return err == nil && m != nil && v.Identity.SessionUID == string(original.UID) && v.Source.Namespace == original.Namespace && v.Source.Name == original.Name && v.Source.UID == string(original.UID) && v.SourceGeneration == publishedGeneration(original) && v.SourceParent == record.Client && v.Project == record.Project && v.Repository == record.Repository &&
 		v.Actor.Kind == "session" && v.Actor.ServiceAccount == s.Policy.SessionNamespace+"/"+s.Policy.SessionServiceAccount && v.Actor.PodName == original.Name && h.PodName == original.Name && v.Actor.PodUID == h.PodUID && apiv1.ValidContextUID(h.PodUID) &&
-		v.Attribution.Provider == record.Provider && v.Attribution.RequestedModel == record.Model && v.Provenance.CatalogRevision == snapshot.CatalogRevision() && v.Provenance.RulesRevision == snapshot.RulesRevision() && v.Provenance.GitHub == snapshot.Selected().GitHub && v.Provenance.DefaultBranch == snapshot.Selected().DefaultBranch &&
+		v.Attribution.Provider == record.Provider && v.Attribution.RequestedModel == record.Model && v.Provenance.CatalogRevision == snapshot.CatalogRevision() && v.Provenance.RulesRevision == snapshot.RulesRevision() && v.Provenance.GitHub == strings.ToLower(snapshot.Selected().GitHub) && v.Provenance.DefaultBranch == snapshot.Selected().DefaultBranch &&
 		v.Origin == "ManagedOutputAssertion" && apiv1.ValidManagedOutput(&apiv1.ManagedOutputAssertion{Invocation: m.Invocation, Ordinal: m.Ordinal, ConversationID: m.ConversationID}) && m.Invocation == apiv1.ManagedInvocation(string(original.UID), h.PodUID) && v.Identity.Key == apiv1.ManagedOutputKey(m.Invocation, m.Ordinal)
 }
 

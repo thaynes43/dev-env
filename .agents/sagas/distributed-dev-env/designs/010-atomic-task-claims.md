@@ -45,6 +45,103 @@ source pin Unknown unless a narrowly bound startup receipt proves it. Preserve
 the task's identity for subsequent budget/history integration without
 inventing counters or stop evidence.
 
+## Same work, bounds and fences (2026-10-12)
+
+These rules come from the #175 coordination review.
+
+- **One owner across a repository rename.** The claim name still digests
+  project, declared repository key and task key, so claims that already exist
+  keep their names. A catalog revision can rename a repository key while the
+  GitHub repository stays the same. A new session on the new key would then
+  get a second deterministic name for the same `issue:N`, and a second owner.
+  A test showed this happening. New claims now carry a work label: a digest
+  of project, lowercased GitHub repository and task key. Before it creates a
+  new identity, the store looks up that label. If the same work is already
+  claimed under another key, it returns that claim unchanged, and the API
+  answers 409 with its owner. Claims created before the work label carry the
+  project label alone. That set can no longer grow, so the store also scans it
+  (selector: project, and no work label), up to the project bound. The catalog
+  refuses one GitHub repository under two keys at one revision, so Create stays
+  atomic within a revision. Only two creates on the old and new keys that race
+  while the catalog changes could both pass this non-atomic check.
+- **Bounds.** A new claim is refused with 429 `limit_exceeded` when its owner
+  Session already owns 512 claims, or its project holds 4096. Nothing is
+  created. A retry of an existing claim, and a contender that gets 409 with the
+  existing owner, are never refused. New claims carry an owner (source) label.
+  Claims from before it count toward the project bound only. Counting uses
+  uncached, metadata-only, label-selected lists under the operator's existing
+  get, create and list grant. Concurrent creates can pass the same count by
+  the number of racing creates.
+- **Final fence.** The owner fence before Create compares the Session's
+  binding (UID, generation and spec, deletion, labels, annotations, owner
+  references and finalizers), not the whole resourceVersion. A heartbeat
+  between the reads is no refusal. The reported HEAD then comes from the first
+  read, and it stays labelled as a reported observation.
+
+## At the bound, recovery and rollback (2026-10-12)
+
+These rules cover TaskClaims, published contexts
+([DESIGN-013](013-published-stopped-context.md)) and inbox messages
+([DESIGN-014](014-durable-offline-inbox.md)). They come from the review of
+PR #223.
+
+- **Lifetime bounds.** Records are immutable and nothing deletes them: the
+  operator's Role grants get, create and list, and no delete. A Session that
+  reaches its bound can create no new record of that kind. A project that
+  reaches its bound refuses every new record of that kind from any Session,
+  for good. Each refused create gets 429 `limit_exceeded` and stores nothing.
+  A retry of an existing identity still confirms, a claim contender still gets
+  409 with the owner, and reads, lists and read acknowledgements still work.
+  Clients name the refusal and say not to retry: agentd `context-publish`
+  prints a fixed message, and the inbox CLI prints the API's error. A managed
+  canary output capture at the bound spends its one delivery attempt (DESIGN-013).
+- **Visible before it is hit.** At scrape time the operator exports
+  `dev_env_coordination_records{kind,project}`,
+  `dev_env_coordination_records_session_max{kind,project}` (the busiest source
+  Session; records without a source label are not attributed) and
+  `dev_env_coordination_record_limit{kind,scope}`, for each enabled kind. It
+  counts with the same uncached, metadata-only lists that Create uses. When a
+  count is unconfirmed, that kind's count series are left out of the scrape. A
+  partial count is never reported. An alert on the ratio is a haynes-ops change,
+  parked with retention below.
+- **Recovery until retention is ruled.** Only a cluster admin (Tom) can delete
+  these records, with kubectl in the operator namespace. No agent or worker
+  ServiceAccount has delete on these kinds, and none may ask for it. Before a
+  delete, the admin:
+  1. Exports every record to be deleted (`kubectl get <kind> -n <operator
+     namespace> -l coordination.dev-env.haynesops.com/project=<project> -o
+     yaml`) to private storage outside every repository. Records hold private
+     text, and this repository is public.
+  2. Keeps every record that is still in use. That means a TaskClaim whose owner
+     Session still exists, since deleting it lets a second owner claim the work.
+     It means a published context whose source Session still exists, and every
+     managed-output publication of a retained canary original, which the fixed
+     result reader reads. It means an inbox message whose recipient still exists
+     and has not acknowledged it.
+  3. Deletes a message's read acknowledgement together with the message.
+
+  The next create counts again, so nothing needs a restart.
+- **Retention is parked, not decided.** See plan 11, "Coordination record
+  retention (parked)". Weighting the project bound by bytes was considered and
+  not adopted. An agent that sends full-size records reaches a byte bound after
+  the same number of records, so a byte bound would not make a project harder
+  to exhaust. It would only spare honest small records. In exchange it would
+  need a size label and a scan of every record on each create.
+- **Rollback floor.** New records carry the source label (all three kinds) and
+  the work label (TaskClaims). Operators released before this change accept
+  only the project label (claims and contexts) or the project and recipient
+  labels (inbox). They fail a whole page on any other record. So once the new
+  operator writes one record in a project:
+  - During a rollout, while old and new replicas both serve, a request that
+    reaches an old replica gets 503 on that project's claim, inbox and context
+    lists and gets. Creates on an old replica skip the bounds and the same-work
+    check.
+  - After a rollback below the first release that carries this change, those
+    503s last until the operator rolls forward again.
+
+  Nothing is lost, and every failure is closed. Once the new operator has
+  written a record, do not roll it back below that release.
+
 ## Paths and acceptance
 
 - `api/coordination/v1alpha1/`: GroupVersion, TaskClaim/List, bounded immutable

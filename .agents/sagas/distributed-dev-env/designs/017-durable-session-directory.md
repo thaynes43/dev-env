@@ -78,6 +78,12 @@ single dev-env project and unchanged named identities; no fleet identity or
 Q-24 ruling is implied.
 Authenticated unauthorized named probes hide existence; unauthenticated calls
 remain unauthorized. Worker ServiceAccounts receive no direct CRD rights.
+A named read masks any record of another project, malformed or not, as absence
+before it validates the record. After an authorized caller's scope passes, only
+absence, an invalid name or another project is the hidden 404. A read that is
+unconfirmed (an API error or timeout) or a malformed record in the caller's own
+project returns 503 `unavailable`. It never reports absence it did not observe
+(2026-10-12, #175 review).
 
 New GET/list API views whitelist metadata. Pages use limit 1..20, bounded opaque
 continuation at most 4096 bytes, exact project/source query binding and fresh

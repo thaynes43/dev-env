@@ -123,3 +123,29 @@ func TestTaskClaimUsesOnlyLiveReadsAndRefusesForeignObjects(t *testing.T) {
 		c = restored
 	}
 }
+
+// A same-work page with a continuation leaves claims unread. One of them could
+// be the same work under another repository key, so the create is Unknown and
+// nothing is stored (#223 review, finding 5).
+func TestTaskClaimSameWorkLookupRefusesUnreadPage(t *testing.T) {
+	store := storeFixture(t)
+	backend := store.Live.(client.WithWatch)
+	store.Live = interceptor.NewClient(backend, interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+		if err := c.List(ctx, list, opts...); err != nil {
+			return err
+		}
+		o := &client.ListOptions{}
+		o.ApplyOptions(opts)
+		if claims, ok := list.(*coord.TaskClaimList); ok && o.LabelSelector != nil && strings.Contains(o.LabelSelector.String(), WorkLabel+"=") {
+			claims.Continue = "unread-page"
+		}
+		return nil
+	}})
+	if _, _, err := store.Create(context.Background(), validSpec()); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("same-work lookup with an unread page passed", err)
+	}
+	var stored coord.TaskClaimList
+	if err := backend.List(context.Background(), &stored); err != nil || len(stored.Items) != 0 {
+		t.Fatal("unconfirmed same-work lookup stored a claim", err, len(stored.Items))
+	}
+}

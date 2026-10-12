@@ -62,6 +62,34 @@ phone notification, human reading or prompt delivery. GET never creates an ack.
 Lists return bounded metadata, and individual authorized GET returns text. No
 provider runner, model call, automatic prompt injection or polling loop runs.
 
+## Bounds and fences (2026-10-12)
+
+These rules come from the #175 coordination review.
+
+- **Bounds.** A new message is refused with 429 `limit_exceeded` when its
+  sender Session has already sent 512 messages, or its project holds 4096.
+  Nothing is created. A retry of an existing message (same sender and key) is
+  never refused. Text is at most 16 KiB and nothing is deleted, so one
+  project's retained text stays near 64 MiB at most. New messages carry a
+  source label (a digest of the sender identity) beside the project and
+  recipient labels. Messages from before the label count toward the project
+  bound only. Read acknowledgements are not counted, because there is at most
+  one per message and recipient. Concurrent sends can pass the same count by
+  the number of racing sends.
+- **At the bound.** The bounds are lifetime bounds, because messages are never
+  deleted. DESIGN-010 "At the bound, recovery and rollback" has the behaviour,
+  the record-count metrics, the manual recovery with its preservation duty, and
+  the rollback floor. The inbox CLI prints the API's `limit_exceeded` error.
+  Recovery keeps every message whose recipient still exists and has not
+  acknowledged it, and deletes a message's acknowledgement with it.
+- **Final fences.** The sender fence (on the new-message and retry paths) and
+  the recipient fence compare each Session's binding: UID, generation and spec,
+  deletion, labels, annotations, owner references and finalizers. They do not
+  compare the whole resourceVersion. A heartbeat or status write during the
+  catalog recheck no longer turns a valid send into the hidden 404 that a
+  sender would read as "no such recipient". Any identity, project-snapshot or
+  spec change still refuses.
+
 ## Paths and acceptance
 
 - `api/coordination/v1alpha1/`: immutable bounded message/ack types, deepcopy

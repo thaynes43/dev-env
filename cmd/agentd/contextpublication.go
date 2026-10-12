@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -66,6 +67,10 @@ func contextCtl(ctx context.Context, args []string, stdin io.Reader, stdout, std
 			return exitUsage
 		}
 		result, err = h.ListPublishedContexts(ctx, *project, *cursor, *limit)
+	}
+	if errors.Is(err, agentd.ErrContextLimit) {
+		_, _ = fmt.Fprintln(stderr, "agentd:", err)
+		return exitFailure
 	}
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "agentd: context request refused or unconfirmed")

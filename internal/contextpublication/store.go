@@ -5,6 +5,7 @@ package contextpublication
 import (
 	"context"
 	"errors"
+	"maps"
 	"reflect"
 	"regexp"
 	"strings"
@@ -23,6 +24,13 @@ import (
 var ErrUnavailable = errors.New("context publication is unconfirmed")
 var ErrNotFound = errors.New("published context not found")
 var ErrConflict = errors.New("publication identity already has different content or provenance")
+
+// ErrLimit means a new publication would exceed its source's or its project's
+// bound. Each publication holds up to 64 KiB of text and none is deleted, so
+// DefaultLimits keeps one project's retained text near 64 MiB at most.
+var ErrLimit = taskclaim.ErrLimit
+
+var DefaultLimits = taskclaim.Limits{PerSession: 128, PerProject: 1024}
 var namePattern = regexp.MustCompile(`^published-context\.[a-f0-9]{32}\.[a-f0-9]{32}$`)
 
 func ValidName(name string) bool          { return namePattern.MatchString(name) }
@@ -49,15 +57,21 @@ type KubeStore struct {
 	Client    client.Client
 	Live      client.Reader
 	Namespace string
+	Limits    taskclaim.Limits // zero fields take DefaultLimits
 }
 
 func (s KubeStore) ready() bool {
 	return s.Client != nil && s.Live != nil && len(validation.IsDNS1123Label(s.Namespace)) == 0
 }
+func labels(spec coord.PublishedContextSpec) map[string]string {
+	return map[string]string{taskclaim.ProjectLabel: spec.Project, taskclaim.SourceLabel: taskclaim.SessionLabel(spec.Source)}
+}
+
+// A publication from before the source label carries the project label alone.
 func (s KubeStore) valid(c *coord.PublishedContext) bool {
 	return c.Namespace == s.Namespace && c.Name == Name(c.Spec.Identity) && ValidSpec(c.Spec) && c.UID != "" && c.ResourceVersion != "" &&
 		!c.CreationTimestamp.IsZero() && c.DeletionTimestamp.IsZero() && len(c.OwnerReferences) == 0 && len(c.Finalizers) == 0 && len(c.Annotations) == 0 &&
-		len(c.Labels) == 1 && c.Labels[taskclaim.ProjectLabel] == c.Spec.Project
+		(maps.Equal(c.Labels, map[string]string{taskclaim.ProjectLabel: c.Spec.Project}) || maps.Equal(c.Labels, labels(c.Spec)))
 }
 func (s KubeStore) Get(ctx context.Context, name string) (*coord.PublishedContext, error) {
 	return s.get(ctx, name, "")
@@ -96,7 +110,18 @@ func (s KubeStore) Create(ctx context.Context, spec coord.PublishedContextSpec) 
 	if !s.ready() || !ValidSpec(spec) {
 		return nil, false, ErrUnavailable
 	}
-	c := &coord.PublishedContext{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: Name(spec.Identity), Labels: map[string]string{taskclaim.ProjectLabel: spec.Project}}, Spec: spec}
+	// Only a new identity counts against the bounds; a retry still confirms.
+	if _, err := s.Get(ctx, Name(spec.Identity)); errors.Is(err, ErrNotFound) {
+		if err := taskclaim.CheckRoom(ctx, s.Live, "PublishedContextList", s.Namespace, spec.Project, spec.Source, s.Limits.Effective(DefaultLimits)); err != nil {
+			if errors.Is(err, ErrLimit) {
+				return nil, false, ErrLimit
+			}
+			return nil, false, ErrUnavailable
+		}
+	} else if err != nil {
+		return nil, false, ErrUnavailable
+	}
+	c := &coord.PublishedContext{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: Name(spec.Identity), Labels: labels(spec)}, Spec: spec}
 	createErr := s.Client.Create(ctx, c)
 	if createErr != nil && (apierrors.IsInvalid(createErr) || apierrors.IsForbidden(createErr) || apierrors.IsUnauthorized(createErr)) {
 		return nil, false, ErrUnavailable

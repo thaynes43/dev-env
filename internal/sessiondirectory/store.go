@@ -150,6 +150,20 @@ func validStatus(status coord.SessionDirectoryStatus) bool {
 	return w == nil || (boundedFields(reflect.ValueOf(*w)) && w.SourceGeneration >= 1 && w.SourceResourceVersion != "" && w.PodUID != "" && w.PodName != "" && !w.ObservedAt.IsZero() && (w.PodPhase == "Pending" || w.PodPhase == "Running" || w.PodPhase == "Succeeded" || w.PodPhase == "Failed" || w.PodPhase == "Unknown"))
 }
 func (s KubeStore) Get(ctx context.Context, name string) (*coord.SessionDirectory, error) {
+	return s.get(ctx, name, "")
+}
+
+// GetForProject masks a record of another project, malformed or not, as
+// absence before validating it, so a scoped reader's named probe discloses
+// nothing outside its project. ErrUnavailable then means an unconfirmed read
+// or an invalid record in the requested project, never a foreign one.
+func (s KubeStore) GetForProject(ctx context.Context, name, project string) (*coord.SessionDirectory, error) {
+	if len(validation.IsDNS1123Label(project)) != 0 {
+		return nil, ErrUnavailable
+	}
+	return s.get(ctx, name, project)
+}
+func (s KubeStore) get(ctx context.Context, name, project string) (*coord.SessionDirectory, error) {
 	if !s.ready() || !ValidName(name) {
 		return nil, ErrUnavailable
 	}
@@ -159,6 +173,9 @@ func (s KubeStore) Get(ctx context.Context, name string) (*coord.SessionDirector
 			return nil, ErrNotFound
 		}
 		return nil, ErrUnavailable
+	}
+	if project != "" && d.Spec.Project != project {
+		return nil, ErrNotFound
 	}
 	if !s.valid(&d) {
 		return nil, ErrUnavailable

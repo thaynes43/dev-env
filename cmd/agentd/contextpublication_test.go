@@ -100,3 +100,31 @@ func TestExplicitContextCommandsUseOnlyStdinAndProjectedAPI(t *testing.T) {
 		t.Fatal("private HOME modified")
 	}
 }
+
+// The publish command names a permanent limit refusal and says not to retry;
+// every other refusal keeps the generic line (#223 review).
+func TestContextPublishReportsPermanentLimit(t *testing.T) {
+	home := t.TempDir()
+	if os.Mkdir(filepath.Join(home, ".agentd"), 0o700) != nil {
+		t.Fatal("state fixture")
+	}
+	token := filepath.Join(t.TempDir(), "token")
+	if os.WriteFile(token, []byte("PROJECTED_IDENTITY_CANARY"), 0o600) != nil {
+		t.Fatal("token fixture")
+	}
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(apiv1.Error{Code: apiv1.CodeLimitExceeded, Message: "SERVER_MESSAGE_CANARY"})
+	}))
+	defer ts.Close()
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	if os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ts.Certificate().Raw}), 0o600) != nil {
+		t.Fatal("CA fixture")
+	}
+	env := map[string]string{"HOME": home, "DEV_ENV_POD_UID": "pod-uid", "AGENTD_API_URL": ts.URL, "AGENTD_API_TOKEN_FILE": token, "AGENTD_API_CA_FILE": ca, "AGENTD_SESSION": `{"name":"source","sessionUID":"session-uid","repo":"repo","agent":"claude","mode":"task","model":"claude-opus-5-5","prompt":"PRIVATE_PROMPT_CANARY"}`}
+	var out, errout bytes.Buffer
+	code := run(context.Background(), []string{"ctl", "context-publish", "--kind=handoff", "--key=task-174"}, strings.NewReader("EXPLICIT_STDIN_TEXT"), &out, &errout, func(k string) string { return env[k] }, contextNoExecution{})
+	if code != exitFailure || !strings.Contains(errout.String(), "limit reached") || !strings.Contains(errout.String(), "do not retry") || strings.Contains(out.String()+errout.String(), "CANARY") {
+		t.Fatal("limit refusal not reported as permanent", code, out.String(), errout.String())
+	}
+}

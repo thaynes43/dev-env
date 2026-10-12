@@ -3,6 +3,7 @@ package agentd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -115,5 +116,43 @@ func TestExplicitContextClientRedirectRefusalAndExactContent(t *testing.T) {
 	redirect = false
 	if _, err := PublishContext(context.Background(), s, sess, h, req); err == nil {
 		t.Fatal("replacement Pod acknowledgement accepted")
+	}
+}
+
+// A 429 limit_exceeded is permanent (DESIGN-013), so it is reported as such and
+// never as an unconfirmed result that invites a retry. Any other refusal stays
+// generic, and the server's message text is never passed on (#223 review).
+func TestExplicitContextClientReportsPermanentLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   any
+		limit  bool
+	}{
+		{"limit", http.StatusTooManyRequests, apiv1.Error{Code: apiv1.CodeLimitExceeded, Message: "SERVER_MESSAGE_CANARY"}, true},
+		{"other-429", http.StatusTooManyRequests, apiv1.Error{Code: apiv1.CodeConflict, Message: "SERVER_MESSAGE_CANARY"}, false},
+		{"unconfirmed", http.StatusServiceUnavailable, apiv1.Error{Code: apiv1.CodeLimitExceeded, Message: "SERVER_MESSAGE_CANARY"}, false},
+		{"not-json", http.StatusTooManyRequests, "SERVER_MESSAGE_CANARY", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, sess, req, _ := contextClientFixture(t)
+			token := filepath.Join(t.TempDir(), "token")
+			if os.WriteFile(token, []byte("SYNTHETIC"), 0o600) != nil {
+				t.Fatal("token fixture")
+			}
+			ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_ = json.NewEncoder(w).Encode(tc.body)
+			}))
+			defer ts.Close()
+			h := &HeartbeatClient{URL: ts.URL, HTTP: ts.Client(), TokenFile: token, Session: sess.Name}
+			_, err := PublishContext(context.Background(), s, sess, h, req)
+			if err == nil || errors.Is(err, ErrContextLimit) != tc.limit || strings.Contains(err.Error(), "CANARY") {
+				t.Fatal("refusal reported wrongly", err)
+			}
+			if tc.limit && !strings.Contains(err.Error(), "do not retry") {
+				t.Fatal("limit refusal invites a retry", err)
+			}
+		})
 	}
 }
