@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -104,7 +105,15 @@ func firstArg(args []string) string {
 	return args[0]
 }
 
-// waitDelay is how long Run waits for a killed command's output pipes.
+// stopGrace is how long a command's process group has, after SIGTERM, to end
+// on its own before Run sends SIGKILL. Git's signal handlers remove its lock
+// files (index.lock, ref locks) and an unfinished `worktree add` on SIGTERM; a
+// SIGKILL leaves them behind, and every later Git step there refuses them.
+var stopGrace = 3 * time.Second
+
+// waitDelay is how long Run waits for a stopped command, counted from its
+// time limit. It is longer than stopGrace, so a stopped command still ends
+// within waitDelay, the allowance sharedGitAdminBudget's headroom covers.
 var waitDelay = 5 * time.Second
 
 // ExecRunner runs commands as child processes.
@@ -138,15 +147,41 @@ func (r ExecRunner) Run(ctx context.Context, c Cmd) (Result, error) {
 	}
 	cmd.Env = append(cmd.Env, c.Env...)
 	cmd.Stdin = c.Stdin
-	// When ctx ends, kill the whole process group, not only the direct child,
-	// and stop waiting for output soon after: a grandchild (node starts some)
-	// that holds the pipes open must not turn a time limit into a hang.
+	// When ctx ends, stop the whole process group, not only the direct child.
+	// SIGTERM comes first, so Git removes its locks and an unfinished worktree
+	// before it exits (DESIGN-007). SIGKILL follows after stopGrace, and once
+	// the direct child has exited, whatever is left of the group gets it at
+	// once. Run stops waiting for output waitDelay after ctx ended: a
+	// grandchild (node starts some) that holds the pipes open must not turn a
+	// time limit into a hang.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	var stopping atomic.Bool
+	exited := make(chan struct{})
+	cmd.Cancel = func() error {
+		pgid := cmd.Process.Pid
+		if err := syscall.Kill(-pgid, syscall.SIGTERM); err != nil {
+			return err
+		}
+		stopping.Store(true)
+		go func() {
+			timer := time.NewTimer(stopGrace)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+				_ = syscall.Kill(-pgid, syscall.SIGKILL)
+			case <-exited:
+			}
+		}()
+		return nil
+	}
 	cmd.WaitDelay = waitDelay
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
+	close(exited)
+	if stopping.Load() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 	res := Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
 	if err != nil {
 		var ee *exec.ExitError

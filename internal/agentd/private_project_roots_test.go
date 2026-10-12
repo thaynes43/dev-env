@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -478,19 +479,30 @@ func TestPrivateRootsRefuseForeignAndPartialPublication(t *testing.T) {
 			if err == nil || report.State == "Ready" || exists(privateRootReceiptPath(s)) {
 				t.Fatalf("unconfirmed root adopted: %v %+v", err, report)
 			}
-			if mode == "authority changed" && (exists(root) || !exists(filepath.Join(s.Home, "codex", ".sample.agentd-root", ".git"))) {
+			staging, _ := filepath.Glob(filepath.Join(s.Home, "codex", ".sample.agentd-root-*"))
+			if mode == "authority changed" && (exists(root) || len(staging) != 1 || !exists(filepath.Join(staging[0], ".git"))) {
 				t.Fatal("changed authority published or erased staging")
 			}
 			if mode == "plain" || mode == "foreign Git" {
 				if string(mustRead(t, filepath.Join(root, "owner"))) != "owner root\n" {
 					t.Fatal("foreign root overwritten")
 				}
-			}
-			if mode == "anchor failure" {
-				partialHead := gitRun(t, g.env, root, "rev-parse", "HEAD")
 				retry, retryErr := RefreshPrivateProjects(context.Background(), r, s, source)
-				if retryErr == nil || retry.Projects[0].State == "Ready" || exists(privateRootReceiptPath(s)) || gitRun(t, g.env, root, "rev-parse", "HEAD") != partialHead {
-					t.Fatal("interrupted root silently adopted on retry")
+				if retryErr == nil || retry.Projects[0].State == "Ready" || exists(privateRootReceiptPath(s)) || string(mustRead(t, filepath.Join(root, "owner"))) != "owner root\n" {
+					t.Fatal("foreign root adopted on retry")
+				}
+			}
+			// agentd's own interrupted creation resumes: the published root
+			// keeps its generated commit, and unpublished staging is rebuilt.
+			if mode == "anchor failure" || mode == "authority changed" {
+				partialHead := ""
+				if mode == "anchor failure" {
+					partialHead = gitRun(t, g.env, root, "rev-parse", "HEAD")
+				}
+				retry := requirePrivateRootReady(t, s, r, source)
+				left, _ := filepath.Glob(filepath.Join(s.Home, "codex", ".sample.agentd-root*"))
+				if partialHead != "" && retry.Head != partialHead || len(left) != 0 || exists(privateRootPendingPath(s)) || !exists(filepath.Join(root, "demo", "README.md")) {
+					t.Fatalf("interrupted root creation was not resumed: %+v %v", retry, left)
 				}
 			}
 		})
@@ -559,5 +571,523 @@ func TestPrivateRootsRetainOperationBeforeMutationAndFailUnretainedOutcome(t *te
 				t.Fatal("uncertain operation path allowed root mutation")
 			}
 		})
+	}
+}
+
+func privateRootPendingPath(s Settings) string {
+	return filepath.Join(s.StateDir, "project-roots", "sample.pending.json")
+}
+
+// failingMerge fails one fast-forward run in dir, before Git runs, once.
+func failingMerge(r Runner, dir string) *fakeRunner {
+	failed := false
+	return &fakeRunner{handle: func(c Cmd) (Result, error) {
+		if !failed && len(c.Args) > 1 && c.Args[1] == dir && slices.Contains(c.Args, "merge") && slices.Contains(c.Args, "--ff-only") {
+			failed = true
+			return Result{}, &CmdError{Name: "git", Sub: "merge", ExitCode: 128}
+		}
+		return r.Run(context.Background(), c)
+	}}
+}
+
+// afterMerge marks when a fast-forward in dir succeeded, so a test can fail
+// the next authority confirmation after the change it made.
+func afterMerge(r Runner, dir string, merged *bool) *fakeRunner {
+	return &fakeRunner{handle: func(c Cmd) (Result, error) {
+		result, err := r.Run(context.Background(), c)
+		if err == nil && len(c.Args) > 1 && c.Args[1] == dir && slices.Contains(c.Args, "merge") && slices.Contains(c.Args, "--ff-only") {
+			*merged = true
+		}
+		return result, err
+	}}
+}
+
+func failConfirmWhen(source *ProjectCatalogSource, fail *bool) *ProjectCatalogSource {
+	read := source.Read
+	copied := *source
+	copied.Read = func(ctx context.Context) (ProjectCatalogResource, error) {
+		if *fail {
+			return ProjectCatalogResource{}, errors.New("transient catalog read")
+		}
+		return read(ctx)
+	}
+	return &copied
+}
+
+func TestPrivateRootsRecoverInterruptedMultiAnchorAdvance(t *testing.T) {
+	declaration := strings.Replace(projectTestCatalog, `"defaultBranch":"main"}},`, `"defaultBranch":"main"},"extra":{"github":"fixture/extra"}},`, 1)
+	declaration = strings.Replace(declaration, `[{"name":"demo"}]`, `[{"name":"demo"},{"name":"extra"}]`, 1)
+	g, s, r, source := privateRootsFixture(t, declaration)
+	prior := requirePrivateRootReady(t, s, r, source)
+	root := privateRootPath(s)
+	demo, extra := filepath.Join(root, "demo"), filepath.Join(root, "extra")
+	target := pushBootstrapChange(t, g)
+	report, err := RefreshPrivateProjects(context.Background(), failingMerge(r, extra), s, source)
+	if err == nil || report.Projects[0].State != "Failed" || gitRun(t, g.env, demo, "rev-parse", "HEAD") != target || gitRun(t, g.env, extra, "rev-parse", "HEAD") != prior.Repositories[1].Target || !exists(privateRootPendingPath(s)) {
+		t.Fatalf("fixture did not leave a partial two-anchor advance: %v %+v", err, report)
+	}
+	updated := requirePrivateRootReady(t, s, r, source)
+	if gitRun(t, g.env, demo, "rev-parse", "HEAD") != target || gitRun(t, g.env, extra, "rev-parse", "HEAD") != target || updated.Repositories[0].Target != target || updated.Repositories[1].Target != target || updated.Head != prior.Head || updated.ID != prior.ID || updated.Anchors["demo"] != prior.Anchors["demo"] || updated.Anchors["extra"] != prior.Anchors["extra"] || exists(privateRootPendingPath(s)) {
+		t.Fatalf("interrupted advance was not resumed: %+v", updated)
+	}
+	again := requirePrivateRootReady(t, s, r, source)
+	if again.Repositories[0].Target != target || again.Head != updated.Head {
+		t.Fatal("resumed root did not stay proved")
+	}
+}
+
+func TestPrivateRootsRecoverAdvanceAfterAuthorityConfirmFailure(t *testing.T) {
+	for _, mode := range []string{"anchor", "root wrappers"} {
+		t.Run(mode, func(t *testing.T) {
+			if mode == "root wrappers" {
+				// Git writes the fast-forwarded wrappers through this umask.
+				priorMask := syscall.Umask(0o077)
+				defer syscall.Umask(priorMask)
+			}
+			g, s, r, source := privateRootsFixture(t, projectTestCatalog)
+			prior := requirePrivateRootReady(t, s, r, source)
+			root := privateRootPath(s)
+			anchor := filepath.Join(root, "demo")
+			target := pushBootstrapChange(t, g)
+			dir := anchor
+			if mode == "root wrappers" {
+				source = projectSyncFixtureOptions(strings.Replace(projectTestCatalog, "Exact rules.", "Recovered rules.", 1)).AcceptedCatalog
+				dir = root
+			}
+			fail := false
+			report, err := RefreshPrivateProjects(context.Background(), afterMerge(r, dir, &fail), s, failConfirmWhen(source, &fail))
+			if err == nil || !fail || report.State == "Ready" || len(report.Projects) != 0 && report.Projects[0].State == "Ready" || gitRun(t, g.env, anchor, "rev-parse", "HEAD") != target {
+				t.Fatalf("fixture did not fail after the change: %v %+v", err, report)
+			}
+			partialHead := gitRun(t, g.env, root, "rev-parse", "HEAD")
+			if mode == "root wrappers" {
+				if partialHead == prior.Head {
+					t.Fatal("fixture did not fast-forward the root")
+				}
+				if fi, err := os.Lstat(filepath.Join(root, "AGENTS.md")); err != nil || fi.Mode().Perm() == 0o644 {
+					t.Fatal("fixture did not leave umask wrapper modes")
+				}
+			}
+			updated := requirePrivateRootReady(t, s, r, source)
+			if gitRun(t, g.env, anchor, "rev-parse", "HEAD") != target || updated.Repositories[0].Target != target || updated.Head != partialHead || gitRun(t, g.env, root, "rev-parse", "HEAD") != partialHead || exists(privateRootPendingPath(s)) {
+				t.Fatalf("authority failure stranded the root: %+v", updated)
+			}
+			for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
+				if fi, err := os.Lstat(filepath.Join(root, name)); err != nil || fi.Mode().Perm() != 0o644 {
+					t.Fatal("recovered wrapper lacks the declared mode")
+				}
+			}
+		})
+	}
+}
+
+func TestPrivateRootsInterruptedAdvanceStillPreservesOwnerState(t *testing.T) {
+	for _, mode := range []string{"anchor dirty", "anchor local commit", "root unknown"} {
+		t.Run(mode, func(t *testing.T) {
+			g, s, r, source := privateRootsFixture(t, projectTestCatalog)
+			requirePrivateRootReady(t, s, r, source)
+			root := privateRootPath(s)
+			anchor := filepath.Join(root, "demo")
+			pushBootstrapChange(t, g)
+			fail := false
+			if _, err := RefreshPrivateProjects(context.Background(), afterMerge(r, anchor, &fail), s, failConfirmWhen(source, &fail)); err == nil || !fail {
+				t.Fatal("fixture did not fail after the anchor change")
+			}
+			switch mode {
+			case "anchor dirty", "anchor local commit":
+				writeFile(t, filepath.Join(anchor, "README.md"), "owner anchor\n")
+				if mode == "anchor local commit" {
+					gitRun(t, g.env, anchor, "commit", "-qam", "owner anchor")
+				}
+			case "root unknown":
+				writeFile(t, filepath.Join(root, "unknown"), "owner root\n")
+			}
+			anchorHead, rootHead := gitRun(t, g.env, anchor, "rev-parse", "HEAD"), gitRun(t, g.env, root, "rev-parse", "HEAD")
+			readme := mustRead(t, filepath.Join(anchor, "README.md"))
+			writeFile(t, filepath.Join(g.seed, "README.md"), "later remote content\n")
+			gitRun(t, g.env, g.seed, "commit", "-qam", "later remote")
+			gitRun(t, g.env, g.seed, "push", "-q", "origin", "main")
+			report, err := RefreshPrivateProjects(context.Background(), r, s, source)
+			if err == nil || report.Projects[0].State != "Failed" || gitRun(t, g.env, anchor, "rev-parse", "HEAD") != anchorHead || gitRun(t, g.env, root, "rev-parse", "HEAD") != rootHead || !bytes.Equal(readme, mustRead(t, filepath.Join(anchor, "README.md"))) || !exists(privateRootPendingPath(s)) {
+				t.Fatalf("recovery adopted owner state: %v %+v", err, report)
+			}
+			if mode == "root unknown" && string(mustRead(t, filepath.Join(root, "unknown"))) != "owner root\n" {
+				t.Fatal("unknown root file changed")
+			}
+		})
+	}
+}
+
+func TestPrivateRootsLeaveOtherStagingUntouched(t *testing.T) {
+	_, s, r, source := privateRootsFixture(t, projectTestCatalog)
+	legacy := filepath.Join(s.Home, "codex", ".sample.agentd-root")
+	writeFile(t, filepath.Join(legacy, "owner"), "owner staging\n")
+	requirePrivateRootReady(t, s, r, source)
+	if string(mustRead(t, filepath.Join(legacy, "owner"))) != "owner staging\n" {
+		t.Fatal("staging agentd does not own was changed")
+	}
+}
+
+func TestPrivateRootsRecoverAddedAnchorBeforeItsIdentityIsRecorded(t *testing.T) {
+	g, s, r, source := privateRootsFixture(t, projectTestCatalog)
+	prior := requirePrivateRootReady(t, s, r, source)
+	declaration := strings.Replace(projectTestCatalog, `"defaultBranch":"main"}},`, `"defaultBranch":"main"},"extra":{"github":"fixture/extra"}},`, 1)
+	declaration = strings.Replace(declaration, `[{"name":"demo"}]`, `[{"name":"demo"},{"name":"extra"}]`, 1)
+	source = projectSyncFixtureOptions(declaration).AcceptedCatalog
+	root := privateRootPath(s)
+	extra := filepath.Join(root, "extra")
+	// Fail agentd's post-create proof of the new anchor once, so its
+	// worktree exists while the pending record has no identity for it.
+	created, failed := false, false
+	runner := &fakeRunner{handle: func(c Cmd) (Result, error) {
+		if created && !failed && len(c.Args) > 1 && c.Args[1] == extra {
+			failed = true
+			return Result{}, &CmdError{Name: "git", Sub: "rev-parse", ExitCode: 128}
+		}
+		result, err := r.Run(context.Background(), c)
+		if err == nil && slices.Contains(c.Args, "worktree") && slices.Contains(c.Args, "add") && slices.Contains(c.Args, extra) {
+			created = true
+		}
+		return result, err
+	}}
+	report, err := RefreshPrivateProjects(context.Background(), runner, s, source)
+	var pending privateRootPending
+	if err == nil || !failed || report.Projects[0].State != "Failed" || !exists(filepath.Join(extra, ".git")) || readWorkspaceJSONBounded(privateRootPendingPath(s), &pending, privateRootPendingLimit) != nil || pending.To.Anchors["extra"].Identity != nil {
+		t.Fatalf("fixture did not leave an unrecorded new anchor: %v %+v", err, report)
+	}
+	updated := requirePrivateRootReady(t, s, r, source)
+	if updated.ID != prior.ID || updated.Exclusion != "/demo/\n/extra/\n" || updated.Anchors["extra"].GitDir == "" || updated.Anchors["demo"] != prior.Anchors["demo"] || gitRun(t, g.env, extra, "rev-parse", "HEAD") != updated.Repositories[1].Target || exists(privateRootPendingPath(s)) {
+		t.Fatalf("new anchor was not resumed: %+v", updated)
+	}
+}
+
+func TestPrivateRootsRefuseForeignPendingRecord(t *testing.T) {
+	g, s, r, source := privateRootsFixture(t, projectTestCatalog)
+	prior := requirePrivateRootReady(t, s, r, source)
+	pending := privateRootPending{Version: 1, ID: "foreign-root-id", Root: privateRootPath(s), ConfigDigest: prior.ConfigDigest, From: prior.state(prior.Repositories, prior.Anchors), To: prior.state(prior.Repositories, prior.Anchors)}
+	if err := writeWorkspaceJSON(privateRootPendingPath(s), pending); err != nil {
+		t.Fatal(err)
+	}
+	pushBootstrapChange(t, g)
+	report, err := RefreshPrivateProjects(context.Background(), r, s, source)
+	if err == nil || report.Projects[0].State != "Failed" || gitRun(t, g.env, filepath.Join(privateRootPath(s), "demo"), "rev-parse", "HEAD") != prior.Repositories[0].Target {
+		t.Fatalf("pending record for another root was accepted: %v %+v", err, report)
+	}
+}
+
+func TestPrivateRootsPreserveChangedStagingGitDirectory(t *testing.T) {
+	// "extra file" fails the path allowlist by name. The others sit at paths
+	// the allowlist accepts, so only the file-type and link-count checks
+	// refuse them.
+	for _, mode := range []string{"extra file", "symlinked object", "symlinked directory", "hard-linked object"} {
+		t.Run(mode, func(t *testing.T) {
+			_, s, r, source := privateRootsFixture(t, projectTestCatalog)
+			changed := false
+			read := source.Read
+			source.Read = func(ctx context.Context) (ProjectCatalogResource, error) {
+				resource, err := read(ctx)
+				if changed {
+					resource.ResourceVersion = "2"
+				}
+				return resource, err
+			}
+			// Authority changes after the staging checkout, so agentd's own
+			// unpublished staging is left behind with its pending record.
+			runner := &fakeRunner{handle: func(c Cmd) (Result, error) {
+				result, err := r.Run(context.Background(), c)
+				if slices.Contains(c.Args, "checkout") && strings.Contains(c.Args[1], ".sample.agentd-root-") {
+					changed = true
+				}
+				return result, err
+			}}
+			if _, err := RefreshPrivateProjects(context.Background(), runner, s, source); err == nil {
+				t.Fatal("fixture did not leave staging")
+			}
+			staging, _ := filepath.Glob(filepath.Join(s.Home, "codex", ".sample.agentd-root-*"))
+			if len(staging) != 1 {
+				t.Fatalf("staging: %v", staging)
+			}
+			owner := filepath.Join(s.Home, "owner-notes")
+			writeFile(t, owner, "owner notes\n")
+			path := filepath.Join(staging[0], ".git", "info", "owner-notes")
+			switch mode {
+			case "extra file":
+				writeFile(t, path, "owner notes\n")
+			case "symlinked object", "hard-linked object":
+				objects, _ := filepath.Glob(filepath.Join(staging[0], ".git", "objects", "??", "*"))
+				if len(objects) == 0 {
+					t.Fatal("no staging objects")
+				}
+				path = objects[0]
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				link := os.Symlink
+				if mode == "hard-linked object" {
+					link = os.Link
+				}
+				if err := link(owner, path); err != nil {
+					t.Fatal(err)
+				}
+			case "symlinked directory":
+				path = filepath.Join(staging[0], ".git", "objects", "info")
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Dir(owner), path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := os.Lstat(path)
+			allowed := privateRootStagingGitPaths.MatchString(strings.TrimPrefix(path, filepath.Join(staging[0], ".git")+"/"))
+			if err != nil || allowed == (mode == "extra file") {
+				t.Fatalf("fixture path %s does not test what %q names: %v", path, mode, err)
+			}
+			report, err := RefreshPrivateProjects(context.Background(), r, s, source)
+			after, lerr := os.Lstat(path)
+			if err == nil || report.Projects[0].State != "Failed" || exists(privateRootPath(s)) || lerr != nil || !os.SameFile(before, after) || after.Mode().Type() != before.Mode().Type() || string(mustRead(t, owner)) != "owner notes\n" {
+				t.Fatalf("changed staging was discarded or adopted: %v %+v", err, report)
+			}
+		})
+	}
+}
+
+// ctxRunner hands the caller's context to the real runner, so a refresh whose
+// time budget ends stops the Git process it is running.
+type ctxRunner struct {
+	Runner
+	run func(ctx context.Context, c Cmd) (Result, error)
+}
+
+func (r ctxRunner) Run(ctx context.Context, c Cmd) (Result, error) { return r.run(ctx, c) }
+
+func twoRepositoryRootDeclaration() string {
+	declaration := strings.Replace(projectTestCatalog, `"defaultBranch":"main"}},`, `"defaultBranch":"main"},"extra":{"github":"fixture/extra"}},`, 1)
+	return strings.Replace(declaration, `[{"name":"demo"}]`, `[{"name":"demo"},{"name":"extra"}]`, 1)
+}
+
+// stopInsideExtraCheckout runs a refresh whose context ends while the extra
+// anchor's fast-forward is writing its checkout: a smudge filter holds Git
+// there, after it has removed the file it rewrites. That is the stop the step
+// reserve keeps the budget from making, and a hard kill can still make.
+func stopInsideExtraCheckout(t *testing.T, r Runner, s Settings, source *ProjectCatalogSource, extra string) {
+	t.Helper()
+	started := filepath.Join(t.TempDir(), "checkout-started")
+	attributes := filepath.Join(t.TempDir(), "attributes")
+	writeFile(t, attributes, "* filter=slow\n")
+	runner := ctxRunner{Runner: r, run: func(ctx context.Context, c Cmd) (Result, error) {
+		if len(c.Args) > 1 && c.Args[1] == extra && slices.Contains(c.Args, "merge") {
+			c.Args = append([]string{"-c", "core.attributesFile=" + attributes, "-c", "filter.slow.smudge=touch '" + started + "'; sleep 60; cat"}, c.Args...)
+		}
+		return r.Run(ctx, c)
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var report PrivateProjectReport
+	var err error
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		report, err = RefreshPrivateProjects(ctx, runner, s, source)
+	}()
+	awaitFixtureFile(t, started, finished)
+	cancel()
+	<-finished
+	if err == nil || len(report.Projects) != 1 || report.Projects[0].State != "Failed" {
+		t.Fatalf("the stopped refresh did not fail: %v %+v", err, report)
+	}
+}
+
+// DESIGN-007's repair of a preserved root, step by step: a leftover lock
+// alone, and a half-written anchor that needs the root rebuilt.
+func TestPrivateRootsRepairAPreservedRoot(t *testing.T) {
+	for _, mode := range []string{"leftover lock", "half-written anchor"} {
+		t.Run(mode, func(t *testing.T) {
+			g, s, r, source := privateRootsFixture(t, twoRepositoryRootDeclaration())
+			prior := requirePrivateRootReady(t, s, r, source)
+			root := privateRootPath(s)
+			demo, extra := filepath.Join(root, "demo"), filepath.Join(root, "extra")
+			lock := gitRun(t, g.env, extra, "rev-parse", "--path-format=absolute", "--git-path", "index.lock")
+			target := pushBootstrapChange(t, g)
+			switch mode {
+			case "leftover lock":
+				// What a hard kill leaves when it stops Git holding the lock.
+				if _, err := RefreshPrivateProjects(context.Background(), failingMerge(r, extra), s, source); err == nil {
+					t.Fatal("fixture did not stop part-way")
+				}
+				writeFile(t, lock, "")
+			case "half-written anchor":
+				stopInsideExtraCheckout(t, r, s, source, extra)
+				if exists(lock) {
+					t.Fatal("Git stopped by SIGTERM left its index.lock")
+				}
+				if exists(filepath.Join(extra, "README.md")) {
+					t.Fatal("the fixture did not stop inside the checkout")
+				}
+			}
+			for range 2 {
+				report, err := RefreshPrivateProjects(context.Background(), r, s, source)
+				if err == nil || report.Projects[0].State != "Failed" || gitRun(t, g.env, demo, "rev-parse", "HEAD") != target || gitRun(t, g.env, extra, "rev-parse", "HEAD") != prior.Repositories[1].Target || !exists(privateRootPendingPath(s)) {
+					t.Fatalf("an unprovable root was not preserved: %v %+v", err, report)
+				}
+			}
+			switch mode {
+			case "leftover lock":
+				// Step 3: no Git process runs there; remove the lock and refresh.
+				if err := os.Remove(lock); err != nil {
+					t.Fatal(err)
+				}
+				updated := requirePrivateRootReady(t, s, r, source)
+				if updated.ID != prior.ID || gitRun(t, g.env, extra, "rev-parse", "HEAD") != target || exists(privateRootPendingPath(s)) {
+					t.Fatalf("lock repair did not resume the advance: %+v", updated)
+				}
+			case "half-written anchor":
+				// Step 4: move the root aside, repair and prune each
+				// reference's worktrees, remove the receipt and pending
+				// record, and refresh.
+				old := root + ".preserved-test"
+				if err := os.Rename(root, old); err != nil {
+					t.Fatal(err)
+				}
+				for _, repo := range []string{"demo", "extra"} {
+					gitRun(t, g.env, s.ClonePath(repo), "worktree", "repair", filepath.Join(old, repo))
+					gitRun(t, g.env, s.ClonePath(repo), "worktree", "prune")
+				}
+				for _, path := range []string{privateRootReceiptPath(s), privateRootPendingPath(s)} {
+					if err := os.Remove(path); err != nil {
+						t.Fatal(err)
+					}
+				}
+				updated := requirePrivateRootReady(t, s, r, source)
+				if updated.ID == prior.ID || gitRun(t, g.env, demo, "rev-parse", "HEAD") != target || gitRun(t, g.env, extra, "rev-parse", "HEAD") != target || exists(privateRootPendingPath(s)) {
+					t.Fatalf("rebuilt root is not Ready at the target: %+v", updated)
+				}
+				// The old root keeps its files, and its anchors stay worktrees
+				// for inspection until the operator removes them.
+				if gitRun(t, g.env, filepath.Join(old, "extra"), "rev-parse", "HEAD") != prior.Repositories[1].Target || gitRun(t, g.env, filepath.Join(old, "extra"), "status", "--porcelain") != "D README.md" {
+					t.Fatal("the preserved root lost its state")
+				}
+				for _, repo := range []string{"demo", "extra"} {
+					gitRun(t, g.env, s.ClonePath(repo), "worktree", "remove", "--force", filepath.Join(old, repo))
+				}
+				requirePrivateRootReady(t, s, r, source)
+			}
+		})
+	}
+}
+
+// A blob:none fast-forward fetches the blobs it writes from inside its
+// checkout. prefetchPrivateAnchor fetches them first, so the fast-forward
+// itself needs no network: with every fetch failing, it still succeeds.
+func TestPrivateAnchorPrefetchMakesTheFastForwardLocal(t *testing.T) {
+	g := newGitFixture(t, "demo")
+	writeFile(t, filepath.Join(g.seed, "old.txt"), "removed by the target\n")
+	gitRun(t, g.env, g.seed, "add", "old.txt")
+	gitRun(t, g.env, g.seed, "commit", "-q", "-m", "old")
+	gitRun(t, g.env, g.seed, "push", "-q", "origin", "main")
+	head := gitRun(t, g.env, g.seed, "rev-parse", "HEAD")
+	clones := map[string]string{}
+	for _, name := range []string{"control", "prefetched"} {
+		clones[name] = filepath.Join(g.root, name)
+		gitRun(t, g.env, g.root, "clone", "-q", "--filter=blob:none", "file://"+g.remote, clones[name])
+	}
+	writeFile(t, filepath.Join(g.seed, "README.md"), "changed by the target\n")
+	writeFile(t, filepath.Join(g.seed, "new.txt"), "added by the target\n")
+	gitRun(t, g.env, g.seed, "rm", "-q", "old.txt")
+	gitRun(t, g.env, g.seed, "add", "README.md", "new.txt")
+	gitRun(t, g.env, g.seed, "commit", "-q", "-m", "target")
+	gitRun(t, g.env, g.seed, "push", "-q", "origin", "main")
+	target := gitRun(t, g.env, g.seed, "rev-parse", "HEAD")
+	s := testSettings(t, filepath.Join(g.root, "session-home"))
+	for name, clone := range clones {
+		gitRun(t, g.env, clone, "fetch", "-q", "origin")
+		if name == "prefetched" {
+			if err := prefetchPrivateAnchor(context.Background(), ExecRunner{BaseEnv: g.env}, s, clone, head, target); err != nil {
+				t.Fatal(err)
+			}
+		}
+		gitRun(t, g.env, clone, "config", "remote.origin.uploadpack", "false")
+		cmd := exec.Command("git", "-C", clone, "merge", "--ff-only", "-q", target)
+		cmd.Env = g.env
+		out, err := cmd.CombinedOutput()
+		switch {
+		case name == "control" && err == nil:
+			t.Fatal("the control fast-forward did not need the network; the fixture proves nothing")
+		case name == "prefetched" && err != nil:
+			t.Fatalf("the prefetched fast-forward still needed the network: %v\n%s", err, out)
+		}
+	}
+	if gitRun(t, g.env, clones["prefetched"], "rev-parse", "HEAD") != target || gitRun(t, g.env, clones["prefetched"], "status", "--porcelain") != "" {
+		t.Fatal("the prefetched fast-forward did not reach a clean target")
+	}
+}
+
+// A mutating step starts only with privateRootStepReserve of the budget left.
+// When the budget runs short after the first anchor moved, the second anchor's
+// fast-forward never starts, and the next refresh resumes the advance.
+func TestPrivateRootsStartNoMutatingStepWithoutTheReserve(t *testing.T) {
+	g, s, r, source := privateRootsFixture(t, twoRepositoryRootDeclaration())
+	prior := requirePrivateRootReady(t, s, r, source)
+	root := privateRootPath(s)
+	demo, extra := filepath.Join(root, "demo"), filepath.Join(root, "extra")
+	target := pushBootstrapChange(t, g)
+	reserve := privateRootStepReserve
+	t.Cleanup(func() { privateRootStepReserve = reserve })
+	extraMerged, prefetched := false, map[string]bool{}
+	runner := ctxRunner{Runner: r, run: func(ctx context.Context, c Cmd) (Result, error) {
+		isMerge := len(c.Args) > 1 && slices.Contains(c.Args, "merge") && slices.Contains(c.Args, "--ff-only")
+		if isMerge && c.Args[1] == extra {
+			extraMerged = true
+		}
+		if len(c.Args) > 1 && slices.Contains(c.Args, "diff") && slices.Contains(c.Args, "--shortstat") && slices.Contains(c.Args, target) {
+			prefetched[c.Args[1]] = true
+		}
+		if isMerge && c.Args[1] == demo && (!prefetched[demo] || !prefetched[extra]) {
+			t.Error("an anchor moved before every checkout's blobs were fetched")
+		}
+		result, err := r.Run(ctx, c)
+		if err == nil && isMerge && c.Args[1] == demo {
+			// The rest of the budget is now shorter than the reserve.
+			privateRootStepReserve = 24 * time.Hour
+		}
+		return result, err
+	}}
+	report, err := RefreshPrivateProjects(context.Background(), runner, s, source)
+	if err == nil || report.Projects[0].State != "Failed" || extraMerged || gitRun(t, g.env, demo, "rev-parse", "HEAD") != target || gitRun(t, g.env, extra, "rev-parse", "HEAD") != prior.Repositories[1].Target || !exists(privateRootPendingPath(s)) {
+		t.Fatalf("a mutating step started without the reserve: merged=%v %v %+v", extraMerged, err, report)
+	}
+	privateRootStepReserve = reserve
+	updated := requirePrivateRootReady(t, s, r, source)
+	if gitRun(t, g.env, extra, "rev-parse", "HEAD") != target || updated.Repositories[1].Target != target || exists(privateRootPendingPath(s)) {
+		t.Fatalf("advance stopped for the reserve was not resumed: %+v", updated)
+	}
+}
+
+// Every anchor's fast-forward is proved before the first change: a target
+// that does not descend from the second anchor's commit refuses the refresh
+// with the first anchor, the root and the records untouched.
+func TestPrivateRootsProveEveryFastForwardBeforeTheFirstChange(t *testing.T) {
+	g, s, r, source := privateRootsFixture(t, twoRepositoryRootDeclaration())
+	prior := requirePrivateRootReady(t, s, r, source)
+	root := privateRootPath(s)
+	demo, extra := filepath.Join(root, "demo"), filepath.Join(root, "extra")
+	rootHead := gitRun(t, g.env, root, "rev-parse", "HEAD")
+	pushBootstrapChange(t, g)
+	runner := &fakeRunner{handle: func(c Cmd) (Result, error) {
+		if len(c.Args) > 1 && c.Args[1] == extra && slices.Contains(c.Args, "merge-base") && slices.Contains(c.Args, "--is-ancestor") {
+			return Result{ExitCode: 1}, &CmdError{Name: "git", Sub: "merge-base", ExitCode: 1}
+		}
+		return r.Run(context.Background(), c)
+	}}
+	report, err := RefreshPrivateProjects(context.Background(), runner, s, source)
+	if err == nil || report.Projects[0].State != "Failed" {
+		t.Fatalf("a refused fast-forward was accepted: %v %+v", err, report)
+	}
+	if gitRun(t, g.env, demo, "rev-parse", "HEAD") != prior.Repositories[0].Target || gitRun(t, g.env, extra, "rev-parse", "HEAD") != prior.Repositories[1].Target || gitRun(t, g.env, root, "rev-parse", "HEAD") != rootHead || exists(privateRootPendingPath(s)) {
+		t.Fatal("a refused fast-forward changed the root before its proof")
+	}
+	var receipt privateRootReceipt
+	if readWorkspaceJSONBounded(privateRootReceiptPath(s), &receipt, privateRootReceiptLimit) != nil || receipt.Repositories[0].Target != prior.Repositories[0].Target {
+		t.Fatal("the receipt changed")
 	}
 }

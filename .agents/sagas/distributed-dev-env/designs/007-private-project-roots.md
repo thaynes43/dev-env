@@ -54,8 +54,108 @@ anchor target; preparing the anchor must not change that reference's index/WIP.
 Keep a private operation outcome and per-project source/rule provenance under
 `.agentd/project-roots`. Interrupted or partial publication cannot leave an old
 Ready receipt describing the current invocation. Unconfirmed ownership is
-preserved and reported; it is not silently repaired. A project is Ready only
+preserved and reported; it is not silently repaired. agentd's own recorded
+partial advance is resumed instead (next section). A project is Ready only
 when all required anchors and both wrappers match confirmed authority.
+
+## Recoverable advance
+
+Added 2026-10-12 for review finding roots-1. A refresh can fail part-way: a
+transient catalog read, the time budget, or a refused fast-forward after one
+anchor already moved. Such a failure must not strand an owned root.
+
+- Before its first change, agentd proves every existing anchor clean at its
+  proven commit, and each fresh target a descendant of that commit. It also
+  fetches, in one batch, every blob each anchor's fast-forward will check out
+  (a `git diff --shortstat` between the two commits). A refusal or a failed
+  fetch here changes nothing in the root.
+- It then writes a private pending record, `<project>.pending.json`, beside the
+  receipt (fsync and atomic rename). The record holds the root's private ID and
+  config digest, the proven state it starts from (`from`) and the state it
+  intends (`to`): root HEAD and tree, wrapper digest, exclusion bytes, and each
+  anchor's repository, target and exact identity. A new anchor's identity is
+  added as soon as its worktree exists.
+- A later refresh that finds the record proves the live root component by
+  component: root HEAD, tree and wrappers at `from` or `to`, exclusion bytes at
+  `from` or `to`, and each anchor at its `from` or `to` commit with its recorded
+  identity. An anchor that `to` adds may be absent, or present as the
+  self-consistent detached worktree at its `to` target that agentd's own
+  post-create proof accepts. Wrappers at `to` may still carry the umask mode;
+  agentd re-applies 0644 (DESIGN-012) before going on. Every other check stays
+  exact. Dirty, staged, ignored or unknown files, local commits, attached
+  anchors, peer aliases, operations in progress and foreign identity are
+  preserved and refused, as before.
+- The proven reached state is the base of a normal advance to the current
+  catalog and fresh targets. The receipt is written only after the exact final
+  proof, and the pending record is removed after that. If the remove fails the
+  outcome is Failed, and the next refresh finishes it.
+- The time budget ends a refresh between Git steps, not inside a mutating one.
+  Reference clones are `blob:none`, and a checkout fetches missing blobs only
+  after it has removed the paths the target deletes, so a fast-forward stopped
+  in that fetch would be neither at `from` nor at `to`. With the blobs already
+  fetched, each anchor fast-forward and the root fast-forward are local work. A
+  mutating step in a published root starts only with at least 30 seconds of the
+  budget left. A new anchor's `git worktree add` may still fetch: Git removes
+  its half-made worktree when it is stopped.
+- When a time limit does stop a command, agentd's runner sends SIGTERM to its
+  process group and SIGKILL 3 seconds later. On SIGTERM Git removes its lock
+  files and an unfinished `worktree add`. A hard kill (that SIGKILL, the OOM
+  killer, a pod or node lost) inside a mutating step can still leave a lock or
+  a half-written checkout. That root is preserved and refused, and the operator
+  repairs it (next section).
+- A new root records its pending ID before it creates staging, which is named
+  `.<project>.agentd-root-<id>`. Recovery may delete only that staging, and only
+  while the root is unpublished and the staging holds nothing but what agentd
+  generates: wrappers at the recorded digest, and a `.git` whose every path is
+  one that Git's empty-template init, object writes and checkout, or agentd's
+  marker and exclusion writes, create, each a directory or single-link regular
+  file that agentd owns. Any other staging content is preserved and refused. A
+  published root is never deleted. Staging under any other name,
+  including the older fixed `.<project>.agentd-root`, is left untouched and no
+  longer blocks creation.
+- A root stranded by an earlier image, with no pending record, is not adopted.
+  It stays preserved for the repair below.
+
+## Repair of a preserved root
+
+agentd never repairs a root it cannot prove. The operator does, from a shell in
+the session pod, as the session's user. `TestPrivateRootsRepairAPreservedRoot`
+runs steps 3 to 5 against real Git.
+
+1. Hold the bootstrap lock, so no refresh runs while you work:
+   `exec 9<>~/.agentd/project-bootstrap.lock && flock -n 9`. It fails while a
+   refresh runs; wait and try again.
+2. Read `~/.agentd/project-roots/<project>.operation.json`, and look at the
+   root and each anchor (`git -C ~/codex/<project>/<repo> status`) for owner
+   work.
+3. **A leftover Git lock only.** `git -C ~/codex/<project>/<repo> rev-parse
+   --path-format=absolute --git-path index.lock` names an anchor's index lock.
+   If no Git process runs in that anchor, delete the lock and go to step 5.
+4. **Anything else: rebuild the root and keep the old one.**
+
+   ```sh
+   old=~/codex/<project>.preserved-$(date -u +%Y%m%dT%H%M%SZ)
+   mv ~/codex/<project> "$old"
+   # For each repository in the project's catalog entry:
+   git -C ~/repos/<repo> worktree repair "$old/<repo>"
+   git -C ~/repos/<repo> worktree prune
+   rm -f ~/.agentd/project-roots/<project>.json ~/.agentd/project-roots/<project>.pending.json
+   ```
+
+   `git worktree add` refuses a path that is "missing but already registered",
+   so the moved anchors must not stay registered at the old path. `worktree
+   repair` points each one's registration at its new path, and the old anchor
+   stays a working worktree for inspection. It reports an error for an anchor
+   that never became a worktree; `worktree prune` then drops any registration
+   left at the old path.
+5. Release the lock (`exec 9>&-`) and run the refresh (`agentd project-refresh`,
+   or let managed startup run it). It proves everything again. After step 3 it
+   resumes the recorded advance if the anchor is otherwise clean, and refuses
+   again if it is not. After step 4 it builds a new root with a new ID.
+6. Copy what you need from `$old`. Then remove each old anchor with
+   `git -C ~/repos/<repo> worktree remove --force "$old/<repo>"` and delete
+   `$old`. Staging named `~/codex/.<project>.agentd-root-<id>` for the old ID
+   can be deleted once inspected.
 
 New task admission still fetches and pins selected source independently. Resume
 keeps its saved worktree, snapshot and effective instructions. This contract
@@ -72,8 +172,15 @@ Prove two independent homes have distinct root/repository Git directories;
 single/multiple repository roots, override fetch/pins and generated instruction
 bytes; safe generated-root and detached-anchor advances; preservation of dirty,
 staged, ignored, local-only, linked-peer, operation and foreign state; refusal of
-changed catalog authority, edited/undeclared roots and partial provenance; and
-unchanged selected-task freshness/resume protections. Default-off roots write
+changed catalog authority, edited/undeclared roots and partial provenance;
+recovery of an interrupted multi-anchor advance, of a single-repository advance
+whose authority confirmation failed after the anchor moved, of a generated-root
+fast-forward left at the umask mode, and of a new root interrupted before or
+after publication; no anchor moved before every fast-forward is proved and its
+blobs fetched; no mutating step started without the budget reserve; Git stopped
+by a time limit leaves no lock or half-made worktree; the documented repair of
+a leftover lock and of a half-written anchor; and unchanged selected-task
+freshness/resume protections. Default-off roots write
 nothing. Shared-path regressions remain guarded.
 
 Required CI and native independent review govern merge. Claude Code reviews

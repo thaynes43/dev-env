@@ -120,8 +120,9 @@ func TestPrivateRootsRefuseUnconfirmedGeneratedWrapperModes(t *testing.T) {
 			snapshot, _ := catalog.ProjectSnapshot("sample")
 			foreign := filepath.Join(s.Home, "provider", "owner-rules")
 			writeFile(t, foreign, snapshot.ProjectRules())
-			staging := filepath.Join(s.Home, "codex", ".sample.agentd-root")
-			path := filepath.Join(staging, "AGENTS.md")
+			// Staging carries the pending root ID; the checkout names it.
+			prefix := filepath.Join(s.Home, "codex", ".sample.agentd-root-")
+			staging, path := "", ""
 			written, edited := false, false
 			read := source.Read
 			source.Read = func(ctx context.Context) (ProjectCatalogResource, error) {
@@ -137,9 +138,10 @@ func TestPrivateRootsRefuseUnconfirmedGeneratedWrapperModes(t *testing.T) {
 			}
 			runner := &fakeRunner{handle: func(c Cmd) (Result, error) {
 				result, err := r.Run(context.Background(), c)
-				if err != nil || !slices.Contains(c.Args, "checkout") || c.Args[1] != staging {
+				if err != nil || !slices.Contains(c.Args, "checkout") || !strings.HasPrefix(c.Args[1], prefix) {
 					return result, err
 				}
+				staging, path = c.Args[1], filepath.Join(c.Args[1], "AGENTS.md")
 				written = true
 				switch mode {
 				case "edited":
@@ -172,6 +174,26 @@ func TestPrivateRootsRefuseUnconfirmedGeneratedWrapperModes(t *testing.T) {
 			if mode == "edited" || mode == "edited during authority" {
 				if fi, err := os.Lstat(path); err != nil || fi.Mode().Perm() != 0o600 || !strings.Contains(string(mustRead(t, path)), "Owner rules.") {
 					t.Fatal("edited wrapper was chmodded or replaced")
+				}
+			}
+			// A retry discards agentd's own unpublished staging only when it
+			// holds nothing but generated content; changed staging is kept.
+			retry, err := RefreshPrivateProjects(context.Background(), r, s, source)
+			if mode == "authority drift" {
+				if err != nil || retry.State != "Ready" || exists(staging) {
+					t.Fatalf("own generated staging was not resumed: %v %+v", err, retry)
+				}
+				return
+			}
+			if err == nil || retry.Projects[0].State != "Failed" || exists(privateRootPath(s)) || !exists(staging) {
+				t.Fatalf("changed staging was discarded or adopted: %v %+v", err, retry)
+			}
+			if fi, err := os.Stat(foreign); err != nil || fi.Mode().Perm() != 0o600 || string(mustRead(t, foreign)) != snapshot.ProjectRules() {
+				t.Fatal("retry changed the foreign file")
+			}
+			if mode == "edited" || mode == "edited during authority" {
+				if !strings.Contains(string(mustRead(t, path)), "Owner rules.") {
+					t.Fatal("retry replaced the edited wrapper")
 				}
 			}
 		})
