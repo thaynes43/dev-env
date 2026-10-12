@@ -316,7 +316,7 @@ right now, so its alert does not depend on that cadence.
 It is D-55's hold pod: the Session's Pod name, the label
 `dev-env.haynesops.com/hold: "true"`, `agentd hold`, S-class resources, no agent
 credentials, the session volume, the shared volume and `/creds` for the rescue's
-Git credential helper. Four additions:
+Git credential helper. Five additions:
 
 - It is made for a private Session only by the expiry, only in `Rescuing`, and
   only after the executor Pod is gone (the same name).
@@ -334,8 +334,13 @@ Git credential helper. Four additions:
   UID as `holdPodUID` by a confirmed write. A hold-labelled Pod with any other
   intent is a new Pod (5.3). Only the operator can create Pods in `dev-agents`
   (`dev-env-identity-guard` refuses agents), so a matching intent is the
-  operator's own. A hold pod made again, after an owner hold, gets a new
-  `holdIntent`, and `holdPodUID` is cleared first.
+  operator's own.
+- **Making it again.** After an owner hold, or after archive was turned off and
+  on again (section 14), the hold pod may have to be made again. `holdPodUID`
+  keeps naming the old pod while it terminates, so that pod is never a new Pod.
+  Only once uncached reads show the Session's Pod name NotFound and no Pod
+  mounting the claim does the operator clear `holdPodUID` and write a new
+  `holdIntent`, in one confirmed write, and then create the pod.
 - **The binding.** A Pod names its claim, not the claim's UID. The operator
   checks the claim's UID before it creates the pod, again once the pod runs, and
   in the common re-check of every later step. While a Pod uses a claim,
@@ -819,7 +824,9 @@ status itself.
   restart falls between the hold pod's create and the write of `holdPodUID`: the
   pod is adopted by its `holdIntent`, nothing is cancelled and no
   PreservationUnknown is raised. A hold-labelled Pod with another intent is a new
-  Pod and cancels.
+  Pod and cancels. An owner hold lifted while the old hold pod still terminates:
+  nothing is cancelled, and the new intent is written only after that pod is
+  gone.
 - **T13, two reconcilers.** Overlapping leaders: one delete succeeds; the archive
   `put` is `exists` for the other.
 - **T14, the stop request.** A reaped private executor gets exactly one patch with
