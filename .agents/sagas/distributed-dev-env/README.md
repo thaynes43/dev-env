@@ -10,23 +10,7 @@ below are historical; they do not reauthorize old next steps or reset counters.
 *Update: both Codex reads then ran and returned both markers; see the #173
 paragraph after the Q-27 ruling.*
 *Update: Claude's rule loading was accepted later on 2026-10-12 under Q-28; see
-the next paragraph.*
-
-**#173 Claude rule markers accepted under Q-28, 2026-10-12.** Tom answered Q-28
-through the Claude native prompt: "Yes, after fixes deploy (Recommended)" (decision
-63). After dev-env v2.24.1 was deployed (haynes-ops #3841 and #3842), one new Claude
-canary, `rule-canary-claude-1012`, ran with one create, one named read and one
-result read, and no retries. The runner's first wait held on a kubectl flag; one
-reviewed correction replaced only that read-only step. The retained output carries
-the common and the repository marker, each behind a label, and the prompt held
-neither. So both providers have now loaded the common and repository rules in
-private v2 pods. The
-[Claude canary 1012 record](verification/claude-canary-1012-2026-10-12.md) binds
-Root acceptance `88909059`. Private GitHub authorization and a fresh task pin
-remain for #173; served model, usage, cost, full history, physical stop,
-capture completeness and tool-use compliance stay Unknown. Counters: Directory 6;
-Claude Create 2, Codex Create 1; Claude named and result reads 2 each, Codex 1
-each. Nothing further is authorized.
+the Q-28 paragraph after the #173 Codex paragraph.*
 
 **Q-27 answered, 2026-10-12.** Tom answered through the Claude native prompt:
 "Fix once, then read (Recommended)". The ruling allows one offline correction of
@@ -52,8 +36,25 @@ capture completeness, private GitHub authorization and a fresh task pin remain
 Unknown or unaccepted. Claude's rule loading is still unproven, so actual
 both-provider rules and the #173 MVP stay open. Counters: Directory 5; Create 1
 each; named and result reads 1 each per provider. Nothing further is authorized.
-*(Update: Claude's rule loading was accepted under Q-28; see the Q-28 paragraph
-above.)*
+*(Update: Claude's rule loading was accepted under Q-28; see the next
+paragraph.)*
+
+**#173 Claude rule markers accepted under Q-28, 2026-10-12.** Tom answered Q-28
+through the Claude native prompt: "Yes, after fixes deploy (Recommended)" (decision
+63). After dev-env v2.24.1 was deployed (haynes-ops #3841 and #3842), one new Claude
+canary, `rule-canary-claude-1012`, ran with one create, one named read and one
+result read, and no retries. The runner's first wait held on a kubectl flag; one
+reviewed correction replaced only that read-only step. The retained output carries
+the common and the repository marker, each behind a label, and the prompt held
+neither. So both providers have now loaded the common and repository rules in
+private v2 pods. The
+[Claude canary 1012 record](verification/claude-canary-1012-2026-10-12.md) binds
+Root acceptance `88909059`. Genuine private GitHub authorization and worktrees,
+and a fresh task pin, remain open for #173 with its other acceptance items;
+served model, usage, cost, full history, physical stop, capture completeness,
+private capture acknowledgement and tool-use compliance stay Unknown.
+Counters: Directory 6; Claude Create 2, Codex Create 1; Claude named and result
+reads 2 each, Codex 1 each. Nothing further is authorized.
 
 The [original Codex probe record](verification/codex-fixed-rule-probe-2026-10-12.md)
 records 16 passing offline checks, independent full review and one program that

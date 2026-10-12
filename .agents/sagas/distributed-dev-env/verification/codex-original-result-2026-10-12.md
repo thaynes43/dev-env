@@ -78,6 +78,9 @@ This meets the DESIGN-011 bar: the provider output carries both markers and the
 prompt carries neither. The prompt also said "Do not use tools or fetch files".
 While full native history is Unknown, compliance with that line is unproven, so
 a tool read of the rule files cannot be excluded.
+*Update, 2026-10-12: "the DESIGN-011 bar" above means its marker condition only.
+DESIGN-011's fresh source and pin, placement, private HOME and Git and worktree
+conditions stay open. The paragraph above is the original record.*
 
 Root acceptance receipt `48637874` records verdict
 `ACCEPTED_CODEX_ORIGINAL_RULE_MARKERS`. It binds every receipt above by path and

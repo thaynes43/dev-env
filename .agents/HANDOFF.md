@@ -46,9 +46,12 @@ has the details.
 
 **#173 status.** Rule loading is accepted for both providers: the Codex original
 and Claude canary 1012 both loaded the common and repository rules in private v2
-pods. Private GitHub authorization and a fresh task pin remain. Served model,
-usage, cost, full history, physical stop, capture completeness and tool-use
-compliance stay Unknown.
+pods. Genuine private GitHub authorization and worktrees, and a fresh task pin,
+remain open for #173, with its other acceptance items (two bounded pods,
+missing-repo bootstrap, a failed fetch blocking new work, preserved local
+state). Served model, usage, cost, full history, physical stop, capture
+completeness, private capture acknowledgement and tool-use compliance stay
+Unknown.
 
 Counters now: Directory 6; Claude Create 2 (1011, 1012), Codex Create 1; Claude
 named/result 2 each; Codex named/result 1 each. All three permanent IDs are
