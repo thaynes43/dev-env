@@ -21,7 +21,9 @@ func showOnceSession() apiv1.Session {
 		LastExecutor: &apiv1.PrivateExecutor{PodUID: "original-pod-uid", PodName: s.Name, Generation: 1},
 	}
 	s.Tools = []string{"synthetic-tool"}
-	s.AgentStatus = &apiv1.AgentStatus{Problems: []string{"synthetic-problem"}, Task: &apiv1.TaskResult{ExitCode: 0, FinishedAt: testNow}}
+	s.AgentStatus = &apiv1.AgentStatus{Problems: []string{"synthetic-problem"}, Task: &apiv1.TaskResult{ExitCode: 0, FinishedAt: testNow},
+		ProjectBootstrap: &apiv1.ProjectBootstrap{State: "Partial", Repositories: []apiv1.ProjectBootstrapRepository{{Name: "synthetic-repo", State: "Preserved", Step: "Advance", Reason: "WorkingTreeDiffers"}},
+			Projects: []apiv1.ProjectBootstrapProject{{Name: "synthetic-project", State: "Failed", Reason: "AnchorUnproven", Repository: "synthetic-repo", Cause: "WorkingTreeDiffers"}}}}
 	u := protocol.UnknownUsage()
 	u.Source = protocol.UsageSource{SessionUID: s.UID, PodUID: "original-pod-uid", Provider: s.Agent, RequestedModel: s.Model, AttemptID: strings.Repeat("a", 64)}
 	u.ID, u.ObservedAt, u.ResultState = protocol.UsageObservationID(u.Source), testNow, "Final"
@@ -159,6 +161,8 @@ func TestShowOnceRejectsAmbiguousAndMalformedSessionJSON(t *testing.T) {
 		"null-array-element":  bytes.Replace(raw, []byte(`"tools":["synthetic-tool"]`), []byte(`"tools":[null]`), 1),
 		"array-type":          bytes.Replace(raw, []byte(`"tools":["synthetic-tool"]`), []byte(`"tools":{}`), 1),
 		"usage-unknown":       bytes.Replace(raw, []byte(`"usageObservation":{`), []byte(`"usageObservation":{"extra":true,`), 1),
+		"bootstrap-unknown":   bytes.Replace(raw, []byte(`"projectBootstrap":{`), []byte(`"projectBootstrap":{"detail":"synthetic",`), 1),
+		"bootstrap-null-name": bytes.Replace(raw, []byte(`"name":"synthetic-repo"`), []byte(`"name":null`), 1),
 		"usage-private-field": bytes.Replace(raw, []byte(`"usageObservation":{`), []byte(`"usageObservation":{"malformedDigest":"synthetic",`), 1),
 		"usage-empty-tag":     bytes.Replace(raw, []byte(`"usageObservation":{`), []byte(`"usageObservation":{"":"synthetic",`), 1),
 		"usage-case-alias":    bytes.Replace(raw, []byte(`"counterSemantics":`), []byte(`"COUNTERSEMANTICS":`), 1),

@@ -133,7 +133,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 	steps := Render(ctx, d.R, d.S, d.Session)
 	if d.S.PrivateProjectBootstrap {
 		report, err := RefreshPrivateProjects(ctx, d.R, d.S, d.ProjectCatalog)
-		steps = append(steps, newStep("project-bootstrap", []string{"catalog bootstrap outcome " + report.State}, err))
+		// The first note is the code summary status.agent.problems carries;
+		// the codes themselves go to status.agent.projectBootstrap.
+		steps = append(steps, newStep("project-bootstrap", []string{report.summary()}, err))
+		rec.ProjectBootstrap = report.published()
 	}
 	ws, repoStep := PrepareRepo(ctx, d.R, d.S, d.Session)
 	steps = append(steps, repoStep)

@@ -88,6 +88,7 @@ func view(s *v1alpha1.AgentSession, withPrompt bool) apiv1.Session {
 			Message:        a.Message,
 			Agentd:         a.Agentd,
 		}
+		v.AgentStatus.ProjectBootstrap = projectBootstrapView(a.ProjectBootstrap)
 		if t := a.Task; t != nil {
 			v.AgentStatus.Task = &apiv1.TaskResult{
 				ExitCode: t.ExitCode, FinishedAt: t.FinishedAt.UTC(), TimedOut: t.TimedOut,
@@ -124,4 +125,19 @@ func timeOf(t *metav1.Time) *time.Time {
 	}
 	u := t.UTC()
 	return &u
+}
+
+// projectBootstrapView is status.agent.projectBootstrap for the API.
+func projectBootstrapView(pb *v1alpha1.ProjectBootstrapStatus) *apiv1.ProjectBootstrap {
+	if pb == nil {
+		return nil
+	}
+	out := &apiv1.ProjectBootstrap{State: pb.State, Reason: pb.Reason, CatalogRevision: pb.CatalogRevision}
+	for _, repo := range pb.Repositories {
+		out.Repositories = append(out.Repositories, apiv1.ProjectBootstrapRepository{Name: repo.Name, State: repo.State, Step: repo.Step, Reason: repo.Reason})
+	}
+	for _, project := range pb.Projects {
+		out.Projects = append(out.Projects, apiv1.ProjectBootstrapProject{Name: project.Name, State: project.State, Reason: project.Reason, Repository: project.Repository, Cause: project.Cause})
+	}
+	return out
 }

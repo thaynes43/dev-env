@@ -116,6 +116,11 @@ for full revisions and acceptance limits. The
 [bootstrap contract](../.agents/sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md)
 uses private catalogs without shared preflight or locks; startup refresh does
 not replace a fresh selected-repository fetch and immutable pin before each task.
+A `Partial` or `Failed` bootstrap is diagnosable without exec: `agent-run show
+NAME` prints a `project bootstrap` row and a row for each repository or project
+that is not Ready, with closed-set reason codes, and the AgentSession holds them
+in `status.agent.projectBootstrap`
+([reason codes](../.agents/sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md#reason-codes-diagnosis-without-exec)).
 
 The [private retention guard](../.agents/sagas/distributed-dev-env/designs/008-private-provider-history-retention.md)
 preserves HOME and Session identity rather than declaring archive complete.

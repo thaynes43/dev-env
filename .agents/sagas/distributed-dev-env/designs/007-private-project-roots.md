@@ -58,6 +58,16 @@ preserved and reported; it is not silently repaired. agentd's own recorded
 partial advance is resumed instead (next section). A project is Ready only
 when all required anchors and both wrappers match confirmed authority.
 
+## Reason codes
+
+Added 2026-10-12. Every exit of a root refresh that is not Ready records a
+closed-set `reason` in `PrivateProjectRootReport`, and the member repository
+and its clean-checkout `cause` when one repository is why. The codes, what is
+published from them and where they appear (boot step note, `status.agent.projectBootstrap`,
+`agent-run show`) are in
+[DESIGN-006, reason codes](006-private-catalog-bootstrap.md#reason-codes-diagnosis-without-exec).
+No path, commit or detail text leaves the private report.
+
 ## Recoverable advance
 
 Added 2026-10-12 for review finding roots-1. A refresh can fail part-way: a

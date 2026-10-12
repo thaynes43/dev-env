@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
 
@@ -38,6 +40,12 @@ type PrivateProjectRootReport struct {
 	Repositories    []PrivateProjectSource `json:"repositories,omitempty"`
 	ObservedAt      time.Time              `json:"observedAt"`
 	Detail          string                 `json:"detail,omitempty"`
+	// Reason is why a Failed refresh stopped (protocol.RootReasons). When one
+	// member repository is why, Repository is its catalog name and Cause its
+	// clean-checkout reason (protocol.RepositoryReasons).
+	Reason     string `json:"reason,omitempty"`
+	Repository string `json:"repository,omitempty"`
+	Cause      string `json:"cause,omitempty"`
 }
 
 // Ownership and operation outcomes are separate: an interrupted mutation
@@ -118,52 +126,82 @@ func (receipt privateRootReceipt) state(anchors []PrivateProjectSource, identiti
 
 func refreshPrivateProjectRoot(ctx context.Context, r Runner, s Settings, snapshot projectcatalog.Snapshot, authority *projectCatalogAuthority) (report PrivateProjectRootReport) {
 	report = PrivateProjectRootReport{Project: snapshot.Project(), State: "Failed", CatalogRevision: snapshot.CatalogRevision(), RulesRevision: snapshot.RulesRevision(), ObservedAt: time.Now().UTC(), Detail: errPrivateRoot.Error()}
+	// stop records why the refresh ended here: err's own root refusal when it
+	// carries one, otherwise reason, with the member repository and its
+	// clean-checkout cause when one repository is why (DESIGN-006).
+	stop := func(reason, repository string, err error) PrivateProjectRootReport {
+		refusal := &rootError{reason: reason, repository: repository, cause: reasonOf(err, "")}
+		var known *rootError
+		if errors.As(err, &known) {
+			refusal = known
+		}
+		report.Reason, report.Repository, report.Cause = refusal.reason, refusal.repository, refusal.cause
+		if ended := endedReason(ctx); ended != "" && report.Reason != protocol.ReasonAnchorRemoved {
+			report.Reason = ended
+		}
+		return report
+	}
 	parent := filepath.Join(s.StateDir, "project-roots")
 	if ensureWorkspaceDirectory(parent) != nil {
-		return report
+		return stop(protocol.ReasonStateUncertain, "", nil)
 	}
 	operation := filepath.Join(parent, snapshot.Project()+".operation.json")
 	started := report
 	started.State = "Started"
 	if writeWorkspaceJSON(operation, started) != nil {
-		return report
+		return stop(protocol.ReasonReceiptUnconfirmed, "", nil)
 	}
 	defer func() {
 		report.ObservedAt = time.Now().UTC()
 		if writeWorkspaceJSON(operation, report) != nil {
 			report.State, report.Detail = "Failed", "private project root outcome retention is unconfirmed"
+			report.Reason, report.Repository, report.Cause = protocol.ReasonReceiptUnconfirmed, "", ""
 		}
 	}()
-	if authority.confirm(ctx) != nil || ensureWorkspaceDirectory(filepath.Join(s.Home, "codex")) != nil {
-		return report
+	if authority.confirm(ctx) != nil {
+		return stop(protocol.ReasonCatalogUnconfirmed, "", nil)
+	}
+	if ensureWorkspaceDirectory(filepath.Join(s.Home, "codex")) != nil {
+		return stop(protocol.ReasonStateUncertain, "", nil)
 	}
 	root := filepath.Join(s.Home, "codex", snapshot.Project())
 	receiptPath := filepath.Join(parent, snapshot.Project()+".json")
 	pendingPath := filepath.Join(parent, snapshot.Project()+".pending.json")
 	current, id, configDigest, err := privateRootStart(ctx, r, s, root, receiptPath, pendingPath, authority)
 	if err != nil {
-		return report
+		return stop(protocol.ReasonRootUnproven, "", err)
 	}
 	published := current.Head != ""
 	// Removed anchors are never deleted or silently reclassified as owned
 	// by a newer map. A later explicit migration can decide their future.
-	for name, prior := range current.Anchors {
+	// Sorted, so the same state always names the same anchor.
+	for _, name := range slices.Sorted(maps.Keys(current.Anchors)) {
+		prior := current.Anchors[name]
 		if !slices.ContainsFunc(snapshot.Repositories(), func(repo projectcatalog.Repository) bool {
 			return repo.Name == name && repo.GitHub == prior.Repository.GitHub
 		}) {
-			return report
+			return stop(protocol.ReasonAnchorRemoved, name, nil)
 		}
 	}
 	var sources []PrivateProjectSource
 	for _, repo := range snapshot.Repositories() {
-		if authority.confirm(ctx) != nil || validateProjectReference(ctx, r, s, repo) != nil || projectGitOperationClear(ctx, r, s, s.ClonePath(repo.Name)) != nil {
-			return report
+		if authority.confirm(ctx) != nil {
+			return stop(protocol.ReasonCatalogUnconfirmed, "", nil)
+		}
+		if err := validateProjectReference(ctx, r, s, repo); err != nil {
+			return stop(protocol.ReasonRepositoryNotReady, repo.Name, withReason(protocol.ReasonReferenceUncertain, err))
+		}
+		if err := projectGitOperationClear(ctx, r, s, s.ClonePath(repo.Name)); err != nil {
+			return stop(protocol.ReasonRepositoryNotReady, repo.Name, withReason(protocol.ReasonGitOperationPresent, err))
 		}
 		target, fetched, err := fetchProjectTarget(ctx, r, s, repo)
 		observed := PrivateProjectSource{Repository: repo, Target: target, FetchedAt: fetched, State: "Preserved", Detail: "project source fetch is unconfirmed"}
 		report.Repositories = append(report.Repositories, observed)
-		if err != nil || !rootObjectID.MatchString(target) {
-			return report
+		if err != nil {
+			return stop(protocol.ReasonFetchFailed, repo.Name, withReason(protocol.ReasonFetchFailed, err))
+		}
+		if !rootObjectID.MatchString(target) {
+			return stop(protocol.ReasonFetchFailed, repo.Name, reasonErr(protocol.ReasonUncertain, "fetched target is not an object id"))
 		}
 		observed.State, observed.Detail = "Ready", "fresh project anchor target"
 		sources = append(sources, observed)
@@ -184,8 +222,14 @@ func refreshPrivateProjectRoot(ctx context.Context, r Runner, s Settings, snapsh
 			state.Identity = prior.Identity
 			if prior.Target != source.Target {
 				anchor := filepath.Join(root, name)
-				if _, err := projectGit(ctx, r, s, anchor, "merge-base", "--is-ancestor", prior.Target, source.Target); err != nil || prefetchPrivateAnchor(ctx, r, s, anchor, prior.Target, source.Target) != nil {
-					return report
+				if _, err := projectGit(ctx, r, s, anchor, "merge-base", "--is-ancestor", prior.Target, source.Target); err != nil {
+					if ExitCodeOf(err) == 1 {
+						return stop(protocol.ReasonAnchorNotFastForward, name, nil)
+					}
+					return stop(protocol.ReasonAnchorUnproven, name, reasonErr(protocol.ReasonUncertain, "anchor ancestry is uncertain"))
+				}
+				if err := prefetchPrivateAnchor(ctx, r, s, anchor, prior.Target, source.Target); err != nil {
+					return stop(protocol.ReasonFetchFailed, name, withReason(protocol.ReasonFetchFailed, err))
 				}
 			}
 		}
@@ -195,36 +239,42 @@ func refreshPrivateProjectRoot(ctx context.Context, r Runner, s Settings, snapsh
 		// Generated objects only; the live index and HEAD are unchanged.
 		to.Head, to.Tree, err = generatedRootCommit(ctx, r, s, root, snapshot.ProjectRules(), current.Head)
 		if err != nil {
-			return report
+			return stop(protocol.ReasonRootPrepareFailed, "", nil)
 		}
 	}
 	if id == "" {
 		if id, err = newUUID(); err != nil {
-			return report
+			return stop(protocol.ReasonRootPrepareFailed, "", nil)
 		}
 		next.ID = id
 	}
 	// From here every change is recorded first: the live root stays, component
 	// by component, at From or To, and a later refresh resumes from it.
 	pending := privateRootPending{Version: 1, ID: id, Root: root, ConfigDigest: configDigest, From: current, To: to}
-	if authority.confirm(ctx) != nil || writePrivateRootPending(pendingPath, pending) != nil {
-		return report
+	if authority.confirm(ctx) != nil {
+		return stop(protocol.ReasonCatalogUnconfirmed, "", nil)
+	}
+	if writePrivateRootPending(pendingPath, pending) != nil {
+		return stop(protocol.ReasonReceiptUnconfirmed, "", nil)
 	}
 	if !published {
 		staging := privateRootStaging(root, id)
 		head, tree, config, err := preparePrivateRoot(ctx, r, s, staging, id, snapshot.ProjectRules(), next.Exclusion, authority)
 		if err != nil {
-			return report
+			return stop(protocol.ReasonRootPrepareFailed, "", nil)
 		}
 		pending.ConfigDigest, pending.To.Head, pending.To.Tree = config, head, tree
-		if writePrivateRootPending(pendingPath, pending) != nil || authority.confirm(ctx) != nil {
-			return report
+		if writePrivateRootPending(pendingPath, pending) != nil {
+			return stop(protocol.ReasonReceiptUnconfirmed, "", nil)
+		}
+		if authority.confirm(ctx) != nil {
+			return stop(protocol.ReasonCatalogUnconfirmed, "", nil)
 		}
 		if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
-			return report
+			return stop(protocol.ReasonRootPrepareFailed, "", nil)
 		}
 		if os.Rename(staging, root) != nil {
-			return report
+			return stop(protocol.ReasonRootPrepareFailed, "", nil)
 		}
 		configDigest, next.ConfigDigest = config, config
 		to.Head, to.Tree = head, tree
@@ -238,11 +288,11 @@ func refreshPrivateProjectRoot(ctx context.Context, r Runner, s Settings, snapsh
 			prior = state.Identity
 		}
 		if authority.confirm(ctx) != nil {
-			return report
+			return stop(protocol.ReasonCatalogUnconfirmed, "", nil)
 		}
 		identity, err := advancePrivateAnchor(ctx, r, s, source.Repository, filepath.Join(root, name), source.Target, prior, authority)
 		if err != nil {
-			return report
+			return stop(protocol.ReasonAnchorUnproven, name, err)
 		}
 		next.Anchors[name] = identity
 		if prior == nil {
@@ -250,7 +300,7 @@ func refreshPrivateProjectRoot(ctx context.Context, r Runner, s Settings, snapsh
 			state.Identity = &identity
 			pending.To.Anchors[name] = state
 			if writePrivateRootPending(pendingPath, pending) != nil {
-				return report
+				return stop(protocol.ReasonReceiptUnconfirmed, "", nil)
 			}
 		}
 	}
@@ -263,34 +313,43 @@ func refreshPrivateProjectRoot(ctx context.Context, r Runner, s Settings, snapsh
 			reached.Anchors[source.Repository.Name] = privateAnchorState{Repository: source.Repository, Target: source.Target, Identity: &identity}
 		}
 		if authority.confirm(ctx) != nil {
-			return report
+			return stop(protocol.ReasonCatalogUnconfirmed, "", nil)
 		}
 		if proof, err := provePrivateRootReached(ctx, r, s, id, root, configDigest, reached, reached); err != nil || proof.modes {
-			return report
+			return stop(protocol.ReasonRootUnproven, "", err)
 		}
 		if current.Head != to.Head {
-			if privateRootStepTime(ctx) != nil {
-				return report
+			if err := privateRootStepTime(ctx); err != nil {
+				return stop(protocol.ReasonBudgetReserve, "", nil)
 			}
 			if _, err := rootGit(ctx, r, s, root, nil, "-c", "merge.autostash=false", "merge", "--ff-only", "--no-edit", "--no-autostash", to.Head); err != nil {
-				return report
+				return stop(protocol.ReasonRootAdvanceFailed, "", nil)
 			}
 			if setGeneratedRootWrapperModes(ctx, root, snapshot.ProjectRules(), authority) != nil {
-				return report
+				return stop(protocol.ReasonRootAdvanceFailed, "", nil)
 			}
 		}
 		if current.Exclusion != next.Exclusion && writeFileAtomic(filepath.Join(next.GitDir, "info", "exclude"), []byte(next.Exclusion), 0o644) != nil {
-			return report
+			return stop(protocol.ReasonRootAdvanceFailed, "", nil)
 		}
 	}
 	encoded, err := json.Marshal(next)
-	if err != nil || len(encoded)+1 > privateRootReceiptLimit || authority.confirm(ctx) != nil || provePrivateRoot(ctx, r, s, next, sources, next.Anchors) != nil || writeWorkspaceJSON(receiptPath, next) != nil {
-		return report
+	if err != nil || len(encoded)+1 > privateRootReceiptLimit {
+		return stop(protocol.ReasonReceiptUnconfirmed, "", nil)
+	}
+	if authority.confirm(ctx) != nil {
+		return stop(protocol.ReasonCatalogUnconfirmed, "", nil)
+	}
+	if err := provePrivateRoot(ctx, r, s, next, sources, next.Anchors); err != nil {
+		return stop(protocol.ReasonRootUnproven, "", err)
+	}
+	if writeWorkspaceJSON(receiptPath, next) != nil {
+		return stop(protocol.ReasonReceiptUnconfirmed, "", nil)
 	}
 	// The receipt now names the reached state. A pending record that cannot be
 	// removed is still accepted by the next refresh, which finishes this one.
 	if os.Remove(pendingPath) != nil {
-		return report
+		return stop(protocol.ReasonReceiptUnconfirmed, "", nil)
 	}
 	report.State, report.Head, report.Repositories, report.Detail = "Ready", next.Head, sources, "managed Git root and detached repository anchors verified"
 	return report
@@ -324,8 +383,8 @@ func privateRootStart(ctx context.Context, r Runner, s Settings, root, receiptPa
 			// A vanished owned root, or a root agentd never recorded.
 			return unpublished, "", "", errPrivateRoot
 		}
-		if provePrivateRoot(ctx, r, s, receipt, receipt.Repositories, receipt.Anchors) != nil {
-			return unpublished, "", "", errPrivateRoot
+		if err := provePrivateRoot(ctx, r, s, receipt, receipt.Repositories, receipt.Anchors); err != nil {
+			return unpublished, "", "", err
 		}
 		return receipt.state(receipt.Repositories, receipt.Anchors), receipt.ID, receipt.ConfigDigest, nil
 	} else if err != nil || readWorkspaceJSONBounded(pendingPath, &pending, privateRootPendingLimit) != nil || pending.Version != 1 || pending.ID == "" || pending.Root != root || saved && receipt.ID != pending.ID {
@@ -340,7 +399,10 @@ func privateRootStart(ctx context.Context, r Runner, s Settings, root, receiptPa
 		return unpublished, pending.ID, "", nil
 	}
 	proof, err := provePrivateRootReached(ctx, r, s, pending.ID, root, pending.ConfigDigest, pending.From, pending.To)
-	if err != nil || proof.modes && setGeneratedRootWrapperModes(ctx, root, proof.rules, authority) != nil {
+	if err != nil {
+		return unpublished, "", "", err
+	}
+	if proof.modes && setGeneratedRootWrapperModes(ctx, root, proof.rules, authority) != nil {
 		return unpublished, "", "", errPrivateRoot
 	}
 	return proof.state, pending.ID, pending.ConfigDigest, nil
@@ -622,7 +684,10 @@ func provePrivateRoot(ctx context.Context, r Runner, s Settings, receipt private
 		}
 	}
 	proof, err := provePrivateRootReached(ctx, r, s, receipt.ID, receipt.Root, receipt.ConfigDigest, state, state)
-	if err != nil || proof.modes || len(proof.state.Anchors) != len(state.Anchors) {
+	if err != nil {
+		return err
+	}
+	if proof.modes || len(proof.state.Anchors) != len(state.Anchors) {
 		return errPrivateRoot
 	}
 	return nil
@@ -726,7 +791,7 @@ func provePrivateRootReached(ctx context.Context, r Runner, s Settings, id, root
 	for _, name := range names {
 		anchor, err := provePrivateAnchorReached(ctx, r, s, filepath.Join(root, name), name, from, to)
 		if err != nil {
-			return proof, errPrivateRoot
+			return proof, anchorRefusal(name, err)
 		}
 		if anchor != nil {
 			proof.state.Anchors[name] = *anchor
@@ -796,12 +861,15 @@ func provePrivateAnchorReached(ctx context.Context, r Runner, s Settings, path, 
 	} else if t.Identity == nil {
 		identity, err := privateAnchorMetadata(ctx, r, s, t.Repository, path)
 		if err != nil {
-			return nil, errPrivateRoot
+			return nil, err
 		}
 		reached.Identity = &identity
 	}
 	head, err := provePrivateAnchor(ctx, r, s, reached.Repository, path, reached.Identity)
-	if err != nil || !rootObjectID.MatchString(head) || !slices.Contains(targets, head) {
+	if err != nil {
+		return nil, err
+	}
+	if !rootObjectID.MatchString(head) || !slices.Contains(targets, head) {
 		return nil, errPrivateRoot
 	}
 	reached.Target = head
@@ -810,7 +878,10 @@ func provePrivateAnchorReached(ctx context.Context, r Runner, s Settings, path, 
 
 func privateAnchorMetadata(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository, anchor string) (privateAnchorIdentity, error) {
 	var identity privateAnchorIdentity
-	if validateProjectReference(ctx, r, s, repo) != nil || noSymlinkComponents(filepath.Join(anchor, ".git")) != nil {
+	if err := validateProjectReference(ctx, r, s, repo); err != nil {
+		return identity, &rootError{reason: protocol.ReasonRepositoryNotReady, repository: repo.Name, cause: reasonOf(err, protocol.ReasonReferenceUncertain)}
+	}
+	if noSymlinkComponents(filepath.Join(anchor, ".git")) != nil {
 		return identity, errPrivateRoot
 	}
 	gitDir, err := projectGit(ctx, r, s, anchor, "rev-parse", "--absolute-git-dir")
@@ -862,8 +933,11 @@ func privateAnchorMetadata(ctx context.Context, r Runner, s Settings, repo proje
 
 func validatePrivateAnchor(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository, anchor, expected string, owned *privateAnchorIdentity) error {
 	head, err := provePrivateAnchor(ctx, r, s, repo, anchor, owned)
-	if err != nil || (expected != "" && head != expected) {
-		return errPrivateRoot
+	if err != nil {
+		return err
+	}
+	if expected != "" && head != expected {
+		return anchorRefusal(repo.Name, nil)
 	}
 	return nil
 }
@@ -872,26 +946,30 @@ func validatePrivateAnchor(ctx context.Context, r Runner, s Settings, repo proje
 // and returns its commit.
 func provePrivateAnchor(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository, anchor string, owned *privateAnchorIdentity) (string, error) {
 	identity, err := privateAnchorMetadata(ctx, r, s, repo, anchor)
-	if err != nil || owned == nil || identity != *owned {
-		return "", errPrivateRoot
+	if err != nil {
+		return "", anchorRefusal(repo.Name, err)
+	}
+	if owned == nil || identity != *owned {
+		return "", anchorRefusal(repo.Name, nil)
 	}
 	common, err := projectGit(ctx, r, s, anchor, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil || common != filepath.Join(s.ClonePath(repo.Name), ".git") {
-		return "", errPrivateRoot
+		return "", anchorRefusal(repo.Name, nil)
 	}
 	top, err := projectGit(ctx, r, s, anchor, "rev-parse", "--show-toplevel")
 	if err != nil || top != anchor {
-		return "", errPrivateRoot
+		return "", anchorRefusal(repo.Name, nil)
 	}
 	if _, err := projectGit(ctx, r, s, anchor, "symbolic-ref", "--quiet", "HEAD"); ExitCodeOf(err) != 1 {
-		return "", errPrivateRoot
+		return "", anchorRefusal(repo.Name, nil)
 	}
+	// The clean-checkout proof's own reason is the anchor's cause.
 	if _, err := projectIndexProof(ctx, r, s, anchor, true); err != nil {
-		return "", errPrivateRoot
+		return "", anchorRefusal(repo.Name, withReason(protocol.ReasonUncertain, err))
 	}
 	head, err := projectGit(ctx, r, s, anchor, "rev-parse", "--verify", "HEAD^{commit}")
 	if err != nil {
-		return "", errPrivateRoot
+		return "", anchorRefusal(repo.Name, nil)
 	}
 	return head, nil
 }
@@ -925,39 +1003,68 @@ func prefetchPrivateAnchor(ctx context.Context, r Runner, s Settings, anchor, he
 }
 
 func advancePrivateAnchor(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository, anchor, target string, owned *privateAnchorIdentity, authority *projectCatalogAuthority) (privateAnchorIdentity, error) {
+	refuse := func(reason string) error { return &rootError{reason: reason, repository: repo.Name} }
 	if _, err := os.Lstat(anchor); errors.Is(err, os.ErrNotExist) {
-		if owned != nil || authority.confirm(ctx) != nil || validateProjectReference(ctx, r, s, repo) != nil || privateRootStepTime(ctx) != nil {
-			return privateAnchorIdentity{}, errPrivateRoot
+		if owned != nil {
+			// A recorded anchor is gone; it is never recreated silently.
+			return privateAnchorIdentity{}, refuse(protocol.ReasonAnchorUnproven)
+		}
+		if authority.confirm(ctx) != nil {
+			return privateAnchorIdentity{}, &rootError{reason: protocol.ReasonCatalogUnconfirmed}
+		}
+		if err := validateProjectReference(ctx, r, s, repo); err != nil {
+			return privateAnchorIdentity{}, &rootError{reason: protocol.ReasonRepositoryNotReady, repository: repo.Name, cause: reasonOf(err, protocol.ReasonReferenceUncertain)}
+		}
+		if privateRootStepTime(ctx) != nil {
+			return privateAnchorIdentity{}, &rootError{reason: protocol.ReasonBudgetReserve}
 		}
 		// A stopped worktree add removes its own half-made worktree on
 		// SIGTERM, so this step may fetch.
 		_, err := projectGit(ctx, r, s, s.ClonePath(repo.Name), "worktree", "add", "--detach", anchor, target)
 		if err != nil {
-			return privateAnchorIdentity{}, errPrivateRoot
+			return privateAnchorIdentity{}, refuse(protocol.ReasonAnchorAddFailed)
 		}
 		identity, err := privateAnchorMetadata(ctx, r, s, repo, anchor)
-		if err != nil || validatePrivateAnchor(ctx, r, s, repo, anchor, target, &identity) != nil {
-			return identity, errPrivateRoot
+		if err != nil {
+			return identity, anchorRefusal(repo.Name, err)
+		}
+		if err := validatePrivateAnchor(ctx, r, s, repo, anchor, target, &identity); err != nil {
+			return identity, anchorRefusal(repo.Name, err)
 		}
 		return identity, nil
 	} else if err != nil {
-		return privateAnchorIdentity{}, errPrivateRoot
+		return privateAnchorIdentity{}, refuse(protocol.ReasonAnchorUnproven)
 	}
-	if validatePrivateAnchor(ctx, r, s, repo, anchor, "", owned) != nil {
-		return privateAnchorIdentity{}, errPrivateRoot
+	if err := validatePrivateAnchor(ctx, r, s, repo, anchor, "", owned); err != nil {
+		return privateAnchorIdentity{}, anchorRefusal(repo.Name, err)
 	}
 	head, err := projectGit(ctx, r, s, anchor, "rev-parse", "--verify", "HEAD^{commit}")
 	if err != nil {
-		return privateAnchorIdentity{}, errPrivateRoot
+		return privateAnchorIdentity{}, refuse(protocol.ReasonAnchorUnproven)
 	}
 	if head == target {
 		return *owned, nil
 	}
-	if _, err := projectGit(ctx, r, s, anchor, "merge-base", "--is-ancestor", head, target); err != nil || authority.confirm(ctx) != nil || validatePrivateAnchor(ctx, r, s, repo, anchor, head, owned) != nil || privateRootStepTime(ctx) != nil {
-		return privateAnchorIdentity{}, errPrivateRoot
+	if _, err := projectGit(ctx, r, s, anchor, "merge-base", "--is-ancestor", head, target); err != nil {
+		if ExitCodeOf(err) == 1 {
+			return privateAnchorIdentity{}, refuse(protocol.ReasonAnchorNotFastForward)
+		}
+		return privateAnchorIdentity{}, &rootError{reason: protocol.ReasonAnchorUnproven, repository: repo.Name, cause: protocol.ReasonUncertain}
 	}
-	if _, err = projectGit(ctx, r, s, anchor, "-c", "merge.autostash=false", "merge", "--ff-only", "--no-edit", "--no-autostash", target); err != nil || validatePrivateAnchor(ctx, r, s, repo, anchor, target, owned) != nil {
-		return privateAnchorIdentity{}, errPrivateRoot
+	if authority.confirm(ctx) != nil {
+		return privateAnchorIdentity{}, &rootError{reason: protocol.ReasonCatalogUnconfirmed}
+	}
+	if err := validatePrivateAnchor(ctx, r, s, repo, anchor, head, owned); err != nil {
+		return privateAnchorIdentity{}, anchorRefusal(repo.Name, err)
+	}
+	if privateRootStepTime(ctx) != nil {
+		return privateAnchorIdentity{}, &rootError{reason: protocol.ReasonBudgetReserve}
+	}
+	if _, err = projectGit(ctx, r, s, anchor, "-c", "merge.autostash=false", "merge", "--ff-only", "--no-edit", "--no-autostash", target); err != nil {
+		return privateAnchorIdentity{}, refuse(protocol.ReasonAnchorAdvanceFailed)
+	}
+	if err := validatePrivateAnchor(ctx, r, s, repo, anchor, target, owned); err != nil {
+		return privateAnchorIdentity{}, anchorRefusal(repo.Name, err)
 	}
 	return *owned, nil
 }

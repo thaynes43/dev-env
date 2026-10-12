@@ -586,6 +586,178 @@ spec:
                       type: string
                     type: array
                     x-kubernetes-list-type: atomic
+                  projectBootstrap:
+                    description: |-
+                      ProjectBootstrap is the boot's private catalog bootstrap, when it ran
+                      (DESIGN-006, reason codes): catalog names, states, steps and closed-set
+                      reason codes, never a path, an object id or detail text.
+                    properties:
+                      catalogRevision:
+                        description: CatalogRevision is the accepted catalog's content
+                          digest.
+                        maxLength: 64
+                        pattern: ^[a-f0-9]{64}$
+                        type: string
+                      projects:
+                        description: Projects are the project roots' refreshes (DESIGN-007).
+                        items:
+                          description: ProjectBootstrapProjectStatus is one project
+                            root's refresh.
+                          properties:
+                            cause:
+                              description: |-
+                                Cause is that repository's reason, when its clean-checkout or reference
+                                proof refused.
+                              enum:
+                              - CloneFailed
+                              - StagingPreserved
+                              - ReferenceUncertain
+                              - IdentityMismatch
+                              - GitOperationPresent
+                              - CatalogUnconfirmed
+                              - FetchFailed
+                              - UntrackedFiles
+                              - UnsupportedTrackedEntry
+                              - IndexBoundExceeded
+                              - WorkingTreeDiffers
+                              - StagedChanges
+                              - NonDefaultBranch
+                              - BranchInOtherWorktree
+                              - LocalOnlyCommits
+                              - ChangedDuringProof
+                              - AdvanceFailed
+                              - TimedOut
+                              - Stopped
+                              - Uncertain
+                              type: string
+                            name:
+                              description: Name is the project's catalog name.
+                              maxLength: 63
+                              minLength: 1
+                              pattern: ^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$
+                              type: string
+                            reason:
+                              description: Reason is why a Failed refresh stopped.
+                              enum:
+                              - StateUncertain
+                              - ReceiptUnconfirmed
+                              - CatalogUnconfirmed
+                              - RootUnproven
+                              - AnchorRemoved
+                              - RepositoryNotReady
+                              - FetchFailed
+                              - AnchorNotFastForward
+                              - RootPrepareFailed
+                              - AnchorAddFailed
+                              - AnchorUnproven
+                              - AnchorAdvanceFailed
+                              - RootAdvanceFailed
+                              - BudgetReserve
+                              - TimedOut
+                              - Stopped
+                              type: string
+                            repository:
+                              description: Repository is the member repository that
+                                caused it, when one did.
+                              maxLength: 63
+                              pattern: ^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$
+                              type: string
+                            state:
+                              description: State is Ready or Failed.
+                              enum:
+                              - Ready
+                              - Failed
+                              type: string
+                          required:
+                          - name
+                          - state
+                          type: object
+                        maxItems: 64
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      reason:
+                        description: Reason is why a Failed bootstrap stopped before
+                          or between its items.
+                        enum:
+                        - ConfigInvalid
+                        - StateUncertain
+                        - LockUnavailable
+                        - ReportUnretained
+                        - CatalogUnconfirmed
+                        - CatalogInvalid
+                        - OwnerMismatch
+                        - TimedOut
+                        - Stopped
+                        type: string
+                      repositories:
+                        description: Repositories are the catalog repositories' reference
+                          refreshes.
+                        items:
+                          description: ProjectBootstrapRepositoryStatus is one repository's
+                            reference refresh.
+                          properties:
+                            name:
+                              description: Name is the repository's catalog name.
+                              maxLength: 63
+                              minLength: 1
+                              pattern: ^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$
+                              type: string
+                            reason:
+                              description: Reason is why a Preserved refresh stopped.
+                              enum:
+                              - CloneFailed
+                              - StagingPreserved
+                              - ReferenceUncertain
+                              - IdentityMismatch
+                              - GitOperationPresent
+                              - CatalogUnconfirmed
+                              - FetchFailed
+                              - UntrackedFiles
+                              - UnsupportedTrackedEntry
+                              - IndexBoundExceeded
+                              - WorkingTreeDiffers
+                              - StagedChanges
+                              - NonDefaultBranch
+                              - BranchInOtherWorktree
+                              - LocalOnlyCommits
+                              - ChangedDuringProof
+                              - AdvanceFailed
+                              - TimedOut
+                              - Stopped
+                              - Uncertain
+                              type: string
+                            state:
+                              description: State is Ready, or Preserved when the refresh
+                                stopped and kept it.
+                              enum:
+                              - Ready
+                              - Preserved
+                              type: string
+                            step:
+                              description: Step is where a Preserved refresh stopped.
+                              enum:
+                              - Clone
+                              - Inspect
+                              - Fetch
+                              - Advance
+                              type: string
+                          required:
+                          - name
+                          - state
+                          type: object
+                        maxItems: 128
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      state:
+                        description: State is the catalog outcome.
+                        enum:
+                        - Ready
+                        - Partial
+                        - Failed
+                        type: string
+                    required:
+                    - state
+                    type: object
                   status:
                     description: |-
                       Status is the agent's state, agentd's: pending, busy, idle, waiting,

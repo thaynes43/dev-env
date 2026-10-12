@@ -106,6 +106,16 @@ separately, a departure from that gate the record names
 (`partial-acceptance-by-property`). See the entry above and the
 [Sigo private-repo canary record](sagas/distributed-dev-env/verification/sigo-private-canary-2026-10-12.md).*
 
+**Diagnosis without exec:** [#239](https://github.com/thaynes43/dev-env/pull/239)
+(D-88) gives every repository and project root a closed-set reason code. The
+boot step's note then reads, for example,
+`catalog bootstrap outcome Partial: <repo>=UnsupportedTrackedEntry; project <p>=AnchorUnproven@<repo>(UnsupportedTrackedEntry)`,
+`status.agent.projectBootstrap` holds the codes, and `agent-run show` prints
+them. Its CRD change goes to haynes-ops before the operator pin. The next
+canary's named read through `show --once` needs the runner's `agent-run` built
+from the deployed operator's release tag or newer: an older one refuses the new
+`projectBootstrap` field (DESIGN-006, reason codes).
+
 **Effects to know.** Every v2 pod that boots after #3845 clones both private
 repositories into its private HOME, because bootstrap is catalog-wide. Nothing
 running restarts. Between the canary's Create and its result read, no change may

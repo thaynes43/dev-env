@@ -802,6 +802,101 @@ type AgentStatus struct {
 	// Message is why agentd could not start the agent, when it could not.
 	// +optional
 	Message string `json:"message,omitempty"`
+
+	// ProjectBootstrap is the boot's private catalog bootstrap, when it ran
+	// (DESIGN-006, reason codes): catalog names, states, steps and closed-set
+	// reason codes, never a path, an object id or detail text.
+	// +optional
+	ProjectBootstrap *ProjectBootstrapStatus `json:"projectBootstrap,omitempty"`
+}
+
+// ProjectBootstrapStatus is a private catalog bootstrap's outcome. The API
+// server copies only known values from agentd's heartbeat.
+type ProjectBootstrapStatus struct {
+	// State is the catalog outcome.
+	// +kubebuilder:validation:Enum=Ready;Partial;Failed
+	// +required
+	State string `json:"state"`
+
+	// Reason is why a Failed bootstrap stopped before or between its items.
+	// +kubebuilder:validation:Enum=ConfigInvalid;StateUncertain;LockUnavailable;ReportUnretained;CatalogUnconfirmed;CatalogInvalid;OwnerMismatch;TimedOut;Stopped
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
+	// CatalogRevision is the accepted catalog's content digest.
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[a-f0-9]{64}$`
+	// +optional
+	CatalogRevision string `json:"catalogRevision,omitempty"`
+
+	// Repositories are the catalog repositories' reference refreshes.
+	// +kubebuilder:validation:MaxItems=128
+	// +listType=atomic
+	// +optional
+	Repositories []ProjectBootstrapRepositoryStatus `json:"repositories,omitempty"`
+
+	// Projects are the project roots' refreshes (DESIGN-007).
+	// +kubebuilder:validation:MaxItems=64
+	// +listType=atomic
+	// +optional
+	Projects []ProjectBootstrapProjectStatus `json:"projects,omitempty"`
+}
+
+// ProjectBootstrapRepositoryStatus is one repository's reference refresh.
+type ProjectBootstrapRepositoryStatus struct {
+	// Name is the repository's catalog name.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`
+	// +required
+	Name string `json:"name"`
+
+	// State is Ready, or Preserved when the refresh stopped and kept it.
+	// +kubebuilder:validation:Enum=Ready;Preserved
+	// +required
+	State string `json:"state"`
+
+	// Step is where a Preserved refresh stopped.
+	// +kubebuilder:validation:Enum=Clone;Inspect;Fetch;Advance
+	// +optional
+	Step string `json:"step,omitempty"`
+
+	// Reason is why a Preserved refresh stopped.
+	// +kubebuilder:validation:Enum=CloneFailed;StagingPreserved;ReferenceUncertain;IdentityMismatch;GitOperationPresent;CatalogUnconfirmed;FetchFailed;UntrackedFiles;UnsupportedTrackedEntry;IndexBoundExceeded;WorkingTreeDiffers;StagedChanges;NonDefaultBranch;BranchInOtherWorktree;LocalOnlyCommits;ChangedDuringProof;AdvanceFailed;TimedOut;Stopped;Uncertain
+	// +optional
+	Reason string `json:"reason,omitempty"`
+}
+
+// ProjectBootstrapProjectStatus is one project root's refresh.
+type ProjectBootstrapProjectStatus struct {
+	// Name is the project's catalog name.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`
+	// +required
+	Name string `json:"name"`
+
+	// State is Ready or Failed.
+	// +kubebuilder:validation:Enum=Ready;Failed
+	// +required
+	State string `json:"state"`
+
+	// Reason is why a Failed refresh stopped.
+	// +kubebuilder:validation:Enum=StateUncertain;ReceiptUnconfirmed;CatalogUnconfirmed;RootUnproven;AnchorRemoved;RepositoryNotReady;FetchFailed;AnchorNotFastForward;RootPrepareFailed;AnchorAddFailed;AnchorUnproven;AnchorAdvanceFailed;RootAdvanceFailed;BudgetReserve;TimedOut;Stopped
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
+	// Repository is the member repository that caused it, when one did.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`
+	// +optional
+	Repository string `json:"repository,omitempty"`
+
+	// Cause is that repository's reason, when its clean-checkout or reference
+	// proof refused.
+	// +kubebuilder:validation:Enum=CloneFailed;StagingPreserved;ReferenceUncertain;IdentityMismatch;GitOperationPresent;CatalogUnconfirmed;FetchFailed;UntrackedFiles;UnsupportedTrackedEntry;IndexBoundExceeded;WorkingTreeDiffers;StagedChanges;NonDefaultBranch;BranchInOtherWorktree;LocalOnlyCommits;ChangedDuringProof;AdvanceFailed;TimedOut;Stopped;Uncertain
+	// +optional
+	Cause string `json:"cause,omitempty"`
 }
 
 // TaskStatus is how a task ended (D-42): the CLI's exit and its result event.

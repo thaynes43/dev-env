@@ -3,6 +3,7 @@ package apiserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
 
 func status(name string) protocol.Status {
@@ -114,6 +116,55 @@ func TestHeartbeatCaps(t *testing.T) {
 	}
 	if u := usageStatus(protocol.Usage{CostUSD: 0.0000001}); u.CostUSD != "0.0000001" {
 		t.Errorf("a small cost became %q, which the schema's pattern refuses", u.CostUSD)
+	}
+}
+
+// The published bounds are the catalog's own limits. A catalog that grows
+// them fails here rather than having agentd and the heartbeat truncate a full
+// report silently; the CRD's validation test holds its schema to the same
+// constants.
+func TestProjectBootstrapBoundsAreTheCatalogLimits(t *testing.T) {
+	if protocol.MaxBootstrapRepositories != projectcatalog.MaxRepositories || protocol.MaxBootstrapProjects != projectcatalog.MaxProjects {
+		t.Fatalf("published bounds %d repositories and %d projects, catalog limits %d and %d",
+			protocol.MaxBootstrapRepositories, protocol.MaxBootstrapProjects, projectcatalog.MaxRepositories, projectcatalog.MaxProjects)
+	}
+	name := strings.Repeat("a", protocol.MaxBootstrapNameLength)
+	if !projectcatalog.ValidName(name) || projectcatalog.ValidName(name+"a") {
+		t.Fatalf("catalog names are not at most %d bytes", protocol.MaxBootstrapNameLength)
+	}
+}
+
+// The heartbeat copies only values the CRD accepts, so a newer or confused
+// agentd can never fail its own status write.
+func TestHeartbeatProjectBootstrapCopiesOnlyKnownValues(t *testing.T) {
+	if projectBootstrapStatus(nil) != nil || projectBootstrapStatus(&protocol.ProjectBootstrap{State: "Started"}) != nil {
+		t.Fatal("an absent or unknown outcome was copied")
+	}
+	in := &protocol.ProjectBootstrap{State: "Failed", Reason: "SomethingNew", CatalogRevision: "not-a-digest"}
+	for i := 0; i < 200; i++ {
+		in.Repositories = append(in.Repositories, protocol.ProjectBootstrapRepository{Name: fmt.Sprintf("r-%d", i), State: "Preserved", Step: "Fetch", Reason: "FetchFailed"})
+		in.Projects = append(in.Projects, protocol.ProjectBootstrapProject{Name: fmt.Sprintf("p-%d", i), State: "Failed", Reason: "RootUnproven", Repository: "a/b", Cause: "made up"})
+	}
+	in.Repositories[0] = protocol.ProjectBootstrapRepository{Name: "/etc/passwd", State: "Preserved"}
+	in.Repositories[1] = protocol.ProjectBootstrapRepository{Name: "ok", State: "Started"}
+	in.Repositories[2] = protocol.ProjectBootstrapRepository{Name: "kept", State: "Preserved", Step: "Rewind", Reason: "tracked files differ"}
+	out := projectBootstrapStatus(in)
+	if out.State != "Failed" || out.Reason != "" || out.CatalogRevision != "" {
+		t.Fatalf("catalog fields %+v", out)
+	}
+	if len(out.Repositories) != protocol.MaxBootstrapRepositories || len(out.Projects) != protocol.MaxBootstrapProjects {
+		t.Fatalf("%d repositories, %d projects", len(out.Repositories), len(out.Projects))
+	}
+	if out.Repositories[0] != (v1alpha1.ProjectBootstrapRepositoryStatus{Name: "kept", State: "Preserved"}) {
+		t.Fatalf("invalid items kept or unknown codes copied: %+v", out.Repositories[0])
+	}
+	if p := out.Projects[0]; p.Repository != "" || p.Cause != "" || p.Reason != "RootUnproven" {
+		t.Fatalf("project %+v", p)
+	}
+	st := status("s")
+	st.ProjectBootstrap = &protocol.ProjectBootstrap{State: "Ready", CatalogRevision: strings.Repeat("f", 64)}
+	if a := agentStatus(st, metav1.Now()); a.ProjectBootstrap == nil || a.ProjectBootstrap.CatalogRevision != strings.Repeat("f", 64) {
+		t.Fatalf("agentStatus dropped the bootstrap: %+v", a.ProjectBootstrap)
 	}
 }
 
