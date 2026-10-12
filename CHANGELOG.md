@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.23.0](https://github.com/thaynes43/dev-env/compare/v2.22.0...v2.23.0) (2026-10-12)
+
+
+### Features
+
+* **agent-run:** add bounded named session reads ([#210](https://github.com/thaynes43/dev-env/issues/210)) ([4c1e0c3](https://github.com/thaynes43/dev-env/commit/4c1e0c37cb228d54556237276b09b502914c027b))
+
 ## [2.22.0](https://github.com/thaynes43/dev-env/compare/v2.21.0...v2.22.0) (2026-10-12)
 
 
