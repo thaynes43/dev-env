@@ -6,6 +6,17 @@ source-review assignments and failed/stopped routes. Review and improve the
 shipped code. Q-24 and Q-27 remain pending, both fixed IDs are consumed, and
 actual both-provider rules/MVP acceptance remains open. Earlier checkpoints
 below are historical; they do not reauthorize old next steps or reset counters.
+*Update: Q-27 was answered later on 2026-10-12; see the next paragraph.*
+
+**Q-27 answered, 2026-10-12.** Tom answered through the Claude native prompt:
+"Fix once, then read (Recommended)". The ruling allows one offline correction of
+the Codex reader preparation, with a fixed list of already accepted evidence,
+focused tests and independent review. Then it allows exactly one named read and
+one result read of the Codex original. There are no retries and no counter reset.
+Decision 60 and the
+[Codex probe record](verification/codex-fixed-rule-probe-2026-10-12.md#q-27-one-final-reader-preparation-correction)
+hold the ruling. Q-24 is still pending with no owner answer recorded; do not ask
+it again.
 
 The [original Codex probe record](verification/codex-fixed-rule-probe-2026-10-12.md)
 records 16 passing offline checks, independent full review and one program that
@@ -17,10 +28,12 @@ three indexing failures; Q-27's native question requests one final offline
 correction and is pending. No fourth attempt or followup read is authorized.
 Actual both-provider rules and the owner pilot remain open; Q-24 is pending.
 Earlier checkpoints below are historical and do not reset the consumed IDs.
+*(Historical: Q-27 is answered; see the ruling above.)*
 
 The [first original Claude canary](verification/first-original-canary-2026-10-12.md)
 records reviewed logical Directory4 and original HTTP201 at 05:28:22 UTC. Claude's
-fixed ID is permanently consumed; Codex's is unstarted. Independent saved review
+fixed ID is permanently consumed; Codex's is unstarted *(historical: Codex's
+original HTTP 201 followed at 06:47:25 UTC; see above)*. Independent saved review
 and Root receipt acceptance bind the original UID only. Named executor/context
 provenance was bound by one saved named read. One fixed stored result read
 returned the weekly-limit response (reported reset 12pm UTC), with no rule
@@ -52,7 +65,8 @@ retained unchanged. Source #210 and release #211 ship the bounded named Session
 reader in v2.23.0; its actual merged-source local client `f136b205` passed saved
 build review `693f1b3e` and root local-build acceptance. It remains uninvoked;
 the consumed Directory TLS attempt and trust correction remain runtime gates.
-Neither permanent provider probe has run. Global private admission remains off,
+Neither permanent provider probe has run *(historical: both ran later on
+2026-10-12; see above)*. Global private admission remains off,
 actual rule loading and the owner pilot remain unaccepted, and Q-24 is pending.
 Q-24 also gates fully isolated native Codex-session acceptance: one paired entry's
 concurrent routing to separate app-server pods is unestablished. Separate paired
@@ -106,7 +120,8 @@ made the repo public. Research notes
 identity) are folded into the design. The spikes in
 [backlog 00](backlog/00-spikes.md) come first: S-1, S-3, S-6 and S-15 passed on 2026-10-06, S-7
 and S-16 are done, and S-2 is answered (re-probed on CLI 2.1.292). The
-first build session's work order is [KICKOFF.md](KICKOFF.md); the repo's front door is
+first build session's work order is [KICKOFF.md](KICKOFF.md) (historical; continue
+from the [pickup brief](../../CLAUDE-RESUME-2026-10-12.md)); the repo's front door is
 [`.agents/HANDOFF.md`](../../HANDOFF.md).
 
 **Working rules:** this repo's [CLAUDE.md](../../../CLAUDE.md). Docs first. Ask Tom
@@ -309,18 +324,22 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 48 | Reuse existing 1Password item for keeper CA | **RECORDED** 2026-10-08 America/New_York (Tom's correction, D-72) | Use `HaynesKube/dev-env` with the same two fresh CA fields. Current ExternalSecrets select individual properties; the CA will use a separate keeper-only Secret. Tom confirmed the fields saved; Q-19 is complete by owner confirmation. CA projection, node trust and real acceptance remain pending. |
 | 49 | Workflow guide, Codex project homes and current source | **REQUESTED** 2026-10-09 America/New_York (Tom) | Before project finalization, provide a detailed high-level Markdown quick start and feature set with diagrams. Discuss Codex session management, v1 `/work/codex` project folders and protection from stale shared repositories. The initial `/work/codex` shorthand and app-choice premise were corrected by the supplied R1–R7 requirements below. Q-20 is superseded. The guide draws working and requested paths separately; no project/client rollout or new approval route is claimed. |
 | 50 | Joint projects and multiple Codex remote pods | **REQUIRED** 2026-10-09 America/New_York (Tom) | Supplied R1–R6 define GitOps catalog, both providers, common/task rules, persistent clean-refreshed roots, task-only sweep and lossless canonical repair. R7 adds multiple Codex remote links spanning pods and sharing workspace files. R2 supersedes Q-20. D-74 requires revision of single-hub/private-Git assumptions. Operator API/controller is the built orchestration service; a coordinator agent is a requester role. Management surface/storage backend remain under workflow review; no new implementation is selected. |
-| 51 | Shared-workspace topology and bounded CephFS trial | **ACCEPTED** 2026-10-09 America/New_York (Tom, Q-21/D-75) | Structured answer: "Accept ADR-002 and the bounded CephFS trial (Recommended)". Shared project/reference/task files, private provider homes, multiple remote hosts and explicit ownership supersede affected ADR-001/D-15/D-22/D-12 decisions. Trial first; normal rollout needs acceptance. No v1 restart, cutover or management-app selection. |
+| 51 | Shared-workspace topology and bounded CephFS trial | **ACCEPTED** 2026-10-09 America/New_York (Tom, Q-21/D-75); **SUPERSEDED** 2026-10-10 by decision 56 (ADR-003) | Structured answer: "Accept ADR-002 and the bounded CephFS trial (Recommended)". Shared project/reference/task files, private provider homes, multiple remote hosts and explicit ownership supersede affected ADR-001/D-15/D-22/D-12 decisions. Trial first; normal rollout needs acceptance. No v1 restart, cutover or management-app selection. Superseded by decision 56 and [ADR-003](adrs/003-session-coordination-private-repositories.md): shared Git/RWX and its trial no longer gate delivery; #130 closed as not planned. |
 | 52 | Keeper-only saved CA projection | **SHIPPED** 2026-10-09 America/New_York | Haynes-ops #3642 (`4bccaa899`) projects the existing private/public fields into the keeper-only read-only mount. ESO and keeper Ready; minting flags false. Key-pair validation, owner node trust/private configuration/provider acceptance still required; all twenty parity rows remain open. |
 | 53 | Keeper node trust delegated to Codex | **DELEGATED** 2026-10-09 America/New_York (Tom, Q-22/D-76) | Structured answer: "Delegate the trust installation to Codex". Review public-key-only delivery, preserve the existing account/key, verify v1 access per node and clean temporary resources. Private CA stays keeper-only; no sudo/sshd changes, node restart, token minting or enabling is included. Installation and certificate/provider acceptance require separate evidence. |
 | 54 | Keeper PVE node trust delivered | **SHIPPED** 2026-10-09 America/New_York | Haynes-ops #3647/#3651 installed the saved public CA on all five PVE nodes and removed temporary delivery resources. Exact original key bytes and standing v1 access preserved; private CA keeper-only, minting off. Certificate/pair/provider acceptance remains open. |
 | 55 | Task budgets and stalled-work escalation | **ACCEPTED** 2026-10-09 America/New_York (Tom, Q-23/D-84) | Structured answer: "60 minutes without progress or 3 failed attempts at the same blocker". History carries across agents, pods and resumes; children count toward their parent's budget. Stop, preserve work and ask one native phone question before further attempts. [Budget contract](requirements/2026-10-09-task-budgets.md). Ledger/stop foundations later shipped in 2.11.0; complete campaign enforcement and phone acceptance remain open in #154. |
 | 56 | Owner scope correction | **ACCEPTED** 2026-10-10 America/New_York (Tom, D-85/ADR-003) | Share rules, coordination and authorized live/stopped context; keep per-pod repos and task worktrees. Five outcomes: safe upgrades, distributed load, guarded access, session visibility, model usage/cost and later local LLMs. Supersedes mandatory shared Git/RWX and its trial. Pilot acceptance differs from full v1 retirement; no runtime change or storage retry is authorized. |
-| 57 | Q-24: Codex native routing for the MVP | **OPEN** 2026-10-11 UTC | The finite pinned-source audit did not establish one-paired-entry federation of complete native chats. Native question asks separate paired session hosts versus one coordinator with isolated managed workers and a shared native failure boundary. [DESIGN-006 Q-24](designs/006-private-catalog-bootstrap.md#q-24-codex-mvp-native-routing) records consequences. Bootstrap proceeds; fleet UX waits for the ruling. |
+| 57 | Q-24: Codex native routing for the MVP | **OPEN** 2026-10-11 UTC | The finite pinned-source audit did not establish one-paired-entry federation of complete native chats. Native question asks separate paired session hosts versus one coordinator with isolated managed workers and a shared native failure boundary. [DESIGN-006 Q-24](designs/006-private-catalog-bootstrap.md#q-24-codex-mvp-native-routing) records consequences. Bootstrap proceeds; fleet UX waits for the ruling. No owner answer is recorded as of 2026-10-12; do not ask again, check for an actual answer first. |
+| 58 | Q-25: local schema-host DNS route | **NO DECISION NEEDED** 2026-10-11 UTC | The failed local schema-host DNS route stopped after three attempts; the owner said he did not understand the question. Shipping uses the already-authorized hosted CI and saved real-API schema evidence. No DNS investigation or retry ([installation record](verification/installation-2026-10-11.md#owner-questions-and-stopped-checks)). |
+| 59 | Q-26: one final activation-checker correction | **DECIDED** 2026-10-11 UTC (Tom) | "Allow one correction (Recommended)". One final R4 correction ran and Ops #3824 activation was accepted; the three failed preparations stay preserved. No R5, alternate method or retry ([fixed-rule activation record](verification/fixed-rule-activation-2026-10-11.md), [DESIGN-021](designs/021-canary-cli.md)). |
+| 60 | Q-27: one final Codex reader-preparation correction | **DECIDED** 2026-10-12 (Tom, through the Claude native prompt) | "Fix once, then read (Recommended)". One offline correction with a fixed list of already accepted evidence, focused tests and independent review; then exactly one named read and one result read of the Codex original. No retries and no counter reset ([Codex probe record](verification/codex-fixed-rule-probe-2026-10-12.md#q-27-one-final-reader-preparation-correction)). |
 
 The full options, consequences and rulings for Q-01 to Q-16, and the premise
 corrections withdrawing Q-17 and Q-18, plus Q-19's first owner CA provisioning
 step, are in
-[DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions).
+[DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions). Q-20 to Q-23
+are there too. Q-24 to Q-27 link their own records in rows 57 to 60.
 
 
 ## Plan backlog
@@ -354,6 +373,8 @@ required workflows and explicit approval. The twenty-row historical audit is a
 migration inventory, not a universal gate for every pilot. Tool pods (08), summoned
 sessions (10), GPUs/local LLMs (09) and later items (06) retain their own scope.
 
+*Historical: DESIGN-017 shipped in #199, and the current order is the pickup
+brief's [six-step roadmap](../../CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap).*
 Next bounded #174 directory contract: [DESIGN-017](designs/017-durable-session-directory.md); default-off prospective managed enrollment, independent metadata discovery and retained exact-source context references. Source, installation and live acceptance remain separate.
 
 Client source/release update: #204/#206 are merged and v2.21.0 includes explicit
@@ -362,3 +383,5 @@ keeps bound build, publication, historical v2.20 installation and runtime gates
 separate. Actual both-provider rules/pilot remain unaccepted. Q-26 now authorizes
 ONE final focused correction with the three failed preparations preserved;
 Q-24 routing remains pending. Claude reviews remain optional while unavailable.
+*(Historical: Q-26's correction is complete and Ops #3824 was accepted; see
+decision 59.)*

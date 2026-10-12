@@ -130,7 +130,11 @@ The ordinary worker template was still 2.9.1 at the historical overnight checkpo
 2.11.0 was signed and used for a separate native fixture. That fixture failed
 without a valid acceptance result. A later reviewed source fix does not count
 as a new runtime pass. See [HANDOFF](../.agents/HANDOFF.md) and
-[overnight evidence](trials/2026-10-10-overnight-results.md).
+[overnight evidence](trials/2026-10-10-overnight-results.md). This note is
+historical: the current installed template is 2.20.0, as the first paragraph
+after the table above says. The
+[pickup brief](../.agents/CLAUDE-RESUME-2026-10-12.md#what-is-actually-delivered)
+has the full revisions.
 
 ## 3. Quick start with the working paths
 
@@ -469,7 +473,8 @@ useful result; restarting a tool is not progress by itself.
 
 The stopped NFS helper and observer remain historical. They demonstrated
 problems in our test tooling, not a NAS failure. Shared-Git trials no longer gate
-this scope, and the old routes will be closed without another attempt. Gasha01
+this scope, and the old routes are closed without another attempt: #130 closed as
+not planned and haynes-ops #3737 closed unmerged. Gasha01
 remains an available storage option when an actual home/context workload needs
 it. Avoid replacing a real product outcome with an infrastructure benchmark.
 
@@ -535,8 +540,11 @@ deriving the context name. Missing or mismatched private-history or executor
 identity holds retrieval. The ordinary `show` command keeps its existing behavior;
 see [the named-read contract](../.agents/sagas/distributed-dev-env/designs/023-named-session-cli-once.md).
 
-After the result reader is deployed, use the original Session UID from the
-accepted creation receipt and the named context from authorized discovery:
+The server-side result reader is deployed (haynes-ops #3825, operator source
+`cd966d17…`). The client is published in `agent-run` v2.22.0 and later but is not
+installed: task pods run 2.20.0, which lacks `canary result`. Use the accepted
+bound local client. Use the original Session UID from the accepted creation
+receipt and the named context from authorized discovery:
 
 ```sh
 agent-run canary result --id APPROVED_FIXED_ID \
