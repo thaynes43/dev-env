@@ -25,8 +25,10 @@ import (
 // The grant routes (D-56). A session asks for a grant for its own pod; the
 // broker decides it, makes it and ends it. The API writes AccessGrant specs
 // only: it has no status write, so it can neither approve nor end a grant. It
-// reads grants from the API server, not the manager's cache: a session polls its
-// grant right after asking, and the operator keeps no AccessGrant informer.
+// reads grants live from the API server (s.Live), not the manager's cache, for
+// freshness: a session polls its grant right after asking. The operator does
+// hold an AccessGrant informer, for D-64's egress expiry backstop
+// (internal/grantexpiry), so its RBAC keeps get, list and watch on accessgrants.
 
 // maxGrantBody bounds a grant request: a reason of at most 1000 characters and
 // a few short lists.

@@ -56,8 +56,10 @@ historical first-build order. Deploys remain GitOps.
 .github/workflows/       ci.yml (lint, test, build, check-generated, image builds; aggregate `CI - Success`), publish.yml (operator image from main, signed), publish-agent.yml (agent image from a v2.x.y tag, signed), release-please.yml, Claude review + @claude
 .github/renovate.json5   Renovate config (gomod, Actions SHA pins, Dockerfile digests, ARG and Makefile pins)
 release-please-config.json, .release-please-manifest.json   one repo version, `go` type, first release 2.0.0
-api/v1alpha1/            CRD types, group dev-env.haynesops.com (AgentSession; AccessGrant and GrantPolicy, D-54; Activity, D-66); depends on apimachinery only.
-                         Its envtest suite proves the schema's rules (D-39) on a real API server
+api/v1alpha1/            CRD types, group dev-env.haynesops.com (AgentSession; AccessGrant and GrantPolicy, D-54; Activity, D-66;
+                         CredentialJob); depends on apimachinery only. Its envtest suite proves the schema's rules (D-39) on a real API server
+api/coordination/v1alpha1/  CRD types, the separate protected group coordination.dev-env.haynesops.com (TaskClaim, InboxMessage,
+                         InboxReadAck, PublishedContext, SessionDirectory); its CRDs go to config/crd/ and haynes-ops like the others
 cmd/dev-env-operator/    the operator, and the access broker as its second mode, `dev-env-operator broker` (broker.go, D-61)
 cmd/dev-env-keeper/      the keeper, its own binary in the operator image (D-38); main only, the work is internal/keeper
 cmd/agentd/              the in-pod supervisor: `run`, `hold` (the rescue pod, D-55), `shelf` (the shelf pod, D-67), `run-agent`
@@ -74,7 +76,9 @@ internal/controller/     the AgentSession reconciler: each session's pod and vol
                          5.1 (no owner reference to the operator; no pod or volume write or delete outside the guards;
                          delete and suspend wait for rescue); a fake rescuer stands in for exec
 internal/apiserver/      the operator's /v1 API (D-46): HTTPS runnable, TokenReview auth, caller classes, sessions,
-                         heartbeat, suspend and resume (D-60), fleet, grants (D-56), activities (D-66) and rescues (D-67) handlers. Unit tests use the fake client; its envtest suite mints real
+                         heartbeat, suspend and resume (D-60), fleet, grants (D-56), activities (D-66) and rescues (D-67) handlers;
+                         also decisions, project canaries and their results, task claims, the inbox, published contexts, the
+                         session directory and task budgets. Unit tests use the fake client; its envtest suite mints real
                          tokens and serves through a manager wired as the operator's
 internal/podexec/        the one pods/exec client (WebSocket, SPDY fallback): the rescue, and the API's log and message routes (D-65)
 internal/apiserver/apiv1/  the API's wire types, error codes and Claude effort table, standard library only, for agent-run
@@ -85,7 +89,8 @@ internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66, D-6
                          pod, in another pod (a minted token) or from flags; imports the standard library, apiv1 and
                          agentd's protocol only (`make build` checks); tests run against an httptest TLS server
 internal/keeper/         the keeper (D-52): mints the haynes-dev-bot token into dev-agents/dev-env-gh-token every 40 minutes
-                         behind a Lease; one Job per credential, so plans 03, 04 and 10 add theirs. Unit tests use a fake
+                         behind a Lease. Only that non-rotating token is a Keeper Job; the rotating Codex login and the
+                         Proxmox credential grants are separate journaled, Lease-fenced leader runnables. Unit tests use a fake
                          GitHub (httptest) and a fake clock; its envtest suite runs it as its ServiceAccount with exactly
                          the Roles haynes-ops gives it
 internal/broker/         the access broker (D-61): decides AccessGrants (GrantPolicy match, Decide for the approval page,
@@ -100,13 +105,27 @@ internal/agentd/         agentd: config rendering (the dev-init.sh port), clone 
                          git against a bare repo in t.TempDir()
 internal/agentd/protocol/  what agentd and the operator exchange: the session document, the status, the heartbeat route,
                          the rescue report, and the rescue layout and manifest on the shared volume
+internal/agentd/hostexecutor/  owns one foreground native computer for one immutable budget binding (no budget authority, no pairing)
+internal/codexauth/      the access-only Codex document the keeper publishes and agentd reads; it cannot carry a refresh token
+internal/tokenfile/      bounded reads of rotating projected bearer-token files
+internal/projectcatalog/ parses and validates the GitOps project catalog and its per-task snapshot; no filesystem or network authority
+internal/projectsync/    agentd's bounded, model-free GitOps project management (`agentd project-sync|project-refresh`): actor, API, receipt
+internal/projectcanary/  validates the two finite operator-owned project rule canaries and binds a session to one
+internal/projectcanary/testutil/  synthetic canary fixtures for tests
+internal/commonrules/    retains the common instruction inputs (common text, Codex header) bound to an enabled managed task
+internal/commonrules/testutil/  synthetic common-source fixtures for tests
+internal/taskclaim/      the TaskClaim store: immutable explicit ownership, Create only, uncached reads
+internal/inbox/          the inbox store: immutable API messages and explicit read acknowledgements, Create only, uncached reads
+internal/contextpublication/  the PublishedContext store: immutable published excerpts, Create only, uncached reads
+internal/sessiondirectory/  the SessionDirectory store: bounded original session metadata and CAS witnesses
+internal/taskbudget/     the task budget ledger: retained, deterministic task admission in ConfigMaps behind CAS (KubeStore)
 config/crd/              CRDs generated by controller-gen; haynes-ops gets a copy by PR with every change, before the
                          operator pin that needs it (a stale copy prunes status fields silently; haynes-ops #3502)
 images/operator/         Dockerfile: ghcr.io/thaynes43/dev-env-operator (operator + keeper); build args COMMIT, VERSION
 images/agent/            Dockerfile: ghcr.io/thaynes43/dev-env, tag line 2.x (D-53); smoke-test.sh; tools/ (pve, hw-ssh, v1 copies). CI only, never in the pod
 images/THIRD_PARTY.md    what each published image bundles and under which license; update it with the Dockerfiles.
                          It and LICENSE are copied into both images, whose license directories CI checks (#55)
-Makefile                 generate, check-generated, lint, test, envtest, build, build-agent-run-darwin, tools
+Makefile                 generate, check-generated, check-layout, lint, test, envtest, build, build-agent-run-darwin, tools
 .golangci.yml            golangci-lint v2 config
 LICENSE                  MIT, copyright Tom Haynes
 ```
@@ -175,7 +194,9 @@ Every Makefile target caps Go at two CPUs and two packages at a time and runs un
 `GO_PARALLELISM` there.
 
 Directories still to come: later controllers (ToolSession, LLMLease) beside
-`internal/controller/`. Name each one here when it lands.
+`internal/controller/`. Name each one here when it lands: every Go package under
+`api/`, `cmd/` and `internal/` needs its own line in the Layout block, and
+`make check-layout` (run in CI beside `check-generated`) fails without one.
 
 ## How work happens here
 
