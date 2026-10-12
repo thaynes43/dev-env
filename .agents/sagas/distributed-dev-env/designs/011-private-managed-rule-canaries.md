@@ -240,10 +240,28 @@ claims or the inbox, so those flags stay `dev-env`.
   hold one keep it.
 - **Admission.** General private project tasks stay off. An ordinary task that
   names a project still refuses. The fixed canary route is the only way in.
-- **Freeze.** The Session binds the catalog's UID, resourceVersion and snapshot
-  at Create. The result read resolves the catalog again and compares all three.
-  So no catalog change, even to another project, may land between the Create
-  and the result read.
+- **Freeze.** The result read (`canaryResultAuthority` in
+  `internal/apiserver/canary_result.go`) checks the bound state against live
+  state again. Between the Create and the result read, none of these may change:
+  - **The catalog** (`apps/dev-env-system/projects`). The Session binds its UID,
+    resourceVersion and snapshot at Create, and the read compares all three. A
+    change to another project denies the read too.
+  - **The templates** (`apps/dev-env-system/templates`). Their revision must
+    still be `2.24.1-7e04fb00dc`, so any template or image bump there denies the
+    read.
+  - **The common rules** (`apps/dev-env-system/session-config`). The text of
+    `dev-env-config-claude` `CLAUDE.md` and `dev-env-config-codex`
+    `AGENTS.header.md` must still match the bound bytes.
+  - **The operator args the read checks** (`apps/dev-env-system/operator`): this
+    record in `--private-project-canaries`, `sigo-alumni` in
+    `--context-payload-read-projects`, `--enable-private-project-tasks` still
+    false, and `--enable-private-history-retention` and
+    `--enable-retained-common-rules` still true.
+
+  The canary has no retries, so a denied result read wastes it. Before the
+  Create, the coordinator lists open haynes-ops PRs that touch those four
+  paths, Renovate's included, and holds any with auto-merge until the result
+  read.
 
 ### Acceptance evidence for #173
 
@@ -251,39 +269,85 @@ The run is accepted for #173 only when all of these hold:
 
 1. **Private repository.** `gh api repos/thaynes43/sigo-alumni` reports
    `private: true` at Create time, and so does `sigoalumni-org`.
-2. **Bootstrap and task clone, with no token warning.** The `project-bootstrap`
-   boot step reports `catalog bootstrap outcome Ready`, with all three
-   repositories `Ready`. The repo step succeeds. Neither step carries the note
-   `no GitHub token at …; cloning without one (public repos only)`, and the
-   Session's `agent.problems` names neither step.
-3. **Fetch and record lines.** The agentd boot log has
-   `fetched accepted repository thaynes43/sigo-alumni branch main at <pin> on <time>`
+2. **Bootstrap and task clone.** The `project-bootstrap` boot step reports
+   `catalog bootstrap outcome Ready`. agentd reports `Ready` only when every
+   catalog repository and project root is `Ready`; otherwise it reports
+   `Partial`. The repo step succeeds, and the Session's `agent.problems` names
+   neither step. The note
+   `no GitHub token at …; cloning without one (public repos only)` must be
+   absent, but that is supporting evidence only. agentd writes the note only
+   when the repo step makes a fresh clone (`internal/agentd/clone.go`), and
+   bootstrap has already cloned `~/repos/sigo-alumni`, so the repo step reuses
+   that clone. Items 1, 3 and 5 prove access: the private fetch succeeds, and
+   the pin equals the private tip.
+3. **Fetch and record lines.** The boot log read (below) has
+   `fetched accepted repository thaynes43/sigo-alumni branch main at <pin> on <fetchedAt>`
    and `recorded the task source: thaynes43/sigo-alumni branch main at <pin>`.
 4. **The task-source record.** `~/.agentd/task-source.json` in the private HOME
    is written once, before the worktree exists. It holds version 1, the
    Session's name and UID, repo `sigo-alumni`, GitHub `thaynes43/sigo-alumni`,
    branch `main`, commit `<pin>`, `fetchedAt`, catalog revision `5fe34bd3…` and
-   rules revision `d070e7a6…`. The log line carries the commit, the fetch line
-   carries `fetchedAt`, and the Session's bound snapshot carries both
+   rules revision `d070e7a6…`. The record line carries the commit, the fetch
+   line carries `fetchedAt`, and the Session's bound snapshot carries both
    revisions. The file stays in the retained HOME; nothing execs into the
    private pod to read it.
-5. **Fresh pin.** `<pin>` equals `git ls-remote` of
-   `thaynes43/sigo-alumni refs/heads/main`, taken immediately before the
-   Create. A second read right after it brackets the fetch. If `main` moved in
-   between, the pin must equal one of the two and agree with `fetchedAt`.
-6. **Worktree.** The boot log has
+5. **Fresh pin.** The coordinator reads `git ls-remote` of
+   `thaynes43/sigo-alumni refs/heads/main` immediately before the Create, and
+   records the time of that read and of the Create. `fetchedAt` must be later
+   than both, so the fetch happened after the Create and is not an older one.
+   `<pin>` must equal the pre-Create `ls-remote`. If `main` moved after that
+   read, a second `ls-remote` taken right after the boot log read brackets the
+   fetch, and `<pin>` must equal it instead. If it equals neither, the pin stays
+   Unknown.
+6. **Worktree.** The boot log read has
    `worktree /home/dev/work/<session> on agent/<session> from <pin> at <pin>`.
    The named read reports branch `agent/<session>` and head equal to the pin.
 7. **Peers unchanged.** Against the pre-merge baseline, every non-operator pod
    in `dev-env-system`, `dev-agents` and `dev` keeps its UID, restarts and
-   images. The three retained Sessions keep their UID, generation and spec.
+   images; pods of CronJob runs come and go and are not compared. The three
+   retained Sessions keep their UID, generation and spec.
+
+**The boot log read.** Items 2, 3 and 6 rest on agentd's boot-step lines.
+agentd writes those notes only to its stdout. The Session view carries Boot,
+Problems, Branch and Head, not the notes. The 1012 record could not accept a
+fresh pin from an unbound `kubectl logs` extract, so this read is part of the
+procedure:
+
+- **When.** Once, after the named read shows the task has finished, and before
+  any pod deletion. Take it promptly: a retained Pod is not durable. A node
+  reboot removed the two retained 1011 canary Pods (Q-31).
+- **How.** A read-only
+  `kubectl logs -n dev-agents private-canary-a1444f4131ec7281b5d1e3130c3b5ada`.
+  The executor Pod has the Session's name. This is not one of Q-30's three
+  operator reads and spends nothing from them.
+- **What is kept.** Only the `msg="boot step"` lines whose `step=` is
+  `project-bootstrap` or `repo`. They go in a new file in the canary's order
+  directory, and the receipt that the Root acceptance binds lists that file
+  and its sha256. The unfiltered log is not kept.
+- **If it fails.** If the Pod or its log is gone, items 2, 3 and 6 stay
+  Unknown. The canary is not run again.
 
 **Markers are secondary here.** Rule loading is already accepted for both
 providers. The prompt can expect the common marker
-`dev-env-common-rules-20261011-4ca29d70`. From the catalog project rules it can
-expect `sigo-alumni-project-rules-20261012-9b122cd5` as the repository marker.
-The repositories' own instructions carry none, so `Unknown` there would mean the
-project rules were not followed. It would not undo items 1 to 7.
+`dev-env-common-rules-20261011-4ca29d70`. The project rules ask for
+`sigo-alumni-project-rules-20261012-9b122cd5` as the repository marker, because
+the repositories' own instructions carry none. If the output reports that
+marker, the project rules reached the agent. `Unknown` proves nothing either
+way. The common rule says to report a repository marker only from loaded
+repository instructions, and `Unknown` when there is none, so `Unknown` is a
+correct reading of the common rule as well. Neither outcome changes items 1 to
+7. Removing the overlap would change a rule revision and the record, so this
+canary keeps both rules as they are.
+
+**Public records.** The canary loads the private repository's own `CLAUDE.md`,
+and its captured output and the boot log come from a private pod. The 1012
+record quoted its captured output word for word, but that canary ran on a
+public repository. Before anything from this run goes into a public record
+(this repository, haynes-ops, an issue or a PR comment), screen it, and quote
+only marker values, IDs, revisions, commit SHAs and timestamps. Quote the
+captured output word for word only if screening shows it holds nothing else.
+The full captured output and the filtered log stay in the order directory,
+which is not published.
 
 Served model, usage, cost, full history, physical stop and capture completeness
 stay Unknown, as for the earlier canaries. The bootstrap reference clone of

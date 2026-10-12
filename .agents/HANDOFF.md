@@ -29,8 +29,12 @@ lists the acceptance evidence.
 
 **Effects to know.** Every v2 pod that boots after #3845 clones both private
 repositories into its private HOME, because bootstrap is catalog-wide. Nothing
-running restarts. No catalog change may land between the canary's Create and its
-result read. Global private admission stays off.
+running restarts. Between the canary's Create and its result read, no change may
+land in haynes-ops `dev-env-system` `projects`, `templates` or `session-config`, or
+in the operator args the result read checks (DESIGN-011's freeze list): with no
+retries, a denied result read wastes the canary. Global private admission stays
+off. The run must also take the boot log read DESIGN-011 describes, and public
+records quote only markers, IDs, revisions, SHAs and timestamps from it.
 
 ## Q-31 ruling: private HOME expiry, docs only — 2026-10-12
 
