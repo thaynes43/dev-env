@@ -1,5 +1,27 @@
 # HANDOFF: start here
 
+## Private-budget ownership source and current canary gate — 2026-10-12 UTC
+
+The [ownership and runtime checkpoint](sagas/distributed-dev-env/verification/private-budget-ownership-2026-10-12.md)
+records the bounded #154 source unit: original Session/HOME/intent/directory/Pod
+identity proof with stop Unknown, and an unwired inspector that always refuses
+reservation. The two new files pass focused tests and affected lint; native
+review and required CI remain source shipping gates. Existing API, schema,
+canary, directory, shared-budget and private-Pod retention guards are unchanged.
+Runnable private dispatch and #160 recovery remain unaccepted.
+
+The public-CA correction produced two complete empty Directory pages. Both
+expired before Create; three logical reads include the retained initial TLS
+failure. Final Create review arrived too late for attempt 3's Root ruling, and
+the pre-spawn guard refused execution. Root receipt `45a9f745` preserves that
+refusal and artifact-absence evidence. No Create/helper/POST ran, no fixed key
+was consumed and no fourth read is authorized by the expired plan. An inert
+sequencing correction is under review; unchanged 300-second freshness and the
+permanent once-only key remain required. v2.23 is signed and published, not
+deployed; fixed task pins remain v2.20. Actual both-provider rule loading and
+the owner pilot remain open. Q-24 is pending; Q-26's authorized final R4
+correction is already satisfied. Claude advisory remains optional/down.
+
 ## Fixed result reader built and released — 2026-10-12 UTC
 
 Source #208 merged as `cd966d17`; release #209 merged as `ca0dc3f1` and
