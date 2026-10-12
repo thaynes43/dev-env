@@ -63,7 +63,9 @@ Added 2026-10-12 for review findings roots-2 to roots-5 (#173).
   branch, immutable commit, fetch time and the snapshot's catalog and rules
   revisions. A retry of a task whose worktree creation failed reuses the
   recorded commit, so the record and the worktree never disagree. The fresh
-  fetch is still required before that retry. Resume never rewrites the record.
+  fetch is still required before that retry. A record that binds another
+  session or source, or cannot be read, refuses the new task and is kept.
+  Resume never rewrites the record.
   `agentd ctl status` and the heartbeat report it as `workspace.source`;
   `workspace.head` stays the live HEAD. A task created before this record
   existed reports no source rather than a guessed one. AgentSession status and
@@ -78,10 +80,11 @@ Added 2026-10-12 for review findings roots-2 to roots-5 (#173).
   which all share the one fetch helper.
 - **Resume after identity drift.** The Git storage proof still gates every
   boot. A mismatch in the origin fetch or push URLs refuses a new task, as
-  before. When the session's worktree or `agent/<name>` branch already exists,
-  the mismatch is a warning instead: agentd skips the fetch and reuses or
-  recreates the worktree without moving it. It never creates a new branch from
-  an unfetched base.
+  before. When the session's worktree, `agent/<name>` branch or first launch
+  record already exists, the mismatch is a warning instead: agentd skips the
+  fetch and reuses or recreates the worktree without moving it. It never
+  creates a new branch from an unfetched base, so a launched task that lost
+  both its worktree and its branch is still refused.
 - **Staged task clone.** A missing selected clone uses the same staged
   reference clone as bootstrap: it checks out the declared branch, proves
   identity before publication, and never deletes staging. Preserved staging

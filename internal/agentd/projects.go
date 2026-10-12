@@ -255,6 +255,16 @@ func validateProjectReference(ctx context.Context, r Runner, s Settings, repo pr
 }
 
 func validateProjectReferenceAt(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository, clone string) error {
+	if err := validateProjectReferenceStorageAt(ctx, r, s, repo, clone); err != nil {
+		return err
+	}
+	return validateProjectReferenceIdentityAt(ctx, r, s, repo, clone)
+}
+
+// validateProjectReferenceStorageAt proves that clone is an ordinary, direct
+// reference: its own Git administration, root and ref storage. Every Git
+// command against a reference needs this proof.
+func validateProjectReferenceStorageAt(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository, clone string) error {
 	if err := noSymlinkComponents(filepath.Join(clone, ".git")); err != nil {
 		return err
 	}
@@ -275,6 +285,13 @@ func validateProjectReferenceAt(ctx context.Context, r Runner, s Settings, repo 
 	if err != nil || filepath.Clean(top) != clone {
 		return errors.New("reference has unexpected root")
 	}
+	return nil
+}
+
+// validateProjectReferenceIdentityAt proves every origin fetch and push URL is
+// the accepted repository. A fetch needs this proof; task worktrees can change
+// this shared configuration, so a resume that does not fetch tolerates drift.
+func validateProjectReferenceIdentityAt(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository, clone string) error {
 	urls, err := projectGit(ctx, r, s, clone, "remote", "get-url", "--all", "origin")
 	if err != nil || urls != repo.URL() {
 		return errors.New("reference identity does not match the catalog")
@@ -378,7 +395,10 @@ func fetchProjectTarget(ctx context.Context, r Runner, s Settings, repo projectc
 	if _, err := projectGit(ctx, r, s, s.ClonePath(repo.Name), "symbolic-ref", "--quiet", ref); ExitCodeOf(err) != 1 {
 		return "", time.Time{}, errors.New("fresh reference destination is symbolic or uncertain; preserved")
 	}
-	if _, err := projectGit(ctx, r, s, s.ClonePath(repo.Name), "fetch", "--no-auto-maintenance", "--no-prune", "--no-write-fetch-head", "--no-recurse-submodules", "--no-tags", "origin", "+refs/heads/"+repo.DefaultBranch+":"+ref); err != nil {
+	// --refmap= drops the configured remote.origin.fetch mappings, which Git
+	// otherwise also applies to an explicitly fetched ref: a mapping into
+	// refs/heads could force an owner's local branch before any proof.
+	if _, err := projectGit(ctx, r, s, s.ClonePath(repo.Name), "fetch", "--refmap=", "--no-auto-maintenance", "--no-prune", "--no-write-fetch-head", "--no-recurse-submodules", "--no-tags", "origin", "+refs/heads/"+repo.DefaultBranch+":"+ref); err != nil {
 		return "", time.Time{}, errors.New("fresh reference fetch failed; preserved")
 	}
 	fetched := time.Now().UTC()

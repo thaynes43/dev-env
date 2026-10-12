@@ -59,6 +59,8 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, session string, no
 				ws.Head = h
 			}
 			cancel()
+			// The durable record names the task's source, not a boot's copy.
+			ws.Source, _ = readTaskSource(s)
 			st.Workspace = &ws
 		}
 	}

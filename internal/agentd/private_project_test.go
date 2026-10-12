@@ -67,8 +67,11 @@ func TestPrivateProjectBootstrapUsesDeclaredAliasAndBranch(t *testing.T) {
 	if ws.Clone != s.ClonePath("local-alias") || s.WorkspaceID != "" || sess.Workspace != nil || exists(s.workspaceDir()) {
 		t.Fatal("private project bootstrap required or created shared workspace state")
 	}
-	if gitRun(t, g.env, ws.Clone, "symbolic-ref", "--short", "HEAD") != "main" {
-		t.Fatal("task preparation moved the reference checkout to the project branch")
+	// A reference the task path clones is the staged reference clone, on the
+	// declared branch like a bootstrap clone (roots-5). An existing reference
+	// is never moved: TestPrivateProjectFreshReusedClonePinsFetchedBranch.
+	if gitRun(t, g.env, ws.Clone, "symbolic-ref", "--short", "HEAD") != "stable" {
+		t.Fatal("task preparation cloned a reference that is not on the declared branch")
 	}
 	rules, err := os.ReadFile(filepath.Join(ws.Worktree, "AGENTS.md"))
 	if err != nil || string(rules) != "REPOSITORY_RULE_IDENTIFIER\n" {
