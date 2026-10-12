@@ -1,5 +1,62 @@
 # HANDOFF: start here
 
+## Fixed result reader built and released — 2026-10-12 UTC
+
+Source #208 merged as `cd966d17`; release #209 merged as `ca0dc3f1` and
+[v2.22.0](https://github.com/thaynes43/dev-env/releases/tag/v2.22.0) is published.
+The [current result-reader evidence](sagas/distributed-dev-env/verification/canary-result-2026-10-12.md)
+supersedes the earlier source-pending entries. The initiating ordinary client can
+read one named retained result for its trusted canary and original Session UID.
+The admission preview fix accepts initial capture creation without persisting a
+preview UID or weakening runtime UID validation. Focused checks, required CI and
+independent native review passed. The bound local client was built and accepted
+without invoking it. The exact-source signed operator image is verified.
+
+Image-only delivery is [haynes-ops #3825](https://github.com/thaynes43/haynes-ops/pull/3825).
+Its required Diff/Flux checks, native source review and independently reviewed
+fresh preservation baseline passed. It merged as `b80cac13` at 02:15:34 UTC.
+The one post observation preserved the exact signed image, two owned Ready pods,
+all 11 peers, authority and fixtures. Its exact-revision HOLD remains unchanged:
+Flux applied the next commit `0167e37a`, whose only changes are two Ollama tags.
+Independent source review `a6271339`, saved review `d3e78362` and combined review
+`5541773d` support separate root acceptance `f610a2d6` at 03:10:31 UTC. This accepts
+#3825 image delivery and preservation in the saved observation window; there was
+no extra GET, reconcile or restart of existing sessions. Both permanent canary IDs remain
+unstarted, no key is consumed and global private-project admission is disabled.
+Actual Directory discovery, both-provider loaded rules and the owner pilot are
+unaccepted. Claude advisory is optional during the outage; error-only runs were
+read and retained without retries. Q-24 remains pending. Q-26 is satisfied by R4;
+the new image delivery is a separate bounded unit, not another correction to R4.
+The D23 named `show --json --once` client merged through PR #210 as `4c1e0c37`. One held
+candidate's response-size finding was corrected before decoding; its focused
+HTTP regression, affected lint and independent full native review passed.
+Required CI passed. Release #211 merged as `c2ac2ab7`, and
+[v2.23.0](https://github.com/thaynes43/dev-env/releases/tag/v2.23.0) was published at
+03:09:41 UTC. Its actual merged-source local client `f136b205` was built once
+offline at low parallelism; native saved review `693f1b3e` passed 483 checks and
+root accepted the unsigned local build. It has never been invoked or installed
+globally. The failed build preparation is preserved; its successor binds the
+actual `4c1e0c37` source and all 67 unchanged, four changed and two added files.
+This build supplies no runtime authority; the Directory TLS gate below remains.
+
+Q-24 blocks acceptance of fully isolated native Codex sessions, as well as the
+fleet UX. Pinned 0.160.1 native chats share one app-server harness; separate tool
+executors do not isolate it. The outstanding native question recommends separate
+paired session hosts. Coordinator/workers retain a shared native failure boundary
+and require an explicit owner choice. [DESIGN-006 Q-24](sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md#q-24-codex-mvp-native-routing)
+and #91 remain the decision record; do not repeat the question or copy enrollment.
+
+The closed installed binding `1061d476` retains current caller and four source
+ConfigMap UID/resourceVersion bindings from the saved post observation. First
+Directory plan `751813d5` passed independent final data review `b3e1ab06` and its
+closed native gate `e3421598`. Root authorized one read. The attempt at 03:31:01
+UTC failed certificate validation: the client does not trust the operator CA.
+Its original refusal `ac1dfe77` and raw stderr `14ecfe02` are retained; no directory
+data was returned, no Create is authorized, both keys are untouched and cardinality
+remains Unknown. No retry, alternate API or TLS bypass is authorized. A finite
+source/public-CA trust audit proceeds without runtime or credential reads.
+No observer retry or original receipt rewrite is authorized.
+
 ## Fixed-rule configuration accepted — 2026-10-12 00:31 UTC
 
 [The activation record](sagas/distributed-dev-env/verification/fixed-rule-activation-2026-10-11.md)
