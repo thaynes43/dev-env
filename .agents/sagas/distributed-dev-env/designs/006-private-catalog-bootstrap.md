@@ -51,6 +51,44 @@ Immediately before each new task, the existing selected-repository path still
 fetches and pins an immutable commit. A failed selected fetch blocks that new
 task. Resume retains its worktree, source receipt and saved project rules.
 
+## Task source and reference fixes
+
+Added 2026-10-12 for review findings roots-2 to roots-5 (#173).
+
+- **Task source record.** A new private project task pins its source once.
+  After the identity proof and the fresh fetch, and before `worktree add`,
+  agentd writes `~/.agentd/task-source.json`. It is private (mode 0600) and
+  written once: an exclusive atomic create that never replaces a file already
+  there. It holds the session, repository alias, GitHub identity, declared
+  branch, immutable commit, fetch time and the snapshot's catalog and rules
+  revisions. A retry of a task whose worktree creation failed reuses the
+  recorded commit, so the record and the worktree never disagree. The fresh
+  fetch is still required before that retry. Resume never rewrites the record.
+  `agentd ctl status` and the heartbeat report it as `workspace.source`;
+  `workspace.head` stays the live HEAD. A task created before this record
+  existed reports no source rather than a guessed one. AgentSession status and
+  the CRD do not change: the heartbeat decoder ignores the new field.
+- **Resume fetch notes.** On resume the selected-branch fetch only refreshes
+  `origin/<branch>`. Its boot note says so and names the recorded source,
+  instead of reading like the task's source.
+- **Explicit refspec only.** The selected-branch fetch passes `--refmap=`, so
+  only `refs/remotes/origin/<branch>` is written. A configured
+  `remote.origin.fetch` can no longer move other remote-tracking refs or force
+  local branches. This applies to bootstrap, project roots, sync and tasks,
+  which all share the one fetch helper.
+- **Resume after identity drift.** The Git storage proof still gates every
+  boot. A mismatch in the origin fetch or push URLs refuses a new task, as
+  before. When the session's worktree or `agent/<name>` branch already exists,
+  the mismatch is a warning instead: agentd skips the fetch and reuses or
+  recreates the worktree without moving it. It never creates a new branch from
+  an unfetched base.
+- **Staged task clone.** A missing selected clone uses the same staged
+  reference clone as bootstrap: it checks out the declared branch, proves
+  identity before publication, and never deletes staging. Preserved staging
+  refuses the clone and stays in place for inspection. When bootstrap is
+  enabled, the legacy clone used by sessions without a project also preserves
+  existing staging instead of deleting it.
+
 The contract is provider-neutral: Claude Code, Codex and a future local-model
 adapter use private repositories and the same source/rules provenance. This
 slice adds no local inference or GPU allocation. Subscription-backed execution
