@@ -194,9 +194,9 @@ gains the same codes.
 
 **Repository reasons.** Each `PrivateProjectSource` gains `step` and `reason`.
 `state` stays `Ready` or `Preserved`. `step` is where the refresh stopped:
-`Clone`, `Inspect` (layout, identity and Git operation proof before the fetch),
-`Fetch` or `Advance` (the clean-view proof and the fast-forward). A Ready
-repository has neither. The reason codes:
+`Clone`, `Inspect` (the clone path, layout, identity and Git operation proof
+before the fetch), `Fetch` or `Advance` (the clean-view proof and the
+fast-forward). A Ready repository has neither. The reason codes:
 
 | Reason | The refresh stopped because |
 |---|---|
@@ -217,8 +217,12 @@ repository has neither. The reason codes:
 | `LocalOnlyCommits` | HEAD has commits outside the fetched default branch |
 | `ChangedDuringProof` | the checkout changed between the two clean-view proofs |
 | `AdvanceFailed` | the fast-forward itself failed |
-| `TimedOut` | the two-minute repository budget ended first |
+| `TimedOut` | the two-minute repository budget ended first; it replaces any other code except `StagingPreserved` |
 | `Uncertain` | a Git command failed or answered something the proof cannot read |
+
+The clean-checkout proof (`projectIndexProof`) and the reference, clone and
+fetch helpers return typed errors that carry the code, with their messages
+unchanged; the shared-workspace sync ignores the codes.
 
 **Project root reasons.** Each `PrivateProjectRootReport` (DESIGN-007) gains
 `reason`, and, when one member repository is the cause, `repository` (its
@@ -240,7 +244,7 @@ catalog name) and `cause` (a repository reason from the table above):
 | `AnchorAdvanceFailed` | an anchor's fast-forward failed |
 | `RootAdvanceFailed` | the root's fast-forward, wrapper modes or exclusion write failed |
 | `BudgetReserve` | less than the step reserve was left before a mutating step (DESIGN-007) |
-| `TimedOut` | the root's two-minute budget ended first |
+| `TimedOut` | the root's two-minute budget ended first; it replaces any other code except `AnchorRemoved` |
 
 A root whose member reference is `Preserved` is still refreshed. Its anchors
 are detached worktrees at the fetched target, so an owner's work in the
@@ -252,18 +256,22 @@ today's capability. The anchor proof decides; the Q-30 canary root reports
 `ConfigInvalid`, `StateUncertain`, `LockUnavailable`, `ReportUnretained`,
 `CatalogUnconfirmed`, `CatalogInvalid`, `OwnerMismatch` or `TimedOut` (the
 ten-minute operation budget). A `Partial` or `Ready` report has none; its
-items carry the reasons.
+items carry the reasons. A configuration that enables bootstrap or roots and
+fails validation now reports `Failed` with `ConfigInvalid`; it reported
+`Disabled` before. A disabled bootstrap still reports `Disabled` and publishes
+nothing.
 
 **Boot step.** The `project-bootstrap` step's first note becomes a compact
 summary of the items that are not Ready, which the existing
 `status.agent.problems` line already carries:
-`catalog bootstrap outcome Partial: sigoalumni-org=UnsupportedTrackedEntry; project sigo-alumni=AnchorUnproven@sigoalumni-org(UnsupportedTrackedEntry)`.
+`catalog bootstrap outcome Partial: extra=UnsupportedTrackedEntry; project sample=AnchorUnproven@extra(UnsupportedTrackedEntry)`.
 A Failed report reads `catalog bootstrap outcome Failed: CatalogUnconfirmed`.
 The summary is at most 224 bytes and ends `+N more` when items do not fit.
 It contains no `/`, no hexadecimal object id and no detail text.
 
-**Status and AgentSession.** agentd keeps the summary in its boot record.
-`protocol.Status` gains `projectBootstrap`: `state`, `reason`,
+**Status and AgentSession.** agentd keeps the codes in its boot record
+(`~/.agentd/boot.json`) beside the step, so a heartbeat and
+`agentd ctl status` report the same thing. `protocol.Status` gains `projectBootstrap`: `state`, `reason`,
 `catalogRevision` (the catalog content digest that task sources already
 report), `repositories[]` of `{name, state, step, reason}` and `projects[]` of
 `{name, state, reason, repository, cause}`. The heartbeat copies it to
@@ -271,9 +279,21 @@ report), `repositories[]` of `{name, state, step, reason}` and `projects[]` of
 as an enum, every name by the catalog name pattern and a 63-byte limit, the
 revision as 64 lowercase hex, and the lists at the catalog limits (128
 repositories, 64 projects). The API server copies only known values: an
-unknown code is dropped rather than failing the heartbeat, so a newer agentd
-never stalls an older operator's status. `agent-run show` prints one
-`project bootstrap` row and one row per item that is not Ready.
+unknown state drops the report, an item with an unknown state or an invalid
+name is left out, and an unknown step, reason or cause is cleared, so a newer
+agentd never fails an older operator's heartbeat. A heartbeat without the field
+clears it. The API's session view (`agentStatus.projectBootstrap`) carries it
+too. `agent-run show` prints one `project bootstrap` row, for example
+`Partial (1 of 2 repositories ready, 0 of 1 projects ready)`, and one row per
+item that is not Ready. The closed sets live in
+`internal/agentd/protocol/project_bootstrap.go`; the CRD's enums list the same
+values, and its validation test proves the CRD accepts every one of them.
+
+`agent-run show --once` validates the response against its own DTO and refuses
+unknown fields (DESIGN-023). An `agent-run` older than this change therefore
+refuses a once read of a session that reports `projectBootstrap`, and works
+again once its image carries this release. That is the once contract failing
+closed, not a fault.
 
 The CRD changes, so haynes-ops must get the new `config/crd/` copy before the
 operator pin that needs it; a stale copy prunes the field silently.
@@ -288,6 +308,11 @@ operator pin that needs it; a stale copy prunes the field silently.
   startup integration and refresh command.
 - Focused agentd/catalog/command tests, this design, plan 11, workflow guide and
   HANDOFF. Existing catalog, clone and task-source helpers remain the foundation.
+- Reason codes: `internal/agentd/protocol/project_bootstrap.go` (the closed
+  sets and the published type), `internal/agentd/bootstrap_reasons.go` (typed
+  errors, summary, published form), `api/v1alpha1` `ProjectBootstrapStatus`
+  with `config/crd/`, `internal/apiserver/heartbeat.go`, `view.go` and
+  `apiv1`, and `internal/agentrun/sessions.go`.
 
 ## Acceptance for this PR
 

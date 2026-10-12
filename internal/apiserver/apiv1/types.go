@@ -291,6 +291,35 @@ type AgentStatus struct {
 	Task           *TaskResult `json:"task,omitempty"`
 	Message        string      `json:"message,omitempty"`
 	Agentd         string      `json:"agentd,omitempty"`
+	// ProjectBootstrap is the boot's private catalog bootstrap: catalog
+	// names, states, steps and reason codes only (DESIGN-006).
+	ProjectBootstrap *ProjectBootstrap `json:"projectBootstrap,omitempty"`
+}
+
+// ProjectBootstrap is a private catalog bootstrap's outcome.
+type ProjectBootstrap struct {
+	State           string                       `json:"state"`
+	Reason          string                       `json:"reason,omitempty"`
+	CatalogRevision string                       `json:"catalogRevision,omitempty"`
+	Repositories    []ProjectBootstrapRepository `json:"repositories,omitempty"`
+	Projects        []ProjectBootstrapProject    `json:"projects,omitempty"`
+}
+
+// ProjectBootstrapRepository is one repository's reference refresh.
+type ProjectBootstrapRepository struct {
+	Name   string `json:"name"`
+	State  string `json:"state"`
+	Step   string `json:"step,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// ProjectBootstrapProject is one project root's refresh.
+type ProjectBootstrapProject struct {
+	Name       string `json:"name"`
+	State      string `json:"state"`
+	Reason     string `json:"reason,omitempty"`
+	Repository string `json:"repository,omitempty"`
+	Cause      string `json:"cause,omitempty"`
 }
 
 // TaskResult is how a task ended.

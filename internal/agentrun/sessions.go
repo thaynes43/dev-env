@@ -222,6 +222,47 @@ func (a *app) printSession(s apiv1.Session) {
 		for _, p := range st.Problems {
 			row("problem", "%s", p)
 		}
+		if pb := st.ProjectBootstrap; pb != nil {
+			line := pb.State
+			if pb.Reason != "" {
+				line += ", " + pb.Reason
+			}
+			ready := 0
+			for _, repo := range pb.Repositories {
+				if repo.State == "Ready" {
+					ready++
+				}
+			}
+			line += fmt.Sprintf(" (%d of %d repositories ready", ready, len(pb.Repositories))
+			ready = 0
+			for _, project := range pb.Projects {
+				if project.State == "Ready" {
+					ready++
+				}
+			}
+			if len(pb.Projects) > 0 {
+				line += fmt.Sprintf(", %d of %d projects ready", ready, len(pb.Projects))
+			}
+			row("project bootstrap", "%s)", line)
+			for _, repo := range pb.Repositories {
+				if repo.State != "Ready" {
+					row("  repository", "%s %s at %s: %s", repo.Name, repo.State, dash(repo.Step), dash(repo.Reason))
+				}
+			}
+			for _, project := range pb.Projects {
+				if project.State == "Ready" {
+					continue
+				}
+				why := dash(project.Reason)
+				if project.Repository != "" {
+					why += " in " + project.Repository
+				}
+				if project.Cause != "" {
+					why += " (" + project.Cause + ")"
+				}
+				row("  project", "%s %s: %s", project.Name, project.State, why)
+			}
+		}
 	}
 	row("Actual model", "Unknown")
 	if u := s.UsageObservation; u != nil && u.Validate() == nil {

@@ -20,6 +20,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
 
@@ -260,9 +261,9 @@ func validateProjectReference(ctx context.Context, r Runner, s Settings, repo pr
 
 func validateProjectReferenceAt(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository, clone string) error {
 	if err := validateProjectReferenceStorageAt(ctx, r, s, repo, clone); err != nil {
-		return err
+		return withReason(protocol.ReasonReferenceUncertain, err)
 	}
-	return validateProjectReferenceIdentityAt(ctx, r, s, repo, clone)
+	return withReason(protocol.ReasonIdentityMismatch, validateProjectReferenceIdentityAt(ctx, r, s, repo, clone))
 }
 
 // validateProjectReferenceStorageAt proves that clone is an ordinary, direct
@@ -322,7 +323,7 @@ func cloneProjectReference(ctx context.Context, r Runner, s Settings, repo proje
 			return &projectStagingPreserved{tmp, "reference clone staging exists or is uncertain"}
 		}
 		if _, err := os.Lstat(clone); !errors.Is(err, os.ErrNotExist) {
-			return errors.New("reference destination exists or is uncertain; preserved")
+			return reasonErr(protocol.ReasonReferenceUncertain, "reference destination exists or is uncertain; preserved")
 		}
 		args := []string{"-c", "core.hooksPath=/dev/null"}
 		if s.privateProjectGit {
@@ -397,18 +398,18 @@ func fetchProjectTarget(ctx context.Context, r Runner, s Settings, repo projectc
 	// local branch before any clean-worktree proof. Only the exact fetched
 	// destination must be direct; normal origin/HEAD discovery remains valid.
 	if _, err := projectGit(ctx, r, s, s.ClonePath(repo.Name), "symbolic-ref", "--quiet", ref); ExitCodeOf(err) != 1 {
-		return "", time.Time{}, errors.New("fresh reference destination is symbolic or uncertain; preserved")
+		return "", time.Time{}, reasonErr(protocol.ReasonReferenceUncertain, "fresh reference destination is symbolic or uncertain; preserved")
 	}
 	// --refmap= drops the configured remote.origin.fetch mappings, which Git
 	// otherwise also applies to an explicitly fetched ref: a mapping into
 	// refs/heads could force an owner's local branch before any proof.
 	if _, err := projectGit(ctx, r, s, s.ClonePath(repo.Name), "fetch", "--refmap=", "--no-auto-maintenance", "--no-prune", "--no-write-fetch-head", "--no-recurse-submodules", "--no-tags", "origin", "+refs/heads/"+repo.DefaultBranch+":"+ref); err != nil {
-		return "", time.Time{}, errors.New("fresh reference fetch failed; preserved")
+		return "", time.Time{}, reasonErr(protocol.ReasonFetchFailed, "fresh reference fetch failed; preserved")
 	}
 	fetched := time.Now().UTC()
 	target, err := projectGit(ctx, r, s, s.ClonePath(repo.Name), "rev-parse", "--verify", "--end-of-options", ref+"^{commit}")
 	if err != nil {
-		return "", fetched, errors.New("fresh reference target is unavailable")
+		return "", fetched, reasonErr(protocol.ReasonFetchFailed, "fresh reference target is unavailable")
 	}
 	return target, fetched, nil
 }
@@ -419,10 +420,10 @@ func projectGitOperationClear(ctx context.Context, r Runner, s Settings, dir str
 	for _, name := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD", "BISECT_LOG", "rebase-merge", "rebase-apply", "sequencer", "index.lock", "HEAD.lock", "config.lock", "packed-refs.lock", "shallow.lock"} {
 		path, err := projectGit(ctx, r, s, dir, "rev-parse", "--path-format=absolute", "--git-path", name)
 		if err != nil {
-			return err
+			return withReason(protocol.ReasonUncertain, err)
 		}
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-			return errors.New("git operation or lock is present or uncertain; preserved")
+			return reasonErr(protocol.ReasonGitOperationPresent, "git operation or lock is present or uncertain; preserved")
 		}
 	}
 	return nil
@@ -438,20 +439,20 @@ func projectIndexProof(ctx context.Context, r Runner, s Settings, dir string, re
 	}
 	untracked, err := projectGit(ctx, r, s, dir, "ls-files", "--others")
 	if err != nil || untracked != "" {
-		return "", errors.New("untracked files (including ignored files) or uncertain scan; preserved")
+		return "", reasonErr(protocol.ReasonUntrackedFiles, "untracked files (including ignored files) or uncertain scan; preserved")
 	}
 	flags, err := projectGit(ctx, r, s, dir, "ls-files", "-v")
 	if err != nil {
-		return "", err
+		return "", withReason(protocol.ReasonUncertain, err)
 	}
 	for _, line := range strings.Split(flags, "\n") {
 		if line != "" && !strings.HasPrefix(line, "H ") {
-			return "", errors.New("nonordinary tracked-file flags; preserved")
+			return "", reasonErr(protocol.ReasonUnsupportedTrackedEntry, "nonordinary tracked-file flags; preserved")
 		}
 	}
 	staged, err := projectGit(ctx, r, s, dir, "-c", "core.quotePath=true", "ls-files", "--stage")
 	if err != nil {
-		return "", err
+		return "", withReason(protocol.ReasonUncertain, err)
 	}
 	var paths strings.Builder
 	var expected []string
@@ -462,28 +463,28 @@ func projectIndexProof(ctx context.Context, r Runner, s Settings, dir string, re
 			continue
 		}
 		if entries++; entries > 10000 {
-			return "", errors.New("reference index exceeds the repair proof bound")
+			return "", reasonErr(protocol.ReasonIndexBoundExceeded, "reference index exceeds the repair proof bound")
 		}
 		meta, path, ok := strings.Cut(line, "\t")
 		fields := strings.Fields(meta)
 		if !ok || len(fields) != 3 || fields[2] != "0" || (fields[0] != "100644" && fields[0] != "100755" && fields[0] != "120000") {
-			return "", errors.New("conflicts, submodules or special tracked files; preserved")
+			return "", reasonErr(protocol.ReasonUnsupportedTrackedEntry, "conflicts, submodules or special tracked files; preserved")
 		}
 		actualPath := path
 		if strings.HasPrefix(path, "\"") {
 			actualPath, err = strconv.Unquote(path)
 			if err != nil {
-				return "", errors.New("tracked filename cannot be proved; preserved")
+				return "", reasonErr(protocol.ReasonUnsupportedTrackedEntry, "tracked filename cannot be proved; preserved")
 			}
 		}
 		fullPath := filepath.Join(dir, actualPath)
 		if !strings.HasPrefix(fullPath, filepath.Clean(dir)+string(filepath.Separator)) {
-			return "", errors.New("tracked filename cannot be proved; preserved")
+			return "", reasonErr(protocol.ReasonUnsupportedTrackedEntry, "tracked filename cannot be proved; preserved")
 		}
 		if fields[0] == "120000" {
 			if objectFormat == "" {
 				if objectFormat, err = projectGit(ctx, r, s, dir, "rev-parse", "--show-object-format"); err != nil {
-					return "", errors.New("repository object format is uncertain; preserved")
+					return "", reasonErr(protocol.ReasonUnsupportedTrackedEntry, "repository object format is uncertain; preserved")
 				}
 			}
 			if err := proveTrackedSymlink(fullPath, objectFormat, fields[1]); err != nil {
@@ -492,29 +493,38 @@ func projectIndexProof(ctx context.Context, r Runner, s Settings, dir string, re
 			continue
 		}
 		if err := noSymlinkComponents(fullPath); err != nil {
-			return "", errors.New("tracked path is missing or has symlink components; preserved")
+			return "", reasonErr(protocol.ReasonWorkingTreeDiffers, "tracked path is missing or has symlink components; preserved")
 		}
 		fi, err := os.Lstat(fullPath)
 		if err != nil || !fi.Mode().IsRegular() || (fi.Mode().Perm()&0o100 != 0) != (fields[0] == "100755") {
-			return "", errors.New("tracked file mode differs from index; preserved")
+			return "", reasonErr(protocol.ReasonWorkingTreeDiffers, "tracked file mode differs from index; preserved")
 		}
 		paths.WriteString(path)
 		paths.WriteByte('\n')
 		expected = append(expected, fields[1])
 	}
 	result, err := r.Run(ctx, privateGitCommand(s, Cmd{Name: "git", Args: []string{"-C", dir, "-c", "core.fsmonitor=false", "hash-object", "--stdin-paths"}, Env: gitEnv, Stdin: strings.NewReader(paths.String())}))
-	if err != nil || !slices.Equal(strings.Fields(string(result.Stdout)), expected) {
-		return "", errors.New("tracked files differ from the index; preserved")
+	if err != nil {
+		return "", reasonErr(protocol.ReasonUncertain, "tracked files differ from the index; preserved")
+	}
+	if !slices.Equal(strings.Fields(string(result.Stdout)), expected) {
+		return "", reasonErr(protocol.ReasonWorkingTreeDiffers, "tracked files differ from the index; preserved")
 	}
 	if len(readOnly) != 0 && readOnly[0] {
 		// A private refresh must not rewrite even the cache-tree extension of
 		// an owner's index. Prove equality to HEAD without write-tree.
 		if _, err := projectGit(ctx, r, s, dir, "diff", "--cached", "--quiet", "--no-ext-diff", "--no-textconv", "HEAD", "--"); err != nil {
-			return "", errors.New("index differs from HEAD or is uncertain; preserved")
+			reason := protocol.ReasonUncertain
+			if ExitCodeOf(err) == 1 {
+				reason = protocol.ReasonStagedChanges
+			}
+			return "", reasonErr(reason, "index differs from HEAD or is uncertain; preserved")
 		}
-		return projectGit(ctx, r, s, dir, "rev-parse", "--verify", "HEAD^{tree}")
+		tree, err := projectGit(ctx, r, s, dir, "rev-parse", "--verify", "HEAD^{tree}")
+		return tree, withReason(protocol.ReasonUncertain, err)
 	}
-	return projectGit(ctx, r, s, dir, "write-tree")
+	tree, err := projectGit(ctx, r, s, dir, "write-tree")
+	return tree, withReason(protocol.ReasonUncertain, err)
 }
 
 // proveTrackedSymlink proves a tracked symlink without following it: no parent
@@ -523,22 +533,22 @@ func projectIndexProof(ctx context.Context, r Runner, s Settings, dir string, re
 // blob id is computed here, as Git computes it for a symlink.
 func proveTrackedSymlink(path, objectFormat, indexed string) error {
 	if err := noSymlinkComponents(filepath.Dir(path)); err != nil {
-		return errors.New("tracked path is missing or has symlink components; preserved")
+		return reasonErr(protocol.ReasonWorkingTreeDiffers, "tracked path is missing or has symlink components; preserved")
 	}
 	fi, err := os.Lstat(path)
 	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
-		return errors.New("tracked file mode differs from index; preserved")
+		return reasonErr(protocol.ReasonWorkingTreeDiffers, "tracked file mode differs from index; preserved")
 	}
 	target, err := os.Readlink(path)
 	if err != nil {
-		return errors.New("tracked symlink cannot be read; preserved")
+		return reasonErr(protocol.ReasonUncertain, "tracked symlink cannot be read; preserved")
 	}
 	id, err := gitBlobObjectID(objectFormat, []byte(target))
 	if err != nil {
-		return errors.New("repository object format is unsupported; preserved")
+		return reasonErr(protocol.ReasonUnsupportedTrackedEntry, "repository object format is unsupported; preserved")
 	}
 	if id != indexed {
-		return errors.New("tracked files differ from the index; preserved")
+		return reasonErr(protocol.ReasonWorkingTreeDiffers, "tracked files differ from the index; preserved")
 	}
 	return nil
 }

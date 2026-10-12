@@ -18,6 +18,9 @@ type bootRecord struct {
 	Steps      []Step              `json:"steps,omitempty"`
 	Workspace  *protocol.Workspace `json:"workspace,omitempty"`
 	AgentError string              `json:"agentError,omitempty"`
+	// ProjectBootstrap is this boot's private catalog bootstrap, as names
+	// and codes only (DESIGN-006, reason codes).
+	ProjectBootstrap *protocol.ProjectBootstrap `json:"projectBootstrap,omitempty"`
 }
 
 // startWindow is how long after the launch file is written the agent counts
@@ -44,6 +47,7 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 	var boot bootRecord
 	if readJSONFile(s.statePath(bootFile), &boot) == nil {
 		st.BootID, st.BootedAt, st.Boot = boot.BootID, boot.BootedAt, boot.Boot
+		st.ProjectBootstrap = boot.ProjectBootstrap
 		for _, step := range boot.Steps {
 			if step.State == StepWarn || step.State == StepFail {
 				st.Problems = append(st.Problems, step)

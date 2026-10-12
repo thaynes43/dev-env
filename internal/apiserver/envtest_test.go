@@ -306,6 +306,47 @@ func TestEnvtestAPI(t *testing.T) {
 		l.want(http.MethodPost, protocol.HeartbeatPath(sess.Name), human, status(sess.Name), http.StatusForbidden)
 	})
 
+	t.Run("the heartbeat's project bootstrap persists as names and codes", func(t *testing.T) {
+		st := status(sess.Name)
+		st.ProjectBootstrap = &protocol.ProjectBootstrap{State: protocol.BootstrapPartial, CatalogRevision: strings.Repeat("a", 64),
+			Repositories: []protocol.ProjectBootstrapRepository{
+				{Name: "demo", State: protocol.BootstrapReady},
+				{Name: "extra", State: protocol.BootstrapPreserved, Step: protocol.StepAdvance, Reason: protocol.ReasonUnsupportedTrackedEntry},
+				{Name: "owner/leak", State: protocol.BootstrapPreserved},
+				{Name: "future", State: protocol.BootstrapPreserved, Step: "Rewind", Reason: "FromTheFuture"},
+			},
+			Projects: []protocol.ProjectBootstrapProject{{Name: "sample", State: protocol.BootstrapFailed, Reason: protocol.ReasonAnchorUnproven, Repository: "extra", Cause: protocol.ReasonUnsupportedTrackedEntry}},
+		}
+		st.Problems = []protocol.Step{{Name: "project-bootstrap", State: "fail", Notes: []string{"catalog bootstrap outcome Partial: extra=UnsupportedTrackedEntry; project sample=AnchorUnproven@extra(UnsupportedTrackedEntry)"}}}
+		l.want(http.MethodPost, protocol.HeartbeatPath(sess.Name), agent, st, http.StatusNoContent)
+		var s v1alpha1.AgentSession
+		if err := l.k8s.Get(ctx, client.ObjectKeyFromObject(&sess), &s); err != nil {
+			t.Fatal(err)
+		}
+		pb := s.Status.Agent.ProjectBootstrap
+		if pb == nil || pb.State != "Partial" || pb.CatalogRevision != strings.Repeat("a", 64) || len(pb.Repositories) != 3 ||
+			pb.Repositories[1] != (v1alpha1.ProjectBootstrapRepositoryStatus{Name: "extra", State: "Preserved", Step: "Advance", Reason: "UnsupportedTrackedEntry"}) ||
+			pb.Repositories[2] != (v1alpha1.ProjectBootstrapRepositoryStatus{Name: "future", State: "Preserved"}) ||
+			pb.Projects[0] != (v1alpha1.ProjectBootstrapProjectStatus{Name: "sample", State: "Failed", Reason: "AnchorUnproven", Repository: "extra", Cause: "UnsupportedTrackedEntry"}) {
+			t.Fatalf("status.agent.projectBootstrap %+v", pb)
+		}
+		if len(s.Status.Agent.Problems) != 1 || !strings.HasPrefix(s.Status.Agent.Problems[0], "project-bootstrap: fail: catalog bootstrap outcome Partial: extra=UnsupportedTrackedEntry") {
+			t.Fatalf("problems %q", s.Status.Agent.Problems)
+		}
+		view := unmarshal[apiv1.Session](t, l.want(http.MethodGet, apiv1.SessionPath(sess.Name), human, nil, http.StatusOK))
+		if v := view.AgentStatus; v == nil || v.ProjectBootstrap == nil || v.ProjectBootstrap.Projects[0].Cause != "UnsupportedTrackedEntry" || len(v.ProjectBootstrap.Repositories) != 3 {
+			t.Fatalf("API view %+v", view.AgentStatus)
+		}
+		// A heartbeat without a bootstrap clears it.
+		l.want(http.MethodPost, protocol.HeartbeatPath(sess.Name), agent, status(sess.Name), http.StatusNoContent)
+		if err := l.k8s.Get(ctx, client.ObjectKeyFromObject(&sess), &s); err != nil {
+			t.Fatal(err)
+		}
+		if s.Status.Agent.ProjectBootstrap != nil {
+			t.Fatalf("stale bootstrap kept: %+v", s.Status.Agent.ProjectBootstrap)
+		}
+	})
+
 	var child apiv1.Session
 	t.Run("the session starts a child on its own profile", func(t *testing.T) {
 		child = unmarshal[apiv1.Session](t, l.want(http.MethodPost, apiv1.SessionsPath, agent, task(), http.StatusCreated))

@@ -113,6 +113,10 @@ func TestShow(t *testing.T) {
 	s.AgentStatus = &apiv1.AgentStatus{
 		State: "exited", Branch: "agent/fix-typo", Head: "abc1234", LastHeartbeat: &beat,
 		Task: &apiv1.TaskResult{ExitCode: 0, FinishedAt: testNow.Add(-time.Minute), NumTurns: 12, Subtype: "success"},
+		ProjectBootstrap: &apiv1.ProjectBootstrap{State: "Partial", CatalogRevision: strings.Repeat("a", 64),
+			Repositories: []apiv1.ProjectBootstrapRepository{{Name: "demo", State: "Ready"}, {Name: "extra", State: "Preserved", Step: "Advance", Reason: "UnsupportedTrackedEntry"}},
+			Projects:     []apiv1.ProjectBootstrapProject{{Name: "sample", State: "Failed", Reason: "AnchorUnproven", Repository: "extra", Cause: "UnsupportedTrackedEntry"}},
+		},
 	}
 	s.Usage = &apiv1.Usage{CostUSD: "1.25", InputTokens: 1000, OutputTokens: 200}
 	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
@@ -135,6 +139,9 @@ func TestShow(t *testing.T) {
 		"agent/fix-typo at abc1234",
 		"last heartbeat:", "30s ago",
 		"exit 0 at 2026-10-06T20:59:00Z, 12 turns",
+		"project bootstrap:", "Partial (1 of 2 repositories ready, 0 of 1 projects ready)",
+		"  repository:", "extra Preserved at Advance: UnsupportedTrackedEntry",
+		"  project:", "sample Failed: AnchorUnproven in extra (UnsupportedTrackedEntry)",
 		"task result:", "Succeeded (TaskSucceeded): the task exited 0 (success) after 12 turns",
 		"Initial task cost:", "Unknown", "Actual model:", "Unknown",
 		"condition:", "PodReady=True",

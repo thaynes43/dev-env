@@ -81,6 +81,21 @@ func mustRead(t *testing.T, path string) []byte {
 }
 
 func TestPrivateCatalogBootstrapPreservesOwnerState(t *testing.T) {
+	// Each preserved state reports where and why, as closed-set codes.
+	codes := map[string][2]string{
+		"dirty":             {protocol.StepAdvance, protocol.ReasonWorkingTreeDiffers},
+		"staged":            {protocol.StepAdvance, protocol.ReasonStagedChanges},
+		"ignored":           {protocol.StepAdvance, protocol.ReasonUntrackedFiles},
+		"local commit":      {protocol.StepAdvance, protocol.ReasonLocalOnlyCommits},
+		"wrong branch":      {protocol.StepAdvance, protocol.ReasonNonDefaultBranch},
+		"detached":          {protocol.StepAdvance, protocol.ReasonNonDefaultBranch},
+		"operation":         {protocol.StepInspect, protocol.ReasonGitOperationPresent},
+		"index lock":        {protocol.StepInspect, protocol.ReasonGitOperationPresent},
+		"assume unchanged":  {protocol.StepAdvance, protocol.ReasonUnsupportedTrackedEntry},
+		"wrong origin":      {protocol.StepInspect, protocol.ReasonIdentityMismatch},
+		"wrong push origin": {protocol.StepInspect, protocol.ReasonIdentityMismatch},
+		"failed fetch":      {protocol.StepFetch, protocol.ReasonFetchFailed},
+	}
 	for _, mode := range []string{"dirty", "staged", "ignored", "local commit", "wrong branch", "detached", "operation", "index lock", "assume unchanged", "wrong origin", "wrong push origin", "failed fetch"} {
 		t.Run(mode, func(t *testing.T) {
 			g, s, r, source := privateBootstrapFixture(t, projectTestCatalog)
@@ -128,6 +143,9 @@ func TestPrivateCatalogBootstrapPreservesOwnerState(t *testing.T) {
 			if err == nil || report.State != "Partial" || len(report.Repositories) != 1 || report.Repositories[0].State != "Preserved" {
 				t.Fatalf("unsafe state admitted: %v %+v", err, report)
 			}
+			if got := report.Repositories[0]; [2]string{got.Step, got.Reason} != codes[mode] || report.summary() != "catalog bootstrap outcome Partial: demo="+codes[mode][1] {
+				t.Fatalf("preserved at %s/%s (%q), want %v", got.Step, got.Reason, report.summary(), codes[mode])
+			}
 			if !bytes.Equal(index, mustRead(t, filepath.Join(clone, ".git", "index"))) || !bytes.Equal(readme, mustRead(t, filepath.Join(clone, "README.md"))) || gitRun(t, g.env, clone, "rev-parse", "HEAD") != head || gitRun(t, g.env, clone, "for-each-ref", "--format=%(refname):%(objectname)", "refs/heads") != refs {
 				t.Fatal("bootstrap modified index, worktree, HEAD or owner branches")
 			}
@@ -161,6 +179,9 @@ func TestPrivateCatalogBootstrapPreservesPeerOnDefaultBranch(t *testing.T) {
 	if err == nil || report.State != "Partial" || report.Repositories[0].Target != target || gitRun(t, g.env, clone, "rev-parse", "HEAD") != head || gitRun(t, g.env, peer, "rev-parse", "HEAD") != head || !bytes.Equal(index, mustRead(t, indexPath)) || string(mustRead(t, filepath.Join(peer, "README.md"))) != "peer staged WIP\n" || gitRun(t, g.env, clone, "worktree", "list", "--porcelain") != worktrees {
 		t.Fatalf("bootstrap changed a linked default worktree: %v %+v", err, report)
 	}
+	if got := report.Repositories[0]; got.Step != protocol.StepAdvance || got.Reason != protocol.ReasonBranchInOtherWorktree {
+		t.Fatalf("peer worktree reported as %s/%s", got.Step, got.Reason)
+	}
 }
 
 func TestPrivateCatalogBootstrapRefusesSymbolicFetchDestination(t *testing.T) {
@@ -188,6 +209,16 @@ func TestPrivateCatalogBootstrapRefusesSymbolicFetchDestination(t *testing.T) {
 			report, err := RefreshPrivateProjects(context.Background(), r, s, source)
 			if err == nil || report.State == "Ready" || report.Projects[0].State != "Failed" || gitRun(t, g.env, clone, "rev-parse", "HEAD") != head || !bytes.Equal(index, mustRead(t, filepath.Join(clone, ".git", "index"))) || string(mustRead(t, filepath.Join(clone, "README.md"))) != "owner staged reference\n" || gitRun(t, g.env, privateRootPath(s), "rev-parse", "HEAD") != rootReceipt.Head || gitRun(t, g.env, clone, "symbolic-ref", "refs/remotes/origin/"+branch) != "refs/heads/main" {
 				t.Fatalf("symbolic fetch destination changed owner state: %v %+v", err, report)
+			}
+			// The reference refresh fetches the catalog branch (main); only the
+			// project's override fetches the symbolic one.
+			want := [2]string{protocol.StepFetch, protocol.ReasonReferenceUncertain}
+			if branch == "stable" {
+				want = [2]string{protocol.StepAdvance, protocol.ReasonStagedChanges}
+			}
+			if repo, project := report.Repositories[0], report.Projects[0]; [2]string{repo.Step, repo.Reason} != want ||
+				project.Reason != protocol.ReasonFetchFailed || project.Repository != "demo" || project.Cause != protocol.ReasonReferenceUncertain {
+				t.Fatalf("symbolic destination reported as %+v %+v", repo, project)
 			}
 		})
 	}
@@ -353,6 +384,18 @@ func TestPrivateCatalogBootstrapReportsFailureAsSeparateBootStep(t *testing.T) {
 	}
 	if !slices.ContainsFunc(record.Steps, func(step Step) bool { return step.Name == "project-bootstrap" && step.State == StepFail }) || !slices.ContainsFunc(record.Steps, func(step Step) bool { return step.Name == "repo" && step.State == StepOK }) {
 		t.Fatalf("bootstrap and task outcomes conflated: %+v", record.Steps)
+	}
+	// The boot record, and so the heartbeat, carries the codes; the step's
+	// first note, which status.agent.problems copies, summarises them.
+	i := slices.IndexFunc(record.Steps, func(step Step) bool { return step.Name == "project-bootstrap" })
+	if record.Steps[i].Notes[0] != "catalog bootstrap outcome Failed: CatalogUnconfirmed" || record.ProjectBootstrap == nil || record.ProjectBootstrap.State != protocol.BootstrapFailed || record.ProjectBootstrap.Reason != protocol.ReasonCatalogUnconfirmed {
+		t.Fatalf("bootstrap codes not recorded: %+v %+v", record.Steps[i], record.ProjectBootstrap)
+	}
+	st, _ := rig.beats.last()
+	if st.ProjectBootstrap == nil || st.ProjectBootstrap.Reason != protocol.ReasonCatalogUnconfirmed || !slices.ContainsFunc(st.Problems, func(step Step) bool {
+		return step.Name == "project-bootstrap" && step.Notes[0] == "catalog bootstrap outcome Failed: CatalogUnconfirmed"
+	}) {
+		t.Fatalf("heartbeat lacks the bootstrap codes: %+v %+v", st.ProjectBootstrap, st.Problems)
 	}
 }
 

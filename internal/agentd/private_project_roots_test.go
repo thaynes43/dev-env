@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
 
@@ -235,6 +236,25 @@ func TestPrivateRootsPreserveReferenceWIPWhilePreparingFreshAnchor(t *testing.T)
 }
 
 func TestPrivateRootsPreserveAmbiguousRootAndAnchorState(t *testing.T) {
+	// reason, repository and cause, as status reports them.
+	codes := map[string][3]string{
+		"root dirty":          {protocol.ReasonRootUnproven},
+		"root staged":         {protocol.ReasonRootUnproven},
+		"root ignored":        {protocol.ReasonRootUnproven},
+		"root unknown":        {protocol.ReasonRootUnproven},
+		"root local commit":   {protocol.ReasonRootUnproven},
+		"root operation":      {protocol.ReasonRootUnproven},
+		"root exclusion":      {protocol.ReasonRootUnproven},
+		"root config":         {protocol.ReasonRootUnproven},
+		"anchor dirty":        {protocol.ReasonAnchorUnproven, "demo", protocol.ReasonWorkingTreeDiffers},
+		"anchor staged":       {protocol.ReasonAnchorUnproven, "demo", protocol.ReasonStagedChanges},
+		"anchor ignored":      {protocol.ReasonAnchorUnproven, "demo", protocol.ReasonUntrackedFiles},
+		"anchor local commit": {protocol.ReasonAnchorUnproven, "demo"},
+		"anchor attached":     {protocol.ReasonAnchorUnproven, "demo"},
+		"anchor operation":    {protocol.ReasonAnchorUnproven, "demo", protocol.ReasonGitOperationPresent},
+		"removed anchor":      {protocol.ReasonAnchorRemoved, "demo"},
+		"missing receipt":     {protocol.ReasonRootUnproven},
+	}
 	for _, mode := range []string{"root dirty", "root staged", "root ignored", "root unknown", "root local commit", "root operation", "root exclusion", "root config", "anchor dirty", "anchor staged", "anchor ignored", "anchor local commit", "anchor attached", "anchor operation", "removed anchor", "missing receipt"} {
 		t.Run(mode, func(t *testing.T) {
 			g, s, r, source := privateRootsFixture(t, projectTestCatalog)
@@ -297,6 +317,9 @@ func TestPrivateRootsPreserveAmbiguousRootAndAnchorState(t *testing.T) {
 			report, err := RefreshPrivateProjects(context.Background(), r, s, source)
 			if err == nil || report.State != "Partial" || len(report.Projects) != 1 || report.Projects[0].State != "Failed" || gitRun(t, g.env, root, "rev-parse", "HEAD") != rootHead || gitRun(t, g.env, anchor, "rev-parse", "HEAD") != anchorHead || !bytes.Equal(rootIndex, mustRead(t, filepath.Join(root, ".git", "index"))) || !bytes.Equal(anchorIndex, mustRead(t, filepath.Join(prior.Anchors["demo"].GitDir, "index"))) || !bytes.Equal(wrapper, mustRead(t, filepath.Join(root, "AGENTS.md"))) || !bytes.Equal(readme, mustRead(t, filepath.Join(anchor, "README.md"))) || !bytes.Equal(config, mustRead(t, filepath.Join(root, ".git", "config"))) {
 				t.Fatalf("unsafe owner state changed: %v %+v", err, report)
+			}
+			if got := report.Projects[0]; [3]string{got.Reason, got.Repository, got.Cause} != codes[mode] {
+				t.Fatalf("root refusal reported as %s@%s(%s), want %v", got.Reason, got.Repository, got.Cause, codes[mode])
 			}
 			var operation PrivateProjectRootReport
 			if readWorkspaceJSON(filepath.Join(s.StateDir, "project-roots", "sample.operation.json"), &operation) != nil || operation.State == "Ready" || operation.State == "Started" {
@@ -570,6 +593,9 @@ func TestPrivateRootsRetainOperationBeforeMutationAndFailUnretainedOutcome(t *te
 			if mode == "symlink operation" && exists(privateRootPath(s)) {
 				t.Fatal("uncertain operation path allowed root mutation")
 			}
+			if got := report.Projects[0]; got.Reason != protocol.ReasonReceiptUnconfirmed || got.Repository != "" || got.Cause != "" {
+				t.Fatalf("unretained outcome reported as %+v", got)
+			}
 		})
 	}
 }
@@ -658,6 +684,9 @@ func TestPrivateRootsRecoverAdvanceAfterAuthorityConfirmFailure(t *testing.T) {
 			report, err := RefreshPrivateProjects(context.Background(), afterMerge(r, dir, &fail), s, failConfirmWhen(source, &fail))
 			if err == nil || !fail || report.State == "Ready" || len(report.Projects) != 0 && report.Projects[0].State == "Ready" || gitRun(t, g.env, anchor, "rev-parse", "HEAD") != target {
 				t.Fatalf("fixture did not fail after the change: %v %+v", err, report)
+			}
+			if report.Reason != protocol.ReasonCatalogUnconfirmed && (len(report.Projects) == 0 || report.Projects[0].Reason != protocol.ReasonCatalogUnconfirmed) {
+				t.Fatalf("authority failure reported as %s %+v", report.Reason, report.Projects)
 			}
 			partialHead := gitRun(t, g.env, root, "rev-parse", "HEAD")
 			if mode == "root wrappers" {
@@ -1056,6 +1085,9 @@ func TestPrivateRootsStartNoMutatingStepWithoutTheReserve(t *testing.T) {
 	if err == nil || report.Projects[0].State != "Failed" || extraMerged || gitRun(t, g.env, demo, "rev-parse", "HEAD") != target || gitRun(t, g.env, extra, "rev-parse", "HEAD") != prior.Repositories[1].Target || !exists(privateRootPendingPath(s)) {
 		t.Fatalf("a mutating step started without the reserve: merged=%v %v %+v", extraMerged, err, report)
 	}
+	if got := report.Projects[0]; got.Reason != protocol.ReasonBudgetReserve {
+		t.Fatalf("reserve refusal reported as %+v", got)
+	}
 	privateRootStepReserve = reserve
 	updated := requirePrivateRootReady(t, s, r, source)
 	if gitRun(t, g.env, extra, "rev-parse", "HEAD") != target || updated.Repositories[1].Target != target || exists(privateRootPendingPath(s)) {
@@ -1082,6 +1114,9 @@ func TestPrivateRootsProveEveryFastForwardBeforeTheFirstChange(t *testing.T) {
 	report, err := RefreshPrivateProjects(context.Background(), runner, s, source)
 	if err == nil || report.Projects[0].State != "Failed" {
 		t.Fatalf("a refused fast-forward was accepted: %v %+v", err, report)
+	}
+	if got := report.Projects[0]; got.Reason != protocol.ReasonAnchorNotFastForward || got.Repository != "extra" {
+		t.Fatalf("refused fast-forward reported as %+v", got)
 	}
 	if gitRun(t, g.env, demo, "rev-parse", "HEAD") != prior.Repositories[0].Target || gitRun(t, g.env, extra, "rev-parse", "HEAD") != prior.Repositories[1].Target || gitRun(t, g.env, root, "rev-parse", "HEAD") != rootHead || exists(privateRootPendingPath(s)) {
 		t.Fatal("a refused fast-forward changed the root before its proof")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
 
 // Length caps on what a heartbeat may write into status. agentd's values are
@@ -141,6 +143,7 @@ func agentStatus(st protocol.Status, now metav1.Time) *v1alpha1.AgentStatus {
 		}
 		a.Problems = append(a.Problems, clip(line, maxProblem))
 	}
+	a.ProjectBootstrap = projectBootstrapStatus(st.ProjectBootstrap)
 	if t := st.Agent.Task; t != nil {
 		a.Task = &v1alpha1.TaskStatus{
 			ExitCode:   clampInt32(int64(t.ExitCode)),
@@ -153,6 +156,58 @@ func agentStatus(st protocol.Status, now metav1.Time) *v1alpha1.AgentStatus {
 	}
 	return a
 }
+
+// projectBootstrapStatus is status.agent.projectBootstrap from agentd's
+// report (DESIGN-006, reason codes). It copies only values the CRD accepts:
+// an unknown state drops the report, an item with an unknown state or an
+// invalid name is left out, and an unknown step, reason or cause is cleared,
+// so a newer agentd never fails an older operator's heartbeat.
+func projectBootstrapStatus(pb *protocol.ProjectBootstrap) *v1alpha1.ProjectBootstrapStatus {
+	if pb == nil || !protocol.InSet(protocol.BootstrapStates, pb.State) {
+		return nil
+	}
+	known := func(set []string, v string) string {
+		if protocol.InSet(set, v) {
+			return v
+		}
+		return ""
+	}
+	out := &v1alpha1.ProjectBootstrapStatus{State: pb.State, Reason: known(protocol.CatalogReasons, pb.Reason)}
+	if catalogRevision.MatchString(pb.CatalogRevision) {
+		out.CatalogRevision = pb.CatalogRevision
+	}
+	for _, repo := range pb.Repositories {
+		if len(out.Repositories) == protocol.MaxBootstrapRepositories {
+			break
+		}
+		if !projectcatalog.ValidName(repo.Name) || !protocol.InSet(protocol.BootstrapRepositoryStates, repo.State) {
+			continue
+		}
+		out.Repositories = append(out.Repositories, v1alpha1.ProjectBootstrapRepositoryStatus{
+			Name: repo.Name, State: repo.State,
+			Step: known(protocol.BootstrapSteps, repo.Step), Reason: known(protocol.RepositoryReasons, repo.Reason),
+		})
+	}
+	for _, project := range pb.Projects {
+		if len(out.Projects) == protocol.MaxBootstrapProjects {
+			break
+		}
+		if !projectcatalog.ValidName(project.Name) || !protocol.InSet(protocol.BootstrapProjectStates, project.State) {
+			continue
+		}
+		p := v1alpha1.ProjectBootstrapProjectStatus{
+			Name: project.Name, State: project.State,
+			Reason: known(protocol.RootReasons, project.Reason), Cause: known(protocol.RepositoryReasons, project.Cause),
+		}
+		if projectcatalog.ValidName(project.Repository) {
+			p.Repository = project.Repository
+		}
+		out.Projects = append(out.Projects, p)
+	}
+	return out
+}
+
+var catalogRevision = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 // usageStatus is status.usage from agentd's cost record (V-16). The cost is a
 // decimal string because CRDs avoid floats.

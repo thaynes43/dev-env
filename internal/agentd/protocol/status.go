@@ -68,6 +68,9 @@ type Status struct {
 	Usage            *Usage            `json:"usage,omitempty"`
 	UsageObservation *UsageObservation `json:"usageObservation,omitempty"`
 	Decision         *DecisionOutcome  `json:"decision,omitempty"`
+	// ProjectBootstrap is the boot's private catalog bootstrap, when it ran:
+	// catalog names, states, steps and reason codes only (DESIGN-006).
+	ProjectBootstrap *ProjectBootstrap `json:"projectBootstrap,omitempty"`
 	ObservedAt       time.Time         `json:"observedAt"`
 }
 

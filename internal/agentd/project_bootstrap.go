@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
 
@@ -21,7 +22,11 @@ type PrivateProjectSource struct {
 	Target     string                    `json:"target,omitempty"`
 	FetchedAt  time.Time                 `json:"fetchedAt,omitempty"`
 	State      string                    `json:"state"`
-	Detail     string                    `json:"detail"`
+	// Step and Reason are where and why a Preserved refresh stopped, from
+	// closed sets (protocol.BootstrapSteps, protocol.RepositoryReasons).
+	Step   string `json:"step,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	Detail string `json:"detail"`
 }
 
 type PrivateProjectReport struct {
@@ -37,6 +42,8 @@ type PrivateProjectReport struct {
 	Repositories           []PrivateProjectSource     `json:"repositories,omitempty"`
 	Projects               []PrivateProjectRootReport `json:"projects,omitempty"`
 	Failure                string                     `json:"failure,omitempty"`
+	// Reason is Failure's code, from protocol.CatalogReasons.
+	Reason string `json:"reason,omitempty"`
 }
 
 var errPrivateProjectBootstrap = errors.New("private project bootstrap is incomplete; inspect its private report")
@@ -62,6 +69,9 @@ func ValidatePrivateProjectBootstrap(s Settings) error {
 func RefreshPrivateProjects(ctx context.Context, r Runner, s Settings, source *ProjectCatalogSource) (report PrivateProjectReport, resultErr error) {
 	report = PrivateProjectReport{Version: 1, State: "Disabled"}
 	if err := ValidatePrivateProjectBootstrap(s); err != nil {
+		if s.PrivateProjectBootstrap || s.PrivateProjectRoots {
+			report.State, report.Reason = protocol.BootstrapFailed, protocol.ReasonConfigInvalid
+		}
 		return report, err
 	}
 	if !s.PrivateProjectBootstrap {
@@ -70,6 +80,7 @@ func RefreshPrivateProjects(ctx context.Context, r Runner, s Settings, source *P
 	ctx, cancel := context.WithTimeout(ctx, projectSyncBudget)
 	defer cancel()
 	report.State, report.StartedAt = "Failed", time.Now().UTC()
+	report.Reason = protocol.ReasonStateUncertain
 	if s.StateDir != filepath.Join(s.Home, ".agentd") || noSymlinkComponents(s.Home) != nil {
 		return report, errors.New("private bootstrap state or home is uncertain")
 	}
@@ -80,6 +91,7 @@ func RefreshPrivateProjects(ctx context.Context, r Runner, s Settings, source *P
 	if err != nil || fi.Mode().Perm() != 0o700 {
 		return report, errors.New("private bootstrap state must have mode 0700")
 	}
+	report.Reason = protocol.ReasonLockUnavailable
 	lock, err := os.OpenFile(s.statePath("project-bootstrap.lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
 	if err != nil {
 		return report, errors.New("private bootstrap lock is unavailable")
@@ -88,10 +100,11 @@ func RefreshPrivateProjects(ctx context.Context, r Runner, s Settings, source *P
 	if fi, err := lock.Stat(); err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 || syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
 		return report, errors.New("private bootstrap is already running or its lock is uncertain")
 	}
+	report.Reason = ""
 	defer func() {
 		report.FinishedAt = time.Now().UTC()
 		if writeWorkspaceJSON(s.statePath(privateProjectBootstrapFile), report) != nil {
-			report.State, report.Failure = "Failed", "private bootstrap report retention is unconfirmed"
+			report.State, report.Failure, report.Reason = "Failed", "private bootstrap report retention is unconfirmed", protocol.ReasonReportUnretained
 			resultErr = errors.New("private project bootstrap report could not be retained")
 		}
 	}()
@@ -100,11 +113,11 @@ func RefreshPrivateProjects(ctx context.Context, r Runner, s Settings, source *P
 	started := report
 	started.State = "Started"
 	if writeWorkspaceJSON(s.statePath(privateProjectBootstrapFile), started) != nil {
-		report.Failure = "private bootstrap report cannot be retained; repositories preserved"
+		report.Failure, report.Reason = "private bootstrap report cannot be retained; repositories preserved", protocol.ReasonReportUnretained
 		return report, errPrivateProjectBootstrap
 	}
 	if source == nil || source.Namespace+"/"+source.Name != s.ProjectCatalog || source.Read == nil {
-		report.Failure = "trusted accepted catalog source is missing or mismatched"
+		report.Failure, report.Reason = "trusted accepted catalog source is missing or mismatched", protocol.ReasonCatalogUnconfirmed
 		return report, errPrivateProjectBootstrap
 	}
 	// Capture once, then confirm the exact UID/RV/bytes before each repository
@@ -112,17 +125,17 @@ func RefreshPrivateProjects(ctx context.Context, r Runner, s Settings, source *P
 	reader := &projectCatalogAuthority{source: *source}
 	accepted, err := reader.read(ctx)
 	if err != nil {
-		report.Failure = "accepted catalog read is unconfirmed"
+		report.Failure, report.Reason = "accepted catalog read is unconfirmed", protocol.ReasonCatalogUnconfirmed
 		return report, errPrivateProjectBootstrap
 	}
 	catalog, err := projectcatalog.Parse(accepted.Data)
 	if err != nil {
-		report.Failure = "accepted catalog is invalid"
+		report.Failure, report.Reason = "accepted catalog is invalid", protocol.ReasonCatalogInvalid
 		return report, errPrivateProjectBootstrap
 	}
 	authority, err := captureProjectCatalogAuthority(ctx, source, catalog)
 	if err != nil || authority.accepted.UID != accepted.UID || authority.accepted.ResourceVersion != accepted.ResourceVersion {
-		report.Failure = "accepted catalog changed during capture"
+		report.Failure, report.Reason = "accepted catalog changed during capture", protocol.ReasonCatalogUnconfirmed
 		return report, errPrivateProjectBootstrap
 	}
 	report.CatalogNamespace, report.CatalogName = accepted.Namespace, accepted.Name
@@ -131,18 +144,18 @@ func RefreshPrivateProjects(ctx context.Context, r Runner, s Settings, source *P
 	for _, repo := range catalog.Repositories() {
 		owner, _, _ := strings.Cut(repo.GitHub, "/")
 		if !strings.EqualFold(owner, s.ProjectCloneOwner) {
-			report.Failure = "catalog repository is outside the configured clone owner"
+			report.Failure, report.Reason = "catalog repository is outside the configured clone owner", protocol.ReasonOwnerMismatch
 			return report, errPrivateProjectBootstrap
 		}
 	}
 	if err := ensureWorkspaceDirectory(s.ReposDir()); err != nil {
-		report.Failure = "private repository directory is uncertain"
+		report.Failure, report.Reason = "private repository directory is uncertain", protocol.ReasonStateUncertain
 		return report, errPrivateProjectBootstrap
 	}
 	s.privateProjectGit = true
 	for _, repo := range catalog.Repositories() {
 		if authority.confirm(ctx) != nil {
-			report.Failure = "accepted catalog changed or became unconfirmed; remaining repositories preserved"
+			report.Failure, report.Reason = "accepted catalog changed or became unconfirmed; remaining repositories preserved", protocol.ReasonCatalogUnconfirmed
 			return report, errPrivateProjectBootstrap
 		}
 		bounded, stop := context.WithTimeout(ctx, sharedGitPrepareBudget)
@@ -150,7 +163,7 @@ func RefreshPrivateProjects(ctx context.Context, r Runner, s Settings, source *P
 		stop()
 		report.Repositories = append(report.Repositories, observed)
 		if ctx.Err() != nil {
-			report.Failure = "catalog bootstrap time budget ended; remaining repositories preserved"
+			report.Failure, report.Reason = "catalog bootstrap time budget ended; remaining repositories preserved", protocol.ReasonTimedOut
 			return report, errPrivateProjectBootstrap
 		}
 	}
@@ -162,13 +175,13 @@ func RefreshPrivateProjects(ctx context.Context, r Runner, s Settings, source *P
 			stop()
 			report.Projects = append(report.Projects, observed)
 			if ctx.Err() != nil {
-				report.Failure = "project root time budget ended; remaining projects preserved"
+				report.Failure, report.Reason = "project root time budget ended; remaining projects preserved", protocol.ReasonTimedOut
 				return report, errPrivateProjectBootstrap
 			}
 		}
 	}
 	if authority.confirm(ctx) != nil {
-		report.Failure = "accepted catalog changed or became unconfirmed before report publication"
+		report.Failure, report.Reason = "accepted catalog changed or became unconfirmed before report publication", protocol.ReasonCatalogUnconfirmed
 		return report, errPrivateProjectBootstrap
 	}
 	report.State = "Ready"
@@ -187,33 +200,45 @@ func RefreshPrivateProjects(ctx context.Context, r Runner, s Settings, source *P
 	return report, nil
 }
 
-func refreshPrivateProjectReference(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository, authority *projectCatalogAuthority) PrivateProjectSource {
-	observed := PrivateProjectSource{Repository: repo, State: "Preserved", Detail: "reference identity or Git operation is uncertain; preserved"}
+func refreshPrivateProjectReference(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository, authority *projectCatalogAuthority) (observed PrivateProjectSource) {
+	observed = PrivateProjectSource{Repository: repo, State: "Preserved", Detail: "reference identity or Git operation is uncertain; preserved"}
+	stop := func(step string, err error, fallback string) PrivateProjectSource {
+		observed.Step, observed.Reason = step, reasonOf(err, fallback)
+		// A refresh the budget stopped reports that, unless it left staging
+		// that someone must inspect.
+		if ctx.Err() != nil && observed.Reason != protocol.ReasonStagingPreserved {
+			observed.Reason = protocol.ReasonTimedOut
+		}
+		return observed
+	}
 	clone := s.ClonePath(repo.Name)
 	if _, err := os.Lstat(clone); errors.Is(err, os.ErrNotExist) {
 		if err := cloneProjectReference(ctx, r, s, repo, authority.confirm); err != nil {
 			observed.Detail = "reference clone failed or is uncertain; existing staging and destination preserved"
-			return observed
+			return stop(protocol.StepClone, err, protocol.ReasonCloneFailed)
 		}
 	} else if err != nil {
-		return observed
+		return stop(protocol.StepInspect, nil, protocol.ReasonReferenceUncertain)
 	}
-	if validateProjectReference(ctx, r, s, repo) != nil || projectGitOperationClear(ctx, r, s, clone) != nil {
-		return observed
+	if err := validateProjectReference(ctx, r, s, repo); err != nil {
+		return stop(protocol.StepInspect, err, protocol.ReasonReferenceUncertain)
+	}
+	if err := projectGitOperationClear(ctx, r, s, clone); err != nil {
+		return stop(protocol.StepInspect, err, protocol.ReasonGitOperationPresent)
 	}
 	if authority.confirm(ctx) != nil {
 		observed.Detail = "accepted catalog changed or became unconfirmed before fetch"
-		return observed
+		return stop(protocol.StepFetch, nil, protocol.ReasonCatalogUnconfirmed)
 	}
 	target, fetched, err := fetchProjectTarget(ctx, r, s, repo)
 	observed.Target, observed.FetchedAt = target, fetched
 	if err != nil {
 		observed.Detail = "fresh reference fetch failed; reference view preserved"
-		return observed
+		return stop(protocol.StepFetch, err, protocol.ReasonFetchFailed)
 	}
-	if advancePrivateProjectReference(ctx, r, s, repo, target, authority) != nil {
+	if err := advancePrivateProjectReference(ctx, r, s, repo, target, authority); err != nil {
 		observed.Detail = "fresh source fetched; dirty, local-only, nondefault or uncertain reference view preserved"
-		return observed
+		return stop(protocol.StepAdvance, err, protocol.ReasonUncertain)
 	}
 	observed.State, observed.Detail = "Ready", "fresh default reference verified"
 	return observed
@@ -230,11 +255,11 @@ func advancePrivateProjectReference(ctx context.Context, r Runner, s Settings, r
 		}
 		branch, err := projectGit(ctx, r, s, clone, "symbolic-ref", "--quiet", "HEAD")
 		if err != nil || branch != "refs/heads/"+repo.DefaultBranch {
-			return "", errors.New("reference is detached or on a nondefault branch")
+			return "", reasonErr(protocol.ReasonNonDefaultBranch, "reference is detached or on a nondefault branch")
 		}
 		worktrees, err := projectGit(ctx, r, s, clone, "worktree", "list", "--porcelain")
 		if err != nil {
-			return "", err
+			return "", withReason(protocol.ReasonUncertain, err)
 		}
 		var path string
 		for _, line := range strings.Split(worktrees, "\n") {
@@ -242,15 +267,15 @@ func advancePrivateProjectReference(ctx context.Context, r Runner, s Settings, r
 				path = strings.TrimPrefix(line, "worktree ")
 			}
 			if line == "branch refs/heads/"+repo.DefaultBranch && path != clone {
-				return "", errors.New("default branch belongs to another worktree; preserved")
+				return "", reasonErr(protocol.ReasonBranchInOtherWorktree, "default branch belongs to another worktree; preserved")
 			}
 		}
 		head, err := projectGit(ctx, r, s, clone, "rev-parse", "--verify", "HEAD^{commit}")
 		if err != nil {
-			return "", err
+			return "", withReason(protocol.ReasonUncertain, err)
 		}
 		if _, err := projectGit(ctx, r, s, clone, "merge-base", "--is-ancestor", head, target); err != nil {
-			return "", errors.New("reference has local-only commits or uncertain ancestry")
+			return "", reasonErr(protocol.ReasonLocalOnlyCommits, "reference has local-only commits or uncertain ancestry")
 		}
 		return head, nil
 	}
@@ -262,14 +287,16 @@ func advancePrivateProjectReference(ctx context.Context, r Runner, s Settings, r
 		return nil
 	}
 	if err := authority.confirm(ctx); err != nil {
-		return err
+		return withReason(protocol.ReasonCatalogUnconfirmed, err)
 	}
 	again, err := prove()
 	if err != nil || again != head {
-		return errors.New("reference changed during clean-view proof")
+		return reasonErr(protocol.ReasonChangedDuringProof, "reference changed during clean-view proof")
 	}
 	// Git's own locks and checkout safety still apply. Never force a checkout,
 	// reset a branch, stash WIP or run hooks to make a reference look fresh.
-	_, err = projectGit(ctx, r, s, clone, "-c", "merge.autostash=false", "merge", "--ff-only", "--no-edit", "--no-autostash", target)
-	return err
+	if _, err = projectGit(ctx, r, s, clone, "-c", "merge.autostash=false", "merge", "--ff-only", "--no-edit", "--no-autostash", target); err != nil {
+		return withReason(protocol.ReasonAdvanceFailed, err)
+	}
+	return nil
 }
