@@ -162,6 +162,8 @@ jobs:
           key: controller-gen-${{ runner.os }}-${{ hashFiles('Makefile') }}
       - name: make check-generated
         run: make check-generated
+      - name: make check-layout
+        run: make check-layout
 
   # Build only, never push. No .git in the build context, so COMMIT is passed.
   image-operator:

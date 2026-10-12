@@ -75,6 +75,17 @@ check-generated: generate ## Fail if the generated files differ from what is com
 		exit 1; \
 	fi
 
+.PHONY: check-layout
+check-layout: ## Fail if a Go package under api/, cmd/ or internal/ has no line in CLAUDE.md's Layout.
+	@layout="$$(awk '/^## Layout/ {in_section = 1} in_section && /^```/ {fence++; if (fence == 2) exit; next} fence == 1' CLAUDE.md)"; \
+	missing=0; \
+	for dir in $$(find api cmd internal -name '*.go' -not -path '*/testdata/*' -exec dirname {} \; | sort -u); do \
+		if ! printf '%s\n' "$$layout" | grep -q "^$$dir/ "; then \
+			echo "CLAUDE.md Layout has no line for $$dir/"; missing=1; \
+		fi; \
+	done; \
+	exit $$missing
+
 .PHONY: lint
 lint: $(GOLANGCI_LINT) ## Run golangci-lint.
 	$(NICE) $(GOLANGCI_LINT) run --concurrency $(GO_PARALLELISM) ./...

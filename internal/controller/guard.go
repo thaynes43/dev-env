@@ -18,13 +18,21 @@ import (
 // only after a rescue in it (D-10). It deletes a session's volume only when a
 // deleted session is archived, after a verified rescue of the volume's last pod.
 // deletePod and deleteVolume are the only places in this package that delete
-// anything, and a test (TestOnlyTheGuardDeletes) keeps it that way.
+// anything, and each deletes by UID; releaseSession, releaseVolume and a few
+// named release helpers are the only ones that lift a finalizer or rewrite owner
+// references. A test (TestOnlyTheGuardDeletes) keeps it that way.
 
 // Finalizer holds a session, and its volume, until the session is rescued. A
 // deleted AgentSession is a reap (D-45): the API server keeps the object while the
-// finalizer is on it, so the garbage collector never reaches the pod or the
-// volume. The volume carries the same finalizer, so even a direct or foreground
-// delete of the volume leaves its data until the operator archives it.
+// finalizer is on it, and with the default (background) propagation the garbage
+// collector deletes dependents only once their owner is gone, so it never
+// reaches the pod or the volume. A foreground cascade is different: the garbage
+// collector deletes the dependents first, while the session still exists, so
+// it deletes the pod, which carries no finalizer. Only a human can ask for one
+// (`kubectl delete --cascade=foreground`, D-45); the API's reap route uses
+// background propagation. The volume carries the same finalizer, so a direct or
+// foreground delete of the volume leaves its data until the operator archives
+// it (TestPrivateHistoryForegroundAndBackgroundDeleteKeepProtectiveFinalizers).
 const Finalizer = v1alpha1.LabelPrefix + "rescue"
 
 // errNeedsRescue is why a suspend or a delete keeps a pod that ran: no rescue

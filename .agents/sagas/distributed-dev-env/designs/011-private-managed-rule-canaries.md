@@ -18,6 +18,11 @@ revision, exact template revision, verified immutable image, fixed bounded
 prompt/timeout/turns and idempotency key. The request contains the canary ID only;
 the fixed prompt does not contain validation marker values. No wildcard, unknown field, duplicate or caller
 override is accepted. API disabled or missing prerequisites means no creation.
+The record is trusted GitOps input, so no code refuses a marker-bearing prompt;
+tests check the rendered values instead (2026-10-12, #91 rules-003): the operator's
+pod (`TestProjectCanaryRenderedPromptAndArgsCarryNoRuleLine`) and agentd's launch
+(`TestProjectRulesReachTheAgentOnlyAsRuleInputs`) carry no line of the bound rules
+outside the rule inputs.
 
 Require trusted named catalog/clone authority, private-history retention and
 the reviewed private profile/template contract. Codex also requires the existing

@@ -361,43 +361,107 @@ func TestPrivateHistoryExecutorObservationSurvivesAbsenceWithoutStopProof(t *tes
 	}
 }
 
-// envtest has no GC controller. Submit both owner delete policies and model
-// its dependent PVC delete on the real API server; neither may lift protection.
+// envtest has no GC controller, so this test plays its part. It submits both
+// owner delete policies against a session with a real HOME volume and a real
+// running original executor pod, both owned by the session, then deletes what
+// the garbage collector would. A background delete leaves the dependents alone
+// while the session's finalizer holds it. A foreground cascade, which only a
+// human can ask for (D-45), deletes them first: the pod, which has no
+// finalizer, goes; the volume stays terminating under its finalizer. Neither
+// policy may lift protection, and the operator must neither delete the pod
+// itself, run a rescue in it, replace it, nor read its absence as a stop.
 func TestPrivateHistoryForegroundAndBackgroundDeleteKeepProtectiveFinalizers(t *testing.T) {
 	for _, policy := range []metav1.DeletionPropagation{metav1.DeletePropagationForeground, metav1.DeletePropagationBackground} {
 		t.Run(string(policy), func(t *testing.T) {
+			ctx := context.Background()
 			s := taskSession()
 			s.Name = "history-gc-" + strings.ToLower(string(policy))
 			s.Namespace = sessionNS
 			s.UID = ""
 			s.ResourceVersion = ""
 			s.Finalizers = []string{Finalizer}
-			if err := k8s.Create(context.Background(), s); err != nil {
+			if err := k8s.Create(ctx, s); err != nil {
 				t.Fatal(err)
 			}
 			home := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: HomeClaimName(s.Name), Namespace: s.Namespace, OwnerReferences: []metav1.OwnerReference{ownerRef(s)}, Finalizers: []string{Finalizer}}, Spec: corev1.PersistentVolumeClaimSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}, Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")}}}}
-			if err := k8s.Create(context.Background(), home); err != nil {
+			if err := k8s.Create(ctx, home); err != nil {
 				t.Fatal(err)
 			}
-			s.Status.PrivateHistory = &v1alpha1.PrivateHistoryStatus{Version: 1, SessionUID: string(s.UID), HomeClaim: home.Name, HomeUID: string(home.UID), BindingGeneration: s.Generation, Admission: sharedStarted, Provider: string(s.Spec.Agent), StopState: "Unknown"}
-			if err := k8s.Status().Update(context.Background(), s); err != nil {
+			const intent = "original-intent"
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: s.Name, Namespace: s.Namespace, OwnerReferences: []metav1.OwnerReference{ownerRef(s)},
+				Labels:      map[string]string{v1alpha1.LabelRevision: "original-template"},
+				Annotations: map[string]string{privateHistoryExecutorAnnotation: intent, privateHistoryHomeAnnotation: string(home.UID)}},
+				Spec: corev1.PodSpec{NodeName: "worker-a", RestartPolicy: corev1.RestartPolicyNever, Containers: []corev1.Container{{Name: ContainerName, Image: "synthetic.invalid/agent:original"}},
+					Volumes: []corev1.Volume{{Name: "home", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: home.Name}}}}}}
+			if err := k8s.Create(ctx, pod); err != nil {
 				t.Fatal(err)
 			}
-			if err := k8s.Delete(context.Background(), s, client.PropagationPolicy(policy)); err != nil {
+			pod.Status = corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Name: ContainerName, Image: pod.Spec.Containers[0].Image,
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.Now()}}}}}
+			if err := k8s.Status().Update(ctx, pod); err != nil {
 				t.Fatal(err)
 			}
-			if err := k8s.Delete(context.Background(), home, client.PropagationPolicy(policy)); err != nil {
+			originalPod := pod.DeepCopy()
+			s.Status.PodName = pod.Name
+			s.Status.PrivateHistory = &v1alpha1.PrivateHistoryStatus{Version: 1, SessionUID: string(s.UID), HomeClaim: home.Name, HomeUID: string(home.UID), BindingGeneration: s.Generation, Admission: sharedStarted, Provider: string(s.Spec.Agent), StopState: "Unknown",
+				ExecutorAttempted: true, ExecutorIntent: intent,
+				LastExecutor: &v1alpha1.PrivateExecutorStatus{PodUID: string(pod.UID), PodName: pod.Name, NodeName: pod.Spec.NodeName, Revision: "original-template", Generation: s.Generation, ConversationID: "synthetic-conversation"}}
+			if err := k8s.Status().Update(ctx, s); err != nil {
 				t.Fatal(err)
 			}
-			r := &Reconciler{Client: k8s, APIReader: k8s}
-			if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(s)}); err != nil {
+			originalHistory := s.Status.PrivateHistory.DeepCopy()
+			if err := k8s.Delete(ctx, s, client.PropagationPolicy(policy)); err != nil {
 				t.Fatal(err)
 			}
-			if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(s), s); err != nil || !controllerutil.ContainsFinalizer(s, Finalizer) {
+			// The garbage collector's part. Background: nothing while the
+			// owner exists; the volume is still deleted directly, the
+			// conservative case. Foreground: every dependent, and a pod with
+			// no finalizer is gone once its process ends (grace 0 models the
+			// end state, which no kubelet reaches in envtest).
+			if policy == metav1.DeletePropagationForeground {
+				if err := k8s.Delete(ctx, pod, client.GracePeriodSeconds(0)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := k8s.Delete(ctx, home, client.PropagationPolicy(policy)); err != nil {
+				t.Fatal(err)
+			}
+			rescue := &fakeRescuer{calls: map[string]int{}}
+			r := &Reconciler{Client: k8s, APIReader: k8s, Rescuer: rescue}
+			for range 2 {
+				if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(s)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := k8s.Get(ctx, client.ObjectKeyFromObject(s), s); err != nil || !controllerutil.ContainsFinalizer(s, Finalizer) {
 				t.Fatal("owner deletion bypassed retention")
 			}
-			if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(home), home); err != nil || !controllerutil.ContainsFinalizer(home, Finalizer) || home.DeletionTimestamp.IsZero() {
+			// The delete bumps the session's generation, and observing the
+			// same live pod records that; the executor's identity must not move.
+			last, want := s.Status.PrivateHistory.LastExecutor, originalHistory.LastExecutor
+			if last == nil || last.PodUID != string(originalPod.UID) || last.PodName != want.PodName || last.NodeName != want.NodeName || last.Revision != want.Revision || last.ConversationID != want.ConversationID ||
+				s.Status.PrivateHistory.StopState != "Unknown" || s.Status.PrivateHistory.ExecutorIntent != intent || !s.Status.PrivateHistory.ExecutorAttempted || s.Status.ArchivedAt != nil {
+				t.Fatalf("the original executor's record changed, or its loss was read as a stop: %+v -> %+v", want, last)
+			}
+			if err := k8s.Get(ctx, client.ObjectKeyFromObject(home), home); err != nil || !controllerutil.ContainsFinalizer(home, Finalizer) || home.DeletionTimestamp.IsZero() {
 				t.Fatal("dependent deletion bypassed protective finalizer")
+			}
+			if n := rescue.callsFor(pod.Name); n != 0 {
+				t.Fatalf("the operator ran %d rescues in the retained original executor", n)
+			}
+			var current corev1.Pod
+			err := k8s.Get(ctx, client.ObjectKeyFromObject(pod), &current)
+			switch policy {
+			case metav1.DeletePropagationForeground:
+				// D-45's human-only exception: the cascade took the process.
+				// The operator must not put a replacement in its place.
+				if !apierrors.IsNotFound(err) {
+					t.Fatalf("after a foreground cascade the operator recreated or kept a pod: uid=%s err=%v", current.UID, err)
+				}
+			default:
+				if err != nil || current.UID != originalPod.UID || !current.DeletionTimestamp.IsZero() || !apiequality.Semantic.DeepEqual(current.Spec, originalPod.Spec) || current.Status.Phase != corev1.PodRunning {
+					t.Fatalf("a background delete lost or changed the original executor pod: err=%v", err)
+				}
 			}
 		})
 	}

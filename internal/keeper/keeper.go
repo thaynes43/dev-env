@@ -9,11 +9,19 @@
 // re-reading the Lease right before the call (D-52).
 //
 // Plan 01 builds the first credential, the haynes-dev-bot installation token,
-// minted every 40 minutes into dev-agents/dev-env-gh-token (D-52). Each
-// credential is a Job with its own schedule, so the later ones (the Max login,
-// the Codex login, the ops bot's token) are new Jobs on the same loop. The
-// keeper's HTTPS endpoint for the operator (the login ceremony, status, archive;
-// DESIGN-001 6.10) and its expiry pages are later plans too.
+// minted every 40 minutes into dev-agents/dev-env-gh-token (D-52). A Job here
+// is for a credential that is safe to mint again: Keeper.attempt retries a
+// failed refresh with backoff, and it keeps no durable intent and checks no
+// fence before the call. Only non-rotating credentials (today, the gh
+// installation token) may be Jobs. A rotating login must never be one:
+// replaying a refresh token whose rotation response was lost revokes the whole
+// token family (CLAUDE.md, hard rules). Rotating logins run as their own
+// serialized leader runnable with a durable intent journal and a Lease budget
+// fence before every refresh, as codexWorker does for the Codex login (Run adds
+// it beside the Keeper); the Proxmox credential grants are a separate
+// journaled credentialWorker too. The keeper's HTTPS endpoint for the operator
+// (the login ceremony, status, archive; DESIGN-001 6.10) and its expiry pages
+// are later plans.
 package keeper
 
 import (
