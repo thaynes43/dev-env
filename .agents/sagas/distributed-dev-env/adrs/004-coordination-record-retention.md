@@ -180,4 +180,9 @@ enabling it. Everything stays default off until the enabling haynes-ops change.
 Acceptance needs an envtest proof that a record is archived and verified before
 it is deleted, and that the delete is refused when the archive entry is missing
 or wrong, when the owner is present, and when absence is Unknown. Installed
-acceptance follows on a disposable non-private Session.
+acceptance (R7) records the installed checks once retention is on: the mount,
+the PV's `Retain` policy, the delete right, the refused agent exec and a
+complete pass. An end-to-end installed release needs a genuinely absent owner.
+With the installed private-history flag no Session can be one until follow-up
+F1, so that release is recorded after F1, or earlier only from an optional
+synthetic record that Tom makes.
