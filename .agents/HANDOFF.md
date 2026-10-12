@@ -32,9 +32,12 @@ candidate's response-size finding was corrected before decoding; its focused
 HTTP regression, affected lint and independent full native review passed.
 Required CI passed. Release #211 merged as `c2ac2ab7`, and
 [v2.23.0](https://github.com/thaynes43/dev-env/releases/tag/v2.23.0) was published at
-03:09:41 UTC. Its actual merged-source local client remains a gate before any
-provider starts. The failed build preparation is preserved; its successor binds
-the actual `4c1e0c37` source and correct file classification.
+03:09:41 UTC. Its actual merged-source local client `f136b205` was built once
+offline at low parallelism; native saved review `693f1b3e` passed 483 checks and
+root accepted the unsigned local build. It has never been invoked or installed
+globally. The failed build preparation is preserved; its successor binds the
+actual `4c1e0c37` source and all 67 unchanged, four changed and two added files.
+This build supplies no runtime authority; the Directory TLS gate below remains.
 
 Q-24 blocks acceptance of fully isolated native Codex sessions, as well as the
 fleet UX. Pinned 0.160.1 native chats share one app-server harness; separate tool

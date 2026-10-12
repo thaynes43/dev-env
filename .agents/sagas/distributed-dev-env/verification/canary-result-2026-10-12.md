@@ -120,10 +120,16 @@ binding `2d545ffd` verifies the squash tree and all eight reviewed files in a
 fresh task worktree. [Release #211](https://github.com/thaynes43/dev-env/pull/211)
 merged as `c2ac2ab70ef34adc17145ac6f71b5051a3e1bfae`; native release review
 `3393548e` and required CI `38197327898` passed. [v2.23.0](https://github.com/thaynes43/dev-env/releases/tag/v2.23.0)
-was published at 03:09:41 UTC. The actual merged-source local client remains a
-gate before provider execution. Its first inert build preparation remains HOLD
-for an incorrect source-file classification; the successor must bind the actual
-merge and all 67 unchanged, four changed and two added source files.
+was published at 03:09:41 UTC. Its first inert build preparation remains HOLD
+for an incorrect source-file classification. Native successor preparation
+`0027d851` binds the actual merge and all 67 unchanged, four changed and two added
+source files; exact final plan review `9e7bc3d4` passed plan `7b744541`.
+One cached offline build produced local client `f136b205`, static ELF, mode 0700,
+11,006,555 bytes. Saved receipt `85ddd864` and native review `693f1b3e` passed
+483 checks, including clean source before/after, exact VCS metadata, all source
+and tool hashes, ten Git reads, one build and one metadata command. Root accepted
+the local build. It remains an unsigned `dev` binary, never invoked or installed
+globally, and grants no runtime authority. The Directory TLS gate still applies.
 The held candidate and prior checks are preserved.
 Private delivery ACK and complete native history remain
 Unknown. No runtime request was used to discover this client gap.

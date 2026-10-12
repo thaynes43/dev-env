@@ -7,7 +7,9 @@ CI, native source review and a fresh accepted baseline. One saved post observati
 and independent source-equivalence review support separate root acceptance
 `f610a2d6` of image delivery and preservation; its original exact-revision HOLD is
 retained unchanged. Source #210 and release #211 ship the bounded named Session
-reader in v2.23.0; its actual merged-source local client remains a runtime gate.
+reader in v2.23.0; its actual merged-source local client `f136b205` passed saved
+build review `693f1b3e` and root local-build acceptance. It remains uninvoked;
+the consumed Directory TLS attempt and trust correction remain runtime gates.
 Neither permanent provider probe has run. Global private admission remains off,
 actual rule loading and the owner pilot remain unaccepted, and Q-24 is pending.
 Q-24 also gates fully isolated native Codex-session acceptance: one paired entry's
