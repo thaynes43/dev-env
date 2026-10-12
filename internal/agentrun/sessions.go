@@ -86,6 +86,11 @@ func note(s apiv1.Session) string {
 	if s.Outdated {
 		parts = append(parts, "outdated")
 	}
+	// An ended pod's session is Failed whatever its task did (D-44); the task's
+	// own result tells a success from a failure (DESIGN-021).
+	if v := s.TaskVerdict(); v != nil {
+		parts = append(parts, "task "+v.State)
+	}
 	switch s.Phase {
 	case "Pending":
 		if s.Pending != "" {
@@ -165,6 +170,9 @@ func (a *app) printSession(s apiv1.Session) {
 	}
 	if s.Pending != "" && s.Phase == "Pending" {
 		row("pending", "%s", s.Pending)
+	}
+	if v := s.TaskVerdict(); v != nil {
+		row("task result", "%s (%s): %s", v.State, v.Reason, v.Message)
 	}
 	row("repo", "%s from %s", s.Repo, firstOf(s.Base, "origin/main"))
 	row("agent", "%s %s, %s, %s mode", s.Agent, s.Model, effortText(s.Effort), s.Mode)
@@ -369,6 +377,9 @@ func (a *app) fleet(ctx context.Context, args []string) error {
 		}
 		if s.Outdated {
 			parts = append(parts, "outdated")
+		}
+		if s.TaskResult != nil {
+			parts = append(parts, "task "+s.TaskResult.State)
 		}
 		if s.Phase == "Pending" && s.Pending != "" {
 			parts = append(parts, s.Pending)

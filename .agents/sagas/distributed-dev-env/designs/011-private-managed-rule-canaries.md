@@ -53,6 +53,10 @@ identity without allowing a replacement; normal history-retention initialization
 cannot remove this finalizer. Never release or rearm it in this unit.
 The controller independently validates the policy/binding and confirms the
 retention latch before creating its one permitted Pod.
+Pod absence never re-arms that latch. The one exception, since 2026-10-12, is
+a recorded known non-attempt: no Create was called for the latched intent, so
+admission may resume it once per mark
+([DESIGN-019](019-private-pod-retention-guard.md#a-known-non-attempt-after-the-executor-latch--2026-10-12-history-01-174)).
 An authenticated canary Session cannot create other Sessions through legacy
 dispatch routes. Heartbeat and observation remain available. Disabling child
 decision rendering alone does not establish the one-executor boundary.

@@ -57,6 +57,7 @@ func (s *Server) fleet(ctx context.Context, _ http.ResponseWriter, r *http.Reque
 		if a := v.AgentStatus; a != nil {
 			fs.AgentState, fs.LastHeartbeat = a.State, a.LastHeartbeat
 		}
+		fs.TaskResult = v.TaskVerdict()
 		f.Sessions = append(f.Sessions, fs)
 		if fs.Node != "" {
 			nodes[fs.Node]++

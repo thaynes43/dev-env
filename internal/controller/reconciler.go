@@ -46,6 +46,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/sessiondirectory"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
@@ -1002,12 +1003,24 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 			return nil
 		}
 	}
+	// reserved is the executor latch this reconcile wrote. Until Create is
+	// called for it, a return caused by a failed observation records a known
+	// non-attempt over that same write, so a transient error cannot burn a
+	// one-shot canary (DESIGN-019). A Create that was called is never recorded
+	// that way, and neither is a latch another reconciler wrote.
+	var reserved executorReservation
 	if privateHistoryProtected(s) {
 		if err := r.bindPrivateHistoryHome(ctx, s); err != nil {
 			obs.removalBlocked = err
 			return nil
 		}
-		if err := r.reservePrivateExecutor(ctx, s); err != nil {
+		var err error
+		reserved, err = r.reservePrivateExecutor(ctx, s)
+		if err != nil {
+			// An acknowledged latch write whose confirmation failed may be
+			// marked; no Create was called for it. An unacknowledged write
+			// (a Conflict, or a result unknown) returns no reservation.
+			r.recordExecutorNotCreated(ctx, s, reserved)
 			obs.removalBlocked = err
 			return nil
 		}
@@ -1060,6 +1073,11 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 		}
 	}
 	if err := r.validateProjectCanary(ctx, s, t); err != nil {
+		// A failed read is a known non-attempt; a changed authority after the
+		// intent stays latched and never rearms.
+		if errors.Is(err, errCanaryUnobserved) {
+			r.recordExecutorNotCreated(ctx, s, reserved)
+		}
 		obs.removalBlocked = err
 		return nil
 	}
@@ -1176,6 +1194,7 @@ func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessio
 	ready.Reason = conditionReason(ready.Reason)
 	ready.Message = truncate(ready.Message)
 	st.Phase = phase
+	st.TaskResult = taskResult(s, st.Agent)
 	st.PendingReason = ""
 	if phase == v1alpha1.PhasePending {
 		st.PendingReason = ready.Message
@@ -1215,6 +1234,21 @@ func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessio
 	default:
 		meta.RemoveStatusCondition(&st.Conditions, ConditionOutdated)
 	}
+}
+
+// taskResult is status.taskResult: how a task-mode session's task ended, from
+// agent.task (DESIGN-021). The phase stays the pod's (D-44), so an ended canary
+// is Failed whatever its task did; this is where its success or failure shows.
+// It is a pure function of status, so a fresh operator computes the same.
+func taskResult(s *v1alpha1.AgentSession, a *v1alpha1.AgentStatus) *v1alpha1.TaskResultStatus {
+	if s.Spec.Mode != v1alpha1.ModeTask || a == nil || a.Task == nil {
+		return nil
+	}
+	t := a.Task
+	// The heartbeat clips the subtype to 128 bytes, so the sentence stays far
+	// inside the schema's 1024.
+	v := apiv1.TaskResult{ExitCode: t.ExitCode, TimedOut: t.TimedOut, Subtype: t.Subtype, IsError: t.IsError, NumTurns: t.NumTurns}.Verdict()
+	return &v1alpha1.TaskResultStatus{State: v1alpha1.TaskResultState(v.State), Reason: v.Reason, Message: v.Message}
 }
 
 // reasonPattern is metav1.Condition's rule for a reason. Reasons from the

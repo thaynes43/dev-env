@@ -98,3 +98,76 @@ startup, lint or generation repeat. Packet
 `92cb9dcf525d4aeeb39ee2a61ec48f8f3c1493ebabcfc557755b7218c860ee12`
 preserves 565 main incoming files and 102 older artifacts. Final native review
 and required CI remain gates; installed operator source predates this correction.
+
+## A known non-attempt after the executor latch — 2026-10-12 (history-01, #174)
+
+Review finding history-01: `ensure()` latches `executorAttempted` and its intent,
+then re-validates the canary authority, then creates the Pod. A failed read in
+that re-validation (a timeout or 429 on the catalog, templates or common-rule
+read) returned before Create with the latch set, and admission then refused
+forever. One transient read consumed the one canary attempt with no provider
+execution. A lost confirmation of the latch write itself did the same.
+
+Rule: the operator records a known non-attempt and may resume the same intent.
+A new optional `status.privateHistory.executorNotCreated` is set, by a confirmed
+status write, only when this reconcile returned before calling Create for the
+recorded intent because an observation failed: the latch write's own
+confirmation, or a read (other than NotFound) in the post-latch canary
+re-validation. Admission accepts an attempted intent marked not created. It
+re-arms the same intent (clears the mark by a confirmed write) and runs the same
+final validation before its one Create. The schema refuses the mark once an
+executor was observed or without an attempt. With the mark set, the absent Pod
+is expected and is not PreservationUnknown. An observed executor for the intent
+clears the mark, so the attempt is latched as usual.
+
+Re-arm never starts on a failing read. `ensure()` runs the full canary
+validation before admission and before the clearing write, so a read failure
+that lasts stops there and makes no status write. Only an intermittent failure
+that passes that validation and fails the post-latch one repeats the clear and
+mark writes. For independent failures that happens on at most a quarter of
+reconciles, and every repeat must pass the earlier validation again.
+
+A reconcile marks only its own latch write. `reservePrivateExecutor` returns the
+intent it wrote and the Session `resourceVersion` that its own acknowledged
+write produced. The mark is written only while the Session is still at that
+version, and the write carries it as its precondition. Two reconcilers can
+overlap during a leader handover and race to clear one mark: one clear lands
+and its reconciler goes on to Create; the other gets a Conflict, or loses the
+response. That reconciler has no write of its own, so it records nothing. Before
+this rule (PR #222 review) it re-read the Session, found the mark cleared for
+the same intent, and set it again over a Create in flight. When anything
+else changed the Session after the reconcile's own write, the operator cannot
+tell that change from a peer's re-arm, so the attempt stays latched.
+
+Focused tests: `TestProjectCanaryTransientFailureAfterIntentResumesSameIntentOnce`
+(a 503 on the post-latch catalog read, and on the latch confirmation, each create
+no Pod, record the mark, then create exactly one Pod with the original intent),
+`TestProjectCanaryPersistentReadFailureAfterMarkWritesNothing` (a lasting 429
+makes no status write and no Pod, and healed reads create exactly one),
+`TestProjectCanaryNonAttemptMarkCoversOnlyItsOwnLatchWrite` (a peer's clear lands
+first and this reconcile's clear conflicts or loses its response: the mark stays
+cleared; a Session moved after the reconcile's own write stays latched without a
+mark), `TestPrivateHistoryWriteRefusesAFieldTheSchemaPruned`,
+`TestPrivateHistoryNotCreatedMarkYieldsToObservedExecutor` and the schema cases in
+`TestPrivateHistoryExecutorNotCreatedMark`.
+
+Unchanged, deliberately:
+
+- An authority change after the intent, a refusal on observed facts, stays
+  latched (`TestProjectCanaryAuthorityLossAfterIntentNeverRearms`).
+- Any Create error stays latched. A POST that failed may still have been
+  stored: client-go repeats a POST after a 5xx with Retry-After, so even a
+  final 403 does not prove that no Pod was created.
+- Absence still never authorizes a replacement, and an uncertain attempt is
+  still PreservationUnknown.
+- Post-latch task-budget steps keep today's behavior. Private budget dispatch is
+  #154's separate acceptance; canaries are never budget-bound.
+- The API wire view is unchanged; the strict once clients refuse unknown fields.
+
+The CRD change reaches haynes-ops by the usual copy before the operator pin. A
+stale schema prunes the mark, and the attempt stays latched, which is the
+previous behavior. The confirmation fails because `writePrivateHistory` compares
+the stored record with the record it meant to write. It used to compare with the
+server's response, which `Status().Update` copies into the object it sends. A
+pruned field is missing from both, so that check passed and the operator logged
+a non-attempt it had not stored (PR #222 review).

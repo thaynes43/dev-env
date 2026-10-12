@@ -106,3 +106,19 @@ Malformed raw provider protocol UTF-8 refuses before JSON parsing can substitute
 characters. Mark capture Unknown and preserve any already accepted private
 prefix; a complete=true event cannot override this uncertainty. CAPTURE-R1
 regression and Common195 integration retain the original failed/uncertain packets.
+
+## A gap freezes the capture — 2026-10-12 (history-02, #174)
+
+Review finding history-02 showed that the Claude path kept accepting assistant
+text after a gap. `claude()` and `text()` marked the capture Unknown on a
+malformed or non-UTF-8 line, a foreign or missing init, a nil message or a
+chunk overflow, then appended the next valid assistant text straight onto the
+accepted prefix. The published chunk was text that never existed contiguously.
+
+Rule: the first gap ends capture. Once the capture is Unknown, `claude()` and
+`text()` accept nothing more. The retained chunks are exactly the prefix
+accepted before the gap, labelled Unknown. The overflow case shares `text()`,
+so it holds for Codex too; Codex's parser already stopped on a malformed line.
+No retry, replay or relabelling follows. Focused tests in
+`internal/agentd/managed_output_test.go` cover the Claude valid/invalid/valid
+sequence and the overflow-then-ASCII sequence.

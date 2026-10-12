@@ -529,6 +529,18 @@ never made). This source client does
 not enable general private admission or select Codex fleet routing. See
 [the ID-only client contract](../.agents/sagas/distributed-dev-env/designs/021-canary-cli.md).
 
+### Tell a finished task's success from its failure
+
+A canary's Pod always ends at its 600-second active deadline, so its session
+phase is Failed whatever the task did (D-44). Read the task's own result instead.
+`agent-run show NAME` prints a `task result` row. `list` and `fleet` add
+`task Succeeded`, `task Failed`, `task TimedOut` or `task Unknown` to NOTE, and
+`kubectl get agentsessions` shows the state in the `Task` column. With `--json`,
+the facts are in `agentStatus.task`. Unknown means exit 0 with no success
+result event. Phase still counts it as Failed: `agent-run list --state Failed`
+and the `dev_env_sessions{phase="Failed"}` metric include a canary that
+succeeded. Read the task result, not those counts, for the outcome. See [the task result rule](../.agents/sagas/distributed-dev-env/designs/021-canary-cli.md#the-task-result-of-an-ended-session--2026-10-12-history-04-174).
+
 ### Read a fixed probe's retained result
 
 For a separately reviewed read, after accepting the original HTTP201 receipt,

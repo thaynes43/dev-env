@@ -3,9 +3,11 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -14,6 +16,34 @@ import (
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/templates"
 )
+
+// errCanaryUnobserved is a canary refusal caused by a failed read, not by a
+// changed authority. After the executor latch it is a known non-attempt
+// (DESIGN-019): ensure() returned before any Pod create for the intent.
+var errCanaryUnobserved = fmt.Errorf("%w: an uncached canary authority read failed", projectcanary.ErrRefused)
+
+// readTracker notes whether any read failed for a reason other than NotFound.
+// A missing object is an authority change; any other error says nothing about
+// the authority, only that it could not be observed.
+type readTracker struct {
+	client.Reader
+	failed bool
+}
+
+func (t *readTracker) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	return t.note(t.Reader.Get(ctx, key, obj, opts...))
+}
+
+func (t *readTracker) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	return t.note(t.Reader.List(ctx, list, opts...))
+}
+
+func (t *readTracker) note(err error) error {
+	if err != nil && !apierrors.IsNotFound(err) {
+		t.failed = true
+	}
+	return err
+}
 
 func (r *Reconciler) validateProjectCanary(ctx context.Context, s *v1alpha1.AgentSession, t *templates.Templates) error {
 	if s.Spec.ProjectCanary == nil {
@@ -26,24 +56,31 @@ func (r *Reconciler) validateProjectCanary(ctx context.Context, s *v1alpha1.Agen
 	if r.RetainedCommonRules != (record.CommonRevision != "") {
 		return projectcanary.ErrRefused
 	}
-	var fresh v1alpha1.AgentSession
-	if r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &fresh) != nil || fresh.UID == "" || fresh.UID != s.UID || fresh.Generation != s.Generation || !fresh.DeletionTimestamp.IsZero() || wantsPodGone(&fresh) || record.MatchSession(&fresh, r.PrivateProjectCloneOwner) != nil || !privateHistoryProtected(&fresh) || budgetBound(&fresh) {
+	reader := &readTracker{Reader: r.APIReader}
+	refuse := func() error {
+		if reader.failed {
+			return errCanaryUnobserved
+		}
 		return projectcanary.ErrRefused
 	}
-	evidence, err := projectcanary.ResolveCatalog(ctx, r.APIReader, r.PrivateProjectCloneOwner, record)
+	var fresh v1alpha1.AgentSession
+	if reader.Get(ctx, client.ObjectKeyFromObject(s), &fresh) != nil || fresh.UID == "" || fresh.UID != s.UID || fresh.Generation != s.Generation || !fresh.DeletionTimestamp.IsZero() || wantsPodGone(&fresh) || record.MatchSession(&fresh, r.PrivateProjectCloneOwner) != nil || !privateHistoryProtected(&fresh) || budgetBound(&fresh) {
+		return refuse()
+	}
+	evidence, err := projectcanary.ResolveCatalog(ctx, reader, r.PrivateProjectCloneOwner, record)
 	b := fresh.Spec.ProjectCanary
 	if err != nil || evidence.UID != b.CatalogUID || evidence.ResourceVersion != b.CatalogResourceVersion || string(evidence.Snapshot) != fresh.Annotations[v1alpha1.AnnotationProjectSnapshot] {
-		return projectcanary.ErrRefused
+		return refuse()
 	}
 	if r.RetainedCommonRules {
 		common, err := commonrules.BoundSession(&fresh)
-		if err != nil || record.CheckCommon(common) != nil || common.Confirm(ctx, r.APIReader) != nil {
-			return projectcanary.ErrRefused
+		if err != nil || record.CheckCommon(common) != nil || common.Confirm(ctx, reader) != nil {
+			return refuse()
 		}
 	}
-	current, err := projectcanary.ReadTemplates(ctx, r.APIReader, r.Templates)
+	current, err := projectcanary.ReadTemplates(ctx, reader, r.Templates)
 	if err != nil || record.ValidateTemplate(current, r.PrivateProjectCloneOwner) != nil {
-		return projectcanary.ErrRefused
+		return refuse()
 	}
 	return nil
 }

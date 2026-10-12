@@ -113,6 +113,20 @@ const (
 	OutcomeEscalated OutcomeState = "escalated"
 )
 
+// TaskResultState is how a task-mode session's task ended, the operator's
+// reading of agent.task (DESIGN-021). It sits beside the phase, which stays the
+// pod's (D-44).
+// +kubebuilder:validation:Enum=Succeeded;Failed;TimedOut;Unknown
+type TaskResultState string
+
+const (
+	TaskResultSucceeded TaskResultState = "Succeeded"
+	TaskResultFailed    TaskResultState = "Failed"
+	TaskResultTimedOut  TaskResultState = "TimedOut"
+	// TaskResultUnknown is an exit 0 with no success result event to prove it.
+	TaskResultUnknown TaskResultState = "Unknown"
+)
+
 // AgentSessionSpec is what the caller asked for. The operator's /v1 API writes
 // it; agents never write AgentSession objects themselves (DESIGN-001 6.11). The
 // operator never writes spec either: what it resolves (the default profile and
@@ -490,6 +504,13 @@ type AgentSessionStatus struct {
 	// +optional
 	Agent *AgentStatus `json:"agent,omitempty"`
 
+	// TaskResult is how a task-mode session's task ended, derived by the
+	// operator from agent.task (DESIGN-021). Phase stays the pod's: a session
+	// whose pod ended is Failed whatever its task did (D-44), so a canary that
+	// succeeded and one that failed differ here, not in Phase.
+	// +optional
+	TaskResult *TaskResultStatus `json:"taskResult,omitempty"`
+
 	// RemoteControl is the session's Remote Control entry, for remote mode
 	// (DESIGN-001 6.7).
 	// +optional
@@ -549,6 +570,7 @@ type AgentSessionStatus struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.lastExecutor) || has(self.lastExecutor)",message="last private executor cannot be erased"
 // +kubebuilder:validation:XValidation:rule="self.admission == 'Started' || size(self.homeUID) == 0",message="unknown original HOME cannot be inferred"
 // +kubebuilder:validation:XValidation:rule="!self.executorAttempted || (self.admission == 'Started' && size(self.executorIntent) > 0)",message="executor attempt requires one durable causal intent"
+// +kubebuilder:validation:XValidation:rule="!has(self.executorNotCreated) || !self.executorNotCreated || (self.executorAttempted && !has(self.lastExecutor))",message="only an executor attempt with no observed executor can be recorded as not created"
 type PrivateHistoryStatus struct {
 	// +kubebuilder:validation:Enum=1
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="retention version is immutable"
@@ -581,6 +603,13 @@ type PrivateHistoryStatus struct {
 	// +kubebuilder:validation:MaxLength=128
 	// +kubebuilder:validation:XValidation:rule="oldSelf == '' || self == oldSelf",message="executor intent cannot change"
 	ExecutorIntent string `json:"executorIntent"`
+	// ExecutorNotCreated records a known non-attempt (DESIGN-019): the operator
+	// returned before calling Create for ExecutorIntent because an observation
+	// failed. Only then may admission re-arm that same intent, once per mark. A
+	// Create that was called, whatever it returned, never sets it, and it is
+	// refused once an executor was observed.
+	// +optional
+	ExecutorNotCreated bool `json:"executorNotCreated,omitempty"`
 	// Provider identifies the configured provider without starting it.
 	// +kubebuilder:validation:MaxLength=128
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="retention provider is immutable"
@@ -709,6 +738,25 @@ type TaskStatus struct {
 	// NumTurns is the number of turns the task took.
 	// +optional
 	NumTurns int32 `json:"numTurns,omitempty"`
+}
+
+// TaskResultStatus is the operator's reading of agent.task: a state, a
+// CamelCase reason and one sentence. It is not Outcome, which is a summoned
+// session's own report.
+type TaskResultStatus struct {
+	// State is the task's result.
+	// +required
+	State TaskResultState `json:"state"`
+
+	// Reason is a CamelCase word, for example TaskSucceeded or TaskExitedNonZero.
+	// +kubebuilder:validation:MaxLength=128
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
+	// Message says how the task ended, for people.
+	// +kubebuilder:validation:MaxLength=1024
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // RemoteControlStatus is a session's Remote Control entry.
@@ -1028,6 +1076,7 @@ type RescuedRef struct {
 // +kubebuilder:printcolumn:name="Agent",type=string,JSONPath=`.spec.agent`
 // +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=`.spec.mode`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Task",type=string,JSONPath=`.status.taskResult.state`
 // +kubebuilder:printcolumn:name="Node",type=string,JSONPath=`.status.nodeName`
 // +kubebuilder:printcolumn:name="Model",type=string,JSONPath=`.spec.model`,priority=1
 // +kubebuilder:printcolumn:name="Lane",type=string,JSONPath=`.spec.lane`,priority=1

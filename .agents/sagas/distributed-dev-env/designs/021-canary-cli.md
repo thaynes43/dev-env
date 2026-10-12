@@ -145,3 +145,29 @@ refused or timed-out dial, or a name that did not resolve). The message then
 says "nothing was sent". No server saw it, so it cannot have created an
 original; whether a later create may follow is still decided by the attempt
 rules above, not by the exit code.
+
+## The task result of an ended session — 2026-10-12 (history-04, #174)
+
+Review finding history-04, checked live and read-only: canary `3bfe…` finished
+its task with exit 0 and subtype success, and canary `fc59…` with exit 1 and an
+error. Both read phase Failed with no top-level reason and a null outcome. A
+canary Pod always ends at its 600-second active deadline, because agentd
+heartbeats until SIGTERM, and D-44 makes every ended Pod's session Failed.
+
+D-44 and the phase enum stay as they are. The operator now derives
+`status.taskResult` from `status.agent.task` for task-mode sessions, as a pure
+function of status in `observe()`: state `Succeeded`, `Failed`, `TimedOut` or
+`Unknown`, a CamelCase reason and one sentence. TimedOut wins when agentd
+stopped the task at `limits.timeout`. A non-zero exit is Failed
+(`TaskExitedNonZero`), and so is an error flag or an `error*` subtype
+(`TaskReportedError`). Succeeded needs exit 0 and the result subtype `success`.
+An exit 0 without it is Unknown (`TaskResultMissing`), because nothing reported
+success. A `Task` printer column shows the state beside Phase.
+
+`agent-run show` prints a `task result` row. `list` and `fleet` put
+`task <state>` in NOTE, and the fleet view carries `taskResult`. The Session
+wire view gains no field: the strict once clients (this design and DESIGN-023)
+refuse unknown fields, and `agentStatus.task` already carries the facts, so
+clients derive the same result with the shared `apiv1` function.
+`status.outcome` stays the summoned session's own report and decision
+escalation; the operator never writes it.
