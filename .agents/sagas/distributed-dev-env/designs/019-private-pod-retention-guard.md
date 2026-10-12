@@ -98,3 +98,39 @@ startup, lint or generation repeat. Packet
 `92cb9dcf525d4aeeb39ee2a61ec48f8f3c1493ebabcfc557755b7218c860ee12`
 preserves 565 main incoming files and 102 older artifacts. Final native review
 and required CI remain gates; installed operator source predates this correction.
+
+## A known non-attempt after the executor latch — 2026-10-12 (history-01, #174)
+
+Review finding history-01: `ensure()` latches `executorAttempted` and its intent,
+then re-validates the canary authority, then creates the Pod. A failed read in
+that re-validation (a timeout or 429 on the catalog, templates or common-rule
+read) returned before Create with the latch set, and admission then refused
+forever. One transient read consumed the one canary attempt with no provider
+execution. A lost confirmation of the latch write itself did the same.
+
+Rule: the operator records a known non-attempt and may resume the same intent.
+A new optional `status.privateHistory.executorNotCreated` is set, by a confirmed
+status write, only when this reconcile returned before calling Create for the
+recorded intent because an observation failed: the latch write's own
+confirmation, or a read (other than NotFound) in the post-latch canary
+re-validation. Admission accepts an attempted intent marked not created. It
+re-arms the same intent (clears the mark by a confirmed write) and runs the same
+final validation before its one Create. The schema refuses the mark once an
+executor was observed or without an attempt.
+
+Unchanged, deliberately:
+
+- An authority change after the intent, a refusal on observed facts, stays
+  latched (`TestProjectCanaryAuthorityLossAfterIntentNeverRearms`).
+- Any Create error stays latched. A POST that failed may still have been
+  stored: client-go repeats a POST after a 5xx with Retry-After, so even a
+  final 403 does not prove that no Pod was created.
+- Absence still never authorizes a replacement, and an uncertain attempt is
+  still PreservationUnknown.
+- Post-latch task-budget steps keep today's behavior. Private budget dispatch is
+  #154's separate acceptance; canaries are never budget-bound.
+- The API wire view is unchanged; the strict once clients refuse unknown fields.
+
+The CRD change reaches haynes-ops by the usual copy before the operator pin. A
+stale schema prunes the mark, its confirmation fails, and the attempt stays
+latched, which is the previous behavior.
