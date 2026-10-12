@@ -7,6 +7,30 @@ the saga. To continue building, follow the
 in the Claude pickup brief. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## Coordination review fixes, source only — 2026-10-12
+
+PR #223 fixes the five #175 coordination review findings and the six findings
+from its own review. TaskClaims, published contexts and inbox messages now have
+per-Session and per-project bounds (429 `limit_exceeded`). The coordination
+fences compare the Session's binding, not its resourceVersion, so a heartbeat
+no longer refuses a valid create; status-borne authority is rechecked
+separately. A catalog rename of a repository key no longer mints a second
+claim owner. A mixed-case GitHub repository can publish. An unconfirmed
+directory read is 503, not absence. The rules are in DESIGN-010, DESIGN-013,
+DESIGN-014 and DESIGN-017.
+
+**Not in effect yet.** The operator change needs a release, the signed operator
+image and a haynes-ops pin. agentd's limit message needs the agent image.
+
+- The bounds are lifetime bounds, because these records are never deleted. The
+  operator exports the counts as `dev_env_coordination_records*`. Recovery is a
+  manual delete by Tom, after an export, with the preservation duty in
+  DESIGN-010. Retention is parked in plan 11 and needs an owner question.
+- **Rollback floor.** Once the new operator has written one coordination
+  record, do not roll the operator back below the release that carries this
+  change. Older operators fail that project's claim, inbox and context lists
+  and gets with 503 (DESIGN-010 "At the bound, recovery and rollback").
+
 ## Codex original result read under Q-27 — 2026-10-12 UTC
 
 The one Q-27 reader correction passed 23 focused tests and independent native

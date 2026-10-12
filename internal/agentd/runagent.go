@@ -92,7 +92,9 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		return 1
 	}
 	defer func() {
-		if capture.finish(l, res.Seen && !res.IsError && !protocolRefused) != nil {
+		if err := capture.finish(l, res.Seen && !res.IsError && !protocolRefused); errors.Is(err, ErrContextLimit) {
+			_, _ = fmt.Fprintln(pane, "agentd: managed output publication refused:", err)
+		} else if err != nil {
 			_, _ = fmt.Fprintln(pane, "agentd: managed output retention or publication is unconfirmed")
 		}
 	}()

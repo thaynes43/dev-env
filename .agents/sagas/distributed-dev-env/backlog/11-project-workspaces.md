@@ -168,6 +168,35 @@ namespaced operator get/create/list Role and signed API promotion are delivery
 gates; installed contention, inbox/acknowledgements and budget/handoff linkage
 remain separate. Initial fetch pin and executor stop are Unknown.
 
+### Coordination record retention (parked)
+
+Parked 2026-10-12 from the review of PR #223 (#175). It needs an owner
+decision before any code.
+
+TaskClaims, published contexts and inbox messages are immutable and never
+deleted. Their per-Session and per-project bounds
+([DESIGN-010](../designs/010-atomic-task-claims.md) "At the bound, recovery and
+rollback") are therefore lifetime bounds. A project that reaches one refuses
+every new record of that kind with 429 `limit_exceeded`, for good, including
+managed canary output capture. The defaults are, per Session and per project:
+claims 512 and 4096, publications 128 and 1024, messages 512 and 4096. Today
+the counts are exported as `dev_env_coordination_records*` metrics, and the
+only recovery is a manual kubectl delete by Tom, after an export, with the
+preservation duty in DESIGN-010.
+
+Open decisions, to put to Tom one at a time:
+
+1. Which history must survive: claims as ownership history, publications as
+   stopped context, messages after acknowledgement.
+2. Whether a record is archived (for example to the shelf) before deletion, and
+   who or what may delete it. The operator's Role has no delete today.
+3. Whether the bounds then count live records only, and how they are sized.
+
+After the ruling: an ADR and design amendments, the haynes-ops Role change, a
+retention runnable with an envtest proof, and a haynes-ops alert when
+`dev_env_coordination_records` reaches, for example, 80% of
+`dev_env_coordination_record_limit{scope="project"}` for its kind.
+
 ### Parent issues
 
 [DESIGN-012](../designs/012-owned-root-wrapper-permissions.md) corrects generated

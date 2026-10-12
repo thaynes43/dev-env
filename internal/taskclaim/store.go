@@ -266,8 +266,11 @@ func (s KubeStore) sameWork(ctx context.Context, spec coord.TaskClaimSpec) (*coo
 		return c.Spec.Identity != spec.Identity && c.Spec.Identity.Project == spec.Identity.Project && c.Spec.Identity.TaskKey == spec.Identity.TaskKey &&
 			strings.EqualFold(c.Spec.Provenance.GitHub, spec.Provenance.GitHub)
 	}
+	// One work label holds a claim per repository key the GitHub repository has
+	// had, so a page of 8 is plenty. A further page is unread, not absent: it
+	// could hold the same work, so the lookup is unconfirmed.
 	var list coord.TaskClaimList
-	if err := s.Live.List(ctx, &list, client.InNamespace(s.Namespace), client.MatchingLabels{ProjectLabel: spec.Identity.Project, WorkLabel: work}, client.Limit(8)); err != nil || len(list.Items) > 8 {
+	if err := s.Live.List(ctx, &list, client.InNamespace(s.Namespace), client.MatchingLabels{ProjectLabel: spec.Identity.Project, WorkLabel: work}, client.Limit(8)); err != nil || len(list.Items) > 8 || list.Continue != "" {
 		return nil, ErrUnavailable
 	}
 	for i := range list.Items {

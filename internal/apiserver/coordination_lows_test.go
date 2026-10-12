@@ -2,6 +2,7 @@ package apiserver
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/inbox"
+	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 	"github.com/thaynes43/dev-env/internal/sessiondirectory"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
@@ -62,27 +64,39 @@ func bindSessionSnapshot(t *testing.T, f *fixture, name, document, repo string) 
 	}
 }
 
-// heartbeatDuringCatalogRead writes only Session status (what agentd's
-// heartbeat does) while the API rereads the named catalog. That bumps each
-// Session's resourceVersion without changing identity, spec or binding.
-func heartbeatDuringCatalogRead(t *testing.T, f *fixture, names ...string) {
+// beat writes only Session status, as agentd's heartbeat does. That bumps each
+// named Session's resourceVersion without changing identity, spec or binding.
+func beat(ctx context.Context, t *testing.T, f *fixture, names ...string) {
 	t.Helper()
-	f.srv.Live = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-		if _, ok := obj.(*corev1.ConfigMap); ok {
-			for _, name := range names {
-				s := f.session(name)
-				beat := metav1.NewTime(f.now.Add(-time.Second))
-				if s.Status.Agent == nil {
-					s.Status.Agent = &v1alpha1.AgentStatus{}
-				}
-				s.Status.Agent.LastHeartbeat = &beat
-				if err := f.c.Status().Update(ctx, s); err != nil {
-					t.Fatal(err)
-				}
-			}
+	for _, name := range names {
+		s := f.session(name)
+		now := metav1.NewTime(f.now.Add(-time.Second))
+		if s.Status.Agent == nil {
+			s.Status.Agent = &v1alpha1.AgentStatus{}
+		}
+		s.Status.Agent.LastHeartbeat = &now
+		if err := f.c.Status().Update(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// changeOnGet returns a client over f.c that runs change before every Get of
+// an object of type T: a write that lands between the API's two reads.
+func changeOnGet[T client.Object](f *fixture, change func(context.Context)) client.WithWatch {
+	return interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+		if _, ok := obj.(T); ok {
+			change(ctx)
 		}
 		return c.Get(ctx, key, obj, opts...)
 	}})
+}
+
+// heartbeatDuringCatalogRead beats the named Sessions while the API rereads
+// the named catalog.
+func heartbeatDuringCatalogRead(t *testing.T, f *fixture, names ...string) {
+	t.Helper()
+	f.srv.Live = changeOnGet[*corev1.ConfigMap](f, func(ctx context.Context) { beat(ctx, t, f, names...) })
 }
 
 func TestCoordinationFenceIgnoresStatusOnlyHeartbeat(t *testing.T) {
@@ -97,7 +111,9 @@ func TestCoordinationFenceIgnoresStatusOnlyHeartbeat(t *testing.T) {
 		if w.Code != http.StatusCreated {
 			t.Fatal("status-only heartbeat refused a valid inbox publish", w.Code, w.Body.String())
 		}
-		// The accepted retry path fences the sender the same way.
+		// The accepted retry path reads no catalog. Its sender fence follows
+		// the inbox store's read of the existing message, so beat there.
+		f.srv.Inbox.Live = changeOnGet[*coord.InboxMessage](f, func(ctx context.Context) { beat(ctx, t, f, "sender") })
 		w = f.do(http.MethodPost, apiv1.InboxPath, sender, inboxRequest(f, "recipient", "beat"))
 		if w.Code != http.StatusOK {
 			t.Fatal("status-only heartbeat refused a confirmed inbox retry", w.Code, w.Body.String())
@@ -387,5 +403,110 @@ func TestPublishedContextRequiresExplicitProject(t *testing.T) {
 	var l coord.PublishedContextList
 	if err := f.c.List(context.Background(), &l); err != nil || len(l.Items) != 0 {
 		t.Fatal("publication outside the explicit project list was stored", err)
+	}
+}
+
+// managedPublishFixture binds a capture canary original whose retained history
+// names the caller's Pod as last executor, so its managed output publishes.
+func managedPublishFixture(t *testing.T) (*fixture, string, apiv1.PublishContextRequest) {
+	t.Helper()
+	f, binding := newCanaryFixture(t, "claude", interceptor.Funcs{})
+	enableContexts(f)
+	record := binding.Record
+	record.CaptureOutput = true
+	raw, _ := json.Marshal([]projectcanary.Record{record})
+	policy, err := projectcanary.Parse(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.srv.PrivateProjectCanaries = policy
+	token := contextSession(t, f, record.SessionName(), clientSA)
+	s := f.session(record.SessionName())
+	s.Spec = binding.Session.Spec
+	s.Spec.ProjectCanary.CaptureOutput = true
+	s.Spec.ProjectCanary.PolicyDigest = record.Digest()
+	s.Annotations, s.Labels, s.Finalizers = binding.Session.Annotations, binding.Session.Labels, binding.Session.Finalizers
+	if err := f.c.Update(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	s.Status.PrivateHistory = &v1alpha1.PrivateHistoryStatus{SessionUID: string(s.UID), LastExecutor: &v1alpha1.PrivateExecutorStatus{PodUID: f.auth[token].PodUID}}
+	if err := f.c.Status().Update(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	invocation := apiv1.ManagedInvocation(string(s.UID), f.auth[token].PodUID)
+	return f, token, apiv1.PublishContextRequest{Kind: "transcript-excerpt", Key: apiv1.ManagedOutputKey(invocation, 0), Text: "synthetic managed stdout",
+		ManagedOutput: &apiv1.ManagedOutputRequest{Ordinal: 0, ConversationID: "11111111-1111-4111-8111-111111111111", Completeness: "PartialManagedOutput"}}
+}
+
+// replaceExecutor moves the retained last executor to another Pod: a status
+// write that ends the caller Pod's authority to assert managed output.
+func replaceExecutor(ctx context.Context, t *testing.T, f *fixture, name string) {
+	t.Helper()
+	s := f.session(name)
+	s.Status.PrivateHistory.LastExecutor = &v1alpha1.PrivateExecutorStatus{PodUID: "replacement-executor-uid", PodName: s.Name, Generation: s.Generation}
+	if err := f.c.Status().Update(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The publish fence ignores status, so the managed executor recheck is what
+// refuses an executor that changed during the catalog read (#223 review).
+func TestManagedOutputExecutorChangeDuringCatalogRead(t *testing.T) {
+	for _, change := range []string{"heartbeat", "executor"} {
+		t.Run(change, func(t *testing.T) {
+			f, token, req := managedPublishFixture(t)
+			name := f.auth[token].PodName
+			f.srv.Live = changeOnGet[*corev1.ConfigMap](f, func(ctx context.Context) {
+				if change == "executor" {
+					replaceExecutor(ctx, t, f, name)
+				} else {
+					beat(ctx, t, f, name)
+				}
+			})
+			w := f.do(http.MethodPost, apiv1.PublishedContextsPath, token, req)
+			var stored coord.PublishedContextList
+			if err := f.c.List(context.Background(), &stored); err != nil {
+				t.Fatal(err)
+			}
+			if change == "heartbeat" {
+				if w.Code != http.StatusCreated || len(stored.Items) != 1 {
+					t.Fatal("status-only heartbeat refused managed output", w.Code, w.Body.String())
+				}
+				return
+			}
+			wantError(t, w, http.StatusForbidden, apiv1.CodeForbidden)
+			if len(stored.Items) != 0 {
+				t.Fatal("replaced executor published managed output", len(stored.Items))
+			}
+		})
+	}
+}
+
+// The result reader's final fence ignores status too: the recheck of the
+// publication against the fresh retained history refuses a changed executor,
+// and a status-only write is no refusal (#223 review).
+func TestCanaryResultStatusChangeDuringPayloadRead(t *testing.T) {
+	for _, change := range []string{"heartbeat", "executor"} {
+		t.Run(change, func(t *testing.T) {
+			f, s, p, path := canaryResultFixture(t, "claude")
+			f.srv.PublishedContexts.Live = changeOnGet[*coord.PublishedContext](f, func(ctx context.Context) {
+				if change == "executor" {
+					replaceExecutor(ctx, t, f, s.Name)
+				} else {
+					beat(ctx, t, f, s.Name)
+				}
+			})
+			w := f.do(http.MethodGet, path, tokClient, nil)
+			if change == "heartbeat" {
+				if w.Code != http.StatusOK || decode[apiv1.CanaryResult](t, w).Context.Text != p.Spec.Text {
+					t.Fatal("status-only heartbeat refused the result read", w.Code, w.Body.String())
+				}
+				return
+			}
+			wantError(t, w, http.StatusForbidden, apiv1.CodeForbidden)
+			if strings.Contains(w.Body.String(), p.Spec.Text) {
+				t.Fatal("replaced executor disclosed text")
+			}
+		})
 	}
 }

@@ -76,6 +76,12 @@ These rules come from the #175 coordination review.
   bound only. Read acknowledgements are not counted, because there is at most
   one per message and recipient. Concurrent sends can pass the same count by
   the number of racing sends.
+- **At the bound.** The bounds are lifetime bounds, because messages are never
+  deleted. DESIGN-010 "At the bound, recovery and rollback" has the behaviour,
+  the record-count metrics, the manual recovery with its preservation duty, and
+  the rollback floor. The inbox CLI prints the API's `limit_exceeded` error.
+  Recovery keeps every message whose recipient still exists and has not
+  acknowledged it, and deletes a message's acknowledgement with it.
 - **Final fences.** The sender fence (on the new-message and retry paths) and
   the recipient fence compare each Session's binding: UID, generation and spec,
   deletion, labels, annotations, owner references and finalizers. They do not

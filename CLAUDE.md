@@ -115,7 +115,8 @@ internal/projectcanary/  validates the two finite operator-owned project rule ca
 internal/projectcanary/testutil/  synthetic canary fixtures for tests
 internal/commonrules/    retains the common instruction inputs (common text, Codex header) bound to an enabled managed task
 internal/commonrules/testutil/  synthetic common-source fixtures for tests
-internal/taskclaim/      the TaskClaim store: immutable explicit ownership, Create only, uncached reads
+internal/taskclaim/      the TaskClaim store: immutable explicit ownership, Create only, uncached reads; also the bounds
+                         that all three coordination stores apply and their record-count metrics (DESIGN-010)
 internal/inbox/          the inbox store: immutable API messages and explicit read acknowledgements, Create only, uncached reads
 internal/contextpublication/  the PublishedContext store: immutable published excerpts, Create only, uncached reads
 internal/sessiondirectory/  the SessionDirectory store: bounded original session metadata and CAS witnesses

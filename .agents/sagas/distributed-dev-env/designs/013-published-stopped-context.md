@@ -65,6 +65,16 @@ These rules come from the #175 coordination review.
   Concurrent creates can pass the same count, so a bound can be passed by at
   most the number of racing creates. The bounds are defence in depth against an
   agent loop filling etcd. They are not a retention policy.
+- **At the bound.** The bounds are lifetime bounds, because publications are
+  never deleted. DESIGN-010 "At the bound, recovery and rollback" has the
+  behaviour, the record-count metrics, the manual recovery with its
+  preservation duty, and the rollback floor. Here, agentd `context-publish`
+  reports `limit_exceeded` with a fixed message that says not to retry, and
+  exits 1. A managed canary output capture that hits the bound spends its one
+  delivery attempt. agentd logs "managed output publication refused" with the
+  same message, and the captured bytes stay in the private capture directory.
+  Recovery never deletes a managed-output publication of a retained canary
+  original.
 - **Final fence.** The fence before the atomic create compares the Session's
   binding: UID, generation and spec, deletion, labels, annotations (including
   the saved project snapshot), owner references and finalizers. It does not

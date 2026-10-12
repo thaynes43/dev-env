@@ -23,6 +23,12 @@ import (
 var contextProjectPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 var contextDigestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
+// ErrContextLimit means the operator refused a new publication because its
+// source Session or its project reached the lifetime publication bound
+// (DESIGN-013). Nothing was published, and publications are never deleted, so
+// the bound does not free up: retrying cannot succeed.
+var ErrContextLimit = errors.New("published context limit reached for this Session or its project; nothing was published and the limit does not free up, so do not retry")
+
 // The fixed operator endpoint and rotating projected identity are the only
 // remote authority. Error bodies and redirect destinations are never exposed.
 func (h *HeartbeatClient) contextRequest(ctx context.Context, method, path string, body any, result any) error {
@@ -58,6 +64,9 @@ func (h *HeartbeatClient) contextRequest(ctx context.Context, method, path strin
 		return errors.New("published context acknowledgement is unconfirmed")
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusTooManyRequests && contextLimitRefusal(resp.Body) {
+		return ErrContextLimit
+	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return errors.New("published context request refused or unconfirmed")
 	}
@@ -71,6 +80,13 @@ func (h *HeartbeatClient) contextRequest(ctx context.Context, method, path strin
 		return errors.New("published context response invalid")
 	}
 	return nil
+}
+
+// contextLimitRefusal reads only the bounded error code. The body's text is
+// never passed on; ErrContextLimit carries a fixed message instead.
+func contextLimitRefusal(body io.Reader) bool {
+	var e apiv1.Error
+	return json.NewDecoder(io.LimitReader(body, 4096)).Decode(&e) == nil && e.Code == apiv1.CodeLimitExceeded
 }
 
 func validContextMetadata(m apiv1.ContextMetadata) bool {

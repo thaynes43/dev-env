@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -202,6 +203,43 @@ func TestManagedOutputUnknownACKHasOneAttemptAndOriginalBytes(t *testing.T) {
 	}
 	b, err := ownedCaptureRead(c.dir, intent.Chunks[0].Key+".txt", apiv1.MaxContextBytes)
 	if err != nil || string(b) != "  exact\noutput  " {
+		t.Fatal("original bytes lost")
+	}
+}
+
+// A permanent limit refusal is reported as such; the one attempt and the
+// original bytes stay as for any other refusal (#223 review).
+func TestManagedOutputLimitRefusalIsReportedOnce(t *testing.T) {
+	s, l := captureLaunch(t)
+	c, err := beginManagedCapture(l, s.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.confirmed = true
+	c.text("limited output")
+	intent, err := c.retain(l, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(apiv1.Error{Code: apiv1.CodeLimitExceeded, Message: "limit"})
+	}))
+	defer srv.Close()
+	token := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(token, []byte("synthetic"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := &HeartbeatClient{URL: srv.URL, Session: l.Session, TokenFile: token, HTTP: srv.Client()}
+	if err := c.publish(context.Background(), l, intent, h); !errors.Is(err, ErrContextLimit) || calls != 1 {
+		t.Fatal("limit refusal not reported", err, calls)
+	}
+	if c.publish(context.Background(), l, intent, h) == nil || calls != 1 {
+		t.Fatal("automatic second attempt after a limit refusal")
+	}
+	if b, err := ownedCaptureRead(c.dir, intent.Chunks[0].Key+".txt", apiv1.MaxContextBytes); err != nil || string(b) != "limited output" {
 		t.Fatal("original bytes lost")
 	}
 }

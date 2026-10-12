@@ -479,6 +479,21 @@ func run(args []string) error {
 		if o.inboxEnabled {
 			inboxStore = &inbox.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.templatesNamespace}
 		}
+		// Coordination records are never deleted, so their bounds are lifetime
+		// bounds; the counts are exported beside them (#175 review).
+		var recordKinds []taskclaim.RecordKind
+		if claims != nil {
+			recordKinds = append(recordKinds, taskclaim.RecordKind{Kind: "TaskClaim", Limits: claims.Limits.Effective(taskclaim.DefaultLimits)})
+		}
+		if contexts != nil {
+			recordKinds = append(recordKinds, taskclaim.RecordKind{Kind: "PublishedContext", Limits: contexts.Limits.Effective(contextpublication.DefaultLimits)})
+		}
+		if inboxStore != nil {
+			recordKinds = append(recordKinds, taskclaim.RecordKind{Kind: "InboxMessage", Limits: inboxStore.Limits.Effective(inbox.DefaultLimits)})
+		}
+		if len(recordKinds) > 0 {
+			ctrlmetrics.Registry.MustRegister(&taskclaim.RecordCollector{Reader: mgr.GetAPIReader(), Namespace: o.templatesNamespace, Kinds: recordKinds})
+		}
 		var directories *sessiondirectory.KubeStore
 		var directoryContexts *contextpublication.KubeStore
 		if o.directoryEnabled {
