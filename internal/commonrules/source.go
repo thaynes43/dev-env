@@ -39,10 +39,33 @@ func Resolve(ctx context.Context, live client.Reader, projectDigest string) (Sna
 
 // Confirm includes original object identity and resourceVersion. An identical
 // replacement source has the same content revision but is not original authority.
+// It fences the steps that capture or first apply inputs: Create and the first
+// executor.
 func (s Snapshot) Confirm(ctx context.Context, live client.Reader) error {
 	fresh, err := Resolve(ctx, live, s.ProjectDigest)
 	if err != nil || !reflect.DeepEqual(fresh, s) {
 		return ErrRefused
 	}
 	return nil
+}
+
+// ConfirmContent compares only the bound content identity: the project digest,
+// CommonRevision and each fixed source's namespace, name, key, hash and bytes.
+// Source UID and resourceVersion stay retained provenance in the snapshot, not
+// inputs here, so another key of the same ConfigMap or an identical re-create
+// does not change the answer (DESIGN-022 amendment). It serves reads of output
+// that already exists; capture and execution keep Confirm.
+func (s Snapshot) ConfirmContent(ctx context.Context, live client.Reader) error {
+	if s.Validate() != nil {
+		return ErrRefused
+	}
+	fresh, err := Resolve(ctx, live, s.ProjectDigest)
+	if err != nil || fresh.ProjectDigest != s.ProjectDigest || fresh.CommonRevision != s.CommonRevision || !sameContent(fresh.Common, s.Common) || !sameContent(fresh.Header, s.Header) {
+		return ErrRefused
+	}
+	return nil
+}
+
+func sameContent(a, b Source) bool {
+	return a.Namespace == b.Namespace && a.Name == b.Name && a.Key == b.Key && a.SHA256 == b.SHA256 && a.Text == b.Text
 }

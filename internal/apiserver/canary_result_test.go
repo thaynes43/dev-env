@@ -167,7 +167,9 @@ func canaryResultFixture(t *testing.T, provider string) (*fixture, *v1alpha1.Age
 		t.Fatal("seed original", w.Code, w.Body.String())
 	}
 	s := f.session(b.Record.SessionName())
-	s.Status.Phase = v1alpha1.PhaseSuspended
+	// A reachable stop: the task ended and its Pod is gone, so the phase is
+	// Failed (the live canaries' state) and metadata.generation is unchanged.
+	s.Status.Phase = v1alpha1.PhaseFailed
 	s.Status.PrivateHistory = &v1alpha1.PrivateHistoryStatus{SessionUID: string(s.UID), LastExecutor: &v1alpha1.PrivateExecutorStatus{PodUID: "original-executor-uid", PodName: s.Name, Generation: s.Generation}}
 	if err := f.c.Status().Update(context.Background(), s); err != nil {
 		t.Fatal(err)
@@ -279,7 +281,7 @@ func TestCanaryResultSelectionBeforeAuthentication(t *testing.T) {
 }
 
 func TestCanaryResultRefusesChangedAuthority(t *testing.T) {
-	for _, kind := range []string{"parent", "session-uid", "policy", "catalog-uid", "catalog-rv", "template", "common-source", "generation", "publication-source", "publication-parent", "publication-project", "publication-provider", "executor", "missing-publication", "missing-session", "payload-grant", "canary-off", "publication-off", "retention-off", "common-off", "codex-off", "other-client", "human"} {
+	for _, kind := range []string{"parent", "session-uid", "policy", "catalog-uid", "catalog-rv", "template", "common-source", "header-source", "generation", "suspended", "suspended-then-reaped", "reaped-then-suspended", "publication-source", "publication-parent", "publication-project", "publication-provider", "executor", "missing-publication", "missing-session", "payload-grant", "canary-off", "publication-off", "retention-off", "common-off", "codex-off", "other-client", "human"} {
 		t.Run(kind, func(t *testing.T) {
 			f, s, p, path := canaryResultFixture(t, "codex")
 			token := tokClient
@@ -294,6 +296,24 @@ func TestCanaryResultRefusesChangedAuthority(t *testing.T) {
 				s.Generation++
 			case "executor":
 				s.Status.PrivateHistory.LastExecutor.PodUID = "other-original-pod"
+			case "suspended", "suspended-then-reaped", "reaped-then-suspended":
+				// The real suspend changes spec.operatingMode, which bumps the
+				// generation; a reap bumps it once more (see reapCanaryResult).
+				if kind == "reaped-then-suspended" {
+					s = reapCanaryResult(t, f, s)
+				}
+				s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+				s.Status.Phase = v1alpha1.PhaseSuspended
+				s.Generation++
+			case "header-source":
+				var cm corev1.ConfigMap
+				if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: "dev-agents", Name: "dev-env-config-codex"}, &cm); err != nil {
+					t.Fatal(err)
+				}
+				cm.Data["AGENTS.header.md"] = "OTHER_HEADER"
+				if err := f.c.Update(context.Background(), &cm); err != nil {
+					t.Fatal(err)
+				}
 			case "catalog-uid", "catalog-rv", "template", "common-source":
 				key := f.srv.Projects.Key
 				if kind == "template" {
@@ -313,7 +333,7 @@ func TestCanaryResultRefusesChangedAuthority(t *testing.T) {
 					cm.Data["templates.yaml"] = "invalid"
 				}
 				if kind == "common-source" {
-					cm.UID = "replacement-common"
+					cm.Data["CLAUDE.md"] += "changed"
 				}
 				if err := f.c.Update(context.Background(), &cm); err != nil {
 					t.Fatal(err)
@@ -371,6 +391,9 @@ func TestCanaryResultRefusesChangedAuthority(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if kind == "suspended-then-reaped" {
+				reapCanaryResult(t, f, f.session(s.Name))
+			}
 			if strings.HasPrefix(kind, "publication-") {
 				if err := f.c.Update(context.Background(), p); err != nil {
 					t.Fatal(err)
@@ -409,7 +432,11 @@ func TestCanaryResultFinalAuthorityFence(t *testing.T) {
 						if err := f.c.Get(ctx, key, &cm); err != nil {
 							t.Fatal(err)
 						}
-						cm.UID = "replacement-authority"
+						if change == "common" {
+							cm.Data["CLAUDE.md"] += "changed"
+						} else {
+							cm.UID = "replacement-authority"
+						}
 						if err := f.c.Update(ctx, &cm); err != nil {
 							t.Fatal(err)
 						}
@@ -466,6 +493,77 @@ func TestCanaryResultRejectedIdentityDoesNotResolveObjects(t *testing.T) {
 			f.srv.Client, f.srv.Live = deny, deny
 			f.srv.PublishedContexts.Client, f.srv.PublishedContexts.Live = deny, deny
 			wantError(t, f.do(http.MethodGet, path, token, nil), http.StatusForbidden, apiv1.CodeForbidden)
+		})
+	}
+}
+
+// reapCanaryResult models what the real API server does to a finalizer-held
+// Session on DELETE: it sets deletionTimestamp and bumps metadata.generation
+// exactly once (api/v1alpha1 TestDeleteBumpsGenerationOnce proves this against
+// envtest). The fake client sets only the timestamp, so the bump is applied here.
+func reapCanaryResult(t *testing.T, f *fixture, s *v1alpha1.AgentSession) *v1alpha1.AgentSession {
+	t.Helper()
+	if err := f.c.Delete(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	reaped := f.session(s.Name)
+	if reaped.DeletionTimestamp.IsZero() {
+		t.Fatal("finalizer-held Session was not retained as deleting")
+	}
+	reaped.Generation++
+	if err := f.c.Update(context.Background(), reaped); err != nil {
+		t.Fatal(err)
+	}
+	return f.session(s.Name)
+}
+
+// rules-001 and history-03 (#174): neither an unrelated change to the common
+// source ConfigMaps nor a reap of the retained original strands its result.
+func TestCanaryResultStaysReadableWithoutAuthorityChange(t *testing.T) {
+	for _, kind := range []string{"unrelated-common-key", "unrelated-header-key", "identical-recreate", "reaped", "reaped-twice"} {
+		t.Run(kind, func(t *testing.T) {
+			f, s, p, path := canaryResultFixture(t, "codex")
+			edit := func(name string, change func(*corev1.ConfigMap)) {
+				var cm corev1.ConfigMap
+				if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: "dev-agents", Name: name}, &cm); err != nil {
+					t.Fatal(err)
+				}
+				rv := cm.ResourceVersion
+				change(&cm)
+				if err := f.c.Update(context.Background(), &cm); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.c.Get(context.Background(), client.ObjectKeyFromObject(&cm), &cm); err != nil || cm.ResourceVersion == rv {
+					t.Fatal("fixture did not change the source observation", err)
+				}
+			}
+			switch kind {
+			case "unrelated-common-key":
+				edit("dev-env-config-claude", func(cm *corev1.ConfigMap) { cm.Data["mcp.json"] = "{}" })
+			case "unrelated-header-key":
+				edit("dev-env-config-codex", func(cm *corev1.ConfigMap) { cm.Data["config.toml"] = "model = \"changed\"" })
+			case "identical-recreate":
+				edit("dev-env-config-claude", func(cm *corev1.ConfigMap) { cm.UID = "replacement-common" })
+				edit("dev-env-config-codex", func(cm *corev1.ConfigMap) { cm.UID = "replacement-header" })
+			case "reaped":
+				if r := reapCanaryResult(t, f, s); r.Generation != p.Spec.SourceGeneration+1 {
+					t.Fatal("reap fixture generation", r.Generation)
+				}
+			case "reaped-twice":
+				reapCanaryResult(t, f, s)
+				// A second DELETE of a deleting object leaves the generation alone.
+				if err := f.c.Delete(context.Background(), f.session(s.Name)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			reads := forbidCanaryResultSideEffects(t, f)
+			w := f.do(http.MethodGet, path, tokClient, nil)
+			if w.Code != http.StatusOK {
+				t.Fatal(w.Code, w.Body.String())
+			}
+			if got := decode[apiv1.CanaryResult](t, w); got.Context.Text != p.Spec.Text || got.SessionUID != string(s.UID) || *reads != 1 {
+				t.Fatal("retained publication not served exactly once", got, *reads)
+			}
 		})
 	}
 }
