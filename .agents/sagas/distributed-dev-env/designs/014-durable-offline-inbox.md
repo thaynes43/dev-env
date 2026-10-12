@@ -61,7 +61,11 @@ recipient identity remain separate work.
 *Amended 2026-10-12 (Q-29): after a release, the same readers read a message
 and its ack from the archive, with `archived: true`; without a shelf the answer
 is 503. A recipient's identical ack retry after the release answers 200 from
-the archive and writes nothing (DESIGN-024 section 6).*
+the archive and writes nothing (DESIGN-024 section 6). One accepted residual
+departs from the uniform 404 above: while the shelf is down, a scoped caller
+asking for a name that is not live gets 503, where a live message outside its
+scope gets 404. Names are full digests of identities the caller must already
+know, so this reveals only that the name is not live.*
 
 An immutable acknowledgement binds message UID and original recipient UID,
 with the authenticated actor and API creation time derived by the server.

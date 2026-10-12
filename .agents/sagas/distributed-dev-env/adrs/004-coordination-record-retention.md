@@ -9,7 +9,8 @@
   claim is released without a verified old-executor stop contract, **in the reap
   case only** (the owner Session's UID is absent). Also the lifetime project
   bounds of DESIGN-010, [DESIGN-013](../designs/013-published-stopped-context.md)
-  and [DESIGN-014](../designs/014-durable-offline-inbox.md).
+  and [DESIGN-014](../designs/014-durable-offline-inbox.md). And DESIGN-001
+  D-67's shelf, which gains the archive volume.
 - **Retains:** [ADR-003](003-session-coordination-private-repositories.md) in
   full; DESIGN-008's private HOME retention; every other DESIGN-010 owner rule.
 - **Design:** [DESIGN-024](../designs/024-coordination-record-retention.md)
@@ -74,12 +75,21 @@ different UID. Any other answer is Unknown, and Unknown releases nothing. A
 stopped, suspended, deleting, Reaping or retained Session is present.
 
 **Grace.** A record is deleted no sooner than 30 days after its release was
-first observed. The operator re-checks absence immediately before the delete.
+first observed. The operator re-checks absence immediately before the delete. If
+a Session it names is ever proved present again (possible only after an etcd
+restore), the grace starts over at the next observed absence. That is the
+conservative reading of "first observed absence": it never deletes sooner than
+the ruling allows.
 
 **Archive first.** Before any delete, the full object as the API server returned
 it, with a manifest that holds its SHA-256, is written to a new ReadWriteOnce
 volume. Only the shelf pod mounts that volume. It is not `dev-env-shared`. The
-archive is kept indefinitely. Nothing removes an archive entry.
+archive is kept indefinitely. Nothing removes an archive entry, and its
+PersistentVolume is set to `Retain`, so no single delete can lose it. Agents
+cannot read it: the shelf is reachable only by exec, which the admission policy
+`dev-env-identity-guard` refuses to every agent identity in the dev-env
+namespaces. RBAC alone would allow that exec, so the archive's privacy depends on
+that guard.
 
 **One deleter.** A leader-only runnable in the operator does all of it. It marks
 the first observation, waits out the grace, re-checks absence, verifies the
@@ -154,10 +164,10 @@ publications stay live, which the fixed result reader needs.
 | C-23 | Good: a reaped Session's task can be claimed again, without a stop contract, by the narrowest evidence available: the owner's UID is gone. |
 | C-24 | Good: history survives deletion. Archived contexts and messages stay readable under the same scopes. |
 | C-25 | Bad: the operator gains delete on four kinds. A guard test, preconditions and an archive check before every delete contain it. |
-| C-26 | Bad: archived reads depend on one shelf pod. While it is down, they answer 503, and retention waits. Live reads and creates do not depend on it. |
+| C-26 | Bad: archived reads and retention depend on one shelf pod, and that pod's ReadWriteOnce volume changes D-67's existing duties too. The shelf Deployment becomes `Recreate`, so every shelf update (each agent release) is about a minute in which rescue list, restore and archived reads answer 503 and the pruner and retention wait. After a node loss the shelf can stay down until the volume is detached by hand. An alert pages when the shelf stays down. Live reads and creates do not depend on it. |
 | C-27 | Bad: the archive grows without limit. It needs a volume alert and, eventually, its own retention decision. |
 | C-28 | Bad: records of private Sessions are never released until a HOME expiry policy exists (the known gap). With the installed flag that is nearly every Session, so the project bounds stay close to lifetime bounds until then. |
-| C-29 | Neutral: an etcd restore could bring back an absent UID. The runnable never deletes while an owner is present, but after that Session's later deletion the earlier mark's grace has already run. The archive holds the record, so only the 30 days are skipped. |
+| C-29 | Neutral: an etcd restore could bring back an absent UID. The runnable never deletes while an owner is present, and records the presence in the archive, so the grace starts over after that Session's later deletion. Nothing is deleted sooner than 30 days after the latest absence began. |
 
 ## Delivery and acceptance
 

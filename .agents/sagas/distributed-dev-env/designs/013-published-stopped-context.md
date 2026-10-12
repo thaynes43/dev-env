@@ -54,7 +54,11 @@ payload grant fail closed without exposing existence or private content.
 *Amended 2026-10-12 (Q-29): after a release, single reads fall back to the
 archive under the same scope and answer `archived: true`; without a shelf they
 answer 503, never 404. `?archived=only` lists archived publications (DESIGN-024
-section 6). The fixed canary result route stays live only.*
+section 6). The fixed canary result route stays live only. One accepted residual
+departs from the uniform answer above: while the shelf is down, a scoped caller
+asking for a name that is not live gets 503, where a live publication outside
+its scope gets 404. Names are full digests of identities the caller must already
+know, so this reveals only that the name is not live.*
 
 ## Bounds, fences and identity normalization (2026-10-12)
 

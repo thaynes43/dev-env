@@ -209,11 +209,11 @@ Everything is default off until R6.
 |---|---|---|---|
 | R0 | dev-env docs | ADR-004, DESIGN-024 and these amendments | merged |
 | R1 | haynes-ops | `DevEnvCoordinationRecordsNearLimit` (80%, existing metrics only) | merged and the rule loaded; can go any time |
-| R2 | dev-env source | `agentd ctl coord-archive put\|get\|list`, the archive mount check, `agentd shelf --coordination-archive`, protocol types, `TestArchiveNeverRemoves` | merged and in a released agent image |
-| R3 | dev-env source | `internal/coordretention` runnable (default off), shelf client methods, retention metrics, the shared guard scanner, `TestOnlyRetentionDeletesCoordinationRecords`, envtest E1, E2, E4, E6, E7 | merged with required CI and independent review |
-| R4 | dev-env source | read fallback (default off), `archived` wire fields, the ack-retry fallback, client tolerance tests, bound wording, the templates check that refuses the archive claim, envtest E3 and E5 | merged and in a released operator image |
-| R5 | haynes-ops | the archive PVC, shelf `Recreate` strategy, mount, flag and image pin, `DevEnvCoordinationArchiveFilling` | the shelf Ready with the archive mounted |
-| R6 | haynes-ops | Role `dev-env-coordination-retention` (delete, operator only), the operator pin, then reads on, then retention on | a complete retention pass on the installed operator |
+| R2 | dev-env source | `agentd ctl coord-archive put\|mark\|lookup\|get\|list`, the size bound, the time-ordered indexes, the archive mount check, `agentd shelf --coordination-archive`, protocol types, `TestArchiveNeverRemoves`, a measurement of a worst-case `get`'s peak memory under the shelf's limits | merged and in a released agent image |
+| R3 | dev-env source | `internal/coordretention` runnable (default off), shelf client methods and the per-replica exec limit, the bulk lookups and resume key, retention metrics, the shared guard scanner, `TestOnlyRetentionDeletesCoordinationRecords`, envtest E1, E2, E4, E6, E7, and the `internal/shelf` package comment (the shelf no longer mounts only the shared volume) | merged with required CI and independent review |
+| R4 | dev-env source | read fallback (default off), the archived item shape and `archived=only` lists, the ack-retry fallback, client tolerance tests, bound wording, the templates check that refuses the archive claim, envtest E3 and E5 | merged and in a released operator image |
+| R5 | haynes-ops | the archive PVC, shelf `Recreate` strategy, mount, flag, image pin, header comment and (if R2 needs it) memory limit; `DevEnvShelfUnavailable` and `DevEnvCoordinationArchiveFilling`; then Tom sets the bound PV to `Retain` | the shelf Ready with the archive mounted, and its PV `Retain` |
+| R6 | haynes-ops | Role `dev-env-coordination-retention` (delete, operator only), the operator pin, then reads on, then retention on, and `DevEnvCoordinationRetentionStalled` | a complete retention pass on the installed operator |
 | R7 | dev-env docs | installed verification record (DESIGN-024 section 11) | merged |
 
 **Follow-up F1, needs an owner question: HOME expiry.** With the installed

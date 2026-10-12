@@ -145,9 +145,9 @@ PR #223.
   *Retention is ruled (Q-29, 2026-10-12). This manual path stays, for Tom only,
   as a break-glass. It bypasses the archive, so step 1's export is the only copy
   of what it deletes. Prefer the retention runnable (DESIGN-024).*
-- **Retention is parked, not decided.** See plan 11, "Coordination record
-  retention (parked)". Weighting the project bound by bytes was considered and
-  not adopted. An agent that sends full-size records reaches a byte bound after
+- **Retention, parked and then ruled on 2026-10-12.** See plan 11, "Coordination
+  record retention". While it was parked, weighting the project bound by bytes
+  was considered and not adopted. An agent that sends full-size records reaches a byte bound after
   the same number of records, so a byte bound would not make a project harder
   to exhaust. It would only spare honest small records. In exchange it would
   need a size label and a scan of every record on each create.

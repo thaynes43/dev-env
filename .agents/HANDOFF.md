@@ -18,9 +18,10 @@ archived first to a new volume that only the shelf pod mounts, then a leader-onl
 operator runnable verifies the archive and deletes the record. Reads fall back to
 the archive. This amends DESIGN-010's no-release rule in the reap case only.
 
-**Nothing runs yet.** Plan 11 lists units R1 to R7; all are default off until
-the haynes-ops change R6. R1, the 80% alert, needs only today's metrics and can
-ship first.
+**Nothing runs yet.** Plan 11 lists units R0 (these docs) to R7; all are
+default off until the haynes-ops change R6. R1, the 80% alert, needs only
+today's metrics and can ship first. R5 needs Tom once: after the archive claim
+binds, he sets its PersistentVolume to `Retain`.
 
 **Known gap.** With the installed private-history flag, every Session without a
 shared workspace is retained and never absent, so retention will release almost
