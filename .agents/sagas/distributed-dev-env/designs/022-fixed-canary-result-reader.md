@@ -158,5 +158,6 @@ with the generation unchanged.
 
 Catalog UID/resourceVersion and template content checks are unchanged here.
 
-**Client.** The one-shot result read never advises a retry: transport failure,
-stop or any 5xx exits 6 (unconfirmed), and a 429 exits 1 (DESIGN-021 amendment).
+**Client.** A one-shot result read that reached the API never advises a retry:
+a lost answer, stop or any 5xx exits 6 (unconfirmed), and a 429 exits 1
+(DESIGN-021 amendment). It exits 5 only when nothing was sent (D-86).

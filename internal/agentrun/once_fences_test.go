@@ -3,7 +3,11 @@ package agentrun
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -105,8 +109,9 @@ func TestDirectoryListRefusesPaddedPrefixAndAmbiguousPage(t *testing.T) {
 	}
 }
 
-// history-06: a one-shot request never exits 5 or advises a retry. A request
-// that may have taken effect says so and says not to repeat it.
+// history-06: a one-shot request that was sent never exits 5 or advises a
+// retry. A request that may have taken effect says so and says not to repeat
+// it. Only a connection that was never made exits 5: nothing was sent.
 func TestOnceOnlyUncertainOutcomeNeverAdvisesRetry(t *testing.T) {
 	result := originalCanaryResult(claudeCanaryID)
 	commands := []struct {
@@ -158,6 +163,15 @@ func TestOnceOnlyUncertainOutcomeNeverAdvisesRetry(t *testing.T) {
 				t.Fatal("refused one-shot request repeated or advised a retry", h.api.requests(), h.sleeps, h.stderr.String())
 			}
 		})
+		t.Run(cmd.name+"/not-sent", func(t *testing.T) {
+			h := newHarness(t)
+			h.api.srv.Close()
+			h.mustRun(ExitRetry, cmd.args...)
+			stderr := h.stderr.String()
+			if len(h.api.requests()) != 0 || len(h.sleeps) != 0 || h.stdout.Len() != 0 || !strings.Contains(stderr, "nothing was sent") || strings.Contains(stderr, "do not repeat") {
+				t.Fatal("a request that never left agent-run was repeated or reported as possibly delivered", h.api.requests(), h.sleeps, stderr)
+			}
+		})
 	}
 }
 
@@ -171,5 +185,26 @@ func TestMsgUnreadableAcknowledgementIsUnconfirmed(t *testing.T) {
 	h.mustRun(ExitUnconfirmed, "msg", "original-session", "synthetic message")
 	if len(h.api.requests()) != 1 || !strings.Contains(h.stderr.String(), "do not repeat") {
 		t.Fatal("unreadable message acknowledgement repeated or not held", h.api.requests(), h.stderr.String())
+	}
+}
+
+// Only an error that proves the connection was never made counts as nothing
+// sent; anything after the dial may follow a request the API received.
+func TestNothingSentOnlyForDialFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"refused", &url.Error{Op: "Post", URL: "https://api", Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}}, true},
+		{"dns", &url.Error{Op: "Post", URL: "https://api", Err: &net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "no such host", Name: "api"}}}, true},
+		{"bare-dns", &net.DNSError{Err: "no such host", Name: "api"}, true},
+		{"read", &url.Error{Op: "Post", URL: "https://api", Err: &net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset by peer")}}, false},
+		{"eof", &url.Error{Op: "Post", URL: "https://api", Err: io.EOF}, false},
+		{"timeout", &url.Error{Op: "Post", URL: "https://api", Err: errors.New("context deadline exceeded (Client.Timeout exceeded while awaiting headers)")}, false},
+	} {
+		if got := nothingSent(tc.err); got != tc.want {
+			t.Errorf("%s: nothingSent = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

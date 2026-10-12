@@ -73,5 +73,6 @@ The strict wire walk is now generic over the DTO type and also guards
 `canary create` (Session) and `directory list` (SessionDirectoryList), both of
 which also enable the body fence (#174, history-05). Its rules are unchanged;
 the directory's reported time adds one wire form: null or an RFC 3339 string.
-A one-shot read's transport failure, stop or 5xx exits 6 (unconfirmed), never
-5; a 429 exits 1 (history-06).
+A one-shot read that reached the API and got a lost answer, a stop or a 5xx
+exits 6 (unconfirmed), never 5; a 429 exits 1 (history-06). It exits 5 only when
+nothing was sent (D-86).

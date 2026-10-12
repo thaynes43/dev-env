@@ -521,9 +521,11 @@ agent-run canary create --id NEW_APPROVED_FIXED_ID --json --once
 The receipt distinguishes original creation from an existing original; neither
 proves the provider ran or loaded instructions. The client sends one request and
 does not retry, redirect or poll. Preserve an uncertain response for observation
-without creating another Session or changing the key: it exits 6 (unconfirmed),
-never 5. Every one-shot request (`msg`, `canary create`, a `--once` read) uses
-that exit code when it gets no confirmed answer. This source client does
+without creating another Session or changing the key: it exits 6
+(unconfirmed). Every one-shot request (`msg`, `canary create`, a `--once` read)
+uses that exit code when it was sent and got no confirmed answer, and exits 5
+only when nothing was sent (no token, no port-forward, or a connection that was
+never made). This source client does
 not enable general private admission or select Codex fleet routing. See
 [the ID-only client contract](../.agents/sagas/distributed-dev-env/designs/021-canary-cli.md).
 

@@ -91,6 +91,8 @@ the whole response body before decoding and walks it against the
 `SessionDirectoryList` wire tags, as `show --once` does (DESIGN-023): a padded
 valid prefix, duplicate keys, case aliases and null scalars are refused. The
 reported time keeps its wire form (null, or an RFC 3339 string). This supersedes
-the 502/504 sentence above: a one-shot read never exits 5. Transport failure,
-stop or any 5xx exits 6 (unconfirmed, not repeated); a 429 exits 1. A failed
-read still proves no zero-record page.
+the 502/504 sentence above: a one-shot read that reached the API never exits
+5. A lost answer, stop or any 5xx exits 6 (unconfirmed, not repeated); a 429
+exits 1. It exits 5 only when nothing was sent: no token, no port-forward, or a
+connection that was never made (D-86). A failed read still proves no
+zero-record page.

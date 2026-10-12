@@ -99,7 +99,8 @@ func TestDirectoryListEmptyCompletePage(t *testing.T) {
 }
 
 func TestDirectoryOnceFailures(t *testing.T) {
-	// A one-shot read never exits 5: every 5xx is an unconfirmed answer (6).
+	// A one-shot read that reached the API never exits 5: every 5xx is an
+	// unconfirmed answer (6).
 	for _, tc := range []struct{ status, exit int }{{500, ExitUnconfirmed}, {502, ExitUnconfirmed}, {503, ExitUnconfirmed}, {504, ExitUnconfirmed}} {
 		t.Run(http.StatusText(tc.status), func(t *testing.T) {
 			h := newHarness(t)
@@ -128,9 +129,10 @@ func TestDirectoryOnceRefusesRedirect(t *testing.T) {
 func TestDirectoryOnceTransportFailure(t *testing.T) {
 	h := newHarness(t)
 	h.api.srv.Close()
-	h.mustRun(ExitUnconfirmed, "directory", "list", "--project", "dev-env", "--once", "--json")
-	if len(h.sleeps) != 0 || h.stdout.Len() != 0 {
-		t.Fatalf("Directory transport failure retried or emitted a page: sleeps=%v stdout=%q", h.sleeps, h.stdout.String())
+	// The connection was never made, so nothing was sent: exit 5, no retry.
+	h.mustRun(ExitRetry, "directory", "list", "--project", "dev-env", "--once", "--json")
+	if len(h.sleeps) != 0 || h.stdout.Len() != 0 || !strings.Contains(h.stderr.String(), "nothing was sent") {
+		t.Fatalf("Directory transport failure retried, emitted a page or misreported: sleeps=%v stdout=%q stderr=%q", h.sleeps, h.stdout.String(), h.stderr.String())
 	}
 }
 

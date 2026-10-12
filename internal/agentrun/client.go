@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -46,9 +47,11 @@ func (a *app) callOnce(ctx context.Context, c *conn, method, path string, body, 
 var errOversizeResponse = errors.New("the API response exceeds the size limit")
 
 // A one-shot request (retry false: msg, canary create and the --once reads) is
-// never repeated by agent-run, and its errors never advise a retry: exit 5 means
-// "try again later". With no confirmed answer it exits ExitUnconfirmed instead,
-// and a request that may have taken effect says not to repeat it (history-06).
+// never repeated by agent-run. It exits ExitRetry ("try again later") only when
+// nothing was sent: a token that could not be had, a port-forward that never
+// came up, or a connection that was never made (nothingSent). Once it was sent,
+// no confirmed answer exits ExitUnconfirmed, and a request that may have taken
+// effect says not to repeat it (history-06).
 func unconfirmed(method, path, detail string) error {
 	if method == http.MethodGet {
 		return fail(ExitUnconfirmed, "no confirmed answer to %s %s: %s; agent-run sent this one-shot request at most once and did not repeat it", method, path, detail)
@@ -58,6 +61,19 @@ func unconfirmed(method, path, detail string) error {
 
 // oneShotRefusal maps a non-2xx answer to a one-shot request. A 5xx is no
 // confirmed answer; a 429 is a refusal. Other answers map as refusal does.
+// nothingSent reports whether a transport error proves the request never left
+// agent-run: the connection was never made (a refused or timed-out dial, or a
+// name that did not resolve). Anything later (a TLS handshake, a reset, a lost
+// answer) may follow a request the API received, so it does not count.
+func nothingSent(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "dial"
+}
+
 func oneShotRefusal(c *conn, method, path string, status int, raw []byte) error {
 	if status < 500 && status != http.StatusTooManyRequests {
 		return refusal(c, status, raw)
@@ -113,6 +129,9 @@ func (a *app) callWith(ctx context.Context, c *conn, method, path string, query 
 			if !retry {
 				if ctx.Err() != nil {
 					return 0, unconfirmed(method, path, fmt.Sprintf("stopped: %v", ctx.Err()))
+				}
+				if nothingSent(err) {
+					return 0, fail(ExitRetry, "could not reach the API at %s: %v; nothing was sent: the connection for %s %s was never made", c.url, err, method, path)
 				}
 				return 0, unconfirmed(method, path, fmt.Sprintf("could not complete the exchange with %s: %v", c.url, err))
 			}
