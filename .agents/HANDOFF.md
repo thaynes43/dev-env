@@ -7,6 +7,31 @@ the saga. To continue building, follow the
 in the Claude pickup brief. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## Q-30: private-repo canary on the Sigo alumni project, prepared — 2026-10-12
+
+Tom answered Q-30 in free text: use the existing private Sigo alumni repositories
+instead of a new probe repository. They become catalog project `sigo-alumni`
+(`thaynes43/sigo-alumni` and `thaynes43/sigoalumni-org`). One Claude canary,
+`rule-canary-claude-sigo-1012`, will prove #173's private GitHub authorization and
+a fresh task pin: one create, one named read and one result read, with no retries.
+The [rulings table](#rulings) has the full question and answer.
+
+**Prepared, not run.** haynes-ops
+[#3845](https://github.com/thaynes43/haynes-ops/pull/3845) adds the project. It
+replaces the consumed `claude-1012` policy record with the new one, and
+`codex-1011` stays byte-identical. It adds `sigo-alumni` to
+`--context-payload-read-projects` and moves the Claude canary network selector.
+Policy digest `154c3a12…`, Session `private-canary-a1444f4131ec7281b5d1e3130c3b5ada`,
+catalog revision `5fe34bd3…`, rules revision `d070e7a6…`. The coordinator runs
+the canary after #3845 deploys.
+[DESIGN-011](sagas/distributed-dev-env/designs/011-private-managed-rule-canaries.md#private-repo-canary-on-the-sigo-alumni-project--2026-10-12-q-30-173)
+lists the acceptance evidence.
+
+**Effects to know.** Every v2 pod that boots after #3845 clones both private
+repositories into its private HOME, because bootstrap is catalog-wide. Nothing
+running restarts. No catalog change may land between the canary's Create and its
+result read. Global private admission stays off.
+
 ## Q-31 ruling: private HOME expiry, docs only — 2026-10-12
 
 Tom answered Q-31 through the Claude native prompt: "Archive, then delete
