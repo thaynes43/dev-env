@@ -5,6 +5,12 @@
 register), 07 (the broker; `ops` sessions' grants go to Tom); spike S-16 (plan usage)
 **Parallel with:** 04, 08
 
+**Proposed scope addition (2026-10-12):** [maintenance-aware response and scoped
+alert mutes](../requirements/2026-10-12-maintenance-aware-response.md). Size this
+against existing Activity, claims and dispatch before automated-caller migration;
+keep the current provider-rule/parity milestone moving. No runtime permission is
+granted by the requirements record.
+
 ## Goal
 
 Every automated caller that summons a Max-plan Claude Code session today keeps doing
