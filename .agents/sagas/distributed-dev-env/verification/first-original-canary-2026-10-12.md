@@ -59,13 +59,14 @@ One Root result-plan data preparation stopped at an incorrect argument-position
 assertion before writing a final plan or running a helper, client or GET. The
 valid already-written Root binding was retained unchanged. A corrected plan
 binds the actual null value after each unique flag; the failure receipt and all
-absence evidence remain preserved. Result execution still requires a native
-final binding gate and separate Root one-read authorization.
+absence evidence remain preserved. Native final gate `e103ac7f` and separate
+Root one-read authorization `1b4d1d50` passed before the one result GET.
 
-A separately accepted named Session reader may read the exact original Session
-once, bind its retained executor UID and derive ordinal-zero context identity.
-Only an independently reviewed saved discovery and a separate Root authority
-can permit one fixed result GET. Missing executor or publication evidence is a
+The separately accepted named reader bound the exact original Session's retained
+executor UID and derived ordinal-zero context identity. Independent saved
+discovery and a separate Root authority permitted the one fixed result GET.
+Both named-read and result-read authorities are consumed. No further named
+Session GET or result GET is authorized. Missing executor or publication evidence is a
 refusal, not permission for another Create, a different identity, polling,
 logs, provider-HOME reads or cleanup. The prompt asks for markers already loaded
 in instructions; marker values must never be injected into the prompt or helper
