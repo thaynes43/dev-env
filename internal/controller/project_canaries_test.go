@@ -446,6 +446,78 @@ func TestProjectCanaryTransientFailureAfterIntentResumesSameIntentOnce(t *testin
 	}
 }
 
+// history-01 review: a read failure that persists after the mark is caught by
+// the validation that runs before admission and before any re-arm write, so a
+// marked canary makes no status writes while the failure lasts. Only after the
+// reads heal does it re-arm and create its one Pod.
+func TestProjectCanaryPersistentReadFailureAfterMarkWritesNothing(t *testing.T) {
+	f := testutil.New(t, "claude", "dev/dev-env")
+	base := privateHistoryClient(f.Session, f.Catalog, f.Template)
+	creates, writes := 0, 0
+	c := interceptor.NewClient(base, interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) error {
+			switch typed := o.(type) {
+			case *corev1.PersistentVolumeClaim:
+				typed.UID = "original-home"
+			case *corev1.Pod:
+				creates++
+			}
+			return c.Create(ctx, o, opts...)
+		},
+		SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, o client.Object, opts ...client.SubResourceUpdateOption) error {
+			if _, ok := o.(*v1alpha1.AgentSession); ok && sub == "status" {
+				writes++
+			}
+			return c.SubResource(sub).Update(ctx, o, opts...)
+		},
+	})
+	broken := true
+	reader := interceptor.NewClient(base, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, o client.Object, opts ...client.GetOption) error {
+		if err := c.Get(ctx, key, o, opts...); err != nil {
+			return err
+		}
+		if _, catalog := o.(*corev1.ConfigMap); !broken || !catalog || key != client.ObjectKeyFromObject(f.Catalog) {
+			return nil
+		}
+		var retained v1alpha1.AgentSession
+		if err := base.Get(ctx, client.ObjectKeyFromObject(f.Session), &retained); err != nil {
+			return err
+		}
+		if h := retained.Status.PrivateHistory; h != nil && h.ExecutorAttempted {
+			return apierrors.NewTooManyRequests("throttled", 1)
+		}
+		return nil
+	}})
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.Session)}
+	if _, err := canaryReconciler(c, reader, f).Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	var retained v1alpha1.AgentSession
+	if err := base.Get(context.Background(), request.NamespacedName, &retained); err != nil || !retained.Status.PrivateHistory.ExecutorNotCreated || creates != 0 {
+		t.Fatal("first throttled reconcile did not record a non-attempt", err, creates)
+	}
+	// One more reconcile settles the conditions observed before HOME was bound.
+	if _, err := canaryReconciler(c, reader, f).Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	marked := writes
+	for range 3 {
+		if _, err := canaryReconciler(c, reader, f).Reconcile(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if writes != marked || creates != 0 {
+		t.Fatalf("a lasting read failure made %d status writes and %d creates; want none", writes-marked, creates)
+	}
+	broken = false
+	if _, err := canaryReconciler(c, reader, f).Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if creates != 1 {
+		t.Fatalf("healed reads created %d Pods, want 1", creates)
+	}
+}
+
 func TestProjectCanaryFinalExecutorRefusesForeignPVCAndMountAliases(t *testing.T) {
 	f := testutil.New(t, "claude", "dev/dev-env")
 	pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, false, nil)

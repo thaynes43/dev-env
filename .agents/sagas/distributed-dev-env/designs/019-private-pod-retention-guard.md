@@ -120,9 +120,18 @@ executor was observed or without an attempt. With the mark set, the absent Pod
 is expected and is not PreservationUnknown. An observed executor for the intent
 clears the mark, so the attempt is latched as usual.
 
+Re-arm never starts on a failing read. `ensure()` runs the full canary
+validation before admission and before the clearing write, so a read failure
+that lasts stops there and makes no status write. Only an intermittent failure
+that passes that validation and fails the post-latch one repeats the clear and
+mark writes. For independent failures that happens on at most a quarter of
+reconciles, and every repeat must pass the earlier validation again.
+
 Focused tests: `TestProjectCanaryTransientFailureAfterIntentResumesSameIntentOnce`
 (a 503 on the post-latch catalog read, and on the latch confirmation, each create
 no Pod, record the mark, then create exactly one Pod with the original intent),
+`TestProjectCanaryPersistentReadFailureAfterMarkWritesNothing` (a lasting 429
+makes no status write and no Pod, and healed reads create exactly one),
 `TestPrivateHistoryNotCreatedMarkYieldsToObservedExecutor` and the schema cases in
 `TestPrivateHistoryExecutorNotCreatedMark`.
 
