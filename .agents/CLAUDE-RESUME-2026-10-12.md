@@ -201,6 +201,23 @@ Its output carried both markers. The
 [Claude canary 1012 record](sagas/distributed-dev-env/verification/claude-canary-1012-2026-10-12.md)
 has the details.
 
+**Counters update, Q-30, 2026-10-12.** The three counters paragraphs above are
+the original records. Under Q-30, one Claude canary on the private Sigo alumni
+project, `rule-canary-claude-sigo-1012` (Session
+`private-canary-a1444f4131ec7281b5d1e3130c3b5ada`, UID
+`430297d9-aa29-4332-9b3b-37095c1b5963`), ran one Create, one named read and one
+result read, with no retries and no directory read. Counters are now Directory
+**6**; Claude Create **3** (1011, 1012, sigo-1012), Codex Create **1**; Claude
+named/result **3 each**; Codex named/result **1 each**. All four permanent IDs
+are consumed. Catalog bootstrap ended `Partial` on a tracked symlink, so the
+run is not accepted for #173 under DESIGN-011's all-items gate; #237 fixes it in
+source and its deploy is pending. Root acceptance `dd5dee24` accepts private
+GitHub authorization and a fresh task pin separately, a departure the record
+names (`partial-acceptance-by-property`). A `Ready` bootstrap on a private
+multi-repository project is still unaccepted. The
+[Sigo private-repo canary record](sagas/distributed-dev-env/verification/sigo-private-canary-2026-10-12.md)
+has the details.
+
 ## Next bounded work and the six-step roadmap
 
 1. **Finish [#173](https://github.com/thaynes43/dev-env/issues/173).** Bootstrap and
@@ -233,6 +250,13 @@ has the details.
    same day. Its bootstrap ended `Partial` on a tracked symlink, so it was not
    accepted; #237 fixes the proof (HANDOFF, Q-30 section)
    ([DESIGN-011 Q-30 amendment](sagas/distributed-dev-env/designs/011-private-managed-rule-canaries.md#private-repo-canary-on-the-sigo-alumni-project--2026-10-12-q-30-173)).*
+   *Update, Q-30 Root acceptance, 2026-10-12: the run is still not accepted for
+   #173 under DESIGN-011's gate. The Root (`dd5dee24`) accepts private GitHub
+   authorization and a fresh task pin separately, as the named deviation
+   `partial-acceptance-by-property`. Still open for #173: a `Ready` bootstrap on a private multi-repository
+   project, after #237 deploys and with a new canary Tom approves, and #173's
+   other acceptance items
+   ([Sigo private-repo canary record](sagas/distributed-dev-env/verification/sigo-private-canary-2026-10-12.md)).*
 2. **[#174](https://github.com/thaynes43/dev-env/issues/174): history and discovery.**
    Finish provider-history retention, durable live/stopped/archived directory and
    authorized stopped-context reads. Prove reads without starting a model turn
