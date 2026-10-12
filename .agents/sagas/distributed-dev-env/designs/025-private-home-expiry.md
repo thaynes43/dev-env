@@ -2,8 +2,9 @@
 
 - **Status:** Accepted 2026-10-12; corrected the same day after its review
   ([ADR-006](../adrs/006-private-home-expiry-corrections.md), D-87). H1, the
-  terminal record, is implemented in source (#236, section 3.6), default off and
-  not yet released or installed; H2 to H10 have no source yet
+  terminal record (#236, section 3.6), shipped in 2.25.0; H2 installed it with
+  the record on, 2026-10-12 (haynes-ops #3852 and #3854). H3 to H10 have no
+  source yet
 - **Decision:** [ADR-005](../adrs/005-private-home-expiry.md) (Q-31, Tom,
   2026-10-12: "Archive, then delete (Recommended)"), amended by
   [ADR-006](../adrs/006-private-home-expiry-corrections.md)
@@ -919,8 +920,18 @@ unknown entry needs a source change or Tom's decision, never a manual delete by
 an agent; an automated responder reports and changes nothing.
 `DevEnvPrivateExecutorEndedUnrecorded` is a warning: nothing is at risk, the HOME
 is simply kept for good. Because `missed` counts only the marker's write, it
-fires once per Session, not again after each operator restart; the two 1011
-canaries fire it once, when H2 turns the record on. `DevEnvShelfUnavailable` (DESIGN-024) covers the shelf.
+fires once per Session, not again after each operator restart.
+`DevEnvShelfUnavailable` (DESIGN-024) covers the shelf.
+
+The rule ships in H7 (section 12), so it never fires for the two 1011 canaries.
+H2 wrote their markers within a second of the first 2.25.0 leader taking its
+lease (2026-10-12 23:22:49 UTC), before the first scrape, which already read
+`missed` = 2; and by the time H7 loads the rule they are far outside its
+one-hour window. The H2 post-check verifies them directly instead: an
+`executorMissed` marker stored on each Session, and `missed` = 2 on the leader
+that wrote them. (Corrected
+2026-10-12: this paragraph used to say the two canaries fire the alert once
+when H2 turns the record on, which section 12's order cannot produce.)
 
 ## 11. Guard tests
 

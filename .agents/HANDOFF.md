@@ -7,6 +7,35 @@ the saga. To continue building, follow the
 in the Claude pickup brief. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## dev-env 2.25.0 deployed: terminal record on (DESIGN-025 H2), R1 alert — 2026-10-12 UTC
+
+haynes-ops #3852 (`217dbede`, the AgentSession CRD, generation 10 to 11) merged
+first, then #3854 (`1815eab0`). The operator runs
+`sha-388444d@sha256:75c41e04…` (code identical to v2.25.0; its binary reports
+`v2.24.1-9-g388444d`), 2/2 Ready, 0 restarts, with one new arg,
+`--enable-private-terminal-record=true`. It has `get` on Nodes and on Leases in
+`kube-node-lease`, bound to its own ServiceAccount only. The task template runs
+agent image `2.25.0@sha256:25b20148…`, revision `2.25.0-b7972dd7b5`, so #237
+(tracked symlinks) and #239 (bootstrap reason codes) reach new pods. The
+canary policy is byte-identical; both records are consumed and the operator
+started with them. No other pod in `dev-env-system`, `dev-agents`, `dev` or
+`upgrade-agent` changed.
+
+**The terminal record is live.** Within a second of taking the lease the leader
+stored four marks: `executorTerminal` on the two 1012 canaries
+(`private-canary-6f090716…` on talosw03, `private-canary-a1444f41…` on
+talosw02; phase `Failed`, `DeadlineExceeded`, container `agent` exit 0) and
+`executorMissed` on the two 1011 originals (`private-canary-3bfe2875…`,
+`private-canary-fc5935c1…`), whose Pods were lost in the talosw02 reboot.
+Counter on the leader: `recorded` 2, `missed` 2, `refused` 0. Spec, phase and
+task result did not change. `DevEnvPrivateExecutorEndedUnrecorded` is an H7
+alert and never sees these two misses (DESIGN-025 section 10, corrected here).
+
+**R1 is live.** `DevEnvCoordinationRecordsNearLimit` (DESIGN-024 section 7) is
+loaded in `dev-env-operator.rules`, health ok, inactive; the largest ratio is
+about 0.003. Next for DESIGN-025 is H3 (source). Post-check evidence stays with
+the coordinator's deploy order, outside this repo.
+
 ## Sigo private-repo canary recorded: not accepted for #173; private authorization and fresh pin accepted separately — 2026-10-12 UTC
 
 The one Q-30 canary, `rule-canary-claude-sigo-1012`, ran on the Sigo alumni
