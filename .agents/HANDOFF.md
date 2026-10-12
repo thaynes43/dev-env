@@ -44,10 +44,15 @@ and require an explicit owner choice. [DESIGN-006 Q-24](sagas/distributed-dev-en
 and #91 remain the decision record; do not repeat the question or copy enrollment.
 
 The closed installed binding `1061d476` retains current caller and four source
-ConfigMap UID/resourceVersion bindings from the saved post observation. The
-first Directory final plan `751813d5` awaits independent final preparation review
-and root one-read authority. Directory contents remain Unknown; it grants no
-Create permission. No observer retry or original receipt rewrite is authorized.
+ConfigMap UID/resourceVersion bindings from the saved post observation. First
+Directory plan `751813d5` passed independent final data review `b3e1ab06` and its
+closed native gate `e3421598`. Root authorized one read. The attempt at 03:31:01
+UTC failed certificate validation: the client does not trust the operator CA.
+Its original refusal `ac1dfe77` and raw stderr `14ecfe02` are retained; no directory
+data was returned, no Create is authorized, both keys are untouched and cardinality
+remains Unknown. No retry, alternate API or TLS bypass is authorized. A finite
+source/public-CA trust audit proceeds without runtime or credential reads.
+No observer retry or original receipt rewrite is authorized.
 
 ## Fixed-rule configuration accepted — 2026-10-12 00:31 UTC
 

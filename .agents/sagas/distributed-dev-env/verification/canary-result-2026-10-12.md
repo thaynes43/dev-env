@@ -97,8 +97,8 @@ continuous liveness or authorize provider execution. Activity `act-021455-259531
 ended at the same checkpoint.
 
 The latest accepted operator image deployment is #3825. Directory contents remain Unknown;
-the first ordinary operator/API read and all fixed creates/result reads remain
-unexecuted. Both permanent IDs are preserved and no key is consumed. Before each
+the first ordinary client Directory attempt failed TLS validation as recorded
+below. All fixed creates/result reads remain unexecuted. Both permanent IDs are preserved and no key is consumed. Before each
 first create, require an installed-image/client binding and a fresh, complete
 authorized Directory page. Preserve each original Session UID and all uncertain
 receipts; there is no alternate Job-output, live-log, identity or rearm route.
@@ -133,8 +133,21 @@ the catalog, template and both common-rule ConfigMap UID/resourceVersion values
 from the saved post observation. Independently accepted common serialization
 `680b0ea1` supplies snapshot digest `95ab08b1`. First Directory final plan
 `751813d5` binds the accepted D22 local client and source, one complete-page read
-and no creation authority. Independent final preparation review and separate
-root one-read authorization remain required; neither helper has been executed.
+and no creation authority. Independent final data review `b3e1ab06` passed all
+134 checks and bound its five-field gate `e3421598`; root one-read authority is
+`75155117`. The reviewer retained its earlier assertion-shape HOLD `aaa76c53`
+and corrected the two structured-proof checks without changing the plan or helper.
+
+The single client attempt at 03:31:01 UTC returned exit 3 after certificate
+validation failed against the operator: `x509: certificate signed by unknown
+authority`. Raw stderr `14ecfe02` contains that diagnostic; stdout is empty.
+Original gate refusal `ac1dfe77` and outer result `b183258a` are retained. There
+was no timeout, accepted Directory response, provider start, Create or key
+consumption. HTTP status and Directory contents remain Unknown. This campaign is
+consumed; no retry, alternate endpoint, TLS bypass or credential copy is authorized.
+The source/public-CA trust audit must establish the legitimate ordinary-client
+trust path before any successor read can be proposed. Installed-image acceptance
+and source checks remain separate from this failed ordinary-client read.
 
 Actual Claude/Codex common and repository rule loading, private GitHub access,
 live/stopped discovery, full native history, claims/inbox consumer behavior,

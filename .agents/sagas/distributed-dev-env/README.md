@@ -19,8 +19,10 @@ The [fixed-rule activation record](verification/fixed-rule-activation-2026-10-11
 binds Q-26's one final correction and accepted Ops #3824 deployment/preservation.
 The single post-roll observer and independent saved review passed; all 11 peers
 were preserved. DESIGN-022 fixes bounded result retrieval and the discovered
-pre-create capture UID preview before any permanent provider probe. Actual
-Directory reads and both-provider rule acceptance have not run; Q-24 remains pending.
+pre-create capture UID preview before any permanent provider probe. The one
+ordinary Directory attempt at 03:31:01 UTC failed operator CA validation; its
+receipt is preserved, contents remain Unknown and no retry or Create is authorized.
+Actual both-provider rule acceptance has not run; Q-24 remains pending.
 
 The [ID-only canary client slice](designs/021-canary-cli.md) makes the fixed
 instruction-probe route safely callable: one trusted-ID POST, original receipt,
