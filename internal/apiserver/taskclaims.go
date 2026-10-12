@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -80,6 +82,19 @@ func (s *Server) claimCaller(ctx context.Context, c *caller) (*v1alpha1.AgentSes
 		return nil, claimDenied()
 	}
 	return &sess, nil
+}
+
+// sameSessionBinding is the final identity fence for the coordination routes.
+// It compares what binds a Session to its authority: UID, generation and spec,
+// deletion, labels, annotations (the saved project snapshot among them), owner
+// references and finalizers. It ignores status, resourceVersion and managed
+// fields, so a heartbeat or controller status write between the first read and
+// the fence is not a refusal. Callers recheck the live status facts they need.
+func sameSessionBinding(a, b *v1alpha1.AgentSession) bool {
+	return a != nil && b != nil && a.UID != "" && a.UID == b.UID && a.Namespace == b.Namespace && a.Name == b.Name &&
+		a.Generation == b.Generation && a.DeletionTimestamp.Equal(b.DeletionTimestamp) &&
+		maps.Equal(a.Labels, b.Labels) && maps.Equal(a.Annotations, b.Annotations) &&
+		reflect.DeepEqual(a.OwnerReferences, b.OwnerReferences) && slices.Equal(a.Finalizers, b.Finalizers) && reflect.DeepEqual(a.Spec, b.Spec)
 }
 
 func claimSnapshot(sess *v1alpha1.AgentSession) (projectcatalog.Snapshot, error) {
@@ -180,15 +195,19 @@ func (s *Server) createTaskClaim(ctx context.Context, w http.ResponseWriter, r *
 	}
 	// Fence the owner again after catalog I/O and before the atomic create.
 	fresh, err := s.claimOwner(ctx, c, req)
-	if err != nil || fresh.UID != owner.UID || fresh.ResourceVersion != owner.ResourceVersion {
+	if err != nil || !sameSessionBinding(fresh, owner) {
 		return 0, nil, claimDenied()
 	}
 	claim, created, err := s.TaskClaims.Create(ctx, spec)
+	if errors.Is(err, taskclaim.ErrLimit) {
+		return 0, nil, newError(http.StatusTooManyRequests, apiv1.CodeLimitExceeded, "task claim limit reached for this owner Session or project; nothing was claimed")
+	}
 	if err != nil {
 		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "task ownership is unconfirmed; retry the same identity and owner")
 	}
 	status, outcome := http.StatusOK, "Confirmed"
-	if claim.Spec.Owner != spec.Owner {
+	// The same work may already be claimed under another repository key.
+	if claim.Spec.Owner != spec.Owner || claim.Spec.Identity != spec.Identity {
 		status, outcome = http.StatusConflict, "Conflict"
 	} else if created {
 		status, outcome = http.StatusCreated, "Created"

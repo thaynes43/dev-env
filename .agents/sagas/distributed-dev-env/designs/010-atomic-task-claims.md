@@ -45,6 +45,39 @@ source pin Unknown unless a narrowly bound startup receipt proves it. Preserve
 the task's identity for subsequent budget/history integration without
 inventing counters or stop evidence.
 
+## Same work, bounds and fences (2026-10-12)
+
+These rules come from the #175 coordination review.
+
+- **One owner across a repository rename.** The claim name still digests
+  project, declared repository key and task key, so claims that already exist
+  keep their names. A catalog revision can rename a repository key while the
+  GitHub repository stays the same. A new session on the new key would then
+  get a second deterministic name for the same `issue:N`, and a second owner.
+  A test showed this happening. New claims now carry a work label: a digest
+  of project, lowercased GitHub repository and task key. Before it creates a
+  new identity, the store looks up that label. If the same work is already
+  claimed under another key, it returns that claim unchanged, and the API
+  answers 409 with its owner. Claims created before the work label carry the
+  project label alone. That set can no longer grow, so the store also scans it
+  (selector: project, and no work label), up to the project bound. The catalog
+  refuses one GitHub repository under two keys at one revision, so Create stays
+  atomic within a revision. Only two creates on the old and new keys that race
+  while the catalog changes could both pass this non-atomic check.
+- **Bounds.** A new claim is refused with 429 `limit_exceeded` when its owner
+  Session already owns 512 claims, or its project holds 4096. Nothing is
+  created. A retry of an existing claim, and a contender that gets 409 with the
+  existing owner, are never refused. New claims carry an owner (source) label.
+  Claims from before it count toward the project bound only. Counting uses
+  uncached, metadata-only, label-selected lists under the operator's existing
+  get, create and list grant. Concurrent creates can pass the same count by
+  the number of racing creates.
+- **Final fence.** The owner fence before Create compares the Session's
+  binding (UID, generation and spec, deletion, labels, annotations, owner
+  references and finalizers), not the whole resourceVersion. A heartbeat
+  between the reads is no refusal. The reported HEAD then comes from the first
+  read, and it stays labelled as a reported observation.
+
 ## Paths and acceptance
 
 - `api/coordination/v1alpha1/`: GroupVersion, TaskClaim/List, bounded immutable

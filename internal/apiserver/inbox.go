@@ -165,7 +165,7 @@ func (s *Server) publishInbox(ctx context.Context, _ http.ResponseWriter, r *htt
 	existing, err := s.Inbox.Get(ctx, inbox.MessageName(spec.Sender, spec.Key))
 	if err == nil {
 		fresh, fenceErr := s.inboxSenderCaller(ctx, c)
-		if fenceErr != nil || fresh.UID != sender.UID || fresh.ResourceVersion != sender.ResourceVersion {
+		if fenceErr != nil || !sameSessionBinding(fresh, sender) {
 			return 0, nil, inboxHidden()
 		}
 		return inboxPublishResult(existing, false, spec)
@@ -183,14 +183,17 @@ func (s *Server) publishInbox(ctx context.Context, _ http.ResponseWriter, r *htt
 	}
 	// Fence both original identities after catalog I/O, before the only mutation.
 	fresh, err := s.inboxSenderCaller(ctx, c)
-	if err != nil || fresh.UID != sender.UID || fresh.ResourceVersion != sender.ResourceVersion {
+	if err != nil || !sameSessionBinding(fresh, sender) {
 		return 0, nil, inboxHidden()
 	}
 	freshRecipient, err := s.newInboxRecipient(ctx, spec.Recipient, spec.Project)
-	if err != nil || freshRecipient.ResourceVersion != recipient.ResourceVersion {
+	if err != nil || !sameSessionBinding(freshRecipient, recipient) {
 		return 0, nil, inboxHidden()
 	}
 	m, created, err := s.Inbox.Create(ctx, spec)
+	if errors.Is(err, inbox.ErrLimit) {
+		return 0, nil, newError(http.StatusTooManyRequests, apiv1.CodeLimitExceeded, "inbox message limit reached for this sender Session or project; nothing was sent")
+	}
 	if err != nil {
 		return 0, nil, inboxUnknown()
 	}

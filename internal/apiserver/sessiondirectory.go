@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
+	"github.com/thaynes43/dev-env/internal/sessiondirectory"
 )
 
 func directoryHidden() error { return notFound("session directory not found") }
@@ -185,6 +187,28 @@ func (s *Server) directoryView(ctx context.Context, d *coord.SessionDirectory) a
 		Retained: apiv1.DirectoryRetained{LastWitness: directoryWitness(retained.LastWitness), SourceState: retained.SourceState, ObservedAt: directoryRecordedTime(retained.ObservedAt), StopState: retained.StopState, ActualModelState: retained.ActualModelState, UsageState: retained.UsageState, CostState: retained.CostState},
 		Current:  apiv1.DirectoryCurrent{SourceState: c.SourceState, PlacementState: c.PlacementState, ObservedAt: c.ObservedAt.Time, SourceResourceVersion: c.SourceResourceVersion, Witness: directoryWitness(c.Witness), StopState: c.StopState}}
 }
+
+// directoryRecord reads one named record after the caller's scope passed and
+// rechecks that scope after the read. Absence, an invalid name and any record
+// of another project stay the hidden 404. An unconfirmed read in the caller's
+// own project is Unknown (503), never reported as absence.
+func (s *Server) directoryRecord(ctx context.Context, c *caller, name, project string) (*coord.SessionDirectory, error) {
+	if !sessiondirectory.ValidName(name) {
+		return nil, directoryHidden()
+	}
+	d, err := s.SessionDirectory.GetForProject(ctx, name, project)
+	if s.directoryScope(ctx, c, project) != nil || errors.Is(err, sessiondirectory.ErrNotFound) {
+		return nil, directoryHidden()
+	}
+	if err != nil {
+		return nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "session directory is unconfirmed; retry")
+	}
+	if d.Spec.Project != project {
+		return nil, directoryHidden()
+	}
+	return d, nil
+}
+
 func (s *Server) getDirectory(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
 	project, _, err := directoryQuery(r, false)
 	if s.directoryScope(ctx, c, project) != nil {
@@ -193,12 +217,9 @@ func (s *Server) getDirectory(ctx context.Context, _ http.ResponseWriter, r *htt
 	if err != nil {
 		return 0, nil, err
 	}
-	d, err := s.SessionDirectory.Get(ctx, r.PathValue("directory"))
-	if err != nil || d.Spec.Project != project {
-		return 0, nil, directoryHidden()
-	}
-	if s.directoryScope(ctx, c, project) != nil {
-		return 0, nil, directoryHidden()
+	d, err := s.directoryRecord(ctx, c, r.PathValue("directory"), project)
+	if err != nil {
+		return 0, nil, err
 	}
 	return http.StatusOK, s.directoryView(ctx, d), nil
 }
@@ -240,9 +261,9 @@ func (s *Server) listDirectoryContexts(ctx context.Context, _ http.ResponseWrite
 	if err != nil {
 		return 0, nil, err
 	}
-	d, err := s.SessionDirectory.Get(ctx, r.PathValue("directory"))
-	if err != nil || d.Spec.Project != project {
-		return 0, nil, directoryHidden()
+	d, err := s.directoryRecord(ctx, c, r.PathValue("directory"), project)
+	if err != nil {
+		return 0, nil, err
 	}
 	if s.DirectoryContexts == nil {
 		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "context metadata store is unavailable")

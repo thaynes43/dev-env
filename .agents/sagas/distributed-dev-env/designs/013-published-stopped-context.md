@@ -47,6 +47,36 @@ authorized reads. No source exec, resume, model turn or stopped-volume mount
 is permitted by a read. Unrelated projects and body reads without the explicit
 payload grant fail closed without exposing existence or private content.
 
+## Bounds, fences and identity normalization (2026-10-12)
+
+These rules come from the #175 coordination review.
+
+- **Explicit project.** Publication is enabled per project. A publisher's saved
+  project must be in the explicit payload project list
+  (`--context-payload-read-projects`), the same list readers need. Otherwise
+  the publish is refused like any other unauthorized call.
+- **Bounds.** Each publication holds up to 64 KiB, and none is ever deleted. A
+  new publication is refused with 429 `limit_exceeded` when its source Session
+  already has 128 publications, or its project has 1024. Nothing is created. A
+  retry of an existing identity is never refused. Counting uses uncached,
+  metadata-only, label-selected lists. New publications carry a source label
+  (a digest of the original Session identity) beside the project label.
+  Publications from before the label count toward the project bound only.
+  Concurrent creates can pass the same count, so a bound can be passed by at
+  most the number of racing creates. The bounds are defence in depth against an
+  agent loop filling etcd. They are not a retention policy.
+- **Final fence.** The fence before the atomic create compares the Session's
+  binding: UID, generation and spec, deletion, labels, annotations (including
+  the saved project snapshot), owner references and finalizers. It does not
+  compare the whole resourceVersion. A heartbeat or controller status write
+  between the reads is therefore no refusal. The fresh live caller check still
+  refuses a stopped, suspended or deleting source. A managed output still
+  rechecks that the fresh retained history names this Pod as last executor.
+- **GitHub identity.** Provenance stores the catalog's GitHub repository
+  lowercased, as claims and the inbox do. A mixed-case repository part in the
+  catalog no longer turns every publication into a 403. The fixed canary result
+  reader compares the lowercased form too.
+
 ## Paths and acceptance
 
 - Protected coordination API types/deepcopy/immutable schema and generated CRD.

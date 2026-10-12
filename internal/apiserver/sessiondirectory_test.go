@@ -251,6 +251,7 @@ func TestDirectoryContextReferenceWhitelistAndSparseBoundedPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.Spec.Source.Namespace = "another-namespace"
+	p.Labels[taskclaim.SourceLabel] = taskclaim.SessionLabel(p.Spec.Source) // a real record carries its own source label
 	lists := 0
 	f.srv.DirectoryContexts.Live = interceptor.NewClient(f.c, interceptor.Funcs{List: func(_ context.Context, _ client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 		lists++
