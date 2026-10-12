@@ -64,6 +64,57 @@ type privateAnchorIdentity struct {
 	CommonFile  string `json:"commonFile"`
 }
 
+// The pending record holds two root states, each with up to the maximum
+// anchors; the bound is twice the receipt's.
+const privateRootPendingLimit = 2 * privateRootReceiptLimit
+
+// Generated wrappers hold the bounded rules plus a header that names at most
+// MaxProjectRepositories repositories.
+const privateRootWrapperLimit = projectcatalog.MaxRulesBytes + (64 << 10)
+
+// privateRootState is one exact, component-wise state of an owned root. An
+// empty Head means the root is not published yet.
+type privateRootState struct {
+	Head          string                        `json:"head"`
+	Tree          string                        `json:"tree"`
+	WrapperDigest string                        `json:"wrapperDigest"`
+	Exclusion     string                        `json:"exclusion"`
+	Anchors       map[string]privateAnchorState `json:"anchors"`
+}
+
+// A nil Identity names an anchor that this advance creates and has not yet
+// recorded.
+type privateAnchorState struct {
+	Repository projectcatalog.Repository `json:"repository"`
+	Target     string                    `json:"target"`
+	Identity   *privateAnchorIdentity    `json:"identity,omitempty"`
+}
+
+// privateRootPending is written before agentd's first change to a root and
+// updated as it records new anchors. Each component of the live root is then
+// at From or To; a later refresh proves that and resumes from the state it
+// finds (DESIGN-007, recoverable advance).
+type privateRootPending struct {
+	Version      int              `json:"version"`
+	ID           string           `json:"id"`
+	Root         string           `json:"root"`
+	ConfigDigest string           `json:"configDigest"`
+	From         privateRootState `json:"from"`
+	To           privateRootState `json:"to"`
+}
+
+func (receipt privateRootReceipt) state(anchors []PrivateProjectSource, identities map[string]privateAnchorIdentity) privateRootState {
+	state := privateRootState{Head: receipt.Head, Tree: receipt.Tree, WrapperDigest: receipt.WrapperDigest, Exclusion: receipt.Exclusion, Anchors: map[string]privateAnchorState{}}
+	for _, anchor := range anchors {
+		var owned *privateAnchorIdentity
+		if identity, ok := identities[anchor.Repository.Name]; ok {
+			owned = &identity
+		}
+		state.Anchors[anchor.Repository.Name] = privateAnchorState{Repository: anchor.Repository, Target: anchor.Target, Identity: owned}
+	}
+	return state
+}
+
 func refreshPrivateProjectRoot(ctx context.Context, r Runner, s Settings, snapshot projectcatalog.Snapshot, authority *projectCatalogAuthority) (report PrivateProjectRootReport) {
 	report = PrivateProjectRootReport{Project: snapshot.Project(), State: "Failed", CatalogRevision: snapshot.CatalogRevision(), RulesRevision: snapshot.RulesRevision(), ObservedAt: time.Now().UTC(), Detail: errPrivateRoot.Error()}
 	parent := filepath.Join(s.StateDir, "project-roots")
@@ -87,28 +138,19 @@ func refreshPrivateProjectRoot(ctx context.Context, r Runner, s Settings, snapsh
 	}
 	root := filepath.Join(s.Home, "codex", snapshot.Project())
 	receiptPath := filepath.Join(parent, snapshot.Project()+".json")
-	var old privateRootReceipt
-	_, rootErr := os.Lstat(root)
-	newRoot := errors.Is(rootErr, os.ErrNotExist)
-	if newRoot {
-		if _, err := os.Lstat(receiptPath); !errors.Is(err, os.ErrNotExist) {
+	pendingPath := filepath.Join(parent, snapshot.Project()+".pending.json")
+	current, id, configDigest, err := privateRootStart(ctx, r, s, root, receiptPath, pendingPath, authority)
+	if err != nil {
+		return report
+	}
+	published := current.Head != ""
+	// Removed anchors are never deleted or silently reclassified as owned
+	// by a newer map. A later explicit migration can decide their future.
+	for name, prior := range current.Anchors {
+		if !slices.ContainsFunc(snapshot.Repositories(), func(repo projectcatalog.Repository) bool {
+			return repo.Name == name && repo.GitHub == prior.Repository.GitHub
+		}) {
 			return report
-		}
-	} else {
-		if rootErr != nil || readWorkspaceJSONBounded(receiptPath, &old, privateRootReceiptLimit) != nil || provePrivateRoot(ctx, r, s, old, old.Repositories, old.Anchors) != nil {
-			return report
-		}
-		if old.Root != root {
-			return report
-		}
-		// Removed anchors are never deleted or silently reclassified as owned
-		// by a newer map. A later explicit migration can decide their future.
-		for _, prior := range old.Repositories {
-			if !slices.ContainsFunc(snapshot.Repositories(), func(repo projectcatalog.Repository) bool {
-				return repo.Name == prior.Repository.Name && repo.GitHub == prior.Repository.GitHub
-			}) {
-				return report
-			}
 		}
 	}
 	var sources []PrivateProjectSource
@@ -125,56 +167,113 @@ func refreshPrivateProjectRoot(ctx context.Context, r Runner, s Settings, snapsh
 		observed.State, observed.Detail = "Ready", "fresh project anchor target"
 		sources = append(sources, observed)
 	}
-	next := privateRootReceipt{Version: 1, ID: old.ID, Root: root, GitDir: filepath.Join(root, ".git"), Branch: privateRootBranch, WrapperDigest: projectcatalog.Digest([]byte(snapshot.ProjectRules())), ConfigDigest: old.ConfigDigest, Repositories: sources, Anchors: map[string]privateAnchorIdentity{}}
+	next := privateRootReceipt{Version: 1, ID: id, Root: root, GitDir: filepath.Join(root, ".git"), Branch: privateRootBranch, WrapperDigest: projectcatalog.Digest([]byte(snapshot.ProjectRules())), ConfigDigest: configDigest, Repositories: sources, Anchors: map[string]privateAnchorIdentity{}}
 	next.Snapshot, _ = json.Marshal(snapshot)
 	for _, repo := range snapshot.Repositories() {
 		next.Exclusion += "/" + repo.Name + "/\n"
 	}
-	if newRoot {
-		id, err := newUUID()
+	// Prove every anchor fast-forward before the first change, so a
+	// deterministic refusal leaves the root exactly where it was.
+	to := privateRootState{Head: current.Head, Tree: current.Tree, WrapperDigest: next.WrapperDigest, Exclusion: next.Exclusion, Anchors: map[string]privateAnchorState{}}
+	for _, source := range sources {
+		name := source.Repository.Name
+		state := privateAnchorState{Repository: source.Repository, Target: source.Target}
+		if prior, exists := current.Anchors[name]; exists {
+			state.Identity = prior.Identity
+			if prior.Target != source.Target {
+				if _, err := projectGit(ctx, r, s, filepath.Join(root, name), "merge-base", "--is-ancestor", prior.Target, source.Target); err != nil {
+					return report
+				}
+			}
+		}
+		to.Anchors[name] = state
+	}
+	if published && current.WrapperDigest != next.WrapperDigest {
+		// Generated objects only; the live index and HEAD are unchanged.
+		to.Head, to.Tree, err = generatedRootCommit(ctx, r, s, root, snapshot.ProjectRules(), current.Head)
 		if err != nil {
 			return report
 		}
-		next.ID = id
-		if preparePrivateRoot(ctx, r, s, &next, snapshot.ProjectRules(), authority) != nil {
+	}
+	if id == "" {
+		if id, err = newUUID(); err != nil {
 			return report
 		}
+		next.ID = id
 	}
+	// From here every change is recorded first: the live root stays, component
+	// by component, at From or To, and a later refresh resumes from it.
+	pending := privateRootPending{Version: 1, ID: id, Root: root, ConfigDigest: configDigest, From: current, To: to}
+	if authority.confirm(ctx) != nil || writePrivateRootPending(pendingPath, pending) != nil {
+		return report
+	}
+	if !published {
+		staging := privateRootStaging(root, id)
+		head, tree, config, err := preparePrivateRoot(ctx, r, s, staging, id, snapshot.ProjectRules(), next.Exclusion, authority)
+		if err != nil {
+			return report
+		}
+		pending.ConfigDigest, pending.To.Head, pending.To.Tree = config, head, tree
+		if writePrivateRootPending(pendingPath, pending) != nil || authority.confirm(ctx) != nil {
+			return report
+		}
+		if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+			return report
+		}
+		if os.Rename(staging, root) != nil {
+			return report
+		}
+		configDigest, next.ConfigDigest = config, config
+		to.Head, to.Tree = head, tree
+		current = privateRootState{Head: head, Tree: tree, WrapperDigest: next.WrapperDigest, Exclusion: next.Exclusion, Anchors: map[string]privateAnchorState{}}
+	}
+	next.Head, next.Tree = to.Head, to.Tree
 	for _, source := range sources {
-		anchor := filepath.Join(root, source.Repository.Name)
+		name := source.Repository.Name
 		var prior *privateAnchorIdentity
-		if identity, exists := old.Anchors[source.Repository.Name]; exists {
-			prior = &identity
+		if state, exists := current.Anchors[name]; exists {
+			prior = state.Identity
 		}
 		if authority.confirm(ctx) != nil {
 			return report
 		}
-		identity, err := advancePrivateAnchor(ctx, r, s, source.Repository, anchor, source.Target, prior, authority)
+		identity, err := advancePrivateAnchor(ctx, r, s, source.Repository, filepath.Join(root, name), source.Target, prior, authority)
 		if err != nil {
 			return report
 		}
-		next.Anchors[source.Repository.Name] = identity
-	}
-	if !newRoot {
-		if provePrivateRoot(ctx, r, s, old, sources, next.Anchors) != nil || authority.confirm(ctx) != nil {
-			return report
-		}
-		if old.WrapperDigest == next.WrapperDigest {
-			next.Head, next.Tree = old.Head, old.Tree
-		} else {
-			var err error
-			next.Head, next.Tree, err = generatedRootCommit(ctx, r, s, root, snapshot.ProjectRules(), old.Head)
-			if err != nil || authority.confirm(ctx) != nil || provePrivateRoot(ctx, r, s, old, sources, next.Anchors) != nil {
+		next.Anchors[name] = identity
+		if prior == nil {
+			state := pending.To.Anchors[name]
+			state.Identity = &identity
+			pending.To.Anchors[name] = state
+			if writePrivateRootPending(pendingPath, pending) != nil {
 				return report
 			}
-			if _, err := rootGit(ctx, r, s, root, nil, "-c", "merge.autostash=false", "merge", "--ff-only", "--no-edit", "--no-autostash", next.Head); err != nil {
+		}
+	}
+	if current.Head != to.Head || current.Exclusion != next.Exclusion {
+		// Re-prove the exact reached state before writing into the root.
+		reached := current
+		reached.Anchors = map[string]privateAnchorState{}
+		for _, source := range sources {
+			identity := next.Anchors[source.Repository.Name]
+			reached.Anchors[source.Repository.Name] = privateAnchorState{Repository: source.Repository, Target: source.Target, Identity: &identity}
+		}
+		if authority.confirm(ctx) != nil {
+			return report
+		}
+		if proof, err := provePrivateRootReached(ctx, r, s, id, root, configDigest, reached, reached); err != nil || proof.modes {
+			return report
+		}
+		if current.Head != to.Head {
+			if _, err := rootGit(ctx, r, s, root, nil, "-c", "merge.autostash=false", "merge", "--ff-only", "--no-edit", "--no-autostash", to.Head); err != nil {
 				return report
 			}
 			if setGeneratedRootWrapperModes(ctx, root, snapshot.ProjectRules(), authority) != nil {
 				return report
 			}
 		}
-		if old.Exclusion != next.Exclusion && writeFileAtomic(filepath.Join(next.GitDir, "info", "exclude"), []byte(next.Exclusion), 0o644) != nil {
+		if current.Exclusion != next.Exclusion && writeFileAtomic(filepath.Join(next.GitDir, "info", "exclude"), []byte(next.Exclusion), 0o644) != nil {
 			return report
 		}
 	}
@@ -182,8 +281,148 @@ func refreshPrivateProjectRoot(ctx context.Context, r Runner, s Settings, snapsh
 	if err != nil || len(encoded)+1 > privateRootReceiptLimit || authority.confirm(ctx) != nil || provePrivateRoot(ctx, r, s, next, sources, next.Anchors) != nil || writeWorkspaceJSON(receiptPath, next) != nil {
 		return report
 	}
+	// The receipt now names the reached state. A pending record that cannot be
+	// removed is still accepted by the next refresh, which finishes this one.
+	if os.Remove(pendingPath) != nil {
+		return report
+	}
 	report.State, report.Head, report.Repositories, report.Detail = "Ready", next.Head, sources, "managed Git root and detached repository anchors verified"
 	return report
+}
+
+// privateRootStart proves where a refresh begins: the exact saved receipt, or
+// agentd's own recorded partial advance. Anything else is preserved. An empty
+// Head in the returned state means the root is not published yet.
+func privateRootStart(ctx context.Context, r Runner, s Settings, root, receiptPath, pendingPath string, authority *projectCatalogAuthority) (privateRootState, string, string, error) {
+	unpublished := privateRootState{Anchors: map[string]privateAnchorState{}}
+	_, rootErr := os.Lstat(root)
+	if rootErr != nil && !errors.Is(rootErr, os.ErrNotExist) {
+		return unpublished, "", "", errPrivateRoot
+	}
+	published := rootErr == nil
+	var receipt privateRootReceipt
+	_, receiptErr := os.Lstat(receiptPath)
+	if receiptErr != nil && !errors.Is(receiptErr, os.ErrNotExist) {
+		return unpublished, "", "", errPrivateRoot
+	}
+	saved := receiptErr == nil
+	if saved && (readWorkspaceJSONBounded(receiptPath, &receipt, privateRootReceiptLimit) != nil || receipt.Root != root) {
+		return unpublished, "", "", errPrivateRoot
+	}
+	var pending privateRootPending
+	if _, err := os.Lstat(pendingPath); errors.Is(err, os.ErrNotExist) {
+		switch {
+		case !published && !saved:
+			return unpublished, "", "", nil
+		case !published || !saved:
+			// A vanished owned root, or a root agentd never recorded.
+			return unpublished, "", "", errPrivateRoot
+		}
+		if provePrivateRoot(ctx, r, s, receipt, receipt.Repositories, receipt.Anchors) != nil {
+			return unpublished, "", "", errPrivateRoot
+		}
+		return receipt.state(receipt.Repositories, receipt.Anchors), receipt.ID, receipt.ConfigDigest, nil
+	} else if err != nil || readWorkspaceJSONBounded(pendingPath, &pending, privateRootPendingLimit) != nil || pending.Version != 1 || pending.ID == "" || pending.Root != root || saved && receipt.ID != pending.ID {
+		return unpublished, "", "", errPrivateRoot
+	}
+	if !published {
+		// agentd never removes a published root, so only an advance that had
+		// not yet published can resume here, from its own staging.
+		if pending.From.Head != "" || saved || discardPrivateRootStaging(privateRootStaging(root, pending.ID), pending.ID, pending.To.WrapperDigest) != nil {
+			return unpublished, "", "", errPrivateRoot
+		}
+		return unpublished, pending.ID, "", nil
+	}
+	proof, err := provePrivateRootReached(ctx, r, s, pending.ID, root, pending.ConfigDigest, pending.From, pending.To)
+	if err != nil || proof.modes && setGeneratedRootWrapperModes(ctx, root, proof.rules, authority) != nil {
+		return unpublished, "", "", errPrivateRoot
+	}
+	return proof.state, pending.ID, pending.ConfigDigest, nil
+}
+
+func writePrivateRootPending(path string, pending privateRootPending) error {
+	encoded, err := json.Marshal(pending)
+	if err != nil || len(encoded)+1 > privateRootPendingLimit {
+		return errPrivateRoot
+	}
+	return writeWorkspaceJSON(path, pending)
+}
+
+func privateRootStaging(root, id string) string {
+	return filepath.Join(filepath.Dir(root), "."+filepath.Base(root)+".agentd-root-"+id)
+}
+
+// discardPrivateRootStaging removes agentd's own unpublished staging, named by
+// the pending root ID recorded before it was created, when it holds nothing
+// but what preparePrivateRoot writes. Changed staging is preserved.
+func discardPrivateRootStaging(staging, id, wrapperDigest string) error {
+	fi, err := os.Lstat(staging)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || !fi.IsDir() || noSymlinkComponents(staging) != nil || !ownedByProcess(fi) {
+		return errPrivateRoot
+	}
+	entries, err := os.ReadDir(staging)
+	if err != nil {
+		return errPrivateRoot
+	}
+	for _, entry := range entries {
+		path := filepath.Join(staging, entry.Name())
+		fi, err := os.Lstat(path)
+		if err != nil {
+			return errPrivateRoot
+		}
+		switch entry.Name() {
+		case ".git":
+			if !fi.IsDir() || !ownedByProcess(fi) {
+				return errPrivateRoot
+			}
+			marker := filepath.Join(path, "dev-env-project-id")
+			if _, err := os.Lstat(marker); !errors.Is(err, os.ErrNotExist) {
+				if data, err := readPrivateRootFile(marker, int64(len(id))); err != nil || data != id {
+					return errPrivateRoot
+				}
+			}
+		case "AGENTS.md", "CLAUDE.md":
+			st, ok := fi.Sys().(*syscall.Stat_t)
+			if !ok || st.Nlink != 1 || !ownedByProcess(fi) {
+				return errPrivateRoot
+			}
+			if data, err := readPrivateRootFile(path, privateRootWrapperLimit); err != nil || projectcatalog.Digest([]byte(data)) != wrapperDigest {
+				return errPrivateRoot
+			}
+		default:
+			return errPrivateRoot
+		}
+	}
+	return os.RemoveAll(staging)
+}
+
+func ownedByProcess(fi os.FileInfo) bool {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	return ok && st.Uid == uint32(os.Geteuid())
+}
+
+// readPrivateRootFile reads a bounded regular file without following a final
+// symlink or blocking on a FIFO.
+func readPrivateRootFile(path string, limit int64) (string, error) {
+	if noSymlinkComponents(path) != nil {
+		return "", errPrivateRoot
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return "", errPrivateRoot
+	}
+	defer func() { _ = f.Close() }()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() || fi.Size() > limit {
+		return "", errPrivateRoot
+	}
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil || int64(len(data)) > limit {
+		return "", errPrivateRoot
+	}
+	return string(data), nil
 }
 
 func rootGit(ctx context.Context, r Runner, s Settings, dir string, input *strings.Reader, args ...string) (string, error) {
@@ -219,46 +458,36 @@ func generatedRootCommit(ctx context.Context, r Runner, s Settings, dir, rules, 
 	return head, tree, nil
 }
 
-func preparePrivateRoot(ctx context.Context, r Runner, s Settings, next *privateRootReceipt, rules string, authority *projectCatalogAuthority) error {
-	staging := filepath.Join(filepath.Dir(next.Root), "."+filepath.Base(next.Root)+".agentd-root")
+// preparePrivateRoot builds an unpublished root in staging named by its
+// pending ID. The caller records the result before it publishes the root.
+func preparePrivateRoot(ctx context.Context, r Runner, s Settings, staging, id, rules, exclusion string, authority *projectCatalogAuthority) (string, string, string, error) {
 	if _, err := os.Lstat(staging); !errors.Is(err, os.ErrNotExist) {
-		return errPrivateRoot
+		return "", "", "", errPrivateRoot
 	}
 	if err := os.Mkdir(staging, 0o755); err != nil {
-		return err
+		return "", "", "", err
 	}
 	if _, err := rootGit(ctx, r, s, staging, nil, "init", "--quiet", "--template=", "--initial-branch="+privateRootBranch); err != nil {
-		return err
+		return "", "", "", err
 	}
 	config, err := os.ReadFile(filepath.Join(staging, ".git", "config"))
 	if err != nil {
-		return errPrivateRoot
+		return "", "", "", errPrivateRoot
 	}
-	next.ConfigDigest = projectcatalog.Digest(config)
 	head, tree, err := generatedRootCommit(ctx, r, s, staging, rules, "")
 	if err != nil {
-		return err
+		return "", "", "", err
 	}
 	if _, err := rootGit(ctx, r, s, staging, nil, "checkout", "--quiet", "-b", privateRootBranch, head); err != nil {
-		return err
+		return "", "", "", err
 	}
 	if err := setGeneratedRootWrapperModes(ctx, staging, rules, authority); err != nil {
-		return err
+		return "", "", "", err
 	}
-	if writeFileAtomic(filepath.Join(staging, ".git", "dev-env-project-id"), []byte(next.ID), 0o600) != nil || writeFileAtomic(filepath.Join(staging, ".git", "info", "exclude"), []byte(next.Exclusion), 0o644) != nil {
-		return errPrivateRoot
+	if writeFileAtomic(filepath.Join(staging, ".git", "dev-env-project-id"), []byte(id), 0o600) != nil || writeFileAtomic(filepath.Join(staging, ".git", "info", "exclude"), []byte(exclusion), 0o644) != nil {
+		return "", "", "", errPrivateRoot
 	}
-	if authority.confirm(ctx) != nil {
-		return errPrivateRoot
-	}
-	if _, err := os.Lstat(next.Root); !errors.Is(err, os.ErrNotExist) {
-		return errPrivateRoot
-	}
-	if err := os.Rename(staging, next.Root); err != nil {
-		return err
-	}
-	next.Head, next.Tree = head, tree
-	return nil
+	return head, tree, projectcatalog.Digest(config), nil
 }
 
 // Git creates these two generated files through the process umask. Only a
@@ -319,45 +548,11 @@ func proveGeneratedRootWrapper(f *os.File, rules string) error {
 	return nil
 }
 
+// provePrivateRoot proves the live root is exactly a saved receipt's state.
 func provePrivateRoot(ctx context.Context, r Runner, s Settings, receipt privateRootReceipt, anchors []PrivateProjectSource, identities map[string]privateAnchorIdentity) error {
 	snapshot, err := projectcatalog.ParseSnapshot(receipt.Snapshot)
 	if err != nil || receipt.Version != 1 || receipt.ID == "" || receipt.Root != filepath.Join(s.Home, "codex", snapshot.Project()) || receipt.GitDir != filepath.Join(receipt.Root, ".git") || receipt.Branch != privateRootBranch || !rootObjectID.MatchString(receipt.Head) || !rootObjectID.MatchString(receipt.Tree) || receipt.WrapperDigest != projectcatalog.Digest([]byte(snapshot.ProjectRules())) {
 		return errPrivateRoot
-	}
-	if privateGitStorageClear(receipt.GitDir, "refs/heads/"+privateRootBranch, "logs/HEAD", "logs/refs/heads/"+privateRootBranch) != nil || projectGitOperationClear(ctx, r, s, receipt.Root) != nil {
-		return errPrivateRoot
-	}
-	for _, path := range []string{"config", "HEAD", "index", "dev-env-project-id", "info/exclude"} {
-		full := filepath.Join(receipt.GitDir, path)
-		fi, err := os.Lstat(full)
-		if err != nil || !fi.Mode().IsRegular() || noSymlinkComponents(full) != nil {
-			return errPrivateRoot
-		}
-		if (path == "dev-env-project-id" && fi.Size() != int64(len(receipt.ID))) || (path == "info/exclude" && fi.Size() != int64(len(receipt.Exclusion))) {
-			return errPrivateRoot
-		}
-		if path == "config" && fi.Size() > 64<<10 {
-			return errPrivateRoot
-		}
-	}
-	config, err := os.ReadFile(filepath.Join(receipt.GitDir, "config"))
-	if err != nil || receipt.ConfigDigest != projectcatalog.Digest(config) {
-		return errPrivateRoot
-	}
-	format, err := rootGit(ctx, r, s, receipt.Root, nil, "config", "--local", "--get", "extensions.refStorage")
-	if err != nil && ExitCodeOf(err) != 1 || err == nil && format != "files" {
-		return errPrivateRoot
-	}
-	if data, err := os.ReadFile(filepath.Join(receipt.GitDir, "dev-env-project-id")); err != nil || string(data) != receipt.ID {
-		return errPrivateRoot
-	}
-	if data, err := os.ReadFile(filepath.Join(receipt.GitDir, "info", "exclude")); err != nil || string(data) != receipt.Exclusion {
-		return errPrivateRoot
-	}
-	for _, path := range []string{"info/attributes", "objects/info/alternates", "objects/info/http-alternates", "config.worktree"} {
-		if _, err := os.Lstat(filepath.Join(receipt.GitDir, path)); !errors.Is(err, os.ErrNotExist) {
-			return errPrivateRoot
-		}
 	}
 	if len(receipt.Repositories) != len(snapshot.Repositories()) || len(identities) != len(anchors) {
 		return errPrivateRoot
@@ -372,57 +567,200 @@ func provePrivateRoot(ctx context.Context, r Runner, s Settings, receipt private
 	if receipt.Exclusion != exclusion {
 		return errPrivateRoot
 	}
+	state := receipt.state(anchors, identities)
+	if len(state.Anchors) != len(anchors) {
+		return errPrivateRoot
+	}
+	for _, anchor := range state.Anchors {
+		if anchor.Identity == nil {
+			return errPrivateRoot
+		}
+	}
+	proof, err := provePrivateRootReached(ctx, r, s, receipt.ID, receipt.Root, receipt.ConfigDigest, state, state)
+	if err != nil || proof.modes || len(proof.state.Anchors) != len(state.Anchors) {
+		return errPrivateRoot
+	}
+	return nil
+}
+
+type privateRootProof struct {
+	state privateRootState
+	// rules holds the wrapper bytes proven at state.WrapperDigest.
+	rules string
+	// modes reports wrappers at To that still carry the creating umask's mode.
+	modes bool
+}
+
+// provePrivateRootReached proves the live root is, component by component, at
+// from or at to, and returns the state it found. Passing one state twice is an
+// exact proof. Only agentd's own recorded advance passes two different states.
+func provePrivateRootReached(ctx context.Context, r Runner, s Settings, id, root, configDigest string, from, to privateRootState) (privateRootProof, error) {
+	var proof privateRootProof
+	gitDir := filepath.Join(root, ".git")
+	if id == "" || configDigest == "" || privateGitStorageClear(gitDir, "refs/heads/"+privateRootBranch, "logs/HEAD", "logs/refs/heads/"+privateRootBranch) != nil || projectGitOperationClear(ctx, r, s, root) != nil {
+		return proof, errPrivateRoot
+	}
+	for _, path := range []string{"config", "HEAD", "index", "dev-env-project-id", "info/exclude"} {
+		full := filepath.Join(gitDir, path)
+		fi, err := os.Lstat(full)
+		if err != nil || !fi.Mode().IsRegular() || noSymlinkComponents(full) != nil {
+			return proof, errPrivateRoot
+		}
+		if (path == "dev-env-project-id" && fi.Size() != int64(len(id))) || (path == "info/exclude" && fi.Size() != int64(len(from.Exclusion)) && fi.Size() != int64(len(to.Exclusion))) {
+			return proof, errPrivateRoot
+		}
+		if path == "config" && fi.Size() > 64<<10 {
+			return proof, errPrivateRoot
+		}
+	}
+	config, err := os.ReadFile(filepath.Join(gitDir, "config"))
+	if err != nil || configDigest != projectcatalog.Digest(config) {
+		return proof, errPrivateRoot
+	}
+	format, err := rootGit(ctx, r, s, root, nil, "config", "--local", "--get", "extensions.refStorage")
+	if err != nil && ExitCodeOf(err) != 1 || err == nil && format != "files" {
+		return proof, errPrivateRoot
+	}
+	if data, err := os.ReadFile(filepath.Join(gitDir, "dev-env-project-id")); err != nil || string(data) != id {
+		return proof, errPrivateRoot
+	}
+	exclusion, err := os.ReadFile(filepath.Join(gitDir, "info", "exclude"))
+	if err != nil || string(exclusion) != from.Exclusion && string(exclusion) != to.Exclusion {
+		return proof, errPrivateRoot
+	}
+	for _, path := range []string{"info/attributes", "objects/info/alternates", "objects/info/http-alternates", "config.worktree"} {
+		if _, err := os.Lstat(filepath.Join(gitDir, path)); !errors.Is(err, os.ErrNotExist) {
+			return proof, errPrivateRoot
+		}
+	}
+	head, err := rootGit(ctx, r, s, root, nil, "rev-parse", "--verify", "HEAD^{commit}")
+	reached, atTo := from, false
+	switch {
+	case err == nil && from.Head != "" && head == from.Head:
+	case err == nil && to.Head != "" && head == to.Head:
+		reached, atTo = to, true
+	default:
+		return proof, errPrivateRoot
+	}
+	if !rootObjectID.MatchString(reached.Head) || !rootObjectID.MatchString(reached.Tree) {
+		return proof, errPrivateRoot
+	}
+	proof.state = privateRootState{Head: reached.Head, Tree: reached.Tree, WrapperDigest: reached.WrapperDigest, Exclusion: string(exclusion), Anchors: map[string]privateAnchorState{}}
 	for _, check := range []struct {
 		args []string
 		want string
 	}{
-		{[]string{"rev-parse", "--show-toplevel"}, receipt.Root},
-		{[]string{"rev-parse", "--path-format=absolute", "--git-common-dir"}, receipt.GitDir},
-		{[]string{"rev-parse", "--verify", "HEAD^{commit}"}, receipt.Head},
-		{[]string{"rev-parse", "--verify", "HEAD^{tree}"}, receipt.Tree},
+		{[]string{"rev-parse", "--show-toplevel"}, root},
+		{[]string{"rev-parse", "--path-format=absolute", "--git-common-dir"}, gitDir},
+		{[]string{"rev-parse", "--verify", "HEAD^{tree}"}, reached.Tree},
 		{[]string{"symbolic-ref", "--quiet", "HEAD"}, "refs/heads/" + privateRootBranch},
 		{[]string{"remote"}, ""},
 		{[]string{"ls-files", "-v"}, "H AGENTS.md\nH CLAUDE.md"},
 		{[]string{"diff", "--cached", "--quiet", "--no-ext-diff", "--no-textconv", "HEAD", "--"}, ""},
 	} {
-		actual, err := rootGit(ctx, r, s, receipt.Root, nil, check.args...)
+		actual, err := rootGit(ctx, r, s, root, nil, check.args...)
 		if err != nil || actual != check.want {
-			return errPrivateRoot
+			return proof, errPrivateRoot
 		}
 	}
-	worktrees, err := rootGit(ctx, r, s, receipt.Root, nil, "worktree", "list", "--porcelain")
-	if err != nil || strings.Count(worktrees, "worktree ") != 1 || !strings.HasPrefix(worktrees, "worktree "+receipt.Root+"\n") {
-		return errPrivateRoot
+	worktrees, err := rootGit(ctx, r, s, root, nil, "worktree", "list", "--porcelain")
+	if err != nil || strings.Count(worktrees, "worktree ") != 1 || !strings.HasPrefix(worktrees, "worktree "+root+"\n") {
+		return proof, errPrivateRoot
 	}
 	allowed := []string{".git", "AGENTS.md", "CLAUDE.md"}
-	for _, anchor := range anchors {
-		identity, owned := identities[anchor.Repository.Name]
-		if !owned || !projectcatalog.ValidName(anchor.Repository.Name) || validatePrivateAnchor(ctx, r, s, anchor.Repository, filepath.Join(receipt.Root, anchor.Repository.Name), anchor.Target, &identity) != nil {
-			return errPrivateRoot
-		}
-		allowed = append(allowed, anchor.Repository.Name)
+	var names []string
+	for name := range from.Anchors {
+		names = append(names, name)
 	}
-	entries, err := os.ReadDir(receipt.Root)
+	for name := range to.Anchors {
+		if _, ok := from.Anchors[name]; !ok {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		anchor, err := provePrivateAnchorReached(ctx, r, s, filepath.Join(root, name), name, from, to)
+		if err != nil {
+			return proof, errPrivateRoot
+		}
+		if anchor != nil {
+			proof.state.Anchors[name] = *anchor
+			allowed = append(allowed, name)
+		}
+	}
+	entries, err := os.ReadDir(root)
 	if err != nil {
-		return errPrivateRoot
+		return proof, errPrivateRoot
 	}
 	for _, entry := range entries {
 		if !slices.Contains(allowed, entry.Name()) {
-			return errPrivateRoot
+			return proof, errPrivateRoot
 		}
 	}
 	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
-		path := filepath.Join(receipt.Root, name)
+		path := filepath.Join(root, name)
 		fi, err := os.Lstat(path)
-		if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o644 || fi.Size() != int64(len(snapshot.ProjectRules())) {
-			return errPrivateRoot
+		if err != nil || !fi.Mode().IsRegular() {
+			return proof, errPrivateRoot
 		}
-		data, err := os.ReadFile(path)
-		if err != nil || string(data) != snapshot.ProjectRules() {
-			return errPrivateRoot
+		// Git writes a fast-forwarded wrapper through the process umask; only
+		// a recorded advance to `to` may still be short of the declared mode.
+		if fi.Mode().Perm() != 0o644 {
+			if !atTo || fi.Mode() & ^os.FileMode(0o644) != 0 {
+				return proof, errPrivateRoot
+			}
+			proof.modes = true
 		}
+		data, err := readPrivateRootFile(path, privateRootWrapperLimit)
+		if err != nil || projectcatalog.Digest([]byte(data)) != reached.WrapperDigest || name == "CLAUDE.md" && data != proof.rules {
+			return proof, errPrivateRoot
+		}
+		proof.rules = data
 	}
-	return nil
+	return proof, nil
+}
+
+// provePrivateAnchorReached proves one anchor at its from or to commit with
+// its recorded identity. An anchor only to declares may be absent (nil), or
+// the self-consistent detached worktree that agentd's post-create proof
+// accepts when its identity was not yet recorded.
+func provePrivateAnchorReached(ctx context.Context, r Runner, s Settings, path, name string, from, to privateRootState) (*privateAnchorState, error) {
+	f, inFrom := from.Anchors[name]
+	t, inTo := to.Anchors[name]
+	if !projectcatalog.ValidName(name) || inFrom && (f.Repository.Name != name || f.Identity == nil) || inTo && t.Repository.Name != name {
+		return nil, errPrivateRoot
+	}
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		if inFrom {
+			return nil, errPrivateRoot
+		}
+		return nil, nil
+	} else if err != nil {
+		return nil, errPrivateRoot
+	}
+	reached, targets := t, []string{t.Target}
+	if inFrom {
+		reached, targets = f, []string{f.Target}
+		if inTo {
+			if t.Repository.GitHub != f.Repository.GitHub || t.Identity == nil || *t.Identity != *f.Identity {
+				return nil, errPrivateRoot
+			}
+			reached.Repository = t.Repository
+			targets = append(targets, t.Target)
+		}
+	} else if t.Identity == nil {
+		identity, err := privateAnchorMetadata(ctx, r, s, t.Repository, path)
+		if err != nil {
+			return nil, errPrivateRoot
+		}
+		reached.Identity = &identity
+	}
+	head, err := provePrivateAnchor(ctx, r, s, reached.Repository, path, reached.Identity)
+	if err != nil || !rootObjectID.MatchString(head) || !slices.Contains(targets, head) {
+		return nil, errPrivateRoot
+	}
+	reached.Target = head
+	return &reached, nil
 }
 
 func privateAnchorMetadata(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository, anchor string) (privateAnchorIdentity, error) {
@@ -478,29 +816,39 @@ func privateAnchorMetadata(ctx context.Context, r Runner, s Settings, repo proje
 }
 
 func validatePrivateAnchor(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository, anchor, expected string, owned *privateAnchorIdentity) error {
-	identity, err := privateAnchorMetadata(ctx, r, s, repo, anchor)
-	if err != nil || owned == nil || identity != *owned {
-		return errPrivateRoot
-	}
-	common, err := projectGit(ctx, r, s, anchor, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil || common != filepath.Join(s.ClonePath(repo.Name), ".git") {
-		return errPrivateRoot
-	}
-	top, err := projectGit(ctx, r, s, anchor, "rev-parse", "--show-toplevel")
-	if err != nil || top != anchor {
-		return errPrivateRoot
-	}
-	if _, err := projectGit(ctx, r, s, anchor, "symbolic-ref", "--quiet", "HEAD"); ExitCodeOf(err) != 1 {
-		return errPrivateRoot
-	}
-	if _, err := projectIndexProof(ctx, r, s, anchor, true); err != nil {
-		return errPrivateRoot
-	}
-	head, err := projectGit(ctx, r, s, anchor, "rev-parse", "--verify", "HEAD^{commit}")
+	head, err := provePrivateAnchor(ctx, r, s, repo, anchor, owned)
 	if err != nil || (expected != "" && head != expected) {
 		return errPrivateRoot
 	}
 	return nil
+}
+
+// provePrivateAnchor proves a clean, detached anchor with the owned identity
+// and returns its commit.
+func provePrivateAnchor(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository, anchor string, owned *privateAnchorIdentity) (string, error) {
+	identity, err := privateAnchorMetadata(ctx, r, s, repo, anchor)
+	if err != nil || owned == nil || identity != *owned {
+		return "", errPrivateRoot
+	}
+	common, err := projectGit(ctx, r, s, anchor, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil || common != filepath.Join(s.ClonePath(repo.Name), ".git") {
+		return "", errPrivateRoot
+	}
+	top, err := projectGit(ctx, r, s, anchor, "rev-parse", "--show-toplevel")
+	if err != nil || top != anchor {
+		return "", errPrivateRoot
+	}
+	if _, err := projectGit(ctx, r, s, anchor, "symbolic-ref", "--quiet", "HEAD"); ExitCodeOf(err) != 1 {
+		return "", errPrivateRoot
+	}
+	if _, err := projectIndexProof(ctx, r, s, anchor, true); err != nil {
+		return "", errPrivateRoot
+	}
+	head, err := projectGit(ctx, r, s, anchor, "rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil {
+		return "", errPrivateRoot
+	}
+	return head, nil
 }
 
 func advancePrivateAnchor(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository, anchor, target string, owned *privateAnchorIdentity, authority *projectCatalogAuthority) (privateAnchorIdentity, error) {
