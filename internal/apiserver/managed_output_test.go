@@ -70,13 +70,27 @@ func TestManagedOutputTrustedOriginalCanaryAndOfflineRead(t *testing.T) {
 			bad.Key = apiv1.ManagedOutputKey(invocation, 1)
 			wantError(t, f.do(http.MethodPost, apiv1.PublishedContextsPath, token, bad), http.StatusForbidden, apiv1.CodeForbidden)
 			reader := contextSession(t, f, "capture-reader-"+provider, humanSA)
+			// Publishers refuse a deleting source: the same accepted publication
+			// is refused once a finalizer-held DELETE marks the original. So every
+			// publication predates the generation bump that DELETE makes, which the
+			// fixed result reader relies on (publishedGeneration, history-03).
+			next := req
+			next.Key = apiv1.ManagedOutputKey(invocation, 1)
+			next.ManagedOutput = &apiv1.ManagedOutputRequest{Ordinal: 1, ConversationID: req.ManagedOutput.ConversationID, Completeness: "PartialManagedOutput"}
+			if w := f.do(http.MethodPost, apiv1.PublishedContextsPath, token, next); w.Code != http.StatusCreated {
+				t.Fatal("second ordinal before delete", w.Code, w.Body.String())
+			}
+			if err := f.c.Delete(context.Background(), f.session(record.SessionName())); err != nil {
+				t.Fatal(err)
+			}
+			if f.session(record.SessionName()).DeletionTimestamp.IsZero() {
+				t.Fatal("finalizer-held original was not retained as deleting")
+			}
+			wantError(t, f.do(http.MethodPost, apiv1.PublishedContextsPath, token, next), http.StatusForbidden, apiv1.CodeForbidden)
 			// Removing source objects does not turn an authorized read into source exec.
 			s = f.session(record.SessionName())
 			s.Finalizers = nil
 			if err := f.c.Update(context.Background(), s); err != nil {
-				t.Fatal(err)
-			}
-			if err := f.c.Delete(context.Background(), s); err != nil {
 				t.Fatal(err)
 			}
 			w = f.do(http.MethodGet, apiv1.PublishedContextsPath+"/"+m.Name+"?project=sample", reader, nil)

@@ -82,3 +82,17 @@ includes it with D21's ID-only client. See [client evidence](../verification/cli
 for the bound build and separate publication/deployment/runtime gates. The
 original null-presence regression and corrected packet925a5b93 remain retained;
 actual authorized Directory reads and provider campaign remain unaccepted.
+
+
+## One-shot fences amendment — 2026-10-12
+
+Review findings history-05 and history-06 (#174). `directory list` now fences
+the whole response body before decoding and walks it against the
+`SessionDirectoryList` wire tags, as `show --once` does (DESIGN-023): a padded
+valid prefix, duplicate keys, case aliases and null scalars are refused. The
+reported time keeps its wire form (null, or an RFC 3339 string). This supersedes
+the 502/504 sentence above: a one-shot read that reached the API never exits
+5. A lost answer, stop or any 5xx exits 6 (unconfirmed, not repeated); a 429
+exits 1. It exits 5 only when nothing was sent: no token, no port-forward, or a
+connection that was never made (D-86). A failed read still proves no
+zero-record page.

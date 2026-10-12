@@ -92,8 +92,14 @@ func (s *Server) canaryResultAuthority(ctx context.Context, c *caller, id, uid s
 		return nil, record, canaryResultDenied()
 	}
 	if record.CommonRevision != "" {
+		// MatchSession binds the record's CommonRevision to the retained
+		// snapshot. Live sources must still carry the bound bytes, but their
+		// UID/resourceVersion are provenance, not read authority: another key
+		// of the same ConfigMap or an identical re-create must not strand the
+		// retained result (DESIGN-022 amendment; Create and the first executor
+		// keep the strict Confirm).
 		common, err := commonrules.BoundSession(&original)
-		if err != nil || common.Confirm(ctx, s.Live) != nil {
+		if err != nil || common.ConfirmContent(ctx, s.Live) != nil {
 			return nil, record, canaryResultDenied()
 		}
 	}
@@ -131,8 +137,22 @@ func (s *Server) canaryResultPublication(original *v1alpha1.AgentSession, record
 	v := p.Spec
 	m := v.ManagedOutput
 	snapshot, err := claimSnapshot(original)
-	return err == nil && m != nil && v.Identity.SessionUID == string(original.UID) && v.Source.Namespace == original.Namespace && v.Source.Name == original.Name && v.Source.UID == string(original.UID) && v.SourceGeneration == original.Generation && v.SourceParent == record.Client && v.Project == record.Project && v.Repository == record.Repository &&
+	return err == nil && m != nil && v.Identity.SessionUID == string(original.UID) && v.Source.Namespace == original.Namespace && v.Source.Name == original.Name && v.Source.UID == string(original.UID) && v.SourceGeneration == publishedGeneration(original) && v.SourceParent == record.Client && v.Project == record.Project && v.Repository == record.Repository &&
 		v.Actor.Kind == "session" && v.Actor.ServiceAccount == s.Policy.SessionNamespace+"/"+s.Policy.SessionServiceAccount && v.Actor.PodName == original.Name && h.PodName == original.Name && v.Actor.PodUID == h.PodUID && apiv1.ValidContextUID(h.PodUID) &&
 		v.Attribution.Provider == record.Provider && v.Attribution.RequestedModel == record.Model && v.Provenance.CatalogRevision == snapshot.CatalogRevision() && v.Provenance.RulesRevision == snapshot.RulesRevision() && v.Provenance.GitHub == snapshot.Selected().GitHub && v.Provenance.DefaultBranch == snapshot.Selected().DefaultBranch &&
 		v.Origin == "ManagedOutputAssertion" && apiv1.ValidManagedOutput(&apiv1.ManagedOutputAssertion{Invocation: m.Invocation, Ordinal: m.Ordinal, ConversationID: m.ConversationID}) && m.Invocation == apiv1.ManagedInvocation(string(original.UID), h.PodUID) && v.Identity.Key == apiv1.ManagedOutputKey(m.Invocation, m.Ordinal)
+}
+
+// publishedGeneration is the generation a publication from this Session must
+// carry when no spec mutation has happened since it was made. A finalizer-held
+// DELETE (a reap of a retained original) sets deletionTimestamp and bumps
+// metadata.generation exactly once, and publishers refuse a deleting source
+// (claimCaller), so every publication predates that bump. Any spec mutation
+// before or after the reap, such as a suspend, still moves the generation past
+// this value and holds the read.
+func publishedGeneration(s *v1alpha1.AgentSession) int64 {
+	if s.DeletionTimestamp.IsZero() {
+		return s.Generation
+	}
+	return s.Generation - 1
 }

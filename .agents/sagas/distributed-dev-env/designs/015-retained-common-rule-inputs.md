@@ -155,3 +155,13 @@ Preserve all existing legacy/native/noncanary and hold rendering. This narrow
 source correction removes peer artifact access before any rule-loading trial;
 it is not a storage investigation, migration, cleanup or running-Pod change.
 Coordination stays on the protected API.
+
+
+Read-path amendment, 2026-10-12 (#174, review finding rules-001): the strict
+original-identity recheck above fences capture and the first executor. Reading
+output that already exists (DESIGN-022's fixed result reader) confirms only the
+bound content: project digest, CommonRevision and each fixed source's
+namespace/name/key, SHA-256 and bytes. Source UID and resourceVersion remain
+retained provenance and are never read-path policy inputs, so a change to an
+unrelated key of the same ConfigMap or an identical re-create cannot strand a
+retained result. Changed instruction bytes still hold the read.

@@ -35,6 +35,35 @@ Counters now: Directory 5; Claude Create 1, Codex Create 1; Claude named/result
 consumed. No further read, retry, Create or cleanup is authorized. Q-24 is still
 pending. The Q-27 entry below and every older entry keep their original text.
 
+## Reader availability and one-shot exit codes, source only — 2026-10-12
+
+Source [#219](https://github.com/thaynes43/dev-env/pull/219) fixes four #174 review
+findings. In the operator, the fixed result reader now compares the bound common
+content (project digest, CommonRevision, and each source's name, key, SHA-256 and
+bytes), not the UID or resourceVersion of `dev-agents/dev-env-config-claude` and
+`dev-agents/dev-env-config-codex` (rules-001). It also keeps a reaped, retained
+original readable: with `deletionTimestamp` set, the publication generation must be
+the live generation minus one (history-03). In `agent-run`, `canary create` and
+`directory list` fence and strictly walk the whole reply (history-05). A one-shot
+request that was sent and got no confirmed answer exits 6 and is not repeated. It
+exits 5 only when nothing was sent (history-06, D-86). The amendments are in
+DESIGN-022, DESIGN-015, DESIGN-020, DESIGN-021, DESIGN-023 and DESIGN-001 3.5.
+
+**Not in effect yet.** The operator change needs a release, the signed operator
+image and a haynes-ops pin. The client change needs that release's `agent-run`
+build (and the agent image, for pods). Until the operator pin lands, the deployed
+reader still has both lockouts. Both Q-27 reads are already done (entry above) and no further
+read is authorized, but a later authorized read needs the results to stay readable:
+
+- Any change to either ConfigMap above (any key, or an identical re-create) holds
+  every retained result read. Do not edit them until the pin lands.
+- A reap bumps an original's generation and holds its result read. Do not reap a
+  canary original until the pin lands (no cleanup is authorized anyway). A suspend
+  changes its spec and holds the read even after this fix.
+
+The catalog's UID/resourceVersion check is still strict and cannot recover; it is
+parked in [#226](https://github.com/thaynes43/dev-env/issues/226).
+
 ## Q-27 ruling and stale-guidance labels — 2026-10-12
 
 Tom answered Q-27 on 2026-10-12 through the Claude native prompt:

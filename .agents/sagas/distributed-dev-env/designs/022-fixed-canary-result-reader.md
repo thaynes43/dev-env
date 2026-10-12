@@ -128,3 +128,36 @@ retrieval readiness, independent final runtime-plan review and separate root
 authorization precede either permanent POST. No initial provider attempt is
 authorized by this contract. Keep #173/#174/#91 and HANDOFF current. Parent MVP
 acceptance and Q-24 remain open; Claude review is optional while down.
+
+## Reader availability amendment — 2026-10-12
+
+Review findings rules-001 and history-03 (#174) showed two ways the retained
+original could become permanently unreadable without any change to its
+authority. This amendment keeps every authority above and changes only what the
+read path compares.
+
+**Common sources: content, not object identity.** The read path resolves the two
+fixed common sources with the same uncached named GETs and refusals as before,
+then requires the project digest, CommonRevision and each source's
+namespace/name/key, SHA-256 and text to equal the bound snapshot. Source UID and
+resourceVersion stay retained provenance (DESIGN-015) and are not compared here.
+A change to another key of either ConfigMap (`mcp.json`, the agent files,
+`config.toml`) or an identical re-create therefore no longer holds the read. A
+change to `CLAUDE.md` or `AGENTS.header.md` bytes still holds it. The pre-Create
+and pre-executor fences keep the strict object-identity check. For an unchanged
+bound ConfigMap the reader accepts exactly what the deployed reader accepts.
+
+**Generation after a reap.** A finalizer-held delete sets `deletionTimestamp` and
+bumps `metadata.generation` exactly once, and publishers refuse a deleting
+source. So when `deletionTimestamp` is set the publication's source generation
+must equal the live generation minus one; otherwise it must equal the live
+generation. A reaped, retained original stays readable. Any spec mutation before
+or after the reap (a suspend changes `operatingMode`) still holds the read. The
+stopped-source test uses the natural end the live canaries show: phase `Failed`
+with the generation unchanged.
+
+Catalog UID/resourceVersion and template content checks are unchanged here.
+
+**Client.** A one-shot result read that reached the API never advises a retry:
+a lost answer, stop or any 5xx exits 6 (unconfirmed), and a 429 exits 1
+(DESIGN-021 amendment). It exits 5 only when nothing was sent (D-86).

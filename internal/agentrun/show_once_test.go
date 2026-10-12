@@ -118,7 +118,7 @@ func TestShowOnceRedirectAndFailuresNeverRetry(t *testing.T) {
 			}
 			_ = c.Close()
 		}
-		h.mustRun(ExitRetry, "show", "original-private-session", "--json", "--once")
+		h.mustRun(ExitUnconfirmed, "show", "original-private-session", "--json", "--once")
 		if len(h.api.requests()) != 1 || len(h.sleeps) != 0 || h.stdout.Len() != 0 {
 			t.Fatal("uncertain transport retried", h.api.requests(), h.sleeps)
 		}

@@ -69,6 +69,10 @@ Exit codes:
   3  not authenticated or not allowed: no credentials, a 401 or a 403
   4  no such session
   5  try again later: a limit was reached (429), or the API was unavailable
+  6  unconfirmed: a one-shot request (msg, canary create or a --once read) was
+     sent, got no confirmed answer and was not repeated. A message or create
+     may have taken effect: observe it, do not repeat it. A one-shot request
+     exits 5 only when nothing was sent
 `
 
 var commandHelp = map[string]string{
@@ -104,7 +108,8 @@ Flags:
 The receipt distinguishes new original creation from an existing original.
 It does not prove provider execution or loaded rules. The command does not wait,
 poll, retry or follow redirects. A failed or uncertain acknowledgement requires
-safe observation of the retained original, rather than another create attempt.
+safe observation of the retained original, rather than another create attempt;
+an uncertain one exits 6 (unconfirmed). It exits 5 only when nothing was sent.
 Common API URL, token, CA and context flags use ordinary caller access.
 
 The result subcommand reads one named immutable publication from the retained
@@ -207,7 +212,9 @@ with a line saying who sent it and that it is information, not the session user'
 instruction, and how to answer (agent-run msg <sender>). A headless task (-p)
 takes no messages; it reports through its log and its PR. Any session or person
 may message any session. agent-run sends a message once and never retries it, so
-it is never delivered twice.
+it is never delivered twice. A lost answer or a 5xx exits 6 (unconfirmed): the
+message may have arrived, so do not send it again before checking. It exits 5
+only when nothing was sent (the API could not be reached at all).
 `,
 	"rescue": `Usage: agent-run rescue list [--session <name>] [-o json]
        agent-run rescue restore <session>/<stamp> (--local | -p "<task>") [--repo <name>] [flags]

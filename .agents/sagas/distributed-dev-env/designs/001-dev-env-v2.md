@@ -607,7 +607,13 @@ each place, and what it prints.**
   something unexpected, or the session failed; `2` usage error, nothing sent; `3`
   not authenticated or not allowed: no credentials, a 401 or 403, a refused token
   mint, or an untrusted certificate; `4` no such session; `5` try again later: a
-  429, or the API unavailable or unreachable after the retries.
+  429, or the API unavailable or unreachable after the retries. Added
+  2026-10-12 (DESIGN-021 amendment, #174, D-86): `6` unconfirmed: a one-shot
+  request (`msg`, `canary create`, a `--once` read) was sent, got no confirmed
+  answer and was not repeated; a message or create may have taken effect. A
+  one-shot request exits `5` only when nothing was sent: no token could be had,
+  the port-forward never came up, or the connection was never made (a refused
+  or timed-out dial, or a name that did not resolve). A 429 to one exits `1`.
 
 Rationale: the verbs, flags and defaults stay v1's, so every CLAUDE.md instruction
 carries over (3.5). The CLI refuses what the API would refuse only where it can
@@ -4993,3 +4999,4 @@ blocks only the step it names.
 | D-83 | Default-off private child questions, live direct-parent UID-fenced answers with operator-owned identity/content digest authority, exact native UUID continuation with genuine owned Wait/group-absence receipt and one-use same-writer consumption; local transport acknowledgment only. | 6.8, docs/managed-child-decisions.md |
 | D-84 | Q-23: 60 minutes without progress or three failed attempts at the same blocker; durable parent/child budget history, actual stop and preserved ownership, one native phone escalation and explicit bounded continuation. Implementation #154 remains required. | 6.8, requirements/2026-10-09-task-budgets.md |
 | D-85 | Owner scope correction: rules/context/coordination shared; repos/worktrees per pod; five outcomes and bounded pilot before full migration. Supersedes mandatory shared Git/RWX and trials; no runtime authority change. | ADR-003, plan 11 |
+| D-86 | `agent-run` exit `6` (unconfirmed), amending D-50's codes 0 to 5: a one-shot request (`msg`, `canary create`, a `--once` read) that was sent and got no confirmed answer exits `6` and is not repeated; it exits `5` only when nothing was sent; a 429 to one exits `1` | 3.5 |

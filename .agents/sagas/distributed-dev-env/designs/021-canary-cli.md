@@ -125,3 +125,23 @@ three failed preparations; full finite metadata preparation remains pending.
 No checker execution, baseline, rollout or provider was started. Original Q-26
 pending text above records the earlier state; this ruling supersedes it. No fifth
 candidate or automatic retry if R4 fails. Q-24 remains pending.
+
+
+## One-shot fences amendment — 2026-10-12
+
+Review findings history-05 and history-06 (#174). `canary create` fences the
+whole response body and walks the receipt against the `Session` wire tags
+before typed validation, as `show --once` does. A padded prefix, duplicate keys
+(two `uid` values), case aliases, null scalars and the tolerant usage decoder no
+longer reach the receipt. An uncertain acknowledgement (a lost answer, stop,
+any 5xx, another 2xx or an unconfirmed receipt) exits 6 (unconfirmed) with "do
+not repeat", never 5 ("try again later"). The same mapping covers every one-shot
+request, including `msg`, whose message may have arrived. The POST is still
+sent once; observation of the retained original remains the only next step.
+
+Exit 5 remains only for a request that was never sent (D-86): no token could be
+had, the port-forward never came up, or the connection was never made (a
+refused or timed-out dial, or a name that did not resolve). The message then
+says "nothing was sent". No server saw it, so it cannot have created an
+original; whether a later create may follow is still decided by the attempt
+rules above, not by the exit code.

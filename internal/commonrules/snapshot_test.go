@@ -98,3 +98,96 @@ func TestSnapshotBoundsAndStrictIdentity(t *testing.T) {
 		t.Fatal("incorrect content digest accepted")
 	}
 }
+
+// The retained-result read path compares bound content, not object identity.
+// The strict Confirm keeps its UID/resourceVersion fence for pre-Create and
+// pre-executor checks.
+func TestConfirmContentIgnoresObservationIdentityOnly(t *testing.T) {
+	ctx := context.Background()
+	update := func(t *testing.T, live client.Client, name string, change func(*corev1.ConfigMap)) {
+		t.Helper()
+		var cm corev1.ConfigMap
+		if live.Get(ctx, types.NamespacedName{Namespace: Namespace, Name: name}, &cm) != nil {
+			t.Fatal("read")
+		}
+		change(&cm)
+		if live.Update(ctx, &cm) != nil {
+			t.Fatal("update")
+		}
+	}
+	recreate := func(t *testing.T, live client.Client, name string, change func(*corev1.ConfigMap)) {
+		t.Helper()
+		var cm corev1.ConfigMap
+		if live.Get(ctx, types.NamespacedName{Namespace: Namespace, Name: name}, &cm) != nil || live.Delete(ctx, &cm) != nil {
+			t.Fatal("delete")
+		}
+		cm.ResourceVersion, cm.UID = "", types.UID("replacement-"+name)
+		change(&cm)
+		if live.Create(ctx, &cm) != nil {
+			t.Fatal("re-create")
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*testing.T, client.Client)
+		accept bool
+	}{
+		{"unchanged", func(*testing.T, client.Client) {}, true},
+		{"unrelated-common-key", func(t *testing.T, live client.Client) {
+			update(t, live, CommonName, func(cm *corev1.ConfigMap) { cm.Data["mcp.json"] = "{}" })
+		}, true},
+		{"unrelated-header-key", func(t *testing.T, live client.Client) {
+			update(t, live, HeaderName, func(cm *corev1.ConfigMap) { cm.Data["config.toml"] = "model = \"changed\"" })
+		}, true},
+		{"labels", func(t *testing.T, live client.Client) {
+			update(t, live, CommonName, func(cm *corev1.ConfigMap) {
+				cm.Labels = map[string]string{"kustomize.toolkit.fluxcd.io/name": "session-config"}
+			})
+		}, true},
+		{"identical-recreate", func(t *testing.T, live client.Client) {
+			recreate(t, live, CommonName, func(*corev1.ConfigMap) {})
+			recreate(t, live, HeaderName, func(*corev1.ConfigMap) {})
+		}, true},
+		{"common-bytes", func(t *testing.T, live client.Client) {
+			update(t, live, CommonName, func(cm *corev1.ConfigMap) { cm.Data[CommonKey] += "changed" })
+		}, false},
+		{"header-bytes", func(t *testing.T, live client.Client) {
+			update(t, live, HeaderName, func(cm *corev1.ConfigMap) { cm.Data[HeaderKey] = "OTHER_HEADER\n" })
+		}, false},
+		{"recreate-changed", func(t *testing.T, live client.Client) {
+			recreate(t, live, CommonName, func(cm *corev1.ConfigMap) { cm.Data[CommonKey] = "REPLACEMENT\n" })
+		}, false},
+		{"key-removed", func(t *testing.T, live client.Client) {
+			update(t, live, HeaderName, func(cm *corev1.ConfigMap) { delete(cm.Data, HeaderKey) })
+		}, false},
+		{"key-binary", func(t *testing.T, live client.Client) {
+			update(t, live, CommonName, func(cm *corev1.ConfigMap) {
+				cm.BinaryData = map[string][]byte{CommonKey: []byte("COMMON_RULE_MARKER\n")}
+			})
+		}, false},
+		{"absent", func(t *testing.T, live client.Client) {
+			var cm corev1.ConfigMap
+			if live.Get(ctx, types.NamespacedName{Namespace: Namespace, Name: CommonName}, &cm) != nil || live.Delete(ctx, &cm) != nil {
+				t.Fatal("delete")
+			}
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, live := fixture(t)
+			tc.mutate(t, live)
+			if err := s.ConfirmContent(ctx, live); (err == nil) != tc.accept {
+				t.Fatalf("content confirmation = %v, want accept=%v", err, tc.accept)
+			}
+			// The strict fence still refuses every observation identity change.
+			if strict := s.Confirm(ctx, live); (strict == nil) != (tc.name == "unchanged") {
+				t.Fatalf("strict confirmation = %v", strict)
+			}
+		})
+	}
+	// A retained snapshot that is itself invalid never confirms.
+	s, live := fixture(t)
+	s.Common.SHA256 = strings.Repeat("0", 64)
+	if s.ConfirmContent(ctx, live) == nil {
+		t.Fatal("invalid retained snapshot confirmed")
+	}
+}

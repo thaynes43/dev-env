@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -62,6 +63,8 @@ func (a *app) directory(ctx context.Context, args []string) error {
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	one := *c
 	one.http = &hc
+	// Fence the whole body before decoding, as show --once does (history-05).
+	one.rejectOversizeResponse = true
 	var raw json.RawMessage
 	status, err := a.callWith(ctx, &one, http.MethodGet, apiv1.SessionDirectoryPath, q, nil, &raw, false)
 	if err != nil {
@@ -72,6 +75,9 @@ func (a *app) directory(ctx context.Context, args []string) error {
 	}
 	if !utf8.Valid(raw) {
 		return fail(ExitFailed, "directory list returned invalid UTF-8 metadata")
+	}
+	if !strictWireJSON(raw, reflect.TypeFor[apiv1.SessionDirectoryList]()) {
+		return fail(ExitFailed, "directory list returned an unconfirmed metadata page")
 	}
 	var page apiv1.SessionDirectoryList
 	d := json.NewDecoder(bytes.NewReader(raw))
