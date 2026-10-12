@@ -216,7 +216,7 @@ Everything is default off until R6.
 | R2 | dev-env source | `agentd ctl coord-archive put\|mark\|lookup\|get\|list`, the size bound, the time-ordered indexes, the archive mount check, `agentd shelf --coordination-archive`, protocol types, `TestArchiveNeverRemoves`, a measurement of a worst-case `get`'s peak memory under the shelf's limits | merged and in a released agent image |
 | R3 | dev-env source | `internal/coordretention` runnable (default off), shelf client methods and the per-replica exec limit, the bulk lookups and resume key, retention metrics, the shared guard scanner, `TestOnlyRetentionDeletesCoordinationRecords`, envtest E1, E2, E4, E6, E7, and the `internal/shelf` package comment (the shelf no longer mounts only the shared volume) | merged with required CI and independent review |
 | R4 | dev-env source | read fallback (default off), the archived item shape and `archived=only` lists, the ack-retry fallback, client tolerance tests, bound wording, the templates check that refuses the archive claim, envtest E3 and E5 | merged and in a released operator image |
-| R5 | haynes-ops | the archive PVC, shelf `Recreate` strategy, mount, flag, image pin, header comment and (if R2 needs it) memory limit; `DevEnvShelfUnavailable` and `DevEnvCoordinationArchiveFilling`; then Tom sets the bound PV to `Retain` | the shelf Ready with the archive mounted, and its PV `Retain` |
+| R5 | haynes-ops | the archive PVC, shelf `Recreate` strategy, mount, flag, image pin, header comment and (if R2 needs it) memory limit; the archive guard (ADR-006, after its parity check, unless H7 shipped it); `DevEnvShelfUnavailable` and `DevEnvCoordinationArchiveFilling`; then Tom sets the bound PV to `Retain` | the shelf Ready with the archive mounted, and its PV `Retain` |
 | R6 | haynes-ops | Role `dev-env-coordination-retention` (delete, operator only), the operator pin, then reads on, then retention on, and `DevEnvCoordinationRetentionStalled` | a complete retention pass on the installed operator |
 | R7 | dev-env docs | installed verification record (DESIGN-024 section 11) | merged |
 
@@ -235,35 +235,39 @@ Follow-up F1 of the retention section above. **Ruled 2026-10-12 (Q-31).** Tom
 answered through the Claude native prompt: "Archive, then delete
 (Recommended)".
 
-1. A private Session (no shared workspace, not a canary) that is Reaping, or
-   Suspended past its archive deadline, is stopped. Its executor's termination is
-   recorded in its status before the Pod can vanish; a retained Pod is not a
-   durable proof, and absence alone never proves stop.
+1. A private Session (no shared workspace, not a canary) that is Reaping, with
+   no owner hold, is stopped. One Suspended past its archive deadline is never
+   stopped; it expires only if its executor ended on its own (ADR-006). The
+   executor's termination is recorded in the Session's status before the Pod can
+   vanish; a retained Pod is not a durable proof, and absence alone never proves
+   stop.
 2. 30 days after that record, a Git rescue runs in a hold pod bound to the HOME's
    UID, the provider history (an allowlist, never credentials) and the Git bundle
-   go to a shelf-only archive volume with a `Retain` PV, kept indefinitely, and
-   archived history is readable under DESIGN-013's payload scope.
+   go to an archive volume on the shelf with a `Retain` PV, kept indefinitely and
+   guarded from H7 against every ServiceAccount but the operator, and archived
+   history is readable under DESIGN-013's payload scope.
 3. Only then, with deletion enabled, the operator's leader deletes the HOME
    through the guarded path and releases the Session. ADR-004 then releases its
    records. Canary originals never expire. Tom alone may hold an expiry or
    release it now (which skips only the grace).
 
-[ADR-005](../adrs/005-private-home-expiry.md) records the decision.
-[DESIGN-025](../designs/025-private-home-expiry.md) is the contract. Everything
+[ADR-005](../adrs/005-private-home-expiry.md) records the decision, and
+[ADR-006](../adrs/006-private-home-expiry-corrections.md) (D-87) corrects it after
+its review. [DESIGN-025](../designs/025-private-home-expiry.md) is the contract. Everything
 is default off; deletion waits for the installed archived-history read (#174).
 
 **Delivery units, each its own reviewed PR, in this order:**
 
 | Unit | Where | What | Done when |
 |---|---|---|---|
-| H0 | dev-env docs | ADR-005, DESIGN-025 and the amendments | merged |
-| H1 | dev-env source | the terminal record (CRD fields and rules, the shared verifier refactored, the confirmed write, `ExecutorEnded`, metrics, flag) | merged and in a released operator image |
+| H0 | dev-env docs | ADR-005, DESIGN-025 and the amendments; ADR-006's corrections | merged |
+| H1 | dev-env source | the terminal record (`executorTerminal` and `executorMissed` beside `lastExecutor`, CRD rules, the shared verifier refactored, the confirmed write, `ExecutorEnded`, metrics, flag) | merged and in a released operator image |
 | H2 | haynes-ops | CRD copy, node and lease `get` for the operator, operator pin, record on | records appear for ended private executors; ship it early, each day without it can lose a proof |
-| H3 | dev-env source | the stop request (`activeDeadlineSeconds`) and its guard test | merged |
-| H4 | dev-env source | agentd `history-export` and `history-archive` commands, the provider layout tables and fixtures, guard tests, the resource measurement | merged and in a released agent image |
-| H5 | dev-env source | the expiry record and steps up to `Archived`, the private hold pod, the relay, overrides, metrics | merged with required CI and independent review |
+| H3 | dev-env source | the stop request for Reaping Sessions only (`stopRequest` intent, hold check, `activeDeadlineSeconds`) and its guard test | merged |
+| H4 | dev-env source | agentd `history-export` and `history-archive` commands, the layout tables (agentd by name, copies of user files excluded) and fixtures, guard tests, the resource measurement | merged and in a released agent image |
+| H5 | dev-env source | the expiry record and steps up to `Archived`, the private hold pod and `expiryHoldRemovalAllowed`, the relay, overrides, metrics | merged with required CI and independent review |
 | H6 | dev-env source | the `/v1/history` reads and `agent-run history`, the delete and release steps (off), `TestExpiryDeleteNeedsVerify` | merged and in a released operator image |
-| H7 | haynes-ops | history archive PVC, shelf mount, override policy, alerts; Tom sets the PV to `Retain`; stop, archive and reads on | a private Session reaches `Archived` with its HOME intact |
+| H7 | haynes-ops | history archive PVC, shelf mount, override policy, the archive guard (after its parity check, unless R5 shipped it), alerts; Tom sets the PV to `Retain`; stop, archive and reads on | a private Session reaches `Archived` with its HOME intact |
 | H8 | dev-env docs | installed record of the archived read (DESIGN-025 section 15) | merged; this is the #174 read acceptance |
 | H9 | haynes-ops | delete on, `DevEnvHomeExpiryStalled` | merged |
 | H10 | dev-env docs | installed record of the first expiry and of the ADR-004 release 30 days later | merged |
@@ -275,6 +279,14 @@ DESIGN-025 needs a terminal record. Such a Session has nothing to archive. A
 narrow release (uncached absence of Pod and HOME, a confirmed `NeverStarted`
 admission, no attempt) would let ADR-004 release its records. It needs its own
 design note and guard test; it is not part of Q-31.
+
+**Follow-up F3, not planned: a stop at the suspended-archive deadline.** ADR-005
+stopped a private executor at that deadline too; ADR-006 removed it, because the
+idle timer suspends an interactive Session after 72 hours idle, so about ten
+days alone would have killed a live Session for good with nobody asking. As a
+result a suspended private Session whose executor still runs keeps its HOME
+until it is reaped. Do not build that stop without a new owner question, asked
+with that premise: it ends a live Session no human asked to end.
 
 ### Parent issues
 
