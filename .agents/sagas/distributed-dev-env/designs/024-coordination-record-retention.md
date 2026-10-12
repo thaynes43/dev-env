@@ -428,7 +428,7 @@ kept between passes but the resume key; the archive holds the rest.
 
 | Metric | Type | Labels |
 |---|---|---|
-| `dev_env_coordination_retention_passes_total` | counter | `result`: `complete`, `capped` (stopped only at a cap), `partial` (stopped at the deadline), `shelf_unavailable`, `failed` |
+| `dev_env_coordination_retention_passes_total` | counter | `result`: `complete`, `capped` (stopped only at a cap), `partial` (stopped at the deadline), `shelf_unavailable`, `failed`; every `result` is set to 0 when the runnable starts |
 | `dev_env_coordination_retention_last_progress_timestamp_seconds` | gauge | none; set to the leader's start time when the runnable starts, then to the end of each `complete` or `capped` pass |
 | `dev_env_coordination_retention_marked_total` | counter | `kind` |
 | `dev_env_coordination_retention_grace_resets_total` | counter | `kind` |
@@ -575,7 +575,9 @@ the archive. Its description links the attachment recovery in section 3.
 starts at the leader's start time, so it also fires when a new leader never
 makes progress. Its second half sums the pass counters over every leader's
 series, so leader changes cannot hide a stall: four or more failed passes in
-two days with none making progress fire too. Both series exist only while
+two days with none making progress fire too. Every `result` series starts at 0
+when the runnable starts, ten minutes before its first pass, so `increase()`
+counts a new leader's first failure instead of dropping it as the first sample. Both series exist only while
 retention is on, so the alert is silent before R6 and after a rollback that
 turns retention off.
 
