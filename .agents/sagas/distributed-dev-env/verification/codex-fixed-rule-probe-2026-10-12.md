@@ -11,8 +11,9 @@ exactly the original Claude Session UID
 `45a614cb-f537-441e-a5c1-33b66a285521`, its fixed name and trusted metadata, plus
 `current.sourceState=Present`. The existing Directory handler checks the live
 source UID/spec and confirmed receipt against returned Directory name/UID and
-spec digest. Actual post-Create cardinality, Directory UID and generation remain
-Unknown until this read. Empty, extra, malformed, replaced or paginated records
+spec digest. The pre-Create page establishes its observed cardinality and
+Directory UID. Directory generation is not exposed, and post-Create cardinality
+remains Unknown. Empty, extra, malformed, replaced or paginated records
 refuse execution. No original record is deleted to produce an empty page.
 
 Only that validated page may permit the conditional first trusted Codex Create
