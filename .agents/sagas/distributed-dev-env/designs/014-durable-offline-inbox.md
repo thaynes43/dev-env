@@ -12,6 +12,11 @@ these resources. Do not use ConfigMaps, provider homes, shared repositories or
 the existing broadly readable API group as the message store. No owner
 references, expiry, garbage collection, replacement or background consumer
 is part of this unit.
+*Amended 2026-10-12 ([ADR-004](../adrs/004-coordination-record-retention.md), Q-29): when the sender's UID is absent and
+the recipient has acknowledged or is absent too, the operator's retention
+runnable archives the message with its ack, waits 30 days from the first
+observation, then deletes both. It alone holds a namespaced delete
+([DESIGN-024](024-coordination-record-retention.md)).*
 
 An authenticated original live sender Session with a currently controlled,
 non-deleting executor Pod may publish one bounded UTF-8 text message, at most
@@ -53,6 +58,14 @@ publish or acknowledge on another Session's behalf. Unauthorized or foreign
 reads return uniform 404 without exposing message metadata or text. Session-less
 native hosts are not assigned a synthetic Session UID; their publication and
 recipient identity remain separate work.
+*Amended 2026-10-12 (Q-29): after a release, the same readers read a message
+and its ack from the archive, with `archived: true`; without a shelf the answer
+is 503. A recipient's identical ack retry after the release answers 200 from
+the archive and writes nothing (DESIGN-024 section 6). One accepted residual
+departs from the uniform 404 above: while the shelf is down, a scoped caller
+asking for a name that is not live gets 503, where a live message outside its
+scope gets 404. Names are full digests of identities the caller must already
+know, so this reveals only that the name is not live.*
 
 An immutable acknowledgement binds message UID and original recipient UID,
 with the authenticated actor and API creation time derived by the server.
@@ -76,12 +89,17 @@ These rules come from the #175 coordination review.
   bound only. Read acknowledgements are not counted, because there is at most
   one per message and recipient. Concurrent sends can pass the same count by
   the number of racing sends.
+  *Amended 2026-10-12 (Q-29): messages are now deleted after an archive, so
+  the 64 MiB applies to a project's live text; the archive holds the rest
+  (DESIGN-024).*
 - **At the bound.** The bounds are lifetime bounds, because messages are never
   deleted. DESIGN-010 "At the bound, recovery and rollback" has the behaviour,
   the record-count metrics, the manual recovery with its preservation duty, and
   the rollback floor. The inbox CLI prints the API's `limit_exceeded` error.
   Recovery keeps every message whose recipient still exists and has not
   acknowledged it, and deletes a message's acknowledgement with it.
+  *Amended 2026-10-12 (Q-29): the per-Session bound stays a lifetime bound; the
+  project bound counts live messages, which retention frees.*
 - **Final fences.** The sender fence (on the new-message and retry paths) and
   the recipient fence compare each Session's binding: UID, generation and spec,
   deletion, labels, annotations, owner references and finalizers. They do not

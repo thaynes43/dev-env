@@ -1776,6 +1776,15 @@ restore is a new session that fetches one.**
   Its image follows the templates' pin, under the same Renovate rule. Without a
   shelf, `GET /v1/rescues` and a restore answer 503, and the pruner waits for the
   next round.
+
+  *Amended 2026-10-12 ([ADR-004](../adrs/004-coordination-record-retention.md),
+  Q-29; [DESIGN-024](024-coordination-record-retention.md) section 3): from unit
+  R5 the shelf also mounts the coordination archive, a ReadWriteOnce volume, at
+  `/home/dev/.coordination-archive`, so it no longer mounts only the shared
+  volume. Its Deployment then uses `Recreate`. Each shelf update, which follows
+  each agent release, is about a minute without a shelf, with the 503s and waits
+  above. After a node loss the shelf can stay down until the volume detaches;
+  DESIGN-024 section 3 has the recovery, and `DevEnvShelfUnavailable` pages.*
 - **List.** `agentd ctl rescues [--session S]` prints every
   `rescue/<session>/<name>/` as JSON, newest first. Each entry has its id
   `<session>/<name>`, when it was made (the manifest's time, or the directory's for
