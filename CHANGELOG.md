@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.22.0](https://github.com/thaynes43/dev-env/compare/v2.21.0...v2.22.0) (2026-10-12)
+
+
+### Features
+
+* **canary:** read retained probe results for initiating clients ([#208](https://github.com/thaynes43/dev-env/issues/208)) ([cd966d1](https://github.com/thaynes43/dev-env/commit/cd966d17c8d1a2bca82c27cc01be4d9a11ae5256))
+
 ## [2.21.0](https://github.com/thaynes43/dev-env/compare/v2.20.0...v2.21.0) (2026-10-11)
 
 
