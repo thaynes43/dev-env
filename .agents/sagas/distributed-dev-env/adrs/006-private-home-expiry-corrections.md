@@ -90,9 +90,11 @@ Once a HOME is deleted, the archive is the only copy of its history. So:
   change. For every ServiceAccount except `dev-env-operator`, it refuses exec,
   attach and port-forward into the shelf pod, and ephemeral containers on it. It
   refuses any Pod or workload that mounts either archive claim, except the
-  shelf's own Deployment and the ReplicaSet and Pod made from it. It refuses a
-  change to the shelf Deployment's pod spec by anyone but Flux. Human users keep
-  their access.
+  shelf's own Deployment and the ReplicaSet and Pod made from it. It refuses any
+  change to the shelf Deployment's pod template by anyone but Flux, except one
+  that changes only the `kubectl.kubernetes.io/restartedAt` annotation
+  (`kubectl rollout restart`), which leaves the pod spec as it was. Human users
+  keep their access.
 - **It narrows v1 at the shelf only.** On 2026-10-12 no runbook in haynes-ops or
   in this repository execs into the shelf. H7 checks that again before the guard
   ships. If a v1 workflow needs that access, it becomes a question for Tom first,

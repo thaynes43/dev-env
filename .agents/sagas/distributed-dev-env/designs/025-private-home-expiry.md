@@ -64,6 +64,21 @@ A Session is **triggered** when it is eligible and it is Reaping
 today). A suspended Session before its deadline is never triggered. The expiry
 record exists only while the Session is triggered (5.1, 5.3).
 
+Two rules keep "triggered" from flapping:
+
+- **Unknown is not false.** `archiveDue` answers "not due" when the Session has
+  no `archiveAfter` of its own and the templates do not load
+  (`internal/controller/reconciler.go`). For the expiry that answer is Unknown:
+  no record is created and none is cancelled, the reason `unknown` is counted,
+  and the reconcile asks again in a minute. Only a timer computed from a spec or
+  templates value that is not yet due counts as not triggered.
+- **Latched from `Deleting`.** Once the record reaches `Deleting` (written in the
+  same status write as `status.archivedAt`, 6.5), the Session counts as
+  triggered whatever the timer says, as today's archive path treats a recorded
+  `archivedAt` as due. A longer `archiveAfter` or a templates failure then
+  cannot strand a Session that has `archivedAt` set but can neither resume nor
+  finish its delete.
+
 The operator stops an executor only for a Reaping Session (section 4). A
 Suspended Session past its deadline is triggered only if its executor ended on
 its own, such as by an eviction, and that end was recorded. One whose executor
@@ -349,8 +364,10 @@ stops the alert at the next re-check.
 ### 5.3 What cancels it
 
 - **No longer triggered.** A resume of a suspended Session, or an archive timer
-  that is no longer due (the templates lengthened `archiveAfter`). A Reaping
-  Session is triggered for good. Before `Deleting`, the expiry's hold pod is
+  that is no longer due because a spec or templates value lengthened
+  `archiveAfter`. Templates that do not load are Unknown, never a cancel
+  (section 2). A Reaping Session is triggered for good, and so is any Session
+  whose record has reached `Deleting`. Before `Deleting`, the expiry's hold pod is
   removed first (`expiryHoldRemovalAllowed`) and confirmed gone by an uncached
   read, while the record still names it, so it is never mistaken for a new Pod.
   Then the record is removed by a confirmed write and `expiryClearedAt` is set.
@@ -669,8 +686,10 @@ class, a different shape, more sensitive content. Everything else is the same.
   Pod or workload (Job, CronJob, Deployment, ReplicaSet, StatefulSet, DaemonSet)
   that mounts `dev-env-history-archive` or `dev-env-coordination-archive`, except
   the shelf Deployment and the ReplicaSet and Pod its controllers make from it.
-  It refuses a change to the shelf Deployment's pod spec by anyone but Flux's
-  `kustomize-controller` (an annotation-only `rollout restart` stays allowed).
+  It refuses any change to the shelf Deployment's pod template by anyone but
+  Flux's `kustomize-controller`, except one that changes only the
+  `kubectl.kubernetes.io/restartedAt` annotation (`kubectl rollout restart`),
+  which leaves the pod spec as it was.
   Human users keep their access. It needs a Pod lookup at admission, so it
   follows `dev-env-exec-guard`'s Kyverno pattern. It narrows v1 at the shelf
   only. On 2026-10-12 no runbook in haynes-ops or this repository execs into the
@@ -987,7 +1006,10 @@ status itself.
   record `Waiting`, grace from the terminal record. Resumed: the record is
   removed, the HOME kept, and no record is made while it is not suspended.
   Suspended again and due: a new record whose 30 days start then. A resume after
-  `Deleting` is refused, and `archivedAt` never exists without `Deleting`.
+  `Deleting` is refused, and `archivedAt` never exists without `Deleting`. With
+  the templates made unreadable at `Waiting`: no cancel, `unknown` counted, the
+  grace unchanged. With `archiveAfter` lengthened at `Waiting`: a cancel; at
+  `Deleting`: no cancel, and the delete goes on.
 - **T8, a new Pod cancels.** A Pod of the Session's name with another UID
   appears: record removed, PreservationUnknown, nothing deleted.
 - **T9, owner overrides.** A hold at `Waiting` and at `Archived`: nothing moves;
@@ -1012,7 +1034,8 @@ status itself.
   the retry runs `verify` and the Pod checks again first; with the archive
   changed in between, it refuses `archive_mismatch` and the claim (deleting or
   not) stays, held by the operator's finalizer; with a debug Pod mounting the
-  claim, it refuses `claim_in_use`. An owner hold lifted while the old hold pod still terminates:
+  claim, it refuses `claim_in_use`. With the templates unreadable across the
+  restart in `Deleting`: the Session stays triggered and the delete goes on. An owner hold lifted while the old hold pod still terminates:
   nothing is cancelled, and the new intent is written only after that pod is
   gone.
 - **T13, two reconcilers.** Overlapping leaders: one delete succeeds; the archive

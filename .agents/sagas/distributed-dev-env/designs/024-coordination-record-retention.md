@@ -153,7 +153,8 @@ cluster-admin, node, storage and hypervisor access reach every volume. An
 archive guard closes the direct paths for both archives: for every
 ServiceAccount but `dev-env-operator`, no exec, attach, port-forward or
 ephemeral container on the shelf, no other Pod or workload that mounts either
-archive claim, and no change to the shelf Deployment's pod spec except by Flux
+archive claim, and no change to the shelf Deployment's pod template except by
+Flux or a `rollout restart` that changes only its `restartedAt` annotation
 ([DESIGN-025](025-private-home-expiry.md) section 7). Whichever of R5 and
 DESIGN-025's H7 ships first ships it, after a check that no v1 workflow execs
 into the shelf. R7 also records that a v1 identity's exec into the shelf is
