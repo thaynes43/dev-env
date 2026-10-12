@@ -408,12 +408,15 @@ every 6 hours, each with a 30-minute deadline.
 
 An InboxMessage and its ack go as one unit: marking the message marks its ack
 too, and while the message is live the ack is handled only through it. Both are
-archived and verified first. Then the message is deleted, then the ack. If the ack's delete fails, the
-next pass finds an ack whose message is absent and archived, and releases it
-under `message-released`. The ack keeps its own mark, made with the message's.
+archived and verified first. Then the message is deleted, then the ack. If the
+ack's delete fails, the next pass finds an ack whose message is absent and
+archived, and releases it under `message-released`. The ack keeps its own mark,
+made with the message's.
 
 **Caps.** At most 256 marks and 256 releases in one pass. The rest waits for the
-next pass, which starts where this one stopped.
+next pass, which starts where this one stopped. A pass stopped only by a cap
+ends `capped`, which counts as progress: a backlog drains over several passes
+without an alert. A pass stopped by its deadline ends `partial`.
 
 **Memory.** Lists are paged and only summaries are kept. A page of 10
 publications or messages is at most about 10 MiB of JSON at the size bound, and
@@ -425,12 +428,12 @@ kept between passes but the resume key; the archive holds the rest.
 
 | Metric | Type | Labels |
 |---|---|---|
-| `dev_env_coordination_retention_passes_total` | counter | `result`: `complete`, `partial` (deadline or cap), `shelf_unavailable`, `failed` |
-| `dev_env_coordination_retention_last_complete_pass_timestamp_seconds` | gauge | none; set to the leader's start time when the runnable starts, then to the end of each complete pass |
+| `dev_env_coordination_retention_passes_total` | counter | `result`: `complete`, `capped` (stopped only at a cap), `partial` (stopped at the deadline), `shelf_unavailable`, `failed` |
+| `dev_env_coordination_retention_last_progress_timestamp_seconds` | gauge | none; set to the leader's start time when the runnable starts, then to the end of each `complete` or `capped` pass |
 | `dev_env_coordination_retention_marked_total` | counter | `kind` |
 | `dev_env_coordination_retention_grace_resets_total` | counter | `kind` |
 | `dev_env_coordination_retention_deleted_total` | counter | `kind` |
-| `dev_env_coordination_retention_pending` | gauge | `kind`, from the last complete pass |
+| `dev_env_coordination_retention_pending` | gauge | `kind`, from the last `complete` or `capped` pass |
 | `dev_env_coordination_retention_refused_total` | counter | `kind`, `reason`: `unknown`, `owner_present`, `archive_invalid`, `archive_missing`, `archive_mismatch`, `precondition_failed`, `forbidden` |
 
 The existing `dev_env_coordination_records*` series keep their names. Their help
@@ -550,7 +553,10 @@ notes.
   for: 1h
 - alert: DevEnvCoordinationRetentionStalled
   expr: |
-    time() - max(dev_env_coordination_retention_last_complete_pass_timestamp_seconds) > 2 * 86400
+    (time() - max(dev_env_coordination_retention_last_progress_timestamp_seconds) > 2 * 86400)
+    or
+    (sum(increase(dev_env_coordination_retention_passes_total{result=~"partial|shelf_unavailable|failed"}[2d])) >= 4
+      unless sum(increase(dev_env_coordination_retention_passes_total{result=~"complete|capped"}[2d])) > 0)
   for: 1h
 ```
 
@@ -564,11 +570,14 @@ recovery, with its export, and only by Tom.
 `DevEnvShelfUnavailable` covers D-67's rescue list, restore and prune as well as
 the archive. Its description links the attachment recovery in section 3.
 `DevEnvCoordinationArchiveFilling`'s fix is a larger PVC request in git.
-`DevEnvCoordinationRetentionStalled` fires when no pass has completed for two
-days, for example after repeated `shelf_unavailable` or `partial` passes. The
-gauge starts at the leader's start time, so the alert also fires when a new
-leader never completes a pass. It exists only while retention is on, so the
-alert is silent before R6 and after a rollback that turns retention off.
+`DevEnvCoordinationRetentionStalled` fires when no pass has made progress
+(`complete` or `capped`) for two days. Its first half reads the gauge, which
+starts at the leader's start time, so it also fires when a new leader never
+makes progress. Its second half sums the pass counters over every leader's
+series, so leader changes cannot hide a stall: four or more failed passes in
+two days with none making progress fire too. Both series exist only while
+retention is on, so the alert is silent before R6 and after a rollback that
+turns retention off.
 
 ## 8. Guard tests
 
