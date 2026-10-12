@@ -105,7 +105,6 @@ func (r *Reconciler) verifyExecutorTerminated(ctx context.Context, s *v1alpha1.A
 	if r.APIReader == nil || uid == "" {
 		return nil, errors.New("a terminal record needs an uncached reader and the recorded executor UID")
 	}
-	now := r.clock()
 	var pod corev1.Pod
 	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &pod); err != nil {
 		return nil, fmt.Errorf("recorded executor: %w", err)
@@ -129,7 +128,9 @@ func (r *Reconciler) verifyExecutorTerminated(ctx context.Context, s *v1alpha1.A
 	if pod.Spec.NodeName == "" {
 		return nil, errors.New("the recorded executor has no node")
 	}
-	node, lease, err := executorNodeLive(ctx, r.APIReader, pod.Spec.NodeName, now)
+	// now is the clock after the lease read (executorNodeLive), so observedAt
+	// is never before the renewal it judged.
+	node, lease, now, err := executorNodeLive(ctx, r.APIReader, pod.Spec.NodeName, r.clock)
 	if err != nil {
 		return nil, err
 	}

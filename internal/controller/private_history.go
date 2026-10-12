@@ -64,19 +64,32 @@ var errPrivateHistoryUnacknowledged = errors.New("private retention write is unc
 // to write, not with the server's response: Update copies the response into
 // fresh, so a field a stale CRD schema prunes would otherwise confirm as written.
 func (r *Reconciler) writePrivateHistory(ctx context.Context, s, fresh *v1alpha1.AgentSession) error {
+	_, err := r.writePrivateHistoryAcknowledged(ctx, s, fresh)
+	return err
+}
+
+// writePrivateHistoryAcknowledged is writePrivateHistory that also reports
+// whether the API server acknowledged the update with the intended record: its
+// response, which Update copies into fresh, holds exactly that record. Only
+// the confirming re-read lets the caller act on the record. The acknowledgement
+// says the record was stored, even when another write to the Session lands
+// before the re-read and the confirmation fails; the terminal counter counts
+// from it (DESIGN-025 3.6).
+func (r *Reconciler) writePrivateHistoryAcknowledged(ctx context.Context, s, fresh *v1alpha1.AgentSession) (acknowledged bool, err error) {
 	intended := fresh.Status.PrivateHistory.DeepCopy()
 	if err := r.Client.Status().Update(ctx, fresh); err != nil {
-		return fmt.Errorf("%w: %w", errPrivateHistoryUnacknowledged, err)
+		return false, fmt.Errorf("%w: %w", errPrivateHistoryUnacknowledged, err)
 	}
+	acknowledged = apiequality.Semantic.DeepEqual(fresh.Status.PrivateHistory, intended)
 	confirmed, err := r.privateHistorySession(ctx, fresh)
 	if err != nil {
-		return err
+		return acknowledged, err
 	}
 	if confirmed.ResourceVersion != fresh.ResourceVersion || !apiequality.Semantic.DeepEqual(confirmed.Status.PrivateHistory, intended) {
-		return errors.New("private retention acknowledgement changed, dropped a field or is unconfirmed")
+		return acknowledged, errors.New("private retention acknowledgement changed, dropped a field or is unconfirmed")
 	}
 	*s = *confirmed
-	return nil
+	return acknowledged, nil
 }
 
 func (r *Reconciler) privateResourcesAbsent(ctx context.Context, s *v1alpha1.AgentSession) error {

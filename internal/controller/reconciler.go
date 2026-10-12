@@ -339,13 +339,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 			}
 			fresh.Status.PrivateHistory = s.Status.PrivateHistory.DeepCopy()
 			// The terminal record or missed marker is written here, before
-			// anything else in this reconcile, by the confirmed write.
-			if err := r.writePrivateHistory(ctx, &s, fresh); err != nil {
-				return ctrl.Result{RequeueAfter: time.Second}, err
-			}
-			if obs.privateTerminal != "" {
+			// anything else in this reconcile, by the confirmed write. It is
+			// counted once the API server acknowledges the update with it: the
+			// schema keeps a stored mark for good, and a later reconcile that
+			// finds it stored writes and counts nothing, so a re-read that
+			// another write overtook must not lose the count.
+			acknowledged, err := r.writePrivateHistoryAcknowledged(ctx, &s, fresh)
+			if acknowledged && obs.privateTerminal != "" {
 				r.countTerminal(obs.privateTerminal)
-				log.FromContext(ctx).Info("confirmed a private executor mark", "mark", obs.privateTerminal, "podUID", s.Status.PrivateHistory.LastExecutor.PodUID)
+				log.FromContext(ctx).Info("stored a private executor mark", "mark", obs.privateTerminal, "confirmed", err == nil)
+			}
+			if err != nil {
+				return ctrl.Result{RequeueAfter: time.Second}, err
 			}
 			return ctrl.Result{RequeueAfter: time.Second}, nil
 		}

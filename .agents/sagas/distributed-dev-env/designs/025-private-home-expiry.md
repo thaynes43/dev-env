@@ -238,7 +238,9 @@ lease checks are `executorNodeLive` in `workspace_stop.go`, which
   `privateHistoryIdentity` passes, `admission` is `Started`, `homeUID` is set,
   `lastExecutor` is set, and neither `executorTerminal` nor `executorMissed`
   exists. The missed marker follows the same rule, so a Session whose HOME was
-  never bound gets neither.
+  never bound gets neither, and neither does any Session while the flag is off,
+  whether its Pod stands or is gone. With the gate closed nothing reads a Node
+  or a Lease.
 - **Bounds.** A Pod with more than 16 containers is refused, never truncated.
   `reason` fields are cut to 128 bytes. Times are stored to the second, so the
   confirmed write compares equal.
@@ -247,6 +249,10 @@ lease checks are `executorNodeLive` in `workspace_stop.go`, which
   expansion), strictly inside the `home` volume's mount (no `subPath`), and
   neither inside nor containing another mount of that container. Anything else
   is empty.
+- **The clock.** `executorNodeLive` reads the clock once, after the lease read,
+  and returns that reading. The lease's freshness, `observedAt` and the shared
+  proof's `verifiedAt` all use it, so a kubelet renewal that lands during the
+  reads is fresh, not future.
 - **Before H2.** The operator has no `get` on Nodes or Leases, so the node read is
   Forbidden: the check fails closed, `refused` is counted, the reconcile asks
   again in 30 seconds, and no record is ever written.
@@ -257,14 +263,29 @@ lease checks are `executorNodeLive` in `workspace_stop.go`, which
   that wants its Pod gone keeps `RetentionPending`, and `RemovalBlocked` keeps
   that reason.
 - **Counting.** `dev_env_private_executor_terminal_total` is registered at start
-  whatever the flag, each result at 0. `recorded` and `missed` count only after
-  their confirmed write; `refused` counts each refused observation of a terminal
-  executor.
+  whatever the flag, each result at 0. `recorded` and `missed` count when the API
+  server acknowledges the status update with the mark: its response holds
+  exactly the intended record. The confirming re-read still gates everything
+  after the write. When another write to the Session lands between the update
+  and that re-read, the reconcile fails and retries, finds the mark stored, and
+  neither writes nor counts it again: the mark still counts once. A pruned field
+  is never acknowledged, so it never counts. An update whose response is lost
+  (a timeout after the write landed) is not counted either; the mark is still
+  stored, and its condition shows it. `refused` counts each refused observation
+  of a terminal executor.
+- **Two reconcilers** (3.4). One whose re-read finds a newer revision of the
+  Session writes nothing; one whose update carries an older revision gets a
+  Conflict. Either way the Session holds one mark, counted once.
 
 Tests: `TestPrivateHistoryExecutorTerminalRecordIsImmutableAndBound` (T16, the
 record part) in `api/v1alpha1`; `TestPrivateTerminalRecordOnTheAPIServer`
 (envtest: T15, T6 with restarts as new reconcilers, and T16's rebuild case) and
-the unit tests in `internal/controller/private_terminal_test.go`.
+the unit tests in `internal/controller/private_terminal_test.go`, among them
+`TestPrivateTerminalGateHoldsWhetherThePodStandsOrNot`,
+`TestPrivateTerminalReadsTheClockAfterTheLease`,
+`TestPrivateTerminalCountedWhenAnotherWriteOvertakesTheReRead` and
+`TestPrivateTerminalOverlappingReconcilers`; for the shared path,
+`TestWorkspaceStopVerifierReadsTheClockAfterTheLease`.
 
 ## 4. Reaching a terminal state: the stop request
 

@@ -268,16 +268,13 @@ func TestPrivateTerminalChecksBlockRecording(t *testing.T) {
 			f.pod.Status.ContainerStatuses[0].State = corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}
 		}},
 		{name: "terminated container but running phase", edit: func(f *terminalFixture) { f.pod.Status.Phase = corev1.PodRunning }},
-		{name: "flag off", edit: func(f *terminalFixture) {}},
 		{name: "executor not yet recorded", edit: func(f *terminalFixture) {
 			// A first observation records lastExecutor only; the terminal record
 			// waits for the next reconcile, which this test does not run.
 			f.s.Status.PrivateHistory.LastExecutor = nil
 		}},
-		{name: "unbound HOME", edit: func(f *terminalFixture) {
-			f.s.Status.PrivateHistory.HomeUID = ""
-			f.s.Status.PrivateHistory.Admission = "Unknown"
-		}},
+		// The flag and the retention record's gates are
+		// TestPrivateTerminalGateHoldsWhetherThePodStandsOrNot.
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newTerminalFixture()
@@ -291,9 +288,6 @@ func TestPrivateTerminalChecksBlockRecording(t *testing.T) {
 			}
 			counter := NewPrivateExecutorTerminalCounter()
 			r := f.reconciler(base, reader, counter)
-			if tc.name == "flag off" {
-				r.PrivateTerminalRecord = false
-			}
 			times := 3
 			if tc.name == "executor not yet recorded" {
 				times = 1
@@ -447,6 +441,271 @@ func TestPrivateTerminalProviderDirs(t *testing.T) {
 			t.Fatal("recorded directories relative to a HOME subPath mount")
 		}
 	})
+}
+
+// The gate (terminalRecordApplies) holds whether the recorded executor Pod
+// stands or is gone: with the flag off, or a retention record that cannot take
+// a mark, no record and no missed marker are written, and nothing reads a Node
+// or a Lease. A missed marker written with the flag off would forfeit the
+// Session's record for good. The control case shows the same fixture reaches
+// both marks when the gate opens.
+func TestPrivateTerminalGateHoldsWhetherThePodStandsOrNot(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		edit       func(*terminalFixture)
+		flagOff    bool
+		absentOnly bool // a standing Pod would get lastExecutor, then its record
+		control    bool
+	}{
+		{name: "flag on (control)", control: true},
+		{name: "flag off", flagOff: true},
+		{name: "unbound HOME", edit: func(f *terminalFixture) {
+			f.s.Status.PrivateHistory.HomeUID = ""
+			f.s.Status.PrivateHistory.Admission = "Unknown"
+		}},
+		{name: "admission Unknown", edit: func(f *terminalFixture) { f.s.Status.PrivateHistory.Admission = "Unknown" }},
+		{name: "identity unconfirmed", edit: func(f *terminalFixture) { f.s.Status.PrivateHistory.Provider = "another-provider" }},
+		{name: "executor not yet recorded", absentOnly: true, edit: func(f *terminalFixture) { f.s.Status.PrivateHistory.LastExecutor = nil }},
+	} {
+		for _, absent := range []bool{false, true} {
+			if tc.absentOnly && !absent {
+				continue
+			}
+			name := tc.name + "/pod standing"
+			if absent {
+				name = tc.name + "/pod absent"
+			}
+			t.Run(name, func(t *testing.T) {
+				f := newTerminalFixture()
+				if tc.edit != nil {
+					tc.edit(&f)
+				}
+				var skip []client.Object
+				if absent {
+					skip = append(skip, f.pod)
+				}
+				base := f.client(skip...)
+				var nodeReads int
+				reader := interceptor.NewClient(base, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, o client.Object, opts ...client.GetOption) error {
+					switch o.(type) {
+					case *corev1.Node, *coordinationv1.Lease:
+						nodeReads++
+						if !tc.control {
+							t.Errorf("read %T %s with the gate closed", o, key)
+						}
+					}
+					return c.Get(ctx, key, o, opts...)
+				}})
+				counter := NewPrivateExecutorTerminalCounter()
+				for run := range 3 { // a start and two restarts, the gate unchanged
+					r := f.reconciler(base, reader, counter)
+					r.PrivateTerminalRecord = !tc.flagOff
+					reconcileSession(t, r, f.s, 3-run)
+				}
+				h := storedHistory(t, base, f.s).Status.PrivateHistory
+				if tc.control {
+					wantRecorded, wantMissed := 1.0, 0.0
+					if absent {
+						wantRecorded, wantMissed = 0, 1
+					}
+					if (h.ExecutorTerminal != nil) != !absent || (h.ExecutorMissed != nil) != absent ||
+						terminalCount(counter, terminalRecorded) != wantRecorded || terminalCount(counter, terminalMissed) != wantMissed {
+						t.Fatalf("the open gate did not give exactly one mark: %+v", h)
+					}
+					if !absent && nodeReads == 0 {
+						t.Fatal("a record without the node and lease reads")
+					}
+					return
+				}
+				if h.ExecutorTerminal != nil || h.ExecutorMissed != nil {
+					t.Fatalf("a mark through a closed gate: %+v", h)
+				}
+				for _, result := range []string{terminalRecorded, terminalMissed, terminalRefused} {
+					if n := terminalCount(counter, result); n != 0 {
+						t.Fatalf("%s counted %v times through a closed gate", result, n)
+					}
+				}
+				if nodeReads != 0 {
+					t.Fatalf("%d Node or Lease reads through a closed gate", nodeReads)
+				}
+			})
+		}
+	}
+}
+
+// renewDuringTheReads returns a reader whose lease read shows a kubelet renewal
+// that landed during the reads: one second after the clock the observation
+// began with, and the clock moves with it.
+func renewDuringTheReads(base client.WithWatch, clock *time.Time) client.Reader {
+	return interceptor.NewClient(base, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, o client.Object, opts ...client.GetOption) error {
+		if err := c.Get(ctx, key, o, opts...); err != nil {
+			return err
+		}
+		if lease, ok := o.(*coordinationv1.Lease); ok {
+			*clock = clock.Add(time.Second)
+			lease.Spec.RenewTime = &metav1.MicroTime{Time: *clock}
+		}
+		return nil
+	}})
+}
+
+// The clock is read after the lease read: a renewal that lands during the
+// reads is fresh, not future, and observedAt is the later reading.
+func TestPrivateTerminalReadsTheClockAfterTheLease(t *testing.T) {
+	f := newTerminalFixture()
+	base := f.client()
+	clock := f.now
+	counter := NewPrivateExecutorTerminalCounter()
+	r := f.reconciler(base, renewDuringTheReads(base, &clock), counter)
+	r.Now = func() time.Time { return clock }
+	reconcileSession(t, r, f.s, 3)
+	rec := storedHistory(t, base, f.s).Status.PrivateHistory.ExecutorTerminal
+	renewed := metav1.NewTime(f.now.Add(time.Second))
+	if rec == nil || !rec.LeaseRenewedAt.Equal(&renewed) || !rec.ObservedAt.Equal(&renewed) || terminalCount(counter, terminalRefused) != 0 {
+		t.Fatalf("a renewal during the reads was refused or misdated: %+v, refused %v", rec, terminalCount(counter, terminalRefused))
+	}
+}
+
+// recorded and missed count from the acknowledged update: when another write
+// to the Session lands between the update and the confirming re-read, the
+// reconcile fails and retries, the stored mark is never written again, and it
+// still counts once.
+func TestPrivateTerminalCountedWhenAnotherWriteOvertakesTheReRead(t *testing.T) {
+	for _, mark := range []string{terminalRecorded, terminalMissed} {
+		t.Run(mark, func(t *testing.T) {
+			f := newTerminalFixture()
+			var skip []client.Object
+			if mark == terminalMissed {
+				skip = append(skip, f.pod)
+			}
+			base := f.client(skip...)
+			overtaken := false
+			c := interceptor.NewClient(base, interceptor.Funcs{SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, o client.Object, opts ...client.SubResourceUpdateOption) error {
+				if err := c.SubResource(sub).Update(ctx, o, opts...); err != nil {
+					return err
+				}
+				typed, ok := o.(*v1alpha1.AgentSession)
+				if !ok || overtaken || typed.Status.PrivateHistory == nil || typed.Status.PrivateHistory.ExecutorTerminal == nil && typed.Status.PrivateHistory.ExecutorMissed == nil {
+					return nil
+				}
+				overtaken = true
+				var other v1alpha1.AgentSession
+				if err := c.Get(ctx, client.ObjectKeyFromObject(o), &other); err != nil {
+					return err
+				}
+				other.Labels = map[string]string{"fixture/another-writer": "true"}
+				return c.Update(ctx, &other)
+			}})
+			counter := NewPrivateExecutorTerminalCounter()
+			r := f.reconciler(c, base, counter)
+			var failed bool
+			for range 4 {
+				if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.s)}); err != nil {
+					failed = true
+				}
+			}
+			for range 2 {
+				reconcileSession(t, f.reconciler(c, base, counter), f.s, 2)
+			}
+			h := storedHistory(t, base, f.s).Status.PrivateHistory
+			if !overtaken || !failed {
+				t.Fatal("the fixture did not overtake the confirming re-read")
+			}
+			if (mark == terminalRecorded) != (h.ExecutorTerminal != nil) || (mark == terminalMissed) != (h.ExecutorMissed != nil) {
+				t.Fatalf("the acknowledged mark is not stored: %+v", h)
+			}
+			other := terminalMissed
+			if mark == terminalMissed {
+				other = terminalRecorded
+			}
+			if terminalCount(counter, mark) != 1 || terminalCount(counter, other) != 0 {
+				t.Fatalf("%s=%v %s=%v, want 1 and 0", mark, terminalCount(counter, mark), other, terminalCount(counter, other))
+			}
+		})
+	}
+}
+
+// DESIGN-025 3.4: two overlapping reconcilers, as two replicas around a leader
+// change. A observes; B writes the mark; then A writes. A's write is skipped
+// (its re-read sees B's revision) or refused (a Conflict on the update), and
+// the Session holds one mark, counted once, by B.
+func TestPrivateTerminalOverlappingReconcilers(t *testing.T) {
+	for _, mark := range []string{terminalRecorded, terminalMissed} {
+		for _, when := range []string{"before A's re-read", "between A's re-read and A's update"} {
+			t.Run(mark+"/"+when, func(t *testing.T) {
+				f := newTerminalFixture()
+				var skip []client.Object
+				if mark == terminalMissed {
+					skip = append(skip, f.pod)
+				}
+				base := f.client(skip...)
+				countA, countB := NewPrivateExecutorTerminalCounter(), NewPrivateExecutorTerminalCounter()
+				b := f.reconciler(base, base, countB)
+				ran := false
+				runB := func(ctx context.Context) {
+					if ran {
+						return
+					}
+					ran = true
+					if _, err := b.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.s)}); err != nil {
+						t.Errorf("B: %v", err)
+					}
+				}
+				var readerA client.Reader = base
+				var clientA client.Client = base
+				if when == "before A's re-read" {
+					// A's last read before its re-read: the lease for a record, the
+					// Pod (NotFound) for a missed marker.
+					readerA = interceptor.NewClient(base, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, o client.Object, opts ...client.GetOption) error {
+						err := c.Get(ctx, key, o, opts...)
+						switch o.(type) {
+						case *coordinationv1.Lease:
+							runB(ctx)
+						case *corev1.Pod:
+							if mark == terminalMissed {
+								runB(ctx)
+							}
+						}
+						return err
+					}})
+				} else {
+					clientA = interceptor.NewClient(base, interceptor.Funcs{SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, o client.Object, opts ...client.SubResourceUpdateOption) error {
+						if typed, ok := o.(*v1alpha1.AgentSession); ok && typed.Status.PrivateHistory != nil &&
+							(typed.Status.PrivateHistory.ExecutorTerminal != nil || typed.Status.PrivateHistory.ExecutorMissed != nil) {
+							runB(ctx)
+						}
+						return c.SubResource(sub).Update(ctx, o, opts...)
+					}})
+				}
+				a := f.reconciler(clientA, readerA, countA)
+				_, errA := a.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.s)})
+				if !ran {
+					t.Fatal("B never ran inside A's reconcile")
+				}
+				if when == "before A's re-read" && errA != nil {
+					t.Fatalf("A did not skip its stale write: %v", errA)
+				}
+				if when != "before A's re-read" && !apierrors.IsConflict(errA) {
+					t.Fatalf("A's stale update was not a Conflict: %v", errA)
+				}
+				reconcileSession(t, a, f.s, 2)
+				reconcileSession(t, b, f.s, 2)
+				h := storedHistory(t, base, f.s).Status.PrivateHistory
+				if (mark == terminalRecorded) != (h.ExecutorTerminal != nil) || (mark == terminalMissed) != (h.ExecutorMissed != nil) {
+					t.Fatalf("not exactly B's mark: %+v", h)
+				}
+				for _, result := range []string{terminalRecorded, terminalMissed} {
+					want := 0.0
+					if result == mark {
+						want = 1
+					}
+					if terminalCount(countA, result) != 0 || terminalCount(countB, result) != want {
+						t.Fatalf("%s: A counted %v, B counted %v; want 0 and %v", result, terminalCount(countA, result), terminalCount(countB, result), want)
+					}
+				}
+			})
+		}
+	}
 }
 
 // envtest (T6, T15 and T16's rebuild case): the same rules against a real API
