@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.24.0](https://github.com/thaynes43/dev-env/compare/v2.23.0...v2.24.0) (2026-10-12)
+
+
+### Features
+
+* **controller:** prove original private worker ownership without admission ([#213](https://github.com/thaynes43/dev-env/issues/213)) ([b3aa4d9](https://github.com/thaynes43/dev-env/commit/b3aa4d93aa72afdec72ddd97a2303eb5860c368a))
+
 ## [2.23.0](https://github.com/thaynes43/dev-env/compare/v2.22.0...v2.23.0) (2026-10-12)
 
 
