@@ -176,11 +176,13 @@ func TestTaskClaimsTwoAPIsAtomicOwnerAndReconstruction(t *testing.T) {
 func TestTaskClaimsLostAcknowledgementAndUnknownConfirmation(t *testing.T) {
 	for _, unavailable := range []bool{false, true} {
 		t.Run(map[bool]string{false: "recover", true: "unknown"}[unavailable], func(t *testing.T) {
+			accepted := false
 			f := newFixtureWith(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 				if err := c.Create(ctx, obj, opts...); err != nil {
 					return err
 				}
 				if _, ok := obj.(*coord.TaskClaim); ok {
+					accepted = true
 					return errors.New("synthetic lost ACK")
 				}
 				return nil
@@ -189,13 +191,20 @@ func TestTaskClaimsLostAcknowledgementAndUnknownConfirmation(t *testing.T) {
 			enableClaims(f)
 			token := claimSession(t, f, "owner", humanSA)
 			if unavailable {
+				// Confirmation fails only after the create was accepted.
 				f.srv.TaskClaims.Live = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-					return errors.New("synthetic confirmation unavailable")
+					if accepted {
+						return errors.New("synthetic confirmation unavailable")
+					}
+					return c.Get(ctx, key, obj, opts...)
 				}})
 			}
 			w := f.do(http.MethodPost, apiv1.TaskClaimsPath, token, claimRequest("task:bounded"))
 			if unavailable {
 				wantError(t, w, http.StatusServiceUnavailable, apiv1.CodeUnavailable)
+				if !accepted {
+					t.Fatal("test did not reach the accepted create")
+				}
 				f.srv.TaskClaims.Live = f.c
 				w = f.do(http.MethodPost, apiv1.TaskClaimsPath, token, claimRequest("task:bounded"))
 			}
