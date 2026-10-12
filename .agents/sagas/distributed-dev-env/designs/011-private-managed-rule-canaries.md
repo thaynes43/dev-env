@@ -158,6 +158,10 @@ coordinator's step after the GitOps change deploys.
 | `sigo-alumni` | `thaynes43/sigo-alumni` | `main` | private |
 | `sigoalumni-org` | `thaynes43/sigoalumni-org` | `main` | private |
 
+These two are the full set Tom's "all the Sigo alumni repos" names: the
+haynes-dev-bot installation lists exactly these two Sigo alumni repositories
+(checked 2026-10-12), and the v1 pod keeps clones of the same two.
+
 Project `sigo-alumni` selects both repositories. Its rules are short and
 generic. They carry no private content, only the marker
 `sigo-alumni-project-rules-20261012-9b122cd5`. They say to report that
@@ -226,7 +230,14 @@ claims or the inbox, so those flags stay `dev-env`.
   private HOME. It runs at agentd boot, at a private Codex host start and on an
   explicit `agentd project-refresh`, and never on a timer. So only pods that
   boot after the change receive the two private repositories. Nothing running
-  restarts.
+  restarts. This reaches further than the one canary, and it is parity, not new
+  access. Tom's answer says the repositories "are needed for dev-env, we use
+  them now". The v1 pod already keeps fetch-only clones of both in `~/repos`,
+  read with the same haynes-dev-bot token. A v2 pod gets its clones in its own
+  private HOME. To withdraw the reach, remove the project and its two
+  repositories from the catalog after the canary's result read. New pods then
+  stop cloning them. Bootstrap never deletes a clone, so HOMEs that already
+  hold one keep it.
 - **Admission.** General private project tasks stay off. An ordinary task that
   names a project still refuses. The fixed canary route is the only way in.
 - **Freeze.** The Session binds the catalog's UID, resourceVersion and snapshot
