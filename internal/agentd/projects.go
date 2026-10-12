@@ -3,9 +3,13 @@ package agentd
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"path/filepath"
@@ -426,6 +430,8 @@ func projectGitOperationClear(ctx context.Context, r Runner, s Settings, dir str
 
 // projectIndexProof hashes every tracked file through Git's index filters. It
 // does not trust cached stat data, assume-unchanged or sparse-checkout bits.
+// A tracked symlink is proved by its target alone and never followed
+// (DESIGN-006, tracked symlinks).
 func projectIndexProof(ctx context.Context, r Runner, s Settings, dir string, readOnly ...bool) (string, error) {
 	if err := projectGitOperationClear(ctx, r, s, dir); err != nil {
 		return "", err
@@ -449,13 +455,18 @@ func projectIndexProof(ctx context.Context, r Runner, s Settings, dir string, re
 	}
 	var paths strings.Builder
 	var expected []string
+	var objectFormat string
+	entries := 0
 	for _, line := range strings.Split(staged, "\n") {
 		if line == "" {
 			continue
 		}
+		if entries++; entries > 10000 {
+			return "", errors.New("reference index exceeds the repair proof bound")
+		}
 		meta, path, ok := strings.Cut(line, "\t")
 		fields := strings.Fields(meta)
-		if !ok || len(fields) != 3 || fields[2] != "0" || (fields[0] != "100644" && fields[0] != "100755") {
+		if !ok || len(fields) != 3 || fields[2] != "0" || (fields[0] != "100644" && fields[0] != "100755" && fields[0] != "120000") {
 			return "", errors.New("conflicts, submodules or special tracked files; preserved")
 		}
 		actualPath := path
@@ -466,6 +477,20 @@ func projectIndexProof(ctx context.Context, r Runner, s Settings, dir string, re
 			}
 		}
 		fullPath := filepath.Join(dir, actualPath)
+		if !strings.HasPrefix(fullPath, filepath.Clean(dir)+string(filepath.Separator)) {
+			return "", errors.New("tracked filename cannot be proved; preserved")
+		}
+		if fields[0] == "120000" {
+			if objectFormat == "" {
+				if objectFormat, err = projectGit(ctx, r, s, dir, "rev-parse", "--show-object-format"); err != nil {
+					return "", errors.New("repository object format is uncertain; preserved")
+				}
+			}
+			if err := proveTrackedSymlink(fullPath, objectFormat, fields[1]); err != nil {
+				return "", err
+			}
+			continue
+		}
 		if err := noSymlinkComponents(fullPath); err != nil {
 			return "", errors.New("tracked path is missing or has symlink components; preserved")
 		}
@@ -476,9 +501,6 @@ func projectIndexProof(ctx context.Context, r Runner, s Settings, dir string, re
 		paths.WriteString(path)
 		paths.WriteByte('\n')
 		expected = append(expected, fields[1])
-		if len(expected) > 10000 {
-			return "", errors.New("reference index exceeds the repair proof bound")
-		}
 	}
 	result, err := r.Run(ctx, privateGitCommand(s, Cmd{Name: "git", Args: []string{"-C", dir, "-c", "core.fsmonitor=false", "hash-object", "--stdin-paths"}, Env: gitEnv, Stdin: strings.NewReader(paths.String())}))
 	if err != nil || !slices.Equal(strings.Fields(string(result.Stdout)), expected) {
@@ -493,6 +515,49 @@ func projectIndexProof(ctx context.Context, r Runner, s Settings, dir string, re
 		return projectGit(ctx, r, s, dir, "rev-parse", "--verify", "HEAD^{tree}")
 	}
 	return projectGit(ctx, r, s, dir, "write-tree")
+}
+
+// proveTrackedSymlink proves a tracked symlink without following it: no parent
+// component is a symlink, the leaf is one, and the blob of its target is the
+// index entry. git hash-object would open the path and follow the link, so the
+// blob id is computed here, as Git computes it for a symlink.
+func proveTrackedSymlink(path, objectFormat, indexed string) error {
+	if err := noSymlinkComponents(filepath.Dir(path)); err != nil {
+		return errors.New("tracked path is missing or has symlink components; preserved")
+	}
+	fi, err := os.Lstat(path)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return errors.New("tracked file mode differs from index; preserved")
+	}
+	target, err := os.Readlink(path)
+	if err != nil {
+		return errors.New("tracked symlink cannot be read; preserved")
+	}
+	id, err := gitBlobObjectID(objectFormat, []byte(target))
+	if err != nil {
+		return errors.New("repository object format is unsupported; preserved")
+	}
+	if id != indexed {
+		return errors.New("tracked files differ from the index; preserved")
+	}
+	return nil
+}
+
+// gitBlobObjectID is Git's object id for a blob holding data: the object
+// format's hash of "blob <length>\x00" followed by data.
+func gitBlobObjectID(objectFormat string, data []byte) (string, error) {
+	var h hash.Hash
+	switch objectFormat {
+	case "sha1":
+		h = sha1.New()
+	case "sha256":
+		h = sha256.New()
+	default:
+		return "", errors.New("unsupported Git object format")
+	}
+	_, _ = fmt.Fprintf(h, "blob %d\x00", len(data))
+	_, _ = h.Write(data)
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func inspectProjectReference(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository, target string) (projectGitState, error) {
