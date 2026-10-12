@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.25.0](https://github.com/thaynes43/dev-env/compare/v2.24.1...v2.25.0) (2026-10-12)
+
+
+### Features
+
+* **agentd:** closed-set reason codes for private catalog bootstrap ([#239](https://github.com/thaynes43/dev-env/issues/239)) ([388444d](https://github.com/thaynes43/dev-env/commit/388444db0b00a5bed43fe513613e2ec2f5f7dfa3))
+* durable private executor terminal record (DESIGN-025 H1) ([#236](https://github.com/thaynes43/dev-env/issues/236)) ([ca58acd](https://github.com/thaynes43/dev-env/commit/ca58acdeec02f0203649beae669a979fdaff2586))
+
+
+### Bug Fixes
+
+* **agentd:** accept tracked symlinks in the clean-checkout proof ([#237](https://github.com/thaynes43/dev-env/issues/237)) ([7367fa1](https://github.com/thaynes43/dev-env/commit/7367fa1fb3631c2f46cedd8234f8d5cb6e803278))
+
 ## [2.24.1](https://github.com/thaynes43/dev-env/compare/v2.24.0...v2.24.1) (2026-10-12)
 
 
