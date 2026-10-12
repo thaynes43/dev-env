@@ -13,7 +13,18 @@ import "time"
 const (
 	SessionsPath = "/v1/sessions"
 	FleetPath    = "/v1/fleet"
+	CanariesPath = "/v1/canaries"
 )
+
+func CanaryResultPath(id string) string { return CanariesPath + "/" + id + "/result" }
+
+// CanaryResult exposes one retained managed publication to its fixed initiating
+// client. Context contains existing publisher assertions, not private receipts.
+type CanaryResult struct {
+	CanaryID   string           `json:"canaryID"`
+	SessionUID string           `json:"sessionUID"`
+	Context    PublishedContext `json:"context"`
+}
 
 // SessionPath is the route of one session.
 func SessionPath(name string) string { return SessionsPath + "/" + name }

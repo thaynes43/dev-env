@@ -15,6 +15,7 @@ import (
 
 	metavalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
@@ -276,12 +277,18 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 // checkAgentd runs agentd's own check on the session, with its final name.
 func checkAgentd(sess *v1alpha1.AgentSession) error {
 	check := sess
-	if sess.UID == "" && sess.Spec.Workspace != nil {
+	capture := sess.Spec.ProjectCanary != nil && sess.Spec.ProjectCanary.CaptureOutput
+	if sess.UID == "" && (sess.Spec.Workspace != nil || capture) {
 		// Kubernetes assigns the real UID only after Create. This copy checks
 		// document syntax and size; its validation-only UID is never persisted
 		// or transported. The controller builds the pod with the actual API UID.
 		check = sess.DeepCopy()
 		check.UID = "00000000-0000-0000-0000-000000000000"
+		if capture {
+			// Reserve the full protocol UID bound in both document transports.
+			// Capture still requires the API-assigned UID at actual Pod startup.
+			check.UID = types.UID(strings.Repeat("x", 128))
+		}
 	}
 	if err := controller.CheckAgentdSession(check); err != nil {
 		return invalid(fieldError("", "%v", err))

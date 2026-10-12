@@ -17,6 +17,8 @@ Usage:
                                                   read one authorized directory page
   agent-run canary create --id <id> --once [-o json]
                                                   create or report a trusted fixed original
+  agent-run canary result --id <id> --session-uid <uid> --context <name> --json --once
+                                                  read one retained fixed publication
   agent-run show <name>                           show one session, with its task
   agent-run log <name> [--tail N]                 print the end of a session's log
   agent-run msg <name> "<text>"                   send a message into a session's TUI
@@ -88,6 +90,7 @@ read cannot establish an empty directory. JSON preserves Unknown observations.
 Common API URL, token, CA and context flags use ordinary caller access.
 `,
 	"canary": `Usage: agent-run canary create --id <fixedID> --once [flags]
+       agent-run canary result --id <fixedID> --session-uid <originalUID> --context <contextName> --json --once [flags]
 
 Calls the operator's trusted ID-only canary route once. The server selects the
 provider, task and bounded profile from its approved record. This command cannot
@@ -103,6 +106,13 @@ It does not prove provider execution or loaded rules. The command does not wait,
 poll, retry or follow redirects. A failed or uncertain acknowledgement requires
 safe observation of the retained original, rather than another create attempt.
 Common API URL, token, CA and context flags use ordinary caller access.
+
+The result subcommand reads one named immutable publication from the retained
+original Session. Its three selection flags are explicit and required. Here
+--context names the publication and is consumed before connection resolution;
+the ordinary default kubeconfig context remains separate. It performs one GET
+without retry or redirects. A read proves stored text and existing receipt
+fields, not complete history, served model, billed cost or confirmed stop.
 `,
 	"run": `Usage: agent-run [--repo] <repo> -p "<task>" [flags]
        agent-run --project <project> [--repo <repo>] -p "<task>" [flags]
