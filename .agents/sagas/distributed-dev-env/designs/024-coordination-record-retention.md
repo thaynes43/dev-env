@@ -426,7 +426,7 @@ kept between passes but the resume key; the archive holds the rest.
 | Metric | Type | Labels |
 |---|---|---|
 | `dev_env_coordination_retention_passes_total` | counter | `result`: `complete`, `partial` (deadline or cap), `shelf_unavailable`, `failed` |
-| `dev_env_coordination_retention_last_complete_pass_timestamp_seconds` | gauge | none; appears after the first complete pass |
+| `dev_env_coordination_retention_last_complete_pass_timestamp_seconds` | gauge | none; set to the leader's start time when the runnable starts, then to the end of each complete pass |
 | `dev_env_coordination_retention_marked_total` | counter | `kind` |
 | `dev_env_coordination_retention_grace_resets_total` | counter | `kind` |
 | `dev_env_coordination_retention_deleted_total` | counter | `kind` |
@@ -565,7 +565,10 @@ recovery, with its export, and only by Tom.
 the archive. Its description links the attachment recovery in section 3.
 `DevEnvCoordinationArchiveFilling`'s fix is a larger PVC request in git.
 `DevEnvCoordinationRetentionStalled` fires when no pass has completed for two
-days, for example after repeated `shelf_unavailable` or `partial` passes.
+days, for example after repeated `shelf_unavailable` or `partial` passes. The
+gauge starts at the leader's start time, so the alert also fires when a new
+leader never completes a pass. It exists only while retention is on, so the
+alert is silent before R6 and after a rollback that turns retention off.
 
 ## 8. Guard tests
 
