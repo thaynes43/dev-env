@@ -174,7 +174,8 @@ func refreshPrivateProjectRoot(ctx context.Context, r Runner, s Settings, snapsh
 		next.Exclusion += "/" + repo.Name + "/\n"
 	}
 	// Prove every anchor fast-forward before the first change, so a
-	// deterministic refusal leaves the root exactly where it was.
+	// deterministic refusal leaves the root exactly where it was, and fetch
+	// what each checkout needs, so the fast-forwards below are local work.
 	to := privateRootState{Head: current.Head, Tree: current.Tree, WrapperDigest: next.WrapperDigest, Exclusion: next.Exclusion, Anchors: map[string]privateAnchorState{}}
 	for _, source := range sources {
 		name := source.Repository.Name
@@ -182,7 +183,8 @@ func refreshPrivateProjectRoot(ctx context.Context, r Runner, s Settings, snapsh
 		if prior, exists := current.Anchors[name]; exists {
 			state.Identity = prior.Identity
 			if prior.Target != source.Target {
-				if _, err := projectGit(ctx, r, s, filepath.Join(root, name), "merge-base", "--is-ancestor", prior.Target, source.Target); err != nil {
+				anchor := filepath.Join(root, name)
+				if _, err := projectGit(ctx, r, s, anchor, "merge-base", "--is-ancestor", prior.Target, source.Target); err != nil || prefetchPrivateAnchor(ctx, r, s, anchor, prior.Target, source.Target) != nil {
 					return report
 				}
 			}
@@ -267,6 +269,9 @@ func refreshPrivateProjectRoot(ctx context.Context, r Runner, s Settings, snapsh
 			return report
 		}
 		if current.Head != to.Head {
+			if privateRootStepTime(ctx) != nil {
+				return report
+			}
 			if _, err := rootGit(ctx, r, s, root, nil, "-c", "merge.autostash=false", "merge", "--ff-only", "--no-edit", "--no-autostash", to.Head); err != nil {
 				return report
 			}
@@ -891,11 +896,41 @@ func provePrivateAnchor(ctx context.Context, r Runner, s Settings, repo projectc
 	return head, nil
 }
 
+// privateRootStepReserve is how much of the time budget must be left before a
+// mutating Git step in a published root starts. The step's network work is
+// already done, so it is local, and the budget ends between steps rather than
+// inside one. A step it does stop gets SIGTERM, and Git removes its locks
+// (ExecRunner); only a hard kill can still leave one (DESIGN-007).
+var privateRootStepReserve = 30 * time.Second
+
+func privateRootStepTime(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < privateRootStepReserve {
+		return errPrivateRoot
+	}
+	return nil
+}
+
+// prefetchPrivateAnchor fetches, in one batch, every blob a fast-forward of
+// anchor from head to target checks out. A blob:none reference otherwise
+// fetches them from inside the checkout, after it has already removed the
+// paths the target deletes, so a stop there would leave the anchor neither at
+// head nor at target. A diffstat between two commits reads neither the index
+// nor the files.
+func prefetchPrivateAnchor(ctx context.Context, r Runner, s Settings, anchor, head, target string) error {
+	_, err := projectGit(ctx, r, s, anchor, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--shortstat", head, target, "--")
+	return err
+}
+
 func advancePrivateAnchor(ctx context.Context, r Runner, s Settings, repo projectcatalog.Repository, anchor, target string, owned *privateAnchorIdentity, authority *projectCatalogAuthority) (privateAnchorIdentity, error) {
 	if _, err := os.Lstat(anchor); errors.Is(err, os.ErrNotExist) {
-		if owned != nil || authority.confirm(ctx) != nil || validateProjectReference(ctx, r, s, repo) != nil {
+		if owned != nil || authority.confirm(ctx) != nil || validateProjectReference(ctx, r, s, repo) != nil || privateRootStepTime(ctx) != nil {
 			return privateAnchorIdentity{}, errPrivateRoot
 		}
+		// A stopped worktree add removes its own half-made worktree on
+		// SIGTERM, so this step may fetch.
 		_, err := projectGit(ctx, r, s, s.ClonePath(repo.Name), "worktree", "add", "--detach", anchor, target)
 		if err != nil {
 			return privateAnchorIdentity{}, errPrivateRoot
@@ -918,7 +953,7 @@ func advancePrivateAnchor(ctx context.Context, r Runner, s Settings, repo projec
 	if head == target {
 		return *owned, nil
 	}
-	if _, err := projectGit(ctx, r, s, anchor, "merge-base", "--is-ancestor", head, target); err != nil || authority.confirm(ctx) != nil || validatePrivateAnchor(ctx, r, s, repo, anchor, head, owned) != nil {
+	if _, err := projectGit(ctx, r, s, anchor, "merge-base", "--is-ancestor", head, target); err != nil || authority.confirm(ctx) != nil || validatePrivateAnchor(ctx, r, s, repo, anchor, head, owned) != nil || privateRootStepTime(ctx) != nil {
 		return privateAnchorIdentity{}, errPrivateRoot
 	}
 	if _, err = projectGit(ctx, r, s, anchor, "-c", "merge.autostash=false", "merge", "--ff-only", "--no-edit", "--no-autostash", target); err != nil || validatePrivateAnchor(ctx, r, s, repo, anchor, target, owned) != nil {
