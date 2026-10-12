@@ -11,6 +11,9 @@ resource in the old dev-env API group. Neither is a private store for the new
 claim ACL. The new group is absent from worker grants. Give the operator only
 namespaced TaskClaim get/create/list permission; add no Secret, worker, broad
 RBAC or elevated runtime access. Use direct/uncached reads without an informer.
+*Amended 2026-10-12 ([ADR-004](../adrs/004-coordination-record-retention.md), Q-29): a separate namespaced delete on the
+four coordination kinds, for the operator's retention runnable only
+([DESIGN-024](024-coordination-record-retention.md)).*
 
 An explicit project, declared repository and logical task/issue key determine
 one canonical identity. Do not infer semantic duplicates from prose. Catalog,
@@ -29,6 +32,16 @@ a contender. An unconfirmed acknowledgement remains Unknown; it cannot change
 the owner. Missing, stopped, deleting or reaped owners remain claimed. No
 expiry, release, transfer or replacement is authorized without a future
 verified old-executor stop contract.
+
+*Amended 2026-10-12 by [ADR-004](../adrs/004-coordination-record-retention.md) (Q-29), in the reap case only. When the
+owner Session's UID is absent, proved by uncached reads, and 30 days have
+passed since that was first observed, the operator archives the claim and
+deletes it. The task can then be claimed again by a new owner
+([DESIGN-024](024-coordination-record-retention.md)). Every other case above keeps its claim: a missing name
+whose UID is unproven, a stopped, suspended, deleting, Reaping or retained
+owner. A transfer from a present owner still needs the stop contract. Private
+Sessions are never absent until a HOME expiry policy exists (DESIGN-008), so
+their claims are never released yet.*
 
 New routes default off and have their own narrow authorization. Creation is
 for an authenticated own Session or a freshly verified coordinator direct
@@ -95,6 +108,10 @@ PR #223.
   Clients name the refusal and say not to retry: agentd `context-publish`
   prints a fixed message, and the inbox CLI prints the API's error. A managed
   canary output capture at the bound spends its one delivery attempt (DESIGN-013).
+  *Amended 2026-10-12 (Q-29, ADR-004): once retention runs, a per-Session bound
+  stays a lifetime bound, because a Session's records are released only after it
+  is absent. A project bound counts live records, which retention frees 30 days
+  after their Sessions are gone ([DESIGN-024](024-coordination-record-retention.md) section 7).*
 - **Visible before it is hit.** At scrape time the operator exports
   `dev_env_coordination_records{kind,project}`,
   `dev_env_coordination_records_session_max{kind,project}` (the busiest source
@@ -104,6 +121,9 @@ PR #223.
   count is unconfirmed, that kind's count series are left out of the scrape. A
   partial count is never reported. An alert on the ratio is a haynes-ops change,
   parked with retention below.
+  *Now specified (Q-29): `DevEnvCoordinationRecordsNearLimit` at 80% of the
+  project bound, DESIGN-024 section 7. It needs only these metrics, so it can
+  ship first.*
 - **Recovery until retention is ruled.** Only a cluster admin (Tom) can delete
   these records, with kubectl in the operator namespace. No agent or worker
   ServiceAccount has delete on these kinds, and none may ask for it. Before a
@@ -121,12 +141,19 @@ PR #223.
   3. Deletes a message's read acknowledgement together with the message.
 
   The next create counts again, so nothing needs a restart.
+
+  *Retention is ruled (Q-29, 2026-10-12). This manual path stays, for Tom only,
+  as a break-glass. It bypasses the archive, so step 1's export is the only copy
+  of what it deletes. Prefer the retention runnable (DESIGN-024).*
 - **Retention is parked, not decided.** See plan 11, "Coordination record
   retention (parked)". Weighting the project bound by bytes was considered and
   not adopted. An agent that sends full-size records reaches a byte bound after
   the same number of records, so a byte bound would not make a project harder
   to exhaust. It would only spare honest small records. In exchange it would
   need a size label and a scan of every record on each create.
+  *Ruled 2026-10-12 (Q-29): archive, then delete. [ADR-004](../adrs/004-coordination-record-retention.md) has the
+  decision and [DESIGN-024](024-coordination-record-retention.md) the contract. The byte-bound reasoning still
+  holds; the record-count bounds keep their defaults.*
 - **Rollback floor.** New records carry the source label (all three kinds) and
   the work label (TaskClaims). Operators released before this change accept
   only the project label (claims and contexts) or the project and recipient

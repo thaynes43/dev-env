@@ -353,12 +353,14 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 59 | Q-26: one final activation-checker correction | **DECIDED** 2026-10-11 UTC (Tom) | "Allow one correction (Recommended)". One final R4 correction ran and Ops #3824 activation was accepted; the three failed preparations stay preserved. No R5, alternate method or retry ([fixed-rule activation record](verification/fixed-rule-activation-2026-10-11.md), [DESIGN-021](designs/021-canary-cli.md)). |
 | 60 | Q-27: one final Codex reader-preparation correction | **DECIDED** 2026-10-12 (Tom, through the Claude native prompt) | "Fix once, then read (Recommended)". One offline correction with a fixed list of already accepted evidence, focused tests and independent review; then exactly one named read and one result read of the Codex original. No retries and no counter reset ([Codex probe record](verification/codex-fixed-rule-probe-2026-10-12.md#q-27-one-final-reader-preparation-correction)). |
 | 61 | D-86: `agent-run` exit 6 for unconfirmed one-shot requests | **DECIDED** 2026-10-12 (agent, #174 review findings history-06 and its follow-up) | Amends D-50 (row 34), whose codes ran 0 to 5. A one-shot request (`msg`, `canary create`, a `--once` read) that was sent and got no confirmed answer (a lost answer, stop, any 5xx, an unreadable receipt) exits 6 and is not repeated; a message or create may have taken effect. It exits 5 only when nothing was sent: no token, no port-forward, or a connection that was never made. A 429 to one exits 1 ([DESIGN-001 3.5](designs/001-dev-env-v2.md#35-agent-run-v2), [DESIGN-021 amendment](designs/021-canary-cli.md)). |
+| 62 | Q-29: coordination record retention | **DECIDED** 2026-10-12 (Tom, through the Claude native prompt) | "Archive, then delete (Recommended)". A TaskClaim, PublishedContext or InboxMessage (with its ack) is released 30 days after the Sessions it depends on are first proved absent by uncached reads. It is archived first (full object and SHA-256 manifest, on a new RWO volume only the shelf pod mounts, kept indefinitely); a leader-only operator runnable verifies the archive and deletes with UID and resourceVersion preconditions. Reads fall back to the archive (`archived: true`, 503 without a shelf). Per-Session bounds stay lifetime, project bounds count live records, 80% alert. Amends DESIGN-010's no-release rule in the reap case only. Known gap: private Sessions are never absent until a HOME expiry policy exists (DESIGN-008), plan 11 follow-up F1 ([ADR-004](adrs/004-coordination-record-retention.md), [DESIGN-024](designs/024-coordination-record-retention.md)). |
 
 The full options, consequences and rulings for Q-01 to Q-16, and the premise
 corrections withdrawing Q-17 and Q-18, plus Q-19's first owner CA provisioning
 step, are in
 [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions). Q-20 to Q-23
-are there too. Q-24 to Q-27 link their own records in rows 57 to 60.
+are there too. Q-24 to Q-27 link their own records in rows 57 to 60, and Q-29
+links ADR-004 in row 62.
 
 
 ## Plan backlog

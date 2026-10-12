@@ -7,6 +7,26 @@ the saga. To continue building, follow the
 in the Claude pickup brief. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## Q-29 ruling: coordination record retention, docs only — 2026-10-12
+
+Tom answered Q-29 through the Claude native prompt: "Archive, then delete
+(Recommended)". [ADR-004](sagas/distributed-dev-env/adrs/004-coordination-record-retention.md)
+records it and [DESIGN-024](sagas/distributed-dev-env/designs/024-coordination-record-retention.md)
+specifies it. A TaskClaim, PublishedContext or InboxMessage (with its ack) is
+released 30 days after the Sessions it depends on are first proved absent. It is
+archived first to a new volume that only the shelf pod mounts, then a leader-only
+operator runnable verifies the archive and deletes the record. Reads fall back to
+the archive. This amends DESIGN-010's no-release rule in the reap case only.
+
+**Nothing runs yet.** Plan 11 lists units R1 to R7; all are default off until
+the haynes-ops change R6. R1, the 80% alert, needs only today's metrics and can
+ship first.
+
+**Known gap.** With the installed private-history flag, every Session without a
+shared workspace is retained and never absent, so retention will release almost
+nothing until a HOME expiry policy exists. That is plan 11 follow-up F1 and needs
+its own owner question.
+
 ## Coordination review fixes, source only — 2026-10-12
 
 PR #223 fixes the five #175 coordination review findings and the six findings
@@ -26,6 +46,7 @@ image and a haynes-ops pin. agentd's limit message needs the agent image.
   operator exports the counts as `dev_env_coordination_records*`. Recovery is a
   manual delete by Tom, after an export, with the preservation duty in
   DESIGN-010. Retention is parked in plan 11 and needs an owner question.
+  *Update: Q-29 ruled retention later on 2026-10-12; see the entry above.*
 - **Rollback floor.** Once the new operator has written one coordination
   record, do not roll the operator back below the release that carries this
   change. Older operators fail that project's claim, inbox and context lists
@@ -1759,8 +1780,9 @@ order, first titled "What happens first". Each item in it is done or superseded.
 | [adrs/001-distributed-dev-env.md](sagas/distributed-dev-env/adrs/001-distributed-dev-env.md) | The architecture decision (Accepted 2026-10-06), with the ratification summary at the top and consequences C-01 to C-21. |
 | [adrs/002-shared-project-workspaces.md](sagas/distributed-dev-env/adrs/002-shared-project-workspaces.md) | Accepted 2026-10-09 and kept as history. ADR-003 supersedes its shared workspace, RWX storage and CephFS trial. |
 | [adrs/003-session-coordination-private-repositories.md](sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md) | The controlling scope since 2026-10-10: share rules, coordination and authorized context; keep repositories and task worktrees per pod. |
+| [adrs/004-coordination-record-retention.md](sagas/distributed-dev-env/adrs/004-coordination-record-retention.md) | Q-29, Accepted 2026-10-12: coordination records are archived, then deleted, 30 days after their Sessions are gone. Amends DESIGN-010 in the reap case only. |
 | [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 onward and their resolutions in 15, the decisions (D-01 onward) in 16. |
-| [designs/](sagas/distributed-dev-env/designs/) | DESIGN-002 to DESIGN-023: the bounded contracts for budgets, private projects, rules, history, directory, claims, inbox, provenance and the once-only clients. The pickup brief's review table maps each to source paths, except DESIGN-012 (owned wrapper permissions). |
+| [designs/](sagas/distributed-dev-env/designs/) | DESIGN-002 to DESIGN-024: the bounded contracts for budgets, private projects, rules, history, directory, claims, inbox, provenance, the once-only clients and coordination record retention. The pickup brief's review table maps each to source paths, except DESIGN-012 (owned wrapper permissions) and DESIGN-024 (no source yet). |
 | [research/R-01](sagas/distributed-dev-env/research/R-01-summoned-agents-audit.md) | An audit of summoned agents today, with v2 requirements V-01 to V-17. |
 | [research/R-02](sagas/distributed-dev-env/research/R-02-remote-control-identity.md) | Remote Control identity, the evidence behind S-1, and proposals P-1 to P-12. |
 | [research/R-03](sagas/distributed-dev-env/research/R-03-claude-code-approvals.md) | Claude Code in-app approval research: hooks, managed policy, forgery paths and the plan 03 core dependency. D-70 withdraws Q-18's earlier premise; no route selected. |
@@ -1816,6 +1838,7 @@ DESIGN-001 section 15; later rows link their own record. This heading first read
 | Q-25 | **No decision needed.** The local schema-host DNS route stopped after three attempts. Shipping uses hosted CI and saved real-API schema evidence; no DNS investigation or retry ([installation record](sagas/distributed-dev-env/verification/installation-2026-10-11.md#owner-questions-and-stopped-checks)). |
 | Q-26 | **Answered 2026-10-11:** "Allow one correction (Recommended)". One final R4 checker correction ran and Ops #3824 activation was accepted. No R5, alternate method or retry ([fixed-rule activation record](sagas/distributed-dev-env/verification/fixed-rule-activation-2026-10-11.md), [DESIGN-021](sagas/distributed-dev-env/designs/021-canary-cli.md)). |
 | Q-27 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Fix once, then read (Recommended)". One offline correction of the Codex reader preparation, with a fixed list of already accepted evidence, focused tests and independent review. Then exactly one named read and one result read of the Codex original. No retries and no counter reset ([Codex probe record](sagas/distributed-dev-env/verification/codex-fixed-rule-probe-2026-10-12.md#q-27-one-final-reader-preparation-correction)). Carried out 2026-10-12: both reads ran once and returned both markers ([result record](sagas/distributed-dev-env/verification/codex-original-result-2026-10-12.md)). |
+| Q-29 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Archive, then delete (Recommended)". Coordination records are released 30 days after the Sessions they depend on are first proved absent, archived first to a shelf-only volume and kept there indefinitely, then deleted by a leader-only operator runnable; reads fall back to the archive. Amends DESIGN-010's no-release rule in the reap case only. Private Sessions are never absent until a HOME expiry policy exists (plan 11 follow-up F1). [ADR-004](sagas/distributed-dev-env/adrs/004-coordination-record-retention.md), [DESIGN-024](sagas/distributed-dev-env/designs/024-coordination-record-retention.md), README decision 62. |
 
 **Next (historical, 2026-10-08; the current order is the pickup brief's
 [six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap)):**

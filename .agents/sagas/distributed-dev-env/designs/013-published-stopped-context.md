@@ -12,6 +12,8 @@ Use an immutable bounded PublishedContext resource in the protected
 read grants must not expose it. Store through the operator's uncached named
 API access, with only namespaced get/create/list permission; no new worker
 read, Secret, broad RBAC, update/delete, informer or storage mount is required.
+*Amended 2026-10-12 ([ADR-004](../adrs/004-coordination-record-retention.md), Q-29): the operator alone gains a
+namespaced delete, used only by its retention runnable ([DESIGN-024](024-coordination-record-retention.md)).*
 
 An authenticated own live Session publishes selected UTF-8 text through an
 explicit agentd stdin command. Accept only kind (`transcript-excerpt`, `result`,
@@ -35,6 +37,9 @@ exact confirmation preserve uncertainty on lost acknowledgement. A changed body
 cannot replace an existing publication or create a silent second revision.
 Retain source binding and published chunks without source owner references or
 expiry/delete on reap. Replaced Session names cannot become the original source.
+*Amended 2026-10-12 (Q-29, ADR-004): 30 days after the source Session's UID is
+first proved absent, the operator archives a publication with its SHA-256 and
+then deletes it. Nothing else deletes one.*
 
 Read/list use a separate explicit project payload-read scope, independent from
 claim metadata and legacy session read/reap permissions. A live authenticated
@@ -46,6 +51,10 @@ readiness. Source deletion, stop or operator reconstruction must not prevent
 authorized reads. No source exec, resume, model turn or stopped-volume mount
 is permitted by a read. Unrelated projects and body reads without the explicit
 payload grant fail closed without exposing existence or private content.
+*Amended 2026-10-12 (Q-29): after a release, single reads fall back to the
+archive under the same scope and answer `archived: true`; without a shelf they
+answer 503, never 404. `?archived=only` lists archived publications (DESIGN-024
+section 6). The fixed canary result route stays live only.*
 
 ## Bounds, fences and identity normalization (2026-10-12)
 
@@ -65,6 +74,9 @@ These rules come from the #175 coordination review.
   Concurrent creates can pass the same count, so a bound can be passed by at
   most the number of racing creates. The bounds are defence in depth against an
   agent loop filling etcd. They are not a retention policy.
+  *Amended 2026-10-12 (Q-29): publications are now deleted 30 days after their
+  source is absent, after an archive. The project bound then counts live
+  publications (DESIGN-024).*
 - **At the bound.** The bounds are lifetime bounds, because publications are
   never deleted. DESIGN-010 "At the bound, recovery and rollback" has the
   behaviour, the record-count metrics, the manual recovery with its
@@ -75,6 +87,10 @@ These rules come from the #175 coordination review.
   same message, and the captured bytes stay in the private capture directory.
   Recovery never deletes a managed-output publication of a retained canary
   original.
+  *Amended 2026-10-12 (Q-29): the per-Session bound stays a lifetime bound; the
+  project bound counts live publications. Retention never releases a canary
+  original's publication either: canary originals are protected Sessions and
+  never absent (`privateHistoryProtected`).*
 - **Final fence.** The fence before the atomic create compares the Session's
   binding: UID, generation and spec, deletion, labels, annotations (including
   the saved project snapshot), owner references and finalizers. It does not

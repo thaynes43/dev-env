@@ -91,6 +91,16 @@ can remove it; do not present that as transcript retention acceptance. New archi
 requires an explicit retention policy, verified artifacts and a discoverable record.
 Exact provider-state restoration and readable exported history are distinct checks.
 
+Coordination records follow
+[ADR-004](../.agents/sagas/distributed-dev-env/adrs/004-coordination-record-retention.md)
+(Q-29, 2026-10-12): a claim, publication or message is archived, then deleted,
+30 days after the Sessions it depends on are proved absent. Reads fall back to
+the archive. A released claim is not a handoff: it frees a reaped owner's task,
+and nothing else. Private Sessions are never absent until a HOME expiry policy
+exists, so their records stay live. The contract is
+[DESIGN-024](../.agents/sagas/distributed-dev-env/designs/024-coordination-record-retention.md);
+none of it runs yet.
+
 A handoff proves the old executor stopped, records the next owner and restores
 work into that owner's local checkout. A missing Pod or heartbeat is insufficient.
 The recipient reads the predecessor's context and may use a new conversation.

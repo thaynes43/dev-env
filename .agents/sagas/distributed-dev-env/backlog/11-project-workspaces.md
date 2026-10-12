@@ -168,34 +168,61 @@ namespaced operator get/create/list Role and signed API promotion are delivery
 gates; installed contention, inbox/acknowledgements and budget/handoff linkage
 remain separate. Initial fetch pin and executor stop are Unknown.
 
-### Coordination record retention (parked)
+### Coordination record retention
 
-Parked 2026-10-12 from the review of PR #223 (#175). It needs an owner
-decision before any code.
+Parked 2026-10-12 from the review of PR #223 (#175). **Ruled the same day
+(Q-29).**
 
-TaskClaims, published contexts and inbox messages are immutable and never
+TaskClaims, published contexts and inbox messages are immutable and were never
 deleted. Their per-Session and per-project bounds
 ([DESIGN-010](../designs/010-atomic-task-claims.md) "At the bound, recovery and
-rollback") are therefore lifetime bounds. A project that reaches one refuses
-every new record of that kind with 429 `limit_exceeded`, for good, including
-managed canary output capture. The defaults are, per Session and per project:
-claims 512 and 4096, publications 128 and 1024, messages 512 and 4096. Today
-the counts are exported as `dev_env_coordination_records*` metrics, and the
-only recovery is a manual kubectl delete by Tom, after an export, with the
-preservation duty in DESIGN-010.
+rollback") were therefore lifetime bounds. A project that reaches one refuses
+every new record of that kind with 429 `limit_exceeded`, including managed
+canary output capture. The defaults are, per Session and per project:
+claims 512 and 4096, publications 128 and 1024, messages 512 and 4096. The
+counts are exported as `dev_env_coordination_records*` metrics. Until the units
+below are enabled, the only recovery is a manual kubectl delete by Tom, after an
+export, with the preservation duty in DESIGN-010.
 
-Open decisions, to put to Tom one at a time:
+**Ruling, 2026-10-12 (Q-29).** Tom answered through the Claude native prompt:
+"Archive, then delete (Recommended)". This replaces the three open decisions
+parked here (which history survives; archive and who deletes; how bounds count):
 
-1. Which history must survive: claims as ownership history, publications as
-   stopped context, messages after acknowledgement.
-2. Whether a record is archived (for example to the shelf) before deletion, and
-   who or what may delete it. The operator's Role has no delete today.
-3. Whether the bounds then count live records only, and how they are sized.
+1. History survives in an archive. A record is released 30 days after the
+   Sessions it depends on are first proved absent: a claim's owner, a
+   publication's source, a message's sender plus its recipient's ack or absence.
+2. It is archived first (full object and SHA-256 manifest, on a new RWO volume
+   that only the shelf pod mounts, kept indefinitely). Only a leader-only
+   operator runnable deletes, with UID and resourceVersion preconditions, after
+   it verifies the archive. Reads fall back to the archive.
+3. Per-Session bounds stay lifetime bounds; project bounds count live records.
+   The defaults stay. An alert fires at 80%.
 
-After the ruling: an ADR and design amendments, the haynes-ops Role change, a
-retention runnable with an envtest proof, and a haynes-ops alert when
-`dev_env_coordination_records` reaches, for example, 80% of
-`dev_env_coordination_record_limit{scope="project"}` for its kind.
+[ADR-004](../adrs/004-coordination-record-retention.md) records the decision,
+including its one amendment of DESIGN-010 (claim release in the reap case only).
+[DESIGN-024](../designs/024-coordination-record-retention.md) is the contract.
+Everything is default off until R6.
+
+**Delivery units, each its own reviewed PR, in this order:**
+
+| Unit | Where | What | Done when |
+|---|---|---|---|
+| R0 | dev-env docs | ADR-004, DESIGN-024 and these amendments | merged |
+| R1 | haynes-ops | `DevEnvCoordinationRecordsNearLimit` (80%, existing metrics only) | merged and the rule loaded; can go any time |
+| R2 | dev-env source | `agentd ctl coord-archive put\|get\|list`, the archive mount check, `agentd shelf --coordination-archive`, protocol types, `TestArchiveNeverRemoves` | merged and in a released agent image |
+| R3 | dev-env source | `internal/coordretention` runnable (default off), shelf client methods, retention metrics, the shared guard scanner, `TestOnlyRetentionDeletesCoordinationRecords`, envtest E1, E2, E4, E6, E7 | merged with required CI and independent review |
+| R4 | dev-env source | read fallback (default off), `archived` wire fields, the ack-retry fallback, client tolerance tests, bound wording, the templates check that refuses the archive claim, envtest E3 and E5 | merged and in a released operator image |
+| R5 | haynes-ops | the archive PVC, shelf `Recreate` strategy, mount, flag and image pin, `DevEnvCoordinationArchiveFilling` | the shelf Ready with the archive mounted |
+| R6 | haynes-ops | Role `dev-env-coordination-retention` (delete, operator only), the operator pin, then reads on, then retention on | a complete retention pass on the installed operator |
+| R7 | dev-env docs | installed verification record (DESIGN-024 section 11) | merged |
+
+**Follow-up F1, needs an owner question: HOME expiry.** With the installed
+`--enable-private-history-retention=true`, every Session without a shared
+workspace is retained and never absent, so retention releases almost nothing
+today (ADR-004 "Known gap"). DESIGN-008 already requires an explicit policy for
+HOME expiry. That policy, when Tom rules on it, is what lets retention release
+these records. Ask it as its own question, with its own premise checked; it is
+not decided here.
 
 ### Parent issues
 
