@@ -1758,12 +1758,16 @@ is never resumed.**
   gets the `config/crd/` copy before the operator pin that writes them, or the API
   server prunes them (CLAUDE.md).
 
-*Amended 2026-10-12 ([ADR-005](../adrs/005-private-home-expiry.md), Q-31): a
-suspended private Session is not archived by this timer. At its deadline its
-executor is stopped instead ([DESIGN-025](025-private-home-expiry.md) section 4),
-and 30 days after the recorded stop its HOME expires. `status.archivedAt` is
-written before that HOME is deleted, as here, so a resume is refused from then
-on, and the Session stays phase `Archived` until it is reaped.*
+*Amended 2026-10-12 ([ADR-005](../adrs/005-private-home-expiry.md), Q-31, as
+corrected by [ADR-006](../adrs/006-private-home-expiry-corrections.md), D-87): a
+suspended private Session is not archived by this timer, and its executor is
+not stopped at the deadline. If its executor has ended on its own and that end
+was recorded ([DESIGN-025](025-private-home-expiry.md) section 3), the Session
+is triggered at the deadline and its HOME expires 30 days after the recorded
+end. `status.archivedAt` is written in the same status write that records the
+expiry's `Deleting` phase, so a resume is refused from then on, and the Session
+stays phase `Archived` until it is reaped. One whose executor still runs keeps
+its HOME until it is reaped.*
 
 ### 4.5 Resume and restore
 
@@ -1808,7 +1812,11 @@ restore is a new session that fetches one.**
   PV, at `/home/dev/.history-archive`, and runs `agentd ctl history-archive`
   there. It copies an expiring Session's rescue bundles from the shared volume
   into that archive, which keeps them indefinitely. The prune below does not
-  change. After a node loss both archive volumes must detach.*
+  change. After a node loss both archive volumes must detach. From H7 (or
+  DESIGN-024's R5, whichever ships first) an admission guard refuses exec,
+  attach and port-forward into the shelf, and any other Pod or workload that
+  mounts either archive claim, to every ServiceAccount but `dev-env-operator`
+  ([ADR-006](../adrs/006-private-home-expiry-corrections.md)).*
 - **List.** `agentd ctl rescues [--session S]` prints every
   `rescue/<session>/<name>/` as JSON, newest first. Each entry has its id
   `<session>/<name>`, when it was made (the manifest's time, or the directory's for
@@ -1940,7 +1948,13 @@ its HOME (archive verified, `Deleting` recorded, UID and resourceVersion
 preconditions) and the release of the Session (`Expired` recorded, no Pod, no
 claim), each in one named function that `TestOnlyTheGuardDeletes` lists. Canary
 originals are never admitted. The only Pod patch is the stop request,
-`stopPrivateExecutor`.*
+`stopPrivateExecutor`, for a Reaping Session with no owner hold, after a
+confirmed stop intent. Corrected the same day
+([ADR-006](../adrs/006-private-home-expiry-corrections.md), D-87): a fifth
+exception, `expiryHoldRemovalAllowed`, removes the expiry's own hold pod once
+nothing needs it, because `podRemovalAllowed` refuses every Pod of a protected
+private Session before it reaches `holdRemovalAllowed`. Every HOME delete
+attempt, retries included, re-verifies the archive first.*
 
 Rationale: 5.1 forbids deleting a Running session's pod outside drain and suspend,
 and D-10 puts rescue before any loss. Owner references alone hand that decision to
@@ -5053,3 +5067,4 @@ blocks only the step it names.
 | D-84 | Q-23: 60 minutes without progress or three failed attempts at the same blocker; durable parent/child budget history, actual stop and preserved ownership, one native phone escalation and explicit bounded continuation. Implementation #154 remains required. | 6.8, requirements/2026-10-09-task-budgets.md |
 | D-85 | Owner scope correction: rules/context/coordination shared; repos/worktrees per pod; five outcomes and bounded pilot before full migration. Supersedes mandatory shared Git/RWX and trials; no runtime authority change. | ADR-003, plan 11 |
 | D-86 | `agent-run` exit `6` (unconfirmed), amending D-50's codes 0 to 5: a one-shot request (`msg`, `canary create`, a `--once` read) that was sent and got no confirmed answer exits `6` and is not repeated; it exits `5` only when nothing was sent; a 429 to one exits `1` | 3.5 |
+| D-87 | ADR-006 corrects ADR-005 (Q-31) after its review: the operator stops a private executor only for a Reaping Session with no owner hold, after a confirmed stop intent, never at the suspended-archive deadline; the archives are not private against v1's OPERATOR tier, the broker or the keeper, so H7 adds an archive guard; the terminal record sits beside `lastExecutor` (`executorTerminal`, with a once-only `executorMissed`); a fifth guard exception, `expiryHoldRemovalAllowed`; every HOME delete attempt re-verifies; copies of user files and unclassified agentd names are not exported | 4.4, 4.5, 5.1 |

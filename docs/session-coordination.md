@@ -103,9 +103,12 @@ none of it runs yet.
 
 Private HOMEs follow
 [ADR-005](../.agents/sagas/distributed-dev-env/adrs/005-private-home-expiry.md)
-(Q-31, 2026-10-12): a reaped private Session is stopped, its executor's
-termination is recorded, and 30 days later its code and chat history (never
-credentials) are archived, and then its HOME is deleted and the Session released.
+(Q-31, 2026-10-12), as corrected by
+[ADR-006](../.agents/sagas/distributed-dev-env/adrs/006-private-home-expiry-corrections.md):
+a reaped private Session is stopped (unless Tom holds it; a suspended one never
+is), its executor's termination is recorded, and 30 days later its code and chat
+history (never credentials) are archived, and then its HOME is deleted and the
+Session released.
 Archived history stays readable under the published-context payload scope.
 Canary originals never expire. The contract is
 [DESIGN-025](../.agents/sagas/distributed-dev-env/designs/025-private-home-expiry.md);

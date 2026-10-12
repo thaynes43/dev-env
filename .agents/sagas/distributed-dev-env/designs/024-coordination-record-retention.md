@@ -141,6 +141,25 @@ archive's privacy depends on that guard.** `dev-env-workbench`, which the guards
 exempt, does not exist today; a change that creates it must account for this
 archive. E4 and R7 prove the refusal (section 11).
 
+*Amended 2026-10-12 ([ADR-006](../adrs/006-private-home-expiry-corrections.md),
+D-87): that guard and the Kyverno `dev-env-exec-guard` match only `dev-agents`
+identities, so "agents cannot read it" (ADR-004) holds for v2 agents and API
+callers only. v1's OPERATOR tier (`dev/dev-env`, every agent in the v1 pod, and
+`upgrade-agent/dev-env-ops`) holds `pods/exec` and Job `create` across the
+cluster: it can exec into the shelf, or run a Job on the shelf's node that
+mounts this claim, and read, rewrite or delete any entry. `dev-env-broker` and
+`dev-env-keeper` hold `pods/exec` in `dev-agents` with no name limit.
+cluster-admin, node, storage and hypervisor access reach every volume. An
+archive guard closes the direct paths for both archives: for every
+ServiceAccount but `dev-env-operator`, no exec, attach, port-forward or
+ephemeral container on the shelf, no other Pod or workload that mounts either
+archive claim, and no change to the shelf Deployment's pod template except by
+Flux or a `rollout restart` that changes only its `restartedAt` annotation
+([DESIGN-025](025-private-home-expiry.md) section 7). Whichever of R5 and
+DESIGN-025's H7 ships first ships it, after a check that no v1 workflow execs
+into the shelf. R7 also records that a v1 identity's exec into the shelf is
+refused.*
+
 **What the shelf's other duties pay.** Mounting a ReadWriteOnce volume changes
 D-67's pod:
 
@@ -631,6 +650,10 @@ All under `kubernetes/main/apps/dev-env-system/`, each in its own reviewed PR:
      today that it mounts only `dev-env-shared`.
    - `DevEnvShelfUnavailable` and `DevEnvCoordinationArchiveFilling` (section 7).
    - After the claim binds: Tom sets the PV to `Retain` (section 3).
+   - *Added 2026-10-12 (ADR-006, D-87):* `kubernetes/main/apps/kyverno/policies/app/dev-env-archive-guard.yaml`,
+     the archive guard of section 3's note, before the claim is mounted, unless
+     DESIGN-025's H7 shipped it first. Its parity check comes first: no v1
+     workflow execs into the shelf.
 3. **R6, after the operator release with R3 and R4:**
    - `crds/app/coordination-retention-operator.yaml`: Role
      `dev-env-coordination-retention` in `dev-env-system`, rule

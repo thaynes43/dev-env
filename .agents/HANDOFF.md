@@ -50,13 +50,14 @@ specifies it. It closes ADR-004's known gap (plan 11 follow-up F1).
   executor Pod UID's termination in the Session's status before the Pod can
   vanish. Absence alone never proves stop.
 - **The policy.** A private Session (no shared workspace, not a canary) that is
-  Reaping, or Suspended past its archive deadline, is stopped. 30 days after its
-  recorded stop: a Git rescue in a hold pod bound to the HOME UID; the provider
-  history (an allowlist, refused if a credential sits in the tree) and the Git
-  bundle into a second shelf-only archive volume with a `Retain` PV, readable
-  under DESIGN-013's payload scope; then the operator's leader deletes the HOME
-  and releases the Session, and ADR-004 releases its records. Canary originals
-  never expire. Tom alone can hold an expiry or release it now.
+  Reaping, with no owner hold, is stopped; a Suspended one is never stopped and
+  expires only if its executor ended on its own (ADR-006 below). 30 days after
+  its recorded stop: a Git rescue in a hold pod bound to the HOME UID; the
+  provider history (an allowlist, refused if a credential sits in the tree) and
+  the Git bundle into a second archive volume on the shelf with a `Retain` PV,
+  readable under DESIGN-013's payload scope; then the operator's leader deletes
+  the HOME and releases the Session, and ADR-004 releases its records. Canary
+  originals never expire. Tom alone can hold an expiry or release it now.
 
 **Nothing runs yet.** Plan 11 lists units H0 (these docs) to H10, all default
 off. H1 and H2, the terminal record, should ship first: each day without it can
@@ -64,6 +65,32 @@ lose a proof. Deletion (H9) waits for the installed archived-history read (H8,
 #174). H7 needs Tom once: after the history archive claim binds, he sets its
 PersistentVolume to `Retain`. Before H7 writes the override policy, check which
 identity Tom's phone path uses (DESIGN-025 section 9).
+
+**Corrected after review, the same day (ADR-006, D-87).** An independent review of
+#233 against the source and haynes-ops RBAC found 13 defects; the follow-up PR
+fixes all of them in DESIGN-025 and, where ADR-005's own text was wrong, in
+[ADR-006](sagas/distributed-dev-env/adrs/006-private-home-expiry-corrections.md).
+The ones that change behaviour:
+
+- **No stop at the suspended deadline.** ADR-005 stopped a private executor at the
+  168-hour archive deadline too. With the 72-hour idle timer, that would have
+  killed a live interactive Session for good after about ten days alone, with no
+  human asking, and Q-31 never asked about stopping executors. Now only a reap
+  stops one, an owner hold blocks it, and a confirmed stop intent serializes the
+  two. Plan 11 F3 records the deadline stop as not planned without a new owner
+  question.
+- **The archives are not private against v1.** The v2 guards match only
+  `dev-agents` identities. v1's OPERATOR tier (`dev/dev-env`,
+  `upgrade-agent/dev-env-ops`) can exec into the shelf or mount an archive claim
+  in a Job; the broker and keeper hold `pods/exec` in `dev-agents`. An admission
+  guard for both archives ships with H7 or DESIGN-024's R5, whichever is first,
+  after a check that no v1 workflow execs into the shelf (none did on
+  2026-10-12). If one does, ask Tom before the guard ships.
+- **Smaller fixes:** the terminal record sits beside `lastExecutor`; a once-only
+  missed marker; a fifth guard exception for the expiry's hold pod; every HOME
+  delete attempt re-verifies the archive; edit snapshots, pasted-text caches and
+  attachments are not exported; agentd's entries are classified by name;
+  provider directories must be set literally in the executor's `env`.
 
 ## Claude rule canary 1012 under Q-28 — 2026-10-12 UTC
 
@@ -1899,6 +1926,7 @@ order, first titled "What happens first". Each item in it is done or superseded.
 | [adrs/003-session-coordination-private-repositories.md](sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md) | The controlling scope since 2026-10-10: share rules, coordination and authorized context; keep repositories and task worktrees per pod. |
 | [adrs/004-coordination-record-retention.md](sagas/distributed-dev-env/adrs/004-coordination-record-retention.md) | Q-29, Accepted 2026-10-12: coordination records are archived, then deleted, 30 days after their Sessions are gone. Amends DESIGN-010 in the reap case only. |
 | [adrs/005-private-home-expiry.md](sagas/distributed-dev-env/adrs/005-private-home-expiry.md) | Q-31, Accepted 2026-10-12: a private Session's HOME is archived, then deleted, 30 days after its executor's recorded termination. Closes ADR-004's known gap; canaries never expire. |
+| [adrs/006-private-home-expiry-corrections.md](sagas/distributed-dev-env/adrs/006-private-home-expiry-corrections.md) | D-87, Accepted 2026-10-12 (agent, after the review of #233): corrects ADR-005. Only a reap stops a private executor, and an owner hold blocks it; the archives get a guard against v1's exec and Jobs; the terminal record sits beside `lastExecutor`; a fifth guard exception; copies of user files are not exported. |
 | [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 onward and their resolutions in 15, the decisions (D-01 onward) in 16. |
 | [designs/](sagas/distributed-dev-env/designs/) | DESIGN-002 to DESIGN-025: the bounded contracts for budgets, private projects, rules, history, directory, claims, inbox, provenance, the once-only clients, coordination record retention and private HOME expiry. The pickup brief's review table maps each to source paths, except DESIGN-012 (owned wrapper permissions) and DESIGN-024 (no source yet). |
 | [research/R-01](sagas/distributed-dev-env/research/R-01-summoned-agents-audit.md) | An audit of summoned agents today, with v2 requirements V-01 to V-17. |
@@ -1959,7 +1987,7 @@ DESIGN-001 section 15; later rows link their own record. This heading first read
 | Q-28 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Yes, after fixes deploy (Recommended)" (other options: "Yes, run it now", "Not now"; owner answer receipt `daadc6b5`). Question: "Codex's canary passed: it loaded both the common and the repository rules in its private pod. Claude's single canary only returned a weekly-limit error, so Claude's rule loading in a v2 pod is still unproven, and its ID is used up. May I run one new Claude canary? It needs a new fixed ID in the operator config in haynes-ops (a rolling operator update that keeps running sessions), then one create, one named read and one result read, with no retries." Allows one new canary `rule-canary-claude-1012`, run only after the review fixes deploy; no retries, no reuse of the 1011 ID, no quota or credential repair, no paid or model fallback, no cleanup. Carried out 2026-10-12 after v2.24.1 deployed: both markers returned, Root acceptance `88909059` ([Claude canary 1012 record](sagas/distributed-dev-env/verification/claude-canary-1012-2026-10-12.md), README decision 63). |
 | Q-29 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Archive, then delete (Recommended)". Coordination records are released 30 days after the Sessions they depend on are first proved absent, archived first to a shelf-only volume and kept there indefinitely, then deleted by a leader-only operator runnable; reads fall back to the archive. Amends DESIGN-010's no-release rule in the reap case only. Private Sessions are never absent until a HOME expiry policy exists (plan 11 follow-up F1). [ADR-004](sagas/distributed-dev-env/adrs/004-coordination-record-retention.md), [DESIGN-024](sagas/distributed-dev-env/designs/024-coordination-record-retention.md), README decision 62. |
 | Q-30 | **Answered 2026-10-12** by Tom through the Claude native prompt, in free text. Question: "To close #173 I need one more Claude canary on a private repo, proving private GitHub access and a fresh pinned task worktree. The dev bot can't create repos on your personal account. Could you create an empty private repo thaynes43/dev-env-private-probe (a README on main is enough)? Global private admission stays off; the canary reuses the spent 1012 slot." Options: "I'll create it (Recommended)", "Use an existing private repo", "Not now". Answer: "All the Sigo alumni repos are private and all are needed for dev-env, we use them now. Why can't you use those?" Interpretation: use the existing private repositories `thaynes43/sigo-alumni` and `thaynes43/sigoalumni-org` instead of a new probe repository, declared as v2 catalog project `sigo-alumni`, and run the one approved private-repo Claude canary `rule-canary-claude-sigo-1012` against it: one create, one named read, one result read, no retries. Global private admission stays off; repository visibility is unchanged. Owner answer receipt `root-q30-owner-answer-r1.json`, sha256 `1490331885be14f5939fe85c81d91f186274dac089286e2343ca373bdd0b3722`. GitOps: haynes-ops [#3845](https://github.com/thaynes43/haynes-ops/pull/3845). Not run yet ([DESIGN-011 Q-30 amendment](sagas/distributed-dev-env/designs/011-private-managed-rule-canaries.md#private-repo-canary-on-the-sigo-alumni-project--2026-10-12-q-30-173), README decision 65). |
-| Q-31 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Archive, then delete (Recommended)". A private Session's HOME is archived, then deleted, 30 days after its executor's recorded termination: Git rescue in a hold pod bound to the HOME UID, provider history (an allowlist, never credentials) and Git bundle to a shelf-only `Retain` archive, readable under DESIGN-013's scope, then a guarded delete by the operator's leader. A retained Pod is not a stop proof; absence never is. Canary originals never expire; hold and release-now are Tom's alone. Deletion waits for the installed archived read (#174). Closes ADR-004's known gap. [ADR-005](sagas/distributed-dev-env/adrs/005-private-home-expiry.md), [DESIGN-025](sagas/distributed-dev-env/designs/025-private-home-expiry.md), README decision 64. |
+| Q-31 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Archive, then delete (Recommended)". A private Session's HOME is archived, then deleted, 30 days after its executor's recorded termination: Git rescue in a hold pod bound to the HOME UID, provider history (an allowlist, never credentials) and Git bundle to a shelf-only `Retain` archive, readable under DESIGN-013's scope, then a guarded delete by the operator's leader. A retained Pod is not a stop proof; absence never is. Canary originals never expire; hold and release-now are Tom's alone. Deletion waits for the installed archived read (#174). Closes ADR-004's known gap. [ADR-005](sagas/distributed-dev-env/adrs/005-private-home-expiry.md), [DESIGN-025](sagas/distributed-dev-env/designs/025-private-home-expiry.md), README decision 64. Corrected the same day by [ADR-006](sagas/distributed-dev-env/adrs/006-private-home-expiry-corrections.md) (D-87, README decision 66): only a reap stops a private executor, never the suspended deadline. |
 
 **Next (historical, 2026-10-08; the current order is the pickup brief's
 [six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap)):**

@@ -89,14 +89,17 @@ exists, for HOME expiry. On 2026-10-12 a reboot of node talosw02 removed two
 retained, already-ended canary Pods, so a retained Pod is not a durable proof.
 Two changes to this guard follow, each default off:*
 
-- *A **stop request**: when a private, non-canary Session is Reaping, or
-  Suspended past its D-62 archive deadline, the operator sets its running
-  executor's `spec.activeDeadlineSeconds`, with UID and resourceVersion `test`
-  operations. The kubelet ends the Pod; the Pod object stays.*
+- *A **stop request**: when a private, non-canary Session is Reaping and has no
+  owner hold, the operator records a stop intent in the Session's status by a
+  confirmed, resourceVersion-checked write, then sets its running executor's
+  `spec.activeDeadlineSeconds`, with UID and resourceVersion `test` operations.
+  The kubelet ends the Pod; the Pod object stays. A Suspended Session is never
+  stopped, before or after its D-62 deadline
+  ([ADR-006](../adrs/006-private-home-expiry-corrections.md), D-87).*
 - *Once the operator has **recorded the executor's termination** in
-  `lastExecutor.terminal` (the all-container, Node and Lease proof, written
-  before the Pod can vanish), the expiry may remove that Pod at its rescue step,
-  so the D-55 hold pod can take its name. A Pod whose termination is not recorded
+  `privateHistory.executorTerminal` (the all-container, Node and Lease proof,
+  written before the Pod can vanish), the expiry may remove that Pod at its
+  rescue step, so the D-55 hold pod can take its name. A Pod whose termination is not recorded
   keeps this guard's full protection. Absence still authorizes nothing.*
 
 Source `cf0a708c` passed the bounded corrected set after preserving actual pre-fix

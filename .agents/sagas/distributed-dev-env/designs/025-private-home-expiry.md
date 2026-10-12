@@ -1,8 +1,10 @@
 # DESIGN-025: Private session HOME expiry: archive, then delete
 
-- **Status:** Accepted 2026-10-12; no source yet
+- **Status:** Accepted 2026-10-12; corrected the same day after its review
+  ([ADR-006](../adrs/006-private-home-expiry-corrections.md), D-87); no source yet
 - **Decision:** [ADR-005](../adrs/005-private-home-expiry.md) (Q-31, Tom,
-  2026-10-12: "Archive, then delete (Recommended)")
+  2026-10-12: "Archive, then delete (Recommended)"), amended by
+  [ADR-006](../adrs/006-private-home-expiry-corrections.md)
 - **Amends:** [DESIGN-008](008-private-provider-history-retention.md),
   [DESIGN-019](019-private-pod-retention-guard.md),
   [DESIGN-013](013-published-stopped-context.md),
@@ -21,26 +23,29 @@ archived-history read is accepted on the installed system.
 ```mermaid
 stateDiagram-v2
     [*] --> Running: executor observed (lastExecutor)
-    Running --> StopRequested: Reaping or archive-due (section 4)
-    Running --> Terminal: Pod ends on its own (task, eviction)
+    Running --> StopRequested: Reaping, no hold, intent recorded (section 4)
+    Running --> Terminal: Pod ends on its own (eviction)
     StopRequested --> Terminal: kubelet marks the Pod Failed
     Terminal --> Recorded: uncached proof, confirmed status write (section 3)
-    Terminal --> Unknown: Pod gone before the record
-    Unknown --> [*]: never expires
-    Recorded --> Waiting: expiry record, grace starts
-    Waiting --> Waiting: hold, or grace not over, or not Reaping / archive-due
-    Waiting --> Cleared: resume or a new Pod
-    Cleared --> Waiting: a later expiry, new 30 days
-    Waiting --> Rescuing: grace over (or release-now) and Reaping / archive-due
+    Terminal --> Missed: Pod gone before the record (executorMissed)
+    Missed --> [*]: never expires
+    Recorded --> Waiting: triggered, expiry record created (5.1)
+    Waiting --> Waiting: hold, or grace not over
+    Waiting --> Cleared: no longer triggered (a resume), or a new Pod
+    Cleared --> Waiting: triggered again, new 30 days from then
+    Waiting --> Rescuing: grace over (or release-now), still triggered
     Rescuing --> Exporting: rescue Verified or CleanAndPushed
     Exporting --> Archived: archive put and verify, digest recorded
     Archived --> Deleting: delete flag on, re-checks, verify under .shelf.lock
-    Deleting --> Expired: HOME deleted with UID and RV preconditions
+    Deleting --> Expired: verify again, HOME deleted with UID and RV preconditions
     Expired --> [*]: Reaping: finalizer released, ADR-004 takes over
 ```
 
 Rescuing, Exporting and Archived can also go to Cleared, until Deleting is
 recorded. After that nothing cancels.
+
+Only a Reaping Session is ever stopped (ADR-006). A Suspended Session past its
+archive deadline reaches Terminal only when its executor ends on its own.
 
 ## 2. Which Sessions are eligible
 
@@ -50,13 +55,34 @@ A Session is **eligible** when all of these hold, each read uncached:
 - `status.privateHistory` passes `privateHistoryIdentity`, its `admission` is
   `Started` and its `homeUID` is set. A HOME the operator never bound
   (`admission: Unknown`) is never eligible.
-- `status.privateHistory.lastExecutor.terminal` (section 3) exists for
+- `status.privateHistory.executorTerminal` (section 3) exists for
   `lastExecutor.podUID`.
 
 A Session is **triggered** when it is eligible and it is Reaping
 (`deletionTimestamp` set), or it is Suspended and its D-62 archive timer is due
 (`suspendedAt` plus `archiveAfter` has passed, computed as `archiveDue` does
-today). A suspended Session before its deadline is never triggered.
+today). A suspended Session before its deadline is never triggered. The expiry
+record exists only while the Session is triggered (5.1, 5.3).
+
+Two rules keep "triggered" from flapping:
+
+- **Unknown is not false.** `archiveDue` answers "not due" when the Session has
+  no `archiveAfter` of its own and the templates do not load
+  (`internal/controller/reconciler.go`). For the expiry that answer is Unknown:
+  no record is created and none is cancelled, the reason `unknown` is counted,
+  and the reconcile asks again in a minute. Only a timer computed from a spec or
+  templates value that is not yet due counts as not triggered.
+- **Latched from `Deleting`.** Once the record reaches `Deleting` (written in the
+  same status write as `status.archivedAt`, 6.5), the Session counts as
+  triggered whatever the timer says, as today's archive path treats a recorded
+  `archivedAt` as due. A longer `archiveAfter` or a templates failure then
+  cannot strand a Session that has `archivedAt` set but can neither resume nor
+  finish its delete.
+
+The operator stops an executor only for a Reaping Session (section 4). A
+Suspended Session past its deadline is triggered only if its executor ended on
+its own, such as by an eviction, and that end was recorded. One whose executor
+still runs keeps its HOME until it is reaped (ADR-006).
 
 **Never eligible, by design:**
 
@@ -74,8 +100,8 @@ today). A suspended Session before its deadline is never triggered.
 
 ### 3.1 Where it lives
 
-A new optional field on the existing executor record,
-`status.privateHistory.lastExecutor.terminal`:
+A new optional field beside the existing executor record,
+`status.privateHistory.executorTerminal`:
 
 | Field | Bound | What |
 |---|---|---|
@@ -88,15 +114,24 @@ A new optional field on the existing executor record,
 | `leaseRenewedAt` | time | the node lease's renew time at the observation |
 | `observedAt` | time | the operator's clock at the observation |
 | `containers` | at most 16 items | `name` (63), `exitCode`, `reason` (128), `finishedAt`, for regular, init and ephemeral containers |
-| `claudeConfigDir`, `codexHome` | 256 each | the executor's effective provider directories, relative to HOME (section 6.3) |
+| `claudeConfigDir`, `codexHome` | 256 each | the executor's provider directories, relative to HOME, when its agent container sets each literally; empty otherwise (section 6.3) |
 
-Schema rules (CEL, each with a case in `agentsession_validation_test.go`):
+**Why beside `lastExecutor`, not inside it.** `observePrivateHistory` rebuilds
+`lastExecutor` on every reconcile that sees the executor Pod, and carries only
+`conversationID` forward (`internal/controller/private_history.go`). A record
+inside it would be dropped by that rebuild, the rule below would refuse the
+write, and the Session's status would freeze. A sibling is never touched by the
+rebuild.
 
-- `terminal` can be set only when `lastExecutor` is set, and `terminal.podUID`
-  equals `lastExecutor.podUID`.
+Schema rules (CEL on `privateHistory`, each with a case in
+`agentsession_validation_test.go`):
+
+- `executorTerminal` can be set only when `lastExecutor` is set, and
+  `executorTerminal.podUID` equals `lastExecutor.podUID`.
 - Once set it never changes and is never removed:
-  `!has(oldSelf.terminal) || (has(self.terminal) && self.terminal == oldSelf.terminal)`.
+  `!has(oldSelf.executorTerminal) || (has(self.executorTerminal) && self.executorTerminal == oldSelf.executorTerminal)`.
   `lastExecutor` already cannot be erased or have its UID replaced.
+- `executorTerminal` and `executorMissed` (3.4) never both exist.
 - `stopState` keeps its single value `Unknown`. The terminal record is evidence
   for expiry only. It is not DESIGN-010's stop contract and authorizes no claim
   transfer, resume or replacement.
@@ -104,8 +139,8 @@ Schema rules (CEL, each with a case in `agentsession_validation_test.go`):
 ### 3.2 What the operator checks before it writes
 
 `observePrivateHistory` gains one step. When the recorded executor Pod exists,
-the Session controls it, its UID is `lastExecutor.podUID` and `terminal` is
-absent, the operator runs `verifyExecutorTerminated`. It reads uncached:
+the Session controls it, its UID is `lastExecutor.podUID` and `executorTerminal`
+is absent, the operator runs `verifyExecutorTerminated`. It reads uncached:
 
 1. **The Pod:** same UID and controller, phase `Succeeded` or `Failed`, and
    `allContainersTerminated` (today's helper in `workspace_stop.go`): every
@@ -168,9 +203,16 @@ otherwise be lost.
 - **An etcd restore** to a point before the record loses it. The operator then
   sees whatever the restore brought back. It never writes a record on a guess.
 
-`dev_env_private_executor_terminal_total{result="missed"}` counts each Session
-whose recorded executor vanished with no terminal record, once per Session. That
-is the talosw02 case (ADR-005 Context).
+**The missed marker.** When an uncached read finds the recorded executor Pod
+NotFound and `executorTerminal` is absent, the operator writes
+`status.privateHistory.executorMissed` (`version` 1, `podUID` equal to
+`lastExecutor.podUID`, `observedAt`) once, by a confirmed write. It never
+changes and is never removed, and `executorTerminal` can never be written beside
+it. `dev_env_private_executor_terminal_total{result="missed"}` counts that write
+only, so each Session counts once, whatever the operator restarts and leader
+changes. That is the talosw02 case (ADR-005 Context): the two 1011 canaries get
+their marker, and count once, when H2 turns the record on. A Pod of that name
+with another UID is not missed; it is today's "private executor was replaced".
 
 ### 3.5 Rights
 
@@ -183,17 +225,34 @@ them no record is ever written, and nothing expires.
 
 An ordinary private executor never ends on its own. agentd keeps running after
 the agent exits, and the Pod's restart policy (`Always`) restarts a container
-that exits. DESIGN-019 keeps
-the Pod through suspend and reap. So without a stop request, only an eviction or
-a node shutdown would ever end one.
+that exits. DESIGN-019 keeps the Pod through suspend and reap. So without a stop
+request, only an eviction or a node shutdown would ever end one.
+
+**Reaping only (ADR-006).** The operator stops a private executor only when its
+Session is Reaping. A reap is an explicit request to end a Session, and it
+already ends the executor of every non-private Session. A Suspended Session is
+never stopped, before or after its archive deadline: that would end a live
+Session that no human asked to end (plan 11 follow-up F3).
 
 **The request.** With `--enable-private-executor-stop`, when a Session is
-eligible in shape (section 2, without the terminal record) and triggered, and its
-recorded executor Pod is running, the operator stops it once:
+eligible in shape (section 2, without the terminal record), Reaping, carries no
+owner hold (section 9), and its recorded executor Pod is running, the operator
+stops it:
 
-1. It re-reads the Session and the Pod uncached. The Pod's UID is
-   `lastExecutor.podUID`, the Session controls it, and it is not a hold pod.
-2. It computes `elapsed` from `status.startTime` and sends one JSON patch
+1. It reads the Session and the Pod uncached. The Session is Reaping with no
+   hold. The Pod's UID is `lastExecutor.podUID`, the Session controls it, and it
+   is not a hold pod.
+2. **The intent.** It writes `status.privateHistory.stopRequest` (`version` 1,
+   `podUID` equal to `lastExecutor.podUID`, `requestedAt`) by a status update
+   that carries the resourceVersion of the Session it just read, and confirms it
+   by an uncached re-read. A hold annotation written after that read changes the
+   resourceVersion, so the update gets a Conflict and nothing is sent. A retry
+   repeats the same update, with the stored intent unchanged and the
+   resourceVersion of its own fresh read. So every patch follows a read that
+   found no hold and a write that nothing overtook. A hold written after the
+   confirmed write comes too late, and the stop goes ahead. `stopRequest` never
+   changes once set and is never removed.
+3. It computes `elapsed` from `status.startTime` and sends one JSON patch
    (`stopPrivateExecutor`):
 
    ```json
@@ -205,34 +264,42 @@ recorded executor Pod is running, the operator stops it once:
    `activeDeadlineSeconds` may be set on a running Pod, and only set or lowered.
    It counts from the Pod's start, hence `elapsed`. A Pod that already has a lower
    value is left alone.
-3. The kubelet stops the containers with the Pod's termination grace (agentd
+4. The kubelet stops the containers with the Pod's termination grace (agentd
    forwards SIGTERM to the agent) and marks the Pod `Failed`, reason
    `DeadlineExceeded`. The Pod object stays, and section 3 records it.
 
-A Conflict or a failed `test` means the Pod changed: the next reconcile judges
-again. The event `ExecutorStopRequested` names the Pod UID.
+A Conflict or a failed `test` means the Session or the Pod changed: the next
+reconcile judges again from point 1. The event `ExecutorStopRequested` names the
+Pod UID.
 
-**What it does not do.** It deletes no Pod and changes no HOME byte. It does not
-stop a suspended Session before its archive deadline, a canary (which has its own
-deadline) or a shared executor. A suspended Session whose executor was stopped at
-its archive deadline can still be resumed, but only in name: the one-way executor
-latch (DESIGN-008) refuses a new executor, so it stays without one. The resume
-still cancels the expiry (5.3) and keeps the HOME. For comparison, D-62 archives
-a non-private Session at this deadline, and it can never be resumed.
+**What it does not do.** It deletes no Pod and changes no HOME byte. It never
+stops a Suspended Session, a held Session, a canary (which has its own deadline)
+or a shared executor. A Reaping Session cannot be resumed, so the stop never
+races a resume.
+
+**What it costs (ADR-006 C-39).** Any API caller may reap any Session, as in v1
+(`reapSession`). A mistaken reap of a live private Session now ends that agent.
+Its HOME, transcripts and Pod object stay, but the executor latch (DESIGN-008)
+refuses a replacement, so it cannot run again. A hold set before the reap
+prevents the stop.
 
 ## 5. The expiry record and its steps
 
 ### 5.1 The record
 
-`status.privateHistory.expiry`, created by a confirmed write once the Session is
-eligible:
+`status.privateHistory.expiry`, created by a confirmed write in the first
+reconcile that finds the Session eligible **and triggered** (section 2). An
+eligible Session that is not triggered, such as an active Session whose executor
+was evicted, gets no record. So creating and cancelling are complements: a record
+exists while the Session is triggered, and a Session that stops being triggered
+loses it (5.3).
 
 | Field | What |
 |---|---|
 | `version` | `1` |
 | `executorUID` | the terminal record it rests on; equals `lastExecutor.podUID` |
 | `homeUID` | equals `privateHistory.homeUID` |
-| `graceStart` | `terminal.observedAt` for the first record; the creation time for a record made after a cancel |
+| `graceStart` | for the Session's first record (`expiryClearedAt` absent), `executorTerminal.observedAt`: Q-31's 30 days run from the first recorded stop proof. For a record made after a cancel, its creation time, which is the first reconcile that finds the Session triggered again. An operator outage only delays that, so the grace is never shorter |
 | `dueAt` | `graceStart` plus the grace (720h, or longer by flag) |
 | `phase` | `Waiting`, `Rescuing`, `Exporting`, `Archived`, `Deleting`, `Expired` |
 | `releaseNowAt` | when release-now was first seen for this record |
@@ -260,27 +327,31 @@ Every step starts with the **common re-check**, all uncached: the Session (same
 UID, still eligible and triggered, no hold), its retention
 identity, the terminal record, the expiry record, and the HOME claim (UID equals
 `homeUID`, controlled by the Session, the operator's finalizer and admission
-annotation present, not deleting). A read error is Unknown: nothing happens, the
+annotation present, not deleting, except in `Deleting` for this step's own
+delete in progress, 6.5). A read error is Unknown: nothing happens, the
 reason `unknown` is counted, and the reconcile asks again in a minute. A
 mismatch refuses with its reason (section 10) and nothing happens.
 
 | Phase | The step | Its own re-checks | Then |
 |---|---|---|---|
-| (none) | Create the record | eligible | `Waiting` |
-| `Waiting` | Wait | `now >= dueAt`, or release-now; triggered | `Rescuing` |
-| `Rescuing` | Remove the ended executor Pod, if it is still there | Pod UID is `executorUID`, phase still terminal; delete with UID and resourceVersion preconditions | |
+| (none) | Create the record | eligible and triggered | `Waiting` |
+| `Waiting` | Wait | `now >= dueAt`, or release-now | `Rescuing` |
+| `Rescuing` | Remove the ended executor Pod, if it is still there (`expiryPodRemovalAllowed`) | Pod UID is `executorUID`, phase still terminal; delete with UID and resourceVersion preconditions | |
 | `Rescuing` | Create the hold pod (6.1) | `holdIntent` recorded first; the Session's Pod name is NotFound; no Pod in the namespace mounts the claim (uncached list) | `holdPodUID` recorded once the pod is observed (6.1, adoption) |
 | `Rescuing` | Run the rescue (6.2) | hold pod is `holdPodUID`, Running; claim UID re-read; the hold pod's `home` volume names the claim | `Exporting` once the verdict is valid |
-| `Exporting` | Export and archive (6.3, 6.4) | rescue still valid, same stamp and same hold pod; shelf Ready with the history archive mounted | `Archived`, with `archive` recorded; then the hold pod is removed (`holdRemovalAllowed`) |
+| `Exporting` | Export and archive (6.3, 6.4) | rescue still valid, same stamp and same hold pod; shelf Ready with the history archive mounted | `Archived`, with `archive` recorded; then the hold pod is removed (`expiryHoldRemovalAllowed`) |
 | `Archived` | Stop here while deletion is off | | |
-| `Archived` | Prepare the delete (6.5) | `verify` under `.shelf.lock` gives `contentSHA256`; no Pod for the name; no Pod mounts the claim | `Deleting` |
-| `Deleting` | Delete the HOME (6.5) | the claim's UID and resourceVersion as preconditions | `Expired` |
+| `Archived` | Prepare the delete (6.5) | `verify` under `.shelf.lock` gives `contentSHA256`; no Pod for the name; no Pod mounts the claim | `Deleting`, with `deletingAt` and, for a suspended Session, `status.archivedAt`, in one confirmed write |
+| `Deleting` | Delete the HOME (6.5), on every attempt | the same checks again in the same call path: `verify` under `.shelf.lock`, no Pod for the name, no Pod mounts the claim; then the delete with the claim's UID and resourceVersion as preconditions | `Expired` |
 | `Expired` | Reaping: release the Session (6.6) | no Pod, no claim, by uncached reads | ADR-004 |
 
 Each step is idempotent. After an operator restart, the next reconcile finds the
 phase in status and repeats only what is not confirmed: a hold pod that carries
 this record's `holdIntent` is adopted (6.1), an archive entry that exists with
 the same digest is `exists`, and a claim that is already gone counts as deleted.
+`Deleting` is never a licence to delete on its own: every attempt, after a
+restart, a Conflict or any other error, runs the archive `verify` and the Pod
+checks again before it deletes (6.5).
 
 **Retry cadence.** A step refused for Unknown is tried again in one minute. A
 step refused for any other reason is re-checked, and its refusal re-counted and
@@ -292,21 +363,30 @@ stops the alert at the next re-check.
 
 ### 5.3 What cancels it
 
-- **A resume.** The Session no longer wants its Pod gone. Before `Deleting`, the
-  record is removed by a confirmed write and `expiryClearedAt` is set. The
-  expiry's hold pod is removed through `holdRemovalAllowed`. The HOME stays. An
-  archive entry already written stays too; it is never removed. A later expiry
-  starts a new 30 days. From `Deleting` on, a resume is refused: a suspended
-  Session has `status.archivedAt` by then (6.5), and a reaped one cannot resume.
+- **No longer triggered.** A resume of a suspended Session, or an archive timer
+  that is no longer due because a spec or templates value lengthened
+  `archiveAfter`. Templates that do not load are Unknown, never a cancel
+  (section 2). A Reaping Session is triggered for good, and so is any Session
+  whose record has reached `Deleting`. Before `Deleting`, the expiry's hold pod is
+  removed first (`expiryHoldRemovalAllowed`) and confirmed gone by an uncached
+  read, while the record still names it, so it is never mistaken for a new Pod.
+  Then the record is removed by a confirmed write and `expiryClearedAt` is set.
+  The HOME stays. An archive entry already written stays too; it is never
+  removed. A later record is created only when the Session is triggered again,
+  and its 30 days start then (5.1). From `Deleting` on, a resume is refused: a
+  suspended Session has `status.archivedAt` by then, written in the same status
+  write as `Deleting` (6.5), and a reaped one cannot resume.
 - **A new Pod.** Any Pod of the Session's name, or any Pod that mounts its claim,
   whose UID is neither `executorUID` nor `holdPodUID`, and that is not the
-  expiry's own hold pod awaiting adoption (6.1). The record is removed and the
-  Session gets today's PreservationUnknown ("private executor was replaced").
-  Nothing is deleted.
-- **A hold** (section 9). Nothing moves on while it is set; the grace clock keeps
-  running. A hold pod the expiry made is removed, because nothing needs it, and is
-  made again after the hold is lifted if the step still needs it. A hold never
-  cancels the record.
+  expiry's own hold pod awaiting adoption (6.1). The expiry's own hold pod, if
+  any, is removed as above, then the record is removed and the Session gets
+  today's PreservationUnknown ("private executor was replaced"). Nothing else is
+  deleted.
+- **A hold** (section 9). Nothing moves on while it is set, and no stop request
+  is sent (section 4); the grace clock keeps running. A hold pod the expiry made
+  is removed (`expiryHoldRemovalAllowed`), because nothing needs it, and is made
+  again after the hold is lifted if the step still needs it. A hold never cancels
+  the record.
 - **Identity changes.** A changed Session UID, a HOME claim with another UID, a
   deleting claim, a canary or workspace binding: refused
   (`identity_changed`, `home_replaced`). Nothing is deleted, and a human looks.
@@ -318,7 +398,7 @@ stops the alert at the next re-check.
 It is D-55's hold pod: the Session's Pod name, the label
 `dev-env.haynesops.com/hold: "true"`, `agentd hold`, S-class resources, no agent
 credentials, the session volume, the shared volume and `/creds` for the rescue's
-Git credential helper. Five additions:
+Git credential helper. Six additions:
 
 - It is made for a private Session only by the expiry, only in `Rescuing`, and
   only after the executor Pod is gone (the same name).
@@ -334,15 +414,31 @@ Git credential helper. Five additions:
   Session controls, that has the hold label, and whose three annotations match
   this record's `holdIntent`, `executorUID` and `homeUID`: it records that Pod's
   UID as `holdPodUID` by a confirmed write. A hold-labelled Pod with any other
-  intent is a new Pod (5.3). Only the operator can create Pods in `dev-agents`
-  (`dev-env-identity-guard` refuses agents), so a matching intent is the
-  operator's own.
+  intent is a new Pod (5.3). The match rests on the controller reference, which
+  must name the Session's UID, not on who may create Pods. Other identities can
+  create Jobs in `dev-agents` (v1's OPERATOR tier can), but a Job's Pod names the
+  Job as its controller, and a Pod has at most one controller reference, so it
+  cannot carry the Session's. An identity that can create a bare Pod there with
+  any owner reference (the operator, cluster-admin) is outside what this check
+  defends against, as it is for every guard here.
 - **Making it again.** After an owner hold, or after archive was turned off and
   on again (section 14), the hold pod may have to be made again. `holdPodUID`
   keeps naming the old pod while it terminates, so that pod is never a new Pod.
   Only once uncached reads show the Session's Pod name NotFound and no Pod
   mounting the claim does the operator clear `holdPodUID` and write a new
   `holdIntent`, in one confirmed write, and then create the pod.
+- **Its removal.** The expiry's hold pod is removed only through
+  `expiryHoldRemovalAllowed`, a fifth named guard exception (ADR-006). D-45's
+  `podRemovalAllowed` refuses every Pod of a protected private Session before it
+  reaches `holdRemovalAllowed`, and `holdRemovalAllowed` keeps a Running,
+  un-rescued hold pod while the Session wants its Pod gone, so neither could
+  remove it. The new function is nil only when the Pod has the hold label, the
+  Session controls it, its UID is the record's `holdPodUID`, its three
+  annotations match the record, and the expiry no longer needs it: the record is
+  being cancelled (5.3), an owner hold is set, archive is off (section 14), the
+  record is `Archived` or later, or the hold pod ended. The delete carries the
+  Pod's UID and resourceVersion as preconditions. A Pod awaiting adoption is
+  adopted first, then judged.
 - **The binding.** A Pod names its claim, not the claim's UID. The operator
   checks the claim's UID before it creates the pod, again once the pod runs, and
   in the common re-check of every later step. While a Pod uses a claim,
@@ -370,11 +466,19 @@ re-hashing each file as it reads it. If any file differs from the plan, it stops
 and the step refuses (`export_changed`).
 
 **Which directories.** The provider directories are the executor's, not the
-hold pod's: a hold pod has no profile environment (D-55), so its own
-`CLAUDE_CONFIG_DIR` or `CODEX_HOME` may differ. The terminal record (3.1) keeps
-the executor's effective paths, from its Pod spec, relative to HOME, with
-agentd's defaults (`.claude`, `.codex`) when unset. A path outside HOME is
-refused (`layout_unknown`).
+hold pod's. A hold pod gets the templates' common `env` (`internal/controller/pod.go`)
+but not the profile's `env` or `envFrom`, so its own `CLAUDE_CONFIG_DIR` or
+`CODEX_HOME` may differ from the executor's. The terminal record (3.1) keeps the
+executor's paths, relative to HOME, only when the agent container's `env` sets
+each one literally (a `value`, not a `valueFrom`; the last entry of that name
+wins). Kubernetes ranks `env` above `envFrom`, so a literal entry is the
+effective value whatever a profile's `envFrom` holds. The operator cannot read
+an `envFrom` source (it reads no Secrets), and neither variable is in
+`templates.ReservedEnv`, so an unset or indirect variable could come from one.
+Then the record keeps the path empty, and the export refuses (`layout_unknown`)
+rather than read a default directory and delete the real history. haynes-ops
+sets both literally in the template `env` today. A path outside HOME is refused
+(`layout_unknown`) too.
 
 **Where each provider keeps history.** From the repository:
 
@@ -397,8 +501,14 @@ refused (`layout_unknown`).
   docs/keeper-codex-auth.md links the pinned Codex source.
 - **agentd.** `internal/agentd/launch.go`: the task records in `~/.agentd`
   (`boot.json`, `launch.json`, `resume.json`, `task-result.json`, `tui-exit.json`,
-  `task-events.jsonl`, `task-source.json`). `internal/agentd/settings.go`
-  `LogPath`: the agent's log is `~/work/<name>.log`; D-67 prunes its shared copy.
+  `task-events.jsonl`, `task-source.json`). `internal/agentd/decisions.go`: the
+  current question-and-answer record `child-decision.json` and the answered ones
+  under `decisions/`. `internal/agentd/managed_output.go`: captured assistant
+  text under `managed-output/`. The other names come from `statePath` and
+  `StateDir` joins across `internal/agentd` (locks, runtime and setup state,
+  Git rescue files) and from `files.go`'s temporary names
+  (`.<name>.agentd-*`). `internal/agentd/settings.go` `LogPath`: the agent's log
+  is `~/work/<name>.log`; D-67 prunes its shared copy.
 
 The top-level names below come from a names-only listing of a v1 HOME on
 2026-10-12 (Claude Code 2.1.292, Codex 0.160.1). H4 confirms them against the
@@ -412,9 +522,24 @@ are listed in the manifest with their size; credentials with their name only.
 
 | Provider | History: exported | Not history: listed, not exported | Credentials: never exported |
 |---|---|---|---|
-| Claude | `projects/` (transcripts and per-session subdirectories; links not followed), `history.jsonl` (prompt history), `file-history/` (edit snapshots), `paste-cache/`, `uploads/`, `jobs/`, `feedback/` | `CLAUDE.md`, `agents/`, `settings.json` and `settings.json.*`, `plugins/`, `skills/`, `cache/`, `state/`, `daemon/`, `daemon.lock`, `daemon.status.json`, `policy-limits.json*`, `remote-settings.json`, `statusline-command.sh`, `.last-cleanup`; `sessions/` (runtime registry with key files); `.claude.json` and `backups/` (account identifiers); `shell-snapshots/` and `session-env/` (environment captures, which can hold secrets) | `.credentials.json` and `.credentials.json.*` |
-| Codex | `sessions/` (`<YYYY>/<MM>/<DD>/rollout-*.jsonl`), `archived_sessions/`, `session_index.jsonl`, `history.jsonl`, `state_*.sqlite*`, `memories_*.sqlite*`, `goals_*.sqlite*`, `queue_*.sqlite*`, `attachments/`, `generated_images/` | `config.toml`, `AGENTS.md`, `rules/`, `skills/`, `plugins/`, `packages/`, `cache/`, `models_cache.json`, `app-server-control/`, `app-server-daemon/`, `log/`, `logs_*.sqlite*`, `installation_id`, `.tmp/`, `rollout-migrations/`, `thread-writer-locks/`, `mcp-oauth-locks/`, `.sqlite-maintenance.lock`, `.personality_migration`, `.sandbox_migration`; `shell_snapshots/` (environment captures) | `auth.json`, `auth.json.*`, `.credentials.json`, `.credentials.json.*` |
-| agentd | the seven task records above, and `~/work/<session>.log` | everything else in `~/.agentd` | none expected; the refusal still applies |
+| Claude | `projects/` (transcripts and per-session subdirectories; links not followed), `history.jsonl` (prompt history), `jobs/`, `feedback/` | `file-history/` (edit snapshots), `paste-cache/` and `uploads/` (copies of user or workspace files under names that say nothing about them; see below); `CLAUDE.md`, `agents/`, `settings.json` and `settings.json.*`, `plugins/`, `skills/`, `cache/`, `state/`, `daemon/`, `daemon.lock`, `daemon.status.json`, `policy-limits.json*`, `remote-settings.json`, `statusline-command.sh`, `.last-cleanup`; `sessions/` (runtime registry with key files); `.claude.json` and `backups/` (account identifiers); `shell-snapshots/` and `session-env/` (environment captures, which can hold secrets) | `.credentials.json` and `.credentials.json.*` |
+| Codex | `sessions/` (`<YYYY>/<MM>/<DD>/rollout-*.jsonl`), `archived_sessions/`, `session_index.jsonl`, `history.jsonl`, `state_*.sqlite*`, `memories_*.sqlite*`, `goals_*.sqlite*`, `queue_*.sqlite*`, `generated_images/` | `attachments/` (copies of user files; see below); `config.toml`, `AGENTS.md`, `rules/`, `skills/`, `plugins/`, `packages/`, `cache/`, `models_cache.json`, `app-server-control/`, `app-server-daemon/`, `log/`, `logs_*.sqlite*`, `installation_id`, `.tmp/`, `rollout-migrations/`, `thread-writer-locks/`, `mcp-oauth-locks/`, `.sqlite-maintenance.lock`, `.personality_migration`, `.sandbox_migration`; `shell_snapshots/` (environment captures) | `auth.json`, `auth.json.*`, `.credentials.json`, `.credentials.json.*` |
+| agentd | the seven task records above; `child-decision.json` and `decisions/`; `managed-output/`; and `~/work/<session>.log` | locks (`agent.pid`, `deliver.lock`, `rescue.lock`, `project-bootstrap.lock`, `codex-host-supervisor.lock`); runtime and setup state (`native-invocation.json`, `native-started.json`, `codex-access-generation.json`, `codex-host-config.json`, `codex-host-start-intent.json`, `codex-host-preparation.json`, `common-rule-ownership.json`, `common-launch-inputs.json`, `project-bootstrap.json`, `project-snapshot.json`, `project-rules.md`, `project-roots/`, `project-sync/`, `workspace-supervisor`, `workspace-admission.json`, `workspace-stop-request.json`); Git files the rescue covers (`rescue-*.bundle`, `rescue-index-*`); temporary copies (`.<name>.agentd-*`) | none expected; the refusal still applies |
+
+**agentd is classified by name too.** An entry of `~/.agentd` in no class
+refuses the export (`unknown_entry`), as for the providers; there is no
+catch-all. H4's `TestHistoryLayoutCoversAgentdState` scans `internal/agentd` for
+every name it writes under its state directory and fails when the table lacks
+one, so a new agentd file is classified in the change that adds it.
+
+**Copies of user and workspace files are not exported (ADR-006).** The credential
+refusal below works on names. Claude's `file-history/` keeps snapshots of edited
+files under hashed names, so a snapshot of an edited `.env`, kubeconfig or key
+file would pass it. `paste-cache/`, `uploads/` and Codex `attachments/` keep
+pasted or attached content the same way. So those subtrees are listed, with
+their size, and not exported. Code goes through the Git rescue, and the
+conversation through the transcripts. H4 checks against the pinned versions
+whether any other exported subtree stores such copies, and excludes it too.
 
 A SQLite file goes with its `-wal` and `-shm` files. The executor has ended and
 the hold pod runs no agent, so nothing writes them during the copy.
@@ -443,8 +568,8 @@ over 512 MiB (`export_too_large`). A symbolic link is never followed. It is
 listed by name, as excluded with class `link`.
 
 **Not checked:** the content of transcripts. An agent may have printed a secret
-into one. The archive is private (section 7) and its reads are scoped
-(section 8), but the bytes are kept (ADR-005 C-35).
+into one. The archive is guarded (section 7, with the limits named there) and
+its reads are scoped (section 8), but the bytes are kept (ADR-005 C-35).
 
 ### 6.4 Transfer and archive
 
@@ -473,7 +598,11 @@ retry gives the same digest.
 
 ### 6.5 Verify and delete
 
-With `--enable-home-expiry-delete`:
+With `--enable-home-expiry-delete`. Points 1 and 2 run on **every** attempt
+that can remove the HOME, in the same call path as the delete: the first one
+from `Archived`, and every retry in `Deleting` after a restart, a Conflict or
+any other error. `Deleting` only records that a resume is refused from now on;
+it never lets a delete skip the checks.
 
 1. The common re-check, then `history-archive verify --session-uid U
    --content-sha256 H` under the shared `.shelf.lock`: it re-hashes every file,
@@ -481,18 +610,30 @@ With `--enable-home-expiry-delete`:
    (`archive_mismatch`; `archive_missing` when the entry is gone). The operator
    never writes over an entry.
 2. An uncached read confirms no Pod of the name and no Pod that mounts the
-   claim. The hold pod went when the archive was recorded.
-3. For a suspended Session, `status.archivedAt` is written the way D-62's
-   `recordArchive` writes it, so a resume is refused from here on. Then `phase:
-   Deleting` and `deletingAt`, by a confirmed write.
+   claim (`claim_in_use` otherwise). The hold pod went when the archive was
+   recorded.
+3. From `Archived` only: one confirmed status write records `phase: Deleting`,
+   `deletingAt` and, for a suspended Session, `status.archivedAt` (as D-62's
+   `recordArchive` writes it). One write, so a Session can never hold
+   `archivedAt` without `Deleting`, which would leave it unable to run and never
+   triggered again. A resume is refused from here on.
 4. `deleteVolume` deletes the claim with
    `client.Preconditions{UID: &homeUID, ResourceVersion: &rv}`, where `rv` is the
-   revision just re-read. Today it passes the UID only; this path adds the
-   resourceVersion. `releaseVolume` lifts the operator's finalizer. A Conflict
-   refuses (`precondition_failed`); the next reconcile starts this step again
-   from point 1.
+   revision read in point 1. Today it passes the UID only; this path adds the
+   resourceVersion. Then `releaseVolume` lifts the operator's finalizer by an
+   update that carries the claim's UID and the resourceVersion of a fresh
+   uncached read. A Conflict refuses (`precondition_failed`); the next reconcile
+   starts again from point 1.
 5. An uncached read confirms NotFound, or another UID. Then `phase: Expired`
    and `homeDeletedAt`.
+
+In `Deleting`, a claim with the recorded UID whose deletion has already started
+is this step's own delete in progress (a restart or an error fell after the
+delete in point 4).
+The common re-check accepts it there, and only there. The retry runs points 1
+and 2 again, then lifts the operator's finalizer. A verify that fails in
+`Deleting` refuses; the record cannot go back, the HOME stays, and
+`DevEnvHomeExpiryNeedsOwner` fires.
 
 The PersistentVolume behind the claim follows its storage class (`Delete` on
 `gasha01-rbd`). The archive is the copy that remains.
@@ -522,10 +663,41 @@ class, a different shape, more sensitive content. Everything else is the same.
   RWO volume uses `Recreate` (DESIGN-024 section 3); whichever of R5 and H7 comes
   first sets it, and a second volume adds no new cost to its updates. After a
   node loss both volumes must detach; DESIGN-024's recovery steps do both.
-- **Privacy** rests on the same guard: only exec into the shelf reaches it, and
-  `dev-env-identity-guard` refuses that exec to every agent identity. The
-  templates check refuses a template that names this claim; H6 adds the name
-  beside the coordination archive's (DESIGN-024 R4).
+- **Who can reach it (corrected by ADR-006).** The templates check refuses a
+  template that names this claim; H6 adds the name beside the coordination
+  archive's (DESIGN-024 R4). `dev-env-identity-guard` and the Kyverno
+  `dev-env-exec-guard` refuse exec into the shelf to every `dev-agents` identity,
+  so v2 agents and API callers cannot reach it. Those guards match only
+  `dev-agents` identities, so today these can:
+  - **v1's OPERATOR tier**, `dev/dev-env` (every agent in the v1 pod) and
+    `upgrade-agent/dev-env-ops`: `pods/exec` and Job `create` across the cluster
+    (haynes-ops `apps/dev/dev-env/app/rbac.yaml`). It can exec into the shelf, or
+    run a Job on the shelf's node that mounts the claim, and read, rewrite or
+    delete any entry;
+  - **`dev-env-broker` and `dev-env-keeper`**: `pods/exec` in `dev-agents` with
+    no name limit;
+  - **`dev-env-operator`**, by design, through `agentd ctl history-archive`;
+  - **cluster-admin identities**, and node, storage and hypervisor
+    administrators, as for every volume in the cluster.
+- **The archive guard (H7, or DESIGN-024's R5 if that ships first).** A new
+  admission policy covers both archives. For
+  every ServiceAccount except `dev-env-operator`, it refuses exec, attach and
+  port-forward into the shelf pod, and ephemeral containers on it. It refuses a
+  Pod or workload (Job, CronJob, Deployment, ReplicaSet, StatefulSet, DaemonSet)
+  that mounts `dev-env-history-archive` or `dev-env-coordination-archive`, except
+  the shelf Deployment and the ReplicaSet and Pod its controllers make from it.
+  It refuses any change to the shelf Deployment's pod template by anyone but
+  Flux's `kustomize-controller`, except one that changes only the
+  `kubectl.kubernetes.io/restartedAt` annotation (`kubectl rollout restart`),
+  which leaves the pod spec as it was.
+  Human users keep their access. It needs a Pod lookup at admission, so it
+  follows `dev-env-exec-guard`'s Kyverno pattern. It narrows v1 at the shelf
+  only. On 2026-10-12 no runbook in haynes-ops or this repository execs into the
+  shelf; H7 checks again, with an RBAC listing of every identity that holds
+  `pods/exec` or Job `create` in `dev-agents`. If a v1 workflow needs that
+  access, it is a question for Tom before the guard ships, because no v2 guard
+  may cut a capability agents use today. If Tom's phone path acts as a
+  ServiceAccount (section 9's check), the guard names that account.
 - **No backup off the cluster**, and kept indefinitely. agentd has no command
   that removes an entry.
 
@@ -589,7 +761,9 @@ Every item and answer carries `archived: true` and `archivedAt`.
 with the project from the verified `content.json`. The project must be in
 `--context-payload-read-projects`, and the caller must be a live Session of that
 project or a configured coordinator. A history with no project is readable by no
-API caller; only Tom can read it, by exec into the shelf.
+API caller. Through exec into the shelf, it is readable by Tom and by the
+identities section 7 names until the H7 guard ships; after that, by Tom and the
+operator, and still by cluster-admin, node and storage access.
 
 **Answers that reveal nothing.** The list route checks the scope for `P` before
 it asks the shelf. A single read first requires that the caller has the payload
@@ -611,7 +785,9 @@ refusal for a caller outside its scope.
 
 One annotation on the AgentSession, `dev-env.haynesops.com/home-expiry`:
 
-- `hold`: nothing moves on (5.3); removing the annotation lifts it.
+- `hold`: nothing moves on (5.3), and no stop request is sent (section 4);
+  removing the annotation lifts it. To keep a private executor running through
+  a reap, set the hold before the reap.
 - `release-now`: skips the grace of the current expiry record, and nothing else.
   The operator records `releaseNowAt`. The annotation is a standing instruction
   while it is there: a record made after a cancel sees it too.
@@ -637,8 +813,8 @@ Exported by the leader:
 
 | Metric | Type | Labels |
 |---|---|---|
-| `dev_env_private_executor_terminal_total` | counter | `result`: `recorded`, `missed` (executor gone with no record, once per Session in each operator process, so a restart counts them again), `refused` (terminal, but the node or lease check failed) |
-| `dev_env_private_executor_stop_requests_total` | counter | `result`: `sent`, `conflict` |
+| `dev_env_private_executor_terminal_total` | counter | `result`: `recorded`, `missed` (counted only when the `executorMissed` marker is written, so once per Session across restarts and leader changes; 3.4), `refused` (terminal, but the node or lease check failed) |
+| `dev_env_private_executor_stop_requests_total` | counter | `result`: `sent`, `conflict` (the intent write or the patch), `held` (a hold refused it) |
 | `dev_env_home_expiry_sessions` | gauge | `phase`: `unproven` (private, retained, no terminal record), `waiting`, `held`, `rescuing`, `exporting`, `archived`, `deleting` |
 | `dev_env_home_expiry_expired_total` | counter | none |
 | `dev_env_home_expiry_archived_bytes_total` | counter | none |
@@ -654,7 +830,7 @@ Rescue failures keep their own condition and page (D-57).
 ```yaml
 - alert: DevEnvHomeExpiryNeedsOwner        # critical
   expr: |
-    sum by (reason) (dev_env_home_expiry_refusing{reason=~"credential_in_tree|unknown_entry|unexpected_entry|layout_unknown|export_too_large|archive_conflict|archive_mismatch|home_replaced|identity_changed"}) > 0
+    sum by (reason) (dev_env_home_expiry_refusing{reason=~"credential_in_tree|unknown_entry|unexpected_entry|layout_unknown|export_too_large|archive_conflict|archive_missing|archive_mismatch|home_replaced|identity_changed"}) > 0
   for: 15m
 - alert: DevEnvHomeExpiryStalled           # critical
   expr: max(dev_env_home_expiry_overdue_seconds) > 2 * 86400
@@ -676,23 +852,30 @@ agentsessions` and its `HomeExpiry` condition; a credential in the tree or an
 unknown entry needs a source change or Tom's decision, never a manual delete by
 an agent; an automated responder reports and changes nothing.
 `DevEnvPrivateExecutorEndedUnrecorded` is a warning: nothing is at risk, the HOME
-is simply kept for good. `DevEnvShelfUnavailable` (DESIGN-024) covers the shelf.
+is simply kept for good. Because `missed` counts only the marker's write, it
+fires once per Session, not again after each operator restart; the two 1011
+canaries fire it once, when H2 turns the record on. `DevEnvShelfUnavailable` (DESIGN-024) covers the shelf.
 
 ## 11. Guard tests
 
 - **`TestOnlyTheGuardDeletes`** (extended): a private executor Pod is deleted only
   through `expiryPodRemovalAllowed` (terminal record confirmed, phase
-  `Rescuing`); a private HOME only through `expiryVolumeRemovalAllowed` (phase
-  `Deleting` confirmed); `releaseSession` lifts a protected Session's finalizer
-  only with an `Expired` record, and never for a canary. Each exception is one
-  function, and the scan names it.
-- **`TestExpiryDeleteNeedsVerify`**: the HOME delete is reachable only after
-  `historyArchiveVerified` and `expiryRechecked` in the same call path, like
-  DESIGN-024's rule 4.
+  `Rescuing`); the expiry's hold pod only through `expiryHoldRemovalAllowed`
+  (6.1); a private HOME only through `expiryVolumeRemovalAllowed` (phase
+  `Deleting` confirmed); `releaseIfEmpty` and `releaseSession` lift a protected
+  Session's finalizer only with an `Expired` record, and never for a canary. Each
+  exception is one function, and the scan names all five.
+- **`TestExpiryDeleteNeedsVerify`**: the HOME delete, and the finalizer lift of a
+  claim already deleting, are reachable only after `historyArchiveVerified`,
+  `expiryRechecked` and `noPodUsesHome` in the same call path, on every attempt,
+  the retries from `Deleting` included, like DESIGN-024's rule 4.
 - **`TestOnlyStopPrivateExecutorPatchesPods`**: apart from create and the guarded
-  deletes, the only Pod write in the module is `stopPrivateExecutor`, and its
-  patch holds exactly the two `test` operations and the one
-  `/spec/activeDeadlineSeconds` operation.
+  deletes, the only Pod write in the module is `stopPrivateExecutor`. Its patch
+  holds exactly the two `test` operations and the one
+  `/spec/activeDeadlineSeconds` operation, and it is reachable only after
+  `stopIntentConfirmed` in the same call path.
+- **`TestHistoryLayoutCoversAgentdState`** (`internal/agentd`): every name agentd
+  writes under its state directory is in the agentd classification (6.3).
 - **`TestHistoryExportReadsOnly`** (`internal/agentd`): the export opens HOME
   files only with `O_RDONLY|O_NOFOLLOW` and makes no create, rename, chmod or
   remove call under HOME.
@@ -705,7 +888,8 @@ rule, and the scan must name every one.
 
 ## 12. haynes-ops changes
 
-All under `kubernetes/main/apps/dev-env-system/`, each its own reviewed PR:
+Under `kubernetes/main/apps/dev-env-system/` unless named otherwise, each its
+own reviewed PR:
 
 1. **H2, after the H1 operator release:** the CRD copy (before the pin);
    ClusterRole `dev-env-operator-node-read` (`nodes: get`) and Role
@@ -718,6 +902,10 @@ All under `kubernetes/main/apps/dev-env-system/`, each its own reviewed PR:
      the image pin, and the header comment;
    - `rbac/app/home-expiry-guard.yaml`: `dev-env-home-expiry-guard` (section 9),
      after the identity check;
+   - `kubernetes/main/apps/kyverno/policies/app/dev-env-archive-guard.yaml`: the
+     archive guard (section 7, ADR-006), after its parity check, before the
+     claim is mounted. It covers DESIGN-024's archive too, so whichever of
+     DESIGN-024's R5 and this unit ships first ships the guard;
    - the alerts of section 10 except stalled;
    - after the claim binds: Tom sets the PV to `Retain`;
    - then `--enable-private-executor-stop=true`,
@@ -735,7 +923,7 @@ change. The operator already has `pods: patch`, `pods: delete`,
 | Flag | Default | Rule |
 |---|---|---|
 | `--enable-private-terminal-record` | false | Records terminal observations (section 3). |
-| `--enable-private-executor-stop` | false | The stop request (section 4). Refused at start without the terminal record flag. |
+| `--enable-private-executor-stop` | false | The stop request for Reaping Sessions (section 4). Refused at start without the terminal record flag. |
 | `--enable-home-history-archive` | false | Expiry up to `Archived`. Refused at start without the terminal record flag. |
 | `--enable-history-archive-reads` | false | The read routes (section 8). |
 | `--enable-home-expiry-delete` | false | `Deleting` and `Expired`, and the release. Refused at start unless archive and reads are both on. |
@@ -751,10 +939,11 @@ read.
 
 - **Delete off:** no more deletes; Sessions stay at `Archived`. Nothing is lost.
 - **Archive off:** no new hold pods or exports. A record mid-step stays in its
-  phase; the operator removes the expiry's hold pod, because nothing needs it.
-  The HOME stays.
-- **Stop off:** no new stop requests. Executors already stopped stay stopped; that
-  cannot be undone, and nothing was lost by it.
+  phase; the operator removes the expiry's hold pod
+  (`expiryHoldRemovalAllowed`), because nothing needs it. The HOME stays.
+- **Stop off:** no new stop requests. Executors already stopped stay stopped;
+  that cannot be undone. Their HOMEs and Pod objects stay, and a Reaping Session
+  cannot be resumed anyway (ADR-006 C-39).
 - **Record off:** no new records. Existing records stay.
 - **Reads off:** archived histories answer 404, as if none existed. The archive
   is unchanged; turning reads back on restores them.
@@ -796,7 +985,12 @@ status itself.
   `.codex/sessions/2026/10/12/`; a `.credentials.json.tmp.x` inside `projects/`; a
   hard link to `auth.json` named `x.jsonl`; a renamed whole copy of the Codex
   login. Each refuses `credential_in_tree`; nothing is archived and the HOME
-  stays. An unclassified top-level name refuses `unknown_entry`.
+  stays. An unclassified top-level name refuses `unknown_entry`, in a provider
+  directory and in `~/.agentd` alike. A `file-history/` snapshot of a `.env`
+  under a hashed name is not exported, and the manifest lists `file-history/`
+  as excluded; `decisions/` and `managed-output/` are exported. An executor whose
+  `CLAUDE_CONFIG_DIR` or `CODEX_HOME` is unset or comes from a `valueFrom`
+  refuses `layout_unknown`.
 - **T4, canaries never expire.** A canary original, terminal record written,
   reaped, 60 days on: no expiry record, no hold pod, no stop request, HOME kept.
   Release-now on it is refused (`canary`).
@@ -804,15 +998,25 @@ status itself.
   the Pod is deleted, as a node reboot would. The Session is not
   PreservationUnknown. After the grace it is archived and its HOME deleted.
 - **T6, Pod loss without the record never expires.** The Pod ends while its node
-  is NotReady (no record), then it is deleted. PreservationUnknown; 60 days on,
-  nothing has happened; `missed` is 1.
-- **T7, resume cancels.** A suspended Session past its archive deadline, record
-  `Waiting`, then resumed: the record is removed and the HOME kept. Suspended
-  again and due: a new 30 days. A resume after `Deleting` is refused.
+  is NotReady (no record), then it is deleted. PreservationUnknown and
+  `executorMissed`; 60 days on, nothing has happened; `missed` is 1, and still 1
+  after the manager is restarted twice.
+- **T7, resume cancels.** A suspended Session whose executor was evicted (terminal
+  record written), before its archive deadline: no record. Past the deadline:
+  record `Waiting`, grace from the terminal record. Resumed: the record is
+  removed, the HOME kept, and no record is made while it is not suspended.
+  Suspended again and due: a new record whose 30 days start then. A resume after
+  `Deleting` is refused, and `archivedAt` never exists without `Deleting`. With
+  the templates made unreadable at `Waiting`: no cancel, `unknown` counted, the
+  grace unchanged. With `archiveAfter` lengthened at `Waiting`: a cancel; at
+  `Deleting`: no cancel, and the delete goes on.
 - **T8, a new Pod cancels.** A Pod of the Session's name with another UID
   appears: record removed, PreservationUnknown, nothing deleted.
 - **T9, owner overrides.** A hold at `Waiting` and at `Archived`: nothing moves;
-  lifted, it goes on. Release-now skips the grace but not the record, rescue,
+  lifted, it goes on. A hold at `Rescuing` with a Running hold pod: the hold pod
+  is removed through `expiryHoldRemovalAllowed`, no PreservationUnknown, and it
+  is made again once the hold is lifted. A cancel at `Exporting` removes the hold
+  pod before the record. Release-now skips the grace but not the record, rescue,
   export or verify. With `dev-env-home-expiry-guard` copied into `testdata/`, the
   annotation set by `dev-env-agent`, a `grant-*` ServiceAccount and
   `dev-env-operator` is refused, and set by a user is admitted.
@@ -826,24 +1030,35 @@ status itself.
   restart falls between the hold pod's create and the write of `holdPodUID`: the
   pod is adopted by its `holdIntent`, nothing is cancelled and no
   PreservationUnknown is raised. A hold-labelled Pod with another intent is a new
-  Pod and cancels. An owner hold lifted while the old hold pod still terminates:
+  Pod and cancels. A restart in `Deleting`, before and after the claim delete:
+  the retry runs `verify` and the Pod checks again first; with the archive
+  changed in between, it refuses `archive_mismatch` and the claim (deleting or
+  not) stays, held by the operator's finalizer; with a debug Pod mounting the
+  claim, it refuses `claim_in_use`. With the templates unreadable across the
+  restart in `Deleting`: the Session stays triggered and the delete goes on. An owner hold lifted while the old hold pod still terminates:
   nothing is cancelled, and the new intent is written only after that pod is
   gone.
 - **T13, two reconcilers.** Overlapping leaders: one delete succeeds; the archive
   `put` is `exists` for the other.
-- **T14, the stop request.** A reaped private executor gets exactly one patch with
-  the two `test` operations; a Conflict leaves it for the next reconcile. A
-  canary, a shared executor and a suspended Session before its deadline get none.
+- **T14, the stop request.** A reaped private executor gets a confirmed
+  `stopRequest`, then exactly one patch with the two `test` operations; a
+  Conflict leaves it for the next reconcile. A hold annotation written between
+  the Session read and the intent write makes the write conflict, and no patch
+  is sent. A held reaped Session, a canary, a shared executor and a suspended
+  Session, before or after its archive deadline (the idle-timer case), get none.
   With the flag off, none.
 - **T15, the record's checks.** No record while the node is NotReady, the lease
   is stale or held by another node UID, a container is still running, or the Pod
   has `DisruptionTarget` with `DeletionByPodGC`. A record once the checks pass,
   confirmed by re-read; a stale schema that prunes it is detected.
 - **T16, the schema.** The terminal record cannot change, be removed, or name
-  another UID; the expiry phase moves only forward; the archive digest cannot
+  another UID; it and `executorMissed` never coexist; `stopRequest` cannot change
+  or be removed; the expiry phase moves only forward; the archive digest cannot
   change; the expiry record can be removed before `Deleting` (a cancel) but not
   from `Deleting` on. An update that drops the terminal record is always
-  refused.
+  refused. A reconcile that rebuilds `lastExecutor` (a new node name or
+  generation) keeps `executorTerminal` unchanged, and the status write
+  succeeds.
 - **T17, the flags.** Delete off: Sessions stop at `Archived`. Delete on without
   archive or reads: the operator refuses to start.
 
@@ -876,14 +1091,14 @@ Plan 11 tracks these:
 
 | Unit | Where | What |
 |---|---|---|
-| H0 | dev-env docs | ADR-005, this design and the amendments |
-| H1 | dev-env source | the terminal record: CRD fields and rules, `verifyExecutorTerminated` (the shared verifier refactored), the confirmed write, `ExecutorEnded`, metrics, the record flag; T6, T15, T16 (record part) |
+| H0 | dev-env docs | ADR-005, this design and the amendments; ADR-006's corrections |
+| H1 | dev-env source | the terminal record: CRD fields and rules (`executorTerminal` and `executorMissed` beside `lastExecutor`), `verifyExecutorTerminated` (the shared verifier refactored), the confirmed write, the missed marker, `ExecutorEnded`, metrics, the record flag; T6, T15, T16 (record part) |
 | H2 | haynes-ops | CRD copy, node and lease read, operator pin, record on |
-| H3 | dev-env source | the stop request and its guard test; T14 |
-| H4 | dev-env source | agentd `history-export plan\|stream`, `history-archive put\|verify\|get\|list\|read`, `agentd shelf --history-archive`, the layout tables and fixtures, `TestHistoryExportReadsOnly`, `TestHistoryArchiveNeverRemoves`, the measurement |
-| H5 | dev-env source | the expiry record and steps up to `Archived`, the private hold pod, the relay, overrides, metrics, the guard test extensions; T1 to T13 up to `Archived` |
+| H3 | dev-env source | the stop request for Reaping Sessions only: the `stopRequest` intent, the hold check, the patch and its guard test; T14 |
+| H4 | dev-env source | agentd `history-export plan\|stream`, `history-archive put\|verify\|get\|list\|read`, `agentd shelf --history-archive`, the layout tables (agentd by name, the copy subtrees excluded) and fixtures, `TestHistoryExportReadsOnly`, `TestHistoryArchiveNeverRemoves`, `TestHistoryLayoutCoversAgentdState`, the measurement |
+| H5 | dev-env source | the expiry record and steps up to `Archived`, the private hold pod and `expiryHoldRemovalAllowed`, the relay, overrides, metrics, the guard test extensions; T1 to T13 up to `Archived` |
 | H6 | dev-env source | the read routes and `agent-run history`, client tolerance tests, the delete and release steps (off), `TestExpiryDeleteNeedsVerify`; T1, T2, T5, T12, T13 and T17 to the end |
-| H7 | haynes-ops | the archive PVC, shelf mount, override policy, alerts, `Retain` by Tom, then stop, archive and reads on |
+| H7 | haynes-ops | the archive PVC, shelf mount, override policy, the archive guard after its parity check, alerts, `Retain` by Tom, then stop, archive and reads on |
 | H8 | dev-env docs | installed record of the archived read (#174) |
 | H9 | haynes-ops | delete on, stalled alert |
 | H10 | dev-env docs | installed record of the first expiry and the ADR-004 release |
@@ -897,6 +1112,16 @@ Plan 11 tracks these:
   executor attempt and no HOME is still never released. Plan 11 follow-up F2
   holds that narrow case: it has nothing to archive, so it needs no owner
   question, but it is not part of Q-31.
+- **Suspended Sessions are not stopped.** A suspended private Session whose
+  executor still runs never expires until it is reaped. A stop at the suspended
+  deadline is not planned; it needs its own owner question (plan 11 follow-up F3,
+  ADR-006).
+- **A reap ends a private executor** (section 4, ADR-006 C-39). A mistaken reap
+  ends a live agent; only a hold set before it prevents that.
+- **The archive guard does not reach** cluster-admin, node, storage or hypervisor
+  access (section 7).
+- **Copies of user files are not archived:** `file-history/`, `paste-cache/`,
+  `uploads/` and `attachments/` go with the HOME (6.3).
 - **Transcript content is not scanned** for secrets (6.3).
 - **Archived history is read, not resumed.**
 - **The archive grows without limit**, like DESIGN-024's.
