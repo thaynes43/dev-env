@@ -99,7 +99,7 @@ func (s *Server) canaryResultAuthority(ctx context.Context, c *caller, id, uid s
 		// retained result (DESIGN-022 amendment; Create and the first executor
 		// keep the strict Confirm).
 		common, err := commonrules.BoundSession(&original)
-		if err != nil || common.ConfirmContent(ctx, s.Live) != nil {
+		if err != nil || record.CheckCommon(common) != nil || common.ConfirmContent(ctx, s.Live) != nil {
 			return nil, record, canaryResultDenied()
 		}
 	}

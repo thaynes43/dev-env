@@ -661,3 +661,27 @@ func TestBrokerRBAC(t *testing.T) {
 		t.Error("the operator may write a grant's status, so it could approve one")
 	}
 }
+
+// TestOperatorKeepsGrantExpiryInformerRBAC proves, from the installed haynes-ops
+// RBAC, what D-64's egress expiry backstop needs: the operator's AccessGrant
+// informer (internal/grantexpiry) gets, lists and watches the grants in the
+// session namespace, and the operator still cannot write a grant's status, so
+// it cannot approve or end one. Trimming list or watch would stop the backstop
+// silently (the informer never syncs), and with it the revocation of an
+// expired egress grant while the broker is down.
+func TestOperatorKeepsGrantExpiryInformerRBAC(t *testing.T) {
+	suite(t)
+	grants := func(verb, subresource string) authorizationv1.ResourceAttributes {
+		return authorizationv1.ResourceAttributes{Verb: verb, Group: v1alpha1.GroupVersion.Group, Resource: "accessgrants", Subresource: subresource, Namespace: sessionNS}
+	}
+	for _, verb := range []string{"get", "list", "watch"} {
+		if !allowed(t, operatorUser, grants(verb, "")) {
+			t.Errorf("the operator may not %s accessgrants in %s; the grant expiry informer needs it", verb, sessionNS)
+		}
+	}
+	for _, verb := range []string{"update", "patch"} {
+		if allowed(t, operatorUser, grants(verb, "status")) {
+			t.Errorf("the operator may %s accessgrants/status; only the broker decides a grant", verb)
+		}
+	}
+}

@@ -74,54 +74,77 @@ func TestProjectCanaryPodWholeExecutorBounds(t *testing.T) {
 // The canary's evidence is the agent reporting the rule markers it loaded, so
 // the operator must hand them over only as rules, never as the prompt: a
 // marker in what the agent is told to do proves nothing about what it loaded.
-// This renders the pod and checks every value it carries against every line of
-// the bound snapshot's rules, so it fails whether the record's prompt or the
-// operator's rendering puts a rule line where the agent reads instructions.
+// A record whose own prompt repeats them is refused at admission
+// (projectcanary.CheckPrompt, through ResolveCatalog and CheckCommon). This
+// renders the pod, alone and with a retained common snapshot, and checks every
+// value the agent's process receives against every line of the bound rules,
+// common text and Codex header, so it fails when the operator's rendering puts
+// one where the agent reads instructions.
 func TestProjectCanaryRenderedPromptAndArgsCarryNoRuleLine(t *testing.T) {
 	for _, provider := range []string{"claude", "codex"} {
-		t.Run(provider, func(t *testing.T) {
-			f := testutil.New(t, provider, "dev/dev-env")
-			snapshot, err := projectcatalog.ParseSnapshot([]byte(f.Session.Annotations[v1alpha1.AnnotationProjectSnapshot]))
-			if err != nil {
-				t.Fatal(err)
+		for _, withCommon := range []bool{false, true} {
+			name := provider
+			if withCommon {
+				name += "/common"
 			}
-			lines := ruleLines(snapshot.Rules())
-			if len(lines) == 0 {
-				t.Fatal("the fixture binds no rule line, so this proves nothing")
-			}
-			pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, true, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			c := pod.Spec.Containers[0]
-			var doc protocol.Session
-			if err := json.Unmarshal([]byte(envOf(c, protocol.SessionEnv).Value), &doc); err != nil {
-				t.Fatal(err)
-			}
-			if doc.Prompt != f.Record.Prompt {
-				t.Fatalf("rendered prompt %q is not the bound record's", doc.Prompt)
-			}
-			delivered, err := projectcatalog.ParseSnapshot(doc.ProjectSnapshot)
-			if err != nil || delivered.Rules() != snapshot.Rules() {
-				t.Fatal("the rules do not reach agentd through the bound snapshot")
-			}
-			values := map[string]string{"prompt": doc.Prompt}
-			for i, v := range append(slices.Clone(c.Command), c.Args...) {
-				values[fmt.Sprintf("argv[%d]", i)] = v
-			}
-			for _, e := range c.Env {
-				if e.Name != protocol.SessionEnv {
-					values["env "+e.Name] = e.Value
+			t.Run(name, func(t *testing.T) {
+				f := testutil.New(t, provider, "dev/dev-env")
+				snapshot, err := projectcatalog.ParseSnapshot([]byte(f.Session.Annotations[v1alpha1.AnnotationProjectSnapshot]))
+				if err != nil {
+					t.Fatal(err)
 				}
-			}
-			for where, v := range values {
-				for _, line := range lines {
-					if strings.Contains(v, line) {
-						t.Errorf("%s carries rule line %q", where, line)
+				lines := ruleLines(snapshot.Rules())
+				if len(lines) == 0 {
+					t.Fatal("the fixture binds no rule line, so this proves nothing")
+				}
+				if withCommon {
+					common := commonCanaryControllerWith(t, &f, "COMMON_RENDER_MARKER\nKeep the common rules out of the prompt.", "HEADER_RENDER_MARKER\nCodex reads this header first.")
+					lines = append(append(lines, ruleLines(common.Common.Text)...), ruleLines(common.Header.Text)...)
+				}
+				pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, true, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				c := pod.Spec.Containers[0]
+				var doc protocol.Session
+				if withCommon {
+					if doc, err = protocol.ParseSessionFile([]byte(pod.Annotations[protocol.SessionInputAnnotation])); err != nil {
+						t.Fatal(err)
+					}
+					if envOf(c, protocol.SessionEnv).Value != "" {
+						t.Fatal("the common route still passes the session in the environment")
+					}
+				} else if err := json.Unmarshal([]byte(envOf(c, protocol.SessionEnv).Value), &doc); err != nil {
+					t.Fatal(err)
+				}
+				if doc.Prompt == "" || doc.Prompt != f.Record.Prompt {
+					t.Fatalf("rendered prompt %q is not the bound record's", doc.Prompt)
+				}
+				delivered, err := projectcatalog.ParseSnapshot(doc.ProjectSnapshot)
+				if err != nil || delivered.Rules() != snapshot.Rules() {
+					t.Fatal("the rules do not reach agentd through the bound snapshot")
+				}
+				if withCommon && len(doc.CommonRules) == 0 {
+					t.Fatal("the common rules do not reach agentd through the bound snapshot")
+				}
+				values := map[string]string{"prompt": doc.Prompt}
+				for i, v := range append(slices.Clone(c.Command), c.Args...) {
+					values[fmt.Sprintf("argv[%d]", i)] = v
+				}
+				for _, e := range c.Env {
+					if e.Name != protocol.SessionEnv {
+						values["env "+e.Name] = e.Value
 					}
 				}
-			}
-		})
+				for where, v := range values {
+					for _, line := range lines {
+						if strings.Contains(v, line) {
+							t.Errorf("%s carries rule line %q", where, line)
+						}
+					}
+				}
+			})
+		}
 	}
 }
 

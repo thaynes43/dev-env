@@ -1876,7 +1876,16 @@ deletes pods.**
   Suspended one after a rescue. `releaseSession` is the only function that lifts the
   finalizer. `TestOnlyTheGuardDeletes` reads the package's source and fails on any
   other delete or finalizer removal, so a new path cannot land without a change to
-  that test, where review sees it.
+  that test, where review sees it. *Scope (2026-10-12, #91 history-07):* the scan
+  reads syntax, not types, so "any" means the forms it knows. It catches the
+  deletes and finalizer or owner-reference releases that
+  `TestGuardScanCatchesReleaseWrites` lists in
+  `internal/controller/testdata/guardscan`: a patch naming finalizers or
+  ownerReferences in a function or through a package-level constant, the
+  setters, an assignment to the lists or to `.ObjectMeta`, an in-place slices
+  edit, a patch of (or a `*x =` from) an object built in the function, and a
+  whole-object Update. It does not follow values across functions or packages;
+  that test names those gaps, and review still covers them.
 - **What stays in a human's hands** (3.4: destroying unrescued work needs a human
   with `kubectl`): removing the finalizer from the session and from its volume, then
   deleting them. A foreground cascade (`kubectl delete --cascade=foreground`) still

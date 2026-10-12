@@ -97,6 +97,10 @@ inputs or WIP. Preserve legacy byte fixtures, dirty/index/local-only commits,
 worktrees and operations. File presence and synthetic argv tests are source
 proof only; actual loaded common and distinct repository markers must later be
 proved through provider output/events, with marker values absent from the prompt.
+Since 2026-10-12 (#91 rules-003) the operator enforces that absence: a reviewed
+canary record whose prompt repeats a line or marker of the retained common text
+or Codex header is refused at create, before an executor and at result read
+(`Record.CheckCommon`; DESIGN-011 has the matching rule).
 
 Use sequential focused nice19/GOMAXPROCS2/p2 checks, cached schema/codegen tools,
 affected lint and native independent review before required CI. No burners,

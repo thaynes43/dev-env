@@ -37,7 +37,7 @@ func (r *Reconciler) validateProjectCanary(ctx context.Context, s *v1alpha1.Agen
 	}
 	if r.RetainedCommonRules {
 		common, err := commonrules.BoundSession(&fresh)
-		if err != nil || common.Confirm(ctx, r.APIReader) != nil {
+		if err != nil || record.CheckCommon(common) != nil || common.Confirm(ctx, r.APIReader) != nil {
 			return projectcanary.ErrRefused
 		}
 	}

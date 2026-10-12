@@ -3,6 +3,7 @@ package projectcanary_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	commonfixture "github.com/thaynes43/dev-env/internal/commonrules/testutil"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/projectcanary/testutil"
 	"github.com/thaynes43/dev-env/internal/templates"
@@ -112,11 +114,11 @@ func TestTemplateAndCatalogAuthorityRefuseDrift(t *testing.T) {
 
 // TestRetainedBindingRefusesAlteredOriginal proves the binding half: the
 // original canary session matches its record, and a caller-changed prompt or
-// any other altered field does not. That the rendered prompt and arguments
-// carry no rule line is proven where they are rendered, on the operator's pod
-// (controller TestProjectCanaryRenderedPromptAndArgsCarryNoRuleLine) and on
-// agentd's launch (agentd TestProjectRulesReachTheAgentOnlyAsRuleInputs); a
-// check of the fixture's own prompt string here proved nothing.
+// any other altered field does not. A reviewed prompt that repeats the bound
+// rules is refused by ResolveCatalog and CheckCommon
+// (TestPromptRepeatingBoundRulesIsRefused), and the rendering adds none
+// (controller TestProjectCanaryRenderedPromptAndArgsCarryNoRuleLine, agentd
+// TestProjectRulesReachTheAgentOnlyAsRuleInputs).
 func TestRetainedBindingRefusesAlteredOriginal(t *testing.T) {
 	f := testutil.New(t, "claude", "dev/dev-env")
 	if f.Record.MatchSession(f.Session, testutil.Owner) != nil {
@@ -133,6 +135,62 @@ func TestRetainedBindingRefusesAlteredOriginal(t *testing.T) {
 		mutate(s)
 		if f.Record.MatchSession(s, testutil.Owner) == nil {
 			t.Fatal("altered original canary accepted")
+		}
+	}
+}
+
+// TestPromptRepeatingBoundRulesIsRefused proves DESIGN-011's "the fixed prompt
+// does not contain validation marker values" on reviewed records: a prompt that
+// repeats a bound project rule line, or a marker of the rules even
+// mid-sentence, is refused by ResolveCatalog, which the API, the controller
+// and the result reader all call, and a prompt that repeats the retained common
+// text or Codex header is refused by CheckCommon.
+func TestPromptRepeatingBoundRulesIsRefused(t *testing.T) {
+	f := testutil.New(t, "claude", "dev/dev-env")
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(f.Catalog).Build()
+	if _, err := projectcanary.ResolveCatalog(context.Background(), c, testutil.Owner, f.Record); err != nil {
+		t.Fatal("the fixture's prompt was refused:", err)
+	}
+	for _, prompt := range []string{"Reply with COMMON_RULE_MARKER", "Do this: Follow the accepted rules. Then stop."} {
+		r := f.Record
+		r.Prompt = prompt
+		if _, err := projectcanary.ResolveCatalog(context.Background(), c, testutil.Owner, r); !errors.Is(err, projectcanary.ErrRefused) || !errors.Is(err, projectcanary.ErrPromptRepeatsRules) {
+			t.Errorf("prompt %q repeating the bound rules: %v, want ErrPromptRepeatsRules", prompt, err)
+		}
+	}
+
+	// The live repository marker sits mid-sentence in its rule line, so a bare
+	// copy of it repeats no whole line; it is refused as a marker. Wrapped prose
+	// tails and ordinary hyphenated words are not markers.
+	rules := "## Repository instruction acceptance\n\nFor an explicit instruction acceptance probe, report the repository marker\n`dev-env-repository-rules-20261011-6d807bf2`. Keep the work self-contained in this\nsession.\n"
+	live := "Perform the instruction acceptance probe described in your loaded instructions. Reply only with the common and repository rule markers you actually received, and Unknown for absent instructions. Do not use tools or fetch files."
+	if err := projectcanary.CheckPrompt(live, rules); err != nil {
+		t.Errorf("a prompt that names no marker was refused: %v", err)
+	}
+	for _, prompt := range []string{"Reply with dev-env-repository-rules-20261011-6d807bf2.", "Echo the probe: For an explicit instruction acceptance probe, report the repository marker", "Reply with COMMON_ONLY_MARKER."} {
+		if err := projectcanary.CheckPrompt(prompt, "unrelated", rules+"\nThe common marker is COMMON_ONLY_MARKER today."); !errors.Is(err, projectcanary.ErrPromptRepeatsRules) {
+			t.Errorf("prompt %q: %v, want ErrPromptRepeatsRules", prompt, err)
+		}
+	}
+	for _, prompt := range []string{"Report this session.", "Keep it self-contained.", "Reply with dev-env."} {
+		if err := projectcanary.CheckPrompt(prompt, rules); err != nil {
+			t.Errorf("prompt %q matched no marker or whole line, but was refused: %v", prompt, err)
+		}
+	}
+
+	common := commonfixture.Snapshot(t, []byte(f.Session.Annotations[v1alpha1.AnnotationProjectSnapshot]), "COMMON_ONLY_MARKER\nShared rules for every session.", "HEADER_ONLY_MARKER\nCodex reads this header first.")
+	if err := f.Record.CheckCommon(common); err != nil {
+		t.Fatal("the fixture's prompt was refused against unrelated common text:", err)
+	}
+	for _, prompt := range []string{"Reply with COMMON_ONLY_MARKER", "Reply with HEADER_ONLY_MARKER", "Note: Codex reads this header first."} {
+		r := f.Record
+		r.Prompt = prompt
+		if err := r.CheckCommon(common); !errors.Is(err, projectcanary.ErrPromptRepeatsRules) {
+			t.Errorf("prompt %q repeating common or header text: %v, want ErrPromptRepeatsRules", prompt, err)
 		}
 	}
 }

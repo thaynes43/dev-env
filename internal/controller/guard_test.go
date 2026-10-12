@@ -273,12 +273,15 @@ var guardedCalls = []struct {
 // deleteVolume calls. Any other write of a finalizer or owner reference list (a
 // JSON or merge patch naming finalizers or ownerReferences, SetFinalizers,
 // SetOwnerReferences and their kin, an assignment to or an in-place slices
-// edit of .Finalizers or .OwnerReferences) may appear only in the
-// releaseWriters, whose one caller and guard guardedCalls pins; and no
-// whole-object Update may appear at all, because it can drop both lists. A new
-// delete or release path cannot slip in without changing this test, which is
-// where review looks (5.1). The scan reads syntax, not types: it catches the
-// ways TestGuardScanCatchesReleaseWrites lists, not every conceivable one.
+// edit of .Finalizers or .OwnerReferences, a use of a package-level constant or
+// variable that names them, an assignment to .ObjectMeta, and a Patch of, or an
+// assignment through *x of, an object built in the function from a composite
+// literal) may appear only in the releaseWriters, whose one caller and guard
+// guardedCalls pins; and no whole-object Update may appear at all, because it
+// can drop both lists. A new delete or release path cannot slip in without
+// changing this test, which is where review looks (5.1). The scan reads syntax,
+// not types: it catches the ways TestGuardScanCatchesReleaseWrites lists, not
+// every conceivable one, and that test names the known gaps.
 func TestOnlyTheGuardDeletes(t *testing.T) {
 	scan := scanGuards(t, ".")
 	for _, v := range scan.violations {
@@ -329,13 +332,22 @@ var sliceEditors = map[string]bool{
 // file that is never compiled, where each function deletes or releases outside
 // the guards in a different way. The scan must name every one of them, or
 // TestOnlyTheGuardDeletes passing proves less than it claims.
+//
+// Known gaps, because the scan reads syntax and does not follow values: an
+// object built in another function and then patched or assigned through *x
+// here (the refresh pattern `var fresh T; Get(..., &fresh); *s = fresh` is
+// allowed on purpose, since fresh then holds the stored finalizers and owner
+// references); a patch text assembled so that no one string names finalizers
+// or ownerReferences; and a release write in another package. Review still
+// covers those.
 func TestGuardScanCatchesReleaseWrites(t *testing.T) {
 	scan := scanGuards(t, filepath.Join("testdata", "guardscan"))
 	for _, fn := range []string{
 		"rawFinalizerReplace", "rawFinalizerRemove", "rawOwnerReplace", "mergeFinalizerNull", "mapPatchFinalizers",
 		"setFinalizersThenUpdate", "setOwnersThenPatch", "assignFinalizersThenPatch", "assignNestedOwnersThenPatch",
 		"deleteFuncInPlace", "removeOwnerThenPatch", "wholeObjectUpdate", "unguardedDelete", "unguardedRemoveFinalizer",
-		"deletePod",
+		"deletePod", "pkgConstPatch", "freshObjectMergePatch", "wholeMetaAssignThenPatch", "derefAssignThenPatch",
+		"pkgVarFuncLiteral",
 	} {
 		if !slices.ContainsFunc(scan.violations, func(v string) bool { return strings.Contains(v, " in "+fn+";") }) {
 			t.Errorf("the guard scan does not catch %s", fn)
@@ -351,7 +363,11 @@ type guardScan struct {
 }
 
 // scanGuards parses the non-test Go files in dir and checks every call against
-// guardedCalls.
+// guardedCalls. It scans function bodies and the values of package-level
+// declarations. A package-level constant or variable whose value names
+// finalizers or ownerReferences (directly, or through another such name) is a
+// release name, and a function that uses one writes those lists as surely as one
+// that spells the patch out.
 func scanGuards(t *testing.T, dir string) guardScan {
 	t.Helper()
 	files, err := filepath.Glob(filepath.Join(dir, "*.go"))
@@ -366,6 +382,7 @@ func scanGuards(t *testing.T, dir string) guardScan {
 	report := func(pos token.Pos, fn, format string, args ...any) {
 		scan.violations = append(scan.violations, fmt.Sprintf("%s: in %s; ", fset.Position(pos), fn)+fmt.Sprintf(format, args...))
 	}
+	var parsed []*ast.File
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
@@ -378,79 +395,232 @@ func scanGuards(t *testing.T, dir string) guardScan {
 		if err != nil {
 			t.Fatal(err)
 		}
+		parsed = append(parsed, file)
+	}
+	releaseNames := packageReleaseNames(parsed)
+	for _, file := range parsed {
 		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
-			}
-			first := map[string]token.Pos{}
-			release := func(pos token.Pos, what string) {
-				if releaseWriters[fn.Name.Name] {
-					scan.seen["release in "+fn.Name.Name]++
-					return
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				if d.Body != nil {
+					scanBody(&scan, report, releaseNames, d.Name.Name, d.Body)
 				}
-				report(pos, fn.Name.Name, "%s writes a finalizer or owner reference list; only the releaseWriters may (5.1, D-45)", what)
-			}
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				switch n := n.(type) {
-				case *ast.BasicLit:
-					if n.Kind == token.STRING && (strings.Contains(n.Value, "finalizers") || strings.Contains(n.Value, "ownerReferences")) {
-						release(n.Pos(), "a patch naming "+n.Value)
-					}
-				case *ast.AssignStmt:
-					for _, lhs := range n.Lhs {
-						if field := releaseField(lhs); field != "" {
-							release(lhs.Pos(), "an assignment to ."+field)
+			case *ast.GenDecl:
+				// A package-level value runs no code by itself, but a function
+				// literal in one does: scan it under the declared name.
+				for _, spec := range d.Specs {
+					if vs, ok := spec.(*ast.ValueSpec); ok && len(vs.Names) > 0 {
+						for _, v := range vs.Values {
+							ast.Inspect(v, func(n ast.Node) bool {
+								if lit, ok := n.(*ast.FuncLit); ok {
+									scanBody(&scan, report, releaseNames, vs.Names[0].Name, lit.Body)
+									return false
+								}
+								return true
+							})
 						}
 					}
 				}
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				name := calleeName(call)
-				if releaseSetters[name] {
-					release(call.Pos(), name)
-				}
-				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sliceEditors[name] && isIdent(sel.X, "slices") && len(call.Args) > 0 {
-					if field := releaseField(call.Args[0]); field != "" {
-						release(call.Pos(), "slices."+name+" on ."+field)
-					}
-				}
-				if name == "Update" && !onSubresource(call) {
-					report(call.Pos(), fn.Name.Name, "a whole-object Update can drop finalizers and owner references; patch through a guarded function instead")
-				}
-				if _, ok := first[name]; !ok {
-					first[name] = call.Pos()
-				}
-				guarded := false
-				for _, g := range guardedCalls {
-					if g.call != name {
-						continue
-					}
-					guarded = true
-					if g.in != fn.Name.Name {
-						continue
-					}
-					scan.seen[g.call+" in "+g.in]++
-					if g.guard != "" {
-						if pos, ok := first[g.guard]; !ok || pos > call.Pos() {
-							report(call.Pos(), fn.Name.Name, "%s is called before %s is asked", name, g.guard)
-						}
-					}
-					if name == "Delete" && !hasUIDPrecondition(call) {
-						report(call.Pos(), fn.Name.Name, "Delete names its object by name only; pass client.Preconditions{UID: ...}")
-					}
-					return true
-				}
-				if guarded || name == "DeleteAllOf" {
-					report(call.Pos(), fn.Name.Name, "%s outside the guarded functions (5.1, D-51)", name)
-				}
-				return true
-			})
+			}
 		}
 	}
 	return scan
+}
+
+// packageReleaseNames are the package-level constants and variables whose
+// value names finalizers or ownerReferences, directly or through another of
+// them.
+func packageReleaseNames(files []*ast.File) map[string]bool {
+	var specs []*ast.ValueSpec
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			if d, ok := decl.(*ast.GenDecl); ok {
+				for _, spec := range d.Specs {
+					if vs, ok := spec.(*ast.ValueSpec); ok {
+						specs = append(specs, vs)
+					}
+				}
+			}
+		}
+	}
+	names := map[string]bool{}
+	for changed := true; changed; {
+		changed = false
+		for _, vs := range specs {
+			if len(vs.Names) == 0 || names[vs.Names[0].Name] {
+				continue
+			}
+			found := false
+			for _, v := range vs.Values {
+				ast.Inspect(v, func(n ast.Node) bool {
+					switch n := n.(type) {
+					case *ast.BasicLit:
+						found = found || namesReleaseField(n)
+					case *ast.Ident:
+						found = found || names[n.Name]
+					}
+					return !found
+				})
+			}
+			if found {
+				for _, name := range vs.Names {
+					names[name.Name] = true
+				}
+				changed = true
+			}
+		}
+	}
+	return names
+}
+
+// namesReleaseField reports whether lit is a string that names a finalizer or
+// owner reference list, as a JSON or merge patch does.
+func namesReleaseField(lit *ast.BasicLit) bool {
+	return lit.Kind == token.STRING && (strings.Contains(lit.Value, "finalizers") || strings.Contains(lit.Value, "ownerReferences"))
+}
+
+// scanBody checks one function body, named fn, against guardedCalls and the
+// release rules.
+func scanBody(scan *guardScan, report func(token.Pos, string, string, ...any), releaseNames map[string]bool, fn string, body *ast.BlockStmt) {
+	first := map[string]token.Pos{}
+	// fresh are the local variables last set from a composite literal: an
+	// object built here, not read from the API server, so it has none of the
+	// stored object's finalizers and owner references.
+	fresh := map[string]bool{}
+	selectors := map[*ast.Ident]bool{}
+	release := func(pos token.Pos, what string) {
+		if releaseWriters[fn] {
+			scan.seen["release in "+fn]++
+			return
+		}
+		report(pos, fn, "%s writes a finalizer or owner reference list; only the releaseWriters may (5.1, D-45)", what)
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.SelectorExpr:
+			selectors[n.Sel] = true
+		case *ast.Ident:
+			if releaseNames[n.Name] && !selectors[n] {
+				release(n.Pos(), "package-level "+n.Name+", which names finalizers or ownerReferences,")
+			}
+		case *ast.BasicLit:
+			if namesReleaseField(n) {
+				release(n.Pos(), "a patch naming "+n.Value)
+			}
+		case *ast.ValueSpec:
+			for i, name := range n.Names {
+				fresh[name.Name] = i < len(n.Values) && compositeLiteral(n.Values[i])
+			}
+		case *ast.AssignStmt:
+			for i, lhs := range n.Lhs {
+				if field := releaseField(lhs); field != "" {
+					release(lhs.Pos(), "an assignment to ."+field)
+				}
+				if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "ObjectMeta" {
+					release(lhs.Pos(), "an assignment to .ObjectMeta")
+				}
+				var rhs ast.Expr
+				if len(n.Rhs) == len(n.Lhs) {
+					rhs = n.Rhs[i]
+				}
+				if star, ok := lhs.(*ast.StarExpr); ok && rhs != nil && freshObject(rhs, fresh) {
+					release(star.Pos(), "an assignment through *x of an object built here")
+				}
+				if id, ok := lhs.(*ast.Ident); ok {
+					fresh[id.Name] = rhs != nil && compositeLiteral(rhs)
+				}
+			}
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		name := calleeName(call)
+		if releaseSetters[name] {
+			release(call.Pos(), name)
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sliceEditors[name] && isIdent(sel.X, "slices") && len(call.Args) > 0 {
+			if field := releaseField(call.Args[0]); field != "" {
+				release(call.Pos(), "slices."+name+" on ."+field)
+			}
+		}
+		if name == "Update" && !onSubresource(call) {
+			report(call.Pos(), fn, "a whole-object Update can drop finalizers and owner references; patch through a guarded function instead")
+		}
+		if name == "Patch" && !onSubresource(call) && len(call.Args) > 1 && freshObject(call.Args[1], fresh) {
+			release(call.Pos(), "a Patch of an object built here, which a merge patch empties of what it lacks,")
+		}
+		if _, ok := first[name]; !ok {
+			first[name] = call.Pos()
+		}
+		guarded := false
+		for _, g := range guardedCalls {
+			if g.call != name {
+				continue
+			}
+			guarded = true
+			if g.in != fn {
+				continue
+			}
+			scan.seen[g.call+" in "+g.in]++
+			if g.guard != "" {
+				if pos, ok := first[g.guard]; !ok || pos > call.Pos() {
+					report(call.Pos(), fn, "%s is called before %s is asked", name, g.guard)
+				}
+			}
+			if name == "Delete" && !hasUIDPrecondition(call) {
+				report(call.Pos(), fn, "Delete names its object by name only; pass client.Preconditions{UID: ...}")
+			}
+			return true
+		}
+		if guarded || name == "DeleteAllOf" {
+			report(call.Pos(), fn, "%s outside the guarded functions (5.1, D-51)", name)
+		}
+		return true
+	})
+}
+
+// compositeLiteral reports whether e is T{...} or &T{...}.
+func compositeLiteral(e ast.Expr) bool {
+	for {
+		switch x := e.(type) {
+		case *ast.ParenExpr:
+			e = x.X
+		case *ast.UnaryExpr:
+			if x.Op != token.AND {
+				return false
+			}
+			e = x.X
+		case *ast.CompositeLit:
+			return true
+		default:
+			return false
+		}
+	}
+}
+
+// freshObject reports whether e is an object built in this function: a
+// composite literal, or a local variable last set from one, through any & or *.
+func freshObject(e ast.Expr, fresh map[string]bool) bool {
+	for {
+		switch x := e.(type) {
+		case *ast.ParenExpr:
+			e = x.X
+		case *ast.StarExpr:
+			e = x.X
+		case *ast.UnaryExpr:
+			if x.Op != token.AND {
+				return false
+			}
+			e = x.X
+		case *ast.CompositeLit:
+			return true
+		case *ast.Ident:
+			return fresh[x.Name]
+		default:
+			return false
+		}
+	}
 }
 
 // releaseField is "Finalizers" or "OwnerReferences" when e is that field of
