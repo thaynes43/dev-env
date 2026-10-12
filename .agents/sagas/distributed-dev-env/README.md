@@ -1,5 +1,12 @@
 # Saga: distributed-dev-env (dev-env v2)
 
+Start continuation with the [Claude pickup brief](../../CLAUDE-RESUME-2026-10-12.md).
+It consolidates current and earlier owner enumerations, the bounded roadmap,
+source-review assignments and failed/stopped routes. Review and improve the
+shipped code. Q-24 and Q-27 remain pending, both fixed IDs are consumed, and
+actual both-provider rules/MVP acceptance remains open. Earlier checkpoints
+below are historical; they do not reauthorize old next steps or reset counters.
+
 The [original Codex probe record](verification/codex-fixed-rule-probe-2026-10-12.md)
 records 16 passing offline checks, independent full review and one program that
 completed Directory 5 and original Codex HTTP 201 at 06:47:25 UTC. Saved native

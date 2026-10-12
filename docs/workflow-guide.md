@@ -1,5 +1,10 @@
 # Dev-env v2: workflow, quick start and feature set
 
+**Current continuation, 2026-10-12:** the
+[Claude pickup brief](../.agents/CLAUDE-RESUME-2026-10-12.md) records current
+requirements, the roadmap, source-review targets and stopped attempts. Read it
+before selecting implementation or executing the bounded probe examples below.
+
 **Scope corrected 2026-10-10, America/New_York.** V2 solves five problems with
 v1: upgrades kill sessions, work concentrates on one node, agents have broad
 access, session management is difficult, and model usage/cost is unclear.
@@ -79,38 +84,44 @@ storage, but it does not require shared Git directories or NFS Git benchmarks.
 
 ## 2. Feature set and delivery state
 
-This table reflects source and recorded runtime evidence as of 2026-10-11.
+This table reflects source and saved runtime evidence as of 2026-10-12.
 A released feature is not automatically enabled or accepted on live sessions.
 
 | Goal or capability | Available evidence | Remaining work |
 |---|---|---|
-| Upgrade without killing sessions | Operator lifecycle leaves running session Pods intact; operator restart preservation tested | Safe agent-image replacement and busy-host drains; interrupted native recovery |
+| Upgrade without killing sessions | Last accepted operator image delivery preserved 11 peers in its saved observation window | Safe agent-image replacement and busy-host drains; interrupted native recovery |
 | Distribute load | Bounded task Pods scheduled on workers; real Claude task ran with CPU/memory limits | Prove placement across nodes; native Codex threads still share their host’s resources |
 | Claude task and terminal workflows | Task, attach/detach, TUI messages, suspend/resume and Git rescue exercised | Owner pilot and history-preserving archive |
 | Codex sessions across pods | Keeper login, scoped-host/task and owned-native source foundations released | Two live distinct links, refresh adoption, native execution/recovery and device acceptance |
-| Common rules and projects | Private preparation and rule composition; installed explicit trusted refresh accepted; private roots source released in 2.14.0 | Installed roots/startup and native client integration; prove actual rules loaded by both providers |
-| See live and stopped work | Managed Session list/show and fleet placement; default-off private retention/provenance guard source | Deploy preservation guard; native host/thread indexing and accurate activity |
-| Communicate and avoid duplicates | Attributed live TUI message route; same-parent request idempotency | Durable inbox and acknowledgements; explicit task claims across independent parents |
-| Read prior context | Provider artifacts and running task log tails; private HOME/identity preservation guard source | Installed retention and authorized transcript/memory/handoff reads without the source Pod |
+| Common rules and projects | Catalog bootstrap, private roots/client guards and common-rule inputs shipped; trusted startup/refresh foundations installed | Actual private GitHub authorization/worktrees and rule loading by both providers |
+| See live and stopped work | Managed list/show, fleet placement and retained Directory/identity guards; one complete pre-Codex page accepted | Actual live/stopped native indexing and accurate activity; post-Create cardinality remains Unknown |
+| Communicate and avoid duplicates | Live TUI route, idempotency, explicit claim and durable inbox/ACK foundations shipped | Actual cross-parent claims, stopped-recipient durability and authorized consumer acceptance |
+| Read prior context | Installed private HOME/identity preservation and stored managed-context result route; one retained Claude result read | Full provider transcripts/memory/handoffs without the source Pod; managed output is partial history |
 | Guard powerful access | Scoped broker/grant foundations; keeper-only CA and node trust prepared | Usable guarded Headlamp/hardware replacements, approved policies and use/revocation acceptance |
-| Stop wasted attempts | Accepted 60-minute stall/three-failure policy; retained ledger and stop foundations released | Whole-task accounting, real progress/failure signals, verified stop and phone escalation |
-| Model usage and cost | Exact model identity; provider-specific token/cost parsers | Provenance, Unknown values, fleet aggregation and no parent/child double counting |
+| Stop wasted attempts | Accepted 60-minute stall/three-failure policy; ledger/stop foundations and v2.24 ownership proof published | Private dispatch inspector remains unwired and refuses reservation; whole-task runtime accounting, verified stop and phone escalation |
+| Model usage and cost | Requested-model identity and provider-specific parsers/provenance foundations | Exact served-model provenance, truthful Unknown values, fleet aggregation and no parent/child double counting |
 | Frontend | Existing management API and CLI | Console for sessions, nodes, tasks, messages, retained history, renewal and cost |
-| Local LLMs and GPUs | Design/backlog exists | GPU availability, household-safe allocation and a provider backend under the same contracts |
+| Local LLMs and GPUs | Local provider included in contracts; live inference disabled | GPU readiness, household-safe allocation and actual backend acceptance |
 
-The ordinary worker template was promoted to signed 2.13.0 without replacing
-existing sessions. A bounded model-free check accepted installed explicit
-catalog refresh against the current public repository. Roots source is released
-in 2.14.0; its installed acceptance remains separate. Private-project admission
-remains disabled. The trusted catalog has
-one declared repository and empty common-rule text. Actual provider loading
-remains unaccepted. The [bootstrap contract](../.agents/sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md)
-prepares private catalogs without shared preflight or locks.
+The saved installed task template is signed v2.20.0, digest `823e0155…`, revision
+`2.20.0-ec26880d2a`; its actual agentd source is `3aab27ce…`, not the revision
+suffix. The accepted operator image is source `cd966d17…`, digest `cc03ae82…`.
+Signed v2.24.0 (`36d26662…`) is published and not deployed. Private-project
+admission remains disabled. Catalog/bootstrap, roots and common-rule source
+foundations have shipped; the earlier empty-common-rule configuration was a
+historical checkpoint. Actual both-provider loading remains unaccepted:
+Claude's retained response hit its weekly limit, and Codex output is Unknown.
+See the [current checkpoint](../.agents/CLAUDE-RESUME-2026-10-12.md#what-is-actually-delivered)
+for full revisions and acceptance limits. The
+[bootstrap contract](../.agents/sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md)
+uses private catalogs without shared preflight or locks; startup refresh does
+not replace a fresh selected-repository fetch and immutable pin before each task.
 
 The [private retention guard](../.agents/sagas/distributed-dev-env/designs/008-private-provider-history-retention.md)
 preserves HOME and Session identity rather than declaring archive complete.
 Its latch survives flag disable; absent executors remain Unknown and cannot
-start replacements. This adds no stopped-history reader or expiry policy.
+start replacements. Managed-context readers are separate; preservation alone
+does not prove complete stopped native history or an accepted expiry policy.
 Existing coordinator scope is preserved; the legacy ordinary-session ACL is
 not a new authorization contract for peer context. Claude review is optional,
 including releases; required CI and native independent review remain gates.
@@ -468,6 +479,13 @@ scope decision changes the experience.
 
 ### Read retained session metadata
 
+**Historical API-shape examples:** these commands document bounded client
+interfaces, not fresh execution permission. Both fixed probe IDs are consumed;
+Claude's named/result reads are consumed too. Codex reads remain zero, but their
+preparation is stopped under Q-27. Do not copy these examples into the current
+campaign or substitute a new key. Follow the current pickup brief and obtain any
+required bounded owner ruling before a separately reviewed runtime action.
+
 The source directory client reads through the operator/API with the caller's
 existing project authorization. It does not grant access to private payloads
 or session control:
@@ -486,12 +504,13 @@ actual authorized discovery or full native-history retention. See
 
 ### Invoke an approved fixed rule probe
 
-Use the server-selected ID-only route after the reviewed configuration and
+For a separately authorized future campaign, use the server-selected ID-only
+route after the reviewed configuration and
 fresh complete authorized directory gate. Each permanent record permits one
 initial provider attempt:
 
 ```sh
-agent-run canary create --id rule-canary-claude-1011 --json --once
+agent-run canary create --id NEW_APPROVED_FIXED_ID --json --once
 ```
 
 The receipt distinguishes original creation from an existing original; neither
@@ -503,7 +522,8 @@ not enable general private admission or select Codex fleet routing. See
 
 ### Read a fixed probe's retained result
 
-After accepting the original HTTP201 receipt, read that named Session once:
+For a separately reviewed read, after accepting the original HTTP201 receipt,
+read that named Session once:
 
 ```sh
 agent-run show ORIGINAL_SESSION_NAME --json --once
@@ -519,7 +539,7 @@ After the result reader is deployed, use the original Session UID from the
 accepted creation receipt and the named context from authorized discovery:
 
 ```sh
-agent-run canary result --id rule-canary-claude-1011 \
+agent-run canary result --id APPROVED_FIXED_ID \
   --session-uid ORIGINAL_SESSION_UID --context PUBLISHED_CONTEXT_NAME --json --once
 ```
 

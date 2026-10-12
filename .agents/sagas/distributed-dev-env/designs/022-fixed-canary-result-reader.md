@@ -3,6 +3,13 @@
 Status: implementation contract ratified by the driving session, 2026-10-12 UTC.
 Tracking: #173, #174; ADR-003 and DESIGN-016/020/021.
 
+**Current checkpoint, 2026-10-12:** source/result-reader delivery is accepted
+separately from runtime output. Both fixed IDs are consumed; Claude's one stored
+result is a weekly-limit response, and Codex reads remain zero under stopped
+Q-27 preparation. “Unstarted” below records the original contract state.
+Follow the [pickup brief](../../../CLAUDE-RESUME-2026-10-12.md) and
+[latest probe record](../verification/codex-fixed-rule-probe-2026-10-12.md).
+
 ## Concrete blocker
 
 The initiating `dev/dev-env` client can create the two trusted fixed probes and
