@@ -353,3 +353,12 @@ Served model, usage, cost, full history, physical stop and capture completeness
 stay Unknown, as for the earlier canaries. The bootstrap reference clone of
 `sigoalumni-org` also proves authorization for that repository, but no task
 pin. Q-24 and the owner pilot are unaffected.
+
+**Run, 2026-10-12.** The canary ran once. Root acceptance `dd5dee24` holds items
+1 and 3 to 7 and fails item 2: catalog bootstrap ended `Partial` because one
+repository tracks a symlink, which #237 fixes in source. The runner read the
+boot log after the wait saw the task result and before the named read. The Root
+recorded that order as a deviation, `bootlog-before-named-read`, and accepted
+it, because both conditions rest on the same Session status. The
+[Sigo private-repo canary record](../verification/sigo-private-canary-2026-10-12.md)
+has the details.
