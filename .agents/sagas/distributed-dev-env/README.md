@@ -1,5 +1,16 @@
 # Saga: distributed-dev-env (dev-env v2)
 
+The [private-budget ownership and runtime checkpoint](verification/private-budget-ownership-2026-10-12.md)
+records the next bounded #154 source proof and default refusal, with private
+dispatch still disabled. Focused checks pass; native review and required CI
+remain source gates. It also supersedes the historical Directory TLS-only state:
+two complete empty pages succeeded but expired before any Create. Three logical
+reads and both expired windows remain recorded; no key, Create or provider turn
+was consumed. The explicit sequencing successor needs independent review before
+another read. Signed v2.23 publication is accepted separately, not deployed.
+Actual rules/history/coordination/dispatch and concurrent owner acceptance remain
+open, and Q-24 still gates native Codex isolation and fleet UX.
+
 The [fixed result-reader delivery record](verification/canary-result-2026-10-12.md)
 records merged #208, published v2.22.0, a bound local client and exact-source signed
 operator publication. Image-only haynes-ops #3825 merged as `b80cac13` after required
