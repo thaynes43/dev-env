@@ -12,8 +12,8 @@ Runnable private dispatch and #160 recovery remain unaccepted.
 
 The public-CA correction produced two complete empty Directory pages. Both
 expired before Create; three logical reads include the retained initial TLS
-failure. Final Create review arrived too late for attempt 3's Root ruling, and
-the pre-spawn guard refused execution. Root receipt `45a9f745` preserves that
+failure. Final Create review preceded attempt 3's Root ruling expiry; the later
+pre-spawn freshness check nevertheless refused execution. Root receipt `45a9f745` preserves that
 refusal and artifact-absence evidence. No Create/helper/POST ran, no fixed key
 was consumed and no fourth read is authorized by the expired plan. An inert
 sequencing correction is under review; unchanged 300-second freshness and the
