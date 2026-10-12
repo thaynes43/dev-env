@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -265,17 +266,106 @@ var guardedCalls = []struct {
 
 // TestOnlyTheGuardDeletes reads this package's source. A Delete or DeleteAllOf
 // call may appear only in deletePod, after podRemovalAllowed, and in
-// deleteVolume, after volumeRemovalAllowed; RemoveFinalizer only in
-// releaseSession, which only releaseIfEmpty calls, and in releaseVolume, which
-// asks volumeRemovalAllowed and which only deleteVolume calls. A new delete path
-// cannot slip in without changing this test, which is where review looks (5.1).
+// deleteVolume, after volumeRemovalAllowed, and each Delete names its object by
+// UID (client.Preconditions), so a same-named replacement never goes in its
+// place; RemoveFinalizer only in releaseSession, which only releaseIfEmpty
+// calls, and in releaseVolume, which asks volumeRemovalAllowed and which only
+// deleteVolume calls. Any other write of a finalizer or owner reference list (a
+// JSON or merge patch naming finalizers or ownerReferences, SetFinalizers,
+// SetOwnerReferences and their kin, an assignment to or an in-place slices
+// edit of .Finalizers or .OwnerReferences) may appear only in the
+// releaseWriters, whose one caller and guard guardedCalls pins; and no
+// whole-object Update may appear at all, because it can drop both lists. A new
+// delete or release path cannot slip in without changing this test, which is
+// where review looks (5.1). The scan reads syntax, not types: it catches the
+// ways TestGuardScanCatchesReleaseWrites lists, not every conceivable one.
 func TestOnlyTheGuardDeletes(t *testing.T) {
-	files, err := filepath.Glob("*.go")
+	scan := scanGuards(t, ".")
+	for _, v := range scan.violations {
+		t.Error(v)
+	}
+	// The test must see every call it guards, once, and every release writer
+	// write, or it proves nothing.
+	for _, g := range guardedCalls {
+		if n := scan.seen[g.call+" in "+g.in]; n != 1 {
+			t.Errorf("%s in %s: seen %d times, want once", g.call, g.in, n)
+		}
+	}
+	for fn := range releaseWriters {
+		if scan.seen["release in "+fn] == 0 {
+			t.Errorf("%s writes no finalizer or owner reference; drop it from releaseWriters", fn)
+		}
+	}
+}
+
+// releaseWriters are the functions that may write a finalizer or owner
+// reference list by other means than RemoveFinalizer. Each releases one
+// retained object by a JSON patch that tests its UID and resourceVersion, and
+// guardedCalls pins the one caller of each and the guard it asks first.
+var releaseWriters = map[string]bool{
+	"detachPrivateHome":                true,
+	"releaseRetainedSharedSession":     true,
+	"releaseNeverStartedSharedSession": true,
+}
+
+// releaseFields are the metadata lists whose loss lets an object go: the
+// finalizers that hold it, and the owner references the garbage collector
+// follows.
+var releaseFields = map[string]bool{"Finalizers": true, "OwnerReferences": true}
+
+// releaseSetters write a finalizer or owner reference list wholesale.
+var releaseSetters = map[string]bool{
+	"SetFinalizers": true, "SetOwnerReferences": true, "RemoveOwnerReference": true,
+	"SetOwnerReference": true, "SetControllerReference": true,
+}
+
+// sliceEditors are the slices functions that change a slice in place.
+var sliceEditors = map[string]bool{
+	"Delete": true, "DeleteFunc": true, "Replace": true, "Insert": true, "Compact": true, "CompactFunc": true,
+	"Reverse": true, "Sort": true, "SortFunc": true, "SortStableFunc": true,
+}
+
+// TestGuardScanCatchesReleaseWrites runs the scan over testdata/guardscan, a
+// file that is never compiled, where each function deletes or releases outside
+// the guards in a different way. The scan must name every one of them, or
+// TestOnlyTheGuardDeletes passing proves less than it claims.
+func TestGuardScanCatchesReleaseWrites(t *testing.T) {
+	scan := scanGuards(t, filepath.Join("testdata", "guardscan"))
+	for _, fn := range []string{
+		"rawFinalizerReplace", "rawFinalizerRemove", "rawOwnerReplace", "mergeFinalizerNull", "mapPatchFinalizers",
+		"setFinalizersThenUpdate", "setOwnersThenPatch", "assignFinalizersThenPatch", "assignNestedOwnersThenPatch",
+		"deleteFuncInPlace", "removeOwnerThenPatch", "wholeObjectUpdate", "unguardedDelete", "unguardedRemoveFinalizer",
+		"deletePod",
+	} {
+		if !slices.ContainsFunc(scan.violations, func(v string) bool { return strings.Contains(v, " in "+fn+";") }) {
+			t.Errorf("the guard scan does not catch %s", fn)
+		}
+	}
+}
+
+// guardScan is what scanGuards found: one message per violation, and how often
+// it saw each allowed guarded call.
+type guardScan struct {
+	violations []string
+	seen       map[string]int
+}
+
+// scanGuards parses the non-test Go files in dir and checks every call against
+// guardedCalls.
+func scanGuards(t *testing.T, dir string) guardScan {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(dir, "*.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(files) == 0 {
+		t.Fatalf("no Go files in %s", dir)
+	}
 	fset := token.NewFileSet()
-	seen := map[string]int{}
+	scan := guardScan{seen: map[string]int{}}
+	report := func(pos token.Pos, fn, format string, args ...any) {
+		scan.violations = append(scan.violations, fmt.Sprintf("%s: in %s; ", fset.Position(pos), fn)+fmt.Sprintf(format, args...))
+	}
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
@@ -294,22 +384,45 @@ func TestOnlyTheGuardDeletes(t *testing.T) {
 				continue
 			}
 			first := map[string]token.Pos{}
+			release := func(pos token.Pos, what string) {
+				if releaseWriters[fn.Name.Name] {
+					scan.seen["release in "+fn.Name.Name]++
+					return
+				}
+				report(pos, fn.Name.Name, "%s writes a finalizer or owner reference list; only the releaseWriters may (5.1, D-45)", what)
+			}
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				switch n := n.(type) {
+				case *ast.BasicLit:
+					if n.Kind == token.STRING && (strings.Contains(n.Value, "finalizers") || strings.Contains(n.Value, "ownerReferences")) {
+						release(n.Pos(), "a patch naming "+n.Value)
+					}
+				case *ast.AssignStmt:
+					for _, lhs := range n.Lhs {
+						if field := releaseField(lhs); field != "" {
+							release(lhs.Pos(), "an assignment to ."+field)
+						}
+					}
+				}
 				call, ok := n.(*ast.CallExpr)
 				if !ok {
 					return true
 				}
-				name := ""
-				switch f := call.Fun.(type) {
-				case *ast.SelectorExpr:
-					name = f.Sel.Name
-				case *ast.Ident:
-					name = f.Name
+				name := calleeName(call)
+				if releaseSetters[name] {
+					release(call.Pos(), name)
+				}
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sliceEditors[name] && isIdent(sel.X, "slices") && len(call.Args) > 0 {
+					if field := releaseField(call.Args[0]); field != "" {
+						release(call.Pos(), "slices."+name+" on ."+field)
+					}
+				}
+				if name == "Update" && !onSubresource(call) {
+					report(call.Pos(), fn.Name.Name, "a whole-object Update can drop finalizers and owner references; patch through a guarded function instead")
 				}
 				if _, ok := first[name]; !ok {
 					first[name] = call.Pos()
 				}
-				at := fset.Position(call.Pos())
 				guarded := false
 				for _, g := range guardedCalls {
 					if g.call != name {
@@ -319,27 +432,106 @@ func TestOnlyTheGuardDeletes(t *testing.T) {
 					if g.in != fn.Name.Name {
 						continue
 					}
-					seen[g.call+" in "+g.in]++
+					scan.seen[g.call+" in "+g.in]++
 					if g.guard != "" {
 						if pos, ok := first[g.guard]; !ok || pos > call.Pos() {
-							t.Errorf("%s: %s calls %s before it asks %s", at, fn.Name.Name, name, g.guard)
+							report(call.Pos(), fn.Name.Name, "%s is called before %s is asked", name, g.guard)
 						}
+					}
+					if name == "Delete" && !hasUIDPrecondition(call) {
+						report(call.Pos(), fn.Name.Name, "Delete names its object by name only; pass client.Preconditions{UID: ...}")
 					}
 					return true
 				}
 				if guarded || name == "DeleteAllOf" {
-					t.Errorf("%s: %s in %s; only the guarded functions may (5.1, D-51)", at, name, fn.Name.Name)
+					report(call.Pos(), fn.Name.Name, "%s outside the guarded functions (5.1, D-51)", name)
 				}
 				return true
 			})
 		}
 	}
-	// The test must see every call it guards, once, or it proves nothing.
-	for _, g := range guardedCalls {
-		if n := seen[g.call+" in "+g.in]; n != 1 {
-			t.Errorf("%s in %s: seen %d times, want once", g.call, g.in, n)
+	return scan
+}
+
+// releaseField is "Finalizers" or "OwnerReferences" when e is that field of
+// some object, or an element of it, and "" otherwise.
+func releaseField(e ast.Expr) string {
+	for {
+		switch x := e.(type) {
+		case *ast.SelectorExpr:
+			if releaseFields[x.Sel.Name] {
+				return x.Sel.Name
+			}
+			return ""
+		case *ast.IndexExpr:
+			e = x.X
+		case *ast.SliceExpr:
+			e = x.X
+		case *ast.ParenExpr:
+			e = x.X
+		default:
+			return ""
 		}
 	}
+}
+
+// onSubresource reports whether call is X.Status().Update(...) or
+// X.SubResource(...).Update(...), which cannot touch metadata.
+func onSubresource(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	inner, ok := sel.X.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	name := calleeName(inner)
+	return name == "Status" || name == "SubResource"
+}
+
+// hasUIDPrecondition reports whether a Delete call passes a
+// client.Preconditions literal that sets UID.
+func hasUIDPrecondition(call *ast.CallExpr) bool {
+	for _, arg := range call.Args {
+		lit, ok := arg.(*ast.CompositeLit)
+		if !ok {
+			continue
+		}
+		var typ string
+		switch ty := lit.Type.(type) {
+		case *ast.SelectorExpr:
+			typ = ty.Sel.Name
+		case *ast.Ident:
+			typ = ty.Name
+		}
+		if typ != "Preconditions" {
+			continue
+		}
+		for _, elt := range lit.Elts {
+			if kv, ok := elt.(*ast.KeyValueExpr); ok && isIdent(kv.Key, "UID") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isIdent reports whether e is the identifier name.
+func isIdent(e ast.Expr, name string) bool {
+	id, ok := e.(*ast.Ident)
+	return ok && id.Name == name
+}
+
+// calleeName is the name a call is made by: the method or the function.
+func calleeName(call *ast.CallExpr) string {
+	switch f := call.Fun.(type) {
+	case *ast.SelectorExpr:
+		return f.Sel.Name
+	case *ast.Ident:
+		return f.Name
+	}
+	return ""
 }
 
 // A hold pod runs no agent (D-55), so the guard judges it by what it is for: it

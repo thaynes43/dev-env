@@ -38,6 +38,16 @@ then `removePod`; terminal/never-started bypasses rescue and passes the old
 A prior retained condition does not prevent it. Protecting only the final delete
 would still admit legacy rescue/exec for a running private Pod, hence both guards.
 
+Scope note (2026-10-12, #91 history-07): this contract binds the operator. A
+human's foreground cascade (`kubectl delete --cascade=foreground`) lets the
+garbage collector delete the original Pod, which carries no finalizer; DESIGN-001
+D-45 records that human-only exception, and the API's reap uses background
+propagation. HOME keeps its finalizer either way.
+`TestPrivateHistoryForegroundAndBackgroundDeleteKeepProtectiveFinalizers` pins
+both policies with a real running executor Pod: background keeps the same Pod
+UID with no rescue, and after a foreground cascade the operator creates no
+replacement and keeps the executor record with StopState Unknown.
+
 ## Affected paths and acceptance
 
 Affect `internal/controller/guard.go`, `internal/controller/reconciler.go` and at
