@@ -13,9 +13,11 @@ ordinal-zero context identity. The Session reports Failed/exit 1; underlying cau
 physical stop, history and pilot acceptance remain open. The one fixed result
 read retained the 49-byte weekly-limit response, reporting reset at 12pm UTC;
 no rule markers appear and Claude rule loading is unaccepted. Preserve the
-original and do not retry its consumed ID or substitute a paid API. Do not repost, replace or
-rearm the original. The next permitted preparation is one separately reviewed
-named Session GET, then a separately gated fixed result read; no polling or logs.
+original and do not retry its consumed ID or substitute a paid API. Native saved
+review `c3ad5658` and Root `54f89e02` accept retained-result identity and source
+assertions only. Both named and result reads are consumed; no polling, logs,
+repost, replacement or rearm follows. Next Codex preparation must account for
+the exact existing original on a fresh Directory page before its first Create.
 
 Source #213 merged as `b3aa4d93` with focused tests, required CI and native review
 passed. Release #214 merged as `78879c4a`, publishing v2.24.0. The new ownership
