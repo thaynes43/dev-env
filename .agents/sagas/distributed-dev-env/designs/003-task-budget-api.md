@@ -26,9 +26,25 @@ live owning Pod UID fence every admission. Pod replacement does not reset budget
 `dev-env.haynesops.com/task-budget: retained-v1` and data key `ledger.json`.
 There are no owner references or delete route. Live reads and resourceVersion
 compare-and-swap retain worker, event, blocker, escalation and extension history.
-Conflicts retry at most five times. Unknown writes require exact readback; they
-are never blindly replayed. History is bounded at 512 events, 64 workers and
-32 extensions; exhaustion stops admission instead of dropping prior evidence.
+Conflicts retry at most five times. A write the API server accepts is confirmed
+from its own response: this writer's exact data at a new resourceVersion. A later
+write by another replica supersedes it; it does not make it unknown. Only a write
+whose result is unknown (a timeout or a lost response) is read back. Exactly this
+writer's data at a new resourceVersion confirms it; anything else stays
+unavailable, and the write is never blindly replayed. A call that changes nothing
+durable except elapsed-time accounting writes nothing; the next write charges
+that time, so frequent observation does not add write contention.
+
+Each replica stamps `AccountedAt` from its own wall clock. A replica whose clock
+trails the stored `AccountedAt` by at most five seconds uses the stored time and
+charges nothing for that gap. A larger backward step is unavailable.
+
+History is bounded at 512 retained events, 64 workers and 32 extensions;
+exhaustion stops admission instead of dropping prior evidence. Heartbeat and
+activity events are observations: a bound caller may send them, but they are
+never retained, so they cannot fill the history. Each worker has at most one stop
+receipt, and stop receipts sit outside the 512 bound (at most 64), so a full
+history never refuses one.
 
 The ledger persists a limit latch before a stop request. A request to stop is not
 proof that execution stopped. A missing Pod or heartbeat is not proof either.
@@ -121,6 +137,16 @@ original Session; a retained reservation without a Session refuses retry.
 Unknown creation remains charged until independent proof; an
 exhausted naming attempt also retains its conservative reservation. No rollback
 infers non-launch from object absence or races an idempotent concurrent request.
+
+A child whose one Pod create was never reserved is different: the ledger itself
+shows `launchRequested` false and no Pod UID, and every managed Pod create is
+reserved there first. Once its session is suspended or being deleted, has no
+recorded Pod name, and an uncached read finds no Pod, the controller records a
+`worker-stop` receipt with evidence kind `managed-never-launched`, and the worker
+stops being charged. The ledger compare-and-swap orders that receipt against
+`ReserveManagedLaunch`: whichever commits first wins, so a closed worker never
+launches and a reserved launch is never closed this way. A reservation whose
+Session was never observed stays charged, as above.
 
 The server writes these AgentSession annotations:
 

@@ -1,6 +1,6 @@
 # Task budgets and owned Codex execution
 
-Implementation design under accepted Q-23/D-84. Updated 2026-10-10 UTC.
+Implementation design under accepted Q-23/D-84. Updated 2026-10-12 UTC.
 The budget and owned-executor work are not deployed. This document specifies
 the controls and the evidence required to enable them.
 
@@ -46,7 +46,9 @@ The operator stores each logical task's ledger in a protected ConfigMap.
 The resource has no session/pod owner reference and no automatic deletion path.
 Replacing a pod, resuming a conversation or changing executors does not create
 a fresh ledger. Kubernetes resource-version compare-and-swap protects concurrent
-updates. An uncertain write is read back before another attempt.
+updates. The API server's response confirms an accepted write, even when another
+replica writes next. Only an uncertain write is read back, and it is never
+blindly replayed.
 
 The immutable binding identifies the logical task, authority epoch, absolute
 deadline, host and exact pod UID. Session and child identity come from the
@@ -67,7 +69,8 @@ values rather than an unlimited campaign. The accepted stall default remains
 60 minutes without evidenced progress, or three failed attempts at the same
 unresolved blocker, whichever comes first.
 
-Heartbeats and activity do not move the progress timestamp. A progress update
+Heartbeats and activity do not move the progress timestamp, and the ledger does
+not retain them, so they cannot fill its bounded history. A progress update
 needs evidence bound to the success condition and an independent verifier.
 The first implementation must refuse an unsupported evidence kind rather than
 accept a caller's `verified: true` claim. A trustworthy timestamp without a
