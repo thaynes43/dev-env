@@ -1,5 +1,29 @@
 # HANDOFF: start here
 
+## Original Codex canary and stopped reader preparation — 2026-10-12 UTC
+
+The [Codex probe contract](sagas/distributed-dev-env/verification/codex-fixed-rule-probe-2026-10-12.md)
+starts from merged checkpoint #215 (`9eeb066c`). The Codex adapter passed 16
+offline checks and independent full review `55e27946`. One reviewed program
+completed Directory attempt 5 and original Codex HTTP 201 at 06:47:25 UTC,
+binding UID `f0396ab3-1abf-41bf-be4e-93ce0e43608b`. The complete page contained
+exactly the retained original Claude record; the Codex fence was fsynced before
+Create, which completed within 0.195 seconds of capture finish. Native saved
+review `c3bcc13b` and Root `f189f079` accept saved transport and original identity
+only. Both fixed IDs are permanently consumed. Current counters are Directory 5,
+Claude/Codex Create 1 each, Claude named/result reads 1 each, Codex reads 0.
+Executor, output, served model, rule loading and post-Create directory remain
+Unknown for Codex; no followup read authority exists.
+
+Reader preparation stopped after three historical-evidence indexing failures;
+untested drafts and corrected reason `0b6eeed4` remain preserved. Q-27 asks through
+the native tool for one final offline correction using a fixed set of accepted
+evidence, followed by tests and independent review; the answer is pending.
+No fourth attempt or result read is authorized. The Claude quota result and
+uncertain lifecycle receipts remain preserved. Q-24, actual both-provider rules
+and the owner pilot remain open; Claude advisory is optional/down. Earlier
+entries below are historical and must not restore zero-Create or unstarted IDs.
+
 ## First original Claude canary and released ownership seam — 2026-10-12 UTC
 
 The [current original-canary record](sagas/distributed-dev-env/verification/first-original-canary-2026-10-12.md)
