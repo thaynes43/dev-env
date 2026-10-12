@@ -280,10 +280,17 @@ Flags:
   -o name|json      print only the names, or the API's list as JSON
 `,
 	"show": `Usage: agent-run show <name> [-o json]
+       agent-run show <name> --json --once
 
 Shows one session: phase and node, the scheduler's reason while Pending, repo,
 agent, model and effort, size, the agent's state, branch and head from its last
 heartbeat, how the task ended, usage, conditions and the task itself.
+
+With explicit --json --once, reads one named Session without retry or redirect
+and prints its validated raw JSON. Missing retained provenance remains Unknown;
+the response does not prove publication acknowledgement or complete history.
+Without --once, ordinary show behavior is unchanged. --context still selects a
+kubeconfig context; it is not a published-context selector on this command.
 `,
 	"reap": `Usage: agent-run reap <name>... [-o json]
 

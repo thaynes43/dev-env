@@ -503,6 +503,18 @@ not enable general private admission or select Codex fleet routing. See
 
 ### Read a fixed probe's retained result
 
+After accepting the original HTTP201 receipt, read that named Session once:
+
+```sh
+agent-run show ORIGINAL_SESSION_NAME --json --once
+```
+
+This explicit mode refuses retries and redirects and preserves the validated
+server JSON. Match the original UID/name and retained executor provenance before
+deriving the context name. Missing or mismatched private-history or executor
+identity holds retrieval. The ordinary `show` command keeps its existing behavior;
+see [the named-read contract](../.agents/sagas/distributed-dev-env/designs/023-named-session-cli-once.md).
+
 After the result reader is deployed, use the original Session UID from the
 accepted creation receipt and the named context from authorized discovery:
 
