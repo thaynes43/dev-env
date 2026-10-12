@@ -116,12 +116,34 @@ acceptance cannot be inferred from the successful Create.
 
 **Ruling, 2026-10-12.** Tom answered Q-27 through the Claude native prompt:
 "Fix once, then read (Recommended)". The ruling allows one offline correction of
-the reader preparation. It uses a fixed list of evidence, focused tests and
-independent review. After that, it allows exactly one named read and one result
-read of the Codex original. There are no retries and no counter reset. The pending
-text above is the original record and stays as written; receipt `9a3a7a1d`,
-the failed drafts and the counters stay preserved. This entry records the ruling
-only; it does not run the correction or either read.
+the reader preparation. The correction uses a fixed list of already accepted
+evidence, focused tests and independent review. After that, the ruling allows
+exactly one named read and one result read of the Codex original. There are no
+retries and no counter reset. The pending text above is the original record and
+stays as written; receipt `9a3a7a1d`, the failed drafts and the counters stay
+preserved. This entry records the ruling only; it does not run the correction or
+either read.
+
+The answer is retained in
+`/home/dev/work/orders/dev-env-rule-canary-runtime-1011/root-q27-owner-answer-r1.json`
+(SHA256 `eaf4e6774c0c42bee210371dfa01d7c70f37c2f8d95f5ae42c8becd04106aeb9`). That
+receipt binds pending receipt `9a3a7a1d` by its full hash. The question Claude
+sent read:
+
+> Q-27: Codex's one-time rules test (rule-canary-codex-1011) finished about 8
+> hours ago, but nobody has read its result. Codex's prep script for that read
+> failed three times on its own evidence bookkeeping and stopped. May I fix that
+> prep once (with a short fixed list of already-accepted evidence), have it
+> independently reviewed, and then do the single named read and single result
+> read it was built for?
+
+The options were "Fix once, then read (Recommended)", "Fix once, ask before
+reading" and "Stop the reader work". The receipt names the original as Session
+`private-canary-3bfe28755095977c9462c269cc24dee3` (UID
+`f0396ab3-1abf-41bf-be4e-93ce0e43608b`). The receipt grants no new Create, retry,
+counter reset or widened cap. It also grants no second correction, no retry of a
+failed read, no new canary, no credential or auth repair and no cleanup of the
+original.
 
 Global private-project admission remains disabled. Actual both-provider rules,
 fresh private GitHub worktrees, claims/inbox, authorized full stopped native

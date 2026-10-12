@@ -541,9 +541,10 @@ identity holds retrieval. The ordinary `show` command keeps its existing behavio
 see [the named-read contract](../.agents/sagas/distributed-dev-env/designs/023-named-session-cli-once.md).
 
 The server-side result reader is deployed (haynes-ops #3825, operator source
-`cd966d17…`); the client ships in `agent-run` 2.22.0 and later. Use the original
-Session UID from the accepted creation receipt and the named context from
-authorized discovery:
+`cd966d17…`). The client is published in `agent-run` v2.22.0 and later but is not
+installed: task pods run 2.20.0, which lacks `canary result`. Use the accepted
+bound local client. Use the original Session UID from the accepted creation
+receipt and the named context from authorized discovery:
 
 ```sh
 agent-run canary result --id APPROVED_FIXED_ID \

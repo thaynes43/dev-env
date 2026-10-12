@@ -7,11 +7,13 @@ It grants no new runtime permission, retry budget or credential access.
 
 **Updates after preparation, 2026-10-12.** The brief was prepared from
 `f6de168` (#216). It merged as #217 (`ae7bec7`), so `main` includes the brief
-itself; references to `f6de168` below describe its starting revision. Tom then answered Q-27 through the Claude native prompt:
-"Fix once, then read (Recommended)". That allows the one offline correction in
-roadmap step 1, then exactly one named read and one result read of the Codex
-original, with no retries and no counter reset. The Q-27 "pending" text below is
-the original record; the ruling sits under it. Q-24 is still pending.
+itself; references to `f6de168` below describe its starting revision. Tom then
+answered Q-27 through the Claude native prompt: "Fix once, then read
+(Recommended)". That allows the one offline correction in roadmap step 1, using a
+fixed list of already accepted evidence. Then it allows exactly one named read and
+one result read of the Codex original, with no retries and no counter reset.
+The Q-27 "pending" text below is the original record; the ruling sits under it.
+Q-24 is still pending.
 
 ## Your assignment
 
@@ -247,9 +249,9 @@ pending decision through its supported native phone prompt; no answer means stop
 
 **Ruling, 2026-10-12.** Tom answered Q-27 through the Claude native prompt:
 "Fix once, then read (Recommended)". One offline correction with a fixed list of
-evidence, focused tests and independent review is allowed. After that, exactly
-one named read and one result read of the Codex original are allowed. There are no
-retries and no counter reset. The
+already accepted evidence, focused tests and independent review is allowed. After
+that, exactly one named read and one result read of the Codex original are
+allowed. There are no retries and no counter reset. The
 [Codex probe record](sagas/distributed-dev-env/verification/codex-fixed-rule-probe-2026-10-12.md#q-27-one-final-reader-preparation-correction)
 holds the ruling.
 

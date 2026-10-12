@@ -11,17 +11,22 @@ the historical work order for the first build session.
 
 Tom answered Q-27 on 2026-10-12 through the Claude native prompt:
 "Fix once, then read (Recommended)". The ruling allows one offline correction of
-the Codex reader preparation. It uses a fixed list of evidence, focused tests and
-independent review. After that, it allows exactly one named read and one result
-read of the Codex original. There are no retries and no counter reset. The
+the Codex reader preparation. The correction uses a fixed list of already
+accepted evidence, focused tests and independent review. After that, the ruling
+allows exactly one named read and one result read of the Codex original. There
+are no retries and no counter reset. The
 [Codex probe record](sagas/distributed-dev-env/verification/codex-fixed-rule-probe-2026-10-12.md#q-27-one-final-reader-preparation-correction)
-keeps the original pending text and adds the ruling under it. This docs update
-records the ruling only; it does not run the correction or either read.
+keeps the original pending text. Under it, it adds the ruling, the question Claude
+sent and the hash of the saved answer receipt. This docs update records the ruling
+only; it does not run the correction or either read.
 
 Q-24 is still pending: no owner answer is recorded. Do not ask it again; check for
 an actual answer first. The [rulings table](#rulings) now runs through Q-27.
-Superseded blocks lower on this page carry a one-line historical label that
-points to the current state. Their original text and receipts are unchanged.
+This update labels the superseded blocks it found lower on this page. Each label
+is one line in italics or a quoted note and points to the current state. The page
+is long, so an unlabelled entry is not thereby current: the newest entries and the
+pickup brief control. Original text and receipts are kept. Retitled headings
+record their first title, and the front-door paragraph moved to the top.
 
 ## Claude pickup and controlling roadmap — 2026-10-12, America/New_York
 
@@ -74,16 +79,19 @@ Directory attempt 4 and the first trusted Claude Create at 05:28:22 UTC, within
 and Root receipt acceptance `2d283d67` bind original HTTP 201 UID
 `45a614cb-f537-441e-a5c1-33b66a285521`. The Claude ID is permanently consumed;
 Codex's fixed ID remains unstarted *(historical: Codex's original HTTP 201
-followed at 06:47:25 UTC; see the entry above)*. A single named read and native saved review bind retained executor metadata and
-ordinal-zero context identity. The Session reports Failed/exit 1; underlying cause,
-physical stop, history and pilot acceptance remain open. The one fixed result
-read retained the 49-byte weekly-limit response, reporting reset at 12pm UTC;
-no rule markers appear and Claude rule loading is unaccepted. Preserve the
-original and do not retry its consumed ID or substitute a paid API. Native saved
-review `c3ad5658` and Root `54f89e02` accept retained-result identity and source
-assertions only. Both named and result reads are consumed; no polling, logs,
-repost, replacement or rearm follows. Next Codex preparation must account for
-the exact existing original on a fresh Directory page before its first Create.
+followed at 06:47:25 UTC; see the entry above)*. A single named read and native
+saved review bind retained executor metadata and ordinal-zero context identity.
+The Session reports Failed/exit 1; underlying cause, physical stop, history and
+pilot acceptance remain open. The one fixed result read retained the 49-byte
+weekly-limit response, reporting reset at 12pm UTC; no rule markers appear and
+Claude rule loading is unaccepted. Preserve the original and do not retry its
+consumed ID or substitute a paid API. Native saved review `c3ad5658` and Root
+`54f89e02` accept retained-result identity and source assertions only. Both
+named and result reads are consumed; no polling, logs, repost, replacement or
+rearm follows. Next Codex preparation must account for the exact existing
+original on a fresh Directory page before its first Create.
+*(Historical: that Codex preparation and Create followed at 06:47:25 UTC; see the
+entry above.)*
 
 Source #213 merged as `b3aa4d93` with focused tests, required CI and native review
 passed. Release #214 merged as `78879c4a`, publishing v2.24.0. The new ownership
@@ -94,7 +102,10 @@ have not been restarted. Claude advisory reviews are optional/down. Q-24 remains
 pending; Q-26's one authorized R4 correction is complete. Earlier entries below
 are historical and must not overwrite these counters or original identity.
 
-## Private-budget ownership source and current canary gate — 2026-10-12 UTC
+## Private-budget ownership source and canary gate — 2026-10-12 UTC
+
+*Historical entry, first titled "Private-budget ownership source and current
+canary gate". Both fixed canaries ran later; see the entries above.*
 
 The [ownership and runtime checkpoint](sagas/distributed-dev-env/verification/private-budget-ownership-2026-10-12.md)
 records the bounded #154 source unit: original Session/HOME/intent/directory/Pod
@@ -111,11 +122,12 @@ pre-spawn freshness check nevertheless refused execution. Root receipt `45a9f745
 refusal and artifact-absence evidence. No Create/helper/POST ran, no fixed key
 was consumed and no fourth read is authorized by the expired plan. An inert
 sequencing correction is under review *(historical: the reviewed sequencer later
-created the Claude and Codex originals; see the entries above)*; unchanged 300-second freshness and the
-permanent once-only key remain required. v2.23 is signed and published, not
-deployed; fixed task pins remain v2.20. Actual both-provider rule loading and
-the owner pilot remain open. Q-24 is pending; Q-26's authorized final R4
-correction is already satisfied. Claude advisory remains optional/down.
+created the Claude and Codex originals; see the entries above)*; unchanged
+300-second freshness and the permanent once-only key remain required. v2.23 is
+signed and published, not deployed; fixed task pins remain v2.20. Actual
+both-provider rule loading and the owner pilot remain open. Q-24 is pending;
+Q-26's authorized final R4 correction is already satisfied. Claude advisory
+remains optional/down.
 
 ## Fixed result reader built and released — 2026-10-12 UTC
 
@@ -206,6 +218,11 @@ bounded admission-only DeepCopy preview fix must retain real runtime UID checks.
 Both fixes require source checks/native review and signed delivery before either
 permanent POST. No Job-output or live-log route supplies a retained receipt.
 Actual rule acceptance and the owner pilot remain open; Q-24 is pending.
+
+*Historical paragraphs: later on 2026-10-12 the DESIGN-022 reader shipped in
+v2.22.0 and Ops #3825 delivered operator `sha-cd966d1`. Complete Directory pages
+were read and both fixed canaries were created. Task/template pins are still
+v2.20. See the entries above.*
 
 ## Client increment — 2026-10-11 UTC
 
@@ -880,8 +897,9 @@ permanent roots, native routing or actual Claude/Codex rule loading. Private
 project admission remains disabled. #173 and #91 remain open.
 
 Initial read-only verification confirmed operator `sha-7a634e5` and worker template
-2.12.0 (2.13.0 in the entry above; the installed template is now 2.20.0, see the
-[pickup brief](CLAUDE-RESUME-2026-10-12.md#what-is-actually-delivered)), two Ready operator replicas, private-project admission disabled and no
+2.12.0 (the template is now 2.13.0 above) *(historical: the installed template is
+now 2.20.0; see the [pickup brief](CLAUDE-RESUME-2026-10-12.md#what-is-actually-delivered))*,
+two Ready operator replicas, private-project admission disabled and no
 AgentSessions. The trusted catalog exists with one dev-env repository and empty
 common-rule text. This does not establish actual provider rule loading.
 Protected runtime identities and the failed fixture ledger have a private
@@ -1343,9 +1361,10 @@ acceptance still gate activation; no key values are exposed.
 
 ## State on 2026-10-08
 
-*Historical state. Its work order (plan 02, approvals, parity, keeper minting) and
-its note on the 2026-10-12 weekly-limit reset are historical. The current order is the pickup
-brief's [six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap).*
+*Historical state. Its work order (plan 02, approvals, parity, keeper minting)
+and its note on the 2026-10-12 weekly-limit reset are historical. The current
+order is the pickup brief's
+[six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap).*
 
 - **dev-env v2 resumed on Codex on 2026-10-08**, under Tom's coordinator work
   order. Work proceeds in order: finish plan 02, assess approvals inside the
@@ -1654,7 +1673,7 @@ order, first titled "What happens first". Each item in it is done or superseded.
 | [adrs/002-shared-project-workspaces.md](sagas/distributed-dev-env/adrs/002-shared-project-workspaces.md) | Accepted 2026-10-09 and kept as history. ADR-003 supersedes its shared workspace, RWX storage and CephFS trial. |
 | [adrs/003-session-coordination-private-repositories.md](sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md) | The controlling scope since 2026-10-10: share rules, coordination and authorized context; keep repositories and task worktrees per pod. |
 | [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 onward and their resolutions in 15, the decisions (D-01 onward) in 16. |
-| [designs/](sagas/distributed-dev-env/designs/) | DESIGN-002 to DESIGN-023: the bounded contracts for budgets, private projects, rules, history, directory, claims, inbox, provenance and the once-only clients. The pickup brief maps each to its source. |
+| [designs/](sagas/distributed-dev-env/designs/) | DESIGN-002 to DESIGN-023: the bounded contracts for budgets, private projects, rules, history, directory, claims, inbox, provenance and the once-only clients. The pickup brief's review table maps each to source paths, except DESIGN-012 (owned wrapper permissions). |
 | [research/R-01](sagas/distributed-dev-env/research/R-01-summoned-agents-audit.md) | An audit of summoned agents today, with v2 requirements V-01 to V-17. |
 | [research/R-02](sagas/distributed-dev-env/research/R-02-remote-control-identity.md) | Remote Control identity, the evidence behind S-1, and proposals P-1 to P-12. |
 | [research/R-03](sagas/distributed-dev-env/research/R-03-claude-code-approvals.md) | Claude Code in-app approval research: hooks, managed policy, forgery paths and the plan 03 core dependency. D-70 withdraws Q-18's earlier premise; no route selected. |
@@ -1709,7 +1728,7 @@ DESIGN-001 section 15; later rows link their own record. This heading first read
 | Q-24 | **Pending.** Codex native routing for the MVP: separate paired session hosts (recommended) or one coordinator with isolated workers sharing a native failure boundary. The native question went out 2026-10-11; no owner answer is recorded and phone delivery is unverified. Do not ask again; check for an actual answer first. [DESIGN-006 Q-24](sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md#q-24-codex-mvp-native-routing), README decision 57. |
 | Q-25 | **No decision needed.** The local schema-host DNS route stopped after three attempts. Shipping uses hosted CI and saved real-API schema evidence; no DNS investigation or retry ([installation record](sagas/distributed-dev-env/verification/installation-2026-10-11.md#owner-questions-and-stopped-checks)). |
 | Q-26 | **Answered 2026-10-11:** "Allow one correction (Recommended)". One final R4 checker correction ran and Ops #3824 activation was accepted. No R5, alternate method or retry ([fixed-rule activation record](sagas/distributed-dev-env/verification/fixed-rule-activation-2026-10-11.md), [DESIGN-021](sagas/distributed-dev-env/designs/021-canary-cli.md)). |
-| Q-27 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Fix once, then read (Recommended)". One offline correction of the Codex reader preparation, with a fixed evidence list, focused tests and independent review. Then exactly one named read and one result read of the Codex original. No retries and no counter reset ([Codex probe record](sagas/distributed-dev-env/verification/codex-fixed-rule-probe-2026-10-12.md#q-27-one-final-reader-preparation-correction)). |
+| Q-27 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Fix once, then read (Recommended)". One offline correction of the Codex reader preparation, with a fixed list of already accepted evidence, focused tests and independent review. Then exactly one named read and one result read of the Codex original. No retries and no counter reset ([Codex probe record](sagas/distributed-dev-env/verification/codex-fixed-rule-probe-2026-10-12.md#q-27-one-final-reader-preparation-correction)). |
 
 **Next (historical, 2026-10-08; the current order is the pickup brief's
 [six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap)):**

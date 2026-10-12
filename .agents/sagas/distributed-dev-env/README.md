@@ -10,10 +10,10 @@ below are historical; they do not reauthorize old next steps or reset counters.
 
 **Q-27 answered, 2026-10-12.** Tom answered through the Claude native prompt:
 "Fix once, then read (Recommended)". The ruling allows one offline correction of
-the Codex reader preparation, with a fixed evidence list, focused tests and
-independent review. Then it allows exactly one named read and one result read of
-the Codex original.
-There are no retries and no counter reset. Decision 60 and the
+the Codex reader preparation, with a fixed list of already accepted evidence,
+focused tests and independent review. Then it allows exactly one named read and
+one result read of the Codex original. There are no retries and no counter reset.
+Decision 60 and the
 [Codex probe record](verification/codex-fixed-rule-probe-2026-10-12.md#q-27-one-final-reader-preparation-correction)
 hold the ruling. Q-24 is still pending with no owner answer recorded; do not ask
 it again.
@@ -333,7 +333,7 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 57 | Q-24: Codex native routing for the MVP | **OPEN** 2026-10-11 UTC | The finite pinned-source audit did not establish one-paired-entry federation of complete native chats. Native question asks separate paired session hosts versus one coordinator with isolated managed workers and a shared native failure boundary. [DESIGN-006 Q-24](designs/006-private-catalog-bootstrap.md#q-24-codex-mvp-native-routing) records consequences. Bootstrap proceeds; fleet UX waits for the ruling. No owner answer is recorded as of 2026-10-12; do not ask again, check for an actual answer first. |
 | 58 | Q-25: local schema-host DNS route | **NO DECISION NEEDED** 2026-10-11 UTC | The failed local schema-host DNS route stopped after three attempts; the owner said he did not understand the question. Shipping uses the already-authorized hosted CI and saved real-API schema evidence. No DNS investigation or retry ([installation record](verification/installation-2026-10-11.md#owner-questions-and-stopped-checks)). |
 | 59 | Q-26: one final activation-checker correction | **DECIDED** 2026-10-11 UTC (Tom) | "Allow one correction (Recommended)". One final R4 correction ran and Ops #3824 activation was accepted; the three failed preparations stay preserved. No R5, alternate method or retry ([fixed-rule activation record](verification/fixed-rule-activation-2026-10-11.md), [DESIGN-021](designs/021-canary-cli.md)). |
-| 60 | Q-27: one final Codex reader-preparation correction | **DECIDED** 2026-10-12 (Tom, through the Claude native prompt) | "Fix once, then read (Recommended)". One offline correction with a fixed evidence list, focused tests and independent review; then exactly one named read and one result read of the Codex original. No retries and no counter reset ([Codex probe record](verification/codex-fixed-rule-probe-2026-10-12.md#q-27-one-final-reader-preparation-correction)). |
+| 60 | Q-27: one final Codex reader-preparation correction | **DECIDED** 2026-10-12 (Tom, through the Claude native prompt) | "Fix once, then read (Recommended)". One offline correction with a fixed list of already accepted evidence, focused tests and independent review; then exactly one named read and one result read of the Codex original. No retries and no counter reset ([Codex probe record](verification/codex-fixed-rule-probe-2026-10-12.md#q-27-one-final-reader-preparation-correction)). |
 
 The full options, consequences and rulings for Q-01 to Q-16, and the premise
 corrections withdrawing Q-17 and Q-18, plus Q-19's first owner CA provisioning
