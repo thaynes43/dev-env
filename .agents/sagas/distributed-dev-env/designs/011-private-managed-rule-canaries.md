@@ -115,3 +115,166 @@ Managed-task success does not establish native nested rule discovery or
 complete-chat routing. New native project start/injection remains separate.
 Keep #173/#91 open for remaining client/pilot acceptance; no v1 restart/cutover,
 elevation, destructive cleanup or retired storage retry.
+
+## Private-repo canary on the Sigo alumni project — 2026-10-12 (Q-30, #173)
+
+**Why.** Both providers have now loaded the common and the repository rules in
+private v2 pods: the Codex original and Claude canary 1012. Every canary so far
+ran on `thaynes43/dev-env`, which is public. A public clone works without a
+token, so no run has proved private GitHub authorization. #173 still needs that
+proof and a fresh task pin.
+
+**Q-30.** The coordinator asked Tom through the Claude native prompt, free-text
+"Other" allowed:
+
+> To close #173 I need one more Claude canary on a private repo, proving private
+> GitHub access and a fresh pinned task worktree. The dev bot can't create repos
+> on your personal account. Could you create an empty private repo
+> thaynes43/dev-env-private-probe (a README on main is enough)? Global private
+> admission stays off; the canary reuses the spent 1012 slot.
+
+Options: "I'll create it (Recommended)", "Use an existing private repo", "Not
+now". Tom answered in free text: "All the Sigo alumni repos are private and all
+are needed for dev-env, we use them now. Why can't you use those?"
+
+The coordinator recorded this interpretation: use the existing private
+repositories `thaynes43/sigo-alumni` and `thaynes43/sigoalumni-org` instead of a
+new probe repository. Declare them as a v2 catalog project. Run the one approved
+private-repo Claude canary against it: one create, one named read and one result
+read, with no retries. Global private admission stays off. Repository visibility
+does not change. The owner answer receipt is
+`root-q30-owner-answer-r1.json` (1332 bytes, sha256
+`1490331885be14f5939fe85c81d91f186274dac089286e2343ca373bdd0b3722`), recorded at
+18:43:31 UTC.
+
+This grants no retry, no second canary, no general private project task, no
+directory read and no cleanup of any original. Running the canary is the
+coordinator's step after the GitOps change deploys.
+
+### The project
+
+| Catalog key | GitHub identity | Default branch | Visibility |
+|---|---|---|---|
+| `sigo-alumni` | `thaynes43/sigo-alumni` | `main` | private |
+| `sigoalumni-org` | `thaynes43/sigoalumni-org` | `main` | private |
+
+Project `sigo-alumni` selects both repositories. Its rules are short and
+generic. They carry no private content, only the marker
+`sigo-alumni-project-rules-20261012-9b122cd5`. They say to report that
+revision as the repository marker in an acceptance probe, because neither
+repository's own `CLAUDE.md` or `AGENTS.md` carries a marker (checked
+2026-10-12). The `dev-env` project entry is byte-identical, and so is its rules
+revision. The catalog revision covers the whole file, so it moves for both
+projects: `9c5cc110…` becomes
+`5fe34bd347f85c4b41773fbe48f815f8655945af9d73503a1ef0e89ee89aad90`. The
+`sigo-alumni` rules revision is
+`d070e7a6d7e10359ed9fa4de897d6e24be7c49ba7df2f8af39ef4317b83ceae0`.
+
+The haynes-dev-bot installation covers both repositories. The keeper mints
+installation tokens with a permission set and no repository list
+(`internal/keeper/github.go`), so the `dev-env-gh-token` Secret that the
+`rule-canary-claude` profile mounts at `/creds` reaches them. Neither repository
+uses Git LFS or submodules, so `github.com:443`, already in the canary's egress,
+is the only host involved.
+
+### The record
+
+The policy holds at most two records, one per provider (`Parse`). The new
+Claude record therefore replaces the consumed `rule-canary-claude-1012`.
+`rule-canary-codex-1011` stays byte-identical. The new record is the 1012
+record with six fields changed:
+
+| Field | Value |
+|---|---|
+| `id` | `rule-canary-claude-sigo-1012` |
+| `idempotencyKey` | `rule-canary-claude-sigo-1012-once` |
+| `project`, `repository` | `sigo-alumni`, `sigo-alumni` |
+| `catalogRevision` | `5fe34bd3…` (the new catalog) |
+| `rulesRevision` | `d070e7a6…` (the `sigo-alumni` rules) |
+
+The rest is unchanged: client `dev/dev-env`, provider `claude`, profile
+`rule-canary-claude`, model `claude-opus-5-5`, effort `xhigh`, size S, timeout
+180s, one turn, `captureOutput`, template `2.24.1-7e04fb00dc`, image
+`dev-env:2.24.1@sha256:f2713217…`, common revision `3b9b829c…` and the 227-byte
+prompt (sha256 `5a3da07a…`). The derived policy digest is
+`154c3a12ecf2cb3e7f8861737c7875052b41a0bc49ab7e20b5e75fcf874bea27`. The Session
+is `dev-agents/private-canary-a1444f4131ec7281b5d1e3130c3b5ada`.
+
+A harness at tag v2.24.1 ran `Parse`, `ValidateCommon`, `ValidateClients`,
+`Validate`, `ValidateTemplate`, `ResolveCatalog` (which includes the
+prompt-repeats-rules guard) and `CheckCommon` on the full policy. All pass. The
+prompt carries no line or marker-shaped token of the new rules. The operator's
+own `parseFlags` accepts the exact HelmRelease args.
+
+### Scope flags
+
+Only `--context-payload-read-projects` gains `sigo-alumni`. Managed output
+publication and the fixed result read both require the record's project in
+that list. Directory enrollment at Create is optional, and only listed projects
+get it. Neither capture nor the result read needs enrollment, discovery,
+claims or the inbox, so those flags stay `dev-env`.
+
+### What else the catalog change does
+
+- **codex-1011.** Its `catalogRevision` no longer matches, so its Create, its
+  result read and the controller's executor admission refuse it. Its template
+  revision already refused it after 2.24.1. All three are consumed, and its pod
+  is gone. Operator startup runs only `Parse`, `ValidateCommon` and
+  `ValidateClients`, so the operator still starts.
+- **Bootstrap reach.** Every profile in `dev-env-templates` enables private
+  catalog bootstrap. Bootstrap clones every catalog repository into the pod's
+  private HOME. It runs at agentd boot, at a private Codex host start and on an
+  explicit `agentd project-refresh`, and never on a timer. So only pods that
+  boot after the change receive the two private repositories. Nothing running
+  restarts.
+- **Admission.** General private project tasks stay off. An ordinary task that
+  names a project still refuses. The fixed canary route is the only way in.
+- **Freeze.** The Session binds the catalog's UID, resourceVersion and snapshot
+  at Create. The result read resolves the catalog again and compares all three.
+  So no catalog change, even to another project, may land between the Create
+  and the result read.
+
+### Acceptance evidence for #173
+
+The run is accepted for #173 only when all of these hold:
+
+1. **Private repository.** `gh api repos/thaynes43/sigo-alumni` reports
+   `private: true` at Create time, and so does `sigoalumni-org`.
+2. **Bootstrap and task clone, with no token warning.** The `project-bootstrap`
+   boot step reports `catalog bootstrap outcome Ready`, with all three
+   repositories `Ready`. The repo step succeeds. Neither step carries the note
+   `no GitHub token at …; cloning without one (public repos only)`, and the
+   Session's `agent.problems` names neither step.
+3. **Fetch and record lines.** The agentd boot log has
+   `fetched accepted repository thaynes43/sigo-alumni branch main at <pin> on <time>`
+   and `recorded the task source: thaynes43/sigo-alumni branch main at <pin>`.
+4. **The task-source record.** `~/.agentd/task-source.json` in the private HOME
+   is written once, before the worktree exists. It holds version 1, the
+   Session's name and UID, repo `sigo-alumni`, GitHub `thaynes43/sigo-alumni`,
+   branch `main`, commit `<pin>`, `fetchedAt`, catalog revision `5fe34bd3…` and
+   rules revision `d070e7a6…`. The log line carries the commit, the fetch line
+   carries `fetchedAt`, and the Session's bound snapshot carries both
+   revisions. The file stays in the retained HOME; nothing execs into the
+   private pod to read it.
+5. **Fresh pin.** `<pin>` equals `git ls-remote` of
+   `thaynes43/sigo-alumni refs/heads/main`, taken immediately before the
+   Create. A second read right after it brackets the fetch. If `main` moved in
+   between, the pin must equal one of the two and agree with `fetchedAt`.
+6. **Worktree.** The boot log has
+   `worktree /home/dev/work/<session> on agent/<session> from <pin> at <pin>`.
+   The named read reports branch `agent/<session>` and head equal to the pin.
+7. **Peers unchanged.** Against the pre-merge baseline, every non-operator pod
+   in `dev-env-system`, `dev-agents` and `dev` keeps its UID, restarts and
+   images. The three retained Sessions keep their UID, generation and spec.
+
+**Markers are secondary here.** Rule loading is already accepted for both
+providers. The prompt can expect the common marker
+`dev-env-common-rules-20261011-4ca29d70`. From the catalog project rules it can
+expect `sigo-alumni-project-rules-20261012-9b122cd5` as the repository marker.
+The repositories' own instructions carry none, so `Unknown` there would mean the
+project rules were not followed. It would not undo items 1 to 7.
+
+Served model, usage, cost, full history, physical stop and capture completeness
+stay Unknown, as for the earlier canaries. The bootstrap reference clone of
+`sigoalumni-org` also proves authorization for that repository, but no task
+pin. Q-24 and the owner pilot are unaffected.
