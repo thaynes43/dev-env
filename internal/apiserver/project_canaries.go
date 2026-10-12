@@ -2,6 +2,7 @@ package apiserver
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 
@@ -37,6 +38,9 @@ func (s *Server) createProjectCanary(ctx context.Context, w http.ResponseWriter,
 		return 0, nil, fromKubeError(err, "read original canary")
 	}
 	evidence, err := projectcanary.ResolveCatalog(ctx, s.Live, s.Projects.CloneOwner, record)
+	if errors.Is(err, projectcanary.ErrPromptRepeatsRules) {
+		return 0, nil, invalid(fieldError("canaryID", "the reviewed canary prompt repeats its bound project rules"))
+	}
 	if err != nil {
 		return 0, nil, invalid(fieldError("canaryID", "accepted catalog authority is unavailable or changed"))
 	}
@@ -62,6 +66,10 @@ func (s *Server) createProjectCanary(ctx context.Context, w http.ResponseWriter,
 		common, err = commonrules.Resolve(ctx, s.Live, commonrules.Digest(evidence.Snapshot))
 		if err != nil || common.CommonRevision != record.CommonRevision {
 			return 0, nil, invalid(fieldError("canaryID", "accepted common sources changed or are unavailable"))
+		}
+		// A marker the prompt supplies would make the evidence self-fulfilling.
+		if record.CheckCommon(common) != nil {
+			return 0, nil, invalid(fieldError("canaryID", "the reviewed canary prompt repeats the accepted common or header rules"))
 		}
 		sess.Spec.CommonRules, err = common.Binding()
 		if err != nil {

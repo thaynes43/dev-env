@@ -18,10 +18,21 @@ revision, exact template revision, verified immutable image, fixed bounded
 prompt/timeout/turns and idempotency key. The request contains the canary ID only;
 the fixed prompt does not contain validation marker values. No wildcard, unknown field, duplicate or caller
 override is accepted. API disabled or missing prerequisites means no creation.
-The record is trusted GitOps input, so no code refuses a marker-bearing prompt;
-tests check the rendered values instead (2026-10-12, #91 rules-003): the operator's
-pod (`TestProjectCanaryRenderedPromptAndArgsCarryNoRuleLine`) and agentd's launch
-(`TestProjectRulesReachTheAgentOnlyAsRuleInputs`) carry no line of the bound rules
+The operator enforces that on the reviewed record (2026-10-12, #91 rules-003;
+this replaces the same day's "tests check the rendered values instead", which
+left the record itself unchecked). `projectcanary.CheckPrompt` refuses a prompt
+that contains a trimmed line of at least 16 bytes of the bound text, or one of
+its marker-shaped tokens even mid-sentence (at least 12 characters joined by `-`
+or `_`, with a letter, and with a digit or no lowercase letter). `ResolveCatalog`
+applies it to the project rules, so the create route, the controller before an
+executor and the result reader all refuse such a record; `Record.CheckCommon`
+applies it to the retained common text and Codex header in those same three
+places. A refusal is fail-closed: it only stops a record that already breaks this
+contract, and the record is reworded. The live records' prompt passes against
+their bound revisions. Separately, the operator's pod
+(`TestProjectCanaryRenderedPromptAndArgsCarryNoRuleLine`) and agentd's launch
+(`TestProjectRulesReachTheAgentOnlyAsRuleInputs`), each with and without a
+retained common snapshot, carry no line of the bound rules, common text or header
 outside the rule inputs.
 
 Require trusted named catalog/clone authority, private-history retention and

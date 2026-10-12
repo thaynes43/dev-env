@@ -6,10 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
@@ -39,6 +41,11 @@ const (
 )
 
 var ErrRefused = errors.New("private project canary policy or original authority is unconfirmed")
+
+// ErrPromptRepeatsRules refuses a reviewed record whose fixed prompt repeats
+// bound instruction text. The canary's evidence is the agent reporting the rule
+// markers it loaded, so a marker the prompt supplies proves nothing (DESIGN-011).
+var ErrPromptRepeatsRules = fmt.Errorf("%w: the fixed prompt repeats bound rule text", ErrRefused)
 var digestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var imagePattern = regexp.MustCompile(`^ghcr\.io/thaynes43/dev-env:[A-Za-z0-9_.-]+@sha256:[a-f0-9]{64}$`)
 var templateRevisionPattern = regexp.MustCompile(`^(?:[A-Za-z0-9_.-]+-)?[a-f0-9]{10}$`)
@@ -159,7 +166,9 @@ type CatalogEvidence struct {
 	ResourceVersion string
 }
 
-// ResolveCatalog always reads only the accepted named API ConfigMap.
+// ResolveCatalog always reads only the accepted named API ConfigMap. It refuses
+// a record whose prompt repeats the bound project rules (CheckPrompt), so the
+// API, the controller and the result reader all refuse one.
 func ResolveCatalog(ctx context.Context, reader client.Reader, owner string, r Record) (CatalogEvidence, error) {
 	var out CatalogEvidence
 	if reader == nil || !projectcatalog.ValidName(owner) || r.Validate() != nil {
@@ -177,12 +186,58 @@ func ResolveCatalog(ctx context.Context, reader client.Reader, owner string, r R
 	if err != nil || snapshot.RulesRevision() != r.RulesRevision || strings.TrimSpace(snapshot.Rules()) == "" || strings.Split(snapshot.Selected().GitHub, "/")[0] != owner {
 		return out, ErrRefused
 	}
+	if err := CheckPrompt(r.Prompt, snapshot.Rules()); err != nil {
+		return out, err
+	}
 	out.Snapshot, err = json.Marshal(snapshot)
 	if err != nil || len(out.Snapshot) > projectcatalog.MaxSnapshotBytes {
 		return CatalogEvidence{}, ErrRefused
 	}
 	out.UID, out.ResourceVersion = string(cm.UID), cm.ResourceVersion
 	return out, nil
+}
+
+// minRuleLine is the shortest trimmed rule line CheckPrompt compares whole.
+// Shorter lines are mostly the tails of wrapped prose ("session.", "PR."), which
+// carry no instruction of their own; markers are caught as tokens instead.
+const minRuleLine = 16
+
+// ruleToken is a run of the characters a rule marker is made of.
+var ruleToken = regexp.MustCompile(`[A-Za-z0-9_-]+`)
+
+// CheckPrompt refuses a fixed prompt that repeats instruction text it must not
+// supply (DESIGN-011, DESIGN-015): a trimmed line of any of texts at least
+// minRuleLine bytes long, or a marker-shaped token of them, even mid-sentence.
+// A false match only refuses a reviewed record, which is then reworded.
+func CheckPrompt(prompt string, texts ...string) error {
+	for _, text := range texts {
+		for _, line := range strings.Split(text, "\n") {
+			if line = strings.TrimSpace(line); len(line) >= minRuleLine && strings.Contains(prompt, line) {
+				return ErrPromptRepeatsRules
+			}
+		}
+		for _, token := range ruleToken.FindAllString(text, -1) {
+			if markerShaped(token) && strings.Contains(prompt, token) {
+				return ErrPromptRepeatsRules
+			}
+		}
+	}
+	return nil
+}
+
+// markerShaped reports whether a rule token looks like a value an acceptance
+// probe asks for: at least 12 characters, joined by '-' or '_', with a letter,
+// and with a digit or no lowercase letter. That covers
+// dev-env-repository-rules-20261011-6d807bf2 and COMMON_RULE_MARKER, and leaves
+// prose such as self-contained alone.
+func markerShaped(token string) bool {
+	return len(token) >= 12 && strings.ContainsAny(token, "-_") && strings.IndexFunc(token, unicode.IsLetter) >= 0 && (strings.ContainsAny(token, "0123456789") || strings.IndexFunc(token, unicode.IsLower) < 0)
+}
+
+// CheckCommon refuses a record whose prompt repeats its retained common or
+// Codex header instruction text, as ResolveCatalog does for the project rules.
+func (r Record) CheckCommon(common commonrules.Snapshot) error {
+	return CheckPrompt(r.Prompt, common.Common.Text, common.Header.Text)
 }
 
 func ReadTemplates(ctx context.Context, reader client.Reader, key types.NamespacedName) (*templates.Templates, error) {

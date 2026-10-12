@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/codexauth"
+	"github.com/thaynes43/dev-env/internal/commonrules"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
 
@@ -588,89 +590,158 @@ func TestProjectPerRepositoryBudgetsAndPartialSuccess(t *testing.T) {
 }
 
 // TestProjectRulesReachTheAgentOnlyAsRuleInputs renders the first launch of a
-// task bound to a project snapshot and checks what the agent is given. The
-// rules must arrive only through the rule inputs (Claude's appended system
-// prompt file, Codex's developer instructions), never in the prompt agentd
-// pipes to the agent or in another argument: a canary's marker found in the
-// prompt would prove nothing about which rules the agent loaded (DESIGN-011).
+// task bound to a project snapshot, alone and with a retained common snapshot,
+// and checks what the agent is given. The project rules must arrive only
+// through the rule inputs (Claude's appended system prompt file, Codex's
+// developer instructions), and the common text and Codex header only through
+// the provider's global instruction file, never in the prompt agentd pipes to
+// the agent or in an argument: a canary's marker found in the prompt would
+// prove nothing about which rules the agent loaded (DESIGN-011, DESIGN-015).
+// The record's own prompt is refused at admission when it repeats them
+// (projectcanary.CheckPrompt); this proves agentd adds none.
 func TestProjectRulesReachTheAgentOnlyAsRuleInputs(t *testing.T) {
 	for _, agent := range []string{protocol.AgentClaude, protocol.AgentCodex} {
-		t.Run(agent, func(t *testing.T) {
-			var (
-				s    Settings
-				sess protocol.Session
-				ws   protocol.Workspace
-				now  = time.Date(2026, 10, 9, 20, 0, 0, 0, time.UTC)
-			)
-			if agent == protocol.AgentCodex {
-				s, sess, ws, now = managedCodexFixture(t)
-			} else {
-				s, sess, ws = launchFixture(t)
-				catalog, err := projectcatalog.Parse([]byte(projectTestCatalog))
+		for _, withCommon := range []bool{false, true} {
+			name := agent
+			if withCommon {
+				name += "/common"
+			}
+			t.Run(name, func(t *testing.T) {
+				s, sess, ws, now, common := ruleInputLaunchFixture(t, agent, withCommon)
+				snapshot, err := projectcatalog.ParseSnapshot(sess.ProjectSnapshot)
 				if err != nil {
 					t.Fatal(err)
 				}
-				snapshot, err := catalog.Snapshot("sample", "demo")
-				if err != nil {
-					t.Fatal(err)
+				lines := nonBlankLines(snapshot.Rules())
+				if len(lines) == 0 {
+					t.Fatal("the fixture binds no rule line, so this proves nothing")
 				}
-				if sess.ProjectSnapshot, err = json.Marshal(snapshot); err != nil {
-					t.Fatal(err)
-				}
-				sess.Repo, sess.Base = "demo", "main"
-				if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
-					t.Fatal(err)
-				}
-			}
-			snapshot, err := projectcatalog.ParseSnapshot(sess.ProjectSnapshot)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var lines []string
-			for _, line := range strings.Split(snapshot.Rules(), "\n") {
-				if line = strings.TrimSpace(line); line != "" {
-					lines = append(lines, line)
-				}
-			}
-			if len(lines) == 0 {
-				t.Fatal("the fixture binds no rule line, so this proves nothing")
-			}
-			l, err := BuildLaunch(s, sess, ws, "boot", now)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if l.Prompt != sess.Prompt {
-				t.Fatalf("launch prompt %q is not the session's", l.Prompt)
-			}
-			ruleInput := -1
-			for i, arg := range l.Argv {
-				if agent == protocol.AgentClaude && i > 0 && l.Argv[i-1] == "--append-system-prompt-file" {
-					data, err := os.ReadFile(arg)
-					if err != nil || !strings.Contains(string(data), snapshot.Rules()) {
-						t.Fatalf("Claude's rule file %s does not carry the bound rules: %v", arg, err)
+				var commonLines []string
+				if withCommon {
+					commonLines = append(nonBlankLines(common.Common.Text), nonBlankLines(common.Header.Text)...)
+					if len(commonLines) == 0 {
+						t.Fatal("the fixture binds no common line, so this proves nothing")
 					}
-					ruleInput = i
 				}
-				if agent == protocol.AgentCodex && strings.HasPrefix(arg, "developer_instructions=") {
-					ruleInput = i
+				l, err := BuildLaunch(s, sess, ws, "boot", now)
+				if err != nil {
+					t.Fatal(err)
 				}
-			}
-			if ruleInput < 0 {
-				t.Fatal("the launch has no rule input")
-			}
-			for _, line := range lines {
-				if strings.Contains(l.Prompt, line) {
-					t.Errorf("the prompt carries rule line %q", line)
+				if l.Prompt == "" || l.Prompt != sess.Prompt {
+					t.Fatalf("launch prompt %q is not the session's", l.Prompt)
 				}
+				ruleInput := -1
 				for i, arg := range l.Argv {
-					if i != ruleInput && strings.Contains(arg, line) {
-						t.Errorf("argv[%d] %q carries rule line %q", i, arg, line)
+					if agent == protocol.AgentClaude && i > 0 && l.Argv[i-1] == "--append-system-prompt-file" {
+						data, err := os.ReadFile(arg)
+						if err != nil || !strings.Contains(string(data), snapshot.Rules()) {
+							t.Fatalf("Claude's rule file %s does not carry the bound rules: %v", arg, err)
+						}
+						ruleInput = i
+					}
+					if agent == protocol.AgentCodex && strings.HasPrefix(arg, "developer_instructions=") {
+						ruleInput = i
 					}
 				}
-				if agent == protocol.AgentCodex && !strings.Contains(l.Argv[ruleInput], line) {
-					t.Errorf("Codex developer instructions lost rule line %q", line)
+				if ruleInput < 0 {
+					t.Fatal("the launch has no rule input")
 				}
-			}
-		})
+				for _, line := range lines {
+					if strings.Contains(l.Prompt, line) {
+						t.Errorf("the prompt carries rule line %q", line)
+					}
+					for i, arg := range l.Argv {
+						if i != ruleInput && strings.Contains(arg, line) {
+							t.Errorf("argv[%d] %q carries rule line %q", i, arg, line)
+						}
+					}
+					if agent == protocol.AgentCodex && !strings.Contains(l.Argv[ruleInput], line) {
+						t.Errorf("Codex developer instructions lost rule line %q", line)
+					}
+				}
+				if !withCommon {
+					return
+				}
+				for _, line := range commonLines {
+					if strings.Contains(l.Prompt, line) {
+						t.Errorf("the prompt carries common or header line %q", line)
+					}
+					for i, arg := range l.Argv {
+						if strings.Contains(arg, line) {
+							t.Errorf("argv[%d] %q carries common or header line %q", i, arg, line)
+						}
+					}
+				}
+				global, want := filepath.Join(s.ClaudeConfigDir, "CLAUDE.md"), common.Common.Text
+				if agent == protocol.AgentCodex {
+					global, want = filepath.Join(s.CodexHome, "AGENTS.md"), common.CodexGlobal()
+				}
+				if got, err := os.ReadFile(global); err != nil || string(got) != want {
+					t.Fatalf("the common rules do not reach the agent through %s: %v", global, err)
+				}
+			})
+		}
 	}
+}
+
+// ruleInputLaunchFixture is a first launch bound to the sample project's
+// snapshot, and with withCommon also to a retained common snapshot, prepared as
+// the private project route prepares it.
+func ruleInputLaunchFixture(t *testing.T, agent string, withCommon bool) (Settings, protocol.Session, protocol.Workspace, time.Time, commonrules.Snapshot) {
+	t.Helper()
+	if withCommon {
+		_, s, runner, sess := privateProjectFixture(t, projectTestCatalog)
+		sess.Agent = agent
+		common := withCommonRules(t, &s, &sess)
+		if err := prepareProjectTask(&s, sess); err != nil {
+			t.Fatal(err)
+		}
+		ws, step := PrepareRepo(context.Background(), runner, s, sess)
+		if step.State != StepOK {
+			t.Fatal(step.Notes)
+		}
+		if agent == protocol.AgentCodex {
+			s.ManagedCodexTasks = true
+			s.CodexAccessFile = filepath.Join(s.Home, "projection", "access.json")
+			access, err := codexauth.Encode(syntheticAgentCodexAccess(t, rescueNow, 1), rescueNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, s.CodexAccessFile, string(access))
+			sess.Model = "gpt-6.1-sol"
+		}
+		return s, sess, ws, rescueNow, common
+	}
+	if agent == protocol.AgentCodex {
+		s, sess, ws, now := managedCodexFixture(t)
+		return s, sess, ws, now, commonrules.Snapshot{}
+	}
+	s, sess, ws := launchFixture(t)
+	catalog, err := projectcatalog.Parse([]byte(projectTestCatalog))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := catalog.Snapshot("sample", "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.ProjectSnapshot, err = json.Marshal(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	sess.Repo, sess.Base = "demo", "main"
+	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return s, sess, ws, time.Date(2026, 10, 9, 20, 0, 0, 0, time.UTC), commonrules.Snapshot{}
+}
+
+// nonBlankLines are the non-blank lines of a text, trimmed.
+func nonBlankLines(text string) []string {
+	var out []string
+	for _, line := range strings.Split(text, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
 }

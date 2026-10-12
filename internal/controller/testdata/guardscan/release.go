@@ -83,3 +83,36 @@ func deletePod(ctx context.Context, c client.Client, s *v1alpha1.AgentSession, p
 	}
 	return c.Delete(ctx, pod)
 }
+
+// releasePatch keeps the patch text out of the function that sends it.
+const releasePatch = `[{"op":"replace","path":"/metadata/finalizers","value":[]}]`
+
+func pkgConstPatch(ctx context.Context, r *Reconciler, s *v1alpha1.AgentSession) error {
+	return r.Client.Patch(ctx, s, client.RawPatch(types.JSONPatchType, []byte(releasePatch)))
+}
+
+// The merge patch from s to an object with only a name and namespace sets
+// finalizers and ownerReferences to null.
+func freshObjectMergePatch(ctx context.Context, r *Reconciler, s *v1alpha1.AgentSession) error {
+	fresh := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: s.Name, Namespace: s.Namespace}}
+	return r.Client.Patch(ctx, fresh, client.MergeFrom(s))
+}
+
+func wholeMetaAssignThenPatch(ctx context.Context, r *Reconciler, s *v1alpha1.AgentSession) error {
+	orig := s.DeepCopy()
+	s.ObjectMeta = metav1.ObjectMeta{Name: s.Name, Namespace: s.Namespace}
+	return r.Client.Patch(ctx, s, client.MergeFrom(orig))
+}
+
+func derefAssignThenPatch(ctx context.Context, r *Reconciler, s *v1alpha1.AgentSession) error {
+	orig := s.DeepCopy()
+	*s = v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: s.Name, Namespace: s.Namespace}, Spec: s.Spec}
+	return r.Client.Patch(ctx, s, client.MergeFrom(orig))
+}
+
+// pkgVarFuncLiteral is a release written as a package-level function value.
+var pkgVarFuncLiteral = func(ctx context.Context, c client.Client, s *v1alpha1.AgentSession) error {
+	orig := s.DeepCopy()
+	s.SetFinalizers(nil)
+	return c.Patch(ctx, s, client.MergeFrom(orig))
+}

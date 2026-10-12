@@ -21,7 +21,14 @@ import (
 
 func commonCanaryController(t *testing.T, f *testutil.Fixture, text string) commonrules.Snapshot {
 	t.Helper()
-	snapshot := commonfixture.Snapshot(t, []byte(f.Session.Annotations[v1alpha1.AnnotationProjectSnapshot]), text, "HEADER")
+	return commonCanaryControllerWith(t, f, text, "HEADER")
+}
+
+// commonCanaryControllerWith binds a retained common snapshot of the given
+// common and Codex header text to the fixture's record, policy and session.
+func commonCanaryControllerWith(t *testing.T, f *testutil.Fixture, text, header string) commonrules.Snapshot {
+	t.Helper()
+	snapshot := commonfixture.Snapshot(t, []byte(f.Session.Annotations[v1alpha1.AnnotationProjectSnapshot]), text, header)
 	f.Record.CommonRevision = snapshot.CommonRevision
 	raw, _ := json.Marshal([]projectcanary.Record{f.Record})
 	var err error
@@ -129,6 +136,45 @@ func TestCommonCanaryIndependentSourceDriftCreatesNoExecutor(t *testing.T) {
 			_, _ = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.Session)})
 			if pods != 0 || pvcs != 0 {
 				t.Fatal("drift created resources", pods, pvcs)
+			}
+		})
+	}
+}
+
+// A session whose bound common text or Codex header repeats its prompt gets no
+// executor: the controller asks CheckCommon before it starts one, as the API
+// does before it creates the session, so a marker the prompt supplies never
+// becomes canary evidence. The accepted case shows the same setup starts one.
+func TestCommonCanaryPromptRepeatingCommonCreatesNoExecutor(t *testing.T) {
+	for _, kind := range []string{"accepted", "common", "header"} {
+		t.Run(kind, func(t *testing.T) {
+			f := testutil.New(t, "codex", "dev/dev-env")
+			common, header := "ACCEPTED_COMMON", "HEADER"
+			switch kind {
+			case "common":
+				common += "\n" + f.Record.Prompt
+			case "header":
+				header += "\n" + f.Record.Prompt
+			}
+			commonCanaryControllerWith(t, &f, common, header)
+			a, h := commonfixture.Sources(common, header)
+			base := privateHistoryClient(f.Session, f.Catalog, f.Template, a, h)
+			pods := 0
+			c := interceptor.NewClient(base, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) error {
+				switch typed := o.(type) {
+				case *corev1.PersistentVolumeClaim:
+					typed.UID = "original-home"
+				case *corev1.Pod:
+					pods++
+					typed.UID = "original-pod"
+				}
+				return c.Create(ctx, o, opts...)
+			}})
+			r := canaryReconciler(c, base, f)
+			r.RetainedCommonRules = true
+			_, _ = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.Session)})
+			if want := map[bool]int{true: 1, false: 0}[kind == "accepted"]; pods != want {
+				t.Fatalf("%s: %d executor pods, want %d", kind, pods, want)
 			}
 		})
 	}

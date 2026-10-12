@@ -57,6 +57,14 @@ type Options struct {
 	Clock clock.Clock
 }
 
+// keeperJobs are the Keeper's Jobs: only credentials that are safe to mint
+// again, which today is the gh installation token alone. A rotating login is
+// never a Job, whatever o enables; Run adds it as its own journaled, fenced
+// runnable (codexWorker), as the package doc says.
+func keeperJobs(o Options) []Job {
+	return []Job{GitHubTokenJob("gh-token", o.GitHubApp, o.GHTokenSecret)}
+}
+
 // Run runs the keeper until ctx ends or this process loses the leader election,
 // which returns an error so the process exits and the kubelet restarts it.
 func Run(ctx context.Context, cfg *rest.Config, o Options) error {
@@ -127,7 +135,7 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 		o.GitHubApp.Clock = o.Clock
 	}
 	k := &Keeper{
-		Jobs:     []Job{GitHubTokenJob("gh-token", o.GitHubApp, o.GHTokenSecret)},
+		Jobs:     keeperJobs(o),
 		Writer:   &SecretWriter{Client: c},
 		Log:      o.Log,
 		Interval: o.Interval,
