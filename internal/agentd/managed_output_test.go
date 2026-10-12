@@ -342,3 +342,66 @@ func TestManagedOutputCodexInvalidUTF8PreservesConfirmedPrefixAsUnknown(t *testi
 		t.Fatal("private confirmed prefix changed", err)
 	}
 }
+
+// history-02: a gap ends Claude capture. Text after it is never spliced onto
+// the prefix accepted before it.
+func TestManagedOutputClaudeGapFreezesAcceptedPrefix(t *testing.T) {
+	assistant := func(text string) []byte {
+		return []byte(`{"type":"assistant","message":{"content":[{"type":"text","text":"` + text + `"}]}}`)
+	}
+	invalidUTF8 := append([]byte(`{"type":"assistant","message":{"content":[{"type":"text","text":"`), 0xff)
+	invalidUTF8 = append(invalidUTF8, []byte(`"}]}}`)...)
+	for name, gap := range map[string][]byte{
+		"invalid UTF-8":  invalidUTF8,
+		"malformed JSON": []byte(`{"type":"assistant",`),
+		"foreign init":   []byte(`{"type":"system","subtype":"init","session_id":"22222222-2222-4222-8222-222222222222"}`),
+		"nil message":    []byte(`{"type":"assistant"}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, l := captureLaunch(t)
+			c, err := beginManagedCapture(l, s.StateDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, line := range [][]byte{
+				[]byte(`{"type":"system","subtype":"init","session_id":"` + captureConversation + `"}`),
+				assistant("Rule A applies. "),
+				gap,
+				assistant("Rule B does not apply."),
+			} {
+				c.claude(line)
+			}
+			if got := strings.Join(c.chunks, ""); got != "Rule A applies. " || !c.unknown {
+				t.Fatalf("capture after a gap = %q, unknown %v; want only the accepted prefix, Unknown", got, c.unknown)
+			}
+			intent, err := c.retain(l, true)
+			if err != nil || intent.Completeness != "Unknown" || len(intent.Chunks) != 1 {
+				t.Fatal("gap retained as a confirmed capture", err)
+			}
+		})
+	}
+}
+
+// history-02: an overflow that drops a multibyte rune is a gap too. A later
+// short ASCII text must not fill the bytes left in the last chunk.
+func TestManagedOutputOverflowGapFreezesCapture(t *testing.T) {
+	s, l := captureLaunch(t)
+	c, err := beginManagedCapture(l, s.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.confirmed = true
+	c.text(strings.Repeat("a", 4*apiv1.MaxContextBytes-2))
+	if c.unknown || len(c.chunks) != 4 {
+		t.Fatal("fill below the bound must stay known")
+	}
+	c.text("界")
+	if !c.unknown {
+		t.Fatal("dropped rune not marked Unknown")
+	}
+	before := strings.Join(c.chunks, "")
+	c.text("OK")
+	if got := strings.Join(c.chunks, ""); got != before {
+		t.Fatalf("text after the overflow gap appended %q", strings.TrimPrefix(got, before))
+	}
+}

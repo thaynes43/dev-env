@@ -148,8 +148,11 @@ func beginManagedCapture(l Launch, stateDir string) (*managedCapture, error) {
 	return c, nil
 }
 
+// text appends accepted assistant text. The first gap ends capture: once the
+// capture is Unknown nothing more is appended, so the retained chunks are
+// exactly the prefix accepted before the gap and never text spliced across it.
 func (c *managedCapture) text(text string) {
-	if c == nil {
+	if c == nil || c.unknown {
 		return
 	}
 	if !utf8.ValidString(text) {
@@ -183,7 +186,7 @@ func (c *managedCapture) text(text string) {
 }
 
 func (c *managedCapture) claude(line []byte) {
-	if c == nil {
+	if c == nil || c.unknown {
 		return
 	}
 	var e streamEvent
