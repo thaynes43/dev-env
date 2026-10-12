@@ -305,12 +305,16 @@ func (r *Reconciler) observePrivateHistory(ctx context.Context, s *v1alpha1.Agen
 	if _, err := r.privateHistoryHome(ctx, s); err != nil {
 		obs.privateHistoryUnknown = err
 	}
+	// DESIGN-025 3: whether a terminal record or missed marker may be added,
+	// judged on the record as stored, before this observation changes it.
+	applies := r.terminalRecordApplies(s)
+	recorded := s.Status.PrivateHistory.LastExecutor
 	var pod corev1.Pod
 	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &pod); err != nil {
 		if !apierrors.IsNotFound(err) {
 			obs.privateHistoryUnknown = errors.New("private executor observation is unconfirmed")
-		} else if s.Status.PrivateHistory.ExecutorAttempted && !s.Status.PrivateHistory.ExecutorNotCreated {
-			obs.privateHistoryUnknown = errors.New("the recorded private executor is absent; absence cannot authorize a retry or prove stop")
+		} else {
+			r.observeExecutorAbsent(s, applies, obs)
 		}
 		return
 	}
@@ -346,6 +350,7 @@ func (r *Reconciler) observePrivateHistory(ctx context.Context, s *v1alpha1.Agen
 		last.ConversationID = s.Status.Agent.ConversationID
 	}
 	h.LastExecutor = last
+	r.observeExecutorTerminal(ctx, s, applies, recorded, &pod, obs)
 }
 
 func privateExecutorUsesHome(pod *corev1.Pod, claim string) bool {
@@ -366,12 +371,20 @@ func setPrivateHistoryConditions(s *v1alpha1.AgentSession, obs observation, st *
 	if wantsPodGone(s) {
 		c.Reason = "RetentionPending"
 	}
+	removal := c
+	if obs.privateExecutorEnded {
+		// DESIGN-025 3.4: with the terminal record confirmed, a missing
+		// executor Pod is expected. The HOME stays protected.
+		c.Reason = "ExecutorEnded"
+		c.Message = "original private HOME and durable Session identity remain protected; the recorded private executor ended (executorTerminal); private stop state is Unknown"
+	}
 	if obs.privateHistoryUnknown != nil {
 		c.Status, c.Reason, c.Message = metav1.ConditionUnknown, "PreservationUnknown", truncate(obs.privateHistoryUnknown.Error())
+		removal = c
 	}
 	meta.SetStatusCondition(&st.Conditions, c)
 	if wantsPodGone(s) {
 		meta.SetStatusCondition(&st.Conditions, metav1.Condition{Type: ConditionRemovalBlocked, Status: metav1.ConditionTrue,
-			Reason: c.Reason, Message: c.Message, ObservedGeneration: s.Generation})
+			Reason: removal.Reason, Message: removal.Message, ObservedGeneration: s.Generation})
 	}
 }

@@ -261,7 +261,7 @@ is default off; deletion waits for the installed archived-history read (#174).
 | Unit | Where | What | Done when |
 |---|---|---|---|
 | H0 | dev-env docs | ADR-005, DESIGN-025 and the amendments; ADR-006's corrections | merged |
-| H1 | dev-env source | the terminal record (`executorTerminal` and `executorMissed` beside `lastExecutor`, CRD rules, the shared verifier refactored, the confirmed write, `ExecutorEnded`, metrics, flag) | merged and in a released operator image |
+| H1 | dev-env source | the terminal record (`executorTerminal` and `executorMissed` beside `lastExecutor`, CRD rules, the shared verifier refactored, the confirmed write, `ExecutorEnded`, metrics, flag). In source in #236 (DESIGN-025 3.6) | merged and in a released operator image |
 | H2 | haynes-ops | CRD copy, node and lease `get` for the operator, operator pin, record on | records appear for ended private executors; ship it early, each day without it can lose a proof |
 | H3 | dev-env source | the stop request for Reaping Sessions only (`stopRequest` intent, hold check, `activeDeadlineSeconds`) and its guard test | merged |
 | H4 | dev-env source | agentd `history-export` and `history-archive` commands, the layout tables (agentd by name, copies of user files excluded) and fixtures, guard tests, the resource measurement | merged and in a released agent image |

@@ -44,8 +44,35 @@ func (v PodWorkspaceStopVerifier) Verify(ctx context.Context, s *v1alpha1.AgentS
 	if pod.Spec.NodeName == "" {
 		return nil, nil, errors.New("terminated executor lacks its admitted node identity")
 	}
+	now := time.Now().UTC()
+	if v.Now != nil {
+		now = v.Now().UTC()
+	}
+	node, lease, err := executorNodeLive(ctx, v.Reader, pod.Spec.NodeName, now)
+	if err != nil {
+		return nil, nil, err
+	}
+	proof := &protocol.WorkspaceStopProof{Version: 1, Workspace: s.Spec.Workspace.ID, Task: s.Name, SessionUID: string(s.UID), PodName: pod.Name, PodUID: string(pod.UID),
+		PodResourceVersion: pod.ResourceVersion, NodeName: node.Name, NodeUID: string(node.UID), LeaseResourceVersion: lease.ResourceVersion,
+		LeaseRenewedAt: lease.Spec.RenewTime.Time, VerifiedAt: now}
+	if err := proof.Validate(s.Spec.Workspace.ID, s.Name, string(s.UID), string(uid)); err != nil {
+		return nil, nil, err
+	}
+	return proof, &pod, nil
+}
+
+// executorNodeLive checks that a live kubelet wrote a Pod's terminated status
+// (DESIGN-025 3.2 points 2 and 3), for the shared stop verifier and the private
+// terminal record alike. The node exists, is not deleting and has exactly one
+// Ready condition, which is True; its lease in kube-node-lease is held by that
+// node, owned by that node's UID, renewed within the last 40 seconds and not in
+// the future. When the Pod garbage collector marks a Pod Failed for a lost node,
+// that node is not Ready, so its status never counts. Reads go through reader,
+// which must be uncached. A read the operator has no rights for (Nodes and
+// Leases until haynes-ops grants them) is an error: it fails closed.
+func executorNodeLive(ctx context.Context, reader client.Reader, nodeName string, now time.Time) (*corev1.Node, *coordinationv1.Lease, error) {
 	var node corev1.Node
-	if err := v.Reader.Get(ctx, client.ObjectKey{Name: pod.Spec.NodeName}, &node); err != nil {
+	if err := reader.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
 		return nil, nil, fmt.Errorf("executor node: %w", err)
 	}
 	ready, readyConditions := false, 0
@@ -55,16 +82,12 @@ func (v PodWorkspaceStopVerifier) Verify(ctx context.Context, s *v1alpha1.AgentS
 			ready = c.Status == corev1.ConditionTrue
 		}
 	}
-	if node.Name != pod.Spec.NodeName || node.UID == "" || !node.DeletionTimestamp.IsZero() || readyConditions != 1 || !ready {
+	if node.Name != nodeName || node.UID == "" || !node.DeletionTimestamp.IsZero() || readyConditions != 1 || !ready {
 		return nil, nil, errors.New("executor node is missing, deleting, unready or unknown")
 	}
 	var lease coordinationv1.Lease
-	if err := v.Reader.Get(ctx, client.ObjectKey{Namespace: "kube-node-lease", Name: pod.Spec.NodeName}, &lease); err != nil {
+	if err := reader.Get(ctx, client.ObjectKey{Namespace: "kube-node-lease", Name: nodeName}, &lease); err != nil {
 		return nil, nil, fmt.Errorf("executor node lease: %w", err)
-	}
-	now := time.Now().UTC()
-	if v.Now != nil {
-		now = v.Now().UTC()
 	}
 	if !lease.DeletionTimestamp.IsZero() || lease.Spec.RenewTime == nil || lease.Spec.HolderIdentity == nil || *lease.Spec.HolderIdentity != node.Name ||
 		lease.Spec.RenewTime.After(now) || now.Sub(lease.Spec.RenewTime.Time) > 40*time.Second {
@@ -79,13 +102,7 @@ func (v PodWorkspaceStopVerifier) Verify(ctx context.Context, s *v1alpha1.AgentS
 	if !matchingNode {
 		return nil, nil, errors.New("executor node lease belongs to a different node UID")
 	}
-	proof := &protocol.WorkspaceStopProof{Version: 1, Workspace: s.Spec.Workspace.ID, Task: s.Name, SessionUID: string(s.UID), PodName: pod.Name, PodUID: string(pod.UID),
-		PodResourceVersion: pod.ResourceVersion, NodeName: node.Name, NodeUID: string(node.UID), LeaseResourceVersion: lease.ResourceVersion,
-		LeaseRenewedAt: lease.Spec.RenewTime.Time, VerifiedAt: now}
-	if err := proof.Validate(s.Spec.Workspace.ID, s.Name, string(s.UID), string(uid)); err != nil {
-		return nil, nil, err
-	}
-	return proof, &pod, nil
+	return &node, &lease, nil
 }
 
 func controlledBySession(p *corev1.Pod, s *v1alpha1.AgentSession) bool {

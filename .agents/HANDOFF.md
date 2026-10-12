@@ -61,7 +61,11 @@ specifies it. It closes ADR-004's known gap (plan 11 follow-up F1).
 
 **Nothing runs yet.** Plan 11 lists units H0 (these docs) to H10, all default
 off. H1 and H2, the terminal record, should ship first: each day without it can
-lose a proof. Deletion (H9) waits for the installed archived-history read (H8,
+lose a proof. H1 is in source in #236 (DESIGN-025 3.6): the schema, the
+uncached checks, the confirmed write, the missed marker, `ExecutorEnded`, the
+counter and `--enable-private-terminal-record`. It records nothing until H2
+gives the operator `get` on Nodes and on Leases in `kube-node-lease`, copies the
+CRD, pins a release with it and turns the flag on. Deletion (H9) waits for the installed archived-history read (H8,
 #174). H7 needs Tom once: after the history archive claim binds, he sets its
 PersistentVolume to `Retain`. Before H7 writes the override policy, check which
 identity Tom's phone path uses (DESIGN-025 section 9).
