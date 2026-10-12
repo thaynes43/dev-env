@@ -333,25 +333,27 @@ func (s *privateBudgetUnknownACKStore) Update(ctx context.Context, l *taskbudget
 
 type privateBudgetContentionStore struct {
 	taskbudget.Store
-	updates int
+	reads int
 }
 
-func (s *privateBudgetContentionStore) Update(ctx context.Context, l *taskbudget.Ledger, rv string) error {
-	s.updates++
-	if s.updates == 1 {
-		// Inject a retained concurrent reservation, without constructing a
-		// positive private admission path. The stale CAS must not erase it.
-		prior, priorRV, err := s.Read(ctx, l.Binding.TaskUID)
-		if err != nil {
-			return err
-		}
-		prior.Workers[0].Managed.LaunchRequested = true
-		if err := s.Store.Update(ctx, prior, priorRV); err != nil {
-			return err
-		}
-		return taskbudget.ErrConflict
+func (s *privateBudgetContentionStore) Read(ctx context.Context, uid string) (*taskbudget.Ledger, string, error) {
+	l, rv, err := s.Store.Read(ctx, uid)
+	s.reads++
+	if err != nil || s.reads != 1 {
+		return l, rv, err
 	}
-	return s.Store.Update(ctx, l, rv)
+	// Inject a retained concurrent reservation after this read, without
+	// constructing a positive private admission path. The stale reader must
+	// not erase it, whether or not it writes.
+	prior, priorRV, err := s.Store.Read(ctx, uid)
+	if err != nil {
+		return nil, "", err
+	}
+	prior.Workers[0].Managed.LaunchRequested = true
+	if err := s.Update(ctx, prior, priorRV); err != nil {
+		return nil, "", err
+	}
+	return l, rv, nil
 }
 
 func TestPrivateBudgetRetainedIntentReservationCannotRearmOrResetHistory(t *testing.T) {
@@ -381,7 +383,15 @@ func TestPrivateBudgetRetainedIntentReservationCannotRearmOrResetHistory(t *test
 				t.Fatal(err)
 			}
 			store := f.service.Store
-			f.service.Now = func() time.Time { return f.now.Add(time.Minute) }
+			// A refusal that changes nothing durable writes nothing, so the
+			// lost-ACK and contention cases run past the 10-minute checkpoint:
+			// the refusal must then persist the Checkpoint latch, and the write
+			// path is what those cases exercise.
+			elapsed := time.Minute
+			if failure != "no-capability" {
+				elapsed = 11 * time.Minute
+			}
+			f.service.Now = func() time.Time { return f.now.Add(elapsed) }
 			f.service.ManagedInspector = PrivateManagedAdmissionInspector{Reader: f.client, Directory: f.store}
 			var unknown *privateBudgetUnknownACKStore
 			var contending *privateBudgetContentionStore
@@ -396,8 +406,20 @@ func TestPrivateBudgetRetainedIntentReservationCannotRearmOrResetHistory(t *test
 			if _, err := f.service.ReserveManagedLaunch(ctx, original.Binding, original.Workers[0].ID); err == nil {
 				t.Fatal("retained intent gained private launch authority")
 			}
-			if unknown != nil && unknown.updates != 1 || contending != nil && contending.updates != 2 {
-				t.Fatal("unknown ACK retried or CAS contention lost its fence")
+			// The latch write whose ACK is lost is sent once and never replayed.
+			if unknown != nil && unknown.updates != 1 {
+				t.Fatalf("unknown ACK: %d latch writes, want exactly 1", unknown.updates)
+			}
+			// The stale reader's latch write conflicts with the injected
+			// reservation, so it re-reads and writes on top of it.
+			if contending != nil && contending.reads < 2 {
+				t.Fatalf("contention: %d reads, want a conflict retry", contending.reads)
+			}
+			if failure != "no-capability" {
+				latched, _, err := store.Read(ctx, original.Binding.TaskUID)
+				if err != nil || !latched.Latched || latched.Reason != "Checkpoint" || !latched.Workers[0].Managed.LaunchRequested {
+					t.Fatalf("refusal latch not committed over the retained reservation: %+v %v", latched, err)
+				}
 			}
 			f.service.Store = store
 			if _, err := f.service.ReserveManagedLaunch(ctx, original.Binding, original.Workers[0].ID); err == nil {
@@ -405,9 +427,15 @@ func TestPrivateBudgetRetainedIntentReservationCannotRearmOrResetHistory(t *test
 			}
 			retained, _, err := store.Read(ctx, original.Binding.TaskUID)
 			if err != nil || retained.Binding != original.Binding || !retained.Workers[0].Active || retained.Workers[0].Managed.PodUID != "" ||
-				retained.Workers[0].Managed.LaunchRequested != (failure != "no-capability") || retained.EffortMilliseconds != 60000 ||
+				retained.Workers[0].Managed.LaunchRequested != (failure != "no-capability") ||
 				!reflect.DeepEqual(retained.Events, original.Events) || retained.LastProgress != original.LastProgress || retained.StallAnchor != original.StallAnchor || retained.NextCheckpoint != original.NextCheckpoint {
 				t.Fatalf("original accounting/history changed: %+v %v", retained, err)
+			}
+			// Elapsed effort is charged once from the retained AccountedAt: by
+			// the latch write, or, when the refusals wrote nothing, by the next
+			// observation or write.
+			if observed, err := f.service.Observe(ctx, original.Binding); err != nil || observed.EffortMilliseconds != elapsed.Milliseconds() {
+				t.Fatal("charged effort lost", err)
 			}
 			var source v1alpha1.AgentSession
 			if err := f.client.Get(ctx, client.ObjectKeyFromObject(f.s), &source); err != nil || !reflect.DeepEqual(source.Status.PrivateHistory, f.s.Status.PrivateHistory) || source.Status.PrivateHistory.StopState != "Unknown" {

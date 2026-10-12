@@ -97,8 +97,8 @@ func (s *Service) ReserveManagedLaunch(ctx context.Context, b Binding, id string
 			if err := s.ManagedInspector.InspectManagedAdmission(ctx, l, *w.Managed); err != nil {
 				return err
 			}
-			now := s.now()
-			if err := l.account(now); err != nil {
+			now, err := l.account(s.now())
+			if err != nil {
 				return err
 			}
 			l.evaluate(now)

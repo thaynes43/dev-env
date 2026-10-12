@@ -276,6 +276,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 			}
 			return ctrl.Result{RequeueAfter: time.Second}, budgetErr
 		}
+		// A child whose launch was never reserved cannot be running. Close it
+		// once it is stopping with no Pod, so it stops being charged.
+		if pod.missing && wantsPodGone(&s) {
+			if err := r.recordTaskBudgetNeverLaunched(ctx, &s); err != nil {
+				if errors.Is(err, taskbudget.ErrConflict) && !errors.Is(err, taskbudget.ErrHistoryConflict) {
+					return ctrl.Result{RequeueAfter: time.Second}, nil
+				}
+				log.FromContext(ctx).Info("never-launched budget worker stays charged", "reason", err.Error())
+			}
+		}
 	}
 	claim, err := getOwned(ctx, r.Client, &s, HomeClaimName(s.Name), &corev1.PersistentVolumeClaim{})
 	if err != nil {

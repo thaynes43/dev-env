@@ -12,9 +12,11 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -246,32 +248,99 @@ func TestManagedDelayedLaunchUsesFirstCheckpointAndCannotReplay(t *testing.T) {
 	}
 }
 
-// A known CAS conflict is contention, not unknown authority. It must retry
-// without irreversibly suspending an admitted executor.
-type conflictingBudgetStore struct{ taskbudget.Store }
-
-func (conflictingBudgetStore) Update(context.Context, *taskbudget.Ledger, string) error {
-	return taskbudget.ErrConflict
+// interleavedLedgerClient wraps the fixture client. After each accepted ledger
+// ConfigMap write, before the response returns, it runs between: another
+// writer committing next, as a sibling reconcile or the other replica would.
+func interleavedLedgerClient(c client.Client, update func(context.Context, client.WithWatch, client.Object, ...client.UpdateOption) error) client.Client {
+	return interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+		if _, ok := obj.(*corev1.ConfigMap); !ok {
+			return cl.Update(ctx, obj, opts...)
+		}
+		return update(ctx, cl, obj, opts...)
+	}})
 }
 
-func TestManagedBudgetCASConflictRetriesWithoutPermanentSuspend(t *testing.T) {
-	ctx := context.Background()
-	f := stoppedWorkspaceFixture()
-	c := f.client()
-	svc, b := budgetService(t, c, f.now)
-	f.s.Annotations = budgetAnnotations(b, "child")
-	f.s.Spec.Parent = "system/parent"
-	f.s.Spec.OperatingMode = v1alpha1.OperatingModeRunning
-	if err := c.Update(ctx, f.s); err != nil {
-		t.Fatal(err)
+// Contention between real ledger writers is not unknown authority. A write the
+// API server accepted stays accepted when another writer commits next, and a
+// typed conflict retries; neither may irreversibly suspend an admitted child.
+func TestManagedBudgetLedgerContentionDoesNotSuspend(t *testing.T) {
+	setup := func(t *testing.T) (workspaceStopFixture, client.Client, *taskbudget.Service, taskbudget.Binding) {
+		t.Helper()
+		ctx := context.Background()
+		f := stoppedWorkspaceFixture()
+		c := f.client()
+		svc, b := budgetService(t, c, f.now)
+		f.s.Annotations = budgetAnnotations(b, "child")
+		f.s.Spec.Parent = "system/parent"
+		f.s.Spec.OperatingMode = v1alpha1.OperatingModeRunning
+		if err := c.Update(ctx, f.s); err != nil {
+			t.Fatal(err)
+		}
+		// Launch reserved but the Pod UID not yet bound: the next observation
+		// of the Pod must write the ledger.
+		if _, err := svc.Record(ctx, apiv1.TaskBudgetEvent{Binding: b, ID: "start-child", Kind: "worker-start", WorkerID: "child"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.BindManagedWorker(ctx, b, "child", taskbudget.ManagedWorkerRef{Namespace: f.s.Namespace, Name: f.s.Name, SessionUID: string(f.s.UID)}); err != nil {
+			t.Fatal(err)
+		}
+		return f, c, svc, b
 	}
-	bindBudgetWorker(t, svc, b, f, "child")
-	svc.Store = conflictingBudgetStore{svc.Store}
-	r := &Reconciler{Client: c, APIReader: c, TaskBudgets: svc}
-	changed, err := r.enforceTaskBudget(ctx, f.s, f.pod)
-	if changed || !errors.Is(err, taskbudget.ErrConflict) || f.s.Spec.OperatingMode != v1alpha1.OperatingModeRunning {
-		t.Fatal("contention suspended worker", changed, err)
+	assertRunning := func(t *testing.T, c client.Client, f workspaceStopFixture, changed bool) {
+		t.Helper()
+		var live v1alpha1.AgentSession
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(f.s), &live); err != nil {
+			t.Fatal(err)
+		}
+		if changed || f.s.Spec.OperatingMode != v1alpha1.OperatingModeRunning || live.Spec.OperatingMode != v1alpha1.OperatingModeRunning {
+			t.Fatal("contention suspended worker", changed, live.Spec.OperatingMode)
+		}
 	}
+
+	t.Run("interleaved-writer", func(t *testing.T) {
+		ctx := context.Background()
+		f, c, svc, b := setup(t)
+		sibling := &taskbudget.Service{Store: svc.Store, Validator: svc.Validator, Now: func() time.Time { return f.now.Add(time.Millisecond) }}
+		interleaved := 0
+		svc.Store = taskbudget.KubeStore{Namespace: "protected-budgets", Live: c, Client: interleavedLedgerClient(c, func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if err := cl.Update(ctx, obj, opts...); err != nil {
+				return err
+			}
+			if interleaved == 0 {
+				interleaved++
+				if _, err := sibling.Record(ctx, apiv1.TaskBudgetEvent{Binding: b, ID: "start-sibling", Kind: "worker-start", WorkerID: "sibling"}); err != nil {
+					t.Error("sibling writer", err)
+				}
+			}
+			return nil
+		})}
+		r := &Reconciler{Client: c, APIReader: c, TaskBudgets: svc}
+		changed, err := r.enforceTaskBudget(ctx, f.s, f.pod)
+		if err != nil || interleaved != 1 {
+			t.Fatal("accepted ledger write became unknown authority", err, interleaved)
+		}
+		assertRunning(t, c, f, changed)
+		l, err := sibling.Observe(ctx, b)
+		if err != nil || len(l.Workers) != 2 || !l.Workers[0].Active || l.Workers[0].Managed.PodUID != string(f.pod.UID) {
+			t.Fatalf("interleaved writes lost: %+v %v", l, err)
+		}
+	})
+
+	t.Run("exhausted-conflicts", func(t *testing.T) {
+		ctx := context.Background()
+		f, c, svc, _ := setup(t)
+		updates := 0
+		svc.Store = taskbudget.KubeStore{Namespace: "protected-budgets", Live: c, Client: interleavedLedgerClient(c, func(context.Context, client.WithWatch, client.Object, ...client.UpdateOption) error {
+			updates++
+			return apierrors.NewConflict(corev1.Resource("configmaps"), "ledger", errors.New("another writer"))
+		})}
+		r := &Reconciler{Client: c, APIReader: c, TaskBudgets: svc}
+		changed, err := r.enforceTaskBudget(ctx, f.s, f.pod)
+		if !errors.Is(err, taskbudget.ErrConflict) || updates != 5 {
+			t.Fatal("typed conflict not retried as contention", err, updates)
+		}
+		assertRunning(t, c, f, changed)
+	})
 }
 
 func TestManagedBudgetUnknownFailureProofRequestsSuspendAndRetainsPod(t *testing.T) {
@@ -348,4 +417,163 @@ func TestManagedRecordedFailureSuspendsThroughReconcileBeforeCheckpoint(t *testi
 	if err := c.Get(ctx, client.ObjectKeyFromObject(f.pod), &retained); err != nil {
 		t.Fatal("executor lost before rescue", err)
 	}
+}
+
+// A child reserved at dispatch whose one Pod create was never reserved cannot
+// be running: every managed create is fenced in the ledger first. Once its
+// session is stopping and no Pod exists, the controller closes it, so it stops
+// being charged, and the closed worker can never launch afterwards.
+func TestManagedNeverLaunchedChildIsClosedAndStopsCharging(t *testing.T) {
+	ctx := context.Background()
+	f := stoppedWorkspaceFixture()
+	f.s.Spec.Parent = "system/parent"
+	f.s.Spec.OperatingMode = v1alpha1.OperatingModeRunning
+	f.s.Status.PodName = ""
+	c := f.client()
+	if err := c.Delete(ctx, f.pod); err != nil {
+		t.Fatal(err)
+	}
+	now := f.now
+	svc, b := budgetService(t, c, f.now)
+	svc.Now = func() time.Time { return now }
+	f.s.Annotations = budgetAnnotations(b, "child")
+	if err := c.Update(ctx, f.s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Record(ctx, apiv1.TaskBudgetEvent{Binding: b, ID: "dispatch", Kind: "worker-start", WorkerID: "child"}); err != nil {
+		t.Fatal(err)
+	}
+	r := &Reconciler{Client: c, APIReader: c, TaskBudgets: svc}
+	if _, err := r.observeTaskBudget(ctx, f.s, nil); err != nil {
+		t.Fatal(err)
+	}
+	// A running session may still launch: nothing proves non-launch yet.
+	if err := r.recordTaskBudgetNeverLaunched(ctx, f.s); err != nil {
+		t.Fatal(err)
+	}
+	l, err := svc.Observe(ctx, b)
+	if err != nil || !l.Workers[0].Active || l.Workers[0].Managed == nil {
+		t.Fatal("running child closed or never bound", err)
+	}
+	ref := *l.Workers[0].Managed
+	if _, err := svc.Record(ctx, managedNeverLaunchedEvent(b, "child", ref)); !errors.Is(err, taskbudget.ErrDenied) {
+		t.Fatal("never-launched receipt accepted for a running session", err)
+	}
+	// The first checkpoint latches before the controller reserved any launch.
+	now = now.Add(11 * time.Minute)
+	for range 3 {
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.s)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var live v1alpha1.AgentSession
+	if err := c.Get(ctx, client.ObjectKeyFromObject(f.s), &live); err != nil || live.Spec.OperatingMode != v1alpha1.OperatingModeSuspended {
+		t.Fatal("latched child not suspended", err)
+	}
+	l, err = svc.Observe(ctx, b)
+	if err != nil || l.Workers[0].Active || l.Workers[0].StopEvidence != managedBudgetReference(ref) {
+		t.Fatalf("never-launched child still charged: %+v %v", l.Workers[0], err)
+	}
+	effort := l.EffortMilliseconds
+	now = now.Add(20 * time.Minute)
+	if l, err = svc.Observe(ctx, b); err != nil || l.EffortMilliseconds != effort {
+		t.Fatal("closed child still charged", err)
+	}
+	svc.ManagedInspector = managedLaunchFixture{}
+	if _, err := svc.ReserveManagedLaunch(ctx, b, "child"); !errors.Is(err, taskbudget.ErrDenied) {
+		t.Fatal("closed child could still launch", err)
+	}
+}
+
+// Non-launch is proved only by the ledger fence plus an absent Pod. A reserved
+// launch or a present Pod keeps the worker charged.
+func TestManagedNeverLaunchedReceiptNeedsUnreservedLaunchAndAbsentPod(t *testing.T) {
+	setup := func(t *testing.T) (workspaceStopFixture, client.Client, *taskbudget.Service, taskbudget.Binding, *Reconciler) {
+		t.Helper()
+		ctx := context.Background()
+		f := stoppedWorkspaceFixture()
+		f.s.Spec.Parent = "system/parent"
+		f.s.Status.PodName = ""
+		c := f.client()
+		if err := c.Delete(ctx, f.pod); err != nil {
+			t.Fatal(err)
+		}
+		svc, b := budgetService(t, c, f.now)
+		f.s.Annotations = budgetAnnotations(b, "child")
+		if err := c.Update(ctx, f.s); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.Record(ctx, apiv1.TaskBudgetEvent{Binding: b, ID: "dispatch", Kind: "worker-start", WorkerID: "child"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.BindManagedWorker(ctx, b, "child", taskbudget.ManagedWorkerRef{Namespace: f.s.Namespace, Name: f.s.Name, SessionUID: string(f.s.UID)}); err != nil {
+			t.Fatal(err)
+		}
+		return f, c, svc, b, &Reconciler{Client: c, APIReader: c, TaskBudgets: svc}
+	}
+	active := func(t *testing.T, svc *taskbudget.Service, b taskbudget.Binding) {
+		t.Helper()
+		l, err := svc.Observe(context.Background(), b)
+		if err != nil || !l.Workers[0].Active {
+			t.Fatal("unproved non-launch uncharged worker", err)
+		}
+	}
+	t.Run("launch-reserved", func(t *testing.T) {
+		ctx := context.Background()
+		f, _, svc, b, r := setup(t)
+		svc.ManagedInspector = managedLaunchFixture{}
+		l, err := svc.ReserveManagedLaunch(ctx, b, "child")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.recordTaskBudgetNeverLaunched(ctx, f.s); err != nil {
+			t.Fatal(err)
+		}
+		ref := *l.Workers[0].Managed
+		ref.LaunchRequested = false
+		if _, err := svc.Record(ctx, managedNeverLaunchedEvent(b, "child", ref)); !errors.Is(err, taskbudget.ErrDenied) {
+			t.Fatal("reserved launch closed as never launched", err)
+		}
+		active(t, svc, b)
+	})
+	t.Run("pod-present", func(t *testing.T) {
+		ctx := context.Background()
+		f, c, svc, b, _ := setup(t)
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: f.s.Name, Namespace: f.s.Namespace, UID: "unreserved"}}
+		if err := c.Create(ctx, pod); err != nil {
+			t.Fatal(err)
+		}
+		ref := taskbudget.ManagedWorkerRef{Namespace: f.s.Namespace, Name: f.s.Name, SessionUID: string(f.s.UID)}
+		if _, err := svc.Record(ctx, managedNeverLaunchedEvent(b, "child", ref)); !errors.Is(err, taskbudget.ErrDenied) {
+			t.Fatal("present Pod closed as never launched", err)
+		}
+		active(t, svc, b)
+	})
+	t.Run("pod-recorded", func(t *testing.T) {
+		ctx := context.Background()
+		f, c, svc, b, _ := setup(t)
+		f.s.Status.PodName = f.s.Name
+		if err := c.Status().Update(ctx, f.s); err != nil {
+			t.Fatal(err)
+		}
+		ref := taskbudget.ManagedWorkerRef{Namespace: f.s.Namespace, Name: f.s.Name, SessionUID: string(f.s.UID)}
+		if _, err := svc.Record(ctx, managedNeverLaunchedEvent(b, "child", ref)); !errors.Is(err, taskbudget.ErrDenied) {
+			t.Fatal("recorded Pod closed as never launched", err)
+		}
+		active(t, svc, b)
+	})
+	t.Run("suspended-and-absent", func(t *testing.T) {
+		ctx := context.Background()
+		f, _, svc, b, r := setup(t)
+		if err := r.recordTaskBudgetNeverLaunched(ctx, f.s); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.recordTaskBudgetNeverLaunched(ctx, f.s); err != nil {
+			t.Fatal("closed worker replay failed", err)
+		}
+		l, err := svc.Observe(ctx, b)
+		if err != nil || l.Workers[0].Active || len(l.Events) != 2 {
+			t.Fatal("proved non-launch not recorded once", err)
+		}
+	})
 }

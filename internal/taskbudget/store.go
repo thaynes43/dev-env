@@ -38,7 +38,8 @@ func ledgerName(uid string) string {
 
 func encodeLedger(l *Ledger) ([]byte, error) {
 	if l.Version != 1 || !validBinding(l.Binding) || !validSpec(l.Spec) || l.Parent == "" ||
-		len(l.Events) > MaxEvents || len(l.Workers) > MaxWorkers || len(l.Extensions) > 32 || len(l.Escalations) > 32 ||
+		l.historyEvents() > MaxEvents || len(l.Events)-l.historyEvents() > MaxWorkers ||
+		len(l.Workers) > MaxWorkers || len(l.Extensions) > 32 || len(l.Escalations) > 32 ||
 		l.CreatedAt.IsZero() || l.AccountedAt.Before(l.CreatedAt) || l.LastProgress.Before(l.CreatedAt) ||
 		l.LastProgress.After(l.AccountedAt) || l.StallAnchor.Before(l.CreatedAt) || l.StallAnchor.After(l.AccountedAt) ||
 		l.NextCheckpoint.IsZero() || l.EffortMilliseconds < 0 || l.EffortCeilingMilliseconds <= 0 ||
@@ -60,6 +61,34 @@ func encodeLedger(l *Ledger) ([]byte, error) {
 
 func (s KubeStore) ready() bool { return s.Client != nil && s.Live != nil && s.Namespace != "" }
 
+// retained reports whether cm is a live, retained ledger object.
+func retained(cm *corev1.ConfigMap) bool {
+	return cm.Labels[LedgerLabel] == "retained-v1" && len(cm.OwnerReferences) == 0 && cm.DeletionTimestamp.IsZero() &&
+		cm.ResourceVersion != "" && (cm.Immutable == nil || !*cm.Immutable)
+}
+
+// exact reports whether cm holds this writer's data at a resourceVersion newer
+// than prior. On the API server's response to an accepted write, it confirms
+// the write. Another replica's later write supersedes that write; it does not
+// make the accepted write unknown.
+func exact(cm *corev1.ConfigMap, data, prior string) error {
+	if !retained(cm) || cm.Data[LedgerKey] != data || cm.ResourceVersion == prior {
+		return fmt.Errorf("%w: ledger write is not exact", ErrUnavailable)
+	}
+	return nil
+}
+
+// readBack resolves a write whose result is unknown (a timeout or a lost
+// response). Only this writer's exact data at a new resourceVersion confirms
+// it. Anything else stays unknown, and the caller must not replay the write.
+func (s KubeStore) readBack(ctx context.Context, uid, data, prior string) error {
+	var cm corev1.ConfigMap
+	if err := s.Live.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: ledgerName(uid)}, &cm); err != nil || exact(&cm, data, prior) != nil {
+		return fmt.Errorf("%w: ledger write result unknown", ErrUnavailable)
+	}
+	return nil
+}
+
 func (s KubeStore) Create(ctx context.Context, l *Ledger) error {
 	if !s.ready() {
 		return ErrUnavailable
@@ -74,9 +103,10 @@ func (s KubeStore) Create(ctx context.Context, l *Ledger) error {
 		if apierrors.IsAlreadyExists(err) {
 			return ErrConflict
 		}
-		return fmt.Errorf("%w: ledger create", ErrUnavailable)
+		return s.readBack(ctx, l.Binding.TaskUID, string(data), "")
 	}
-	return s.confirm(ctx, l, string(data))
+	// The client decodes the API server's response into cm.
+	return exact(cm, string(data), "")
 }
 
 func (s KubeStore) Read(ctx context.Context, uid string) (*Ledger, string, error) {
@@ -87,7 +117,7 @@ func (s KubeStore) Read(ctx context.Context, uid string) (*Ledger, string, error
 	if err := s.Live.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: ledgerName(uid)}, &cm); err != nil {
 		return nil, "", ErrUnavailable
 	}
-	if cm.Labels[LedgerLabel] != "retained-v1" || len(cm.OwnerReferences) != 0 || !cm.DeletionTimestamp.IsZero() || cm.ResourceVersion == "" || cm.Immutable != nil && *cm.Immutable {
+	if !retained(&cm) {
 		return nil, "", ErrUnavailable
 	}
 	data := cm.Data[LedgerKey]
@@ -120,16 +150,9 @@ func (s KubeStore) Update(ctx context.Context, l *Ledger, rv string) error {
 		if apierrors.IsConflict(err) {
 			return ErrConflict
 		}
-		return fmt.Errorf("%w: ledger update result unknown", ErrUnavailable)
+		return s.readBack(ctx, l.Binding.TaskUID, string(data), rv)
 	}
-	return s.confirm(ctx, l, string(data))
-}
-
-func (s KubeStore) confirm(ctx context.Context, l *Ledger, data string) error {
-	var cm corev1.ConfigMap
-	if s.Live.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: ledgerName(l.Binding.TaskUID)}, &cm) != nil ||
-		cm.Data[LedgerKey] != data || cm.Labels[LedgerLabel] != "retained-v1" || len(cm.OwnerReferences) != 0 || !cm.DeletionTimestamp.IsZero() || cm.ResourceVersion == "" || cm.Immutable != nil && *cm.Immutable {
-		return ErrUnavailable
-	}
-	return nil
+	// The client decodes the API server's response into cm. A fresh read here
+	// would race every other writer and misreport this accepted write.
+	return exact(cm, string(data), rv)
 }

@@ -152,6 +152,9 @@ func TestStallDespiteHeartbeatsAndActivity(t *testing.T) {
 		if i == 2 && (!l.Latched || l.Reason != "Stalled" || l.Escalation == nil) {
 			t.Fatalf("stall missing: %+v", l.Status())
 		}
+		if len(l.Events) != 0 {
+			t.Fatal("heartbeat retained as history")
+		}
 	}
 	l, err := s.Admit(context.Background(), b)
 	if !errors.Is(err, ErrDenied) || !l.Latched {
@@ -553,5 +556,202 @@ func TestImmutableFailureHistoryConflictIsDistinctFromCAS(t *testing.T) {
 	l, err := s.Record(ctx, e)
 	if !errors.Is(err, ErrHistoryConflict) || !errors.Is(err, ErrConflict) || len(l.Events) != 1 {
 		t.Fatal("semantic history conflict lost stable attempt or API conflict mapping", err)
+	}
+}
+
+// permissiveReceipts stands in for any validator that accepts every receipt;
+// the history bound alone must still let each worker stop.
+type permissiveReceipts struct{}
+
+func (permissiveReceipts) Validate(context.Context, *Ledger, apiv1.TaskBudgetEvent) error { return nil }
+func (permissiveReceipts) ValidateOwnerDecision(context.Context, *Ledger, apiv1.TaskBudgetExtension, string) error {
+	return ErrDenied
+}
+
+// A bound agent can post heartbeats freely. They are observations, never
+// history, so they cannot latch HistoryBound or refuse a later stop receipt.
+func TestHeartbeatsCannotFillHistoryOrBlockStop(t *testing.T) {
+	s, _, _, b := setup(t, time.Hour, time.Hour, time.Hour)
+	ctx := context.Background()
+	if _, err := s.Record(ctx, apiv1.TaskBudgetEvent{Binding: b, ID: "dispatch-w1", Kind: "worker-start", WorkerID: "w1"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range MaxEvents + 8 {
+		kind := "heartbeat"
+		if i%2 == 1 {
+			kind = "activity"
+		}
+		l, err := record(t, s, b, fmt.Sprintf("%s-%d", kind, i), kind)
+		if err != nil {
+			t.Fatalf("%s %d: %v", kind, i, err)
+		}
+		if l.Latched || len(l.Events) != 1 {
+			t.Fatalf("%s %d retained: latched %v, %d events", kind, i, l.Latched, len(l.Events))
+		}
+	}
+	stop := apiv1.TaskBudgetEvent{Binding: b, ID: "stop-w1", Kind: "worker-stop", WorkerID: "w1",
+		Evidence: apiv1.TaskBudgetEvidence{ID: "stop-w1", Kind: "supervised-tree-stop", Reference: "fixture:verified:w1"}}
+	l, err := s.Record(ctx, stop)
+	if err != nil || l.Workers[0].Active || l.Workers[0].StopEvidence == "" {
+		t.Fatal("stop receipt refused after heartbeats", err)
+	}
+}
+
+// Exhausted history stops admission, but every worker can still record its one
+// stop receipt: stop receipts sit outside the event bound.
+func TestFullHistoryStillAcceptsStopReceipts(t *testing.T) {
+	s, m, _, b := setup(t, time.Hour, time.Hour, time.Hour)
+	s.Validator = permissiveReceipts{}
+	ctx := context.Background()
+	for _, id := range []string{"w1", "w2"} {
+		if _, err := s.Record(ctx, apiv1.TaskBudgetEvent{Binding: b, ID: "dispatch-" + id, Kind: "worker-start", WorkerID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	l, _, err := m.Read(ctx, b.TaskUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := len(l.Events); i < MaxEvents; i++ {
+		e := failureEvent(b, fmt.Sprintf("failure-%d", i), fmt.Sprintf("attempt-%d", i), fmt.Sprintf("blocker-%d", i))
+		l.Events = append(l.Events, Event{Request: e, At: l.AccountedAt})
+	}
+	m.data, _ = json.Marshal(l)
+	l, err = s.Observe(ctx, b)
+	if err != nil || !l.Latched || l.Reason != "HistoryBound" {
+		t.Fatal("full history did not stop admission", err)
+	}
+	if _, err := s.Record(ctx, failureEvent(b, "failure-late", "attempt-late", "blocker-late")); !errors.Is(err, ErrDenied) {
+		t.Fatal("history grew past its bound", err)
+	}
+	for _, id := range []string{"w1", "w2"} {
+		stop := apiv1.TaskBudgetEvent{Binding: b, ID: "stop-" + id, Kind: "worker-stop", WorkerID: id,
+			Evidence: apiv1.TaskBudgetEvidence{ID: "stop-" + id, Kind: "supervised-tree-stop", Reference: "receipt:" + id}}
+		if _, err := s.Record(ctx, stop); err != nil {
+			t.Fatal("full history refused a stop receipt", id, err)
+		}
+		if _, err := s.Record(ctx, stop); err != nil {
+			t.Fatal("stop receipt replay refused", id, err)
+		}
+	}
+	l, err = s.Observe(ctx, b)
+	if err != nil || len(l.Events) != MaxEvents+2 || l.Workers[0].Active || l.Workers[1].Active {
+		t.Fatal("stop receipts not retained", err)
+	}
+	if _, err := encodeLedger(l); err != nil {
+		t.Fatal("retained stop receipts break the stored bound", err)
+	}
+}
+
+// An observation that changes nothing durable except elapsed accounting does
+// not write. The next write charges the same elapsed time.
+func TestNoOpObservationDoesNotWrite(t *testing.T) {
+	s, m, now, b := setup(t, 2*time.Hour, 2*time.Hour, 10*time.Minute)
+	ctx := context.Background()
+	start := *now
+	if _, err := s.Record(ctx, apiv1.TaskBudgetEvent{Binding: b, ID: "dispatch", Kind: "worker-start", WorkerID: "child"}); err != nil {
+		t.Fatal(err)
+	}
+	writes := m.updates
+	for i := 1; i <= 2; i++ {
+		*now = start.Add(time.Duration(i) * time.Minute)
+		l, err := s.Observe(ctx, b)
+		if err != nil || l.EffortMilliseconds != int64(i)*60000 || !l.AccountedAt.Equal(*now) {
+			t.Fatalf("observation %d: effort %d, %v", i, l.EffortMilliseconds, err)
+		}
+	}
+	if _, err := s.Record(ctx, apiv1.TaskBudgetEvent{Binding: b, ID: "dispatch", Kind: "worker-start", WorkerID: "child"}); err != nil {
+		t.Fatal("idempotent replay refused", err)
+	}
+	if m.updates != writes {
+		t.Fatalf("no-op calls wrote %d times", m.updates-writes)
+	}
+	durable, _, _ := m.Read(ctx, b.TaskUID)
+	if durable.EffortMilliseconds != 0 || !durable.AccountedAt.Equal(start) {
+		t.Fatal("no-op observation persisted")
+	}
+	*now = start.Add(10 * time.Minute)
+	l, err := s.Observe(ctx, b)
+	if err != nil || !l.Latched || m.updates != writes+1 {
+		t.Fatal("due latch not persisted by observation", err)
+	}
+	durable, _, _ = m.Read(ctx, b.TaskUID)
+	if !durable.Latched || durable.EffortMilliseconds != int64(10*time.Minute/time.Millisecond) {
+		t.Fatal("deferred elapsed time lost", durable.EffortMilliseconds)
+	}
+}
+
+// Replicas stamp AccountedAt from their own clocks. A replica slightly behind
+// the stored time uses it and charges nothing for the gap; a large backward
+// step is still unavailable.
+func TestReplicaClockSkewWithinTolerance(t *testing.T) {
+	s, m, now, b := setup(t, 2*time.Hour, 2*time.Hour, 2*time.Hour)
+	ctx := context.Background()
+	start := *now
+	if _, err := s.Record(ctx, apiv1.TaskBudgetEvent{Binding: b, ID: "dispatch-a", Kind: "worker-start", WorkerID: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	*now = start.Add(20 * time.Millisecond)
+	if _, err := s.Record(ctx, apiv1.TaskBudgetEvent{Binding: b, ID: "dispatch-b", Kind: "worker-start", WorkerID: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	ahead := *now
+	behind := &Service{Store: m, Validator: s.Validator, NativeInspector: s.NativeInspector, Now: func() time.Time { return start }}
+	l, err := behind.Observe(ctx, b)
+	if err != nil || !l.AccountedAt.Equal(ahead) || l.EffortMilliseconds != 20 {
+		t.Fatal("trailing replica refused or rewound the ledger", err)
+	}
+	l, err = behind.Record(ctx, apiv1.TaskBudgetEvent{Binding: b, ID: "dispatch-c", Kind: "worker-start", WorkerID: "c"})
+	if err != nil || !l.Workers[2].StartedAt.Equal(ahead) || !l.Events[2].At.Equal(ahead) {
+		t.Fatal("trailing replica write not stamped at ledger time", err)
+	}
+	// One process whose clock steps back between its own reads is the same case.
+	calls := 0
+	stepping := &Service{Store: m, Validator: s.Validator, NativeInspector: s.NativeInspector, Now: func() time.Time {
+		calls++
+		return ahead.Add(time.Second - time.Duration(calls)*time.Millisecond)
+	}}
+	if _, err := stepping.Admit(ctx, b); err != nil {
+		t.Fatal("backward step inside one call refused", err)
+	}
+	durable, _, _ := m.Read(ctx, b.TaskUID)
+	far := &Service{Store: m, Now: func() time.Time { return durable.AccountedAt.Add(-MaxClockSkew - time.Millisecond) }}
+	if _, err := far.Observe(ctx, b); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("large backward clock step accepted", err)
+	}
+}
+
+// The production validator accepts only server-derived worker-start, failure
+// and stop receipts, at most one of each per worker. That whole history, at the
+// longest identifiers it allows, fits the stored byte bound.
+func TestProductionShapedHistoryFitsLedgerBytes(t *testing.T) {
+	long := func(prefix string) string { return (prefix + strings.Repeat("x", 128))[:128] }
+	uid := func(i int) string { return fmt.Sprintf("%08x-0000-4000-8000-%012x", i, i) }
+	now := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	b := Binding{TaskUID: long("task"), HostID: long("host"), PodUID: uid(0), Epoch: 1, Deadline: now.Add(45 * time.Minute)}
+	l := &Ledger{Version: 1, Binding: b, Spec: Spec{SuccessCondition: strings.Repeat("s", 1024), OverallSeconds: 2700, EffortSeconds: 3600, CheckpointSeconds: 600},
+		Parent: strings.Repeat("p", 63) + "/" + strings.Repeat("a", 253), CreatedAt: now, AccountedAt: now, LastProgress: now, StallAnchor: now,
+		NextCheckpoint: now.Add(10 * time.Minute), CheckpointSeconds: 600, EffortCeilingMilliseconds: 3600000}
+	l.latch(now, "HistoryBound")
+	ns, name := strings.Repeat("n", 63), strings.Repeat("c", 256-63-36-36-3)
+	for i := 1; i <= MaxWorkers; i++ {
+		hash := fmt.Sprintf("%032x", i)
+		worker, session, pod := "child:"+hash, uid(i), uid(1000+i)
+		ref := ManagedWorkerRef{Namespace: ns, Name: name, SessionUID: session, PodUID: pod, LaunchRequested: true}
+		reference := strings.Join([]string{ns, name, session, pod}, "/")
+		l.Workers = append(l.Workers, Worker{ID: worker, StartedAt: now, StoppedAt: now, StopEvidence: reference, Managed: &ref})
+		for _, e := range []apiv1.TaskBudgetEvent{
+			{Binding: b, ID: "dispatch:" + hash, Kind: "worker-start", WorkerID: worker, AttemptID: uid(2000 + i)},
+			{Binding: b, ID: "managed-failure:" + session, Kind: "failure", WorkerID: worker, AttemptID: "managed:" + session, BlockerID: "checkpoint:" + hash + ":1",
+				Evidence: apiv1.TaskBudgetEvidence{ID: "exit:" + pod, Kind: "managed-container-exit", Reference: reference}},
+			{Binding: b, ID: "managed-stop:" + session, Kind: "worker-stop", WorkerID: worker,
+				Evidence: apiv1.TaskBudgetEvidence{ID: "stop:" + pod, Kind: "managed-rescue-stop", Reference: reference}},
+		} {
+			l.Events = append(l.Events, Event{Request: e, At: now})
+		}
+	}
+	data, err := encodeLedger(l)
+	if err != nil || len(data) > MaxLedgerBytes {
+		t.Fatalf("production-shaped history does not fit: %d bytes, %v", len(data), err)
 	}
 }
