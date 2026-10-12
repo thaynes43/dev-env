@@ -1,5 +1,16 @@
 # Saga: distributed-dev-env (dev-env v2)
 
+The [original Codex probe record](verification/codex-fixed-rule-probe-2026-10-12.md)
+records 16 passing offline checks, independent full review and one program that
+completed Directory 5 and original Codex HTTP 201 at 06:47:25 UTC. Saved native
+review `c3bcc13b` and Root `f189f079` accept transport/original identity only;
+actual output, executor and rules remain Unknown. Both fixed IDs are consumed.
+The Claude quota result remains preserved. Reader preparation stopped after
+three indexing failures; Q-27's native question requests one final offline
+correction and is pending. No fourth attempt or followup read is authorized.
+Actual both-provider rules and the owner pilot remain open; Q-24 is pending.
+Earlier checkpoints below are historical and do not reset the consumed IDs.
+
 The [first original Claude canary](verification/first-original-canary-2026-10-12.md)
 records reviewed logical Directory4 and original HTTP201 at 05:28:22 UTC. Claude's
 fixed ID is permanently consumed; Codex's is unstarted. Independent saved review
