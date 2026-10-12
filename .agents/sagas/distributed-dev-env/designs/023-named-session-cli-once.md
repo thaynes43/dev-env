@@ -65,3 +65,13 @@ The finite source audit is
 `/home/dev/work/orders/dev-env-rule-canary-runtime-1011/review/named-context-discovery-source-audit-r1.json`
 (`7918f0c4`), on merged D22 source `cd966d17`. Both fixed provider IDs remain
 unstarted. Private admission is disabled; Q-24 and the owner pilot remain open.
+
+
+## Shared walker amendment — 2026-10-12
+
+The strict wire walk is now generic over the DTO type and also guards
+`canary create` (Session) and `directory list` (SessionDirectoryList), both of
+which also enable the body fence (#174, history-05). Its rules are unchanged;
+the directory's reported time adds one wire form: null or an RFC 3339 string.
+A one-shot read's transport failure, stop or 5xx exits 6 (unconfirmed), never
+5; a 429 exits 1 (history-06).

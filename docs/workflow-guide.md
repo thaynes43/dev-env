@@ -521,7 +521,9 @@ agent-run canary create --id NEW_APPROVED_FIXED_ID --json --once
 The receipt distinguishes original creation from an existing original; neither
 proves the provider ran or loaded instructions. The client sends one request and
 does not retry, redirect or poll. Preserve an uncertain response for observation
-without creating another Session or changing the key. This source client does
+without creating another Session or changing the key: it exits 6 (unconfirmed),
+never 5. Every one-shot request (`msg`, `canary create`, a `--once` read) uses
+that exit code when it gets no confirmed answer. This source client does
 not enable general private admission or select Codex fleet routing. See
 [the ID-only client contract](../.agents/sagas/distributed-dev-env/designs/021-canary-cli.md).
 
@@ -555,7 +557,9 @@ This command sends one read and refuses redirects and retries. Here `--context`
 names the publication, rather than selecting a kubeconfig context. The reader
 requires the fixed record's initiating client, the retained original Session
 and matching publication authority. It can read a stored result after the source
-Pod exits; an absent, replaced or mismatched original holds the read. It cannot
+Pod exits, and after a reap while the original is retained; an absent, replaced,
+suspended or mismatched original holds the read. A change to another key of the
+common source ConfigMaps does not; changed instruction bytes do. It cannot
 create a replacement or inspect a private home.
 
 The returned receipt proves only that stored publication. Missing output or an

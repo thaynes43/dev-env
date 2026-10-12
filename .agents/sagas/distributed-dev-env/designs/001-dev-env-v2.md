@@ -607,7 +607,11 @@ each place, and what it prints.**
   something unexpected, or the session failed; `2` usage error, nothing sent; `3`
   not authenticated or not allowed: no credentials, a 401 or 403, a refused token
   mint, or an untrusted certificate; `4` no such session; `5` try again later: a
-  429, or the API unavailable or unreachable after the retries.
+  429, or the API unavailable or unreachable after the retries. Added
+  2026-10-12 (DESIGN-021 amendment, #174): `6` unconfirmed: a one-shot request
+  (`msg`, `canary create`, a `--once` read) got no confirmed answer and was not
+  repeated; a message or create may have taken effect. One-shot requests never
+  exit `5`, and a 429 to one exits `1`.
 
 Rationale: the verbs, flags and defaults stay v1's, so every CLAUDE.md instruction
 carries over (3.5). The CLI refuses what the API would refuse only where it can

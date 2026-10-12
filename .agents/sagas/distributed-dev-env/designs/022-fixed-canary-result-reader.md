@@ -157,3 +157,6 @@ stopped-source test uses the natural end the live canaries show: phase `Failed`
 with the generation unchanged.
 
 Catalog UID/resourceVersion and template content checks are unchanged here.
+
+**Client.** The one-shot result read never advises a retry: transport failure,
+stop or any 5xx exits 6 (unconfirmed), and a 429 exits 1 (DESIGN-021 amendment).
