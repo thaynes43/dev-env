@@ -60,7 +60,13 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, session string, no
 			}
 			cancel()
 			// The durable record names the task's source, not a boot's copy.
-			ws.Source, _ = readTaskSource(s)
+			// An unreadable record is a problem, not a task without one.
+			source, err := readTaskSource(s)
+			ws.Source = source
+			if err != nil {
+				st.Problems = append(st.Problems, Step{Name: "task-source", State: StepWarn,
+					Notes: []string{"the task source record is unreadable; preserved: " + err.Error()}})
+			}
 			st.Workspace = &ws
 		}
 	}

@@ -356,3 +356,38 @@ func TestPrivateProjectLegacyTaskReportsNoRecordedSource(t *testing.T) {
 		t.Fatalf("legacy resume: source %+v; %s %q", resumed.Source, step.State, step.Notes)
 	}
 }
+
+// roots-2 review: a corrupt record is reported as a problem, never presented
+// as a task without a record, and is kept as it is.
+func TestPrivateProjectCorruptTaskSourceIsReported(t *testing.T) {
+	_, s, r, sess := privateProjectFixture(t, projectTestCatalog)
+	if err := prepareProjectTask(&s, sess); err != nil {
+		t.Fatal(err)
+	}
+	ws, step := PrepareRepo(context.Background(), r, s, sess)
+	if step.State != StepOK {
+		t.Fatalf("new task: %s %q", step.State, step.Notes)
+	}
+	corrupt := []byte(`{"version":2}` + "\n")
+	if err := os.WriteFile(s.statePath(taskSourceFile), corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resumed, step := PrepareRepo(context.Background(), r, s, sess)
+	if step.State != StepWarn || resumed.Source != nil || !strings.Contains(strings.Join(step.Notes, "\n"), "task source record is invalid") ||
+		!bytes.Equal(corrupt, mustRead(t, s.statePath(taskSourceFile))) {
+		t.Fatalf("resume with a corrupt record: %s %q", step.State, step.Notes)
+	}
+	if err := writeJSONFile(s.statePath(bootFile), bootRecord{BootID: "b2", Boot: protocol.BootReady, Workspace: &ws}); err != nil {
+		t.Fatal(err)
+	}
+	st := CollectStatus(context.Background(), r.ExecRunner, s, sess.Name, time.Now())
+	reported := false
+	for _, problem := range st.Problems {
+		if problem.Name == "task-source" && problem.State == StepWarn && strings.Contains(strings.Join(problem.Notes, "\n"), "task source record is invalid") {
+			reported = true
+		}
+	}
+	if st.Workspace == nil || st.Workspace.Source != nil || !reported {
+		t.Fatalf("status hid a corrupt task source record: %+v %+v", st.Workspace, st.Problems)
+	}
+}
