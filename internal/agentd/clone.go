@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -94,6 +95,18 @@ func privateOrigHeadClear(gitDir string) error {
 // propagates these command options to its internal promisor fetches too.
 var sharedGitPolicyArgs = []string{"-c", "gc.auto=0", "-c", "maintenance.auto=false"}
 
+// originBranchesRefspec maps origin's branches into refs/remotes/origin only.
+const originBranchesRefspec = "+refs/heads/*:refs/remotes/origin/*"
+
+// originFetchArgs is a whole-origin fetch that can only change
+// refs/remotes/origin. --refmap= and the explicit refspec replace the clone's
+// configured remote.origin.fetch: a mapping into refs/heads would otherwise
+// let --prune delete, or a forced update move, local branches origin lacks,
+// session and peer branches included. --no-prune-tags keeps local tags.
+func originFetchArgs(opts ...string) []string {
+	return append(append([]string{"fetch"}, opts...), "--no-prune-tags", "--refmap=", "origin", originBranchesRefspec)
+}
+
 // cloneAttempts and cloneBackoff bound the clone's retries: S-7 measured every
 // repo under 25 s, so three tries cover a passing network blip.
 var (
@@ -180,20 +193,37 @@ func PrepareRepo(ctx context.Context, r Runner, s Settings, sess protocol.Sessio
 		Branch:   "agent/" + sess.Name,
 	}
 	var privateProject *projectcatalog.Repository
+	var privateSnapshot projectcatalog.Snapshot
+	// identityDrift is an origin URL mismatch tolerated for an existing task:
+	// it resumes without a fetch and can never create a new task branch.
+	var identityDrift error
 	if len(sess.ProjectSnapshot) != 0 && s.WorkspaceID == "" && sess.Workspace == nil {
 		snapshot, err := acceptedProjectTask(s, sess)
 		if err != nil {
 			return ws, newStep(name, nil, err)
 		}
 		repo := snapshot.Selected()
-		privateProject = &repo
+		privateProject, privateSnapshot = &repo, snapshot
 		s.TaskRepositoryURL = repo.URL()
 		s.privateProjectGit = true
-		// A reused private reference must carry the accepted identity before
-		// any fetch. A foreign or ambiguous directory is never a clone target.
+		// A reused private reference must prove its own Git storage before any
+		// command and carry the accepted identity before any fetch. A foreign
+		// or ambiguous directory is never a clone target.
 		if _, err := os.Lstat(ws.Clone); err == nil {
-			if err := validateProjectReference(ctx, r, s, repo); err != nil {
+			if err := validateProjectReferenceStorageAt(ctx, r, s, repo, ws.Clone); err != nil {
 				return ws, newStep(name, nil, err)
+			}
+			if err := validateProjectReferenceIdentityAt(ctx, r, s, repo, ws.Clone); err != nil {
+				// A resume needs no fetch, and task worktrees share this
+				// origin configuration. Only a new task needs the full proof.
+				existing, existErr := privateTaskExists(ctx, r, s, ws)
+				if existErr != nil {
+					return ws, newStep(name, nil, existErr)
+				}
+				if !existing {
+					return ws, newStep(name, nil, err)
+				}
+				identityDrift = err
 			}
 		} else if !errors.Is(err, fs.ErrNotExist) {
 			return ws, newStep(name, nil, err)
@@ -236,9 +266,9 @@ func PrepareRepo(ctx context.Context, r Runner, s Settings, sess protocol.Sessio
 			return ws, newStep(name, notes, err)
 		}
 		if privateProject == nil {
-			fetchArgs := []string{"fetch", "--prune", "origin"}
+			fetchArgs := originFetchArgs("--prune")
 			if s.WorkspaceID != "" {
-				fetchArgs = []string{"fetch", "--no-auto-maintenance", "--no-prune", "origin"}
+				fetchArgs = originFetchArgs("--no-auto-maintenance", "--no-prune")
 			}
 			if _, fetchErr = s.git(ctx, r, ws.Clone, fetchArgs...); fetchErr == nil {
 				notes = append(notes, "reused the clone and fetched origin")
@@ -249,25 +279,76 @@ func PrepareRepo(ctx context.Context, r Runner, s Settings, sess protocol.Sessio
 		if !waited {
 			notes = append(notes, "no GitHub token at "+s.GHTokenFile+"; cloning without one (public repos only)")
 		}
-		took, err := cloneRepo(ctx, r, s, sess.Repo, ws.Clone)
+		if privateProject != nil {
+			// The staged reference clone, as bootstrap uses: the declared branch,
+			// identity proved before publication, and staging never deleted.
+			start := time.Now()
+			if err := cloneProjectReference(ctx, r, s, *privateProject); err != nil {
+				return ws, newStep(name, notes, err)
+			}
+			notes = append(notes, fmt.Sprintf("cloned %s (blob:none) on %s in %s", privateProject.URL(), privateProject.DefaultBranch, time.Since(start).Round(100*time.Millisecond)))
+		} else {
+			took, err := cloneRepo(ctx, r, s, sess.Repo, ws.Clone)
+			if err != nil {
+				return ws, newStep(name, notes, err)
+			}
+			notes = append(notes, fmt.Sprintf("cloned %s (blob:none) in %s", s.RemoteURL(sess.Repo), took.Round(100*time.Millisecond)))
+		}
+	}
+	if privateProject != nil {
+		sess.Base = "refs/remotes/origin/" + privateProject.DefaultBranch
+		existing, err := privateTaskExists(ctx, r, s, ws)
 		if err != nil {
 			return ws, newStep(name, notes, err)
 		}
-		notes = append(notes, fmt.Sprintf("cloned %s (blob:none) in %s", s.RemoteURL(sess.Repo), took.Round(100*time.Millisecond)))
-	}
-	if privateProject != nil {
-		if err := validateProjectReference(ctx, r, s, *privateProject); err != nil {
-			return ws, newStep(name, notes, err)
+		var recorded *protocol.TaskSource
+		var sourceProblem bool
+		if existing {
+			// Only this session's record names the task's source; a resume
+			// reports it and never rewrites it. A task from before the record
+			// reports none, and so does a task whose record is unreadable or
+			// binds another session or source.
+			if recorded, err = sessionTaskSource(s, sess); err != nil {
+				sourceProblem = true
+				notes = append(notes, "WARN the task source record is not reported; preserved: "+err.Error())
+			}
 		}
-		// Fetch the declared branch explicitly; a configured fetch refspec or
-		// stale local branch must not select a different base for a new task.
-		target, fetched, err := fetchProjectTarget(ctx, r, s, *privateProject)
-		fetchErr = err
-		sess.Base = "refs/remotes/origin/" + privateProject.DefaultBranch
-		if err == nil {
-			sess.Base = target
-			notes = append(notes, fmt.Sprintf("fetched accepted repository %s branch %s at %s on %s", privateProject.GitHub, privateProject.DefaultBranch, target, fetched.Format(time.RFC3339Nano)))
+		if identityDrift != nil {
+			fetchErr = fetchSkipped{identityDrift}
+			notes = append(notes, "WARN "+identityDrift.Error()+"; skipped the fetch: the existing task is reused as it is, and no new task branch is created until the reference is repaired")
+		} else {
+			if err := validateProjectReference(ctx, r, s, *privateProject); err != nil {
+				return ws, newStep(name, notes, err)
+			}
+			// Fetch the declared branch explicitly; a configured fetch refspec or
+			// stale local branch must not select a different base for a new task.
+			target, fetched, err := fetchProjectTarget(ctx, r, s, *privateProject)
+			fetchErr = err
+			switch {
+			case err != nil:
+			case existing:
+				note := fmt.Sprintf("refreshed origin/%s of %s at %s on %s; this is not the task's source", privateProject.DefaultBranch, privateProject.GitHub, target, fetched.Format(time.RFC3339Nano))
+				switch {
+				case recorded != nil:
+					note += fmt.Sprintf(", which stays %s fetched %s", recorded.Commit, recorded.FetchedAt.Format(time.RFC3339Nano))
+				case sourceProblem:
+					note += ", and this task reports no source"
+				default:
+					note += ", and this task has no recorded source pin"
+				}
+				notes = append(notes, note)
+			default:
+				notes = append(notes, fmt.Sprintf("fetched accepted repository %s branch %s at %s on %s", privateProject.GitHub, privateProject.DefaultBranch, target, fetched.Format(time.RFC3339Nano)))
+				// A new task records its pin once, before its worktree exists.
+				source, note, err := pinTaskSource(s, sess, privateSnapshot, target, fetched)
+				if err != nil {
+					return ws, newStep(name, notes, err)
+				}
+				notes = append(notes, note)
+				sess.Base, recorded = source.Commit, &source
+			}
 		}
+		ws.Source = recorded
 	}
 
 	workspaceNotes, err := ensureWorktree(ctx, r, s, ws, sess, fetchErr)
@@ -281,6 +362,128 @@ func PrepareRepo(ctx context.Context, r Runner, s Settings, sess protocol.Sessio
 	}
 	ws.Head = head
 	return ws, newStep(name, notes, nil)
+}
+
+// fetchSkipped is a fetch agentd chose not to run. Like a failed fetch, it
+// preserves an existing task as it is and refuses a new task branch.
+type fetchSkipped struct{ reason error }
+
+func (f fetchSkipped) Error() string { return f.reason.Error() }
+
+// fetchProblem names a fetch error for a note: skipped or failed.
+func fetchProblem(err error) string {
+	var skipped fetchSkipped
+	if errors.As(err, &skipped) {
+		return "fetch skipped"
+	}
+	return "fetch failed"
+}
+
+// privateTaskExists reports whether this session already has a task: its
+// worktree path, its agent/<name> branch or its first launch record. Such a
+// task resumes or is refused on its own terms; it never starts a new branch.
+// The caller has proved the reference's storage, or the clone is absent.
+func privateTaskExists(ctx context.Context, r Runner, s Settings, ws protocol.Workspace) (bool, error) {
+	for _, path := range []string{ws.Worktree, s.statePath(launchFile)} {
+		if _, err := os.Lstat(path); err == nil {
+			return true, nil
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return false, err
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(ws.Clone, ".git")); errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	_, err := s.git(ctx, r, ws.Clone, "show-ref", "--verify", "--quiet", "refs/heads/"+ws.Branch)
+	switch {
+	case err == nil:
+		return true, nil
+	case ExitCodeOf(err) == 1:
+		return false, nil
+	default:
+		return false, fmt.Errorf("check the session branch %s: %s", ws.Branch, cmdDetail(err))
+	}
+}
+
+// readTaskSource reads the task's source record. A missing record is nil
+// without an error: other sessions and older tasks have none.
+func readTaskSource(s Settings) (*protocol.TaskSource, error) {
+	var source protocol.TaskSource
+	if err := readWorkspaceJSON(s.statePath(taskSourceFile), &source); errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	if source.Version != 1 || source.Session == "" || source.Repo == "" || source.GitHub == "" || source.Branch == "" ||
+		!rootObjectID.MatchString(source.Commit) || source.FetchedAt.IsZero() {
+		return nil, errors.New("task source record is invalid")
+	}
+	return &source, nil
+}
+
+// errForeignTaskSource is a well-formed record that binds another session,
+// session UID, repository, branch or accepted snapshot.
+var errForeignTaskSource = errors.New("task source record belongs to another session or source")
+
+// taskSourceFor is the record this session's task writes, without the commit
+// and fetch time that only the record itself holds.
+func taskSourceFor(sess protocol.Session, snapshot projectcatalog.Snapshot) protocol.TaskSource {
+	repo := snapshot.Selected()
+	return protocol.TaskSource{Version: 1, Session: sess.Name, SessionUID: sess.SessionUID, Repo: repo.Name, GitHub: repo.GitHub, Branch: repo.DefaultBranch,
+		CatalogRevision: snapshot.CatalogRevision(), RulesRevision: snapshot.RulesRevision()}
+}
+
+// taskSourceBinds reports whether recorded is want's record: every field but
+// the commit and the fetch time must match.
+func taskSourceBinds(recorded, want protocol.TaskSource) bool {
+	recorded.Commit, recorded.FetchedAt = want.Commit, want.FetchedAt
+	return recorded == want
+}
+
+// sessionTaskSource is the task source record when it belongs to sess and its
+// accepted project snapshot. A missing record is nil without an error. An
+// unreadable or foreign record is an error: never reported as this task's
+// source, and kept as it is.
+func sessionTaskSource(s Settings, sess protocol.Session) (*protocol.TaskSource, error) {
+	recorded, err := readTaskSource(s)
+	if err != nil || recorded == nil {
+		return recorded, err
+	}
+	if len(sess.ProjectSnapshot) == 0 {
+		return nil, errForeignTaskSource
+	}
+	snapshot, err := projectcatalog.ParseSnapshot(sess.ProjectSnapshot)
+	if err != nil || !taskSourceBinds(*recorded, taskSourceFor(sess, snapshot)) {
+		return nil, errForeignTaskSource
+	}
+	return recorded, nil
+}
+
+// pinTaskSource returns the source a new task's worktree is created from. The
+// first new-task boot records the fresh pin with an exclusive create. A retry,
+// after a worktree creation that failed, uses that recorded pin: the record is
+// never replaced, so it always names the commit the worktree came from.
+func pinTaskSource(s Settings, sess protocol.Session, snapshot projectcatalog.Snapshot, target string, fetched time.Time) (protocol.TaskSource, string, error) {
+	source := taskSourceFor(sess, snapshot)
+	source.Commit, source.FetchedAt = target, fetched.UTC().Round(0)
+	recorded, err := readTaskSource(s)
+	if err != nil {
+		return source, "", fmt.Errorf("%w; preserved, and no new task branch is created", err)
+	}
+	if recorded == nil {
+		data, err := json.Marshal(source)
+		if err != nil {
+			return source, "", err
+		}
+		if err := writeFileOnce(s.statePath(taskSourceFile), append(data, '\n'), 0o600); err != nil {
+			return source, "", fmt.Errorf("record the task source: %w", err)
+		}
+		return source, fmt.Sprintf("recorded the task source: %s branch %s at %s", source.GitHub, source.Branch, target), nil
+	}
+	if !taskSourceBinds(*recorded, source) {
+		return source, "", fmt.Errorf("%w; preserved, and no new task branch is created", errForeignTaskSource)
+	}
+	return *recorded, fmt.Sprintf("creating the task from its recorded source %s fetched %s, not from this fetch", recorded.Commit, recorded.FetchedAt.Format(time.RFC3339Nano)), nil
 }
 
 // waitForFile waits until path is a non-empty file, up to max. The keeper's
@@ -308,6 +511,15 @@ func cloneRepo(ctx context.Context, r Runner, s Settings, repo, dst string) (tim
 		return 0, err
 	}
 	tmp := filepath.Join(filepath.Dir(dst), "."+filepath.Base(dst)+".agentd-clone")
+	// Shared staging may be a peer's. With private bootstrap enabled, this path
+	// holds bootstrap's preserved staging or this session's own interrupted
+	// clone, which agentd cannot tell apart: neither is ever deleted here, and
+	// a human recovers it (DESIGN-006).
+	preserve := s.WorkspaceID != "" || s.PrivateProjectBootstrap
+	kind, recovery := "shared staging clone", ""
+	if s.WorkspaceID == "" {
+		kind, recovery = "staging clone", "; inspect it and remove it before another clone attempt"
+	}
 	var lastErr error
 	for attempt := 0; attempt < cloneAttempts; attempt++ {
 		if attempt > 0 {
@@ -315,9 +527,9 @@ func cloneRepo(ctx context.Context, r Runner, s Settings, repo, dst string) (tim
 				return 0, err
 			}
 		}
-		if s.WorkspaceID != "" {
+		if preserve {
 			if _, err := os.Lstat(tmp); !errors.Is(err, os.ErrNotExist) {
-				return 0, fmt.Errorf("shared staging clone %s is partial or uncertain; preserved and refused", tmp)
+				return 0, fmt.Errorf("%s %s is partial or uncertain; preserved and refused%s", kind, tmp, recovery)
 			}
 		} else if err := os.RemoveAll(tmp); err != nil {
 			return 0, err
@@ -334,13 +546,13 @@ func cloneRepo(ctx context.Context, r Runner, s Settings, repo, dst string) (tim
 			return time.Since(start), nil
 		}
 		lastErr = err
-		if s.WorkspaceID != "" {
+		if preserve {
 			if _, statErr := os.Lstat(tmp); !errors.Is(statErr, os.ErrNotExist) {
-				return 0, fmt.Errorf("shared clone failed with partial or uncertain staging data preserved: %s", cmdDetail(err))
+				return 0, fmt.Errorf("clone failed; %s %s keeps partial or uncertain data, preserved%s: %s", kind, tmp, recovery, cmdDetail(err))
 			}
 		}
 	}
-	if s.WorkspaceID == "" {
+	if !preserve {
 		_ = os.RemoveAll(tmp)
 	}
 	return 0, fmt.Errorf("clone of %s failed %d times: %s", s.RemoteURL(repo), cloneAttempts, cmdDetail(lastErr))
@@ -390,7 +602,7 @@ func ensureWorktree(ctx context.Context, r Runner, s Settings, ws protocol.Works
 			notes = append(notes, "WARN the existing worktree is on "+strings.TrimPrefix(branch, "refs/heads/")+"; expected session branch "+ws.Branch+"; preserving it as it is")
 		}
 		if fetchErr != nil {
-			notes = append(notes, "WARN fetch failed; preserving the existing worktree without moving its branch: "+cmdDetail(fetchErr))
+			notes = append(notes, "WARN "+fetchProblem(fetchErr)+"; preserving the existing worktree without moving its branch: "+cmdDetail(fetchErr))
 		}
 		return append(notes, "reused the worktree "+ws.Worktree), nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
@@ -403,7 +615,7 @@ func ensureWorktree(ctx context.Context, r Runner, s Settings, ws protocol.Works
 	}
 	if branchErr == nil {
 		if fetchErr != nil {
-			notes = append(notes, "WARN fetch failed; recovering the existing session branch without moving it: "+cmdDetail(fetchErr))
+			notes = append(notes, "WARN "+fetchProblem(fetchErr)+"; recovering the existing session branch without moving it: "+cmdDetail(fetchErr))
 		}
 		if err := prepareWorktreePath(ctx, r, s, ws); err != nil {
 			return notes, err
@@ -426,7 +638,7 @@ func ensureWorktree(ctx context.Context, r Runner, s Settings, ws protocol.Works
 	var offlineBase string
 	if fetchErr != nil {
 		if sess.Restore == "" || !strings.HasPrefix(base, "refs/rescued/") {
-			return notes, fmt.Errorf("fetch origin failed; refusing a new session branch from %s: %s", base, cmdDetail(fetchErr))
+			return notes, fmt.Errorf("%s; refusing a new session branch from %s: %s", fetchProblem(fetchErr), base, cmdDetail(fetchErr))
 		}
 		offlineBase = base
 	}

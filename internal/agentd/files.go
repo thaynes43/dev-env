@@ -48,6 +48,47 @@ func writeFileAtomic(path string, data []byte, mode fs.FileMode) error {
 	return nil
 }
 
+// writeFileOnce publishes data at path only when nothing is there. It syncs a
+// temporary file beside path and hard-links it into place, so a reader sees
+// the whole file or none, and an existing file is never replaced: that case
+// returns an error that matches fs.ErrExist.
+func writeFileOnce(path string, data []byte, mode fs.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := noSymlinkComponents(dir); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".agentd-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }()
+	if err := f.Chmod(mode); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Link(tmp, path); err != nil {
+		return err
+	}
+	parent, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = parent.Close() }()
+	return parent.Sync()
+}
+
 // symlinkForce points link at target, replacing a file or link already there
 // (ln -sf). It refuses to replace a directory.
 func symlinkForce(target, link string) error {

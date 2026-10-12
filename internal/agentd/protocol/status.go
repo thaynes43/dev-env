@@ -76,7 +76,30 @@ type Workspace struct {
 	Clone    string `json:"clone"`
 	Worktree string `json:"worktree"`
 	Branch   string `json:"branch,omitempty"`
-	Head     string `json:"head,omitempty"`
+	// Head is the worktree's live HEAD, not where the task started.
+	Head string `json:"head,omitempty"`
+	// Source is a private project task's recorded source pin. It is absent for
+	// other sessions and for a task created before agentd recorded one.
+	Source *TaskSource `json:"source,omitempty"`
+}
+
+// TaskSource is the source pin of a private project task (DESIGN-006): the
+// accepted repository and the immutable commit its worktree was created from.
+// agentd records it once, in ~/.agentd/task-source.json, before it creates the
+// task's worktree. A resume or a later fetch never rewrites it.
+type TaskSource struct {
+	Version    int    `json:"version"`
+	Session    string `json:"session"`
+	SessionUID string `json:"sessionUID,omitempty"`
+	// Repo is the catalog's local alias; GitHub is the owner/name identity.
+	Repo   string `json:"repo"`
+	GitHub string `json:"github"`
+	// Branch is the declared branch that was fetched; Commit is the pin.
+	Branch          string    `json:"branch"`
+	Commit          string    `json:"commit"`
+	FetchedAt       time.Time `json:"fetchedAt"`
+	CatalogRevision string    `json:"catalogRevision"`
+	RulesRevision   string    `json:"rulesRevision"`
 }
 
 // AgentState is the agent process's state.

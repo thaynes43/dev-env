@@ -183,7 +183,7 @@ func clonesIn(dir string) ([]string, error) {
 func rescueRepo(ctx context.Context, r Runner, s Settings, repo, stamp string) protocol.RepoRescue {
 	rr := protocol.RepoRescue{Path: repo, Worktrees: []protocol.WorktreeRescue{}}
 	fctx, cancel := context.WithTimeout(ctx, rescueFetchTimeout)
-	_, err := s.git(fctx, r, repo, "fetch", "--prune", "--quiet", "origin")
+	_, err := s.git(fctx, r, repo, originFetchArgs("--prune", "--quiet")...)
 	cancel()
 	if err != nil {
 		// Stale remote refs can only make more refs look unpushed, the safe

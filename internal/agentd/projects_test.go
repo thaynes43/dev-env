@@ -29,6 +29,10 @@ type projectFixtureRunner struct {
 	failFetch    bool
 	cloneFailure string
 	cloneCalls   int
+	// namedRemote keeps fetches on the named remote, so its configured
+	// refspecs apply, and routes the HTTPS identity to the fixture with a
+	// command-scoped insteadOf instead of replacing the remote argument.
+	namedRemote bool
 }
 
 func (r *projectFixtureRunner) Run(ctx context.Context, cmd Cmd) (Result, error) {
@@ -63,6 +67,10 @@ func (r *projectFixtureRunner) Run(ctx context.Context, cmd Cmd) (Result, error)
 	if i := slices.Index(cmd.Args, "fetch"); i >= 0 {
 		if r.failFetch {
 			return Result{}, &CmdError{Name: "git", Sub: "fetch", ExitCode: 128}
+		}
+		if r.namedRemote {
+			cmd.Args = append([]string{"-c", "url.file://" + r.remote + ".insteadOf=https://github.com/fixture/demo"}, cmd.Args...)
+			return r.ExecRunner.Run(ctx, cmd)
 		}
 		for j := i + 1; j < len(cmd.Args); j++ {
 			if cmd.Args[j] == "origin" {

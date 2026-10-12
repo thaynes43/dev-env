@@ -51,6 +51,70 @@ Immediately before each new task, the existing selected-repository path still
 fetches and pins an immutable commit. A failed selected fetch blocks that new
 task. Resume retains its worktree, source receipt and saved project rules.
 
+## Task source and reference fixes
+
+Added 2026-10-12 for review findings roots-2 to roots-5 (#173).
+
+- **Task source record.** A new private project task pins its source once.
+  After the identity proof and the fresh fetch, and before `worktree add`,
+  agentd writes `~/.agentd/task-source.json`. It is private (mode 0600) and
+  written once: an exclusive atomic create that never replaces a file already
+  there. It holds the session, repository alias, GitHub identity, declared
+  branch, immutable commit, fetch time and the snapshot's catalog and rules
+  revisions. A retry of a task whose worktree creation failed reuses the
+  recorded commit, so the record and the worktree never disagree. The fresh
+  fetch is still required before that retry. A record that binds another
+  session or source, or cannot be read, refuses the new task and is kept.
+  Resume never rewrites the record.
+  `agentd ctl status` and the heartbeat report it as `workspace.source`;
+  `workspace.head` stays the live HEAD. A task created before this record
+  existed reports no source rather than a guessed one. Resume and status
+  report the record only when it binds this session: its name and UID, the
+  repository alias, GitHub identity and declared branch, and the accepted
+  snapshot's catalog and rules revisions. An unreadable record, or one that
+  binds another session or source, is a boot warning and a `task-source`
+  problem. It reports no source and is kept as it is. AgentSession status and
+  the CRD do not change: the heartbeat decoder ignores the new field.
+- **Resume fetch notes.** On resume the selected-branch fetch only refreshes
+  `origin/<branch>`. Its boot note says so and names the recorded source,
+  instead of reading like the task's source.
+- **Explicit refspec only.** The selected-branch fetch passes `--refmap=`, so
+  only `refs/remotes/origin/<branch>` is written. A configured
+  `remote.origin.fetch` can no longer move other remote-tracking refs or force
+  local branches. This applies to bootstrap, project roots, sync and tasks,
+  which all share the one fetch helper. The whole-origin fetches do the same:
+  the boot fetch of a reused clone for a session without a project, and both
+  rescue fetches (private and shared). Each passes `--refmap=` with
+  `+refs/heads/*:refs/remotes/origin/*` and `--no-prune-tags`. Their
+  `--prune` then removes only stale `refs/remotes/origin/*` refs. Before this,
+  a configured mapping into `refs/heads` let a rescue's `--prune` delete the
+  session branch and every local branch origin lacked, and `fetch.pruneTags`
+  every such tag, before the rescue reported or bundled them.
+- **Resume after identity drift.** The Git storage proof still gates every
+  boot. A mismatch in the origin fetch or push URLs refuses a new task, as
+  before. When the session's worktree, `agent/<name>` branch or first launch
+  record already exists, the mismatch is a warning instead: agentd skips the
+  fetch and reuses or recreates the worktree without moving it. It never
+  creates a new branch from an unfetched base, so a launched task that lost
+  both its worktree and its branch is still refused.
+- **Staged task clone.** A missing selected clone uses the same staged
+  reference clone as bootstrap: it checks out the declared branch, proves
+  identity before publication, and never deletes staging. Preserved staging
+  refuses the clone and stays in place for inspection. When bootstrap is
+  enabled, the legacy clone used by sessions without a project also preserves
+  existing staging instead of deleting it.
+- **Recovery from preserved staging.** Staging at
+  `~/repos/.<repo>.agentd-clone` is either bootstrap's preserved clone or a
+  first clone cut short, for example when the pod was killed or drained. agentd
+  cannot tell which, so it refuses the repo step on every boot and the agent
+  never starts. Earlier, a private task deleted that staging and cloned again.
+  The boot note names the staging path. A human recovers in one of two ways:
+  - Inspect the staging from the session pod (`kubectl exec`) and remove it.
+    The next boot clones again. Suspend and resume start that boot when the
+    session's lifecycle allows a new pod.
+  - Reap the session and create the task again. A task refused here never got
+    a worktree or started its agent, so it has no work to lose.
+
 The contract is provider-neutral: Claude Code, Codex and a future local-model
 adapter use private repositories and the same source/rules provenance. This
 slice adds no local inference or GPU allocation. Subscription-backed execution

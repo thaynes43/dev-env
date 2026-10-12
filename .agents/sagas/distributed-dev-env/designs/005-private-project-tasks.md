@@ -36,10 +36,11 @@ unsupported combination appear usable.
 Agentd accepts that snapshot with shared-workspace settings off. Before fetching
 an existing selected clone, it verifies its root, common Git directory and all
 origin fetch/push URLs against the accepted repository identity. A missing
-selected clone uses the existing private clone preparation. Before a new task,
+selected clone uses the staged reference clone (DESIGN-006, amended
+2026-10-12; it first used the legacy private clone). Before a new task,
 fetch the declared branch explicitly and resolve its remote-tracking commit.
 Create the task branch/worktree from that immutable commit and record its source
-identity. Administrative preparation disables replacement refs, local hooks and
+identity in `~/.agentd/task-source.json` (DESIGN-006). Administrative preparation disables replacement refs, local hooks and
 fsmonitor so they cannot substitute the fetched tree. A failed fetch blocks a
 fresh task.
 

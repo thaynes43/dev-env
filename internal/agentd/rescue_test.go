@@ -180,6 +180,65 @@ func TestRescueReportsUnpushedCommitsAndStash(t *testing.T) {
 	}
 }
 
+// refAt is the commit at exactly ref, or "" when the ref is absent.
+func refAt(t *testing.T, env []string, dir, ref string) string {
+	t.Helper()
+	for _, line := range strings.Split(gitRun(t, env, dir, "for-each-ref", "--format=%(objectname) %(refname)", ref), "\n") {
+		if sha, name, ok := strings.Cut(line, " "); ok && name == ref {
+			return sha
+		}
+	}
+	return ""
+}
+
+// The rescue's fetch never applies the clone's configured refspecs: with a
+// mirroring remote.origin.fetch and fetch.pruneTags, --prune would delete the
+// local branches and tags origin lacks before they were reported or bundled.
+func TestRescueFetchKeepsLocalRefsUnderAMirroringRefspec(t *testing.T) {
+	rig := newRescueRig(t)
+	wt, env, clone := rig.ws.Worktree, rig.g.env, rig.ws.Clone
+	writeFile(t, filepath.Join(wt, "done.txt"), "done\n")
+	gitRun(t, env, wt, "add", "done.txt")
+	gitRun(t, env, wt, "commit", "-q", "-m", "work")
+	work := gitRun(t, env, wt, "rev-parse", "HEAD")
+	gitRun(t, env, clone, "branch", "local-only", work)
+	gitRun(t, env, clone, "tag", "local-tag", work)
+	main := gitRun(t, env, clone, "rev-parse", "refs/heads/main")
+	gitRun(t, env, clone, "update-ref", "refs/remotes/origin/gone", main)
+	gitRun(t, env, clone, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/heads/*")
+	gitRun(t, env, clone, "config", "fetch.pruneTags", "true")
+	check := func(stage, originMain string) {
+		t.Helper()
+		rep := rig.rescue(t)
+		if !rep.Repos[0].Fetched {
+			t.Fatalf("%s: fetch failed: %+v", stage, rep.Repos[0])
+		}
+		for ref, want := range map[string]string{
+			"refs/heads/" + rig.ws.Branch: work, "refs/heads/local-only": work, "refs/tags/local-tag": work,
+			"refs/heads/main": main, "refs/remotes/origin/main": originMain, "refs/remotes/origin/gone": "",
+		} {
+			if got := refAt(t, env, clone, ref); got != want {
+				t.Errorf("%s: %s = %q, want %q", stage, ref, got, want)
+			}
+		}
+		if got := refNames(rep.Repos[0].UnpushedRefs); got != "refs/heads/"+rig.ws.Branch+" refs/heads/local-only refs/tags/local-tag" {
+			t.Errorf("%s: unpushed = %q", stage, got)
+		}
+	}
+	// With the clone's HEAD off main, the configured refspec plus --prune
+	// deleted every local branch and tag except main.
+	gitRun(t, env, clone, "switch", "-q", "--detach")
+	check("clone detached", main)
+	// With main checked out and origin moved on, the configured refspec made
+	// Git refuse the whole fetch; now origin/main moves and main stays.
+	gitRun(t, env, clone, "switch", "-q", "main")
+	writeFile(t, filepath.Join(rig.g.seed, "b.txt"), "b\n")
+	gitRun(t, env, rig.g.seed, "add", "b.txt")
+	gitRun(t, env, rig.g.seed, "commit", "-q", "-m", "second")
+	gitRun(t, env, rig.g.seed, "push", "-q", "origin", "HEAD:main")
+	check("origin moved", gitRun(t, env, rig.g.seed, "rev-parse", "HEAD"))
+}
+
 func TestRescueWithoutAnIndexFile(t *testing.T) {
 	rig := newRescueRig(t)
 	wt, env := rig.ws.Worktree, rig.g.env

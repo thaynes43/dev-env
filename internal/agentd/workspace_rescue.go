@@ -122,7 +122,7 @@ func rescueSharedTask(ctx context.Context, r Runner, s Settings, task string, no
 	}
 	rr := protocol.RepoRescue{Path: owner.Clone, Worktrees: []protocol.WorktreeRescue{}}
 	fctx, cancel := context.WithTimeout(ctx, rescueFetchTimeout)
-	_, err = s.git(fctx, r, owner.Clone, "fetch", "--prune", "--quiet", "origin")
+	_, err = s.git(fctx, r, owner.Clone, originFetchArgs("--prune", "--quiet")...)
 	cancel()
 	if err != nil {
 		rr.FetchError = cmdDetail(err)

@@ -34,6 +34,9 @@ const (
 	tuiExitFile = "tui-exit.json"
 	pidFile     = "agent.pid"
 	eventsFile  = "task-events.jsonl"
+	// taskSourceFile is a private project task's source pin, written once
+	// before its worktree is created (DESIGN-006).
+	taskSourceFile = "task-source.json"
 )
 
 // Launch is everything `agentd run-agent` needs to run the agent: agentd

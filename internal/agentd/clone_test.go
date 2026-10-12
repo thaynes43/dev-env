@@ -20,7 +20,7 @@ func cloneSession(name string) protocol.Session {
 // failOriginFetch keeps local git operations real while origin is unavailable.
 func failOriginFetch(r ExecRunner) *fakeRunner {
 	return &fakeRunner{handle: func(c Cmd) (Result, error) {
-		if c.Name == "git" && len(c.Args) > 2 && slices.Equal(c.Args[2:], []string{"fetch", "--prune", "origin"}) {
+		if c.Name == "git" && len(c.Args) > 2 && slices.Equal(c.Args[2:], originFetchArgs("--prune")) {
 			return Result{}, &CmdError{Name: "git", Sub: "fetch", ExitCode: 128, Stderr: "fatal: origin unavailable"}
 		}
 		return r.Run(context.Background(), c)
@@ -193,6 +193,49 @@ func TestPrepareRepoFreshThenReuse(t *testing.T) {
 	}
 	if got := gitRun(t, g.env, ws.Clone, "rev-parse", "origin/main"); got == main {
 		t.Error("the clone was not fetched")
+	}
+}
+
+// The boot fetch of a reused clone never applies its configured refspecs: a
+// mirroring remote.origin.fetch with --prune deleted the session branch and
+// every local branch origin lacks.
+func TestPrepareRepoReuseFetchKeepsLocalBranches(t *testing.T) {
+	g := newGitFixture(t, "demo")
+	s, r := g.settings(t)
+	sess := cloneSession("demo-1006-120000")
+	ctx := context.Background()
+	ws, step := PrepareRepo(ctx, r, s, sess)
+	if step.State != StepOK {
+		t.Fatalf("first boot: %s %q", step.State, step.Notes)
+	}
+	writeFile(t, filepath.Join(ws.Worktree, "work.txt"), "work\n")
+	gitRun(t, g.env, ws.Worktree, "add", "work.txt")
+	gitRun(t, g.env, ws.Worktree, "commit", "-q", "-m", "work")
+	work := gitRun(t, g.env, ws.Worktree, "rev-parse", "HEAD")
+	gitRun(t, g.env, ws.Clone, "branch", "local-only", work)
+	gitRun(t, g.env, ws.Clone, "update-ref", "refs/remotes/origin/gone", work)
+	gitRun(t, g.env, ws.Clone, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/heads/*")
+	gitRun(t, g.env, ws.Clone, "switch", "-q", "--detach")
+	writeFile(t, filepath.Join(g.seed, "b.txt"), "b\n")
+	gitRun(t, g.env, g.seed, "add", "b.txt")
+	gitRun(t, g.env, g.seed, "commit", "-q", "-m", "second")
+	gitRun(t, g.env, g.seed, "push", "-q", "origin", "HEAD:main")
+	moved := gitRun(t, g.env, g.seed, "rev-parse", "HEAD")
+
+	ws2, step := PrepareRepo(ctx, r, s, sess)
+	if step.State != StepOK || !strings.Contains(strings.Join(step.Notes, "\n"), "reused the clone and fetched origin") {
+		t.Fatalf("second boot: %s %q", step.State, step.Notes)
+	}
+	if ws2.Head != work {
+		t.Errorf("head %s, want the session's work %s", ws2.Head, work)
+	}
+	for ref, want := range map[string]string{
+		"refs/heads/" + ws.Branch: work, "refs/heads/local-only": work,
+		"refs/remotes/origin/main": moved, "refs/remotes/origin/gone": "",
+	} {
+		if got := refAt(t, g.env, ws.Clone, ref); got != want {
+			t.Errorf("%s = %q, want %q", ref, got, want)
+		}
 	}
 }
 

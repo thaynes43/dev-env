@@ -154,7 +154,7 @@ func TestUsagePrivateOriginalReceiptAndRetainedResume(t *testing.T) {
 	if err := writeJSONFile(s.statePath(resumeFile), Launch{BootID: "later", TUI: true, Resume: true, ConversationID: l.ConversationID}); err != nil {
 		t.Fatal(err)
 	}
-	st := CollectStatus(context.Background(), &fakeRunner{}, s, l.Session, l.CreatedAt.Add(time.Hour))
+	st := CollectStatus(context.Background(), &fakeRunner{}, s, protocol.Session{Name: l.Session}, l.CreatedAt.Add(time.Hour))
 	if st.UsageObservation == nil || !reflect.DeepEqual(*st.UsageObservation, *tr.UsageObservation) || st.UsageObservation.Coverage != protocol.UsageInitial {
 		t.Fatal("resume relabelled or lost initial snapshot")
 	}
@@ -300,7 +300,7 @@ func TestUsageOutgoingHeartbeatMixedVersionPreservesPrivateEvidence(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			st := CollectStatus(context.Background(), &fakeRunner{}, s, launch.Session, private.FinishedAt.Add(time.Minute))
+			st := CollectStatus(context.Background(), &fakeRunner{}, s, protocol.Session{Name: launch.Session}, private.FinishedAt.Add(time.Minute))
 			if st.Usage != nil || st.Agent.State != protocol.AgentExited || st.Agent.Task == nil || st.Agent.Task.ExitCode != 124 || !st.Agent.Task.TimedOut || st.Agent.Task.NumTurns != 3 {
 				t.Fatal("raw usage escaped collection or task budget outcome was lost", st)
 			}

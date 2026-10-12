@@ -483,7 +483,7 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
 			return exitFailure
 		}
-		st := agentd.CollectStatus(ctx, r, s, sess.Name, time.Now())
+		st := agentd.CollectStatus(ctx, r, s, sess, time.Now())
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(st); err != nil {
