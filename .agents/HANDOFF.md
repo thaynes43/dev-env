@@ -1,5 +1,36 @@
 # HANDOFF: start here
 
+## Fixed-rule configuration accepted — 2026-10-12 00:31 UTC
+
+[The activation record](sagas/distributed-dev-env/verification/fixed-rule-activation-2026-10-11.md)
+supersedes the pending R4/merge state below. Owner Q-26 allowed one final
+correction after three failed preparations. Frozen R4 passed independent
+preparation review; its one fresh 21-GET baseline passed independent saved review.
+Ops #3824 squash-merged as `00bd6403` with required Diff/Flux checks and native
+source review passed. Claude review is optional/down; its error-only result was
+read and retained.
+
+The one post-roll observer completed with 21 GETs and 29 predicates passed.
+Independent saved-response review `d394b19e` passed; root configuration acceptance
+is `b74d9a29`. Both replacement operator Pods are Ready and all 11 peers, fixture
+Jobs/ledgers, schemas, authority objects, guards, networks and rule/catalog
+ConfigMaps are preserved. Activity `act-235107-2570013` ended after acceptance.
+Q-26 is satisfied: one final correction, one baseline and one observer, no retry
+or fifth candidate. This accepts configuration preservation only.
+
+The first Directory wrapper passed inert preparation review only. Actual
+installation/caller/plan bindings remain unset. No new client or provider has
+run; Directory contents remain Unknown. The two permanent IDs, signed operator
+`sha-a44b5b1`/`d0463c21` and v2.20 task/template pins remain fixed. Global private
+admission remains disabled. Capture audit `8093f2b6` found the initiating client
+cannot read stored probe text through the general context API. DESIGN-022 is
+the separate read-only result slice in flight. Its fake API tests also found
+initial capture creation refuses the pre-create empty UID (`17ddd14e`). The
+bounded admission-only DeepCopy preview fix must retain real runtime UID checks.
+Both fixes require source checks/native review and signed delivery before either
+permanent POST. No Job-output or live-log route supplies a retained receipt.
+Actual rule acceptance and the owner pilot remain open; Q-24 is pending.
+
 ## Latest client increment — 2026-10-11 UTC
 
 Source #204 (`c9493db0`) and #206 (`562d7df2`) are merged after focused checks,

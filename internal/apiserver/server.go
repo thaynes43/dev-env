@@ -130,6 +130,8 @@ type handler func(ctx context.Context, w http.ResponseWriter, r *http.Request, c
 // route is a path's handlers by method.
 type route struct {
 	methods map[string]handler
+	// identityGuard is an optional, read-free gate before caller resolution.
+	identityGuard func(Identity, *http.Request) error
 	// quiet logs the route at debug level: heartbeats come every minute.
 	quiet       bool
 	coordinator bool
@@ -141,6 +143,7 @@ type route struct {
 // Handler returns the API's HTTP handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle(apiv1.CanariesPath+"/{id}/result", s.canaryResultRoute())
 	mux.Handle(apiv1.SessionDirectoryPath, s.serve(route{directory: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.listDirectory}}))
 	mux.Handle(apiv1.SessionDirectoryPath+"/{directory}", s.serve(route{directory: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.getDirectory}}))
 	mux.Handle(apiv1.SessionDirectoryPath+"/{directory}/contexts", s.serve(route{directory: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.listDirectoryContexts}}))
@@ -237,6 +240,11 @@ func (s *Server) serve(rt route) http.Handler {
 			id, err := s.Auth.Authenticate(r.Context(), tok)
 			if err != nil {
 				return 0, err
+			}
+			if rt.identityGuard != nil {
+				if err := rt.identityGuard(id, r); err != nil {
+					return 0, err
+				}
 			}
 			if c, err = s.resolveCaller(r.Context(), id); err != nil {
 				if rt.directory {

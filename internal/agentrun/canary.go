@@ -23,8 +23,11 @@ func (a *app) canary(ctx context.Context, args []string) error {
 	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
 		return a.help([]string{"canary"})
 	}
+	if len(args) > 0 && args[0] == "result" {
+		return a.canaryResult(ctx, args[1:])
+	}
 	if len(args) == 0 || args[0] != "create" {
-		return usageError("canary takes the create subcommand; agent-run help canary lists its flags")
+		return usageError("canary takes create or result; agent-run help canary lists its flags")
 	}
 	cmd := newCommand("canary", outputJSON)
 	cmd.c.output = outputJSON

@@ -500,3 +500,25 @@ does not retry, redirect or poll. Preserve an uncertain response for observation
 without creating another Session or changing the key. This source client does
 not enable general private admission or select Codex fleet routing. See
 [the ID-only client contract](../.agents/sagas/distributed-dev-env/designs/021-canary-cli.md).
+
+### Read a fixed probe's retained result
+
+After the result reader is deployed, use the original Session UID from the
+accepted creation receipt and the named context from authorized discovery:
+
+```sh
+agent-run canary result --id rule-canary-claude-1011 \
+  --session-uid ORIGINAL_SESSION_UID --context PUBLISHED_CONTEXT_NAME --json --once
+```
+
+This command sends one read and refuses redirects and retries. Here `--context`
+names the publication, rather than selecting a kubeconfig context. The reader
+requires the fixed record's initiating client, the retained original Session
+and matching publication authority. It can read a stored result after the source
+Pod exits; an absent, replaced or mismatched original holds the read. It cannot
+create a replacement or inspect a private home.
+
+The returned receipt proves only that stored publication. Missing output or an
+uncertain capture ACK remains Unknown. Partial managed output does not prove
+complete native history, served model or billed cost. Source tests alone do not
+accept actual rule loading. See [the result reader contract](../.agents/sagas/distributed-dev-env/designs/022-fixed-canary-result-reader.md).
