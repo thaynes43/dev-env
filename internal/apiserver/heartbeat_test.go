@@ -18,6 +18,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
 
 func status(name string) protocol.Status {
@@ -115,6 +116,21 @@ func TestHeartbeatCaps(t *testing.T) {
 	}
 	if u := usageStatus(protocol.Usage{CostUSD: 0.0000001}); u.CostUSD != "0.0000001" {
 		t.Errorf("a small cost became %q, which the schema's pattern refuses", u.CostUSD)
+	}
+}
+
+// The published bounds are the catalog's own limits. A catalog that grows
+// them fails here rather than having agentd and the heartbeat truncate a full
+// report silently; the CRD's validation test holds its schema to the same
+// constants.
+func TestProjectBootstrapBoundsAreTheCatalogLimits(t *testing.T) {
+	if protocol.MaxBootstrapRepositories != projectcatalog.MaxRepositories || protocol.MaxBootstrapProjects != projectcatalog.MaxProjects {
+		t.Fatalf("published bounds %d repositories and %d projects, catalog limits %d and %d",
+			protocol.MaxBootstrapRepositories, protocol.MaxBootstrapProjects, projectcatalog.MaxRepositories, projectcatalog.MaxProjects)
+	}
+	name := strings.Repeat("a", protocol.MaxBootstrapNameLength)
+	if !projectcatalog.ValidName(name) || projectcatalog.ValidName(name+"a") {
+		t.Fatalf("catalog names are not at most %d bytes", protocol.MaxBootstrapNameLength)
 	}
 }
 

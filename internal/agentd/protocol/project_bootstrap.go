@@ -81,11 +81,12 @@ const (
 	ReasonChangedDuringProof      = "ChangedDuringProof"
 	ReasonAdvanceFailed           = "AdvanceFailed"
 	ReasonTimedOut                = "TimedOut"
+	ReasonStopped                 = "Stopped"
 	ReasonUncertain               = "Uncertain"
 )
 
-// Project root reasons (DESIGN-007), beside CatalogUnconfirmed, FetchFailed
-// and TimedOut above.
+// Project root reasons (DESIGN-007), beside CatalogUnconfirmed, FetchFailed,
+// TimedOut and Stopped above.
 const (
 	ReasonStateUncertain       = "StateUncertain"
 	ReasonReceiptUnconfirmed   = "ReceiptUnconfirmed"
@@ -101,7 +102,8 @@ const (
 	ReasonBudgetReserve        = "BudgetReserve"
 )
 
-// Catalog reasons, beside StateUncertain, CatalogUnconfirmed and TimedOut.
+// Catalog reasons, beside StateUncertain, CatalogUnconfirmed, TimedOut and
+// Stopped.
 const (
 	ReasonConfigInvalid    = "ConfigInvalid"
 	ReasonLockUnavailable  = "LockUnavailable"
@@ -122,22 +124,24 @@ var (
 		ReasonGitOperationPresent, ReasonCatalogUnconfirmed, ReasonFetchFailed, ReasonUntrackedFiles,
 		ReasonUnsupportedTrackedEntry, ReasonIndexBoundExceeded, ReasonWorkingTreeDiffers, ReasonStagedChanges,
 		ReasonNonDefaultBranch, ReasonBranchInOtherWorktree, ReasonLocalOnlyCommits, ReasonChangedDuringProof,
-		ReasonAdvanceFailed, ReasonTimedOut, ReasonUncertain,
+		ReasonAdvanceFailed, ReasonTimedOut, ReasonStopped, ReasonUncertain,
 	}
 	RootReasons = []string{
 		ReasonStateUncertain, ReasonReceiptUnconfirmed, ReasonCatalogUnconfirmed, ReasonRootUnproven,
 		ReasonAnchorRemoved, ReasonRepositoryNotReady, ReasonFetchFailed, ReasonAnchorNotFastForward,
 		ReasonRootPrepareFailed, ReasonAnchorAddFailed, ReasonAnchorUnproven, ReasonAnchorAdvanceFailed,
-		ReasonRootAdvanceFailed, ReasonBudgetReserve, ReasonTimedOut,
+		ReasonRootAdvanceFailed, ReasonBudgetReserve, ReasonTimedOut, ReasonStopped,
 	}
 	CatalogReasons = []string{
 		ReasonConfigInvalid, ReasonStateUncertain, ReasonLockUnavailable, ReasonReportUnretained,
-		ReasonCatalogUnconfirmed, ReasonCatalogInvalid, ReasonOwnerMismatch, ReasonTimedOut,
+		ReasonCatalogUnconfirmed, ReasonCatalogInvalid, ReasonOwnerMismatch, ReasonTimedOut, ReasonStopped,
 	}
 )
 
-// Bounds at the catalog's own limits (projectcatalog.MaxRepositories and
-// MaxProjects); a catalog name is at most 63 bytes.
+// Bounds at the catalog's own limits (projectcatalog.MaxRepositories,
+// MaxProjects and ValidName's 63 bytes), which the CRD's MaxItems and
+// MaxLength repeat. The API server's tests prove the catalog side and the
+// CRD's validation test the schema side, so neither can drift silently.
 const (
 	MaxBootstrapRepositories = 128
 	MaxBootstrapProjects     = 64

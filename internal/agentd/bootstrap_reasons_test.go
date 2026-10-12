@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -232,5 +234,197 @@ func TestPrivateBootstrapSummaryPublishesNoPrivateDetail(t *testing.T) {
 	}
 	if (PrivateProjectReport{State: "Disabled"}).published() != nil {
 		t.Fatal("a disabled bootstrap was published")
+	}
+}
+
+// hookRunner answers the commands hook claims and runs the rest.
+type hookRunner struct {
+	Runner
+	hook func(ctx context.Context, c Cmd) (handled bool, err error)
+}
+
+func (r *hookRunner) Run(ctx context.Context, c Cmd) (Result, error) {
+	if handled, err := r.hook(ctx, c); handled {
+		return Result{ExitCode: ExitCodeOf(err)}, err
+	}
+	return r.Runner.Run(ctx, c)
+}
+
+func isAncestryCheck(c Cmd, dir string) bool {
+	return len(c.Args) > 1 && c.Args[1] == dir && slices.Contains(c.Args, "merge-base") && slices.Contains(c.Args, "--is-ancestor")
+}
+
+// endingContext is a parent context the test ends on demand, the way the
+// operation budget's deadline or agentd's SIGTERM ends the real one.
+type endingContext struct {
+	context.Context
+	once sync.Once
+	done chan struct{}
+	err  error
+}
+
+func newEndingContext() *endingContext {
+	return &endingContext{Context: context.Background(), done: make(chan struct{})}
+}
+
+func (c *endingContext) Done() <-chan struct{} { return c.done }
+
+func (c *endingContext) Err() error {
+	select {
+	case <-c.done:
+		return c.err
+	default:
+		return nil
+	}
+}
+
+func (c *endingContext) end(err error) {
+	c.once.Do(func() {
+		c.err = err
+		close(c.done)
+	})
+}
+
+// A refresh that a passed deadline ends reports TimedOut at the item and the
+// catalog; one that agentd's stop (a cancelled context) ends reports Stopped.
+// Neither is mistaken for the other, and the step stays where it stopped.
+func TestPrivateCatalogBootstrapReportsWhyItsContextEnded(t *testing.T) {
+	isFetch := func(c Cmd) bool { return slices.Contains(c.Args, "fetch") }
+	isAnchorAdd := func(c Cmd) bool { return slices.Contains(c.Args, "worktree") && slices.Contains(c.Args, "add") }
+	cases := []struct {
+		name  string
+		end   error
+		roots bool
+		at    func(Cmd) bool
+		want  string
+	}{
+		{"repository fetch past the deadline", context.DeadlineExceeded, false, isFetch, protocol.ReasonTimedOut},
+		{"repository fetch when agentd stops", context.Canceled, false, isFetch, protocol.ReasonStopped},
+		{"anchor add past the deadline", context.DeadlineExceeded, true, isAnchorAdd, protocol.ReasonTimedOut},
+		{"anchor add when agentd stops", context.Canceled, true, isAnchorAdd, protocol.ReasonStopped},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, s, r, source := privateBootstrapFixture(t, projectTestCatalog)
+			s.PrivateProjectRoots = c.roots
+			parent := newEndingContext()
+			runner := &hookRunner{Runner: r, hook: func(ctx context.Context, cmd Cmd) (bool, error) {
+				if !c.at(cmd) {
+					return false, nil
+				}
+				// The command is in flight when its context ends, and is
+				// killed once the end reaches it.
+				parent.end(c.end)
+				<-ctx.Done()
+				return true, &CmdError{Name: "git", Sub: "killed", ExitCode: -1}
+			}}
+			report, err := RefreshPrivateProjects(parent, runner, s, source)
+			if err == nil || report.State != protocol.BootstrapFailed || report.Reason != c.want || len(report.Repositories) != 1 {
+				t.Fatalf("ended bootstrap reported as %v %+v", err, report)
+			}
+			wantSummary := "catalog bootstrap outcome Failed: " + c.want + "; demo=" + c.want
+			repo := report.Repositories[0]
+			if c.roots {
+				wantSummary = "catalog bootstrap outcome Failed: " + c.want + "; project sample=" + c.want + "@demo"
+				if repo.State != protocol.BootstrapReady || len(report.Projects) != 1 {
+					t.Fatalf("repository before the root %+v, projects %+v", repo, report.Projects)
+				}
+				if got := report.Projects[0]; got.State != protocol.BootstrapFailed || got.Reason != c.want || got.Repository != "demo" || got.Cause != "" {
+					t.Fatalf("ended root reported as %s@%s(%s)", got.Reason, got.Repository, got.Cause)
+				}
+			} else if repo.State != protocol.BootstrapPreserved || repo.Step != protocol.StepFetch || repo.Reason != c.want {
+				t.Fatalf("ended repository reported as %+v", repo)
+			}
+			if got := report.summary(); got != wantSummary {
+				t.Fatalf("summary\n got %q\nwant %q", got, wantSummary)
+			}
+			stopped := strings.HasPrefix(report.Failure, "agentd stopped during ")
+			if stopped != (c.want == protocol.ReasonStopped) || stopped == strings.Contains(report.Failure, "time budget ended") {
+				t.Fatalf("private failure text %q for %s", report.Failure, c.want)
+			}
+		})
+	}
+}
+
+// Only Git's exit 1 answers an ancestry check "no". Any other failure, such
+// as exit 128 for a missing object, is no answer: Uncertain for a reference,
+// and AnchorUnproven with cause Uncertain for a root's anchor.
+func TestPrivateBootstrapAncestryCodesNeedGitsAnswer(t *testing.T) {
+	t.Run("reference", func(t *testing.T) {
+		_, s, r, source := privateBootstrapFixture(t, projectTestCatalog)
+		runner := &hookRunner{Runner: r, hook: func(_ context.Context, c Cmd) (bool, error) {
+			if !isAncestryCheck(c, s.ClonePath("demo")) {
+				return false, nil
+			}
+			return true, &CmdError{Name: "git", Sub: "merge-base", ExitCode: 128}
+		}}
+		report, err := RefreshPrivateProjects(context.Background(), runner, s, source)
+		if err == nil || report.State != protocol.BootstrapPartial {
+			t.Fatalf("an unanswered ancestry check was admitted: %v %+v", err, report)
+		}
+		if got := report.Repositories[0]; got.State != protocol.BootstrapPreserved || got.Step != protocol.StepAdvance || got.Reason != protocol.ReasonUncertain {
+			t.Fatalf("unanswered ancestry reported as %+v", got)
+		}
+	})
+	// The root asks twice per moved anchor: before the first change, from
+	// the recorded commit, and again before the fast-forward, from the
+	// checked-out commit.
+	for _, c := range []struct {
+		name   string
+		call   int
+		exit   int
+		reason string
+		cause  string
+	}{
+		{"recorded commit, no answer", 1, 128, protocol.ReasonAnchorUnproven, protocol.ReasonUncertain},
+		{"checked-out commit, no answer", 2, 128, protocol.ReasonAnchorUnproven, protocol.ReasonUncertain},
+		{"checked-out commit, answered no", 2, 1, protocol.ReasonAnchorNotFastForward, ""},
+	} {
+		t.Run("anchor "+c.name, func(t *testing.T) {
+			g, s, r, source := privateRootsFixture(t, projectTestCatalog)
+			requirePrivateRootReady(t, s, r, source)
+			anchor := filepath.Join(privateRootPath(s), "demo")
+			pushBootstrapChange(t, g)
+			calls := 0
+			runner := &hookRunner{Runner: r, hook: func(_ context.Context, cmd Cmd) (bool, error) {
+				if !isAncestryCheck(cmd, anchor) {
+					return false, nil
+				}
+				if calls++; calls != c.call {
+					return false, nil
+				}
+				return true, &CmdError{Name: "git", Sub: "merge-base", ExitCode: c.exit}
+			}}
+			report, err := RefreshPrivateProjects(context.Background(), runner, s, source)
+			if err == nil || report.State != protocol.BootstrapPartial || report.Repositories[0].State != protocol.BootstrapReady || calls < c.call {
+				t.Fatalf("anchor ancestry check %d not refused: %v %+v", c.call, err, report)
+			}
+			if got := report.Projects[0]; got.State != protocol.BootstrapFailed || got.Reason != c.reason || got.Repository != "demo" || got.Cause != c.cause {
+				t.Fatalf("anchor ancestry reported as %s@%s(%s), want %s@demo(%s)", got.Reason, got.Repository, got.Cause, c.reason, c.cause)
+			}
+		})
+	}
+}
+
+// With more than one removed anchor, the report names the first by name, so
+// the same state on disk always gives the same status and summary.
+func TestPrivateRootsNameTheFirstRemovedAnchor(t *testing.T) {
+	_, s, r, source := privateRootsFixture(t, twoRepositoryRootDeclaration())
+	requirePrivateRootReady(t, s, r, source)
+	changed := strings.Replace(twoRepositoryRootDeclaration(), `"github":"fixture/extra"}},`, `"github":"fixture/extra"},"other":{"github":"fixture/other"}},`, 1)
+	changed = strings.Replace(changed, `[{"name":"demo"},{"name":"extra"}]`, `[{"name":"other"}]`, 1)
+	if changed == twoRepositoryRootDeclaration() || !strings.Contains(changed, `[{"name":"other"}]`) {
+		t.Fatal("fixture catalog did not change")
+	}
+	source = projectSyncFixtureOptions(changed).AcceptedCatalog
+	// Map order would pick either anchor; six runs make a lucky pass 1 in 64.
+	for run := 0; run < 6; run++ {
+		report, err := RefreshPrivateProjects(context.Background(), r, s, source)
+		if err == nil || len(report.Projects) != 1 {
+			t.Fatalf("run %d: removed anchors admitted: %v %+v", run, err, report)
+		}
+		if got := report.Projects[0]; got.Reason != protocol.ReasonAnchorRemoved || got.Repository != "demo" {
+			t.Fatalf("run %d: removed anchors reported as %s@%s, want AnchorRemoved@demo", run, got.Reason, got.Repository)
+		}
 	}
 }

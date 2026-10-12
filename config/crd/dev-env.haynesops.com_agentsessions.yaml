@@ -627,6 +627,7 @@ spec:
                               - ChangedDuringProof
                               - AdvanceFailed
                               - TimedOut
+                              - Stopped
                               - Uncertain
                               type: string
                             name:
@@ -653,6 +654,7 @@ spec:
                               - RootAdvanceFailed
                               - BudgetReserve
                               - TimedOut
+                              - Stopped
                               type: string
                             repository:
                               description: Repository is the member repository that
@@ -685,6 +687,7 @@ spec:
                         - CatalogInvalid
                         - OwnerMismatch
                         - TimedOut
+                        - Stopped
                         type: string
                       repositories:
                         description: Repositories are the catalog repositories' reference
@@ -720,6 +723,7 @@ spec:
                               - ChangedDuringProof
                               - AdvanceFailed
                               - TimedOut
+                              - Stopped
                               - Uncertain
                               type: string
                             state:

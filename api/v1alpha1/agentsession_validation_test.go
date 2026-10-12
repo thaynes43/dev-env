@@ -780,7 +780,7 @@ func TestProjectBootstrapStatusSchemaAcceptsOnlyNamesAndCodes(t *testing.T) {
 		step := protocol.BootstrapSteps[i%len(protocol.BootstrapSteps)]
 		pb.Repositories = append(pb.Repositories, v1alpha1.ProjectBootstrapRepositoryStatus{Name: fmt.Sprintf("repo-%d", i), State: "Preserved", Step: step, Reason: reason})
 	}
-	pb.Repositories = append(pb.Repositories, v1alpha1.ProjectBootstrapRepositoryStatus{Name: strings.Repeat("r", 63), State: "Ready"})
+	pb.Repositories = append(pb.Repositories, v1alpha1.ProjectBootstrapRepositoryStatus{Name: strings.Repeat("r", protocol.MaxBootstrapNameLength), State: "Ready"})
 	for i, reason := range protocol.RootReasons {
 		cause := protocol.RepositoryReasons[i%len(protocol.RepositoryReasons)]
 		pb.Projects = append(pb.Projects, v1alpha1.ProjectBootstrapProjectStatus{Name: fmt.Sprintf("project-%d", i), State: "Failed", Reason: reason, Repository: "repo-0", Cause: cause})
@@ -808,6 +808,20 @@ func TestProjectBootstrapStatusSchemaAcceptsOnlyNamesAndCodes(t *testing.T) {
 	if saved.Status.Agent.ProjectBootstrap == nil || len(saved.Status.Agent.ProjectBootstrap.Repositories) != len(pb.Repositories) || saved.Status.Agent.ProjectBootstrap.Projects[0] != pb.Projects[0] {
 		t.Fatal("schema pruned the bootstrap report")
 	}
+	// A full catalog's report fits: the lists hold exactly the protocol's
+	// bounds, which the API server's tests hold to the catalog's limits.
+	full := get(t, s)
+	repositories, projects := full.Status.Agent.ProjectBootstrap.Repositories, full.Status.Agent.ProjectBootstrap.Projects
+	for i := len(repositories); i < protocol.MaxBootstrapRepositories; i++ {
+		repositories = append(repositories, v1alpha1.ProjectBootstrapRepositoryStatus{Name: fmt.Sprintf("full-%d", i), State: "Ready"})
+	}
+	for i := len(projects); i < protocol.MaxBootstrapProjects; i++ {
+		projects = append(projects, v1alpha1.ProjectBootstrapProjectStatus{Name: fmt.Sprintf("full-%d", i), State: "Ready"})
+	}
+	full.Status.Agent.ProjectBootstrap.Repositories, full.Status.Agent.ProjectBootstrap.Projects = repositories, projects
+	if err := k8s.Status().Update(ctx(t), full); err != nil {
+		t.Fatal("a report at the bounds refused: ", err)
+	}
 	rejects := []struct {
 		title  string
 		mutate func(*v1alpha1.ProjectBootstrapStatus)
@@ -819,7 +833,9 @@ func TestProjectBootstrapStatusSchemaAcceptsOnlyNamesAndCodes(t *testing.T) {
 		{"a commit for a revision", func(p *v1alpha1.ProjectBootstrapStatus) { p.CatalogRevision = strings.Repeat("a", 40) }, "projectBootstrap.catalogRevision"},
 		{"an uppercase revision", func(p *v1alpha1.ProjectBootstrapStatus) { p.CatalogRevision = strings.Repeat("A", 64) }, "projectBootstrap.catalogRevision"},
 		{"a path for a repository name", func(p *v1alpha1.ProjectBootstrapStatus) { p.Repositories[0].Name = "owner/demo" }, "projectBootstrap.repositories[0].name"},
-		{"a 64-byte repository name", func(p *v1alpha1.ProjectBootstrapStatus) { p.Repositories[0].Name = strings.Repeat("r", 64) }, "projectBootstrap.repositories[0].name"},
+		{"a repository name past the bound", func(p *v1alpha1.ProjectBootstrapStatus) {
+			p.Repositories[0].Name = strings.Repeat("r", protocol.MaxBootstrapNameLength+1)
+		}, "projectBootstrap.repositories[0].name"},
 		{"no repository name", func(p *v1alpha1.ProjectBootstrapStatus) { p.Repositories[0].Name = "" }, "projectBootstrap.repositories[0].name"},
 		{"an unknown repository state", func(p *v1alpha1.ProjectBootstrapStatus) { p.Repositories[0].State = "Failed" }, "projectBootstrap.repositories[0].state: Unsupported value"},
 		{"an unknown step", func(p *v1alpha1.ProjectBootstrapStatus) { p.Repositories[0].Step = "Checkout" }, "projectBootstrap.repositories[0].step: Unsupported value"},
@@ -827,9 +843,9 @@ func TestProjectBootstrapStatusSchemaAcceptsOnlyNamesAndCodes(t *testing.T) {
 			p.Repositories[0].Reason = "tracked files differ from the index; preserved"
 		}, "projectBootstrap.repositories[0].reason: Unsupported value"},
 		{"a root reason on a repository", func(p *v1alpha1.ProjectBootstrapStatus) { p.Repositories[0].Reason = "AnchorUnproven" }, "projectBootstrap.repositories[0].reason: Unsupported value"},
-		{"129 repositories", func(p *v1alpha1.ProjectBootstrapStatus) {
+		{"repositories past the bound", func(p *v1alpha1.ProjectBootstrapStatus) {
 			p.Repositories = nil
-			for i := 0; i < 129; i++ {
+			for i := 0; i <= protocol.MaxBootstrapRepositories; i++ {
 				p.Repositories = append(p.Repositories, v1alpha1.ProjectBootstrapRepositoryStatus{Name: fmt.Sprintf("r-%d", i), State: "Ready"})
 			}
 		}, "projectBootstrap.repositories: Too many"},
@@ -837,9 +853,9 @@ func TestProjectBootstrapStatusSchemaAcceptsOnlyNamesAndCodes(t *testing.T) {
 		{"a repository reason on a project", func(p *v1alpha1.ProjectBootstrapStatus) { p.Projects[0].Reason = "UntrackedFiles" }, "projectBootstrap.projects[0].reason: Unsupported value"},
 		{"an unknown cause", func(p *v1alpha1.ProjectBootstrapStatus) { p.Projects[0].Cause = "RootUnproven" }, "projectBootstrap.projects[0].cause: Unsupported value"},
 		{"a path for a member repository", func(p *v1alpha1.ProjectBootstrapStatus) { p.Projects[0].Repository = "../demo" }, "projectBootstrap.projects[0].repository"},
-		{"65 projects", func(p *v1alpha1.ProjectBootstrapStatus) {
+		{"projects past the bound", func(p *v1alpha1.ProjectBootstrapStatus) {
 			p.Projects = nil
-			for i := 0; i < 65; i++ {
+			for i := 0; i <= protocol.MaxBootstrapProjects; i++ {
 				p.Projects = append(p.Projects, v1alpha1.ProjectBootstrapProjectStatus{Name: fmt.Sprintf("p-%d", i), State: "Ready"})
 			}
 		}, "projectBootstrap.projects: Too many"},

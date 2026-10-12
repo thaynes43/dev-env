@@ -214,11 +214,12 @@ fast-forward). A Ready repository has neither. The reason codes:
 | `StagedChanges` | the index differs from HEAD |
 | `NonDefaultBranch` | the checkout is detached or on another branch |
 | `BranchInOtherWorktree` | the default branch is checked out in another worktree |
-| `LocalOnlyCommits` | HEAD has commits outside the fetched default branch |
+| `LocalOnlyCommits` | HEAD has commits outside the fetched default branch (Git's ancestry check answered no, exit 1) |
 | `ChangedDuringProof` | the checkout changed between the two clean-view proofs |
 | `AdvanceFailed` | the fast-forward itself failed |
-| `TimedOut` | the two-minute repository budget ended first; it replaces any other code except `StagingPreserved` |
-| `Uncertain` | a Git command failed or answered something the proof cannot read |
+| `TimedOut` | a deadline passed first, the two-minute repository budget or the ten-minute operation budget; it replaces any other code except `StagingPreserved` |
+| `Stopped` | agentd was stopped first (its SIGTERM cancels the refresh); it replaces any other code except `StagingPreserved` |
+| `Uncertain` | a Git command failed or answered something the proof cannot read, such as an ancestry check that exits with anything but 0 or 1 |
 
 The clean-checkout proof (`projectIndexProof`) and the reference, clone and
 fetch helpers return typed errors that carry the code, with their messages
@@ -234,17 +235,18 @@ catalog name) and `cause` (a repository reason from the table above):
 | `ReceiptUnconfirmed` | the operation record, pending record or receipt could not be written, read back or removed |
 | `CatalogUnconfirmed` | the accepted catalog changed or could not be confirmed |
 | `RootUnproven` | the root, its receipt or its pending record does not prove (DESIGN-007 ownership and clean state) |
-| `AnchorRemoved` | the root holds an anchor the catalog no longer declares; it is preserved |
+| `AnchorRemoved` | the root holds an anchor the catalog no longer declares; it is preserved. With several, `repository` names the first by name, so the same state always reports the same anchor |
 | `RepositoryNotReady` | a member reference does not prove (identity, layout or Git operation) before its fetch |
 | `FetchFailed` | a member fetch, or the prefetch of an anchor's fast-forward, failed |
-| `AnchorNotFastForward` | an anchor's recorded commit is not an ancestor of the new target |
+| `AnchorNotFastForward` | Git answered (exit 1) that an anchor's recorded or checked-out commit is not an ancestor of the new target |
 | `RootPrepareFailed` | the generated rules commit, the unpublished root's staging or its publication failed |
 | `AnchorAddFailed` | `git worktree add` of a new anchor failed |
-| `AnchorUnproven` | an anchor does not prove clean, detached and owned; `cause` says why when the clean-checkout proof refused |
+| `AnchorUnproven` | an anchor does not prove clean, detached and owned; `cause` says why when the clean-checkout proof refused, and is `Uncertain` when Git could not answer an anchor's ancestry check |
 | `AnchorAdvanceFailed` | an anchor's fast-forward failed |
 | `RootAdvanceFailed` | the root's fast-forward, wrapper modes or exclusion write failed |
 | `BudgetReserve` | less than the step reserve was left before a mutating step (DESIGN-007) |
-| `TimedOut` | the root's two-minute budget ended first; it replaces any other code except `AnchorRemoved` |
+| `TimedOut` | a deadline passed first, the root's two-minute budget or the ten-minute operation budget; it replaces any other code except `AnchorRemoved` |
+| `Stopped` | agentd was stopped first; it replaces any other code except `AnchorRemoved` |
 
 A root whose member reference is `Preserved` is still refreshed. Its anchors
 are detached worktrees at the fetched target, so an owner's work in the
@@ -254,8 +256,10 @@ today's capability. The anchor proof decides; the Q-30 canary root reports
 
 **Catalog reasons.** The report gains `reason` when its state is `Failed`:
 `ConfigInvalid`, `StateUncertain`, `LockUnavailable`, `ReportUnretained`,
-`CatalogUnconfirmed`, `CatalogInvalid`, `OwnerMismatch` or `TimedOut` (the
-ten-minute operation budget). A `Partial` or `Ready` report has none; its
+`CatalogUnconfirmed`, `CatalogInvalid`, `OwnerMismatch`, `TimedOut` (the
+ten-minute operation budget passed) or `Stopped` (agentd was stopped). Only a
+passed deadline counts as `TimedOut`; a cancelled context, which is what
+agentd's SIGTERM produces, is `Stopped` at every level. A `Partial` or `Ready` report has none; its
 items carry the reasons. A configuration that enables bootstrap or roots and
 fails validation now reports `Failed` with `ConfigInvalid`; it reported
 `Disabled` before. A disabled bootstrap still reports `Disabled` and publishes
@@ -287,7 +291,12 @@ too. `agent-run show` prints one `project bootstrap` row, for example
 `Partial (1 of 2 repositories ready, 0 of 1 projects ready)`, and one row per
 item that is not Ready. The closed sets live in
 `internal/agentd/protocol/project_bootstrap.go`; the CRD's enums list the same
-values, and its validation test proves the CRD accepts every one of them.
+values, and its validation test proves the CRD accepts every one of them. The
+protocol's list and name bounds equal the catalog's own limits: the API
+server's tests prove that against `internal/projectcatalog`, and the CRD's
+validation test proves the schema accepts a list at each bound and refuses one
+past it, so a catalog that grows its limits fails a test instead of being
+truncated silently.
 
 `agent-run show --once` validates the response against its own DTO and refuses
 unknown fields (DESIGN-023). An `agent-run` older than this change therefore

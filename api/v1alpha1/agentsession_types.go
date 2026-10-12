@@ -819,7 +819,7 @@ type ProjectBootstrapStatus struct {
 	State string `json:"state"`
 
 	// Reason is why a Failed bootstrap stopped before or between its items.
-	// +kubebuilder:validation:Enum=ConfigInvalid;StateUncertain;LockUnavailable;ReportUnretained;CatalogUnconfirmed;CatalogInvalid;OwnerMismatch;TimedOut
+	// +kubebuilder:validation:Enum=ConfigInvalid;StateUncertain;LockUnavailable;ReportUnretained;CatalogUnconfirmed;CatalogInvalid;OwnerMismatch;TimedOut;Stopped
 	// +optional
 	Reason string `json:"reason,omitempty"`
 
@@ -862,7 +862,7 @@ type ProjectBootstrapRepositoryStatus struct {
 	Step string `json:"step,omitempty"`
 
 	// Reason is why a Preserved refresh stopped.
-	// +kubebuilder:validation:Enum=CloneFailed;StagingPreserved;ReferenceUncertain;IdentityMismatch;GitOperationPresent;CatalogUnconfirmed;FetchFailed;UntrackedFiles;UnsupportedTrackedEntry;IndexBoundExceeded;WorkingTreeDiffers;StagedChanges;NonDefaultBranch;BranchInOtherWorktree;LocalOnlyCommits;ChangedDuringProof;AdvanceFailed;TimedOut;Uncertain
+	// +kubebuilder:validation:Enum=CloneFailed;StagingPreserved;ReferenceUncertain;IdentityMismatch;GitOperationPresent;CatalogUnconfirmed;FetchFailed;UntrackedFiles;UnsupportedTrackedEntry;IndexBoundExceeded;WorkingTreeDiffers;StagedChanges;NonDefaultBranch;BranchInOtherWorktree;LocalOnlyCommits;ChangedDuringProof;AdvanceFailed;TimedOut;Stopped;Uncertain
 	// +optional
 	Reason string `json:"reason,omitempty"`
 }
@@ -882,7 +882,7 @@ type ProjectBootstrapProjectStatus struct {
 	State string `json:"state"`
 
 	// Reason is why a Failed refresh stopped.
-	// +kubebuilder:validation:Enum=StateUncertain;ReceiptUnconfirmed;CatalogUnconfirmed;RootUnproven;AnchorRemoved;RepositoryNotReady;FetchFailed;AnchorNotFastForward;RootPrepareFailed;AnchorAddFailed;AnchorUnproven;AnchorAdvanceFailed;RootAdvanceFailed;BudgetReserve;TimedOut
+	// +kubebuilder:validation:Enum=StateUncertain;ReceiptUnconfirmed;CatalogUnconfirmed;RootUnproven;AnchorRemoved;RepositoryNotReady;FetchFailed;AnchorNotFastForward;RootPrepareFailed;AnchorAddFailed;AnchorUnproven;AnchorAdvanceFailed;RootAdvanceFailed;BudgetReserve;TimedOut;Stopped
 	// +optional
 	Reason string `json:"reason,omitempty"`
 
@@ -894,7 +894,7 @@ type ProjectBootstrapProjectStatus struct {
 
 	// Cause is that repository's reason, when its clean-checkout or reference
 	// proof refused.
-	// +kubebuilder:validation:Enum=CloneFailed;StagingPreserved;ReferenceUncertain;IdentityMismatch;GitOperationPresent;CatalogUnconfirmed;FetchFailed;UntrackedFiles;UnsupportedTrackedEntry;IndexBoundExceeded;WorkingTreeDiffers;StagedChanges;NonDefaultBranch;BranchInOtherWorktree;LocalOnlyCommits;ChangedDuringProof;AdvanceFailed;TimedOut;Uncertain
+	// +kubebuilder:validation:Enum=CloneFailed;StagingPreserved;ReferenceUncertain;IdentityMismatch;GitOperationPresent;CatalogUnconfirmed;FetchFailed;UntrackedFiles;UnsupportedTrackedEntry;IndexBoundExceeded;WorkingTreeDiffers;StagedChanges;NonDefaultBranch;BranchInOtherWorktree;LocalOnlyCommits;ChangedDuringProof;AdvanceFailed;TimedOut;Stopped;Uncertain
 	// +optional
 	Cause string `json:"cause,omitempty"`
 }

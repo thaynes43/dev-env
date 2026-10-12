@@ -162,8 +162,8 @@ func RefreshPrivateProjects(ctx context.Context, r Runner, s Settings, source *P
 		observed := refreshPrivateProjectReference(bounded, r, s, repo, authority)
 		stop()
 		report.Repositories = append(report.Repositories, observed)
-		if ctx.Err() != nil {
-			report.Failure, report.Reason = "catalog bootstrap time budget ended; remaining repositories preserved", protocol.ReasonTimedOut
+		if ended := endedReason(ctx); ended != "" {
+			report.Failure, report.Reason = endedFailure(ended, "catalog bootstrap")+"; remaining repositories preserved", ended
 			return report, errPrivateProjectBootstrap
 		}
 	}
@@ -174,8 +174,8 @@ func RefreshPrivateProjects(ctx context.Context, r Runner, s Settings, source *P
 			observed := refreshPrivateProjectRoot(bounded, r, s, snapshot, authority)
 			stop()
 			report.Projects = append(report.Projects, observed)
-			if ctx.Err() != nil {
-				report.Failure, report.Reason = "project root time budget ended; remaining projects preserved", protocol.ReasonTimedOut
+			if ended := endedReason(ctx); ended != "" {
+				report.Failure, report.Reason = endedFailure(ended, "project root refresh")+"; remaining projects preserved", ended
 				return report, errPrivateProjectBootstrap
 			}
 		}
@@ -204,10 +204,10 @@ func refreshPrivateProjectReference(ctx context.Context, r Runner, s Settings, r
 	observed = PrivateProjectSource{Repository: repo, State: "Preserved", Detail: "reference identity or Git operation is uncertain; preserved"}
 	stop := func(step string, err error, fallback string) PrivateProjectSource {
 		observed.Step, observed.Reason = step, reasonOf(err, fallback)
-		// A refresh the budget stopped reports that, unless it left staging
-		// that someone must inspect.
-		if ctx.Err() != nil && observed.Reason != protocol.ReasonStagingPreserved {
-			observed.Reason = protocol.ReasonTimedOut
+		// A refresh a budget or agentd's stop ended reports that, unless it
+		// left staging that someone must inspect.
+		if ended := endedReason(ctx); ended != "" && observed.Reason != protocol.ReasonStagingPreserved {
+			observed.Reason = ended
 		}
 		return observed
 	}
@@ -275,7 +275,11 @@ func advancePrivateProjectReference(ctx context.Context, r Runner, s Settings, r
 			return "", withReason(protocol.ReasonUncertain, err)
 		}
 		if _, err := projectGit(ctx, r, s, clone, "merge-base", "--is-ancestor", head, target); err != nil {
-			return "", reasonErr(protocol.ReasonLocalOnlyCommits, "reference has local-only commits or uncertain ancestry")
+			// Exit 1 is Git's "no"; any other exit is no answer at all.
+			if ExitCodeOf(err) == 1 {
+				return "", reasonErr(protocol.ReasonLocalOnlyCommits, "reference has local-only commits")
+			}
+			return "", withReason(protocol.ReasonUncertain, err)
 		}
 		return head, nil
 	}

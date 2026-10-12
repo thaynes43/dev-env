@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -135,8 +136,8 @@ func refreshPrivateProjectRoot(ctx context.Context, r Runner, s Settings, snapsh
 			refusal = known
 		}
 		report.Reason, report.Repository, report.Cause = refusal.reason, refusal.repository, refusal.cause
-		if ctx.Err() != nil && report.Reason != protocol.ReasonAnchorRemoved {
-			report.Reason = protocol.ReasonTimedOut
+		if ended := endedReason(ctx); ended != "" && report.Reason != protocol.ReasonAnchorRemoved {
+			report.Reason = ended
 		}
 		return report
 	}
@@ -173,7 +174,9 @@ func refreshPrivateProjectRoot(ctx context.Context, r Runner, s Settings, snapsh
 	published := current.Head != ""
 	// Removed anchors are never deleted or silently reclassified as owned
 	// by a newer map. A later explicit migration can decide their future.
-	for name, prior := range current.Anchors {
+	// Sorted, so the same state always names the same anchor.
+	for _, name := range slices.Sorted(maps.Keys(current.Anchors)) {
+		prior := current.Anchors[name]
 		if !slices.ContainsFunc(snapshot.Repositories(), func(repo projectcatalog.Repository) bool {
 			return repo.Name == name && repo.GitHub == prior.Repository.GitHub
 		}) {
@@ -220,7 +223,10 @@ func refreshPrivateProjectRoot(ctx context.Context, r Runner, s Settings, snapsh
 			if prior.Target != source.Target {
 				anchor := filepath.Join(root, name)
 				if _, err := projectGit(ctx, r, s, anchor, "merge-base", "--is-ancestor", prior.Target, source.Target); err != nil {
-					return stop(protocol.ReasonAnchorNotFastForward, name, nil)
+					if ExitCodeOf(err) == 1 {
+						return stop(protocol.ReasonAnchorNotFastForward, name, nil)
+					}
+					return stop(protocol.ReasonAnchorUnproven, name, reasonErr(protocol.ReasonUncertain, "anchor ancestry is uncertain"))
 				}
 				if err := prefetchPrivateAnchor(ctx, r, s, anchor, prior.Target, source.Target); err != nil {
 					return stop(protocol.ReasonFetchFailed, name, withReason(protocol.ReasonFetchFailed, err))
@@ -1040,7 +1046,10 @@ func advancePrivateAnchor(ctx context.Context, r Runner, s Settings, repo projec
 		return *owned, nil
 	}
 	if _, err := projectGit(ctx, r, s, anchor, "merge-base", "--is-ancestor", head, target); err != nil {
-		return privateAnchorIdentity{}, refuse(protocol.ReasonAnchorNotFastForward)
+		if ExitCodeOf(err) == 1 {
+			return privateAnchorIdentity{}, refuse(protocol.ReasonAnchorNotFastForward)
+		}
+		return privateAnchorIdentity{}, &rootError{reason: protocol.ReasonAnchorUnproven, repository: repo.Name, cause: protocol.ReasonUncertain}
 	}
 	if authority.confirm(ctx) != nil {
 		return privateAnchorIdentity{}, &rootError{reason: protocol.ReasonCatalogUnconfirmed}

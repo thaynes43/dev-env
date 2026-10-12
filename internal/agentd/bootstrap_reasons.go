@@ -1,6 +1,7 @@
 package agentd
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"strings"
@@ -45,6 +46,29 @@ func reasonOf(err error, fallback string) string {
 		return protocol.ReasonStagingPreserved
 	}
 	return fallback
+}
+
+// endedReason is the code for work that stopped because ctx ended: TimedOut
+// when a budget's deadline passed (the step's own or the operation's), Stopped
+// when agentd itself was stopped (SIGTERM cancels its context), and "" while
+// ctx is live.
+func endedReason(ctx context.Context) string {
+	switch err := ctx.Err(); {
+	case err == nil:
+		return ""
+	case errors.Is(err, context.DeadlineExceeded):
+		return protocol.ReasonTimedOut
+	default:
+		return protocol.ReasonStopped
+	}
+}
+
+// endedFailure is the private report's text for an operation that ended.
+func endedFailure(reason, operation string) string {
+	if reason == protocol.ReasonStopped {
+		return "agentd stopped during " + operation
+	}
+	return operation + " time budget ended"
 }
 
 // rootError is a project root refusal (DESIGN-007) with its reason code, the
