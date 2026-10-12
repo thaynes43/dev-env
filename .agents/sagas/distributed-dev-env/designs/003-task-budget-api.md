@@ -145,8 +145,10 @@ recorded Pod name, and an uncached read finds no Pod, the controller records a
 `worker-stop` receipt with evidence kind `managed-never-launched`, and the worker
 stops being charged. The ledger compare-and-swap orders that receipt against
 `ReserveManagedLaunch`: whichever commits first wins, so a closed worker never
-launches and a reserved launch is never closed this way. A reservation whose
-Session was never observed stays charged, as above.
+launches and a reserved launch is never closed this way. Suspending or deleting
+an unlaunched budget child is therefore final: resume and continuation require an
+active worker and are refused, as they are for a launched child after its stop
+receipt. A reservation whose Session was never observed stays charged, as above.
 
 The server writes these AgentSession annotations:
 
