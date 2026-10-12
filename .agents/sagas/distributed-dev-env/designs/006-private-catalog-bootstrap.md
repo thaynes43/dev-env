@@ -69,8 +69,9 @@ Added 2026-10-12 for review findings roots-2 to roots-5 (#173).
   `agentd ctl status` and the heartbeat report it as `workspace.source`;
   `workspace.head` stays the live HEAD. A task created before this record
   existed reports no source rather than a guessed one. An unreadable record
-  is reported as a `task-source` problem and kept as it is. AgentSession status and
-  the CRD do not change: the heartbeat decoder ignores the new field.
+  is reported as a `task-source` problem and kept as it is. AgentSession
+  status and the CRD do not change: the heartbeat decoder ignores the new
+  field.
 - **Resume fetch notes.** On resume the selected-branch fetch only refreshes
   `origin/<branch>`. Its boot note says so and names the recorded source,
   instead of reading like the task's source.
