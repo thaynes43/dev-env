@@ -54,8 +54,47 @@ anchor target; preparing the anchor must not change that reference's index/WIP.
 Keep a private operation outcome and per-project source/rule provenance under
 `.agentd/project-roots`. Interrupted or partial publication cannot leave an old
 Ready receipt describing the current invocation. Unconfirmed ownership is
-preserved and reported; it is not silently repaired. A project is Ready only
+preserved and reported; it is not silently repaired. agentd's own recorded
+partial advance is resumed instead (next section). A project is Ready only
 when all required anchors and both wrappers match confirmed authority.
+
+## Recoverable advance
+
+Added 2026-10-12 for review finding roots-1. A refresh can fail part-way: a
+transient catalog read, the time budget, or a refused fast-forward after one
+anchor already moved. Such a failure must not strand an owned root.
+
+- Before its first change, agentd proves every existing anchor clean at its
+  proven commit, and each fresh target a descendant of that commit. A refusal
+  here changes nothing.
+- It then writes a private pending record, `<project>.pending.json`, beside the
+  receipt (fsync and atomic rename). The record holds the root's private ID and
+  config digest, the proven state it starts from (`from`) and the state it
+  intends (`to`): root HEAD and tree, wrapper digest, exclusion bytes, and each
+  anchor's repository, target and exact identity. A new anchor's identity is
+  added as soon as its worktree exists.
+- A later refresh that finds the record proves the live root component by
+  component: root HEAD, tree and wrappers at `from` or `to`, exclusion bytes at
+  `from` or `to`, and each anchor at its `from` or `to` commit with its recorded
+  identity. An anchor that `to` adds may be absent, or present as the
+  self-consistent detached worktree at its `to` target that agentd's own
+  post-create proof accepts. Wrappers at `to` may still carry the umask mode;
+  agentd re-applies 0644 (DESIGN-012) before going on. Every other check stays
+  exact. Dirty, staged, ignored or unknown files, local commits, attached
+  anchors, peer aliases, operations in progress and foreign identity are
+  preserved and refused, as before.
+- The proven reached state is the base of a normal advance to the current
+  catalog and fresh targets. The receipt is written only after the exact final
+  proof, and the pending record is removed after that. If the remove fails the
+  outcome is Failed, and the next refresh finishes it.
+- A new root records its pending ID before it creates staging, which is named
+  `.<project>.agentd-root-<id>`. Recovery may delete only that staging, and only
+  while the root is unpublished: it holds generated content that agentd never
+  published. A published root is never deleted. Staging under any other name,
+  including the older fixed `.<project>.agentd-root`, is left untouched and no
+  longer blocks creation.
+- A root stranded by an earlier image, with no pending record, is not adopted.
+  It stays preserved for an explicit repair.
 
 New task admission still fetches and pins selected source independently. Resume
 keeps its saved worktree, snapshot and effective instructions. This contract
@@ -72,8 +111,11 @@ Prove two independent homes have distinct root/repository Git directories;
 single/multiple repository roots, override fetch/pins and generated instruction
 bytes; safe generated-root and detached-anchor advances; preservation of dirty,
 staged, ignored, local-only, linked-peer, operation and foreign state; refusal of
-changed catalog authority, edited/undeclared roots and partial provenance; and
-unchanged selected-task freshness/resume protections. Default-off roots write
+changed catalog authority, edited/undeclared roots and partial provenance;
+recovery of an interrupted multi-anchor advance, of a single-repository advance
+whose authority confirmation failed after the anchor moved, of a generated-root
+fast-forward left at the umask mode, and of a new root interrupted before or
+after publication; and unchanged selected-task freshness/resume protections. Default-off roots write
 nothing. Shared-path regressions remain guarded.
 
 Required CI and native independent review govern merge. Claude Code reviews
