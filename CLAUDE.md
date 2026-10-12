@@ -3,6 +3,12 @@
 Guidance for Claude Code and other agents working in this repository. Codex reads
 `AGENTS.md`, which points here: this file is the one source of the rules.
 
+For the current takeover, read the
+[Claude pickup brief](.agents/CLAUDE-RESUME-2026-10-12.md) in full. It records
+Tom's requirement history, current six-step roadmap, exact acceptance gaps and
+failed routes. Review and improve the code Codex shipped. Earlier next steps
+are historical; changing drivers does not reset stopped tasks or consumed IDs.
+
 The [workflow guide](docs/workflow-guide.md) gives the high-level feature set,
 working quick start, Codex session model, freshness contract and delivery gates.
 **Controlling scope: [ADR-003](.agents/sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md).** Agents share rules, coordination

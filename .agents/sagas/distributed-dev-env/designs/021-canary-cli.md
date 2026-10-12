@@ -1,5 +1,12 @@
 # DESIGN-021: ID-only single-request canary client
 
+**Current checkpoint, 2026-10-12:** the source client is shipped; Q-26's one
+final R4 correction and Ops #3824 activation/preservation are accepted. Both
+fixed IDs are now consumed. The pending Q-26/unstarted paragraphs below are
+historical, not retry authority. Follow the
+[pickup brief](../../../CLAUDE-RESUME-2026-10-12.md) and
+[latest probe record](../verification/codex-fixed-rule-probe-2026-10-12.md).
+
 Contract ratified 2026-10-11 UTC; prerequisite for the fixed #173 instruction
 probes. The shipped CLI also lacks a canary route. Generic creation fills extra
 request fields, retries POST and polls; it cannot safely call the API's strict

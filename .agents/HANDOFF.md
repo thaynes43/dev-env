@@ -1,5 +1,21 @@
 # HANDOFF: start here
 
+## Claude pickup and controlling roadmap — 2026-10-12, America/New_York
+
+Read the [Claude pickup brief](CLAUDE-RESUME-2026-10-12.md) in full. It records
+Tom's current requirements and earlier enumerated lists, the six-step delivery
+order, exact built/published/deployed/accepted distinctions, source-review paths
+and stopped routes. Claude is to review, fix and improve Codex's implementations,
+then ship bounded increments. Native phone questions remain the decision route;
+Claude GitHub advisory reviews are optional/down.
+
+The admission/preparation first assignment is completed. Both fixed canary IDs
+are consumed; Codex reads remain zero and Q-27 remains stopped after three
+preparation failures, with no fourth attempt authorized. Q-24 routing is pending.
+This pickup does not reset counters or authorize retries, pairing or cutover.
+Older entries below, including “What happens first” and shared-RWX prescriptions,
+are historical; later owner requirements and ADR-003 control conflicting guidance.
+
 ## Original Codex canary and stopped reader preparation — 2026-10-12 UTC
 
 The [Codex probe contract](sagas/distributed-dev-env/verification/codex-fixed-rule-probe-2026-10-12.md)

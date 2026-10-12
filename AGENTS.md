@@ -1,5 +1,10 @@
 # AGENTS.md
 
+**Claude pickup, 2026-10-12:** read the
+[current requirements and roadmap](.agents/CLAUDE-RESUME-2026-10-12.md) in full.
+It consolidates Tom's earlier enumerations and later corrections, delivered work,
+review targets and stopped attempts. Changing drivers does not reset counters.
+
 **Controlling scope, 2026-10-10:** [ADR-003](.agents/sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md) supersedes mandatory
 shared Git/RWX. Share rules, task coordination and authorized live/stopped context;
 keep repositories and worktrees per pod. Read the updated guide before selecting
