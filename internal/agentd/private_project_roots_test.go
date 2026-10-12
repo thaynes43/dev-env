@@ -779,7 +779,7 @@ func TestPrivateRootsPreserveChangedStagingGitDirectory(t *testing.T) {
 	// "extra file" fails the path allowlist by name. The others sit at paths
 	// the allowlist accepts, so only the file-type and link-count checks
 	// refuse them.
-	for _, mode := range []string{"extra file", "symlinked object", "symlinked directory", "hardlinked object"} {
+	for _, mode := range []string{"extra file", "symlinked object", "symlinked directory", "hard-linked object"} {
 		t.Run(mode, func(t *testing.T) {
 			_, s, r, source := privateRootsFixture(t, projectTestCatalog)
 			changed := false
@@ -813,7 +813,7 @@ func TestPrivateRootsPreserveChangedStagingGitDirectory(t *testing.T) {
 			switch mode {
 			case "extra file":
 				writeFile(t, path, "owner notes\n")
-			case "symlinked object", "hardlinked object":
+			case "symlinked object", "hard-linked object":
 				objects, _ := filepath.Glob(filepath.Join(staging[0], ".git", "objects", "??", "*"))
 				if len(objects) == 0 {
 					t.Fatal("no staging objects")
@@ -823,7 +823,7 @@ func TestPrivateRootsPreserveChangedStagingGitDirectory(t *testing.T) {
 					t.Fatal(err)
 				}
 				link := os.Symlink
-				if mode == "hardlinked object" {
+				if mode == "hard-linked object" {
 					link = os.Link
 				}
 				if err := link(owner, path); err != nil {
