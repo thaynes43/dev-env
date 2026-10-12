@@ -7,6 +7,8 @@ shipped code. Q-24 and Q-27 remain pending, both fixed IDs are consumed, and
 actual both-provider rules/MVP acceptance remains open. Earlier checkpoints
 below are historical; they do not reauthorize old next steps or reset counters.
 *Update: Q-27 was answered later on 2026-10-12; see the next paragraph.*
+*Update: both Codex reads then ran and returned both markers; see the #173
+paragraph after the Q-27 ruling.*
 
 **Q-27 answered, 2026-10-12.** Tom answered through the Claude native prompt:
 "Fix once, then read (Recommended)". The ruling allows one offline correction of
@@ -17,6 +19,21 @@ Decision 60 and the
 [Codex probe record](verification/codex-fixed-rule-probe-2026-10-12.md#q-27-one-final-reader-preparation-correction)
 hold the ruling. Q-24 is still pending with no owner answer recorded; do not ask
 it again.
+
+**#173 Codex rule markers accepted, 2026-10-12.** Under Q-27, the one reader
+correction passed its tests and independent review of both read plans. Then the
+one named read and the one result read of the Codex original ran, with no
+retries. Its retained output is exactly the common and the repository marker,
+and the prompt held neither, so the Codex original loaded both rule sets in its
+private pod. The prompt said not to use tools; compliance is unproven while full
+history is Unknown. The
+[Codex original result record](verification/codex-original-result-2026-10-12.md)
+binds Root acceptance `48637874` and the review after the reads. This accepts
+the markers only. Served model, usage, cost, full history, physical stop,
+capture completeness, private GitHub authorization and a fresh task pin remain
+Unknown or unaccepted. Claude's rule loading is still unproven, so actual
+both-provider rules and the #173 MVP stay open. Counters: Directory 5; Create 1
+each; named and result reads 1 each per provider. Nothing further is authorized.
 
 The [original Codex probe record](verification/codex-fixed-rule-probe-2026-10-12.md)
 records 16 passing offline checks, independent full review and one program that
@@ -29,6 +46,7 @@ correction and is pending. No fourth attempt or followup read is authorized.
 Actual both-provider rules and the owner pilot remain open; Q-24 is pending.
 Earlier checkpoints below are historical and do not reset the consumed IDs.
 *(Historical: Q-27 is answered; see the ruling above.)*
+*(Update: the Codex reads ran; see the #173 paragraph above.)*
 
 The [first original Claude canary](verification/first-original-canary-2026-10-12.md)
 records reviewed logical Directory4 and original HTTP201 at 05:28:22 UTC. Claude's
