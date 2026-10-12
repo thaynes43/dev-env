@@ -44,6 +44,15 @@ func (a *app) showOnce(ctx context.Context, c *conn, name string) error {
 // Walk every canonical exported wire field before that decoder can hide an
 // unknown key or nested type error. This validator grants no status authority.
 func strictSessionJSON(raw []byte) bool {
+	return strictWireJSON(raw, reflect.TypeFor[apiv1.Session]())
+}
+
+// strictWireJSON walks raw against the canonical exported JSON tags of the
+// standard-library wire DTO root before any typed decode: it refuses duplicate
+// keys, case aliases, unknown fields, trailing values, null scalars and nested
+// type errors that encoding/json alone would let through. show --once, canary
+// create and directory list use it (DESIGN-023, history-05).
+func strictWireJSON(raw []byte, root reflect.Type) bool {
 	// send fences the complete wire body before decoding. Independently bound
 	// the JSON value span here, even when this validator is called directly.
 	if len(raw) == 0 || len(raw) >= maxResponse || !utf8.Valid(raw) {
@@ -72,6 +81,19 @@ func strictSessionJSON(raw []byte) bool {
 				return false
 			}
 			_, err := time.Parse(time.RFC3339Nano, s)
+			return err == nil
+		}
+		// The directory's reported time encodes an unknown time as null and a
+		// recorded one as an RFC 3339 string (its own MarshalJSON).
+		if t == reflect.TypeFor[apiv1.DirectoryReportedTime]() {
+			if tok == nil {
+				return true
+			}
+			s, ok := tok.(string)
+			if !ok {
+				return false
+			}
+			_, err := time.Parse(time.RFC3339, s)
 			return err == nil
 		}
 		switch t.Kind() {
@@ -135,7 +157,7 @@ func strictSessionJSON(raw []byte) bool {
 			return false
 		}
 	}
-	if !read(reflect.TypeFor[apiv1.Session](), 0) {
+	if !read(root, 0) {
 		return false
 	}
 	_, err := d.Token()

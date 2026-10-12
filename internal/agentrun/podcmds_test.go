@@ -59,7 +59,11 @@ func TestMsg(t *testing.T) {
 	}
 
 	n := posts.Load()
-	h.mustRun(ExitRetry, "msg", name, "fail")
+	// The message may have arrived: exit 6 says so and never advises a retry.
+	h.mustRun(ExitUnconfirmed, "msg", name, "fail")
+	if !strings.Contains(h.stderr.String(), "do not repeat") || strings.Contains(h.stderr.String(), "try again") {
+		t.Errorf("uncertain message advice: %s", h.stderr.String())
+	}
 	if posts.Load() != n+1 {
 		t.Errorf("a message was sent %d times", posts.Load()-n)
 	}

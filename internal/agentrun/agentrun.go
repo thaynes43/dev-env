@@ -45,6 +45,12 @@ const (
 	// ExitRetry: try again later. A limit was reached (429), or the API was
 	// unavailable (503) or unreachable after agent-run's own retries.
 	ExitRetry = 5
+	// ExitUnconfirmed: a one-shot request (msg, canary create or a --once read)
+	// got no confirmed answer: no answer, a 5xx, or an unreadable receipt.
+	// agent-run sent it at most once and did not repeat it. A message or create
+	// may have taken effect, so it must not be repeated before its result is
+	// observed. One-shot requests never exit ExitRetry.
+	ExitUnconfirmed = 6
 )
 
 // Env is what the CLI reads from and writes to outside its arguments. Tests

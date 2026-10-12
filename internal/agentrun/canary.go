@@ -60,6 +60,9 @@ func (a *app) canary(ctx context.Context, args []string) error {
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	one := *c
 	one.http = &hc
+	// Fence the whole body before decoding, as show --once does: a padded,
+	// truncated prefix must not pass as the receipt (history-05).
+	one.rejectOversizeResponse = true
 	// CreateSessionRequest has other non-omitempty fields. A narrow struct is
 	// necessary to satisfy the server's exact one-field admission boundary.
 	request := struct {
@@ -70,14 +73,16 @@ func (a *app) canary(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if (status != http.StatusCreated && status != http.StatusOK) || !utf8.Valid(raw) {
-		return fail(ExitFailed, "canary original receipt is unconfirmed; do not repeat the POST")
+	// The POST was answered, but an unexpected status or receipt confirms
+	// nothing: the original may exist. Hold it for observation.
+	if (status != http.StatusCreated && status != http.StatusOK) || !utf8.Valid(raw) || !strictSessionJSON(raw) {
+		return fail(ExitUnconfirmed, "canary original receipt is unconfirmed; do not repeat the POST")
 	}
 	var session apiv1.Session
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
 	if d.Decode(&session) != nil || d.Decode(new(any)) != io.EOF || !confirmedCanaryReceipt(id, session) {
-		return fail(ExitFailed, "canary original receipt is unconfirmed; do not repeat the POST")
+		return fail(ExitUnconfirmed, "canary original receipt is unconfirmed; do not repeat the POST")
 	}
 	disposition := "ExistingOriginalSession"
 	if status == http.StatusCreated {

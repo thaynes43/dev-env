@@ -41,6 +41,38 @@ func (a *app) callOnce(ctx context.Context, c *conn, method, path string, body, 
 	return a.callWith(ctx, c, method, path, nil, body, out, false)
 }
 
+// errOversizeResponse is send's answer when a fenced connection's body is
+// larger than maxResponse.
+var errOversizeResponse = errors.New("the API response exceeds the size limit")
+
+// A one-shot request (retry false: msg, canary create and the --once reads) is
+// never repeated by agent-run, and its errors never advise a retry: exit 5 means
+// "try again later". With no confirmed answer it exits ExitUnconfirmed instead,
+// and a request that may have taken effect says not to repeat it (history-06).
+func unconfirmed(method, path, detail string) error {
+	if method == http.MethodGet {
+		return fail(ExitUnconfirmed, "no confirmed answer to %s %s: %s; agent-run sent this one-shot request at most once and did not repeat it", method, path, detail)
+	}
+	return fail(ExitUnconfirmed, "no confirmed answer to %s %s: %s; agent-run sent this one-shot request at most once and did not repeat it. It may have taken effect: do not repeat it; observe its result first", method, path, detail)
+}
+
+// oneShotRefusal maps a non-2xx answer to a one-shot request. A 5xx is no
+// confirmed answer; a 429 is a refusal. Other answers map as refusal does.
+func oneShotRefusal(c *conn, method, path string, status int, raw []byte) error {
+	if status < 500 && status != http.StatusTooManyRequests {
+		return refusal(c, status, raw)
+	}
+	detail := fmt.Sprintf("the API answered %d %s", status, http.StatusText(status))
+	var doc apiv1.ErrorResponse
+	if json.Unmarshal(raw, &doc) == nil && doc.Error.Code != "" {
+		detail = fmt.Sprintf("the API answered %d %s: %s", status, doc.Error.Code, doc.Error.Message)
+	}
+	if status == http.StatusTooManyRequests {
+		return fail(ExitFailed, "%s %s was refused (%s); agent-run did not repeat this one-shot request", method, path, detail)
+	}
+	return unconfirmed(method, path, detail)
+}
+
 func (a *app) callWith(ctx context.Context, c *conn, method, path string, query url.Values, body, out any, retry bool) (int, error) {
 	var payload []byte
 	if body != nil {
@@ -64,21 +96,42 @@ func (a *app) callWith(ctx context.Context, c *conn, method, path string, query 
 		if errors.As(err, &certErr) {
 			return 0, fail(ExitAuth, "the API at %s has a certificate agent-run does not trust: %v; give its CA with --ca-file or %s", c.url, certErr.Err, envCAFile)
 		}
+		// A one-shot write whose answer cannot be read may still have taken
+		// effect; a read with an unreadable answer simply failed.
+		writeOnce := !retry && method != http.MethodGet
+		if errors.Is(err, errOversizeResponse) {
+			if writeOnce {
+				return status, unconfirmed(method, path, fmt.Sprintf("the response exceeds the %d-byte limit", maxResponse))
+			}
+			return status, fail(ExitFailed, "the API response exceeds the %d-byte limit", maxResponse)
+		}
 		retryable := err != nil || status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
 		if retry && retryable && attempt < len(retryDelays) && ctx.Err() == nil && a.env.Sleep(ctx, retryDelays[attempt]) == nil {
 			continue
 		}
 		if err != nil {
+			if !retry {
+				if ctx.Err() != nil {
+					return 0, unconfirmed(method, path, fmt.Sprintf("stopped: %v", ctx.Err()))
+				}
+				return 0, unconfirmed(method, path, fmt.Sprintf("could not complete the exchange with %s: %v", c.url, err))
+			}
 			if ctx.Err() != nil {
 				return 0, fail(ExitFailed, "%s %s: stopped: %v", method, path, ctx.Err())
 			}
 			return 0, fail(ExitRetry, "could not reach the API at %s: %v", c.url, err)
 		}
 		if status/100 != 2 {
+			if !retry {
+				return status, oneShotRefusal(c, method, path, status, raw)
+			}
 			return status, refusal(c, status, raw)
 		}
 		if out != nil && len(raw) > 0 {
 			if err := json.Unmarshal(raw, out); err != nil {
+				if writeOnce {
+					return status, unconfirmed(method, path, fmt.Sprintf("the answer is not the expected JSON: %v", err))
+				}
 				return status, fail(ExitFailed, "the API answered %s %s with a body that is not the expected JSON: %v", method, path, err)
 			}
 		}
@@ -121,7 +174,7 @@ func (a *app) send(ctx context.Context, c *conn, method, target string, payload 
 		return 0, nil, err
 	}
 	if c.rejectOversizeResponse && len(raw) > maxResponse {
-		return 0, nil, fail(ExitFailed, "the API response exceeds the %d-byte limit", maxResponse)
+		return resp.StatusCode, nil, errOversizeResponse
 	}
 	return resp.StatusCode, raw, nil
 }

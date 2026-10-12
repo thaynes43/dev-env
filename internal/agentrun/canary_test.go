@@ -125,10 +125,11 @@ func TestCanaryUsageRefusesBeforeAuthentication(t *testing.T) {
 	}
 }
 
+// Every 5xx leaves the one POST's outcome unknown: exit 6, never a retry hint.
 func TestCanaryErrorsMakeOneAttempt(t *testing.T) {
 	for _, tc := range []struct{ status, exit int }{
-		{http.StatusServiceUnavailable, ExitRetry}, {http.StatusInternalServerError, ExitFailed},
-		{http.StatusBadGateway, ExitFailed}, {http.StatusGatewayTimeout, ExitFailed},
+		{http.StatusServiceUnavailable, ExitUnconfirmed}, {http.StatusInternalServerError, ExitUnconfirmed},
+		{http.StatusBadGateway, ExitUnconfirmed}, {http.StatusGatewayTimeout, ExitUnconfirmed},
 	} {
 		t.Run(http.StatusText(tc.status), func(t *testing.T) {
 			h := newHarness(t)
@@ -136,8 +137,8 @@ func TestCanaryErrorsMakeOneAttempt(t *testing.T) {
 				apiError(w, tc.status, apiv1.CodeUnavailable, "original acknowledgement unavailable")
 			}
 			h.mustRun(tc.exit, "canary", "create", "--id", claudeCanaryID, "--once", "--json")
-			if len(h.api.requests()) != 1 || len(h.sleeps) != 0 || h.stdout.Len() != 0 {
-				t.Errorf("error retried or invented receipt: requests=%v sleeps=%v stdout=%s", h.api.requests(), h.sleeps, &h.stdout)
+			if len(h.api.requests()) != 1 || len(h.sleeps) != 0 || h.stdout.Len() != 0 || !strings.Contains(h.stderr.String(), "do not repeat") || strings.Contains(h.stderr.String(), "try again") {
+				t.Errorf("error retried, invented a receipt or advised a retry: requests=%v sleeps=%v stdout=%s stderr=%s", h.api.requests(), h.sleeps, &h.stdout, &h.stderr)
 			}
 		})
 	}
@@ -165,7 +166,7 @@ func TestCanaryRefusesOtherSuccessStatuses(t *testing.T) {
 			h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) {
 				writeTestJSON(w, status, originalCanary(claudeCanaryID))
 			}
-			h.mustRun(ExitFailed, "canary", "create", "--id", claudeCanaryID, "--once", "--json")
+			h.mustRun(ExitUnconfirmed, "canary", "create", "--id", claudeCanaryID, "--once", "--json")
 			if len(h.api.requests()) != 1 || len(h.sleeps) != 0 || h.stdout.Len() != 0 {
 				t.Errorf("unacknowledged status retried or accepted: requests=%v sleeps=%v stdout=%s", h.api.requests(), h.sleeps, &h.stdout)
 			}
@@ -209,7 +210,7 @@ func TestCanaryRefusesUnconfirmedReceipt(t *testing.T) {
 				w.WriteHeader(http.StatusCreated)
 				_, _ = w.Write(raw)
 			}
-			h.mustRun(ExitFailed, "canary", "create", "--id", claudeCanaryID, "--once", "--json")
+			h.mustRun(ExitUnconfirmed, "canary", "create", "--id", claudeCanaryID, "--once", "--json")
 			if len(h.api.requests()) != 1 || len(h.sleeps) != 0 || h.stdout.Len() != 0 {
 				t.Errorf("unconfirmed original retried or accepted: requests=%v sleeps=%v stdout=%s", h.api.requests(), h.sleeps, &h.stdout)
 			}
