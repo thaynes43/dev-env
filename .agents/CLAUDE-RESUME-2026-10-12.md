@@ -209,9 +209,11 @@ project, `rule-canary-claude-sigo-1012` (Session
 result read, with no retries and no directory read. Counters are now Directory
 **6**; Claude Create **3** (1011, 1012, sigo-1012), Codex Create **1**; Claude
 named/result **3 each**; Codex named/result **1 each**. All four permanent IDs
-are consumed. Root acceptance `dd5dee24` shows private GitHub authorization and a
-fresh task pin. Catalog bootstrap ended `Partial` on a tracked symlink; #237
-fixes it in source and its deploy is pending. A `Ready` bootstrap on a private
+are consumed. Catalog bootstrap ended `Partial` on a tracked symlink, so the
+run is not accepted for #173 under DESIGN-011's all-items gate; #237 fixes it in
+source and its deploy is pending. Root acceptance `dd5dee24` accepts private
+GitHub authorization and a fresh task pin separately, a departure the record
+names (`partial-acceptance-by-property`). A `Ready` bootstrap on a private
 multi-repository project is still unaccepted. The
 [Sigo private-repo canary record](sagas/distributed-dev-env/verification/sigo-private-canary-2026-10-12.md)
 has the details.
@@ -248,9 +250,10 @@ has the details.
    same day. Its bootstrap ended `Partial` on a tracked symlink, so it was not
    accepted; #237 fixes the proof (HANDOFF, Q-30 section)
    ([DESIGN-011 Q-30 amendment](sagas/distributed-dev-env/designs/011-private-managed-rule-canaries.md#private-repo-canary-on-the-sigo-alumni-project--2026-10-12-q-30-173)).*
-   *Update, Q-30 Root acceptance, 2026-10-12: the Root accepted part of that run
-   (`dd5dee24`). Private GitHub authorization and a fresh task pin are shown.
-   Still open for #173: a `Ready` bootstrap on a private multi-repository
+   *Update, Q-30 Root acceptance, 2026-10-12: the run is still not accepted for
+   #173 under DESIGN-011's gate. The Root (`dd5dee24`) accepts private GitHub
+   authorization and a fresh task pin separately, as the named deviation
+   `partial-acceptance-by-property`. Still open for #173: a `Ready` bootstrap on a private multi-repository
    project, after #237 deploys and with a new canary Tom approves, and #173's
    other acceptance items
    ([Sigo private-repo canary record](sagas/distributed-dev-env/verification/sigo-private-canary-2026-10-12.md)).*

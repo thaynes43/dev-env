@@ -7,7 +7,7 @@ the saga. To continue building, follow the
 in the Claude pickup brief. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
-## Sigo private-repo canary recorded: private authorization and fresh pin shown — 2026-10-12 UTC
+## Sigo private-repo canary recorded: not accepted for #173; private authorization and fresh pin accepted separately — 2026-10-12 UTC
 
 The one Q-30 canary, `rule-canary-claude-sigo-1012`, ran on the Sigo alumni
 catalog project after haynes-ops #3845 deployed. A corrected runner (r2, 60 of 60
@@ -18,17 +18,25 @@ and one result read, with no retries and no directory read. Session
 exited 0 after one turn.
 
 **Root acceptance `dd5dee24`: `PARTIAL_ACCEPTED_PRIVATE_AUTH_AND_FRESH_PIN`.**
-It binds all 102 files in the canary's order directory.
+It binds every other file in the canary's order directory (102 files).
+DESIGN-011 accepts the run for #173 only when items 1 to 7 all hold. Item 2
+fails, so the run is not accepted for #173, and the runner's verdict candidate
+says so (`UNACCEPTED_CANDIDATE`). The Root accepts two properties separately, on
+their own items; the record names that departure from the gate as the deviation
+`partial-acceptance-by-property`.
 
 - Items 1 and 3 to 7 hold. In its private pod, agentd fetched the private
   `thaynes43/sigo-alumni` `main` at `c5da46c2` 53 seconds after Create. That
   equals the `ls-remote` tip read just before Create. It recorded the task
-  source and made the task worktree from it. Peers were unchanged.
-- Item 2 fails: catalog bootstrap ended `Partial`, because
-  `thaynes43/sigoalumni-org` tracks one symlink that agentd's clean-checkout
-  proof refused. [#237](https://github.com/thaynes43/dev-env/pull/237) fixes it
-  in source; it ships with release PR #238 and then needs a haynes-ops template
-  pin. Until then, every v2 pod that boots with this catalog reports the same
+  source and made the task worktree from it. That shows private GitHub
+  authorization (items 1, 3, 5) and a fresh task pin (items 3 to 6). Peers were
+  unchanged: pods that are neither operator nor Job pods, and the three retained
+  Sessions (item 7).
+- Item 2 fails: catalog bootstrap ended `Partial`. The diagnosed cause, from
+  read-only analysis that no receipt binds: `thaynes43/sigoalumni-org` tracks
+  one symlink, which agentd's clean-checkout proof refused.
+  [#237](https://github.com/thaynes43/dev-env/pull/237) fixes it in source; it
+  ships with release PR #238 and then needs a haynes-ops template pin. Until then, every v2 pod that boots with this catalog reports the same
   `project-bootstrap` problem (in this canary the task still ran).
 - Markers (secondary): common marker `dev-env-common-rules-20261011-4ca29d70`
   present; project marker `sigo-alumni-project-rules-20261012-9b122cd5`
@@ -38,9 +46,10 @@ It binds all 102 files in the canary's order directory.
   deviation, `bootlog-before-named-read`, and accepts it: both rest on the same
   Session status.
 
-**#173 status.** Shown: rule loading for both providers, private GitHub
-authorization and a fresh task pin. Failed: catalog bootstrap of a
-symlink-carrying repository (fixed in source by #237, deploy pending). Pending:
+**#173 status.** Not accepted for #173 under DESIGN-011's gate. Accepted
+separately, as a named deviation: private GitHub authorization and a fresh task
+pin. Shown earlier: rule loading for both providers. Failed: catalog bootstrap
+of a symlink-carrying repository (fixed in source by #237, deploy pending). Pending:
 acceptance of a `Ready` bootstrap on a private multi-repository project. That
 needs the fix deployed and a new canary, which needs Tom's approval and its own
 record. #173's other items (two bounded pods, missing-repo bootstrap, a failed
@@ -90,9 +99,11 @@ symlink without following it
 A HOME left by 2.24.1 resumes on its next refresh with no operator step. It
 ships in the next release and needs a haynes-ops template pin; a new canary
 needs its own record after that deploys.
-*Update, Root acceptance, 2026-10-12: Root receipt `dd5dee24` accepts part of
-this run. Items 1 and 3 to 7 hold, so private GitHub authorization and a fresh
-task pin are shown for #173; item 2 fails as above. See the entry above and the
+*Update, Root acceptance, 2026-10-12: items 1 and 3 to 7 hold and item 2 fails
+as above, so under DESIGN-011's gate the run still does not count for #173. Root
+receipt `dd5dee24` accepts private GitHub authorization and a fresh task pin
+separately, a departure from that gate the record names
+(`partial-acceptance-by-property`). See the entry above and the
 [Sigo private-repo canary record](sagas/distributed-dev-env/verification/sigo-private-canary-2026-10-12.md).*
 
 **Effects to know.** Every v2 pod that boots after #3845 clones both private
@@ -2058,7 +2069,7 @@ DESIGN-001 section 15; later rows link their own record. This heading first read
 | Q-27 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Fix once, then read (Recommended)". One offline correction of the Codex reader preparation, with a fixed list of already accepted evidence, focused tests and independent review. Then exactly one named read and one result read of the Codex original. No retries and no counter reset ([Codex probe record](sagas/distributed-dev-env/verification/codex-fixed-rule-probe-2026-10-12.md#q-27-one-final-reader-preparation-correction)). Carried out 2026-10-12: both reads ran once and returned both markers ([result record](sagas/distributed-dev-env/verification/codex-original-result-2026-10-12.md)). |
 | Q-28 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Yes, after fixes deploy (Recommended)" (other options: "Yes, run it now", "Not now"; owner answer receipt `daadc6b5`). Question: "Codex's canary passed: it loaded both the common and the repository rules in its private pod. Claude's single canary only returned a weekly-limit error, so Claude's rule loading in a v2 pod is still unproven, and its ID is used up. May I run one new Claude canary? It needs a new fixed ID in the operator config in haynes-ops (a rolling operator update that keeps running sessions), then one create, one named read and one result read, with no retries." Allows one new canary `rule-canary-claude-1012`, run only after the review fixes deploy; no retries, no reuse of the 1011 ID, no quota or credential repair, no paid or model fallback, no cleanup. Carried out 2026-10-12 after v2.24.1 deployed: both markers returned, Root acceptance `88909059` ([Claude canary 1012 record](sagas/distributed-dev-env/verification/claude-canary-1012-2026-10-12.md), README decision 63). |
 | Q-29 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Archive, then delete (Recommended)". Coordination records are released 30 days after the Sessions they depend on are first proved absent, archived first to a shelf-only volume and kept there indefinitely, then deleted by a leader-only operator runnable; reads fall back to the archive. Amends DESIGN-010's no-release rule in the reap case only. Private Sessions are never absent until a HOME expiry policy exists (plan 11 follow-up F1). [ADR-004](sagas/distributed-dev-env/adrs/004-coordination-record-retention.md), [DESIGN-024](sagas/distributed-dev-env/designs/024-coordination-record-retention.md), README decision 62. |
-| Q-30 | **Answered 2026-10-12** by Tom through the Claude native prompt, in free text. Question: "To close #173 I need one more Claude canary on a private repo, proving private GitHub access and a fresh pinned task worktree. The dev bot can't create repos on your personal account. Could you create an empty private repo thaynes43/dev-env-private-probe (a README on main is enough)? Global private admission stays off; the canary reuses the spent 1012 slot." Options: "I'll create it (Recommended)", "Use an existing private repo", "Not now". Answer: "All the Sigo alumni repos are private and all are needed for dev-env, we use them now. Why can't you use those?" Interpretation: use the existing private repositories `thaynes43/sigo-alumni` and `thaynes43/sigoalumni-org` instead of a new probe repository, declared as v2 catalog project `sigo-alumni`, and run the one approved private-repo Claude canary `rule-canary-claude-sigo-1012` against it: one create, one named read, one result read, no retries. Global private admission stays off; repository visibility is unchanged. Owner answer receipt `root-q30-owner-answer-r1.json`, sha256 `1490331885be14f5939fe85c81d91f186274dac089286e2343ca373bdd0b3722`. GitOps: haynes-ops [#3845](https://github.com/thaynes43/haynes-ops/pull/3845). Run on 2026-10-12: bootstrap `Partial` on a tracked symlink, so not accepted; fixed in [#237](https://github.com/thaynes43/dev-env/pull/237) ([DESIGN-011 Q-30 amendment](sagas/distributed-dev-env/designs/011-private-managed-rule-canaries.md#private-repo-canary-on-the-sigo-alumni-project--2026-10-12-q-30-173), README decision 65). Root acceptance `dd5dee24` then accepted part of it: items 1 and 3 to 7 hold, so private GitHub authorization and a fresh task pin are shown; item 2 (bootstrap) fails ([Sigo private-repo canary record](sagas/distributed-dev-env/verification/sigo-private-canary-2026-10-12.md)). |
+| Q-30 | **Answered 2026-10-12** by Tom through the Claude native prompt, in free text. Question: "To close #173 I need one more Claude canary on a private repo, proving private GitHub access and a fresh pinned task worktree. The dev bot can't create repos on your personal account. Could you create an empty private repo thaynes43/dev-env-private-probe (a README on main is enough)? Global private admission stays off; the canary reuses the spent 1012 slot." Options: "I'll create it (Recommended)", "Use an existing private repo", "Not now". Answer: "All the Sigo alumni repos are private and all are needed for dev-env, we use them now. Why can't you use those?" Interpretation: use the existing private repositories `thaynes43/sigo-alumni` and `thaynes43/sigoalumni-org` instead of a new probe repository, declared as v2 catalog project `sigo-alumni`, and run the one approved private-repo Claude canary `rule-canary-claude-sigo-1012` against it: one create, one named read, one result read, no retries. Global private admission stays off; repository visibility is unchanged. Owner answer receipt `root-q30-owner-answer-r1.json`, sha256 `1490331885be14f5939fe85c81d91f186274dac089286e2343ca373bdd0b3722`. GitOps: haynes-ops [#3845](https://github.com/thaynes43/haynes-ops/pull/3845). Run on 2026-10-12: bootstrap `Partial` on a tracked symlink, so not accepted; fixed in [#237](https://github.com/thaynes43/dev-env/pull/237) ([DESIGN-011 Q-30 amendment](sagas/distributed-dev-env/designs/011-private-managed-rule-canaries.md#private-repo-canary-on-the-sigo-alumni-project--2026-10-12-q-30-173), README decision 65). Root acceptance `dd5dee24`: items 1 and 3 to 7 hold and item 2 (bootstrap) fails, so the run is not accepted for #173 under DESIGN-011's gate; the Root accepts private GitHub authorization and a fresh task pin separately, as the named deviation `partial-acceptance-by-property` ([Sigo private-repo canary record](sagas/distributed-dev-env/verification/sigo-private-canary-2026-10-12.md)). |
 | Q-31 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Archive, then delete (Recommended)". A private Session's HOME is archived, then deleted, 30 days after its executor's recorded termination: Git rescue in a hold pod bound to the HOME UID, provider history (an allowlist, never credentials) and Git bundle to a shelf-only `Retain` archive, readable under DESIGN-013's scope, then a guarded delete by the operator's leader. A retained Pod is not a stop proof; absence never is. Canary originals never expire; hold and release-now are Tom's alone. Deletion waits for the installed archived read (#174). Closes ADR-004's known gap. [ADR-005](sagas/distributed-dev-env/adrs/005-private-home-expiry.md), [DESIGN-025](sagas/distributed-dev-env/designs/025-private-home-expiry.md), README decision 64. Corrected the same day by [ADR-006](sagas/distributed-dev-env/adrs/006-private-home-expiry-corrections.md) (D-87, README decision 66): only a reap stops a private executor, never the suspended deadline. |
 
 **Next (historical, 2026-10-08; the current order is the pickup brief's

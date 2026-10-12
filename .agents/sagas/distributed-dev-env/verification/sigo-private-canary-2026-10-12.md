@@ -3,10 +3,12 @@
 This record follows the [Claude canary 1012 record](claude-canary-1012-2026-10-12.md)
 and Tom's Q-30 answer. It records the deploy that came first, the corrected
 runner, the one canary on a private project, its boot log read, its one named
-read and one result read, and the Root's acceptance. The Root accepts private
-GitHub authorization and a fresh task pin. Catalog bootstrap failed on a tracked
-symlink, so a Ready bootstrap on a private project is not accepted. The fix is
-merged in source and not deployed yet.
+read and one result read, and the Root's acceptance. Catalog bootstrap failed
+on a tracked symlink, so under DESIGN-011's gate the run is not accepted for
+#173. The Root accepts two of its properties on their own items: private GitHub
+authorization and a fresh task pin. That partial acceptance departs from the
+gate, and this record names it as a deviation. The bootstrap fix is merged in
+source and not deployed yet.
 
 ## Contract
 
@@ -42,9 +44,11 @@ haynes-ops [#3845](https://github.com/thaynes43/haynes-ops/pull/3845) merged as
 canary policy record with `claude-sigo-1012` (`codex-1011` stayed
 byte-identical), added `sigo-alumni` to `--context-payload-read-projects` and
 moved the Claude canary network selector. The post-check passed with no failed
-check: every non-operator pod in `dev-env-system`, `dev-agents` and `dev` kept
-its UID, restarts and images, and the three retained Sessions kept their UID,
-generation and spec.
+check: every pod in `dev-env-system`, `dev-agents` and `dev` that is neither an
+operator pod nor a Job pod kept its UID, restarts and images, and the three
+retained Sessions kept their UID, generation and spec. The operator's own pods
+were replaced by the deploy and checked separately (two Ready, no restarts, the
+pinned image).
 
 The canary ran on the deployed bound state:
 
@@ -63,7 +67,8 @@ which is not published.
   independent native review returned changes required: one high finding, two
   medium and two low. The high one: r1's Create depended on a directory read,
   which Q-30 does not grant. r1 never ran.
-- **r2**, `run-sigo-canary-r2.py` (`3ef04afb`), fixes all five. It drops the
+- **r2**, `run-sigo-canary-r2.py` (`3ef04afb`). The correction note
+  `CORRECTION-sigo-r2.md`, written with r2, says it fixes all five. It drops the
   directory step; Create's own NotFound checks of the Session and Pod and an
   empty `project-canary` label selector are the absence proof. Freeze and
   remote are read-only and repeatable. It adds `result-forgo` and a single
@@ -128,9 +133,19 @@ and `repo`, screened one note value, and did not keep the unfiltered log.
 
 The named read reported boot `ready`, agent state `exited`, branch
 `agent/private-canary-a1444f4131ec7281b5d1e3130c3b5ada` and head `c5da46c2`.
-Its problems named two steps, `mcp` and `project-bootstrap`. It bound the
-retained executor Pod and derived the ordinal-zero context name. The result
-read returned that context:
+Its problems named two steps, `mcp` and `project-bootstrap`. The `mcp` one is
+the same boot warning as in canary 1012: the `cigar-journal` MCP token is not
+set. The `rule-canary-claude` profile mounts only the GitHub token, and the
+prompt forbade tools. The named read bound the retained executor Pod and derived
+the ordinal-zero context name.
+
+The Session view carries provider-reported counts for the first managed
+invocation: 2 input, 754 output, 10,373 cache-read and 21,658 cache-creation
+tokens, and a CLI-equivalent cost estimate of 0.1904266 USD. As in the 1012
+record, these are source assertions. They are not accepted as charged usage or
+cost.
+
+The result read returned that context:
 
 - Name `published-context.c7c80a48b70d71fcb14f5c470b03a4ba.483817f8027a9bd5666e348d5bd3d4fe`,
   UID `e49b7dca-ad0f-4474-bb36-c1feca031518`, kind `transcript-excerpt`, ordinal 0.
@@ -155,7 +170,7 @@ its marker tokens (below).
 | 4 | The task-source record | Holds | The record line carries the commit and comes before the worktree line, the fetch line carries `fetchedAt`, and the bound snapshot carries both revisions. No task-source problem. The file stays in the retained private HOME and was not read. |
 | 5 | Fresh pin | Holds | `ls-remote` finished at 21:00:08.918 and Create started at 21:00:11.014; `fetchedAt` 21:01:03.944 is later than both. The pin equals the pre-Create tip, so no bracketing `ls-remote` was needed. |
 | 6 | Worktree | Holds | The worktree line is on `agent/<session>` from the pin at the pin; the named read reports the same branch and head. |
-| 7 | Peers unchanged | Holds | Against the pre-merge baseline (18:54:04 UTC) and the post-run snapshot (21:01:52 UTC): no pod differences and no Session differences. |
+| 7 | Peers unchanged | Holds | Against the pre-merge baseline (18:54:04 UTC) and the post-run snapshot (21:01:52 UTC), in `dev-env-system`, `dev-agents` and `dev`: every baseline pod that is neither an operator pod nor a Job pod kept its UID, restarts and images, and the three retained Sessions kept their UID, generation and spec. The deploy replaced the operator pods and CronJob runs came and went; those, and the canary's own pod, were not compared, as DESIGN-011 item 7 allows. |
 
 ## Why item 2 fails, and the fix
 
@@ -167,9 +182,12 @@ and refused any other tracked entry as a conflict, submodule or special file.
 So that repository's reference ended `Preserved`. The `sigo-alumni` project root
 proves every member's anchor again, so it ended `Failed`, and the outcome was
 `Partial`. `thaynes43/sigo-alumni` and `thaynes43/dev-env` track no symlinks, and
-canaries on the `dev-env` project alone reached `Ready`. This cause comes from
-a read-only analysis of the source and the tree modes. The pod's private
-bootstrap report was not read, because nothing execs into a private pod.
+canaries on the `dev-env` project alone reached `Ready`. This cause is a
+diagnosis from a read-only analysis of the source and the tree modes. The pod's
+private bootstrap report was not read, because nothing execs into a private pod.
+No receipt in the order directory binds the symlink count, the tree modes or the
+`Preserved` and `Failed` outcomes; they appear only in the Root's own diagnosis
+text.
 
 The Session later reads phase `Failed`: its Pod reached its deadline and the
 HOME is kept. That comes from one read-only `kubectl get` after the run, which
@@ -185,9 +203,9 @@ needs a haynes-ops template pin. Until that pin lands, every v2 pod that boots
 with this catalog reports the same `project-bootstrap` problem. In this canary
 the `repo` step and the task still ran.
 
-## Recorded deviation
+## Recorded deviations
 
-DESIGN-011 says to take the boot log once, "after the named read shows the task
+**`bootlog-before-named-read`.** DESIGN-011 says to take the boot log once, "after the named read shows the task
 has finished". r2's run plan takes it after the wait and before the named read:
 the wait saw the task result `Succeeded` at 21:01:35, the boot log was read at
 21:01:38 and the named read ran at 21:01:44. The Root names this order as a
@@ -196,6 +214,18 @@ conditions rest on the same AgentSession status. The named read serves the
 `agent.task` that the wait had already seen, and it then reported the same task
 (exit code 0, finished 21:01:15). The executor Pod kept its UID across the log
 read.
+
+**`partial-acceptance-by-property`.** DESIGN-011 says the run "is accepted for
+#173 only when all of these hold", items 1 to 7. Item 2 fails, so the run is not
+accepted for #173 under that gate, and the runner's verdict candidate says so
+(`UNACCEPTED_CANDIDATE`, `items1to7AllHold` false). The Root receipt then
+accepts two properties of the run on their own items: private GitHub
+authorization (items 1, 3 and 5) and a fresh task pin (items 3 to 6), with peers
+preserved (item 7). DESIGN-011 item 2 itself says "Items 1, 3 and 5 prove
+access", so neither property rests on the bootstrap outcome. The Root receipt
+does not list this as a deviation; this record names it. The gate stays as
+written: a run that accepts #173's private-repository evidence as a whole still
+needs all seven items.
 
 ## Markers
 
@@ -218,9 +248,11 @@ Root acceptance receipt `dd5dee24` records verdict
 `PARTIAL_ACCEPTED_PRIVATE_AUTH_AND_FRESH_PIN`, with `furtherExecutionAuthorized`
 false. It binds the owner answer, both runners and their tests and reviews,
 every campaign gate and file, the baseline, the post-run snapshot and the
-deploy post-check: every file in the order directory, 102 files, by path,
+deploy post-check: every other file in the order directory, 102 files, by path,
 SHA256 and bytes. It is saved beside them as
-`root-sigo-canary-acceptance-r1.json`.
+`root-sigo-canary-acceptance-r1.json`. It accepts these properties separately,
+under the `partial-acceptance-by-property` deviation above; the run as a whole
+is not accepted for #173.
 
 - **Private GitHub authorization.** In its private v2 pod, agentd fetched
   `thaynes43/sigo-alumni`, private at Create, at its private tip. A private
@@ -241,9 +273,11 @@ Not accepted:
 
 ## #173 status
 
-Shown: loaded common and repository rules for both providers (the Codex original
-and Claude canary 1012), private GitHub authorization and a fresh task pin
-(this canary). Failed: catalog bootstrap of a project with a symlink-carrying
+Under DESIGN-011's all-items gate this run is not accepted for #173. Accepted
+separately, as a named deviation from that gate: private GitHub authorization
+and a fresh task pin (this canary). Shown earlier: loaded common and repository
+rules for both providers (the Codex original and Claude canary 1012). Failed:
+catalog bootstrap of a project with a symlink-carrying
 repository; fixed in source by #237, deploy pending. Pending: acceptance of a
 `Ready` bootstrap on a private multi-repository project. That needs the fix
 deployed and a new canary, which Q-30 does not grant: it needs Tom's approval
@@ -254,7 +288,8 @@ work, preserved local state) are outside this record. #173 stays open.
 ## Still Unknown
 
 - Served model (requested `claude-opus-5-5`).
-- Usage and cost.
+- Usage and cost. The provider-reported counts above are source assertions,
+  not accepted as charged usage or cost.
 - Full native history.
 - Physical stop.
 - Capture completeness beyond the excerpt.
