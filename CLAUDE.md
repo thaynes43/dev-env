@@ -36,13 +36,17 @@ this repo publishes signed images, haynes-ops pins and deploys them.
 **Current scope, 2026-10-10:** preserve sessions through upgrades, distribute
 load, guard powerful access, expose live/stopped work and context, and attribute
 model usage/cost. Plans 01/02 provide the tested Claude task/terminal subset.
-Source release 2.11.0 includes budget/native foundations; full Codex coordination,
+As of 2026-10-12, release 2.24.0 is published and signed, not deployed. The
+installed task template is signed agent 2.20.0. The deployed operator is
+`sha-cd966d1`, delivered through haynes-ops #3825. Full Codex coordination,
 history-preserving archive, guarded access and truthful cost reporting remain
-unaccepted. Read the handoff for exact deployed versions and evidence. The
+unaccepted. Read the handoff for exact digests and evidence. The
 historical twenty-row audit guides migration; it is not a universal pilot gate.
 V1 stays running until required workflows have replacements and Tom explicitly
-approves retirement. Build sessions follow
-[`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md); deploys remain GitOps.
+approves retirement. Build sessions follow the
+[Claude pickup brief](.agents/CLAUDE-RESUME-2026-10-12.md) and its six-step
+roadmap; [`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md) is the
+historical first-build order. Deploys remain GitOps.
 
 ## Layout
 

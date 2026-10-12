@@ -114,6 +114,15 @@ review before any separately gated result read. Pending question receipt
 and the original remain preserved. A stopped-context read and actual rule
 acceptance cannot be inferred from the successful Create.
 
+**Ruling, 2026-10-12.** Tom answered Q-27 through the Claude native prompt:
+"Fix once, then read (Recommended)". The ruling allows one offline correction of
+the reader preparation. It uses a fixed list of evidence, focused tests and
+independent review. After that, it allows exactly one named read and one result
+read of the Codex original. There are no retries and no counter reset. The pending
+text above is the original record and stays as written; receipt `9a3a7a1d`,
+the failed drafts and the counters stay preserved. This entry records the ruling
+only; it does not run the correction or either read.
+
 Global private-project admission remains disabled. Actual both-provider rules,
 fresh private GitHub worktrees, claims/inbox, authorized full stopped native
 history, private dispatch/recovery, exact served-model/usage/cost provenance and

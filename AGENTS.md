@@ -15,8 +15,10 @@ Codex and other agents: the rules for this repository live in
 source, kept in one file so the two never drift.
 
 **Start with [`.agents/HANDOFF.md`](.agents/HANDOFF.md):** the current state, the
-next steps, and what works outside the cluster. The first build session follows
-[`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md).
+next steps, and what works outside the cluster. Build sessions follow the
+[Claude pickup brief](.agents/CLAUDE-RESUME-2026-10-12.md) and its six-step
+roadmap; [`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md) is the
+historical first-build order.
 
 The short version:
 

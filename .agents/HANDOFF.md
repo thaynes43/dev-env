@@ -1,5 +1,28 @@
 # HANDOFF: start here
 
+The front door for any agent that opens this repo, in the cluster's dev-env pod or on
+Tom's own machine. Read this page, then [CLAUDE.md](../CLAUDE.md) (the rules), then
+the saga. To continue building, follow the
+[six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap)
+in the Claude pickup brief. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
+the historical work order for the first build session.
+
+## Q-27 ruling and stale-guidance labels — 2026-10-12
+
+Tom answered Q-27 on 2026-10-12 through the Claude native prompt:
+"Fix once, then read (Recommended)". The ruling allows one offline correction of
+the Codex reader preparation. It uses a fixed list of evidence, focused tests and
+independent review. After that, it allows exactly one named read and one result
+read of the Codex original. There are no retries and no counter reset. The
+[Codex probe record](sagas/distributed-dev-env/verification/codex-fixed-rule-probe-2026-10-12.md#q-27-one-final-reader-preparation-correction)
+keeps the original pending text and adds the ruling under it. This docs update
+records the ruling only; it does not run the correction or either read.
+
+Q-24 is still pending: no owner answer is recorded. Do not ask it again; check for
+an actual answer first. The [rulings table](#rulings) now runs through Q-27.
+Superseded blocks lower on this page carry a one-line historical label that
+points to the current state. Their original text and receipts are unchanged.
+
 ## Claude pickup and controlling roadmap — 2026-10-12, America/New_York
 
 Read the [Claude pickup brief](CLAUDE-RESUME-2026-10-12.md) in full. It records
@@ -15,6 +38,7 @@ preparation failures, with no fourth attempt authorized. Q-24 routing is pending
 This pickup does not reset counters or authorize retries, pairing or cutover.
 Older entries below, including “What happens first” and shared-RWX prescriptions,
 are historical; later owner requirements and ADR-003 control conflicting guidance.
+*Update: Tom answered Q-27 later on 2026-10-12; see the ruling above.*
 
 ## Original Codex canary and stopped reader preparation — 2026-10-12 UTC
 
@@ -39,6 +63,7 @@ No fourth attempt or result read is authorized. The Claude quota result and
 uncertain lifecycle receipts remain preserved. Q-24, actual both-provider rules
 and the owner pilot remain open; Claude advisory is optional/down. Earlier
 entries below are historical and must not restore zero-Create or unstarted IDs.
+*Historical: Q-27 was answered later on 2026-10-12; see the ruling at the top.*
 
 ## First original Claude canary and released ownership seam — 2026-10-12 UTC
 
@@ -48,7 +73,8 @@ Directory attempt 4 and the first trusted Claude Create at 05:28:22 UTC, within
 0.273 seconds of the successful empty page. Independent saved review `fd25b915`
 and Root receipt acceptance `2d283d67` bind original HTTP 201 UID
 `45a614cb-f537-441e-a5c1-33b66a285521`. The Claude ID is permanently consumed;
-Codex's fixed ID remains unstarted. A single named read and native saved review bind retained executor metadata and
+Codex's fixed ID remains unstarted *(historical: Codex's original HTTP 201
+followed at 06:47:25 UTC; see the entry above)*. A single named read and native saved review bind retained executor metadata and
 ordinal-zero context identity. The Session reports Failed/exit 1; underlying cause,
 physical stop, history and pilot acceptance remain open. The one fixed result
 read retained the 49-byte weekly-limit response, reporting reset at 12pm UTC;
@@ -84,7 +110,8 @@ failure. Final Create review preceded attempt 3's Root ruling expiry; the later
 pre-spawn freshness check nevertheless refused execution. Root receipt `45a9f745` preserves that
 refusal and artifact-absence evidence. No Create/helper/POST ran, no fixed key
 was consumed and no fourth read is authorized by the expired plan. An inert
-sequencing correction is under review; unchanged 300-second freshness and the
+sequencing correction is under review *(historical: the reviewed sequencer later
+created the Claude and Codex originals; see the entries above)*; unchanged 300-second freshness and the
 permanent once-only key remain required. v2.23 is signed and published, not
 deployed; fixed task pins remain v2.20. Actual both-provider rule loading and
 the owner pilot remain open. Q-24 is pending; Q-26's authorized final R4
@@ -113,6 +140,8 @@ Independent source review `a6271339`, saved review `d3e78362` and combined revie
 #3825 image delivery and preservation in the saved observation window; there was
 no extra GET, reconcile or restart of existing sessions. Both permanent canary IDs remain
 unstarted, no key is consumed and global private-project admission is disabled.
+*(Historical: both fixed IDs were consumed later on 2026-10-12; see the Claude
+and Codex original entries above.)*
 Actual Directory discovery, both-provider loaded rules and the owner pilot are
 unaccepted. Claude advisory is optional during the outage; error-only runs were
 read and retained without retries. Q-24 remains pending. Q-26 is satisfied by R4;
@@ -178,7 +207,10 @@ Both fixes require source checks/native review and signed delivery before either
 permanent POST. No Job-output or live-log route supplies a retained receipt.
 Actual rule acceptance and the owner pilot remain open; Q-24 is pending.
 
-## Latest client increment — 2026-10-11 UTC
+## Client increment — 2026-10-11 UTC
+
+*Historical entry, first titled "Latest client increment". v2.22 to v2.24 and
+both fixed canaries came later; see the entries above.*
 
 Source #204 (`c9493db0`) and #206 (`562d7df2`) are merged after focused checks,
 required CI and native independent review. Release #205 (`42fb8bf2`) publishes
@@ -193,6 +225,9 @@ Native saved-result reviews18502c6e (build) andbb3b7547 (publication) passed.
 v2.21 is a verified signed artifact; it is not a runtime rollout.
 Neither new client has called the operator API; no fixed provider attempt has
 occurred.
+
+*Historical paragraph: Ops #3824 merged, Q-26's one correction is complete and
+Ops #3825 is the later accepted delivery; see the entries above.*
 
 The latest accepted deployment evidence is the v2.20 prerequisite observation
 from 22:00 UTC, separately evaluated offline. This client release changes no
@@ -220,6 +255,9 @@ authorized hosted CI plus saved real-API evidence. No DNS investigation opened.
 
 ## #173 ID-only canary client prerequisite
 
+*Historical entry: Ops #3824 merged, Q-26 is answered and both fixed canaries
+ran on 2026-10-12; see the entries above.*
+
 [DESIGN-021](sagas/distributed-dev-env/designs/021-canary-cli.md) ratifies explicit
 `canary create --id <fixedID> --json --once`. The pre-D21 CLI lacks this route;
 generic create sends extra fields/retries and is not a safe substitute. Use the
@@ -238,6 +276,9 @@ checker work, baseline/rollout or provider attempt until the owner's answer.
 
 ## #174 directory CLI prerequisite for #173 rule probes
 
+*Historical entry: the bound client and Directory reads ran later; the counter is
+Directory 5. See the entries above.*
+
 [DESIGN-020](sagas/distributed-dev-env/designs/020-directory-cli.md) ratifies the
 explicit `directory list --project dev-env --limit 20 --json --once` route.
 The shipped pre-D20 binary has no Directory verb; do not invoke an unknown
@@ -252,7 +293,10 @@ After a bound client build, require a fresh complete authorized page before each
 first fixed canary create. Actual directory and both-provider rules remain
 unaccepted. Preserve original observer/counters; optional Claude is not a gate.
 
-## Latest installed state and acceptance gates — 2026-10-11 22:00 UTC
+## Historical installed state and acceptance gates — 2026-10-11 22:00 UTC
+
+*Historical entry, first titled "Latest installed state". Ops #3825 is the later
+accepted operator delivery; see "Fixed result reader built and released" above.*
 
 This entry supersedes the historical “pending release/install” paragraphs below.
 Source #199/#200/#202 and release #201 are merged; signed v2.20.0 prerequisites
@@ -836,7 +880,8 @@ permanent roots, native routing or actual Claude/Codex rule loading. Private
 project admission remains disabled. #173 and #91 remain open.
 
 Initial read-only verification confirmed operator `sha-7a634e5` and worker template
-2.12.0 (the template is now 2.13.0 above), two Ready operator replicas, private-project admission disabled and no
+2.12.0 (2.13.0 in the entry above; the installed template is now 2.20.0, see the
+[pickup brief](CLAUDE-RESUME-2026-10-12.md#what-is-actually-delivered)), two Ready operator replicas, private-project admission disabled and no
 AgentSessions. The trusted catalog exists with one dev-env repository and empty
 common-rule text. This does not establish actual provider rule loading.
 Protected runtime identities and the failed fixture ledger have a private
@@ -901,10 +946,8 @@ checks. No retired storage investigation or native fixture is rerun.
 
 ---
 
-The front door for any agent that opens this repo, in the cluster's dev-env pod or on
-Tom's own machine. Read this page, then [CLAUDE.md](../CLAUDE.md) (the rules), then
-the saga. To start building, follow
-[KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md).
+*The front-door paragraph that stood here moved to the top of this page on
+2026-10-12.*
 
 ## Overnight delivery, 2026-10-10 UTC
 
@@ -1005,6 +1048,9 @@ a fresh agent or pod. Keep v1, its enrollment, the keeper refresh owner and the
 existing shelf unchanged. Source changes require reviewed PRs, exact-head checks
 and GitOps delivery; no local image builds or CPU burners on shared nodes.
 
+*Expired: this 2026-10-10 delivery window has closed and grants no current
+authority. The current order is the pickup brief's six-step roadmap.*
+
 The coordinator's current delivery window is 05:29–09:30 UTC with at most eight
 hours of aggregate child effort. At the morning checkpoint, report the verified
 workflow and precise remaining gates, preserve WIP and stop new implementation
@@ -1060,6 +1106,10 @@ and selected-turn cancellation do not establish universal future admission
 control. Do not call the first owner workflow ready until coordinator coverage,
 trusted accounting and native phone escalation are proven.
 
+*Withdrawn: #130 closed as not planned, haynes-ops #3737 closed unmerged, and
+[ADR-003](sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md)
+removed the storage prerequisite. No storage trial follows from this paragraph.*
+
 The [bounded NFS comparison](../docs/trials/2026-10-09-external-storage-comparison.md)
 is the next storage candidate. Reviewed haynes-ops #3693 merged and its exact
 TCP/9283 rule is observed in the live policy. One bounded external Ceph metrics
@@ -1085,6 +1135,10 @@ stopped under Q-23/D-84. A native owner question proposes one hosted Flux CI run
 with a ten-minute checkpoint; its answer is pending. Do not silently substitute
 another test route, publish the schema PR or deploy it before that bounded next
 step is authorized and required checks pass.
+
+*Superseded: Claude took over v2 on 2026-10-12 under the
+[pickup brief](CLAUDE-RESUME-2026-10-12.md), and ADR-003 replaced the
+shared-project route and #130's storage diagnosis.*
 
 Tom clarified that Codex must continue until v2 provides a workflow he can test.
 The documentation checkpoint did not end that assignment. Read the
@@ -1116,6 +1170,11 @@ source `0e0931ad`; independent signature/admission/telemetry checks remain befor
 a bounded storage observation. No new storage trial follows automatically from
 these source changes. Resolve #130 and the independent real-client,
 lifecycle, host and phone gates before claiming the owner-test milestone.
+
+> **Superseded by [ADR-003](sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md)
+> (2026-10-10).** The shared-workspace, CephFS diagnostic and D-80/D-81 shared-file
+> prescriptions in the next three paragraphs no longer gate delivery. Repositories
+> and task worktrees stay per pod. Kept as history.
 
 **Latest delivery checkpoint, 2026-10-09 22:13Z:** shared-workspace core #135
 merged `316c03c`; keeper-owned Codex auth #138 merged `bcb2599` and bounded
@@ -1157,6 +1216,12 @@ is its requester. There is no separate requester-agent service. The planned
 console is unbuilt; the normal management surface still needs workflow review.
 Owner questions must arrive as native phone prompts, not get buried in comments
 or documentation.
+
+> **Superseded by [ADR-003](sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md)
+> (2026-10-10).** R7's shared workspace files, ADR-002/Q-21's RWX workspace and the
+> CephFS trial in the next three paragraphs no longer gate delivery; #130 closed as
+> not planned. Repositories and task worktrees stay per pod. The Q-22 node-trust
+> facts in the third paragraph still stand. Kept as history.
 
 Tom supplied [project requirements R1–R6](sagas/distributed-dev-env/requirements/2026-10-09-project-roots.md)
 and added R7: multiple Codex remote links across pods sharing workspace files.
@@ -1278,6 +1343,10 @@ acceptance still gate activation; no key values are exposed.
 
 ## State on 2026-10-08
 
+*Historical state. Its work order (plan 02, approvals, parity, keeper minting) and
+its note on the 2026-10-12 weekly-limit reset are historical. The current order is the pickup
+brief's [six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap).*
+
 - **dev-env v2 resumed on Codex on 2026-10-08**, under Tom's coordinator work
   order. Work proceeds in order: finish plan 02, assess approvals inside the
   Claude Code app, check v1 capability parity, then build keeper SSH minting.
@@ -1365,6 +1434,10 @@ acceptance still gate activation; no key values are exposed.
     release. Issue #91 remains open; #90 and haynes-ops #3550 remain closed.
 
 ## State on 2026-10-07
+
+*Historical state. "Next is plan 02" and plan 07's "next step" below are past;
+plan 02 is done. The current order is the pickup brief's
+[six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap).*
 
 - **Phase 1 is built: plan 01 is done (2026-10-07, #60).** From the v1 pod,
   `agent-run` (built from main) started task session `dev-env-1007-045709` on
@@ -1538,7 +1611,12 @@ acceptance still gate activation; no key values are exposed.
 - **Q-08 is live.** Kyverno `default-cpu-request` (haynes-ops #3406) went live on
   2026-10-06. At 03:34Z no Running pod in the cluster was BestEffort.
 
-## What happens first
+## What happens next
+
+Follow the
+[six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap)
+in the Claude pickup brief. The list below is the historical 2026-10-07 start
+order, first titled "What happens first". Each item in it is done or superseded.
 
 1. **The laptop handoff** ([`handoffs/2026-10-06-tom-laptop-settings.md`](handoffs/2026-10-06-tom-laptop-settings.md)).
    All three parts are done (2026-10-07; the checklist below says how each was
@@ -1570,10 +1648,13 @@ acceptance still gate activation; no key values are exposed.
 | [CLAUDE.md](../CLAUDE.md) | The rules for this repo, the single source. Codex reads [AGENTS.md](../AGENTS.md), which points there. |
 | [.agents/sagas/README.md](sagas/README.md) | Saga conventions: statuses and the D/Q/C/S id schemes. |
 | [distributed-dev-env/README.md](sagas/distributed-dev-env/README.md) | Tom's vision, the architecture at a glance, the hard news, the decision log and the plan index. |
-| [distributed-dev-env/KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) | The work order for the first build session. |
+| [CLAUDE-RESUME-2026-10-12.md](CLAUDE-RESUME-2026-10-12.md) | The Claude pickup brief: current owner requirements, what is delivered, the six-step roadmap and stopped routes. |
+| [distributed-dev-env/KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) | The work order for the first build session (historical; continue from the pickup brief). |
 | [adrs/001-distributed-dev-env.md](sagas/distributed-dev-env/adrs/001-distributed-dev-env.md) | The architecture decision (Accepted 2026-10-06), with the ratification summary at the top and consequences C-01 to C-21. |
-| [adrs/002-shared-project-workspaces.md](sagas/distributed-dev-env/adrs/002-shared-project-workspaces.md) | Accepted shared workspace/private runtime topology; bounded CephFS trial authorized, normal rollout gated on acceptance. |
+| [adrs/002-shared-project-workspaces.md](sagas/distributed-dev-env/adrs/002-shared-project-workspaces.md) | Accepted 2026-10-09 and kept as history. ADR-003 supersedes its shared workspace, RWX storage and CephFS trial. |
+| [adrs/003-session-coordination-private-repositories.md](sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md) | The controlling scope since 2026-10-10: share rules, coordination and authorized context; keep repositories and task worktrees per pod. |
 | [designs/001-dev-env-v2.md](sagas/distributed-dev-env/designs/001-dev-env-v2.md) | The detail: components, API, lifecycle, credentials, RBAC, egress, GPUs. Spikes are in section 13, risks in 14, Q-01 onward and their resolutions in 15, the decisions (D-01 onward) in 16. |
+| [designs/](sagas/distributed-dev-env/designs/) | DESIGN-002 to DESIGN-023: the bounded contracts for budgets, private projects, rules, history, directory, claims, inbox, provenance and the once-only clients. The pickup brief maps each to its source. |
 | [research/R-01](sagas/distributed-dev-env/research/R-01-summoned-agents-audit.md) | An audit of summoned agents today, with v2 requirements V-01 to V-17. |
 | [research/R-02](sagas/distributed-dev-env/research/R-02-remote-control-identity.md) | Remote Control identity, the evidence behind S-1, and proposals P-1 to P-12. |
 | [research/R-03](sagas/distributed-dev-env/research/R-03-claude-code-approvals.md) | Claude Code in-app approval research: hooks, managed policy, forgery paths and the plan 03 core dependency. D-70 withdraws Q-18's earlier premise; no route selected. |
@@ -1589,12 +1670,16 @@ acceptance still gate activation; no key values are exposed.
 | [backlog/08](sagas/distributed-dev-env/backlog/08-tool-pods.md) | Plan 08: tool pods (Blender, audio, image, whisper, printer, video). |
 | [backlog/09](sagas/distributed-dev-env/backlog/09-gpu-local-llm.md) | Plan 09: the VRAM budget, LLM pools, satellites and opencode. |
 | [backlog/10](sagas/distributed-dev-env/backlog/10-summoned-sessions.md) | Plan 10: summoned sessions move into v2 and `dev-env-ops` retires. |
-| [backlog/11](sagas/distributed-dev-env/backlog/11-project-workspaces.md) | R1–R7 joint projects, shared workspace/remote pods, rules, freshness, lossless repair and cross-pod cleanup acceptance. |
+| [backlog/11](sagas/distributed-dev-env/backlog/11-project-workspaces.md) | Plan 11 under ADR-003: common rules, session coordination and fresh per-pod repositories and task worktrees. R1–R7 are read with the 2026-10-10 correction. |
 | [workflow guide](../docs/workflow-guide.md) | High-level quick start, architecture/flow diagrams, features, current limits and cutover gates. |
 | [.github/workflows/](../.github/workflows/) | CI (`ci.yml`, with the aggregate `CI - Success`), the operator image (`publish.yml`, from main), the agent image (`publish-agent.yml`, from a `v2.x.y` tag), release-please, the Claude advisory review and the `@claude` handler. |
 | haynes-ops [`.agents/sagas/dev-env/adrs/001-v2-lives-in-own-repo.md`](https://github.com/thaynes43/haynes-ops/blob/main/.agents/sagas/dev-env/adrs/001-v2-lives-in-own-repo.md) | Accepted: v2 lives here, and v1 and every manifest stay in haynes-ops. |
 
-## Rulings (Tom, 2026-10-06 to 2026-10-08; full text in DESIGN-001 section 15)
+## Rulings
+
+Tom's rulings from 2026-10-06 to 2026-10-12. Full text for Q-01 to Q-23 is in
+DESIGN-001 section 15; later rows link their own record. This heading first read
+"Rulings (Tom, 2026-10-06 to 2026-10-08; full text in DESIGN-001 section 15)".
 
 | Id | Ruling |
 |---|---|
@@ -1617,8 +1702,18 @@ acceptance still gate activation; no key values are exposed.
 | Q-17 | Withdrawn after Tom corrected its premise (2026-10-08): use `agent-run` or ask agents to start sessions; a web UI is another possible session-management client. No laptop kubeconfig or test blocks plan 02. D-68 remains an optional external path whose real external-machine use is unverified. Q-16 remains in force. |
 | Q-18 | Earlier prompt withdrawn by the coordinator after Tom corrected its OPERATOR-only premise (2026-10-08, D-70). Headlamp's cluster-admin route already exposes the claimed additional Kubernetes powers. No approval route or blanket direct admin grant is selected. Any future approval question must name an actual new capability or workflow and preserve effective parity and existing owner rules. R-03 remains design research; no human path or new guard is enabled. |
 | Q-19 | **Complete by owner confirmation, 2026-10-08 America/New_York:** fresh CA fields `SSH_CA_PRIVATE_KEY_B64` and `SSH_CA_PUBLIC_KEY` saved in existing `HaynesKube/dev-env` (D-72 corrects the originally proposed separate item). No values were sent to or read by this coordinator; format and delivery validation still belong to keeper provisioning. Do not ask to generate/store it again. Minting stays disabled; node trust and activation follow separately. |
+| Q-20 | **Superseded.** The early question of which app registers the proposed v1 project folders was premature. Tom's R2 (2026-10-09: both providers share one project concept) supersedes it (README decisions 49 and 50). |
+| Q-21 | **Accepted 2026-10-09, then superseded by ADR-003.** Tom answered "Accept ADR-002 and the bounded CephFS trial (Recommended)" (D-75, README decision 51). [ADR-003](sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md) (2026-10-10, decision 56) removed shared Git/RWX and its trial from delivery; #130 closed as not planned. |
+| Q-22 | **Delegated 2026-10-09.** "Delegate the trust installation to Codex" (D-76, README decision 53). The saved public CA was installed on all five PVE nodes (decision 54); minting stays off. |
+| Q-23 | **Accepted 2026-10-09.** "60 minutes without progress or 3 failed attempts at the same blocker" (D-84, README decision 55, [budget contract](sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md)). Counters carry across agents, pods, methods and resumes. |
+| Q-24 | **Pending.** Codex native routing for the MVP: separate paired session hosts (recommended) or one coordinator with isolated workers sharing a native failure boundary. The native question went out 2026-10-11; no owner answer is recorded and phone delivery is unverified. Do not ask again; check for an actual answer first. [DESIGN-006 Q-24](sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md#q-24-codex-mvp-native-routing), README decision 57. |
+| Q-25 | **No decision needed.** The local schema-host DNS route stopped after three attempts. Shipping uses hosted CI and saved real-API schema evidence; no DNS investigation or retry ([installation record](sagas/distributed-dev-env/verification/installation-2026-10-11.md#owner-questions-and-stopped-checks)). |
+| Q-26 | **Answered 2026-10-11:** "Allow one correction (Recommended)". One final R4 checker correction ran and Ops #3824 activation was accepted. No R5, alternate method or retry ([fixed-rule activation record](sagas/distributed-dev-env/verification/fixed-rule-activation-2026-10-11.md), [DESIGN-021](sagas/distributed-dev-env/designs/021-canary-cli.md)). |
+| Q-27 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Fix once, then read (Recommended)". One offline correction of the Codex reader preparation, with a fixed evidence list, focused tests and independent review. Then exactly one named read and one result read of the Codex original. No retries and no counter reset ([Codex probe record](sagas/distributed-dev-env/verification/codex-fixed-rule-probe-2026-10-12.md#q-27-one-final-reader-preparation-correction)). |
 
-**Next:** effective parity and keeper activation prerequisites. Q-18's earlier
+**Next (historical, 2026-10-08; the current order is the pickup brief's
+[six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap)):**
+effective parity and keeper activation prerequisites. Q-18's earlier
 prompt is withdrawn; no approval route is selected. The spike and corrected v1 parity audit are complete;
 parity restoration and keeper SSH minting are in progress. No gap is waived. Any future
 approval proposal must preserve existing owner requirements; a change to the
