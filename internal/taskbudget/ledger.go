@@ -4,7 +4,9 @@
 package taskbudget
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -18,8 +20,13 @@ import (
 const (
 	StallLimit   = 60 * time.Minute
 	FailureLimit = 3
-	MaxEvents    = 512
-	MaxWorkers   = 64
+	// MaxEvents bounds retained history. Worker stop receipts sit outside it:
+	// each worker has at most one, so at most MaxWorkers.
+	MaxEvents  = 512
+	MaxWorkers = 64
+	// MaxClockSkew is how far a replica's clock may trail the ledger's
+	// AccountedAt, which the last writing replica stamped from its own clock.
+	MaxClockSkew = 5 * time.Second
 )
 
 var (
@@ -157,9 +164,17 @@ func (l *Ledger) checkBinding(b Binding) error {
 	return nil
 }
 
-func (l *Ledger) account(now time.Time) error {
+// account charges active workers up to now and returns the time to use for the
+// rest of the operation. A clock up to MaxClockSkew behind AccountedAt (another
+// replica's clock, or a small backward step) uses AccountedAt and charges
+// nothing for the gap, so ledger time never runs backwards. A larger backward
+// step is unknown authority.
+func (l *Ledger) account(now time.Time) (time.Time, error) {
 	if now.Before(l.AccountedAt) {
-		return ErrUnavailable
+		if l.AccountedAt.Sub(now) > MaxClockSkew {
+			return time.Time{}, ErrUnavailable
+		}
+		now = l.AccountedAt
 	}
 	// Clock-boundary subtraction retains fractional intervals across frequent
 	// observations; truncating each elapsed duration would undercount effort.
@@ -170,7 +185,48 @@ func (l *Ledger) account(now time.Time) error {
 		}
 	}
 	l.AccountedAt = now
-	return nil
+	return now, nil
+}
+
+// historyEvents counts the retained events that consume MaxEvents: all but
+// worker stop receipts, so a full history can still record every stop.
+func (l *Ledger) historyEvents() int {
+	n := 0
+	for _, e := range l.Events {
+		if e.Request.Kind != "worker-stop" {
+			n++
+		}
+	}
+	return n
+}
+
+// readState remembers a ledger as read, to tell whether an operation changed
+// anything durable beyond elapsed accounting.
+type readState struct {
+	data        []byte
+	accountedAt time.Time
+	effort      int64
+}
+
+func (l *Ledger) readState() readState {
+	data, err := json.Marshal(l)
+	if err != nil {
+		data = nil
+	}
+	return readState{data: data, accountedAt: l.AccountedAt, effort: l.EffortMilliseconds}
+}
+
+// onlyAccounted reports whether l differs from its read state in nothing but
+// AccountedAt and EffortMilliseconds. That is derived state: the next write
+// charges the same elapsed time from the stored AccountedAt.
+func (r readState) onlyAccounted(l *Ledger) bool {
+	if r.data == nil {
+		return false
+	}
+	c := *l
+	c.AccountedAt, c.EffortMilliseconds = r.accountedAt, r.effort
+	data, err := json.Marshal(&c)
+	return err == nil && bytes.Equal(data, r.data)
 }
 
 func (l *Ledger) latch(now time.Time, reason string) {
@@ -195,7 +251,7 @@ func (l *Ledger) evaluate(now time.Time) {
 		l.latch(now, "Stalled")
 	case !now.Before(l.NextCheckpoint):
 		l.latch(now, "Checkpoint")
-	case len(l.Events) >= MaxEvents || len(l.Workers) >= MaxWorkers:
+	case l.historyEvents() >= MaxEvents || len(l.Workers) >= MaxWorkers:
 		l.latch(now, "HistoryBound")
 	}
 	counts := map[string]int{}
@@ -229,8 +285,9 @@ func (s *Service) mutate(ctx context.Context, b Binding, fn func(*Ledger, time.T
 		if err := l.checkBinding(b); err != nil {
 			return nil, err
 		}
-		now := s.now()
-		if err := l.account(now); err != nil {
+		read := l.readState()
+		now, err := l.account(s.now())
+		if err != nil {
 			return nil, err
 		}
 		l.evaluate(now)
@@ -238,6 +295,11 @@ func (s *Service) mutate(ctx context.Context, b Binding, fn func(*Ledger, time.T
 		// caller requests a stop. A stale binding never changes the new epoch.
 		operationErr := fn(l, now)
 		l.evaluate(now)
+		// An observation, replay or refusal that changes nothing durable writes
+		// nothing, so frequent observers do not contend with real writers.
+		if read.onlyAccounted(l) {
+			return l, operationErr
+		}
 		if err := s.Store.Update(ctx, l, rv); err != nil {
 			if errors.Is(err, ErrConflict) {
 				continue
@@ -263,9 +325,9 @@ func (s *Service) ObserveNative(ctx context.Context, b Binding) (*Ledger, error)
 		refuse := func(err error) error {
 			for _, w := range l.Workers {
 				if w.ID == fmt.Sprintf("host:%s:%d", b.HostID, b.Epoch) && w.Active {
-					now := s.now()
-					if err := l.account(now); err != nil {
-						return err
+					now, accountErr := l.account(s.now())
+					if accountErr != nil {
+						return accountErr
 					}
 					l.latch(now, "NativeAuthorityUnavailable")
 				}
@@ -278,8 +340,8 @@ func (s *Service) ObserveNative(ctx context.Context, b Binding) (*Ledger, error)
 		if err := s.NativeInspector.InspectNativeAdmission(ctx, l, b); err != nil {
 			return refuse(err)
 		}
-		now := s.now()
-		if err := l.account(now); err != nil {
+		now, err := l.account(s.now())
+		if err != nil {
 			return err
 		}
 		l.evaluate(now)
@@ -300,8 +362,8 @@ func (s *Service) Admit(ctx context.Context, b Binding) (*Ledger, error) {
 		if err := s.NativeInspector.InspectNativeAdmission(ctx, l, b); err != nil {
 			return err
 		}
-		now := s.now()
-		if err := l.account(now); err != nil {
+		now, err := l.account(s.now())
+		if err != nil {
 			return err
 		}
 		l.evaluate(now)
@@ -349,6 +411,11 @@ func (s *Service) Record(ctx context.Context, e apiv1.TaskBudgetEvent) (*Ledger,
 	if !validEvent(e) {
 		return nil, ErrDenied
 	}
+	// Heartbeat and activity are observations, never evidence. They are not
+	// retained, so a bound caller cannot fill the bounded history with them.
+	if e.Kind == "heartbeat" || e.Kind == "activity" {
+		return s.Observe(ctx, e.Binding)
+	}
 	return s.mutate(ctx, e.Binding, func(l *Ledger, now time.Time) error {
 		for _, prior := range l.Events {
 			if prior.Request.ID == e.ID || (e.Kind == "failure" && prior.Request.Kind == "failure" && prior.Request.AttemptID == e.AttemptID) {
@@ -362,7 +429,7 @@ func (s *Service) Record(ctx context.Context, e apiv1.TaskBudgetEvent) (*Ledger,
 				return ErrHistoryConflict
 			}
 		}
-		if len(l.Events) >= MaxEvents {
+		if e.Kind != "worker-stop" && l.historyEvents() >= MaxEvents {
 			return ErrDenied
 		}
 		if l.Latched && (e.Kind == "worker-start" || e.Kind == "progress" || e.Kind == "resolved") {

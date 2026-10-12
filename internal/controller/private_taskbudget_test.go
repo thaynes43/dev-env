@@ -333,25 +333,27 @@ func (s *privateBudgetUnknownACKStore) Update(ctx context.Context, l *taskbudget
 
 type privateBudgetContentionStore struct {
 	taskbudget.Store
-	updates int
+	reads int
 }
 
-func (s *privateBudgetContentionStore) Update(ctx context.Context, l *taskbudget.Ledger, rv string) error {
-	s.updates++
-	if s.updates == 1 {
-		// Inject a retained concurrent reservation, without constructing a
-		// positive private admission path. The stale CAS must not erase it.
-		prior, priorRV, err := s.Read(ctx, l.Binding.TaskUID)
-		if err != nil {
-			return err
-		}
-		prior.Workers[0].Managed.LaunchRequested = true
-		if err := s.Store.Update(ctx, prior, priorRV); err != nil {
-			return err
-		}
-		return taskbudget.ErrConflict
+func (s *privateBudgetContentionStore) Read(ctx context.Context, uid string) (*taskbudget.Ledger, string, error) {
+	l, rv, err := s.Store.Read(ctx, uid)
+	s.reads++
+	if err != nil || s.reads != 1 {
+		return l, rv, err
 	}
-	return s.Store.Update(ctx, l, rv)
+	// Inject a retained concurrent reservation after this read, without
+	// constructing a positive private admission path. The stale reader must
+	// not erase it, whether or not it writes.
+	prior, priorRV, err := s.Store.Read(ctx, uid)
+	if err != nil {
+		return nil, "", err
+	}
+	prior.Workers[0].Managed.LaunchRequested = true
+	if err := s.Update(ctx, prior, priorRV); err != nil {
+		return nil, "", err
+	}
+	return l, rv, nil
 }
 
 func TestPrivateBudgetRetainedIntentReservationCannotRearmOrResetHistory(t *testing.T) {
@@ -396,8 +398,10 @@ func TestPrivateBudgetRetainedIntentReservationCannotRearmOrResetHistory(t *test
 			if _, err := f.service.ReserveManagedLaunch(ctx, original.Binding, original.Workers[0].ID); err == nil {
 				t.Fatal("retained intent gained private launch authority")
 			}
-			if unknown != nil && unknown.updates != 1 || contending != nil && contending.updates != 2 {
-				t.Fatal("unknown ACK retried or CAS contention lost its fence")
+			// A refusal changes nothing durable but elapsed accounting, so it
+			// need not write; an unknown ACK must never be replayed either way.
+			if unknown != nil && unknown.updates > 1 || contending != nil && contending.reads == 0 {
+				t.Fatal("unknown ACK retried or contention not exercised")
 			}
 			f.service.Store = store
 			if _, err := f.service.ReserveManagedLaunch(ctx, original.Binding, original.Workers[0].ID); err == nil {
@@ -405,9 +409,14 @@ func TestPrivateBudgetRetainedIntentReservationCannotRearmOrResetHistory(t *test
 			}
 			retained, _, err := store.Read(ctx, original.Binding.TaskUID)
 			if err != nil || retained.Binding != original.Binding || !retained.Workers[0].Active || retained.Workers[0].Managed.PodUID != "" ||
-				retained.Workers[0].Managed.LaunchRequested != (failure != "no-capability") || retained.EffortMilliseconds != 60000 ||
+				retained.Workers[0].Managed.LaunchRequested != (failure != "no-capability") ||
 				!reflect.DeepEqual(retained.Events, original.Events) || retained.LastProgress != original.LastProgress || retained.StallAnchor != original.StallAnchor || retained.NextCheckpoint != original.NextCheckpoint {
 				t.Fatalf("original accounting/history changed: %+v %v", retained, err)
+			}
+			// Elapsed effort the refusals did not write is charged by the next
+			// observation or write, from the retained AccountedAt.
+			if observed, err := f.service.Observe(ctx, original.Binding); err != nil || observed.EffortMilliseconds != 60000 {
+				t.Fatal("charged effort lost", err)
 			}
 			var source v1alpha1.AgentSession
 			if err := f.client.Get(ctx, client.ObjectKeyFromObject(f.s), &source); err != nil || !reflect.DeepEqual(source.Status.PrivateHistory, f.s.Status.PrivateHistory) || source.Status.PrivateHistory.StopState != "Unknown" {

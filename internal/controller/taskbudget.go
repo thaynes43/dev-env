@@ -38,6 +38,10 @@ func managedBudgetReference(ref taskbudget.ManagedWorkerRef) string {
 	return strings.Join([]string{ref.Namespace, ref.Name, ref.SessionUID, ref.PodUID}, "/")
 }
 
+// managedNeverLaunchedEvidence marks a stop receipt for a child whose one Pod
+// create was never reserved in the ledger, so it cannot have run.
+const managedNeverLaunchedEvidence = "managed-never-launched"
+
 // ManagedBudgetEvidenceValidator uses only uncached server/resource observations.
 // State files, heartbeat and Outcome are never completion or failure receipts.
 // It deliberately cannot validate native progress, notification or owner answers.
@@ -61,7 +65,9 @@ func (v ManagedBudgetEvidenceValidator) Validate(ctx context.Context, l *taskbud
 			break
 		}
 	}
-	if ref == nil || ref.PodUID == "" || e.Evidence.Reference != managedBudgetReference(*ref) {
+	neverLaunched := e.Kind == "worker-stop" && e.Evidence.Kind == managedNeverLaunchedEvidence
+	if ref == nil || e.Evidence.Reference != managedBudgetReference(*ref) ||
+		neverLaunched != (ref.PodUID == "") || neverLaunched && ref.LaunchRequested {
 		return taskbudget.ErrDenied
 	}
 	var s v1alpha1.AgentSession
@@ -71,6 +77,9 @@ func (v ManagedBudgetEvidenceValidator) Validate(ctx context.Context, l *taskbud
 	b, err := taskbudget.BindingFromAnnotations(s.Annotations)
 	if err != nil || b != l.Binding || string(s.UID) != ref.SessionUID || s.Spec.Parent != l.Parent || s.Annotations[taskbudget.WorkerAnnotation] != e.WorkerID || s.Spec.Workspace == nil {
 		return taskbudget.ErrDenied
+	}
+	if neverLaunched {
+		return v.validateNeverLaunched(ctx, &s)
 	}
 	_, pod, err := PodWorkspaceStopVerifier(v).Verify(ctx, &s, types.UID(ref.PodUID))
 	if err != nil {
@@ -89,6 +98,27 @@ func (v ManagedBudgetEvidenceValidator) Validate(ctx context.Context, l *taskbud
 	}
 	if e.Evidence.Kind != "managed-rescue-stop" || !sharedRescued(&s) || s.Status.Rescue.SourcePodUID != ref.PodUID {
 		return taskbudget.ErrDenied
+	}
+	return nil
+}
+
+// validateNeverLaunched proves a reserved child never ran. Every managed Pod
+// create is reserved in the ledger first, and the ledger being validated shows
+// none for this worker. The session must also be stopping, must never have
+// recorded a Pod, and an uncached read must find no Pod by its name. The
+// ledger compare-and-swap orders this receipt against a launch reservation:
+// whichever commits first wins.
+func (v ManagedBudgetEvidenceValidator) validateNeverLaunched(ctx context.Context, s *v1alpha1.AgentSession) error {
+	if !wantsPodGone(s) || s.Status.PodName != "" {
+		return taskbudget.ErrDenied
+	}
+	var pod corev1.Pod
+	err := v.Reader.Get(ctx, client.ObjectKeyFromObject(s), &pod)
+	if err == nil {
+		return taskbudget.ErrDenied
+	}
+	if !apierrors.IsNotFound(err) {
+		return taskbudget.ErrUnavailable
 	}
 	return nil
 }
@@ -204,6 +234,57 @@ func (r *Reconciler) recordTaskBudgetStop(ctx context.Context, s *v1alpha1.Agent
 	e := apiv1.TaskBudgetEvent{Binding: l.Binding, ID: "managed-stop:" + ref.SessionUID, Kind: "worker-stop", WorkerID: id,
 		Evidence: apiv1.TaskBudgetEvidence{ID: "stop:" + ref.PodUID, Kind: "managed-rescue-stop", Reference: managedBudgetReference(*ref)}}
 	_, err = r.TaskBudgets.Record(ctx, e)
+	return err
+}
+
+func managedNeverLaunchedEvent(b taskbudget.Binding, worker string, ref taskbudget.ManagedWorkerRef) apiv1.TaskBudgetEvent {
+	return apiv1.TaskBudgetEvent{Binding: b, ID: "managed-unlaunched:" + ref.SessionUID, Kind: "worker-stop", WorkerID: worker,
+		Evidence: apiv1.TaskBudgetEvidence{ID: "unlaunched:" + ref.SessionUID, Kind: managedNeverLaunchedEvidence, Reference: managedBudgetReference(ref)}}
+}
+
+// recordTaskBudgetNeverLaunched closes a child reserved at dispatch whose one
+// Pod create was never reserved, once its session is stopping without a Pod.
+// Otherwise that worker stays charged and can never record a stop. A worker
+// with a reserved launch, or one already closed, is left alone.
+func (r *Reconciler) recordTaskBudgetNeverLaunched(ctx context.Context, s *v1alpha1.AgentSession) error {
+	if !budgetBound(s) || !wantsPodGone(s) || s.Status.PodName != "" {
+		return nil
+	}
+	if r.TaskBudgets == nil {
+		return taskbudget.ErrUnavailable
+	}
+	b, err := taskbudget.BindingFromAnnotations(s.Annotations)
+	if err != nil {
+		return err
+	}
+	l, err := r.TaskBudgets.Observe(ctx, b)
+	if err != nil {
+		return err
+	}
+	id := s.Annotations[taskbudget.WorkerAnnotation]
+	candidate := func(l *taskbudget.Ledger) *taskbudget.Worker {
+		for i := range l.Workers {
+			w := &l.Workers[i]
+			if w.ID == id && w.Active && (w.Managed == nil || !w.Managed.LaunchRequested && w.Managed.PodUID == "") {
+				return w
+			}
+		}
+		return nil
+	}
+	w := candidate(l)
+	if w == nil {
+		return nil
+	}
+	if w.Managed == nil {
+		// Bind the worker to this session first, as before any launch.
+		if l, err = r.observeTaskBudget(ctx, s, nil); err != nil {
+			return err
+		}
+		if w = candidate(l); w == nil || w.Managed == nil {
+			return nil
+		}
+	}
+	_, err = r.TaskBudgets.Record(ctx, managedNeverLaunchedEvent(l.Binding, id, *w.Managed))
 	return err
 }
 
