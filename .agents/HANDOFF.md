@@ -1,5 +1,33 @@
 # HANDOFF: start here
 
+## First original Claude canary and released ownership seam — 2026-10-12 UTC
+
+The [current original-canary record](sagas/distributed-dev-env/verification/first-original-canary-2026-10-12.md)
+supersedes the zero-Create state below. The reviewed sequencer completed logical
+Directory attempt 4 and the first trusted Claude Create at 05:28:22 UTC, within
+0.273 seconds of the successful empty page. Independent saved review `fd25b915`
+and Root receipt acceptance `2d283d67` bind original HTTP 201 UID
+`45a614cb-f537-441e-a5c1-33b66a285521`. The Claude ID is permanently consumed;
+Codex's fixed ID remains unstarted. A single named read and native saved review bind retained executor metadata and
+ordinal-zero context identity. The Session reports Failed/exit 1; underlying cause,
+physical stop, history and pilot acceptance remain open. The one fixed result
+read retained the 49-byte weekly-limit response, reporting reset at 12pm UTC;
+no rule markers appear and Claude rule loading is unaccepted. Preserve the
+original and do not retry its consumed ID or substitute a paid API. Native saved
+review `c3ad5658` and Root `54f89e02` accept retained-result identity and source
+assertions only. Both named and result reads are consumed; no polling, logs,
+repost, replacement or rearm follows. Next Codex preparation must account for
+the exact existing original on a fresh Directory page before its first Create.
+
+Source #213 merged as `b3aa4d93` with focused tests, required CI and native review
+passed. Release #214 merged as `78879c4a`, publishing v2.24.0. The new ownership
+inspector remains unwired and refuses reservation; no private dispatch or #160
+runtime recovery is accepted, and no deployment is required for that source seam.
+Global private admission remains off; task pins remain v2.20. Existing sessions
+have not been restarted. Claude advisory reviews are optional/down. Q-24 remains
+pending; Q-26's one authorized R4 correction is complete. Earlier entries below
+are historical and must not overwrite these counters or original identity.
+
 ## Private-budget ownership source and current canary gate — 2026-10-12 UTC
 
 The [ownership and runtime checkpoint](sagas/distributed-dev-env/verification/private-budget-ownership-2026-10-12.md)
