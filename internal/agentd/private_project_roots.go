@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -354,7 +355,8 @@ func privateRootStaging(root, id string) string {
 
 // discardPrivateRootStaging removes agentd's own unpublished staging, named by
 // the pending root ID recorded before it was created, when it holds nothing
-// but what preparePrivateRoot writes. Changed staging is preserved.
+// but what preparePrivateRoot writes: wrappers at the recorded digest and a
+// .git that privateRootStagingGitClear accepts. Changed staging is preserved.
 func discardPrivateRootStaging(staging, id, wrapperDigest string) error {
 	fi, err := os.Lstat(staging)
 	if errors.Is(err, os.ErrNotExist) {
@@ -375,7 +377,7 @@ func discardPrivateRootStaging(staging, id, wrapperDigest string) error {
 		}
 		switch entry.Name() {
 		case ".git":
-			if !fi.IsDir() || !ownedByProcess(fi) {
+			if !fi.IsDir() || privateRootStagingGitClear(path) != nil {
 				return errPrivateRoot
 			}
 			marker := filepath.Join(path, "dev-env-project-id")
@@ -397,6 +399,44 @@ func discardPrivateRootStaging(staging, id, wrapperDigest string) error {
 		}
 	}
 	return os.RemoveAll(staging)
+}
+
+// privateRootStagingGitPaths names everything an empty-template files-backend
+// init, the generated blob/tree/commit, the checkout of privateRootBranch
+// (dev-env/project), an interrupted Git lock, and agentd's own marker and
+// exclusion writes (with their atomic-write temporaries) create under .git.
+var privateRootStagingGitPaths = regexp.MustCompile(`^(?:(?:HEAD|config|index)(?:\.lock)?|dev-env-project-id|\.dev-env-project-id\.agentd-[^/]+|info|info/exclude|info/\.exclude\.agentd-[^/]+|logs|logs/HEAD|logs/refs|logs/refs/heads|logs/refs/heads/dev-env|logs/refs/heads/dev-env/project|refs|refs/heads|refs/tags|refs/heads/dev-env|refs/heads/dev-env/project(?:\.lock)?|objects|objects/info|objects/pack|objects/[0-9a-f]{2}|objects/[0-9a-f]{2}/(?:[0-9a-f]{38}|[0-9a-f]{62}|tmp_obj_[A-Za-z0-9]+))$`)
+
+// privateRootStagingGitClear proves a staging .git holds only those paths, each
+// a directory or a single-link regular file owned by this process, within a
+// bounded walk that never follows a symlink.
+func privateRootStagingGitClear(gitDir string) error {
+	count := 0
+	return filepath.WalkDir(gitDir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return errPrivateRoot
+		}
+		if count++; count > 1024 {
+			return errPrivateRoot
+		}
+		fi, err := entry.Info()
+		if err != nil || !ownedByProcess(fi) {
+			return errPrivateRoot
+		}
+		if path != gitDir {
+			rel, err := filepath.Rel(gitDir, path)
+			if err != nil || !privateRootStagingGitPaths.MatchString(filepath.ToSlash(rel)) {
+				return errPrivateRoot
+			}
+		}
+		if fi.IsDir() {
+			return nil
+		}
+		if st, ok := fi.Sys().(*syscall.Stat_t); !fi.Mode().IsRegular() || path == gitDir || !ok || st.Nlink != 1 {
+			return errPrivateRoot
+		}
+		return nil
+	})
 }
 
 func ownedByProcess(fi os.FileInfo) bool {

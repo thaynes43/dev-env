@@ -773,3 +773,64 @@ func TestPrivateRootsRefuseForeignPendingRecord(t *testing.T) {
 		t.Fatalf("pending record for another root was accepted: %v %+v", err, report)
 	}
 }
+
+func TestPrivateRootsPreserveChangedStagingGitDirectory(t *testing.T) {
+	for _, mode := range []string{"extra file", "symlink", "hardlink"} {
+		t.Run(mode, func(t *testing.T) {
+			_, s, r, source := privateRootsFixture(t, projectTestCatalog)
+			changed := false
+			read := source.Read
+			source.Read = func(ctx context.Context) (ProjectCatalogResource, error) {
+				resource, err := read(ctx)
+				if changed {
+					resource.ResourceVersion = "2"
+				}
+				return resource, err
+			}
+			// Authority changes after the staging checkout, so agentd's own
+			// unpublished staging is left behind with its pending record.
+			runner := &fakeRunner{handle: func(c Cmd) (Result, error) {
+				result, err := r.Run(context.Background(), c)
+				if slices.Contains(c.Args, "checkout") && strings.Contains(c.Args[1], ".sample.agentd-root-") {
+					changed = true
+				}
+				return result, err
+			}}
+			if _, err := RefreshPrivateProjects(context.Background(), runner, s, source); err == nil {
+				t.Fatal("fixture did not leave staging")
+			}
+			staging, _ := filepath.Glob(filepath.Join(s.Home, "codex", ".sample.agentd-root-*"))
+			if len(staging) != 1 {
+				t.Fatalf("staging: %v", staging)
+			}
+			owner := filepath.Join(s.Home, "owner-notes")
+			writeFile(t, owner, "owner notes\n")
+			path := filepath.Join(staging[0], ".git", "info", "owner-notes")
+			switch mode {
+			case "extra file":
+				writeFile(t, path, "owner notes\n")
+			case "symlink":
+				path = filepath.Join(staging[0], ".git", "objects", "info", "owner-link")
+				if err := os.Symlink(owner, path); err != nil {
+					t.Fatal(err)
+				}
+			case "hardlink":
+				objects, _ := filepath.Glob(filepath.Join(staging[0], ".git", "objects", "??", "*"))
+				if len(objects) == 0 {
+					t.Fatal("no staging objects")
+				}
+				path = objects[0]
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Link(owner, path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			report, err := RefreshPrivateProjects(context.Background(), r, s, source)
+			if err == nil || report.Projects[0].State != "Failed" || exists(privateRootPath(s)) || !exists(path) || string(mustRead(t, owner)) != "owner notes\n" {
+				t.Fatalf("changed staging was discarded or adopted: %v %+v", err, report)
+			}
+		})
+	}
+}

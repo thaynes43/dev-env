@@ -89,8 +89,12 @@ anchor already moved. Such a failure must not strand an owned root.
   outcome is Failed, and the next refresh finishes it.
 - A new root records its pending ID before it creates staging, which is named
   `.<project>.agentd-root-<id>`. Recovery may delete only that staging, and only
-  while the root is unpublished: it holds generated content that agentd never
-  published. A published root is never deleted. Staging under any other name,
+  while the root is unpublished and the staging holds nothing but what agentd
+  generates: wrappers at the recorded digest, and a `.git` whose every path is
+  one that Git's empty-template init, object writes and checkout, or agentd's
+  marker and exclusion writes, create, each a directory or single-link regular
+  file that agentd owns. Any other staging content is preserved and refused. A
+  published root is never deleted. Staging under any other name,
   including the older fixed `.<project>.agentd-root`, is left untouched and no
   longer blocks creation.
 - A root stranded by an earlier image, with no pending record, is not adopted.
