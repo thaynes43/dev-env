@@ -227,6 +227,54 @@ today (ADR-004 "Known gap"). DESIGN-008 already requires an explicit policy for
 HOME expiry. That policy, when Tom rules on it, is what lets retention release
 these records. Ask it as its own question, with its own premise checked; it is
 not decided here.
+*Decided 2026-10-12 (Q-31): see "Private HOME expiry" below.*
+
+### Private HOME expiry
+
+Follow-up F1 of the retention section above. **Ruled 2026-10-12 (Q-31).** Tom
+answered through the Claude native prompt: "Archive, then delete
+(Recommended)".
+
+1. A private Session (no shared workspace, not a canary) that is Reaping, or
+   Suspended past its archive deadline, is stopped. Its executor's termination is
+   recorded in its status before the Pod can vanish; a retained Pod is not a
+   durable proof, and absence alone never proves stop.
+2. 30 days after that record, a Git rescue runs in a hold pod bound to the HOME's
+   UID, the provider history (an allowlist, never credentials) and the Git bundle
+   go to a shelf-only archive volume with a `Retain` PV, kept indefinitely, and
+   archived history is readable under DESIGN-013's payload scope.
+3. Only then, with deletion enabled, the operator's leader deletes the HOME
+   through the guarded path and releases the Session. ADR-004 then releases its
+   records. Canary originals never expire. Tom alone may hold an expiry or
+   release it now (which skips only the grace).
+
+[ADR-005](../adrs/005-private-home-expiry.md) records the decision.
+[DESIGN-025](../designs/025-private-home-expiry.md) is the contract. Everything
+is default off; deletion waits for the installed archived-history read (#174).
+
+**Delivery units, each its own reviewed PR, in this order:**
+
+| Unit | Where | What | Done when |
+|---|---|---|---|
+| H0 | dev-env docs | ADR-005, DESIGN-025 and the amendments | merged |
+| H1 | dev-env source | the terminal record (CRD fields and rules, the shared verifier refactored, the confirmed write, `ExecutorEnded`, metrics, flag) | merged and in a released operator image |
+| H2 | haynes-ops | CRD copy, node and lease `get` for the operator, operator pin, record on | records appear for ended private executors; ship it early, each day without it can lose a proof |
+| H3 | dev-env source | the stop request (`activeDeadlineSeconds`) and its guard test | merged |
+| H4 | dev-env source | agentd `history-export` and `history-archive` commands, the provider layout tables and fixtures, guard tests, the resource measurement | merged and in a released agent image |
+| H5 | dev-env source | the expiry record and steps up to `Archived`, the private hold pod, the relay, overrides, metrics | merged with required CI and independent review |
+| H6 | dev-env source | the `/v1/history` reads and `agent-run history`, the delete and release steps (off), `TestExpiryDeleteNeedsVerify` | merged and in a released operator image |
+| H7 | haynes-ops | history archive PVC, shelf mount, override policy, alerts; Tom sets the PV to `Retain`; stop, archive and reads on | a private Session reaches `Archived` with its HOME intact |
+| H8 | dev-env docs | installed record of the archived read (DESIGN-025 section 15) | merged; this is the #174 read acceptance |
+| H9 | haynes-ops | delete on, `DevEnvHomeExpiryStalled` | merged |
+| H10 | dev-env docs | installed record of the first expiry and of the ADR-004 release 30 days later | merged |
+
+**Follow-up F2, no owner question needed: never-started private Sessions.** A
+private Session with `admission: NeverStarted`, no executor attempt and no HOME
+is never released either: `releaseIfEmpty` refuses every private Session, and
+DESIGN-025 needs a terminal record. Such a Session has nothing to archive. A
+narrow release (uncached absence of Pod and HOME, a confirmed `NeverStarted`
+admission, no attempt) would let ADR-004 release its records. It needs its own
+design note and guard test; it is not part of Q-31.
 
 ### Parent issues
 

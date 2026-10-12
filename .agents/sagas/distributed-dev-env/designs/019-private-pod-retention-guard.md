@@ -83,6 +83,22 @@ request and exact original all-container/Node/Lease proof without losing causal
 Pod/HOME evidence. Private task budget integration and exceptional native
 recovery do not acquire authority from this guard-only change.
 
+*Amended 2026-10-12 ([ADR-005](../adrs/005-private-home-expiry.md), Q-31;
+[DESIGN-025](025-private-home-expiry.md) sections 3 and 4): that contract now
+exists, for HOME expiry. On 2026-10-12 a reboot of node talosw02 removed two
+retained, already-ended canary Pods, so a retained Pod is not a durable proof.
+Two changes to this guard follow, each default off:*
+
+- *A **stop request**: when a private, non-canary Session is Reaping, or
+  Suspended past its D-62 archive deadline, the operator sets its running
+  executor's `spec.activeDeadlineSeconds`, with UID and resourceVersion `test`
+  operations. The kubelet ends the Pod; the Pod object stays.*
+- *Once the operator has **recorded the executor's termination** in
+  `lastExecutor.terminal` (the all-container, Node and Lease proof, written
+  before the Pod can vanish), the expiry may remove that Pod at its rescue step,
+  so the D-55 hold pod can take its name. A Pod whose termination is not recorded
+  keeps this guard's full protection. Absence still authorizes nothing.*
+
 Source `cf0a708c` passed the bounded corrected set after preserving actual pre-fix
 original UID deletion through full Reconcile. Exactly two required cached
 TestMain startups; sixteen state cases plus partial/unknown/canary and shared/

@@ -93,6 +93,14 @@ which `privateHistoryEnabled` is true. Two groups follow:
   records are never released. This design does not change that. Follow-up F1 in
   plan 11 holds it.
 
+*Amended 2026-10-12 ([ADR-005](../adrs/005-private-home-expiry.md), Q-31; F1
+decided): a private Session's HOME is archived, then deleted, 30 days after a
+recorded stop proof ([DESIGN-025](025-private-home-expiry.md)). A reaped one is
+then released by the one new exception in `releaseIfEmpty` and becomes absent,
+and its records follow this design from there. Canary originals never expire, so
+they and their records stay present. Until DESIGN-025's deletion is on (its unit
+H9), the gap remains in practice.*
+
 ## 3. The archive volume
 
 - **PersistentVolumeClaim** `dev-env-coordination-archive` in `dev-agents`:
@@ -723,6 +731,9 @@ empty page. An end-to-end release needs a genuinely absent owner. With the
 installed private-history flag that first comes after follow-up F1, so the
 installed release is recorded then. A synthetic record would need Tom; it is
 optional.
+*Amended 2026-10-12 (Q-31): F1 is DESIGN-025. The first genuinely absent owner
+is its first expired, reaped Session, so this end-to-end release is recorded in
+DESIGN-025's unit H10, 30 days after that Session is released.*
 
 ## 12. Delivery units
 
@@ -731,3 +742,8 @@ agentd archive commands; R3 runnable, exec limit, guard tests and envtest E1, E2
 E4, E6, E7; R4 read fallback, wording, E3, E5 and the templates check; R5 and R6
 haynes-ops; R7 installed record. F1, the HOME expiry policy, needs its own owner
 question and closes the known gap.
+*Amended 2026-10-12: Tom answered it (Q-31, "Archive, then delete
+(Recommended)"). [ADR-005](../adrs/005-private-home-expiry.md) records it and
+[DESIGN-025](025-private-home-expiry.md) specifies it. Its history archive is a
+second shelf-only volume beside this one; this archive does not change. The
+shelf's node-loss recovery (section 3) detaches both.*

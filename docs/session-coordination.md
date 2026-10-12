@@ -96,10 +96,20 @@ Coordination records follow
 (Q-29, 2026-10-12): a claim, publication or message is archived, then deleted,
 30 days after the Sessions it depends on are proved absent. Reads fall back to
 the archive. A released claim is not a handoff: it frees a reaped owner's task,
-and nothing else. Private Sessions are never absent until a HOME expiry policy
-exists, so their records stay live. The contract is
+and nothing else. Private Sessions are never absent until their HOME expires,
+so their records stay live until then. The contract is
 [DESIGN-024](../.agents/sagas/distributed-dev-env/designs/024-coordination-record-retention.md);
 none of it runs yet.
+
+Private HOMEs follow
+[ADR-005](../.agents/sagas/distributed-dev-env/adrs/005-private-home-expiry.md)
+(Q-31, 2026-10-12): a reaped private Session is stopped, its executor's
+termination is recorded, and 30 days later its code and chat history (never
+credentials) are archived, and then its HOME is deleted and the Session released.
+Archived history stays readable under the published-context payload scope.
+Canary originals never expire. The contract is
+[DESIGN-025](../.agents/sagas/distributed-dev-env/designs/025-private-home-expiry.md);
+none of it runs yet, and deletion waits for an accepted installed read.
 
 A handoff proves the old executor stopped, records the next owner and restores
 work into that owner's local checkout. A missing Pod or heartbeat is insufficient.
