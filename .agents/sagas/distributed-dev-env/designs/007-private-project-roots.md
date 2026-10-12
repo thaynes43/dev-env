@@ -80,7 +80,9 @@ anchor already moved. Such a failure must not strand an owned root.
   `from` or `to`, and each anchor at its `from` or `to` commit with its recorded
   identity. An anchor that `to` adds may be absent, or present as the
   self-consistent detached worktree at its `to` target that agentd's own
-  post-create proof accepts. Wrappers at `to` may still carry the umask mode;
+  post-create proof accepts. That proof accepts tracked symlinks under
+  DESIGN-006's clean-checkout rules (added 2026-10-12); an anchor left by an
+  image that refused them resumes this way. Wrappers at `to` may still carry the umask mode;
   agentd re-applies 0644 (DESIGN-012) before going on. Every other check stays
   exact. Dirty, staged, ignored or unknown files, local commits, attached
   anchors, peer aliases, operations in progress and foreign identity are
