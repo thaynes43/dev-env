@@ -229,7 +229,9 @@ has the details.
    No further Claude or Codex read, retry or Create is authorized.*
    *Update, Q-30, 2026-10-12: Tom chose the existing private Sigo alumni
    repositories for the private-repo proof. One Claude canary,
-   `rule-canary-claude-sigo-1012`, is prepared in haynes-ops #3845 and not yet run
+   `rule-canary-claude-sigo-1012`, was prepared in haynes-ops #3845 and run the
+   same day. Its bootstrap ended `Partial` on a tracked symlink, so it was not
+   accepted; #237 fixes the proof (HANDOFF, Q-30 section)
    ([DESIGN-011 Q-30 amendment](sagas/distributed-dev-env/designs/011-private-managed-rule-canaries.md#private-repo-canary-on-the-sigo-alumni-project--2026-10-12-q-30-173)).*
 2. **[#174](https://github.com/thaynes43/dev-env/issues/174): history and discovery.**
    Finish provider-history retention, durable live/stopped/archived directory and

@@ -120,6 +120,62 @@ adapter use private repositories and the same source/rules provenance. This
 slice adds no local inference or GPU allocation. Subscription-backed execution
 continues through its existing providers.
 
+## Tracked symlinks in the clean-checkout proof
+
+Added 2026-10-12 after the Q-30 private-repo canary. That bootstrap ended
+`Partial`: one catalog repository tracks a symlink (Git mode `120000`), and the
+clean-checkout proof accepted only regular files (`100644`, `100755`). The
+reference was preserved as holding "special tracked files", and the project
+root that names it failed when it proved that repository's anchor.
+
+One proof, `projectIndexProof` in `internal/agentd/projects.go`, decides that a
+checkout is clean. It has four callers: the private reference refresh (this
+design), the private root's anchor proof (DESIGN-007), and the shared-workspace
+reference and anchor sync. It now accepts a tracked symlink when all of these
+hold:
+
+- The index entry is stage 0 with mode `120000`.
+- No parent component of the path is a symlink, and the leaf itself is a
+  symlink by `lstat`.
+- agentd reads the leaf with `readlink` and never follows it. It does not stat,
+  open or hash the path through Git, because `git hash-object` opens the path
+  and would follow the link. Symlinks are left out of that batch.
+- agentd computes the blob id in Go: the repository's object hash of
+  `blob <length>\0<target>`. The object format comes from
+  `git rev-parse --show-object-format`; `sha1` and `sha256` are supported, and
+  any other answer refuses. The id must equal the index entry's. This is the id
+  Git itself records for a symlink, which no clean or smudge filter touches.
+- The executable-bit check does not apply to a symlink.
+
+A relative, absolute, directory-valued or dangling target is accepted: agentd
+never resolves it. An agent working in the checkout may follow the link, as in
+any clone.
+
+Still refused, so the checkout is preserved: a symlink whose target differs from
+the index (retargeted), a regular file or directory where the index has a
+symlink (for example a `core.symlinks=false` checkout, or a file holding the
+target text), a symlink where the index has a regular file, a submodule
+(`160000`), a conflict (any nonzero stage), and every other mode. Regular files
+keep the existing proof through Git's filters. The 10,000-entry bound counts
+symlinks too. The final index-equals-HEAD check (read-only callers) and
+`write-tree` (shared callers) are unchanged.
+
+A tracked `.gitattributes` that is a symlink is now accepted like any other
+symlink. It cannot hide an edit to a regular file, because Git 2.32 and later
+does not read an in-tree `.gitattributes` through a symlink, so a linked file
+cannot add a normalizing attribute such as `* text`. The proof assumes that Git
+version. The agent image installs Git from Debian (2.39.5 on the current
+bookworm base); an image with an older Git would need this proof revisited.
+
+Recovery from the earlier refusal needs no operator step. The preserved
+reference is unchanged and advances on the next refresh. The project root keeps
+its pending record, and a new anchor's worktree may exist without a recorded
+identity. The next refresh resumes it through DESIGN-007's recoverable advance:
+the worktree is adopted only as the self-consistent detached worktree at its
+recorded `to` target that passes the full post-create proof, which now includes
+its symlinks. A changed target, dirty or staged files, or a moved HEAD stay
+preserved, and the project reports `Failed`.
+
 ## Affected paths
 
 - `internal/agentd/projects.go` and private bootstrap implementation: catalog
