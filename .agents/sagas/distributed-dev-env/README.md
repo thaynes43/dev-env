@@ -1,5 +1,18 @@
 # Saga: distributed-dev-env (dev-env v2)
 
+The [first original Claude canary](verification/first-original-canary-2026-10-12.md)
+records reviewed logical Directory4 and original HTTP201 at 05:28:22 UTC. Claude's
+fixed ID is permanently consumed; Codex's is unstarted. Independent saved review
+and Root receipt acceptance bind the original UID only. Named executor/context
+provenance was bound by one saved named read. One fixed stored result read
+returned the weekly-limit response (reported reset 12pm UTC), with no rule
+markers. Claude rule acceptance remains unaccepted; no consumed-ID retry or
+paid API fallback is authorized. Source #213
+and release #214 ship the unwired ownership proof in v2.24.0; private dispatch
+remains disabled and no new deployment is required. This supersedes historical
+zero-Create entries below. Claude advisory is optional/down; required CI and
+native review remain gates. Q-24 and the owner pilot remain open.
+
 The [private-budget ownership and runtime checkpoint](verification/private-budget-ownership-2026-10-12.md)
 records the next bounded #154 source proof and default refusal, with private
 dispatch still disabled. Focused checks pass; native review and required CI
