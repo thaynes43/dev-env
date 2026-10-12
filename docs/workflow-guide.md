@@ -121,7 +121,9 @@ The [private retention guard](../.agents/sagas/distributed-dev-env/designs/008-p
 preserves HOME and Session identity rather than declaring archive complete.
 Its latch survives flag disable; absent executors remain Unknown and cannot
 start replacements. Managed-context readers are separate; preservation alone
-does not prove complete stopped native history or an accepted expiry policy.
+does not prove complete stopped native history. The expiry policy is decided
+([ADR-005](../.agents/sagas/distributed-dev-env/adrs/005-private-home-expiry.md),
+Q-31: archive, then delete, 30 days after a recorded stop) but not built.
 Existing coordinator scope is preserved; the legacy ordinary-session ACL is
 not a new authorization contract for peer context. Claude review is optional,
 including releases; required CI and native independent review remain gates.

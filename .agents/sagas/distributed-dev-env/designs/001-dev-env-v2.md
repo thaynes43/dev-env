@@ -1711,6 +1711,15 @@ Rationale: the rescue already runs by exec in a session pod (D-08, D-51). A hold
 is that pod without the agent, so the verdict, the record, the guard and the archive
 stay one code path, and the operator gains no new way to touch a volume.
 
+*Amended 2026-10-12 ([ADR-005](../adrs/005-private-home-expiry.md), Q-31;
+[DESIGN-025](025-private-home-expiry.md) section 6.1): a private Session also
+gets a hold pod, made only by the HOME expiry, only after its executor's
+termination is recorded and the 30-day grace is over. The ended executor Pod is
+removed first, because the hold pod takes its name. The hold pod is bound to the
+HOME's UID: an annotation names it, and the operator checks the claim's UID
+before it creates the pod, once it runs, and before each later step. The rescue
+in it is this one.*
+
 **D-62 (2026-10-07, plan 02 step 7). A suspended session's volume is archived on
 its timer after a valid rescue, and the session stays as an Archived record that
 is never resumed.**
@@ -1749,6 +1758,13 @@ is never resumed.**
   gets the `config/crd/` copy before the operator pin that writes them, or the API
   server prunes them (CLAUDE.md).
 
+*Amended 2026-10-12 ([ADR-005](../adrs/005-private-home-expiry.md), Q-31): a
+suspended private Session is not archived by this timer. At its deadline its
+executor is stopped instead ([DESIGN-025](025-private-home-expiry.md) section 4),
+and 30 days after the recorded stop its HOME expires. `status.archivedAt` is
+written before that HOME is deleted, as here, so a resume is refused from then
+on, and the Session stays phase `Archived` until it is reaped.*
+
 ### 4.5 Resume and restore
 
 - `agent-run resume <id>`: same volume, new pod, `claude --resume <session-id>`. The
@@ -1785,6 +1801,14 @@ restore is a new session that fetches one.**
   each agent release, is about a minute without a shelf, with the 503s and waits
   above. After a node loss the shelf can stay down until the volume detaches;
   DESIGN-024 section 3 has the recovery, and `DevEnvShelfUnavailable` pages.*
+
+  *Amended 2026-10-12 ([ADR-005](../adrs/005-private-home-expiry.md), Q-31;
+  [DESIGN-025](025-private-home-expiry.md) section 7): from unit H7 the shelf
+  also mounts the history archive, a second ReadWriteOnce volume with a `Retain`
+  PV, at `/home/dev/.history-archive`, and runs `agentd ctl history-archive`
+  there. It copies an expiring Session's rescue bundles from the shared volume
+  into that archive, which keeps them indefinitely. The prune below does not
+  change. After a node loss both archive volumes must detach.*
 - **List.** `agentd ctl rescues [--session S]` prints every
   `rescue/<session>/<name>/` as JSON, newest first. Each entry has its id
   `<session>/<name>`, when it was made (the manifest's time, or the directory's for
@@ -1907,6 +1931,16 @@ deletes pods.**
 - **RBAC.** The session finalizer needs nothing new (the operator's own CRD group).
   Archive must also lift the volume's finalizer, so plan 01 step 5 adds `patch` on
   PVCs in `dev-agents` to the operator's row in 6.11.
+
+*Amended 2026-10-12 ([ADR-005](../adrs/005-private-home-expiry.md), Q-31;
+[DESIGN-025](025-private-home-expiry.md) sections 6.5, 6.6 and 11): the one delete
+path gains one exception for the HOME expiry of a private Session. The guards
+admit the removal of its ended executor Pod (termination recorded), the delete of
+its HOME (archive verified, `Deleting` recorded, UID and resourceVersion
+preconditions) and the release of the Session (`Expired` recorded, no Pod, no
+claim), each in one named function that `TestOnlyTheGuardDeletes` lists. Canary
+originals are never admitted. The only Pod patch is the stop request,
+`stopPrivateExecutor`.*
 
 Rationale: 5.1 forbids deleting a Running session's pod outside drain and suspend,
 and D-10 puts rescue before any loss. Owner references alone hand that decision to

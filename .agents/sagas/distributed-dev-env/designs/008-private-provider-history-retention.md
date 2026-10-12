@@ -45,6 +45,15 @@ heartbeat, PID-only boolean or legacy shared-workspace proof cannot establish
 that an independent private executor stopped. Preserve stop state as Unknown
 where current evidence is insufficient. It does not authorize a stopped-history
 export or a replacement model execution.
+*Amended 2026-10-12 ([ADR-005](../adrs/005-private-home-expiry.md), Q-31): the
+executor record gains an immutable terminal observation,
+`lastExecutor.terminal`. The operator writes it, and confirms it, when an
+uncached read shows the recorded executor Pod UID in a terminal phase with every
+container terminated, reported by a Ready node with a fresh lease. A retained
+Pod is not a durable proof; this record is. A missing Pod still proves nothing.
+The record serves HOME expiry only: `stopState` keeps its one value `Unknown`,
+and no export, transfer or replacement follows from it outside
+[DESIGN-025](025-private-home-expiry.md).*
 
 Suspended retention remains Suspended with Ready false. Reap remains HTTP 202
 and Reaping with an explicit RetentionPending or PreservationUnknown condition;
@@ -89,3 +98,14 @@ manifests/cursors, private stop/completeness proof and reads without a Ready
 source Pod or a new model. Retention expiry/destruction requires an explicit
 policy; no earlier shared-Git TTL is adopted. Keep #174 and #91 open and retain
 the failed native fixture and its original ledger.
+
+*Amended 2026-10-12 (Q-31, Tom: "Archive, then delete (Recommended)"): the
+explicit expiry policy is [ADR-005](../adrs/005-private-home-expiry.md). A
+private Session that is Reaping, or Suspended past its archive deadline, is
+stopped; 30 days after its recorded stop proof, a Git rescue runs in a hold pod
+bound to its HOME UID, its provider history (an allowlist, never credentials)
+and Git bundle go to a shelf-only archive, and only then, with deletion enabled,
+is the HOME deleted. Canary originals never expire. Archived history is readable
+under DESIGN-013's payload scope. [DESIGN-025](025-private-home-expiry.md) is the
+contract; it also defines the provider-history paths this section asked for.
+None of it runs yet.*

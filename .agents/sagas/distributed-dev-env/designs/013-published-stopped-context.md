@@ -59,6 +59,12 @@ departs from the uniform answer above: while the shelf is down, a scoped caller
 asking for a name that is not live gets 503, where a live publication outside
 its scope gets 404. Names are full digests of identities the caller must already
 know, so this reveals only that the name is not live.*
+*Amended 2026-10-12 ([ADR-005](../adrs/005-private-home-expiry.md), Q-31): the
+same payload-read scope authorizes reads of archived provider history, which
+the HOME expiry exports before it deletes a private HOME. The routes are
+`/v1/history...`, every answer says `archived: true`, and the project comes from
+the archive's verified manifest ([DESIGN-025](025-private-home-expiry.md)
+section 8). Publication and the routes above do not change.*
 
 ## Bounds, fences and identity normalization (2026-10-12)
 
