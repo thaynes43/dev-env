@@ -36,9 +36,10 @@ named read and one result read ran, with no retries.
 `Common marker: dev-env-common-rules-20261011-4ca29d70` and
 `Repository marker: dev-env-repository-rules-20261011-6d807bf2`. The runner's
 exact-text check is false only because Claude labelled each line; both marker
-values are exact. The prompt held neither marker and said not to use tools, so
-Claude loaded both rule sets in its private pod. Compliance with the no-tools
-line is unproven while full history is Unknown. Root acceptance `88909059`
+values are exact. The prompt held neither marker, so Claude got both from the
+rules in its private pod. The prompt also said not to use tools; while full
+history is Unknown, compliance with that line is unproven, so a tool read of the
+rule files cannot be excluded. Root acceptance `88909059`
 binds 115 receipt files. The
 [Claude canary 1012 record](sagas/distributed-dev-env/verification/claude-canary-1012-2026-10-12.md)
 has the details.

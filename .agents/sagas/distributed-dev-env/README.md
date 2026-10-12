@@ -23,10 +23,10 @@ neither. So both providers have now loaded the common and repository rules in
 private v2 pods. The
 [Claude canary 1012 record](verification/claude-canary-1012-2026-10-12.md) binds
 Root acceptance `88909059`. Private GitHub authorization and a fresh task pin
-remain for #173; served model, usage, cost, full history, physical stop and
-capture completeness stay Unknown. Counters: Directory 6; Claude Create 2, Codex
-Create 1; Claude named and result reads 2 each, Codex 1 each. Nothing further is
-authorized.
+remain for #173; served model, usage, cost, full history, physical stop,
+capture completeness and tool-use compliance stay Unknown. Counters: Directory 6;
+Claude Create 2, Codex Create 1; Claude named and result reads 2 each, Codex 1
+each. Nothing further is authorized.
 
 **Q-27 answered, 2026-10-12.** Tom answered through the Claude native prompt:
 "Fix once, then read (Recommended)". The ruling allows one offline correction of
