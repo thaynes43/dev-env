@@ -95,6 +95,18 @@ func privateOrigHeadClear(gitDir string) error {
 // propagates these command options to its internal promisor fetches too.
 var sharedGitPolicyArgs = []string{"-c", "gc.auto=0", "-c", "maintenance.auto=false"}
 
+// originBranchesRefspec maps origin's branches into refs/remotes/origin only.
+const originBranchesRefspec = "+refs/heads/*:refs/remotes/origin/*"
+
+// originFetchArgs is a whole-origin fetch that can only change
+// refs/remotes/origin. --refmap= and the explicit refspec replace the clone's
+// configured remote.origin.fetch: a mapping into refs/heads would otherwise
+// let --prune delete, or a forced update move, local branches origin lacks,
+// session and peer branches included. --no-prune-tags keeps local tags.
+func originFetchArgs(opts ...string) []string {
+	return append(append([]string{"fetch"}, opts...), "--no-prune-tags", "--refmap=", "origin", originBranchesRefspec)
+}
+
 // cloneAttempts and cloneBackoff bound the clone's retries: S-7 measured every
 // repo under 25 s, so three tries cover a passing network blip.
 var (
@@ -254,9 +266,9 @@ func PrepareRepo(ctx context.Context, r Runner, s Settings, sess protocol.Sessio
 			return ws, newStep(name, notes, err)
 		}
 		if privateProject == nil {
-			fetchArgs := []string{"fetch", "--prune", "origin"}
+			fetchArgs := originFetchArgs("--prune")
 			if s.WorkspaceID != "" {
-				fetchArgs = []string{"fetch", "--no-auto-maintenance", "--no-prune", "origin"}
+				fetchArgs = originFetchArgs("--no-auto-maintenance", "--no-prune")
 			}
 			if _, fetchErr = s.git(ctx, r, ws.Clone, fetchArgs...); fetchErr == nil {
 				notes = append(notes, "reused the clone and fetched origin")
@@ -290,11 +302,15 @@ func PrepareRepo(ctx context.Context, r Runner, s Settings, sess protocol.Sessio
 			return ws, newStep(name, notes, err)
 		}
 		var recorded *protocol.TaskSource
+		var sourceProblem bool
 		if existing {
-			// Only the record names the task's source; a resume reports it and
-			// never rewrites it. A task from before the record reports none.
-			if recorded, err = readTaskSource(s); err != nil {
-				notes = append(notes, "WARN the task source record is unreadable; preserved: "+err.Error())
+			// Only this session's record names the task's source; a resume
+			// reports it and never rewrites it. A task from before the record
+			// reports none, and so does a task whose record is unreadable or
+			// binds another session or source.
+			if recorded, err = sessionTaskSource(s, sess); err != nil {
+				sourceProblem = true
+				notes = append(notes, "WARN the task source record is not reported; preserved: "+err.Error())
 			}
 		}
 		if identityDrift != nil {
@@ -312,9 +328,12 @@ func PrepareRepo(ctx context.Context, r Runner, s Settings, sess protocol.Sessio
 			case err != nil:
 			case existing:
 				note := fmt.Sprintf("refreshed origin/%s of %s at %s on %s; this is not the task's source", privateProject.DefaultBranch, privateProject.GitHub, target, fetched.Format(time.RFC3339Nano))
-				if recorded != nil {
+				switch {
+				case recorded != nil:
 					note += fmt.Sprintf(", which stays %s fetched %s", recorded.Commit, recorded.FetchedAt.Format(time.RFC3339Nano))
-				} else {
+				case sourceProblem:
+					note += ", and this task reports no source"
+				default:
 					note += ", and this task has no recorded source pin"
 				}
 				notes = append(notes, note)
@@ -402,14 +421,51 @@ func readTaskSource(s Settings) (*protocol.TaskSource, error) {
 	return &source, nil
 }
 
+// errForeignTaskSource is a well-formed record that binds another session,
+// session UID, repository, branch or accepted snapshot.
+var errForeignTaskSource = errors.New("task source record belongs to another session or source")
+
+// taskSourceFor is the record this session's task writes, without the commit
+// and fetch time that only the record itself holds.
+func taskSourceFor(sess protocol.Session, snapshot projectcatalog.Snapshot) protocol.TaskSource {
+	repo := snapshot.Selected()
+	return protocol.TaskSource{Version: 1, Session: sess.Name, SessionUID: sess.SessionUID, Repo: repo.Name, GitHub: repo.GitHub, Branch: repo.DefaultBranch,
+		CatalogRevision: snapshot.CatalogRevision(), RulesRevision: snapshot.RulesRevision()}
+}
+
+// taskSourceBinds reports whether recorded is want's record: every field but
+// the commit and the fetch time must match.
+func taskSourceBinds(recorded, want protocol.TaskSource) bool {
+	recorded.Commit, recorded.FetchedAt = want.Commit, want.FetchedAt
+	return recorded == want
+}
+
+// sessionTaskSource is the task source record when it belongs to sess and its
+// accepted project snapshot. A missing record is nil without an error. An
+// unreadable or foreign record is an error: never reported as this task's
+// source, and kept as it is.
+func sessionTaskSource(s Settings, sess protocol.Session) (*protocol.TaskSource, error) {
+	recorded, err := readTaskSource(s)
+	if err != nil || recorded == nil {
+		return recorded, err
+	}
+	if len(sess.ProjectSnapshot) == 0 {
+		return nil, errForeignTaskSource
+	}
+	snapshot, err := projectcatalog.ParseSnapshot(sess.ProjectSnapshot)
+	if err != nil || !taskSourceBinds(*recorded, taskSourceFor(sess, snapshot)) {
+		return nil, errForeignTaskSource
+	}
+	return recorded, nil
+}
+
 // pinTaskSource returns the source a new task's worktree is created from. The
 // first new-task boot records the fresh pin with an exclusive create. A retry,
 // after a worktree creation that failed, uses that recorded pin: the record is
 // never replaced, so it always names the commit the worktree came from.
 func pinTaskSource(s Settings, sess protocol.Session, snapshot projectcatalog.Snapshot, target string, fetched time.Time) (protocol.TaskSource, string, error) {
-	repo := snapshot.Selected()
-	source := protocol.TaskSource{Version: 1, Session: sess.Name, SessionUID: sess.SessionUID, Repo: repo.Name, GitHub: repo.GitHub, Branch: repo.DefaultBranch,
-		Commit: target, FetchedAt: fetched.UTC().Round(0), CatalogRevision: snapshot.CatalogRevision(), RulesRevision: snapshot.RulesRevision()}
+	source := taskSourceFor(sess, snapshot)
+	source.Commit, source.FetchedAt = target, fetched.UTC().Round(0)
 	recorded, err := readTaskSource(s)
 	if err != nil {
 		return source, "", fmt.Errorf("%w; preserved, and no new task branch is created", err)
@@ -422,12 +478,10 @@ func pinTaskSource(s Settings, sess protocol.Session, snapshot projectcatalog.Sn
 		if err := writeFileOnce(s.statePath(taskSourceFile), append(data, '\n'), 0o600); err != nil {
 			return source, "", fmt.Errorf("record the task source: %w", err)
 		}
-		return source, fmt.Sprintf("recorded the task source: %s branch %s at %s", repo.GitHub, repo.DefaultBranch, target), nil
+		return source, fmt.Sprintf("recorded the task source: %s branch %s at %s", source.GitHub, source.Branch, target), nil
 	}
-	other := *recorded
-	other.Commit, other.FetchedAt = source.Commit, source.FetchedAt
-	if other != source {
-		return source, "", errors.New("task source record belongs to another session or source; preserved, and no new task branch is created")
+	if !taskSourceBinds(*recorded, source) {
+		return source, "", fmt.Errorf("%w; preserved, and no new task branch is created", errForeignTaskSource)
 	}
 	return *recorded, fmt.Sprintf("creating the task from its recorded source %s fetched %s, not from this fetch", recorded.Commit, recorded.FetchedAt.Format(time.RFC3339Nano)), nil
 }
@@ -457,11 +511,14 @@ func cloneRepo(ctx context.Context, r Runner, s Settings, repo, dst string) (tim
 		return 0, err
 	}
 	tmp := filepath.Join(filepath.Dir(dst), "."+filepath.Base(dst)+".agentd-clone")
-	// Shared staging may be a peer's, and private bootstrap preserves its
-	// staging for inspection at this same path: neither is ever deleted here.
-	preserve, kind := s.WorkspaceID != "" || s.PrivateProjectBootstrap, "shared"
+	// Shared staging may be a peer's. With private bootstrap enabled, this path
+	// holds bootstrap's preserved staging or this session's own interrupted
+	// clone, which agentd cannot tell apart: neither is ever deleted here, and
+	// a human recovers it (DESIGN-006).
+	preserve := s.WorkspaceID != "" || s.PrivateProjectBootstrap
+	kind, recovery := "shared staging clone", ""
 	if s.WorkspaceID == "" {
-		kind = "private bootstrap"
+		kind, recovery = "staging clone", "; inspect it and remove it before another clone attempt"
 	}
 	var lastErr error
 	for attempt := 0; attempt < cloneAttempts; attempt++ {
@@ -472,7 +529,7 @@ func cloneRepo(ctx context.Context, r Runner, s Settings, repo, dst string) (tim
 		}
 		if preserve {
 			if _, err := os.Lstat(tmp); !errors.Is(err, os.ErrNotExist) {
-				return 0, fmt.Errorf("%s staging clone %s is partial or uncertain; preserved and refused", kind, tmp)
+				return 0, fmt.Errorf("%s %s is partial or uncertain; preserved and refused%s", kind, tmp, recovery)
 			}
 		} else if err := os.RemoveAll(tmp); err != nil {
 			return 0, err
@@ -491,7 +548,7 @@ func cloneRepo(ctx context.Context, r Runner, s Settings, repo, dst string) (tim
 		lastErr = err
 		if preserve {
 			if _, statErr := os.Lstat(tmp); !errors.Is(statErr, os.ErrNotExist) {
-				return 0, fmt.Errorf("%s clone failed with partial or uncertain staging data preserved: %s", kind, cmdDetail(err))
+				return 0, fmt.Errorf("clone failed; %s %s keeps partial or uncertain data, preserved%s: %s", kind, tmp, recovery, cmdDetail(err))
 			}
 		}
 	}

@@ -315,7 +315,7 @@ func TestDecisionForgedLocalAnswerCannotResumeOrArchiveWithoutOperatorAuthority(
 	if err := writePrivateDecision(s, stored); err != nil {
 		t.Fatal(err)
 	}
-	st := CollectStatus(context.Background(), &fakeRunner{handle: func(Cmd) (Result, error) { return Result{}, nil }}, s, sess.Name, time.Now())
+	st := CollectStatus(context.Background(), &fakeRunner{handle: func(Cmd) (Result, error) { return Result{}, nil }}, s, sess, time.Now())
 	if st.Decision == nil || st.Decision.State != "Delivered" {
 		t.Fatal("fabricated local Delivered disappeared from discovery")
 	}

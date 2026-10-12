@@ -86,7 +86,7 @@ func TestCollectStatusStates(t *testing.T) {
 				t.Fatal(err)
 			}
 			tc.setup(s)
-			st := CollectStatus(context.Background(), git, s, "s", now)
+			st := CollectStatus(context.Background(), git, s, protocol.Session{Name: "s"}, now)
 			if st.Session != "s" || !strings.HasPrefix(st.Agentd, "agentd ") || !st.ObservedAt.Equal(now) {
 				t.Errorf("header %+v", st)
 			}
@@ -126,7 +126,7 @@ func TestSharedStatusPendingRequiresExactUnlaunchedReceipt(t *testing.T) {
 			if err := writeWorkspaceJSON(s.ownerPath(sess.Name), current); err != nil {
 				t.Fatal(err)
 			}
-			st := CollectStatus(context.Background(), &fakeRunner{}, s, sess.Name, tc.at)
+			st := CollectStatus(context.Background(), &fakeRunner{}, s, sess, tc.at)
 			if st.Agent.State != tc.state {
 				t.Fatalf("state %q, want %q: %+v", st.Agent.State, tc.state, st.Agent)
 			}

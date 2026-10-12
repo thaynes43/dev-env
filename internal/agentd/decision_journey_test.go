@@ -186,7 +186,7 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens
 	if err != nil || result.Phase != "Exited" || !result.LeaderReaped || !result.GroupAbsent {
 		t.Fatal("question native invocation lacks genuine causal exit", err)
 	}
-	st := CollectStatus(ctx, gitRunner, s, sess.Name, time.Now())
+	st := CollectStatus(ctx, gitRunner, s, sess, time.Now())
 	raw, _ := json.Marshal(st.Decision)
 	if st.Decision == nil || st.Decision.ID != record.ID || strings.Contains(string(raw), "SYNTHETIC-PRIVATE-DECISION") {
 		t.Fatal("parent discovery omitted identity or exposed private context")

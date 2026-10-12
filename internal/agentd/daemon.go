@@ -371,7 +371,7 @@ func (d *Daemon) beat(ctx context.Context) {
 	if d.Send == nil {
 		return
 	}
-	st := CollectStatus(ctx, d.R, d.S, d.Session.Name, d.now())
+	st := CollectStatus(ctx, d.R, d.S, d.Session, d.now())
 	d.sendHeartbeat(ctx, st)
 }
 

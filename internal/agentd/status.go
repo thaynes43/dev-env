@@ -27,9 +27,9 @@ const startWindow = time.Minute
 // CollectStatus builds the session's status from agentd's state files and the
 // worktree. The heartbeat and `agentd ctl status` both use it, so the
 // operator sees the same thing either way. It reads; it never changes state.
-func CollectStatus(ctx context.Context, r Runner, s Settings, session string, now time.Time) protocol.Status {
+func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Session, now time.Time) protocol.Status {
 	st := protocol.Status{
-		Session:    session,
+		Session:    sess.Name,
 		Agentd:     version.Get().String("agentd"),
 		Boot:       protocol.BootBooting,
 		Agent:      protocol.AgentState{State: protocol.AgentPending},
@@ -60,12 +60,13 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, session string, no
 			}
 			cancel()
 			// The durable record names the task's source, not a boot's copy.
-			// An unreadable record is a problem, not a task without one.
-			source, err := readTaskSource(s)
+			// An unreadable record, or one that binds another session or
+			// source, is a problem, not a task without one.
+			source, err := sessionTaskSource(s, sess)
 			ws.Source = source
 			if err != nil {
 				st.Problems = append(st.Problems, Step{Name: "task-source", State: StepWarn,
-					Notes: []string{"the task source record is unreadable; preserved: " + err.Error()}})
+					Notes: []string{"the task source record is not reported; preserved: " + err.Error()}})
 			}
 			st.Workspace = &ws
 		}

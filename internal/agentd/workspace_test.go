@@ -196,12 +196,21 @@ func TestSharedRescueSnapshotsOnlyOwnedTaskAndRefusesBusyWriter(t *testing.T) {
 		t.Fatal("busy writer lock bypassed without holder proof")
 	}
 	w.unlock()
+	// The shared clone's configured refspecs never reach its branches: a
+	// mirroring remote.origin.fetch would let --prune delete peer branches.
+	gitRun(t, g.env, ws.Clone, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/heads/*")
+	gitRun(t, g.env, ws.Clone, "update-ref", "refs/remotes/origin/gone", peerHead)
 	rep, err := Rescue(context.Background(), r, s, sess.Name, rescueNow, RescueOptions{StopAgent: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !rep.OK || rep.Bundle == nil || rep.Bundle.Error != "" || len(rep.Repos) != 1 || len(rep.Repos[0].Worktrees) != 1 {
+	if !rep.OK || rep.Bundle == nil || rep.Bundle.Error != "" || len(rep.Repos) != 1 || len(rep.Repos[0].Worktrees) != 1 || !rep.Repos[0].Fetched {
 		t.Fatalf("report %+v", rep)
+	}
+	for ref, want := range map[string]string{"refs/heads/agent/task-a-peer": peerHead, "refs/heads/rescue/task-a-peer/old": peerHead, "refs/remotes/origin/gone": ""} {
+		if got := refAt(t, g.env, ws.Clone, ref); got != want {
+			t.Errorf("%s = %q, want %q", ref, got, want)
+		}
 	}
 	for _, ref := range rep.Repos[0].Bundle.Refs {
 		if ref.Source != "refs/heads/agent/task-a" && !strings.HasPrefix(ref.Source, "refs/heads/rescue/task-a/") {

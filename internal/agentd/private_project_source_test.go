@@ -99,7 +99,7 @@ func TestPrivateProjectTaskSourceRecordSurvivesResume(t *testing.T) {
 	if err := writeJSONFile(s.statePath(bootFile), bootRecord{BootID: "b2", Boot: protocol.BootReady, Workspace: &protocol.Workspace{Clone: resumed.Clone, Worktree: resumed.Worktree}}); err != nil {
 		t.Fatal(err)
 	}
-	st := CollectStatus(context.Background(), r.ExecRunner, s, sess.Name, time.Now())
+	st := CollectStatus(context.Background(), r.ExecRunner, s, sess, time.Now())
 	if st.Workspace == nil || taskSourceJSON(t, st.Workspace.Source) != taskSourceJSON(t, &record) || st.Workspace.Head != pinned {
 		t.Fatalf("status workspace %+v does not report the recorded source", st.Workspace)
 	}
@@ -152,6 +152,73 @@ func TestPrivateProjectTaskSourceRefusesForeignRecord(t *testing.T) {
 	ws, step := PrepareRepo(context.Background(), r, s, sess)
 	if step.State != StepFail || exists(ws.Worktree) || !bytes.Equal(saved, mustRead(t, s.statePath(taskSourceFile))) {
 		t.Fatalf("foreign task source record was adopted or replaced: %s %q", step.State, step.Notes)
+	}
+}
+
+// roots-2 review: beside an existing task, a record that binds another
+// session or source is never reported as the task's source, by resume or by
+// status. It is a warning and a task-source problem, and it is kept.
+func TestPrivateProjectResumeAndStatusRefuseForeignRecord(t *testing.T) {
+	_, s, r, sess := privateProjectFixture(t, projectTestCatalog)
+	if err := prepareProjectTask(&s, sess); err != nil {
+		t.Fatal(err)
+	}
+	ws, step := PrepareRepo(context.Background(), r, s, sess)
+	if step.State != StepOK || ws.Source == nil {
+		t.Fatalf("new task: %s %q", step.State, step.Notes)
+	}
+	own := *ws.Source
+	if err := writeJSONFile(s.statePath(bootFile), bootRecord{BootID: "b2", Boot: protocol.BootReady, Workspace: &ws}); err != nil {
+		t.Fatal(err)
+	}
+	foreign := map[string]func(*protocol.TaskSource){
+		"session":          func(f *protocol.TaskSource) { f.Session = "another-task" },
+		"session UID":      func(f *protocol.TaskSource) { f.SessionUID = "another-uid" },
+		"repository":       func(f *protocol.TaskSource) { f.Repo = "other" },
+		"GitHub identity":  func(f *protocol.TaskSource) { f.GitHub = "fixture/other" },
+		"branch":           func(f *protocol.TaskSource) { f.Branch = "stable" },
+		"catalog revision": func(f *protocol.TaskSource) { f.CatalogRevision = "sha256:" + strings.Repeat("0", 64) },
+		"rules revision":   func(f *protocol.TaskSource) { f.RulesRevision = "sha256:" + strings.Repeat("0", 64) },
+	}
+	for _, name := range slices.Sorted(maps.Keys(foreign)) {
+		record := own
+		foreign[name](&record)
+		if err := os.Remove(s.statePath(taskSourceFile)); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeWorkspaceJSON(s.statePath(taskSourceFile), record); err != nil {
+			t.Fatal(err)
+		}
+		saved := mustRead(t, s.statePath(taskSourceFile))
+		resumed, step := PrepareRepo(context.Background(), r, s, sess)
+		notes := strings.Join(step.Notes, "\n")
+		if step.State != StepWarn || resumed.Source != nil || resumed.Head != ws.Head || !strings.Contains(notes, "belongs to another session or source") ||
+			strings.Contains(notes, "which stays") || !bytes.Equal(saved, mustRead(t, s.statePath(taskSourceFile))) {
+			t.Fatalf("%s: resume reported or replaced a foreign record: source %+v; %s %q", name, resumed.Source, step.State, step.Notes)
+		}
+		st := CollectStatus(context.Background(), r.ExecRunner, s, sess, time.Now())
+		reported := slices.ContainsFunc(st.Problems, func(p Step) bool {
+			return p.Name == "task-source" && p.State == StepWarn && strings.Contains(strings.Join(p.Notes, "\n"), "belongs to another session or source")
+		})
+		if st.Workspace == nil || st.Workspace.Source != nil || !reported {
+			t.Fatalf("%s: status reported a foreign record: %+v %+v", name, st.Workspace, st.Problems)
+		}
+	}
+	// A session without a project snapshot has no record of its own.
+	legacy := sess
+	legacy.ProjectSnapshot = nil
+	if err := os.Remove(s.statePath(taskSourceFile)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeWorkspaceJSON(s.statePath(taskSourceFile), own); err != nil {
+		t.Fatal(err)
+	}
+	if st := CollectStatus(context.Background(), r.ExecRunner, s, legacy, time.Now()); st.Workspace == nil || st.Workspace.Source != nil {
+		t.Fatalf("status of a session without a project reported a record: %+v", st.Workspace)
+	}
+	// The session's own record is still reported.
+	if st := CollectStatus(context.Background(), r.ExecRunner, s, sess, time.Now()); st.Workspace == nil || taskSourceJSON(t, st.Workspace.Source) != taskSourceJSON(t, &own) {
+		t.Fatalf("status lost the session's own record: %+v", st.Workspace)
 	}
 }
 
@@ -327,6 +394,11 @@ func TestPrepareRepoPreservesBootstrapStagingWithoutProject(t *testing.T) {
 	if step.State != StepFail || cloned || exists(ws.Clone) || !exists(filepath.Join(staging, "keep")) {
 		t.Fatalf("legacy clone deleted preserved staging: cloned %v, %s %q", cloned, step.State, step.Notes)
 	}
+	// The staging may be this session's own interrupted clone: the note names
+	// it neutrally, with its path and the recovery (DESIGN-006).
+	if notes := strings.Join(step.Notes, "\n"); strings.Contains(notes, "bootstrap") || !strings.Contains(notes, staging) || !strings.Contains(notes, "remove it before another clone attempt") {
+		t.Fatalf("preserved staging note: %q", step.Notes)
+	}
 	if err := os.RemoveAll(staging); err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +452,7 @@ func TestPrivateProjectCorruptTaskSourceIsReported(t *testing.T) {
 	if err := writeJSONFile(s.statePath(bootFile), bootRecord{BootID: "b2", Boot: protocol.BootReady, Workspace: &ws}); err != nil {
 		t.Fatal(err)
 	}
-	st := CollectStatus(context.Background(), r.ExecRunner, s, sess.Name, time.Now())
+	st := CollectStatus(context.Background(), r.ExecRunner, s, sess, time.Now())
 	reported := false
 	for _, problem := range st.Problems {
 		if problem.Name == "task-source" && problem.State == StepWarn && strings.Contains(strings.Join(problem.Notes, "\n"), "task source record is invalid") {
