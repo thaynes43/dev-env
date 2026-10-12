@@ -17,6 +17,12 @@ Q-24 is still pending.
 The correction then passed its tests and review, and both Codex reads ran once.
 The Codex original returned both rule markers; see the dated counters update
 below and the [Codex original result record](sagas/distributed-dev-env/verification/codex-original-result-2026-10-12.md).
+*Update, Q-28, 2026-10-12:* Tom answered Q-28, "Yes, after fixes deploy
+(Recommended)". After v2.24.1 deployed, one new Claude canary returned both
+markers, so rule loading is accepted for both providers. See the Q-28 counters
+update below and the
+[Claude canary 1012 record](sagas/distributed-dev-env/verification/claude-canary-1012-2026-10-12.md).
+The MVP stays unaccepted.
 
 ## Your assignment
 
@@ -125,6 +131,12 @@ This is saved, bounded evidence checked against repository/public records on
 | Actual probe acceptance | Original Claude and Codex HTTP201 receipts, a pre-Codex complete Directory page, one Claude named read and one retained managed-result read. These accept transport/source identity only. Actual both-provider rules and the MVP remain unaccepted. |
 | Current resume checkpoint | [#215](https://github.com/thaynes43/dev-env/pull/215) and [#216](https://github.com/thaynes43/dev-env/pull/216) are merged. #216 is `f6de1680a4a00a12d25bea5c43865d088c068db1`; native factual finding fixed, native R2 and required CI passed, available Claude advisory was error-only with no findings/verdict. |
 
+*Update, Q-28, 2026-10-12: the "Actual probe acceptance" row above is the
+original record. Actual rule loading is now accepted for both providers: the
+Codex original under Q-27 and Claude canary 1012 under Q-28 each returned both
+markers ([Claude canary 1012 record](sagas/distributed-dev-env/verification/claude-canary-1012-2026-10-12.md)).
+The MVP remains unaccepted.*
+
 Read [installation](sagas/distributed-dev-env/verification/installation-2026-10-11.md),
 [fixed activation](sagas/distributed-dev-env/verification/fixed-rule-activation-2026-10-11.md),
 [result delivery](sagas/distributed-dev-env/verification/canary-result-2026-10-12.md),
@@ -149,6 +161,16 @@ physical stop, capture completeness, private GitHub authorization and a fresh
 task pin stay Unknown or unaccepted. See the
 [Codex original result record](sagas/distributed-dev-env/verification/codex-original-result-2026-10-12.md).*
 
+*Update, Q-28, 2026-10-12: the Claude row above is the original record, and its
+ID stays consumed. Under Q-28 a new Claude canary, `rule-canary-claude-1012`
+(Session `private-canary-6f090716f22b84cb55321a14338ccf30`), ran one Create, one
+named read and one result read. Its retained output returned both rule markers,
+so loaded common and repository rules are accepted for Claude too. Served model,
+usage, cost, full history, physical stop, capture completeness, private capture
+acknowledgement, tool-use compliance, private GitHub authorization and a fresh
+task pin stay Unknown or unaccepted. See the
+[Claude canary 1012 record](sagas/distributed-dev-env/verification/claude-canary-1012-2026-10-12.md).*
+
 Global counters: Directory **5**; Claude Create **1**, Codex Create **1**;
 Claude named/result **1 each**; Codex named/result **0 each**. Both permanent IDs
 are consumed. Never repost, change key, rearm, replace, poll or clean up an original.
@@ -166,6 +188,18 @@ named/result **1 each**; Codex named/result **1 each**. The Codex output returne
 both the common and the repository marker. The
 [Codex original result record](sagas/distributed-dev-env/verification/codex-original-result-2026-10-12.md)
 has the details and what remains Unknown.
+
+**Counters update, Q-28, 2026-10-12.** The two counters paragraphs above are the
+original records. Tom answered Q-28, "Yes, after fixes deploy (Recommended)".
+After v2.24.1 deployed, one new Claude canary, `rule-canary-claude-1012`
+(Session `private-canary-6f090716f22b84cb55321a14338ccf30`, UID
+`de61708b-3dc5-45de-8a16-885c2bdc83a3`), ran one directory read, one Create, one
+named read and one result read, with no retries. Counters are now Directory
+**6**; Claude Create **2** (1011, 1012), Codex Create **1**; Claude named/result
+**2 each**; Codex named/result **1 each**. All three permanent IDs are consumed.
+Its output carried both markers. The
+[Claude canary 1012 record](sagas/distributed-dev-env/verification/claude-canary-1012-2026-10-12.md)
+has the details.
 
 ## Next bounded work and the six-step roadmap
 
@@ -186,6 +220,13 @@ has the details and what remains Unknown.
    What remains for #173: Claude's rule loading (unproven), genuine private
    GitHub access and worktrees, and a fresh task pin. No further Codex read,
    retry or Create is authorized.*
+   *Update, Q-28, 2026-10-12: Claude's rule loading is accepted too. After
+   v2.24.1 deployed, the one new Claude canary returned both markers
+   ([Claude canary 1012 record](sagas/distributed-dev-env/verification/claude-canary-1012-2026-10-12.md)),
+   so rule loading is accepted for both providers. Still open for #173:
+   genuine private GitHub authorization and worktrees, a fresh task pin, and
+   #173's other acceptance items.
+   No further Claude or Codex read, retry or Create is authorized.*
 2. **[#174](https://github.com/thaynes43/dev-env/issues/174): history and discovery.**
    Finish provider-history retention, durable live/stopped/archived directory and
    authorized stopped-context reads. Prove reads without starting a model turn

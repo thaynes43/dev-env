@@ -126,6 +126,10 @@ remain on the parent issue. No retired storage route is reopened.
 *Update, 2026-10-12: the Codex original's result returned both rule markers; see
 the [Codex original result record](../verification/codex-original-result-2026-10-12.md).
 Claude loading remains unproven.*
+*Update, Q-28, 2026-10-12: Claude canary 1012 returned both markers too; see the
+[Claude canary 1012 record](../verification/claude-canary-1012-2026-10-12.md).
+Genuine private GitHub authorization and worktrees, and a fresh task pin, remain
+open for #173, with the parent items above.*
 
 ### Next #173 slice: private catalog startup and refresh
 
