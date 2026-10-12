@@ -2,8 +2,11 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -14,8 +17,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/projectcanary/testutil"
+	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
 
 func TestProjectCanaryPodWholeExecutorBounds(t *testing.T) {
@@ -64,6 +69,71 @@ func TestProjectCanaryPodWholeExecutorBounds(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The canary's evidence is the agent reporting the rule markers it loaded, so
+// the operator must hand them over only as rules, never as the prompt: a
+// marker in what the agent is told to do proves nothing about what it loaded.
+// This renders the pod and checks every value it carries against every line of
+// the bound snapshot's rules, so it fails whether the record's prompt or the
+// operator's rendering puts a rule line where the agent reads instructions.
+func TestProjectCanaryRenderedPromptAndArgsCarryNoRuleLine(t *testing.T) {
+	for _, provider := range []string{"claude", "codex"} {
+		t.Run(provider, func(t *testing.T) {
+			f := testutil.New(t, provider, "dev/dev-env")
+			snapshot, err := projectcatalog.ParseSnapshot([]byte(f.Session.Annotations[v1alpha1.AnnotationProjectSnapshot]))
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := ruleLines(snapshot.Rules())
+			if len(lines) == 0 {
+				t.Fatal("the fixture binds no rule line, so this proves nothing")
+			}
+			pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, true, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := pod.Spec.Containers[0]
+			var doc protocol.Session
+			if err := json.Unmarshal([]byte(envOf(c, protocol.SessionEnv).Value), &doc); err != nil {
+				t.Fatal(err)
+			}
+			if doc.Prompt != f.Record.Prompt {
+				t.Fatalf("rendered prompt %q is not the bound record's", doc.Prompt)
+			}
+			delivered, err := projectcatalog.ParseSnapshot(doc.ProjectSnapshot)
+			if err != nil || delivered.Rules() != snapshot.Rules() {
+				t.Fatal("the rules do not reach agentd through the bound snapshot")
+			}
+			values := map[string]string{"prompt": doc.Prompt}
+			for i, v := range append(slices.Clone(c.Command), c.Args...) {
+				values[fmt.Sprintf("argv[%d]", i)] = v
+			}
+			for _, e := range c.Env {
+				if e.Name != protocol.SessionEnv {
+					values["env "+e.Name] = e.Value
+				}
+			}
+			for where, v := range values {
+				for _, line := range lines {
+					if strings.Contains(v, line) {
+						t.Errorf("%s carries rule line %q", where, line)
+					}
+				}
+			}
+		})
+	}
+}
+
+// ruleLines are the non-blank lines of a rules text, trimmed.
+func ruleLines(rules string) []string {
+	var out []string
+	for _, line := range strings.Split(rules, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 func canaryReconciler(c client.Client, reader client.Reader, f testutil.Fixture) *Reconciler {

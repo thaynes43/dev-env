@@ -110,11 +110,15 @@ func TestTemplateAndCatalogAuthorityRefuseDrift(t *testing.T) {
 	}
 }
 
-func TestRetainedBindingAndPromptDoNotSupplyRuleMarker(t *testing.T) {
+// TestRetainedBindingRefusesAlteredOriginal proves the binding half: the
+// original canary session matches its record, and a caller-changed prompt or
+// any other altered field does not. That the rendered prompt and arguments
+// carry no rule line is proven where they are rendered, on the operator's pod
+// (controller TestProjectCanaryRenderedPromptAndArgsCarryNoRuleLine) and on
+// agentd's launch (agentd TestProjectRulesReachTheAgentOnlyAsRuleInputs); a
+// check of the fixture's own prompt string here proved nothing.
+func TestRetainedBindingRefusesAlteredOriginal(t *testing.T) {
 	f := testutil.New(t, "claude", "dev/dev-env")
-	if strings.Contains(f.Record.Prompt, "COMMON_RULE_MARKER") {
-		t.Fatal("validation marker leaked into prompt")
-	}
 	if f.Record.MatchSession(f.Session, testutil.Owner) != nil {
 		t.Fatal("original retained binding refused")
 	}

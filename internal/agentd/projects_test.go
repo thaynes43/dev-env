@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
 
@@ -583,5 +584,93 @@ func TestProjectPerRepositoryBudgetsAndPartialSuccess(t *testing.T) {
 		return f.Path == root && f.State == "partial" && strings.Contains(f.Detail, "1 of 2")
 	}) {
 		t.Fatal("one successful repo became whole-project ready")
+	}
+}
+
+// TestProjectRulesReachTheAgentOnlyAsRuleInputs renders the first launch of a
+// task bound to a project snapshot and checks what the agent is given. The
+// rules must arrive only through the rule inputs (Claude's appended system
+// prompt file, Codex's developer instructions), never in the prompt agentd
+// pipes to the agent or in another argument: a canary's marker found in the
+// prompt would prove nothing about which rules the agent loaded (DESIGN-011).
+func TestProjectRulesReachTheAgentOnlyAsRuleInputs(t *testing.T) {
+	for _, agent := range []string{protocol.AgentClaude, protocol.AgentCodex} {
+		t.Run(agent, func(t *testing.T) {
+			var (
+				s    Settings
+				sess protocol.Session
+				ws   protocol.Workspace
+				now  = time.Date(2026, 10, 9, 20, 0, 0, 0, time.UTC)
+			)
+			if agent == protocol.AgentCodex {
+				s, sess, ws, now = managedCodexFixture(t)
+			} else {
+				s, sess, ws = launchFixture(t)
+				catalog, err := projectcatalog.Parse([]byte(projectTestCatalog))
+				if err != nil {
+					t.Fatal(err)
+				}
+				snapshot, err := catalog.Snapshot("sample", "demo")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if sess.ProjectSnapshot, err = json.Marshal(snapshot); err != nil {
+					t.Fatal(err)
+				}
+				sess.Repo, sess.Base = "demo", "main"
+				if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			snapshot, err := projectcatalog.ParseSnapshot(sess.ProjectSnapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var lines []string
+			for _, line := range strings.Split(snapshot.Rules(), "\n") {
+				if line = strings.TrimSpace(line); line != "" {
+					lines = append(lines, line)
+				}
+			}
+			if len(lines) == 0 {
+				t.Fatal("the fixture binds no rule line, so this proves nothing")
+			}
+			l, err := BuildLaunch(s, sess, ws, "boot", now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if l.Prompt != sess.Prompt {
+				t.Fatalf("launch prompt %q is not the session's", l.Prompt)
+			}
+			ruleInput := -1
+			for i, arg := range l.Argv {
+				if agent == protocol.AgentClaude && i > 0 && l.Argv[i-1] == "--append-system-prompt-file" {
+					data, err := os.ReadFile(arg)
+					if err != nil || !strings.Contains(string(data), snapshot.Rules()) {
+						t.Fatalf("Claude's rule file %s does not carry the bound rules: %v", arg, err)
+					}
+					ruleInput = i
+				}
+				if agent == protocol.AgentCodex && strings.HasPrefix(arg, "developer_instructions=") {
+					ruleInput = i
+				}
+			}
+			if ruleInput < 0 {
+				t.Fatal("the launch has no rule input")
+			}
+			for _, line := range lines {
+				if strings.Contains(l.Prompt, line) {
+					t.Errorf("the prompt carries rule line %q", line)
+				}
+				for i, arg := range l.Argv {
+					if i != ruleInput && strings.Contains(arg, line) {
+						t.Errorf("argv[%d] %q carries rule line %q", i, arg, line)
+					}
+				}
+				if agent == protocol.AgentCodex && !strings.Contains(l.Argv[ruleInput], line) {
+					t.Errorf("Codex developer instructions lost rule line %q", line)
+				}
+			}
+		})
 	}
 }
