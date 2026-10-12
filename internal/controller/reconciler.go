@@ -1003,25 +1003,27 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 			return nil
 		}
 	}
-	// intent is the executor attempt this reconcile latched. Until Create is
+	// reserved is the executor latch this reconcile wrote. Until Create is
 	// called for it, a return caused by a failed observation records a known
-	// non-attempt, so a transient error cannot burn a one-shot canary
-	// (DESIGN-019). A Create that was called is never recorded that way.
-	intent := ""
+	// non-attempt over that same write, so a transient error cannot burn a
+	// one-shot canary (DESIGN-019). A Create that was called is never recorded
+	// that way, and neither is a latch another reconciler wrote.
+	var reserved executorReservation
 	if privateHistoryProtected(s) {
 		if err := r.bindPrivateHistoryHome(ctx, s); err != nil {
 			obs.removalBlocked = err
 			return nil
 		}
-		reserved, err := r.reservePrivateExecutor(ctx, s)
+		var err error
+		reserved, err = r.reservePrivateExecutor(ctx, s)
 		if err != nil {
-			// The latch write may have landed though its acknowledgement is
-			// unconfirmed; no Create was called for it either way.
+			// An acknowledged latch write whose confirmation failed may be
+			// marked; no Create was called for it. An unacknowledged write
+			// (a Conflict, or a result unknown) returns no reservation.
 			r.recordExecutorNotCreated(ctx, s, reserved)
 			obs.removalBlocked = err
 			return nil
 		}
-		intent = reserved
 		pod.Annotations[privateHistoryHomeAnnotation] = s.Status.PrivateHistory.HomeUID
 		pod.Annotations[privateHistoryExecutorAnnotation] = s.Status.PrivateHistory.ExecutorIntent
 	}
@@ -1074,7 +1076,7 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 		// A failed read is a known non-attempt; a changed authority after the
 		// intent stays latched and never rearms.
 		if errors.Is(err, errCanaryUnobserved) {
-			r.recordExecutorNotCreated(ctx, s, intent)
+			r.recordExecutorNotCreated(ctx, s, reserved)
 		}
 		obs.removalBlocked = err
 		return nil

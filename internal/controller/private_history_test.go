@@ -388,6 +388,43 @@ func TestPrivateHistoryNotCreatedMarkYieldsToObservedExecutor(t *testing.T) {
 	}
 }
 
+// history-01 review (#222): a stale CRD schema prunes executorNotCreated. The
+// API server then stores and returns the record without the mark, so the
+// response alone matches the stored record. The confirmation compares the
+// stored record with the record the write meant to store, so the mark is
+// unconfirmed and the attempt stays latched.
+func TestPrivateHistoryWriteRefusesAFieldTheSchemaPruned(t *testing.T) {
+	s, home := privateHistoryFixture()
+	h := s.Status.PrivateHistory
+	h.LastExecutor = nil
+	h.ExecutorAttempted, h.ExecutorIntent = true, "synthetic-intent"
+	base := privateHistoryClient(s, home)
+	c := interceptor.NewClient(base, interceptor.Funcs{SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, o client.Object, opts ...client.SubResourceUpdateOption) error {
+		if typed, ok := o.(*v1alpha1.AgentSession); ok && typed.Status.PrivateHistory != nil {
+			typed.Status.PrivateHistory.ExecutorNotCreated = false // what a schema without the field prunes
+		}
+		return c.SubResource(sub).Update(ctx, o, opts...)
+	}})
+	r := &Reconciler{Client: c, APIReader: base}
+	ctx := context.Background()
+	current, err := r.privateHistorySession(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := current.DeepCopy()
+	fresh.Status.PrivateHistory.ExecutorNotCreated = true
+	if err := r.writePrivateHistory(ctx, current, fresh); err == nil {
+		t.Fatal("a pruned non-attempt mark confirmed as written")
+	}
+	if current.Status.PrivateHistory.ExecutorNotCreated {
+		t.Fatal("an unconfirmed write replaced the caller's Session")
+	}
+	stored, err := r.privateHistorySession(ctx, s)
+	if err != nil || stored.Status.PrivateHistory.ExecutorNotCreated || !stored.Status.PrivateHistory.ExecutorAttempted {
+		t.Fatal("the attempt did not stay latched without a mark", err)
+	}
+}
+
 // envtest has no GC controller, so this test plays its part. It submits both
 // owner delete policies against a session with a real HOME volume and a real
 // running original executor pod, both owned by the session, then deletes what

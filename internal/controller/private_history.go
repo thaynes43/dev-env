@@ -54,17 +54,26 @@ func (r *Reconciler) privateHistorySession(ctx context.Context, s *v1alpha1.Agen
 	return &fresh, nil
 }
 
+// errPrivateHistoryUnacknowledged wraps a status write the API server did not
+// acknowledge. A Conflict proves the write did not land; any other error leaves
+// its result unknown.
+var errPrivateHistoryUnacknowledged = errors.New("private retention write is unconfirmed")
+
 // A status write must be confirmed independently before any resource write.
+// The confirmation compares the stored record with the record this call meant
+// to write, not with the server's response: Update copies the response into
+// fresh, so a field a stale CRD schema prunes would otherwise confirm as written.
 func (r *Reconciler) writePrivateHistory(ctx context.Context, s, fresh *v1alpha1.AgentSession) error {
+	intended := fresh.Status.PrivateHistory.DeepCopy()
 	if err := r.Client.Status().Update(ctx, fresh); err != nil {
-		return fmt.Errorf("private retention write is unconfirmed: %w", err)
+		return fmt.Errorf("%w: %w", errPrivateHistoryUnacknowledged, err)
 	}
 	confirmed, err := r.privateHistorySession(ctx, fresh)
 	if err != nil {
 		return err
 	}
-	if confirmed.ResourceVersion != fresh.ResourceVersion || !apiequality.Semantic.DeepEqual(confirmed.Status.PrivateHistory, fresh.Status.PrivateHistory) {
-		return errors.New("private retention acknowledgement changed or is unconfirmed")
+	if confirmed.ResourceVersion != fresh.ResourceVersion || !apiequality.Semantic.DeepEqual(confirmed.Status.PrivateHistory, intended) {
+		return errors.New("private retention acknowledgement changed, dropped a field or is unconfirmed")
 	}
 	*s = *confirmed
 	return nil
@@ -202,27 +211,35 @@ func (r *Reconciler) bindPrivateHistoryHome(ctx context.Context, s *v1alpha1.Age
 	return nil
 }
 
+// executorReservation is the executor latch one reconcile wrote: its intent and
+// the Session resourceVersion that its own acknowledged write produced. The
+// zero value means this reconcile has no write of its own to mark.
+type executorReservation struct {
+	intent          string
+	resourceVersion string
+}
+
 // Record the attempt before Pod creation. A failed/lost create is uncertain,
 // and cannot be retried as an implicit new provider execution by this slice.
 // A recorded known non-attempt (executorNotCreated) re-arms its same intent
 // instead: the mark is cleared by a confirmed write before the one Create.
-// It returns the intent it wrote, or "" when it wrote nothing, so a caller
-// that returns before Create can record the non-attempt.
-func (r *Reconciler) reservePrivateExecutor(ctx context.Context, s *v1alpha1.AgentSession) (string, error) {
+// It returns the latch it wrote, so a caller that returns before Create can
+// record the non-attempt over exactly that write and nothing later.
+func (r *Reconciler) reservePrivateExecutor(ctx context.Context, s *v1alpha1.AgentSession) (executorReservation, error) {
 	fresh, err := r.privateHistorySession(ctx, s)
 	if err != nil {
-		return "", err
+		return executorReservation{}, err
 	}
 	h := fresh.Status.PrivateHistory
 	if wantsPodGone(fresh) || h == nil || h.ExecutorAttempted && (!h.ExecutorNotCreated || h.ExecutorIntent == "" || h.LastExecutor != nil) {
-		return "", errors.New("private executor attempt is already recorded or Session stopped")
+		return executorReservation{}, errors.New("private executor attempt is already recorded or Session stopped")
 	}
 	if _, err := r.privateHistoryHome(ctx, fresh); err != nil {
-		return "", err
+		return executorReservation{}, err
 	}
 	var pod corev1.Pod
 	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(fresh), &pod); !apierrors.IsNotFound(err) {
-		return "", errors.New("private executor absence is unconfirmed before first attempt")
+		return executorReservation{}, errors.New("private executor absence is unconfirmed before first attempt")
 	}
 	if h.ExecutorAttempted {
 		h.ExecutorNotCreated = false
@@ -230,23 +247,44 @@ func (r *Reconciler) reservePrivateExecutor(ctx context.Context, s *v1alpha1.Age
 		h.ExecutorAttempted = true
 		h.ExecutorIntent = string(uuid.NewUUID())
 	}
-	return h.ExecutorIntent, r.writePrivateHistory(ctx, s, fresh)
+	intent := h.ExecutorIntent
+	if err := r.writePrivateHistory(ctx, s, fresh); err != nil {
+		if errors.Is(err, errPrivateHistoryUnacknowledged) {
+			// A Conflict proves this write did not land: another reconciler
+			// may have written the same latch and be creating its Pod. Any
+			// other unacknowledged error leaves the result unknown. Either
+			// way this reconcile has no write of its own to mark.
+			return executorReservation{}, err
+		}
+		// The server acknowledged the write (Update copied its response into
+		// fresh); only the confirmation failed.
+		return executorReservation{intent: intent, resourceVersion: fresh.ResourceVersion}, err
+	}
+	return executorReservation{intent: intent, resourceVersion: s.ResourceVersion}, nil
 }
 
-// recordExecutorNotCreated marks intent as a known non-attempt (DESIGN-019).
-// Call it only when this reconcile returned before calling Create for intent
-// because an observation failed. It is best effort: when the mark cannot be
-// written and confirmed, the attempt stays latched, as it was before.
-func (r *Reconciler) recordExecutorNotCreated(ctx context.Context, s *v1alpha1.AgentSession, intent string) {
-	if intent == "" {
+// recordExecutorNotCreated marks the reserved intent as a known non-attempt
+// (DESIGN-019). Call it only when this reconcile returned before calling Create
+// for that intent because an observation failed. It writes only over the
+// reservation's own write: when the Session's resourceVersion has moved since,
+// another write may have re-armed the same intent, so the mark could cover a
+// Create in flight. It is best effort: when the mark cannot be written and
+// confirmed, the attempt stays latched, as it was before.
+func (r *Reconciler) recordExecutorNotCreated(ctx context.Context, s *v1alpha1.AgentSession, res executorReservation) {
+	if res.intent == "" || res.resourceVersion == "" {
 		return
 	}
 	fresh, err := r.privateHistorySession(ctx, s)
 	if err != nil {
+		log.FromContext(ctx).Info("the private executor attempt stays latched: the Session read for its non-attempt record failed", "error", err.Error())
+		return
+	}
+	if fresh.ResourceVersion != res.resourceVersion {
+		log.FromContext(ctx).Info("the private executor attempt stays latched: the Session changed after this reconcile's own latch write", "intent", res.intent)
 		return
 	}
 	h := fresh.Status.PrivateHistory
-	if h == nil || !h.ExecutorAttempted || h.ExecutorIntent != intent || h.ExecutorNotCreated || h.LastExecutor != nil {
+	if h == nil || !h.ExecutorAttempted || h.ExecutorIntent != res.intent || h.ExecutorNotCreated || h.LastExecutor != nil {
 		return
 	}
 	h.ExecutorNotCreated = true
@@ -254,7 +292,7 @@ func (r *Reconciler) recordExecutorNotCreated(ctx context.Context, s *v1alpha1.A
 		log.FromContext(ctx).Info("the private executor attempt stays latched: its non-attempt record is unconfirmed", "error", err.Error())
 		return
 	}
-	log.FromContext(ctx).Info("recorded a known non-attempt: no Pod create was called for the private executor intent", "intent", intent)
+	log.FromContext(ctx).Info("recorded a known non-attempt: no Pod create was called for the private executor intent", "intent", res.intent)
 }
 
 // Observe only uncached exact owners. Absence never erases an executor or turns

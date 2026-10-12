@@ -518,6 +518,117 @@ func TestProjectCanaryPersistentReadFailureAfterMarkWritesNothing(t *testing.T) 
 	}
 }
 
+// history-01 review (#222): a reconcile records a known non-attempt only over
+// its own acknowledged latch write. Two reconcilers race to re-arm one marked
+// intent: A's clear lands first and A goes on to its one Create. B's clear
+// either conflicts or loses its response, so B has no write of its own and
+// must not put the mark back over A's re-armed intent. A third case moves the
+// Session after B's own confirmed write: B then cannot tell that write from
+// a later one, so the attempt stays latched.
+func TestProjectCanaryNonAttemptMarkCoversOnlyItsOwnLatchWrite(t *testing.T) {
+	for _, race := range []string{"conflict", "lost-response", "moved-after-latch"} {
+		t.Run(race, func(t *testing.T) {
+			f := testutil.New(t, "claude", "dev/dev-env")
+			base := privateHistoryClient(f.Session, f.Catalog, f.Template)
+			key := client.ObjectKeyFromObject(f.Session)
+			creates := 0
+			peerCleared := false
+			c := interceptor.NewClient(base, interceptor.Funcs{
+				Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) error {
+					switch typed := o.(type) {
+					case *corev1.PersistentVolumeClaim:
+						typed.UID = "original-home"
+					case *corev1.Pod:
+						creates++
+					}
+					return c.Create(ctx, o, opts...)
+				},
+				SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, o client.Object, opts ...client.SubResourceUpdateOption) error {
+					s, ok := o.(*v1alpha1.AgentSession)
+					if !ok || sub != "status" || race == "moved-after-latch" || peerCleared || s.Status.PrivateHistory == nil {
+						return c.SubResource(sub).Update(ctx, o, opts...)
+					}
+					var stored v1alpha1.AgentSession
+					if err := base.Get(ctx, key, &stored); err != nil {
+						return err
+					}
+					if h := stored.Status.PrivateHistory; h == nil || !h.ExecutorNotCreated || s.Status.PrivateHistory.ExecutorNotCreated {
+						return c.SubResource(sub).Update(ctx, o, opts...)
+					}
+					// Reconciler A clears the same mark first, with a
+					// confirmed write, and goes on to Create.
+					peerCleared = true
+					stored.Status.PrivateHistory.ExecutorNotCreated = false
+					if err := base.Status().Update(ctx, &stored); err != nil {
+						return err
+					}
+					if race == "lost-response" {
+						return apierrors.NewServerTimeout(v1alpha1.GroupVersion.WithResource("agentsessions").GroupResource(), "update", 1)
+					}
+					return c.SubResource(sub).Update(ctx, o, opts...)
+				},
+			})
+			failures := 1
+			reader := interceptor.NewClient(base, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, k client.ObjectKey, o client.Object, opts ...client.GetOption) error {
+				if err := c.Get(ctx, k, o, opts...); err != nil {
+					return err
+				}
+				if _, catalog := o.(*corev1.ConfigMap); failures == 0 || !catalog || k != client.ObjectKeyFromObject(f.Catalog) {
+					return nil
+				}
+				var stored v1alpha1.AgentSession
+				if err := base.Get(ctx, key, &stored); err != nil {
+					return err
+				}
+				if h := stored.Status.PrivateHistory; h == nil || !h.ExecutorAttempted || h.ExecutorNotCreated {
+					return nil
+				}
+				failures--
+				if race == "moved-after-latch" {
+					// Another writer changes the Session after this
+					// reconcile's own confirmed latch write.
+					stored.Labels = map[string]string{"fixture/peer-write": "true"}
+					if err := base.Update(ctx, &stored); err != nil {
+						return err
+					}
+				}
+				return apierrors.NewServiceUnavailable("transient")
+			}})
+			request := ctrl.Request{NamespacedName: key}
+			reconcile := func() {
+				t.Helper()
+				if _, err := canaryReconciler(c, reader, f).Reconcile(context.Background(), request); err != nil {
+					t.Fatal(err)
+				}
+			}
+			stored := func() *v1alpha1.PrivateHistoryStatus {
+				t.Helper()
+				var s v1alpha1.AgentSession
+				if err := base.Get(context.Background(), key, &s); err != nil {
+					t.Fatal(err)
+				}
+				return s.Status.PrivateHistory
+			}
+			reconcile()
+			if race == "moved-after-latch" {
+				if h := stored(); failures != 0 || creates != 0 || h == nil || !h.ExecutorAttempted || h.ExecutorNotCreated {
+					t.Fatalf("a Session moved after the latch: failures left %d, creates %d, history %+v; want a latched attempt with no mark", failures, creates, h)
+				}
+				return
+			}
+			if h := stored(); failures != 0 || creates != 0 || h == nil || !h.ExecutorNotCreated {
+				t.Fatalf("setup: failures left %d, creates %d, history %+v; want a recorded non-attempt", failures, creates, h)
+			}
+			intent := stored().ExecutorIntent
+			// Reconciler B re-arms the marked intent and loses the race.
+			reconcile()
+			if h := stored(); !peerCleared || creates != 0 || h.ExecutorNotCreated || !h.ExecutorAttempted || h.ExecutorIntent != intent {
+				t.Fatalf("%s: peer cleared %v, creates %d, history %+v; the mark must not cover the peer's re-armed intent", race, peerCleared, creates, h)
+			}
+		})
+	}
+}
+
 func TestProjectCanaryFinalExecutorRefusesForeignPVCAndMountAliases(t *testing.T) {
 	f := testutil.New(t, "claude", "dev/dev-env")
 	pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, false, nil)

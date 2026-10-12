@@ -127,11 +127,27 @@ that passes that validation and fails the post-latch one repeats the clear and
 mark writes. For independent failures that happens on at most a quarter of
 reconciles, and every repeat must pass the earlier validation again.
 
+A reconcile marks only its own latch write. `reservePrivateExecutor` returns the
+intent it wrote and the Session `resourceVersion` that its own acknowledged
+write produced. The mark is written only while the Session is still at that
+version, and the write carries it as its precondition. Two reconcilers can
+overlap during a leader handover and race to clear one mark: one clear lands
+and its reconciler goes on to Create; the other gets a Conflict, or loses the
+response. That reconciler has no write of its own, so it records nothing. Before
+this rule (PR #222 review) it re-read the Session, found the mark cleared for
+the same intent, and set it again over a Create in flight. When anything
+else changed the Session after the reconcile's own write, the operator cannot
+tell that change from a peer's re-arm, so the attempt stays latched.
+
 Focused tests: `TestProjectCanaryTransientFailureAfterIntentResumesSameIntentOnce`
 (a 503 on the post-latch catalog read, and on the latch confirmation, each create
 no Pod, record the mark, then create exactly one Pod with the original intent),
 `TestProjectCanaryPersistentReadFailureAfterMarkWritesNothing` (a lasting 429
 makes no status write and no Pod, and healed reads create exactly one),
+`TestProjectCanaryNonAttemptMarkCoversOnlyItsOwnLatchWrite` (a peer's clear lands
+first and this reconcile's clear conflicts or loses its response: the mark stays
+cleared; a Session moved after the reconcile's own write stays latched without a
+mark), `TestPrivateHistoryWriteRefusesAFieldTheSchemaPruned`,
 `TestPrivateHistoryNotCreatedMarkYieldsToObservedExecutor` and the schema cases in
 `TestPrivateHistoryExecutorNotCreatedMark`.
 
@@ -149,5 +165,9 @@ Unchanged, deliberately:
 - The API wire view is unchanged; the strict once clients refuse unknown fields.
 
 The CRD change reaches haynes-ops by the usual copy before the operator pin. A
-stale schema prunes the mark, its confirmation fails, and the attempt stays
-latched, which is the previous behavior.
+stale schema prunes the mark, and the attempt stays latched, which is the
+previous behavior. The confirmation fails because `writePrivateHistory` compares
+the stored record with the record it meant to write. It used to compare with the
+server's response, which `Status().Update` copies into the object it sends. A
+pruned field is missing from both, so that check passed and the operator logged
+a non-attempt it had not stored (PR #222 review).

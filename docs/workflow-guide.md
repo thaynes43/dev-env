@@ -537,7 +537,9 @@ phase is Failed whatever the task did (D-44). Read the task's own result instead
 `task Succeeded`, `task Failed`, `task TimedOut` or `task Unknown` to NOTE, and
 `kubectl get agentsessions` shows the state in the `Task` column. With `--json`,
 the facts are in `agentStatus.task`. Unknown means exit 0 with no success
-result event. See [the task result rule](../.agents/sagas/distributed-dev-env/designs/021-canary-cli.md#the-task-result-of-an-ended-session--2026-10-12-history-04-174).
+result event. Phase still counts it as Failed: `agent-run list --state Failed`
+and the `dev_env_sessions{phase="Failed"}` metric include a canary that
+succeeded. Read the task result, not those counts, for the outcome. See [the task result rule](../.agents/sagas/distributed-dev-env/designs/021-canary-cli.md#the-task-result-of-an-ended-session--2026-10-12-history-04-174).
 
 ### Read a fixed probe's retained result
 

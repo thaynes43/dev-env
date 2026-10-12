@@ -27,6 +27,11 @@ Persist a one-way private executor-attempt intent before first creation. A lost
 acknowledgement can adopt only a verified executor from that same causal
 intent; an absent later Pod cannot authorize a replacement model. This guard
 is not general #160 recovery and has no automatic rearm.
+2026-10-12 (#174 history-01): one narrow re-arm now exists. A reconcile that
+returned before calling Create, because an observation failed, records a known
+non-attempt (`executorNotCreated`) over its own latch write. Admission may then
+resume that same intent once per mark. Absence alone still authorizes nothing.
+See [DESIGN-019](019-private-pod-retention-guard.md#a-known-non-attempt-after-the-executor-latch--2026-10-12-history-01-174).
 
 Guard every private archive, volume deletion/release and session-finalizer
 release path before legacy fallback. Keep existing protective finalizers and
