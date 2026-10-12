@@ -241,7 +241,7 @@ eligible:
 | `rescueStamp` | the rescue it relies on (`status.rescue.stamp`) |
 | `archive` | `entry`, `contentSHA256`, `bytes`, `files`, `gitBundles`, `archivedAt` |
 | `deletingAt`, `homeDeletedAt` | times |
-| `refusal`, `refusalAt` | the last refusal reason, for `kubectl get` and the condition |
+| `refusal`, `refusalAt` | the current refusal reason, for `kubectl get`, the condition and the gauge; cleared by the confirmed write of the next step that passes |
 
 `status.privateHistory.expiryClearedAt` keeps the time of the last cancel.
 
@@ -286,7 +286,9 @@ the same digest is `exists`, and a claim that is already gone counts as deleted.
 step refused for any other reason is re-checked, and its refusal re-counted and
 re-recorded in `refusal`, every 15 minutes while the Session stays refused. The
 gauge `dev_env_home_expiry_refusing` (section 10) shows the Sessions refused
-right now, so its alert does not depend on that cadence.
+right now, so its alert does not depend on that cadence. A step that passes
+clears `refusal` and `refusalAt` in its own confirmed write, so a fixed cause
+stops the alert at the next re-check.
 
 ### 5.3 What cancels it
 
@@ -640,7 +642,7 @@ Exported by the leader:
 | `dev_env_home_expiry_sessions` | gauge | `phase`: `unproven` (private, retained, no terminal record), `waiting`, `held`, `rescuing`, `exporting`, `archived`, `deleting` |
 | `dev_env_home_expiry_expired_total` | counter | none |
 | `dev_env_home_expiry_archived_bytes_total` | counter | none |
-| `dev_env_home_expiry_refusing` | gauge | `reason`: the number of Sessions whose current `refusal` is that reason, from the last reconcile of each; the reasons below |
+| `dev_env_home_expiry_refusing` | gauge | `reason`: the number of Sessions whose current `refusal` is that reason, from the last reconcile of each; the reasons below. A Session leaves it when a step passes (which clears `refusal`), when its expiry record is removed, or when the Session is gone |
 | `dev_env_home_expiry_refused_total` | counter | `reason`: `unknown`, `identity_changed`, `home_replaced`, `claim_in_use`, `canary`, `override_invalid`, `layout_unknown`, `unknown_entry`, `unexpected_entry`, `credential_in_tree`, `export_too_large`, `export_changed`, `shelf_unavailable`, `archive_conflict`, `archive_missing`, `archive_mismatch`, `precondition_failed`, `forbidden` |
 | `dev_env_home_expiry_overdue_seconds` | gauge | none; the largest `now - dueAt` over triggered, unheld Sessions not yet `Archived` (or `Expired` with deletion on) |
 
