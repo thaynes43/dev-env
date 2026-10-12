@@ -236,7 +236,8 @@ eligible:
 | `dueAt` | `graceStart` plus the grace (720h, or longer by flag) |
 | `phase` | `Waiting`, `Rescuing`, `Exporting`, `Archived`, `Deleting`, `Expired` |
 | `releaseNowAt` | when release-now was first seen for this record |
-| `holdPodUID` | the hold pod the expiry made |
+| `holdIntent` | a random id, written by a confirmed write before the hold pod is created, and set on the pod as an annotation |
+| `holdPodUID` | the hold pod the expiry made, recorded once it is observed |
 | `rescueStamp` | the rescue it relies on (`status.rescue.stamp`) |
 | `archive` | `entry`, `contentSHA256`, `bytes`, `files`, `gitBundles`, `archivedAt` |
 | `deletingAt`, `homeDeletedAt` | times |
@@ -268,7 +269,7 @@ mismatch refuses with its reason (section 10) and nothing happens.
 | (none) | Create the record | eligible | `Waiting` |
 | `Waiting` | Wait | `now >= dueAt`, or release-now; triggered | `Rescuing` |
 | `Rescuing` | Remove the ended executor Pod, if it is still there | Pod UID is `executorUID`, phase still terminal; delete with UID and resourceVersion preconditions | |
-| `Rescuing` | Create the hold pod (6.1) | the Session's Pod name is NotFound; no Pod in the namespace mounts the claim (uncached list) | |
+| `Rescuing` | Create the hold pod (6.1) | `holdIntent` recorded first; the Session's Pod name is NotFound; no Pod in the namespace mounts the claim (uncached list) | `holdPodUID` recorded once the pod is observed (6.1, adoption) |
 | `Rescuing` | Run the rescue (6.2) | hold pod is `holdPodUID`, Running; claim UID re-read; the hold pod's `home` volume names the claim | `Exporting` once the verdict is valid |
 | `Exporting` | Export and archive (6.3, 6.4) | rescue still valid, same stamp and same hold pod; shelf Ready with the history archive mounted | `Archived`, with `archive` recorded; then the hold pod is removed (`holdRemovalAllowed`) |
 | `Archived` | Stop here while deletion is off | | |
@@ -277,9 +278,15 @@ mismatch refuses with its reason (section 10) and nothing happens.
 | `Expired` | Reaping: release the Session (6.6) | no Pod, no claim, by uncached reads | ADR-004 |
 
 Each step is idempotent. After an operator restart, the next reconcile finds the
-phase in status and repeats only what is not confirmed: a hold pod that exists is
-reused, an archive entry that exists with the same digest is `exists`, and a
-claim that is already gone counts as deleted.
+phase in status and repeats only what is not confirmed: a hold pod that carries
+this record's `holdIntent` is adopted (6.1), an archive entry that exists with
+the same digest is `exists`, and a claim that is already gone counts as deleted.
+
+**Retry cadence.** A step refused for Unknown is tried again in one minute. A
+step refused for any other reason is re-checked, and its refusal re-counted and
+re-recorded in `refusal`, every 15 minutes while the Session stays refused. The
+gauge `dev_env_home_expiry_refusing` (section 10) shows the Sessions refused
+right now, so its alert does not depend on that cadence.
 
 ### 5.3 What cancels it
 
@@ -290,14 +297,16 @@ claim that is already gone counts as deleted.
   starts a new 30 days. From `Deleting` on, a resume is refused: a suspended
   Session has `status.archivedAt` by then (6.5), and a reaped one cannot resume.
 - **A new Pod.** Any Pod of the Session's name, or any Pod that mounts its claim,
-  whose UID is neither `executorUID` nor `holdPodUID`. The record is removed and
-  the Session gets today's PreservationUnknown ("private executor was replaced").
+  whose UID is neither `executorUID` nor `holdPodUID`, and that is not the
+  expiry's own hold pod awaiting adoption (6.1). The record is removed and the
+  Session gets today's PreservationUnknown ("private executor was replaced").
   Nothing is deleted.
 - **A hold** (section 9). Nothing moves on while it is set; the grace clock keeps
   running. A hold pod the expiry made is removed, because nothing needs it, and is
   made again after the hold is lifted if the step still needs it. A hold never
   cancels the record.
-- **Identity changes.** A changed Session UID, a HOME claim with another UID, a deleting claim, a canary or workspace binding: refused
+- **Identity changes.** A changed Session UID, a HOME claim with another UID, a
+  deleting claim, a canary or workspace binding: refused
   (`identity_changed`, `home_replaced`). Nothing is deleted, and a human looks.
 
 ## 6. Step details
@@ -307,14 +316,26 @@ claim that is already gone counts as deleted.
 It is D-55's hold pod: the Session's Pod name, the label
 `dev-env.haynesops.com/hold: "true"`, `agentd hold`, S-class resources, no agent
 credentials, the session volume, the shared volume and `/creds` for the rescue's
-Git credential helper. Three additions:
+Git credential helper. Four additions:
 
 - It is made for a private Session only by the expiry, only in `Rescuing`, and
   only after the executor Pod is gone (the same name).
 - It carries the annotations `dev-env.haynesops.com/private-history-home-uid`
-  (the HOME UID) and `dev-env.haynesops.com/home-expiry-executor` (the executor
-  UID). `observePrivateHistory` already ignores hold pods for the executor
-  record.
+  (the HOME UID), `dev-env.haynesops.com/home-expiry-executor` (the executor
+  UID) and `dev-env.haynesops.com/home-expiry-hold-intent` (the record's
+  `holdIntent`). `observePrivateHistory` already ignores hold pods for the
+  executor record.
+- **Intent first, then adoption.** The operator writes `holdIntent` into the
+  expiry record by a confirmed write before it calls Create, like the executor
+  intent of DESIGN-008. An operator can restart between the Create and the write
+  of `holdPodUID`. So before it treats a Pod as new, it adopts a Pod that the
+  Session controls, that has the hold label, and whose three annotations match
+  this record's `holdIntent`, `executorUID` and `homeUID`: it records that Pod's
+  UID as `holdPodUID` by a confirmed write. A hold-labelled Pod with any other
+  intent is a new Pod (5.3). Only the operator can create Pods in `dev-agents`
+  (`dev-env-identity-guard` refuses agents), so a matching intent is the
+  operator's own. A hold pod made again, after an owner hold, gets a new
+  `holdIntent`, and `holdPodUID` is cleared first.
 - **The binding.** A Pod names its claim, not the claim's UID. The operator
   checks the claim's UID before it creates the pod, again once the pod runs, and
   in the common re-check of every later step. While a Pod uses a claim,
@@ -614,6 +635,7 @@ Exported by the leader:
 | `dev_env_home_expiry_sessions` | gauge | `phase`: `unproven` (private, retained, no terminal record), `waiting`, `held`, `rescuing`, `exporting`, `archived`, `deleting` |
 | `dev_env_home_expiry_expired_total` | counter | none |
 | `dev_env_home_expiry_archived_bytes_total` | counter | none |
+| `dev_env_home_expiry_refusing` | gauge | `reason`: the number of Sessions whose current `refusal` is that reason, from the last reconcile of each; the reasons below |
 | `dev_env_home_expiry_refused_total` | counter | `reason`: `unknown`, `identity_changed`, `home_replaced`, `claim_in_use`, `canary`, `override_invalid`, `layout_unknown`, `unknown_entry`, `unexpected_entry`, `credential_in_tree`, `export_too_large`, `export_changed`, `shelf_unavailable`, `archive_conflict`, `archive_missing`, `archive_mismatch`, `precondition_failed`, `forbidden` |
 | `dev_env_home_expiry_overdue_seconds` | gauge | none; the largest `now - dueAt` over triggered, unheld Sessions not yet `Archived` (or `Expired` with deletion on) |
 
@@ -625,7 +647,7 @@ Rescue failures keep their own condition and page (D-57).
 ```yaml
 - alert: DevEnvHomeExpiryNeedsOwner        # critical
   expr: |
-    sum by (reason) (increase(dev_env_home_expiry_refused_total{reason=~"credential_in_tree|unknown_entry|unexpected_entry|layout_unknown|export_too_large|archive_conflict|archive_mismatch|home_replaced|identity_changed"}[1h])) > 0
+    sum by (reason) (dev_env_home_expiry_refusing{reason=~"credential_in_tree|unknown_entry|unexpected_entry|layout_unknown|export_too_large|archive_conflict|archive_mismatch|home_replaced|identity_changed"}) > 0
   for: 15m
 - alert: DevEnvHomeExpiryStalled           # critical
   expr: max(dev_env_home_expiry_overdue_seconds) > 2 * 86400
@@ -640,8 +662,9 @@ Rescue failures keep their own condition and page (D-57).
   expr: increase(dev_env_private_executor_terminal_total{result="missed"}[1h]) > 0
 ```
 
-`DevEnvHomeExpiryNeedsOwner` names reasons that never clear on their own. Its
-description says: the HOME is kept; find the Session with `kubectl get
+`DevEnvHomeExpiryNeedsOwner` names reasons that never clear on their own. It
+reads the gauge of Sessions refused right now, so it keeps firing until the
+refusal is gone, whatever the retry cadence (5.2). Its description says: the HOME is kept; find the Session with `kubectl get
 agentsessions` and its `HomeExpiry` condition; a credential in the tree or an
 unknown entry needs a source change or Tom's decision, never a manual delete by
 an agent; an automated responder reports and changes nothing.
@@ -792,7 +815,11 @@ status itself.
   `home_replaced`, nothing deleted. Another Pod mounting the claim:
   `claim_in_use`.
 - **T12, restarts.** The manager stopped and started between every two steps:
-  the expiry resumes from status, with one archive entry and one delete.
+  the expiry resumes from status, with one archive entry and one delete. One
+  restart falls between the hold pod's create and the write of `holdPodUID`: the
+  pod is adopted by its `holdIntent`, nothing is cancelled and no
+  PreservationUnknown is raised. A hold-labelled Pod with another intent is a new
+  Pod and cancels.
 - **T13, two reconcilers.** Overlapping leaders: one delete succeeds; the archive
   `put` is `exists` for the other.
 - **T14, the stop request.** A reaped private executor gets exactly one patch with
@@ -805,8 +832,9 @@ status itself.
   confirmed by re-read; a stale schema that prunes it is detected.
 - **T16, the schema.** The terminal record cannot change, be removed, or name
   another UID; the expiry phase moves only forward; the archive digest cannot
-  change; the record cannot be removed from `Deleting` on; an update that drops
-  either record is refused.
+  change; the expiry record can be removed before `Deleting` (a cancel) but not
+  from `Deleting` on. An update that drops the terminal record is always
+  refused.
 - **T17, the flags.** Delete off: Sessions stop at `Archived`. Delete on without
   archive or reads: the operator refuses to start.
 

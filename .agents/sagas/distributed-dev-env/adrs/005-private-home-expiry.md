@@ -191,8 +191,11 @@ contract.
 
 This ADR adds it, at the two points where today's lifecycle ends a non-private
 Session for good: the reap, and the suspended-archive deadline (D-62), after
-which a Session can never be resumed. So a private Session is stopped when it is
-Reaping, or when it is suspended and passes that deadline. The operator sets the running
+which a non-private Session can never be resumed. So a private Session is
+stopped when it is Reaping, or when it is suspended and passes that deadline. A
+private Session stopped at that deadline can still be resumed in name, without
+a new executor, until its HOME is about to be deleted; the resume cancels the
+expiry (DESIGN-025 sections 4 and 5.3). The operator sets the running
 executor's `spec.activeDeadlineSeconds`, with the Pod's UID and resourceVersion
 as preconditions. The kubelet then stops the containers, with the usual grace,
 and marks the Pod `Failed`. The Pod object stays, so its termination can be
