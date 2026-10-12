@@ -505,6 +505,54 @@ func TestFleet(t *testing.T) {
 	}
 }
 
+// history-04 (DESIGN-021): the fleet carries each ended task's own result, so
+// a canary whose task succeeded reads differently from one that failed, though
+// both pods ended and both sessions are Failed (D-44).
+func TestFleetCarriesTaskResult(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	add := func(name string, mode v1alpha1.SessionMode, task *v1alpha1.TaskStatus) {
+		s := &v1alpha1.AgentSession{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS},
+			Spec:       v1alpha1.AgentSessionSpec{Repo: "r", Agent: "claude", Mode: mode, Model: "claude-opus-5-5"},
+		}
+		if mode == v1alpha1.ModeTask {
+			s.Spec.Prompt = "p"
+		}
+		if err := f.c.Create(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+		s.Status.Phase = v1alpha1.PhaseFailed
+		s.Status.Agent = &v1alpha1.AgentStatus{Status: "exited", Task: task}
+		if err := f.c.Status().Update(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	at := metav1.NewTime(f.now)
+	add("ok", v1alpha1.ModeTask, &v1alpha1.TaskStatus{ExitCode: 0, Subtype: "success", NumTurns: 2, FinishedAt: at})
+	add("bad", v1alpha1.ModeTask, &v1alpha1.TaskStatus{ExitCode: 1, Subtype: "error_max_turns", IsError: true, FinishedAt: at})
+	add("none", v1alpha1.ModeTask, nil)
+	add("tui", v1alpha1.ModeRemote, &v1alpha1.TaskStatus{ExitCode: 0, Subtype: "success", FinishedAt: at})
+
+	fl := decode[apiv1.Fleet](t, f.do(http.MethodGet, apiv1.FleetPath, tokHuman, nil))
+	got := map[string]*apiv1.TaskVerdict{}
+	for _, s := range fl.Sessions {
+		if s.Phase != "Failed" {
+			t.Errorf("%s: phase %s, want Failed (D-44)", s.Name, s.Phase)
+		}
+		got[s.Name] = s.TaskResult
+	}
+	if r := got["ok"]; r == nil || r.State != apiv1.TaskSucceeded {
+		t.Errorf("succeeded task: %+v", r)
+	}
+	if r := got["bad"]; r == nil || r.State != apiv1.TaskFailed || r.Reason != "TaskExitedNonZero" {
+		t.Errorf("failed task: %+v", r)
+	}
+	if got["none"] != nil || got["tui"] != nil {
+		t.Errorf("result without a finished task: %+v %+v", got["none"], got["tui"])
+	}
+}
+
 func TestGeneratedName(t *testing.T) {
 	at := time.Date(2026, 10, 5, 20, 25, 4, 0, time.FixedZone("EDT", -4*3600))
 	for repo, want := range map[string]string{

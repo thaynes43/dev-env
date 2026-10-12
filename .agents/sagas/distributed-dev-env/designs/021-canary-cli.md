@@ -156,11 +156,13 @@ heartbeats until SIGTERM, and D-44 makes every ended Pod's session Failed.
 
 D-44 and the phase enum stay as they are. The operator now derives
 `status.taskResult` from `status.agent.task` for task-mode sessions, as a pure
-function of status in `observe()`: state `Succeeded`, `Failed` or `TimedOut`,
-a CamelCase reason and one sentence. TimedOut wins when agentd stopped the task
-at `limits.timeout`. Succeeded needs exit 0, no error flag and no `error*`
-subtype. Anything else is Failed, with reason `TaskExitedNonZero` or
-`TaskReportedError`. A `Task` printer column shows the state beside Phase.
+function of status in `observe()`: state `Succeeded`, `Failed`, `TimedOut` or
+`Unknown`, a CamelCase reason and one sentence. TimedOut wins when agentd
+stopped the task at `limits.timeout`. A non-zero exit is Failed
+(`TaskExitedNonZero`), and so is an error flag or an `error*` subtype
+(`TaskReportedError`). Succeeded needs exit 0 and the result subtype `success`.
+An exit 0 without it is Unknown (`TaskResultMissing`), because nothing reported
+success. A `Task` printer column shows the state beside Phase.
 
 `agent-run show` prints a `task result` row. `list` and `fleet` put
 `task <state>` in NOTE, and the fleet view carries `taskResult`. The Session

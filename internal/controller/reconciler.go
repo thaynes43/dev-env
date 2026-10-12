@@ -46,6 +46,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/sessiondirectory"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
@@ -1176,6 +1177,7 @@ func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessio
 	ready.Reason = conditionReason(ready.Reason)
 	ready.Message = truncate(ready.Message)
 	st.Phase = phase
+	st.TaskResult = taskResult(s, st.Agent)
 	st.PendingReason = ""
 	if phase == v1alpha1.PhasePending {
 		st.PendingReason = ready.Message
@@ -1215,6 +1217,21 @@ func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessio
 	default:
 		meta.RemoveStatusCondition(&st.Conditions, ConditionOutdated)
 	}
+}
+
+// taskResult is status.taskResult: how a task-mode session's task ended, from
+// agent.task (DESIGN-021). The phase stays the pod's (D-44), so an ended canary
+// is Failed whatever its task did; this is where its success or failure shows.
+// It is a pure function of status, so a fresh operator computes the same.
+func taskResult(s *v1alpha1.AgentSession, a *v1alpha1.AgentStatus) *v1alpha1.TaskResultStatus {
+	if s.Spec.Mode != v1alpha1.ModeTask || a == nil || a.Task == nil {
+		return nil
+	}
+	t := a.Task
+	// The heartbeat clips the subtype to 128 bytes, so the sentence stays far
+	// inside the schema's 1024.
+	v := apiv1.TaskResult{ExitCode: t.ExitCode, TimedOut: t.TimedOut, Subtype: t.Subtype, IsError: t.IsError, NumTurns: t.NumTurns}.Verdict()
+	return &v1alpha1.TaskResultStatus{State: v1alpha1.TaskResultState(v.State), Reason: v.Reason, Message: v.Message}
 }
 
 // reasonPattern is metav1.Condition's rule for a reason. Reasons from the

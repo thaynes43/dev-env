@@ -7,7 +7,11 @@
 // is one static binary (D-06), imports it without the Kubernetes libraries.
 package apiv1
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // Paths. A session's own routes hang off SessionPath.
 const (
@@ -299,6 +303,74 @@ type TaskResult struct {
 	NumTurns   int32     `json:"numTurns,omitempty"`
 }
 
+// Task result states: how a task-mode session's task ended (DESIGN-021). The
+// phase stays the pod's (D-44), so a session whose pod ended reads Failed even
+// when its task succeeded; the task's own answer is its result.
+const (
+	TaskSucceeded = "Succeeded"
+	TaskFailed    = "Failed"
+	TaskTimedOut  = "TimedOut"
+	// TaskUnknown is an exit 0 with no success result event to prove it.
+	TaskUnknown = "Unknown"
+)
+
+// TaskVerdict is a task's result: a state, a CamelCase reason and a sentence.
+// The operator records the same in status.taskResult.
+type TaskVerdict struct {
+	State   string `json:"state"`
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+}
+
+// Verdict is how the task ended, from its exit and its result event. TimedOut
+// wins. A non-zero exit, an error flag or an error subtype is Failed.
+// Succeeded needs exit 0 and the result subtype success; an exit 0 without
+// one is Unknown, because nothing reported the task's success.
+func (t TaskResult) Verdict() TaskVerdict {
+	var notes []string
+	if t.Subtype != "" {
+		notes = append(notes, t.Subtype)
+	}
+	if t.IsError {
+		notes = append(notes, "error")
+	}
+	exit := fmt.Sprintf("exited %d", t.ExitCode)
+	if len(notes) > 0 {
+		exit += " (" + strings.Join(notes, ", ") + ")"
+	}
+	switch t.NumTurns {
+	case 0:
+	case 1:
+		exit += " after 1 turn"
+	default:
+		exit += fmt.Sprintf(" after %d turns", t.NumTurns)
+	}
+	switch {
+	case t.TimedOut:
+		return TaskVerdict{TaskTimedOut, "TaskTimedOut", "agentd stopped the task at limits.timeout; it " + exit}
+	case t.ExitCode != 0:
+		return TaskVerdict{TaskFailed, "TaskExitedNonZero", "the task " + exit}
+	case t.IsError || strings.HasPrefix(t.Subtype, "error"):
+		return TaskVerdict{TaskFailed, "TaskReportedError", "the task " + exit}
+	case t.Subtype == "success":
+		return TaskVerdict{TaskSucceeded, "TaskSucceeded", "the task " + exit}
+	default:
+		return TaskVerdict{TaskUnknown, "TaskResultMissing", "the task " + exit + " with no success result event"}
+	}
+}
+
+// TaskVerdict is the session's task result once its task ended, for a
+// task-mode session only. The Session view carries the facts in
+// AgentStatus.Task and no derived field, because the strict once clients
+// refuse unknown fields (DESIGN-021, DESIGN-023).
+func (s Session) TaskVerdict() *TaskVerdict {
+	if s.Mode != "task" || s.AgentStatus == nil || s.AgentStatus.Task == nil {
+		return nil
+	}
+	v := s.AgentStatus.Task.Verdict()
+	return &v
+}
+
 // RemoteControl is a remote session's Remote Control entry (plan 03).
 type RemoteControl struct {
 	Name  string `json:"name,omitempty"`
@@ -385,6 +457,9 @@ type FleetSession struct {
 	LastHeartbeat *time.Time `json:"lastHeartbeat,omitempty"`
 	Reaping       bool       `json:"reaping,omitempty"`
 	CreatedAt     time.Time  `json:"createdAt"`
+	// TaskResult is how a task-mode session's task ended, once it has. Phase
+	// stays the pod's (D-44): an ended canary is Failed whatever its task did.
+	TaskResult *TaskVerdict `json:"taskResult,omitempty"`
 }
 
 // FleetNode is the number of session pods on one node.

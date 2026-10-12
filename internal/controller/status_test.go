@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -72,6 +73,49 @@ func TestPodPhase(t *testing.T) {
 			}
 			if (cond.Status == metav1.ConditionTrue) != (c.phase == v1alpha1.PhaseRunning) {
 				t.Errorf("PodReady %s with phase %s", cond.Status, phase)
+			}
+		})
+	}
+}
+
+// history-04 (DESIGN-021): a canary pod always ends at its active deadline, so
+// D-44 makes the session Failed whatever its task did. The task's own result is
+// recorded beside the phase, and a success reads differently from a failure.
+func TestObserveTaskResultBesideEndedPod(t *testing.T) {
+	ended := &corev1.Pod{Spec: corev1.PodSpec{NodeName: "talosw02"}, Status: corev1.PodStatus{Phase: corev1.PodFailed, Reason: "DeadlineExceeded",
+		Message: "Pod was active on the node longer than the specified deadline"}}
+	obs := observation{pod: owned[*corev1.Pod]{obj: ended}, claim: owned[*corev1.PersistentVolumeClaim]{obj: &corev1.PersistentVolumeClaim{}},
+		templatesErr: errors.New("not read in this test")}
+	finished := metav1.Now()
+	for name, c := range map[string]struct {
+		mode   v1alpha1.SessionMode
+		task   *v1alpha1.TaskStatus
+		state  v1alpha1.TaskResultState
+		reason string
+	}{
+		"canary succeeded": {v1alpha1.ModeTask, &v1alpha1.TaskStatus{ExitCode: 0, Subtype: "success", NumTurns: 2, FinishedAt: finished}, v1alpha1.TaskResultSucceeded, "TaskSucceeded"},
+		"canary failed":    {v1alpha1.ModeTask, &v1alpha1.TaskStatus{ExitCode: 1, Subtype: "error_max_turns", IsError: true, FinishedAt: finished}, v1alpha1.TaskResultFailed, "TaskExitedNonZero"},
+		"task timed out":   {v1alpha1.ModeTask, &v1alpha1.TaskStatus{ExitCode: 143, TimedOut: true, FinishedAt: finished}, v1alpha1.TaskResultTimedOut, "TaskTimedOut"},
+		"no task result":   {v1alpha1.ModeTask, nil, "", ""},
+		"remote mode":      {v1alpha1.ModeRemote, &v1alpha1.TaskStatus{ExitCode: 0, Subtype: "success", FinishedAt: finished}, "", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: "s"}, Spec: v1alpha1.AgentSessionSpec{Mode: c.mode, OperatingMode: v1alpha1.OperatingModeRunning},
+				Status: v1alpha1.AgentSessionStatus{Agent: &v1alpha1.AgentStatus{Status: "exited", Task: c.task}}}
+			st := s.Status.DeepCopy()
+			observe(s, obs, st)
+			ready := meta.FindStatusCondition(st.Conditions, ConditionPodReady)
+			if st.Phase != v1alpha1.PhaseFailed || ready == nil || ready.Reason != "PodEnded" || !strings.Contains(ready.Message, "DeadlineExceeded") {
+				t.Fatalf("D-44 changed: phase %s, PodReady %+v", st.Phase, ready)
+			}
+			if c.state == "" {
+				if st.TaskResult != nil {
+					t.Fatalf("task result %+v, want none", st.TaskResult)
+				}
+				return
+			}
+			if r := st.TaskResult; r == nil || r.State != c.state || r.Reason != c.reason || r.Message == "" {
+				t.Fatalf("task result %+v; want %s %s", r, c.state, c.reason)
 			}
 		})
 	}

@@ -24,15 +24,33 @@ func TestList(t *testing.T) {
 	failed := testSession("old-1001-000000", "Failed")
 	failed.CreatedAt = testNow.Add(-5 * 24 * time.Hour)
 	failed.Conditions = []apiv1.Condition{{Type: conditionPodReady, Status: "False", Reason: "PodEnded", Message: "the pod ended (Evicted): low memory; its volume is kept"}}
+	// history-04: both canary pods ended at their deadline, so both sessions
+	// are Failed (D-44); the NOTE tells the task that succeeded from the one
+	// that failed.
+	ended := []apiv1.Condition{{Type: conditionPodReady, Status: "False", Reason: "PodEnded", Message: "the pod ended (DeadlineExceeded): deadline; its volume is kept"}}
+	canaryOK := testSession("canary-ok-1012-000000", "Failed")
+	canaryOK.Conditions = ended
+	canaryOK.AgentStatus = &apiv1.AgentStatus{State: "exited", Task: &apiv1.TaskResult{ExitCode: 0, Subtype: "success", NumTurns: 2, FinishedAt: testNow}}
+	canaryBad := testSession("canary-bad-1012-000000", "Failed")
+	canaryBad.Conditions = ended
+	canaryBad.AgentStatus = &apiv1.AgentStatus{State: "exited", Task: &apiv1.TaskResult{ExitCode: 1, Subtype: "error_max_turns", IsError: true, FinishedAt: testNow}}
 	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
-		writeTestJSON(w, http.StatusOK, apiv1.SessionList{Sessions: []apiv1.Session{pending, running, reaping, failed}})
+		writeTestJSON(w, http.StatusOK, apiv1.SessionList{Sessions: []apiv1.Session{pending, running, reaping, failed, canaryOK, canaryBad}})
 	}
 
 	h.mustRun(ExitOK, "list")
 	out := h.stdout.String()
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	if len(lines) != 5 {
-		t.Fatalf("list printed %d lines, want a header and 4 rows:\n%s", len(lines), out)
+	if len(lines) != 7 {
+		t.Fatalf("list printed %d lines, want a header and 6 rows:\n%s", len(lines), out)
+	}
+	for _, line := range lines {
+		switch {
+		case strings.HasPrefix(line, "canary-ok-"):
+			contains(t, "succeeded canary row", line, "Failed", "task Succeeded", "DeadlineExceeded")
+		case strings.HasPrefix(line, "canary-bad-"):
+			contains(t, "failed canary row", line, "Failed", "task Failed", "DeadlineExceeded")
+		}
 	}
 	if fields := strings.Fields(lines[0]); strings.Join(fields, " ") != "NAME PHASE AGENT NODE AGE PARENT NOTE" {
 		t.Errorf("header = %q", lines[0])
@@ -54,14 +72,14 @@ func TestList(t *testing.T) {
 	}
 
 	h.mustRun(ExitOK, "list", "-o", "name")
-	if got := h.stdout.String(); got != "dev-env-1006-205900\nhaynes-ops-1006-205500\nhaynes-ops-1005-090000\nold-1001-000000\n" {
+	if got := h.stdout.String(); got != "dev-env-1006-205900\nhaynes-ops-1006-205500\nhaynes-ops-1005-090000\nold-1001-000000\ncanary-ok-1012-000000\ncanary-bad-1012-000000\n" {
 		t.Errorf("-o name printed %q", got)
 	}
 
 	h.mustRun(ExitOK, "list", "-o", "json")
 	var l apiv1.SessionList
-	if err := json.Unmarshal(h.stdout.Bytes(), &l); err != nil || len(l.Sessions) != 4 {
-		t.Errorf("-o json printed %d sessions (%v), want 4", len(l.Sessions), err)
+	if err := json.Unmarshal(h.stdout.Bytes(), &l); err != nil || len(l.Sessions) != 6 {
+		t.Errorf("-o json printed %d sessions (%v), want 6", len(l.Sessions), err)
 	}
 
 	h.mustRun(ExitUsage, "list", "haynes-ops")
@@ -94,7 +112,7 @@ func TestShow(t *testing.T) {
 	beat := testNow.Add(-30 * time.Second)
 	s.AgentStatus = &apiv1.AgentStatus{
 		State: "exited", Branch: "agent/fix-typo", Head: "abc1234", LastHeartbeat: &beat,
-		Task: &apiv1.TaskResult{ExitCode: 0, FinishedAt: testNow.Add(-time.Minute), NumTurns: 12},
+		Task: &apiv1.TaskResult{ExitCode: 0, FinishedAt: testNow.Add(-time.Minute), NumTurns: 12, Subtype: "success"},
 	}
 	s.Usage = &apiv1.Usage{CostUSD: "1.25", InputTokens: 1000, OutputTokens: 200}
 	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
@@ -117,6 +135,7 @@ func TestShow(t *testing.T) {
 		"agent/fix-typo at abc1234",
 		"last heartbeat:", "30s ago",
 		"exit 0 at 2026-10-06T20:59:00Z, 12 turns",
+		"task result:", "Succeeded (TaskSucceeded): the task exited 0 (success) after 12 turns",
 		"Initial task cost:", "Unknown", "Actual model:", "Unknown",
 		"condition:", "PodReady=True",
 		"prompt:\n  fix the typo\n  then open a PR\n")
@@ -189,6 +208,8 @@ func TestFleet(t *testing.T) {
 			Sessions: []apiv1.FleetSession{
 				{Name: "a-1006-205900", Phase: "Pending", Pending: "0/7 nodes are available: 3 Insufficient memory", CreatedAt: testNow.Add(-time.Minute)},
 				{Name: "b-1006-200000", Phase: "Running", Node: "talosw02", AgentState: "busy", LastHeartbeat: &beat, Outdated: true, CreatedAt: testNow.Add(-time.Hour)},
+				{Name: "c-1012-000000", Phase: "Failed", Mode: "task", AgentState: "exited", CreatedAt: testNow.Add(-time.Hour),
+					TaskResult: &apiv1.TaskVerdict{State: apiv1.TaskSucceeded, Reason: "TaskSucceeded", Message: "the task exited 0 (success) after 2 turns"}},
 			},
 			Nodes:    []apiv1.FleetNode{{Name: "talosw02", Sessions: 2}, {Name: "talosw03", Sessions: 1}},
 			Outdated: []string{"b-1006-200000"},
@@ -202,7 +223,8 @@ func TestFleet(t *testing.T) {
 		"outdated: b-1006-200000\n",
 		"NAME", "HEARTBEAT",
 		"a-1006-205900", "0/7 nodes are available: 3 Insufficient memory",
-		"b-1006-200000", "busy", "20s ago", "1h", "outdated")
+		"b-1006-200000", "busy", "20s ago", "1h", "outdated",
+		"c-1012-000000", "task Succeeded")
 	if got := h.api.requests()[0]; got.method != http.MethodGet || got.path != apiv1.FleetPath {
 		t.Errorf("request = %s %s, want GET /v1/fleet", got.method, got.path)
 	}
