@@ -1,5 +1,20 @@
 # Saga: distributed-dev-env (dev-env v2)
 
+The [fixed result-reader delivery record](verification/canary-result-2026-10-12.md)
+records merged #208, published v2.22.0, a bound local client and exact-source signed
+operator publication. Image-only haynes-ops #3825 merged as `b80cac13` after required
+CI, native source review and a fresh accepted baseline. One saved post observation
+and independent source-equivalence review support separate root acceptance
+`f610a2d6` of image delivery and preservation; its original exact-revision HOLD is
+retained unchanged. Source #210 and release #211 ship the bounded named Session
+reader in v2.23.0; its actual merged-source local client remains a runtime gate.
+Neither permanent provider probe has run. Global private admission remains off,
+actual rule loading and the owner pilot remain unaccepted, and Q-24 is pending.
+Q-24 also gates fully isolated native Codex-session acceptance: one paired entry's
+concurrent routing to separate app-server pods is unestablished. Separate paired
+session hosts remain the recommendation; coordinator/workers share the native
+failure boundary and require an explicit owner choice.
+
 The [fixed-rule activation record](verification/fixed-rule-activation-2026-10-11.md)
 binds Q-26's one final correction and accepted Ops #3824 deployment/preservation.
 The single post-roll observer and independent saved review passed; all 11 peers
@@ -17,9 +32,10 @@ safe read prerequisite for the fixed rule probes: one authorized API request,
 no create fallback/retries/redirects, truthful continuation and Unknown state.
 Source verification remains separate from actual discovery/provider acceptance.
 
-**Latest delivery, 2026-10-11:** signed v2.20.0 directory/usage/private-Pod
+**Earlier delivery, 2026-10-11:** signed v2.20.0 directory/usage/private-Pod
 retention prerequisites are deployed through haynes-ops #3823. Global private
-admission and fixed-rule/discovery activation remain off. Directory cardinality
+admission remained off; fixed-rule/discovery activation was accepted subsequently
+through #3824 as recorded above. Directory cardinality
 is Unknown after the expected operator-only Kubernetes list refusal; the frozen
 observer and all failed evidence remain preserved. See the
 [installation verification and next acceptance gates](verification/installation-2026-10-11.md).
