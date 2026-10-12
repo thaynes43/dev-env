@@ -363,6 +363,89 @@ func TestProjectCanaryAuthorityLossAfterIntentNeverRearms(t *testing.T) {
 	}
 }
 
+// history-01 (DESIGN-019): a transient read failure after the executor latch
+// is a known non-attempt. No Pod create was called for the intent, so a later
+// healthy reconcile resumes that same intent once instead of burning the one
+// canary attempt. A changed authority still never rearms (the test above).
+func TestProjectCanaryTransientFailureAfterIntentResumesSameIntentOnce(t *testing.T) {
+	for _, gap := range []string{"revalidation-read", "latch-confirmation"} {
+		t.Run(gap, func(t *testing.T) {
+			f := testutil.New(t, "claude", "dev/dev-env")
+			base := privateHistoryClient(f.Session, f.Catalog, f.Template)
+			creates := 0
+			var createdIntent string
+			c := interceptor.NewClient(base, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) error {
+				switch typed := o.(type) {
+				case *corev1.PersistentVolumeClaim:
+					typed.UID = "original-home"
+				case *corev1.Pod:
+					creates++
+					typed.UID = "original-pod"
+					createdIntent = typed.Annotations[privateHistoryExecutorAnnotation]
+					var retained v1alpha1.AgentSession
+					if err := base.Get(ctx, client.ObjectKeyFromObject(f.Session), &retained); err != nil {
+						t.Fatal(err)
+					}
+					if h := retained.Status.PrivateHistory; h == nil || !h.ExecutorAttempted || h.ExecutorNotCreated || h.ExecutorIntent != createdIntent {
+						t.Fatal("Pod created without a confirmed re-armed latch", h)
+					}
+				}
+				return c.Create(ctx, o, opts...)
+			}})
+			failed := false
+			reader := interceptor.NewClient(base, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, o client.Object, opts ...client.GetOption) error {
+				if err := c.Get(ctx, key, o, opts...); err != nil {
+					return err
+				}
+				if failed {
+					return nil
+				}
+				var retained v1alpha1.AgentSession
+				if err := base.Get(ctx, client.ObjectKeyFromObject(f.Session), &retained); err != nil {
+					return err
+				}
+				if h := retained.Status.PrivateHistory; h == nil || !h.ExecutorAttempted {
+					return nil
+				}
+				_, catalog := o.(*corev1.ConfigMap)
+				_, session := o.(*v1alpha1.AgentSession)
+				if gap == "revalidation-read" && catalog && key == client.ObjectKeyFromObject(f.Catalog) || gap == "latch-confirmation" && session {
+					failed = true
+					return apierrors.NewServiceUnavailable("transient")
+				}
+				return nil
+			}})
+			request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.Session)}
+			if _, err := canaryReconciler(c, reader, f).Reconcile(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			var retained v1alpha1.AgentSession
+			if err := base.Get(context.Background(), request.NamespacedName, &retained); err != nil {
+				t.Fatal(err)
+			}
+			h := retained.Status.PrivateHistory
+			if !failed || creates != 0 || h == nil || !h.ExecutorAttempted || h.ExecutorIntent == "" || !h.ExecutorNotCreated || h.LastExecutor != nil {
+				t.Fatalf("transient gap: failed %v, creates %d, history %+v; want a recorded non-attempt", failed, creates, h)
+			}
+			intent := h.ExecutorIntent
+			for range 2 {
+				if _, err := canaryReconciler(c, reader, f).Reconcile(context.Background(), request); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if creates != 1 || createdIntent != intent {
+				t.Fatalf("resume: creates %d with intent %q; want exactly one with the original %q", creates, createdIntent, intent)
+			}
+			if err := base.Get(context.Background(), request.NamespacedName, &retained); err != nil {
+				t.Fatal(err)
+			}
+			if h := retained.Status.PrivateHistory; h.ExecutorNotCreated || h.ExecutorIntent != intent || !h.ExecutorAttempted {
+				t.Fatalf("resumed latch %+v", h)
+			}
+		})
+	}
+}
+
 func TestProjectCanaryFinalExecutorRefusesForeignPVCAndMountAliases(t *testing.T) {
 	f := testutil.New(t, "claude", "dev/dev-env")
 	pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, false, nil)

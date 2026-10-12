@@ -734,6 +734,7 @@ func TestPrinterColumns(t *testing.T) {
 		{"Agent", 0, "claude"},
 		{"Mode", 0, "remote"},
 		{"Phase", 0, "Running"},
+		{"Task", 0, nil}, // a remote session has no task result (DESIGN-021)
 		{"Node", 0, "talosw03"},
 		{"Model", 1, "claude-fable-5-1"},
 		{"Lane", 1, "escalation"},
@@ -842,6 +843,7 @@ func TestPrivateHistoryRetentionIsDurableBoundedAndCannotAssertPrivateStop(t *te
 		{"replace executor intent", func(st *v1alpha1.AgentSessionStatus) { st.PrivateHistory.ExecutorIntent = "replacement" }},
 		{"reverse executor attempt", func(st *v1alpha1.AgentSessionStatus) { st.PrivateHistory.ExecutorAttempted = false }},
 		{"claim private stop", func(st *v1alpha1.AgentSessionStatus) { st.PrivateHistory.StopState = "Confirmed" }},
+		{"mark an observed executor not created", func(st *v1alpha1.AgentSessionStatus) { st.PrivateHistory.ExecutorNotCreated = true }},
 		{"unbounded conversation", func(st *v1alpha1.AgentSessionStatus) {
 			st.PrivateHistory.LastExecutor.ConversationID = strings.Repeat("x", 257)
 		}},
@@ -903,5 +905,42 @@ func TestTaskResultSchema(t *testing.T) {
 				t.Fatalf("invalid task result accepted: %v", err)
 			}
 		})
+	}
+}
+
+// history-01 (DESIGN-019): a known non-attempt mark needs a recorded attempt
+// and no observed executor; it may be cleared to re-arm the same intent.
+func TestPrivateHistoryExecutorNotCreatedMark(t *testing.T) {
+	s := taskSession()
+	if err := k8s.Create(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	s.Status.PrivateHistory = &v1alpha1.PrivateHistoryStatus{Version: 1, SessionUID: string(s.UID), HomeClaim: "original-home", HomeUID: "original-home-uid",
+		BindingGeneration: s.Generation, Admission: "Started", ExecutorNotCreated: true, Provider: string(s.Spec.Agent), StopState: "Unknown"}
+	if err := k8s.Status().Update(ctx(t), s); !apierrors.IsInvalid(err) {
+		t.Fatalf("non-attempt mark without an attempt accepted: %v", err)
+	}
+	s = get(t, s)
+	s.Status.PrivateHistory = &v1alpha1.PrivateHistoryStatus{Version: 1, SessionUID: string(s.UID), HomeClaim: "original-home", HomeUID: "original-home-uid",
+		BindingGeneration: s.Generation, Admission: "Started", ExecutorAttempted: true, ExecutorIntent: "original-intent", ExecutorNotCreated: true, Provider: string(s.Spec.Agent), StopState: "Unknown"}
+	if err := k8s.Status().Update(ctx(t), s); err != nil {
+		t.Fatal("known non-attempt refused:", err)
+	}
+	if got := get(t, s); !got.Status.PrivateHistory.ExecutorNotCreated {
+		t.Fatal("non-attempt mark pruned")
+	}
+	rearm := get(t, s)
+	rearm.Status.PrivateHistory.ExecutorNotCreated = false
+	if err := k8s.Status().Update(ctx(t), rearm); err != nil {
+		t.Fatal("re-arming the same intent refused:", err)
+	}
+	if got := get(t, s); got.Status.PrivateHistory.ExecutorNotCreated || !got.Status.PrivateHistory.ExecutorAttempted || got.Status.PrivateHistory.ExecutorIntent != "original-intent" {
+		t.Fatal("re-arm changed the latch", got.Status.PrivateHistory)
+	}
+	newIntent := get(t, s)
+	newIntent.Status.PrivateHistory.ExecutorIntent = "replacement"
+	newIntent.Status.PrivateHistory.ExecutorNotCreated = true
+	if err := k8s.Status().Update(ctx(t), newIntent); !apierrors.IsInvalid(err) {
+		t.Fatalf("a non-attempt mark replaced the intent: %v", err)
 	}
 }

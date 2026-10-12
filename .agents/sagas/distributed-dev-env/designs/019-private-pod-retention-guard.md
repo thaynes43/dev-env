@@ -116,7 +116,15 @@ confirmation, or a read (other than NotFound) in the post-latch canary
 re-validation. Admission accepts an attempted intent marked not created. It
 re-arms the same intent (clears the mark by a confirmed write) and runs the same
 final validation before its one Create. The schema refuses the mark once an
-executor was observed or without an attempt.
+executor was observed or without an attempt. With the mark set, the absent Pod
+is expected and is not PreservationUnknown. An observed executor for the intent
+clears the mark, so the attempt is latched as usual.
+
+Focused tests: `TestProjectCanaryTransientFailureAfterIntentResumesSameIntentOnce`
+(a 503 on the post-latch catalog read, and on the latch confirmation, each create
+no Pod, record the mark, then create exactly one Pod with the original intent),
+`TestPrivateHistoryNotCreatedMarkYieldsToObservedExecutor` and the schema cases in
+`TestPrivateHistoryExecutorNotCreatedMark`.
 
 Unchanged, deliberately:
 

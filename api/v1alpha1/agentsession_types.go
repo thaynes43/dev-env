@@ -570,6 +570,7 @@ type AgentSessionStatus struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.lastExecutor) || has(self.lastExecutor)",message="last private executor cannot be erased"
 // +kubebuilder:validation:XValidation:rule="self.admission == 'Started' || size(self.homeUID) == 0",message="unknown original HOME cannot be inferred"
 // +kubebuilder:validation:XValidation:rule="!self.executorAttempted || (self.admission == 'Started' && size(self.executorIntent) > 0)",message="executor attempt requires one durable causal intent"
+// +kubebuilder:validation:XValidation:rule="!has(self.executorNotCreated) || !self.executorNotCreated || (self.executorAttempted && !has(self.lastExecutor))",message="only an executor attempt with no observed executor can be recorded as not created"
 type PrivateHistoryStatus struct {
 	// +kubebuilder:validation:Enum=1
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="retention version is immutable"
@@ -602,6 +603,13 @@ type PrivateHistoryStatus struct {
 	// +kubebuilder:validation:MaxLength=128
 	// +kubebuilder:validation:XValidation:rule="oldSelf == '' || self == oldSelf",message="executor intent cannot change"
 	ExecutorIntent string `json:"executorIntent"`
+	// ExecutorNotCreated records a known non-attempt (DESIGN-019): the operator
+	// returned before calling Create for ExecutorIntent because an observation
+	// failed. Only then may admission re-arm that same intent, once per mark. A
+	// Create that was called, whatever it returned, never sets it, and it is
+	// refused once an executor was observed.
+	// +optional
+	ExecutorNotCreated bool `json:"executorNotCreated,omitempty"`
 	// Provider identifies the configured provider without starting it.
 	// +kubebuilder:validation:MaxLength=128
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="retention provider is immutable"

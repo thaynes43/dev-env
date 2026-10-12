@@ -1003,15 +1003,25 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 			return nil
 		}
 	}
+	// intent is the executor attempt this reconcile latched. Until Create is
+	// called for it, a return caused by a failed observation records a known
+	// non-attempt, so a transient error cannot burn a one-shot canary
+	// (DESIGN-019). A Create that was called is never recorded that way.
+	intent := ""
 	if privateHistoryProtected(s) {
 		if err := r.bindPrivateHistoryHome(ctx, s); err != nil {
 			obs.removalBlocked = err
 			return nil
 		}
-		if err := r.reservePrivateExecutor(ctx, s); err != nil {
+		reserved, err := r.reservePrivateExecutor(ctx, s)
+		if err != nil {
+			// The latch write may have landed though its acknowledgement is
+			// unconfirmed; no Create was called for it either way.
+			r.recordExecutorNotCreated(ctx, s, reserved)
 			obs.removalBlocked = err
 			return nil
 		}
+		intent = reserved
 		pod.Annotations[privateHistoryHomeAnnotation] = s.Status.PrivateHistory.HomeUID
 		pod.Annotations[privateHistoryExecutorAnnotation] = s.Status.PrivateHistory.ExecutorIntent
 	}
@@ -1061,6 +1071,11 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 		}
 	}
 	if err := r.validateProjectCanary(ctx, s, t); err != nil {
+		// A failed read is a known non-attempt; a changed authority after the
+		// intent stays latched and never rearms.
+		if errors.Is(err, errCanaryUnobserved) {
+			r.recordExecutorNotCreated(ctx, s, intent)
+		}
 		obs.removalBlocked = err
 		return nil
 	}

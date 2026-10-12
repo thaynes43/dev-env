@@ -361,6 +361,33 @@ func TestPrivateHistoryExecutorObservationSurvivesAbsenceWithoutStopProof(t *tes
 	}
 }
 
+// history-01 (DESIGN-019): a non-attempt mark only ever covers absence. With
+// the intent's Pod absent the attempt is not PreservationUnknown; an observed
+// executor wins, clearing the mark so the attempt is latched and never re-arms.
+func TestPrivateHistoryNotCreatedMarkYieldsToObservedExecutor(t *testing.T) {
+	s, home := privateHistoryFixture()
+	h := s.Status.PrivateHistory
+	h.LastExecutor = nil
+	h.ExecutorAttempted, h.ExecutorIntent, h.ExecutorNotCreated = true, "synthetic-intent", true
+	c := privateHistoryClient(s, home)
+	r := &Reconciler{Client: c, APIReader: c}
+	obs := observation{}
+	r.observePrivateHistory(context.Background(), s, &obs)
+	if obs.privateHistoryUnknown != nil || !s.Status.PrivateHistory.ExecutorNotCreated {
+		t.Fatal("a recorded non-attempt read as an absent executor", obs.privateHistoryUnknown)
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: s.Name, Namespace: s.Namespace, UID: "observed-executor", OwnerReferences: []metav1.OwnerReference{ownerRef(s)},
+		Annotations: map[string]string{privateHistoryHomeAnnotation: string(home.UID), privateHistoryExecutorAnnotation: "synthetic-intent"}},
+		Spec: corev1.PodSpec{NodeName: "worker-a", Volumes: []corev1.Volume{{Name: "home", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: home.Name}}}}}}
+	if err := c.Create(context.Background(), pod); err != nil {
+		t.Fatal(err)
+	}
+	r.observePrivateHistory(context.Background(), s, &obs)
+	if got := s.Status.PrivateHistory; got.ExecutorNotCreated || got.LastExecutor == nil || got.LastExecutor.PodUID != "observed-executor" {
+		t.Fatalf("observed executor did not latch the attempt: %+v", got)
+	}
+}
+
 // envtest has no GC controller, so this test plays its part. It submits both
 // owner delete policies against a session with a real HOME volume and a real
 // running original executor pod, both owned by the session, then deletes what

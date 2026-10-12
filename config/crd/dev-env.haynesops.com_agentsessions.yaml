@@ -827,6 +827,14 @@ spec:
                     x-kubernetes-validations:
                     - message: executor intent cannot change
                       rule: oldSelf == '' || self == oldSelf
+                  executorNotCreated:
+                    description: |-
+                      ExecutorNotCreated records a known non-attempt (DESIGN-019): the operator
+                      returned before calling Create for ExecutorIntent because an observation
+                      failed. Only then may admission re-arm that same intent, once per mark. A
+                      Create that was called, whatever it returned, never sets it, and it is
+                      refused once an executor was observed.
+                    type: boolean
                   homeClaim:
                     maxLength: 253
                     minLength: 1
@@ -925,6 +933,10 @@ spec:
                 - message: executor attempt requires one durable causal intent
                   rule: '!self.executorAttempted || (self.admission == ''Started''
                     && size(self.executorIntent) > 0)'
+                - message: only an executor attempt with no observed executor can
+                    be recorded as not created
+                  rule: '!has(self.executorNotCreated) || !self.executorNotCreated
+                    || (self.executorAttempted && !has(self.lastExecutor))'
               remoteControl:
                 description: |-
                   RemoteControl is the session's Remote Control entry, for remote mode

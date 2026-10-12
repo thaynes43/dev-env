@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
@@ -123,7 +124,8 @@ func (r *Reconciler) admitPrivateHistory(ctx context.Context, s *v1alpha1.AgentS
 		return err
 	}
 	h := fresh.Status.PrivateHistory
-	if wantsPodGone(fresh) || h.Admission == "Unknown" || h.ExecutorAttempted {
+	// A recorded known non-attempt may resume its same intent (DESIGN-019).
+	if wantsPodGone(fresh) || h.Admission == "Unknown" || h.ExecutorAttempted && (!h.ExecutorNotCreated || h.LastExecutor != nil) {
 		return errors.New("private executor admission is unknown or stopped; original HOME is not inferred")
 	}
 	if h.Admission == sharedNeverStarted {
@@ -202,24 +204,57 @@ func (r *Reconciler) bindPrivateHistoryHome(ctx context.Context, s *v1alpha1.Age
 
 // Record the attempt before Pod creation. A failed/lost create is uncertain,
 // and cannot be retried as an implicit new provider execution by this slice.
-func (r *Reconciler) reservePrivateExecutor(ctx context.Context, s *v1alpha1.AgentSession) error {
+// A recorded known non-attempt (executorNotCreated) re-arms its same intent
+// instead: the mark is cleared by a confirmed write before the one Create.
+// It returns the intent it wrote, or "" when it wrote nothing, so a caller
+// that returns before Create can record the non-attempt.
+func (r *Reconciler) reservePrivateExecutor(ctx context.Context, s *v1alpha1.AgentSession) (string, error) {
 	fresh, err := r.privateHistorySession(ctx, s)
 	if err != nil {
-		return err
+		return "", err
 	}
-	if wantsPodGone(fresh) || fresh.Status.PrivateHistory == nil || fresh.Status.PrivateHistory.ExecutorAttempted {
-		return errors.New("private executor attempt is already recorded or Session stopped")
+	h := fresh.Status.PrivateHistory
+	if wantsPodGone(fresh) || h == nil || h.ExecutorAttempted && (!h.ExecutorNotCreated || h.ExecutorIntent == "" || h.LastExecutor != nil) {
+		return "", errors.New("private executor attempt is already recorded or Session stopped")
 	}
 	if _, err := r.privateHistoryHome(ctx, fresh); err != nil {
-		return err
+		return "", err
 	}
 	var pod corev1.Pod
 	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(fresh), &pod); !apierrors.IsNotFound(err) {
-		return errors.New("private executor absence is unconfirmed before first attempt")
+		return "", errors.New("private executor absence is unconfirmed before first attempt")
 	}
-	fresh.Status.PrivateHistory.ExecutorAttempted = true
-	fresh.Status.PrivateHistory.ExecutorIntent = string(uuid.NewUUID())
-	return r.writePrivateHistory(ctx, s, fresh)
+	if h.ExecutorAttempted {
+		h.ExecutorNotCreated = false
+	} else {
+		h.ExecutorAttempted = true
+		h.ExecutorIntent = string(uuid.NewUUID())
+	}
+	return h.ExecutorIntent, r.writePrivateHistory(ctx, s, fresh)
+}
+
+// recordExecutorNotCreated marks intent as a known non-attempt (DESIGN-019).
+// Call it only when this reconcile returned before calling Create for intent
+// because an observation failed. It is best effort: when the mark cannot be
+// written and confirmed, the attempt stays latched, as it was before.
+func (r *Reconciler) recordExecutorNotCreated(ctx context.Context, s *v1alpha1.AgentSession, intent string) {
+	if intent == "" {
+		return
+	}
+	fresh, err := r.privateHistorySession(ctx, s)
+	if err != nil {
+		return
+	}
+	h := fresh.Status.PrivateHistory
+	if h == nil || !h.ExecutorAttempted || h.ExecutorIntent != intent || h.ExecutorNotCreated || h.LastExecutor != nil {
+		return
+	}
+	h.ExecutorNotCreated = true
+	if err := r.writePrivateHistory(ctx, s, fresh); err != nil {
+		log.FromContext(ctx).Info("the private executor attempt stays latched: its non-attempt record is unconfirmed", "error", err.Error())
+		return
+	}
+	log.FromContext(ctx).Info("recorded a known non-attempt: no Pod create was called for the private executor intent", "intent", intent)
 }
 
 // Observe only uncached exact owners. Absence never erases an executor or turns
@@ -236,7 +271,7 @@ func (r *Reconciler) observePrivateHistory(ctx context.Context, s *v1alpha1.Agen
 	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &pod); err != nil {
 		if !apierrors.IsNotFound(err) {
 			obs.privateHistoryUnknown = errors.New("private executor observation is unconfirmed")
-		} else if s.Status.PrivateHistory.ExecutorAttempted {
+		} else if s.Status.PrivateHistory.ExecutorAttempted && !s.Status.PrivateHistory.ExecutorNotCreated {
 			obs.privateHistoryUnknown = errors.New("the recorded private executor is absent; absence cannot authorize a retry or prove stop")
 		}
 		return
@@ -249,6 +284,9 @@ func (r *Reconciler) observePrivateHistory(ctx context.Context, s *v1alpha1.Agen
 		return
 	}
 	h := s.Status.PrivateHistory
+	// An observed executor wins over a non-attempt mark: clear it, so the
+	// attempt is latched as usual and can never re-arm.
+	h.ExecutorNotCreated = false
 	if h.LastExecutor != nil && h.LastExecutor.PodUID != string(pod.UID) {
 		obs.privateHistoryUnknown = errors.New("private executor was replaced; original executor provenance remains retained")
 		return
