@@ -167,6 +167,18 @@ both the common and the repository marker. The
 [Codex original result record](sagas/distributed-dev-env/verification/codex-original-result-2026-10-12.md)
 has the details and what remains Unknown.
 
+**Counters update, Q-28, 2026-10-12.** The two counters paragraphs above are the
+original records. Tom answered Q-28, "Yes, after fixes deploy (Recommended)".
+After v2.24.1 deployed, one new Claude canary, `rule-canary-claude-1012`
+(Session `private-canary-6f090716f22b84cb55321a14338ccf30`, UID
+`de61708b-3dc5-45de-8a16-885c2bdc83a3`), ran one directory read, one Create, one
+named read and one result read, with no retries. Counters are now Directory
+**6**; Claude Create **2** (1011, 1012), Codex Create **1**; Claude named/result
+**2 each**; Codex named/result **1 each**. All three permanent IDs are consumed.
+Its output carried both markers. The
+[Claude canary 1012 record](sagas/distributed-dev-env/verification/claude-canary-1012-2026-10-12.md)
+has the details.
+
 ## Next bounded work and the six-step roadmap
 
 1. **Finish [#173](https://github.com/thaynes43/dev-env/issues/173).** Bootstrap and
@@ -186,6 +198,12 @@ has the details and what remains Unknown.
    What remains for #173: Claude's rule loading (unproven), genuine private
    GitHub access and worktrees, and a fresh task pin. No further Codex read,
    retry or Create is authorized.*
+   *Update, Q-28, 2026-10-12: Claude's rule loading is accepted too. After
+   v2.24.1 deployed, the one new Claude canary returned both markers
+   ([Claude canary 1012 record](sagas/distributed-dev-env/verification/claude-canary-1012-2026-10-12.md)),
+   so rule loading is accepted for both providers. What remains for #173:
+   genuine private GitHub authorization and worktrees, and a fresh task pin.
+   No further Claude or Codex read, retry or Create is authorized.*
 2. **[#174](https://github.com/thaynes43/dev-env/issues/174): history and discovery.**
    Finish provider-history retention, durable live/stopped/archived directory and
    authorized stopped-context reads. Prove reads without starting a model turn

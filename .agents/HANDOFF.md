@@ -7,6 +7,54 @@ the saga. To continue building, follow the
 in the Claude pickup brief. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## Claude rule canary 1012 under Q-28 — 2026-10-12 UTC
+
+Tom answered Q-28 through the Claude native prompt: "Yes, after fixes deploy
+(Recommended)" (owner answer receipt `daadc6b5`). It allows one new Claude rule
+canary, `rule-canary-claude-1012`, after the review fixes deploy: one create,
+one named read and one result read, with no retries.
+
+**Deploy first.** dev-env v2.24.1 (#228) shipped the fixes. The agent image is
+`2.24.1@sha256:f2713217…` and the operator is `sha-538c4f6@sha256:d706ee40…`.
+haynes-ops #3841 updated the AgentSession CRD. #3842 pinned the operator and
+template `2.24.1-7e04fb00dc` and replaced the `claude-1011` canary policy record
+with `claude-1012`; `codex-1011` stayed byte-identical. The post-check passed
+with every peer preserved.
+
+**The run.** One local `agent-run` built from tag v2.24.1. The directory read
+passed (Directory 5 to 6) and Create returned HTTP 201: Session
+`dev-agents/private-canary-6f090716f22b84cb55321a14338ccf30`, UID
+`de61708b-3dc5-45de-8a16-885c2bdc83a3`, at 18:13:54 UTC. The runner's wait then
+held after 40 seconds: it passed `--request-timeout` to kubectl, which in this pod
+skips the in-cluster config and dials `localhost:8080`. The wait makes no operator
+API call, so it spent nothing from Q-28. One reviewed correction (r2, 88 of 88
+offline tests) dropped the flag and replaced only the wait step. The new wait
+passed on its first poll: task result `Succeeded`, one turn. Then exactly one
+named read and one result read ran, with no retries.
+
+**The result.** The retained output is two lines,
+`Common marker: dev-env-common-rules-20261011-4ca29d70` and
+`Repository marker: dev-env-repository-rules-20261011-6d807bf2`. The runner's
+exact-text check is false only because Claude labelled each line; both marker
+values are exact. The prompt held neither marker and said not to use tools, so
+Claude loaded both rule sets in its private pod. Compliance with the no-tools
+line is unproven while full history is Unknown. Root acceptance `88909059`
+binds 115 receipt files. The
+[Claude canary 1012 record](sagas/distributed-dev-env/verification/claude-canary-1012-2026-10-12.md)
+has the details.
+
+**#173 status.** Rule loading is accepted for both providers: the Codex original
+and Claude canary 1012 both loaded the common and repository rules in private v2
+pods. Private GitHub authorization and a fresh task pin remain. Served model,
+usage, cost, full history, physical stop, capture completeness and tool-use
+compliance stay Unknown.
+
+Counters now: Directory 6; Claude Create 2 (1011, 1012), Codex Create 1; Claude
+named/result 2 each; Codex named/result 1 each. All three permanent IDs are
+consumed: `rule-canary-claude-1011`, `rule-canary-codex-1011` and
+`rule-canary-claude-1012`. No further read, retry, Create or cleanup is
+authorized. Q-24 is still pending. Older entries keep their original text.
+
 ## Q-29 ruling: coordination record retention, docs only — 2026-10-12
 
 Tom answered Q-29 through the Claude native prompt: "Archive, then delete
@@ -75,6 +123,8 @@ Served model, usage, cost, full history, physical stop, capture completeness,
 private GitHub authorization and a fresh task pin remain Unknown or unaccepted.
 Claude's rule loading is still unproven; its original returned a weekly-limit
 response.
+*Update: #222 shipped in v2.24.1 and was deployed, and a new Claude canary loaded
+both rule sets under Q-28; see the Q-28 entry at the top.*
 
 Counters now: Directory 5; Claude Create 1, Codex Create 1; Claude named/result
 1 each; Codex named/result 1 each. Both permanent IDs and both Q-27 reads are
@@ -199,6 +249,8 @@ consumed ID or substitute a paid API. Native saved review `c3ad5658` and Root
 named and result reads are consumed; no polling, logs, repost, replacement or
 rearm follows. Next Codex preparation must account for the exact existing
 original on a fresh Directory page before its first Create.
+*(Update: under Q-28 a new Claude canary, `rule-canary-claude-1012`, returned both
+markers; this original's ID stays consumed. See the Q-28 entry at the top.)*
 *(Historical: that Codex preparation and Create followed at 06:47:25 UTC; see the
 entry above.)*
 
@@ -1839,6 +1891,7 @@ DESIGN-001 section 15; later rows link their own record. This heading first read
 | Q-25 | **No decision needed.** The local schema-host DNS route stopped after three attempts. Shipping uses hosted CI and saved real-API schema evidence; no DNS investigation or retry ([installation record](sagas/distributed-dev-env/verification/installation-2026-10-11.md#owner-questions-and-stopped-checks)). |
 | Q-26 | **Answered 2026-10-11:** "Allow one correction (Recommended)". One final R4 checker correction ran and Ops #3824 activation was accepted. No R5, alternate method or retry ([fixed-rule activation record](sagas/distributed-dev-env/verification/fixed-rule-activation-2026-10-11.md), [DESIGN-021](sagas/distributed-dev-env/designs/021-canary-cli.md)). |
 | Q-27 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Fix once, then read (Recommended)". One offline correction of the Codex reader preparation, with a fixed list of already accepted evidence, focused tests and independent review. Then exactly one named read and one result read of the Codex original. No retries and no counter reset ([Codex probe record](sagas/distributed-dev-env/verification/codex-fixed-rule-probe-2026-10-12.md#q-27-one-final-reader-preparation-correction)). Carried out 2026-10-12: both reads ran once and returned both markers ([result record](sagas/distributed-dev-env/verification/codex-original-result-2026-10-12.md)). |
+| Q-28 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Yes, after fixes deploy (Recommended)" (other options: "Yes, run it now", "Not now"; owner answer receipt `daadc6b5`). Question: "Codex's canary passed: it loaded both the common and the repository rules in its private pod. Claude's single canary only returned a weekly-limit error, so Claude's rule loading in a v2 pod is still unproven, and its ID is used up. May I run one new Claude canary? It needs a new fixed ID in the operator config in haynes-ops (a rolling operator update that keeps running sessions), then one create, one named read and one result read, with no retries." Allows one new canary `rule-canary-claude-1012`, run only after the review fixes deploy; no retries, no reuse of the 1011 ID, no quota or credential repair, no paid or model fallback, no cleanup. Carried out 2026-10-12 after v2.24.1 deployed: both markers returned, Root acceptance `88909059` ([Claude canary 1012 record](sagas/distributed-dev-env/verification/claude-canary-1012-2026-10-12.md), README decision 63). |
 | Q-29 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Archive, then delete (Recommended)". Coordination records are released 30 days after the Sessions they depend on are first proved absent, archived first to a shelf-only volume and kept there indefinitely, then deleted by a leader-only operator runnable; reads fall back to the archive. Amends DESIGN-010's no-release rule in the reap case only. Private Sessions are never absent until a HOME expiry policy exists (plan 11 follow-up F1). [ADR-004](sagas/distributed-dev-env/adrs/004-coordination-record-retention.md), [DESIGN-024](sagas/distributed-dev-env/designs/024-coordination-record-retention.md), README decision 62. |
 
 **Next (historical, 2026-10-08; the current order is the pickup brief's

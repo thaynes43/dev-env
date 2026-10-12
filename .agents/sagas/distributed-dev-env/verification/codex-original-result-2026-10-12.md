@@ -124,6 +124,10 @@ or cost.
 - Claude's rule loading. Its original returned a weekly-limit response, which
   neither proves nor disproves loading.
 
+*Update, 2026-10-12: under Q-28 a new Claude canary returned both markers; see
+the [Claude canary 1012 record](claude-canary-1012-2026-10-12.md). The list
+above is the original record.*
+
 ## Counters
 
 Directory 5. Claude Create 1, Codex Create 1. Claude named and result reads 1

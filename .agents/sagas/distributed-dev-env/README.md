@@ -9,6 +9,24 @@ below are historical; they do not reauthorize old next steps or reset counters.
 *Update: Q-27 was answered later on 2026-10-12; see the next paragraph.*
 *Update: both Codex reads then ran and returned both markers; see the #173
 paragraph after the Q-27 ruling.*
+*Update: Claude's rule loading was accepted later on 2026-10-12 under Q-28; see
+the next paragraph.*
+
+**#173 Claude rule markers accepted under Q-28, 2026-10-12.** Tom answered Q-28
+through the Claude native prompt: "Yes, after fixes deploy (Recommended)" (decision
+63). After dev-env v2.24.1 was deployed (haynes-ops #3841 and #3842), one new Claude
+canary, `rule-canary-claude-1012`, ran with one create, one named read and one
+result read, and no retries. The runner's first wait held on a kubectl flag; one
+reviewed correction replaced only that read-only step. The retained output carries
+the common and the repository marker, each behind a label, and the prompt held
+neither. So both providers have now loaded the common and repository rules in
+private v2 pods. The
+[Claude canary 1012 record](verification/claude-canary-1012-2026-10-12.md) binds
+Root acceptance `88909059`. Private GitHub authorization and a fresh task pin
+remain for #173; served model, usage, cost, full history, physical stop and
+capture completeness stay Unknown. Counters: Directory 6; Claude Create 2, Codex
+Create 1; Claude named and result reads 2 each, Codex 1 each. Nothing further is
+authorized.
 
 **Q-27 answered, 2026-10-12.** Tom answered through the Claude native prompt:
 "Fix once, then read (Recommended)". The ruling allows one offline correction of
@@ -34,6 +52,8 @@ capture completeness, private GitHub authorization and a fresh task pin remain
 Unknown or unaccepted. Claude's rule loading is still unproven, so actual
 both-provider rules and the #173 MVP stay open. Counters: Directory 5; Create 1
 each; named and result reads 1 each per provider. Nothing further is authorized.
+*(Update: Claude's rule loading was accepted under Q-28; see the Q-28 paragraph
+above.)*
 
 The [original Codex probe record](verification/codex-fixed-rule-probe-2026-10-12.md)
 records 16 passing offline checks, independent full review and one program that
@@ -354,13 +374,14 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 60 | Q-27: one final Codex reader-preparation correction | **DECIDED** 2026-10-12 (Tom, through the Claude native prompt) | "Fix once, then read (Recommended)". One offline correction with a fixed list of already accepted evidence, focused tests and independent review; then exactly one named read and one result read of the Codex original. No retries and no counter reset ([Codex probe record](verification/codex-fixed-rule-probe-2026-10-12.md#q-27-one-final-reader-preparation-correction)). |
 | 61 | D-86: `agent-run` exit 6 for unconfirmed one-shot requests | **DECIDED** 2026-10-12 (agent, #174 review findings history-06 and its follow-up) | Amends D-50 (row 34), whose codes ran 0 to 5. A one-shot request (`msg`, `canary create`, a `--once` read) that was sent and got no confirmed answer (a lost answer, stop, any 5xx, an unreadable receipt) exits 6 and is not repeated; a message or create may have taken effect. It exits 5 only when nothing was sent: no token, no port-forward, or a connection that was never made. A 429 to one exits 1 ([DESIGN-001 3.5](designs/001-dev-env-v2.md#35-agent-run-v2), [DESIGN-021 amendment](designs/021-canary-cli.md)). |
 | 62 | Q-29: coordination record retention | **DECIDED** 2026-10-12 (Tom, through the Claude native prompt) | "Archive, then delete (Recommended)". A TaskClaim, PublishedContext or InboxMessage (with its ack) is released 30 days after the Sessions it depends on are first proved absent by uncached reads. It is archived first (full object and SHA-256 manifest, on a new RWO volume only the shelf pod mounts, kept indefinitely); a leader-only operator runnable verifies the archive and deletes with UID and resourceVersion preconditions. Reads fall back to the archive (`archived: true`, 503 without a shelf). Per-Session bounds stay lifetime, project bounds count live records, 80% alert. Amends DESIGN-010's no-release rule in the reap case only. Known gap: private Sessions are never absent until a HOME expiry policy exists (DESIGN-008), plan 11 follow-up F1 ([ADR-004](adrs/004-coordination-record-retention.md), [DESIGN-024](designs/024-coordination-record-retention.md)). |
+| 63 | Q-28: one new Claude rule canary | **DECIDED** 2026-10-12 (Tom, through the Claude native prompt) | Question: "Codex's canary passed: it loaded both the common and the repository rules in its private pod. Claude's single canary only returned a weekly-limit error, so Claude's rule loading in a v2 pod is still unproven, and its ID is used up. May I run one new Claude canary? It needs a new fixed ID in the operator config in haynes-ops (a rolling operator update that keeps running sessions), then one create, one named read and one result read, with no retries." Options: "Yes, after fixes deploy (Recommended)", "Yes, run it now", "Not now". Answer: "Yes, after fixes deploy (Recommended)" (owner answer receipt `daadc6b5`). One new canary `rule-canary-claude-1012`, added through a reviewed haynes-ops PR and run only after the review fixes deploy; exactly one create, one named read and one result read; no retries, no reuse of the 1011 ID, no quota or credential repair, no paid or model fallback, no cleanup. Carried out 2026-10-12 after v2.24.1 deployed: both markers returned and Root acceptance `88909059` accepted them ([Claude canary 1012 record](verification/claude-canary-1012-2026-10-12.md)). |
 
 The full options, consequences and rulings for Q-01 to Q-16, and the premise
 corrections withdrawing Q-17 and Q-18, plus Q-19's first owner CA provisioning
 step, are in
 [DESIGN-001 section 15](designs/001-dev-env-v2.md#15-open-questions). Q-20 to Q-23
-are there too. Q-24 to Q-27 link their own records in rows 57 to 60, and Q-29
-links ADR-004 in row 62.
+are there too. Q-24 to Q-27 link their own records in rows 57 to 60, Q-29
+links ADR-004 in row 62, and Q-28 links its result record in row 63.
 
 
 ## Plan backlog
