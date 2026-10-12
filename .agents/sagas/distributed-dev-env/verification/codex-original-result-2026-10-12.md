@@ -24,8 +24,8 @@ All receipts are under
 - Preparation result `47f67bf4` passed. It binds contract `119f225e`, a fixed
   evidence list `d65e8978` of 32 entries and frozen inputs `0953951b`.
 - 23 focused tests passed with no failures or errors (`06318647`).
-- Independent native review passed both plan gates: named read `9fa825de` and
-  result read `60cf3dfa`.
+- Independent native review passed both plan gates before the reads: named read
+  `9fa825de` and result read `60cf3dfa`. These gates reviewed the plans only.
 - The r1 drafts, the three failed attempts and every earlier receipt are
   unchanged.
 
@@ -39,8 +39,10 @@ deletionTimestamp. The operator ran `sha-cd966d1@cc03ae82`.
 
 | Read | Client | Return code | Time | Finished (UTC) | Retries |
 | --- | --- | --- | --- | --- | --- |
-| Named Session | D23 | 0 | 0.07 s | 15:55:52 | none |
-| Fixed result | D22 | 0 | 0.12 s | 15:56:02 | none |
+| Named Session | [DESIGN-023](../designs/023-named-session-cli-once.md) | 0 | 0.07 s | 15:55:52 | none |
+| Fixed result | [DESIGN-022](../designs/022-fixed-canary-result-reader.md) | 0 | 0.12 s | 15:56:02 | none |
+
+The receipts call these clients D23 and D22.
 
 The named read bound the retained executor Pod UID
 `f76228d3-b104-4b21-97e8-0f8aff173591` and derived the ordinal-zero context name.
@@ -66,21 +68,45 @@ dev-env-repository-rules-20261011-6d807bf2
 
 The first line is the common marker. It sits in the bound common source,
 `dev-env-config-claude` key `CLAUDE.md`. The second line is the repository
-marker. It has been in this repo's `CLAUDE.md` since `d5433b3` (#196), which is an
-ancestor of the task head `9eeb066c` the Session reports. So the Codex original
-loaded both the common rules and the repository rules in its private pod.
+marker. It has been in this repo's `AGENTS.md`, which Codex loads, and in
+`CLAUDE.md` since `d5433b3` (#196). That commit is an ancestor of the task head
+`9eeb066c` the Session reports. The Root receipt names `CLAUDE.md` only. So the
+Codex original loaded both the common rules and the repository rules in its
+private pod.
+
+This meets the DESIGN-011 bar: the provider output carries both markers and the
+prompt carries neither. The prompt also said "Do not use tools or fetch files".
+While full native history is Unknown, compliance with that line is unproven, so
+a tool read of the rule files cannot be excluded.
 
 Root acceptance receipt `48637874` records verdict
 `ACCEPTED_CODEX_ORIGINAL_RULE_MARKERS`. It binds every receipt above by path and
 SHA256 and is saved beside them as `root-codex-original-result-acceptance-r2.json`.
+
+## Review after the reads
+
+Root accepted the markers on its own checks. No independent review followed the
+reads before that, and the Root receipt does not say so. The bound
+`CONTRACT.md` ("Limits that remain") expected provider rule loading to stay
+Unknown after both reads. Both saved candidates still carry state
+`…_CANDIDATE_ONLY_AWAITING_INDEPENDENT_REVIEW`, with `markerAcceptance` and
+`providerRulePass` Unknown. The original candidate files are kept as written.
+
+The independent native review of this record's PR (#227) is the review after the
+reads. It rechecked all 33 Root bindings, the recomputed result text, both UIDs,
+the live ConfigMap identities, the marker sources, the ancestry and the
+counters. It found no factual error and supports the marker acceptance; its
+seven findings were documentation fixes, all made on #227. Its receipt is
+`review/post-read-independent-review-r2.json`, SHA256 `6c9a5fe1`.
 
 ## What the named read also shows
 
 The task exited 0 with subtype `success` after one turn, at 06:47:53 UTC, about
 28 seconds after Create. The Session still reads phase `Failed`. Its Pod ended
 later on `DeadlineExceeded` and kept its volume. The phase comes from the Pod
-deadline, not the task result. That is finding history-04; its fix is in branch
-`agent/fix-canary-outcome-1012` (draft PR #222 when this was written).
+deadline, not the task result. That is finding history-04; a fix is proposed in
+branch `agent/fix-canary-outcome-1012` (draft PR #222, unmerged when this was
+written).
 
 The Session DTO also carries provider-reported token counts for the first managed
 invocation. They are source assertions. They are not accepted as charged usage

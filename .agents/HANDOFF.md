@@ -10,18 +10,25 @@ the historical work order for the first build session.
 ## Codex original result read under Q-27 — 2026-10-12 UTC
 
 The one Q-27 reader correction passed 23 focused tests and independent native
-review. Then exactly one named read (15:55:52 UTC) and one fixed result read
-(15:56:02 UTC) ran, with no retries. The Codex original's retained output is
-exactly two lines: the common marker and the repository marker. So Codex loaded
-both rule sets in its private pod. Root acceptance `48637874` binds the receipts;
-the [Codex original result record](sagas/distributed-dev-env/verification/codex-original-result-2026-10-12.md)
+review of both read plans. Then exactly one named read (finished 15:55:52 UTC)
+and one fixed result read (finished 15:56:02 UTC) ran, with no retries. The
+Codex original's retained output is exactly two lines: the common marker and the
+repository marker. The prompt held neither marker and said not to use tools, so
+Codex loaded both rule sets in its private pod. Compliance with the no-tools line
+is unproven while full history is Unknown.
+
+Root acceptance `48637874` binds the receipts. Root accepted on its own checks;
+no independent review followed the reads until the native review of PR #227,
+which supports the acceptance (receipt `6c9a5fe1`). The
+[Codex original result record](sagas/distributed-dev-env/verification/codex-original-result-2026-10-12.md)
 has the details.
 
 The task exited 0 after one turn, but the Session reads `Failed` because its Pod
-later hit the deadline (finding history-04, fix in draft PR #222). Served model,
-usage, cost, full history, physical stop, capture completeness, private GitHub
-authorization and a fresh task pin remain Unknown or unaccepted. Claude's rule
-loading is still unproven; its original returned a weekly-limit response.
+later hit the deadline (finding history-04; a fix is proposed in draft PR #222).
+Served model, usage, cost, full history, physical stop, capture completeness,
+private GitHub authorization and a fresh task pin remain Unknown or unaccepted.
+Claude's rule loading is still unproven; its original returned a weekly-limit
+response.
 
 Counters now: Directory 5; Claude Create 1, Codex Create 1; Claude named/result
 1 each; Codex named/result 1 each. Both permanent IDs and both Q-27 reads are
@@ -94,7 +101,8 @@ uncertain lifecycle receipts remain preserved. Q-24, actual both-provider rules
 and the owner pilot remain open; Claude advisory is optional/down. Earlier
 entries below are historical and must not restore zero-Create or unstarted IDs.
 *Historical: Q-27 was answered later on 2026-10-12; see the ruling at the top.*
-*Update: both Codex reads then ran and returned both markers; see the top entry.*
+*Update: both Codex reads then ran and returned both markers; see the top entry.
+The Q-27 ruling is now the second entry.*
 
 ## First original Claude canary and released ownership seam — 2026-10-12 UTC
 

@@ -141,6 +141,14 @@ Do not erase the old receipts or turn their original HOLD into a PASS.
 | Claude | `rule-canary-claude-1011`; Session `private-canary-fc5935c175c6fc15f842b051bf85aa8d`; UID `45a614cb-f537-441e-a5c1-33b66a285521`; original201 at 05:28:22 UTC / 01:28:22 EDT. Create, named read and fixed result read are consumed. | Saved task Failed/exit1; retained 49-byte weekly-limit response. It does not prove instructions were absent. Served model, cost, physical stop, full native history and capture completeness remain unaccepted/Unknown. A reported reset time is not current readiness proof. |
 | Codex | `rule-canary-codex-1011`; Session `private-canary-3bfe28755095977c9462c269cc24dee3`; UID `f0396ab3-1abf-41bf-be4e-93ce0e43608b`; original201 at 06:47:25 UTC / 02:47:25 EDT. Create is consumed; named/result reads are zero. | Native saved review `c3bcc13b` and Root `f189f079` accept original identity only. Executor, provider output, loaded rules, served model, quota, history, stop and usage/cost remain Unknown. Reader preparation is stopped, untested and inert under Q-27. |
 
+*Update, 2026-10-12: the Codex row above is the original record. Under Q-27 the
+reader correction passed, and the one named read and one result read ran. The
+retained output returned both rule markers, so loaded common and repository rules
+are accepted for the Codex original. Served model, usage, cost, full history,
+physical stop, capture completeness, private GitHub authorization and a fresh
+task pin stay Unknown or unaccepted. See the
+[Codex original result record](sagas/distributed-dev-env/verification/codex-original-result-2026-10-12.md).*
+
 Global counters: Directory **5**; Claude Create **1**, Codex Create **1**;
 Claude named/result **1 each**; Codex named/result **0 each**. Both permanent IDs
 are consumed. Never repost, change key, rearm, replace, poll or clean up an original.
@@ -172,6 +180,12 @@ has the details and what remains Unknown.
    Claude's quota result requires a separately authorized future trial if needed;
    its consumed ID cannot be retried. Genuine private GitHub access/worktrees and
    actual loaded common/repository rules remain acceptance gaps.
+   *Update, 2026-10-12: the Codex reader unit is done. Q-27 was answered, the one
+   correction passed, and both Codex reads ran once and returned both markers
+   ([result record](sagas/distributed-dev-env/verification/codex-original-result-2026-10-12.md)).
+   What remains for #173: Claude's rule loading (unproven), genuine private
+   GitHub access and worktrees, and a fresh task pin. No further Codex read,
+   retry or Create is authorized.*
 2. **[#174](https://github.com/thaynes43/dev-env/issues/174): history and discovery.**
    Finish provider-history retention, durable live/stopped/archived directory and
    authorized stopped-context reads. Prove reads without starting a model turn
