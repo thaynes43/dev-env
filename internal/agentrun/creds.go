@@ -75,6 +75,9 @@ type conn struct {
 	url   string
 	token tokenSource
 	http  *http.Client
+	// Explicit once reads must reject an oversized body before JSON decoding
+	// can turn a truncated valid prefix into an apparently complete value.
+	rejectOversizeResponse bool
 }
 
 // connOpts are the connection flags.

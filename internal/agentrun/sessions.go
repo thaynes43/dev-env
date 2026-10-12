@@ -101,6 +101,18 @@ func note(s apiv1.Session) string {
 
 func (a *app) show(ctx context.Context, args []string) error {
 	cmd := newCommand("show", outputJSON)
+	var once, asJSON bool
+	cmd.fs.BoolVar(&once, "once", false, "")
+	cmd.fs.BoolVar(&asJSON, "json", false, "")
+	onceFlags, jsonFlags := 0, 0
+	for _, arg := range args {
+		if arg == "--once" || arg == "-once" || strings.HasPrefix(arg, "--once=") || strings.HasPrefix(arg, "-once=") {
+			onceFlags++
+		}
+		if arg == "--json" || arg == "-json" || strings.HasPrefix(arg, "--json=") || strings.HasPrefix(arg, "-json=") {
+			jsonFlags++
+		}
+	}
 	pos, err := cmd.parse(a, args)
 	if err != nil {
 		return err
@@ -108,9 +120,18 @@ func (a *app) show(ctx context.Context, args []string) error {
 	if len(pos) != 1 {
 		return usageError("show takes one session name; agent-run list shows them")
 	}
+	if onceFlags != 0 && (onceFlags != 1 || jsonFlags != 1 || !once || !asJSON || !canaryName.MatchString(pos[0])) {
+		return usageError("show --once requires one valid DNS-label session name and explicit --json --once")
+	}
+	if asJSON {
+		cmd.c.output = outputJSON
+	}
 	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
 		return err
+	}
+	if once {
+		return a.showOnce(ctx, c, pos[0])
 	}
 	var s apiv1.Session
 	if _, err := a.call(ctx, c, http.MethodGet, apiv1.SessionPath(url.PathEscape(pos[0])), nil, nil, &s); err != nil {

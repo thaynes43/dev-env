@@ -112,9 +112,16 @@ func (a *app) send(ctx context.Context, c *conn, method, target string, payload 
 		return 0, nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
+	limit := int64(maxResponse)
+	if c.rejectOversizeResponse {
+		limit++
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
 		return 0, nil, err
+	}
+	if c.rejectOversizeResponse && len(raw) > maxResponse {
+		return 0, nil, fail(ExitFailed, "the API response exceeds the %d-byte limit", maxResponse)
 	}
 	return resp.StatusCode, raw, nil
 }
