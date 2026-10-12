@@ -176,6 +176,108 @@ recorded `to` target that passes the full post-create proof, which now includes
 its symlinks. A changed target, dirty or staged files, or a moved HEAD stay
 preserved, and the project reports `Failed`.
 
+## Reason codes: diagnosis without exec
+
+Added 2026-10-12 after the Q-30 canary. That bootstrap ended `Partial`, and the
+only signals outside the pod were the boot problem
+`project-bootstrap: fail: catalog bootstrap outcome Partial` and "inspect its
+private report". The report sits in the session's private home, so finding the
+cause took an exec into the pod or a reading of the code. This section makes a
+failed or partial bootstrap diagnosable from the AgentSession and
+`agent-run show`, without exec and without publishing private data.
+
+**What is published.** Only catalog names (repository and project names, which
+the accepted catalog already holds), states, step names and reason codes from a
+closed set. Never a path, a commit or object id, a URL, an error message or any
+other detail text. The private report keeps its detail text as before and
+gains the same codes.
+
+**Repository reasons.** Each `PrivateProjectSource` gains `step` and `reason`.
+`state` stays `Ready` or `Preserved`. `step` is where the refresh stopped:
+`Clone`, `Inspect` (layout, identity and Git operation proof before the fetch),
+`Fetch` or `Advance` (the clean-view proof and the fast-forward). A Ready
+repository has neither. The reason codes:
+
+| Reason | The refresh stopped because |
+|---|---|
+| `CloneFailed` | the bounded clone attempts failed; nothing was staged |
+| `StagingPreserved` | a clone staging directory exists, from this or an earlier attempt, and is kept for inspection |
+| `ReferenceUncertain` | the clone path, its `.git`, ref storage, common Git directory or root does not prove, or the fetch destination is symbolic |
+| `IdentityMismatch` | an origin fetch or push URL is not the catalog repository |
+| `GitOperationPresent` | a merge, rebase, cherry-pick, revert, bisect, sequencer or Git lock is present |
+| `CatalogUnconfirmed` | the accepted catalog changed or could not be confirmed before a mutation |
+| `FetchFailed` | the fetch of the default branch failed, or its commit is unavailable |
+| `UntrackedFiles` | untracked or ignored files are present |
+| `UnsupportedTrackedEntry` | a tracked entry is a conflict, a submodule or another unsupported mode, has nonordinary flags (assume-unchanged, skip-worktree), or its name or object format cannot be proved |
+| `IndexBoundExceeded` | the index has more than 10,000 entries |
+| `WorkingTreeDiffers` | a tracked file is missing, or its mode or content differs from the index |
+| `StagedChanges` | the index differs from HEAD |
+| `NonDefaultBranch` | the checkout is detached or on another branch |
+| `BranchInOtherWorktree` | the default branch is checked out in another worktree |
+| `LocalOnlyCommits` | HEAD has commits outside the fetched default branch |
+| `ChangedDuringProof` | the checkout changed between the two clean-view proofs |
+| `AdvanceFailed` | the fast-forward itself failed |
+| `TimedOut` | the two-minute repository budget ended first |
+| `Uncertain` | a Git command failed or answered something the proof cannot read |
+
+**Project root reasons.** Each `PrivateProjectRootReport` (DESIGN-007) gains
+`reason`, and, when one member repository is the cause, `repository` (its
+catalog name) and `cause` (a repository reason from the table above):
+
+| Reason | The root refresh stopped because |
+|---|---|
+| `StateUncertain` | the private root state or `$HOME/codex` directory is unavailable |
+| `ReceiptUnconfirmed` | the operation record, pending record or receipt could not be written, read back or removed |
+| `CatalogUnconfirmed` | the accepted catalog changed or could not be confirmed |
+| `RootUnproven` | the root, its receipt or its pending record does not prove (DESIGN-007 ownership and clean state) |
+| `AnchorRemoved` | the root holds an anchor the catalog no longer declares; it is preserved |
+| `RepositoryNotReady` | a member reference does not prove (identity, layout or Git operation) before its fetch |
+| `FetchFailed` | a member fetch, or the prefetch of an anchor's fast-forward, failed |
+| `AnchorNotFastForward` | an anchor's recorded commit is not an ancestor of the new target |
+| `RootPrepareFailed` | the generated rules commit, the unpublished root's staging or its publication failed |
+| `AnchorAddFailed` | `git worktree add` of a new anchor failed |
+| `AnchorUnproven` | an anchor does not prove clean, detached and owned; `cause` says why when the clean-checkout proof refused |
+| `AnchorAdvanceFailed` | an anchor's fast-forward failed |
+| `RootAdvanceFailed` | the root's fast-forward, wrapper modes or exclusion write failed |
+| `BudgetReserve` | less than the step reserve was left before a mutating step (DESIGN-007) |
+| `TimedOut` | the root's two-minute budget ended first |
+
+A root whose member reference is `Preserved` is still refreshed. Its anchors
+are detached worktrees at the fetched target, so an owner's work in the
+reference checkout does not make the root unsafe, and skipping it would cut
+today's capability. The anchor proof decides; the Q-30 canary root reports
+`AnchorUnproven` with the symlinked repository and `UnsupportedTrackedEntry`.
+
+**Catalog reasons.** The report gains `reason` when its state is `Failed`:
+`ConfigInvalid`, `StateUncertain`, `LockUnavailable`, `ReportUnretained`,
+`CatalogUnconfirmed`, `CatalogInvalid`, `OwnerMismatch` or `TimedOut` (the
+ten-minute operation budget). A `Partial` or `Ready` report has none; its
+items carry the reasons.
+
+**Boot step.** The `project-bootstrap` step's first note becomes a compact
+summary of the items that are not Ready, which the existing
+`status.agent.problems` line already carries:
+`catalog bootstrap outcome Partial: sigoalumni-org=UnsupportedTrackedEntry; project sigo-alumni=AnchorUnproven@sigoalumni-org(UnsupportedTrackedEntry)`.
+A Failed report reads `catalog bootstrap outcome Failed: CatalogUnconfirmed`.
+The summary is at most 224 bytes and ends `+N more` when items do not fit.
+It contains no `/`, no hexadecimal object id and no detail text.
+
+**Status and AgentSession.** agentd keeps the summary in its boot record.
+`protocol.Status` gains `projectBootstrap`: `state`, `reason`,
+`catalogRevision` (the catalog content digest that task sources already
+report), `repositories[]` of `{name, state, step, reason}` and `projects[]` of
+`{name, state, reason, repository, cause}`. The heartbeat copies it to
+`status.agent.projectBootstrap`. The CRD validates every state, step and reason
+as an enum, every name by the catalog name pattern and a 63-byte limit, the
+revision as 64 lowercase hex, and the lists at the catalog limits (128
+repositories, 64 projects). The API server copies only known values: an
+unknown code is dropped rather than failing the heartbeat, so a newer agentd
+never stalls an older operator's status. `agent-run show` prints one
+`project bootstrap` row and one row per item that is not Ready.
+
+The CRD changes, so haynes-ops must get the new `config/crd/` copy before the
+operator pin that needs it; a stale copy prunes the field silently.
+
 ## Affected paths
 
 - `internal/agentd/projects.go` and private bootstrap implementation: catalog
