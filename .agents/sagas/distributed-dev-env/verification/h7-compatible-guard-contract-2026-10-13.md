@@ -42,6 +42,11 @@ trusted identity. Missing proof narrows the claim; it does not authorize a v1
 permission reduction. Preserve Q-33's personal Kubernetes account separately
 from Headlamp and the later exact-user owner-override policy.
 
+The existing identity guard exempts `dev-env-workbench`. The new archive policy
+must refuse its direct protected requests, but cannot claim transitive borrowing
+isolation for it. That application is not currently deployed; a future workbench
+delivery must review this archive boundary, as DESIGN-024 already requires.
+
 ## Controller proof and resource coverage
 
 Use the actual Kyverno 1.19.1 ValidatingPolicy engine, Fail/Deny, no background
