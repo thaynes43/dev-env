@@ -41,11 +41,16 @@ type historyRig struct {
 // log, and a GitHub token outside HOME.
 func newHistoryRig(t *testing.T) *historyRig {
 	t.Helper()
-	base := t.TempDir()
+	return newHistoryRigAt(t, t.TempDir())
+}
+
+// The caller owns a new private base directory; this never copies a real HOME.
+func newHistoryRigAt(t *testing.T, base string) *historyRig {
+	t.Helper()
 	home := filepath.Join(base, "home")
 	creds := filepath.Join(base, "creds")
 	for _, d := range []string{home, creds} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
+		if err := os.MkdirAll(d, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -125,10 +130,10 @@ func (r *historyRig) claudeFixture(t *testing.T) {
 	// Links: render's CLAUDE.md and the shared memory link (DESIGN-001 6.6).
 	r.mkdir(t, ".shared/memory/x")
 	r.write(t, "config/CLAUDE.md", "rules\n")
-	if err := os.Symlink(r.path("config/CLAUDE.md"), r.path(".claude/CLAUDE.md")); err != nil {
+	if err := os.Symlink("../config/CLAUDE.md", r.path(".claude/CLAUDE.md")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(r.path(".shared/memory/x"), r.path(".claude/projects/-home-dev-work-x/memory")); err != nil {
+	if err := os.Symlink("../../../.shared/memory/x", r.path(".claude/projects/-home-dev-work-x/memory")); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -12,6 +12,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"slices"
@@ -60,6 +61,23 @@ func TestMain(m *testing.M) {
 }
 
 func run(m *testing.M) int {
+	flag.Parse()
+	measureOnly, err := historyMeasurementOnly(os.Getenv("DEV_ENV_HISTORY_RELAY_MEASURE_ONLY"), flag.Lookup("test.run").Value.String())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "history measurement:", err)
+		return 2
+	}
+	if measureOnly {
+		if err := historyMeasurementFlags(flag.CommandLine); err != nil {
+			fmt.Fprintln(os.Stderr, "history measurement:", err)
+			return 2
+		}
+		if err := errors.Join(clientgoscheme.AddToScheme(scheme), v1alpha1.AddToScheme(scheme)); err != nil {
+			fmt.Fprintln(os.Stderr, "scheme:", err)
+			return 1
+		}
+		return m.Run()
+	}
 	b, err := os.ReadFile("../templates/testdata/templates.yaml")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -92,6 +110,32 @@ func run(m *testing.M) int {
 		return 1
 	}
 	return m.Run()
+}
+
+// This escape from envtest is only for the fake-exec measurement. Other tests
+// must never silently run without the API server their fixtures require.
+func historyMeasurementOnly(optIn, selector string) (bool, error) {
+	if optIn == "" {
+		return false, nil
+	}
+	if optIn != "1" || selector != "^TestHistoryRelayMeasure$" {
+		return false, errors.New("DEV_ENV_HISTORY_RELAY_MEASURE_ONLY=1 requires -test.run=^TestHistoryRelayMeasure$")
+	}
+	return true, nil
+}
+
+func historyMeasurementFlags(fs *flag.FlagSet) error {
+	for _, name := range []string{"test.bench", "test.fuzz", "test.list", "test.cpu", "test.skip"} {
+		if f := fs.Lookup(name); f != nil && f.Value.String() != "" {
+			return fmt.Errorf("measurement-only mode refuses -%s", name)
+		}
+	}
+	for _, name := range []string{"test.count", "test.parallel"} {
+		if f := fs.Lookup(name); f == nil || f.Value.String() != "1" {
+			return fmt.Errorf("measurement-only mode requires -%s=1", name)
+		}
+	}
+	return nil
 }
 
 // setup creates what haynes-ops provides: the namespaces, the PriorityClass (the
