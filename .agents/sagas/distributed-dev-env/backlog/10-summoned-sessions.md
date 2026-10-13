@@ -6,10 +6,12 @@ register), 07 (the broker; `ops` sessions' grants go to Tom); spike S-16 (plan u
 **Parallel with:** 04, 08
 
 **Proposed scope addition (2026-10-12):** [maintenance-aware response and scoped
-alert mutes](../requirements/2026-10-12-maintenance-aware-response.md). Size this
-against existing Activity, claims and dispatch before automated-caller migration;
-keep the current provider-rule/parity milestone moving. No runtime permission is
-granted by the requirements record.
+alert mutes](../requirements/2026-10-12-maintenance-aware-response.md), including
+shared operator visibility for Tom and Meatball. Size this against existing
+Activity, claims and dispatch before automated-caller migration. Core supported
+API/MCP discovery and authorized control follow the existing coordination roadmap;
+the later web UI consumes the same contracts. Keep the current provider-rule/parity
+milestone moving. No runtime permission is granted by the requirements record.
 
 ## Goal
 
