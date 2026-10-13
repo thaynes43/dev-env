@@ -748,11 +748,12 @@ sections above leave open:
 - **The archive timer's start.** With `--enable-home-history-archive` on, a
   private Session's recorded executor that ended, with its terminal record
   confirmed, counts as no Pod of the Session's own for `status.suspendedAt`
-  (D-62): it never runs again. Canary originals never enter the expiry, so
-  theirs keeps today's rule. So a Suspended Session whose executor was evicted
+  (D-62): it never runs again. So a Suspended Session whose executor was evicted
   is triggered at its deadline while the ended Pod object stands. With the flag
   off nothing changes: the timer starts only once the Pod is gone, as before.
-  `archiveDue` and the trigger share one deadline function, `archiveDeadline`.
+  Canary originals never enter the expiry, so their timer keeps that rule with
+  the flag on too. `archiveDue` and the trigger share one deadline function,
+  `archiveDeadline`.
 - **The condition** `HomeExpiry` has the phase as its reason, or `Held`,
   `Refused`, `Unknown` (status Unknown), `HoldPodStarting` or `RescueFailed`, and
   names `dueAt`, the archive entry and the refusal.
@@ -1756,9 +1757,9 @@ status itself.
   only with a newer `expiryClearedAt` in the same write, but not from `Deleting`
   on; `expiryClearedAt` is never removed and never moves back, so a write that
   drops the record and it, as an older operator's does, is refused. An update
-  that drops the terminal record is always refused. A reconcile that rebuilds `lastExecutor` (a new node name or
-  generation) keeps `executorTerminal` unchanged, and the status write
-  succeeds.
+  that drops the terminal record is always refused. A reconcile that rebuilds
+  `lastExecutor` (a new node name or generation) keeps `executorTerminal`
+  unchanged, and the status write succeeds.
 - **T17, the flags.** Delete off: Sessions stop at `Archived`. Delete on without
   archive or reads: the operator refuses to start.
 
@@ -1785,9 +1786,10 @@ relay, `TestHistoryRelayMeasure`, in the dev-env pod under `nice -n 19` and
 
 The heap column counts objects not yet swept, so it includes garbage. With
 `GOMEMLIMIT=40MiB`, which makes the collector run as often as it can, the
-15.8 MiB plan peaked at 81 MiB of heap and 77 MiB of RSS: about its live set. Before the streaming canonical encoder, the 22.6 MiB plan
-peaked at 355 MiB of RSS above the start. Hence the 16 MiB cap, and H7's
-`GOMEMLIMIT` and in-container run (section 12).
+15.8 MiB plan peaked at 81 MiB of heap and 77 MiB of RSS: about its live set.
+Before the streaming canonical encoder, the 22.6 MiB plan peaked at 355 MiB of
+RSS above the start. Hence the 16 MiB cap, and H7's `GOMEMLIMIT` and
+in-container run (section 12).
 
 H4's measurement (2026-10-13). `TestHistoryExportMeasure` is skipped unless
 `DEV_ENV_HISTORY_MEASURE_MIB` is set. It ran in the dev-env pod under
