@@ -28,6 +28,9 @@ Usage:
   agent-run rescue list [--session <name>]        list the rescues on the shelf
   agent-run rescue restore <session>/<stamp> (--local | -p "<task>")
                                                   start a session that fetches a rescue
+  agent-run history list --project <p>            list a project's archived Session histories
+  agent-run history show <uid>                    show one archived history's manifest
+  agent-run history read <uid> <root/path>        print an archived file, a page or --all
   declare-activity start "<what>" --scope <a,b>   declare dev work, so it is not taken for a fault
   agent-run attach <name>                         attach to a session's TUI (Tom only)
   agent-run detach <name>                         detach every client from it (Tom only)
@@ -241,6 +244,47 @@ you give no --base and the bundle holds the old session's branch, the worktree
 starts at refs/rescued/heads/agent/<session>. A rescue branch (uncommitted work,
 refs/rescued/heads/rescue/...) is never the base: look at it and copy from it, and
 never push it, because it can hold secrets (D-10).
+`,
+	"history": `Usage: agent-run history list --project <project> [--limit N] [--continue <cursor>] [-o json]
+       agent-run history show <session-uid> [--content <sha256>] [--limit N] [--continue <n>] [-o json]
+       agent-run history read <session-uid> <root/path> [--content <sha256>] [--offset N] [--all | -o json]
+
+The archived provider history of private Sessions (DESIGN-025). Before a private
+Session's HOME is deleted, the operator exports its chat history (never its
+credentials) and its Git rescue into the shelf's history archive. These commands
+read that archive. Every answer is the archive's copy and says archived: true;
+nothing here changes or removes it.
+
+What you may read is DESIGN-013's payload-read scope: a live session reads the
+histories of its own project, if that project is configured for payload reads,
+and a coordinator reads every such project. A history with no project is
+readable by no API caller. Anything outside your scope answers "not found", the
+same as a history that does not exist; so does an operator whose archived-history
+reads are off or that is older than these routes (exit 4).
+
+history list shows one project's histories, newest first: the Session, its UID,
+provider, when it was archived (UTC), its file count and size, and how its
+executor ended. A history whose archive check failed is listed as corrupt.
+  --project <p>      the project (required)
+  --limit N          at most N a page (1 to 100, default 20)
+  --continue <c>     the next page, as the last line of the previous one says
+
+history show prints one history's manifest: identity, terminal record, rescue,
+counts, then a page of its files and of the names the export left out (copies of
+user files, settings, credentials by name only), with their class and size.
+  --content <sha256> an older archive entry of the same Session (default: newest)
+  --limit N          files and excluded names a page (1 to 1000, default 100)
+  --continue <n>     the next page
+
+history read writes one file's bytes to stdout, 64 KiB a page, each page checked
+against the archive's hashes. <root/path> is a FILE of history show, such as
+claude/projects/-home-dev/<id>.jsonl.
+  --offset N         start at byte N (default 0)
+  --all              follow the pages to the end; from offset 0 it also checks
+                     the whole file against its SHA-256
+  -o json            print one page as the API's JSON (base64 data)
+
+The Git bundles are not served: restore code with agent-run rescue restore.
 `,
 	"declare-activity": `Usage: agent-run declare-activity start "<what you are doing>" --scope <a,b,c> [--ttl 45m]
        agent-run declare-activity end <id>
