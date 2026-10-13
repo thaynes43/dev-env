@@ -106,11 +106,11 @@ Commands:
                            the private history it would export, hashed, and
                            every name it excluded; stream writes exactly those
                            files as a tar stream. Reads HOME only.
-  ctl history-archive put|verify|get|list|read
+  ctl history-archive put|verify|get|list|manifest|read
                            In the shelf (DESIGN-025 7): store an export behind
                            its content manifest, re-hash an entry, print its
-                           manifest, list a project's entries, or read one page
-                           of an archived file.
+                           manifest or one page of it, list a project's
+                           entries, or read one page of an archived file.
   ctl prepare-restart      Print what the next boot resumes (the conversation in
                            ~/.agentd/launch.json) as JSON, then stop the agent
                            CLI as the pod's SIGTERM would (D-58).

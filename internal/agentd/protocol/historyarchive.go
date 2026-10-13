@@ -80,6 +80,9 @@ const (
 	MaxHistoryGitFiles        = 64
 	MaxHistoryReadBytes       = 64 << 10
 	MaxHistoryListLimit       = 100
+	// MaxHistoryManifestPage bounds one page of `history-archive manifest`:
+	// the files, then the excluded names, at most this many items together.
+	MaxHistoryManifestPage = 1000
 	MaxHistoryContentBytes    = 64 << 20
 	// HistoryIncomingMaxAge is how old debris in .incoming must be before a
 	// put removes it: older than any put could still be running.
@@ -337,6 +340,35 @@ type HistoryList struct {
 	Next string `json:"next,omitempty"`
 }
 
+// HistoryManifestPage is one page of an entry's verified manifest
+// (`history-archive manifest`, DESIGN-025 8): everything content.json holds
+// but the file and excluded-name lists, which come at most
+// MaxHistoryManifestPage items a page. The items are one sequence, the files
+// in the manifest's order and then the excluded names; Offset and Next count
+// in it. So no reader holds a whole content.json to show part of it.
+type HistoryManifestPage struct {
+	ContentSHA256 string          `json:"contentSHA256"`
+	Entry         HistoryEntry    `json:"entry"`
+	Session       HistorySession  `json:"session"`
+	Project       string          `json:"project"`
+	Provider      string          `json:"provider"`
+	HomeUID       string          `json:"homeUID"`
+	Terminal      HistoryTerminal `json:"terminal"`
+	Rescue        HistoryRescue   `json:"rescue"`
+	Roots         []HistoryRoot   `json:"roots"`
+	Git           *HistoryGit     `json:"git,omitempty"`
+	Bytes         int64           `json:"bytes"`
+	PlanSHA256    string          `json:"planSHA256"`
+	FileCount     int             `json:"fileCount"`
+	ExcludedCount int             `json:"excludedCount"`
+	// Offset is this page's first item.
+	Offset int `json:"offset"`
+	// Next is the next page's offset; 0 when no item follows this page.
+	Next     int               `json:"next,omitempty"`
+	Files    []HistoryFile     `json:"files"`
+	Excluded []HistoryExcluded `json:"excluded"`
+}
+
 // HistoryReadResult is one page of one archived file.
 type HistoryReadResult struct {
 	ContentSHA256 string `json:"contentSHA256"`
@@ -356,6 +388,14 @@ var (
 	kubeUID     = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	gitFileName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,255}$`)
 )
+
+// historyCursor is a list cursor: an index file's name below its project,
+// <YYYY-MM>/<archivedAt>-<session UID>-<16 hex>.json.
+var historyCursor = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}/[0-9]{8}T[0-9]{6}\.[0-9]{9}Z-[0-9a-f-]{36}-[0-9a-f]{16}\.json$`)
+
+// ValidHistoryCursor reports whether s is a cursor `history-archive list`
+// prints as next.
+func ValidHistoryCursor(s string) bool { return historyCursor.MatchString(s) }
 
 // ValidSHA256 reports whether s is 64 lowercase hex digits.
 func ValidSHA256(s string) bool { return hexSHA256.MatchString(s) }

@@ -84,6 +84,11 @@ func TestHistoryExportCommands(t *testing.T) {
 		t.Errorf("list without the archive: %d %q", code, out)
 	}
 
+	code, out, _ = runArgs([]string{"ctl", "history-archive", "manifest", "--session-uid", "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f", "--offset", "3", "--limit", "10"}, env)
+	if code != exitFailure || !strings.HasPrefix(out, `{"error":"no_archive"`) {
+		t.Errorf("manifest without the archive: %d %q", code, out)
+	}
+
 	for _, bad := range [][]string{
 		{"ctl", "history-export"},
 		{"ctl", "history-export", "fly"},
@@ -93,6 +98,8 @@ func TestHistoryExportCommands(t *testing.T) {
 		{"ctl", "history-archive", "list"},
 		{"ctl", "history-archive", "read", "--session-uid", "u", "--content-sha256", "h"},
 		{"ctl", "history-archive", "put", "--project", "x"},
+		{"ctl", "history-archive", "manifest", "--session-uid", "u", "--limit", "x"},
+		{"ctl", "history-archive", "manifest", "--session-uid", "u", "--file", "x"},
 		{"shelf", "--other"},
 	} {
 		if code, _, _ := runArgs(bad, env); code != exitUsage {

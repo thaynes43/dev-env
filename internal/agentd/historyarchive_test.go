@@ -666,6 +666,113 @@ func TestHistoryArchiveGetListAndRead(t *testing.T) {
 	}
 }
 
+// manifest (DESIGN-025 8, H6) pages an entry's verified manifest: the
+// header and counts on every page, then the files and the excluded names in
+// one sequence, so neither the operator nor the API holds a whole
+// content.json. An offset past the end is an empty page, never an error.
+func TestHistoryArchiveManifestPages(t *testing.T) {
+	r := newHistoryRig(t)
+	ar := newArchiveRig(t, r)
+	c, put := putTestHistory(t, r, ar, "dev-env", testSessionUID)
+	total := len(c.Files) + len(c.Excluded)
+	if len(c.Files) < 2 || len(c.Excluded) < 2 {
+		t.Fatalf("the rig's history is too small to page: %d files, %d excluded", len(c.Files), len(c.Excluded))
+	}
+
+	head, err := ar.a.Manifest(testSessionUID, "", 0, 0)
+	if err != nil {
+		t.Fatalf("header only: %v", err)
+	}
+	if head.ContentSHA256 != put.ContentSHA256 || head.Entry.ContentSHA256 != put.ContentSHA256 || head.Entry.ArchivedBy != "dev-env-operator test" ||
+		head.Session != c.Session || head.Project != "dev-env" || head.Provider != c.Provider || head.HomeUID != c.HomeUID ||
+		head.Terminal != c.Terminal || head.Rescue != c.Rescue || head.Bytes != c.Bytes || head.PlanSHA256 != c.PlanSHA256 ||
+		head.FileCount != len(c.Files) || head.ExcludedCount != len(c.Excluded) || len(head.Roots) != len(c.Roots) {
+		t.Errorf("header: %+v", head)
+	}
+	if len(head.Files) != 0 || len(head.Excluded) != 0 || head.Next != 0 || head.Offset != 0 {
+		t.Errorf("limit 0 prints the header only: %+v", head)
+	}
+
+	// Pages of two, files first, then the excluded names, in the manifest's
+	// order.
+	var files []protocol.HistoryFile
+	var excluded []protocol.HistoryExcluded
+	offset, pages := 0, 0
+	for {
+		p, err := ar.a.Manifest(testSessionUID, put.ContentSHA256, offset, 2)
+		if err != nil {
+			t.Fatalf("page at %d: %v", offset, err)
+		}
+		if p.Offset != offset || len(p.Files)+len(p.Excluded) > 2 || p.FileCount != len(c.Files) {
+			t.Fatalf("page at %d: %+v", offset, p)
+		}
+		files, excluded = append(files, p.Files...), append(excluded, p.Excluded...)
+		pages++
+		if p.Next == 0 {
+			break
+		}
+		if p.Next != offset+2 {
+			t.Fatalf("page at %d: next %d", offset, p.Next)
+		}
+		offset = p.Next
+	}
+	if pages != (total+1)/2 || len(files) != len(c.Files) || len(excluded) != len(c.Excluded) {
+		t.Fatalf("%d pages, %d files, %d excluded; want %d, %d, %d", pages, len(files), len(excluded), (total+1)/2, len(c.Files), len(c.Excluded))
+	}
+	for i := range files {
+		if files[i].Name() != c.Files[i].Name() || files[i].SHA256 != c.Files[i].SHA256 || files[i].Bytes != c.Files[i].Bytes || len(files[i].Blocks) != 0 {
+			t.Errorf("file %d: %+v, want %+v", i, files[i], c.Files[i])
+		}
+	}
+	for i := range excluded {
+		if excluded[i] != c.Excluded[i] {
+			t.Errorf("excluded %d: %+v, want %+v", i, excluded[i], c.Excluded[i])
+		}
+	}
+
+	// Past the end, and far past it: an empty last page.
+	for _, off := range []int{total, total + 1, 1 << 40} {
+		p, err := ar.a.Manifest(testSessionUID, "", off, protocol.MaxHistoryManifestPage)
+		if err != nil || len(p.Files) != 0 || len(p.Excluded) != 0 || p.Next != 0 || p.FileCount != len(c.Files) {
+			t.Errorf("offset %d: %+v %v", off, p, err)
+		}
+	}
+	// One page holds them all.
+	if p, err := ar.a.Manifest(testSessionUID, "", 0, protocol.MaxHistoryManifestPage); err != nil || len(p.Files)+len(p.Excluded) != total || p.Next != 0 {
+		t.Errorf("one page: %d items, next %d, %v", len(p.Files)+len(p.Excluded), p.Next, err)
+	}
+
+	for _, bad := range []struct {
+		uid, sum      string
+		offset, limit int
+	}{
+		{testSessionUID, "", -1, 1},
+		{testSessionUID, "", 0, -1},
+		{testSessionUID, "", 0, protocol.MaxHistoryManifestPage + 1},
+		{"not-a-uid", "", 0, 1},
+		{testSessionUID, "abc", 0, 1},
+	} {
+		if _, err := ar.a.Manifest(bad.uid, bad.sum, bad.offset, bad.limit); historyCode(err) != protocol.HistoryErrInvalid {
+			t.Errorf("manifest %+v: %v, want invalid", bad, err)
+		}
+	}
+	if _, err := ar.a.Manifest("99999999-4a5b-4c6d-8e7f-0a1b2c3d4e5f", "", 0, 1); historyCode(err) != protocol.HistoryErrNotFound {
+		t.Errorf("an unknown Session: %v, want not_found", err)
+	}
+	if _, err := ar.a.Manifest(testSessionUID, strings.Repeat("a", 64), 0, 1); historyCode(err) != protocol.HistoryErrNotFound {
+		t.Errorf("an unknown digest: %v, want not_found", err)
+	}
+
+	// A damaged content.json is corrupt, and nothing of it is printed.
+	entry := filepath.Join(ar.a.Root, "v1", "dev-env", testSessionUID, put.ContentSHA256[:16])
+	if err := os.WriteFile(filepath.Join(entry, "content.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := ar.a.Manifest(testSessionUID, "", 0, 1); historyCode(err) != protocol.HistoryErrCorrupt || p.Project != "" || len(p.Files) != 0 {
+		t.Errorf("a damaged entry: %+v %v, want corrupt and nothing else", p, err)
+	}
+}
+
 func TestHistoryArchiveNeedsItsVolume(t *testing.T) {
 	r := newHistoryRig(t)
 	ar := newArchiveRig(t, r)
@@ -684,6 +791,9 @@ func TestHistoryArchiveNeedsItsVolume(t *testing.T) {
 	}
 	if _, err := ar.a.Read(testSessionUID, strings.Repeat("a", 64), "x/y", 0); historyCode(err) != protocol.HistoryErrNoArchive {
 		t.Errorf("read: %v", err)
+	}
+	if _, err := ar.a.Manifest(testSessionUID, "", 0, 1); historyCode(err) != protocol.HistoryErrNoArchive {
+		t.Errorf("manifest: %v", err)
 	}
 }
 

@@ -15,7 +15,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"syscall"
@@ -25,7 +24,7 @@ import (
 )
 
 // The history archive (DESIGN-025 7): `agentd ctl history-archive
-// put|verify|get|list|read`, run by the operator in the shelf pod over the
+// put|verify|get|list|manifest|read`, run by the operator in the shelf pod over the
 // archive volume at ~/.history-archive. put writes a whole entry into
 // .incoming/<random>, syncs it and renames it into place; nothing is written
 // over an entry once it is there, and the only removal is debris in .incoming
@@ -906,8 +905,6 @@ func (a HistoryArchive) Get(sessionUID, sum string) (protocol.HistoryGetResult, 
 	return protocol.HistoryGetResult{ContentSHA256: e.ContentSHA256, Entry: e, Content: c}, nil
 }
 
-var historyCursor = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}/[0-9]{8}T[0-9]{6}\.[0-9]{9}Z-[0-9a-f-]{36}-[0-9a-f]{16}\.json$`)
-
 // List walks a project's index newest first and prints each entry's verified
 // summary: at most limit items, after the cursor.
 func (a HistoryArchive) List(project string, limit int, after string) (protocol.HistoryList, error) {
@@ -921,7 +918,7 @@ func (a HistoryArchive) List(project string, limit int, after string) (protocol.
 	if limit < 1 || limit > protocol.MaxHistoryListLimit {
 		return res, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "--limit must be 1 to %d", protocol.MaxHistoryListLimit)
 	}
-	if after != "" && !historyCursor.MatchString(after) {
+	if after != "" && !protocol.ValidHistoryCursor(after) {
 		return res, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "--after is not a cursor of this list")
 	}
 	if err := a.CheckMounted(); err != nil {
@@ -948,7 +945,7 @@ func (a HistoryArchive) List(project string, limit int, after string) (protocol.
 		}
 		for j := len(names) - 1; j >= 0 && len(cursors) <= limit; j-- {
 			cur := months[i] + "/" + names[j]
-			if !historyCursor.MatchString(cur) || (after != "" && cur >= after) {
+			if !protocol.ValidHistoryCursor(cur) || (after != "" && cur >= after) {
 				continue
 			}
 			cursors = append(cursors, cur)
@@ -998,6 +995,55 @@ func (a HistoryArchive) summary(project, indexFile string) protocol.HistorySumma
 		SessionUID: c.Session.UID, Session: c.Session.Name, Provider: c.Provider, ArchivedAt: e.ArchivedAt,
 		ContentSHA256: sum, Bytes: c.Bytes, Files: len(c.Files), Terminal: &t,
 	}
+}
+
+// Manifest prints one page of an entry's verified manifest (DESIGN-025 8):
+// the Session's newest entry, or the one sum names. offset and the page's
+// items count the files, then the excluded names; limit 0 prints the header
+// and counts only. An offset past the end is an empty page, never an error,
+// so a reader learns nothing from an offset that it would not from the
+// header.
+func (a HistoryArchive) Manifest(sessionUID, sum string, offset, limit int) (protocol.HistoryManifestPage, error) {
+	var res protocol.HistoryManifestPage
+	if offset < 0 || limit < 0 || limit > protocol.MaxHistoryManifestPage {
+		return res, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "--offset must be 0 or more and --limit 0 to %d", protocol.MaxHistoryManifestPage)
+	}
+	if err := a.CheckMounted(); err != nil {
+		return res, err
+	}
+	unlock, err := lockHistoryArchive(a.Root, false)
+	if err != nil {
+		return res, err
+	}
+	defer unlock()
+	_, c, e, err := a.openEntry(sessionUID, sum)
+	if err != nil {
+		return res, err
+	}
+	res = protocol.HistoryManifestPage{
+		ContentSHA256: e.ContentSHA256, Entry: e, Session: c.Session, Project: c.Project, Provider: c.Provider, HomeUID: c.HomeUID,
+		Terminal: c.Terminal, Rescue: c.Rescue, Roots: c.Roots, Git: c.Git, Bytes: c.Bytes, PlanSHA256: c.PlanSHA256,
+		FileCount: len(c.Files), ExcludedCount: len(c.Excluded), Offset: offset,
+		Files: []protocol.HistoryFile{}, Excluded: []protocol.HistoryExcluded{},
+	}
+	total := len(c.Files) + len(c.Excluded)
+	if offset >= total {
+		return res, nil
+	}
+	end := offset + min(limit, total-offset)
+	for i := offset; i < end; i++ {
+		if i < len(c.Files) {
+			f := c.Files[i]
+			f.Blocks = nil
+			res.Files = append(res.Files, f)
+		} else {
+			res.Excluded = append(res.Excluded, c.Excluded[i-len(c.Files)])
+		}
+	}
+	if limit > 0 && end < total {
+		res.Next = end
+	}
+	return res, nil
 }
 
 // Read returns at most MaxHistoryReadBytes of one archived file from offset.
