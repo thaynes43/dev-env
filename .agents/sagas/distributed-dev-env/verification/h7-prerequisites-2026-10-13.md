@@ -95,7 +95,8 @@ original profiles and prepare a successor before using that workflow again.
   measurements do not satisfy these checks. Every Job needs a CPU limit.
 - Archive guard after parity and owner-identity confirmation, before either
   archive claim is mounted. The first GitOps unit is the unmounted history PVC.
-  Tom sets its bound PV to `Retain`; verify that before archive activation.
+  Its bound PV Retain was later verified by the one-time Q-37/D-91
+  delegation; that attempt is consumed ([acceptance](h7-retain-acceptance-2026-10-13.md)).
 - Recheck live Reaping non-canary private Sessions immediately before the stop
   flag. The audit found none; ask about holds only if that later list is nonempty.
 - Preserve the pickup brief's separate PR order: stop, archive, then history reads.

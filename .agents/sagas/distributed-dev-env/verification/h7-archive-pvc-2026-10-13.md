@@ -1,6 +1,9 @@
 # H7: unmounted history archive PVC, 2026-10-13
 
-**Installed PVC unit verified at 17:24 UTC; archive activation remains pending.**
+**Installed PVC unit verified at 17:24 UTC; PV Retain accepted later under Q-37/D-91.**
+Archive activation remains pending. The [Retain acceptance](h7-retain-acceptance-2026-10-13.md)
+records the sole consumed operation and client postcondition at 19:40:32 EDT
+(23:40:32.254177 UTC); no extra PV GET was made.
 [haynes-ops #3898](https://github.com/thaynes43/haynes-ops/pull/3898) merged at
 17:22 UTC as `a287a4f6ac8455076af0defee9383dcacb61a649`, after required
 `Flux Local - Success`, `Diff Scope - Success`, native independent review of
@@ -10,13 +13,13 @@ The source adds one PVC in the existing storage-only Kustomization and corrects
 its comment. Flux source and `dev-env-system/dev-env-shared` applied the merge;
 the storage Kustomization is Ready and Healthy.
 
-| Check | Result |
+| Check | Result at 17:24 UTC |
 |---|---|
 | Claim | `dev-agents/dev-env-history-archive`, Bound, 20Gi, `ceph-block`, ReadWriteOnce |
 | Pruning | Claim annotation disabled; existing storage Kustomization remains `prune: false` |
 | Consumers | No reference among 481 readable Pods at the verification time |
 | Bound volume | `pvc-ec80a337-740f-49d3-8b27-171bb6eed5af`; claim UID matches |
-| Reclaim policy | **Delete; owner-set Retain remains pending before archive activation** |
+| Reclaim policy | `Delete` at this snapshot; later `Retain` verified under Q-37/D-91 (above) |
 | Shelf | Same UID, image 2.9.1, RollingUpdate and shared claim only |
 | Retained runtime | Same selected fields for 2 operator Pods, 1 shelf Pod, 3 canary Pods, 5 AgentSessions and 2 failed Jobs; the 2 previously absent canary Pods remain absent |
 | Expiry flags | Terminal record on; stop, archive, history reads and delete off |
@@ -27,9 +30,9 @@ archive guard before the shelf mount. The later read-only finding raised
 its relayed owner answer is now recorded in
 [ADR-007](../adrs/007-preserve-v1-archive-trust-boundary.md). That ruling governs
 the next compatible guard; it changes none of this installed PVC evidence.
-F4, both cold resource measurements, the bound PV's
-owner-set Retain and the remaining H7 policies and flag gates still apply.
-A [prepared one-time action](h7-retain-action-contract-2026-10-13.md) is a proposal only; the owner decision and execution remain pending.
+F4, both cold resource measurements and the remaining H7 policies and flag
+gates still apply. The [one-time action](h7-retain-action-contract-2026-10-13.md)
+has completed and is consumed; it authorizes no repeat or other PV change.
 This is not H8's installed history-read acceptance.
 
 Activity `act-172203-248390` covered provisioning and reconciliation in

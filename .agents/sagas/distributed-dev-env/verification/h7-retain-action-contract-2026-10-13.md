@@ -1,16 +1,16 @@
 # Prepared one-time history PV Retain action
 
-**Status: source preparation only; owner decision and execution remain pending.**
-This contract does not replace DESIGN-025 section 7's rule: "Tom sets it after
-the claim binds; no agent tier writes a PersistentVolume." Q-35 preserves v1
-trust; Q-36 permits the existing Mac evidence route. Neither authorizes a PV
-write. After the executable is reviewed and verified, ask Tom one phone
-question about delegating this exact action. Record the actual answer before
-any execution. No workstation commands are needed from him.
+**Status: executed once; PV Retain accepted; the attempt is consumed.**
+[Q-37/D-91](../designs/025-private-home-expiry.md#22-one-time-pv-retain-q-37-d-91)
+permitted one exception to DESIGN-025 section 7's default owner-only PV rule.
+The [execution acceptance](h7-retain-acceptance-2026-10-13.md) records the
+source-corroborated owner "Yes", sole launch and verified postcondition.
+No further executable launch or PATCH is authorized. The following protocol
+is the frozen contract for that consumed operation, not a reusable grant.
 
 ## Fixed action and authority
 
-The proposed action changes only `persistentVolumeReclaimPolicy` from `Delete`
+The approved action changed only `persistentVolumeReclaimPolicy` from `Delete`
 to `Retain` on `pvc-ec80a337-740f-49d3-8b27-171bb6eed5af`. It uses the existing
 Mac configuration and context already used for H7 evidence. Credentials stay
 on that machine. It creates no persistent permission, pod PV-write grant or
@@ -79,7 +79,7 @@ This action alone does not establish installed admission, complete baseline
 freshness, personal owner identity, F4 history evidence, either cold-resource
 measurement, restore, archived reads or deletion acceptance.
 
-## Verified executable; decision pending
+## Verified executable and completed operation
 
 Dev-env [#269](https://github.com/thaynes43/dev-env/pull/269) merged at
 22:57:19 UTC as `789f2b499930dadf2cf02a440b56a20d224ae9b8`, after required CI,
@@ -106,7 +106,7 @@ The first verification stopped at the missing local reader after hash checks;
 the artifact was preserved and verification completed by reading its metadata.
 That was not a client execution or cluster attempt.
 
-Q-37 now requests the one-time delegation. The question tool accepted it, but
-no owner reply has been observed. See
-[DESIGN-025 section 22](../designs/025-private-home-expiry.md#22-prepared-one-time-pv-action-q-37-pending).
-No execution, permission or activation follows from the verified build alone.
+Q-37 was later answered "Yes" through the source Mac conversation. D-91
+records the one-time exception; the reviewed client completed once and
+verified Retain. See the [acceptance](h7-retain-acceptance-2026-10-13.md).
+The attempt is consumed. No permanent permission or later activation follows.
