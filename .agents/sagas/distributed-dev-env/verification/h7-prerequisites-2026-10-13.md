@@ -1,9 +1,16 @@
 # H7 read-only prerequisite checkpoint, 2026-10-13
 
 **Status: audit complete; Q-33 pending. No H7 deployment or acceptance.**
-Observed at 08:36 EDT (12:36 UTC), against dev-env
-`2d70017d599212da3ecdc1b3e6554ac507dcaa62` and haynes-ops
-`bf851754b3cc2b2d7953fd5a84c0aa4da2da46c2`.
+Dev-env source: `2d70017d599212da3ecdc1b3e6554ac507dcaa62`.
+The original audit used haynes-ops
+`25f09cf42bf0708ceb4d08442ea2d7afe15e6ace`: RBAC at 08:11 EDT (12:11 UTC),
+runtime state at 08:14 EDT (12:14 UTC), and the source scan at 08:15 EDT
+(12:15 UTC), corrected at 08:17 EDT (12:17 UTC).
+
+The 08:36 EDT (12:36 UTC) refresh used haynes-ops
+`bf851754b3cc2b2d7953fd5a84c0aa4da2da46c2`. It rechecked RBAC and Headlamp,
+and scanned the three changed manifests. It did not reobserve the operator,
+shelf or Session runtime state.
 
 The first H7 owner question is the phone identity exception in
 [DESIGN-025 section 9](../designs/025-private-home-expiry.md#9-owner-overrides-hold-and-release-now).
@@ -77,10 +84,11 @@ original profiles and prepare a successor before using that workflow again.
   Deletion remains gated on the merged H8 installed-read record and a separately
   authorized non-canary Session source. Canary originals cannot serve H8.
 
-The operator was 2/2 at `sha-2221b83`, terminal recording enabled and the stop,
+In the 08:14 EDT (12:14 UTC) runtime snapshot, the operator was 2/2 at
+`sha-2221b83`, terminal recording enabled and the stop,
 archive, read and delete flags off. The shelf was 2.9.1 with `RollingUpdate`,
-only the shared rescue claim mounted and no archive claim. All five retained
-canary originals and both failed Jobs remain evidence.
+only the shared rescue claim mounted and no archive claim. The snapshot contained
+all five retained canary originals and both failed Jobs; preserve them as evidence.
 
 ## Evidence
 
