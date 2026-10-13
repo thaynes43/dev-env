@@ -35,6 +35,11 @@ current access; add no rights, archive activation or automatic decommissioning.
 [Issue #261](https://github.com/thaynes43/dev-env/issues/261) preserves the
 evidence and validation limits. No guard implementation or runtime probe was
 made. The compatible guard protects v2 paths without claiming isolation from v1.
+The [compatible guard contract](sagas/distributed-dev-env/verification/h7-compatible-guard-contract-2026-10-13.md)
+is ratified for source implementation: preserve the named current administrator
+and infrastructure routes, prove controller parent chains and a clean activation
+baseline, and verify real webhook delivery separately. Source work is in flight;
+no installed guard acceptance or archive mount is claimed.
 
 The [resource setup checkpoint](sagas/distributed-dev-env/verification/h7-measurement-setup-2026-10-13.md)
 records the corrected synthetic fixture accounting, measurement-only isolation

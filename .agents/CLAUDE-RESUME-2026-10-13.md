@@ -200,8 +200,13 @@ and current access; add no privilege or automatic decommissioning.
 [Issue #261](https://github.com/thaynes43/dev-env/issues/261) holds the evidence.
 No guard implementation or bypass probe was made. Finish the in-flight
 [measurement source setup](sagas/distributed-dev-env/verification/h7-measurement-setup-2026-10-13.md),
-then the next ordered guard, preserving the trusted-v1 boundary. Small source
-checks do not establish either cold measurement or deployed acceptance.
+then the next ordered guard, preserving the trusted-v1 boundary. The measurement
+setup merged in [#262](https://github.com/thaynes43/dev-env/pull/262), `01c6bc99`.
+The [compatible guard contract](sagas/distributed-dev-env/verification/h7-compatible-guard-contract-2026-10-13.md)
+now governs its source implementation, with fixed trusted infrastructure routes,
+controller-chain proof, audited activation baseline and separate real webhook
+acceptance. Small source checks establish neither cold measurement nor deployed
+acceptance.
 
 Each unit: publish its contract, one reviewed PR, focused tests, native
 independent review, `CI - Success`, self-squash-merge. haynes-ops units also
