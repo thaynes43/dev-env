@@ -51,3 +51,19 @@ func aliasStateDir(s Settings) {
 	dir := s.StateDir
 	_ = os.WriteFile(filepath.Join(dir, "unclassified-j"), nil, 0o600)
 }
+
+func tempBeside(path string) {
+	dir := filepath.Dir(path)
+	_, _ = os.CreateTemp(dir, "."+filepath.Base(path)+".unclassified-k-*")
+}
+
+func tempForward(path string, data []byte) { tempBeside(path) }
+
+func tempForwardCaller(s Settings) { tempForward(s.statePath("launch.json"), nil) }
+
+func tempLiteral(path string) { _, _ = os.CreateTemp(filepath.Dir(path), ".unclassified-l-*") }
+
+func tempLiteralCaller(s Settings) {
+	receipt := s.statePath("boot.json")
+	tempLiteral(receipt)
+}

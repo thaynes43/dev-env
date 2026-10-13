@@ -83,6 +83,10 @@ var claudeLayout = []historyRule{
 	// Credentials: never exported, listed by name only.
 	{".credentials.json", protocol.HistoryClassCredential, kindAny},
 	{".credentials.json.*", protocol.HistoryClassCredential, kindAny},
+	// A temporary copy writeFileAtomic (files.go) left when agentd stopped
+	// mid-write, of .claude.json or settings.json. Below the credentials, so a
+	// credential's name always wins.
+	{".*.agentd-*", protocol.HistoryClassNotHistory, kindAny},
 }
 
 // codexLayout is $CODEX_HOME.
@@ -135,6 +139,11 @@ var codexLayout = []historyRule{
 	{"auth.json.*", protocol.HistoryClassCredential, kindAny},
 	{".credentials.json", protocol.HistoryClassCredential, kindAny},
 	{".credentials.json.*", protocol.HistoryClassCredential, kindAny},
+	// A temporary copy writeCodexPrivateAtomic (codex_auth.go) left when
+	// agentd stopped mid-write: auth.json's bytes, or config.toml's.
+	{".codex-access-*", protocol.HistoryClassCredential, kindAny},
+	// A temporary copy writeFileAtomic left, of config.toml or AGENTS.md.
+	{".*.agentd-*", protocol.HistoryClassNotHistory, kindAny},
 }
 
 // agentdLayout is ~/.agentd. TestHistoryLayoutCoversAgentdState scans
@@ -188,8 +197,13 @@ var agentdLayout = []historyRule{
 	// Git files the rescue covers.
 	{"rescue-*.bundle", protocol.HistoryClassNotHistory, kindAny},
 	{"rescue-index-*", protocol.HistoryClassNotHistory, kindAny},
-	// Temporary copies (files.go).
+	// Temporary copies a write leaves when agentd stops in the middle of it:
+	// files.go's writeFileAtomic and writeFileOnce, workspace.go's
+	// writeWorkspaceJSON, and codex_auth.go's writeCodexPrivateAtomic
+	// (receipts and start intents, never a login here).
 	{".*.agentd-*", protocol.HistoryClassNotHistory, kindAny},
+	{".receipt-*", protocol.HistoryClassNotHistory, kindAny},
+	{".codex-access-*", protocol.HistoryClassNotHistory, kindAny},
 }
 
 // classifyHistoryName finds the rule for a top-level name. The first matching

@@ -46,3 +46,16 @@ func callsAWriterElsewhere(p string) { _ = writeFileAtomic(p, nil, 0o600) }
 func readCredentialReference(p string) { _, _ = os.OpenFile(p, os.O_RDWR, 0) }
 
 var literalRemoves = func(p string) { _ = os.RemoveAll(p) }
+
+func openOutsideOpenBeneath(p string) { _, _ = os.OpenFile(p, historyOpenFlags, 0) }
+
+func openBeneathWritable(p string) { _, _ = openBeneath(p, p, os.O_RDWR) }
+
+func openatOutsideOpenBeneath(p string) { _, _ = syscall.Openat(0, p, historyOpenFlags, 0) }
+
+func newFileOutsideOpenBeneath(fd uintptr) { _ = os.NewFile(fd, "x") }
+
+func openBeneath(base, abs string, flags int) (*os.File, error) {
+	fd, err := syscall.Openat(0, abs, syscall.O_RDWR, 0)
+	return os.NewFile(uintptr(fd), abs), err
+}

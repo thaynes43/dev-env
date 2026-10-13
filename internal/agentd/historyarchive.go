@@ -99,8 +99,8 @@ func readContentLine(br *bufio.Reader) ([]byte, error) {
 	for {
 		chunk, err := br.ReadSlice('\n')
 		line = append(line, chunk...)
-		if len(line) > protocol.MaxHistoryContentBytes+1 {
-			return nil, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "the content manifest is larger than %d bytes", protocol.MaxHistoryContentBytes)
+		if len(line) > historyBounds.contentBytes+1 {
+			return nil, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "the content manifest is larger than %d bytes", historyBounds.contentBytes)
 		}
 		if err == nil {
 			return bytes.TrimSuffix(line, []byte("\n")), nil
@@ -133,10 +133,12 @@ func parseHistoryContent(line []byte) (protocol.HistoryContent, string, error) {
 	return c, sum, nil
 }
 
-var rescueResult = regexp.MustCompile(`^[A-Za-z]{1,64}$`)
-
 // validateHistoryContent checks a content manifest's format, identities,
-// names and bounds.
+// names and bounds, and that it describes a whole export: the four roots, a
+// rescue whose verdict lets a HOME go (DESIGN-025 6.2), and, for a Verified
+// rescue, that rescue's own bundle directory. Verify compares an entry only
+// with its own manifest, so put is where a manifest that proves less is
+// refused.
 func validateHistoryContent(c protocol.HistoryContent) error {
 	bad := func(format string, args ...any) error {
 		return protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", format, args...)
@@ -154,22 +156,39 @@ func validateHistoryContent(c protocol.HistoryContent) error {
 		return bad("homeUID is not a UID")
 	case !protocol.ValidKubeUID(c.Terminal.PodUID) || (c.Terminal.Phase != "Succeeded" && c.Terminal.Phase != "Failed") || len(c.Terminal.Reason) > 128 || len(c.Terminal.NodeName) > 253 || c.Terminal.ObservedAt.IsZero():
 		return bad("the terminal record is not valid")
-	case !protocol.ValidRescueName(c.Rescue.Stamp) || !rescueResult.MatchString(c.Rescue.Result) || (c.Rescue.PodUID != "" && !protocol.ValidKubeUID(c.Rescue.PodUID)):
-		return bad("the rescue is not valid")
+	case !protocol.ValidRescueStamp(c.Rescue.Stamp) || (c.Rescue.PodUID != "" && !protocol.ValidKubeUID(c.Rescue.PodUID)):
+		return bad("the rescue's stamp or pod UID is not valid")
+	case c.Rescue.Result != protocol.HistoryRescueVerified && c.Rescue.Result != protocol.HistoryRescueCleanAndPushed:
+		return bad("the rescue's result %q is not %s or %s", c.Rescue.Result, protocol.HistoryRescueVerified, protocol.HistoryRescueCleanAndPushed)
+	case c.Rescue.Result == protocol.HistoryRescueVerified && c.Git == nil:
+		return bad("a %s rescue's bundle is not in the manifest", protocol.HistoryRescueVerified)
 	case !protocol.ValidSHA256(c.PlanSHA256):
 		return bad("planSHA256 is not a SHA-256")
 	case len(c.Files) > historyBounds.files || len(c.Excluded) > historyBounds.excluded:
 		return bad("too many files or excluded names")
 	}
 	roots := map[string]bool{}
+	seen := map[string]bool{}
 	for _, r := range c.Roots {
-		if !protocol.ValidHistoryRoot(r.Name) || roots[r.Name] {
+		if !protocol.ValidHistoryRoot(r.Name) || seen[r.Name] {
 			return bad("root %q is not valid or repeated", r.Name)
 		}
 		if code, why := protocol.CheckHistoryPath(r.Dir); code == protocol.HistoryErrInvalid {
 			return bad("root %s's directory %s", r.Name, why)
 		}
+		switch {
+		case r.Name == protocol.HistoryRootAgentd && r.Dir != ".agentd":
+			return bad("the agentd root is %q, not .agentd", r.Dir)
+		case r.Name == protocol.HistoryRootLog && r.Dir != "work/"+c.Session.Name+".log":
+			return bad("the log root is %q, not work/%s.log", r.Dir, c.Session.Name)
+		}
+		seen[r.Name] = true
 		roots[r.Name] = !r.Absent
+	}
+	for _, name := range []string{protocol.HistoryRootClaude, protocol.HistoryRootCodex, protocol.HistoryRootAgentd, protocol.HistoryRootLog} {
+		if !seen[name] {
+			return bad("the manifest lacks the %s root", name)
+		}
 	}
 	var total int64
 	prev := ""
@@ -214,9 +233,15 @@ func validateHistoryContent(c protocol.HistoryContent) error {
 		}
 	}
 	if c.Git != nil {
-		session, _, err := protocol.ParseRescueID(c.Git.Rescue)
+		session, name, err := protocol.ParseRescueID(c.Git.Rescue)
 		if err != nil || session != c.Session.Name {
 			return bad("the Git rescue %q is not this Session's", c.Git.Rescue)
+		}
+		// The rescue's directory is its stamp, or <stamp>-N for a later
+		// rescue in the same minute (D-48): an older rescue's bundle never
+		// stands for this one's.
+		if name != c.Rescue.Stamp && !strings.HasPrefix(name, c.Rescue.Stamp+"-") {
+			return bad("the Git rescue %q is not the rescue %s", c.Git.Rescue, c.Rescue.Stamp)
 		}
 		if len(c.Git.Files) > protocol.MaxHistoryGitFiles {
 			return bad("too many Git files")
@@ -274,11 +299,14 @@ func (a HistoryArchive) Put(r io.Reader, archivedBy string) (protocol.HistoryPut
 		res.GitFiles = len(c.Git.Files)
 	}
 	if _, err := os.Lstat(final); err == nil {
-		old, err := readArchiveFile(filepath.Join(final, protocol.HistoryContentFile), protocol.MaxHistoryContentBytes)
-		if err != nil || !bytes.Equal(old, line) {
+		old, err := readArchiveFile(a.Root, filepath.Join(final, protocol.HistoryContentFile), protocol.MaxHistoryContentBytes)
+		if err != nil {
+			return res, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, entryRel, "the entry there has no readable content.json: %v", err)
+		}
+		if !bytes.Equal(old, line) {
 			return res, protocol.HistoryErrorf(protocol.HistoryErrConflict, entryRel, "an entry with another content manifest is already there")
 		}
-		e, err := readHistoryEntryFile(final, sum)
+		e, err := readHistoryEntryFile(a.Root, final, sum)
 		if err != nil {
 			return res, err
 		}
@@ -387,7 +415,7 @@ func (a HistoryArchive) incomingEntry(tmp string, c protocol.HistoryContent, lin
 	session, stamp, _ := protocol.ParseRescueID(c.Git.Rescue)
 	src := filepath.Join(a.SharedDir, protocol.RescueRoot, session, stamp)
 	for _, g := range c.Git.Files {
-		in, fi, err := openHistoryFile(filepath.Join(src, g.Name))
+		in, fi, err := openHistoryFile(a.SharedDir, filepath.Join(src, g.Name))
 		if err != nil {
 			return protocol.HistoryErrorf(protocol.HistoryErrInvalid, path.Join(protocol.HistoryGitDir, g.Name), "the rescue file: %v", err)
 		}
@@ -506,7 +534,7 @@ func (a HistoryArchive) incomingSyncTree(tmp string) error {
 	var walk func(string) error
 	walk = func(d string) error {
 		dirs = append(dirs, d)
-		names, err := readHistoryDir(d)
+		names, err := readHistoryDir(a.Root, d)
 		if err != nil {
 			return err
 		}
@@ -612,7 +640,7 @@ func (a HistoryArchive) linkIndexEntry(c protocol.HistoryContent, sum, entryRel 
 // of a put that crashed. Errors leave the debris for the next put.
 func (a HistoryArchive) pruneIncoming() {
 	dir := filepath.Join(a.Root, protocol.HistoryArchiveIncoming)
-	names, err := readHistoryDir(dir)
+	names, err := readHistoryDir(a.Root, dir)
 	if err != nil {
 		return
 	}
@@ -645,10 +673,17 @@ func syncArchiveDir(d string) error {
 	return f.Sync()
 }
 
-// readArchiveFile reads a whole regular file of the archive, never through a
-// link, up to bound bytes.
-func readArchiveFile(p string, bound int64) ([]byte, error) {
-	f, fi, err := openHistoryFile(p)
+// readArchiveFile reads a whole regular file of the archive at root, never
+// through a link, up to bound bytes.
+func readArchiveFile(root, p string, bound int64) ([]byte, error) {
+	return readArchiveFileLinks(root, p, bound, 1)
+}
+
+// readArchiveFileLinks is readArchiveFile for a file that may have up to
+// maxLinks hard links: an index file has two while its .incoming copy waits
+// for removal after a put that stopped between the link and the removal.
+func readArchiveFileLinks(root, p string, bound int64, maxLinks int64) ([]byte, error) {
+	f, fi, err := openHistoryFileLinks(root, p, maxLinks)
 	if err != nil {
 		return nil, err
 	}
@@ -659,10 +694,11 @@ func readArchiveFile(p string, bound int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(f, bound))
 }
 
-// readHistoryEntryFile reads entry.json and checks it names sum.
-func readHistoryEntryFile(dir, sum string) (protocol.HistoryEntry, error) {
+// readHistoryEntryFile reads entry.json of the entry dir under the archive at
+// root and checks it names sum.
+func readHistoryEntryFile(root, dir, sum string) (protocol.HistoryEntry, error) {
 	var e protocol.HistoryEntry
-	data, err := readArchiveFile(filepath.Join(dir, protocol.HistoryEntryFile), 64<<10)
+	data, err := readArchiveFile(root, filepath.Join(dir, protocol.HistoryEntryFile), 64<<10)
 	if err != nil {
 		return e, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, "", "entry.json: %v", err)
 	}
@@ -681,7 +717,7 @@ func (a HistoryArchive) openEntry(sessionUID, sum string) (string, protocol.Hist
 	if !protocol.ValidKubeUID(sessionUID) || (sum != "" && !protocol.ValidSHA256(sum)) {
 		return "", c, e, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "the Session UID or content digest is not valid")
 	}
-	projects, err := readHistoryDir(filepath.Join(a.Root, protocol.HistoryArchiveEntries))
+	projects, err := readHistoryDir(a.Root, filepath.Join(a.Root, protocol.HistoryArchiveEntries))
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", c, e, protocol.HistoryErrorf(protocol.HistoryErrNotFound, "", "no entry for Session %s", sessionUID)
 	}
@@ -696,7 +732,7 @@ func (a HistoryArchive) openEntry(sessionUID, sum string) (string, protocol.Hist
 	var found []cand
 	for _, p := range projects {
 		sdir := filepath.Join(a.Root, protocol.HistoryArchiveEntries, p, sessionUID)
-		names, err := readHistoryDir(sdir)
+		names, err := readHistoryDir(a.Root, sdir)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
@@ -708,7 +744,7 @@ func (a HistoryArchive) openEntry(sessionUID, sum string) (string, protocol.Hist
 				continue
 			}
 			dir := filepath.Join(sdir, n)
-			data, err := readArchiveFile(filepath.Join(dir, protocol.HistoryContentFile), protocol.MaxHistoryContentBytes)
+			data, err := readArchiveFile(a.Root, filepath.Join(dir, protocol.HistoryContentFile), protocol.MaxHistoryContentBytes)
 			if err != nil {
 				return "", c, e, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, "", "content.json: %v", err)
 			}
@@ -717,7 +753,7 @@ func (a HistoryArchive) openEntry(sessionUID, sum string) (string, protocol.Hist
 			if got[:16] != n || (sum != "" && got != sum) {
 				return "", c, e, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, "", "content.json does not match its entry")
 			}
-			ent, err := readHistoryEntryFile(dir, got)
+			ent, err := readHistoryEntryFile(a.Root, dir, got)
 			if err != nil {
 				return "", c, e, err
 			}
@@ -737,7 +773,7 @@ func (a HistoryArchive) openEntry(sessionUID, sum string) (string, protocol.Hist
 		return found[i].sum > found[j].sum
 	})
 	best := found[0]
-	data, err := readArchiveFile(filepath.Join(best.dir, protocol.HistoryContentFile), protocol.MaxHistoryContentBytes)
+	data, err := readArchiveFile(a.Root, filepath.Join(best.dir, protocol.HistoryContentFile), protocol.MaxHistoryContentBytes)
 	if err != nil {
 		return "", c, e, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, "", "content.json: %v", err)
 	}
@@ -778,14 +814,14 @@ func (a HistoryArchive) Verify(sessionUID, sum string) (protocol.HistoryVerifyRe
 		rel := path.Join(protocol.HistoryFilesDir, f.Root, f.Path)
 		brel := path.Join(protocol.HistoryBlocksDir, fmt.Sprintf("%d.json", i))
 		want[rel], want[brel] = true, true
-		got, blocks, fi, err := hashHistoryFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		got, blocks, fi, err := hashHistoryFile(a.Root, filepath.Join(dir, filepath.FromSlash(rel)))
 		if err != nil {
 			return res, corrupt(f.Name(), "%v", err)
 		}
 		if fi.Size() != f.Bytes || got != f.SHA256 || protocol.HistoryBlocksSHA256(blocks) != f.BlocksSHA256 {
 			return res, corrupt(f.Name(), "the file differs from the manifest")
 		}
-		stored, err := readArchiveFile(filepath.Join(dir, filepath.FromSlash(brel)), 1<<20)
+		stored, err := readArchiveFile(a.Root, filepath.Join(dir, filepath.FromSlash(brel)), 1<<20)
 		canon, _ := protocol.CanonicalJSON(blocks)
 		if err != nil || !bytes.Equal(stored, canon) {
 			return res, corrupt(f.Name(), "its block list differs from the file")
@@ -796,7 +832,7 @@ func (a HistoryArchive) Verify(sessionUID, sum string) (protocol.HistoryVerifyRe
 		for _, g := range c.Git.Files {
 			rel := path.Join(protocol.HistoryGitDir, stamp, g.Name)
 			want[rel] = true
-			got, _, fi, err := hashHistoryFile(filepath.Join(dir, filepath.FromSlash(rel)))
+			got, _, fi, err := hashHistoryFile(a.Root, filepath.Join(dir, filepath.FromSlash(rel)))
 			if err != nil || fi.Size() != g.Bytes || got != g.SHA256 {
 				return res, corrupt(rel, "the Git file differs from the manifest")
 			}
@@ -806,7 +842,7 @@ func (a HistoryArchive) Verify(sessionUID, sum string) (protocol.HistoryVerifyRe
 	var extra string
 	var walk func(abs, rel string) error
 	walk = func(abs, rel string) error {
-		names, err := readHistoryDir(abs)
+		names, err := readHistoryDir(a.Root, abs)
 		if err != nil {
 			return err
 		}
@@ -888,7 +924,7 @@ func (a HistoryArchive) List(project string, limit int, after string) (protocol.
 	}
 	defer unlock()
 	base := filepath.Join(a.Root, protocol.HistoryArchiveIndex, protocol.HistoryProjectDir(project))
-	months, err := readHistoryDir(base)
+	months, err := readHistoryDir(a.Root, base)
 	if errors.Is(err, fs.ErrNotExist) {
 		return res, nil
 	}
@@ -897,7 +933,7 @@ func (a HistoryArchive) List(project string, limit int, after string) (protocol.
 	}
 	var cursors []string
 	for i := len(months) - 1; i >= 0 && len(cursors) <= limit; i-- {
-		names, err := readHistoryDir(filepath.Join(base, months[i]))
+		names, err := readHistoryDir(a.Root, filepath.Join(base, months[i]))
 		if err != nil {
 			return res, err
 		}
@@ -923,7 +959,7 @@ func (a HistoryArchive) List(project string, limit int, after string) (protocol.
 // content.json; a failed check is {"error":"corrupt"}.
 func (a HistoryArchive) summary(project, indexFile string) protocol.HistorySummary {
 	bad := protocol.HistorySummary{Error: protocol.HistoryErrCorrupt}
-	data, err := readArchiveFile(indexFile, 64<<10)
+	data, err := readArchiveFileLinks(a.Root, indexFile, 64<<10, 2)
 	if err != nil {
 		return bad
 	}
@@ -936,7 +972,7 @@ func (a HistoryArchive) summary(project, indexFile string) protocol.HistorySumma
 		return bad
 	}
 	dir := filepath.Join(a.Root, filepath.FromSlash(idx.Entry))
-	content, err := readArchiveFile(filepath.Join(dir, protocol.HistoryContentFile), protocol.MaxHistoryContentBytes)
+	content, err := readArchiveFile(a.Root, filepath.Join(dir, protocol.HistoryContentFile), protocol.MaxHistoryContentBytes)
 	if err != nil {
 		return bad
 	}
@@ -944,7 +980,7 @@ func (a HistoryArchive) summary(project, indexFile string) protocol.HistorySumma
 	if err != nil || sum != idx.ContentSHA256 || c.Session.UID != idx.SessionUID || c.Project != project {
 		return bad
 	}
-	e, err := readHistoryEntryFile(dir, sum)
+	e, err := readHistoryEntryFile(a.Root, dir, sum)
 	if err != nil {
 		return bad
 	}
@@ -993,7 +1029,7 @@ func (a HistoryArchive) Read(sessionUID, sum, file string, offset int64) (protoc
 	corrupt := func(format string, args ...any) error {
 		return protocol.HistoryErrorf(protocol.HistoryErrCorrupt, file, format, args...)
 	}
-	data, err := readArchiveFile(filepath.Join(dir, protocol.HistoryBlocksDir, fmt.Sprintf("%d.json", idx)), 1<<20)
+	data, err := readArchiveFile(a.Root, filepath.Join(dir, protocol.HistoryBlocksDir, fmt.Sprintf("%d.json", idx)), 1<<20)
 	if err != nil {
 		return res, corrupt("its block list: %v", err)
 	}
@@ -1004,7 +1040,7 @@ func (a HistoryArchive) Read(sessionUID, sum, file string, offset int64) (protoc
 	if int64(len(blocks)) != (f.Bytes+protocol.HistoryBlockSize-1)/protocol.HistoryBlockSize {
 		return res, corrupt("its block list does not fit its size")
 	}
-	in, fi, err := openHistoryFile(filepath.Join(dir, protocol.HistoryFilesDir, f.Root, filepath.FromSlash(f.Path)))
+	in, fi, err := openHistoryFile(a.Root, filepath.Join(dir, protocol.HistoryFilesDir, f.Root, filepath.FromSlash(f.Path)))
 	if err != nil {
 		return res, corrupt("%v", err)
 	}

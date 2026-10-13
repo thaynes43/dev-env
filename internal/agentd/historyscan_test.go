@@ -197,11 +197,28 @@ func (r *scanResult) has(fn string) bool {
 // each only stats.
 var exportCallsOutside = map[string]bool{"sharedIsMounted": true}
 
-// scanHistoryExport checks the export's files: every open is os.OpenFile with
-// historyOpenFlags or historyDirFlags (readCredentialReference alone opens
-// outside HOME with os.O_RDONLY); no call creates, changes or removes a file,
-// reads through a link, or walks with the standard library; and no call
-// leaves the export's files except to exportCallsOutside.
+// exprName is an identifier's name, or pkg.Name for a selector, or "".
+func exprName(e ast.Expr) string {
+	switch e := e.(type) {
+	case *ast.Ident:
+		return e.Name
+	case *ast.SelectorExpr:
+		if x, ok := e.X.(*ast.Ident); ok {
+			return x.Name + "." + e.Sel.Name
+		}
+	}
+	return ""
+}
+
+// scanHistoryExport checks the export's files: every open goes through
+// openBeneath, which alone opens a base directory (os.OpenFile with
+// historyBaseFlags), walks below it with syscall.Openat (historyDirFlags, or
+// its flags parameter for the last component) and wraps the descriptors with
+// os.NewFile; every call of openBeneath passes historyOpenFlags or
+// historyDirFlags (readCredentialReference alone opens outside HOME with
+// os.O_RDONLY); no call creates, changes or removes a file, reads through a
+// link, or walks with the standard library; and no call leaves the export's
+// files except to exportCallsOutside.
 func scanHistoryExport(t *testing.T, paths []string) scanResult {
 	fset := token.NewFileSet()
 	files := parseGoFiles(t, fset, paths)
@@ -221,6 +238,17 @@ func scanHistoryExport(t *testing.T, paths []string) scanResult {
 				if !defined[id.Name] && !local[id.Name] && !goBuiltins[id.Name] && !exportCallsOutside[id.Name] {
 					report(call.Pos(), "calls %s, outside the export's files", id.Name)
 				}
+				if id.Name == "openBeneath" && fn != "openBeneath" {
+					flags := ""
+					if len(call.Args) > 2 {
+						flags = exprName(call.Args[2])
+					}
+					if flags == "historyOpenFlags" || flags == "historyDirFlags" {
+						res.seen["openBeneath "+flags+" in "+fn]++
+					} else {
+						report(call.Pos(), "calls openBeneath with flags %q, not historyOpenFlags or historyDirFlags", flags)
+					}
+				}
 				return true
 			}
 			pkg, name, ok := pkgCall(pf, call)
@@ -231,23 +259,28 @@ func scanHistoryExport(t *testing.T, paths []string) scanResult {
 			case pkg == "os" && name == "OpenFile":
 				flags := ""
 				if len(call.Args) > 1 {
-					switch f := call.Args[1].(type) {
-					case *ast.Ident:
-						flags = f.Name
-					case *ast.SelectorExpr:
-						if x, ok := f.X.(*ast.Ident); ok {
-							flags = x.Name + "." + f.Sel.Name
-						}
-					}
+					flags = exprName(call.Args[1])
 				}
 				switch {
 				case fn == "readCredentialReference" && flags == "os.O_RDONLY":
 					res.seen["os.OpenFile os.O_RDONLY in "+fn]++
-				case fn != "readCredentialReference" && (flags == "historyOpenFlags" || flags == "historyDirFlags"):
-					res.seen["os.OpenFile "+flags+" in "+fn]++
+				case fn == "openBeneath" && flags == "historyBaseFlags":
+					res.seen["os.OpenFile historyBaseFlags in "+fn]++
 				default:
-					report(call.Pos(), "opens with flags %q, not historyOpenFlags or historyDirFlags", flags)
+					report(call.Pos(), "opens with flags %q outside openBeneath", flags)
 				}
+			case (pkg == "syscall" || pkg == "unix") && name == "Openat" && fn == "openBeneath":
+				flags := ""
+				if len(call.Args) > 2 {
+					flags = exprName(call.Args[2])
+				}
+				if flags == "historyDirFlags" || flags == "flags" {
+					res.seen[pkg+".Openat "+flags+" in "+fn]++
+				} else {
+					report(call.Pos(), "opens below the base with flags %q, not historyDirFlags or its flags parameter", flags)
+				}
+			case pkg == "os" && name == "NewFile" && fn == "openBeneath":
+				res.seen["os.NewFile in "+fn]++
 			case pkg == "os" && osWriters[name]:
 				report(call.Pos(), "calls os.%s, which writes", name)
 			case pkg == "os" && osFollowers[name]:
@@ -268,16 +301,20 @@ func TestHistoryExportReadsOnly(t *testing.T) {
 	for _, v := range res.violations {
 		t.Error(v)
 	}
-	for _, want := range []string{
-		"os.OpenFile historyOpenFlags in openHistoryFileLinks",
-		"os.OpenFile historyDirFlags in readHistoryDir",
-		"os.OpenFile os.O_RDONLY in readCredentialReference",
+	for want, n := range map[string]int{
+		"os.OpenFile historyBaseFlags in openBeneath":          1,
+		"syscall.Openat historyDirFlags in openBeneath":        1,
+		"syscall.Openat flags in openBeneath":                  1,
+		"os.NewFile in openBeneath":                            2,
+		"openBeneath historyOpenFlags in openHistoryFileLinks": 1,
+		"openBeneath historyDirFlags in readHistoryDir":        1,
+		"os.OpenFile os.O_RDONLY in readCredentialReference":   1,
 	} {
-		if res.seen[want] != 1 {
-			t.Errorf("%s: seen %d times, want once", want, res.seen[want])
+		if res.seen[want] != n {
+			t.Errorf("%s: seen %d times, want %d", want, res.seen[want], n)
 		}
 	}
-	if len(res.seen) != 3 {
+	if len(res.seen) != 7 {
 		t.Errorf("the export opens files in more places than the scan expects: %v", res.seen)
 	}
 }
@@ -288,6 +325,8 @@ func TestHistoryExportScanCatchesWrites(t *testing.T) {
 		"openWithoutNoFollow", "openWithLiteralFlags", "openPlain", "readFileFollows", "statFollows", "createFile",
 		"removeFile", "renameFile", "chmodFile", "chtimesFile", "mkdirAll", "writeFile", "linkFile", "syscallUnlink",
 		"walkFollows", "callsAWriterElsewhere", "readCredentialReference", "literalRemoves",
+		"openOutsideOpenBeneath", "openBeneathWritable", "openatOutsideOpenBeneath", "newFileOutsideOpenBeneath",
+		"openBeneath",
 	} {
 		if !res.has(fn) {
 			t.Errorf("the export scan does not catch %s", fn)
@@ -300,7 +339,8 @@ func TestHistoryExportScanCatchesWrites(t *testing.T) {
 // archiveCallsOutside are the functions of other files the archive may call:
 // they read, hash or stat.
 var archiveCallsOutside = map[string]bool{
-	"sharedIsMounted": true, "openHistoryFile": true, "readHistoryDir": true, "newBlockHasher": true, "hashHistoryFile": true,
+	"sharedIsMounted": true, "openHistoryFile": true, "openHistoryFileLinks": true, "readHistoryDir": true,
+	"newBlockHasher": true, "hashHistoryFile": true,
 }
 
 // openWriteFlags are the open flags that let a call write.
@@ -723,9 +763,257 @@ func (sc *stateScan) add(pos token.Pos, fn string, decl *ast.FuncDecl, e ast.Exp
 	}
 }
 
+// tempHelper is a function that writes a temporary file beside the path it is
+// given: os.CreateTemp(filepath.Dir(p), pattern) for its parameter p, or a
+// call that passes p on to another tempHelper. writeFileAtomic, writeFileOnce,
+// writeCodexPrivateAtomic and writeJSONFile are four.
+type tempHelper struct {
+	param    int
+	patterns []tempPattern
+}
+
+// tempPattern is a CreateTemp pattern and the path parameter filepath.Base
+// reads in it.
+type tempPattern struct {
+	expr  ast.Expr
+	param string
+}
+
+func paramIndex(decl *ast.FuncDecl, name string) int {
+	i := 0
+	for _, field := range decl.Type.Params.List {
+		for _, n := range field.Names {
+			if n.Name == name {
+				return i
+			}
+			i++
+		}
+	}
+	return -1
+}
+
+// isPkgCall reports whether e is pkg.name(...) and returns the call.
+func isPkgCall(e ast.Expr, pkg, name string) (*ast.CallExpr, bool) {
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return nil, false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != name {
+		return nil, false
+	}
+	x, ok := sel.X.(*ast.Ident)
+	return call, ok && x.Name == pkg
+}
+
+// calleeName is the name a call calls: f for f(...) and x.f(...).
+func calleeName(call *ast.CallExpr) string {
+	switch f := call.Fun.(type) {
+	case *ast.Ident:
+		return f.Name
+	case *ast.SelectorExpr:
+		return f.Sel.Name
+	}
+	return ""
+}
+
+// dirOfParam reports which parameter of decl e is the directory of:
+// filepath.Dir(p), or a local assigned from it.
+func dirOfParam(decl *ast.FuncDecl, e ast.Expr) (string, bool) {
+	ofParam := func(e ast.Expr) (string, bool) {
+		call, ok := isPkgCall(e, "filepath", "Dir")
+		if !ok || len(call.Args) != 1 {
+			return "", false
+		}
+		id, ok := call.Args[0].(*ast.Ident)
+		return id.Name, ok && paramIndex(decl, id.Name) >= 0
+	}
+	if p, ok := ofParam(e); ok {
+		return p, true
+	}
+	id, ok := e.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	found := ""
+	ast.Inspect(decl.Body, func(n ast.Node) bool {
+		if as, ok := n.(*ast.AssignStmt); ok && len(as.Lhs) == len(as.Rhs) {
+			for i, l := range as.Lhs {
+				if lid, ok := l.(*ast.Ident); ok && lid.Name == id.Name {
+					if p, ok := ofParam(as.Rhs[i]); ok {
+						found = p
+					}
+				}
+			}
+		}
+		return true
+	})
+	return found, found != ""
+}
+
+// findTempHelpers finds every tempHelper among the scanned functions.
+func (sc *stateScan) findTempHelpers() map[string]*tempHelper {
+	out := map[string]*tempHelper{}
+	for name, decls := range sc.funcs {
+		for _, decl := range decls {
+			if decl.Body == nil {
+				continue
+			}
+			ast.Inspect(decl.Body, func(n ast.Node) bool {
+				call, ok := isPkgCall(asExpr(n), "os", "CreateTemp")
+				if !ok || len(call.Args) != 2 {
+					return true
+				}
+				if p, ok := dirOfParam(decl, call.Args[0]); ok {
+					h := out[name]
+					if h == nil {
+						h = &tempHelper{param: paramIndex(decl, p)}
+						out[name] = h
+					}
+					h.patterns = append(h.patterns, tempPattern{call.Args[1], p})
+				}
+				return true
+			})
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for name, decls := range sc.funcs {
+			if out[name] != nil {
+				continue
+			}
+			for _, decl := range decls {
+				if decl.Body == nil {
+					continue
+				}
+				ast.Inspect(decl.Body, func(n ast.Node) bool {
+					call, ok := n.(*ast.CallExpr)
+					if !ok || out[name] != nil {
+						return out[name] == nil
+					}
+					h := out[calleeName(call)]
+					if h == nil || len(call.Args) <= h.param {
+						return true
+					}
+					if id, ok := call.Args[h.param].(*ast.Ident); ok && paramIndex(decl, id.Name) >= 0 {
+						out[name] = &tempHelper{param: paramIndex(decl, id.Name), patterns: h.patterns}
+						changed = true
+						return false
+					}
+					return true
+				})
+			}
+		}
+	}
+	return out
+}
+
+func asExpr(n ast.Node) ast.Expr {
+	e, _ := n.(ast.Expr)
+	return e
+}
+
+// statePathOf finds the names e can have at the top of the state directory:
+// statePath(name), filepath.Join(<state dir>, name), or a local assigned from
+// either. isState is false for anything else, and for a path in a
+// subdirectory, where a temporary copy beside it is not at the top.
+func (sc *stateScan) statePathOf(e ast.Expr, decl *ast.FuncDecl, depth int) (names []string, isState, ok bool) {
+	if depth > 4 || decl == nil {
+		return nil, false, true
+	}
+	switch e := e.(type) {
+	case *ast.ParenExpr:
+		return sc.statePathOf(e.X, decl, depth)
+	case *ast.CallExpr:
+		if sel, isSel := e.Fun.(*ast.SelectorExpr); isSel && sel.Sel.Name == "statePath" && len(e.Args) == 1 {
+			if x, isID := sel.X.(*ast.Ident); isID {
+				if _, rebased := sc.rebasedStateDir(x.Name, decl); rebased {
+					return nil, false, true
+				}
+			}
+			v, good := sc.resolve(e.Args[0], decl, 0)
+			return v, true, good
+		}
+		if call, isJoin := isPkgCall(e, "filepath", "Join"); isJoin && len(call.Args) >= 2 && stateDirExpr(call.Args[0], decl) {
+			if len(call.Args) > 2 {
+				return nil, false, true
+			}
+			v, good := sc.resolve(call.Args[1], decl, 0)
+			return v, true, good
+		}
+	case *ast.Ident:
+		var out []string
+		state, good := false, true
+		ast.Inspect(decl.Body, func(n ast.Node) bool {
+			as, isAssign := n.(*ast.AssignStmt)
+			if !isAssign || len(as.Lhs) != len(as.Rhs) {
+				return true
+			}
+			for i, l := range as.Lhs {
+				if id, isID := l.(*ast.Ident); isID && id.Name == e.Name {
+					v, s, g := sc.statePathOf(as.Rhs[i], decl, depth+1)
+					if s {
+						state = true
+						good = good && g
+						out = append(out, v...)
+					}
+				}
+			}
+			return true
+		})
+		return out, state, good
+	}
+	return nil, false, true
+}
+
+// tempNames are the names a tempPattern gives beside the state file name.
+func (sc *stateScan) tempNames(p tempPattern, name string) ([]string, bool) {
+	var r func(e ast.Expr) ([]string, bool)
+	r = func(e ast.Expr) ([]string, bool) {
+		switch e := e.(type) {
+		case *ast.ParenExpr:
+			return r(e.X)
+		case *ast.BasicLit:
+			if e.Kind != token.STRING {
+				return nil, false
+			}
+			v, err := strconv.Unquote(e.Value)
+			return []string{v}, err == nil
+		case *ast.Ident:
+			v, ok := sc.consts[e.Name]
+			return v, ok
+		case *ast.BinaryExpr:
+			if e.Op != token.ADD {
+				return nil, false
+			}
+			l, ok1 := r(e.X)
+			rr, ok2 := r(e.Y)
+			if !ok1 || !ok2 {
+				return nil, false
+			}
+			var out []string
+			for _, a := range l {
+				for _, b := range rr {
+					out = append(out, a+b)
+				}
+			}
+			return out, true
+		case *ast.CallExpr:
+			if call, ok := isPkgCall(e, "filepath", "Base"); ok && len(call.Args) == 1 {
+				if id, ok := call.Args[0].(*ast.Ident); ok && id.Name == p.param {
+					return []string{path.Base(name)}, true
+				}
+			}
+		}
+		return nil, false
+	}
+	return r(p.expr)
+}
+
 // scanAgentdState collects the top-level names of every statePath call,
 // filepath.Join(<state dir>, name, ...), os.CreateTemp(<state dir>, pattern)
-// (each * as x) and workspaceFileLock(<state dir>, name) (name.lock).
+// (each * as x), workspaceFileLock(<state dir>, name) (name.lock), and the
+// temporary copy a tempHelper writes beside a state file.
 func scanAgentdState(t *testing.T, paths []string) *stateScan {
 	sc := newStateScan(t, paths)
 	eachFunc(sc.files, func(pf parsedFile, fn string, decl *ast.FuncDecl, body *ast.BlockStmt) {
@@ -769,6 +1057,44 @@ func scanAgentdState(t *testing.T, paths []string) *stateScan {
 			return true
 		})
 	})
+	helpers := sc.findTempHelpers()
+	eachFunc(sc.files, func(_ parsedFile, fn string, decl *ast.FuncDecl, body *ast.BlockStmt) {
+		ast.Inspect(body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			h := helpers[calleeName(call)]
+			if h == nil || len(call.Args) <= h.param {
+				return true
+			}
+			names, isState, good := sc.statePathOf(call.Args[h.param], decl, 0)
+			if !isState {
+				return true
+			}
+			if !good {
+				sc.report(call.Pos(), fn, "cannot resolve the state file a temporary copy is written beside")
+				return true
+			}
+			for _, name := range names {
+				if strings.Contains(name, "/") {
+					continue
+				}
+				for _, p := range h.patterns {
+					vals, ok := sc.tempNames(p, name)
+					if !ok {
+						sc.report(call.Pos(), fn, "cannot resolve the temporary name written beside %s", name)
+						continue
+					}
+					for _, v := range vals {
+						top := strings.ReplaceAll(v, "*", "x")
+						sc.names[top] = append(sc.names[top], fmt.Sprintf("%s (%s)", sc.fset.Position(call.Pos()), fn))
+					}
+				}
+			}
+			return true
+		})
+	})
 	return sc
 }
 
@@ -792,25 +1118,18 @@ func TestHistoryLayoutCoversAgentdState(t *testing.T) {
 	for _, u := range sc.unclassified() {
 		t.Errorf("agentd writes %s; classify it in agentdLayout", u)
 	}
-	// writeFileAtomic and writeFileOnce write a temporary copy beside the
-	// file (files.go).
-	for _, tmp := range []string{".launch.json.agentd-123", ".child-decision.json.agentd-9"} {
-		if r, ok := classifyHistoryName(agentdLayout, tmp); !ok || r.class == classHistory {
-			t.Errorf("temporary copy %s is not classified as not history", tmp)
-		}
-	}
-	// The scan must see the names it exists for, or it proves nothing.
+	// The scan must see the names it exists for, or it proves nothing: the
+	// temporary copies included, through writeFileOnce, writeJSONFile and
+	// writeCodexPrivateAtomic.
 	for _, want := range []string{"launch.json", "boot.json", "task-result.json", "decisions", "managed-output", "initial-usage",
-		"workspace-supervisor.lock", "native-invocation.lock", "published-context.0123.4567.json", "rescue-x.bundle", "rescue-index-x"} {
+		"workspace-supervisor.lock", "native-invocation.lock", "published-context.0123.4567.json", "rescue-x.bundle", "rescue-index-x",
+		".task-source.json.agentd-x", ".launch.json.agentd-x", ".codex-access-x"} {
 		if len(sc.names[want]) == 0 {
 			t.Errorf("the scan did not find %s", want)
 		}
 	}
 	// Every rule names something agentd writes, so the table does not rot.
 	for _, r := range agentdLayout {
-		if r.pattern == ".*.agentd-*" {
-			continue
-		}
 		used := false
 		for name := range sc.names {
 			if ok, _ := path.Match(r.pattern, name); ok {
@@ -830,7 +1149,7 @@ func TestHistoryLayoutScanCatchesNewState(t *testing.T) {
 	for _, want := range []string{
 		"unclassified-a.json", "unclassified-b.json", "unclassified-c", "unclassified-d", "unclassified-e-x",
 		"unclassified-f.lock", "unclassified-g.json", "unclassified-h.json", "in dynamicName;", "unclassified-i",
-		"unclassified-j",
+		"unclassified-j", ".launch.json.unclassified-k-x", ".unclassified-l-x",
 	} {
 		if !strings.Contains(report, want) {
 			t.Errorf("the state scan does not catch %s:\n%s", want, report)

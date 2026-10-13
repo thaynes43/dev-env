@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // What `agentd ctl history-export` (in the hold pod, over a private HOME) and
@@ -221,6 +222,13 @@ type HistoryTerminal struct {
 	ObservedAt time.Time `json:"observedAt"`
 }
 
+// The rescue verdicts that let a HOME go (DESIGN-025 6.2), as status.rescue
+// spells them (api/v1alpha1 RescueResult). put refuses any other.
+const (
+	HistoryRescueVerified       = "Verified"
+	HistoryRescueCleanAndPushed = "CleanAndPushed"
+)
+
 // HistoryRescue is the Git rescue the expiry relied on (status.rescue).
 type HistoryRescue struct {
 	Stamp  string `json:"stamp"`
@@ -340,12 +348,17 @@ type HistoryReadResult struct {
 
 var (
 	hexSHA256   = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	rescueStamp = regexp.MustCompile(`^[0-9]{8}-[0-9]{4}$`)
 	kubeUID     = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	gitFileName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,255}$`)
 )
 
 // ValidSHA256 reports whether s is 64 lowercase hex digits.
 func ValidSHA256(s string) bool { return hexSHA256.MatchString(s) }
+
+// ValidRescueStamp reports whether s is a rescue report's stamp, UTC
+// YYYYMMDD-HHMM, without the -N its directory may add.
+func ValidRescueStamp(s string) bool { return rescueStamp.MatchString(s) }
 
 // ValidKubeUID reports whether s is a Kubernetes UID.
 func ValidKubeUID(s string) bool { return kubeUID.MatchString(s) }
@@ -449,10 +462,14 @@ func IsCredentialName(base string) bool {
 	return false
 }
 
-// CheckHistoryPath checks one slash path relative to a root: not empty, not
-// absolute, no empty, "." or ".." segment, within the depth and length bounds,
-// and no segment with a credential name. It returns the HistoryError code.
+// CheckHistoryPath checks one slash path relative to a root: valid UTF-8, not
+// empty, not absolute, no empty, "." or ".." segment, within the depth and
+// length bounds, and no segment with a credential name. It returns the
+// HistoryError code.
 func CheckHistoryPath(p string) (code, why string) {
+	if !utf8.ValidString(p) {
+		return HistoryErrInvalid, "not UTF-8"
+	}
 	if p == "" || strings.HasPrefix(p, "/") || len(p) > MaxHistoryPathBytes || strings.ContainsRune(p, 0) || strings.Contains(p, "\\") {
 		return HistoryErrInvalid, "not a relative slash path within the length bound"
 	}

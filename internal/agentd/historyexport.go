@@ -16,15 +16,17 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"unicode/utf8"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
 // The history export (DESIGN-025 6.3): `agentd ctl history-export plan|stream`,
 // run by exec in a private Session's hold pod, or in its session pod, over the
-// private HOME. It reads HOME only. Every file and directory is opened with
-// O_RDONLY|O_NOFOLLOW (TestHistoryExportReadsOnly), and nothing under HOME is
-// created, changed or removed.
+// private HOME. It reads HOME only. Every file and directory is opened by
+// openBeneath, one path component at a time from HOME with O_NOFOLLOW, so no
+// component below HOME is ever a link (TestHistoryExportReadsOnly), and
+// nothing under HOME is created, changed or removed.
 
 // HistoryExportOptions are what the operator knows about the executor: its
 // provider directories relative to HOME, from the Session's terminal record,
@@ -42,14 +44,25 @@ type HistoryExportOptions struct {
 var historyBounds = struct {
 	fileBytes, totalBytes int64
 	files, excluded       int
-}{protocol.MaxHistoryFileBytes, protocol.MaxHistoryExportBytes, protocol.MaxHistoryExportFiles, protocol.MaxHistoryExcluded}
+	contentBytes          int
+}{protocol.MaxHistoryFileBytes, protocol.MaxHistoryExportBytes, protocol.MaxHistoryExportFiles, protocol.MaxHistoryExcluded, protocol.MaxHistoryContentBytes}
 
-// historyOpenFlags opens a file of HOME: read-only, never through a link, and
-// never blocking on a FIFO that raced into its place.
+// historyContentReserve is the room a plan leaves under the content
+// manifest's bound for the operator's half of it (session, project, terminal
+// record and rescue), which is under 2 KiB.
+const historyContentReserve = 64 << 10
+
+// historyOpenFlags opens the last component of a file's path: read-only, never
+// through a link, and never blocking on a FIFO that raced into its place.
 const historyOpenFlags = os.O_RDONLY | syscall.O_NOFOLLOW | syscall.O_NONBLOCK | syscall.O_CLOEXEC
 
-// historyDirFlags opens a directory of HOME the same way.
+// historyDirFlags opens each directory of a path the same way.
 const historyDirFlags = os.O_RDONLY | syscall.O_NOFOLLOW | syscall.O_DIRECTORY | syscall.O_CLOEXEC
+
+// historyBaseFlags opens the directory openBeneath starts from: HOME, the
+// shared volume or the archive. Its own path may pass through a link or a
+// mount; nothing below it may.
+const historyBaseFlags = os.O_RDONLY | syscall.O_DIRECTORY | syscall.O_CLOEXEC
 
 // historyRootDef is one root of an export, resolved.
 type historyRootDef struct {
@@ -73,7 +86,7 @@ func PlanHistoryExport(s Settings, o HistoryExportOptions) (protocol.HistoryExpo
 	if err != nil {
 		return protocol.HistoryExportPlan{}, err
 	}
-	w := &historyWalk{creds: creds}
+	w := &historyWalk{home: s.Home, shared: sharedMountInHome(s), creds: creds}
 	plan := protocol.HistoryExportPlan{
 		Format:   protocol.HistoryExportPlanFormat,
 		Session:  o.Session,
@@ -116,7 +129,40 @@ func PlanHistoryExport(s Settings, o HistoryExportOptions) (protocol.HistoryExpo
 		}
 		plan.Git = g
 	}
+	if err := checkHistoryContentSize(plan); err != nil {
+		return protocol.HistoryExportPlan{}, err
+	}
 	return plan, nil
+}
+
+// checkHistoryContentSize refuses (export_too_large) a plan whose content
+// manifest would not fit put's bound with historyContentReserve to spare, so
+// the plan refuses rather than a put that can never succeed.
+func checkHistoryContentSize(plan protocol.HistoryExportPlan) error {
+	var c protocol.HistoryContent
+	protocol.HistoryContentFromPlan(&c, plan, strings.Repeat("0", 64))
+	data, err := protocol.CanonicalJSON(c)
+	if err != nil {
+		return err
+	}
+	if limit := historyBounds.contentBytes - historyContentReserve; len(data) > limit {
+		return protocol.HistoryErrorf(protocol.HistoryErrTooLarge, "", "the content manifest would be %d bytes, over the %d-byte bound less %d for the operator's part", len(data), historyBounds.contentBytes, historyContentReserve)
+	}
+	return nil
+}
+
+// sharedMountInHome is the shared volume's directory when it lies strictly
+// inside HOME and is mounted there, and "" otherwise: a link to it from a
+// history subtree names data HOME's delete leaves alone.
+func sharedMountInHome(s Settings) string {
+	r, err := filepath.Rel(s.Home, s.SharedDir)
+	if err != nil || s.SharedDir == "" || !filepath.IsAbs(s.SharedDir) || r == "." || !filepath.IsLocal(r) {
+		return ""
+	}
+	if sharedIsMounted(s.SharedDir, s.Home) != nil {
+		return ""
+	}
+	return filepath.Clean(s.SharedDir)
 }
 
 // HistoryPlanSHA256 is the digest `stream --plan-sha256` compares: the
@@ -151,15 +197,23 @@ func StreamHistoryExport(s Settings, o HistoryExportOptions, planSHA256 string, 
 		if f.Root == protocol.HistoryRootLog {
 			abs = roots[f.Root]
 		}
-		if err := streamHistoryFile(tw, abs, f); err != nil {
+		if err := streamHistoryFile(tw, s.Home, abs, f); err != nil {
 			return err
 		}
 	}
 	return tw.Close()
 }
 
-func streamHistoryFile(tw *tar.Writer, abs string, f protocol.HistoryFile) error {
-	file, fi, err := openHistoryFile(abs)
+func streamHistoryFile(tw *tar.Writer, home, abs string, f protocol.HistoryFile) error {
+	lfi, err := os.Lstat(abs)
+	if err != nil {
+		return protocol.HistoryErrorf(protocol.HistoryErrChanged, f.Name(), "%v", err)
+	}
+	links, ok := historyFileLinks(home, f.Root, f.Path, abs, lfi)
+	if !ok {
+		return protocol.HistoryErrorf(protocol.HistoryErrCredentialInTree, f.Name(), "a file with more than one hard link, which could be a credential's")
+	}
+	file, fi, err := openHistoryFileLinks(home, abs, links)
 	if err != nil {
 		return protocol.HistoryErrorf(protocol.HistoryErrChanged, f.Name(), "%v", err)
 	}
@@ -298,7 +352,7 @@ func credentialDigests(s Settings, roots []historyRootDef) (map[string]bool, err
 		if r.rules == nil {
 			continue
 		}
-		names, err := readHistoryDir(r.abs)
+		names, err := readHistoryDir(s.Home, r.abs)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
@@ -314,7 +368,7 @@ func credentialDigests(s Settings, roots []historyRootDef) (map[string]bool, err
 			if err != nil || !fi.Mode().IsRegular() || fi.Size() == 0 || fi.Size() > historyBounds.fileBytes {
 				continue
 			}
-			sum, _, _, err := hashHistoryFileLinks(filepath.Join(r.abs, name), true)
+			sum, _, _, err := hashHistoryFileLinks(s.Home, filepath.Join(r.abs, name), anyHistoryLinks)
 			if err != nil {
 				return nil, protocol.HistoryErrorf(protocol.HistoryErrIO, path.Join(r.name, name), "read a credential to compare: %v", err)
 			}
@@ -365,6 +419,9 @@ func readCredentialReference(home, p string) (string, error) {
 
 // historyWalk collects a plan's files and exclusions.
 type historyWalk struct {
+	// home is HOME, where every open starts; shared is sharedMountInHome.
+	home     string
+	shared   string
 	creds    map[string]bool
 	files    []protocol.HistoryFile
 	excluded []protocol.HistoryExcluded
@@ -395,12 +452,17 @@ func (w *historyWalk) dirRoot(r historyRootDef) (absent bool, err error) {
 	if !fi.IsDir() {
 		return false, protocol.HistoryErrorf(protocol.HistoryErrLayoutUnknown, r.name, "the %s root %q is not a directory", r.name, r.rel)
 	}
-	names, err := readHistoryDir(r.abs)
+	names, err := readHistoryDir(w.home, r.abs)
 	if err != nil {
 		return false, err
 	}
 	for _, name := range names {
 		abs := filepath.Join(r.abs, name)
+		if !utf8.ValidString(name) {
+			// JSON cannot carry the name's bytes, so the manifest and the
+			// stream would name different files.
+			return false, protocol.HistoryErrorf(protocol.HistoryErrUnexpectedEntry, r.name, "a name that is not UTF-8")
+		}
 		rule, ok := classifyHistoryName(r.rules, name)
 		switch {
 		case ok && rule.class == protocol.HistoryClassCredential:
@@ -420,13 +482,18 @@ func (w *historyWalk) dirRoot(r historyRootDef) (absent bool, err error) {
 			return false, protocol.HistoryErrorf(protocol.HistoryErrIO, path.Join(r.name, name), "%v", err)
 		}
 		if efi.Mode()&fs.ModeSymlink != 0 {
+			if rule.class == classHistory {
+				// What the link names would be deleted with HOME, or not, without
+				// being archived either way.
+				return false, protocol.HistoryErrorf(protocol.HistoryErrUnexpectedEntry, path.Join(r.name, name), "a link where history belongs")
+			}
 			if err := w.exclude(r.name, name, protocol.HistoryClassLink, 0); err != nil {
 				return false, err
 			}
 			continue
 		}
 		if rule.class != classHistory {
-			n, err := treeBytesNoFollow(abs, efi)
+			n, err := treeBytesNoFollow(w.home, abs, efi)
 			if err != nil {
 				return false, err
 			}
@@ -462,7 +529,7 @@ func (w *historyWalk) logRoot(r historyRootDef) (absent bool, err error) {
 	}
 	switch {
 	case fi.Mode()&fs.ModeSymlink != 0:
-		return false, w.exclude(r.name, r.file, protocol.HistoryClassLink, 0)
+		return false, protocol.HistoryErrorf(protocol.HistoryErrUnexpectedEntry, path.Join(r.name, r.file), "the log is a link")
 	case fi.Mode().IsRegular():
 		return false, w.addFile(r.name, r.abs, r.file, fi)
 	default:
@@ -470,19 +537,23 @@ func (w *historyWalk) logRoot(r historyRootDef) (absent bool, err error) {
 	}
 }
 
-// walkDir walks one history subtree. Links are listed, never followed;
-// anything but a directory, a regular file or a link refuses.
+// walkDir walks one history subtree. Links are listed, never followed, and
+// checkLink refuses one whose target HOME's delete would remove; anything but
+// a directory, a regular file or a link refuses.
 func (w *historyWalk) walkDir(root, abs, rel string, depth int) error {
 	if depth >= protocol.MaxHistoryPathDepth {
 		return protocol.HistoryErrorf(protocol.HistoryErrUnexpectedEntry, path.Join(root, rel), "deeper than %d levels", protocol.MaxHistoryPathDepth)
 	}
-	names, err := readHistoryDir(abs)
+	names, err := readHistoryDir(w.home, abs)
 	if err != nil {
 		return err
 	}
 	for _, name := range names {
 		childRel := rel + "/" + name
 		childAbs := filepath.Join(abs, name)
+		if !utf8.ValidString(name) {
+			return protocol.HistoryErrorf(protocol.HistoryErrUnexpectedEntry, path.Join(root, rel), "a name that is not UTF-8")
+		}
 		if len(childRel) > protocol.MaxHistoryPathBytes {
 			return protocol.HistoryErrorf(protocol.HistoryErrUnexpectedEntry, path.Join(root, rel), "a path longer than %d bytes", protocol.MaxHistoryPathBytes)
 		}
@@ -495,6 +566,9 @@ func (w *historyWalk) walkDir(root, abs, rel string, depth int) error {
 		}
 		switch {
 		case fi.Mode()&fs.ModeSymlink != 0:
+			if err := w.checkLink(root, childAbs, childRel); err != nil {
+				return err
+			}
 			if err := w.exclude(root, childRel, protocol.HistoryClassLink, 0); err != nil {
 				return err
 			}
@@ -513,11 +587,72 @@ func (w *historyWalk) walkDir(root, abs, rel string, depth int) error {
 	return nil
 }
 
+// checkLink lets a link inside a history subtree be listed only when HOME's
+// delete leaves what it names: a target outside HOME, or on the shared volume
+// mounted inside it, such as Claude's projects/<key>/memory (DESIGN-001 6.6).
+// A link to anything else in HOME refuses (unexpected_entry), because its
+// target would go with HOME without being archived. The target is read with
+// Readlink and resolved by its text; it is never followed.
+func (w *historyWalk) checkLink(root, abs, rel string) error {
+	target, err := os.Readlink(abs)
+	if err != nil {
+		return protocol.HistoryErrorf(protocol.HistoryErrIO, path.Join(root, rel), "%v", err)
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(abs), target)
+	}
+	target = filepath.Clean(target)
+	within := func(p, dir string) bool { return p == dir || strings.HasPrefix(p, dir+string(filepath.Separator)) }
+	if w.shared != "" && within(target, w.shared) {
+		return nil
+	}
+	if within(target, w.home) {
+		return protocol.HistoryErrorf(protocol.HistoryErrUnexpectedEntry, path.Join(root, rel), "a link to something in HOME, which would be deleted without being archived")
+	}
+	return nil
+}
+
+// historyFileLinks is how many hard links an exported file may have: one, or
+// two when it is a file at the top of agentd's state directory whose other
+// name is the temporary copy writeFileOnce (files.go) left beside it when
+// agentd stopped between linking the copy into place and removing it,
+// ".<name>.agentd-*" in the same directory. Then the file has no name outside
+// that directory, so it cannot be a credential's. ok is false for any other
+// file with more than one link. The copy's name is built from rel, which
+// holds a slash below the top, so a file deeper down never finds one; there
+// the copy would be a history file with two links itself.
+func historyFileLinks(home, root, rel, abs string, fi fs.FileInfo) (links int64, ok bool) {
+	st, isStat := fi.Sys().(*syscall.Stat_t)
+	if !isStat || st.Nlink <= 1 {
+		return 1, true
+	}
+	if st.Nlink != 2 || root != protocol.HistoryRootAgentd {
+		return 0, false
+	}
+	dir := filepath.Dir(abs)
+	names, err := readHistoryDir(home, dir)
+	if err != nil {
+		return 0, false
+	}
+	prefix := "." + rel + ".agentd-"
+	for _, n := range names {
+		if !strings.HasPrefix(n, prefix) || len(n) == len(prefix) {
+			continue
+		}
+		sfi, err := os.Lstat(filepath.Join(dir, n))
+		if err == nil && sfi.Mode().IsRegular() && os.SameFile(fi, sfi) {
+			return 2, true
+		}
+	}
+	return 0, false
+}
+
 // addFile hashes one regular file into the plan.
 func (w *historyWalk) addFile(root, abs, rel string, lfi fs.FileInfo) error {
 	name := path.Join(root, rel)
-	if st, ok := lfi.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
-		return protocol.HistoryErrorf(protocol.HistoryErrCredentialInTree, name, "a file with %d hard links, which could be a credential's", st.Nlink)
+	links, ok := historyFileLinks(w.home, root, rel, abs, lfi)
+	if !ok {
+		return protocol.HistoryErrorf(protocol.HistoryErrCredentialInTree, name, "a file with more than one hard link, which could be a credential's")
 	}
 	if lfi.Size() > historyBounds.fileBytes {
 		return protocol.HistoryErrorf(protocol.HistoryErrTooLarge, name, "%d bytes, over the %d-byte bound for one file", lfi.Size(), historyBounds.fileBytes)
@@ -528,7 +663,7 @@ func (w *historyWalk) addFile(root, abs, rel string, lfi fs.FileInfo) error {
 	if w.bytes+lfi.Size() > historyBounds.totalBytes {
 		return protocol.HistoryErrorf(protocol.HistoryErrTooLarge, name, "more than %d bytes in total", historyBounds.totalBytes)
 	}
-	sum, blocks, fi, err := hashHistoryFile(abs)
+	sum, blocks, fi, err := hashHistoryFileLinks(w.home, abs, links)
 	if err != nil {
 		var he *protocol.HistoryError
 		if errors.As(err, &he) {
@@ -557,16 +692,53 @@ func (w *historyWalk) addFile(root, abs, rel string, lfi fs.FileInfo) error {
 	return nil
 }
 
-// openHistoryFile opens a regular file of HOME with historyOpenFlags and
-// checks, on the open file, that it is regular with one link.
-func openHistoryFile(abs string) (*os.File, fs.FileInfo, error) {
-	return openHistoryFileLinks(abs, false)
+// anyHistoryLinks lets an open accept a file with any number of hard links:
+// a credential file read only to compare.
+const anyHistoryLinks = int64(^uint64(0) >> 1)
+
+// openBeneath opens abs, which must lie strictly inside base, one path
+// component at a time: base with historyBaseFlags, then each directory below
+// it with historyDirFlags and the last component with flags, each relative to
+// the directory before it. O_NOFOLLOW on every step means no component below
+// base is ever a link, even one swapped in while the walk runs. flags is
+// historyOpenFlags or historyDirFlags (TestHistoryExportReadsOnly).
+func openBeneath(base, abs string, flags int) (*os.File, error) {
+	rel, err := filepath.Rel(base, abs)
+	if err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return nil, &os.PathError{Op: "open", Path: abs, Err: fmt.Errorf("not inside %s", base)}
+	}
+	dir, err := os.OpenFile(base, historyBaseFlags, 0)
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	for _, p := range parts[:len(parts)-1] {
+		fd, err := syscall.Openat(int(dir.Fd()), p, historyDirFlags, 0)
+		_ = dir.Close()
+		if err != nil {
+			return nil, &os.PathError{Op: "openat", Path: abs, Err: err}
+		}
+		dir = os.NewFile(uintptr(fd), abs)
+	}
+	fd, err := syscall.Openat(int(dir.Fd()), parts[len(parts)-1], flags, 0)
+	_ = dir.Close()
+	if err != nil {
+		return nil, &os.PathError{Op: "openat", Path: abs, Err: err}
+	}
+	return os.NewFile(uintptr(fd), abs), nil
 }
 
-// openHistoryFileLinks is openHistoryFile; with anyLinks, a file with more
-// than one hard link opens too (a credential file read only to compare).
-func openHistoryFileLinks(abs string, anyLinks bool) (*os.File, fs.FileInfo, error) {
-	f, err := os.OpenFile(abs, historyOpenFlags, 0)
+// openHistoryFile opens a regular file with one link below base: HOME, the
+// shared volume or the archive.
+func openHistoryFile(base, abs string) (*os.File, fs.FileInfo, error) {
+	return openHistoryFileLinks(base, abs, 1)
+}
+
+// openHistoryFileLinks opens a regular file below base through openBeneath
+// and checks, on the open file, that it is regular with at most maxLinks hard
+// links.
+func openHistoryFileLinks(base, abs string, maxLinks int64) (*os.File, fs.FileInfo, error) {
+	f, err := openBeneath(base, abs, historyOpenFlags)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -579,22 +751,22 @@ func openHistoryFileLinks(abs string, anyLinks bool) (*os.File, fs.FileInfo, err
 		_ = f.Close()
 		return nil, nil, protocol.HistoryErrorf(protocol.HistoryErrUnexpectedEntry, "", "not a regular file")
 	}
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 && !anyLinks {
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && int64(st.Nlink) > maxLinks {
 		_ = f.Close()
 		return nil, nil, protocol.HistoryErrorf(protocol.HistoryErrCredentialInTree, "", "a file with %d hard links", st.Nlink)
 	}
 	return f, fi, nil
 }
 
-// hashHistoryFile reads a whole file once: its SHA-256 and the SHA-256 of
-// each block. The size must not change while it is read.
-func hashHistoryFile(abs string) (string, []string, fs.FileInfo, error) {
-	return hashHistoryFileLinks(abs, false)
+// hashHistoryFile reads a whole file below base once: its SHA-256 and the
+// SHA-256 of each block. The size must not change while it is read.
+func hashHistoryFile(base, abs string) (string, []string, fs.FileInfo, error) {
+	return hashHistoryFileLinks(base, abs, 1)
 }
 
-// hashHistoryFileLinks is hashHistoryFile, with openHistoryFileLinks' anyLinks.
-func hashHistoryFileLinks(abs string, anyLinks bool) (string, []string, fs.FileInfo, error) {
-	f, fi, err := openHistoryFileLinks(abs, anyLinks)
+// hashHistoryFileLinks is hashHistoryFile, with openHistoryFileLinks' maxLinks.
+func hashHistoryFileLinks(base, abs string, maxLinks int64) (string, []string, fs.FileInfo, error) {
+	f, fi, err := openHistoryFileLinks(base, abs, maxLinks)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -611,10 +783,10 @@ func hashHistoryFileLinks(abs string, anyLinks bool) (string, []string, fs.FileI
 	return sum, blocks, fi, nil
 }
 
-// readHistoryDir lists a directory of HOME, opened with historyDirFlags,
+// readHistoryDir lists a directory below base, opened through openBeneath,
 // sorted by name.
-func readHistoryDir(abs string) ([]string, error) {
-	d, err := os.OpenFile(abs, historyDirFlags, 0)
+func readHistoryDir(base, abs string) ([]string, error) {
+	d, err := openBeneath(base, abs, historyDirFlags)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
@@ -630,16 +802,16 @@ func readHistoryDir(abs string) ([]string, error) {
 	return names, nil
 }
 
-// treeBytesNoFollow is the size of the regular files under an excluded entry,
-// from directory listings and Lstat only: no file is opened.
-func treeBytesNoFollow(abs string, fi fs.FileInfo) (int64, error) {
+// treeBytesNoFollow is the size of the regular files under an excluded entry
+// below base, from directory listings and Lstat only: no file is opened.
+func treeBytesNoFollow(base, abs string, fi fs.FileInfo) (int64, error) {
 	if fi.Mode().IsRegular() {
 		return fi.Size(), nil
 	}
 	if !fi.IsDir() {
 		return 0, nil
 	}
-	names, err := readHistoryDir(abs)
+	names, err := readHistoryDir(base, abs)
 	if err != nil {
 		return 0, err
 	}
@@ -649,7 +821,7 @@ func treeBytesNoFollow(abs string, fi fs.FileInfo) (int64, error) {
 		if err != nil {
 			return 0, protocol.HistoryErrorf(protocol.HistoryErrIO, "", "%v", err)
 		}
-		c, err := treeBytesNoFollow(filepath.Join(abs, name), cfi)
+		c, err := treeBytesNoFollow(base, filepath.Join(abs, name), cfi)
 		if err != nil {
 			return 0, err
 		}
@@ -683,7 +855,7 @@ func planRescue(s Settings, o HistoryExportOptions) (*protocol.HistoryGit, error
 			return nil, protocol.HistoryErrorf(protocol.HistoryErrUnexpectedEntry, p, "not a directory")
 		}
 	}
-	m, err := readRescueManifestNoFollow(filepath.Join(abs, protocol.ManifestFile))
+	m, err := readRescueManifestNoFollow(s.SharedDir, filepath.Join(abs, protocol.ManifestFile))
 	if err != nil {
 		return nil, protocol.HistoryErrorf(protocol.HistoryErrIO, path.Join(dir, protocol.ManifestFile), "%v", err)
 	}
@@ -700,7 +872,7 @@ func planRescue(s Settings, o HistoryExportOptions) (*protocol.HistoryGit, error
 		}
 		want[path.Base(r.Bundle.File)] = r.Bundle
 	}
-	names, err := readHistoryDir(abs)
+	names, err := readHistoryDir(s.SharedDir, abs)
 	if err != nil {
 		return nil, err
 	}
@@ -714,7 +886,7 @@ func planRescue(s Settings, o HistoryExportOptions) (*protocol.HistoryGit, error
 		if name != protocol.ManifestFile && !isBundle {
 			return nil, protocol.HistoryErrorf(protocol.HistoryErrUnexpectedEntry, path.Join(dir, name), "the manifest does not name it")
 		}
-		sum, _, fi, err := hashHistoryFile(filepath.Join(abs, name))
+		sum, _, fi, err := hashHistoryFile(s.SharedDir, filepath.Join(abs, name))
 		if err != nil {
 			return nil, protocol.HistoryErrorf(protocol.HistoryErrUnexpectedEntry, path.Join(dir, name), "%v", err)
 		}
@@ -734,11 +906,11 @@ func planRescue(s Settings, o HistoryExportOptions) (*protocol.HistoryGit, error
 	return g, nil
 }
 
-// readRescueManifestNoFollow reads a rescue's manifest.json with
-// historyOpenFlags.
-func readRescueManifestNoFollow(abs string) (protocol.RescueManifest, error) {
+// readRescueManifestNoFollow reads a rescue's manifest.json below the shared
+// volume's directory through openHistoryFile.
+func readRescueManifestNoFollow(shared, abs string) (protocol.RescueManifest, error) {
 	var m protocol.RescueManifest
-	f, fi, err := openHistoryFile(abs)
+	f, fi, err := openHistoryFile(shared, abs)
 	if err != nil {
 		return m, err
 	}

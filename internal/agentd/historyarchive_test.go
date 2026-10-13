@@ -45,12 +45,16 @@ func newArchiveRig(t *testing.T, r *historyRig) *archiveRig {
 }
 
 // testContent is the operator's half of a content manifest, joined with a
-// plan.
+// plan: a Verified rescue when the plan lists its bundle, else CleanAndPushed.
 func testContent(t *testing.T, plan protocol.HistoryExportPlan, project, uid string) protocol.HistoryContent {
 	t.Helper()
 	sum, _, err := HistoryPlanSHA256(plan)
 	if err != nil {
 		t.Fatal(err)
+	}
+	result := protocol.HistoryRescueCleanAndPushed
+	if plan.Git != nil {
+		result = protocol.HistoryRescueVerified
 	}
 	c := protocol.HistoryContent{
 		Format:   protocol.HistoryArchiveFormat,
@@ -59,7 +63,7 @@ func testContent(t *testing.T, plan protocol.HistoryExportPlan, project, uid str
 		Provider: protocol.HistoryProviderClaude,
 		HomeUID:  testHomeUID,
 		Terminal: protocol.HistoryTerminal{PodUID: testPodUID, Phase: "Failed", Reason: "DeadlineExceeded", NodeName: "talosw01", ObservedAt: time.Date(2026, 10, 12, 1, 0, 0, 0, time.UTC)},
-		Rescue:   protocol.HistoryRescue{Stamp: "20261012-0102", Result: "Verified", PodUID: testPodUID},
+		Rescue:   protocol.HistoryRescue{Stamp: "20261012-0102", Result: result, PodUID: testPodUID},
 	}
 	protocol.HistoryContentFromPlan(&c, plan, sum)
 	return c
@@ -143,6 +147,18 @@ func TestHistoryArchivePutStoresAndIsIdempotent(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(filepath.Join(entry, "content.json")); !bytes.Equal(got, line) {
 		t.Errorf("a conflicting put wrote over content.json")
+	}
+
+	// An entry whose content.json cannot be read is damaged, not another
+	// manifest: corrupt, and still nothing is written.
+	if err := os.Remove(filepath.Join(entry, "content.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ar.a.Put(bytes.NewReader(putInput(t, r, c)), "x"); historyCode(err) != protocol.HistoryErrCorrupt {
+		t.Errorf("put over an entry without content.json: %v, want corrupt", err)
+	}
+	if _, err := os.Lstat(filepath.Join(entry, "content.json")); err == nil {
+		t.Errorf("a put wrote into a damaged entry")
 	}
 }
 
@@ -256,6 +272,99 @@ func TestHistoryArchivePutRefusesStreamsThatDifferFromTheManifest(t *testing.T) 
 	}
 }
 
+// TestHistoryArchivePutRefusesManifestsThatProveLess: verify compares an
+// entry only with its own manifest, and H6 deletes the HOME after verify, so
+// put refuses a manifest that does not show a whole export behind a rescue
+// that lets the HOME go.
+func TestHistoryArchivePutRefusesManifestsThatProveLess(t *testing.T) {
+	r := newHistoryRig(t)
+	r.o.Rescue = writeTestRescue(t, r, "20261012-0102", nil)
+	ar := newArchiveRig(t, r)
+	c := testContent(t, r.plan(t), "dev-env", testSessionUID)
+	good := putInput(t, r, c)
+	stream := good[bytes.IndexByte(good, '\n')+1:]
+	bad := func(edit func(*protocol.HistoryContent)) []byte {
+		cc := c
+		cc.Roots = append([]protocol.HistoryRoot(nil), c.Roots...)
+		g := *c.Git
+		cc.Git = &g
+		edit(&cc)
+		l, err := protocol.CanonicalJSON(cc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return append(append(l, '\n'), stream...)
+	}
+	cases := map[string][]byte{
+		"a Failed rescue":          bad(func(cc *protocol.HistoryContent) { cc.Rescue.Result = "Failed" }),
+		"a NoWorkAdmitted rescue":  bad(func(cc *protocol.HistoryContent) { cc.Rescue.Result = "NoWorkAdmitted" }),
+		"a result in another case": bad(func(cc *protocol.HistoryContent) { cc.Rescue.Result = "verified" }),
+		"a Verified rescue without its bundle": bad(func(cc *protocol.HistoryContent) {
+			cc.Git = nil
+		}),
+		"another rescue's bundle": bad(func(cc *protocol.HistoryContent) { cc.Git.Rescue = testHistorySession + "/20261012-0999" }),
+		"a bundle of an earlier minute's rescue": bad(func(cc *protocol.HistoryContent) {
+			cc.Rescue.Stamp = "20261012-0103"
+		}),
+		"a stamp with a directory's suffix": bad(func(cc *protocol.HistoryContent) { cc.Rescue.Stamp = "20261012-0102-2" }),
+		"agentd's root elsewhere": bad(func(cc *protocol.HistoryContent) {
+			for i := range cc.Roots {
+				if cc.Roots[i].Name == protocol.HistoryRootAgentd {
+					cc.Roots[i].Dir = ".agentd-old"
+				}
+			}
+		}),
+		"another Session's log": bad(func(cc *protocol.HistoryContent) {
+			for i := range cc.Roots {
+				if cc.Roots[i].Name == protocol.HistoryRootLog {
+					cc.Roots[i].Dir = "work/other.log"
+				}
+			}
+		}),
+	}
+	// A root with nothing in it, left out: the manifest no longer shows that
+	// CODEX_HOME was looked at.
+	rn := newHistoryRig(t)
+	rn.o.Rescue = writeTestRescue(t, rn, "20261012-0102", nil)
+	rn.o.CodexHome = ".codex-never-made"
+	cn := testContent(t, rn.plan(t), "dev-env", testSessionUID)
+	gn := putInput(t, rn, cn)
+	var kept []protocol.HistoryRoot
+	for _, root := range cn.Roots {
+		if root.Name != protocol.HistoryRootCodex {
+			kept = append(kept, root)
+		}
+	}
+	cn.Roots = kept
+	ln, err := protocol.CanonicalJSON(cn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases["a missing root"] = append(append(ln, '\n'), gn[bytes.IndexByte(gn, '\n')+1:]...)
+
+	for name, input := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ar.a.Put(bytes.NewReader(input), "x"); historyCode(err) != protocol.HistoryErrInvalid {
+				t.Errorf("put: %v, want invalid", err)
+			}
+			if _, err := os.Lstat(filepath.Join(ar.a.Root, "v1")); err == nil {
+				t.Errorf("a refused put published an entry")
+			}
+		})
+	}
+
+	// A later rescue in the same minute has the directory <stamp>-2, which
+	// stands for the rescue <stamp>.
+	r2 := newHistoryRig(t)
+	writeTestRescue(t, r2, "20261012-0102", nil)
+	r2.o.Rescue = writeTestRescue(t, r2, "20261012-0102-2", nil)
+	ar2 := newArchiveRig(t, r2)
+	c2 := testContent(t, r2.plan(t), "dev-env", testSessionUID)
+	if res, err := ar2.a.Put(bytes.NewReader(putInput(t, r2, c2)), "x"); err != nil || res.Status != protocol.HistoryPutStored || res.GitFiles != 2 {
+		t.Errorf("put of the rescue's -2 directory: %+v %v", res, err)
+	}
+}
+
 func TestHistoryArchiveSizeCaps(t *testing.T) {
 	r := newHistoryRig(t)
 	ar := newArchiveRig(t, r)
@@ -264,9 +373,10 @@ func TestHistoryArchiveSizeCaps(t *testing.T) {
 	old := historyBounds
 	t.Cleanup(func() { historyBounds = old })
 	for name, lower := range map[string]func(){
-		"one file over its bound": func() { historyBounds.fileBytes = 1 << 20 },
-		"over the total":          func() { historyBounds.totalBytes = 2 << 20 },
-		"too many files":          func() { historyBounds.files = 10 },
+		"one file over its bound":           func() { historyBounds.fileBytes = 1 << 20 },
+		"over the total":                    func() { historyBounds.totalBytes = 2 << 20 },
+		"too many files":                    func() { historyBounds.files = 10 },
+		"a content manifest over its bound": func() { historyBounds.contentBytes = 1 << 10 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			historyBounds = old
@@ -399,6 +509,29 @@ func TestHistoryArchivePartialPutRecoversAfterARestart(t *testing.T) {
 	list, err := again.List("dev-env", 0, "")
 	if err != nil || len(list.Items) != 1 || list.Items[0].ContentSHA256 != res.ContentSHA256 {
 		t.Errorf("list after the repair: %+v %v", list, err)
+	}
+
+	// A put that stopped between linking the index file and removing its
+	// .incoming copy leaves the index file with two links: list still reads
+	// it, until a put an hour later removes the copy.
+	months, _ := os.ReadDir(idxDir)
+	if len(months) != 1 {
+		t.Fatalf("index months: %v", months)
+	}
+	files, _ := os.ReadDir(filepath.Join(idxDir, months[0].Name()))
+	if len(files) != 1 {
+		t.Fatalf("index files: %v", files)
+	}
+	leftover := filepath.Join(incoming, "fedcba9876543210fedcba9876543210")
+	if err := os.Mkdir(leftover, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(filepath.Join(idxDir, months[0].Name(), files[0].Name()), filepath.Join(leftover, "index.json")); err != nil {
+		t.Fatal(err)
+	}
+	list, err = again.List("dev-env", 0, "")
+	if err != nil || len(list.Items) != 1 || list.Items[0].Error != "" || list.Items[0].ContentSHA256 != res.ContentSHA256 {
+		t.Errorf("list with an index file's leftover link: %+v %v", list, err)
 	}
 }
 
@@ -538,6 +671,27 @@ func TestHistoryArchiveChecksTheGitRescueItCopies(t *testing.T) {
 		t.Errorf("put with a changed bundle: %v, want invalid", err)
 	}
 	if _, err := os.Lstat(filepath.Join(ar.a.Root, "v1")); err == nil {
+		t.Errorf("a refused put published an entry")
+	}
+
+	// The rescue directory swapped for a link to a copy with the same bytes,
+	// which agents can do on the shared volume: put never copies through it.
+	r2 := newHistoryRig(t)
+	r2.o.Rescue = writeTestRescue(t, r2, "20261012-0102", nil)
+	ar2 := newArchiveRig(t, r2)
+	c2 := testContent(t, r2.plan(t), "dev-env", testSessionUID)
+	input2 := putInput(t, r2, c2)
+	dir := filepath.Join(r2.s.SharedDir, "rescue", testHistorySession)
+	if err := os.Rename(filepath.Join(dir, "20261012-0102"), filepath.Join(dir, "moved")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("moved", filepath.Join(dir, "20261012-0102")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ar2.a.Put(bytes.NewReader(input2), "x"); historyCode(err) != protocol.HistoryErrInvalid {
+		t.Errorf("put through a linked rescue directory: %v, want invalid", err)
+	}
+	if _, err := os.Lstat(filepath.Join(ar2.a.Root, "v1")); err == nil {
 		t.Errorf("a refused put published an entry")
 	}
 }

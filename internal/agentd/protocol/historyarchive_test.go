@@ -40,6 +40,14 @@ func TestIsCredentialName(t *testing.T) {
 	}
 }
 
+func TestValidRescueStamp(t *testing.T) {
+	for s, want := range map[string]bool{"20261012-0102": true, "20261012-0102-2": false, "2026101-0102": false, "../x": false, "": false} {
+		if ValidRescueStamp(s) != want {
+			t.Errorf("%q: %v, want %v", s, !want, want)
+		}
+	}
+}
+
 func TestCheckHistoryPath(t *testing.T) {
 	for p, want := range map[string]string{
 		"projects/-home-dev/t.jsonl":           "",
@@ -54,6 +62,8 @@ func TestCheckHistoryPath(t *testing.T) {
 		"sessions/2026/auth.json":              HistoryErrCredentialInTree,
 		".env/x":                               HistoryErrCredentialInTree,
 		"projects/p/.credentials.json.tmp.abc": HistoryErrCredentialInTree,
+		"sessions/rollout-\xff.jsonl":          HistoryErrInvalid,
+		"sessions/r\u00e9sum\u00e9.jsonl":      "",
 	} {
 		if got, _ := CheckHistoryPath(p); got != want {
 			t.Errorf("%q: %q, want %q", p, got, want)

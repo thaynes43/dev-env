@@ -119,6 +119,9 @@ func (r *historyRig) claudeFixture(t *testing.T) {
 	r.write(t, ".claude/session-env/0b6f/env", "X=1\n")
 	r.write(t, ".claude/.credentials.json", testClaudeLogin)
 	r.write(t, ".claude/.credentials.json.tmp.e5023036", testClaudeLogin)
+	// What writeFileAtomic leaves when agentd stops mid-write.
+	r.write(t, ".claude/..claude.json.agentd-77", "{}")
+	r.write(t, ".claude/.settings.json.agentd-78", "{}")
 	// Links: render's CLAUDE.md and the shared memory link (DESIGN-001 6.6).
 	r.mkdir(t, ".shared/memory/x")
 	r.write(t, "config/CLAUDE.md", "rules\n")
@@ -156,6 +159,10 @@ func (r *historyRig) codexFixture(t *testing.T) {
 	r.write(t, ".codex/tmp/arg0", "x")
 	r.write(t, ".codex/auth.json", testCodexLogin)
 	r.write(t, ".codex/.credentials.json", testCodexLogin+" ")
+	// What writeCodexPrivateAtomic and writeFileAtomic leave when agentd
+	// stops mid-write: a copy of the login, and one of config.toml.
+	r.write(t, ".codex/.codex-access-1234", testCodexLogin+"\n")
+	r.write(t, ".codex/.config.toml.agentd-55", "x")
 }
 
 func (r *historyRig) agentdFixture(t *testing.T) {
@@ -168,7 +175,7 @@ func (r *historyRig) agentdFixture(t *testing.T) {
 	r.write(t, ".agentd/initial-usage/observation.json", `{}`)
 	for _, f := range []string{"agent.pid", "deliver.lock", "rescue.lock", "project-snapshot.json", "mcp-managed.json",
 		"workspace-supervisor.lock", "native-invocation.json", "rescue-123.bundle", "rescue-index-123",
-		".launch.json.agentd-4711", "published-context.0123.4567.json"} {
+		".launch.json.agentd-4711", "published-context.0123.4567.json", ".receipt-2718", ".codex-access-3141"} {
 		r.write(t, ".agentd/"+f, "x")
 	}
 }
@@ -251,6 +258,12 @@ func TestHistoryExportPlanFollowsTheAllowlists(t *testing.T) {
 		"agentd/published-context.0123.4567.json":           protocol.HistoryClassNotHistory,
 		"agentd/workspace-supervisor.lock":                  protocol.HistoryClassNotHistory,
 		"claude/policy-limits.json.stamp.json.tmp.a60e464e": protocol.HistoryClassNotHistory,
+		"claude/..claude.json.agentd-77":                    protocol.HistoryClassNotHistory,
+		"claude/.settings.json.agentd-78":                   protocol.HistoryClassNotHistory,
+		"codex/.codex-access-1234":                          protocol.HistoryClassCredential,
+		"codex/.config.toml.agentd-55":                      protocol.HistoryClassNotHistory,
+		"agentd/.receipt-2718":                              protocol.HistoryClassNotHistory,
+		"agentd/.codex-access-3141":                         protocol.HistoryClassNotHistory,
 	} {
 		e, ok := excluded[name]
 		if !ok || e.Class != class {
@@ -367,6 +380,32 @@ func TestHistoryExportRefusesCredentialsAnywhere(t *testing.T) {
 		},
 		"a renamed copy of the GitHub token": func(t *testing.T, r *historyRig) {
 			r.write(t, ".agentd/decisions/token.json", testGHToken)
+		},
+		"a renamed copy of an interrupted Codex login write": func(t *testing.T, r *historyRig) {
+			r.write(t, ".codex/sessions/2026/10/12/rollout-y.jsonl", testCodexLogin+"\n")
+		},
+		"a third link to agentd's own write": func(t *testing.T, r *historyRig) {
+			if err := os.Link(r.path(".agentd/task-source.json"), r.path(".agentd/.task-source.json.agentd-1")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Link(r.path(".agentd/task-source.json"), r.path(".agentd/managed-output/inv-1/copy.txt")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a second link that only looks like agentd's own write": func(t *testing.T, r *historyRig) {
+			if err := os.Link(r.path(".agentd/task-source.json"), r.path(".agentd/.task-source.json.agentd-")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a second link named like agentd's copy, in a provider's directory": func(t *testing.T, r *historyRig) {
+			if err := os.Link(r.path(".claude/history.jsonl"), r.path(".claude/.history.jsonl.agentd-1")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a second link beside a nested history file": func(t *testing.T, r *historyRig) {
+			if err := os.Link(r.path(".agentd/decisions/019a-thread.json"), r.path(".agentd/decisions/.019a-thread.json.agentd-1")); err != nil {
+				t.Fatal(err)
+			}
 		},
 		"auth.json at the top of agentd's state": func(t *testing.T, r *historyRig) {
 			r.write(t, ".agentd/auth.json", "x")
@@ -512,6 +551,61 @@ func TestHistoryExportRefusesUnexpectedEntries(t *testing.T) {
 			long := strings.Repeat("p", 200)
 			r.write(t, ".codex/sessions/"+strings.Join([]string{long, long, long, long, long, long}, "/")+".jsonl", "x")
 		},
+		// JSON would carry U+FFFD for the name, and put would refuse the
+		// stream's own name on every retry.
+		"a name that is not UTF-8": func(t *testing.T, r *historyRig) {
+			r.write(t, ".codex/sessions/2026/10/12/rollout-\xff.jsonl", "x")
+		},
+		"a top-level name that is not UTF-8": func(t *testing.T, r *historyRig) {
+			r.write(t, ".agentd/state_\xfe.json", "x")
+		},
+		// History behind a link would be deleted with HOME, or kept, without
+		// being archived either way.
+		"history that is a link": func(t *testing.T, r *historyRig) {
+			if err := os.Rename(r.path(".codex/sessions"), r.path("elsewhere-sessions")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(r.path("elsewhere-sessions"), r.path(".codex/sessions")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"history that links to the shared volume": func(t *testing.T, r *historyRig) {
+			r.mkdir(t, ".shared/jobs")
+			if err := os.RemoveAll(r.path(".claude/jobs")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(r.path(".shared/jobs"), r.path(".claude/jobs")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a log that is a link": func(t *testing.T, r *historyRig) {
+			if err := os.Rename(r.path("work/"+testHistorySession+".log"), r.path("work/real.log")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("real.log", r.path("work/"+testHistorySession+".log")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a nested link into HOME": func(t *testing.T, r *historyRig) {
+			r.write(t, "elsewhere/rollout.jsonl", "x")
+			if err := os.Symlink(r.path("elsewhere"), r.path(".codex/sessions/2026/10/13")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a relative nested link into HOME": func(t *testing.T, r *historyRig) {
+			r.write(t, "elsewhere/a.jsonl", "x")
+			if err := os.Symlink("../../../elsewhere/a.jsonl", r.path(".claude/projects/-home-dev/a.jsonl")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a nested link into the same tree": func(t *testing.T, r *historyRig) {
+			if err := os.Symlink("big.jsonl", r.path(".claude/projects/-home-dev/latest.jsonl")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"the memory link when the shared volume is not mounted": func(t *testing.T, r *historyRig) {
+			sharedIsMounted = func(string, string) error { return errors.New("not mounted") }
+		},
 	}
 	for name, setup := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -524,6 +618,138 @@ func TestHistoryExportRefusesUnexpectedEntries(t *testing.T) {
 	}
 }
 
+func TestHistoryExportListsLinksHOMEKeeps(t *testing.T) {
+	r := newHistoryRig(t)
+	// A link out of HOME, and links whose targets are on the shared volume,
+	// absolute or relative: listed, never followed, never refused.
+	if err := os.Symlink("/etc/hostname", r.path(".codex/sessions/2026/10/12/outside")); err != nil {
+		t.Fatal(err)
+	}
+	r.mkdir(t, ".shared/memory/y")
+	if err := os.Symlink("../../../.shared/memory/y", r.path(".claude/projects/-home-dev/memory")); err != nil {
+		t.Fatal(err)
+	}
+	plan := r.plan(t)
+	links := map[string]bool{}
+	for _, e := range plan.Excluded {
+		if e.Class == protocol.HistoryClassLink {
+			links[e.Root+"/"+e.Path] = true
+		}
+	}
+	for _, want := range []string{"claude/CLAUDE.md", "claude/projects/-home-dev-work-x/memory", "claude/projects/-home-dev/memory", "codex/sessions/2026/10/12/outside"} {
+		if !links[want] {
+			t.Errorf("%s is not listed as a link: %v", want, links)
+		}
+	}
+}
+
+// TestHistoryExportKeepsAgentdsInterruptedWrite: writeFileOnce links its
+// synced copy into place and then removes it, so agentd stopping between the
+// two leaves task-source.json with two links, the other its own copy. That
+// file has no name outside agentd's state directory, so it is exported.
+func TestHistoryExportKeepsAgentdsInterruptedWrite(t *testing.T) {
+	r := newHistoryRig(t)
+	if err := os.Link(r.path(".agentd/task-source.json"), r.path(".agentd/.task-source.json.agentd-1234")); err != nil {
+		t.Fatal(err)
+	}
+	plan := r.plan(t)
+	found := false
+	for _, f := range plan.Files {
+		found = found || f.Name() == "agentd/task-source.json"
+	}
+	listed := false
+	for _, e := range plan.Excluded {
+		listed = listed || (e.Root == "agentd" && e.Path == ".task-source.json.agentd-1234" && e.Class == protocol.HistoryClassNotHistory)
+	}
+	if !found || !listed {
+		t.Fatalf("task-source.json exported %v, its copy listed %v", found, listed)
+	}
+	sum, _, err := HistoryPlanSHA256(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := StreamHistoryExport(r.s, r.o, sum, &buf); err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+}
+
+// TestHistoryExportNeverOpensThroughALink: every open walks from its base one
+// component at a time, so a directory swapped for a link between a check and
+// an open is never followed, even to identical bytes.
+func TestHistoryExportNeverOpensThroughALink(t *testing.T) {
+	base := t.TempDir()
+	writeTestFile(t, filepath.Join(base, "a", "b", "f"), "x")
+	if err := os.Symlink(filepath.Join(base, "a"), filepath.Join(base, "l")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("f", filepath.Join(base, "a", "b", "g")); err != nil {
+		t.Fatal(err)
+	}
+	if f, _, err := openHistoryFile(base, filepath.Join(base, "a", "b", "f")); err != nil {
+		t.Fatalf("a plain path: %v", err)
+	} else {
+		_ = f.Close()
+	}
+	for _, p := range []string{"l/b/f", "a/b/g"} {
+		if f, _, err := openHistoryFile(base, filepath.Join(base, filepath.FromSlash(p))); err == nil {
+			_ = f.Close()
+			t.Errorf("%s opened through a link", p)
+		}
+	}
+	if _, err := readHistoryDir(base, filepath.Join(base, "l", "b")); err == nil {
+		t.Errorf("a directory listed through a link")
+	}
+	for _, p := range []string{base, filepath.Dir(base), filepath.Join(base, "..", "x")} {
+		if f, err := openBeneath(base, p, historyOpenFlags); err == nil {
+			_ = f.Close()
+			t.Errorf("%s opened, which is not below the base", p)
+		}
+	}
+
+	// In the export: a nested directory of history swapped for a link to a
+	// copy with the same bytes and times, after the plan's walk.
+	r := newHistoryRig(t)
+	plan := r.plan(t)
+	sum, _, err := HistoryPlanSHA256(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := r.path(".codex/sessions/2026/10/12")
+	copyDir := r.path("elsewhere/12")
+	r.mkdir(t, "elsewhere/12")
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		data, _ := os.ReadFile(filepath.Join(dir, e.Name()))
+		fi, _ := os.Stat(filepath.Join(dir, e.Name()))
+		writeTestFile(t, filepath.Join(copyDir, e.Name()), string(data))
+		if err := os.Chtimes(filepath.Join(copyDir, e.Name()), fi.ModTime(), fi.ModTime()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Rename(dir, r.path("elsewhere/old")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(copyDir, dir); err != nil {
+		t.Fatal(err)
+	}
+	// streamHistoryFile is what runs after stream's own plan; call it on the
+	// first plan's file directly, as a swap after that plan would.
+	var f protocol.HistoryFile
+	for _, pf := range plan.Files {
+		if strings.HasPrefix(pf.Name(), "codex/sessions/2026/10/12/") {
+			f = pf
+		}
+	}
+	tw := tar.NewWriter(io.Discard)
+	if err := streamHistoryFile(tw, r.home, filepath.Join(r.home, ".codex", filepath.FromSlash(f.Path)), f); historyCode(err) != protocol.HistoryErrChanged {
+		t.Errorf("stream through a swapped directory: %v, want export_changed", err)
+	}
+	if err := StreamHistoryExport(r.s, r.o, sum, io.Discard); historyCode(err) == "" {
+		t.Errorf("stream after the swap succeeded")
+	}
+}
+
 func TestHistoryExportSizeCaps(t *testing.T) {
 	old := historyBounds
 	t.Cleanup(func() { historyBounds = old })
@@ -532,6 +758,9 @@ func TestHistoryExportSizeCaps(t *testing.T) {
 		"over the total":          func() { historyBounds.totalBytes = 2 << 20 },
 		"too many files":          func() { historyBounds.files = 10 },
 		"too many excluded names": func() { historyBounds.excluded = 5 },
+		// The fixture's manifest is some kilobytes: over a bound with 1 KiB
+		// to spare for it, put could never take it.
+		"a content manifest over put's bound": func() { historyBounds.contentBytes = historyContentReserve + 1<<10 },
 	}
 	for name, lower := range cases {
 		t.Run(name, func(t *testing.T) {
