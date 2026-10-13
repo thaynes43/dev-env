@@ -71,17 +71,20 @@ const (
 // The refusal reasons (DESIGN-025 section 10). An export refusal keeps
 // agentd's code.
 const (
-	expiryUnknown            = "unknown"
-	expiryIdentityChanged    = "identity_changed"
-	expiryHomeReplaced       = "home_replaced"
-	expiryClaimInUse         = "claim_in_use"
-	expiryCanary             = "canary"
-	expiryOverrideInvalid    = "override_invalid"
-	expiryShelfUnavailable   = "shelf_unavailable"
-	expiryArchiveConflict    = "archive_conflict"
-	expiryArchiveMissing     = "archive_missing"
-	expiryArchiveMismatch    = "archive_mismatch"
-	expiryExportInvalid      = "export_invalid"
+	expiryUnknown          = "unknown"
+	expiryIdentityChanged  = "identity_changed"
+	expiryHomeReplaced     = "home_replaced"
+	expiryClaimInUse       = "claim_in_use"
+	expiryCanary           = "canary"
+	expiryOverrideInvalid  = "override_invalid"
+	expiryShelfUnavailable = "shelf_unavailable"
+	expiryArchiveConflict  = "archive_conflict"
+	expiryArchiveMissing   = "archive_missing"
+	expiryArchiveMismatch  = "archive_mismatch"
+	expiryExportInvalid    = "export_invalid"
+	// expiryPlanTooLarge: the plan is longer than this operator takes
+	// (history_relay.go); an operator release clears it, not an agent image.
+	expiryPlanTooLarge       = "plan_too_large"
 	expiryPreconditionFailed = "precondition_failed"
 	expiryForbidden          = "forbidden"
 )
@@ -92,7 +95,7 @@ var homeExpiryReasons = []string{
 	protocol.HistoryErrLayoutUnknown, protocol.HistoryErrUnknownEntry, protocol.HistoryErrUnexpectedEntry,
 	protocol.HistoryErrCredentialInTree, protocol.HistoryErrTooLarge, protocol.HistoryErrChanged,
 	expiryShelfUnavailable, expiryArchiveConflict, expiryArchiveMissing, expiryArchiveMismatch, expiryExportInvalid,
-	expiryPreconditionFailed, expiryForbidden,
+	expiryPlanTooLarge, expiryPreconditionFailed, expiryForbidden,
 }
 
 // homeExpiryPhaseOrder is the only order an expiry record moves in.
@@ -928,7 +931,7 @@ func (r *Reconciler) recordHomeArchive(ctx context.Context, v *expiryView, hold 
 // historyRefusal maps a relay error to its section 10 reason. agentd's export
 // refusals keep their codes; io_error and a failed exec into the hold pod are
 // Unknown; a shelf that is missing, unready, unmounted or unreachable is
-// shelf_unavailable.
+// shelf_unavailable; a plan longer than this operator takes is plan_too_large.
 func historyRefusal(err error) *expiryRefusal {
 	var he *protocol.HistoryError
 	if errors.As(err, &he) {
@@ -952,6 +955,9 @@ func historyRefusal(err error) *expiryRefusal {
 	}
 	if errors.Is(err, errShelfUnavailable) {
 		return &expiryRefusal{reason: expiryShelfUnavailable, err: err}
+	}
+	if errors.Is(err, errPlanTooLarge) {
+		return &expiryRefusal{reason: expiryPlanTooLarge, err: err}
 	}
 	return &expiryRefusal{reason: expiryUnknown, err: err}
 }
@@ -1140,7 +1146,7 @@ func exportRefusal(reason string) bool {
 	switch reason {
 	case protocol.HistoryErrLayoutUnknown, protocol.HistoryErrUnknownEntry, protocol.HistoryErrUnexpectedEntry,
 		protocol.HistoryErrCredentialInTree, protocol.HistoryErrTooLarge, protocol.HistoryErrChanged, expiryExportInvalid,
-		expiryShelfUnavailable, expiryArchiveConflict, expiryArchiveMissing, expiryArchiveMismatch:
+		expiryPlanTooLarge, expiryShelfUnavailable, expiryArchiveConflict, expiryArchiveMissing, expiryArchiveMismatch:
 		return true
 	}
 	return false
@@ -1149,7 +1155,8 @@ func exportRefusal(reason string) bool {
 // sourceChangeRefusal reports whether only a change to the export's source
 // clears reason (DESIGN-025 section 10): a layout, an entry or a bound the
 // export does not take, or a request or rescue directory it refused as
-// invalid. The export runs from the hold pod's agent image.
+// invalid. The export runs from the hold pod's agent image. plan_too_large is
+// the operator's own bound, which no agent image changes, so it is not one.
 func sourceChangeRefusal(reason string) bool {
 	switch reason {
 	case protocol.HistoryErrLayoutUnknown, protocol.HistoryErrUnknownEntry, protocol.HistoryErrUnexpectedEntry,

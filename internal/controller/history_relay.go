@@ -41,7 +41,7 @@ const HistoryArchivedBy = "dev-env-operator"
 // its decoded form and content.json at once. TestHistoryRelayMeasure
 // (DESIGN-025 5.4) measured a 16 MiB plan (42,000 files) at about 80 MiB of
 // live heap and 130 MiB of peak RSS above the operator's own, so the operator
-// takes plans up to 16 MiB and refuses a longer one as export_too_large: the
+// takes plans up to 16 MiB and refuses a longer one as plan_too_large: the
 // HOME stays and DevEnvHomeExpiryNeedsOwner names it, instead of an operator
 // killed for its memory on every leader that tries the export again.
 const historyPlanOutputMax = 16 << 20
@@ -60,6 +60,10 @@ var (
 	// errHistoryExec: an exec into the hold pod failed, or its answer could
 	// not be read (Unknown).
 	errHistoryExec = errors.New("the history export exec failed")
+	// errPlanTooLarge: the plan is longer than this operator takes
+	// (plan_too_large). Only an operator release with a higher cap clears it,
+	// never a new agent image, so it is not agentd's export_too_large.
+	errPlanTooLarge = errors.New("the history export plan is longer than this operator takes")
 )
 
 // HistoryExportArgs are `history-export`'s flags (DESIGN-025 7.1).
@@ -253,15 +257,14 @@ func (e *ExecHistoryRelay) Archive(ctx context.Context, hold *corev1.Pod, args H
 // relayPlan runs the plan in the hold pod and builds content.json from it.
 // Its digest is the SHA-256 of the canonical line the plan printed, which is
 // what stream compares. A plan longer than historyPlanOutputMax refuses
-// export_too_large. The plan's bytes and its decoded form are dropped on
+// plan_too_large. The plan's bytes and its decoded form are dropped on
 // return, before the stream starts.
 func (e *ExecHistoryRelay) relayPlan(ctx context.Context, hold *corev1.Pod, args HistoryExportArgs, content HistoryArchiveContent) (string, []byte, error) {
 	planCmd := append([]string{"agentd", "ctl", "history-export", "plan"}, args.flags()...)
 	out, errOut := &cappedBuffer{max: e.planMax()}, &cappedBuffer{max: historySmallOutputMax}
 	runErr := e.Exec.Run(ctx, hold.Namespace, hold.Name, ContainerName, planCmd, nil, out, errOut)
 	if out.err != nil && runErr == nil {
-		return "", nil, protocol.HistoryErrorf(protocol.HistoryErrTooLarge, "",
-			"the plan is longer than the %d bytes this operator takes (DESIGN-025 5.4)", e.planMax())
+		return "", nil, fmt.Errorf("%w: more than %d bytes (DESIGN-025 5.4)", errPlanTooLarge, e.planMax())
 	}
 	if err := historyExecError(out, runErr); err != nil {
 		return "", nil, holdSide(err, errOut)

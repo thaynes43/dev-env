@@ -58,8 +58,9 @@ func TestHomeExpiryOverrideGuardIsOwnerOnly(t *testing.T) {
 	role := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "test-h5-agentsession-writer"},
 		Rules: []rbacv1.PolicyRule{{APIGroups: []string{v1alpha1.GroupVersion.Group}, Resources: []string{"agentsessions"}, Verbs: []string{"get", "create", "update", "patch"}}}}
 	binding := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "test-h5-agentsession-writer"},
-		RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: role.Name},
-		Subjects: []rbacv1.Subject{{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: "tom"}}}
+		RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: role.Name},
+		Subjects: []rbacv1.Subject{{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: "tom"},
+			{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: "system:kube-controller-manager"}}}
 	for _, a := range accounts {
 		binding.Subjects = append(binding.Subjects, rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Namespace: a.ns, Name: a.name})
 	}
@@ -199,6 +200,24 @@ func TestHomeExpiryOverrideGuardIsOwnerOnly(t *testing.T) {
 			}
 		})
 	}
+
+	// A system identity that is no ServiceAccount (a control-plane component,
+	// a node) is refused too: only a person sets the override.
+	t.Run("a system component", func(t *testing.T) {
+		c := as("system:kube-controller-manager")
+		plain, held := session(t, ""), session(t, v1alpha1.HomeExpiryHold)
+		for name, err := range map[string]error{
+			"add release-now": edit(c, plain, set(v1alpha1.HomeExpiryReleaseNow)),
+			"remove the hold": edit(c, held, remove),
+		} {
+			if !byPolicy(err) {
+				t.Errorf("%s: %v; want refused by %s", name, err, homeExpiryGuardName)
+			}
+		}
+		if err := edit(c, plain, other); err != nil {
+			t.Errorf("an unrelated change refused: %v", err)
+		}
+	})
 
 	t.Run("a user", func(t *testing.T) {
 		tom := as("tom")

@@ -1,14 +1,18 @@
 ---
-# dev-env-home-expiry-guard: the HOME expiry's owner override is Tom's alone
-# (thaynes43/dev-env DESIGN-025 section 9, ADR-005). The annotation
-# dev-env.haynesops.com/home-expiry on an AgentSession holds an expiry (hold) or
-# skips its grace (release-now). This policy refuses every ServiceAccount a
-# request that adds, changes or removes it: the operator, the broker, the
-# keeper, Flux and every agent. dev-env-identity-guard already refuses every
-# dev-agents identity any write to dev-env.haynesops.com objects; this one
-# covers the rest. Tom acts as himself with kubectl. Before H7 ships it, check
-# which identity Tom's phone path uses: if it is a ServiceAccount, name that one
-# account in the matchCondition below, in the reviewed haynes-ops change.
+# dev-env-home-expiry-guard: the HOME expiry's owner override is set by a
+# person, never by code (thaynes43/dev-env DESIGN-025 section 9, ADR-005). The
+# annotation dev-env.haynesops.com/home-expiry on an AgentSession holds an
+# expiry (hold) or skips its grace (release-now). This policy refuses a request
+# that adds, changes or removes it to every system: identity: every
+# ServiceAccount (the operator, the broker, the keeper, Flux and every agent),
+# and the control-plane and node identities. dev-env-identity-guard already
+# refuses every dev-agents identity any write to dev-env.haynesops.com objects;
+# this one covers the rest. Human users are outside it: Tom acts as himself with
+# kubectl. Before H7 ships it, list the users and groups that can update
+# AgentSessions; if anyone but Tom is among them, match on Tom's identity
+# instead (refuse every user but him). And check which identity Tom's phone path
+# uses: if it is a ServiceAccount, exempt that one account in the
+# matchCondition below. Both in the reviewed haynes-ops change.
 #
 # This is the reference copy the dev-env envtest suite runs
 # (internal/controller TestHomeExpiryOverrideGuardIsOwnerOnly); haynes-ops ships
@@ -29,8 +33,8 @@ spec:
         operations: [CREATE, UPDATE]
         resources: [agentsessions]
   matchConditions:
-    - name: service-account
-      expression: request.userInfo.username.startsWith('system:serviceaccount:')
+    - name: system-identity
+      expression: request.userInfo.username.startsWith('system:')
   variables:
     - name: present
       expression: >-
@@ -46,7 +50,7 @@ spec:
         (variables.present && variables.before &&
           object.metadata.annotations['dev-env.haynesops.com/home-expiry'] ==
           oldObject.metadata.annotations['dev-env.haynesops.com/home-expiry'])
-      message: only Tom sets, changes or removes the HOME expiry override dev-env.haynesops.com/home-expiry (DESIGN-025 9); no ServiceAccount may
+      message: no ServiceAccount or other system identity sets, changes or removes the HOME expiry override dev-env.haynesops.com/home-expiry (DESIGN-025 9); its owner does
       reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1

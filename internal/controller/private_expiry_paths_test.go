@@ -356,3 +356,55 @@ func TestHomeExpiryRemakesTheHoldPodForANewImage(t *testing.T) {
 	}
 	f.claimIntact(t)
 }
+
+// The operator's own plan cap (plan_too_large) is no source-change refusal: a
+// new agent image cannot clear it, so the hold pod is not remade for one. The
+// re-check exports again from the same hold pod, which an operator with a
+// higher cap passes.
+func TestHomeExpiryPlanCapKeepsItsHoldPodAcrossImages(t *testing.T) {
+	ctx := context.Background()
+	f := newExpiryFixture(t, nil)
+	planMax := 64
+	run := func(times int) {
+		t.Helper()
+		r := f.reconciler()
+		r.HistoryRelay.(*ExecHistoryRelay).PlanMax = planMax
+		for range times {
+			if _, err := r.Reconcile(ctx, reqFor(f.s)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	f.at(f.due().Add(time.Minute))
+	run(6)
+	hold := f.runHold(t)
+	run(5)
+	if e := f.expiry(t); e.Phase != v1alpha1.HomeExpiryExporting || e.Refusal != expiryPlanTooLarge || refusedCount(f.counters, expiryPlanTooLarge) != 1 {
+		t.Fatalf("record %+v; want plan_too_large at Exporting", e)
+	}
+	var cm corev1.ConfigMap
+	if err := f.c.Get(ctx, templatesKey, &cm); err != nil {
+		t.Fatal(err)
+	}
+	cm.Data[templates.Key] = strings.Replace(exampleDoc, "0000000000000000000000000000000000000000000000000000000000000001",
+		"0000000000000000000000000000000000000000000000000000000000000002", 1)
+	if err := f.c.Update(ctx, &cm); err != nil {
+		t.Fatal(err)
+	}
+	f.at(f.clock.Add(homeExpiryRefusalRetry + time.Minute))
+	run(3)
+	if p := f.named(t); p == nil || p.UID != hold.UID {
+		t.Fatalf("hold pod %v; a new agent image cannot clear the operator's cap, so the hold pod stays", p)
+	}
+	if e := f.expiry(t); e.Refusal != expiryPlanTooLarge || len(f.rescuer.ranIn()) != 1 {
+		t.Fatalf("record %+v, rescues %v; want plan_too_large again and no second rescue", e, f.rescuer.ranIn())
+	}
+	// An operator release with a higher cap passes at the next re-check.
+	planMax = 0
+	f.at(f.clock.Add(homeExpiryRefusalRetry + time.Minute))
+	run(4)
+	if e := f.expiry(t); e.Phase != v1alpha1.HomeExpiryArchived || e.Refusal != "" {
+		t.Fatalf("with the default cap, the record is %+v; want Archived", e)
+	}
+	f.claimIntact(t)
+}

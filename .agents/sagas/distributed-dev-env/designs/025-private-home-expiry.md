@@ -676,8 +676,10 @@ sections above leave open:
   64 MiB content manifest and the block lists). The operator runs with a
   256 MiB limit, and holds the plan, its decoded form and `content.json` at
   once, so it takes plans of at most 16 MiB (`historyPlanOutputMax`) and
-  refuses a longer one as `export_too_large`, a recorded refusal that
-  `DevEnvHomeExpiryNeedsOwner` names. Without that cap, a plan inside H4's
+  refuses a longer one as `plan_too_large`, a recorded refusal that
+  `DevEnvHomeExpiryNeedsOwner` names. It is not agentd's `export_too_large`:
+  only an operator release with a higher cap clears it, never a new agent image,
+  so it does not remake the hold pod (below; advisory review of #251). Without that cap, a plan inside H4's
   bounds would have killed the operator for its memory, and every new leader
   would have tried the export again (review of #251). The relay also builds
   no second copy of the plan: it decodes it with `json.Unmarshal` and checks
@@ -709,8 +711,8 @@ sections above leave open:
   step has nothing to write (it waits for the grace, a starting hold pod or a
   rescue retry, or it is `Archived`), by a confirmed write of its own. So a fixed
   cause stops the alert at the next re-check. A refusal the export recorded
-  (agentd's codes, `export_invalid`, `shelf_unavailable` and the three archive
-  reasons) is the export's to clear, by `Archived` or another refusal: the new
+  (agentd's codes, `export_invalid`, `plan_too_large`, `shelf_unavailable` and
+  the three archive reasons) is the export's to clear, by `Archived` or another refusal: the new
   intent, the adoption and the rescue that come before a new export keep it, so
   a hold pod made again does not resolve the alert and fire it once more.
   agentd's codes map as: the export's six keep their names, `invalid` from either
@@ -718,7 +720,8 @@ sections above leave open:
   `archive_conflict`, `corrupt` is `archive_mismatch`, `not_found` is
   `archive_missing`, `no_archive` is `shelf_unavailable` and `io_error` is
   `unknown`. No shelf pod, no history relay, or a failed exec into the shelf is
-  `shelf_unavailable`; a failed exec into the hold pod is `unknown`. A Conflict on
+  `shelf_unavailable`; a failed exec into the hold pod is `unknown`; a plan over
+  the operator's own cap is `plan_too_large` (a new reason, section 10). A Conflict on
   a guarded delete counts `precondition_failed`, and the step runs again.
   `canary` and `override_invalid` count at most once per 15 minutes per Session;
   the operator keeps those times for the last 15 minutes only.
@@ -786,13 +789,15 @@ its cases); after the review of #251, in `private_expiry_paths_test.go`,
 bundles archived beside the history, and `export_invalid` for a bundle
 directory that is not the rescue's own),
 `TestHomeExpiryHoldDuringTheExportKeepsArchivedAndRescuesTheNewHoldPod`,
-`TestHomeExpiryVerifyThatDoesNotMatchRefuses` and
-`TestHomeExpiryRemakesTheHoldPodForANewImage`; on a real API server,
+`TestHomeExpiryVerifyThatDoesNotMatchRefuses`,
+`TestHomeExpiryRemakesTheHoldPodForANewImage` and
+`TestHomeExpiryPlanCapKeepsItsHoldPodAcrossImages`; on a real API server,
 `TestHomeExpiryOnTheAPIServer` (T1 to `Archived`, T5, T12 with a fresh operator
 for every step, T13 with two operators at once, two cancels on one clock, and
 the schema) and
 `TestHomeExpiryOverrideGuardIsOwnerOnly` (T9's admission part, with the
-reference policy in `testdata/haynes-ops/home-expiry-guard.yaml`); the guard
+reference policy in `testdata/haynes-ops/home-expiry-guard.yaml`, a control-plane
+identity among the refused); the guard
 scans of section 11; `TestPrivateHomeExpiryRecordIsBoundAndForwardOnly` in
 `api/v1alpha1`; `TestHomeHistoryArchiveFlagIsExplicitDefaultOffAndNeedsTheRecord`
 in `cmd/dev-env-operator` (T17's flag part); `TestExecSlotsLimitAndRelease`
@@ -1431,6 +1436,16 @@ Before H7 writes the policy, check which identity Tom's phone path uses (for
 example Headlamp). If it is a ServiceAccount, the policy names that one account
 explicitly, in the reviewed haynes-ops change.
 
+In source (H5, corrected after the advisory review of #251): the reference copy
+refuses every `system:` identity, not only ServiceAccounts, so control-plane and
+node identities cannot set the override either. Human users are outside it, so
+it enforces "no code and no component", not "Tom alone". Before H7 ships it,
+list the users and groups that can update AgentSessions; if anyone but Tom is
+among them, the policy matches on Tom's identity instead (refusing every user
+but him), in the same reviewed haynes-ops change. `TestHomeExpiryOverrideGuardIsOwnerOnly`
+refuses three ServiceAccounts and `system:kube-controller-manager`, and admits a
+user.
+
 No dev-env code writes the annotation: `TestNoCodeWritesHomeExpiryOverride`. No
 API route sets it.
 
@@ -1446,7 +1461,7 @@ Exported by the leader:
 | `dev_env_home_expiry_expired_total` | counter | none |
 | `dev_env_home_expiry_archived_bytes_total` | counter | none |
 | `dev_env_home_expiry_refusing` | gauge | `reason`: the number of Sessions whose current `refusal` is that reason, from the last reconcile of each; the reasons below. A Session leaves it when a step passes (which clears `refusal`), when its expiry record is removed, or when the Session is gone |
-| `dev_env_home_expiry_refused_total` | counter | `reason`: `unknown`, `identity_changed`, `home_replaced`, `claim_in_use`, `canary`, `override_invalid`, `layout_unknown`, `unknown_entry`, `unexpected_entry`, `credential_in_tree`, `export_too_large`, `export_changed`, `export_invalid` (agentd's `invalid`: a rescue directory or a manifest that does not fit; added in H5, 5.4), `shelf_unavailable`, `archive_conflict`, `archive_missing`, `archive_mismatch`, `precondition_failed`, `forbidden` |
+| `dev_env_home_expiry_refused_total` | counter | `reason`: `unknown`, `identity_changed`, `home_replaced`, `claim_in_use`, `canary`, `override_invalid`, `layout_unknown`, `unknown_entry`, `unexpected_entry`, `credential_in_tree`, `export_too_large`, `export_changed`, `export_invalid` (agentd's `invalid`: a rescue directory or a manifest that does not fit; added in H5, 5.4), `plan_too_large` (a plan over the operator's own 16 MiB cap; added in H5, 5.4), `shelf_unavailable`, `archive_conflict`, `archive_missing`, `archive_mismatch`, `precondition_failed`, `forbidden` |
 | `dev_env_home_expiry_overdue_seconds` | gauge | none; the largest `now - dueAt` over triggered, unheld Sessions not yet `Archived` (or `Expired` with deletion on) |
 
 Rescue failures keep their own condition and page (D-57).
@@ -1457,7 +1472,7 @@ Rescue failures keep their own condition and page (D-57).
 ```yaml
 - alert: DevEnvHomeExpiryNeedsOwner        # critical
   expr: |
-    sum by (reason) (dev_env_home_expiry_refusing{reason=~"credential_in_tree|unknown_entry|unexpected_entry|layout_unknown|export_too_large|export_invalid|archive_conflict|archive_missing|archive_mismatch|home_replaced|identity_changed"}) > 0
+    sum by (reason) (dev_env_home_expiry_refusing{reason=~"credential_in_tree|unknown_entry|unexpected_entry|layout_unknown|export_too_large|export_invalid|plan_too_large|archive_conflict|archive_missing|archive_mismatch|home_replaced|identity_changed"}) > 0
   for: 15m
 - alert: DevEnvHomeExpiryStalled           # critical
   expr: max(dev_env_home_expiry_overdue_seconds) > 2 * 86400
@@ -1482,9 +1497,10 @@ unknown entry needs a source change or Tom's decision, never a manual delete by
 an agent; an automated responder reports and changes nothing. For
 `layout_unknown`, `unknown_entry`, `unexpected_entry`, `export_too_large` and
 `export_invalid`, the source change is an agent image whose export takes the
-HOME (or, for the operator's own 16 MiB plan cap, an operator release): once the
-templates name the new agent image, the next 15-minute re-check makes a hold
-pod of it and exports again (5.4); nothing needs toggling.
+HOME: once the templates name the new agent image, the next 15-minute re-check
+makes a hold pod of it and exports again (5.4); nothing needs toggling. For
+`plan_too_large` it is an operator release whose plan cap takes the HOME; the
+re-check after the rollout exports again from the same hold pod.
 `DevEnvHomeExpiryOverrideInvalid` is a warning: a value of the owner override
 that is neither `hold` nor `release-now` holds the expiry (fail closed,
 section 9), so nothing is lost, but the owner meant something else. It counts
@@ -1575,7 +1591,8 @@ own reviewed PR:
    - `shelf/app/deployment.yaml`: the second volume and mount, `--history-archive`,
      the image pin, and the header comment;
    - `rbac/app/home-expiry-guard.yaml`: `dev-env-home-expiry-guard` (section 9),
-     after the identity check; the reference copy, with its envtest, is this
+     after the identity checks (Tom's phone path, and the users and groups that
+     can update AgentSessions); the reference copy, with its envtest, is this
      repository's `internal/controller/testdata/haynes-ops/home-expiry-guard.yaml`
      (H5);
    - `kubernetes/main/apps/kyverno/policies/app/dev-env-archive-guard.yaml`: the
