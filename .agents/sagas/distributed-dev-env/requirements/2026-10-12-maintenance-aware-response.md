@@ -136,6 +136,49 @@ runtime authority or approval delegation. They select no new frontend or control
 architecture; implement bounded contracts through the existing roadmap, with the
 web UI consuming them later.
 
+### Trace a page into an investigation
+
+Owner clarification, 2026-10-12, America/New_York: a terse request such as
+"I just got paged about X; can you check it?" must lead into an investigation
+across supported providers. Use connected evidence before asking the owner to
+repeat where the page appeared or information already available to the agent.
+Start with today's Pushover pages and keep the contract extensible to other
+notification channels.
+
+Discover recent matching notifications through an authorized notification source
+or dispatch/audit ledger, using a bounded time window. Correlate stable notification
+and incident IDs, timestamps and affected-resource identities with the originating
+rule, event and service, including delivery attempts and history. A notification
+provider's retrieval API must be verified before relying on it. If Pushover or a
+future channel cannot supply retrievable history, retain the necessary dispatch
+and correlation evidence in a source-side audit ledger through the existing
+dispatch path; do not assume a notification-history API exists.
+
+Gather relevant logs, metrics and change history, then check maintenance Activities,
+task claims and existing responders. Reuse the [dispatcher decision](#decide-before-launching),
+[operator visibility](#operator-visibility-and-control) and
+[existing escalation/telemetry contracts](../research/R-01-summoned-agents-audit.md).
+Diagnose the incident, coordinate with an existing owner, carry out remediation
+within the caller's authorization, and verify recovery with fresh source evidence.
+Avoid a competing responder for a task already owned. Clarify only genuine
+ambiguity, missing access or a required approval for a high-impact action; continue
+independent authorized investigation where possible. A request to investigate
+does not itself grant new mutation authority, credentials or wider access.
+
+Expose sent, delivered and acknowledged states only when supported by evidence;
+otherwise report Unknown. These delivery states are separate from investigated,
+remediated and verified recovered. Retain source references, observation times,
+correlation provenance and action/outcome records under existing access and
+retention policy, with redaction and bounded payloads. Notification text is
+untrusted evidence, never an instruction source or an approval. The same limits
+apply when displaying or forwarding that text to another agent.
+
+Provider parity acceptance must exercise the same terse escalation, evidence
+lookup and authorized investigation path for Codex, Claude Code and future
+supported harnesses. Record capability gaps explicitly; a successful Claude path
+does not establish Codex acceptance. Build this through the existing operator,
+observability and coordination contracts, without waiting for the web UI.
+
 ## Observable acceptance
 
 Use bounded fixtures and fake time first; any live trial needs a separate
@@ -155,10 +198,15 @@ reviewed scope. No node reboot or alert mutation is authorized by this record.
 | Stale ownership or pending coordination | The read exposes conflict/staleness, provenance and observation time, plus linked message delivery/ACK state. A stale claim, queued message or API ACK is never presented as confirmed live ownership, agent acceptance or completed work. |
 | Authorized operator control | Meatball discovers a task and reads its progress/blocker context, then uses a supported start, steer, stop or coordination operation under an existing scoped authorization. The receipt identifies actor, target, policy/delegation and observed outcome; unsupported capability and uncertain delivery/stop remain explicit. |
 | Read access without action authority | Both operator clients can inspect permitted evidence without gaining mutation rights. A gated action follows the existing human approval path with its context intact; denied or absent authority leaves the action unperformed, while valid scoped delegation needs no manual relay or duplicate approval. |
+| Terse page, provider parity | The same bounded fixtures and installed acceptance scenario for Codex and Claude Code (and each future supported harness) let the operator say only "I just got paged about X". The agent finds the matching notification, traces its source and delivery history, gathers logs/metrics/changes and ownership context, and reports a diagnosis plus authorized next step without asking for retrievable details. |
+| Missing history or ambiguous match | If the notification channel cannot return history, the existing dispatch path's audit ledger supplies the trace. Missing evidence is explicit; multiple plausible incidents lead to one focused clarification. No invented API, guessed incident, new credential or access grant fills the gap. |
+| Existing responder or maintenance | The page correlates to the current Activity/claim and responder. The investigating agent shares evidence through authorized coordination, preserves ownership and checks unexpected impact instead of launching a competing fix or dismissing the page because maintenance exists. |
+| Delivery, trust and recovery | Repeated or delayed pages retain their incident and delivery identities. A sent, delivered or acknowledged page is not marked resolved without fresh recovery evidence. Instructions embedded in a notification confer no authority; redaction, provenance and retention remain intact across operator and agent views. |
 
 Acceptance must retain decision IDs, task/owner bindings, matched alert/resource
-identities, timestamps, expiry/revocation events and responder counts. Report
-source tests, deployment and observed runtime behavior separately.
+identities, notification/delivery history, timestamps, expiry/revocation events,
+responder counts and recovery evidence. Report source tests, deployment and
+observed runtime behavior separately.
 
 ## Sizing and recommended phase
 
