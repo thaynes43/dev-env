@@ -5,7 +5,9 @@
   terminal record (#236, section 3.6), shipped in 2.25.0; H2 installed it with
   the record on, 2026-10-12 (haynes-ops #3852 and #3854). H3, the stop
   request for Reaping Sessions (section 4.1), is in source in #244, default
-  off. H4 to H10 have no source yet
+  off. H4, agentd's history export and archive, is in source in #246 (section
+  7.1); it reaches the cluster with the next agent image. H5 to H10 have no
+  source yet
 - **Decision:** [ADR-005](../adrs/005-private-home-expiry.md) (Q-31, Tom,
   2026-10-12: "Archive, then delete (Recommended)"), amended by
   [ADR-006](../adrs/006-private-home-expiry-corrections.md)
@@ -689,6 +691,46 @@ The top-level names below come from a names-only listing of a v1 HOME on
 agent image's pinned versions and keeps them in
 `internal/agentd/historyexport_layout.go`, with a fixture tree per provider.
 
+**H4's confirmation (2026-10-13).** The agent image pins Claude Code 2.1.296
+and Codex 0.160.1 (`images/agent/Dockerfile`). H4 checked three sources: a
+names-only listing of a v1 HOME written by Codex 0.160.1 and Claude Code
+2.1.292; Claude Code 2.1.296's own list of its config directory's
+subdirectories, which is 2.1.292's list plus `remote-control`; and the Codex
+source at `rust-v0.160.1`. The table below includes what the check added:
+
+- **Claude:** `telemetry/`, not history (Claude Code's own event queue).
+- **Codex:** `thread_history_*.sqlite*`, history (the thread item store,
+  `codex-rs/thread-store`); `visualizations/`, history (inline visualizations
+  the model drew, by date, like `generated_images/`); `tmp/` and
+  `version.json`, not history (scratch files and the update check).
+- **agentd**, from `TestHistoryLayoutCoversAgentdState`: `initial-usage/`,
+  history (the initial usage observation, DESIGN-018); `mcp-managed.json`; the
+  publication intents `published-context.<hash>.json`; and the locks
+  `native-invocation.lock`, `child-decision.lock`, `common-rules.lock` and
+  `published-context.lock`, all not history. The supervisor's lock is
+  `workspace-supervisor.lock`, not `workspace-supervisor`.
+
+H4 also checked the exported subtrees for copies of user files. Claude's
+`projects/<key>/` holds the transcripts `<id>.jsonl`, `<id>/subagents/`
+(subagent transcripts), `<id>/tool-results/` (tool output too long to keep
+inline in the transcript), `<id>/workflows/`, `bridge-pointer.json` and the
+`memory` link. A tool result is part of the conversation the transcript
+records, not a copy the client makes on its own, so it is exported under
+ADR-005 C-35 like the transcript. No other exported subtree keeps copies.
+
+**Known to Claude Code 2.1.296 and not classified.** No observed HOME holds
+these, so they keep no class, and a HOME that has one refuses
+(`unknown_entry`) until a change classifies it: `agent-memory`,
+`agent-memory-local`, `agent-memory-project`, `api-dumps`, `chrome`,
+`cowork_plugins`, `debug`, `downloads`, `dump-prompts`, `feedback-bundles`,
+`file-transfers`, `ide`, `image-cache`, `local`, `local-settings`, `logs`,
+`mcp-discovery-cache`, `mcp-skill-archives`, `plans`, `project-settings`,
+`remote`, `remote-control`, `scratch`, `seed-admin`, `shares`, `startup-perf`,
+`statsig`, `storage-v2`, `systemd`, `tasks`, `teams`, `todos`, `traces` and
+`usage-data`. Some of them (`plans`, `todos`, `tasks`, `agent-memory*`) may
+hold history. Classifying them needs a HOME that has them, so plan 11 follow-up
+F4 holds the work.
+
 **The classification.** Every top-level entry of each provider directory gets one
 class. An entry in no class refuses the export (`unknown_entry`), so a new layout
 blocks expiry until a source change classifies it (ADR-005 C-34). Excluded names
@@ -696,9 +738,9 @@ are listed in the manifest with their size; credentials with their name only.
 
 | Provider | History: exported | Not history: listed, not exported | Credentials: never exported |
 |---|---|---|---|
-| Claude | `projects/` (transcripts and per-session subdirectories; links not followed), `history.jsonl` (prompt history), `jobs/`, `feedback/` | `file-history/` (edit snapshots), `paste-cache/` and `uploads/` (copies of user or workspace files under names that say nothing about them; see below); `CLAUDE.md`, `agents/`, `settings.json` and `settings.json.*`, `plugins/`, `skills/`, `cache/`, `state/`, `daemon/`, `daemon.lock`, `daemon.status.json`, `policy-limits.json*`, `remote-settings.json`, `statusline-command.sh`, `.last-cleanup`; `sessions/` (runtime registry with key files); `.claude.json` and `backups/` (account identifiers); `shell-snapshots/` and `session-env/` (environment captures, which can hold secrets) | `.credentials.json` and `.credentials.json.*` |
-| Codex | `sessions/` (`<YYYY>/<MM>/<DD>/rollout-*.jsonl`), `archived_sessions/`, `session_index.jsonl`, `history.jsonl`, `state_*.sqlite*`, `memories_*.sqlite*`, `goals_*.sqlite*`, `queue_*.sqlite*`, `generated_images/` | `attachments/` (copies of user files; see below); `config.toml`, `AGENTS.md`, `rules/`, `skills/`, `plugins/`, `packages/`, `cache/`, `models_cache.json`, `app-server-control/`, `app-server-daemon/`, `log/`, `logs_*.sqlite*`, `installation_id`, `.tmp/`, `rollout-migrations/`, `thread-writer-locks/`, `mcp-oauth-locks/`, `.sqlite-maintenance.lock`, `.personality_migration`, `.sandbox_migration`; `shell_snapshots/` (environment captures) | `auth.json`, `auth.json.*`, `.credentials.json`, `.credentials.json.*` |
-| agentd | the seven task records above; `child-decision.json` and `decisions/`; `managed-output/`; and `~/work/<session>.log` | locks (`agent.pid`, `deliver.lock`, `rescue.lock`, `project-bootstrap.lock`, `codex-host-supervisor.lock`); runtime and setup state (`native-invocation.json`, `native-started.json`, `codex-access-generation.json`, `codex-host-config.json`, `codex-host-start-intent.json`, `codex-host-preparation.json`, `common-rule-ownership.json`, `common-launch-inputs.json`, `project-bootstrap.json`, `project-snapshot.json`, `project-rules.md`, `project-roots/`, `project-sync/`, `workspace-supervisor`, `workspace-admission.json`, `workspace-stop-request.json`); Git files the rescue covers (`rescue-*.bundle`, `rescue-index-*`); temporary copies (`.<name>.agentd-*`) | none expected; the refusal still applies |
+| Claude | `projects/` (transcripts and per-session subdirectories; links not followed), `history.jsonl` (prompt history), `jobs/`, `feedback/` | `file-history/` (edit snapshots), `paste-cache/` and `uploads/` (copies of user or workspace files under names that say nothing about them; see below); `CLAUDE.md`, `agents/`, `settings.json` and `settings.json.*`, `plugins/`, `skills/`, `cache/`, `state/`, `daemon/`, `daemon.lock`, `daemon.status.json`, `policy-limits.json*`, `remote-settings.json`, `statusline-command.sh`, `.last-cleanup`, `telemetry/`; `sessions/` (runtime registry with key files); `.claude.json` and `backups/` (account identifiers); `shell-snapshots/` and `session-env/` (environment captures, which can hold secrets) | `.credentials.json` and `.credentials.json.*` |
+| Codex | `sessions/` (`<YYYY>/<MM>/<DD>/rollout-*.jsonl`), `archived_sessions/`, `session_index.jsonl`, `history.jsonl`, `state_*.sqlite*`, `memories_*.sqlite*`, `goals_*.sqlite*`, `queue_*.sqlite*`, `thread_history_*.sqlite*`, `generated_images/`, `visualizations/` | `attachments/` (copies of user files; see below); `config.toml`, `AGENTS.md`, `rules/`, `skills/`, `plugins/`, `packages/`, `cache/`, `models_cache.json`, `app-server-control/`, `app-server-daemon/`, `log/`, `logs_*.sqlite*`, `installation_id`, `.tmp/`, `tmp/`, `version.json`, `rollout-migrations/`, `thread-writer-locks/`, `mcp-oauth-locks/`, `.sqlite-maintenance.lock`, `.personality_migration`, `.sandbox_migration`; `shell_snapshots/` (environment captures) | `auth.json`, `auth.json.*`, `.credentials.json`, `.credentials.json.*` |
+| agentd | the seven task records above; `child-decision.json` and `decisions/`; `managed-output/`; `initial-usage/`; and `~/work/<session>.log` | locks (`agent.pid`, `deliver.lock`, `rescue.lock`, `project-bootstrap.lock`, `codex-host-supervisor.lock`, `native-invocation.lock`, `child-decision.lock`, `common-rules.lock`, `published-context.lock`, `workspace-supervisor.lock`); runtime and setup state (`native-invocation.json`, `native-started.json`, `codex-access-generation.json`, `codex-host-config.json`, `codex-host-start-intent.json`, `codex-host-preparation.json`, `common-rule-ownership.json`, `common-launch-inputs.json`, `mcp-managed.json`, `project-bootstrap.json`, `project-snapshot.json`, `project-rules.md`, `project-roots/`, `project-sync/`, `workspace-admission.json`, `workspace-stop-request.json`); publication intents (`published-context.*.json`); Git files the rescue covers (`rescue-*.bundle`, `rescue-index-*`); temporary copies (`.<name>.agentd-*`) | none expected; the refusal still applies |
 
 **agentd is classified by name too.** An entry of `~/.agentd` in no class
 refuses the export (`unknown_entry`), as for the providers; there is no
@@ -917,6 +959,104 @@ class, a different shape, more sensitive content. Everything else is the same.
 check). Errors are DESIGN-024's: one JSON object, codes `not_found`, `conflict`,
 `corrupt`, `invalid`, `no_archive`. Protocol types live in
 `internal/agentd/protocol/historyarchive.go`.
+
+### 7.1 In source (H4, #246)
+
+agentd's half of sections 6.3, 6.4 and 7 is in `internal/agentd/historyexport.go`,
+`historyexport_layout.go` and `historyarchive.go`, with the wire types in
+`internal/agentd/protocol/historyarchive.go`. Nothing calls it yet. The
+operator's relay, the expiry steps and the read routes are H5 and H6. The
+sections above leave these details open:
+
+- **Export flags.** `agentd ctl history-export plan --session S
+  --claude-config-dir D --codex-home D [--rescue SESSION/STAMP]`. The
+  directories are the terminal record's, relative to HOME. An empty, absolute
+  or unclean one, one outside HOME, one reached through a link, a root that is
+  not a directory, or two roots that overlap all refuse `layout_unknown`. A
+  provider directory that does not exist is a root marked `absent`. `stream`
+  takes the same flags plus `--plan-sha256 H`.
+- **The plan** is one line of canonical JSON on stdout. Its SHA-256 is the plan
+  digest. `stream` plans again and refuses `export_changed` unless the digest
+  is the same, then writes a PAX tar: one regular entry per planned file, named
+  `<root>/<path>` (`claude`, `codex`, `agentd` or `log`), mode 0600, in the
+  plan's order. A failure after the first byte of the tar goes to stderr as
+  the JSON error, because stdout carries the tar.
+- **The Git rescue** goes in the plan when `--rescue` names one. Every file of
+  `rescue/<session>/<stamp>/` must be the manifest or a bundle the manifest
+  names. The manifest must be complete and name this Session and directory,
+  and each bundle must match the manifest's size and SHA-256. `put` copies the
+  files from the shelf's own shared mount and checks each hash again.
+- **Credential digests** come from the credential entries of the two provider
+  directories and from `$AGENTD_GH_TOKEN_FILE` (default `/creds/gh_token`).
+  That token is the one file the export reads through a link, because a
+  Secret volume's files are links into `..data/`. Empty files are never
+  compared, or every empty file would match.
+- **put's stdin** is the canonical `content.json` line, a newline, then the
+  tar. The operator fills `session`, `project`, `provider`, `homeUID`,
+  `terminal` and `rescue`. `protocol.HistoryContentFromPlan` copies the plan's
+  part. In `content.json` a file carries `blocksSHA256`, the SHA-256 of its
+  canonical block list, and the list itself goes to `blocks/<n>.json`. `put`
+  refuses `invalid` for any of these: bytes that are not canonical, an unknown
+  field, a bound exceeded, a name the 6.3 checks refuse, a log other than
+  `<session>.log`, or tar entries that are not exactly the manifest's files in
+  its order. `--archived-by` goes to `entry.json`.
+- **Index entries** are named
+  `index/<project or _none>/<YYYY-MM>/<archivedAt as 20060102T150405.000000000Z>-<session UID>-<16 hex>.json`.
+  Each is hard-linked from `.incoming`, so it never replaces a file. A put that
+  answers `exists` writes a missing index entry, which repairs a put that
+  stopped between the rename and the index.
+- **The archive lock** is `.shelf.lock` at the archive's root: exclusive for
+  `put`, shared for the reads.
+- **Reads.** `verify --session-uid U --content-sha256 H`, `get --session-uid U
+  [--content-sha256 H]`, `list --project P [--limit N] [--after CURSOR]` (an
+  empty `P` lists the histories with no project) and `read --session-uid U
+  --content-sha256 H --file ROOT/PATH --offset N`. `verify` also refuses a file
+  the manifest does not list. A `list` item that fails its check is printed as
+  `{"error":"corrupt"}` with its UID, time and digest, and nothing else.
+- **Errors** are one JSON object, `{"error", "message", "path"}`, with exit
+  status 1. The `path` names an entry, never its bytes. The export's codes are
+  section 10's reasons (`layout_unknown`, `unknown_entry`, `unexpected_entry`,
+  `credential_in_tree`, `export_too_large`, `export_changed`), plus `invalid`
+  for a request or a rescue that does not fit and `io_error` for a failed read,
+  which the operator takes as Unknown. The archive's codes are `not_found`,
+  `conflict`, `corrupt`, `invalid` and `no_archive`. A put that finds an entry
+  with the same `content.json` but a damaged `entry.json` answers `corrupt`.
+- **Bounds** are 6.3's, plus at most 100,000 excluded names, 64 Git files,
+  2 GiB of Git files and a 64 MiB content manifest.
+- **Guard scans.** `TestHistoryExportReadsOnly` allows only two kinds of open:
+  `os.OpenFile` with `historyOpenFlags` (`O_RDONLY|O_NOFOLLOW|O_NONBLOCK`) or
+  `historyDirFlags`, and `readCredentialReference`'s one `os.O_RDONLY` open
+  outside HOME. It refuses any call that writes, follows links or walks with
+  the standard library, and any call into another file except
+  `sharedIsMounted`. `TestHistoryArchiveNeverRemoves` allows these and nothing
+  else:
+  - a removal only in `removeIncoming`;
+  - a rename only in `publishIncoming`;
+  - a hard link only in `linkIndexEntry`;
+  - a create or a write-mode open only in the `incoming*` functions and the
+    lock.
+
+  Each of those functions first checks that its path is under `.incoming`.
+  `TestHistoryLayoutCoversAgentdState` resolves every name that
+  `internal/agentd` passes to `statePath`, to `filepath.Join` of the state
+  directory, to `os.CreateTemp` there or to `workspaceFileLock`, and fails on a
+  name the table lacks or cannot resolve, and on a rule that names nothing. Each
+  scan has a never-compiled file under `testdata/historyscan/`.
+- **Tests:** `TestHistoryExportPlanFollowsTheAllowlists`,
+  `TestHistoryExportStreamWritesThePlan`,
+  `TestHistoryExportRefusesCredentialsAnywhere` (nested names, temporary
+  names, upper case, hard links, renamed copies of each login and of the token),
+  `TestHistoryExportRefusesUnclassifiedEntries`,
+  `TestHistoryExportRefusesUnknownLayouts`,
+  `TestHistoryExportRefusesUnexpectedEntries`, `TestHistoryExportSizeCaps`,
+  `TestHistoryExportListsTheGitRescue`,
+  `TestHistoryArchivePutStoresAndIsIdempotent`,
+  `TestHistoryArchivePutRefusesStreamsThatDifferFromTheManifest`,
+  `TestHistoryArchiveSizeCaps`, `TestHistoryArchiveVerifyDetectsTamper`,
+  `TestHistoryArchivePartialPutRecoversAfterARestart`,
+  `TestHistoryArchiveGetListAndRead`, `TestHistoryArchiveNeedsItsVolume`,
+  `TestHistoryArchiveChecksTheGitRescueItCopies`, the scans above and their
+  testdata checks, and `TestHistoryExportCommands` in `cmd/agentd`.
 
 ## 8. Reads of archived history
 
@@ -1280,6 +1420,24 @@ a missing one, a changed one); size bounds; SQLite triples; links not followed;
 **Measured in H4:** the peak memory and CPU time of a 2 GiB export in a container
 with the hold pod's S limits, and of `put` and `verify` with the shelf's limits.
 H7 raises the shelf's memory limit if the measurement needs it.
+
+H4's measurement (2026-10-13). `TestHistoryExportMeasure` is skipped unless
+`DEV_ENV_HISTORY_MEASURE_MIB` is set. It ran in the dev-env pod under
+`nice -n 19` and `GOMAXPROCS=2`, on files of 32 MiB with a warm page cache. One
+process did the plan, the stream piped into `put` (both ends) and the verify:
+
+| History | plan CPU | stream and put CPU | verify CPU | Go heap | peak RSS |
+|---|---|---|---|---|---|
+| 256 MiB | 0.32 s | 1.42 s | 0.34 s | 24 MiB | 61 MiB |
+| 1 GiB | 1.29 s | 5.50 s | 1.28 s | 28 MiB | 58 MiB |
+
+Memory does not grow with the history: every file is streamed through 1 MiB
+buffers. CPU is about 1.3 s per GiB for each hashing pass. At 2 GiB that
+predicts about 2.6 s for the plan, about 5 s for the hold pod's stream (which
+plans again), about 6 s for the shelf's put and about 2.6 s for its verify, all
+on one core. None of this was run in a container with the hold pod's or the
+shelf's limits: the work order allowed no cluster change. H7 runs it there,
+with a cold cache, before it sets the shelf's limits.
 
 **Installed:**
 

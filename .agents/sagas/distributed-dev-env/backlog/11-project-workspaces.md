@@ -285,7 +285,7 @@ is default off; deletion waits for the installed archived-history read (#174).
 | H1 | dev-env source | the terminal record (`executorTerminal` and `executorMissed` beside `lastExecutor`, CRD rules, the shared verifier refactored, the confirmed write, `ExecutorEnded`, metrics, flag). In source in #236 (DESIGN-025 3.6), released in 2.25.0 | merged and in a released operator image |
 | H2 | haynes-ops | CRD copy, node and lease `get` for the operator, operator pin, record on | records appear for ended private executors; ship it early, each day without it can lose a proof. Done 2026-10-12 (haynes-ops #3852, #3854, 2.25.0): two records and two missed markers stored |
 | H3 | dev-env source | the stop request for Reaping Sessions only (`stopRequest` intent, hold check, `activeDeadlineSeconds`) and its guard test. In source in #244 (DESIGN-025 4.1), default off | merged |
-| H4 | dev-env source | agentd `history-export` and `history-archive` commands, the layout tables (agentd by name, copies of user files excluded) and fixtures, guard tests, the resource measurement | merged and in a released agent image |
+| H4 | dev-env source | agentd `history-export` and `history-archive` commands, the layout tables (agentd by name, copies of user files excluded) and fixtures, guard tests, the resource measurement. In source in #246 (DESIGN-025 7.1); the in-cluster measurement moves to H7 | merged and in a released agent image |
 | H5 | dev-env source | the expiry record and steps up to `Archived`, the private hold pod and `expiryHoldRemovalAllowed`, the relay, overrides, metrics | merged with required CI and independent review |
 | H6 | dev-env source | the `/v1/history` reads and `agent-run history`, the delete and release steps (off), `TestExpiryDeleteNeedsVerify` | merged and in a released operator image |
 | H7 | haynes-ops | history archive PVC, shelf mount, override policy, the archive guard (after its parity check, unless R5 shipped it), alerts; Tom sets the PV to `Retain`; stop, archive and reads on | a private Session reaches `Archived` with its HOME intact |
@@ -308,6 +308,27 @@ days alone would have killed a live Session for good with nobody asking. As a
 result a suspended private Session whose executor still runs keeps its HOME
 until it is reaped. Do not build that stop without a new owner question, asked
 with that premise: it ends a live Session no human asked to end.
+
+**Follow-up F4, needs evidence first: the rest of Claude Code's config names.**
+Claude Code 2.1.296 lists 49 subdirectories of its config directory. H4
+classified the ones a real HOME holds (DESIGN-025 6.3, H4's confirmation). The
+other 34 have no class: `agent-memory`, `agent-memory-local`,
+`agent-memory-project`, `api-dumps`, `chrome`, `cowork_plugins`, `debug`,
+`downloads`, `dump-prompts`, `feedback-bundles`, `file-transfers`, `ide`,
+`image-cache`, `local`, `local-settings`, `logs`, `mcp-discovery-cache`,
+`mcp-skill-archives`, `plans`, `project-settings`, `remote`, `remote-control`,
+`scratch`, `seed-admin`, `shares`, `startup-perf`, `statsig`, `storage-v2`,
+`systemd`, `tasks`, `teams`, `todos`, `traces` and `usage-data`. A HOME that
+holds one refuses its export (`unknown_entry`), and the expiry stops with
+`DevEnvHomeExpiryNeedsOwner`. That is safe: the HOME stays. To classify a name,
+look at a HOME that has it, names only, and read what the client writes there.
+`plans`, `todos`, `tasks` and `agent-memory*` may be history; `downloads`,
+`file-transfers`, `image-cache`, `scratch` and `shares` may hold copies of user
+files (ADR-006). Each name goes in `claudeLayout`
+(`internal/agentd/historyexport_layout.go`) with a fixture in
+`historyexport_test.go`, in the change that classifies it. To find the list
+again, search the pinned `claude` binary for the array that holds
+`"dump-prompts"`.
 
 ### Parent issues
 

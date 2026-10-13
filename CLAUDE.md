@@ -63,10 +63,12 @@ api/coordination/v1alpha1/  CRD types, the separate protected group coordination
                          InboxReadAck, PublishedContext, SessionDirectory); its CRDs go to config/crd/ and haynes-ops like the others
 cmd/dev-env-operator/    the operator, and the access broker as its second mode, `dev-env-operator broker` (broker.go, D-61)
 cmd/dev-env-keeper/      the keeper, its own binary in the operator image (D-38); main only, the work is internal/keeper
-cmd/agentd/              the in-pod supervisor: `run`, `hold` (the rescue pod, D-55), `shelf` (the shelf pod, D-67), `run-agent`
+cmd/agentd/              the in-pod supervisor: `run`, `hold` (the rescue pod, D-55), `shelf [--history-archive]` (the shelf pod,
+                         D-67, DESIGN-025), `run-agent`
                          (a task, or a TUI, D-58), `render`, `ctl status|rescue [--stop-agent]|prepare-restart` (D-40 to D-43,
                          D-48, D-58), `ctl deliver|log` (D-65), `ctl rescues|hold-rescue|prune` (D-67),
-                         `ctl grant-install|grant-remove|grant-list|grant-use` (D-63)
+                         `ctl grant-install|grant-remove|grant-list|grant-use` (D-63),
+                         `ctl history-export|history-archive` (DESIGN-025 H4)
 cmd/agent-run/           the CLI, one static binary (CGO_ENABLED=0, D-06); main only, the commands are internal/agentrun
 internal/version/        the build identity every binary's `version` prints
 internal/testenv/        starts envtest (kube-apiserver + etcd) with config/crd/ installed, for test suites
@@ -104,7 +106,9 @@ internal/egress/         the scoped CiliumNetworkPolicy builder and ownership ch
 internal/grantexpiry/    the operator's separate egress expiry backstop (D-64), watches grants, reads CNPs by name only,
                          deletes by verified ownership and UID, and preserves the broker's grant audit record
 internal/agentd/         agentd: config rendering (the dev-init.sh port), clone and worktree, the task runner, heartbeat,
-                         status, rescue and its bundle on the shared volume (D-48); tests fake claude and tmux and run
+                         status, rescue and its bundle on the shared volume (D-48), the private history export and the
+                         shelf's history archive (DESIGN-025 7.1; historyexport_layout.go classifies every provider and
+                         agentd name, and its scans keep the table complete); tests fake claude and tmux and run
                          git against a bare repo in t.TempDir()
 internal/agentd/protocol/  what agentd and the operator exchange: the session document, the status, the heartbeat route,
                          the rescue report, and the rescue layout and manifest on the shared volume
