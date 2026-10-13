@@ -181,8 +181,8 @@ func validateHistoryContent(c protocol.HistoryContent) error {
 		if code, why := protocol.CheckHistoryPath(f.Path); code != "" {
 			return protocol.HistoryErrorf(protocol.HistoryErrInvalid, name, "%s", why)
 		}
-		if f.Root == protocol.HistoryRootLog && (strings.Contains(f.Path, "/") || !strings.HasSuffix(f.Path, ".log")) {
-			return bad("the log root holds one .log file")
+		if f.Root == protocol.HistoryRootLog && f.Path != c.Session.Name+".log" {
+			return bad("the log root holds only the Session's own log")
 		}
 		if f.Bytes < 0 || f.Bytes > historyBounds.fileBytes || f.Mode > 0o7777 || !protocol.ValidSHA256(f.SHA256) || !protocol.ValidSHA256(f.BlocksSHA256) || f.Blocks != nil || f.ModTime.IsZero() {
 			return protocol.HistoryErrorf(protocol.HistoryErrInvalid, name, "size, mode, time or digests not valid")
@@ -291,7 +291,7 @@ func (a HistoryArchive) Put(r io.Reader, archivedBy string) (protocol.HistoryPut
 		return res, protocol.HistoryErrorf(protocol.HistoryErrNoArchive, entryRel, "%v", err)
 	}
 
-	tmp, err := a.incomingDir()
+	tmp, err := a.newIncomingDir()
 	if err != nil {
 		return res, err
 	}
@@ -404,23 +404,25 @@ func (a HistoryArchive) checkIncoming(p string) error {
 	return nil
 }
 
-// incomingDir makes a new .incoming/<random> directory.
-func (a HistoryArchive) incomingDir() (string, error) {
+// newIncomingDir makes a new .incoming/<random> directory.
+func (a HistoryArchive) newIncomingDir() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
 	}
 	tmp := filepath.Join(a.Root, protocol.HistoryArchiveIncoming, hex.EncodeToString(b[:]))
-	if err := a.checkIncoming(tmp); err != nil {
-		return "", err
+	return tmp, a.incomingMkdir(tmp)
+}
+
+// incomingMkdir makes one new directory under .incoming.
+func (a HistoryArchive) incomingMkdir(p string) error {
+	if err := a.checkIncoming(p); err != nil {
+		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(tmp), 0o700); err != nil {
-		return "", err
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		return err
 	}
-	if err := os.Mkdir(tmp, 0o700); err != nil {
-		return "", err
-	}
-	return tmp, nil
+	return os.Mkdir(p, 0o700)
 }
 
 // incomingFile writes a new file under .incoming and syncs it.
@@ -573,7 +575,7 @@ func (a HistoryArchive) linkIndexEntry(c protocol.HistoryContent, sum, entryRel 
 	if err != nil {
 		return err
 	}
-	tmp, err := a.incomingDir()
+	tmp, err := a.newIncomingDir()
 	if err != nil {
 		return err
 	}

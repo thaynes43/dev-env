@@ -354,6 +354,11 @@ func TestHistoryExportRefusesCredentialsAnywhere(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
+		"any hard-linked file, whatever its bytes": func(t *testing.T, r *historyRig) {
+			if err := os.Link(r.path(".codex/history.jsonl"), r.path(".agentd/managed-output/inv-1/linked.txt")); err != nil {
+				t.Fatal(err)
+			}
+		},
 		"a renamed whole copy of the Codex login": func(t *testing.T, r *historyRig) {
 			r.write(t, ".codex/sessions/2026/10/12/rollout-z.jsonl", testCodexLogin)
 		},

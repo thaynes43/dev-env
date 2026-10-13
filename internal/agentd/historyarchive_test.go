@@ -330,7 +330,11 @@ func TestHistoryArchiveVerifyDetectsTamper(t *testing.T) {
 		t.Errorf("verify of nothing: %v, want not_found", err)
 	}
 	_, res := putTestHistory(t, r, ar, "", testSessionUID)
-	if _, err := ar.a.Verify(testSessionUID, res.ContentSHA256[:63]+"0"); historyCode(err) == "" {
+	other := res.ContentSHA256[:63] + "0"
+	if other == res.ContentSHA256 {
+		other = res.ContentSHA256[:63] + "1"
+	}
+	if _, err := ar.a.Verify(testSessionUID, other); historyCode(err) != protocol.HistoryErrCorrupt {
 		t.Errorf("verify of another digest with the same prefix answered no error")
 	}
 	if _, err := ar.a.Verify(testSessionUID, res.ContentSHA256); err != nil || !strings.HasPrefix(res.Entry, "v1/_none/") {
