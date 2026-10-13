@@ -85,10 +85,9 @@ func TestOverrideScanCatchesWrites(t *testing.T) {
 }
 
 type overrideScan struct {
-	violations     []string
-	declared       int
-	reads          int
-	overrideConsts map[string]bool
+	violations []string
+	declared   int
+	reads      int
 }
 
 // overrideKeyLiteral matches a string that names the override's key, and not

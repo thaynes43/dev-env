@@ -19,7 +19,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -96,7 +95,7 @@ func newExpiryFixture(t *testing.T, edit func(*terminalFixture)) (f *expiryFixtu
 		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 			// The API server gives every object a UID; the fake client does not.
 			if obj.GetUID() == "" {
-				obj.SetUID(types.UID(uuid.NewUUID()))
+				obj.SetUID(uuid.NewUUID())
 			}
 			return c.Create(ctx, obj, opts...)
 		},

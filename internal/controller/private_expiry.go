@@ -395,6 +395,16 @@ func (r *Reconciler) reconcileHomeExpiry(ctx context.Context, s *v1alpha1.AgentS
 		// Not eligible, and nothing to cancel: no read needed.
 		return ctrl.Result{}, false, nil
 	}
+	if h.Expiry == nil {
+		// Nothing to cancel: a Session the cache shows not triggered needs
+		// no uncached reads until its deadline, or an event, comes.
+		if trig, wait := homeExpiryTriggered(s, obs.templates, r.clock()); trig == expiryNotTriggered {
+			if wait > 0 {
+				return ctrl.Result{RequeueAfter: min(wait, homeExpiryMaxWait)}, false, nil
+			}
+			return ctrl.Result{}, false, nil
+		}
+	}
 	v, err := r.readExpiryView(ctx, s)
 	if errors.Is(err, errExpiryBehind) {
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
@@ -409,7 +419,7 @@ func (r *Reconciler) reconcileHomeExpiry(ctx context.Context, s *v1alpha1.AgentS
 	if v.record() == nil {
 		return r.startHomeExpiry(ctx, v, obs, trig, wait)
 	}
-	return r.stepHomeExpiry(ctx, s, v, obs, trig)
+	return r.stepHomeExpiry(ctx, v, obs, trig)
 }
 
 // startHomeExpiry creates the expiry record of an eligible, triggered Session
@@ -457,7 +467,7 @@ func (r *Reconciler) startHomeExpiry(ctx context.Context, v *expiryView, obs *ob
 }
 
 // stepHomeExpiry runs the record's next step, after the cancels and the hold.
-func (r *Reconciler) stepHomeExpiry(ctx context.Context, s *v1alpha1.AgentSession, v *expiryView, obs *observation, trig expiryTrigger) (ctrl.Result, bool, error) {
+func (r *Reconciler) stepHomeExpiry(ctx context.Context, v *expiryView, obs *observation, trig expiryTrigger) (ctrl.Result, bool, error) {
 	e := v.record()
 	if expiryPhaseAtLeast(e.Phase, v1alpha1.HomeExpiryDeleting) {
 		// Deleting and Expired are H6's: nothing cancels them, and this
