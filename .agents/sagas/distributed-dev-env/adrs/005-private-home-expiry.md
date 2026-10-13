@@ -180,9 +180,6 @@ sibling volume, `dev-env-history-archive`, with the same rules: shelf-only,
 
 The cost is a second manual `Retain` step for Tom, and a second volume that the
 shelf must reattach after a node loss. DESIGN-024's recovery steps cover both.
-Implementation ruling [Q-37/D-91](../designs/025-private-home-expiry.md#22-one-time-pv-retain-q-37-d-91)
-allowed one delegated Retain change for this exact history PV; it completed
-and is consumed. The default owner-only PV rule and other volumes are unchanged.
 
 ### Stopping a reaped private executor
 
