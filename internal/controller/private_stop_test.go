@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -102,6 +103,48 @@ func storedPod(t *testing.T, c client.Reader, pod *corev1.Pod) *corev1.Pod {
 	return &got
 }
 
+// calledFrom reports whether the function named fn (a method or function name
+// in this package, without its receiver) is on the caller's stack.
+func calledFrom(fn string) bool {
+	pcs := make([]uintptr, 64)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
+	for {
+		f, more := frames.Next()
+		if strings.HasSuffix(f.Function, "."+fn) {
+			return true
+		}
+		if !more {
+			return false
+		}
+	}
+}
+
+// holdOnStopIntentRead wraps c so that the first Session read that
+// stopIntentConfirmed makes first writes an owner hold through write: a hold
+// written after the reconcile's own uncached read of the Session and before the
+// intent's. The intent write then carries a resourceVersion that already
+// includes the hold, so no Conflict catches it; only the hold check on that
+// read does.
+func holdOnStopIntentRead(c client.WithWatch, write client.Client, written *bool) client.WithWatch {
+	return interceptor.NewClient(c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, o client.Object, opts ...client.GetOption) error {
+		if _, ok := o.(*v1alpha1.AgentSession); ok && !*written && calledFrom("stopIntentConfirmed") {
+			*written = true
+			var latest v1alpha1.AgentSession
+			if err := write.Get(ctx, key, &latest); err != nil {
+				return err
+			}
+			if latest.Annotations == nil {
+				latest.Annotations = map[string]string{}
+			}
+			latest.Annotations[v1alpha1.AnnotationHomeExpiry] = v1alpha1.HomeExpiryHold
+			if err := write.Update(ctx, &latest); err != nil {
+				return err
+			}
+		}
+		return c.Get(ctx, key, o, opts...)
+	}})
+}
+
 // T14 and the order's first case: a reap records the intent, then exactly one
 // patch with the two tests sets the deadline; more reconciles send nothing;
 // once the kubelet ends the Pod, the terminal record follows.
@@ -140,7 +183,7 @@ func TestPrivateStopReapRecordsIntentThenOnePatchThenTerminal(t *testing.T) {
 		t.Fatalf("the stop patch is not exactly two tests and the deadline: %s", patches.sent[0])
 	}
 	if pod.Spec.ActiveDeadlineSeconds == nil || *pod.Spec.ActiveDeadlineSeconds != 3630 {
-		t.Fatalf("activeDeadlineSeconds %v, want 3630", pod.Spec.ActiveDeadlineSeconds)
+		t.Fatalf("activeDeadlineSeconds %v, want 3630", ptr.Deref(pod.Spec.ActiveDeadlineSeconds, -1))
 	}
 	if stopCount(stops, stopSent) != 1 || stopCount(stops, stopConflict) != 0 || stopCount(stops, stopHeld) != 0 {
 		t.Fatal("the stop was not counted once as sent")
@@ -250,7 +293,7 @@ func TestPrivateStopRefusals(t *testing.T) {
 				t.Fatalf("a stop intent was recorded: %+v", h.StopRequest)
 			}
 			if pod := storedPod(t, base, f.pod); !apiequality.Semantic.DeepEqual(pod.Spec.ActiveDeadlineSeconds, f.pod.Spec.ActiveDeadlineSeconds) {
-				t.Fatalf("activeDeadlineSeconds changed: %v", pod.Spec.ActiveDeadlineSeconds)
+				t.Fatalf("activeDeadlineSeconds changed: %v", ptr.Deref(pod.Spec.ActiveDeadlineSeconds, -1))
 			}
 			if held := stopCount(stops, stopHeld) > 0; held != tc.held || stopCount(stops, stopSent) != 0 {
 				t.Fatalf("held counted %v (want %v), sent %v", stopCount(stops, stopHeld), tc.held, stopCount(stops, stopSent))
@@ -302,7 +345,7 @@ func TestPrivateStopLowersAHigherDeadline(t *testing.T) {
 	c := watchPodPatches(base, patches, nil)
 	reconcileSession(t, f.stopReconciler(c, c, NewPrivateExecutorStopCounter()), f.s, 3)
 	if pod := storedPod(t, base, f.pod); pod.Spec.ActiveDeadlineSeconds == nil || *pod.Spec.ActiveDeadlineSeconds != 3630 {
-		t.Fatalf("activeDeadlineSeconds %v, want 3630", pod.Spec.ActiveDeadlineSeconds)
+		t.Fatalf("activeDeadlineSeconds %v, want 3630", ptr.Deref(pod.Spec.ActiveDeadlineSeconds, -1))
 	}
 	if _, landed := patches.count(); landed != 1 {
 		t.Fatalf("%d patches landed, want 1", landed)
@@ -348,6 +391,41 @@ func TestPrivateStopHoldBetweenReadAndIntentWins(t *testing.T) {
 	}
 	if stopCount(stops, stopConflict) != 1 || stopCount(stops, stopHeld) == 0 || stopCount(stops, stopSent) != 0 {
 		t.Fatalf("conflict %v held %v sent %v", stopCount(stops, stopConflict), stopCount(stops, stopHeld), stopCount(stops, stopSent))
+	}
+}
+
+// A hold written after the reconcile's own read of the Session but before the
+// intent's read is in the Session's latest version, so the intent write would
+// not conflict: the hold check on the intent's read is what refuses it. No
+// intent is stored, no patch is sent, and the hold is counted (ADR-006: a hold
+// written before the intent wins).
+func TestPrivateStopHoldBeforeTheIntentReadWins(t *testing.T) {
+	f := newStopFixture()
+	base := f.client()
+	patches := &podPatches{}
+	written := false
+	c := holdOnStopIntentRead(watchPodPatches(base, patches, nil), base, &written)
+	stops := NewPrivateExecutorStopCounter()
+	r := f.stopReconciler(c, c, stops)
+	for range 4 {
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.s)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !written {
+		t.Fatal("the hold was never written before the intent's read")
+	}
+	if sent, _ := patches.count(); sent != 0 {
+		t.Fatalf("%d pod patches sent past a hold written before the intent", sent)
+	}
+	if h := storedHistory(t, base, f.s).Status.PrivateHistory; h.StopRequest != nil {
+		t.Fatalf("the intent was stored over the hold: %+v", h.StopRequest)
+	}
+	if pod := storedPod(t, base, f.pod); pod.Spec.ActiveDeadlineSeconds != nil {
+		t.Fatalf("activeDeadlineSeconds %v set past a hold", *pod.Spec.ActiveDeadlineSeconds)
+	}
+	if stopCount(stops, stopHeld) == 0 || stopCount(stops, stopConflict) != 0 || stopCount(stops, stopSent) != 0 {
+		t.Fatalf("conflict %v held %v sent %v; want held only", stopCount(stops, stopConflict), stopCount(stops, stopHeld), stopCount(stops, stopSent))
 	}
 }
 
@@ -494,15 +572,41 @@ func TestPrivateStopRestartAdoptsTheIntentAndNeverPatchesTwice(t *testing.T) {
 			if got := storedHistory(t, base, f.s).Status.PrivateHistory.StopRequest; !apiequality.Semantic.DeepEqual(got, intent) {
 				t.Fatalf("a restart changed the intent: %+v -> %+v", intent, got)
 			}
+			// The deadline counts from the stored intent, not from the new
+			// operator's clock, so a late patch sets the same value.
 			_, landed := patches.count()
-			want := int64(3630)
-			if when == "before the patch" {
-				want = 3600 + 300 + 30
-			}
-			if pod := storedPod(t, base, f.pod); landed != 1 || pod.Spec.ActiveDeadlineSeconds == nil || *pod.Spec.ActiveDeadlineSeconds != want {
-				t.Fatalf("%d patches landed, deadline %v; want 1 and %d", landed, pod.Spec.ActiveDeadlineSeconds, want)
+			if pod := storedPod(t, base, f.pod); landed != 1 || pod.Spec.ActiveDeadlineSeconds == nil || *pod.Spec.ActiveDeadlineSeconds != 3630 {
+				t.Fatalf("%d patches landed, deadline %v; want 1 and 3630", landed, ptr.Deref(pod.Spec.ActiveDeadlineSeconds, -1))
 			}
 		})
+	}
+}
+
+// A second replica, or a restarted operator on another node, whose clock lags
+// the one that patched by more than the time since the patch: it computes the
+// deadline from the stored intent, finds the Pod's deadline at it, and sends
+// nothing. (Computed from its own clock, the deadline would be lower than the
+// Pod's, and it would patch and count a second time.)
+func TestPrivateStopLaggingClockPatchesOnce(t *testing.T) {
+	f := newStopFixture()
+	base := f.client()
+	patches := &podPatches{}
+	c := watchPodPatches(base, patches, nil)
+	stopsA, stopsB := NewPrivateExecutorStopCounter(), NewPrivateExecutorStopCounter()
+	reconcileSession(t, f.stopReconciler(c, c, stopsA), f.s, 2)
+	if _, landed := patches.count(); landed != 1 || stopCount(stopsA, stopSent) != 1 {
+		t.Fatalf("A: %d patches landed; want 1", landed)
+	}
+	for _, lag := range []time.Duration{2 * time.Minute, time.Hour} {
+		b := f.stopReconciler(c, c, stopsB)
+		b.Now = func() time.Time { return f.now.Add(10 * time.Second).Add(-lag) }
+		reconcileSession(t, b, f.s, 3)
+	}
+	if sent, _ := patches.count(); sent != 1 || stopCount(stopsB, stopSent) != 0 {
+		t.Fatalf("%d pod patches, B counted %v sent; a lagging clock must send none", sent, stopCount(stopsB, stopSent))
+	}
+	if pod := storedPod(t, base, f.pod); pod.Spec.ActiveDeadlineSeconds == nil || *pod.Spec.ActiveDeadlineSeconds != 3630 {
+		t.Fatalf("activeDeadlineSeconds %v, want 3630", ptr.Deref(pod.Spec.ActiveDeadlineSeconds, -1))
 	}
 }
 
@@ -570,8 +674,9 @@ func TestPrivateStopTwoReplicasPatchOnce(t *testing.T) {
 
 // envtest (T14 on a real API server): reap, intent, one patch the API server
 // accepts on a running Pod, a terminal record after the kubelet ends it; a
-// hold written between the read and the intent conflicts; a stale Pod
-// resourceVersion fails the patch's test.
+// hold written between the read and the intent conflicts; a hold written before
+// the intent's read refuses the intent; a stale Pod resourceVersion fails the
+// patch's test.
 func TestPrivateStopOnTheAPIServer(t *testing.T) {
 	ctx := context.Background()
 	if err := k8s.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-node-lease"}}); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -671,7 +776,7 @@ func TestPrivateStopOnTheAPIServer(t *testing.T) {
 		}
 		got := storedPod(t, k8s, pod)
 		if got.Spec.ActiveDeadlineSeconds == nil || *got.Spec.ActiveDeadlineSeconds != 3630 {
-			t.Fatalf("activeDeadlineSeconds %v, want 3630", got.Spec.ActiveDeadlineSeconds)
+			t.Fatalf("activeDeadlineSeconds %v, want 3630", ptr.Deref(got.Spec.ActiveDeadlineSeconds, -1))
 		}
 		if sent, landed := patches.count(); sent != 1 || landed != 1 || stopCount(stops, stopSent) != 1 {
 			t.Fatalf("%d sent, %d landed, sent counted %v; want one", sent, landed, stopCount(stops, stopSent))
@@ -725,6 +830,26 @@ func TestPrivateStopOnTheAPIServer(t *testing.T) {
 		}
 	})
 
+	t.Run("a hold before the intent's read refuses the intent", func(t *testing.T) {
+		s, pod := envFixture(t, "h3-stop-held-early")
+		reap(t, s)
+		patches := &podPatches{}
+		written := false
+		c := holdOnStopIntentRead(watchPodPatches(watching, patches, nil), k8s, &written)
+		stops := NewPrivateExecutorStopCounter()
+		for range 4 {
+			if _, err := operatorAt(c, stops).Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(s)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if !written || stopCount(stops, stopHeld) == 0 || stopCount(stops, stopConflict) != 0 || stopCount(stops, stopSent) != 0 {
+			t.Fatalf("hold written %v, conflict %v, held %v, sent %v", written, stopCount(stops, stopConflict), stopCount(stops, stopHeld), stopCount(stops, stopSent))
+		}
+		if sent, _ := patches.count(); sent != 0 || history(t, s).StopRequest != nil || storedPod(t, k8s, pod).Spec.ActiveDeadlineSeconds != nil {
+			t.Fatal("the stop went past a hold written before the intent")
+		}
+	})
+
 	t.Run("two replicas: a stale Pod revision fails the test", func(t *testing.T) {
 		s, pod := envFixture(t, "h3-stop-replicas")
 		reap(t, s)
@@ -750,7 +875,7 @@ func TestPrivateStopOnTheAPIServer(t *testing.T) {
 			t.Fatalf("A conflict %v sent %v, B sent %v", stopCount(stopsA, stopConflict), stopCount(stopsA, stopSent), stopCount(stopsB, stopSent))
 		}
 		if got := storedPod(t, k8s, pod); got.Spec.ActiveDeadlineSeconds == nil || *got.Spec.ActiveDeadlineSeconds != 3630 {
-			t.Fatalf("activeDeadlineSeconds %v", got.Spec.ActiveDeadlineSeconds)
+			t.Fatalf("activeDeadlineSeconds %v", ptr.Deref(got.Spec.ActiveDeadlineSeconds, -1))
 		}
 	})
 }

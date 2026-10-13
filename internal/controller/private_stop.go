@@ -43,9 +43,12 @@ const (
 	stopHeld     = "held"
 )
 
-// privateStopGrace is how long after the patch the kubelet's deadline falls:
-// activeDeadlineSeconds counts from the Pod's start, so the operator sets it
-// to the Pod's age plus this.
+// privateStopGrace is how long after the stored intent the kubelet's deadline
+// falls: activeDeadlineSeconds counts from the Pod's start, so the operator
+// sets it to the Pod's age at the intent's requestedAt plus this. A patch sent
+// later (a retry, or a restart between the intent and the patch) gets less of
+// it, or none; the kubelet still stops the containers with the Pod's
+// termination grace.
 const privateStopGrace = 30 * time.Second
 
 // EventExecutorStopRequested is the event reason of a sent stop request.
@@ -114,13 +117,13 @@ func (r *Reconciler) privateStopApplies(s *v1alpha1.AgentSession) bool {
 }
 
 // privateStopDeadline is the activeDeadlineSeconds the stop sets: the Pod's
-// age at now, rounded up, plus privateStopGrace. ok is false when the Pod has
-// no start time, so no deadline can be computed.
-func privateStopDeadline(pod *corev1.Pod, now time.Time) (int64, bool) {
+// age at at, rounded up, plus privateStopGrace. ok is false when the Pod has no
+// start time, so no deadline can be computed.
+func privateStopDeadline(pod *corev1.Pod, at time.Time) (int64, bool) {
 	if pod.Status.StartTime == nil {
 		return 0, false
 	}
-	age := max(0, math.Ceil(now.Sub(pod.Status.StartTime.Time).Seconds()))
+	age := max(0, math.Ceil(at.Sub(pod.Status.StartTime.Time).Seconds()))
 	return int64(age) + int64(privateStopGrace/time.Second), true
 }
 
@@ -129,14 +132,26 @@ func privateStopDeadline(pod *corev1.Pod, now time.Time) (int64, bool) {
 // not terminal or deleting, it has started, and it has no deadline at or
 // below the one the stop would set. A Pod that already has one is left alone,
 // which is what keeps the patch to one per executor across reconciles,
-// restarts and replicas.
+// restarts and replicas. Once the intent is stored, the deadline counts from
+// its requestedAt, not from now: every operator then computes the same
+// deadline from stored fields, whatever its own clock says, so a replica or a
+// restarted operator whose clock lags the one that patched never finds the
+// Pod's deadline above its own and never patches again. Before the intent, now
+// stands in for the requestedAt the intent will store.
 func privateStopNeeded(s *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time) (int64, bool) {
 	h := s.Status.PrivateHistory
 	if h == nil || h.LastExecutor == nil || pod.UID == "" || string(pod.UID) != h.LastExecutor.PodUID || !controlledBySession(pod, s) || isHoldPod(pod) ||
 		podPhaseTerminal(pod) || !pod.DeletionTimestamp.IsZero() {
 		return 0, false
 	}
-	deadline, ok := privateStopDeadline(pod, now)
+	at := now
+	if sr := h.StopRequest; sr != nil {
+		if sr.PodUID != string(pod.UID) {
+			return 0, false
+		}
+		at = sr.RequestedAt.Time
+	}
+	deadline, ok := privateStopDeadline(pod, at)
 	if !ok || pod.Spec.ActiveDeadlineSeconds != nil && *pod.Spec.ActiveDeadlineSeconds <= deadline {
 		return 0, false
 	}
@@ -210,9 +225,10 @@ func (r *Reconciler) requestPrivateExecutorStop(ctx context.Context, s *v1alpha1
 // confirms it by an uncached re-read. When the intent is already stored (a
 // retry, or an operator restart between the intent and the patch), the same
 // update carries it unchanged: every patch follows a read that found no hold
-// and a write that nothing overtook. A hold written after the read changes the
-// resourceVersion, so the write conflicts and nothing is sent. On success s is
-// the confirmed Session.
+// and a write that nothing overtook. A hold written before this read (after
+// the reconcile's own read of s) is in fresh, and the hold check here refuses
+// it; a hold written after this read changes the resourceVersion, so the write
+// conflicts and nothing is sent. On success s is the confirmed Session.
 func (r *Reconciler) stopIntentConfirmed(ctx context.Context, s *v1alpha1.AgentSession) (confirmedStopIntent, error) {
 	fresh, err := r.privateHistorySession(ctx, s)
 	if err != nil {

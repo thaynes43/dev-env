@@ -257,7 +257,9 @@ stop intent and confirms it. Then it sends one JSON patch that sets the
 recorded executor's `activeDeadlineSeconds`. Any override value except
 `release-now` blocks the stop. A guard test scans the module for Pod writes. The
 CRD gains a field, so haynes-ops needs the CRD copy before the operator pin that
-carries it. H7 turns the flag on.
+carries it. H7 turns the flag on, after a read-only check for Reaping private
+Sessions whose executor still runs: the flag stops each at once (DESIGN-025
+section 12).
 
 **Corrected after review, the same day (ADR-006, D-87).** An independent review of
 #233 against the source and haynes-ops RBAC found 13 defects; the follow-up PR

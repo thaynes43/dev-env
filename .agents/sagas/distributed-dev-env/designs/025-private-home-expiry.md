@@ -313,15 +313,16 @@ stops it:
 2. **The intent.** It writes `status.privateHistory.stopRequest` (`version` 1,
    `podUID` equal to `lastExecutor.podUID`, `requestedAt`) by a status update
    that carries the resourceVersion of the Session it just read, and confirms it
-   by an uncached re-read. A hold annotation written after that read changes the
+   by an uncached re-read. A hold annotation already on that read refuses the
+   intent. A hold annotation written after that read changes the
    resourceVersion, so the update gets a Conflict and nothing is sent. A retry
    repeats the same update, with the stored intent unchanged and the
    resourceVersion of its own fresh read. So every patch follows a read that
    found no hold and a write that nothing overtook. A hold written after the
    confirmed write comes too late, and the stop goes ahead. `stopRequest` never
    changes once set and is never removed.
-3. It computes `elapsed` from `status.startTime` and sends one JSON patch
-   (`stopPrivateExecutor`):
+3. It computes `elapsed`, the Pod's age at the stored `requestedAt`, from
+   `status.startTime`, and sends one JSON patch (`stopPrivateExecutor`):
 
    ```json
    [{"op": "test", "path": "/metadata/uid", "value": "<podUID>"},
@@ -331,7 +332,8 @@ stops it:
 
    `activeDeadlineSeconds` may be set on a running Pod, and only set or lowered.
    It counts from the Pod's start, hence `elapsed`. A Pod that already has a lower
-   value is left alone.
+   value is left alone. Because `elapsed` comes from stored fields, every
+   operator computes the same deadline whatever its own clock says.
 4. The kubelet stops the containers with the Pod's termination grace (agentd
    forwards SIGTERM to the agent) and marks the Pod `Failed`, reason
    `DeadlineExceeded`. The Pod object stays, and section 3 records it.
@@ -385,7 +387,10 @@ section above leaves open:
 - **The intent.** `stopIntentConfirmed` reads the Session uncached and checks
   the gate and the hold again. It reads the Pod uncached. It then updates the
   status with the stored intent, or a new one at the operator's clock,
-  truncated to the second. The update carries that read's resourceVersion and
+  truncated to the second. The hold check on this read is what makes a hold
+  written before the intent win when it lands after the reconcile's own read of
+  the Session: the update's resourceVersion already includes that hold, so no
+  Conflict would catch it. The update carries that read's resourceVersion and
   is confirmed by `writePrivateHistoryAcknowledged`'s re-read. When the intent
   is already stored, as after a restart, the update is a no-op whose
   resourceVersion check still refuses a Session changed since the read. Two
@@ -400,14 +405,21 @@ section above leaves open:
   whatever a caller does with the error. The guard test pins all of this.
 - **The patch.** `stopPrivateExecutor` sends `privateStopPatch` for the Pod
   that `stopIntentConfirmed` read; its `test` operations refuse a Pod changed
-  since. The deadline is the Pod's age in whole seconds, rounded up, plus 30. An
+  since. The deadline is the Pod's age at the stored `requestedAt` in whole
+  seconds, rounded up, plus 30. Before an intent is stored, the operator's clock
+  stands in for it. A patch sent late, after a failure or a restart between the
+  intent and the patch, so gets less than 30 seconds of grace, or none; the
+  kubelet still stops the containers with the Pod's termination grace. An
   existing higher deadline is lowered: JSON patch `add` replaces it. A Conflict
   counts `conflict`, and so does an Invalid when a fresh read shows the Pod
   changed or gone. A failed `test` is Invalid (422). The next reconcile then
   judges again. An Invalid on an unchanged Pod (an admission policy, Pod
-  validation) is a failure. Once the patch has landed, the Pod has a deadline
-  below any later one, so no reconcile, restart or second replica sends
-  another.
+  validation) is a failure. Once the patch has landed, the Pod has exactly the
+  deadline that every operator computes from the stored intent, so no
+  reconcile, restart or second replica sends another, whatever its clock says.
+  A deadline computed from each operator's own clock would not hold this: a
+  replica whose clock lagged the patching one by more than the time since the
+  patch would compute a lower deadline and patch again (review of #244).
 - **Failures.** The stop never ends the reconcile early, so the Session's status
   is written whatever happens. A failure other than a change is logged. The
   `RemovalBlocked` condition names it, and it is tried again in 30 seconds.
@@ -432,13 +444,16 @@ a replaced executor, a hold pod, not started, terminal, a lower deadline, the
 missed marker), `TestPrivateStopNeverForASharedExecutor`,
 `TestPrivateStopReleaseNowIsNoHold`, `TestPrivateStopLowersAHigherDeadline`,
 `TestPrivateStopHoldBetweenReadAndIntentWins`,
+`TestPrivateStopHoldBeforeTheIntentReadWins`,
 `TestPrivateStopPrunedIntentSendsNothing`,
 `TestPrivateStopPersistentRefusalIsNoConflict`,
 `TestPrivateStopIntentOvertakenByAnotherWrite`,
 `TestPrivateStopRestartAdoptsTheIntentAndNeverPatchesTwice`,
+`TestPrivateStopLaggingClockPatchesOnce`,
 `TestPrivateStopTwoReplicasPatchOnce`, the envtest
-`TestPrivateStopOnTheAPIServer` (the whole flow to the terminal record, the hold
-race and a stale Pod resourceVersion on a real API server), and the guard tests
+`TestPrivateStopOnTheAPIServer` (the whole flow to the terminal record, a hold
+written before the intent's read and one written between that read and the
+intent, and a stale Pod resourceVersion on a real API server), and the guard tests
 `TestOnlyStopPrivateExecutorPatchesPods` and
 `TestPodWriteScanCatchesPodWrites` (section 11).
 
@@ -1091,6 +1106,14 @@ own reviewed PR:
      DESIGN-024's R5 and this unit ships first ships the guard;
    - the alerts of section 10 except stalled;
    - after the claim binds: Tom sets the PV to `Retain`;
+   - just before the stop flag, a read-only check: list the Reaping private
+     Sessions (no `spec.workspace`, no `spec.projectCanary`) whose recorded
+     executor Pod still runs. They were reaped under the old rule, which let a
+     private executor keep running (ADR-005 C-37), and the flag stops each of
+     them at once. Name them in the PR so Tom can set a hold
+     (`dev-env.haynesops.com/home-expiry`, section 9) on any he wants to keep
+     running before the flag merges. On 2026-10-12 there were none: five private
+     Sessions, all canary originals, none Reaping;
    - then `--enable-private-executor-stop=true`,
      `--enable-home-history-archive=true` and
      `--enable-history-archive-reads=true`, in that order.
