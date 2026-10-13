@@ -8,7 +8,8 @@ archive guard under [ADR-007](../adrs/007-preserve-v1-archive-trust-boundary.md)
 
 ## Corrected fixture contract
 
-Source branch `agent/dev-env-h7-measurement-fixtures-1013`, head
+Initial source implementation from `agent/dev-env-h7-measurement-fixtures-1013`,
+head
 `f1c2d8c4a4084f0fc18bd93acdb7d5e38dc51367`, changes six source/test files:
 
 - Export target means **total exported file bytes**, including the existing
@@ -18,7 +19,10 @@ Source branch `agent/dev-env-h7-measurement-fixtures-1013`, head
 - Explicit prepare/reuse modes freeze private synthetic inputs and size/hash
   metadata. Reuse rejects unsafe roots, changed control files, links and
   unexpected file kinds. Construction is excluded from a measured phase only
-  by preparing in an earlier process and cgroup.
+  by preparing in an earlier process and cgroup. Failed preparation preserves
+  its unsealed root as evidence; it cannot be reused or prepared again. A
+  separately authorized future attempt needs a new root, with no automatic
+  retry or deletion of the failed inputs.
 - Controller measurement isolation requires explicit opt-in and exactly
   `^TestHistoryRelayMeasure$`; unsupported selectors and testing modes are
   refused before envtest or API setup. Ordinary controller tests still use
@@ -38,7 +42,7 @@ passed. The isolated controller test passed with an 8192-byte prepared/reused
 fixture, bounded canonical shapes, production cap+1 rejection before put and
 opt-in/flag misuse checks. These small functional checks are not cold-limit
 acceptance. Formatting and diff checks passed; hosted required CI and
-independent review govern merging.
+independent review govern merging [PR #262](https://github.com/thaynes43/dev-env/pull/262).
 
 The first checks exposed final-symlink following by `os.Root.OpenFile`,
 insufficient padding for a bounded long-path fixture and a requested 3 MiB

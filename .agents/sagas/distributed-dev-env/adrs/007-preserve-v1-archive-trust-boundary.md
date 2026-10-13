@@ -7,7 +7,8 @@
 - **Decider:** Tom, as quoted in the relay; no independent authority is granted
   by a peer message.
 - **Amends:** [ADR-006](006-private-home-expiry-corrections.md) section 2's
-  proposed restriction of v1 archive access. The other corrections stand.
+  proposed restriction of v1 archive access and C-42's v1 denial/privacy
+  consequence. The other corrections stand.
 - **Retains:** Q-31's archive-before-delete gates, Q-33's permanent personal
   Kubernetes account, and separate approval for v1 decommissioning.
 - **Design:** [DESIGN-025 section 20](../designs/025-private-home-expiry.md#20-h7-archive-trust-boundary-q-35)
