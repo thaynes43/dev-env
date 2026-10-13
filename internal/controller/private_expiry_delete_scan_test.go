@@ -63,7 +63,7 @@ func TestExpiryDeleteScanCatchesUncheckedDeletes(t *testing.T) {
 }
 
 type expiryDeleteScan struct {
-	violations             []string
+	violations              []string
 	deletes, deletingWrites int
 }
 
