@@ -73,12 +73,20 @@ func (r *Reconciler) countStop(result string) {
 
 // errStopHeld, errStopNotNeeded and errStopChanged are why stopIntentConfirmed
 // returns no intent: an owner hold, nothing to stop (the Session or the Pod is
-// no longer in the shape a stop needs), or a Conflict.
+// no longer in the shape a stop needs), or a Session that changed under the
+// intent write. errStopPodChanged is why stopPrivateExecutor sent nothing: the
+// Pod changed since its read (a Conflict, or a failed test).
 var (
-	errStopHeld      = errors.New("an owner hold on the HOME expiry blocks the stop request")
-	errStopNotNeeded = errors.New("the Session or its recorded executor no longer needs a stop request")
-	errStopChanged   = errors.New("the Session changed under the stop intent write")
+	errStopHeld       = errors.New("an owner hold on the HOME expiry blocks the stop request")
+	errStopNotNeeded  = errors.New("the Session or its recorded executor no longer needs a stop request")
+	errStopChanged    = errors.New("the Session changed under the stop intent write")
+	errStopPodChanged = errors.New("the recorded executor changed since it was read for the stop")
 )
+
+// privateStopRetry is how soon a stop request that failed for any reason but a
+// change is tried again. The reconcile still writes the Session's status, and
+// the RemovalBlocked condition names the failure.
+const privateStopRetry = 30 * time.Second
 
 // homeExpiryHeld reports whether the owner override blocks the stop. Any
 // value but release-now counts as a hold, so a mistyped hold never lets a stop
@@ -89,18 +97,20 @@ func homeExpiryHeld(s *v1alpha1.AgentSession) bool {
 	return ok && v != v1alpha1.HomeExpiryReleaseNow
 }
 
-// privateStopShape reports whether the Session may have its executor stopped,
-// judged on its own fields: it is Reaping, private (no workspace, no canary
-// binding), its retention record is intact with a Started admission, a bound
-// HOME and a recorded executor, and the executor has no terminal record or
-// missed marker yet. A Suspended Session is never stopped, before or after its
-// archive deadline (ADR-006; plan 11 follow-up F3 is not planned).
-func privateStopShape(s *v1alpha1.AgentSession) bool {
+// privateStopApplies reports whether the Session may have its executor
+// stopped, judged on its own fields: the stop flag is on, a terminal record
+// may still be written for its recorded executor (terminalRecordApplies: the
+// record flag, an intact retention record, a Started admission, a bound HOME,
+// a recorded executor, no terminal record or missed marker yet), and it is
+// Reaping and private (no workspace, no canary binding). A Suspended Session is
+// never stopped, before or after its archive deadline (ADR-006; plan 11
+// follow-up F3 is not planned).
+func (r *Reconciler) privateStopApplies(s *v1alpha1.AgentSession) bool {
+	if !r.PrivateExecutorStop || !r.terminalRecordApplies(s) || s.DeletionTimestamp.IsZero() || s.Spec.Workspace != nil || s.Spec.ProjectCanary != nil {
+		return false
+	}
 	h := s.Status.PrivateHistory
-	return !s.DeletionTimestamp.IsZero() && s.Spec.Workspace == nil && s.Spec.ProjectCanary == nil &&
-		h != nil && privateHistoryIdentity(s) == nil && h.Admission == sharedStarted && h.HomeUID != "" &&
-		h.LastExecutor != nil && h.LastExecutor.PodUID != "" && h.ExecutorTerminal == nil && h.ExecutorMissed == nil &&
-		(h.StopRequest == nil || h.StopRequest.PodUID == h.LastExecutor.PodUID)
+	return h.StopRequest == nil || h.StopRequest.PodUID == h.LastExecutor.PodUID
 }
 
 // privateStopDeadline is the activeDeadlineSeconds the stop sets: the Pod's
@@ -133,13 +143,24 @@ func privateStopNeeded(s *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time)
 	return deadline, true
 }
 
+// confirmedStopIntent is what stopIntentConfirmed returns once the intent is
+// stored and confirmed: the confirmed Session and the recorded executor as read
+// for it. Only stopIntentConfirmed builds one (TestOnlyStopPrivateExecutorPatchesPods),
+// and stopPrivateExecutor refuses the zero value, so no patch can be sent
+// without a confirmed intent.
+type confirmedStopIntent struct {
+	confirmedSession *v1alpha1.AgentSession
+	readExecutor     *corev1.Pod
+}
+
 // requestPrivateExecutorStop is DESIGN-025 section 4. It runs from removePod,
 // for a Session that wants its Pod gone and still has one, after this
-// reconcile's private history observation changed nothing. stop means the
-// reconcile ends here with res.
-func (r *Reconciler) requestPrivateExecutorStop(ctx context.Context, s *v1alpha1.AgentSession, obs *observation) (res ctrl.Result, stop bool, err error) {
-	if !r.PrivateExecutorStop || !r.PrivateTerminalRecord || !privateStopShape(s) || obs.privateHistoryUnknown != nil ||
-		obs.pod.missing || obs.pod.foreign != "" {
+// reconcile's private history observation changed nothing. It never ends the
+// reconcile early: the status is written whatever happens here. A failure is
+// logged, named in the RemovalBlocked condition and tried again in
+// privateStopRetry; a change is judged again in a second.
+func (r *Reconciler) requestPrivateExecutorStop(ctx context.Context, s *v1alpha1.AgentSession, obs *observation) (ctrl.Result, bool, error) {
+	if !r.privateStopApplies(s) || obs.privateHistoryUnknown != nil || obs.pod.missing || obs.pod.foreign != "" {
 		return ctrl.Result{}, false, nil
 	}
 	if _, ok := privateStopNeeded(s, obs.pod.obj, r.clock()); !ok {
@@ -149,7 +170,12 @@ func (r *Reconciler) requestPrivateExecutorStop(ctx context.Context, s *v1alpha1
 		r.countStop(stopHeld)
 		return ctrl.Result{}, false, nil
 	}
-	confirmed, err := r.stopIntentConfirmed(ctx, s)
+	failed := func(err error) (ctrl.Result, bool, error) {
+		obs.privateStopErr = err
+		log.FromContext(ctx).Error(err, "the stop request for a reaped private executor failed; retrying", "retry", privateStopRetry)
+		return ctrl.Result{RequeueAfter: privateStopRetry}, false, nil
+	}
+	intent, err := r.stopIntentConfirmed(ctx, s)
 	switch {
 	case errors.Is(err, errStopHeld):
 		r.countStop(stopHeld)
@@ -158,105 +184,119 @@ func (r *Reconciler) requestPrivateExecutorStop(ctx context.Context, s *v1alpha1
 		return ctrl.Result{}, false, nil
 	case errors.Is(err, errStopChanged):
 		r.countStop(stopConflict)
-		return ctrl.Result{RequeueAfter: time.Second}, true, nil
+		return ctrl.Result{RequeueAfter: time.Second}, false, nil
 	case err != nil:
-		return ctrl.Result{RequeueAfter: time.Second}, true, err
+		return failed(err)
 	}
-	sent, err := r.stopPrivateExecutor(ctx, confirmed)
+	sent, err := r.stopPrivateExecutor(ctx, intent)
 	switch {
-	case apierrors.IsConflict(err) || apierrors.IsInvalid(err):
-		// The Pod changed since the read (a failed test is Invalid): judge
-		// again from the start.
+	case errors.Is(err, errStopPodChanged):
 		r.countStop(stopConflict)
-		return ctrl.Result{RequeueAfter: time.Second}, true, nil
+		return ctrl.Result{RequeueAfter: time.Second}, false, nil
 	case err != nil:
-		return ctrl.Result{RequeueAfter: time.Second}, true, err
+		return failed(err)
 	case sent:
 		r.countStop(stopSent)
-		return ctrl.Result{RequeueAfter: time.Second}, true, nil
+		return ctrl.Result{RequeueAfter: time.Second}, false, nil
 	}
 	return ctrl.Result{}, false, nil
 }
 
 // stopIntentConfirmed records the stop intent and confirms it (section 4,
 // points 1 and 2). It reads the Session uncached, checks again that it is
-// Reaping, private and unheld, and that its recorded executor still needs the
-// stop, then writes status.privateHistory.stopRequest by a status update that
-// carries the resourceVersion of that read, and confirms it by an uncached
-// re-read. When the intent is already stored (a retry, or an operator restart
-// between the intent and the patch), the same update carries it unchanged:
-// every patch follows a read that found no hold and a write that nothing
-// overtook. A hold written after the read changes the resourceVersion, so the
-// write conflicts and nothing is sent. It returns the confirmed Session.
-func (r *Reconciler) stopIntentConfirmed(ctx context.Context, s *v1alpha1.AgentSession) (*v1alpha1.AgentSession, error) {
+// Reaping, private and unheld, reads its recorded executor uncached and checks
+// that it still needs the stop, then writes status.privateHistory.stopRequest
+// by a status update that carries the resourceVersion of that read, and
+// confirms it by an uncached re-read. When the intent is already stored (a
+// retry, or an operator restart between the intent and the patch), the same
+// update carries it unchanged: every patch follows a read that found no hold
+// and a write that nothing overtook. A hold written after the read changes the
+// resourceVersion, so the write conflicts and nothing is sent. On success s is
+// the confirmed Session.
+func (r *Reconciler) stopIntentConfirmed(ctx context.Context, s *v1alpha1.AgentSession) (confirmedStopIntent, error) {
 	fresh, err := r.privateHistorySession(ctx, s)
 	if err != nil {
-		return nil, err
+		return confirmedStopIntent{}, err
 	}
-	if !privateStopShape(fresh) {
-		return nil, errStopNotNeeded
+	if !r.privateStopApplies(fresh) {
+		return confirmedStopIntent{}, errStopNotNeeded
 	}
 	if homeExpiryHeld(fresh) {
-		return nil, errStopHeld
+		return confirmedStopIntent{}, errStopHeld
 	}
 	var pod corev1.Pod
 	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(fresh), &pod); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, errStopNotNeeded
+			return confirmedStopIntent{}, errStopNotNeeded
 		}
-		return nil, fmt.Errorf("the recorded executor read before the stop intent: %w", err)
+		return confirmedStopIntent{}, fmt.Errorf("the recorded executor read before the stop intent: %w", err)
 	}
 	if _, ok := privateStopNeeded(fresh, &pod, r.clock()); !ok {
-		return nil, errStopNotNeeded
+		return confirmedStopIntent{}, errStopNotNeeded
 	}
 	h := fresh.Status.PrivateHistory
 	if h.StopRequest == nil {
 		h.StopRequest = &v1alpha1.PrivateExecutorStopRequestStatus{Version: 1, PodUID: h.LastExecutor.PodUID, RequestedAt: recordTime(r.clock())}
 	}
-	confirmed := fresh.DeepCopy()
-	if err := r.writePrivateHistory(ctx, confirmed, fresh); err != nil {
-		if apierrors.IsConflict(err) {
-			return nil, fmt.Errorf("%w: %w", errStopChanged, err)
-		}
-		return nil, fmt.Errorf("the stop intent is unconfirmed: %w", err)
+	acknowledged, err := r.writePrivateHistoryAcknowledged(ctx, s, fresh)
+	switch {
+	case err != nil && (acknowledged || apierrors.IsConflict(err)):
+		// A Conflict: the Session changed since the read, so the intent was
+		// not written. Acknowledged: it was stored, but another write (a
+		// heartbeat, say) overtook the confirming re-read. Either way the next
+		// reconcile judges again, and adopts a stored intent.
+		return confirmedStopIntent{}, fmt.Errorf("%w: %w", errStopChanged, err)
+	case err != nil:
+		return confirmedStopIntent{}, fmt.Errorf("the stop intent is unconfirmed: %w", err)
 	}
-	if sr := confirmed.Status.PrivateHistory.StopRequest; sr == nil || sr.PodUID != confirmed.Status.PrivateHistory.LastExecutor.PodUID {
-		return nil, errors.New("the stop intent is not stored for the recorded executor")
+	if sr := s.Status.PrivateHistory.StopRequest; sr == nil || sr.PodUID != s.Status.PrivateHistory.LastExecutor.PodUID {
+		return confirmedStopIntent{}, errors.New("the stop intent is not stored for the recorded executor")
 	}
-	*s = *confirmed
-	return confirmed, nil
+	return confirmedStopIntent{confirmedSession: s.DeepCopy(), readExecutor: &pod}, nil
 }
 
 // stopPrivateExecutor sends the one stop patch (section 4, point 3) to the
-// recorded executor of s, which stopIntentConfirmed returned. It reads the Pod
-// uncached and, when it still needs the stop, patches exactly a test of its
-// UID, a test of its resourceVersion and the activeDeadlineSeconds. It is the
-// only Pod write in the module besides create and the guarded deletes
-// (TestOnlyStopPrivateExecutorPatchesPods). sent is false when the Pod no
-// longer needs the stop.
-func (r *Reconciler) stopPrivateExecutor(ctx context.Context, s *v1alpha1.AgentSession) (sent bool, err error) {
-	h := s.Status.PrivateHistory
-	if h == nil || h.StopRequest == nil || h.LastExecutor == nil || h.StopRequest.PodUID != h.LastExecutor.PodUID {
+// recorded executor that stopIntentConfirmed read: exactly a test of its UID, a
+// test of its resourceVersion and the activeDeadlineSeconds. The tests make a
+// Pod changed since that read refuse the patch; the API server answers a failed
+// test with Invalid, so an Invalid is checked against a fresh read before it
+// counts as a change. It is the only Pod write in the module besides create and
+// the guarded deletes (TestOnlyStopPrivateExecutorPatchesPods). sent is false
+// when the Pod no longer needs the stop.
+func (r *Reconciler) stopPrivateExecutor(ctx context.Context, intent confirmedStopIntent) (sent bool, err error) {
+	s, pod := intent.confirmedSession, intent.readExecutor
+	if s == nil || pod == nil || s.Status.PrivateHistory == nil || s.Status.PrivateHistory.StopRequest == nil ||
+		s.Status.PrivateHistory.LastExecutor == nil || s.Status.PrivateHistory.StopRequest.PodUID != s.Status.PrivateHistory.LastExecutor.PodUID {
 		return false, errors.New("no confirmed stop intent for the recorded executor")
 	}
-	var pod corev1.Pod
-	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &pod); err != nil {
-		return false, client.IgnoreNotFound(err)
-	}
-	deadline, ok := privateStopNeeded(s, &pod, r.clock())
-	if !ok || string(pod.UID) != h.StopRequest.PodUID || pod.ResourceVersion == "" {
+	deadline, ok := privateStopNeeded(s, pod, r.clock())
+	if !ok || string(pod.UID) != s.Status.PrivateHistory.StopRequest.PodUID || pod.ResourceVersion == "" {
 		return false, nil
 	}
-	patch, err := json.Marshal(privateStopPatch(pod.UID, pod.ResourceVersion, deadline))
+	uid, rv := pod.UID, pod.ResourceVersion
+	patch, err := json.Marshal(privateStopPatch(uid, rv, deadline))
 	if err != nil {
 		return false, err
 	}
-	if err := r.Client.Patch(ctx, &pod, client.RawPatch(types.JSONPatchType, patch)); err != nil {
+	if err := r.Client.Patch(ctx, pod, client.RawPatch(types.JSONPatchType, patch)); err != nil {
+		switch {
+		case apierrors.IsNotFound(err), apierrors.IsConflict(err):
+			return false, fmt.Errorf("%w: %w", errStopPodChanged, err)
+		case apierrors.IsInvalid(err):
+			// A failed test, or a refusal that will not clear by itself (an
+			// admission policy, Pod validation). Only a Pod that changed is a
+			// change; anything else is a failure, retried slowly.
+			var now corev1.Pod
+			if rerr := r.APIReader.Get(ctx, client.ObjectKey{Namespace: pod.Namespace, Name: pod.Name}, &now); apierrors.IsNotFound(rerr) || rerr == nil && (now.UID != uid || now.ResourceVersion != rv) {
+				return false, fmt.Errorf("%w: %w", errStopPodChanged, err)
+			}
+			return false, fmt.Errorf("the stop patch was refused: %w", err)
+		}
 		return false, err
 	}
-	log.FromContext(ctx).Info("requested the stop of a reaped private executor", "podUID", string(pod.UID), "activeDeadlineSeconds", deadline)
+	log.FromContext(ctx).Info("requested the stop of a reaped private executor", "podUID", string(uid), "activeDeadlineSeconds", deadline)
 	r.event(s, corev1.EventTypeNormal, "StopRequest", EventExecutorStopRequested,
-		fmt.Sprintf("set activeDeadlineSeconds %d on the recorded private executor %s (DESIGN-025 4); the kubelet ends it and its terminal record follows", deadline, pod.UID))
+		fmt.Sprintf("set activeDeadlineSeconds %d on the recorded private executor %s (DESIGN-025 4); the kubelet ends it and its terminal record follows", deadline, uid))
 	return true, nil
 }
 

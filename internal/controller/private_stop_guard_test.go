@@ -22,7 +22,11 @@ import (
 // the one Patch in stopPrivateExecutor. That patch is a JSON patch built by
 // privateStopPatch, which holds exactly two tests and the one
 // /spec/activeDeadlineSeconds operation. stopPrivateExecutor has one caller,
-// and that caller asks stopIntentConfirmed first.
+// and that caller asks stopIntentConfirmed first. stopPrivateExecutor takes a
+// confirmedStopIntent and refuses its zero value; a non-zero one is built only
+// in stopIntentConfirmed, after its confirmed status write, and no code
+// outside it sets the intent's fields. So the gate is the type: no patch
+// without a confirmed intent, whatever the caller does with errors.
 //
 // The scan reads syntax, not types. An object counts as a Pod when it is
 // declared as a corev1 Pod (a parameter, a var, a composite literal or a
@@ -67,7 +71,7 @@ func TestOnlyStopPrivateExecutorPatchesPods(t *testing.T) {
 	}
 	// The scan must see the one allowed patch, the one allowed delete and the
 	// one guarded call, or it proves nothing.
-	for _, seen := range []string{"pod Patch in stopPrivateExecutor", "pod Delete in deletePod", "stopPrivateExecutor in requestPrivateExecutorStop"} {
+	for _, seen := range []string{"pod Patch in stopPrivateExecutor", "pod Delete in deletePod", "stopPrivateExecutor in requestPrivateExecutorStop", "confirmedStopIntent in stopIntentConfirmed"} {
 		if n := scan.seen[seen]; n != 1 {
 			t.Errorf("%s: seen %d times, want once", seen, n)
 		}
@@ -96,7 +100,7 @@ func TestPodWriteScanCatchesPodWrites(t *testing.T) {
 	for _, fn := range []string{
 		"patchPodElsewhere", "updateDeclaredPod", "statusUpdatePodParam", "ephemeralContainersUpdate", "evictionCreate",
 		"deepCopyThenPatch", "patchOwnedObj", "typedClientsetPatch", "typedClientsetEvict", "restClientPatch",
-		"deletePodElsewhere", "applyPod", "stopWithoutIntent", "stopIntentAfterStop",
+		"deletePodElsewhere", "applyPod", "stopWithoutIntent", "stopIntentAfterStop", "forgedIntent", "intentFieldWrite",
 	} {
 		if !slices.ContainsFunc(scan.violations, func(v string) bool { return strings.Contains(v, " in "+fn+";") }) {
 			t.Errorf("the pod write scan does not catch %s", fn)
@@ -104,11 +108,11 @@ func TestPodWriteScanCatchesPodWrites(t *testing.T) {
 	}
 	// stopPrivateExecutor there sends a merge patch, and a second patch, and
 	// builds no privateStopPatch: each is named.
-	for _, want := range []string{"not a JSON patch", "more than one pod patch", "privateStopPatch"} {
+	for _, want := range []string{"not a JSON patch", "more than one pod patch", "privateStopPatch", "before its confirmed status write"} {
 		if !slices.ContainsFunc(scan.violations, func(v string) bool {
-			return strings.Contains(v, " in stopPrivateExecutor;") && strings.Contains(v, want)
+			return (strings.Contains(v, " in stopPrivateExecutor;") || strings.Contains(v, " in stopIntentConfirmed;")) && strings.Contains(v, want)
 		}) {
-			t.Errorf("the pod write scan does not catch stopPrivateExecutor: %s", want)
+			t.Errorf("the pod write scan does not catch stopPrivateExecutor or stopIntentConfirmed: %s", want)
 		}
 	}
 }
@@ -304,6 +308,22 @@ func scanPodWriteBody(scan *podWriteScan, report func(token.Pos, string, string,
 				for i, lhs := range x.Lhs {
 					if id, ok := lhs.(*ast.Ident); ok && podValue(x.Rhs[i], core, pods) {
 						pods[id.Name] = true
+					}
+				}
+			}
+			for _, lhs := range x.Lhs {
+				if sel, ok := lhs.(*ast.SelectorExpr); ok && (sel.Sel.Name == "confirmedSession" || sel.Sel.Name == "readExecutor") && fn != "stopIntentConfirmed" {
+					report(sel.Pos(), fn, "a write to a stop intent's .%s outside stopIntentConfirmed", sel.Sel.Name)
+				}
+			}
+		case *ast.CompositeLit:
+			if id, ok := x.Type.(*ast.Ident); ok && id.Name == "confirmedStopIntent" && len(x.Elts) > 0 {
+				if fn != "stopIntentConfirmed" {
+					report(x.Pos(), fn, "a confirmedStopIntent built outside stopIntentConfirmed")
+				} else {
+					scan.seen["confirmedStopIntent in stopIntentConfirmed"]++
+					if pos, ok := first["writePrivateHistoryAcknowledged"]; !ok || pos > x.Pos() {
+						report(x.Pos(), fn, "a confirmedStopIntent built before its confirmed status write (writePrivateHistoryAcknowledged)")
 					}
 				}
 			}

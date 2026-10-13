@@ -362,14 +362,16 @@ CEL rules say it names `lastExecutor.podUID`, and that once set it never changes
 and is never removed. A schema test covers them (T16, stop part). Details the
 section above leaves open:
 
-- **The gate.** `--enable-private-executor-stop` must be on, and so must
-  `--enable-private-terminal-record`: the operator refuses to start with the
-  first without the second, and the reconciler checks both. The Session must be
-  Reaping and private in shape: no `spec.workspace`, no `spec.projectCanary`,
-  `privateHistoryIdentity` passes, `admission` is `Started`, `homeUID` is set,
-  `lastExecutor` is set, and neither `executorTerminal` nor `executorMissed`
-  exists. The observation must have found nothing Unknown. A replaced executor,
-  a foreign owner or a HOME binding that does not verify each stop it.
+- **The gate** (`privateStopApplies`). `--enable-private-executor-stop` must be
+  on, and so must `--enable-private-terminal-record`. The operator refuses to
+  start with the first flag and not the second. `terminalRecordApplies` must
+  hold, so that the stop's own record can still be written: the record flag is
+  on, `privateHistoryIdentity` passes, `admission` is `Started`, `homeUID` is
+  set, `lastExecutor` is set, and neither `executorTerminal` nor
+  `executorMissed` exists. The Session must also be Reaping, with no
+  `spec.workspace` and no `spec.projectCanary`. The observation must have found
+  nothing Unknown. A replaced executor, a foreign owner or a HOME binding that
+  does not verify each stops it.
 - **The Pod.** The Pod must be the recorded executor (same UID, controlled by the
   Session, not a hold pod). It must not be terminal and must not be deleting.
   It must have `status.startTime`, and it must have no `activeDeadlineSeconds`
@@ -384,17 +386,31 @@ section above leaves open:
   the gate and the hold again. It reads the Pod uncached. It then updates the
   status with the stored intent, or a new one at the operator's clock,
   truncated to the second. The update carries that read's resourceVersion and
-  is confirmed by `writePrivateHistory`'s re-read. When the intent is already
-  stored, as after a restart, the update is a no-op whose resourceVersion check
-  still refuses a Session changed since the read. A Conflict counts
-  `conflict`. A pruned field fails the confirmation, and nothing is sent.
-- **The patch.** `stopPrivateExecutor` reads the Pod uncached again and sends
-  `privateStopPatch`. The deadline is the Pod's age in whole seconds, rounded
-  up, plus 30. An existing higher deadline is lowered: JSON patch `add`
-  replaces it. A Conflict, or a failed `test` (the API server answers 422,
-  Invalid), counts `conflict`, and the next reconcile judges again. Once the
-  patch has landed, the Pod has a deadline below any later one, so no reconcile,
-  restart or second replica sends another.
+  is confirmed by `writePrivateHistoryAcknowledged`'s re-read. When the intent
+  is already stored, as after a restart, the update is a no-op whose
+  resourceVersion check still refuses a Session changed since the read. Two
+  cases count `conflict` and are judged again a second later: a Conflict, and
+  an update that was acknowledged but whose re-read another write, such as a
+  heartbeat, overtook. The next reconcile adopts an intent that was stored. A
+  pruned field fails the confirmation, and nothing is sent.
+- **The gate is a type.** Only `stopIntentConfirmed` builds a non-zero
+  `confirmedStopIntent`, the confirmed Session and the Pod as read for it, and
+  it builds it only after its confirmed write. `stopPrivateExecutor` takes one
+  and refuses the zero value. So no patch can follow an intent that failed,
+  whatever a caller does with the error. The guard test pins all of this.
+- **The patch.** `stopPrivateExecutor` sends `privateStopPatch` for the Pod
+  that `stopIntentConfirmed` read; its `test` operations refuse a Pod changed
+  since. The deadline is the Pod's age in whole seconds, rounded up, plus 30. An
+  existing higher deadline is lowered: JSON patch `add` replaces it. A Conflict
+  counts `conflict`, and so does an Invalid when a fresh read shows the Pod
+  changed or gone. A failed `test` is Invalid (422). The next reconcile then
+  judges again. An Invalid on an unchanged Pod (an admission policy, Pod
+  validation) is a failure. Once the patch has landed, the Pod has a deadline
+  below any later one, so no reconcile, restart or second replica sends
+  another.
+- **Failures.** The stop never ends the reconcile early, so the Session's status
+  is written whatever happens. A failure other than a change is logged. The
+  `RemovalBlocked` condition names it, and it is tried again in 30 seconds.
 - **Counting.** `dev_env_private_executor_stop_requests_total` is registered at
   start whatever the flag, each result at 0. `sent` counts a patch the API server
   accepted. `held` counts each reconcile that a hold refuses, so it rises while a
@@ -417,6 +433,8 @@ missed marker), `TestPrivateStopNeverForASharedExecutor`,
 `TestPrivateStopReleaseNowIsNoHold`, `TestPrivateStopLowersAHigherDeadline`,
 `TestPrivateStopHoldBetweenReadAndIntentWins`,
 `TestPrivateStopPrunedIntentSendsNothing`,
+`TestPrivateStopPersistentRefusalIsNoConflict`,
+`TestPrivateStopIntentOvertakenByAnotherWrite`,
 `TestPrivateStopRestartAdoptsTheIntentAndNeverPatchesTwice`,
 `TestPrivateStopTwoReplicasPatchOnce`, the envtest
 `TestPrivateStopOnTheAPIServer` (the whole flow to the terminal record, the hold
@@ -1034,9 +1052,11 @@ when H2 turns the record on, which section 12's order cannot produce.)
   `Resource("pods")`. The only ones allowed are the one JSON `Patch` in
   `stopPrivateExecutor`, built by `privateStopPatch`, and the `Delete` in
   `deletePod`. `stopPrivateExecutor` has one caller,
-  `requestPrivateExecutorStop`, which calls `stopIntentConfirmed` first. The
-  test also pins `privateStopPatch`'s three operations. Its testdata is
-  `testdata/podwritescan`.
+  `requestPrivateExecutorStop`, which calls `stopIntentConfirmed` first. A
+  non-zero `confirmedStopIntent` is built only in `stopIntentConfirmed`, after
+  its `writePrivateHistoryAcknowledged` call, and no other function writes its
+  fields. The test also pins `privateStopPatch`'s three operations. Its
+  testdata is `testdata/podwritescan`.
 - **`TestHistoryLayoutCoversAgentdState`** (`internal/agentd`): every name agentd
   writes under its state directory is in the agentd classification (6.3).
 - **`TestHistoryExportReadsOnly`** (`internal/agentd`): the export opens HOME

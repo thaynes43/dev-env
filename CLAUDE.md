@@ -75,7 +75,9 @@ internal/controller/     the AgentSession reconciler: each session's pod and vol
                          guarded deletes (D-45): the rescue by exec before a suspend deletes a pod, and the archive of
                          a reaped session's volume after a verified rescue (D-51), in a hold pod when the volume has no pod (D-55). Its envtest suite proves DESIGN-001
                          5.1 (no owner reference to the operator; no pod or volume write or delete outside the guards;
-                         delete and suspend wait for rescue); a fake rescuer stands in for exec
+                         delete and suspend wait for rescue); a fake rescuer stands in for exec. The one Pod write
+                         besides create and the guarded deletes is DESIGN-025's stop request (private_stop.go), pinned
+                         by TestOnlyStopPrivateExecutorPatchesPods
 internal/apiserver/      the operator's /v1 API (D-46): HTTPS runnable, TokenReview auth, caller classes, sessions,
                          heartbeat, suspend and resume (D-60), fleet, grants (D-56), activities (D-66) and rescues (D-67) handlers;
                          also decisions, project canaries and their results, task claims, the inbox, published contexts, the

@@ -1214,6 +1214,9 @@ type observation struct {
 	// privateExecutorEnded: the recorded executor is gone after its confirmed
 	// terminal record, so its absence is ExecutorEnded, not Unknown.
 	privateExecutorEnded bool
+	// privateStopErr: the stop request for a Reaping private executor failed
+	// this reconcile (DESIGN-025 4); RemovalBlocked names it.
+	privateStopErr error
 	// now is the reconcile's clock, for the timers' status fields.
 	now time.Time
 }

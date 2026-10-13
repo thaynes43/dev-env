@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,8 +19,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -261,13 +265,13 @@ func TestPrivateStopNeverForASharedExecutor(t *testing.T) {
 	f := stoppedWorkspaceFixture()
 	f.s.DeletionTimestamp = &metav1.Time{Time: f.now}
 	f.pod.Status = corev1.PodStatus{Phase: corev1.PodRunning, StartTime: &metav1.Time{Time: f.now.Add(-time.Hour)}}
-	if privateStopShape(f.s) {
-		t.Fatal("a shared Session passes the private stop shape")
-	}
 	patches := &podPatches{}
 	base := f.client().(client.WithWatch)
 	c := watchPodPatches(base, patches, nil)
 	r := &Reconciler{Client: c, APIReader: c, PrivateTerminalRecord: true, PrivateExecutorStop: true, PrivateExecutorStops: NewPrivateExecutorStopCounter(), Now: func() time.Time { return f.now }}
+	if r.privateStopApplies(f.s) {
+		t.Fatal("a shared Session passes the private stop gate")
+	}
 	for range 3 {
 		_, _ = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.s)})
 	}
@@ -359,13 +363,93 @@ func TestPrivateStopPrunedIntentSendsNothing(t *testing.T) {
 		return c.SubResource(sub).Update(ctx, o, opts...)
 	}})
 	r := f.stopReconciler(c, c, NewPrivateExecutorStopCounter())
+	// Every reconcile fails its confirmation, without an error that would
+	// skip the status write. (The fake client moves the resourceVersion on
+	// each update, even an unchanged one, so that write conflicts here; a
+	// real API server leaves an unchanged object as it is.)
 	for range 3 {
-		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.s)}); err == nil {
-			t.Fatal("a pruned intent was confirmed")
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.s)}); err != nil {
+			t.Fatal(err)
 		}
 	}
 	if sent, _ := patches.count(); sent != 0 {
 		t.Fatalf("%d pod patches sent on an unconfirmed intent", sent)
+	}
+	if h := storedHistory(t, base, f.s).Status.PrivateHistory; h.StopRequest != nil {
+		t.Fatalf("a pruned intent is stored: %+v", h.StopRequest)
+	}
+}
+
+// A refusal that does not clear by itself (an admission policy answering
+// Invalid, with the Pod unchanged) is a failure retried slowly, not a
+// conflict retried every second; the status still names it.
+func TestPrivateStopPersistentRefusalIsNoConflict(t *testing.T) {
+	f := newStopFixture()
+	base := f.client()
+	patches := &podPatches{}
+	denied := apierrors.NewInvalid(schema.GroupKind{Kind: "Pod"}, f.pod.Name, field.ErrorList{field.Forbidden(field.NewPath("spec"), "denied by a synthetic policy")})
+	c := watchPodPatches(base, patches, func(context.Context) error { return denied })
+	stops := NewPrivateExecutorStopCounter()
+	r := f.stopReconciler(c, c, stops)
+	for range 3 {
+		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.s)})
+		if err != nil || res.RequeueAfter != privateStopRetry {
+			t.Fatalf("a refused patch: %v, requeue %v; want a retry in %v", err, res.RequeueAfter, privateStopRetry)
+		}
+	}
+	if stopCount(stops, stopConflict) != 0 || stopCount(stops, stopSent) != 0 {
+		t.Fatalf("a refusal counted conflict %v, sent %v", stopCount(stops, stopConflict), stopCount(stops, stopSent))
+	}
+	got := storedHistory(t, base, f.s)
+	if c := meta.FindStatusCondition(got.Status.Conditions, ConditionRemovalBlocked); c == nil || !strings.Contains(c.Message, "synthetic policy") {
+		t.Fatalf("RemovalBlocked does not name the refusal: %+v", c)
+	}
+}
+
+// Another write to the Session (a heartbeat) between the intent's update and
+// its confirming re-read: counted as a conflict and judged again in a second;
+// the next reconcile adopts the stored intent and sends the one patch.
+func TestPrivateStopIntentOvertakenByAnotherWrite(t *testing.T) {
+	f := newStopFixture()
+	base := f.client()
+	patches := &podPatches{}
+	once := false
+	c := interceptor.NewClient(watchPodPatches(base, patches, nil), interceptor.Funcs{SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, o client.Object, opts ...client.SubResourceUpdateOption) error {
+		if err := c.SubResource(sub).Update(ctx, o, opts...); err != nil {
+			return err
+		}
+		if s, ok := o.(*v1alpha1.AgentSession); ok && !once && s.Status.PrivateHistory != nil && s.Status.PrivateHistory.StopRequest != nil {
+			once = true
+			var latest v1alpha1.AgentSession
+			if err := base.Get(ctx, client.ObjectKeyFromObject(s), &latest); err != nil {
+				return err
+			}
+			latest.Status.Agent = &v1alpha1.AgentStatus{Status: "busy"}
+			if err := base.Status().Update(ctx, &latest); err != nil {
+				return err
+			}
+		}
+		return nil
+	}})
+	stops := NewPrivateExecutorStopCounter()
+	r := f.stopReconciler(c, c, stops)
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.s)})
+	if err != nil || res.RequeueAfter != time.Second || !once || stopCount(stops, stopConflict) != 1 {
+		t.Fatalf("overtaken intent: %v, requeue %v, conflict %v", err, res.RequeueAfter, stopCount(stops, stopConflict))
+	}
+	intent := storedHistory(t, base, f.s).Status.PrivateHistory.StopRequest
+	if intent == nil {
+		t.Fatal("the acknowledged intent is not stored")
+	}
+	if sent, _ := patches.count(); sent != 0 {
+		t.Fatal("a patch followed an unconfirmed intent")
+	}
+	reconcileSession(t, r, f.s, 3)
+	if _, landed := patches.count(); landed != 1 || stopCount(stops, stopSent) != 1 {
+		t.Fatalf("%d patches landed after the overtaken intent; want 1", landed)
+	}
+	if got := storedHistory(t, base, f.s).Status.PrivateHistory.StopRequest; !apiequality.Semantic.DeepEqual(got, intent) {
+		t.Fatalf("the intent changed: %+v -> %+v", intent, got)
 	}
 }
 
@@ -390,12 +474,15 @@ func TestPrivateStopRestartAdoptsTheIntentAndNeverPatchesTwice(t *testing.T) {
 					return killed
 				}})
 			}
-			if _, err := f.stopReconciler(a, a, NewPrivateExecutorStopCounter()).Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.s)}); !errors.Is(err, killed) {
-				t.Fatalf("the first operator did not stop at the patch: %v", err)
+			if _, err := f.stopReconciler(a, a, NewPrivateExecutorStopCounter()).Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.s)}); err != nil {
+				t.Fatal(err)
 			}
 			intent := storedHistory(t, base, f.s).Status.PrivateHistory.StopRequest
 			if intent == nil {
 				t.Fatal("no confirmed intent before the patch")
+			}
+			if sent, landed := patches.count(); sent != 1 || (landed == 1) != (when == "after the patch landed") {
+				t.Fatalf("the first operator: %d sent, %d landed", sent, landed)
 			}
 			// New operators, five minutes later.
 			for range 2 {

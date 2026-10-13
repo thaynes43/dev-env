@@ -80,6 +80,25 @@ func stopIntentAfterStop(ctx context.Context, r *Reconciler, s *Session) error {
 	return err
 }
 
+func forgedIntent(s *Session, p *core.Pod) confirmedStopIntent {
+	return confirmedStopIntent{confirmedSession: s, readExecutor: p}
+}
+
+func intentFieldWrite(s *Session) confirmedStopIntent {
+	var intent confirmedStopIntent
+	intent.confirmedSession = s
+	return intent
+}
+
+// stopIntentConfirmed here builds the intent before its confirmed write.
+func stopIntentConfirmed(ctx context.Context, r *Reconciler, s, fresh *Session, p *core.Pod) (confirmedStopIntent, error) {
+	intent := confirmedStopIntent{confirmedSession: s, readExecutor: p}
+	if _, err := r.writePrivateHistoryAcknowledged(ctx, s, fresh); err != nil {
+		return confirmedStopIntent{}, err
+	}
+	return intent, nil
+}
+
 // stopPrivateExecutor here sends a merge patch, then a second patch, and builds
 // neither with privateStopPatch.
 func stopPrivateExecutor(ctx context.Context, r *Reconciler, pod *core.Pod) error {

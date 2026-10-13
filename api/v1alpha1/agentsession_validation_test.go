@@ -1236,11 +1236,6 @@ func TestPrivateHistoryStopRequestIsImmutableAndBound(t *testing.T) {
 				h.StopRequest = request()
 				h.StopRequest.Version = 2
 			}},
-			{"unbounded UID", func(h *v1alpha1.PrivateHistoryStatus) {
-				h.LastExecutor.PodUID = strings.Repeat("u", 129)
-				h.StopRequest = request()
-				h.StopRequest.PodUID = h.LastExecutor.PodUID
-			}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				s := taskSession()
@@ -1253,6 +1248,19 @@ func TestPrivateHistoryStopRequestIsImmutableAndBound(t *testing.T) {
 					t.Fatalf("invalid stop request accepted: %v", err)
 				}
 			})
+		}
+		// The bound on the intent's own UID: the API server names that
+		// field, beside lastExecutor's.
+		s := taskSession()
+		if err := k8s.Create(ctx(t), s); err != nil {
+			t.Fatal(err)
+		}
+		s.Status.PrivateHistory = retained(s)
+		s.Status.PrivateHistory.LastExecutor.PodUID = strings.Repeat("u", 129)
+		s.Status.PrivateHistory.StopRequest = request()
+		s.Status.PrivateHistory.StopRequest.PodUID = s.Status.PrivateHistory.LastExecutor.PodUID
+		if err := k8s.Status().Update(ctx(t), s); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "stopRequest.podUID") {
+			t.Fatalf("an unbounded stop request UID is not refused by its own bound: %v", err)
 		}
 	})
 
