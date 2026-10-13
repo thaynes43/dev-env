@@ -205,6 +205,11 @@ func TestValidateRefuses(t *testing.T) {
 		{"a default profile that is not there", "defaultProfile: full", "defaultProfile: nope", `defaultProfile "nope" is not in profiles`},
 		{"a profile label the operator owns", "dev-env.haynesops.com/egress: ops", "dev-env.haynesops.com/profile: full", "is set by the operator"},
 		{"an app.kubernetes.io label", "dev-env.haynesops.com/egress: ops", "app.kubernetes.io/name: x", "is set by the operator"},
+		// The archives are the shelf's alone (DESIGN-025 7, DESIGN-024 3):
+		// no session pod mounts one.
+		{"the history archive as the shared claim", "sharedClaim: dev-env-shared", "sharedClaim: dev-env-history-archive", "is the shelf's archive"},
+		{"the coordination archive as the shared claim", "sharedClaim: dev-env-shared", "sharedClaim: dev-env-coordination-archive", "is the shelf's archive"},
+		{"the history archive as the workspace claim", "sharedClaim: dev-env-shared", "sharedClaim: dev-env-shared\nworkspace: { enabled: true, claim: dev-env-history-archive, id: ws1 }", "is the shelf's archive"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
