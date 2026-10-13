@@ -6,8 +6,9 @@
   the record on, 2026-10-12 (haynes-ops #3852 and #3854). H3, the stop
   request for Reaping Sessions (section 4.1), is in source in #244, default
   off. H4, agentd's history export and archive, is in source in #246 (section
-  7.1); it reaches the cluster with the next agent image. H5 to H10 have no
-  source yet
+  7.1); it reaches the cluster with the next agent image. H5, the operator's
+  expiry up to `Archived`, is in progress in a draft PR, default off. H6 to
+  H10 have no source yet
 - **Decision:** [ADR-005](../adrs/005-private-home-expiry.md) (Q-31, Tom,
   2026-10-12: "Archive, then delete (Recommended)"), amended by
   [ADR-006](../adrs/006-private-home-expiry-corrections.md)
