@@ -78,3 +78,35 @@ The existing GET-only checker and held cluster reader remain unchanged.
 This action alone does not establish installed admission, complete baseline
 freshness, personal owner identity, F4 history evidence, either cold-resource
 measurement, restore, archived reads or deletion acceptance.
+
+## Verified executable; decision pending
+
+Dev-env [#269](https://github.com/thaynes43/dev-env/pull/269) merged at
+22:57:19 UTC as `789f2b499930dadf2cf02a440b56a20d224ae9b8`, after required CI,
+offline fixtures and no-findings advisory/independent reviews at
+`fcd4bfa9403618e18465bc59ea916da31f7b6a46`. The initial unused-import compile
+failure is preserved; it ran no fixtures and produced no artifact.
+
+[Push-main run 38481175509](https://github.com/thaynes43/dev-env/actions/runs/38481175509),
+attempt 1, passed the offline fixtures, build and artifact upload at that merge
+commit. External API metadata established the event, repository, main branch,
+source commit and workflow path. Artifact `11857325032` is 5,676,929 bytes with
+ZIP SHA-256 `b6ff8b54545e85e71f3b66da73e2b294c124aec44f8853d4e841bd533ff2aef7`.
+All eight source hashes and the workflow hash match the merged commit. The
+Darwin ARM64 binary is 9,938,402 bytes with SHA-256
+`22867b8b277df64f6899f75ee6b58c0705b8a98b1f4cf6c1f4b03aed62dc0694`.
+Its embedded Go 1.27.1 build information matches the recorded build output,
+including the merge revision and `vcs.modified=false`. Direct parsing followed
+the [pinned Go build-info format](https://github.com/golang/go/blob/go1.27.1/src/debug/buildinfo/buildinfo.go#L178-L255)
+because this pod has no local Go metadata reader; the executable was not run.
+
+Private receipt `dev-env-h7-retain-main-artifact-1013/main-artifact-verification-r1.json`,
+SHA-256 `acdf43190c33fe2a2400dddfbe0147d64a8e7e6ca89257f0be320a22582e068b`.
+The first verification stopped at the missing local reader after hash checks;
+the artifact was preserved and verification completed by reading its metadata.
+That was not a client execution or cluster attempt.
+
+Q-37 now requests the one-time delegation. The question tool accepted it, but
+no owner reply has been observed. See
+[DESIGN-025 section 22](../designs/025-private-home-expiry.md#22-prepared-one-time-pv-action-q-37-pending).
+No execution, permission or activation follows from the verified build alone.

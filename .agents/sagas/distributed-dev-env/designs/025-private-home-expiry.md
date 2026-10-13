@@ -2261,3 +2261,36 @@ acceptance remain unestablished; the source-only Mac correction preserves the
 failed reader and exact policy checks. All real-request, Retain, F4,
 cold-measurement, restore and activation gates remain intact. This operational
 direction creates no architecture ADR and does not change Q-33 or ADR-007.
+
+## 22. Prepared one-time PV action: Q-37 pending
+
+**Asked directly through the asynchronous question tool; answer pending.**
+The [prepared action contract](../verification/h7-retain-action-contract-2026-10-13.md)
+preserves section 7's owner-only PV rule. Dev-env #269 merged the fixed client
+as `789f2b499930dadf2cf02a440b56a20d224ae9b8`. Exact-head required CI, offline
+fixtures and both reviews passed. Its passing push-main run and executable
+were independently checked before the question. Nothing has been executed.
+
+Q-37 asks:
+
+> May I make the reviewed one-time change that tells the new history disk to
+> retain its data if its claim is removed? It changes only this disk's Delete
+> setting to Retain through the existing Mac connection and adds no permanent
+> permissions. Your design reserves this change to you, so I need this one
+> exception. No commands are needed from you.
+
+Options: "Yes, make this one change (Recommended)" and "Leave it pending".
+The tool accepted the question; no owner answer or confirmed phone delivery
+has been observed. Receipt `q37-pv-retain-question-r1.json`, SHA-256
+`4b8f8c4576a25c0cb6c8feb5e0205beb252fef6f5c2edb715f3befdf619dae0c`.
+
+The proposed exception is one fixed seven-test CAS patch from `Delete` to
+`Retain`, against the exact bound UID, resourceVersion and claim in the contract.
+The actual answer is required before execution. No D-91 ruling or README
+decision 72 is consumed by this pending question. No persistent agent right,
+new grant, reader retry or removal, archive mount, flag or v1 change follows.
+
+The [personal-identity mapping checkpoint](../verification/h7-personal-identity-mapping-2026-10-13.md)
+separately establishes a conditional expected personal username from current
+Omni metadata and pinned source. It does not establish a current authenticated
+owner request or a phone path and grants no policy activation.
