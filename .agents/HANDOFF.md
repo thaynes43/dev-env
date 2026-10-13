@@ -7,6 +7,63 @@ the saga. To continue building, follow the
 in the Claude pickup brief. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## Sigo rerun canary under Q-32: all seven items hold; #173's private-repo evidence accepted — 2026-10-13 UTC
+
+Tom answered Q-32, "Yes, after deploy (Recommended)": one more Claude canary on
+the Sigo alumni project after the 2.25 deploy, to prove catalog bootstrap
+reaches `Ready` and the new status codes work. haynes-ops
+[#3855](https://github.com/thaynes43/haynes-ops/pull/3855) (`156bd3a6`) replaced
+the consumed Sigo record with `rule-canary-claude-sigo-1012b` (policy digest
+`5b11e61c…`; `codex-1011` byte-identical); its post-check passed, with every
+earlier peer pod move attributed to declared maintenance (`act-000159`). A
+corrected runner (r4, 100 of 100 offline tests, independent review APPROVE; r3
+never ran) waited until that maintenance and its successor `act-005526`, which
+scoped Ceph and `gasha01`, had ended. Then it made one Create, one boot log
+read, one named read and one result read, with no retries and no directory
+read. Session `dev-agents/private-canary-eb9d486a612e27fd2b52d27f675512be`, UID
+`454d12a2-60bc-4c4e-95c5-bb4b26428a65`, created at 01:20:09 UTC; the task
+exited 0 after one turn.
+
+**Root acceptance `a3aa0b7d`: `ACCEPTED_PRIVATE_REPO_CANARY_ALL_ITEMS`.** It
+binds 215 files: every other file in the order directory (179), the Q-32
+answer, the 2.25 deploy evidence and the earlier inputs. All seven DESIGN-011
+items hold, so under the all-items gate the run is accepted for #173's
+private-repository evidence.
+
+- Catalog bootstrap reached `Ready`: the boot step says so, and
+  `status.agent.projectBootstrap` reports `dev-env`, `sigo-alumni` and
+  `sigoalumni-org` and both project roots `Ready`, with no reason code, in a
+  HOME that was new at Create. The #239 field was reported and well formed,
+  but with everything `Ready` no non-`Ready` reason code was exercised.
+- agentd fetched the private `thaynes43/sigo-alumni` `main` at `c5da46c2` 49
+  seconds after `createdAt` (01:20:09Z), equal to the `ls-remote` tip read
+  just before Create, recorded the task source and made the task worktree from
+  it; the task finished 62 seconds after `createdAt`.
+- Peers unchanged: the 10 pods in `dev-env-system`, `dev-agents` and `dev` that
+  are neither operator nor Job pods, and the four retained Sessions (item 7).
+  The `upgrade-agent` pods in the snapshots are outside item 7.
+- Markers (secondary): common `dev-env-common-rules-20261011-4ca29d70` present,
+  project `sigo-alumni-project-rules-20261012-9b122cd5` reported.
+- The boot log was again read after the wait and before the named read; the
+  Root records and accepts `bootlog-before-named-read`, as for Q-30.
+
+**#173 status.** Accepted: rule loading for both providers; private GitHub
+authorization, a `Ready` private multi-repository catalog bootstrap and a fresh
+pinned task worktree (this run, Claude only). Partly shown: missing-repo
+bootstrap, for a new HOME only. Open: two bounded pods compared for independent
+Git directories and worktrees, a failed fetch blocking new work, and preserved
+dirty, WIP and reference state in an installed run. #173 stays open. Served
+model, usage, cost, full history, physical stop beyond the terminal record,
+capture completeness and tool-use compliance stay Unknown.
+
+Counters now: Directory 6 (no directory read this run); Claude Create 4 (1011,
+1012, sigo-1012, sigo-1012b), Codex Create 1; Claude named/result 4 each; Codex
+named/result 1 each. All five permanent IDs are consumed, the last being
+`rule-canary-claude-sigo-1012b`. No further read, retry, Create, second rerun or
+cleanup is authorized. The
+[Sigo rerun record](sagas/distributed-dev-env/verification/sigo-rerun-2026-10-13.md)
+has the details.
+
 ## dev-env 2.25.0 deployed: terminal record on (DESIGN-025 H2), R1 alert — 2026-10-12 UTC
 
 haynes-ops #3852 (`217dbede`, the AgentSession CRD, generation 10 to 11) merged
@@ -134,6 +191,10 @@ receipt `dd5dee24` accepts private GitHub authorization and a fresh task pin
 separately, a departure from that gate the record names
 (`partial-acceptance-by-property`). See the entry above and the
 [Sigo private-repo canary record](sagas/distributed-dev-env/verification/sigo-private-canary-2026-10-12.md).*
+*Update, Q-32, 2026-10-13: after 2.25.0 deployed, the one rerun canary
+`rule-canary-claude-sigo-1012b` reached a `Ready` bootstrap and all seven items
+hold (Root `a3aa0b7d`); see the
+[Sigo rerun record](sagas/distributed-dev-env/verification/sigo-rerun-2026-10-13.md).*
 
 **Diagnosis without exec:** [#239](https://github.com/thaynes43/dev-env/pull/239)
 (D-88) gives every repository and project root a closed-set reason code. The
@@ -2110,6 +2171,7 @@ DESIGN-001 section 15; later rows link their own record. This heading first read
 | Q-29 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Archive, then delete (Recommended)". Coordination records are released 30 days after the Sessions they depend on are first proved absent, archived first to a shelf-only volume and kept there indefinitely, then deleted by a leader-only operator runnable; reads fall back to the archive. Amends DESIGN-010's no-release rule in the reap case only. Private Sessions are never absent until a HOME expiry policy exists (plan 11 follow-up F1). [ADR-004](sagas/distributed-dev-env/adrs/004-coordination-record-retention.md), [DESIGN-024](sagas/distributed-dev-env/designs/024-coordination-record-retention.md), README decision 62. |
 | Q-30 | **Answered 2026-10-12** by Tom through the Claude native prompt, in free text. Question: "To close #173 I need one more Claude canary on a private repo, proving private GitHub access and a fresh pinned task worktree. The dev bot can't create repos on your personal account. Could you create an empty private repo thaynes43/dev-env-private-probe (a README on main is enough)? Global private admission stays off; the canary reuses the spent 1012 slot." Options: "I'll create it (Recommended)", "Use an existing private repo", "Not now". Answer: "All the Sigo alumni repos are private and all are needed for dev-env, we use them now. Why can't you use those?" Interpretation: use the existing private repositories `thaynes43/sigo-alumni` and `thaynes43/sigoalumni-org` instead of a new probe repository, declared as v2 catalog project `sigo-alumni`, and run the one approved private-repo Claude canary `rule-canary-claude-sigo-1012` against it: one create, one named read, one result read, no retries. Global private admission stays off; repository visibility is unchanged. Owner answer receipt `root-q30-owner-answer-r1.json`, sha256 `1490331885be14f5939fe85c81d91f186274dac089286e2343ca373bdd0b3722`. GitOps: haynes-ops [#3845](https://github.com/thaynes43/haynes-ops/pull/3845). Run on 2026-10-12: bootstrap `Partial` on a tracked symlink, so not accepted; fixed in [#237](https://github.com/thaynes43/dev-env/pull/237) ([DESIGN-011 Q-30 amendment](sagas/distributed-dev-env/designs/011-private-managed-rule-canaries.md#private-repo-canary-on-the-sigo-alumni-project--2026-10-12-q-30-173), README decision 65). Root acceptance `dd5dee24`: items 1 and 3 to 7 hold and item 2 (bootstrap) fails, so the run is not accepted for #173 under DESIGN-011's gate; the Root accepts private GitHub authorization and a fresh task pin separately, as the named deviation `partial-acceptance-by-property` ([Sigo private-repo canary record](sagas/distributed-dev-env/verification/sigo-private-canary-2026-10-12.md)). |
 | Q-31 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Archive, then delete (Recommended)". A private Session's HOME is archived, then deleted, 30 days after its executor's recorded termination: Git rescue in a hold pod bound to the HOME UID, provider history (an allowlist, never credentials) and Git bundle to a shelf-only `Retain` archive, readable under DESIGN-013's scope, then a guarded delete by the operator's leader. A retained Pod is not a stop proof; absence never is. Canary originals never expire; hold and release-now are Tom's alone. Deletion waits for the installed archived read (#174). Closes ADR-004's known gap. [ADR-005](sagas/distributed-dev-env/adrs/005-private-home-expiry.md), [DESIGN-025](sagas/distributed-dev-env/designs/025-private-home-expiry.md), README decision 64. Corrected the same day by [ADR-006](sagas/distributed-dev-env/adrs/006-private-home-expiry-corrections.md) (D-87, README decision 66): only a reap stops a private executor, never the suspended deadline. |
+| Q-32 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Yes, after deploy (Recommended)" (other option: "Not now"). Question: "The Sigo canary proved private GitHub access and a fresh pinned worktree, but catalog bootstrap ended Partial: one Sigo repo tracks a symlink our checkout check wrongly refused. The fix is merged and deploying now as 2.25. May I run one more Claude canary on the Sigo project after the deploy, to prove bootstrap reaches Ready and the new status codes work? One create, one named read, one result read, no retries." Grants, after the 2.25 deploy is post-checked, one new Claude canary record for project `sigo-alumni` through a reviewed haynes-ops PR, replacing the consumed `rule-canary-claude-sigo-1012` record (`codex-1011` byte-identical): exactly one create, one named read and one result read, no retries; global private admission stays off. Not granted: reuse of a consumed canary ID, any retry, a second rerun, credential repair or cleanup of any original. Owner answer receipt `root-q32-owner-answer-r1.json`, sha256 `48ab104fa0c140b139ce537a0d3eb4b59139111a785d2f97145e4ff459736609`. GitOps: haynes-ops [#3855](https://github.com/thaynes43/haynes-ops/pull/3855) (`rule-canary-claude-sigo-1012b`). Run on 2026-10-13 UTC: all seven DESIGN-011 items hold, bootstrap `Ready`; Root acceptance `a3aa0b7d` (`ACCEPTED_PRIVATE_REPO_CANARY_ALL_ITEMS`) accepts #173's private-repository evidence under the all-items gate ([Sigo rerun record](sagas/distributed-dev-env/verification/sigo-rerun-2026-10-13.md), README decision 68). |
 
 **Next (historical, 2026-10-08; the current order is the pickup brief's
 [six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap)):**

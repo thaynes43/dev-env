@@ -367,3 +367,36 @@ record names that departure from the all-items gate
 `partial-acceptance-by-property`. The
 [Sigo private-repo canary record](../verification/sigo-private-canary-2026-10-12.md)
 has the details.
+
+**Rerun, 2026-10-13 UTC (Q-32).** Tom approved one more canary after the 2.25.0
+deploy: one create, one named read and one result read, no retries. haynes-ops
+#3855 replaced the consumed record with `rule-canary-claude-sigo-1012b` (id,
+idempotency key, template `2.25.0-b7972dd7b5` and image changed; policy digest
+`5b11e61c…`; Session `private-canary-eb9d486a612e27fd2b52d27f675512be`). The
+items above applied with the four Q-32 adjustments that Root acceptance
+`a3aa0b7d` lists, none of which relaxes the gate:
+
+- Item 2 also requires `status.agent.projectBootstrap` (#239): at least one of
+  the named read and the wait's Session read reports it, and each that does
+  shows `Ready`, the expected catalog revision, every declared repository and
+  project root `Ready`, and no reason code. Q-32 asked to prove "the new status
+  codes work". Both reads reported the field, well formed. With everything
+  `Ready` it carried no reason code, so no non-`Ready` code was exercised.
+- Item 7 covers four retained Sessions: the Q-30 Session joined the three.
+- Item 7 leaves out the operator pods by their `app.kubernetes.io/name` label,
+  as "every non-operator pod" says.
+- Both item 7 snapshots carry the snapshot script's fixed purpose text, which
+  names the Q-30 PR. They were taken for #3855 and this run.
+
+Two run-plan inputs changed with the record and are not item changes: the
+freeze list checks template revision `2.25.0-b7972dd7b5`, and the boot log read
+targets the new Session's Pod.
+
+All seven items hold, so under the all-items gate the run is accepted for
+#173's private-repository evidence. The runner again read the boot log after
+the wait and before the named read; Root acceptance `a3aa0b7d` records and
+accepts `bootlog-before-named-read` on the same grounds as above. No other
+deviation is recorded. The canary waited for declared host and storage
+maintenance to end first, because its HOME and the shared volume sit on the
+storage in that scope. The
+[Sigo rerun record](../verification/sigo-rerun-2026-10-13.md) has the details.

@@ -218,6 +218,19 @@ multi-repository project is still unaccepted. The
 [Sigo private-repo canary record](sagas/distributed-dev-env/verification/sigo-private-canary-2026-10-12.md)
 has the details.
 
+**Counters update, Q-32, 2026-10-13 UTC.** The four counters paragraphs above
+are the original records. Under Q-32, one rerun Claude canary on the Sigo alumni
+project, `rule-canary-claude-sigo-1012b` (Session
+`private-canary-eb9d486a612e27fd2b52d27f675512be`, UID
+`454d12a2-60bc-4c4e-95c5-bb4b26428a65`), ran one Create, one named read and one
+result read after 2.25.0 deployed, with no retries and no directory read.
+Counters are now Directory **6**; Claude Create **4** (1011, 1012, sigo-1012,
+sigo-1012b), Codex Create **1**; Claude named/result **4 each**; Codex
+named/result **1 each**. All five permanent IDs are consumed. All seven
+DESIGN-011 items hold and Root acceptance `a3aa0b7d` accepts the run. The
+[Sigo rerun record](sagas/distributed-dev-env/verification/sigo-rerun-2026-10-13.md)
+has the details.
+
 ## Next bounded work and the six-step roadmap
 
 1. **Finish [#173](https://github.com/thaynes43/dev-env/issues/173).** Bootstrap and
@@ -257,6 +270,17 @@ has the details.
    project, after #237 deploys and with a new canary Tom approves, and #173's
    other acceptance items
    ([Sigo private-repo canary record](sagas/distributed-dev-env/verification/sigo-private-canary-2026-10-12.md)).*
+   *Update, Q-32, 2026-10-13 UTC: Tom approved one rerun after the 2.25 deploy.
+   The rerun canary `rule-canary-claude-sigo-1012b` reached a `Ready` catalog
+   bootstrap, and all seven DESIGN-011 items hold. Under the all-items gate,
+   Root acceptance `a3aa0b7d` accepts private GitHub authorization, a `Ready`
+   private multi-repository bootstrap and a fresh pinned task worktree for
+   #173 (Claude only). Still open for #173: two bounded pods compared for
+   independent Git directories and worktrees, missing-repo bootstrap in an
+   existing HOME (a new HOME is shown), a failed fetch blocking new work, and
+   preserved dirty, WIP and reference state in an installed run. No further
+   canary read, retry or Create is authorized
+   ([Sigo rerun record](sagas/distributed-dev-env/verification/sigo-rerun-2026-10-13.md)).*
 2. **[#174](https://github.com/thaynes43/dev-env/issues/174): history and discovery.**
    Finish provider-history retention, durable live/stopped/archived directory and
    authorized stopped-context reads. Prove reads without starting a model turn

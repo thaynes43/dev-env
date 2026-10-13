@@ -130,6 +130,16 @@ Claude loading remains unproven.*
 [Claude canary 1012 record](../verification/claude-canary-1012-2026-10-12.md).
 Genuine private GitHub authorization and worktrees, and a fresh task pin, remain
 open for #173, with the parent items above.*
+*Update, Q-32, 2026-10-13 UTC: the Sigo rerun canary
+`rule-canary-claude-sigo-1012b` (after the 2.25.0 deploy) holds all seven
+DESIGN-011 items. Root acceptance `a3aa0b7d` accepts private GitHub
+authorization and a fresh pinned task worktree on a private repository: the
+task fetch ran after Create, equals the pre-Create tip and is recorded as the
+task source (Claude only). The Q-30 run on 2026-10-12 had shown both but failed
+bootstrap. See the [Sigo rerun record](../verification/sigo-rerun-2026-10-13.md).
+Still open for #173: two bounded pods compared for independent Git directories
+and worktrees, a failed fetch blocking fresh work, and preserved dirty, WIP and
+reference state in an installed run.*
 
 ### Next #173 slice: private catalog startup and refresh
 
@@ -139,6 +149,17 @@ and explicit refresh record revisions/outcomes and preserve unsafe reference
 state. Neither path replaces selected-task fetch/pinning or resume provenance.
 Promotion changes new-session settings only and retains the private-task gate.
 Real-provider loading, project roots and other clients remain separate acceptance.
+*Update, Q-32, 2026-10-13 UTC: installed startup bootstrap reached `Ready` on a
+private multi-repository catalog project (`sigo-alumni`: two private
+repositories, plus `dev-env`) in a new HOME. The boot step and
+`status.agent.projectBootstrap` (#239) both report every repository and project
+root `Ready`, with no reason code; under 2.24.1 the same catalog ended
+`Partial`. That is consistent with #237's fix, but neither run recorded the tip
+of `sigoalumni-org`, so no receipt shows it still tracks the symlink. With
+everything `Ready`, no non-`Ready` #239 reason code was exercised. Missing-repo
+bootstrap in an existing HOME, and
+preservation of dirty or ambiguous reference state in an installed run, are not
+shown yet. See the [Sigo rerun record](../verification/sigo-rerun-2026-10-13.md).*
 
 ### Private permanent roots
 
