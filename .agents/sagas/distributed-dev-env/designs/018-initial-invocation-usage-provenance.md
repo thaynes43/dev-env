@@ -155,3 +155,75 @@ promotion follow with separate installation verification preserving existing
 sessions. No v1 restart/cutover or new permission grant is included. Actual
 provider usage, exact served model, billing/quota, local inference and complete
 MVP acceptance remain separate; keep #176/#91 open.
+
+## Provider-reported served model, usage and cost (2026-10-12, #176)
+
+This section supersedes the statements above that keep the actual served model
+Unknown and forbid a parent/child aggregate. It applies to observations of
+version 2. Version 1 observations keep their original rules and display.
+
+**What the provider reports.** The final result event is the only source. Claude's
+stream-json `result` event carries `usage`, `total_cost_usd` and `modelUsage`, a map
+from served model id to `inputTokens`, `outputTokens`, `cacheReadInputTokens`,
+`cacheCreationInputTokens` and `costUSD`. Codex `exec --json` reports token counts
+on `turn.completed`; agentd reads a served model there only from an explicit
+`model` string. The pinned 0.160 schema emits none, so Codex observations keep the
+served model Unknown in practice, and Codex cost stays Unknown.
+
+**Version 2 observation.** agentd records, from the final result event:
+
+- `provenance: ProviderReported`. The CLI that served the invocation reported it.
+  It is not an attestation of billing.
+- `billingBasis: Subscription` when the launch is plan-served by policy: a Claude
+  launch that unsets `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` (V-05), or a
+  Codex launch that forces the ChatGPT login. Any other launch is `Unknown`. The
+  USD figure is the CLI's list-price equivalent, never a charge, and its kind stays
+  `ProviderCLIEquivalentEstimate`.
+- `servedModels`: at most 8 entries, sorted by model id, each with its own four
+  token observations and cost observation. `actualModelState` is
+  `ProviderReported` exactly when the list is not empty. A malformed map, a
+  malformed or overlong model id, or more than 8 models leaves the list empty and
+  the state Unknown; a partial list is never kept.
+- The invocation totals, as before: each counter and the cost has its own
+  presence. Absent, null, malformed, negative or out-of-range values are Unknown,
+  never zero. An explicit zero stays zero.
+
+Subscription quota, API billing and local resource stay Unknown. The observation
+ID, source, receipt, replay, conflict and old-decoder rules above are unchanged.
+New agents still omit the raw Usage field from heartbeats.
+
+**Mixed versions.** The CRD accepts version 1 or 2, with CEL rules for each shape.
+An old operator or an old CRD refuses a version 2 observation as InvalidPayload;
+liveness and budgets continue, and agentd keeps replaying the private snapshot, so
+an upgraded operator retains it. Old agents keep sending version 1.
+
+**Published context attribution.** Only a managed output assertion (DESIGN-016)
+can carry usage, because it is the output of the same initial invocation: the key
+is the Session UID plus the invocation. agentd puts its retained private
+observation into the publication intent before any HTTP call, so every chunk and
+every retry carries the same one. The operator applies it with the heartbeat rules
+and attributes it only when the retained status observation equals the request
+and its source is this Session UID and Pod UID. Then `observedModelState`,
+`usageState` and `costState` become `ProviderReported` each only when that part
+was reported, and the attribution carries the observed models and a bounded usage
+summary: observation ID, billing basis, the four counters and the cost. Otherwise
+all three stay Unknown. Explicit publications stay Unknown. An old operator decodes
+the request strictly and refuses a publication with usage; the capture stays
+private. Roll the operator out before the agent image, the order every API
+addition already follows.
+
+**Parent and child.** A child Session's usage belongs to the child, in its own
+status; nothing is added to the parent's own observation. `GET
+/v1/sessions/{name}` adds `usageRollup`: the Session and its descendants, found by
+`spec.parent` name and created no earlier than their parent, walked once each by
+UID, at most 64 Sessions. Each Session contributes at most its own retained
+observation, keyed by Session UID and observation ID, and only when the source
+Session UID matches. A metric is Reported only when every walked Session has an
+observation and every one reported that metric; otherwise it is Unknown, with no
+partial sum. Each separate Session is a separate CLI process, so the sum counts
+nothing twice. Work a CLI delegates inside its own process is in that CLI's own
+report and is never added again.
+
+**Out of scope.** Pricing from tokens, subscription quota, API billing, local
+inference, TUI/resume/native coverage, the SessionDirectory usage fields and
+rollups across names that a parent never created stay Unknown or absent.
