@@ -7,6 +7,23 @@ the saga. To continue building, follow the
 in the Claude pickup brief. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## DESIGN-025 H5 in source: the operator's HOME expiry up to Archived — 2026-10-13 UTC
+
+#251 adds `status.privateHistory.expiry` (and `expiryClearedAt`) with its CEL
+rules, and the operator's expiry behind `--enable-home-history-archive`
+(default off; needs `--enable-private-terminal-record`; `--home-expiry-grace`
+720h or longer). After the grace, or release-now, it removes the ended executor
+Pod, makes a hold pod bound to the HOME UID with its intent recorded first,
+rescues in it, pipes H4's export into the shelf's `history-archive put`,
+verifies the entry and records `Archived`. A resume, a moved deadline or a new
+Pod cancels; an owner hold stops every step; canary originals never enter it.
+It deletes no HOME: `Deleting`, `Expired`, the reads and the delete flag are H6.
+The reference copy of `dev-env-home-expiry-guard` that H7 ships is in
+`internal/controller/testdata/haynes-ops/`, with its envtest. A new refusal
+reason, `export_invalid`, joins `DevEnvHomeExpiryNeedsOwner` (DESIGN-025 5.4,
+section 10). The CRD changed: haynes-ops needs the CRD copy before an operator
+pin with this source.
+
 ## DESIGN-025 H4 in source: agentd history export and archive — 2026-10-13 UTC
 
 #246 adds `agentd ctl history-export plan|stream` (hold or session pod, private

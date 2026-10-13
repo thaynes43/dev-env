@@ -75,7 +75,8 @@ internal/testenv/        starts envtest (kube-apiserver + etcd) with config/crd/
 internal/templates/      parses and checks dev-env-templates, the GitOps data pods are built from; its revision (D-44)
 internal/controller/     the AgentSession reconciler: each session's pod and volume (D-44), the reap finalizer and the
                          guarded deletes (D-45): the rescue by exec before a suspend deletes a pod, and the archive of
-                         a reaped session's volume after a verified rescue (D-51), in a hold pod when the volume has no pod (D-55). Its envtest suite proves DESIGN-001
+                         a reaped session's volume after a verified rescue (D-51), in a hold pod when the volume has no pod (D-55); a private
+                         Session's HOME expiry up to Archived, default off (DESIGN-025 5.4: private_expiry.go, history_relay.go). Its envtest suite proves DESIGN-001
                          5.1 (no owner reference to the operator; no pod or volume write or delete outside the guards;
                          delete and suspend wait for rescue); a fake rescuer stands in for exec. The one Pod write
                          besides create and the guarded deletes is DESIGN-025's stop request (private_stop.go), pinned
@@ -89,7 +90,7 @@ internal/podexec/        the one pods/exec client (WebSocket, SPDY fallback): th
 internal/apiserver/apiv1/  the API's wire types, error codes and Claude effort table, standard library only, for agent-run
 internal/activity/       the reaper of expired declare-activity declarations (D-66), a leader-only runnable in the operator
 internal/shelf/          the operator's side of the shelf pod (D-67): finds it, lists and prunes rescues there by exec; the pruner is
-                         a leader-only runnable
+                         a leader-only runnable; ExecSlots, the per-replica limit on archive execs (DESIGN-024 5, DESIGN-025 6.4)
 internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66, D-67): -p, --local, list, show, log, msg, reap, suspend, resume, rescue list|restore, declare-activity, attach, detach, fleet; finds the API and a token in a session
                          pod, in another pod (a minted token) or from flags; imports the standard library, apiv1 and
                          agentd's protocol only (`make build` checks); tests run against an httptest TLS server
