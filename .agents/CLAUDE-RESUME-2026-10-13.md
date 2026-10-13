@@ -184,11 +184,22 @@ predate this session; their rows point there.
 
 ## Next work, in order
 
-**H7 progress at 17:24 UTC, 2026-10-13:** the unmounted history PVC is installed
+**H7 progress at 20:23 UTC, 2026-10-13:** the compatible guard merged in
+[haynes-ops #3902](https://github.com/thaynes43/haynes-ops/pull/3902), `650f3a04`.
+The [source and registered hook checkpoint](sagas/distributed-dev-env/verification/h7-compatible-guard-source-and-hook-2026-10-13.md)
+records the exact-head 1,593 passing hosted tests/subtests, final independent
+no-findings review, observed Kyverno GET permissions, Flux Ready/Healthy and the
+generated Fail hook. Actual installed request acceptance and a complete
+pre-mount baseline remain pending. The next separate unit is a bounded sanitized
+read-only metadata audit using a new dedicated reader, preserving v1 access.
+Forbidden policy/ReplicationController reads are not empty or successful results.
+No workstation commands or administrator-token borrowing are the verification path.
+
+The unmounted history PVC was installed at 17:24 UTC
 by haynes-ops #3898 (`a287a4f6`), Bound with no Pod references. Read the
 [installed checkpoint](sagas/distributed-dev-env/verification/h7-archive-pvc-2026-10-13.md).
-Its bound PV remains Delete; owner-set Retain is pending. The next ordered unit
-is the compatible archive guard before mounting it, under Q-35 and
+Its bound PV remains Delete; owner-set Retain is pending. Finish guard delivery
+and baseline evidence before mounting it, under Q-35 and
 [ADR-007](sagas/distributed-dev-env/adrs/007-preserve-v1-archive-trust-boundary.md).
 F4 and both cold resource measurements remain gates.
 The guard review found operator-account borrowing paths available to v1.
@@ -198,10 +209,10 @@ accepted MVP. The coordinator verified the oversight relay; the original owner
 turn and native delivery were not observed. Preserve v1 behavior, configuration
 and current access; add no privilege or automatic decommissioning.
 [Issue #261](https://github.com/thaynes43/dev-env/issues/261) holds the evidence.
-No guard implementation or bypass probe was made. Finish the in-flight
-[measurement source setup](sagas/distributed-dev-env/verification/h7-measurement-setup-2026-10-13.md),
-then the next ordered guard, preserving the trusted-v1 boundary. The measurement
-setup merged in [#262](https://github.com/thaynes43/dev-env/pull/262), `01c6bc99`.
+The initial read-only checkpoint performed no bypass probe. The
+[measurement source setup](sagas/distributed-dev-env/verification/h7-measurement-setup-2026-10-13.md)
+merged in [#262](https://github.com/thaynes43/dev-env/pull/262), `01c6bc99`;
+the compatible guard source and registered hook now have the checkpoint above.
 The [compatible guard contract](sagas/distributed-dev-env/verification/h7-compatible-guard-contract-2026-10-13.md)
 now governs its source implementation, with fixed trusted infrastructure routes,
 controller-chain proof, audited activation baseline and separate real webhook
@@ -225,7 +236,8 @@ need declare-activity and peer checks before and after.
         by #3898; its owner-set PV Retain step remains pending;
      2. the archive guard, `dev-env-archive-guard` (it covers DESIGN-024's
         archive too, so it ships with whichever of H7 and R5 comes first),
-        preserving v1 under ADR-007/Q-35;
+        preserving v1 under ADR-007/Q-35; source merged in #3902 and hook
+        registered, with complete installed/baseline acceptance pending;
      3. the shelf mount, `--history-archive`, `Recreate` and the 2.27.0 image
         (this absorbs #3710);
      4. the `dev-env-home-expiry-guard` admission policy, refusing every

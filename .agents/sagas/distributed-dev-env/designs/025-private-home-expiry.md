@@ -2199,8 +2199,14 @@ archive activation, destructive action or automatic decommissioning approval.
 Accepted MVP precedes decommissioning; the existing separate owner approval
 still applies. Do not ask Tom this same migration choice again.
 
-Implement the next ordered archive guard under section 7's trusted-v1 boundary,
-with v2 refusal and compatible v1/controller paths proved independently.
+The compatible archive guard under section 7's trusted-v1 boundary merged in
+[haynes-ops #3902](https://github.com/thaynes43/haynes-ops/pull/3902), `650f3a04`.
+The [source and hook checkpoint](../verification/h7-compatible-guard-source-and-hook-2026-10-13.md)
+records passing actual-expression fixtures, native review and deployed lookup
+permissions, plus Flux health and the registered Fail webhook. Complete
+installed request outcomes and the audited pre-mount baseline remain pending;
+the next separate evidence unit is a bounded, sanitized, narrowly read-only audit
+with its own identity, without changing v1 access.
 No narrowing of v1 shelf access or credential borrowing is authorized. Tom's
 personal Kubernetes account remains permanent under Q-33; preserving Headlamp's
 current administrator route creates no shared-SA owner-override exception.
@@ -2210,5 +2216,6 @@ later flags and installed read acceptance remain separate gates.
 Validation also needs correction: the pinned Kyverno CLI 1.19.1 does not simulate
 CEL CONNECT and sets UPDATE oldObject from the new resource, so ordinary CLI
 fixtures do not establish exec matching or a pure restartedAt update. An evaluator
-of the actual expressions with explicit synthetic old/new requests is a candidate;
-real webhook verification remains separate. [Pinned CLI source](https://github.com/kyverno/kyverno/blob/v1.19.1/cmd/cli/kubectl-kyverno/processor/operation.go).
+of the actual expressions with explicit synthetic old/new requests now passed
+in #3902; real webhook verification remains separate.
+[Pinned CLI source](https://github.com/kyverno/kyverno/blob/v1.19.1/cmd/cli/kubectl-kyverno/processor/operation.go).
