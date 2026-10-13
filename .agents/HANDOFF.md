@@ -18,8 +18,12 @@ records every direct RBAC subject, Headlamp's shared ServiceAccount backend and
 the scoped v1 workflow scan. No haynes-ops change was made.
 
 [Q-33](sagas/distributed-dev-env/designs/025-private-home-expiry.md#18-h7-owner-identity-q-33)
-is pending in the native user prompt: preserve Headlamp's shared backend for the
+was submitted by this Codex chat through `functions.request_user_input_async`:
+preserve Headlamp's shared backend for the
 phone owner controls and archive access, or use Tom's personal Kubernetes identity.
+The tool accepted submission, but phone delivery is unverified and no owner answer
+has arrived. This is the native-question capability gap, not a confirmed delivered
+ask; the dependent policies remain pending.
 The configured backend does not establish his actual phone path or a sole user.
 F4 and both cold resource measurements remain prerequisites before archive
 activation. Source, deployment and installed acceptance remain separate.

@@ -16,7 +16,10 @@ The first H7 owner question is the phone identity exception in
 [DESIGN-025 section 9](../designs/025-private-home-expiry.md#9-owner-overrides-hold-and-release-now).
 [Q-33](../designs/025-private-home-expiry.md#18-h7-owner-identity-q-33) asks
 whether to preserve Headlamp's shared backend or use Tom's personal Kubernetes
-identity. No haynes-ops change is made while it is pending.
+identity. The Codex chat submitted it through `functions.request_user_input_async`;
+the tool accepted submission, but phone delivery is unverified and no owner answer
+has arrived. It does not count as a confirmed delivered ask. No haynes-ops change
+is made while the decision is pending.
 
 ## Direct RBAC subjects in dev-agents
 

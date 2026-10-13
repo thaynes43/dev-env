@@ -101,7 +101,9 @@ question takes the next free Q id when it is asked; none is reserved.
 
 **H7 pickup update, 2026-10-13:** the
 [read-only prerequisite checkpoint](sagas/distributed-dev-env/verification/h7-prerequisites-2026-10-13.md)
-is recorded. Q-33 is pending in the native user prompt; it asks whether the
+is recorded. This Codex chat submitted Q-33 through
+`functions.request_user_input_async`; the tool accepted submission, but phone
+delivery is unverified and the decision is pending. It asks whether the
 guards should preserve Headlamp's shared backend or use Tom's personal Kubernetes
 identity. No haynes-ops change is made while it is pending. Plan 11 F4 and both
 DESIGN-025 cold resource measurements remain prerequisites before archive
