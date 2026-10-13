@@ -112,7 +112,8 @@ internal/agentd/         agentd: config rendering (the dev-init.sh port), clone 
                          agentd name, and its scans keep the table complete); tests fake claude and tmux and run
                          git against a bare repo in t.TempDir()
 internal/agentd/protocol/  what agentd and the operator exchange: the session document, the status, the heartbeat route,
-                         the rescue report, and the rescue layout and manifest on the shared volume
+                         the rescue report, and the rescue layout and manifest on the shared volume; the history
+                         archive's wire types and the canonical JSON both sides hash (canonical.go, DESIGN-025 5.4)
 internal/agentd/hostexecutor/  owns one foreground native computer for one immutable budget binding (no budget authority, no pairing)
 internal/codexauth/      the access-only Codex document the keeper publishes and agentd reads; it cannot carry a refresh token
 internal/tokenfile/      bounded reads of rotating projected bearer-token files

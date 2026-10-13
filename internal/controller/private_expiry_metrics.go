@@ -147,7 +147,7 @@ func homeExpiryGauges(sessions []v1alpha1.AgentSession, now time.Time) (phases, 
 		if e.Refusal != "" {
 			refusing[e.Refusal]++
 		}
-		held := homeExpiryOverride(s) == v1alpha1.HomeExpiryHold
+		held := homeExpiryHeld(s)
 		switch {
 		case e.Phase == v1alpha1.HomeExpiryExpired:
 			continue

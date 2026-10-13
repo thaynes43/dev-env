@@ -1,10 +1,8 @@
 package protocol
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"path"
 	"regexp"
@@ -397,30 +395,6 @@ func HistoryBlocksSHA256(blocks []string) string {
 	b, _ := CanonicalJSON(blocks)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
-}
-
-// CanonicalJSON encodes v as DESIGN-024 section 4 does: sorted keys, no extra
-// whitespace and no HTML escaping, numbers kept as written.
-func CanonicalJSON(v any) ([]byte, error) {
-	var first bytes.Buffer
-	enc := json.NewEncoder(&first)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
-		return nil, err
-	}
-	dec := json.NewDecoder(&first)
-	dec.UseNumber()
-	var generic any
-	if err := dec.Decode(&generic); err != nil {
-		return nil, err
-	}
-	var out bytes.Buffer
-	enc = json.NewEncoder(&out)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(generic); err != nil {
-		return nil, err
-	}
-	return bytes.TrimSuffix(out.Bytes(), []byte("\n")), nil
 }
 
 // CanonicalSHA256 is the hex SHA-256 of v's canonical JSON, and those bytes.

@@ -336,6 +336,41 @@ func TestHomeExpiryOnTheAPIServer(t *testing.T) {
 		claimIntact(t, g)
 	})
 
+	// Section 14: a cancel must record an expiryClearedAt newer than the last
+	// one, or the schema refuses it. Two cancels by new Pods, on an operator
+	// clock that does not move, both land: the second one's time moves
+	// forward a second, and each new record's grace starts no earlier than
+	// the cancel before it.
+	t.Run("two cancels on one clock both land, expiryClearedAt forward", func(t *testing.T) {
+		g := newRig(t, "h5-expiry-cancel")
+		untilRecord(t, g)
+		var cleared []metav1.Time
+		for _, name := range []string{"h5-expiry-cancel-debug-a", "h5-expiry-cancel-debug-b"} {
+			debug := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS},
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "debug", Image: "synthetic.invalid/debug:1"}},
+					Volumes: []corev1.Volume{{Name: "home", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: g.home.Name}}}}}}
+			if err := k8s.Create(ctx, debug); err != nil {
+				t.Fatal(err)
+			}
+			step(t, g, 2)
+			h := history(t, g)
+			if h.Expiry != nil || h.ExpiryClearedAt == nil {
+				t.Fatalf("a Pod mounting the HOME did not cancel on the API server: %+v", h)
+			}
+			cleared = append(cleared, *h.ExpiryClearedAt)
+			purgeEnv(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS}})
+			step(t, g, 2)
+			h = history(t, g)
+			if h.Expiry == nil || h.Expiry.GraceStart.Before(h.ExpiryClearedAt) {
+				t.Fatalf("no new record after the cancel, or its grace starts before it: %+v", h)
+			}
+		}
+		if !cleared[1].After(cleared[0].Time) {
+			t.Fatalf("expiryClearedAt %v then %v; want it to move forward", cleared[0], cleared[1])
+		}
+		claimIntact(t, g)
+	})
+
 	t.Run("the schema refuses a record past the terminal record", func(t *testing.T) {
 		g := newRig(t, "h5-expiry-schema")
 		untilRecord(t, g)

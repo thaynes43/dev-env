@@ -1470,6 +1470,74 @@ func TestPrivateHomeExpiryRecordIsBoundAndForwardOnly(t *testing.T) {
 		}
 	})
 
+	// Section 14: an operator below H5 drops the record and expiryClearedAt
+	// from its status writes. Removing a record needs a newer expiryClearedAt
+	// in the same write, and expiryClearedAt never goes or moves back, so such
+	// a write is refused, as for the terminal record, and a later record can
+	// never take its grace from an old terminal observation.
+	t.Run("a cancel records a newer expiryClearedAt, which never goes or moves back", func(t *testing.T) {
+		later := metav1.NewTime(due.Add(time.Hour))
+		s := stored(t, &v1alpha1.PrivateHistoryStatus{Expiry: record()})
+		for _, tc := range []struct {
+			name string
+			edit func(*v1alpha1.PrivateHistoryStatus)
+		}{
+			{"the first record dropped without expiryClearedAt", func(h *v1alpha1.PrivateHistoryStatus) { h.Expiry = nil }},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				bad := get(t, s)
+				tc.edit(bad.Status.PrivateHistory)
+				if err := k8s.Status().Update(ctx(t), bad); !apierrors.IsInvalid(err) {
+					t.Fatalf("accepted: %v", err)
+				}
+			})
+		}
+		cancelled := get(t, s)
+		cancelled.Status.PrivateHistory.Expiry, cancelled.Status.PrivateHistory.ExpiryClearedAt = nil, &due
+		if err := k8s.Status().Update(ctx(t), cancelled); err != nil {
+			t.Fatal("a cancel with expiryClearedAt refused:", err)
+		}
+		again := get(t, s)
+		again.Status.PrivateHistory.Expiry = record()
+		again.Status.PrivateHistory.Expiry.GraceStart, again.Status.PrivateHistory.Expiry.DueAt = due, metav1.NewTime(due.Add(720*time.Hour))
+		if err := k8s.Status().Update(ctx(t), again); err != nil {
+			t.Fatal("a new record after a cancel refused:", err)
+		}
+		for _, tc := range []struct {
+			name string
+			edit func(*v1alpha1.PrivateHistoryStatus)
+		}{
+			{"expiryClearedAt dropped", func(h *v1alpha1.PrivateHistoryStatus) { h.ExpiryClearedAt = nil }},
+			{"expiryClearedAt moved back", func(h *v1alpha1.PrivateHistoryStatus) { h.ExpiryClearedAt = &at }},
+			{"both dropped, as an older operator writes", func(h *v1alpha1.PrivateHistoryStatus) { h.Expiry, h.ExpiryClearedAt = nil, nil }},
+			{"the record dropped, expiryClearedAt kept", func(h *v1alpha1.PrivateHistoryStatus) { h.Expiry = nil }},
+			{"the record dropped, expiryClearedAt older", func(h *v1alpha1.PrivateHistoryStatus) { h.Expiry, h.ExpiryClearedAt = nil, &at }},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				bad := get(t, s)
+				tc.edit(bad.Status.PrivateHistory)
+				if err := k8s.Status().Update(ctx(t), bad); !apierrors.IsInvalid(err) {
+					t.Fatalf("accepted: %v", err)
+				}
+			})
+		}
+		// A heartbeat-like write that keeps both is accepted, and so is a
+		// second cancel with a newer time.
+		kept := get(t, s)
+		kept.Status.PrivateHistory.Expiry.HoldIntent = "intent-1"
+		if err := k8s.Status().Update(ctx(t), kept); err != nil {
+			t.Fatal("a write that keeps the record and expiryClearedAt refused:", err)
+		}
+		second := get(t, s)
+		second.Status.PrivateHistory.Expiry, second.Status.PrivateHistory.ExpiryClearedAt = nil, &later
+		if err := k8s.Status().Update(ctx(t), second); err != nil {
+			t.Fatal("a second cancel with a newer expiryClearedAt refused:", err)
+		}
+		if got := get(t, s).Status.PrivateHistory; got.Expiry != nil || got.ExpiryClearedAt == nil || !got.ExpiryClearedAt.Equal(&later) {
+			t.Fatalf("the second cancel was not stored: %+v", got)
+		}
+	})
+
 	t.Run("from Deleting on it is never removed and only becomes Expired", func(t *testing.T) {
 		deleting := record()
 		deleting.Phase, deleting.RescueStamp, deleting.Archive, deleting.DeletingAt = v1alpha1.HomeExpiryDeleting, "20261111-1200", archive(), &due

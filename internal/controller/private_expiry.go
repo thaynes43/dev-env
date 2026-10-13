@@ -107,11 +107,11 @@ func expiryPhaseAtLeast(phase, min string) bool {
 	return ok && p >= homeExpiryPhaseOrder[min]
 }
 
-// homeExpiryOverride is the owner's override as the expiry reads it: hold,
-// release-now, "" for none, and anything else is invalid (override_invalid),
-// which the expiry ignores. The stop request reads any value but release-now
-// as a hold (homeExpiryHeld, fail closed); the expiry's steps need no such
-// rule, because an invalid value is counted and alerts nothing away.
+// homeExpiryOverride is the owner's override as written: hold, release-now,
+// "" for none, and anything else is invalid (override_invalid), which is
+// counted. Whether it holds is homeExpiryHeld's: any value but release-now
+// holds the expiry, as it holds the stop request, so a mistyped hold never
+// lets a step through (fail closed, DESIGN-025 9).
 func homeExpiryOverride(s *v1alpha1.AgentSession) string {
 	v, ok := s.Annotations[v1alpha1.AnnotationHomeExpiry]
 	switch {
@@ -122,6 +122,20 @@ func homeExpiryOverride(s *v1alpha1.AgentSession) string {
 	default:
 		return expiryOverrideInvalid
 	}
+}
+
+// heldNote is the HomeExpiry condition's note for a held expiry; it names a
+// value that holds only because it is not release-now.
+func heldNote(s *v1alpha1.AgentSession) *homeExpiryNote {
+	if homeExpiryOverride(s) == expiryOverrideInvalid {
+		v := s.Annotations[v1alpha1.AnnotationHomeExpiry]
+		if len(v) > 64 {
+			v = v[:64] + "..."
+		}
+		return &homeExpiryNote{reason: "Held", message: fmt.Sprintf("the owner's HOME expiry override %q is neither %q nor %q, so it holds the HOME expiry (fail closed); "+
+			"correct or remove it", v, v1alpha1.HomeExpiryHold, v1alpha1.HomeExpiryReleaseNow)}
+	}
+	return &homeExpiryNote{reason: "Held", message: "the owner holds the HOME expiry; nothing moves on until the hold is removed"}
 }
 
 func (r *Reconciler) homeExpiryOn() bool { return r.HomeHistoryArchive && r.PrivateTerminalRecord }
@@ -183,10 +197,11 @@ func homeExpiryTriggered(s *v1alpha1.AgentSession, t *templates.Templates, now t
 
 // recordedExecutorEnded reports whether the Pod of a private Session's name is
 // its recorded executor, ended in a terminal phase with its terminal record
-// confirmed.
+// confirmed. Canary originals never enter the HOME expiry (DESIGN-025 2), so
+// their archive timer keeps today's rule.
 func recordedExecutorEnded(s *v1alpha1.AgentSession, obs observation) bool {
 	h := s.Status.PrivateHistory
-	return privateHistoryProtected(s) && s.Spec.Workspace == nil && !obs.pod.missing && obs.pod.foreign == "" &&
+	return privateHistoryProtected(s) && s.Spec.Workspace == nil && s.Spec.ProjectCanary == nil && !obs.pod.missing && obs.pod.foreign == "" &&
 		executorTerminalRecorded(h) && string(obs.pod.obj.UID) == h.ExecutorTerminal.PodUID && podPhaseTerminal(obs.pod.obj)
 }
 
@@ -359,7 +374,7 @@ func (r *Reconciler) expiryQuiet(s *v1alpha1.AgentSession, obs *observation, oth
 		return ctrl.Result{}, false
 	}
 	if override == v1alpha1.HomeExpiryHold {
-		obs.homeExpiry = &homeExpiryNote{reason: "Held", message: "the owner holds the HOME expiry; nothing moves on until the hold is removed"}
+		obs.homeExpiry = heldNote(s)
 		return ctrl.Result{RequeueAfter: homeExpiryMaxWait}, true
 	}
 	if e.Phase == v1alpha1.HomeExpiryWaiting {
@@ -526,8 +541,12 @@ func (r *Reconciler) startHomeExpiry(ctx context.Context, v *expiryView, obs *ob
 	start := h.ExecutorTerminal.ObservedAt
 	if h.ExpiryClearedAt != nil {
 		// After a cancel, a new 30 days from when the Session is found
-		// triggered again (5.1).
+		// triggered again (5.1), never before the cancel itself, whatever
+		// this replica's clock says.
 		start = recordTime(v.now)
+		if start.Before(h.ExpiryClearedAt) {
+			start = *h.ExpiryClearedAt.DeepCopy()
+		}
 	}
 	fresh := v.s.DeepCopy()
 	e := &v1alpha1.PrivateHomeExpiryStatus{Version: 1, ExecutorUID: h.LastExecutor.PodUID, HomeUID: h.HomeUID,
@@ -564,13 +583,19 @@ func (r *Reconciler) stepHomeExpiry(ctx context.Context, v *expiryView, obs *obs
 	if trig == expiryNotTriggered {
 		return r.cancelHomeExpiry(ctx, v, obs, "the Session is no longer triggered: resumed, or its archive deadline moved", false)
 	}
-	if homeExpiryOverride(v.s) == v1alpha1.HomeExpiryHold {
+	if homeExpiryHeld(v.s) {
 		// Nothing moves on while the owner holds it, and the hold pod goes,
-		// because nothing needs it; the grace keeps running (5.3).
+		// because nothing needs it; the grace keeps running (5.3). A value
+		// that is neither hold nor release-now holds too (fail closed, 9):
+		// it is counted, and looked at again every 15 minutes so the count
+		// keeps showing it.
 		if p := v.ownHold(); p != nil && p.DeletionTimestamp.IsZero() {
 			return r.removeExpiryHold(ctx, v, obs, p, holdReleaseOwnerHold)
 		}
-		obs.homeExpiry = &homeExpiryNote{reason: "Held", message: "the owner holds the HOME expiry; nothing moves on until the hold is removed"}
+		obs.homeExpiry = heldNote(v.s)
+		if homeExpiryOverride(v.s) == expiryOverrideInvalid {
+			return ctrl.Result{RequeueAfter: homeExpiryRefusalRetry}, false, nil
+		}
 		return ctrl.Result{}, false, nil
 	}
 	if trig == expiryTriggerUnknown {
@@ -584,14 +609,16 @@ func (r *Reconciler) stepHomeExpiry(ctx context.Context, v *expiryView, obs *obs
 		return r.refuseHomeExpiry(ctx, v, obs, ref)
 	}
 	res, stop, err := r.runExpiryStep(ctx, v, obs)
-	if err != nil || stop || e.Refusal == "" || obs.homeExpiry != nil && obs.homeExpiry.pending {
+	if err != nil || stop || e.Refusal == "" || exportRefusal(e.Refusal) || obs.homeExpiry != nil && obs.homeExpiry.pending {
 		return res, stop, err
 	}
 	// The common re-check and the step passed, and the step had nothing to
 	// write (it waits for the grace, a starting hold pod, a rescue retry, or
 	// it is Archived): the recorded refusal's cause is gone. Clear it now, so
 	// a fixed cause stops the alert at this re-check (5.2), not at the next
-	// step that writes, which may be weeks away.
+	// step that writes, which may be weeks away. An export refusal is the
+	// export's to clear (clearStepRefusal): a step that waits before the next
+	// export proves nothing about its cause.
 	fresh := v.s.DeepCopy()
 	clearExpiryRefusal(fresh.Status.PrivateHistory.Expiry)
 	if err := r.writeExpiry(ctx, v, fresh); err != nil {
@@ -634,7 +661,7 @@ func (r *Reconciler) expiryWait(ctx context.Context, v *expiryView) (ctrl.Result
 		at := recordTime(v.now)
 		next.ReleaseNowAt = &at
 	}
-	clearExpiryRefusal(next)
+	clearStepRefusal(next)
 	if err := r.writeExpiry(ctx, v, fresh); err != nil {
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}
@@ -678,7 +705,7 @@ func (r *Reconciler) expiryRescueAndExport(ctx context.Context, v *expiryView, o
 		fresh := v.s.DeepCopy()
 		next := fresh.Status.PrivateHistory.Expiry
 		next.HoldPodUID, next.HoldIntent = "", string(uuid.NewUUID())
-		clearExpiryRefusal(next)
+		clearStepRefusal(next)
 		if err := r.writeExpiry(ctx, v, fresh); err != nil {
 			return ctrl.Result{RequeueAfter: time.Second}, true, nil
 		}
@@ -698,6 +725,14 @@ func (r *Reconciler) expiryRescueAndExport(ctx context.Context, v *expiryView, o
 	}
 	if podEnded(hold) {
 		return r.removeExpiryHold(ctx, v, obs, hold, holdReleaseEnded)
+	}
+	if sourceChangeRefusal(e.Refusal) && staleHoldImage(hold, obs.templates) {
+		// The export refused for a reason only a source change clears, and
+		// the templates now name another agent image. The export runs from
+		// the hold pod's image, so the re-check needs a hold pod of the new
+		// one: this one goes, and a new one is made, rescued and exported
+		// from. The refusal stands until that export answers.
+		return r.removeExpiryHold(ctx, v, obs, hold, holdReleaseStaleImage)
 	}
 	if hold.Status.Phase != corev1.PodRunning {
 		obs.homeExpiry = &homeExpiryNote{reason: "HoldPodStarting", message: "the hold pod " + hold.Name + " is starting"}
@@ -720,7 +755,7 @@ func (r *Reconciler) expiryRescueAndExport(ctx context.Context, v *expiryView, o
 		fresh := v.s.DeepCopy()
 		next := fresh.Status.PrivateHistory.Expiry
 		next.Phase, next.RescueStamp = v1alpha1.HomeExpiryExporting, rec.Stamp
-		clearExpiryRefusal(next)
+		clearStepRefusal(next)
 		if err := r.writeExpiry(ctx, v, fresh); err != nil {
 			return ctrl.Result{RequeueAfter: time.Second}, true, nil
 		}
@@ -867,7 +902,7 @@ func (r *Reconciler) recordHomeArchive(ctx context.Context, v *expiryView, hold 
 	e, before := after.record(), v.record()
 	trig, _ := homeExpiryTriggered(after.s, obs.templates, after.now)
 	if e == nil || e.Phase != v1alpha1.HomeExpiryExporting || e.HoldPodUID != before.HoldPodUID || e.RescueStamp != before.RescueStamp ||
-		after.ownHold() == nil || after.newPod() != nil || trig != expiryTriggered || homeExpiryOverride(after.s) == v1alpha1.HomeExpiryHold ||
+		after.ownHold() == nil || after.newPod() != nil || trig != expiryTriggered || homeExpiryHeld(after.s) ||
 		!rescued(after.s) || !rescueRanIn(after.s, hold) || after.s.Status.Rescue.Stamp != e.RescueStamp || expiryRecheck(after) != nil {
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}
@@ -937,7 +972,13 @@ func (r *Reconciler) cancelHomeExpiry(ctx context.Context, v *expiryView, obs *o
 		return ctrl.Result{RequeueAfter: homeExpiryPodWait}, false, nil
 	}
 	fresh := v.s.DeepCopy()
+	// The schema takes a cancel only with an expiryClearedAt newer than the
+	// last one (section 14); a replica whose clock lags the one that cancelled
+	// before still moves it forward.
 	cleared := recordTime(v.now)
+	if last := fresh.Status.PrivateHistory.ExpiryClearedAt; last != nil && !cleared.After(last.Time) {
+		cleared = recordTime(last.Add(time.Second))
+	}
 	fresh.Status.PrivateHistory.Expiry, fresh.Status.PrivateHistory.ExpiryClearedAt = nil, &cleared
 	if err := r.writeExpiry(ctx, v, fresh); err != nil {
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
@@ -953,7 +994,7 @@ func (r *Reconciler) adoptExpiryHold(ctx context.Context, v *expiryView) (ctrl.R
 	fresh := v.s.DeepCopy()
 	next := fresh.Status.PrivateHistory.Expiry
 	next.HoldPodUID = string(v.pod.UID)
-	clearExpiryRefusal(next)
+	clearStepRefusal(next)
 	if err := r.writeExpiry(ctx, v, fresh); err != nil {
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}
@@ -1081,6 +1122,57 @@ func (r *Reconciler) writeExpiry(ctx context.Context, v *expiryView, fresh *v1al
 }
 
 func clearExpiryRefusal(e *v1alpha1.PrivateHomeExpiryStatus) { e.Refusal, e.RefusalAt = "", nil }
+
+// clearStepRefusal clears the refusal in the write of a step that passed,
+// unless the export recorded it: only the export's own answer clears an
+// export refusal (Archived, or another refusal). The new intent, the adoption
+// and the rescue that come before an export do not prove its cause gone, so a
+// remade hold pod does not reset the alert (DESIGN-025 5.4).
+func clearStepRefusal(e *v1alpha1.PrivateHomeExpiryStatus) {
+	if !exportRefusal(e.Refusal) {
+		clearExpiryRefusal(e)
+	}
+}
+
+// exportRefusal reports whether the export step (DESIGN-025 6.3, 6.4) records
+// reason: agentd's export and archive codes, and the shelf.
+func exportRefusal(reason string) bool {
+	switch reason {
+	case protocol.HistoryErrLayoutUnknown, protocol.HistoryErrUnknownEntry, protocol.HistoryErrUnexpectedEntry,
+		protocol.HistoryErrCredentialInTree, protocol.HistoryErrTooLarge, protocol.HistoryErrChanged, expiryExportInvalid,
+		expiryShelfUnavailable, expiryArchiveConflict, expiryArchiveMissing, expiryArchiveMismatch:
+		return true
+	}
+	return false
+}
+
+// sourceChangeRefusal reports whether only a change to the export's source
+// clears reason (DESIGN-025 section 10): a layout, an entry or a bound the
+// export does not take, or a request or rescue directory it refused as
+// invalid. The export runs from the hold pod's agent image.
+func sourceChangeRefusal(reason string) bool {
+	switch reason {
+	case protocol.HistoryErrLayoutUnknown, protocol.HistoryErrUnknownEntry, protocol.HistoryErrUnexpectedEntry,
+		protocol.HistoryErrTooLarge, expiryExportInvalid:
+		return true
+	}
+	return false
+}
+
+// staleHoldImage reports whether the hold pod's agent container runs another
+// image than the templates name now. Templates that do not load answer false:
+// nothing is remade on a guess.
+func staleHoldImage(hold *corev1.Pod, t *templates.Templates) bool {
+	if t == nil || t.Image == "" {
+		return false
+	}
+	for _, c := range hold.Spec.Containers {
+		if c.Name == ContainerName {
+			return c.Image != t.Image
+		}
+	}
+	return false
+}
 
 // refuseHomeExpiry counts a refused step. Unknown changes nothing and asks
 // again in a minute. Any other reason is recorded in the record's refusal by

@@ -24,6 +24,19 @@ reason, `export_invalid`, joins `DevEnvHomeExpiryNeedsOwner` (DESIGN-025 5.4,
 section 10). The CRD changed: haynes-ops needs the CRD copy before an operator
 pin with this source.
 
+Its review (7 findings) changed four things an installer must know. The
+operator takes a history plan of at most 16 MiB and refuses a longer one as
+`export_too_large`; H7 sets `GOMEMLIMIT` near 200 MiB on the operator and runs
+`TestHistoryRelayMeasure` in its container (DESIGN-025 5.4, sections 12 and 15).
+`protocol.CanonicalJSON` streams now, byte-identical to 2.26's, so agentd and
+operator of either release agree on digests. A mistyped override value holds
+the expiry (fail closed), with a new warning alert,
+`DevEnvHomeExpiryOverrideInvalid` (section 9, 10). Two CEL rules keep
+`expiryClearedAt` (never removed or moved back; a cancel needs a newer one), so
+an operator rollback below this release freezes those Sessions' status instead
+of dropping the cancel (section 14). An export refusal that needs a source
+change gets a hold pod of the new agent image at its next re-check (5.4).
+
 ## DESIGN-025 H4 in source: agentd history export and archive — 2026-10-13 UTC
 
 #246 adds `agentd ctl history-export plan|stream` (hold or session pod, private

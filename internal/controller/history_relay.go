@@ -27,16 +27,24 @@ import (
 	"github.com/thaynes43/dev-env/internal/shelf"
 )
 
-// HistoryRelayTimeout bounds the plan, the stream and put pair, and the
-// verify: DESIGN-025 6.4's 15 minutes instead of the shelf's minute.
+// HistoryRelayTimeout is DESIGN-025 6.4's 15 minutes instead of the shelf's
+// minute: one deadline for the plan, the stream and put together, and one of
+// its own for the verify.
 const HistoryRelayTimeout = 15 * time.Minute
 
 // HistoryArchivedBy is what put records as archivedBy in entry.json.
 const HistoryArchivedBy = "dev-env-operator"
 
-// historyPlanOutputMax caps what the plan may print: the content manifest's
-// bound and the plan's block lists, with room to spare.
-const historyPlanOutputMax = 2*protocol.MaxHistoryContentBytes + 1<<20
+// historyPlanOutputMax caps the plan the operator takes. agentd's own bounds
+// allow a plan of about 129 MiB (a 64 MiB content manifest and the block
+// lists), more than the operator can hold in its 256 MiB limit with the plan,
+// its decoded form and content.json at once. TestHistoryRelayMeasure
+// (DESIGN-025 5.4) measured a 16 MiB plan (42,000 files) at about 80 MiB of
+// live heap and 130 MiB of peak RSS above the operator's own, so the operator
+// takes plans up to 16 MiB and refuses a longer one as export_too_large: the
+// HOME stays and DevEnvHomeExpiryNeedsOwner names it, instead of an operator
+// killed for its memory on every leader that tries the export again.
+const historyPlanOutputMax = 16 << 20
 
 // historySmallOutputMax caps put's and verify's answers, and a stream's
 // error on stderr.
@@ -94,8 +102,12 @@ type ExecHistoryRelay struct {
 	Exec  shelf.Executor
 	Shelf *shelf.Shelf
 	Slots *shelf.ExecSlots
-	// Timeout bounds each exec; zero means HistoryRelayTimeout.
+	// Timeout bounds the plan, the stream and put together, and the verify
+	// on its own; zero means HistoryRelayTimeout.
 	Timeout time.Duration
+	// PlanMax caps the plan this operator takes; zero means
+	// historyPlanOutputMax. Tests set it.
+	PlanMax int
 
 	export sync.Mutex
 }
@@ -154,22 +166,9 @@ func (e *ExecHistoryRelay) Archive(ctx context.Context, hold *corev1.Pod, args H
 	}
 	defer release()
 
-	// The plan, in the hold pod. Its digest is the SHA-256 of the canonical
-	// line it printed, which is what stream compares.
-	planCmd := append([]string{"agentd", "ctl", "history-export", "plan"}, args.flags()...)
-	out, errOut := &cappedBuffer{max: historyPlanOutputMax}, &cappedBuffer{max: historySmallOutputMax}
-	runErr := e.Exec.Run(ctx, hold.Namespace, hold.Name, ContainerName, planCmd, nil, out, errOut)
-	var plan protocol.HistoryExportPlan
-	if err := decodeHistoryAnswer(out, runErr, &plan, true); err != nil {
-		return res, holdSide(err, errOut)
-	}
-	line := bytes.TrimSuffix(out.Bytes(), []byte("\n"))
-	sum := sha256.Sum256(line)
-	planSHA := hex.EncodeToString(sum[:])
-	if canonical, err := protocol.CanonicalJSON(plan); err != nil || !bytes.Equal(canonical, line) {
-		return res, fmt.Errorf("%w: the plan is not canonical JSON", errHistoryExec)
-	}
-	data, _, err := content(plan, planSHA)
+	// The plan, in the hold pod, then content.json from it. Nothing of the
+	// plan is kept past relayPlan: only content.json goes on to put.
+	planSHA, data, err := e.relayPlan(ctx, hold, args, content)
 	if err != nil {
 		return res, err
 	}
@@ -199,7 +198,7 @@ func (e *ExecHistoryRelay) Archive(ctx context.Context, hold *corev1.Pod, args H
 		streamDone <- err
 	}()
 	putCmd := []string{"agentd", "ctl", "history-archive", "put", "--archived-by", HistoryArchivedBy}
-	stdin := io.MultiReader(bytes.NewReader(append(append([]byte(nil), data...), '\n')), pr)
+	stdin := io.MultiReader(bytes.NewReader(data), strings.NewReader("\n"), pr)
 	putOut, putErrOut := &cappedBuffer{max: historySmallOutputMax}, &cappedBuffer{max: historySmallOutputMax}
 	putErr := e.Exec.Run(ctx, e.Shelf.Namespace, shelfPod, shelf.Container, putCmd, stdin, putOut, putErrOut)
 	// Which side ended first says which failure is the cause: a stream that
@@ -228,7 +227,7 @@ func (e *ExecHistoryRelay) Archive(ctx context.Context, hold *corev1.Pod, args H
 	if streamRefusal != nil && streamRefusal.Code != protocol.HistoryErrIO {
 		return res, streamRefusal
 	}
-	if err := decodeHistoryAnswer(putOut, putErr, &res, false); err != nil {
+	if err := decodeHistoryAnswer(putOut, putErr, &res); err != nil {
 		var he *protocol.HistoryError
 		switch {
 		case streamFirst && streamRefusal != nil:
@@ -251,6 +250,52 @@ func (e *ExecHistoryRelay) Archive(ctx context.Context, hold *corev1.Pod, args H
 	return res, nil
 }
 
+// relayPlan runs the plan in the hold pod and builds content.json from it.
+// Its digest is the SHA-256 of the canonical line the plan printed, which is
+// what stream compares. A plan longer than historyPlanOutputMax refuses
+// export_too_large. The plan's bytes and its decoded form are dropped on
+// return, before the stream starts.
+func (e *ExecHistoryRelay) relayPlan(ctx context.Context, hold *corev1.Pod, args HistoryExportArgs, content HistoryArchiveContent) (string, []byte, error) {
+	planCmd := append([]string{"agentd", "ctl", "history-export", "plan"}, args.flags()...)
+	out, errOut := &cappedBuffer{max: e.planMax()}, &cappedBuffer{max: historySmallOutputMax}
+	runErr := e.Exec.Run(ctx, hold.Namespace, hold.Name, ContainerName, planCmd, nil, out, errOut)
+	if out.err != nil && runErr == nil {
+		return "", nil, protocol.HistoryErrorf(protocol.HistoryErrTooLarge, "",
+			"the plan is longer than the %d bytes this operator takes (DESIGN-025 5.4)", e.planMax())
+	}
+	if err := historyExecError(out, runErr); err != nil {
+		return "", nil, holdSide(err, errOut)
+	}
+	line := bytes.TrimSuffix(out.Bytes(), []byte("\n"))
+	var plan protocol.HistoryExportPlan
+	if err := json.Unmarshal(line, &plan); err != nil {
+		return "", nil, fmt.Errorf("%w: the plan is not what agentd prints: %w", errHistoryExec, err)
+	}
+	// The plan must be the canonical encoding of what this operator decoded:
+	// that refuses a field the operator does not know, which it would drop
+	// from content.json, as well as any other spelling. CanonicalEqual
+	// compares as it encodes, so no second copy of the plan is built.
+	if eq, err := protocol.CanonicalEqual(plan, line); err != nil || !eq {
+		return "", nil, fmt.Errorf("%w: the plan is not the canonical JSON of a plan this operator knows", errHistoryExec)
+	}
+	sum := sha256.Sum256(line)
+	planSHA := hex.EncodeToString(sum[:])
+	// The plan's bytes are dead from here: the collector may take them while
+	// content.json is built.
+	data, _, err := content(plan, planSHA)
+	if err != nil {
+		return "", nil, err
+	}
+	return planSHA, data, nil
+}
+
+func (e *ExecHistoryRelay) planMax() int {
+	if e.PlanMax > 0 {
+		return e.PlanMax
+	}
+	return historyPlanOutputMax
+}
+
 // Verify implements HistoryRelay.
 func (e *ExecHistoryRelay) Verify(ctx context.Context, sessionUID, contentSHA256 string) (protocol.HistoryVerifyResult, error) {
 	var res protocol.HistoryVerifyResult
@@ -268,7 +313,7 @@ func (e *ExecHistoryRelay) Verify(ctx context.Context, sessionUID, contentSHA256
 	cmd := []string{"agentd", "ctl", "history-archive", "verify", "--session-uid", sessionUID, "--content-sha256", contentSHA256}
 	out, errOut := &cappedBuffer{max: historySmallOutputMax}, &cappedBuffer{max: historySmallOutputMax}
 	runErr := e.Exec.Run(ctx, e.Shelf.Namespace, shelfPod, shelf.Container, cmd, nil, out, errOut)
-	if err := decodeHistoryAnswer(out, runErr, &res, false); err != nil {
+	if err := decodeHistoryAnswer(out, runErr, &res); err != nil {
 		var he *protocol.HistoryError
 		if errors.As(err, &he) {
 			return res, he
@@ -280,9 +325,20 @@ func (e *ExecHistoryRelay) Verify(ctx context.Context, sessionUID, contentSHA256
 
 // decodeHistoryAnswer reads an agentd history command's answer: on exit 0 the
 // result, on exit 1 the one JSON error object. Anything else is an exec
-// failure. strict refuses a field the operator does not know: the plan's
-// fields go into content.json, so one the operator would drop must stop it.
-func decodeHistoryAnswer(out *cappedBuffer, runErr error, v any, strict bool) error {
+// failure.
+func decodeHistoryAnswer(out *cappedBuffer, runErr error, v any) error {
+	if err := historyExecError(out, runErr); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(out.Bytes(), v); err != nil {
+		return fmt.Errorf("%w: the answer is not what agentd prints: %w", errHistoryExec, err)
+	}
+	return nil
+}
+
+// historyExecError is an agentd history command's failure: its one JSON error
+// object on exit 1, or an exec failure, or nil when it answered.
+func historyExecError(out *cappedBuffer, runErr error) error {
 	if out.err != nil {
 		return fmt.Errorf("%w: the answer is longer than %d bytes", errHistoryExec, out.max)
 	}
@@ -293,13 +349,6 @@ func decodeHistoryAnswer(out *cappedBuffer, runErr error, v any, strict bool) er
 			return &he
 		}
 		return fmt.Errorf("%w: %w", errHistoryExec, runErr)
-	}
-	dec := json.NewDecoder(bytes.NewReader(out.Bytes()))
-	if strict {
-		dec.DisallowUnknownFields()
-	}
-	if err := dec.Decode(v); err != nil {
-		return fmt.Errorf("%w: the answer is not what agentd prints: %w", errHistoryExec, err)
 	}
 	return nil
 }

@@ -1301,7 +1301,10 @@ spec:
                   expiryClearedAt:
                     description: |-
                       ExpiryClearedAt is when the last expiry record was cancelled (DESIGN-025
-                      5.3). A record made after it starts its own grace.
+                      5.3). A record made after it starts its own grace. It is never removed
+                      and never moves back, and a cancel must set a newer one in the write
+                      that removes the record, so an operator that does not know these
+                      fields cannot drop them, and with them the cancel (section 14).
                     format: date-time
                     type: string
                   homeClaim:
@@ -1465,6 +1468,13 @@ spec:
                 - message: the HOME expiry record cannot be removed once Deleting
                   rule: '!has(oldSelf.expiry) || has(self.expiry) || !(oldSelf.expiry.phase
                     in [''Deleting'', ''Expired''])'
+                - message: expiryClearedAt cannot be removed or move back
+                  rule: '!has(oldSelf.expiryClearedAt) || (has(self.expiryClearedAt)
+                    && self.expiryClearedAt >= oldSelf.expiryClearedAt)'
+                - message: removing the HOME expiry record (a cancel) records a newer
+                    expiryClearedAt in the same write
+                  rule: '!has(oldSelf.expiry) || has(self.expiry) || (has(self.expiryClearedAt)
+                    && (!has(oldSelf.expiryClearedAt) || self.expiryClearedAt > oldSelf.expiryClearedAt))'
               remoteControl:
                 description: |-
                   RemoteControl is the session's Remote Control entry, for remote mode

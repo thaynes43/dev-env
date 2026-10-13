@@ -10,6 +10,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -242,15 +243,38 @@ func TestHomeExpiryResumeAndArchiveDeadline(t *testing.T) {
 		t.Fatalf("the record after a cancel is %+v; want 30 days from %s", e2, again)
 	}
 
-	// archiveAfter lengthened past now: no longer triggered, cancelled.
+	// archiveAfter lengthened past now: no longer triggered, cancelled. This
+	// cancel runs on a replica whose clock lags the first cancel by an hour:
+	// expiryClearedAt still moves forward, as the schema asks (section 14).
+	first := s.Status.PrivateHistory.ExpiryClearedAt.DeepCopy()
 	f.update(t, func(s *v1alpha1.AgentSession) {
 		s.Spec.Lifecycle = &v1alpha1.Lifecycle{ArchiveAfter: &metav1.Duration{Duration: 1000 * time.Hour}}
 	})
+	f.at(first.Add(-time.Hour))
 	f.reconcile(t, 3)
-	if got := f.expiry(t); got != nil {
-		t.Fatalf("a deadline that moved past now did not cancel: %+v", got)
+	h := f.session(t).Status.PrivateHistory
+	if h.Expiry != nil {
+		t.Fatalf("a deadline that moved past now did not cancel: %+v", h.Expiry)
+	}
+	if h.ExpiryClearedAt == nil || !h.ExpiryClearedAt.After(first.Time) {
+		t.Fatalf("expiryClearedAt %v after a cancel on a lagging clock; want later than %v", h.ExpiryClearedAt, first)
 	}
 	f.claimIntact(t)
+
+	// Triggered again on that lagging clock: the new grace starts no earlier
+	// than the cancel.
+	cleared := h.ExpiryClearedAt.DeepCopy()
+	f.update(t, func(s *v1alpha1.AgentSession) {
+		s.Spec.Lifecycle = &v1alpha1.Lifecycle{ArchiveAfter: &metav1.Duration{Duration: time.Hour}}
+	})
+	f.updateStatus(t, func(st *v1alpha1.AgentSessionStatus) {
+		at := metav1.NewTime(first.Add(-3 * time.Hour))
+		st.SuspendedAt = &at
+	})
+	f.reconcile(t, 3)
+	if e3 := f.expiry(t); e3 == nil || !e3.GraceStart.Equal(cleared) {
+		t.Fatalf("the record on a lagging clock is %+v; want its grace from the cancel at %v", e3, cleared)
+	}
 }
 
 // T8: a new Pod cancels. A replaced executor at Waiting, a hold-labelled Pod
@@ -430,16 +454,49 @@ func TestHomeExpiryOwnerOverrides(t *testing.T) {
 		}
 	})
 
-	t.Run("any other value is counted and ignored", func(t *testing.T) {
+	// Section 9, fail closed: a mistyped hold holds the expiry, as it holds
+	// the stop request (4.1), so the ended executor, the rescue and the export
+	// all wait. It is counted (override_invalid) once per 15 minutes, and the
+	// condition names it; corrected to release-now, the expiry goes on.
+	t.Run("any other value holds, and is counted", func(t *testing.T) {
 		f := newExpiryFixture(t, nil)
 		setOverride(t, f, "Hold")
 		f.at(f.due().Add(time.Minute))
-		f.reconcile(t, 3)
-		if e := f.expiry(t); e == nil || e.Phase != v1alpha1.HomeExpiryRescuing {
-			t.Fatalf("an invalid override held the expiry: %+v", e)
+		res := ctrl.Result{}
+		r := f.reconciler()
+		for range 3 {
+			var err error
+			if res, err = r.Reconcile(context.Background(), reqFor(f.s)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if e := f.expiry(t); e == nil || e.Phase != v1alpha1.HomeExpiryWaiting {
+			t.Fatalf("an invalid override let the expiry move on: %+v", e)
+		}
+		if p := f.named(t); p == nil || p.UID != f.pod.UID {
+			t.Fatal("the ended executor went under an invalid override")
 		}
 		if n := refusedCount(f.counters, expiryOverrideInvalid); n != 1 {
 			t.Fatalf("override_invalid counted %v times, want once per 15 minutes", n)
+		}
+		if c := f.condition(t, ConditionHomeExpiry); c == nil || c.Reason != "Held" || !strings.Contains(c.Message, `"Hold"`) {
+			t.Fatalf("HomeExpiry condition %+v; want Held, naming the value", c)
+		}
+		if res.RequeueAfter <= 0 || res.RequeueAfter > homeExpiryRefusalRetry {
+			t.Fatalf("requeue %v; want a look again within 15 minutes, so the count keeps showing it", res.RequeueAfter)
+		}
+		if g := gaugeValues(t, &HomeExpiryCollector{Reader: f.c, Namespace: f.s.Namespace, Now: func() time.Time { return *f.clock }}); g[MetricHomeExpirySessions+"/held"] != 1 {
+			t.Fatalf("the held gauge does not count it: %v", g)
+		}
+		f.at(f.clock.Add(16 * time.Minute))
+		f.reconcile(t, 2)
+		if n := refusedCount(f.counters, expiryOverrideInvalid); n != 2 {
+			t.Fatalf("override_invalid counted %v times after 15 minutes, want twice", n)
+		}
+		setOverride(t, f, v1alpha1.HomeExpiryReleaseNow)
+		f.reconcile(t, 2)
+		if e := f.expiry(t); e.Phase != v1alpha1.HomeExpiryRescuing {
+			t.Fatalf("corrected to release-now, still %s", e.Phase)
 		}
 	})
 }
@@ -828,22 +885,37 @@ func TestHomeExpiryRefusalClearsWhenItsCauseIsFixed(t *testing.T) {
 // Section 14 and default off: with archive off, nothing of the expiry runs,
 // and the archive timer of a Suspended private Session does not start while
 // its ended executor's Pod stands; with archive on, it does (T7 relies on it).
+// A canary original never enters the expiry, so its timer keeps today's rule
+// with archive on too: it starts only once the Pod is gone.
 func TestHomeExpiryTimerStartOnlyWithTheArchiveOn(t *testing.T) {
-	for _, on := range []bool{false, true} {
-		f := newExpiryFixture(t, func(tf *terminalFixture) {
-			tf.s.DeletionTimestamp = nil
-			tf.s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
-		})
-		r := f.reconciler()
-		r.HomeHistoryArchive = on
-		for range 3 {
-			if _, err := r.Reconcile(context.Background(), reqFor(f.s)); err != nil {
-				t.Fatal(err)
+	for _, tc := range []struct {
+		name        string
+		on, canary  bool
+		wantStarted bool
+	}{
+		{name: "archive off", on: false, wantStarted: false},
+		{name: "archive on", on: true, wantStarted: true},
+		{name: "archive on, canary original", on: true, canary: true, wantStarted: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newExpiryFixture(t, func(tf *terminalFixture) {
+				tf.s.DeletionTimestamp = nil
+				tf.s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+				if tc.canary {
+					tf.s.Spec.ProjectCanary = &v1alpha1.ProjectCanaryBinding{Version: 1, ID: "canary-a"}
+				}
+			})
+			r := f.reconciler()
+			r.HomeHistoryArchive = tc.on
+			for range 3 {
+				if _, err := r.Reconcile(context.Background(), reqFor(f.s)); err != nil {
+					t.Fatal(err)
+				}
 			}
-		}
-		if got := f.session(t).Status.SuspendedAt != nil; got != on {
-			t.Fatalf("archive %v: suspendedAt set %v", on, got)
-		}
+			if got := f.session(t).Status.SuspendedAt != nil; got != tc.wantStarted {
+				t.Fatalf("suspendedAt set %v, want %v", got, tc.wantStarted)
+			}
+		})
 	}
 }
 

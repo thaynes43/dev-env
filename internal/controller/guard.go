@@ -274,6 +274,10 @@ const (
 	holdReleaseArchiveOff expiryHoldRelease = "the history archive is turned off"
 	holdReleaseArchived   expiryHoldRelease = "the history is archived"
 	holdReleaseEnded      expiryHoldRelease = "the hold pod ended"
+	// holdReleaseStaleImage: the export refused for a reason only a source
+	// change clears, and the templates name another agent image than the hold
+	// pod runs; a hold pod of the new image re-checks it.
+	holdReleaseStaleImage expiryHoldRelease = "the export needs a source change and the hold pod runs an agent image the templates no longer name"
 )
 
 // expiryHoldEvidence is what the HOME expiry's hold pod guard judges a
@@ -298,9 +302,12 @@ type expiryHoldEvidence struct {
 // holdPodUID, its three annotations match the record, and the expiry no longer
 // needs it, which the guard checks from the evidence: a cancel needs a view
 // that shows the Session no longer triggered or a new Pod holding the HOME;
-// archive off needs the archive flag off; an owner hold needs the hold
-// annotation; Archived needs the record at Archived or later; ended needs the
-// hold pod in a terminal phase. podRemovalAllowed refuses every Pod of a
+// archive off needs the archive flag off; an owner hold needs an override
+// that holds (any value but release-now, homeExpiryHeld); Archived needs the
+// record at Archived or later; ended needs the hold pod in a terminal phase;
+// a stale image needs the record before Archived with a refusal only a
+// source change clears, and loaded templates that name another agent image
+// than the hold pod runs. podRemovalAllowed refuses every Pod of a
 // private Session, and holdRemovalAllowed would keep a Running, unrescued hold
 // pod, so neither can remove it.
 func expiryHoldRemovalAllowed(pod *corev1.Pod, ev expiryHoldEvidence) error {
@@ -330,7 +337,7 @@ func expiryHoldRemovalAllowed(pod *corev1.Pod, ev expiryHoldEvidence) error {
 			return nil
 		}
 	case holdReleaseOwnerHold:
-		if homeExpiryOverride(s) == v1alpha1.HomeExpiryHold {
+		if homeExpiryHeld(s) {
 			return nil
 		}
 	case holdReleaseArchived:
@@ -339,6 +346,10 @@ func expiryHoldRemovalAllowed(pod *corev1.Pod, ev expiryHoldEvidence) error {
 		}
 	case holdReleaseEnded:
 		if podEnded(pod) {
+			return nil
+		}
+	case holdReleaseStaleImage:
+		if !expiryPhaseAtLeast(h.Expiry.Phase, v1alpha1.HomeExpiryArchived) && sourceChangeRefusal(h.Expiry.Refusal) && staleHoldImage(pod, ev.templates) {
 			return nil
 		}
 	}

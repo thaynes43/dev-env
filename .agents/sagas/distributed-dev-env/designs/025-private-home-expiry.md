@@ -4,11 +4,11 @@
   ([ADR-006](../adrs/006-private-home-expiry-corrections.md), D-87). H1, the
   terminal record (#236, section 3.6), shipped in 2.25.0; H2 installed it with
   the record on, 2026-10-12 (haynes-ops #3852 and #3854). H3, the stop
-  request for Reaping Sessions (section 4.1), is in source in #244, default
-  off. H4, agentd's history export and archive, is in source in #246 (section
-  7.1); it reaches the cluster with the next agent image. H5, the operator's
-  expiry up to `Archived` (section 5.4), is in source in #251, default off. H6
-  to H10 have no source yet
+  request for Reaping Sessions (section 4.1, #244), and H4, agentd's history
+  export and archive (section 7.1, #246), are in release 2.26.0, default off.
+  H5, the operator's expiry up to `Archived` (section 5.4), is in source in
+  #251, default off, with its review findings handled the same day. H6 to H10
+  have no source yet
 - **Decision:** [ADR-005](../adrs/005-private-home-expiry.md) (Q-31, Tom,
   2026-10-12: "Archive, then delete (Recommended)"), amended by
   [ADR-006](../adrs/006-private-home-expiry-corrections.md)
@@ -384,9 +384,9 @@ section above leaves open:
   stopped, because no deadline can be computed for it.
 - **The hold.** Any value of `dev-env.haynesops.com/home-expiry` except
   `release-now` blocks the stop, a mistyped `hold` included. This fails closed.
-  Section 9 says the expiry ignores such a value; for the stop it counts as a
-  hold. `release-now` skips only the expiry's grace, so it does not block the
-  stop.
+  Since the review of #251 the expiry reads such a value as a hold too
+  (section 9). `release-now` skips only the expiry's grace, so it does not block
+  the stop.
 - **The intent.** `stopIntentConfirmed` reads the Session uncached and checks
   the gate and the hold again. It reads the Pod uncached. It then updates the
   status with the stored intent, or a new one at the operator's clock,
@@ -492,7 +492,10 @@ loses it (5.3).
 Schema rules: `executorUID` and `homeUID` match their sources; `phase` moves only
 forward in the order above; `archive` never changes once set; the record may be
 removed only while its phase is before `Deleting`; once `Deleting` it can only
-become `Expired`, and once `Expired` it never changes.
+become `Expired`, and once `Expired` it never changes. `expiryClearedAt` is never
+removed and never moves back, and a write that removes the record must set an
+`expiryClearedAt` newer than the one before (added after the review of #251), so
+an operator that does not know these fields cannot drop them (section 14).
 
 A condition, `HomeExpiry`, reports the phase or the refusal and the due time.
 The API's session view does not change; `kubectl`, the condition and the
@@ -600,7 +603,8 @@ sections above leave open:
   uncached reads.
 - **The order of the checks.** A hold pod awaiting adoption is adopted; then a
   new Pod cancels; then a Session no longer triggered cancels; then an owner hold
-  stops everything else (and removes the hold pod); then a trigger that is
+  (any value but `release-now`, section 9) stops everything else (and removes
+  the hold pod); then a trigger that is
   Unknown changes nothing; then a refused step waits for its 15 minutes; then the
   common re-check; then the step of the phase. A step that writes, deletes,
   creates or runs a rescue ends the reconcile, and the next one judges again
@@ -629,6 +633,17 @@ sections above leave open:
   valid rescue that ran in the current hold pod: a hold pod made again after an
   owner hold or archive off and on is rescued again first, and `rescueStamp`
   follows it.
+- **A new agent image.** The hold pod keeps the image it was made with, and the
+  export runs from it. Five refusals clear only with a change to the export's
+  source: `layout_unknown`, `unknown_entry`, `unexpected_entry`,
+  `export_too_large` and `export_invalid`. When the 15-minute re-check finds one
+  of them recorded and the templates name another agent image than the hold
+  pod's, the hold pod is removed (`expiryHoldRemovalAllowed`, stale image), and
+  one of the new image is made, rescued and exported from. With the same image
+  the re-check exports again from the same hold pod, as for any refusal.
+  Templates that do not load remake nothing. Before this (review of #251) the
+  refusal and its alert stayed until someone toggled the owner hold or the
+  archive flag, which no document named.
 - **The export's flags** come from the terminal record (`claudeConfigDir`,
   `codexHome`). `--rescue` is given only for a `Verified` rescue: the directory of
   its `lastBundle`, `rescue/<session>/<stamp>[-N]/manifest.json`. A `Verified`
@@ -645,7 +660,8 @@ sections above leave open:
   one of two shelf exec slots per replica (`shelf.ExecSlots`, DESIGN-024 section
   5), for the plan, the stream and put together, and again for the verify. A
   busy relay is no refusal: the step runs again in a minute, and a recorded
-  refusal stands. Each exec has 6.4's 15 minutes. The stream is piped into put
+  refusal stands. The plan, the stream and put share one 15-minute deadline
+  (6.4's), and the verify has 15 minutes of its own. The stream is piped into put
   through an `io.Pipe`, which holds no bytes, and has a context of its own. The
   side that ended first names the cause: a stream that ended first with a
   refusal other than `io_error` is that refusal, and one that broke first made
@@ -656,6 +672,26 @@ sections above leave open:
   same hold pod UID, or nothing is recorded and the next reconcile judges the
   new Pod (an entry put stored stays, unreferenced, as every entry does). Then
   `verify` runs in the shelf, under the archive's shared `.shelf.lock`.
+- **The operator's memory.** agentd's bounds allow a plan of about 129 MiB (a
+  64 MiB content manifest and the block lists). The operator runs with a
+  256 MiB limit, and holds the plan, its decoded form and `content.json` at
+  once, so it takes plans of at most 16 MiB (`historyPlanOutputMax`) and
+  refuses a longer one as `export_too_large`, a recorded refusal that
+  `DevEnvHomeExpiryNeedsOwner` names. Without that cap, a plan inside H4's
+  bounds would have killed the operator for its memory, and every new leader
+  would have tried the export again (review of #251). The relay also builds
+  no second copy of the plan: it decodes it with `json.Unmarshal` and checks
+  it with `protocol.CanonicalEqual`, which compares the canonical bytes with
+  the plan's line as it writes them. `protocol.CanonicalJSON` now rewrites a
+  value's compact encoding instead of building a tree of generic maps; its
+  bytes are the same as before, which `TestCanonicalJSONMatchesTheGenericEncoding`
+  and its fuzz seeds hold against the old encoding, so an operator and an
+  agentd of different releases agree on every digest. `TestHistoryRelayMeasure`
+  (skipped unless `DEV_ENV_HISTORY_RELAY_MEASURE_FILES` is set) measured a
+  16 MiB plan of 42,000 files at about 80 MiB of live heap and 130 MiB of peak
+  RSS above the operator's own (about 25 MiB on 2026-10-13); a 15.6 MiB plan of
+  12,000 files with 1,000-byte paths at 124 MiB. H7 repeats it in the operator's
+  container (section 15).
 - **Archived** is written after an uncached re-read finds the record still at
   `Exporting` with the same hold pod and rescue, and the Session still eligible,
   triggered and unheld; otherwise the next reconcile exports again, and put
@@ -672,7 +708,11 @@ sections above leave open:
   checks and step pass clears the refusal: by the step's own write, or, when the
   step has nothing to write (it waits for the grace, a starting hold pod or a
   rescue retry, or it is `Archived`), by a confirmed write of its own. So a fixed
-  cause stops the alert at the next re-check.
+  cause stops the alert at the next re-check. A refusal the export recorded
+  (agentd's codes, `export_invalid`, `shelf_unavailable` and the three archive
+  reasons) is the export's to clear, by `Archived` or another refusal: the new
+  intent, the adoption and the rescue that come before a new export keep it, so
+  a hold pod made again does not resolve the alert and fire it once more.
   agentd's codes map as: the export's six keep their names, `invalid` from either
   side is `export_invalid` (a new reason, section 10), `conflict` is
   `archive_conflict`, `corrupt` is `archive_mismatch`, `not_found` is
@@ -692,18 +732,24 @@ sections above leave open:
   takes the reconcile's uncached reads: a cancel needs them to show the Session
   no longer triggered or a new Pod holding the HOME, and archive off needs the
   flag off, besides the owner hold, `Archived` and an ended hold pod it checked
-  before.
+  before. A stale image needs the record before `Archived` with one of the five
+  refusals above, and loaded templates that name another agent image than the
+  hold pod's agent container runs.
 - **A cancel** removes the expiry's own hold pod first; the next reconcile's
   uncached reads confirm it gone while the record still names it, and only then
   is the record removed and `expiryClearedAt` set. A new Pod also sets today's
   PreservationUnknown for that reconcile, and the record does not start again
-  while the Pod is there.
+  while the Pod is there. `expiryClearedAt` only moves forward, as the schema
+  asks: a replica whose clock is not past the last cancel sets it a second after
+  that one. A record made after a cancel starts its grace no earlier than the
+  cancel, whatever the replica's clock says.
 - **Archive off** adopts a hold pod awaiting adoption and removes the expiry's
   hold pod; the record stays in its phase.
 - **The archive timer's start.** With `--enable-home-history-archive` on, a
   private Session's recorded executor that ended, with its terminal record
   confirmed, counts as no Pod of the Session's own for `status.suspendedAt`
-  (D-62): it never runs again. So a Suspended Session whose executor was evicted
+  (D-62): it never runs again. Canary originals never enter the expiry, so
+  theirs keeps today's rule. So a Suspended Session whose executor was evicted
   is triggered at its deadline while the ended Pod object stands. With the flag
   off nothing changes: the timer starts only once the Pod is gone, as before.
   `archiveDue` and the trigger share one deadline function, `archiveDeadline`.
@@ -733,15 +779,30 @@ export and archive behind an in-process exec,
 `TestHomeExpiryExportFromAReplacedHoldPodIsNotRecorded`,
 `TestHomeExpiryParkedRecordsSkipTheUncachedReads`,
 `TestHomeExpiryPodGuardTable`, `TestHomeExpiryHoldGuardTable`,
-`TestHomeExpiryGauges` and `TestExecHistoryRelayAnswers`; on a real API server,
+`TestHomeExpiryGauges` and `TestExecHistoryRelayAnswers` (the plan cap among
+its cases); after the review of #251, in `private_expiry_paths_test.go`,
+`TestHomeExpiryArchivesAVerifiedRescueWithItsGitBundles` (a `Verified` rescue's
+bundles archived beside the history, and `export_invalid` for a bundle
+directory that is not the rescue's own),
+`TestHomeExpiryHoldDuringTheExportKeepsArchivedAndRescuesTheNewHoldPod`,
+`TestHomeExpiryVerifyThatDoesNotMatchRefuses` and
+`TestHomeExpiryRemakesTheHoldPodForANewImage`; on a real API server,
 `TestHomeExpiryOnTheAPIServer` (T1 to `Archived`, T5, T12 with a fresh operator
-for every step, T13 with two operators at once, and the schema) and
+for every step, T13 with two operators at once, two cancels on one clock, and
+the schema) and
 `TestHomeExpiryOverrideGuardIsOwnerOnly` (T9's admission part, with the
 reference policy in `testdata/haynes-ops/home-expiry-guard.yaml`); the guard
 scans of section 11; `TestPrivateHomeExpiryRecordIsBoundAndForwardOnly` in
 `api/v1alpha1`; `TestHomeHistoryArchiveFlagIsExplicitDefaultOffAndNeedsTheRecord`
-in `cmd/dev-env-operator` (T17's flag part); and `TestExecSlotsLimitAndRelease`
-in `internal/shelf`.
+in `cmd/dev-env-operator` (T17's flag part); `TestExecSlotsLimitAndRelease`
+in `internal/shelf`; `TestCanonicalJSONMatchesTheGenericEncoding` and
+`FuzzCanonicalJSONMatchesTheGenericEncoding` in `internal/agentd/protocol`; and
+the measurement `TestHistoryRelayMeasure`. Mutation probes of the review (one
+test run each) now fail a test: the Git rescue's flag dropped, the hold re-check
+before `Archived` removed, an export on an earlier hold pod's rescue, a verify
+answer ignored; and each new rule broken: the remake for a new image, its
+guard's refusal check, the refusal kept through the remake, the mistyped hold,
+the cancel time that moves forward, and the canary's archive timer.
 
 ## 6. Step details
 
@@ -788,7 +849,9 @@ Git credential helper. Six additions:
   Session controls it, its UID is the record's `holdPodUID`, its three
   annotations match the record, and the expiry no longer needs it: the record is
   being cancelled (5.3), an owner hold is set, archive is off (section 14), the
-  record is `Archived` or later, or the hold pod ended. The delete carries the
+  record is `Archived` or later, the hold pod ended, or (since the review of
+  #251) the export refused for a reason only a source change clears and the
+  templates now name another agent image (5.4). The delete carries the
   Pod's UID and resourceVersion as preconditions. A Pod awaiting adoption is
   adopted first, then judged.
 - **The binding.** A Pod names its claim, not the claim's UID. The operator
@@ -1348,8 +1411,14 @@ One annotation on the AgentSession, `dev-env.haynesops.com/home-expiry`:
   The operator records `releaseNowAt`. The annotation is a standing instruction
   while it is there: a record made after a cancel sees it too.
 
-Any other value is ignored and counted (`override_invalid`) by the expiry. The
-stop request reads any value but `release-now` as a hold (4.1, fail closed).
+Any other value holds, for the expiry as for the stop request (4.1): it fails
+closed, so a mistyped `hold` never lets a step through. The expiry counts it
+(`override_invalid`, once per 15 minutes per Session while it is there), the
+`HomeExpiry` condition says `Held` and names the value, and the gauge counts the
+Session as `held`. (Corrected after the review of #251, 2026-10-13: this section
+used to say the expiry ignores such a value, which failed open: the ended
+executor would go, and the rescue and archive with it, while the stop request
+held.)
 
 **Owner-only, by admission.** `dev-env-identity-guard` already refuses every
 `dev-agents` identity any write to `dev-env.haynesops.com` objects. A new small
@@ -1400,6 +1469,8 @@ Rescue failures keep their own condition and page (D-57).
   for: 1h
 - alert: DevEnvPrivateExecutorEndedUnrecorded   # warning
   expr: increase(dev_env_private_executor_terminal_total{result="missed"}[1h]) > 0
+- alert: DevEnvHomeExpiryOverrideInvalid   # warning
+  expr: increase(dev_env_home_expiry_refused_total{reason="override_invalid"}[1h]) > 0
 ```
 
 `DevEnvHomeExpiryNeedsOwner` names reasons that never clear on their own. It
@@ -1407,7 +1478,17 @@ reads the gauge of Sessions refused right now, so it keeps firing until the
 refusal is gone, whatever the retry cadence (5.2). Its description says: the HOME is kept; find the Session with `kubectl get
 agentsessions` and its `HomeExpiry` condition; a credential in the tree or an
 unknown entry needs a source change or Tom's decision, never a manual delete by
-an agent; an automated responder reports and changes nothing.
+an agent; an automated responder reports and changes nothing. For
+`layout_unknown`, `unknown_entry`, `unexpected_entry`, `export_too_large` and
+`export_invalid`, the source change is an agent image whose export takes the
+HOME (or, for the operator's own 16 MiB plan cap, an operator release): once the
+templates name the new agent image, the next 15-minute re-check makes a hold
+pod of it and exports again (5.4); nothing needs toggling.
+`DevEnvHomeExpiryOverrideInvalid` is a warning: a value of the owner override
+that is neither `hold` nor `release-now` holds the expiry (fail closed,
+section 9), so nothing is lost, but the owner meant something else. It counts
+once per 15 minutes per Session while the value is there, so it keeps firing
+until the value is corrected or removed. (Added after the review of #251.)
 `DevEnvPrivateExecutorEndedUnrecorded` is a warning: nothing is at risk, the HOME
 is simply kept for good. Because `missed` counts only the marker's write, it
 fires once per Session, not again after each operator restart.
@@ -1501,6 +1582,11 @@ own reviewed PR:
      claim is mounted. It covers DESIGN-024's archive too, so whichever of
      DESIGN-024's R5 and this unit ships first ships the guard;
    - the alerts of section 10 except stalled;
+   - the operator's memory: `GOMEMLIMIT` at about 200 MiB on the operator's
+     container (its limit is 256 MiB), so the collector works harder before the
+     limit than the default doubling of the heap allows; and
+     `TestHistoryRelayMeasure` run once in a Job with the operator's limits at
+     the 16 MiB plan cap (5.4), cold, before the archive flag;
    - after the claim binds: Tom sets the PV to `Retain`;
    - just before the stop flag, a read-only check: list the Reaping private
      Sessions (no `spec.workspace`, no `spec.projectCanary`) whose recorded
@@ -1550,10 +1636,17 @@ read.
 - **Reads off:** archived histories answer 404, as if none existed. The archive
   is unchanged; turning reads back on restores them.
 - **Operator below the release:** its Go types lack the new fields, so its status
-  writes for a Session with a terminal or expiry record drop them, and the schema
-  refuses those writes. Those Sessions' status then freezes, and nothing is
-  deleted. Once one record exists, do not roll the operator back below the
-  release that writes it (ADR-005 C-38).
+  writes for a Session with a terminal, stop or expiry record drop them, and the
+  schema refuses those writes. Those Sessions' status then freezes, and nothing
+  is deleted. Once one record exists, do not roll the operator back below the
+  release that writes it (ADR-005 C-38). For the expiry record this holds only
+  since the review of #251: a record may be removed before `Deleting` (a
+  cancel), so H5 as first written let an older operator (2.25, 2.26) drop it and
+  `expiryClearedAt` silently; a Session triggered again after a roll forward
+  would then have taken its grace from the old terminal observation, against
+  ADR-005's new 30 days. The two rules of 5.1 on `expiryClearedAt` close that:
+  it is never removed or moved back, and removing the record needs a newer one
+  in the same write, which an older operator cannot write.
 - **Removing the override policy** would let ServiceAccounts set the override.
   Do not; turn the delete flag off instead.
 - **The PVC** is never pruned, and its PV is `Retain`.
@@ -1659,9 +1752,11 @@ status itself.
 - **T16, the schema.** The terminal record cannot change, be removed, or name
   another UID; it and `executorMissed` never coexist; `stopRequest` cannot change
   or be removed; the expiry phase moves only forward; the archive digest cannot
-  change; the expiry record can be removed before `Deleting` (a cancel) but not
-  from `Deleting` on. An update that drops the terminal record is always
-  refused. A reconcile that rebuilds `lastExecutor` (a new node name or
+  change; the expiry record can be removed before `Deleting` (a cancel), and
+  only with a newer `expiryClearedAt` in the same write, but not from `Deleting`
+  on; `expiryClearedAt` is never removed and never moves back, so a write that
+  drops the record and it, as an older operator's does, is refused. An update
+  that drops the terminal record is always refused. A reconcile that rebuilds `lastExecutor` (a new node name or
   generation) keeps `executorTerminal` unchanged, and the status write
   succeeds.
 - **T17, the flags.** Delete off: Sessions stop at `Archived`. Delete on without
@@ -1676,6 +1771,23 @@ a missing one, a changed one); size bounds; SQLite triples; links not followed;
 **Measured in H4:** the peak memory and CPU time of a 2 GiB export in a container
 with the hold pod's S limits, and of `put` and `verify` with the shelf's limits.
 H7 raises the shelf's memory limit if the measurement needs it.
+
+**Measured in H5 (after the review of #251):** the operator's memory for one
+relay, `TestHistoryRelayMeasure`, in the dev-env pod under `nice -n 19` and
+`GOMAXPROCS=2`, with the default `GOGC` and no memory limit:
+
+| Plan | Files | content.json | Peak heap above the start | Peak RSS above the start |
+|---|---|---|---|---|
+| 7.5 MiB | 20,000 (120-byte paths) | 6.0 MiB | 70 MiB | 74 MiB |
+| 15.8 MiB | 42,000 (120-byte paths) | 12.7 MiB | 110 MiB | 130 MiB |
+| 15.6 MiB | 12,000 (1,000-byte paths) | 14.7 MiB | 121 MiB | 124 MiB |
+| 22.6 MiB | 60,000 (120-byte paths) | 18.1 MiB | 194 MiB | 210 MiB |
+
+The heap column counts objects not yet swept, so it includes garbage. With
+`GOMEMLIMIT=40MiB`, which makes the collector run as often as it can, the
+15.8 MiB plan peaked at 81 MiB of heap and 77 MiB of RSS: about its live set. Before the streaming canonical encoder, the 22.6 MiB plan
+peaked at 355 MiB of RSS above the start. Hence the 16 MiB cap, and H7's
+`GOMEMLIMIT` and in-container run (section 12).
 
 H4's measurement (2026-10-13). `TestHistoryExportMeasure` is skipped unless
 `DEV_ENV_HISTORY_MEASURE_MIB` is set. It ran in the dev-env pod under

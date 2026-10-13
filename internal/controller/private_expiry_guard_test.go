@@ -93,6 +93,18 @@ func TestHomeExpiryPodGuardTable(t *testing.T) {
 }
 
 func TestHomeExpiryHoldGuardTable(t *testing.T) {
+	current := mustTemplates(t).Image
+	// staleAfter is a hold pod of an older agent image, after the export
+	// refused with reason.
+	staleAfter := func(reason, image string) func(*v1alpha1.AgentSession, *corev1.Pod) {
+		return func(s *v1alpha1.AgentSession, p *corev1.Pod) {
+			at := metav1.Now()
+			if reason != "" {
+				s.Status.PrivateHistory.Expiry.Refusal, s.Status.PrivateHistory.Expiry.RefusalAt = reason, &at
+			}
+			p.Spec.Containers = []corev1.Container{{Name: ContainerName, Image: image}}
+		}
+	}
 	for _, tc := range []struct {
 		name  string
 		phase string
@@ -119,6 +131,16 @@ func TestHomeExpiryHoldGuardTable(t *testing.T) {
 		{"an owner hold claimed with release-now", v1alpha1.HomeExpiryRescuing, holdReleaseOwnerHold, func(s *v1alpha1.AgentSession, _ *corev1.Pod) {
 			s.Annotations = map[string]string{v1alpha1.AnnotationHomeExpiry: v1alpha1.HomeExpiryReleaseNow}
 		}, false},
+		{"an owner hold mistyped (fail closed)", v1alpha1.HomeExpiryRescuing, holdReleaseOwnerHold, func(s *v1alpha1.AgentSession, _ *corev1.Pod) {
+			s.Annotations = map[string]string{v1alpha1.AnnotationHomeExpiry: "Hold"}
+		}, true},
+		{"a stale image after unknown_entry", v1alpha1.HomeExpiryExporting, holdReleaseStaleImage, staleAfter(protocol.HistoryErrUnknownEntry, "synthetic.invalid/agent:old"), true},
+		{"a stale image after export_invalid", v1alpha1.HomeExpiryExporting, holdReleaseStaleImage, staleAfter(expiryExportInvalid, "synthetic.invalid/agent:old"), true},
+		{"a stale image claimed with the current image", v1alpha1.HomeExpiryExporting, holdReleaseStaleImage, staleAfter(protocol.HistoryErrUnknownEntry, current), false},
+		{"a stale image claimed after credential_in_tree", v1alpha1.HomeExpiryExporting, holdReleaseStaleImage, staleAfter(protocol.HistoryErrCredentialInTree, "synthetic.invalid/agent:old"), false},
+		{"a stale image claimed after shelf_unavailable", v1alpha1.HomeExpiryExporting, holdReleaseStaleImage, staleAfter(expiryShelfUnavailable, "synthetic.invalid/agent:old"), false},
+		{"a stale image claimed with no refusal", v1alpha1.HomeExpiryExporting, holdReleaseStaleImage, staleAfter("", "synthetic.invalid/agent:old"), false},
+		{"a stale image claimed at Archived", v1alpha1.HomeExpiryArchived, holdReleaseStaleImage, staleAfter(protocol.HistoryErrUnknownEntry, "synthetic.invalid/agent:old"), false},
 		{"ended", v1alpha1.HomeExpiryRescuing, holdReleaseEnded, func(_ *v1alpha1.AgentSession, p *corev1.Pod) { p.Status.Phase = corev1.PodFailed }, true},
 		{"ended claimed while it runs", v1alpha1.HomeExpiryRescuing, holdReleaseEnded, nil, false},
 		{"another hold pod", v1alpha1.HomeExpiryArchived, holdReleaseArchived, func(_ *v1alpha1.AgentSession, p *corev1.Pod) { p.UID = "hold-2" }, false},
@@ -370,6 +392,19 @@ func TestExecHistoryRelayAnswers(t *testing.T) {
 				}
 			}
 		})
+	}
+
+	// A plan longer than this operator takes refuses export_too_large, a
+	// recorded refusal, before anything is decoded or streamed; the HOME
+	// stays (DESIGN-025 5.4). An operator killed for its memory would retry
+	// the export on every new leader instead.
+	streamed := false
+	small := &ExecHistoryRelay{Exec: &scriptedExec{answers: map[string]func(io.Reader, io.Writer, io.Writer) error{"plan": planOK,
+		"stream": func(io.Reader, io.Writer, io.Writer) error { streamed = true; return nil }}},
+		Shelf: &shelf.Shelf{Reader: withShelf, Namespace: "dev-agents"}, Slots: shelf.NewExecSlots(1), PlanMax: 16}
+	_, err := small.Archive(context.Background(), hold, HistoryExportArgs{Session: "s"}, content)
+	if he := (*protocol.HistoryError)(nil); !errors.As(err, &he) || he.Code != protocol.HistoryErrTooLarge || historyRefusal(err).reason != protocol.HistoryErrTooLarge || streamed {
+		t.Fatalf("a plan over the operator's cap: %v (streamed %v); want export_too_large and no stream", err, streamed)
 	}
 
 	// A put that ends first ends the stream's exec: client-go would otherwise

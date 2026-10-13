@@ -581,6 +581,8 @@ type AgentSessionStatus struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.expiry) || (has(self.executorTerminal) && has(self.lastExecutor) && self.expiry.executorUID == self.executorTerminal.podUID && self.expiry.executorUID == self.lastExecutor.podUID)",message="the HOME expiry record must rest on the recorded executor's terminal record"
 // +kubebuilder:validation:XValidation:rule="!has(self.expiry) || self.expiry.homeUID == self.homeUID",message="the HOME expiry record must name the bound HOME"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.expiry) || has(self.expiry) || !(oldSelf.expiry.phase in ['Deleting', 'Expired'])",message="the HOME expiry record cannot be removed once Deleting"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.expiryClearedAt) || (has(self.expiryClearedAt) && self.expiryClearedAt >= oldSelf.expiryClearedAt)",message="expiryClearedAt cannot be removed or move back"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.expiry) || has(self.expiry) || (has(self.expiryClearedAt) && (!has(oldSelf.expiryClearedAt) || self.expiryClearedAt > oldSelf.expiryClearedAt))",message="removing the HOME expiry record (a cancel) records a newer expiryClearedAt in the same write"
 type PrivateHistoryStatus struct {
 	// +kubebuilder:validation:Enum=1
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="retention version is immutable"
@@ -662,7 +664,10 @@ type PrivateHistoryStatus struct {
 	// +optional
 	Expiry *PrivateHomeExpiryStatus `json:"expiry,omitempty"`
 	// ExpiryClearedAt is when the last expiry record was cancelled (DESIGN-025
-	// 5.3). A record made after it starts its own grace.
+	// 5.3). A record made after it starts its own grace. It is never removed
+	// and never moves back, and a cancel must set a newer one in the write
+	// that removes the record, so an operator that does not know these
+	// fields cannot drop them, and with them the cancel (section 14).
 	// +optional
 	ExpiryClearedAt *metav1.Time `json:"expiryClearedAt,omitempty"`
 }
