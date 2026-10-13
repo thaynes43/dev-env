@@ -341,6 +341,16 @@ func TestExecHistoryRelayAnswers(t *testing.T) {
 				}
 				return nil
 			}, "put": putOK(protocol.HistoryPutExists)}, true, ""},
+		{"a plan with a field this operator does not know", map[string]func(io.Reader, io.Writer, io.Writer) error{"plan": func(_ io.Reader, out, _ io.Writer) error {
+			data, _ := protocol.CanonicalJSON(plan)
+			_, err := out.Write(append(append([]byte(`{"aaa":1,`), data[1:]...), '\n'))
+			return err
+		}}, true, "exec"},
+		{"a plan that is not canonical", map[string]func(io.Reader, io.Writer, io.Writer) error{"plan": func(_ io.Reader, out, _ io.Writer) error {
+			data, _ := protocol.CanonicalJSON(plan)
+			_, err := out.Write(append(append([]byte("{ "), data[1:]...), '\n'))
+			return err
+		}}, true, "exec"},
 		{"the plan refuses", map[string]func(io.Reader, io.Writer, io.Writer) error{"plan": func(_ io.Reader, out, _ io.Writer) error {
 			return exitOne(out, protocol.HistoryErrCredentialInTree)
 		}}, true, protocol.HistoryErrCredentialInTree},
