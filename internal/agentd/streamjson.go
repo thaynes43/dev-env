@@ -1,9 +1,11 @@
 package agentd
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -26,6 +28,8 @@ type streamEvent struct {
 	NumTurns     int             `json:"num_turns"`
 	TotalCostUSD json.RawMessage `json:"total_cost_usd"`
 	Usage        json.RawMessage `json:"usage"`
+	// ModelUsage maps each served model id to its own counters and cost.
+	ModelUsage json.RawMessage `json:"modelUsage"`
 }
 
 type streamUsage struct {
@@ -33,6 +37,15 @@ type streamUsage struct {
 	OutputTokens             json.RawMessage `json:"output_tokens"`
 	CacheReadInputTokens     json.RawMessage `json:"cache_read_input_tokens"`
 	CacheCreationInputTokens json.RawMessage `json:"cache_creation_input_tokens"`
+}
+
+// streamModelUsage is one modelUsage entry of Claude's result event.
+type streamModelUsage struct {
+	InputTokens              json.RawMessage `json:"inputTokens"`
+	OutputTokens             json.RawMessage `json:"outputTokens"`
+	CacheReadInputTokens     json.RawMessage `json:"cacheReadInputTokens"`
+	CacheCreationInputTokens json.RawMessage `json:"cacheCreationInputTokens"`
+	CostUSD                  json.RawMessage `json:"costUSD"`
 }
 
 type contentBlock struct {
@@ -102,6 +115,10 @@ func renderStreamLine(line []byte, w io.Writer, res *streamResult) {
 			observation.CacheReadInputTokens = reportedTokens(usage.CacheReadInputTokens)
 			observation.CacheCreationInputTokens = reportedTokens(usage.CacheCreationInputTokens)
 		}
+		observation.ServedModels = claudeServedModels(ev.ModelUsage)
+		if len(observation.ServedModels) > 0 {
+			observation.ActualModelState = protocol.UsageProviderReported
+		}
 		if res.Seen {
 			first, _ := json.Marshal(res.Observation)
 			next, _ := json.Marshal(observation)
@@ -120,8 +137,61 @@ func renderStreamLine(line []byte, w io.Writer, res *streamResult) {
 		if observation.Cost.State == protocol.UsageReported {
 			cost = observation.Cost.Amount + " USD (CLI equivalent estimate)"
 		}
-		_, _ = fmt.Fprintf(w, "[agentd] result %s after %d turns, initial invocation cost %s; actual model Unknown\n", ev.Subtype, ev.NumTurns, cost)
+		_, _ = fmt.Fprintf(w, "[agentd] result %s after %d turns, initial invocation cost %s; %s\n", ev.Subtype, ev.NumTurns, cost, servedModelsText(observation.ServedModels))
 	}
+}
+
+// servedModelsText names the provider-reported served models for the log.
+func servedModelsText(models []protocol.ModelUsage) string {
+	if len(models) == 0 {
+		return "actual model Unknown"
+	}
+	names := make([]string, 0, len(models))
+	for _, m := range models {
+		names = append(names, m.Model)
+	}
+	what := "served model "
+	if len(names) > 1 {
+		what = "served models "
+	}
+	return what + strings.Join(names, ", ") + " (provider reported)"
+}
+
+// claudeServedModels reads the result event's modelUsage object. Anything but
+// an object of at most MaxServedModels valid ids, each an object, with no key
+// repeated, is no list at all: a partial list would misstate what served the
+// invocation. Within a valid entry each counter and the cost keep their own
+// presence, as the totals do.
+func claudeServedModels(raw json.RawMessage) []protocol.ModelUsage {
+	d := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := d.Token(); err != nil || tok != json.Delim('{') {
+		return nil
+	}
+	var models []protocol.ModelUsage
+	seen := map[string]bool{}
+	for d.More() {
+		tok, err := d.Token()
+		id, ok := tok.(string)
+		if err != nil || !ok || seen[id] || !protocol.ValidUsageModelID(id) || len(models) == protocol.MaxServedModels {
+			return nil
+		}
+		seen[id] = true
+		var entry json.RawMessage
+		if d.Decode(&entry) != nil || !bytes.HasPrefix(bytes.TrimSpace(entry), []byte("{")) {
+			return nil
+		}
+		var m streamModelUsage
+		if json.Unmarshal(entry, &m) != nil {
+			return nil
+		}
+		models = append(models, protocol.ModelUsage{Model: id, InputTokens: reportedTokens(m.InputTokens), OutputTokens: reportedTokens(m.OutputTokens),
+			CacheReadInputTokens: reportedTokens(m.CacheReadInputTokens), CacheCreationInputTokens: reportedTokens(m.CacheCreationInputTokens), Cost: reportedCost(m.CostUSD)})
+	}
+	if tok, err := d.Token(); err != nil || tok != json.Delim('}') {
+		return nil
+	}
+	slices.SortFunc(models, func(a, b protocol.ModelUsage) int { return strings.Compare(a.Model, b.Model) })
+	return models
 }
 
 func reportedTokens(raw json.RawMessage) protocol.TokenObservation {

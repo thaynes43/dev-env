@@ -54,6 +54,9 @@ func (h *HeartbeatClient) contextRequest(ctx context.Context, method, path strin
 		return errors.New("published context request invalid")
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(tok)))
+	// Ask for provider-reported attribution (DESIGN-018); an older operator
+	// ignores the header and answers with the all-Unknown shape.
+	req.Header.Set(apiv1.AttributionHeader, apiv1.AttributionProvider)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -93,10 +96,10 @@ func validContextMetadata(m apiv1.ContextMetadata) bool {
 	return apiv1.ValidContextUID(m.Source.UID) && m.Name == apiv1.ContextName(m.Source.UID, m.Kind, m.Key) && apiv1.ValidContextUID(m.UID) &&
 		apiv1.ValidContextRequest(apiv1.PublishContextRequest{Kind: m.Kind, Key: m.Key, Text: "probe"}) && m.SourceGeneration >= 1 && m.Source.Name != "" && m.Source.Namespace != "" &&
 		m.Actor.Kind == "session" && apiv1.ValidContextUID(m.Actor.PodUID) && m.Actor.PodName != "" && m.Actor.ServiceAccount != "" && contextProjectPattern.MatchString(m.Project) && contextProjectPattern.MatchString(m.Repository) &&
-		contextProjectPattern.MatchString(m.Attribution.Provider) && len(m.Attribution.RequestedModel) > 0 && len(m.Attribution.RequestedModel) <= 256 &&
+		contextProjectPattern.MatchString(m.Attribution.Provider) && len(m.Attribution.RequestedModel) > 0 && len(m.Attribution.RequestedModel) <= 256 && apiv1.ValidContextAttribution(m.Attribution, m.ManagedOutput != nil) &&
 		contextDigestPattern.MatchString(m.ContentSHA256) && m.ByteCount > 0 && m.ByteCount <= apiv1.MaxContextBytes && !m.PublishedAt.IsZero() &&
 		contextDigestPattern.MatchString(m.Provenance.CatalogRevision) && contextDigestPattern.MatchString(m.Provenance.RulesRevision) && m.Provenance.InitialPinState == "Unknown" && m.Provenance.ReportedHead == "" && m.Provenance.ReportedAt == nil &&
-		m.Attribution.ObservedModelState == "Unknown" && m.Attribution.UsageState == "Unknown" && m.Attribution.CostState == "Unknown" && m.StopState == "Unknown" && validContextOrigin(m)
+		m.StopState == "Unknown" && validContextOrigin(m)
 }
 
 type contextIntent struct {

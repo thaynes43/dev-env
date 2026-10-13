@@ -1016,6 +1016,20 @@ type TokenObservationStatus struct {
 	Amount *int64 `json:"amount,omitempty"`
 }
 
+// ModelUsageStatus is one provider-reported served model's share of the
+// initial invocation, with independent counter and cost presence.
+type ModelUsageStatus struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._:/@+\[\]-]*$`
+	Model                    string                 `json:"model"`
+	InputTokens              TokenObservationStatus `json:"inputTokens"`
+	OutputTokens             TokenObservationStatus `json:"outputTokens"`
+	CacheReadInputTokens     TokenObservationStatus `json:"cacheReadInputTokens"`
+	CacheCreationInputTokens TokenObservationStatus `json:"cacheCreationInputTokens"`
+	Cost                     CostObservationStatus  `json:"cost"`
+}
+
 // CostObservationStatus is a CLI equivalent estimate, never billed dollars.
 // +kubebuilder:validation:XValidation:rule="self.state == 'Reported' ? (has(self.amount) && has(self.unit) && self.unit == 'USD' && self.kind == 'ProviderCLIEquivalentEstimate') : (!has(self.amount) && !has(self.unit) && self.kind == 'Unknown')",message="cost requires explicit presence and CLI estimate provenance"
 type CostObservationStatus struct {
@@ -1054,12 +1068,16 @@ type UsageSourceStatus struct {
 }
 
 // UsageObservationStatus is immutable publisher evidence for the first
-// managed invocation. It does not attest actual model, billing or child totals.
+// managed invocation. Version 2 records the provider-reported served models
+// and billing basis (DESIGN-018, 2026-10-12). It never attests a charge,
+// subscription quota or another Session's usage.
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="original usage observation cannot change"
 // +kubebuilder:validation:XValidation:rule="has(self.logicalTaskUID) == has(self.logicalTaskEpoch) && has(self.logicalTaskUID) == has(self.workerID)",message="logical task provenance requires one complete server binding"
-// +kubebuilder:validation:XValidation:rule="self.source.provider != 'codex' || self.cost.state == 'Unknown'",message="Codex token-only usage cannot assert cost"
+// +kubebuilder:validation:XValidation:rule="self.source.provider != 'codex' || (self.cost.state == 'Unknown' && (!has(self.servedModels) || self.servedModels.all(m, m.cost.state == 'Unknown')))",message="Codex token-only usage cannot assert cost"
+// +kubebuilder:validation:XValidation:rule="self.version == 1 ? (!has(self.provenance) && !has(self.billingBasis) && !has(self.servedModels) && self.actualModelState == 'Unknown') : (has(self.provenance) && has(self.billingBasis))",message="version 2 requires provenance and billing basis; version 1 carries neither"
+// +kubebuilder:validation:XValidation:rule="(self.actualModelState == 'ProviderReported') == (has(self.servedModels) && size(self.servedModels) > 0)",message="actual model is ProviderReported exactly when served models are listed"
 type UsageObservationStatus struct {
-	// +kubebuilder:validation:Enum=1
+	// +kubebuilder:validation:Enum=1;2
 	Version int32 `json:"version"`
 	// +kubebuilder:validation:MaxLength=64
 	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
@@ -1083,7 +1101,7 @@ type UsageObservationStatus struct {
 	// +kubebuilder:validation:Enum=Unknown
 	// +kubebuilder:validation:MaxLength=64
 	AggregationScope string `json:"aggregationScope"`
-	// +kubebuilder:validation:Enum=Unknown
+	// +kubebuilder:validation:Enum=Unknown;ProviderReported
 	// +kubebuilder:validation:MaxLength=64
 	ActualModelState string `json:"actualModelState"`
 	// +kubebuilder:validation:Enum=Unknown
@@ -1095,6 +1113,23 @@ type UsageObservationStatus struct {
 	// +kubebuilder:validation:Enum=Unknown
 	// +kubebuilder:validation:MaxLength=64
 	LocalResourceState string `json:"localResourceState"`
+	// Provenance labels every Reported value: the serving CLI's final result.
+	// +kubebuilder:validation:Enum=ProviderReported
+	// +kubebuilder:validation:MaxLength=64
+	// +optional
+	Provenance string `json:"provenance,omitempty"`
+	// BillingBasis is Subscription for a plan-served launch; the cost is then a
+	// CLI list-price equivalent, never a charge.
+	// +kubebuilder:validation:Enum=Subscription;Unknown
+	// +kubebuilder:validation:MaxLength=64
+	// +optional
+	BillingBasis string `json:"billingBasis,omitempty"`
+	// ServedModels are the provider-reported models, sorted by id.
+	// +kubebuilder:validation:MaxItems=8
+	// +listType=map
+	// +listMapKey=model
+	// +optional
+	ServedModels []ModelUsageStatus `json:"servedModels,omitempty"`
 	// +kubebuilder:validation:MaxLength=128
 	// +optional
 	LogicalTaskUID string `json:"logicalTaskUID,omitempty"`

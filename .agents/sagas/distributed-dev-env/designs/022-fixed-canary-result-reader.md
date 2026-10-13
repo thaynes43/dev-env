@@ -83,6 +83,10 @@ from the original Session and accepted receipts; do not invent such publication
 evidence. A successful read proves the returned stored publication only. Missing
 publication or ACK remains Unknown. Requested model is not served model;
 partial managed output is not complete native history or billed cost.
+*Amended 2026-10-12 ([DESIGN-018](018-initial-invocation-usage-provenance.md), #176):
+the reader sends the attribution header and accepts provider-reported attribution
+that passes `apiv1.ValidContextAttribution`; inconsistent attribution is refused
+like any other unconfirmed field.*
 
 Generic context ACLs, Session/coordinator identity rules, general creation,
 global private admission, task/template pins and the permanent records remain

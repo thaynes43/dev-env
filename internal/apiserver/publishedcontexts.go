@@ -16,6 +16,7 @@ import (
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/contextpublication"
 )
@@ -155,7 +156,11 @@ func (s *Server) publishContext(ctx context.Context, w http.ResponseWriter, r *h
 	if created {
 		status, outcome = http.StatusCreated, "Created"
 	}
-	return status, apiv1.PublishContextResult{Outcome: outcome, Metadata: contextMetadata(publication)}, nil
+	m := contextMetadata(publication)
+	if providerAttribution(r) {
+		m.Attribution = contextAttribution(m.Attribution, publication, fresh)
+	}
+	return status, apiv1.PublishContextResult{Outcome: outcome, Metadata: m}, nil
 }
 
 func (s *Server) getPublishedContext(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
@@ -179,7 +184,11 @@ func (s *Server) getPublishedContext(ctx context.Context, _ http.ResponseWriter,
 	if p.Spec.Project != project {
 		return 0, nil, notFound("published context not found")
 	}
-	return http.StatusOK, apiv1.PublishedContext{Metadata: contextMetadata(p), Text: p.Spec.Text}, nil
+	m := contextMetadata(p)
+	if providerAttribution(r) {
+		m.Attribution = s.joinedAttribution(ctx, m.Attribution, p, map[string]*v1alpha1.AgentSession{})
+	}
+	return http.StatusOK, apiv1.PublishedContext{Metadata: m, Text: p.Spec.Text}, nil
 }
 func (s *Server) listPublishedContexts(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
 	if err := s.contextsAvailable(); err != nil {
@@ -202,8 +211,13 @@ func (s *Server) listPublishedContexts(ctx context.Context, _ http.ResponseWrite
 		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "published context unavailable")
 	}
 	views := make([]apiv1.ContextMetadata, 0, len(items))
+	sources := map[string]*v1alpha1.AgentSession{}
 	for i := range items {
-		views = append(views, contextMetadata(&items[i]))
+		m := contextMetadata(&items[i])
+		if providerAttribution(r) {
+			m.Attribution = s.joinedAttribution(ctx, m.Attribution, &items[i], sources)
+		}
+		views = append(views, m)
 	}
 	return http.StatusOK, apiv1.PublishedContextList{Items: views, Continue: next}, nil
 }
@@ -220,4 +234,65 @@ func contextMetadata(c *coord.PublishedContext) apiv1.ContextMetadata {
 		result.ManagedOutput = &apiv1.ManagedOutputAssertion{Invocation: m.Invocation, Ordinal: m.Ordinal, ConversationID: m.ConversationID}
 	}
 	return result
+}
+
+// providerAttribution reports whether the reader asked for provider-reported
+// attribution (DESIGN-018). Without the header the original all-Unknown shape
+// is returned, which older strict readers accept.
+func providerAttribution(r *http.Request) bool {
+	return r.Header.Get(apiv1.AttributionHeader) == apiv1.AttributionProvider
+}
+
+// joinedAttribution reads the publication's source Session (once per list) and
+// joins its retained observation. A missing or replaced source stays Unknown.
+func (s *Server) joinedAttribution(ctx context.Context, a apiv1.ContextAttribution, p *coord.PublishedContext, sources map[string]*v1alpha1.AgentSession) apiv1.ContextAttribution {
+	if p.Spec.ManagedOutput == nil {
+		return a
+	}
+	src := p.Spec.Source
+	source, cached := sources[src.UID]
+	if !cached {
+		var sess v1alpha1.AgentSession
+		if s.get(ctx, types.NamespacedName{Namespace: src.Namespace, Name: src.Name}, &sess) == nil && string(sess.UID) == src.UID {
+			source = &sess
+		}
+		sources[src.UID] = source
+	}
+	return contextAttribution(a, p, source)
+}
+
+// contextAttribution joins a managed output assertion with the source
+// Session's retained version 2 observation of the same invocation: the same
+// Session UID and Pod UID, provider and requested model. Each state becomes
+// ProviderReported only when that part was reported; anything else keeps the
+// stored attribution, Unknown. The stored record is never changed.
+func contextAttribution(a apiv1.ContextAttribution, p *coord.PublishedContext, source *v1alpha1.AgentSession) apiv1.ContextAttribution {
+	m := p.Spec.ManagedOutput
+	if m == nil || source == nil || p.Spec.Origin != "ManagedOutputAssertion" || string(source.UID) != p.Spec.Source.UID {
+		return a
+	}
+	u := sessionUsage(source)
+	if u == nil || u.Version != protocol.UsageVersion || u.Source.SessionUID != p.Spec.Source.UID || u.Source.PodUID != p.Spec.Actor.PodUID ||
+		apiv1.ManagedInvocation(u.Source.SessionUID, u.Source.PodUID) != m.Invocation || u.Source.Provider != a.Provider || u.Source.RequestedModel != a.RequestedModel {
+		return a
+	}
+	out := a
+	out.Usage = &apiv1.ContextUsage{ObservationID: u.ID, BillingBasis: u.BillingBasis, InputTokens: u.InputTokens, OutputTokens: u.OutputTokens,
+		CacheReadInputTokens: u.CacheReadInputTokens, CacheCreationInputTokens: u.CacheCreationInputTokens, Cost: u.Cost}
+	for _, model := range u.ServedModels {
+		out.ObservedModels = append(out.ObservedModels, model.Model)
+	}
+	reported := func(ok bool) string {
+		if ok {
+			return protocol.UsageProviderReported
+		}
+		return protocol.UsageUnknown
+	}
+	out.ObservedModelState = reported(len(out.ObservedModels) > 0)
+	out.UsageState = reported(u.InputTokens.State == protocol.UsageReported || u.OutputTokens.State == protocol.UsageReported || u.CacheReadInputTokens.State == protocol.UsageReported || u.CacheCreationInputTokens.State == protocol.UsageReported)
+	out.CostState = reported(u.Cost.State == protocol.UsageReported)
+	if !apiv1.ValidContextAttribution(out, true) {
+		return a
+	}
+	return out
 }

@@ -197,20 +197,31 @@ An old operator or an old CRD refuses a version 2 observation as InvalidPayload;
 liveness and budgets continue, and agentd keeps replaying the private snapshot, so
 an upgraded operator retains it. Old agents keep sending version 1.
 
+**Reader negotiation.** Older readers decode Sessions and publications strictly
+and accept only the version 1 observation and all-Unknown attribution. A reader
+asks for the new shape with the request header `Dev-Env-Attribution: provider-v1`;
+an older operator ignores it. Without the header the API leaves a version 2
+observation and the rollup out of every Session response, so an older reader
+shows Unknown instead of refusing the Session, and publications keep the
+all-Unknown attribution. New agent-run sends the header on every call; new
+agentd sends it on published-context calls.
+
 **Published context attribution.** Only a managed output assertion (DESIGN-016)
 can carry usage, because it is the output of the same initial invocation: the key
-is the Session UID plus the invocation. agentd puts its retained private
-observation into the publication intent before any HTTP call, so every chunk and
-every retry carries the same one. The operator applies it with the heartbeat rules
-and attributes it only when the retained status observation equals the request
-and its source is this Session UID and Pod UID. Then `observedModelState`,
-`usageState` and `costState` become `ProviderReported` each only when that part
-was reported, and the attribution carries the observed models and a bounded usage
-summary: observation ID, billing basis, the four counters and the cost. Otherwise
-all three stay Unknown. Explicit publications stay Unknown. An old operator decodes
-the request strictly and refuses a publication with usage; the capture stays
-private. Roll the operator out before the agent image, the order every API
-addition already follows.
+is the Session UID plus the Pod UID. The stored PublishedContext never changes and
+keeps its publication-time attribution, Unknown. When a reader sends the header,
+the API joins, at read time, the source Session's retained version 2 observation,
+and only when its source is that Session UID and Pod UID, its provider and
+requested model match, and the Session still has that UID. Then
+`observedModelState`, `usageState` and `costState` become `ProviderReported` each
+only when that part was reported, and the attribution carries the observed
+models and a bounded usage summary: observation ID, billing basis, the four
+counters and the cost. Otherwise all three stay Unknown. The observation is
+immutable once retained, so a reader only ever sees Unknown change to
+ProviderReported, never one value change to another. A publication made before
+the next heartbeat retains the observation shows Unknown until then. Explicit
+publications stay Unknown. The canary result reader, agentd and agent-run accept
+both shapes through one validator, `apiv1.ValidContextAttribution`.
 
 **Parent and child.** A child Session's usage belongs to the child, in its own
 status; nothing is added to the parent's own observation. `GET
@@ -224,6 +235,20 @@ partial sum. Each separate Session is a separate CLI process, so the sum counts
 nothing twice. Work a CLI delegates inside its own process is in that CLI's own
 report and is never added again.
 
+`agent-run show` prints the served models, provenance, billing basis, each
+model's counters and cost, and the descendants' rollup.
+
 **Out of scope.** Pricing from tokens, subscription quota, API billing, local
 inference, TUI/resume/native coverage, the SessionDirectory usage fields and
 rollups across names that a parent never created stay Unknown or absent.
+
+**Tests.** Claude fixtures with modelUsage present (one and several models),
+absent and malformed (not an object, empty, a non-object entry, a repeated key,
+an invalid or overlong id, more than 8 models); Codex token-only, with an
+explicit model and with a malformed one; billing basis per launch policy; a
+walk over every observation that no Unknown carries an amount; version 1 and 2
+validation in Go and in the CRD (envtest); heartbeat retention and the API wire
+shape; the rollup's single count, stale names, cycles, the bound, missing and
+foreign observations and Codex cost; the attribution join, its foreign-Pod and
+explicit refusals and both reader shapes; agent-run show, show --once and the
+canary result reader with the new shape and with inconsistent attribution.

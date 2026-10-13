@@ -52,6 +52,9 @@ func (s *codexStream) line(raw []byte, path string, l *Launch, out io.Writer, re
 			Cached     json.RawMessage `json:"cached_input_tokens"`
 			CacheWrite json.RawMessage `json:"cache_write_input_tokens"`
 		} `json:"usage"`
+		// Model is read only as an explicit served-model string on a
+		// terminal event. The pinned 0.160 exec schema sends none.
+		Model json.RawMessage `json:"model"`
 	}
 	if json.Unmarshal(raw, &e) != nil || e.Type == "" {
 		return errors.New("malformed native Codex JSONL")
@@ -114,6 +117,7 @@ func (s *codexStream) line(raw []byte, path string, l *Launch, out io.Writer, re
 		u.ResultState = "Final"
 		u.InputTokens, u.OutputTokens = reportedTokens(e.Usage.Input), reportedTokens(e.Usage.Output)
 		u.CacheReadInputTokens, u.CacheCreationInputTokens = reportedTokens(e.Usage.Cached), reportedTokens(e.Usage.CacheWrite)
+		codexServedModel(&u, e.Model)
 		*result = streamResult{Seen: true, Subtype: "success", NumTurns: 1, Usage: legacyUsage(u), Observation: u}
 	case "turn.failed", "error":
 		if s.terminal {
@@ -125,10 +129,25 @@ func (s *codexStream) line(raw []byte, path string, l *Launch, out io.Writer, re
 			u.InputTokens, u.OutputTokens = reportedTokens(e.Usage.Input), reportedTokens(e.Usage.Output)
 			u.CacheReadInputTokens, u.CacheCreationInputTokens = reportedTokens(e.Usage.Cached), reportedTokens(e.Usage.CacheWrite)
 		}
+		codexServedModel(&u, e.Model)
 		*result = streamResult{Seen: true, Subtype: "provider_error", IsError: true, Observation: u, Usage: legacyUsage(u)}
 		_, _ = fmt.Fprintln(out, "[agentd] native Codex turn failed")
 	default:
 		return errors.New("unknown pinned native Codex event")
 	}
 	return nil
+}
+
+// codexServedModel records the terminal event's explicit served model, with
+// the turn's own counters and an Unknown cost. A missing or malformed model is
+// Unknown; it never refuses an otherwise valid turn.
+func codexServedModel(u *protocol.UsageObservation, raw json.RawMessage) {
+	var model string
+	if len(raw) == 0 || json.Unmarshal(raw, &model) != nil || !protocol.ValidUsageModelID(model) {
+		return
+	}
+	u.ServedModels = []protocol.ModelUsage{{Model: model, InputTokens: u.InputTokens, OutputTokens: u.OutputTokens,
+		CacheReadInputTokens: u.CacheReadInputTokens, CacheCreationInputTokens: u.CacheCreationInputTokens,
+		Cost: protocol.CostObservation{State: protocol.UsageUnknown, Kind: protocol.UsageUnknown}}}
+	u.ActualModelState = protocol.UsageProviderReported
 }

@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
@@ -100,6 +101,20 @@ func strictCanaryResultJSON(raw []byte) bool {
 			_, ok := tok.(json.Number)
 			return ok
 		}
+		// The only list is the bounded observed model list: an array, never
+		// null, of at most MaxServedModels elements.
+		if t.Kind() == reflect.Slice {
+			if tok != json.Delim('[') {
+				return false
+			}
+			for n := 0; d.More(); n++ {
+				if n == protocol.MaxServedModels || !read(t.Elem(), depth+1) {
+					return false
+				}
+			}
+			end, err := d.Token()
+			return err == nil && end == json.Delim(']')
+		}
 		if t.Kind() != reflect.Struct || tok != json.Delim('{') {
 			return false
 		}
@@ -147,7 +162,7 @@ func confirmedCanaryResult(id, uid, name string, result apiv1.CanaryResult) bool
 		m.Kind == "transcript-excerpt" && m.Name == apiv1.ContextName(uid, m.Kind, m.Key) && m.Key == apiv1.ManagedOutputKey(m.ManagedOutput.Invocation, m.ManagedOutput.Ordinal) && m.ManagedOutput.Invocation == apiv1.ManagedInvocation(uid, m.Actor.PodUID) &&
 		m.Actor.Kind == "session" && m.Actor.PodName == sourceName && apiv1.ValidContextUID(m.Actor.PodUID) && len(actor) == 2 && actor[0] == m.Source.Namespace && canaryName.MatchString(actor[1]) &&
 		canaryName.MatchString(m.Project) && canaryName.MatchString(m.Repository) && (m.Attribution.Provider == "claude" || m.Attribution.Provider == "codex") && len(m.Attribution.RequestedModel) > 0 && len(m.Attribution.RequestedModel) <= 256 &&
-		m.Attribution.ObservedModelState == "Unknown" && m.Attribution.UsageState == "Unknown" && m.Attribution.CostState == "Unknown" && m.StopState == "Unknown" && m.Provenance.InitialPinState == "Unknown" && m.Provenance.ReportedHead == "" && m.Provenance.ReportedAt == nil &&
+		apiv1.ValidContextAttribution(m.Attribution, true) && m.StopState == "Unknown" && m.Provenance.InitialPinState == "Unknown" && m.Provenance.ReportedHead == "" && m.Provenance.ReportedAt == nil &&
 		len(m.Provenance.CatalogRevision) == 64 && len(m.Provenance.RulesRevision) == 64 && m.Origin == "ManagedOutputAssertion" && (m.Completeness == "PartialManagedOutput" || m.Completeness == "Unknown") && !m.PublishedAt.IsZero() &&
 		apiv1.ValidContextRequest(apiv1.PublishContextRequest{Kind: m.Kind, Key: m.Key, Text: p.Text}) && m.ContentSHA256 == apiv1.ContextHash(p.Text) && int(m.ByteCount) == len(p.Text)
 }

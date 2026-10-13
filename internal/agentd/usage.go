@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -95,9 +97,10 @@ func retainInitialUsage(l Launch, stateDir string, res streamResult, finished ti
 		return nil
 	}
 	u := res.Observation
-	if !res.Seen || u.Version != 1 {
+	if !res.Seen || u.Version != protocol.UsageVersion {
 		u = protocol.UnknownUsage()
 	}
+	u.BillingBasis = launchBillingBasis(l)
 	u.Source, u.ID, u.ObservedAt = *l.UsageSource, protocol.UsageObservationID(*l.UsageSource), finished.UTC().Truncate(time.Second)
 	if partial || res.IsError || res.UsageConflict {
 		u.ResultState = "Partial"
@@ -111,6 +114,28 @@ func retainInitialUsage(l Launch, stateDir string, res streamResult, finished ti
 		return nil
 	}
 	return &u
+}
+
+// launchBillingBasis is Subscription only for a launch that is plan-served by
+// policy: Claude without a metered key in reach (V-05), or Codex forced onto
+// the ChatGPT login without an API key. Anything else is Unknown, never API
+// billing: agentd does not observe charges.
+func launchBillingBasis(l Launch) string {
+	cleared := func(names ...string) bool {
+		for _, name := range names {
+			if !slices.Contains(l.Unset, name) || slices.ContainsFunc(l.Env, func(kv string) bool { k, _, _ := strings.Cut(kv, "="); return k == name }) {
+				return false
+			}
+		}
+		return true
+	}
+	switch {
+	case l.Provider == protocol.AgentClaude && cleared("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+		return protocol.UsageSubscription
+	case l.Provider == protocol.AgentCodex && cleared("OPENAI_API_KEY", "CODEX_API_KEY") && slices.Contains(l.Argv, `forced_login_method="chatgpt"`):
+		return protocol.UsageSubscription
+	}
+	return protocol.UsageUnknown
 }
 
 func collectedInitialUsage(l Launch, stateDir string, result *protocol.UsageObservation) *protocol.UsageObservation {
