@@ -90,8 +90,8 @@ alert and never sees these two misses (DESIGN-025 section 10, corrected here).
 
 **R1 is live.** `DevEnvCoordinationRecordsNearLimit` (DESIGN-024 section 7) is
 loaded in `dev-env-operator.rules`, health ok, inactive; the largest ratio is
-about 0.003. Next for DESIGN-025 is H3 (source). Post-check evidence stays with
-the coordinator's deploy order, outside this repo.
+about 0.003. Next for DESIGN-025 was H3 (source), now in source in #244 (below).
+Post-check evidence stays with the coordinator's deploy order, outside this repo.
 
 ## Sigo private-repo canary recorded: not accepted for #173; private authorization and fresh pin accepted separately — 2026-10-12 UTC
 
@@ -248,6 +248,16 @@ CRD, pins a release with it and turns the flag on. Deletion (H9) waits for the i
 #174). H7 needs Tom once: after the history archive claim binds, he sets its
 PersistentVolume to `Retain`. Before H7 writes the override policy, check which
 identity Tom's phone path uses (DESIGN-025 section 9).
+
+**H3 is in source in #244 (DESIGN-025 4.1), default off.** It adds
+`status.privateHistory.stopRequest` and `--enable-private-executor-stop`. The
+operator refuses to start with that flag unless the terminal record flag is on
+too. For a Reaping private Session with no owner hold, the operator writes the
+stop intent and confirms it. Then it sends one JSON patch that sets the
+recorded executor's `activeDeadlineSeconds`. Any override value except
+`release-now` blocks the stop. A guard test scans the module for Pod writes. The
+CRD gains a field, so haynes-ops needs the CRD copy before the operator pin that
+carries it. H7 turns the flag on.
 
 **Corrected after review, the same day (ADR-006, D-87).** An independent review of
 #233 against the source and haynes-ops RBAC found 13 defects; the follow-up PR
