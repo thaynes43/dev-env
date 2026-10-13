@@ -75,7 +75,7 @@ func TestNativeReadinessPeerAndVersion(t *testing.T) {
 			stages := make(chan nativeReadinessStage, 1)
 			ctx = context.WithValue(ctx, nativeReadinessObserverKey{}, stages)
 			got := probeNative(ctx, path, root, PinnedNativeVersion)
-			if (got == nil) != tc.want || got != nil && got != errNativeReady {
+			if (got == nil) != tc.want || got != nil && got != errNativeReady { //nolint:errorlint // Require the exact unwrapped sentinel object; errors.Is would accept wrapping.
 				t.Fatalf("ready=%v err=%v", tc.want, got)
 			}
 			var stage nativeReadinessStage
@@ -169,7 +169,7 @@ func TestOwnedTreeNativeReady(t *testing.T) {
 func TestNativeReadinessObserverDoesNotBlockOrChangeSentinel(t *testing.T) {
 	// A nil channel is never writable; diagnostics must still return immediately.
 	ctx := context.WithValue(context.Background(), nativeReadinessObserverKey{}, (chan nativeReadinessStage)(nil))
-	if got := probeNative(ctx, "", Identity{}, "unsupported"); got != errNativeReady {
+	if got := probeNative(ctx, "", Identity{}, "unsupported"); got != errNativeReady { //nolint:errorlint // Require the exact unwrapped sentinel object; errors.Is would accept wrapping.
 		t.Fatalf("refusal changed sentinel: %v", got)
 	}
 }
