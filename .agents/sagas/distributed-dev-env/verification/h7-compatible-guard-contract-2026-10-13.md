@@ -1,8 +1,10 @@
 # H7 compatible archive guard: implementation contract — 2026-10-13
 
 The coordinator ratified this implementation contract under
-[ADR-007/Q-35](../adrs/007-preserve-v1-archive-trust-boundary.md), merged in
-[dev-env #262](https://github.com/thaynes43/dev-env/pull/262). This is agent
+[ADR-007/Q-35](../adrs/007-preserve-v1-archive-trust-boundary.md). ADR-007 and
+the measurement source prerequisites merged together in
+[dev-env #262](https://github.com/thaynes43/dev-env/pull/262), `01c6bc99`.
+This page preserves the ratified outcome. This is agent
 implementation judgment within authorized H7 scope. **Guard source, deployment
 and real webhook acceptance remain separate.** No archive mount, history
 activation, v1 change or new RBAC grant follows from this contract.
@@ -103,8 +105,16 @@ borrowing and token reads are not the verification path. Actual webhook requests
 require a separate reviewed fixture/delivery plan, preserving the unused history
 claim and existing canaries. Source evaluation proves no installed request result.
 
-Local proposal and coordinator ratification are under
-`/home/dev/work/orders/dev-env-h7-archive-guard-1013/`. The compatible source unit
+[Issue #261's public ratification](https://github.com/thaynes43/dev-env/issues/261#issuecomment-6153207334)
+also preserves the outcome. Copies under
+`/home/dev/work/orders/dev-env-h7-archive-guard-1013/` are local working notes:
+
+| Working note | SHA-256 |
+|---|---|
+| `compatible-guard-proposal.md` | `2c949d957c145799c261795f7efc664264df265330d6143caee2bb75f0bcfd46` |
+| `root-guard-ratification-r1.md` | `a542b5a805dd1bb7f1c46cca617deba7e1353e49e0c12145a1767ec0db51c20b` |
+
+The compatible source unit
 targets only the new policy, its app resource entry and focused synthetic tests
 with necessary CI wiring. Shelf image/mount, owner identity/Retain, F4, both cold
 measurements, flags, H8's non-canary read and deletion remain later gates.
