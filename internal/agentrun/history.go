@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
@@ -131,6 +132,9 @@ func (a *app) historyShow(ctx context.Context, args []string) error {
 		return usageError("history show takes one Session UID; agent-run help history")
 	}
 	uid := pos[0]
+	if !protocol.ValidKubeUID(uid) {
+		return usageError("history show: %q is not a Session UID; agent-run help history", uid)
+	}
 	q := url.Values{}
 	if content != "" {
 		q.Set("content", content)
@@ -146,7 +150,7 @@ func (a *app) historyShow(ctx context.Context, args []string) error {
 		return err
 	}
 	var m apiv1.HistoryManifest
-	if _, err := a.call(ctx, c, http.MethodGet, apiv1.HistoryEntryPath(uid), q, nil, &m); err != nil {
+	if _, err := a.call(ctx, c, http.MethodGet, apiv1.HistoryEntryPath(url.PathEscape(uid)), q, nil, &m); err != nil {
 		return historyNotFound(err)
 	}
 	if cmd.c.output == outputJSON {
@@ -220,6 +224,9 @@ func (a *app) historyRead(ctx context.Context, args []string) error {
 		return usageError("history read: --all writes the file's bytes; -o json prints one page")
 	}
 	uid, file := pos[0], pos[1]
+	if !protocol.ValidKubeUID(uid) {
+		return usageError("history read: %q is not a Session UID; agent-run help history", uid)
+	}
 	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
 		return err
@@ -234,7 +241,7 @@ func (a *app) historyRead(ctx context.Context, args []string) error {
 			q.Set("content", content)
 		}
 		var p apiv1.HistoryFilePage
-		if _, err := a.call(ctx, c, http.MethodGet, apiv1.HistoryFilePath(uid), q, nil, &p); err != nil {
+		if _, err := a.call(ctx, c, http.MethodGet, apiv1.HistoryFilePath(url.PathEscape(uid)), q, nil, &p); err != nil {
 			return historyNotFound(err)
 		}
 		if cmd.c.output == outputJSON {

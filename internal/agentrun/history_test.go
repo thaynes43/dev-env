@@ -168,6 +168,15 @@ func TestHistoryUsage(t *testing.T) {
 		{"history", "read", histUID},
 		{"history", "read", histUID, "claude/x", "--offset", "-1"},
 		{"history", "read", histUID, "claude/x", "--all", "-o", "json"},
+		// A Session UID goes into the request path: anything that is not a
+		// Kube UID could reach another route or add query parameters, so it
+		// is refused before any request.
+		{"history", "show", "../sessions/x"},
+		{"history", "show", histUID + "?content=x"},
+		{"history", "show", strings.ToUpper(histUID)},
+		{"history", "read", "../sessions/x", "claude/x"},
+		{"history", "read", "a?b=c", "claude/x"},
+		{"history", "read", histUID + "/file", "claude/x"},
 	} {
 		h.mustRun(ExitUsage, args...)
 	}
