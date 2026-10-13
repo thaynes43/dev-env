@@ -55,6 +55,15 @@ const (
 	// an idle suspend's rescue still runs, and keeps the old pod, is not
 	// suspended again at once.
 	AnnotationResumedAt = LabelPrefix + "resumed-at"
+	// AnnotationHomeExpiry is Tom's owner override on a private Session's HOME
+	// expiry (DESIGN-025 section 9): HomeExpiryHold or HomeExpiryReleaseNow.
+	// No dev-env code writes it; an admission policy (H7) refuses it to every
+	// ServiceAccount. A hold also blocks the stop request (section 4), and the
+	// operator reads any value but release-now as a hold there.
+	AnnotationHomeExpiry = LabelPrefix + "home-expiry"
+	// HomeExpiryHold and HomeExpiryReleaseNow are AnnotationHomeExpiry's values.
+	HomeExpiryHold       = "hold"
+	HomeExpiryReleaseNow = "release-now"
 
 	// LabelAppName and LabelManagedBy are the well-known labels; session pods
 	// and volumes carry AppNameSession and ManagedByOperator.

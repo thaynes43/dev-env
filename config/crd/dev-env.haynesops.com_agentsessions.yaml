@@ -1200,6 +1200,34 @@ spec:
                     x-kubernetes-validations:
                     - message: retention Session UID is immutable
                       rule: self == oldSelf
+                  stopRequest:
+                    description: |-
+                      StopRequest is the operator's recorded intent to stop the recorded
+                      executor of a Reaping Session (DESIGN-025 section 4). It is written and
+                      confirmed before the one Pod patch that sets activeDeadlineSeconds, so an
+                      owner hold written first makes it conflict. It names lastExecutor.podUID,
+                      never changes and is never removed. It is not stop proof: only
+                      executorTerminal is.
+                    properties:
+                      podUID:
+                        description: PodUID must equal lastExecutor.podUID.
+                        maxLength: 128
+                        minLength: 1
+                        type: string
+                      requestedAt:
+                        description: RequestedAt is the operator's clock when it first
+                          recorded the intent.
+                        format: date-time
+                        type: string
+                      version:
+                        enum:
+                        - 1
+                        type: integer
+                    required:
+                    - podUID
+                    - requestedAt
+                    - version
+                    type: object
                   stopState:
                     description: |-
                       StopState stays Unknown: executorTerminal is evidence for HOME expiry
@@ -1252,6 +1280,12 @@ spec:
                 - message: the missed executor marker cannot change or be removed
                   rule: '!has(oldSelf.executorMissed) || (has(self.executorMissed)
                     && self.executorMissed == oldSelf.executorMissed)'
+                - message: the executor stop request must name the recorded executor
+                  rule: '!has(self.stopRequest) || (has(self.lastExecutor) && self.stopRequest.podUID
+                    == self.lastExecutor.podUID)'
+                - message: the executor stop request cannot change or be removed
+                  rule: '!has(oldSelf.stopRequest) || (has(self.stopRequest) && self.stopRequest
+                    == oldSelf.stopRequest)'
               remoteControl:
                 description: |-
                   RemoteControl is the session's Remote Control entry, for remote mode

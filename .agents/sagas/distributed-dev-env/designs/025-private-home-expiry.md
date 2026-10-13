@@ -3,8 +3,9 @@
 - **Status:** Accepted 2026-10-12; corrected the same day after its review
   ([ADR-006](../adrs/006-private-home-expiry-corrections.md), D-87). H1, the
   terminal record (#236, section 3.6), shipped in 2.25.0; H2 installed it with
-  the record on, 2026-10-12 (haynes-ops #3852 and #3854). H3 to H10 have no
-  source yet
+  the record on, 2026-10-12 (haynes-ops #3852 and #3854). H3, the stop
+  request for Reaping Sessions (section 4.1), is in source in #244, default
+  off. H4 to H10 have no source yet
 - **Decision:** [ADR-005](../adrs/005-private-home-expiry.md) (Q-31, Tom,
   2026-10-12: "Archive, then delete (Recommended)"), amended by
   [ADR-006](../adrs/006-private-home-expiry-corrections.md)
@@ -312,15 +313,16 @@ stops it:
 2. **The intent.** It writes `status.privateHistory.stopRequest` (`version` 1,
    `podUID` equal to `lastExecutor.podUID`, `requestedAt`) by a status update
    that carries the resourceVersion of the Session it just read, and confirms it
-   by an uncached re-read. A hold annotation written after that read changes the
+   by an uncached re-read. A hold annotation already on that read refuses the
+   intent. A hold annotation written after that read changes the
    resourceVersion, so the update gets a Conflict and nothing is sent. A retry
    repeats the same update, with the stored intent unchanged and the
    resourceVersion of its own fresh read. So every patch follows a read that
    found no hold and a write that nothing overtook. A hold written after the
    confirmed write comes too late, and the stop goes ahead. `stopRequest` never
    changes once set and is never removed.
-3. It computes `elapsed` from `status.startTime` and sends one JSON patch
-   (`stopPrivateExecutor`):
+3. It computes `elapsed`, the Pod's age at the stored `requestedAt`, from
+   `status.startTime`, and sends one JSON patch (`stopPrivateExecutor`):
 
    ```json
    [{"op": "test", "path": "/metadata/uid", "value": "<podUID>"},
@@ -330,7 +332,8 @@ stops it:
 
    `activeDeadlineSeconds` may be set on a running Pod, and only set or lowered.
    It counts from the Pod's start, hence `elapsed`. A Pod that already has a lower
-   value is left alone.
+   value is left alone. Because `elapsed` comes from stored fields, every
+   operator computes the same deadline whatever its own clock says.
 4. The kubelet stops the containers with the Pod's termination grace (agentd
    forwards SIGTERM to the agent) and marks the Pod `Failed`, reason
    `DeadlineExceeded`. The Pod object stays, and section 3 records it.
@@ -349,6 +352,110 @@ races a resume.
 Its HOME, transcripts and Pod object stay, but the executor latch (DESIGN-008)
 refuses a replacement, so it cannot run again. A hold set before the reap
 prevents the stop.
+
+### 4.1 In source (H3, #244)
+
+Implemented in `internal/controller/private_stop.go`. It is called from
+`removePod`'s private branch, which every Reaping Session with a Pod reaches.
+That happens only in a reconcile whose private history observation changed
+nothing, so `lastExecutor` is already stored and confirmed. The schema field is
+`status.privateHistory.stopRequest` (`version` 1, `podUID`, `requestedAt`). Two
+CEL rules say it names `lastExecutor.podUID`, and that once set it never changes
+and is never removed. A schema test covers them (T16, stop part). Details the
+section above leaves open:
+
+- **The gate** (`privateStopApplies`). `--enable-private-executor-stop` must be
+  on, and so must `--enable-private-terminal-record`. The operator refuses to
+  start with the first flag and not the second. `terminalRecordApplies` must
+  hold, so that the stop's own record can still be written: the record flag is
+  on, `privateHistoryIdentity` passes, `admission` is `Started`, `homeUID` is
+  set, `lastExecutor` is set, and neither `executorTerminal` nor
+  `executorMissed` exists. The Session must also be Reaping, with no
+  `spec.workspace` and no `spec.projectCanary`. The observation must have found
+  nothing Unknown. A replaced executor, a foreign owner or a HOME binding that
+  does not verify each stops it.
+- **The Pod.** The Pod must be the recorded executor (same UID, controlled by the
+  Session, not a hold pod). It must not be terminal and must not be deleting.
+  It must have `status.startTime`, and it must have no `activeDeadlineSeconds`
+  at or below the one the stop would set. A Pod that never started is not
+  stopped, because no deadline can be computed for it.
+- **The hold.** Any value of `dev-env.haynesops.com/home-expiry` except
+  `release-now` blocks the stop, a mistyped `hold` included. This fails closed.
+  Section 9 says the expiry ignores such a value; for the stop it counts as a
+  hold. `release-now` skips only the expiry's grace, so it does not block the
+  stop.
+- **The intent.** `stopIntentConfirmed` reads the Session uncached and checks
+  the gate and the hold again. It reads the Pod uncached. It then updates the
+  status with the stored intent, or a new one at the operator's clock,
+  truncated to the second. The hold check on this read is what makes a hold
+  written before the intent win when it lands after the reconcile's own read of
+  the Session: the update's resourceVersion already includes that hold, so no
+  Conflict would catch it. The update carries that read's resourceVersion and
+  is confirmed by `writePrivateHistoryAcknowledged`'s re-read. When the intent
+  is already stored, as after a restart, the update is a no-op whose
+  resourceVersion check still refuses a Session changed since the read. Two
+  cases count `conflict` and are judged again a second later: a Conflict, and
+  an update that was acknowledged but whose re-read another write, such as a
+  heartbeat, overtook. The next reconcile adopts an intent that was stored. A
+  pruned field fails the confirmation, and nothing is sent.
+- **The gate is a type.** Only `stopIntentConfirmed` builds a non-zero
+  `confirmedStopIntent`, the confirmed Session and the Pod as read for it, and
+  it builds it only after its confirmed write. `stopPrivateExecutor` takes one
+  and refuses the zero value. So no patch can follow an intent that failed,
+  whatever a caller does with the error. The guard test pins all of this.
+- **The patch.** `stopPrivateExecutor` sends `privateStopPatch` for the Pod
+  that `stopIntentConfirmed` read; its `test` operations refuse a Pod changed
+  since. The deadline is the Pod's age at the stored `requestedAt` in whole
+  seconds, rounded up, plus 30. Before an intent is stored, the operator's clock
+  stands in for it. A patch sent late, after a failure or a restart between the
+  intent and the patch, so gets less than 30 seconds of grace, or none; the
+  kubelet still stops the containers with the Pod's termination grace. An
+  existing higher deadline is lowered: JSON patch `add` replaces it. A Conflict
+  counts `conflict`, and so does an Invalid when a fresh read shows the Pod
+  changed or gone. A failed `test` is Invalid (422). The next reconcile then
+  judges again. An Invalid on an unchanged Pod (an admission policy, Pod
+  validation) is a failure. Once the patch has landed, the Pod has exactly the
+  deadline that every operator computes from the stored intent, so no
+  reconcile, restart or second replica sends another, whatever its clock says.
+  A deadline computed from each operator's own clock would not hold this: a
+  replica whose clock lagged the patching one by more than the time since the
+  patch would compute a lower deadline and patch again (review of #244).
+- **Failures.** The stop never ends the reconcile early, so the Session's status
+  is written whatever happens. A failure other than a change is logged. The
+  `RemovalBlocked` condition names it, and it is tried again in 30 seconds.
+- **Counting.** `dev_env_private_executor_stop_requests_total` is registered at
+  start whatever the flag, each result at 0. `sent` counts a patch the API server
+  accepted. `held` counts each reconcile that a hold refuses, so it rises while a
+  held Session keeps being reconciled. The event `ExecutorStopRequested` (action
+  `StopRequest`) names the Pod UID and the deadline.
+- **Rollback.** Turning the flag off sends no new intent and no new patch. A
+  stored `stopRequest` stays, as the schema requires. An operator below this
+  release drops the field on its status writes, and the schema refuses them, as
+  for the terminal record (section 14).
+
+Tests: `TestPrivateHistoryStopRequestIsImmutableAndBound` in `api/v1alpha1`;
+`TestPrivateExecutorStopFlagIsExplicitDefaultOffAndNeedsTheRecord` in
+`cmd/dev-env-operator`; and in `internal/controller`:
+`TestPrivateStopReapRecordsIntentThenOnePatchThenTerminal`,
+`TestPrivateStopRefusals` (flag off, record flag off, held, an unknown or empty
+override value, suspended before and after the deadline with the idle timer,
+running, canary, unbound HOME, Unknown admission, an executor of another intent,
+a replaced executor, a hold pod, not started, terminal, a lower deadline, the
+missed marker), `TestPrivateStopNeverForASharedExecutor`,
+`TestPrivateStopReleaseNowIsNoHold`, `TestPrivateStopLowersAHigherDeadline`,
+`TestPrivateStopHoldBetweenReadAndIntentWins`,
+`TestPrivateStopHoldBeforeTheIntentReadWins`,
+`TestPrivateStopPrunedIntentSendsNothing`,
+`TestPrivateStopPersistentRefusalIsNoConflict`,
+`TestPrivateStopIntentOvertakenByAnotherWrite`,
+`TestPrivateStopRestartAdoptsTheIntentAndNeverPatchesTwice`,
+`TestPrivateStopLaggingClockPatchesOnce`,
+`TestPrivateStopTwoReplicasPatchOnce`, the envtest
+`TestPrivateStopOnTheAPIServer` (the whole flow to the terminal record, a hold
+written before the intent's read and one written between that read and the
+intent, and a stale Pod resourceVersion on a real API server), and the guard tests
+`TestOnlyStopPrivateExecutorPatchesPods` and
+`TestPodWriteScanCatchesPodWrites` (section 11).
 
 ## 5. The expiry record and its steps
 
@@ -859,7 +966,8 @@ One annotation on the AgentSession, `dev-env.haynesops.com/home-expiry`:
   The operator records `releaseNowAt`. The annotation is a standing instruction
   while it is there: a record made after a cancel sees it too.
 
-Any other value is ignored and counted (`override_invalid`).
+Any other value is ignored and counted (`override_invalid`) by the expiry. The
+stop request reads any value but `release-now` as a hold (4.1, fail closed).
 
 **Owner-only, by admission.** `dev-env-identity-guard` already refuses every
 `dev-agents` identity any write to `dev-env.haynesops.com` objects. A new small
@@ -950,7 +1058,20 @@ when H2 turns the record on, which section 12's order cannot produce.)
   deletes, the only Pod write in the module is `stopPrivateExecutor`. Its patch
   holds exactly the two `test` operations and the one
   `/spec/activeDeadlineSeconds` operation, and it is reachable only after
-  `stopIntentConfirmed` in the same call path.
+  `stopIntentConfirmed` in the same call path. In source (H3): the scan parses
+  every non-test Go file of the module. It counts as a Pod write a
+  controller-runtime `Patch`, `Update`, `Apply` or `Delete`, on the object or a
+  subresource, and a subresource `Create` (an eviction, say), of an object
+  declared as a corev1 Pod or named like one. It also counts a typed clientset
+  `Pods(...)` write and a REST `Patch`, `Put`, `Delete` or non-exec `Post` on
+  `Resource("pods")`. The only ones allowed are the one JSON `Patch` in
+  `stopPrivateExecutor`, built by `privateStopPatch`, and the `Delete` in
+  `deletePod`. `stopPrivateExecutor` has one caller,
+  `requestPrivateExecutorStop`, which calls `stopIntentConfirmed` first. A
+  non-zero `confirmedStopIntent` is built only in `stopIntentConfirmed`, after
+  its `writePrivateHistoryAcknowledged` call, and no other function writes its
+  fields. The test also pins `privateStopPatch`'s three operations. Its
+  testdata is `testdata/podwritescan`.
 - **`TestHistoryLayoutCoversAgentdState`** (`internal/agentd`): every name agentd
   writes under its state directory is in the agentd classification (6.3).
 - **`TestHistoryExportReadsOnly`** (`internal/agentd`): the export opens HOME
@@ -985,6 +1106,14 @@ own reviewed PR:
      DESIGN-024's R5 and this unit ships first ships the guard;
    - the alerts of section 10 except stalled;
    - after the claim binds: Tom sets the PV to `Retain`;
+   - just before the stop flag, a read-only check: list the Reaping private
+     Sessions (no `spec.workspace`, no `spec.projectCanary`) whose recorded
+     executor Pod still runs. They were reaped under the old rule, which let a
+     private executor keep running (ADR-005 C-37), and the flag stops each of
+     them at once. Name them in the PR so Tom can set a hold
+     (`dev-env.haynesops.com/home-expiry`, section 9) on any he wants to keep
+     running before the flag merges. On 2026-10-12 there were none: five private
+     Sessions, all canary originals, none Reaping;
    - then `--enable-private-executor-stop=true`,
      `--enable-home-history-archive=true` and
      `--enable-history-archive-reads=true`, in that order.
@@ -1123,7 +1252,10 @@ status itself.
   the Session read and the intent write makes the write conflict, and no patch
   is sent. A held reaped Session, a canary, a shared executor and a suspended
   Session, before or after its archive deadline (the idle-timer case), get none.
-  With the flag off, none.
+  With the flag off, none. An operator restart between the intent and the patch
+  adopts the stored intent and sends one patch, and two overlapping replicas
+  land one patch. The terminal record follows once the kubelet ends the Pod
+  (4.1).
 - **T15, the record's checks.** No record while the node is NotReady, the lease
   is stale or held by another node UID, a container is still running, or the Pod
   has `DisruptionTarget` with `DeletionByPodGC`. A record once the checks pass,

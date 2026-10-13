@@ -175,3 +175,19 @@ func TestPrivateTerminalRecordFlagIsExplicitAndDefaultOff(t *testing.T) {
 		t.Fatal("explicit terminal record setting missing")
 	}
 }
+
+// DESIGN-025 13: the stop request is default off, turned on explicitly, and
+// refused at start without the terminal record that proves its stop.
+func TestPrivateExecutorStopFlagIsExplicitDefaultOffAndNeedsTheRecord(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.privateExecutorStop {
+		t.Fatal("the private executor stop is on by default")
+	}
+	if _, err := parseFlags([]string{"--enable-private-executor-stop"}); err == nil {
+		t.Fatal("the stop was accepted without the terminal record flag")
+	}
+	o, err = parseFlags([]string{"--enable-private-terminal-record", "--enable-private-executor-stop"})
+	if err != nil || !o.privateExecutorStop || !o.privateTerminalRecord {
+		t.Fatal("explicit stop setting missing:", err)
+	}
+}

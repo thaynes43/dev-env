@@ -1207,3 +1207,111 @@ func TestPrivateHistoryExecutorTerminalRecordIsImmutableAndBound(t *testing.T) {
 		}
 	})
 }
+
+// DESIGN-025 section 4, T16's stop part: the stop intent names the recorded
+// executor, and once set it never changes and is never removed. It sits
+// beside the terminal record, which follows it.
+func TestPrivateHistoryStopRequestIsImmutableAndBound(t *testing.T) {
+	at := metav1.NewTime(time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC))
+	retained := func(s *v1alpha1.AgentSession) *v1alpha1.PrivateHistoryStatus {
+		return &v1alpha1.PrivateHistoryStatus{Version: 1, SessionUID: string(s.UID), HomeClaim: "original-home", HomeUID: "original-home-uid",
+			BindingGeneration: s.Generation, Admission: "Started", ExecutorAttempted: true, ExecutorIntent: "synthetic-intent", Provider: string(s.Spec.Agent), StopState: "Unknown",
+			LastExecutor: &v1alpha1.PrivateExecutorStatus{PodUID: "original-executor", PodName: s.Name, NodeName: "worker-a", Revision: "original-template", Generation: s.Generation}}
+	}
+	request := func() *v1alpha1.PrivateExecutorStopRequestStatus {
+		return &v1alpha1.PrivateExecutorStopRequestStatus{Version: 1, PodUID: "original-executor", RequestedAt: at}
+	}
+
+	t.Run("refused at creation", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			edit func(*v1alpha1.PrivateHistoryStatus)
+		}{
+			{"without an executor", func(h *v1alpha1.PrivateHistoryStatus) { h.LastExecutor = nil; h.StopRequest = request() }},
+			{"for another UID", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.StopRequest = request()
+				h.StopRequest.PodUID = "forged"
+			}},
+			{"version 2", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.StopRequest = request()
+				h.StopRequest.Version = 2
+			}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				s := taskSession()
+				if err := k8s.Create(ctx(t), s); err != nil {
+					t.Fatal(err)
+				}
+				s.Status.PrivateHistory = retained(s)
+				tc.edit(s.Status.PrivateHistory)
+				if err := k8s.Status().Update(ctx(t), s); !apierrors.IsInvalid(err) {
+					t.Fatalf("invalid stop request accepted: %v", err)
+				}
+			})
+		}
+		// The bound on the intent's own UID: the API server names that
+		// field, beside lastExecutor's.
+		s := taskSession()
+		if err := k8s.Create(ctx(t), s); err != nil {
+			t.Fatal(err)
+		}
+		s.Status.PrivateHistory = retained(s)
+		s.Status.PrivateHistory.LastExecutor.PodUID = strings.Repeat("u", 129)
+		s.Status.PrivateHistory.StopRequest = request()
+		s.Status.PrivateHistory.StopRequest.PodUID = s.Status.PrivateHistory.LastExecutor.PodUID
+		if err := k8s.Status().Update(ctx(t), s); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "stopRequest.podUID") {
+			t.Fatalf("an unbounded stop request UID is not refused by its own bound: %v", err)
+		}
+	})
+
+	t.Run("recorded, then the terminal record beside it", func(t *testing.T) {
+		s := taskSession()
+		if err := k8s.Create(ctx(t), s); err != nil {
+			t.Fatal(err)
+		}
+		s.Status.PrivateHistory = retained(s)
+		if err := k8s.Status().Update(ctx(t), s); err != nil {
+			t.Fatal(err)
+		}
+		withIntent := get(t, s)
+		withIntent.Status.PrivateHistory.StopRequest = request()
+		if err := k8s.Status().Update(ctx(t), withIntent); err != nil {
+			t.Fatal("a valid stop request refused:", err)
+		}
+		if got := get(t, s); !apiequality.Semantic.DeepEqual(got.Status.PrivateHistory.StopRequest, request()) {
+			t.Fatalf("stop request pruned or changed: %+v", got.Status.PrivateHistory.StopRequest)
+		}
+		for _, tc := range []struct {
+			name string
+			edit func(*v1alpha1.PrivateHistoryStatus)
+		}{
+			{"remove", func(h *v1alpha1.PrivateHistoryStatus) { h.StopRequest = nil }},
+			{"change requestedAt", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.StopRequest.RequestedAt = metav1.NewTime(at.Add(time.Hour))
+			}},
+			{"change the UID", func(h *v1alpha1.PrivateHistoryStatus) { h.StopRequest.PodUID = "replacement" }},
+			{"drop with status", func(h *v1alpha1.PrivateHistoryStatus) { *h = *retained(s) }},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				bad := get(t, s)
+				tc.edit(bad.Status.PrivateHistory)
+				if err := k8s.Status().Update(ctx(t), bad); !apierrors.IsInvalid(err) {
+					t.Fatalf("stop request change accepted: %v", err)
+				}
+			})
+		}
+		// The kubelet ends the Pod; the terminal record follows the intent,
+		// and a lastExecutor rebuild keeps both.
+		ended := get(t, s)
+		ended.Status.PrivateHistory.ExecutorTerminal = &v1alpha1.PrivateExecutorTerminalStatus{Version: 1, PodUID: "original-executor", Phase: "Failed", Reason: "DeadlineExceeded", PodResourceVersion: "42",
+			NodeName: "worker-a", NodeUID: "node-uid", LeaseRenewedAt: at, ObservedAt: at,
+			Containers: []v1alpha1.PrivateExecutorContainerTermination{{Name: "agent", ExitCode: 143, Reason: "Error", FinishedAt: at}}}
+		ended.Status.PrivateHistory.LastExecutor.Generation = s.Generation + 1
+		if err := k8s.Status().Update(ctx(t), ended); err != nil {
+			t.Fatal("the terminal record beside a stop request refused:", err)
+		}
+		if got := get(t, s); !apiequality.Semantic.DeepEqual(got.Status.PrivateHistory.StopRequest, request()) || got.Status.PrivateHistory.ExecutorTerminal == nil {
+			t.Fatalf("stop request or terminal record lost: %+v", got.Status.PrivateHistory)
+		}
+	})
+}

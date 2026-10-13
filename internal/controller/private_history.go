@@ -396,6 +396,9 @@ func setPrivateHistoryConditions(s *v1alpha1.AgentSession, obs observation, st *
 		removal = c
 	}
 	meta.SetStatusCondition(&st.Conditions, c)
+	if obs.privateStopErr != nil {
+		removal.Message = truncate(removal.Message + "; the stop request for the recorded executor (DESIGN-025 4) failed and is retried: " + obs.privateStopErr.Error())
+	}
 	if wantsPodGone(s) {
 		meta.SetStatusCondition(&st.Conditions, metav1.Condition{Type: ConditionRemovalBlocked, Status: metav1.ConditionTrue,
 			Reason: removal.Reason, Message: removal.Message, ObservedGeneration: s.Generation})
