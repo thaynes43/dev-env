@@ -3,3 +3,8 @@
 # Go test artefacts.
 *.test
 *.out
+# Binaries `go build ./cmd/...` leaves at the repository root.
+/agentd
+/agent-run
+/dev-env-operator
+/dev-env-keeper
