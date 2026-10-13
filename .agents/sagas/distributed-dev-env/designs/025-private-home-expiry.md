@@ -633,8 +633,9 @@ volume at `rescue/<session>/<stamp>/` (D-48).
 ### 6.3 The history export
 
 `agentd ctl history-export plan` runs by exec in the hold pod. It reads HOME
-only: every file is opened `O_RDONLY|O_NOFOLLOW`, and it never creates, changes
-or removes anything there. It prints one JSON plan: the files it would export,
+only: every file is opened read-only, one path component at a time from HOME
+with `O_NOFOLLOW` (7.1), and it never creates, changes or removes anything
+there. It prints one JSON plan: the files it would export,
 each with its size, mode, modification time, SHA-256 and the SHA-256 of each
 1 MiB block, plus every name it excluded and why. Then `history-export stream
 --plan-sha256 <h>` writes exactly those files as a tar stream to stdout,
@@ -738,9 +739,9 @@ are listed in the manifest with their size; credentials with their name only.
 
 | Provider | History: exported | Not history: listed, not exported | Credentials: never exported |
 |---|---|---|---|
-| Claude | `projects/` (transcripts and per-session subdirectories; links not followed), `history.jsonl` (prompt history), `jobs/`, `feedback/` | `file-history/` (edit snapshots), `paste-cache/` and `uploads/` (copies of user or workspace files under names that say nothing about them; see below); `CLAUDE.md`, `agents/`, `settings.json` and `settings.json.*`, `plugins/`, `skills/`, `cache/`, `state/`, `daemon/`, `daemon.lock`, `daemon.status.json`, `policy-limits.json*`, `remote-settings.json`, `statusline-command.sh`, `.last-cleanup`, `telemetry/`; `sessions/` (runtime registry with key files); `.claude.json` and `backups/` (account identifiers); `shell-snapshots/` and `session-env/` (environment captures, which can hold secrets) | `.credentials.json` and `.credentials.json.*` |
-| Codex | `sessions/` (`<YYYY>/<MM>/<DD>/rollout-*.jsonl`), `archived_sessions/`, `session_index.jsonl`, `history.jsonl`, `state_*.sqlite*`, `memories_*.sqlite*`, `goals_*.sqlite*`, `queue_*.sqlite*`, `thread_history_*.sqlite*`, `generated_images/`, `visualizations/` | `attachments/` (copies of user files; see below); `config.toml`, `AGENTS.md`, `rules/`, `skills/`, `plugins/`, `packages/`, `cache/`, `models_cache.json`, `app-server-control/`, `app-server-daemon/`, `log/`, `logs_*.sqlite*`, `installation_id`, `.tmp/`, `tmp/`, `version.json`, `rollout-migrations/`, `thread-writer-locks/`, `mcp-oauth-locks/`, `.sqlite-maintenance.lock`, `.personality_migration`, `.sandbox_migration`; `shell_snapshots/` (environment captures) | `auth.json`, `auth.json.*`, `.credentials.json`, `.credentials.json.*` |
-| agentd | the seven task records above; `child-decision.json` and `decisions/`; `managed-output/`; `initial-usage/`; and `~/work/<session>.log` | locks (`agent.pid`, `deliver.lock`, `rescue.lock`, `project-bootstrap.lock`, `codex-host-supervisor.lock`, `native-invocation.lock`, `child-decision.lock`, `common-rules.lock`, `published-context.lock`, `workspace-supervisor.lock`); runtime and setup state (`native-invocation.json`, `native-started.json`, `codex-access-generation.json`, `codex-host-config.json`, `codex-host-start-intent.json`, `codex-host-preparation.json`, `common-rule-ownership.json`, `common-launch-inputs.json`, `mcp-managed.json`, `project-bootstrap.json`, `project-snapshot.json`, `project-rules.md`, `project-roots/`, `project-sync/`, `workspace-admission.json`, `workspace-stop-request.json`); publication intents (`published-context.*.json`); Git files the rescue covers (`rescue-*.bundle`, `rescue-index-*`); temporary copies (`.<name>.agentd-*`) | none expected; the refusal still applies |
+| Claude | `projects/` (transcripts and per-session subdirectories; links not followed), `history.jsonl` (prompt history), `jobs/`, `feedback/` | `file-history/` (edit snapshots), `paste-cache/` and `uploads/` (copies of user or workspace files under names that say nothing about them; see below); `CLAUDE.md`, `agents/`, `settings.json` and `settings.json.*`, `plugins/`, `skills/`, `cache/`, `state/`, `daemon/`, `daemon.lock`, `daemon.status.json`, `policy-limits.json*`, `remote-settings.json`, `statusline-command.sh`, `.last-cleanup`, `telemetry/`; `sessions/` (runtime registry with key files); `.claude.json` and `backups/` (account identifiers); `shell-snapshots/` and `session-env/` (environment captures, which can hold secrets); temporary copies agentd leaves when it stops mid-write (`.<name>.agentd-*`) | `.credentials.json` and `.credentials.json.*` |
+| Codex | `sessions/` (`<YYYY>/<MM>/<DD>/rollout-*.jsonl`), `archived_sessions/`, `session_index.jsonl`, `history.jsonl`, `state_*.sqlite*`, `memories_*.sqlite*`, `goals_*.sqlite*`, `queue_*.sqlite*`, `thread_history_*.sqlite*`, `generated_images/`, `visualizations/` | `attachments/` (copies of user files; see below); `config.toml`, `AGENTS.md`, `rules/`, `skills/`, `plugins/`, `packages/`, `cache/`, `models_cache.json`, `app-server-control/`, `app-server-daemon/`, `log/`, `logs_*.sqlite*`, `installation_id`, `.tmp/`, `tmp/`, `version.json`, `rollout-migrations/`, `thread-writer-locks/`, `mcp-oauth-locks/`, `.sqlite-maintenance.lock`, `.personality_migration`, `.sandbox_migration`; `shell_snapshots/` (environment captures); temporary copies agentd leaves when it stops mid-write (`.<name>.agentd-*`) | `auth.json`, `auth.json.*`, `.credentials.json`, `.credentials.json.*`; `.codex-access-*` (agentd's temporary copy of the login, left when it stops mid-write) |
+| agentd | the seven task records above; `child-decision.json` and `decisions/`; `managed-output/`; `initial-usage/`; and `~/work/<session>.log` | locks (`agent.pid`, `deliver.lock`, `rescue.lock`, `project-bootstrap.lock`, `codex-host-supervisor.lock`, `native-invocation.lock`, `child-decision.lock`, `common-rules.lock`, `published-context.lock`, `workspace-supervisor.lock`); runtime and setup state (`native-invocation.json`, `native-started.json`, `codex-access-generation.json`, `codex-host-config.json`, `codex-host-start-intent.json`, `codex-host-preparation.json`, `common-rule-ownership.json`, `common-launch-inputs.json`, `mcp-managed.json`, `project-bootstrap.json`, `project-snapshot.json`, `project-rules.md`, `project-roots/`, `project-sync/`, `workspace-admission.json`, `workspace-stop-request.json`); publication intents (`published-context.*.json`); Git files the rescue covers (`rescue-*.bundle`, `rescue-index-*`); temporary copies agentd leaves when it stops mid-write (`.<name>.agentd-*`, `.receipt-*`, `.codex-access-*`, which here holds a receipt or a start intent, never a login) | none expected; the refusal still applies |
 
 **agentd is classified by name too.** An entry of `~/.agentd` in no class
 refuses the export (`unknown_entry`), as for the providers; there is no
@@ -773,15 +774,31 @@ whole export with `credential_in_tree`, and the HOME stays:
   `id_dsa`, `id_ecdsa`, `id_ed25519` or `.env.`, so temporary and backup copies
   count too (a v1 HOME had a `.credentials.json.tmp.<suffix>`);
 - a base name that ends with `.pem`, `.key`, `.p12` or `.pfx`;
-- a regular file with more than one hard link;
+- a regular file with more than one hard link. One exception: a file at the
+  top of agentd's state directory whose only other name is its own copy
+  `.<name>.agentd-*` beside it. `writeFileOnce` links its synced copy into place
+  and then removes the copy, so agentd stopping between the two leaves
+  `task-source.json` that way, and the file has no name outside the directory;
 - a file whose SHA-256 equals that of a credential file found in HOME or of
   `/creds/gh_token`, so a renamed whole copy counts too.
 
 **Other refusals.** Inside an exported subtree: a socket, FIFO or device
 (`unexpected_entry`); a path deeper than 64 levels or longer than 1024 bytes
 (`unexpected_entry`). Over 2 GiB or over 100,000 files in total, or one file
-over 512 MiB (`export_too_large`). A symbolic link is never followed. It is
-listed by name, as excluded with class `link`.
+over 512 MiB (`export_too_large`). A name that is not valid UTF-8
+(`unexpected_entry`): JSON cannot carry it, so the manifest and the stream would
+name different files.
+
+**Links.** A symbolic link is never followed. A history name at the top of a
+provider or agentd directory that is a link, and a log that is a link, refuse
+(`unexpected_entry`): HOME's delete would remove what they name, or keep it,
+without archiving it either way. Inside a history subtree, a link is listed by
+name as excluded with class `link` when its target, read as text and never
+followed, lies outside HOME or on the shared volume mounted in HOME, such as
+Claude's `projects/<key>/memory`. A link to anything else in HOME refuses
+(`unexpected_entry`), for the same reason. A link at the top of a provider
+directory under a not-history name, such as render's `CLAUDE.md`, is listed
+with class `link`.
 
 **Not checked:** the content of transcripts. An agent may have printed a secret
 into one. The archive is guarded (section 7, with the limits named there) and
@@ -936,7 +953,9 @@ class, a different shape, more sensitive content. Everything else is the same.
 
 - **`put`** reads the content manifest, then the tar stream. Under the exclusive
   lock it validates the manifest (format, bounds, names, no `..` or absolute
-  path, the credential names again). It writes each tar entry into
+  path, the credential names again, each of the four roots once, and a rescue
+  that lets the HOME go: `Verified` with that rescue's own bundle directory, or
+  `CleanAndPushed`). It writes each tar entry into
   `.incoming/<random>/`, hashing as it writes. It refuses (`invalid`) a tar entry
   the manifest does not list, a listed file that is missing, or a size or hash
   that differs. It copies the rescue files from `/home/dev/.shared/rescue/`, which
@@ -998,9 +1017,17 @@ sections above leave these details open:
   part. In `content.json` a file carries `blocksSHA256`, the SHA-256 of its
   canonical block list, and the list itself goes to `blocks/<n>.json`. `put`
   refuses `invalid` for any of these: bytes that are not canonical, an unknown
-  field, a bound exceeded, a name the 6.3 checks refuse, a log other than
-  `<session>.log`, or tar entries that are not exactly the manifest's files in
-  its order. `--archived-by` goes to `entry.json`. A put that is refused or
+  field, a bound exceeded, a name the 6.3 checks refuse or that is not UTF-8, a
+  log other than `<session>.log`, or tar entries that are not exactly the
+  manifest's files in its order. It also refuses `invalid` a manifest that
+  proves less than a whole export, because verify compares an entry only with
+  its own manifest and the delete follows verify. Each of the four roots must
+  be there once, agentd's at `.agentd` and the log's at `work/<session>.log`.
+  The rescue's result must be `Verified` or `CleanAndPushed` (6.2) and its
+  stamp a report's stamp, `YYYYMMDD-HHMM`. A `Verified` rescue must carry its
+  Git part, and a Git part must be that rescue's directory, `<stamp>` or
+  `<stamp>-N` for a later rescue in the same minute (D-48), never an older
+  rescue's. `--archived-by` goes to `entry.json`. A put that is refused or
   fails removes its own `.incoming` directory at once, so retries cannot fill
   the volume. Only a crash leaves debris, and a later put removes it once it is
   an hour old.
@@ -1008,7 +1035,9 @@ sections above leave these details open:
   `index/<project or _none>/<YYYY-MM>/<archivedAt as 20060102T150405.000000000Z>-<session UID>-<16 hex>.json`.
   Each is hard-linked from `.incoming`, so it never replaces a file. A put that
   answers `exists` writes a missing index entry, which repairs a put that
-  stopped between the rename and the index.
+  stopped between the rename and the index. A put that stopped between the
+  link and removing its `.incoming` copy leaves the index file with two links;
+  `list` reads it all the same, and a put an hour later removes the copy.
 - **The archive lock** is `.shelf.lock` at the archive's root: exclusive for
   `put`, shared for the reads.
 - **Reads.** `verify --session-uid U --content-sha256 H`, `get --session-uid U
@@ -1024,15 +1053,33 @@ sections above leave these details open:
   for a request or a rescue that does not fit and `io_error` for a failed read,
   which the operator takes as Unknown. The archive's codes are `not_found`,
   `conflict`, `corrupt`, `invalid` and `no_archive`. A put that finds an entry
-  with the same `content.json` but a damaged `entry.json` answers `corrupt`.
+  whose `content.json` cannot be read, or one with the same `content.json` but
+  a damaged `entry.json`, answers `corrupt`; `conflict` is only a readable
+  manifest that differs.
 - **Bounds** are 6.3's, plus at most 100,000 excluded names, 64 Git files,
-  2 GiB of Git files and a 64 MiB content manifest.
-- **Guard scans.** `TestHistoryExportReadsOnly` allows only two kinds of open:
-  `os.OpenFile` with `historyOpenFlags` (`O_RDONLY|O_NOFOLLOW|O_NONBLOCK`) or
-  `historyDirFlags`, and `readCredentialReference`'s one `os.O_RDONLY` open
-  outside HOME. It refuses any call that writes, follows links or walks with
-  the standard library, and any call into another file except
-  `sharedIsMounted`. `TestHistoryArchiveNeverRemoves` allows these and nothing
+  2 GiB of Git files and a 64 MiB content manifest. The plan refuses
+  `export_too_large` when its part of the manifest would leave less than
+  64 KiB of that for the operator's part (under 2 KiB), so a plan put can
+  never take refuses at once.
+- **Opens.** Every read of HOME, of the shared volume and of the archive goes
+  through `openBeneath`: it opens the base directory (HOME, the shared volume or
+  the archive), then each component below it with `O_NOFOLLOW`, relative to the
+  directory before it. So no component below the base is a link, even a
+  directory swapped for one between a check and an open. That covers `put`'s
+  copy of the Git rescue from the shared volume, which agents can write. The
+  hashes would catch changed bytes anyway; this keeps the export from reading a
+  file through a link at all. `Lstat` calls that only classify a name still
+  take a path, and a link swapped in there makes the next open fail. The
+  archive's writes take paths too: only the operator reaches the archive.
+- **Guard scans.** `TestHistoryExportReadsOnly` allows only `openBeneath`'s
+  opens and `readCredentialReference`'s one `os.O_RDONLY` open outside HOME.
+  `openBeneath` alone opens a base directory (`os.OpenFile` with
+  `historyBaseFlags`), walks below it with `syscall.Openat`
+  (`historyDirFlags`, or its flags parameter for the last component) and wraps
+  the descriptors with `os.NewFile`; every call of it passes `historyOpenFlags`
+  (`O_RDONLY|O_NOFOLLOW|O_NONBLOCK`) or `historyDirFlags`. The scan refuses any
+  call that writes, follows links or walks with the standard library, and any
+  call into another file except `sharedIsMounted`. `TestHistoryArchiveNeverRemoves` allows these and nothing
   else:
   - a removal only in `removeIncoming`;
   - a rename only in `publishIncoming`;
@@ -1043,8 +1090,12 @@ sections above leave these details open:
   Each of those functions first checks that its path is under `.incoming`.
   `TestHistoryLayoutCoversAgentdState` resolves every name that
   `internal/agentd` passes to `statePath`, to `filepath.Join` of the state
-  directory, to `os.CreateTemp` there or to `workspaceFileLock`, and fails on a
-  name the table lacks or cannot resolve, and on a rule that names nothing. Each
+  directory, to `os.CreateTemp` there or to `workspaceFileLock`, and the
+  temporary copy any helper that calls `os.CreateTemp(filepath.Dir(path), …)`
+  writes beside a state file, directly or through another helper
+  (`writeFileAtomic`, `writeFileOnce`, `writeWorkspaceJSON`,
+  `writeCodexPrivateAtomic`, `writeJSONFile`). It fails on a name the table
+  lacks or cannot resolve, and on a rule that names nothing. Each
   scan has a never-compiled file under `testdata/historyscan/`.
 - **Tests:** `TestHistoryExportPlanFollowsTheAllowlists`,
   `TestHistoryExportStreamWritesThePlan`,
@@ -1052,10 +1103,14 @@ sections above leave these details open:
   names, upper case, hard links, renamed copies of each login and of the token),
   `TestHistoryExportRefusesUnclassifiedEntries`,
   `TestHistoryExportRefusesUnknownLayouts`,
-  `TestHistoryExportRefusesUnexpectedEntries`, `TestHistoryExportSizeCaps`,
+  `TestHistoryExportRefusesUnexpectedEntries` (links into HOME, names that are
+  not UTF-8), `TestHistoryExportListsLinksHOMEKeeps`,
+  `TestHistoryExportKeepsAgentdsInterruptedWrite`,
+  `TestHistoryExportNeverOpensThroughALink`, `TestHistoryExportSizeCaps`,
   `TestHistoryExportListsTheGitRescue`,
   `TestHistoryArchivePutStoresAndIsIdempotent`,
   `TestHistoryArchivePutRefusesStreamsThatDifferFromTheManifest`,
+  `TestHistoryArchivePutRefusesManifestsThatProveLess`,
   `TestHistoryArchiveSizeCaps`, `TestHistoryArchiveVerifyDetectsTamper`,
   `TestHistoryArchivePartialPutRecoversAfterARestart`,
   `TestHistoryArchiveGetListAndRead`, `TestHistoryArchiveNeedsItsVolume`,
@@ -1219,8 +1274,9 @@ when H2 turns the record on, which section 12's order cannot produce.)
 - **`TestHistoryLayoutCoversAgentdState`** (`internal/agentd`): every name agentd
   writes under its state directory is in the agentd classification (6.3).
 - **`TestHistoryExportReadsOnly`** (`internal/agentd`): the export opens HOME
-  files only with `O_RDONLY|O_NOFOLLOW` and makes no create, rename, chmod or
-  remove call under HOME.
+  files only read-only through `openBeneath`, one component at a time with
+  `O_NOFOLLOW` (7.1), and makes no create, rename, chmod or remove call under
+  HOME.
 - **`TestHistoryArchiveNeverRemoves`**: the archive code removes files only under
   `.incoming/` and never rewrites a file once it is renamed into place.
 - **`TestNoCodeWritesHomeExpiryOverride`**.

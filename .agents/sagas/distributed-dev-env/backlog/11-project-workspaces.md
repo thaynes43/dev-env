@@ -328,7 +328,9 @@ files (ADR-006). Each name goes in `claudeLayout`
 (`internal/agentd/historyexport_layout.go`) with a fixture in
 `historyexport_test.go`, in the change that classifies it. To find the list
 again, search the pinned `claude` binary for the array that holds
-`"dump-prompts"`.
+`"dump-prompts"`. Do F4 before H7 turns the archive on: Claude Code may write
+`remote-control/` once v2 Claude sessions run in remote mode (plan 03), and the
+first HOME that holds it refuses until it has a class.
 
 ### Parent issues
 
