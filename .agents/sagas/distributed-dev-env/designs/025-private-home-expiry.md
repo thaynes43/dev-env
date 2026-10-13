@@ -1309,6 +1309,9 @@ class, a different shape, more sensitive content. Everything else is the same.
   Tom's personal Kubernetes account; Q-34 (section 19) directs discovery from
   accessible evidence. Headlamp's shared backend is not an owner-override
   exception. This archive guard is separate from that exact-user override.
+  The [H7 implementation contract](../verification/h7-compatible-guard-contract-2026-10-13.md)
+  lists the fixed current trusted infrastructure routes, bounded controller
+  proof, activation-baseline requirements and separate installed acceptance.
 - **No backup off the cluster**, and kept indefinitely. agentd has no command
   that removes an entry.
 
