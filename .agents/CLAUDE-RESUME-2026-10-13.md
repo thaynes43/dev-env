@@ -96,8 +96,16 @@ The five retained AgentSessions in `dev-agents`. Canary originals never expire
 | `private-canary-a1444f4131ec7281b5d1e3130c3b5ada` | `430297d9-aa29-4332-9b3b-37095c1b5963` | claude-sigo-1012 | `Failed`, task `Succeeded`, `executorTerminal` |
 | `private-canary-eb9d486a612e27fd2b52d27f675512be` | `454d12a2-60bc-4c4e-95c5-bb4b26428a65` | claude-sigo-1012b | `Failed`, task `Succeeded`, `executorTerminal` |
 
-Next free IDs: Q-37, D-91, ADR-008, DESIGN-026, README decision 72. Each new
+Next free IDs: Q-38, D-91, ADR-008, DESIGN-026, README decision 72. Each new
 question takes the next free Q id when it is asked; none is reserved.
+
+Q-37 is pending through the asynchronous question tool: a one-time delegation
+of the owner-only PV Retain step, against the reviewed #269 client and verified
+push-main executable. No answer, PV write or later gate is accepted. See
+[DESIGN-025 section 22](sagas/distributed-dev-env/designs/025-private-home-expiry.md#22-prepared-one-time-pv-action-q-37-pending).
+The [identity mapping checkpoint](sagas/distributed-dev-env/verification/h7-personal-identity-mapping-2026-10-13.md)
+adds current Omni metadata and pinned mapping evidence; personal authenticated
+request and phone-path acceptance remain unobserved.
 
 **H7 pickup update, 2026-10-13:** the
 [read-only prerequisite checkpoint](sagas/distributed-dev-env/verification/h7-prerequisites-2026-10-13.md)
