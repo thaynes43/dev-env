@@ -1,8 +1,10 @@
 # Dev-env v2: workflow, quick start and feature set
 
-**Current continuation, 2026-10-12:** the
-[Claude pickup brief](../.agents/CLAUDE-RESUME-2026-10-12.md) records current
-requirements, the roadmap, source-review targets and stopped attempts. Read it
+**Current continuation, 2026-10-13:** the
+[2026-10-13 Claude pickup brief](../.agents/CLAUDE-RESUME-2026-10-13.md) records
+the deployed state, counters, rulings and next work. The
+[2026-10-12 brief](../.agents/CLAUDE-RESUME-2026-10-12.md) still records the
+requirements, the roadmap, source-review targets and stopped attempts. Read both
 before selecting implementation or executing the bounded probe examples below.
 
 **Scope corrected 2026-10-10, America/New_York.** V2 solves five problems with
@@ -112,7 +114,15 @@ foundations have shipped; the earlier empty-common-rule configuration was a
 historical checkpoint. Actual both-provider loading remains unaccepted:
 Claude's retained response hit its weekly limit, and Codex output is Unknown.
 See the [current checkpoint](../.agents/CLAUDE-RESUME-2026-10-12.md#what-is-actually-delivered)
-for full revisions and acceptance limits. The
+for full revisions and acceptance limits.
+*Update, 2026-10-13: the sentences above are the 2026-10-12 record. Release
+2.27.0 is now deployed: operator `sha-2221b83`, task template
+`2.27.0-e83cacfe3e`. Rule loading is accepted for both providers; private
+GitHub authorization, a `Ready` private bootstrap and a fresh task pin are
+accepted for Claude. HOME expiry (DESIGN-025 H1 to H6) is installed with only
+the terminal record on. Private-project admission is still disabled. The
+[2026-10-13 brief](../.agents/CLAUDE-RESUME-2026-10-13.md#deployed-state)
+has the digests.* The
 [bootstrap contract](../.agents/sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md)
 uses private catalogs without shared preflight or locks; startup refresh does
 not replace a fresh selected-repository fetch and immutable pin before each task.
@@ -130,7 +140,8 @@ does not prove complete stopped native history. The expiry policy is decided
 ([ADR-005](../.agents/sagas/distributed-dev-env/adrs/005-private-home-expiry.md),
 Q-31: archive, then delete, 30 days after a recorded stop; corrected by
 [ADR-006](../.agents/sagas/distributed-dev-env/adrs/006-private-home-expiry-corrections.md))
-but not built.
+but not built. *(Update, 2026-10-13: DESIGN-025 H1 to H6 are built and
+installed; only the terminal record is on. H7 to H10 remain.)*
 Existing coordinator scope is preserved; the legacy ordinary-session ACL is
 not a new authorization contract for peer context. Claude review is optional,
 including releases; required CI and native independent review remain gates.
@@ -141,7 +152,8 @@ without a valid acceptance result. A later reviewed source fix does not count
 as a new runtime pass. See [HANDOFF](../.agents/HANDOFF.md) and
 [overnight evidence](trials/2026-10-10-overnight-results.md). This note is
 historical: the current installed template is 2.20.0, as the first paragraph
-after the table above says. The
+after the table above says. *(Since 2026-10-13 it is 2.27.0; see the update
+under that paragraph.)* The
 [pickup brief](../.agents/CLAUDE-RESUME-2026-10-12.md#what-is-actually-delivered)
 has the full revisions.
 

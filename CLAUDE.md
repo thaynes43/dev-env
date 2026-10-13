@@ -4,10 +4,13 @@ Guidance for Claude Code and other agents working in this repository. Codex read
 `AGENTS.md`, which points here: this file is the one source of the rules.
 
 For the current takeover, read the
-[Claude pickup brief](.agents/CLAUDE-RESUME-2026-10-12.md) in full. It records
-Tom's requirement history, current six-step roadmap, exact acceptance gaps and
-failed routes. Review and improve the code Codex shipped. Earlier next steps
-are historical; changing drivers does not reset stopped tasks or consumed IDs.
+[2026-10-13 Claude pickup brief](.agents/CLAUDE-RESUME-2026-10-13.md) in full. It
+records the deployed state, counters, rulings, next work with owner gates and
+the questions still to ask Tom. The
+[2026-10-12 brief](.agents/CLAUDE-RESUME-2026-10-12.md) still holds Tom's
+requirement history, the six-step roadmap and the failed routes. Earlier next
+steps are historical; changing drivers does not reset stopped tasks or consumed
+IDs.
 
 The [workflow guide](docs/workflow-guide.md) gives the high-level feature set,
 working quick start, Codex session model, freshness contract and delivery gates.
@@ -36,16 +39,21 @@ this repo publishes signed images, haynes-ops pins and deploys them.
 **Current scope, 2026-10-10:** preserve sessions through upgrades, distribute
 load, guard powerful access, expose live/stopped work and context, and attribute
 model usage/cost. Plans 01/02 provide the tested Claude task/terminal subset.
-As of 2026-10-12, release 2.24.0 is published and signed, not deployed. The
-installed task template is signed agent 2.20.0. The deployed operator is
-`sha-cd966d1`, delivered through haynes-ops #3825. Full Codex coordination,
-history-preserving archive, guarded access and truthful cost reporting remain
-unaccepted. Read the handoff for exact digests and evidence. The
+As of 2026-10-13, release 2.27.0 is deployed: operator `sha-2221b83` (haynes-ops
+#3886) and task template `2.27.0-e83cacfe3e` with signed agent 2.27.0
+(haynes-ops #3887).
+Rule loading is accepted for both providers. Private GitHub authorization, a
+`Ready` private catalog bootstrap and a fresh task pin are accepted for Claude.
+HOME expiry (DESIGN-025 H1 to H6) is installed with only the terminal record
+on. Full Codex coordination, history-preserving archive, guarded access and
+truthful cost reporting remain unaccepted. Read the handoff for exact digests
+and evidence. The
 historical twenty-row audit guides migration; it is not a universal pilot gate.
 V1 stays running until required workflows have replacements and Tom explicitly
 approves retirement. Build sessions follow the
-[Claude pickup brief](.agents/CLAUDE-RESUME-2026-10-12.md) and its six-step
-roadmap; [`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md) is the
+[2026-10-13 Claude pickup brief](.agents/CLAUDE-RESUME-2026-10-13.md) and its
+next work, which continues the 2026-10-12 brief's six-step roadmap;
+[`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md) is the
 historical first-build order. Deploys remain GitOps.
 
 ## Layout
@@ -181,7 +189,8 @@ explicit `@claude` request through `claude.yml` can obtain a review; read and
 resolve any findings it produces. A skipped green job is not a review. Tom
 confirmed on 2026-10-11 that the review service is down: record it as unavailable
 and proceed with required CI and native independent review; do not retry or
-repair its authentication as a delivery prerequisite. If
+repair its authentication as a delivery prerequisite. (It did run on most PRs on
+2026-10-12 and 2026-10-13; see the review section below.) If
 `RELEASE_APP_ID` or `RELEASE_APP_PRIVATE_KEY` is missing, release-please falls back
 to `GITHUB_TOKEN`, and a PR opened that way starts no workflows: then close and reopen
 the release PR (`gh pr close <n> && gh pr reopen <n>`) as haynes-dev-bot so
@@ -280,6 +289,13 @@ findings before merging. Fix each one, or answer it on the PR with a concrete re
 it is wrong; never "merging anyway". Both workflows need the Claude GitHub App on the
 repo and the `CLAUDE_CODE_OAUTH_TOKEN` repo secret, otherwise they skip green and
 review nothing.
+
+*Observed 2026-10-12 and 2026-10-13:* the advisory review ran on most PRs in
+these two days and posted reviews; several had findings that led to fixes (for
+example #251).
+Tom's rule above is unchanged: the review stays optional and is not a gate, a
+missing result is recorded as unavailable, and native independent review stays
+mandatory. Check the PR rather than assuming it ran or did not.
 
 ## Repository instruction acceptance
 
