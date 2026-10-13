@@ -19,18 +19,28 @@ records Flux Ready/Healthy, the Bound claim and no Pod references at 17:24 UTC.
 The shelf, retained sessions and failed Jobs match their baseline. Expiry flags
 remain off except terminal recording. The bound PV is still Delete; owner-set
 Retain is required before archive activation. The next ordered unit is the
-archive guard before the shelf mount; its implementation now awaits Q-35 below.
+archive guard before the shelf mount, preserving v1 under Q-35 and
+[ADR-007](sagas/distributed-dev-env/adrs/007-preserve-v1-archive-trust-boundary.md).
 F4 and both cold measurements still gate activation.
 
 **Guard prerequisite:** the read-only review found operator-account borrowing
 paths available to v1's existing administrator powers. A shelf-only guard does
 not close them. [Q-35](sagas/distributed-dev-env/designs/025-private-home-expiry.md#20-h7-archive-trust-boundary-q-35)
-asks whether v1 remains trusted during migration or H7 must isolate archives
-from it before use. Native submission was accepted, but delivery and the answer
-remain unverified. [Issue #261](https://github.com/thaynes43/dev-env/issues/261)
-preserves the evidence and validation limits. No guard implementation or runtime
-probe was made; continue independent resource prerequisites while the decision
-is pending.
+asked whether v1 remains trusted during migration or H7 must isolate archives
+from it before use. An oversight relay quotes Tom's answer: "v1 must remain the
+same until it’s decommissioned after the MVP has been accepted". The coordinator
+verified the relay, not the original owner turn or native phone delivery.
+ADR-007 records the narrow constraint: preserve v1 behavior, configuration and
+current access; add no rights, archive activation or automatic decommissioning.
+[Issue #261](https://github.com/thaynes43/dev-env/issues/261) preserves the
+evidence and validation limits. No guard implementation or runtime probe was
+made. The compatible guard protects v2 paths without claiming isolation from v1.
+
+The [resource setup checkpoint](sagas/distributed-dev-env/verification/h7-measurement-setup-2026-10-13.md)
+records the corrected synthetic fixture accounting, measurement-only isolation
+and small focused checks. These are source prerequisites, not either cold
+resource acceptance. Hosted artifacts, cache evidence and separately limited
+measurement phases remain required.
 
 ## H7 owner identity and read-only prerequisites — 2026-10-13
 
@@ -462,7 +472,11 @@ The ones that change behaviour:
   in a Job; the broker and keeper hold `pods/exec` in `dev-agents`. An admission
   guard for both archives ships with H7 or DESIGN-024's R5, whichever is first,
   after a check that no v1 workflow execs into the shelf (none did on
-  2026-10-12). If one does, ask Tom before the guard ships.
+  2026-10-12). This historical v1 restriction is superseded by
+  [ADR-007/Q-35](sagas/distributed-dev-env/adrs/007-preserve-v1-archive-trust-boundary.md):
+  preserve v1 unchanged through accepted MVP and separately approved
+  decommissioning. The current guard protects untrusted v2 paths without
+  claiming privacy from v1.
 - **Smaller fixes:** the terminal record sits beside `lastExecutor`; a once-only
   missed marker; a fifth guard exception for the expiry's hold pod; every HOME
   delete attempt re-verifies the archive; edit snapshots, pasted-text caches and

@@ -96,7 +96,7 @@ The five retained AgentSessions in `dev-agents`. Canary originals never expire
 | `private-canary-a1444f4131ec7281b5d1e3130c3b5ada` | `430297d9-aa29-4332-9b3b-37095c1b5963` | claude-sigo-1012 | `Failed`, task `Succeeded`, `executorTerminal` |
 | `private-canary-eb9d486a612e27fd2b52d27f675512be` | `454d12a2-60bc-4c4e-95c5-bb4b26428a65` | claude-sigo-1012b | `Failed`, task `Succeeded`, `executorTerminal` |
 
-Next free IDs: Q-36, D-89, ADR-007, DESIGN-026, README decision 70. Each new
+Next free IDs: Q-36, D-90, ADR-008, DESIGN-026, README decision 71. Each new
 question takes the next free Q id when it is asked; none is reserved.
 
 **H7 pickup update, 2026-10-13:** the
@@ -130,6 +130,7 @@ predate this session; their rows point there.
 | Q-32 | "Yes, after deploy" | `dev-env-private-repo-canary-1012/root-q32-owner-answer-r1.json` (`48ab104f…`) | One Sigo rerun after 2.25. Done: all seven DESIGN-011 items hold (#247). |
 | Q-33 | Personal Kubernetes account remains; Headlamp retires after full v2 adoption | `dev-env-h7-personal-identity-1013/root-q33-owner-answer-r1.json` (`da28de08…`) | Direct owner answer in this chat; exact username still needs evidence. No shared Headlamp owner exception follows. |
 | Q-34 | Cannot run a workstation check from the phone; keep working | `dev-env-h7-personal-identity-1013/root-q34-owner-direction-r1.json` (`ac078e5d…`) | Withdraw the workstation request. Discover the identity from accessible evidence and continue independent H7 prerequisites. |
+| Q-35 | "v1 must remain the same until it’s decommissioned after the MVP has been accepted" | `dev-env-h7-archive-guard-1013/q35-relayed-answer-r1.json` (`b8b96a86…`) | Owner answer relayed through oversight; original user turn and native delivery unobserved. ADR-007/D-89 preserves v1 current behavior and access; no new authority or automatic decommissioning. |
 | Pacing | "Slow down" (asked 04:00Z, answered 11:02Z, 2026-10-13) | `dev-env-claude-handoff-1013/root-pacing-owner-answer-r1.json` (`a70a80cc…`) | One Opus subagent unit (`claude-opus-5-5`) at a time, Sonnet (`claude-sonnet-5-5`) for routine work, no parallel Opus waves until Tom says otherwise. README decision 69. |
 
 ## Delivered 2026-10-12 to 2026-10-13
@@ -187,15 +188,20 @@ predate this session; their rows point there.
 by haynes-ops #3898 (`a287a4f6`), Bound with no Pod references. Read the
 [installed checkpoint](sagas/distributed-dev-env/verification/h7-archive-pvc-2026-10-13.md).
 Its bound PV remains Delete; owner-set Retain is pending. The next ordered unit
-is the archive guard before mounting it; its implementation now awaits Q-35
-below. F4 and both cold resource measurements remain gates.
-The guard review then found operator-account borrowing paths available to v1.
+is the compatible archive guard before mounting it, under Q-35 and
+[ADR-007](sagas/distributed-dev-env/adrs/007-preserve-v1-archive-trust-boundary.md).
+F4 and both cold resource measurements remain gates.
+The guard review found operator-account borrowing paths available to v1.
 [Q-35](sagas/distributed-dev-env/designs/025-private-home-expiry.md#20-h7-archive-trust-boundary-q-35)
-is submitted, delivery unverified and answer pending: preserve the current
-trusted v1 administrator boundary during migration, or require technical
-isolation before archive use. [Issue #261](https://github.com/thaynes43/dev-env/issues/261)
-holds the evidence. No guard implementation or bypass probe was made. Continue
-independent resource prerequisites while the owner decision is pending.
+now has a relayed owner answer: v1 stays unchanged until decommissioned after
+accepted MVP. The coordinator verified the oversight relay; the original owner
+turn and native delivery were not observed. Preserve v1 behavior, configuration
+and current access; add no privilege or automatic decommissioning.
+[Issue #261](https://github.com/thaynes43/dev-env/issues/261) holds the evidence.
+No guard implementation or bypass probe was made. Finish the in-flight
+[measurement source setup](sagas/distributed-dev-env/verification/h7-measurement-setup-2026-10-13.md),
+then the next ordered guard, preserving the trusted-v1 boundary. Small source
+checks do not establish either cold measurement or deployed acceptance.
 
 Each unit: publish its contract, one reviewed PR, focused tests, native
 independent review, `CI - Success`, self-squash-merge. haynes-ops units also
@@ -213,7 +219,8 @@ need declare-activity and peer checks before and after.
      1. the `dev-env-history-archive` PVC (shelf-only, RWO), installed unmounted
         by #3898; its owner-set PV Retain step remains pending;
      2. the archive guard, `dev-env-archive-guard` (it covers DESIGN-024's
-        archive too, so it ships with whichever of H7 and R5 comes first);
+        archive too, so it ships with whichever of H7 and R5 comes first),
+        preserving v1 under ADR-007/Q-35;
      3. the shelf mount, `--history-archive`, `Recreate` and the 2.27.0 image
         (this absorbs #3710);
      4. the `dev-env-home-expiry-guard` admission policy, refusing every
@@ -226,10 +233,10 @@ need declare-activity and peer checks before and after.
      6. `GOMEMLIMIT` about 200MiB on the operator, then
         `TestHistoryRelayMeasure` once in a CPU-limited Job with the
         operator's limits, before the archive flag.
-   - **Owner gates**, each one AskUserQuestion when it arises: if the parity
-     check finds a v1 workflow that execs into the shelf or mounts the claim,
-     ask Tom before the guard ships (no v2 guard may cut a capability agents
-     use today); Tom sets the PV to `Retain` by hand once the claim binds; if
+   - **Owner gates**, each one AskUserQuestion when it arises: Q-35 preserves
+     v1 unchanged; the compatible guard must not remove its existing access,
+     whether or not the scoped scan found a workflow. Tom sets the PV to
+     `Retain` by hand once the claim binds; if
      anyone but Tom can update AgentSessions, the policy must match his identity.
      Q-33 settles the personal-account choice; Q-34 withdraws the workstation
      request. Discover the exact username from accessible evidence before that
@@ -354,9 +361,9 @@ Ask each with AskUserQuestion when it arises, recommended option first. Check
 its premise with a read-only command first, record it in the design or issue,
 and fold the answer back as a dated ruling.
 
-1. **H7 owner steps**, in order as they come up: whether a v1 workflow keeps
-   its shelf access (only if the parity check finds one that execs into the
-   shelf or mounts the claim; ask before the archive guard ships); the
+1. **H7 owner steps**, in order as they come up: Q-35 already preserves v1
+   unchanged; do not re-ask the same migration choice or remove an unused v1
+   permission on the strength of the parity scan. The remaining steps are the
    override policy's identity (personal account chosen in Q-33; discover the
    exact username from accessible evidence under Q-34); `Retain` on the
    archive PV; a hold for any Reaping private Session with a live executor
