@@ -17,12 +17,13 @@ const historyUsage = `usage:
   ctl history-archive verify --session-uid U --content-sha256 H
   ctl history-archive get    --session-uid U [--content-sha256 H]
   ctl history-archive list   --project P [--limit N] [--after CURSOR]
+  ctl history-archive manifest --session-uid U [--content-sha256 H] [--offset N] [--limit N]
   ctl history-archive read   --session-uid U --content-sha256 H --file ROOT/PATH --offset N
 `
 
 // historyCtl is `ctl history-export plan|stream` (DESIGN-025 6.3), run in a
 // session or hold pod over its private HOME, and `ctl history-archive
-// put|verify|get|list|read` (DESIGN-025 7), run in the shelf. A failure is one
+// put|verify|get|list|manifest|read` (DESIGN-025 7), run in the shelf. A failure is one
 // JSON object, {"error": code, "message": ...}, with exit status 1: on stdout,
 // except for stream, whose stdout is the tar stream, so its error goes to
 // stderr.
@@ -45,6 +46,8 @@ func historyCtl(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv
 		after       string
 		file        string
 		offset      int64
+		pageOffset  int
+		pageLimit   int
 		projectSeen bool
 	)
 	switch cmd + " " + sub {
@@ -65,6 +68,11 @@ func historyCtl(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv
 			fs.StringVar(&file, "file", "", "")
 			fs.Int64Var(&offset, "offset", 0, "")
 		}
+	case "history-archive manifest":
+		fs.StringVar(&sessionUID, "session-uid", "", "")
+		fs.StringVar(&contentSHA, "content-sha256", "", "")
+		fs.IntVar(&pageOffset, "offset", 0, "")
+		fs.IntVar(&pageLimit, "limit", protocol.MaxHistoryManifestPage, "")
 	case "history-archive list":
 		fs.Func("project", "", func(v string) error { project, projectSeen = v, true; return nil })
 		fs.IntVar(&limit, "limit", 0, "")
@@ -114,6 +122,8 @@ func historyCtl(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv
 		out, err = a.Get(sessionUID, contentSHA)
 	case "list":
 		out, err = a.List(project, limit, after)
+	case "manifest":
+		out, err = a.Manifest(sessionUID, contentSHA, pageOffset, pageLimit)
 	case "read":
 		out, err = a.Read(sessionUID, contentSHA, file, offset)
 	}

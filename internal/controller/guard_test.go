@@ -269,6 +269,14 @@ var guardedCalls = []struct {
 	{"Delete", "deleteExpiryHold", "expiryHoldRemovalAllowed"},
 	{"deleteExpiryExecutor", "removeExpiredExecutor", "expiryPodRemovalAllowed"},
 	{"deleteExpiryHold", "removeExpiryHold", "expiryHoldRemovalAllowed"},
+	// The HOME's own (DESIGN-025 6.5, H6): deleted with UID and
+	// resourceVersion, its finalizer lifted, only after the expiry's volume
+	// guard, from the one caller that verifies the archive and checks for
+	// Pods first (TestExpiryDeleteNeedsVerify).
+	{"Delete", "deleteExpiryHome", "expiryVolumeRemovalAllowed"},
+	{"RemoveFinalizer", "releaseExpiryHome", "expiryVolumeRemovalAllowed"},
+	{"releaseExpiryHome", "deleteExpiryHome", "expiryVolumeRemovalAllowed"},
+	{"deleteExpiryHome", "removeExpiredHome", "noPodUsesHome"},
 }
 
 // TestOnlyTheGuardDeletes reads this package's source. A Delete or DeleteAllOf

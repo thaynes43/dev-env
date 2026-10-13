@@ -84,14 +84,15 @@ internal/controller/     the AgentSession reconciler: each session's pod and vol
 internal/apiserver/      the operator's /v1 API (D-46): HTTPS runnable, TokenReview auth, caller classes, sessions,
                          heartbeat, suspend and resume (D-60), fleet, grants (D-56), activities (D-66) and rescues (D-67) handlers;
                          also decisions, project canaries and their results, task claims, the inbox, published contexts, the
-                         session directory and task budgets. Unit tests use the fake client; its envtest suite mints real
+                         session directory, task budgets and archived history (DESIGN-025 8). Unit tests use the fake client; its envtest suite mints real
                          tokens and serves through a manager wired as the operator's
 internal/podexec/        the one pods/exec client (WebSocket, SPDY fallback): the rescue, and the API's log and message routes (D-65)
 internal/apiserver/apiv1/  the API's wire types, error codes and Claude effort table, standard library only, for agent-run
 internal/activity/       the reaper of expired declare-activity declarations (D-66), a leader-only runnable in the operator
 internal/shelf/          the operator's side of the shelf pod (D-67): finds it, lists and prunes rescues there by exec; the pruner is
-                         a leader-only runnable; ExecSlots, the per-replica limit on archive execs (DESIGN-024 5, DESIGN-025 6.4)
-internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66, D-67): -p, --local, list, show, log, msg, reap, suspend, resume, rescue list|restore, declare-activity, attach, detach, fleet; finds the API and a token in a session
+                         a leader-only runnable; ExecSlots, the per-replica limit on archive execs (DESIGN-024 5, DESIGN-025 6.4);
+                         HistoryReader, the history archive's reads for the API (DESIGN-025 8)
+internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66, D-67): -p, --local, list, show, log, msg, reap, suspend, resume, rescue list|restore, history list|show|read (DESIGN-025), declare-activity, attach, detach, fleet; finds the API and a token in a session
                          pod, in another pod (a minted token) or from flags; imports the standard library, apiv1 and
                          agentd's protocol only (`make build` checks); tests run against an httptest TLS server
 internal/keeper/         the keeper (D-52): mints the haynes-dev-bot token into dev-agents/dev-env-gh-token every 40 minutes

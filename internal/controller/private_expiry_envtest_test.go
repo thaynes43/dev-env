@@ -1,6 +1,6 @@
 package controller
 
-// DESIGN-025 unit H5 on a real API server: the AgentSession CRD with its
+// DESIGN-025 units H5 and H6 on a real API server: the AgentSession CRD with its
 // rules, real UIDs and preconditions, and Node and Lease objects. envtest has
 // no kubelet, so the test reports Pod status and plays the kubelet's removal
 // of a Pod that is being deleted. The history export and archive are agentd's
@@ -9,6 +9,9 @@ package controller
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -129,13 +132,37 @@ func TestHomeExpiryOnTheAPIServer(t *testing.T) {
 		// archivedAfterVerify: the first status write that holds Archived
 		// came after a verify ran in the shelf.
 		archivedWrites, archivedAfterVerify int
+		// deleteOn is --enable-home-expiry-delete (H6). claimDeletes are
+		// the HOME claim deletes the API server accepted, each with the
+		// verifies run before it and whether it carried UID and
+		// resourceVersion preconditions.
+		deleteOn     bool
+		claimDeletes []envClaimDelete
 	}
 	newRig := func(t *testing.T, name string) *rig {
 		s, pod, home := envFixture(t, name)
 		return &rig{s: s, pod: pod, home: home, x: newAgentdExec(t, name), rescuer: &expiryRescuer{}, clock: now}
 	}
 	operator := func(g *rig) *Reconciler {
-		c := interceptor.NewClient(k8sWatch(t), interceptor.Funcs{SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, o client.Object, opts ...client.SubResourceUpdateOption) error {
+		c := interceptor.NewClient(k8sWatch(t), interceptor.Funcs{Delete: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.DeleteOption) error {
+			err := c.Delete(ctx, o, opts...)
+			if _, ok := o.(*corev1.PersistentVolumeClaim); ok && err == nil {
+				var do client.DeleteOptions
+				do.ApplyOptions(opts)
+				p := do.Preconditions
+				verifies := 0
+				for _, call := range g.x.called() {
+					if call == "verify" {
+						verifies++
+					}
+				}
+				g.mu.Lock()
+				g.claimDeletes = append(g.claimDeletes, envClaimDelete{verifies: verifies,
+					preconditions: p != nil && p.UID != nil && *p.UID == g.home.UID && p.ResourceVersion != nil && *p.ResourceVersion != ""})
+				g.mu.Unlock()
+			}
+			return err
+		}, SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, o client.Object, opts ...client.SubResourceUpdateOption) error {
 			if s, ok := o.(*v1alpha1.AgentSession); ok && s.Status.PrivateHistory != nil && s.Status.PrivateHistory.Expiry != nil &&
 				s.Status.PrivateHistory.Expiry.Phase == v1alpha1.HomeExpiryArchived && s.Status.PrivateHistory.Expiry.Refusal == "" {
 				g.mu.Lock()
@@ -151,7 +178,7 @@ func TestHomeExpiryOnTheAPIServer(t *testing.T) {
 			return c.SubResource(sub).Update(ctx, o, opts...)
 		}})
 		return &Reconciler{Client: c, APIReader: c, Templates: templatesKey, PrivateTerminalRecord: true, PrivateExecutorTerminal: NewPrivateExecutorTerminalCounter(),
-			HomeHistoryArchive: true, HomeExpiryCounters: NewHomeExpiryCounters(), Rescuer: g.rescuer,
+			HomeHistoryArchive: true, HomeExpiryDelete: g.deleteOn, HomeExpiryCounters: NewHomeExpiryCounters(), Rescuer: g.rescuer,
 			HistoryRelay: &ExecHistoryRelay{Exec: g.x, Shelf: &shelf.Shelf{Reader: c, Namespace: sessionNS}, Slots: shelf.NewExecSlots(shelf.DefaultExecSlots)},
 			Now:          func() time.Time { g.mu.Lock(); defer g.mu.Unlock(); return g.clock }}
 	}
@@ -184,10 +211,26 @@ func TestHomeExpiryOnTheAPIServer(t *testing.T) {
 		}
 		return p
 	}
+	// pvcProtection plays the pvc-protection controller, which envtest
+	// lacks: a HOME claim being deleted that no Pod uses loses its
+	// kubernetes.io/pvc-protection finalizer.
+	pvcProtection := func(t *testing.T, g *rig) {
+		t.Helper()
+		c := &corev1.PersistentVolumeClaim{}
+		if err := k8s.Get(ctx, client.ObjectKeyFromObject(g.home), c); err != nil || c.DeletionTimestamp.IsZero() {
+			return
+		}
+		if controllerutil.RemoveFinalizer(c, "kubernetes.io/pvc-protection") {
+			if err := k8s.Update(ctx, c); client.IgnoreNotFound(err) != nil && !apierrors.IsConflict(err) {
+				t.Fatal(err)
+			}
+		}
+	}
 	// kubelet runs a hold pod on the node, and removes a Pod that is being
 	// deleted, as a kubelet does once its containers stopped.
 	kubelet := func(t *testing.T, g *rig) {
 		t.Helper()
+		pvcProtection(t, g)
 		p := named(t, g)
 		switch {
 		case p == nil:
@@ -295,8 +338,95 @@ func TestHomeExpiryOnTheAPIServer(t *testing.T) {
 				t.Fatalf("Archived moved on: %+v", e2)
 			}
 			claimIntact(t, g)
+
+			// H6, the delete on (T1 to the end, T5, T12): a fresh operator
+			// for every step. Deleting is recorded after a verify, the
+			// claim goes after another one, with its UID and
+			// resourceVersion; then Expired, and the reaped Session is
+			// released. The archive stays and verifies.
+			verifies := strings.Count(strings.Join(g.x.called(), " "), "verify")
+			g.deleteOn = true
+			released := false
+			for range 12 {
+				step(t, g, 1)
+				kubelet(t, g)
+				if err := k8s.Get(ctx, client.ObjectKeyFromObject(g.s), &v1alpha1.AgentSession{}); apierrors.IsNotFound(err) {
+					released = true
+					break
+				}
+			}
+			if !released {
+				t.Fatalf("the Session was not released: %+v", history(t, g).Expiry)
+			}
+			if len(g.claimDeletes) != 1 || !g.claimDeletes[0].preconditions || g.claimDeletes[0].verifies < verifies+2 {
+				t.Fatalf("claim deletes %+v; want one, with UID and resourceVersion, after two more verifies than %d", g.claimDeletes, verifies)
+			}
+			if err := k8s.Get(ctx, client.ObjectKeyFromObject(g.home), &corev1.PersistentVolumeClaim{}); !apierrors.IsNotFound(err) {
+				t.Fatalf("the HOME claim stays: %v", err)
+			}
+			if ver, err := g.x.archive.Verify(string(g.s.UID), e.Archive.ContentSHA256); err != nil || ver.ContentSHA256 != e.Archive.ContentSHA256 {
+				t.Fatalf("the archive does not verify after the delete: %v", err)
+			}
 		})
 	}
+
+	// T12's delete part on a real API server: a verify that fails in
+	// Deleting refuses, the record stays Deleting, the HOME stays; with the
+	// archive whole again the delete goes on. The schema takes Deleting and
+	// Expired, and refuses a record moved back from Deleting.
+	t.Run("a changed archive in Deleting refuses, then the delete goes on (T12)", func(t *testing.T) {
+		g := newRig(t, "h6-expiry-mismatch")
+		untilRecord(t, g)
+		g.mu.Lock()
+		g.clock = history(t, g).Expiry.DueAt.Add(time.Minute)
+		g.mu.Unlock()
+		e := run(t, g)
+		g.deleteOn = true
+		step(t, g, 1)
+		if got := history(t, g).Expiry; got.Phase != v1alpha1.HomeExpiryDeleting || got.DeletingAt == nil {
+			t.Fatalf("want Deleting: %+v", got)
+		}
+		back := &v1alpha1.AgentSession{}
+		if err := k8s.Get(ctx, client.ObjectKeyFromObject(g.s), back); err != nil {
+			t.Fatal(err)
+		}
+		back.Status.PrivateHistory.Expiry.Phase = v1alpha1.HomeExpiryArchived
+		if err := k8s.Status().Update(ctx, back); !apierrors.IsInvalid(err) {
+			t.Fatalf("a record moved back from Deleting was accepted: %v", err)
+		}
+		file := filepath.Join(g.x.archive.Root, filepath.FromSlash(e.Archive.Entry), "content.json")
+		orig, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, append([]byte(" "), orig...), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		step(t, g, 2)
+		if got := history(t, g).Expiry; got.Phase != v1alpha1.HomeExpiryDeleting || got.Refusal != expiryArchiveMismatch || len(g.claimDeletes) != 0 {
+			t.Fatalf("a changed archive in Deleting: %+v, deletes %+v", got, g.claimDeletes)
+		}
+		claimIntact(t, g)
+		if err := os.WriteFile(file, orig, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		g.mu.Lock()
+		g.clock = g.clock.Add(homeExpiryRefusalRetry + time.Second)
+		g.mu.Unlock()
+		for range 8 {
+			step(t, g, 1)
+			kubelet(t, g)
+			if err := k8s.Get(ctx, client.ObjectKeyFromObject(g.s), &v1alpha1.AgentSession{}); apierrors.IsNotFound(err) {
+				break
+			}
+		}
+		if len(g.claimDeletes) != 1 {
+			t.Fatalf("claim deletes %+v; want one", g.claimDeletes)
+		}
+		if err := k8s.Get(ctx, client.ObjectKeyFromObject(g.s), &v1alpha1.AgentSession{}); !apierrors.IsNotFound(err) {
+			t.Fatalf("the Session was not released: %v", err)
+		}
+	})
 
 	t.Run("two operators at once land one entry (T13)", func(t *testing.T) {
 		g := newRig(t, "h5-expiry-two")
@@ -334,6 +464,31 @@ func TestHomeExpiryOnTheAPIServer(t *testing.T) {
 			t.Fatalf("two operators left entries %v", entries)
 		}
 		claimIntact(t, g)
+
+		// H6: two operators at once with the delete on: one claim delete
+		// lands, and the Session is released once.
+		g.deleteOn = true
+		for range 12 {
+			var wg sync.WaitGroup
+			for range 2 {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					_, _ = operator(g).Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(g.s)})
+				}()
+			}
+			wg.Wait()
+			kubelet(t, g)
+			if err := k8s.Get(ctx, client.ObjectKeyFromObject(g.s), &v1alpha1.AgentSession{}); apierrors.IsNotFound(err) {
+				break
+			}
+		}
+		if len(g.claimDeletes) != 1 || !g.claimDeletes[0].preconditions {
+			t.Fatalf("two operators: claim deletes %+v; want one with its preconditions", g.claimDeletes)
+		}
+		if err := k8s.Get(ctx, client.ObjectKeyFromObject(g.s), &v1alpha1.AgentSession{}); !apierrors.IsNotFound(err) {
+			t.Fatalf("two operators did not release the Session: %v", err)
+		}
 	})
 
 	// Section 14: a cancel must record an expiryClearedAt newer than the last
@@ -383,6 +538,12 @@ func TestHomeExpiryOnTheAPIServer(t *testing.T) {
 			t.Fatalf("Archived without an archive or a rescue accepted: %v", err)
 		}
 	})
+}
+
+// envClaimDelete is one HOME claim delete the API server accepted.
+type envClaimDelete struct {
+	verifies      int
+	preconditions bool
 }
 
 // purgeEnv removes test objects for good: it lifts their finalizers and

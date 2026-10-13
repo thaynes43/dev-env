@@ -54,6 +54,11 @@ const (
 	WorkspaceIDEnv        = "AGENTD_WORKSPACE_ID"
 )
 
+// ArchiveClaims are the shelf's archive volumes (DESIGN-024 section 3,
+// DESIGN-025 section 7): only the shelf mounts them, so no template names
+// one as a claim a session pod mounts.
+var ArchiveClaims = []string{"dev-env-coordination-archive", "dev-env-history-archive"}
+
 // Volume names the operator uses itself.
 var reservedVolumeNames = []string{"home", "shared", "tmp", "api-token", "grants", "workspace", "session-input"}
 
@@ -357,6 +362,13 @@ func (t *Templates) StorageClassFor(class v1alpha1.SizeClass) string {
 	return t.Home.StorageClassName
 }
 
+func workspaceClaim(w *Workspace) string {
+	if w == nil {
+		return ""
+	}
+	return w.Claim
+}
+
 // Validate checks the templates.
 func (t *Templates) Validate() error {
 	var errs []error
@@ -413,6 +425,11 @@ func (t *Templates) Validate() error {
 	}
 	if msgs := validation.IsDNS1123Subdomain(t.SharedClaim); len(msgs) > 0 {
 		add("sharedClaim %q: %s", t.SharedClaim, strings.Join(msgs, "; "))
+	}
+	for field, claim := range map[string]string{"sharedClaim": t.SharedClaim, "workspace.claim": workspaceClaim(t.Workspace)} {
+		if slices.Contains(ArchiveClaims, claim) {
+			add("%s %q is the shelf's archive; only the shelf mounts it (DESIGN-025 7)", field, claim)
+		}
 	}
 	if t.Claude.StaticToken.Name == "" || t.Claude.StaticToken.Key == "" {
 		add("claude.staticToken needs a name and a key")

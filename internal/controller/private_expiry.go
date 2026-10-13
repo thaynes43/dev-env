@@ -13,7 +13,7 @@ package controller
 // and the HOME claim. A resume, an archive timer no longer due or a new Pod
 // cancels; an owner hold stops every step. Canary originals never enter it.
 // Default off (--enable-home-history-archive). Nothing here deletes a HOME:
-// Deleting and Expired are H6's, behind their own flag.
+// Deleting and Expired are private_expiry_delete.go's, behind their own flag.
 
 import (
 	"context"
@@ -360,6 +360,9 @@ func (r *Reconciler) expiryQuiet(s *v1alpha1.AgentSession, obs *observation, oth
 		return ctrl.Result{}, false
 	case e.Phase != v1alpha1.HomeExpiryWaiting && e.Phase != v1alpha1.HomeExpiryArchived:
 		return ctrl.Result{}, false
+	case e.Phase == v1alpha1.HomeExpiryArchived && r.homeExpiryDeleteOn():
+		// The delete's step runs from Archived (H6).
+		return ctrl.Result{}, false
 	case override != "" && override != v1alpha1.HomeExpiryHold:
 		return ctrl.Result{}, false
 	case e.Phase == v1alpha1.HomeExpiryWaiting && override == "" && !now.Before(e.DueAt.Time):
@@ -500,6 +503,15 @@ func (r *Reconciler) reconcileHomeExpiry(ctx context.Context, s *v1alpha1.AgentS
 			}
 			return ctrl.Result{}, false, nil
 		}
+	} else if e := h.Expiry; expiryPhaseAtLeast(e.Phase, v1alpha1.HomeExpiryDeleting) &&
+		(!r.homeExpiryDeleteOn() || e.Phase == v1alpha1.HomeExpiryExpired && s.DeletionTimestamp.IsZero()) {
+		// Parked past Archived: with the delete off a Deleting record waits,
+		// HOME kept, and an Expired one of a Session not reaped stays until
+		// the reap. Neither needs the uncached reads.
+		if !r.homeExpiryDeleteOn() {
+			obs.homeExpiry = &homeExpiryNote{reason: "DeleteOff", message: "the HOME delete is off (--enable-home-expiry-delete); the record waits at " + e.Phase + " and the HOME, if any, stays"}
+		}
+		return ctrl.Result{}, false, nil
 	} else if res, quiet := r.expiryQuiet(s, obs, len(mounts) > 0 || mountsErr != nil); quiet {
 		return res, false, nil
 	}
@@ -572,9 +584,9 @@ func (r *Reconciler) startHomeExpiry(ctx context.Context, v *expiryView, obs *ob
 func (r *Reconciler) stepHomeExpiry(ctx context.Context, v *expiryView, obs *observation, trig expiryTrigger) (ctrl.Result, bool, error) {
 	e := v.record()
 	if expiryPhaseAtLeast(e.Phase, v1alpha1.HomeExpiryDeleting) {
-		// Deleting and Expired are H6's: nothing cancels them, and this
-		// operator deletes no HOME.
-		return ctrl.Result{}, false, nil
+		// From Deleting on nothing cancels; the delete's own steps run
+		// (DESIGN-025 6.5, 6.6), behind --enable-home-expiry-delete.
+		return r.stepExpiryDelete(ctx, v, obs)
 	}
 	// A hold pod made before a restart is adopted first, then judged (6.1).
 	if v.pod != nil && v.awaitingAdoption(v.pod) {
@@ -641,10 +653,24 @@ func (r *Reconciler) runExpiryStep(ctx context.Context, v *expiryView, obs *obse
 		return r.expiryRescueAndExport(ctx, v, obs)
 	case v1alpha1.HomeExpiryArchived:
 		// The archive is verified and recorded; the hold pod goes. With
-		// deletion off (H5 has none) the expiry stops here, HOME intact.
+		// the delete off the expiry stops here, HOME intact; a refusal
+		// recorded at Archived (the verify's, the common re-check's, or the
+		// delete's Pod check's) is cleared only by a verify that passes
+		// after the common re-check, so it needs the shelf (DESIGN-025 6.7).
 		if p := v.ownHold(); p != nil && p.DeletionTimestamp.IsZero() {
 			return r.removeExpiryHold(ctx, v, obs, p, holdReleaseArchived)
 		}
+		if !r.homeExpiryDeleteOn() {
+			if v.record().Refusal != "" {
+				return r.recheckArchivedRefusal(ctx, v, obs)
+			}
+			return ctrl.Result{}, false, nil
+		}
+		if v.ownHold() != nil {
+			// The hold pod still terminates; it mounts the claim.
+			return ctrl.Result{RequeueAfter: homeExpiryPodWait}, false, nil
+		}
+		return r.prepareExpiryDelete(ctx, v, obs)
 	}
 	return ctrl.Result{}, false, nil
 }

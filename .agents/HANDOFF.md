@@ -7,6 +7,37 @@ the saga. To continue building, follow the
 in the Claude pickup brief. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## DESIGN-025 H6 in source: archived-history reads and the guarded HOME delete, both off — 2026-10-13 UTC
+
+#254 adds three read routes behind `--enable-history-archive-reads` (default
+off; off, they answer 404): `GET /v1/history?project=P` (a project's archived
+histories), `GET /v1/history/{sessionUID}` (an entry's manifest, in pages) and
+`GET /v1/history/{sessionUID}/file?path=&offset=` (64 KiB pages). The scope is
+DESIGN-013's payload-read scope, unchanged; a single read answers 404 for
+anything outside the caller's scope, and the shelf's failures are 503. Each read
+takes one of the replica's two shelf exec slots, shared with the H5 relay. The
+client is `agent-run history list|show|read`. agentd gains `history-archive
+manifest` (one page of an entry's manifest), so the shelf needs the agent image
+of this release before the reads are turned on (H7 pins it).
+
+It also adds the delete and the release behind `--enable-home-expiry-delete`
+(default off), which the operator refuses at start unless the archive and the
+reads are both on. Every attempt verifies the archive under `.shelf.lock`,
+re-reads uncached and checks that no Pod uses the HOME before it records
+`Deleting` (with `archivedAt` for a suspended Session) or deletes the claim with
+its UID and resourceVersion; then `Expired`, and a reaped Session is released.
+`TestExpiryDeleteNeedsVerify` pins that order. Deletion stays off until H8
+records the archived read on the installed system (#174). The templates check
+now refuses `dev-env-history-archive` and `dev-env-coordination-archive` as a
+session claim. No CRD change (DESIGN-025 6.7, 7, 7.1, 8.1, 11).
+
+Its review added tests for an owner hold and a resume written during the
+delete's verify and for a verify answer that names another digest or entry,
+made `TestExpiryDeleteNeedsVerify` check the two `if` conditions, corrected
+6.7 on refusals recorded at `Archived` (each clears only through a verify, so
+it needs the shelf), and made `agent-run history show|read` refuse a Session
+UID that is not a Kubernetes UID before any request.
+
 ## DESIGN-025 H5 in source: the operator's HOME expiry up to Archived — 2026-10-13 UTC
 
 #251 adds `status.privateHistory.expiry` (and `expiryClearedAt`) with its CEL

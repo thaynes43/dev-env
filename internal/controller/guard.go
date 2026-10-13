@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/templates"
 )
 
@@ -19,12 +20,15 @@ import (
 // only after a rescue in it (D-10). It deletes a session's volume only when a
 // deleted session is archived, after a verified rescue of the volume's last pod.
 // deletePod and deleteVolume are the only places in this package that delete
-// anything, besides the HOME expiry's two exceptions (DESIGN-025 5.2, 6.1):
-// deleteExpiryExecutor, the ended executor of a private Session in Rescuing,
-// and deleteExpiryHold, the expiry's own hold pod. Each deletes by UID;
-// releaseSession, releaseVolume and a few
-// named release helpers are the only ones that lift a finalizer or rewrite owner
-// references. A test (TestOnlyTheGuardDeletes) keeps it that way.
+// anything, besides the HOME expiry's three exceptions (DESIGN-025 5.2, 6.1,
+// 6.5): deleteExpiryExecutor, the ended executor of a private Session in
+// Rescuing, deleteExpiryHold, the expiry's own hold pod, and deleteExpiryHome,
+// a private HOME in Deleting after its archive verified again. Each deletes by
+// UID; releaseSession, releaseVolume, releaseExpiryHome and a few named
+// release helpers are the only ones that lift a finalizer or rewrite owner
+// references, and releaseSession lifts a private Session's only for an
+// Expired record (expiryReleaseAllowed). A test (TestOnlyTheGuardDeletes)
+// keeps it that way.
 
 // Finalizer holds a session, and its volume, until the session is rescued. A
 // deleted AgentSession is a reap (D-45): the API server keeps the object while the
@@ -363,6 +367,103 @@ func deleteExpiryHold(ctx context.Context, c client.Client, pod *corev1.Pod, ev 
 		return err
 	}
 	return client.IgnoreNotFound(c.Delete(ctx, pod, client.Preconditions{UID: &pod.UID, ResourceVersion: &pod.ResourceVersion}))
+}
+
+// expiryVolumeRemovalAllowed is nil only when the HOME expiry may delete a
+// private Session's HOME claim, or lift the operator's finalizer from it
+// (DESIGN-025 6.5; ADR-005's D-45 exception): the Session is private and no
+// canary, its retention identity holds, its HOME was bound, and its expiry
+// record is Deleting, rests on the confirmed terminal record of the recorded
+// executor, names the bound HOME and holds the archive it verified; the claim
+// is that HOME claim (its name and UID), the Session controls it, and it has
+// the resourceVersion the delete's precondition carries. A Session that is
+// not Reaping must have status.archivedAt, written with Deleting, so it can
+// never be resumed onto a new HOME (D-62). The caller runs the archive's
+// verify and the Pod checks in the same call path first (removeExpiredHome).
+func expiryVolumeRemovalAllowed(s *v1alpha1.AgentSession, claim *corev1.PersistentVolumeClaim) error {
+	h := s.Status.PrivateHistory
+	switch {
+	case s.Spec.Workspace != nil || s.Spec.ProjectCanary != nil:
+		return errors.New("only a private Session's HOME expires; canary originals and shared Sessions never do (DESIGN-025 2)")
+	case privateHistoryIdentity(s) != nil:
+		return privateHistoryIdentity(s)
+	case h.Admission != sharedStarted || h.HomeUID == "":
+		return errors.New("the private HOME was never bound")
+	case h.Expiry == nil || h.Expiry.Phase != v1alpha1.HomeExpiryDeleting || h.Expiry.DeletingAt == nil:
+		return errors.New("the HOME expiry deletes a HOME only once Deleting is recorded (DESIGN-025 6.5)")
+	case h.Expiry.Archive == nil || !protocol.ValidSHA256(h.Expiry.Archive.ContentSHA256) || h.Expiry.Archive.Entry == "":
+		return errors.New("the expiry record holds no archive of the history")
+	case !executorTerminalRecorded(h) || h.Expiry.ExecutorUID != h.ExecutorTerminal.PodUID || h.Expiry.HomeUID != h.HomeUID:
+		return errors.New("the expiry record rests on no confirmed terminal record of the recorded executor, or names another HOME")
+	case claim == nil || claim.UID == "" || string(claim.UID) != h.HomeUID || claim.Name != h.HomeClaim || claim.ResourceVersion == "":
+		return errors.New("the claim is not the bound HOME claim the expiry record names")
+	case !controlledBySessionObject(claim, s):
+		return errors.New("the Session does not control the HOME claim")
+	case s.DeletionTimestamp.IsZero() && s.Status.ArchivedAt == nil:
+		return errArchiveNotRecorded
+	}
+	return nil
+}
+
+// deleteExpiryHome deletes the HOME claim if the expiry's guard allows it, with
+// the claim's UID and resourceVersion as preconditions, then lifts the
+// operator's finalizer from a fresh uncached read of it (releaseExpiryHome). A
+// claim already deleting (an earlier attempt's delete) only has its finalizer
+// lifted. Its one caller, removeExpiredHome, verifies the archive and checks
+// for Pods first, on every attempt (TestExpiryDeleteNeedsVerify).
+func deleteExpiryHome(ctx context.Context, c client.Client, live client.Reader, s *v1alpha1.AgentSession, claim *corev1.PersistentVolumeClaim) error {
+	if err := expiryVolumeRemovalAllowed(s, claim); err != nil {
+		return err
+	}
+	if claim.DeletionTimestamp.IsZero() {
+		if err := c.Delete(ctx, claim, client.Preconditions{UID: &claim.UID, ResourceVersion: &claim.ResourceVersion}); err != nil {
+			return client.IgnoreNotFound(err)
+		}
+	}
+	var fresh corev1.PersistentVolumeClaim
+	if err := live.Get(ctx, client.ObjectKeyFromObject(claim), &fresh); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	return releaseExpiryHome(ctx, c, s, &fresh)
+}
+
+// releaseExpiryHome lifts the operator's finalizer from a HOME claim the
+// expiry deleted, by a patch that carries the resourceVersion of the caller's
+// fresh read, so a claim changed since, or another object of its name, is
+// never released. Only deleteExpiryHome calls it.
+func releaseExpiryHome(ctx context.Context, c client.Client, s *v1alpha1.AgentSession, claim *corev1.PersistentVolumeClaim) error {
+	if err := expiryVolumeRemovalAllowed(s, claim); err != nil {
+		return err
+	}
+	if claim.DeletionTimestamp.IsZero() {
+		return errors.New("the HOME claim is not being deleted, so its finalizer stays")
+	}
+	if !controllerutil.ContainsFinalizer(claim, Finalizer) {
+		return nil
+	}
+	orig := claim.DeepCopy()
+	controllerutil.RemoveFinalizer(claim, Finalizer)
+	return client.IgnoreNotFound(c.Patch(ctx, claim, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})))
+}
+
+// expiryReleaseAllowed is nil only for the one protected Session that
+// releaseIfEmpty and releaseSession may let go (DESIGN-025 6.6): a Reaping
+// private Session, no canary, whose expiry record is Expired for its bound
+// HOME. The caller confirms by uncached reads that no Pod and no claim of its
+// names is left.
+func expiryReleaseAllowed(s *v1alpha1.AgentSession) error {
+	h := s.Status.PrivateHistory
+	switch {
+	case s.Spec.Workspace != nil || s.Spec.ProjectCanary != nil:
+		return errors.New("only a private Session is released by its HOME expiry; canary originals never are")
+	case s.DeletionTimestamp.IsZero():
+		return errors.New("only a reaped Session is released")
+	case privateHistoryIdentity(s) != nil:
+		return privateHistoryIdentity(s)
+	case h.HomeUID == "" || h.Expiry == nil || h.Expiry.Phase != v1alpha1.HomeExpiryExpired || h.Expiry.HomeDeletedAt == nil || h.Expiry.HomeUID != h.HomeUID:
+		return errors.New("the HOME expiry record is not Expired for the bound HOME")
+	}
+	return nil
 }
 
 // deleteVolume archives the session's volume if the guard allows it: it deletes
