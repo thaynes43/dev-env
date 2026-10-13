@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -132,6 +133,20 @@ type Reconciler struct {
 	// PrivateExecutorStops counts the stop requests
 	// (MetricPrivateExecutorStopRequests); nil counts nothing.
 	PrivateExecutorStops *prometheus.CounterVec
+	// HomeHistoryArchive runs a private Session's HOME expiry up to Archived
+	// (DESIGN-025 5, --enable-home-history-archive). It acts only while
+	// PrivateTerminalRecord is on too. Off, no record is made and no hold pod
+	// or export starts; a record stays in its phase, and the expiry's hold pod
+	// is removed because nothing needs it (section 14).
+	HomeHistoryArchive bool
+	// HomeExpiryGrace is the grace; below DefaultHomeExpiryGrace counts as it.
+	HomeExpiryGrace time.Duration
+	// HistoryRelay runs the export in the hold pod and the archive commands
+	// in the shelf; nil refuses the export with shelf_unavailable.
+	HistoryRelay HistoryRelay
+	// HomeExpiryCounters count refusals and archived bytes; nil counts
+	// nothing.
+	HomeExpiryCounters *HomeExpiryCounters
 	// Now is the clock of the terminal record and its lease check; nil is
 	// time.Now.
 	Now                      func() time.Time
@@ -165,6 +180,10 @@ type Reconciler struct {
 	// HoldRetry is how soon a failed rescue in a hold pod runs again; zero
 	// means HoldRescueRetry (D-55).
 	HoldRetry time.Duration
+
+	// expiryCounted rate-limits the refusals no record holds (countExpiryOnce).
+	expiryMu      sync.Mutex
+	expiryCounted map[string]time.Time
 }
 
 func (r *Reconciler) holdRetry() time.Duration {
@@ -376,6 +395,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 		}
 	}
 
+	// DESIGN-025 5: the HOME expiry, up to Archived, after the observation
+	// above confirmed the terminal record it rests on.
+	var expiryResult ctrl.Result
+	if privateHistoryProtected(&s) {
+		res, stop, err := r.reconcileHomeExpiry(ctx, &s, &obs)
+		if err != nil || stop {
+			return res, err
+		}
+		expiryResult = res
+	}
+
 	if s.Spec.SessionDirectory != nil {
 		if err := r.observeSessionDirectory(ctx, &s); err != nil {
 			return ctrl.Result{RequeueAfter: time.Second}, err
@@ -447,6 +477,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 		result = res
 	}
 
+	result = sooner(result, expiryResult)
 	next := s.Status.DeepCopy()
 	observe(&s, obs, next)
 	if !apiequality.Semantic.DeepEqual(&s.Status, next) {
@@ -454,6 +485,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 		return r.writeStatus(ctx, &s, result)
 	}
 	return result, nil
+}
+
+// sooner is the result that reconciles first: a requeue after the shorter
+// positive wait.
+func sooner(a, b ctrl.Result) ctrl.Result {
+	switch {
+	case b.RequeueAfter <= 0:
+		return a
+	case a.RequeueAfter <= 0 || b.RequeueAfter < a.RequeueAfter:
+		return b
+	}
+	return a
 }
 
 // writeStatus writes the session's status. A conflict or a missing session
@@ -1217,6 +1260,9 @@ type observation struct {
 	// privateStopErr: the stop request for a Reaping private executor failed
 	// this reconcile (DESIGN-025 4); RemovalBlocked names it.
 	privateStopErr error
+	// homeExpiry is what the HOME expiry found this reconcile that its record
+	// does not say (DESIGN-025 5): Unknown, a hold, a refusal, a waiting step.
+	homeExpiry *homeExpiryNote
 	// now is the reconcile's clock, for the timers' status fields.
 	now time.Time
 }
@@ -1238,7 +1284,10 @@ func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessio
 	switch {
 	case s.Spec.OperatingMode != v1alpha1.OperatingModeSuspended || !s.DeletionTimestamp.IsZero():
 		st.SuspendedAt = nil
-	case st.SuspendedAt == nil && obs.pod.missing:
+	case st.SuspendedAt == nil && (obs.pod.missing || recordedExecutorEnded(s, obs)):
+		// A private executor whose terminal record is confirmed is no pod
+		// of the Session's own: it never runs again (DESIGN-025 2), so its
+		// timer starts as for a Pod that is gone.
 		t := metav1.NewTime(obs.now)
 		st.SuspendedAt = &t
 	}
@@ -1272,6 +1321,9 @@ func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessio
 		meta.RemoveStatusCondition(&st.Conditions, ConditionRemovalBlocked)
 	}
 	setPrivateHistoryConditions(s, obs, st)
+	if privateHistoryProtected(s) {
+		setHomeExpiryCondition(s, obs, st)
+	}
 
 	// A hold pod runs no agent, so no drain is due for it (D-55).
 	agentPod := hasPod && !isHoldPod(pod)

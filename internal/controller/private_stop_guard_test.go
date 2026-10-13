@@ -18,7 +18,7 @@ import (
 
 // TestOnlyStopPrivateExecutorPatchesPods is DESIGN-025 section 11's guard for
 // the stop request. It reads every non-test Go file of the module. Apart from
-// creating a Pod and the guarded deletes (deletePod), the only Pod write is
+// creating a Pod and the guarded deletes (podDeleters), the only Pod write is
 // the one Patch in stopPrivateExecutor. That patch is a JSON patch built by
 // privateStopPatch, which holds exactly two tests and the one
 // /spec/activeDeadlineSeconds operation. stopPrivateExecutor has one caller,
@@ -71,9 +71,13 @@ func TestOnlyStopPrivateExecutorPatchesPods(t *testing.T) {
 	}
 	// The scan must see the one allowed patch, the one allowed delete and the
 	// one guarded call, or it proves nothing.
-	for _, seen := range []string{"pod Patch in stopPrivateExecutor", "pod Delete in deletePod", "stopPrivateExecutor in requestPrivateExecutorStop", "confirmedStopIntent in stopIntentConfirmed"} {
-		if n := scan.seen[seen]; n != 1 {
-			t.Errorf("%s: seen %d times, want once", seen, n)
+	wants := []string{"pod Patch in stopPrivateExecutor", "stopPrivateExecutor in requestPrivateExecutorStop", "confirmedStopIntent in stopIntentConfirmed"}
+	for fn := range podDeleters {
+		wants = append(wants, "pod Delete in "+fn)
+	}
+	for _, want := range wants {
+		if n := scan.seen[want]; n != 1 {
+			t.Errorf("%s: seen %d times, want once", want, n)
 		}
 	}
 	if len(files) < 50 {
@@ -116,6 +120,12 @@ func TestPodWriteScanCatchesPodWrites(t *testing.T) {
 		}
 	}
 }
+
+// podDeleters are the guarded deletes of a Pod, each after its own guard
+// (TestOnlyTheGuardDeletes): deletePod (D-45) and the HOME expiry's two
+// exceptions, the ended executor and the expiry's hold pod (DESIGN-025 5.2,
+// 6.1).
+var podDeleters = map[string]bool{"deletePod": true, "deleteExpiryExecutor": true, "deleteExpiryHold": true}
 
 type podWriteScan struct {
 	violations []string
@@ -403,10 +413,10 @@ func scanPodWriteBody(scan *podWriteScan, report func(token.Pos, string, string,
 			if !sawStopPatch {
 				report(call.Pos(), fn, "the stop patch is not built by privateStopPatch before it is sent")
 			}
-		case name == "Delete" && !onSub && fn == "deletePod":
-			scan.seen["pod Delete in deletePod"]++
+		case name == "Delete" && !onSub && podDeleters[fn]:
+			scan.seen["pod Delete in "+fn]++
 		default:
-			report(call.Pos(), fn, "a Pod %s; apart from create and deletePod, the only Pod write is stopPrivateExecutor's patch", name)
+			report(call.Pos(), fn, "a Pod %s; apart from create and the guarded deletes, the only Pod write is stopPrivateExecutor's patch", name)
 		}
 		return true
 	})

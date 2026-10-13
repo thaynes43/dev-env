@@ -262,11 +262,20 @@ var guardedCalls = []struct {
 	{"detachPrivateHome", "retainSharedPrivateHome", "sharedPodsAbsent"},
 	{"releaseRetainedSharedSession", "retainSharedPrivateHome", "confirmedRetention"},
 	{"releaseNeverStartedSharedSession", "retainSharedPrivateHome", "sharedAdmissionIs"},
+	// The HOME expiry's exceptions (DESIGN-025 11, ADR-005, ADR-006): the
+	// ended executor of a private Session in Rescuing, and the expiry's own
+	// hold pod, each deleted only after its own guard, by one caller.
+	{"Delete", "deleteExpiryExecutor", "expiryPodRemovalAllowed"},
+	{"Delete", "deleteExpiryHold", "expiryHoldRemovalAllowed"},
+	{"deleteExpiryExecutor", "removeExpiredExecutor", "expiryPodRemovalAllowed"},
+	{"deleteExpiryHold", "removeExpiryHold", "expiryHoldRemovalAllowed"},
 }
 
 // TestOnlyTheGuardDeletes reads this package's source. A Delete or DeleteAllOf
-// call may appear only in deletePod, after podRemovalAllowed, and in
-// deleteVolume, after volumeRemovalAllowed, and each Delete names its object by
+// call may appear only in deletePod, after podRemovalAllowed, in
+// deleteVolume, after volumeRemovalAllowed, and in the HOME expiry's
+// deleteExpiryExecutor and deleteExpiryHold, after expiryPodRemovalAllowed and
+// expiryHoldRemovalAllowed (DESIGN-025 11), and each Delete names its object by
 // UID (client.Preconditions), so a same-named replacement never goes in its
 // place; RemoveFinalizer only in releaseSession, which only releaseIfEmpty
 // calls, and in releaseVolume, which asks volumeRemovalAllowed and which only

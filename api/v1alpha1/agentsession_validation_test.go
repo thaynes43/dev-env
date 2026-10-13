@@ -1315,3 +1315,198 @@ func TestPrivateHistoryStopRequestIsImmutableAndBound(t *testing.T) {
 		}
 	})
 }
+
+// T16, the expiry part (DESIGN-025 5.1): the HOME expiry record rests on the
+// terminal record and the bound HOME, its phase moves only forward, its
+// archive, executor, HOME and grace never change, and it can be removed (a
+// cancel) only before Deleting.
+func TestPrivateHomeExpiryRecordIsBoundAndForwardOnly(t *testing.T) {
+	at := metav1.NewTime(time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC))
+	due := metav1.NewTime(at.Add(720 * time.Hour))
+	retained := func(s *v1alpha1.AgentSession) *v1alpha1.PrivateHistoryStatus {
+		return &v1alpha1.PrivateHistoryStatus{Version: 1, SessionUID: string(s.UID), HomeClaim: "original-home", HomeUID: "original-home-uid",
+			BindingGeneration: s.Generation, Admission: "Started", ExecutorAttempted: true, ExecutorIntent: "synthetic-intent", Provider: string(s.Spec.Agent), StopState: "Unknown",
+			LastExecutor: &v1alpha1.PrivateExecutorStatus{PodUID: "original-executor", PodName: s.Name, NodeName: "worker-a", Revision: "original-template", Generation: s.Generation},
+			ExecutorTerminal: &v1alpha1.PrivateExecutorTerminalStatus{Version: 1, PodUID: "original-executor", Phase: "Failed", Reason: "DeadlineExceeded", PodResourceVersion: "42",
+				NodeName: "worker-a", NodeUID: "node-uid", LeaseRenewedAt: at, ObservedAt: at,
+				Containers: []v1alpha1.PrivateExecutorContainerTermination{{Name: "agent", ExitCode: 143, Reason: "Error", FinishedAt: at}}}}
+	}
+	record := func() *v1alpha1.PrivateHomeExpiryStatus {
+		return &v1alpha1.PrivateHomeExpiryStatus{Version: 1, ExecutorUID: "original-executor", HomeUID: "original-home-uid", GraceStart: at, DueAt: due, Phase: v1alpha1.HomeExpiryWaiting}
+	}
+	archive := func() *v1alpha1.PrivateHomeArchiveStatus {
+		return &v1alpha1.PrivateHomeArchiveStatus{Entry: "v1/_none/uid/0123456789abcdef", ContentSHA256: strings.Repeat("ab", 32), Bytes: 42, Files: 3, GitFiles: 2, ArchivedAt: at}
+	}
+	stored := func(t *testing.T, h *v1alpha1.PrivateHistoryStatus) *v1alpha1.AgentSession {
+		t.Helper()
+		s := taskSession()
+		if err := k8s.Create(ctx(t), s); err != nil {
+			t.Fatal(err)
+		}
+		s.Status.PrivateHistory = retained(s)
+		if h != nil {
+			s.Status.PrivateHistory.Expiry = h.Expiry
+			s.Status.PrivateHistory.ExpiryClearedAt = h.ExpiryClearedAt
+		}
+		if err := k8s.Status().Update(ctx(t), s); err != nil {
+			t.Fatal("a valid expiry record refused:", err)
+		}
+		return get(t, s)
+	}
+
+	t.Run("refused at creation", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			edit func(*v1alpha1.PrivateHistoryStatus)
+		}{
+			{"without a terminal record", func(h *v1alpha1.PrivateHistoryStatus) { h.ExecutorTerminal = nil; h.Expiry = record() }},
+			{"for another executor", func(h *v1alpha1.PrivateHistoryStatus) { h.Expiry = record(); h.Expiry.ExecutorUID = "forged" }},
+			{"for another HOME", func(h *v1alpha1.PrivateHistoryStatus) { h.Expiry = record(); h.Expiry.HomeUID = "replacement-home" }},
+			{"version 2", func(h *v1alpha1.PrivateHistoryStatus) { h.Expiry = record(); h.Expiry.Version = 2 }},
+			{"an unknown phase", func(h *v1alpha1.PrivateHistoryStatus) { h.Expiry = record(); h.Expiry.Phase = "Done" }},
+			{"exporting without a rescue", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.Expiry = record()
+				h.Expiry.Phase = v1alpha1.HomeExpiryExporting
+			}},
+			{"archived without an archive", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.Expiry = record()
+				h.Expiry.Phase, h.Expiry.RescueStamp = v1alpha1.HomeExpiryArchived, "20261111-1200"
+			}},
+			{"a digest that is not one", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.Expiry = record()
+				h.Expiry.Phase, h.Expiry.RescueStamp, h.Expiry.Archive = v1alpha1.HomeExpiryArchived, "20261111-1200", archive()
+				h.Expiry.Archive.ContentSHA256 = "not-a-digest"
+			}},
+			{"deleting without deletingAt", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.Expiry = record()
+				h.Expiry.Phase, h.Expiry.RescueStamp, h.Expiry.Archive = v1alpha1.HomeExpiryDeleting, "20261111-1200", archive()
+			}},
+			{"an unbounded refusal", func(h *v1alpha1.PrivateHistoryStatus) {
+				h.Expiry = record()
+				h.Expiry.Refusal = strings.Repeat("r", 65)
+			}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				s := taskSession()
+				if err := k8s.Create(ctx(t), s); err != nil {
+					t.Fatal(err)
+				}
+				s.Status.PrivateHistory = retained(s)
+				tc.edit(s.Status.PrivateHistory)
+				if err := k8s.Status().Update(ctx(t), s); !apierrors.IsInvalid(err) {
+					t.Fatalf("invalid expiry record accepted: %v", err)
+				}
+			})
+		}
+	})
+
+	t.Run("moves forward to Archived, then the archive is fixed", func(t *testing.T) {
+		s := stored(t, &v1alpha1.PrivateHistoryStatus{Expiry: record()})
+		steps := []func(*v1alpha1.PrivateHomeExpiryStatus){
+			func(e *v1alpha1.PrivateHomeExpiryStatus) {
+				e.Phase, e.ReleaseNowAt, e.Refusal, e.RefusalAt = v1alpha1.HomeExpiryRescuing, &at, "shelf_unavailable", &at
+			},
+			func(e *v1alpha1.PrivateHomeExpiryStatus) { e.HoldIntent, e.Refusal, e.RefusalAt = "intent-1", "", nil },
+			func(e *v1alpha1.PrivateHomeExpiryStatus) { e.HoldPodUID = "hold-1" },
+			// A hold pod made again: a new intent, and its UID cleared.
+			func(e *v1alpha1.PrivateHomeExpiryStatus) { e.HoldIntent, e.HoldPodUID = "intent-2", "" },
+			func(e *v1alpha1.PrivateHomeExpiryStatus) { e.HoldPodUID = "hold-2" },
+			func(e *v1alpha1.PrivateHomeExpiryStatus) {
+				e.Phase, e.RescueStamp = v1alpha1.HomeExpiryExporting, "20261111-1200"
+			},
+			func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Phase, e.Archive = v1alpha1.HomeExpiryArchived, archive() },
+		}
+		for i, step := range steps {
+			next := get(t, s)
+			step(next.Status.PrivateHistory.Expiry)
+			if err := k8s.Status().Update(ctx(t), next); err != nil {
+				t.Fatalf("step %d refused: %v", i, err)
+			}
+		}
+		if got := get(t, s).Status.PrivateHistory.Expiry; got.Phase != v1alpha1.HomeExpiryArchived || got.Archive == nil || got.HoldPodUID != "hold-2" {
+			t.Fatalf("the record was pruned or changed: %+v", got)
+		}
+		for _, tc := range []struct {
+			name string
+			edit func(*v1alpha1.PrivateHomeExpiryStatus)
+		}{
+			{"back to Exporting", func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Phase = v1alpha1.HomeExpiryExporting }},
+			{"back to Waiting", func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Phase = v1alpha1.HomeExpiryWaiting }},
+			{"another digest", func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Archive.ContentSHA256 = strings.Repeat("cd", 32) }},
+			{"the archive dropped", func(e *v1alpha1.PrivateHomeExpiryStatus) { e.Archive = nil }},
+			{"another grace", func(e *v1alpha1.PrivateHomeExpiryStatus) { e.DueAt = metav1.NewTime(due.Add(time.Hour)) }},
+			{"another start", func(e *v1alpha1.PrivateHomeExpiryStatus) { e.GraceStart = metav1.NewTime(at.Add(time.Hour)) }},
+			{"releaseNowAt changed", func(e *v1alpha1.PrivateHomeExpiryStatus) { e.ReleaseNowAt = &due }},
+			{"releaseNowAt dropped", func(e *v1alpha1.PrivateHomeExpiryStatus) { e.ReleaseNowAt = nil }},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				bad := get(t, s)
+				tc.edit(bad.Status.PrivateHistory.Expiry)
+				if err := k8s.Status().Update(ctx(t), bad); !apierrors.IsInvalid(err) {
+					t.Fatalf("expiry record change accepted: %v", err)
+				}
+			})
+		}
+		// A cancel before Deleting removes the record and records when.
+		cancelled := get(t, s)
+		cancelled.Status.PrivateHistory.Expiry, cancelled.Status.PrivateHistory.ExpiryClearedAt = nil, &due
+		if err := k8s.Status().Update(ctx(t), cancelled); err != nil {
+			t.Fatal("a cancel at Archived refused:", err)
+		}
+		// A record made after the cancel starts its own grace, at Waiting.
+		again := get(t, s)
+		again.Status.PrivateHistory.Expiry = record()
+		again.Status.PrivateHistory.Expiry.GraceStart, again.Status.PrivateHistory.Expiry.DueAt = due, metav1.NewTime(due.Add(720*time.Hour))
+		if err := k8s.Status().Update(ctx(t), again); err != nil {
+			t.Fatal("a new record after a cancel refused:", err)
+		}
+		// Dropping the whole retention record drops the expiry with it: refused.
+		dropped := get(t, s)
+		dropped.Status.PrivateHistory = nil
+		if err := k8s.Status().Update(ctx(t), dropped); !apierrors.IsInvalid(err) {
+			t.Fatalf("the retention record and its expiry dropped: %v", err)
+		}
+	})
+
+	t.Run("from Deleting on it is never removed and only becomes Expired", func(t *testing.T) {
+		deleting := record()
+		deleting.Phase, deleting.RescueStamp, deleting.Archive, deleting.DeletingAt = v1alpha1.HomeExpiryDeleting, "20261111-1200", archive(), &due
+		s := stored(t, &v1alpha1.PrivateHistoryStatus{Expiry: deleting})
+		for _, tc := range []struct {
+			name string
+			edit func(*v1alpha1.PrivateHistoryStatus)
+		}{
+			{"removed", func(h *v1alpha1.PrivateHistoryStatus) { h.Expiry = nil }},
+			{"back to Archived", func(h *v1alpha1.PrivateHistoryStatus) { h.Expiry.Phase = v1alpha1.HomeExpiryArchived }},
+			{"expired without homeDeletedAt", func(h *v1alpha1.PrivateHistoryStatus) { h.Expiry.Phase = v1alpha1.HomeExpiryExpired }},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				bad := get(t, s)
+				tc.edit(bad.Status.PrivateHistory)
+				if err := k8s.Status().Update(ctx(t), bad); !apierrors.IsInvalid(err) {
+					t.Fatalf("a Deleting record change accepted: %v", err)
+				}
+			})
+		}
+		expired := get(t, s)
+		expired.Status.PrivateHistory.Expiry.Phase, expired.Status.PrivateHistory.Expiry.HomeDeletedAt = v1alpha1.HomeExpiryExpired, &due
+		if err := k8s.Status().Update(ctx(t), expired); err != nil {
+			t.Fatal("Deleting to Expired refused:", err)
+		}
+		for _, tc := range []struct {
+			name string
+			edit func(*v1alpha1.PrivateHistoryStatus)
+		}{
+			{"removed", func(h *v1alpha1.PrivateHistoryStatus) { h.Expiry = nil }},
+			{"a refusal added", func(h *v1alpha1.PrivateHistoryStatus) { h.Expiry.Refusal = "unknown" }},
+		} {
+			t.Run("expired "+tc.name, func(t *testing.T) {
+				bad := get(t, s)
+				tc.edit(bad.Status.PrivateHistory)
+				if err := k8s.Status().Update(ctx(t), bad); !apierrors.IsInvalid(err) {
+					t.Fatalf("an Expired record change accepted: %v", err)
+				}
+			})
+		}
+	})
+}

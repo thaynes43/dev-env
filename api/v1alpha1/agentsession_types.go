@@ -578,6 +578,9 @@ type AgentSessionStatus struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.executorMissed) || (has(self.executorMissed) && self.executorMissed == oldSelf.executorMissed)",message="the missed executor marker cannot change or be removed"
 // +kubebuilder:validation:XValidation:rule="!has(self.stopRequest) || (has(self.lastExecutor) && self.stopRequest.podUID == self.lastExecutor.podUID)",message="the executor stop request must name the recorded executor"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.stopRequest) || (has(self.stopRequest) && self.stopRequest == oldSelf.stopRequest)",message="the executor stop request cannot change or be removed"
+// +kubebuilder:validation:XValidation:rule="!has(self.expiry) || (has(self.executorTerminal) && has(self.lastExecutor) && self.expiry.executorUID == self.executorTerminal.podUID && self.expiry.executorUID == self.lastExecutor.podUID)",message="the HOME expiry record must rest on the recorded executor's terminal record"
+// +kubebuilder:validation:XValidation:rule="!has(self.expiry) || self.expiry.homeUID == self.homeUID",message="the HOME expiry record must name the bound HOME"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.expiry) || has(self.expiry) || !(oldSelf.expiry.phase in ['Deleting', 'Expired'])",message="the HOME expiry record cannot be removed once Deleting"
 type PrivateHistoryStatus struct {
 	// +kubebuilder:validation:Enum=1
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="retention version is immutable"
@@ -650,6 +653,113 @@ type PrivateHistoryStatus struct {
 	// executorTerminal is.
 	// +optional
 	StopRequest *PrivateExecutorStopRequestStatus `json:"stopRequest,omitempty"`
+	// Expiry is the HOME expiry record (DESIGN-025 5.1). It exists only while
+	// the Session is eligible and triggered: Reaping, or Suspended past its
+	// archive deadline, with a terminal record. It rests on executorTerminal
+	// and names the bound HOME. Its phase moves only forward, its archive
+	// never changes once set, and it can be removed (a cancel) only before
+	// Deleting.
+	// +optional
+	Expiry *PrivateHomeExpiryStatus `json:"expiry,omitempty"`
+	// ExpiryClearedAt is when the last expiry record was cancelled (DESIGN-025
+	// 5.3). A record made after it starts its own grace.
+	// +optional
+	ExpiryClearedAt *metav1.Time `json:"expiryClearedAt,omitempty"`
+}
+
+// The phases of a HOME expiry record (DESIGN-025 5.1), in their only order.
+const (
+	HomeExpiryWaiting   = "Waiting"
+	HomeExpiryRescuing  = "Rescuing"
+	HomeExpiryExporting = "Exporting"
+	HomeExpiryArchived  = "Archived"
+	HomeExpiryDeleting  = "Deleting"
+	HomeExpiryExpired   = "Expired"
+)
+
+// PrivateHomeExpiryStatus is the HOME expiry record of a private Session
+// (DESIGN-025 5.1): the grace, the step reached, and what each step relied on.
+// +kubebuilder:validation:XValidation:rule="self.executorUID == oldSelf.executorUID && self.homeUID == oldSelf.homeUID && self.graceStart == oldSelf.graceStart && self.dueAt == oldSelf.dueAt",message="a HOME expiry record's executor, HOME and grace never change"
+// +kubebuilder:validation:XValidation:rule="{'Waiting': 0, 'Rescuing': 1, 'Exporting': 2, 'Archived': 3, 'Deleting': 4, 'Expired': 5}[self.phase] >= {'Waiting': 0, 'Rescuing': 1, 'Exporting': 2, 'Archived': 3, 'Deleting': 4, 'Expired': 5}[oldSelf.phase]",message="a HOME expiry record's phase moves only forward"
+// +kubebuilder:validation:XValidation:rule="oldSelf.phase != 'Expired' || self == oldSelf",message="an Expired HOME expiry record never changes"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.archive) || (has(self.archive) && self.archive == oldSelf.archive)",message="a HOME expiry record's archive never changes once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.releaseNowAt) || (has(self.releaseNowAt) && self.releaseNowAt == oldSelf.releaseNowAt)",message="a HOME expiry record's releaseNowAt never changes once set"
+// +kubebuilder:validation:XValidation:rule="!(self.phase in ['Exporting', 'Archived', 'Deleting', 'Expired']) || size(self.rescueStamp) > 0",message="a HOME expiry record past Rescuing names its rescue"
+// +kubebuilder:validation:XValidation:rule="!(self.phase in ['Archived', 'Deleting', 'Expired']) || has(self.archive)",message="an Archived HOME expiry record holds its archive"
+// +kubebuilder:validation:XValidation:rule="!(self.phase in ['Deleting', 'Expired']) || has(self.deletingAt)",message="a Deleting HOME expiry record has deletingAt"
+// +kubebuilder:validation:XValidation:rule="self.phase != 'Expired' || has(self.homeDeletedAt)",message="an Expired HOME expiry record has homeDeletedAt"
+type PrivateHomeExpiryStatus struct {
+	// +kubebuilder:validation:Enum=1
+	Version int `json:"version"`
+	// ExecutorUID is the terminal record the expiry rests on; it equals
+	// lastExecutor.podUID and executorTerminal.podUID.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	ExecutorUID string `json:"executorUID"`
+	// HomeUID equals privateHistory.homeUID.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	HomeUID string `json:"homeUID"`
+	// GraceStart is executorTerminal.observedAt for the Session's first
+	// record, and the record's creation for one made after a cancel.
+	GraceStart metav1.Time `json:"graceStart"`
+	// DueAt is graceStart plus the grace in force when the record was made.
+	DueAt metav1.Time `json:"dueAt"`
+	// +kubebuilder:validation:Enum=Waiting;Rescuing;Exporting;Archived;Deleting;Expired
+	Phase string `json:"phase"`
+	// ReleaseNowAt is when the owner's release-now was first seen for this
+	// record. It skips the grace and nothing else.
+	// +optional
+	ReleaseNowAt *metav1.Time `json:"releaseNowAt,omitempty"`
+	// HoldIntent is written by a confirmed write before the hold pod is
+	// created, and set on the pod as an annotation, so a pod created before an
+	// operator restart is adopted, never mistaken for a new Pod (6.1).
+	// +kubebuilder:validation:MaxLength=64
+	// +optional
+	HoldIntent string `json:"holdIntent,omitempty"`
+	// HoldPodUID is the hold pod the expiry made, recorded once observed.
+	// +kubebuilder:validation:MaxLength=128
+	// +optional
+	HoldPodUID string `json:"holdPodUID,omitempty"`
+	// RescueStamp is the rescue the export relies on (status.rescue.stamp).
+	// +kubebuilder:validation:MaxLength=64
+	// +optional
+	RescueStamp string `json:"rescueStamp,omitempty"`
+	// Archive is the verified history archive entry.
+	// +optional
+	Archive *PrivateHomeArchiveStatus `json:"archive,omitempty"`
+	// +optional
+	DeletingAt *metav1.Time `json:"deletingAt,omitempty"`
+	// +optional
+	HomeDeletedAt *metav1.Time `json:"homeDeletedAt,omitempty"`
+	// Refusal is the current refusal reason (DESIGN-025 section 10), cleared
+	// by the confirmed write of the next step that passes.
+	// +kubebuilder:validation:MaxLength=64
+	// +optional
+	Refusal string `json:"refusal,omitempty"`
+	// +optional
+	RefusalAt *metav1.Time `json:"refusalAt,omitempty"`
+}
+
+// PrivateHomeArchiveStatus is the history archive entry an expiry wrote and
+// verified (DESIGN-025 6.4).
+type PrivateHomeArchiveStatus struct {
+	// Entry is the entry's directory relative to the archive's root.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=512
+	Entry string `json:"entry"`
+	// ContentSHA256 is the SHA-256 of the entry's content.json.
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
+	ContentSHA256 string `json:"contentSHA256"`
+	// +kubebuilder:validation:Minimum=0
+	Bytes int64 `json:"bytes"`
+	// +kubebuilder:validation:Minimum=0
+	Files int32 `json:"files"`
+	// GitFiles counts the Git rescue's files copied beside the history: its
+	// manifest and bundles.
+	// +kubebuilder:validation:Minimum=0
+	GitFiles   int32       `json:"gitFiles"`
+	ArchivedAt metav1.Time `json:"archivedAt"`
 }
 
 // PrivateExecutorStopRequestStatus records the stop intent for the recorded

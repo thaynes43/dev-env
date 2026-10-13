@@ -25,6 +25,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -116,6 +117,8 @@ type options struct {
 	privateHistoryRetention       bool
 	privateTerminalRecord         bool
 	privateExecutorStop           bool
+	homeHistoryArchive            bool
+	homeExpiryGrace               time.Duration
 	privateProjectCanariesEnabled bool
 	privateProjectCanaries        *projectcanary.Policy
 	managedChildDecisions         bool
@@ -149,6 +152,8 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.privateHistoryRetention, "enable-private-history-retention", false, "retain private managed HOME and durable Session identity on reap and suspended autoarchive")
 	fs.BoolVar(&o.privateTerminalRecord, "enable-private-terminal-record", false, "record the durable terminal observation of a private executor, and the missed marker, in its Session's status (DESIGN-025 3); records only, deletes nothing")
 	fs.BoolVar(&o.privateExecutorStop, "enable-private-executor-stop", false, "stop the recorded executor of a Reaping private Session with activeDeadlineSeconds, after a confirmed stop intent; an owner hold blocks it (DESIGN-025 4); needs --enable-private-terminal-record")
+	fs.BoolVar(&o.homeHistoryArchive, "enable-home-history-archive", false, "run the HOME expiry of private Sessions up to Archived: after the grace, rescue in a hold pod bound to the HOME, export the provider history into the shelf's history archive and verify it; deletes no HOME (DESIGN-025 5); needs --enable-private-terminal-record")
+	fs.DurationVar(&o.homeExpiryGrace, "home-expiry-grace", controller.DefaultHomeExpiryGrace, "the HOME expiry's grace after the recorded stop; it may only lengthen Q-31's 720h (DESIGN-025 13)")
 	fs.BoolVar(&o.retainedCommonRules, "enable-retained-common-rules", false, "retain reviewed common instruction inputs for new fixed private managed canaries")
 	fs.BoolVar(&o.privateProjectCanariesEnabled, "enable-private-project-canaries", false, "enable only two explicitly configured private managed subscription rule canaries")
 	canaries := fs.String("private-project-canaries", "", "strict operator-owned JSON records for at most two fixed private managed canaries")
@@ -349,6 +354,12 @@ func parseFlags(args []string) (options, error) {
 	if o.privateExecutorStop && !o.privateTerminalRecord {
 		return o, errors.New("--enable-private-executor-stop requires --enable-private-terminal-record: the terminal record is what proves the stop (DESIGN-025 13)")
 	}
+	if o.homeHistoryArchive && !o.privateTerminalRecord {
+		return o, errors.New("--enable-home-history-archive requires --enable-private-terminal-record: the HOME expiry rests on the terminal record (DESIGN-025 13)")
+	}
+	if o.homeExpiryGrace < controller.DefaultHomeExpiryGrace {
+		return o, fmt.Errorf("--home-expiry-grace %s is under %s: the grace may only be lengthened (DESIGN-025 13)", o.homeExpiryGrace, controller.DefaultHomeExpiryGrace)
+	}
 	return o, nil
 }
 
@@ -423,6 +434,18 @@ func run(args []string) error {
 	ctrlmetrics.Registry.MustRegister(terminalCounter)
 	stopCounter := controller.NewPrivateExecutorStopCounter()
 	ctrlmetrics.Registry.MustRegister(stopCounter)
+	expiryCounters := controller.NewHomeExpiryCounters()
+	ctrlmetrics.Registry.MustRegister(expiryCounters.Collectors()...)
+	// The API's log and message routes run agentd in a session's pod (D-65),
+	// and the HOME expiry's relay runs the history export there and the
+	// archive commands in the shelf (DESIGN-025 6.4).
+	podExec, err := podexec.New(cfg)
+	if err != nil {
+		return err
+	}
+	// The shelf pod holds the shared volume: rescues are listed, restored
+	// from and pruned through it (D-67), and history archived through it.
+	rescueShelf := &shelf.Shelf{Reader: mgr.GetAPIReader(), Exec: podExec, Namespace: o.sessionNamespace}
 	r := &controller.Reconciler{
 		SessionDirectory: directoryStore,
 		Client:           mgr.GetClient(),
@@ -436,6 +459,10 @@ func run(args []string) error {
 		PrivateExecutorTerminal:     terminalCounter,
 		PrivateExecutorStop:         o.privateExecutorStop,
 		PrivateExecutorStops:        stopCounter,
+		HomeHistoryArchive:          o.homeHistoryArchive,
+		HomeExpiryGrace:             o.homeExpiryGrace,
+		HomeExpiryCounters:          expiryCounters,
+		HistoryRelay:                &controller.ExecHistoryRelay{Exec: podExec, Shelf: rescueShelf, Slots: shelf.NewExecSlots(shelf.DefaultExecSlots)},
 		PrivateProjectCanaries:      o.privateProjectCanaries,
 		PrivateProjectCloneOwner:    cloneOwner,
 		ManagedChildDecisions:       o.managedChildDecisions,
@@ -459,6 +486,9 @@ func run(args []string) error {
 	// The sessions' metrics, read from the cache at scrape time on every
 	// replica: the RescueFailed page's source (D-57).
 	ctrlmetrics.Registry.MustRegister(&controller.SessionCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace})
+	// The HOME expiry's gauges, read from the same cache at scrape time
+	// (DESIGN-025 10).
+	ctrlmetrics.Registry.MustRegister(&controller.HomeExpiryCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace})
 	// Expired declare-activity declarations go within a minute (D-17, D-66).
 	if err := mgr.Add(&activity.Reaper{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Namespace: o.templatesNamespace,
 		Log: ctrl.Log.WithName("activities")}); err != nil {
@@ -470,14 +500,7 @@ func run(args []string) error {
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		return err
 	}
-	// The API's log and message routes run agentd in a session's pod (D-65).
-	podExec, err := podexec.New(cfg)
-	if err != nil {
-		return err
-	}
-	// The shelf pod holds the shared volume: rescues are listed, restored
-	// from and pruned through it (D-67). The pruner runs in the leader.
-	rescueShelf := &shelf.Shelf{Reader: mgr.GetAPIReader(), Exec: podExec, Namespace: o.sessionNamespace}
+	// The shelf's pruner runs in the leader (D-67).
 	if err := mgr.Add(&shelf.Pruner{Shelf: rescueShelf, Reader: mgr.GetAPIReader(), Namespace: o.sessionNamespace,
 		Templates: apiserver.TemplatesFrom(mgr.GetClient(), templatesKey), Log: ctrl.Log.WithName("shelf")}); err != nil {
 		return err
