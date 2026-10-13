@@ -2144,3 +2144,11 @@ PVC, does not depend on Tom's exact username.
 The pod's ServiceAccount identity, a kubeconfig context label, Headlamp's shared
 account and the `system:masters` group are not substitutes for that authenticated
 username. Keep the identity-dependent policies pending until it is established.
+
+The 2026-10-13 17:06 UTC audit found an exact historical personal username in
+haynes-ops' 2026-07-29 cluster inspection and the same current Omni Admin account,
+last active 2026-10-10. It did not observe current personal Kubernetes
+authentication. The username remains in local evidence, not this public repo.
+An exact-user guard can be prepared as a candidate with a reviewed private
+identity parameter; current personal access acceptance remains separate. See the
+[prerequisite checkpoint](../verification/h7-prerequisites-2026-10-13.md).

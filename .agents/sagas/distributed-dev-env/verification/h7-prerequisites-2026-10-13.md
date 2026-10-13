@@ -63,6 +63,15 @@ OIDC configuration. Authentik protects the ingress. This establishes the backend
 not whether Tom uses it on his phone or whether he is its only user.
 Anyone using this backend would share any exception granted to that account.
 
+The 17:06 UTC personal-identity audit used haynes-ops
+`3030615481190860a210a14eadffae7fc28c49d5`. Its cluster inspection record from
+2026-07-29 establishes an exact historical personal Kubernetes username with
+`system:masters`. Current Omni metadata has the same account as Admin, last
+active 2026-10-10. Live Kubernetes RBAC has no personal User subject; it does not
+prove current personal authentication. This is a strong candidate for guard
+preparation, not installed access acceptance. Its account email stays in local
+evidence; any guard needs a reviewed private identity parameter.
+
 No executable shelf-exec or archive-claim-mount workflow was found in the scanned
 v1 scripts, resources, runbooks and workflows in these two repositories. This is
 a scoped static finding; it does not establish every external or ad hoc workflow.
@@ -114,3 +123,9 @@ The bounded F4 audit is under
 `f4-pinned-code-evidence-and-candidates-r1.json` and `audit-manifest-r1.json`.
 The official 2.1.296 artifact's registry integrity was verified; the retained
 binary is non-executable. No provider session or runtime change was used for it.
+
+The personal-identity audit is under
+`/home/dev/work/orders/dev-env-h7-personal-lookup-1013/`:
+`personal-identity-findings-r1.json`, SHA-256
+`0457ded016daf2012e57d96e3c99022aff0f99147e3d096c5faaa0da91968319`.
+No current personal kubeconfig, credentials or authentication attempt was used.

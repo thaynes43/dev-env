@@ -28,8 +28,12 @@ settles this choice without proving native phone-prompt delivery.
 asked for a workstation check. Tom cannot run it from his phone and directed the
 coordinator to keep working. That request is withdrawn; discover the identity
 from accessible read-only evidence. Keep only the identity-dependent policy
-pending if evidence is insufficient. The first H7 GitOps unit, the unmounted
-history PVC, does not depend on that username.
+pending if evidence is insufficient. A bounded read-only audit found the exact
+historical personal username in a 2026-07-29 cluster inspection, with the same
+account still present as an Omni Admin (last active 2026-10-10). Current personal
+Kubernetes authentication remains unobserved. Keep the account email outside this
+public repo; guard preparation needs a reviewed private identity parameter. The
+first H7 GitOps unit, the unmounted history PVC, does not depend on that username.
 
 The F4 code audit found that `remote-control/fork-seeds` can contain conversation
 history, but none of the 34 names was present in the observed v1 config directory.
