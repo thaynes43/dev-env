@@ -64,18 +64,38 @@ reporting already-deployed state without undoing it.
 The hold arrived after the merge, foundation apply and failed automatic Job.
 No additional reader access, retry or undo is proceeding. The existing Mac route
 independently reached the same first-policy source mismatch without an access
-denial. Its delivered bundle claims complete nine-kind inventory (13 objects,
-zero archive references), matching five-object shelf lineage and stable named
-rereads, while retaining `NotFullAuditAcceptance`. Its adapters and evidence are
-under independent review; no property is promoted to acceptance yet.
+denial. Independent review supports its **historical workload baseline**:
+nine complete kind lists, 13 objects, zero references to either archive claim,
+five exact protected UID/source templates and 11 stable named rereads during
+21:15:48–21:16:00 UTC. Reconstructing the verified template enrichment reproduces
+the baseline facts digest. Both hook components passed unchanged validation.
+The report retains `NotFullAuditAcceptance`.
 
-The diagnostic identifies three checker assumptions to review: expression
-formatting differences with equal lexer tokens, omitted item TypeMeta in a typed
-PodList, and Kyverno readiness exposing two condition types rather than the
-checker's required three. Token equality is diagnostic, not semantic acceptance;
-derive missing type fields only from verified typed endpoints and reject
-conflicts. Verify required readiness conditions from pinned primary source.
-Do not weaken source matching or call an incomplete capture accepted.
+The transport did not establish the strict request contract: it buffered entire
+subprocess responses before byte checks, counted subprocesses rather than actual
+requests with client retries disabled, and read version outside its counters.
+The saved response sizes were small; that does not prove enforced limits.
+Preserve the useful historical observation without promoting transport or full
+audit acceptance.
+
+Pinned Kyverno 1.19.1 primary source establishes two required readiness conditions,
+`WebhookConfigured` and `RBACPermissionsGranted`; it does not produce the checker's
+required `PolicyCached`. Both observed condition sets were True. The saved
+message hashes also exactly match its benign generation-disabled message; an
+empty-message requirement wrongly rejects that status. Keep
+`generationAttested: false` because observedGeneration remains unattested.
+See the [status producer](https://github.com/kyverno/kyverno/blob/v1.19.1/pkg/controllers/policystatus/controller.go),
+[readiness calculation](https://github.com/kyverno/kyverno/blob/v1.19.1/pkg/controllers/policystatus/vpol.go)
+and [message producer](https://github.com/kyverno/kyverno/blob/v1.19.1/pkg/controllers/admissionpolicygenerator/generate-vap.go).
+
+Missing-only item TypeMeta derivation is sound when the typed endpoint and outer
+List type are verified and conflicting item types are rejected. Incorporate it
+into the source correction without relaxing UID, source or lineage checks.
+The 43 equal diagnostic expression token comparisons remain diagnostic: that
+regex is not a full CEL lexer. A reviewed correction needs a pinned full lexer
+and successful parsing of both expressions, preserving literal/token bytes and
+ignoring only whitespace. Retain exact comparisons elsewhere; no schema-default
+discrepancy was established.
 
 The exact contract is in local PVC order
 `dev-env-h7-archive-guard-1013/existing-mac-evidence-handoff-r1.md`. It specifies
@@ -85,10 +105,10 @@ stable rereads, response/time/page/call limits and sanitization. Reusing the pur
 audit needs a reviewed Mac transport adapter; unmodified main expects in-cluster
 credential paths. No credential export or administrator-token borrowing follows.
 
-Next: independently review the Mac adapters and bounded evidence, verify the
-checker assumptions against pinned primary source, review a focused source-only
-collector/transport correction, and determine exactly which metadata predicates
-hold. Withdrawal of already-installed reader access needs a separate
+Next: implement and independently review a focused source-only Mac
+collector/transport correction, then obtain a fresh bounded existing-access
+capture. Do not edit or redeploy the held cluster reader. Withdrawal of
+already-installed reader access needs a separate
 concrete owner ruling; no such ruling was observed. No workstation commands are
 requested from the owner.
 
@@ -122,3 +142,9 @@ The delivered Mac manifest is local
 SHA-256 `b104b63b4eedb293058026b24e039209e86ae149bc42f890df7877629c304f99`.
 Its inventory capture spans 21:15:48–21:16:00 UTC, 26 GETs. The unchanged original
 audit failure and earlier diagnostics remain preserved separately.
+
+Independent Mac review receipt:
+`/home/dev/work/orders/dev-env-h7-existing-mac-evidence-1013/independent-mac-evidence-review-r1.json`,
+SHA-256 `3fced52cf8a3bde54f72d8c86374c1ca7c82d70b5d744a892d1da8ee64909651`.
+The baseline facts digest is
+`34709d7dab0c17fc9c3cdec5d2811750a20fa476cb0e574aaa57cb09dc054737`.

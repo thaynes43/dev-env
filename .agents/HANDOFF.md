@@ -22,11 +22,14 @@ the failed Job; no retry, additional access or undo is proceeding.
 Q-36/D-90 records Tom's relayed "Go for it" for holding the new reader and using
 existing authorized Mac access for bounded evidence. The relay arrived after the
 merge/deployment and expressly required reporting existing state without undo.
-The Mac route reached the same source mismatch without denial. Diagnose the
-structural difference, verify any API default, review a source-only collector and
-transport correction, and check the resulting bounded receipt. No complete
-baseline or real guard acceptance follows yet; no workstation commands are
-requested from the owner. Already-installed access has no withdrawal ruling.
+The Mac route reached the same source mismatch without denial. Independent
+review supports a historical nine-kind baseline (13 objects, zero archive
+references), matching five-object protected lineage and stable named rereads.
+It found transport-limit and checker-assumption defects; full audit and real
+guard acceptance remain pending. Review a focused source-only Mac correction
+and obtain a fresh bounded receipt without changing the held reader. No
+workstation commands are requested from the owner. Already-installed access
+has no withdrawal ruling.
 
 ## H7 archive guard registered; installed acceptance pending — 2026-10-13
 

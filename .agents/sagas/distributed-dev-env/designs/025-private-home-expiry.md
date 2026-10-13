@@ -2244,7 +2244,10 @@ explicitly requires reporting already-deployed state without undo. No withdrawal
 of installed grants, retry, replacement, cleanup or later gate is approved.
 Diagnose the source mismatch, verify any CRD/API default against pinned primary
 source, review a focused source-only collector/transport correction and check
-the bounded receipt. Mac reads reached the same mismatch without access denial;
-they do not yet establish a complete baseline. All real-request, Retain, F4,
+the bounded receipt. Mac reads reached the same mismatch without access denial.
+Independent review supports a historical nine-kind workload baseline and matching
+protected lineage, with zero archive references. Strict transport and full audit
+acceptance remain unestablished; the source-only Mac correction preserves the
+failed reader and exact policy checks. All real-request, Retain, F4,
 cold-measurement, restore and activation gates remain intact. This operational
 direction creates no architecture ADR and does not change Q-33 or ADR-007.

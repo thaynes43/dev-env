@@ -191,9 +191,13 @@ workload baseline was collected; the first policy's normalized spec mismatched
 source, and actual timezone injection exceeded reviewed execution confinement.
 Q-36/D-90 holds further reader access/deployment and uses existing authorized Mac
 evidence. The relay arrived after deployment and does not authorize undo.
-Diagnose the structural mismatch, verify defaults, review a focused source-only
-collector/transport correction and check the bounded Mac receipt. No retry or
-new grant; preserve the failed Job and all other retained runtime.
+Independent review supports a historical nine-kind Mac baseline with zero
+archive references and matching protected lineage. Full audit remains pending:
+the transport did not enforce the request contract, and pinned-engine readiness,
+typed-list handling and exact expression formatting need a reviewed correction.
+Implement a focused source-only Mac collector/transport correction and obtain a
+fresh bounded receipt. No held-reader change, retry or new grant; preserve the
+failed Job and all other retained runtime.
 
 **H7 progress at 20:23 UTC, 2026-10-13:** the compatible guard merged in
 [haynes-ops #3902](https://github.com/thaynes43/haynes-ops/pull/3902), `650f3a04`.
