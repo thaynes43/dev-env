@@ -83,7 +83,7 @@ const (
 	// MaxHistoryManifestPage bounds one page of `history-archive manifest`:
 	// the files, then the excluded names, at most this many items together.
 	MaxHistoryManifestPage = 1000
-	MaxHistoryContentBytes    = 64 << 20
+	MaxHistoryContentBytes = 64 << 20
 	// HistoryIncomingMaxAge is how old debris in .incoming must be before a
 	// put removes it: older than any put could still be running.
 	HistoryIncomingMaxAge = time.Hour
