@@ -1300,8 +1300,9 @@ class, a different shape, more sensitive content. Everything else is the same.
   shelf; H7 checks again, with an RBAC listing of every identity that holds
   `pods/exec` or Job `create` in `dev-agents`. If a v1 workflow needs that
   access, it is a question for Tom before the guard ships, because no v2 guard
-  may cut a capability agents use today. If Tom's phone path acts as a
-  ServiceAccount (section 9's check), the guard names that account.
+  may cut a capability agents use today. Q-33 (section 18) replaces the proposed
+  phone ServiceAccount exception with Tom's personal Kubernetes identity;
+  Q-34 (section 19) directs the coordinator to discover it from accessible evidence.
 - **No backup off the cluster**, and kept indefinitely. agentd has no command
   that removes an entry.
 
@@ -1633,9 +1634,9 @@ ValidatingAdmissionPolicy, `dev-env-home-expiry-guard`, matches AgentSession
 `CREATE` and `UPDATE`. It refuses a request that adds, changes or removes this
 annotation when the requester is a ServiceAccount, which covers the operator, the
 broker, the keeper, Flux and every agent. Tom acts as himself with `kubectl`.
-Before H7 writes the policy, check which identity Tom's phone path uses (for
-example Headlamp). If it is a ServiceAccount, the policy names that one account
-explicitly, in the reviewed haynes-ops change.
+Q-33 (section 18) replaces the proposed phone ServiceAccount exception with Tom's
+personal Kubernetes identity. Establish that authenticated username from accessible
+evidence before writing the identity-dependent policy (Q-34, section 19).
 
 In source (H5, corrected after the advisory review of #251): the reference copy
 refuses every `system:` identity, not only ServiceAccounts, so control-plane and
@@ -1808,7 +1809,7 @@ own reviewed PR:
    - `shelf/app/deployment.yaml`: the second volume and mount, `--history-archive`,
      the image pin, and the header comment;
    - `rbac/app/home-expiry-guard.yaml`: `dev-env-home-expiry-guard` (section 9),
-     after the identity checks (Tom's phone path, and the users and groups that
+     after the identity checks (Tom's personal username under Q-33, and the users and groups that
      can update AgentSessions); the reference copy, with its envtest, is this
      repository's `internal/controller/testdata/haynes-ops/home-expiry-guard.yaml`
      (H5);
@@ -2099,36 +2100,55 @@ Plan 11 tracks these:
 
 ## 18. H7 owner identity: Q-33
 
-**Prompt emitted 2026-10-13; phone delivery unverified; decision pending.**
-The Codex chat in the v1 dev-env pod submitted Q-33 through
-`functions.request_user_input_async`. The tool returned `accepted: true`, which
-establishes submission, not that it appeared on Tom's phone. No delivery receipt
-or owner answer has been received. This remains the plan 11 native-question
-capability gap in CLAUDE.md; do not treat it as a confirmed delivered ask or a
-policy ruling. Keep the dependent policies pending and continue independent
-authorized work without inventing another notification channel.
+**Answered directly in this chat, 2026-10-13.** Tom's ruling:
 
-The read-only H7 audit found that
-Headlamp's configured Kubernetes backend uses ServiceAccount
-`frontend/headlamp`, bound to `cluster-admin`. Its kubeconfig comes from the
-pod's ServiceAccount token; Authentik protects the ingress. This establishes
-the configured backend, not which path Tom uses on his phone.
+> Headlamp should go away once dev-env v2 is fully adopted and I’ll always need my k8s account.
 
-Direct RBAC also permits AgentSession update and patch for the operator, Flux's
-helm and kustomize controllers, the generic garbage collector and the
-`system:masters` group. That group's members and Tom's personal Kubernetes
-username are not established by the RBAC listing. These are RBAC allowances,
-not proof that admission permits each request.
+H7 must preserve Tom's personal Kubernetes identity as a permanent access path.
+The owner controls use that identity, not an exception for Headlamp's shared
+ServiceAccount. This does not retire Headlamp now: its retirement comes after
+full v2 adoption. Tom's exact authenticated Kubernetes username is not yet
+established; the coordinator is checking accessible read-only evidence before
+the identity-dependent policies are written.
 
-**Question:** should H7 preserve `frontend/headlamp` for Tom's phone owner
-controls and archive access? Anyone who can use that shared Headlamp backend
-would share this access.
+The original read-only check established `frontend/headlamp`, bound to
+`cluster-admin`, as Headlamp's configured backend. It did not establish Tom's
+actual phone path or a sole user. Direct RBAC also allows AgentSession update
+and patch for the operator, Flux's helm and kustomize controllers, the generic
+garbage collector and `system:masters`. Group membership does not identify Tom.
 
-1. **Preserve Headlamp (recommended):** name `frontend/headlamp` explicitly in
-   the override policy and archive guard, preserving this existing access path.
-2. **Use a personal Kubernetes identity:** establish Tom's exact authenticated
-   identity before writing the policies; do not infer it from a group name.
+The Codex chat first submitted Q-33 through
+`functions.request_user_input_async`; the tool accepted submission, but Tom
+reported that the question never arrived. A later `request_user_input` attempt
+returned unavailable in Default mode. The question was then put in this existing
+chat and Tom answered directly. His answer is authority for this identity choice;
+it does not establish native phone-prompt acceptance.
 
-This prompt grants no exception until Tom answers. No haynes-ops change is
-made while it is pending. F4, the cold resource measurements, the archive PV's
-owner-set `Retain`, H8's session source and the delete gate remain separate.
+No haynes-ops change has been made. F4, both cold resource measurements, the
+archive PV's owner-set `Retain`, H8's session source and the delete gate remain
+separate. No credential, admission, cleanup or immediate Headlamp retirement
+permission follows from this ruling.
+
+## 19. Personal Kubernetes username: Q-34
+
+**Workstation request withdrawn, 2026-10-13.** The coordinator asked what username
+`kubectl auth whoami` shows on Tom's own machine. Tom replied:
+
+> Why are you stopping? I can’t answer these questions from my phone.
+
+The coordinator must discover what it can from accessible read-only cluster and
+configuration evidence and continue independent prerequisite work. This is not a
+new approval gate for the whole H7 sequence. The first unit, an unmounted history
+PVC, does not depend on Tom's exact username.
+
+The pod's ServiceAccount identity, a kubeconfig context label, Headlamp's shared
+account and the `system:masters` group are not substitutes for that authenticated
+username. Keep the identity-dependent policies pending until it is established.
+
+The 2026-10-13 17:06 UTC audit found an exact historical personal username in
+haynes-ops' 2026-07-29 cluster inspection and the same current Omni Admin account,
+last active 2026-10-10. It did not observe current personal Kubernetes
+authentication. The username remains in local evidence, not this public repo.
+An exact-user guard can be prepared as a candidate with a reviewed private
+identity parameter; current personal access acceptance remains separate. See the
+[prerequisite checkpoint](../verification/h7-prerequisites-2026-10-13.md).

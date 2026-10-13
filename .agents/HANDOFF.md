@@ -10,7 +10,7 @@ of the 2026-10-12 brief, which still holds the requirement history and the
 stopped routes. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
-## H7 read-only prerequisites: Q-33 pending — 2026-10-13
+## H7 owner identity and read-only prerequisites — 2026-10-13
 
 The Codex takeover refreshed the startup and H7 read-only checks. The
 [prerequisite checkpoint](sagas/distributed-dev-env/verification/h7-prerequisites-2026-10-13.md)
@@ -18,15 +18,28 @@ records every direct RBAC subject, Headlamp's shared ServiceAccount backend and
 the scoped v1 workflow scan. No haynes-ops change was made.
 
 [Q-33](sagas/distributed-dev-env/designs/025-private-home-expiry.md#18-h7-owner-identity-q-33)
-was submitted by this Codex chat through `functions.request_user_input_async`:
-preserve Headlamp's shared backend for the
-phone owner controls and archive access, or use Tom's personal Kubernetes identity.
-The tool accepted submission, but phone delivery is unverified and no owner answer
-has arrived. This is the native-question capability gap, not a confirmed delivered
-ask; the dependent policies remain pending.
-The configured backend does not establish his actual phone path or a sole user.
-F4 and both cold resource measurements remain prerequisites before archive
-activation. Source, deployment and installed acceptance remain separate.
+is answered directly in this chat: Tom always needs his personal Kubernetes
+account; Headlamp retires after full v2 adoption. Preserve that account for H7
+owner controls. The shared Headlamp backend does not establish his personal
+username. The original native prompt never reached him; his direct chat answer
+settles this choice without proving native phone-prompt delivery.
+
+[Q-34](sagas/distributed-dev-env/designs/025-private-home-expiry.md#19-personal-kubernetes-username-q-34)
+asked for a workstation check. Tom cannot run it from his phone and directed the
+coordinator to keep working. That request is withdrawn; discover the identity
+from accessible read-only evidence. Keep only the identity-dependent policy
+pending if evidence is insufficient. A bounded read-only audit found the exact
+historical personal username in a 2026-07-29 cluster inspection, with the same
+account still present as an Omni Admin (last active 2026-10-10). Current personal
+Kubernetes authentication remains unobserved. Keep the account email outside this
+public repo; guard preparation needs a reviewed private identity parameter. The
+first H7 GitOps unit, the unmounted history PVC, does not depend on that username.
+
+The F4 code audit found that `remote-control/fork-seeds` can contain conversation
+history, but none of the 34 names was present in the observed v1 config directory.
+All 34 remain unclassified; preserve `unknown_entry`. F4 and both cold resource
+measurements remain prerequisites before archive activation. Source, deployment
+and installed acceptance remain separate.
 
 ## Claude coordinator session 2026-10-12 to 2026-10-13: summary and pickup brief — 2026-10-13 UTC
 
