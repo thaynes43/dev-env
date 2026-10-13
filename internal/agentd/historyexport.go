@@ -45,7 +45,8 @@ var historyBounds = struct {
 	fileBytes, totalBytes int64
 	files, excluded       int
 	contentBytes          int
-}{protocol.MaxHistoryFileBytes, protocol.MaxHistoryExportBytes, protocol.MaxHistoryExportFiles, protocol.MaxHistoryExcluded, protocol.MaxHistoryContentBytes}
+	excludedEntries       int
+}{protocol.MaxHistoryFileBytes, protocol.MaxHistoryExportBytes, protocol.MaxHistoryExportFiles, protocol.MaxHistoryExcluded, protocol.MaxHistoryContentBytes, protocol.MaxHistoryExcludedEntries}
 
 // historyContentReserve is the room a plan leaves under the content
 // manifest's bound for the operator's half of it (session, project, terminal
@@ -86,7 +87,7 @@ func PlanHistoryExport(s Settings, o HistoryExportOptions) (protocol.HistoryExpo
 	if err != nil {
 		return protocol.HistoryExportPlan{}, err
 	}
-	w := &historyWalk{home: s.Home, shared: sharedMountInHome(s), creds: creds}
+	w := &historyWalk{home: s.Home, shared: sharedMountInHome(s), creds: creds, countLeft: historyBounds.excludedEntries}
 	plan := protocol.HistoryExportPlan{
 		Format:   protocol.HistoryExportPlanFormat,
 		Session:  o.Session,
@@ -426,16 +427,23 @@ type historyWalk struct {
 	files    []protocol.HistoryFile
 	excluded []protocol.HistoryExcluded
 	bytes    int64
+	// countLeft is how many more names excludedBytes may stat in this plan.
+	countLeft int
 }
 
 func (w *historyWalk) exclude(root, p, class string, bytes int64) error {
+	return w.excludePartial(root, p, class, bytes, false)
+}
+
+// excludePartial lists an excluded name; partial says bytes is a lower bound.
+func (w *historyWalk) excludePartial(root, p, class string, bytes int64, partial bool) error {
 	if len(w.excluded) >= historyBounds.excluded {
 		return protocol.HistoryErrorf(protocol.HistoryErrTooLarge, path.Join(root, p), "more than %d excluded names", historyBounds.excluded)
 	}
 	if class == protocol.HistoryClassCredential {
-		bytes = 0
+		bytes, partial = 0, false
 	}
-	w.excluded = append(w.excluded, protocol.HistoryExcluded{Root: root, Path: p, Class: class, Bytes: bytes})
+	w.excluded = append(w.excluded, protocol.HistoryExcluded{Root: root, Path: p, Class: class, Bytes: bytes, Partial: partial})
 	return nil
 }
 
@@ -493,11 +501,8 @@ func (w *historyWalk) dirRoot(r historyRootDef) (absent bool, err error) {
 			continue
 		}
 		if rule.class != classHistory {
-			n, err := treeBytesNoFollow(w.home, abs, efi)
-			if err != nil {
-				return false, err
-			}
-			if err := w.exclude(r.name, name, rule.class, n); err != nil {
+			n, partial := w.excludedBytes(abs, efi, 0)
+			if err := w.excludePartial(r.name, name, rule.class, n, partial); err != nil {
 				return false, err
 			}
 			continue
@@ -802,32 +807,42 @@ func readHistoryDir(base, abs string) ([]string, error) {
 	return names, nil
 }
 
-// treeBytesNoFollow is the size of the regular files under an excluded entry
-// below base, from directory listings and Lstat only: no file is opened.
-func treeBytesNoFollow(base, abs string, fi fs.FileInfo) (int64, error) {
+// excludedBytes is the size of the regular files under an excluded entry,
+// from directory listings and Lstat only: no file is opened. Nothing under an
+// excluded entry is exported, so what it cannot count never refuses the
+// export: it stops below MaxHistoryPathDepth levels, after the plan's
+// countLeft names, and at a name it cannot list or stat (a path past
+// PATH_MAX, say), and then partial says bytes is a lower bound.
+func (w *historyWalk) excludedBytes(abs string, fi fs.FileInfo, depth int) (bytes int64, partial bool) {
 	if fi.Mode().IsRegular() {
-		return fi.Size(), nil
+		return fi.Size(), false
 	}
 	if !fi.IsDir() {
-		return 0, nil
+		return 0, false
 	}
-	names, err := readHistoryDir(base, abs)
+	if depth >= protocol.MaxHistoryPathDepth {
+		return 0, true
+	}
+	names, err := readHistoryDir(w.home, abs)
 	if err != nil {
-		return 0, err
+		return 0, true
 	}
-	var n int64
 	for _, name := range names {
-		cfi, err := os.Lstat(filepath.Join(abs, name))
-		if err != nil {
-			return 0, protocol.HistoryErrorf(protocol.HistoryErrIO, "", "%v", err)
+		if w.countLeft <= 0 {
+			return bytes, true
 		}
-		c, err := treeBytesNoFollow(base, filepath.Join(abs, name), cfi)
+		w.countLeft--
+		child := filepath.Join(abs, name)
+		cfi, err := os.Lstat(child)
 		if err != nil {
-			return 0, err
+			partial = true
+			continue
 		}
-		n += c
+		n, p := w.excludedBytes(child, cfi, depth+1)
+		bytes += n
+		partial = partial || p
 	}
-	return n, nil
+	return bytes, partial
 }
 
 // planRescue lists the Git rescue directory on the shared volume: every file

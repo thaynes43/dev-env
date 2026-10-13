@@ -750,6 +750,68 @@ func TestHistoryExportNeverOpensThroughALink(t *testing.T) {
 	}
 }
 
+// TestHistoryExportCountsExcludedTreesWithinBounds: nothing under an
+// excluded entry is exported, so a tree too deep, too long for PATH_MAX or too
+// large to count is listed with a lower bound, never a refusal.
+func TestHistoryExportCountsExcludedTreesWithinBounds(t *testing.T) {
+	r := newHistoryRig(t)
+	r.write(t, ".codex/packages/"+strings.Repeat("d/", protocol.MaxHistoryPathDepth+5)+"f", "deep")
+	// A path past PATH_MAX, made one directory at a time.
+	r.mkdir(t, ".claude/cache")
+	fd, err := syscall.Open(r.path(".claude/cache"), syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("c", 200)
+	for i := 0; i < 25; i++ {
+		if err := syscall.Mkdirat(fd, long, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		next, err := syscall.Openat(fd, long, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+		_ = syscall.Close(fd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fd = next
+	}
+	ffd, err := syscall.Openat(fd, "f", syscall.O_CREAT|syscall.O_WRONLY, 0o600)
+	_ = syscall.Close(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = syscall.Close(ffd)
+	r.write(t, ".claude/cache/shallow", "12345")
+
+	plan := r.plan(t)
+	got := map[string]protocol.HistoryExcluded{}
+	for _, e := range plan.Excluded {
+		got[e.Root+"/"+e.Path] = e
+	}
+	if e := got["codex/packages"]; !e.Partial {
+		t.Errorf("a tree deeper than the bound: %+v, want partial", e)
+	}
+	if e := got["claude/cache"]; !e.Partial || e.Bytes != 5 {
+		t.Errorf("a tree past PATH_MAX: %+v, want partial with the 5 bytes it could count", e)
+	}
+	if e := got["claude/file-history"]; e.Partial {
+		t.Errorf("a small tree is partial: %+v", e)
+	}
+
+	old := historyBounds
+	t.Cleanup(func() { historyBounds = old })
+	historyBounds.excludedEntries = 2
+	plan = r.plan(t)
+	partial := 0
+	for _, e := range plan.Excluded {
+		if e.Partial {
+			partial++
+		}
+	}
+	if partial < 3 {
+		t.Errorf("with 2 names to count, %d entries are partial", partial)
+	}
+}
+
 func TestHistoryExportSizeCaps(t *testing.T) {
 	old := historyBounds
 	t.Cleanup(func() { historyBounds = old })

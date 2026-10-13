@@ -533,6 +533,34 @@ func TestHistoryArchivePartialPutRecoversAfterARestart(t *testing.T) {
 	if err != nil || len(list.Items) != 1 || list.Items[0].Error != "" || list.Items[0].ContentSHA256 != res.ContentSHA256 {
 		t.Errorf("list with an index file's leftover link: %+v %v", list, err)
 	}
+	if err := os.RemoveAll(leftover); err != nil {
+		t.Fatal(err)
+	}
+
+	// An index write that fails removes its own .incoming directory, and the
+	// next put repairs the index.
+	if err := os.RemoveAll(idxDir); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, idxDir, "in the way")
+	if _, err := again.Put(bytes.NewReader(input), "x"); err == nil {
+		t.Fatalf("a put whose index cannot be written succeeded")
+	}
+	left, _ := os.ReadDir(incoming)
+	for _, d := range left {
+		if d.Name() != "young" {
+			t.Errorf("a failed index write left %s in .incoming", d.Name())
+		}
+	}
+	if err := os.Remove(idxDir); err != nil {
+		t.Fatal(err)
+	}
+	if res3, err := again.Put(bytes.NewReader(input), "x"); err != nil || res3.Status != protocol.HistoryPutExists {
+		t.Errorf("put after a failed index write: %+v %v", res3, err)
+	}
+	if list, err := again.List("dev-env", 0, ""); err != nil || len(list.Items) != 1 {
+		t.Errorf("list after the index repair: %+v %v", list, err)
+	}
 }
 
 func TestHistoryArchiveGetListAndRead(t *testing.T) {

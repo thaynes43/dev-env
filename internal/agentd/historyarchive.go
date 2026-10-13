@@ -225,7 +225,7 @@ func validateHistoryContent(c protocol.HistoryContent) error {
 		switch e.Class {
 		case protocol.HistoryClassNotHistory, protocol.HistoryClassUserCopy, protocol.HistoryClassLink:
 		case protocol.HistoryClassCredential:
-			if e.Bytes != 0 {
+			if e.Bytes != 0 || e.Partial {
 				return bad("a credential is listed with a size")
 			}
 		default:
@@ -601,7 +601,9 @@ func historyIndexName(project, sessionUID, sum string, at time.Time) string {
 
 // linkIndexEntry writes the entry's index file unless it is there: a synced
 // file under .incoming, hard-linked into place, which never replaces a file.
-// It repairs a put that stopped between the rename and the index.
+// It repairs a put that stopped between the rename and the index. Its
+// .incoming directory goes on every return, a failed one included; only a
+// crash leaves it for pruneIncoming.
 func (a HistoryArchive) linkIndexEntry(c protocol.HistoryContent, sum, entryRel string, at time.Time) error {
 	rel := historyIndexName(c.Project, c.Session.UID, sum, at)
 	final := filepath.Join(a.Root, filepath.FromSlash(rel))
@@ -620,6 +622,12 @@ func (a HistoryArchive) linkIndexEntry(c protocol.HistoryContent, sum, entryRel 
 	if err != nil {
 		return err
 	}
+	removed := false
+	defer func() {
+		if !removed {
+			_ = a.removeIncoming(tmp)
+		}
+	}()
 	tmpFile := filepath.Join(tmp, "index.json")
 	if err := a.incomingFile(tmpFile, data); err != nil {
 		return err
@@ -633,6 +641,7 @@ func (a HistoryArchive) linkIndexEntry(c protocol.HistoryContent, sum, entryRel 
 	if err := syncArchiveDir(filepath.Dir(final)); err != nil {
 		return err
 	}
+	removed = true
 	return a.removeIncoming(tmp)
 }
 

@@ -69,17 +69,20 @@ const (
 
 // Bounds (DESIGN-025 6.3 and 7).
 const (
-	HistoryBlockSize       = 1 << 20
-	MaxHistoryExportBytes  = 2 << 30
-	MaxHistoryExportFiles  = 100_000
-	MaxHistoryFileBytes    = 512 << 20
-	MaxHistoryPathDepth    = 64
-	MaxHistoryPathBytes    = 1024
-	MaxHistoryExcluded     = 100_000
-	MaxHistoryGitFiles     = 64
-	MaxHistoryReadBytes    = 64 << 10
-	MaxHistoryListLimit    = 100
-	MaxHistoryContentBytes = 64 << 20
+	HistoryBlockSize      = 1 << 20
+	MaxHistoryExportBytes = 2 << 30
+	MaxHistoryExportFiles = 100_000
+	MaxHistoryFileBytes   = 512 << 20
+	MaxHistoryPathDepth   = 64
+	MaxHistoryPathBytes   = 1024
+	MaxHistoryExcluded    = 100_000
+	// MaxHistoryExcludedEntries is how many names under excluded entries a
+	// plan stats to size them; past it, sizes are lower bounds.
+	MaxHistoryExcludedEntries = 1_000_000
+	MaxHistoryGitFiles        = 64
+	MaxHistoryReadBytes       = 64 << 10
+	MaxHistoryListLimit       = 100
+	MaxHistoryContentBytes    = 64 << 20
 	// HistoryIncomingMaxAge is how old debris in .incoming must be before a
 	// put removes it: older than any put could still be running.
 	HistoryIncomingMaxAge = time.Hour
@@ -176,6 +179,9 @@ type HistoryExcluded struct {
 	Class string `json:"class"`
 	// Bytes is the size of the entry's regular files; absent for a credential.
 	Bytes int64 `json:"bytes,omitempty"`
+	// Partial says the count stopped early: at its bound, or at a name it
+	// could not list or stat. Bytes is then a lower bound.
+	Partial bool `json:"partial,omitempty"`
 }
 
 // HistoryGit is the Git rescue the archive copies beside the history: the

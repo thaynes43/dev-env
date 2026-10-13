@@ -736,6 +736,11 @@ F4 holds the work.
 class. An entry in no class refuses the export (`unknown_entry`), so a new layout
 blocks expiry until a source change classifies it (ADR-005 C-34). Excluded names
 are listed in the manifest with their size; credentials with their name only.
+The size counts regular files from directory listings and `Lstat` only, at most
+64 levels down and 1,000,000 names a plan. A count that stops there, or at a
+name it cannot list or stat (a path past `PATH_MAX`, say), is marked `partial`,
+a lower bound. It never refuses the export: nothing under an excluded name is
+exported.
 
 | Provider | History: exported | Not history: listed, not exported | Credentials: never exported |
 |---|---|---|---|
@@ -1028,9 +1033,9 @@ sections above leave these details open:
   Git part, and a Git part must be that rescue's directory, `<stamp>` or
   `<stamp>-N` for a later rescue in the same minute (D-48), never an older
   rescue's. `--archived-by` goes to `entry.json`. A put that is refused or
-  fails removes its own `.incoming` directory at once, so retries cannot fill
-  the volume. Only a crash leaves debris, and a later put removes it once it is
-  an hour old.
+  fails removes its own `.incoming` directories at once, the index file's
+  included, so retries cannot fill the volume. Only a crash leaves debris, and
+  a later put removes it once it is an hour old.
 - **Index entries** are named
   `index/<project or _none>/<YYYY-MM>/<archivedAt as 20060102T150405.000000000Z>-<session UID>-<16 hex>.json`.
   Each is hard-linked from `.incoming`, so it never replaces a file. A put that
@@ -1056,8 +1061,9 @@ sections above leave these details open:
   whose `content.json` cannot be read, or one with the same `content.json` but
   a damaged `entry.json`, answers `corrupt`; `conflict` is only a readable
   manifest that differs.
-- **Bounds** are 6.3's, plus at most 100,000 excluded names, 64 Git files,
-  2 GiB of Git files and a 64 MiB content manifest. The plan refuses
+- **Bounds** are 6.3's, plus at most 100,000 excluded names, 1,000,000 names
+  counted under them (sizes past that are `partial`), 64 Git files, 2 GiB of
+  Git files and a 64 MiB content manifest. The plan refuses
   `export_too_large` when its part of the manifest would leave less than
   64 KiB of that for the operator's part (under 2 KiB), so a plan put can
   never take refuses at once.
@@ -1106,7 +1112,8 @@ sections above leave these details open:
   `TestHistoryExportRefusesUnexpectedEntries` (links into HOME, names that are
   not UTF-8), `TestHistoryExportListsLinksHOMEKeeps`,
   `TestHistoryExportKeepsAgentdsInterruptedWrite`,
-  `TestHistoryExportNeverOpensThroughALink`, `TestHistoryExportSizeCaps`,
+  `TestHistoryExportNeverOpensThroughALink`,
+  `TestHistoryExportCountsExcludedTreesWithinBounds`, `TestHistoryExportSizeCaps`,
   `TestHistoryExportListsTheGitRescue`,
   `TestHistoryArchivePutStoresAndIsIdempotent`,
   `TestHistoryArchivePutRefusesStreamsThatDifferFromTheManifest`,
