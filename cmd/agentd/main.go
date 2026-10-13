@@ -44,9 +44,12 @@ Commands:
   hold                     The rescue pod's command (D-55): hold the session
                            volume for the operator's rescue and start nothing
                            (no config, clone, agent or heartbeat), until SIGTERM.
-  shelf                    The shelf pod's command (D-67): check that the shared
+  shelf [--history-archive]
+                           The shelf pod's command (D-67): check that the shared
                            volume is mounted, then wait until SIGTERM. The
-                           operator lists and prunes rescues here by exec.
+                           operator lists and prunes rescues here by exec. With
+                           --history-archive it also refuses to start without
+                           the history archive at ~/.history-archive (DESIGN-025).
   render                   Render the GitOps config into $HOME (boot step 1).
   project-sync --enabled   Run one explicitly configured, model-free GitOps Job
                            to prepare declared shared references/project roots.
@@ -97,6 +100,17 @@ Commands:
                            request's retention whose session is not in its keep
                            list; the request is JSON on stdin, the report JSON
                            on stdout (D-67).
+  ctl history-export plan|stream --session S --claude-config-dir D --codex-home D
+                           [--rescue SESSION/STAMP] [--plan-sha256 H]
+                           In a session or hold pod (DESIGN-025 6.3): plan prints
+                           the private history it would export, hashed, and
+                           every name it excluded; stream writes exactly those
+                           files as a tar stream. Reads HOME only.
+  ctl history-archive put|verify|get|list|read
+                           In the shelf (DESIGN-025 7): store an export behind
+                           its content manifest, re-hash an entry, print its
+                           manifest, list a project's entries, or read one page
+                           of an archived file.
   ctl prepare-restart      Print what the next boot resumes (the conversation in
                            ~/.agentd/launch.json) as JSON, then stop the agent
                            CLI as the pod's SIGTERM would (D-58).
@@ -164,11 +178,12 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		}
 		return daemon(ctx, log, getenv, r)
 	case "shelf":
-		if len(args) > 1 {
-			_, _ = fmt.Fprintf(stderr, "%s: shelf takes no arguments, got %q\n", binaryName, args[1:])
+		historyArchive := len(args) == 2 && args[1] == "--history-archive"
+		if len(args) > 1 && !historyArchive {
+			_, _ = fmt.Fprintf(stderr, "%s: shelf takes only --history-archive, got %q\n", binaryName, args[1:])
 			return exitUsage
 		}
-		return shelf(ctx, log, getenv)
+		return shelf(ctx, log, getenv, historyArchive)
 	case "hold":
 		if len(args) > 1 {
 			_, _ = fmt.Fprintf(stderr, "%s: hold takes no arguments, got %q\n", binaryName, args[1:])
@@ -248,7 +263,7 @@ func hold(ctx context.Context, log *slog.Logger, getenv func(string) string) int
 
 // shelf is the shelf pod's command (D-67). It refuses to run without the
 // shared volume, so a shelf that cannot see the rescues never looks healthy.
-func shelf(ctx context.Context, log *slog.Logger, getenv func(string) string) int {
+func shelf(ctx context.Context, log *slog.Logger, getenv func(string) string, historyArchive bool) int {
 	s, err := agentd.LoadSettings(getenv)
 	if err != nil {
 		log.Error("settings", "err", err)
@@ -258,6 +273,15 @@ func shelf(ctx context.Context, log *slog.Logger, getenv func(string) string) in
 	if err != nil {
 		log.Error("the shelf needs the shared volume", "err", err)
 		return exitFailure
+	}
+	if historyArchive {
+		// With --history-archive the shelf never looks healthy without the
+		// archive volume (DESIGN-025 7).
+		if err := historyShelfCheck(s); err != nil {
+			log.Error("the shelf needs the history archive volume", "err", err)
+			return exitFailure
+		}
+		log.Info("history archive mounted", "root", agentd.NewHistoryArchive(s).Root)
 	}
 	log.Info("shelf ready; the operator lists and prunes rescues here by exec", "shared", s.SharedDir, "rescues", len(list.Rescues))
 	<-ctx.Done()
@@ -457,6 +481,8 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return contextCtl(ctx, args, stdin, stdout, stderr, getenv)
 		case "rescues", "prune", "hold-rescue":
 			return shelfCtl(args, stdin, stdout, stderr, getenv)
+		case "history-export", "history-archive":
+			return historyCtl(args, stdin, stdout, stderr, getenv)
 		}
 	}
 	stopAgent := false

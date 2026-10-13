@@ -7,6 +7,22 @@ the saga. To continue building, follow the
 in the Claude pickup brief. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## DESIGN-025 H4 in source: agentd history export and archive — 2026-10-13 UTC
+
+#246 adds `agentd ctl history-export plan|stream` (hold or session pod, private
+HOME, read-only), `agentd ctl history-archive put|verify|get|list|read` (shelf)
+and `agentd shelf --history-archive`. Nothing calls them until H5 and H6, and
+the archive volume arrives in H7. The layout tables were checked against the
+pinned Claude Code 2.1.296 and Codex 0.160.1 (DESIGN-025 6.3, H4's
+confirmation). Plan 11 follow-up F4 holds 34 Claude config names that still have
+no class. The in-cluster resource measurement moves to H7 (DESIGN-025 15).
+Before merge the review's findings were fixed: put refuses a manifest that
+proves less than a whole export (rescue verdict, its own bundle, all four
+roots); links whose targets HOME's delete would remove refuse; agentd's own
+crash leftovers are classified; names that are not UTF-8 refuse; the plan
+refuses a manifest put could not take; every read walks from its base with
+`O_NOFOLLOW` on each component (DESIGN-025 6.3 and 7.1).
+
 ## Sigo rerun canary under Q-32: all seven items hold; #173's private-repo evidence accepted — 2026-10-13 UTC
 
 Tom answered Q-32, "Yes, after deploy (Recommended)": one more Claude canary on
