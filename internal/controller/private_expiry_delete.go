@@ -21,6 +21,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -118,7 +119,7 @@ func (r *Reconciler) expiryRechecked(ctx context.Context, v *expiryView, obs *ob
 		return nil, res, stop, err
 	}
 	e, before := after.record(), v.record()
-	if e == nil || e.Phase != before.Phase || e.Archive == nil || before.Archive == nil || *e.Archive != *before.Archive || homeExpiryHeld(after.s) {
+	if e == nil || e.Phase != before.Phase || e.Archive == nil || !apiequality.Semantic.DeepEqual(e.Archive, before.Archive) || homeExpiryHeld(after.s) {
 		// The record or the owner's override changed during the verify:
 		// judge again from the start.
 		return nil, ctrl.Result{RequeueAfter: time.Second}, true, nil
