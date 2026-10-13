@@ -1300,8 +1300,9 @@ class, a different shape, more sensitive content. Everything else is the same.
   shelf; H7 checks again, with an RBAC listing of every identity that holds
   `pods/exec` or Job `create` in `dev-agents`. If a v1 workflow needs that
   access, it is a question for Tom before the guard ships, because no v2 guard
-  may cut a capability agents use today. If Tom's phone path acts as a
-  ServiceAccount (section 9's check), the guard names that account.
+  may cut a capability agents use today. Q-33 (section 18) replaces the proposed
+  phone ServiceAccount exception with Tom's personal Kubernetes identity;
+  Q-34 (section 19) directs the coordinator to discover it from accessible evidence.
 - **No backup off the cluster**, and kept indefinitely. agentd has no command
   that removes an entry.
 
@@ -1633,9 +1634,9 @@ ValidatingAdmissionPolicy, `dev-env-home-expiry-guard`, matches AgentSession
 `CREATE` and `UPDATE`. It refuses a request that adds, changes or removes this
 annotation when the requester is a ServiceAccount, which covers the operator, the
 broker, the keeper, Flux and every agent. Tom acts as himself with `kubectl`.
-Before H7 writes the policy, check which identity Tom's phone path uses (for
-example Headlamp). If it is a ServiceAccount, the policy names that one account
-explicitly, in the reviewed haynes-ops change.
+Q-33 (section 18) replaces the proposed phone ServiceAccount exception with Tom's
+personal Kubernetes identity. Establish that authenticated username from accessible
+evidence before writing the identity-dependent policy (Q-34, section 19).
 
 In source (H5, corrected after the advisory review of #251): the reference copy
 refuses every `system:` identity, not only ServiceAccounts, so control-plane and
@@ -1808,7 +1809,7 @@ own reviewed PR:
    - `shelf/app/deployment.yaml`: the second volume and mount, `--history-archive`,
      the image pin, and the header comment;
    - `rbac/app/home-expiry-guard.yaml`: `dev-env-home-expiry-guard` (section 9),
-     after the identity checks (Tom's phone path, and the users and groups that
+     after the identity checks (Tom's personal username under Q-33, and the users and groups that
      can update AgentSessions); the reference copy, with its envtest, is this
      repository's `internal/controller/testdata/haynes-ops/home-expiry-guard.yaml`
      (H5);

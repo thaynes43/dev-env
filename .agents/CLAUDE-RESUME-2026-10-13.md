@@ -128,8 +128,8 @@ predate this session; their rows point there.
 | Q-30 | free text: use the Sigo alumni repos | `dev-env-private-repo-canary-1012/root-q30-owner-answer-r1.json` (`14903318…`) | Private-repo proof on project `sigo-alumni`. First run `Partial` (#234, #240). |
 | Q-31 | "Archive, then delete" | `dev-env-coordination-retention-1012/root-q31-owner-answer-r1.json` (`03255c15…`) | A private HOME is archived, then deleted, 30 days after its executor's recorded stop (ADR-005, DESIGN-025, #233). ADR-006 (#235): only a reap stops a private executor. |
 | Q-32 | "Yes, after deploy" | `dev-env-private-repo-canary-1012/root-q32-owner-answer-r1.json` (`48ab104f…`) | One Sigo rerun after 2.25. Done: all seven DESIGN-011 items hold (#247). |
-| Q-33 | Personal Kubernetes account remains; Headlamp retires after full v2 adoption | `dev-env-h7-personal-identity-1013/root-q33-owner-answer-r1.json` | Direct owner answer in this chat; exact username still needs evidence. No shared Headlamp owner exception follows. |
-| Q-34 | Cannot run a workstation check from the phone; keep working | `dev-env-h7-personal-identity-1013/root-q34-owner-direction-r1.json` | Withdraw the workstation request. Discover the identity from accessible evidence and continue independent H7 prerequisites. |
+| Q-33 | Personal Kubernetes account remains; Headlamp retires after full v2 adoption | `dev-env-h7-personal-identity-1013/root-q33-owner-answer-r1.json` (`da28de08…`) | Direct owner answer in this chat; exact username still needs evidence. No shared Headlamp owner exception follows. |
+| Q-34 | Cannot run a workstation check from the phone; keep working | `dev-env-h7-personal-identity-1013/root-q34-owner-direction-r1.json` (`ac078e5d…`) | Withdraw the workstation request. Discover the identity from accessible evidence and continue independent H7 prerequisites. |
 | Pacing | "Slow down" (asked 04:00Z, answered 11:02Z, 2026-10-13) | `dev-env-claude-handoff-1013/root-pacing-owner-answer-r1.json` (`a70a80cc…`) | One Opus subagent unit (`claude-opus-5-5`) at a time, Sonnet (`claude-sonnet-5-5`) for routine work, no parallel Opus waves until Tom says otherwise. README decision 69. |
 
 ## Delivered 2026-10-12 to 2026-10-13
@@ -215,9 +215,10 @@ need declare-activity and peer checks before and after.
      check finds a v1 workflow that execs into the shelf or mounts the claim,
      ask Tom before the guard ships (no v2 guard may cut a capability agents
      use today); Tom sets the PV to `Retain` by hand once the claim binds; if
-     anyone but Tom can update AgentSessions, or his phone path is a
-     ServiceAccount, the policy must match his identity, so confirm it with
-     him (a ServiceAccount phone path is also named in the archive guard);
+     anyone but Tom can update AgentSessions, the policy must match his identity.
+     Q-33 settles the personal-account choice; Q-34 withdraws the workstation
+     request. Discover the exact username from accessible evidence before that
+     policy, without stopping independent prerequisites;
      just before the stop flag, a read-only list of Reaping private Sessions
      with a live executor, named in the PR so Tom can hold any (ask only if
      the list is not empty).
@@ -341,8 +342,8 @@ and fold the answer back as a dated ruling.
 1. **H7 owner steps**, in order as they come up: whether a v1 workflow keeps
    its shelf access (only if the parity check finds one that execs into the
    shelf or mounts the claim; ask before the archive guard ships); the
-   override policy's identity (only if someone besides Tom can update
-   AgentSessions, or his phone path is a ServiceAccount); `Retain` on the
+   override policy's identity (personal account chosen in Q-33; discover the
+   exact username from accessible evidence under Q-34); `Retain` on the
    archive PV; a hold for any Reaping private Session with a live executor
    (only if the check finds one).
 2. **A private Session for H8 and the pilot.** H8 needs a reaped, non-canary
