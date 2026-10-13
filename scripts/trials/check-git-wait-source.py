@@ -88,7 +88,7 @@ class SourceRecipeChecks(unittest.TestCase):
     def test_changed_or_missing_actual_base_refuses_before_download_or_compile(self):
         with tempfile.TemporaryDirectory(prefix='git-wait-base-refusal-') as directory:
             root=Path(directory)
-            for actual in ['',module.LOCK['baseImage'].replace(':2.9.1@',':unreviewed@')]:
+            for actual in ['',module.LOCK['baseImage'].replace(':2.25.0@',':unreviewed@')]:
                 with mock.patch.dict(module.os.environ,BASE_IMAGE=actual), \
                         mock.patch.object(sys,'argv',['recipe',str(root/'source')]), \
                         mock.patch.object(module,'download') as download:

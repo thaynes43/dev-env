@@ -200,8 +200,8 @@ class MarkerInterfaceChecks(unittest.TestCase):
             'markerHeaderSHA256','buildOptionsSHA256']}
         self.record.update(abiVersion=1,platform='linux-amd64',
             artifactVerification='hostedArtifactVerified',debianVersion='1:2.39.5-0+deb12u3',
-            baseImage=('ghcr.io/thaynes43/dev-env:2.9.1@sha256:'
-                'a975de7dbc40c6f33048a38a327a2db2b9698a7615f5b2b9897abbb1d04df0cf'),
+            baseImage=('ghcr.io/thaynes43/dev-env:2.25.0@sha256:'
+                '25b20148706fe0b735cc879891c12851977c72a32b5b83cc68ef511246a3cd29'),
             executable='/opt/dev-env/trials/git-wait',
             reader='/opt/dev-env/trials/libgit-wait-reader.so',debianPatchCount=7,
             historicalCompilerEquivalence=False,sourceCommit=self.commit,

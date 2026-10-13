@@ -238,8 +238,8 @@ class GitWaitMarker:
             assert record['abiVersion'] == 1 and record['platform'] == 'linux-amd64'
             assert record['artifactVerification'] == 'hostedArtifactVerified'
             assert record['debianVersion'] == '1:2.39.5-0+deb12u3'
-            assert record['baseImage'] == ('ghcr.io/thaynes43/dev-env:2.9.1@sha256:'
-                'a975de7dbc40c6f33048a38a327a2db2b9698a7615f5b2b9897abbb1d04df0cf')
+            assert record['baseImage'] == ('ghcr.io/thaynes43/dev-env:2.25.0@sha256:'
+                '25b20148706fe0b735cc879891c12851977c72a32b5b83cc68ef511246a3cd29')
             assert record['executable'] == cls.executable and record['reader'] == cls.reader
             assert record['debianPatchCount'] == 7 and not record['historicalCompilerEquivalence']
             assert re.fullmatch('[0-9a-f]{40}',record['sourceCommit'])
