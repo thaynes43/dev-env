@@ -113,7 +113,16 @@ func TestHomeExpiryOverrideGuardIsOwnerOnly(t *testing.T) {
 			break
 		}
 		if err == nil {
-			t.Fatal("the operator set release-now before the guard was enforced; the probe is spent")
+			// Not enforced yet: an admin takes the override back off the
+			// probe, and the probe runs again.
+			var undo v1alpha1.AgentSession
+			if err := k8s.Get(ctx, client.ObjectKeyFromObject(probe), &undo); err != nil {
+				t.Fatal(err)
+			}
+			delete(undo.Annotations, v1alpha1.AnnotationHomeExpiry)
+			if err := k8s.Update(ctx, &undo); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("%s was not enforced within %s: %v", homeExpiryGuardName, wait, err)
