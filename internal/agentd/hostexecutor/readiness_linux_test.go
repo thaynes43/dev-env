@@ -21,8 +21,11 @@ func TestNativeReadinessPeerAndVersion(t *testing.T) {
 		name, version string
 		wrongPeer     bool
 		want          bool
+		wantStage     nativeReadinessStage
 	}{
-		{"ready", PinnedNativeVersion, false, true}, {"version-mismatch", "0.159.1", false, false}, {"wrong-peer", PinnedNativeVersion, true, false},
+		{"ready", PinnedNativeVersion, false, true, ""},
+		{"version-mismatch", "0.159.1", false, false, "version-reply-refused"},
+		{"wrong-peer", PinnedNativeVersion, true, false, "peer-identity-refused"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "control.sock")
@@ -69,8 +72,19 @@ func TestNativeReadinessPeerAndVersion(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			defer cancel()
-			if got := probeNative(ctx, path, root, PinnedNativeVersion); (got == nil) != tc.want {
+			stages := make(chan nativeReadinessStage, 1)
+			ctx = context.WithValue(ctx, nativeReadinessObserverKey{}, stages)
+			got := probeNative(ctx, path, root, PinnedNativeVersion)
+			if (got == nil) != tc.want || got != nil && got != errNativeReady { //nolint:errorlint // Require the exact unwrapped sentinel object; errors.Is would accept wrapping.
 				t.Fatalf("ready=%v err=%v", tc.want, got)
+			}
+			var stage nativeReadinessStage
+			select {
+			case stage = <-stages:
+			default:
+			}
+			if stage != tc.wantStage {
+				t.Fatalf("refusal stage=%q want=%q", stage, tc.wantStage)
 			}
 			if tc.want {
 				select {
@@ -139,9 +153,24 @@ func TestOwnedTreeNativeReady(t *testing.T) {
 	if os.WriteFile(filepath.Join(c.Home, "fixture-readiness"), nil, 0o600) != nil {
 		t.Fatal("fixture marker")
 	}
-	r, err := Run(context.Background(), c, fixtureGate{home: c.Home})
+	stages := make(chan nativeReadinessStage, 1)
+	ctx := context.WithValue(context.Background(), nativeReadinessObserverKey{}, stages)
+	r, err := Run(ctx, c, fixtureGate{home: c.Home})
 	if err != nil || r.State != "Stopped" || !r.NativeReady || r.NativeVersion != PinnedNativeVersion || !r.TreeReaped {
-		t.Fatalf("owned authenticated ready/stop: %+v %v", r, err)
+		var stage nativeReadinessStage
+		select {
+		case stage = <-stages:
+		default:
+		}
+		t.Fatalf("owned authenticated ready/stop: refusalStage=%q %+v %v", stage, r, err)
+	}
+}
+
+func TestNativeReadinessObserverDoesNotBlockOrChangeSentinel(t *testing.T) {
+	// A nil channel is never writable; diagnostics must still return immediately.
+	ctx := context.WithValue(context.Background(), nativeReadinessObserverKey{}, (chan nativeReadinessStage)(nil))
+	if got := probeNative(ctx, "", Identity{}, "unsupported"); got != errNativeReady { //nolint:errorlint // Require the exact unwrapped sentinel object; errors.Is would accept wrapping.
+		t.Fatalf("refusal changed sentinel: %v", got)
 	}
 }
 

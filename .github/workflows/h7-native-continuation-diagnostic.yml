@@ -1,0 +1,44 @@
+name: H7 native continuation diagnostic
+
+on:
+  pull_request:
+    paths:
+      - internal/agentd/native_invocation_test.go
+      - internal/agentd/hostexecutor/readiness_linux.go
+      - internal/agentd/hostexecutor/readiness_linux_test.go
+      - .github/workflows/h7-native-continuation-diagnostic.yml
+  push:
+    branches: [main]
+    paths:
+      - internal/agentd/native_invocation_test.go
+      - internal/agentd/hostexecutor/readiness_linux.go
+      - internal/agentd/hostexecutor/readiness_linux_test.go
+      - .github/workflows/h7-native-continuation-diagnostic.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    name: Exact native continuation diagnostic
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GOMAXPROCS: '2'
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Record exact source and toolchain
+        run: |
+          git rev-parse HEAD
+          go version
+      - name: One exact synthetic continuation test
+        run: nice -n 19 go test -p 1 -parallel 1 -count 1 -timeout 3m -run '^TestNativeInvocationOwnedWaitAllowsOneSameWriterContinuation$' -v ./internal/agentd
+      - name: One exact synthetic owned-tree readiness diagnostic
+        run: nice -n 19 go test -p 1 -parallel 1 -count 1 -timeout 3m -run '^TestOwnedTreeNativeReady$' -v ./internal/agentd/hostexecutor

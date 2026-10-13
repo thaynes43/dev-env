@@ -99,8 +99,15 @@ func TestNativeInvocationOwnedWaitAllowsOneSameWriterContinuation(t *testing.T) 
 	if err := writeWorkspaceJSON(s.statePath(resumeFile), next); err != nil {
 		t.Fatal(err)
 	}
-	if code := RunAgent(s.statePath(resumeFile), &syncBuffer{}, make(chan os.Signal), 20*time.Millisecond); code != 0 {
-		t.Fatal("same-owner continuation was rejected", code)
+	// This pane contains only agentd messages and the fixture's fake CLI:
+	// constant synthetic events/prompt and paths in t.TempDir, no provider I/O.
+	pane := &syncBuffer{}
+	if code := RunAgent(s.statePath(resumeFile), pane, make(chan os.Signal), 20*time.Millisecond); code != 0 {
+		diagnostic := pane.String()
+		if len(diagnostic) > 4096 {
+			diagnostic = diagnostic[len(diagnostic)-4096:]
+		}
+		t.Fatalf("same-owner continuation was rejected %d; synthetic pane tail: %q", code, diagnostic)
 	}
 	if code := RunAgent(s.statePath(resumeFile), &syncBuffer{}, make(chan os.Signal), 20*time.Millisecond); code == 0 {
 		t.Fatal("causal receipt was consumed twice")

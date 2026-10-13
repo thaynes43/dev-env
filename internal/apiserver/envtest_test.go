@@ -401,7 +401,26 @@ func TestEnvtestAPI(t *testing.T) {
 	t.Run("a reap deletes the session and the finalizer holds it", func(t *testing.T) {
 		// The child has no pod and no finalizer: nothing to rescue, so it goes.
 		l.want(http.MethodDelete, apiv1.SessionPath(child.Name), agent, nil, http.StatusAccepted)
-		l.want(http.MethodGet, apiv1.SessionPath(child.Name), human, nil, http.StatusNotFound)
+		// DELETE accepts the reap; the manager's read cache may still contain
+		// this exact child until its deletion event arrives.
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			code, body := l.do(http.MethodGet, apiv1.SessionPath(child.Name), human, nil)
+			if code == http.StatusNotFound {
+				break
+			}
+			if code != http.StatusOK {
+				t.Fatalf("deleted child GET: %d, want eventual 404: %s", code, body)
+			}
+			cached := unmarshal[apiv1.Session](t, body)
+			if cached.UID != child.UID || cached.Name != child.Name {
+				t.Fatalf("deleted child GET changed identity: %s/%s, want %s/%s", cached.Name, cached.UID, child.Name, child.UID)
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("deleted child GET remained 200 after cache convergence bound: %s", body)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
 
 		r := unmarshal[apiv1.Session](t, l.want(http.MethodDelete, apiv1.SessionPath(sess.Name), human, nil, http.StatusAccepted))
 		if !r.Reaping {
