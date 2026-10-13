@@ -96,8 +96,18 @@ The five retained AgentSessions in `dev-agents`. Canary originals never expire
 | `private-canary-a1444f4131ec7281b5d1e3130c3b5ada` | `430297d9-aa29-4332-9b3b-37095c1b5963` | claude-sigo-1012 | `Failed`, task `Succeeded`, `executorTerminal` |
 | `private-canary-eb9d486a612e27fd2b52d27f675512be` | `454d12a2-60bc-4c4e-95c5-bb4b26428a65` | claude-sigo-1012b | `Failed`, task `Succeeded`, `executorTerminal` |
 
-Next free IDs: Q-33, D-89, ADR-007, DESIGN-026, README decision 70. Each new
+Next free IDs: Q-34, D-89, ADR-007, DESIGN-026, README decision 70. Each new
 question takes the next free Q id when it is asked; none is reserved.
+
+**H7 pickup update, 2026-10-13:** the
+[read-only prerequisite checkpoint](sagas/distributed-dev-env/verification/h7-prerequisites-2026-10-13.md)
+is recorded. This Codex chat submitted Q-33 through
+`functions.request_user_input_async`; the tool accepted submission, but phone
+delivery is unverified and the decision is pending. It asks whether the
+guards should preserve Headlamp's shared backend or use Tom's personal Kubernetes
+identity. No haynes-ops change is made while it is pending. Plan 11 F4 and both
+DESIGN-025 cold resource measurements remain prerequisites before archive
+activation, including the 2 GiB export/put/verify under hold/shelf limits.
 
 ## Rulings Q-24 to Q-32 and pacing
 

@@ -10,6 +10,24 @@ of the 2026-10-12 brief, which still holds the requirement history and the
 stopped routes. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## H7 read-only prerequisites: Q-33 pending — 2026-10-13
+
+The Codex takeover refreshed the startup and H7 read-only checks. The
+[prerequisite checkpoint](sagas/distributed-dev-env/verification/h7-prerequisites-2026-10-13.md)
+records every direct RBAC subject, Headlamp's shared ServiceAccount backend and
+the scoped v1 workflow scan. No haynes-ops change was made.
+
+[Q-33](sagas/distributed-dev-env/designs/025-private-home-expiry.md#18-h7-owner-identity-q-33)
+was submitted by this Codex chat through `functions.request_user_input_async`:
+preserve Headlamp's shared backend for the
+phone owner controls and archive access, or use Tom's personal Kubernetes identity.
+The tool accepted submission, but phone delivery is unverified and no owner answer
+has arrived. This is the native-question capability gap, not a confirmed delivered
+ask; the dependent policies remain pending.
+The configured backend does not establish his actual phone path or a sole user.
+F4 and both cold resource measurements remain prerequisites before archive
+activation. Source, deployment and installed acceptance remain separate.
+
 ## Claude coordinator session 2026-10-12 to 2026-10-13: summary and pickup brief — 2026-10-13 UTC
 
 The next Claude coordinator starts from the
