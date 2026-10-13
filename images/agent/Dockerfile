@@ -152,7 +152,7 @@ ARG CNPG_PLUGIN_VERSION=1.30.1
 # load-bearing: Sonnet 5.5 is the subagent tier for routine coding and tests in
 # config/claude/CLAUDE.md, and it has an agent-run picker row.
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
-ARG CLAUDE_CODE_VERSION=2.1.292
+ARG CLAUDE_CODE_VERSION=2.1.296
 # Codex is the managed STANDALONE, not the npm package — only the standalone can run
 # `codex remote-control`. v1 installed it at boot onto the PVC (dev-init.sh); here the
 # image installs it, under /opt/dev-env/codex (never under CODEX_HOME, which is the
