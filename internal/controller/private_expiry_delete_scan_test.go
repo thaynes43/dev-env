@@ -18,7 +18,9 @@ import (
 // after, in the same function and in this order: historyArchiveVerified, as
 // an if's init whose body returns; expiryRechecked, its view checked against
 // nil with a return; and noPodUsesHome on that view, as an if's init whose
-// body returns. The delete must take the Session and the claim from that same
+// body returns. Each of those two ifs must test the check's own answer, and
+// nothing else: !ok on the verify's first result, ref != nil on the Pod
+// check's. The delete must take the Session and the claim from that same
 // view, the fresh reads made after the verify. So every attempt, the retries
 // from Deleting included, verifies the archive and checks for Pods first,
 // like DESIGN-024's rule 4. TestOnlyTheGuardDeletes pins the rest: the one
@@ -50,6 +52,7 @@ func TestExpiryDeleteScanCatchesUncheckedDeletes(t *testing.T) {
 	for _, fn := range []string{
 		"deleteWithoutVerify", "verifyAfterDelete", "recheckBeforeVerify", "podCheckOnStaleView", "deleteOnStaleView",
 		"verifyIgnored", "noNilCheck", "deletingWithoutChecks", "deletingBeforePodCheck",
+		"verifyReturnsOnSuccess", "podCheckNeverRefuses",
 	} {
 		if !slices.ContainsFunc(scan.violations, func(v string) bool { return strings.Contains(v, " in "+fn+":") }) {
 			t.Errorf("the scan does not catch %s", fn)
@@ -102,12 +105,23 @@ func scanExpiryDeleteFunc(fset *token.FileSet, fn *ast.FuncDecl, scan *expiryDel
 		switch x := n.(type) {
 		case *ast.IfStmt:
 			if call := initCall(x.Init); call != nil && endsInReturn(x.Body) {
+				// The if must return on the check's failure: !ok for the
+				// verify's first result, ref != nil for the Pod check's.
+				result := initResult(x.Init)
 				switch calleeName(call) {
 				case "historyArchiveVerified":
+					if !isNot(x.Cond, result) {
+						report(x.Pos(), "historyArchiveVerified's if must test !%s, its first result, and return", result)
+						break
+					}
 					if verified == token.NoPos {
 						verified = call.Pos()
 					}
 				case "noPodUsesHome":
+					if !isNotNil(x.Cond, result) {
+						report(x.Pos(), "noPodUsesHome's if must test %s != nil, its result, and return", result)
+						break
+					}
 					if nilChecked != token.NoPos && len(call.Args) == 1 && isIdent(call.Args[0], view) && podChecked == token.NoPos {
 						podChecked = call.Pos()
 					}
@@ -156,6 +170,30 @@ func initCall(s ast.Stmt) *ast.CallExpr {
 	}
 	call, _ := as.Rhs[0].(*ast.CallExpr)
 	return call
+}
+
+// initResult is the name of the first variable an if's init assigns, or "".
+func initResult(s ast.Stmt) string {
+	as, ok := s.(*ast.AssignStmt)
+	if !ok || len(as.Lhs) == 0 {
+		return ""
+	}
+	if id, ok := as.Lhs[0].(*ast.Ident); ok && id.Name != "_" {
+		return id.Name
+	}
+	return ""
+}
+
+// isNot reports whether e is exactly !name.
+func isNot(e ast.Expr, name string) bool {
+	u, ok := e.(*ast.UnaryExpr)
+	return ok && name != "" && u.Op == token.NOT && isIdent(u.X, name)
+}
+
+// isNotNil reports whether e is exactly name != nil.
+func isNotNil(e ast.Expr, name string) bool {
+	b, ok := e.(*ast.BinaryExpr)
+	return ok && name != "" && b.Op == token.NEQ && isIdent(b.X, name) && isIdent(b.Y, "nil")
 }
 
 // endsInReturn reports whether a block's last statement is a return.

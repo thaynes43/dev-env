@@ -114,6 +114,34 @@ func deletingBeforePodCheck(ctx context.Context, v *expiryView) {
 	}
 }
 
+func verifyReturnsOnSuccess(ctx context.Context, v *expiryView) {
+	if ok, res, stop, err := r.historyArchiveVerified(ctx, v, obs); ok {
+		return res, stop, err
+	}
+	after, res, stop, err := r.expiryRechecked(ctx, v, obs)
+	if after == nil {
+		return res, stop, err
+	}
+	if ref := noPodUsesHome(after); ref != nil {
+		return
+	}
+	deleteExpiryHome(ctx, r.Client, r.APIReader, after.s, after.claim)
+}
+
+func podCheckNeverRefuses(ctx context.Context, v *expiryView) {
+	if ok, res, stop, err := r.historyArchiveVerified(ctx, v, obs); !ok {
+		return res, stop, err
+	}
+	after, res, stop, err := r.expiryRechecked(ctx, v, obs)
+	if after == nil {
+		return res, stop, err
+	}
+	if ref := noPodUsesHome(after); ref == nil && false {
+		return
+	}
+	deleteExpiryHome(ctx, r.Client, r.APIReader, after.s, after.claim)
+}
+
 func goodDelete(ctx context.Context, v *expiryView) {
 	if ok, res, stop, err := r.historyArchiveVerified(ctx, v, obs); !ok {
 		return res, stop, err
