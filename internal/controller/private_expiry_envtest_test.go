@@ -45,6 +45,9 @@ func TestHomeExpiryOnTheAPIServer(t *testing.T) {
 	case !apierrors.IsAlreadyExists(err):
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		purgeEnv(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: shelfPod.Name, Namespace: sessionNS}})
+	})
 	now := time.Now().UTC().Truncate(time.Second)
 
 	// envFixture is a reaped private Session whose recorded executor ended
@@ -71,6 +74,17 @@ func TestHomeExpiryOnTheAPIServer(t *testing.T) {
 		if err := k8s.Create(ctx, s); err != nil {
 			t.Fatal(err)
 		}
+		// Nothing of this Session is left for later tests' operators, which
+		// reconcile every Session in the namespace: the Pod of its name (the
+		// executor or the hold pod the expiry made), its HOME, the Session,
+		// its Node and Lease.
+		t.Cleanup(func() {
+			purgeEnv(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS}},
+				&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: HomeClaimName(name), Namespace: sessionNS}},
+				&v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS}},
+				&coordinationv1.Lease{ObjectMeta: metav1.ObjectMeta{Name: node.Name, Namespace: "kube-node-lease"}},
+				&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: node.Name}})
+		})
 		home := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: HomeClaimName(s.Name), Namespace: s.Namespace, OwnerReferences: []metav1.OwnerReference{ownerRef(s)}, Finalizers: []string{Finalizer},
 			Annotations: map[string]string{privateHistoryAdmissionAnnotation: "1"}},
 			Spec: corev1.PersistentVolumeClaimSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}, Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")}}}}
@@ -334,6 +348,24 @@ func TestHomeExpiryOnTheAPIServer(t *testing.T) {
 			t.Fatalf("Archived without an archive or a rescue accepted: %v", err)
 		}
 	})
+}
+
+// purgeEnv removes test objects for good: it lifts their finalizers and
+// deletes them at once. envtest has no garbage collector or kubelet, so
+// nothing else would.
+func purgeEnv(objs ...client.Object) {
+	ctx := context.Background()
+	for _, o := range objs {
+		cur, ok := o.DeepCopyObject().(client.Object)
+		if !ok || k8s.Get(ctx, client.ObjectKeyFromObject(o), cur) != nil {
+			continue
+		}
+		if len(cur.GetFinalizers()) > 0 {
+			cur.SetFinalizers(nil)
+			_ = k8s.Update(ctx, cur)
+		}
+		_ = k8s.Delete(ctx, cur, client.GracePeriodSeconds(0))
+	}
 }
 
 // k8sWatch is a client with watch on the envtest API server.

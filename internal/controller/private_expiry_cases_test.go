@@ -506,6 +506,8 @@ func TestHomeExpiryUnknownReadsChangeNothing(t *testing.T) {
 				t.Run(stepName+"/"+readName+"/"+errName, func(t *testing.T) {
 					f := newExpiryFixture(t, nil)
 					step(t, f)
+					// A minute on: unknown counts once a minute per Session.
+					f.at(f.clock.Add(homeExpiryUnknownRetry))
 					before := f.session(t).Status.PrivateHistory.Expiry.DeepCopy()
 					pod := f.named(t)
 					unknown := refusedCount(f.counters, expiryUnknown)
@@ -525,8 +527,9 @@ func TestHomeExpiryUnknownReadsChangeNothing(t *testing.T) {
 					if now := f.named(t); (now == nil) != (pod == nil) || now != nil && now.UID != pod.UID {
 						t.Fatalf("a Pod was written on an Unknown read")
 					}
-					if refusedCount(f.counters, expiryUnknown) < unknown+3 {
-						t.Fatalf("unknown counted %v, want 3 more than %v", refusedCount(f.counters, expiryUnknown), unknown)
+					// Three reconciles in one minute count once, not per event.
+					if refusedCount(f.counters, expiryUnknown) != unknown+1 {
+						t.Fatalf("unknown counted %v, want once more than %v", refusedCount(f.counters, expiryUnknown), unknown)
 					}
 					if len(f.rescuer.ranIn()) != rescues || len(f.x.called()) != execs {
 						t.Fatalf("a rescue or an export ran on an Unknown read")
@@ -759,4 +762,199 @@ func mustTemplates(t *testing.T) *templates.Templates {
 		t.Fatal(err)
 	}
 	return tm
+}
+
+// A recorded refusal goes at the re-check after its cause is fixed (5.2),
+// also where the step has nothing to write: at Waiting before the grace ends,
+// and at Archived, where H5 stops for good.
+func TestHomeExpiryRefusalClearsWhenItsCauseIsFixed(t *testing.T) {
+	ctx := context.Background()
+	setAdmission := func(t *testing.T, f *expiryFixture, v string) {
+		t.Helper()
+		var c corev1.PersistentVolumeClaim
+		if err := f.c.Get(ctx, client.ObjectKeyFromObject(f.home), &c); err != nil {
+			t.Fatal(err)
+		}
+		c.Annotations[privateHistoryAdmissionAnnotation] = v
+		if err := f.c.Update(ctx, &c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(t *testing.T, f *expiryFixture, phase string) {
+		t.Helper()
+		setAdmission(t, f, "99")
+		f.reconcile(t, 3)
+		if e := f.expiry(t); e.Phase != phase || e.Refusal != expiryIdentityChanged || e.RefusalAt == nil {
+			t.Fatalf("a changed claim binding at %s: %+v; want identity_changed recorded", phase, e)
+		}
+		setAdmission(t, f, "3")
+		f.reconcile(t, 2)
+		if e := f.expiry(t); e.Refusal == "" {
+			t.Fatal("the refusal went before its 15-minute re-check")
+		}
+		f.at(f.clock.Add(homeExpiryRefusalRetry + time.Minute))
+		f.reconcile(t, 2)
+		e := f.expiry(t)
+		if e.Phase != phase || e.Refusal != "" || e.RefusalAt != nil {
+			t.Fatalf("at %s, the fixed cause's refusal stays: %+v", phase, e)
+		}
+		gauges := gaugeValues(t, &HomeExpiryCollector{Reader: f.c, Namespace: f.s.Namespace, Now: func() time.Time { return *f.clock }})
+		if gauges[MetricHomeExpiryRefusing+"/"+expiryIdentityChanged] != 0 {
+			t.Fatalf("the refusing gauge still counts it: %v", gauges)
+		}
+	}
+
+	t.Run("at Waiting, before the grace ends", func(t *testing.T) {
+		f := newExpiryFixture(t, nil)
+		f.reconcile(t, 2)
+		check(t, f, v1alpha1.HomeExpiryWaiting)
+		if f.clock.After(f.due()) {
+			t.Fatal("the test ran past the grace")
+		}
+	})
+	t.Run("at Archived", func(t *testing.T) {
+		f := newExpiryFixture(t, nil)
+		f.at(f.due().Add(time.Minute))
+		f.reconcile(t, 6)
+		f.runHold(t)
+		f.reconcile(t, 8)
+		if e := f.expiry(t); e.Phase != v1alpha1.HomeExpiryArchived {
+			t.Fatalf("not Archived: %+v", e)
+		}
+		check(t, f, v1alpha1.HomeExpiryArchived)
+	})
+}
+
+// Section 14 and default off: with archive off, nothing of the expiry runs,
+// and the archive timer of a Suspended private Session does not start while
+// its ended executor's Pod stands; with archive on, it does (T7 relies on it).
+func TestHomeExpiryTimerStartOnlyWithTheArchiveOn(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		f := newExpiryFixture(t, func(tf *terminalFixture) {
+			tf.s.DeletionTimestamp = nil
+			tf.s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+		})
+		r := f.reconciler()
+		r.HomeHistoryArchive = on
+		for range 3 {
+			if _, err := r.Reconcile(context.Background(), reqFor(f.s)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got := f.session(t).Status.SuspendedAt != nil; got != on {
+			t.Fatalf("archive %v: suspendedAt set %v", on, got)
+		}
+	}
+}
+
+// A Pod of another name that mounts the HOME keeps PreservationUnknown after
+// the cancel it caused, while it is there; once it goes, a new record starts
+// with its own grace.
+func TestHomeExpiryForeignMountStaysVisibleAfterTheCancel(t *testing.T) {
+	ctx := context.Background()
+	f := newExpiryFixture(t, nil)
+	f.reconcile(t, 2)
+	debug := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "debug-home", Namespace: f.s.Namespace},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "debug", Image: "synthetic.invalid/debug"}},
+			Volumes: []corev1.Volume{{Name: "h", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: f.home.Name}}}}}}
+	if err := f.c.Create(ctx, debug); err != nil {
+		t.Fatal(err)
+	}
+	f.reconcile(t, 4)
+	s := f.session(t)
+	if s.Status.PrivateHistory.Expiry != nil || s.Status.PrivateHistory.ExpiryClearedAt == nil {
+		t.Fatalf("the foreign mount did not cancel: %+v", s.Status.PrivateHistory)
+	}
+	for range 2 {
+		f.reconcile(t, 1)
+		if c := f.condition(t, ConditionPrivateHistory); c == nil || c.Reason != "PreservationUnknown" {
+			t.Fatalf("after the cancel, PrivateHistoryRetained is %+v; want PreservationUnknown while the Pod mounts the HOME", c)
+		}
+	}
+	if err := f.c.Delete(ctx, debug); err != nil {
+		t.Fatal(err)
+	}
+	f.at(f.clock.Add(time.Hour))
+	f.reconcile(t, 3)
+	e := f.expiry(t)
+	if e == nil || !e.GraceStart.Time.Equal(recordTime(*f.clock).Time) {
+		t.Fatalf("once the Pod went, the new record is %+v; want 30 days from now", e)
+	}
+	if c := f.condition(t, ConditionPrivateHistory); c == nil || c.Reason == "PreservationUnknown" {
+		t.Fatalf("PreservationUnknown stays after the Pod went: %+v", c)
+	}
+}
+
+// The relay reaches the hold pod by name. A hold pod replaced during the
+// export is never recorded as the source of Archived: the entry put stored
+// stays, unreferenced, and the replacement cancels the record.
+func TestHomeExpiryExportFromAReplacedHoldPodIsNotRecorded(t *testing.T) {
+	ctx := context.Background()
+	f := newExpiryFixture(t, nil)
+	f.at(f.due().Add(time.Minute))
+	f.reconcile(t, 6)
+	hold := f.runHold(t)
+	f.reconcile(t, 2) // the rescue, then Exporting
+	f.x.before = map[string]func(){"verify": nil, "put": func() {
+		if err := f.c.Delete(ctx, hold.DeepCopy()); err != nil {
+			t.Error(err)
+		}
+		replacement := hold.DeepCopy()
+		replacement.UID, replacement.ResourceVersion = "", ""
+		replacement.Annotations[homeExpiryHoldIntentAnnotation] = "someone-else"
+		if err := f.c.Create(ctx, replacement); err != nil {
+			t.Error(err)
+		}
+	}}
+	f.reconcile(t, 1)
+	if e := f.expiry(t); e == nil || e.Phase != v1alpha1.HomeExpiryExporting || e.Archive != nil {
+		t.Fatalf("an export from a replaced hold pod was recorded: %+v", e)
+	}
+	for _, c := range f.x.called() {
+		if c == "verify" {
+			t.Fatal("verify ran after the hold pod was replaced")
+		}
+	}
+	f.reconcile(t, 3)
+	if e := f.expiry(t); e != nil {
+		t.Fatalf("the replacement did not cancel: %+v", e)
+	}
+	if got := f.x.entries(t); len(got) != 1 {
+		t.Fatalf("archive entries %v; the stored one stays", got)
+	}
+}
+
+// A record parked where nothing can act (Waiting before its grace, Archived)
+// costs no uncached reads: every one of them fails here, and nothing is
+// counted Unknown.
+func TestHomeExpiryParkedRecordsSkipTheUncachedReads(t *testing.T) {
+	f := newExpiryFixture(t, nil)
+	f.reconcile(t, 2)
+	failReads := func(client.ObjectKey, runtime.Object) error {
+		if calledFrom("readExpiryView") {
+			return apierrors.NewInternalError(errors.New("etcd is unavailable"))
+		}
+		return nil
+	}
+	f.readErr = failReads
+	f.at(f.due().Add(-time.Hour))
+	f.reconcile(t, 3)
+	f.readErr = nil
+	if n := refusedCount(f.counters, expiryUnknown); n != 0 {
+		t.Fatalf("a parked Waiting record read uncached: unknown %v", n)
+	}
+	f.at(f.due().Add(time.Minute))
+	f.reconcile(t, 6)
+	f.runHold(t)
+	f.reconcile(t, 8)
+	if e := f.expiry(t); e.Phase != v1alpha1.HomeExpiryArchived {
+		t.Fatalf("not Archived: %+v", e)
+	}
+	f.readErr = failReads
+	f.at(f.clock.Add(48 * time.Hour))
+	f.reconcile(t, 3)
+	f.readErr = nil
+	if n := refusedCount(f.counters, expiryUnknown); n != 0 {
+		t.Fatalf("a parked Archived record read uncached: unknown %v", n)
+	}
 }

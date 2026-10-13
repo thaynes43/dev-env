@@ -43,6 +43,8 @@ type agentdExec struct {
 	// fail makes a command ("plan", "stream", "put", "verify") fail as an
 	// exec that could not run.
 	fail map[string]error
+	// before runs before a command, once: a test changes the world there.
+	before map[string]func()
 }
 
 // newAgentdExec builds a HOME for session with one file of each history root,
@@ -142,7 +144,12 @@ func (x *agentdExec) Run(_ context.Context, _, pod, container string, cmd []stri
 	x.mu.Lock()
 	x.calls = append(x.calls, cmd[3])
 	failure := x.fail[cmd[3]]
+	hook := x.before[cmd[3]]
+	delete(x.before, cmd[3])
 	x.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	if failure != nil {
 		return failure
 	}

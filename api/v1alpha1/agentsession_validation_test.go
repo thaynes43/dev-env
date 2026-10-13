@@ -1383,8 +1383,10 @@ func TestPrivateHomeExpiryRecordIsBoundAndForwardOnly(t *testing.T) {
 			}},
 			{"an unbounded refusal", func(h *v1alpha1.PrivateHistoryStatus) {
 				h.Expiry = record()
-				h.Expiry.Refusal = strings.Repeat("r", 65)
+				h.Expiry.Refusal, h.Expiry.RefusalAt = strings.Repeat("r", 65), &at
 			}},
+			{"a refusal without refusalAt", func(h *v1alpha1.PrivateHistoryStatus) { h.Expiry = record(); h.Expiry.Refusal = "unknown" }},
+			{"refusalAt without a refusal", func(h *v1alpha1.PrivateHistoryStatus) { h.Expiry = record(); h.Expiry.RefusalAt = &at }},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				s := taskSession()
@@ -1498,7 +1500,7 @@ func TestPrivateHomeExpiryRecordIsBoundAndForwardOnly(t *testing.T) {
 			edit func(*v1alpha1.PrivateHistoryStatus)
 		}{
 			{"removed", func(h *v1alpha1.PrivateHistoryStatus) { h.Expiry = nil }},
-			{"a refusal added", func(h *v1alpha1.PrivateHistoryStatus) { h.Expiry.Refusal = "unknown" }},
+			{"a refusal added", func(h *v1alpha1.PrivateHistoryStatus) { h.Expiry.Refusal, h.Expiry.RefusalAt = "unknown", &at }},
 		} {
 			t.Run("expired "+tc.name, func(t *testing.T) {
 				bad := get(t, s)

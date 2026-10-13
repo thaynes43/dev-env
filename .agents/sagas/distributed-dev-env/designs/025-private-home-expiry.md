@@ -588,9 +588,16 @@ sections above leave open:
   after the private history observation found nothing to write, so the terminal
   record it rests on is stored and confirmed. A canary original returns at once.
   A Session with no terminal record and no expiry record costs no read, nor does
-  one with no record that the cache shows not triggered. Every other reconcile
-  reads uncached: the Session, the Pod of its name, the HOME claim, and a list of
-  the namespace's Pods for those that mount the claim.
+  one with no record that the cache shows not triggered. A record parked where
+  no step can act costs none either (`expiryQuiet`): the cache shows it at
+  `Waiting` before its grace ends (or held), or at `Archived`; no refusal to
+  re-check; still eligible and triggered; no override that would act; the HOME
+  claim bound as the common re-check asks; and no Pod but the ended executor's
+  at `Waiting`, of the name or mounting the claim. Changes to these reconcile
+  the Session, and the requeue covers the grace. Every other reconcile reads
+  uncached: the Session, the Pod of its name, the HOME claim, and a list of the
+  namespace's Pods for those that mount the claim. Every write follows those
+  uncached reads.
 - **The order of the checks.** A hold pod awaiting adoption is adopted; then a
   new Pod cancels; then a Session no longer triggered cancels; then an owner hold
   stops everything else (and removes the hold pod); then a trigger that is
@@ -601,7 +608,11 @@ sections above leave open:
 - **The record is made** only while nothing but the recorded executor holds the
   HOME: a Pod of the name with another UID, or another Pod that mounts the claim,
   keeps it from starting and gives today's PreservationUnknown, since a new Pod
-  would cancel the record at once. It is made while the owner holds the expiry
+  would cancel the record at once. A Pod of another name that mounts the claim is
+  found in the cache whenever the Session has a terminal record and no expiry
+  record, triggered or not, so the PreservationUnknown of a cancel it caused
+  stays while the Pod is there (a Pod of the Session's name is
+  `observePrivateHistory`'s). That finding reports only; it decides no write. It is made while the owner holds the expiry
   too: a hold stops the steps, not the grace. `releaseNowAt` is recorded when the
   record is made or when Waiting ends, whichever first sees release-now.
 - **The hold pod** is `buildHoldPod`'s, with the three annotations. A new intent
@@ -624,17 +635,25 @@ sections above leave open:
   project is the project snapshot's (`dev-env.haynesops.com/project-snapshot`),
   and empty when the Session has none, it does not parse, or it names another
   repository: such a history is readable by no API caller.
-- **The relay.** The plan's digest is the SHA-256 of the canonical line the plan
+- **The relay.** It finds the shelf pod and takes a shelf exec slot before the
+  plan, so a missing shelf or a busy one costs no plan, which hashes the whole
+  history. The plan's digest is the SHA-256 of the canonical line the plan
   printed. A plan that is not canonical JSON, or that has a field the operator
   does not know, is Unknown: the operator would drop that field from
-  `content.json`. One export runs at a time per operator, and each shelf exec
-  takes one of two slots per replica (`shelf.ExecSlots`, DESIGN-024 section 5).
-  A busy relay is no refusal: the step runs again in a minute. Each exec has
-  6.4's 15 minutes. The stream is piped into put through an `io.Pipe`, which holds
-  no bytes. A refusal from the stream other than `io_error` is the cause whoever
-  ended first; otherwise the side that ended first is: a stream that broke first
-  made put read a short tar (Unknown), a put that ended first closed the pipe
-  under the stream. A put that answers `exists` reads none of the stream. Then
+  `content.json`. One export runs at a time per operator, and each relay takes
+  one of two shelf exec slots per replica (`shelf.ExecSlots`, DESIGN-024 section
+  5), for the plan, the stream and put together, and again for the verify. A
+  busy relay is no refusal: the step runs again in a minute, and a recorded
+  refusal stands. Each exec has 6.4's 15 minutes. The stream is piped into put
+  through an `io.Pipe`, which holds no bytes, and has a context of its own. The
+  side that ended first names the cause: a stream that ended first with a
+  refusal other than `io_error` is that refusal, and one that broke first made
+  put read a short tar (Unknown); a put that ended first cancels the stream's
+  exec, which client-go would otherwise drain to its end, and put's answer
+  stands. A put that answers `exists` reads none of the stream. The hold pod is
+  reached by name, as D-51's rescue is: an uncached read after put must find the
+  same hold pod UID, or nothing is recorded and the next reconcile judges the
+  new Pod (an entry put stored stays, unreferenced, as every entry does). Then
   `verify` runs in the shelf, under the archive's shared `.shelf.lock`.
 - **Archived** is written after an uncached re-read finds the record still at
   `Exporting` with the same hold pod and rescue, and the Session still eligible,
@@ -643,10 +662,16 @@ sections above leave open:
   counts the rescue directory's files, its manifest and bundles, as put reports
   them. `dev_env_home_expiry_archived_bytes_total` counts once, when the API
   server acknowledges the `Archived` write. Then the hold pod is removed.
-- **Refusals.** Unknown writes nothing, is counted and retried in a minute.
-  Every other reason is written to `refusal` and `refusalAt` by a confirmed write,
-  counted, given a Warning event, and re-checked every 15 minutes; the steps wait
-  until then, while adoption, cancels and the hold still run on every reconcile.
+- **Refusals.** Unknown writes nothing, is counted at most once a minute per
+  Session (the cadence of its retry, not of events) and retried in a minute.
+  Every other reason is written to `refusal` and `refusalAt` (a CEL rule keeps
+  them together) by a confirmed write, counted, given a Warning event, and
+  re-checked every 15 minutes; the steps wait until then, while adoption,
+  cancels and the hold still run on every reconcile. A re-check whose common
+  checks and step pass clears the refusal: by the step's own write, or, when the
+  step has nothing to write (it waits for the grace, a starting hold pod or a
+  rescue retry, or it is `Archived`), by a confirmed write of its own. So a fixed
+  cause stops the alert at the next re-check.
   agentd's codes map as: the export's six keep their names, `invalid` from either
   side is `export_invalid` (a new reason, section 10), `conflict` is
   `archive_conflict`, `corrupt` is `archive_mismatch`, `not_found` is
@@ -654,7 +679,19 @@ sections above leave open:
   `unknown`. No shelf pod, no history relay, or a failed exec into the shelf is
   `shelf_unavailable`; a failed exec into the hold pod is `unknown`. A Conflict on
   a guarded delete counts `precondition_failed`, and the step runs again.
-  `canary` and `override_invalid` count at most once per 15 minutes per Session.
+  `canary` and `override_invalid` count at most once per 15 minutes per Session;
+  the operator keeps those times for the last 15 minutes only.
+- **`claim_in_use` before `Deleting`.** A Pod other than the executor and the
+  expiry's hold pod, of the name or mounting the claim, is a new Pod and cancels
+  (5.3) before any step runs, so `claim_in_use` is not reached in H5; the step
+  keeps the check so that a change to that order fails closed. T11's
+  `claim_in_use` is the delete step's (H6), from `Deleting` on, where nothing
+  cancels.
+- **The hold pod's guard judges its evidence.** `expiryHoldRemovalAllowed`
+  takes the reconcile's uncached reads: a cancel needs them to show the Session
+  no longer triggered or a new Pod holding the HOME, and archive off needs the
+  flag off, besides the owner hold, `Archived` and an ended hold pod it checked
+  before.
 - **A cancel** removes the expiry's own hold pod first; the next reconcile's
   uncached reads confirm it gone while the record still names it, and only then
   is the record removed and `expiryClearedAt` set. A new Pod also sets today's
@@ -662,11 +699,13 @@ sections above leave open:
   while the Pod is there.
 - **Archive off** adopts a hold pod awaiting adoption and removes the expiry's
   hold pod; the record stays in its phase.
-- **The archive timer's start.** A private Session's recorded executor that
-  ended, with its terminal record confirmed, counts as no Pod of the Session's
-  own for `status.suspendedAt` (D-62): it never runs again. So a Suspended
-  Session whose executor was evicted is triggered at its deadline while the
-  ended Pod object stands.
+- **The archive timer's start.** With `--enable-home-history-archive` on, a
+  private Session's recorded executor that ended, with its terminal record
+  confirmed, counts as no Pod of the Session's own for `status.suspendedAt`
+  (D-62): it never runs again. So a Suspended Session whose executor was evicted
+  is triggered at its deadline while the ended Pod object stands. With the flag
+  off nothing changes: the timer starts only once the Pod is gone, as before.
+  `archiveDue` and the trigger share one deadline function, `archiveDeadline`.
 - **The condition** `HomeExpiry` has the phase as its reason, or `Held`,
   `Refused`, `Unknown` (status Unknown), `HoldPodStarting` or `RescueFailed`, and
   names `dueAt`, the archive entry and the refusal.
@@ -687,6 +726,11 @@ export and archive behind an in-process exec,
 `TestHomeExpiryAdoptsItsHoldPodAndWaitsForTheOldOne` (T12),
 `TestHomeExpirySecondOperatorFindsTheEntry` (T13),
 `TestHomeExpiryArchiveOffRemovesItsHoldPod` (section 14),
+`TestHomeExpiryRefusalClearsWhenItsCauseIsFixed`,
+`TestHomeExpiryTimerStartOnlyWithTheArchiveOn`,
+`TestHomeExpiryForeignMountStaysVisibleAfterTheCancel`,
+`TestHomeExpiryExportFromAReplacedHoldPodIsNotRecorded`,
+`TestHomeExpiryParkedRecordsSkipTheUncachedReads`,
 `TestHomeExpiryPodGuardTable`, `TestHomeExpiryHoldGuardTable`,
 `TestHomeExpiryGauges` and `TestExecHistoryRelayAnswers`; on a real API server,
 `TestHomeExpiryOnTheAPIServer` (T1 to `Archived`, T5, T12 with a fresh operator

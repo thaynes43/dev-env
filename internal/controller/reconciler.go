@@ -399,6 +399,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 	// above confirmed the terminal record it rests on.
 	var expiryResult ctrl.Result
 	if privateHistoryProtected(&s) {
+		obs.expiryExecutorEnded = r.homeExpiryOn() && recordedExecutorEnded(&s, obs)
 		res, stop, err := r.reconcileHomeExpiry(ctx, &s, &obs)
 		if err != nil || stop {
 			return res, err
@@ -794,6 +795,23 @@ func (r *Reconciler) archiveDue(s *v1alpha1.AgentSession, t *templates.Templates
 	if s.Status.SuspendedAt == nil {
 		return false, time.Second
 	}
+	at, known := archiveDeadline(s, t)
+	if !known {
+		return false, time.Minute
+	}
+	if obs.now.Before(at) {
+		return false, at.Sub(obs.now) + time.Second
+	}
+	return true, 0
+}
+
+// archiveDeadline is when a suspended session's archive timer is due (D-62):
+// status.suspendedAt plus spec.lifecycle.archiveAfter, else the templates'.
+// known is false when the session has no archiveAfter of its own and the
+// templates do not load: the window is unknown, never the default. The caller
+// checks that suspendedAt is set. archiveDue and the HOME expiry's trigger
+// (DESIGN-025 2) both use it, so they never disagree.
+func archiveDeadline(s *v1alpha1.AgentSession, t *templates.Templates) (at time.Time, known bool) {
 	var after time.Duration
 	switch l := s.Spec.Lifecycle; {
 	case l != nil && l.ArchiveAfter != nil:
@@ -801,13 +819,9 @@ func (r *Reconciler) archiveDue(s *v1alpha1.AgentSession, t *templates.Templates
 	case t != nil:
 		after = t.ArchiveAfter()
 	default:
-		return false, time.Minute
+		return time.Time{}, false
 	}
-	at := s.Status.SuspendedAt.Add(after)
-	if obs.now.Before(at) {
-		return false, at.Sub(obs.now) + time.Second
-	}
-	return true, 0
+	return s.Status.SuspendedAt.Add(after), true
 }
 
 // archive deletes a session's volume once the guard allows it: a reaped
@@ -1263,6 +1277,10 @@ type observation struct {
 	// homeExpiry is what the HOME expiry found this reconcile that its record
 	// does not say (DESIGN-025 5): Unknown, a hold, a refusal, a waiting step.
 	homeExpiry *homeExpiryNote
+	// expiryExecutorEnded: the HOME expiry is on and the Pod of the Session's
+	// name is its recorded executor, ended, with its terminal record
+	// confirmed; the archive timer starts as if the Pod were gone.
+	expiryExecutorEnded bool
 	// now is the reconcile's clock, for the timers' status fields.
 	now time.Time
 }
@@ -1284,10 +1302,10 @@ func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessio
 	switch {
 	case s.Spec.OperatingMode != v1alpha1.OperatingModeSuspended || !s.DeletionTimestamp.IsZero():
 		st.SuspendedAt = nil
-	case st.SuspendedAt == nil && (obs.pod.missing || recordedExecutorEnded(s, obs)):
-		// A private executor whose terminal record is confirmed is no pod
-		// of the Session's own: it never runs again (DESIGN-025 2), so its
-		// timer starts as for a Pod that is gone.
+	case st.SuspendedAt == nil && (obs.pod.missing || obs.expiryExecutorEnded):
+		// With the HOME expiry on, a private executor whose terminal record
+		// is confirmed is no pod of the Session's own: it never runs again
+		// (DESIGN-025 2), so its timer starts as for a Pod that is gone.
 		t := metav1.NewTime(obs.now)
 		st.SuspendedAt = &t
 	}

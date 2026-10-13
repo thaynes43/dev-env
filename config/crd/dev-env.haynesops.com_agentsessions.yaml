@@ -1296,6 +1296,8 @@ spec:
                       rule: '!(self.phase in [''Deleting'', ''Expired'']) || has(self.deletingAt)'
                     - message: an Expired HOME expiry record has homeDeletedAt
                       rule: self.phase != 'Expired' || has(self.homeDeletedAt)
+                    - message: a HOME expiry record's refusal and refusalAt go together
+                      rule: has(self.refusal) == has(self.refusalAt)
                   expiryClearedAt:
                     description: |-
                       ExpiryClearedAt is when the last expiry record was cancelled (DESIGN-025

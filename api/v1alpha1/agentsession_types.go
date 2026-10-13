@@ -688,6 +688,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="!(self.phase in ['Archived', 'Deleting', 'Expired']) || has(self.archive)",message="an Archived HOME expiry record holds its archive"
 // +kubebuilder:validation:XValidation:rule="!(self.phase in ['Deleting', 'Expired']) || has(self.deletingAt)",message="a Deleting HOME expiry record has deletingAt"
 // +kubebuilder:validation:XValidation:rule="self.phase != 'Expired' || has(self.homeDeletedAt)",message="an Expired HOME expiry record has homeDeletedAt"
+// +kubebuilder:validation:XValidation:rule="has(self.refusal) == has(self.refusalAt)",message="a HOME expiry record's refusal and refusalAt go together"
 type PrivateHomeExpiryStatus struct {
 	// +kubebuilder:validation:Enum=1
 	Version int `json:"version"`

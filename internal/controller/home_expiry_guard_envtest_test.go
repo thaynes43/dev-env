@@ -96,6 +96,9 @@ func TestHomeExpiryOverrideGuardIsOwnerOnly(t *testing.T) {
 		if err := k8s.Create(ctx, s); err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() {
+			purgeEnv(&v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: s.Name, Namespace: s.Namespace}})
+		})
 		return s
 	}
 	// The API server loads a new policy a moment after it is created.
@@ -164,6 +167,7 @@ func TestHomeExpiryOverrideGuardIsOwnerOnly(t *testing.T) {
 			created.Annotations = map[string]string{v1alpha1.AnnotationHomeExpiry: v1alpha1.HomeExpiryHold}
 			if err := c.Create(ctx, created); !byPolicy(err) {
 				t.Errorf("a create with the override: %v", err)
+				purgeEnv(created)
 			}
 			plain, held := session(t, ""), session(t, v1alpha1.HomeExpiryHold)
 			for name, err := range map[string]error{

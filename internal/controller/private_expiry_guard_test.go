@@ -100,8 +100,16 @@ func TestHomeExpiryHoldGuardTable(t *testing.T) {
 		edit  func(*v1alpha1.AgentSession, *corev1.Pod)
 		allow bool
 	}{
-		{"a cancel", v1alpha1.HomeExpiryExporting, holdReleaseCancel, nil, true},
+		{"a cancel: no longer triggered", v1alpha1.HomeExpiryExporting, holdReleaseCancel, nil, true},
+		{"a cancel claimed while triggered", v1alpha1.HomeExpiryExporting, holdReleaseCancel, func(s *v1alpha1.AgentSession, _ *corev1.Pod) {
+			reaped := metav1.Now()
+			s.DeletionTimestamp = &reaped
+		}, false},
+		{"a cancel claimed at Deleting", v1alpha1.HomeExpiryDeleting, holdReleaseCancel, nil, false},
 		{"archive off", v1alpha1.HomeExpiryRescuing, holdReleaseArchiveOff, nil, true},
+		{"archive off claimed while it is on", v1alpha1.HomeExpiryRescuing, holdReleaseArchiveOff, func(s *v1alpha1.AgentSession, _ *corev1.Pod) {
+			s.Annotations = map[string]string{"test.dev-env/archive": "on"}
+		}, false},
 		{"Archived", v1alpha1.HomeExpiryArchived, holdReleaseArchived, nil, true},
 		{"Archived claimed at Exporting", v1alpha1.HomeExpiryExporting, holdReleaseArchived, nil, false},
 		{"an owner hold", v1alpha1.HomeExpiryRescuing, holdReleaseOwnerHold, func(s *v1alpha1.AgentSession, _ *corev1.Pod) {
@@ -136,14 +144,28 @@ func TestHomeExpiryHoldGuardTable(t *testing.T) {
 			if tc.edit != nil {
 				tc.edit(s, hold)
 			}
-			if err := expiryHoldRemovalAllowed(s, hold, tc.why); (err == nil) != tc.allow {
+			ev := expiryHoldEvidence{why: tc.why, view: &expiryView{s: s, pod: hold, now: time.Now()}, templates: mustTemplates(t),
+				archiveOn: s.Annotations["test.dev-env/archive"] == "on"}
+			if err := expiryHoldRemovalAllowed(hold, ev); (err == nil) != tc.allow {
 				t.Fatalf("allowed %v (%v), want %v", err == nil, err, tc.allow)
 			}
 			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(hold.DeepCopy()).Build()
-			if err := deleteExpiryHold(context.Background(), c, s, hold, tc.why); (err == nil) != tc.allow {
+			if err := deleteExpiryHold(context.Background(), c, hold, ev); (err == nil) != tc.allow {
 				t.Fatalf("deleteExpiryHold: %v, want allowed %v", err, tc.allow)
 			}
 		})
+	}
+	// A cancel while triggered is allowed when a new Pod holds the HOME.
+	s, _, hold := guardSession(v1alpha1.HomeExpiryRescuing)
+	reaped := metav1.Now()
+	s.DeletionTimestamp = &reaped
+	mounting := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "debug", UID: "debug-uid"}}
+	ev := expiryHoldEvidence{why: holdReleaseCancel, view: &expiryView{s: s, pod: hold, mounts: []corev1.Pod{mounting}, now: time.Now()}, templates: mustTemplates(t)}
+	if err := expiryHoldRemovalAllowed(hold, ev); err != nil {
+		t.Fatalf("a cancel for a new Pod refused: %v", err)
+	}
+	if err := expiryHoldRemovalAllowed(hold, expiryHoldEvidence{why: holdReleaseArchived}); err == nil {
+		t.Fatal("a release with no reads to judge by was allowed")
 	}
 	// podRemovalAllowed still keeps every Pod of a private Session: the
 	// expiry's exceptions are their own functions.
@@ -228,9 +250,14 @@ func TestHomeExpiryGauges(t *testing.T) {
 // scriptedExec answers each command from a table, as pods/exec would.
 type scriptedExec struct {
 	answers map[string]func(stdin io.Reader, stdout, stderr io.Writer) error
+	// withContext answers a command that needs the exec's context.
+	withContext map[string]func(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) error
 }
 
-func (s *scriptedExec) Run(_ context.Context, _, _, _ string, cmd []string, stdin io.Reader, stdout, stderr io.Writer) error {
+func (s *scriptedExec) Run(ctx context.Context, _, _, _ string, cmd []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	if a := s.withContext[cmd[3]]; a != nil {
+		return a(ctx, stdin, stdout, stderr)
+	}
 	a := s.answers[cmd[3]]
 	if a == nil {
 		return errors.New("unexpected " + cmd[3])
@@ -343,6 +370,41 @@ func TestExecHistoryRelayAnswers(t *testing.T) {
 				}
 			}
 		})
+	}
+
+	// A put that ends first ends the stream's exec: client-go would otherwise
+	// drain the whole history before the relay returns.
+	cancelled := make(chan struct{})
+	ended := &ExecHistoryRelay{Exec: &scriptedExec{
+		answers: map[string]func(io.Reader, io.Writer, io.Writer) error{"plan": planOK, "put": putOK(protocol.HistoryPutExists)},
+		withContext: map[string]func(context.Context, io.Reader, io.Writer, io.Writer) error{"stream": func(ctx context.Context, _ io.Reader, _, _ io.Writer) error {
+			<-ctx.Done()
+			close(cancelled)
+			return ctx.Err()
+		}},
+	}, Shelf: &shelf.Shelf{Reader: withShelf, Namespace: "dev-agents"}, Slots: shelf.NewExecSlots(1), Timeout: 30 * time.Second}
+	start := time.Now()
+	if res, err := ended.Archive(context.Background(), hold, HistoryExportArgs{Session: "s"}, content); err != nil || res.Status != protocol.HistoryPutExists {
+		t.Fatalf("put answered exists, the relay returned %+v, %v", res, err)
+	}
+	select {
+	case <-cancelled:
+	default:
+		t.Fatal("the stream's exec was not cancelled when put ended first")
+	}
+	if time.Since(start) > 10*time.Second {
+		t.Fatal("the relay waited for the stream's exec to time out")
+	}
+
+	// No shelf: nothing runs in the hold pod either, so a missing shelf does
+	// not cost a plan, which hashes the whole history.
+	planned := false
+	noPlan := &ExecHistoryRelay{Exec: &scriptedExec{answers: map[string]func(io.Reader, io.Writer, io.Writer) error{"plan": func(_ io.Reader, out, errOut io.Writer) error {
+		planned = true
+		return planOK(nil, out, errOut)
+	}}}, Shelf: &shelf.Shelf{Reader: noShelf, Namespace: "dev-agents"}, Slots: shelf.NewExecSlots(1)}
+	if _, err := noPlan.Archive(context.Background(), hold, HistoryExportArgs{}, content); !errors.Is(err, errShelfUnavailable) || planned {
+		t.Fatalf("no shelf: %v, planned %v", err, planned)
 	}
 
 	// Busy: a second export while one runs, and no free shelf slot.

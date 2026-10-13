@@ -142,10 +142,22 @@ func (e *ExecHistoryRelay) Archive(ctx context.Context, hold *corev1.Pod, args H
 	ctx, cancel := context.WithTimeout(ctx, e.timeout())
 	defer cancel()
 
+	// The shelf and a slot first: a plan hashes the whole history, so it runs
+	// only when put can follow it at once.
+	shelfPod, err := e.shelfPod(ctx)
+	if err != nil {
+		return res, err
+	}
+	release, err := e.slot()
+	if err != nil {
+		return res, err
+	}
+	defer release()
+
 	// The plan, in the hold pod. Its digest is the SHA-256 of the canonical
 	// line it printed, which is what stream compares.
 	planCmd := append([]string{"agentd", "ctl", "history-export", "plan"}, args.flags()...)
-	out, errOut := &capped{max: historyPlanOutputMax}, &capped{max: historySmallOutputMax}
+	out, errOut := &cappedBuffer{max: historyPlanOutputMax}, &cappedBuffer{max: historySmallOutputMax}
 	runErr := e.Exec.Run(ctx, hold.Namespace, hold.Name, ContainerName, planCmd, nil, out, errOut)
 	var plan protocol.HistoryExportPlan
 	if err := decodeHistoryAnswer(out, runErr, &plan, true); err != nil {
@@ -162,27 +174,22 @@ func (e *ExecHistoryRelay) Archive(ctx context.Context, hold *corev1.Pod, args H
 		return res, err
 	}
 
-	shelfPod, err := e.shelfPod(ctx)
-	if err != nil {
-		return res, err
-	}
-	release, err := e.slot()
-	if err != nil {
-		return res, err
-	}
-	defer release()
-
 	// The stream, in the hold pod, piped into put, in the shelf. A pipe holds
 	// no bytes of its own: the stream waits for put to read each write.
 	pr, pw := io.Pipe()
 	streamCmd := append(append([]string{"agentd", "ctl", "history-export", "stream"}, args.flags()...), "--plan-sha256", planSHA)
-	streamErrOut := &capped{max: historySmallOutputMax}
+	streamErrOut := &cappedBuffer{max: historySmallOutputMax}
 	streamDone := make(chan error, 1)
 	// streamEnded is set before the pipe closes, so a put that ended on that
 	// close always finds it set.
 	var streamEnded atomic.Bool
+	// The stream has a context of its own: a put that ends first (exists
+	// reads none of it) ends the exec, which client-go would otherwise drain
+	// to its end.
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
 	go func() {
-		err := e.Exec.Run(ctx, hold.Namespace, hold.Name, ContainerName, streamCmd, nil, pw, streamErrOut)
+		err := e.Exec.Run(streamCtx, hold.Namespace, hold.Name, ContainerName, streamCmd, nil, pw, streamErrOut)
 		streamEnded.Store(true)
 		if err != nil {
 			_ = pw.CloseWithError(err)
@@ -193,23 +200,25 @@ func (e *ExecHistoryRelay) Archive(ctx context.Context, hold *corev1.Pod, args H
 	}()
 	putCmd := []string{"agentd", "ctl", "history-archive", "put", "--archived-by", HistoryArchivedBy}
 	stdin := io.MultiReader(bytes.NewReader(append(append([]byte(nil), data...), '\n')), pr)
-	putOut, putErrOut := &capped{max: historySmallOutputMax}, &capped{max: historySmallOutputMax}
+	putOut, putErrOut := &cappedBuffer{max: historySmallOutputMax}, &cappedBuffer{max: historySmallOutputMax}
 	putErr := e.Exec.Run(ctx, e.Shelf.Namespace, shelfPod, shelf.Container, putCmd, stdin, putOut, putErrOut)
 	// Which side ended first says which failure is the cause: a stream that
 	// failed first made put read a short tar; a put that ended first closed
 	// the pipe under the stream.
 	streamFirst := streamEnded.Load()
 	if !streamFirst {
-		// A put that ended early must not leave the stream blocked on the
-		// pipe.
+		// A put that ended first: the stream is not needed, and must not stay
+		// blocked on the pipe or drain the rest of the history.
 		_ = pr.CloseWithError(errors.New("put ended"))
+		cancelStream()
 	}
 	streamErr := <-streamDone
 
-	// A refusal of the stream (export_changed, say) is the cause whenever it
-	// came: put then saw a short tar and refused it.
+	// A refusal of a stream that ended first (export_changed, say) is the
+	// cause: put then saw a short tar and refused it. A stream that ended
+	// after put was cut off by it, and put's answer stands.
 	var streamRefusal *protocol.HistoryError
-	if streamErr != nil {
+	if streamFirst && streamErr != nil {
 		var he protocol.HistoryError
 		var exit utilexec.ExitError
 		if errors.As(streamErr, &exit) && exit.ExitStatus() == 1 && json.Unmarshal(bytes.TrimSpace(streamErrOut.Bytes()), &he) == nil && he.Code != "" {
@@ -257,7 +266,7 @@ func (e *ExecHistoryRelay) Verify(ctx context.Context, sessionUID, contentSHA256
 	ctx, cancel := context.WithTimeout(ctx, e.timeout())
 	defer cancel()
 	cmd := []string{"agentd", "ctl", "history-archive", "verify", "--session-uid", sessionUID, "--content-sha256", contentSHA256}
-	out, errOut := &capped{max: historySmallOutputMax}, &capped{max: historySmallOutputMax}
+	out, errOut := &cappedBuffer{max: historySmallOutputMax}, &cappedBuffer{max: historySmallOutputMax}
 	runErr := e.Exec.Run(ctx, e.Shelf.Namespace, shelfPod, shelf.Container, cmd, nil, out, errOut)
 	if err := decodeHistoryAnswer(out, runErr, &res, false); err != nil {
 		var he *protocol.HistoryError
@@ -273,8 +282,8 @@ func (e *ExecHistoryRelay) Verify(ctx context.Context, sessionUID, contentSHA256
 // result, on exit 1 the one JSON error object. Anything else is an exec
 // failure. strict refuses a field the operator does not know: the plan's
 // fields go into content.json, so one the operator would drop must stop it.
-func decodeHistoryAnswer(out *capped, runErr error, v any, strict bool) error {
-	if out.over {
+func decodeHistoryAnswer(out *cappedBuffer, runErr error, v any, strict bool) error {
+	if out.err != nil {
 		return fmt.Errorf("%w: the answer is longer than %d bytes", errHistoryExec, out.max)
 	}
 	if runErr != nil {
@@ -296,7 +305,7 @@ func decodeHistoryAnswer(out *capped, runErr error, v any, strict bool) error {
 }
 
 // holdSide adds the hold pod's stderr to an exec failure there.
-func holdSide(err error, stderr *capped) error {
+func holdSide(err error, stderr *cappedBuffer) error {
 	var he *protocol.HistoryError
 	if errors.As(err, &he) {
 		return err
@@ -306,25 +315,3 @@ func holdSide(err error, stderr *capped) error {
 	}
 	return err
 }
-
-// capped keeps the first max bytes written and notes that more came. It has
-// no WriteString or ReadFrom, so io.Copy cannot pass the cap.
-type capped struct {
-	buf  bytes.Buffer
-	max  int
-	over bool
-}
-
-func (c *capped) Write(p []byte) (int, error) {
-	if room := c.max - c.buf.Len(); room < len(p) {
-		c.over = true
-		if room > 0 {
-			c.buf.Write(p[:room])
-		}
-		return len(p), nil
-	}
-	return c.buf.Write(p)
-}
-
-func (c *capped) Bytes() []byte  { return c.buf.Bytes() }
-func (c *capped) String() string { return c.buf.String() }

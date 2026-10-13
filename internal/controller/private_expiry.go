@@ -171,16 +171,11 @@ func homeExpiryTriggered(s *v1alpha1.AgentSession, t *templates.Templates, now t
 	if s.Spec.OperatingMode != v1alpha1.OperatingModeSuspended || s.Status.SuspendedAt == nil {
 		return expiryNotTriggered, 0
 	}
-	var after time.Duration
-	switch l := s.Spec.Lifecycle; {
-	case l != nil && l.ArchiveAfter != nil:
-		after = l.ArchiveAfter.Duration
-	case t != nil:
-		after = t.ArchiveAfter()
-	default:
+	at, known := archiveDeadline(s, t)
+	switch {
+	case !known:
 		return expiryTriggerUnknown, 0
-	}
-	if at := s.Status.SuspendedAt.Add(after); now.Before(at) {
+	case now.Before(at):
 		return expiryNotTriggered, at.Sub(now) + time.Second
 	}
 	return expiryTriggered, 0
@@ -311,6 +306,68 @@ func (r *Reconciler) readExpiryView(ctx context.Context, s *v1alpha1.AgentSessio
 	return v, nil
 }
 
+// cachedHomeMounts names the Pods of other names that mount the Session's HOME
+// claim, from the cache. It reports and skips uncached reads; it never
+// decides a write.
+func (r *Reconciler) cachedHomeMounts(ctx context.Context, s *v1alpha1.AgentSession) ([]string, error) {
+	var pods corev1.PodList
+	if err := r.Client.List(ctx, &pods, client.InNamespace(s.Namespace)); err != nil {
+		return nil, err
+	}
+	var names []string
+	for i := range pods.Items {
+		if p := &pods.Items[i]; p.Name != s.Name && podMountsClaim(p, s.Status.PrivateHistory.HomeClaim) {
+			names = append(names, p.Name)
+		}
+	}
+	return names, nil
+}
+
+// expiryQuiet reports whether the cache shows a record parked where no step
+// can act, so the reconcile needs none of the expiry's uncached reads: at
+// Waiting before its grace ends (or held), or at Archived (H5 deletes no
+// HOME); no refusal to re-check; still eligible and triggered; no override
+// that would act (release-now at Waiting, an invalid value to count); the
+// HOME claim the bound one and not deleting; and no Pod but the recorded
+// executor's ended one at Waiting, of the name or mounting the claim. Any
+// change to these reconciles the Session (its Pods, its claim, its own
+// spec and metadata), and the requeue covers the grace and a Pod of another
+// name. Every write still follows uncached reads.
+func (r *Reconciler) expiryQuiet(s *v1alpha1.AgentSession, obs *observation, otherMounts bool) (ctrl.Result, bool) {
+	e := s.Status.PrivateHistory.Expiry
+	now := r.clock()
+	override := homeExpiryOverride(s)
+	switch {
+	case e.Refusal != "" || otherMounts || homeExpiryEligible(s) != nil:
+		return ctrl.Result{}, false
+	case e.Phase != v1alpha1.HomeExpiryWaiting && e.Phase != v1alpha1.HomeExpiryArchived:
+		return ctrl.Result{}, false
+	case override != "" && override != v1alpha1.HomeExpiryHold:
+		return ctrl.Result{}, false
+	case e.Phase == v1alpha1.HomeExpiryWaiting && override == "" && !now.Before(e.DueAt.Time):
+		return ctrl.Result{}, false
+	case obs.claim.missing || obs.claim.foreign != "" || homeClaimBound(s, obs.claim.obj) != nil:
+		return ctrl.Result{}, false
+	}
+	if trig, _ := homeExpiryTriggered(s, obs.templates, now); trig != expiryTriggered {
+		return ctrl.Result{}, false
+	}
+	switch {
+	case obs.pod.missing:
+	case obs.pod.foreign == "" && e.Phase == v1alpha1.HomeExpiryWaiting && string(obs.pod.obj.UID) == e.ExecutorUID && podPhaseTerminal(obs.pod.obj):
+	default:
+		return ctrl.Result{}, false
+	}
+	if override == v1alpha1.HomeExpiryHold {
+		obs.homeExpiry = &homeExpiryNote{reason: "Held", message: "the owner holds the HOME expiry; nothing moves on until the hold is removed"}
+		return ctrl.Result{RequeueAfter: homeExpiryMaxWait}, true
+	}
+	if e.Phase == v1alpha1.HomeExpiryWaiting {
+		return ctrl.Result{RequeueAfter: min(e.DueAt.Sub(now)+time.Second, homeExpiryMaxWait)}, true
+	}
+	return ctrl.Result{RequeueAfter: homeExpiryMaxWait}, true
+}
+
 // podMountsClaim reports whether any volume of p names the claim.
 func podMountsClaim(p *corev1.Pod, claim string) bool {
 	for _, vol := range p.Spec.Volumes {
@@ -347,7 +404,15 @@ func expiryRecheck(v *expiryView) *expiryRefusal {
 	if e.ExecutorUID != h.LastExecutor.PodUID || e.ExecutorUID != h.ExecutorTerminal.PodUID || e.HomeUID != h.HomeUID {
 		return refusal(expiryIdentityChanged, "the expiry record no longer names the recorded executor and HOME")
 	}
-	c := v.claim
+	return homeClaimBound(s, v.claim)
+}
+
+// homeClaimBound is the common re-check's claim part: the HOME claim is the
+// bound one (UID equals homeUID), controlled by the Session, with the
+// operator's finalizer and admission annotation, and not being deleted. nil c
+// is a claim that is gone.
+func homeClaimBound(s *v1alpha1.AgentSession, c *corev1.PersistentVolumeClaim) *expiryRefusal {
+	h := s.Status.PrivateHistory
 	switch {
 	case c == nil:
 		return refusal(expiryHomeReplaced, "the HOME claim %s is gone", h.HomeClaim)
@@ -368,6 +433,9 @@ type homeExpiryNote struct {
 	reason  string
 	message string
 	unknown bool
+	// pending: the step was not judged (Unknown, or the relay was busy), so a
+	// recorded refusal stands.
+	pending bool
 }
 
 // reconcileHomeExpiry runs DESIGN-025 section 5 up to Archived for a protected
@@ -386,7 +454,7 @@ func (r *Reconciler) reconcileHomeExpiry(ctx context.Context, s *v1alpha1.AgentS
 		// Canary originals never expire, and release-now does not reach them
 		// (DESIGN-025 2): the fixed result reader reads their records live.
 		if s.Annotations[v1alpha1.AnnotationHomeExpiry] == v1alpha1.HomeExpiryReleaseNow {
-			r.countExpiryOnce(s, expiryCanary)
+			r.countExpiryOnce(s, expiryCanary, homeExpiryRefusalRetry)
 		}
 		return ctrl.Result{}, false, nil
 	}
@@ -395,7 +463,17 @@ func (r *Reconciler) reconcileHomeExpiry(ctx context.Context, s *v1alpha1.AgentS
 		// Not eligible, and nothing to cancel: no read needed.
 		return ctrl.Result{}, false, nil
 	}
+	mounts, mountsErr := r.cachedHomeMounts(ctx, s)
 	if h.Expiry == nil {
+		// A Pod of another name that mounts the HOME is a new Pod (5.3): it
+		// keeps a record from starting, and the Session shows
+		// PreservationUnknown while it is there, also after the cancel it
+		// caused. observePrivateHistory covers a Pod of the Session's name.
+		// From the cache: this reports, and decides nothing.
+		if len(mounts) > 0 {
+			obs.privateHistoryUnknown = fmt.Errorf("private executor was replaced: Pod %s mounts the private HOME %s; the HOME expiry does not start while it is there", mounts[0], h.HomeClaim)
+			return ctrl.Result{RequeueAfter: homeExpiryRefusalRetry}, false, nil
+		}
 		// Nothing to cancel: a Session the cache shows not triggered needs
 		// no uncached reads until its deadline, or an event, comes.
 		if trig, wait := homeExpiryTriggered(s, obs.templates, r.clock()); trig == expiryNotTriggered {
@@ -404,16 +482,18 @@ func (r *Reconciler) reconcileHomeExpiry(ctx context.Context, s *v1alpha1.AgentS
 			}
 			return ctrl.Result{}, false, nil
 		}
+	} else if res, quiet := r.expiryQuiet(s, obs, len(mounts) > 0 || mountsErr != nil); quiet {
+		return res, false, nil
 	}
 	v, err := r.readExpiryView(ctx, s)
 	if errors.Is(err, errExpiryBehind) {
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}
 	if err != nil {
-		return r.expiryUnknown(ctx, obs, err)
+		return r.expiryUnknown(ctx, s, obs, err)
 	}
 	if homeExpiryOverride(v.s) == expiryOverrideInvalid {
-		r.countExpiryOnce(v.s, expiryOverrideInvalid)
+		r.countExpiryOnce(v.s, expiryOverrideInvalid, homeExpiryRefusalRetry)
 	}
 	trig, wait := homeExpiryTriggered(v.s, obs.templates, v.now)
 	if v.record() == nil {
@@ -431,7 +511,7 @@ func (r *Reconciler) startHomeExpiry(ctx context.Context, v *expiryView, obs *ob
 	}
 	switch trig {
 	case expiryTriggerUnknown:
-		return r.expiryUnknown(ctx, obs, errors.New("the archive deadline is unknown: the Session has no archiveAfter of its own and the templates do not load"))
+		return r.expiryUnknown(ctx, v.s, obs, errors.New("the archive deadline is unknown: the Session has no archiveAfter of its own and the templates do not load"))
 	case expiryNotTriggered:
 		if wait > 0 {
 			return ctrl.Result{RequeueAfter: min(wait, homeExpiryMaxWait)}, false, nil
@@ -488,22 +568,43 @@ func (r *Reconciler) stepHomeExpiry(ctx context.Context, v *expiryView, obs *obs
 		// Nothing moves on while the owner holds it, and the hold pod goes,
 		// because nothing needs it; the grace keeps running (5.3).
 		if p := v.ownHold(); p != nil && p.DeletionTimestamp.IsZero() {
-			return r.removeExpiryHold(ctx, v, p, holdReleaseOwnerHold)
+			return r.removeExpiryHold(ctx, v, obs, p, holdReleaseOwnerHold)
 		}
 		obs.homeExpiry = &homeExpiryNote{reason: "Held", message: "the owner holds the HOME expiry; nothing moves on until the hold is removed"}
 		return ctrl.Result{}, false, nil
 	}
 	if trig == expiryTriggerUnknown {
-		return r.expiryUnknown(ctx, obs, errors.New("the archive deadline is unknown: the Session has no archiveAfter of its own and the templates do not load"))
+		return r.expiryUnknown(ctx, v.s, obs, errors.New("the archive deadline is unknown: the Session has no archiveAfter of its own and the templates do not load"))
 	}
-	if e.Refusal != "" && e.RefusalAt != nil && v.now.Before(e.RefusalAt.Add(homeExpiryRefusalRetry)) {
+	if e.Refusal != "" && e.RefusalAt != nil && v.now.Before(e.RefusalAt.Add(homeExpiryRefusalRetry)) && !v.now.Before(e.RefusalAt.Time) {
 		// A refused step is re-checked every 15 minutes, not on every event.
 		return ctrl.Result{RequeueAfter: e.RefusalAt.Add(homeExpiryRefusalRetry).Sub(v.now) + time.Second}, false, nil
 	}
 	if ref := expiryRecheck(v); ref != nil {
 		return r.refuseHomeExpiry(ctx, v, obs, ref)
 	}
-	switch e.Phase {
+	res, stop, err := r.runExpiryStep(ctx, v, obs)
+	if err != nil || stop || e.Refusal == "" || obs.homeExpiry != nil && obs.homeExpiry.pending {
+		return res, stop, err
+	}
+	// The common re-check and the step passed, and the step had nothing to
+	// write (it waits for the grace, a starting hold pod, a rescue retry, or
+	// it is Archived): the recorded refusal's cause is gone. Clear it now, so
+	// a fixed cause stops the alert at this re-check (5.2), not at the next
+	// step that writes, which may be weeks away.
+	fresh := v.s.DeepCopy()
+	clearExpiryRefusal(fresh.Status.PrivateHistory.Expiry)
+	if err := r.writeExpiry(ctx, v, fresh); err != nil {
+		return ctrl.Result{RequeueAfter: time.Second}, true, nil
+	}
+	log.FromContext(ctx).Info("the HOME expiry's refusal is resolved", "refusal", e.Refusal)
+	return ctrl.Result{RequeueAfter: time.Second}, true, nil
+}
+
+// runExpiryStep runs the step of the record's phase, once the common re-check
+// passed.
+func (r *Reconciler) runExpiryStep(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
+	switch v.record().Phase {
 	case v1alpha1.HomeExpiryWaiting:
 		return r.expiryWait(ctx, v)
 	case v1alpha1.HomeExpiryRescuing, v1alpha1.HomeExpiryExporting:
@@ -512,9 +613,8 @@ func (r *Reconciler) stepHomeExpiry(ctx context.Context, v *expiryView, obs *obs
 		// The archive is verified and recorded; the hold pod goes. With
 		// deletion off (H5 has none) the expiry stops here, HOME intact.
 		if p := v.ownHold(); p != nil && p.DeletionTimestamp.IsZero() {
-			return r.removeExpiryHold(ctx, v, p, holdReleaseArchived)
+			return r.removeExpiryHold(ctx, v, obs, p, holdReleaseArchived)
 		}
-		return ctrl.Result{}, false, nil
 	}
 	return ctrl.Result{}, false, nil
 }
@@ -565,11 +665,13 @@ func (r *Reconciler) expiryRescueAndExport(ctx context.Context, v *expiryView, o
 		return r.removeExpiredExecutor(ctx, v, obs, pod)
 	case pod != nil && v.ownHold() == pod:
 		// The hold pod the record names.
-	case pod != nil:
-		// newPod would have cancelled; a Pod here is not the expiry's.
-		return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryIdentityChanged, "the Pod %s is neither the executor nor the expiry's hold pod", pod.Name))
-	case len(v.mounts) > 0:
-		return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryClaimInUse, "the Pod %s mounts the HOME claim", v.mounts[0].Name))
+	case pod != nil, len(v.mounts) > 0:
+		// Not reached today: stepHomeExpiry cancels for any such Pod first
+		// (5.3), before Deleting. Kept so that a later change to that order
+		// refuses here instead of creating a hold pod beside it. From
+		// Deleting on (H6), where nothing cancels, claim_in_use is the
+		// delete step's own refusal.
+		return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryClaimInUse, "a Pod other than the executor and the expiry's hold pod holds the HOME claim"))
 	case e.HoldPodUID != "" || e.HoldIntent == "":
 		// No hold pod yet, or the old one is gone: a new intent, by a
 		// confirmed write, before any create (6.1).
@@ -595,7 +697,7 @@ func (r *Reconciler) expiryRescueAndExport(ctx context.Context, v *expiryView, o
 		return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryIdentityChanged, "the hold pod %s is not bound to the HOME and the record", hold.Name))
 	}
 	if podEnded(hold) {
-		return r.removeExpiryHold(ctx, v, hold, holdReleaseEnded)
+		return r.removeExpiryHold(ctx, v, obs, hold, holdReleaseEnded)
 	}
 	if hold.Status.Phase != corev1.PodRunning {
 		obs.homeExpiry = &homeExpiryNote{reason: "HoldPodStarting", message: "the hold pod " + hold.Name + " is starting"}
@@ -633,11 +735,11 @@ func (r *Reconciler) expiryRescueAndExport(ctx context.Context, v *expiryView, o
 func (r *Reconciler) expiryRescue(ctx context.Context, v *expiryView, obs *observation, hold *corev1.Pod) (ctrl.Result, bool, error) {
 	rec, reason, _, err := r.rescue(ctx, v.s, hold)
 	if err != nil {
-		return r.expiryUnknown(ctx, obs, fmt.Errorf("the rescue could not run in the hold pod %s: %w", hold.Name, err))
+		return r.expiryUnknown(ctx, v.s, obs, fmt.Errorf("the rescue could not run in the hold pod %s: %w", hold.Name, err))
 	}
 	written, err := r.recordRescue(ctx, v.s, rec, reason)
 	if err != nil {
-		return r.expiryUnknown(ctx, obs, fmt.Errorf("record the rescue in the hold pod %s: %w", hold.Name, err))
+		return r.expiryUnknown(ctx, v.s, obs, fmt.Errorf("record the rescue in the hold pod %s: %w", hold.Name, err))
 	}
 	if !written {
 		// The Session changed during the rescue: judge it again.
@@ -719,16 +821,28 @@ func (r *Reconciler) exportHomeHistory(ctx context.Context, v *expiryView, hold 
 		return data, sum, err
 	})
 	if errors.Is(err, errHistoryRelayBusy) {
+		obs.homeExpiry = &homeExpiryNote{reason: "ExportBusy", message: "another export runs on this operator, or no shelf exec slot is free; trying again in a minute", pending: true}
 		return ctrl.Result{RequeueAfter: homeExpiryUnknownRetry}, false, nil
 	}
 	if err != nil {
 		return r.refuseHomeExpiry(ctx, v, obs, historyRefusal(err))
+	}
+	// The relay reached the hold pod by name, as the rescue does (D-51):
+	// the export counts only if that name still holds the same hold pod.
+	var after corev1.Pod
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(hold), &after); err != nil && !apierrors.IsNotFound(err) {
+		return r.expiryUnknown(ctx, v.s, obs, fmt.Errorf("read the hold pod after the export: %w", err))
+	} else if err != nil || after.UID != hold.UID {
+		// Replaced or gone: the next reconcile judges the new state, and an
+		// entry put already stored stays, unreferenced (7).
+		return ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}
 	if put.ContentSHA256 != contentSHA || !protocol.ValidSHA256(contentSHA) {
 		return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryArchiveMismatch, "put stored %s, not the content manifest's %s", put.ContentSHA256, contentSHA))
 	}
 	ver, err := r.HistoryRelay.Verify(ctx, string(v.s.UID), contentSHA)
 	if errors.Is(err, errHistoryRelayBusy) {
+		obs.homeExpiry = &homeExpiryNote{reason: "ExportBusy", message: "no shelf exec slot is free for the verify; trying again in a minute", pending: true}
 		return ctrl.Result{RequeueAfter: homeExpiryUnknownRetry}, false, nil
 	}
 	if err != nil {
@@ -818,7 +932,7 @@ func (r *Reconciler) cancelHomeExpiry(ctx context.Context, v *expiryView, obs *o
 	}
 	if p := v.ownHold(); p != nil {
 		if p.DeletionTimestamp.IsZero() {
-			return r.removeExpiryHold(ctx, v, p, holdReleaseCancel)
+			return r.removeExpiryHold(ctx, v, obs, p, holdReleaseCancel)
 		}
 		return ctrl.Result{RequeueAfter: homeExpiryPodWait}, false, nil
 	}
@@ -853,7 +967,7 @@ func (r *Reconciler) adoptExpiryHold(ctx context.Context, v *expiryView) (ctrl.R
 // the claim, by this step's uncached reads.
 func (r *Reconciler) createExpiryHold(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
 	if obs.templatesErr != nil || obs.templates == nil {
-		return r.expiryUnknown(ctx, obs, fmt.Errorf("no hold pod can be built until the templates load: %w", obs.templatesErr))
+		return r.expiryUnknown(ctx, v.s, obs, fmt.Errorf("no hold pod can be built until the templates load: %w", obs.templatesErr))
 	}
 	pod, err := buildExpiryHoldPod(v.s, obs.templates)
 	if err != nil {
@@ -866,7 +980,7 @@ func (r *Reconciler) createExpiryHold(ctx context.Context, v *expiryView, obs *o
 		case apierrors.IsForbidden(err):
 			return r.refuseHomeExpiry(ctx, v, obs, refusal(expiryForbidden, "create the hold pod: %v", err))
 		}
-		return r.expiryUnknown(ctx, obs, fmt.Errorf("create the hold pod: %w", err))
+		return r.expiryUnknown(ctx, v.s, obs, fmt.Errorf("create the hold pod: %w", err))
 	}
 	log.FromContext(ctx).Info("created the HOME expiry's hold pod", "pod", pod.Name, "uid", pod.UID, "intent", v.record().HoldIntent)
 	r.event(v.s, corev1.EventTypeNormal, "HomeExpiry", "HoldPod", "created hold pod "+pod.Name+" bound to the HOME "+v.record().HomeUID+" for the expiry's rescue and export (DESIGN-025 6.1)")
@@ -911,13 +1025,15 @@ func (r *Reconciler) removeExpiredExecutor(ctx context.Context, v *expiryView, o
 }
 
 // removeExpiryHold deletes the expiry's hold pod when nothing needs it (6.1).
-// It is the one caller of deleteExpiryHold.
-func (r *Reconciler) removeExpiryHold(ctx context.Context, v *expiryView, pod *corev1.Pod, why expiryHoldRelease) (ctrl.Result, bool, error) {
-	if err := expiryHoldRemovalAllowed(v.s, pod, why); err != nil {
+// It is the one caller of deleteExpiryHold. The guard judges the reason from
+// this reconcile's uncached reads, not from the caller's word.
+func (r *Reconciler) removeExpiryHold(ctx context.Context, v *expiryView, obs *observation, pod *corev1.Pod, why expiryHoldRelease) (ctrl.Result, bool, error) {
+	ev := expiryHoldEvidence{why: why, view: v, templates: obs.templates, archiveOn: r.homeExpiryOn()}
+	if err := expiryHoldRemovalAllowed(pod, ev); err != nil {
 		log.FromContext(ctx).Info("the HOME expiry keeps its hold pod", "pod", pod.Name, "reason", err.Error())
 		return ctrl.Result{RequeueAfter: homeExpiryRefusalRetry}, false, nil
 	}
-	if err := deleteExpiryHold(ctx, r.Client, v.s, pod, why); err != nil {
+	if err := deleteExpiryHold(ctx, r.Client, pod, ev); err != nil {
 		if apierrors.IsConflict(err) || apierrors.IsInvalid(err) {
 			r.countExpiryRefused(expiryPreconditionFailed)
 			return ctrl.Result{RequeueAfter: time.Second}, true, nil
@@ -947,7 +1063,7 @@ func (r *Reconciler) homeExpiryOff(ctx context.Context, s *v1alpha1.AgentSession
 		return r.adoptExpiryHold(ctx, v)
 	}
 	if p := v.ownHold(); p != nil && p.DeletionTimestamp.IsZero() {
-		return r.removeExpiryHold(ctx, v, p, holdReleaseArchiveOff)
+		return r.removeExpiryHold(ctx, v, obs, p, holdReleaseArchiveOff)
 	}
 	return ctrl.Result{}, false, nil
 }
@@ -972,7 +1088,7 @@ func clearExpiryRefusal(e *v1alpha1.PrivateHomeExpiryStatus) { e.Refusal, e.Refu
 // and the refusing gauge until a step passes.
 func (r *Reconciler) refuseHomeExpiry(ctx context.Context, v *expiryView, obs *observation, ref *expiryRefusal) (ctrl.Result, bool, error) {
 	if ref.reason == expiryUnknown {
-		return r.expiryUnknown(ctx, obs, ref.err)
+		return r.expiryUnknown(ctx, v.s, obs, ref.err)
 	}
 	r.countExpiryRefused(ref.reason)
 	log.FromContext(ctx).Info("the HOME expiry is refused; the HOME stays", "reason", ref.reason, "error", ref.err.Error())
@@ -988,12 +1104,13 @@ func (r *Reconciler) refuseHomeExpiry(ctx context.Context, v *expiryView, obs *o
 	return ctrl.Result{RequeueAfter: time.Second}, true, nil
 }
 
-// expiryUnknown counts a read, exec or deadline that could not be judged:
-// nothing happens, and the reconcile asks again in a minute.
-func (r *Reconciler) expiryUnknown(ctx context.Context, obs *observation, err error) (ctrl.Result, bool, error) {
-	r.countExpiryRefused(expiryUnknown)
+// expiryUnknown counts a read, exec or deadline that could not be judged, at
+// most once a minute per Session: nothing happens, and the reconcile asks again
+// in a minute.
+func (r *Reconciler) expiryUnknown(ctx context.Context, s *v1alpha1.AgentSession, obs *observation, err error) (ctrl.Result, bool, error) {
+	r.countExpiryOnce(s, expiryUnknown, homeExpiryUnknownRetry)
 	log.FromContext(ctx).Info("the HOME expiry cannot judge this step; asking again", "retry", homeExpiryUnknownRetry, "error", err.Error())
-	obs.homeExpiry = &homeExpiryNote{reason: "Unknown", message: truncate(err.Error()), unknown: true}
+	obs.homeExpiry = &homeExpiryNote{reason: "Unknown", message: truncate(err.Error()), unknown: true, pending: true}
 	return ctrl.Result{RequeueAfter: homeExpiryUnknownRetry}, false, nil
 }
 
@@ -1025,7 +1142,11 @@ func setHomeExpiryCondition(s *v1alpha1.AgentSession, obs observation, st *v1alp
 		where = strings.TrimPrefix(where+"; ", "; ") + "this step cannot be judged now: " + n.message
 	case e != nil && e.Refusal != "":
 		c.Reason = "Refused"
-		where += fmt.Sprintf("; refused since %s: %s; the HOME stays", e.RefusalAt.UTC().Format(time.RFC3339), e.Refusal)
+		since := "an unrecorded time"
+		if e.RefusalAt != nil {
+			since = e.RefusalAt.UTC().Format(time.RFC3339)
+		}
+		where += fmt.Sprintf("; refused since %s: %s; the HOME stays", since, e.Refusal)
 	case n != nil:
 		c.Reason = n.reason
 		where = strings.TrimPrefix(where+"; ", "; ") + n.message
@@ -1042,10 +1163,13 @@ func (r *Reconciler) countExpiryRefused(reason string) {
 	}
 }
 
-// countExpiryOnce counts a refusal that no record holds (canary,
-// override_invalid) at most once per 15 minutes per Session, the cadence of a
-// recorded refusal, not on every event.
-func (r *Reconciler) countExpiryOnce(s *v1alpha1.AgentSession, reason string) {
+// countExpiryOnce counts a refusal at most once per window per Session:
+// unknown once a minute, the cadence of its retry, and the refusals no record
+// holds (canary, override_invalid) once per 15 minutes, the cadence of a
+// recorded refusal. So the counter follows the retries, not the event volume.
+// Entries older than the longest window are dropped as new ones are added, so
+// the map holds only the Sessions of the last 15 minutes.
+func (r *Reconciler) countExpiryOnce(s *v1alpha1.AgentSession, reason string, window time.Duration) {
 	key := string(s.UID) + "/" + reason
 	now := r.clock()
 	r.expiryMu.Lock()
@@ -1053,9 +1177,14 @@ func (r *Reconciler) countExpiryOnce(s *v1alpha1.AgentSession, reason string) {
 		r.expiryCounted = map[string]time.Time{}
 	}
 	last, seen := r.expiryCounted[key]
-	if seen && now.Before(last.Add(homeExpiryRefusalRetry)) {
+	if seen && now.Before(last.Add(window)) && !now.Before(last) {
 		r.expiryMu.Unlock()
 		return
+	}
+	for k, at := range r.expiryCounted {
+		if now.Sub(at) > homeExpiryRefusalRetry {
+			delete(r.expiryCounted, k)
+		}
 	}
 	r.expiryCounted[key] = now
 	r.expiryMu.Unlock()
