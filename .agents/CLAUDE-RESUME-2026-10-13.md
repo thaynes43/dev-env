@@ -183,6 +183,12 @@ predate this session; their rows point there.
 
 ## Next work, in order
 
+**H7 progress at 17:24 UTC, 2026-10-13:** the unmounted history PVC is installed
+by haynes-ops #3898 (`a287a4f6`), Bound with no Pod references. Read the
+[installed checkpoint](sagas/distributed-dev-env/verification/h7-archive-pvc-2026-10-13.md).
+Its bound PV remains Delete; owner-set Retain is pending. Continue with the archive
+guard before mounting it. F4 and both cold resource measurements remain gates.
+
 Each unit: publish its contract, one reviewed PR, focused tests, native
 independent review, `CI - Success`, self-squash-merge. haynes-ops units also
 need declare-activity and peer checks before and after.
@@ -196,7 +202,8 @@ need declare-activity and peer checks before and after.
      runbook execs into the shelf or runs a Job that mounts the claim.
    - PRs, in this order. The archive guard ships after its parity check and
      before the claim is mounted (section 12), so the shelf mount comes last:
-     1. the `dev-env-history-archive` PVC (shelf-only, RWO);
+     1. the `dev-env-history-archive` PVC (shelf-only, RWO), installed unmounted
+        by #3898; its owner-set PV Retain step remains pending;
      2. the archive guard, `dev-env-archive-guard` (it covers DESIGN-024's
         archive too, so it ships with whichever of H7 and R5 comes first);
      3. the shelf mount, `--history-archive`, `Recreate` and the 2.27.0 image

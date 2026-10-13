@@ -10,6 +10,17 @@ of the 2026-10-12 brief, which still holds the requirement history and the
 stopped routes. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## H7 unmounted archive PVC installed — 2026-10-13
+
+[haynes-ops #3898](https://github.com/thaynes43/haynes-ops/pull/3898), merge
+`a287a4f6`, created the 20Gi RWO history archive PVC. The
+[installed checkpoint](sagas/distributed-dev-env/verification/h7-archive-pvc-2026-10-13.md)
+records Flux Ready/Healthy, the Bound claim and no Pod references at 17:24 UTC.
+The shelf, retained sessions and failed Jobs match their baseline. Expiry flags
+remain off except terminal recording. The bound PV is still Delete; owner-set
+Retain is required before archive activation. Next is the archive guard before
+the shelf mount. F4 and both cold measurements still gate activation.
+
 ## H7 owner identity and read-only prerequisites — 2026-10-13
 
 The Codex takeover refreshed the startup and H7 read-only checks. The
