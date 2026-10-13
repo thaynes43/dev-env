@@ -612,9 +612,10 @@ sections above leave open:
   found in the cache whenever the Session has a terminal record and no expiry
   record, triggered or not, so the PreservationUnknown of a cancel it caused
   stays while the Pod is there (a Pod of the Session's name is
-  `observePrivateHistory`'s). That finding reports only; it decides no write. It is made while the owner holds the expiry
-  too: a hold stops the steps, not the grace. `releaseNowAt` is recorded when the
-  record is made or when Waiting ends, whichever first sees release-now.
+  `observePrivateHistory`'s). That finding reports only; it decides no write.
+  The record is made while the owner holds the expiry too: a hold stops the
+  steps, not the grace. `releaseNowAt` is recorded when the record is made or
+  when Waiting ends, whichever first sees release-now.
 - **The hold pod** is `buildHoldPod`'s, with the three annotations. A new intent
   is written with `holdPodUID` cleared, in one confirmed write, whenever no hold
   pod is recorded or the recorded one is gone; the create follows in the next
