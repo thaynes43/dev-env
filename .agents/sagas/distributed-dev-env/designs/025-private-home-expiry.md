@@ -3,8 +3,9 @@
 - **Status:** Accepted 2026-10-12; corrected the same day after its review
   ([ADR-006](../adrs/006-private-home-expiry-corrections.md), D-87). H1, the
   terminal record (#236, section 3.6), shipped in 2.25.0; H2 installed it with
-  the record on, 2026-10-12 (haynes-ops #3852 and #3854). H3 to H10 have no
-  source yet
+  the record on, 2026-10-12 (haynes-ops #3852 and #3854). H3, the stop
+  request for Reaping Sessions (section 4), is in progress on branch
+  `agent/h3-reap-stop-request`. H4 to H10 have no source yet
 - **Decision:** [ADR-005](../adrs/005-private-home-expiry.md) (Q-31, Tom,
   2026-10-12: "Archive, then delete (Recommended)"), amended by
   [ADR-006](../adrs/006-private-home-expiry-corrections.md)
