@@ -10,6 +10,10 @@
 //     only through deletePod, whose guard (guard.go) allows the Draining and
 //     Suspended transitions only, and a suspend of a pod that ran only after a
 //     rescue in it (D-51). Drain is plan 04, so the guard refuses it today.
+//     One exception, default off: stopPrivateExecutor sets a Reaping private
+//     Session's executor's activeDeadlineSeconds after a confirmed stop intent
+//     (DESIGN-025 4), and no other Pod write exists in the module
+//     (TestOnlyStopPrivateExecutorPatchesPods).
 //   - A finalizer holds every session, and its volume, until rescue: deleting
 //     an AgentSession is a reap, never a cascade (D-45). deleteVolume, the
 //     other guarded delete, archives a reaped session's volume only after a
@@ -120,6 +124,14 @@ type Reconciler struct {
 	// PrivateExecutorTerminal counts the marks (MetricPrivateExecutorTerminal);
 	// nil counts nothing.
 	PrivateExecutorTerminal *prometheus.CounterVec
+	// PrivateExecutorStop sends the stop request for a Reaping private
+	// Session's recorded executor (DESIGN-025 4, --enable-private-executor-stop).
+	// It acts only while PrivateTerminalRecord is on too. Off, no intent is
+	// written and no Pod is patched.
+	PrivateExecutorStop bool
+	// PrivateExecutorStops counts the stop requests
+	// (MetricPrivateExecutorStopRequests); nil counts nothing.
+	PrivateExecutorStops *prometheus.CounterVec
 	// Now is the clock of the terminal record and its lease check; nil is
 	// time.Now.
 	Now                      func() time.Time
@@ -196,8 +208,9 @@ func (r *Reconciler) sessionsForTemplates(ctx context.Context, o client.Object) 
 }
 
 // Reconcile creates what a session lacks and records what it sees. It never
-// updates a pod or a volume, and deletes one only through the guard: a pod in
-// the Suspended transition after its rescue, a volume at archive (D-51).
+// updates a volume, updates a pod only by the stop request of a Reaping private
+// Session (DESIGN-025 4), and deletes one only through the guard: a pod in the
+// Suspended transition after its rescue, a volume at archive (D-51).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.Result, outcomeErr error) {
 	var s v1alpha1.AgentSession
 	if err := r.Client.Get(ctx, req.NamespacedName, &s); err != nil {
@@ -464,7 +477,9 @@ func (r *Reconciler) removePod(ctx context.Context, s *v1alpha1.AgentSession, ob
 		// Legacy rescue may exec and change provider HOME. Retain the original
 		// executor before either rescue or deletion, including uncertain history.
 		obs.removalBlocked = errPrivateHistoryRetained
-		return ctrl.Result{}, false, nil
+		// A Reaping private Session's recorded executor is asked to end
+		// instead (DESIGN-025 4); its Pod object stays.
+		return r.requestPrivateExecutorStop(ctx, s, obs)
 	}
 	pod := obs.pod.obj
 	if !pod.DeletionTimestamp.IsZero() {

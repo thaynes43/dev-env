@@ -115,6 +115,7 @@ type options struct {
 	managedCodexTasks             bool
 	privateHistoryRetention       bool
 	privateTerminalRecord         bool
+	privateExecutorStop           bool
 	privateProjectCanariesEnabled bool
 	privateProjectCanaries        *projectcanary.Policy
 	managedChildDecisions         bool
@@ -147,6 +148,7 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.managedCodexTasks, "enable-managed-codex-tasks", false, "enable accepted-project managed Codex task admission")
 	fs.BoolVar(&o.privateHistoryRetention, "enable-private-history-retention", false, "retain private managed HOME and durable Session identity on reap and suspended autoarchive")
 	fs.BoolVar(&o.privateTerminalRecord, "enable-private-terminal-record", false, "record the durable terminal observation of a private executor, and the missed marker, in its Session's status (DESIGN-025 3); records only, deletes nothing")
+	fs.BoolVar(&o.privateExecutorStop, "enable-private-executor-stop", false, "stop the recorded executor of a Reaping private Session with activeDeadlineSeconds, after a confirmed stop intent; an owner hold blocks it (DESIGN-025 4); needs --enable-private-terminal-record")
 	fs.BoolVar(&o.retainedCommonRules, "enable-retained-common-rules", false, "retain reviewed common instruction inputs for new fixed private managed canaries")
 	fs.BoolVar(&o.privateProjectCanariesEnabled, "enable-private-project-canaries", false, "enable only two explicitly configured private managed subscription rule canaries")
 	canaries := fs.String("private-project-canaries", "", "strict operator-owned JSON records for at most two fixed private managed canaries")
@@ -344,6 +346,9 @@ func parseFlags(args []string) (options, error) {
 	if err := validateNativeFixtureOptions(o); err != nil {
 		return o, err
 	}
+	if o.privateExecutorStop && !o.privateTerminalRecord {
+		return o, errors.New("--enable-private-executor-stop requires --enable-private-terminal-record: the terminal record is what proves the stop (DESIGN-025 13)")
+	}
 	return o, nil
 }
 
@@ -416,6 +421,8 @@ func run(args []string) error {
 	// Registered whatever the flag says, so the series exist at 0 (DESIGN-025 10).
 	terminalCounter := controller.NewPrivateExecutorTerminalCounter()
 	ctrlmetrics.Registry.MustRegister(terminalCounter)
+	stopCounter := controller.NewPrivateExecutorStopCounter()
+	ctrlmetrics.Registry.MustRegister(stopCounter)
 	r := &controller.Reconciler{
 		SessionDirectory: directoryStore,
 		Client:           mgr.GetClient(),
@@ -427,6 +434,8 @@ func run(args []string) error {
 		PrivateHistoryRetention:     o.privateHistoryRetention,
 		PrivateTerminalRecord:       o.privateTerminalRecord,
 		PrivateExecutorTerminal:     terminalCounter,
+		PrivateExecutorStop:         o.privateExecutorStop,
+		PrivateExecutorStops:        stopCounter,
 		PrivateProjectCanaries:      o.privateProjectCanaries,
 		PrivateProjectCloneOwner:    cloneOwner,
 		ManagedChildDecisions:       o.managedChildDecisions,
