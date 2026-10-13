@@ -3,9 +3,58 @@
 The front door for any agent that opens this repo, in the cluster's dev-env pod or on
 Tom's own machine. Read this page, then [CLAUDE.md](../CLAUDE.md) (the rules), then
 the saga. To continue building, follow the
+[next work, in order](CLAUDE-RESUME-2026-10-13.md#next-work-in-order) in the
+2026-10-13 Claude pickup brief. It continues the
 [six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap)
-in the Claude pickup brief. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
+of the 2026-10-12 brief, which still holds the requirement history and the
+stopped routes. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
+
+## Claude coordinator session 2026-10-12 to 2026-10-13: summary and pickup brief — 2026-10-13 UTC
+
+The next Claude coordinator starts from the
+[2026-10-13 pickup brief](CLAUDE-RESUME-2026-10-13.md). It has the deployed
+state, counters, rulings with receipt paths, next work with owner gates,
+boundaries, lessons and the questions still to ask Tom. The
+[2026-10-12 brief](CLAUDE-RESUME-2026-10-12.md) is superseded for current
+state; its requirement history and stopped routes still hold.
+
+What the session (`task-dev-env-1012-105043`) did:
+
+- **Reviewed Codex's source** in six units: 29 findings, 27 confirmed, 2 high
+  (#220, an interrupted project-root advance; #221, the ledger's confirm
+  read-back). Fixed in #219 to #225 and #229, released as 2.24.1.
+- **Asked Q-27 to Q-32 and a pacing question**, one at a time through the
+  Claude native prompt; each has a receipt. Rule loading is accepted for both
+  providers (Q-27, Q-28). The Sigo rerun under Q-32 holds all seven DESIGN-011
+  items. Q-29 and Q-31 produced ADR-004, ADR-005 and ADR-006 with DESIGN-024
+  and DESIGN-025. Pacing (2026-10-13): "Slow down", one Opus subagent unit
+  (`claude-opus-5-5`) at a time (README decision 69). Q-24 still has no answer.
+- **Built DESIGN-025 H1, H3, H4, H5 and H6** (#236, #244, #246, #251, #254),
+  bootstrap fixes S1 and S2 (#237, #239) and provider-reported usage for #176
+  (#245).
+- **Released and deployed 2.24.1, 2.25.0, 2.26.0 and 2.27.0.** The 2.26.0 and
+  2.27.0 deploys have no entry of their own; this is their record.
+  - 2.26.0: haynes-ops #3877 (CRD generation 11 to 12), #3878 (operator
+    `sha-20c710f@sha256:23aae8a8…`), #3880 (template `2.26.0-3d5ddc3cf0`,
+    agent `2.26.0@sha256:bb4b5d1d…`). Post-check PASS under `act-035219-4042498`.
+  - 2.27.0: haynes-ops #3885 (CRD generation 12 to 13), #3886 (operator
+    `sha-2221b83@sha256:fd8bdeca…`), #3887 (template `2.27.0-e83cacfe3e`,
+    agent `2.27.0@sha256:b635dd81…`). Post-check PASS under
+    `act-112939-38525`.
+  - In both, the operator's args stayed byte-identical, and every
+    non-operator, non-Job pod in `dev-env-system`, `dev-agents`, `dev` and
+    `upgrade-agent` kept its UID, node and restarts. The three `Failed`
+    Sessions changed only their `Outdated` condition; the two `Pending` ones
+    did not change. Of the DESIGN-025 flags only the terminal record is on;
+    stop, archive, reads and delete are off. Post-check evidence stays in the
+    coordinator's deploy orders, outside this repo.
+- **Housekeeping.** haynes-ops #3881 makes dev-env v2 image bumps manual-only,
+  so Renovate #3710 (the shelf image) waits for H7. #243 tracks the Codex bump
+  (#100 must not merge as is). #248 parks usage after reap. #231 got a scope
+  review.
+
+Next is H7 in haynes-ops (DESIGN-025 section 12), under the slow-down pacing.
 
 ## DESIGN-025 H6 in source: archived-history reads and the guarded HOME delete, both off — 2026-10-13 UTC
 
@@ -2159,9 +2208,10 @@ plan 02 is done. The current order is the pickup brief's
 
 ## What happens next
 
-Follow the
+Follow the [next work, in order](CLAUDE-RESUME-2026-10-13.md#next-work-in-order)
+in the 2026-10-13 Claude pickup brief, which continues the
 [six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap)
-in the Claude pickup brief. The list below is the historical 2026-10-07 start
+of the 2026-10-12 brief. The list below is the historical 2026-10-07 start
 order, first titled "What happens first". Each item in it is done or superseded.
 
 1. **The laptop handoff** ([`handoffs/2026-10-06-tom-laptop-settings.md`](handoffs/2026-10-06-tom-laptop-settings.md)).
@@ -2194,7 +2244,8 @@ order, first titled "What happens first". Each item in it is done or superseded.
 | [CLAUDE.md](../CLAUDE.md) | The rules for this repo, the single source. Codex reads [AGENTS.md](../AGENTS.md), which points there. |
 | [.agents/sagas/README.md](sagas/README.md) | Saga conventions: statuses and the D/Q/C/S id schemes. |
 | [distributed-dev-env/README.md](sagas/distributed-dev-env/README.md) | Tom's vision, the architecture at a glance, the hard news, the decision log and the plan index. |
-| [CLAUDE-RESUME-2026-10-12.md](CLAUDE-RESUME-2026-10-12.md) | The Claude pickup brief: current owner requirements, what is delivered, the six-step roadmap and stopped routes. |
+| [CLAUDE-RESUME-2026-10-13.md](CLAUDE-RESUME-2026-10-13.md) | The current Claude pickup brief (2026-10-13): deployed state, counters, rulings with receipts, next work with owner gates, boundaries and open questions for Tom. |
+| [CLAUDE-RESUME-2026-10-12.md](CLAUDE-RESUME-2026-10-12.md) | The Claude pickup brief: current owner requirements, what is delivered, the six-step roadmap and stopped routes. *Superseded for current state by the 2026-10-13 brief; its requirement history and stopped routes still hold.* |
 | [distributed-dev-env/KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) | The work order for the first build session (historical; continue from the pickup brief). |
 | [adrs/001-distributed-dev-env.md](sagas/distributed-dev-env/adrs/001-distributed-dev-env.md) | The architecture decision (Accepted 2026-10-06), with the ratification summary at the top and consequences C-01 to C-21. |
 | [adrs/002-shared-project-workspaces.md](sagas/distributed-dev-env/adrs/002-shared-project-workspaces.md) | Accepted 2026-10-09 and kept as history. ADR-003 supersedes its shared workspace, RWX storage and CephFS trial. |
@@ -2226,7 +2277,7 @@ order, first titled "What happens first". Each item in it is done or superseded.
 
 ## Rulings
 
-Tom's rulings from 2026-10-06 to 2026-10-12. Full text for Q-01 to Q-23 is in
+Tom's rulings from 2026-10-06 to 2026-10-13. Full text for Q-01 to Q-23 is in
 DESIGN-001 section 15; later rows link their own record. This heading first read
 "Rulings (Tom, 2026-10-06 to 2026-10-08; full text in DESIGN-001 section 15)".
 
@@ -2255,7 +2306,7 @@ DESIGN-001 section 15; later rows link their own record. This heading first read
 | Q-21 | **Accepted 2026-10-09, then superseded by ADR-003.** Tom answered "Accept ADR-002 and the bounded CephFS trial (Recommended)" (D-75, README decision 51). [ADR-003](sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md) (2026-10-10, decision 56) removed shared Git/RWX and its trial from delivery; #130 closed as not planned. |
 | Q-22 | **Delegated 2026-10-09.** "Delegate the trust installation to Codex" (D-76, README decision 53). The saved public CA was installed on all five PVE nodes (decision 54); minting stays off. |
 | Q-23 | **Accepted 2026-10-09.** "60 minutes without progress or 3 failed attempts at the same blocker" (D-84, README decision 55, [budget contract](sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md)). Counters carry across agents, pods, methods and resumes. |
-| Q-24 | **Pending.** Codex native routing for the MVP: separate paired session hosts (recommended) or one coordinator with isolated workers sharing a native failure boundary. The native question went out 2026-10-11; no owner answer is recorded and phone delivery is unverified. Do not ask again; check for an actual answer first. [DESIGN-006 Q-24](sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md#q-24-codex-mvp-native-routing), README decision 57. |
+| Q-24 | **Pending.** Codex native routing for the MVP: separate paired session hosts (recommended) or one coordinator with isolated workers sharing a native failure boundary. The native question went out 2026-10-11; no owner answer is recorded and phone delivery is unverified. Do not ask again; check for an actual answer first. [DESIGN-006 Q-24](sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md#q-24-codex-mvp-native-routing), README decision 57. *Update, 2026-10-13:* still no owner answer. A peer relay of a reported direction (bounded paired hosts, perhaps one per node) is saved locally as data only, not a ruling, and a peer-relayed owner quote is not authority. The [2026-10-13 brief](CLAUDE-RESUME-2026-10-13.md#questions-for-tom-one-at-a-time) records the recommendation of session `task-dev-env-1012-105043`, not an owner ruling: when Codex routing is the next unit, ask one new confirmation question under the next free Q id. |
 | Q-25 | **No decision needed.** The local schema-host DNS route stopped after three attempts. Shipping uses hosted CI and saved real-API schema evidence; no DNS investigation or retry ([installation record](sagas/distributed-dev-env/verification/installation-2026-10-11.md#owner-questions-and-stopped-checks)). |
 | Q-26 | **Answered 2026-10-11:** "Allow one correction (Recommended)". One final R4 checker correction ran and Ops #3824 activation was accepted. No R5, alternate method or retry ([fixed-rule activation record](sagas/distributed-dev-env/verification/fixed-rule-activation-2026-10-11.md), [DESIGN-021](sagas/distributed-dev-env/designs/021-canary-cli.md)). |
 | Q-27 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Fix once, then read (Recommended)". One offline correction of the Codex reader preparation, with a fixed list of already accepted evidence, focused tests and independent review. Then exactly one named read and one result read of the Codex original. No retries and no counter reset ([Codex probe record](sagas/distributed-dev-env/verification/codex-fixed-rule-probe-2026-10-12.md#q-27-one-final-reader-preparation-correction)). Carried out 2026-10-12: both reads ran once and returned both markers ([result record](sagas/distributed-dev-env/verification/codex-original-result-2026-10-12.md)). |
@@ -2264,8 +2315,10 @@ DESIGN-001 section 15; later rows link their own record. This heading first read
 | Q-30 | **Answered 2026-10-12** by Tom through the Claude native prompt, in free text. Question: "To close #173 I need one more Claude canary on a private repo, proving private GitHub access and a fresh pinned task worktree. The dev bot can't create repos on your personal account. Could you create an empty private repo thaynes43/dev-env-private-probe (a README on main is enough)? Global private admission stays off; the canary reuses the spent 1012 slot." Options: "I'll create it (Recommended)", "Use an existing private repo", "Not now". Answer: "All the Sigo alumni repos are private and all are needed for dev-env, we use them now. Why can't you use those?" Interpretation: use the existing private repositories `thaynes43/sigo-alumni` and `thaynes43/sigoalumni-org` instead of a new probe repository, declared as v2 catalog project `sigo-alumni`, and run the one approved private-repo Claude canary `rule-canary-claude-sigo-1012` against it: one create, one named read, one result read, no retries. Global private admission stays off; repository visibility is unchanged. Owner answer receipt `root-q30-owner-answer-r1.json`, sha256 `1490331885be14f5939fe85c81d91f186274dac089286e2343ca373bdd0b3722`. GitOps: haynes-ops [#3845](https://github.com/thaynes43/haynes-ops/pull/3845). Run on 2026-10-12: bootstrap `Partial` on a tracked symlink, so not accepted; fixed in [#237](https://github.com/thaynes43/dev-env/pull/237) ([DESIGN-011 Q-30 amendment](sagas/distributed-dev-env/designs/011-private-managed-rule-canaries.md#private-repo-canary-on-the-sigo-alumni-project--2026-10-12-q-30-173), README decision 65). Root acceptance `dd5dee24`: items 1 and 3 to 7 hold and item 2 (bootstrap) fails, so the run is not accepted for #173 under DESIGN-011's gate; the Root accepts private GitHub authorization and a fresh task pin separately, as the named deviation `partial-acceptance-by-property` ([Sigo private-repo canary record](sagas/distributed-dev-env/verification/sigo-private-canary-2026-10-12.md)). |
 | Q-31 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Archive, then delete (Recommended)". A private Session's HOME is archived, then deleted, 30 days after its executor's recorded termination: Git rescue in a hold pod bound to the HOME UID, provider history (an allowlist, never credentials) and Git bundle to a shelf-only `Retain` archive, readable under DESIGN-013's scope, then a guarded delete by the operator's leader. A retained Pod is not a stop proof; absence never is. Canary originals never expire; hold and release-now are Tom's alone. Deletion waits for the installed archived read (#174). Closes ADR-004's known gap. [ADR-005](sagas/distributed-dev-env/adrs/005-private-home-expiry.md), [DESIGN-025](sagas/distributed-dev-env/designs/025-private-home-expiry.md), README decision 64. Corrected the same day by [ADR-006](sagas/distributed-dev-env/adrs/006-private-home-expiry-corrections.md) (D-87, README decision 66): only a reap stops a private executor, never the suspended deadline. |
 | Q-32 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Yes, after deploy (Recommended)" (other option: "Not now"). Question: "The Sigo canary proved private GitHub access and a fresh pinned worktree, but catalog bootstrap ended Partial: one Sigo repo tracks a symlink our checkout check wrongly refused. The fix is merged and deploying now as 2.25. May I run one more Claude canary on the Sigo project after the deploy, to prove bootstrap reaches Ready and the new status codes work? One create, one named read, one result read, no retries." Grants, after the 2.25 deploy is post-checked, one new Claude canary record for project `sigo-alumni` through a reviewed haynes-ops PR, replacing the consumed `rule-canary-claude-sigo-1012` record (`codex-1011` byte-identical): exactly one create, one named read and one result read, no retries; global private admission stays off. Not granted: reuse of a consumed canary ID, any retry, a second rerun, credential repair or cleanup of any original. Owner answer receipt `root-q32-owner-answer-r1.json`, sha256 `48ab104fa0c140b139ce537a0d3eb4b59139111a785d2f97145e4ff459736609`. GitOps: haynes-ops [#3855](https://github.com/thaynes43/haynes-ops/pull/3855) (`rule-canary-claude-sigo-1012b`). Run on 2026-10-13 UTC: all seven DESIGN-011 items hold, bootstrap `Ready`; Root acceptance `a3aa0b7d` (`ACCEPTED_PRIVATE_REPO_CANARY_ALL_ITEMS`) accepts #173's private-repository evidence under the all-items gate ([Sigo rerun record](sagas/distributed-dev-env/verification/sigo-rerun-2026-10-13.md), README decision 68). |
+| Pacing | **Answered 2026-10-13** by Tom through the Claude native prompt: "Slow down (Recommended)" (other options: "Keep full speed", "Pause after H5/H6"; asked 04:00Z, answered 11:02Z). Question: "Today's dev-env push has used a lot of Opus subagent time: about 40 reviewed PRs, 4 deploys and 4 canaries. The Max plan is shared with your own Claude use, and hitting the weekly limit stops every session, yours included. How hard should I keep pushing after H5/H6 finish?" Means: one Opus subagent unit (`claude-opus-5-5`) at a time, Sonnet (`claude-sonnet-5-5`) for routine work, no parallel Opus waves until Tom says otherwise. It limits concurrency; it pauses nothing and changes no other gate. Owner answer receipt `root-pacing-owner-answer-r1.json` (in the coordinator's `dev-env-claude-handoff-1013` orders, written from the session record after the answer), sha256 `a70a80ccef09e0d7bd7c8521ce7156dc2dd4a8d00a23a429365e3844be32cf20`. README decision 69; it follows decision 40's 2026-10-07 pacing. |
 
-**Next (historical, 2026-10-08; the current order is the pickup brief's
+**Next (historical, 2026-10-08; the current order is the 2026-10-13 brief's
+[next work](CLAUDE-RESUME-2026-10-13.md#next-work-in-order), which continues the
 [six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap)):**
 effective parity and keeper activation prerequisites. Q-18's earlier
 prompt is withdrawn; no approval route is selected. The spike and corrected v1 parity audit are complete;

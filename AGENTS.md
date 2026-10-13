@@ -1,9 +1,11 @@
 # AGENTS.md
 
-**Claude pickup, 2026-10-12:** read the
-[current requirements and roadmap](.agents/CLAUDE-RESUME-2026-10-12.md) in full.
-It consolidates Tom's earlier enumerations and later corrections, delivered work,
-review targets and stopped attempts. Changing drivers does not reset counters.
+**Claude pickup, 2026-10-13:** read the
+[2026-10-13 pickup brief](.agents/CLAUDE-RESUME-2026-10-13.md) in full: deployed
+state, counters, rulings, next work with owner gates and open questions. The
+[2026-10-12 brief](.agents/CLAUDE-RESUME-2026-10-12.md) still holds Tom's earlier
+enumerations and later corrections, review targets and stopped attempts.
+Changing drivers does not reset counters.
 
 **Controlling scope, 2026-10-10:** [ADR-003](.agents/sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md) supersedes mandatory
 shared Git/RWX. Share rules, task coordination and authorized live/stopped context;
@@ -16,9 +18,10 @@ source, kept in one file so the two never drift.
 
 **Start with [`.agents/HANDOFF.md`](.agents/HANDOFF.md):** the current state, the
 next steps, and what works outside the cluster. Build sessions follow the
-[Claude pickup brief](.agents/CLAUDE-RESUME-2026-10-12.md) and its six-step
-roadmap; [`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md) is the
-historical first-build order.
+[2026-10-13 Claude pickup brief](.agents/CLAUDE-RESUME-2026-10-13.md) and its
+next work, which continues the 2026-10-12 brief's six-step roadmap;
+[`KICKOFF.md`](.agents/sagas/distributed-dev-env/KICKOFF.md) is the historical
+first-build order.
 
 The short version:
 
@@ -48,6 +51,9 @@ available findings before merging. Fix each one, or answer it on the PR with a c
 it is wrong; never "merging anyway". Both workflows need the Claude GitHub App on the
 repo and the `CLAUDE_CODE_OAUTH_TOKEN` repo secret, otherwise they skip green and
 review nothing. Every repo gets this reviewer (Tom, 2026-09-30); see CLAUDE.md.
+*Observed 2026-10-12 and 2026-10-13:* the advisory review ran on most PRs and
+posted reviews, several with findings. Tom's rule is unchanged: optional, not a gate, and native independent
+review stays mandatory.
 
 ## Repository instruction acceptance
 

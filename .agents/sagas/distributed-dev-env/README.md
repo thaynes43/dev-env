@@ -1,6 +1,12 @@
 # Saga: distributed-dev-env (dev-env v2)
 
-Start continuation with the [Claude pickup brief](../../CLAUDE-RESUME-2026-10-12.md).
+Start continuation with the
+[2026-10-13 Claude pickup brief](../../CLAUDE-RESUME-2026-10-13.md): deployed
+state (2.27.0), counters, rulings through Q-32 and pacing, and the next work
+with its owner gates. Rule loading is accepted for both providers, all five
+canary IDs are consumed, Q-24 is still pending, and the MVP is unaccepted.
+
+*Historical, 2026-10-12:* Start continuation with the [Claude pickup brief](../../CLAUDE-RESUME-2026-10-12.md).
 It consolidates current and earlier owner enumerations, the bounded roadmap,
 source-review assignments and failed/stopped routes. Review and improve the
 shipped code. Q-24 and Q-27 remain pending, both fixed IDs are consumed, and
@@ -381,6 +387,7 @@ running, maintained in haynes-ops as today, until Tom approves the cutover in ph
 | 66 | D-87: corrections to ADR-005 after its review | **DECIDED** 2026-10-12 (agent, review findings of #233) | Amends row 64 by [ADR-006](adrs/006-private-home-expiry-corrections.md); narrows it and adds no authority. The operator stops a private executor only for a Reaping Session with no owner hold, after a confirmed stop intent; a Suspended one is never stopped, so the 72-hour idle timer and the 168-hour archive deadline can no longer kill a live Session nobody asked to end (a stop at that deadline needs its own owner question, plan 11 F3). The archives are not private against v1's OPERATOR tier, the broker or the keeper; an admission guard (H7, or R5 if first) closes exec and archive mounts to every ServiceAccount but the operator, after a parity check. The terminal record sits beside `lastExecutor`; a once-only missed marker; a fifth guard exception for the expiry's hold pod; every HOME delete attempt re-verifies the archive; edit snapshots and other copies of user files, and unclassified agentd names, are not exported ([DESIGN-025](designs/025-private-home-expiry.md)). |
 | 67 | D-88: closed-set reason codes for private catalog bootstrap | **DECIDED** 2026-10-12 (agent, after the Q-30 canary's undiagnosable `Partial`) | Amends DESIGN-006 and DESIGN-007; adds no authority. Each repository refresh records a step and a reason, each project root a reason with the member repository and its clean-checkout cause, and a Failed catalog a reason, all from closed sets. The `project-bootstrap` step's first note summarises the items that are not Ready, and `status.agent.projectBootstrap` (CRD enums, name pattern, catalog-limit MaxItems) and `agent-run show` carry them. Only catalog names, states, steps and codes leave the pod: no path, object id or detail text. A root whose member reference is Preserved is still refreshed, because skipping it would cut capability. haynes-ops gets the CRD copy before the operator pin ([DESIGN-006, reason codes](designs/006-private-catalog-bootstrap.md#reason-codes-diagnosis-without-exec)). |
 | 68 | Q-32: one Sigo rerun canary after the 2.25 deploy | **DECIDED** 2026-10-12 (Tom, through the Claude native prompt) | Question: "The Sigo canary proved private GitHub access and a fresh pinned worktree, but catalog bootstrap ended Partial: one Sigo repo tracks a symlink our checkout check wrongly refused. The fix is merged and deploying now as 2.25. May I run one more Claude canary on the Sigo project after the deploy, to prove bootstrap reaches Ready and the new status codes work? One create, one named read, one result read, no retries." Options: "Yes, after deploy (Recommended)", "Not now". Answer: "Yes, after deploy (Recommended)" (owner answer receipt `root-q32-owner-answer-r1.json`, sha256 `48ab104f…`). After the 2.25 deploy is post-checked, one new Claude canary record for project `sigo-alumni` through a reviewed haynes-ops PR, replacing the consumed `rule-canary-claude-sigo-1012` (`codex-1011` byte-identical); exactly one create, one named read and one result read; no retries; global private admission stays off; no reuse of a consumed ID, second rerun, credential repair or cleanup. Item 2 also checks `status.agent.projectBootstrap` (row 67). Carried out 2026-10-13 UTC as `rule-canary-claude-sigo-1012b` (haynes-ops [#3855](https://github.com/thaynes43/haynes-ops/pull/3855)): all seven DESIGN-011 items hold and Root acceptance `a3aa0b7d` accepts #173's private-repository evidence ([Sigo rerun record](verification/sigo-rerun-2026-10-13.md)). |
+| 69 | Pacing while the weekly plan quota is shared | **DECIDED** 2026-10-13 (Tom, through the Claude native prompt) | Question: "Today's dev-env push has used a lot of Opus subagent time: about 40 reviewed PRs, 4 deploys and 4 canaries. The Max plan is shared with your own Claude use, and hitting the weekly limit stops every session, yours included. How hard should I keep pushing after H5/H6 finish?" Options: "Slow down (Recommended)", "Keep full speed", "Pause after H5/H6". Answer: "Slow down (Recommended)": one Opus subagent unit (`claude-opus-5-5`) at a time, Sonnet (`claude-sonnet-5-5`) for routine work, no parallel Opus waves until Tom says otherwise. It limits concurrency, pauses nothing and changes no other gate. Like decision 40, it governs pace, not scope. Owner answer receipt `root-pacing-owner-answer-r1.json`, sha256 `a70a80cc…` ([HANDOFF rulings](../../HANDOFF.md#rulings), [2026-10-13 brief](../../CLAUDE-RESUME-2026-10-13.md#rulings-q-24-to-q-32-and-pacing)). |
 
 The full options, consequences and rulings for Q-01 to Q-16, and the premise
 corrections withdrawing Q-17 and Q-18, plus Q-19's first owner CA provisioning
@@ -390,7 +397,8 @@ are there too. Q-24 to Q-27 link their own records in rows 57 to 60, Q-29
 links ADR-004 in row 62, Q-28 links its result record in row 63, Q-31
 links ADR-005 in row 64, Q-30 links its DESIGN-011 amendment in row 65, and
 D-87 links ADR-006, which corrects ADR-005, in row 66, D-88 links its
-DESIGN-006 section in row 67, and Q-32 links its result record in row 68.
+DESIGN-006 section in row 67, Q-32 links its result record in row 68,
+and the 2026-10-13 pacing ruling is row 69.
 
 
 ## Plan backlog

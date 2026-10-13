@@ -1,5 +1,12 @@
 # Claude continuation: dev-env v2 toward a working multi-provider MVP
 
+> **Superseded for current state, 2026-10-13.** The
+> [2026-10-13 brief](CLAUDE-RESUME-2026-10-13.md) has the current deployed
+> state, counters, rulings, next work and open questions. This brief still
+> holds the requirement history, the owner requirements, the failed and
+> stopped routes and the source-review map. Its body below is the 2026-10-12
+> record, unchanged.
+
 Prepared 2026-10-12, America/New_York, from `origin/main` at `f6de1680a4a00a12d25bea5c43865d088c068db1`.
 This is Tom's requested Claude pickup brief. It consolidates his current
 requirements, the earlier enumerated lists, delivered work and stopped routes.
