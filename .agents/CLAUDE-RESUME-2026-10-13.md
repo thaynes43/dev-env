@@ -96,16 +96,18 @@ The five retained AgentSessions in `dev-agents`. Canary originals never expire
 | `private-canary-a1444f4131ec7281b5d1e3130c3b5ada` | `430297d9-aa29-4332-9b3b-37095c1b5963` | claude-sigo-1012 | `Failed`, task `Succeeded`, `executorTerminal` |
 | `private-canary-eb9d486a612e27fd2b52d27f675512be` | `454d12a2-60bc-4c4e-95c5-bb4b26428a65` | claude-sigo-1012b | `Failed`, task `Succeeded`, `executorTerminal` |
 
-Next free IDs: Q-34, D-89, ADR-007, DESIGN-026, README decision 70. Each new
+Next free IDs: Q-35, D-89, ADR-007, DESIGN-026, README decision 70. Each new
 question takes the next free Q id when it is asked; none is reserved.
 
 **H7 pickup update, 2026-10-13:** the
 [read-only prerequisite checkpoint](sagas/distributed-dev-env/verification/h7-prerequisites-2026-10-13.md)
-is recorded. This Codex chat submitted Q-33 through
-`functions.request_user_input_async`; the tool accepted submission, but phone
-delivery is unverified and the decision is pending. It asks whether the
-guards should preserve Headlamp's shared backend or use Tom's personal Kubernetes
-identity. No haynes-ops change is made while it is pending. Plan 11 F4 and both
+is recorded. Tom answered Q-33 directly in this chat: his personal Kubernetes
+account is permanent; Headlamp retires after full v2 adoption. The original native
+prompt never reached him. Q-34 asked for a workstation identity check; Tom cannot
+run it from his phone and directed the coordinator to continue. Withdraw that
+request and use accessible read-only evidence. Only the identity-dependent policy
+waits for a verified username; the unmounted history PVC can proceed. No
+haynes-ops change had been made at this checkpoint. Plan 11 F4 and both
 DESIGN-025 cold resource measurements remain prerequisites before archive
 activation, including the 2 GiB export/put/verify under hold/shelf limits.
 
@@ -126,6 +128,8 @@ predate this session; their rows point there.
 | Q-30 | free text: use the Sigo alumni repos | `dev-env-private-repo-canary-1012/root-q30-owner-answer-r1.json` (`14903318…`) | Private-repo proof on project `sigo-alumni`. First run `Partial` (#234, #240). |
 | Q-31 | "Archive, then delete" | `dev-env-coordination-retention-1012/root-q31-owner-answer-r1.json` (`03255c15…`) | A private HOME is archived, then deleted, 30 days after its executor's recorded stop (ADR-005, DESIGN-025, #233). ADR-006 (#235): only a reap stops a private executor. |
 | Q-32 | "Yes, after deploy" | `dev-env-private-repo-canary-1012/root-q32-owner-answer-r1.json` (`48ab104f…`) | One Sigo rerun after 2.25. Done: all seven DESIGN-011 items hold (#247). |
+| Q-33 | Personal Kubernetes account remains; Headlamp retires after full v2 adoption | `dev-env-h7-personal-identity-1013/root-q33-owner-answer-r1.json` | Direct owner answer in this chat; exact username still needs evidence. No shared Headlamp owner exception follows. |
+| Q-34 | Cannot run a workstation check from the phone; keep working | `dev-env-h7-personal-identity-1013/root-q34-owner-direction-r1.json` | Withdraw the workstation request. Discover the identity from accessible evidence and continue independent H7 prerequisites. |
 | Pacing | "Slow down" (asked 04:00Z, answered 11:02Z, 2026-10-13) | `dev-env-claude-handoff-1013/root-pacing-owner-answer-r1.json` (`a70a80cc…`) | One Opus subagent unit (`claude-opus-5-5`) at a time, Sonnet (`claude-sonnet-5-5`) for routine work, no parallel Opus waves until Tom says otherwise. README decision 69. |
 
 ## Delivered 2026-10-12 to 2026-10-13

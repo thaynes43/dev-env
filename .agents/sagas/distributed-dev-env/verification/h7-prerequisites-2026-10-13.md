@@ -1,6 +1,6 @@
 # H7 read-only prerequisite checkpoint, 2026-10-13
 
-**Status: audit complete; Q-33 pending. No H7 deployment or acceptance.**
+**Status: read-only checkpoint; Q-33 answered. No H7 deployment or acceptance.**
 Dev-env source: `2d70017d599212da3ecdc1b3e6554ac507dcaa62`.
 The original audit used haynes-ops
 `25f09cf42bf0708ceb4d08442ea2d7afe15e6ace`: RBAC at 08:11 EDT (12:11 UTC),
@@ -14,12 +14,14 @@ shelf or Session runtime state.
 
 The first H7 owner question is the phone identity exception in
 [DESIGN-025 section 9](../designs/025-private-home-expiry.md#9-owner-overrides-hold-and-release-now).
-[Q-33](../designs/025-private-home-expiry.md#18-h7-owner-identity-q-33) asks
-whether to preserve Headlamp's shared backend or use Tom's personal Kubernetes
-identity. The Codex chat submitted it through `functions.request_user_input_async`;
-the tool accepted submission, but phone delivery is unverified and no owner answer
-has arrived. It does not count as a confirmed delivered ask. No haynes-ops change
-is made while the decision is pending.
+[Q-33](../designs/025-private-home-expiry.md#18-h7-owner-identity-q-33) is answered
+directly in this chat: preserve Tom's personal Kubernetes account permanently;
+Headlamp retires after full v2 adoption. The original native prompt never arrived.
+This settles the access choice, not the exact authenticated username or native
+phone-prompt acceptance. Q-34's workstation request is withdrawn after Tom said
+he cannot perform it from his phone and asked the coordinator to continue.
+Discover the username from accessible read-only evidence. The unmounted history
+PVC can proceed; keep any identity-dependent policy pending until verified.
 
 ## Direct RBAC subjects in dev-agents
 
@@ -73,7 +75,11 @@ original profiles and prepare a successor before using that workflow again.
 - [Plan 11 F4](../backlog/11-project-workspaces.md): the remaining 34 Claude
   config names need actual names-only HOME evidence, verified client writes and
   fixtures before archive activation. None was present in the inspected current
-  HOME. Preserve `unknown_entry` refusal rather than guessing a classification.
+  HOME. The pinned 2.1.296 code audit found conversation messages persisted under
+  `remote-control/fork-seeds`, so that name cannot be assumed to be runtime-only.
+  Code candidates for `plans`, `tasks` and user `agent-memory` also lack the
+  observed-name/type prerequisite. All 34 remain unclassified. Preserve
+  `unknown_entry` refusal rather than guessing a classification.
 - Both cold resource measurements in [DESIGN-025 section 15](../designs/025-private-home-expiry.md#15-acceptance):
   2 GiB export, archive put and verify under hold/shelf limits; and the 16 MiB
   relay under operator limits, with `GOMEMLIMIT` near 200 MiB. Earlier warm local
@@ -102,3 +108,9 @@ New read-only receipts remain on the pod PVC under
 The original source-scan receipt's mistaken textual conclusion is retained and
 corrected by `h7-v1-parity-source-scan-20261013T121751Z-r2.json`.
 No credential contents or provider transcripts were read or copied.
+
+The bounded F4 audit is under
+`/home/dev/work/orders/dev-env-f4-evidence-1013/`:
+`f4-pinned-code-evidence-and-candidates-r1.json` and `audit-manifest-r1.json`.
+The official 2.1.296 artifact's registry integrity was verified; the retained
+binary is non-executable. No provider session or runtime change was used for it.
