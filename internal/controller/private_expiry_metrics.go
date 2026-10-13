@@ -80,7 +80,7 @@ var (
 		"Private Sessions whose HOME expiry is refused right now, by the reason in their expiry record. A Session leaves it when a step passes, its record goes, or it is gone.",
 		[]string{"reason"}, nil)
 	homeExpiryOverdueDesc = prometheus.NewDesc(MetricHomeExpiryOverdue,
-		"The largest time past its grace of an unheld HOME expiry record not yet Archived, in seconds; 0 when none.",
+		"The largest time past its grace of an unheld HOME expiry record not yet Archived (not yet Expired with the delete on), in seconds; 0 when none.",
 		nil, nil)
 )
 
@@ -94,6 +94,9 @@ type HomeExpiryCollector struct {
 	Namespace string
 	// Now is the clock of the overdue gauge; nil is time.Now.
 	Now func() time.Time
+	// DeleteOn is the operator's --enable-home-expiry-delete: with it, a
+	// record is overdue until Expired, not until Archived (DESIGN-025 10).
+	DeleteOn bool
 }
 
 // Describe implements prometheus.Collector.
@@ -117,7 +120,7 @@ func (c *HomeExpiryCollector) Collect(ch chan<- prometheus.Metric) {
 	if c.Now != nil {
 		now = c.Now()
 	}
-	phases, refusing, overdue := homeExpiryGauges(list.Items, now)
+	phases, refusing, overdue := homeExpiryGauges(list.Items, now, c.DeleteOn)
 	for _, p := range homeExpiryGaugePhases {
 		ch <- prometheus.MustNewConstMetric(homeExpirySessionsDesc, prometheus.GaugeValue, float64(phases[p]), p)
 	}
@@ -129,7 +132,11 @@ func (c *HomeExpiryCollector) Collect(ch chan<- prometheus.Metric) {
 
 // homeExpiryGauges computes the gauges from the sessions: a pure function, so
 // every replica reports the same.
-func homeExpiryGauges(sessions []v1alpha1.AgentSession, now time.Time) (phases, refusing map[string]int, overdue float64) {
+func homeExpiryGauges(sessions []v1alpha1.AgentSession, now time.Time, deleteOn bool) (phases, refusing map[string]int, overdue float64) {
+	done := v1alpha1.HomeExpiryArchived
+	if deleteOn {
+		done = v1alpha1.HomeExpiryExpired
+	}
 	phases, refusing = map[string]int{}, map[string]int{}
 	for i := range sessions {
 		s := &sessions[i]
@@ -158,7 +165,7 @@ func homeExpiryGauges(sessions []v1alpha1.AgentSession, now time.Time) (phases, 
 				v1alpha1.HomeExpiryExporting: expiryGaugeExporting, v1alpha1.HomeExpiryArchived: expiryGaugeArchived,
 				v1alpha1.HomeExpiryDeleting: expiryGaugeDeleting}[e.Phase]]++
 		}
-		if !held && !expiryPhaseAtLeast(e.Phase, v1alpha1.HomeExpiryArchived) && now.After(e.DueAt.Time) {
+		if !held && !expiryPhaseAtLeast(e.Phase, done) && now.After(e.DueAt.Time) {
 			overdue = max(overdue, now.Sub(e.DueAt.Time).Seconds())
 		}
 	}

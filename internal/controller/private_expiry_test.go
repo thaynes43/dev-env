@@ -7,6 +7,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -44,6 +45,12 @@ type expiryFixture struct {
 	// status writes.
 	readErr   func(key client.ObjectKey, obj runtime.Object) error
 	statusErr func(obj client.Object) error
+	// deleteErr and patchErr, when set, fail the deletes and patches they
+	// match (H6: a restart between the claim delete and the finalizer lift).
+	deleteErr func(obj client.Object) error
+	patchErr  func(obj client.Object) error
+	// deletes records every delete with its preconditions, in order.
+	deletes []string
 }
 
 // newExpiryFixture is a reaped private Session whose recorded executor ended
@@ -106,6 +113,32 @@ func newExpiryFixture(t *testing.T, edit func(*terminalFixture)) (f *expiryFixtu
 				}
 			}
 			return c.Get(ctx, key, obj, opts...)
+		},
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			var o client.DeleteOptions
+			o.ApplyOptions(opts)
+			rec := fmt.Sprintf("%T %s", obj, obj.GetName())
+			if p := o.Preconditions; p != nil && p.UID != nil && p.ResourceVersion != nil {
+				rec += fmt.Sprintf(" uid=%s rv=%s", *p.UID, *p.ResourceVersion)
+			}
+			// How many verifies ran before it: the delete's place in the
+			// relay's call order.
+			rec += fmt.Sprintf(" after-verifies=%d", strings.Count(strings.Join(f.x.called(), " "), "verify"))
+			f.deletes = append(f.deletes, rec)
+			if f.deleteErr != nil {
+				if err := f.deleteErr(obj); err != nil {
+					return err
+				}
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if f.patchErr != nil {
+				if err := f.patchErr(obj); err != nil {
+					return err
+				}
+			}
+			return c.Patch(ctx, obj, patch, opts...)
 		},
 		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 			if f.readErr != nil {

@@ -499,7 +499,7 @@ func run(args []string) error {
 	ctrlmetrics.Registry.MustRegister(&controller.SessionCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace})
 	// The HOME expiry's gauges, read from the same cache at scrape time
 	// (DESIGN-025 10).
-	ctrlmetrics.Registry.MustRegister(&controller.HomeExpiryCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace})
+	ctrlmetrics.Registry.MustRegister(&controller.HomeExpiryCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace, DeleteOn: o.homeExpiryDelete})
 	// Expired declare-activity declarations go within a minute (D-17, D-66).
 	if err := mgr.Add(&activity.Reaper{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Namespace: o.templatesNamespace,
 		Log: ctrl.Log.WithName("activities")}); err != nil {

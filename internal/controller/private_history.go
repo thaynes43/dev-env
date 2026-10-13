@@ -315,7 +315,9 @@ func (r *Reconciler) observePrivateHistory(ctx context.Context, s *v1alpha1.Agen
 		obs.privateHistoryUnknown = errors.New("private retention or executor observation is unconfirmed")
 		return
 	}
-	if _, err := r.privateHistoryHome(ctx, s); err != nil {
+	if _, err := r.privateHistoryHome(ctx, s); err != nil && (!homeExpiryRemovingHome(s) || privateHistoryIdentity(s) != nil) {
+		// From Deleting on, the HOME expiry deletes this HOME after its
+		// archive verified (DESIGN-025 6.5): its absence is expected then.
 		obs.privateHistoryUnknown = err
 	}
 	// DESIGN-025 3: whether a terminal record or missed marker may be added,
@@ -390,6 +392,17 @@ func setPrivateHistoryConditions(s *v1alpha1.AgentSession, obs observation, st *
 		// executor Pod is expected. The HOME stays protected.
 		c.Reason = "ExecutorEnded"
 		c.Message = "original private HOME and durable Session identity remain protected; the recorded private executor ended (executorTerminal); private stop state is Unknown"
+	}
+	if h := s.Status.PrivateHistory; homeExpiryRemovingHome(s) {
+		// DESIGN-025 6.5: the HOME goes, or went, after its history was
+		// archived; the Session's identity stays.
+		c.Reason = map[string]string{v1alpha1.HomeExpiryDeleting: "HomeDeleting", v1alpha1.HomeExpiryExpired: "HomeExpired"}[h.Expiry.Phase]
+		c.Message = "the HOME expiry deletes the private HOME after archiving its history"
+		if h.Expiry.Archive != nil {
+			c.Message += " as " + h.Expiry.Archive.Entry
+		}
+		c.Message += "; durable Session identity remains protected; private stop state is Unknown"
+		removal = c
 	}
 	if obs.privateHistoryUnknown != nil {
 		c.Status, c.Reason, c.Message = metav1.ConditionUnknown, "PreservationUnknown", truncate(obs.privateHistoryUnknown.Error())

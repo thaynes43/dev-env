@@ -1002,7 +1002,9 @@ func setRescueCondition(s *v1alpha1.AgentSession, st *v1alpha1.AgentSessionStatu
 // (D-45). Any pod or volume of the session's names keeps the finalizer, whoever
 // controls it.
 func (r *Reconciler) releaseIfEmpty(ctx context.Context, s *v1alpha1.AgentSession) (bool, error) {
-	if r.privateHistoryEnabled(s) {
+	// One exception for a protected private Session: its HOME expiry is
+	// Expired (DESIGN-025 6.6), and the reads below find no Pod and no claim.
+	if r.privateHistoryEnabled(s) && expiryReleaseAllowed(s) != nil {
 		return false, errPrivateHistoryRetained
 	}
 	if !controllerutil.ContainsFinalizer(s, Finalizer) {
@@ -1030,11 +1032,13 @@ func (r *Reconciler) releaseIfEmpty(ctx context.Context, s *v1alpha1.AgentSessio
 	return true, releaseSession(ctx, r.Client, s)
 }
 
-// releaseSession removes the session's finalizer. With releaseVolume it is the
-// only place that lifts a finalizer, and only releaseIfEmpty calls it
-// (TestOnlyTheGuardDeletes).
+// releaseSession removes the session's finalizer. With releaseVolume and
+// releaseExpiryHome it is the only place that lifts a finalizer, and only
+// releaseIfEmpty calls it (TestOnlyTheGuardDeletes). It keeps every protected
+// private Session but one whose HOME expiry is Expired (expiryReleaseAllowed),
+// canary originals always.
 func releaseSession(ctx context.Context, c client.Client, s *v1alpha1.AgentSession) error {
-	if privateHistoryProtected(s) {
+	if privateHistoryProtected(s) && expiryReleaseAllowed(s) != nil {
 		return errPrivateHistoryRetained
 	}
 	orig := s.DeepCopy()
@@ -1429,6 +1433,11 @@ func podPhase(s *v1alpha1.AgentSession, obs observation) (v1alpha1.SessionPhase,
 	case privateHistoryProtected(s) && obs.pod.missing && obs.privateExecutorEnded && !wantsPodGone(s):
 		rec := s.Status.PrivateHistory.ExecutorTerminal
 		return v1alpha1.PhaseFailed, notReady("ExecutorEnded", fmt.Sprintf("the recorded private executor ended (%s %s) and its Pod is gone; its HOME is kept and no replacement starts", rec.Phase, rec.Reason))
+	case privateHistoryProtected(s) && obs.pod.missing && s.DeletionTimestamp.IsZero() && s.Status.ArchivedAt != nil && homeExpiryRemovingHome(s):
+		// DESIGN-025 6.5: a suspended private Session whose HOME expiry
+		// recorded Deleting is archived (D-62) until it is reaped.
+		return v1alpha1.PhaseArchived, notReady("Archived", fmt.Sprintf("the HOME expiry archived the history as %s and deletes the HOME %s; an archived session is not resumed: read its history with agent-run history (DESIGN-025)",
+			s.Status.PrivateHistory.Expiry.Archive.Entry, HomeClaimName(s.Name)))
 	case privateHistoryProtected(s) && wantsPodGone(s):
 		if s.DeletionTimestamp.IsZero() {
 			return v1alpha1.PhaseSuspended, notReady("RetentionPending", "private HOME and durable identity remain retained; private stop evidence is unknown")
