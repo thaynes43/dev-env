@@ -21,8 +21,11 @@ the storage Kustomization is Ready and Healthy.
 | Retained runtime | Same selected fields for 2 operator Pods, 1 shelf Pod, 3 canary Pods, 5 AgentSessions and 2 failed Jobs; the 2 previously absent canary Pods remain absent |
 | Expiry flags | Terminal record on; stop, archive, history reads and delete off |
 
-The unit creates no archive mount or archive data. Next is the archive guard,
-before the shelf mount. F4, both cold resource measurements, the bound PV's
+The unit creates no archive mount or archive data. The next ordered unit is the
+archive guard before the shelf mount; the later read-only finding now holds its
+implementation on [Q-35](../designs/025-private-home-expiry.md#20-h7-archive-trust-boundary-q-35).
+Continue only independent prerequisites while that decision is pending.
+F4, both cold resource measurements, the bound PV's
 owner-set Retain and the remaining H7 policies and flag gates still apply.
 This is not H8's installed history-read acceptance.
 

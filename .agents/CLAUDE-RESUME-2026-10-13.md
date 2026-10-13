@@ -186,8 +186,9 @@ predate this session; their rows point there.
 **H7 progress at 17:24 UTC, 2026-10-13:** the unmounted history PVC is installed
 by haynes-ops #3898 (`a287a4f6`), Bound with no Pod references. Read the
 [installed checkpoint](sagas/distributed-dev-env/verification/h7-archive-pvc-2026-10-13.md).
-Its bound PV remains Delete; owner-set Retain is pending. Continue with the archive
-guard before mounting it. F4 and both cold resource measurements remain gates.
+Its bound PV remains Delete; owner-set Retain is pending. The next ordered unit
+is the archive guard before mounting it; its implementation now awaits Q-35
+below. F4 and both cold resource measurements remain gates.
 The guard review then found operator-account borrowing paths available to v1.
 [Q-35](sagas/distributed-dev-env/designs/025-private-home-expiry.md#20-h7-archive-trust-boundary-q-35)
 is submitted, delivery unverified and answer pending: preserve the current
