@@ -26,7 +26,7 @@ source = source_path.read_text()
 annotations = {'k8tz.io/inject':'false',
                'dev-env.haynesops.com/trial-source-sha256':hashlib.sha256(source.encode()).hexdigest(),
                'dev-env.haynesops.com/trial-source-commit':args.source_commit}
-image = 'ghcr.io/thaynes43/dev-env:2.9.1@sha256:a975de7dbc40c6f33048a38a327a2db2b9698a7615f5b2b9897abbb1d04df0cf'
+image = 'ghcr.io/thaynes43/dev-env:2.25.0@sha256:25b20148706fe0b735cc879891c12851977c72a32b5b83cc68ef511246a3cd29'
 init = '''import json, os, pathlib
 root = pathlib.Path('/trial-workspace')
 for name in ('repos','codex','work'):

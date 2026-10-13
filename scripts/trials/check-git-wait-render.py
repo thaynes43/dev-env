@@ -13,8 +13,8 @@ from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 COMMIT = 'a'*40
-BASE = ('ghcr.io/thaynes43/dev-env:2.9.1@sha256:'
-        'a975de7dbc40c6f33048a38a327a2db2b9698a7615f5b2b9897abbb1d04df0cf')
+BASE = ('ghcr.io/thaynes43/dev-env:2.25.0@sha256:'
+        '25b20148706fe0b735cc879891c12851977c72a32b5b83cc68ef511246a3cd29')
 NATIVE = 'ghcr.io/thaynes43/dev-env:git-wait-sha-'+COMMIT+'@sha256:'+'b'*64
 
 
