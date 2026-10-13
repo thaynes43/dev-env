@@ -426,6 +426,28 @@ func HistoryEntryDir(project, sessionUID, contentSHA256 string) string {
 	return path.Join(HistoryArchiveEntries, HistoryProjectDir(project), sessionUID, contentSHA256[:16])
 }
 
+// HistoryEntryProject is the project an entry directory names, as a refusal's
+// Path gives it (v1/<project or _none>/<session UID>/<16 hex>), for the
+// Session UID the reader asked for: "" for an entry with no project. ok is
+// false for any other path. The name is the directory's, not a verified
+// content.json's: a reader uses it only to hide a refusal from a caller
+// outside that project, never to serve anything.
+func HistoryEntryProject(p, sessionUID string) (project string, ok bool) {
+	parts := strings.Split(p, "/")
+	if len(parts) != 4 || parts[0] != HistoryArchiveEntries || parts[2] != sessionUID || !ValidKubeUID(sessionUID) || !historyEntryName.MatchString(parts[3]) {
+		return "", false
+	}
+	switch dir := parts[1]; {
+	case dir == HistoryNoProject:
+		return "", true
+	case dir != "" && ValidHistoryProject(dir):
+		return dir, true
+	}
+	return "", false
+}
+
+var historyEntryName = regexp.MustCompile(`^[0-9a-f]{16}$`)
+
 // HistoryBlocksSHA256 is the digest of a block list: the SHA-256 of its
 // canonical JSON, ["<hex>",...], or of [] for an empty file.
 func HistoryBlocksSHA256(blocks []string) string {

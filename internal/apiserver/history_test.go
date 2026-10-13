@@ -276,6 +276,32 @@ func TestHistoryManifestIsScopedAndPaged(t *testing.T) {
 		h.manErr = err
 		wantError(t, f.do(http.MethodGet, apiv1.HistoryEntryPath(histSample), reader, nil), http.StatusServiceUnavailable, apiv1.CodeUnavailable)
 	}
+	// An entry that fails its check reveals no more than one that does not
+	// exist: agentd names the entry's directory, and an entry of a project
+	// outside the caller's scope (or of none) is 404, like no entry. In scope
+	// it is 503; a refusal naming no entry is the shelf's, 503 for everyone.
+	f.srv.ContextReadProjects = []string{"sample", "other"}
+	for _, tc := range []struct {
+		path string
+		tok  string
+		want int
+	}{
+		{"v1/other/" + histSample + "/0123456789abcdef", reader, http.StatusNotFound},
+		{"v1/_none/" + histSample + "/0123456789abcdef", reader, http.StatusNotFound},
+		{"v1/_none/" + histSample + "/0123456789abcdef", tokCoordinator, http.StatusNotFound},
+		{"v1/sample/" + histSample + "/0123456789abcdef", reader, http.StatusServiceUnavailable},
+		{"v1/other/" + histSample + "/0123456789abcdef", tokCoordinator, http.StatusServiceUnavailable},
+		{"v1/other/" + histOther + "/0123456789abcdef", reader, http.StatusServiceUnavailable},
+		{"", reader, http.StatusServiceUnavailable},
+	} {
+		h.manErr = protocol.HistoryErrorf(protocol.HistoryErrCorrupt, tc.path, "content.json does not match its entry")
+		for _, path := range []string{apiv1.HistoryEntryPath(histSample), apiv1.HistoryFilePath(histSample) + "?path=claude/x&offset=0"} {
+			if w := f.do(http.MethodGet, path, tc.tok, nil); w.Code != tc.want {
+				t.Errorf("a corrupt entry at %q read by %s at %s: %d, want %d", tc.path, tc.tok, path, w.Code, tc.want)
+			}
+		}
+	}
+	f.srv.ContextReadProjects = []string{"sample"}
 	h.manErr = nil
 	f.srv.History = nil
 	wantError(t, f.do(http.MethodGet, apiv1.HistoryEntryPath(histSample), reader, nil), http.StatusServiceUnavailable, apiv1.CodeUnavailable)

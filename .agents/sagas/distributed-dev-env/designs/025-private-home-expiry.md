@@ -1542,6 +1542,14 @@ leaves open:
   `io_error`, an exec that failed and an answer for another entry are 503
   `unavailable` for every caller in scope, logged without content. In scope,
   a file the entry lacks is 404 and an offset past its end is 400.
+- **A damaged entry reveals no more than a missing one** (advisory review of
+  #254). agentd's refusal for an entry it found but could not verify names the
+  entry's directory in its `path`, `v1/<project or _none>/<session UID>/<16
+  hex>`, never its bytes. An entry whose directory names a project outside the
+  caller's scope, or no project, then answers 404 like an entry that does not
+  exist; in scope it is 503. Only a refusal that names no entry, the shelf's
+  own, is 503 for every caller. The directory's project is used to hide, never
+  to serve.
 - **Slots.** Each read takes one of the replica's two shelf exec slots
   (`shelf.ExecSlots`), the same limit the H5 relay takes from, so archive
   traffic never crowds the shelf, and a replica holds at most two pages in

@@ -768,8 +768,27 @@ func TestHistoryArchiveManifestPages(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(entry, "content.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if p, err := ar.a.Manifest(testSessionUID, "", 0, 1); historyCode(err) != protocol.HistoryErrCorrupt || p.Project != "" || len(p.Files) != 0 {
+	p, err := ar.a.Manifest(testSessionUID, "", 0, 1)
+	if historyCode(err) != protocol.HistoryErrCorrupt || p.Project != "" || len(p.Files) != 0 {
 		t.Errorf("a damaged entry: %+v %v, want corrupt and nothing else", p, err)
+	}
+	// The refusal names the entry it found, by its directory, so a reader
+	// can tell whose entry failed without any of its bytes (DESIGN-025 8.1).
+	var he *protocol.HistoryError
+	want := "v1/dev-env/" + testSessionUID + "/" + put.ContentSHA256[:16]
+	if !errors.As(err, &he) || he.Path != want {
+		t.Errorf("the refusal's path is %v, want %s", err, want)
+	}
+	if project, ok := protocol.HistoryEntryProject(he.Path, testSessionUID); !ok || project != "dev-env" {
+		t.Errorf("HistoryEntryProject(%q) = %q, %v", he.Path, project, ok)
+	}
+	for _, bad := range []string{"", "v1/dev-env/" + testSessionUID, "v1/../" + testSessionUID + "/0123456789abcdef", "v1/dev-env/other-uid/0123456789abcdef", "v2/dev-env/" + testSessionUID + "/0123456789abcdef"} {
+		if _, ok := protocol.HistoryEntryProject(bad, testSessionUID); ok {
+			t.Errorf("HistoryEntryProject(%q) is ok", bad)
+		}
+	}
+	if project, ok := protocol.HistoryEntryProject("v1/_none/"+testSessionUID+"/0123456789abcdef", testSessionUID); !ok || project != "" {
+		t.Errorf("an entry with no project: %q %v", project, ok)
 	}
 }
 

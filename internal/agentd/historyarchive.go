@@ -737,6 +737,16 @@ func (a HistoryArchive) openEntry(sessionUID, sum string) (string, protocol.Hist
 		e   protocol.HistoryEntry
 		sum string
 	}
+	// named gives an entry's refusal the entry's directory (DESIGN-025 8.1):
+	// a reader then tells whose entry failed without any of its bytes, and
+	// hides one of a project outside its caller's scope.
+	named := func(dir string, err error) error {
+		var he *protocol.HistoryError
+		if rel, rerr := filepath.Rel(a.Root, dir); rerr == nil && errors.As(err, &he) && he.Path == "" {
+			return protocol.HistoryErrorf(he.Code, filepath.ToSlash(rel), "%s", he.Message)
+		}
+		return err
+	}
 	var found []cand
 	for _, p := range projects {
 		sdir := filepath.Join(a.Root, protocol.HistoryArchiveEntries, p, sessionUID)
@@ -754,16 +764,16 @@ func (a HistoryArchive) openEntry(sessionUID, sum string) (string, protocol.Hist
 			dir := filepath.Join(sdir, n)
 			data, err := readArchiveFile(a.Root, filepath.Join(dir, protocol.HistoryContentFile), protocol.MaxHistoryContentBytes)
 			if err != nil {
-				return "", c, e, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, "", "content.json: %v", err)
+				return "", c, e, named(dir, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, "", "content.json: %v", err))
 			}
 			h := sha256.Sum256(data)
 			got := hex.EncodeToString(h[:])
 			if got[:16] != n || (sum != "" && got != sum) {
-				return "", c, e, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, "", "content.json does not match its entry")
+				return "", c, e, named(dir, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, "", "content.json does not match its entry"))
 			}
 			ent, err := readHistoryEntryFile(a.Root, dir, got)
 			if err != nil {
-				return "", c, e, err
+				return "", c, e, named(dir, err)
 			}
 			found = append(found, cand{dir, ent, got})
 		}
@@ -783,14 +793,14 @@ func (a HistoryArchive) openEntry(sessionUID, sum string) (string, protocol.Hist
 	best := found[0]
 	data, err := readArchiveFile(a.Root, filepath.Join(best.dir, protocol.HistoryContentFile), protocol.MaxHistoryContentBytes)
 	if err != nil {
-		return "", c, e, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, "", "content.json: %v", err)
+		return "", c, e, named(best.dir, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, "", "content.json: %v", err))
 	}
 	c, got, err := parseHistoryContent(data)
 	if err != nil || got != best.sum || validateHistoryContent(c) != nil || c.Session.UID != sessionUID {
-		return "", c, e, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, "", "content.json is not a valid manifest of this entry")
+		return "", protocol.HistoryContent{}, e, named(best.dir, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, "", "content.json is not a valid manifest of this entry"))
 	}
 	if filepath.Join(a.Root, filepath.FromSlash(protocol.HistoryEntryDir(c.Project, c.Session.UID, got))) != best.dir {
-		return "", c, e, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, "", "the entry is not under its own project")
+		return "", protocol.HistoryContent{}, e, named(best.dir, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, "", "the entry is not under its own project"))
 	}
 	return best.dir, c, best.e, nil
 }

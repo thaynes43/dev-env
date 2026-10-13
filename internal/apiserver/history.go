@@ -170,7 +170,17 @@ func (s *Server) historyEntry(ctx context.Context, r *http.Request, readable fun
 	case historyCode(err) == protocol.HistoryErrNotFound:
 		return page, historyHidden()
 	case err != nil:
-		return page, s.historyShelfError(r, err)
+		// agentd names the entry whose check failed by its directory: one
+		// of a project outside the caller's scope, or of none, is hidden
+		// like an entry that does not exist. A refusal that names no entry
+		// is the shelf's, the same for every caller.
+		var he *protocol.HistoryError
+		if errors.As(err, &he) {
+			if project, ok := protocol.HistoryEntryProject(he.Path, uid); ok && !readable(project) {
+				return protocol.HistoryManifestPage{}, historyHidden()
+			}
+		}
+		return protocol.HistoryManifestPage{}, s.historyShelfError(r, err)
 	case page.Session.UID != uid || (content != "" && page.ContentSHA256 != content) || !protocol.ValidSHA256(page.ContentSHA256):
 		return page, s.historyShelfError(r, errors.New("the shelf answered for another entry"))
 	case !readable(page.Project):
