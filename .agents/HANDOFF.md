@@ -10,6 +10,24 @@ of the 2026-10-12 brief, which still holds the requirement history and the
 stopped routes. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## H7 reader failed; existing Mac evidence and hold — 2026-10-13
+
+The [failed-reader and existing-access checkpoint](sagas/distributed-dev-env/verification/h7-reader-failure-and-existing-access-2026-10-13.md)
+records haynes-ops #3904, merge `85d1dce3`: the reader foundation and read grants
+are installed, but its single automatic Job failed before any workload inventory.
+Its first policy read reported `InstalledPolicySourceMismatch`; the actual Pod
+also had unreviewed timezone injection with an unlimited init container. Preserve
+the failed Job; no retry, additional access or undo is proceeding.
+
+Q-36/D-90 records Tom's relayed "Go for it" for holding the new reader and using
+existing authorized Mac access for bounded evidence. The relay arrived after the
+merge/deployment and expressly required reporting existing state without undo.
+The Mac route reached the same source mismatch without denial. Diagnose the
+structural difference, verify any API default, review a source-only collector and
+transport correction, and check the resulting bounded receipt. No complete
+baseline or real guard acceptance follows yet; no workstation commands are
+requested from the owner. Already-installed access has no withdrawal ruling.
+
 ## H7 archive guard registered; installed acceptance pending — 2026-10-13
 
 [haynes-ops #3902](https://github.com/thaynes43/haynes-ops/pull/3902), merge
@@ -19,9 +37,9 @@ records 1,593 passing hosted tests/subtests, no remaining native/advisory findin
 the deployed Kyverno lookup permissions and Flux Ready/Healthy at 20:23 UTC.
 The generated Fail webhook matches the intended namespace/resources/operations.
 Actual installed request outcomes and the complete pre-mount baseline are still
-pending. The next separate unit is a bounded, sanitized read-only metadata audit
-with its own dedicated identity; v1's inaccessible reads are not success or empty
-state. The owner is currently on a phone; do not request workstation commands.
+pending. The dedicated audit's later failure and existing-access hold are recorded
+above. v1's inaccessible reads are not success or empty state. The owner is
+currently on a phone; do not request workstation commands.
 
 [haynes-ops #3898](https://github.com/thaynes43/haynes-ops/pull/3898), merge
 `a287a4f6`, created the 20Gi RWO history archive PVC. The

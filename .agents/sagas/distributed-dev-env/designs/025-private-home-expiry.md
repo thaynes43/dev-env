@@ -2204,9 +2204,9 @@ The compatible archive guard under section 7's trusted-v1 boundary merged in
 The [source and hook checkpoint](../verification/h7-compatible-guard-source-and-hook-2026-10-13.md)
 records passing actual-expression fixtures, native review and deployed lookup
 permissions, plus Flux health and the registered Fail webhook. Complete
-installed request outcomes and the audited pre-mount baseline remain pending;
-the next separate evidence unit is a bounded, sanitized, narrowly read-only audit
-with its own identity, without changing v1 access.
+installed request outcomes and the audited pre-mount baseline remain pending.
+The separate reader's failed attempt and existing-access hold are recorded in
+section 21; use that current route without changing v1 access.
 No narrowing of v1 shelf access or credential borrowing is authorized. Tom's
 personal Kubernetes account remains permanent under Q-33; preserving Headlamp's
 current administrator route creates no shared-SA owner-override exception.
@@ -2219,3 +2219,32 @@ fixtures do not establish exec matching or a pure restartedAt update. An evaluat
 of the actual expressions with explicit synthetic old/new requests now passed
 in #3902; real webhook verification remains separate.
 [Pinned CLI source](https://github.com/kyverno/kyverno/blob/v1.19.1/cmd/cli/kubectl-kyverno/processor/operation.go).
+
+## 21. Existing-access evidence and hold: Q-36
+
+**D-90, operational direction, recorded 2026-10-13.** At 21:05 UTC, oversight
+asked whether it could tell this coordinator to hold the new metadata reader
+and use existing Mac access for the evidence. It explained the pre-use workload
+and archive-mount baseline plus named guard readiness/webhook configuration,
+excluding conversations and actual guard-behavior proof. The relay quotes Tom:
+"Go for it". The coordinator read the relay's parent instruction and transcript;
+the original owner thread returned no turns. Original owner-turn and native
+prompt delivery remain unobserved. Receipt `q36-relayed-direction-r1.json`,
+SHA-256 `96ea06588570ba276c09956e0799e539202d53cfbb2e584155da7ca48a4d373c`.
+
+The [failure and existing-access checkpoint](../verification/h7-reader-failure-and-existing-access-2026-10-13.md)
+records the timing: #3904 merged and its foundation/read grants applied before
+the relay arrived; the dependent Job had already failed automatically on its
+first source-mismatched policy read, before any inventory. Actual Pod timezone
+injection also exceeded reviewed confinement. Preserve that failed attempt.
+
+Hold further reader access/deployment and use bounded existing authorized Mac
+reads, without credential export, permission expansion or mutations. The relay
+explicitly requires reporting already-deployed state without undo. No withdrawal
+of installed grants, retry, replacement, cleanup or later gate is approved.
+Diagnose the source mismatch, verify any CRD/API default against pinned primary
+source, review a focused source-only collector/transport correction and check
+the bounded receipt. Mac reads reached the same mismatch without access denial;
+they do not yet establish a complete baseline. All real-request, Retain, F4,
+cold-measurement, restore and activation gates remain intact. This operational
+direction creates no architecture ADR and does not change Q-33 or ADR-007.
