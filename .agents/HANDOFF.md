@@ -26,8 +26,12 @@ The Mac route reached the same source mismatch without denial. Independent
 review supports a historical nine-kind baseline (13 objects, zero archive
 references), matching five-object protected lineage and stable named rereads.
 It found transport-limit and checker-assumption defects; full audit and real
-guard acceptance remain pending. Review a focused source-only Mac correction
-and obtain a fresh bounded receipt without changing the held reader. No
+guard acceptance remain pending. The source-only correction merged in
+[dev-env #267](https://github.com/thaynes43/dev-env/pull/267), `dad78a39`, at
+22:14:26 UTC. Required CI and both reviews passed; Python 3.9.25 and 3.12.15
+each passed all 20 methods, including real CEL checks. Verified Mac binaries
+and the reviewed invocation are ready for a fresh bounded capture; none has
+run with this correction. Obtain that receipt without changing the held reader. No
 workstation commands are requested from the owner. Already-installed access
 has no withdrawal ruling.
 

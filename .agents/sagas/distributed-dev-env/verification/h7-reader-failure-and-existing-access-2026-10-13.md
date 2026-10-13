@@ -105,9 +105,30 @@ stable rereads, response/time/page/call limits and sanitization. Reusing the pur
 audit needs a reviewed Mac transport adapter; unmodified main expects in-cluster
 credential paths. No credential export or administrator-token borrowing follows.
 
-Next: implement and independently review a focused source-only Mac
-collector/transport correction, then obtain a fresh bounded existing-access
-capture. Do not edit or redeploy the held cluster reader. Withdrawal of
+## Corrected source ready; fresh capture pending
+
+[dev-env #267](https://github.com/thaynes43/dev-env/pull/267) merged at
+22:14:26 UTC as `dad78a3958867a4f7260624dc7932d402927a67a`. Its exact reviewed
+head is `1142e2c3bbec0a570ed99950163c40a4d406ab9d`. The isolated checker uses
+the pinned full CEL lexer/parser, missing-only typed-list derivation and the
+supported Kyverno 1.19.1 readiness profile. Its bounded private adapter uses
+the unchanged Mac GET transport. The review's Python 3.9 timestamp blocker is
+fixed with exact integer nanoseconds and strict calendar validation; redacted
+transport refusals retain their code only for the exact pre-dispatch shape.
+
+Required CI, advisory and independent native review passed. Hosted Go suites
+passed; Python 3.9.25 and 3.12.15 each passed all 20 methods, including the real
+CEL integrations. Artifact `11854095679` contains Go 1.27.1 Mac binaries and
+a manifest: all 15 source hashes and three binary hashes/sizes were verified.
+These are hosted interpreter observations, not a new Mac runtime observation.
+The configured engine profile is not immutable live-binary attestation.
+
+Next: invoke the reviewed adapter once through the existing Mac route and
+preserve a new sanitized report and provenance under exclusive filenames.
+The exact invocation and hashes are in `existing-mac-capture-handoff-r2.md`.
+No fresh capture has run with this correction. Source approval and built tools
+do not close the installed configuration/baseline gate. Do not edit or redeploy
+the held cluster reader. Withdrawal of
 already-installed reader access needs a separate
 concrete owner ruling; no such ruling was observed. No workstation commands are
 requested from the owner.
@@ -130,6 +151,9 @@ not copied into this public repository.
 | `installed-reader-verification-r1.json` | `3c57e04d0220d24f54c0fedfc4b30ab7c0465b5d6cc0c5ceca5a75caf16a8049` |
 | `q36-relayed-direction-r1.json` | `96ea06588570ba276c09956e0799e539202d53cfbb2e584155da7ca48a4d373c` |
 | `existing-mac-evidence-handoff-r1.md` | `0b6083fc3e6bece20d02658b122b7a657913da1e30b644033187e2e582f71ea1` |
+| `independent-review-pr267-1142e2c3-pr268-ce55f996-r2.json` | `00530e97188f07fa6be117844c8abf53fd6e85566a536cfef18a3d78dbe08d3e` |
+| `mac-checker-artifact-verification-1142e2c3-r1.json` | `4979b4aea6f808e08f2948ace432546646193f5b9517aa00c31a61135ce63567` |
+| `existing-mac-capture-handoff-r2.md` | `b5efc37614fd9c4f8aee19dd634070313ebb3cfdcb76151225c900dd44642d60` |
 
 The retained collector output is 2,156 bytes, SHA-256
 `511addabf27f5aca747d73f1888ff945de91d281213694e585cee889d1294799`.

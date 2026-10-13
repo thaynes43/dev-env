@@ -192,11 +192,12 @@ source, and actual timezone injection exceeded reviewed execution confinement.
 Q-36/D-90 holds further reader access/deployment and uses existing authorized Mac
 evidence. The relay arrived after deployment and does not authorize undo.
 Independent review supports a historical nine-kind Mac baseline with zero
-archive references and matching protected lineage. Full audit remains pending:
-the transport did not enforce the request contract, and pinned-engine readiness,
-typed-list handling and exact expression formatting need a reviewed correction.
-Implement a focused source-only Mac collector/transport correction and obtain a
-fresh bounded receipt. No held-reader change, retry or new grant; preserve the
+archive references and matching protected lineage. The reviewed source-only
+correction merged in [dev-env #267](https://github.com/thaynes43/dev-env/pull/267),
+`dad78a39`, at 22:14:26 UTC; its required CI, full CEL/transport fixtures and
+Python 3.9/current hosted suites passed. The verified Mac tools are ready.
+Full audit remains pending: obtain a fresh bounded receipt using that exact
+reviewed source/artifact and invocation. No held-reader change, retry or new grant; preserve the
 failed Job and all other retained runtime.
 
 **H7 progress at 20:23 UTC, 2026-10-13:** the compatible guard merged in
