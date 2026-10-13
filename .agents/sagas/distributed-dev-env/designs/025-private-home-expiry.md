@@ -2199,6 +2199,16 @@ archive activation, destructive action or automatic decommissioning approval.
 Accepted MVP precedes decommissioning; the existing separate owner approval
 still applies. Do not ask Tom this same migration choice again.
 
+At 21:33 UTC, the coordinator received the original asynchronous question's
+direct user reply: **"Keep v1 trusted during migration (Recommended)"**. The
+question explicitly preserved his personal Kubernetes account and required no
+commands. This confirms D-89's trusted-v1 boundary without replacing the prior
+preservation/decommission order or approving new rights, archive activation or
+reader retry/removal. Q-36 remains intact. The original relayed turn remains
+unobserved; this direct confirmation is observed. Receipt
+`q35-direct-owner-confirmation-r1.json`, SHA-256
+`d7728c571d7373417c1ca1d9dc52fd8670468483dc6140535cf447b21f3789e9`.
+
 The compatible archive guard under section 7's trusted-v1 boundary merged in
 [haynes-ops #3902](https://github.com/thaynes43/haynes-ops/pull/3902), `650f3a04`.
 The [source and hook checkpoint](../verification/h7-compatible-guard-source-and-hook-2026-10-13.md)
