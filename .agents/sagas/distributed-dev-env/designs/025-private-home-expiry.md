@@ -972,7 +972,8 @@ sections above leave these details open:
   --claude-config-dir D --codex-home D [--rescue SESSION/STAMP]`. The
   directories are the terminal record's, relative to HOME. An empty, absolute
   or unclean one, one outside HOME, one reached through a link, a root that is
-  not a directory, or two roots that overlap all refuse `layout_unknown`. A
+  not a directory, two roots that overlap, or a root on the shared volume all
+  refuse `layout_unknown`. A
   provider directory that does not exist is a root marked `absent`. `stream`
   takes the same flags plus `--plan-sha256 H`.
 - **The plan** is one line of canonical JSON on stdout. Its SHA-256 is the plan

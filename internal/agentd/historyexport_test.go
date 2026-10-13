@@ -437,6 +437,10 @@ func TestHistoryExportRefusesUnknownLayouts(t *testing.T) {
 		"HOME itself":          func(t *testing.T, r *historyRig) { r.o.CodexHome = "." },
 		"overlapping roots":    func(t *testing.T, r *historyRig) { r.o.CodexHome = ".claude/codex" },
 		"the same root twice":  func(t *testing.T, r *historyRig) { r.o.CodexHome = ".claude" },
+		"a root on the shared volume": func(t *testing.T, r *historyRig) {
+			r.mkdir(t, ".shared/codex")
+			r.o.CodexHome = ".shared/codex"
+		},
 		"a root that is a link": func(t *testing.T, r *historyRig) {
 			if err := os.Symlink(r.path(".codex"), r.path("codex-link")); err != nil {
 				t.Fatal(err)

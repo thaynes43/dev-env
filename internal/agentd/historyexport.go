@@ -240,8 +240,17 @@ func historyRoots(s Settings, o HistoryExportOptions) ([]historyRootDef, error) 
 		{name: protocol.HistoryRootAgentd, rel: agentdRel, rules: agentdLayout},
 		{name: protocol.HistoryRootLog, rel: logRel, file: o.Session + ".log"},
 	}
+	// The shared volume is mounted inside HOME; nothing on it is the
+	// Session's private history.
+	sharedRel := ""
+	if r, err := filepath.Rel(s.Home, s.SharedDir); err == nil && s.SharedDir != "" && !strings.HasPrefix(filepath.ToSlash(r), "../") && r != ".." && r != "." {
+		sharedRel = filepath.ToSlash(r)
+	}
 	for i := range roots {
 		roots[i].abs = filepath.Join(s.Home, filepath.FromSlash(roots[i].rel))
+		if a := roots[i].rel; sharedRel != "" && (a == sharedRel || strings.HasPrefix(a, sharedRel+"/") || strings.HasPrefix(sharedRel, a+"/")) {
+			return nil, protocol.HistoryErrorf(protocol.HistoryErrLayoutUnknown, "", "the %s root %q overlaps the shared volume", roots[i].name, a)
+		}
 		for j := 0; j < i; j++ {
 			a, b := roots[i].rel, roots[j].rel
 			if a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/") {
