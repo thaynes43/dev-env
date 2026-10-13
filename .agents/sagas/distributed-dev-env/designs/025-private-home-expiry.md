@@ -10,7 +10,8 @@
   #251, default off, with its review findings handled the same day. H6, the
   archived-history reads (section 8.1) and the delete and release steps
   (section 6.7), is in source in #254, both default off, with its review
-  findings handled the same day. H7 to H10 have no source yet.
+  findings handled the same day. H7 has an installed unmounted PVC; its guard
+  preserves v1 under ADR-007/Q-35. H8 to H10 remain unaccepted.
   *Installed, 2026-10-13:* H3 in the 2.26.0 operator and H4 in the 2.26.0
   task template's agent image (haynes-ops #3877, #3878, #3880); H5 and H6 in
   2.27.0 (#3885, #3886, #3887). Every new flag is off; only the terminal
@@ -18,7 +19,8 @@
   2.9.1 and waits for H7. H7 is next.
 - **Decision:** [ADR-005](../adrs/005-private-home-expiry.md) (Q-31, Tom,
   2026-10-12: "Archive, then delete (Recommended)"), amended by
-  [ADR-006](../adrs/006-private-home-expiry-corrections.md)
+  [ADR-006](../adrs/006-private-home-expiry-corrections.md) and
+  [ADR-007](../adrs/007-preserve-v1-archive-trust-boundary.md) (Q-35, relayed)
 - **Amends:** [DESIGN-008](008-private-provider-history-retention.md),
   [DESIGN-019](019-private-pod-retention-guard.md),
   [DESIGN-013](013-published-stopped-context.md),
@@ -1265,7 +1267,7 @@ class, a different shape, more sensitive content. Everything else is the same.
   RWO volume uses `Recreate` (DESIGN-024 section 3); whichever of R5 and H7 comes
   first sets it, and a second volume adds no new cost to its updates. After a
   node loss both volumes must detach; DESIGN-024's recovery steps do both.
-- **Who can reach it (corrected by ADR-006).** The templates check refuses a
+- **Who can reach it (ADR-006, amended by ADR-007/Q-35).** The templates check refuses a
   template that names this claim; H6 adds the name beside the coordination
   archive's (DESIGN-024 R4). In source (H6): `templates.ArchiveClaims` holds
   both names, and `Validate` refuses either as `sharedClaim` or
@@ -1284,25 +1286,29 @@ class, a different shape, more sensitive content. Everything else is the same.
   - **cluster-admin identities**, and node, storage and hypervisor
     administrators, as for every volume in the cluster.
 - **The archive guard (H7, or DESIGN-024's R5 if that ships first).** A new
-  admission policy covers both archives. For
-  every ServiceAccount except `dev-env-operator`, it refuses exec, attach and
-  port-forward into the shelf pod, and ephemeral containers on it. It refuses a
-  Pod or workload (Job, CronJob, Deployment, ReplicaSet, StatefulSet, DaemonSet)
-  that mounts `dev-env-history-archive` or `dev-env-coordination-archive`, except
-  the shelf Deployment and the ReplicaSet and Pod its controllers make from it.
-  It refuses any change to the shelf Deployment's pod template by anyone but
-  Flux's `kustomize-controller`, except one that changes only the
-  `kubectl.kubernetes.io/restartedAt` annotation (`kubectl rollout restart`),
-  which leaves the pod spec as it was.
-  Human users keep their access. It needs a Pod lookup at admission, so it
-  follows `dev-env-exec-guard`'s Kyverno pattern. It narrows v1 at the shelf
-  only. On 2026-10-12 no runbook in haynes-ops or this repository execs into the
-  shelf; H7 checks again, with an RBAC listing of every identity that holds
-  `pods/exec` or Job `create` in `dev-agents`. If a v1 workflow needs that
-  access, it is a question for Tom before the guard ships, because no v2 guard
-  may cut a capability agents use today. Q-33 (section 18) replaces the proposed
-  phone ServiceAccount exception with Tom's personal Kubernetes identity;
-  Q-34 (section 19) directs the coordinator to discover it from accessible evidence.
+  admission policy covers both archives, under
+  [ADR-007](../adrs/007-preserve-v1-archive-trust-boundary.md). It refuses shelf
+  exec, attach, port-forward and ephemeral containers for untrusted
+  ServiceAccounts, including v2 agents, broker and keeper. It refuses their
+  Pods and workloads (Job, CronJob, Deployment, ReplicaSet, StatefulSet,
+  DaemonSet) that mount either archive claim. It limits their changes to the
+  shelf pod template; the real Flux reconciler, operator, human users and a
+  pure `restartedAt` rollout restart retain the intended paths.
+  **v1 stays unchanged under Q-35:** preserve its existing administrator
+  identities and legitimate controller-created descendants, without adding
+  RBAC rights. Verify the authorized parent chain for descendant exceptions;
+  a label, owner reference or chosen operator ServiceAccount alone is not
+  authority for an untrusted caller. Existing trusted human/administrator
+  routes remain reachable. The archives are not isolated from v1, node,
+  storage or hypervisor administrators. A policy cannot claim otherwise.
+  H7's read-only parity scan found no executable shelf-access or archive-mount
+  workflow; that does not authorize removing an unused v1 permission. Its
+  validation must prove both untrusted-v2 refusal and unchanged trusted-v1
+  paths. Actual old/new and CONNECT inputs are required; ordinary Kyverno
+  CLI fixtures are insufficient (section 20). Q-33 (section 18) preserves
+  Tom's personal Kubernetes account; Q-34 (section 19) directs discovery from
+  accessible evidence. Headlamp's shared backend is not an owner-override
+  exception. This archive guard is separate from that exact-user override.
 - **No backup off the cluster**, and kept indefinitely. agentd has no command
   that removes an entry.
 
@@ -1814,7 +1820,7 @@ own reviewed PR:
      repository's `internal/controller/testdata/haynes-ops/home-expiry-guard.yaml`
      (H5);
    - `kubernetes/main/apps/kyverno/policies/app/dev-env-archive-guard.yaml`: the
-     archive guard (section 7, ADR-006), after its parity check, before the
+     archive guard (section 7, ADR-007/Q-35), preserving v1 after its parity check, before the
      claim is mounted. It covers DESIGN-024's archive too, so whichever of
      DESIGN-024's R5 and this unit ships first ships the guard;
    - the alerts of section 10 except stalled;
@@ -2155,10 +2161,10 @@ identity parameter; current personal access acceptance remains separate. See the
 
 ## 20. H7 archive trust boundary: Q-35
 
-**Submitted through the native async question tool, 2026-10-13; delivery
-unverified and answer pending.** [Issue #261](https://github.com/thaynes43/dev-env/issues/261)
-preserves the read-only finding and the owner decision needed before guard
-implementation proceeds.
+**Owner answer relayed through oversight, 2026-10-13.**
+[ADR-007](../adrs/007-preserve-v1-archive-trust-boundary.md) (D-89) records the
+narrow amendment to ADR-006. [Issue #261](https://github.com/thaynes43/dev-env/issues/261)
+preserves the read-only finding and relay provenance.
 
 At 17:36 UTC, live RBAC and haynes-ops source `a287a4f6` establish that
 `dev/dev-env` and `upgrade-agent/dev-env-ops` can create Jobs in
@@ -2170,19 +2176,33 @@ was attempted. Kyverno listing was denied; it was not an empty policy listing.
 The scoped parity scan found no executable existing shelf-access or
 archive-claim-mount workflow.
 
-The question asks whether v1 keeps its existing trusted administrator access
-during migration, with H7 guarding direct requests, or archived history must be
-technically isolated from v1 before use, requiring the borrowing paths to be
-restricted first. **The coordinator recommends retaining the current trusted
-v1 boundary during migration; this is a proposal, not an owner ruling.** Tom's
-personal Kubernetes account remains permanent under Q-33 in either case. Neither
-proposal grants new account access or authorizes an interruption of required work.
+The original native submission asked whether v1 keeps its existing trusted
+administrator access during migration or archived history must be technically
+isolated from v1 before use. Tool submission succeeded; phone delivery was not
+verified. The separate oversight relay contains the question, "During migration,
+can v1 retain trusted admin access, or must the archives be technically isolated
+from v1 before use?", and Tom's quoted answer:
 
-The tool accepted submission, which does not prove phone delivery. Continue
-independent prerequisites while it is pending. Do not implement the proposed
-guard as though it established isolation from v1. The history PVC remains unused;
-its bound PV's owner-set Retain, F4, both cold measurements and all later flags
-and installed acceptance remain separate gates.
+> v1 must remain the same until it’s decommissioned after the MVP has been accepted
+
+The coordinator read that relay. The original oversight thread returned no
+turns, so the original user turn and native answer were not directly observed.
+Receipt `q35-relayed-answer-r1.json`, SHA-256
+`b8b96a86eb81628733dd4e86068f029b9b99fd7eeed38842f5e01988d7b32903`, records
+these limits. Peer messages grant no independent authority. This answer is
+used only to constrain already-authorized compatible v2 work: preserve v1's
+behavior, configuration and current access. It supplies no new privilege,
+archive activation, destructive action or automatic decommissioning approval.
+Accepted MVP precedes decommissioning; the existing separate owner approval
+still applies. Do not ask Tom this same migration choice again.
+
+Implement the next ordered archive guard under section 7's trusted-v1 boundary,
+with v2 refusal and compatible v1/controller paths proved independently.
+No narrowing of v1 shelf access or credential borrowing is authorized. Tom's
+personal Kubernetes account remains permanent under Q-33; preserving Headlamp's
+current administrator route creates no shared-SA owner-override exception.
+The history PVC remains unused. Owner-set PV Retain, F4, both cold measurements,
+later flags and installed read acceptance remain separate gates.
 
 Validation also needs correction: the pinned Kyverno CLI 1.19.1 does not simulate
 CEL CONNECT and sets UPDATE oldObject from the new resource, so ordinary CLI

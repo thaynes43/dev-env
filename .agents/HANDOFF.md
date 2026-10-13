@@ -19,18 +19,28 @@ records Flux Ready/Healthy, the Bound claim and no Pod references at 17:24 UTC.
 The shelf, retained sessions and failed Jobs match their baseline. Expiry flags
 remain off except terminal recording. The bound PV is still Delete; owner-set
 Retain is required before archive activation. The next ordered unit is the
-archive guard before the shelf mount; its implementation now awaits Q-35 below.
+archive guard before the shelf mount, preserving v1 under Q-35 and
+[ADR-007](sagas/distributed-dev-env/adrs/007-preserve-v1-archive-trust-boundary.md).
 F4 and both cold measurements still gate activation.
 
 **Guard prerequisite:** the read-only review found operator-account borrowing
 paths available to v1's existing administrator powers. A shelf-only guard does
 not close them. [Q-35](sagas/distributed-dev-env/designs/025-private-home-expiry.md#20-h7-archive-trust-boundary-q-35)
-asks whether v1 remains trusted during migration or H7 must isolate archives
-from it before use. Native submission was accepted, but delivery and the answer
-remain unverified. [Issue #261](https://github.com/thaynes43/dev-env/issues/261)
-preserves the evidence and validation limits. No guard implementation or runtime
-probe was made; continue independent resource prerequisites while the decision
-is pending.
+asked whether v1 remains trusted during migration or H7 must isolate archives
+from it before use. An oversight relay quotes Tom's answer: "v1 must remain the
+same until it’s decommissioned after the MVP has been accepted". The coordinator
+verified the relay, not the original owner turn or native phone delivery.
+ADR-007 records the narrow constraint: preserve v1 behavior, configuration and
+current access; add no rights, archive activation or automatic decommissioning.
+[Issue #261](https://github.com/thaynes43/dev-env/issues/261) preserves the
+evidence and validation limits. No guard implementation or runtime probe was
+made. The compatible guard protects v2 paths without claiming isolation from v1.
+
+The [resource setup checkpoint](sagas/distributed-dev-env/verification/h7-measurement-setup-2026-10-13.md)
+records the corrected synthetic fixture accounting, measurement-only isolation
+and small focused checks. These are source prerequisites, not either cold
+resource acceptance. Hosted artifacts, cache evidence and separately limited
+measurement phases remain required.
 
 ## H7 owner identity and read-only prerequisites — 2026-10-13
 
@@ -462,7 +472,11 @@ The ones that change behaviour:
   in a Job; the broker and keeper hold `pods/exec` in `dev-agents`. An admission
   guard for both archives ships with H7 or DESIGN-024's R5, whichever is first,
   after a check that no v1 workflow execs into the shelf (none did on
-  2026-10-12). If one does, ask Tom before the guard ships.
+  2026-10-12). This historical v1 restriction is superseded by
+  [ADR-007/Q-35](sagas/distributed-dev-env/adrs/007-preserve-v1-archive-trust-boundary.md):
+  preserve v1 unchanged through accepted MVP and separately approved
+  decommissioning. The current guard protects untrusted v2 paths without
+  claiming privacy from v1.
 - **Smaller fixes:** the terminal record sits beside `lastExecutor`; a once-only
   missed marker; a fifth guard exception for the expiry's hold pod; every HOME
   delete attempt re-verifies the archive; edit snapshots, pasted-text caches and
@@ -2368,6 +2382,7 @@ DESIGN-001 section 15; later rows link their own record. This heading first read
 | Q-30 | **Answered 2026-10-12** by Tom through the Claude native prompt, in free text. Question: "To close #173 I need one more Claude canary on a private repo, proving private GitHub access and a fresh pinned task worktree. The dev bot can't create repos on your personal account. Could you create an empty private repo thaynes43/dev-env-private-probe (a README on main is enough)? Global private admission stays off; the canary reuses the spent 1012 slot." Options: "I'll create it (Recommended)", "Use an existing private repo", "Not now". Answer: "All the Sigo alumni repos are private and all are needed for dev-env, we use them now. Why can't you use those?" Interpretation: use the existing private repositories `thaynes43/sigo-alumni` and `thaynes43/sigoalumni-org` instead of a new probe repository, declared as v2 catalog project `sigo-alumni`, and run the one approved private-repo Claude canary `rule-canary-claude-sigo-1012` against it: one create, one named read, one result read, no retries. Global private admission stays off; repository visibility is unchanged. Owner answer receipt `root-q30-owner-answer-r1.json`, sha256 `1490331885be14f5939fe85c81d91f186274dac089286e2343ca373bdd0b3722`. GitOps: haynes-ops [#3845](https://github.com/thaynes43/haynes-ops/pull/3845). Run on 2026-10-12: bootstrap `Partial` on a tracked symlink, so not accepted; fixed in [#237](https://github.com/thaynes43/dev-env/pull/237) ([DESIGN-011 Q-30 amendment](sagas/distributed-dev-env/designs/011-private-managed-rule-canaries.md#private-repo-canary-on-the-sigo-alumni-project--2026-10-12-q-30-173), README decision 65). Root acceptance `dd5dee24`: items 1 and 3 to 7 hold and item 2 (bootstrap) fails, so the run is not accepted for #173 under DESIGN-011's gate; the Root accepts private GitHub authorization and a fresh task pin separately, as the named deviation `partial-acceptance-by-property` ([Sigo private-repo canary record](sagas/distributed-dev-env/verification/sigo-private-canary-2026-10-12.md)). |
 | Q-31 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Archive, then delete (Recommended)". A private Session's HOME is archived, then deleted, 30 days after its executor's recorded termination: Git rescue in a hold pod bound to the HOME UID, provider history (an allowlist, never credentials) and Git bundle to a shelf-only `Retain` archive, readable under DESIGN-013's scope, then a guarded delete by the operator's leader. A retained Pod is not a stop proof; absence never is. Canary originals never expire; hold and release-now are Tom's alone. Deletion waits for the installed archived read (#174). Closes ADR-004's known gap. [ADR-005](sagas/distributed-dev-env/adrs/005-private-home-expiry.md), [DESIGN-025](sagas/distributed-dev-env/designs/025-private-home-expiry.md), README decision 64. Corrected the same day by [ADR-006](sagas/distributed-dev-env/adrs/006-private-home-expiry-corrections.md) (D-87, README decision 66): only a reap stops a private executor, never the suspended deadline. |
 | Q-32 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Yes, after deploy (Recommended)" (other option: "Not now"). Question: "The Sigo canary proved private GitHub access and a fresh pinned worktree, but catalog bootstrap ended Partial: one Sigo repo tracks a symlink our checkout check wrongly refused. The fix is merged and deploying now as 2.25. May I run one more Claude canary on the Sigo project after the deploy, to prove bootstrap reaches Ready and the new status codes work? One create, one named read, one result read, no retries." Grants, after the 2.25 deploy is post-checked, one new Claude canary record for project `sigo-alumni` through a reviewed haynes-ops PR, replacing the consumed `rule-canary-claude-sigo-1012` record (`codex-1011` byte-identical): exactly one create, one named read and one result read, no retries; global private admission stays off. Not granted: reuse of a consumed canary ID, any retry, a second rerun, credential repair or cleanup of any original. Owner answer receipt `root-q32-owner-answer-r1.json`, sha256 `48ab104fa0c140b139ce537a0d3eb4b59139111a785d2f97145e4ff459736609`. GitOps: haynes-ops [#3855](https://github.com/thaynes43/haynes-ops/pull/3855) (`rule-canary-claude-sigo-1012b`). Run on 2026-10-13 UTC: all seven DESIGN-011 items hold, bootstrap `Ready`; Root acceptance `a3aa0b7d` (`ACCEPTED_PRIVATE_REPO_CANARY_ALL_ITEMS`) accepts #173's private-repository evidence under the all-items gate ([Sigo rerun record](sagas/distributed-dev-env/verification/sigo-rerun-2026-10-13.md), README decision 68). |
+| Q-35 | **Recorded 2026-10-13 as an owner answer relayed through oversight:** "v1 must remain the same until it’s decommissioned after the MVP has been accepted". [ADR-007/D-89](sagas/distributed-dev-env/adrs/007-preserve-v1-archive-trust-boundary.md), README row 70, amends only ADR-006's v1 archive narrowing and C-42. Preserve v1 behavior, configuration and current access. Guard untrusted v2 paths; claim no isolation from v1 and grant no new access, activation or automatic decommissioning. Original owner turn and native delivery were not observed; the coordinator verified the relay. Local receipt `dev-env-h7-archive-guard-1013/q35-relayed-answer-r1.json`, SHA-256 `b8b96a86eb81628733dd4e86068f029b9b99fd7eeed38842f5e01988d7b32903`. |
 | Pacing | **Answered 2026-10-13** by Tom through the Claude native prompt: "Slow down (Recommended)" (other options: "Keep full speed", "Pause after H5/H6"; asked 04:00Z, answered 11:02Z). Question: "Today's dev-env push has used a lot of Opus subagent time: about 40 reviewed PRs, 4 deploys and 4 canaries. The Max plan is shared with your own Claude use, and hitting the weekly limit stops every session, yours included. How hard should I keep pushing after H5/H6 finish?" Means: one Opus subagent unit (`claude-opus-5-5`) at a time, Sonnet (`claude-sonnet-5-5`) for routine work, no parallel Opus waves until Tom says otherwise. It limits concurrency; it pauses nothing and changes no other gate. Owner answer receipt `root-pacing-owner-answer-r1.json` (in the coordinator's `dev-env-claude-handoff-1013` orders, written from the session record after the answer), sha256 `a70a80ccef09e0d7bd7c8521ce7156dc2dd4a8d00a23a429365e3844be32cf20`. README decision 69; it follows decision 40's 2026-10-07 pacing. |
 
 **Next (historical, 2026-10-08; the current order is the 2026-10-13 brief's

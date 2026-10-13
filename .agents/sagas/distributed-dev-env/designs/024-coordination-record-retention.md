@@ -160,6 +160,17 @@ DESIGN-025's H7 ships first ships it, after a check that no v1 workflow execs
 into the shelf. R7 also records that a v1 identity's exec into the shelf is
 refused.*
 
+*Amended 2026-10-13 ([ADR-007](../adrs/007-preserve-v1-archive-trust-boundary.md),
+Q-35/D-89, owner answer relayed through oversight): v1 remains unchanged until
+its decommissioning after accepted MVP. The earlier v1 shelf-denial proposal
+and R7's corresponding denial expectation are superseded. Both archives remain
+reachable through v1's current administrator access. H7/R5 guard untrusted v2
+actors, including broker and keeper, while preserving v1 identities and proven
+controller descendants of their authorized workloads. No new rights or
+technical isolation from v1 are claimed. Human/admin paths and separate
+Retain, installed acceptance and activation gates remain. See DESIGN-025
+sections 7 and 20 for the current contract and relay limits.*
+
 **What the shelf's other duties pay.** Mounting a ReadWriteOnce volume changes
 D-67's pod:
 
@@ -653,7 +664,9 @@ All under `kubernetes/main/apps/dev-env-system/`, each in its own reviewed PR:
    - *Added 2026-10-12 (ADR-006, D-87):* `kubernetes/main/apps/kyverno/policies/app/dev-env-archive-guard.yaml`,
      the archive guard of section 3's note, before the claim is mounted, unless
      DESIGN-025's H7 shipped it first. Its parity check comes first: no v1
-     workflow execs into the shelf.
+     workflow execs into the shelf. ADR-007/Q-35 now requires the compatible
+     trusted-v1 boundary in section 3; absence of observed use permits no v1
+     permission removal.
 3. **R6, after the operator release with R3 and R4:**
    - `crds/app/coordination-retention-operator.yaml`: Role
      `dev-env-coordination-retention` in `dev-env-system`, rule

@@ -7,6 +7,13 @@ planning, not a universal pilot gate. Before retiring old homes, preserve and ve
 readable transcripts, memory and handoffs as well as Git work. Approval of this
 scope does not approve a cutover or remove v1 access.
 
+**Migration constraint, 2026-10-13:**
+[ADR-007](../adrs/007-preserve-v1-archive-trust-boundary.md) records Q-35's
+relayed owner direction: v1's behavior, configuration and current access stay
+unchanged until decommissioning after accepted MVP. This plan still needs
+Tom's explicit decommissioning approval. It authorizes no migration-time
+permission reduction, automatic retirement or new privilege.
+
 **Status:** backlog
 **Depends on:** 03, 04, 07 (verified effective v1 parity, including accepted
 Headlamp-equivalent tasks, before retiring v1; restricted break-glass alone is not

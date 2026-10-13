@@ -237,7 +237,7 @@ Everything is default off until R6.
 | R2 | dev-env source | `agentd ctl coord-archive put\|mark\|lookup\|get\|list`, the size bound, the time-ordered indexes, the archive mount check, `agentd shelf --coordination-archive`, protocol types, `TestArchiveNeverRemoves`, a measurement of a worst-case `get`'s peak memory under the shelf's limits | merged and in a released agent image |
 | R3 | dev-env source | `internal/coordretention` runnable (default off), shelf client methods and the per-replica exec limit, the bulk lookups and resume key, retention metrics, the shared guard scanner, `TestOnlyRetentionDeletesCoordinationRecords`, envtest E1, E2, E4, E6, E7, and the `internal/shelf` package comment (the shelf no longer mounts only the shared volume) | merged with required CI and independent review |
 | R4 | dev-env source | read fallback (default off), the archived item shape and `archived=only` lists, the ack-retry fallback, client tolerance tests, bound wording, the templates check that refuses the archive claim, envtest E3 and E5 | merged and in a released operator image |
-| R5 | haynes-ops | the archive PVC, shelf `Recreate` strategy, mount, flag, image pin, header comment and (if R2 needs it) memory limit; the archive guard (ADR-006, after its parity check, unless H7 shipped it); `DevEnvShelfUnavailable` and `DevEnvCoordinationArchiveFilling`; then Tom sets the bound PV to `Retain` | the shelf Ready with the archive mounted, and its PV `Retain` |
+| R5 | haynes-ops | the archive PVC, shelf `Recreate` strategy, mount, flag, image pin, header comment and (if R2 needs it) memory limit; the archive guard (ADR-007/Q-35, preserving v1 after its parity check, unless H7 shipped it); `DevEnvShelfUnavailable` and `DevEnvCoordinationArchiveFilling`; then Tom sets the bound PV to `Retain` | the shelf Ready with the archive mounted, and its PV `Retain` |
 | R6 | haynes-ops | Role `dev-env-coordination-retention` (delete, operator only), the operator pin, then reads on, then retention on, and `DevEnvCoordinationRetentionStalled` | a complete retention pass on the installed operator |
 | R7 | dev-env docs | installed verification record (DESIGN-024 section 11) | merged |
 
@@ -265,8 +265,9 @@ answered through the Claude native prompt: "Archive, then delete
 2. 30 days after that record, a Git rescue runs in a hold pod bound to the HOME's
    UID, the provider history (an allowlist, never credentials) and the Git bundle
    go to an archive volume on the shelf with a `Retain` PV, kept indefinitely and
-   guarded from H7 against every ServiceAccount but the operator, and archived
-   history is readable under DESIGN-013's payload scope.
+   guarded from H7 against untrusted v2 actors; v1 retains its existing
+   administrator access under ADR-007/Q-35. Archived history is readable
+   under DESIGN-013's payload scope.
 3. Only then, with deletion enabled, the operator's leader deletes the HOME
    through the guarded path and releases the Session. ADR-004 then releases its
    records. Canary originals never expire. Tom alone may hold an expiry or
@@ -274,7 +275,9 @@ answered through the Claude native prompt: "Archive, then delete
 
 [ADR-005](../adrs/005-private-home-expiry.md) records the decision, and
 [ADR-006](../adrs/006-private-home-expiry-corrections.md) (D-87) corrects it after
-its review. [DESIGN-025](../designs/025-private-home-expiry.md) is the contract. Everything
+its review. [ADR-007](../adrs/007-preserve-v1-archive-trust-boundary.md)
+(Q-35/D-89, relayed) preserves v1 unchanged and supersedes only the proposed
+v1 archive narrowing. [DESIGN-025](../designs/025-private-home-expiry.md) is the contract. Everything
 is default off; deletion waits for the installed archived-history read (#174).
 
 **Delivery units, each its own reviewed PR, in this order:**
@@ -288,7 +291,7 @@ is default off; deletion waits for the installed archived-history read (#174).
 | H4 | dev-env source | agentd `history-export` and `history-archive` commands, the layout tables (agentd by name, copies of user files excluded) and fixtures, guard tests, the resource measurement. In source in #246 (DESIGN-025 7.1); the in-cluster measurement moves to H7. Released in agent 2.26.0 and 2.27.0; the shelf still runs 2.9.1 until H7 | merged and in a released agent image |
 | H5 | dev-env source | the expiry record and steps up to `Archived`, the private hold pod and `expiryHoldRemovalAllowed`, the relay, overrides, metrics. In source in #251 (DESIGN-025 5.4), default off (`--enable-home-history-archive`); deletes no HOME. The reference copy of `dev-env-home-expiry-guard` for H7 is in `internal/controller/testdata/haynes-ops/`. Installed in 2.27.0, off (haynes-ops #3885, #3886, 2026-10-13) | merged with required CI and independent review |
 | H6 | dev-env source | the `/v1/history` reads and `agent-run history`, the delete and release steps (off), `TestExpiryDeleteNeedsVerify`. In source in #254 (DESIGN-025 6.7 and 8.1): the reads behind `--enable-history-archive-reads`, the delete and release behind `--enable-home-expiry-delete`, which the operator refuses without the archive and the reads; both default off, and the delete stays off until H8. Installed in 2.27.0, both off (haynes-ops #3886, #3887, 2026-10-13) | merged and in a released operator image |
-| H7 | haynes-ops | history archive PVC, shelf mount, override policy, the archive guard (after its parity check, unless R5 shipped it), alerts; Tom sets the PV to `Retain`; stop, archive and reads on | a private Session reaches `Archived` with its HOME intact |
+| H7 | haynes-ops | history archive PVC, shelf mount, override policy, the archive guard (ADR-007/Q-35, preserving v1 after its parity check, unless R5 shipped it), alerts; Tom sets the PV to `Retain`; stop, archive and reads on | a private Session reaches `Archived` with its HOME intact |
 | H8 | dev-env docs | installed record of the archived read (DESIGN-025 section 15) | merged; this is the #174 read acceptance |
 | H9 | haynes-ops | delete on, `DevEnvHomeExpiryStalled` | merged |
 | H10 | dev-env docs | installed record of the first expiry and of the ADR-004 release 30 days later | merged |

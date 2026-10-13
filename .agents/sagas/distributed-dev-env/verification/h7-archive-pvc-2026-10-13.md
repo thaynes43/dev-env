@@ -22,9 +22,11 @@ the storage Kustomization is Ready and Healthy.
 | Expiry flags | Terminal record on; stop, archive, history reads and delete off |
 
 The unit creates no archive mount or archive data. The next ordered unit is the
-archive guard before the shelf mount; the later read-only finding now holds its
-implementation on [Q-35](../designs/025-private-home-expiry.md#20-h7-archive-trust-boundary-q-35).
-Continue only independent prerequisites while that decision is pending.
+archive guard before the shelf mount. The later read-only finding raised
+[Q-35](../designs/025-private-home-expiry.md#20-h7-archive-trust-boundary-q-35);
+its relayed owner answer is now recorded in
+[ADR-007](../adrs/007-preserve-v1-archive-trust-boundary.md). That ruling governs
+the next compatible guard; it changes none of this installed PVC evidence.
 F4, both cold resource measurements, the bound PV's
 owner-set Retain and the remaining H7 policies and flag gates still apply.
 This is not H8's installed history-read acceptance.
