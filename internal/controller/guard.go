@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/templates"
 )
 
 // The guard of DESIGN-001 5.1 (D-45, D-51). The operator deletes a session's pod
@@ -18,7 +19,10 @@ import (
 // only after a rescue in it (D-10). It deletes a session's volume only when a
 // deleted session is archived, after a verified rescue of the volume's last pod.
 // deletePod and deleteVolume are the only places in this package that delete
-// anything, and each deletes by UID; releaseSession, releaseVolume and a few
+// anything, besides the HOME expiry's two exceptions (DESIGN-025 5.2, 6.1):
+// deleteExpiryExecutor, the ended executor of a private Session in Rescuing,
+// and deleteExpiryHold, the expiry's own hold pod. Each deletes by UID;
+// releaseSession, releaseVolume and a few
 // named release helpers are the only ones that lift a finalizer or rewrite owner
 // references. A test (TestOnlyTheGuardDeletes) keeps it that way.
 
@@ -220,6 +224,144 @@ func deletePod(ctx context.Context, c client.Client, s *v1alpha1.AgentSession, p
 	// The preconditions make the delete hit this pod, in the state the guard
 	// judged, and no other: not one that replaced it, and not this one after
 	// it was scheduled or started.
+	return client.IgnoreNotFound(c.Delete(ctx, pod, client.Preconditions{UID: &pod.UID, ResourceVersion: &pod.ResourceVersion}))
+}
+
+// expiryPodRemovalAllowed is nil only when the HOME expiry may delete a
+// private Session's recorded executor Pod (DESIGN-025 5.2; ADR-005's D-45
+// exception): the Session is private, its expiry record is Rescuing and rests
+// on a confirmed terminal record of exactly this Pod, the Session controls the
+// Pod, it is no hold pod, and its phase is still terminal. A terminal phase
+// never runs again, and the record is the stop proof, so the Pod object is
+// needed no more; the hold pod takes its name. podRemovalAllowed keeps every
+// other Pod of a private Session.
+func expiryPodRemovalAllowed(s *v1alpha1.AgentSession, pod *corev1.Pod) error {
+	h := s.Status.PrivateHistory
+	switch {
+	case s.Spec.Workspace != nil || s.Spec.ProjectCanary != nil:
+		return errors.New("only a private Session's HOME expires; canary originals and shared Sessions never do (DESIGN-025 2)")
+	case h == nil || h.Expiry == nil || h.Expiry.Phase != v1alpha1.HomeExpiryRescuing:
+		return errors.New("the HOME expiry removes the ended executor only in its Rescuing step (DESIGN-025 5.2)")
+	case !executorTerminalRecorded(h) || h.Expiry.ExecutorUID != h.ExecutorTerminal.PodUID:
+		return errors.New("the expiry record rests on no confirmed terminal record of the recorded executor")
+	case pod.UID == "" || string(pod.UID) != h.Expiry.ExecutorUID || pod.ResourceVersion == "":
+		return errors.New("the Pod is not the recorded executor that the terminal record names")
+	case !controlledBySession(pod, s) || isHoldPod(pod):
+		return errors.New("the Session does not control the Pod, or it is a hold pod")
+	case !podPhaseTerminal(pod):
+		return errors.New("the recorded executor's phase is not terminal")
+	}
+	return nil
+}
+
+// deleteExpiryExecutor deletes the recorded executor's ended Pod if the expiry
+// guard allows it, with the Pod's UID and resourceVersion as preconditions, so
+// a Pod changed since the guard judged it is never deleted.
+func deleteExpiryExecutor(ctx context.Context, c client.Client, s *v1alpha1.AgentSession, pod *corev1.Pod) error {
+	if err := expiryPodRemovalAllowed(s, pod); err != nil {
+		return err
+	}
+	return client.IgnoreNotFound(c.Delete(ctx, pod, client.Preconditions{UID: &pod.UID, ResourceVersion: &pod.ResourceVersion}))
+}
+
+// expiryHoldRelease is why the HOME expiry no longer needs its hold pod
+// (DESIGN-025 6.1).
+type expiryHoldRelease string
+
+const (
+	holdReleaseCancel     expiryHoldRelease = "the expiry record is being cancelled"
+	holdReleaseOwnerHold  expiryHoldRelease = "the owner put a hold on the HOME expiry"
+	holdReleaseArchiveOff expiryHoldRelease = "the history archive is turned off"
+	holdReleaseArchived   expiryHoldRelease = "the history is archived"
+	holdReleaseEnded      expiryHoldRelease = "the hold pod ended"
+	// holdReleaseStaleImage: the export refused for a reason only a source
+	// change clears, and the templates name another agent image than the hold
+	// pod runs; a hold pod of the new image re-checks it.
+	holdReleaseStaleImage expiryHoldRelease = "the export needs a source change and the hold pod runs an agent image the templates no longer name"
+)
+
+// expiryHoldEvidence is what the HOME expiry's hold pod guard judges a
+// release by: why the caller says the hold pod is no longer needed, and the
+// reads that must show it. The guard checks the reason against them itself.
+type expiryHoldEvidence struct {
+	why expiryHoldRelease
+	// view is the reconcile's uncached reads (the Session, the Pod of its
+	// name, the Pods that mount the HOME); a cancel is judged from it.
+	view *expiryView
+	// templates is the archive window's source, for a cancel because the
+	// Session is no longer triggered; nil when the templates do not load.
+	templates *templates.Templates
+	// archiveOn is the operator's --enable-home-history-archive (with the
+	// terminal record), for archive off.
+	archiveOn bool
+}
+
+// expiryHoldRemovalAllowed is nil only when the HOME expiry may delete its own
+// hold pod (DESIGN-025 6.1, ADR-006's fifth D-45 exception): the Pod carries
+// the hold label, the Session controls it, its UID is the expiry record's
+// holdPodUID, its three annotations match the record, and the expiry no longer
+// needs it, which the guard checks from the evidence: a cancel needs a view
+// that shows the Session no longer triggered or a new Pod holding the HOME;
+// archive off needs the archive flag off; an owner hold needs an override
+// that holds (any value but release-now, homeExpiryHeld); Archived needs the
+// record at Archived or later; ended needs the hold pod in a terminal phase;
+// a stale image needs the record before Archived with a refusal only a
+// source change clears, and loaded templates that name another agent image
+// than the hold pod runs. podRemovalAllowed refuses every Pod of a
+// private Session, and holdRemovalAllowed would keep a Running, unrescued hold
+// pod, so neither can remove it.
+func expiryHoldRemovalAllowed(pod *corev1.Pod, ev expiryHoldEvidence) error {
+	if ev.view == nil || ev.view.s == nil {
+		return errors.New("the HOME expiry's hold pod guard has no uncached reads to judge by")
+	}
+	s := ev.view.s
+	h := s.Status.PrivateHistory
+	switch {
+	case s.Spec.Workspace != nil || s.Spec.ProjectCanary != nil:
+		return errors.New("only a private Session's HOME expiry has a hold pod of its own")
+	case h == nil || h.Expiry == nil:
+		return errors.New("no HOME expiry record names a hold pod")
+	case !isHoldPod(pod) || !controlledBySession(pod, s) || pod.UID == "" || pod.ResourceVersion == "":
+		return errors.New("the Pod is not a hold pod the Session controls")
+	case h.Expiry.HoldPodUID == "" || string(pod.UID) != h.Expiry.HoldPodUID || !expiryHoldAnnotated(pod, h.Expiry):
+		return errors.New("the hold pod is not the one the expiry record names")
+	}
+	switch ev.why {
+	case holdReleaseCancel:
+		trig, _ := homeExpiryTriggered(s, ev.templates, ev.view.now)
+		if !expiryPhaseAtLeast(h.Expiry.Phase, v1alpha1.HomeExpiryDeleting) && (trig == expiryNotTriggered || ev.view.newPod() != nil) {
+			return nil
+		}
+	case holdReleaseArchiveOff:
+		if !ev.archiveOn {
+			return nil
+		}
+	case holdReleaseOwnerHold:
+		if homeExpiryHeld(s) {
+			return nil
+		}
+	case holdReleaseArchived:
+		if expiryPhaseAtLeast(h.Expiry.Phase, v1alpha1.HomeExpiryArchived) {
+			return nil
+		}
+	case holdReleaseEnded:
+		if podEnded(pod) {
+			return nil
+		}
+	case holdReleaseStaleImage:
+		if !expiryPhaseAtLeast(h.Expiry.Phase, v1alpha1.HomeExpiryArchived) && sourceChangeRefusal(h.Expiry.Refusal) && staleHoldImage(pod, ev.templates) {
+			return nil
+		}
+	}
+	return fmt.Errorf("the HOME expiry still needs its hold pod: the reads do not show that %s", ev.why)
+}
+
+// deleteExpiryHold deletes the HOME expiry's hold pod if the guard allows it,
+// with the Pod's UID and resourceVersion as preconditions.
+func deleteExpiryHold(ctx context.Context, c client.Client, pod *corev1.Pod, ev expiryHoldEvidence) error {
+	if err := expiryHoldRemovalAllowed(pod, ev); err != nil {
+		return err
+	}
 	return client.IgnoreNotFound(c.Delete(ctx, pod, client.Preconditions{UID: &pod.UID, ResourceVersion: &pod.ResourceVersion}))
 }
 

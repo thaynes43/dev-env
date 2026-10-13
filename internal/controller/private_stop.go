@@ -91,10 +91,10 @@ var (
 // the RemovalBlocked condition names the failure.
 const privateStopRetry = 30 * time.Second
 
-// homeExpiryHeld reports whether the owner override blocks the stop. Any
-// value but release-now counts as a hold, so a mistyped hold never lets a stop
-// through (fail closed); section 9's override_invalid count belongs to the
-// expiry (H5).
+// homeExpiryHeld reports whether the owner override blocks the stop and the
+// HOME expiry's steps. Any value but release-now counts as a hold, so a
+// mistyped hold never lets a stop or a step through (fail closed, DESIGN-025
+// 9); the expiry counts such a value as override_invalid.
 func homeExpiryHeld(s *v1alpha1.AgentSession) bool {
 	v, ok := s.Annotations[v1alpha1.AnnotationHomeExpiry]
 	return ok && v != v1alpha1.HomeExpiryReleaseNow

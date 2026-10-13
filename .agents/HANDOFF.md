@@ -7,6 +7,39 @@ the saga. To continue building, follow the
 in the Claude pickup brief. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## DESIGN-025 H5 in source: the operator's HOME expiry up to Archived — 2026-10-13 UTC
+
+#251 adds `status.privateHistory.expiry` (and `expiryClearedAt`) with its CEL
+rules, and the operator's expiry behind `--enable-home-history-archive`
+(default off; needs `--enable-private-terminal-record`; `--home-expiry-grace`
+720h or longer). After the grace, or release-now, it removes the ended executor
+Pod, makes a hold pod bound to the HOME UID with its intent recorded first,
+rescues in it, pipes H4's export into the shelf's `history-archive put`,
+verifies the entry and records `Archived`. A resume, a moved deadline or a new
+Pod cancels; an owner hold stops every step; canary originals never enter it.
+It deletes no HOME: `Deleting`, `Expired`, the reads and the delete flag are H6.
+The reference copy of `dev-env-home-expiry-guard` that H7 ships is in
+`internal/controller/testdata/haynes-ops/`, with its envtest. A new refusal
+reason, `export_invalid`, joins `DevEnvHomeExpiryNeedsOwner` (DESIGN-025 5.4,
+section 10). The CRD changed: haynes-ops needs the CRD copy before an operator
+pin with this source.
+
+Its review (7 findings) changed four things an installer must know. The
+operator takes a history plan of at most 16 MiB and refuses a longer one as
+`plan_too_large` (a new reason, in `DevEnvHomeExpiryNeedsOwner`); H7 sets `GOMEMLIMIT` near 200 MiB on the operator and runs
+`TestHistoryRelayMeasure` in its container (DESIGN-025 5.4, sections 12 and 15).
+`protocol.CanonicalJSON` streams now, byte-identical to 2.26's, so agentd and
+operator of either release agree on digests. A mistyped override value holds
+the expiry (fail closed), with a new warning alert,
+`DevEnvHomeExpiryOverrideInvalid` (section 9, 10). Two CEL rules keep
+`expiryClearedAt` (never removed or moved back; a cancel needs a newer one), so
+an operator rollback below this release freezes those Sessions' status instead
+of dropping the cancel (section 14). An export refusal that needs a source
+change gets a hold pod of the new agent image at its next re-check (5.4).
+The reference `dev-env-home-expiry-guard` now refuses every `system:` identity,
+not only ServiceAccounts; human users stay outside it, so H7 lists who can
+update AgentSessions and matches on Tom's identity if anyone else can (section 9).
+
 ## DESIGN-025 H4 in source: agentd history export and archive — 2026-10-13 UTC
 
 #246 adds `agentd ctl history-export plan|stream` (hold or session pod, private
