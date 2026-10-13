@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"time"
 	"unicode/utf8"
+
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
 const PublishedContextsPath = "/v1/published-contexts"
@@ -76,12 +78,71 @@ type PublishContextRequest struct {
 	Text          string                `json:"text"`
 }
 
+// AttributionHeader asks for provider-reported attribution (DESIGN-018). A
+// reader without it gets the original shape: every state Unknown and no
+// models or usage, which older strict decoders and validators accept.
+const (
+	AttributionHeader   = "Dev-Env-Attribution"
+	AttributionProvider = "provider-v1"
+)
+
 type ContextAttribution struct {
 	Provider           string `json:"provider"`
 	RequestedModel     string `json:"requestedModel"`
 	ObservedModelState string `json:"observedModelState"`
 	UsageState         string `json:"usageState"`
 	CostState          string `json:"costState"`
+	// ObservedModels and Usage come from the source Session's retained
+	// initial-invocation observation, joined at read time for a managed output
+	// assertion of that same invocation only. The stored record never changes,
+	// so the join lasts only while the source Session exists: once it is
+	// reaped or replaced, the attribution reads Unknown again (DESIGN-018).
+	ObservedModels []string      `json:"observedModels,omitempty"`
+	Usage          *ContextUsage `json:"usage,omitempty"`
+}
+
+// ContextUsage is the invocation's provider-reported totals. The cost is a CLI
+// list-price equivalent, never a charge; a plan-served launch says so in
+// BillingBasis.
+type ContextUsage struct {
+	ObservationID            string                    `json:"observationID"`
+	BillingBasis             string                    `json:"billingBasis"`
+	InputTokens              protocol.TokenObservation `json:"inputTokens"`
+	OutputTokens             protocol.TokenObservation `json:"outputTokens"`
+	CacheReadInputTokens     protocol.TokenObservation `json:"cacheReadInputTokens"`
+	CacheCreationInputTokens protocol.TokenObservation `json:"cacheCreationInputTokens"`
+	Cost                     protocol.CostObservation  `json:"cost"`
+}
+
+// ValidContextAttribution accepts the original all-Unknown shape, or, for a
+// managed output assertion only, provider-reported states that each have their
+// evidence: models for the model state, a Reported counter for the usage
+// state, a Reported cost for the cost state. Codex never asserts cost.
+func ValidContextAttribution(a ContextAttribution, managed bool) bool {
+	unknown := protocol.UsageUnknown
+	state := func(s string) bool { return s == unknown || s == protocol.UsageProviderReported }
+	if !state(a.ObservedModelState) || !state(a.UsageState) || !state(a.CostState) {
+		return false
+	}
+	u := a.Usage
+	if u == nil {
+		return a.ObservedModelState == unknown && a.UsageState == unknown && a.CostState == unknown && len(a.ObservedModels) == 0
+	}
+	if !managed || !contextDigestPattern.MatchString(u.ObservationID) || (u.BillingBasis != protocol.UsageSubscription && u.BillingBasis != unknown) ||
+		!u.InputTokens.Valid() || !u.OutputTokens.Valid() || !u.CacheReadInputTokens.Valid() || !u.CacheCreationInputTokens.Valid() || !u.Cost.Valid() ||
+		len(a.ObservedModels) > protocol.MaxServedModels || (a.Provider == protocol.AgentCodex && u.Cost.State != unknown) {
+		return false
+	}
+	for i, m := range a.ObservedModels {
+		if !protocol.ValidUsageModelID(m) || (i > 0 && a.ObservedModels[i-1] >= m) {
+			return false
+		}
+	}
+	tokens := u.InputTokens.State == protocol.UsageReported || u.OutputTokens.State == protocol.UsageReported || u.CacheReadInputTokens.State == protocol.UsageReported || u.CacheCreationInputTokens.State == protocol.UsageReported
+	models := len(a.ObservedModels) > 0
+	cost := u.Cost.State == protocol.UsageReported
+	return (a.ObservedModelState == protocol.UsageProviderReported) == models && (a.UsageState == protocol.UsageProviderReported) == tokens &&
+		(a.CostState == protocol.UsageProviderReported) == cost && (models || tokens || cost)
 }
 
 // Metadata lists and publication acknowledgements never include the text.

@@ -381,13 +381,30 @@ func (s *Server) getSession(ctx context.Context, _ http.ResponseWriter, r *http.
 		if err != nil {
 			return 0, nil, err
 		}
-		return http.StatusOK, view(sess, true), nil
+		return http.StatusOK, s.withUsageRollup(ctx, sess, c), nil
 	}
 	var sess v1alpha1.AgentSession
 	if err := s.get(ctx, key, &sess); err != nil {
 		return 0, nil, fromKubeError(err, "session "+key.Name)
 	}
-	return http.StatusOK, view(&sess, true), nil
+	return http.StatusOK, s.withUsageRollup(ctx, &sess, c), nil
+}
+
+// withUsageRollup is a single Session's view with its retained descendants'
+// usage rollup (DESIGN-018). A failed list leaves the rollup out: absent,
+// never zero. A coordinator may read only its direct children, so on a
+// child's view it gets the totals of the work it delegated but not the
+// invocation keys, which name grandchildren it may not read.
+func (s *Server) withUsageRollup(ctx context.Context, sess *v1alpha1.AgentSession, c *caller) apiv1.Session {
+	v := view(sess, true)
+	var list v1alpha1.AgentSessionList
+	if err := s.Client.List(ctx, &list, client.InNamespace(sess.Namespace)); err == nil {
+		v.UsageRollup = usageRollup(sess, list.Items)
+	}
+	if v.UsageRollup != nil && c.kind == kindCoordinator {
+		v.UsageRollup.Invocations = nil
+	}
+	return v
 }
 
 // reapSession serves DELETE /v1/sessions/{name}: it deletes the AgentSession,

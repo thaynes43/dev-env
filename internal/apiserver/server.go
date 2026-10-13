@@ -263,6 +263,9 @@ func (s *Server) serve(rt route) http.Handler {
 			if err != nil {
 				return 0, err
 			}
+			if !providerAttribution(r) {
+				body = legacyUsageShape(body)
+			}
 			if body == nil {
 				w.WriteHeader(status)
 			} else {

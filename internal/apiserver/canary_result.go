@@ -128,7 +128,12 @@ func (s *Server) getCanaryResult(ctx context.Context, _ http.ResponseWriter, r *
 	if err != nil || !sameSessionBinding(fresh, original) || !s.canaryResultPublication(fresh, record, p) {
 		return 0, nil, canaryResultDenied()
 	}
-	return http.StatusOK, apiv1.CanaryResult{CanaryID: id, SessionUID: uid, Context: apiv1.PublishedContext{Metadata: contextMetadata(p), Text: p.Spec.Text}}, nil
+	m := contextMetadata(p)
+	if providerAttribution(r) {
+		// The fresh original is the publication's own source Session.
+		m.Attribution = contextAttribution(m.Attribution, p, fresh)
+	}
+	return http.StatusOK, apiv1.CanaryResult{CanaryID: id, SessionUID: uid, Context: apiv1.PublishedContext{Metadata: m, Text: p.Spec.Text}}, nil
 }
 
 func (s *Server) canaryResultPublication(original *v1alpha1.AgentSession, record projectcanary.Record, p *coord.PublishedContext) bool {

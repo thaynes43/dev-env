@@ -68,7 +68,11 @@ Use distinct Origin `ManagedOutputAssertion` and Completeness `PartialManagedOut
 or `Unknown`, preserving existing ExplicitPublished/ExplicitExcerpt semantics.
 The conversation ID is a publisher assertion validated by the local parser; the
 server does not attest a provider transcript, actual served model, usage, cost or
-stop state. These remain Unknown. Lists still return metadata only; text reads
+stop state. These remain Unknown. *Amended 2026-10-12 ([DESIGN-018](018-initial-invocation-usage-provenance.md),
+#176): the stored record still says Unknown, but a reader that asks with the
+attribution header sees the source Session's retained provider-reported
+observation of the same invocation joined at read time. The join is live: once the
+source Session is reaped or replaced, the reader sees Unknown again.* Lists still return metadata only; text reads
 require the existing independent explicit project payload grant. No HOME/PVC
 mount, source Pod exec, control grant or new reader privilege is introduced.
 

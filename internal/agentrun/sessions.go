@@ -264,20 +264,32 @@ func (a *app) printSession(s apiv1.Session) {
 			}
 		}
 	}
-	row("Actual model", "Unknown")
-	if u := s.UsageObservation; u != nil && u.Validate() == nil {
+	u := s.UsageObservation
+	if u != nil && u.Validate() != nil {
+		u = nil
+	}
+	row("Actual model", "%s", servedModelsText(u))
+	if u != nil {
 		cost := "Unknown"
 		if u.Cost.State == protocol.UsageReported {
 			cost = u.Cost.Amount + " USD (CLI equivalent estimate)"
 		}
 		row("Initial task cost", "%s", cost)
 		row("Usage scope", "Initial managed invocation")
-		row("Usage result", "%s; child inclusion Unknown", u.ResultState)
+		row("Usage result", "%s; this Session's own CLI process, child Sessions counted on their own", u.ResultState)
+		if u.Version == protocol.UsageVersion {
+			row("Usage provenance", "Provider reported")
+			row("Billing basis", "%s", billingBasisText(u.BillingBasis))
+		}
 		row("Requested model", "%s", u.Source.RequestedModel)
 		row("Input tokens", "%s", usageTokenText(u.InputTokens))
 		row("Output tokens", "%s", usageTokenText(u.OutputTokens))
 		row("Cache read tokens", "%s", usageTokenText(u.CacheReadInputTokens))
 		row("Cache create tokens", "%s", usageTokenText(u.CacheCreationInputTokens))
+		for _, m := range u.ServedModels {
+			row("  served model", "%s: input %s, output %s, cache read %s, cache create %s, cost %s", m.Model, usageTokenText(m.InputTokens), usageTokenText(m.OutputTokens),
+				usageTokenText(m.CacheReadInputTokens), usageTokenText(m.CacheCreationInputTokens), usageCostText(m.Cost))
+		}
 		row("Subscription quota", "Unknown")
 	} else {
 		row("Requested model", "%s", firstOf(s.Model, "Unknown"))
@@ -286,6 +298,25 @@ func (a *app) printSession(s apiv1.Session) {
 		row("Output tokens", "Unknown")
 		row("Cache read tokens", "Unknown")
 		row("Cache create tokens", "Unknown")
+	}
+	if r := s.UsageRollup; r != nil {
+		coverage := fmt.Sprintf("%s over %d retained descendant Sessions, %d invocations counted once each", r.Coverage, r.Sessions, r.Counted)
+		if r.Truncated {
+			coverage += "; walk stopped at the bound"
+		}
+		coverage += "; reaped descendants are not counted"
+		row("Descendant usage", "%s", coverage)
+		row("  input tokens", "%s", usageTokenText(r.InputTokens))
+		row("  output tokens", "%s", usageTokenText(r.OutputTokens))
+		row("  cache read tokens", "%s", usageTokenText(r.CacheReadInputTokens))
+		row("  cache create tokens", "%s", usageTokenText(r.CacheCreationInputTokens))
+		row("  cost", "%s", usageCostText(r.Cost))
+		row("  billing basis", "%s", billingBasisText(r.BillingBasis))
+		models := "Unknown"
+		if r.ObservedModelState == protocol.UsageProviderReported && len(r.ObservedModels) > 0 {
+			models = strings.Join(r.ObservedModels, ", ") + " (provider reported)"
+		}
+		row("  models", "%s", models)
 	}
 	if issue := s.UsageConflict; issue != nil {
 		row("usage conflict", "Unknown (%s); original observation retained", issue.Reason)
@@ -300,6 +331,32 @@ func (a *app) printSession(s apiv1.Session) {
 			a.outf("  %s\n", line)
 		}
 	}
+}
+
+// servedModelsText names the provider-reported served models, or Unknown.
+func servedModelsText(u *protocol.UsageObservation) string {
+	if u == nil || u.ActualModelState != protocol.UsageProviderReported || len(u.ServedModels) == 0 {
+		return "Unknown"
+	}
+	names := make([]string, 0, len(u.ServedModels))
+	for _, m := range u.ServedModels {
+		names = append(names, m.Model)
+	}
+	return strings.Join(names, ", ") + " (provider reported)"
+}
+
+func billingBasisText(basis string) string {
+	if basis == protocol.UsageSubscription {
+		return "Subscription (plan-served; the cost is a list-price equivalent, not a charge)"
+	}
+	return "Unknown"
+}
+
+func usageCostText(cost protocol.CostObservation) string {
+	if cost.State == protocol.UsageReported && cost.Valid() {
+		return cost.Amount + " USD (CLI equivalent estimate)"
+	}
+	return "Unknown"
 }
 
 func usageTokenText(metric protocol.TokenObservation) string {

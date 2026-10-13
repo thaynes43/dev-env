@@ -179,6 +179,9 @@ func (a *app) send(ctx context.Context, c *conn, method, target string, payload 
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	// This client reads provider-reported usage and attribution (DESIGN-018);
+	// an older operator ignores the header.
+	req.Header.Set(apiv1.AttributionHeader, apiv1.AttributionProvider)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return 0, nil, err
