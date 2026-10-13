@@ -10,7 +10,18 @@ of the 2026-10-12 brief, which still holds the requirement history and the
 stopped routes. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
-## H7 unmounted archive PVC installed — 2026-10-13
+## H7 archive guard registered; installed acceptance pending — 2026-10-13
+
+[haynes-ops #3902](https://github.com/thaynes43/haynes-ops/pull/3902), merge
+`650f3a04`, installs the compatible archive guard. The
+[source and hook checkpoint](sagas/distributed-dev-env/verification/h7-compatible-guard-source-and-hook-2026-10-13.md)
+records 1,593 passing hosted tests/subtests, no remaining native/advisory finding,
+the deployed Kyverno lookup permissions and Flux Ready/Healthy at 20:23 UTC.
+The generated Fail webhook matches the intended namespace/resources/operations.
+Actual installed request outcomes and the complete pre-mount baseline are still
+pending. The next separate unit is a bounded, sanitized read-only metadata audit
+with its own dedicated identity; v1's inaccessible reads are not success or empty
+state. The owner is currently on a phone; do not request workstation commands.
 
 [haynes-ops #3898](https://github.com/thaynes43/haynes-ops/pull/3898), merge
 `a287a4f6`, created the 20Gi RWO history archive PVC. The
@@ -18,8 +29,8 @@ the historical work order for the first build session.
 records Flux Ready/Healthy, the Bound claim and no Pod references at 17:24 UTC.
 The shelf, retained sessions and failed Jobs match their baseline. Expiry flags
 remain off except terminal recording. The bound PV is still Delete; owner-set
-Retain is required before archive activation. The next ordered unit is the
-archive guard before the shelf mount, preserving v1 under Q-35 and
+Retain is required before archive activation. Finish the guard's installed and
+baseline evidence before the shelf mount, preserving v1 under Q-35 and
 [ADR-007](sagas/distributed-dev-env/adrs/007-preserve-v1-archive-trust-boundary.md).
 F4 and both cold measurements still gate activation.
 
@@ -33,13 +44,14 @@ verified the relay, not the original owner turn or native phone delivery.
 ADR-007 records the narrow constraint: preserve v1 behavior, configuration and
 current access; add no rights, archive activation or automatic decommissioning.
 [Issue #261](https://github.com/thaynes43/dev-env/issues/261) preserves the
-evidence and validation limits. No guard implementation or runtime probe was
-made. The compatible guard protects v2 paths without claiming isolation from v1.
+evidence and validation limits. That initial read-only checkpoint performed no
+bypass probe. The compatible guard protects v2 paths without claiming isolation from v1.
 The [compatible guard contract](sagas/distributed-dev-env/verification/h7-compatible-guard-contract-2026-10-13.md)
 is ratified for source implementation: preserve the named current administrator
 and infrastructure routes, prove controller parent chains and a clean activation
-baseline, and verify real webhook delivery separately. Source work is in flight;
-no installed guard acceptance or archive mount is claimed.
+baseline, and verify real webhook delivery separately. Source acceptance and
+registered hook configuration now have the checkpoint above; complete installed
+guard acceptance and archive mounting remain pending.
 
 The [resource setup checkpoint](sagas/distributed-dev-env/verification/h7-measurement-setup-2026-10-13.md)
 records the corrected synthetic fixture accounting, measurement-only isolation

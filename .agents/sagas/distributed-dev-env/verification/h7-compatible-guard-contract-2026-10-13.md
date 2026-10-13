@@ -9,6 +9,10 @@ implementation judgment within authorized H7 scope. **Guard source, deployment
 and real webhook acceptance remain separate.** No archive mount, history
 activation, v1 change or new RBAC grant follows from this contract.
 
+The [source and registered hook checkpoint](h7-compatible-guard-source-and-hook-2026-10-13.md)
+records the completed #3902 source unit and observed deployment. Complete
+installed request and pre-mount baseline acceptance remain pending.
+
 ## Trusted actors
 
 The guard protects both exact archive claims in `dev-agents`, including the
