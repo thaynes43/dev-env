@@ -1,0 +1,95 @@
+{
+  "capturePerformed": false,
+  "originalReader": {
+    "collectorSha256": "5693d16884cc08749bd49fe82ac1a1a4848008db2fe0ebf64d7f7cff31c1e43d",
+    "configurationRevision": "650f3a04113d78b85f0d345a1944bc9fb8508d10",
+    "expectedCanonicalSha256": "97beed7e1b37f009ed21f3ceace439b1e8498f0ad7b91b5ac606d787ad8ebed1",
+    "expectedFileSha256": "e2b03a0718b38ba9e014fb04295bcac65f0a171ee09fe3b87cfc9276e559ec54",
+    "head": "f334d64aaf289aed6b362758557333ef5adef66a",
+    "merge": "85d1dce3a40a23a677f5739eef5a41886058b28f",
+    "repository": "thaynes43/haynes-ops"
+  },
+  "pinnedProfiles": {
+    "antlr4-go": "4.13.1",
+    "cel-go": "0.30.0",
+    "expressionComparison": "Both parse successfully; exact token types and original token bytes; only WHITESPACE omitted; COMMENT retained",
+    "generationAttested": false,
+    "generationDisabledMessageBytes": 55,
+    "generationDisabledMessageSha256": "c143f5a5fd24117a18129ac9dfb4af1227d8b6b97bd0cbb7f87ce976d4ec6fd6",
+    "hostedGo": "1.27.1",
+    "kyverno": "1.19.1",
+    "requiredConditions": [
+      "WebhookConfigured",
+      "RBACPermissionsGranted"
+    ]
+  },
+  "primarySources": {
+    "cel-grammar": {
+      "sha256": "316026ce88e95364c45ba3954907e58f81e3bda6fdb443c3c4149e9692a4db76",
+      "url": "https://github.com/google/cel-go/blob/v0.30.0/parser/gen/CEL.g4"
+    },
+    "cel-module": {
+      "sha256": "36ff896f974dd73cd3e824226b3eaeff87a325000b95676a642ba1ebc89d072f",
+      "url": "https://github.com/google/cel-go/blob/v0.30.0/go.mod"
+    },
+    "cel-parser": {
+      "sha256": "8d6b14a32c9288b41f2db2f190a7038693c6bbfc0f6c46b02442b6ebbeb40cd2",
+      "url": "https://github.com/google/cel-go/blob/v0.30.0/parser/parser.go"
+    },
+    "generation-message-producer": {
+      "sha256": "8ab49b8492a755a3121f8eeb775e432d56d60ff61c0962d97a0a936ad8c6c982",
+      "url": "https://github.com/kyverno/kyverno/blob/v1.19.1/pkg/controllers/admissionpolicygenerator/generate-vap.go"
+    },
+    "generation-status-producer": {
+      "sha256": "eb583cf53be29aac8fdda550af6caed0be8e8ca2876ce574da0b65bd0affcf22",
+      "url": "https://github.com/kyverno/kyverno/blob/v1.19.1/pkg/controllers/admissionpolicygenerator/controller.go"
+    },
+    "kyverno-go.mod": {
+      "sha256": "fe7bebaa613aea1b150cd2a8fb20d2db1cac47e9564d17145735db3792135aac",
+      "url": "https://github.com/kyverno/kyverno/blob/v1.19.1/go.mod"
+    },
+    "optional-syntax-env": {
+      "sha256": "456fb085db22728c961d60be01c598c5a5b307cbded336d63970d980a4ead906",
+      "url": "https://github.com/kyverno/kyverno/blob/v1.19.1/pkg/cel/compiler/env.go"
+    },
+    "policy-status-producer": {
+      "sha256": "7803e822092e42718baf113204676a7431e2a95b673c140a5a1cfd29330b68f5",
+      "url": "https://github.com/kyverno/kyverno/blob/v1.19.1/pkg/controllers/policystatus/controller.go"
+    },
+    "ready-producer": {
+      "sha256": "a09000b30fa7410d3c393ab0e212afb3a2043fb61a64716009cc54b8a38fe4fa",
+      "url": "https://github.com/kyverno/kyverno/blob/v1.19.1/pkg/controllers/policystatus/vpol.go"
+    }
+  },
+  "pureAuditInterface": "audit(reader, expected, report, cel_checker, *, kyverno_version)",
+  "reviewCorrections": {
+    "independentReviewSha256": "aa1126a8d184f388a75b5235fb898970212e5e44fea404775d5fb31d4ecc65c6",
+    "pythonAction": {
+      "sha": "5fda3b95a4ea91299a34e894583c3862153e4b97",
+      "source": "https://github.com/actions/setup-python/tree/v7.0.0",
+      "tagVerifiedAsCommit": true
+    },
+    "redactedFailure": "OnlyRequestShapeRefused/GET/emptyPath/unchangedAttemptAndTotal/zeroResponseBytes/noHTTPStatus/noBody; readerfailspermanently; no authority expansion",
+    "requiredHostedPython": [
+      "3.9",
+      "3.12"
+    ],
+    "reviewedImplementation": "a99502d7b41f999453b52f90bbb5b3dbdec7444d",
+    "timestampEnvelopeBasis": "Parent IPC deadline; unchanged GoHTTP context is5seconds and excludes pre-context validation/post-request cleanup",
+    "timestampEnvelopeNanoseconds": 6000000000,
+    "timestampParser": "Strict UTC Gregorian calendar plus integer epoch nanoseconds; preserves all original0or1-9fractiondigits"
+  },
+  "schemaVersion": 1,
+  "scope": "Source corrections only; original installed reader, grants, failed attempts, canaries and v1 unchanged",
+  "transport": {
+    "revision": "transport-r2",
+    "sourceFilesSha256": {
+      "go.mod": "5624e29a239805945a5d021e74ca1a17b59ff5d75febad9d1f61cfcb11da2751",
+      "go.sum": "3f8f6a8ac1048ed9b6cb66a4e2795ff956d52fd447239c67eed83943fa91ac35",
+      "main.go": "f6c54705ecbc7e9d4227dc8910e531646e90ca34ec712800e1050505d8675beb",
+      "main_test.go": "06e9e531a132da3adf277cb72f3d25d3c7e3bc045f59cce71e00f4dc423bf190"
+    },
+    "sourceFilesUnchanged": true,
+    "sourceManifestSha256": "81ce6a38112ba1d6f5d66122ac5ff74ae2060b882243e2fb240be745eb8800fa"
+  }
+}

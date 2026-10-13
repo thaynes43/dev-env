@@ -64,6 +64,9 @@ historical first-build order. Deploys remain GitOps.
 .github/workflows/       ci.yml (lint, test, build, check-generated, image builds; aggregate `CI - Success`), publish.yml (operator image from main, signed), publish-agent.yml (agent image from a v2.x.y tag, signed), publish-git-wait.yml (the git-wait trial fixture's
                          git-wait-sha-<sha> tag from main, signed), release-please.yml, Claude review + @claude
 .github/renovate.json5   Renovate config (gomod, Actions SHA pins, Dockerfile digests, ARG and Makefile pins)
+tools/h7-metadata-checker/  isolated Python metadata checker and bounded Mac adapter; no operator dependency or deployment
+tools/h7-metadata-checker/celhelper/  separate Go module: pinned CEL lexer/parser, token comparison only
+tools/h7-metadata-checker/transport/  separate Go module: existing-Mac GET-only transport, fixed authority and request budgets
 release-please-config.json, .release-please-manifest.json   one repo version, `go` type, first release 2.0.0
 api/v1alpha1/            CRD types, group dev-env.haynesops.com (AgentSession; AccessGrant and GrantPolicy, D-54; Activity, D-66;
                          CredentialJob); depends on apimachinery only. Its envtest suite proves the schema's rules (D-39) on a real API server
