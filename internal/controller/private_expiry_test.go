@@ -41,15 +41,17 @@ type expiryFixture struct {
 	rescuer  *expiryRescuer
 	counters *HomeExpiryCounters
 	c        client.WithWatch
-	// readErr, when set, fails the uncached reads it matches (T10).
-	readErr func(key client.ObjectKey, obj runtime.Object) error
+	// readErr, when set, fails the reads it matches (T10); statusErr the
+	// status writes.
+	readErr   func(key client.ObjectKey, obj runtime.Object) error
+	statusErr func(obj client.Object) error
 }
 
 // newExpiryFixture is a reaped private Session whose recorded executor ended
 // (DeadlineExceeded) and has its confirmed terminal record, with a bound HOME,
 // a shelf pod, the templates, and a HOME of history for the export. edit runs
 // before the objects are stored.
-func newExpiryFixture(t *testing.T, edit func(*terminalFixture)) *expiryFixture {
+func newExpiryFixture(t *testing.T, edit func(*terminalFixture)) (f *expiryFixture) {
 	t.Helper()
 	tf := newTerminalFixture()
 	s := tf.s
@@ -75,10 +77,21 @@ func newExpiryFixture(t *testing.T, edit func(*terminalFixture)) *expiryFixture 
 		edit(&tf)
 	}
 	clock := tf.now
-	f := &expiryFixture{terminalFixture: tf, observed: observed, clock: &clock, x: newAgentdExec(t, s.Name), rescuer: &expiryRescuer{}, counters: NewHomeExpiryCounters()}
+	f = &expiryFixture{terminalFixture: tf, observed: observed, clock: &clock, x: newAgentdExec(t, s.Name), rescuer: &expiryRescuer{}, counters: NewHomeExpiryCounters()}
 	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: templatesKey.Name, Namespace: templatesKey.Namespace}, Data: map[string]string{templates.Key: exampleDoc}}
+	objects := []client.Object{tf.s, tf.home, tf.node, tf.lease, cm, shelfPodObject(s.Namespace)}
+	if tf.pod != nil {
+		objects = append(objects, tf.pod)
+	}
 	base := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.AgentSession{}, &corev1.Pod{}, &corev1.Node{}).
-		WithObjects(tf.s, tf.home, tf.pod, tf.node, tf.lease, cm, shelfPodObject(s.Namespace)).Build()
+		WithObjects(objects...).WithInterceptorFuncs(interceptor.Funcs{SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+		if f.statusErr != nil {
+			if err := f.statusErr(obj); err != nil {
+				return err
+			}
+		}
+		return c.SubResource(sub).Update(ctx, obj, opts...)
+	}}).Build()
 	f.c = interceptor.NewClient(base, interceptor.Funcs{
 		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 			// The API server gives every object a UID; the fake client does not.
@@ -271,9 +284,25 @@ func TestHomeExpiryArchivesAfterTheGraceAndKeepsTheHome(t *testing.T) {
 		get.Content.Rescue.PodUID != string(hold.UID) || get.Content.Provider != "claude" || get.Content.Project != "" {
 		t.Fatalf("content.json does not name the Session, HOME, terminal record and rescue: %+v, %v", get.Content, err)
 	}
+	excluded := map[string]string{}
 	for _, x := range get.Content.Excluded {
+		excluded[x.Root+"/"+x.Path] = x.Class
 		if x.Class == protocol.HistoryClassCredential && x.Bytes != 0 {
 			t.Errorf("a credential's size is listed: %+v", x)
+		}
+	}
+	if excluded["claude/file-history"] != protocol.HistoryClassUserCopy || excluded["codex/auth.json"] != protocol.HistoryClassCredential ||
+		excluded["claude/.credentials.json"] != protocol.HistoryClassCredential {
+		t.Errorf("the manifest does not list the copies and logins it left out: %v", excluded)
+	}
+	exported := map[string]bool{}
+	for _, file := range get.Content.Files {
+		exported[file.Name()] = true
+	}
+	for _, want := range []string{"agentd/decisions/019a-thread.json", "agentd/managed-output/inv-1/0.txt", "log/" + f.s.Name + ".log",
+		"codex/sessions/2026/10/12/rollout-2026-10-12T01-00-00-abc.jsonl", "claude/history.jsonl"} {
+		if !exported[want] {
+			t.Errorf("%s is not exported: %v", want, exported)
 		}
 	}
 	for _, file := range get.Content.Files {

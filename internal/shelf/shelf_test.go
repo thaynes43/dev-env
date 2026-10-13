@@ -190,3 +190,31 @@ func TestCappedHoldsUnderIOCopy(t *testing.T) {
 		t.Errorf("kept %d bytes, over=%v", c.buf.Len(), c.over)
 	}
 }
+
+// DESIGN-024 section 5's per-replica limit: n slots at most, each released
+// once, and a caller with no slot is told so at once.
+func TestExecSlotsLimitAndRelease(t *testing.T) {
+	s := NewExecSlots(2)
+	a, okA := s.TryTake()
+	b, okB := s.TryTake()
+	if !okA || !okB {
+		t.Fatal("two slots are not free")
+	}
+	if _, ok := s.TryTake(); ok {
+		t.Fatal("a third slot was taken from a limit of two")
+	}
+	a()
+	a() // a second release returns nothing more
+	c, ok := s.TryTake()
+	if !ok {
+		t.Fatal("a released slot is not free")
+	}
+	if _, ok := s.TryTake(); ok {
+		t.Fatal("a double release freed two slots")
+	}
+	b()
+	c()
+	if NewExecSlots(0).free == nil || cap(NewExecSlots(0).free) != 1 {
+		t.Fatal("a limit below one is not one")
+	}
+}

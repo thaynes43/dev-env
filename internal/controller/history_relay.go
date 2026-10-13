@@ -17,6 +17,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -177,8 +178,12 @@ func (e *ExecHistoryRelay) Archive(ctx context.Context, hold *corev1.Pod, args H
 	streamCmd := append(append([]string{"agentd", "ctl", "history-export", "stream"}, args.flags()...), "--plan-sha256", planSHA)
 	streamErrOut := &capped{max: historySmallOutputMax}
 	streamDone := make(chan error, 1)
+	// streamEnded is set before the pipe closes, so a put that ended on that
+	// close always finds it set.
+	var streamEnded atomic.Bool
 	go func() {
 		err := e.Exec.Run(ctx, hold.Namespace, hold.Name, ContainerName, streamCmd, nil, pw, streamErrOut)
+		streamEnded.Store(true)
 		if err != nil {
 			_ = pw.CloseWithError(err)
 		} else {
@@ -190,13 +195,19 @@ func (e *ExecHistoryRelay) Archive(ctx context.Context, hold *corev1.Pod, args H
 	stdin := io.MultiReader(bytes.NewReader(append(append([]byte(nil), data...), '\n')), pr)
 	putOut, putErrOut := &capped{max: historySmallOutputMax}, &capped{max: historySmallOutputMax}
 	putErr := e.Exec.Run(ctx, e.Shelf.Namespace, shelfPod, shelf.Container, putCmd, stdin, putOut, putErrOut)
-	// A put that ended early must not leave the stream blocked on the pipe.
-	_ = pr.CloseWithError(errors.New("put ended"))
+	// Which side ended first says which failure is the cause: a stream that
+	// failed first made put read a short tar; a put that ended first closed
+	// the pipe under the stream.
+	streamFirst := streamEnded.Load()
+	if !streamFirst {
+		// A put that ended early must not leave the stream blocked on the
+		// pipe.
+		_ = pr.CloseWithError(errors.New("put ended"))
+	}
 	streamErr := <-streamDone
 
-	// A refusal of the stream (export_changed, say) is the cause: put then
-	// saw a short tar and refused it. A stream that failed only because put
-	// ended first (io_error) is not: put's own answer is.
+	// A refusal of the stream (export_changed, say) is the cause whenever it
+	// came: put then saw a short tar and refused it.
 	var streamRefusal *protocol.HistoryError
 	if streamErr != nil {
 		var he protocol.HistoryError
@@ -211,23 +222,23 @@ func (e *ExecHistoryRelay) Archive(ctx context.Context, hold *corev1.Pod, args H
 	if err := decodeHistoryAnswer(putOut, putErr, &res, false); err != nil {
 		var he *protocol.HistoryError
 		switch {
+		case streamFirst && streamRefusal != nil:
+			// The stream could not read HOME (io_error): Unknown.
+			return res, streamRefusal
+		case streamFirst && streamErr != nil:
+			// The exec into the hold pod failed: Unknown, whatever put
+			// made of the short stream.
+			return res, holdSide(fmt.Errorf("%w: %w", errHistoryExec, streamErr), streamErrOut)
 		case errors.As(err, &he):
 			return res, he
-		case streamRefusal != nil:
-			return res, streamRefusal
-		case streamErr != nil:
-			return res, holdSide(fmt.Errorf("%w: %w", errHistoryExec, streamErr), streamErrOut)
 		}
 		return res, fmt.Errorf("%w: put in the shelf pod %s: %w: %s", errShelfUnavailable, shelfPod, err, strings.TrimSpace(putErrOut.String()))
 	}
-	if streamErr != nil {
-		// put answered although the stream failed: treat the relay as
-		// unconfirmed, and judge it again.
-		if streamRefusal != nil {
-			return res, streamRefusal
-		}
-		return res, holdSide(fmt.Errorf("%w: %w", errHistoryExec, streamErr), streamErrOut)
-	}
+	// put answered. stored: it checked every byte of the stream against the
+	// manifest. exists: the same content.json is there, and put read none of
+	// the stream, which then failed on its closed pipe. Either way the
+	// stream's own failure, short of a refusal, changes nothing, and verify
+	// checks the entry next.
 	return res, nil
 }
 

@@ -3,6 +3,9 @@ package main
 import (
 	"slices"
 	"testing"
+	"time"
+
+	"github.com/thaynes43/dev-env/internal/controller"
 )
 
 func TestPublishedContextFlagsDefaultOffAndIndependentScope(t *testing.T) {
@@ -189,5 +192,27 @@ func TestPrivateExecutorStopFlagIsExplicitDefaultOffAndNeedsTheRecord(t *testing
 	o, err = parseFlags([]string{"--enable-private-terminal-record", "--enable-private-executor-stop"})
 	if err != nil || !o.privateExecutorStop || !o.privateTerminalRecord {
 		t.Fatal("explicit stop setting missing:", err)
+	}
+}
+
+// T17's flag part (DESIGN-025 13): the HOME expiry up to Archived is off by
+// default, refused without the terminal record, and its grace may only be
+// lengthened.
+func TestHomeHistoryArchiveFlagIsExplicitDefaultOffAndNeedsTheRecord(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.homeHistoryArchive || o.homeExpiryGrace != controller.DefaultHomeExpiryGrace {
+		t.Fatalf("defaults: archive %v, grace %s, err %v; want off and 720h", o.homeHistoryArchive, o.homeExpiryGrace, err)
+	}
+	if _, err := parseFlags([]string{"--enable-home-history-archive"}); err == nil {
+		t.Fatal("the archive was accepted without the terminal record flag")
+	}
+	for _, grace := range []string{"719h59m", "24h", "0s"} {
+		if _, err := parseFlags([]string{"--home-expiry-grace", grace}); err == nil {
+			t.Fatalf("a grace of %s under 720h was accepted", grace)
+		}
+	}
+	o, err = parseFlags([]string{"--enable-private-terminal-record", "--enable-home-history-archive", "--home-expiry-grace", "1000h"})
+	if err != nil || !o.homeHistoryArchive || o.homeExpiryGrace != 1000*time.Hour {
+		t.Fatal("explicit archive setting missing:", err)
 	}
 }

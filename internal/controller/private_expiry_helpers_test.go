@@ -59,11 +59,13 @@ func newAgentdExec(t *testing.T, session string) *agentdExec {
 		".claude/history.jsonl":     `{"display":"a prompt"}` + "\n",
 		".claude/.credentials.json": `{"claudeAiOauth":{"accessToken":"sk-ant-oat-TEST-ONLY"}}`,
 		".codex/sessions/2026/10/12/rollout-2026-10-12T01-00-00-abc.jsonl": `{"type":"session_meta"}` + "\n",
-		".codex/auth.json":                   `{"tokens":{"access_token":"codex-TEST-ONLY"}}`,
-		".agentd/launch.json":                `{"record":"launch"}`,
-		".agentd/decisions/019a-thread.json": `{"state":"Delivered"}`,
-		"work/" + session + ".log":           "the session's log\n",
-		"repos/haynes-ops/README.md":         "code goes through the Git rescue\n",
+		".codex/auth.json":                          `{"tokens":{"access_token":"codex-TEST-ONLY"}}`,
+		".agentd/launch.json":                       `{"record":"launch"}`,
+		".agentd/decisions/019a-thread.json":        `{"state":"Delivered"}`,
+		"work/" + session + ".log":                  "the session's log\n",
+		"repos/haynes-ops/README.md":                "code goes through the Git rescue\n",
+		".claude/file-history/0b6f6c1e/3f9a1c2e@v1": "SECRET_FROM_DOTENV=1\n",
+		".agentd/managed-output/inv-1/0.txt":        "assistant text\n",
 	} {
 		writeExpiryFile(t, filepath.Join(x.home, filepath.FromSlash(rel)), content)
 	}

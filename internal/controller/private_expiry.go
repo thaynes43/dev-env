@@ -625,8 +625,13 @@ func (r *Reconciler) expiryRescue(ctx context.Context, v *expiryView, obs *obser
 	if err != nil {
 		return r.expiryUnknown(ctx, obs, fmt.Errorf("the rescue could not run in the hold pod %s: %w", hold.Name, err))
 	}
-	if written, err := r.recordRescue(ctx, v.s, rec, reason); err != nil || !written {
-		return ctrl.Result{RequeueAfter: time.Second}, true, err
+	written, err := r.recordRescue(ctx, v.s, rec, reason)
+	if err != nil {
+		return r.expiryUnknown(ctx, obs, fmt.Errorf("record the rescue in the hold pod %s: %w", hold.Name, err))
+	}
+	if !written {
+		// The Session changed during the rescue: judge it again.
+		return ctrl.Result{RequeueAfter: time.Second}, true, nil
 	}
 	r.event(v.s, eventType(rec), "Rescue", reason, rec.Message)
 	return ctrl.Result{RequeueAfter: time.Second}, true, nil
