@@ -208,8 +208,13 @@ func (r *Reconciler) prepareExpiryDelete(ctx context.Context, v *expiryView, obs
 }
 
 // recheckArchivedRefusal re-runs the verify for a refusal recorded at
-// Archived while the delete is off, so a fixed archive stops its alert. Only
-// the delete's own checks refuse at Archived, so the refusal is theirs.
+// Archived while the delete is off, once the common re-check has passed, so a
+// fixed archive or a fixed cause stops its alert. The refusal may be the
+// verify's (archive_missing, archive_mismatch, shelf_unavailable), the common
+// re-check's (identity_changed, home_replaced) or the delete's Pod check's
+// (claim_in_use, while the delete was on); each clears only through a verify
+// that passes. With the shelf down it becomes shelf_unavailable instead
+// (DESIGN-025 6.7).
 func (r *Reconciler) recheckArchivedRefusal(ctx context.Context, v *expiryView, obs *observation) (ctrl.Result, bool, error) {
 	if ok, res, stop, err := r.historyArchiveVerified(ctx, v, obs); !ok {
 		return res, stop, err

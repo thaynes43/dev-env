@@ -31,6 +31,13 @@ records the archived read on the installed system (#174). The templates check
 now refuses `dev-env-history-archive` and `dev-env-coordination-archive` as a
 session claim. No CRD change (DESIGN-025 6.7, 7, 7.1, 8.1, 11).
 
+Its review added tests for an owner hold and a resume written during the
+delete's verify and for a verify answer that names another digest or entry,
+made `TestExpiryDeleteNeedsVerify` check the two `if` conditions, corrected
+6.7 on refusals recorded at `Archived` (each clears only through a verify, so
+it needs the shelf), and made `agent-run history show|read` refuse a Session
+UID that is not a Kubernetes UID before any request.
+
 ## DESIGN-025 H5 in source: the operator's HOME expiry up to Archived — 2026-10-13 UTC
 
 #251 adds `status.privateHistory.expiry` (and `expiryClearedAt`) with its CEL

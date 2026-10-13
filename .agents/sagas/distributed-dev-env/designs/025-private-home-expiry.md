@@ -9,8 +9,8 @@
   H5, the operator's expiry up to `Archived` (section 5.4), is in source in
   #251, default off, with its review findings handled the same day. H6, the
   archived-history reads (section 8.1) and the delete and release steps
-  (section 6.7), is in source in #254, both default off. H7 to H10 have no
-  source yet
+  (section 6.7), is in source in #254, both default off, with its review
+  findings handled the same day. H7 to H10 have no source yet
 - **Decision:** [ADR-005](../adrs/005-private-home-expiry.md) (Q-31, Tom,
   2026-10-12: "Archive, then delete (Recommended)"), amended by
   [ADR-006](../adrs/006-private-home-expiry-corrections.md)
@@ -1181,9 +1181,29 @@ installed system (#174). Details the sections above leave open:
   `claim_in_use`. An owner hold stops the delete and the release, as it stops
   every step. With the delete flag off, a record at `Deleting` waits there,
   with its HOME if it still has one, and costs no uncached reads.
-- **A refusal recorded at `Archived`** with the delete off (the delete's own
-  verify is the only step at `Archived` that refuses) is re-checked by the
-  verify alone every 15 minutes, so a repaired archive clears its alert.
+- **A refusal recorded at `Archived`** with the delete off is re-checked every
+  15 minutes by the common re-check and then the delete's verify, and a verify
+  that passes clears it, so a repaired archive or a fixed cause clears its
+  alert. It may be the verify's own (`archive_missing`, `archive_mismatch`,
+  `shelf_unavailable`), the common re-check's (`identity_changed`,
+  `home_replaced`, recorded with the delete on or off), or `claim_in_use` from
+  the delete's Pod check while the delete was on. (Corrected after the review
+  of #254: this used to say the verify is the only step at `Archived` that
+  refuses.) Clearing any of them needs the shelf. If the shelf is down at that
+  re-check, the refusal becomes `shelf_unavailable` instead of clearing: the
+  refusing gauge moves to that reason, `DevEnvHomeExpiryNeedsOwner` no longer
+  names the old one, and `DevEnvShelfUnavailable` (DESIGN-024) shows the cause.
+  The first re-check after the shelf is back clears it. A busy shelf or an
+  Unknown verify keeps the refusal as it is and tries again in a minute.
+- **The re-check after the verify** (`expiryRechecked`) judges the Session
+  again from reads made after the verify, because an owner or a resume may act
+  while it runs, and the write that follows carries those reads'
+  resourceVersion, which already includes the change. A hold written during
+  the verify stops the step: at `Archived` no `Deleting` is written, and in
+  `Deleting` the claim is not deleted. A suspended Session resumed during the
+  verify at `Archived` is no longer triggered, so neither `Deleting` nor
+  `status.archivedAt` is written, and the next reconcile cancels the record
+  with the HOME kept.
 - **The release** (`releaseExpiredSession`) asks `releaseIfEmpty`, whose one
   new exception (`expiryReleaseAllowed`: a Reaping private Session, no canary,
   its record `Expired` for the bound HOME) lets it read the Pod and claim names
@@ -1213,7 +1233,13 @@ never without `Deleting`, no cancel from a longer `archiveAfter` or unreadable
 templates, phase `Archived`, released only once reaped),
 `TestHomeExpiryDeleteTwoOperatorsDeleteOnce` (T13), the guard table
 `TestHomeExpiryVolumeAndReleaseGuardTable` and
-`TestHomeExpiryOverdueCountsToExpiredWithTheDeleteOn`; on a real API server,
+`TestHomeExpiryOverdueCountsToExpiredWithTheDeleteOn`; after the review of
+#254, `TestHomeExpiryHoldDuringTheDeleteVerifyStopsIt` and
+`TestHomeExpiryResumeDuringTheDeleteVerifyCancels` (an owner hold, and a
+resume, written during the verify) and
+`TestHomeExpiryDeleteVerifyThatDoesNotMatchRefuses` (a verify that answers
+another digest or another entry refuses `archive_mismatch` at `Archived` and
+in `Deleting`); on a real API server,
 `TestHomeExpiryOnTheAPIServer` now continues each H5 case to the release with a
 fresh operator for every step (T1, T5, T12), adds a changed archive in
 `Deleting` and a record moved back that the schema refuses, and runs T13's two
@@ -1556,7 +1582,10 @@ leaves open:
   memory at once.
 - **`agent-run history list|show|read`.** `read --all` follows the pages,
   pinned to the first page's entry, and from offset 0 checks the whole file
-  against the archive's SHA-256. A 404 says what it may mean: nothing in the
+  against the archive's SHA-256. `show` and `read` refuse a Session UID that
+  is not a Kubernetes UID before any request, and escape it in the path, as
+  every other verb escapes its path argument (review of #254); the API
+  refuses such a UID too. A 404 says what it may mean: nothing in the
   caller's scope, the reads off, or an operator older than these routes.
 
 Tests: `TestHistoryReadsOffAnswer404`, `TestHistoryListIsScopedBeforeTheShelf`,
@@ -1569,7 +1598,9 @@ changed block is 503 and never served) in `internal/apiserver`;
 `internal/agentrun`, `TestHistoryListTableAndNewFields` and
 `TestHistoryShowAndItsPages` (answers with fields the client does not know),
 `TestHistoryReadFollowsThePagesAndChecksTheHash` and
-`TestHistoryOnAnOperatorWithoutTheReads` (the client tolerance tests).
+`TestHistoryOnAnOperatorWithoutTheReads` (the client tolerance tests), and
+`TestHistoryUsage` (a Session UID that would change the route or the query is
+refused before any request).
 
 ## 9. Owner overrides: hold and release-now
 
@@ -1745,12 +1776,14 @@ after `noPodUsesHome`. `releaseIfEmpty` and `releaseSession` keep a protected
 Session unless `expiryReleaseAllowed` holds. `TestExpiryDeleteNeedsVerify`
 reads every non-test file of the package: each call of `deleteExpiryHome` and
 each write of phase `Deleting` must follow, in the same function and in this
-order, `historyArchiveVerified` as an `if`'s init whose body returns,
-`expiryRechecked` with its view checked against nil and a return, and
-`noPodUsesHome` on that view as an `if`'s init whose body returns; the delete
-must take the Session and claim from that view. It must see exactly one delete
-and one `Deleting` write. Its testdata is `testdata/expirydeletescan`, where
-nine functions each break one rule and two keep them all.
+order, `historyArchiveVerified` as an `if`'s init whose condition is
+`!<its first result>` and whose body returns, `expiryRechecked` with its view
+checked against nil and a return, and `noPodUsesHome` on that view as an
+`if`'s init whose condition is `<its result> != nil` and whose body returns
+(the two conditions since the review of #254); the delete must take the
+Session and claim from that view. It must see exactly one delete and one
+`Deleting` write. Its testdata is `testdata/expirydeletescan`, where eleven
+functions each break one rule and two keep them all.
 
 Each scan has a `testdata` file, never compiled, where each function breaks one
 rule, and the scan must name every one.

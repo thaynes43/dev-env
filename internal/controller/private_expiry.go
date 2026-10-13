@@ -653,8 +653,10 @@ func (r *Reconciler) runExpiryStep(ctx context.Context, v *expiryView, obs *obse
 		return r.expiryRescueAndExport(ctx, v, obs)
 	case v1alpha1.HomeExpiryArchived:
 		// The archive is verified and recorded; the hold pod goes. With
-		// the delete off the expiry stops here, HOME intact; a refusal the
-		// delete's verify recorded is re-checked by the verify alone.
+		// the delete off the expiry stops here, HOME intact; a refusal
+		// recorded at Archived (the verify's, the common re-check's, or the
+		// delete's Pod check's) is cleared only by a verify that passes
+		// after the common re-check, so it needs the shelf (DESIGN-025 6.7).
 		if p := v.ownHold(); p != nil && p.DeletionTimestamp.IsZero() {
 			return r.removeExpiryHold(ctx, v, obs, p, holdReleaseArchived)
 		}
