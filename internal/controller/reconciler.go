@@ -139,6 +139,14 @@ type Reconciler struct {
 	// or export starts; a record stays in its phase, and the expiry's hold pod
 	// is removed because nothing needs it (section 14).
 	HomeHistoryArchive bool
+	// HomeExpiryDelete lets the HOME expiry go past Archived (DESIGN-025 6.5,
+	// 6.6, --enable-home-expiry-delete): the archive verified again, the HOME
+	// deleted through expiryVolumeRemovalAllowed and a Reaping Session
+	// released. It acts only while HomeHistoryArchive is on too; the operator
+	// refuses to start with it unless the archive and the archived-history
+	// reads are on. Off, a record stops at Archived with its HOME intact; one
+	// already Deleting waits, its HOME kept, until the flag is on again.
+	HomeExpiryDelete bool
 	// HomeExpiryGrace is the grace; below DefaultHomeExpiryGrace counts as it.
 	HomeExpiryGrace time.Duration
 	// HistoryRelay runs the export in the hold pod and the archive commands

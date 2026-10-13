@@ -2,6 +2,7 @@ package main
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -214,5 +215,33 @@ func TestHomeHistoryArchiveFlagIsExplicitDefaultOffAndNeedsTheRecord(t *testing.
 	o, err = parseFlags([]string{"--enable-private-terminal-record", "--enable-home-history-archive", "--home-expiry-grace", "1000h"})
 	if err != nil || !o.homeHistoryArchive || o.homeExpiryGrace != 1000*time.Hour {
 		t.Fatal("explicit archive setting missing:", err)
+	}
+}
+
+// T17's flag part (DESIGN-025 13): the archived-history reads and the HOME
+// delete are each off unless set, and the delete is refused at start unless
+// the archive and the reads are both on.
+func TestHistoryReadsAndHomeDeleteFlagsAreExplicitDefaultOff(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.historyArchiveReads || o.homeExpiryDelete {
+		t.Fatalf("defaults: reads %v, delete %v, err %v; want both off", o.historyArchiveReads, o.homeExpiryDelete, err)
+	}
+	o, err = parseFlags([]string{"--enable-history-archive-reads"})
+	if err != nil || !o.historyArchiveReads || o.homeExpiryDelete {
+		t.Fatalf("reads alone: %+v %v", o.historyArchiveReads, err)
+	}
+	for _, args := range [][]string{
+		{"--enable-home-expiry-delete"},
+		{"--enable-home-expiry-delete", "--enable-history-archive-reads"},
+		{"--enable-home-expiry-delete", "--enable-private-terminal-record", "--enable-home-history-archive"},
+		{"--enable-home-expiry-delete", "--enable-private-terminal-record", "--enable-history-archive-reads"},
+	} {
+		if _, err := parseFlags(args); err == nil || !strings.Contains(err.Error(), "--enable-home-expiry-delete") {
+			t.Errorf("%v was accepted: %v", args, err)
+		}
+	}
+	o, err = parseFlags([]string{"--enable-home-expiry-delete", "--enable-private-terminal-record", "--enable-home-history-archive", "--enable-history-archive-reads"})
+	if err != nil || !o.homeExpiryDelete {
+		t.Fatalf("delete with archive and reads: %v", err)
 	}
 }

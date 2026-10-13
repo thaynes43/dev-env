@@ -118,6 +118,8 @@ type options struct {
 	privateTerminalRecord         bool
 	privateExecutorStop           bool
 	homeHistoryArchive            bool
+	historyArchiveReads           bool
+	homeExpiryDelete              bool
 	homeExpiryGrace               time.Duration
 	privateProjectCanariesEnabled bool
 	privateProjectCanaries        *projectcanary.Policy
@@ -153,6 +155,8 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.privateTerminalRecord, "enable-private-terminal-record", false, "record the durable terminal observation of a private executor, and the missed marker, in its Session's status (DESIGN-025 3); records only, deletes nothing")
 	fs.BoolVar(&o.privateExecutorStop, "enable-private-executor-stop", false, "stop the recorded executor of a Reaping private Session with activeDeadlineSeconds, after a confirmed stop intent; an owner hold blocks it (DESIGN-025 4); needs --enable-private-terminal-record")
 	fs.BoolVar(&o.homeHistoryArchive, "enable-home-history-archive", false, "run the HOME expiry of private Sessions up to Archived: after the grace, rescue in a hold pod bound to the HOME, export the provider history into the shelf's history archive and verify it; deletes no HOME (DESIGN-025 5); needs --enable-private-terminal-record")
+	fs.BoolVar(&o.historyArchiveReads, "enable-history-archive-reads", false, "serve the archived provider history of private Sessions on /v1/history under the published context payload-read scope (DESIGN-025 8); off, those routes answer 404")
+	fs.BoolVar(&o.homeExpiryDelete, "enable-home-expiry-delete", false, "let the HOME expiry go past Archived: verify the archive again, delete the private HOME with UID and resourceVersion preconditions and release a reaped Session (DESIGN-025 6.5, 6.6); needs --enable-home-history-archive and --enable-history-archive-reads, and stays off until the archived read is accepted on the installed system (#174)")
 	fs.DurationVar(&o.homeExpiryGrace, "home-expiry-grace", controller.DefaultHomeExpiryGrace, "the HOME expiry's grace after the recorded stop; it may only lengthen Q-31's 720h (DESIGN-025 13)")
 	fs.BoolVar(&o.retainedCommonRules, "enable-retained-common-rules", false, "retain reviewed common instruction inputs for new fixed private managed canaries")
 	fs.BoolVar(&o.privateProjectCanariesEnabled, "enable-private-project-canaries", false, "enable only two explicitly configured private managed subscription rule canaries")
@@ -357,6 +361,9 @@ func parseFlags(args []string) (options, error) {
 	if o.homeHistoryArchive && !o.privateTerminalRecord {
 		return o, errors.New("--enable-home-history-archive requires --enable-private-terminal-record: the HOME expiry rests on the terminal record (DESIGN-025 13)")
 	}
+	if o.homeExpiryDelete && (!o.homeHistoryArchive || !o.historyArchiveReads) {
+		return o, errors.New("--enable-home-expiry-delete requires --enable-home-history-archive and --enable-history-archive-reads: a HOME is deleted only after its history is archived and readable (DESIGN-025 13)")
+	}
 	if o.homeExpiryGrace < controller.DefaultHomeExpiryGrace {
 		return o, fmt.Errorf("--home-expiry-grace %s is under %s: the grace may only be lengthened (DESIGN-025 13)", o.homeExpiryGrace, controller.DefaultHomeExpiryGrace)
 	}
@@ -446,6 +453,9 @@ func run(args []string) error {
 	// The shelf pod holds the shared volume: rescues are listed, restored
 	// from and pruned through it (D-67), and history archived through it.
 	rescueShelf := &shelf.Shelf{Reader: mgr.GetAPIReader(), Exec: podExec, Namespace: o.sessionNamespace}
+	// One limit on this replica's archive execs into the shelf (DESIGN-024
+	// section 5): the HOME expiry's relay and the history reads share it.
+	shelfSlots := shelf.NewExecSlots(shelf.DefaultExecSlots)
 	r := &controller.Reconciler{
 		SessionDirectory: directoryStore,
 		Client:           mgr.GetClient(),
@@ -462,7 +472,8 @@ func run(args []string) error {
 		HomeHistoryArchive:          o.homeHistoryArchive,
 		HomeExpiryGrace:             o.homeExpiryGrace,
 		HomeExpiryCounters:          expiryCounters,
-		HistoryRelay:                &controller.ExecHistoryRelay{Exec: podExec, Shelf: rescueShelf, Slots: shelf.NewExecSlots(shelf.DefaultExecSlots)},
+		HomeExpiryDelete:            o.homeExpiryDelete,
+		HistoryRelay:                &controller.ExecHistoryRelay{Exec: podExec, Shelf: rescueShelf, Slots: shelfSlots},
 		PrivateProjectCanaries:      o.privateProjectCanaries,
 		PrivateProjectCloneOwner:    cloneOwner,
 		ManagedChildDecisions:       o.managedChildDecisions,
@@ -563,6 +574,9 @@ func run(args []string) error {
 			PrivateHistoryRetention: o.privateHistoryRetention, PrivateCanaryTemplates: templatesKey,
 			Exec:             podExec,
 			Shelf:            rescueShelf,
+			HistoryReads:     o.historyArchiveReads,
+			History:          &shelf.HistoryReader{Shelf: rescueShelf},
+			ShelfSlots:       shelfSlots,
 			Templates:        apiserver.TemplatesFrom(mgr.GetClient(), templatesKey),
 			Log:              ctrl.Log.WithName("api"),
 			GrantApprovalURL: o.grantApprovalURL,
