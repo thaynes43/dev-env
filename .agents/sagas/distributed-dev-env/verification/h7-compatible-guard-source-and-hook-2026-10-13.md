@@ -90,6 +90,12 @@ credentials, history mounts or expiry flags were changed by this PR.
 
 ## Remaining evidence and next unit
 
+**Later update:** the dedicated audit deployed in #3904 and failed before
+collecting a baseline. Q-36 holds further reader changes and uses existing Mac
+access; read the [failed-attempt checkpoint](h7-reader-failure-and-existing-access-2026-10-13.md)
+for the current evidence route. The proposed unit below records the 20:23 plan,
+which is superseded for execution.
+
 Current v1 access cannot list dev-agents ReplicationControllers or read the
 ValidatingPolicies, so its incomplete baseline and Forbidden reads are not empty
 or successful results. Q-35 preserves that access. The next separate reviewed

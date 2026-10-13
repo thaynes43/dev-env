@@ -1,5 +1,10 @@
 # H7 compatible archive guard: implementation contract — 2026-10-13
 
+**Current evidence route:** the separate reader failed before any baseline and
+is held under Q-36. Use [the existing-access checkpoint](h7-reader-failure-and-existing-access-2026-10-13.md)
+for the bounded Mac diagnostic and evidence work. No complete installed
+acceptance or new reader access follows.
+
 The coordinator ratified this implementation contract under
 [ADR-007/Q-35](../adrs/007-preserve-v1-archive-trust-boundary.md). ADR-007 and
 the measurement source prerequisites merged together in

@@ -96,7 +96,7 @@ The five retained AgentSessions in `dev-agents`. Canary originals never expire
 | `private-canary-a1444f4131ec7281b5d1e3130c3b5ada` | `430297d9-aa29-4332-9b3b-37095c1b5963` | claude-sigo-1012 | `Failed`, task `Succeeded`, `executorTerminal` |
 | `private-canary-eb9d486a612e27fd2b52d27f675512be` | `454d12a2-60bc-4c4e-95c5-bb4b26428a65` | claude-sigo-1012b | `Failed`, task `Succeeded`, `executorTerminal` |
 
-Next free IDs: Q-36, D-90, ADR-008, DESIGN-026, README decision 71. Each new
+Next free IDs: Q-37, D-91, ADR-008, DESIGN-026, README decision 72. Each new
 question takes the next free Q id when it is asked; none is reserved.
 
 **H7 pickup update, 2026-10-13:** the
@@ -130,7 +130,8 @@ predate this session; their rows point there.
 | Q-32 | "Yes, after deploy" | `dev-env-private-repo-canary-1012/root-q32-owner-answer-r1.json` (`48ab104f…`) | One Sigo rerun after 2.25. Done: all seven DESIGN-011 items hold (#247). |
 | Q-33 | Personal Kubernetes account remains; Headlamp retires after full v2 adoption | `dev-env-h7-personal-identity-1013/root-q33-owner-answer-r1.json` (`da28de08…`) | Direct owner answer in this chat; exact username still needs evidence. No shared Headlamp owner exception follows. |
 | Q-34 | Cannot run a workstation check from the phone; keep working | `dev-env-h7-personal-identity-1013/root-q34-owner-direction-r1.json` (`ac078e5d…`) | Withdraw the workstation request. Discover the identity from accessible evidence and continue independent H7 prerequisites. |
-| Q-35 | "v1 must remain the same until it’s decommissioned after the MVP has been accepted" | `dev-env-h7-archive-guard-1013/q35-relayed-answer-r1.json` (`b8b96a86…`) | Owner answer relayed through oversight; original user turn and native delivery unobserved. ADR-007/D-89 preserves v1 current behavior and access; no new authority or automatic decommissioning. |
+| Q-35 | Relay: "v1 must remain the same until it’s decommissioned after the MVP has been accepted"; direct asynchronous confirmation at 21:33 UTC: "Keep v1 trusted during migration (Recommended)" | `dev-env-h7-archive-guard-1013/q35-relayed-answer-r1.json` (`b8b96a86…`); `q35-direct-owner-confirmation-r1.json` (`d7728c57…`) | Original relayed turn remains unobserved; direct confirmation observed. ADR-007/D-89 preserves v1 current behavior and access; no new authority, activation or automatic decommissioning. Q-36 intact. |
+| Q-36 | "Go for it" for holding the new reader and using existing Mac evidence | `dev-env-h7-archive-guard-1013/q36-relayed-direction-r1.json` (`96ea0658…`) | Relayed operational ruling D-90; original owner turn/native delivery unobserved. Reader already deployed and failed before relay arrived. Hold further reader access/deployment; no undo/retry/activation. |
 | Pacing | "Slow down" (asked 04:00Z, answered 11:02Z, 2026-10-13) | `dev-env-claude-handoff-1013/root-pacing-owner-answer-r1.json` (`a70a80cc…`) | One Opus subagent unit (`claude-opus-5-5`) at a time, Sonnet (`claude-sonnet-5-5`) for routine work, no parallel Opus waves until Tom says otherwise. README decision 69. |
 
 ## Delivered 2026-10-12 to 2026-10-13
@@ -184,14 +185,29 @@ predate this session; their rows point there.
 
 ## Next work, in order
 
+**Current H7 evidence route:** [the reader-failure checkpoint](sagas/distributed-dev-env/verification/h7-reader-failure-and-existing-access-2026-10-13.md)
+records #3904's installed read grants and failed single automatic Job. No
+workload baseline was collected; the first policy's normalized spec mismatched
+source, and actual timezone injection exceeded reviewed execution confinement.
+Q-36/D-90 holds further reader access/deployment and uses existing authorized Mac
+evidence. The relay arrived after deployment and does not authorize undo.
+Independent review supports a historical nine-kind Mac baseline with zero
+archive references and matching protected lineage. The reviewed source-only
+correction merged in [dev-env #267](https://github.com/thaynes43/dev-env/pull/267),
+`dad78a39`, at 22:14:26 UTC; its required CI, full CEL/transport fixtures and
+Python 3.9/current hosted suites passed. The verified Mac tools are ready.
+Full audit remains pending: obtain a fresh bounded receipt using that exact
+reviewed source/artifact and invocation. No held-reader change, retry or new grant; preserve the
+failed Job and all other retained runtime.
+
 **H7 progress at 20:23 UTC, 2026-10-13:** the compatible guard merged in
 [haynes-ops #3902](https://github.com/thaynes43/haynes-ops/pull/3902), `650f3a04`.
 The [source and registered hook checkpoint](sagas/distributed-dev-env/verification/h7-compatible-guard-source-and-hook-2026-10-13.md)
 records the exact-head 1,593 passing hosted tests/subtests, final independent
 no-findings review, observed Kyverno GET permissions, Flux Ready/Healthy and the
 generated Fail hook. Actual installed request acceptance and a complete
-pre-mount baseline remain pending. The next separate unit is a bounded sanitized
-read-only metadata audit using a new dedicated reader, preserving v1 access.
+pre-mount baseline remain pending. The separate reader's later failed attempt
+and existing-access hold are recorded above; use the current route.
 Forbidden policy/ReplicationController reads are not empty or successful results.
 No workstation commands or administrator-token borrowing are the verification path.
 
@@ -238,6 +254,8 @@ need declare-activity and peer checks before and after.
         archive too, so it ships with whichever of H7 and R5 comes first),
         preserving v1 under ADR-007/Q-35; source merged in #3902 and hook
         registered, with complete installed/baseline acceptance pending;
+        the dedicated metadata audit failed and is held under Q-36; diagnose
+        and verify bounded existing Mac evidence before proceeding;
      3. the shelf mount, `--history-archive`, `Recreate` and the 2.27.0 image
         (this absorbs #3710);
      4. the `dev-env-home-expiry-guard` admission policy, refusing every

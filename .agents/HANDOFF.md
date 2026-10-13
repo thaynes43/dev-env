@@ -10,6 +10,31 @@ of the 2026-10-12 brief, which still holds the requirement history and the
 stopped routes. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## H7 reader failed; existing Mac evidence and hold — 2026-10-13
+
+The [failed-reader and existing-access checkpoint](sagas/distributed-dev-env/verification/h7-reader-failure-and-existing-access-2026-10-13.md)
+records haynes-ops #3904, merge `85d1dce3`: the reader foundation and read grants
+are installed, but its single automatic Job failed before any workload inventory.
+Its first policy read reported `InstalledPolicySourceMismatch`; the actual Pod
+also had unreviewed timezone injection with an unlimited init container. Preserve
+the failed Job; no retry, additional access or undo is proceeding.
+
+Q-36/D-90 records Tom's relayed "Go for it" for holding the new reader and using
+existing authorized Mac access for bounded evidence. The relay arrived after the
+merge/deployment and expressly required reporting existing state without undo.
+The Mac route reached the same source mismatch without denial. Independent
+review supports a historical nine-kind baseline (13 objects, zero archive
+references), matching five-object protected lineage and stable named rereads.
+It found transport-limit and checker-assumption defects; full audit and real
+guard acceptance remain pending. The source-only correction merged in
+[dev-env #267](https://github.com/thaynes43/dev-env/pull/267), `dad78a39`, at
+22:14:26 UTC. Required CI and both reviews passed; Python 3.9.25 and 3.12.15
+each passed all 20 methods, including real CEL checks. Verified Mac binaries
+and the reviewed invocation are ready for a fresh bounded capture; none has
+run with this correction. Obtain that receipt without changing the held reader. No
+workstation commands are requested from the owner. Already-installed access
+has no withdrawal ruling.
+
 ## H7 archive guard registered; installed acceptance pending — 2026-10-13
 
 [haynes-ops #3902](https://github.com/thaynes43/haynes-ops/pull/3902), merge
@@ -19,9 +44,9 @@ records 1,593 passing hosted tests/subtests, no remaining native/advisory findin
 the deployed Kyverno lookup permissions and Flux Ready/Healthy at 20:23 UTC.
 The generated Fail webhook matches the intended namespace/resources/operations.
 Actual installed request outcomes and the complete pre-mount baseline are still
-pending. The next separate unit is a bounded, sanitized read-only metadata audit
-with its own dedicated identity; v1's inaccessible reads are not success or empty
-state. The owner is currently on a phone; do not request workstation commands.
+pending. The dedicated audit's later failure and existing-access hold are recorded
+above. v1's inaccessible reads are not success or empty state. The owner is
+currently on a phone; do not request workstation commands.
 
 [haynes-ops #3898](https://github.com/thaynes43/haynes-ops/pull/3898), merge
 `a287a4f6`, created the 20Gi RWO history archive PVC. The
@@ -41,6 +66,11 @@ asked whether v1 remains trusted during migration or H7 must isolate archives
 from it before use. An oversight relay quotes Tom's answer: "v1 must remain the
 same until it’s decommissioned after the MVP has been accepted". The coordinator
 verified the relay, not the original owner turn or native phone delivery.
+At 21:33 UTC, Tom directly answered the original asynchronous Q-35 prompt:
+"Keep v1 trusted during migration (Recommended)". This confirms the existing
+boundary; it grants no new rights or activation and leaves Q-36 intact. Receipt
+`q35-direct-owner-confirmation-r1.json`, SHA-256
+`d7728c571d7373417c1ca1d9dc52fd8670468483dc6140535cf447b21f3789e9`.
 ADR-007 records the narrow constraint: preserve v1 behavior, configuration and
 current access; add no rights, archive activation or automatic decommissioning.
 [Issue #261](https://github.com/thaynes43/dev-env/issues/261) preserves the
@@ -2399,7 +2429,8 @@ DESIGN-001 section 15; later rows link their own record. This heading first read
 | Q-30 | **Answered 2026-10-12** by Tom through the Claude native prompt, in free text. Question: "To close #173 I need one more Claude canary on a private repo, proving private GitHub access and a fresh pinned task worktree. The dev bot can't create repos on your personal account. Could you create an empty private repo thaynes43/dev-env-private-probe (a README on main is enough)? Global private admission stays off; the canary reuses the spent 1012 slot." Options: "I'll create it (Recommended)", "Use an existing private repo", "Not now". Answer: "All the Sigo alumni repos are private and all are needed for dev-env, we use them now. Why can't you use those?" Interpretation: use the existing private repositories `thaynes43/sigo-alumni` and `thaynes43/sigoalumni-org` instead of a new probe repository, declared as v2 catalog project `sigo-alumni`, and run the one approved private-repo Claude canary `rule-canary-claude-sigo-1012` against it: one create, one named read, one result read, no retries. Global private admission stays off; repository visibility is unchanged. Owner answer receipt `root-q30-owner-answer-r1.json`, sha256 `1490331885be14f5939fe85c81d91f186274dac089286e2343ca373bdd0b3722`. GitOps: haynes-ops [#3845](https://github.com/thaynes43/haynes-ops/pull/3845). Run on 2026-10-12: bootstrap `Partial` on a tracked symlink, so not accepted; fixed in [#237](https://github.com/thaynes43/dev-env/pull/237) ([DESIGN-011 Q-30 amendment](sagas/distributed-dev-env/designs/011-private-managed-rule-canaries.md#private-repo-canary-on-the-sigo-alumni-project--2026-10-12-q-30-173), README decision 65). Root acceptance `dd5dee24`: items 1 and 3 to 7 hold and item 2 (bootstrap) fails, so the run is not accepted for #173 under DESIGN-011's gate; the Root accepts private GitHub authorization and a fresh task pin separately, as the named deviation `partial-acceptance-by-property` ([Sigo private-repo canary record](sagas/distributed-dev-env/verification/sigo-private-canary-2026-10-12.md)). |
 | Q-31 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Archive, then delete (Recommended)". A private Session's HOME is archived, then deleted, 30 days after its executor's recorded termination: Git rescue in a hold pod bound to the HOME UID, provider history (an allowlist, never credentials) and Git bundle to a shelf-only `Retain` archive, readable under DESIGN-013's scope, then a guarded delete by the operator's leader. A retained Pod is not a stop proof; absence never is. Canary originals never expire; hold and release-now are Tom's alone. Deletion waits for the installed archived read (#174). Closes ADR-004's known gap. [ADR-005](sagas/distributed-dev-env/adrs/005-private-home-expiry.md), [DESIGN-025](sagas/distributed-dev-env/designs/025-private-home-expiry.md), README decision 64. Corrected the same day by [ADR-006](sagas/distributed-dev-env/adrs/006-private-home-expiry-corrections.md) (D-87, README decision 66): only a reap stops a private executor, never the suspended deadline. |
 | Q-32 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Yes, after deploy (Recommended)" (other option: "Not now"). Question: "The Sigo canary proved private GitHub access and a fresh pinned worktree, but catalog bootstrap ended Partial: one Sigo repo tracks a symlink our checkout check wrongly refused. The fix is merged and deploying now as 2.25. May I run one more Claude canary on the Sigo project after the deploy, to prove bootstrap reaches Ready and the new status codes work? One create, one named read, one result read, no retries." Grants, after the 2.25 deploy is post-checked, one new Claude canary record for project `sigo-alumni` through a reviewed haynes-ops PR, replacing the consumed `rule-canary-claude-sigo-1012` record (`codex-1011` byte-identical): exactly one create, one named read and one result read, no retries; global private admission stays off. Not granted: reuse of a consumed canary ID, any retry, a second rerun, credential repair or cleanup of any original. Owner answer receipt `root-q32-owner-answer-r1.json`, sha256 `48ab104fa0c140b139ce537a0d3eb4b59139111a785d2f97145e4ff459736609`. GitOps: haynes-ops [#3855](https://github.com/thaynes43/haynes-ops/pull/3855) (`rule-canary-claude-sigo-1012b`). Run on 2026-10-13 UTC: all seven DESIGN-011 items hold, bootstrap `Ready`; Root acceptance `a3aa0b7d` (`ACCEPTED_PRIVATE_REPO_CANARY_ALL_ITEMS`) accepts #173's private-repository evidence under the all-items gate ([Sigo rerun record](sagas/distributed-dev-env/verification/sigo-rerun-2026-10-13.md), README decision 68). |
-| Q-35 | **Recorded 2026-10-13 as an owner answer relayed through oversight:** "v1 must remain the same until it’s decommissioned after the MVP has been accepted". [ADR-007/D-89](sagas/distributed-dev-env/adrs/007-preserve-v1-archive-trust-boundary.md), README row 70, amends only ADR-006's v1 archive narrowing and C-42. Preserve v1 behavior, configuration and current access. Guard untrusted v2 paths; claim no isolation from v1 and grant no new access, activation or automatic decommissioning. Original owner turn and native delivery were not observed; the coordinator verified the relay. Local receipt `dev-env-h7-archive-guard-1013/q35-relayed-answer-r1.json`, SHA-256 `b8b96a86eb81628733dd4e86068f029b9b99fd7eeed38842f5e01988d7b32903`. |
+| Q-35 | **Recorded 2026-10-13 through oversight, directly confirmed at 21:33 UTC:** relay "v1 must remain the same until it’s decommissioned after the MVP has been accepted"; direct asynchronous answer "Keep v1 trusted during migration (Recommended)". [ADR-007/D-89](sagas/distributed-dev-env/adrs/007-preserve-v1-archive-trust-boundary.md), README row 70, amends only ADR-006's v1 archive narrowing and C-42. Preserve v1 behavior, configuration and current access. Guard untrusted v2 paths; claim no isolation from v1 and grant no new access, activation or automatic decommissioning. Original relayed turn remains unobserved; the direct confirmation is observed. Local relay receipt `dev-env-h7-archive-guard-1013/q35-relayed-answer-r1.json`, SHA-256 `b8b96a86eb81628733dd4e86068f029b9b99fd7eeed38842f5e01988d7b32903`; `dev-env-h7-archive-guard-1013/q35-direct-owner-confirmation-r1.json`, SHA-256 `d7728c571d7373417c1ca1d9dc52fd8670468483dc6140535cf447b21f3789e9`. |
+| Q-36 | **Recorded 2026-10-13 as relayed operational direction:** "Go for it" for holding the new reader and collecting workload/guard/webhook evidence through existing authorized Mac access. [DESIGN-025/D-90](sagas/distributed-dev-env/designs/025-private-home-expiry.md#21-existing-access-evidence-and-hold-q-36), README row 71. The relay arrived after #3904 deployed and its automatic Job failed. Hold further reader access/deployment, preserve the failed attempt; no undo, retry, credential export or later activation. Original owner turn and native delivery unobserved. Local receipt `dev-env-h7-archive-guard-1013/q36-relayed-direction-r1.json`, SHA-256 `96ea06588570ba276c09956e0799e539202d53cfbb2e584155da7ca48a4d373c`. |
 | Pacing | **Answered 2026-10-13** by Tom through the Claude native prompt: "Slow down (Recommended)" (other options: "Keep full speed", "Pause after H5/H6"; asked 04:00Z, answered 11:02Z). Question: "Today's dev-env push has used a lot of Opus subagent time: about 40 reviewed PRs, 4 deploys and 4 canaries. The Max plan is shared with your own Claude use, and hitting the weekly limit stops every session, yours included. How hard should I keep pushing after H5/H6 finish?" Means: one Opus subagent unit (`claude-opus-5-5`) at a time, Sonnet (`claude-sonnet-5-5`) for routine work, no parallel Opus waves until Tom says otherwise. It limits concurrency; it pauses nothing and changes no other gate. Owner answer receipt `root-pacing-owner-answer-r1.json` (in the coordinator's `dev-env-claude-handoff-1013` orders, written from the session record after the answer), sha256 `a70a80ccef09e0d7bd7c8521ce7156dc2dd4a8d00a23a429365e3844be32cf20`. README decision 69; it follows decision 40's 2026-10-07 pacing. |
 
 **Next (historical, 2026-10-08; the current order is the 2026-10-13 brief's
