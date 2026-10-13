@@ -13,6 +13,9 @@
 //	GET    /v1/grants                      list, with filters
 //	GET    /v1/grants/{name}               one grant
 //	DELETE /v1/grants/{name}               release: set spec.release for the broker
+//	GET    /v1/history                     archived provider history of one project (DESIGN-025 8)
+//	GET    /v1/history/{session}           one archived history's manifest, in pages
+//	GET    /v1/history/{session}/file      one page of one archived file
 //
 // The API writes AgentSession objects and their status, and AccessGrant specs
 // (never their status: the broker decides a grant); it never touches a pod or a
@@ -47,6 +50,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/inbox"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/sessiondirectory"
+	"github.com/thaynes43/dev-env/internal/shelf"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
 	"github.com/thaynes43/dev-env/internal/templates"
@@ -99,6 +103,16 @@ type Server struct {
 	// Shelf lists the rescues on the shared volume, for GET /v1/rescues and a
 	// restore (D-67). Nil answers both with 503.
 	Shelf RescueShelf
+	// HistoryReads turns the archived-history routes on (DESIGN-025 8,
+	// --enable-history-archive-reads). Off, every history route answers 404,
+	// as if no history existed.
+	HistoryReads bool
+	// History reads the shelf's history archive; nil answers 503.
+	History HistoryArchive
+	// ShelfSlots is the replica's limit on archive execs into the shelf
+	// (DESIGN-024 section 5), shared with the HOME expiry's relay: every
+	// history read takes one. Nil takes none.
+	ShelfSlots *shelf.ExecSlots
 	// Templates returns the current templates, or why they are unusable. Nil
 	// skips the profile check and leaves the fleet's revision unknown.
 	Templates func(context.Context) (*templates.Templates, error)
@@ -138,6 +152,9 @@ type route struct {
 	// New private content routes hide authenticated classification refusals.
 	inbox     bool
 	directory bool
+	// history hides a caller that cannot be classified as the archived
+	// history's single reads hide everything outside the caller's scope: 404.
+	history bool
 }
 
 // Handler returns the API's HTTP handler.
@@ -206,6 +223,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle(apiv1.RescuesPath, s.serve(route{methods: map[string]handler{
 		http.MethodGet: s.listRescues,
 	}}))
+	mux.Handle(apiv1.HistoryPath, s.serve(route{coordinator: true, identityGuard: s.historyRoutesOn, methods: map[string]handler{http.MethodGet: s.listHistory}}))
+	mux.Handle(apiv1.HistoryPath+"/{session}", s.serve(route{coordinator: true, history: true, identityGuard: s.historyRoutesOn, methods: map[string]handler{http.MethodGet: s.getHistory}}))
+	mux.Handle(apiv1.HistoryPath+"/{session}/file", s.serve(route{coordinator: true, history: true, identityGuard: s.historyRoutesOn, methods: map[string]handler{http.MethodGet: s.readHistoryFile}}))
 	mux.Handle(apiv1.FleetPath, s.serve(route{methods: map[string]handler{
 		http.MethodGet: s.fleet,
 	}}))
@@ -253,6 +273,9 @@ func (s *Server) serve(rt route) http.Handler {
 				var refusal *apiError
 				if rt.inbox && errors.As(err, &refusal) && (refusal.status == http.StatusForbidden || refusal.status == http.StatusNotFound) {
 					return 0, inboxHidden()
+				}
+				if rt.history && errors.As(err, &refusal) && (refusal.status == http.StatusForbidden || refusal.status == http.StatusNotFound) {
+					return 0, historyHidden()
 				}
 				return 0, err
 			}
