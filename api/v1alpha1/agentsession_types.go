@@ -576,6 +576,8 @@ type AgentSessionStatus struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.executorTerminal) || !has(self.executorMissed)",message="an executor cannot be both recorded terminal and missed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.executorTerminal) || (has(self.executorTerminal) && self.executorTerminal == oldSelf.executorTerminal)",message="the executor terminal record cannot change or be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.executorMissed) || (has(self.executorMissed) && self.executorMissed == oldSelf.executorMissed)",message="the missed executor marker cannot change or be removed"
+// +kubebuilder:validation:XValidation:rule="!has(self.stopRequest) || (has(self.lastExecutor) && self.stopRequest.podUID == self.lastExecutor.podUID)",message="the executor stop request must name the recorded executor"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.stopRequest) || (has(self.stopRequest) && self.stopRequest == oldSelf.stopRequest)",message="the executor stop request cannot change or be removed"
 type PrivateHistoryStatus struct {
 	// +kubebuilder:validation:Enum=1
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="retention version is immutable"
@@ -640,6 +642,27 @@ type PrivateHistoryStatus struct {
 	// proves stop.
 	// +optional
 	ExecutorMissed *PrivateExecutorMissedStatus `json:"executorMissed,omitempty"`
+	// StopRequest is the operator's recorded intent to stop the recorded
+	// executor of a Reaping Session (DESIGN-025 section 4). It is written and
+	// confirmed before the one Pod patch that sets activeDeadlineSeconds, so an
+	// owner hold written first makes it conflict. It names lastExecutor.podUID,
+	// never changes and is never removed. It is not stop proof: only
+	// executorTerminal is.
+	// +optional
+	StopRequest *PrivateExecutorStopRequestStatus `json:"stopRequest,omitempty"`
+}
+
+// PrivateExecutorStopRequestStatus records the stop intent for the recorded
+// private executor (DESIGN-025 section 4).
+type PrivateExecutorStopRequestStatus struct {
+	// +kubebuilder:validation:Enum=1
+	Version int `json:"version"`
+	// PodUID must equal lastExecutor.podUID.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	PodUID string `json:"podUID"`
+	// RequestedAt is the operator's clock when it first recorded the intent.
+	RequestedAt metav1.Time `json:"requestedAt"`
 }
 
 // PrivateExecutorTerminalStatus is the operator's confirmed observation that
