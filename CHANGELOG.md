@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.26.0](https://github.com/thaynes43/dev-env/compare/v2.25.0...v2.26.0) (2026-10-13)
+
+
+### Features
+
+* **agentd:** history export and archive (DESIGN-025 H4) ([#246](https://github.com/thaynes43/dev-env/issues/246)) ([20c710f](https://github.com/thaynes43/dev-env/commit/20c710fe21350db0ce0fde64accf12e40c5413d5))
+* **operator:** stop request for reaped private executors (DESIGN-025 H3) ([#244](https://github.com/thaynes43/dev-env/issues/244)) ([944c1f5](https://github.com/thaynes43/dev-env/commit/944c1f54d6215a72c2f085d6cfe4e0a9c361503e))
+* **usage:** provider-reported served model, usage and cost ([#176](https://github.com/thaynes43/dev-env/issues/176)) ([#245](https://github.com/thaynes43/dev-env/issues/245)) ([02a586b](https://github.com/thaynes43/dev-env/commit/02a586bae799fa2d3a480424e101562800884ec2))
+
 ## [2.25.0](https://github.com/thaynes43/dev-env/compare/v2.24.1...v2.25.0) (2026-10-12)
 
 
