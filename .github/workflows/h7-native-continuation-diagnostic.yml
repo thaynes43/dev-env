@@ -4,11 +4,15 @@ on:
   pull_request:
     paths:
       - internal/agentd/native_invocation_test.go
+      - internal/agentd/hostexecutor/readiness_linux.go
+      - internal/agentd/hostexecutor/readiness_linux_test.go
       - .github/workflows/h7-native-continuation-diagnostic.yml
   push:
     branches: [main]
     paths:
       - internal/agentd/native_invocation_test.go
+      - internal/agentd/hostexecutor/readiness_linux.go
+      - internal/agentd/hostexecutor/readiness_linux_test.go
       - .github/workflows/h7-native-continuation-diagnostic.yml
 
 permissions:
@@ -36,3 +40,5 @@ jobs:
           go version
       - name: One exact synthetic continuation test
         run: nice -n 19 go test -p 1 -parallel 1 -count 1 -timeout 3m -run '^TestNativeInvocationOwnedWaitAllowsOneSameWriterContinuation$' -v ./internal/agentd
+      - name: One exact synthetic owned-tree readiness diagnostic
+        run: nice -n 19 go test -p 1 -parallel 1 -count 1 -timeout 3m -run '^TestOwnedTreeNativeReady$' -v ./internal/agentd/hostexecutor
