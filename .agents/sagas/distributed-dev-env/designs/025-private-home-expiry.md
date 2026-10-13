@@ -11,9 +11,11 @@
   archived-history reads (section 8.1) and the delete and release steps
   (section 6.7), is in source in #254, both default off, with its review
   findings handled the same day. H7 to H10 have no source yet.
-  *Installed, 2026-10-13:* H3 and H4 in 2.26.0 (haynes-ops #3877, #3878,
-  #3880) and H5 and H6 in 2.27.0 (#3885, #3886, #3887), every new flag off;
-  only the terminal record is on. H7 is next
+  *Installed, 2026-10-13:* H3 in the 2.26.0 operator and H4 in the 2.26.0
+  task template's agent image (haynes-ops #3877, #3878, #3880); H5 and H6 in
+  2.27.0 (#3885, #3886, #3887). Every new flag is off; only the terminal
+  record is on. The shelf, which runs H4's `history-archive`, still runs agent
+  2.9.1 and waits for H7. H7 is next.
 - **Decision:** [ADR-005](../adrs/005-private-home-expiry.md) (Q-31, Tom,
   2026-10-12: "Archive, then delete (Recommended)"), amended by
   [ADR-006](../adrs/006-private-home-expiry-corrections.md)

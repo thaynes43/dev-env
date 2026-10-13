@@ -45,7 +45,7 @@ As of 2026-10-13, release 2.27.0 is deployed: operator `sha-2221b83` (haynes-ops
 Rule loading is accepted for both providers. Private GitHub authorization, a
 `Ready` private catalog bootstrap and a fresh task pin are accepted for Claude.
 HOME expiry (DESIGN-025 H1 to H6) is installed with only the terminal record
-on. Full Codex coordination, history-preserving archive, guarded access and
+on; H4's `history-archive` waits for the shelf's H7 image. Full Codex coordination, history-preserving archive, guarded access and
 truthful cost reporting remain unaccepted. Read the handoff for exact digests
 and evidence. The
 historical twenty-row audit guides migration; it is not a universal pilot gate.

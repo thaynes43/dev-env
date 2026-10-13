@@ -11,8 +11,9 @@ grants no runtime permission, retry budget or credential access.
 ## Your assignment
 
 Continue dev-env v2 toward Tom's five outcomes in bounded, reviewed units. Take
-the [next work](#next-work-in-order) in order, one Opus unit at a time (the
-[pacing ruling](#rulings-q-24-to-q-32-and-pacing)). Review what earlier units
+the [next work](#next-work-in-order) in order, one Opus subagent unit
+(`claude-opus-5-5`) at a time, with Sonnet (`claude-sonnet-5-5`) for routine
+work (the [pacing ruling](#rulings-q-24-to-q-32-and-pacing)). Review what earlier units
 shipped; merged code and its tests do not prove a working MVP. Keep source,
 release, deploy and acceptance separate in every record. Do not write another
 general architecture plan.
@@ -66,7 +67,7 @@ Read with `kubectl get` and `gh pr view` at about 11:40 UTC on 2026-10-13.
 | Task template | revision `2.27.0-e83cacfe3e`, agent `ghcr.io/thaynes43/dev-env:2.27.0@sha256:b635dd8183c5f8aa16281e09dfc061bd3694d7a00e47a34f5563d0536ac91718` | haynes-ops #3887 |
 | Shelf (`dev-agents/dev-env-shelf`) | agent 2.9.1 (`a975de7d…`), `RollingUpdate`, no archive volume | H7 changes it; Renovate haynes-ops #3710 is held for H7 |
 | Broker, keeper | broker `sha-eeb15e3` 2/2; keeper `sha-257287a` 1/1; unchanged this session | |
-| Flags on | `--enable-private-terminal-record=true` (H2), private history retention, retained common rules, private-project canaries, session directory, task claims, published contexts, durable inbox, task budgets (the fixture only) | |
+| Flags on | `--enable-private-terminal-record=true` (H2), `--enable-private-history-retention`, `--enable-retained-common-rules`, `--enable-private-project-canaries`, `--enable-coordinator-callers`, `--enable-managed-codex-tasks`, `--enable-session-directory`, `--enable-task-claims`, `--enable-published-contexts` (payload reads for `dev-env` and `sigo-alumni`), `--enable-durable-inbox`, `--enable-task-budgets` (the fixture only) and `--enable-native-lifecycle-fixture`. The operator's live args are authoritative | |
 | Flags off | `--enable-private-project-tasks=false` (global private admission). Absent, so off: `--enable-private-executor-stop`, `--enable-home-history-archive`, `--enable-history-archive-reads`, `--enable-home-expiry-delete` | |
 | Canary policy | `rule-canary-claude-sigo-1012b` and `rule-canary-codex-1011`, both consumed | haynes-ops #3855 |
 | Alerts | `DevEnvRescueFailed`, `DevEnvOperatorMetricsAbsent`, `DevEnvCoordinationRecordsNearLimit` (DESIGN-024 R1) | haynes-ops #3854 |
@@ -95,23 +96,27 @@ The five retained AgentSessions in `dev-agents`. Canary originals never expire
 | `private-canary-a1444f4131ec7281b5d1e3130c3b5ada` | `430297d9-aa29-4332-9b3b-37095c1b5963` | claude-sigo-1012 | `Failed`, task `Succeeded`, `executorTerminal` |
 | `private-canary-eb9d486a612e27fd2b52d27f675512be` | `454d12a2-60bc-4c4e-95c5-bb4b26428a65` | claude-sigo-1012b | `Failed`, task `Succeeded`, `executorTerminal` |
 
-Next free IDs: Q-33, D-89, ADR-007, DESIGN-026, README decision 70.
+Next free IDs: Q-33, D-89, ADR-007, DESIGN-026, README decision 70. Each new
+question takes the next free Q id when it is asked; none is reserved.
 
 ## Rulings Q-24 to Q-32 and pacing
 
 Receipts are under `/home/dev/work/orders/` (local PVC, not in git). The
-[HANDOFF rulings table](HANDOFF.md#rulings) has the full text.
+[HANDOFF rulings table](HANDOFF.md#rulings) has the full text. Q-25 and Q-26
+predate this session; their rows point there.
 
 | Id | Answer | Receipt | Meaning |
 |---|---|---|---|
 | Q-24 | **No answer** | none | Codex native routing for the MVP stays undecided. See [question 3](#questions-for-tom-one-at-a-time). |
+| Q-25 | No decision needed | see HANDOFF | The local schema-host DNS route stopped after three attempts; no retry. [HANDOFF rulings](HANDOFF.md#rulings). |
+| Q-26 | "Allow one correction" (2026-10-11) | see HANDOFF | One final R4 checker correction; Ops #3824 activation accepted; no further retry. [HANDOFF rulings](HANDOFF.md#rulings). |
 | Q-27 | "Fix once, then read" | `dev-env-rule-canary-runtime-1011/root-q27-owner-answer-r1.json` (`eaf4e677…`) | One reader correction, then one named and one result read of the Codex original. Done: both markers (#227). |
 | Q-28 | "Yes, after fixes deploy" | `dev-env-claude-canary-2-1012/root-q28-owner-answer-r1.json` (`daadc6b5…`) | One new Claude canary after 2.24.1. Done: both markers (#232). |
 | Q-29 | "Archive, then delete" | `dev-env-coordination-retention-1012/root-q29-owner-answer-r1.json` (`16346a60…`) | Coordination records archive, then delete, 30 days after their Sessions are proved absent (ADR-004, DESIGN-024, #230). |
 | Q-30 | free text: use the Sigo alumni repos | `dev-env-private-repo-canary-1012/root-q30-owner-answer-r1.json` (`14903318…`) | Private-repo proof on project `sigo-alumni`. First run `Partial` (#234, #240). |
 | Q-31 | "Archive, then delete" | `dev-env-coordination-retention-1012/root-q31-owner-answer-r1.json` (`03255c15…`) | A private HOME is archived, then deleted, 30 days after its executor's recorded stop (ADR-005, DESIGN-025, #233). ADR-006 (#235): only a reap stops a private executor. |
 | Q-32 | "Yes, after deploy" | `dev-env-private-repo-canary-1012/root-q32-owner-answer-r1.json` (`48ab104f…`) | One Sigo rerun after 2.25. Done: all seven DESIGN-011 items hold (#247). |
-| Pacing | "Slow down" (asked 04:00Z, answered 11:02Z, 2026-10-13) | `dev-env-claude-handoff-1013/root-pacing-owner-answer-r1.json` (`a70a80cc…`) | One Opus unit at a time, Sonnet for routine work, no parallel Opus waves until Tom says otherwise. README decision 69. |
+| Pacing | "Slow down" (asked 04:00Z, answered 11:02Z, 2026-10-13) | `dev-env-claude-handoff-1013/root-pacing-owner-answer-r1.json` (`a70a80cc…`) | One Opus subagent unit (`claude-opus-5-5`) at a time, Sonnet (`claude-sonnet-5-5`) for routine work, no parallel Opus waves until Tom says otherwise. README decision 69. |
 
 ## Delivered 2026-10-12 to 2026-10-13
 
@@ -134,8 +139,10 @@ Receipts are under `/home/dev/work/orders/` (local PVC, not in git). The
   ADR-006 (#235). H1 terminal record (#236); H2 deployed with the record on;
   H3 reap-only stop request (#244); H4 agentd history export and archive
   (#246); H5 expiry up to `Archived` (#251); H6 `/v1/history` reads,
-  `agent-run history` and the guarded delete (#254). H3 to H6 are installed
-  with every flag off.
+  `agent-run history` and the guarded delete (#254). H3, H5 and H6 are in the
+  installed operator with every flag off. H4's commands are in the task
+  template's agent image; the shelf, which runs `history-archive`, still runs
+  agent 2.9.1 until H7.
 - **Usage (#176).** Provider-reported served model, tokens and CLI-equivalent
   cost, billing basis `Subscription`, `Unknown` when absent (#245). Keeping it
   after a reap is parked in #248.
@@ -169,25 +176,37 @@ need declare-activity and peer checks before and after.
 1. **H7, haynes-ops** (DESIGN-025 section 12). None of it is under
    `apps/dev/dev-env/**`, so these PRs merge normally.
    - Read-only checks first: every identity that can update AgentSessions; the
-     identity Tom's phone and Headlamp path uses; that no v1 workflow execs
-     into the shelf (the archive guard's parity check).
-   - PRs: the `dev-env-history-archive` PVC (shelf-only, RWO); the shelf mount,
-     `--history-archive`, `Recreate` and the 2.27.0 image (this absorbs #3710);
-     the `dev-env-home-expiry-guard` admission policy, refusing every `system:`
-     identity; the archive guard (it covers DESIGN-024's archive too); the
-     section 10 alerts except stalled (`DevEnvHomeExpiryNeedsOwner`, which
-     includes `plan_too_large`; `DevEnvHistoryArchiveFilling`;
-     `DevEnvPrivateExecutorEndedUnrecorded`; `DevEnvHomeExpiryOverrideInvalid`)
-     and DESIGN-024's `DevEnvShelfUnavailable` for shelf absence;
-     `GOMEMLIMIT` about 200MiB on the operator, then
-     `TestHistoryRelayMeasure` once in a CPU-limited Job with the operator's
-     limits.
-   - **Owner gates**, each one AskUserQuestion when it arises: Tom sets the PV
-     to `Retain` by hand once the claim binds; if anyone but Tom can update
-     AgentSessions, or his phone path is a ServiceAccount, the policy must
-     match his identity, so confirm it with him; just before the stop flag, a
-     read-only list of Reaping private Sessions with a live executor, named in
-     the PR so Tom can hold any (ask only if the list is not empty).
+     identity Tom's phone and Headlamp path uses; the archive guard's parity
+     check (DESIGN-025 section 7): an RBAC listing of every identity with
+     `pods/exec` or Job `create` in `dev-agents`, and that no v1 workflow or
+     runbook execs into the shelf or runs a Job that mounts the claim.
+   - PRs, in this order. The archive guard ships after its parity check and
+     before the claim is mounted (section 12), so the shelf mount comes last:
+     1. the `dev-env-history-archive` PVC (shelf-only, RWO);
+     2. the archive guard, `dev-env-archive-guard` (it covers DESIGN-024's
+        archive too, so it ships with whichever of H7 and R5 comes first);
+     3. the shelf mount, `--history-archive`, `Recreate` and the 2.27.0 image
+        (this absorbs #3710);
+     4. the `dev-env-home-expiry-guard` admission policy, refusing every
+        `system:` identity;
+     5. the section 10 alerts except stalled (`DevEnvHomeExpiryNeedsOwner`,
+        which includes `plan_too_large`; `DevEnvHistoryArchiveFilling`;
+        `DevEnvPrivateExecutorEndedUnrecorded`;
+        `DevEnvHomeExpiryOverrideInvalid`) and DESIGN-024's
+        `DevEnvShelfUnavailable` for shelf absence;
+     6. `GOMEMLIMIT` about 200MiB on the operator, then
+        `TestHistoryRelayMeasure` once in a CPU-limited Job with the
+        operator's limits, before the archive flag.
+   - **Owner gates**, each one AskUserQuestion when it arises: if the parity
+     check finds a v1 workflow that execs into the shelf or mounts the claim,
+     ask Tom before the guard ships (no v2 guard may cut a capability agents
+     use today); Tom sets the PV to `Retain` by hand once the claim binds; if
+     anyone but Tom can update AgentSessions, or his phone path is a
+     ServiceAccount, the policy must match his identity, so confirm it with
+     him (a ServiceAccount phone path is also named in the archive guard);
+     just before the stop flag, a read-only list of Reaping private Sessions
+     with a live executor, named in the PR so Tom can hold any (ask only if
+     the list is not empty).
    - Then flags on, each its own PR, in this order:
      `--enable-private-executor-stop`, `--enable-home-history-archive`,
      `--enable-history-archive-reads`.
@@ -197,7 +216,8 @@ need declare-activity and peer checks before and after.
    the session source ([question 2](#questions-for-tom-one-at-a-time)). The
    Session also needs the 30-day grace or Tom's `release-now` annotation, which
    only he can set. H9 (delete on, `DevEnvHomeExpiryStalled`) only after H8
-   merges. H10 records the first `Expired` Session.
+   merges. H10 is the installed record of the first expiry and of the ADR-004
+   release 30 days later.
 3. **Coordination retention R2 to R7** (#175, DESIGN-024): R2 to R4 source, R5
    and R6 haynes-ops (R5 shares the shelf's `Recreate` and the archive guard
    with H7), R7 the record. Then #175 consumer acceptance: claim contention and
@@ -209,15 +229,33 @@ need declare-activity and peer checks before and after.
    directories and worktrees; missing-repo bootstrap in an existing HOME; a
    failed fetch blocking new work; dirty and WIP state surviving an installed
    run; a runtime proof of the tracked-symlink case. A new canary for any of
-   these is an **owner gate**.
-6. **MCP parity in v2 pods.** The cigar-journal, home-assistant, outline and
-   vexa secrets are unset (the boot step `mcp` warns). The UniFi token is in
-   Tom's held draft haynes-ops #3884, which also edits `templates.yaml`:
-   coordinate merges with any template pin, and do not merge it yourself (it
-   bounces the v1 pod).
-7. **The rest.** #248 (usage after reap); #243 (Codex bump; not #100 as is);
-   dev-env Renovate #252 and #255; Q-24 and global private admission (owner);
-   roadmap step 6, the disposable owner pilot.
+   these is an **owner gate**. Settle
+   [#226](https://github.com/thaynes43/dev-env/issues/226) first (item 8).
+6. **MCP parity in v2 pods
+   ([#257](https://github.com/thaynes43/dev-env/issues/257)).** Observed
+   2026-10-13: all five retained Sessions are on the canary profiles, which
+   carry no MCP tokens by design, and each reports boot step `mcp` warning
+   `$CIGAR_JOURNAL_TOKEN is not set`. The `full`, `dev` and `ops` profiles wire
+   `dev-env-cigar-secret` (and `full` and `dev` `dev-env-mcp-secret`); both
+   ExternalSecrets report `SecretSynced`. No non-canary v2 session's `mcp`
+   step has been seen yet, so parity is not shown. The UniFi token is in Tom's
+   held draft haynes-ops #3884, which also edits `templates.yaml`: coordinate
+   merges with any template pin, and do not merge it yourself (it bounces the
+   v1 pod).
+7. **#176 acceptance and guarded access (roadmap step 5, outcome 3).**
+   Provider-reported usage (#245) is installed since 2.26.0 but not accepted:
+   acceptance against a real provider is separate (#245's body). The guarded
+   required-access slices are not started: useful scoped access, with use,
+   refusal, expiry and revocation proved before any required v1 workflow
+   retires ([2026-10-12 roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap),
+   step 5).
+8. **The rest.** [#226](https://github.com/thaynes43/dev-env/issues/226) needs
+   a design decision: whether canary result reads keep the catalog
+   ConfigMap's UID and resourceVersion as read authority or compare content
+   only. Settle it before the next canary's result read (items 2 and 5). #248
+   (usage after reap); #243 (Codex bump; not #100 as is); dev-env Renovate
+   #252 and #255; Q-24 and global private admission (owner); roadmap step 6,
+   the disposable owner pilot.
 
 ## Standing boundaries
 
@@ -235,8 +273,8 @@ need declare-activity and peer checks before and after.
 - CPU: no burners, stress, busy loops or wide test runs. Focused tests, one at a
   time, through a shared `flock`, under `nice -n 19` with `GOMAXPROCS=2 -p 1`.
   Reuse the envtest assets. A CPU limit on every Job.
-- Pacing: one Opus unit at a time, Sonnet for routine work, no parallel Opus
-  waves.
+- Pacing: one Opus subagent unit (`claude-opus-5-5`) at a time, Sonnet
+  (`claude-sonnet-5-5`) for routine work, no parallel Opus waves.
 - Full model ids. No secrets, private addresses or transcripts in this public
   repo. No credential or enrollment copies, no paid-API fallback.
 - Claude advisory review is optional, not a gate. It ran on most PRs on
@@ -286,10 +324,13 @@ Ask each with AskUserQuestion when it arises, recommended option first. Check
 its premise with a read-only command first, record it in the design or issue,
 and fold the answer back as a dated ruling.
 
-1. **H7 owner steps**, in order as they come up: the override policy's identity
-   (only if someone besides Tom can update AgentSessions, or his phone path is a
-   ServiceAccount); `Retain` on the archive PV; a hold for any Reaping private
-   Session with a live executor (only if the check finds one).
+1. **H7 owner steps**, in order as they come up: whether a v1 workflow keeps
+   its shelf access (only if the parity check finds one that execs into the
+   shelf or mounts the claim; ask before the archive guard ships); the
+   override policy's identity (only if someone besides Tom can update
+   AgentSessions, or his phone path is a ServiceAccount); `Retain` on the
+   archive PV; a hold for any Reaping private Session with a live executor
+   (only if the check finds one).
 2. **A private Session for H8 and the pilot.** H8 needs a reaped, non-canary
    private Session, and global private admission is off. Ask Tom how he wants
    one made, for example one bounded admission for a single disposable session
@@ -299,8 +340,10 @@ and fold the answer back as a dated ruling.
    went out through a native question tool whose phone delivery was never
    verified ([DESIGN-006 Q-24](sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md#q-24-codex-mvp-native-routing)). A peer
    relay (2026-10-12, data only) reports a direction: bounded paired hosts,
-   perhaps one per node, provided pairing is a one-time step. Do not repeat the
-   old question. When Codex routing becomes the next unit, the coordinator may
-   ask one new question (Q-33) that quotes the relay and asks Tom to confirm or
-   correct it. Until then, keep it pending and build nothing that assumes an
-   answer.
+   perhaps one per node, provided pairing is a one-time step. A peer-relayed
+   owner quote is not authority (2026-10-12 brief). Do not repeat the old
+   question. Keep Q-24 pending and build nothing that assumes an answer.
+   *Recommendation of session `task-dev-env-1012-105043`, not an owner
+   ruling:* when Codex routing becomes the next unit, ask one new question,
+   under the next free Q id, that quotes the relay and asks Tom to confirm or
+   correct it.

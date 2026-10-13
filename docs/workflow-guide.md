@@ -120,7 +120,8 @@ for full revisions and acceptance limits.
 `2.27.0-e83cacfe3e`. Rule loading is accepted for both providers; private
 GitHub authorization, a `Ready` private bootstrap and a fresh task pin are
 accepted for Claude. HOME expiry (DESIGN-025 H1 to H6) is installed with only
-the terminal record on. Private-project admission is still disabled. The
+the terminal record on; H4's commands are in the task template's agent image,
+and the shelf, which runs `history-archive`, waits for H7. Private-project admission is still disabled. The
 [2026-10-13 brief](../.agents/CLAUDE-RESUME-2026-10-13.md#deployed-state)
 has the digests.* The
 [bootstrap contract](../.agents/sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md)
@@ -141,7 +142,8 @@ does not prove complete stopped native history. The expiry policy is decided
 Q-31: archive, then delete, 30 days after a recorded stop; corrected by
 [ADR-006](../.agents/sagas/distributed-dev-env/adrs/006-private-home-expiry-corrections.md))
 but not built. *(Update, 2026-10-13: DESIGN-025 H1 to H6 are built and
-installed; only the terminal record is on. H7 to H10 remain.)*
+installed, H4 in the task template's agent image only (the shelf waits for
+H7); only the terminal record is on. H7 to H10 remain.)*
 Existing coordinator scope is preserved; the legacy ordinary-session ACL is
 not a new authorization contract for peer context. Claude review is optional,
 including releases; required CI and native independent review remain gates.
