@@ -10,6 +10,28 @@ of the 2026-10-12 brief, which still holds the requirement history and the
 stopped routes. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## H7 unmounted archive PVC installed — 2026-10-13
+
+[haynes-ops #3898](https://github.com/thaynes43/haynes-ops/pull/3898), merge
+`a287a4f6`, created the 20Gi RWO history archive PVC. The
+[installed checkpoint](sagas/distributed-dev-env/verification/h7-archive-pvc-2026-10-13.md)
+records Flux Ready/Healthy, the Bound claim and no Pod references at 17:24 UTC.
+The shelf, retained sessions and failed Jobs match their baseline. Expiry flags
+remain off except terminal recording. The bound PV is still Delete; owner-set
+Retain is required before archive activation. The next ordered unit is the
+archive guard before the shelf mount; its implementation now awaits Q-35 below.
+F4 and both cold measurements still gate activation.
+
+**Guard prerequisite:** the read-only review found operator-account borrowing
+paths available to v1's existing administrator powers. A shelf-only guard does
+not close them. [Q-35](sagas/distributed-dev-env/designs/025-private-home-expiry.md#20-h7-archive-trust-boundary-q-35)
+asks whether v1 remains trusted during migration or H7 must isolate archives
+from it before use. Native submission was accepted, but delivery and the answer
+remain unverified. [Issue #261](https://github.com/thaynes43/dev-env/issues/261)
+preserves the evidence and validation limits. No guard implementation or runtime
+probe was made; continue independent resource prerequisites while the decision
+is pending.
+
 ## H7 owner identity and read-only prerequisites — 2026-10-13
 
 The Codex takeover refreshed the startup and H7 read-only checks. The

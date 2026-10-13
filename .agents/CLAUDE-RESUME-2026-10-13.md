@@ -96,7 +96,7 @@ The five retained AgentSessions in `dev-agents`. Canary originals never expire
 | `private-canary-a1444f4131ec7281b5d1e3130c3b5ada` | `430297d9-aa29-4332-9b3b-37095c1b5963` | claude-sigo-1012 | `Failed`, task `Succeeded`, `executorTerminal` |
 | `private-canary-eb9d486a612e27fd2b52d27f675512be` | `454d12a2-60bc-4c4e-95c5-bb4b26428a65` | claude-sigo-1012b | `Failed`, task `Succeeded`, `executorTerminal` |
 
-Next free IDs: Q-35, D-89, ADR-007, DESIGN-026, README decision 70. Each new
+Next free IDs: Q-36, D-89, ADR-007, DESIGN-026, README decision 70. Each new
 question takes the next free Q id when it is asked; none is reserved.
 
 **H7 pickup update, 2026-10-13:** the
@@ -183,6 +183,20 @@ predate this session; their rows point there.
 
 ## Next work, in order
 
+**H7 progress at 17:24 UTC, 2026-10-13:** the unmounted history PVC is installed
+by haynes-ops #3898 (`a287a4f6`), Bound with no Pod references. Read the
+[installed checkpoint](sagas/distributed-dev-env/verification/h7-archive-pvc-2026-10-13.md).
+Its bound PV remains Delete; owner-set Retain is pending. The next ordered unit
+is the archive guard before mounting it; its implementation now awaits Q-35
+below. F4 and both cold resource measurements remain gates.
+The guard review then found operator-account borrowing paths available to v1.
+[Q-35](sagas/distributed-dev-env/designs/025-private-home-expiry.md#20-h7-archive-trust-boundary-q-35)
+is submitted, delivery unverified and answer pending: preserve the current
+trusted v1 administrator boundary during migration, or require technical
+isolation before archive use. [Issue #261](https://github.com/thaynes43/dev-env/issues/261)
+holds the evidence. No guard implementation or bypass probe was made. Continue
+independent resource prerequisites while the owner decision is pending.
+
 Each unit: publish its contract, one reviewed PR, focused tests, native
 independent review, `CI - Success`, self-squash-merge. haynes-ops units also
 need declare-activity and peer checks before and after.
@@ -196,7 +210,8 @@ need declare-activity and peer checks before and after.
      runbook execs into the shelf or runs a Job that mounts the claim.
    - PRs, in this order. The archive guard ships after its parity check and
      before the claim is mounted (section 12), so the shelf mount comes last:
-     1. the `dev-env-history-archive` PVC (shelf-only, RWO);
+     1. the `dev-env-history-archive` PVC (shelf-only, RWO), installed unmounted
+        by #3898; its owner-set PV Retain step remains pending;
      2. the archive guard, `dev-env-archive-guard` (it covers DESIGN-024's
         archive too, so it ships with whichever of H7 and R5 comes first);
      3. the shelf mount, `--history-archive`, `Recreate` and the 2.27.0 image
