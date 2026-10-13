@@ -449,6 +449,110 @@ class AdapterTests(unittest.TestCase):
             reader.get(path)
         self.assertTrue(pipe.closed)
 
+    def test_rfc3339nano_all_fraction_lengths_and_calendar(self):
+        path = C.api_path("v1", "namespaces", name=C.NAMESPACE)
+        origin = M.rfc3339nano_ns("2026-10-13T00:00:00Z")
+        for digits in range(10):
+            with self.subTest(fraction_digits=digits):
+                fraction = "123456789"[:digits]
+                suffix = "." + fraction if digits else ""
+                started = "2026-10-13T00:00:00" + suffix + "Z"
+                finished = "2026-10-13T00:00:01" + suffix + "Z"
+                ns = int(fraction.ljust(9, "0")) if digits else 0
+                self.assertEqual(M.rfc3339nano_ns(started), origin + ns)
+                reply = self.reply(path, {})
+                reply["receipt"].update({"startedAt": started, "finishedAt": finished})
+                reader = M.TransportReader(FakePipe([reply]), EXPECTED)
+                self.assertEqual(reader.get(path), {})
+                self.assertEqual(reader.receipts[0]["startedAt"], started)
+                self.assertEqual(reader.receipts[0]["finishedAt"], finished)
+        self.assertEqual(M.rfc3339nano_ns("1970-01-01T00:00:00.000000001Z"), 1)
+        self.assertEqual(M.rfc3339nano_ns("1969-12-31T23:59:59.999999999Z"), -1)
+        self.assertEqual(M.rfc3339nano_ns("2000-03-01T00:00:00Z") -
+                         M.rfc3339nano_ns("2000-02-29T00:00:00Z"), 86400 * M.NANOSECONDS)
+        invalid = (
+            "1900-02-29T00:00:00Z", "2026-02-29T00:00:00Z", "2026-04-31T00:00:00Z",
+            "0000-01-01T00:00:00Z", "2026-00-01T00:00:00Z", "2026-13-01T00:00:00Z",
+            "2026-10-00T00:00:00Z", "2026-10-13T24:00:00Z", "2026-10-13T00:60:00Z",
+            "2026-10-13T00:00:60Z", "2026-10-13T00:00:00.Z", "2026-10-13T00:00:00.1234567890Z",
+            "2026-10-13T00:00:00+00:00", "2026-10-13T00:00:00-01:00", "2026-10-13T00:00:00z",
+            "2026-10-13T00:00:00Zextra", "2026-10-13 00:00:00Z", SECRET, None,
+        )
+        for value in invalid:
+            with self.subTest(value=value):
+                reply = self.reply(path, {})
+                reply["receipt"]["startedAt"] = value
+                pipe = FakePipe([reply])
+                reader = M.TransportReader(pipe, EXPECTED)
+                with self.assertRaises(C.Refused) as caught:
+                    reader.get(path)
+                self.assertEqual(caught.exception.code, "MalformedTransportTimestamp")
+                self.assertTrue(pipe.closed)
+                self.assertEqual(reader.receipts, [])
+
+    def test_timestamp_order_and_parent_envelope_keep_nanosecond_precision(self):
+        path = C.api_path("v1", "namespaces", name=C.NAMESPACE)
+        cases = (
+            ("2026-10-13T00:00:00.123456789Z", "2026-10-13T00:00:00.123456789Z", True),
+            ("2026-10-13T00:00:00.123456789Z", "2026-10-13T00:00:00.123456790Z", True),
+            ("2026-10-13T00:00:00.123456789Z", "2026-10-13T00:00:00.123456788Z", False),
+            ("2026-12-31T23:59:59.999999999Z", "2027-01-01T00:00:00Z", True),
+            ("2026-10-13T00:00:00Z", "2026-10-13T00:00:05.000000001Z", True),
+            ("2026-10-13T00:00:00Z", "2026-10-13T00:00:05.999999999Z", True),
+            ("2026-10-13T00:00:00Z", "2026-10-13T00:00:06Z", True),
+            ("2026-10-13T00:00:00Z", "2026-10-13T00:00:06.000000001Z", False),
+        )
+        for started, finished, valid in cases:
+            with self.subTest(started=started, finished=finished):
+                reply = self.reply(path, {})
+                reply["receipt"].update({"startedAt": started, "finishedAt": finished})
+                reader = M.TransportReader(FakePipe([reply]), EXPECTED)
+                if valid:
+                    self.assertEqual(reader.get(path), {})
+                else:
+                    with self.assertRaises(C.Refused) as caught:
+                        reader.get(path)
+                    self.assertEqual(caught.exception.code, "MalformedTransportTimestamp")
+
+    def test_preserve_only_exact_redacted_predispatch_refusal(self):
+        path = C.api_path("v1", "namespaces", name=C.NAMESPACE)
+        previous = self.reply(path, {})
+        initial_bytes = previous["receipt"]["responseBytes"]
+        base = {"receipt": {"method": "GET", "path": "", "startedAt": "2026-10-13T00:00:01.000000001Z",
+                "finishedAt": "2026-10-13T00:00:01.000000002Z", "responseBytes": 0,
+                "attempt": 1, "totalResponseBytes": initial_bytes, "error": "RequestShapeRefused"}}
+        pipe = FakePipe([previous, base])
+        reader = M.TransportReader(pipe, EXPECTED)
+        reader.get(path)
+        with self.assertRaises(C.Refused) as caught:
+            reader.get(path)
+        self.assertEqual(caught.exception.code, "RequestShapeRefused")
+        self.assertEqual((reader.requests, reader.bytes), (1, initial_bytes))
+        with self.assertRaises(C.Refused):
+            reader.get(path)
+        self.assertEqual(len(pipe.requests), 2)
+        changes = {
+            "advanced-attempt": lambda r: r["receipt"].update({"attempt": 2}),
+            "bytes": lambda r: r["receipt"].update({"responseBytes": 1, "totalResponseBytes": initial_bytes+1}),
+            "status": lambda r: r["receipt"].update({"httpStatus": 403}),
+            "zero-status-key": lambda r: r["receipt"].update({"httpStatus": 0}),
+            "body": lambda r: r.update({"bodyBase64": "e30="}),
+            "method": lambda r: r["receipt"].update({"method": "POST"}),
+            "different-error": lambda r: r["receipt"].update({"error": "TransportRefused"}),
+            "success": lambda r: r["receipt"].pop("error"),
+        }
+        for name, change in changes.items():
+            with self.subTest(name=name):
+                bad = copy.deepcopy(base)
+                change(bad)
+                pipe = FakePipe([previous, bad])
+                reader = M.TransportReader(pipe, EXPECTED)
+                reader.get(path)
+                with self.assertRaises(C.Refused) as caught:
+                    reader.get(path)
+                self.assertNotEqual(caught.exception.code, "RequestShapeRefused")
+                self.assertTrue(pipe.closed)
+
     def test_transport_refusals_are_sanitized_and_never_retry(self):
         path = C.api_path("v1", "namespaces", name=C.NAMESPACE)
         changes = {

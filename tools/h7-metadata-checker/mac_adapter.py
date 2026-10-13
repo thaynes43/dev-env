@@ -13,6 +13,24 @@ TRANSPORT_ERRORS = {
     "TransportRefused", "HTTPStatusRefused", "EncodingRefused", "DeclaredResponseBudgetExhausted",
     "ResponseBudgetExhausted", "ResponseReadRefused", "MalformedJSONResponse", "MalformedRequest", "InputBudgetExhausted",
 }
+NANOSECONDS = 1_000_000_000
+EXCHANGE_BUDGET_NS = 6 * NANOSECONDS
+
+
+def rfc3339nano_ns(value):
+    """Exact UTC calendar parsing on Python3.9+, with no float or truncation."""
+    C.require(isinstance(value, str), "MalformedTransportTimestamp")
+    match = re.fullmatch(r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]{1,9}))?Z", value)
+    C.require(match is not None, "MalformedTransportTimestamp")
+    try:
+        year, month, day, hour, minute, second = (int(part) for part in match.groups()[:6])
+        stamp = datetime.datetime(year, month, day, hour, minute, second, tzinfo=datetime.timezone.utc)
+    except ValueError:
+        raise C.Refused("MalformedTransportTimestamp") from None
+    days = stamp.toordinal() - datetime.date(1970, 1, 1).toordinal()
+    seconds = days * 86400 + hour * 3600 + minute * 60 + second
+    fraction = int((match.group(7) or "").ljust(9, "0"))
+    return seconds * NANOSECONDS + fraction
 
 
 class TransportReader:
@@ -60,14 +78,23 @@ class TransportReader:
             C.require(type(status) is int and 0 <= status <= 599, "MalformedTransportStatus")
             startup = error in {"ConfigUnavailable", "ConfigRefused", "ContextRefused", "AuthShapeRefused", "ServerShapeRefused",
                                "MalformedRequest", "InputBudgetExhausted"} and attempt == 0 and total == 0
+            # A future helper allowlist drift can refuse a locally allowed path.
+            # Preserve only this exact pre-dispatch refusal, never a success.
+            redacted = error == "RequestShapeRefused" and rec.get("path") == "" and rec.get("method") == "GET" and \
+                attempt == previous_attempt and size == 0 and total == self.bytes and \
+                "httpStatus" not in rec and "bodyBase64" not in reply
             C.require(rec.get("path") == path and rec.get("method") == "GET" or
-                      startup and rec.get("path", "") == "" and rec.get("method", "") == "", "MalformedTransportPath")
+                      startup and rec.get("path", "") == "" and rec.get("method", "") == "" or redacted, "MalformedTransportPath")
+            timestamps = []
             for field in ("startedAt", "finishedAt"):
                 stamp = rec.get(field, "")
-                C.require(isinstance(stamp, str) and (startup and stamp == "" or re.fullmatch(
-                    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?Z", stamp)), "MalformedTransportTimestamp")
-                if stamp:
-                    datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+                timestamps.append(None if startup and stamp == "" else rfc3339nano_ns(stamp))
+            C.require(all(stamp is None for stamp in timestamps) or all(stamp is not None for stamp in timestamps),
+                      "MalformedTransportTimestamp")
+            if timestamps[0] is not None:
+                # Span includes pre-context validation and post-request cleanup;
+                # the separately enforced Go HTTP context remains five seconds.
+                C.require(0 <= timestamps[1] - timestamps[0] <= EXCHANGE_BUDGET_NS, "MalformedTransportTimestamp")
             self.requests, self.bytes = attempt, total
             self.receipts.append({key: rec[key] for key in rec})
             if error:

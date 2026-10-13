@@ -62,6 +62,23 @@
     }
   },
   "pureAuditInterface": "audit(reader, expected, report, cel_checker, *, kyverno_version)",
+  "reviewCorrections": {
+    "independentReviewSha256": "aa1126a8d184f388a75b5235fb898970212e5e44fea404775d5fb31d4ecc65c6",
+    "pythonAction": {
+      "sha": "5fda3b95a4ea91299a34e894583c3862153e4b97",
+      "source": "https://github.com/actions/setup-python/tree/v7.0.0",
+      "tagVerifiedAsCommit": true
+    },
+    "redactedFailure": "OnlyRequestShapeRefused/GET/emptyPath/unchangedAttemptAndTotal/zeroResponseBytes/noHTTPStatus/noBody; readerfailspermanently; no authority expansion",
+    "requiredHostedPython": [
+      "3.9",
+      "3.12"
+    ],
+    "reviewedImplementation": "a99502d7b41f999453b52f90bbb5b3dbdec7444d",
+    "timestampEnvelopeBasis": "Parent IPC deadline; unchanged GoHTTP context is5seconds and excludes pre-context validation/post-request cleanup",
+    "timestampEnvelopeNanoseconds": 6000000000,
+    "timestampParser": "Strict UTC Gregorian calendar plus integer epoch nanoseconds; preserves all original0or1-9fractiondigits"
+  },
   "schemaVersion": 1,
   "scope": "Source corrections only; original installed reader, grants, failed attempts, canaries and v1 unchanged",
   "transport": {
