@@ -69,7 +69,7 @@ tools/h7-metadata-checker/celhelper/  separate Go module: pinned CEL lexer/parse
 tools/h7-metadata-checker/transport/  separate Go module: existing-Mac GET-only transport, fixed authority and request budgets
 .github/workflows/h7-native-continuation-diagnostic.yml  bounded hosted diagnostic for the exact synthetic native continuation fixture
 tools/h7-retain-action/  isolated one-time history-PV retention action; owner decision required before execution
-.github/workflows/h7-retain-action.yml  isolated one-time history-PV retention action; owner decision required before execution
+.github/workflows/h7-retain-action.yml  finite offline Retain-action fixtures and Mac artifact build
 release-please-config.json, .release-please-manifest.json   one repo version, `go` type, first release 2.0.0
 api/v1alpha1/            CRD types, group dev-env.haynesops.com (AgentSession; AccessGrant and GrantPolicy, D-54; Activity, D-66;
                          CredentialJob); depends on apimachinery only. Its envtest suite proves the schema's rules (D-39) on a real API server
