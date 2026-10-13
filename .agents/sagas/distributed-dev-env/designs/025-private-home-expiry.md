@@ -2096,3 +2096,30 @@ Plan 11 tracks these:
 - **Transcript content is not scanned** for secrets (6.3).
 - **Archived history is read, not resumed.**
 - **The archive grows without limit**, like DESIGN-024's.
+
+## 18. H7 owner identity: Q-33
+
+**Asked 2026-10-13; answer pending.** The read-only H7 audit found that
+Headlamp's configured Kubernetes backend uses ServiceAccount
+`frontend/headlamp`, bound to `cluster-admin`. Its kubeconfig comes from the
+pod's ServiceAccount token; Authentik protects the ingress. This establishes
+the configured backend, not which path Tom uses on his phone.
+
+Direct RBAC also permits AgentSession update and patch for the operator, Flux's
+helm and kustomize controllers, the generic garbage collector and the
+`system:masters` group. That group's members and Tom's personal Kubernetes
+username are not established by the RBAC listing. These are RBAC allowances,
+not proof that admission permits each request.
+
+**Question:** should H7 preserve `frontend/headlamp` for Tom's phone owner
+controls and archive access? Anyone who can use that shared Headlamp backend
+would share this access.
+
+1. **Preserve Headlamp (recommended):** name `frontend/headlamp` explicitly in
+   the override policy and archive guard, preserving this existing access path.
+2. **Use a personal Kubernetes identity:** establish Tom's exact authenticated
+   identity before writing the policies; do not infer it from a group name.
+
+This question grants no exception until Tom answers. No haynes-ops change is
+made while it is pending. F4, the cold resource measurements, the archive PV's
+owner-set `Retain`, H8's session source and the delete gate remain separate.
