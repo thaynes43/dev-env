@@ -29,6 +29,7 @@ its relayed owner answer is now recorded in
 the next compatible guard; it changes none of this installed PVC evidence.
 F4, both cold resource measurements, the bound PV's
 owner-set Retain and the remaining H7 policies and flag gates still apply.
+A [prepared one-time action](h7-retain-action-contract-2026-10-13.md) is a proposal only; the owner decision and execution remain pending.
 This is not H8's installed history-read acceptance.
 
 Activity `act-172203-248390` covered provisioning and reconciliation in

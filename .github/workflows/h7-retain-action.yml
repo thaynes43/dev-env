@@ -1,0 +1,53 @@
+name: H7 Retain action source
+
+on:
+  pull_request:
+    paths:
+      - tools/h7-retain-action/**
+      - .github/workflows/h7-retain-action.yml
+  push:
+    branches: [main]
+    paths:
+      - tools/h7-retain-action/**
+      - .github/workflows/h7-retain-action.yml
+
+permissions:
+  contents: read
+
+jobs:
+  offline-action:
+    name: H7 offline Retain action and Mac binary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GOMAXPROCS: '2'
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: tools/h7-retain-action/go.sum
+      - name: Finite offline fake-TLS fixtures
+        working-directory: tools/h7-retain-action
+        run: |
+          go version
+          nice -n 19 go test -mod=readonly -p 1 -parallel 1 -count 1 -timeout 2m -v ./...
+      - name: Frozen-source Mac executable
+        working-directory: tools/h7-retain-action
+        run: |
+          mkdir -p "$RUNNER_TEMP/h7-retain-action"
+          nice -n 19 env GOOS=darwin GOARCH=arm64 go build -mod=readonly -p 1 -trimpath -ldflags "-X main.sourceCommit=$(git rev-parse HEAD)" -o "$RUNNER_TEMP/h7-retain-action/retain-darwin-arm64" .
+          go version -m "$RUNNER_TEMP/h7-retain-action/retain-darwin-arm64" > "$RUNNER_TEMP/h7-retain-action/buildinfo.txt"
+          python3 -I -B artifact_manifest.py "$RUNNER_TEMP/h7-retain-action"
+          git diff --exit-code
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: h7-retain-action-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/h7-retain-action
+          if-no-files-found: error
+          retention-days: 7
