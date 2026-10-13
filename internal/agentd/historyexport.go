@@ -94,8 +94,12 @@ func PlanHistoryExport(s Settings, o HistoryExportOptions) (protocol.HistoryExpo
 		root.Absent = absent
 		plan.Roots = append(plan.Roots, root)
 	}
-	plan.Files = w.files
-	plan.Excluded = w.excluded
+	if w.files != nil {
+		plan.Files = w.files
+	}
+	if w.excluded != nil {
+		plan.Excluded = w.excluded
+	}
 	plan.Bytes = w.bytes
 	protocol.SortHistoryFiles(plan.Files)
 	sort.Slice(plan.Excluded, func(i, j int) bool {

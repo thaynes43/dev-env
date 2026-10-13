@@ -295,22 +295,13 @@ func (a HistoryArchive) Put(r io.Reader, archivedBy string) (protocol.HistoryPut
 	if err != nil {
 		return res, err
 	}
-	if err := a.incomingEntry(tmp, c, line, br); err != nil {
-		return res, err
-	}
 	now := a.Now().UTC()
-	entry := protocol.HistoryEntry{Format: protocol.HistoryArchiveEntryFormat, ContentSHA256: sum, ArchivedAt: now, ArchivedBy: archivedBy}
-	data, err := protocol.CanonicalJSON(entry)
-	if err != nil {
-		return res, err
-	}
-	if err := a.incomingFile(filepath.Join(tmp, protocol.HistoryEntryFile), data); err != nil {
-		return res, err
-	}
-	if err := a.incomingSyncTree(tmp); err != nil {
-		return res, err
-	}
-	if err := a.publishIncoming(tmp, final); err != nil {
+	if err := a.incomingWhole(tmp, final, c, line, br, protocol.HistoryEntry{
+		Format: protocol.HistoryArchiveEntryFormat, ContentSHA256: sum, ArchivedAt: now, ArchivedBy: archivedBy,
+	}); err != nil {
+		// A refused or failed put leaves nothing behind, so retries cannot
+		// fill the archive; only a crash leaves debris for pruneIncoming.
+		_ = a.removeIncoming(tmp)
 		return res, err
 	}
 	if err := a.linkIndexEntry(c, sum, entryRel, now); err != nil {
@@ -318,6 +309,28 @@ func (a HistoryArchive) Put(r io.Reader, archivedBy string) (protocol.HistoryPut
 	}
 	res.Status = protocol.HistoryPutStored
 	return res, nil
+}
+
+// incomingWhole writes a whole entry into tmp, entry.json last, syncs it and
+// renames it into place.
+func (a HistoryArchive) incomingWhole(tmp, final string, c protocol.HistoryContent, line []byte, r io.Reader, entry protocol.HistoryEntry) error {
+	if err := a.checkIncoming(tmp); err != nil {
+		return err
+	}
+	if err := a.incomingEntry(tmp, c, line, r); err != nil {
+		return err
+	}
+	data, err := protocol.CanonicalJSON(entry)
+	if err != nil {
+		return err
+	}
+	if err := a.incomingFile(filepath.Join(tmp, protocol.HistoryEntryFile), data); err != nil {
+		return err
+	}
+	if err := a.incomingSyncTree(tmp); err != nil {
+		return err
+	}
+	return a.publishIncoming(tmp, final)
 }
 
 // incomingEntry writes content.json, every file of the tar stream and its

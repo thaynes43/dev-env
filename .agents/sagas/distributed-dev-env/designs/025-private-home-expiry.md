@@ -999,7 +999,10 @@ sections above leave these details open:
   refuses `invalid` for any of these: bytes that are not canonical, an unknown
   field, a bound exceeded, a name the 6.3 checks refuse, a log other than
   `<session>.log`, or tar entries that are not exactly the manifest's files in
-  its order. `--archived-by` goes to `entry.json`.
+  its order. `--archived-by` goes to `entry.json`. A put that is refused or
+  fails removes its own `.incoming` directory at once, so retries cannot fill
+  the volume. Only a crash leaves debris, and a later put removes it once it is
+  an hour old.
 - **Index entries** are named
   `index/<project or _none>/<YYYY-MM>/<archivedAt as 20060102T150405.000000000Z>-<session UID>-<16 hex>.json`.
   Each is hard-linked from `.incoming`, so it never replaces a file. A put that

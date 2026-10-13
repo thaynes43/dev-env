@@ -348,16 +348,17 @@ func TestHistoryArchivePartialPutRecoversAfterARestart(t *testing.T) {
 	c := testContent(t, r.plan(t), "dev-env", testSessionUID)
 	input := putInput(t, r, c)
 
-	// A put that crashed mid-stream leaves its incoming directory.
+	// A refused put, such as one whose stream was cut, leaves nothing.
 	if _, err := ar.a.Put(bytes.NewReader(input[:len(input)/2]), "x"); historyCode(err) != protocol.HistoryErrInvalid {
 		t.Fatalf("a cut stream: %v", err)
 	}
 	incoming := filepath.Join(ar.a.Root, protocol.HistoryArchiveIncoming)
-	debris, _ := os.ReadDir(incoming)
-	if len(debris) != 1 {
-		t.Fatalf("debris: %v", debris)
+	if debris, _ := os.ReadDir(incoming); len(debris) != 0 {
+		t.Fatalf("a refused put left debris: %v", debris)
 	}
-	old := filepath.Join(incoming, debris[0].Name())
+	// A put that crashed mid-stream leaves its incoming directory.
+	old := filepath.Join(incoming, "0123456789abcdef0123456789abcdef")
+	writeTestFile(t, filepath.Join(old, "files", "claude", "history.jsonl"), "half")
 	if err := os.Chtimes(old, ar.now.Add(-2*time.Hour), ar.now.Add(-2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
