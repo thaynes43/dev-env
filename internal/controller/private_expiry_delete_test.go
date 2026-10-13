@@ -566,3 +566,191 @@ func TestHomeExpiryOverdueCountsToExpiredWithTheDeleteOn(t *testing.T) {
 		}
 	}
 }
+
+// setDuringVerify changes the stored Session inside the next archive verify,
+// as an owner or a resume would while it runs: the fresh reads after the
+// verify see the change, and their resourceVersion already includes it, so
+// only the re-check on those reads can stop the step.
+func (f *expiryFixture) setDuringVerify(t *testing.T, edit func(*v1alpha1.AgentSession)) {
+	t.Helper()
+	f.x.mu.Lock()
+	defer f.x.mu.Unlock()
+	f.x.before = map[string]func(){"verify": func() {
+		var s v1alpha1.AgentSession
+		if err := f.c.Get(context.Background(), client.ObjectKeyFromObject(f.s), &s); err != nil {
+			t.Error(err)
+			return
+		}
+		edit(&s)
+		if err := f.c.Update(context.Background(), &s); err != nil {
+			t.Error(err)
+		}
+	}}
+}
+
+func holdHomeExpiry(s *v1alpha1.AgentSession) {
+	if s.Annotations == nil {
+		s.Annotations = map[string]string{}
+	}
+	s.Annotations[v1alpha1.AnnotationHomeExpiry] = v1alpha1.HomeExpiryHold
+}
+
+// An owner hold set while the delete's verify runs (review of #254): at
+// Archived, Deleting is not written; in Deleting, the claim is not deleted.
+// Nothing moves while the hold stays, and once it is lifted the expiry goes
+// on to the end.
+func TestHomeExpiryHoldDuringTheDeleteVerifyStopsIt(t *testing.T) {
+	f := newExpiryFixture(t, nil)
+	f.toArchived(t)
+
+	f.setDuringVerify(t, holdHomeExpiry)
+	f.reconcileDeleting(t, 1)
+	got := f.session(t)
+	if e := got.Status.PrivateHistory.Expiry; e.Phase != v1alpha1.HomeExpiryArchived || e.DeletingAt != nil || got.Status.ArchivedAt != nil {
+		t.Fatalf("a hold set during the verify at Archived: %+v; want Archived, no Deleting", e)
+	}
+	f.reconcileDeleting(t, 3)
+	if e := f.expiry(t); e.Phase != v1alpha1.HomeExpiryArchived || len(f.claimDeletes()) != 0 {
+		t.Fatalf("held at Archived: %+v, deletes %v", e, f.claimDeletes())
+	}
+	f.claimIntact(t)
+
+	f.update(t, func(s *v1alpha1.AgentSession) { delete(s.Annotations, v1alpha1.AnnotationHomeExpiry) })
+	f.reconcileDeleting(t, 1)
+	if e := f.expiry(t); e.Phase != v1alpha1.HomeExpiryDeleting {
+		t.Fatalf("the hold lifted at Archived: %+v; want Deleting", e)
+	}
+
+	f.setDuringVerify(t, holdHomeExpiry)
+	f.reconcileDeleting(t, 1)
+	if e := f.expiry(t); e.Phase != v1alpha1.HomeExpiryDeleting || len(f.claimDeletes()) != 0 {
+		t.Fatalf("a hold set during the verify in Deleting: %+v, deletes %v; want no delete", e, f.claimDeletes())
+	}
+	f.claimIntact(t)
+	f.at(f.clock.Add(homeExpiryRefusalRetry + time.Second))
+	f.reconcileDeleting(t, 3)
+	if len(f.claimDeletes()) != 0 {
+		t.Fatalf("held in Deleting, the HOME was deleted: %v", f.claimDeletes())
+	}
+	f.claimIntact(t)
+
+	f.update(t, func(s *v1alpha1.AgentSession) { delete(s.Annotations, v1alpha1.AnnotationHomeExpiry) })
+	f.reconcileDeleting(t, 2)
+	if e := f.expiry(t); e.Phase != v1alpha1.HomeExpiryExpired || len(f.claimDeletes()) != 1 {
+		t.Fatalf("the hold lifted in Deleting: %+v, deletes %v; want Expired after one delete", e, f.claimDeletes())
+	}
+}
+
+// A suspended Session resumed while the delete's verify runs at Archived
+// (review of #254): the fresh reads show it no longer triggered, so neither
+// Deleting nor status.archivedAt is written, which would leave the resumed
+// Session unable to run with its HOME deleted. The next reconcile cancels the
+// record, and the HOME stays.
+func TestHomeExpiryResumeDuringTheDeleteVerifyCancels(t *testing.T) {
+	f := newExpiryFixture(t, func(tf *terminalFixture) {
+		tf.s.DeletionTimestamp = nil
+		tf.s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+		tf.pod.Status.Reason = "Evicted"
+		tf.s.Status.PrivateHistory.ExecutorTerminal.Reason = "Evicted"
+		suspended := metav1.NewTime(tf.now)
+		tf.s.Status.SuspendedAt = &suspended
+	})
+	f.at(f.now.Add(168*time.Hour + time.Minute))
+	f.toArchived(t)
+	f.statusErr = func(obj client.Object) error {
+		if s, ok := obj.(*v1alpha1.AgentSession); ok && s.Status.ArchivedAt != nil {
+			t.Errorf("a resumed Session got archivedAt: %+v", s.Status.PrivateHistory.Expiry)
+		}
+		return nil
+	}
+
+	f.setDuringVerify(t, func(s *v1alpha1.AgentSession) { s.Spec.OperatingMode = v1alpha1.OperatingModeRunning })
+	f.reconcileDeleting(t, 1)
+	got := f.session(t)
+	if e := got.Status.PrivateHistory.Expiry; e == nil || e.Phase != v1alpha1.HomeExpiryArchived || e.DeletingAt != nil || got.Status.ArchivedAt != nil {
+		t.Fatalf("a resume during the verify at Archived: %+v, archivedAt %v; want Archived, no Deleting", e, got.Status.ArchivedAt)
+	}
+	f.reconcileDeleting(t, 3)
+	got = f.session(t)
+	if got.Status.PrivateHistory.Expiry != nil || got.Status.PrivateHistory.ExpiryClearedAt == nil || got.Status.ArchivedAt != nil {
+		t.Fatalf("the resumed Session: record %+v, cleared %v, archivedAt %v; want the record cancelled", got.Status.PrivateHistory.Expiry,
+			got.Status.PrivateHistory.ExpiryClearedAt, got.Status.ArchivedAt)
+	}
+	if len(f.claimDeletes()) != 0 {
+		t.Fatalf("a resumed Session's HOME was deleted: %v", f.claimDeletes())
+	}
+	f.claimIntact(t)
+}
+
+// The delete's verify must answer the recorded digest and entry (review of
+// #254, as TestHomeExpiryVerifyThatDoesNotMatchRefuses asks of the export's):
+// another digest or another entry refuses archive_mismatch, at Archived (no
+// Deleting) and in Deleting (no claim delete). Once verify answers the entry,
+// the re-check goes on.
+func TestHomeExpiryDeleteVerifyThatDoesNotMatchRefuses(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		answer func(protocol.HistoryVerifyResult) protocol.HistoryVerifyResult
+	}{
+		{"another digest", func(r protocol.HistoryVerifyResult) protocol.HistoryVerifyResult {
+			r.ContentSHA256 = strings.Repeat("cd", 32)
+			return r
+		}},
+		{"another entry", func(r protocol.HistoryVerifyResult) protocol.HistoryVerifyResult {
+			r.Entry = "v1/_none/other/0123456789abcdef"
+			return r
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newExpiryFixture(t, nil)
+			f.toArchived(t)
+			wrong := true
+			run := func(times int) {
+				t.Helper()
+				for range times {
+					r := f.deleting()
+					r.HistoryRelay = verifyAnswer{HistoryRelay: r.HistoryRelay, verify: func(uid, sum string) (protocol.HistoryVerifyResult, error) {
+						real, err := f.x.archive.Verify(uid, sum)
+						if err != nil || !wrong {
+							return real, err
+						}
+						return tc.answer(real), nil
+					}}
+					if _, err := r.Reconcile(context.Background(), reqFor(f.s)); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+
+			run(2)
+			got := f.session(t)
+			e := got.Status.PrivateHistory.Expiry
+			if e.Phase != v1alpha1.HomeExpiryArchived || e.Refusal != expiryArchiveMismatch || got.Status.ArchivedAt != nil || refusedCount(f.counters, expiryArchiveMismatch) != 1 {
+				t.Fatalf("at Archived: %+v; want archive_mismatch, no Deleting", e)
+			}
+			wrong = false
+			f.at(f.clock.Add(homeExpiryRefusalRetry + time.Second))
+			run(1)
+			if e := f.expiry(t); e.Phase != v1alpha1.HomeExpiryDeleting || e.Refusal != "" {
+				t.Fatalf("verify answers the entry at Archived: %+v; want Deleting", e)
+			}
+
+			wrong = true
+			run(2)
+			if e := f.expiry(t); e.Phase != v1alpha1.HomeExpiryDeleting || e.Refusal != expiryArchiveMismatch || refusedCount(f.counters, expiryArchiveMismatch) != 2 {
+				t.Fatalf("in Deleting: %+v; want archive_mismatch", e)
+			}
+			if len(f.claimDeletes()) != 0 {
+				t.Fatalf("the HOME was deleted after a verify that did not match: %v", f.claimDeletes())
+			}
+			f.claimIntact(t)
+
+			wrong = false
+			f.at(f.clock.Add(homeExpiryRefusalRetry + time.Second))
+			run(2)
+			if e := f.expiry(t); e.Phase != v1alpha1.HomeExpiryExpired || len(f.claimDeletes()) != 1 {
+				t.Fatalf("verify answers the entry in Deleting: %+v, deletes %v; want Expired", e, f.claimDeletes())
+			}
+		})
+	}
+}
