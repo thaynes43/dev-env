@@ -465,18 +465,32 @@ func TestHomeExpiryVolumeAndReleaseGuardTable(t *testing.T) {
 		t.Fatalf("the base case is refused: %v", err)
 	}
 	for name, edit := range map[string]func(*v1alpha1.AgentSession, *corev1.PersistentVolumeClaim){
-		"canary":           func(s *v1alpha1.AgentSession, _ *corev1.PersistentVolumeClaim) { s.Spec.ProjectCanary = &v1alpha1.ProjectCanaryBinding{} },
-		"shared":           func(s *v1alpha1.AgentSession, _ *corev1.PersistentVolumeClaim) { s.Spec.Workspace = &v1alpha1.WorkspaceSpec{} },
-		"no record":        func(s *v1alpha1.AgentSession, _ *corev1.PersistentVolumeClaim) { s.Status.PrivateHistory.Expiry = nil },
-		"archived":         func(s *v1alpha1.AgentSession, _ *corev1.PersistentVolumeClaim) { s.Status.PrivateHistory.Expiry.Phase = v1alpha1.HomeExpiryArchived },
-		"expired":          func(s *v1alpha1.AgentSession, _ *corev1.PersistentVolumeClaim) { s.Status.PrivateHistory.Expiry.Phase = v1alpha1.HomeExpiryExpired },
-		"no archive":       func(s *v1alpha1.AgentSession, _ *corev1.PersistentVolumeClaim) { s.Status.PrivateHistory.Expiry.Archive = nil },
-		"no terminal":      func(s *v1alpha1.AgentSession, _ *corev1.PersistentVolumeClaim) { s.Status.PrivateHistory.ExecutorTerminal = nil },
-		"other home":       func(_ *v1alpha1.AgentSession, c *corev1.PersistentVolumeClaim) { c.UID = "other" },
-		"other name":       func(_ *v1alpha1.AgentSession, c *corev1.PersistentVolumeClaim) { c.Name = "home-other" },
-		"foreign owner":    func(_ *v1alpha1.AgentSession, c *corev1.PersistentVolumeClaim) { c.OwnerReferences = nil },
-		"no rv":            func(_ *v1alpha1.AgentSession, c *corev1.PersistentVolumeClaim) { c.ResourceVersion = "" },
-		"unbound identity": func(s *v1alpha1.AgentSession, _ *corev1.PersistentVolumeClaim) { s.Status.PrivateHistory.SessionUID = "x" },
+		"canary": func(s *v1alpha1.AgentSession, _ *corev1.PersistentVolumeClaim) {
+			s.Spec.ProjectCanary = &v1alpha1.ProjectCanaryBinding{}
+		},
+		"shared": func(s *v1alpha1.AgentSession, _ *corev1.PersistentVolumeClaim) {
+			s.Spec.Workspace = &v1alpha1.WorkspaceSpec{}
+		},
+		"no record": func(s *v1alpha1.AgentSession, _ *corev1.PersistentVolumeClaim) { s.Status.PrivateHistory.Expiry = nil },
+		"archived": func(s *v1alpha1.AgentSession, _ *corev1.PersistentVolumeClaim) {
+			s.Status.PrivateHistory.Expiry.Phase = v1alpha1.HomeExpiryArchived
+		},
+		"expired": func(s *v1alpha1.AgentSession, _ *corev1.PersistentVolumeClaim) {
+			s.Status.PrivateHistory.Expiry.Phase = v1alpha1.HomeExpiryExpired
+		},
+		"no archive": func(s *v1alpha1.AgentSession, _ *corev1.PersistentVolumeClaim) {
+			s.Status.PrivateHistory.Expiry.Archive = nil
+		},
+		"no terminal": func(s *v1alpha1.AgentSession, _ *corev1.PersistentVolumeClaim) {
+			s.Status.PrivateHistory.ExecutorTerminal = nil
+		},
+		"other home":    func(_ *v1alpha1.AgentSession, c *corev1.PersistentVolumeClaim) { c.UID = "other" },
+		"other name":    func(_ *v1alpha1.AgentSession, c *corev1.PersistentVolumeClaim) { c.Name = "home-other" },
+		"foreign owner": func(_ *v1alpha1.AgentSession, c *corev1.PersistentVolumeClaim) { c.OwnerReferences = nil },
+		"no rv":         func(_ *v1alpha1.AgentSession, c *corev1.PersistentVolumeClaim) { c.ResourceVersion = "" },
+		"unbound identity": func(s *v1alpha1.AgentSession, _ *corev1.PersistentVolumeClaim) {
+			s.Status.PrivateHistory.SessionUID = "x"
+		},
 		"suspended, no archivedAt": func(s *v1alpha1.AgentSession, _ *corev1.PersistentVolumeClaim) {
 			s.DeletionTimestamp = nil
 			s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
