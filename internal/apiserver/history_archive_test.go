@@ -113,15 +113,15 @@ func TestHistoryReadsARealArchivedEntry(t *testing.T) {
 	transcript := `{"type":"user","message":"hello from an archived session"}` + "\n"
 	for rel, content := range map[string]string{
 		".claude/projects/-home-dev/0b6f6c1e-1111-4222-8333-444455556666.jsonl": transcript,
-		".claude/.credentials.json":       `{"claudeAiOauth":{"accessToken":"sk-ant-oat-TEST-ONLY"}}`,
-		".claude/file-history/x/y@v1":     "COPY_OF_A_FILE=1\n",
-		".codex/sessions/2026/s.jsonl":    "{}\n",
-		".agentd/launch.json":             `{"record":"launch"}`,
-		"work/task-1.log":                 "log\n",
-		"repos/haynes-ops/README.md":      "code goes through the Git rescue\n",
-		"../creds/gh_token":               "ghs_TEST_ONLY",
-		"../shared/.keep":                 "",
-		"../archive/.keep-archive-dir":    "",
+		".claude/.credentials.json":    `{"claudeAiOauth":{"accessToken":"sk-ant-oat-TEST-ONLY"}}`,
+		".claude/file-history/x/y@v1":  "COPY_OF_A_FILE=1\n",
+		".codex/sessions/2026/s.jsonl": "{}\n",
+		".agentd/launch.json":          `{"record":"launch"}`,
+		"work/task-1.log":              "log\n",
+		"repos/haynes-ops/README.md":   "code goes through the Git rescue\n",
+		"../creds/gh_token":            "ghs_TEST_ONLY",
+		"../shared/.keep":              "",
+		"../archive/.keep-archive-dir": "",
 	} {
 		p := filepath.Join(home, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {

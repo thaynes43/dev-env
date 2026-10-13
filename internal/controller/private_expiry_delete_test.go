@@ -532,3 +532,37 @@ func TestHomeExpiryVolumeAndReleaseGuardTable(t *testing.T) {
 		t.Errorf("releaseSession released a Deleting Session: %v", err)
 	}
 }
+
+// The overdue gauge (DESIGN-025 10): with the delete off a record is done at
+// Archived; with it on, only at Expired, so DevEnvHomeExpiryStalled (H9)
+// sees a delete that stalls.
+func TestHomeExpiryOverdueCountsToExpiredWithTheDeleteOn(t *testing.T) {
+	tf := newTerminalFixture()
+	s := tf.s
+	h := s.Status.PrivateHistory
+	at := metav1.NewTime(tf.now)
+	h.ExecutorTerminal = &v1alpha1.PrivateExecutorTerminalStatus{Version: 1, PodUID: h.LastExecutor.PodUID, Phase: "Failed", ObservedAt: at}
+	due := metav1.NewTime(tf.now.Add(-time.Hour))
+	h.Expiry = &v1alpha1.PrivateHomeExpiryStatus{Version: 1, Phase: v1alpha1.HomeExpiryArchived, DueAt: due}
+	for _, tc := range []struct {
+		phase    string
+		deleteOn bool
+		overdue  bool
+	}{
+		{v1alpha1.HomeExpiryArchived, false, false},
+		{v1alpha1.HomeExpiryArchived, true, true},
+		{v1alpha1.HomeExpiryDeleting, true, true},
+		{v1alpha1.HomeExpiryDeleting, false, false},
+		{v1alpha1.HomeExpiryExpired, true, false},
+		{v1alpha1.HomeExpiryExporting, false, true},
+	} {
+		h.Expiry.Phase = tc.phase
+		phases, _, overdue := homeExpiryGauges([]v1alpha1.AgentSession{*s}, tf.now, tc.deleteOn)
+		if (overdue > 0) != tc.overdue {
+			t.Errorf("%s, delete on %v: overdue %v, want overdue %v", tc.phase, tc.deleteOn, overdue, tc.overdue)
+		}
+		if tc.phase == v1alpha1.HomeExpiryDeleting && phases[expiryGaugeDeleting] != 1 {
+			t.Errorf("the deleting gauge: %v", phases)
+		}
+	}
+}
