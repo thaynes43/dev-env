@@ -149,6 +149,9 @@ func exactRelayMeasurePlan(target, pathBytes int) ([]byte, relayMeasureShape, er
 }
 
 // MODE=prepare seals ROOT/plan.json and metadata without running a relay.
+// If prepare fails after creating ROOT, it leaves the unsealed ROOT as evidence.
+// Neither prepare nor reuse accepts that ROOT. Any separately authorized future
+// attempt needs a new ROOT; there is no automatic retry or cleanup.
 // MODE=run reuses that private fixture. BYTES requests an exact canonical size
 // (including newline); FILES retains the earlier inline shape experiment.
 // MODE=selftest runs only the bounded prerequisite checks, not a measurement.

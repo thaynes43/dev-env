@@ -38,6 +38,9 @@ type exportMeasureFixture struct {
 // MODE=plan or stream reuses it; each phase needs its own Job/cgroup and cache
 // evidence for cold acceptance. With no MODE this remains an explicitly warm
 // combined exploratory check, never the deployment-sized cold measurement.
+// If prepare fails after creating ROOT, it leaves the unsealed ROOT as evidence.
+// Neither prepare nor reuse accepts that ROOT. Any separately authorized future
+// attempt needs a new ROOT; there is no automatic retry or cleanup.
 // CPU rule: nice -n19, GOMAXPROCS=2, -p1, -parallel1 and shared flock. No stress,
 // wide parallel tests, cache drops or live HOME/claim mounts are authorized here.
 func TestHistoryExportMeasure(t *testing.T) {
