@@ -149,7 +149,8 @@ name, and Create found neither the Session nor its Pod.
 
 The wait polled the AgentSession five times with read-only `kubectl`. On the
 fifth poll the task result was `Succeeded` / `TaskSucceeded`, "the task exited
-0 (success) after 1 turn", finished at 01:21:11 UTC, 62 seconds after Create.
+0 (success) after 1 turn", finished at 01:21:11 UTC, 62 seconds after
+`createdAt`.
 The binding was `Bound` with all ten checks true, and the bound common rules
 were `Bound` with all seven checks true. The executor Pod
 `3f88bf37-56c3-46ab-b885-057aa18fe30a` ran agentd v2.25.0 on `talosw02`.
@@ -216,9 +217,12 @@ its marker tokens (below).
 | 4 | The task-source record | Holds | The record line carries the commit and comes before the worktree line, the fetch line carries `fetchedAt`, and the bound snapshot carries both revisions. No task-source problem. The file stays in the retained private HOME and was not read. |
 | 5 | Fresh pin | Holds | `ls-remote` finished at 01:20:09.414 and Create started at 01:20:09.766; `fetchedAt` 01:20:58.087 is later than both. The pin equals the pre-Create tip, so no bracketing `ls-remote` was needed. |
 | 6 | Worktree | Holds | The worktree line is on `agent/<session>` from the pin at the pin; the named read reports the same branch and head. |
-| 7 | Peers unchanged | Holds | Against `baseline-item7.json` (pre-merge, 00:21:53 UTC) and the post-run snapshot (01:21:47 UTC), taken with the same script: no pod and no Session differences. Compared: the 10 pods in `dev-env-system`, `dev-agents` and `dev` that are neither operator nor Job pods, and the four retained Sessions (UID, generation, spec). Not compared: the operator pods (rolled by #3855), the canary's own pod, and a Flux-made fixture pod that was re-created at 00:23:32 UTC and is not in the baseline. |
+| 7 | Peers unchanged | Holds | Against `baseline-item7.json` (pre-merge, 00:21:53 UTC) and the post-run snapshot (01:21:47 UTC), taken with the same script: no pod and no Session differences. Compared: the 10 pods in `dev-env-system`, `dev-agents` and `dev` that are neither operator nor Job pods, and the four retained Sessions (UID, generation, spec). Not compared: the operator pods (rolled by #3855), the canary's own pod, a Flux-made fixture pod that was re-created at 00:23:32 UTC and is not in the baseline, and the `upgrade-agent` namespace, which both snapshots hold but item 7 does not cover. |
 
 ## How Q-32 adjusts the items
+
+Root acceptance `a3aa0b7d` lists four Q-32 adjustments, and DESIGN-011's rerun
+note lists the same four. None relaxes the gate.
 
 - Item 2 adds the `status.agent.projectBootstrap` checks, because Q-32 asks to
   prove "the new status codes work". The boot-log checks are unchanged.
@@ -228,6 +232,10 @@ its marker tokens (below).
   as DESIGN-011's "every non-operator pod" says.
 - Both item 7 snapshots carry the snapshot script's fixed purpose text, which
   names the Q-30 PR. They were taken for #3855 and this run.
+
+Two run-plan inputs changed with the record and are not item changes: the
+freeze list checks template revision `2.25.0-b7972dd7b5`, and the boot log read
+targets the new Session's Pod.
 
 ## Recorded deviation
 
@@ -291,18 +299,23 @@ usage, cost, history, stop, the multi-provider MVP or the owner pilot.
 
 ## What #173 now has
 
-Measured against the acceptance list in
-[#173](https://github.com/thaynes43/dev-env/issues/173):
+The rows come from three places, named in the Source column. "Acceptance list"
+is the issue's own acceptance sentence. "Issue body" is a requirement stated
+earlier in [#173](https://github.com/thaynes43/dev-env/issues/173): "New task
+admission still fetches the selected repo and records the exact commit".
+"DESIGN-011" is the private-repository evidence that
+[DESIGN-011's Q-30 section](../designs/011-private-managed-rule-canaries.md#private-repo-canary-on-the-sigo-alumni-project--2026-10-12-q-30-173)
+gates for #173. Only the "Acceptance list" rows are #173's acceptance items.
 
-| #173 acceptance item | State |
-| --- | --- |
-| Both actual providers load the expected rule revision | **Accepted.** The Codex original and Claude canary 1012 loaded the common and repository rules; both Sigo runs reported the project rules' marker too. |
-| New task admission fetches the selected repo and records the exact commit | **Accepted** for a private repository (this run, items 3 to 5). |
-| Private GitHub authorization, `Ready` private catalog bootstrap, fresh pinned task worktree | **Accepted** under DESIGN-011's all-items gate (this run). |
-| Missing repo bootstrap works | **Partly shown.** In this run's new HOME all three declared repositories were missing at boot and reached `Ready`. Not shown: an existing HOME that lacks a repository declared later. |
-| Two bounded pods have independent Git directories and task worktrees | **Open.** Each canary ran in its own pod with its own HOME, but no run compared two pods' Git directories and task worktrees. |
-| A failed fetch blocks fresh implementation | **Open.** No installed run has shown it. |
-| Dirty, WIP and reference state is preserved | **Open** for an installed run. The 2026-10-11 refresh acceptance covered a clean source only. |
+| #173 item | Source | State |
+| --- | --- | --- |
+| Both actual providers load the expected rule revision | Acceptance list | **Accepted.** The Codex original and Claude canary 1012 loaded the common and repository rules; both Sigo runs reported the project rules' marker too. |
+| New task admission fetches the selected repo and records the exact commit | Issue body | **Accepted** for a private repository (this run, items 3 to 5). |
+| Private GitHub authorization, `Ready` private catalog bootstrap, fresh pinned task worktree | DESIGN-011 | **Accepted** under DESIGN-011's all-items gate (this run). |
+| Missing repo bootstrap works | Acceptance list | **Partly shown.** In this run's new HOME all three declared repositories were missing at boot and reached `Ready`. Not shown: an existing HOME that lacks a repository declared later. |
+| Two bounded pods have independent Git directories and task worktrees | Acceptance list | **Open.** Each canary ran in its own pod with its own HOME, but no run compared two pods' Git directories and task worktrees. |
+| A failed fetch blocks fresh implementation | Acceptance list | **Open.** No installed run has shown it. |
+| Dirty, WIP and reference state is preserved | Acceptance list | **Open** for an installed run. The 2026-10-11 refresh acceptance covered a clean source only. |
 
 Global private admission stays off, so general private project tasks still
 refuse. #173 stays open.

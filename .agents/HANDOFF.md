@@ -33,12 +33,15 @@ private-repository evidence.
 - Catalog bootstrap reached `Ready`: the boot step says so, and
   `status.agent.projectBootstrap` reports `dev-env`, `sigo-alumni` and
   `sigoalumni-org` and both project roots `Ready`, with no reason code, in a
-  HOME that was new at Create.
-- agentd fetched the private `thaynes43/sigo-alumni` `main` at `c5da46c2` 48
-  seconds after Create, equal to the `ls-remote` tip read just before it,
-  recorded the task source and made the task worktree from it.
-- Peers unchanged: the 10 pods that are neither operator nor Job pods, and the
-  four retained Sessions (item 7).
+  HOME that was new at Create. The #239 field was reported and well formed,
+  but with everything `Ready` no non-`Ready` reason code was exercised.
+- agentd fetched the private `thaynes43/sigo-alumni` `main` at `c5da46c2` 49
+  seconds after `createdAt` (01:20:09Z), equal to the `ls-remote` tip read
+  just before Create, recorded the task source and made the task worktree from
+  it; the task finished 62 seconds after `createdAt`.
+- Peers unchanged: the 10 pods in `dev-env-system`, `dev-agents` and `dev` that
+  are neither operator nor Job pods, and the four retained Sessions (item 7).
+  The `upgrade-agent` pods in the snapshots are outside item 7.
 - Markers (secondary): common `dev-env-common-rules-20261011-4ca29d70` present,
   project `sigo-alumni-project-rules-20261012-9b122cd5` reported.
 - The boot log was again read after the wait and before the named read; the

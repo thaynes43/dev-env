@@ -154,7 +154,10 @@ private multi-repository catalog project (`sigo-alumni`: two private
 repositories, plus `dev-env`) in a new HOME. The boot step and
 `status.agent.projectBootstrap` (#239) both report every repository and project
 root `Ready`, with no reason code; under 2.24.1 the same catalog ended
-`Partial` (fixed by #237). Missing-repo bootstrap in an existing HOME, and
+`Partial`. That is consistent with #237's fix, but neither run recorded the tip
+of `sigoalumni-org`, so no receipt shows it still tracks the symlink. With
+everything `Ready`, no non-`Ready` #239 reason code was exercised. Missing-repo
+bootstrap in an existing HOME, and
 preservation of dirty or ambiguous reference state in an installed run, are not
 shown yet. See the [Sigo rerun record](../verification/sigo-rerun-2026-10-13.md).*
 
