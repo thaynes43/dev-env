@@ -146,8 +146,8 @@ func TestUsageRollupCountsEachDescendantOnce(t *testing.T) {
 	if r == nil {
 		t.Fatal("no rollup for a Session with descendants")
 	}
-	if r.Scope != "Descendants" || r.Coverage != "Complete" || r.Sessions != 3 || len(r.Invocations) != 3 || r.Truncated {
-		t.Fatal("walk", r.Scope, r.Coverage, r.Sessions, r.Invocations, r.Truncated)
+	if r.Scope != apiv1.UsageRollupScope || r.Coverage != "Complete" || r.Sessions != 3 || r.Counted != 3 || len(r.Invocations) != 3 || r.Truncated {
+		t.Fatal("walk", r.Scope, r.Coverage, r.Sessions, r.Counted, r.Invocations, r.Truncated)
 	}
 	if *r.InputTokens.Amount != 111 || *r.OutputTokens.Amount != 222 || r.CacheReadInputTokens.State != protocol.UsageUnknown || r.CacheReadInputTokens.Amount != nil {
 		t.Fatal("token sums or unknown counters", r.InputTokens, r.OutputTokens, r.CacheReadInputTokens)
@@ -192,7 +192,7 @@ func TestUsageRollupUnknownIsNeverZeroOrPartialSum(t *testing.T) {
 			add(tree)
 			root := tree.items[0]
 			r := usageRollup(&root, tree.items)
-			if r == nil || r.Coverage != "Partial" || r.Sessions != 2 || len(r.Invocations) != 1 {
+			if r == nil || r.Coverage != "Partial" || r.Sessions != 2 || r.Counted != 1 || len(r.Invocations) != 1 {
 				t.Fatal("coverage", r)
 			}
 			for _, m := range []protocol.TokenObservation{r.InputTokens, r.OutputTokens, r.CacheReadInputTokens, r.CacheCreationInputTokens} {
@@ -221,6 +221,27 @@ func TestUsageRollupUnknownIsNeverZeroOrPartialSum(t *testing.T) {
 			t.Fatal("codex token-only child", r)
 		}
 	})
+	t.Run("total past the token bound", func(t *testing.T) {
+		tree := &rollupTree{}
+		tree.add("root", humanSA, base, nil)
+		huge := providerObservation("", "pod", "", "", protocol.MaxUsageTokens, 1, "")
+		for i := 0; i < 10; i++ {
+			tree.add("huge-"+itoa(i), "root", base, &huge)
+		}
+		root := tree.items[0]
+		r := usageRollup(&root, tree.items)
+		if r == nil || r.Coverage != "Complete" || r.Counted != 10 {
+			t.Fatal("coverage", r)
+		}
+		// Every counted invocation is valid, but their sum is not a valid
+		// amount: Unknown, never an amount a reader would refuse.
+		if r.InputTokens.State != protocol.UsageUnknown || r.InputTokens.Amount != nil {
+			t.Fatal("a total past the token bound was reported", r.InputTokens)
+		}
+		if !r.OutputTokens.Valid() || r.OutputTokens.State != protocol.UsageReported || *r.OutputTokens.Amount != 10 {
+			t.Fatal("a bounded total was lost", r.OutputTokens)
+		}
+	})
 	t.Run("no descendants", func(t *testing.T) {
 		tree := &rollupTree{}
 		tree.add("root", humanSA, base, &full)
@@ -234,7 +255,7 @@ func TestUsageRollupUnknownIsNeverZeroOrPartialSum(t *testing.T) {
 		tree.add("root", "loop", base, &full)
 		tree.add("loop", "root", base, &full)
 		root := tree.items[0]
-		if r := usageRollup(&root, tree.items); r == nil || r.Sessions != 1 || len(r.Invocations) != 1 {
+		if r := usageRollup(&root, tree.items); r == nil || r.Sessions != 1 || r.Counted != 1 || len(r.Invocations) != 1 {
 			t.Fatal("cycle walked twice", r)
 		}
 		wide := &rollupTree{}
@@ -287,7 +308,7 @@ func TestUsageRollupOnSessionGet(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	for _, field := range []string{`"usageRollup":{"scope":"Descendants","coverage":"Complete","sessions":1,"invocations":[{"sessionUID":"` + string(s.UID) + `","observationID":"` + u.ID + `"}]`, `"cost":{"state":"Reported","amount":"0","unit":"USD","kind":"ProviderCLIEquivalentEstimate"}`, `"billingBasis":"Subscription"`, `"observedModels":["claude-opus-5-5"]`} {
+	for _, field := range []string{`"usageRollup":{"scope":"RetainedDescendants","coverage":"Complete","sessions":1,"counted":1,"invocations":[{"sessionUID":"` + string(s.UID) + `","observationID":"` + u.ID + `"}]`, `"cost":{"state":"Reported","amount":"0","unit":"USD","kind":"ProviderCLIEquivalentEstimate"}`, `"billingBasis":"Subscription"`, `"observedModels":["claude-opus-5-5"]`} {
 		if !strings.Contains(w.Body.String(), field) {
 			t.Fatal("rollup wire shape", field, w.Body.String())
 		}
@@ -298,6 +319,86 @@ func TestUsageRollupOnSessionGet(t *testing.T) {
 	}
 	if w := f.doHeader(http.MethodGet, apiv1.SessionsPath+"/"+child, tokHuman, nil, provider); strings.Contains(w.Body.String(), "usageRollup") || !strings.Contains(w.Body.String(), `"usageObservation":{"version":2`) {
 		t.Fatal("a Session without descendants got a rollup, or lost its own observation", w.Body.String())
+	}
+
+	// A reaped descendant is gone and drops out of the rollup. Its scope
+	// says the rollup covers retained descendants only, so Complete never
+	// claims the reaped Session's usage.
+	f.sessionPod("rollup-reaped", "full", 1)
+	reaped := f.session("rollup-reaped")
+	reaped.Spec.Parent = root
+	if err := f.c.Update(context.Background(), reaped); err != nil {
+		t.Fatal(err)
+	}
+	reaped = f.session("rollup-reaped")
+	reaped.Status.UsageObservation = usageObservationStatus(providerObservation(string(reaped.UID), "reaped-pod", protocol.AgentClaude, "claude-opus-5-5", 5, 6, "0.5"))
+	if err := f.c.Status().Update(context.Background(), reaped); err != nil {
+		t.Fatal(err)
+	}
+	before := decode[apiv1.Session](t, f.doHeader(http.MethodGet, apiv1.SessionsPath+"/"+root, tokHuman, nil, provider)).UsageRollup
+	if before == nil || before.Sessions != 2 || before.Counted != 2 || *before.InputTokens.Amount != 8 {
+		t.Fatal("rollup before the reap", before)
+	}
+	f.reap(t, "rollup-reaped")
+	after := decode[apiv1.Session](t, f.doHeader(http.MethodGet, apiv1.SessionsPath+"/"+root, tokHuman, nil, provider)).UsageRollup
+	if after == nil || after.Scope != apiv1.UsageRollupScope || after.Coverage != "Complete" || after.Sessions != 1 || after.Counted != 1 || *after.InputTokens.Amount != 3 {
+		t.Fatal("rollup after the reap", after)
+	}
+}
+
+// reap removes a Session the way a finished reap does: its finalizer is
+// released and the object is gone.
+func (f *fixture) reap(t *testing.T, name string) {
+	t.Helper()
+	s := f.session(name)
+	s.Finalizers = nil
+	if err := f.c.Update(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.Delete(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A coordinator may read only its direct children. On a child's view it gets
+// the totals of the work it delegated, never the keys naming grandchildren.
+func TestUsageRollupCoordinatorGetsTotalsWithoutGrandchildKeys(t *testing.T) {
+	f := coordinatorFixture(t)
+	f.sessionPod("coord-child", "dev", 0)
+	child := f.session("coord-child")
+	child.Spec.Parent = coordinatorSA
+	if err := f.c.Update(context.Background(), child); err != nil {
+		t.Fatal(err)
+	}
+	f.sessionPod("coord-grandchild", "dev", 1)
+	grandchild := f.session("coord-grandchild")
+	grandchild.Spec.Parent = "coord-child"
+	if err := f.c.Update(context.Background(), grandchild); err != nil {
+		t.Fatal(err)
+	}
+	grandchild = f.session("coord-grandchild")
+	u := providerObservation(string(grandchild.UID), "grandchild-pod", protocol.AgentClaude, "claude-opus-5-5", 7, 8, "0.25")
+	grandchild.Status.UsageObservation = usageObservationStatus(u)
+	if err := f.c.Status().Update(context.Background(), grandchild); err != nil {
+		t.Fatal(err)
+	}
+	provider := http.Header{apiv1.AttributionHeader: {apiv1.AttributionProvider}}
+	w := f.doHeader(http.MethodGet, apiv1.SessionPath("coord-child"), tokCoordinator, nil, provider)
+	if w.Code != http.StatusOK {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), string(grandchild.UID)) || strings.Contains(w.Body.String(), u.ID) || strings.Contains(w.Body.String(), `"invocations"`) {
+		t.Fatal("coordinator saw a grandchild's keys", w.Body.String())
+	}
+	r := decode[apiv1.Session](t, w).UsageRollup
+	if r == nil || r.Sessions != 1 || r.Counted != 1 || r.Invocations != nil || *r.InputTokens.Amount != 7 || r.Cost.Amount != "0.25" {
+		t.Fatal("coordinator rollup totals", r)
+	}
+	wantError(t, f.do(http.MethodGet, apiv1.SessionPath("coord-grandchild"), tokCoordinator, nil), http.StatusForbidden, apiv1.CodeForbidden)
+	// Any other reader may read every Session and gets the keys.
+	r = decode[apiv1.Session](t, f.doHeader(http.MethodGet, apiv1.SessionPath("coord-child"), tokHuman, nil, provider)).UsageRollup
+	if r == nil || len(r.Invocations) != 1 || r.Invocations[0].SessionUID != string(grandchild.UID) || r.Invocations[0].ObservationID != u.ID {
+		t.Fatal("human reader lost the invocation keys", r)
 	}
 }
 
@@ -396,6 +497,32 @@ func TestManagedOutputAttributionJoinsRetainedInvocationUsage(t *testing.T) {
 	if attr := contextAttribution(contextMetadata(f.context(t, m.Name)).Attribution, f.context(t, m.Name), withObservation(s, other)); attr.Usage != nil || attr.UsageState != "Unknown" {
 		t.Fatal("foreign invocation attributed", attr)
 	}
+	unknownAttribution := func(what string, attr apiv1.ContextAttribution) {
+		t.Helper()
+		if attr.Usage != nil || attr.ObservedModels != nil || attr.ObservedModelState != "Unknown" || attr.UsageState != "Unknown" || attr.CostState != "Unknown" || !apiv1.ValidContextAttribution(attr, true) {
+			t.Fatal(what, attr)
+		}
+	}
+	// A version 1 observation of the same invocation is retained but carries
+	// no provider provenance: the attribution stays Unknown.
+	v1 := providerObservation(string(s.UID), podUID, "claude", s.Spec.Model, 30, 40, "0.75")
+	v1.Version, v1.Provenance, v1.BillingBasis = 1, "", ""
+	if sessionUsage(withObservation(s, v1)) == nil {
+		t.Fatal("the version 1 observation is not a retained observation")
+	}
+	unknownAttribution("version 1 observation attributed", contextAttribution(contextMetadata(f.context(t, m.Name)).Attribution, f.context(t, m.Name), withObservation(s, v1)))
+	// A Session that replaced the source under its name is another Session.
+	replaced := withObservation(s, u)
+	replaced.UID = "replacement-session-uid"
+	unknownAttribution("replaced source attributed", contextAttribution(contextMetadata(f.context(t, m.Name)).Attribution, f.context(t, m.Name), replaced))
+	// The join is live, not stored: once the source Session is reaped, every
+	// reader sees Unknown again (DESIGN-018).
+	f.reap(t, record.SessionName())
+	w = f.doHeader(http.MethodGet, path, reader, nil, provider)
+	if w.Code != http.StatusOK {
+		t.Fatal("publication unreadable after its source was reaped", w.Code, w.Body.String())
+	}
+	unknownAttribution("attribution survived the reaped source", decode[apiv1.PublishedContext](t, w).Metadata.Attribution)
 }
 
 func withObservation(s *v1alpha1.AgentSession, u protocol.UsageObservation) *v1alpha1.AgentSession {
@@ -404,7 +531,7 @@ func withObservation(s *v1alpha1.AgentSession, u protocol.UsageObservation) *v1a
 	return c
 }
 
-func TestContextAttributionExplicitAndVersionOneStayUnknown(t *testing.T) {
+func TestContextAttributionExplicitStaysUnknown(t *testing.T) {
 	f := newFixture(t)
 	bindCatalogFixture(t, f)
 	enableContexts(f)

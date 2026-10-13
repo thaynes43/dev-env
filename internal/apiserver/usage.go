@@ -145,12 +145,14 @@ func sessionUsage(s *v1alpha1.AgentSession) *protocol.UsageObservation {
 // maxRollupSessions bounds a rollup's walk. A larger tree is Partial.
 const maxRollupSessions = 64
 
-// usageRollup sums root's descendants' own initial invocations (DESIGN-018).
-// Descendants are found by spec.parent name, created no earlier than their
-// parent (an older Session names an earlier holder of the name), and walked
-// once each by UID. Each contributes at most its own observation, keyed by its
-// Session UID and observation ID, so no invocation is counted twice. It returns
-// nil when root has no descendants: an empty sum is not a zero.
+// usageRollup sums root's retained descendants' own initial invocations
+// (DESIGN-018). Descendants are found by spec.parent name among the Sessions
+// that still exist, created no earlier than their parent (an older Session
+// names an earlier holder of the name), and walked once each by UID. A reaped
+// descendant is not in all and is not counted; the scope says so. Each
+// contributes at most its own observation, keyed by its Session UID and
+// observation ID, so no invocation is counted twice. It returns nil when root
+// has no retained descendants: an empty sum is not a zero.
 func usageRollup(root *v1alpha1.AgentSession, all []v1alpha1.AgentSession) *apiv1.UsageRollup {
 	children := map[string][]*v1alpha1.AgentSession{}
 	for i := range all {
@@ -159,7 +161,7 @@ func usageRollup(root *v1alpha1.AgentSession, all []v1alpha1.AgentSession) *apiv
 		}
 	}
 	visited := map[types.UID]bool{root.UID: true}
-	r := &apiv1.UsageRollup{Scope: "Descendants", Coverage: "Complete", Invocations: []apiv1.UsageRollupKey{}}
+	r := &apiv1.UsageRollup{Scope: apiv1.UsageRollupScope, Coverage: "Complete", Invocations: []apiv1.UsageRollupKey{}}
 	var observed []protocol.UsageObservation
 	queue := []*v1alpha1.AgentSession{root}
 	for len(queue) > 0 {
@@ -182,6 +184,7 @@ func usageRollup(root *v1alpha1.AgentSession, all []v1alpha1.AgentSession) *apiv
 				r.Coverage = "Partial"
 				continue
 			}
+			r.Counted++
 			r.Invocations = append(r.Invocations, apiv1.UsageRollupKey{SessionUID: string(child.UID), ObservationID: u.ID})
 			observed = append(observed, *u)
 		}
@@ -191,11 +194,13 @@ func usageRollup(root *v1alpha1.AgentSession, all []v1alpha1.AgentSession) *apiv
 	}
 	slices.SortFunc(r.Invocations, func(a, b apiv1.UsageRollupKey) int { return strings.Compare(a.SessionUID, b.SessionUID) })
 	complete := r.Coverage == "Complete"
+	// A total past the token bound is Unknown: a reader validates every
+	// Reported amount against the same bound and would refuse it.
 	sum := func(pick func(protocol.UsageObservation) protocol.TokenObservation) protocol.TokenObservation {
 		var total int64
 		for _, u := range observed {
 			m := pick(u)
-			if !complete || m.State != protocol.UsageReported || m.Amount == nil {
+			if !complete || m.State != protocol.UsageReported || m.Amount == nil || *m.Amount > protocol.MaxUsageTokens-total {
 				return protocol.TokenObservation{State: protocol.UsageUnknown}
 			}
 			total += *m.Amount

@@ -300,10 +300,11 @@ func (a *app) printSession(s apiv1.Session) {
 		row("Cache create tokens", "Unknown")
 	}
 	if r := s.UsageRollup; r != nil {
-		coverage := fmt.Sprintf("%s over %d descendant Sessions, %d invocations counted once each", r.Coverage, r.Sessions, len(r.Invocations))
+		coverage := fmt.Sprintf("%s over %d retained descendant Sessions, %d invocations counted once each", r.Coverage, r.Sessions, r.Counted)
 		if r.Truncated {
 			coverage += "; walk stopped at the bound"
 		}
+		coverage += "; reaped descendants are not counted"
 		row("Descendant usage", "%s", coverage)
 		row("  input tokens", "%s", usageTokenText(r.InputTokens))
 		row("  output tokens", "%s", usageTokenText(r.OutputTokens))

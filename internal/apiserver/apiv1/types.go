@@ -250,7 +250,7 @@ type Session struct {
 	Usage            *Usage            `json:"usage,omitempty"`
 	UsageObservation *UsageObservation `json:"usageObservation,omitempty"`
 	UsageConflict    *UsageConflict    `json:"usageConflict,omitempty"`
-	// UsageRollup sums the descendants' own initial invocations. It is
+	// UsageRollup sums the retained descendants' own initial invocations. It is
 	// present only on a single Session's view, and only when it has
 	// descendants.
 	UsageRollup *UsageRollup `json:"usageRollup,omitempty"`

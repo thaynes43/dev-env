@@ -181,7 +181,8 @@ func (u UsageObservation) Validate() error {
 	if u.Version == 1 && (u.ActualModelState != UsageUnknown || u.Provenance != "" || u.BillingBasis != "" || len(u.ServedModels) > 0) {
 		return errors.New("version 1 usage observation carries version 2 provenance")
 	}
-	if u.Version == UsageVersion && (u.Provenance != UsageProviderReported || (u.BillingBasis != UsageSubscription && u.BillingBasis != UsageUnknown) || !u.validServedModels()) {
+	if u.Version == UsageVersion && (u.Provenance != UsageProviderReported || (u.BillingBasis != UsageSubscription && u.BillingBasis != UsageUnknown) ||
+		(u.ActualModelState != UsageUnknown && u.ActualModelState != UsageProviderReported) || !u.validServedModels()) {
 		return errors.New("provider-reported usage provenance is unconfirmed")
 	}
 	if (u.LogicalTaskUID == "") != (u.LogicalTaskEpoch == "") || (u.LogicalTaskUID == "") != (u.WorkerID == "") ||

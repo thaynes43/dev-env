@@ -63,12 +63,16 @@ func TestUsageVersionTwoRefusesInventedOrInconsistentModels(t *testing.T) {
 	for name, mutate := range map[string]func(*UsageObservation){
 		"state without models": func(u *UsageObservation) { u.ServedModels = nil },
 		"models without state": func(u *UsageObservation) { u.ActualModelState = UsageUnknown },
-		"unsorted":             func(u *UsageObservation) { u.ServedModels[0], u.ServedModels[1] = u.ServedModels[1], u.ServedModels[0] },
-		"duplicate":            func(u *UsageObservation) { u.ServedModels[1].Model = u.ServedModels[0].Model },
-		"too many":             func(u *UsageObservation) { u.ServedModels = many },
-		"empty id":             func(u *UsageObservation) { u.ServedModels[0].Model = "" },
-		"whitespace id":        func(u *UsageObservation) { u.ServedModels[0].Model = "claude haiku" },
-		"overlong id":          func(u *UsageObservation) { u.ServedModels[1].Model = "m" + strings.Repeat("x", 256) },
+		"invented state, no models": func(u *UsageObservation) {
+			u.ServedModels, u.ActualModelState = nil, "Bogus"
+		},
+		"empty state, no models": func(u *UsageObservation) { u.ServedModels, u.ActualModelState = nil, "" },
+		"unsorted":               func(u *UsageObservation) { u.ServedModels[0], u.ServedModels[1] = u.ServedModels[1], u.ServedModels[0] },
+		"duplicate":              func(u *UsageObservation) { u.ServedModels[1].Model = u.ServedModels[0].Model },
+		"too many":               func(u *UsageObservation) { u.ServedModels = many },
+		"empty id":               func(u *UsageObservation) { u.ServedModels[0].Model = "" },
+		"whitespace id":          func(u *UsageObservation) { u.ServedModels[0].Model = "claude haiku" },
+		"overlong id":            func(u *UsageObservation) { u.ServedModels[1].Model = "m" + strings.Repeat("x", 256) },
 		"negative model counter": func(u *UsageObservation) {
 			u.ServedModels[0].OutputTokens = TokenObservation{State: UsageReported, Amount: &negative}
 		},

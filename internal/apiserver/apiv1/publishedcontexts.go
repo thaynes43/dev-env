@@ -94,7 +94,9 @@ type ContextAttribution struct {
 	CostState          string `json:"costState"`
 	// ObservedModels and Usage come from the source Session's retained
 	// initial-invocation observation, joined at read time for a managed output
-	// assertion of that same invocation only. The stored record never changes.
+	// assertion of that same invocation only. The stored record never changes,
+	// so the join lasts only while the source Session exists: once it is
+	// reaped or replaced, the attribution reads Unknown again (DESIGN-018).
 	ObservedModels []string      `json:"observedModels,omitempty"`
 	Usage          *ContextUsage `json:"usage,omitempty"`
 }

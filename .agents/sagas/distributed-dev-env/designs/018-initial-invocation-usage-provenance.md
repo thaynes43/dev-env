@@ -193,9 +193,18 @@ ID, source, receipt, replay, conflict and old-decoder rules above are unchanged.
 New agents still omit the raw Usage field from heartbeats.
 
 **Mixed versions.** The CRD accepts version 1 or 2, with CEL rules for each shape.
-An old operator or an old CRD refuses a version 2 observation as InvalidPayload;
-liveness and budgets continue, and agentd keeps replaying the private snapshot, so
-an upgraded operator retains it. Old agents keep sending version 1.
+Promote in this order: the CRD, then the operator, then the agent image. Old
+agents keep sending version 1. Out of order, two things happen:
+
+- *New operator, old CRD.* The operator's own validation accepts a version 2
+  observation, and the API server refuses the status patch (422, `version` is an
+  enum of 1). Liveness was patched first, so it continues, but the heartbeat reply
+  is an error and no receipt is written. agentd keeps replaying the private
+  snapshot, so the observation is retained once the CRD is upgraded.
+- *Old operator replica during a rollout.* It refuses version 2 and writes an
+  `InvalidPayload` `usageConflict` receipt. A receipt is written once and never
+  cleared, so after an upgraded replica retains the observation, `show` prints
+  that conflict next to a valid observation for the life of the Session.
 
 **Reader negotiation.** Older readers decode Sessions and publications strictly
 and accept only the version 1 observation and all-Unknown attribution. A reader
@@ -216,27 +225,49 @@ requested model match, and the Session still has that UID. Then
 `observedModelState`, `usageState` and `costState` become `ProviderReported` each
 only when that part was reported, and the attribution carries the observed
 models and a bounded usage summary: observation ID, billing basis, the four
-counters and the cost. Otherwise all three stay Unknown. The observation is
-immutable once retained, so a reader only ever sees Unknown change to
-ProviderReported, never one value change to another. A publication made before
-the next heartbeat retains the observation shows Unknown until then. Explicit
-publications stay Unknown. The canary result reader, agentd and agent-run accept
+counters and the cost. Otherwise all three stay Unknown. A version 1
+observation stays Unknown too. A publication made before the next heartbeat
+retains the observation shows Unknown until then. Explicit publications stay
+Unknown.
+
+The join is live, not stored. The observation is immutable once retained, so
+while the source Session exists a reader never sees one reported value change
+to another. A PublishedContext has no owner reference and outlives its source
+Session: once that Session is reaped, or replaced under its name by another
+UID, the join finds nothing and every reader sees Unknown again. The attribution
+is durable only as long as the source Session. Keeping it after a reap needs a
+bounded copy written once the observation is retained, which changes the stored
+record's write-once rule; that is a separate decision (#248). The canary result reader, agentd and agent-run accept
 both shapes through one validator, `apiv1.ValidContextAttribution`.
 
 **Parent and child.** A child Session's usage belongs to the child, in its own
 status; nothing is added to the parent's own observation. `GET
-/v1/sessions/{name}` adds `usageRollup`: the Session and its descendants, found by
+/v1/sessions/{name}` adds `usageRollup` with scope `RetainedDescendants`: the
+Session's descendants that still exist, not the Session itself. They are found by
 `spec.parent` name and created no earlier than their parent, walked once each by
 UID, at most 64 Sessions. Each Session contributes at most its own retained
 observation, keyed by Session UID and observation ID, and only when the source
 Session UID matches. A metric is Reported only when every walked Session has an
-observation and every one reported that metric; otherwise it is Unknown, with no
-partial sum. Each separate Session is a separate CLI process, so the sum counts
-nothing twice. Work a CLI delegates inside its own process is in that CLI's own
-report and is never added again.
+observation, every one reported that metric and the total stays within the
+per-metric token bound; otherwise it is Unknown, with no partial sum. Each
+separate Session is a separate CLI process, so the sum counts nothing twice.
+Work a CLI delegates inside its own process is in that CLI's own report and is
+never added again.
+
+A reaped descendant is deleted, so it is not walked and its usage is not in the
+rollup. `coverage: Complete` means every retained descendant reported, not every
+descendant the Session ever had; coordinators reap finished children routinely,
+so the rollup usually undercounts the whole tree. A per-parent ledger that
+survives a reap is a separate decision (#248).
+
+A coordinator may read only its direct children. On a child's view it gets the
+rollup's totals and counts, which are the usage of the work it delegated, but
+not `invocations`, the keys that name grandchildren it may not read. Every other
+caller may read any Session and gets the keys.
 
 `agent-run show` prints the served models, provenance, billing basis, each
-model's counters and cost, and the descendants' rollup.
+model's counters and cost, and the retained descendants' rollup, saying that
+reaped descendants are not counted.
 
 **Out of scope.** Pricing from tokens, subscription quota, API billing, local
 inference, TUI/resume/native coverage, the SessionDirectory usage fields and
@@ -249,6 +280,9 @@ explicit model and with a malformed one; billing basis per launch policy; a
 walk over every observation that no Unknown carries an amount; version 1 and 2
 validation in Go and in the CRD (envtest); heartbeat retention and the API wire
 shape; the rollup's single count, stale names, cycles, the bound, missing and
-foreign observations and Codex cost; the attribution join, its foreign-Pod and
-explicit refusals and both reader shapes; agent-run show, show --once and the
-canary result reader with the new shape and with inconsistent attribution.
+foreign observations, Codex cost, a total past the token bound, a reaped
+descendant and the coordinator's view without keys; the attribution join, its
+foreign-Pod, replaced-source, version 1 and explicit refusals, a reaped source
+and both reader shapes; agent-run show, show --once (including a null model
+list) and the canary result reader with the new shape and with inconsistent
+attribution.
