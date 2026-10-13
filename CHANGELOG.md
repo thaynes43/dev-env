@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.27.0](https://github.com/thaynes43/dev-env/compare/v2.26.0...v2.27.0) (2026-10-13)
+
+
+### Features
+
+* archived-history reads and the guarded HOME delete, off (DESIGN-025 H6) ([#254](https://github.com/thaynes43/dev-env/issues/254)) ([2221b83](https://github.com/thaynes43/dev-env/commit/2221b834dab857abe251e228d24d4d85cec4391e))
+* **operator:** HOME expiry up to Archived (DESIGN-025 H5) ([#251](https://github.com/thaynes43/dev-env/issues/251)) ([a3091af](https://github.com/thaynes43/dev-env/commit/a3091af279f9e495badac2b0a72aac99cc1690e2))
+
 ## [2.26.0](https://github.com/thaynes43/dev-env/compare/v2.25.0...v2.26.0) (2026-10-13)
 
 
