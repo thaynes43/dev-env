@@ -1263,6 +1263,8 @@ class, a different shape, more sensitive content. Everything else is the same.
   `kustomize.toolkit.fluxcd.io/prune: disabled`.
 - **Its PersistentVolume is `Retain`.** Tom sets it after the claim binds; no
   agent tier writes a PersistentVolume (DESIGN-024 section 3). H7 checks it.
+  Q-37/D-91 permitted one exception for this history PV; it was verified once
+  and is consumed ([section 22](#22-one-time-pv-retain-q-37-d-91)).
 - **Mounted only by the shelf**, at `/home/dev/.history-archive`. A shelf with an
   RWO volume uses `Recreate` (DESIGN-024 section 3); whichever of R5 and H7 comes
   first sets it, and a second volume adds no new cost to its updates. After a
@@ -1832,7 +1834,8 @@ own reviewed PR:
      limit than the default doubling of the heap allows; and
      `TestHistoryRelayMeasure` run once in a Job with the operator's limits at
      the 16 MiB plan cap (5.4), cold, before the archive flag;
-   - after the claim binds: Tom sets the PV to `Retain`;
+   - after the claim binds: verify PV `Retain`; this history PV step is complete
+     under the one-time, consumed Q-37/D-91 exception (section 22);
    - just before the stop flag, a read-only check: list the Reaping private
      Sessions (no `spec.workspace`, no `spec.projectCanary`) whose recorded
      executor Pod still runs. They were reaped under the old rule, which let a
@@ -2262,16 +2265,15 @@ failed reader and exact policy checks. All real-request, Retain, F4,
 cold-measurement, restore and activation gates remain intact. This operational
 direction creates no architecture ADR and does not change Q-33 or ADR-007.
 
-## 22. Prepared one-time PV action: Q-37 pending
+## 22. One-time PV Retain: Q-37, D-91
 
-**Asked directly through the asynchronous question tool; answer pending.**
-The [prepared action contract](../verification/h7-retain-action-contract-2026-10-13.md)
-preserves section 7's owner-only PV rule. Dev-env #269 merged the fixed client
-as `789f2b499930dadf2cf02a440b56a20d224ae9b8`. Exact-head required CI, offline
-fixtures and both reviews passed. Its passing push-main run and executable
-were independently checked before the question. Nothing has been executed.
+**D-91, owner ruling relayed through the sole Mac executor; executed once and consumed.**
+The [execution contract](../verification/h7-retain-action-contract-2026-10-13.md)
+and [accepted postcondition](../verification/h7-retain-acceptance-2026-10-13.md)
+record the fixed action. General PV writes remain owner-only. Q-37 permits
+one explicit exception for this history PV, not a permanent agent capability.
 
-Q-37 asks:
+Root's original asynchronous question asked:
 
 > May I make the reviewed one-time change that tells the new history disk to
 > retain its data if its claim is removed? It changes only this disk's Delete
@@ -2279,16 +2281,29 @@ Q-37 asks:
 > permissions. Your design reserves this change to you, so I need this one
 > exception. No commands are needed from you.
 
-Options: "Yes, make this one change (Recommended)" and "Leave it pending".
-The tool accepted the question; no owner answer or confirmed phone delivery
-has been observed. Receipt `q37-pv-retain-question-r1.json`, SHA-256
+Options were "Yes, make this one change (Recommended)" and "Leave it pending".
+The tool accepted that prompt; its receipt remains
+`q37-pv-retain-question-r1.json`, SHA-256
 `4b8f8c4576a25c0cb6c8feb5e0205beb252fef6f5c2edb715f3befdf619dae0c`.
+A direct response or delivery confirmation for that native prompt was not observed.
 
-The proposed exception is one fixed seven-test CAS patch from `Delete` to
-`Retain`, against the exact bound UID, resourceVersion and claim in the contract.
-The actual answer is required before execution. No D-91 ruling or README
-decision 72 is consumed by this pending question. No persistent agent right,
-new grant, reader retry or removal, archive mount, flag or v1 change follows.
+At 19:34:06 EDT (23:34:06 UTC), Tom instead answered "Yes" to the Mac
+conversation's explicit one-time Delete-to-Retain question naming the same
+history claim and bound PV. The sole Mac executor preserved and corroborated
+the original approval evidence. Root verified that saved relay and its exact
+scope, but the original user turn was not exposed in Root's thread view.
+Owner receipt `q37-owner-approval-mac-r1.json`, SHA-256
+`c86616cb671435d375317451d3032c8c371d8d2e0100c67181d01151624b62e1`.
+
+After the frozen executable, approval, reservation and exclusive start marker
+were checked, the Mac launched the client once. Its GET/PATCH/GET all returned
+200; the same bound PV and claim were verified with Retain at 19:40:32 EDT
+(23:40:32.254177 UTC), resourceVersion `828767216`. Root and independent saved-
+evidence review accept only this PV gate. No extra PV GET or client invocation
+was made by Root. README decision 72 records this ruling; the sole attempt is
+consumed and cannot be repeated, even after a duplicate reply or restart.
+No permanent right, new grant, reader retry or removal, archive mount, flag or
+v1 change follows. All later H7 evidence and activation gates remain separate.
 
 The [personal-identity mapping checkpoint](../verification/h7-personal-identity-mapping-2026-10-13.md)
 separately establishes a conditional expected personal username from current

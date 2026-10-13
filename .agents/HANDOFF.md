@@ -10,19 +10,23 @@ of the 2026-10-12 brief, which still holds the requirement history and the
 stopped routes. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
-## H7 prepared Retain action; Q-37 pending — 2026-10-13
+## H7 PV Retain verified; Q-37/D-91 consumed — 2026-10-13
 
-[Dev-env #269](https://github.com/thaynes43/dev-env/pull/269), merge `789f2b49`,
-adds a fixed one-time PV Retain client and its
-[proposed contract](sagas/distributed-dev-env/verification/h7-retain-action-contract-2026-10-13.md).
-Required CI, finite offline fixtures and both reviews passed. The passing
-push-main executable's external run metadata, artifact digest, all eight
-source hashes, workflow hash, binary hash and embedded Go build information
-were verified without executing it. Q-37 was then asked through the
-asynchronous tool; its answer is pending. The owner-only rule remains in force;
-no PV write, new rights, mount, retry or activation is authorized. The exact
-question and receipt are in
-[DESIGN-025 section 22](sagas/distributed-dev-env/designs/025-private-home-expiry.md#22-prepared-one-time-pv-action-q-37-pending).
+The [Retain acceptance](sagas/distributed-dev-env/verification/h7-retain-acceptance-2026-10-13.md)
+records Tom's "Yes" through the source Mac conversation, the preserved
+source-corroborated approval relay, and the sole verified execution. Root did
+not observe the original user turn directly. The reviewed #269 executable
+made GET/PATCH/GET once, all 200, then verified the same bound history PV and
+claim with Retain at 19:40:32 EDT (23:40:32.254177 UTC). Its output and exit 0
+were independently audited from saved evidence; Root made no extra PV request.
+
+The PV Retain gate is accepted. The one-time exception is consumed: no second
+launch or PATCH is authorized. General PV rights remain owner-only. No v1 or
+reader configuration, permissions, archive mount or flag changed in this
+operation. The next ordered unit is the fresh bounded existing-Mac guard and
+baseline capture, then separate installed behavior acceptance before mounting.
+[DESIGN-025 section 22](sagas/distributed-dev-env/designs/025-private-home-expiry.md#22-one-time-pv-retain-q-37-d-91)
+records Q-37/D-91 and README decision 72. Other H7 gates remain separate.
 
 The [personal-identity mapping checkpoint](sagas/distributed-dev-env/verification/h7-personal-identity-mapping-2026-10-13.md)
 establishes a strong conditional expected username from current Omni metadata
@@ -72,8 +76,8 @@ currently on a phone; do not request workstation commands.
 [installed checkpoint](sagas/distributed-dev-env/verification/h7-archive-pvc-2026-10-13.md)
 records Flux Ready/Healthy, the Bound claim and no Pod references at 17:24 UTC.
 The shelf, retained sessions and failed Jobs match their baseline. Expiry flags
-remain off except terminal recording. The bound PV is still Delete; owner-set
-Retain is required before archive activation. Finish the guard's installed and
+remain off except terminal recording in that snapshot. PV Retain was later
+verified under Q-37/D-91 (the acceptance above). Finish the guard's installed and
 baseline evidence before the shelf mount, preserving v1 under Q-35 and
 [ADR-007](sagas/distributed-dev-env/adrs/007-preserve-v1-archive-trust-boundary.md).
 F4 and both cold measurements still gate activation.
@@ -503,8 +507,8 @@ uncached checks, the confirmed write, the missed marker, `ExecutorEnded`, the
 counter and `--enable-private-terminal-record`. It records nothing until H2
 gives the operator `get` on Nodes and on Leases in `kube-node-lease`, copies the
 CRD, pins a release with it and turns the flag on. Deletion (H9) waits for the installed archived-history read (H8,
-#174). H7 needs Tom once: after the history archive claim binds, he sets its
-PersistentVolume to `Retain`. Before H7 writes the override policy, check which
+#174). H7's one-time history-PV Retain step is now complete under Q-37/D-91;
+that delegated attempt is consumed. Before H7 writes the override policy, check which
 identity Tom's phone path uses (DESIGN-025 section 9).
 
 **H3 is in source in #244 (DESIGN-025 4.1), default off.** It adds
@@ -2450,7 +2454,7 @@ DESIGN-001 section 15; later rows link their own record. This heading first read
 | Q-32 | **Answered 2026-10-12** by Tom through the Claude native prompt: "Yes, after deploy (Recommended)" (other option: "Not now"). Question: "The Sigo canary proved private GitHub access and a fresh pinned worktree, but catalog bootstrap ended Partial: one Sigo repo tracks a symlink our checkout check wrongly refused. The fix is merged and deploying now as 2.25. May I run one more Claude canary on the Sigo project after the deploy, to prove bootstrap reaches Ready and the new status codes work? One create, one named read, one result read, no retries." Grants, after the 2.25 deploy is post-checked, one new Claude canary record for project `sigo-alumni` through a reviewed haynes-ops PR, replacing the consumed `rule-canary-claude-sigo-1012` record (`codex-1011` byte-identical): exactly one create, one named read and one result read, no retries; global private admission stays off. Not granted: reuse of a consumed canary ID, any retry, a second rerun, credential repair or cleanup of any original. Owner answer receipt `root-q32-owner-answer-r1.json`, sha256 `48ab104fa0c140b139ce537a0d3eb4b59139111a785d2f97145e4ff459736609`. GitOps: haynes-ops [#3855](https://github.com/thaynes43/haynes-ops/pull/3855) (`rule-canary-claude-sigo-1012b`). Run on 2026-10-13 UTC: all seven DESIGN-011 items hold, bootstrap `Ready`; Root acceptance `a3aa0b7d` (`ACCEPTED_PRIVATE_REPO_CANARY_ALL_ITEMS`) accepts #173's private-repository evidence under the all-items gate ([Sigo rerun record](sagas/distributed-dev-env/verification/sigo-rerun-2026-10-13.md), README decision 68). |
 | Q-35 | **Recorded 2026-10-13 through oversight, directly confirmed at 21:33 UTC:** relay "v1 must remain the same until it’s decommissioned after the MVP has been accepted"; direct asynchronous answer "Keep v1 trusted during migration (Recommended)". [ADR-007/D-89](sagas/distributed-dev-env/adrs/007-preserve-v1-archive-trust-boundary.md), README row 70, amends only ADR-006's v1 archive narrowing and C-42. Preserve v1 behavior, configuration and current access. Guard untrusted v2 paths; claim no isolation from v1 and grant no new access, activation or automatic decommissioning. Original relayed turn remains unobserved; the direct confirmation is observed. Local relay receipt `dev-env-h7-archive-guard-1013/q35-relayed-answer-r1.json`, SHA-256 `b8b96a86eb81628733dd4e86068f029b9b99fd7eeed38842f5e01988d7b32903`; `dev-env-h7-archive-guard-1013/q35-direct-owner-confirmation-r1.json`, SHA-256 `d7728c571d7373417c1ca1d9dc52fd8670468483dc6140535cf447b21f3789e9`. |
 | Q-36 | **Recorded 2026-10-13 as relayed operational direction:** "Go for it" for holding the new reader and collecting workload/guard/webhook evidence through existing authorized Mac access. [DESIGN-025/D-90](sagas/distributed-dev-env/designs/025-private-home-expiry.md#21-existing-access-evidence-and-hold-q-36), README row 71. The relay arrived after #3904 deployed and its automatic Job failed. Hold further reader access/deployment, preserve the failed attempt; no undo, retry, credential export or later activation. Original owner turn and native delivery unobserved. Local receipt `dev-env-h7-archive-guard-1013/q36-relayed-direction-r1.json`, SHA-256 `96ea06588570ba276c09956e0799e539202d53cfbb2e584155da7ca48a4d373c`. |
-| Q-37 | **Asked; answer pending.** One-time owner delegation for the fixed history-PV Delete-to-Retain action; [DESIGN-025 section 22](sagas/distributed-dev-env/designs/025-private-home-expiry.md#22-prepared-one-time-pv-action-q-37-pending). Exact merged source and push-main executable were verified before asking. Tool accepted; no owner reply or confirmed phone delivery observed. Receipt `q37-pv-retain-question-r1.json`, SHA-256 `4b8f8c4576a25c0cb6c8feb5e0205beb252fef6f5c2edb715f3befdf619dae0c`. No execution or new authority; D-91 and README 72 remain free. |
+| Q-37 | **Answered through the source Mac conversation; one-time action consumed.** Tom answered "Yes" at 19:34:06 EDT (23:34:06 UTC) to the exact history-PV Delete-to-Retain scope. Source-corroborated approval relay; original user turn not directly exposed to Root. [D-91/section 22](sagas/distributed-dev-env/designs/025-private-home-expiry.md#22-one-time-pv-retain-q-37-d-91), README 72. One reviewed client launch, GET/PATCH/GET all 200, exit 0, same bound PV/claim verified Retain at 19:40:32 EDT. The attempt is consumed; no repeat, new permission or activation. Owner receipt `q37-owner-approval-mac-r1.json`, SHA-256 `c86616cb671435d375317451d3032c8c371d8d2e0100c67181d01151624b62e1`; [acceptance](sagas/distributed-dev-env/verification/h7-retain-acceptance-2026-10-13.md). |
 | Pacing | **Answered 2026-10-13** by Tom through the Claude native prompt: "Slow down (Recommended)" (other options: "Keep full speed", "Pause after H5/H6"; asked 04:00Z, answered 11:02Z). Question: "Today's dev-env push has used a lot of Opus subagent time: about 40 reviewed PRs, 4 deploys and 4 canaries. The Max plan is shared with your own Claude use, and hitting the weekly limit stops every session, yours included. How hard should I keep pushing after H5/H6 finish?" Means: one Opus subagent unit (`claude-opus-5-5`) at a time, Sonnet (`claude-sonnet-5-5`) for routine work, no parallel Opus waves until Tom says otherwise. It limits concurrency; it pauses nothing and changes no other gate. Owner answer receipt `root-pacing-owner-answer-r1.json` (in the coordinator's `dev-env-claude-handoff-1013` orders, written from the session record after the answer), sha256 `a70a80ccef09e0d7bd7c8521ce7156dc2dd4a8d00a23a429365e3844be32cf20`. README decision 69; it follows decision 40's 2026-10-07 pacing. |
 
 **Next (historical, 2026-10-08; the current order is the 2026-10-13 brief's

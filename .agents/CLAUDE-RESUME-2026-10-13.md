@@ -96,13 +96,18 @@ The five retained AgentSessions in `dev-agents`. Canary originals never expire
 | `private-canary-a1444f4131ec7281b5d1e3130c3b5ada` | `430297d9-aa29-4332-9b3b-37095c1b5963` | claude-sigo-1012 | `Failed`, task `Succeeded`, `executorTerminal` |
 | `private-canary-eb9d486a612e27fd2b52d27f675512be` | `454d12a2-60bc-4c4e-95c5-bb4b26428a65` | claude-sigo-1012b | `Failed`, task `Succeeded`, `executorTerminal` |
 
-Next free IDs: Q-38, D-91, ADR-008, DESIGN-026, README decision 72. Each new
+Next free IDs: Q-38, D-92, ADR-008, DESIGN-026, README decision 73. Each new
 question takes the next free Q id when it is asked; none is reserved.
 
-Q-37 is pending through the asynchronous question tool: a one-time delegation
-of the owner-only PV Retain step, against the reviewed #269 client and verified
-push-main executable. No answer, PV write or later gate is accepted. See
-[DESIGN-025 section 22](sagas/distributed-dev-env/designs/025-private-home-expiry.md#22-prepared-one-time-pv-action-q-37-pending).
+Q-37/D-91 is answered through the source Mac conversation and consumed.
+The [Retain acceptance](sagas/distributed-dev-env/verification/h7-retain-acceptance-2026-10-13.md)
+records the sole reviewed client launch: GET/PATCH/GET all 200, exit 0, same
+bound history PV and claim with Retain at 19:40:32 EDT (23:40:32.254177 UTC).
+Root accepted that client postcondition and the independent saved-evidence
+audit without another PV GET. The original owner turn was not directly exposed
+to Root; the Mac preserved and corroborated the approval relay. No second
+launch, permanent right or later H7 activation follows. See
+[DESIGN-025 section 22](sagas/distributed-dev-env/designs/025-private-home-expiry.md#22-one-time-pv-retain-q-37-d-91).
 The [identity mapping checkpoint](sagas/distributed-dev-env/verification/h7-personal-identity-mapping-2026-10-13.md)
 adds current Omni metadata and pinned mapping evidence; personal authenticated
 request and phone-path acceptance remain unobserved.
@@ -140,6 +145,7 @@ predate this session; their rows point there.
 | Q-34 | Cannot run a workstation check from the phone; keep working | `dev-env-h7-personal-identity-1013/root-q34-owner-direction-r1.json` (`ac078e5d…`) | Withdraw the workstation request. Discover the identity from accessible evidence and continue independent H7 prerequisites. |
 | Q-35 | Relay: "v1 must remain the same until it’s decommissioned after the MVP has been accepted"; direct asynchronous confirmation at 21:33 UTC: "Keep v1 trusted during migration (Recommended)" | `dev-env-h7-archive-guard-1013/q35-relayed-answer-r1.json` (`b8b96a86…`); `q35-direct-owner-confirmation-r1.json` (`d7728c57…`) | Original relayed turn remains unobserved; direct confirmation observed. ADR-007/D-89 preserves v1 current behavior and access; no new authority, activation or automatic decommissioning. Q-36 intact. |
 | Q-36 | "Go for it" for holding the new reader and using existing Mac evidence | `dev-env-h7-archive-guard-1013/q36-relayed-direction-r1.json` (`96ea0658…`) | Relayed operational ruling D-90; original owner turn/native delivery unobserved. Reader already deployed and failed before relay arrived. Hold further reader access/deployment; no undo/retry/activation. |
+| Q-37 | "Yes" to the exact one-time history-PV Delete-to-Retain scope, through the source Mac conversation | `dev-env-h7-archive-guard-1013/q37-owner-approval-mac-r1.json` (`c86616cb…`) | Source-corroborated relay, original user turn not directly exposed to Root. D-91/README 72; one reviewed client launch verified Retain, attempt consumed. No new right or activation. |
 | Pacing | "Slow down" (asked 04:00Z, answered 11:02Z, 2026-10-13) | `dev-env-claude-handoff-1013/root-pacing-owner-answer-r1.json` (`a70a80cc…`) | One Opus subagent unit (`claude-opus-5-5`) at a time, Sonnet (`claude-sonnet-5-5`) for routine work, no parallel Opus waves until Tom says otherwise. README decision 69. |
 
 ## Delivered 2026-10-12 to 2026-10-13
@@ -222,7 +228,8 @@ No workstation commands or administrator-token borrowing are the verification pa
 The unmounted history PVC was installed at 17:24 UTC
 by haynes-ops #3898 (`a287a4f6`), Bound with no Pod references. Read the
 [installed checkpoint](sagas/distributed-dev-env/verification/h7-archive-pvc-2026-10-13.md).
-Its bound PV remains Delete; owner-set Retain is pending. Finish guard delivery
+Its bound PV Retain is now accepted under the one-time, consumed Q-37/D-91
+exception. Finish guard delivery
 and baseline evidence before mounting it, under Q-35 and
 [ADR-007](sagas/distributed-dev-env/adrs/007-preserve-v1-archive-trust-boundary.md).
 F4 and both cold resource measurements remain gates.
@@ -257,7 +264,8 @@ need declare-activity and peer checks before and after.
    - PRs, in this order. The archive guard ships after its parity check and
      before the claim is mounted (section 12), so the shelf mount comes last:
      1. the `dev-env-history-archive` PVC (shelf-only, RWO), installed unmounted
-        by #3898; its owner-set PV Retain step remains pending;
+        by #3898; PV Retain was verified under Q-37/D-91, whose sole delegated
+        attempt is consumed;
      2. the archive guard, `dev-env-archive-guard` (it covers DESIGN-024's
         archive too, so it ships with whichever of H7 and R5 comes first),
         preserving v1 under ADR-007/Q-35; source merged in #3902 and hook
@@ -278,8 +286,9 @@ need declare-activity and peer checks before and after.
         operator's limits, before the archive flag.
    - **Owner gates**, each one AskUserQuestion when it arises: Q-35 preserves
      v1 unchanged; the compatible guard must not remove its existing access,
-     whether or not the scoped scan found a workflow. Tom sets the PV to
-     `Retain` by hand once the claim binds; if
+     whether or not the scoped scan found a workflow. The owner-only history
+     PV Retain step was completed by the one-time Q-37/D-91 delegation; do not
+     repeat it. If
      anyone but Tom can update AgentSessions, the policy must match his identity.
      Q-33 settles the personal-account choice; Q-34 withdraws the workstation
      request. Discover the exact username from accessible evidence before that
