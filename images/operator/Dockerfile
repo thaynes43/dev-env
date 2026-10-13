@@ -11,7 +11,7 @@
 # publish.yml builds this file on every merge to main that changes a build input and
 # pushes ghcr.io/thaynes43/dev-env-operator:sha-<short>, signed with keyless cosign.
 
-FROM golang:1.27.1@sha256:162be5298a40ed317005c8339c6de4d10d3eef336d66dc8e9259b03ab9d3a6d2 AS build
+FROM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS build
 WORKDIR /src
 # go-licenses collects the license texts of the modules linked into the binaries (#55).
 # It goes in before the sources, so a Go change does not rebuild it.

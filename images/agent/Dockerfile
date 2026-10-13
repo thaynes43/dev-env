@@ -27,7 +27,7 @@
 # has no .git (.dockerignore), so COMMIT is always passed and VERSION on a release
 # build; without them the binaries report "dev" (internal/version). Only the Go
 # sources are copied, so an edit to the tools below does not rebuild them.
-FROM golang:1.27.1@sha256:162be5298a40ed317005c8339c6de4d10d3eef336d66dc8e9259b03ab9d3a6d2 AS go
+FROM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS go
 WORKDIR /src
 # go-licenses collects the license texts of the modules linked into the binaries below
 # (the issue #55 work). It goes in before the sources, so a Go change does not rebuild it.
