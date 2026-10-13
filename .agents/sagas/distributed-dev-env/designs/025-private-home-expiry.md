@@ -2152,3 +2152,40 @@ authentication. The username remains in local evidence, not this public repo.
 An exact-user guard can be prepared as a candidate with a reviewed private
 identity parameter; current personal access acceptance remains separate. See the
 [prerequisite checkpoint](../verification/h7-prerequisites-2026-10-13.md).
+
+## 20. H7 archive trust boundary: Q-35
+
+**Submitted through the native async question tool, 2026-10-13; delivery
+unverified and answer pending.** [Issue #261](https://github.com/thaynes43/dev-env/issues/261)
+preserves the read-only finding and the owner decision needed before guard
+implementation proceeds.
+
+At 17:36 UTC, live RBAC and haynes-ops source `a287a4f6` establish that
+`dev/dev-env` and `upgrade-agent/dev-env-ops` can create Jobs in
+`dev-env-system` and exec into the two Running operator Pods. A Job can select
+the exempt operator ServiceAccount; both operator Pods have projected token
+mounts. Existing source guards match v2 identities or direct v1 TokenRequests,
+not those borrowing paths. No token was read and no exec, Job or bypass probe
+was attempted. Kyverno listing was denied; it was not an empty policy listing.
+The scoped parity scan found no executable existing shelf-access or
+archive-claim-mount workflow.
+
+The question asks whether v1 keeps its existing trusted administrator access
+during migration, with H7 guarding direct requests, or archived history must be
+technically isolated from v1 before use, requiring the borrowing paths to be
+restricted first. **The coordinator recommends retaining the current trusted
+v1 boundary during migration; this is a proposal, not an owner ruling.** Tom's
+personal Kubernetes account remains permanent under Q-33 in either case. Neither
+proposal grants new account access or authorizes an interruption of required work.
+
+The tool accepted submission, which does not prove phone delivery. Continue
+independent prerequisites while it is pending. Do not implement the proposed
+guard as though it established isolation from v1. The history PVC remains unused;
+its bound PV's owner-set Retain, F4, both cold measurements and all later flags
+and installed acceptance remain separate gates.
+
+Validation also needs correction: the pinned Kyverno CLI 1.19.1 does not simulate
+CEL CONNECT and sets UPDATE oldObject from the new resource, so ordinary CLI
+fixtures do not establish exec matching or a pure restartedAt update. An evaluator
+of the actual expressions with explicit synthetic old/new requests is a candidate;
+real webhook verification remains separate. [Pinned CLI source](https://github.com/kyverno/kyverno/blob/v1.19.1/cmd/cli/kubectl-kyverno/processor/operation.go).

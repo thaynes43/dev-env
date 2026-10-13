@@ -96,7 +96,7 @@ The five retained AgentSessions in `dev-agents`. Canary originals never expire
 | `private-canary-a1444f4131ec7281b5d1e3130c3b5ada` | `430297d9-aa29-4332-9b3b-37095c1b5963` | claude-sigo-1012 | `Failed`, task `Succeeded`, `executorTerminal` |
 | `private-canary-eb9d486a612e27fd2b52d27f675512be` | `454d12a2-60bc-4c4e-95c5-bb4b26428a65` | claude-sigo-1012b | `Failed`, task `Succeeded`, `executorTerminal` |
 
-Next free IDs: Q-35, D-89, ADR-007, DESIGN-026, README decision 70. Each new
+Next free IDs: Q-36, D-89, ADR-007, DESIGN-026, README decision 70. Each new
 question takes the next free Q id when it is asked; none is reserved.
 
 **H7 pickup update, 2026-10-13:** the
@@ -188,6 +188,13 @@ by haynes-ops #3898 (`a287a4f6`), Bound with no Pod references. Read the
 [installed checkpoint](sagas/distributed-dev-env/verification/h7-archive-pvc-2026-10-13.md).
 Its bound PV remains Delete; owner-set Retain is pending. Continue with the archive
 guard before mounting it. F4 and both cold resource measurements remain gates.
+The guard review then found operator-account borrowing paths available to v1.
+[Q-35](sagas/distributed-dev-env/designs/025-private-home-expiry.md#20-h7-archive-trust-boundary-q-35)
+is submitted, delivery unverified and answer pending: preserve the current
+trusted v1 administrator boundary during migration, or require technical
+isolation before archive use. [Issue #261](https://github.com/thaynes43/dev-env/issues/261)
+holds the evidence. No guard implementation or bypass probe was made. Continue
+independent resource prerequisites while the owner decision is pending.
 
 Each unit: publish its contract, one reviewed PR, focused tests, native
 independent review, `CI - Success`, self-squash-merge. haynes-ops units also
