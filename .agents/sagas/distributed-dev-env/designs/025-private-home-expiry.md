@@ -7,8 +7,10 @@
   request for Reaping Sessions (section 4.1, #244), and H4, agentd's history
   export and archive (section 7.1, #246), are in release 2.26.0, default off.
   H5, the operator's expiry up to `Archived` (section 5.4), is in source in
-  #251, default off, with its review findings handled the same day. H6 to H10
-  have no source yet
+  #251, default off, with its review findings handled the same day. H6, the
+  archived-history reads (section 8.1) and the delete and release steps
+  (section 6.7), is in source in #254, both default off. H7 to H10 have no
+  source yet
 - **Decision:** [ADR-005](../adrs/005-private-home-expiry.md) (Q-31, Tom,
   2026-10-12: "Archive, then delete (Recommended)"), amended by
   [ADR-006](../adrs/006-private-home-expiry-corrections.md)
@@ -1132,6 +1134,92 @@ The Session is then absent, and ADR-004's 30 days start for its records.
 A suspended Session stays, phase `Archived`, until it is reaped. Then it is
 released at once, the same way.
 
+### 6.7 In source (H6, #254)
+
+The delete and the release are in `internal/controller/private_expiry_delete.go`,
+with the guard exceptions `expiryVolumeRemovalAllowed`, `deleteExpiryHome`,
+`releaseExpiryHome` and `expiryReleaseAllowed` in `guard.go`. They act only
+with `--enable-home-expiry-delete`, which the operator refuses at start unless
+`--enable-home-history-archive` and `--enable-history-archive-reads` are both
+on (section 13). The flag stays off until H8 records the archived read on the
+installed system (#174). Details the sections above leave open:
+
+- **One call path per attempt.** `prepareExpiryDelete` (from `Archived`) and
+  `removeExpiredHome` (in `Deleting`) each call, in this order:
+  `historyArchiveVerified` (point 1's verify, under `.shelf.lock`; its answer
+  must name the recorded digest and entry), `expiryRechecked` (fresh uncached
+  reads made after the verify, which can take minutes: the same record at the
+  same phase with the same archive, still eligible, triggered and unheld, and
+  the common re-check), and `noPodUsesHome` on that view (point 2). Only then
+  does the first write `Deleting` and the second delete. The delete takes the
+  Session and the claim from that same view. `TestExpiryDeleteNeedsVerify`
+  pins the order (section 11).
+- **The `Deleting` write** carries `deletingAt` and, for a Session that is not
+  Reaping, `status.archivedAt`, in one status update that carries the
+  resourceVersion of the fresh read, confirmed by a re-read. A resume
+  (`resumeSession`, an optimistic-locked patch that refuses `archivedAt`) and
+  this write therefore exclude each other. A Session that is not Reaping and
+  has `archivedAt` and a record at `Deleting` or later reports phase
+  `Archived`.
+- **The delete** (`deleteExpiryHome`) runs `expiryVolumeRemovalAllowed` (the
+  Session private and no canary, its retention identity intact, the record
+  `Deleting` with its archive and its terminal record, the claim the bound one
+  by name and UID and controlled by the Session, and `archivedAt` for a
+  Session that is not Reaping), deletes the claim with
+  `client.Preconditions{UID, ResourceVersion}` unless it is already deleting,
+  reads it again uncached, and lifts the operator's finalizer
+  (`releaseExpiryHome`) by a merge patch with the fresh resourceVersion. A
+  Conflict or Invalid counts `precondition_failed`, and the next reconcile
+  starts again from the verify.
+- **A claim being deleted whose finalizer is already lifted** (Kubernetes'
+  `pvc-protection` still holds it) is waited on every 30 seconds without a
+  verify: nothing is left for the operator to remove. **A claim that is gone**,
+  or another claim of its name, makes the record `Expired` with
+  `homeDeletedAt`, by a confirmed write; `dev_env_home_expiry_expired_total`
+  counts it once, when the API server acknowledges the write.
+- **Nothing cancels from `Deleting` on.** A Pod that mounts the claim refuses
+  `claim_in_use`. An owner hold stops the delete and the release, as it stops
+  every step. With the delete flag off, a record at `Deleting` waits there,
+  with its HOME if it still has one, and costs no uncached reads.
+- **A refusal recorded at `Archived`** with the delete off (the delete's own
+  verify is the only step at `Archived` that refuses) is re-checked by the
+  verify alone every 15 minutes, so a repaired archive clears its alert.
+- **The release** (`releaseExpiredSession`) asks `releaseIfEmpty`, whose one
+  new exception (`expiryReleaseAllowed`: a Reaping private Session, no canary,
+  its record `Expired` for the bound HOME) lets it read the Pod and claim names
+  uncached and call `releaseSession`, which keeps every other protected Session,
+  canaries always. A Session that is not Reaping stays.
+- **Conditions.** From `Deleting` on, the HOME's absence is the expiry's own
+  doing: `PrivateHistoryRetained` says `HomeDeleting` or `HomeExpired` and
+  names the archive entry, instead of `PreservationUnknown`.
+- **The overdue gauge** counts a record until `Expired`, not `Archived`, when
+  the delete is on (`HomeExpiryCollector.DeleteOn`), so H9's
+  `DevEnvHomeExpiryStalled` sees a delete that stalls.
+
+Tests: in `internal/controller`, `private_expiry_delete_test.go`:
+`TestHomeExpiryDeletesOnlyAfterVerifyAndReleases` (T1 to the end and T17's
+delete-off half: a recorded order of verify before each claim delete, UID and
+resourceVersion preconditions, `Expired` counted once, the Session released,
+the archive still verifying), `TestHomeExpiryDeleteRefusesAMissingOrChangedArchive`
+(T2 and T12: `archive_missing`, `archive_mismatch` at `Archived` and in
+`Deleting`, a restart between the claim delete and the finalizer lift with the
+archive changed in between, the claim kept deleting and held),
+`TestHomeExpiryDeleteNeedsTheShelf`, `TestHomeExpiryDeleteRefusesAClaimInUseAndHonoursTheHold`
+(T11's `claim_in_use` and a hold in `Deleting`),
+`TestHomeExpiryDeletingWaitsWithTheDeleteOff`,
+`TestHomeExpiryPodLostAfterTheRecordStillExpires` (T5),
+`TestHomeExpirySuspendedSessionArchivedAtGoesWithDeleting` (T7: `archivedAt`
+never without `Deleting`, no cancel from a longer `archiveAfter` or unreadable
+templates, phase `Archived`, released only once reaped),
+`TestHomeExpiryDeleteTwoOperatorsDeleteOnce` (T13), the guard table
+`TestHomeExpiryVolumeAndReleaseGuardTable` and
+`TestHomeExpiryOverdueCountsToExpiredWithTheDeleteOn`; on a real API server,
+`TestHomeExpiryOnTheAPIServer` now continues each H5 case to the release with a
+fresh operator for every step (T1, T5, T12), adds a changed archive in
+`Deleting` and a record moved back that the schema refuses, and runs T13's two
+operators at once to one claim delete; `TestHistoryReadsAndHomeDeleteFlagsAreExplicitDefaultOff`
+in `cmd/dev-env-operator` (T17).
+
 ## 7. The history archive volume
 
 **A sibling of DESIGN-024's volume.** ADR-005 gives the reasons: a different size
@@ -1148,7 +1236,9 @@ class, a different shape, more sensitive content. Everything else is the same.
   node loss both volumes must detach; DESIGN-024's recovery steps do both.
 - **Who can reach it (corrected by ADR-006).** The templates check refuses a
   template that names this claim; H6 adds the name beside the coordination
-  archive's (DESIGN-024 R4). `dev-env-identity-guard` and the Kyverno
+  archive's (DESIGN-024 R4). In source (H6): `templates.ArchiveClaims` holds
+  both names, and `Validate` refuses either as `sharedClaim` or
+  `workspace.claim`, the two claims a template can name. `dev-env-identity-guard` and the Kyverno
   `dev-env-exec-guard` refuse exec into the shelf to every `dev-agents` identity,
   so v2 agents and API callers cannot reach it. Those guards match only
   `dev-agents` identities, so today these can:
@@ -1296,6 +1386,16 @@ sections above leave these details open:
   --content-sha256 H --file ROOT/PATH --offset N`. `verify` also refuses a file
   the manifest does not list. A `list` item that fails its check is printed as
   `{"error":"corrupt"}` with its UID, time and digest, and nothing else.
+- **`manifest` (added in H6, #254).** `history-archive manifest --session-uid U
+  [--content-sha256 H] [--offset N] [--limit N]` prints one page of an entry's
+  verified manifest, under the shared lock: everything `content.json` holds but
+  the file and excluded-name lists, their counts, and at most 1,000 of those
+  items (`protocol.MaxHistoryManifestPage`), the files first, then the excluded
+  names, with `offset` and `next` counting in that one sequence. `--limit 0`
+  prints the header and counts only. An offset past the end is an empty page,
+  never an error. So the API never holds a whole `content.json` (up to 16 MiB
+  for an entry this operator archived) to show part of it. `get` does not
+  change.
 - **Errors** are one JSON object, `{"error", "message", "path"}`, with exit
   status 1. The `path` names an entry, never its bytes. The export's codes are
   section 10's reasons (`layout_unknown`, `unknown_entry`, `unexpected_entry`,
@@ -1405,6 +1505,63 @@ client. These routes are new, so no existing client decodes them.
 This read is the **#174 read**. Deletion stays off until H8 records it working on
 the installed system: an authorized read of a real archived history, and a
 refusal for a caller outside its scope.
+
+### 8.1 In source (H6, #254)
+
+The routes are in `internal/apiserver/history.go`, their wire types in
+`internal/apiserver/apiv1/history.go` (standard library only), the shelf side
+in `internal/shelf/history.go` (`HistoryReader`: `history-archive
+list|manifest|read` by exec, agentd's refusal decoded from its exit status 1),
+and the client in `internal/agentrun/history.go`. Details the section above
+leaves open:
+
+- **Off** (`--enable-history-archive-reads` false, the default): every history
+  route answers 404 `not_found` right after authentication, before the caller
+  is classified, as if no history existed.
+- **Pages.** The list takes `limit` 1 to 100 (default 20) and `continue`, the
+  cursor agentd printed. The manifest view takes `limit` 1 to 1,000 (default
+  100) and `continue`, a decimal offset into the files followed by the
+  excluded names (agentd's `manifest`, section 7.1); every page carries the
+  identity, terminal record, rescue, roots, Git file names and the counts. A
+  file page is at most 64 KiB, base64 in JSON.
+- **The list** checks the scope for `P` before the shelf is asked and answers
+  403 `forbidden` for a project outside it, as DESIGN-013's routes do; `P` is
+  the caller's own word, so a 403 reveals nothing of the archive. A history
+  with no project is never listed. A list item whose check failed comes back
+  as `error: corrupt` with its UID, time and digest only.
+- **A single read** answers 404 at once when the caller has the payload scope
+  for no project, including a caller the API cannot classify. Then it asks the
+  shelf for the entry's header (`manifest`, limit 0 for a file page) and checks
+  the entry's project, from its verified `content.json`, before anything of the
+  entry is returned: another project, no project and no entry are the same 404.
+  A file page reads the file only after that check, pinned to the digest the
+  header named, so no offset or path check can tell an out-of-scope entry from
+  none. A path is checked as the export checks names: a credential's name is no
+  file path (400), and an excluded name has no file in the entry (404).
+- **503.** No shelf, no free shelf exec slot, `no_archive`, `corrupt`,
+  `io_error`, an exec that failed and an answer for another entry are 503
+  `unavailable` for every caller in scope, logged without content. In scope,
+  a file the entry lacks is 404 and an offset past its end is 400.
+- **Slots.** Each read takes one of the replica's two shelf exec slots
+  (`shelf.ExecSlots`), the same limit the H5 relay takes from, so archive
+  traffic never crowds the shelf, and a replica holds at most two pages in
+  memory at once.
+- **`agent-run history list|show|read`.** `read --all` follows the pages,
+  pinned to the first page's entry, and from offset 0 checks the whole file
+  against the archive's SHA-256. A 404 says what it may mean: nothing in the
+  caller's scope, the reads off, or an operator older than these routes.
+
+Tests: `TestHistoryReadsOffAnswer404`, `TestHistoryListIsScopedBeforeTheShelf`,
+`TestHistoryManifestIsScopedAndPaged`, `TestHistoryFilePageChecksTheScopeFirst`,
+`TestHistoryReadsTakeAShelfSlot` and `TestHistoryReadsARealArchivedEntry` (T1's
+read: agentd's own export and archive, the shelf reader and the routes; a
+changed block is 503 and never served) in `internal/apiserver`;
+`TestHistoryReaderRunsTheArchiveReads` and `TestHistoryReaderErrors` in
+`internal/shelf`; `TestHistoryArchiveManifestPages` in `internal/agentd`; and in
+`internal/agentrun`, `TestHistoryListTableAndNewFields` and
+`TestHistoryShowAndItsPages` (answers with fields the client does not know),
+`TestHistoryReadFollowsThePagesAndChecksTheHash` and
+`TestHistoryOnAnOperatorWithoutTheReads` (the client tolerance tests).
 
 ## 9. Owner overrides: hold and release-now
 
@@ -1570,8 +1727,22 @@ In source (H5), `TestOnlyTheGuardDeletes` names `deleteExpiryExecutor` (after
 `expiryPodRemovalAllowed`, one caller `removeExpiredExecutor`) and
 `deleteExpiryHold` (after `expiryHoldRemovalAllowed`, one caller
 `removeExpiryHold`), and `TestOnlyStopPrivateExecutorPatchesPods` allows a Pod
-delete in those two and in `deletePod` only. `expiryVolumeRemovalAllowed`, the
-release exceptions and `TestExpiryDeleteNeedsVerify` are H6's.
+delete in those two and in `deletePod` only.
+
+In source (H6), `TestOnlyTheGuardDeletes` also names the claim `Delete` in
+`deleteExpiryHome` and the `RemoveFinalizer` in `releaseExpiryHome`, each after
+`expiryVolumeRemovalAllowed`; `releaseExpiryHome`'s one caller,
+`deleteExpiryHome`; and `deleteExpiryHome`'s one caller, `removeExpiredHome`,
+after `noPodUsesHome`. `releaseIfEmpty` and `releaseSession` keep a protected
+Session unless `expiryReleaseAllowed` holds. `TestExpiryDeleteNeedsVerify`
+reads every non-test file of the package: each call of `deleteExpiryHome` and
+each write of phase `Deleting` must follow, in the same function and in this
+order, `historyArchiveVerified` as an `if`'s init whose body returns,
+`expiryRechecked` with its view checked against nil and a return, and
+`noPodUsesHome` on that view as an `if`'s init whose body returns; the delete
+must take the Session and claim from that view. It must see exactly one delete
+and one `Deleting` write. Its testdata is `testdata/expirydeletescan`, where
+nine functions each break one rule and two keep them all.
 
 Each scan has a `testdata` file, never compiled, where each function breaks one
 rule, and the scan must name every one.
@@ -1851,7 +2022,7 @@ Plan 11 tracks these:
 | H3 | dev-env source | the stop request for Reaping Sessions only: the `stopRequest` intent, the hold check, the patch and its guard test; T14 |
 | H4 | dev-env source | agentd `history-export plan\|stream`, `history-archive put\|verify\|get\|list\|read`, `agentd shelf --history-archive`, the layout tables (agentd by name, the copy subtrees excluded) and fixtures, `TestHistoryExportReadsOnly`, `TestHistoryArchiveNeverRemoves`, `TestHistoryLayoutCoversAgentdState`, the measurement |
 | H5 | dev-env source, in source (#251, 5.4) | the expiry record and steps up to `Archived`, the private hold pod and `expiryHoldRemovalAllowed`, the relay, overrides, metrics, the guard test extensions; T1 to T13 up to `Archived` |
-| H6 | dev-env source | the read routes and `agent-run history`, client tolerance tests, the delete and release steps (off), `TestExpiryDeleteNeedsVerify`; T1, T2, T5, T12, T13 and T17 to the end |
+| H6 | dev-env source, in source (#254, 6.7 and 8.1) | the read routes and `agent-run history`, client tolerance tests, the delete and release steps (off), `TestExpiryDeleteNeedsVerify`; T1, T2, T5, T12, T13 and T17 to the end |
 | H7 | haynes-ops | the archive PVC, shelf mount, override policy, the archive guard after its parity check, alerts, `Retain` by Tom, then stop, archive and reads on |
 | H8 | dev-env docs | installed record of the archived read (#174) |
 | H9 | haynes-ops | delete on, stalled alert |
