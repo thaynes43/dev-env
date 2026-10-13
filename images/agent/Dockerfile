@@ -111,7 +111,7 @@ ARG TALOSCTL_VERSION=v1.14.2
 # which stay API-compatible with nearby omnictl versions. renovate: datasource=github-releases depName=siderolabs/omni
 ARG OMNICTL_VERSION=v1.12.3
 # renovate: datasource=github-releases depName=astral-sh/uv
-ARG UV_VERSION=0.12.23
+ARG UV_VERSION=0.13.0
 # tini is PID 1 in every session pod (D-07): it reaps, which v1's PID 1 (code-server)
 # never did (2,970 zombies on 2026-09-28). The static build needs no libc. Its release
 # publishes a .sha256sum per asset; the install step checks it.
