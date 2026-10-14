@@ -10,6 +10,22 @@ of the 2026-10-12 brief, which still holds the requirement history and the
 stopped routes. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## Coordination archive index publication and repair — 2026-10-14 UTC
+
+The [R2 index slice](sagas/distributed-dev-env/verification/coordination-archive-index-2026-10-14.md)
+adds immutable all-record indices and recipient indices for InboxMessage only.
+Entries hold identity and the UID's first publication time, with no object text.
+Puts repair missing indices and retry directory syncs after interrupted revision
+or index publication. Later revisions preserve the first index time even when
+the clock moves back. Damaged entries are refused without replacement.
+
+The focused suite passed all 21 coordination methods and finite subtests.
+Commands, append-only absence events, bounded lookup/list, latest-revision
+resolution and old-incoming cleanup remain R2 work. The next source unit is the
+absence-event journal and grace-state transitions. R2, installed consumers and
+pilot acceptance remain incomplete. Deployment, live execution, archive/deletion
+activation, v1 changes and cutover stay held.
+
 ## Coordination archive immutable storage source checkpoint — 2026-10-14 UTC
 
 The [R2 storage slice](sagas/distributed-dev-env/verification/coordination-archive-storage-2026-10-14.md)
