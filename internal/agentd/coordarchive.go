@@ -2,7 +2,6 @@ package agentd
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,7 +15,7 @@ import (
 )
 
 // CoordArchive stores exact immutable revisions (DESIGN-024 section 4).
-// Commands, indices, absence events and retention are separate R2 slices.
+// Commands, absence events and retention are separate R2 slices.
 type CoordArchive struct {
 	Root    string
 	Home    string
@@ -67,6 +66,10 @@ func (a CoordArchive) Put(m protocol.CoordArchiveManifest, r io.Reader) (protoco
 	}
 	defer unlock()
 	final := filepath.Join(a.Root, filepath.FromSlash(rel))
+	first, err := a.firstIndexEntry(m, filepath.Dir(final))
+	if err != nil {
+		return zero, err
+	}
 	if _, err := os.Lstat(final); err == nil {
 		stored, err := a.readRevision(m, rel)
 		if err != nil || !bytes.Equal(stored.Object, object) {
@@ -77,6 +80,9 @@ func (a CoordArchive) Put(m protocol.CoordArchiveManifest, r io.Reader) (protoco
 		if err := a.syncRevision(final); err != nil {
 			return zero, coordArchiveWriteError(rel, err)
 		}
+		if err := a.publishIndexes(*first); err != nil {
+			return zero, err
+		}
 		return stored.Manifest, nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return zero, protocol.HistoryErrorf(protocol.HistoryErrNoArchive, rel, "cannot inspect revision: %v", err)
@@ -86,8 +92,14 @@ func (a CoordArchive) Put(m protocol.CoordArchiveManifest, r io.Reader) (protoco
 		clock = time.Now
 	}
 	stored := protocol.CoordArchiveStoredManifest{CoordArchiveManifest: m, ArchivedAt: clock().UTC()}
+	if stored.ArchivedAt.IsZero() {
+		return zero, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "invalid archive clock")
+	}
+	if first != nil && stored.ArchivedAt.Before(first.ArchivedAt) {
+		stored.ArchivedAt = first.ArchivedAt
+	}
 	manifest, err := protocol.CanonicalJSON(stored)
-	if err != nil || stored.ArchivedAt.IsZero() {
+	if err != nil {
 		return zero, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "invalid archive clock")
 	}
 	// Existing directory components must be directories, never symbolic links.
@@ -114,6 +126,13 @@ func (a CoordArchive) Put(m protocol.CoordArchiveManifest, r io.Reader) (protoco
 	}
 	if err := files.publishIncoming(tmp, final); err != nil {
 		return zero, coordArchiveWriteError(rel, err)
+	}
+	if first == nil {
+		entry := coordIndexEntry(stored)
+		first = &entry
+	}
+	if err := a.publishIndexes(*first); err != nil {
+		return zero, err
 	}
 	return stored, nil
 }
@@ -156,15 +175,13 @@ func (a CoordArchive) readRevision(m protocol.CoordArchiveManifest, rel string) 
 	if err != nil {
 		return corrupt()
 	}
-	var stored protocol.CoordArchiveStoredManifest
-	if err := json.Unmarshal(manifest, &stored); err != nil || stored.ArchivedAt.IsZero() ||
-		stored.ArchivedAt.Location() != time.UTC {
+	stored, err := parseCoordStoredManifest(manifest, rel)
+	if err != nil {
 		return corrupt()
 	}
 	expected, actual := m, stored.CoordArchiveManifest
 	expected.ArchivedBy, actual.ArchivedBy = "", "" // First publisher is immutable provenance.
-	canonicalManifest, err := protocol.CanonicalJSON(stored)
-	if err != nil || expected != actual || !bytes.Equal(manifest, canonicalManifest) {
+	if expected != actual {
 		return corrupt()
 	}
 	object, err := readArchiveFile(a.Root, filepath.Join(dir, "object.json"), protocol.MaxCoordArchiveObjectBytes)
@@ -203,6 +220,11 @@ func (a CoordArchive) syncRevision(dir string) error {
 			return closeErr
 		}
 	}
+	return a.syncPublicationDirectories(dir)
+}
+
+// Both revision rename and index link need their publication chain synced.
+func (a CoordArchive) syncPublicationDirectories(dir string) error {
 	syncDir := a.syncDir
 	if syncDir == nil {
 		syncDir = syncArchiveDir

@@ -368,10 +368,10 @@ func TestCoordArchiveRetryRepairsPublicationSyncFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rename did not publish a complete revision: %v", err)
 	}
-	before := coordTree(t, a.Root)
+	before := coordTree(t, dir)
 	synced = nil
 	stored, err := a.Put(m, bytes.NewReader(raw))
-	if err != nil || stored != visible.Manifest || !reflect.DeepEqual(before, coordTree(t, a.Root)) {
+	if err != nil || stored != visible.Manifest || !reflect.DeepEqual(before, coordTree(t, dir)) {
 		t.Fatalf("retry changed the immutable revision or failed: %v", err)
 	}
 	for _, want := range []string{dir, parent, a.Root, filepath.Join(a.Root, ".incoming")} {

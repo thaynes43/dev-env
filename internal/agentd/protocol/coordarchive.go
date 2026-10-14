@@ -18,6 +18,7 @@ import (
 const (
 	CoordArchiveDirName         = ".coordination-archive"
 	CoordArchiveFormat          = "dev-env.coordination-archive.v1"
+	CoordArchiveIndexFormat     = "dev-env.coordination-archive.index.v1"
 	CoordArchiveAPIVersion      = "coordination.dev-env.haynesops.com/v1alpha1"
 	MaxCoordArchiveObjectBytes  = 1 << 20
 	MaxCoordArchiveRequestBytes = MaxCoordArchiveObjectBytes + 64<<10
@@ -57,6 +58,19 @@ type CoordArchiveStoredManifest struct {
 type CoordArchiveGetResult struct {
 	Manifest CoordArchiveStoredManifest `json:"manifest"`
 	Object   json.RawMessage            `json:"object"`
+}
+
+// CoordArchiveIndexEntry locates a UID without carrying object text or a
+// mutable latest-revision pointer. ArchivedAt is this UID's first publication.
+type CoordArchiveIndexEntry struct {
+	Format       string    `json:"format"`
+	Resource     string    `json:"resource"`
+	Namespace    string    `json:"namespace"`
+	Project      string    `json:"project"`
+	Name         string    `json:"name"`
+	UID          string    `json:"uid"`
+	RecipientUID string    `json:"recipientUID,omitempty"`
+	ArchivedAt   time.Time `json:"archivedAt"`
 }
 
 // CoordArchiveRevisionDir returns the immutable revision's relative path only

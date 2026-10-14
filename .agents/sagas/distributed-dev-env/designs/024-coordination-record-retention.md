@@ -1,6 +1,6 @@
 # DESIGN-024: Coordination record retention: archive, then delete
 
-- **Status:** Accepted 2026-10-12; R2 ingestion and immutable revision storage in source, archive commands and R3–R7 pending
+- **Status:** Accepted 2026-10-12; R2 ingestion, immutable revisions and index publication/repair in source, archive commands and R3–R7 pending
 - **Decision:** [ADR-004](../adrs/004-coordination-record-retention.md) (Q-29,
   Tom, 2026-10-12: "Archive, then delete (Recommended)")
 - **Amends:** [DESIGN-010](010-atomic-task-claims.md),
@@ -26,10 +26,25 @@ only canonical bytes whose complete identity, size and digest match the stored
 manifest and requested revision.
 
 The [storage verification](../verification/coordination-archive-storage-2026-10-14.md)
-records the focused local suite. This storage primitive has no CLI, API, index, absence event, latest-revision
-resolution, retention, release or deletion authority. Indices, crash repair of
-indices, events and commands complete later R2 slices. It does not complete R2
-or installed acceptance. Deployment and activation remain held.
+records the focused local suite. The subsequent R2 slice publishes the UID's
+immutable all-record index and, for InboxMessage only, its recipient index.
+Entries contain identity and first publication time, never object text.
+Publication uses a fsynced private staging file and an exclusive hard link;
+an existing entry is never replaced. A staging link may remain until the later
+age-bounded incoming cleanup; index reads permit at most two links. Matching
+existing entries are re-synced before success.
+
+The first publication time comes from verified revision manifests for this UID.
+A later revision's clock is clamped to that time if the clock moves back, so it
+cannot create a second index name. Identical puts repair missing indices after
+interrupted revision/index publication. Damaged or substituted entries and linked
+directories refuse the put. Revision manifests are walked in bounded batches
+within this UID, never across a project.
+
+These primitives have no CLI, API, absence event, latest-revision resolution,
+retention, release or deletion authority. Events, commands and incoming cleanup
+remain R2 work. R2 and installed acceptance are incomplete. Deployment and
+activation remain held.
 
 ## 1. What runs, in one picture
 
