@@ -66,9 +66,10 @@ type CoordArchiveGetResult struct {
 type CoordArchivePutRequest struct {
 	Manifest CoordArchiveManifest `json:"manifest"`
 	Object   json.RawMessage      `json:"object"`
+	Event    *CoordArchiveEvent   `json:"event,omitempty"`
 }
 
-// Unmarked put reports null only after refusing a nonempty event journal.
+// Put results report reconstructed journal grace; null means unmarked.
 type CoordArchivePutResult struct {
 	Manifest   CoordArchiveStoredManifest `json:"manifest"`
 	GraceStart *time.Time                 `json:"graceStart"`

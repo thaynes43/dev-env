@@ -111,8 +111,9 @@ Commands:
                            its content manifest, re-hash an entry, print its
                            manifest or one page of it, list a project's
                            entries, or read one page of an archived file.
-  ctl coord-archive put|lookup|get
-                           Put an unmarked coordination object from JSON stdin,
+  ctl coord-archive put [--mark]|mark|lookup|get
+                           Put a coordination object (with --mark, append absent),
+                           mark present/reset, look up revisions and grace,
                            or read one exact verified archived revision.
   ctl prepare-restart      Print what the next boot resumes (the conversation in
                            ~/.agentd/launch.json) as JSON, then stop the agent

@@ -132,7 +132,7 @@ func TestCoordArchiveCLIRefusesIncompleteOrUnboundedRequests(t *testing.T) {
 		}
 	}
 	for _, args := range [][]string{
-		{"ctl", "coord-archive", "put", "--mark"}, {"ctl", "coord-archive", "list"},
+		{"ctl", "coord-archive", "list"},
 		{"ctl", "coord-archive", "get", "--mount-bypass"},
 	} {
 		if code, _, _ := runCoordCLI(args, nil, env); code != exitUsage {

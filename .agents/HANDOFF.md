@@ -10,6 +10,29 @@ of the 2026-10-12 brief, which still holds the requirement history and the
 stopped routes. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## Append-only coordination journal and grace — 2026-10-14 UTC
+
+The [journal slice](sagas/distributed-dev-env/verification/coordination-archive-journal-2026-10-14.md)
+adds `put --mark`, batched present/reset `mark`, and truthful marked lookup.
+Absent starts grace after verified revision/index publication. Repeated marked
+puts retain the original start; present/reset clears it; re-mark starts anew.
+Malformed/unknown events, gaps, duplicate sequences, links and backward times
+refuse state reconstruction. Append-only publication never replaces an event;
+retry repairs sync after a visible event link without duplicating it.
+
+All 41 focused coordination methods and finite subcases passed after preserving
+the writer's existing no_archive refusal for linked archive parents. The local
+main-dispatcher fixture demonstrates these transitions and corruption refusal.
+These recorded observations do not authenticate absence or authorize release.
+No live request, permission, release/deployment, archive mount/activation/deletion,
+v1 change or cutover occurred. Chapter6 remains sole implementation owner;
+Chapter5 and its workers stay idle. Shared budget/stall history is preserved.
+
+The next source milestone is deterministic latest-revision/UID selection for get,
+then paged list, old incoming cleanup and shelf startup wiring. R2 and installed
+consumers remain incomplete; H7/H8, full parity, the real two-provider pilot and
+separately approved v1 retirement remain independent acceptance gates.
+
 ## Local read-only coordination archive discovery — 2026-10-14 UTC
 
 The [lookup slice](sagas/distributed-dev-env/verification/coordination-archive-lookup-2026-10-14.md)

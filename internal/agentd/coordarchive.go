@@ -15,7 +15,7 @@ import (
 )
 
 // CoordArchive stores exact immutable revisions (DESIGN-024 section 4).
-// General selectors, absence events and retention are separate R2 slices.
+// General selectors and retention are separate R2 slices.
 type CoordArchive struct {
 	Root    string
 	Home    string
@@ -48,29 +48,44 @@ func (a CoordArchive) CheckMounted() error {
 // or damaged revision is never overwritten. Incomplete incoming writes remain
 // private; a later R2 cleanup command will handle old debris.
 func (a CoordArchive) Put(m protocol.CoordArchiveManifest, r io.Reader) (protocol.CoordArchiveStoredManifest, error) {
-	return a.put(m, r, false)
+	result, err := a.put(m, r, false, nil)
+	return result.Manifest, err
 }
 
-// PutUnmarked supports the first CLI without hiding an existing grace state.
+// PutUnmarked retains the strict unmarked-only storage entry point.
 func (a CoordArchive) PutUnmarked(m protocol.CoordArchiveManifest, r io.Reader) (protocol.CoordArchivePutResult, error) {
-	stored, err := a.put(m, r, true)
+	stored, err := a.put(m, r, true, nil)
 	if err != nil {
 		return protocol.CoordArchivePutResult{}, err
 	}
-	return protocol.CoordArchivePutResult{Manifest: stored}, nil
+	return stored, nil
 }
 
-func (a CoordArchive) put(m protocol.CoordArchiveManifest, r io.Reader, unmarkedOnly bool) (protocol.CoordArchiveStoredManifest, error) {
-	var zero protocol.CoordArchiveStoredManifest
-	if err := a.CheckMounted(); err != nil {
-		return zero, err
-	}
+// PutRecord reports actual journal grace; an absent event is appended only
+// after the verified revision and indices are durably published.
+func (a CoordArchive) PutRecord(m protocol.CoordArchiveManifest, r io.Reader, event *protocol.CoordArchiveEvent) (protocol.CoordArchivePutResult, error) {
+	return a.put(m, r, false, event)
+}
+
+func (a CoordArchive) put(m protocol.CoordArchiveManifest, r io.Reader, unmarkedOnly bool, event *protocol.CoordArchiveEvent) (protocol.CoordArchivePutResult, error) {
+	zero := protocol.CoordArchivePutResult{}
 	object, err := protocol.VerifyCoordArchiveObject(m, r)
 	if err != nil {
 		return zero, err
 	}
 	rel, err := protocol.CoordArchiveRevisionDir(m)
 	if err != nil {
+		return zero, err
+	}
+	if event != nil {
+		if err := event.Validate(m.Resource); err != nil {
+			return zero, err
+		}
+		if event.State != "absent" {
+			return zero, protocol.HistoryErrorf(protocol.HistoryErrInvalid, rel, "marked put requires absent event")
+		}
+	}
+	if err := a.CheckMounted(); err != nil {
 		return zero, err
 	}
 	unlock, err := lockHistoryArchive(a.Root, true)
@@ -84,6 +99,42 @@ func (a CoordArchive) put(m protocol.CoordArchiveManifest, r io.Reader, unmarked
 			return zero, err
 		}
 	}
+	id := protocol.CoordArchiveIdentity{Resource: m.Resource, Project: m.Project, Name: m.Name, UID: m.UID}
+	uidRel, _ := id.RecordDir()
+	// Preserve the writer's no_archive refusal for unsafe archive parents.
+	// Journal entries themselves are classified as corrupt by readJournal.
+	uidDir, pathErr := openBeneath(a.Root, filepath.Join(a.Root, filepath.FromSlash(uidRel)), historyDirFlags)
+	if pathErr == nil {
+		_ = uidDir.Close()
+	} else if !errors.Is(pathErr, fs.ErrNotExist) {
+		return zero, protocol.HistoryErrorf(protocol.HistoryErrNoArchive, rel, "unsafe archived record directory")
+	}
+	state, err := a.readJournal(id, uidRel)
+	if err != nil {
+		return zero, err
+	}
+	if event != nil && state.GraceStart == nil && event.At.Before(state.LastAt) {
+		return zero, protocol.HistoryErrorf(protocol.HistoryErrInvalid, rel, "backward event timestamp")
+	}
+	stored, err := a.putRevisionLocked(m, object, rel)
+	if err != nil {
+		return zero, err
+	}
+	if event != nil {
+		state, _, err = a.appendEvent(uidRel, state, *event)
+	} else {
+		err = a.syncJournal(state)
+	}
+	if err != nil {
+		return zero, coordArchiveWriteError(rel, err)
+	}
+	return protocol.CoordArchivePutResult{Manifest: stored, GraceStart: state.GraceStart}, nil
+}
+
+// Caller holds the exclusive shelf lock; journal preflight already succeeded.
+func (a CoordArchive) putRevisionLocked(m protocol.CoordArchiveManifest, object []byte, rel string) (protocol.CoordArchiveStoredManifest, error) {
+	zero := protocol.CoordArchiveStoredManifest{}
+	final := filepath.Join(a.Root, filepath.FromSlash(rel))
 	first, err := a.firstIndexEntry(m, filepath.Dir(final))
 	if err != nil {
 		return zero, err

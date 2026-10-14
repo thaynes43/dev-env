@@ -1,6 +1,6 @@
 # DESIGN-024: Coordination record retention: archive, then delete
 
-- **Status:** Accepted 2026-10-12; R2 unmarked put/exact get, unmarked lookup and immutable storage/indices in source, remaining commands and R3–R7 pending
+- **Status:** Accepted 2026-10-12; R2 put/mark/lookup with journal grace, exact get and immutable storage/indices in source, remaining commands and R3–R7 pending
 - **Decision:** [ADR-004](../adrs/004-coordination-record-retention.md) (Q-29,
   Tom, 2026-10-12: "Archive, then delete (Recommended)")
 - **Amends:** [DESIGN-010](010-atomic-task-claims.md),
@@ -79,6 +79,33 @@ The [lookup fixture](../verification/coordination-archive-lookup-2026-10-14.md)
 exercises put -> lookup -> exact verified get and corruption refusal locally.
 The event journal/grace transitions remain the next source prerequisite for
 marked lookup; full R2 and installed acceptance remain incomplete.
+
+**Journal slice, 2026-10-14:** append-only events use the accepted eight-digit
+sequence and absent/present/reset states. Readers scan names in 128-entry
+batches, require one canonical bounded event per contiguous sequence, and fold
+in sequence order with constant journal memory. Unknown fields/states, linked
+or malformed entries, gaps/duplicate sequences, and backward timestamps refuse
+state reconstruction. A first absent after present/reset starts grace; repeated
+marked puts retain that start. Present/reset clears it. Missing or empty
+journals remain unmarked, including after an archive revision is lost.
+
+`put --mark` takes an `event` alongside manifest/object and publishes verified
+revision/index data before the absent event under one exclusive lock. Plain
+put and lookup report the actual recorded grace. `mark` takes 1–1024
+identity/event items (present/reset only); it skips unmarked UIDs. Input uses
+the existing request cap, each event is at most 8 KiB, and metadata output stays
+within 4 MiB. Event publication reuses private fsynced staging and exclusive
+hard links, never overwrites a file, and retries sync after visible publication
+failure. A failed mark batch may have published a prefix; retry safely skips
+already-cleared UIDs and repairs durability without rewriting events.
+
+Events are bounded structural observations supplied by the trusted shelf caller,
+not authenticated Session absence or permission to release. No live reads,
+retention runnable, grace-expiry decision or deletion is added. The
+[journal fixture](../verification/coordination-archive-journal-2026-10-14.md)
+shows local marked lookup transitions and finite refusal/repair cases. General
+get/list, old incoming cleanup and shelf startup wiring remain R2 work;
+installed consumers and all live/activation/cutover gates remain held.
 
 ## 1. What runs, in one picture
 
