@@ -63,19 +63,21 @@ func coordArchiveCtl(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 		var identities []protocol.CoordArchiveIdentity
 		var events []protocol.CoordArchiveMarkRequest
 		var target any = &request
-		if args[0] == "lookup" {
+		switch args[0] {
+		case "lookup":
 			target = &identities
-		} else if args[0] == "mark" {
+		case "mark":
 			target = &events
 		}
 		if err := dec.Decode(target); err != nil || !errors.Is(dec.Decode(&extra), io.EOF) {
 			return historyFail(stdout, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "one complete JSON request required"))
 		}
-		if args[0] == "lookup" {
+		switch args[0] {
+		case "lookup":
 			out, err = a.Lookup(identities)
-		} else if args[0] == "mark" {
+		case "mark":
 			out, err = a.Mark(events)
-		} else {
+		default:
 			if mark != (request.Event != nil) {
 				return historyFail(stdout, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "--mark and absent event must be supplied together"))
 			}

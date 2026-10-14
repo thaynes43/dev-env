@@ -99,7 +99,6 @@ func (a CoordArchive) lookupRecord(id protocol.CoordArchiveIdentity, rel string,
 	if len(base) > budget {
 		return zero, coordLookupOverflow()
 	}
-	used := len(base)
 	dir := filepath.Join(a.Root, filepath.FromSlash(rel))
 	d, err := openBeneath(a.Root, dir, historyDirFlags)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -119,7 +118,7 @@ func (a CoordArchive) lookupRecord(id protocol.CoordArchiveIdentity, rel string,
 		return zero, err
 	}
 	base, _ = protocol.CanonicalJSON(result)
-	used = len(base)
+	used := len(base)
 	if used > budget {
 		return zero, coordLookupOverflow()
 	}

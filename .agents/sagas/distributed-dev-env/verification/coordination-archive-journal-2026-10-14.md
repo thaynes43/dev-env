@@ -54,7 +54,7 @@ GOMAXPROCS=2 GOFLAGS=-p=1 GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off \
 ```
 
 The focused coordination suite passed all 41 top-level methods (108 passing
-nodes including finite subcases), with no skips: cmd 0.104s, agentd 1.179s,
+nodes including finite subcases), with no skips: cmd 0.096s, agentd 1.177s,
 protocol 0.054s, cached Go 1.27.2 under the same lock/CPU bounds and no downloads.
 It covers all four kinds, preserving old event bytes, unknown/malformed/linked
 journals, gaps/duplicates, clock rollback, invalid marking before writes,
@@ -74,3 +74,8 @@ R2 work. Installed consumers, H7/H8, full parity and pilot acceptance are separa
 Live impersonated dry-runs await separate original Tom approval; consumed inquiry
 permission is not reused. Release/deployment, archive mount/activation/deletion,
 v1 changes and cutover stay held.
+
+Hosted lint then identified an unused initial budget assignment and two command
+branches that should be tagged switches. Those were corrected, and stale command
+help was updated per advisory review. The final focused suite above passed after
+that small control-flow delta; native read-only delta review found no blockers.
