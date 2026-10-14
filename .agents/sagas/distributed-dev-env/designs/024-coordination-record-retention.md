@@ -1,6 +1,6 @@
 # DESIGN-024: Coordination record retention: archive, then delete
 
-- **Status:** Accepted 2026-10-12; R2 unmarked put/exact get and immutable storage/indices in source, remaining commands and R3–R7 pending
+- **Status:** Accepted 2026-10-12; R2 unmarked put/exact get, unmarked lookup and immutable storage/indices in source, remaining commands and R3–R7 pending
 - **Decision:** [ADR-004](../adrs/004-coordination-record-retention.md) (Q-29,
   Tom, 2026-10-12: "Archive, then delete (Recommended)")
 - **Amends:** [DESIGN-010](010-atomic-task-claims.md),
@@ -53,12 +53,32 @@ It refuses an existing nonempty event journal rather than guessing grace state.
 `get --resource R --name N --uid U --resource-version V --sha256 H` resolves one
 exact revision across projects and verifies the complete bytes before printing.
 A name under two projects is ambiguous. General latest-revision selection,
-`--mark`, event commands and lookup/list remain unsupported and fail closed.
+`--mark`, event commands and list remain unsupported and fail closed.
 This is a partial R2 command demonstration, not full R2 or installed acceptance.
 Local tests use synthetic temporary files on existing filesystems; no mount,
 activation, public mount-bypass option or live client is involved.
 The [CLI demonstration](../verification/coordination-archive-cli-2026-10-14.md)
 records the runnable command test, matching digest and corruption refusal.
+
+**Read-only discovery slice, 2026-10-14:** `lookup` accepts one JSON array
+of 1 to 1024 identities (`resource`, `project`, `name`, `uid`) on stdin and
+returns an array in the same order. Each item contains that identity, `holds`,
+`revisions` (resourceVersion and sha256, sorted lexically without claiming time
+order), and `graceStart: null`. Missing UIDs return `holds: false` and an empty
+revision array. It walks only each requested UID in 128-name batches and reads
+bounded manifests, never object bytes or indices. Metadata/path validation is
+structural; lookup is not object verification. Exact `get` remains that proof.
+
+This initial lookup refuses a nonempty or unreadable event journal rather than
+inventing grace. Invalid paths, linked or malformed manifests and incomplete
+revision directories return an error with no partial results. Its stdin cap is
+the existing 1 MiB + 64 KiB; output metadata is capped at 4 MiB, with an `invalid`
+error rather than truncation if the complete batch would exceed the bound.
+Neither this cap nor unsupported marked UIDs provides release eligibility.
+The [lookup fixture](../verification/coordination-archive-lookup-2026-10-14.md)
+exercises put -> lookup -> exact verified get and corruption refusal locally.
+The event journal/grace transitions remain the next source prerequisite for
+marked lookup; full R2 and installed acceptance remain incomplete.
 
 ## 1. What runs, in one picture
 

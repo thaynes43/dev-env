@@ -80,18 +80,8 @@ func (a CoordArchive) put(m protocol.CoordArchiveManifest, r io.Reader, unmarked
 	defer unlock()
 	final := filepath.Join(a.Root, filepath.FromSlash(rel))
 	if unmarkedOnly {
-		d, err := openBeneath(a.Root, filepath.Join(filepath.Dir(final), "events"), historyDirFlags)
-		if err == nil {
-			names, readErr := d.Readdirnames(1)
-			_ = d.Close()
-			if len(names) != 0 {
-				return zero, protocol.HistoryErrorf(protocol.HistoryErrInvalid, rel, "event journal support required for this UID")
-			}
-			if !errors.Is(readErr, io.EOF) {
-				return zero, coordArchiveWriteError(rel, readErr)
-			}
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			return zero, coordArchiveWriteError(rel, err)
+		if err := a.requireUnmarked(filepath.Dir(final), rel); err != nil {
+			return zero, err
 		}
 	}
 	first, err := a.firstIndexEntry(m, filepath.Dir(final))

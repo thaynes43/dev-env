@@ -10,6 +10,24 @@ of the 2026-10-12 brief, which still holds the requirement history and the
 stopped routes. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## Local read-only coordination archive discovery — 2026-10-14 UTC
+
+The [lookup slice](sagas/distributed-dev-env/verification/coordination-archive-lookup-2026-10-14.md)
+adds stdin batch discovery for up to 1024 exact record identities. It returns
+stored resourceVersion/hash selectors, then exact get verifies their bytes.
+Lookup reads only manifests under each requested UID and does not verify objects.
+An absent or empty journal yields null grace; nonempty journals fail closed.
+The complete metadata response is bounded at 4 MiB, with no partial batch on error.
+
+All 34 focused coordination methods and their finite subcases passed, including
+put -> lookup -> exact get with identical digest and corrupt get refusal.
+This source/offline slice adds no release eligibility or live execution.
+General selectors, event journal/grace transitions, list, old incoming cleanup
+and shelf startup wiring remain R2 work. The next useful source milestone is
+the append-only event journal and grace transitions needed by marked lookup.
+R2, installed consumers and pilot acceptance remain incomplete. All live,
+deployment, archive activation/deletion, v1 and cutover holds remain.
+
 ## Local coordination archive CLI round-trip — 2026-10-14 UTC
 
 The [minimal CLI slice](sagas/distributed-dev-env/verification/coordination-archive-cli-2026-10-14.md)
@@ -22,7 +40,7 @@ check remained enabled; no mount or public bypass option was added.
 
 All 28 focused coordination/CLI methods passed. Nonempty journals refuse
 unmarked put, preserving unknown grace state. General selectors, `--mark`,
-events, lookup/list and old incoming cleanup remain unsupported source work;
+events, marked lookup/list and old incoming cleanup remain source work;
 R2 and installed acceptance are incomplete. Do not execute this demonstration
 against live archives under the current hold. Deployment, permissions, v1,
 archive/deletion activation and cutover remain unchanged.
