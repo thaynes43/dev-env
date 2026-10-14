@@ -1,6 +1,6 @@
 # DESIGN-024: Coordination record retention: archive, then delete
 
-- **Status:** Accepted 2026-10-12; no source yet
+- **Status:** Accepted 2026-10-12; R2 ingestion foundation in source, archive commands and R3–R7 pending
 - **Decision:** [ADR-004](../adrs/004-coordination-record-retention.md) (Q-29,
   Tom, 2026-10-12: "Archive, then delete (Recommended)")
 - **Amends:** [DESIGN-010](010-atomic-task-claims.md),
@@ -12,6 +12,11 @@
 
 Everything here is default off. Two operator flags turn it on, in a haynes-ops
 change that comes last (section 9).
+
+**Source checkpoint, 2026-10-14:** the [bounded ingestion slice](../verification/coordination-archive-ingestion-2026-10-14.md)
+verifies full canonical objects against manifest identities and digests without
+discarding unknown fields or numeric encodings. It has no storage, CLI, API,
+release or delete authority. It does not complete R2 or installed acceptance.
 
 ## 1. What runs, in one picture
 
