@@ -96,8 +96,15 @@ The five retained AgentSessions in `dev-agents`. Canary originals never expire
 | `private-canary-a1444f4131ec7281b5d1e3130c3b5ada` | `430297d9-aa29-4332-9b3b-37095c1b5963` | claude-sigo-1012 | `Failed`, task `Succeeded`, `executorTerminal` |
 | `private-canary-eb9d486a612e27fd2b52d27f675512be` | `454d12a2-60bc-4c4e-95c5-bb4b26428a65` | claude-sigo-1012b | `Failed`, task `Succeeded`, `executorTerminal` |
 
-Next free IDs: Q-38, D-92, ADR-008, DESIGN-026, README decision 73. Each new
+Next free IDs: Q-38, D-93, ADR-008, DESIGN-026, README decision 74. Each new
 question takes the next free Q id when it is asked; none is reserved.
+
+D-92 / README 73 records the relayed owner clarification: all Tom's trusted
+dev-env agents may read shared history. Per-agent denied-read isolation is not
+a parity gate. [Requirements and bounded plan](sagas/distributed-dev-env/requirements/2026-10-13-shared-agent-history.md)
+retain existing authentication/trust membership, credential exclusion, integrity,
+write/delete protections, public/anonymous/external refusal and unchanged v1.
+Root did not directly observe the original owner turn; no question ID was used.
 
 Q-37/D-91 is answered through the source Mac conversation and consumed.
 The [Retain acceptance](sagas/distributed-dev-env/verification/h7-retain-acceptance-2026-10-13.md)
@@ -199,6 +206,22 @@ predate this session; their rows point there.
 
 ## Next work, in order
 
+**Current checkpoint, 20:18 EDT October 13:** the corrected existing-Mac
+[capture-r2 is accepted](sagas/distributed-dev-env/verification/h7-mac-capture-r2-2026-10-13.md)
+for its bounded configuration/pre-mount metadata window: Ready, 26 GETs all
+200, nine complete lists/13 objects, five stable protected objects, zero
+archive references under the reviewed predicates. No extra PV request,
+mutation or retry. Installed admission/lookup behavior remains separate;
+the held reader, failures and original canaries remain preserved.
+
+Next bounded source step under D-92: identify the minimal history-only
+authorization correction for the existing authenticated trusted agents,
+including projectless history. Preserve other read/publication/write/delete
+authority and identify any concrete security-sensitive diff before execution.
+Use one approved private history sample and positive peer retrieval with
+matching digest; retain F4, resource, persistence/restore and H8 requirements.
+No new architecture/review project or per-agent denied-read matrix.
+
 **Current H7 evidence route:** [the reader-failure checkpoint](sagas/distributed-dev-env/verification/h7-reader-failure-and-existing-access-2026-10-13.md)
 records #3904's installed read grants and failed single automatic Job. No
 workload baseline was collected; the first policy's normalized spec mismatched
@@ -210,8 +233,8 @@ archive references and matching protected lineage. The reviewed source-only
 correction merged in [dev-env #267](https://github.com/thaynes43/dev-env/pull/267),
 `dad78a39`, at 22:14:26 UTC; its required CI, full CEL/transport fixtures and
 Python 3.9/current hosted suites passed. The verified Mac tools are ready.
-Full audit remains pending: obtain a fresh bounded receipt using that exact
-reviewed source/artifact and invocation. No held-reader change, retry or new grant; preserve the
+That exact source/artifact and invocation produced the accepted capture-r2
+above. Installed request outcomes remain separate. No held-reader change, retry or new grant; preserve the
 failed Job and all other retained runtime.
 
 **H7 progress at 20:23 UTC, 2026-10-13:** the compatible guard merged in
@@ -219,8 +242,8 @@ failed Job and all other retained runtime.
 The [source and registered hook checkpoint](sagas/distributed-dev-env/verification/h7-compatible-guard-source-and-hook-2026-10-13.md)
 records the exact-head 1,593 passing hosted tests/subtests, final independent
 no-findings review, observed Kyverno GET permissions, Flux Ready/Healthy and the
-generated Fail hook. Actual installed request acceptance and a complete
-pre-mount baseline remain pending. The separate reader's later failed attempt
+generated Fail hook. Actual installed request acceptance remains pending;
+capture-r2 above accepts the bounded pre-mount baseline. The separate reader's failed attempt
 and existing-access hold are recorded above; use the current route.
 Forbidden policy/ReplicationController reads are not empty or successful results.
 No workstation commands or administrator-token borrowing are the verification path.
@@ -269,9 +292,9 @@ need declare-activity and peer checks before and after.
      2. the archive guard, `dev-env-archive-guard` (it covers DESIGN-024's
         archive too, so it ships with whichever of H7 and R5 comes first),
         preserving v1 under ADR-007/Q-35; source merged in #3902 and hook
-        registered, with complete installed/baseline acceptance pending;
-        the dedicated metadata audit failed and is held under Q-36; diagnose
-        and verify bounded existing Mac evidence before proceeding;
+        registered; capture-r2 accepts bounded installed configuration/baseline,
+        while actual admission/lookup behavior remains pending. The dedicated
+        metadata audit failed and stays held under Q-36; do not repeat it;
      3. the shelf mount, `--history-archive`, `Recreate` and the 2.27.0 image
         (this absorbs #3710);
      4. the `dev-env-home-expiry-guard` admission policy, refusing every

@@ -267,7 +267,9 @@ answered through the Claude native prompt: "Archive, then delete
    go to an archive volume on the shelf with a `Retain` PV, kept indefinitely and
    guarded from H7 against untrusted v2 actors; v1 retains its existing
    administrator access under ADR-007/Q-35. Archived history is readable
-   under DESIGN-013's payload scope.
+   under D-92's [trusted shared-history requirement](../requirements/2026-10-13-shared-agent-history.md).
+   The current history-only authorization must be corrected before that read
+   is accepted; denied reads between Tom's trusted agents are not a gate.
 3. Only then, with deletion enabled, the operator's leader deletes the HOME
    through the guarded path and releases the Session. ADR-004 then releases its
    records. Canary originals never expire. Tom alone may hold an expiry or

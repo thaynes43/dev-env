@@ -10,6 +10,32 @@ of the 2026-10-12 brief, which still holds the requirement history and the
 stopped routes. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## Shared history requirement and fresh metadata acceptance — 2026-10-13 EDT
+
+**D-92 / README decision 73:** all Tom's trusted dev-env agents may read shared
+history. [The owner clarification and bounded plan](sagas/distributed-dev-env/requirements/2026-10-13-shared-agent-history.md)
+replace per-agent denied-read isolation as a parity gate. Use existing
+authenticated access; preserve credential exclusion, integrity, write/delete
+protections, external/anonymous refusal and unchanged v1. The Mac relayed this
+requirement; Root did not directly observe the original owner turn. It consumes
+no question ID and authorizes no silent RBAC or trust-membership expansion.
+
+Separately, Root accepts the [fresh existing-Mac capture-r2](sagas/distributed-dev-env/verification/h7-mac-capture-r2-2026-10-13.md)
+for the bounded installed-configuration/pre-mount metadata window at
+20:18:15–20:18:25 EDT (00:18:15–00:18:25 UTC October 14). Independent review
+found no issues: 26 GETs, all 200, nine complete lists, 13 objects, five stable
+protected objects and zero archive references under the reviewed predicates.
+Actual admission/lookup behavior remains separate. The held reader and previous
+failures are preserved; no PV request, mutation, retry or runtime change occurred.
+
+Next: identify the minimal history-only read-authorization correction, keeping
+the existing authenticated trusted caller set and publication/write/delete
+authority. Then use one approved private sample and positive peer retrieval
+with matching digest; retain F4, bounded resource, persistence/restore and H8
+requirements. No new isolation project or per-agent denial matrix is needed.
+Reads and deletion remain off. Next IDs: Q-38, D-93, README 74, ADR-008,
+DESIGN-026.
+
 ## H7 PV Retain verified; Q-37/D-91 consumed — 2026-10-13
 
 The [Retain acceptance](sagas/distributed-dev-env/verification/h7-retain-acceptance-2026-10-13.md)
@@ -23,8 +49,8 @@ were independently audited from saved evidence; Root made no extra PV request.
 The PV Retain gate is accepted. The one-time exception is consumed: no second
 launch or PATCH is authorized. General PV rights remain owner-only. No v1 or
 reader configuration, permissions, archive mount or flag changed in this
-operation. The next ordered unit is the fresh bounded existing-Mac guard and
-baseline capture, then separate installed behavior acceptance before mounting.
+operation. The fresh bounded existing-Mac guard and baseline capture is now
+accepted above; installed behavior acceptance before mounting remains separate.
 [DESIGN-025 section 22](sagas/distributed-dev-env/designs/025-private-home-expiry.md#22-one-time-pv-retain-q-37-d-91)
 records Q-37/D-91 and README decision 72. Other H7 gates remain separate.
 
@@ -53,8 +79,8 @@ guard acceptance remain pending. The source-only correction merged in
 [dev-env #267](https://github.com/thaynes43/dev-env/pull/267), `dad78a39`, at
 22:14:26 UTC. Required CI and both reviews passed; Python 3.9.25 and 3.12.15
 each passed all 20 methods, including real CEL checks. Verified Mac binaries
-and the reviewed invocation are ready for a fresh bounded capture; none has
-run with this correction. Obtain that receipt without changing the held reader. No
+and the reviewed invocation later produced the accepted capture-r2 above.
+The held reader remains unchanged. No
 workstation commands are requested from the owner. Already-installed access
 has no withdrawal ruling.
 
@@ -66,8 +92,8 @@ has no withdrawal ruling.
 records 1,593 passing hosted tests/subtests, no remaining native/advisory finding,
 the deployed Kyverno lookup permissions and Flux Ready/Healthy at 20:23 UTC.
 The generated Fail webhook matches the intended namespace/resources/operations.
-Actual installed request outcomes and the complete pre-mount baseline are still
-pending. The dedicated audit's later failure and existing-access hold are recorded
+Actual installed request outcomes remain pending; the later capture-r2 above
+accepts the bounded pre-mount baseline. The dedicated audit's failure and existing-access hold are recorded
 above. v1's inaccessible reads are not success or empty state. The owner is
 currently on a phone; do not request workstation commands.
 
@@ -195,7 +221,8 @@ Next is H7 in haynes-ops (DESIGN-025 section 12), under the slow-down pacing.
 off; off, they answer 404): `GET /v1/history?project=P` (a project's archived
 histories), `GET /v1/history/{sessionUID}` (an entry's manifest, in pages) and
 `GET /v1/history/{sessionUID}/file?path=&offset=` (64 KiB pages). The scope is
-DESIGN-013's payload-read scope, unchanged; a single read answers 404 for
+DESIGN-013's implemented payload-read scope; D-92 above requires a history-only
+shared-read correction before acceptance. Currently a single read answers 404 for
 anything outside the caller's scope, and the shelf's failures are 503. Each read
 takes one of the replica's two shelf exec slots, shared with the H5 relay. The
 client is `agent-run history list|show|read`. agentd gains `history-archive
