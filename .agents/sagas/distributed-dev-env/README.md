@@ -2,7 +2,7 @@
 
 Start continuation with the
 [2026-10-13 Claude pickup brief](../../CLAUDE-RESUME-2026-10-13.md): deployed
-state (2.27.0), counters, rulings through Q-32 and pacing, and the next work
+state (2.27.0), counters, rulings through Q-37/D-92 and pacing, and the next work
 with its owner gates. Rule loading is accepted for both providers, all five
 canary IDs are consumed, Q-24 is still pending, and the MVP is unaccepted.
 
@@ -393,6 +393,7 @@ explicit approval in phase 5.
 | 70 | Q-35/D-89: preserve v1 during archive migration | **RECORDED** 2026-10-13 through oversight; **DIRECTLY CONFIRMED** at 21:33 UTC | Relay: "v1 must remain the same until it’s decommissioned after the MVP has been accepted". Direct asynchronous answer: "Keep v1 trusted during migration (Recommended)". Preserve v1 behavior, configuration and current access; accepted MVP precedes separately approved decommissioning. [ADR-007](adrs/007-preserve-v1-archive-trust-boundary.md) amends row 66's v1 archive narrowing: H7 protects untrusted v2 paths, preserving trusted v1 and legitimate controller descendants. No new privilege, isolation from v1, archive activation or automatic decommissioning follows. Original relayed turn remains unobserved; direct confirmation observed. Q-36 unchanged ([DESIGN-025 section 20](designs/025-private-home-expiry.md#20-h7-archive-trust-boundary-q-35)). |
 | 71 | Q-36/D-90: existing Mac evidence and reader hold | **RECORDED** 2026-10-13 (owner answer relayed through oversight) | "Go for it" for holding the new reader and collecting pre-use workload/guard/webhook evidence through existing authorized Mac access. The relay arrived after #3904 had deployed and its single automatic Job had failed; installed grants have no withdrawal ruling. Hold further reader access/deployment, preserve the failed attempt, and diagnose the source mismatch through bounded existing reads. No undo, retry, credential export, mutation or later activation follows ([DESIGN-025 section 21](designs/025-private-home-expiry.md#21-existing-access-evidence-and-hold-q-36), [failed-attempt checkpoint](verification/h7-reader-failure-and-existing-access-2026-10-13.md)). Original owner turn and native phone delivery unobserved; no new ADR. |
 | 72 | Q-37/D-91: one-time history-PV Retain delegation | **RECORDED AND EXECUTED** 2026-10-13 through the source Mac conversation | Tom answered "Yes" to one fixed Delete-to-Retain change for `dev-agents/dev-env-history-archive`'s bound PV, using existing Mac access. Source-corroborated approval relay; original user turn not directly exposed to Root. One verified executable launch, GET/PATCH/GET all 200, exit 0, same bound PV/claim verified Retain at 19:40:32 EDT (23:40:32.254177 UTC). Root and independent saved-evidence review accept only the PV gate. The attempt is consumed: no repeat, new right, v1/reader change, mount, flag or other activation ([DESIGN-025 section 22](designs/025-private-home-expiry.md#22-one-time-pv-retain-q-37-d-91), [acceptance](verification/h7-retain-acceptance-2026-10-13.md)). |
+| 73 | D-92: shared history for trusted agents | **RECORDED** 2026-10-13 EDT through the Mac coordinator's owner clarification relay; original owner turn not directly observed by Root | All Tom's trusted dev-env agents may read shared history. Positive peer retrieval is the parity target; denied reads between trusted agents are not a gate. Preserve authentication, credential exclusion, integrity, write/delete protections, public/anonymous/external refusal and unchanged v1. No silent new identities, RBAC or trust expansion. Identify the concrete history-only authorization diff before execution. No question ID or new architecture/review project ([requirements and bounded plan](requirements/2026-10-13-shared-agent-history.md)). |
 
 The full options, consequences and rulings for Q-01 to Q-16, and the premise
 corrections withdrawing Q-17 and Q-18, plus Q-19's first owner CA provisioning
@@ -404,7 +405,9 @@ links ADR-005 in row 64, Q-30 links its DESIGN-011 amendment in row 65, and
 D-87 links ADR-006, which corrects ADR-005, in row 66, D-88 links its
 DESIGN-006 section in row 67, Q-32 links its result record in row 68,
 the 2026-10-13 pacing ruling is row 69, and Q-35/D-89 links ADR-007
-in row 70. Q-36/D-90 records the existing-access hold in row 71.
+in row 70. Q-36/D-90 records the existing-access hold in row 71; Q-37/D-91
+records the consumed Retain delegation in row 72. D-92 records trusted shared
+history in row 73; its owner requirement is separate from capture-r2 acceptance.
 
 
 ## Plan backlog

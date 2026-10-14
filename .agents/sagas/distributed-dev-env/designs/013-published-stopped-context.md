@@ -5,6 +5,15 @@ Default off. ADR-003 controls privacy and coordination. This is an explicitly
 published excerpt/result/memory/handoff contract, not complete native history
 or database restoration. No provider turn, pairing or fleet UX follows.
 
+**Owner clarification, 2026-10-13 (D-92):** all Tom's trusted dev-env agents
+may read shared history. [The authoritative requirement and bounded plan](../requirements/2026-10-13-shared-agent-history.md)
+replace denied-read isolation between those agents as a history parity gate.
+The project-scoped helper below describes the current implementation; the
+history API still needs its identified read-only authorization correction.
+This does not change publication/write authority, grant external access or
+alter v1. A history-only correction must not broaden this shared helper's
+other callers implicitly.
+
 ## Contract
 
 Use an immutable bounded PublishedContext resource in the protected

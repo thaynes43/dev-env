@@ -1525,13 +1525,24 @@ one of DESIGN-024's exec slots. Three routes:
 
 Every item and answer carries `archived: true` and `archivedAt`.
 
-**Scope.** DESIGN-013's payload-read scope, unchanged: `contextReadScope(project)`
+**Current implementation, superseded for trusted history reads by D-92.**
+DESIGN-013's payload-read rules mirrored by `historyScope` in `history.go`,
+with the shared `contextCaller` identity check and separate project checks,
 with the project from the verified `content.json`. The project must be in
 `--context-payload-read-projects`, and the caller must be a live Session of that
 project or a configured coordinator. A history with no project is readable by no
-API caller. Through exec into the shelf, it is readable by Tom and by the
-identities section 7 names until the H7 guard ships; after that, by Tom and the
-operator, and still by cluster-admin, node and storage access.
+API caller. This is narrower than the
+[D-92 shared-history requirement](../requirements/2026-10-13-shared-agent-history.md):
+all Tom's existing trusted authenticated agents may read shared history,
+including across their projects; a projectless history must not disappear
+from that requirement. Identify the minimal history-only authorization diff
+before executing it. Keep the existing caller authentication/live identity
+checks, write/delete protections and public/anonymous/external refusal.
+
+API read sharing grants no raw shelf exec or volume access. Q-35/ADR-007
+preserves trusted v1's existing administrator routes; Tom, the operator and
+the named legitimate infrastructure routes retain their separate access,
+as do existing cluster-admin, node and storage powers.
 
 **Answers that reveal nothing.** The list route checks the scope for `P` before
 it asks the shelf. A single read first requires that the caller has the payload
@@ -1546,8 +1557,9 @@ excluded or credential name's content. `agent-run history list|show|read` is the
 client. These routes are new, so no existing client decodes them.
 
 This read is the **#174 read**. Deletion stays off until H8 records it working on
-the installed system: an authorized read of a real archived history, and a
-refusal for a caller outside its scope.
+the installed system: trusted peers retrieve the same real archived history
+with matching digest, and public/anonymous or external callers remain refused.
+Denied reads between Tom's trusted agents are not a parity gate (D-92).
 
 ### 8.1 In source (H6, #254)
 
