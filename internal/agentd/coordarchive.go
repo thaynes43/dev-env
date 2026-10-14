@@ -15,7 +15,7 @@ import (
 )
 
 // CoordArchive stores exact immutable revisions (DESIGN-024 section 4).
-// Commands, absence events and retention are separate R2 slices.
+// General selectors, absence events and retention are separate R2 slices.
 type CoordArchive struct {
 	Root    string
 	Home    string
@@ -48,6 +48,19 @@ func (a CoordArchive) CheckMounted() error {
 // or damaged revision is never overwritten. Incomplete incoming writes remain
 // private; a later R2 cleanup command will handle old debris.
 func (a CoordArchive) Put(m protocol.CoordArchiveManifest, r io.Reader) (protocol.CoordArchiveStoredManifest, error) {
+	return a.put(m, r, false)
+}
+
+// PutUnmarked supports the first CLI without hiding an existing grace state.
+func (a CoordArchive) PutUnmarked(m protocol.CoordArchiveManifest, r io.Reader) (protocol.CoordArchivePutResult, error) {
+	stored, err := a.put(m, r, true)
+	if err != nil {
+		return protocol.CoordArchivePutResult{}, err
+	}
+	return protocol.CoordArchivePutResult{Manifest: stored}, nil
+}
+
+func (a CoordArchive) put(m protocol.CoordArchiveManifest, r io.Reader, unmarkedOnly bool) (protocol.CoordArchiveStoredManifest, error) {
 	var zero protocol.CoordArchiveStoredManifest
 	if err := a.CheckMounted(); err != nil {
 		return zero, err
@@ -66,6 +79,21 @@ func (a CoordArchive) Put(m protocol.CoordArchiveManifest, r io.Reader) (protoco
 	}
 	defer unlock()
 	final := filepath.Join(a.Root, filepath.FromSlash(rel))
+	if unmarkedOnly {
+		d, err := openBeneath(a.Root, filepath.Join(filepath.Dir(final), "events"), historyDirFlags)
+		if err == nil {
+			names, readErr := d.Readdirnames(1)
+			_ = d.Close()
+			if len(names) != 0 {
+				return zero, protocol.HistoryErrorf(protocol.HistoryErrInvalid, rel, "event journal support required for this UID")
+			}
+			if !errors.Is(readErr, io.EOF) {
+				return zero, coordArchiveWriteError(rel, readErr)
+			}
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return zero, coordArchiveWriteError(rel, err)
+		}
+	}
 	first, err := a.firstIndexEntry(m, filepath.Dir(final))
 	if err != nil {
 		return zero, err

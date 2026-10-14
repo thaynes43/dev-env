@@ -1,6 +1,6 @@
 # DESIGN-024: Coordination record retention: archive, then delete
 
-- **Status:** Accepted 2026-10-12; R2 ingestion, immutable revisions and index publication/repair in source, archive commands and R3–R7 pending
+- **Status:** Accepted 2026-10-12; R2 unmarked put/exact get and immutable storage/indices in source, remaining commands and R3–R7 pending
 - **Decision:** [ADR-004](../adrs/004-coordination-record-retention.md) (Q-29,
   Tom, 2026-10-12: "Archive, then delete (Recommended)")
 - **Amends:** [DESIGN-010](010-atomic-task-claims.md),
@@ -41,10 +41,24 @@ interrupted revision/index publication. Damaged or substituted entries and linke
 directories refuse the put. Revision manifests are walked in bounded batches
 within this UID, never across a project.
 
-These primitives have no CLI, API, absence event, latest-revision resolution,
-retention, release or deletion authority. Events, commands and incoming cleanup
+These primitives have no API, absence event, latest-revision resolution,
+retention, release or deletion authority. Remaining commands and incoming cleanup
 remain R2 work. R2 and installed acceptance are incomplete. Deployment and
 activation remain held.
+
+**Minimal command slice:** unmarked `agentd ctl coord-archive put` reads one
+bounded JSON request with `manifest` and `object`, publishes through the existing
+storage/indices, and prints the stored manifest with `graceStart: null`.
+It refuses an existing nonempty event journal rather than guessing grace state.
+`get --resource R --name N --uid U --resource-version V --sha256 H` resolves one
+exact revision across projects and verifies the complete bytes before printing.
+A name under two projects is ambiguous. General latest-revision selection,
+`--mark`, event commands and lookup/list remain unsupported and fail closed.
+This is a partial R2 command demonstration, not full R2 or installed acceptance.
+Local tests use synthetic temporary files on existing filesystems; no mount,
+activation, public mount-bypass option or live client is involved.
+The [CLI demonstration](../verification/coordination-archive-cli-2026-10-14.md)
+records the runnable command test, matching digest and corruption refusal.
 
 ## 1. What runs, in one picture
 
