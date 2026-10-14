@@ -116,8 +116,11 @@ Claude's retained response hit its weekly limit, and Codex output is Unknown.
 See the [current checkpoint](../.agents/CLAUDE-RESUME-2026-10-12.md#what-is-actually-delivered)
 for full revisions and acceptance limits.
 *Update, 2026-10-13: the sentences above are the 2026-10-12 record. Release
-2.27.0 is now deployed: operator `sha-2221b83`, task template
-`2.27.0-e83cacfe3e`. Rule loading is accepted for both providers; private
+2.28.0 is now deployed: operator `sha-cbf0700` (actual binary version
+`v2.28.0-1-gcbf0700`) and task agent 2.28.0. The
+[delivery record](../.agents/sagas/distributed-dev-env/verification/d92-shared-history-delivery-2026-10-13.md)
+has the source, signed digests and separate operator/template deployments.
+The shared-history correction is installed with reads still off. Rule loading is accepted for both providers; private
 GitHub authorization, a `Ready` private bootstrap and a fresh task pin are
 accepted for Claude. HOME expiry (DESIGN-025 H1 to H6) is installed with only
 the terminal record on; H4's commands are in the task template's agent image,
@@ -154,7 +157,7 @@ without a valid acceptance result. A later reviewed source fix does not count
 as a new runtime pass. See [HANDOFF](../.agents/HANDOFF.md) and
 [overnight evidence](trials/2026-10-10-overnight-results.md). This note is
 historical: the current installed template is 2.20.0, as the first paragraph
-after the table above says. *(Since 2026-10-13 it is 2.27.0; see the update
+after the table above says. *(Since October 13, 2026 (EDT), it is 2.28.0; see the update
 under that paragraph.)* The
 [pickup brief](../.agents/CLAUDE-RESUME-2026-10-12.md#what-is-actually-delivered)
 has the full revisions.

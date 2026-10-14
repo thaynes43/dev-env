@@ -10,6 +10,23 @@ of the 2026-10-12 brief, which still holds the requirement history and the
 stopped routes. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## Shared-history correction deployed — 2026-10-13 EDT
+
+The [D-92 delivery record](sagas/distributed-dev-env/verification/d92-shared-history-delivery-2026-10-13.md)
+records source #273, release 2.28.0 (#263), the publication fix (#274) and the
+separate operator/template deployments (haynes-ops #3906 and #3907). Both signed
+images were verified. The operator is Ready 2/2 at `sha-cbf0700` (actual binary
+version `v2.28.0-1-gcbf0700`); the task template pins agent 2.28.0. Retained
+sessions and their Pods, the shelf, failed reader/Jobs and v1 are preserved.
+
+The history routes now have the shared-read correction, with runtime reads still
+off. No archive mount, privilege, trust membership or feature flag changed.
+Next: finish H7's installed guard acceptance and remaining prerequisites in the
+pickup brief's order. Keep the personal-identity check separate from phone-path
+proof. F4, both cold measurements, persistence/restore and H8 remain; an approved
+non-canary source and positive peer retrieval with matching digest are still
+needed. No Accepted ADR or owner question ID changed.
+
 ## Shared history requirement and fresh metadata acceptance — 2026-10-13 EDT
 
 **D-92 / README decision 73:** all Tom's trusted dev-env agents may read shared
@@ -35,10 +52,9 @@ live Session checks and publication/write/delete helpers are unchanged. The CLI
 can list the existing projectless bucket by omitting `--project`. This is source
 behavior; it enables no runtime flag and is not installed-read acceptance.
 
-Next: release and review installation with the existing flags preserved, then
-use one approved private sample and positive peer retrieval
-with matching digest; retain F4, bounded resource, persistence/restore and H8
-requirements. No new isolation project or per-agent denial matrix is needed.
+The release and image installation are recorded above. After the remaining H7
+gates, use one approved private sample and positive peer retrieval with matching
+digest; retain F4, bounded resource, persistence/restore and H8 requirements. No new isolation project or per-agent denial matrix is needed.
 Reads and deletion remain off. Next IDs: Q-38, D-93, README 74, ADR-008,
 DESIGN-026.
 
