@@ -12,7 +12,10 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/shelf"
@@ -110,10 +113,95 @@ func historyFixture(t *testing.T) (*fixture, *fakeHistory, string) {
 	return f, h, contextSession(t, f, "reader", clientSA)
 }
 
+func TestHistoryPeersShareProjectsAndProjectless(t *testing.T) {
+	f, h, reader := historyFixture(t)
+	peer := contextSession(t, f, "peer", humanSA)
+	projectless := f.session("peer")
+	delete(projectless.Annotations, v1alpha1.AnnotationProjectSnapshot)
+	if err := f.c.Update(context.Background(), projectless); err != nil {
+		t.Fatal(err)
+	}
+	// History read authority does not depend on payload-publication projects or
+	// a saved project snapshot. Both callers use the existing Session SA.
+	f.srv.ContextReadProjects = nil
+	for _, tok := range []string{reader, peer} {
+		for _, uid := range []string{histOther, histNone} {
+			w := f.do(http.MethodGet, apiv1.HistoryEntryPath(uid), tok, nil)
+			if w.Code != http.StatusOK {
+				t.Fatalf("shared manifest: %d", w.Code)
+			}
+			manifest := decode[apiv1.HistoryManifest](t, w)
+			w = f.do(http.MethodGet, apiv1.HistoryFilePath(uid)+"?path=claude/history.jsonl&offset=0&content="+manifest.ContentSHA256, tok, nil)
+			if w.Code != http.StatusOK {
+				t.Fatalf("shared bytes: %d", w.Code)
+			}
+			page := decode[apiv1.HistoryFilePage](t, w)
+			if manifest.ContentSHA256 != histSum(uid) || page.ContentSHA256 != manifest.ContentSHA256 || string(page.Data) != "abc" {
+				t.Fatal("peers did not retrieve the same preserved bytes and digest")
+			}
+		}
+	}
+	for _, project := range []string{"other", "third", ""} {
+		h.list = protocol.HistoryList{Project: project, Items: []protocol.HistorySummary{}}
+		w := f.do(http.MethodGet, apiv1.HistoryPath+"?project="+project, reader, nil)
+		if w.Code != http.StatusOK || decode[apiv1.HistoryList](t, w).Project != project {
+			t.Fatalf("shared project index %q: %d", project, w.Code)
+		}
+	}
+}
+
+func TestHistorySharedReadsKeepLiveCallerFences(t *testing.T) {
+	for _, change := range []string{"session-pod-replaced", "session-replaced", "coordinator-replaced", "client-unconfigured", "no-live", "anonymous"} {
+		t.Run(change, func(t *testing.T) {
+			f, h, reader := historyFixture(t)
+			tok := reader
+			switch change {
+			case "client-unconfigured":
+				f.srv.Policy.Clients = nil
+				tok = tokClient
+			case "no-live":
+				f.srv.Live = nil
+				tok = tokClient
+			case "anonymous":
+				tok = ""
+			default:
+				if change == "coordinator-replaced" {
+					tok = tokCoordinator
+				}
+				podReads := 0
+				f.srv.Live = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if err := c.Get(ctx, key, obj, opts...); err != nil {
+						return err
+					}
+					if pod, ok := obj.(*corev1.Pod); ok {
+						podReads++
+						if change == "session-pod-replaced" || change == "coordinator-replaced" && podReads == 2 {
+							pod.UID = "replacement-pod"
+						}
+					}
+					if sess, ok := obj.(*v1alpha1.AgentSession); ok && change == "session-replaced" {
+						sess.UID = "replacement-session"
+					}
+					return nil
+				}})
+			}
+			w := f.do(http.MethodGet, apiv1.HistoryEntryPath(histSample), tok, nil)
+			if change == "anonymous" {
+				wantError(t, w, http.StatusUnauthorized, apiv1.CodeUnauthenticated)
+			} else {
+				wantError(t, w, http.StatusNotFound, apiv1.CodeNotFound)
+			}
+			if len(h.calls) != 0 {
+				t.Fatal("refused identity reached the shelf")
+			}
+		})
+	}
+}
+
 func TestHistoryReadsOffAnswer404(t *testing.T) {
 	f, h, reader := historyFixture(t)
 	f.srv.HistoryReads = false
-	for _, tok := range []string{reader, tokCoordinator, tokHuman} {
+	for _, tok := range []string{reader, tokCoordinator, tokClient, tokHuman} {
 		for _, path := range []string{apiv1.HistoryPath + "?project=sample", apiv1.HistoryEntryPath(histSample), apiv1.HistoryFilePath(histSample) + "?path=claude/x&offset=0"} {
 			w := f.do(http.MethodGet, path, tok, nil)
 			wantError(t, w, http.StatusNotFound, apiv1.CodeNotFound)
@@ -124,14 +212,14 @@ func TestHistoryReadsOffAnswer404(t *testing.T) {
 	}
 }
 
-func TestHistoryListIsScopedBeforeTheShelf(t *testing.T) {
+func TestHistoryListChecksTrustedCallerBeforeTheShelf(t *testing.T) {
 	f, h, reader := historyFixture(t)
 	h.list = protocol.HistoryList{Project: "sample", Next: "2026-11/20261112T010000.000000000Z-" + histSample + "-1111111111111111.json", Items: []protocol.HistorySummary{
 		{SessionUID: histSample, Session: "s-1", Provider: "claude", ArchivedAt: histArchivedAt, ContentSHA256: histSum(histSample), Bytes: 3, Files: 2,
 			Terminal: &protocol.HistoryTerminal{PodUID: "p", Phase: "Failed", ObservedAt: histArchivedAt}},
 		{SessionUID: histOther, ArchivedAt: histArchivedAt, ContentSHA256: histSum(histOther), Error: protocol.HistoryErrCorrupt},
 	}}
-	for _, tok := range []string{reader, tokCoordinator} {
+	for _, tok := range []string{reader, tokCoordinator, tokClient} {
 		w := f.do(http.MethodGet, apiv1.HistoryPath+"?project=sample", tok, nil)
 		if w.Code != http.StatusOK {
 			t.Fatalf("list: %d %s", w.Code, w.Body.String())
@@ -155,15 +243,10 @@ func TestHistoryListIsScopedBeforeTheShelf(t *testing.T) {
 		t.Errorf("a later page: %d %v", w.Code, h.calls)
 	}
 
-	// Outside the scope: 403 before the shelf is asked.
+	// Human and unknown identities gain no history permission.
 	calls := len(h.calls)
-	f.srv.ContextReadProjects = []string{"sample", "other"}
 	for _, tc := range []struct{ tok, project string }{
-		{reader, "other"},         // a Session reads its own project only
-		{tokCoordinator, "third"}, // not a payload project
-		{reader, ""},              // no project is readable by no API caller
-		{tokCoordinator, ""},
-		{tokHuman, "sample"}, // not a Session or a coordinator
+		{tokHuman, "sample"}, {tokStranger, "sample"},
 	} {
 		w := f.do(http.MethodGet, apiv1.HistoryPath+"?project="+tc.project, tc.tok, nil)
 		if w.Code != http.StatusForbidden {
@@ -191,7 +274,7 @@ func TestHistoryListIsScopedBeforeTheShelf(t *testing.T) {
 	}
 }
 
-func TestHistoryManifestIsScopedAndPaged(t *testing.T) {
+func TestHistoryManifestIsSharedAndPaged(t *testing.T) {
 	f, h, reader := historyFixture(t)
 	w := f.do(http.MethodGet, apiv1.HistoryEntryPath(histSample)+"?limit=2", reader, nil)
 	if w.Code != http.StatusOK {
@@ -217,30 +300,24 @@ func TestHistoryManifestIsScopedAndPaged(t *testing.T) {
 		t.Errorf("the default page: %d %q", w.Code, h.calls[2])
 	}
 
-	// Another project's entry, an entry with no project and one that does
-	// not exist all answer the same 404.
-	f.srv.ContextReadProjects = []string{"sample", "other"}
+	// Existing trusted readers can read another project or no project. Only
+	// an absent history is hidden; payload publication configuration is separate.
+	f.srv.ContextReadProjects = nil
 	for _, tc := range []struct{ tok, uid string }{
-		{reader, histOther}, {reader, histNone}, {tokCoordinator, histNone}, {reader, histAbsent}, {tokCoordinator, histAbsent},
+		{reader, histOther}, {reader, histNone}, {tokCoordinator, histNone}, {tokClient, histOther},
 	} {
 		w := f.do(http.MethodGet, apiv1.HistoryEntryPath(tc.uid), tc.tok, nil)
-		e := wantError(t, w, http.StatusNotFound, apiv1.CodeNotFound)
-		if strings.Contains(w.Body.String(), "other") || strings.Contains(w.Body.String(), "s-") {
-			t.Errorf("%s reading %s: the refusal says too much: %+v", tc.tok, tc.uid, e)
+		if w.Code != http.StatusOK || decode[apiv1.HistoryManifest](t, w).Session.UID != tc.uid {
+			t.Errorf("shared manifest: %d", w.Code)
 		}
 	}
-	if w := f.do(http.MethodGet, apiv1.HistoryEntryPath(histOther), tokCoordinator, nil); w.Code != http.StatusOK {
-		t.Errorf("the coordinator reads every payload project: %d", w.Code)
+	for _, tok := range []string{reader, tokCoordinator, tokClient} {
+		wantError(t, f.do(http.MethodGet, apiv1.HistoryEntryPath(histAbsent), tok, nil), http.StatusNotFound, apiv1.CodeNotFound)
 	}
 
-	// A caller with the scope for no project gets 404 at once, before the
-	// shelf: no payload project, a Session that is not live, a caller that is
-	// neither a Session nor a coordinator.
+	// Untrusted, human and no-longer-live callers are refused before the shelf.
 	calls := len(h.calls)
-	f.srv.ContextReadProjects = []string{"other"}
-	wantError(t, f.do(http.MethodGet, apiv1.HistoryEntryPath(histSample), reader, nil), http.StatusNotFound, apiv1.CodeNotFound)
-	f.srv.ContextReadProjects = []string{"sample"}
-	for _, tok := range []string{tokHuman, tokStranger, tokClient} {
+	for _, tok := range []string{tokHuman, tokStranger} {
 		wantError(t, f.do(http.MethodGet, apiv1.HistoryEntryPath(histSample), tok, nil), http.StatusNotFound, apiv1.CodeNotFound)
 	}
 	var pod corev1.Pod
@@ -276,19 +353,16 @@ func TestHistoryManifestIsScopedAndPaged(t *testing.T) {
 		h.manErr = err
 		wantError(t, f.do(http.MethodGet, apiv1.HistoryEntryPath(histSample), reader, nil), http.StatusServiceUnavailable, apiv1.CodeUnavailable)
 	}
-	// An entry that fails its check reveals no more than one that does not
-	// exist: agentd names the entry's directory, and an entry of a project
-	// outside the caller's scope (or of none) is 404, like no entry. In scope
-	// it is 503; a refusal naming no entry is the shelf's, 503 for everyone.
-	f.srv.ContextReadProjects = []string{"sample", "other"}
+	// A corrupt entry remains unavailable for every trusted reader, regardless
+	// of its project or the directory named by agentd's refusal.
 	for _, tc := range []struct {
 		path string
 		tok  string
 		want int
 	}{
-		{"v1/other/" + histSample + "/0123456789abcdef", reader, http.StatusNotFound},
-		{"v1/_none/" + histSample + "/0123456789abcdef", reader, http.StatusNotFound},
-		{"v1/_none/" + histSample + "/0123456789abcdef", tokCoordinator, http.StatusNotFound},
+		{"v1/other/" + histSample + "/0123456789abcdef", reader, http.StatusServiceUnavailable},
+		{"v1/_none/" + histSample + "/0123456789abcdef", reader, http.StatusServiceUnavailable},
+		{"v1/_none/" + histSample + "/0123456789abcdef", tokCoordinator, http.StatusServiceUnavailable},
 		{"v1/sample/" + histSample + "/0123456789abcdef", reader, http.StatusServiceUnavailable},
 		{"v1/other/" + histSample + "/0123456789abcdef", tokCoordinator, http.StatusServiceUnavailable},
 		{"v1/other/" + histOther + "/0123456789abcdef", reader, http.StatusServiceUnavailable},
@@ -307,7 +381,7 @@ func TestHistoryManifestIsScopedAndPaged(t *testing.T) {
 	wantError(t, f.do(http.MethodGet, apiv1.HistoryEntryPath(histSample), reader, nil), http.StatusServiceUnavailable, apiv1.CodeUnavailable)
 }
 
-func TestHistoryFilePageChecksTheScopeFirst(t *testing.T) {
+func TestHistoryFilePageChecksTrustedCallerFirst(t *testing.T) {
 	f, h, reader := historyFixture(t)
 	path := apiv1.HistoryFilePath(histSample) + "?path=claude/projects/a.jsonl&offset=1"
 	w := f.do(http.MethodGet, path, reader, nil)
@@ -328,18 +402,23 @@ func TestHistoryFilePageChecksTheScopeFirst(t *testing.T) {
 		t.Errorf("data is not base64: %s", w.Body.String())
 	}
 
-	// Another project's file: 404, and the file is never read, so no offset
-	// or path check can tell an entry from none.
-	f.srv.ContextReadProjects = []string{"sample", "other"}
+	// Shared files keep the same content pin and bytes across project buckets.
+	f.srv.ContextReadProjects = nil
 	h.calls = nil
-	for _, uid := range []string{histOther, histNone, histAbsent} {
-		w := f.do(http.MethodGet, apiv1.HistoryFilePath(uid)+"?path=claude/projects/a.jsonl&offset=99999", reader, nil)
-		wantError(t, w, http.StatusNotFound, apiv1.CodeNotFound)
-	}
-	for _, c := range h.calls {
-		if strings.HasPrefix(c, "read ") {
-			t.Errorf("an out-of-scope file was read: %q", c)
+	for _, uid := range []string{histOther, histNone} {
+		w := f.do(http.MethodGet, apiv1.HistoryFilePath(uid)+"?path=claude/projects/a.jsonl&offset=0", reader, nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("shared file: %d", w.Code)
 		}
+		got := decode[apiv1.HistoryFilePage](t, w)
+		if string(got.Data) != "abc" || got.SessionUID != uid || got.ContentSHA256 != histSum(uid) {
+			t.Errorf("shared file lost its content pin: %+v", got)
+		}
+	}
+	calls := len(h.calls)
+	wantError(t, f.do(http.MethodGet, apiv1.HistoryFilePath(histAbsent)+"?path=claude/projects/a.jsonl&offset=0", reader, nil), http.StatusNotFound, apiv1.CodeNotFound)
+	if len(h.calls) != calls+1 || !strings.HasPrefix(h.calls[calls], "manifest ") {
+		t.Error("an absent history reached the file read")
 	}
 
 	// In scope, the read's own refusals: a missing file is 404, an offset

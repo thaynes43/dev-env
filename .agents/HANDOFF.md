@@ -28,9 +28,15 @@ protected objects and zero archive references under the reviewed predicates.
 Actual admission/lookup behavior remains separate. The held reader and previous
 failures are preserved; no PV request, mutation, retry or runtime change occurred.
 
-Next: identify the minimal history-only read-authorization correction, keeping
-the existing authenticated trusted caller set and publication/write/delete
-authority. Then use one approved private sample and positive peer retrieval
+The D-92 source correction is limited to the history routes: existing exact
+configured API clients, live Sessions and configured Coordinators may read
+shared history across projects, including projectless histories. Authentication,
+live Session checks and publication/write/delete helpers are unchanged. The CLI
+can list the existing projectless bucket by omitting `--project`. This is source
+behavior; it enables no runtime flag and is not installed-read acceptance.
+
+Next: release and review installation with the existing flags preserved, then
+use one approved private sample and positive peer retrieval
 with matching digest; retain F4, bounded resource, persistence/restore and H8
 requirements. No new isolation project or per-agent denial matrix is needed.
 Reads and deletion remain off. Next IDs: Q-38, D-93, README 74, ADR-008,
@@ -221,9 +227,9 @@ Next is H7 in haynes-ops (DESIGN-025 section 12), under the slow-down pacing.
 off; off, they answer 404): `GET /v1/history?project=P` (a project's archived
 histories), `GET /v1/history/{sessionUID}` (an entry's manifest, in pages) and
 `GET /v1/history/{sessionUID}/file?path=&offset=` (64 KiB pages). The scope is
-DESIGN-013's implemented payload-read scope; D-92 above requires a history-only
-shared-read correction before acceptance. Currently a single read answers 404 for
-anything outside the caller's scope, and the shelf's failures are 503. Each read
+the trusted shared-history scope under D-92 in the corrected source; the initial
+2.27.0 implementation used DESIGN-013's project boundaries. Untrusted callers
+get 404 on single reads before the shelf, and the shelf's failures are 503. Each read
 takes one of the replica's two shelf exec slots, shared with the H5 relay. The
 client is `agent-run history list|show|read`. agentd gains `history-archive
 manifest` (one page of an entry's manifest), so the shelf needs the agent image
