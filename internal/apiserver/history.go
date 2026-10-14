@@ -2,19 +2,16 @@ package apiserver
 
 // The archived-history reads (DESIGN-025 8, unit H6): a private Session's
 // provider history, exported into the shelf's history archive before its HOME
-// expires, read back under DESIGN-013's payload-read scope. Every read goes to
-// the shelf by exec and takes one of the replica's shelf exec slots. The
-// answers reveal nothing outside the caller's scope: a single read answers 404
-// at once for a caller with the scope for no project, and 404 for an entry of
-// a project outside it, as for one that does not exist; every caller in scope
-// gets 503 while the shelf cannot answer. Off (the default), every history
-// route answers 404, as if no history existed.
+// expires, shared by the existing trusted callers under D-92. Every read goes
+// to the shelf by exec and takes one of the replica's shelf exec slots. A
+// single read answers 404 before the shelf for an unauthorized caller; trusted
+// readers get 503 while the shelf cannot answer. Off (the default), every
+// history route answers 404, as if no history existed.
 
 import (
 	"context"
 	"errors"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -50,28 +47,24 @@ func (s *Server) historyRoutesOn(Identity, *http.Request) error {
 	return nil
 }
 
-// historyScope is the set of projects whose archived history the caller may
-// read: DESIGN-013's payload-read scope, unchanged (contextReadScope). A
-// coordinator reads every payload project; a live Session reads its own
-// project, if it is one. Nobody reads a history with no project.
-func (s *Server) historyScope(ctx context.Context, c *caller) func(project string) bool {
-	none := func(string) bool { return false }
-	if s.Live == nil || len(s.ContextReadProjects) == 0 {
-		return none
+// historyReaderAllowed grants shared history reads, not publication or mutation.
+// Clients are the exact identities already classified through Policy.Clients;
+// their TokenReview authentication adds no new Pod fence. Sessions and configured
+// coordinators retain contextCaller's uncached live identity checks. Project
+// labels select archive indexes rather than partitioning this trusted set.
+func (s *Server) historyReaderAllowed(ctx context.Context, c *caller) bool {
+	if s.Live == nil || c == nil {
+		return false
 	}
-	sess, err := s.contextCaller(ctx, c)
-	if err != nil {
-		return none
+	switch c.kind {
+	case kindClient:
+		return true
+	case kindSession, kindCoordinator:
+		_, err := s.contextCaller(ctx, c)
+		return err == nil
+	default:
+		return false
 	}
-	if c.kind == kindCoordinator {
-		return func(p string) bool { return p != "" && slices.Contains(s.ContextReadProjects, p) }
-	}
-	snapshot, err := claimSnapshot(sess)
-	if err != nil || !slices.Contains(s.ContextReadProjects, snapshot.Project()) {
-		return none
-	}
-	own := snapshot.Project()
-	return func(p string) bool { return p != "" && p == own }
 }
 
 // historySlot takes one of the replica's shelf exec slots for a read.
@@ -116,13 +109,13 @@ func pageLimit(raw string, def, max int) (int, error) {
 }
 
 // listHistory is GET /v1/history?project=P[&limit=&continue=]: one project's
-// archived histories, newest first. The scope for P is checked before the
-// shelf is asked.
+// archived histories, newest first. An empty project selects the projectless
+// index. The trusted caller is checked before the shelf is asked.
 func (s *Server) listHistory(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
 	q := r.URL.Query()
 	project := q.Get("project")
-	if project == "" || !protocol.ValidHistoryProject(project) || !s.historyScope(ctx, c)(project) {
-		return 0, nil, forbidden("archived history requires the payload scope of its project and a live owned identity")
+	if !protocol.ValidHistoryProject(project) || !s.historyReaderAllowed(ctx, c) {
+		return 0, nil, forbidden("archived history requires a trusted client or live owned identity")
 	}
 	limit, err := pageLimit(q.Get("limit"), apiv1.DefaultHistoryListLimit, apiv1.MaxHistoryListLimit)
 	if err != nil {
@@ -160,58 +153,42 @@ func (s *Server) listHistory(ctx context.Context, _ http.ResponseWriter, r *http
 	return http.StatusOK, out, nil
 }
 
-// historyEntry reads one page of an entry's manifest for a caller whose scope
-// was found, and hides an entry outside it: 404 for one that does not exist,
-// one of another project and one with no project alike. Nothing of the entry
-// comes back before its project is checked.
-func (s *Server) historyEntry(ctx context.Context, r *http.Request, readable func(string) bool, uid, content string, offset, limit int) (protocol.HistoryManifestPage, error) {
+// historyEntry reads one page after the trusted reader check. All valid project
+// buckets, including projectless history, share the same integrity checks.
+func (s *Server) historyEntry(ctx context.Context, r *http.Request, uid, content string, offset, limit int) (protocol.HistoryManifestPage, error) {
 	page, err := s.History.Manifest(ctx, uid, content, offset, limit)
 	switch {
 	case historyCode(err) == protocol.HistoryErrNotFound:
 		return page, historyHidden()
 	case err != nil:
-		// agentd names the entry whose check failed by its directory: one
-		// of a project outside the caller's scope, or of none, is hidden
-		// like an entry that does not exist. A refusal that names no entry
-		// is the shelf's, the same for every caller.
-		var he *protocol.HistoryError
-		if errors.As(err, &he) {
-			if project, ok := protocol.HistoryEntryProject(he.Path, uid); ok && !readable(project) {
-				return protocol.HistoryManifestPage{}, historyHidden()
-			}
-		}
 		return protocol.HistoryManifestPage{}, s.historyShelfError(r, err)
-	case page.Session.UID != uid || (content != "" && page.ContentSHA256 != content) || !protocol.ValidSHA256(page.ContentSHA256):
+	case page.Session.UID != uid || (content != "" && page.ContentSHA256 != content) || !protocol.ValidSHA256(page.ContentSHA256) || !protocol.ValidHistoryProject(page.Project):
 		return page, s.historyShelfError(r, errors.New("the shelf answered for another entry"))
-	case !readable(page.Project):
-		return protocol.HistoryManifestPage{}, historyHidden()
 	}
 	return page, nil
 }
 
-// singleHistoryRead checks what both single reads check first: the caller has
-// the scope for some project (404 at once otherwise), the Session UID and the
-// content digest are well formed, and a shelf slot is free.
-func (s *Server) singleHistoryRead(ctx context.Context, r *http.Request, c *caller) (func(string) bool, string, string, error) {
-	readable := s.historyScope(ctx, c)
-	if !slices.ContainsFunc(s.ContextReadProjects, readable) {
-		return nil, "", "", historyHidden()
+// singleHistoryRead checks the trusted caller before the shelf and validates
+// the Session UID and optional content digest. The handler then takes a slot.
+func (s *Server) singleHistoryRead(ctx context.Context, r *http.Request, c *caller) (string, string, error) {
+	if !s.historyReaderAllowed(ctx, c) {
+		return "", "", historyHidden()
 	}
 	uid, content := r.PathValue("session"), r.URL.Query().Get("content")
 	if !protocol.ValidKubeUID(uid) {
-		return nil, "", "", badRequest("%q is not a Session UID", uid)
+		return "", "", badRequest("%q is not a Session UID", uid)
 	}
 	if content != "" && !protocol.ValidSHA256(content) {
-		return nil, "", "", badRequest("content must be an entry's SHA-256")
+		return "", "", badRequest("content must be an entry's SHA-256")
 	}
-	return readable, uid, content, nil
+	return uid, content, nil
 }
 
 // getHistory is GET /v1/history/{session}[?content=&limit=&continue=]: one
 // page of an archived history's manifest, the Session's newest entry unless
 // content names another.
 func (s *Server) getHistory(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
-	readable, uid, content, err := s.singleHistoryRead(ctx, r, c)
+	uid, content, err := s.singleHistoryRead(ctx, r, c)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -231,7 +208,7 @@ func (s *Server) getHistory(ctx context.Context, _ http.ResponseWriter, r *http.
 		return 0, nil, err
 	}
 	defer release()
-	page, err := s.historyEntry(ctx, r, readable, uid, content, offset, limit)
+	page, err := s.historyEntry(ctx, r, uid, content, offset, limit)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -274,11 +251,10 @@ func historyManifestView(p protocol.HistoryManifestPage) apiv1.HistoryManifest {
 }
 
 // readHistoryFile is GET /v1/history/{session}/file?path=&offset=[&content=]:
-// one page of one archived file, at most 64 KiB. The entry's header comes
-// first, so its project is checked before the file is read at all: an offset
-// or a path outside a file of another project's entry tells nothing.
+// one page of one archived file, at most 64 KiB. After the trusted reader check,
+// the verified header pins the file read to that archive content.
 func (s *Server) readHistoryFile(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
-	readable, uid, content, err := s.singleHistoryRead(ctx, r, c)
+	uid, content, err := s.singleHistoryRead(ctx, r, c)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -297,7 +273,7 @@ func (s *Server) readHistoryFile(ctx context.Context, _ http.ResponseWriter, r *
 		return 0, nil, err
 	}
 	defer release()
-	head, err := s.historyEntry(ctx, r, readable, uid, content, 0, 0)
+	head, err := s.historyEntry(ctx, r, uid, content, 0, 0)
 	if err != nil {
 		return 0, nil, err
 	}

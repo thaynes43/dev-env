@@ -8,11 +8,12 @@ or database restoration. No provider turn, pairing or fleet UX follows.
 **Owner clarification, 2026-10-13 (D-92):** all Tom's trusted dev-env agents
 may read shared history. [The authoritative requirement and bounded plan](../requirements/2026-10-13-shared-agent-history.md)
 replace denied-read isolation between those agents as a history parity gate.
-The project-scoped helper below describes the current implementation; the
-history API still needs its identified read-only authorization correction.
+The project-scoped helper below still governs published contexts. History
+reads use the separate trusted-reader contract in
+[DESIGN-025 section 8](025-private-home-expiry.md#8-reads-of-archived-history).
 This does not change publication/write authority, grant external access or
-alter v1. A history-only correction must not broaden this shared helper's
-other callers implicitly.
+alter v1 configuration. The history correction leaves this shared helper and
+its other callers unchanged.
 
 ## Contract
 

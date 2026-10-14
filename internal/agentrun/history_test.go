@@ -64,6 +64,23 @@ func TestHistoryListTableAndNewFields(t *testing.T) {
 	}
 }
 
+func TestHistoryListProjectlessAndContinuation(t *testing.T) {
+	for _, args := range [][]string{{"history", "list"}, {"history", "list", "--project", ""}} {
+		h := newHarness(t)
+		serveRaw(h, map[string]func(*http.Request) (int, string){apiv1.HistoryPath: func(r *http.Request) (int, string) {
+			if values, ok := r.URL.Query()["project"]; !ok || len(values) != 1 || values[0] != "" {
+				t.Error("projectless list did not select the empty project bucket")
+			}
+			return http.StatusOK, `{"archived":true,"project":"","items":[],"continue":"2026-11/next.json"}`
+		}})
+		h.mustRun(ExitOK, args...)
+		contains(t, "stdout", h.stdout.String(), "no archived history without a project", "more: agent-run history list --continue 2026-11/next.json")
+		if strings.Contains(h.stdout.String(), "--project  --continue") || len(h.api.requests()) != 1 {
+			t.Fatal("projectless pagination hint or request count changed")
+		}
+	}
+}
+
 func TestHistoryShowAndItsPages(t *testing.T) {
 	h := newHarness(t)
 	manifest := `{"archived":true,"archivedAt":"2026-11-12T01:00:00Z","contentSHA256":"` + histSum + `","session":{"namespace":"dev-agents","name":"task-1","uid":"` + histUID + `"},` +
@@ -161,7 +178,6 @@ func TestHistoryUsage(t *testing.T) {
 	for _, args := range [][]string{
 		{"history"},
 		{"history", "fly"},
-		{"history", "list"},
 		{"history", "list", "extra", "--project", "x"},
 		{"history", "show"},
 		{"history", "show", histUID, "extra"},

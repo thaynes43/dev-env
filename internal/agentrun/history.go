@@ -17,9 +17,9 @@ import (
 )
 
 // history list, show and read (DESIGN-025 8): the archived provider history
-// of private Sessions whose HOME expired, under DESIGN-013's payload-read
-// scope. Every answer is the archive's copy (archived: true); nothing here can
-// change it.
+// of private Sessions whose HOME expired, shared by existing trusted readers
+// under D-92. Every answer is the archive's copy (archived: true); nothing here
+// can change it.
 
 func (a *app) history(ctx context.Context, args []string) error {
 	if len(args) == 0 {
@@ -42,12 +42,12 @@ func (a *app) history(ctx context.Context, args []string) error {
 }
 
 // historyNotFound adds what a 404 may mean to the API's own words: the
-// history routes answer 404 for anything outside the caller's scope, with the
+// history routes answer 404 for an unauthorized reader, with the
 // reads off, and on an operator that has no such routes.
 func historyNotFound(err error) error {
 	var ee *exitError
 	if errors.As(err, &ee) && ee.code == ExitNotFound {
-		return fail(ExitNotFound, "%s\nno archived history answered: none exists within your payload scope, or this operator's archived-history reads are off or older than DESIGN-025 H6", ee.msg)
+		return fail(ExitNotFound, "%s\nno archived history answered: none exists, the caller is not a trusted reader, or this operator's archived-history reads are off or older than DESIGN-025 H6", ee.msg)
 	}
 	return err
 }
@@ -63,8 +63,8 @@ func (a *app) historyList(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(pos) > 0 || project == "" {
-		return usageError("history list takes --project <project> and no arguments; agent-run help history")
+	if len(pos) > 0 {
+		return usageError("history list takes an optional --project <project> and no arguments; agent-run help history")
 	}
 	q := url.Values{"project": {project}}
 	if limit != 0 {
@@ -85,7 +85,11 @@ func (a *app) historyList(ctx context.Context, args []string) error {
 		return a.printJSON(out)
 	}
 	if len(out.Items) == 0 {
-		a.outf("no archived history in project %s\n", project)
+		if project == "" {
+			a.outf("no archived history without a project\n")
+		} else {
+			a.outf("no archived history in project %s\n", project)
+		}
 	} else {
 		tw := a.table()
 		_, _ = fmt.Fprintln(tw, "SESSION\tUID\tPROVIDER\tARCHIVED\tFILES\tSIZE\tTERMINAL")
@@ -102,7 +106,11 @@ func (a *app) historyList(ctx context.Context, args []string) error {
 		}
 	}
 	if out.Continue != "" {
-		a.outf("more: agent-run history list --project %s --continue %s\n", project, out.Continue)
+		if project == "" {
+			a.outf("more: agent-run history list --continue %s\n", out.Continue)
+		} else {
+			a.outf("more: agent-run history list --project %s --continue %s\n", project, out.Continue)
+		}
 	}
 	return nil
 }

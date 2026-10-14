@@ -214,11 +214,13 @@ archive references under the reviewed predicates. No extra PV request,
 mutation or retry. Installed admission/lookup behavior remains separate;
 the held reader, failures and original canaries remain preserved.
 
-Next bounded source step under D-92: identify the minimal history-only
-authorization correction for the existing authenticated trusted agents,
-including projectless history. Preserve other read/publication/write/delete
-authority and identify any concrete security-sensitive diff before execution.
-Use one approved private history sample and positive peer retrieval with
+The concrete D-92 history-only correction was identified before implementation:
+existing exact configured API clients, live Sessions and configured Coordinators
+may read shared history across projects, including projectless histories.
+Authentication, live Session checks and publication/write/delete helpers stay
+unchanged; omitted CLI list project selects the existing projectless bucket.
+Release and review installation with current flags preserved. Then use one
+approved private history sample and positive peer retrieval with
 matching digest; retain F4, resource, persistence/restore and H8 requirements.
 No new architecture/review project or per-agent denied-read matrix.
 

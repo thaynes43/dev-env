@@ -1519,38 +1519,41 @@ one of DESIGN-024's exec slots. Three routes:
 
 | Route | Answers |
 |---|---|
-| `GET /v1/history?project=P[&limit=&continue=]` | archived histories of one project, newest first: Session name and UID, provider, `archivedAt`, `contentSHA256`, bytes, file count, the terminal phase and time |
+| `GET /v1/history[?project=P&limit=&continue=]` | archived histories of one project, newest first; omitted/empty project selects histories without a project: Session name and UID, provider, `archivedAt`, `contentSHA256`, bytes, file count, the terminal phase and time |
 | `GET /v1/history/{sessionUID}[?content=]` | one entry's manifest view: identity, provider, terminal record, rescue, files (path, bytes, SHA-256) and excluded names; the newest entry unless `content` names another |
 | `GET /v1/history/{sessionUID}/file?path=&offset=[&content=]` | one page: at most 64 KiB, base64, with `offset`, `next`, `eof` and the file's SHA-256 |
 
 Every item and answer carries `archived: true` and `archivedAt`.
 
-**Current implementation, superseded for trusted history reads by D-92.**
-DESIGN-013's payload-read rules mirrored by `historyScope` in `history.go`,
-with the shared `contextCaller` identity check and separate project checks,
-with the project from the verified `content.json`. The project must be in
-`--context-payload-read-projects`, and the caller must be a live Session of that
-project or a configured coordinator. A history with no project is readable by no
-API caller. This is narrower than the
-[D-92 shared-history requirement](../requirements/2026-10-13-shared-agent-history.md):
-all Tom's existing trusted authenticated agents may read shared history,
-including across their projects; a projectless history must not disappear
-from that requirement. Identify the minimal history-only authorization diff
-before executing it. Keep the existing caller authentication/live identity
-checks, write/delete protections and public/anonymous/external refusal.
+**Trusted shared-history scope (D-92).** The history-only `historyReaderAllowed` in
+`history.go` accepts the existing exact configured API clients, live Sessions
+and configured Coordinators. All may read every valid archived project,
+including the empty project. A project is provenance and a list filter, not
+a read boundary between these trusted agents. The existing
+`--context-payload-read-projects` and `contextReadScope` continue to govern
+published contexts and are unchanged.
+
+Authentication and caller classification are unchanged. Session and
+Coordinator callers still pass `contextCaller`; Sessions retain the existing
+live Pod UID, Running/deletion and Session-state checks. Exact configured
+clients retain their existing TokenReview/classification trust without an
+added Pod/Session binding. No other ServiceAccount, human class or anonymous
+caller gains history access. This adds no identity, token, wildcard, cluster
+permission or v1 configuration. It changes only history read permission for
+the existing trusted caller set under the
+[owner's requirement](../requirements/2026-10-13-shared-agent-history.md).
 
 API read sharing grants no raw shelf exec or volume access. Q-35/ADR-007
 preserves trusted v1's existing administrator routes; Tom, the operator and
 the named legitimate infrastructure routes retain their separate access,
 as do existing cluster-admin, node and storage powers.
 
-**Answers that reveal nothing.** The list route checks the scope for `P` before
-it asks the shelf. A single read first requires that the caller has the payload
-scope for at least one project; otherwise it answers 404 at once. Then it reads
-the entry; a project outside the caller's scope is 404, like an entry that does
-not exist. No shelf, no free slot, `no_archive`, `corrupt` or a failed exec is
-503 `unavailable`, never 404. Because every caller that reaches the shelf gets
-503 while it is down, existence is not revealed.
+**Untrusted callers learn no entry contents.** The list route checks trusted
+reader authorization before asking the shelf. A single read answers 404 at
+once for an untrusted caller, before looking up the entry. Trusted callers get
+503 `unavailable` for no shelf, no free slot, `no_archive`, `corrupt` or a failed
+exec, and 404 for a missing entry. No project filter can bypass manifest,
+file-path, byte-count or digest verification.
 
 **Not served:** the Git bundles (code goes through D-67's restore), and any
 excluded or credential name's content. `agent-run history list|show|read` is the
@@ -1561,7 +1564,7 @@ the installed system: trusted peers retrieve the same real archived history
 with matching digest, and public/anonymous or external callers remain refused.
 Denied reads between Tom's trusted agents are not a parity gate (D-92).
 
-### 8.1 In source (H6, #254)
+### 8.1 In source (H6, #254; trusted reads amended by D-92)
 
 The routes are in `internal/apiserver/history.go`, their wire types in
 `internal/apiserver/apiv1/history.go` (standard library only), the shelf side
@@ -1579,37 +1582,36 @@ leaves open:
   excluded names (agentd's `manifest`, section 7.1); every page carries the
   identity, terminal record, rescue, roots, Git file names and the counts. A
   file page is at most 64 KiB, base64 in JSON.
-- **The list** checks the scope for `P` before the shelf is asked and answers
-  403 `forbidden` for a project outside it, as DESIGN-013's routes do; `P` is
-  the caller's own word, so a 403 reveals nothing of the archive. A history
-  with no project is never listed. A list item whose check failed comes back
+- **The list** checks trusted-reader authorization and project syntax before
+  asking the shelf, answering 403 `forbidden` on refusal. Omitted or empty `P`
+  selects only the existing projectless bucket (`_none` on disk); it does not
+  merge all projects. A list item whose check failed comes back
   as `error: corrupt` with its UID, time and digest only.
-- **A single read** answers 404 at once when the caller has the payload scope
-  for no project, including a caller the API cannot classify. Then it asks the
+- **A single read** answers 404 at once for an untrusted caller, including a
+  caller the API cannot classify. Then it asks the
   shelf for the entry's header (`manifest`, limit 0 for a file page) and checks
   the entry's project, from its verified `content.json`, before anything of the
-  entry is returned: another project, no project and no entry are the same 404.
+  entry is returned. A trusted reader may read another project or no project;
+  malformed entry metadata is not served, and a missing entry is 404.
   A file page reads the file only after that check, pinned to the digest the
-  header named, so no offset or path check can tell an out-of-scope entry from
-  none. A path is checked as the export checks names: a credential's name is no
+  header named. A path is checked as the export checks names: a credential's name is no
   file path (400), and an excluded name has no file in the entry (404).
 - **503.** No shelf, no free shelf exec slot, `no_archive`, `corrupt`,
   `io_error`, an exec that failed and an answer for another entry are 503
   `unavailable` for every caller in scope, logged without content. In scope,
   a file the entry lacks is 404 and an offset past its end is 400.
-- **A damaged entry reveals no more than a missing one** (advisory review of
-  #254). agentd's refusal for an entry it found but could not verify names the
+- **Damaged entries are never served** (original refusal handling from #254).
+  agentd's refusal for an entry it found but could not verify names the
   entry's directory in its `path`, `v1/<project or _none>/<session UID>/<16
-  hex>`, never its bytes. An entry whose directory names a project outside the
-  caller's scope, or no project, then answers 404 like an entry that does not
-  exist; in scope it is 503. Only a refusal that names no entry, the shelf's
-  own, is 503 for every caller. The directory's project is used to hide, never
-  to serve.
+  hex>`, never its bytes. A trusted reader receives 503 for corrupt entries
+  across the shared pool, including projectless entries. Untrusted readers are
+  rejected before the shelf. The directory hint never authorizes serving bytes.
 - **Slots.** Each read takes one of the replica's two shelf exec slots
   (`shelf.ExecSlots`), the same limit the H5 relay takes from, so archive
   traffic never crowds the shelf, and a replica holds at most two pages in
   memory at once.
-- **`agent-run history list|show|read`.** `read --all` follows the pages,
+- **`agent-run history list|show|read`.** Omit `--project` to list histories
+  without a project. `read --all` follows the pages,
   pinned to the first page's entry, and from offset 0 checks the whole file
   against the archive's SHA-256. `show` and `read` refuse a Session UID that
   is not a Kubernetes UID before any request, and escape it in the path, as
