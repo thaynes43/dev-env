@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.28.0](https://github.com/thaynes43/dev-env/compare/v2.27.0...v2.28.0) (2026-10-14)
+
+
+### Features
+
+* **h7:** isolate corrected Mac metadata checker ([#267](https://github.com/thaynes43/dev-env/issues/267)) ([dad78a3](https://github.com/thaynes43/dev-env/commit/dad78a3958867a4f7260624dc7932d402927a67a))
+* **h7:** prepare fixed owner-gated history-PV Retain client ([#269](https://github.com/thaynes43/dev-env/issues/269)) ([789f2b4](https://github.com/thaynes43/dev-env/commit/789f2b499930dadf2cf02a440b56a20d224ae9b8))
+
+
+### Bug Fixes
+
+* prepare H7 resource measurements and preserve v1 access ([#262](https://github.com/thaynes43/dev-env/issues/262)) ([01c6bc9](https://github.com/thaynes43/dev-env/commit/01c6bc99bc377771c4c43223c311974c0804bf0e))
+* share archived history with existing trusted agents ([#273](https://github.com/thaynes43/dev-env/issues/273)) ([1e17919](https://github.com/thaynes43/dev-env/commit/1e179198114b465dee81d4ab0ce69168bf0bea62))
+
 ## [2.27.0](https://github.com/thaynes43/dev-env/compare/v2.26.0...v2.27.0) (2026-10-13)
 
 
