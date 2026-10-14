@@ -6,7 +6,7 @@ Scope: the smallest end-to-end DESIGN-024 R2 command slice after
 immutable revision storage, index publication and durability repair.
 
 `agentd ctl coord-archive put` reads one bounded JSON request containing the
-manifest without archivedAt and the full object. Unknown envelope fields,
+manifest without archivedAt and the full object. Invalid UTF-8, unknown envelope fields,
 trailing JSON, invalid identity/digest and oversized requests are refused.
 The backend checks for a nonempty journal while holding the exclusive shelf
 lock. It publishes an unmarked revision and prints its stored manifest plus
@@ -51,11 +51,17 @@ same exact get after synthetic object corruption
 The focused suite used Go 1.27.2 under the same CPU/shared-lock bounds:
 `go test -p 1 -count=1 -run '^TestCoordArchive' ./cmd/agentd
 ./internal/agentd ./internal/agentd/protocol`. All 27 methods/subtests passed:
-cmd 0.022s, agentd 0.592s, protocol 0.062s. It also covers malformed/oversized
+cmd 0.020s, agentd 0.654s, protocol 0.048s. It also covers malformed/oversized
 requests, unsupported options, unmounted ordinary HOME, unsafe exact identities,
 ambiguous projects, missing manifests and unknown grace state without writes.
 The local command methods skip when a separate existing temporary filesystem
 is unavailable; they actually ran and passed in the dev-env source workspace.
+
+Focused native review found that typed JSON decoding could replace an invalid
+publisher byte before manifest validation. The command now rejects invalid
+envelope UTF-8 before decoding. A valid request with one malformed publisher byte
+returns invalid and leaves the archive fixture empty. The focused suite above
+passed after that correction.
 
 This is partial command support. General latest-revision selection, marking,
 events, lookup/list, cleanup and full shelf startup wiring remain R2 work.

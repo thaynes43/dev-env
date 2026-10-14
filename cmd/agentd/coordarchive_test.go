@@ -115,12 +115,20 @@ func TestCoordArchiveCLIRoundTripAndCorruption(t *testing.T) {
 }
 
 func TestCoordArchiveCLIRefusesIncompleteOrUnboundedRequests(t *testing.T) {
-	env, _ := coordCLIRig(t)
+	env, root := coordCLIRig(t)
 	_, _, packet := coordCLIData(t)
-	for _, data := range [][]byte{[]byte("{}"), append(append([]byte{}, packet...), packet...), bytes.Repeat([]byte(" "), protocol.MaxCoordArchiveRequestBytes+1)} {
+	for _, data := range [][]byte{
+		[]byte("{}"), append(append([]byte{}, packet...), packet...),
+		bytes.Repeat([]byte(" "), protocol.MaxCoordArchiveRequestBytes+1),
+		bytes.Replace(packet, []byte("dev-env-operator fixture"), []byte{0xff}, 1),
+	} {
 		code, out, _ := runCoordCLI([]string{"ctl", "coord-archive", "put"}, data, env)
 		if code != exitFailure || !bytes.Contains(out, []byte("\"error\":\"invalid\"")) {
 			t.Fatalf("bad put: %d, %s", code, out)
+		}
+		entries, err := os.ReadDir(root)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("refused envelope published archive files: %v", err)
 		}
 	}
 	for _, args := range [][]string{

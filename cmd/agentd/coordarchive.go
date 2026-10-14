@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"unicode/utf8"
 
 	"github.com/thaynes43/dev-env/internal/agentd"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -49,8 +50,8 @@ func coordArchiveCtl(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 	var out any
 	if args[0] == "put" {
 		raw, readErr := io.ReadAll(io.LimitReader(stdin, protocol.MaxCoordArchiveRequestBytes+1))
-		if readErr != nil || len(raw) > protocol.MaxCoordArchiveRequestBytes {
-			return historyFail(stdout, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "put request exceeds its bound or cannot be read"))
+		if readErr != nil || len(raw) > protocol.MaxCoordArchiveRequestBytes || !utf8.Valid(raw) {
+			return historyFail(stdout, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "put request read, byte bound or UTF-8 refused"))
 		}
 		var request protocol.CoordArchivePutRequest
 		dec := json.NewDecoder(bytes.NewReader(raw))
