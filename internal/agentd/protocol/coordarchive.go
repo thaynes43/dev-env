@@ -7,13 +7,16 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"path"
 	"regexp"
+	"time"
 	"unicode/utf8"
 )
 
-// DESIGN-024 section 4. This first R2 slice validates ingestion only; it has
-// no filesystem, Kubernetes, retention, release or deletion authority.
+// DESIGN-024 section 4. These types bind ingestion and one exact stored
+// revision. They confer no Kubernetes, retention, release or deletion authority.
 const (
+	CoordArchiveDirName         = ".coordination-archive"
 	CoordArchiveFormat          = "dev-env.coordination-archive.v1"
 	CoordArchiveAPIVersion      = "coordination.dev-env.haynesops.com/v1alpha1"
 	MaxCoordArchiveObjectBytes  = 1 << 20
@@ -27,7 +30,7 @@ type CoordArchiveObjectDigest struct {
 }
 
 // CoordArchiveManifest is the identity/digest portion of the stored manifest.
-// The shelf's later put command supplies archivedAt when publishing the entry.
+// The shelf supplies archivedAt when publishing the entry.
 type CoordArchiveManifest struct {
 	Format          string                   `json:"format"`
 	Resource        string                   `json:"resource"`
@@ -42,6 +45,28 @@ type CoordArchiveManifest struct {
 	MessageUID      string                   `json:"messageUID,omitempty"`
 	Object          CoordArchiveObjectDigest `json:"object"`
 	ArchivedBy      string                   `json:"archivedBy"`
+}
+
+// CoordArchiveStoredManifest adds the shelf's immutable publication time.
+type CoordArchiveStoredManifest struct {
+	CoordArchiveManifest
+	ArchivedAt time.Time `json:"archivedAt"`
+}
+
+// CoordArchiveGetResult carries only a verified full canonical object.
+type CoordArchiveGetResult struct {
+	Manifest CoordArchiveStoredManifest `json:"manifest"`
+	Object   json.RawMessage            `json:"object"`
+}
+
+// CoordArchiveRevisionDir returns the immutable revision's relative path only
+// after validating every manifest component. It does not find a latest revision.
+func CoordArchiveRevisionDir(m CoordArchiveManifest) (string, error) {
+	if !validCoordArchiveManifest(m) {
+		return "", HistoryErrorf(HistoryErrInvalid, "", "invalid coordination archive revision")
+	}
+	return path.Join("v1", m.Resource, m.Project, "records", m.Name, m.UID,
+		m.ResourceVersion+"-"+m.Object.SHA256[:16]), nil
 }
 
 var (

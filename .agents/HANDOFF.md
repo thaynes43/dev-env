@@ -10,6 +10,21 @@ of the 2026-10-12 brief, which still holds the requirement history and the
 stopped routes. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## Coordination archive immutable storage source checkpoint — 2026-10-14 UTC
+
+The [R2 storage slice](sagas/distributed-dev-env/verification/coordination-archive-storage-2026-10-14.md)
+adds atomic immutable revision puts and exact verified reads under the shelf lock.
+All four record kinds round-trip with unknown fields and number precision intact.
+Identical puts retain the first manifest. Conflicts, damaged records and linked
+files return no object and never replace the stored revision. Interrupted staging
+stays invisible. The focused coordination suite passed with two test workers.
+
+This is source storage behavior, with no CLI/API or deployment. R2 still needs
+indices and their crash repair, absence events, bounded lookup/list and command
+wiring; R3–R7 and installed consumer/pilot acceptance remain. Keep archive/deletion
+activation, deployment, live guard and cutover gates held. The next useful source
+unit is immutable index publication and repair after interrupted puts.
+
 ## Coordination archive ingestion source checkpoint — 2026-10-14 UTC
 
 The [DESIGN-024 R2 ingestion slice](sagas/distributed-dev-env/verification/coordination-archive-ingestion-2026-10-14.md)

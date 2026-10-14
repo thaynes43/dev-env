@@ -1,6 +1,6 @@
 # DESIGN-024: Coordination record retention: archive, then delete
 
-- **Status:** Accepted 2026-10-12; R2 ingestion foundation in source, archive commands and R3–R7 pending
+- **Status:** Accepted 2026-10-12; R2 ingestion and immutable revision storage in source, archive commands and R3–R7 pending
 - **Decision:** [ADR-004](../adrs/004-coordination-record-retention.md) (Q-29,
   Tom, 2026-10-12: "Archive, then delete (Recommended)")
 - **Amends:** [DESIGN-010](010-atomic-task-claims.md),
@@ -15,8 +15,21 @@ change that comes last (section 9).
 
 **Source checkpoint, 2026-10-14:** the [bounded ingestion slice](../verification/coordination-archive-ingestion-2026-10-14.md)
 verifies full canonical objects against manifest identities and digests without
-discarding unknown fields or numeric encodings. It has no storage, CLI, API,
-release or delete authority. It does not complete R2 or installed acceptance.
+discarding unknown fields or numeric encodings. The next bounded R2 slice stores
+and reads one exact immutable revision under the shelf lock. It reuses the
+history archive's mount check, bounded no-link reads and fsync/rename helpers.
+Identical object bytes retain the original manifest and re-sync the files and
+publication directories, repairing a prior rename followed by fsync failure.
+A damaged entry or hash
+prefix collision refuses the put without changing that revision. A read returns
+only canonical bytes whose complete identity, size and digest match the stored
+manifest and requested revision.
+
+The [storage verification](../verification/coordination-archive-storage-2026-10-14.md)
+records the focused local suite. This storage primitive has no CLI, API, index, absence event, latest-revision
+resolution, retention, release or deletion authority. Indices, crash repair of
+indices, events and commands complete later R2 slices. It does not complete R2
+or installed acceptance. Deployment and activation remain held.
 
 ## 1. What runs, in one picture
 
