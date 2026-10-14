@@ -10,6 +10,20 @@ of the 2026-10-12 brief, which still holds the requirement history and the
 stopped routes. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## Coordination archive ingestion source checkpoint — 2026-10-14 UTC
+
+The [DESIGN-024 R2 ingestion slice](sagas/distributed-dev-env/verification/coordination-archive-ingestion-2026-10-14.md)
+verifies full canonical coordination objects against their manifest identities,
+project, recipient/message bindings, size and SHA256. Unknown fields and numeric
+encodings survive. The focused protocol suite passed. No archive command,
+filesystem write, API route, retention/delete flag or deployment is added; R2's
+atomic shelf storage/commands and R3–R7 remain.
+
+Separately, the [six-query authority acceptance](sagas/distributed-dev-env/verification/h7-six-query-authority-acceptance-2026-10-14.md)
+records the consumed Mac authorization window and current coordinator ownership.
+Keep live guard, deployment, v1 and cutover gates held. Next source milestone:
+atomic immutable shelf put/get; pilot/consumer/history acceptance is separate.
+
 ## Shared-history correction deployed — 2026-10-13 EDT
 
 The [D-92 delivery record](sagas/distributed-dev-env/verification/d92-shared-history-delivery-2026-10-13.md)
