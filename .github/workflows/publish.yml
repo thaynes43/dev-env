@@ -7,20 +7,19 @@ name: Publish
 # Tags: only sha-<short>. Never `latest`, and an existing tag is never pushed again.
 # A run for a commit whose tag already exists (a manual re-run) skips the build, so
 # the digest never changes under a tag. The push trigger has a paths filter, so a
-# docs-only or workflow-only merge builds no image at all. Together these avoid what
+# docs-only merge builds no image. Release-version and workflow changes do publish.
+# Together these avoid what
 # v1 (haynes-ops dev-env-build.yml) suffered: rebuilds from unchanged source that
 # re-tagged an image with a new digest and made Renovate open digest-drift PRs.
 # Release tags (the repo's single version, both images) arrive with release-please
 # in B4.
 #
-# Triggers: push to main that changes an input of the image build, and
+# Triggers: push to main that changes an image input, release version or this workflow, and
 # workflow_dispatch for a manual run on main. Dispatch ignores the paths filter: it
-# builds the current commit if its tag is missing (this is how the first publish, and
-# any publish after an edit to this file, is run: `gh workflow run publish.yml`). On
-# a commit already published it builds nothing and only signs the image if no valid
+# builds the current commit if its tag is missing. On a commit already published
+# it builds nothing and only signs the image if no valid
 # signature exists, which is the way to retry a run whose signing step failed. Like
-# v1, this workflow does not list its own file in the paths, so a workflow edit never
-# rebuilds; run it by hand after deliberately changing it.
+# image inputs, release manifest and workflow edits publish automatically after merge.
 #
 # After signing, a verify step checks the pushed digest against this workflow's
 # identity, on every run, so a mis-signed image fails the job.
@@ -56,6 +55,8 @@ on:
       - 'go.sum'
       - 'Makefile'
       - '.dockerignore'
+      - '.release-please-manifest.json'
+      - '.github/workflows/publish.yml'
   workflow_dispatch:
 
 permissions:
@@ -106,10 +107,26 @@ jobs:
       - name: Compute the tag and version
         id: meta
         run: |
+          set -euo pipefail
+          # Release Please creates the release tag after the release commit is pushed.
+          # Read that commit's intended version without waiting for its tag to exist.
+          manifest_changes="$(git diff-tree --root --no-commit-id --name-only -r --diff-merges=first-parent HEAD -- .release-please-manifest.json)"
+          if [ -n "${manifest_changes}" ]; then
+            version="$(python3 -c '
+          import json, re, sys
+          with open(".release-please-manifest.json", encoding="utf-8") as source:
+              manifest = json.load(source)
+          version = manifest.get(".") if isinstance(manifest, dict) else None
+          if not isinstance(version, str) or not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version):
+              sys.exit("release manifest must contain a stable X.Y.Z version for the root package")
+          print("v" + version)
+          ')"
+          else
+            # Non-release commits keep Git's version, empty before the first tag.
+            version="$(git describe --tags --match 'v[0-9]*' 2>/dev/null || true)"
+          fi
           echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-          # Empty before the first release tag; the binaries then report "dev" with
-          # the commit stamped. The Makefile uses the same pattern.
-          echo "version=$(git describe --tags --match 'v[0-9]*' 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
