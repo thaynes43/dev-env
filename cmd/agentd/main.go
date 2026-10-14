@@ -111,6 +111,9 @@ Commands:
                            its content manifest, re-hash an entry, print its
                            manifest or one page of it, list a project's
                            entries, or read one page of an archived file.
+  ctl coord-archive put|get
+                           Put an unmarked coordination object from JSON stdin,
+                           or read one exact verified archived revision.
   ctl prepare-restart      Print what the next boot resumes (the conversation in
                            ~/.agentd/launch.json) as JSON, then stop the agent
                            CLI as the pod's SIGTERM would (D-58).
@@ -483,6 +486,8 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return shelfCtl(args, stdin, stdout, stderr, getenv)
 		case "history-export", "history-archive":
 			return historyCtl(args, stdin, stdout, stderr, getenv)
+		case "coord-archive":
+			return coordArchiveCtl(args[1:], stdin, stdout, stderr, getenv)
 		}
 	}
 	stopAgent := false

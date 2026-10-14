@@ -10,6 +10,23 @@ of the 2026-10-12 brief, which still holds the requirement history and the
 stopped routes. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## Local coordination archive CLI round-trip — 2026-10-14 UTC
+
+The [minimal CLI slice](sagas/distributed-dev-env/verification/coordination-archive-cli-2026-10-14.md)
+adds `agentd ctl coord-archive put` for an unmarked manifest/object request and
+`get --resource R --name N --uid U --resource-version V --sha256 H`.
+The existing command dispatcher and real storage were exercised with synthetic
+temporary files: put succeeded, get returned identical bytes/digest, and a
+corrupted object returned `corrupt` without an object. The production filesystem
+check remained enabled; no mount or public bypass option was added.
+
+All 27 focused coordination/CLI methods passed. Nonempty journals refuse
+unmarked put, preserving unknown grace state. General selectors, `--mark`,
+events, lookup/list and old incoming cleanup remain unsupported source work;
+R2 and installed acceptance are incomplete. Do not execute this demonstration
+against live archives under the current hold. Deployment, permissions, v1,
+archive/deletion activation and cutover remain unchanged.
+
 ## Coordination archive index publication and repair — 2026-10-14 UTC
 
 The [R2 index slice](sagas/distributed-dev-env/verification/coordination-archive-index-2026-10-14.md)

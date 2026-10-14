@@ -84,7 +84,7 @@ cmd/agentd/              the in-pod supervisor: `run`, `hold` (the rescue pod, D
                          (a task, or a TUI, D-58), `render`, `ctl status|rescue [--stop-agent]|prepare-restart` (D-40 to D-43,
                          D-48, D-58), `ctl deliver|log` (D-65), `ctl rescues|hold-rescue|prune` (D-67),
                          `ctl grant-install|grant-remove|grant-list|grant-use` (D-63),
-                         `ctl history-export|history-archive` (DESIGN-025 H4)
+                         `ctl history-export|history-archive` (DESIGN-025 H4), `ctl coord-archive put|get` (DESIGN-024 R2; unmarked put/exact get)
 cmd/agent-run/           the CLI, one static binary (CGO_ENABLED=0, D-06); main only, the commands are internal/agentrun
 internal/version/        the build identity every binary's `version` prints
 internal/testenv/        starts envtest (kube-apiserver + etcd) with config/crd/ installed, for test suites

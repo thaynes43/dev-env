@@ -106,6 +106,7 @@ const (
 // Archive errors (DESIGN-024's codes).
 const (
 	HistoryErrNotFound  = "not_found"
+	HistoryErrAmbiguous = "ambiguous"
 	HistoryErrConflict  = "conflict"
 	HistoryErrCorrupt   = "corrupt"
 	HistoryErrInvalid   = "invalid"

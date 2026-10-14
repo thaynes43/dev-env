@@ -9,6 +9,7 @@ import (
 	"io"
 	"path"
 	"regexp"
+	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -58,6 +59,46 @@ type CoordArchiveStoredManifest struct {
 type CoordArchiveGetResult struct {
 	Manifest CoordArchiveStoredManifest `json:"manifest"`
 	Object   json.RawMessage            `json:"object"`
+}
+
+type CoordArchivePutRequest struct {
+	Manifest CoordArchiveManifest `json:"manifest"`
+	Object   json.RawMessage      `json:"object"`
+}
+
+// Unmarked put reports null only after refusing a nonempty event journal.
+type CoordArchivePutResult struct {
+	Manifest   CoordArchiveStoredManifest `json:"manifest"`
+	GraceStart *time.Time                 `json:"graceStart"`
+}
+
+// CoordArchiveExactQuery is the complete identity supported by the first CLI.
+// Optional latest-revision selection remains a later R2 command slice.
+type CoordArchiveExactQuery struct {
+	Resource        string
+	Name            string
+	UID             string
+	ResourceVersion string
+	SHA256          string
+}
+
+func (q CoordArchiveExactQuery) Validate() error {
+	prefix, _ := coordArchiveResource(q.Resource)
+	if prefix == "" || !coordArchiveName.MatchString(q.Name) || !strings.HasPrefix(q.Name, prefix+".") ||
+		!ValidKubeUID(q.UID) || !coordArchiveRevision.MatchString(q.ResourceVersion) || !coordArchiveDigest.MatchString(q.SHA256) {
+		return HistoryErrorf(HistoryErrInvalid, "", "exact coordination revision identity required")
+	}
+	return nil
+}
+
+func (q CoordArchiveExactQuery) RevisionDir(project string) (string, error) {
+	if err := q.Validate(); err != nil {
+		return "", err
+	}
+	if !coordArchiveLabel.MatchString(project) {
+		return "", HistoryErrorf(HistoryErrCorrupt, "", "invalid archived project")
+	}
+	return path.Join("v1", q.Resource, project, "records", q.Name, q.UID, q.ResourceVersion+"-"+q.SHA256[:16]), nil
 }
 
 // CoordArchiveIndexEntry locates a UID without carrying object text or a
@@ -132,9 +173,9 @@ func VerifyCoordArchiveObject(m CoordArchiveManifest, r io.Reader) ([]byte, erro
 	return canonical, nil
 }
 
-func validCoordArchiveManifest(m CoordArchiveManifest) bool {
+func coordArchiveResource(resource string) (string, string) {
 	prefix, kind := "", ""
-	switch m.Resource {
+	switch resource {
 	case "taskclaims":
 		prefix, kind = "task-claim", "TaskClaim"
 	case "publishedcontexts":
@@ -144,9 +185,14 @@ func validCoordArchiveManifest(m CoordArchiveManifest) bool {
 	case "inboxreadacks":
 		prefix, kind = "read-ack", "InboxReadAck"
 	default:
-		return false
+		return "", ""
 	}
-	if m.Format != CoordArchiveFormat || m.APIVersion != CoordArchiveAPIVersion || m.Kind != kind ||
+	return prefix, kind
+}
+
+func validCoordArchiveManifest(m CoordArchiveManifest) bool {
+	prefix, kind := coordArchiveResource(m.Resource)
+	if prefix == "" || m.Format != CoordArchiveFormat || m.APIVersion != CoordArchiveAPIVersion || m.Kind != kind ||
 		!coordArchiveLabel.MatchString(m.Namespace) || !coordArchiveLabel.MatchString(m.Project) ||
 		!coordArchiveName.MatchString(m.Name) || len(m.Name) < len(prefix)+1 || m.Name[:len(prefix)+1] != prefix+"." ||
 		!ValidKubeUID(m.UID) || !coordArchiveRevision.MatchString(m.ResourceVersion) ||
