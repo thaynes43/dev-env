@@ -185,6 +185,8 @@ automatically. It pushes `dev-env-operator:sha-<short>` (never
 `latest`, never an existing tag) and signs the digest with keyless cosign, pinned like
 haynes-ops v1 (see the workflow header and haynes-ops #3092). It needs no Docker in the
 pod: never build images here.
+Manifest-changing commits take their version from that checked-in release record,
+so publication cannot race tag creation. Other commits retain the Git-derived version.
 
 Releases: `release-please.yml` runs on every push to main and keeps one release PR
 open (one version for the repo; both images are tagged with it, and the first release

@@ -107,10 +107,26 @@ jobs:
       - name: Compute the tag and version
         id: meta
         run: |
+          set -euo pipefail
+          # Release Please creates the release tag after the release commit is pushed.
+          # Read that commit's intended version without waiting for its tag to exist.
+          manifest_changes="$(git diff-tree --root --no-commit-id --name-only -r --diff-merges=first-parent HEAD -- .release-please-manifest.json)"
+          if [ -n "${manifest_changes}" ]; then
+            version="$(python3 -c '
+          import json, re, sys
+          with open(".release-please-manifest.json", encoding="utf-8") as source:
+              manifest = json.load(source)
+          version = manifest.get(".") if isinstance(manifest, dict) else None
+          if not isinstance(version, str) or not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version):
+              sys.exit("release manifest must contain a stable X.Y.Z version for the root package")
+          print("v" + version)
+          ')"
+          else
+            # Non-release commits keep Git's version, empty before the first tag.
+            version="$(git describe --tags --match 'v[0-9]*' 2>/dev/null || true)"
+          fi
           echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-          # Empty before the first release tag; the binaries then report "dev" with
-          # the commit stamped. The Makefile uses the same pattern.
-          echo "version=$(git describe --tags --match 'v[0-9]*' 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
