@@ -344,6 +344,53 @@ func TestCoordArchiveInterruptedStagingIsInvisibleAndPreserved(t *testing.T) {
 	}
 }
 
+func TestCoordArchiveRetryRepairsPublicationSyncFailure(t *testing.T) {
+	a := coordArchiveRig(t)
+	m, raw := coordStoredFixture(t, "taskclaims")
+	dir := coordRevisionPath(t, a, m)
+	parent := filepath.Dir(dir)
+	failed := false
+	var synced []string
+	a.syncDir = func(d string) error {
+		if d == parent && !failed {
+			failed = true
+			return errors.New("injected directory fsync failure after rename")
+		}
+		synced = append(synced, d)
+		return syncArchiveDir(d)
+	}
+	_, err := a.Put(m, bytes.NewReader(raw))
+	requireCoordError(t, err, protocol.HistoryErrNoArchive)
+	if !failed {
+		t.Fatal("did not reach the post-rename fsync failure")
+	}
+	visible, err := a.Get(m)
+	if err != nil {
+		t.Fatalf("rename did not publish a complete revision: %v", err)
+	}
+	before := coordTree(t, a.Root)
+	synced = nil
+	stored, err := a.Put(m, bytes.NewReader(raw))
+	if err != nil || stored != visible.Manifest || !reflect.DeepEqual(before, coordTree(t, a.Root)) {
+		t.Fatalf("retry changed the immutable revision or failed: %v", err)
+	}
+	for _, want := range []string{dir, parent, a.Root, filepath.Join(a.Root, ".incoming")} {
+		found := false
+		for _, got := range synced {
+			if got == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("retry skipped durability repair for %s", want)
+		}
+	}
+	// A repeated durability failure must still refuse success.
+	a.syncDir = func(string) error { return errors.New("continued fsync failure") }
+	_, err = a.Put(m, bytes.NewReader(raw))
+	requireCoordError(t, err, protocol.HistoryErrNoArchive)
+}
+
 func TestCoordArchiveRequiresMountAndRefusesDirectoryLinks(t *testing.T) {
 	for _, failure := range []string{"unmounted", "root-link", "v1-link", "incoming-link"} {
 		t.Run(failure, func(t *testing.T) {

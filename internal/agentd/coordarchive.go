@@ -18,9 +18,10 @@ import (
 // CoordArchive stores exact immutable revisions (DESIGN-024 section 4).
 // Commands, indices, absence events and retention are separate R2 slices.
 type CoordArchive struct {
-	Root string
-	Home string
-	Now  func() time.Time
+	Root    string
+	Home    string
+	Now     func() time.Time
+	syncDir func(string) error
 }
 
 func NewCoordArchive(s Settings) CoordArchive {
@@ -71,6 +72,11 @@ func (a CoordArchive) Put(m protocol.CoordArchiveManifest, r io.Reader) (protoco
 		if err != nil || !bytes.Equal(stored.Object, object) {
 			return zero, protocol.HistoryErrorf(protocol.HistoryErrConflict, rel, "existing revision differs or is damaged")
 		}
+		// A previous rename may have succeeded before a parent fsync failed.
+		// Visible, verified bytes alone do not prove durable publication.
+		if err := a.syncRevision(final); err != nil {
+			return zero, coordArchiveWriteError(rel, err)
+		}
 		return stored.Manifest, nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return zero, protocol.HistoryErrorf(protocol.HistoryErrNoArchive, rel, "cannot inspect revision: %v", err)
@@ -92,7 +98,7 @@ func (a CoordArchive) Put(m protocol.CoordArchiveManifest, r io.Reader) (protoco
 			return zero, protocol.HistoryErrorf(protocol.HistoryErrNoArchive, rel, "archive directory: %v", err)
 		}
 	}
-	files := HistoryArchive{Root: a.Root}
+	files := HistoryArchive{Root: a.Root, syncDir: a.syncDir}
 	tmp, err := files.newIncomingDir()
 	if err != nil {
 		return zero, protocol.HistoryErrorf(protocol.HistoryErrNoArchive, rel, "incoming directory: %v", err)
@@ -178,6 +184,44 @@ func coordArchiveWriteError(rel string, err error) error {
 		return err
 	}
 	return protocol.HistoryErrorf(protocol.HistoryErrNoArchive, rel, "archive write: %v", err)
+}
+
+// syncRevision repairs durability after an interrupted publication without
+// changing the verified object or its immutable provenance. The lock is held.
+func (a CoordArchive) syncRevision(dir string) error {
+	for _, name := range []string{"object.json", "manifest.json"} {
+		f, _, err := openHistoryFile(a.Root, filepath.Join(dir, name))
+		if err != nil {
+			return err
+		}
+		err = f.Sync()
+		closeErr := f.Close()
+		if err != nil {
+			return err
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+	syncDir := a.syncDir
+	if syncDir == nil {
+		syncDir = syncArchiveDir
+	}
+	for d := dir; ; d = filepath.Dir(d) {
+		if err := syncDir(d); err != nil {
+			return err
+		}
+		if d == a.Root {
+			break
+		}
+	}
+	incoming := filepath.Join(a.Root, protocol.HistoryArchiveIncoming)
+	if _, err := os.Lstat(incoming); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	return syncDir(incoming)
 }
 
 // coordArchiveDirectories creates only directories beneath this archive and

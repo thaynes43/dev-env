@@ -40,6 +40,9 @@ type HistoryArchive struct {
 	SharedDir string
 	// Now is the clock: archivedAt, and the age of debris in .incoming.
 	Now func() time.Time
+	// Nil uses syncArchiveDir. A per-instance hook permits finite publication
+	// fault injection without changing other archives or their test clocks.
+	syncDir func(string) error
 }
 
 // NewHistoryArchive is the archive of the shelf's settings.
@@ -568,6 +571,10 @@ func (a HistoryArchive) publishIncoming(tmp, final string) error {
 	if err := a.checkIncoming(tmp); err != nil {
 		return err
 	}
+	syncDir := a.syncDir
+	if syncDir == nil {
+		syncDir = syncArchiveDir
+	}
 	if _, err := os.Lstat(final); !errors.Is(err, fs.ErrNotExist) {
 		return protocol.HistoryErrorf(protocol.HistoryErrConflict, "", "the entry appeared during the put")
 	}
@@ -579,14 +586,14 @@ func (a HistoryArchive) publishIncoming(tmp, final string) error {
 		return err
 	}
 	for d := parent; ; d = filepath.Dir(d) {
-		if err := syncArchiveDir(d); err != nil {
+		if err := syncDir(d); err != nil {
 			return err
 		}
 		if d == a.Root || len(d) <= len(a.Root) {
 			break
 		}
 	}
-	return syncArchiveDir(filepath.Dir(tmp))
+	return syncDir(filepath.Dir(tmp))
 }
 
 // historyIndexName is an index file's path relative to the archive's root:

@@ -15,27 +15,37 @@ trusted; no new isolation boundary is claimed.
 The path includes resource, project, record name, UID, resourceVersion and the
 first 16 digest characters. The complete digest remains in the stored manifest.
 An identical put returns the original manifest, including its publication time
-and publisher. A conflicting or damaged entry is never overwritten.
+and publisher, after re-syncing the verified files and publication directories.
+That repairs a previous rename whose parent fsync failed. A conflicting or
+damaged entry is never overwritten.
 `CoordArchive.Get` reads an exact revision under the shared lock, verifies the
 stored manifest, full identity, canonical bytes, size and digest, and returns no
 manifest or object on failure. It reads neither staging debris nor other revisions.
 
-The focused suite ran once after correcting a fixture that confused a valid
-missing-revision query with an invalid ingestion byte count:
+The first focused run corrected a fixture that confused a valid missing-revision
+query with an invalid ingestion byte count. Native independent review then found
+a durability gap in the existing-revision branch. The fix retries publication
+syncs before returning success. A per-archive sync hook in the existing publisher
+allows finite fault injection without changing default history behavior. The
+final focused suite includes the affected history archive regression cases:
 
 ```sh
 GOMAXPROCS=2 GOFLAGS=-p=1 flock -w 60 /tmp/dev-env-go-tests.lock \
-  nice -n 19 go test -p 1 -count=1 -run '^TestCoordArchive' \
+  nice -n 19 go test -p 1 -count=1 -run '^(TestCoordArchive|TestHistoryArchive)' \
   ./internal/agentd ./internal/agentd/protocol
 ```
 
-The exact cached Go 1.27.2 toolchain was used. All 13 test methods and their finite
-subtests passed: agentd 0.113s, protocol 0.053s. The seven new filesystem methods
+The exact cached Go 1.27.2 toolchain was used. All 14 coordination test methods,
+their finite subtests and the affected history archive regressions passed:
+agentd 4.251s, protocol 0.054s. The eight new filesystem methods
 cover all four record kinds, original-manifest idempotence, changed UID and
 resourceVersion forms, two concurrent identical puts, invalid input without
 writes, object/manifest damage, missing files, symlinks and hard links, a mismatched
 complete digest with the same directory prefix, invisible interrupted staging,
-missing mount and linked directory refusal. All fixtures use temporary local
+missing mount, linked directory refusal, and a real rename followed by an injected
+parent-fsync failure. The identical retry repairs every publication directory and
+preserves the original bytes; continued sync failure still refuses success.
+All fixtures use temporary local
 directories; no model or Kubernetes client is invoked.
 
 This primitive is not the complete R2 command. Indices and crash repair, absence

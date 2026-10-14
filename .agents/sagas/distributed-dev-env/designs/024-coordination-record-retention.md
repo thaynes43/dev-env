@@ -18,7 +18,9 @@ verifies full canonical objects against manifest identities and digests without
 discarding unknown fields or numeric encodings. The next bounded R2 slice stores
 and reads one exact immutable revision under the shelf lock. It reuses the
 history archive's mount check, bounded no-link reads and fsync/rename helpers.
-Identical object bytes retain the original manifest; a damaged entry or hash
+Identical object bytes retain the original manifest and re-sync the files and
+publication directories, repairing a prior rename followed by fsync failure.
+A damaged entry or hash
 prefix collision refuses the put without changing that revision. A read returns
 only canonical bytes whose complete identity, size and digest match the stored
 manifest and requested revision.
