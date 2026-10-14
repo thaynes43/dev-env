@@ -46,16 +46,16 @@ writer evidence, grant a retry or enable a feature flag by itself.
 
 ## Concrete security-sensitive change to identify before execution
 
-Current `internal/apiserver/publishedcontexts.go:contextReadScope` requires a
-Session's saved project to equal the requested project. The archived-history
-routes reuse that check. It is narrower than shared history across Tom's
-trusted agents. A concrete implementation may therefore need to change the
+Current `internal/apiserver/history.go:historyScope` calls `contextCaller`
+and separately requires a Session's saved project to equal the requested
+project, within `ContextReadProjects`. It is narrower than shared history
+across Tom's trusted agents. The concrete implementation needs to change the
 **history read authorization** for already authenticated trusted callers.
 Check projectless histories too; do not silently omit them from this requirement.
 
 Identify that exact code/configuration diff before applying it. Preserve
 `contextCaller`'s authentication and live identity checks and the separate
-publication/write/delete checks. Do not remove a shared helper's checks in a
+publication/write/delete checks. Leave `contextReadScope` unchanged. Do not remove a shared helper's checks in a
 way that broadens write authority. No cluster RBAC change is proposed here;
 identify any actual new identity, API privilege or trust membership separately
 before executing it. This document changes no running authorization.

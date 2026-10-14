@@ -2,7 +2,7 @@
 
 Start continuation with the
 [2026-10-13 Claude pickup brief](../../CLAUDE-RESUME-2026-10-13.md): deployed
-state (2.27.0), counters, rulings through Q-32 and pacing, and the next work
+state (2.27.0), counters, rulings through Q-37/D-92 and pacing, and the next work
 with its owner gates. Rule loading is accepted for both providers, all five
 canary IDs are consumed, Q-24 is still pending, and the MVP is unaccepted.
 

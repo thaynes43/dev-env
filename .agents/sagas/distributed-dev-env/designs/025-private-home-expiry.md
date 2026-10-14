@@ -1526,7 +1526,8 @@ one of DESIGN-024's exec slots. Three routes:
 Every item and answer carries `archived: true` and `archivedAt`.
 
 **Current implementation, superseded for trusted history reads by D-92.**
-DESIGN-013's payload-read scope: `contextReadScope(project)`
+DESIGN-013's payload-read rules mirrored by `historyScope` in `history.go`,
+with the shared `contextCaller` identity check and separate project checks,
 with the project from the verified `content.json`. The project must be in
 `--context-payload-read-projects`, and the caller must be a live Session of that
 project or a configured coordinator. A history with no project is readable by no
