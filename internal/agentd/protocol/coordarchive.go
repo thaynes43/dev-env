@@ -23,6 +23,8 @@ const (
 	CoordArchiveAPIVersion      = "coordination.dev-env.haynesops.com/v1alpha1"
 	MaxCoordArchiveObjectBytes  = 1 << 20
 	MaxCoordArchiveRequestBytes = MaxCoordArchiveObjectBytes + 64<<10
+	MaxCoordArchiveLookupItems  = 1024
+	MaxCoordArchiveLookupBytes  = 4 << 20
 )
 
 // CoordArchiveObjectDigest binds the full canonical object, not typed CRD data.
@@ -70,6 +72,35 @@ type CoordArchivePutRequest struct {
 type CoordArchivePutResult struct {
 	Manifest   CoordArchiveStoredManifest `json:"manifest"`
 	GraceStart *time.Time                 `json:"graceStart"`
+}
+
+// Lookup discovers manifest selectors; it does not verify object bytes.
+type CoordArchiveIdentity struct {
+	Resource string `json:"resource"`
+	Project  string `json:"project"`
+	Name     string `json:"name"`
+	UID      string `json:"uid"`
+}
+
+type CoordArchiveRevision struct {
+	ResourceVersion string `json:"resourceVersion"`
+	SHA256          string `json:"sha256"`
+}
+
+type CoordArchiveLookupResult struct {
+	CoordArchiveIdentity
+	Holds      bool                   `json:"holds"`
+	Revisions  []CoordArchiveRevision `json:"revisions"`
+	GraceStart *time.Time             `json:"graceStart"`
+}
+
+func (i CoordArchiveIdentity) RecordDir() (string, error) {
+	prefix, _ := coordArchiveResource(i.Resource)
+	if prefix == "" || !coordArchiveLabel.MatchString(i.Project) || !coordArchiveName.MatchString(i.Name) ||
+		!strings.HasPrefix(i.Name, prefix+".") || !ValidKubeUID(i.UID) {
+		return "", HistoryErrorf(HistoryErrInvalid, "", "complete coordination record identity required")
+	}
+	return path.Join("v1", i.Resource, i.Project, "records", i.Name, i.UID), nil
 }
 
 // CoordArchiveExactQuery is the complete identity supported by the first CLI.
