@@ -30,7 +30,7 @@ GOMAXPROCS=2 GOFLAGS=-p=1 flock -w 60 /tmp/dev-env-go-tests.lock \
   ./internal/agentd ./internal/agentd/protocol
 ```
 
-All 21 methods and their finite subtests passed: agentd 0.464s, protocol 0.058s.
+All 21 methods and their finite subtests passed: agentd 0.457s, protocol 0.063s.
 Seven new methods cover all four kinds, first-time retention across a month and
 clock rollback, actual revision rename and both index-link publications followed
 by injected fsync failure, missing-entry repair, corruption/link refusals,
@@ -38,6 +38,11 @@ recipient substitution, reclaimed UID separation and the 129-revision directory
 batch boundary. The existing durability fixture now compares the immutable
 revision separately from the newly repaired indices. All data is synthetic and
 uses local temporary directories; no model or cluster client is launched.
+
+Focused native and available advisory reviews found no blocking source issues.
+Native review noted that directory creation order does not prove batch placement;
+the corrected fixture chooses the oldest revision from the actual entry beyond
+the first enumeration batch. Runtime source bytes are unchanged by that fix.
 
 This completes index publication and repair in source. R2 still needs the
 append-only absence-event journal, bounded lookup/list, latest-revision selection,

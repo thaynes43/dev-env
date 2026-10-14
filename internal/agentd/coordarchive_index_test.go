@@ -289,17 +289,12 @@ func TestCoordArchiveIndexesSeparateReclaimedUID(t *testing.T) {
 func TestCoordArchiveIndexesFindFirstTimePastDirectoryBatch(t *testing.T) {
 	a := coordArchiveRig(t)
 	m, raw := coordStoredFixture(t, "taskclaims")
-	var first protocol.CoordArchiveStoredManifest
 	// Seed one UID with 129 small historical revisions and no indices. The
 	// oldest timestamp lies past the first 128-entry directory batch. This
 	// is one finite boundary fixture, not repeated puts or a load test.
 	for i := 0; i < 129; i++ {
 		old, object := nextCoordFixture(t, m, raw, strconv.Itoa(i+1))
 		stored := protocol.CoordArchiveStoredManifest{CoordArchiveManifest: old, ArchivedAt: a.Now().UTC()}
-		if i == 128 {
-			stored.ArchivedAt = stored.ArchivedAt.Add(-time.Hour)
-			first = stored
-		}
 		dir := coordRevisionPath(t, a, old)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
@@ -318,6 +313,35 @@ func TestCoordArchiveIndexesFindFirstTimePastDirectoryBatch(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "manifest.json"), manifest, 0o600); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// Directory order is unspecified. Choose the entry actually beyond the
+	// first batch, without changing any directory entries afterward.
+	uidDir := filepath.Dir(coordRevisionPath(t, a, m))
+	d, err := openBeneath(a.Root, uidDir, historyDirFlags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names, err := d.Readdirnames(129)
+	_ = d.Close()
+	if err != nil || len(names) != 129 {
+		t.Fatalf("directory boundary fixture: %d, %v", len(names), err)
+	}
+	p := filepath.Join(uidDir, names[128], "manifest.json")
+	b, err := readArchiveFile(a.Root, p, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first protocol.CoordArchiveStoredManifest
+	if err := json.Unmarshal(b, &first); err != nil {
+		t.Fatal(err)
+	}
+	first.ArchivedAt = first.ArchivedAt.Add(-time.Hour)
+	b, err = protocol.CanonicalJSON(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, b, 0o600); err != nil {
+		t.Fatal(err)
 	}
 	next, changed := nextCoordFixture(t, m, raw, "500")
 	if _, err := a.Put(next, bytes.NewReader(changed)); err != nil {
