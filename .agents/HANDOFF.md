@@ -19,12 +19,10 @@ encodings survive. The focused protocol suite passed. No archive command,
 filesystem write, API route, retention/delete flag or deployment is added; R2's
 atomic shelf storage/commands and R3–R7 remain.
 
-The six-query Mac authority window is accepted and consumed: six successful
-queries, 20 saved files locally verified, 2.291489 seconds at 04:57 UTC. No actual
-impersonation, dry-run or new grant occurred or follows. Chapter 6 owns
-implementation; Chapter 5 and its workers remain settled. Keep live guard,
-deployment, v1 and cutover gates held. Next source milestone: atomic immutable
-shelf put/get; actual pilot/consumer/history acceptance remains separate.
+Separately, the [six-query authority acceptance](sagas/distributed-dev-env/verification/h7-six-query-authority-acceptance-2026-10-14.md)
+records the consumed Mac authorization window and current coordinator ownership.
+Keep live guard, deployment, v1 and cutover gates held. Next source milestone:
+atomic immutable shelf put/get; pilot/consumer/history acceptance is separate.
 
 ## Shared-history correction deployed — 2026-10-13 EDT
 

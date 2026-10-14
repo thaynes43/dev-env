@@ -33,13 +33,9 @@ fixture identifiers, which were replaced with valid synthetic Kubernetes UIDs.
 Substitution fixtures now use different valid UIDs, so they exercise object
 binding rather than only format rejection. No live API call was made.
 
-The separate Mac inquiry's 20 saved files were verified locally, including
-every response/stream digest and launch/body/argv binding. All six gates passed
-in the recorded 04:57:24.740398–04:57:27.031887 UTC window (2.291489 seconds),
-with zero stderr/truncation and all cleanup reported proved. Source provenance
-SHA256 `c67132403e4d1359fd7092e533e41f7cba33a2a2ed50f20757babd931c1b45d1`.
-This accepts the named ServiceAccount and the five exact authorization answers
-in that window. It proves neither a permanent personal identity nor admission
+The separate, consumed Mac inquiry is recorded in the
+[H7 six-query authority acceptance](h7-six-query-authority-acceptance-2026-10-14.md).
+Its authorization evidence does not establish archive ingestion or admission
 delivery and grants no impersonation, dry-run or repeat inquiry.
 
 The next source milestone is atomic immutable shelf put/get over these verified

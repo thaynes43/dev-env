@@ -147,7 +147,7 @@ func TestCoordArchiveRefusesUnsafeOrInconsistentManifest(t *testing.T) {
 func TestCoordArchiveRefusesMalformedOrMultipleObjects(t *testing.T) {
 	m, raw := coordArchiveFixture(t, "taskclaims")
 	for _, input := range [][]byte{nil, []byte("null"), []byte("[]"), []byte("{"), []byte(`{"number":NaN}`),
-		[]byte{0xff}, append(append([]byte(nil), raw...), []byte(" {}")...), append(append([]byte(nil), raw...), 'x')} {
+		{0xff}, append(append([]byte(nil), raw...), []byte(" {}")...), append(append([]byte(nil), raw...), 'x')} {
 		requireCoordArchiveInvalid(t, m, bytes.NewReader(input))
 	}
 	requireCoordArchiveInvalid(t, m, nil)
