@@ -15,6 +15,15 @@ import (
 // Nonempty journals require the later event implementation. No object is read
 // or verified, and no partial batch is returned when any item fails.
 func (a CoordArchive) LookupUnmarked(ids []protocol.CoordArchiveIdentity) ([]protocol.CoordArchiveLookupResult, error) {
+	return a.lookup(ids, false)
+}
+
+// Lookup reconstructs recorded journal grace, without verifying object bytes.
+func (a CoordArchive) Lookup(ids []protocol.CoordArchiveIdentity) ([]protocol.CoordArchiveLookupResult, error) {
+	return a.lookup(ids, true)
+}
+
+func (a CoordArchive) lookup(ids []protocol.CoordArchiveIdentity, marked bool) ([]protocol.CoordArchiveLookupResult, error) {
 	if len(ids) == 0 || len(ids) > protocol.MaxCoordArchiveLookupItems {
 		return nil, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "lookup requires 1 to 1024 identities")
 	}
@@ -40,7 +49,7 @@ func (a CoordArchive) LookupUnmarked(ids []protocol.CoordArchiveIdentity) ([]pro
 		if n > 0 {
 			remaining-- // comma between results
 		}
-		result, err := a.lookupUnmarked(id, paths[n], remaining)
+		result, err := a.lookupRecord(id, paths[n], remaining, marked)
 		if err != nil {
 			return nil, err
 		}
@@ -80,6 +89,10 @@ func (a CoordArchive) requireUnmarked(uidDir, rel string) error {
 }
 
 func (a CoordArchive) lookupUnmarked(id protocol.CoordArchiveIdentity, rel string, budget int) (protocol.CoordArchiveLookupResult, error) {
+	return a.lookupRecord(id, rel, budget, false)
+}
+
+func (a CoordArchive) lookupRecord(id protocol.CoordArchiveIdentity, rel string, budget int, marked bool) (protocol.CoordArchiveLookupResult, error) {
 	zero := protocol.CoordArchiveLookupResult{}
 	result := protocol.CoordArchiveLookupResult{CoordArchiveIdentity: id, Revisions: []protocol.CoordArchiveRevision{}}
 	base, _ := protocol.CanonicalJSON(result)
@@ -96,9 +109,21 @@ func (a CoordArchive) lookupUnmarked(id protocol.CoordArchiveIdentity, rel strin
 		return zero, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, rel, "unreadable record directory")
 	}
 	defer func() { _ = d.Close() }()
-	if err := a.requireUnmarked(dir, rel); err != nil {
+	if marked {
+		state, err := a.readJournal(id, rel)
+		if err != nil {
+			return zero, err
+		}
+		result.GraceStart = state.GraceStart
+	} else if err := a.requireUnmarked(dir, rel); err != nil {
 		return zero, err
 	}
+	base, _ = protocol.CanonicalJSON(result)
+	used = len(base)
+	if used > budget {
+		return zero, coordLookupOverflow()
+	}
+
 	for {
 		names, readErr := d.Readdirnames(128)
 		if readErr != nil && !errors.Is(readErr, io.EOF) {
