@@ -20,7 +20,7 @@ temporary files: put succeeded, get returned identical bytes/digest, and a
 corrupted object returned `corrupt` without an object. The production filesystem
 check remained enabled; no mount or public bypass option was added.
 
-All 27 focused coordination/CLI methods passed. Nonempty journals refuse
+All 28 focused coordination/CLI methods passed. Nonempty journals refuse
 unmarked put, preserving unknown grace state. General selectors, `--mark`,
 events, lookup/list and old incoming cleanup remain unsupported source work;
 R2 and installed acceptance are incomplete. Do not execute this demonstration

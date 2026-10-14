@@ -50,8 +50,8 @@ same exact get after synthetic object corruption
 
 The focused suite used Go 1.27.2 under the same CPU/shared-lock bounds:
 `go test -p 1 -count=1 -run '^TestCoordArchive' ./cmd/agentd
-./internal/agentd ./internal/agentd/protocol`. All 27 methods/subtests passed:
-cmd 0.020s, agentd 0.654s, protocol 0.048s. It also covers malformed/oversized
+./internal/agentd ./internal/agentd/protocol`. All 28 methods/subtests passed:
+cmd 0.091s, agentd 0.667s, protocol 0.057s. It also covers malformed/oversized
 requests, unsupported options, unmounted ordinary HOME, unsafe exact identities,
 ambiguous projects, missing manifests and unknown grace state without writes.
 The local command methods skip when a separate existing temporary filesystem
@@ -62,6 +62,14 @@ publisher byte before manifest validation. The command now rejects invalid
 envelope UTF-8 before decoding. A valid request with one malformed publisher byte
 returns invalid and leaves the archive fixture empty. The focused suite above
 passed after that correction.
+
+The request cap remains the accepted 1 MiB + 64 KiB for the entire envelope.
+Producers should use `protocol.CanonicalJSON(request)` so RawMessage objects are
+not expanded by HTML escaping. The finite boundary fixture successfully puts and
+gets a full 1 MiB canonical object containing HTML characters. Default
+`json.Marshal` expands that fixture beyond the wire cap; that encoded request
+does not satisfy the separate request-size contract. Increasing the envelope
+limit is unnecessary and would change the agreed bound.
 
 This is partial command support. General latest-revision selection, marking,
 events, lookup/list, cleanup and full shelf startup wiring remain R2 work.

@@ -33,7 +33,7 @@ func coordCLIData(t *testing.T) (protocol.CoordArchiveManifest, []byte, []byte) 
 	}
 	sum := sha256.Sum256(canonical)
 	m.Object = protocol.CoordArchiveObjectDigest{SHA256: hex.EncodeToString(sum[:]), Bytes: int64(len(canonical))}
-	packet, err := json.Marshal(protocol.CoordArchivePutRequest{Manifest: m, Object: canonical})
+	packet, err := protocol.CanonicalJSON(protocol.CoordArchivePutRequest{Manifest: m, Object: canonical})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,4 +156,46 @@ func TestCoordArchiveCLIDefaultRequiresArchiveFilesystem(t *testing.T) {
 	if code != exitFailure || !bytes.Contains(out, []byte("\"error\":\"no_archive\"")) {
 		t.Fatalf("unmounted directory accepted: %d, %s", code, out)
 	}
+}
+
+func TestCoordArchiveCLIAcceptsCanonicalObjectAtSizeLimit(t *testing.T) {
+	env, _ := coordCLIRig(t)
+	m, canonical, _ := coordCLIData(t)
+	var object map[string]any
+	dec := json.NewDecoder(bytes.NewReader(canonical))
+	dec.UseNumber()
+	if err := dec.Decode(&object); err != nil {
+		t.Fatal(err)
+	}
+	object["boundary"] = ""
+	empty, err := protocol.CanonicalJSON(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object["boundary"] = strings.Repeat("<", protocol.MaxCoordArchiveObjectBytes-len(empty))
+	canonical, err = protocol.CanonicalJSON(object)
+	if err != nil || len(canonical) != protocol.MaxCoordArchiveObjectBytes {
+		t.Fatalf("canonical boundary: %d, %v", len(canonical), err)
+	}
+	sum := sha256.Sum256(canonical)
+	m.Object = protocol.CoordArchiveObjectDigest{SHA256: hex.EncodeToString(sum[:]), Bytes: int64(len(canonical))}
+	request := protocol.CoordArchivePutRequest{Manifest: m, Object: canonical}
+	packet, err := protocol.CanonicalJSON(request)
+	if err != nil || len(packet) > protocol.MaxCoordArchiveRequestBytes {
+		t.Fatalf("canonical envelope bound: %d, %v", len(packet), err)
+	}
+	expanded, err := json.Marshal(request)
+	if err != nil || len(expanded) <= protocol.MaxCoordArchiveRequestBytes {
+		t.Fatalf("expected HTML-escape expansion: %d, %v", len(expanded), err)
+	}
+	code, out, _ := runCoordCLI([]string{"ctl", "coord-archive", "put"}, packet, env)
+	if code != exitOK {
+		t.Fatalf("canonical near-max put: %d, %s", code, out)
+	}
+	code, out, _ = runCoordCLI(coordGetArgs(m), nil, env)
+	var got protocol.CoordArchiveGetResult
+	if err := json.Unmarshal(out, &got); err != nil || code != exitOK || !bytes.Equal(got.Object, canonical) {
+		t.Fatalf("canonical near-max get: %d, %v", code, err)
+	}
+	t.Logf("canonical object=%d bytes; envelope=%d bytes; digest equality=true", len(canonical), len(packet))
 }
