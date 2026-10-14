@@ -1,4 +1,4 @@
-# Claude continuation, 2026-10-13: dev-env v2 after release 2.27.0
+# Claude continuation, 2026-10-13: dev-env v2 after release 2.28.0
 
 Prepared 2026-10-13 UTC from `origin/main` at `c20fafd` (release 2.27.0, #253),
 by the Claude coordinator session `task-dev-env-1012-105043` (2026-10-12 10:50
@@ -7,6 +7,10 @@ EDT to 2026-10-13). It replaces the
 next work. That brief still holds the requirement history, the failed and
 stopped routes and the source-review map; read those sections there. This brief
 grants no runtime permission, retry budget or credential access.
+
+Updated October 13 (EDT) for the [D-92 source, release and image delivery](sagas/distributed-dev-env/verification/d92-shared-history-delivery-2026-10-13.md).
+The original preparation reference above remains historical; current pins are
+in the deployed-state table below. Runtime archive reads remain off.
 
 ## Your assignment
 
@@ -58,20 +62,23 @@ stay stopped.
 
 ## Deployed state
 
-Read with `kubectl get` and `gh pr view` at about 11:40 UTC on 2026-10-13.
+Image delivery and the retained-runtime comparison were rechecked October 13
+(EDT), after the two reviewed GitOps updates. See the linked delivery record for
+exact commits and receipts. Other infrastructure rows retain the original
+11:40 UTC October 13 observations unless separately noted.
 
 | Part | Now | Delivered by |
 |---|---|---|
-| Operator | `ghcr.io/thaynes43/dev-env-operator:sha-2221b83@sha256:fd8bdecaf2f68341ada2e53f39fa06e11b8b35416b88918fccb0c9eac5a7d779`, 2/2 Ready. Code equals v2.27.0; the binary reports `v2.26.0-2-g2221b83`. Memory limit 256Mi, no `GOMEMLIMIT` yet | haynes-ops #3886 |
+| Operator | `ghcr.io/thaynes43/dev-env-operator:sha-cbf0700@sha256:e86be8a5876a159aff3fe9950ac98830b94d0f80f623466393247cddc037dced`, 2/2 Ready. Includes the 2.28.0 correction; actual binary version `v2.28.0-1-gcbf0700`. Memory limit 256Mi, no `GOMEMLIMIT` yet | haynes-ops #3906 |
 | AgentSession CRD | generation 13, with `privateHistory.expiry` and `expiryClearedAt` | haynes-ops #3885 |
-| Task template | revision `2.27.0-e83cacfe3e`, agent `ghcr.io/thaynes43/dev-env:2.27.0@sha256:b635dd8183c5f8aa16281e09dfc061bd3694d7a00e47a34f5563d0536ac91718` | haynes-ops #3887 |
+| Task template | revision `2.28.0-f61d3ada0e`, agent `ghcr.io/thaynes43/dev-env:2.28.0@sha256:d426ad1e17ccf4663e07ae333eaea9551342ff214beefa5acd1e26063cb2efd7` | haynes-ops #3907 |
 | Shelf (`dev-agents/dev-env-shelf`) | agent 2.9.1 (`a975de7d…`), `RollingUpdate`, no archive volume | H7 changes it; Renovate haynes-ops #3710 is held for H7 |
 | Broker, keeper | broker `sha-eeb15e3` 2/2; keeper `sha-257287a` 1/1; unchanged this session | |
 | Flags on | `--enable-private-terminal-record=true` (H2), `--enable-private-history-retention`, `--enable-retained-common-rules`, `--enable-private-project-canaries`, `--enable-coordinator-callers`, `--enable-managed-codex-tasks`, `--enable-session-directory`, `--enable-task-claims`, `--enable-published-contexts` (payload reads for `dev-env` and `sigo-alumni`), `--enable-durable-inbox`, `--enable-task-budgets` (the fixture only) and `--enable-native-lifecycle-fixture`. The operator's live args are authoritative | |
 | Flags off | `--enable-private-project-tasks=false` (global private admission). Absent, so off: `--enable-private-executor-stop`, `--enable-home-history-archive`, `--enable-history-archive-reads`, `--enable-home-expiry-delete` | |
 | Canary policy | `rule-canary-claude-sigo-1012b` and `rule-canary-codex-1011`, both consumed | haynes-ops #3855 |
 | Alerts | `DevEnvRescueFailed`, `DevEnvOperatorMetricsAbsent`, `DevEnvCoordinationRecordsNearLimit` (DESIGN-024 R1) | haynes-ops #3854 |
-| Latest release | v2.27.0 (#253), signed agent and operator images | |
+| Latest release | v2.28.0 (#263), signed agent; the signed operator additionally includes CI-only #274 | |
 
 Two failed Jobs are kept as evidence and keep `KubeJobFailed` firing:
 `dev-agents/dev-env-private-project-roots-check-1011` and
@@ -196,6 +203,7 @@ predate this session; their rows point there.
   | Sigo records | | #3845 (catalog and canary), #3855 (sigo-1012b) | |
   | 2.26.0 | #249 | #3877, #3878, #3880 | `sha-20c710f` |
   | 2.27.0 | #253 | #3885, #3886, #3887 (post-check PASS) | `sha-2221b83` |
+  | 2.28.0 | #263; history correction #273; publication fix #274 | #3906, #3907 (post-check PASS; flags preserved) | `sha-cbf0700` (`v2.28.0-1-gcbf0700`) |
 
 - **Housekeeping.** haynes-ops #3881: dev-env v2 image bumps are manual-only.
   Renovate safe bumps merged (#97, #98, #101, #117 to #120, #250); #242
@@ -219,9 +227,10 @@ existing exact configured API clients, live Sessions and configured Coordinators
 may read shared history across projects, including projectless histories.
 Authentication, live Session checks and publication/write/delete helpers stay
 unchanged; omitted CLI list project selects the existing projectless bucket.
-Release and review installation with current flags preserved. Then use one
-approved private history sample and positive peer retrieval with
-matching digest; retain F4, resource, persistence/restore and H8 requirements.
+The [2.28.0 image delivery](sagas/distributed-dev-env/verification/d92-shared-history-delivery-2026-10-13.md)
+is installed with current flags preserved. Finish H7's remaining gates, then use
+one approved private history sample and positive peer retrieval with matching
+digest; retain F4, resource, persistence/restore and H8 requirements.
 No new architecture/review project or per-agent denied-read matrix.
 
 **Current H7 evidence route:** [the reader-failure checkpoint](sagas/distributed-dev-env/verification/h7-reader-failure-and-existing-access-2026-10-13.md)
@@ -260,9 +269,10 @@ and baseline evidence before mounting it, under Q-35 and
 F4 and both cold resource measurements remain gates.
 The guard review found operator-account borrowing paths available to v1.
 [Q-35](sagas/distributed-dev-env/designs/025-private-home-expiry.md#20-h7-archive-trust-boundary-q-35)
-now has a relayed owner answer: v1 stays unchanged until decommissioned after
-accepted MVP. The coordinator verified the oversight relay; the original owner
-turn and native delivery were not observed. Preserve v1 behavior, configuration
+has a relayed owner answer: v1 stays unchanged until decommissioned after
+accepted MVP. The original relayed owner turn was not observed; Tom directly
+confirmed the original asynchronous Q-35 prompt at 21:33 UTC with "Keep v1
+trusted during migration (Recommended)". This grants no new right or activation. Preserve v1 behavior, configuration
 and current access; add no privilege or automatic decommissioning.
 [Issue #261](https://github.com/thaynes43/dev-env/issues/261) holds the evidence.
 The initial read-only checkpoint performed no bypass probe. The
@@ -297,7 +307,7 @@ need declare-activity and peer checks before and after.
         registered; capture-r2 accepts bounded installed configuration/baseline,
         while actual admission/lookup behavior remains pending. The dedicated
         metadata audit failed and stays held under Q-36; do not repeat it;
-     3. the shelf mount, `--history-archive`, `Recreate` and the 2.27.0 image
+     3. the shelf mount, `--history-archive`, `Recreate` and the verified 2.28.0 image
         (this absorbs #3710);
      4. the `dev-env-home-expiry-guard` admission policy, refusing every
         `system:` identity;
@@ -442,9 +452,10 @@ and fold the answer back as a dated ruling.
    unchanged; do not re-ask the same migration choice or remove an unused v1
    permission on the strength of the parity scan. The remaining steps are the
    override policy's identity (personal account chosen in Q-33; discover the
-   exact username from accessible evidence under Q-34); `Retain` on the
-   archive PV; a hold for any Reaping private Session with a live executor
-   (only if the check finds one).
+   exact username from accessible evidence under Q-34); a hold for any Reaping
+   private Session with a live executor (only if the check finds one). The PV
+   Retain step is accepted and its sole Q-37 delegation consumed; do not repeat
+   it or make an extra PV request.
 2. **A private Session for H8 and the pilot.** H8 needs a reaped, non-canary
    private Session, and global private admission is off. Ask Tom how he wants
    one made, for example one bounded admission for a single disposable session

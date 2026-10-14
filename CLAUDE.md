@@ -39,9 +39,11 @@ this repo publishes signed images, haynes-ops pins and deploys them.
 **Current scope, 2026-10-10:** preserve sessions through upgrades, distribute
 load, guard powerful access, expose live/stopped work and context, and attribute
 model usage/cost. Plans 01/02 provide the tested Claude task/terminal subset.
-As of 2026-10-13, release 2.27.0 is deployed: operator `sha-2221b83` (haynes-ops
-#3886) and task template `2.27.0-e83cacfe3e` with signed agent 2.27.0
-(haynes-ops #3887).
+As of October 13, 2026 (EDT), the 2.28.0 shared-history correction is installed:
+operator `sha-cbf0700` (actual binary version `v2.28.0-1-gcbf0700`, haynes-ops
+#3906) and the signed 2.28.0 task agent (haynes-ops #3907). The
+[delivery record](.agents/sagas/distributed-dev-env/verification/d92-shared-history-delivery-2026-10-13.md)
+separates source, release, publication and the two verified GitOps updates.
 Rule loading is accepted for both providers. Private GitHub authorization, a
 `Ready` private catalog bootstrap and a fresh task pin are accepted for Claude.
 HOME expiry (DESIGN-025 H1 to H6) is installed with only the terminal record

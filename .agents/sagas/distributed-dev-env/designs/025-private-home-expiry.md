@@ -17,6 +17,10 @@
   2.27.0 (#3885, #3886, #3887). Every new flag is off; only the terminal
   record is on. The shelf, which runs H4's `history-archive`, still runs agent
   2.9.1 and waits for H7. H7 is next.
+  *Image update, October 13 (EDT):* the [2.28.0 delivery](../verification/d92-shared-history-delivery-2026-10-13.md)
+  installs the D-92 shared-history correction in the operator and task agent.
+  All existing flags are preserved; the shelf remains unchanged and H8 is not
+  accepted. The operator's actual version is `v2.28.0-1-gcbf0700`.
 - **Decision:** [ADR-005](../adrs/005-private-home-expiry.md) (Q-31, Tom,
   2026-10-12: "Archive, then delete (Recommended)"), amended by
   [ADR-006](../adrs/006-private-home-expiry-corrections.md) and

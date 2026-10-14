@@ -74,4 +74,7 @@ Relay evidence is retained privately as
 `dev-env-h7-archive-guard-1013/d92-shared-history-owner-clarification-relay-r1.json`.
 Its SHA-256 is
 `10409282db165fd5c294ee63ecc1623daf628356f680eca660f10ba2bdea6e01`.
-The capture report and its acceptance remain separate evidence.
+The capture report and its acceptance remain separate evidence. The
+[2.28.0 delivery record](../verification/d92-shared-history-delivery-2026-10-13.md)
+records the source correction, signed publication and verified operator/template
+pins; runtime reads remain off and the sample/read acceptance remains pending.
