@@ -7,20 +7,19 @@ name: Publish
 # Tags: only sha-<short>. Never `latest`, and an existing tag is never pushed again.
 # A run for a commit whose tag already exists (a manual re-run) skips the build, so
 # the digest never changes under a tag. The push trigger has a paths filter, so a
-# docs-only or workflow-only merge builds no image at all. Together these avoid what
+# docs-only merge builds no image. Release-version and workflow changes do publish.
+# Together these avoid what
 # v1 (haynes-ops dev-env-build.yml) suffered: rebuilds from unchanged source that
 # re-tagged an image with a new digest and made Renovate open digest-drift PRs.
 # Release tags (the repo's single version, both images) arrive with release-please
 # in B4.
 #
-# Triggers: push to main that changes an input of the image build, and
+# Triggers: push to main that changes an image input, release version or this workflow, and
 # workflow_dispatch for a manual run on main. Dispatch ignores the paths filter: it
-# builds the current commit if its tag is missing (this is how the first publish, and
-# any publish after an edit to this file, is run: `gh workflow run publish.yml`). On
-# a commit already published it builds nothing and only signs the image if no valid
+# builds the current commit if its tag is missing. On a commit already published
+# it builds nothing and only signs the image if no valid
 # signature exists, which is the way to retry a run whose signing step failed. Like
-# v1, this workflow does not list its own file in the paths, so a workflow edit never
-# rebuilds; run it by hand after deliberately changing it.
+# image inputs, release manifest and workflow edits publish automatically after merge.
 #
 # After signing, a verify step checks the pushed digest against this workflow's
 # identity, on every run, so a mis-signed image fails the job.
@@ -56,6 +55,8 @@ on:
       - 'go.sum'
       - 'Makefile'
       - '.dockerignore'
+      - '.release-please-manifest.json'
+      - '.github/workflows/publish.yml'
   workflow_dispatch:
 
 permissions:

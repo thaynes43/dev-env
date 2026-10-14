@@ -179,7 +179,9 @@ CI (`ci.yml`) runs the Makefile targets, so what passes in the pod passes there.
 one required check is the aggregate job `CI - Success`; the workflow has no `paths:`
 filter, so a docs-only PR still gets it. Image builds run on PRs and never push.
 `publish.yml` runs on push to main when an image build input changed (a paths filter),
-and on `workflow_dispatch`; run it by hand after editing it. It pushes `dev-env-operator:sha-<short>` (never
+and on `workflow_dispatch`. Its push paths include the release-version manifest
+and the workflow itself, so reviewed release bumps and publication fixes publish
+automatically. It pushes `dev-env-operator:sha-<short>` (never
 `latest`, never an existing tag) and signs the digest with keyless cosign, pinned like
 haynes-ops v1 (see the workflow header and haynes-ops #3092). It needs no Docker in the
 pod: never build images here.
