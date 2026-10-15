@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
@@ -210,39 +211,60 @@ func inboxPublishResult(m *coord.InboxMessage, created bool, spec coord.InboxMes
 	}
 	return status, apiv1.InboxResult{Outcome: outcome, Message: inboxMetadata(m)}, nil
 }
-func (s *Server) authorizedInbox(ctx context.Context, r *http.Request, c *caller) (*coord.InboxMessage, error) {
+
+// authorizedInbox keeps acknowledgement reads and writes live-only. Only the
+// message GET passes archiveFallback, after its real live-store NotFound.
+func (s *Server) authorizedInbox(ctx context.Context, r *http.Request, c *caller, archiveFallback bool) (*coord.InboxMessage, *time.Time, error) {
 	if err := s.inboxAvailable(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	project := r.URL.Query().Get("project")
 	recipient, err := s.inboxReadScope(ctx, c, project)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !inbox.ValidMessageName(r.PathValue("message")) {
-		return nil, inboxHidden()
+		return nil, nil, inboxHidden()
 	}
 	m, err := s.Inbox.Get(ctx, r.PathValue("message"))
 	if errors.Is(err, inbox.ErrNotFound) {
-		return nil, inboxHidden()
+		if !archiveFallback || !s.CoordinationArchiveReads {
+			return nil, nil, inboxHidden()
+		}
+		var archivedAt time.Time
+		m, archivedAt, err = s.archivedInboxMessage(ctx, r.PathValue("message"))
+		if err != nil {
+			return nil, nil, err
+		}
+		if m.Spec.Project != project || (recipient != nil && m.Spec.Recipient != *recipient) {
+			return nil, nil, inboxHidden()
+		}
+		if err := s.inboxReadFence(ctx, c, project, recipient); err != nil {
+			return nil, nil, err
+		}
+		return m, &archivedAt, nil
 	}
 	if err != nil {
-		return nil, inboxUnknown()
+		return nil, nil, inboxUnknown()
 	}
 	if m.Spec.Project != project || (recipient != nil && m.Spec.Recipient != *recipient) {
-		return nil, inboxHidden()
+		return nil, nil, inboxHidden()
 	}
 	if err := s.inboxReadFence(ctx, c, project, recipient); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return m, nil
+	return m, nil, nil
 }
 func (s *Server) readInbox(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
-	m, err := s.authorizedInbox(ctx, r, c)
+	m, archivedAt, err := s.authorizedInbox(ctx, r, c, true)
 	if err != nil {
 		return 0, nil, err
 	}
-	return http.StatusOK, apiv1.InboxMessage{InboxMetadata: inboxMetadata(m), Text: m.Spec.Text}, nil
+	view := inboxMetadata(m)
+	if archivedAt != nil {
+		view.Archived, view.ArchivedAt = true, archivedAt
+	}
+	return http.StatusOK, apiv1.InboxMessage{InboxMetadata: view, Text: m.Spec.Text}, nil
 }
 func (s *Server) listInbox(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
 	if err := s.inboxAvailable(); err != nil {
@@ -304,7 +326,7 @@ func (s *Server) ackInbox(ctx context.Context, _ http.ResponseWriter, r *http.Re
 	if err := boundedInboxJSON(r, 128, &empty); err != nil {
 		return 0, nil, err
 	}
-	m, err := s.authorizedInbox(ctx, r, c)
+	m, _, err := s.authorizedInbox(ctx, r, c, false)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -323,7 +345,7 @@ func (s *Server) ackInbox(ctx context.Context, _ http.ResponseWriter, r *http.Re
 	return status, apiv1.InboxAckResult{Outcome: outcome, Ack: inboxAckView(a)}, nil
 }
 func (s *Server) readInboxAck(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
-	m, err := s.authorizedInbox(ctx, r, c)
+	m, _, err := s.authorizedInbox(ctx, r, c, false)
 	if err != nil {
 		return 0, nil, err
 	}
