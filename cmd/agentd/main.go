@@ -268,8 +268,7 @@ func hold(ctx context.Context, log *slog.Logger, getenv func(string) string) int
 	return exitOK
 }
 
-// shelf is the shelf pod's command (D-67). It refuses to run without the
-// shared volume, so a shelf that cannot see the rescues never looks healthy.
+// shelfFlags accepts only explicit archive startup flags.
 func shelfFlags(args []string) (historyArchive, coordinationArchive, ok bool) {
 	for _, arg := range args {
 		switch arg {
@@ -290,6 +289,8 @@ func shelfFlags(args []string) (historyArchive, coordinationArchive, ok bool) {
 	return historyArchive, coordinationArchive, true
 }
 
+// shelf is the shelf pod's command (D-67). It refuses to run without the
+// shared volume, so a shelf that cannot see the rescues never looks healthy.
 func shelf(ctx context.Context, log *slog.Logger, getenv func(string) string, historyArchive, coordinationArchive bool) int {
 	s, err := agentd.LoadSettings(getenv)
 	if err != nil {

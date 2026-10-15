@@ -31,7 +31,7 @@ measurement and clock-chronology gates remain unresolved.
 The initial filter above selects the three coordination-named methods and the
 history-export regression; it does not select the separately named
 `TestShelfBothArchivesRequireBothGuards`. The coordinator ran that omitted
-method on2026-10-15 at13:21:34–13:21:36UTC, with the same cached toolchain,
+method on 2026-10-15 at 13:21:34–13:21:36 UTC, with the same cached toolchain,
 shared lock, GOMAXPROCS=2/-p1/nice19 and downloads off:
 
 ```text
