@@ -256,21 +256,24 @@ func TestTaskClaimArchiveListLimitsAndCallerFence(t *testing.T) {
 	f, reader, claim, archive := taskClaimArchiveListRig(t)
 	archive.list.Items = []protocol.CoordArchiveListItem{archivedTaskClaimListItem(t, claim)}
 	path := apiv1.TaskClaimsPath + "?project=sample&archived=only"
-	for _, request := range []struct{ token, suffix string }{{reader, ""}, {tokCoordinator, ""}, {reader, "&limit=20"}} {
+	for _, request := range []struct {
+		token, suffix string
+		limit         int
+	}{{reader, "", 100}, {tokCoordinator, "", 100}, {reader, "&limit=100", 100}, {reader, "&limit=21", 21}} {
 		w := f.do(http.MethodGet, path+request.suffix, request.token, nil)
-		if w.Code != http.StatusOK || archive.query.Limit != 20 || len(decode[apiv1.TaskClaimList](t, w).Items) != 1 {
+		if w.Code != http.StatusOK || archive.query.Limit != request.limit || len(decode[apiv1.TaskClaimList](t, w).Items) != 1 {
 			t.Fatalf("default/max/coordinator = %d query=%#v %s", w.Code, archive.query, w.Body.String())
 		}
 	}
-	for _, suffix := range []string{"&limit=0", "&limit=21", "&limit=100", "&limit=bad", "&archived=only", "&unexpected=value", "&continue=live-cursor"} {
+	for _, suffix := range []string{"&limit=0", "&limit=101", "&limit=bad", "&archived=only", "&unexpected=value", "&continue=live-cursor"} {
 		w := f.do(http.MethodGet, path+suffix, reader, nil)
-		if w.Code != http.StatusBadRequest || archive.calls != 3 {
+		if w.Code != http.StatusBadRequest || archive.calls != 4 {
 			t.Fatalf("invalid query %s = %d calls=%d", suffix, w.Code, archive.calls)
 		}
 	}
 	for _, token := range []string{tokHuman, tokClient, tokStranger, ""} {
 		w := f.do(http.MethodGet, path, token, nil)
-		if (w.Code != http.StatusForbidden && w.Code != http.StatusUnauthorized) || archive.calls != 3 {
+		if (w.Code != http.StatusForbidden && w.Code != http.StatusUnauthorized) || archive.calls != 4 {
 			t.Fatalf("unauthorized caller = %d calls=%d", w.Code, archive.calls)
 		}
 	}
@@ -454,7 +457,7 @@ func TestTaskClaimArchiveListResponseBounds(t *testing.T) {
 			item := archivedTaskClaimListItem(t, claim)
 			switch mode {
 			case "too-many":
-				for n := 0; n < 21; n++ {
+				for n := 0; n < 101; n++ {
 					archive.list.Items = append(archive.list.Items, item)
 				}
 			case "too-large":

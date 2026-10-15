@@ -5,6 +5,10 @@ Date: 2026-10-15. Scope: C7-R4-CLAIM-LIST-1015 only.
 This source slice adds the default-off `GET /v1/task-claims?archived=only`
 metadata list. It reuses the accepted archive lister, shared shelf slots and
 route-bound cursor envelope. Live listing and its owner Session join are unchanged.
+Both live and archived TaskClaim pages default/max at 100, as DESIGN-024 requires;
+the coordinator's original 20-item claim confused the PublishedContext bound
+with the TaskClaim bound and was corrected after advisory review. The design
+itself is unchanged. The archive result envelope remains bounded at 4 MiB.
 
 Archived views are made from immutable metadata only. They set `archived` and
 the UID's first `archivedAt`; `ownerState` and `stopState` remain `Unknown` and

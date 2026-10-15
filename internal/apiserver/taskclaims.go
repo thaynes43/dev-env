@@ -257,15 +257,12 @@ func (s *Server) listTaskClaims(ctx context.Context, _ http.ResponseWriter, r *h
 	if archived != "" && archived != "only" {
 		return 0, nil, badRequest("archived must be only")
 	}
-	limit, maxLimit := int64(100), int64(100)
-	if archived == "only" {
-		limit, maxLimit = 20, 20
-	}
+	limit := int64(100)
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		var err error
 		limit, err = strconv.ParseInt(raw, 10, 64)
-		if err != nil || limit < 1 || limit > maxLimit {
-			return 0, nil, badRequest("limit is outside this task claim list bound")
+		if err != nil || limit < 1 || limit > 100 {
+			return 0, nil, badRequest("limit must be between 1 and 100")
 		}
 	}
 	if archived == "only" {
