@@ -109,6 +109,15 @@ three diagnostics: QF1003 on command dispatch, gofmt simplification of a test
 literal, and a direct test error assertion flagged by errorlint. Root changed
 the same validated dispatch alternatives to a tagged switch, applied `gofmt -s`,
 and used `errors.As`. The finite final selection above passed on those exact Go
-bytes. The earlier 22-method/35-node run remains separate evidence. The hosted
+bytes. The pre-lint `root-closure.jsonl` run also passed 22 methods / 35 nodes; its
+SHA-256 is `37a3e99fd95b60593349617fc43296a96916a2ea87985143003a71b46d5e8ed5`.
+The final post-lint run is `root-lint.jsonl`, reported in the focused evidence
+section with SHA-256 `9ecb75a2536ebc2ca69df2de96b7eccb2ea53235a33ea444ce2ff65700c56211`.
+Matching counts do not combine these distinct runs. The hosted
 failure is retained; the correction uses ordinary new-head CI, with no manual
 rerun, workflow change, weakened assertion or budget reset.
+
+The advisory on `17ca0d7`, run `38807679719`, requested clearer names for
+the two 22-method/35-node runs. This record now binds each run to its own raw
+file and SHA-256. The correction changes documentation only and adds no test
+result or source behavior. The original advisory finding remains preserved.
