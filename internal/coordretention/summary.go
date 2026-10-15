@@ -7,16 +7,17 @@ import (
 	"fmt"
 	"sort"
 
-	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
-	"github.com/thaynes43/dev-env/internal/agentd/protocol"
-	"github.com/thaynes43/dev-env/internal/contextpublication"
-	"github.com/thaynes43/dev-env/internal/inbox"
-	"github.com/thaynes43/dev-env/internal/taskclaim"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/contextpublication"
+	"github.com/thaynes43/dev-env/internal/inbox"
+	"github.com/thaynes43/dev-env/internal/taskclaim"
 )
 
 // Kind is one retention-supported coordination resource.

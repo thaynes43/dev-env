@@ -4,12 +4,13 @@ import (
 	"context"
 	"fmt"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	devv1 "github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/inbox"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // Decision is eligibility only. Released never authorizes a mutation.
