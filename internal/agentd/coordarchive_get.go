@@ -112,9 +112,8 @@ func (a CoordArchive) getSelected(q protocol.CoordArchiveGetQuery, itemReceipt b
 	if err != nil {
 		return zero, err
 	}
-	// A default latest request is the selected UID's archived item. Its outgoing
-	// receipt is that UID's birth time, rather than the later revision receipt.
-	// Explicit UID selection retains its revision receipt.
+	// Default UID selection and item reads return the selected UID's birth
+	// time. Legacy explicit-UID selection retains its revision receipt.
 	if defaultUID || itemReceipt {
 		result.Manifest.ArchivedAt = selected.FirstAt
 	}

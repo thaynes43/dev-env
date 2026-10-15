@@ -82,6 +82,19 @@ func TestCoordArchiveItemGetRefusesPinsAndBirthDamage(t *testing.T) {
 				if got.Object != nil {
 					t.Fatal("pinned item read returned bytes")
 				}
+				// Pin rejection precedes mounted-root or identity selection, even
+				// when only one pin component is supplied.
+				unmounted := a
+				unmounted.Root = filepath.Join(a.Root, "unmounted")
+				for _, pins := range []struct{ revision, digest string }{{newer.ResourceVersion, ""}, {"", newer.Object.SHA256}, {newer.ResourceVersion, newer.Object.SHA256}} {
+					query := q
+					query.ResourceVersion, query.SHA256 = pins.revision, pins.digest
+					got, err := unmounted.GetItemSelected(query)
+					requireCoordError(t, err, protocol.HistoryErrInvalid)
+					if got.Object != nil || got.Manifest != (protocol.CoordArchiveStoredManifest{}) {
+						t.Fatal("rejected pin exposed item metadata or bytes")
+					}
+				}
 			case "missing-index", "damaged-index":
 				file := filepath.Join(a.Root, filepath.FromSlash(coordIndexPaths(coordIndexEntry(first))[0]))
 				if kind == "missing-index" {
@@ -97,8 +110,16 @@ func TestCoordArchiveItemGetRefusesPinsAndBirthDamage(t *testing.T) {
 				if got.Object != nil {
 					t.Fatal("damaged birth returned item bytes")
 				}
-				requireCoordSelected(t, a, q, stored.CoordArchiveManifest, newerRaw)
-				requireCoordSelected(t, a, protocol.CoordArchiveGetQuery(coordExactQuery(newer)), stored.CoordArchiveManifest, newerRaw)
+				canonical, err := protocol.CanonicalJSON(json.RawMessage(newerRaw))
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, legacyQuery := range []protocol.CoordArchiveGetQuery{q, protocol.CoordArchiveGetQuery(coordExactQuery(newer))} {
+					legacy, err := a.GetSelected(legacyQuery)
+					if err != nil || legacy.Manifest.CoordArchiveManifest != stored.CoordArchiveManifest || !legacy.Manifest.ArchivedAt.Equal(stored.ArchivedAt) || legacy.Manifest.ArchivedAt.Location() != time.UTC || !bytes.Equal(legacy.Object, canonical) {
+						t.Fatalf("birth damage changed legacy receipt or object: %+v, %v", legacy.Manifest, err)
+					}
+				}
 			case "corrupt-latest":
 				if err := os.WriteFile(filepath.Join(coordRevisionPath(t, a, newer), "object.json"), []byte("{}"), 0o600); err != nil {
 					t.Fatal(err)
