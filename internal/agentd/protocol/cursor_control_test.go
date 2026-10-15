@@ -54,6 +54,30 @@ func TestCursorAPIReadReceipt(t *testing.T) {
 	}
 }
 
+func TestCursorRequestedModelIsNotServedModelEvidence(t *testing.T) {
+	b, raw := cursorAPIFixture()
+	raw = bytes.Replace(raw, []byte(`"agent":{"id"`), []byte(`"agent":{"model":{"id":"synthetic-requested-model"},"id"`), 1)
+	got, err := NormalizeCursorAPIRead(raw, b, cursorFixtureTime(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Model != "synthetic-requested-model" || got.ModelState != CursorModelProviderRequested || got.ActualModelState != UsageUnknown {
+		t.Fatalf("requested metadata overclaims served model: %+v", got)
+	}
+	if _, err := PlanCursorControl("observe", got, 1, cursorFixtureTime(), time.Hour); err != nil {
+		t.Fatalf("requested metadata rejected by planning: %v", err)
+	}
+	got.ModelState = UsageProviderReported
+	// Reseal to test the semantic validator independently of digest integrity.
+	got.ObservationSHA256, err = cursorControlObservationDigest(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PlanCursorControl("observe", got, 1, cursorFixtureTime(), time.Hour); err == nil {
+		t.Fatal("accepted serving-model provenance for requested metadata")
+	}
+}
+
 func TestCursorACPReadReceipt(t *testing.T) {
 	b, raw := cursorACPFixture()
 	got, err := NormalizeCursorACPRead(raw, b, cursorFixtureTime(), time.Hour)

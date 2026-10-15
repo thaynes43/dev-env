@@ -14,6 +14,10 @@ import (
 
 const MaxCursorControlReceiptBytes = 64 << 10
 
+// CursorModelProviderRequested labels agent configuration metadata only.
+// It never establishes which model served an inference result.
+const CursorModelProviderRequested = "ProviderRequested"
+
 var cursorControlLabel = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 var cursorControlRepo = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 var cursorControlAgent = regexp.MustCompile(`^bc-[A-Za-z0-9-]{1,100}$`)
@@ -251,7 +255,7 @@ func NormalizeCursorAPIRead(raw []byte, want CursorBinding, now time.Time, maxAg
 			return CursorControlObservation{}, errors.New("invalid Cursor model metadata")
 		}
 		out.Model = r.Agent.Model.ID
-		out.ModelState = UsageProviderReported
+		out.ModelState = CursorModelProviderRequested
 	}
 	var err error
 	out.ReceiptSHA256, err = cursorReceiptHash(want, r)
@@ -369,7 +373,7 @@ func validCursorObservation(o CursorControlObservation) bool {
 		if o.Model != "" {
 			return false
 		}
-	} else if o.ModelState != UsageProviderReported || !ValidUsageModelID(o.Model) {
+	} else if o.ModelState != CursorModelProviderRequested || !ValidUsageModelID(o.Model) {
 		return false
 	}
 	for _, v := range []string{o.Advertisements.List, o.Advertisements.Load, o.Advertisements.MCPHTTP, o.Advertisements.MCPSSE} {
