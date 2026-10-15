@@ -2,10 +2,10 @@ package coordretention
 
 import (
 	"context"
-	"fmt"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	devv1 "github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/inbox"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -20,11 +20,11 @@ const (
 	Unknown  Decision = "Unknown"
 )
 
-// ArchiveEvidence is the narrow bulk-lookup seam for InboxReadAck evaluation.
-// An absent map entry means the later archive lookup has not supplied proof.
+// ArchiveEvidence is supplied by a later bulk lookup, never a per-record exec.
+// Missing or Known=false evidence is pending only after live UID absence is proved.
 type ArchiveEvidence struct{ Known, Holds bool }
 type EvalConfig struct {
-	Reader               client.Reader
+	Reader               client.Reader // the operator's uncached APIReader
 	OperatorNamespace    string
 	ReconciledNamespaces map[string]bool
 	Archive              map[MessageRef]ArchiveEvidence
@@ -32,7 +32,7 @@ type EvalConfig struct {
 type Result struct {
 	Summary         Summary
 	Decision        Decision
-	RequiredMessage *MessageRef
+	RequiredMessage *MessageRef // non-nil only after scoped live UID absence
 }
 type sessionAnswer uint8
 
@@ -47,111 +47,144 @@ type memoSession struct {
 	uid    string
 }
 
-// Evaluate evaluates a pass with a fresh session memo. It performs only Get reads.
+// Evaluate owns one pass's namespace/name memo. Future delete rechecks must
+// perform fresh uncached reads, never reuse these eligibility observations.
 func Evaluate(ctx context.Context, c EvalConfig, summaries []Summary) []Result {
 	memo := map[string]memoSession{}
-	return evaluate(ctx, c, summaries, memo)
-}
-func evaluate(ctx context.Context, c EvalConfig, summaries []Summary, memo map[string]memoSession) []Result {
 	out := make([]Result, 0, len(summaries))
 	for _, s := range summaries {
-		out = append(out, Result{Summary: s, Decision: decide(ctx, c, s, memo)})
-	}
-	for i := range out {
-		if out[i].Decision == Unknown && out[i].Summary.Kind == InboxReadAck && out[i].Summary.Valid {
-			m := out[i].Summary.Message
-			if _, ok := c.Archive[m]; !ok {
-				out[i].RequiredMessage = &m
-			}
+		d, pending := decide(ctx, c, s, memo)
+		if ctx.Err() != nil {
+			d, pending = Unknown, nil
 		}
+		out = append(out, Result{Summary: s, Decision: d, RequiredMessage: pending})
 	}
 	return out
 }
+
+func validRef(r SessionRef) bool {
+	return inbox.ValidSession(coord.SessionIdentity{Namespace: r.Namespace, Name: r.Name, UID: r.UID})
+}
+func validSummary(s Summary, namespace string) bool {
+	if !s.Valid || !validMeta(s, namespace) {
+		return false
+	}
+	switch s.Kind {
+	case TaskClaim:
+		return validRef(s.Owner)
+	case PublishedContext:
+		return validRef(s.Source)
+	case InboxMessage:
+		return validRef(s.Sender) && validRef(s.Recipient)
+	case InboxReadAck:
+		if !validRef(s.Recipient) || s.Message.Namespace != s.Namespace || s.Message.Project != s.Project || s.Name != inbox.AckName(s.Message.UID, s.Recipient.UID) {
+			return false
+		}
+		_, err := (protocol.CoordArchiveIdentity{Resource: "inboxmessages", Project: s.Message.Project, Name: s.Message.Name, UID: s.Message.UID}).RecordDir()
+		return err == nil
+	}
+	return false
+}
+func matchesObject(o client.Object, key client.ObjectKey) bool {
+	return o.GetNamespace() == key.Namespace && o.GetName() == key.Name && protocol.ValidKubeUID(string(o.GetUID()))
+}
 func session(ctx context.Context, c EvalConfig, r SessionRef, memo map[string]memoSession) sessionAnswer {
-	if c.Reader == nil || !c.ReconciledNamespaces[r.Namespace] || !inbox.ValidSession(coord.SessionIdentity{Namespace: r.Namespace, Name: r.Name, UID: r.UID}) {
+	if ctx.Err() != nil || c.Reader == nil || !c.ReconciledNamespaces[r.Namespace] || !validRef(r) {
 		return sessionUnknown
 	}
-	k := r.Namespace + "\x00" + r.Name
-	if a, ok := memo[k]; ok {
+	key := r.Namespace + "\x00" + r.Name
+	if a, ok := memo[key]; ok {
 		if a.answer == sessionPresent && a.uid != r.UID {
 			return sessionAbsent
 		}
 		return a.answer
 	}
 	var got devv1.AgentSession
-	err := c.Reader.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: r.Name}, &got)
-	if apierrors.IsNotFound(err) {
-		memo[k] = memoSession{answer: sessionAbsent}
-		return sessionAbsent
-	}
-	if err != nil {
-		memo[k] = memoSession{answer: sessionUnknown}
+	objectKey := client.ObjectKey{Namespace: r.Namespace, Name: r.Name}
+	err := c.Reader.Get(ctx, objectKey, &got)
+	if ctx.Err() != nil {
 		return sessionUnknown
 	}
-	memo[k] = memoSession{answer: sessionPresent, uid: string(got.UID)}
+	if apierrors.IsNotFound(err) {
+		memo[key] = memoSession{answer: sessionAbsent}
+		return sessionAbsent
+	}
+	if err != nil || !matchesObject(&got, objectKey) {
+		memo[key] = memoSession{answer: sessionUnknown}
+		return sessionUnknown
+	}
+	memo[key] = memoSession{answer: sessionPresent, uid: string(got.UID)}
 	if string(got.UID) != r.UID {
 		return sessionAbsent
 	}
 	return sessionPresent
 }
 func absentFor(ctx context.Context, c EvalConfig, r SessionRef, memo map[string]memoSession) Decision {
-	a := session(ctx, c, r, memo)
-	if a == sessionUnknown {
-		return Unknown
-	}
-	if a == sessionPresent {
-		return Kept
-	}
-	return Released
-}
-func decide(ctx context.Context, c EvalConfig, s Summary, memo map[string]memoSession) Decision {
-	if c.Reader == nil || !s.Valid || s.Namespace != c.OperatorNamespace {
-		return Unknown
-	}
-	switch s.Kind {
-	case TaskClaim:
-		return absentFor(ctx, c, s.Owner, memo)
-	case PublishedContext:
-		return absentFor(ctx, c, s.Source, memo)
-	case InboxMessage:
-		if d := absentFor(ctx, c, s.Sender, memo); d != Released {
-			return d
-		}
-		var a coord.InboxReadAck
-		err := c.Reader.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: inbox.AckName(s.UID, s.Recipient.UID)}, &a)
-		if err == nil {
-			if !inbox.ValidAck(a.Spec) || a.Spec.Project != s.Project || a.Spec.MessageName != s.Name || a.Spec.MessageUID != s.UID || a.Spec.Recipient != (coord.SessionIdentity{Namespace: s.Recipient.Namespace, Name: s.Recipient.Name, UID: s.Recipient.UID}) {
-				return Unknown
-			}
-			return Released
-		}
-		if !apierrors.IsNotFound(err) {
-			return Unknown
-		}
-		return absentFor(ctx, c, s.Recipient, memo)
-	case InboxReadAck:
-		var m coord.InboxMessage
-		err := c.Reader.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: s.Message.Name}, &m)
-		if err == nil && string(m.UID) == s.Message.UID {
-			return Kept
-		}
-		if err != nil && !apierrors.IsNotFound(err) {
-			return Unknown
-		}
-		e, ok := c.Archive[s.Message]
-		if !ok {
-			return Unknown
-		}
-		if !e.Known {
-			return Unknown
-		}
-		if !e.Holds {
-			return Kept
-		}
+	switch session(ctx, c, r, memo) {
+	case sessionAbsent:
 		return Released
+	case sessionPresent:
+		return Kept
 	default:
 		return Unknown
 	}
 }
-
-func (s Summary) String() string { return fmt.Sprintf("%s/%s/%s", s.Kind, s.Project, s.Name) }
+func decide(ctx context.Context, c EvalConfig, s Summary, memo map[string]memoSession) (Decision, *MessageRef) {
+	if ctx.Err() != nil || c.Reader == nil || !validSummary(s, c.OperatorNamespace) {
+		return Unknown, nil
+	}
+	switch s.Kind {
+	case TaskClaim:
+		return absentFor(ctx, c, s.Owner, memo), nil
+	case PublishedContext:
+		return absentFor(ctx, c, s.Source, memo), nil
+	case InboxMessage:
+		if d := absentFor(ctx, c, s.Sender, memo); d != Released {
+			return d, nil
+		}
+		var a coord.InboxReadAck
+		key := client.ObjectKey{Namespace: s.Namespace, Name: inbox.AckName(s.UID, s.Recipient.UID)}
+		err := c.Reader.Get(ctx, key, &a)
+		if ctx.Err() != nil {
+			return Unknown, nil
+		}
+		if err == nil {
+			if !matchesObject(&a, key) || a.ResourceVersion == "" || !inbox.ValidAck(a.Spec) || a.Spec.Project != s.Project || a.Spec.MessageName != s.Name || a.Spec.MessageUID != s.UID || a.Spec.Recipient != (coord.SessionIdentity{Namespace: s.Recipient.Namespace, Name: s.Recipient.Name, UID: s.Recipient.UID}) {
+				return Unknown, nil
+			}
+			return Released, nil
+		}
+		if !apierrors.IsNotFound(err) {
+			return Unknown, nil
+		}
+		return absentFor(ctx, c, s.Recipient, memo), nil
+	case InboxReadAck:
+		var m coord.InboxMessage
+		key := client.ObjectKey{Namespace: s.Message.Namespace, Name: s.Message.Name}
+		err := c.Reader.Get(ctx, key, &m)
+		if ctx.Err() != nil {
+			return Unknown, nil
+		}
+		if err == nil {
+			if !matchesObject(&m, key) {
+				return Unknown, nil
+			}
+			if string(m.UID) == s.Message.UID {
+				return Kept, nil
+			}
+		} else if !apierrors.IsNotFound(err) {
+			return Unknown, nil
+		}
+		// Only this branch has proved the original live message UID absent.
+		evidence, ok := c.Archive[s.Message]
+		if !ok || !evidence.Known {
+			needed := s.Message
+			return Unknown, &needed
+		}
+		if !evidence.Holds {
+			return Kept, nil
+		}
+		return Released, nil
+	}
+	return Unknown, nil
+}

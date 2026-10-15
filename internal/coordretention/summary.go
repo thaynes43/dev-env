@@ -8,12 +8,14 @@ import (
 	"sort"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/contextpublication"
 	"github.com/thaynes43/dev-env/internal/inbox"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -67,7 +69,7 @@ var resources = []resource{
 // Summaries lists enabled resources only in the supplied operator namespace.
 // Each List is bounded and terminates if a server repeats a continuation cursor.
 func Summaries(ctx context.Context, c ListConfig) ([]Summary, error) {
-	if c.Reader == nil || c.Namespace == "" {
+	if c.Reader == nil || len(validation.IsDNS1123Label(c.Namespace)) != 0 {
 		return nil, fmt.Errorf("coordination retention summaries: missing uncached reader or namespace")
 	}
 	var out []Summary
@@ -77,14 +79,29 @@ func Summaries(ctx context.Context, c ListConfig) ([]Summary, error) {
 		}
 		cursor, seen := "", map[string]struct{}{}
 		for {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			list := &unstructured.UnstructuredList{}
 			list.SetGroupVersionKind(r.gvk.GroupVersion().WithKind(r.gvk.Kind + "List"))
 			err := c.Reader.List(ctx, list, client.InNamespace(c.Namespace), client.Limit(r.page), client.Continue(cursor))
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
 			if err != nil {
 				return nil, fmt.Errorf("list %s: %w", r.kind, err)
 			}
+			if int64(len(list.Items)) > r.page {
+				return nil, fmt.Errorf("list %s: page exceeds requested bound", r.kind)
+			}
 			for i := range list.Items {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				out = append(out, summarize(r, c.Namespace, &list.Items[i]))
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
 			}
 			next := list.GetContinue()
 			if next == "" {
@@ -96,6 +113,9 @@ func Summaries(ctx context.Context, c ListConfig) ([]Summary, error) {
 			seen[next] = struct{}{}
 			cursor = next
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	sort.Slice(out, func(i, j int) bool {
 		a, b := out[i], out[j]
@@ -118,7 +138,23 @@ func objectSummary(r resource, ns string, u *unstructured.Unstructured) Summary 
 	return Summary{Kind: r.kind, Resource: r.name, Namespace: ns, Name: u.GetName(), UID: string(u.GetUID()), ResourceVersion: u.GetResourceVersion()}
 }
 func validMeta(s Summary, namespace string) bool {
-	return s.Namespace == namespace && s.Name != "" && s.UID != "" && s.ResourceVersion != ""
+	if s.Namespace != namespace || len(validation.IsDNS1123Label(namespace)) != 0 {
+		return false
+	}
+	expected := ""
+	for _, r := range resources {
+		if r.kind == s.Kind {
+			expected = r.name
+			break
+		}
+	}
+	if expected == "" || s.Resource != expected {
+		return false
+	}
+	if _, err := (protocol.CoordArchiveIdentity{Resource: s.Resource, Project: s.Project, Name: s.Name, UID: s.UID}).RecordDir(); err != nil {
+		return false
+	}
+	return (protocol.CoordArchiveExactQuery{Resource: s.Resource, Name: s.Name, UID: s.UID, ResourceVersion: s.ResourceVersion, SHA256: "0000000000000000000000000000000000000000000000000000000000000000"}).Validate() == nil
 }
 func summarize(r resource, namespace string, u *unstructured.Unstructured) Summary {
 	s := objectSummary(r, namespace, u)
@@ -130,13 +166,13 @@ func summarize(r resource, namespace string, u *unstructured.Unstructured) Summa
 		var v coord.TaskClaim
 		if runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &v) == nil {
 			s.Project, s.Owner = v.Spec.Identity.Project, ref(v.Spec.Owner)
-			s.Valid = validMeta(s, namespace) && taskclaim.ValidSpec(v.Spec)
+			s.Valid = validMeta(s, namespace) && taskclaim.ValidSpec(v.Spec) && u.GetName() == taskclaim.Name(v.Spec.Identity)
 		}
 	case PublishedContext:
 		var v coord.PublishedContext
 		if runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &v) == nil {
 			s.Project, s.Source = v.Spec.Project, ref(v.Spec.Source)
-			s.Valid = validMeta(s, namespace) && contextpublication.ValidSpec(v.Spec)
+			s.Valid = validMeta(s, namespace) && contextpublication.ValidSpec(v.Spec) && u.GetName() == contextpublication.Name(v.Spec.Identity)
 		}
 	case InboxMessage:
 		var v coord.InboxMessage
