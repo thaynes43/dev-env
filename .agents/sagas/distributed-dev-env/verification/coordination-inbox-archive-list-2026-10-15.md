@@ -82,3 +82,10 @@ Ordinary exact-head required CI and advisory findings plus native closure must
 be inspected before guarded source merge. No release/installation/activation,
 provider experiment, access/security change, archive deletion, v1 change or
 cutover is authorized by this source slice.
+
+Native closure tightened the evidence: expected attribution is now built field
+by field from the original immutable spec instead of calling inboxMetadata.
+Oversized pages pad full objects before computing their manifests and stripping
+text; every fixture first passes VerifyCoordArchiveObject. The archive validator
+explicitly refuses nonempty text. These are source-test corrections, with a
+justified finite final selection and no deadline or ownership extension.

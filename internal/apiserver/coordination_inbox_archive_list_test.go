@@ -1,6 +1,7 @@
 package apiserver
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -64,6 +65,9 @@ func archivedInboxListItem(t *testing.T, m *coord.InboxMessage) protocol.CoordAr
 		t.Fatal(err)
 	}
 	manifest := protocol.CoordArchiveManifest{Format: protocol.CoordArchiveFormat, Resource: "inboxmessages", Kind: "InboxMessage", APIVersion: protocol.CoordArchiveAPIVersion, Namespace: m.Namespace, Name: m.Name, UID: string(m.UID), ResourceVersion: m.ResourceVersion, Project: m.Spec.Project, RecipientUID: m.Spec.Recipient.UID, Object: protocol.CoordArchiveObjectDigest{SHA256: hex.EncodeToString(sum[:]), Bytes: int64(len(full))}, ArchivedBy: "fixture"}
+	if _, err := protocol.VerifyCoordArchiveObject(manifest, bytes.NewReader(full)); err != nil {
+		t.Fatalf("fixture full object invalid: %v", err)
+	}
 	return protocol.CoordArchiveListItem{UID: string(m.UID), Manifest: &protocol.CoordArchiveStoredManifest{CoordArchiveManifest: manifest, ArchivedAt: time.Date(2026, 10, 15, 18, 0, 0, 0, time.UTC)}, Object: object}
 }
 
@@ -219,7 +223,17 @@ func TestInboxArchiveListImmutableAttributionWithoutSenderJoin(t *testing.T) {
 	if !got.Archived || got.ArchivedAt == nil || !got.ArchivedAt.Equal(a.list.Items[0].Manifest.ArchivedAt) {
 		t.Fatal("missing archive receipt")
 	}
-	want := inboxMetadata(m)
+	p := m.Spec.Provenance
+	want := apiv1.InboxMetadata{Name: m.Name, UID: string(m.UID), Project: m.Spec.Project, Key: m.Spec.Key,
+		Sender:     apiv1.TaskClaimOwner{Namespace: m.Spec.Sender.Namespace, Name: m.Spec.Sender.Name, UID: m.Spec.Sender.UID},
+		Recipient:  apiv1.TaskClaimOwner{Namespace: m.Spec.Recipient.Namespace, Name: m.Spec.Recipient.Name, UID: m.Spec.Recipient.UID},
+		Actor:      apiv1.TaskClaimActor{Kind: m.Spec.Actor.Kind, ServiceAccount: m.Spec.Actor.ServiceAccount, PodName: m.Spec.Actor.PodName, PodUID: m.Spec.Actor.PodUID},
+		Provenance: apiv1.TaskClaimProvenance{CatalogRevision: p.CatalogRevision, RulesRevision: p.RulesRevision, GitHub: p.GitHub, DefaultBranch: p.DefaultBranch, InitialPinState: p.InitialPinState, ReportedHead: p.ReportedHead},
+		Repository: m.Spec.Repository, Provider: m.Spec.Provider, RequestedModel: m.Spec.RequestedModel, CreatedAt: m.CreationTimestamp.Time}
+	if p.ReportedAt != nil {
+		stamp := p.ReportedAt.Time
+		want.Provenance.ReportedAt = &stamp
+	}
 	wire, err := json.Marshal(want)
 	if err != nil {
 		t.Fatal(err)
@@ -324,13 +338,8 @@ func TestInboxArchiveListMalformedResultsAndBounds(t *testing.T) {
 				for i := range 20 {
 					copy := m.DeepCopy()
 					copy.UID = types.UID(fmt.Sprintf("%08d-1111-2222-3333-444444444444", i))
+					copy.Annotations = map[string]string{"fixture": strings.Repeat("x", 220<<10)}
 					row := archivedInboxListItem(t, copy)
-					var obj map[string]any
-					if json.Unmarshal(row.Object, &obj) != nil {
-						t.Fatal("fixture")
-					}
-					obj["padding"] = strings.Repeat("x", 220<<10)
-					row.Object, _ = protocol.CanonicalJSON(obj)
 					if _, _, err := f.srv.archivedInboxMetadata(*row.Manifest, row.Object); err != nil {
 						t.Fatalf("row invalid: %v", err)
 					}
