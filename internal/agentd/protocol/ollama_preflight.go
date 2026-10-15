@@ -145,7 +145,7 @@ func (r OllamaCapabilityReceipt) validate() error {
 func ParseOllamaCapabilityReceipt(raw []byte) (OllamaCapabilityReceipt, error) {
 	var r OllamaCapabilityReceipt
 	if len(raw) == 0 || len(raw) > MaxOllamaReceiptBytes {
-		return r, errors.New("Ollama receipt size refused")
+		return r, errors.New("ollama receipt size refused")
 	}
 	d := json.NewDecoder(bytes.NewReader(raw))
 	if err := ollamaJSONValue(d, 0); err != nil {
@@ -167,7 +167,7 @@ func ParseOllamaCapabilityReceipt(raw []byte) (OllamaCapabilityReceipt, error) {
 
 func ollamaJSONValue(d *json.Decoder, depth int) error {
 	if depth > 16 {
-		return errors.New("Ollama receipt nesting refused")
+		return errors.New("ollama receipt nesting refused")
 	}
 	t, err := d.Token()
 	if err != nil {
@@ -232,7 +232,7 @@ func PlanOllamaCandidate(w OllamaCandidateRequirements, r OllamaCapabilityReceip
 	}
 	encoded, err := CanonicalJSON(r)
 	if err != nil || len(encoded) > MaxOllamaReceiptBytes {
-		return out, errors.New("Ollama receipt size refused")
+		return out, errors.New("ollama receipt size refused")
 	}
 	if r.Backend != w.Identity.Backend || r.Endpoint != w.Identity.Endpoint {
 		out.Reasons = append(out.Reasons, "endpoint-backend-mismatch")
