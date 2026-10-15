@@ -49,7 +49,7 @@ func TestCoordinationArchiveRunsTypedCommandsAndVerifiesGet(t *testing.T) {
 		t.Fatal("put stdin is not canonical request")
 	}
 
-	e.out = `[{"resource":"taskclaims","project":"demo","name":"` + m.Name + `","uid":"` + m.UID + `","holds":true,"revisions":[{"resourceVersion":"42","sha256":"` + m.Object.SHA256 + `"}],"graceStart":null}]`
+	e.out = `[{"resource":"taskclaims","project":"demo","name":"` + m.Name + `","uid":"` + m.UID + `","holds":true,"revisions":[{"resourceVersion":"42","sha256":"` + m.Object.SHA256 + `"}],"graceStart":"2026-10-15T01:02:03Z"}]`
 	lookup, err := c.Lookup(context.Background(), []protocol.CoordArchiveIdentity{{Resource: m.Resource, Project: m.Project, Name: m.Name, UID: m.UID}})
 	if err != nil || len(lookup) != 1 || e.cmds[1] != "agentd ctl coord-archive lookup" {
 		t.Fatalf("lookup = %#v, %v, %q", lookup, err, e.cmds)
@@ -68,7 +68,17 @@ func TestCoordinationArchiveRunsTypedCommandsAndVerifiesGet(t *testing.T) {
 		t.Fatalf("get: %#v, %v, %q", got, err, e.cmds)
 	}
 
-	e.out = `{"items":[{"uid":"` + m.UID + `","manifest":` + string(mustJSON(t, stored)) + `,"object":{"redacted":true}}]}`
+	var projected map[string]any
+	if err := json.Unmarshal(object, &projected); err != nil {
+		t.Fatal(err)
+	}
+	projectedSpec := projected["spec"].(map[string]any)
+	delete(projectedSpec, "text")
+	projection, err := json.Marshal(projected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.out = `{"items":[{"uid":"` + m.UID + `","manifest":` + string(mustJSON(t, stored)) + `,"object":` + string(projection) + `}]}`
 	list, err := c.List(context.Background(), protocol.CoordArchiveListQuery{Resource: m.Resource, Project: m.Project, Limit: 1})
 	if err != nil || len(list.Items) != 1 || e.cmds[4] != "agentd ctl coord-archive list --resource taskclaims --project demo --limit 1" {
 		t.Fatalf("list: %#v, %v, %q", list, err, e.cmds)
@@ -101,12 +111,65 @@ func TestCoordinationArchiveRefusesInvalidAndUnsafeAnswers(t *testing.T) {
 			t.Errorf("%q returned %#v, %v", out, got, err)
 		}
 	}
-	e.out, e.errOut, e.err = "", "unknown command coord-archive", utilexec.CodeExitError{Err: errors.New("exit"), Code: 2}
+	e.out, e.errOut, e.err = "", "agentd: usage: ctl status | rescue", utilexec.CodeExitError{Err: errors.New("exit"), Code: 2}
 	_, err = c.List(context.Background(), protocol.CoordArchiveListQuery{Resource: m.Resource, Project: m.Project, Limit: 1})
 	var refusal *protocol.HistoryError
 	if !errors.As(err, &refusal) || refusal.Code != protocol.HistoryErrNoArchive {
 		t.Fatalf("old shelf: %v", err)
 	}
+}
+
+func TestCoordinationArchiveRefusesIncompleteAndNoncanonicalReplies(t *testing.T) {
+	m, object := coordFixture(t)
+	stored := protocol.CoordArchiveStoredManifest{CoordArchiveManifest: m, ArchivedAt: time.Date(2026, 10, 15, 1, 2, 3, 0, time.UTC)}
+	e := &fakeExec{}
+	c := coordClient(t, e)
+	id := protocol.CoordArchiveIdentity{Resource: m.Resource, Project: m.Project, Name: m.Name, UID: m.UID}
+	mark := []protocol.CoordArchiveMarkRequest{{CoordArchiveIdentity: id, Event: protocol.CoordArchiveEvent{Format: protocol.CoordArchiveEventFormat, State: "reset", At: stored.ArchivedAt, Rule: "owner-absent", By: "fixture"}}}
+
+	for _, answer := range []string{"null", `{}`, `[{"resource":"taskclaims","project":"demo","name":"` + m.Name + `","uid":"` + m.UID + `"}]`} {
+		e.out = answer
+		if got, err := c.Lookup(context.Background(), []protocol.CoordArchiveIdentity{id}); err == nil || got != nil {
+			t.Errorf("lookup %q = %#v, %v", answer, got, err)
+		}
+		if got, err := c.Mark(context.Background(), mark); err == nil || got != nil {
+			t.Errorf("mark %q = %#v, %v", answer, got, err)
+		}
+	}
+	for _, answer := range []string{"null", `{}`, `{"items":null}`} {
+		e.out = answer
+		if got, err := c.List(context.Background(), protocol.CoordArchiveListQuery{Resource: m.Resource, Project: m.Project, Limit: 1}); err == nil || got.Items != nil {
+			t.Errorf("list %q = %#v, %v", answer, got, err)
+		}
+	}
+	manifest, _ := json.Marshal(stored)
+	e.out = `{"manifest":` + string(manifest) + `,"object": { "kind":"TaskClaim", "apiVersion":"coordination.dev-env.haynesops.com/v1alpha1", "metadata":{"uid":"` + m.UID + `","name":"` + m.Name + `","namespace":"dev-agents","resourceVersion":"42"},"spec":{"identity":{"project":"demo"}} }}`
+	got, err := c.Get(context.Background(), protocol.CoordArchiveGetQuery{Resource: m.Resource, Name: m.Name, UID: m.UID, ResourceVersion: m.ResourceVersion, SHA256: m.Object.SHA256})
+	if err == nil || got.Object != nil {
+		t.Fatalf("noncanonical get = %#v, %v", got, err)
+	}
+
+	e.out = `{"items":[{"uid":"` + m.UID + `","error":"corrupt","manifest":` + string(manifest) + `}]}`
+	if got, err := c.List(context.Background(), protocol.CoordArchiveListQuery{Resource: m.Resource, Project: m.Project, Limit: 1}); err == nil || got.Items != nil {
+		t.Fatalf("corrupt item leaks = %#v, %v", got, err)
+	}
+
+	e.out, e.errOut = strings.Repeat("x", maxOutput+1), ""
+	if _, err := c.Get(context.Background(), protocol.CoordArchiveGetQuery{Resource: m.Resource, Name: m.Name}); err == nil {
+		t.Fatal("stdout overflow accepted")
+	}
+	e.out, e.errOut = `{"items":[]}`, strings.Repeat("x", 4097)
+	if _, err := c.List(context.Background(), protocol.CoordArchiveListQuery{Resource: m.Resource, Project: m.Project, Limit: 1}); err == nil {
+		t.Fatal("stderr overflow accepted")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	before := len(e.cmds)
+	if _, err := c.List(ctx, protocol.CoordArchiveListQuery{Resource: m.Resource, Project: m.Project, Limit: 1}); !errors.Is(err, context.Canceled) || len(e.cmds) != before {
+		t.Fatalf("cancelled call launched or succeeded: %v", err)
+	}
+	_ = object
 }
 
 func mustCanonical(t *testing.T, v any) []byte {

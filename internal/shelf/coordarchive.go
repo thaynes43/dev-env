@@ -35,16 +35,26 @@ func (c *CoordinationArchive) Put(ctx context.Context, req protocol.CoordArchive
 	if err != nil || len(body) > protocol.MaxCoordArchiveRequestBytes {
 		return zero, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "bounded coordination put request required")
 	}
-	var out protocol.CoordArchivePutResult
 	cmd := []string{"agentd", "ctl", "coord-archive", "put"}
 	if mark {
 		cmd = append(cmd, "--mark")
 	}
-	if err := c.run(ctx, cmd, bytes.NewReader(body), &out); err != nil {
+	raw, err := c.run(ctx, cmd, bytes.NewReader(body))
+	if err != nil {
 		return zero, err
+	}
+	var out protocol.CoordArchivePutResult
+	if err := decodeObject(raw, &out, "manifest"); err != nil {
+		return zero, fmt.Errorf("coordination archive put response is incomplete: %w", err)
+	}
+	if !hasField(raw, "graceStart") {
+		return zero, errors.New("coordination archive put response is incomplete")
 	}
 	if !sameManifest(out.Manifest.CoordArchiveManifest, req.Manifest) || !utcTime(out.Manifest.ArchivedAt) {
 		return zero, errors.New("coordination archive put returned an invalid manifest")
+	}
+	if mark && !utcTimePtr(out.GraceStart) || !mark && out.GraceStart != nil {
+		return zero, errors.New("coordination archive put returned an invalid grace state")
 	}
 	return out, nil
 }
@@ -62,15 +72,19 @@ func (c *CoordinationArchive) Mark(ctx context.Context, req []protocol.CoordArch
 	if err != nil || len(body) > protocol.MaxCoordArchiveRequestBytes {
 		return nil, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "bounded coordination mark batch required")
 	}
-	var out []protocol.CoordArchiveMarkResult
-	if err := c.run(ctx, []string{"agentd", "ctl", "coord-archive", "mark"}, bytes.NewReader(body), &out); err != nil {
+	raw, err := c.run(ctx, []string{"agentd", "ctl", "coord-archive", "mark"}, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	out, err := decodeMarkResults(raw)
+	if err != nil {
 		return nil, err
 	}
 	if len(out) != len(req) {
 		return nil, errors.New("coordination archive mark response is incomplete")
 	}
 	for i := range out {
-		if out[i].CoordArchiveIdentity != req[i].CoordArchiveIdentity {
+		if out[i].CoordArchiveIdentity != req[i].CoordArchiveIdentity || out[i].GraceStart != nil {
 			return nil, errors.New("coordination archive mark response identity differs")
 		}
 	}
@@ -90,8 +104,12 @@ func (c *CoordinationArchive) Lookup(ctx context.Context, ids []protocol.CoordAr
 	if err != nil || len(body) > protocol.MaxCoordArchiveRequestBytes {
 		return nil, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "bounded coordination lookup batch required")
 	}
-	var out []protocol.CoordArchiveLookupResult
-	if err := c.run(ctx, []string{"agentd", "ctl", "coord-archive", "lookup"}, bytes.NewReader(body), &out); err != nil {
+	raw, err := c.run(ctx, []string{"agentd", "ctl", "coord-archive", "lookup"}, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	out, err := decodeLookupResults(raw)
+	if err != nil {
 		return nil, err
 	}
 	if len(out) != len(ids) {
@@ -117,17 +135,29 @@ func (c *CoordinationArchive) Get(ctx context.Context, q protocol.CoordArchiveGe
 	if q.ResourceVersion != "" {
 		cmd = append(cmd, "--resource-version", q.ResourceVersion, "--sha256", q.SHA256)
 	}
-	var out protocol.CoordArchiveGetResult
-	if err := c.run(ctx, cmd, nil, &out); err != nil {
+	raw, err := c.run(ctx, cmd, nil)
+	if err != nil {
 		return zero, err
+	}
+	var out protocol.CoordArchiveGetResult
+	if err := decodeObject(raw, &out, "manifest", "object"); err != nil {
+		return zero, fmt.Errorf("coordination archive get response is incomplete: %w", err)
 	}
 	m := out.Manifest.CoordArchiveManifest
 	if !utcTime(out.Manifest.ArchivedAt) || m.Resource != q.Resource || m.Name != q.Name || (q.UID != "" && m.UID != q.UID) || (q.ResourceVersion != "" && (m.ResourceVersion != q.ResourceVersion || m.Object.SHA256 != q.SHA256)) {
 		return zero, errors.New("coordination archive get response does not match its selector")
 	}
-	if _, err := protocol.VerifyCoordArchiveObject(m, bytes.NewReader(out.Object)); err != nil {
+	if _, err := protocol.CoordArchiveRevisionDir(m); err != nil {
+		return zero, errors.New("coordination archive get response has an invalid manifest")
+	}
+	canonical, err := protocol.VerifyCoordArchiveObject(m, bytes.NewReader(out.Object))
+	if err != nil {
 		return zero, fmt.Errorf("coordination archive get response refused: %w", err)
 	}
+	if !bytes.Equal(canonical, out.Object) {
+		return zero, errors.New("coordination archive get response object is not canonical")
+	}
+	out.Object = canonical
 	return out, nil
 }
 
@@ -143,56 +173,86 @@ func (c *CoordinationArchive) List(ctx context.Context, q protocol.CoordArchiveL
 	if q.After != "" {
 		cmd = append(cmd, "--after", q.After)
 	}
-	var out protocol.CoordArchiveListResult
-	if err := c.run(ctx, cmd, nil, &out); err != nil {
+	raw, err := c.run(ctx, cmd, nil)
+	if err != nil {
+		return zero, err
+	}
+	out, err := decodeListResult(raw)
+	if err != nil {
 		return zero, err
 	}
 	if len(out.Items) > q.Limit {
 		return zero, errors.New("coordination archive list exceeds its requested limit")
 	}
 	for _, item := range out.Items {
-		if item.UID == "" || (item.Error == "" && (item.Manifest == nil || !utcTime(item.Manifest.ArchivedAt) || item.Manifest.UID != item.UID || item.Manifest.Resource != q.Resource || item.Manifest.Project != q.Project)) {
+		if err := validateListItem(item, q); err != nil {
 			return zero, errors.New("coordination archive list response is incomplete")
+		}
+	}
+	if out.Next != "" {
+		next := q
+		next.After = out.Next
+		if err := next.Validate(); err != nil {
+			return zero, errors.New("coordination archive list response has an invalid cursor")
 		}
 	}
 	return out, nil
 }
 
-func (c *CoordinationArchive) run(ctx context.Context, cmd []string, stdin io.Reader, out any) error {
+func (c *CoordinationArchive) run(ctx context.Context, cmd []string, stdin io.Reader) ([]byte, error) {
 	s := c.Shelf
 	if s == nil || s.Exec == nil || s.Reader == nil {
-		return errors.New("this operator cannot exec into the shelf")
+		return nil, errors.New("this operator cannot exec into the shelf")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	pod, err := s.Pod(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	timeout := s.Timeout
-	if timeout <= 0 {
+	if timeout <= 0 || timeout > defaultTimeout {
 		timeout = defaultTimeout
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	stdout, stderr := &capped{max: maxOutput}, &capped{max: 4 << 10}
 	err = s.Exec.Run(ctx, s.Namespace, pod, Container, cmd, stdin, stdout, stderr)
-	if stdout.over {
-		return fmt.Errorf("coordination archive in shelf pod %s printed more than %d bytes", pod, maxOutput)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+	if stdout.over || stderr.over {
+		return nil, fmt.Errorf("coordination archive in shelf pod %s exceeded its output limit", pod)
 	}
 	if err != nil {
 		var exit utilexec.ExitError
 		var refusal protocol.HistoryError
-		if errors.As(err, &exit) && exit.ExitStatus() == 1 && decodeOne(stdout.Bytes(), &refusal) == nil && refusal.Code != "" {
-			return &refusal
+		if errors.As(err, &exit) && exit.ExitStatus() == 1 && decodeObject(stdout.Bytes(), &refusal, "error", "message") == nil && knownRefusal(refusal.Code) {
+			return nil, &refusal
 		}
-		if strings.Contains(strings.ToLower(stderr.String()), "unknown command") {
-			return protocol.HistoryErrorf(protocol.HistoryErrNoArchive, "", "coordination archive is unavailable")
+		if errors.As(err, &exit) && exit.ExitStatus() == 2 && strings.Contains(stderr.String(), "usage: ctl status | rescue") {
+			return nil, protocol.HistoryErrorf(protocol.HistoryErrNoArchive, "", "coordination archive is unavailable")
 		}
-		return fmt.Errorf("coordination archive in shelf pod %s: %w", pod, err)
+		return nil, fmt.Errorf("coordination archive in shelf pod %s: %w", pod, err)
 	}
-	if err := decodeOne(stdout.Bytes(), out); err != nil {
-		return fmt.Errorf("coordination archive in shelf pod %s: answer is not one complete JSON value: %w", pod, err)
+	return stdout.Bytes(), nil
+}
+
+func decodeObject(raw []byte, out any, required ...string) error {
+	var fields map[string]json.RawMessage
+	if err := decodeOne(raw, &fields); err != nil || fields == nil {
+		if err != nil {
+			return err
+		}
+		return errors.New("object required")
 	}
-	return nil
+	for _, key := range required {
+		if value, ok := fields[key]; !ok || bytes.Equal(value, []byte("null")) {
+			return fmt.Errorf("%s required", key)
+		}
+	}
+	return decodeOne(raw, out)
 }
 
 func decodeOne(raw []byte, out any) error {
@@ -208,4 +268,121 @@ func decodeOne(raw []byte, out any) error {
 	return nil
 }
 func utcTime(t time.Time) bool                             { return !t.IsZero() && t.Location() == time.UTC }
+func utcTimePtr(t *time.Time) bool                         { return t != nil && utcTime(*t) }
 func sameManifest(a, b protocol.CoordArchiveManifest) bool { return a == b }
+
+func knownRefusal(code string) bool {
+	switch code {
+	case protocol.HistoryErrNotFound, protocol.HistoryErrAmbiguous, protocol.HistoryErrConflict, protocol.HistoryErrCorrupt, protocol.HistoryErrInvalid, protocol.HistoryErrNoArchive:
+		return true
+	}
+	return false
+}
+
+func decodeMarkResults(raw []byte) ([]protocol.CoordArchiveMarkResult, error) {
+	var items []json.RawMessage
+	if err := decodeOne(raw, &items); err != nil || items == nil {
+		return nil, errors.New("coordination archive mark response is incomplete")
+	}
+	out := make([]protocol.CoordArchiveMarkResult, len(items))
+	for i := range items {
+		if err := decodeObject(items[i], &out[i], "resource", "project", "name", "uid", "appended"); err != nil || !hasField(items[i], "graceStart") {
+			return nil, errors.New("coordination archive mark response is incomplete")
+		}
+	}
+	return out, nil
+}
+
+func decodeLookupResults(raw []byte) ([]protocol.CoordArchiveLookupResult, error) {
+	var items []json.RawMessage
+	if err := decodeOne(raw, &items); err != nil || items == nil {
+		return nil, errors.New("coordination archive lookup response is incomplete")
+	}
+	out := make([]protocol.CoordArchiveLookupResult, len(items))
+	for i := range items {
+		if err := decodeObject(items[i], &out[i], "resource", "project", "name", "uid", "holds", "revisions"); err != nil || !hasField(items[i], "graceStart") || out[i].Revisions == nil {
+			return nil, errors.New("coordination archive lookup response is incomplete")
+		}
+		for _, revision := range out[i].Revisions {
+			if err := (protocol.CoordArchiveExactQuery{Resource: out[i].Resource, Name: out[i].Name, UID: out[i].UID, ResourceVersion: revision.ResourceVersion, SHA256: revision.SHA256}).Validate(); err != nil {
+				return nil, errors.New("coordination archive lookup response has an invalid revision")
+			}
+		}
+		if (out[i].Holds && (len(out[i].Revisions) == 0 || !utcTimePtr(out[i].GraceStart))) || (!out[i].Holds && out[i].GraceStart != nil) {
+			return nil, errors.New("coordination archive lookup response has an invalid hold state")
+		}
+	}
+	return out, nil
+}
+
+func decodeListResult(raw []byte) (protocol.CoordArchiveListResult, error) {
+	var fields map[string]json.RawMessage
+	if err := decodeOne(raw, &fields); err != nil || fields == nil {
+		return protocol.CoordArchiveListResult{}, errors.New("coordination archive list response is incomplete")
+	}
+	items, ok := fields["items"]
+	if !ok || bytes.Equal(items, []byte("null")) {
+		return protocol.CoordArchiveListResult{}, errors.New("coordination archive list response is incomplete")
+	}
+	var out protocol.CoordArchiveListResult
+	if err := decodeOne(raw, &out); err != nil || out.Items == nil {
+		return protocol.CoordArchiveListResult{}, errors.New("coordination archive list response is incomplete")
+	}
+	return out, nil
+}
+
+func hasField(raw []byte, key string) bool {
+	var fields map[string]json.RawMessage
+	return decodeOne(raw, &fields) == nil && fields != nil && fields[key] != nil
+}
+
+func validateListItem(item protocol.CoordArchiveListItem, q protocol.CoordArchiveListQuery) error {
+	if !protocol.ValidKubeUID(item.UID) {
+		return errors.New("invalid uid")
+	}
+	if item.Error != "" {
+		if item.Error != "corrupt" || item.Manifest != nil || item.Object != nil {
+			return errors.New("invalid corrupt item")
+		}
+		return nil
+	}
+	if item.Manifest == nil || len(item.Object) == 0 || !utcTime(item.Manifest.ArchivedAt) || item.Manifest.UID != item.UID || item.Manifest.Resource != q.Resource || item.Manifest.Project != q.Project {
+		return errors.New("incomplete item")
+	}
+	if _, err := protocol.CoordArchiveRevisionDir(item.Manifest.CoordArchiveManifest); err != nil {
+		return err
+	}
+	if q.RecipientUID != "" && item.Manifest.RecipientUID != q.RecipientUID {
+		return errors.New("recipient differs")
+	}
+	var object map[string]any
+	if err := decodeOne(item.Object, &object); err != nil || object == nil {
+		return errors.New("projection is not an object")
+	}
+	spec, ok := object["spec"].(map[string]any)
+	if !ok {
+		return errors.New("projection has no spec")
+	}
+	if _, hasText := spec["text"]; hasText {
+		return errors.New("projection has text")
+	}
+	metadata, ok := object["metadata"].(map[string]any)
+	if !ok || object["apiVersion"] != item.Manifest.APIVersion || object["kind"] != item.Manifest.Kind || metadata["namespace"] != item.Manifest.Namespace || metadata["name"] != item.Manifest.Name || metadata["uid"] != item.Manifest.UID || metadata["resourceVersion"] != item.Manifest.ResourceVersion {
+		return errors.New("projection identity differs")
+	}
+	if q.Resource == "taskclaims" {
+		identity, ok := spec["identity"].(map[string]any)
+		if !ok || identity["project"] != q.Project {
+			return errors.New("projection project differs")
+		}
+	} else if spec["project"] != q.Project {
+		return errors.New("projection project differs")
+	}
+	if q.Resource == "inboxmessages" {
+		recipient, ok := spec["recipient"].(map[string]any)
+		if !ok || recipient["uid"] != item.Manifest.RecipientUID {
+			return errors.New("projection recipient differs")
+		}
+	}
+	return nil
+}
