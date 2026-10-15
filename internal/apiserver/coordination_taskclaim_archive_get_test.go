@@ -25,17 +25,24 @@ import (
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/shelf"
+	"github.com/thaynes43/dev-env/internal/taskclaim"
 )
 
 type taskClaimArchiveGetFake struct {
-	result protocol.CoordArchiveGetResult
-	calls  int
-	query  protocol.CoordArchiveGetQuery
-	err    error
-	after  func()
+	legacyResult *protocol.CoordArchiveGetResult
+	legacyCalls  int
+	result       protocol.CoordArchiveGetResult
+	calls        int
+	query        protocol.CoordArchiveGetQuery
+	err          error
+	after        func()
 }
 
 func (f *taskClaimArchiveGetFake) Get(context.Context, protocol.CoordArchiveGetQuery) (protocol.CoordArchiveGetResult, error) {
+	f.legacyCalls++
+	if f.legacyResult != nil {
+		return *f.legacyResult, nil
+	}
 	return protocol.CoordArchiveGetResult{}, context.Canceled
 }
 
@@ -213,6 +220,11 @@ func TestTaskClaimArchiveGetDefaultOffLiveAndOptionalUID(t *testing.T) {
 	if w := f.do(http.MethodGet, path+"&uid="+string(claim.UID), reader, nil); w.Code != http.StatusOK || archive.calls != 0 || decode[apiv1.TaskClaim](t, w).UID != string(claim.UID) {
 		t.Fatalf("matching live UID = %d calls=%d", w.Code, archive.calls)
 	}
+	f.srv.CoordinationArchiveReads = false
+	if w := f.do(http.MethodGet, path+"&uid="+string(archived.UID), reader, nil); w.Code != http.StatusNotFound || archive.calls != 0 {
+		t.Fatalf("defaultoff oldUID=%d calls=%d", w.Code, archive.calls)
+	}
+	f.srv.CoordinationArchiveReads = true
 	w := f.do(http.MethodGet, path+"&uid="+string(archived.UID), reader, nil)
 	if w.Code != http.StatusOK || archive.calls != 1 || archive.query.UID != string(archived.UID) || !decode[apiv1.TaskClaim](t, w).Archived || decode[apiv1.TaskClaim](t, w).UID != string(archived.UID) {
 		t.Fatalf("other live UID did not select archive: %d calls=%d query=%#v", w.Code, archive.calls, archive.query)
@@ -357,6 +369,9 @@ func TestTaskClaimArchiveGetUnavailableAndForeignLiveNeverFallback(t *testing.T)
 			if w.Code != want || archive.calls != 0 {
 				t.Fatalf("%s = %d calls=%d %s", mode, w.Code, archive.calls, w.Body.String())
 			}
+			if legacy, ok := f.srv.CoordinationArchive.(*taskClaimGetOnlyFake); ok && legacy.calls != 0 {
+				t.Fatalf("forbidden legacy Get fallback called %d times", legacy.calls)
+			}
 			if f.srv.ShelfSlots != nil && mode != "busy" {
 				assertTaskClaimArchiveGetSlot(t, f.srv.ShelfSlots)
 			}
@@ -422,4 +437,195 @@ func ownerPoisoningClient(backing client.WithWatch, namespace, name string, read
 		}
 		return c.Get(ctx, key, object, opts...)
 	}})
+}
+
+func TestTaskClaimArchiveGetMissingProjectKeepsACLStatus(t *testing.T) {
+	f, _, reader, claim, archive, _ := taskClaimArchiveGetRig(t)
+	path := apiv1.TaskClaimsPath + "/" + claim.Name
+	w := f.do(http.MethodGet, path, reader, nil)
+	if w.Code != http.StatusForbidden || archive.calls != 0 {
+		t.Fatalf("missingproject changedACL=%d calls=%d %s", w.Code, archive.calls, w.Body.String())
+	}
+}
+
+func assertTaskClaimGetNoWrites(t *testing.T, f *fixture) {
+	t.Helper()
+	attempts := 0
+	fail := func() error { attempts++; return errors.New("TaskClaim GET attempted a write") }
+	f.srv.TaskClaims.Client = interceptor.NewClient(f.c, interceptor.Funcs{
+		Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error { return fail() },
+		Update: func(context.Context, client.WithWatch, client.Object, ...client.UpdateOption) error { return fail() },
+		Patch: func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error {
+			return fail()
+		},
+		Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error { return fail() },
+		DeleteAllOf: func(context.Context, client.WithWatch, client.Object, ...client.DeleteAllOfOption) error {
+			return fail()
+		},
+	})
+	t.Cleanup(func() {
+		if attempts != 0 {
+			t.Errorf("TaskClaim GET attempted %d writes", attempts)
+		}
+	})
+}
+
+func TestTaskClaimArchiveGetFullObjectRefusals(t *testing.T) {
+	modes := []string{"manifest-api", "manifest-resource", "manifest-project", "manifest-version", "digest", "canonical", "namespace", "identity-name", "owner", "actor", "provenance", "reported-head", "created", "deleted", "zero-receipt", "nonutc-receipt", "valid-wrong-selected-uid", "unexpected-text", "typed-invalid", "typed-ambiguous"}
+	for _, mode := range modes {
+		t.Run(mode, func(t *testing.T) {
+			f, _, reader, claim, archive, path := taskClaimArchiveGetRig(t)
+			if err := f.c.Delete(context.Background(), claim); err != nil {
+				t.Fatal(err)
+			}
+			saved := claim.DeepCopy()
+			switch mode {
+			case "namespace":
+				saved.Namespace = "other"
+			case "identity-name":
+				saved.Spec.Identity.TaskKey = "issue:other"
+			case "owner":
+				saved.Spec.Owner.UID = ""
+			case "actor":
+				saved.Spec.Actor.Kind = "invalid"
+			case "provenance":
+				saved.Spec.Provenance.InitialPinState = "invalid"
+			case "reported-head":
+				saved.Spec.Provenance.ReportedHead = "bad"
+			case "created":
+				saved.CreationTimestamp = metav1.Time{}
+			case "deleted":
+				at := metav1.NewTime(time.Date(2026, 10, 15, 19, 0, 0, 0, time.UTC))
+				saved.DeletionTimestamp = &at
+			case "valid-wrong-selected-uid":
+				saved.UID = "11111111-1111-4111-8111-111111111111"
+				path += "&uid=" + string(claim.UID)
+			}
+			archive.result = archivedTaskClaimGetResult(t, saved, archive.result.Manifest.ArchivedAt)
+			switch mode {
+			case "manifest-api":
+				archive.result.Manifest.APIVersion = "other/v1"
+			case "manifest-resource":
+				archive.result.Manifest.Resource = "inboxmessages"
+			case "manifest-project":
+				archive.result.Manifest.Project = "other"
+			case "manifest-version":
+				archive.result.Manifest.ResourceVersion = "other"
+			case "digest":
+				archive.result.Manifest.Object.SHA256 = strings.Repeat("0", 64)
+			case "canonical":
+				archive.result.Object = append([]byte("{ "), archive.result.Object[1:]...)
+				if _, err := protocol.VerifyCoordArchiveObject(archive.result.Manifest.CoordArchiveManifest, bytes.NewReader(archive.result.Object)); err != nil {
+					t.Fatalf("canonicalfixture lacksvaliddigest: %v", err)
+				}
+			case "zero-receipt":
+				archive.result.Manifest.ArchivedAt = time.Time{}
+			case "nonutc-receipt":
+				archive.result.Manifest.ArchivedAt = archive.result.Manifest.ArchivedAt.In(time.FixedZone("fixture", 3600))
+			case "unexpected-text":
+				var raw map[string]any
+				if err := json.Unmarshal(archive.result.Object, &raw); err != nil {
+					t.Fatal(err)
+				}
+				raw["spec"].(map[string]any)["text"] = "PRIVATE_PROMPT_MUST_NOT_LEAK"
+				object, err := protocol.CanonicalJSON(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sum := sha256.Sum256(object)
+				archive.result.Object = object
+				archive.result.Manifest.Object = protocol.CoordArchiveObjectDigest{SHA256: hex.EncodeToString(sum[:]), Bytes: int64(len(object))}
+				if _, err := protocol.VerifyCoordArchiveObject(archive.result.Manifest.CoordArchiveManifest, bytes.NewReader(object)); err != nil {
+					t.Fatal(err)
+				}
+			case "typed-invalid":
+				archive.err = protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "refused")
+			case "typed-ambiguous":
+				archive.err = protocol.HistoryErrorf(protocol.HistoryErrAmbiguous, "", "refused")
+			}
+			assertTaskClaimGetNoWrites(t, f)
+			w := f.do(http.MethodGet, path, reader, nil)
+			if w.Code != http.StatusServiceUnavailable || archive.calls != 1 || archive.legacyCalls != 0 || strings.Contains(w.Body.String(), "PRIVATE_PROMPT_MUST_NOT_LEAK") {
+				t.Fatalf("%s=%d item=%d legacy=%d %s", mode, w.Code, archive.calls, archive.legacyCalls, w.Body.String())
+			}
+			assertTaskClaimArchiveGetSlot(t, f.srv.ShelfSlots)
+		})
+	}
+}
+
+func TestTaskClaimArchiveGetScopesOwnersAndFirstReceipt(t *testing.T) {
+	for _, mode := range []string{"absent-owner", "coordinator", "unscoped-coordinator", "foreign-archive", "first-vs-revision", "caller-deleted", "pod-deleted"} {
+		t.Run(mode, func(t *testing.T) {
+			f, _, reader, claim, archive, path := taskClaimArchiveGetRig(t)
+			if err := f.c.Delete(context.Background(), claim); err != nil {
+				t.Fatal(err)
+			}
+			want, calls := http.StatusOK, 1
+			ownerReads := 0
+			switch mode {
+			case "absent-owner":
+				removeTaskClaimArchiveOwner(t, f, claim.Spec.Owner.Name)
+			case "coordinator":
+				reader = tokCoordinator
+			case "unscoped-coordinator":
+				reader = tokCoordinator
+				f.srv.TaskClaimReadProjects = []string{"other"}
+				want, calls = http.StatusForbidden, 0
+			case "foreign-archive":
+				foreign := claim.DeepCopy()
+				foreign.Spec.Identity.Project = "other"
+				foreign.Name = taskclaim.Name(foreign.Spec.Identity)
+				archive.result = archivedTaskClaimGetResult(t, foreign, archive.result.Manifest.ArchivedAt)
+				path = apiv1.TaskClaimsPath + "/" + foreign.Name + "?project=sample"
+				want = http.StatusNotFound
+			case "first-vs-revision":
+				legacy := archive.result
+				legacy.Manifest.ArchivedAt = legacy.Manifest.ArchivedAt.Add(2 * time.Hour)
+				archive.legacyResult = &legacy
+			case "caller-deleted":
+				archive.after = func() { removeTaskClaimArchiveOwner(t, f, "archive-reader") }
+				want = http.StatusForbidden
+			case "pod-deleted":
+				archive.after = func() {
+					id := f.auth[reader]
+					pod := new(corev1.Pod)
+					if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: sessionNS, Name: id.PodName}, pod); err != nil {
+						t.Fatal(err)
+					}
+					if err := f.c.Delete(context.Background(), pod); err != nil {
+						t.Fatal(err)
+					}
+				}
+				want = http.StatusForbidden
+			}
+			f.srv.Live = ownerPoisoningClient(f.c, claim.Spec.Owner.Namespace, claim.Spec.Owner.Name, &ownerReads)
+			assertTaskClaimGetNoWrites(t, f)
+			w := f.do(http.MethodGet, path, reader, nil)
+			if w.Code != want || archive.calls != calls || archive.legacyCalls != 0 || ownerReads != 0 || strings.Contains(w.Body.String(), "PRIVATE_PROMPT_MUST_NOT_LEAK") {
+				t.Fatalf("%s=%d item=%d legacy=%d owner=%d %s", mode, w.Code, archive.calls, archive.legacyCalls, ownerReads, w.Body.String())
+			}
+			if want == http.StatusOK {
+				got := normalizeTaskClaimUTC(t, decode[apiv1.TaskClaim](t, w))
+				expected := expectedArchivedTaskClaim(t, claim, archive.result.Manifest.ArchivedAt)
+				if !reflect.DeepEqual(got, expected) {
+					t.Fatalf("%s fullsavedclaim changed: got=%#v want=%#v", mode, got, expected)
+				}
+			}
+			assertTaskClaimArchiveGetSlot(t, f.srv.ShelfSlots)
+		})
+	}
+}
+
+func TestTaskClaimArchiveGetLiveErrorNeverFallsBack(t *testing.T) {
+	f, _, reader, claim, archive, path := taskClaimArchiveGetRig(t)
+	f.srv.TaskClaims.Live = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+		if key.Name == claim.Name {
+			return errors.New("PRIVATE_PROMPT_MUST_NOT_LEAK")
+		}
+		return c.Get(ctx, key, obj, opts...)
+	}})
+	w := f.do(http.MethodGet, path, reader, nil)
+	if w.Code != http.StatusServiceUnavailable || archive.calls != 0 || archive.legacyCalls != 0 || strings.Contains(w.Body.String(), "PRIVATE_PROMPT_MUST_NOT_LEAK") {
+		t.Fatalf("liveerror=%d archive=%d legacy=%d %s", w.Code, archive.calls, archive.legacyCalls, w.Body.String())
+	}
 }

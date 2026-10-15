@@ -222,7 +222,7 @@ func (s *Server) getTaskClaim(ctx context.Context, _ http.ResponseWriter, r *htt
 		return 0, nil, err
 	}
 	query, err := url.ParseQuery(r.URL.RawQuery)
-	if err != nil || len(query["project"]) != 1 || len(query["uid"]) > 1 {
+	if err != nil || len(query["project"]) > 1 || len(query["uid"]) > 1 {
 		return 0, nil, badRequest("invalid task claim query")
 	}
 	for key := range query {
