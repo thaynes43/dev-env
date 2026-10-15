@@ -1,6 +1,8 @@
 # Coordination retention bound wording: source-only evidence
 
 Story: `C7-R4-BOUND-WORDING-1015` (#317). Date: 2026-10-15 UTC.
+R4 is the source-read delivery unit in DESIGN-024 and backlog 11; C7 is the
+Chapter 7 Codex coordinator story prefix, not a runtime feature.
 
 This is a bounded source-only wording correction. It does not implement, enable,
 install, accept, or otherwise claim coordination archive-backed retention.
@@ -36,14 +38,48 @@ The source patch preserves error identity, metric names and labels, numeric limi
 collector filtering/counting/pagination behavior, and context-client request and
 retry behavior. No new prose-mirroring test was added.
 
-The collector value/label/count test passed under the pinned cached Go toolchain,
-offline environment, low CPU settings and shared test lock. The existing context
-limit test reached its final literal assertion and failed because it requires the
-old substring `do not retry`; the required message says `An immediate retry will not
-help`. This is a stale prose assertion, not a changed retry/client behavior. The
-four-path reservation does not authorize changing that test or changing the required
-message. Focused raw command output, environment, and post-change source hashes are
-recorded in `/home/dev/work/orders/dev-env-chapter7-bound-wording-1015/` alongside
-the sealed order. This candidate requires Chapter7 coordinator acceptance; it is
-neither R4 nor installed acceptance and has no release, deployment, archive
-activation, deletion, v1, cutover, access, credential, or provider effect.
+At the worker checkpoint (2026-10-15T19:32:31Z), the collector value/label/count
+test passed and the context-limit test failed its existing `do not retry`
+assertion. The worker correctly preserved its four-path boundary and stopped.
+The coordinator-authored required text had omitted that valid phrase; this was
+a copy-planning error, not a stale or invalid test. The historical candidate
+and its failed output remain recorded.
+
+The coordinator revised the message to say `do not retry immediately` while
+retaining the conditional explanation of lifetime Session and live project
+bounds. No test was changed. The final direct constrained selection passes
+**2 methods / 6 nodes**: collector values/labels/counts and all four context-limit
+refusal cases, including sentinel matching, exclusion of the server-body canary
+and preservation of the no-retry instruction. This validates existing behavior;
+no test mirroring the new prose was added.
+
+Use cached Go 1.27.2 and existing dependencies, without downloads:
+
+```sh
+flock -w 60 /tmp/dev-env-go-tests.lock nice -n 19 env GOMAXPROCS=2 GOFLAGS=-p=1 GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test -p=1 -json ./internal/taskclaim ./internal/agentd -run '^(TestRecordCollectorCountsPerProjectAndSession|TestExplicitContextClientReportsPermanentLimit)$' -count=1 -timeout=60s
+```
+
+The selection does not invoke the held TTY test or an envtest suite. The
+worker's combined output summaries remain historical, not reconstructed raw
+JSON. The coordinator captured the command's direct JSON stream, command and
+environment under `/home/dev/work/orders/dev-env-chapter7-bound-wording-1015/`;
+these PVC artifacts are supplemental, not publicly fetchable source artifacts.
+The committed baseline descriptions, tests, command, hashes and ordinary public
+PR checks/reviews provide portable evidence.
+
+Raw JSON SHA-256: `189ef9cfe7438c35add2b0087c0dc08c4e529fee55853c0aac0ed1708ae66217`.
+
+| Tested source | SHA-256 |
+| --- | --- |
+| `internal/apiserver/apiv1/types.go` | `4fc920e15dd16e789709963ff4bef15d5349ac9a8c1aa5cba07ac6c1a74c725b` |
+| `internal/taskclaim/metrics.go` | `b18978189a6987eb0e5df40721965582e002f2f8de958ac72b1298f83811613c` |
+| `internal/agentd/contextpublication.go` | `3abfd0194f9235c07387747f555fdf516a7f2cafd42aa6916d5e389fb650149e` |
+
+The one worker test failure and all historical counters/deviations/deadline
+records remain preserved; no runtime activation, source-merge permission
+expansion, manual retry or budget extension follows from the correction.
+Independent native source review and exact-head ordinary required CI/advisory
+finding disposition must be inspected before guarded source acceptance. This
+slice neither accepts full R4 nor installs or activates retention, access,
+credentials, providers, archives, deployment, v1 changes or cutover. The #301
+denied-rerun and dependent R3 holds remain unchanged.

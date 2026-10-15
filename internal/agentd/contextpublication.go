@@ -28,7 +28,7 @@ var contextDigestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 // Nothing was published and immediate retry does not help. A project bound can
 // free only when enabled archive-backed retention succeeds, at least 30 days
 // after the required Sessions are absent.
-var ErrContextLimit = errors.New("published context limit reached for this Session or its project; nothing was published. An immediate retry will not help. A Session's bound is lifetime; a project bound can free only when enabled archive-backed retention succeeds, at least 30 days after the required Sessions are absent")
+var ErrContextLimit = errors.New("published context limit reached for this Session or its project; nothing was published, so do not retry immediately. A Session's bound is lifetime; a project bound can free only when enabled archive-backed retention succeeds, at least 30 days after the required Sessions are absent")
 
 // The fixed operator endpoint and rotating projected identity are the only
 // remote authority. Error bodies and redirect destinations are never exposed.
