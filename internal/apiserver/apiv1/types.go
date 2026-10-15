@@ -546,9 +546,11 @@ const (
 	CodeInvalid = "invalid"
 	// CodeLimitExceeded (429): a count limit was reached. Most free up later,
 	// such as a session's four running children or its three pending grants.
-	// A coordination record bound (TaskClaims, published contexts and inbox
-	// messages per Session and per project, DESIGN-010/013/014) is a lifetime
-	// bound: those records are never deleted, so it does not free up by itself.
+	// Coordination Session bounds (TaskClaims, published contexts and inbox
+	// messages) are lifetime for that Session UID. Project bounds count live
+	// records and can free only after enabled successful archive-backed retention,
+	// at least 30 days after the required Sessions are absent; immediate retry
+	// does not help.
 	CodeLimitExceeded = "limit_exceeded"
 	// CodeInternal (500).
 	CodeInternal = "internal"

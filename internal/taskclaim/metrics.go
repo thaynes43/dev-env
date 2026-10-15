@@ -34,13 +34,13 @@ const (
 
 var (
 	recordsDesc = prometheus.NewDesc(MetricRecords,
-		"Coordination records of one kind in one project. Records are never deleted; a new one is refused once this reaches the project limit.",
+		"Live coordination records of one kind in one project; a new record is refused at the project limit. Space can free only after enabled archive-backed retention succeeds for eligible records, at least 30 days after the required Sessions are absent.",
 		[]string{"kind", "project"}, nil)
 	recordsSessionMaxDesc = prometheus.NewDesc(MetricRecordsSessionMax,
-		"The most coordination records of one kind in one project held by any one source Session (records without a source label are not attributed).",
+		"The largest number of live coordination records of one kind attributed to any one source Session in one project; that Session's bound is lifetime (records without a source label are not attributed).",
 		[]string{"kind", "project"}, nil)
 	recordLimitDesc = prometheus.NewDesc(MetricRecordLimit,
-		"The lifetime bound on coordination records of one kind, per source Session (scope=session) or per project (scope=project).",
+		"Coordination record limits per kind: lifetime per source Session (scope=session), live record count per project (scope=project); immediate retry does not free either bound.",
 		[]string{"kind", "scope"}, nil)
 )
 
