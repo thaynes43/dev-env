@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -268,7 +269,11 @@ func (s *Server) listInbox(ctx context.Context, _ http.ResponseWriter, r *http.R
 		}
 	}
 	if archived == "only" {
-		for key, values := range r.URL.Query() {
+		parsed, parseErr := url.ParseQuery(r.URL.RawQuery)
+		if parseErr != nil {
+			return 0, nil, badRequest("invalid archived inbox query")
+		}
+		for key, values := range parsed {
 			if len(values) != 1 || (key != "project" && key != "limit" && key != "continue" && key != "archived") {
 				return 0, nil, badRequest("invalid archived inbox query")
 			}

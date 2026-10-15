@@ -41,3 +41,44 @@ ok github.com/thaynes43/dev-env/internal/inbox 0.012s
 
 The candidate has not been independently reviewed, pushed, PR'd, released or
 merged. Chapter7 remains the sole coordinator and acceptance authority.
+
+## Chapter7 acceptance correction
+
+The initial candidate's two new test methods and summarized command outputs
+were insufficient for source acceptance. The worker remains stopped. Chapter7
+added direct UTC JSON captures for default-off behavior, live-list isolation,
+1/default100/max100/101 limits, strict singleton queries, coordinator and
+recipient scopes, deleting/replaced original recipients, post-I/O caller fences,
+full wire-normalized immutable attribution after sender removal, malformed
+metadata/manifests, corrupt-marker continuation, cursor query binding and
+strictly older progress, slot exhaustion/cancellation, and count/4MiB bounds.
+Each row in the oversized-page fixture is individually valid. The synthetic
+typed shelf client fixture verifies inbox resource/recipient command routing and
+HTTP projection through the existing apiv1 decoder; it is not a real full
+archive-to-HTTP or installed run.
+
+Independent native review of initial candidate d98cfc2 identified P2 malformed
+query parsing and missing acceptance coverage. URL.Query silently drops invalid
+pairs; the archived branch now rejects RawQuery ParseQuery errors before shelf
+access. Invalid percent escapes and semicolon parameters have focused refusal
+cases. The live branch's parsing remains unchanged.
+
+The final constrained direct selection passes **19 methods / 55 nodes** across
+apiserver and inbox. An earlier 18-method/54-node selection predates the typed
+fixture and is separate evidence, not an additional combined run. Raw JSON, exact
+command/environment, source hashes, and native findings/closure are saved under
+`/home/dev/work/orders/dev-env-chapter7-inbox-list-1015/`. Owner-reported stdout
+summaries remain historical and are not relabelled as direct raw evidence.
+
+The initial worker's helper-name compile failure and absent envtest assets are
+retained separately; no download or broad envtest retry was used. Its temporary
+unreserved store_test.go edit was moved to the reserved new validator test file;
+store_test.go equals the accepted base. The initially missing manifest recipient
+UID binding was fixed with a regression before handoff. Historical Chapter7
+counters, including #311's two hosted CI failures and previous deadline overrun,
+and #301's denied-rerun/R3 hold remain unchanged.
+
+Ordinary exact-head required CI and advisory findings plus native closure must
+be inspected before guarded source merge. No release/installation/activation,
+provider experiment, access/security change, archive deletion, v1 change or
+cutover is authorized by this source slice.
