@@ -211,6 +211,9 @@ func (a CoordArchive) coordListItem(q protocol.CoordArchiveListQuery, rel, index
 		return corrupt()
 	}
 	manifest := got.Manifest
+	// The index entry and UID summary already established this UID's immutable
+	// first archive time. The latest revision's manifest may be newer.
+	manifest.ArchivedAt = summary.FirstAt
 	return protocol.CoordArchiveListItem{UID: uid, Manifest: &manifest, Object: projected}
 }
 
