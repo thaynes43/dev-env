@@ -1,7 +1,5 @@
-// Package shelf is the operator's side of the shelf pod (D-67): a pod in the
-// session namespace that mounts only the shared volume and runs `agentd
-// shelf`. The operator finds it by label and lists and prunes the rescues on
-// the shared volume there by exec, as it rescues a session (D-51).
+// Package shelf supplies rescue operations on the shared volume and command
+// transport for explicitly configured archives; this does not claim mounts are installed.
 package shelf
 
 import (
