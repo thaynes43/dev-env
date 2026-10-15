@@ -7,6 +7,11 @@ client tests and this record. No production behavior or command flags changed.
 This closes an acceptance-evidence gap; it does not claim an accepted-source
 production defect or an artificial RED counterexample.
 
+Here, "Terra worker" means the implementation agent configured as GPT-5.6-Terra,
+and "root" means the Chapter7 coordinator. A checkpoint records progress; a stop
+ends that phase; the total cap limits the whole story. These configured model
+labels do not prove which model served a request.
+
 The sole Terra worker picked up at 21:53:14.948Z, retained its original
 22:08:14.948Z checkpoint / 22:18:14.948Z stop, and committed candidate
 `328762d825b1e9c1a28b240e0ce86246f1b7d9e1` at 22:01:30Z. Root verified its
