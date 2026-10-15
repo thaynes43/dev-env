@@ -3,7 +3,7 @@
 Story C7-R4-INBOX-ACK-GET-1015 (Chapter 7 source story #319), under epic #175
 and backlog 11, retention read fallback (R4), implements the GET acknowledgement portion of
 [DESIGN-024 section 6](../designs/024-coordination-record-retention.md#6-reads-fall-back-to-the-archive).
-It depends on accepted PR316/main
+It depends on accepted PR316, merged into main at
 `51f8e3912ecef646980e429557a2eb7ce875227d`, not held #301/R3 or an unaccepted
 branch. The original five-path claim has one explicit supplemental test path,
 `coordination_inbox_archive_get_test.go`, needed to replace the previous slice’s
@@ -36,7 +36,7 @@ All acquired slots are released.
 ## Evidence and limitations
 
 The first RED attempt failed in the fixture because its ack manifest omitted
-`messageUID`; it is preserved as fixture failure1. After correcting the fixture,
+`messageUID`; it is preserved as fixture failure 1. After correcting the fixture,
 `red2-go-test.out` captured the actual accepted production source returning 404
 with zero archive calls despite a protocol-verified archive ack. The test used
 raw HTTP JSON and compiled before the new response fields existed. This is
@@ -68,7 +68,7 @@ equal `ReportedAt` instants carried different Local/UTC representations. The
 coordinator normalizes copies of that timestamp to UTC before the unchanged
 full attribution/text comparison. Nil presence and every other provenance field
 remain asserted; no production code or ownership assertion was weakened. That
-failed capture remains preserved as root fixture failure1.
+failed capture remains preserved as root fixture failure 1.
 
 After those real test changes, the final combined selection passed
 **15 methods / 94 nodes** in one direct JSON capture. This is one run; earlier
