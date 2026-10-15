@@ -2,9 +2,12 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -39,6 +42,9 @@ func TestCoordArchiveCLIGetItemTransport(t *testing.T) {
 	}
 	if code, out, _ := runCoordCLI([]string{"ctl", "coord-archive", "get-item", "--resource", m.Resource}, nil, env); code != exitFailure || !bytes.Contains(out, []byte(`"error":"invalid"`)) {
 		t.Fatalf("incomplete item identity: exit=%d output=%s", code, out)
+	}
+	if code, out, _ := runCoordCLI([]string{"ctl", "coord-archive", "get-item", "--resource", m.Resource, "--name", "../escape"}, nil, env); code != exitFailure || !bytes.Contains(out, []byte(`"error":"invalid"`)) || bytes.Contains(out, []byte(`"object":`)) {
+		t.Fatalf("unsafe item identity: exit=%d output=%s", code, out)
 	}
 }
 
@@ -89,8 +95,12 @@ func TestCoordArchiveCLIGetItemSelectsFirstUIDReceiptAndRefusesDamage(t *testing
 	getItem := func(extra []string, want protocol.CoordArchiveManifest, wantRaw []byte, receipt time.Time) {
 		t.Helper()
 		args := append([]string{"ctl", "coord-archive", "get-item", "--resource", m.Resource, "--name", m.Name}, extra...)
+		before := coordItemTreeSnapshot(t, root)
 		code, out, _ := runCoordCLI(args, nil, env)
 		var got protocol.CoordArchiveGetResult
+		if after := coordItemTreeSnapshot(t, root); !reflect.DeepEqual(before, after) {
+			t.Fatal("item read mutated archive paths, content, mode or mtime")
+		}
 		if code != exitOK || json.Unmarshal(out, &got) != nil || got.Manifest.CoordArchiveManifest != want || !bytes.Equal(got.Object, wantRaw) || !got.Manifest.ArchivedAt.Equal(receipt) || got.Manifest.ArchivedAt.Location() != time.UTC {
 			t.Fatalf("get-item selection: exit=%d output=%s", code, out)
 		}
@@ -145,4 +155,57 @@ func TestCoordArchiveCLIGetItemSelectsFirstUIDReceiptAndRefusesDamage(t *testing
 	if code != exitFailure || !bytes.Contains(out, []byte(`"error":"corrupt"`)) || bytes.Contains(out, []byte(`"object":`)) {
 		t.Fatalf("damaged birth index did not refuse item: exit=%d output=%s", code, out)
 	}
+	oldIndex := filepath.Join(root, "v1", m.Resource, m.Project, "index", "all", oldFirst.ArchivedAt.Format("2006-01"), oldFirst.ArchivedAt.Format("20060102T150405.000000000Z")+"-"+old.UID+".json")
+	for _, damage := range []string{"missing", "damaged"} {
+		if damage == "missing" {
+			if err := os.Remove(oldIndex); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			if err := os.WriteFile(oldIndex, []byte("{}"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		args := []string{"ctl", "coord-archive", "get-item", "--resource", m.Resource, "--name", m.Name, "--uid", old.UID}
+		code, out, _ = runCoordCLI(args, nil, env)
+		if code != exitFailure || !bytes.Contains(out, []byte(`"error":"corrupt"`)) || bytes.Contains(out, []byte(`"object":`)) {
+			t.Fatalf("%s old birth item=%d %s", damage, code, out)
+		}
+		for _, legacyArgs := range [][]string{{"ctl", "coord-archive", "get", "--resource", m.Resource, "--name", m.Name, "--uid", old.UID}, coordGetArgs(oldLatest)} {
+			code, out, _ = runCoordCLI(legacyArgs, nil, env)
+			if code != exitOK || json.Unmarshal(out, &legacy) != nil || legacy.Manifest.CoordArchiveManifest != oldLatest || !legacy.Manifest.ArchivedAt.Equal(oldFirst.ArchivedAt.Add(2*time.Hour)) || !bytes.Equal(legacy.Object, oldRaw) {
+				t.Fatalf("%s old birth legacy recovery=%d %s", damage, code, out)
+			}
+		}
+	}
+
+}
+
+// Read calls must not alter archive content, paths, permissions or modification times.
+func coordItemTreeSnapshot(t *testing.T, root string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		digest := "directory"
+		if !info.IsDir() {
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			digest = fmt.Sprintf("%x", sha256.Sum256(b))
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		out[rel] = fmt.Sprintf("%s %s %s", info.Mode(), info.ModTime().UTC().Format(time.RFC3339Nano), digest)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }

@@ -1,88 +1,104 @@
-# Coordination item-get transport — source checkpoint, 2026-10-15
+# Coordination item-get transport verification
 
-Story `C7-R4-ITEM-GET-TRANSPORT-1015` began at
-`2026-10-15T20:48:25Z` from accepted base
-`1b8cc27997932d4474dcca21fcb1bdd3ba076a67`. It is source-only: no HTTP route,
-controller, provider, runtime, deployment, access, or authentication work was
-performed. The requested configuration was `supported TUI Terra high`; the
-serving model remains unproved.
+Story #327, `C7-R4-ITEM-GET-TRANSPORT-1015`, implements the next retention read
+fallback source seam in backlog 11, R4, under DESIGN-024 section 6. Its accepted
+base is `1b8cc27997932d4474dcca21fcb1bdd3ba076a67` (PR324). The worker began
+at 20:48:25Z and stopped at 20:57:29Z. Root accepted correction ownership in a
+separate finite phase at 20:58:14Z. Source acceptance, required CI, review and
+merge remain separate gates. No installed or usable R4 acceptance is claimed.
 
-The contract is documented in DESIGN-024 section 6. `agentd ctl coord-archive
-get-item --resource R --name N [--uid U]` uses `GetItemSelected`, accepts no
-revision/hash flags, consumes no stdin, and retains the ordinary settings/mount,
-canonical JSON, and error rules. `CoordinationArchive.GetItem` rejects pins
-before exec and uses the same response verification as legacy `Get`.
+## Contract and scope
 
-## Direct accepted-base RED
+`agentd ctl coord-archive get-item --resource R --name N [--uid U]` dispatches
+to accepted `GetItemSelected`. It selects the latest verified object and returns
+the UID's first UTC archive receipt. It accepts no revision/hash flags and reads
+no stdin. Legacy `get`, including explicit UID and exact pinned recovery, keeps
+its revision receipt and recovery behavior when the birth index is unavailable.
 
-The exact accepted `cmd/agentd/coordarchive.go` was reconstructed without a
-production toggle and substituted only by Go's supported overlay. Its SHA-256
-is `219ab25a3cd2d70614187ec127f468ac45da1bf0c11b43d871a2ddb9d3fa1789`.
-The direct artifacts are in the assigned order directory:
+`CoordinationArchive.GetItem` rejects either pin before shelf access with typed
+`invalid`, validates its selector, constructs the narrow command, and reuses the
+existing bounded full-object response verifier. Full selector, manifest, digest,
+canonical bytes and UTC receipt checks remain shared with legacy `Get`.
+The seven-path claim changes only this transport, its tests and help synopsis,
+the narrow design contract, and this verification record. There is no HTTP,
+controller, provider, runtime, credential or deployment wiring.
 
-- `base-red.stdout`, `base-red.stderr`, `base-red.exit`,
-  `base-red.source.sha256`, and `accepted-base-overlay.json`.
+## Counterexample
 
-The constrained command was:
+The corrected RED uses Go's supported overlay with **byte-exact** accepted
+`cmd/agentd/coordarchive.go` obtained directly from `git show`. That source has
+SHA-256 `164108213f7058958d4b2f17e02ba25b91deb124fc8b47a5e77817dd4994778e`.
+The test first puts a valid object and proves legacy exact recovery works. It
+then requests `get-item`, which accepted source refuses with usage exit 2 and no
+object. The test exits 1 for that missing contract, after successful setup.
 
-```text
-flock -w 60 /tmp/dev-env-go-tests.lock env GOMAXPROCS=2 GOFLAGS=-p=1 GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off nice -n 19 <cached-go> go test -overlay accepted-base-overlay.json -json ./cmd/agentd -run '^TestCoordArchiveCLIGetItemTransport$' -count=1
+The direct raw is `root-exact-base-red.jsonl`, SHA-256
+`00c406b69a0377561cca57de92d44887019d8b0b5483a36f3a5e6ddb594ef3ef`. The overlay and source bindings are saved as
+`accepted-base-exact-overlay.json`, `accepted-base-exact.go` and
+`red-exact-source.json`. Reproduction uses the command below with
+`-overlay <absolute-overlay-path>` and
+`-run '^TestCoordArchiveCLIGetItemTransport$'`, selecting `./cmd/agentd` only.
+This is separate from the worker's original RED, whose manually reconstructed
+overlay changed a usage newline escape and removed a comment. That original
+capture, its differing hash, and the native finding remain preserved; it is not
+represented as exact accepted-source evidence.
+
+## Final coherent focused evidence
+
+After genuine missing-assertion corrections, root ran:
+
+```sh
+flock -w 60 /tmp/dev-env-go-tests.lock env TZ=UTC GOMAXPROCS=2 GOFLAGS=-p=1 GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off nice -n 19 /home/dev/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.2.linux-amd64/bin/go test -json ./cmd/agentd ./internal/shelf -run '^(TestCoordArchive.*|TestCoordinationArchive.*)$' -count=1
 ```
 
-It exited `1`: the fixture put a valid object and legacy exact `get` succeeded,
-then `get-item` returned exit `2` and the accepted usage string without that
-subcommand. Stderr was empty; the JSON event stream is retained verbatim in
-`base-red.stdout`.
+It exited 0: **22 methods, 35 test nodes** (including
+13 subtests), with 2 separate package pass events.
+Direct raw `root-closure.jsonl` SHA-256:
+`37a3e99fd95b60593349617fc43296a96916a2ea87985143003a71b46d5e8ed5`.
 
-## GREEN evidence
+CLI assertions cover controlled old/new UID publication, late recapture and
+latest revisions, full object/manifest identity with first receipts, unsafe and
+missing selectors, rejected pins, missing/damaged birth indexes, corrupt or
+tied latest revisions, and unchanged legacy explicit/pinned recovery. Positive
+item reads compare archive path, content, permission and modification-time
+snapshots before and after the read. Shelf assertions cover exact arguments,
+no stdin, default/explicit UID, individual and combined pins before exec,
+typed invalid and corrupt errors, cancellation, missing fields, resource/name
+and manifest refusal, digest failure and non-UTC/zero receipts. The canonical
+byte test first proves its noncanonical input verifies against the valid
+canonical manifest and digest, then requires the specific byte-canonical refusal;
+an earlier invalid-digest object cannot substitute for that assertion.
 
-The direct final artifacts are `final-green.stdout`, `final-green.stderr`,
-`final-green.exit`, and `final-green.source.sha256` in the order directory.
-The same shared flock, `nice -n 19`, `GOMAXPROCS=2`, `GOFLAGS=-p=1`, offline
-module settings, and cached Go binary ran:
+The final selection includes the unchanged legacy command/client tests. Worker
+GREEN (21 methods / 28 nodes) and root's earlier assertion run remain separate;
+no runs are summed into the final count. Supplemental artifacts are under
+`/home/dev/work/orders/dev-env-chapter7-item-get-transport-1015/`. Committed
+contract, tests, command and hashes provide portable source evidence.
 
-```text
-go test -json ./cmd/agentd ./internal/shelf -run '^(TestCoordArchive.*|TestCoordinationArchive.*)$' -count=1
-```
-
-It exited `0`, with empty stderr. From the direct JSON stream: 21 top-level test
-methods, 28 test nodes (including seven subtests), and four package events
-(two starts and two passes); these counts are deliberately not combined with
-the separate RED or focused correction runs.
-
-The new CLI coverage uses controlled times for an old UID, later new UID,
-old-UID recapture, and newer revision. It proves default and explicit item
-selection return the latest verified object with the UID's first receipt; legacy
-explicit/pinned recovery retains revision receipts. It also refuses pin flags,
-unsafe/missing identity, missing/damaged first-publication entries, corrupt
-latest objects, and tied latest revisions without an object or unusable pin
-advice. The shelf coverage proves exact command construction with no stdin,
-pin rejection before exec (including a nil shelf), missing/mismatched/digest or
-noncanonical responses, zero/non-UTC receipts, cancellation, typed refusal,
-and unknown transport error propagation. Existing legacy get tests remained in
-the final selection.
-
-Go-source SHA-256 values used for GREEN:
+Go source SHA-256 bindings for the final run:
 
 ```text
 1edfed0d1713a9af3c403ace0ad8e187b6814f46aa20ad2241394028f0d2bea0  cmd/agentd/coordarchive.go
-b99542a0834d402cd2406f3a754f8a932a76296b4408f8cb6f175a789cbdc897  cmd/agentd/coordarchive_item_get_test.go
+fc55e561381fcab5545d4558d0542cb810ea718be81b04e426a976d5620155cb  cmd/agentd/coordarchive_item_get_test.go
 962fd0488ef54c91b2ad42e0f80bc5352e5681c39874390df9a67658bd5d1479  cmd/agentd/main.go
 4d78854053a87f9a56b8356ab40cc61099d57d2986da6a7b5609e7d0a8ce5571  internal/shelf/coordarchive.go
-4f01d4222fafa9124eb78d7fa89031ab500abcd18dd5f15b68615c189e4e0436  internal/shelf/coordarchive_item_get_test.go
+0f6681a70ef7d7c5b5837709f83311ab7179e603e6965c87b712f49045eb574a  internal/shelf/coordarchive_item_get_test.go
 ```
 
-## Deviations and remaining gates
+## Preserved failures and remaining gates
 
-The first shelf-focused run failed because the fake executor records nil stdin
-as no entry, while the new assertion indexed `stdin[0]`. That test-only error
-was corrected to require no stdin entry; no production behavior changed. Before
-the root interruption, a successful platform-only focused run existed without
-the required direct raw artifact files; this was a missing-capture deviation,
-not acceptance evidence. The overlay RED and direct GREEN above replace neither
-history nor counters and retain the interruption record.
+The worker initially used the wrong backlog filename, then recovered. Its first
+shelf assertion indexed absent fake-executor stdin; the fixture correction now
+requires no stdin entry. Initial platform-only successful output lacked durable
+raw captures. Root interrupted before candidate handoff to deliver the existing
+evidence obligations, preserving the original pickup, checkpoint and stop.
+Native review found the reconstructed-overlay mismatch, missing transport
+assertions, an inaccurate command example and missing raw hashes. Root retained
+all originals, corrected those concrete gaps, and reran only the affected finite
+counterexample or focused selection. No production behavior changed during root
+assertion and documentation closure. No failure counter or clock was reset.
 
-This is not source acceptance, review, CI, installation, runtime, or usable R4
-acceptance. The next safe steps are root review, ordinary source CI and advisory
-review if available, then any separately authorized delivery work. No push, PR,
-merge, or CI polling occurred here.
+Independent native closure, exact-head required CI, available advisory findings
+and guarded source merge remain acceptance gates. No installation, archive
+activation/deletion, provider, access/auth, deployment, v1 or cutover action is
+claimed. #301's permission-denied rerun and the dependent R3 hold remain unchanged.

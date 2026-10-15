@@ -1,7 +1,9 @@
 package shelf
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -28,6 +30,7 @@ func TestCoordinationArchiveGetItemUsesNarrowCommandAndSharedVerification(t *tes
 	for _, q := range []protocol.CoordArchiveGetQuery{
 		{Resource: m.Resource, Name: m.Name, ResourceVersion: m.ResourceVersion},
 		{Resource: m.Resource, Name: m.Name, SHA256: m.Object.SHA256},
+		{Resource: m.Resource, Name: m.Name, ResourceVersion: m.ResourceVersion, SHA256: m.Object.SHA256},
 		{Resource: "taskclaims", Name: "../escape"},
 	} {
 		if _, err := c.GetItem(context.Background(), q); err == nil || len(e.cmds) != before {
@@ -88,5 +91,63 @@ func TestCoordinationArchiveGetItemUsesNarrowCommandAndSharedVerification(t *tes
 	e.out = string(mustJSON(t, protocol.CoordArchiveGetResult{Manifest: stored, Object: []byte(` {}`)}))
 	if out, err := c.GetItem(context.Background(), protocol.CoordArchiveGetQuery{Resource: m.Resource, Name: m.Name}); err == nil || out.Object != nil || !strings.Contains(err.Error(), "refused") {
 		t.Fatalf("noncanonical item response accepted: %#v, %v", out, err)
+	}
+}
+
+func TestCoordinationArchiveGetItemRejectsSelectorManifestAndCanonicalViolations(t *testing.T) {
+	m, object := coordFixture(t)
+	stored := protocol.CoordArchiveStoredManifest{CoordArchiveManifest: m, ArchivedAt: time.Date(2026, 10, 15, 1, 2, 3, 0, time.UTC)}
+	for _, mode := range []string{"resource", "name", "manifest", "canonical", "typed-other", "pins-invalid"} {
+		t.Run(mode, func(t *testing.T) {
+			e := &fakeExec{}
+			c := coordClient(t, e)
+			next := stored
+			query := protocol.CoordArchiveGetQuery{Resource: m.Resource, Name: m.Name}
+			switch mode {
+			case "resource":
+				next.Resource = "inboxmessages"
+			case "name":
+				next.Name = "task-claim." + strings.Repeat("a", 32) + "." + strings.Repeat("b", 32)
+			case "manifest":
+				next.ArchivedBy = ""
+			case "pins-invalid":
+				query.ResourceVersion, query.SHA256 = m.ResourceVersion, m.Object.SHA256
+			}
+			e.out = string(mustJSON(t, protocol.CoordArchiveGetResult{Manifest: next, Object: object}))
+			if mode == "canonical" {
+				noncanonical := append([]byte("{ "), object[1:]...)
+				if canonical, err := protocol.VerifyCoordArchiveObject(m, bytes.NewReader(noncanonical)); err != nil || !bytes.Equal(canonical, object) {
+					t.Fatalf("noncanonical fixture lacks valid digest: %v", err)
+				}
+				manifest, err := json.Marshal(stored)
+				if err != nil {
+					t.Fatal(err)
+				}
+				e.out = `{"manifest":` + string(manifest) + `,"object":` + string(noncanonical) + `}`
+			}
+			if mode == "typed-other" {
+				e.out = `{"error":"corrupt","message":"fixture"}`
+				e.err = coordExit(1)
+			}
+			got, err := c.GetItem(context.Background(), query)
+			if err == nil || got.Object != nil {
+				t.Fatalf("%s accepted: %#v %v", mode, got, err)
+			}
+			if mode == "pins-invalid" {
+				var typed *protocol.HistoryError
+				if !errors.As(err, &typed) || typed.Code != protocol.HistoryErrInvalid || len(e.cmds) != 0 {
+					t.Fatalf("pins launched or lost typed invalid: %v commands=%v", err, e.cmds)
+				}
+			}
+			if mode == "canonical" && !strings.Contains(err.Error(), "not canonical") {
+				t.Fatalf("canonical test missed byte comparison: %v", err)
+			}
+			if mode == "typed-other" {
+				var typed *protocol.HistoryError
+				if !errors.As(err, &typed) || typed.Code != protocol.HistoryErrCorrupt {
+					t.Fatalf("typed corrupt lost: %v", err)
+				}
+			}
+		})
 	}
 }
