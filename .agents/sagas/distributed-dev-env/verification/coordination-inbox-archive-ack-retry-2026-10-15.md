@@ -99,7 +99,7 @@ Worker focused evidence (17 methods, 83 nodes) remains separate and does not att
 the later source. Root source bindings below attest the final focused selection:
 
 ```
-5df498c56d1db791396ca8f43c3d57b756b2116c99891eef272820befa7a991f  internal/apiserver/inbox.go
+c45e95e14af2612b83a341986c1cb331f83711a10ce0ade1beb2d2631a274897  internal/apiserver/inbox.go
 ca657fd2007f66b395c86bca654605bcd4a46be888197bd6ea16ab4dee7e39fb  internal/apiserver/coordination_inbox_archive_ack_retry.go
 d6d99260ed4aaf57daecb07004cd1f1c491236c9c14e37557ba9efd0d2804586  internal/apiserver/coordination_inbox_archive_ack_retry_test.go
 128b80288eaac8df747764063daaee6049e1c5b08f8257c656cfd76b12c200f3  internal/apiserver/coordination_inbox_archive_get_test.go
@@ -110,3 +110,8 @@ Independent native closure, available advisory findings and exact-head required
 CI must be inspected before guarded source merge. No installed, runtime,
 provider, archive activation/deletion, deployment, v1 or cutover acceptance is
 claimed. The #301 permission-denied rerun and dependent R3 hold remain unchanged.
+
+The advisory on `4e8584c` identified a stale `authorizedInbox` comment that said
+all writes stayed live-only. The comment now distinguishes normal live creation
+from a read-only archived retry. Go behavior and tests are unchanged from the
+source-bound final selection above; no additional local test run is claimed.

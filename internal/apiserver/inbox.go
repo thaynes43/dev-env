@@ -212,8 +212,9 @@ func inboxPublishResult(m *coord.InboxMessage, created bool, spec coord.InboxMes
 	return status, apiv1.InboxResult{Outcome: outcome, Message: inboxMetadata(m)}, nil
 }
 
-// authorizedInbox keeps writes live-only. GET routes may opt in to archive
-// fallback, but only after their real live-store message lookup is NotFound.
+// authorizedInbox permits archive fallback for reads and read-only ack retries,
+// only after the live-store message lookup returns NotFound. Creating an ack
+// requires a live message; an archived retry only confirms verified stored data.
 func (s *Server) authorizedInbox(ctx context.Context, r *http.Request, c *caller, archiveFallback bool) (*coord.InboxMessage, *time.Time, error) {
 	if err := s.inboxAvailable(); err != nil {
 		return nil, nil, err
