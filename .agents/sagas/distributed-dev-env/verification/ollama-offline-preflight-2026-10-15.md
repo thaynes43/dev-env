@@ -21,7 +21,8 @@ Unknown. Unknown cost uses the existing protocol CostObservation primitive.
 Existing research is reused, with no repeat probe: both Ollama DNS reads failed;
 a different llama-server catalog advertised only the Muse Glimmer model. That proves neither
 Qwen availability nor Ollama unavailability. No Ollama/OpenCode CLI was found.
-Synthetic Qwen receipts below are fixtures, never installed evidence.
+Synthetic Qwen receipts in `internal/agentd/protocol/ollama_preflight_test.go`
+are fixtures, never installed evidence.
 
 Validation: all four focused `TestOllama` methods passed with finite subcases.
 Independent native Codex review (gpt-6.1-sol) found a JSON case-fold duplicate override. Exact
@@ -30,9 +31,9 @@ fixtures passed and the reviewer confirmed closure with no remaining findings.
 Tests used cached Go 1.27.2, two CPUs, nice 19, package parallelism one, downloads
 off and the shared test lock. Required exact-head CI remains a delivery gate.
 The implementation worker delivered a held draft on 2026-10-15; that historical
-checkpoint did not constitute source acceptance. The parent later clarified that
-the blanket draft/merge restriction was an oversight interpretation and restored
-ordinary source ready/review/merge delivery, including advisory reviews. Required
+checkpoint did not constitute source acceptance. On 2026-10-15, Tom's parent
+coordinator clarified that ordinary source ready/review/merge delivery, including
+advisory reviews, remains authorized. Required
 exact-head CI and review finding disposition still precede source merge. All
 runtime, authentication, security, egress, deployment, v1 and local-provider
 activation gates (spike S11 and backlog plan09)
