@@ -142,8 +142,12 @@ func Lookup(ctx context.Context, operatorNamespace string, slots *shelf.ExecSlot
 		out[i].Message = &message
 		if message.Holds {
 			out[i].Result.Decision = Released
+			out[i].Result.Observations = []protocol.CoordArchiveObservation{{
+				Role: "message", Namespace: m.Namespace, Name: m.Name, UID: m.UID, Observed: "message-released",
+			}}
 		} else {
 			out[i].Result.Decision = Kept
+			out[i].Result.Observations = nil
 		}
 		out[i].Result.RequiredMessage = nil
 	}
