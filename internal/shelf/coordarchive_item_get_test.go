@@ -64,7 +64,7 @@ func TestCoordinationArchiveGetItemUsesNarrowCommandAndSharedVerification(t *tes
 			t.Fatalf("incomplete item response accepted: %#v, %v", out, err)
 		}
 	}
-	for _, receipt := range []time.Time{time.Time{}, time.Date(2026, 10, 15, 1, 2, 3, 0, time.FixedZone("fixture", 3600))} {
+	for _, receipt := range []time.Time{{}, time.Date(2026, 10, 15, 1, 2, 3, 0, time.FixedZone("fixture", 3600))} {
 		e.out = string(mustJSON(t, protocol.CoordArchiveGetResult{Manifest: protocol.CoordArchiveStoredManifest{CoordArchiveManifest: m, ArchivedAt: receipt}, Object: object}))
 		if out, err := c.GetItem(context.Background(), protocol.CoordArchiveGetQuery{Resource: m.Resource, Name: m.Name}); err == nil || out.Object != nil {
 			t.Fatalf("invalid item receipt accepted: %#v, %v", out, err)
@@ -83,8 +83,11 @@ func TestCoordinationArchiveGetItemUsesNarrowCommandAndSharedVerification(t *tes
 	e.out, e.err = `{"error":"not_a_history_error","message":"fixture"}`, coordExit(1)
 	if out, err := c.GetItem(context.Background(), protocol.CoordArchiveGetQuery{Resource: m.Resource, Name: m.Name}); out.Object != nil || err == nil {
 		t.Fatalf("unknown item error accepted: %#v, %v", out, err)
-	} else if _, typed := err.(*protocol.HistoryError); typed {
-		t.Fatalf("unknown item error became typed: %v", err)
+	} else {
+		var typed *protocol.HistoryError
+		if errors.As(err, &typed) {
+			t.Fatalf("unknown item error became typed: %v", err)
+		}
 	}
 
 	e.err = nil

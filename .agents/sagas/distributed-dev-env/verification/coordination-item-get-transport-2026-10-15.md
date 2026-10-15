@@ -54,8 +54,8 @@ flock -w 60 /tmp/dev-env-go-tests.lock env TZ=UTC GOMAXPROCS=2 GOFLAGS=-p=1 GOTO
 
 It exited 0: **22 methods, 35 test nodes** (including
 13 subtests), with 2 separate package pass events.
-Direct raw `root-closure.jsonl` SHA-256:
-`37a3e99fd95b60593349617fc43296a96916a2ea87985143003a71b46d5e8ed5`.
+Direct raw `root-lint.jsonl` SHA-256:
+`9ecb75a2536ebc2ca69df2de96b7eccb2ea53235a33ea444ce2ff65700c56211`.
 
 CLI assertions cover controlled old/new UID publication, late recapture and
 latest revisions, full object/manifest identity with first receipts, unsafe and
@@ -79,11 +79,11 @@ contract, tests, command and hashes provide portable source evidence.
 Go source SHA-256 bindings for the final run:
 
 ```text
-1edfed0d1713a9af3c403ace0ad8e187b6814f46aa20ad2241394028f0d2bea0  cmd/agentd/coordarchive.go
+e2c49a06d0cf8523f2adf2b880bdd095ba0c97c5649e430bdb96a976d09d94aa  cmd/agentd/coordarchive.go
 fc55e561381fcab5545d4558d0542cb810ea718be81b04e426a976d5620155cb  cmd/agentd/coordarchive_item_get_test.go
 962fd0488ef54c91b2ad42e0f80bc5352e5681c39874390df9a67658bd5d1479  cmd/agentd/main.go
 4d78854053a87f9a56b8356ab40cc61099d57d2986da6a7b5609e7d0a8ce5571  internal/shelf/coordarchive.go
-0f6681a70ef7d7c5b5837709f83311ab7179e603e6965c87b712f49045eb574a  internal/shelf/coordarchive_item_get_test.go
+c690eb61869ff3aedeea62bf843d1999f18b5bf8fc9653b37c18f9e028e857cf  internal/shelf/coordarchive_item_get_test.go
 ```
 
 ## Preserved failures and remaining gates
@@ -103,3 +103,12 @@ Independent native closure, exact-head required CI, available advisory findings
 and guarded source merge remain acceptance gates. No installation, archive
 activation/deletion, provider, access/auth, deployment, v1 or cutover action is
 claimed. #301's permission-denied rerun and the dependent R3 hold remain unchanged.
+
+The first required CI on `85c3835`, run `38806928227`, failed Lint with
+three diagnostics: QF1003 on command dispatch, gofmt simplification of a test
+literal, and a direct test error assertion flagged by errorlint. Root changed
+the same validated dispatch alternatives to a tagged switch, applied `gofmt -s`,
+and used `errors.As`. The finite final selection above passed on those exact Go
+bytes. The earlier 22-method/35-node run remains separate evidence. The hosted
+failure is retained; the correction uses ordinary new-head CI, with no manual
+rerun, workflow change, weakened assertion or budget reset.

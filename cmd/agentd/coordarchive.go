@@ -62,7 +62,8 @@ func coordArchiveCtl(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 	}
 	a := newCoordArchive(s)
 	var out any
-	if args[0] == "put" || args[0] == "mark" || args[0] == "lookup" {
+	switch args[0] {
+	case "put", "mark", "lookup":
 		raw, readErr := io.ReadAll(io.LimitReader(stdin, protocol.MaxCoordArchiveRequestBytes+1))
 		if readErr != nil || len(raw) > protocol.MaxCoordArchiveRequestBytes || !utf8.Valid(raw) {
 			return historyFail(stdout, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "request read, byte bound or UTF-8 refused"))
@@ -94,11 +95,11 @@ func coordArchiveCtl(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 			}
 			out, err = a.PutRecord(request.Manifest, bytes.NewReader(request.Object), request.Event)
 		}
-	} else if args[0] == "get" {
+	case "get":
 		out, err = a.GetSelected(q)
-	} else if args[0] == "get-item" {
+	case "get-item":
 		out, err = a.GetItemSelected(q)
-	} else {
+	case "list":
 		out, err = a.List(list)
 	}
 	if err != nil {
