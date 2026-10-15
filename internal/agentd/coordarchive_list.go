@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"path"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -54,91 +55,104 @@ func (a CoordArchive) listLocked(q protocol.CoordArchiveListQuery) (protocol.Coo
 	}
 	_ = baseDir.Close()
 	result := protocol.CoordArchiveListResult{Items: make([]protocol.CoordArchiveListItem, 0, q.Limit)}
-	lastEmitted := ""
 	afterMonth := ""
 	if after != "" {
 		afterMonth = after[:4] + "-" + after[4:6]
 	}
-	monthUpper := ""
-	for {
-		month, err := a.coordListNextName(base, monthUpper, validCoordArchiveMonth)
-		if errors.Is(err, fs.ErrNotExist) {
-			break
-		}
-		if err != nil {
-			return protocol.CoordArchiveListResult{}, coordGetCorrupt(base)
-		}
-		if month == "" {
-			break
-		}
-		monthUpper = month
+	months, err := a.coordListNames(base, "", validCoordArchiveMonth, 0)
+	if err != nil {
+		return protocol.CoordArchiveListResult{}, coordGetCorrupt(base)
+	}
+	type candidate struct{ name, month string }
+	candidates := make([]candidate, 0, q.Limit+1)
+	for _, month := range months {
 		if afterMonth != "" && month > afterMonth {
 			continue
 		}
-		nameUpper := ""
+		upper := ""
 		if month == afterMonth {
-			nameUpper = after
+			upper = after
 		}
-		for {
-			name, err := a.coordListNextName(path.Join(base, month), nameUpper, protocol.ValidCoordArchiveIndexName)
-			if err != nil {
-				return protocol.CoordArchiveListResult{}, coordGetCorrupt(path.Join(base, month))
+		remaining := q.Limit + 1 - len(candidates)
+		names, err := a.coordListNames(path.Join(base, month), upper, protocol.ValidCoordArchiveIndexName, remaining)
+		if err != nil {
+			return protocol.CoordArchiveListResult{}, coordGetCorrupt(path.Join(base, month))
+		}
+		for _, name := range names {
+			candidates = append(candidates, candidate{name: name, month: month})
+		}
+		if len(candidates) == q.Limit+1 {
+			break
+		}
+	}
+	for i, selected := range candidates {
+		item := a.coordListItem(q, path.Join(base, selected.month, selected.name), selected.name, selected.month)
+		candidateItems := append(append([]protocol.CoordArchiveListItem(nil), result.Items...), item)
+		next, err := q.Cursor(selected.name)
+		if err != nil {
+			return protocol.CoordArchiveListResult{}, err
+		}
+		trial := protocol.CoordArchiveListResult{Items: candidateItems, Next: next}
+		encoded, err := protocol.CanonicalJSON(trial)
+		if err != nil || len(encoded)+1 > protocol.MaxCoordArchiveLookupBytes { // agentd writes a final newline.
+			if len(result.Items) == 0 {
+				return protocol.CoordArchiveListResult{}, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, path.Join(base, selected.month, selected.name), "list item cannot fit the output bound")
 			}
-			if name == "" {
-				break
-			}
-			nameUpper = name
-			item := a.coordListItem(q, path.Join(base, month, name), name, month)
-			candidate := append(append([]protocol.CoordArchiveListItem(nil), result.Items...), item)
-			next, err := q.Cursor(name)
-			if err != nil {
-				return protocol.CoordArchiveListResult{}, err
-			}
-			trial := protocol.CoordArchiveListResult{Items: candidate, Next: next}
-			encoded, err := protocol.CanonicalJSON(trial)
-			if err != nil || len(encoded) > protocol.MaxCoordArchiveLookupBytes {
-				if len(result.Items) == 0 {
-					return protocol.CoordArchiveListResult{}, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, path.Join(base, month, name), "list item cannot fit the output bound")
-				}
-				result.Next, _ = q.Cursor(lastEmitted)
-				return result, nil
-			}
-			result.Items = candidate
-			lastEmitted = name
-			if len(result.Items) == q.Limit {
-				result.Next = next
-				return result, nil
-			}
+			result.Next, _ = q.Cursor(candidates[i-1].name)
+			return result, nil
+		}
+		result = trial
+		if len(result.Items) == q.Limit {
+			return result, nil
 		}
 	}
 	return result, nil
 }
 
-// coordListNextName finds one greatest acceptable entry below upper while
-// retaining only one name. Repeated bounded scans avoid relying on filesystem
-// directory order or accumulating an unbounded month/index directory.
-func (a CoordArchive) coordListNextName(rel, upper string, valid func(string) bool) (string, error) {
+// coordListNames scans a directory once in fixed batches. It retains only the
+// greatest limit names below upper, then returns that bounded selection newest
+// first. A zero limit is used only for month directories, whose names are not
+// archive entries.
+func (a CoordArchive) coordListNames(rel, upper string, valid func(string) bool, limit int) ([]string, error) {
 	d, err := openBeneath(a.Root, filepath.Join(a.Root, filepath.FromSlash(rel)), historyDirFlags)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer func() { _ = d.Close() }()
-	best := ""
+	names := []string{}
 	for {
 		batch, readErr := d.Readdirnames(128)
 		for _, name := range batch {
 			if !valid(name) {
-				return "", protocol.HistoryErrorf(protocol.HistoryErrCorrupt, rel, "invalid index directory entry")
+				return nil, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, rel, "invalid index directory entry")
 			}
-			if (upper == "" || name < upper) && name > best {
-				best = name
+			if upper != "" && name >= upper {
+				continue
+			}
+			if limit == 0 {
+				names = append(names, name)
+				continue
+			}
+			if len(names) < limit {
+				names = append(names, name)
+				continue
+			}
+			min := 0
+			for i := 1; i < len(names); i++ {
+				if names[i] < names[min] {
+					min = i
+				}
+			}
+			if name > names[min] {
+				names[min] = name
 			}
 		}
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
-				return best, nil
+				sort.Slice(names, func(i, j int) bool { return names[i] > names[j] })
+				return names, nil
 			}
-			return "", readErr
+			return nil, readErr
 		}
 	}
 }
@@ -171,6 +185,11 @@ func (a CoordArchive) coordListItem(q protocol.CoordArchiveListQuery, rel, index
 	}
 	got, err := a.readRevision(summary.Latest.CoordArchiveManifest, summary.LatestRel)
 	if err != nil {
+		return corrupt()
+	}
+	want := coordIndexEntry(got.Manifest)
+	want.ArchivedAt = summary.FirstAt
+	if entry != want {
 		return corrupt()
 	}
 	projected, err := coordListProjection(got.Object)

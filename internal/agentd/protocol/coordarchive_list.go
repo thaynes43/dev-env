@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"strings"
+	"time"
 )
 
 const MaxCoordArchiveListItems = 100
@@ -43,6 +44,9 @@ type coordArchiveListCursor struct {
 
 func (q CoordArchiveListQuery) cursor() (coordArchiveListCursor, error) {
 	var c coordArchiveListCursor
+	if len(q.After) > base64.RawURLEncoding.EncodedLen(512) {
+		return coordArchiveListCursor{}, HistoryErrorf(HistoryErrInvalid, "", "coordination list cursor is invalid or belongs to another index")
+	}
 	raw, err := base64.RawURLEncoding.DecodeString(q.After)
 	if err != nil || len(raw) == 0 || len(raw) > 512 || json.Unmarshal(raw, &c) != nil ||
 		c.Resource != q.Resource || c.Project != q.Project || c.RecipientUID != q.RecipientUID || !validCoordArchiveIndexName(c.Name) {
@@ -73,10 +77,15 @@ func CoordArchiveListCursorName(q CoordArchiveListQuery) (string, error) {
 }
 
 func validCoordArchiveIndexName(name string) bool {
-	if len(name) != len("20060102T150405.000000000Z-")+36+len(".json") || !strings.HasSuffix(name, ".json") {
+	const timestampLayout = "20060102T150405.000000000Z"
+	if len(name) != len(timestampLayout+"-")+36+len(".json") || !strings.HasSuffix(name, ".json") || name[len(timestampLayout)] != '-' {
 		return false
 	}
-	return ValidKubeUID(strings.TrimSuffix(name[len("20060102T150405.000000000Z-"):], ".json"))
+	timestamp, err := time.Parse(timestampLayout, name[:len(timestampLayout)])
+	if err != nil || timestamp.Location() != time.UTC || timestamp.Format(timestampLayout) != name[:len(timestampLayout)] {
+		return false
+	}
+	return ValidKubeUID(strings.TrimSuffix(name[len(timestampLayout)+1:], ".json"))
 }
 
 func ValidCoordArchiveIndexName(name string) bool { return validCoordArchiveIndexName(name) }
@@ -85,7 +94,7 @@ func CoordArchiveIndexNameUID(name string) string {
 	if !validCoordArchiveIndexName(name) {
 		return ""
 	}
-	return strings.TrimSuffix(name[len("20060102T150405.000000000Z-"):], ".json")
+	return strings.TrimSuffix(name[len("20060102T150405.000000000Z")+1:], ".json")
 }
 
 // CoordArchiveListItem intentionally exposes no unverified object. Corrupt
