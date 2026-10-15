@@ -212,8 +212,9 @@ func inboxPublishResult(m *coord.InboxMessage, created bool, spec coord.InboxMes
 	return status, apiv1.InboxResult{Outcome: outcome, Message: inboxMetadata(m)}, nil
 }
 
-// authorizedInbox keeps writes live-only. GET routes may opt in to archive
-// fallback, but only after their real live-store message lookup is NotFound.
+// authorizedInbox permits archive fallback for reads and read-only ack retries,
+// only after the live-store message lookup returns NotFound. Creating an ack
+// requires a live message; an archived retry only confirms verified stored data.
 func (s *Server) authorizedInbox(ctx context.Context, r *http.Request, c *caller, archiveFallback bool) (*coord.InboxMessage, *time.Time, error) {
 	if err := s.inboxAvailable(); err != nil {
 		return nil, nil, err
@@ -322,17 +323,23 @@ func (s *Server) ackInbox(ctx context.Context, _ http.ResponseWriter, r *http.Re
 	if c.kind != kindSession {
 		return 0, nil, inboxHidden()
 	}
-	var empty struct{}
+	var empty map[string]json.RawMessage
 	if err := boundedInboxJSON(r, 128, &empty); err != nil {
 		return 0, nil, err
 	}
-	m, _, err := s.authorizedInbox(ctx, r, c, false)
+	if empty == nil || len(empty) != 0 {
+		return 0, nil, badRequest("expected one empty inbox acknowledgement object")
+	}
+	m, archivedAt, err := s.authorizedInbox(ctx, r, c, true)
 	if err != nil {
 		return 0, nil, err
 	}
 	fresh, err := s.inboxReadScope(ctx, c, m.Spec.Project)
 	if err != nil || fresh == nil || *fresh != m.Spec.Recipient {
 		return 0, nil, inboxHidden()
+	}
+	if archivedAt != nil {
+		return s.archivedInboxAckRetry(ctx, c, m)
 	}
 	a, created, err := s.Inbox.Ack(ctx, m, inboxActor(c))
 	if err != nil {

@@ -177,19 +177,17 @@ func TestInboxArchiveGetRefusesOnlyAfterGenuineLiveNotFound(t *testing.T) {
 	}
 }
 
-func TestInboxArchiveGetKeepsWritesLiveOnly(t *testing.T) {
+func TestInboxArchiveGetKeepsPublishLiveOnly(t *testing.T) {
 	f, sender, recipient, m, archive, path := inboxArchiveGetRig(t)
 	if err := f.c.Delete(context.Background(), m); err != nil {
 		t.Fatal(err)
 	}
 	f.srv.CoordinationArchiveReads, f.srv.CoordinationArchive, f.srv.ShelfSlots = true, archive, shelf.NewExecSlots(2)
-	ackPath := strings.Split(path, "?")[0] + "/ack?project=sample"
-	if w := f.do(http.MethodPost, ackPath, recipient, strings.NewReader(`{}`)); w.Code != http.StatusNotFound || archive.calls != 0 {
-		t.Fatalf("ack POST = %d calls=%d", w.Code, archive.calls)
-	}
 	if w := f.do(http.MethodPost, apiv1.InboxPath, sender, inboxRequest(f, "archive-recipient", "archive-get-next")); w.Code != http.StatusCreated || archive.calls != 0 {
 		t.Fatalf("publish = %d calls=%d", w.Code, archive.calls)
 	}
+	_ = recipient
+	_ = path
 }
 
 // Construct the wire oracle independently of the production projection.
