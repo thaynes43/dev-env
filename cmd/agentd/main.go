@@ -44,12 +44,15 @@ Commands:
   hold                     The rescue pod's command (D-55): hold the session
                            volume for the operator's rescue and start nothing
                            (no config, clone, agent or heartbeat), until SIGTERM.
-  shelf [--history-archive]
+  shelf [--history-archive] [--coordination-archive]
                            The shelf pod's command (D-67): check that the shared
                            volume is mounted, then wait until SIGTERM. The
                            operator lists and prunes rescues here by exec. With
                            --history-archive it also refuses to start without
                            the history archive at ~/.history-archive (DESIGN-025).
+                           With --coordination-archive it also refuses to start
+                           without the coordination archive at ~/.coordination-archive
+                           (DESIGN-024).
   render                   Render the GitOps config into $HOME (boot step 1).
   project-sync --enabled   Run one explicitly configured, model-free GitOps Job
                            to prepare declared shared references/project roots.
@@ -182,12 +185,12 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		}
 		return daemon(ctx, log, getenv, r)
 	case "shelf":
-		historyArchive := len(args) == 2 && args[1] == "--history-archive"
-		if len(args) > 1 && !historyArchive {
-			_, _ = fmt.Fprintf(stderr, "%s: shelf takes only --history-archive, got %q\n", binaryName, args[1:])
+		historyArchive, coordinationArchive, ok := shelfFlags(args[1:])
+		if !ok {
+			_, _ = fmt.Fprintf(stderr, "%s: usage: shelf [--history-archive] [--coordination-archive], got %q\n", binaryName, args[1:])
 			return exitUsage
 		}
-		return shelf(ctx, log, getenv, historyArchive)
+		return shelf(ctx, log, getenv, historyArchive, coordinationArchive)
 	case "hold":
 		if len(args) > 1 {
 			_, _ = fmt.Fprintf(stderr, "%s: hold takes no arguments, got %q\n", binaryName, args[1:])
@@ -265,9 +268,30 @@ func hold(ctx context.Context, log *slog.Logger, getenv func(string) string) int
 	return exitOK
 }
 
+// shelfFlags accepts only explicit archive startup flags.
+func shelfFlags(args []string) (historyArchive, coordinationArchive, ok bool) {
+	for _, arg := range args {
+		switch arg {
+		case "--history-archive":
+			if historyArchive {
+				return false, false, false
+			}
+			historyArchive = true
+		case "--coordination-archive":
+			if coordinationArchive {
+				return false, false, false
+			}
+			coordinationArchive = true
+		default:
+			return false, false, false
+		}
+	}
+	return historyArchive, coordinationArchive, true
+}
+
 // shelf is the shelf pod's command (D-67). It refuses to run without the
 // shared volume, so a shelf that cannot see the rescues never looks healthy.
-func shelf(ctx context.Context, log *slog.Logger, getenv func(string) string, historyArchive bool) int {
+func shelf(ctx context.Context, log *slog.Logger, getenv func(string) string, historyArchive, coordinationArchive bool) int {
 	s, err := agentd.LoadSettings(getenv)
 	if err != nil {
 		log.Error("settings", "err", err)
@@ -286,6 +310,15 @@ func shelf(ctx context.Context, log *slog.Logger, getenv func(string) string, hi
 			return exitFailure
 		}
 		log.Info("history archive mounted", "root", agentd.NewHistoryArchive(s).Root)
+	}
+	if coordinationArchive {
+		// With --coordination-archive the shelf never looks healthy without the
+		// archive volume (DESIGN-024 4).
+		if err := coordArchiveShelfCheck(s); err != nil {
+			log.Error("the shelf needs the coordination archive volume", "err", err)
+			return exitFailure
+		}
+		log.Info("coordination archive mounted", "root", newCoordArchive(s).Root)
 	}
 	log.Info("shelf ready; the operator lists and prunes rescues here by exec", "shared", s.SharedDir, "rescues", len(list.Rescues))
 	<-ctx.Done()
