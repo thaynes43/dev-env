@@ -62,6 +62,21 @@ func ValidSpec(s coord.PublishedContextSpec) bool {
 		s.ContentSHA256 == apiv1.ContextHash(s.Text) && int(s.ByteCount) == len(s.Text)
 }
 
+// ValidArchiveMetadata validates the immutable parts of a context projection
+// after the shelf has verified the full archived object and removed spec.text.
+// It deliberately does not bind ContentSHA256 or ByteCount to absent text;
+// ValidSpec remains the full-content authority for live objects and GETs.
+func ValidArchiveMetadata(s coord.PublishedContextSpec) bool {
+	i := s.Identity
+	c := coord.TaskClaimSpec{Identity: coord.TaskIdentity{Project: s.Project, Repository: s.Repository, TaskKey: "task:context"}, Owner: s.Source, Actor: s.Actor, Provenance: s.Provenance}
+	return taskclaim.ValidSpec(c) && s.Actor.Kind == "session" && apiv1.ValidContextUID(i.SessionUID) && s.Source.UID == i.SessionUID &&
+		apiv1.ValidContextRequest(apiv1.PublishContextRequest{Kind: i.Kind, Key: i.Key, Text: "x"}) && s.Text == "" && s.SourceGeneration >= 1 && boundedText(s.SourceParent, 317) &&
+		len(validation.IsDNS1123Label(s.Attribution.Provider)) == 0 && boundedText(s.Attribution.RequestedModel, 256) &&
+		s.Attribution.ObservedModelState == "Unknown" && s.Attribution.UsageState == "Unknown" && s.Attribution.CostState == "Unknown" &&
+		s.Provenance.ReportedHead == "" && s.Provenance.ReportedAt == nil && validOrigin(s) && s.StopState == "Unknown" &&
+		len(s.ContentSHA256) == 64 && strings.Trim(s.ContentSHA256, "0123456789abcdef") == "" && s.ByteCount > 0 && s.ByteCount <= apiv1.MaxContextBytes
+}
+
 type KubeStore struct {
 	Client    client.Client
 	Live      client.Reader

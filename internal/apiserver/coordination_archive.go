@@ -22,6 +22,12 @@ type CoordinationArchiveReader interface {
 	Get(context.Context, protocol.CoordArchiveGetQuery) (protocol.CoordArchiveGetResult, error)
 }
 
+// CoordinationArchiveLister is the optional paged shelf contract. Keeping it
+// separate preserves existing Get-only fakes and callers.
+type CoordinationArchiveLister interface {
+	List(context.Context, protocol.CoordArchiveListQuery) (protocol.CoordArchiveListResult, error)
+}
+
 func (s *Server) coordinationArchiveSlot(ctx context.Context) (func(), error) {
 	if s.CoordinationArchive == nil || s.ShelfSlots == nil {
 		return nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "coordination archive unavailable")

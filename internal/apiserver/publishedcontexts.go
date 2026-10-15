@@ -213,6 +213,24 @@ func (s *Server) listPublishedContexts(ctx context.Context, _ http.ResponseWrite
 			return 0, nil, badRequest("limit must be between 1 and 20")
 		}
 	}
+	archivedValues := r.URL.Query()["archived"]
+	if len(archivedValues) > 1 {
+		return 0, nil, badRequest("archived must be only")
+	}
+	if archived := r.URL.Query().Get("archived"); archived != "" {
+		if archived != "only" {
+			return 0, nil, badRequest("archived must be only")
+		}
+		for key, values := range r.URL.Query() {
+			if len(values) != 1 || (key != "project" && key != "limit" && key != "continue" && key != "archived") {
+				return 0, nil, badRequest("invalid archived context query")
+			}
+		}
+		if !s.CoordinationArchiveReads {
+			return 0, nil, notFound("published context not found")
+		}
+		return s.listArchivedPublishedContexts(ctx, project, limit, r.URL.Query().Get("continue"))
+	}
 	items, next, err := s.PublishedContexts.List(ctx, project, limit, r.URL.Query().Get("continue"))
 	if err != nil {
 		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "published context unavailable")
