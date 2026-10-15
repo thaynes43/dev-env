@@ -158,7 +158,7 @@ func expectedArchivedTaskClaim(t *testing.T, claim *coord.TaskClaim, receipt tim
 	p := claim.Spec.Provenance
 	receipt = receipt.UTC()
 	want := apiv1.TaskClaim{
-		Name: claim.Name, UID: string(claim.UID), CreatedAt: claim.CreationTimestamp.Time.UTC(),
+		Name: claim.Name, UID: string(claim.UID), CreatedAt: claim.CreationTimestamp.UTC(),
 		Identity:   apiv1.TaskClaimIdentity{Project: claim.Spec.Identity.Project, Repository: claim.Spec.Identity.Repository, TaskKey: claim.Spec.Identity.TaskKey},
 		Owner:      apiv1.TaskClaimOwner{Namespace: claim.Spec.Owner.Namespace, Name: claim.Spec.Owner.Name, UID: claim.Spec.Owner.UID},
 		Actor:      apiv1.TaskClaimActor{Kind: claim.Spec.Actor.Kind, ServiceAccount: claim.Spec.Actor.ServiceAccount, PodName: claim.Spec.Actor.PodName, PodUID: claim.Spec.Actor.PodUID},
@@ -166,7 +166,7 @@ func expectedArchivedTaskClaim(t *testing.T, claim *coord.TaskClaim, receipt tim
 		OwnerState: "Unknown", StopState: "Unknown", Archived: true, ArchivedAt: &receipt,
 	}
 	if p.ReportedAt != nil {
-		reported := p.ReportedAt.Time.UTC()
+		reported := p.ReportedAt.UTC()
 		want.Provenance.ReportedAt = &reported
 	}
 	if want.ArchivedAt == nil || want.ArchivedAt.Location() != time.UTC || want.CreatedAt.Location() != time.UTC || (want.Provenance.ReportedAt != nil && want.Provenance.ReportedAt.Location() != time.UTC) {

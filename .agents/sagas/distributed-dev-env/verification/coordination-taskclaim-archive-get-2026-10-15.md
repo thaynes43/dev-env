@@ -64,7 +64,8 @@ Each run has its own raw identity; none are combined:
 | Worker candidate | `final-direct.json` | Pass, 21 methods / 79 nodes | `4bb6d4fa44d6289e1cf8d7d2a10bb9f7dff8ee625f21609212c3006262e04b3a` |
 | Compatibility counterexample | `compat-red.jsonl` | Expected failure: missing-project 400 | `ddc19c0f8155863d26bfbc80c11d7bfe7174826be84a07c544b382c2f2575df8` |
 | Root expanded fixtures, before correction | `root-final.jsonl` | Fail: 25 methods / 110 nodes started; 23 methods / 107 nodes passed | `cd5d873933a78f91b853d4813b1643a92f9b53b26854aa88d5d403e6ad00a85f` |
-| **Final root selection** | `root-corrected.jsonl` | **Pass, 25 methods / 110 nodes** | `1565209336c8e253444c9dac634d6790793fa85f4be9f57785965c0b5ff41c13` |
+| Root fixture correction | `root-corrected.jsonl` | Pass, 25 methods / 110 nodes | `1565209336c8e253444c9dac634d6790793fa85f4be9f57785965c0b5ff41c13` |
+| **Final lint-corrected selection** | `root-lint.jsonl` | **Pass, 25 methods / 110 nodes** | `20582f7da90d3937d15ff01935f86d21604a6b6677f6f813eebc24bbd16cf581` |
 
 The final selection includes 85 subtests and 1 separate package pass event.
 It ran after the genuine compatibility, coverage and fixture corrections:
@@ -82,7 +83,7 @@ bindings are:
 0612ea57d2da635a90c6b34010b0675d013ab7e8b079ebc491fabeb790c4c0de  internal/apiserver/taskclaims.go
 4293d840250da03ea115c0916f90581c58a782d6d460cd425e593c8648314719  internal/apiserver/coordination_archive.go
 7aa6b01d63917ba03bf8c2d6f2626bc801fb881ae0318eeff56dba453dd96652  internal/apiserver/coordination_taskclaim_archive_get.go
-a19075b3f0407fa2e17f4f99211f90e25f21c4a914b5e3354f0cfd05a24e4917  internal/apiserver/coordination_taskclaim_archive_get_test.go
+29e5edea61917a752658a028eda7c51361aa1a7e97f08319f0dbe59dfc5ca1b1  internal/apiserver/coordination_taskclaim_archive_get_test.go
 ```
 
 The final matrix includes live/default-off/matching and old UID selection,
@@ -118,6 +119,13 @@ was installed on `Client` instead of the store's actual `Live` reader. The inval
 owner fixture is now empty and the poison targets `Live`. No production UID rule,
 ownership assertion or error boundary was weakened. Those failed captures and
 the separate genuine compatibility counterexample remain saved.
+
+The first hosted Lint job (run `38812226787`, job `116688565279`) failed
+QF1008 on two explicit embedded `Time` selectors in the independent test oracle.
+The test now calls the same promoted `UTC` methods directly; no assertion or
+production behavior changed. `root-lint.jsonl` binds that final test source and
+passes the same 25 methods / 110 nodes. This CI failure remains recorded, and
+normal new-head CI follows the real source correction without a manual rerun.
 
 Independent native closure, exact-head required CI, available advisory findings
 and guarded source merge remain gates. No source acceptance, installed parity,
