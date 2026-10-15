@@ -50,10 +50,13 @@ func (c *CoordinationArchive) Put(ctx context.Context, req protocol.CoordArchive
 	if !hasField(raw, "graceStart") {
 		return zero, errors.New("coordination archive put response is incomplete")
 	}
+	if _, err := protocol.CoordArchiveRevisionDir(out.Manifest.CoordArchiveManifest); err != nil {
+		return zero, errors.New("coordination archive put returned an invalid manifest")
+	}
 	if !sameManifest(out.Manifest.CoordArchiveManifest, req.Manifest) || !utcTime(out.Manifest.ArchivedAt) {
 		return zero, errors.New("coordination archive put returned an invalid manifest")
 	}
-	if mark && !utcTimePtr(out.GraceStart) || !mark && out.GraceStart != nil {
+	if (mark && out.GraceStart == nil) || (out.GraceStart != nil && !utcTimePtr(out.GraceStart)) {
 		return zero, errors.New("coordination archive put returned an invalid grace state")
 	}
 	return out, nil
@@ -64,7 +67,7 @@ func (c *CoordinationArchive) Mark(ctx context.Context, req []protocol.CoordArch
 		return nil, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "bounded coordination mark batch required")
 	}
 	for _, item := range req {
-		if _, err := item.CoordArchiveIdentity.RecordDir(); err != nil || item.Event.Validate(item.Resource) != nil || (item.Event.State != "present" && item.Event.State != "reset") {
+		if _, err := item.RecordDir(); err != nil || item.Event.Validate(item.Resource) != nil || (item.Event.State != "present" && item.Event.State != "reset") {
 			return nil, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "invalid coordination mark request")
 		}
 	}
@@ -228,7 +231,7 @@ func (c *CoordinationArchive) run(ctx context.Context, cmd []string, stdin io.Re
 	if err != nil {
 		var exit utilexec.ExitError
 		var refusal protocol.HistoryError
-		if errors.As(err, &exit) && exit.ExitStatus() == 1 && decodeObject(stdout.Bytes(), &refusal, "error", "message") == nil && knownRefusal(refusal.Code) {
+		if errors.As(err, &exit) && exit.ExitStatus() == 1 && decodeObject(stdout.Bytes(), &refusal, "error", "message") == nil && knownRefusal(refusal.Code) && refusal.Message != "" {
 			return nil, &refusal
 		}
 		if errors.As(err, &exit) && exit.ExitStatus() == 2 && strings.Contains(stderr.String(), "usage: ctl status | rescue") {
@@ -267,9 +270,13 @@ func decodeOne(raw []byte, out any) error {
 	}
 	return nil
 }
-func utcTime(t time.Time) bool                             { return !t.IsZero() && t.Location() == time.UTC }
-func utcTimePtr(t *time.Time) bool                         { return t != nil && utcTime(*t) }
-func sameManifest(a, b protocol.CoordArchiveManifest) bool { return a == b }
+func utcTime(t time.Time) bool     { return !t.IsZero() && t.Location() == time.UTC }
+func utcTimePtr(t *time.Time) bool { return t != nil && utcTime(*t) }
+func sameManifest(a, b protocol.CoordArchiveManifest) bool {
+	// The shelf preserves the first publisher across idempotent retries.
+	a.ArchivedBy, b.ArchivedBy = "", ""
+	return a == b
+}
 
 func knownRefusal(code string) bool {
 	switch code {
@@ -308,7 +315,7 @@ func decodeLookupResults(raw []byte) ([]protocol.CoordArchiveLookupResult, error
 				return nil, errors.New("coordination archive lookup response has an invalid revision")
 			}
 		}
-		if (out[i].Holds && (len(out[i].Revisions) == 0 || !utcTimePtr(out[i].GraceStart))) || (!out[i].Holds && out[i].GraceStart != nil) {
+		if out[i].Holds != (len(out[i].Revisions) > 0) || (out[i].GraceStart != nil && (!out[i].Holds || !utcTimePtr(out[i].GraceStart))) {
 			return nil, errors.New("coordination archive lookup response has an invalid hold state")
 		}
 	}
@@ -378,11 +385,14 @@ func validateListItem(item protocol.CoordArchiveListItem, q protocol.CoordArchiv
 	} else if spec["project"] != q.Project {
 		return errors.New("projection project differs")
 	}
-	if q.Resource == "inboxmessages" {
+	if q.Resource == "inboxmessages" || q.Resource == "inboxreadacks" {
 		recipient, ok := spec["recipient"].(map[string]any)
 		if !ok || recipient["uid"] != item.Manifest.RecipientUID {
 			return errors.New("projection recipient differs")
 		}
+	}
+	if q.Resource == "inboxreadacks" && spec["messageUID"] != item.Manifest.MessageUID {
+		return errors.New("projection message differs")
 	}
 	return nil
 }
