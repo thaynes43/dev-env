@@ -315,7 +315,7 @@ func decodeLookupResults(raw []byte) ([]protocol.CoordArchiveLookupResult, error
 				return nil, errors.New("coordination archive lookup response has an invalid revision")
 			}
 		}
-		if out[i].Holds != (len(out[i].Revisions) > 0) || (out[i].GraceStart != nil && (!out[i].Holds || !utcTimePtr(out[i].GraceStart))) {
+		if out[i].Holds != (len(out[i].Revisions) > 0) || (out[i].GraceStart != nil && !utcTimePtr(out[i].GraceStart)) {
 			return nil, errors.New("coordination archive lookup response has an invalid hold state")
 		}
 	}

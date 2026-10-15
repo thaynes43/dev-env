@@ -230,6 +230,11 @@ func TestCoordinationArchiveRetryAndBatchContracts(t *testing.T) {
 	if out, err := c.Lookup(context.Background(), []protocol.CoordArchiveIdentity{id}); err != nil || out[0].Holds {
 		t.Fatalf("lookup miss: %#v %v", out, err)
 	}
+	// Journal grace survives missing revisions so R3 can reset and report archive_missing.
+	e.out = string(mustJSON(t, []protocol.CoordArchiveLookupResult{{CoordArchiveIdentity: id, Revisions: []protocol.CoordArchiveRevision{}, GraceStart: &at}}))
+	if out, err := c.Lookup(context.Background(), []protocol.CoordArchiveIdentity{id}); err != nil || out[0].Holds || out[0].GraceStart == nil {
+		t.Fatalf("missing revision grace: %#v %v", out, err)
+	}
 	reset := absent
 	reset.State = "reset"
 	reset.Sessions = nil

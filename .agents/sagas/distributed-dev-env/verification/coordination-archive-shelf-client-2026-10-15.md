@@ -15,7 +15,9 @@ redaction, item errors and cursor binding without hashing that projection agains
 the full object digest. A corrupt list item exposes neither manifest nor object.
 Put preserves immutable first-publisher provenance across retries, including
 existing grace on an unmarked retry. Lookup's `holds` means revisions exist;
-it does not imply non-null grace. Mark present/reset clears grace.
+it does not imply non-null grace. Journal grace can also survive a missing last
+revision, so a later reconciler can observe and reset that state. Mark
+present/reset clears grace.
 
 The client remains caller-gated, like HistoryReader: later runnable/API callers
 must take the existing shared ExecSlots pool. No new semaphore, runnable/API
@@ -39,7 +41,11 @@ list projection/recipient/cursor refusal, six typed refusal codes versus transpo
 failures, both output caps and context/deadline bounds. Existing history, shelf,
 rescue/prune and slots regressions also passed. Two owner compile failures from
 a test-helper naming mistake were retained before the successful run; earlier
-worker failures and reviews are preserved in the private checkpoint.
+worker failures and reviews are preserved in the private checkpoint. A final
+review found the missing-revision/non-null-grace case; after correcting that
+validation and adding its fixture, the seven coordination client methods /14
+passing nodes ran again with no skips in 0.134 seconds using the same bounds
+and `-run '^TestCoordinationArchive'`. Existing unchanged regressions were reused.
 
 Independent review and required CI are final source acceptance gates. Actual
 shelf-limit memory measurement, release/installed image, archive activation,
