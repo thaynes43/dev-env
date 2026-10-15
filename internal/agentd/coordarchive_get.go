@@ -24,6 +24,7 @@ func (a CoordArchive) GetExact(q protocol.CoordArchiveExactQuery) (protocol.Coor
 // The chosen object is fully verified before any result is returned.
 func (a CoordArchive) GetSelected(q protocol.CoordArchiveGetQuery) (protocol.CoordArchiveGetResult, error) {
 	zero := protocol.CoordArchiveGetResult{}
+	defaultUID := q.UID == ""
 	if err := q.Validate(); err != nil {
 		return zero, err
 	}
@@ -86,7 +87,17 @@ func (a CoordArchive) GetSelected(q protocol.CoordArchiveGetQuery) (protocol.Coo
 	if selected.LatestTied {
 		return zero, protocol.HistoryErrorf(protocol.HistoryErrAmbiguous, "", "revision archive time does not identify one latest revision; supply revision/hash")
 	}
-	return a.readRevision(selected.Latest.CoordArchiveManifest, selected.LatestRel)
+	result, err := a.readRevision(selected.Latest.CoordArchiveManifest, selected.LatestRel)
+	if err != nil {
+		return zero, err
+	}
+	// A default latest request is the selected UID's archived item. Its outgoing
+	// receipt is that UID's birth time, rather than the later revision receipt.
+	// Explicit UID selection retains its revision receipt.
+	if defaultUID {
+		result.Manifest.ArchivedAt = selected.FirstAt
+	}
+	return result, nil
 }
 
 func coordGetNotFound() error {
