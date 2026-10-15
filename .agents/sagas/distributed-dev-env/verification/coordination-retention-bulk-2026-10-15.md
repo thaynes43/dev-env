@@ -14,10 +14,16 @@ incomplete or mismatched responses return no partial result. Lookup metadata is
 retained for later mark/grace work only; this source slice adds no archive write,
 release, delete, runnable, runtime action or acceptance claim.
 
-Focused fake coverage proves exact chunking beyond 1024 records, resource/project
-isolation, message deduplication, pending-ack-only resolution, invalid and bad
-proof refusal, nonblocking slot exhaustion, and slot release on errors and
-cancellation. It ran with cached Go 1.27.2, `nice -n 19`, `GOMAXPROCS=2`,
+Focused fake coverage proves exact chunking beyond 1024 records, same-resource
+cross-project isolation, dependency deduplication against a listed live message,
+and composition with actual rule evaluation: proved absence plus holds releases
+the pending ack, no holds keeps it, and a message read error remains Unknown.
+It also proves one token held during exec on a supplied two-token pool, restored
+capacity, no usable output after a later-batch error/partial/wrong-identity/busy/
+cancel result, and cancellation for empty/invalid inputs and after client return.
+The revised suite has 9 top-level methods / 21 passing nodes, zero skips (0.061s).
+Native R3-BULK-1/2 cancellation/fixture findings are addressed; final native
+corrective review and hosted CI are recorded with the PR acceptance. It ran with cached Go 1.27.2, `nice -n 19`, `GOMAXPROCS=2`,
 `-p 1`, the shared test lock, and downloads disabled:
 
 ```text

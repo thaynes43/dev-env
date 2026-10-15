@@ -29,6 +29,9 @@ var ErrLookupBusy = errors.New("coordination retention lookup: shelf exec slot u
 // Lookup consumes one evaluated pass with sequential, grouped archive lookups.
 // It returns no partial result when validation or any lookup fails.
 func Lookup(ctx context.Context, operatorNamespace string, slots *shelf.ExecSlots, archive ArchiveLookup, results []Result) ([]LookupResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if slots == nil || archive == nil {
 		return nil, errors.New("coordination retention lookup: shelf slots and archive are required")
 	}
@@ -36,6 +39,9 @@ func Lookup(ctx context.Context, operatorNamespace string, slots *shelf.ExecSlot
 	groups := map[string][]protocol.CoordArchiveIdentity{}
 	seen := map[string]struct{}{}
 	for i, result := range results {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		s := result.Summary
 		if !validSummary(s, operatorNamespace) {
 			out[i].Result = Result{Summary: s, Decision: Unknown}
@@ -62,8 +68,14 @@ func Lookup(ctx context.Context, operatorNamespace string, slots *shelf.ExecSlot
 	for key := range groups {
 		keys = append(keys, key)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	sort.Strings(keys)
 	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		ids := groups[key]
 		sort.Slice(ids, func(i, j int) bool {
 			if ids[i].Name != ids[j].Name {
@@ -96,6 +108,9 @@ func Lookup(ctx context.Context, operatorNamespace string, slots *shelf.ExecSlot
 				return nil, errors.New("coordination retention lookup: incomplete response")
 			}
 			for n := range answer {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				if answer[n].CoordArchiveIdentity != ids[start+n] {
 					return nil, errors.New("coordination retention lookup: response identity differs")
 				}
@@ -104,6 +119,9 @@ func Lookup(ctx context.Context, operatorNamespace string, slots *shelf.ExecSlot
 		}
 	}
 	for i := range out {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		s := out[i].Result.Summary
 		if !validSummary(s, operatorNamespace) {
 			continue
@@ -128,6 +146,9 @@ func Lookup(ctx context.Context, operatorNamespace string, slots *shelf.ExecSlot
 			out[i].Result.Decision = Kept
 		}
 		out[i].Result.RequiredMessage = nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
