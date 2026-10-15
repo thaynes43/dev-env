@@ -58,3 +58,22 @@ The composed fixture evidence has two deliberately separate bounded parts:
 This is **COMPOSED** source evidence, not one archive-to-HTTP end-to-end test,
 and not envtest, installed, runtime, consumer, release, archive activation or
 cutover acceptance.
+
+The independent source review requested three corrections: decoded cursor
+progress, import grouping, and focused acceptance coverage. Continuations now
+compare decoded index names and must move strictly older, including when an
+alternate encoding names the same position. Added fixtures cover selector
+binding, malformed projections, valid coordinator/default and maximum limits,
+foreign-project refusal, and immutable managed attribution with a source-read
+guard. The existing full-content `ValidSpec` implementation remains unchanged;
+the metadata-only helper reuses the origin and provenance validators but repeats
+its metadata predicates to keep this slice from changing accepted live validation.
+A future shared extraction must retain that separation.
+
+The coordinator directly captured one constrained selection after these
+corrections on October 15 at 16:32 UTC: 11 methods, 39 passing test nodes, zero
+skips. Package times were agentd 0.103s, contextpublication 0.012s and apiserver
+2.969s. These totals describe that one selection. The real archive-to-typed-client
+and typed-client-to-API fixtures remain separate composed evidence. Earlier
+compile and duplicate-query fixture failures are preserved in the private
+work-order record; they are not runtime failures or evidence of installed parity.

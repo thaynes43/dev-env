@@ -99,13 +99,17 @@ func (s *Server) listArchivedPublishedContexts(ctx context.Context, project stri
 		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "coordination archive unavailable")
 	}
 	if result.Next != "" {
-		if result.Next == after {
-			return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "coordination archive unavailable")
-		}
 		nextQuery := query
 		nextQuery.After = result.Next
-		if nextQuery.Validate() != nil {
+		nextName, nextErr := protocol.CoordArchiveListCursorName(nextQuery)
+		if nextErr != nil {
 			return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "coordination archive unavailable")
+		}
+		if after != "" {
+			afterName, afterErr := protocol.CoordArchiveListCursorName(query)
+			if afterErr != nil || nextName >= afterName {
+				return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "coordination archive unavailable")
+			}
 		}
 	}
 	items := make([]apiv1.ContextMetadata, 0, len(result.Items))
