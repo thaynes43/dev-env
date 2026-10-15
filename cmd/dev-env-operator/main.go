@@ -529,8 +529,9 @@ func run(args []string) error {
 		if o.inboxEnabled {
 			inboxStore = &inbox.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.templatesNamespace}
 		}
-		// Coordination records are never deleted, so their bounds are lifetime
-		// bounds; the counts are exported beside them (#175 review).
+		// Export live project record counts and lifetime source Session bounds.
+		// Enabled archive-backed retention can free project capacity after eligible
+		// records meet the minimum 30-day absence requirement for required Sessions.
 		var recordKinds []taskclaim.RecordKind
 		if claims != nil {
 			recordKinds = append(recordKinds, taskclaim.RecordKind{Kind: "TaskClaim", Limits: claims.Limits.Effective(taskclaim.DefaultLimits)})

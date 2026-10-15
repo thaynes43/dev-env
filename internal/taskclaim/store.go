@@ -36,8 +36,10 @@ const (
 )
 
 // Limits bounds how many records of one kind one Session and one project may
-// create. Records are immutable and never deleted, so both are lifetime
-// bounds. A zero field takes the kind's default.
+// create. A source Session's bound is lifetime; the project bound counts live
+// records. Enabled archive-backed retention can free project capacity after
+// eligible records meet the minimum 30-day absence requirement for their
+// required Sessions. A zero field takes the kind's default.
 type Limits struct {
 	PerSession int64
 	PerProject int64
