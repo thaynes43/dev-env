@@ -99,7 +99,7 @@ func TestInboxArchiveAckGetRedAcceptedBase(t *testing.T) {
 	}
 }
 
-func TestInboxArchiveAckGetDefaultOffLiveWinsAndPostStaysLiveOnly(t *testing.T) {
+func TestInboxArchiveAckGetDefaultOffAndLiveAckWins(t *testing.T) {
 	f, _, recipient, m, _, messagePath := inboxArchiveGetRig(t)
 	ackPath := messagePath[:len(messagePath)-len("?project=sample")] + "/ack?project=sample"
 	if w := f.do(http.MethodPost, ackPath, recipient, bytes.NewBufferString(`{}`)); w.Code != http.StatusCreated {
@@ -131,12 +131,6 @@ func TestInboxArchiveAckGetDefaultOffLiveWinsAndPostStaysLiveOnly(t *testing.T) 
 		if _, archived := got["archived"]; archived {
 			t.Fatalf("live ack marked archived: %#v", got)
 		}
-	}
-	if err := f.c.Delete(context.Background(), m); err != nil {
-		t.Fatal(err)
-	}
-	if w := f.do(http.MethodPost, ackPath, recipient, bytes.NewBufferString(`{}`)); w.Code != http.StatusNotFound || archive.calls != 0 {
-		t.Fatalf("POST must remain live-only = %d calls=%d body=%s", w.Code, archive.calls, w.Body.String())
 	}
 }
 

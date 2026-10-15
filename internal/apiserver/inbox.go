@@ -322,17 +322,23 @@ func (s *Server) ackInbox(ctx context.Context, _ http.ResponseWriter, r *http.Re
 	if c.kind != kindSession {
 		return 0, nil, inboxHidden()
 	}
-	var empty struct{}
+	var empty map[string]json.RawMessage
 	if err := boundedInboxJSON(r, 128, &empty); err != nil {
 		return 0, nil, err
 	}
-	m, _, err := s.authorizedInbox(ctx, r, c, false)
+	if len(empty) != 0 {
+		return 0, nil, badRequest("expected one empty inbox acknowledgement object")
+	}
+	m, archivedAt, err := s.authorizedInbox(ctx, r, c, true)
 	if err != nil {
 		return 0, nil, err
 	}
 	fresh, err := s.inboxReadScope(ctx, c, m.Spec.Project)
 	if err != nil || fresh == nil || *fresh != m.Spec.Recipient {
 		return 0, nil, inboxHidden()
+	}
+	if archivedAt != nil {
+		return s.archivedInboxAckRetry(ctx, c, m)
 	}
 	a, created, err := s.Inbox.Ack(ctx, m, inboxActor(c))
 	if err != nil {
