@@ -280,13 +280,14 @@ func TestTaskClaimArchiveListLimitsAndCallerFence(t *testing.T) {
 	for _, mode := range []string{"replaced-session", "deleting-pod", "missing-grant"} {
 		t.Run(mode, func(t *testing.T) {
 			f, reader, _, archive := taskClaimArchiveListRig(t)
-			if mode == "replaced-session" {
+			switch mode {
+			case "replaced-session":
 				s := f.session("archive-reader")
 				s.UID = "replacement-session"
 				if err := f.c.Update(context.Background(), s); err != nil {
 					t.Fatal(err)
 				}
-			} else if mode == "deleting-pod" {
+			case "deleting-pod":
 				var pod corev1.Pod
 				if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: sessionNS, Name: "archive-reader"}, &pod); err != nil {
 					t.Fatal(err)
@@ -298,7 +299,7 @@ func TestTaskClaimArchiveListLimitsAndCallerFence(t *testing.T) {
 				if err := f.c.Delete(context.Background(), &pod); err != nil {
 					t.Fatal(err)
 				}
-			} else {
+			default:
 				f.srv.TaskClaimReadProjects = []string{"other"}
 			}
 			w := f.do(http.MethodGet, path, reader, nil)
