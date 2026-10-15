@@ -63,6 +63,7 @@ Each run has its own raw identity; none are combined:
 | Accepted handler counterexample | `red-direct.json` | Expected failure after valid live control | `fca016f3ad1215c0596c94aa0bc312953ddd1dbc2af5b90ff99681fd900c5706` |
 | Worker candidate | `final-direct.json` | Pass, 21 methods / 79 nodes | `4bb6d4fa44d6289e1cf8d7d2a10bb9f7dff8ee625f21609212c3006262e04b3a` |
 | Compatibility counterexample | `compat-red.jsonl` | Expected failure: missing-project 400 | `ddc19c0f8155863d26bfbc80c11d7bfe7174826be84a07c544b382c2f2575df8` |
+| Root expanded fixtures, before correction | `root-final.jsonl` | Fail: 25 methods / 110 nodes started; 23 methods / 107 nodes passed | `cd5d873933a78f91b853d4813b1643a92f9b53b26854aa88d5d403e6ad00a85f` |
 | **Final root selection** | `root-corrected.jsonl` | **Pass, 25 methods / 110 nodes** | `1565209336c8e253444c9dac634d6790793fa85f4be9f57785965c0b5ff41c13` |
 
 The final selection includes 85 subtests and 1 separate package pass event.
