@@ -91,23 +91,32 @@ func (a CoordArchive) listLocked(q protocol.CoordArchiveListQuery) (protocol.Coo
 		}
 		monthUpper, includeUpper = months[len(months)-1], false
 	}
+	encodedItems := 0
 	for i, selected := range candidates {
 		item := a.coordListItem(q, path.Join(base, selected.month, selected.name), selected.name, selected.month)
-		candidateItems := append(append([]protocol.CoordArchiveListItem(nil), result.Items...), item)
-		next, err := q.Cursor(selected.name)
-		if err != nil {
-			return protocol.CoordArchiveListResult{}, err
+		next := ""
+		if i+1 < len(candidates) {
+			var err error
+			next, err = q.Cursor(selected.name)
+			if err != nil {
+				return protocol.CoordArchiveListResult{}, err
+			}
 		}
-		trial := protocol.CoordArchiveListResult{Items: candidateItems, Next: next}
-		encoded, err := protocol.CanonicalJSON(trial)
-		if err != nil || len(encoded)+1 > protocol.MaxCoordArchiveLookupBytes { // agentd writes a final newline.
+		encoded, itemErr := protocol.CanonicalJSON(item)
+		frame, frameErr := protocol.CanonicalJSON(protocol.CoordArchiveListResult{Items: []protocol.CoordArchiveListItem{}, Next: next})
+		// Empty brackets are already in frame; add each encoded item once,
+		// the separators, and agentd's final newline.
+		wireBytes := len(frame) + encodedItems + len(encoded) + len(result.Items) + 1
+		if itemErr != nil || frameErr != nil || wireBytes > protocol.MaxCoordArchiveLookupBytes {
 			if len(result.Items) == 0 {
 				return protocol.CoordArchiveListResult{}, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, path.Join(base, selected.month, selected.name), "list item cannot fit the output bound")
 			}
 			result.Next, _ = q.Cursor(candidates[i-1].name)
 			return result, nil
 		}
-		result = trial
+		result.Items = append(result.Items, item)
+		result.Next = next
+		encodedItems += len(encoded)
 		if len(result.Items) == q.Limit {
 			return result, nil
 		}

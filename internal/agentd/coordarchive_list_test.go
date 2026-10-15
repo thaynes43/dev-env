@@ -45,7 +45,7 @@ func TestCoordArchiveListPagesLatestVerifiedProjection(t *testing.T) {
 	}
 	q.After = page.Next
 	page, err = a.List(q)
-	if err != nil || len(page.Items) != 1 || page.Items[0].UID != m.UID || page.Next == "" {
+	if err != nil || len(page.Items) != 1 || page.Items[0].UID != m.UID || page.Next != "" {
 		t.Fatalf("second page: %#v, %v", page, err)
 	}
 	bad := protocol.CoordArchiveListQuery{Resource: "taskclaims", Project: "other", Limit: 1, After: q.After}
@@ -181,7 +181,7 @@ func TestCoordArchiveListPagesBoundedSelectionAcrossDirectoryBatches(t *testing.
 	}
 	q.After = first.Next
 	second, err := a.List(q)
-	if err != nil || len(second.Items) != 30 {
+	if err != nil || len(second.Items) != 30 || second.Next != "" {
 		t.Fatalf("second terminal page: %#v, %v", second, err)
 	}
 	for _, item := range second.Items {
@@ -219,14 +219,10 @@ func TestCoordArchiveListContinuesAcrossSparseMonthBatches(t *testing.T) {
 	q := protocol.CoordArchiveListQuery{Resource: base.Resource, Project: base.Project, Limit: 1}
 	for i := len(uids) - 1; i >= 0; i-- {
 		page, err := a.List(q)
-		if err != nil || len(page.Items) != 1 || page.Items[0].UID != uids[i] || page.Items[0].Error != "" || page.Next == "" {
+		if err != nil || len(page.Items) != 1 || page.Items[0].UID != uids[i] || page.Items[0].Error != "" || (i > 0 && page.Next == "") || (i == 0 && page.Next != "") {
 			t.Fatalf("sparse month page %d: %#v, %v", i, page, err)
 		}
 		q.After = page.Next
-	}
-	last, err := a.List(q)
-	if err != nil || len(last.Items) != 0 || last.Next != "" {
-		t.Fatalf("sparse month exhaustion: %#v, %v", last, err)
 	}
 }
 
@@ -269,7 +265,25 @@ func TestCoordArchiveListKeepsContinuationAtFourMiBWireBoundary(t *testing.T) {
 	}
 	q.After = first.Next
 	second, err := a.List(q)
-	if err != nil || len(second.Items) != 1 || second.Items[0].UID == first.Items[len(first.Items)-1].UID {
+	if err != nil || len(second.Items) != 1 || second.Items[0].UID == first.Items[len(first.Items)-1].UID || second.Next != "" {
 		t.Fatalf("deferred boundary item was lost or repeated: %#v, %v", second, err)
+	}
+}
+
+func TestCoordArchiveListRefusesUnknownIndexName(t *testing.T) {
+	a := coordArchiveRig(t)
+	m, raw := coordStoredFixture(t, "taskclaims")
+	stored, err := a.Put(m, bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	month := filepath.Join(a.Root, "v1", m.Resource, m.Project, "index", "all", stored.ArchivedAt.Format("2006-01"))
+	if err := os.WriteFile(filepath.Join(month, "unknown-name"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := a.List(protocol.CoordArchiveListQuery{Resource: m.Resource, Project: m.Project, Limit: 1})
+	requireCoordError(t, err, protocol.HistoryErrCorrupt)
+	if len(result.Items) != 0 || result.Next != "" {
+		t.Fatalf("unknown identity returned a partial page: %#v", result)
 	}
 }

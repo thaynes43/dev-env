@@ -10,8 +10,10 @@ Pages contain at most 100 items and are capped at 4 MiB. Their opaque cursor
 binds the resource, project, recipient selector and last index name; a
 cross-index or malformed cursor is refused. Traversal reads directory names in
 128-entry batches without relying on physical directory order or accumulating a
-whole index. A malformed index or selected revision is represented as an item
-with `error: corrupt` and no object; it never falls back to an older revision.
+whole index. A valid index filename with a malformed entry body or selected revision is
+represented as an item with `error: corrupt` and no object; it never falls back
+to an older revision. Invalid month/index names have no trustworthy identity
+and refuse the whole page as `corrupt`, without objects.
 
 The local synthetic fixtures cover traversal across two months, a verified
 latest projection with text removed, cursor binding, corruption of the latest
@@ -53,3 +55,13 @@ Ordering remains recorded UTC archive time. Physical arrival chronology after
 clock rollback is unestablished; equal greatest revision times refuse instead
 of guessing. These are synthetic source fixtures, not installed production
 execution, runtime archive acceptance, or MVP completion.
+
+The final advisory correction encodes each item once and counts the encoded
+items, separators, empty envelope, optional cursor and newline before adding
+it. Terminal pages omit `next`; a size-cut page keeps the last emitted cursor.
+DESIGN-024 now states the distinction between a known UID with corrupt content
+and an invalid directory filename whose identity is unknown. Eight focused
+backend list methods passed without skips in 1.664s at 13:07 UTC on2026-10-15,
+under the same lock/CPU/cached-toolchain limits, including terminal cursor
+checks and whole-page unknown-name refusal. No broader suite or live command
+was repeated for this correction.
