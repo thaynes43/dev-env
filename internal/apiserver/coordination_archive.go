@@ -39,12 +39,21 @@ func (s *Server) coordinationArchiveSlot(ctx context.Context) (func(), error) {
 }
 
 func (s *Server) archivedPublishedContext(ctx context.Context, name, project string) (*coord.PublishedContext, time.Time, error) {
+	if ctx.Err() != nil {
+		return nil, time.Time{}, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "coordination archive unavailable")
+	}
 	release, err := s.coordinationArchiveSlot(ctx)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
 	defer release()
+	if ctx.Err() != nil {
+		return nil, time.Time{}, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "coordination archive unavailable")
+	}
 	result, err := s.CoordinationArchive.Get(ctx, protocol.CoordArchiveGetQuery{Resource: "publishedcontexts", Name: name})
+	if ctx.Err() != nil {
+		return nil, time.Time{}, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "coordination archive unavailable")
+	}
 	if err != nil {
 		var refusal *protocol.HistoryError
 		if errors.As(err, &refusal) && refusal.Code == protocol.HistoryErrNotFound {
@@ -57,12 +66,18 @@ func (s *Server) archivedPublishedContext(ctx context.Context, name, project str
 		return nil, time.Time{}, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "coordination archive unavailable")
 	}
 	manifest := result.Manifest.CoordArchiveManifest
-	if manifest.Resource != "publishedcontexts" || manifest.Kind != "PublishedContext" || manifest.APIVersion != "coordination.dev-env.haynesops.com/v1alpha1" || manifest.Namespace != s.PublishedContexts.Namespace || manifest.Name != name || manifest.Project != project || result.Manifest.ArchivedAt.IsZero() || result.Manifest.ArchivedAt.Location() != time.UTC {
+	if manifest.Resource != "publishedcontexts" || manifest.Kind != "PublishedContext" || manifest.APIVersion != "coordination.dev-env.haynesops.com/v1alpha1" || manifest.Namespace != s.PublishedContexts.Namespace || manifest.Name != name || result.Manifest.ArchivedAt.IsZero() || result.Manifest.ArchivedAt.Location() != time.UTC {
 		return nil, time.Time{}, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "coordination archive unavailable")
 	}
 	var archived coord.PublishedContext
-	if json.Unmarshal(canonical, &archived) != nil || archived.APIVersion != manifest.APIVersion || archived.Kind != manifest.Kind || archived.Namespace != manifest.Namespace || archived.Name != manifest.Name || string(archived.UID) != manifest.UID || archived.ResourceVersion != manifest.ResourceVersion || archived.Spec.Project != project || !contextpublication.ValidName(archived.Name) || !contextpublication.ValidSpec(archived.Spec) || archived.CreationTimestamp.IsZero() || !archived.DeletionTimestamp.IsZero() {
+	if json.Unmarshal(canonical, &archived) != nil || archived.APIVersion != manifest.APIVersion || archived.Kind != manifest.Kind || archived.Namespace != manifest.Namespace || archived.Name != manifest.Name || string(archived.UID) != manifest.UID || archived.ResourceVersion != manifest.ResourceVersion || archived.Spec.Project != manifest.Project || archived.Name != contextpublication.Name(archived.Spec.Identity) || !contextpublication.ValidSpec(archived.Spec) || archived.CreationTimestamp.IsZero() || !archived.DeletionTimestamp.IsZero() {
 		return nil, time.Time{}, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "coordination archive unavailable")
+	}
+	if ctx.Err() != nil {
+		return nil, time.Time{}, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "coordination archive unavailable")
+	}
+	if manifest.Project != project {
+		return nil, time.Time{}, notFound("published context not found")
 	}
 	return &archived, result.Manifest.ArchivedAt, nil
 }
@@ -71,7 +86,6 @@ func archivedContextMetadata(p *coord.PublishedContext, archivedAt time.Time) ap
 	m := contextMetadata(p)
 	m.Archived = true
 	m.ArchivedAt = &archivedAt
-	// Archived context reads do not join a possibly absent source Session.
-	m.Attribution = apiv1.ContextAttribution{ObservedModelState: protocol.UsageUnknown, UsageState: protocol.UsageUnknown, CostState: protocol.UsageUnknown}
+	// Keep immutable attribution; do not join a possibly absent source Session.
 	return m
 }

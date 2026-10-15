@@ -93,15 +93,10 @@ func contextLimitRefusal(body io.Reader) bool {
 }
 
 func validContextMetadata(m apiv1.ContextMetadata) bool {
-	archivedAtValid := !m.Archived && m.ArchivedAt == nil || m.Archived && m.ArchivedAt != nil && !m.ArchivedAt.IsZero()
-	attributionValid := apiv1.ValidContextAttribution(m.Attribution, m.ManagedOutput != nil)
-	if m.Archived && m.Attribution.Provider == "" && m.Attribution.RequestedModel == "" {
-		attributionValid = m.Attribution.ObservedModelState == protocol.UsageUnknown && m.Attribution.UsageState == protocol.UsageUnknown && m.Attribution.CostState == protocol.UsageUnknown && len(m.Attribution.ObservedModels) == 0 && m.Attribution.Usage == nil
-	}
 	return apiv1.ValidContextUID(m.Source.UID) && m.Name == apiv1.ContextName(m.Source.UID, m.Kind, m.Key) && apiv1.ValidContextUID(m.UID) &&
 		apiv1.ValidContextRequest(apiv1.PublishContextRequest{Kind: m.Kind, Key: m.Key, Text: "probe"}) && m.SourceGeneration >= 1 && m.Source.Name != "" && m.Source.Namespace != "" &&
 		m.Actor.Kind == "session" && apiv1.ValidContextUID(m.Actor.PodUID) && m.Actor.PodName != "" && m.Actor.ServiceAccount != "" && contextProjectPattern.MatchString(m.Project) && contextProjectPattern.MatchString(m.Repository) &&
-		archivedAtValid && ((m.Archived && m.Attribution.Provider == "" && m.Attribution.RequestedModel == "") || (contextProjectPattern.MatchString(m.Attribution.Provider) && len(m.Attribution.RequestedModel) > 0 && len(m.Attribution.RequestedModel) <= 256)) && attributionValid &&
+		contextProjectPattern.MatchString(m.Attribution.Provider) && len(m.Attribution.RequestedModel) > 0 && len(m.Attribution.RequestedModel) <= 256 && apiv1.ValidContextAttribution(m.Attribution, m.ManagedOutput != nil) &&
 		contextDigestPattern.MatchString(m.ContentSHA256) && m.ByteCount > 0 && m.ByteCount <= apiv1.MaxContextBytes && !m.PublishedAt.IsZero() &&
 		contextDigestPattern.MatchString(m.Provenance.CatalogRevision) && contextDigestPattern.MatchString(m.Provenance.RulesRevision) && m.Provenance.InitialPinState == "Unknown" && m.Provenance.ReportedHead == "" && m.Provenance.ReportedAt == nil &&
 		m.StopState == "Unknown" && validContextOrigin(m)

@@ -43,16 +43,24 @@ func (s *ExecSlots) TryTake() (release func(), ok bool) {
 // Take waits for a slot until ctx ends. Archive HTTP reads use their own
 // bounded context; background work continues to use TryTake.
 func (s *ExecSlots) Take(ctx context.Context) (release func(), err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-s.free:
 		done := false
-		return func() {
+		release := func() {
 			if !done {
 				done = true
 				s.free <- struct{}{}
 			}
-		}, nil
+		}
+		if err := ctx.Err(); err != nil {
+			release()
+			return nil, err
+		}
+		return release, nil
 	}
 }
