@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -456,8 +458,22 @@ func TestTaskClaimArchiveListResponseBounds(t *testing.T) {
 					archive.list.Items = append(archive.list.Items, item)
 				}
 			case "too-large":
-				claim.Annotations = map[string]string{"fixture": strings.Repeat("x", 4<<20)}
-				archive.list.Items = []protocol.CoordArchiveListItem{archivedTaskClaimListItem(t, claim)}
+				claim.Annotations = map[string]string{"fixture": strings.Repeat("x", 220<<10)}
+				for n := 0; n < 20; n++ {
+					row := claim.DeepCopy()
+					row.UID = types.UID(fmt.Sprintf("11111111-1111-1111-1111-%012d", n))
+					row.Spec.Identity.TaskKey = fmt.Sprintf("issue:%d", 1000+n)
+					row.Name = taskclaim.Name(row.Spec.Identity)
+					valid := archivedTaskClaimListItem(t, row)
+					if _, _, err := f.srv.archivedTaskClaimMetadata(*valid.Manifest, valid.Object); err != nil {
+						t.Fatalf("oversize-page fixture row is individually invalid: %v", err)
+					}
+					archive.list.Items = append(archive.list.Items, valid)
+				}
+				envelope, err := protocol.CanonicalJSON(archive.list)
+				if err != nil || len(envelope) <= maxTaskClaimArchiveListBytes {
+					t.Fatal("fixture does not exceed only the whole-page byte bound")
+				}
 			case "corrupt-payload":
 				item.Error = protocol.HistoryErrCorrupt
 				archive.list.Items = []protocol.CoordArchiveListItem{item}
