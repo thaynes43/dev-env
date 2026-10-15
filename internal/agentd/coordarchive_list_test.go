@@ -195,6 +195,41 @@ func TestCoordArchiveListPagesBoundedSelectionAcrossDirectoryBatches(t *testing.
 	}
 }
 
+func TestCoordArchiveListContinuesAcrossSparseMonthBatches(t *testing.T) {
+	a := coordArchiveRig(t)
+	base, baseRaw := coordStoredFixture(t, "taskclaims")
+	var uids []string
+	for i, month := range []time.Month{time.January, time.March, time.September} {
+		uid := fmt.Sprintf("%08x-1111-1111-1111-111111111111", i+1)
+		m, raw := coordSelectorFixture(t, base, baseRaw, uid, "42")
+		at := time.Date(2020, month, 1, 0, 0, 0, 0, time.UTC)
+		a.Now = func() time.Time { return at }
+		if _, err := a.Put(m, bytes.NewReader(raw)); err != nil {
+			t.Fatal(err)
+		}
+		uids = append(uids, uid)
+	}
+	index := filepath.Join(a.Root, "v1", base.Resource, base.Project, "index", "all")
+	for i := 0; i < 131; i++ {
+		month := time.Date(2021, time.January, 1, 0, 0, 0, 0, time.UTC).AddDate(0, i, 0)
+		if err := os.MkdirAll(filepath.Join(index, month.Format("2006-01")), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	q := protocol.CoordArchiveListQuery{Resource: base.Resource, Project: base.Project, Limit: 1}
+	for i := len(uids) - 1; i >= 0; i-- {
+		page, err := a.List(q)
+		if err != nil || len(page.Items) != 1 || page.Items[0].UID != uids[i] || page.Items[0].Error != "" || page.Next == "" {
+			t.Fatalf("sparse month page %d: %#v, %v", i, page, err)
+		}
+		q.After = page.Next
+	}
+	last, err := a.List(q)
+	if err != nil || len(last.Items) != 0 || last.Next != "" {
+		t.Fatalf("sparse month exhaustion: %#v, %v", last, err)
+	}
+}
+
 func TestCoordArchiveListKeepsContinuationAtFourMiBWireBoundary(t *testing.T) {
 	a := coordArchiveRig(t)
 	base, baseRaw := coordStoredFixture(t, "taskclaims")

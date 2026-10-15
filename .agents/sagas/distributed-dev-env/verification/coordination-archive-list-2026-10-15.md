@@ -28,3 +28,28 @@ flock -w 60 /tmp/dev-env-go-tests.lock nice -n 19 \
 It passed on 2026-10-15 UTC. This is source/offline evidence only: it does not
 install, mount, activate, query, or delete a coordination archive, and it does
 not establish R2 or consumer acceptance.
+
+The final focused correction retains at most `limit + 1` month names as well as
+at most `limit + 1` selected index entries. It fetches another parent-name batch
+only after exhausting the prior batch, including empty or sparse months; each
+actual month directory is scanned once per page. The cursor month is included
+on the first batch, and later batches use an exclusive month bound. No complete
+history of month names is accumulated.
+
+Seven backend `TestCoordArchiveList` methods passed without skips in 1.826s on
+2026-10-15 at 13:01 UTC, using the cached Go1.27.2 toolchain, shared test lock,
+GOMAXPROCS=2, `-p 1`, nice19 and downloads off. The additional scenario crosses
+131 empty newer months before retrieving three older records in order on
+one-item pages, then proves cursor exhaustion without loss or duplication.
+Other focused fixtures cover 130 entries over the 128-name read batch and
+100-item page boundary, near-4MiB wire output/continuation including the final
+newline, recipient/namespace index forgery without object disclosure, and
+corrupt selected revisions without fallback. Focused protocol and CLI checks
+from the corrective unit also passed, including malformed timestamp cursors and
+bare-list invalid refusal. The initial failed CLI unsupported-list fixture and
+formatter/tool-path attempts remain preserved in the work order evidence.
+
+Ordering remains recorded UTC archive time. Physical arrival chronology after
+clock rollback is unestablished; equal greatest revision times refuse instead
+of guessing. These are synthetic source fixtures, not installed production
+execution, runtime archive acceptance, or MVP completion.

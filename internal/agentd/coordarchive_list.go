@@ -59,31 +59,37 @@ func (a CoordArchive) listLocked(q protocol.CoordArchiveListQuery) (protocol.Coo
 	if after != "" {
 		afterMonth = after[:4] + "-" + after[4:6]
 	}
-	months, err := a.coordListNames(base, "", validCoordArchiveMonth, 0)
-	if err != nil {
-		return protocol.CoordArchiveListResult{}, coordGetCorrupt(base)
-	}
 	type candidate struct{ name, month string }
 	candidates := make([]candidate, 0, q.Limit+1)
-	for _, month := range months {
-		if afterMonth != "" && month > afterMonth {
-			continue
-		}
-		upper := ""
-		if month == afterMonth {
-			upper = after
-		}
-		remaining := q.Limit + 1 - len(candidates)
-		names, err := a.coordListNames(path.Join(base, month), upper, protocol.ValidCoordArchiveIndexName, remaining)
+	monthUpper, includeUpper := afterMonth, true
+	for len(candidates) < q.Limit+1 {
+		// Keep at most one page-sized batch of month names. An exhausted
+		// sparse batch advances the parent bound; no month is visited twice.
+		months, err := a.coordListNames(base, monthUpper, includeUpper, validCoordArchiveMonth, q.Limit+1)
 		if err != nil {
-			return protocol.CoordArchiveListResult{}, coordGetCorrupt(path.Join(base, month))
+			return protocol.CoordArchiveListResult{}, coordGetCorrupt(base)
 		}
-		for _, name := range names {
-			candidates = append(candidates, candidate{name: name, month: month})
+		for _, month := range months {
+			upper := ""
+			if month == afterMonth {
+				upper = after
+			}
+			remaining := q.Limit + 1 - len(candidates)
+			names, err := a.coordListNames(path.Join(base, month), upper, false, protocol.ValidCoordArchiveIndexName, remaining)
+			if err != nil {
+				return protocol.CoordArchiveListResult{}, coordGetCorrupt(path.Join(base, month))
+			}
+			for _, name := range names {
+				candidates = append(candidates, candidate{name: name, month: month})
+			}
+			if len(candidates) == q.Limit+1 {
+				break
+			}
 		}
-		if len(candidates) == q.Limit+1 {
+		if len(months) < q.Limit+1 {
 			break
 		}
+		monthUpper, includeUpper = months[len(months)-1], false
 	}
 	for i, selected := range candidates {
 		item := a.coordListItem(q, path.Join(base, selected.month, selected.name), selected.name, selected.month)
@@ -111,9 +117,12 @@ func (a CoordArchive) listLocked(q protocol.CoordArchiveListQuery) (protocol.Coo
 
 // coordListNames scans a directory once in fixed batches. It retains only the
 // greatest limit names below upper, then returns that bounded selection newest
-// first. A zero limit is used only for month directories, whose names are not
-// archive entries.
-func (a CoordArchive) coordListNames(rel, upper string, valid func(string) bool, limit int) ([]string, error) {
+// first. The inclusive upper bound is used only to include a cursor's month;
+// subsequent month batches and revision names use an exclusive bound.
+func (a CoordArchive) coordListNames(rel, upper string, includeUpper bool, valid func(string) bool, limit int) ([]string, error) {
+	if limit < 1 || limit > protocol.MaxCoordArchiveListItems+1 {
+		return nil, protocol.HistoryErrorf(protocol.HistoryErrInvalid, rel, "invalid list selection bound")
+	}
 	d, err := openBeneath(a.Root, filepath.Join(a.Root, filepath.FromSlash(rel)), historyDirFlags)
 	if err != nil {
 		return nil, err
@@ -126,11 +135,7 @@ func (a CoordArchive) coordListNames(rel, upper string, valid func(string) bool,
 			if !valid(name) {
 				return nil, protocol.HistoryErrorf(protocol.HistoryErrCorrupt, rel, "invalid index directory entry")
 			}
-			if upper != "" && name >= upper {
-				continue
-			}
-			if limit == 0 {
-				names = append(names, name)
+			if upper != "" && (name > upper || name == upper && !includeUpper) {
 				continue
 			}
 			if len(names) < limit {
