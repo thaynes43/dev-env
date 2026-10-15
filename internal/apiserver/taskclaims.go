@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"net/url"
 	"reflect"
 	"slices"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
@@ -219,24 +221,46 @@ func (s *Server) getTaskClaim(ctx context.Context, _ http.ResponseWriter, r *htt
 	if err := s.claimsAvailable(); err != nil {
 		return 0, nil, err
 	}
-	project := r.URL.Query().Get("project")
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil || len(query["project"]) > 1 || len(query["uid"]) > 1 {
+		return 0, nil, badRequest("invalid task claim query")
+	}
+	for key := range query {
+		if key != "project" && key != "uid" {
+			return 0, nil, badRequest("invalid task claim query")
+		}
+	}
+	project, uid := query.Get("project"), query.Get("uid")
+	if _, suppliedUID := query["uid"]; suppliedUID && !protocol.ValidKubeUID(uid) {
+		return 0, nil, badRequest("invalid task claim UID")
+	}
 	if err := s.claimReadScope(ctx, c, project); err != nil {
 		return 0, nil, err
 	}
 	if !taskclaim.ValidName(r.PathValue("claim")) {
 		return 0, nil, badRequest("invalid task claim name")
 	}
-	claim, err := s.TaskClaims.Get(ctx, r.PathValue("claim"))
-	if errors.Is(err, taskclaim.ErrNotFound) {
-		return 0, nil, notFound("task claim not found")
-	}
+	name := r.PathValue("claim")
+	claim, err := s.TaskClaims.Get(ctx, name)
 	if err != nil {
+		if errors.Is(err, taskclaim.ErrNotFound) {
+			if !s.CoordinationArchiveReads {
+				return 0, nil, notFound("task claim not found")
+			}
+			return s.archivedTaskClaimView(ctx, c, project, name, uid)
+		}
 		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "task ownership is unconfirmed")
 	}
 	if claim.Spec.Identity.Project != project {
 		// The digest is deterministic: knowing a foreign identity must not
 		// reveal whether its scoped claim exists.
 		return 0, nil, notFound("task claim not found")
+	}
+	if uid != "" && uid != string(claim.UID) {
+		if !s.CoordinationArchiveReads {
+			return 0, nil, notFound("task claim not found")
+		}
+		return s.archivedTaskClaimView(ctx, c, project, name, uid)
 	}
 	return http.StatusOK, s.claimView(ctx, claim), nil
 }
