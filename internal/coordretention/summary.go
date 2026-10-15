@@ -130,6 +130,9 @@ func Summaries(ctx context.Context, c ListConfig) ([]Summary, error) {
 		}
 		return a.UID < b.UID
 	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 

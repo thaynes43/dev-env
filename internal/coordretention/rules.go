@@ -2,6 +2,7 @@ package coordretention
 
 import (
 	"context"
+	"fmt"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	devv1 "github.com/thaynes43/dev-env/api/v1alpha1"
@@ -188,3 +189,5 @@ func decide(ctx context.Context, c EvalConfig, s Summary, memo map[string]memoSe
 	}
 	return Unknown, nil
 }
+
+func (s Summary) String() string { return fmt.Sprintf("%s/%s/%s", s.Kind, s.Project, s.Name) }
