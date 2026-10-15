@@ -23,11 +23,12 @@ import (
 var contextProjectPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 var contextDigestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
-// ErrContextLimit means the operator refused a new publication because its
-// source Session or its project reached the lifetime publication bound
-// (DESIGN-013). Nothing was published, and publications are never deleted, so
-// the bound does not free up: retrying cannot succeed.
-var ErrContextLimit = errors.New("published context limit reached for this Session or its project; nothing was published and the limit does not free up, so do not retry")
+// ErrContextLimit means the operator refused a new publication because its source
+// Session reached its lifetime bound or its project reached its live record bound.
+// Nothing was published and immediate retry does not help. A project bound can
+// free only when enabled archive-backed retention succeeds, at least 30 days
+// after the required Sessions are absent.
+var ErrContextLimit = errors.New("published context limit reached for this Session or its project; nothing was published, so do not retry immediately. A Session's bound is lifetime; a project bound can free only when enabled archive-backed retention succeeds, at least 30 days after the required Sessions are absent")
 
 // The fixed operator endpoint and rotating projected identity are the only
 // remote authority. Error bodies and redirect destinations are never exposed.

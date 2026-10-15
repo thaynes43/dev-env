@@ -11,10 +11,11 @@ import (
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 )
 
-// The coordination record metrics (#175 review). Records are never deleted, so
-// the per-Session and per-project bounds are lifetime bounds: once a project
-// reaches one, every new record of that kind there is refused for good. These
-// series show how close each project is, so an alert can fire before then.
+// Coordination record metrics expose live project counts and lifetime source
+// Session bounds. Enabled archive-backed retention can free project capacity
+// after eligible records have met the minimum 30-day absence requirement for
+// their required Sessions. These series show proximity to the bounds; an
+// immediate retry does not free capacity.
 const (
 	// MetricRecords is the number of records of one kind in one project.
 	MetricRecords = "dev_env_coordination_records"
@@ -34,13 +35,13 @@ const (
 
 var (
 	recordsDesc = prometheus.NewDesc(MetricRecords,
-		"Coordination records of one kind in one project. Records are never deleted; a new one is refused once this reaches the project limit.",
+		"Live coordination records of one kind in one project; a new record is refused at the project limit. Space can free only after enabled archive-backed retention succeeds for eligible records, at least 30 days after the required Sessions are absent.",
 		[]string{"kind", "project"}, nil)
 	recordsSessionMaxDesc = prometheus.NewDesc(MetricRecordsSessionMax,
-		"The most coordination records of one kind in one project held by any one source Session (records without a source label are not attributed).",
+		"The largest number of live coordination records of one kind attributed to any one source Session in one project; that Session's bound is lifetime (records without a source label are not attributed).",
 		[]string{"kind", "project"}, nil)
 	recordLimitDesc = prometheus.NewDesc(MetricRecordLimit,
-		"The lifetime bound on coordination records of one kind, per source Session (scope=session) or per project (scope=project).",
+		"Coordination record limits per kind: lifetime per source Session (scope=session), live record count per project (scope=project); immediate retry does not free either bound.",
 		[]string{"kind", "scope"}, nil)
 )
 
