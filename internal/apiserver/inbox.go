@@ -326,7 +326,7 @@ func (s *Server) ackInbox(ctx context.Context, _ http.ResponseWriter, r *http.Re
 	if err := boundedInboxJSON(r, 128, &empty); err != nil {
 		return 0, nil, err
 	}
-	if len(empty) != 0 {
+	if empty == nil || len(empty) != 0 {
 		return 0, nil, badRequest("expected one empty inbox acknowledgement object")
 	}
 	m, archivedAt, err := s.authorizedInbox(ctx, r, c, true)
