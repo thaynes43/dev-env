@@ -106,6 +106,9 @@ func (a CoordArchive) getSelected(q protocol.CoordArchiveGetQuery, itemReceipt b
 		}
 	}
 	if selected.LatestTied {
+		if itemReceipt {
+			return zero, protocol.HistoryErrorf(protocol.HistoryErrAmbiguous, "", "revision archive time does not identify one latest item revision")
+		}
 		return zero, protocol.HistoryErrorf(protocol.HistoryErrAmbiguous, "", "revision archive time does not identify one latest revision; supply revision/hash")
 	}
 	result, err := a.readRevision(selected.Latest.CoordArchiveManifest, selected.LatestRel)

@@ -42,6 +42,14 @@ damage. Each individual pin component is also refused before mounted-root
 selection, with no result bytes or metadata. The private selector comment now
 explicitly distinguishes legacy explicit-UID recovery from item mode.
 
+The first advisory review found that the item ambiguity error inherited a
+suggestion to supply revision/hash pins, which this new entry point rejects.
+The item path now reports ambiguity without that unusable suggestion. The
+legacy error guidance remains unchanged, and an exact pinned legacy recovery
+still succeeds when item selection is ambiguous. The regression checks these
+separate caller contracts without fixing the new message to exact prose.
+The original finding and earlier captures remain preserved.
+
 The final coordinator selection passed **11 methods / 33 test nodes** in one
 direct JSON capture. The separate worker candidate capture also has 11 methods
 and 33 test nodes, plus one package pass event; it is not added to this count.
@@ -61,12 +69,12 @@ unsafe or missing identities, complete object/manifest equality and read-only
 archive-tree snapshots. Timestamp assertions compare the instant and explicitly
 require UTC where the contract requires it.
 
-Direct raw JSON SHA-256: `b7fc09c682d09234eb12b6a3a1e66d50f15a1e25309c335d0fa502e0148aa4f0`.
+Direct raw JSON SHA-256: `e33836fe5303f7ad8f56cd3e040dae1cb7d211a8ece7f22d8e08cd56f4382964`.
 
 | Tested source | SHA-256 |
 | --- | --- |
-| `internal/agentd/coordarchive_get.go` | `c07ad8d4785be9bf5e2b871b198add0d83b6256b978b650f9f6816bdf81a0994` |
-| `internal/agentd/coordarchive_item_get_test.go` | `18b9d638a007c970115ef7c165b3e713269fd2e98143d0e8dfd9e6c4c6021f69` |
+| `internal/agentd/coordarchive_get.go` | `031c20f6bfa1757964aff1a5eff1f8df2012e3c1c997d4612294168aef1d2c8e` |
+| `internal/agentd/coordarchive_item_get_test.go` | `09b8629e2aad0d58c6c23503ae90d3078f3b668995ed32e26a4e64296306ea73` |
 | `.agents/sagas/distributed-dev-env/designs/024-coordination-record-retention.md` | `a89d5179c23736aa219c580944fd9504904fa7fb8cb4bf531572976572d4bdf6` |
 
 The hashes attest the tested Go and contract bytes. This later verification

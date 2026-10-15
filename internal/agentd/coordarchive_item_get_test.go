@@ -140,6 +140,15 @@ func TestCoordArchiveItemGetRefusesPinsAndBirthDamage(t *testing.T) {
 				if got.Object != nil {
 					t.Fatal("ambiguous latest returned item bytes")
 				}
+				if bytes.Contains([]byte(err.Error()), []byte("supply revision/hash")) {
+					t.Fatal("item ambiguity recommends pins that item queries reject")
+				}
+				_, legacyErr := a.GetSelected(q)
+				requireCoordError(t, legacyErr, protocol.HistoryErrAmbiguous)
+				if !bytes.Contains([]byte(legacyErr.Error()), []byte("supply revision/hash")) {
+					t.Fatal("legacy revision recovery guidance changed")
+				}
+				requireCoordSelected(t, a, protocol.CoordArchiveGetQuery(coordExactQuery(newer)), newer, newerRaw)
 			}
 			if kind == "pin" && !reflect.DeepEqual(before, coordTree(t, a.Root)) {
 				t.Fatal("rejected pinned item read changed archive")
