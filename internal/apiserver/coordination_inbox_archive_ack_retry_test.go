@@ -5,11 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
-	"github.com/thaynes43/dev-env/internal/inbox"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -17,11 +12,16 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/inbox"
 	"github.com/thaynes43/dev-env/internal/shelf"
 )
 

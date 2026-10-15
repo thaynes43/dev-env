@@ -101,7 +101,7 @@ the later source. Root source bindings below attest the final focused selection:
 ```
 c45e95e14af2612b83a341986c1cb331f83711a10ce0ade1beb2d2631a274897  internal/apiserver/inbox.go
 ca657fd2007f66b395c86bca654605bcd4a46be888197bd6ea16ab4dee7e39fb  internal/apiserver/coordination_inbox_archive_ack_retry.go
-d6d99260ed4aaf57daecb07004cd1f1c491236c9c14e37557ba9efd0d2804586  internal/apiserver/coordination_inbox_archive_ack_retry_test.go
+26b23db6dae5e766c87fa6256cd81bfebf8e4f3b725f588f176c57fbdb632dd2  internal/apiserver/coordination_inbox_archive_ack_retry_test.go
 128b80288eaac8df747764063daaee6049e1c5b08f8257c656cfd76b12c200f3  internal/apiserver/coordination_inbox_archive_get_test.go
 b732b2e31c7fd8dfcc20f9c1f234d48e462aeadb22d4058f4717e4f424f3ca0e  internal/apiserver/coordination_inbox_archive_ack_get_test.go
 ```
@@ -115,3 +115,9 @@ The advisory on `4e8584c` identified a stale `authorizedInbox` comment that said
 all writes stayed live-only. The comment now distinguishes normal live creation
 from a read-only archived retry. Go behavior and tests are unchanged from the
 source-bound final selection above; no additional local test run is claimed.
+
+Required CI `38804891380` on `a1ab4fe` found a goimports formatting failure in
+the new retry test imports. Root grouped standard, external and repository
+imports to match the repository formatter configuration. Test bodies and
+production behavior are unchanged; the failure is retained and ordinary new-head
+CI is required. No manual rerun or new local test result is claimed.
