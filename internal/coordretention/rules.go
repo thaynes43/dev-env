@@ -35,6 +35,8 @@ type Result struct {
 	Summary         Summary
 	Decision        Decision
 	RequiredMessage *MessageRef // non-nil only after scoped live UID absence
+	// Observations are the reads this pass already performed. They confer no mark or delete authority.
+	Observations []protocol.CoordArchiveObservation
 }
 type sessionAnswer uint8
 
@@ -55,11 +57,11 @@ func Evaluate(ctx context.Context, c EvalConfig, summaries []Summary) []Result {
 	memo := map[string]memoSession{}
 	out := make([]Result, 0, len(summaries))
 	for _, s := range summaries {
-		d, pending := decide(ctx, c, s, memo)
+		d, pending, observations := decide(ctx, c, s, memo)
 		if ctx.Err() != nil {
-			d, pending = Unknown, nil
+			d, pending, observations = Unknown, nil, nil
 		}
-		out = append(out, Result{Summary: s, Decision: d, RequiredMessage: pending})
+		out = append(out, Result{Summary: s, Decision: d, RequiredMessage: pending, Observations: observations})
 	}
 	return out
 }
@@ -121,74 +123,109 @@ func session(ctx context.Context, c EvalConfig, r SessionRef, memo map[string]me
 	}
 	return sessionPresent
 }
-func absentFor(ctx context.Context, c EvalConfig, r SessionRef, memo map[string]memoSession) Decision {
-	switch session(ctx, c, r, memo) {
-	case sessionAbsent:
-		return Released
-	case sessionPresent:
-		return Kept
-	default:
-		return Unknown
+func sessionObservation(role string, ref SessionRef, memo map[string]memoSession) (protocol.CoordArchiveObservation, bool) {
+	a, ok := memo[ref.Namespace+"\x00"+ref.Name]
+	if !ok || a.answer == sessionUnknown {
+		return protocol.CoordArchiveObservation{}, false
 	}
+	obs := protocol.CoordArchiveObservation{Role: role, Namespace: ref.Namespace, Name: ref.Name, UID: ref.UID}
+	switch a.answer {
+	case sessionPresent:
+		if a.uid == ref.UID {
+			obs.Observed = "present"
+		} else {
+			obs.Observed = "uid-replaced"
+		}
+	case sessionAbsent:
+		obs.Observed = "not-found"
+	default:
+		return protocol.CoordArchiveObservation{}, false
+	}
+	return obs, true
 }
-func decide(ctx context.Context, c EvalConfig, s Summary, memo map[string]memoSession) (Decision, *MessageRef) {
+func decide(ctx context.Context, c EvalConfig, s Summary, memo map[string]memoSession) (Decision, *MessageRef, []protocol.CoordArchiveObservation) {
 	if ctx.Err() != nil || c.Reader == nil || !validSummary(s, c.OperatorNamespace) {
-		return Unknown, nil
+		return Unknown, nil, nil
 	}
 	switch s.Kind {
 	case TaskClaim:
-		return absentFor(ctx, c, s.Owner, memo), nil
+		return sessionDecision(ctx, c, "owner", s.Owner, memo)
 	case PublishedContext:
-		return absentFor(ctx, c, s.Source, memo), nil
+		return sessionDecision(ctx, c, "source", s.Source, memo)
 	case InboxMessage:
-		if d := absentFor(ctx, c, s.Sender, memo); d != Released {
-			return d, nil
+		answer := session(ctx, c, s.Sender, memo)
+		senderObs, ok := sessionObservation("sender", s.Sender, memo)
+		if !ok {
+			return Unknown, nil, nil
+		}
+		if answer == sessionPresent {
+			return Kept, nil, []protocol.CoordArchiveObservation{senderObs}
 		}
 		var a coord.InboxReadAck
 		key := client.ObjectKey{Namespace: s.Namespace, Name: inbox.AckName(s.UID, s.Recipient.UID)}
 		err := c.Reader.Get(ctx, key, &a)
 		if ctx.Err() != nil {
-			return Unknown, nil
+			return Unknown, nil, nil
 		}
 		if err == nil {
 			if !matchesObject(&a, key) || a.ResourceVersion == "" || !inbox.ValidAck(a.Spec) || a.Spec.Project != s.Project || a.Spec.MessageName != s.Name || a.Spec.MessageUID != s.UID || a.Spec.Recipient != (coord.SessionIdentity{Namespace: s.Recipient.Namespace, Name: s.Recipient.Name, UID: s.Recipient.UID}) {
-				return Unknown, nil
+				return Unknown, nil, nil
 			}
-			return Released, nil
+			return Released, nil, []protocol.CoordArchiveObservation{senderObs, {Role: "recipient", Namespace: s.Recipient.Namespace, Name: s.Recipient.Name, UID: s.Recipient.UID, Observed: "acknowledged", AckUID: string(a.UID)}}
 		}
 		if !apierrors.IsNotFound(err) {
-			return Unknown, nil
+			return Unknown, nil, nil
 		}
-		return absentFor(ctx, c, s.Recipient, memo), nil
+		recipientAnswer := session(ctx, c, s.Recipient, memo)
+		recipientObs, ok := sessionObservation("recipient", s.Recipient, memo)
+		if !ok {
+			return Unknown, nil, nil
+		}
+		decision := Released
+		if recipientAnswer == sessionPresent {
+			decision = Kept
+		}
+		return decision, nil, []protocol.CoordArchiveObservation{senderObs, recipientObs}
 	case InboxReadAck:
 		var m coord.InboxMessage
 		key := client.ObjectKey{Namespace: s.Message.Namespace, Name: s.Message.Name}
 		err := c.Reader.Get(ctx, key, &m)
 		if ctx.Err() != nil {
-			return Unknown, nil
+			return Unknown, nil, nil
 		}
 		if err == nil {
 			if !matchesObject(&m, key) {
-				return Unknown, nil
+				return Unknown, nil, nil
 			}
 			if string(m.UID) == s.Message.UID {
-				return Kept, nil
+				return Kept, nil, []protocol.CoordArchiveObservation{{Role: "message", Namespace: s.Message.Namespace, Name: s.Message.Name, UID: s.Message.UID, Observed: "present"}}
 			}
 		} else if !apierrors.IsNotFound(err) {
-			return Unknown, nil
+			return Unknown, nil, nil
 		}
 		// Only this branch has proved the original live message UID absent.
 		evidence, ok := c.Archive[s.Message]
 		if !ok || !evidence.Known {
 			needed := s.Message
-			return Unknown, &needed
+			return Unknown, &needed, nil
 		}
 		if !evidence.Holds {
-			return Kept, nil
+			return Kept, nil, nil
 		}
-		return Released, nil
+		return Released, nil, []protocol.CoordArchiveObservation{{Role: "message", Namespace: s.Message.Namespace, Name: s.Message.Name, UID: s.Message.UID, Observed: "message-released"}}
 	}
-	return Unknown, nil
+	return Unknown, nil, nil
+}
+func sessionDecision(ctx context.Context, c EvalConfig, role string, ref SessionRef, memo map[string]memoSession) (Decision, *MessageRef, []protocol.CoordArchiveObservation) {
+	answer := session(ctx, c, ref, memo)
+	obs, ok := sessionObservation(role, ref, memo)
+	if !ok {
+		return Unknown, nil, nil
+	}
+	if answer == sessionPresent {
+		return Kept, nil, []protocol.CoordArchiveObservation{obs}
+	}
+	return Released, nil, []protocol.CoordArchiveObservation{obs}
 }
 
 func (s Summary) String() string { return fmt.Sprintf("%s/%s/%s", s.Kind, s.Project, s.Name) }
