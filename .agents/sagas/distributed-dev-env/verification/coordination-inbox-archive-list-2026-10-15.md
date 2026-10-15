@@ -1,10 +1,10 @@
 # Coordination retention R4: inbox archive metadata source verification
 
-R4 is the API-read delivery unit in DESIGN-024 section6 and backlog11.
-C7-R4 is the bounded story prefix used by Chapter7, the current Codex source
+R4 is the API-read delivery unit in DESIGN-024 section 6 and backlog 11.
+C7-R4 is the bounded story prefix used by Chapter 7, the current Codex source
 coordinator; neither is a runtime feature or an installation claim. P2 below
 means a medium-severity native code-review finding. This record covers #313
-and [PR314](https://github.com/thaynes43/dev-env/pull/314).
+and [PR #314](https://github.com/thaynes43/dev-env/pull/314).
 
 This is a source-only, default-off candidate for #313. It does not claim R4,
 release, installation, archive activation, runtime acceptance, or cutover.
@@ -47,27 +47,27 @@ ok github.com/thaynes43/dev-env/internal/inbox 0.012s
 
 At the original worker checkpoint (2026-10-15T18:32:09Z), its candidate had
 not been independently reviewed or pushed, and no PR existed. That statement
-records the historical checkpoint. Subsequent coordinator work opened PR314
+records the historical checkpoint. Subsequent coordinator work opened PR #314
 and obtained native closure; current delivery still requires that PR's exact
 head checks and findings disposition. Release, installation and runtime
 acceptance remain separate. The Codex coordinator owns source acceptance.
 
-## Chapter7 acceptance correction
+## Chapter 7 acceptance correction
 
 The initial candidate's two new test methods and summarized command outputs
-were insufficient for source acceptance. The worker remains stopped. Chapter7
+were insufficient for source acceptance. The worker remains stopped. Chapter 7
 added direct UTC JSON captures for default-off behavior, live-list isolation,
-1/default100/max100/101 limits, strict singleton queries, coordinator and
+page limits of 1, default 100, maximum 100 and refusal at 101, strict singleton queries, coordinator and
 recipient scopes, deleting/replaced original recipients, post-I/O caller fences,
 full wire-normalized immutable attribution after sender removal, malformed
 metadata/manifests, corrupt-marker continuation, cursor query binding and
-strictly older progress, slot exhaustion/cancellation, and count/4MiB bounds.
+strictly older progress, slot exhaustion/cancellation, and item-count and 4 MiB bounds.
 Each row in the oversized-page fixture is individually valid. The synthetic
 typed shelf client fixture verifies inbox resource/recipient command routing and
 HTTP projection through the existing apiv1 decoder; it is not a real full
 archive-to-HTTP or installed run.
 
-Independent native review of initial candidate d98cfc2 identified P2 malformed
+Independent native review of initial candidate `d98cfc2` identified P2 malformed
 query parsing and missing acceptance coverage. URL.Query silently drops invalid
 pairs; the archived branch now rejects RawQuery ParseQuery errors before shelf
 access. Invalid percent escapes and semicolon parameters have focused refusal
@@ -84,7 +84,7 @@ The initial worker's helper-name compile failure and absent envtest assets are
 retained separately; no download or broad envtest retry was used. Its temporary
 unreserved store_test.go edit was moved to the reserved new validator test file;
 store_test.go equals the accepted base. The initially missing manifest recipient
-UID binding was fixed with a regression before handoff. Historical Chapter7
+UID binding was fixed with a regression before handoff. Historical Chapter 7
 counters, including #311's two hosted CI failures and previous deadline overrun,
 and #301's denied-rerun/R3 hold remain unchanged.
 
@@ -102,14 +102,14 @@ justified finite final selection and no deadline or ownership extension.
 
 ## Reproducible source evidence
 
-The final direct UTC selection ran on 2026-10-15 before commit10c21a8 and
-passed19methods/55nodes. The native reviewer independently checked the raw
+The final direct UTC selection ran on 2026-10-15 before commit `10c21a8` and
+passed **19 methods / 55 nodes**. The native reviewer independently checked the raw
 JSON counts/hash and all seven committed file hashes at that commit, closing
-the two medium findings at18:43:00Z. The later correction to this verification
+the two medium findings at 18:43:00Z. The later correction to this verification
 record changes documentation only; it does not relabel test or native evidence
 as having run against later documentation bytes.
 
-Use Go1.27.2 and the existing cached dependencies; the exact focused selection
+Use Go 1.27.2 and the existing cached dependencies; the exact focused selection
 is reproducible from this checkout with downloads disabled:
 
 ```sh
