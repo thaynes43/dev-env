@@ -212,8 +212,8 @@ func inboxPublishResult(m *coord.InboxMessage, created bool, spec coord.InboxMes
 	return status, apiv1.InboxResult{Outcome: outcome, Message: inboxMetadata(m)}, nil
 }
 
-// authorizedInbox keeps acknowledgement reads and writes live-only. Only the
-// message GET passes archiveFallback, after its real live-store NotFound.
+// authorizedInbox keeps writes live-only. GET routes may opt in to archive
+// fallback, but only after their real live-store message lookup is NotFound.
 func (s *Server) authorizedInbox(ctx context.Context, r *http.Request, c *caller, archiveFallback bool) (*coord.InboxMessage, *time.Time, error) {
 	if err := s.inboxAvailable(); err != nil {
 		return nil, nil, err
@@ -345,13 +345,22 @@ func (s *Server) ackInbox(ctx context.Context, _ http.ResponseWriter, r *http.Re
 	return status, apiv1.InboxAckResult{Outcome: outcome, Ack: inboxAckView(a)}, nil
 }
 func (s *Server) readInboxAck(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
-	m, _, err := s.authorizedInbox(ctx, r, c, false)
+	m, _, err := s.authorizedInbox(ctx, r, c, true)
 	if err != nil {
 		return 0, nil, err
 	}
 	a, err := s.Inbox.ReadAck(ctx, m)
+	var archivedAt *time.Time
 	if errors.Is(err, inbox.ErrNotFound) {
-		return 0, nil, inboxHidden()
+		if !s.CoordinationArchiveReads {
+			return 0, nil, inboxHidden()
+		}
+		var at time.Time
+		a, at, err = s.archivedInboxReadAck(ctx, m)
+		if err != nil {
+			return 0, nil, err
+		}
+		archivedAt = &at
 	}
 	if err != nil {
 		return 0, nil, inboxUnknown()
@@ -363,7 +372,11 @@ func (s *Server) readInboxAck(ctx context.Context, _ http.ResponseWriter, r *htt
 	if err := s.inboxReadFence(ctx, c, m.Spec.Project, recipient); err != nil {
 		return 0, nil, err
 	}
-	return http.StatusOK, inboxAckView(a), nil
+	view := inboxAckView(a)
+	if archivedAt != nil {
+		view.Archived, view.ArchivedAt = true, archivedAt
+	}
+	return http.StatusOK, view, nil
 }
 func inboxOwner(s coord.SessionIdentity) apiv1.TaskClaimOwner {
 	return apiv1.TaskClaimOwner{Namespace: s.Namespace, Name: s.Name, UID: s.UID}
