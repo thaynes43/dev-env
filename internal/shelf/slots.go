@@ -1,5 +1,7 @@
 package shelf
 
+import "context"
+
 // ExecSlots is the per-replica limit on archive execs into the shelf
 // (DESIGN-024 section 5): every history archive exec (DESIGN-025 6.4) and,
 // once it lands, every coordination archive exec takes one, so archive traffic
@@ -35,5 +37,30 @@ func (s *ExecSlots) TryTake() (release func(), ok bool) {
 		}, true
 	default:
 		return nil, false
+	}
+}
+
+// Take waits for a slot until ctx ends. Archive HTTP reads use their own
+// bounded context; background work continues to use TryTake.
+func (s *ExecSlots) Take(ctx context.Context) (release func(), err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-s.free:
+		done := false
+		release := func() {
+			if !done {
+				done = true
+				s.free <- struct{}{}
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			release()
+			return nil, err
+		}
+		return release, nil
 	}
 }

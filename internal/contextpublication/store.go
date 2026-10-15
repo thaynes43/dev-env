@@ -23,7 +23,16 @@ import (
 
 var ErrUnavailable = errors.New("context publication is unconfirmed")
 var ErrNotFound = errors.New("published context not found")
+
+// ErrProjectMasked is still ErrNotFound to established callers, but lets the
+// archive fallback preserve a live foreign record's uniform 404.
+var ErrProjectMasked = projectMaskedError{}
 var ErrConflict = errors.New("publication identity already has different content or provenance")
+
+type projectMaskedError struct{}
+
+func (projectMaskedError) Error() string { return "published context belongs to another project" }
+func (projectMaskedError) Unwrap() error { return ErrNotFound }
 
 // ErrLimit means a new publication would exceed its source's or its project's
 // bound. Each publication holds up to 64 KiB of text and none is deleted, so
@@ -97,7 +106,7 @@ func (s KubeStore) get(ctx context.Context, name, project string) (*coord.Publis
 		return nil, ErrUnavailable
 	}
 	if project != "" && c.Spec.Project != project {
-		return nil, ErrNotFound
+		return nil, ErrProjectMasked
 	}
 	if !s.valid(&c) {
 		return nil, ErrUnavailable

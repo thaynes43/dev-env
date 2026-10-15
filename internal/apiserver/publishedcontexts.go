@@ -176,7 +176,14 @@ func (s *Server) getPublishedContext(ctx context.Context, _ http.ResponseWriter,
 	}
 	p, err := s.PublishedContexts.GetForProject(ctx, r.PathValue("context"), project)
 	if errors.Is(err, contextpublication.ErrNotFound) {
-		return 0, nil, notFound("published context not found")
+		if errors.Is(err, contextpublication.ErrProjectMasked) || !s.CoordinationArchiveReads {
+			return 0, nil, notFound("published context not found")
+		}
+		archived, archivedAt, archiveErr := s.archivedPublishedContext(ctx, r.PathValue("context"), project)
+		if archiveErr != nil {
+			return 0, nil, archiveErr
+		}
+		return http.StatusOK, apiv1.PublishedContext{Metadata: archivedContextMetadata(archived, archivedAt), Text: archived.Spec.Text}, nil
 	}
 	if err != nil {
 		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "published context unavailable")

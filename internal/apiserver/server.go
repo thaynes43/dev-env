@@ -113,6 +113,12 @@ type Server struct {
 	// (DESIGN-024 section 5), shared with the HOME expiry's relay: every
 	// history read takes one. Nil takes none.
 	ShelfSlots *shelf.ExecSlots
+	// CoordinationArchiveReads enables archived coordination GET fallbacks.
+	// It is default-off until separately configured by the operator.
+	CoordinationArchiveReads bool
+	// CoordinationArchive is the typed, verified shelf transport. Nil leaves
+	// an enabled archive read unavailable rather than creating a hidden client.
+	CoordinationArchive CoordinationArchiveReader
 	// Templates returns the current templates, or why they are unusable. Nil
 	// skips the profile check and leaves the fleet's revision unknown.
 	Templates func(context.Context) (*templates.Templates, error)

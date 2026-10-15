@@ -147,6 +147,8 @@ func ValidContextAttribution(a ContextAttribution, managed bool) bool {
 
 // Metadata lists and publication acknowledgements never include the text.
 type ContextMetadata struct {
+	Archived         bool                    `json:"archived,omitempty"`
+	ArchivedAt       *time.Time              `json:"archivedAt,omitempty"`
 	ManagedOutput    *ManagedOutputAssertion `json:"managedOutput,omitempty"`
 	Name             string                  `json:"name"`
 	UID              string                  `json:"uid"`
