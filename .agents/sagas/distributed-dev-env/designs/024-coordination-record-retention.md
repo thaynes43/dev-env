@@ -668,6 +668,15 @@ recover without a valid birth index. A missing or damaged birth index refuses an
 item read rather than inventing a time or falling back. This source seam alone
 does not wire the CLI, shelf transport or TaskClaim HTTP route.
 
+**Transport contract.** `agentd ctl coord-archive get-item --resource R --name N
+[--uid U]` is the read-only transport for `GetItemSelected`: it returns the same
+full-object result protocol as `get`, accepts no revision or hash pins, and
+rejects unknown pins or flags as usage errors before archive access. It consumes
+no stdin; its usual settings and mount validation, canonical JSON, and error exit
+handling remain. `shelf.CoordinationArchive.GetItem` rejects nonempty pins before
+exec and otherwise uses that command, while legacy `get`, `GetSelected`, and
+`GetExact` retain their selector, pin, receipt, and explicit-UID recovery behavior.
+
 A name in neither place is today's NotFound answer. No shelf, no free exec slot,
 `no_archive`, `corrupt`, `ambiguous` or a failed exec is 503 `unavailable`, never
 404.

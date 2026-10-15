@@ -127,15 +127,30 @@ func (c *CoordinationArchive) Lookup(ctx context.Context, ids []protocol.CoordAr
 }
 
 func (c *CoordinationArchive) Get(ctx context.Context, q protocol.CoordArchiveGetQuery) (protocol.CoordArchiveGetResult, error) {
-	var zero protocol.CoordArchiveGetResult
 	if err := q.Validate(); err != nil {
-		return zero, err
+		return protocol.CoordArchiveGetResult{}, err
 	}
-	cmd := []string{"agentd", "ctl", "coord-archive", "get", "--resource", q.Resource, "--name", q.Name}
+	return c.get(ctx, q, "get")
+}
+
+// GetItem reads the selected archived item without allowing revision recovery pins.
+func (c *CoordinationArchive) GetItem(ctx context.Context, q protocol.CoordArchiveGetQuery) (protocol.CoordArchiveGetResult, error) {
+	if q.ResourceVersion != "" || q.SHA256 != "" {
+		return protocol.CoordArchiveGetResult{}, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "item reads do not accept revision or SHA256 pins")
+	}
+	if err := q.Validate(); err != nil {
+		return protocol.CoordArchiveGetResult{}, err
+	}
+	return c.get(ctx, q, "get-item")
+}
+
+func (c *CoordinationArchive) get(ctx context.Context, q protocol.CoordArchiveGetQuery, command string) (protocol.CoordArchiveGetResult, error) {
+	var zero protocol.CoordArchiveGetResult
+	cmd := []string{"agentd", "ctl", "coord-archive", command, "--resource", q.Resource, "--name", q.Name}
 	if q.UID != "" {
 		cmd = append(cmd, "--uid", q.UID)
 	}
-	if q.ResourceVersion != "" {
+	if command == "get" && q.ResourceVersion != "" {
 		cmd = append(cmd, "--resource-version", q.ResourceVersion, "--sha256", q.SHA256)
 	}
 	raw, err := c.run(ctx, cmd, nil)
@@ -144,21 +159,21 @@ func (c *CoordinationArchive) Get(ctx context.Context, q protocol.CoordArchiveGe
 	}
 	var out protocol.CoordArchiveGetResult
 	if err := decodeObject(raw, &out, "manifest", "object"); err != nil {
-		return zero, fmt.Errorf("coordination archive get response is incomplete: %w", err)
+		return zero, fmt.Errorf("coordination archive %s response is incomplete: %w", command, err)
 	}
 	m := out.Manifest.CoordArchiveManifest
 	if !utcTime(out.Manifest.ArchivedAt) || m.Resource != q.Resource || m.Name != q.Name || (q.UID != "" && m.UID != q.UID) || (q.ResourceVersion != "" && (m.ResourceVersion != q.ResourceVersion || m.Object.SHA256 != q.SHA256)) {
-		return zero, errors.New("coordination archive get response does not match its selector")
+		return zero, fmt.Errorf("coordination archive %s response does not match its selector", command)
 	}
 	if _, err := protocol.CoordArchiveRevisionDir(m); err != nil {
-		return zero, errors.New("coordination archive get response has an invalid manifest")
+		return zero, fmt.Errorf("coordination archive %s response has an invalid manifest", command)
 	}
 	canonical, err := protocol.VerifyCoordArchiveObject(m, bytes.NewReader(out.Object))
 	if err != nil {
-		return zero, fmt.Errorf("coordination archive get response refused: %w", err)
+		return zero, fmt.Errorf("coordination archive %s response refused: %w", command, err)
 	}
 	if !bytes.Equal(canonical, out.Object) {
-		return zero, errors.New("coordination archive get response object is not canonical")
+		return zero, fmt.Errorf("coordination archive %s response object is not canonical", command)
 	}
 	out.Object = canonical
 	return out, nil

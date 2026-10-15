@@ -114,7 +114,7 @@ Commands:
                            its content manifest, re-hash an entry, print its
                            manifest or one page of it, list a project's
                            entries, or read one page of an archived file.
-  ctl coord-archive put [--mark]|mark|lookup|get|list
+  ctl coord-archive put [--mark]|mark|lookup|get|get-item|list
                            Put a coordination object (with --mark, append absent),
                            mark present/reset, look up revisions and grace,
                            select a verified archived UID/revision, or list a bounded verified page.
