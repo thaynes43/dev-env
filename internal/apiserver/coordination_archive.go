@@ -22,6 +22,13 @@ type CoordinationArchiveReader interface {
 	Get(context.Context, protocol.CoordArchiveGetQuery) (protocol.CoordArchiveGetResult, error)
 }
 
+// CoordinationArchiveItemReader is the optional UID-first item contract. It is
+// intentionally separate from CoordinationArchiveReader: legacy Get callers
+// retain revision recovery semantics that are unsafe for an item read.
+type CoordinationArchiveItemReader interface {
+	GetItem(context.Context, protocol.CoordArchiveGetQuery) (protocol.CoordArchiveGetResult, error)
+}
+
 // CoordinationArchiveLister is the optional paged shelf contract. Keeping it
 // separate preserves existing Get-only fakes and callers.
 type CoordinationArchiveLister interface {
