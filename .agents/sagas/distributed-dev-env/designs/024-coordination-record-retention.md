@@ -1,6 +1,6 @@
 # DESIGN-024: Coordination record retention: archive, then delete
 
-- **Status:** Accepted 2026-10-12; R2 put/mark/lookup with journal grace, exact get and immutable storage/indices in source, remaining commands and R3–R7 pending
+- **Status:** Accepted 2026-10-12; R2 put/mark/lookup with journal grace, exact get, immutable storage/indices and incoming cleanup in source, remaining commands and R3–R7 pending
 - **Decision:** [ADR-004](../adrs/004-coordination-record-retention.md) (Q-29,
   Tom, 2026-10-12: "Archive, then delete (Recommended)")
 - **Amends:** [DESIGN-010](010-atomic-task-claims.md),
@@ -42,8 +42,8 @@ directories refuse the put. Revision manifests are walked in bounded batches
 within this UID, never across a project.
 
 These primitives have no API, absence event, latest-revision resolution,
-retention, release or deletion authority. Remaining commands and incoming cleanup
-remain R2 work. R2 and installed acceptance are incomplete. Deployment and
+retention, release or deletion authority. Remaining commands remain R2 work. R2
+and installed acceptance are incomplete. Deployment and
 activation remain held.
 
 **Minimal command slice:** unmarked `agentd ctl coord-archive put` reads one
@@ -104,7 +104,7 @@ not authenticated Session absence or permission to release. No live reads,
 retention runnable, grace-expiry decision or deletion is added. The
 [journal fixture](../verification/coordination-archive-journal-2026-10-14.md)
 shows local marked lookup transitions and finite refusal/repair cases. General
-get/list, old incoming cleanup and shelf startup wiring remain R2 work;
+get/list and shelf startup wiring remain R2 work;
 installed consumers and all live/activation/cutover gates remain held.
 
 **General get selector slice, 2026-10-14:** the source reader accepts optional
@@ -134,8 +134,8 @@ does not prove strict arrival order after clock rollback. That chronology choice
 is unestablished; no new sequence/clock policy is introduced or full acceptance
 claimed for it. The [selector fixture](../verification/coordination-archive-selectors-2026-10-14.md)
 records the independent safe portion and explicit-pin escape from time ambiguity.
-General selector source support is separate from installed acceptance; list,
-incoming cleanup and shelf startup wiring remain R2 work.
+General selector source support is separate from installed acceptance; list and
+shelf startup wiring remain R2 work.
 
 ## 1. What runs, in one picture
 
@@ -451,8 +451,14 @@ exclusive lock it:
    its recipient's index), named by the UID's first `archivedAt`, the same way.
    A put that crashed between steps 4 and 5 is repaired by the next put.
 6. With `--mark`, appends the `absent` event unless the UID is already marked.
-7. Removes `.incoming` entries older than one hour (a crashed write). That is the
-   only removal in the package.
+7. After durable revision publication, index repair and journal success, removes
+   eligible `.incoming` entries older than one hour (a crashed write). That is
+   the only removal in the package. Unknown or unsafe old debris, or a cleanup
+   failure, refuses `put` success; any already-published immutable bytes remain
+   readable. A retry does not rewrite those bytes. Unknown debris is preserved
+   for separately authorized operator investigation and resolution; this does
+   not imply live deletion authority. The [incoming cleanup verification](../verification/coordination-archive-incoming-2026-10-15.md)
+   records the bounded source/offline evidence.
 
 It prints the stored manifest and the UID's grace start.
 

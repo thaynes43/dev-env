@@ -45,8 +45,8 @@ func (a CoordArchive) CheckMounted() error {
 
 // Put verifies the bounded object before writing. Identical revisions retain
 // their original manifest, including archivedAt and archivedBy. A conflicting
-// or damaged revision is never overwritten. Incomplete incoming writes remain
-// private; a later R2 cleanup command will handle old debris.
+// or damaged revision is never overwritten. After a durable successful put it
+// removes only verified old private staging debris.
 func (a CoordArchive) Put(m protocol.CoordArchiveManifest, r io.Reader) (protocol.CoordArchiveStoredManifest, error) {
 	result, err := a.put(m, r, false, nil)
 	return result.Manifest, err
@@ -126,6 +126,12 @@ func (a CoordArchive) put(m protocol.CoordArchiveManifest, r io.Reader, unmarked
 		err = a.syncJournal(state)
 	}
 	if err != nil {
+		return zero, coordArchiveWriteError(rel, err)
+	}
+	if err := a.cleanupIncoming(); err != nil {
+		// The revision, indexes and journal have already been made durable. Do
+		// not report success when the required conservative cleanup is unknown
+		// or not durable; a retry can complete it without changing the record.
 		return zero, coordArchiveWriteError(rel, err)
 	}
 	return protocol.CoordArchivePutResult{Manifest: stored, GraceStart: state.GraceStart}, nil
