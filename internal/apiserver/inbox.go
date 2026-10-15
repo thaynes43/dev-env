@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -252,12 +253,35 @@ func (s *Server) listInbox(ctx context.Context, _ http.ResponseWriter, r *http.R
 	if err != nil {
 		return 0, nil, err
 	}
+	archivedValues := r.URL.Query()["archived"]
+	if len(archivedValues) > 1 {
+		return 0, nil, badRequest("archived must be only")
+	}
+	archived := r.URL.Query().Get("archived")
+	if archived != "" && archived != "only" {
+		return 0, nil, badRequest("archived must be only")
+	}
 	limit := int64(100)
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		limit, err = strconv.ParseInt(raw, 10, 64)
 		if err != nil || limit < 1 || limit > 100 {
 			return 0, nil, badRequest("limit must be between 1 and 100")
 		}
+	}
+	if archived == "only" {
+		parsed, parseErr := url.ParseQuery(r.URL.RawQuery)
+		if parseErr != nil {
+			return 0, nil, badRequest("invalid archived inbox query")
+		}
+		for key, values := range parsed {
+			if len(values) != 1 || (key != "project" && key != "limit" && key != "continue" && key != "archived") {
+				return 0, nil, badRequest("invalid archived inbox query")
+			}
+		}
+		if !s.CoordinationArchiveReads {
+			return 0, nil, inboxHidden()
+		}
+		return s.listArchivedInbox(ctx, c, project, recipient, limit, r.URL.Query().Get("continue"))
 	}
 	items, next, err := s.Inbox.List(ctx, project, recipient, limit, r.URL.Query().Get("continue"))
 	if err != nil {

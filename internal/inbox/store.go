@@ -79,9 +79,24 @@ func ValidText(text string) bool {
 func recipientLabel(s coord.SessionIdentity) string { return digest(s)[:63] }
 
 func ValidMessage(s coord.InboxMessageSpec) bool {
+	return validMessageSpec(s, false)
+}
+
+// ValidArchiveMetadata validates immutable inbox attribution after the shelf
+// has verified the complete object and the API has stripped spec.text. It is
+// intentionally not a replacement for ValidMessage's live text validation.
+func ValidArchiveMetadata(s coord.InboxMessageSpec) bool {
+	return validMessageSpec(s, true)
+}
+
+func validMessageSpec(s coord.InboxMessageSpec, archived bool) bool {
 	// Reuse bounded attribution/provenance validation without sharing claim ACLs.
 	claim := coord.TaskClaimSpec{Identity: coord.TaskIdentity{Project: s.Project, Repository: s.Repository, TaskKey: "task:inbox"}, Owner: s.Sender, Actor: s.Actor, Provenance: s.Provenance}
-	return taskclaim.ValidSpec(claim) && s.Actor.Kind == "session" && ValidSession(s.Recipient) && ValidKey(s.Key) && ValidText(s.Text) &&
+	textOK := ValidText(s.Text)
+	if archived {
+		textOK = s.Text == ""
+	}
+	return taskclaim.ValidSpec(claim) && s.Actor.Kind == "session" && ValidSession(s.Recipient) && ValidKey(s.Key) && textOK &&
 		(s.Provider == "claude" || s.Provider == "codex" || s.Provider == "opencode") && modelPattern.MatchString(s.RequestedModel)
 }
 
