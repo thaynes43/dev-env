@@ -143,16 +143,6 @@ func sessionObservation(role string, ref SessionRef, memo map[string]memoSession
 	}
 	return obs, true
 }
-func absentFor(ctx context.Context, c EvalConfig, r SessionRef, memo map[string]memoSession) Decision {
-	switch session(ctx, c, r, memo) {
-	case sessionAbsent:
-		return Released
-	case sessionPresent:
-		return Kept
-	default:
-		return Unknown
-	}
-}
 func decide(ctx context.Context, c EvalConfig, s Summary, memo map[string]memoSession) (Decision, *MessageRef, []protocol.CoordArchiveObservation) {
 	if ctx.Err() != nil || c.Reader == nil || !validSummary(s, c.OperatorNamespace) {
 		return Unknown, nil, nil

@@ -25,3 +25,11 @@ A `Released` observation list is a complete protocol `absent` event. A kept pres
 ## Not accepted here
 
 No archive write, mark, reset, runnable, schedule, delete, flag, API route, or controller wiring. Future mark/reset still needs its own story: uncached UID and resourceVersion recheck, existing `put --mark`, caps, and message/ack pairing.
+
+## Bounded source evidence
+
+The final focused capture on 2026-10-15 at 23:22:33–23:22:35 UTC passed one top-level method, 27 named test nodes (26 nested nodes, 22 leaf cases), and zero skips. The command selected only `^TestObservation` in `./internal/coordretention`, using the cached Go 1.27.2 toolchain, shared test lock, `nice -n 19`, `GOMAXPROCS=2`, `GOFLAGS=-p=1`, `GOTOOLCHAIN=local`, `GOPROXY=off` and `GOSUMDB=off`. Existing rules and lookup tests were compiled but were not selected for replay.
+
+Two earlier local failures remain part of this story: changing the internal `session` return shape broke two existing test callers; restoring its original signature fixed that compile error. A new fixture expected two bulk lookup groups instead of the three for the ack, message and ordinary claim; correcting that count left production grouping unchanged. The failed assertion run has 24 passing and three failing nodes, including parent groups. The subsequent passing worker capture is separate evidence, not one composed test run.
+
+Independent source review then identified an unused helper and incomplete message identity/read-count assertions. The final correction removed the unused helper and added exact namespace/name/UID/role/reason/ack-UID checks for present and released read-ack observations, plus the missing no-extra-GET checks. The focused final capture above binds the corrected Go sources. Required exact-head CI and independent closure are recorded with source delivery; this document does not substitute for those gates.

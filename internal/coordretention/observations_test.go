@@ -172,15 +172,14 @@ func TestObservation(t *testing.T) {
 
 	t.Run("read ack", func(t *testing.T) {
 		s := summaryOf(t, InboxReadAck)
+		messageRef := SessionRef{Namespace: s.Message.Namespace, Name: s.Message.Name, UID: s.Message.UID}
 		t.Run("message present", func(t *testing.T) {
 			gets := 0
 			got := evalAck(t, &gets, s, "same", nil)
 			if gets != 1 || got.Decision != Kept || len(got.Observations) != 1 {
 				t.Fatalf("gets=%d %#v", gets, got)
 			}
-			if got.Observations[0].Role != "message" || got.Observations[0].UID != s.Message.UID || got.Observations[0].Observed != "present" {
-				t.Fatalf("%#v", got.Observations)
-			}
+			assertObs(t, got.Observations[0], "message", messageRef, "present", "")
 			validateEvent(t, "inboxreadacks", "present", got.Observations)
 		})
 		t.Run("pending", func(t *testing.T) {
@@ -193,15 +192,17 @@ func TestObservation(t *testing.T) {
 		t.Run("known holds", func(t *testing.T) {
 			gets := 0
 			got := evalAck(t, &gets, s, "notfound", map[MessageRef]ArchiveEvidence{s.Message: {Known: true, Holds: true}})
-			if got.Decision != Released || got.RequiredMessage != nil || len(got.Observations) != 1 || got.Observations[0].Observed != "message-released" {
-				t.Fatalf("%#v", got)
+			if gets != 1 || got.Decision != Released || got.RequiredMessage != nil || len(got.Observations) != 1 {
+				t.Fatalf("gets=%d %#v", gets, got)
 			}
+			assertObs(t, got.Observations[0], "message", messageRef, "message-released", "")
 			validateEvent(t, "inboxreadacks", "absent", got.Observations)
 		})
 		t.Run("known no holds", func(t *testing.T) {
-			got := evalAck(t, new(int), s, "notfound", map[MessageRef]ArchiveEvidence{s.Message: {Known: true, Holds: false}})
-			if got.Decision != Kept || got.Observations != nil || got.RequiredMessage != nil {
-				t.Fatalf("%#v", got)
+			gets := 0
+			got := evalAck(t, &gets, s, "notfound", map[MessageRef]ArchiveEvidence{s.Message: {Known: true, Holds: false}})
+			if gets != 1 || got.Decision != Kept || got.Observations != nil || got.RequiredMessage != nil {
+				t.Fatalf("gets=%d %#v", gets, got)
 			}
 		})
 		t.Run("bulk holds and ordinary unknown", func(t *testing.T) {
@@ -220,9 +221,7 @@ func TestObservation(t *testing.T) {
 			if out[0].Result.Decision != Released || out[0].Result.RequiredMessage != nil || len(out[0].Result.Observations) != 1 {
 				t.Fatalf("%#v", out[0].Result)
 			}
-			if out[0].Result.Observations[0].Role != "message" || out[0].Result.Observations[0].UID != s.Message.UID || out[0].Result.Observations[0].Observed != "message-released" {
-				t.Fatalf("%#v", out[0].Result.Observations)
-			}
+			assertObs(t, out[0].Result.Observations[0], "message", messageRef, "message-released", "")
 			validateEvent(t, "inboxreadacks", "absent", out[0].Result.Observations)
 			if out[1].Result.Decision != Unknown || out[1].Result.Observations != nil {
 				t.Fatalf("ordinary %#v", out[1].Result)
@@ -233,8 +232,8 @@ func TestObservation(t *testing.T) {
 			evaluated := Evaluate(context.Background(), config(ackReader(&gets, s, "notfound")), []Summary{s})
 			fake := &lookupFake{}
 			out, err := Lookup(context.Background(), retentionNS, shelf.NewExecSlots(1), fake, evaluated)
-			if err != nil || out[0].Result.Decision != Kept || out[0].Result.Observations != nil || out[0].Result.RequiredMessage != nil {
-				t.Fatalf("%v %#v", err, out)
+			if err != nil || gets != 1 || len(fake.calls) != 2 || out[0].Result.Decision != Kept || out[0].Result.Observations != nil || out[0].Result.RequiredMessage != nil {
+				t.Fatalf("gets=%d calls=%d err=%v %#v", gets, len(fake.calls), err, out)
 			}
 		})
 	})
