@@ -27,6 +27,16 @@ source boundary fixture, not a real archive-to-HTTP or installed run. Direct tes
 output and source hashes are retained with the order; required exact-head CI
 and native closure precede source acceptance.
 
+The later hosted immutable-attribution assertion failed deterministically under
+`TZ=UTC`: its timestamp instant and all attribution values matched, but the
+expected Kubernetes timestamp retained `time.Local` while the decoded API
+timestamp used `time.UTC`. A two-zone diagnostic reproduced UTC failure and
+New York success without changing the assertion. The expected metadata now
+passes through the same API wire type before the unchanged owner, actor and
+complete provenance comparison. This corrects the fixture's representation;
+production projection and timestamp values are unchanged. The hosted failure
+and earlier lint failure remain recorded as two distinct CI failures.
+
 This is source and focused-test evidence only. It does not activate archive
 reads, change retention, archive storage, credentials, runtime behavior,
 deployment, or acceptance of R4.

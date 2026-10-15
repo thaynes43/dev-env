@@ -110,6 +110,16 @@ func TestTaskClaimArchiveListPagingDefaultOffAndNoOwnerJoin(t *testing.T) {
 		t.Fatalf("archived page = %d calls=%d query=%#v body=%s", w.Code, archive.calls, archive.query, w.Body.String())
 	}
 	wantMetadata := claimMetadata(claim)
+	// Compare two API wire values. metav1.Time decodes into time.Local while
+	// the API's time.Time decodes a Z timestamp into time.UTC; those locations
+	// can represent the same instant without being reflect.DeepEqual.
+	wantWire, err := json.Marshal(wantMetadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(wantWire, &wantMetadata); err != nil {
+		t.Fatal(err)
+	}
 	if got.Items[0].Owner != wantMetadata.Owner || got.Items[0].Actor != wantMetadata.Actor || !reflect.DeepEqual(got.Items[0].Provenance, wantMetadata.Provenance) {
 		t.Fatal("archive view lost immutable attribution")
 	}
