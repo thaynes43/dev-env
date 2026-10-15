@@ -45,7 +45,11 @@ skipped; the parent subsequently restored ordinary source ready/review/merge
 delivery, including advisory review. The ready-event advisory found a requested
 model provenance ambiguity and a missing durable design reference. The correction
 adds the separate requested-model state, a semantic regression and the linked
-offline design contract; native review and new exact-head CI precede acceptance.
+offline design contract; native review and new exact-head CI precede acceptance. A further advisory
+identified resealable cross-surface fields. API observations now refuse ACP
+advertisements/list completion, and ACP observations refuse requested-model
+metadata. The final focused run passed eight methods / thirteen nodes, including
+independent reseal regressions for each surface-only field.
 Source proof does not establish installed
 control, tool parity, phone mirroring, availability or cost. Smallest later
 decisions remain the approved model-catalog handoff, separate workspace opt-in

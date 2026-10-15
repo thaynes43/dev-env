@@ -78,6 +78,51 @@ func TestCursorRequestedModelIsNotServedModelEvidence(t *testing.T) {
 	}
 }
 
+func TestCursorSurfaceFieldsCannotBeResealedAcrossSurfaces(t *testing.T) {
+	b, raw := cursorAPIFixture()
+	api, err := NormalizeCursorAPIRead(raw, b, cursorFixtureTime(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"load", "list", "http", "sse", "listComplete"} {
+		t.Run(field, func(t *testing.T) {
+			changed := api
+			switch field {
+			case "load":
+				changed.Advertisements.Load = "Advertised"
+			case "list":
+				changed.Advertisements.List = "Advertised"
+			case "http":
+				changed.Advertisements.MCPHTTP = "Advertised"
+			case "sse":
+				changed.Advertisements.MCPSSE = "Advertised"
+			case "listComplete":
+				changed.ListComplete = true
+			}
+			changed.ObservationSHA256, err = cursorControlObservationDigest(changed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := PlanCursorControl("observe", changed, 1, cursorFixtureTime(), time.Hour); err == nil {
+				t.Fatal("accepted ACP-only observation field on API surface")
+			}
+		})
+	}
+	b, raw = cursorACPFixture()
+	acp, err := NormalizeCursorACPRead(raw, b, cursorFixtureTime(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acp.ModelState, acp.Model = CursorModelProviderRequested, "synthetic-requested-model"
+	acp.ObservationSHA256, err = cursorControlObservationDigest(acp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PlanCursorControl("observe", acp, 1, cursorFixtureTime(), time.Hour); err == nil {
+		t.Fatal("accepted API requested-model field on ACP surface")
+	}
+}
+
 func TestCursorACPReadReceipt(t *testing.T) {
 	b, raw := cursorACPFixture()
 	got, err := NormalizeCursorACPRead(raw, b, cursorFixtureTime(), time.Hour)

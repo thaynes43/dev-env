@@ -394,10 +394,11 @@ func validCursorObservation(o CursorControlObservation) bool {
 	if (o.Binding.WorkerID == "") != (o.WorkerIDState == UsageUnknown) {
 		return false
 	}
-	if o.Binding.Surface == "api" && len(o.LocalSessions) != 0 {
+	if o.Binding.Surface == "api" && (len(o.LocalSessions) != 0 || o.ListComplete ||
+		o.Advertisements != (CursorCapabilityAdvertisements{UsageUnknown, UsageUnknown, UsageUnknown, UsageUnknown})) {
 		return false
 	}
-	if o.Binding.Surface == "acp" && (o.AgentState != UsageUnknown || o.RunState != UsageUnknown || o.WorkerIDState != UsageUnknown) {
+	if o.Binding.Surface == "acp" && (o.AgentState != UsageUnknown || o.RunState != UsageUnknown || o.WorkerIDState != UsageUnknown || o.ModelState != UsageUnknown) {
 		return false
 	}
 	return true
