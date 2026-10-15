@@ -23,6 +23,20 @@ func (a CoordArchive) GetExact(q protocol.CoordArchiveExactQuery) (protocol.Coor
 // shared lock. Equal greatest times refuse; opaque identities never break ties.
 // The chosen object is fully verified before any result is returned.
 func (a CoordArchive) GetSelected(q protocol.CoordArchiveGetQuery) (protocol.CoordArchiveGetResult, error) {
+	return a.getSelected(q, false)
+}
+
+// GetItemSelected selects a UID's latest verified revision for an archived item.
+// Unlike GetSelected, item reads do not accept revision or object-digest pins:
+// their receipt is always the UID's verified first archive time.
+func (a CoordArchive) GetItemSelected(q protocol.CoordArchiveGetQuery) (protocol.CoordArchiveGetResult, error) {
+	if q.ResourceVersion != "" || q.SHA256 != "" {
+		return protocol.CoordArchiveGetResult{}, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "item reads do not accept revision or SHA256 pins")
+	}
+	return a.getSelected(q, true)
+}
+
+func (a CoordArchive) getSelected(q protocol.CoordArchiveGetQuery, itemReceipt bool) (protocol.CoordArchiveGetResult, error) {
 	zero := protocol.CoordArchiveGetResult{}
 	defaultUID := q.UID == ""
 	if err := q.Validate(); err != nil {
@@ -48,7 +62,7 @@ func (a CoordArchive) GetSelected(q protocol.CoordArchiveGetQuery) (protocol.Coo
 		}
 		q.UID = selected.Latest.UID
 	}
-	if q.ResourceVersion != "" {
+	if !itemReceipt && q.ResourceVersion != "" {
 		exact := protocol.CoordArchiveExactQuery(q)
 		rel, err := exact.RevisionDir(project)
 		if err != nil {
@@ -84,6 +98,13 @@ func (a CoordArchive) GetSelected(q protocol.CoordArchiveGetQuery) (protocol.Coo
 	if selected.Latest.UID == "" {
 		return zero, coordGetNotFound()
 	}
+	// Default selection checks this while comparing UIDs. An explicit item read
+	// needs the same verified birth receipt before it reads the selected object.
+	if itemReceipt && !defaultUID {
+		if err := a.coordCheckUIDBirth(selected); err != nil {
+			return zero, err
+		}
+	}
 	if selected.LatestTied {
 		return zero, protocol.HistoryErrorf(protocol.HistoryErrAmbiguous, "", "revision archive time does not identify one latest revision; supply revision/hash")
 	}
@@ -94,7 +115,7 @@ func (a CoordArchive) GetSelected(q protocol.CoordArchiveGetQuery) (protocol.Coo
 	// A default latest request is the selected UID's archived item. Its outgoing
 	// receipt is that UID's birth time, rather than the later revision receipt.
 	// Explicit UID selection retains its revision receipt.
-	if defaultUID {
+	if defaultUID || itemReceipt {
 		result.Manifest.ArchivedAt = selected.FirstAt
 	}
 	return result, nil

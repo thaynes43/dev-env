@@ -658,6 +658,16 @@ and `stopState` are `Unknown`, which is what the live projection gives for an
 absent owner; the API makes no Session read for it. Single reads include the
 text where the live read does.
 
+Item reads and revision recovery have separate library entry points.
+`CoordArchive.GetItemSelected` selects a UID and its latest verified revision
+under the existing shared lock, verifies the matching first-publication index,
+and returns the UID's first archive time. It does not accept revision/hash pins.
+`GetSelected` and `GetExact` retain revision-selection and recovery semantics:
+explicit-UID and pinned queries keep their stored revision receipt and can
+recover without a valid birth index. A missing or damaged birth index refuses an
+item read rather than inventing a time or falling back. This source seam alone
+does not wire the CLI, shelf transport or TaskClaim HTTP route.
+
 A name in neither place is today's NotFound answer. No shelf, no free exec slot,
 `no_archive`, `corrupt`, `ambiguous` or a failed exec is 503 `unavailable`, never
 404.
