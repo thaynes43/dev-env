@@ -99,7 +99,7 @@ supplemental PVC-local evidence under
 fetchable repository artifacts. The committed tests, reproducible selections,
 hashes and ordinary public PR checks/review are the portable source evidence.
 
-Final tested Go hashes (the later verification text is documentation only):
+Go hashes from the final targeted local run (before the import-group formatting correction described below):
 
 | File | SHA-256 |
 | --- | --- |
@@ -124,3 +124,12 @@ GUI, unrelated Claude or runtime work. No such action was required or taken.
 Source acceptance requires independent native closure, exact-head required CI,
 available advisory finding disposition and guarded source merge within the
 recorded coordinator budget. It does not complete the remaining R4 units.
+
+The first hosted CI run at `9c76d81` failed goimports at test line 21: the
+controller-runtime client import belonged with the other external Kubernetes
+imports, rather than the local project group. The real correction only moves
+that import and updates this record; no assertion or production logic changes.
+One hosted lint failure remains recorded. Earlier local test/source hashes and
+native closure stay attributed to their exact bytes; ordinary new-head CI and
+scoped independent review cover the later formatting delta. No manual retry,
+workflow change, empty commit or budget extension was used.

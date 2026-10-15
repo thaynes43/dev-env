@@ -17,6 +17,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
@@ -25,7 +26,6 @@ import (
 	"github.com/thaynes43/dev-env/internal/inbox"
 	"github.com/thaynes43/dev-env/internal/shelf"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type inboxArchiveGetFake struct {
