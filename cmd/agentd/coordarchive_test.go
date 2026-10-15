@@ -132,7 +132,7 @@ func TestCoordArchiveCLIRefusesIncompleteOrUnboundedRequests(t *testing.T) {
 		}
 	}
 	for _, args := range [][]string{
-		{"ctl", "coord-archive", "list"},
+		{"ctl", "coord-archive", "unknown"},
 		{"ctl", "coord-archive", "get", "--mount-bypass"},
 	} {
 		if code, _, _ := runCoordCLI(args, nil, env); code != exitUsage {
@@ -142,6 +142,10 @@ func TestCoordArchiveCLIRefusesIncompleteOrUnboundedRequests(t *testing.T) {
 	code, out, _ := runCoordCLI([]string{"ctl", "coord-archive", "get", "--resource", "taskclaims"}, nil, env)
 	if code != exitFailure || !bytes.Contains(out, []byte("\"error\":\"invalid\"")) {
 		t.Fatalf("incomplete exact get: %d, %s", code, out)
+	}
+	code, out, _ = runCoordCLI([]string{"ctl", "coord-archive", "list"}, nil, env)
+	if code != exitFailure || !bytes.Contains(out, []byte("\"error\":\"invalid\"")) {
+		t.Fatalf("incomplete list: %d, %s", code, out)
 	}
 }
 

@@ -488,8 +488,13 @@ latest revision, verifies its hash and prints the manifest and the object with
 `spec.text` removed. An entry that fails the check is printed as `{"uid": ...,
 "error": "corrupt"}`, without the object. A page ends at `--limit` items (at most
 100) or at 4 MiB of output, whichever comes first, with an opaque `next` cursor
-(the last index name). A page costs one directory read per month it touches and
-a few file reads per item. It does not grow with the archive.
+(the last emitted index name); a terminal page has no `next` cursor. An invalid
+month or index filename has no trustworthy entry identity and refuses the whole
+page as `corrupt`, without objects; a valid index filename whose entry body or
+selected revision is corrupt is reported in-band with its UID and no object. A
+page costs one directory read per month it touches and a few file reads per
+item. Month-name selection uses bounded batches, rescanning the parent only
+after exhausting a batch, rather than retaining the full month history.
 
 **Errors** are one JSON object on stdout, `{"error": "<code>", "message": "..."}`,
 with exit status 1. Codes: `not_found`, `conflict`, `corrupt`, `ambiguous`,
