@@ -156,7 +156,7 @@ func historyFail(w io.Writer, err error) int {
 }
 
 // historyShelfCheck is `agentd shelf --history-archive`'s start check: the
-// archive must be mounted.
-func historyShelfCheck(s agentd.Settings) error {
+// archive must be mounted. It is a private command seam for shelf tests.
+var historyShelfCheck = func(s agentd.Settings) error {
 	return agentd.NewHistoryArchive(s).CheckMounted()
 }
