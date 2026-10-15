@@ -119,6 +119,7 @@ type options struct {
 	privateExecutorStop           bool
 	homeHistoryArchive            bool
 	historyArchiveReads           bool
+	coordinationArchiveReads      bool
 	homeExpiryDelete              bool
 	homeExpiryGrace               time.Duration
 	privateProjectCanariesEnabled bool
@@ -156,6 +157,7 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.privateExecutorStop, "enable-private-executor-stop", false, "stop the recorded executor of a Reaping private Session with activeDeadlineSeconds, after a confirmed stop intent; an owner hold blocks it (DESIGN-025 4); needs --enable-private-terminal-record")
 	fs.BoolVar(&o.homeHistoryArchive, "enable-home-history-archive", false, "run the HOME expiry of private Sessions up to Archived: after the grace, rescue in a hold pod bound to the HOME, export the provider history into the shelf's history archive and verify it; deletes no HOME (DESIGN-025 5); needs --enable-private-terminal-record")
 	fs.BoolVar(&o.historyArchiveReads, "enable-history-archive-reads", false, "serve shared archived provider history on /v1/history to configured trusted callers (DESIGN-025 8, D-92); off, those routes answer 404")
+	fs.BoolVar(&o.coordinationArchiveReads, "enable-coordination-archive-reads", false, "serve default-off coordination archive fallbacks and archived-only lists to existing authorized callers; creates and ACL scopes stay unchanged (DESIGN-024 6)")
 	fs.BoolVar(&o.homeExpiryDelete, "enable-home-expiry-delete", false, "let the HOME expiry go past Archived: verify the archive again, delete the private HOME with UID and resourceVersion preconditions and release a reaped Session (DESIGN-025 6.5, 6.6); needs --enable-home-history-archive and --enable-history-archive-reads, and stays off until the archived read is accepted on the installed system (#174)")
 	fs.DurationVar(&o.homeExpiryGrace, "home-expiry-grace", controller.DefaultHomeExpiryGrace, "the HOME expiry's grace after the recorded stop; it may only lengthen Q-31's 720h (DESIGN-025 13)")
 	fs.BoolVar(&o.retainedCommonRules, "enable-retained-common-rules", false, "retain reviewed common instruction inputs for new fixed private managed canaries")
@@ -573,14 +575,16 @@ func run(args []string) error {
 			Projects: o.catalogBinding, PrivateProjectTasks: o.privateProjectTasks, ManagedCodexTasks: o.managedCodexTasks, ManagedChildDecisions: o.managedChildDecisions,
 			PrivateProjectCanaries: o.privateProjectCanaries, RetainedCommonRules: o.retainedCommonRules,
 			PrivateHistoryRetention: o.privateHistoryRetention, PrivateCanaryTemplates: templatesKey,
-			Exec:             podExec,
-			Shelf:            rescueShelf,
-			HistoryReads:     o.historyArchiveReads,
-			History:          &shelf.HistoryReader{Shelf: rescueShelf},
-			ShelfSlots:       shelfSlots,
-			Templates:        apiserver.TemplatesFrom(mgr.GetClient(), templatesKey),
-			Log:              ctrl.Log.WithName("api"),
-			GrantApprovalURL: o.grantApprovalURL,
+			Exec:                     podExec,
+			Shelf:                    rescueShelf,
+			HistoryReads:             o.historyArchiveReads,
+			History:                  &shelf.HistoryReader{Shelf: rescueShelf},
+			ShelfSlots:               shelfSlots,
+			CoordinationArchiveReads: o.coordinationArchiveReads,
+			CoordinationArchive:      &shelf.CoordinationArchive{Shelf: rescueShelf},
+			Templates:                apiserver.TemplatesFrom(mgr.GetClient(), templatesKey),
+			Log:                      ctrl.Log.WithName("api"),
+			GrantApprovalURL:         o.grantApprovalURL,
 		}
 		runner := &apiserver.Runner{
 			Addr:     o.apiAddr,
