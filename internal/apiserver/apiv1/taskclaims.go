@@ -49,8 +49,10 @@ type TaskClaim struct {
 	Provenance TaskClaimProvenance `json:"provenance"`
 	CreatedAt  time.Time           `json:"createdAt"`
 	// Observed state is metadata, not stop proof or permission to transfer ownership.
-	OwnerState string `json:"ownerState"`
-	StopState  string `json:"stopState"`
+	OwnerState string     `json:"ownerState"`
+	StopState  string     `json:"stopState"`
+	Archived   bool       `json:"archived,omitempty"`
+	ArchivedAt *time.Time `json:"archivedAt,omitempty"`
 }
 
 type TaskClaimResult struct {
