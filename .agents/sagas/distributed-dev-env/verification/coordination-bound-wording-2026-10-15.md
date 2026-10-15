@@ -75,6 +75,14 @@ Raw JSON SHA-256: `189ef9cfe7438c35add2b0087c0dc08c4e529fee55853c0aac0ed1708ae66
 | `internal/taskclaim/metrics.go` | `b18978189a6987eb0e5df40721965582e002f2f8de958ac72b1298f83811613c` |
 | `internal/agentd/contextpublication.go` | `3abfd0194f9235c07387747f555fdf516a7f2cafd42aa6916d5e389fb650149e` |
 
+Native review of `37013db31b6b7e81d01e98cfef39f0a8ebe7ed32` found a stale
+metrics header still describing project bounds as permanent. The coordinator
+corrected that comment to match the conditional retention contract. This final
+comment-only correction does not change executable behavior. The source hashes
+above attest the preceding tested bytes; final exact-head review and ordinary
+CI cover the later comment and verification record. The finding and its
+closure remain recorded rather than erased.
+
 The one worker test failure and all historical counters/deviations/deadline
 records remain preserved; no runtime activation, source-merge permission
 expansion, manual retry or budget extension follows from the correction.

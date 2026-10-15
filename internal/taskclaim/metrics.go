@@ -11,10 +11,11 @@ import (
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 )
 
-// The coordination record metrics (#175 review). Records are never deleted, so
-// the per-Session and per-project bounds are lifetime bounds: once a project
-// reaches one, every new record of that kind there is refused for good. These
-// series show how close each project is, so an alert can fire before then.
+// Coordination record metrics expose live project counts and lifetime source
+// Session bounds. Enabled archive-backed retention can free project capacity
+// after eligible records have met the minimum 30-day absence requirement for
+// their required Sessions. These series show proximity to the bounds; an
+// immediate retry does not free capacity.
 const (
 	// MetricRecords is the number of records of one kind in one project.
 	MetricRecords = "dev_env_coordination_records"
