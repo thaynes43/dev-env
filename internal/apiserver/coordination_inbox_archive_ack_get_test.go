@@ -174,6 +174,15 @@ func TestInboxArchiveAckGetArchivedMessageLiveAndArchivedAck(t *testing.T) {
 	} else {
 		got := decode[apiv1.InboxReadAck](t, w)
 		want := apiv1.InboxReadAck{Name: a.Name, UID: string(a.UID), Project: a.Spec.Project, MessageName: a.Spec.MessageName, MessageUID: a.Spec.MessageUID, Recipient: apiv1.TaskClaimOwner{Namespace: a.Spec.Recipient.Namespace, Name: a.Spec.Recipient.Name, UID: a.Spec.Recipient.UID}, Actor: apiv1.TaskClaimActor{Kind: a.Spec.Actor.Kind, ServiceAccount: a.Spec.Actor.ServiceAccount, PodName: a.Spec.Actor.PodName, PodUID: a.Spec.Actor.PodUID}, CreatedAt: a.CreationTimestamp.Time}
+		// The independent oracle crosses the same JSON wire representation as
+		// the response; retain every field while normalizing time locations.
+		wire, err := json.Marshal(want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(wire, &want); err != nil {
+			t.Fatal(err)
+		}
 		if !got.Archived || got.ArchivedAt == nil || !got.ArchivedAt.Equal(ackArchive.result.Manifest.ArchivedAt) || !reflect.DeepEqual(func() apiv1.InboxReadAck { got.Archived, got.ArchivedAt = false, nil; return got }(), want) {
 			t.Fatalf("immutable archived ack projection got=%#v want=%#v", got, want)
 		}

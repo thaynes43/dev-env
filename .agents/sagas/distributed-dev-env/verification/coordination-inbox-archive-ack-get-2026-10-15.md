@@ -70,25 +70,40 @@ full attribution/text comparison. Nil presence and every other provenance field
 remain asserted; no production code or ownership assertion was weakened. That
 failed capture remains preserved as root fixture failure 1.
 
+The first hosted Test job then found the worker’s archived-message/ack oracle
+had the same class of timezone representation defect in `CreatedAt`: Local and
+UTC represented the same instant but failed full-field `DeepEqual`. The exact
+UTC test reproduced the failure. The independent expected value now crosses
+JSON encoding and decoding before the unchanged complete comparison. Every
+actor, recipient, message and creation-time value remains asserted; no production
+code changed. This hosted failure is retained separately from the earlier
+`ReportedAt` fixture failure.
+
+The corrected combined UTC selection below passes. A separate one-method
+New York selection also passes; its count is not added to the combined run.
+Both use the shared constrained test lock, cached toolchain and downloads-off
+environment. Earlier captures and their source hashes remain preserved under
+the prior commits and supplemental receipts.
+
 After those real test changes, the final combined selection passed
 **15 methods / 94 nodes** in one direct JSON capture. This is one run; earlier
 worker captures are separate evidence and are not added to its count.
 
 ```sh
-flock -w 60 /tmp/dev-env-go-tests.lock nice -n 19 env GOMAXPROCS=2 GOFLAGS=-p=1 GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test -p=1 -json ./internal/apiserver -run '^(TestInboxArchiveAckGet|TestInboxArchiveGet)' -count=1 -timeout=90s
+flock -w 60 /tmp/dev-env-go-tests.lock nice -n 19 env TZ=UTC GOMAXPROCS=2 GOFLAGS=-p=1 GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test -p=1 -json ./internal/apiserver -run '^(TestInboxArchiveAckGet|TestInboxArchiveGet)' -count=1 -timeout=90s
 ```
 
 Use cached Go 1.27.2 and existing dependencies, with downloads off. The direct
 command used the cached executable’s full path; no broad agentd, held TTY,
 envtest, load loop or image build ran locally. Direct raw JSON SHA-256:
-`bbdda7892f8ffe0d5adc60908b7c381d06cd3813edf3a9608cf646806a45736c`.
+`28584f1c8b690a0826f451e545b8ce992ac55dc7959b6e53dd83f0753030d035`.
 
 | Tested source | SHA-256 |
 | --- | --- |
 | `internal/apiserver/inbox.go` | `cef73a337dade173a31e2e7283ce6d866acfc942c25bc8bc6bffe73f0d139d79` |
 | `internal/apiserver/apiv1/inbox.go` | `8960f8c464ee8043639a44cd798dd308dbef8b30dda6ab0e616edc8951b83c9a` |
 | `internal/apiserver/coordination_inbox_archive_ack_get.go` | `8b776a1507379b99ca76814d2d593aedd09c47444a824fcba95adc954bcfc516` |
-| `internal/apiserver/coordination_inbox_archive_ack_get_test.go` | `7a70de59ea6bd5259031d265132e065f50a7615ac30170afc245b3720cd10dd6` |
+| `internal/apiserver/coordination_inbox_archive_ack_get_test.go` | `ed77376e8818e61b80b047119b9da9b4df4e874cf610514e78d94e58f0bcaed3` |
 | `internal/apiserver/coordination_inbox_archive_get_test.go` | `1bc8fd52f2629b7cab74cdfa9941a0f174d7257ca61cfaa58beb955711d3c5f9` |
 
 These hashes attest the tested Go bytes. The later verification edits change
