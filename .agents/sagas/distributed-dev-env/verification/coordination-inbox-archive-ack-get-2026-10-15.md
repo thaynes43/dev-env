@@ -1,75 +1,112 @@
-# Coordination inbox archived acknowledgement GET — 2026-10-15
+# Archived inbox acknowledgement GET — 2026-10-15
 
-Story `C7-R4-INBOX-ACK-GET-1015` / #319, under saga
-`distributed-dev-env`, epic #175 backlog 11 R4. The accepted base was
-`51f8e3912ecef646980e429557a2eb7ce875227d`.
+Story C7-R4-INBOX-ACK-GET-1015 (Chapter7 source story #319), under epic #175
+and backlog11 R4, implements the GET acknowledgement portion of
+[DESIGN-024 section6](../designs/024-coordination-record-retention.md#6-reads-fall-back-to-the-archive).
+It depends on accepted PR316/main
+`51f8e3912ecef646980e429557a2eb7ce875227d`, not held #301/R3 or an unaccepted
+branch. The original five-path claim has one explicit supplemental test path,
+`coordination_inbox_archive_get_test.go`, needed to replace the previous slice’s
+temporary GET-ack prohibition. Original claim seals and the supplemental record
+remain preserved.
 
-This source-only candidate adds a default-off, typed archive fallback for
-`GET /v1/inbox/{message}/ack` after a genuine live `ReadAck` NotFound. It
-keeps acknowledgement creation live-only. The returned archived acknowledgement
-is the canonical stored object, including its immutable actor; the API wire view
-adds `archived` and `archivedAt` only for that verified archived result.
+## Behavior
 
-## Finite evidence
+With archive reads enabled, GET `/v1/inbox/{message}/ack` first authorizes its
+live or verified archived message, then prefers a valid live acknowledgement.
+Only an actual live acknowledgement NotFound asks the existing typed archive
+Get for its deterministic name, without UID/revision/hash pins. The accepted
+typed default selection provides that UID’s first archive time. The full
+canonical object, digest and manifest are checked, then project, message name
+and UID, full recipient namespace/name/UID and stored actor attribution are
+validated against the authorized message. The response uses the existing
+projection with additive `archived` and `archivedAt` fields only for an archived
+acknowledgement. An archived message with a live ack returns a live ack view.
 
-All Go checks used the cached full-path toolchain and shared lock:
+Original recipient Session/controlled live Pod or coordinator read scope is
+checked before and after archive I/O. A deleting original Session remains
+permitted under the existing inbox contract; an absent/replaced recipient or
+changed executor is refused. No sender Session join or current-actor rewrite
+is introduced. Default-off behavior, live errors, foreign live records and
+POST/publish writes do not acquire a new archive path. POST ack retry is a
+separate remaining slice, not implemented here. Typed NotFound maps to404;
+other archive failures, bad objects, no shelf/slot and cancellation map to503.
+All acquired slots are released.
 
-```text
-flock -w 60 /tmp/dev-env-go-tests.lock nice -n 19 env GOMAXPROCS=2 GOFLAGS=-p=1 GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off /home/dev/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.2.linux-amd64/bin/go test ./internal/apiserver -run '<selection>' -count=1
+## Evidence and limitations
+
+The first RED attempt failed in the fixture because its ack manifest omitted
+`messageUID`; it is preserved as fixture failure1. After correcting the fixture,
+`red2-go-test.out` captured the actual accepted production source returning404
+with zero archive calls despite a protocol-verified archive ack. The test used
+raw HTTP JSON and compiled before the new response fields existed. This is
+accepted-base evidence, not a disabled-flag mutation. Its original source
+hashes and direct plaintext output remain saved.
+
+The worker’s initial two-method capture was incomplete acceptance evidence.
+Its bounded test closure subsequently passed **4 methods / 19 nodes** in direct
+JSON while production remained frozen at `ed7524ed926d151f2dcb3167deaeb140280a9d64`.
+Native review found no production defect at that frozen source, but identified
+the old message test’s superseded GET-ack404/noarchive assertion. The coordinator
+removed that obsolete GET block and renamed the function, retaining its
+POST-ack404/noarchive and publish201/noarchive assertions unchanged. New tests
+positively cover archived-message/live-ack and archived-message/archived-ack.
+
+Coordinator closure adds independent full-field actor/recipient/message oracles,
+coordinator and recipient pre/post fences, absent sender/deleting original
+Session positives, foreign-live refusal, and semantic mutations whose complete
+canonical digest envelopes still pass protocol verification. These cover full
+recipient identity, message name/UID, project, namespace, actor validity, creation
+and deletion state, plus a non-UTC receipt. Earlier tests cover corrupt envelopes,
+typed errors, missing/busy slots, cancellation and additive HTTP JSON decoding.
+No existing separate typed acknowledgement consumer was found; the HTTP response
+is decoded into the existing additive API type. These are finite offline fixtures,
+not an installed shelf or complete real archive-to-HTTP integration proof.
+
+The first combined coordinator run exposed a prior message-test oracle defect:
+equal `ReportedAt` instants carried different Local/UTC representations. The
+coordinator normalizes copies of that timestamp toUTC before the unchanged
+full attribution/text comparison. Nil presence and every other provenance field
+remain asserted; no production code or ownership assertion was weakened. That
+failed capture remains preserved as root fixture failure1.
+
+After those real test changes, the final combined selection passed
+**15 methods / 94 nodes** in one direct JSON capture. This is one run; earlier
+worker captures are separate evidence and are not added to its count.
+
+```sh
+flock -w 60 /tmp/dev-env-go-tests.lock nice -n 19 env GOMAXPROCS=2 GOFLAGS=-p=1 GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test -p=1 -json ./internal/apiserver -run '^(TestInboxArchiveAckGet|TestInboxArchiveGet)' -count=1 -timeout=90s
 ```
 
-- RED count: 2. The first (`red-go-test.out`, SHA-256
-  `6bdee5cfa2a14fcf24eff8360c37251b971d58cd5b68879146d96fabee522223`)
-  stopped in a new fixture because its `inboxreadacks` manifest omitted
-  `messageUID`; it is preserved as fixture failure1, not an accepted-base
-  behavior counterexample.
-  The corrected accepted-base RED (`red2-go-test.out`, SHA-256
-  `0b6b20383746794bd3c6a9d4d654f9059b5e79f34b4118b5ef77648db706f509`)
-  ran `^TestInboxArchiveAckGetRedAcceptedBase$` and returned `404`, with zero
-  archive calls, for an absent live ack and a valid archived receipt.
-- GREEN count: 3 targeted selections. The initial production-wire check
-  (`green-go-test.out`, SHA-256
-  `e3f07ac0d7a06091bf2ece10941014caa16f1e6e6da86c786bac4cc9dbcfe7b9`)
-  passed `^TestInboxArchiveAckGetRedAcceptedBase$`. The final focused selection
-  (`green2-go-test.out`, SHA-256
-  `fd636e783fae9736b9cedaa337a7ffa5b07e8b995baa8736e77d8f1dc2cae9c7`)
-  passed `^TestInboxArchiveAckGet`. A final import-only test-source correction
-  was checked with the same selection (`green3-go-test.out`, SHA-256
-  `c3529b493b168971d63f7fb59e7fb6918515a4b4e01e76a2a5a6af72c503280c`).
-- Exact source hashes are retained out of tree in `red2-source.sha256`
-  (file SHA-256 `6fbea0eff8e14879eed58a8ee6921fa6f3b84ae70620b6fc1f001e5df54fde90`)
-  and `green2-source.sha256` (file SHA-256
-  `ff8981f05c5d7384fa1f8d5b78879d437688769b32b1e7fdf55ebec4c8aeabdd`).
-  The final source hash record is `green3-source.sha256` (file SHA-256
-  `360bdca1b60ca60e02b74f468fca455fcdd0983bcc321172f8901ce82694cec4`).
+Use cached Go1.27.2 and existing dependencies, with downloads off. The direct
+command used the cached executable’s full path; no broad agentd, held TTY,
+envtest, load loop or image build ran locally. Direct raw JSON SHA-256:
+`bbdda7892f8ffe0d5adc60908b7c381d06cd3813edf3a9608cf646806a45736c`.
 
-## Original acceptance closure
+| Tested source | SHA-256 |
+| --- | --- |
+| `internal/apiserver/inbox.go` | `cef73a337dade173a31e2e7283ce6d866acfc942c25bc8bc6bffe73f0d139d79` |
+| `internal/apiserver/apiv1/inbox.go` | `8960f8c464ee8043639a44cd798dd308dbef8b30dda6ab0e616edc8951b83c9a` |
+| `internal/apiserver/coordination_inbox_archive_ack_get.go` | `8b776a1507379b99ca76814d2d593aedd09c47444a824fcba95adc954bcfc516` |
+| `internal/apiserver/coordination_inbox_archive_ack_get_test.go` | `7a70de59ea6bd5259031d265132e065f50a7615ac30170afc245b3720cd10dd6` |
+| `internal/apiserver/coordination_inbox_archive_get_test.go` | `1bc8fd52f2629b7cab74cdfa9941a0f174d7257ca61cfaa58beb955711d3c5f9` |
 
-Production stayed frozen at `ed7524ed926d151f2dcb3167deaeb140280a9d64`.
-The supplemental focused GREEN used this exact command and direct JSON output:
+These hashes attest the tested Go bytes; the later verification record does not
+change their behavior. The command, raw captures, exact source hashes, original
+mismatch receipts, supported configured-model correction, timestamps-only login
+check deviation, interrupted administrative turns and bounded owner handoffs
+are supplemental PVC evidence under
+`/home/dev/work/orders/dev-env-chapter7-inbox-ack-get-1015/`, not public artifacts.
+The committed contract, tests, portable command and public exact-head PR checks
+provide reviewable source evidence. Configured Terra/high was verified through
+supported `/status`; the model’s earlier Astra/max self-report is preserved and
+corrected, without claiming independently proven serving-model identity. No
+login, renewal, GUI, usage-reset or unrelated Claude action followed.
 
-```text
-flock -w 60 /tmp/dev-env-go-tests.lock nice -n 19 env GOMAXPROCS=2 GOFLAGS=-p=1 GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off /home/dev/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.2.linux-amd64/bin/go test -json ./internal/apiserver -run '^TestInboxArchiveAckGet' -count=1
-```
-
-It passed with exit status 0. The raw JSON is `closure-green-go-test.json`
-(SHA-256 `2e55e96d3e4f4653b84838425b9180ba9c673ff6aecab0abf1b773a926fa6a1f`);
-its exact four-source hash record is `closure-green-source.sha256` (SHA-256
-`af5444f299703555e94e4986e2d2b64f21e7c4b6f599bdca9676a86cefdeca5f`).
-
-The closure cases exercise resource routing for archived message/live ack and
-archived message/archived ack, stored immutable actor/recipient/message API
-projection and archive receipt, default-off and live precedence, typed not-found
-versus typed failure, malformed manifest bindings (namespace, name, UID,
-message UID and project), digest/noncanonical/receipt refusal, nil reader/slots,
-busy slots, cancellation before and after archive I/O, and released-slot checks.
-
-The focused tests cover the accepted-base live miss, verified archive return,
-default-off behavior, live ack precedence without a shelf call, and POST staying
-live-only. The implementation validates the full canonical raw ack and digest,
-typed resource identity, manifest message/recipient/project bindings,
-deterministic acknowledgement name, stored object binding, non-deletion and
-creation timestamp before applying the post-I/O caller fence.
-
-Native independent review and CI are pending. This is a source candidate only:
-it is not installed, usable acceptance, archive activation, or full R4.
+Final independent native closure, ordinary exact-head required CI and available
+advisory finding disposition remain pending at this record’s source candidate.
+This does not claim source merge, installed/usable/fullR4 acceptance, retention
+activation, runtime/provider/access/security/credential authority, archive
+deletion, deployment, v1 changes or cutover. All failure/deviation/deadline/stall
+records remain preserved. #301’s original failed attempt1, permission-denied
+rerun and dependent R3 hold remain unchanged; no alternate retry or trigger.

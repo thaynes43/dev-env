@@ -266,3 +266,147 @@ func TestInboxArchiveAckGetEnvelopeAndAvailabilityRefusals(t *testing.T) {
 		})
 	}
 }
+
+func archivedAckRig(t *testing.T) (*fixture, string, *coord.InboxMessage, *coord.InboxReadAck, *inboxArchiveAckGetFake, string) {
+	t.Helper()
+	f, _, recipient, m, _, messagePath := inboxArchiveGetRig(t)
+	path := strings.TrimSuffix(messagePath, "?project=sample") + "/ack?project=sample"
+	if w := f.do(http.MethodPost, path, recipient, strings.NewReader(`{}`)); w.Code != http.StatusCreated {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	a, err := f.srv.Inbox.ReadAck(context.Background(), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.Delete(context.Background(), a); err != nil {
+		t.Fatal(err)
+	}
+	archive := &inboxArchiveAckGetFake{result: archivedInboxAckGetResult(t, a)}
+	f.srv.CoordinationArchiveReads, f.srv.CoordinationArchive, f.srv.ShelfSlots = true, archive, shelf.NewExecSlots(1)
+	return f, recipient, m, a, archive, path
+}
+
+// These semantic mutations retain a valid canonical digest and matching
+// manifest. They exercise message/recipient binding beyond protocol integrity.
+func TestInboxArchiveAckGetValidEnvelopeSemanticRefusals(t *testing.T) {
+	for _, mode := range []string{"recipient-namespace", "recipient-name", "recipient-uid", "message-name", "message-uid", "project", "namespace", "invalid-actor", "zero-created", "deleted", "nonutc-receipt"} {
+		t.Run(mode, func(t *testing.T) {
+			f, token, _, a, archive, path := archivedAckRig(t)
+			switch mode {
+			case "recipient-namespace":
+				a.Spec.Recipient.Namespace = "other"
+			case "recipient-name":
+				a.Spec.Recipient.Name = "other"
+			case "recipient-uid":
+				a.Spec.Recipient.UID = "11111111-1111-4111-8111-111111111111"
+			case "message-name":
+				a.Spec.MessageName = inbox.MessageName(coord.SessionIdentity{Namespace: "other", Name: "other", UID: "11111111-1111-4111-8111-111111111111"}, "other")
+			case "message-uid":
+				a.Spec.MessageUID = "11111111-1111-4111-8111-111111111111"
+			case "project":
+				a.Spec.Project = "other"
+			case "namespace":
+				a.Namespace = "other"
+			case "invalid-actor":
+				a.Spec.Actor.Kind = "coordinator"
+			case "zero-created":
+				a.CreationTimestamp = metav1.Time{}
+			case "deleted":
+				stamp := metav1.NewTime(time.Now().UTC())
+				a.DeletionTimestamp = &stamp
+			}
+			archive.result = archivedInboxAckGetResult(t, a)
+			if mode == "nonutc-receipt" {
+				archive.result.Manifest.ArchivedAt = archive.result.Manifest.ArchivedAt.In(time.FixedZone("other", 3600))
+			}
+			w := f.do(http.MethodGet, path, token, nil)
+			if w.Code != http.StatusServiceUnavailable || archive.calls != 1 || strings.Contains(w.Body.String(), "PRIVATE_INBOX_EXACT_TEXT") {
+				t.Fatalf("%s=%d calls=%d %s", mode, w.Code, archive.calls, w.Body.String())
+			}
+			assertInboxArchiveGetSlot(t, f.srv.ShelfSlots)
+		})
+	}
+}
+
+func TestInboxArchiveAckGetCallerFenceAndStoredActor(t *testing.T) {
+	for _, mode := range []string{"coordinator", "unscoped-coordinator", "absent-sender", "deleting-recipient", "absent-recipient", "replaced-before", "replaced-after", "pod-after", "foreign-live"} {
+		t.Run(mode, func(t *testing.T) {
+			f, token, m, a, archive, path := archivedAckRig(t)
+			want, calls := http.StatusOK, 1
+			replace := func() {
+				sess := f.session("archive-recipient")
+				sess.UID = "replacement-session"
+				if err := f.c.Update(context.Background(), sess); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch mode {
+			case "coordinator":
+				token = tokCoordinator
+				f.srv.InboxCoordinatorReadProjects = []string{"sample"}
+			case "unscoped-coordinator":
+				token = tokCoordinator
+				want, calls = http.StatusNotFound, 0
+			case "absent-sender":
+				removeInboxSession(t, f, "archive-sender")
+			case "deleting-recipient":
+				sess := f.session("archive-recipient")
+				sess.Finalizers = []string{"fixture-retain"}
+				if err := f.c.Update(context.Background(), sess); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.c.Delete(context.Background(), sess); err != nil {
+					t.Fatal(err)
+				}
+			case "absent-recipient":
+				removeInboxSession(t, f, "archive-recipient")
+				want, calls = http.StatusNotFound, 0
+			case "replaced-before":
+				replace()
+				want, calls = http.StatusNotFound, 0
+			case "replaced-after":
+				archive.after = replace
+				want = http.StatusNotFound
+			case "pod-after":
+				archive.after = func() { resumeInboxPod(t, f, token) }
+				want = http.StatusNotFound
+			case "foreign-live":
+				m.Spec.Project = "other"
+				m.Labels["coordination.dev-env.haynesops.com/project"] = "other"
+				if err := f.c.Update(context.Background(), m); err != nil {
+					t.Fatal(err)
+				}
+				want, calls = http.StatusNotFound, 0
+			}
+			// A resumed Pod is never substituted for immutable acknowledgement actor.
+			if mode == "coordinator" || mode == "absent-sender" {
+				a.Spec.Actor.PodName = "original-ack-pod"
+				a.Spec.Actor.PodUID = "11111111-1111-4111-8111-111111111111"
+				archive.result = archivedInboxAckGetResult(t, a)
+			}
+			w := f.do(http.MethodGet, path, token, nil)
+			if w.Code != want || archive.calls != calls {
+				t.Fatalf("%s=%d calls=%d %s", mode, w.Code, archive.calls, w.Body.String())
+			}
+			if want == http.StatusOK {
+				got := decode[apiv1.InboxReadAck](t, w)
+				expected := apiv1.InboxReadAck{Name: a.Name, UID: string(a.UID), Project: a.Spec.Project, MessageName: a.Spec.MessageName, MessageUID: a.Spec.MessageUID, Recipient: apiv1.TaskClaimOwner{Namespace: a.Spec.Recipient.Namespace, Name: a.Spec.Recipient.Name, UID: a.Spec.Recipient.UID}, Actor: apiv1.TaskClaimActor{Kind: a.Spec.Actor.Kind, ServiceAccount: a.Spec.Actor.ServiceAccount, PodName: a.Spec.Actor.PodName, PodUID: a.Spec.Actor.PodUID}, CreatedAt: a.CreationTimestamp.Time}
+				wire, err := json.Marshal(expected)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = json.Unmarshal(wire, &expected); err != nil {
+					t.Fatal(err)
+				}
+				if !got.Archived || got.ArchivedAt == nil || !got.ArchivedAt.Equal(archive.result.Manifest.ArchivedAt) {
+					t.Fatal("missing receipt")
+				}
+				got.Archived, got.ArchivedAt = false, nil
+				if !reflect.DeepEqual(got, expected) {
+					t.Fatalf("stored attribution differs: got=%#v want=%#v", got, expected)
+				}
+			}
+			assertInboxArchiveGetSlot(t, f.srv.ShelfSlots)
+		})
+	}
+}

@@ -177,16 +177,13 @@ func TestInboxArchiveGetRefusesOnlyAfterGenuineLiveNotFound(t *testing.T) {
 	}
 }
 
-func TestInboxArchiveGetDoesNotEnableAcknowledgementFallback(t *testing.T) {
+func TestInboxArchiveGetKeepsWritesLiveOnly(t *testing.T) {
 	f, sender, recipient, m, archive, path := inboxArchiveGetRig(t)
 	if err := f.c.Delete(context.Background(), m); err != nil {
 		t.Fatal(err)
 	}
 	f.srv.CoordinationArchiveReads, f.srv.CoordinationArchive, f.srv.ShelfSlots = true, archive, shelf.NewExecSlots(2)
 	ackPath := strings.Split(path, "?")[0] + "/ack?project=sample"
-	if w := f.do(http.MethodGet, ackPath, recipient, nil); w.Code != http.StatusNotFound || archive.calls != 0 {
-		t.Fatalf("ack GET = %d calls=%d", w.Code, archive.calls)
-	}
 	if w := f.do(http.MethodPost, ackPath, recipient, strings.NewReader(`{}`)); w.Code != http.StatusNotFound || archive.calls != 0 {
 		t.Fatalf("ack POST = %d calls=%d", w.Code, archive.calls)
 	}
@@ -363,6 +360,12 @@ func TestInboxArchiveGetCallerFenceAndAbsentSender(t *testing.T) {
 				}
 				got.Archived = false
 				got.ArchivedAt = nil
+				// Compare the reported instant without depending on the timezone
+				// representation chosen by metav1.Time versus time.Time decoding.
+				if got.Provenance.ReportedAt != nil && expected.Provenance.ReportedAt != nil {
+					gotAt, wantAt := got.Provenance.ReportedAt.UTC(), expected.Provenance.ReportedAt.UTC()
+					got.Provenance.ReportedAt, expected.Provenance.ReportedAt = &gotAt, &wantAt
+				}
 				if !reflect.DeepEqual(got.InboxMetadata, expected) || got.Text != m.Spec.Text {
 					t.Fatalf("attribution changed: %#v %#v", got, expected)
 				}
