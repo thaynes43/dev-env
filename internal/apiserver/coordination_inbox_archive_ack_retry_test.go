@@ -389,7 +389,7 @@ func TestInboxArchiveAckRetryEnvelopeAndAvailabilityRefusals(t *testing.T) {
 }
 
 func TestInboxArchiveAckRetryExecutorAndEarlyFence(t *testing.T) {
-	for _, mode := range []string{"foreign-recipient", "replaced-during-message", "missing-pod", "deleting-pod-before", "deleting-pod-after"} {
+	for _, mode := range []string{"foreign-recipient", "replaced-during-message", "missing-pod", "deleting-pod-before", "deleting-pod-after", "scope-after"} {
 		t.Run(mode, func(t *testing.T) {
 			f, token, _, _, archive, path := archivedRetryRig(t)
 			message := f.srv.CoordinationArchive.(inboxArchiveAckRouter).message
@@ -423,6 +423,9 @@ func TestInboxArchiveAckRetryExecutorAndEarlyFence(t *testing.T) {
 				}
 			case "missing-pod", "deleting-pod-before":
 				changePod()
+			case "scope-after":
+				archive.after = func() { f.srv.InboxProjects = nil }
+				ackCalls = 1
 			case "deleting-pod-after":
 				archive.after = changePod
 				ackCalls = 1

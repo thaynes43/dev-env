@@ -57,10 +57,10 @@ After correcting the parser and strengthening assertions, root ran:
 flock -w 60 /tmp/dev-env-go-tests.lock env TZ=UTC GOMAXPROCS=2 GOFLAGS=-p=1 GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off nice -n 19 /home/dev/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.2.linux-amd64/bin/go test -json ./internal/apiserver -run '^(TestInboxArchiveGet.*|TestInboxArchiveAckGet.*|TestInboxArchiveAckRetry.*)$' -count=1
 ```
 
-This one final selection passed: **23 methods, 152 test nodes**
-(including 129 subtests), plus one separate package pass event.
-Raw `root-green.jsonl` SHA-256:
-`3b20dc28d5fa4366ab0742a4e215e712a37c79c445f91603efbf4db9fb45200d`.
+This one final selection passed: **23 methods, 153 test nodes**
+(including 130 subtests), plus one separate package pass event.
+Raw `root-scope-green.jsonl` SHA-256:
+`8ca60ba84f492a02f10e5b414ed0104635a5a0e7cd2a776d119283f9d2f5277f`.
 All supplemental captures reside at
 `/home/dev/work/orders/dev-env-chapter7-inbox-ack-retry-1015/`;
 committed tests, the contract, command and hashes provide portable source evidence.
@@ -75,7 +75,7 @@ original/deleting recipient, absent sender, coordinator and foreign callers,
 replacement during either archive read, missing/deleting executors, strict body
 validation, valid-envelope semantic mismatches, typed and plain failures,
 canonical/digest corruption, missing reader/slots, busy slots and cancellation
-before/after I/O. Acquired slots are checked for release. Private message text
+before/after I/O, and removed project scope during acknowledgement I/O. Acquired slots are checked for release. Private message text
 must not appear in refusal or acknowledgement projections.
 
 ## Preserved failures and gates
@@ -90,13 +90,18 @@ expanded counterexample capture had one undefined fixture variable compilation
 failure; that raw file remains preserved, followed by the corrected actual RED.
 No setup failure is represented as the intended contract counterexample.
 
+A native closure check also found one missing POST assertion for removal of
+configured project scope during acknowledgement I/O. Root added that exact
+404, zero-write and slot-release case and ran the final coherent selection
+reported above; the earlier 23-method, 152-node run remains separate evidence.
+
 Worker focused evidence (17 methods, 83 nodes) remains separate and does not attest
 the later source. Root source bindings below attest the final focused selection:
 
 ```
 5df498c56d1db791396ca8f43c3d57b756b2116c99891eef272820befa7a991f  internal/apiserver/inbox.go
 ca657fd2007f66b395c86bca654605bcd4a46be888197bd6ea16ab4dee7e39fb  internal/apiserver/coordination_inbox_archive_ack_retry.go
-94a705cce490e890dd9ad2941c6ab5596b47ccc02a9aa421be2873b7433971b4  internal/apiserver/coordination_inbox_archive_ack_retry_test.go
+d6d99260ed4aaf57daecb07004cd1f1c491236c9c14e37557ba9efd0d2804586  internal/apiserver/coordination_inbox_archive_ack_retry_test.go
 128b80288eaac8df747764063daaee6049e1c5b08f8257c656cfd76b12c200f3  internal/apiserver/coordination_inbox_archive_get_test.go
 b732b2e31c7fd8dfcc20f9c1f234d48e462aeadb22d4058f4717e4f424f3ca0e  internal/apiserver/coordination_inbox_archive_ack_get_test.go
 ```
