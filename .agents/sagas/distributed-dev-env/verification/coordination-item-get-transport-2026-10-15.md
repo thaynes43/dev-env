@@ -12,8 +12,9 @@ merge remain separate gates. No installed or usable R4 acceptance is claimed.
 `agentd ctl coord-archive get-item --resource R --name N [--uid U]` dispatches
 to accepted `GetItemSelected`. It selects the latest verified object and returns
 the UID's first UTC archive receipt. It accepts no revision/hash flags and reads
-no stdin. Legacy `get`, including explicit UID and exact pinned recovery, keeps
-its revision receipt and recovery behavior when the birth index is unavailable.
+no stdin. Legacy explicit-UID `get`, including exact pinned recovery, keeps its revision
+receipt and recovery behavior when the birth index is unavailable. Default
+`get` with no UID retains its existing first-UID receipt semantics.
 
 `CoordinationArchive.GetItem` rejects either pin before shelf access with typed
 `invalid`, validates its selector, constructs the narrow command, and reuses the
