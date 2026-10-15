@@ -249,6 +249,14 @@ func (s *Server) listTaskClaims(ctx context.Context, _ http.ResponseWriter, r *h
 	if err := s.claimReadScope(ctx, c, project); err != nil {
 		return 0, nil, err
 	}
+	archivedValues := r.URL.Query()["archived"]
+	if len(archivedValues) > 1 {
+		return 0, nil, badRequest("archived must be only")
+	}
+	archived := r.URL.Query().Get("archived")
+	if archived != "" && archived != "only" {
+		return 0, nil, badRequest("archived must be only")
+	}
 	limit := int64(100)
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		var err error
@@ -256,6 +264,17 @@ func (s *Server) listTaskClaims(ctx context.Context, _ http.ResponseWriter, r *h
 		if err != nil || limit < 1 || limit > 100 {
 			return 0, nil, badRequest("limit must be between 1 and 100")
 		}
+	}
+	if archived == "only" {
+		for key, values := range r.URL.Query() {
+			if len(values) != 1 || (key != "project" && key != "limit" && key != "continue" && key != "archived") {
+				return 0, nil, badRequest("invalid archived task claim query")
+			}
+		}
+		if !s.CoordinationArchiveReads {
+			return 0, nil, notFound("task claim not found")
+		}
+		return s.listArchivedTaskClaims(ctx, project, limit, r.URL.Query().Get("continue"))
 	}
 	claims, next, err := s.TaskClaims.List(ctx, project, limit, r.URL.Query().Get("continue"))
 	if err != nil {
@@ -269,6 +288,21 @@ func (s *Server) listTaskClaims(ctx context.Context, _ http.ResponseWriter, r *h
 }
 
 func (s *Server) claimView(ctx context.Context, c *coord.TaskClaim) apiv1.TaskClaim {
+	view := claimMetadata(c)
+	var owner v1alpha1.AgentSession
+	if s.Live.Get(ctx, types.NamespacedName{Namespace: c.Spec.Owner.Namespace, Name: c.Spec.Owner.Name}, &owner) == nil && string(owner.UID) == c.Spec.Owner.UID {
+		if !owner.DeletionTimestamp.IsZero() {
+			view.OwnerState = "Deleting"
+		} else if owner.Status.Phase != "" {
+			view.OwnerState = string(owner.Status.Phase)
+		}
+	}
+	return view
+}
+
+// claimMetadata projects immutable TaskClaim data. Archive reads use this
+// projection without consulting a live owner Session.
+func claimMetadata(c *coord.TaskClaim) apiv1.TaskClaim {
 	p := c.Spec.Provenance
 	view := apiv1.TaskClaim{Name: c.Name, UID: string(c.UID), CreatedAt: c.CreationTimestamp.Time,
 		Identity:   apiv1.TaskClaimIdentity{Project: c.Spec.Identity.Project, Repository: c.Spec.Identity.Repository, TaskKey: c.Spec.Identity.TaskKey},
@@ -279,14 +313,6 @@ func (s *Server) claimView(ctx context.Context, c *coord.TaskClaim) apiv1.TaskCl
 	if p.ReportedAt != nil {
 		at := p.ReportedAt.Time
 		view.Provenance.ReportedAt = &at
-	}
-	var owner v1alpha1.AgentSession
-	if s.Live.Get(ctx, types.NamespacedName{Namespace: c.Spec.Owner.Namespace, Name: c.Spec.Owner.Name}, &owner) == nil && string(owner.UID) == c.Spec.Owner.UID {
-		if !owner.DeletionTimestamp.IsZero() {
-			view.OwnerState = "Deleting"
-		} else if owner.Status.Phase != "" {
-			view.OwnerState = string(owner.Status.Phase)
-		}
 	}
 	return view
 }
