@@ -14,10 +14,11 @@ Agents share rules and authorized context and coordinate tasks. Each independent
 Claude Code, Codex or local-model session has its own bounded pod and failure
 boundary, private provider home, repositories and ordinary task worktrees.
 
-**Coordination archive reads remain uninstalled.** The operator source has a
+**Coordination archive reads have source support.** The operator has a
 default-off `--enable-coordination-archive-reads` setting for the designed
-archive fallback and `archived=only` lists. It changes no caller ACL, create
-path, runtime setting, deployment, or archive activation.
+archive fallback and `archived=only` lists. Existing caller ACLs and create
+paths remain unchanged. Installation and activation require separate acceptance;
+this source change applies no runtime configuration.
 
 The controlling decision is [ADR-003](../.agents/sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md).
 It supersedes the shared-Git/RWX prerequisite. The original ADRs and storage
