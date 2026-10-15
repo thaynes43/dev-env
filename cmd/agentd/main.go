@@ -114,7 +114,7 @@ Commands:
   ctl coord-archive put [--mark]|mark|lookup|get
                            Put a coordination object (with --mark, append absent),
                            mark present/reset, look up revisions and grace,
-                           or read one exact verified archived revision.
+                           or select a verified archived UID/revision by recorded time or exact pins.
   ctl prepare-restart      Print what the next boot resumes (the conversation in
                            ~/.agentd/launch.json) as JSON, then stop the agent
                            CLI as the pod's SIGTERM would (D-58).

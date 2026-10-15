@@ -10,6 +10,26 @@ of the 2026-10-12 brief, which still holds the requirement history and the
 stopped routes. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
 the historical work order for the first build session.
 
+## General archive get selectors: recorded-time source portion — 2026-10-14 UTC
+
+The [selector slice](sagas/distributed-dev-env/verification/coordination-archive-selectors-2026-10-14.md)
+accepts optional UID and paired revision/hash pins. Defaults use the UID's first
+recorded publication time with its immutable birth index, then that UID's recorded
+revision archivedAt. Late recaptures do not reorder older UID births. Only the
+selected object is fully verified, with no fallback from corrupt latest data.
+Cross-project ambiguity, damaged/incomplete or linked selection metadata and
+equal greatest timestamps refuse without an object. Traversal uses 128-name
+batches and constant candidate memory. Explicit pins bypass default ordering.
+
+All 49 focused coordination tests (129 passing nodes with finite subcases) passed.
+Recorded timestamps do not establish strict arrival chronology after rollback;
+that interpretation remains unestablished. No opaque/lexical tie breaker or new
+clock/sequence policy was introduced, and full selector acceptance is not waived.
+Next source: paged list, old incoming cleanup and shelf startup wiring. Installed
+consumers, H7/H8, full parity and pilot acceptance remain separate. All live,
+release/deployment, archive activation/deletion, v1 and cutover holds remain.
+Chapter6 stays sole implementation owner; Chapter5/workers remain idle.
+
 ## Append-only coordination journal and grace — 2026-10-14 UTC
 
 The [journal slice](sagas/distributed-dev-env/verification/coordination-archive-journal-2026-10-14.md)

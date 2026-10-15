@@ -13,7 +13,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
-const coordArchiveUsage = "usage: agentd ctl coord-archive put [--mark] | mark | lookup | get --resource R --name N --uid U --resource-version V --sha256 H\n"
+const coordArchiveUsage = "usage: agentd ctl coord-archive put [--mark] | mark | lookup | get --resource R --name N [--uid U] [--resource-version V --sha256 H]\n"
 
 // Private constructor seam for local command tests; no public mount bypass.
 var newCoordArchive = agentd.NewCoordArchive
@@ -25,7 +25,7 @@ func coordArchiveCtl(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 	}
 	fs := flag.NewFlagSet("coord-archive "+args[0], flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var q protocol.CoordArchiveExactQuery
+	var q protocol.CoordArchiveGetQuery
 	var mark bool
 	switch args[0] {
 	case "put":
@@ -84,7 +84,7 @@ func coordArchiveCtl(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 			out, err = a.PutRecord(request.Manifest, bytes.NewReader(request.Object), request.Event)
 		}
 	} else {
-		out, err = a.GetExact(q)
+		out, err = a.GetSelected(q)
 	}
 	if err != nil {
 		return historyFail(stdout, err)

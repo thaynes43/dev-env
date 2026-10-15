@@ -107,6 +107,36 @@ shows local marked lookup transitions and finite refusal/repair cases. General
 get/list, old incoming cleanup and shelf startup wiring remain R2 work;
 installed consumers and all live/activation/cutover gates remain held.
 
+**General get selector slice, 2026-10-14:** the source reader accepts optional
+UID and paired resourceVersion/SHA256 selectors. It discovers the unique project
+for the name before reading any object. With UID omitted, it compares the UID's
+first recorded publication time (the same minimum manifest time used by its
+immutable index); a later revision of an older UID does not reorder UID births.
+Default UID selection also requires its immutable birth-index entry to match;
+missing or inconsistent birth metadata refuses rather than reranking that UID.
+With revision omitted, it compares that UID's recorded revision archivedAt.
+Only the selected object is read, with the existing complete canonical identity,
+size and digest verification. A damaged selected object never falls back to an
+older one. Explicit UID/revision pins remain usable without default ordering.
+
+Traversal retains bounded 128-name batches and constant candidate state, rather
+than collecting/sorting an archive. Every metadata candidate needed for ordering
+must be canonical, path-bound and consistent with its UID's immutable identity.
+Malformed/incomplete or linked candidates refuse selection; names in two projects
+remain ambiguous even with explicit pins. A revision/hash pair without UID applies
+to the selected UID only; it never searches an older UID for a matching revision.
+
+**Ordering limit:** accepted metadata supplies recorded timestamps, not a separate
+publication sequence. Equal greatest UID/revision times do not identify a unique
+latest candidate and return ambiguous, with no object. No directory enumeration,
+resourceVersion, UID or digest lexical order breaks ties. Recorded time selection
+does not prove strict arrival order after clock rollback. That chronology choice
+is unestablished; no new sequence/clock policy is introduced or full acceptance
+claimed for it. The [selector fixture](../verification/coordination-archive-selectors-2026-10-14.md)
+records the independent safe portion and explicit-pin escape from time ambiguity.
+General selector source support is separate from installed acceptance; list,
+incoming cleanup and shelf startup wiring remain R2 work.
+
 ## 1. What runs, in one picture
 
 ```mermaid
