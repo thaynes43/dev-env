@@ -49,6 +49,8 @@ type InboxReadAck struct {
 	Recipient   TaskClaimOwner `json:"recipient"`
 	Actor       TaskClaimActor `json:"actor"`
 	CreatedAt   time.Time      `json:"createdAt"`
+	Archived    bool           `json:"archived,omitempty"`
+	ArchivedAt  *time.Time     `json:"archivedAt,omitempty"`
 }
 type InboxAckResult struct {
 	Outcome string       `json:"outcome"`
