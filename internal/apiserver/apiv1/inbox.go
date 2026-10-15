@@ -25,6 +25,8 @@ type InboxMetadata struct {
 	Provider       string              `json:"provider"`
 	RequestedModel string              `json:"requestedModel"`
 	CreatedAt      time.Time           `json:"createdAt"`
+	Archived       bool                `json:"archived,omitempty"`
+	ArchivedAt     *time.Time          `json:"archivedAt,omitempty"`
 }
 type InboxMessage struct {
 	InboxMetadata
