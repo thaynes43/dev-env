@@ -457,9 +457,8 @@ exclusive lock it:
    failure, refuses `put` success; any already-published immutable bytes remain
    readable. A retry does not rewrite those bytes. Unknown debris is preserved
    for separately authorized operator investigation and resolution; this does
-   not imply live deletion authority. The [incoming cleanup verification]
-   (../verification/coordination-archive-incoming-2026-10-15.md) records the
-   bounded source/offline evidence.
+   not imply live deletion authority. The [incoming cleanup verification](../verification/coordination-archive-incoming-2026-10-15.md)
+   records the bounded source/offline evidence.
 
 It prints the stored manifest and the UID's grace start.
 
