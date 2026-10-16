@@ -1,5 +1,10 @@
 # Saga: distributed-dev-env (dev-env v2)
 
+**Owner requirement, 2026-10-16:** [central cross-repository work coordination](requirements/2026-10-16-central-work-coordination.md)
+records canonical OpenProject Saga/Epic/Story work, shared agent rules/tools, central
+owner refinement and practical delivery. [Plan 11](backlog/11-project-workspaces.md#central-cross-repository-work-requirement)
+is the implementation home; this documentation update enables no runtime changes.
+
 Start continuation with the
 [2026-10-13 Claude pickup brief](../../CLAUDE-RESUME-2026-10-13.md): deployed
 state (2.28.0 image delivery), counters, rulings through Q-37/D-92 and pacing, and the next work
