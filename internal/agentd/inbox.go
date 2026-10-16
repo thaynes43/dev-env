@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -66,6 +67,15 @@ func (c *InboxClient) Do(ctx context.Context, method, path string, body []byte) 
 	if c.HTTP == nil || len(path) > 8192 || len(body) > InboxMaxRequestBytes || !utf8.Valid(body) || (path != apiv1.InboxPath && !strings.HasPrefix(path, apiv1.InboxPath+"?") && !strings.HasPrefix(path, apiv1.InboxPath+"/")) {
 		return nil, 0, errors.New("invalid bounded inbox operation")
 	}
+	return c.doBounded(ctx, method, path, body, "inbox", InboxMaxRequestBytes)
+}
+
+// doBounded shares the existing projected-identity/TLS transport. Callers build
+// fixed validated routes; it is deliberately not an exported arbitrary API client.
+func (c *InboxClient) doBounded(ctx context.Context, method, path string, body []byte, operation string, maxRequest int) ([]byte, int, error) {
+	if c == nil || c.HTTP == nil || len(path) > 8192 || len(body) > maxRequest || !utf8.Valid(body) {
+		return nil, 0, fmt.Errorf("invalid bounded %s operation", operation)
+	}
 	ctx, cancel := context.WithTimeout(ctx, heartbeatTimeout)
 	defer cancel()
 	token, err := readInboxToken(c.TokenFile)
@@ -74,7 +84,7 @@ func (c *InboxClient) Do(ctx context.Context, method, path string, body []byte) 
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.URL+path, bytes.NewReader(body))
 	if err != nil {
-		return nil, 0, errors.New("invalid inbox request")
+		return nil, 0, fmt.Errorf("invalid %s request", operation)
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
 	req.Header.Set("Content-Type", "application/json")
@@ -82,15 +92,15 @@ func (c *InboxClient) Do(ctx context.Context, method, path string, body []byte) 
 	h.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := h.Do(req)
 	if err != nil {
-		return nil, 0, errors.New("inbox outcome Unknown; retry the same intent and key")
+		return nil, 0, fmt.Errorf("%s outcome Unknown; inspect the same intent before any retry", operation)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 == 3 {
-		return nil, resp.StatusCode, errors.New("inbox redirect refused")
+		return nil, resp.StatusCode, fmt.Errorf("%s redirect refused", operation)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, InboxMaxResponseBytes+1))
 	if err != nil || len(data) > InboxMaxResponseBytes || !utf8.Valid(data) || !json.Valid(data) {
-		return nil, resp.StatusCode, errors.New("inbox response invalid or exceeds bound")
+		return nil, resp.StatusCode, fmt.Errorf("%s response invalid or exceeds bound", operation)
 	}
 	return data, resp.StatusCode, nil
 }

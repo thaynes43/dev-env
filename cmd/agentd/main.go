@@ -58,6 +58,12 @@ Commands:
                            to prepare declared shared references/project roots.
   project-refresh          Bootstrap/fetch the trusted catalog in this private
                            pod using its enabled startup settings; print report.
+  task-claim-create        Claim own explicit task from bounded JSON stdin;
+                           owner/provenance come from authenticated Session.
+  task-claim-list --project P [--limit N] [--continue CURSOR]
+                           Read one bounded ownership metadata page as JSON.
+  task-claim-get --project P --claim NAME [--uid UID]
+                           Read one claim with an optional original UID fence.
   ask-decision             Save one bounded question from JSON stdin for the
                            configured direct parent. Print its durable record.
                            The parent must present it through its question tool.
@@ -220,6 +226,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return ctl(ctx, args[1:], stdin, stdout, stderr, getenv, r)
 	case "ask-decision":
 		return askDecision(ctx, args[1:], stdin, stdout, stderr, getenv)
+	case "task-claim-create", "task-claim-list", "task-claim-get":
+		return taskClaimCommand(ctx, args[0], args[1:], stdin, stdout, stderr, getenv)
 	case "inbox-publish", "inbox-list", "inbox-read", "inbox-ack":
 		return inboxCommand(ctx, args[0], args[1:], stdin, stdout, stderr, getenv)
 	default:

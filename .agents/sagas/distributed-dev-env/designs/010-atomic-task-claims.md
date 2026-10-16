@@ -199,3 +199,36 @@ handoff follow separate slices. Publish schema/operator/least-privilege role,
 then run a reviewed disposable two-parent contention proof before claiming
 installed coordination. Keep #175/#91 open; preserve failed native fixtures,
 ledgers, current sessions and Q-24's pending routing/UX decision.
+
+
+## In-session executable client (#339, 2026-10-15)
+
+The pilot needs a supported caller, not a copied bearer token or an arbitrary
+HTTP command. `agentd task-claim-create` reads at most 4096 UTF-8 JSON bytes from
+stdin: `{"identity":{"project":"dev-env","repository":"dev-env","taskKey":"task:example"}}`.
+Owner and provenance are never supplied by this command: the server derives the
+original authenticated Session owner. A coordinator create is outside this
+in-session interface. The existing HTTP ownership/retention contract is unchanged.
+
+`agentd task-claim-list --project dev-env [--limit 1..100] [--continue CURSOR]`
+returns one bounded page. `agentd task-claim-get --project dev-env --claim NAME
+[--uid UID]` reads one exact claim; UID fences are optional and never inferred.
+No archived-only switch, release, takeover or automatic continuation is added.
+
+All three commands use the existing projected-token file and verified HTTPS/CA
+transport, reopening the bounded token per request. They expose no URL, token,
+owner, generic path or provider-file flag. No redirects or automatic retries.
+Valid bounded JSON replies, including HTTP409 original-owner metadata and API
+refusals, remain on stdout; a non-2xx reply exits1. Invalid inputs exit2 before
+HTTP. Transport/TLS/oversized/malformed replies exit1 without token or response
+content in diagnostic errors. No result implies old-owner stop or transfer.
+
+Acceptance uses synthetic tokens and local TLS fixtures for exact intent/routes,
+rotated projected identity, conflict and refusal preservation, no automatic retry,
+and pre-request rejection of malformed or spoofed intent/path/query. Required CI,
+independent native review and available advisory findings bind the final head.
+This is source/test acceptance only. The task image must later contain the new
+agentd binary before pilot execution. No runtime/API/provider call, admission,
+auth repair, permission change or retention consumer activation is authorized.
+Claims, live durable inbox/ACK and explicit published handoffs do not depend on
+#337; its failed captures and native defects remain held for later retention.
