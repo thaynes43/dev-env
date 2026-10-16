@@ -113,6 +113,11 @@ type Observation struct {
 // validateGate consumes supported show/log output, including reported markers
 // and an exact structured successful claim receipt. Log text is reported
 // evidence, not a new authorization source or a private stop proof.
+func readyForLog(s apiv1.Session) bool {
+	a := s.AgentStatus
+	return a != nil && a.Boot == "ready" && (a.State == "busy" || a.State == "running") && a.Head != "" && a.ProjectBootstrap != nil && a.ProjectBootstrap.State == "Ready"
+}
+
 func validateGate(c Config, o Observation, now time.Time) (*Deadlines, error) {
 	s := o.Session
 	if o.Log.Truncated {
@@ -121,7 +126,7 @@ func validateGate(c Config, o Observation, now time.Time) (*Deadlines, error) {
 	if s.UID != c.AUID || s.Name != c.Policy.SessionName(0) || s.Repo != "dev-env" || s.IdempotencyKey != c.Policy.Key(0) || s.Prompt != c.Policy.Prompts[0] || s.Agent != "codex" || s.Model != "gpt-6.1-sol" || s.Effort != "high" || s.Mode != "task" || s.Size != "S" || s.Profile != projectcanary.PilotProfile || s.Limits == nil || s.Limits.Timeout != "15m0s" || s.CreatedAt.Before(c.Policy.NotBefore) || (!c.ATaskStarted.IsZero() && s.CreatedAt.After(c.ATaskStarted)) {
 		return nil, errRefused
 	}
-	if s.PrivateHistory == nil || s.PrivateHistory.SessionUID != c.AUID || s.PrivateHistory.LastExecutor == nil || s.PrivateHistory.LastExecutor.PodUID != c.APodUID {
+	if s.PrivateHistory != nil && (s.PrivateHistory.SessionUID != c.AUID || (s.PrivateHistory.LastExecutor != nil && s.PrivateHistory.LastExecutor.PodUID != c.APodUID)) {
 		return nil, errRefused
 	}
 	if s.AgentStatus == nil {
@@ -129,6 +134,12 @@ func validateGate(c Config, o Observation, now time.Time) (*Deadlines, error) {
 	}
 	a := s.AgentStatus
 	if a.Task != nil || a.State == "exited" || (a.Head != "" && a.Head != c.Head) {
+		return nil, errRefused
+	}
+	if !readyForLog(s) {
+		return nil, nil
+	}
+	if s.PrivateHistory == nil || s.PrivateHistory.LastExecutor == nil {
 		return nil, errRefused
 	}
 	if a.LastHeartbeat == nil || now.Before(*a.LastHeartbeat) || now.Sub(*a.LastHeartbeat) > 30*time.Second {
@@ -328,7 +339,12 @@ func liveAdapters(c Config, invoke func(context.Context, string, []string) ([]by
 		if err = json.Unmarshal(raw, &o.Session); err != nil {
 			return o, err
 		}
-		raw, err = read(ctx, "log", c.Policy.SessionName(0), "--tail", "200", "--once", "-o", "json")
+		// Container creation/bootstrap has no task log yet (captured404).
+		// Wait using supported metadata; never swallow a real CLI error.
+		if !readyForLog(o.Session) {
+			return o, nil
+		}
+		raw, err = read(ctx, "log", c.Policy.SessionName(0), "--tail", "5000", "--once", "-o", "json")
 		if err != nil {
 			return o, err
 		}
@@ -388,6 +404,12 @@ func execute(args []string, out io.Writer) error {
 	}
 	if !*enabled {
 		return json.NewEncoder(out).Encode(map[string]any{"state": "NONEXECUTING_REQUIRES_SEPARATE_RUNTIME_AUTHORITY", "argv": append([]string{c.Binary}, c.dispatchArgs()...), "phaseSeconds": []int{360, 600, 720}, "noTransportCalled": true})
+	}
+	// A completed/failed/unknown harness run cannot be restarted in place.
+	// Reserve before ANY transport, so a loser cannot overwrite the winner's
+	// result or dispatch B then discover an old result file.
+	if err := saveExclusive(filepath.Join(c.ReceiptDir, c.Policy.Key(1)+".run.json"), map[string]any{"state": "HARNESS_RUN_RESERVED_NO_RETRY", "policyDigest": c.Policy.Digest(), "aUID": c.AUID}); err != nil {
+		return err
 	}
 	ctx, cancel := context.WithDeadline(context.Background(), c.Policy.ExpiresAt.Add(-time.Minute))
 	defer cancel()

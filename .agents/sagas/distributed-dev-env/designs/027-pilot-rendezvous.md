@@ -10,22 +10,29 @@ status labels are not a security gate. Its readiness/migration is separate.
 
 ## Demonstrated failure and smallest correction
 
-The closed 17:50 pilot was PARTIAL. A claimed at17:54:22; its successful claim
-capture existed at17:54:43.485878; B invocation waited until17:55:31.640230.
+The closed 17:50 pilot was PARTIAL. A claimed at 17:54:22; its successful claim
+capture existed at 17:54:43.485878; B invocation waited until 17:55:31.640230.
 That48.154352s coordinator/model/reporting gap contributed to B's message at
-17:57:13 arriving18s after A exited. The combined eight-read budget was four
+17:57:13 arriving 18 seconds after A exited. The combined eight-read budget was four
 claim/inbox rounds, not eight rendezvous rounds. Neither ACK nor handoff read
-was proved. Task exit0 did not establish private executor stopState, which was
+was proved. Task exit 0 did not establish private executor stopState, which was
 Unknown. These are orchestration failures; no production message/context defect
 was demonstrated. Original receipts and all failed attempts remain unchanged.
 
 Use one small command in `scripts/trials/pilot_rendezvous`, not a new controller.
 It is nonexecuting by default. The execution adapter reads original A through
-existing `agent-run show --json --once` and `log --once -o json`, validates their
+existing `agent-run show --json --once` and `log --tail 5000 --once -o json`, validates their
 captured output, reserves a durable attempt, then invokes the exact prebound B
 CLI arguments in the SAME synchronous call. There is no model/reporting callback
 or returned command to execute on a later turn. Fake clock/observation/dispatch
 adapters exercise this path offline, including the actual command adapter.
+
+The future reviewed A prompt must require exactly one single-line JSON receipt
+before its wait: `{"operation":"task-claim-create","exitCode":0,"stdout":"<actual returned JSON, encoded as a JSON string>"}`. Preserve the actual exit
+code/stdout; never manufacture a successful receipt. A nonzero result stops A.
+The preserved real log-6 already contains this format (its claim creation was
+wrapped by the actor); it is not a universal agentd logging guarantee. The
+checked-in captured-log projection proves compatibility with the actual output.
 
 The gate checks original Session/Pod UIDs, sealed A prompt/key/profile/model,
 fresh heartbeat/head/catalog, reported loaded markers and structured successful
@@ -52,16 +59,16 @@ within `min(T+15m, P+20m, W-1m)`. Refuse an already-infeasible schedule instead 
 shortening correctness checks or extending any task/Pod/window limit.
 
 - Startup/rendezvous ends at C+6m. A waits for B's exact owned claim and first
-  attributed message, at most8 rounds45s apart, each round explicitly containing
-  one claim-list and one inbox-list (maximum16 RPCs, not8). Stop early on success.
+  attributed message, at most 8 rounds 45 seconds apart, each round explicitly containing
+  one claim-list and one inbox-list (maximum 16 RPCs, not8). Stop early on success.
 - ACK/reply phase ends at C+10m, never relative to a late model turn. A reads and
   validates B's exact message, ACKs it, publishes its handoff and replies with the
-  exact publication/ACK references. B waits at most8 inbox reads30s apart. Both
+  exact publication/ACK references. B waits at most 8 inbox reads 30 seconds apart. Both
   phases stop at their absolute deadlines even with unused read allowance.
 - Task-terminal/handoff-read phase ends at C+12m. B preserves the full one-shot
   original-A response, exact original UID and actual task finishedAt/exitCode (or
   the existing reviewed terminal record) before the authorized published context
-  read. At most8 metadata reads15s apart. Missing evidence means PARTIAL. A's
+  read. At most8 metadata reads 15 seconds apart. Missing evidence means PARTIAL. A's
   task exit is NOT private-executor stopConfirmed; if that stronger condition is
   required, Unknown blocks that claim. No revival or alternate read route.
 
@@ -72,13 +79,16 @@ instructions. Do not insert loaded-rule marker values into either prompt.
 Prompt changes require a fresh reviewed policy/seal package before any future
 runtime authorization. This source story does not modify or reuse an old seal.
 
-The harness's pre-claim gate wait has a separate cap:60 rounds,5s spacing, at most
-5m and an earlier latest feasible window time; each round is two one-shot CLI
-reads under one10s context. A successful claim must be no more than30s old and
-its heartbeat no more than30s old. The durable attempt must reach invocation
-within5s of validation or abort permanently. B's create has a10s deadline.
+The harness's pre-claim gate wait has a separate cap: 60 rounds, 5 seconds spacing, at most
+5 minutes and an earlier latest feasible window time; each round is two one-shot CLI
+reads under one 10-second context. During container creation/bootstrap it reads only
+show; it defers log until task/bootstrap metadata is ready (the captured earlier
+log request returned404 no-log-yet). Actual CLI/authority errors are not ignored. A successful claim must be no more than 30 seconds old and
+its heartbeat no more than 30 seconds old. The durable attempt must reach invocation
+within 5 seconds of validation or abort permanently. B's create has a 10-second deadline.
 All CLI, parse, UID, timeout and durable-write errors abort with no fallback.
-The `.attempt.json` is created exclusively and synced BEFORE invoking B. It is
+One exclusive `.run.json` is reserved before ANY transport; prior runs cannot
+restart in that directory or overwrite an earlier result. The `.attempt.json` is created exclusively and synced BEFORE invoking B. It is
 never removed after unknown outcomes; a crash may consume the one attempt even
 before transmission. No automatic recovery/replacement is allowed. Keep the
 same receipt directory per approved cohort. The operator's sealed slots and
@@ -86,16 +96,20 @@ idempotency key remain the final guard across differing local directories.
 
 ## Offline acceptance and limits
 
-Replay69+53+49=171s claim-to-message against A's153s old wait: retain the18s miss.
+Replay69+53+49=171s claim-to-message against A's 153 seconds old wait: retain the18s miss.
 Then exercise same-call dispatch with the measured claim-capture offset and
-both53s warm startup and the199s pull-to-container envelope+20s bootstrap+49s
+both 53-second warm startup and the 199-second pull-to-container envelope+20s bootstrap+49s
 first-tools delay. The cold envelope includes unpack/create, not pure pull time.
-The next45s round is within360s; a separate30s ACK and terminal phase fit their
+The next 45-second round is within360s; a separate 30-second ACK and terminal phase fit their
 absolute ends. These synthetic times prove the budget and orchestration, not
 future model latency or runtime behavior. Never-ready and wrong-UID cases must
 send zero creates. An uncertain create must reserve exactly one attempt across
 re-entry, with no duplicate/replacement action. In-memory CLI tests must show
 one-shot refusal/no retry and ordinary retry behavior unchanged.
+
+Log reads are capped at 5000 lines and 128 KiB; missing/truncated evidence
+refuses dispatch. This finite limit is intentional; do not add broader log
+retrieval or private history as a fallback.
 
 Scope excludes broader polling frameworks, general session control, automatic
 closure/activation, provider research, history migration and speculative edge

@@ -13,11 +13,11 @@ to execute it now. No live API/model calls are part of source testing.
 
 ## Focused offline proof
 
-Use cached Go, downloads off, shared test lock, GOMAXPROCS2, -p1 and nice19:
+Use cached Go, downloads off, shared test lock, GOMAXPROCS=2, -p1 and nice 19:
 
 ```
 go test -count=1 -v ./scripts/trials/pilot_rendezvous ./internal/agentrun \
-  -run 'Test(Gate|CapturedTiming|NeverReady|AllAdapter|DurableAttempt|Infeasible|DefaultAndDrift|ExistingCLIAdapter|ProjectCreateOnce|ProjectCreateDefault|LogOnce|LogDefault)'
+  -run 'Test(Gate|CapturedTiming|NeverReady|AllAdapter|DurableAttempt|Infeasible|DefaultAndDrift|ExistingCLIAdapter|ProjectCreateOnce|ProjectCreateDefault|LogOnce|LogDefault|ActualStartup|CapturedReal|ExistingRun)'
 ```
 
 The harness clock/observation/dispatch are injected. The actual command adapter
@@ -26,7 +26,11 @@ checks use net.Pipe and synthetic credentials: no listener, DNS, operator,
 external transport, subprocess or model. Record raw commands/results and final
 exact head/patch in the orders. A first new CLI test used an incomplete Session
 fixture; strict-wire validation correctly refused it. The fixture was corrected
-to the existing complete Session DTO; that failed capture is retained.
+to the existing complete Session DTO; that failed capture is retained. Independent
+Mac review found a real startup issue: the first adapter requested a log before
+metadata was ready. The correction defers that request and replays nil metadata,
+bootstrap-in-progress and ready/claim states to exactly one dispatch. No actual
+CLI/authority error is swallowed.
 
 ## Ready-to-execute procedure (held; separate runtime authorization required)
 
@@ -35,7 +39,7 @@ to the existing complete Session DTO; that failed capture is retained.
    record SHA256s. The old v2.29.2 CLI lacks create/log `--once` and is not a
    compatible execution binary. No operator or task image change is required.
 2. Prepare a separately reviewed immutable two-slot package using the phase
-   amendment in DESIGN-027. Keep the existing15m task/20m Pod/30m window,
+   amendment in DESIGN-027. Keep the existing15-minute task/20-minute Pod/30-minute window,
    provider/model/resource/identity/access constraints. Retain all old seals.
    Required activation, actual sealUID binding, preflight and checked closure
    PR/inverse must be established before any actor. No currently approved new
@@ -54,6 +58,10 @@ to the existing complete Session DTO; that failed capture is retained.
    absolute directory, stable for this cohort). Optional `aTaskStarted` must
    equal the real log start. Markers are comparison inputs, never added to prompts.
    Config contains NO tokens. Existing CLI credential discovery/TLS remain intact.
+   The reviewed A prompt must explicitly emit the exact successful claim
+   receipt line defined in DESIGN-027; actor tool output is not guaranteed to
+   wrap raw stdout by itself. The captured-log fixture preserves actual start,
+   marker and operation lines projected from actor-A/log-6.stdout.
 5. Run the harness once WITHOUT `--execute`:
    `pilot-rendezvous --config /absolute/config.json`.
    Expect NONEXECUTING and the exact B argv including `--once`; no observation,
@@ -64,14 +72,15 @@ to the existing complete Session DTO; that failed capture is retained.
    invokes B directly in the same step. NO model turn, phone report or manual
    copy/paste of a returned B command intervenes. Its one observation is show+log;
    its durable attempt capture includes raw gate, fixed argv and phase ends.
-   All errors mean abort/retain evidence, not retry. Keep the attempt marker even
+   All errors mean abort/retain evidence, not retry. A durable run reservation
+   prevents restarting an earlier failed/unknown run in place. Keep the attempt marker even
    if the create result is unknown. Do not switch credentials, model or path.
 7. A/B follow the absolute phase/read budgets. Require correct B ownership,
    duplicate-Aclaim refusal retaining AUID, B-to-A message sender/recipient/Pod,
    A's exact message read/ACK, publication sourceUID/content hash and reply.
    B must preserve full raw original-A task-terminal evidence before reading
    the exact authorized publication. Unknown private executor stop stays Unknown.
-   Neither model exit0 nor B-create acceptance is semantic pilot acceptance.
+   Neither model exit 0 nor B-create acceptance is semantic pilot acceptance.
 8. At completion OR abort, deliver the pre-reviewed remove-only closure through
    its exact-head gates; verify actual no-policy/global-private-false replicas
    and all peer/v1/seal/Session/HOME identities preserved. No actor deletion,

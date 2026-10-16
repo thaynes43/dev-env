@@ -367,7 +367,7 @@ its size does not authorize an unbounded investigation.
 ### Bounded pilot rendezvous correction — 2026-10-16
 
 C7-PILOT-RENDEZVOUS-OFFLINE-1016 follows the closed PARTIAL two-actor pilot #353.
-[DESIGN-027](../designs/027-pilot-rendezvous.md) removes the demonstrated48s
+[DESIGN-027](../designs/027-pilot-rendezvous.md) removes the demonstrated 48-second
 coordinator/reporting handoff from A's verified claim to B invocation and separates
 startup/ACK/terminal deadlines. The small default-off existing-CLI harness and
 opt-in create/log `--once` remain source/offline only; normal CLI defaults keep

@@ -348,3 +348,94 @@ func TestExistingCLIAdapterDispatchesInSameStep(t *testing.T) {
 		}
 	}
 }
+
+func TestActualStartupNoLogTransitionsToOneDispatch(t *testing.T) {
+	f := newFixture(t)
+	f.now = f.now.Add(-10 * time.Second)
+	stages, logs, dispatches := 0, 0, 0
+	fake := func(_ context.Context, _ string, args []string) ([]byte, error) {
+		switch args[0] {
+		case "show":
+			stages++
+			s := f.o.Session
+			switch stages {
+			case 1:
+				s.AgentStatus = nil
+				s.PrivateHistory = nil
+			case 2:
+				a := *s.AgentStatus
+				a.Boot = "starting"
+				a.State = "idle"
+				a.ProjectBootstrap = &apiv1.ProjectBootstrap{State: "Pending"}
+				s.AgentStatus = &a
+			}
+			return json.Marshal(s)
+		case "log":
+			logs++
+			if stages < 3 {
+				return nil, errors.New("captured: session has no log yet (404 not_found)")
+			}
+			return json.Marshal(f.o.Log)
+		default:
+			dispatches++
+			return json.Marshal(apiv1.Session{UID: bUID, Name: f.c.Policy.SessionName(1), IdempotencyKey: f.c.Policy.Key(1)})
+		}
+	}
+	a := liveAdapters(f.c, fake)
+	a.now = func() time.Time { return f.now }
+	a.sleep = func(_ context.Context, d time.Duration) error { f.now = f.now.Add(d); return nil }
+	r, err := run(context.Background(), f.c, a)
+	if err != nil || stages != 3 || logs != 1 || dispatches != 1 || r.ObservationRounds != 3 {
+		t.Fatalf("err%v shows%d logs%d creates%d receipt%+v", err, stages, logs, dispatches, r)
+	}
+}
+
+func TestCapturedRealClaimLogGate(t *testing.T) {
+	f := newFixture(t)
+	raw, err := os.ReadFile("testdata/captured-claim-log.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal(raw, &f.o.Log); err != nil {
+		t.Fatal(err)
+	}
+	// Exact actual protocol/start/receipt bytes, projected from the preserved
+	// log-6 capture. Synthetic Session/prompt stand in for the supported show.
+	f.c.Policy.Cohort = "c7-20261016-1750"
+	f.c.AUID = "57b6fdf8-e0d6-4545-918b-700fd40d8d0c"
+	f.c.APodUID = "86c81ed2-a661-40f1-b0b0-2919ad718baa"
+	f.c.Head = "c72d2e48f70f0131845dc53f55a7b177e0ac32e1"
+	f.c.CommonMarker = "dev-env-common-rules-20261011-4ca29d70"
+	f.c.RepositoryMarker = "dev-env-repository-rules-20261011-6d807bf2"
+	f.c.Policy.CatalogRevision = "5fe34bd347f85c4b41773fbe48f815f8655945af9d73503a1ef0e89ee89aad90"
+	f.c.Policy.RulesRevision = "1cebe4524e65483d4854960c34a31d3f75f1cfc0acb991f0fd490b10bbc98e2b"
+	s := &f.o.Session
+	s.UID = f.c.AUID
+	s.Name = f.c.Policy.SessionName(0)
+	s.IdempotencyKey = f.c.Policy.Key(0)
+	s.PrivateHistory.SessionUID = f.c.AUID
+	s.PrivateHistory.LastExecutor.PodUID = f.c.APodUID
+	s.AgentStatus.Head = f.c.Head
+	s.AgentStatus.ProjectBootstrap.CatalogRevision = f.c.Policy.CatalogRevision
+	d, err := validateGate(f.c, f.o, f.now)
+	if err != nil || d == nil {
+		t.Fatalf("actual captured format refused: %v", err)
+	}
+}
+func TestExistingRunRefusesBeforeAnyTransport(t *testing.T) {
+	f := newFixture(t)
+	path := filepath.Join(f.c.ReceiptDir, "config.json")
+	raw, _ := json.Marshal(f.c)
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveExclusive(filepath.Join(f.c.ReceiptDir, f.c.Policy.Key(1)+".run.json"), map[string]string{"state": "already consumed"}); err != nil {
+		t.Fatal(err)
+	}
+	// Binary is deliberately NOT executable. Re-entry must refuse before it
+	// could run any show/log/create. No actual command/transport is invoked.
+	var out bytes.Buffer
+	if err := execute([]string{"--config", path, "--execute"}, &out); !errors.Is(err, os.ErrExist) || out.Len() != 0 {
+		t.Fatalf("err%v out%s", err, out.String())
+	}
+}
