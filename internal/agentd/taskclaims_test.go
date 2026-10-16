@@ -16,7 +16,7 @@ import (
 
 func taskClaimViewFixture() apiv1.TaskClaim {
 	id := apiv1.TaskClaimIdentity{Project: "sample", Repository: "repo", TaskKey: "task:pilot"}
-	return apiv1.TaskClaim{Name: taskclaim.Name(coord.TaskIdentity{Project: id.Project, Repository: id.Repository, TaskKey: id.TaskKey}), UID: "11111111-1111-4111-8111-111111111111", Identity: id, Owner: apiv1.TaskClaimOwner{Namespace: "dev-agents", Name: "owner", UID: "22222222-2222-4222-8222-222222222222"}}
+	return apiv1.TaskClaim{Name: taskclaim.Name(coord.TaskIdentity{Project: id.Project, Repository: id.Repository, TaskKey: id.TaskKey}), UID: "11111111-1111-4111-8111-111111111111", Identity: id, Owner: apiv1.TaskClaimOwner{Namespace: "dev-agents", Name: strings.Repeat("a", 60) + ".worker", UID: "22222222-2222-4222-8222-222222222222"}}
 }
 func TestTaskClaimClientFixedOperationsRotationAndConflict(t *testing.T) {
 	claim := taskClaimViewFixture()
@@ -35,12 +35,16 @@ func TestTaskClaimClientFixedOperationsRotationAndConflict(t *testing.T) {
 			if json.Unmarshal(body, &req) != nil || req.Owner != nil || req.Identity != claim.Identity {
 				t.Error("intent changed or owner supplied")
 			}
+			wire := claim
 			status, outcome := 201, "Created"
 			if calls == 2 {
 				status, outcome = 409, "Conflict"
+				// A catalog repository-key rename returns the old identity.
+				wire.Identity.Repository = "old-repo"
+				wire.Name = taskclaim.Name(coord.TaskIdentity{Project: wire.Identity.Project, Repository: wire.Identity.Repository, TaskKey: wire.Identity.TaskKey})
 			}
 			w.WriteHeader(status)
-			_ = json.NewEncoder(w).Encode(apiv1.TaskClaimResult{Outcome: outcome, Claim: claim})
+			_ = json.NewEncoder(w).Encode(apiv1.TaskClaimResult{Outcome: outcome, Claim: wire})
 		case 3:
 			if r.Method != "GET" || r.URL.Query().Get("continue") != "opaque&/cursor" || r.URL.Query().Get("project") != "sample" || r.URL.Query().Get("limit") != "1" {
 				t.Error("list scope changed", r.URL)
@@ -94,7 +98,7 @@ func TestTaskClaimClientFixedOperationsRotationAndConflict(t *testing.T) {
 	}
 }
 func TestTaskClaimClientTruthfulFailureAndReplyFences(t *testing.T) {
-	for _, kind := range []string{"forbidden", "unavailable", "network", "redirect", "overflow", "bad-json", "wrong-project", "wrong-uid", "null-list", "wrong-outcome", "unexpected-status"} {
+	for _, kind := range []string{"forbidden", "unavailable", "network", "redirect", "overflow", "bad-json", "wrong-project", "wrong-uid", "null-list", "wrong-outcome", "unexpected-status", "wrong-name-create", "wrong-name-get", "wrong-name-list"} {
 		t.Run(kind, func(t *testing.T) {
 			calls := 0
 			claim := taskClaimViewFixture()
@@ -125,6 +129,16 @@ func TestTaskClaimClientTruthfulFailureAndReplyFences(t *testing.T) {
 					_ = json.NewEncoder(w).Encode(claim)
 				case "null-list":
 					_, _ = io.WriteString(w, `{"items":null}`)
+				case "wrong-name-create":
+					claim.Name = "task-claim." + strings.Repeat("a", 32) + "." + strings.Repeat("b", 32)
+					w.WriteHeader(201)
+					_ = json.NewEncoder(w).Encode(apiv1.TaskClaimResult{Outcome: "Created", Claim: claim})
+				case "wrong-name-get":
+					claim.Identity.TaskKey = "task:other"
+					_ = json.NewEncoder(w).Encode(claim)
+				case "wrong-name-list":
+					claim.Identity.TaskKey = "task:other"
+					_ = json.NewEncoder(w).Encode(apiv1.TaskClaimList{Items: []apiv1.TaskClaim{claim}})
 				case "wrong-outcome":
 					_ = json.NewEncoder(w).Encode(apiv1.TaskClaimResult{Outcome: "Created", Claim: claim})
 				case "unexpected-status":
@@ -139,9 +153,9 @@ func TestTaskClaimClientTruthfulFailureAndReplyFences(t *testing.T) {
 			var data []byte
 			var status int
 			switch kind {
-			case "null-list":
+			case "null-list", "wrong-name-list":
 				data, status, e = c.List(context.Background(), "sample", 1, "")
-			case "wrong-outcome":
+			case "wrong-outcome", "wrong-name-create":
 				data, status, e = c.Create(context.Background(), claim.Identity)
 			default:
 				data, status, e = c.Get(context.Background(), "sample", claim.Name, claim.UID)
@@ -160,5 +174,22 @@ func TestTaskClaimClientTruthfulFailureAndReplyFences(t *testing.T) {
 				t.Fatal("token leaked")
 			}
 		})
+	}
+}
+
+func TestTaskClaimTransportPreservesInboxUnknownHint(t *testing.T) {
+	calls := 0
+	c, _ := inboxTLSFixture(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_ = conn.Close()
+	}))
+	_, _, err := c.Do(context.Background(), http.MethodPost, "/v1/inbox", []byte(`{"project":"sample"}`))
+	if calls != 1 || err == nil || err.Error() != "inbox outcome Unknown; retry the same intent and key" {
+		t.Fatal("existing inbox semantics changed", calls, err)
 	}
 }

@@ -92,7 +92,11 @@ func (c *InboxClient) doBounded(ctx context.Context, method, path string, body [
 	h.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := h.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("%s outcome Unknown; inspect the same intent before any retry", operation)
+		hint := "inspect the same intent before any retry"
+		if operation == "inbox" {
+			hint = "retry the same intent and key"
+		}
+		return nil, 0, fmt.Errorf("%s outcome Unknown; %s", operation, hint)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 == 3 {

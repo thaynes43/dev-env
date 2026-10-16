@@ -10,6 +10,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"k8s.io/apimachinery/pkg/util/validation"
+
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
@@ -112,5 +114,5 @@ func (c *TaskClaimClient) Get(ctx context.Context, project, name, uid string) ([
 }
 
 func validClaimView(claim apiv1.TaskClaim, project string) bool {
-	return claim.Identity.Project == project && ValidTaskClaimIdentity(claim.Identity) && taskclaim.ValidName(claim.Name) && protocol.ValidKubeUID(claim.UID) && projectcatalog.ValidName(claim.Owner.Namespace) && projectcatalog.ValidName(claim.Owner.Name) && protocol.ValidKubeUID(claim.Owner.UID)
+	return claim.Identity.Project == project && ValidTaskClaimIdentity(claim.Identity) && claim.Name == taskclaim.Name(coord.TaskIdentity{Project: claim.Identity.Project, Repository: claim.Identity.Repository, TaskKey: claim.Identity.TaskKey}) && protocol.ValidKubeUID(claim.UID) && len(validation.IsDNS1123Label(claim.Owner.Namespace)) == 0 && len(validation.IsDNS1123Subdomain(claim.Owner.Name)) == 0 && protocol.ValidKubeUID(claim.Owner.UID)
 }
