@@ -61,9 +61,15 @@ in the final supported log, with aggregated script output. Python flush alone
 therefore did not establish timely tool-to-log visibility; first visibility time
 was not recorded. The wait script ended19:33:57.233877 after8 rounds/16 reads,
 exit2. A's model task finished19:34:15, exit0, semantic PARTIAL. No ACK,
-publication or reply occurred; B never existed. At the last supported observations,
-`privateHistory.stopState` remained **Unknown**. No later actual executor shutdown
-proof was collected. Do not infer it from the task result or elapsed Pod TTL.
+publication or reply occurred; B never existed.
+
+**Shutdown addendum:** independent Mac read-only GET at19:47:40 UTC verified
+original A PodUID `67c216d7-3aa0-4290-ad0c-1356eab4c8e6` in phaseFailed,
+reasonDeadlineExceeded. Its original agent container terminated exit0,
+reasonCompleted, finishedAt19:46:37 UTC (startedAt19:26:40). Actual original
+executor-container shutdown is now proved by supported Pod status, not inferred
+from task exit or TTL. Retained Session `privateHistory.stopState` is still
+**Unknown**; this proof does not change that field or establish semantic success.
 
 All consumed windows, seals, actor identities, attempts, failures and deadline
 records stay retained. No retry/replacement/new window is authorized by this file.
@@ -114,14 +120,14 @@ is needed. Do not modify the preserved remote branch to make it look delivered.
    short-call visibility contract. Keep actual native visibility unproved until
    supported evidence establishes it. Any future delivery needs normal exact-head
    required CI and review; source acceptance is not runtime acceptance.
-4. Before any later conflicting execution, verify original A's actual executor
-   shutdown through supported status, preserving Unknown until proved. Any future
+4. Before any later conflicting execution, bind/reuse the exact original-A
+   shutdown proof above; keep the retained Session stop-state field Unknown. Any future
    runtime needs fresh explicit scope, exact new identity/seal/window bindings,
    one-shot dispatch, checked remove-only closure and peer/v1 preservation.
    Do not reuse consumed attempts or assume old approvals survived STOP.
 
 No implementation/model workers, manual tests or reviewers remain active for the
-stopped correction. Retained actor daemon/executor shutdown is a separate unknown,
-not permission to stop/delete it. Do not touch unrelated user/hass-sandbox or
+stopped correction. The retained Session stop-state field remains Unknown despite
+original A's proved container shutdown; neither fact authorizes stop/delete. Do not touch unrelated user/hass-sandbox or
 paused HaynesNetwork sessions. Never read restricted Codex session/rollout/database
 files, extract credentials, expand access or restart/cut over v1.
