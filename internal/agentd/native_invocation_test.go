@@ -126,10 +126,7 @@ func TestNativeInvocationOwnedWaitAllowsOneSameWriterContinuation(t *testing.T) 
 		tick := time.NewTicker(20 * time.Millisecond)
 		defer tick.Stop()
 		var receiptErr error
-		for {
-			if ownedNativeStarted(s, next) == nil {
-				break
-			}
+		for ownedNativeStarted(s, next) != nil {
 			select {
 			case <-tick.C:
 				continue
