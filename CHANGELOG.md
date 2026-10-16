@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.29.3](https://github.com/thaynes43/dev-env/compare/v2.29.2...v2.29.3) (2026-10-16)
+
+
+### Bug Fixes
+
+* **pilot:** bound rendezvous and dispatch peer without a model handoff ([#354](https://github.com/thaynes43/dev-env/issues/354)) ([df32cab](https://github.com/thaynes43/dev-env/commit/df32cabbad2c9afd1b95f3c8037d44140690b5d3))
+
 ## [2.29.2](https://github.com/thaynes43/dev-env/compare/v2.29.1...v2.29.2) (2026-10-16)
 
 
