@@ -6,7 +6,7 @@ source correction gives a new reviewed policy distinct retained cohort identitie
 It does not reuse, replace, reseed or delete the old seal or original Session names.
 
 `cohort` is optional and omitted when empty. A pre-change fixture digest is pinned
-at `fe1974daeb0dc9fc7ab23bcc459d50847a3ad0a0686055350c58ffbf78ee242c from accepted pre-cohort API fixture`; it still matches. Legacy Session/key names and
+at `fe1974daeb0dc9fc7ab23bcc459d50847a3ad0a0686055350c58ffbf78ee242c` (from the accepted pre-cohort API fixture); it still matches. Legacy Session/key names and
 retained record decoding remain unchanged. Named cohorts use distinct deterministic
 seal/Session/key names; `v1` is rejected as a named alias. Existing digest, immutable
 spec binding, retained annotations and finalizers bind the cohort without a CRD or
