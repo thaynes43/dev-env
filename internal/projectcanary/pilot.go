@@ -152,7 +152,7 @@ func (p *PilotPolicy) Key(slot int) string {
 
 func namedPilotSession(name string) bool {
 	cohort, ok := strings.CutPrefix(name, "private-pilot-")
-	if !ok || !(strings.HasSuffix(cohort, "-a") || strings.HasSuffix(cohort, "-b")) {
+	if !ok || !strings.HasSuffix(cohort, "-a") && !strings.HasSuffix(cohort, "-b") {
 		return false
 	}
 	return validPilotCohort(cohort[:len(cohort)-2])
