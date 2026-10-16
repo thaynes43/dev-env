@@ -38,7 +38,7 @@ func (s *Server) createPrivatePilot(ctx context.Context, w http.ResponseWriter, 
 	var found *v1alpha1.AgentSession
 	for i := range 2 {
 		var old v1alpha1.AgentSession
-		err = s.Live.Get(ctx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: projectcanary.PilotSessionName(i)}, &old)
+		err = s.Live.Get(ctx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: p.SessionName(i)}, &old)
 		if err == nil {
 			if p.MatchSession(&old, i) != nil {
 				return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "original pilot slot or policy is unconfirmed")
@@ -65,7 +65,7 @@ func (s *Server) createPrivatePilot(ctx context.Context, w http.ResponseWriter, 
 	if sess.Spec.Workspace != nil || sess.Annotations[v1alpha1.AnnotationProjectSnapshot] != string(evidence.Snapshot) {
 		return 0, nil, forbidden("pilot catalog changed before create")
 	}
-	sess.Name = projectcanary.PilotSessionName(slot)
+	sess.Name = p.SessionName(slot)
 	sess.Finalizers = append(sess.Finalizers, projectcanary.PilotFinalizer)
 	sess.Annotations[projectcanary.PilotAnnotation] = p.Binding(slot)
 	sess.Annotations[projectcanary.PilotPolicyAnnotation] = p.Record(evidence)

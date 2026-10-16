@@ -168,7 +168,7 @@ func (r *Reconciler) validatePrivatePilot(ctx context.Context, s *v1alpha1.Agent
 		now = r.Now()
 	}
 	slot := 0
-	if s.Name == projectcanary.PilotSessionName(1) {
+	if s.Name == p.SessionName(1) {
 		slot = 1
 	}
 	if p.MatchSession(s, slot) != nil || p.ValidateTemplate(t) != nil {

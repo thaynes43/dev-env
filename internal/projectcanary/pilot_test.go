@@ -139,3 +139,102 @@ func TestPilotSpecBindingRejectsTampering(t *testing.T) {
 		})
 	}
 }
+
+func TestPilotCohortLegacyCompatibilityAndDistinctBindings(t *testing.T) {
+	legacy := testutil.NewPilot(t)
+	// Captured before the cohort field existed, from the accepted API fixture.
+	if legacy.Policy.Digest() != "fe1974daeb0dc9fc7ab23bcc459d50847a3ad0a0686055350c58ffbf78ee242c" {
+		t.Fatal("legacy digest changed")
+	}
+	raw, _ := json.Marshal(legacy.Policy)
+	if strings.Contains(string(raw), `"cohort"`) || legacy.Policy.SealName() != projectcanary.PilotSealName {
+		t.Fatal("legacy encoding or seal changed")
+	}
+	fresh := testutil.NewPilot(t)
+	fresh.SetCohort("c7-20261016-1800")
+	if fresh.Policy.Validate() != nil || fresh.Policy.Digest() == legacy.Policy.Digest() || fresh.Policy.SealName() == legacy.Policy.SealName() {
+		t.Fatal("cohort authority aliases legacy")
+	}
+	for slot := range 2 {
+		if legacy.Policy.SessionName(slot) != projectcanary.PilotSessionName(slot) || legacy.Policy.Key(slot) != projectcanary.PilotKey(slot) {
+			t.Fatal("legacy identity changed")
+		}
+		s := fresh.Session(t, slot)
+		if fresh.Policy.SessionName(slot) == legacy.Policy.SessionName(slot) || fresh.Policy.Key(slot) == legacy.Policy.Key(slot) {
+			t.Fatal("cohort aliases old slot")
+		}
+		if fresh.Policy.MatchSession(s, slot) != nil {
+			t.Fatal("new binding refused")
+		}
+		record, err := projectcanary.BoundPilot(s)
+		if err != nil || record.Policy.Cohort != fresh.Policy.Cohort {
+			t.Fatal("retained cohort/slot not recovered", err)
+		}
+		if legacy.Policy.MatchSession(s, slot) == nil || fresh.Policy.MatchSession(legacy.Session(t, slot), slot) == nil {
+			t.Fatal("cross-cohort rebound")
+		}
+		s.Spec.PrivatePilot = nil
+		s.Annotations = nil
+		s.Finalizers = nil
+		if !projectcanary.IsPilot(s) {
+			t.Fatal("reserved named cohort escaped pilot guards")
+		}
+	}
+	if fresh.Policy.SessionName(2) != "" || fresh.Policy.Key(2) != "" {
+		t.Fatal("third identity")
+	}
+	if _, ok := fresh.Policy.Slot(legacy.Policy.Request(0)); ok {
+		t.Fatal("old key admitted to fresh cohort")
+	}
+	for slot := range 2 {
+		if _, err := projectcanary.BoundPilot(legacy.Session(t, slot)); err != nil {
+			t.Fatal("legacy retained record lost", err)
+		}
+	}
+}
+
+func TestPilotCohortSyntaxAndAuthoritySeparation(t *testing.T) {
+	for _, cohort := range []string{"v1", "UPPER", "-leading", "trailing-", "a/b", "a.b", strings.Repeat("a", 33), " old", "é"} {
+		t.Run(cohort, func(t *testing.T) {
+			f := testutil.NewPilot(t)
+			f.Policy.Cohort = cohort
+			if f.Policy.Validate() == nil {
+				t.Fatal("invalid cohort accepted")
+			}
+		})
+	}
+	for _, cohort := range []string{"a", "cohort-2", strings.Repeat("a", 32)} {
+		f := testutil.NewPilot(t)
+		f.SetCohort(cohort)
+		if f.Policy.Validate() != nil {
+			t.Fatal("bounded cohort refused")
+		}
+	}
+	for _, kind := range []string{"valid", "old-seal-only", "wrong-digest", "wrong-uid", "cohort-change"} {
+		t.Run(kind, func(t *testing.T) {
+			f := testutil.NewPilot(t)
+			oldSeal := f.Seal.DeepCopy()
+			f.SetCohort("fresh-1800")
+			objects := f.Objects()
+			switch kind {
+			case "old-seal-only":
+				objects[2] = oldSeal
+			case "wrong-digest":
+				f.Seal.Data["policySHA256"] = oldSeal.Data["policySHA256"]
+			case "wrong-uid":
+				f.Seal.UID = "44444444-4444-4444-8444-444444444444"
+			case "cohort-change":
+				f.Policy.Cohort = "other-1800"
+			}
+			c := fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).WithObjects(objects...).Build()
+			_, err := f.Policy.Resolve(context.Background(), c, client.ObjectKeyFromObject(f.Template), f.Now)
+			if (err == nil) != (kind == "valid") {
+				t.Fatal("cohort seal authority not exact", err)
+			}
+			var maps corev1.ConfigMapList
+			if e := c.List(context.Background(), &maps); e != nil || len(maps.Items) != len(objects) {
+				t.Fatal("authority mutated", e)
+			}
+		})
+	}
+}
