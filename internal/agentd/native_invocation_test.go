@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,7 +36,10 @@ func nativeInvocationFixture(t *testing.T) (Settings, protocol.Session, Launch, 
 	prompts := filepath.Join(s.StateDir, "synthetic-initial-prompts")
 	cli := fakeCLI(t, t.TempDir(), `if [ "$1" = "--version" ]; then printf '%s\n' 'codex-cli 0.160.1'; exit 0; fi
 printf '%s\n' "$1" >> "$SYNTHETIC_NATIVE_SPAWNS"
-if [ "$1" = "resume" ]; then exit 0; fi
+if [ "$1" = "resume" ]; then
+  if [ -n "$SYNTHETIC_NATIVE_RESUME_RELEASE" ]; then IFS= read -r ready < "$SYNTHETIC_NATIVE_RESUME_RELEASE"; fi
+  exit 0
+fi
 cat >> "$SYNTHETIC_INITIAL_PROMPTS"
 printf '%s\n' '{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123456789abc"}' '{"type":"turn.started"}' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1,"cached_input_tokens":0}}'
 `)
@@ -93,6 +97,19 @@ func TestNativeInvocationOwnedWaitAllowsOneSameWriterContinuation(t *testing.T) 
 		t.Fatal("first invocation was replayed")
 	}
 	next := nextNativeInvocation(t, first)
+	// Keep the synthetic resumed process alive until its exact startup receipt
+	// exists. Immediate exit can become a zombie before recordStarted, which
+	// correctly refuses to infer a live identity from a dead process.
+	barrierPath := filepath.Join(t.TempDir(), "resume-release")
+	if err := syscall.Mkfifo(barrierPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	barrier, err := os.OpenFile(barrierPath, os.O_RDWR|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = barrier.Close() }()
+	next.Env = append(next.Env, "SYNTHETIC_NATIVE_RESUME_RELEASE="+barrierPath)
 	if err := admitNativeContinuation(context.Background(), s, sess, first, &next); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +119,37 @@ func TestNativeInvocationOwnedWaitAllowsOneSameWriterContinuation(t *testing.T) 
 	// This pane contains only agentd messages and the fixture's fake CLI:
 	// constant synthetic events/prompt and paths in t.TempDir, no provider I/O.
 	pane := &syncBuffer{}
-	if code := RunAgent(s.statePath(resumeFile), pane, make(chan os.Signal), 20*time.Millisecond); code != 0 {
+	released := make(chan error, 1)
+	go func() {
+		deadline := time.NewTimer(2 * time.Second)
+		defer deadline.Stop()
+		tick := time.NewTicker(20 * time.Millisecond)
+		defer tick.Stop()
+		var receiptErr error
+		for {
+			if ownedNativeStarted(s, next) == nil {
+				break
+			}
+			select {
+			case <-tick.C:
+				continue
+			case <-deadline.C:
+				receiptErr = fmt.Errorf("synthetic resumed invocation never published its exact live startup receipt")
+			}
+			break
+		}
+		_, releaseErr := barrier.WriteString("ready\n")
+		if receiptErr != nil {
+			released <- receiptErr
+		} else {
+			released <- releaseErr
+		}
+	}()
+	code := RunAgent(s.statePath(resumeFile), pane, make(chan os.Signal), 20*time.Millisecond)
+	if err := <-released; err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
 		diagnostic := pane.String()
 		if len(diagnostic) > 4096 {
 			diagnostic = diagnostic[len(diagnostic)-4096:]
