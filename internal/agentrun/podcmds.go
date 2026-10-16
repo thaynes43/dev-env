@@ -2,9 +2,11 @@ package agentrun
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -17,6 +19,8 @@ import (
 func (a *app) log(ctx context.Context, args []string) error {
 	cmd := newCommand("log", outputJSON)
 	var tail int
+	var once bool
+	cmd.fs.BoolVar(&once, "once", false, "")
 	cmd.fs.IntVar(&tail, "tail", 200, "")
 	pos, err := cmd.parse(a, args)
 	if err != nil {
@@ -28,9 +32,28 @@ func (a *app) log(ctx context.Context, args []string) error {
 	if tail < 1 || tail > 5000 {
 		return usageError("--tail is a number of lines from 1 to 5000, not %d", tail)
 	}
+	if once && cmd.c.output != outputJSON {
+		return usageError("log --once requires -o json")
+	}
 	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
 		return err
+	}
+	if once {
+		hc := *c.http
+		hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		one := *c
+		one.http, one.rejectOversizeResponse = &hc, true
+		var raw json.RawMessage
+		status, err := a.callWith(ctx, &one, http.MethodGet, apiv1.SessionLogPath(url.PathEscape(pos[0])), url.Values{"tail": {strconv.Itoa(tail)}}, nil, &raw, false)
+		if err != nil {
+			return err
+		}
+		var log apiv1.SessionLog
+		if status != http.StatusOK || !strictWireJSON(raw, reflect.TypeFor[apiv1.SessionLog]()) || json.Unmarshal(raw, &log) != nil || log.Session != pos[0] || log.Truncated {
+			return fail(ExitFailed, "unconfirmed one-shot log")
+		}
+		return a.printJSON(raw)
 	}
 	var l apiv1.SessionLog
 	if _, err := a.call(ctx, c, http.MethodGet, apiv1.SessionLogPath(url.PathEscape(pos[0])), url.Values{"tail": {strconv.Itoa(tail)}}, nil, &l); err != nil {

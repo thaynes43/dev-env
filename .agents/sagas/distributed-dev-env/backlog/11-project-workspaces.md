@@ -372,3 +372,16 @@ stopped reads. No shared-Git TTL or broad legacy peer mutation right is adopted.
 [Issue #91](https://github.com/thaynes43/dev-env/issues/91) remains the resume index.
 Each parent issue must be delivered through finite slices with its own checkpoint;
 its size does not authorize an unbounded investigation.
+
+### Bounded pilot rendezvous correction — 2026-10-16
+
+C7-PILOT-RENDEZVOUS-OFFLINE-1016 follows the closed PARTIAL two-actor pilot #353.
+[DESIGN-027](../designs/027-pilot-rendezvous.md) removes the demonstrated 48-second
+coordinator/reporting handoff from A's verified claim to B invocation and separates
+startup/ACK/terminal deadlines. The small default-off existing-CLI harness and
+opt-in create/log `--once` remain source/offline only; normal CLI defaults keep
+their retry behavior. Exact path claim, original clocks and historical failures
+are retained in the story orders. Independent Mac review and required CI gate
+source acceptance; new actors/window/activation remain unauthorized. Follow the
+[concrete acceptance procedure](../verification/pilot-rendezvous-2026-10-16.md).
+OpenProject integration is a separate readiness task, not a new strict status gate.
