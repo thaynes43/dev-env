@@ -28,10 +28,16 @@ or returned command to execute on a later turn. Fake clock/observation/dispatch
 adapters exercise this path offline, including the actual command adapter.
 
 The future reviewed A prompt must require exactly one single-line JSON receipt
-before its wait: `{"operation":"task-claim-create","exitCode":0,"stdout":"<actual returned JSON, encoded as a JSON string>"}`. Preserve the actual exit
+in a SHORT COMPLETED tool call, before starting its separate long wait call:
+`{"operation":"task-claim-create","exitCode":0,"stdout":"<actual returned JSON, encoded as a JSON string>"}`. Preserve the actual exit
 code/stdout; never manufacture a successful receipt. A nonzero result stops A.
 The preserved real log-6 already contains this format (its claim creation was
-wrapped by the actor); it is not a universal agentd logging guarantee. The
+wrapped by the actor); it is not a universal agentd logging guarantee.
+Python flush inside a still-running captured tool call does not prove that
+stdout has reached the supported CLI log. The claim call must return its actual
+wrapper before the wait call begins; do not combine create/receipt and the long
+wait in one captured subprocess. Native tool-to-log visibility is still a
+runtime evidence requirement; a fake adapter cannot establish it. The
 checked-in captured-log projection proves compatibility with the actual output.
 
 The gate checks original Session/Pod UIDs, sealed A prompt/key/profile/model,
@@ -84,7 +90,10 @@ The harness's pre-claim gate wait has a separate cap: 60 rounds, 5 seconds spaci
 reads under one 10-second context. During container creation/bootstrap it reads only
 show; it defers log until task/bootstrap metadata is ready (the captured earlier
 log request returned404 no-log-yet). Actual CLI/authority errors are not ignored. A successful claim must be no more than 30 seconds old and
-its heartbeat no more than 30 seconds old. The durable attempt must reach invocation
+its heartbeat no more than 70 seconds old: the installed agentd sends every
+60 seconds (`cmd/agentd/main.go`), plus the existing 10-second observation budget.
+A missing, future or older heartbeat still refuses. This does not change the
+30-second claim-age limit, identity/authority checks or any phase/window bound. The durable attempt must reach invocation
 within 5 seconds of validation or abort permanently. B's create has a 10-second deadline.
 All CLI, parse, UID, timeout and durable-write errors abort with no fallback.
 One exclusive `.run.json` is reserved before ANY transport; prior runs cannot
@@ -118,3 +127,32 @@ not installed in actor Pods. CLI publication/use of the corrected binary is a
 separate shipping gate; no operator/task image change is needed for these paths.
 Required exact-head CI, available advisory disposition and independent Mac
 review precede source acceptance. No source result establishes runtime acceptance.
+
+## Closed 19:16 run and local-only correction
+
+The 19:16:08–19:46:08 UTC approved window ended PARTIAL and admission was removed.
+Only original A was created. Its task started 19:26:56; the harness refused at
+19:27:27.419783 after 9 rounds, with no B dispatch attempt. The installed heartbeat
+period is 60s but the old guard rejected age > 30s. The 31.419783s offset matches that
+mismatch, but the rejected observation was not retained: the exact old rejection
+predicate remains inference, not recovered evidence. No actor/window is reopened.
+
+Future gate refusals retain a bounded predicate/timestamp/SessionUID/PodUID and
+heartbeat timestamp/limit in the result receipt, without log/prompt/token copies.
+This records the actual failing guard, rather than diagnosing from a later show.
+
+A's claim was created 19:28:42. Its flushed JSON appeared in the final supported
+log after round 6 commentary with aggregated script output. The script ended
+19:33:57.233877 (315.233877s after claim); exact first log visibility is unknown.
+A exhausted 8 rounds/16 reads and its model task ended 19:34:15 exit 0, semantic
+PARTIAL. Heartbeat correction alone therefore does not prove a runnable pilot.
+Offline replay keeps the 315.233877s buffered counterexample failing, rejects an
+already-old visible claim, and demonstrates one immediate dispatch only when a
+short completed claim tool call makes the receipt visible within 30s. It models
+that contract; it does not establish actual native output transport behavior.
+
+The stopped claim kept this correction local. That claim did not push, open a
+PR, trigger hosted CI, merge, release, publish an image, or start a runtime.
+On 2026-10-16 Tom directed the Cursor pickup to deliver this exact patch.
+This delivery is the source correction only. It does not admit a pilot, reuse
+a consumed seal or actor, or start a model.
