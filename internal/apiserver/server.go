@@ -79,6 +79,7 @@ type Server struct {
 	Projects *CatalogBinding
 	// PrivateProjectTasks admits new catalog tasks into private repositories.
 	// It is independent of the provider and shared-workspace feature gates.
+	PrivatePilot          *projectcanary.PilotPolicy
 	PrivateProjectTasks   bool
 	ManagedCodexTasks     bool
 	ManagedChildDecisions bool

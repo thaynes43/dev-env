@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -46,6 +47,9 @@ func (t *readTracker) note(err error) error {
 }
 
 func (r *Reconciler) validateProjectCanary(ctx context.Context, s *v1alpha1.AgentSession, t *templates.Templates) error {
+	if projectcanary.IsPilot(s) {
+		return r.validatePrivatePilot(ctx, s, t)
+	}
 	if s.Spec.ProjectCanary == nil {
 		return nil
 	}
@@ -138,4 +142,49 @@ func validateProjectCanaryExecutor(s *v1alpha1.AgentSession, pod *corev1.Pod) er
 
 func canaryMountOverlaps(a, b string) bool {
 	return a == b || a == "/" || b == "/" || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
+}
+
+// A pending pilot is never a legacy fallback when its opt-in policy disappears.
+// ensure calls this before resource allocation and again before Pod Create;
+// already-present pods are preserved by ensure's first guard.
+func (r *Reconciler) validatePrivatePilot(ctx context.Context, s *v1alpha1.AgentSession, t *templates.Templates) error {
+	p := r.PrivatePilot
+	if p == nil || !r.ManagedCodexTasks || !r.PrivateHistoryRetention || !r.RetainedCommonRules || r.APIReader == nil || r.APIURL == "" || r.PrivateProjectCloneOwner != "thaynes43" || budgetBound(s) || s.Spec.ProjectCanary != nil {
+		return projectcanary.ErrRefused
+	}
+	now := time.Now()
+	if r.Now != nil {
+		now = r.Now()
+	}
+	slot := 0
+	if s.Name == projectcanary.PilotSessionName(1) {
+		slot = 1
+	}
+	if p.MatchSession(s, slot) != nil || p.ValidateTemplate(t) != nil {
+		return projectcanary.ErrRefused
+	}
+	var fresh v1alpha1.AgentSession
+	if r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &fresh) != nil || fresh.UID != s.UID || fresh.Generation != s.Generation || wantsPodGone(&fresh) || p.MatchSession(&fresh, slot) != nil {
+		return projectcanary.ErrRefused
+	}
+	evidence, err := p.Resolve(ctx, r.APIReader, r.Templates, now)
+	if err != nil || string(evidence.Snapshot) != fresh.Annotations[v1alpha1.AnnotationProjectSnapshot] {
+		return projectcanary.ErrRefused
+	}
+	record, err := projectcanary.BoundPilot(&fresh)
+	if err != nil || evidence.CatalogUID != record.CatalogUID || evidence.CatalogResourceVersion != record.CatalogResourceVersion {
+		return projectcanary.ErrRefused
+	}
+	common, err := commonrules.BoundSession(&fresh)
+	if err != nil || common.Confirm(ctx, r.APIReader) != nil {
+		return projectcanary.ErrRefused
+	}
+	now = time.Now()
+	if r.Now != nil {
+		now = r.Now()
+	}
+	if !p.Open(now) {
+		return projectcanary.ErrRefused
+	}
+	return nil
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/controller"
+	"github.com/thaynes43/dev-env/internal/projectcanary"
 )
 
 // Body limits. A create carries a prompt of at most 64 KiB
@@ -278,7 +279,7 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 func checkAgentd(sess *v1alpha1.AgentSession) error {
 	check := sess
 	capture := sess.Spec.ProjectCanary != nil && sess.Spec.ProjectCanary.CaptureOutput
-	if sess.UID == "" && (sess.Spec.Workspace != nil || capture) {
+	if sess.UID == "" && (sess.Spec.Workspace != nil || capture || projectcanary.IsPilot(sess)) {
 		// Kubernetes assigns the real UID only after Create. This copy checks
 		// document syntax and size; its validation-only UID is never persisted
 		// or transported. The controller builds the pod with the actual API UID.

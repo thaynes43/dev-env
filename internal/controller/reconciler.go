@@ -160,6 +160,7 @@ type Reconciler struct {
 	Now                      func() time.Time
 	RetainedCommonRules      bool
 	SessionDirectory         *sessiondirectory.KubeStore
+	PrivatePilot             *projectcanary.PilotPolicy
 	PrivateProjectCanaries   *projectcanary.Policy
 	PrivateProjectCloneOwner string
 	ManagedCodexTasks        bool

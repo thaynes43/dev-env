@@ -228,8 +228,8 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		{Name: "grants", MountPath: protocol.GrantsDir},
 		{Name: "api-token", MountPath: templates.APITokenDir, ReadOnly: true},
 	}
-	if s.Spec.ProjectCanary != nil {
-		// Canary coordination is API-only. Never expose the cross-session scratch PVC.
+	if s.Spec.ProjectCanary != nil || projectcanary.IsPilot(s) {
+		// Canary/pilot coordination is API-only. Never expose the cross-session scratch PVC.
 		volumes = slices.DeleteFunc(volumes, func(v corev1.Volume) bool { return v.Name == "shared" })
 		mounts = slices.DeleteFunc(mounts, func(m corev1.VolumeMount) bool { return m.Name == "shared" })
 	}
@@ -470,8 +470,13 @@ func sessionDocument(s *v1alpha1.AgentSession) (string, error) {
 		Restore: s.Spec.Restore,
 	}
 	if s.Spec.CommonRules != nil {
+		if projectcanary.IsPilot(s) {
+			if _, err := projectcanary.BoundPilot(s); err != nil {
+				return "", sessionInvalidError{err}
+			}
+		}
 		common, err := commonrules.BoundSession(s)
-		if err != nil || len(s.UID) > 128 || s.Spec.ProjectCanary == nil || s.Spec.Workspace != nil || s.Spec.Mode != v1alpha1.ModeTask {
+		if err != nil || len(s.UID) > 128 || (s.Spec.ProjectCanary == nil && !projectcanary.IsPilot(s)) || s.Spec.Workspace != nil || s.Spec.Mode != v1alpha1.ModeTask {
 			return "", sessionInvalidError{commonrules.ErrRefused}
 		}
 		raw, err := common.Bytes()
