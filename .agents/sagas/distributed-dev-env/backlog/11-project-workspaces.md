@@ -16,6 +16,15 @@ Claude, Codex and future local-model agents on different pods load common rules,
 other's work, communicate, avoid duplicate task claims and read authorized live
 or stopped-session context. Each implements in its own fresh task worktree.
 
+## Central cross-repository work requirement
+
+The [2026-10-16 owner requirement](../requirements/2026-10-16-central-work-coordination.md)
+adds canonical OpenProject Saga/Epic/Story discovery, claims, history and linked repo
+execution artifacts across harnesses. Agents search and update existing central work;
+Tom refines and green-lights it centrally. Agent CRUD is required. Approval statuses
+are coordination metadata; a technical status firewall is not an acceptance gate.
+This is a recorded requirement, not an enabled integration or a change to Chapter 7.
+
 ## Reusable source and gaps
 
 - Private clone/worktree preparation fetches and pins a base commit. Trusted
