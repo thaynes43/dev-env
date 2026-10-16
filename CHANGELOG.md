@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.29.2](https://github.com/thaynes43/dev-env/compare/v2.29.1...v2.29.2) (2026-10-16)
+
+
+### Bug Fixes
+
+* retain independent sealed pilot cohort identities ([#351](https://github.com/thaynes43/dev-env/issues/351)) ([6910dec](https://github.com/thaynes43/dev-env/commit/6910decc5279cb3d320e749418cac25fd13f85f1))
+
 ## [2.29.1](https://github.com/thaynes43/dev-env/compare/v2.29.0...v2.29.1) (2026-10-16)
 
 
