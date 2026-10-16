@@ -55,7 +55,7 @@ func TestPrivatePilotControllerExpiryDriftAndPreservedPeer(t *testing.T) {
 				if e != nil {
 					t.Fatal("pilot cannot render", e)
 				}
-				if pod.Spec.RestartPolicy != corev1.RestartPolicyNever || pod.Spec.ActiveDeadlineSeconds == nil || *pod.Spec.ActiveDeadlineSeconds != 900 || pod.Spec.TerminationGracePeriodSeconds == nil || *pod.Spec.TerminationGracePeriodSeconds != 5 {
+				if pod.Spec.RestartPolicy != corev1.RestartPolicyNever || pod.Spec.ActiveDeadlineSeconds == nil || *pod.Spec.ActiveDeadlineSeconds != 1200 || pod.Spec.TerminationGracePeriodSeconds == nil || *pod.Spec.TerminationGracePeriodSeconds != 5 {
 					t.Fatal("pilot executor is not finite")
 				}
 				for _, mode := range []string{"restart", "deadline"} {

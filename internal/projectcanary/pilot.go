@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	PilotActiveDeadlineSeconds int64 = 900
+	PilotActiveDeadlineSeconds int64 = 1200
 	PilotCaller                      = "dev/dev-env"
 	PilotProject                     = "dev-env"
 	PilotProfile                     = "rule-canary-codex"

@@ -124,9 +124,11 @@ never time since process start. The API checks it before source reads and again
 before Create. The controller checks it before resource allocation and again
 before its first Pod Create. Already-running pods are preserved when the window
 ends, the feature is disabled, or the operator rolls. Admission expiry refuses
-new starts; it does not kill an existing actor. Each task still has its 15m limit. The whole Pod independently has a 900-second
+new starts; it does not kill an existing actor. Each task still has its 15m limit. The whole Pod independently has a 1200-second
 active deadline, RestartPolicyNever and 5-second termination grace; a failed
-container cannot restart into a native resume TUI. Admission is rechecked after
+container cannot restart into a native resume TUI. The whole-Pod cap leaves
+five minutes beyond the task timeout for clone/setup and final reporting; setup
+exceeding that margin still fails closed at the whole-Pod cap. Admission is rechecked after
 directory/retention I/O immediately before a missing HOME Create.
 
 A pre-provisioned immutable ConfigMap `dev-env-budgets/dev-env-private-pilot-v1`
