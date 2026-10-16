@@ -131,9 +131,9 @@ review precede source acceptance. No source result establishes runtime acceptanc
 ## Closed 19:16 run and local-only correction
 
 The 19:16:08–19:46:08 UTC approved window ended PARTIAL and admission was removed.
-Only original A was created. Its task started19:26:56; the harness refused at
-19:27:27.419783 after9 rounds, with no B dispatch attempt. The installed heartbeat
-period is60s but the old guard rejected age>30s. The31.419783s offset matches that
+Only original A was created. Its task started 19:26:56; the harness refused at
+19:27:27.419783 after 9 rounds, with no B dispatch attempt. The installed heartbeat
+period is 60s but the old guard rejected age > 30s. The 31.419783s offset matches that
 mismatch, but the rejected observation was not retained: the exact old rejection
 predicate remains inference, not recovered evidence. No actor/window is reopened.
 
@@ -141,14 +141,14 @@ Future gate refusals retain a bounded predicate/timestamp/SessionUID/PodUID and
 heartbeat timestamp/limit in the result receipt, without log/prompt/token copies.
 This records the actual failing guard, rather than diagnosing from a later show.
 
-A's claim was created19:28:42. Its flushed JSON appeared in the final supported
-log after round6 commentary with aggregated script output. The script ended
+A's claim was created 19:28:42. Its flushed JSON appeared in the final supported
+log after round 6 commentary with aggregated script output. The script ended
 19:33:57.233877 (315.233877s after claim); exact first log visibility is unknown.
-A exhausted8 rounds/16 reads and its model task ended19:34:15 exit0, semantic
+A exhausted 8 rounds/16 reads and its model task ended 19:34:15 exit 0, semantic
 PARTIAL. Heartbeat correction alone therefore does not prove a runnable pilot.
-Offline replay keeps the315.233877s buffered counterexample failing, rejects an
+Offline replay keeps the 315.233877s buffered counterexample failing, rejects an
 already-old visible claim, and demonstrates one immediate dispatch only when a
-short completed claim tool call makes the receipt visible within30s. It models
+short completed claim tool call makes the receipt visible within 30s. It models
 that contract; it does not establish actual native output transport behavior.
 
 The stopped claim kept this correction local. That claim did not push, open a

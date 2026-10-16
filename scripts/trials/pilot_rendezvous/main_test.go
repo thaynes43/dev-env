@@ -441,8 +441,8 @@ func TestExistingRunRefusesBeforeAnyTransport(t *testing.T) {
 	}
 }
 
-// Actual failure offset: task19:26:56 -> result19:27:27.419783. The
-// installed60s sender can be healthy throughout that31.419783s gap.
+// Actual failure offset: task 19:26:56 -> result 19:27:27.419783. The
+// installed 60s sender can be healthy throughout that 31.419783s gap.
 func TestInstalledHeartbeatCadenceAcceptsHealthyGap(t *testing.T) {
 	for _, age := range []time.Duration{31419783 * time.Microsecond, 59 * time.Second, time.Minute, maxHeartbeatAge} {
 		t.Run(age.String(), func(t *testing.T) {
@@ -507,7 +507,7 @@ func TestRejectedGateRetainsExactPredicateAndMetadata(t *testing.T) {
 }
 
 // Fake command adapters model the proven native capture boundary, not actual
-// streaming. The315.233877s delay is claim19:28:42 -> script19:33:57.233877;
+// streaming. The 315.233877s delay is claim 19:28:42 -> script 19:33:57.233877;
 // its first log visibility was NOT timestamped in the old run.
 func TestClaimOutputVisibilityBoundary(t *testing.T) {
 	for _, tc := range []struct {
@@ -535,7 +535,7 @@ func TestClaimOutputVisibilityBoundary(t *testing.T) {
 				case "show":
 					session := f.o.Session
 					status := *session.AgentStatus
-					// Match installed60s cadence without refreshing on each observation.
+					// Match installed 60s cadence without refreshing on each observation.
 					beat := claimAt.Add(f.now.Sub(claimAt) / time.Minute * time.Minute)
 					status.LastHeartbeat = &beat
 					session.AgentStatus = &status

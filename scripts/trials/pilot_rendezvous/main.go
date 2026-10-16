@@ -31,7 +31,7 @@ import (
 var errRefused = errors.New("pilot rendezvous refused; no retry or replacement")
 var headPattern = regexp.MustCompile(`^[a-f0-9]{40}$`)
 
-// Installed agentd sends every60s (cmd/agentd/main.go); allow the existing
+// Installed agentd sends every 60s (cmd/agentd/main.go); allow the existing
 // 10s observation budget. Claim freshness and all authority guards stay tighter.
 const maxHeartbeatAge = time.Minute + 10*time.Second
 

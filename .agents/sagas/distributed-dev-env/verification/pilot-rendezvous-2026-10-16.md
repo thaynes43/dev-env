@@ -62,7 +62,7 @@ CLI/authority error is swallowed.
    receipt line defined in DESIGN-027 in one SHORT COMPLETED tool invocation,
    before a separate long wait invocation. Do not put create/receipt and wait
    in a single captured subprocess: Python flush alone does not establish CLI
-   log visibility. Verify the wrapper is visible within30s in a later separately
+   log visibility. Verify the wrapper is visible within 30s in a later separately
    authorized supported trace; no live proof occurs in this source story. The captured-log fixture preserves actual start,
    marker and operation lines projected from actor-A/log-6.stdout.
 5. Run the harness once WITHOUT `--execute`:
@@ -111,7 +111,7 @@ the Cursor pickup to deliver this exact patch as source. Required CI remains a
 delivery gate. Offline tests are not a substitute for it, and they are not
 runtime acceptance.
 
-Focused checks replay the installed60s heartbeat cadence including the actual
+Focused checks replay the installed 60s heartbeat cadence including the actual
 31.419783s refusal offset, retain genuine stale/future/missing and wrongUID refusal,
 and inspect the exact predicate/evidence in the saved gate rejection. A buffered
 315.233877s claim-output counterexample must send no create; an old visible claim
