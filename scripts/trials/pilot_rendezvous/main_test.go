@@ -171,7 +171,8 @@ func TestGateRefusesWrongBindingsAndTerminalFacts(t *testing.T) {
 			case "endedTask":
 				f.o.Session.AgentStatus.Task = &apiv1.TaskResult{}
 			case "staleHeartbeat":
-				f.now = f.now.Add(31 * time.Second)
+				beat := f.now.Add(-maxHeartbeatAge - time.Second)
+				f.o.Session.AgentStatus.LastHeartbeat = &beat
 			case "wrongLogSession":
 				f.o.Log.Session = "wrong"
 			case "wrongStart":
@@ -437,5 +438,141 @@ func TestExistingRunRefusesBeforeAnyTransport(t *testing.T) {
 	var out bytes.Buffer
 	if err := execute([]string{"--config", path, "--execute"}, &out); !errors.Is(err, os.ErrExist) || out.Len() != 0 {
 		t.Fatalf("err%v out%s", err, out.String())
+	}
+}
+
+// Actual failure offset: task19:26:56 -> result19:27:27.419783. The
+// installed60s sender can be healthy throughout that31.419783s gap.
+func TestInstalledHeartbeatCadenceAcceptsHealthyGap(t *testing.T) {
+	for _, age := range []time.Duration{31419783 * time.Microsecond, 59 * time.Second, time.Minute, maxHeartbeatAge} {
+		t.Run(age.String(), func(t *testing.T) {
+			f := newFixture(t)
+			beat := f.now.Add(-age)
+			f.o.Session.AgentStatus.LastHeartbeat = &beat
+			r, err := run(context.Background(), f.c, f.adapters(t))
+			if err != nil || f.calls != 1 || f.attempts != 1 || r.Rejection != nil {
+				t.Fatalf("healthy heartbeat age%s: receipt%+v err%v calls%d", age, r, err, f.calls)
+			}
+		})
+	}
+}
+
+func TestRejectedGateRetainsExactPredicateAndMetadata(t *testing.T) {
+	for _, tc := range []struct{ name, predicate string }{
+		{"missing", "heartbeat_missing"}, {"future", "heartbeat_future"}, {"stale", "heartbeat_stale"}, {"wrongUID", "session_binding"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			switch tc.name {
+			case "missing":
+				f.o.Session.AgentStatus.LastHeartbeat = nil
+			case "future":
+				beat := f.now.Add(time.Second)
+				f.o.Session.AgentStatus.LastHeartbeat = &beat
+			case "stale":
+				beat := f.now.Add(-maxHeartbeatAge - time.Nanosecond)
+				f.o.Session.AgentStatus.LastHeartbeat = &beat
+			case "wrongUID":
+				f.o.Session.UID = bUID
+			}
+			r, err := run(context.Background(), f.c, f.adapters(t))
+			if !errors.Is(err, errRefused) || r.Rejection == nil || r.Rejection.Predicate != tc.predicate || f.calls != 0 || f.attempts != 0 {
+				t.Fatalf("receipt%+v err%v calls%d attempts%d", r, err, f.calls, f.attempts)
+			}
+			evidence := r.Rejection
+			if !evidence.ObservedAt.Equal(f.now) || evidence.SessionUID != f.o.Session.UID || evidence.PodUID != podUID || evidence.MaxHeartbeatAgeSeconds != 70 || r.ObservationRounds != 1 {
+				t.Fatalf("wrong failed-round evidence%+v", evidence)
+			}
+			if !reflect.DeepEqual(evidence.LastHeartbeat, f.o.Session.AgentStatus.LastHeartbeat) {
+				t.Fatal("lost exact failed heartbeat timestamp")
+			}
+			path := filepath.Join(f.c.ReceiptDir, "rejected-result.json")
+			if err := saveExclusive(path, r); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var saved Receipt
+			if err := json.Unmarshal(raw, &saved); err != nil || saved.Rejection == nil || saved.Rejection.Predicate != tc.predicate {
+				t.Fatalf("receipt not retained: %s err%v", raw, err)
+			}
+			if bytes.Contains(raw, []byte(f.c.Policy.Prompts[0])) || bytes.Contains(raw, []byte(f.o.Log.Text)) {
+				t.Fatal("raw prompt/log leaked into refusal evidence")
+			}
+			t.Logf("saved predicate=%s observed=%s lastHeartbeat=%v maxAge=70s", evidence.Predicate, evidence.ObservedAt.Format(time.RFC3339Nano), evidence.LastHeartbeat)
+		})
+	}
+}
+
+// Fake command adapters model the proven native capture boundary, not actual
+// streaming. The315.233877s delay is claim19:28:42 -> script19:33:57.233877;
+// its first log visibility was NOT timestamped in the old run.
+func TestClaimOutputVisibilityBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		visibleAfter time.Duration
+		accept       bool
+	}{
+		{"short_completed_claim_call", 2 * time.Second, true},
+		{"old_visible_claim", 31 * time.Second, false},
+		{"captured_long_wait_buffer", 315233877 * time.Microsecond, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			claimAt := f.c.Policy.NotBefore.Add(4*time.Minute + 22*time.Second)
+			f.now = claimAt
+			fullLog := f.o.Log
+			parts := strings.SplitN(fullLog.Text, "\n", 3)
+			noReceipt := fullLog
+			noReceipt.Text = parts[0] + "\n" + parts[1] + "\n"
+			visibleAt := claimAt.Add(tc.visibleAfter)
+			var commands []string
+			fake := func(_ context.Context, _ string, args []string) ([]byte, error) {
+				commands = append(commands, args[0])
+				switch args[0] {
+				case "show":
+					session := f.o.Session
+					status := *session.AgentStatus
+					// Match installed60s cadence without refreshing on each observation.
+					beat := claimAt.Add(f.now.Sub(claimAt) / time.Minute * time.Minute)
+					status.LastHeartbeat = &beat
+					session.AgentStatus = &status
+					return json.Marshal(session)
+				case "log":
+					if f.now.Before(visibleAt) {
+						return json.Marshal(noReceipt)
+					}
+					return json.Marshal(fullLog)
+				default:
+					if !reflect.DeepEqual(args, f.c.dispatchArgs()) {
+						t.Fatal("changed prebound dispatch")
+					}
+					f.calls++
+					return json.Marshal(apiv1.Session{UID: bUID, Name: f.c.Policy.SessionName(1), IdempotencyKey: f.c.Policy.Key(1)})
+				}
+			}
+			a := liveAdapters(f.c, fake)
+			a.now = func() time.Time { return f.now }
+			a.sleep = func(_ context.Context, d time.Duration) error { f.now = f.now.Add(d); return nil }
+			r, err := run(context.Background(), f.c, a)
+			if tc.accept {
+				if err != nil || f.calls != 1 || !r.GateAt.Equal(claimAt.Add(5*time.Second)) || !r.DispatchAt.Equal(r.GateAt) || !reflect.DeepEqual(commands, []string{"show", "log", "show", "log", "--project"}) {
+					t.Fatalf("err%v receipt%+v creates%d commands%v", err, r, f.calls, commands)
+				}
+			} else {
+				if err == nil || f.calls != 0 {
+					t.Fatalf("buffered/old claim dispatched: err%v creates%d receipt%+v", err, f.calls, r)
+				}
+				if tc.name == "old_visible_claim" && (r.Rejection == nil || r.Rejection.Predicate != "claim_stale") {
+					t.Fatalf("missing exact stale claim predicate%+v", r)
+				}
+				if f.now.Sub(claimAt) > 5*time.Minute {
+					t.Fatal("buffered proof exceeded existing finite wait")
+				}
+			}
+			t.Logf("visibleAfter=%s elapsed=%s creates=%d rejection=%+v", tc.visibleAfter, f.now.Sub(claimAt), f.calls, r.Rejection)
+		})
 	}
 }

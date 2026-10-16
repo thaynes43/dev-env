@@ -31,6 +31,24 @@ import (
 var errRefused = errors.New("pilot rendezvous refused; no retry or replacement")
 var headPattern = regexp.MustCompile(`^[a-f0-9]{40}$`)
 
+// Installed agentd sends every60s (cmd/agentd/main.go); allow the existing
+// 10s observation budget. Claim freshness and all authority guards stay tighter.
+const maxHeartbeatAge = time.Minute + 10*time.Second
+
+// gateRejection records only bounded gate metadata, never raw logs/prompts/tokens.
+// It names the actual failed predicate at the observation that was rejected.
+type gateRejection struct {
+	Predicate              string     `json:"predicate"`
+	ObservedAt             time.Time  `json:"observedAt"`
+	SessionUID             string     `json:"sessionUID"`
+	PodUID                 string     `json:"podUID,omitempty"`
+	LastHeartbeat          *time.Time `json:"lastHeartbeat,omitempty"`
+	MaxHeartbeatAgeSeconds int        `json:"maxHeartbeatAgeSeconds"`
+}
+
+func (r *gateRejection) Error() string { return fmt.Sprintf("%s: %s", errRefused, r.Predicate) }
+func (r *gateRejection) Unwrap() error { return errRefused }
+
 // Config is a reviewed nonsecret binding, never a token or an access grant.
 // The original A identity and exact binary/CA/prompt bytes are pinned before
 // observation. The operator independently enforces B's sealed request.
@@ -120,36 +138,53 @@ func readyForLog(s apiv1.Session) bool {
 
 func validateGate(c Config, o Observation, now time.Time) (*Deadlines, error) {
 	s := o.Session
+	reject := func(predicate string) error {
+		r := &gateRejection{Predicate: predicate, ObservedAt: now, SessionUID: s.UID, MaxHeartbeatAgeSeconds: int(maxHeartbeatAge / time.Second)}
+		if s.PrivateHistory != nil && s.PrivateHistory.LastExecutor != nil {
+			r.PodUID = s.PrivateHistory.LastExecutor.PodUID
+		}
+		if s.AgentStatus != nil && s.AgentStatus.LastHeartbeat != nil {
+			beat := *s.AgentStatus.LastHeartbeat
+			r.LastHeartbeat = &beat
+		}
+		return r
+	}
 	if o.Log.Truncated {
-		return nil, errRefused
+		return nil, reject("log_truncated")
 	}
 	if s.UID != c.AUID || s.Name != c.Policy.SessionName(0) || s.Repo != "dev-env" || s.IdempotencyKey != c.Policy.Key(0) || s.Prompt != c.Policy.Prompts[0] || s.Agent != "codex" || s.Model != "gpt-6.1-sol" || s.Effort != "high" || s.Mode != "task" || s.Size != "S" || s.Profile != projectcanary.PilotProfile || s.Limits == nil || s.Limits.Timeout != "15m0s" || s.CreatedAt.Before(c.Policy.NotBefore) || (!c.ATaskStarted.IsZero() && s.CreatedAt.After(c.ATaskStarted)) {
-		return nil, errRefused
+		return nil, reject("session_binding")
 	}
 	if s.PrivateHistory != nil && (s.PrivateHistory.SessionUID != c.AUID || (s.PrivateHistory.LastExecutor != nil && s.PrivateHistory.LastExecutor.PodUID != c.APodUID)) {
-		return nil, errRefused
+		return nil, reject("private_executor_binding")
 	}
 	if s.AgentStatus == nil {
 		return nil, nil
 	}
 	a := s.AgentStatus
 	if a.Task != nil || a.State == "exited" || (a.Head != "" && a.Head != c.Head) {
-		return nil, errRefused
+		return nil, reject("task_ended_or_head_changed")
 	}
 	if !readyForLog(s) {
 		return nil, nil
 	}
 	if s.PrivateHistory == nil || s.PrivateHistory.LastExecutor == nil {
-		return nil, errRefused
+		return nil, reject("executor_evidence_missing")
 	}
-	if a.LastHeartbeat == nil || now.Before(*a.LastHeartbeat) || now.Sub(*a.LastHeartbeat) > 30*time.Second {
-		return nil, errRefused
+	if a.LastHeartbeat == nil {
+		return nil, reject("heartbeat_missing")
+	}
+	if now.Before(*a.LastHeartbeat) {
+		return nil, reject("heartbeat_future")
+	}
+	if now.Sub(*a.LastHeartbeat) > maxHeartbeatAge {
+		return nil, reject("heartbeat_stale")
 	}
 	if a.Head != c.Head || a.Boot != "ready" || a.ProjectBootstrap == nil || a.ProjectBootstrap.State != "Ready" {
 		return nil, nil
 	}
 	if a.ProjectBootstrap.CatalogRevision != c.Policy.CatalogRevision || o.Log.Session != s.Name {
-		return nil, errRefused
+		return nil, reject("catalog_or_log_session")
 	}
 	if !strings.Contains(o.Log.Text, c.CommonMarker) || !strings.Contains(o.Log.Text, c.RepositoryMarker) {
 		return nil, nil
@@ -160,17 +195,17 @@ func validateGate(c Config, o Observation, now time.Time) (*Deadlines, error) {
 		if strings.HasPrefix(line, startPrefix) {
 			raw, _, ok := strings.Cut(strings.TrimPrefix(line, startPrefix), ",")
 			if !ok || !started.IsZero() {
-				return nil, errRefused
+				return nil, reject("task_start_duplicate_or_malformed")
 			}
 			var err error
 			started, err = time.Parse(time.RFC3339, raw)
 			if err != nil {
-				return nil, errRefused
+				return nil, reject("task_start_parse")
 			}
 		}
 	}
 	if started.IsZero() || started.Before(s.CreatedAt) || started.Before(c.Policy.NotBefore) || started.After(now) || (!c.ATaskStarted.IsZero() && !started.Equal(c.ATaskStarted)) {
-		return nil, errRefused
+		return nil, reject("task_start_binding")
 	}
 	c.ATaskStarted = started
 
@@ -188,11 +223,11 @@ func validateGate(c Config, o Observation, now time.Time) (*Deadlines, error) {
 			continue
 		}
 		if entry.ExitCode == nil || *entry.ExitCode != 0 || result != nil {
-			return nil, errRefused
+			return nil, reject("claim_receipt_duplicate_or_failed")
 		}
 		var r apiv1.TaskClaimResult
 		if json.Unmarshal([]byte(entry.Stdout), &r) != nil {
-			return nil, errRefused
+			return nil, reject("claim_receipt_parse")
 		}
 		result = &r
 	}
@@ -201,10 +236,19 @@ func validateGate(c Config, o Observation, now time.Time) (*Deadlines, error) {
 	}
 	r := result.Claim
 	if (result.Outcome != "Created" && result.Outcome != "Confirmed") || !protocol.ValidKubeUID(r.UID) || r.Archived || r.Owner != (apiv1.TaskClaimOwner{Namespace: "dev-agents", Name: s.Name, UID: c.AUID}) || r.Actor.Kind != "session" || r.Actor.PodUID != c.APodUID || r.Actor.PodName != s.Name || r.Identity != (apiv1.TaskClaimIdentity{Project: "dev-env", Repository: "dev-env", TaskKey: "task:" + c.Policy.Key(0)}) || r.Provenance.CatalogRevision != c.Policy.CatalogRevision || r.Provenance.RulesRevision != c.Policy.RulesRevision || r.Provenance.ReportedHead != c.Head {
-		return nil, errRefused
+		return nil, reject("claim_binding")
 	}
 	d, err := deadlines(c, r.CreatedAt, s.CreatedAt, now)
-	return &d, err
+	if err != nil {
+		if now.Before(r.CreatedAt) {
+			return nil, reject("claim_future")
+		}
+		if now.Sub(r.CreatedAt) > 30*time.Second {
+			return nil, reject("claim_stale")
+		}
+		return nil, reject("phase_budget_or_claim_start")
+	}
+	return &d, nil
 }
 
 type adapters struct {
@@ -218,12 +262,13 @@ type adapters struct {
 }
 
 type Receipt struct {
-	State             string    `json:"state"`
-	GateAt            time.Time `json:"gateAt"`
-	DispatchAt        time.Time `json:"dispatchAt"`
-	Deadlines         Deadlines `json:"deadlines"`
-	BUID              string    `json:"bUID,omitempty"`
-	ObservationRounds int       `json:"observationRounds"`
+	State             string         `json:"state"`
+	GateAt            time.Time      `json:"gateAt"`
+	DispatchAt        time.Time      `json:"dispatchAt"`
+	Deadlines         Deadlines      `json:"deadlines"`
+	BUID              string         `json:"bUID,omitempty"`
+	ObservationRounds int            `json:"observationRounds"`
+	Rejection         *gateRejection `json:"rejection,omitempty"`
 }
 
 func run(ctx context.Context, c Config, a adapters) (Receipt, error) {
@@ -251,6 +296,10 @@ func run(ctx context.Context, c Config, a adapters) (Receipt, error) {
 		gateAt := a.now()
 		d, err := validateGate(c, observation, gateAt)
 		if err != nil {
+			var rejection *gateRejection
+			if errors.As(err, &rejection) {
+				receipt.Rejection = rejection
+			}
 			return receipt, err
 		}
 		if d != nil {

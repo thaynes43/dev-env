@@ -58,9 +58,12 @@ CLI/authority error is swallowed.
    absolute directory, stable for this cohort). Optional `aTaskStarted` must
    equal the real log start. Markers are comparison inputs, never added to prompts.
    Config contains NO tokens. Existing CLI credential discovery/TLS remain intact.
-   The reviewed A prompt must explicitly emit the exact successful claim
-   receipt line defined in DESIGN-027; actor tool output is not guaranteed to
-   wrap raw stdout by itself. The captured-log fixture preserves actual start,
+   The reviewed A prompt must emit the exact successful claim
+   receipt line defined in DESIGN-027 in one SHORT COMPLETED tool invocation,
+   before a separate long wait invocation. Do not put create/receipt and wait
+   in a single captured subprocess: Python flush alone does not establish CLI
+   log visibility. Verify the wrapper is visible within30s in a later separately
+   authorized supported trace; no live proof occurs in this source story. The captured-log fixture preserves actual start,
    marker and operation lines projected from actor-A/log-6.stdout.
 5. Run the harness once WITHOUT `--execute`:
    `pilot-rendezvous --config /absolute/config.json`.
@@ -91,3 +94,28 @@ Remaining usable-MVP proof is two-way ACK and published stopped-handoff read wit
 attribution and peer preservation. The last runtime demonstrated neither; this
 source/offline replay does not claim them. A fresh future reviewed runtime
 package/authorization is needed to prove them, not a new core redesign.
+
+## Local-only heartbeat/visibility correction pickup
+
+Story C7-RENDEZVOUS-FRESHNESS-LOCAL-1016, same sole Chapter7, accepted base
+`71b713e849de52aecb540dc722733514cf5c6d95`, isolated worktree
+`/home/dev/work/dev-env-c7-rendezvous-freshness-1016-1538`. Exact paths and fresh
+15-minute checkpoint/25-minute stop are recorded BEFORE code edits in
+`/home/dev/work/orders/dev-env-chapter7-rendezvous-freshness-local-1016-1538/story.json`.
+All prior failures/clocks and the closed runtime remain retained unchanged.
+
+The stopped claim was local patch, offline checks, and independent review only.
+That claim did not push, open a PR, merge, trigger hosted CI, release, build or
+publish an image, or make a live API or model call. On 2026-10-16 Tom directed
+the Cursor pickup to deliver this exact patch as source. Required CI remains a
+delivery gate. Offline tests are not a substitute for it, and they are not
+runtime acceptance.
+
+Focused checks replay the installed60s heartbeat cadence including the actual
+31.419783s refusal offset, retain genuine stale/future/missing and wrongUID refusal,
+and inspect the exact predicate/evidence in the saved gate rejection. A buffered
+315.233877s claim-output counterexample must send no create; an old visible claim
+must refuse; a short completed claim call with timely visibility dispatches
+exactly once without a reporting/model turn. All adapters and clocks are fake;
+this does not prove native streaming visibility. Final results belong in the
+local orders; no new runtime package or retry is implied.
