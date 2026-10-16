@@ -1,5 +1,46 @@
 # Changelog
 
+## [2.29.0](https://github.com/thaynes43/dev-env/compare/v2.28.0...v2.29.0) (2026-10-16)
+
+
+### Features
+
+* add bounded in-session task-claim client ([#340](https://github.com/thaynes43/dev-env/issues/340)) ([f7025ea](https://github.com/thaynes43/dev-env/commit/f7025eacc49465925bf78955f6455f0ab91cf459))
+* add coordination archive shelf client ([#299](https://github.com/thaynes43/dev-env/issues/299)) ([b1fc8ca](https://github.com/thaynes43/dev-env/commit/b1fc8caf044778a6e71406d9a3a419635362b628))
+* add coordination retention bulk lookup ([#301](https://github.com/thaynes43/dev-env/issues/301)) ([baa95b2](https://github.com/thaynes43/dev-env/commit/baa95b2025d6a93cfbf304c8e0a9801bd094422d))
+* add coordination retention rule summaries ([#300](https://github.com/thaynes43/dev-env/issues/300)) ([7763470](https://github.com/thaynes43/dev-env/commit/7763470738dca53a489b24d4ec6aa63a7ca6dd4b))
+* add published context archive fallback ([#302](https://github.com/thaynes43/dev-env/issues/302)) ([b8c81aa](https://github.com/thaynes43/dev-env/commit/b8c81aa9b25c19b638bd66d5bd88dbdcfab43bea))
+* **agentd:** add coordination archive CLI round-trip ([#286](https://github.com/thaynes43/dev-env/issues/286)) ([ae82d95](https://github.com/thaynes43/dev-env/commit/ae82d9531463bd80ed947cea9b3577ef2d15e029))
+* **agentd:** add paged coordination archive list ([#297](https://github.com/thaynes43/dev-env/issues/297)) ([f2f49f8](https://github.com/thaynes43/dev-env/commit/f2f49f85ecb15dfa4c3743d78649462f40387060))
+* **agentd:** add verified UID-first archive item lookup ([#324](https://github.com/thaynes43/dev-env/issues/324)) ([1b8cc27](https://github.com/thaynes43/dev-env/commit/1b8cc27997932d4474dcca21fcb1bdd3ba076a67))
+* **agentd:** clean stale coordination staging ([#296](https://github.com/thaynes43/dev-env/issues/296)) ([d6c5777](https://github.com/thaynes43/dev-env/commit/d6c5777cd65a217e936a9aab1cd6f257d7f879a9))
+* **agentd:** discover unmarked coordination archive revisions ([#287](https://github.com/thaynes43/dev-env/issues/287)) ([42cd82d](https://github.com/thaynes43/dev-env/commit/42cd82da46646c26eee6aa0d57008fa71c09abd5))
+* **agentd:** guard coordination archive shelf startup ([#298](https://github.com/thaynes43/dev-env/issues/298)) ([272e9be](https://github.com/thaynes43/dev-env/commit/272e9be3e6178f1eead410f537866f0ff84b166c))
+* **agentd:** journal coordination archive grace transitions ([#288](https://github.com/thaynes43/dev-env/issues/288)) ([a2d2f2c](https://github.com/thaynes43/dev-env/commit/a2d2f2ca384d026a0c9cb6a3580688624b93a6cb))
+* **agentd:** publish and repair immutable coordination indices ([#285](https://github.com/thaynes43/dev-env/issues/285)) ([9f5e71f](https://github.com/thaynes43/dev-env/commit/9f5e71fb17ddb2d6ee6f1d91a194b45aebc70589))
+* **agentd:** select verified coordination archive revisions by recorded time ([#289](https://github.com/thaynes43/dev-env/issues/289)) ([8bba7b6](https://github.com/thaynes43/dev-env/commit/8bba7b66fe5635434e11837cbb843f1c9e025492))
+* **agentd:** store verified coordination archive revisions ([#283](https://github.com/thaynes43/dev-env/issues/283)) ([cf91ef4](https://github.com/thaynes43/dev-env/commit/cf91ef4e94f8de5da7e78c42a335a228209e5b7f))
+* **agentd:** verify bounded coordination archive objects ([#281](https://github.com/thaynes43/dev-env/issues/281)) ([4e67b87](https://github.com/thaynes43/dev-env/commit/4e67b87f03db48fb60948937c5273f6f03b57e92))
+* **apiserver:** list archived TaskClaim metadata ([#312](https://github.com/thaynes43/dev-env/issues/312)) ([3d0a18e](https://github.com/thaynes43/dev-env/commit/3d0a18e85a39540c9c689abb253a4974cb6be39f))
+* **apiserver:** list scoped archived inbox metadata ([#314](https://github.com/thaynes43/dev-env/issues/314)) ([f362fad](https://github.com/thaynes43/dev-env/commit/f362fad1af31b43e5182c1a3bf40917e83dae8f0))
+* **apiserver:** read archived inbox messages after live miss ([#316](https://github.com/thaynes43/dev-env/issues/316)) ([51f8e39](https://github.com/thaynes43/dev-env/commit/51f8e3912ecef646980e429557a2eb7ce875227d))
+* **apiserver:** read archived TaskClaims by optional UID ([#330](https://github.com/thaynes43/dev-env/issues/330)) ([47d7c9b](https://github.com/thaynes43/dev-env/commit/47d7c9b709fee696e11b63117d7a34cdba89680d))
+* **apiserver:** read verified archived inbox acknowledgements ([#322](https://github.com/thaynes43/dev-env/issues/322)) ([862f7a4](https://github.com/thaynes43/dev-env/commit/862f7a4930f0d2d0274ffc5ac96750a8f311bac6))
+* **coordination:** expose archive item reads through CLI and shelf ([#328](https://github.com/thaynes43/dev-env/issues/328)) ([504b1c5](https://github.com/thaynes43/dev-env/commit/504b1c5b12b8195347053667a61f0a38d52d597e))
+* define offline Cursor control contracts ([#308](https://github.com/thaynes43/dev-env/issues/308)) ([a70c45c](https://github.com/thaynes43/dev-env/commit/a70c45c4f0d1aebeddbb6f238427e77bd3555c24))
+* define offline Ollama candidate preflight ([#307](https://github.com/thaynes43/dev-env/issues/307)) ([19615e9](https://github.com/thaynes43/dev-env/commit/19615e97cd80c15be1ff94e2c88f7fa6f30264cf))
+* list archived published contexts ([#306](https://github.com/thaynes43/dev-env/issues/306)) ([5957708](https://github.com/thaynes43/dev-env/commit/5957708fc0c719db09b6051fb4a3de5ce61f8910))
+* **operator:** wire default-off coordination archive reads ([#334](https://github.com/thaynes43/dev-env/issues/334)) ([e25c8f3](https://github.com/thaynes43/dev-env/commit/e25c8f36e9a54f0390fe5ba0ec03c2f308cc0e46))
+* retain truthful coordination eligibility observations ([#336](https://github.com/thaynes43/dev-env/issues/336)) ([a4f950e](https://github.com/thaynes43/dev-env/commit/a4f950e0b24425a8553045c67409e53f686b5e1d))
+* seal and expire a two-session private pilot ([#345](https://github.com/thaynes43/dev-env/issues/345)) ([c1c84e5](https://github.com/thaynes43/dev-env/commit/c1c84e52d2da5b608ebd56086d1caf99cbbd86b3))
+
+
+### Bug Fixes
+
+* **apiserver:** confirm archived inbox acknowledgement retries ([#326](https://github.com/thaynes43/dev-env/issues/326)) ([3020772](https://github.com/thaynes43/dev-env/commit/30207728900ccf2b5cc713a6605d258b991bc729))
+* **coordarchive:** use first time for default latest get ([#310](https://github.com/thaynes43/dev-env/issues/310)) ([900fc02](https://github.com/thaynes43/dev-env/commit/900fc02236d71b8f140c1bb9089bc63d6561f783))
+* **coordination:** clarify lifetime and live project record bounds ([#318](https://github.com/thaynes43/dev-env/issues/318)) ([51c0256](https://github.com/thaynes43/dev-env/commit/51c0256fa4de9e9f02358374c905800196260a0f))
+
 ## [2.28.0](https://github.com/thaynes43/dev-env/compare/v2.27.0...v2.28.0) (2026-10-14)
 
 
