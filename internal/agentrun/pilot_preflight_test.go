@@ -2,6 +2,7 @@ package agentrun
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
@@ -71,11 +72,20 @@ func TestPilotPreflightNoCreateFallback(t *testing.T) {
 	}
 }
 func TestPilotPreflightUsageRefusesBeforeConnection(t *testing.T) {
-	for _, args := range [][]string{{"dev-env", "-p", "task", "--dry-run=server"}, {"--project", "dev-env", "-p", "task", "--dry-run=client"}, {"--project", "dev-env", "--local", "--dry-run=server"}} {
+	for _, args := range [][]string{{"--project", "dev-env", "-p", "task", "--dry-run="}, {"--project", "dev-env", "-p", "task", "--dry-run", ""}, {"--project", "dev-env", "-p", "task", "--dry-run=", "--dry-run=server"}, {"dev-env", "-p", "task", "--dry-run=server"}, {"--project", "dev-env", "-p", "task", "--dry-run=client"}, {"--project", "dev-env", "--local", "--dry-run=server"}} {
 		h := newHarness(t)
 		h.mustRun(ExitUsage, args...)
 		if len(h.api.requests()) != 0 {
 			t.Fatal("invalid preflight connected")
 		}
+	}
+}
+
+func TestPilotPreflightHelpIsTaskOnly(t *testing.T) {
+	if !strings.Contains(commandHelp["run"], "--dry-run=server") {
+		t.Fatal("task help missing dry-run")
+	}
+	if strings.Contains(commandHelp["directory"], "--dry-run") {
+		t.Fatal("directory advertises task dry-run")
 	}
 }

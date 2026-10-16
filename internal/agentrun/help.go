@@ -86,7 +86,6 @@ This command makes one API request. It does not retry or follow redirects.
 It cannot create or control a session, or read its private history.
 
 Flags:
-  --dry-run=server           sealed-pilot admission only; never creates, waits or falls back
   --project <name>      the authorized project to read (required)
   --once               acknowledge one request with no retry (required)
   --limit <1..20>       maximum records in this page (default 20)
@@ -144,6 +143,7 @@ for a project with several. Declared projects take task mode only. Their rules
 and catalog revision come from the server.
 
 Flags:
+  --dry-run=server           sealed-pilot admission only; never creates, waits or falls back
   -p, --prompt <task>        the task, at most 64 KiB
   --local                    an interactive session instead of a task: the TUI, no prompt
   --prompt-file <path>       read the task from a file instead; - reads stdin

@@ -59,7 +59,13 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		wait                                                                                       time.Duration
 		interactive, local, safe                                                                   bool
 	)
-	fs.StringVar(&dryRun, "dry-run", "", "")
+	fs.Func("dry-run", "", func(value string) error {
+		if value != "server" {
+			return fmt.Errorf("--dry-run requires explicit value server")
+		}
+		dryRun = value
+		return nil
+	})
 	fs.StringVar(&prompt, "p", "", "")
 	fs.StringVar(&prompt, "prompt", "", "")
 	fs.StringVar(&promptFile, "prompt-file", "", "")
@@ -84,11 +90,14 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	if err != nil {
 		return err
 	}
-	if dryRun != "" && (dryRun != "server" || project == "" || restoring || local || interactive) {
+	projectGiven, dryRunGiven := false, false
+	fs.Visit(func(f *flag.Flag) {
+		projectGiven = projectGiven || f.Name == "project"
+		dryRunGiven = dryRunGiven || f.Name == "dry-run"
+	})
+	if dryRunGiven && (dryRun != "server" || project == "" || restoring || local || interactive) {
 		return usageError("--dry-run=server requires a new declared-project task")
 	}
-	projectGiven := false
-	fs.Visit(func(f *flag.Flag) { projectGiven = projectGiven || f.Name == "project" })
 	if projectGiven && !projectName.MatchString(project) {
 		return usageError("--project must be a declared project name: 1 to 63 lowercase letters, digits or '-', starting and ending with a letter or digit")
 	}
@@ -248,7 +257,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		Lifecycle:      lifecycle,
 		IdempotencyKey: key,
 	}
-	if dryRun != "" {
+	if dryRunGiven {
 		hc := *c.http
 		hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 		one := *c
