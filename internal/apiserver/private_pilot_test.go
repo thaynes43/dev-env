@@ -356,42 +356,22 @@ func TestPrivatePilotPreflightRealSchemaAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	corrected := crd.DeepCopy()
-	setOld := func(o *unstructured.Unstructured) {
-		versions := o.Object["spec"].(map[string]any)["versions"].([]any)
-		v := versions[0].(map[string]any)
-		root := v["schema"].(map[string]any)["openAPIV3Schema"].(map[string]any)
-		sp := root["properties"].(map[string]any)["spec"].(map[string]any)
-		delete(sp["properties"].(map[string]any), "privatePilot")
-		rules := sp["x-kubernetes-validations"].([]any)
-		kept := []any{}
-		for _, r := range rules {
-			m := r.(map[string]any)
-			msg := m["message"].(string)
-			rule := m["rule"].(string)
-			if strings.HasPrefix(msg, "sealed pilots require") {
-				continue
-			}
-			rule = strings.ReplaceAll(rule, " && has(self.privatePilot) == has(oldSelf.privatePilot)", "")
-			if msg == "common rules require the matching managed canary binding" {
-				rule = "!has(self.commonRules) || (has(self.projectCanary) && has(self.projectCanary.commonRevision) && self.projectCanary.commonRevision == self.commonRules.commonRevision)"
-			}
-			if msg == "directory enrollment requires a managed canary" {
-				rule = "!has(self.sessionDirectory) || has(self.projectCanary)"
-			}
-			m["rule"] = rule
-			kept = append(kept, m)
-		}
-		sp["x-kubernetes-validations"] = kept
-	}
 	old := crd.DeepCopy()
-	setOld(old)
-	versions := old.Object["spec"].(map[string]any)["versions"].([]any)
-	oldSchema := versions[0].(map[string]any)["schema"].(map[string]any)["openAPIV3Schema"].(map[string]any)["properties"].(map[string]any)["spec"]
-	oldJSON, _ := json.Marshal(oldSchema)
-	if fmt.Sprintf("%x", sha256.Sum256(oldJSON)) != "6d5db36566f417cabb83d8b5151153b6f8c44c762f24e86a91f8e63c42e9ac63" {
-		t.Fatal("reconstructed released schema differs from independently captured installed spec schema")
+	captured, err := os.ReadFile("testdata/agentsession-installed-spec-20261016.json")
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Logf("exact installed/released spec schema SHA256=%x", sha256.Sum256(oldJSON))
+	var installedSpec map[string]any
+	if err := json.Unmarshal(captured, &installedSpec); err != nil {
+		t.Fatal(err)
+	}
+	oldJSON, _ := json.Marshal(installedSpec)
+	if fmt.Sprintf("%x", sha256.Sum256(oldJSON)) != "6d5db36566f417cabb83d8b5151153b6f8c44c762f24e86a91f8e63c42e9ac63" {
+		t.Fatal("captured installed spec schema fingerprint changed")
+	}
+	versions := old.Object["spec"].(map[string]any)["versions"].([]any)
+	versions[0].(map[string]any)["schema"].(map[string]any)["openAPIV3Schema"].(map[string]any)["properties"].(map[string]any)["spec"] = installedSpec
+	t.Logf("captured installed/released spec schema SHA256=%x", sha256.Sum256(oldJSON))
 	if err := realClient.Update(ctx, old); err != nil {
 		t.Fatal(err)
 	}

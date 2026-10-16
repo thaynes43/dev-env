@@ -82,7 +82,7 @@ func TestPilotPreflightUsageRefusesBeforeConnection(t *testing.T) {
 }
 
 func TestPilotPreflightHelpIsTaskOnly(t *testing.T) {
-	if !strings.Contains(commandHelp["run"], "--dry-run=server") {
+	if !strings.Contains(commandHelp["run"], "--dry-run=server           requires --project") {
 		t.Fatal("task help missing dry-run")
 	}
 	if strings.Contains(commandHelp["directory"], "--dry-run") {

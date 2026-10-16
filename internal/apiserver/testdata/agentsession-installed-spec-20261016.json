@@ -1,0 +1,545 @@
+{
+  "description": "AgentSessionSpec is what the caller asked for. The operator's /v1 API writes\nit; agents never write AgentSession objects themselves (DESIGN-001 6.11). The\noperator never writes spec either: what it resolves (the default profile and\ntools, the timers per mode) it reads from the templates or records in status.",
+  "properties": {
+    "agent": {
+      "description": "Agent is the agent CLI to run.",
+      "enum": [
+        "claude",
+        "codex",
+        "opencode"
+      ],
+      "type": "string",
+      "x-kubernetes-validations": [
+        {
+          "message": "immutable after create; only operatingMode and lifecycle may change",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "base": {
+      "default": "origin/main",
+      "description": "Base is the ref the session's worktree branches from. It cannot start\nwith '-', so git never reads it as an option.",
+      "maxLength": 255,
+      "minLength": 1,
+      "pattern": "^[^-\\s]\\S*$",
+      "type": "string",
+      "x-kubernetes-validations": [
+        {
+          "message": "immutable after create; only operatingMode and lifecycle may change",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "caller": {
+      "description": "Caller is the CallerPolicy of a summoned session, for example\nalert-responder (DESIGN-001 3.7). Empty for Tom's own sessions. A\nsummoned session sets caller and lane together.",
+      "maxLength": 253,
+      "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+      "type": "string",
+      "x-kubernetes-validations": [
+        {
+          "message": "immutable after create; only operatingMode and lifecycle may change",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "commonRules": {
+      "description": "CommonRules is authored only by the enabled managed common-input route.\nAbsence is legacy Unknown provenance, never an inferred current snapshot.",
+      "properties": {
+        "commonRevision": {
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "projectDigest": {
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "snapshot": {
+          "description": "The entire source-authored session document has a separate 192KiB cap.",
+          "maxLength": 499712,
+          "type": "string"
+        },
+        "snapshotDigest": {
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "version": {
+          "enum": [
+            1
+          ],
+          "type": "integer"
+        }
+      },
+      "required": [
+        "commonRevision",
+        "projectDigest",
+        "snapshot",
+        "snapshotDigest",
+        "version"
+      ],
+      "type": "object",
+      "x-kubernetes-validations": [
+        {
+          "message": "common instruction binding is immutable",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "effort": {
+      "description": "Effort is the reasoning effort. The levels differ per model, so the API\nchecks them, not this schema.",
+      "maxLength": 32,
+      "pattern": "^[a-z]+$",
+      "type": "string",
+      "x-kubernetes-validations": [
+        {
+          "message": "immutable after create; only operatingMode and lifecycle may change",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "idempotencyKey": {
+      "description": "IdempotencyKey lets a summoning caller repeat a create safely, for example\nwith an alert signature: a repeated key returns the existing session. It has\nthe form of a label value, so the API can find that session with a label\nselector; a caller with a longer signature sends a hash of it.",
+      "maxLength": 63,
+      "pattern": "^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$",
+      "type": "string",
+      "x-kubernetes-validations": [
+        {
+          "message": "immutable after create; only operatingMode and lifecycle may change",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "lane": {
+      "description": "Lane is a summoned session's lane.",
+      "enum": [
+        "remediation",
+        "upgrade",
+        "curation",
+        "escalation"
+      ],
+      "type": "string",
+      "x-kubernetes-validations": [
+        {
+          "message": "immutable after create; only operatingMode and lifecycle may change",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "lifecycle": {
+      "description": "Lifecycle overrides the default timers of D-09.",
+      "properties": {
+        "archiveAfter": {
+          "description": "ArchiveAfter archives a suspended session after this long, once its rescue\nbundle is verified (D-09: 168h).",
+          "type": "string",
+          "x-kubernetes-validations": [
+            {
+              "message": "must be a positive Go duration such as 40m or 72h",
+              "rule": "duration(self) > duration('0s')"
+            }
+          ]
+        },
+        "idleSuspendAfter": {
+          "description": "IdleSuspendAfter suspends an idle session after this long (D-09: 72h for\ninteractive and remote sessions).",
+          "type": "string",
+          "x-kubernetes-validations": [
+            {
+              "message": "must be a positive Go duration such as 40m or 72h",
+              "rule": "duration(self) > duration('0s')"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "limits": {
+      "description": "Limits caps a task session; task mode only. Summoned callers get them from\ntheir policy.",
+      "properties": {
+        "maxTurns": {
+          "description": "MaxTurns caps the agent's turns. 0 means no cap.",
+          "format": "int32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeout": {
+          "description": "Timeout is the wall-clock limit, for example 3h.",
+          "type": "string",
+          "x-kubernetes-validations": [
+            {
+              "message": "must be a positive Go duration such as 40m or 72h",
+              "rule": "duration(self) > duration('0s')"
+            }
+          ]
+        }
+      },
+      "type": "object",
+      "x-kubernetes-validations": [
+        {
+          "message": "immutable after create; only operatingMode and lifecycle may change",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "llm": {
+      "description": "LLM is the LLM pool an opencode session leases (DESIGN-001 8.3).",
+      "properties": {
+        "pool": {
+          "description": "Pool is the LLMPool name, for example llm-coder.",
+          "maxLength": 63,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pool"
+      ],
+      "type": "object",
+      "x-kubernetes-validations": [
+        {
+          "message": "immutable after create; only operatingMode and lifecycle may change",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "mode": {
+      "description": "Mode is how the agent runs.",
+      "enum": [
+        "task",
+        "local",
+        "remote"
+      ],
+      "type": "string",
+      "x-kubernetes-validations": [
+        {
+          "message": "immutable after create; only operatingMode and lifecycle may change",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "model": {
+      "description": "Model is a full model id, never an alias (for example claude-opus-5-5), so\na Claude model starts with claude-. For opencode it is the LLM pool's model\nid.",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string",
+      "x-kubernetes-validations": [
+        {
+          "message": "immutable after create; only operatingMode and lifecycle may change",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "operatingMode": {
+      "default": "Running",
+      "description": "OperatingMode is the desired state of the pod.",
+      "enum": [
+        "Running",
+        "Suspended"
+      ],
+      "type": "string"
+    },
+    "parent": {
+      "description": "Parent is the session or caller that created this one. The API sets it from\nthe caller's token, never from the request body (D-05).",
+      "maxLength": 253,
+      "type": "string",
+      "x-kubernetes-validations": [
+        {
+          "message": "immutable after create; only operatingMode and lifecycle may change",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "profile": {
+      "description": "Profile names the Secrets, egress tier and standing grants the pod gets\n(D-18): full, dev or ops. Profiles are template data, so the schema checks\nthe form, not the name. Empty means the templates' default; a summoned\nsession always names one.",
+      "maxLength": 63,
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+      "type": "string",
+      "x-kubernetes-validations": [
+        {
+          "message": "immutable after create; only operatingMode and lifecycle may change",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "projectCanary": {
+      "description": "ProjectCanary is authored by the strict operator-owned canary route.\nIt permanently binds the original accepted source and reviewed policy.",
+      "properties": {
+        "captureOutput": {
+          "type": "boolean"
+        },
+        "catalogResourceVersion": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "catalogRevision": {
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "catalogUID": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "client": {
+          "maxLength": 127,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?/[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "type": "string"
+        },
+        "cloneOwner": {
+          "maxLength": 63,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "type": "string"
+        },
+        "commonRevision": {
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 63,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "type": "string"
+        },
+        "image": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "policyDigest": {
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "rulesRevision": {
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "snapshotDigest": {
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "templateRevision": {
+          "maxLength": 63,
+          "minLength": 1,
+          "type": "string"
+        },
+        "version": {
+          "enum": [
+            1
+          ],
+          "type": "integer"
+        }
+      },
+      "required": [
+        "catalogResourceVersion",
+        "catalogRevision",
+        "catalogUID",
+        "client",
+        "cloneOwner",
+        "id",
+        "image",
+        "policyDigest",
+        "rulesRevision",
+        "snapshotDigest",
+        "templateRevision",
+        "version"
+      ],
+      "type": "object",
+      "x-kubernetes-validations": [
+        {
+          "message": "project canary binding is immutable",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "prompt": {
+      "description": "Prompt is the task. Task mode only, and required there.",
+      "maxLength": 262144,
+      "minLength": 1,
+      "type": "string",
+      "x-kubernetes-validations": [
+        {
+          "message": "immutable after create; only operatingMode and lifecycle may change",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "repo": {
+      "description": "Repo is the repository the session works in, for example haynes-ops: a\nname, not a path (it becomes a directory in the pod).",
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.-]+$",
+      "type": "string",
+      "x-kubernetes-validations": [
+        {
+          "message": "repo is a repository name, not a path",
+          "rule": "self != '.' && self != '..'"
+        },
+        {
+          "message": "immutable after create; only operatingMode and lifecycle may change",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "restore": {
+      "description": "Restore is a rescue on the shared volume, <session>/<stamp> (D-67). On\nthe session's first boot agentd fetches that rescue's bundle for Repo\ninto refs/rescued/*, after checking it against the rescue's manifest.",
+      "maxLength": 80,
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?/[0-9]{8}-[0-9]{4}(-[0-9]+)?$",
+      "type": "string",
+      "x-kubernetes-validations": [
+        {
+          "message": "immutable after create; only operatingMode and lifecycle may change",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "sessionDirectory": {
+      "description": "SessionDirectory is selected only by the prospective operator canary route.",
+      "properties": {
+        "project": {
+          "maxLength": 63,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+          "type": "string"
+        },
+        "version": {
+          "enum": [
+            1
+          ],
+          "type": "integer"
+        }
+      },
+      "required": [
+        "project",
+        "version"
+      ],
+      "type": "object",
+      "x-kubernetes-validations": [
+        {
+          "message": "directory enrollment is immutable",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "size": {
+      "default": "M",
+      "description": "Size picks the requests and limits preset.",
+      "enum": [
+        "S",
+        "M",
+        "L"
+      ],
+      "type": "string",
+      "x-kubernetes-validations": [
+        {
+          "message": "immutable after create; only operatingMode and lifecycle may change",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "tools": {
+      "description": "Tools are the tool pools registered at boot (DESIGN-001 8.1), by ToolPool\nname. Empty means the profile's default.",
+      "items": {
+        "maxLength": 63,
+        "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+        "type": "string"
+      },
+      "maxItems": 32,
+      "type": "array",
+      "x-kubernetes-list-type": "set",
+      "x-kubernetes-validations": [
+        {
+          "message": "immutable after create; only operatingMode and lifecycle may change",
+          "rule": "self == oldSelf"
+        }
+      ]
+    },
+    "workspace": {
+      "description": "Workspace explicitly opts this session into a pre-provisioned workspace.\nOmission retains private repositories, even when later templates enable one.",
+      "properties": {
+        "id": {
+          "description": "ID must match the enabled template and the mounted workspace marker.",
+          "maxLength": 63,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object",
+      "x-kubernetes-validations": [
+        {
+          "message": "immutable after create",
+          "rule": "self == oldSelf"
+        }
+      ]
+    }
+  },
+  "required": [
+    "agent",
+    "mode",
+    "model",
+    "repo"
+  ],
+  "type": "object",
+  "x-kubernetes-validations": [
+    {
+      "message": "prompt is required in task mode and not allowed in local or remote mode",
+      "rule": "self.mode == 'task' ? has(self.prompt) : !has(self.prompt)"
+    },
+    {
+      "message": "limits apply to task mode only",
+      "rule": "!has(self.limits) || self.mode == 'task'"
+    },
+    {
+      "message": "llm is required for agent opencode and not allowed for claude or codex",
+      "rule": "self.agent == 'opencode' ? has(self.llm) : !has(self.llm)"
+    },
+    {
+      "message": "a Claude model is a full id such as claude-opus-5-5, never an alias",
+      "rule": "self.agent != 'claude' || self.model.startsWith('claude-')"
+    },
+    {
+      "message": "caller and lane go together: a summoned session sets both, Tom's own sessions neither",
+      "rule": "has(self.caller) == has(self.lane)"
+    },
+    {
+      "message": "idempotencyKey is for summoned sessions only: set caller and lane",
+      "rule": "!has(self.idempotencyKey) || has(self.caller)"
+    },
+    {
+      "message": "a summoned session runs in task or remote mode, never local",
+      "rule": "!has(self.caller) || self.mode != 'local'"
+    },
+    {
+      "message": "a summoned session names its profile, and it is never full (D-36)",
+      "rule": "!has(self.caller) || (has(self.profile) && self.profile != 'full')"
+    },
+    {
+      "message": "immutable after create: no spec field may be added or removed, except operatingMode and lifecycle",
+      "rule": "has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort) && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size) && has(self.profile) == has(oldSelf.profile) && has(self.tools) == has(oldSelf.tools) && has(self.llm) == has(oldSelf.llm) && has(self.parent) == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller) && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey) == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits) && has(self.restore) == has(oldSelf.restore) && has(self.workspace) == has(oldSelf.workspace) && has(self.projectCanary) == has(oldSelf.projectCanary) && has(self.commonRules) == has(oldSelf.commonRules) && has(self.sessionDirectory) == has(oldSelf.sessionDirectory)"
+    },
+    {
+      "message": "project canaries require their fixed private bounded subscription task contract",
+      "rule": "!has(self.projectCanary) || (self.mode == 'task' && self.agent in ['claude', 'codex'] && self.size == 'S' && has(self.parent) && self.parent == self.projectCanary.client && !has(self.workspace) && !has(self.restore) && !has(self.tools) && !has(self.llm) && !has(self.caller) && !has(self.lane) && !has(self.lifecycle) && has(self.limits) && has(self.limits.timeout) && duration(self.limits.timeout) <= duration('180s') && (self.agent == 'codex' ? (!has(self.limits.maxTurns) || self.limits.maxTurns == 0) : (has(self.limits.maxTurns) && self.limits.maxTurns > 0 && self.limits.maxTurns <= 3)))"
+    },
+    {
+      "message": "common rules require the matching managed canary binding",
+      "rule": "!has(self.commonRules) || (has(self.projectCanary) && has(self.projectCanary.commonRevision) && self.projectCanary.commonRevision == self.commonRules.commonRevision)"
+    },
+    {
+      "message": "directory enrollment requires a managed canary",
+      "rule": "!has(self.sessionDirectory) || has(self.projectCanary)"
+    }
+  ]
+}
