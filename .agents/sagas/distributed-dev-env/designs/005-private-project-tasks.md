@@ -191,3 +191,34 @@ tracking: a non-NotFound observation failure before any Pod Create records the
 same intent as not-created. A later healthy reconciliation may resume that exact
 intent once within the original policy window. Missing or changed authority stays
 latched; no new slot, UID, deadline or direct runtime retry follows.
+
+## 2026-10-16: sealed pilot schema compatibility and preflight (#347)
+
+The first approved pilot was rejected before either Session existed. The handler
+set commonRules and sessionDirectory without projectCanary, while the installed
+CRD required that canary binding. Fake-client handler tests and typed template
+checks did not execute Kubernetes CEL admission. The earlier assertion that no
+CRD update was needed was wrong; retain that failed runtime evidence.
+
+A separate immutable privatePilot spec binding records seal UID, policy digest,
+common revision and slot. It is mutually exclusive with projectCanary. CEL keeps
+the exact dev-env/Codex/Sol-high/S/15-minute/private-profile contract and matching
+common rules plus directory enrollment; it does not open ordinary admission.
+The existing live seal/policy/catalog checks, fixed names, expiry, no-children
+and controller guards remain authoritative. MatchSession verifies this binding
+against the retained policy, and any privatePilot binding marks a pilot even
+when other markers are missing.
+
+Before creating actors, the supported CLI --dry-run=server uses a dedicated
+POST /v1/private-pilot/preflight endpoint. It never calls the create endpoint
+and never falls back if the endpoint is unsupported. The operator builds the
+same exact object, performs Kubernetes Create with DryRunAll, and confirms the
+slot remains absent. A preflight may inspect a configured policy before or after
+its window, but never authorizes execution or changes the window. Real creates
+still require the actual open clock. Preflight refuses consumed slots and returns
+an explicit nonpersistent result, not an executor identity or an access grant.
+
+Install the reviewed matching CRD before an operator needing this field. An old
+installed schema must refuse preflight; source/envtest success does not prove an
+installed update. No rollout, pilot reopening, seal replacement, new window,
+credential or security change is included in this source correction.

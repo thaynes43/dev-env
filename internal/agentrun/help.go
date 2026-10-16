@@ -143,6 +143,7 @@ for a project with several. Declared projects take task mode only. Their rules
 and catalog revision come from the server.
 
 Flags:
+  --dry-run=server           requires --project; admission only, never creates or falls back
   -p, --prompt <task>        the task, at most 64 KiB
   --local                    an interactive session instead of a task: the TUI, no prompt
   --prompt-file <path>       read the task from a file instead; - reads stdin

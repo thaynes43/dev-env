@@ -3,10 +3,15 @@ package apiserver
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,8 +19,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -261,4 +269,177 @@ func TestPrivatePilotDeletingSlotRefusesBothAdmissions(t *testing.T) {
 	if err := f.c.List(context.Background(), &sessions); err != nil || len(sessions.Items) != 1 {
 		t.Fatal("peer admitted after deletion", err)
 	}
+}
+
+func TestPrivatePilotPreflightCannotPersistOrFallback(t *testing.T) {
+	for _, kind := range []string{"valid", "before", "expired", "schema-error", "occupied", "disabled", "ordinary", "canary", "wrong-caller"} {
+		t.Run(kind, func(t *testing.T) {
+			dryCalls := 0
+			realCalls := 0
+			seeding := true
+			f, b := pilotAPI(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) error {
+				if seeding {
+					return c.Create(ctx, o, opts...)
+				}
+				co := (&client.CreateOptions{}).ApplyOptions(opts)
+				if len(co.DryRun) != 1 || co.DryRun[0] != metav1.DryRunAll {
+					realCalls++
+					return errors.New("unexpected persistent create")
+				}
+				dryCalls++
+				if kind == "schema-error" {
+					return apierrors.NewInvalid(schema.GroupKind{Group: v1alpha1.GroupVersion.Group, Kind: "AgentSession"}, o.GetName(), nil)
+				}
+				return nil
+			}})
+			req := b.Policy.Request(0)
+			token := tokClient
+			switch kind {
+			case "before":
+				f.now = b.Policy.NotBefore.Add(-time.Hour)
+			case "expired":
+				f.now = b.Policy.ExpiresAt.Add(time.Hour)
+			case "disabled":
+				f.srv.PrivatePilot = nil
+			case "ordinary":
+				req.Project = ""
+			case "canary":
+				req = apiv1.CreateSessionRequest{CanaryID: "ignored"}
+			case "wrong-caller":
+				token = tokHuman
+			case "occupied":
+				if err := f.c.Create(context.Background(), b.Session(t, 0)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			seeding = false
+			w := f.do(http.MethodPost, apiv1.PilotPreflightPath, token, req)
+			if kind == "valid" || kind == "before" || kind == "expired" {
+				if w.Code != 200 || dryCalls != 1 {
+					t.Fatal(w.Code, w.Body.String(), dryCalls)
+				}
+				var result apiv1.PilotPreflight
+				if json.Unmarshal(w.Body.Bytes(), &result) != nil || result.DryRun != "All" || result.Persisted {
+					t.Fatal("not explicit dry-run")
+				}
+			} else if w.Code < 400 {
+				t.Fatal("bad preflight accepted", w.Body.String())
+			}
+			if realCalls != 0 {
+				t.Fatal("persistent create attempted")
+			}
+			if kind != "occupied" {
+				var absent v1alpha1.AgentSession
+				if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: "dev-agents", Name: projectcanary.PilotSessionName(0)}, &absent); !apierrors.IsNotFound(err) {
+					t.Fatal("dry-run persisted", err)
+				}
+			}
+		})
+	}
+}
+
+// This passes the actual shared API builder output to a real kube-apiserver.
+// No reconciler, kubelet or provider runs, and every Session write is DryRunAll.
+func TestPrivatePilotPreflightRealSchemaAdmission(t *testing.T) {
+	realClient, err := client.New(envConfig(t), client.Options{Scheme: testScheme})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, ns := range []string{"dev-agents"} {
+		if err := realClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil && !apierrors.IsAlreadyExists(err) {
+			t.Fatal(err)
+		}
+	}
+	crd := &unstructured.Unstructured{}
+	crd.SetGroupVersionKind(schema.GroupVersionKind{Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition"})
+	if err := realClient.Get(ctx, types.NamespacedName{Name: "agentsessions.dev-env.haynesops.com"}, crd); err != nil {
+		t.Fatal(err)
+	}
+	corrected := crd.DeepCopy()
+	old := crd.DeepCopy()
+	captured, err := os.ReadFile("testdata/agentsession-installed-spec-20261016.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var installedSpec map[string]any
+	if err := json.Unmarshal(captured, &installedSpec); err != nil {
+		t.Fatal(err)
+	}
+	oldJSON, _ := json.Marshal(installedSpec)
+	if fmt.Sprintf("%x", sha256.Sum256(oldJSON)) != "6d5db36566f417cabb83d8b5151153b6f8c44c762f24e86a91f8e63c42e9ac63" {
+		t.Fatal("captured installed spec schema fingerprint changed")
+	}
+	versions := old.Object["spec"].(map[string]any)["versions"].([]any)
+	versions[0].(map[string]any)["schema"].(map[string]any)["openAPIV3Schema"].(map[string]any)["properties"].(map[string]any)["spec"] = installedSpec
+	t.Logf("captured installed/released spec schema SHA256=%x", sha256.Sum256(oldJSON))
+	if err := realClient.Update(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	restore := func() {
+		cur := corrected.DeepCopy()
+		if err := realClient.Get(ctx, client.ObjectKeyFromObject(cur), cur); err != nil {
+			t.Fatal(err)
+		}
+		cur.Object["spec"] = corrected.Object["spec"]
+		if err := realClient.Update(ctx, cur); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(restore)
+	var payload []byte
+	f, b := pilotAPI(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) error {
+		co := (&client.CreateOptions{}).ApplyOptions(opts)
+		if len(co.DryRun) != 1 || co.DryRun[0] != metav1.DryRunAll {
+			t.Fatal("real API write was not dry-run")
+		}
+		o.SetUID("")
+		o.SetGeneration(0)
+		o.SetCreationTimestamp(metav1.Time{})
+		payload, _ = json.Marshal(o)
+		return realClient.Create(ctx, o, opts...)
+	}, Get: func(ctx context.Context, c client.WithWatch, k client.ObjectKey, o client.Object, opts ...client.GetOption) error {
+		if _, ok := o.(*v1alpha1.AgentSession); ok {
+			return realClient.Get(ctx, k, o, opts...)
+		}
+		return c.Get(ctx, k, o, opts...)
+	}})
+	request := b.Policy.Request(0)
+	call := func() *httptest.ResponseRecorder {
+		return f.do(http.MethodPost, apiv1.PilotPreflightPath, tokClient, request)
+	}
+	var w *httptest.ResponseRecorder
+	pollErr := wait.PollUntilContextTimeout(ctx, 250*time.Millisecond, 10*time.Second, true, func(context.Context) (bool, error) { w = call(); return w.Code == 422, nil })
+	if pollErr != nil {
+		t.Fatalf("installed schema did not converge: %v; last response %v", pollErr, w)
+	}
+	if w.Code != 422 || !strings.Contains(w.Body.String(), "matching managed canary binding") || !strings.Contains(w.Body.String(), "directory enrollment requires") {
+		t.Fatal("released schema counterexample not reproduced", w.Code, w.Body.String())
+	}
+	oldPayload := append([]byte(nil), payload...)
+	t.Logf("released-schema actual generated payload rejected; SHA256=%x", sha256.Sum256(payload))
+	restore()
+	pollErr = wait.PollUntilContextTimeout(ctx, 250*time.Millisecond, 10*time.Second, true, func(context.Context) (bool, error) { w = call(); return w.Code == 200, nil })
+	if pollErr != nil {
+		t.Fatalf("corrected schema did not converge: %v; last response %v", pollErr, w)
+	}
+	if w.Code != 200 {
+		t.Fatal("corrected schema refused exact shared-builder object", w.Code, w.Body.String())
+	}
+	if !bytes.Equal(payload, oldPayload) {
+		t.Fatal("schema comparison changed the submitted payload")
+	}
+	var absent v1alpha1.AgentSession
+	if err := realClient.Get(ctx, types.NamespacedName{Namespace: "dev-agents", Name: projectcanary.PilotSessionName(0)}, &absent); !apierrors.IsNotFound(err) {
+		t.Fatal("real dry-run persisted actor", err)
+	}
+	if out := os.Getenv("C7_PILOT_SCHEMA_EVIDENCE_DIR"); out != "" {
+		if err := os.WriteFile(filepath.Join(out, "generated-session.json"), append(payload, '\n'), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(out, "real-schema-dryrun.json"), []byte(fmt.Sprintf(`{"samePayloadSHA256":"%x","releasedSchema":"REJECTED422","correctedSchema":"ACCEPTED200","persisted":false}`, sha256.Sum256(payload))), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Logf("corrected-schema SAME generated payload accepted; SHA256=%x; post-dry-run slot absent", sha256.Sum256(payload))
 }

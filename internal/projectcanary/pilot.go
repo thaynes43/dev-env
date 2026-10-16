@@ -110,7 +110,7 @@ func PilotKey(slot int) string {
 }
 func IsPilot(s *v1alpha1.AgentSession) bool {
 	_, marked := s.Annotations[PilotAnnotation]
-	return marked || slices.Contains(s.Finalizers, PilotFinalizer) || s.Name == PilotSessionName(0) || s.Name == PilotSessionName(1)
+	return s.Spec.PrivatePilot != nil || marked || slices.Contains(s.Finalizers, PilotFinalizer) || s.Name == PilotSessionName(0) || s.Name == PilotSessionName(1)
 }
 func (p *PilotPolicy) Request(slot int) apiv1.CreateSessionRequest {
 	if slot < 0 || slot > 1 {
@@ -192,6 +192,12 @@ func (p *PilotPolicy) ValidateTemplate(t *templates.Templates) error {
 	}
 	return validatePrivateTemplate(t, "thaynes43", "codex", PilotProfile, p.TemplateRevision, p.Image)
 }
+
+// SpecBinding is the schema-visible immutable projection of the retained policy.
+func (p *PilotPolicy) SpecBinding(slot int) *v1alpha1.PrivatePilotBinding {
+	return &v1alpha1.PrivatePilotBinding{SealUID: p.SealUID, PolicyDigest: p.Digest(), CommonRevision: p.CommonRevision, Slot: slot}
+}
+
 func (p *PilotPolicy) MatchSession(s *v1alpha1.AgentSession, slot int) error {
 	if p.Validate() != nil || slot < 0 || slot > 1 || s == nil || s.Namespace != "dev-agents" || s.Name != PilotSessionName(slot) || s.UID == "" || !s.DeletionTimestamp.IsZero() || !slices.Contains(s.Finalizers, PilotFinalizer) || s.Annotations[PilotAnnotation] != p.Binding(slot) || s.Labels[v1alpha1.LabelIdempotencyKey] != PilotKey(slot) {
 		return ErrRefused
@@ -201,6 +207,9 @@ func (p *PilotPolicy) MatchSession(s *v1alpha1.AgentSession, slot int) error {
 		return ErrRefused
 	}
 	spec := s.Spec
+	if spec.PrivatePilot == nil || *spec.PrivatePilot != *p.SpecBinding(slot) {
+		return ErrRefused
+	}
 	req := p.Request(slot)
 	if spec.Parent != PilotCaller || spec.Agent != v1alpha1.AgentCodex || spec.Mode != v1alpha1.ModeTask || spec.Repo != PilotProject || spec.Base != "main" || spec.Model != req.Model || spec.Effort != req.Effort || spec.Prompt != req.Prompt || spec.Profile != PilotProfile || spec.Size != v1alpha1.SizeS || spec.Workspace != nil || spec.ProjectCanary != nil || spec.Restore != "" || spec.Lifecycle != nil || len(spec.Tools) != 0 || spec.LLM != nil || spec.Caller != "" || spec.Lane != "" || spec.Limits == nil || spec.Limits.Timeout == nil || spec.Limits.Timeout.Duration != 15*time.Minute || spec.Limits.MaxTurns != 0 || spec.SessionDirectory == nil || spec.SessionDirectory.Version != 1 || spec.SessionDirectory.Project != PilotProject {
 		return ErrRefused

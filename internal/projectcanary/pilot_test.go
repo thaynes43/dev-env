@@ -104,3 +104,38 @@ func TestPilotPolicySealAndSourceDriftFailClosed(t *testing.T) {
 		})
 	}
 }
+
+func TestPilotSpecBindingRejectsTampering(t *testing.T) {
+	f := testutil.NewPilot(t)
+	s := f.Session(t, 0)
+	if err := f.Policy.MatchSession(s, 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"missing", "seal", "policy", "common", "slot", "stripped-markers"} {
+		t.Run(kind, func(t *testing.T) {
+			c := s.DeepCopy()
+			switch kind {
+			case "missing":
+				c.Spec.PrivatePilot = nil
+			case "seal":
+				c.Spec.PrivatePilot.SealUID = "66666666-6666-4666-8666-666666666666"
+			case "policy":
+				c.Spec.PrivatePilot.PolicyDigest = strings.Repeat("a", 64)
+			case "common":
+				c.Spec.PrivatePilot.CommonRevision = strings.Repeat("a", 64)
+			case "slot":
+				c.Spec.PrivatePilot.Slot = 1
+			case "stripped-markers":
+				c.Name = "foreign"
+				c.Annotations = nil
+				c.Finalizers = nil
+				if !projectcanary.IsPilot(c) {
+					t.Fatal("typed pilot lost marker")
+				}
+			}
+			if f.Policy.MatchSession(c, 0) == nil {
+				t.Fatal("forged binding accepted")
+			}
+		})
+	}
+}

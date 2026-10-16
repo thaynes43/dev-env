@@ -14,10 +14,10 @@ import (
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 )
 
-func (s *Server) createPrivatePilot(ctx context.Context, w http.ResponseWriter, c *caller, req apiv1.CreateSessionRequest) (int, any, error) {
+func (s *Server) createPrivatePilot(ctx context.Context, w http.ResponseWriter, c *caller, req apiv1.CreateSessionRequest, dryRun bool) (int, any, error) {
 	p := s.PrivatePilot
 	slot, ok := p.Slot(req)
-	if !ok || s.PrivateProjectTasks || !s.ManagedCodexTasks || !s.PrivateHistoryRetention || !s.RetainedCommonRules || s.Live == nil || s.Projects == nil || s.Projects.CloneOwner != "thaynes43" || s.Policy.SessionNamespace != "dev-agents" || s.SessionDirectory == nil || !slices.Contains(s.SessionDirectoryProjects, projectcanary.PilotProject) || !p.Open(s.now()) {
+	if !ok || s.PrivateProjectTasks || !s.ManagedCodexTasks || !s.PrivateHistoryRetention || !s.RetainedCommonRules || s.Live == nil || s.Projects == nil || s.Projects.CloneOwner != "thaynes43" || s.Policy.SessionNamespace != "dev-agents" || s.SessionDirectory == nil || !slices.Contains(s.SessionDirectoryProjects, projectcanary.PilotProject) || (!dryRun && !p.Open(s.now())) {
 		return 0, nil, forbidden("sealed private pilot admission is unavailable or expired")
 	}
 	if c.kind != kindClient || c.parent != projectcanary.PilotCaller || s.callerHasTaskBudget(c) {
@@ -25,7 +25,11 @@ func (s *Server) createPrivatePilot(ctx context.Context, w http.ResponseWriter, 
 	}
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
-	evidence, err := p.Resolve(ctx, s.Live, s.PrivateCanaryTemplates, s.now())
+	resolveTime := s.now()
+	if dryRun {
+		resolveTime = p.NotBefore
+	}
+	evidence, err := p.Resolve(ctx, s.Live, s.PrivateCanaryTemplates, resolveTime)
 	if err != nil {
 		return 0, nil, forbidden("sealed pilot authority is unavailable or changed")
 	}
@@ -48,6 +52,9 @@ func (s *Server) createPrivatePilot(ctx context.Context, w http.ResponseWriter, 
 		}
 	}
 	if found != nil {
+		if dryRun {
+			return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "preflight requires an unused original slot")
+		}
 		w.Header().Set("Location", apiv1.SessionPath(found.Name))
 		return http.StatusOK, view(found, false), nil
 	}
@@ -62,6 +69,7 @@ func (s *Server) createPrivatePilot(ctx context.Context, w http.ResponseWriter, 
 	sess.Finalizers = append(sess.Finalizers, projectcanary.PilotFinalizer)
 	sess.Annotations[projectcanary.PilotAnnotation] = p.Binding(slot)
 	sess.Annotations[projectcanary.PilotPolicyAnnotation] = p.Record(evidence)
+	sess.Spec.PrivatePilot = p.SpecBinding(slot)
 	sess.Spec.CommonRules, err = evidence.Common.Binding()
 	if err != nil {
 		return 0, nil, forbidden("pilot common rules are unconfirmed")
@@ -71,9 +79,25 @@ func (s *Server) createPrivatePilot(ctx context.Context, w http.ResponseWriter, 
 		return 0, nil, err
 	}
 	// Re-read every authority and clock immediately before the only create.
-	latest, err := p.Resolve(ctx, s.Live, s.PrivateCanaryTemplates, s.now())
-	if err != nil || string(latest.Snapshot) != string(evidence.Snapshot) || latest.CatalogUID != evidence.CatalogUID || latest.CatalogResourceVersion != evidence.CatalogResourceVersion || evidence.Common.Confirm(ctx, s.Live) != nil || !p.Open(s.now()) {
+	resolveTime = s.now()
+	if dryRun {
+		resolveTime = p.NotBefore
+	}
+	latest, err := p.Resolve(ctx, s.Live, s.PrivateCanaryTemplates, resolveTime)
+	if err != nil || string(latest.Snapshot) != string(evidence.Snapshot) || latest.CatalogUID != evidence.CatalogUID || latest.CatalogResourceVersion != evidence.CatalogResourceVersion || evidence.Common.Confirm(ctx, s.Live) != nil || (!dryRun && !p.Open(s.now())) {
 		return 0, nil, forbidden("pilot admission expired or authority changed before create")
+	}
+	if dryRun {
+		if err := s.Client.Create(ctx, sess, client.DryRunAll); err != nil {
+			return 0, nil, fromKubeError(err, "validate sealed pilot dry-run")
+		}
+		var absent v1alpha1.AgentSession
+		if err := s.Live.Get(ctx, client.ObjectKeyFromObject(sess), &absent); !apierrors.IsNotFound(err) {
+			return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "dry-run slot absence is unconfirmed")
+		}
+		sess.UID = ""
+		sess.ResourceVersion = ""
+		return http.StatusOK, apiv1.PilotPreflight{DryRun: "All", Persisted: false, Session: view(sess, false)}, nil
 	}
 	createErr := s.Client.Create(ctx, sess)
 	var original v1alpha1.AgentSession
