@@ -1,5 +1,9 @@
 # HANDOFF: start here
 
+**Current stopped state (2026-10-16):** read the [Cursor wind-down handoff](DEV-ENV-CURSOR-HANDOFF-2026-10-16.md)
+first. It supersedes older ownership/next-pickup wording below. Implementation,
+manual tests, releases and trials remain stopped; this link grants no restart.
+
 The front door for any agent that opens this repo, in the cluster's dev-env pod or on
 Tom's own machine. Read this page, then [CLAUDE.md](../CLAUDE.md) (the rules), then
 the saga. To continue building, follow the
