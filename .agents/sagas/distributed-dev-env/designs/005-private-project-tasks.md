@@ -109,6 +109,13 @@ This source-only follow-up to #338/#340 adds no general admission or runtime
 permission. `--private-project-pilot=JSON` defaults empty. It requires general
 `--enable-private-project-tasks=false`, managed Codex, retained common rules,
 private-history retention, the accepted catalog and project directory support.
+Startup also requires existing `--enable-task-budgets` and exact
+`--task-budget-namespace=dev-env-budgets` (the seal lives in that existing protected
+namespace). Their existing coordinator-host/budget-worker configuration must
+already be valid; this source does not provision or assign a new budget.
+The API must be enabled with its concrete HTTPS URL, catalog clone owner
+`thaynes43`, authenticated client `dev/dev-env`, Session namespace `dev-agents`,
+and directory metadata scope `dev-env`. Removing any required flag fails startup.
 Old canary records are unchanged and cannot be reused by this route.
 
 The policy fixes project/repository `dev-env`, caller `dev/dev-env` (trusted

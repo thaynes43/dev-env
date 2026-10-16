@@ -264,7 +264,7 @@ func TestPrivatePilotFlagDefaultOffAndExactExistingAuthority(t *testing.T) {
 	if err != nil || o.privatePilot == nil || o.privateProjectTasks {
 		t.Fatal("exact existing authority refused", err)
 	}
-	for _, extra := range []string{"--enable-private-project-tasks", "--enable-private-history-retention=false", "--enable-managed-codex-tasks=false", "--client-service-accounts=other/client", "--session-namespace=other", "--session-directory-projects=other", "--private-project-pilot={}"} {
+	for _, extra := range []string{"--enable-private-project-tasks", "--enable-private-history-retention=false", "--enable-managed-codex-tasks=false", "--client-service-accounts=other/client", "--session-namespace=other", "--session-directory-projects=other", "--enable-task-budgets=false", "--task-budget-namespace=other", "--private-project-pilot={}"} {
 		if _, err := parseFlags(append(slices.Clone(base), extra)); err == nil {
 			t.Fatal("pilot widened", extra)
 		}
