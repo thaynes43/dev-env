@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.29.1](https://github.com/thaynes43/dev-env/compare/v2.29.0...v2.29.1) (2026-10-16)
+
+
+### Bug Fixes
+
+* validate sealed pilots against schema before launch ([#348](https://github.com/thaynes43/dev-env/issues/348)) ([5d17250](https://github.com/thaynes43/dev-env/commit/5d172507bceba1d1b115b1584926c16e94901fe5))
+
 ## [2.29.0](https://github.com/thaynes43/dev-env/compare/v2.28.0...v2.29.0) (2026-10-16)
 
 
