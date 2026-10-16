@@ -222,3 +222,40 @@ Install the reviewed matching CRD before an operator needing this field. An old
 installed schema must refuse preflight; source/envtest success does not prove an
 installed update. No rollout, pilot reopening, seal replacement, new window,
 credential or security change is included in this source correction.
+
+
+## 2026-10-16: distinct retained pilot cohorts (#350)
+
+The original sealed policy remains bound to its expired window, image and template.
+A new window cannot reuse or replace that immutable seal. Tom approved a separate
+bounded retry for October 16, 18:00–18:30 UTC (2:00–2:30 PM EDT), with the same two
+Codex Sol/high actors and existing access/resource limits. This source change
+provides distinct retained identities; source acceptance alone opens no admission.
+
+PilotPolicy gains optional `cohort`. Empty or omitted means the original v1 cohort:
+its JSON serialization, digest, seal `dev-env-private-pilot-v1`, Session names and
+idempotency keys are unchanged. A named cohort is 1–32 lowercase DNS-label characters
+with alphanumeric endpoints; `v1` is reserved so it cannot alias the legacy cohort.
+It derives one immutable seal `dev-env-private-pilot-<cohort>`, two retained Sessions
+`private-pilot-<cohort>-a` and `-b`, and corresponding `c7-` prefixed keys. Requests
+cannot select a cohort or supply names: only the reviewed operator policy selects it.
+The policy digest includes a nonempty cohort and retains all existing source/window
+pins. The existing immutable spec binding already contains that digest, so no new
+schema field, caller permission or resource grant is needed.
+
+Resolve reads only that policy's seal. API admission, replay, both-slot fencing,
+controller validation and retained-record interpretation use the same derived names.
+Legacy records always decode their original empty cohort; they are never rebound to
+the currently configured policy. A session's retained policy determines its slot,
+including slot B. Cohort names remain pilot identities even if outer markers vanish,
+and typed bindings/finalizers continue the existing fail-closed recognition.
+
+Every cohort still has exactly two slots. Third requests, cross-cohort keys or
+records, missing/replaced/wrong seals and changed policy/source pins fail closed.
+Consumed records stay consumed. No seal creation/reseed/delete, retry permission,
+children, new provider, resources, RBAC, egress, auth or v1 action is added. The
+supported operator `/v1/private-pilot/preflight` uses only DryRunAll and must pass
+before any future approved actor create; direct Kubernetes create is not a fallback.
+The already approved retry requires its own exact GitOps cohort record, actual UID,
+reviewed policy and inverse, signed release and installed pins. The window never
+extends: failed validation or a missed window aborts and closes admission.

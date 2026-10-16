@@ -37,7 +37,12 @@ import (
 
 func pilotAPI(t *testing.T, funcs interceptor.Funcs) (*fixture, testutil.PilotFixture) {
 	t.Helper()
+	return pilotAPIForCohort(t, funcs, "")
+}
+func pilotAPIForCohort(t *testing.T, funcs interceptor.Funcs, cohort string) (*fixture, testutil.PilotFixture) {
+	t.Helper()
 	b := testutil.NewPilot(t)
+	b.SetCohort(cohort)
 	create := funcs.Create
 	funcs.Create = func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) error {
 		if s, ok := o.(*v1alpha1.AgentSession); ok {
@@ -442,4 +447,74 @@ func TestPrivatePilotPreflightRealSchemaAdmission(t *testing.T) {
 		}
 	}
 	t.Logf("corrected-schema SAME generated payload accepted; SHA256=%x; post-dry-run slot absent", sha256.Sum256(payload))
+}
+
+func TestPrivatePilotFreshCohortPreflightAndRetainedLegacy(t *testing.T) {
+	dryCalls := 0
+	f, b := pilotAPIForCohort(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) error {
+		if _, ok := o.(*v1alpha1.AgentSession); ok {
+			co := (&client.CreateOptions{}).ApplyOptions(opts)
+			if len(co.DryRun) > 0 {
+				if len(co.DryRun) != 1 || co.DryRun[0] != metav1.DryRunAll {
+					t.Fatal("wrong dry-run")
+				}
+				dryCalls++
+				return nil
+			}
+		}
+		return c.Create(ctx, o, opts...)
+	}}, "c7-20261016-1800")
+	legacy := testutil.NewPilot(t)
+	old := legacy.Session(t, 0)
+	if err := f.c.Create(context.Background(), old); err != nil {
+		t.Fatal(err)
+	}
+	legacy.Seal.ResourceVersion = ""
+	if err := f.c.Create(context.Background(), legacy.Seal); err != nil {
+		t.Fatal(err)
+	}
+	oldUID := old.UID
+	for slot := range 2 {
+		req := b.Policy.Request(slot)
+		if w := f.do(http.MethodPost, apiv1.PilotPreflightPath, tokClient, req); w.Code != 200 {
+			t.Fatal("fresh preflight", w.Code, w.Body.String())
+		}
+		var absent v1alpha1.AgentSession
+		if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: "dev-agents", Name: b.Policy.SessionName(slot)}, &absent); !apierrors.IsNotFound(err) {
+			t.Fatal("preflight persisted", err)
+		}
+		if w := f.do(http.MethodPost, apiv1.SessionsPath, tokClient, req); w.Code != 201 {
+			t.Fatal("fresh create", w.Code, w.Body.String())
+		}
+		var created v1alpha1.AgentSession
+		if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: "dev-agents", Name: b.Policy.SessionName(slot)}, &created); err != nil || b.Policy.MatchSession(&created, slot) != nil {
+			t.Fatal("wrong retained identity", err)
+		}
+		uid := created.UID
+		if w := f.do(http.MethodPost, apiv1.SessionsPath, tokClient, req); w.Code != 200 {
+			t.Fatal("fresh replay", w.Code, w.Body.String())
+		}
+		if err := f.c.Get(context.Background(), client.ObjectKeyFromObject(&created), &created); err != nil || created.UID != uid {
+			t.Fatal("replay replaced", err)
+		}
+		if w := f.do(http.MethodPost, apiv1.PilotPreflightPath, tokClient, req); w.Code != 409 {
+			t.Fatal("consumed preflight accepted", w.Code)
+		}
+	}
+	if dryCalls != 2 {
+		t.Fatal("not exactly two noncreating validations", dryCalls)
+	}
+	for _, req := range []apiv1.CreateSessionRequest{legacy.Policy.Request(0), func() apiv1.CreateSessionRequest { r := b.Policy.Request(0); r.IdempotencyKey = "third"; return r }()} {
+		if w := f.do(http.MethodPost, apiv1.SessionsPath, tokClient, req); w.Code < 400 {
+			t.Fatal("cross-cohort/third request accepted")
+		}
+	}
+	var kept v1alpha1.AgentSession
+	if err := f.c.Get(context.Background(), client.ObjectKeyFromObject(old), &kept); err != nil || kept.UID != oldUID || legacy.Policy.MatchSession(&kept, 0) != nil {
+		t.Fatal("legacy record changed", err)
+	}
+	var seal corev1.ConfigMap
+	if err := f.c.Get(context.Background(), client.ObjectKeyFromObject(legacy.Seal), &seal); err != nil || seal.UID != legacy.Seal.UID || seal.Data["policySHA256"] != legacy.Policy.Digest() {
+		t.Fatal("legacy seal changed", err)
+	}
 }

@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -214,6 +215,39 @@ func TestPrivatePilotReadFailureAfterReservationDistinguishesAuthorityChange(t *
 			}
 			if pods != want || kept.Status.PrivateHistory.ExecutorIntent != intent {
 				t.Fatalf("unexpected attempt or changed intent: pods=%d want=%d history=%+v", pods, want, kept.Status.PrivateHistory)
+			}
+		})
+	}
+}
+
+func TestPrivatePilotFreshCohortBothSlotsAndLegacyRetention(t *testing.T) {
+	for slot := range 2 {
+		t.Run(fmt.Sprint(slot), func(t *testing.T) {
+			b := testutil.NewPilot(t)
+			b.SetCohort("c7-20261016-1800")
+			s := b.Session(t, slot)
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(append(b.Objects(), s)...).WithStatusSubresource(&v1alpha1.AgentSession{}).Build()
+			r := &Reconciler{Client: c, APIReader: c, Templates: client.ObjectKeyFromObject(b.Template), APIURL: "https://operator.example", PrivatePilot: b.Policy, ManagedCodexTasks: true, PrivateHistoryRetention: true, RetainedCommonRules: true, PrivateProjectCloneOwner: "thaynes43", Now: func() time.Time { return b.Now }}
+			if err := r.validateProjectCanary(context.Background(), s, b.Templates); err != nil {
+				t.Fatal("fresh cohort slot refused", err)
+			}
+			pod, err := buildManagedPod(s, b.Templates, r.APIURL, true, false, nil)
+			if err != nil {
+				t.Fatal("fresh session document/retained record", err)
+			}
+			if pod.Spec.RestartPolicy != corev1.RestartPolicyNever || pod.Spec.ActiveDeadlineSeconds == nil || *pod.Spec.ActiveDeadlineSeconds != 1200 {
+				t.Fatal("lost finite bounds")
+			}
+			other := *b.Policy
+			other.Cohort = "other-1800"
+			r.PrivatePilot = &other
+			if err := r.validateProjectCanary(context.Background(), s, b.Templates); err == nil {
+				t.Fatal("cross-cohort controller accepted")
+			}
+			r.PrivatePilot = nil
+			obs := observation{pod: owned[*corev1.Pod]{obj: pod}}
+			if err := r.ensure(context.Background(), s, b.Templates, &obs); err != nil || obs.pod.obj != pod {
+				t.Fatal("disabled policy changed existing executor", err)
 			}
 		})
 	}

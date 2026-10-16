@@ -3,6 +3,7 @@ package projectcanary
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -46,6 +47,13 @@ type PilotPolicy struct {
 	TemplateRevision string    `json:"templateRevision"`
 	Image            string    `json:"image"`
 	Prompts          []string  `json:"prompts"`
+	Cohort           string    `json:"cohort,omitempty"`
+}
+
+var pilotCohortPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$`)
+
+func validPilotCohort(cohort string) bool {
+	return cohort != "v1" && pilotCohortPattern.MatchString(cohort)
 }
 
 func ParsePilot(raw string) (*PilotPolicy, error) {
@@ -64,6 +72,9 @@ func ParsePilot(raw string) (*PilotPolicy, error) {
 }
 func (p *PilotPolicy) Validate() error {
 	if p == nil || p.NotBefore.IsZero() || !p.ExpiresAt.After(p.NotBefore) || p.ExpiresAt.Sub(p.NotBefore) > 30*time.Minute || !protocol.ValidKubeUID(p.SealUID) || !digestPattern.MatchString(p.CatalogRevision) || !digestPattern.MatchString(p.RulesRevision) || !commonrules.ValidDigest(p.CommonRevision) || !templateRevisionPattern.MatchString(p.TemplateRevision) || !imagePattern.MatchString(p.Image) || len(p.Prompts) != 2 {
+		return ErrRefused
+	}
+	if p.Cohort != "" && !validPilotCohort(p.Cohort) {
 		return ErrRefused
 	}
 	for _, t := range []time.Time{p.NotBefore, p.ExpiresAt} {
@@ -108,15 +119,54 @@ func PilotKey(slot int) string {
 	}
 	return ""
 }
+
+// Empty Cohort preserves the original v1 names and serialized policy digest.
+// Named cohorts never replace or reinterpret a previously retained identity.
+func (p *PilotPolicy) SealName() string {
+	if p.Cohort == "" {
+		return PilotSealName
+	}
+	return "dev-env-private-pilot-" + p.Cohort
+}
+
+func (p *PilotPolicy) SessionName(slot int) string {
+	if p.Cohort == "" {
+		return PilotSessionName(slot)
+	}
+	if slot < 0 || slot > 1 {
+		return ""
+	}
+	return "private-pilot-" + p.Cohort + []string{"-a", "-b"}[slot]
+}
+
+func (p *PilotPolicy) Key(slot int) string {
+	if p.Cohort == "" {
+		return PilotKey(slot)
+	}
+	name := p.SessionName(slot)
+	if name == "" {
+		return ""
+	}
+	return "c7-" + name
+}
+
+func namedPilotSession(name string) bool {
+	cohort, ok := strings.CutPrefix(name, "private-pilot-")
+	if !ok || !strings.HasSuffix(cohort, "-a") && !strings.HasSuffix(cohort, "-b") {
+		return false
+	}
+	return validPilotCohort(cohort[:len(cohort)-2])
+}
+
 func IsPilot(s *v1alpha1.AgentSession) bool {
 	_, marked := s.Annotations[PilotAnnotation]
-	return s.Spec.PrivatePilot != nil || marked || slices.Contains(s.Finalizers, PilotFinalizer) || s.Name == PilotSessionName(0) || s.Name == PilotSessionName(1)
+	return s.Spec.PrivatePilot != nil || marked || slices.Contains(s.Finalizers, PilotFinalizer) || s.Name == PilotSessionName(0) || s.Name == PilotSessionName(1) || namedPilotSession(s.Name)
 }
 func (p *PilotPolicy) Request(slot int) apiv1.CreateSessionRequest {
 	if slot < 0 || slot > 1 {
 		return apiv1.CreateSessionRequest{}
 	}
-	return apiv1.CreateSessionRequest{Project: PilotProject, Repo: PilotProject, Agent: "codex", Mode: "task", Model: "gpt-6.1-sol", Effort: "high", Prompt: p.Prompts[slot], Size: "S", Profile: PilotProfile, IdempotencyKey: PilotKey(slot), Limits: &apiv1.Limits{Timeout: "15m"}}
+	return apiv1.CreateSessionRequest{Project: PilotProject, Repo: PilotProject, Agent: "codex", Mode: "task", Model: "gpt-6.1-sol", Effort: "high", Prompt: p.Prompts[slot], Size: "S", Profile: PilotProfile, IdempotencyKey: p.Key(slot), Limits: &apiv1.Limits{Timeout: "15m"}}
 }
 func (p *PilotPolicy) Slot(req apiv1.CreateSessionRequest) (int, bool) {
 	if p.Validate() != nil {
@@ -132,7 +182,7 @@ func (p *PilotPolicy) Slot(req apiv1.CreateSessionRequest) (int, bool) {
 	return 0, false
 }
 func (p *PilotPolicy) Binding(slot int) string {
-	return p.SealUID + ":" + p.Digest() + ":" + PilotKey(slot)
+	return p.SealUID + ":" + p.Digest() + ":" + p.Key(slot)
 }
 
 // PilotEvidence is the existing common/catalog/template composition. No secret,
@@ -151,7 +201,7 @@ func (p *PilotPolicy) Resolve(ctx context.Context, reader client.Reader, templat
 		return out, ErrRefused
 	}
 	var seal corev1.ConfigMap
-	if reader.Get(ctx, types.NamespacedName{Namespace: PilotSealNamespace, Name: PilotSealName}, &seal) != nil || seal.Namespace != PilotSealNamespace || seal.Name != PilotSealName || string(seal.UID) != p.SealUID || seal.ResourceVersion == "" || !seal.DeletionTimestamp.IsZero() || seal.Immutable == nil || !*seal.Immutable || len(seal.OwnerReferences) != 0 || len(seal.BinaryData) != 0 || len(seal.Data) != 1 || seal.Data["policySHA256"] != p.Digest() {
+	if reader.Get(ctx, types.NamespacedName{Namespace: PilotSealNamespace, Name: p.SealName()}, &seal) != nil || seal.Namespace != PilotSealNamespace || seal.Name != p.SealName() || string(seal.UID) != p.SealUID || seal.ResourceVersion == "" || !seal.DeletionTimestamp.IsZero() || seal.Immutable == nil || !*seal.Immutable || len(seal.OwnerReferences) != 0 || len(seal.BinaryData) != 0 || len(seal.Data) != 1 || seal.Data["policySHA256"] != p.Digest() {
 		return out, ErrRefused
 	}
 	var cm corev1.ConfigMap
@@ -199,7 +249,7 @@ func (p *PilotPolicy) SpecBinding(slot int) *v1alpha1.PrivatePilotBinding {
 }
 
 func (p *PilotPolicy) MatchSession(s *v1alpha1.AgentSession, slot int) error {
-	if p.Validate() != nil || slot < 0 || slot > 1 || s == nil || s.Namespace != "dev-agents" || s.Name != PilotSessionName(slot) || s.UID == "" || !s.DeletionTimestamp.IsZero() || !slices.Contains(s.Finalizers, PilotFinalizer) || s.Annotations[PilotAnnotation] != p.Binding(slot) || s.Labels[v1alpha1.LabelIdempotencyKey] != PilotKey(slot) {
+	if p.Validate() != nil || slot < 0 || slot > 1 || s == nil || s.Namespace != "dev-agents" || s.Name != p.SessionName(slot) || s.UID == "" || !s.DeletionTimestamp.IsZero() || !slices.Contains(s.Finalizers, PilotFinalizer) || s.Annotations[PilotAnnotation] != p.Binding(slot) || s.Labels[v1alpha1.LabelIdempotencyKey] != p.Key(slot) {
 		return ErrRefused
 	}
 	record, err := decodePilotRecord(s)
@@ -255,7 +305,7 @@ func BoundPilot(s *v1alpha1.AgentSession) (PilotRecord, error) {
 		return r, err
 	}
 	slot := 0
-	if s.Name == PilotSessionName(1) {
+	if s.Name == r.Policy.SessionName(1) {
 		slot = 1
 	}
 	if r.Policy.MatchSession(s, slot) != nil {
