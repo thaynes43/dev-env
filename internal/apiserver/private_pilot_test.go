@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -408,12 +409,9 @@ func TestPrivatePilotPreflightRealSchemaAdmission(t *testing.T) {
 		return f.do(http.MethodPost, apiv1.PilotPreflightPath, tokClient, request)
 	}
 	var w *httptest.ResponseRecorder
-	for i := 0; i < 10; i++ {
-		w = call()
-		if w.Code == 422 {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
+	pollErr := wait.PollUntilContextTimeout(ctx, 250*time.Millisecond, 10*time.Second, true, func(context.Context) (bool, error) { w = call(); return w.Code == 422, nil })
+	if pollErr != nil {
+		t.Fatalf("installed schema did not converge: %v; last response %v", pollErr, w)
 	}
 	if w.Code != 422 || !strings.Contains(w.Body.String(), "matching managed canary binding") || !strings.Contains(w.Body.String(), "directory enrollment requires") {
 		t.Fatal("released schema counterexample not reproduced", w.Code, w.Body.String())
@@ -421,12 +419,9 @@ func TestPrivatePilotPreflightRealSchemaAdmission(t *testing.T) {
 	oldPayload := append([]byte(nil), payload...)
 	t.Logf("released-schema actual generated payload rejected; SHA256=%x", sha256.Sum256(payload))
 	restore()
-	for i := 0; i < 10; i++ {
-		w = call()
-		if w.Code == 200 {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
+	pollErr = wait.PollUntilContextTimeout(ctx, 250*time.Millisecond, 10*time.Second, true, func(context.Context) (bool, error) { w = call(); return w.Code == 200, nil })
+	if pollErr != nil {
+		t.Fatalf("corrected schema did not converge: %v; last response %v", pollErr, w)
 	}
 	if w.Code != 200 {
 		t.Fatal("corrected schema refused exact shared-builder object", w.Code, w.Body.String())
