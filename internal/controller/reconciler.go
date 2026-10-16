@@ -1098,6 +1098,13 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 				return nil
 			}
 		}
+		// Directory and retention I/O may cross the sealed admission window.
+		if projectcanary.IsPilot(s) {
+			if err := r.validatePrivatePilot(ctx, s, t); err != nil {
+				obs.removalBlocked = err
+				return nil
+			}
+		}
 		if err := r.create(ctx, "volume", claim); err != nil {
 			return err
 		}

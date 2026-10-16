@@ -113,18 +113,21 @@ Old canary records are unchanged and cannot be reused by this route.
 
 The policy fixes project/repository `dev-env`, caller `dev/dev-env` (trusted
 client only), provider `codex`, model `gpt-6.1-sol`, effort `high`, profile
-`rule-canary-codex`, size S (at most 2 CPUs/4Gi), and task timeout15m. Two reviewed
+`rule-canary-codex`, size S (at most 2 CPUs/4Gi), and task timeout 15m. Two reviewed
 prompts and keys select fixed retained Session names `private-pilot-v1-a` and
 `private-pilot-v1-b`. Neither requests nor policy can add a third slot or change
 those scope limits. No restore, native host, tool pool or child dispatch follows.
 This is two actors of one provider, not both-provider parity.
 
-Policy time is an absolute UTC notBefore/expiresAt interval of at most30m,
+Policy time is an absolute UTC notBefore/expiresAt interval of at most 30m,
 never time since process start. The API checks it before source reads and again
 before Create. The controller checks it before resource allocation and again
 before its first Pod Create. Already-running pods are preserved when the window
 ends, the feature is disabled, or the operator rolls. Admission expiry refuses
-new starts; it does not kill an existing actor. Each task still has its15m limit.
+new starts; it does not kill an existing actor. Each task still has its 15m limit. The whole Pod independently has a 900-second
+active deadline, RestartPolicyNever and 5-second termination grace; a failed
+container cannot restart into a native resume TUI. Admission is rechecked after
+directory/retention I/O immediately before a missing HOME Create.
 
 A pre-provisioned immutable ConfigMap `dev-env-budgets/dev-env-private-pilot-v1`
 contains only `policySHA256`. The policy pins its actual UID, plus catalog,
@@ -141,7 +144,10 @@ Each slot has an independent permanent `dev-env.haynesops.com/private-pilot-reta
 finalizer and immutable policy/request annotations. Atomic Create on its fixed
 name arbitrates replicas. A lost response reads only that name and checks the
 original exact binding; no generated suffix, new key or replacement UID. A
-completed/deleting slot remains consumed. There is no finalizer-release, deletion
+completed slot remains consumed. Deleting either retained original intentionally
+refuses both new-slot admission and replay (409), preserving both identities
+without guessing through incomplete deletion. Its directory source projection
+also refuses a deleting binding; previously retained directory evidence is kept. There is no finalizer-release, deletion
 or rearming operation in this source. Existing private-history launch-intent
 fences protect the executor; pilot markers, fixed names and retained finalizers
 remain recognized even if a marker or configuration is missing.

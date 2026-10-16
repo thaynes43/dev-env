@@ -22,13 +22,14 @@ import (
 )
 
 const (
-	PilotCaller        = "dev/dev-env"
-	PilotProject       = "dev-env"
-	PilotProfile       = "rule-canary-codex"
-	PilotSealNamespace = "dev-env-budgets"
-	PilotSealName      = "dev-env-private-pilot-v1"
-	PilotAnnotation    = v1alpha1.LabelPrefix + "private-pilot"
-	PilotFinalizer     = v1alpha1.LabelPrefix + "private-pilot-retained"
+	PilotActiveDeadlineSeconds int64 = 900
+	PilotCaller                      = "dev/dev-env"
+	PilotProject                     = "dev-env"
+	PilotProfile                     = "rule-canary-codex"
+	PilotSealNamespace               = "dev-env-budgets"
+	PilotSealName                    = "dev-env-private-pilot-v1"
+	PilotAnnotation                  = v1alpha1.LabelPrefix + "private-pilot"
+	PilotFinalizer                   = v1alpha1.LabelPrefix + "private-pilot-retained"
 )
 
 // PilotPolicy is one reviewed, sealed window, never a rolling allowance. Only

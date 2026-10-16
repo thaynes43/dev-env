@@ -233,3 +233,32 @@ func TestPrivatePilotRetainedSlotsAndChildRefusal(t *testing.T) {
 		t.Fatal("pilot mark lost")
 	}
 }
+
+func TestPrivatePilotDeletingSlotRefusesBothAdmissions(t *testing.T) {
+	f, b := pilotAPI(t, interceptor.Funcs{})
+	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokClient, b.Policy.Request(0)); w.Code != http.StatusCreated {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	var original v1alpha1.AgentSession
+	key := client.ObjectKey{Namespace: "dev-agents", Name: projectcanary.PilotSessionName(0)}
+	if err := f.c.Get(context.Background(), key, &original); err != nil {
+		t.Fatal(err)
+	}
+	uid := original.UID
+	if err := f.c.Delete(context.Background(), &original); err != nil {
+		t.Fatal(err)
+	}
+	for slot := range 2 {
+		if w := f.do(http.MethodPost, apiv1.SessionsPath, tokClient, b.Policy.Request(slot)); w.Code != http.StatusConflict {
+			t.Fatal("deleting original must stop both admissions", slot, w.Code, w.Body.String())
+		}
+	}
+	var kept v1alpha1.AgentSession
+	if err := f.c.Get(context.Background(), key, &kept); err != nil || kept.UID != uid || kept.DeletionTimestamp.IsZero() {
+		t.Fatal("original consumed identity lost", err)
+	}
+	var sessions v1alpha1.AgentSessionList
+	if err := f.c.List(context.Background(), &sessions); err != nil || len(sessions.Items) != 1 {
+		t.Fatal("peer admitted after deletion", err)
+	}
+}

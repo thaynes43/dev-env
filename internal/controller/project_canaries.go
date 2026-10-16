@@ -90,6 +90,13 @@ func (r *Reconciler) validateProjectCanary(ctx context.Context, s *v1alpha1.Agen
 }
 
 func validateProjectCanaryPod(s *v1alpha1.AgentSession, t *templates.Templates, podShape bool) error {
+	if projectcanary.IsPilot(s) {
+		record, err := projectcanary.BoundPilot(s)
+		if err != nil || record.Policy.ValidateTemplate(t) != nil || !podShape {
+			return projectcanary.ErrRefused
+		}
+		return nil
+	}
 	if s.Spec.ProjectCanary == nil {
 		return nil
 	}
@@ -103,10 +110,14 @@ func validateProjectCanaryPod(s *v1alpha1.AgentSession, t *templates.Templates, 
 // Final rendered executor proof is independent of template admission. The only
 // persistent storage a managed canary may receive is its original own HOME.
 func validateProjectCanaryExecutor(s *v1alpha1.AgentSession, pod *corev1.Pod) error {
-	if s.Spec.ProjectCanary == nil {
+	if s.Spec.ProjectCanary == nil && !projectcanary.IsPilot(s) {
 		return nil
 	}
-	if pod == nil || len(pod.Spec.Containers) != 1 || len(pod.Spec.InitContainers) != 0 || len(pod.Spec.EphemeralContainers) != 0 || pod.Spec.RestartPolicy != corev1.RestartPolicyNever || pod.Spec.ActiveDeadlineSeconds == nil || *pod.Spec.ActiveDeadlineSeconds != projectcanary.ActiveDeadlineSeconds || pod.Spec.TerminationGracePeriodSeconds == nil || *pod.Spec.TerminationGracePeriodSeconds != projectcanary.TerminationGraceSeconds || pod.Annotations["k8tz.io/inject"] != "false" {
+	deadline := projectcanary.ActiveDeadlineSeconds
+	if projectcanary.IsPilot(s) {
+		deadline = projectcanary.PilotActiveDeadlineSeconds
+	}
+	if pod == nil || len(pod.Spec.Containers) != 1 || len(pod.Spec.InitContainers) != 0 || len(pod.Spec.EphemeralContainers) != 0 || pod.Spec.RestartPolicy != corev1.RestartPolicyNever || pod.Spec.ActiveDeadlineSeconds == nil || *pod.Spec.ActiveDeadlineSeconds != deadline || pod.Spec.TerminationGracePeriodSeconds == nil || *pod.Spec.TerminationGracePeriodSeconds != projectcanary.TerminationGraceSeconds || pod.Annotations["k8tz.io/inject"] != "false" {
 		return projectcanary.ErrRefused
 	}
 	homeVolumes := 0
