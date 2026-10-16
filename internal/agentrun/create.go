@@ -2,11 +2,13 @@ package agentrun
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -52,11 +54,12 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	fs := cmd.fs
 	var (
 		prompt, promptFile, repo, project, agent, model, effort, base, size, profile, timeout, key string
-		idleAfter, archiveAfter                                                                    string
+		idleAfter, archiveAfter, dryRun                                                            string
 		maxTurns                                                                                   int
 		wait                                                                                       time.Duration
 		interactive, local, safe                                                                   bool
 	)
+	fs.StringVar(&dryRun, "dry-run", "", "")
 	fs.StringVar(&prompt, "p", "", "")
 	fs.StringVar(&prompt, "prompt", "", "")
 	fs.StringVar(&promptFile, "prompt-file", "", "")
@@ -80,6 +83,9 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	pos, err := cmd.parse(a, args)
 	if err != nil {
 		return err
+	}
+	if dryRun != "" && (dryRun != "server" || project == "" || restoring || local || interactive) {
+		return usageError("--dry-run=server requires a new declared-project task")
 	}
 	projectGiven := false
 	fs.Visit(func(f *flag.Flag) { projectGiven = projectGiven || f.Name == "project" })
@@ -241,6 +247,31 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		Limits:         limits,
 		Lifecycle:      lifecycle,
 		IdempotencyKey: key,
+	}
+	if dryRun != "" {
+		hc := *c.http
+		hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		one := *c
+		one.http = &hc
+		one.rejectOversizeResponse = true
+		var raw json.RawMessage
+		status, err := a.callWith(ctx, &one, http.MethodPost, apiv1.PilotPreflightPath, nil, req, &raw, false)
+		if err != nil {
+			return err
+		}
+		var result apiv1.PilotPreflight
+		d := json.NewDecoder(strings.NewReader(string(raw)))
+		d.DisallowUnknownFields()
+		var present map[string]json.RawMessage
+		_ = json.Unmarshal(raw, &present)
+		if status != http.StatusOK || !strictWireJSON(raw, reflect.TypeFor[apiv1.PilotPreflight]()) || string(present["persisted"]) != "false" || d.Decode(&result) != nil || d.Decode(new(any)) != io.EOF || result.DryRun != "All" || result.Persisted || result.Session.Name == "" {
+			return fail(ExitFailed, "unconfirmed server dry-run; no create fallback")
+		}
+		if cmd.c.output == outputJSON {
+			return a.printJSON(result)
+		}
+		a.outf("server dry-run accepted %s; no Session or actor was created\n", result.Session.Name)
+		return nil
 	}
 	var sess apiv1.Session
 	status, err := a.call(ctx, c, http.MethodPost, apiv1.SessionsPath, nil, req, &sess)

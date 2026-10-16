@@ -184,6 +184,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle(apiv1.TaskBudgetsPath+"/{uid}/observe", s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.observeTaskBudget}}))
 	mux.Handle(apiv1.TaskBudgetsPath+"/{uid}/events", s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.recordTaskBudgetEvent}}))
 	mux.Handle(apiv1.TaskBudgetsPath+"/{uid}/extend", s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.extendTaskBudget}}))
+	mux.Handle(apiv1.PilotPreflightPath, s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.preflightPrivatePilot}}))
 	mux.Handle(apiv1.SessionsPath, s.serve(route{coordinator: true, methods: map[string]handler{
 		http.MethodGet:  s.listSessions,
 		http.MethodPost: s.createSession,

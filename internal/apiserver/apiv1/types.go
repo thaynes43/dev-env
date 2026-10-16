@@ -15,9 +15,10 @@ import (
 
 // Paths. A session's own routes hang off SessionPath.
 const (
-	SessionsPath = "/v1/sessions"
-	FleetPath    = "/v1/fleet"
-	CanariesPath = "/v1/canaries"
+	SessionsPath       = "/v1/sessions"
+	PilotPreflightPath = "/v1/private-pilot/preflight"
+	FleetPath          = "/v1/fleet"
+	CanariesPath       = "/v1/canaries"
 )
 
 func CanaryResultPath(id string) string { return CanariesPath + "/" + id + "/result" }
@@ -200,6 +201,13 @@ type Lifecycle struct {
 
 // Session is one session as the API shows it: GET /v1/sessions/{name}, the
 // items of GET /v1/sessions, and the answer to a create or a reap.
+// PilotPreflight is an explicitly nonpersistent Kubernetes admission result.
+type PilotPreflight struct {
+	DryRun    string  `json:"dryRun"`
+	Persisted bool    `json:"persisted"`
+	Session   Session `json:"session"`
+}
+
 type Session struct {
 	UID            string          `json:"uid,omitempty"`
 	PrivateHistory *PrivateHistory `json:"privateHistory,omitempty"`

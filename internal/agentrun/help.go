@@ -86,6 +86,7 @@ This command makes one API request. It does not retry or follow redirects.
 It cannot create or control a session, or read its private history.
 
 Flags:
+  --dry-run=server           sealed-pilot admission only; never creates, waits or falls back
   --project <name>      the authorized project to read (required)
   --once               acknowledge one request with no retry (required)
   --limit <1..20>       maximum records in this page (default 20)

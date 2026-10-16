@@ -140,11 +140,16 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.idempotencyKey) || has(self.caller)",message="idempotencyKey is for summoned sessions only: set caller and lane"
 // +kubebuilder:validation:XValidation:rule="!has(self.caller) || self.mode != 'local'",message="a summoned session runs in task or remote mode, never local"
 // +kubebuilder:validation:XValidation:rule="!has(self.caller) || (has(self.profile) && self.profile != 'full')",message="a summoned session names its profile, and it is never full (D-36)"
-// +kubebuilder:validation:XValidation:rule="has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort) && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size) && has(self.profile) == has(oldSelf.profile) && has(self.tools) == has(oldSelf.tools) && has(self.llm) == has(oldSelf.llm) && has(self.parent) == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller) && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey) == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits) && has(self.restore) == has(oldSelf.restore) && has(self.workspace) == has(oldSelf.workspace) && has(self.projectCanary) == has(oldSelf.projectCanary) && has(self.commonRules) == has(oldSelf.commonRules) && has(self.sessionDirectory) == has(oldSelf.sessionDirectory)",message="immutable after create: no spec field may be added or removed, except operatingMode and lifecycle"
+// +kubebuilder:validation:XValidation:rule="has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort) && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size) && has(self.profile) == has(oldSelf.profile) && has(self.tools) == has(oldSelf.tools) && has(self.llm) == has(oldSelf.llm) && has(self.parent) == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller) && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey) == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits) && has(self.restore) == has(oldSelf.restore) && has(self.workspace) == has(oldSelf.workspace) && has(self.projectCanary) == has(oldSelf.projectCanary) && has(self.commonRules) == has(oldSelf.commonRules) && has(self.sessionDirectory) == has(oldSelf.sessionDirectory) && has(self.privatePilot) == has(oldSelf.privatePilot)",message="immutable after create: no spec field may be added or removed, except operatingMode and lifecycle"
 // +kubebuilder:validation:XValidation:rule="!has(self.projectCanary) || (self.mode == 'task' && self.agent in ['claude', 'codex'] && self.size == 'S' && has(self.parent) && self.parent == self.projectCanary.client && !has(self.workspace) && !has(self.restore) && !has(self.tools) && !has(self.llm) && !has(self.caller) && !has(self.lane) && !has(self.lifecycle) && has(self.limits) && has(self.limits.timeout) && duration(self.limits.timeout) <= duration('180s') && (self.agent == 'codex' ? (!has(self.limits.maxTurns) || self.limits.maxTurns == 0) : (has(self.limits.maxTurns) && self.limits.maxTurns > 0 && self.limits.maxTurns <= 3)))",message="project canaries require their fixed private bounded subscription task contract"
-// +kubebuilder:validation:XValidation:rule="!has(self.commonRules) || (has(self.projectCanary) && has(self.projectCanary.commonRevision) && self.projectCanary.commonRevision == self.commonRules.commonRevision)",message="common rules require the matching managed canary binding"
-// +kubebuilder:validation:XValidation:rule="!has(self.sessionDirectory) || has(self.projectCanary)",message="directory enrollment requires a managed canary"
+// +kubebuilder:validation:XValidation:rule="!has(self.commonRules) || (has(self.projectCanary) && has(self.projectCanary.commonRevision) && self.projectCanary.commonRevision == self.commonRules.commonRevision) || (has(self.privatePilot) && self.privatePilot.commonRevision == self.commonRules.commonRevision)",message="common rules require the matching managed canary binding"
+// +kubebuilder:validation:XValidation:rule="!has(self.sessionDirectory) || has(self.projectCanary) || has(self.privatePilot)",message="directory enrollment requires a managed canary"
+// +kubebuilder:validation:XValidation:rule="!has(self.privatePilot) || (!has(self.projectCanary) && self.repo == 'dev-env' && self.base == 'main' && self.mode == 'task' && self.agent == 'codex' && self.model == 'gpt-6.1-sol' && self.effort == 'high' && self.size == 'S' && self.profile == 'rule-canary-codex' && self.parent == 'dev/dev-env' && !has(self.workspace) && !has(self.restore) && !has(self.tools) && !has(self.llm) && !has(self.caller) && !has(self.lane) && !has(self.lifecycle) && !has(self.idempotencyKey) && has(self.limits) && has(self.limits.timeout) && duration(self.limits.timeout) == duration('15m') && (!has(self.limits.maxTurns) || self.limits.maxTurns == 0) && has(self.commonRules) && self.commonRules.commonRevision == self.privatePilot.commonRevision && has(self.sessionDirectory) && self.sessionDirectory.version == 1 && self.sessionDirectory.project == 'dev-env')",message="sealed pilots require the fixed private bounded Codex contract and matching retained inputs"
 type AgentSessionSpec struct {
+	// PrivatePilot is authored only by the sealed operator route, never a caller override.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="private pilot binding is immutable"
+	// +optional
+	PrivatePilot *PrivatePilotBinding `json:"privatePilot,omitempty"`
 	// SessionDirectory is selected only by the prospective operator canary route.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="directory enrollment is immutable"
 	// +optional
@@ -308,6 +313,21 @@ type AgentSessionSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +optional
 	Restore string `json:"restore,omitempty"`
+}
+
+// PrivatePilotBinding binds the immutable two-slot policy to retained inputs.
+type PrivatePilotBinding struct {
+	// +kubebuilder:validation:MaxLength=36
+	// +kubebuilder:validation:Pattern=`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`
+	SealUID string `json:"sealUID"`
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[a-f0-9]{64}$`
+	PolicyDigest string `json:"policyDigest"`
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[a-f0-9]{64}$`
+	CommonRevision string `json:"commonRevision"`
+	// +kubebuilder:validation:Enum=0;1
+	Slot int `json:"slot"`
 }
 
 // SessionDirectoryReceipt prevents reconstructing a lost pre-executor record.

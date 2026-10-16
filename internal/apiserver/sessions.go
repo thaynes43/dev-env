@@ -37,6 +37,12 @@ const nameAttempts = 9
 
 // createSession serves POST /v1/sessions.
 func (s *Server) createSession(ctx context.Context, w http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+	return s.createSessionMode(ctx, w, r, c, false)
+}
+func (s *Server) preflightPrivatePilot(ctx context.Context, w http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+	return s.createSessionMode(ctx, w, r, c, true)
+}
+func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r *http.Request, c *caller, dryRun bool) (int, any, error) {
 	// A canary is one retained executor. Its projected session token keeps
 	// heartbeats/observation but cannot dispatch a second task through the
 	// legacy create route either.
@@ -59,6 +65,9 @@ func (s *Server) createSession(ctx context.Context, w http.ResponseWriter, r *ht
 	for key := range keys {
 		canaryRequest = canaryRequest || strings.EqualFold(key, "canaryID")
 	}
+	if dryRun && (canaryRequest || req.Project == "" || s.PrivatePilot == nil) {
+		return 0, nil, forbidden("dry-run requires a configured exact sealed pilot request")
+	}
 	if canaryRequest {
 		strict, err := kjson.UnmarshalStrict(raw, &req)
 		if err != nil || len(strict) != 0 || len(keys) != 1 || keys["canaryID"] == nil || req.CanaryID == "" {
@@ -71,7 +80,7 @@ func (s *Server) createSession(ctx context.Context, w http.ResponseWriter, r *ht
 		if err != nil || len(strict) != 0 {
 			return 0, nil, badRequest("expected one exact sealed pilot request")
 		}
-		return s.createPrivatePilot(ctx, w, c, req)
+		return s.createPrivatePilot(ctx, w, c, req, dryRun)
 	}
 	sess, err := s.newSession(ctx, req, c)
 	if err != nil {
