@@ -259,10 +259,18 @@ func ReadTemplates(ctx context.Context, reader client.Reader, key types.Namespac
 // Signature verification belongs to publication and policy review; the trusted
 // record names that immutable image, never a caller-selected image.
 func (r Record) ValidateTemplate(t *templates.Templates, owner string) error {
-	if t == nil || r.Validate() != nil || t.Revision() != r.TemplateRevision || t.Image != r.Image || t.Workspace != nil && t.Workspace.Enabled {
+	if r.Validate() != nil {
 		return ErrRefused
 	}
-	_, profile, err := t.Profile(r.Profile)
+	return validatePrivateTemplate(t, owner, r.Provider, r.Profile, r.TemplateRevision, r.Image)
+}
+
+// Shared finite private shape; canary and pilot policy validation remain separate.
+func validatePrivateTemplate(t *templates.Templates, owner, provider, profileName, revision, image string) error {
+	if t == nil || t.Revision() != revision || t.Image != image || t.Workspace != nil && t.Workspace.Enabled {
+		return ErrRefused
+	}
+	_, profile, err := t.Profile(profileName)
 	if err != nil || len(profile.EnvFrom) != 0 || len(profile.Labels) != 0 {
 		return ErrRefused
 	}
@@ -285,7 +293,7 @@ func (r Record) ValidateTemplate(t *templates.Templates, owner string) error {
 	if !projectcatalog.ValidName(owner) {
 		return ErrRefused
 	}
-	if r.Provider == "codex" && values["AGENTD_CODEX_ACCESS_FILE"] != CodexAccessPath+"/access.json" || r.Provider == "claude" && values["AGENTD_CODEX_ACCESS_FILE"] != "" {
+	if provider == "codex" && values["AGENTD_CODEX_ACCESS_FILE"] != CodexAccessPath+"/access.json" || provider == "claude" && values["AGENTD_CODEX_ACCESS_FILE"] != "" {
 		return ErrRefused
 	}
 	allowedMounts := map[string]string{"/opt/dev-env/config/claude": "dev-env-config-claude", "/opt/dev-env/config/codex": "dev-env-config-codex", "/opt/dev-env/scripts": "dev-env-scripts", "/etc/codex": "dev-env-codex-requirements", "/opt/dev-env/api-ca": "dev-env-api-ca"}
@@ -307,7 +315,7 @@ func (r Record) ValidateTemplate(t *templates.Templates, owner string) error {
 			}
 			gh = true
 		case CodexAccessPath:
-			if access || r.Provider != "codex" || m.ConfigMap != "" || m.Secret != CodexAccessSecret {
+			if access || provider != "codex" || m.ConfigMap != "" || m.Secret != CodexAccessSecret {
 				return ErrRefused
 			}
 			access = true
@@ -315,7 +323,7 @@ func (r Record) ValidateTemplate(t *templates.Templates, owner string) error {
 			return ErrRefused
 		}
 	}
-	if !gh || r.Provider == "codex" && !access || r.Provider == "claude" && (t.Claude.StaticToken.Name != "dev-env-claude-secret" || t.Claude.StaticToken.Key != "CLAUDE_CODE_OAUTH_TOKEN") {
+	if !gh || provider == "codex" && !access || provider == "claude" && (t.Claude.StaticToken.Name != "dev-env-claude-secret" || t.Claude.StaticToken.Key != "CLAUDE_CODE_OAUTH_TOKEN") {
 		return ErrRefused
 	}
 	size, err := t.Size(v1alpha1.SizeS)

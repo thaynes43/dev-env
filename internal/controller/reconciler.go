@@ -160,6 +160,7 @@ type Reconciler struct {
 	Now                      func() time.Time
 	RetainedCommonRules      bool
 	SessionDirectory         *sessiondirectory.KubeStore
+	PrivatePilot             *projectcanary.PilotPolicy
 	PrivateProjectCanaries   *projectcanary.Policy
 	PrivateProjectCloneOwner string
 	ManagedCodexTasks        bool
@@ -1093,6 +1094,13 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 		}
 		if s.Spec.Workspace != nil {
 			if err := r.startSharedAdmission(ctx, s); err != nil {
+				obs.removalBlocked = err
+				return nil
+			}
+		}
+		// Directory and retention I/O may cross the sealed admission window.
+		if projectcanary.IsPilot(s) {
+			if err := r.validatePrivatePilot(ctx, s, t); err != nil {
 				obs.removalBlocked = err
 				return nil
 			}

@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/projectcanary"
 )
 
 const (
@@ -33,7 +34,7 @@ var errPrivateHistoryRetained = errors.New("private provider HOME and durable Se
 func privateHistoryProtected(s *v1alpha1.AgentSession) bool {
 	// The immutable canary binding protects its original HOME even when a
 	// status read/schema is uncertain or the global retention flag is disabled.
-	return s.Spec.ProjectCanary != nil || s.Spec.Workspace == nil && s.Status.PrivateHistory != nil
+	return projectcanary.IsPilot(s) || s.Spec.ProjectCanary != nil || s.Spec.Workspace == nil && s.Status.PrivateHistory != nil
 }
 
 func (r *Reconciler) privateHistoryEnabled(s *v1alpha1.AgentSession) bool {

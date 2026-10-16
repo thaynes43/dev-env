@@ -103,7 +103,7 @@ func buildHoldPod(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.Pod
 func isHoldPod(p *corev1.Pod) bool { return p.Labels[v1alpha1.LabelHold] == "true" }
 
 func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, hold bool, managedCodex bool, childDecisions bool) (*corev1.Pod, error) {
-	if s.Spec.ProjectCanary != nil {
+	if s.Spec.ProjectCanary != nil || projectcanary.IsPilot(s) {
 		if validateProjectCanaryPod(s, t, !hold && (s.Spec.Agent != v1alpha1.AgentCodex || managedCodex)) != nil {
 			return nil, projectcanary.ErrRefused
 		}
@@ -228,8 +228,8 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		{Name: "grants", MountPath: protocol.GrantsDir},
 		{Name: "api-token", MountPath: templates.APITokenDir, ReadOnly: true},
 	}
-	if s.Spec.ProjectCanary != nil {
-		// Canary coordination is API-only. Never expose the cross-session scratch PVC.
+	if s.Spec.ProjectCanary != nil || projectcanary.IsPilot(s) {
+		// Canary/pilot coordination is API-only. Never expose the cross-session scratch PVC.
 		volumes = slices.DeleteFunc(volumes, func(v corev1.Volume) bool { return v.Name == "shared" })
 		mounts = slices.DeleteFunc(mounts, func(m corev1.VolumeMount) bool { return m.Name == "shared" })
 	}
@@ -336,14 +336,18 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 	if s.Spec.Workspace != nil && !hold {
 		pod.Spec.RestartPolicy = corev1.RestartPolicyNever
 	}
-	if s.Spec.ProjectCanary != nil {
+	if s.Spec.ProjectCanary != nil || projectcanary.IsPilot(s) {
 		if len(pod.Spec.Containers) != 1 || len(pod.Spec.InitContainers) != 0 || len(pod.Spec.EphemeralContainers) != 0 {
 			return nil, projectcanary.ErrRefused
 		}
-		pod.Labels[v1alpha1.LabelProjectCanary] = s.Spec.ProjectCanary.ID
+		deadline := projectcanary.PilotActiveDeadlineSeconds
+		if s.Spec.ProjectCanary != nil {
+			pod.Labels[v1alpha1.LabelProjectCanary] = s.Spec.ProjectCanary.ID
+			deadline = projectcanary.ActiveDeadlineSeconds
+		}
 		pod.Annotations["k8tz.io/inject"] = "false"
 		pod.Spec.RestartPolicy = corev1.RestartPolicyNever
-		pod.Spec.ActiveDeadlineSeconds = ptr.To(projectcanary.ActiveDeadlineSeconds)
+		pod.Spec.ActiveDeadlineSeconds = ptr.To(deadline)
 		pod.Spec.TerminationGracePeriodSeconds = ptr.To(projectcanary.TerminationGraceSeconds)
 	}
 	if validateProjectCanaryExecutor(s, pod) != nil {
@@ -470,8 +474,13 @@ func sessionDocument(s *v1alpha1.AgentSession) (string, error) {
 		Restore: s.Spec.Restore,
 	}
 	if s.Spec.CommonRules != nil {
+		if projectcanary.IsPilot(s) {
+			if _, err := projectcanary.BoundPilot(s); err != nil {
+				return "", sessionInvalidError{err}
+			}
+		}
 		common, err := commonrules.BoundSession(s)
-		if err != nil || len(s.UID) > 128 || s.Spec.ProjectCanary == nil || s.Spec.Workspace != nil || s.Spec.Mode != v1alpha1.ModeTask {
+		if err != nil || len(s.UID) > 128 || (s.Spec.ProjectCanary == nil && !projectcanary.IsPilot(s)) || s.Spec.Workspace != nil || s.Spec.Mode != v1alpha1.ModeTask {
 			return "", sessionInvalidError{commonrules.ErrRefused}
 		}
 		raw, err := common.Bytes()

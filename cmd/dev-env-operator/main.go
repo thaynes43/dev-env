@@ -112,6 +112,7 @@ type options struct {
 	clientSAs                     []string
 	grantApprovalURL              string
 	coordinatorEnabled            bool
+	privatePilot                  *projectcanary.PilotPolicy
 	privateProjectTasks           bool
 	managedCodexTasks             bool
 	privateHistoryRetention       bool
@@ -162,6 +163,7 @@ func parseFlags(args []string) (options, error) {
 	fs.DurationVar(&o.homeExpiryGrace, "home-expiry-grace", controller.DefaultHomeExpiryGrace, "the HOME expiry's grace after the recorded stop; it may only lengthen Q-31's 720h (DESIGN-025 13)")
 	fs.BoolVar(&o.retainedCommonRules, "enable-retained-common-rules", false, "retain reviewed common instruction inputs for new fixed private managed canaries")
 	fs.BoolVar(&o.privateProjectCanariesEnabled, "enable-private-project-canaries", false, "enable only two explicitly configured private managed subscription rule canaries")
+	pilot := fs.String("private-project-pilot", "", "sealed absolute-window two-session dev-env Codex integration policy; global private admission remains off")
 	canaries := fs.String("private-project-canaries", "", "strict operator-owned JSON records for at most two fixed private managed canaries")
 	fs.BoolVar(&o.managedChildDecisions, "enable-managed-child-decisions", false, "enable private recorded child decisions and same-writer native continuation")
 	fs.BoolVar(&o.taskBudgetsEnabled, "enable-task-budgets", false, "enable retained finite managed task budget authority; native admission requires a separate trusted inspector")
@@ -255,6 +257,13 @@ func parseFlags(args []string) (options, error) {
 		}
 	} else {
 		o.privateProjectCanaries = nil
+	}
+	o.privatePilot, err = projectcanary.ParsePilot(*pilot)
+	if err != nil {
+		return o, err
+	}
+	if o.privatePilot != nil && (o.privateProjectTasks || !o.managedCodexTasks || !o.privateHistoryRetention || !o.retainedCommonRules || o.apiAddr == "0" || o.apiURL == "" || o.catalogBinding == nil || o.catalogBinding.CloneOwner != "thaynes43" || !slices.Contains(o.clientSAs, projectcanary.PilotCaller) || o.sessionNamespace != "dev-agents" || o.taskBudgetNamespace != "dev-env-budgets" || !o.taskBudgetsEnabled) {
+		return o, errors.New("sealed pilot requires existing narrow managed authority and disabled general private admission")
 	}
 	if o.managedChildDecisions && (!o.coordinatorEnabled || !o.managedCodexTasks) {
 		return o, errors.New("managed child decisions require enabled configured coordinators and managed native tasks")
@@ -369,6 +378,9 @@ func parseFlags(args []string) (options, error) {
 	if o.homeExpiryGrace < controller.DefaultHomeExpiryGrace {
 		return o, fmt.Errorf("--home-expiry-grace %s is under %s: the grace may only be lengthened (DESIGN-025 13)", o.homeExpiryGrace, controller.DefaultHomeExpiryGrace)
 	}
+	if o.privatePilot != nil && (!o.directoryEnabled || !slices.Contains(o.directoryProjects, projectcanary.PilotProject)) {
+		return o, errors.New("sealed pilot requires the dev-env session directory")
+	}
 	return o, nil
 }
 
@@ -477,6 +489,7 @@ func run(args []string) error {
 		HomeExpiryDelete:            o.homeExpiryDelete,
 		HistoryRelay:                &controller.ExecHistoryRelay{Exec: podExec, Shelf: rescueShelf, Slots: shelfSlots},
 		PrivateProjectCanaries:      o.privateProjectCanaries,
+		PrivatePilot:                o.privatePilot,
 		PrivateProjectCloneOwner:    cloneOwner,
 		ManagedChildDecisions:       o.managedChildDecisions,
 		ManagedChildDecisionParents: decisionParents,
@@ -572,7 +585,8 @@ func run(args []string) error {
 				// (D-66).
 				ActivityNamespace: o.templatesNamespace,
 			},
-			Projects: o.catalogBinding, PrivateProjectTasks: o.privateProjectTasks, ManagedCodexTasks: o.managedCodexTasks, ManagedChildDecisions: o.managedChildDecisions,
+			PrivatePilot: o.privatePilot,
+			Projects:     o.catalogBinding, PrivateProjectTasks: o.privateProjectTasks, ManagedCodexTasks: o.managedCodexTasks, ManagedChildDecisions: o.managedChildDecisions,
 			PrivateProjectCanaries: o.privateProjectCanaries, RetainedCommonRules: o.retainedCommonRules,
 			PrivateHistoryRetention: o.privateHistoryRetention, PrivateCanaryTemplates: templatesKey,
 			Exec:                     podExec,

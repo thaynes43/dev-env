@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -46,6 +47,9 @@ func (t *readTracker) note(err error) error {
 }
 
 func (r *Reconciler) validateProjectCanary(ctx context.Context, s *v1alpha1.AgentSession, t *templates.Templates) error {
+	if projectcanary.IsPilot(s) {
+		return r.validatePrivatePilot(ctx, s, t)
+	}
 	if s.Spec.ProjectCanary == nil {
 		return nil
 	}
@@ -86,6 +90,13 @@ func (r *Reconciler) validateProjectCanary(ctx context.Context, s *v1alpha1.Agen
 }
 
 func validateProjectCanaryPod(s *v1alpha1.AgentSession, t *templates.Templates, podShape bool) error {
+	if projectcanary.IsPilot(s) {
+		record, err := projectcanary.BoundPilot(s)
+		if err != nil || record.Policy.ValidateTemplate(t) != nil || !podShape {
+			return projectcanary.ErrRefused
+		}
+		return nil
+	}
 	if s.Spec.ProjectCanary == nil {
 		return nil
 	}
@@ -99,10 +110,14 @@ func validateProjectCanaryPod(s *v1alpha1.AgentSession, t *templates.Templates, 
 // Final rendered executor proof is independent of template admission. The only
 // persistent storage a managed canary may receive is its original own HOME.
 func validateProjectCanaryExecutor(s *v1alpha1.AgentSession, pod *corev1.Pod) error {
-	if s.Spec.ProjectCanary == nil {
+	if s.Spec.ProjectCanary == nil && !projectcanary.IsPilot(s) {
 		return nil
 	}
-	if pod == nil || len(pod.Spec.Containers) != 1 || len(pod.Spec.InitContainers) != 0 || len(pod.Spec.EphemeralContainers) != 0 || pod.Spec.RestartPolicy != corev1.RestartPolicyNever || pod.Spec.ActiveDeadlineSeconds == nil || *pod.Spec.ActiveDeadlineSeconds != projectcanary.ActiveDeadlineSeconds || pod.Spec.TerminationGracePeriodSeconds == nil || *pod.Spec.TerminationGracePeriodSeconds != projectcanary.TerminationGraceSeconds || pod.Annotations["k8tz.io/inject"] != "false" {
+	deadline := projectcanary.ActiveDeadlineSeconds
+	if projectcanary.IsPilot(s) {
+		deadline = projectcanary.PilotActiveDeadlineSeconds
+	}
+	if pod == nil || len(pod.Spec.Containers) != 1 || len(pod.Spec.InitContainers) != 0 || len(pod.Spec.EphemeralContainers) != 0 || pod.Spec.RestartPolicy != corev1.RestartPolicyNever || pod.Spec.ActiveDeadlineSeconds == nil || *pod.Spec.ActiveDeadlineSeconds != deadline || pod.Spec.TerminationGracePeriodSeconds == nil || *pod.Spec.TerminationGracePeriodSeconds != projectcanary.TerminationGraceSeconds || pod.Annotations["k8tz.io/inject"] != "false" {
 		return projectcanary.ErrRefused
 	}
 	homeVolumes := 0
@@ -138,4 +153,56 @@ func validateProjectCanaryExecutor(s *v1alpha1.AgentSession, pod *corev1.Pod) er
 
 func canaryMountOverlaps(a, b string) bool {
 	return a == b || a == "/" || b == "/" || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
+}
+
+// A pending pilot is never a legacy fallback when its opt-in policy disappears.
+// ensure calls this before resource allocation and again before Pod Create;
+// already-present pods are preserved by ensure's first guard.
+func (r *Reconciler) validatePrivatePilot(ctx context.Context, s *v1alpha1.AgentSession, t *templates.Templates) error {
+	p := r.PrivatePilot
+	if p == nil || !r.ManagedCodexTasks || !r.PrivateHistoryRetention || !r.RetainedCommonRules || r.APIReader == nil || r.APIURL == "" || r.PrivateProjectCloneOwner != "thaynes43" || budgetBound(s) || s.Spec.ProjectCanary != nil {
+		return projectcanary.ErrRefused
+	}
+	now := time.Now()
+	if r.Now != nil {
+		now = r.Now()
+	}
+	slot := 0
+	if s.Name == projectcanary.PilotSessionName(1) {
+		slot = 1
+	}
+	if p.MatchSession(s, slot) != nil || p.ValidateTemplate(t) != nil {
+		return projectcanary.ErrRefused
+	}
+	reader := &readTracker{Reader: r.APIReader}
+	refuse := func() error {
+		if reader.failed {
+			return errCanaryUnobserved
+		}
+		return projectcanary.ErrRefused
+	}
+	var fresh v1alpha1.AgentSession
+	if reader.Get(ctx, client.ObjectKeyFromObject(s), &fresh) != nil || fresh.UID != s.UID || fresh.Generation != s.Generation || wantsPodGone(&fresh) || p.MatchSession(&fresh, slot) != nil {
+		return refuse()
+	}
+	evidence, err := p.Resolve(ctx, reader, r.Templates, now)
+	if err != nil || string(evidence.Snapshot) != fresh.Annotations[v1alpha1.AnnotationProjectSnapshot] {
+		return refuse()
+	}
+	record, err := projectcanary.BoundPilot(&fresh)
+	if err != nil || evidence.CatalogUID != record.CatalogUID || evidence.CatalogResourceVersion != record.CatalogResourceVersion {
+		return refuse()
+	}
+	common, err := commonrules.BoundSession(&fresh)
+	if err != nil || common.Confirm(ctx, reader) != nil {
+		return refuse()
+	}
+	now = time.Now()
+	if r.Now != nil {
+		now = r.Now()
+	}
+	if !p.Open(now) {
+		return refuse()
+	}
+	return nil
 }

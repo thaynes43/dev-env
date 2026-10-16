@@ -277,3 +277,20 @@ func TestDirectoryCommonRevisionsUseOriginalBindingWithoutBodies(t *testing.T) {
 		t.Fatal("UTF-8 byte bound replaced by character bound")
 	}
 }
+
+func TestDirectoryPilotProjectionKeepsAuthorityWithoutPromptBodies(t *testing.T) {
+	b := testutil.NewPilot(t)
+	s := b.Session(t, 0)
+	spec, err := sessiondirectory.Spec(s)
+	if err != nil || spec.Project != "dev-env" || string(spec.TaskKey) != "pilot:"+projectcanary.PilotKey(0) || string(spec.Revisions.CanaryPolicy) != b.Policy.Digest() || spec.Revisions.Common.State != "Bound" {
+		t.Fatal("pilot metadata failed", err)
+	}
+	raw, _ := json.Marshal(spec)
+	if strings.Contains(string(raw), b.Policy.Prompts[0]) || strings.Contains(string(raw), b.Policy.Prompts[1]) || strings.Contains(string(raw), "Synthetic common pilot instructions") {
+		t.Fatal("private content leaked to directory")
+	}
+	delete(s.Annotations, projectcanary.PilotPolicyAnnotation)
+	if _, err = sessiondirectory.Spec(s); err == nil {
+		t.Fatal("missing original policy inferred")
+	}
+}

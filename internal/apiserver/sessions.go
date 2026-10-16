@@ -27,6 +27,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/controller"
+	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
 )
 
@@ -39,8 +40,8 @@ func (s *Server) createSession(ctx context.Context, w http.ResponseWriter, r *ht
 	// A canary is one retained executor. Its projected session token keeps
 	// heartbeats/observation but cannot dispatch a second task through the
 	// legacy create route either.
-	if c.kind == kindSession && c.session != nil && c.session.Spec.ProjectCanary != nil {
-		return 0, nil, forbidden("a private managed canary cannot create another executor")
+	if c.kind == kindSession && c.session != nil && (c.session.Spec.ProjectCanary != nil || projectcanary.IsPilot(c.session)) {
+		return 0, nil, forbidden("a retained private pilot or managed canary cannot create another executor")
 	}
 	var raw json.RawMessage
 	if err := decodeJSON(w, r, maxCreateBody, &raw, true); err != nil {
@@ -64,6 +65,13 @@ func (s *Server) createSession(ctx context.Context, w http.ResponseWriter, r *ht
 			return 0, nil, invalid(fieldError("canaryID", "a canary create contains only its fixed canaryID"))
 		}
 		return s.createProjectCanary(ctx, w, c, req.CanaryID)
+	}
+	if req.Project != "" && s.PrivatePilot != nil {
+		strict, err := kjson.UnmarshalStrict(raw, &req)
+		if err != nil || len(strict) != 0 {
+			return 0, nil, badRequest("expected one exact sealed pilot request")
+		}
+		return s.createPrivatePilot(ctx, w, c, req)
 	}
 	sess, err := s.newSession(ctx, req, c)
 	if err != nil {

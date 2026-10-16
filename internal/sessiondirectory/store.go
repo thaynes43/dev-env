@@ -24,6 +24,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/commonrules"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
+	"github.com/thaynes43/dev-env/internal/projectcatalog"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
 )
 
@@ -99,13 +100,33 @@ func Spec(s *v1alpha1.AgentSession) (coord.SessionDirectorySpec, error) {
 	if s == nil || s.Spec.SessionDirectory == nil || s.Spec.SessionDirectory.Version != 1 || s.UID == "" || s.CreationTimestamp.IsZero() {
 		return out, ErrUnavailable
 	}
-	r, err := projectcanary.BoundRecord(s)
-	if err != nil || s.Spec.SessionDirectory.Project != r.Project {
+	var r projectcanary.Record
+	var b *v1alpha1.ProjectCanaryBinding
+	var taskKey string
+	if projectcanary.IsPilot(s) {
+		pilot, err := projectcanary.BoundPilot(s)
+		if err != nil {
+			return out, ErrUnavailable
+		}
+		r = projectcanary.Record{Project: projectcanary.PilotProject, Provider: "codex"}
+		b = &v1alpha1.ProjectCanaryBinding{PolicyDigest: pilot.Policy.Digest(), CatalogUID: pilot.CatalogUID, CatalogResourceVersion: pilot.CatalogResourceVersion, CatalogRevision: pilot.Policy.CatalogRevision, RulesRevision: pilot.Policy.RulesRevision, TemplateRevision: pilot.Policy.TemplateRevision, Image: pilot.Policy.Image, SnapshotDigest: projectcatalog.Digest([]byte(s.Annotations[v1alpha1.AnnotationProjectSnapshot]))}
+		// CanaryPolicy is the legacy wire name for fixed managed admission policy;
+		// the explicit pilot task prefix distinguishes this from old canary records.
+		taskKey = "pilot:" + s.Labels[v1alpha1.LabelIdempotencyKey]
+	} else {
+		var err error
+		r, err = projectcanary.BoundRecord(s)
+		if err != nil {
+			return out, ErrUnavailable
+		}
+		b = s.Spec.ProjectCanary
+		taskKey = "canary:" + r.ID
+	}
+	if s.Spec.SessionDirectory.Project != r.Project {
 		return out, ErrUnavailable
 	}
-	b := s.Spec.ProjectCanary
 	out = coord.SessionDirectorySpec{Version: 1, Source: coord.SessionIdentity{Namespace: s.Namespace, Name: s.Name, UID: string(s.UID)}, SourceCreatedAt: s.CreationTimestamp,
-		Project: r.Project, Repository: coord.DirectoryText(s.Spec.Repo), Base: coord.DirectoryText(s.Spec.Base), Parent: s.Spec.Parent, TaskKey: coord.DirectoryText("canary:" + r.ID),
+		Project: r.Project, Repository: coord.DirectoryText(s.Spec.Repo), Base: coord.DirectoryText(s.Spec.Base), Parent: s.Spec.Parent, TaskKey: coord.DirectoryText(taskKey),
 		Request:   coord.DirectoryRequest{Provider: r.Provider, CLI: coord.DirectoryText(s.Spec.Agent), Model: coord.DirectoryText(s.Spec.Model), Effort: coord.DirectoryText(s.Spec.Effort)},
 		Revisions: coord.DirectoryRevisions{CanaryPolicy: coord.DirectoryDigest(b.PolicyDigest), CaptureOutput: b.CaptureOutput, CatalogUID: coord.DirectoryText(b.CatalogUID), CatalogResourceVersion: coord.DirectoryText(b.CatalogResourceVersion), Catalog: coord.DirectoryDigest(b.CatalogRevision), Rules: coord.DirectoryDigest(b.RulesRevision), Template: coord.DirectoryText(b.TemplateRevision), Image: coord.DirectoryImage(b.Image), ProjectSnapshot: coord.DirectoryDigest(b.SnapshotDigest), Common: coord.DirectoryCommon{State: "Unknown"}}}
 	if s.Spec.CommonRules != nil {

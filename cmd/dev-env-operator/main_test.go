@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/controller"
+	"github.com/thaynes43/dev-env/internal/projectcanary"
+	"github.com/thaynes43/dev-env/internal/projectcanary/testutil"
 )
 
 func TestPublishedContextFlagsDefaultOffAndIndependentScope(t *testing.T) {
@@ -243,5 +246,27 @@ func TestHistoryReadsAndHomeDeleteFlagsAreExplicitDefaultOff(t *testing.T) {
 	o, err = parseFlags([]string{"--enable-home-expiry-delete", "--enable-private-terminal-record", "--enable-home-history-archive", "--enable-history-archive-reads"})
 	if err != nil || !o.homeExpiryDelete {
 		t.Fatalf("delete with archive and reads: %v", err)
+	}
+}
+
+func TestPrivatePilotFlagDefaultOffAndExactExistingAuthority(t *testing.T) {
+	b := testutil.NewPilot(t)
+	raw, _ := json.Marshal(b.Policy)
+	old := testutil.New(t, "codex", "dev/dev-env")
+	old.Record.CommonRevision = b.Policy.CommonRevision
+	canaries, _ := json.Marshal([]projectcanary.Record{old.Record})
+	base := []string{"--private-project-pilot=" + string(raw), "--enable-private-project-canaries", "--private-project-canaries=" + string(canaries), "--enable-retained-common-rules", "--client-service-accounts=dev/dev-env", "--project-catalog=dev-env-system/dev-env-project-catalog", "--project-clone-owner=thaynes43", "--enable-private-history-retention", "--enable-managed-codex-tasks", "--api-url=https://operator.example", "--enable-session-directory", "--session-directory-projects=dev-env", "--metadata-discovery-projects=dev-env", "--enable-task-budgets", "--enable-coordinator-callers", `--coordinator-hosts=[{"serviceAccount":"dev-env-system/host-a","podName":"host-a","hostID":"codex-a"}]`, `--assigned-task-budgets={"codex-a":"campaign"}`, "--task-budget-namespace=dev-env-budgets", "--task-budget-worker-image=example/worker@sha256:" + strings.Repeat("a", 64)}
+	o, err := parseFlags(nil)
+	if err != nil || o.privatePilot != nil {
+		t.Fatal("pilot default enabled", err)
+	}
+	o, err = parseFlags(base)
+	if err != nil || o.privatePilot == nil || o.privateProjectTasks {
+		t.Fatal("exact existing authority refused", err)
+	}
+	for _, extra := range []string{"--enable-private-project-tasks", "--enable-private-history-retention=false", "--enable-managed-codex-tasks=false", "--client-service-accounts=other/client", "--session-namespace=other", "--session-directory-projects=other", "--enable-task-budgets=false", "--task-budget-namespace=other", "--private-project-pilot={}"} {
+		if _, err := parseFlags(append(slices.Clone(base), extra)); err == nil {
+			t.Fatal("pilot widened", extra)
+		}
 	}
 }
