@@ -116,7 +116,7 @@ func TestTaskClaimClientTruthfulFailureAndReplyFences(t *testing.T) {
 					conn, _, _ := h.Hijack()
 					_ = conn.Close()
 				case "redirect":
-					http.Redirect(w, r, "/v1/inbox", 307)
+					http.Redirect(w, r, "/v1/inbox", http.StatusTemporaryRedirect)
 				case "overflow":
 					_, _ = io.WriteString(w, strings.Repeat(" ", InboxMaxResponseBytes+1))
 				case "bad-json":
