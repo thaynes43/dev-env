@@ -178,3 +178,9 @@ record supplies the original catalog UID/revision and image/template metadata;
 its prompts and rule bodies never enter directory projection. No schema change
 or new provider enum follows. Pilot retention markers protect HOME even before
 first executor reconciliation or after the opt-in flag is removed.
+
+Pilot post-reservation uncached read failures reuse DESIGN-019 known non-attempt
+tracking: a non-NotFound observation failure before any Pod Create records the
+same intent as not-created. A later healthy reconciliation may resume that exact
+intent once within the original policy window. Missing or changed authority stays
+latched; no new slot, UID, deadline or direct runtime retry follows.

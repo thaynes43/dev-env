@@ -174,28 +174,35 @@ func (r *Reconciler) validatePrivatePilot(ctx context.Context, s *v1alpha1.Agent
 	if p.MatchSession(s, slot) != nil || p.ValidateTemplate(t) != nil {
 		return projectcanary.ErrRefused
 	}
-	var fresh v1alpha1.AgentSession
-	if r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &fresh) != nil || fresh.UID != s.UID || fresh.Generation != s.Generation || wantsPodGone(&fresh) || p.MatchSession(&fresh, slot) != nil {
+	reader := &readTracker{Reader: r.APIReader}
+	refuse := func() error {
+		if reader.failed {
+			return errCanaryUnobserved
+		}
 		return projectcanary.ErrRefused
 	}
-	evidence, err := p.Resolve(ctx, r.APIReader, r.Templates, now)
+	var fresh v1alpha1.AgentSession
+	if reader.Get(ctx, client.ObjectKeyFromObject(s), &fresh) != nil || fresh.UID != s.UID || fresh.Generation != s.Generation || wantsPodGone(&fresh) || p.MatchSession(&fresh, slot) != nil {
+		return refuse()
+	}
+	evidence, err := p.Resolve(ctx, reader, r.Templates, now)
 	if err != nil || string(evidence.Snapshot) != fresh.Annotations[v1alpha1.AnnotationProjectSnapshot] {
-		return projectcanary.ErrRefused
+		return refuse()
 	}
 	record, err := projectcanary.BoundPilot(&fresh)
 	if err != nil || evidence.CatalogUID != record.CatalogUID || evidence.CatalogResourceVersion != record.CatalogResourceVersion {
-		return projectcanary.ErrRefused
+		return refuse()
 	}
 	common, err := commonrules.BoundSession(&fresh)
-	if err != nil || common.Confirm(ctx, r.APIReader) != nil {
-		return projectcanary.ErrRefused
+	if err != nil || common.Confirm(ctx, reader) != nil {
+		return refuse()
 	}
 	now = time.Now()
 	if r.Now != nil {
 		now = r.Now()
 	}
 	if !p.Open(now) {
-		return projectcanary.ErrRefused
+		return refuse()
 	}
 	return nil
 }
