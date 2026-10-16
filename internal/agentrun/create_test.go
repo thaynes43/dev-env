@@ -1,8 +1,15 @@
 package agentrun
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -376,4 +383,100 @@ func TestCreateWithTimers(t *testing.T) {
 	}
 	h.mustRun(ExitUsage, "haynes-ops", "--local", "--idle-suspend-after", "-1m")
 	h.mustRun(ExitUsage, "haynes-ops", "--local", "--archive-after", "soon")
+}
+
+// onceMemoryCLI speaks HTTP over net.Pipe only: no listening socket, DNS,
+// operator, model, real credential or external transport is used.
+func onceMemoryCLI(t *testing.T, status int, body string) (Env, *atomic.Int32, *atomic.Int32, *strings.Builder) {
+	t.Helper()
+	var calls, sleeps atomic.Int32
+	old := http.DefaultTransport
+	tr := &http.Transport{DialTLSContext: func(context.Context, string, string) (net.Conn, error) {
+		calls.Add(1)
+		client, server := net.Pipe()
+		t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+		go func() {
+			defer func() { _ = server.Close() }()
+			req, err := http.ReadRequest(bufio.NewReader(server))
+			if err != nil {
+				return
+			}
+			_, _ = io.Copy(io.Discard, req.Body)
+			_ = req.Body.Close()
+			response := &http.Response{StatusCode: status, ProtoMajor: 1, ProtoMinor: 1, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), ContentLength: int64(len(body)), Close: true}
+			response.Header.Set("Location", "https://must-not-follow.invalid/target")
+			_ = response.Write(server)
+		}()
+		return client, nil
+	}}
+	http.DefaultTransport = tr
+	t.Cleanup(func() { http.DefaultTransport = old; tr.CloseIdleConnections() })
+	dir := t.TempDir()
+	token := filepath.Join(dir, "synthetic-token")
+	if err := os.WriteFile(token, []byte("synthetic-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	env := DefaultEnv()
+	env.Stdout = &stdout
+	env.Stderr = &stderr
+	env.Getenv = func(k string) string {
+		switch k {
+		case envAPIURL:
+			return "https://offline.invalid"
+		case envTokenFile:
+			return token
+		}
+		return ""
+	}
+	env.ServiceAccountDir = filepath.Join(dir, "absent")
+	env.SessionTokenFile = filepath.Join(dir, "absent-token")
+	env.Sleep = func(context.Context, time.Duration) error { sleeps.Add(1); return nil }
+	env.LookPath = func(string) (string, error) { return "", errors.New("offline fixture forbids subprocess") }
+	return env, &calls, &sleeps, &stderr
+}
+
+func TestProjectCreateOnceNoAutomaticRetryOrRedirect(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   int
+	}{
+		{"accepted", 201, `{"name":"synthetic-b","uid":"33333333-3333-4333-8333-333333333333"}`, ExitOK},
+		{"unknown", 503, `{}`, ExitUnconfirmed},
+		{"malformed", 201, `{broken`, ExitUnconfirmed},
+		{"invalid-wire", 201, `{"name":"synthetic-b","unknown":true}`, ExitUnconfirmed},
+		{"redirect", 307, `{}`, ExitFailed},
+		{"forbidden", 403, `{}`, ExitAuth},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := tc.body
+			if tc.name == "accepted" {
+				raw, _ := json.Marshal(testSession("synthetic-b", "Pending"))
+				body = string(raw)
+			}
+			env, calls, sleeps, stderr := onceMemoryCLI(t, tc.status, body)
+			code := Run(context.Background(), []string{"--project", "dev-env", "-p", "synthetic task", "--idempotency-key", "synthetic-b", "--once", "--wait=0", "-o", "json"}, env)
+			if code != tc.want || calls.Load() != 1 || sleeps.Load() != 0 {
+				t.Fatalf("exit%d want%d calls%d sleeps%d stderr%s", code, tc.want, calls.Load(), sleeps.Load(), stderr.String())
+			}
+		})
+	}
+}
+func TestProjectCreateOnceInvalidArgumentsSendNothing(t *testing.T) {
+	for _, extra := range [][]string{{}, {"--project", "dev-env"}, {"--project", "dev-env", "--idempotency-key", "key"}, {"--project", "dev-env", "--idempotency-key", "key", "--wait=0", "-o", "json", "--dry-run=server"}} {
+		env, calls, _, _ := onceMemoryCLI(t, 201, `{}`)
+		code := Run(context.Background(), append([]string{"-p", "synthetic", "--once"}, extra...), env)
+		if code != ExitUsage || calls.Load() != 0 {
+			t.Fatalf("args%v exit%d requests%d", extra, code, calls.Load())
+		}
+	}
+}
+func TestProjectCreateDefaultStillRetries(t *testing.T) {
+	env, calls, sleeps, _ := onceMemoryCLI(t, 503, `{}`)
+	code := Run(context.Background(), []string{"--project", "dev-env", "-p", "synthetic", "--wait=0", "-o", "json"}, env)
+	if code != ExitRetry || calls.Load() != 3 || sleeps.Load() != 2 {
+		t.Fatalf("default exit%d calls%d sleeps%d", code, calls.Load(), sleeps.Load())
+	}
 }

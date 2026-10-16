@@ -1,6 +1,7 @@
 package agentrun
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -69,4 +70,39 @@ func TestMsg(t *testing.T) {
 	}
 	h.mustRun(ExitUsage, "msg", name)
 	h.mustRun(ExitUsage, "msg", name, "   ")
+}
+
+func TestLogOnceOfflineWireSemantics(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   int
+	}{
+		{"accepted", 200, `{"session":"synthetic-a","tail":200,"text":"bounded receipt"}`, ExitOK},
+		{"unavailable", 503, `{}`, ExitUnconfirmed},
+		{"redirect", 307, `{}`, ExitFailed},
+		{"wrong-name", 200, `{"session":"wrong","text":"receipt"}`, ExitFailed},
+		{"truncated", 200, `{"session":"synthetic-a","text":"receipt","truncated":true}`, ExitFailed},
+		{"malformed", 200, `{broken`, ExitFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env, calls, sleeps, stderr := onceMemoryCLI(t, tc.status, tc.body)
+			code := Run(context.Background(), []string{"log", "synthetic-a", "--once", "-o", "json"}, env)
+			if code != tc.want || calls.Load() != 1 || sleeps.Load() != 0 {
+				t.Fatalf("exit%d want%d calls%d sleeps%d %s", code, tc.want, calls.Load(), sleeps.Load(), stderr.String())
+			}
+		})
+	}
+	env, calls, _, _ := onceMemoryCLI(t, 200, `{}`)
+	if code := Run(context.Background(), []string{"log", "synthetic-a", "--once"}, env); code != ExitUsage || calls.Load() != 0 {
+		t.Fatalf("bad output sent a request: exit%d requests%d", code, calls.Load())
+	}
+}
+func TestLogDefaultStillRetries(t *testing.T) {
+	env, calls, sleeps, _ := onceMemoryCLI(t, 503, `{}`)
+	code := Run(context.Background(), []string{"log", "synthetic-a"}, env)
+	if code != ExitRetry || calls.Load() != 3 || sleeps.Load() != 2 {
+		t.Fatalf("default exit%d calls%d sleeps%d", code, calls.Load(), sleeps.Load())
+	}
 }

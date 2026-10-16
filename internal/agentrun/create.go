@@ -57,7 +57,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		idleAfter, archiveAfter, dryRun                                                            string
 		maxTurns                                                                                   int
 		wait                                                                                       time.Duration
-		interactive, local, safe                                                                   bool
+		interactive, local, safe, once                                                             bool
 	)
 	fs.Func("dry-run", "", func(value string) error {
 		if value != "server" {
@@ -86,6 +86,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	fs.BoolVar(&interactive, "interactive", false, "")
 	fs.BoolVar(&local, "local", false, "")
 	fs.BoolVar(&safe, "safe", false, "")
+	fs.BoolVar(&once, "once", false, "")
 	pos, err := cmd.parse(a, args)
 	if err != nil {
 		return err
@@ -97,6 +98,9 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	})
 	if dryRunGiven && (dryRun != "server" || project == "" || restoring || local || interactive) {
 		return usageError("--dry-run=server requires a new declared-project task")
+	}
+	if once && (project == "" || key == "" || restoring || local || interactive || dryRunGiven || wait != 0 || cmd.c.output != outputJSON) {
+		return usageError("--once requires a new --project task, explicit --idempotency-key, --wait=0 and -o json; no dry-run or restore")
 	}
 	if projectGiven && !projectName.MatchString(project) {
 		return usageError("--project must be a declared project name: 1 to 63 lowercase letters, digits or '-', starting and ending with a letter or digit")
@@ -281,6 +285,21 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		}
 		a.outf("server dry-run accepted %s; no Session or actor was created\n", result.Session.Name)
 		return nil
+	}
+	if once {
+		hc := *c.http
+		hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		one := *c
+		one.http, one.rejectOversizeResponse = &hc, true
+		var raw json.RawMessage
+		status, err := a.callWith(ctx, &one, http.MethodPost, apiv1.SessionsPath, nil, req, &raw, false)
+		if err != nil {
+			return err
+		}
+		if (status != http.StatusOK && status != http.StatusCreated) || !strictWireJSON(raw, reflect.TypeFor[apiv1.Session]()) {
+			return unconfirmed(http.MethodPost, apiv1.SessionsPath, "invalid one-shot Session receipt")
+		}
+		return a.printJSON(raw)
 	}
 	var sess apiv1.Session
 	status, err := a.call(ctx, c, http.MethodPost, apiv1.SessionsPath, nil, req, &sess)

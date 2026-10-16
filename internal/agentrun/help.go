@@ -144,6 +144,8 @@ and catalog revision come from the server.
 
 Flags:
   --dry-run=server           requires --project; admission only, never creates or falls back
+  --once                     one create POST, no retry/redirect/pod wait; requires --project,
+                             --idempotency-key, --wait=0 and -o json
   -p, --prompt <task>        the task, at most 64 KiB
   --local                    an interactive session instead of a task: the TUI, no prompt
   --prompt-file <path>       read the task from a file instead; - reads stdin
@@ -201,7 +203,10 @@ resumes the same conversation in its TUI (claude --resume). A task's prompt is
 never run again. agent-run waits up to --wait (default 30s) for the pod, then
 prints how to attach. A reaped session cannot be resumed.
 `,
-	"log": `Usage: agent-run log <name> [--tail N] [-o json]
+	"log": `Usage: agent-run log <name> [--tail N] [-o json] [--once]
+
+With --once and -o json, makes one GET without retry or redirect and refuses
+truncated or mismatched log receipts. Ordinary log behavior is unchanged.
 
 Prints the last N lines (default 200, at most 5000) of the session's log, read in
 its running pod. A task's log is its readable event stream; a TUI's log has a line

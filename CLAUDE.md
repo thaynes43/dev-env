@@ -155,6 +155,7 @@ images/codex-login/      Dockerfile: ghcr.io/thaynes43/dev-env-codex-login, the 
 images/git-wait/         the git-wait trial fixture: a patched Git build recipe; publish-git-wait.yml, fixture tags only
 scripts/trials/          bounded synthetic trial scripts and their checks (git-wait, workspace CephFS); run only in reviewed fixture Jobs
 scripts/trials/native_lifecycle_profile/  renders the isolated native lifecycle profile; provisions nothing
+scripts/trials/pilot_rendezvous/  default-off bounded existing-CLI pilot gate/one-dispatch harness; offline injected checks
 images/THIRD_PARTY.md    what each published image bundles and under which license; update it with the Dockerfiles.
                          It and LICENSE are copied into both images, whose license directories CI checks (#55)
 Makefile                 generate, check-generated, check-layout, lint, test, envtest, build, build-agent-run-darwin, tools
