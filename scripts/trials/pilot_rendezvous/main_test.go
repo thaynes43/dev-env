@@ -151,6 +151,15 @@ func TestCapturedTimingAndColdStartReplay(t *testing.T) {
 		})
 	}
 }
+func TestGateRefusesFailedClaimReceipt(t *testing.T) {
+	f := newFixture(t)
+	f.o.Log.Text = strings.SplitN(f.o.Log.Text, "\n", 3)[0] + "\n" + strings.SplitN(f.o.Log.Text, "\n", 3)[1] + "\n" + `{"operation":"task-claim-create","exitCode":125,"stdout":""}` + "\n"
+	r, err := run(context.Background(), f.c, f.adapters(t))
+	if !errors.Is(err, errRefused) || r.Rejection == nil || r.Rejection.Predicate != "claim_receipt_failed" || f.calls != 0 {
+		t.Fatalf("receipt%+v err%v calls%d", r, err, f.calls)
+	}
+}
+
 func TestGateRefusesWrongBindingsAndTerminalFacts(t *testing.T) {
 	for _, mode := range []string{"sessionUID", "podUID", "head", "catalog", "prompt", "model", "endedTask", "staleHeartbeat", "wrongLogSession", "wrongStart", "wrongOwner", "wrongClaimPod", "wrongRules", "duplicateClaimReceipt", "staleClaim"} {
 		t.Run(mode, func(t *testing.T) {
@@ -184,7 +193,7 @@ func TestGateRefusesWrongBindingsAndTerminalFacts(t *testing.T) {
 			case "wrongRules":
 				f.o.Log.Text = strings.ReplaceAll(f.o.Log.Text, f.c.Policy.RulesRevision, "wrong")
 			case "duplicateClaimReceipt":
-				f.o.Log.Text += f.o.Log.Text
+				f.o.Log.Text += "\n" + claimLine(t, apiv1.TaskClaimResult{Outcome: "Created", Claim: apiv1.TaskClaim{UID: "66666666-6666-4666-8666-666666666666", Identity: apiv1.TaskClaimIdentity{Project: "dev-env", Repository: "dev-env", TaskKey: "task:" + f.c.Policy.Key(0)}, Owner: apiv1.TaskClaimOwner{Namespace: "dev-agents", Name: f.c.Policy.SessionName(0), UID: aUID}, Actor: apiv1.TaskClaimActor{Kind: "session", PodUID: podUID, PodName: f.c.Policy.SessionName(0)}, Provenance: apiv1.TaskClaimProvenance{CatalogRevision: f.c.Policy.CatalogRevision, RulesRevision: f.c.Policy.RulesRevision, ReportedHead: f.c.Head}, CreatedAt: f.c.Policy.NotBefore.Add(4*time.Minute + 22*time.Second)}})
 			case "staleClaim":
 				f.now = f.now.Add(15 * time.Second)
 				f.o.Session.AgentStatus.LastHeartbeat = &f.now
@@ -423,6 +432,19 @@ func TestCapturedRealClaimLogGate(t *testing.T) {
 		t.Fatalf("actual captured format refused: %v", err)
 	}
 }
+func TestExecuteRefusesNonExecutableCLI(t *testing.T) {
+	f := newFixture(t)
+	path := filepath.Join(f.c.ReceiptDir, "config.json")
+	raw, _ := json.Marshal(f.c)
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := execute([]string{"--config", path, "--execute"}, &out); err == nil || out.Len() != 0 {
+		t.Fatalf("err%v out%s", err, out.String())
+	}
+}
+
 func TestExistingRunRefusesBeforeAnyTransport(t *testing.T) {
 	f := newFixture(t)
 	path := filepath.Join(f.c.ReceiptDir, "config.json")

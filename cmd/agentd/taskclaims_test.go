@@ -91,13 +91,17 @@ func TestTaskClaimCommandsIntentConflictAndRefusal(t *testing.T) {
 			t.Fatal("invalid intent not refused", code)
 		}
 	}
-	for _, args := range [][]string{{"task-claim-get", "--project=sample", "--claim=../../inbox"}, {"task-claim-list", "--project=sample", "--limit=101"}, {"task-claim-list", "--project=other?x=y"}, {"task-claim-create", "--uid=spoofed"}, {"task-claim-create", "--owner=other"}} {
+	for _, args := range [][]string{{"task-claim-get", "--project=sample", "--claim=../../inbox"}, {"task-claim-list", "--project=sample", "--limit=101"}, {"task-claim-list", "--project=other?x=y"}, {"task-claim-create", "--uid=spoofed"}, {"task-claim-create", "--owner=other"}, {"task-claim-create", "--timeout=11s"}, {"task-claim-create", "--timeout=500ms"}, {"task-claim-list", "--project=sample", "--timeout=5s"}} {
 		var out, stderr bytes.Buffer
 		if code := run(context.Background(), args, strings.NewReader(intent), &out, &stderr, getenv, agentd.ExecRunner{}); code != exitUsage {
-			t.Fatal("invalid flags not refused", code)
+			t.Fatal("invalid flags not refused", code, args)
 		}
 	}
 	if calls != before {
 		t.Fatal("invalid intent reached API")
+	}
+	var out, stderr bytes.Buffer
+	if code := run(context.Background(), []string{"task-claim-create", "--timeout=10s"}, strings.NewReader(intent), &out, &stderr, getenv, agentd.ExecRunner{}); code != exitOK || calls != before+1 {
+		t.Fatal("bounded create timeout flag refused valid call", code, stderr.String())
 	}
 }

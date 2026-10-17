@@ -222,8 +222,14 @@ func validateGate(c Config, o Observation, now time.Time) (*Deadlines, error) {
 		if json.Unmarshal([]byte(line), &entry) != nil || entry.Operation != "task-claim-create" {
 			continue
 		}
-		if entry.ExitCode == nil || *entry.ExitCode != 0 || result != nil {
-			return nil, reject("claim_receipt_duplicate_or_failed")
+		if entry.ExitCode == nil || *entry.ExitCode != 0 {
+			if result != nil {
+				return nil, reject("claim_receipt_duplicate")
+			}
+			return nil, reject("claim_receipt_failed")
+		}
+		if result != nil {
+			return nil, reject("claim_receipt_duplicate")
 		}
 		var r apiv1.TaskClaimResult
 		if json.Unmarshal([]byte(entry.Stdout), &r) != nil {
@@ -454,10 +460,19 @@ func execute(args []string, out io.Writer) error {
 	if !*enabled {
 		return json.NewEncoder(out).Encode(map[string]any{"state": "NONEXECUTING_REQUIRES_SEPARATE_RUNTIME_AUTHORITY", "argv": append([]string{c.Binary}, c.dispatchArgs()...), "phaseSeconds": []int{360, 600, 720}, "noTransportCalled": true})
 	}
+	runPath := filepath.Join(c.ReceiptDir, c.Policy.Key(1)+".run.json")
 	// A completed/failed/unknown harness run cannot be restarted in place.
-	// Reserve before ANY transport, so a loser cannot overwrite the winner's
-	// result or dispatch B then discover an old result file.
-	if err := saveExclusive(filepath.Join(c.ReceiptDir, c.Policy.Key(1)+".run.json"), map[string]any{"state": "HARNESS_RUN_RESERVED_NO_RETRY", "policyDigest": c.Policy.Digest(), "aUID": c.AUID}); err != nil {
+	// Refuse before ANY transport or CLI exec, so a loser cannot overwrite the
+	// winner's result or dispatch B then discover an old result file.
+	if _, err := os.Stat(runPath); err == nil {
+		return os.ErrExist
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if st, err := os.Stat(c.Binary); err != nil || st.Mode()&0111 == 0 {
+		return fmt.Errorf("existing CLI is not executable (no retry): %w", err)
+	}
+	if err := saveExclusive(runPath, map[string]any{"state": "HARNESS_RUN_RESERVED_NO_RETRY", "policyDigest": c.Policy.Digest(), "aUID": c.AUID}); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithDeadline(context.Background(), c.Policy.ExpiresAt.Add(-time.Minute))
