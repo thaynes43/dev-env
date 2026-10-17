@@ -159,6 +159,10 @@ type RestartReport struct {
 	ConversationID string `json:"conversationId,omitempty"`
 	// Resumable: the next boot resumes ConversationID in the TUI.
 	Resumable bool `json:"resumable"`
-	// Agent is what the stop did to the agent CLI.
+	// Attached is the live tmux client count from `prepare-restart --dry-run`.
+	// Nil means this report did not count clients. Drain stops the agent only
+	// when the count is present and zero.
+	Attached *int `json:"attached,omitempty"`
+	// Agent is what the stop did to the agent CLI. The dry-run leaves it empty.
 	Agent *AgentStop `json:"agent,omitempty"`
 }

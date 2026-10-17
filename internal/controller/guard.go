@@ -17,7 +17,9 @@ import (
 
 // The guard of DESIGN-001 5.1 (D-45, D-51). The operator deletes a session's pod
 // in two transitions only, Draining and Suspended, and suspends a pod that ran
-// only after a rescue in it (D-10). It deletes a session's volume only when a
+// only after a rescue in it (D-10). Drain (DESIGN-001 5.2) may delete the pod
+// only after prepare-restart has recorded the conversation for that pod; it
+// does not lift the volume finalizer. It deletes a session's volume only when a
 // deleted session is archived, after a verified rescue of the volume's last pod.
 // deletePod and deleteVolume are the only places in this package that delete
 // anything, besides the HOME expiry's three exceptions (DESIGN-025 5.2, 6.1,
@@ -56,9 +58,13 @@ var errHoldStarting = errors.New("the hold pod has not started yet; it stays to 
 // in to fix the worktree meanwhile (D-55).
 var errHoldRescuing = errors.New("the hold pod stays until a rescue in it makes the volume safe (D-55)")
 
-// errDrainNotBuilt is why a Draining session keeps its pod today: drain needs
-// agentd's prepare-restart, plan 04 (DESIGN-001 5.2).
-var errDrainNotBuilt = errors.New("drain is not built yet (plan 04, DESIGN-001 5.2); the pod stays")
+// errDrainNeedsRestart is why a Draining session keeps its pod: prepare-restart
+// has not recorded the conversation this pod resumes (DESIGN-001 5.2).
+var errDrainNeedsRestart = errors.New("the pod stays until prepare-restart has recorded the conversation this pod resumes (DESIGN-001 5.2)")
+
+// errSummonedNotDrained is why a summoned session is never rolled onto a new
+// revision (DESIGN-001 3.7, V-13, 5.2).
+var errSummonedNotDrained = errors.New("a summoned session is never drained; it keeps the revision it started on (DESIGN-001 3.7, 5.2)")
 
 // wantsPodGone reports whether the session asks for its pod to go: suspended, or
 // deleted (a reap, which suspends first).
@@ -68,16 +74,19 @@ func wantsPodGone(s *v1alpha1.AgentSession) bool {
 
 // podRemovalAllowed is nil only when 5.1 allows deleting the session's pod now:
 // in the Suspended transition (asked by a suspend or a delete), when no agent
-// process runs in the pod or a rescue ran in it since the session last changed.
-// A pod runs no agent when it never started (never scheduled, or its containers
-// never ran) or when it ended; then no rescue can run in it, and none is needed
-// for the pod, because the volume stays and archive asks for its own rescue.
-// Every other state keeps the pod, whatever else asks. Draining (plan 04)
-// keeps it too, until drain is built.
+// process runs in the pod or a rescue ran in it since the session last changed,
+// or in the Draining transition (DESIGN-001 5.2) when the session still wants
+// a pod and prepare-restart has recorded the conversation for this pod. A
+// suspend or a delete still needs its rescue; a stale Draining phase does not
+// skip that. A pod runs no agent when it never started (never scheduled, or
+// its containers never ran) or when it ended; then no rescue can run in it,
+// and none is needed for the pod, because the volume stays and archive asks
+// for its own rescue. Every other state keeps the pod, whatever else asks.
 //
 // A hold pod (D-55) runs no agent, so holdRemovalAllowed judges it instead.
 // Private history protection retains the original pod regardless of legacy
 // rescue or process state; neither is private stop or preservation proof.
+// A summoned session is not drained (DESIGN-001 3.7, 5.2).
 func podRemovalAllowed(s *v1alpha1.AgentSession, pod *corev1.Pod) error {
 	if privateHistoryProtected(s) {
 		return errPrivateHistoryRetained
@@ -100,8 +109,16 @@ func podRemovalAllowed(s *v1alpha1.AgentSession, pod *corev1.Pod) error {
 	switch {
 	case isHoldPod(pod):
 		return holdRemovalAllowed(s, pod)
-	case s.Status.Phase == v1alpha1.PhaseDraining:
-		return errDrainNotBuilt
+	case s.Status.Phase == v1alpha1.PhaseDraining && !wantsPodGone(s):
+		// Drain deletes this pod only. The volume finalizer stays, and the
+		// next ensure starts a pod on the current revision (DESIGN-001 5.2).
+		if summonedSession(s) {
+			return errSummonedNotDrained
+		}
+		if restartProofFor(s, pod) {
+			return nil
+		}
+		return errDrainNeedsRestart
 	case !wantsPodGone(s):
 		return fmt.Errorf("the session is neither draining nor suspending (operatingMode %s); its pod stays (DESIGN-001 5.1)", s.Spec.OperatingMode)
 	case podNeverStarted(pod), podEnded(pod), rescueRanIn(s, pod):

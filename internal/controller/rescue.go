@@ -31,6 +31,23 @@ import (
 // the agent first, so the rescue is the worktree's last state (D-48).
 var RescueCommand = []string{"agentd", "ctl", "rescue", "--stop-agent"}
 
+// ReadRestartCommand is `agentd ctl prepare-restart --dry-run` (DESIGN-001 5.2).
+// It prints the launch record and the live attach count. It does not stop the agent.
+var ReadRestartCommand = []string{"agentd", "ctl", "prepare-restart", "--dry-run"}
+
+// PrepareRestartCommand is `agentd ctl prepare-restart` (DESIGN-001 5.2).
+// Drain runs it only after the dry-run's conversation is stored and the live
+// attach count is zero. The command stops the agent the way the pod's SIGTERM
+// would, so the CLI can flush first.
+var PrepareRestartCommand = []string{"agentd", "ctl", "prepare-restart"}
+
+// ReadRestartTimeout bounds the dry-run. It does not stop the agent.
+const ReadRestartTimeout = 15 * time.Second
+
+// PrepareRestartTimeout bounds one prepare-restart. agentd's stop grace is
+// 30s; the rest is the report.
+const PrepareRestartTimeout = 90 * time.Second
+
 // RescueTimeout bounds one rescue: the agent's 30 s stop, a 60 s fetch per
 // clone, and up to 5 minutes per bundle (D-43, D-48).
 const RescueTimeout = 10 * time.Minute
@@ -77,6 +94,50 @@ func (e *ExecRescuer) Rescue(ctx context.Context, pod *corev1.Pod) (protocol.Res
 	stdout, stderr := &cappedBuffer{max: maxReport}, &cappedBuffer{max: 64 << 10}
 	err := e.exec.Run(ctx, pod.Namespace, pod.Name, ContainerName, RescueCommand, nil, stdout, stderr)
 	return parseRescueOutput(stdout, stderr.String(), err)
+}
+
+// ReadRestart implements Restarter. It execs the dry-run. A non-zero exit or
+// an unreadable report is a failure. The command does not stop the agent.
+func (e *ExecRescuer) ReadRestart(ctx context.Context, pod *corev1.Pod) (protocol.RestartReport, error) {
+	return e.execRestart(ctx, pod, ReadRestartCommand, ReadRestartTimeout)
+}
+
+// PrepareRestart implements Restarter. It execs the existing stop. A non-zero
+// exit or an unreadable report is a failure. Drain calls it only after the
+// dry-run proof is stored and the pod delete is the next step.
+func (e *ExecRescuer) PrepareRestart(ctx context.Context, pod *corev1.Pod) (protocol.RestartReport, error) {
+	return e.execRestart(ctx, pod, PrepareRestartCommand, PrepareRestartTimeout)
+}
+
+func (e *ExecRescuer) execRestart(ctx context.Context, pod *corev1.Pod, command []string, timeout time.Duration) (protocol.RestartReport, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	stdout, stderr := &cappedBuffer{max: 1 << 20}, &cappedBuffer{max: 64 << 10}
+	err := e.exec.Run(ctx, pod.Namespace, pod.Name, ContainerName, command, nil, stdout, stderr)
+	return parseRestartOutput(stdout, stderr.String(), err)
+}
+
+func parseRestartOutput(stdout *cappedBuffer, stderr string, runErr error) (protocol.RestartReport, error) {
+	var rep protocol.RestartReport
+	parseErr := stdout.err
+	if parseErr == nil {
+		parseErr = json.NewDecoder(bytes.NewReader(stdout.Bytes())).Decode(&rep)
+	}
+	if runErr == nil && parseErr == nil {
+		return rep, nil
+	}
+	detail := strings.TrimSpace(stderr)
+	if len(detail) > 400 {
+		detail = detail[:400] + "..."
+	}
+	switch {
+	case runErr != nil && detail != "":
+		return protocol.RestartReport{}, fmt.Errorf("%w: %s", runErr, detail)
+	case runErr != nil:
+		return protocol.RestartReport{}, runErr
+	default:
+		return protocol.RestartReport{}, fmt.Errorf("unreadable prepare-restart report: %w", parseErr)
+	}
 }
 
 func (e *ExecRescuer) RescueWorkspace(ctx context.Context, pod *corev1.Pod, proof *protocol.WorkspaceStopProof) (protocol.RescueReport, error) {

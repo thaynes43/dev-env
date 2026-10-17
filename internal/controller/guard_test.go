@@ -130,7 +130,9 @@ func TestPrivateHistoryPodDeletionBoundaryRetainsUncertainIdentity(t *testing.T)
 // TestPodGuardTable is 5.1's pod rule over every phase, operating mode, delete,
 // pod state and rescue record: a pod goes only in the Suspended transition, and
 // a pod an agent may run in only after a rescue in it at the session's current
-// generation. Drain (plan 04) is refused until it is built.
+// generation. A Draining session that still wants its pod stays until
+// prepare-restart proof is recorded (DESIGN-001 5.2). These rows have none.
+// A Draining phase does not skip the rescue a suspend or a delete still needs.
 func TestPodGuardTable(t *testing.T) {
 	now := metav1.Now()
 	allowed := 0
@@ -147,7 +149,8 @@ func TestPodGuardTable(t *testing.T) {
 							s.DeletionTimestamp = &now
 						}
 						s.Status.Rescue = mkRec(pod.UID, s.Generation)
-						want := phase != v1alpha1.PhaseDraining &&
+						draining := phase == v1alpha1.PhaseDraining && mode == v1alpha1.OperatingModeRunning && !deleted
+						want := !draining &&
 							(mode == v1alpha1.OperatingModeSuspended || deleted) &&
 							(!livePods[podName] || rescuedHere[recName])
 						err := podRemovalAllowed(s, pod)
@@ -157,11 +160,11 @@ func TestPodGuardTable(t *testing.T) {
 							t.Errorf("%s: refused: %v", name, err)
 						case !want && err == nil:
 							t.Errorf("%s: allowed a pod delete", name)
-						case !want && phase == v1alpha1.PhaseDraining && !errors.Is(err, errDrainNotBuilt):
+						case !want && draining && !errors.Is(err, errDrainNeedsRestart):
 							t.Errorf("%s: %v, want the drain reason", name, err)
-						case !want && phase != v1alpha1.PhaseDraining && (mode == v1alpha1.OperatingModeSuspended || deleted) && !errors.Is(err, errNeedsRescue):
+						case !want && !draining && (mode == v1alpha1.OperatingModeSuspended || deleted) && !errors.Is(err, errNeedsRescue):
 							t.Errorf("%s: %v, want the rescue reason", name, err)
-						case !want && phase != v1alpha1.PhaseDraining && mode == v1alpha1.OperatingModeRunning && !deleted && !strings.Contains(err.Error(), "neither draining nor suspending"):
+						case !want && !draining && mode == v1alpha1.OperatingModeRunning && !deleted && !strings.Contains(err.Error(), "neither draining nor suspending"):
 							t.Errorf("%s: %v", name, err)
 						}
 						if want {
@@ -258,6 +261,9 @@ var guardedCalls = []struct {
 	{"releaseVolume", "deleteVolume", "volumeRemovalAllowed"},
 	{"deletePod", "removePod", "podRemovalAllowed"},
 	{"deletePod", "removeSharedPod", "podRemovalAllowed"},
+	// Idle drain (DESIGN-001 5.2) calls deletePod only after podRemovalAllowed
+	// has seen the prepare-restart proof. It does not lift a volume finalizer.
+	{"deletePod", "drainPod", "podRemovalAllowed"},
 	{"deleteVolume", "archive", "volumeRemovalAllowed"},
 	{"detachPrivateHome", "retainSharedPrivateHome", "sharedPodsAbsent"},
 	{"releaseRetainedSharedSession", "retainSharedPrivateHome", "confirmedRetention"},
@@ -283,7 +289,9 @@ var guardedCalls = []struct {
 // call may appear only in deletePod, after podRemovalAllowed, in
 // deleteVolume, after volumeRemovalAllowed, and in the HOME expiry's
 // deleteExpiryExecutor and deleteExpiryHold, after expiryPodRemovalAllowed and
-// expiryHoldRemovalAllowed (DESIGN-025 11), and each Delete names its object by
+// expiryHoldRemovalAllowed (DESIGN-025 11). deletePod itself may be called
+// from removePod, removeSharedPod, and drainPod, each after podRemovalAllowed
+// (DESIGN-001 5.2). Each Delete names its object by
 // UID (client.Preconditions), so a same-named replacement never goes in its
 // place; RemoveFinalizer only in releaseSession, which only releaseIfEmpty
 // calls, and in releaseVolume, which asks volumeRemovalAllowed and which only

@@ -35,7 +35,7 @@ func status(name string) protocol.Status {
 			Branch: "agent/" + name, Head: "0123456789abcdef",
 		},
 		Agent: protocol.AgentState{
-			State: protocol.AgentExited, ConversationID: "9b1c", StartedAt: &at, LastActivity: &at,
+			State: protocol.AgentExited, ConversationID: "9b1c", StartedAt: &at, LastActivity: &at, Attached: 1,
 			Task: &protocol.TaskResult{ExitCode: 0, FinishedAt: at.Add(time.Minute), Subtype: "success", NumTurns: 12},
 		},
 		Usage:      &protocol.Usage{CostUSD: 0.4217, InputTokens: 1200, OutputTokens: 3400},
@@ -57,7 +57,7 @@ func TestHeartbeat(t *testing.T) {
 	s := f.session(name)
 	a := s.Status.Agent
 	if a == nil || a.Status != protocol.AgentExited || a.Boot != protocol.BootReady || a.Branch != "agent/"+name ||
-		a.Head != "0123456789abcdef" || a.ConversationID != "9b1c" || a.Agentd == "" {
+		a.Head != "0123456789abcdef" || a.ConversationID != "9b1c" || a.Attached != 1 || a.Agentd == "" {
 		t.Fatalf("status.agent %+v", a)
 	}
 	if !a.LastHeartbeat.Time.Equal(f.now) || a.LastActivity == nil {

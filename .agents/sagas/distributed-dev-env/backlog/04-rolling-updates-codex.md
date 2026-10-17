@@ -90,3 +90,21 @@ Project catalog, common rules, task coordination, history retention and local
 repo freshness live in [plan 11](11-project-workspaces.md). No shared Git rollout
 is needed; do not share writable provider homes. No new
 management UI or v1/auth migration is selected by this plan update.
+
+## Source note, 2026-10-17
+
+Idle drain (DESIGN-001 5.2, Q-03) is in the operator source. Q-03 is unchanged.
+This slice's idle moment is the agent reporting idle or waiting, with no
+attached client. `status.agent.attached` is the heartbeat's client count.
+`status.restart` stores the conversation id, the pod UID, and the session
+generation. That proof comes only from `agentd ctl prepare-restart --dry-run`,
+which reads the launch record and the live attach count and does not stop the
+agent. The existing stop runs only after the proof is stored and that count is
+zero; then `deletePod` runs. A read that is not resumable, a proof that was not
+written, or a live attach count above zero does not stop the agent and does not
+delete the pod. Busy, summoned, private-history, canary, and pilot sessions are
+not drained. The 72h session message and the Pushover line are deferred: they
+are not sent, and drain does not wait on that notice. D-50 egress stays. The
+existing ensure path then starts the replacement on the current revision and
+the same volume. This note is source only. It does not deploy the operator.
+The acceptance list above is unchanged.

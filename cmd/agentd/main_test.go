@@ -119,6 +119,9 @@ func TestCtl(t *testing.T) {
 	if code, out, errOut := runArgs([]string{"ctl", "prepare-restart"}, env); code != exitOK || !strings.Contains(out, `"resumable": false`) || !strings.Contains(out, `"wasRunning": false`) {
 		t.Errorf("ctl prepare-restart: %d %s %s", code, out, errOut)
 	}
+	if code, out, errOut := runArgs([]string{"ctl", "prepare-restart", "--dry-run"}, env); code != exitOK || !strings.Contains(out, `"resumable": false`) || !strings.Contains(out, `"attached": 0`) || strings.Contains(out, `"wasRunning"`) {
+		t.Errorf("ctl prepare-restart --dry-run: %d %s %s", code, out, errOut)
+	}
 	if code, _, _ := runArgs([]string{"ctl"}, env); code != exitUsage {
 		t.Errorf("ctl: %d", code)
 	}
