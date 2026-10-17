@@ -104,7 +104,8 @@ func TestRenderFullPod(t *testing.T) {
 			adds = append(adds, l)
 		}
 	}
-	if len(adds) != 2 || !strings.Contains(adds[0], "http://ha:8086/secret-path-xyz") {
+	joined := strings.Join(adds, "\n")
+	if len(adds) != 3 || !strings.Contains(joined, "http://ha:8086/secret-path-xyz") || !strings.Contains(joined, `dev-env {"args":["mcp"],"command":"agent-run"}`) {
 		t.Errorf("mcp adds = %q", adds)
 	}
 	// Default model from the session.
@@ -117,7 +118,7 @@ func TestRenderFullPod(t *testing.T) {
 	}
 	// Codex config: base + generated servers; 0600 because a URL path is expanded.
 	toml, _ := os.ReadFile(filepath.Join(s.Home, ".codex", "config.toml"))
-	if !strings.HasPrefix(string(toml), "model = \"gpt-6-astra\"\n") || !strings.Contains(string(toml), "[mcp_servers.ha]") || !strings.Contains(string(toml), "[mcp_servers.pw]") {
+	if !strings.HasPrefix(string(toml), "model = \"gpt-6-astra\"\n") || !strings.Contains(string(toml), "[mcp_servers.ha]") || !strings.Contains(string(toml), "[mcp_servers.pw]") || !strings.Contains(string(toml), "[mcp_servers.dev-env]") {
 		t.Errorf("config.toml = %s", toml)
 	}
 	if fi, _ := os.Stat(filepath.Join(s.Home, ".codex", "config.toml")); fi.Mode().Perm() != 0o600 {

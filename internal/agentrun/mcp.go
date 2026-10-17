@@ -5,11 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -32,25 +32,24 @@ func (a *app) mcp(ctx context.Context, args []string) error {
 	if len(pos) > 0 {
 		return usageError("mcp takes no arguments; it speaks MCP on stdin and stdout")
 	}
-	c, err := a.connect(ctx, cmd.c.conn)
-	if err != nil {
-		return err
-	}
-	return a.serveMCP(ctx, c, a.env.Stdin, a.env.Stdout)
+	// The API connection waits for the first tools/call. initialize can be
+	// answered while the operator or the token is briefly unavailable.
+	return a.serveMCP(ctx, cmd.c.conn, a.env.Stdin, a.env.Stdout)
 }
 
-func (a *app) serveMCP(ctx context.Context, c *conn, in io.Reader, out io.Writer) error {
+func (a *app) serveMCP(ctx context.Context, opts connOpts, in io.Reader, out io.Writer) error {
+	s := &mcpSession{app: a, ctx: ctx, opts: opts}
 	r := bufio.NewReaderSize(in, 64*1024)
 	w := bufio.NewWriter(out)
 	for {
 		body, err := readMCPMessage(r)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
 			return fail(ExitFailed, "mcp: %v", err)
 		}
-		msg, err := a.handleMCP(ctx, c, body)
+		msg, err := s.handle(body)
 		if err != nil {
 			return err
 		}
@@ -63,13 +62,33 @@ func (a *app) serveMCP(ctx context.Context, c *conn, in io.Reader, out io.Writer
 	}
 }
 
+// mcpSession is one stdio server. conn stays nil until a tool needs the API.
+type mcpSession struct {
+	app  *app
+	ctx  context.Context
+	opts connOpts
+	conn *conn
+}
+
+func (s *mcpSession) client() (*conn, error) {
+	if s.conn != nil {
+		return s.conn, nil
+	}
+	c, err := s.app.connect(s.ctx, s.opts)
+	if err != nil {
+		return nil, err
+	}
+	s.conn = c
+	return c, nil
+}
+
 type mcpRequest struct {
 	ID     *json.RawMessage `json:"id"`
 	Method string           `json:"method"`
 	Params json.RawMessage  `json:"params"`
 }
 
-func (a *app) handleMCP(ctx context.Context, c *conn, body []byte) ([]byte, error) {
+func (s *mcpSession) handle(body []byte) ([]byte, error) {
 	var req mcpRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		return mcpError(json.RawMessage("null"), -32700, "parse error"), nil
@@ -91,7 +110,12 @@ func (a *app) handleMCP(ctx context.Context, c *conn, body []byte) ([]byte, erro
 	case "tools/list":
 		result = map[string]any{"tools": accessTools()}
 	case "tools/call":
-		result = a.callAccessTool(ctx, c, req.Params)
+		c, err := s.client()
+		if err != nil {
+			result = mcpToolError(err.Error())
+			break
+		}
+		result = s.app.callAccessTool(s.ctx, c, req.Params)
 	default:
 		rpcErr = &mcpRPCError{Code: -32601, Message: "method not found"}
 	}
@@ -311,50 +335,40 @@ func mcpError(id json.RawMessage, code int, msg string) []byte {
 
 const maxMCPMessage = 1 << 20
 
+// readMCPMessage reads one JSON-RPC message. MCP stdio is one JSON object per
+// line, with no Content-Length header.
 func readMCPMessage(r *bufio.Reader) ([]byte, error) {
-	var length int
 	for {
-		line, err := r.ReadString('\n')
-		if err != nil {
+		line, err := r.ReadBytes('\n')
+		if len(line) > maxMCPMessage {
+			return nil, fmt.Errorf("mcp message exceeds %d bytes", maxMCPMessage)
+		}
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) == 0 {
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					return nil, io.EOF
+				}
+				return nil, err
+			}
+			continue
+		}
+		if err != nil && !errors.Is(err, io.EOF) {
 			return nil, err
 		}
-		line = strings.TrimRight(line, "\r\n")
-		if line == "" {
-			break
-		}
-		name, value, ok := strings.Cut(line, ":")
-		if ok && strings.EqualFold(strings.TrimSpace(name), "Content-Length") {
-			n, err := strconv.Atoi(strings.TrimSpace(value))
-			if err != nil || n < 0 || n > maxMCPMessage {
-				return nil, fmt.Errorf("content length %q is not a message this server reads", strings.TrimSpace(value))
-			}
-			length = n
-		}
+		return trimmed, nil
 	}
-	if length == 0 {
-		return nil, fmt.Errorf("a message omitted Content-Length")
-	}
-	body := make([]byte, length)
-	if _, err := io.ReadFull(r, body); err != nil {
-		return nil, err
-	}
-	return body, nil
 }
 
 func writeMCPMessage(w *bufio.Writer, body []byte) error {
-	if _, err := fmt.Fprintf(w, "Content-Length: %d\r\n\r\n", len(body)); err != nil {
-		return err
+	if bytes.Contains(body, []byte("\n")) {
+		return fmt.Errorf("mcp message contains a newline")
 	}
 	if _, err := w.Write(body); err != nil {
 		return err
 	}
+	if err := w.WriteByte('\n'); err != nil {
+		return err
+	}
 	return w.Flush()
-}
-
-// frameMCP is used by tests in this package.
-func frameMCP(body []byte) string {
-	var b bytes.Buffer
-	fmt.Fprintf(&b, "Content-Length: %d\r\n\r\n", len(body))
-	b.Write(body)
-	return b.String()
 }

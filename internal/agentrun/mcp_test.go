@@ -3,8 +3,10 @@ package agentrun
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -21,10 +23,12 @@ func TestAccessMCPRequestsAndDoesNotInstall(t *testing.T) {
 			return http.StatusCreated, `{"name":"grant-1017-160000-ab12","phase":"Pending","type":"kube","session":"task-1","ttl":"1h0m0s","reason":"read pods","approvalURL":"https://broker.example/g"}`
 		},
 	})
-	initBody := []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`)
-	note := []byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
-	call := []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"request_access","arguments":{"type":"kube","reason":"read pods","role":"dev-env-grant-workloads"}}}`)
-	h.env.Stdin = strings.NewReader(frameMCP(initBody) + frameMCP(note) + frameMCP(call))
+	h.env.Stdin = strings.NewReader(strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize"}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"request_access","arguments":{"type":"kube","reason":"read pods","role":"dev-env-grant-workloads"}}}`,
+		"",
+	}, "\n"))
 	h.mustRun(ExitOK, "mcp")
 	msgs := decodeMCPFrames(t, h.stdout.String())
 	if len(msgs) != 2 {
@@ -44,14 +48,26 @@ func TestAccessMCPRequestsAndDoesNotInstall(t *testing.T) {
 		t.Fatalf("body %#v", got)
 	}
 	before := len(h.api.requests())
-	bad := []byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"request_access","arguments":{"type":"later","reason":"x"}}}`)
-	h.env.Stdin = strings.NewReader(frameMCP(bad))
+	h.env.Stdin = strings.NewReader(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"request_access","arguments":{"type":"later","reason":"x"}}}` + "\n")
 	h.mustRun(ExitOK, "mcp")
 	if len(h.api.requests()) != before {
 		t.Fatal("a refused tool call reached the API")
 	}
 	if !strings.Contains(h.stdout.String(), `"isError":true`) {
 		t.Fatalf("refused call %s", h.stdout.String())
+	}
+}
+
+func TestAccessMCPInitializeDoesNotConnect(t *testing.T) {
+	h := newHarness(t)
+	h.vars[envTokenFile] = filepath.Join(h.dir, "missing-token")
+	h.env.Stdin = strings.NewReader("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"initialize\"}\n")
+	h.mustRun(ExitOK, "mcp")
+	if !strings.Contains(h.stdout.String(), `"id":7`) || !strings.Contains(h.stdout.String(), `"name":"dev-env"`) {
+		t.Fatalf("initialize %s", h.stdout.String())
+	}
+	if len(h.api.requests()) != 0 {
+		t.Fatal("initialize called the API")
 	}
 }
 
@@ -71,9 +87,11 @@ func TestAccessMCPStatusAndRelease(t *testing.T) {
 			return http.StatusAccepted, `{"name":"grant-abc","phase":"Active","type":"kube","ttl":"30m","reason":"read pods","release":true}`
 		},
 	})
-	list := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"grant_status","arguments":{"phase":"Active","mine":true}}}`)
-	rel := []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"release_access","arguments":{"name":"grant-abc"}}}`)
-	h.env.Stdin = strings.NewReader(frameMCP(list) + frameMCP(rel))
+	h.env.Stdin = strings.NewReader(strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"grant_status","arguments":{"phase":"Active","mine":true}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"release_access","arguments":{"name":"grant-abc"}}}`,
+		"",
+	}, "\n"))
 	h.mustRun(ExitOK, "mcp")
 	if len(h.api.requests()) != 2 || h.api.requests()[1].method != http.MethodDelete {
 		t.Fatalf("requests %+v", h.api.requests())
@@ -90,7 +108,7 @@ func decodeMCPFrames(t *testing.T, raw string) []string {
 	var out []string
 	for {
 		body, err := readMCPMessage(r)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return out
 		}
 		if err != nil {

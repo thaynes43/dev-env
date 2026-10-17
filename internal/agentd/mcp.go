@@ -143,8 +143,9 @@ func marshalNoEscape(v any) ([]byte, error) {
 // leaves mcp.json is removed at the next boot on the same volume.
 const mcpManagedFile = "mcp-managed.json"
 
-// builtinAccessMCP is the in-pod access server (DESIGN-001 6.12). Its command
-// is agent-run mcp. A server of this name already in mcp.json is left alone.
+// builtinAccessMCP is the in-pod access server (DESIGN-001 D-29, 2026-10-17).
+// Its command is agent-run mcp. A server of this name already in mcp.json is
+// left alone.
 const builtinAccessMCP = "dev-env"
 
 func builtinAccessSpec() json.RawMessage {
