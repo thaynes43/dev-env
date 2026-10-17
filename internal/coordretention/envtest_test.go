@@ -27,7 +27,11 @@ func TestEnvtestInboxRule(t *testing.T) {
 		}
 	})
 	ctx := context.Background()
-	admin, err := client.New(env.Config, client.Options{Scheme: retentionScheme(t)})
+	scheme := retentionScheme(t)
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	admin, err := client.New(env.Config, client.Options{Scheme: scheme})
 	if err != nil {
 		t.Fatal(err)
 	}
