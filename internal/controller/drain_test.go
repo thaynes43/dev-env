@@ -835,6 +835,21 @@ func TestDrainFailureLetsTheIdleTimerSuspend(t *testing.T) {
 	}
 }
 
+func TestStoppedProofKeepsDrainingAfterTheAgentExits(t *testing.T) {
+	tmpl := currentTemplates(t)
+	s := drainFixture("exited-proof")
+	s.Status.Agent.Status = protocol.AgentExited
+	pod := readyDrainPod(s.Name, "old-revision")
+	s.Status.Restart = &v1alpha1.RestartStatus{ConversationID: "conv-1", PodUID: string(pod.UID), Generation: s.Generation, Stopped: true}
+	phase, _ := podPhase(s, observation{pod: owned[*corev1.Pod]{obj: pod}, templates: tmpl})
+	if phase != v1alpha1.PhaseDraining {
+		t.Fatalf("phase %s", phase)
+	}
+	if drainEligible(s, pod, tmpl.Revision()) {
+		t.Fatal("an exited agent was still drain-eligible")
+	}
+}
+
 // Idle for drain is the agent's not-working state with no attached client.
 // Waiting counts. Busy, a client, and a current revision do not.
 func TestDrainIdleMoment(t *testing.T) {

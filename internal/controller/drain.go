@@ -82,6 +82,12 @@ func templateRevision(obs observation) string {
 // restartProofFor reports whether prepare-restart recorded a conversation for
 // this pod at the session's current generation (DESIGN-001 5.2). Anything else
 // keeps the pod.
+// drainStopRecorded is a restart proof whose stop was marked. The phase stays
+// Draining after the agent exits, so a failed delete can be retried.
+func drainStopRecorded(s *v1alpha1.AgentSession, pod *corev1.Pod) bool {
+	return restartProofFor(s, pod) && s.Status.Restart.Stopped
+}
+
 func restartProofFor(s *v1alpha1.AgentSession, pod *corev1.Pod) bool {
 	if s == nil || pod == nil || pod.UID == "" {
 		return false
@@ -112,7 +118,7 @@ func (r *Reconciler) drainIdle(ctx context.Context, s *v1alpha1.AgentSession, t 
 	// The conversation is already stored for this pod. A later heartbeat can
 	// report the agent exited, or the tmux count can be unset, and those
 	// gates would keep the pod with no agent. Delete it.
-	if s != nil && s.Status.Phase == v1alpha1.PhaseDraining && restartProofFor(s, pod) && s.Status.Restart.Stopped {
+	if s != nil && s.Status.Phase == v1alpha1.PhaseDraining && drainStopRecorded(s, pod) {
 		return r.finishDrain(ctx, s, pod, obs)
 	}
 	if !drainEligible(s, pod, t.Revision()) {

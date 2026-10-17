@@ -1512,7 +1512,7 @@ func podPhase(s *v1alpha1.AgentSession, obs observation) (v1alpha1.SessionPhase,
 			reason = string(pod.Status.Phase)
 		}
 		return v1alpha1.PhaseFailed, notReady("PodEnded", fmt.Sprintf("the pod ended (%s): %s; its volume is kept", reason, pod.Status.Message))
-	case pod.Status.Phase == corev1.PodRunning && podReady(pod) && drainEligible(s, pod, templateRevision(obs)):
+	case pod.Status.Phase == corev1.PodRunning && podReady(pod) && (drainEligible(s, pod, templateRevision(obs)) || drainStopRecorded(s, pod)):
 		return v1alpha1.PhaseDraining, metav1.Condition{Status: metav1.ConditionTrue, Reason: "PodReady",
 			Message: "the pod is Ready on " + pod.Spec.NodeName + " and idle on an older template revision, so it drains (DESIGN-001 5.2)"}
 	case pod.Status.Phase == corev1.PodRunning && podReady(pod):
