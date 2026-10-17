@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -374,6 +375,19 @@ func TestExistingCLIAdapterDispatchesInSameStep(t *testing.T) {
 		if !found {
 			t.Fatalf("retrying command %v", args)
 		}
+	}
+}
+
+func TestLogReadUnavailable(t *testing.T) {
+	if logReadUnavailable(nil) {
+		t.Fatal("nil is available")
+	}
+	err := fmt.Errorf("existing CLI failed (no retry): the API refused the request (409 conflict): session s's pod is not running (Failed)")
+	if !logReadUnavailable(err) {
+		t.Fatal("expected stopped executor")
+	}
+	if logReadUnavailable(errors.New("agent-run: --tail is a number of lines from 1 to 5000, not 8000")) {
+		t.Fatal("usage errors are not unavailable logs")
 	}
 }
 

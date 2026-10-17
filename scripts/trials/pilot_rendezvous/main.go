@@ -402,10 +402,22 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	}
 	return b.Buffer.Write(p)
 }
+// logReadUnavailable reports a one-shot log read the API refuses because the
+// executor pod is gone. Those rounds may still use a prior captured log.
+func logReadUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "pod is not running") || strings.Contains(msg, "has no pod")
+}
+
 func liveAdapters(c Config, invoke func(context.Context, string, []string) ([]byte, error)) adapters {
 	read := func(ctx context.Context, args ...string) ([]byte, error) {
 		return invoke(ctx, c.Binary, append(args, "--ca-file", c.CAFile))
 	}
+	var retainedLog apiv1.SessionLog
+	var hasRetainedLog bool
 	return adapters{now: time.Now, sleep: func(ctx context.Context, d time.Duration) error {
 		timer := time.NewTimer(d)
 		defer timer.Stop()
@@ -438,10 +450,20 @@ func liveAdapters(c Config, invoke func(context.Context, string, []string) ([]by
 		}
 		raw, err = read(ctx, "log", c.Policy.SessionName(0), "--tail", "5000", "--once", "-o", "json")
 		if err != nil {
+			if logReadUnavailable(err) && hasRetainedLog {
+				o.Log = retainedLog
+				return o, nil
+			}
+			if logReadUnavailable(err) {
+				return o, nil
+			}
 			return o, err
 		}
-		err = json.Unmarshal(raw, &o.Log)
-		return o, err
+		if err = json.Unmarshal(raw, &o.Log); err != nil {
+			return o, err
+		}
+		retainedLog, hasRetainedLog = o.Log, true
+		return o, nil
 	}, dispatch: func(ctx context.Context, args []string) ([]byte, error) { return invoke(ctx, c.Binary, args) }, claimAttempt: func(o Observation, d Deadlines) error {
 		if err := c.validate(); err != nil {
 			return err
