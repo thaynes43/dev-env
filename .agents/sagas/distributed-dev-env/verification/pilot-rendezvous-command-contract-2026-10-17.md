@@ -15,7 +15,9 @@ argv. The word `stdin` must not appear.
 
 `PilotPolicy.ValidateRendezvousCommands` requires those shapes, plus
 `task-claim-list` and `inbox-list` with `--project dev-env`, in both prompts.
-It refuses the positional read/ack, extra claim argv, and the word `stdin`.
+It refuses every `inbox-read` and `inbox-ack` that is not that exact flag form,
+including a second bad line beside a good one, plus extra claim argv and the
+word `stdin`.
 Operator `Validate` does not call it. The harness `validate` and `run` do, and
 `run` returns before observation, reservation, or a B create.
 

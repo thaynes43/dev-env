@@ -33,7 +33,7 @@ func (p *PilotPolicy) ValidateRendezvousCommands() error {
 }
 
 func validRendezvousPrompt(prompt string) bool {
-	if containsWord(prompt, "stdin") || hasTrailingArg(prompt, "task-claim-create") || hasPositional(prompt, "inbox-read") || hasPositional(prompt, "inbox-ack") {
+	if containsWord(prompt, "stdin") || hasTrailingArg(prompt, "task-claim-create") || !exactMessageCommands(prompt, "inbox-read") || !exactMessageCommands(prompt, "inbox-ack") {
 		return false
 	}
 	if !hasClaimPipeline(prompt) {
@@ -47,7 +47,7 @@ func validRendezvousPrompt(prompt string) bool {
 			return false
 		}
 	}
-	return hasMessageCommand(prompt, "/usr/local/bin/agentd inbox-read") && hasMessageCommand(prompt, "/usr/local/bin/agentd inbox-ack")
+	return true
 }
 
 func hasClaimPipeline(prompt string) bool {
@@ -88,24 +88,34 @@ func hasProjectCommand(prompt, command string) bool {
 	}
 }
 
-func hasMessageCommand(prompt, command string) bool {
-	key := command + " --project dev-env --message "
-	rest := prompt
+// exactMessageCommands requires every inbox-read or inbox-ack to be the
+// proved flag form, including a second line beside a good one. A flag
+// followed by a bare name, or a message name followed by another token,
+// is refused.
+func exactMessageCommands(prompt, command string) bool {
+	const lead = "/usr/local/bin/agentd "
+	const flags = " --project dev-env --message "
+	from := 0
+	found := false
 	for {
-		i := strings.Index(rest, key)
+		i := findBounded(prompt, command, from)
 		if i < 0 {
+			return found
+		}
+		if i < len(lead) || prompt[i-len(lead):i] != lead || !strings.HasPrefix(prompt[i+len(command):], flags) {
 			return false
 		}
-		after := rest[i+len(key):]
+		rest := prompt[i+len(command)+len(flags):]
 		n := 0
-		for n < len(after) && after[n] != ' ' && after[n] != '\t' && after[n] != '\n' && after[n] != '\r' {
+		for n < len(rest) && rest[n] != ' ' && rest[n] != '\t' && rest[n] != '\n' && rest[n] != '\r' {
 			n++
 		}
-		token := after[:n]
-		if token != "" && !strings.EqualFold(token, "stdin") && terminated(after[n:]) {
-			return true
+		token := rest[:n]
+		if token == "" || strings.EqualFold(token, "stdin") || !terminated(rest[n:]) {
+			return false
 		}
-		rest = rest[i+len(key):]
+		found = true
+		from = i + len(command)
 	}
 }
 
@@ -117,25 +127,6 @@ func hasTrailingArg(prompt, command string) bool {
 			return false
 		}
 		if !terminated(prompt[i+len(command):]) {
-			return true
-		}
-		from = i + len(command)
-	}
-}
-
-func hasPositional(prompt, command string) bool {
-	from := 0
-	for {
-		i := findBounded(prompt, command, from)
-		if i < 0 {
-			return false
-		}
-		after := prompt[i+len(command):]
-		j := 0
-		for j < len(after) && (after[j] == ' ' || after[j] == '\t') {
-			j++
-		}
-		if j > 0 && j < len(after) && after[j] != '\n' && after[j] != '\r' && after[j] != '-' {
 			return true
 		}
 		from = i + len(command)

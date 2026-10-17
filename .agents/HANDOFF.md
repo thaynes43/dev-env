@@ -157,8 +157,9 @@ it after A is terminal. `B_CREATE_ACCEPTED_NOT_PILOT_ACCEPTANCE` is not done.
    refuse otherwise, before observation or B's create. Require the 2.29.5 claim
    pipeline with no extra argv, `task-claim-list` and `inbox-list` with
    `--project dev-env`, and `inbox-read` / `inbox-ack` with
-   `--project dev-env --message NAME`. Refuse the r10 positional read/ack, any
-   extra `task-claim-create` argv, and the word `stdin` in either prompt.
+   `--project dev-env --message NAME`. Every read and ack must be that exact
+   flag form, including a second line beside a good one. Refuse any extra
+   `task-claim-create` argv and the word `stdin` in either prompt.
    Operator admission is unchanged. This check does not open a cohort, bind a
    seal, or accept rendezvous. Context publication commands remain unproved.
    The next live attempt still needs a fresh seal, a fresh window, and a bound

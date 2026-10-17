@@ -31,6 +31,8 @@ func TestRendezvousCommandsAcceptProvedShapesOnly(t *testing.T) {
 		block + "\nThe word STDIN must not be an argument.",
 		strings.ReplaceAll(block, "/usr/local/bin/agentd inbox-ack --project dev-env --message EXACT_NAME", "/usr/local/bin/agentd inbox-ack --message EXACT_NAME --project dev-env"),
 		strings.ReplaceAll(block, "task-claim-list --project dev-env", "task-claim-list --project dev-env-other"),
+		block + "\n/usr/local/bin/agentd inbox-read --project dev-env " + message,
+		block + "\n/usr/local/bin/agentd inbox-ack --project dev-env --message " + message + " extra",
 	}
 	for _, body := range bad {
 		if err := (&projectcanary.PilotPolicy{Prompts: []string{body, body}}).ValidateRendezvousCommands(); err == nil {

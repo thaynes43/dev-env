@@ -171,9 +171,10 @@ argv. The word `stdin` must not appear in either sealed prompt.
 `PilotPolicy.ValidateRendezvousCommands` requires both prompts to contain that
 claim pipeline, `task-claim-list --project dev-env`, `inbox-list --project dev-env`,
 and `inbox-read` / `inbox-ack` with `--project dev-env --message NAME`. `JSON`
-and `EXACT_NAME` in `RendezvousCommandText` are placeholders. The check refuses
-a positional read or ack, any extra `task-claim-create` argv, and the word
-`stdin` anywhere in either prompt. Operator `Validate` does not call it, so
+and `EXACT_NAME` in `RendezvousCommandText` are placeholders. The check refuses every `inbox-read` and `inbox-ack` that is not that exact
+flag form, including a second line beside a good one (`--project dev-env NAME`,
+or a message name followed by another token). It also refuses any extra
+`task-claim-create` argv and the word `stdin` anywhere in either prompt. Operator `Validate` does not call it, so
 existing admission of a short prompt is unchanged and this slice needs no new
 operator or task image.
 
