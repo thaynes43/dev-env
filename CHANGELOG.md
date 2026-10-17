@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.29.4](https://github.com/thaynes43/dev-env/compare/v2.29.3...v2.29.4) (2026-10-17)
+
+
+### Bug Fixes
+
+* **pilot:** accept the installed heartbeat cadence in the rendezvous gate ([#358](https://github.com/thaynes43/dev-env/issues/358)) ([a7c8e60](https://github.com/thaynes43/dev-env/commit/a7c8e6096433d5464aa20ddb50b4ad45e2b091c6))
+* **pilot:** run sealed coordination tests on gpt-6-luna ([#360](https://github.com/thaynes43/dev-env/issues/360)) ([e4350bc](https://github.com/thaynes43/dev-env/commit/e4350bc5eb7bf474a2e6673441fe33675532be69))
+
 ## [2.29.3](https://github.com/thaynes43/dev-env/compare/v2.29.2...v2.29.3) (2026-10-16)
 
 
