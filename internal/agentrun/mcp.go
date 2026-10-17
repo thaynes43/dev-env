@@ -39,10 +39,10 @@ func (a *app) mcp(ctx context.Context, args []string) error {
 
 func (a *app) serveMCP(ctx context.Context, opts connOpts, in io.Reader, out io.Writer) error {
 	s := &mcpSession{app: a, ctx: ctx, opts: opts}
-	r := bufio.NewReaderSize(in, 64*1024)
+	sc := newMCPScanner(in)
 	w := bufio.NewWriter(out)
 	for {
-		body, err := readMCPMessage(r)
+		body, err := nextMCPMessage(sc)
 		if errors.Is(err, io.EOF) {
 			return nil
 		}
@@ -335,28 +335,30 @@ func mcpError(id json.RawMessage, code int, msg string) []byte {
 
 const maxMCPMessage = 1 << 20
 
-// readMCPMessage reads one JSON-RPC message. MCP stdio is one JSON object per
-// line, with no Content-Length header.
-func readMCPMessage(r *bufio.Reader) ([]byte, error) {
+// newMCPScanner reads MCP stdio: one JSON object per line. The buffer cap is
+// the largest line the server will hold.
+func newMCPScanner(r io.Reader) *bufio.Scanner {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), maxMCPMessage)
+	return sc
+}
+
+func nextMCPMessage(sc *bufio.Scanner) ([]byte, error) {
 	for {
-		line, err := r.ReadBytes('\n')
-		if len(line) > maxMCPMessage {
-			return nil, fmt.Errorf("mcp message exceeds %d bytes", maxMCPMessage)
-		}
-		trimmed := bytes.TrimSpace(line)
-		if len(trimmed) == 0 {
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					return nil, io.EOF
+		if !sc.Scan() {
+			if err := sc.Err(); err != nil {
+				if errors.Is(err, bufio.ErrTooLong) {
+					return nil, fmt.Errorf("mcp message exceeds %d bytes", maxMCPMessage)
 				}
 				return nil, err
 			}
+			return nil, io.EOF
+		}
+		line := bytes.TrimSpace(sc.Bytes())
+		if len(line) == 0 {
 			continue
 		}
-		if err != nil && !errors.Is(err, io.EOF) {
-			return nil, err
-		}
-		return trimmed, nil
+		return append([]byte(nil), line...), nil
 	}
 }
 

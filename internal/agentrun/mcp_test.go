@@ -1,7 +1,6 @@
 package agentrun
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"io"
@@ -104,10 +103,10 @@ func TestAccessMCPStatusAndRelease(t *testing.T) {
 
 func decodeMCPFrames(t *testing.T, raw string) []string {
 	t.Helper()
-	r := bufio.NewReader(strings.NewReader(raw))
+	sc := newMCPScanner(strings.NewReader(raw))
 	var out []string
 	for {
-		body, err := readMCPMessage(r)
+		body, err := nextMCPMessage(sc)
 		if errors.Is(err, io.EOF) {
 			return out
 		}
