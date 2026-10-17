@@ -370,6 +370,21 @@ func TestInboxAckDeletesOnTheNextPassAfterAConflict(t *testing.T) {
 	if got := runnable.Pass(context.Background()); got != resultComplete || rig.realDeletes != 1 {
 		t.Fatalf("first pass result %s deletes %d order %v", got, rig.realDeletes, rig.order)
 	}
+	messageAt, ackAt := -1, -1
+	for i, step := range rig.order {
+		if step == "delete:InboxMessage" {
+			messageAt = i
+		}
+		if step == "delete:InboxReadAck" {
+			ackAt = i
+		}
+	}
+	if messageAt < 0 || ackAt < messageAt {
+		t.Fatalf("first pass did not refuse the ack after deleting the message, order %v", rig.order)
+	}
+	if err := rig.base.Get(context.Background(), client.ObjectKey{Namespace: msg.Namespace, Name: msg.Name}, &coord.InboxMessage{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("message after the first pass: %v", err)
+	}
 	if err := rig.base.Get(context.Background(), client.ObjectKey{Namespace: ack.Namespace, Name: ack.Name}, &coord.InboxReadAck{}); err != nil {
 		t.Fatalf("ack should remain after the conflict: %v", err)
 	}
