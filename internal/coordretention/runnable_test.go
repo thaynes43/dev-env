@@ -152,8 +152,8 @@ func TestRetentionPassKeepsUnsafeRecordsAndDeletesVerified(t *testing.T) {
 		if sampleValue(runnable.metrics.Refused.WithLabelValues(string(TaskClaim), reasonOwnerPresent)) != 1 {
 			t.Fatal("owner present was not refused")
 		}
-		if len(rig.archive.marks) != 1 || rig.archive.marks[0].Event.State != "present" {
-			t.Fatalf("present event = %#v", rig.archive.marks)
+		if len(rig.archive.marks) != 2 || rig.archive.marks[0].Event.State != "hold" || rig.archive.marks[1].Event.State != "present" {
+			t.Fatalf("hold then present = %#v", rig.archive.marks)
 		}
 	})
 	t.Run("grace not over", func(t *testing.T) {

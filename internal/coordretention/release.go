@@ -85,6 +85,14 @@ func (r *Runnable) releaseRechecked(ctx context.Context, s Summary) (liveRecord,
 	case Released:
 		return rec, stepStatus{}
 	case Kept:
+		if err := r.appendHold(ctx, rec); err != nil {
+			if stop := r.refuseArchive(rec.summary.Kind, err); stop.stop != "" {
+				return liveRecord{}, stop
+			}
+			r.block(orderOf(rec.summary))
+			r.countRefused(rec.summary.Kind, reasonOwnerPresent)
+			return liveRecord{}, stepStatus{refused: true}
+		}
 		if err := r.appendPresent(ctx, rec); err != nil {
 			if stop := r.refuseArchive(rec.summary.Kind, err); stop.stop != "" {
 				return liveRecord{}, stop
@@ -314,6 +322,18 @@ func (r *Runnable) ensureAckMark(ctx context.Context, ack liveRecord, message Su
 	}
 	r.countMarked(ack.summary.Kind)
 	return nil
+}
+
+func (r *Runnable) appendHold(ctx context.Context, rec liveRecord) error {
+	ev, err := presentEvent(rec.summary.Resource, r.now(), rec.observations)
+	if err != nil {
+		return err
+	}
+	ev.State = "hold"
+	if err := ev.Validate(rec.summary.Resource); err != nil {
+		return errArchiveInvalid
+	}
+	return r.markBatch(ctx, []protocol.CoordArchiveMarkRequest{{CoordArchiveIdentity: identityOf(rec.summary), Event: ev}})
 }
 
 func (r *Runnable) appendPresent(ctx context.Context, rec liveRecord) error {

@@ -434,8 +434,12 @@ so it is never deleted: the runnable refuses it as `archive_invalid` (section 5)
 ```
 
 `state` is `absent` (the rule was proved), `present` (the rule was proved not
-to hold again, for example a Session came back) or `reset` (the archive lost a
-marked revision).
+to hold again, for example a Session came back), `hold` (the owner was seen
+while a grace was open; the grace start stays, and the record is not deleted
+from that grace) or `reset` (the archive lost a marked revision, or a held
+grace is cleared). A shelf image from before `hold` reads a journal that
+contains one as corrupt, so those records stay refused until the shelf is new
+enough again. Do not roll the shelf image back after a hold has been written.
 `observed` is `not-found`, `uid-replaced`, `present`, `acknowledged` or, for an
 ack, `message-released`. A UID is **marked** when its last event is `absent`.
 Its **grace start** is the `at` of the first `absent` event after its last
@@ -470,10 +474,10 @@ exclusive lock it:
 
 It prints the stored manifest and the UID's grace start.
 
-**`mark`** reads up to 1024 events on stdin, each `present` or `reset` with its
-identity, and appends each to a UID that is marked. Others are skipped. It never
-appends `absent`; only `put --mark` does, so nothing is marked before it is
-archived.
+**`mark`** reads up to 1024 events on stdin, each `present`, `hold` or `reset`
+with its identity, and appends each to a UID that is marked. Others are skipped.
+It never appends `absent`; only `put --mark` does, so nothing is marked before
+it is archived.
 
 **`lookup`** reads up to 1024 identities (resource, project, name, UID) on stdin
 and, under the shared lock, prints for each whether the archive holds it, its
@@ -555,9 +559,11 @@ every 6 hours, each with a 30-minute deadline.
      Otherwise `put --mark`. Count `marked`.
    - released, marked, grace not over: count it as pending.
    - released, marked, grace over: **release** it (below).
-   - kept, and marked: append a `present` event, batched in one `mark` exec per
-     project. The grace restarts at the next observed absence. Count
-     `grace_reset`.
+   - kept, and marked: append a `hold`, then a `present`, each batched in one
+     `mark` exec per project. The hold keeps the grace start and blocks a
+     delete. The present clears it. The grace restarts at the next observed
+     absence. Count `grace_reset`. The release re-check does the same hold
+     before its present.
    - Unknown: nothing. Count it.
 6. **Order.** Marks and releases run in a stable order (kind, project, name, UID),
    starting just after the key where the last pass stopped, and wrap round. The

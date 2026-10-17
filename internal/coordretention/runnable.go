@@ -376,9 +376,9 @@ func (r *Runnable) resetKept(ctx context.Context, items []LookupResult) error {
 				}
 				return err
 			}
-			// A failed present leaves the old absent event in place. Try to
-			// clear it now. If that reset also fails, this leader blocks the
-			// record, and a later leader clears any grace it did not witness.
+			// A failed present leaves the hold appended above. Try to clear the
+			// grace now. If that reset also fails, this leader blocks the
+			// record, and a later leader resets a held record instead of deleting it.
 			for _, req := range batch {
 				if clearErr := r.clearStaleGrace(ctx, req.CoordArchiveIdentity); clearErr != nil {
 					r.block(orderKey{kind: kinds[lookupKey(req.CoordArchiveIdentity)], project: req.Project, name: req.Name, uid: req.UID})
