@@ -104,6 +104,23 @@ func TestEnvtestBoundsAndSameWorkUnderOperatorRole(t *testing.T) {
 	if err != nil || created || got.UID != old.UID {
 		t.Fatal("renamed repository key minted a second owner of a pre-label claim", created, err)
 	}
+	// A release removes one live record. The project bound frees. The first
+	// owner's two claims stay, so that live Session cannot take the freed slot.
+	// The operator role cannot delete; this delete is the effect of retention's
+	// guarded delete, counted by the same live list.
+	var released coord.TaskClaim
+	if err := admin.Get(ctx, client.ObjectKey{Namespace: ns, Name: Name(claim("second", "issue:4").Identity)}, &released); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.Delete(ctx, &released); err != nil {
+		t.Fatal(err)
+	}
+	if _, created, err := store.Create(ctx, claim("third", "issue:6")); err != nil || !created {
+		t.Fatal("project bound did not free after the release", created, err)
+	}
+	if _, _, err := store.Create(ctx, claim("first", "issue:7")); !errors.Is(err, ErrLimit) {
+		t.Fatal("a live session's per-session count dropped after another owner's release", err)
+	}
 	// The other bounded kinds resolve under the same role.
 	for _, kind := range []string{"PublishedContextList", "InboxMessageList"} {
 		if err := CheckRoom(ctx, operator, kind, ns, "sample", renamed.Owner, Limits{PerSession: 1, PerProject: 1}); err != nil {

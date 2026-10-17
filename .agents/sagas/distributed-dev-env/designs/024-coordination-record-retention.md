@@ -918,6 +918,10 @@ exec fake, so the protocol is exercised):
   the test checks the refusal names the policy, not a missing node.
 - **E5, bounds.** A project at a small test bound refuses; after a release it
   accepts. A live Session's per-Session count does not drop.
+  *2026-10-17:* `TestEnvtestBoundsAndSameWorkUnderOperatorRole` deletes one
+  live claim on the real API server. Another owner can create. The remaining
+  owner's per-session bound still refuses. The operator role used for creates
+  cannot delete; the delete is the effect of retention's guarded delete.
 - **E6, a replaced owner.** Same name, new UID: released.
 - **E7, two passes at once.** Exactly one delete succeeds. Each revision has one
   archive entry.
