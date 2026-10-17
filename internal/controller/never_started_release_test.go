@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -107,7 +108,11 @@ func TestNeverStartedReleaseLiftsFinalizerOnlyWhenPodAndHomeAreAbsent(t *testing
 	finalizerGone := func(t *testing.T, c client.Client, s *v1alpha1.AgentSession) {
 		t.Helper()
 		var got v1alpha1.AgentSession
-		if err := c.Get(ctx, client.ObjectKeyFromObject(s), &got); err != nil {
+		err := c.Get(ctx, client.ObjectKeyFromObject(s), &got)
+		if apierrors.IsNotFound(err) {
+			return
+		}
+		if err != nil {
 			t.Fatal(err)
 		}
 		if controllerutil.ContainsFinalizer(&got, Finalizer) {
