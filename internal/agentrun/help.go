@@ -29,6 +29,9 @@ Usage:
   agent-run rescue restore <session>/<stamp> (--local | -p "<task>")
                                                   start a session that fetches a rescue
   agent-run history list [--project <p>]          list archived Session histories by project
+  agent-run grant list [--session <s>] [--phase <p>] [--mine]
+                                                  list access grants, newest first
+  agent-run grant show <grant-id>                 show one access grant
   agent-run history show <uid>                    show one archived history's manifest
   agent-run history read <uid> <root/path>        print an archived file, a page or --all
   declare-activity start "<what>" --scope <a,b>   declare dev work, so it is not taken for a fault
@@ -359,6 +362,20 @@ changes nothing. Any caller may reap any session. agent-run asks for no
 confirmation: it reaps the sessions it is given.
 
 A reap returns at once; agent-run show <name> follows it until the session is gone.
+`,
+	"grant": `Usage: agent-run grant list [--session <name>] [--phase <phase>] [--mine] [-o json]
+       agent-run grant show <grant-id> [-o json]
+
+Read access grants from the operator (DESIGN-001 6.12). This is the list and
+show slice of plan 07 step 7. It does not request, use, release or break glass,
+and it does not start the in-pod access MCP server.
+
+grant list prints name, phase, type, session, TTL and expiry, newest first.
+  --session <name>   only that session's grants
+  --phase <phase>    Pending, Active, Denied, Expired, Released or Failed
+  --mine             only the calling session's grants
+
+grant show prints one grant. The name is grant-<id>. It does not print a token.
 `,
 	"fleet": `Usage: agent-run fleet [-o json]
 
