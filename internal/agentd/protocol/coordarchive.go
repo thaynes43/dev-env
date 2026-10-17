@@ -93,6 +93,11 @@ type CoordArchiveLookupResult struct {
 	Holds      bool                   `json:"holds"`
 	Revisions  []CoordArchiveRevision `json:"revisions"`
 	GraceStart *time.Time             `json:"graceStart"`
+	// LatestState and LatestAt are the journal tail. Empty when the record has
+	// no event. Retention deletes only when this tail is the absent event whose
+	// time is GraceStart.
+	LatestState string     `json:"latestState,omitempty"`
+	LatestAt    *time.Time `json:"latestAt,omitempty"`
 }
 
 func (i CoordArchiveIdentity) RecordDir() (string, error) {

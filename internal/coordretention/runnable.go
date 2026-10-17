@@ -361,11 +361,25 @@ func (r *Runnable) resetKept(ctx context.Context, items []LookupResult) error {
 		}
 		batch := groups[project]
 		if err := r.markBatch(ctx, batch); err != nil {
-			for _, req := range batch {
-				r.block(orderKey{kind: kinds[lookupKey(req.CoordArchiveIdentity)], project: req.Project, name: req.Name, uid: req.UID})
-			}
 			if deadlineErr(err) || historyCode(err) == protocol.HistoryErrNoArchive || errors.Is(err, shelf.ErrNoShelf) || errors.Is(err, ErrLookupBusy) {
+				for _, req := range batch {
+					r.block(orderKey{kind: kinds[lookupKey(req.CoordArchiveIdentity)], project: req.Project, name: req.Name, uid: req.UID})
+				}
 				return err
+			}
+			// A failed present leaves the old absent event in place. Clear that
+			// grace durably so the next leader cannot release from it. A reset
+			// that also fails stays blocked only until this leader stops; the
+			// delete path still requires the latest event to be that absence.
+			for _, req := range batch {
+				if clearErr := r.clearStaleGrace(ctx, req.CoordArchiveIdentity); clearErr != nil {
+					r.block(orderKey{kind: kinds[lookupKey(req.CoordArchiveIdentity)], project: req.Project, name: req.Name, uid: req.UID})
+					if deadlineErr(clearErr) || historyCode(clearErr) == protocol.HistoryErrNoArchive || errors.Is(clearErr, shelf.ErrNoShelf) || errors.Is(clearErr, ErrLookupBusy) {
+						return clearErr
+					}
+					continue
+				}
+				r.unblock(orderKey{kind: kinds[lookupKey(req.CoordArchiveIdentity)], project: req.Project, name: req.Name, uid: req.UID})
 			}
 			continue
 		}
@@ -500,6 +514,14 @@ func (r *Runnable) perform(ctx context.Context, c candidate) stepStatus {
 		return r.markReleased(ctx, c)
 	}
 	return r.release(ctx, c)
+}
+
+func (r *Runnable) clearStaleGrace(ctx context.Context, id protocol.CoordArchiveIdentity) error {
+	ev, err := resetEvent(id.Resource, r.now())
+	if err != nil {
+		return errArchiveInvalid
+	}
+	return r.markBatch(ctx, []protocol.CoordArchiveMarkRequest{{CoordArchiveIdentity: id, Event: ev}})
 }
 
 func (r *Runnable) forceReset(ctx context.Context, c candidate) error {

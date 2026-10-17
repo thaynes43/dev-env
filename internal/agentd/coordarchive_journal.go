@@ -111,6 +111,26 @@ func (a CoordArchive) readJournal(id protocol.CoordArchiveIdentity, rel string) 
 	return result, nil
 }
 
+// journalTail is the last folded event. Its time equals GraceStart only for the
+// absent event that opened the current grace.
+func journalTail(state coordJournalState) (string, *time.Time) {
+	if state.Tail == "" || state.LastAt.IsZero() {
+		return "", nil
+	}
+	base := filepath.Base(state.Tail)
+	if len(base) < len("00000001-a.json") || base[8] != '-' || !strings.HasSuffix(base, ".json") {
+		return "", nil
+	}
+	name := strings.TrimSuffix(base[9:], ".json")
+	switch name {
+	case "absent", "present", "reset":
+		at := state.LastAt.UTC()
+		return name, &at
+	default:
+		return "", nil
+	}
+}
+
 func (a CoordArchive) syncJournal(state coordJournalState) error {
 	if state.Tail == "" {
 		return nil

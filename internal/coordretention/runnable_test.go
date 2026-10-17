@@ -235,6 +235,49 @@ func TestRetentionPassKeepsUnsafeRecordsAndDeletesVerified(t *testing.T) {
 	})
 }
 
+func timePtr(at time.Time) *time.Time {
+	at = at.UTC()
+	return &at
+}
+
+func TestFailedPresentResetDoesNotDeleteOnNewLeader(t *testing.T) {
+	opened := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	claim := retentionClaim(t, "issue:301", "55555555-5555-4555-8555-555555555555")
+	arch := newMemArchive()
+	rig := &passRig{archive: arch, now: opened}
+	first := rig.build(t, claim)
+	if got := first.Pass(context.Background()); got != resultComplete || len(arch.puts) != 1 || arch.puts[0].Event == nil || arch.puts[0].Event.State != "absent" || rig.realDeletes != 0 {
+		t.Fatalf("absent mark: result %s puts %d deletes %d", got, len(arch.puts), rig.realDeletes)
+	}
+	key := claimIdentity(claim)
+	if arch.grace[key] == nil || arch.latest[key].State != "absent" || !arch.latest[key].At.Equal(opened) {
+		t.Fatalf("grace event = %#v grace %v", arch.latest[key], arch.grace[key])
+	}
+
+	rig.now = opened.Add(25 * 24 * time.Hour)
+	arch.failPresent = true
+	owner := &devv1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: sender.Namespace, Name: sender.Name, UID: types.UID(sender.UID)}}
+	if err := rig.base.Create(context.Background(), owner); err != nil {
+		t.Fatal(err)
+	}
+	if got := first.Pass(context.Background()); got != resultComplete || rig.realDeletes != 0 || arch.grace[key] != nil || arch.latest[key].State != "reset" {
+		t.Fatalf("failed present: result %s deletes %d grace %v latest %s", got, rig.realDeletes, arch.grace[key], arch.latest[key].State)
+	}
+
+	// The original absence is already older than 30 days. The latest event is
+	// the reset, not that absent event. A new leader must not delete.
+	stale := opened
+	arch.grace[key] = &stale
+	next := &passRig{archive: arch, now: opened.Add(31 * 24 * time.Hour)}
+	leader := next.build(t, claim)
+	if len(leader.blocked) != 0 {
+		t.Fatal("new leader kept the old block")
+	}
+	if got := leader.Pass(context.Background()); got != resultComplete || next.realDeletes != 0 || deletedCount(leader) != 0 {
+		t.Fatalf("new leader: result %s deletes %d counted %v", got, next.realDeletes, deletedCount(leader))
+	}
+}
+
 func TestCappedPassResumesAfterLastRecord(t *testing.T) {
 	rig := &passRig{archive: newMemArchive()}
 	rig.archive.freezeGrace = true
@@ -371,9 +414,10 @@ func (rig *passRig) build(t *testing.T, claims ...*coord.TaskClaim) *Runnable {
 		}
 		listed = append(listed, unstructured.Unstructured{Object: raw})
 		if rig.released {
-			past := rig.now.Add(-DefaultGrace - time.Minute)
+			past := rig.now.Add(-DefaultGrace - time.Minute).UTC()
 			key := claimIdentity(claim)
-			rig.archive.grace[key] = &past
+			rig.archive.grace[key] = timePtr(past)
+			rig.archive.latest[key] = protocol.CoordArchiveEvent{State: "absent", At: past}
 			rig.archive.revisions[key] = []protocol.CoordArchiveRevision{{ResourceVersion: claim.ResourceVersion, SHA256: strings.Repeat("ab", 32)}}
 		}
 	}
@@ -449,10 +493,12 @@ type memArchive struct {
 	freezeGrace bool
 	revisions   map[string][]protocol.CoordArchiveRevision
 	grace       map[string]*time.Time
+	latest      map[string]protocol.CoordArchiveEvent
 	objects     map[string][]byte
 	puts        []protocol.CoordArchivePutRequest
 	marks       []protocol.CoordArchiveMarkRequest
 	lookups     int
+	failPresent bool
 	onCall      func()
 	onGet       func()
 	note        func(string)
@@ -462,6 +508,7 @@ func newMemArchive() *memArchive {
 	return &memArchive{
 		revisions: map[string][]protocol.CoordArchiveRevision{},
 		grace:     map[string]*time.Time{},
+		latest:    map[string]protocol.CoordArchiveEvent{},
 		objects:   map[string][]byte{},
 	}
 }
@@ -476,11 +523,18 @@ func (m *memArchive) Lookup(_ context.Context, ids []protocol.CoordArchiveIdenti
 	}
 	out := make([]protocol.CoordArchiveLookupResult, len(ids))
 	for i, id := range ids {
-		revs := append([]protocol.CoordArchiveRevision(nil), m.revisions[lookupKey(id)]...)
+		key := lookupKey(id)
+		revs := append([]protocol.CoordArchiveRevision(nil), m.revisions[key]...)
 		if revs == nil {
 			revs = []protocol.CoordArchiveRevision{}
 		}
-		out[i] = protocol.CoordArchiveLookupResult{CoordArchiveIdentity: id, Holds: len(revs) > 0, Revisions: revs, GraceStart: m.grace[lookupKey(id)]}
+		item := protocol.CoordArchiveLookupResult{CoordArchiveIdentity: id, Holds: len(revs) > 0, Revisions: revs, GraceStart: m.grace[key]}
+		if ev, ok := m.latest[key]; ok && ev.State != "" {
+			at := ev.At.UTC()
+			item.LatestState = ev.State
+			item.LatestAt = &at
+		}
+		out[i] = item
 	}
 	return out, nil
 }
@@ -501,9 +555,12 @@ func (m *memArchive) Put(_ context.Context, req protocol.CoordArchivePutRequest,
 	m.revisions[key] = append(m.revisions[key], protocol.CoordArchiveRevision{ResourceVersion: req.Manifest.ResourceVersion, SHA256: req.Manifest.Object.SHA256})
 	var grace *time.Time
 	if req.Event != nil && !m.freezeGrace {
-		at := req.Event.At
+		at := req.Event.At.UTC()
 		grace = &at
 		m.grace[key] = grace
+		ev := *req.Event
+		ev.At = at
+		m.latest[key] = ev
 	}
 	return protocol.CoordArchivePutResult{Manifest: protocol.CoordArchiveStoredManifest{CoordArchiveManifest: req.Manifest, ArchivedAt: time.Unix(1, 0).UTC()}, GraceStart: grace}, nil
 }
@@ -515,12 +572,22 @@ func (m *memArchive) Mark(_ context.Context, req []protocol.CoordArchiveMarkRequ
 	if m.err != nil {
 		return nil, m.err
 	}
+	if m.failPresent {
+		for _, item := range req {
+			if item.Event.State == "present" {
+				return nil, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "present reset failed")
+			}
+		}
+	}
 	m.marks = append(m.marks, req...)
 	out := make([]protocol.CoordArchiveMarkResult, len(req))
 	for i, item := range req {
 		out[i] = protocol.CoordArchiveMarkResult{CoordArchiveIdentity: item.CoordArchiveIdentity, Appended: true}
+		key := lookupKey(item.CoordArchiveIdentity)
+		ev := item.Event
+		ev.At = item.Event.At.UTC()
+		m.latest[key] = ev
 		if item.Event.State == "present" || item.Event.State == "reset" {
-			key := lookupKey(item.CoordArchiveIdentity)
 			m.grace[key] = nil
 		}
 	}

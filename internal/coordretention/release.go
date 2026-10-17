@@ -123,6 +123,12 @@ func (r *Runnable) archiveRevision(ctx context.Context, rec liveRecord) error {
 	if len(got) != 1 || got[0].CoordArchiveIdentity != id {
 		return errArchiveMissing
 	}
+	// The pass lookup can still show an old GraceStart after a present reset
+	// failed and a new leader forgot that failure. Delete only when the journal
+	// tail is still the absent event that opened this grace.
+	if !absentGraceCurrent(got[0]) {
+		return errGraceStale
+	}
 	if !got[0].Holds || len(got[0].Revisions) == 0 {
 		ev, evErr := resetEvent(rec.summary.Resource, r.now())
 		if evErr != nil {
@@ -139,6 +145,16 @@ func (r *Runnable) archiveRevision(ctx context.Context, rec liveRecord) error {
 		}
 	}
 	return r.putArchive(ctx, rec, nil)
+}
+
+// absentGraceCurrent is the durable fence for a release. GraceStart alone is
+// not enough: a failed present reset leaves it set, and a new leader would
+// otherwise delete before 30 days after the latest absence.
+func absentGraceCurrent(got protocol.CoordArchiveLookupResult) bool {
+	if got.GraceStart == nil || got.LatestAt == nil || got.LatestState != "absent" {
+		return false
+	}
+	return !got.LatestAt.IsZero() && got.LatestAt.UTC().Equal(got.GraceStart.UTC())
 }
 
 func (r *Runnable) archiveVerified(ctx context.Context, rec liveRecord) error {
@@ -316,6 +332,9 @@ func (r *Runnable) refuseArchive(kind Kind, err error) stepStatus {
 		return stepStatus{refused: true}
 	case errors.Is(err, errArchiveMismatch):
 		r.countRefused(kind, reasonArchiveMismatch)
+		return stepStatus{refused: true}
+	case errors.Is(err, errGraceStale):
+		r.countRefused(kind, reasonUnknown)
 		return stepStatus{refused: true}
 	case historyCode(err) == protocol.HistoryErrNoArchive || errors.Is(err, shelf.ErrNoShelf):
 		return stepStatus{stop: resultShelfUnavailable}

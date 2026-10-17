@@ -82,4 +82,4 @@ refusal that does not delete.
 - `dev_env_coordination_records*` help text was already updated by earlier source and was not edited here.
 - No haynes-ops Role, deployment flag, or alert was added. The retention flag is not set in any deployment.
 - The inbox message-and-ack unit is implemented and was not exercised by the focused TaskClaim tests.
-- A new leader starts with an empty resume key and an empty failed-reset set. The design already says a new leader starts from the beginning. The failed-reset set does not survive a leader change.
+- A new leader starts with an empty resume key. A failed present reset clears the old grace in the archive, and a release still refuses unless the journal tail is the absent event that opened `GraceStart`. Memory of the failure is not required.

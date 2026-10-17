@@ -36,6 +36,7 @@ var (
 	errArchiveInvalid  = errors.New("coordination retention: archive_invalid")
 	errArchiveMissing  = errors.New("coordination retention: archive_missing")
 	errArchiveMismatch = errors.New("coordination retention: archive_mismatch")
+	errGraceStale      = errors.New("coordination retention: grace event is not the latest absence")
 )
 
 // coordinationProbe is a read-only lookup identity. It is not a live record.
