@@ -402,6 +402,7 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	}
 	return b.Buffer.Write(p)
 }
+
 // logReadUnavailable reports a one-shot log read the API refuses because the
 // executor pod is gone. Those rounds may still use a prior captured log.
 func logReadUnavailable(err error) bool {
