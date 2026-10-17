@@ -21,6 +21,10 @@
   installs the D-92 shared-history correction in the operator and task agent.
   All existing flags are preserved; the shelf remains unchanged and H8 is not
   accepted. The operator's actual version is `v2.28.0-1-gcbf0700`.
+  *F2 contract, 2026-10-17:* section 23 names the never-started reap that has
+  nothing to archive. The predicate is in source. `archive`, `releaseIfEmpty`
+  and `releaseSession` still refuse that Session, so the finalizer stays until
+  those three call sites use the predicate.
 - **Decision:** [ADR-005](../adrs/005-private-home-expiry.md) (Q-31, Tom,
   2026-10-12: "Archive, then delete (Recommended)"), amended by
   [ADR-006](../adrs/006-private-home-expiry-corrections.md) and
@@ -2111,9 +2115,9 @@ Plan 11 tracks these:
   vanished before its record, keeps its HOME until Tom removes it by hand. That
   includes the two 1011 canaries lost on talosw02, which are canaries anyway.
 - **Never-started Sessions.** A private Session with `admission: NeverStarted`, no
-  executor attempt and no HOME is still never released. Plan 11 follow-up F2
-  holds that narrow case: it has nothing to archive, so it needs no owner
-  question, but it is not part of Q-31.
+  executor attempt and no HOME is still never released. Section 23 is the
+  contract for that plan 11 follow-up. It needs no owner question and is not
+  part of Q-31. The finalizer stays until the three named call sites use it.
 - **Suspended Sessions are not stopped.** A suspended private Session whose
   executor still runs never expires until it is reaped. A stop at the suspended
   deadline is not planned; it needs its own owner question (plan 11 follow-up F3,
@@ -2327,3 +2331,38 @@ The [personal-identity mapping checkpoint](../verification/h7-personal-identity-
 separately establishes a conditional expected personal username from current
 Omni metadata and pinned source. It does not establish a current authenticated
 owner request or a phone path and grants no policy activation.
+
+## 23. Never-started reap with no HOME: plan 11 F2
+
+A private Session that never admitted an executor and never got a HOME has
+nothing to archive. ADR-004 cannot treat its coordination records as released
+while the Session finalizer keeps the object. This section is that narrow
+release. It is not Q-31, it does not delete a volume, and it does not expire a
+HOME.
+
+`neverStartedReleaseAllowed` returns nil only when every line below holds.
+Any miss returns an error and the Session stays.
+
+- `spec.workspace` is absent and `spec.projectCanary` is absent.
+- `projectcanary.IsPilot` is false. A sealed pilot and a canary original stay.
+- `metadata.deletionTimestamp` is set. A live Session is not released.
+- `privateHistoryIdentity` succeeds: version 1, this Session's UID, the
+  derived HOME claim name, a binding generation, the configured provider,
+  `stopState: Unknown`, and the rescue finalizer.
+- `status.privateHistory.admission` is `NeverStarted`.
+- `homeUID` is empty. `executorAttempted` is false. `executorIntent` is empty.
+  `executorNotCreated` is false. `lastExecutor`, `executorTerminal`,
+  `executorMissed`, `stopRequest`, `expiry` and `expiryClearedAt` are absent.
+
+The caller then reads the Pod named for the Session and the HOME claim
+`home-<session>` through the uncached API reader. Both must be NotFound. Any
+other result, including a present object, keeps the finalizer. Only then may
+`releaseSession` lift the Session finalizer. This path never calls
+`deleteVolume` or `deletePod`.
+
+Three call sites consult the predicate before the private-history refusal:
+`archive`'s early return, `releaseIfEmpty`, and `releaseSession`. As of this
+section those three still refuse, so a matching Session keeps its finalizer.
+Switching them is the rest of F2. `TestNeverStartedReleasePredicate` locks the
+predicate. `TestNeverStartedReleaseDoesNotLiftTheFinalizer` locks the current
+refusal until that switch.
