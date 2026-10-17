@@ -70,6 +70,32 @@ it after A is terminal. `B_CREATE_ACCEPTED_NOT_PILOT_ACCEPTANCE` is not done.
   `timeout`. On 2.29.5, `--timeout=10s` exists. The working claim shape is
   `printf '%s' 'JSON' | /usr/local/bin/agentd task-claim-create` with no extra argv.
   The word `stdin` must not appear.
+- **r4** A claimed exit 0 with taskKey `task:c7-private-pilot-1016-r4-a`. The seal
+  required `task:c7-private-pilot-c7-rendezvous-1016-r4-a`. B was not created.
+  Session `private-pilot-c7-rendezvous-1016-r4-a` /
+  `a8a696d3-cccb-4df4-8b82-80896953f1a4`. haynes-ops #4001–#4003.
+- **r5** sealed the v2.29.4 tag `f315635` while the worktree was origin/main
+  `394c6b19`. A never called `task-claim-create`. Session
+  `private-pilot-c7-rendezvous-1016-r5-a` /
+  `c2edcfdf-c0ff-4e90-83e9-483c94fc2a3e`. haynes-ops #4004–#4006.
+- **r6** sealed `394c6b19` and A claimed
+  `task:c7-private-pilot-c7-rendezvous-1016-r6-a` (`d863a69f`, `04:09:40Z`). The
+  harness log had raw claim JSON and no `operation` wrapper, so it polled until
+  `task_ended_or_head_changed` (37 rounds). B was not created. haynes-ops
+  #4007–#4010. [#366](https://github.com/thaynes43/dev-env/pull/366) parses that
+  JSON.
+- **r7** dispatched B. A `60253bec-ee21-420a-91af-be7ca7465da4` claimed
+  `4fcc5466`. B `9d51d406-1b40-4850-a08a-5aebc60ee312` stopped before its own
+  claim because `ctl status` omitted model and effort. No inbox. haynes-ops
+  #4011–#4013. [#367](https://github.com/thaynes43/dev-env/pull/367) is in
+  v2.29.5.
+- **r8** ran on 2.29.5. A `4e2c50c6-7f06-49b6-93f6-f97ad1a3259d` exited after one
+  turn. The log poll used `--tail 8000` and the v1 `agent-run` CLI. No B claim.
+  haynes-ops #4014–#4016 admit, #4018 close.
+- **r9** A `0262fe96-37e3-46f5-90be-dabf43c5b3aa` claimed `dfac26e6` for
+  `task:c7-private-pilot-c7-rendezvous-1016-r9-a`. `config.json` `head` was the
+  words `and private worktree`, and the worktree had moved to `60c4e38` after
+  #370. B was not created. haynes-ops #4019–#4021.
 - **r10** (`60c4e38`) is the furthest run. A claimed
   `f01d99af-6d4e-455d-8208-e12f7bfa32fa` for
   `task:c7-private-pilot-c7-rendezvous-1016-r10-a`. B
