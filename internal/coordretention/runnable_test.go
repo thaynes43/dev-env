@@ -698,6 +698,12 @@ func TestEnsureAckMarkResetsOnlyAHeldAck(t *testing.T) {
 	if !sawReset {
 		t.Fatal("ack reset was not attempted")
 	}
+	resetAt := now.Add(time.Minute)
+	arch.grace[key] = nil
+	arch.latest[key] = protocol.CoordArchiveEvent{State: "reset", At: resetAt}
+	if err := runnable.ensureAckMark(context.Background(), ack, message, opened); err != nil || !arch.latest[key].At.Equal(resetAt) || arch.latest[key].State != "absent" {
+		t.Fatalf("absence preceded the reset tail: %v latest %#v", err, arch.latest[key])
+	}
 }
 
 func (m *memArchive) refuseBackward(key string, at time.Time) error {

@@ -325,6 +325,11 @@ func (r *Runnable) ensureAckMark(ctx context.Context, ack liveRecord, message Su
 	} else if len(got) == 1 && got[0].GraceStart != nil {
 		return nil
 	}
+	// A reset or present tail is newer than the message's grace start and has
+	// no grace of its own. The new absence cannot precede that tail.
+	if len(got) == 1 && got[0].LatestAt != nil && at.Before(got[0].LatestAt.UTC()) {
+		at = got[0].LatestAt.UTC()
+	}
 	ev, err := ackAbsentEvent(message, at)
 	if err != nil {
 		return errArchiveInvalid
