@@ -42,7 +42,7 @@ func TestOnlyRetentionDeletesCoordinationRecords(t *testing.T) {
 	recheck := indexOf(scan.release, "releaseRechecked")
 	verified := indexOf(scan.release, "archiveVerified")
 	deleted := indexOf(scan.release, "deleteRecord")
-	if recheck < 0 || verified < 0 || deleted < 0 || !(recheck < verified && verified < deleted) {
+	if recheck < 0 || verified < 0 || deleted < 0 || recheck >= verified || verified >= deleted {
 		t.Fatalf("release call order = %v", scan.release)
 	}
 	if !retentionFlagGatesRunnable(t, filepath.Join("..", "..", "cmd", "dev-env-operator", "main.go")) {
@@ -150,7 +150,7 @@ func scanRetention(t *testing.T, dir string) retentionScan {
 				}
 			}
 			if name == "release" && indexOf(calls, "deleteRecord") >= 0 {
-				if indexOf(calls, "releaseRechecked") < 0 || indexOf(calls, "archiveVerified") < 0 || !(indexOf(calls, "releaseRechecked") < indexOf(calls, "archiveVerified") && indexOf(calls, "archiveVerified") < indexOf(calls, "deleteRecord")) {
+				if indexOf(calls, "releaseRechecked") < 0 || indexOf(calls, "archiveVerified") < 0 || indexOf(calls, "releaseRechecked") >= indexOf(calls, "archiveVerified") || indexOf(calls, "archiveVerified") >= indexOf(calls, "deleteRecord") {
 					scan.violations = append(scan.violations, "release reaches deleteRecord without releaseRechecked and archiveVerified")
 				}
 			}
