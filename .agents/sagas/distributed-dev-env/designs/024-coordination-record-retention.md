@@ -932,6 +932,10 @@ exec fake, so the protocol is exercised):
   owner can then create. The operator role used for creates cannot delete;
   the delete is the effect of retention's guarded delete.
 - **E6, a replaced owner.** Same name, new UID: released.
+  *2026-10-17:* `TestEnvtestReplacedOwnerReleases` creates the Session and both
+  claims on a real API server. The claim that still names the old UID is
+  released. The claim that names the live UID stays kept. The delete after
+  grace stays in the fake-client tests.
 - **E7, two passes at once.** Exactly one delete succeeds. Each revision has one
   archive entry.
 
