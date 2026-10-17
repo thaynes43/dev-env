@@ -88,33 +88,24 @@ it after A is terminal. `B_CREATE_ACCEPTED_NOT_PILOT_ACCEPTANCE` is not done.
 - **r13 admit** merged as [haynes-ops #4031](https://github.com/thaynes43/haynes-ops/pull/4031),
   digest `c1967f6c62ba443ac28fc187cffe3ba7fd15260f95c8d192523734f91f08ca95`, window
   `2026-10-17T08:35:00Z`–`09:00:00Z`, placeholder sealUID
-  `3cfa283f-dc49-491b-a570-21cc156c2023`. It never ran. The Mac commands exported
-  `KUBECONFIG=/Users/thaynes/src/labspace/haynes-ops/kubeconfig` (also what that
-  repo's `.envrc` selects). That file runs `kubectl oidc-login get-token`. Repeated
-  polling started a new interactive browser login before `kubectl exec` reached the
-  pod, so discovery of
-  `https://haynes.na-west-1.omni.siderolabs.io/oidc/.well-known/openid-configuration`
-  never completed. That window is expired. Do not reuse it. The next cohort needs a
-  fresh seal, a fresh window, and a bound live ConfigMap UID.
-- **Mac cluster access, 2026-10-17.** Codex uses the Omni service account
-  `haynes-m5max-local-agent` (issuer `omni-haynes-service-account-issuer`). Its
-  kubeconfig is `/Users/thaynes/.kube/haynes-ops-machine.yaml`, context
-  `haynes-haynes-ops-machine`, user
-  `haynes-haynes-ops-haynes-m5max-local-agent`. That user is a bearer token. It
-  has no exec plugin. Every Mac `kubectl` command passes
-  `--kubeconfig=/Users/thaynes/.kube/haynes-ops-machine.yaml`. Flux on the Mac
-  uses that same file only as a command-scoped `KUBECONFIG=...` prefix. A
-  bounded read with it succeeded: namespace `dev`. The human OIDC kubeconfigs
-  are a different identity: `~/.kube/config` and
-  `haynes-ops/kubeconfig` both run `kubectl oidc-login get-token` as
-  `manofoz@gmail.com`. Tom refreshed that OIDC login on 2026-10-17 so it would
-  not block the day. Agents still use the service-account file, not the
-  refreshed OIDC config. Do not export the repo kubeconfig. Do not refresh Omni
-  login. Do not retry interactive authentication inside a poll loop. One failed
-  token read stops the loop. The Mac path is not inside a remote pod. Commands
-  that run in the v1 pod or a session pod use that pod's own kube setup, not
-  this file. Do not change `.envrc`, security settings, or install credentials.
-  Do not create another service account.
+  `3cfa283f-dc49-491b-a570-21cc156c2023`. It never ran: Mac polls used the human
+  OIDC kubeconfig in the next bullet. That window is expired. Do not reuse it.
+  The next cohort needs a fresh seal, a fresh window, and a bound live
+  ConfigMap UID.
+- **Mac kubectl uses Codex's Omni service account** `haynes-m5max-local-agent`
+  (issuer `omni-haynes-service-account-issuer`). File
+  `/Users/thaynes/.kube/haynes-ops-machine.yaml`, context
+  `haynes-haynes-ops-machine`, bearer token, no exec plugin. Every Mac
+  `kubectl` passes `--kubeconfig=` that file. Mac Flux prefixes the command
+  with `KUBECONFIG=` that file. A bounded read succeeded: namespace `dev`.
+  `~/.kube/config` and `haynes-ops/kubeconfig` are the human OIDC login
+  (`kubectl oidc-login get-token` as `manofoz@gmail.com`). The repo `.envrc`
+  selects the repo file. Polling that file opens a browser login before
+  `kubectl exec` reaches the pod. Tom refreshed that OIDC login on 2026-10-17.
+  Agents still use the service-account file. Do not refresh Omni login. A poll
+  that fails token auth stops. Do not retry it. The Mac path does not exist
+  inside a pod. In-pod commands use the pod's own kube setup. Do not change
+  `.envrc` or install credentials. Do not create another service account.
 
 ### Next attempt rules
 
@@ -131,18 +122,7 @@ it after A is terminal. `B_CREATE_ACCEPTED_NOT_PILOT_ACCEPTANCE` is not done.
    the CA file under
    `/home/dev/work/orders/dev-env-chapter7-pilot-runtime-1016-0907/public-operator-ca.pem`.
    `--tail` max is 5000. A Failed pod returns 409. v1 `agent-run log` is the wrong CLI.
-5. **Mac kubectl and Flux use Codex's service account.** Pass
-   `--kubeconfig=/Users/thaynes/.kube/haynes-ops-machine.yaml` on every Mac
-   `kubectl` (context `haynes-haynes-ops-machine`). That file is the Omni
-   service account `haynes-m5max-local-agent`, a bearer token with no exec
-   plugin. For Mac Flux, prefix the command with
-   `KUBECONFIG=/Users/thaynes/.kube/haynes-ops-machine.yaml`. Do not use
-   `~/.kube/config` or `haynes-ops/kubeconfig`. Both are the human OIDC login,
-   and the repo `.envrc` selects the repo file. Tom refreshed that OIDC login
-   on 2026-10-17; agents still do not use it. Do not refresh Omni login. A poll
-   loop must not retry interactive auth. Do not assume the Mac kubeconfig path
-   exists inside a pod. Do not create another service account.
-6. For everything outside the sealed Luna pilot, continue the
+5. For everything outside the sealed Luna pilot, continue the
    [2026-10-13 next-work order](CLAUDE-RESUME-2026-10-13.md#next-work-in-order) where
    it does not conflict with this page. H7 reader (Q-36) and Q-37 Retain remain out of
    scope until Tom reopens them.
