@@ -17,7 +17,7 @@ RUN mkdir -p /out/licenses/go-stdlib \
       --ignore github.com/thaynes43/dev-env --save_path=/out/licenses/go-modules \
  && cp "$(go env GOROOT)/LICENSE" /out/licenses/go-stdlib/LICENSE
 
-FROM node:24-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+FROM node:24-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5
 # Deliberately fixed to the source contract reviewed in D-78, not an auto-upgrade.
 ARG CODEX_VERSION=0.160.1
 RUN apt-get update \
