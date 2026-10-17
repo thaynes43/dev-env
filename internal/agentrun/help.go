@@ -31,6 +31,12 @@ Usage:
   agent-run history list [--project <p>]          list archived Session histories by project
   agent-run history show <uid>                    show one archived history's manifest
   agent-run history read <uid> <root/path>        print an archived file, a page or --all
+  agent-run grant list [--session <s>] [--phase <p>] [--mine]
+                                                  list access grants, newest first
+  agent-run grant show <grant-id>                 show one access grant
+  agent-run grant request --type <t> --reason <why>
+                                                  ask for a grant; Tom still approves it
+  agent-run grant release <grant-id>              ask the broker to end one grant
   declare-activity start "<what>" --scope <a,b>   declare dev work, so it is not taken for a fault
   agent-run attach <name>                         attach to a session's TUI (Tom only)
   agent-run detach <name>                         detach every client from it (Tom only)
@@ -359,6 +365,38 @@ changes nothing. Any caller may reap any session. agent-run asks for no
 confirmation: it reaps the sessions it is given.
 
 A reap returns at once; agent-run show <name> follows it until the session is gone.
+`,
+	"grant": `Usage: agent-run grant list [--session <name>] [--phase <phase>] [--mine] [-o json]
+       agent-run grant show <grant-id> [-o json]
+       agent-run grant request --type <type> --reason <why> [type flags] [-o json]
+       agent-run grant release <grant-id> [-o json]
+
+Read, request and release access grants (DESIGN-001 6.12). This is part of
+plan 07 step 7. Request posts the ask. Release asks the broker to end the
+grant. Neither approves a grant or installs it, and this command does not
+start the in-pod access MCP server.
+
+grant list prints name, phase, type, session, TTL and expiry, newest first.
+  --session <name>   only that session's grants
+  --phase <phase>    Pending, Active, Denied, Expired, Released or Failed
+  --mine             only the calling session's grants
+
+grant show prints one grant. The name is grant-<id>. It does not print a token.
+
+grant request asks for one grant for the calling session. An identical ask
+returns the grant the session already holds.
+  --type <type>      kube, egress, credential or breakglass
+  --reason <why>     required; Tom reads it on the approval page
+  --role <role>      kube catalog role
+  --namespace <ns>   repeatable, for kube or breakglass
+  --fqdn <name>      repeatable egress destination
+  --cidr <cidr>      repeatable egress destination
+  --endpoint <ns>    NAMESPACE or NAMESPACE:key=value,key=value
+  --port <port>      443, 53/udp; repeatable
+  --credential <id>  proxmox or hw-ssh
+  --ttl <duration>   such as 45m; empty uses the API default
+
+grant release names one grant. The grant object stays as the audit record.
 `,
 	"fleet": `Usage: agent-run fleet [-o json]
 

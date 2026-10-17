@@ -351,8 +351,8 @@ func sortedSet(in []string) []string {
 }
 
 // listGrants serves GET /v1/grants: every grant, newest first, unless a filter
-// narrows it. Agents can read AccessGrants anyway, and `agent-run grant list
-// --all` shows each requester, approver and time.
+// narrows it. Agents can read AccessGrants anyway. `agent-run grant list`
+// filters with --session, --phase and --mine.
 func (s *Server) listGrants(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
 	f, err := parseGrantFilters(r.URL.Query())
 	if err != nil {
