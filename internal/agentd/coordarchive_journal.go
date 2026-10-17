@@ -51,7 +51,7 @@ func (a CoordArchive) readJournal(id protocol.CoordArchiveIdentity, rel string) 
 			}
 			seq, parseErr := strconv.Atoi(name[:8])
 			state := strings.TrimSuffix(name[9:], ".json")
-			if parseErr != nil || seq < 1 || fmt.Sprintf("%08d", seq) != name[:8] || (state != "absent" && state != "present" && state != "reset") {
+			if parseErr != nil || seq < 1 || fmt.Sprintf("%08d", seq) != name[:8] || (state != "absent" && state != "present" && state != "reset" && state != "hold") {
 				return corrupt()
 			}
 			count++
