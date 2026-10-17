@@ -143,11 +143,32 @@ func marshalNoEscape(v any) ([]byte, error) {
 // leaves mcp.json is removed at the next boot on the same volume.
 const mcpManagedFile = "mcp-managed.json"
 
+// builtinAccessMCP is the in-pod access server (DESIGN-001 6.12). Its command
+// is agent-run mcp. A server of this name already in mcp.json is left alone.
+const builtinAccessMCP = "dev-env"
+
+func builtinAccessSpec() json.RawMessage {
+	return json.RawMessage(`{"command":"agent-run","args":["mcp"]}`)
+}
+
+// withBuiltinAccess adds the access server when git did not name one.
+func withBuiltinAccess(cfg mcpConfig) mcpConfig {
+	next := mcpConfig{Servers: map[string]json.RawMessage{}}
+	for k, v := range cfg.Servers {
+		next.Servers[k] = v
+	}
+	if _, ok := next.Servers[builtinAccessMCP]; !ok {
+		next.Servers[builtinAccessMCP] = builtinAccessSpec()
+	}
+	return next
+}
+
 // registerMCP runs v1's loop (D-14): `claude mcp add-json -s user` for each
 // server in mcp.json, with ${VAR} expanded from the pod's environment. A server
 // that is already registered is removed first, so the spec in git wins. It
 // never logs a spec: specs carry tokens and secret URL paths.
 func registerMCP(ctx context.Context, r Runner, s Settings, cfg mcpConfig) []string {
+	cfg = withBuiltinAccess(cfg)
 	var notes []string
 	existing := userMCPServers(s.ClaudeState)
 	managedPath := filepath.Join(s.StateDir, mcpManagedFile)

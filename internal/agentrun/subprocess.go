@@ -30,6 +30,28 @@ func (b *cappedOutput) Write(p []byte) (int, error) {
 	return n, nil
 }
 
+// execOutput runs argv and returns its exit code with captured stdout and
+// stderr. A non-nil error means the program did not start, or its output
+// exceeded the cap. A non-zero exit is not an error.
+func execOutput(ctx context.Context, argv []string) (int, string, string, error) {
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	var stdout, stderr cappedOutput
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	cmd.WaitDelay = time.Second
+	err := cmd.Run()
+	if stdout.overflow || stderr.overflow {
+		return 0, "", "", errors.New("command output exceeded limit")
+	}
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return ee.ExitCode(), string(stdout.data), string(stderr.data), nil
+		}
+		return 0, "", "", err
+	}
+	return 0, string(stdout.data), string(stderr.data), nil
+}
+
 func commandOutput(ctx context.Context, argv []string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	var out cappedOutput

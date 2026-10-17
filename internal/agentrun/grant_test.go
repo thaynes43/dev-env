@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
@@ -139,4 +140,30 @@ func TestGrantNameAndPhase(t *testing.T) {
 	if !grantPhaseKnown("Active") || grantPhaseKnown("Later") {
 		t.Fatal("phase check")
 	}
+}
+
+func TestGrantUseSelectsThePodContext(t *testing.T) {
+	h := newHarness(t)
+	h.agentd = func(argv []string) (int, string, string) {
+		return 0, "kubectl now uses " + argv[len(argv)-1] + "\n", ""
+	}
+	h.mustRun(ExitOK, "grant", "use", "grant-abc")
+	contains(t, "stdout", h.stdout.String(), "kubectl now uses grant-abc")
+	if len(h.ran) != 1 || h.ran[0] != "/usr/local/bin/agentd ctl grant-use grant-abc" {
+		t.Fatalf("ran %q", h.ran)
+	}
+	if len(h.api.requests()) != 0 {
+		t.Fatal("grant use called the API")
+	}
+	h.mustRun(ExitOK, "grant", "use", protocol.DefaultContext)
+	h.mustRun(ExitUsage, "grant", "use", "Grant-abc")
+	h.mustRun(ExitUsage, "grant", "use")
+	if len(h.ran) != 2 {
+		t.Fatal("a refused name ran agentd")
+	}
+	h.agentd = func(argv []string) (int, string, string) {
+		return 1, "", "agentd: grant-use: grant grant-abc is not installed in this pod, or it has expired"
+	}
+	h.mustRun(ExitFailed, "grant", "use", "grant-abc")
+	contains(t, "stderr", h.stderr.String(), "not installed")
 }

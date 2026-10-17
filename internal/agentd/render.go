@@ -157,20 +157,25 @@ func renderMCP(ctx context.Context, r Runner, s Settings, cfg string) Step {
 	const name = "mcp"
 	src := filepath.Join(cfg, "claude", "mcp.json")
 	data, err := os.ReadFile(src)
-	if isNotExist(err) {
-		return skipStep(name, src+" is not mounted")
-	}
-	if err != nil {
+	var mc mcpConfig
+	switch {
+	case isNotExist(err):
+		// Git named no other servers. The built-in access server is still registered.
+	case err != nil:
 		return newStep(name, nil, err)
-	}
-	if err := writeFileAtomic(filepath.Join(s.Home, ".config", "dev-env", "mcp.json"), data, 0o644); err != nil {
-		return newStep(name, nil, err)
-	}
-	mc, err := readMCPConfig(src)
-	if err != nil {
-		return newStep(name, nil, err)
+	default:
+		if err := writeFileAtomic(filepath.Join(s.Home, ".config", "dev-env", "mcp.json"), data, 0o644); err != nil {
+			return newStep(name, nil, err)
+		}
+		mc, err = readMCPConfig(src)
+		if err != nil {
+			return newStep(name, nil, err)
+		}
 	}
 	if _, err := r.LookPath(s.ClaudeBin); err != nil {
+		if len(data) == 0 {
+			return skipStep(name, src+" is not mounted")
+		}
 		return newStep(name, []string{"WARN the claude CLI is not on PATH; no MCP server registered"}, nil)
 	}
 	return newStep(name, registerMCP(ctx, r, s, mc), nil)
@@ -234,18 +239,20 @@ func renderCodexConfig(s Settings, cfg string) Step {
 	mc, err := readMCPConfig(filepath.Join(cfg, "claude", "mcp.json"))
 	switch {
 	case err == nil:
-		e := newExpander(s.Getenv)
-		servers, err = renderCodexMCP(mc, e)
-		if err != nil {
-			return newStep(name, nil, err)
-		}
-		for _, w := range e.warnings() {
-			notes = append(notes, "WARN codex MCP: "+w)
-		}
+		mc = withBuiltinAccess(mc)
 	case isNotExist(err):
-		notes = append(notes, "no mcp.json: no MCP servers for codex")
+		mc = withBuiltinAccess(mcpConfig{})
+		notes = append(notes, "no mcp.json: only the built-in dev-env access server")
 	default:
 		return newStep(name, nil, err)
+	}
+	e := newExpander(s.Getenv)
+	servers, err = renderCodexMCP(mc, e)
+	if err != nil {
+		return newStep(name, nil, err)
+	}
+	for _, w := range e.warnings() {
+		notes = append(notes, "WARN codex MCP: "+w)
 	}
 	var buf bytes.Buffer
 	buf.Write(base)

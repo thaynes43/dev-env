@@ -9,12 +9,14 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
-// grant list, show, request and release are the CLI slice of plan 07 step 7.
-// They use the existing /v1/grants routes. Use and the in-pod MCP server are
-// not in this slice. Nothing here approves a grant or installs one.
+// grant list, show, request, release and use are the CLI slice of plan 07
+// step 7. List, show, request and release use /v1/grants. Use selects an
+// installed kube context in this pod. Nothing here approves a grant or
+// installs one. The in-pod tools are `agent-run mcp`.
 
 var grantPhases = []string{
 	apiv1.GrantPending, apiv1.GrantActive, apiv1.GrantDenied,
@@ -35,12 +37,14 @@ func (a *app) grant(ctx context.Context, args []string) error {
 		return a.grantRequest(ctx, args[1:])
 	case "release":
 		return a.grantRelease(ctx, args[1:])
+	case "use":
+		return a.grantUse(ctx, args[1:])
 	case "help", "-h", "--help":
 		_, _ = io.WriteString(a.env.Stdout, commandHelp["grant"])
 		return nil
 	}
 	_, _ = io.WriteString(a.env.Stderr, commandHelp["grant"])
-	return usageError("unknown grant command %q: it is list, show, request or release", args[0])
+	return usageError("unknown grant command %q: it is list, show, request, release or use", args[0])
 }
 
 func (a *app) grantList(ctx context.Context, args []string) error {
@@ -247,6 +251,45 @@ func (a *app) grantRelease(ctx context.Context, args []string) error {
 		a.outf("already ended\n")
 	}
 	return a.printGrant(out)
+}
+
+func (a *app) grantUse(ctx context.Context, args []string) error {
+	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
+		return usageError("grant use takes one grant-<id> or %s; agent-run help grant", protocol.DefaultContext)
+	}
+	name := args[0]
+	if name != protocol.DefaultContext {
+		if err := protocol.ValidGrantName(name); err != nil {
+			return usageError("%s", err.Error())
+		}
+	}
+	if a.env.LookPath == nil || a.env.ExecOutput == nil {
+		return fail(ExitFailed, "grant use cannot run agentd from this agent-run")
+	}
+	path, err := a.env.LookPath("agentd")
+	if err != nil {
+		return fail(ExitFailed, "agentd is not on PATH; grant use selects a kube context inside the session pod")
+	}
+	// The only arguments are the subcommand and the checked name. Use does
+	// not call the API and does not install a token.
+	code, stdout, stderr, err := a.env.ExecOutput(ctx, []string{path, "ctl", "grant-use", name})
+	if err != nil {
+		return fail(ExitFailed, "could not run agentd: %v", err)
+	}
+	if stdout != "" {
+		if !strings.HasSuffix(stdout, "\n") {
+			stdout += "\n"
+		}
+		_, _ = io.WriteString(a.env.Stdout, stdout)
+	}
+	if code == 0 {
+		return nil
+	}
+	msg := strings.TrimSpace(stderr)
+	if msg == "" {
+		msg = "agentd ctl grant-use failed"
+	}
+	return fail(ExitFailed, "%s", msg)
 }
 
 func (a *app) grantShow(ctx context.Context, args []string) error {

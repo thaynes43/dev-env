@@ -121,6 +121,7 @@ func TestRegisterMCP(t *testing.T) {
 		`claude mcp add-json -s user alpha {"headers":{"Authorization":"Bearer secret-token-value"},"type":"http","url":"http://a/mcp"}`,
 		`claude mcp add-json -s user beta {"command":"beta-mcp"}`,
 		`claude mcp add-json -s user broke {"command":"x"}`,
+		`claude mcp add-json -s user dev-env {"args":["mcp"],"command":"agent-run"}`,
 		"claude mcp remove -s user gone",
 	}
 	if got := f.lines(); !reflect.DeepEqual(got, want) {
@@ -130,7 +131,7 @@ func TestRegisterMCP(t *testing.T) {
 	if strings.Contains(joined, "secret-token-value") {
 		t.Errorf("a secret reached the notes: %s", joined)
 	}
-	for _, want := range []string{`WARN mcp "broke" registration failed (claude mcp: exit status 1)`, `mcp "gone" removed`, "2 of 3 MCP servers registered"} {
+	for _, want := range []string{`WARN mcp "broke" registration failed (claude mcp: exit status 1)`, `mcp "gone" removed`, "3 of 4 MCP servers registered"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("notes lack %q:\n%s", want, joined)
 		}
@@ -138,7 +139,7 @@ func TestRegisterMCP(t *testing.T) {
 	var managed []string
 	data, _ := os.ReadFile(filepath.Join(s.StateDir, mcpManagedFile))
 	_ = json.Unmarshal(data, &managed)
-	if !reflect.DeepEqual(managed, []string{"alpha", "beta"}) {
+	if !reflect.DeepEqual(managed, []string{"alpha", "beta", "dev-env"}) {
 		t.Errorf("managed = %q", managed)
 	}
 }
@@ -159,8 +160,21 @@ func TestRegisterMCPKeepsAFailedRemove(t *testing.T) {
 	var managed []string
 	data, _ := os.ReadFile(filepath.Join(s.StateDir, mcpManagedFile))
 	_ = json.Unmarshal(data, &managed)
-	if !reflect.DeepEqual(managed, []string{"kept", "gone"}) {
+	if !reflect.DeepEqual(managed, []string{"dev-env", "kept", "gone"}) {
 		t.Errorf("managed = %q, want the failed remove kept for the next boot", managed)
+	}
+}
+
+func TestBuiltinAccessDoesNotReplaceGit(t *testing.T) {
+	cfg := withBuiltinAccess(mcpConfig{Servers: map[string]json.RawMessage{
+		"dev-env": json.RawMessage(`{"command":"from-git"}`),
+	}})
+	if string(cfg.Servers["dev-env"]) != `{"command":"from-git"}` {
+		t.Fatalf("git server replaced: %s", cfg.Servers["dev-env"])
+	}
+	added := withBuiltinAccess(mcpConfig{})
+	if string(added.Servers["dev-env"]) != `{"command":"agent-run","args":["mcp"]}` {
+		t.Fatalf("builtin = %s", added.Servers["dev-env"])
 	}
 }
 
