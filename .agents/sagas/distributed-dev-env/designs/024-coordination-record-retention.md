@@ -913,7 +913,10 @@ exec fake, so the protocol is exercised):
   on the fake client. The message delete is recorded before the ack delete.
   `TestInboxAckDeletesOnTheNextPassAfterAConflict` leaves the ack in place
   when its delete conflicts, then deletes it on the next pass once the message
-  is gone. The envtest of the whole rule remains.
+  is gone. `TestEnvtestInboxRule` runs the keep decisions on a real API server:
+  a present recipient without an ack stays kept, an ack releases the message,
+  and an acknowledgement whose message is gone and not archived stays kept.
+  Delete order remains the fake-client tests.
 - **E4, rights.** Run as `dev-env-operator` under haynes-ops' Roles, copied into
   `testdata/` as the broker and keeper suites do. Delete works only in the
   operator namespace and only on the four kinds; deletecollection is refused. A
