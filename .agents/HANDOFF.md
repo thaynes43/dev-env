@@ -1,63 +1,114 @@
 # HANDOFF: start here
 
-**Start here (2026-10-16):** read the [Cursor wind-down handoff](DEV-ENV-CURSOR-HANDOFF-2026-10-16.md)
-for the partial rendezvous windows, consumed seals and shutdown evidence to preserve.
-Do not repeat those attempts. Its uncommitted freshness WIP and v2.29.2 installed
-paragraphs are historical; **installed state and next work** are the
-[2026-10-16 block](#installed-state--2026-10-16-utc) below.
+**Start here (2026-10-17):** **installed state and next work** are the
+[2026-10-17 blocks](#installed-state--2026-10-17-utc) below. The older
+[Cursor wind-down handoff](DEV-ENV-CURSOR-HANDOFF-2026-10-16.md) is a stopped-session
+snapshot only: partial windows, consumed seals and shutdown evidence to preserve, not
+the current pickup. Do not repeat those attempts.
 
 The front door for any agent that opens this repo, in the cluster's dev-env pod or on
 Tom's own machine. Read this page, then [CLAUDE.md](../CLAUDE.md) (the rules), then
 the saga. The [2026-10-13 pickup brief](CLAUDE-RESUME-2026-10-13.md) holds owner
 gates; the [2026-10-12 brief](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap)
 holds requirement history and the six-step roadmap. The 2026-10-13 enumerated
-next-work list is stale where this page's 2026-10-16 sections disagree.
+next-work list is stale where this page's 2026-10-17 sections disagree.
 [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is the historical first-build order.
 
-## Installed state — 2026-10-16 UTC
+## Installed state — 2026-10-17 UTC
 
 **Released and installed v2.29.4**, release commit
 `f315635ad6fc30129da4e0310295634e57b78422`, including heartbeat freshness
-[#358](https://github.com/thaynes43/dev-env/pull/358) (`a7c8e609`) and Luna pilot
-[#360](https://github.com/thaynes43/dev-env/pull/360) (`e4350bc5`). The sealed pilot
-model is `gpt-6-luna`. The rendezvous harness freshness correction is merged and
-reviewed; do not re-land that WIP.
+[#358](https://github.com/thaynes43/dev-env/pull/358) and Luna pilot
+[#360](https://github.com/thaynes43/dev-env/pull/360). The sealed pilot model is
+`gpt-6-luna`; effort is `high`.
 
-- Task image `ghcr.io/thaynes43/dev-env:2.29.4@sha256:9f1213cce94cc0ad33fc01eb124136ec82a6cc47f1c9d7a997775ae3a5117bd2`,
-  cosign verified.
-- Operator `ghcr.io/thaynes43/dev-env-operator:sha-f315635@sha256:60f66558bd178543c64ff4b5554fbd204fd9c023f7f9d8c57b1b9016b7a4099a`,
-  publish run [38990213487](https://github.com/thaynes43/dev-env/actions/runs/38990213487),
-  keyless verified.
+- Task image `ghcr.io/thaynes43/dev-env:2.29.4@sha256:9f1213cce94cc0ad33fc01eb124136ec82a6cc47f1c9d7a997775ae3a5117bd2`.
+- Operator `ghcr.io/thaynes43/dev-env-operator:sha-f315635@sha256:60f66558bd178543c64ff4b5554fbd204fd9c023f7f9d8c57b1b9016b7a4099a`.
 - [haynes-ops #3992](https://github.com/thaynes43/haynes-ops/pull/3992) merged
-  `08cfff93f0ab3b286673df4e0116fe8c30819daf`. Flux applied `dev-env-crds`,
-  `dev-env-templates` and `dev-env-operator`. The live CRD requires `gpt-6-luna` for
-  the sealed pilot.
+  `08cfff93`. Flux applied `dev-env-crds`, `dev-env-templates` and
+  `dev-env-operator`. The live CRD requires `gpt-6-luna` for the sealed pilot.
 
-**Chapter 7 rendezvous is not accepted.** Cohort `c7-rendezvous-1016-r3` (pod
-`private-pilot-c7-rendezvous-1016-r3-a`) exited **125** before any claim (recorded
-2026-10-16 cluster pickup after haynes-ops #3992). Retain that failure; do not treat
-it as a pilot pass. The cursor handoff still holds earlier partial windows and
-original-A shutdown proof.
+**Later task image v2.29.5**, release commit
+`56f1b8c127eae4864b241d729afae71cd7e23f2d`:
+
+- Task image `ghcr.io/thaynes43/dev-env:2.29.5@sha256:1887be46224bfacd4a6e9c20e443c03f3b2d1516ca0f9305b939011f6a484c61`.
+- [#367](https://github.com/thaynes43/dev-env/pull/367) (`5d44d12`): `ctl status` shows
+  model and effort.
+- [#366](https://github.com/thaynes43/dev-env/pull/366) (`b8a0873`): harness accepts
+  direct claim JSON.
+- [#362](https://github.com/thaynes43/dev-env/pull/362) (`e2be494`):
+  `agentd task-claim-create --timeout`.
+- [#370](https://github.com/thaynes43/dev-env/pull/370) (`60c4e38`): retains the last
+  good log after executor stop.
+
+**dev-env `origin/main` seal (last fetch):** `60c4e38c507c21d5fce64c51d0decc4b56362996`.
+Session pods clone `repo: dev-env`, `base: main`, so the worktree HEAD is
+`origin/main`, not the release tag. Write that SHA verbatim into harness
+`config.json` `head`. It must match `^[0-9a-f]{40}$`. Do not parse HEAD from prompt
+prose.
+
+**Chapter 7 rendezvous is not accepted.** Codex checks use Luna; Claude Code checks use
+Haiku. Luna quota is tighter.
 
 **Held without reopening:** H7 reader work under Q-36 and the consumed Q-37 PV Retain
 step stay held unless Tom explicitly reopens them in a new ruling.
 
-## Next work — 2026-10-16 UTC
+## Next work — 2026-10-17 UTC
 
-1. Read this page, the cursor handoff (failures only), [CLAUDE.md](../CLAUDE.md) and
-   the saga. Do not reopen shipped [#358](https://github.com/thaynes43/dev-env/pull/358)
-   / [#360](https://github.com/thaynes43/dev-env/pull/360) or re-deploy v2.29.4 unless
-   a new pin is required for unrelated work.
-2. **Live pilot windows are open 24/7** (Tom, 2026-10-16 Cursor pickup). That removes
-   any separate scheduling go-ahead gate; it does not reuse consumed seals or
-   attempts. The cursor handoff's "not authorized by this file" lines only bound the
-   stopped 2026-10-16 session, not Tom's window rule. Each new attempt still needs
-   fresh explicit seal/window/identity bindings, one-shot dispatch, checked
-   remove-only closure and peer/v1 preservation.
-3. The smallest remaining Chapter 7 gap is the complete two-agent rendezvous (ACK,
-   publication, authorized retrieval after original A's task completion). Bind new
-   identities before dispatch; preserve r3 and prior partial records.
-4. For everything outside the sealed Luna pilot, continue the
+**Do not start a live cohort from this chat.** A takeover agent reads this page and
+the saga, then runs the next attempt only with a fresh seal, window and bound live
+ConfigMap UID.
+
+### Rendezvous acceptance (not done)
+
+Done means A and B both claim, an inbox ACK exists, A publishes context, and B reads
+it after A is terminal. `B_CREATE_ACCEPTED_NOT_PILOT_ACCEPTANCE` is not done.
+
+### Cohort history (retain; do not reuse)
+
+- **r3 exit 125** was GNU `timeout` wrapping `agentd`. Do not wrap `agentd` in GNU
+  `timeout`. On 2.29.5, `--timeout=10s` exists. The working claim shape is
+  `printf '%s' 'JSON' | /usr/local/bin/agentd task-claim-create` with no extra argv.
+  The word `stdin` must not appear.
+- **r10** (`60c4e38`) is the furthest run. A claimed
+  `f01d99af-6d4e-455d-8208-e12f7bfa32fa` for
+  `task:c7-private-pilot-c7-rendezvous-1016-r10-a`. B
+  `d191bd6f-c704-4084-8f47-c74956719088` claimed
+  `6c423430-56f5-43a2-8220-28f279e85933` and sent InboxMessage
+  `message.ce4a9f8a21da2153afba4e115e643770.555066cd2a8dc46506572a4da482f962`. A's
+  `inbox-read` passed the name as a positional and exited 2 with empty stderr
+  (`cmd/agentd/inbox.go` usage). The working command, proven on that pod, is
+  `/usr/local/bin/agentd inbox-read --project dev-env --message EXACT_NAME`.
+  `inbox-ack` needs the same flags. No ACK, no PublishedContext.
+- **r11** B ran `task-claim-create stdin` and stopped. Inbox flags were never tested.
+- **r12** harness started ~2 minutes after A (`bdc0c114-a1b8-43a7-9b1b-0d855a89cc92`)
+  and returned `claim_stale`. The gate refuses a claim older than 30 seconds. Execute
+  must start within 20 seconds of A existing. No separate nonexec. No missing
+  `run-harness.sh`.
+- **r13 admit** merged as [haynes-ops #4031](https://github.com/thaynes43/haynes-ops/pull/4031),
+  digest `c1967f6c62ba443ac28fc187cffe3ba7fd15260f95c8d192523734f91f08ca95`, window
+  `2026-10-17T08:35:00Z`–`09:00:00Z`, placeholder sealUID
+  `3cfa283f-dc49-491b-a570-21cc156c2023`. It never ran. Omni OIDC discovery hung
+  (`https://haynes.na-west-1.omni.siderolabs.io/oidc/.well-known/openid-configuration`).
+  That window is expired. Do not reuse it. The next cohort needs a fresh seal, a fresh
+  window, and a bound live ConfigMap UID.
+
+### Next attempt rules
+
+1. Admission is a single `--private-project-pilot` arg. Close it after the harness
+   returns. Keep the seal ConfigMap.
+2. Do not restart the v1 pod `dev-env-68b4b9f6cf-lt6j7` (UID
+   `51cbe97d-f88b-46f2-a95d-046fbdf102f8`) or existing session pods.
+3. Pin task image **2.29.5** (or newer if Tom approves a pin). Do not re-open shipped
+   [#358](https://github.com/thaynes43/dev-env/pull/358) /
+   [#360](https://github.com/thaynes43/dev-env/pull/360) unless unrelated work needs a
+   new deploy.
+4. **Log command** on a running executor:
+   `/home/dev/.local/bin/agent-run-f315635 log SESSION --tail 5000 --once -o json` plus
+   the CA file under
+   `/home/dev/work/orders/dev-env-chapter7-pilot-runtime-1016-0907/public-operator-ca.pem`.
+   `--tail` max is 5000. A Failed pod returns 409. v1 `agent-run log` is the wrong CLI.
+5. For everything outside the sealed Luna pilot, continue the
    [2026-10-13 next-work order](CLAUDE-RESUME-2026-10-13.md#next-work-in-order) where
    it does not conflict with this page. H7 reader (Q-36) and Q-37 Retain remain out of
    scope until Tom reopens them.
@@ -2569,10 +2620,11 @@ plan 02 is done. The current order is the pickup brief's
 
 ## What happens next
 
-**Current order:** the [Next work — 2026-10-16 UTC](#next-work--2026-10-16-utc)
+**Current order:** the [Next work — 2026-10-17 UTC](#next-work--2026-10-17-utc)
 section at the top of this page. It supersedes the 2026-10-13 brief's enumerated
-list where they differ (installed v2.29.4, shipped freshness, Luna pilot CRD, r3
-failure, 24/7 live windows, held H7/Q-37).
+list where they differ (v2.29.4/2.29.5 pins, rendezvous cohort r3–r13, inbox CLI
+shape, freshness gate, expired r13 window, held H7/Q-37). The
+[Cursor wind-down handoff](DEV-ENV-CURSOR-HANDOFF-2026-10-16.md) is history only.
 
 The [2026-10-13 next-work list](CLAUDE-RESUME-2026-10-13.md#next-work-in-order)
 and [six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap)
