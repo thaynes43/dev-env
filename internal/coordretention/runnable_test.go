@@ -399,6 +399,25 @@ func TestInboxAckDeletesOnTheNextPassAfterAConflict(t *testing.T) {
 	}
 }
 
+func TestSecondPassDoesNotDeleteTheSameRevision(t *testing.T) {
+	rig := releasedRig()
+	claim := retentionClaim(t, "issue:301", "55555555-5555-4555-8555-555555555555")
+	runnable := rig.build(t, claim)
+	if got := runnable.Pass(context.Background()); got != resultComplete || rig.realDeletes != 1 {
+		t.Fatalf("first pass result %s deletes %d", got, rig.realDeletes)
+	}
+	puts := len(rig.archive.puts)
+	if puts == 0 {
+		t.Fatal("first pass archived nothing")
+	}
+	if got := runnable.Pass(context.Background()); got != resultComplete || rig.realDeletes != 1 || len(rig.archive.puts) != puts {
+		t.Fatalf("second pass result %s deletes %d puts %d want deletes 1 puts %d", got, rig.realDeletes, len(rig.archive.puts), puts)
+	}
+	if err := rig.base.Get(context.Background(), client.ObjectKey{Namespace: claim.Namespace, Name: claim.Name}, &coord.TaskClaim{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("record after the second pass: %v", err)
+	}
+}
+
 func TestFailedPresentResetDoesNotDeleteOnNewLeader(t *testing.T) {
 	opened := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	claim := retentionClaim(t, "issue:301", "55555555-5555-4555-8555-555555555555")
