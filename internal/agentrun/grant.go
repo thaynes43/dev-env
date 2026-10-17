@@ -9,9 +9,18 @@ import (
 	"strconv"
 	"strings"
 
+	"time"
+
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
+
+// grantAnswerWait is how long grant request waits for Tom's answer. An
+// unanswered request is denied at 30 minutes (DESIGN-001 6.12).
+const grantAnswerWait = 30 * time.Minute
+
+// grantAnswerPoll is the gap between reads while a request is pending.
+const grantAnswerPoll = 5 * time.Second
 
 // grant list, show, request, release and use are the CLI slice of plan 07
 // step 7. List, show, request and release use /v1/grants. Use selects an
@@ -104,12 +113,14 @@ func (a *app) grantList(ctx context.Context, args []string) error {
 func (a *app) grantRequest(ctx context.Context, args []string) error {
 	cmd := newCommand("grant", outputJSON)
 	var typ, role, credential, ttl, reason string
+	var noWait bool
 	var namespaces, fqdns, cidrs, endpoints, ports stringList
 	cmd.fs.StringVar(&typ, "type", "", "")
 	cmd.fs.StringVar(&role, "role", "", "")
 	cmd.fs.StringVar(&credential, "credential", "", "")
 	cmd.fs.StringVar(&ttl, "ttl", "", "")
 	cmd.fs.StringVar(&reason, "reason", "", "")
+	cmd.fs.BoolVar(&noWait, "no-wait", false, "")
 	cmd.fs.Var(&namespaces, "namespace", "")
 	cmd.fs.Var(&fqdns, "fqdn", "")
 	cmd.fs.Var(&cidrs, "cidr", "")
@@ -137,7 +148,47 @@ func (a *app) grantRequest(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if noWait || out.Phase != apiv1.GrantPending {
+		return a.finishGrantRequest(status, out, cmd.c.output)
+	}
+	if cmd.c.output != outputJSON {
+		if status == http.StatusOK {
+			a.outf("existing grant\n")
+		} else {
+			a.outf("requested\n")
+		}
+		if err := a.printGrant(out); err != nil {
+			return err
+		}
+	}
+	now := time.Now
+	if a.env.Now != nil {
+		now = a.env.Now
+	}
+	deadline := now().Add(grantAnswerWait)
+	for out.Phase == apiv1.GrantPending {
+		if !now().Before(deadline) {
+			return fail(ExitFailed, "grant %s is still pending after %s", out.Name, grantAnswerWait)
+		}
+		if a.env.Sleep == nil {
+			return fail(ExitFailed, "grant request cannot wait from this agent-run")
+		}
+		if err := a.env.Sleep(ctx, grantAnswerPoll); err != nil {
+			return fail(ExitFailed, "stopped waiting for grant %s: %v", out.Name, err)
+		}
+		if _, err := a.call(ctx, c, http.MethodGet, apiv1.GrantPath(out.Name), nil, nil, &out); err != nil {
+			return err
+		}
+	}
 	if cmd.c.output == outputJSON {
+		return a.printJSON(out)
+	}
+	a.outf("answered\n")
+	return a.printGrant(out)
+}
+
+func (a *app) finishGrantRequest(status int, out apiv1.Grant, format string) error {
+	if format == outputJSON {
 		return a.printJSON(out)
 	}
 	if status == http.StatusOK {

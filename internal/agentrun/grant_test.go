@@ -47,7 +47,7 @@ func TestGrantRequestPostsTheAsk(t *testing.T) {
 			return http.StatusCreated, `{"name":"grant-1017-160000-ab12","phase":"Pending","type":"egress","session":"task-1","ttl":"30m","reason":"look up the registry","message":"waiting","approvalURL":"https://broker.example/grants/grant-1017-160000-ab12"}`
 		},
 	})
-	h.mustRun(ExitOK, "grant", "request", "--type", "egress", "--reason", "look up the registry",
+	h.mustRun(ExitOK, "grant", "request", "--no-wait", "--type", "egress", "--reason", "look up the registry",
 		"--fqdn", "ghcr.io", "--endpoint", "database:app=registry", "--port", "443", "--port", "53/udp", "--ttl", "30m")
 	contains(t, "stdout", h.stdout.String(), "requested", "name: grant-1017-160000-ab12", "phase: Pending", "message: waiting", "approval: https://broker.example/grants/grant-1017-160000-ab12")
 	var got apiv1.CreateGrantRequest
@@ -69,6 +69,28 @@ func TestGrantRequestPostsTheAsk(t *testing.T) {
 	h.mustRun(ExitUsage, "grant", "request", "--type", "egress", "--reason", "x", "--endpoint", ":app=a")
 	if len(h.api.requests()) != before {
 		t.Fatal("a refused request reached the API")
+	}
+}
+
+func TestGrantRequestWaitsForTheAnswer(t *testing.T) {
+	h := newHarness(t)
+	gets := 0
+	serveRaw(h, map[string]func(*http.Request) (int, string){
+		apiv1.GrantsPath: func(r *http.Request) (int, string) {
+			return http.StatusCreated, `{"name":"grant-abc","phase":"Pending","type":"kube","session":"task-1","ttl":"30m","reason":"read pods","approvalURL":"https://broker.example/g"}`
+		},
+		apiv1.GrantPath("grant-abc"): func(r *http.Request) (int, string) {
+			gets++
+			if gets == 1 {
+				return http.StatusOK, `{"name":"grant-abc","phase":"Pending","type":"kube","session":"task-1","ttl":"30m","reason":"read pods","approvalURL":"https://broker.example/g"}`
+			}
+			return http.StatusOK, `{"name":"grant-abc","phase":"Active","type":"kube","session":"task-1","ttl":"30m","reason":"read pods"}`
+		},
+	})
+	h.mustRun(ExitOK, "grant", "request", "--type", "kube", "--role", "dev-env-grant-workloads", "--reason", "read pods")
+	contains(t, "stdout", h.stdout.String(), "requested", "approval: https://broker.example/g", "answered", "phase: Active")
+	if gets != 2 || len(h.sleeps) != 2 || h.sleeps[0] != grantAnswerPoll {
+		t.Fatalf("gets %d sleeps %v", gets, h.sleeps)
 	}
 }
 
