@@ -1,6 +1,7 @@
 package agentrun
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -32,7 +33,42 @@ func TestGrantListFiltersAndTable(t *testing.T) {
 	}
 	h.mustRun(ExitUsage, "grant", "list", "--phase", "Later")
 	h.mustRun(ExitUsage, "grant", "list", "extra")
-	h.mustRun(ExitUsage, "grant", "request", "kube")
+	h.mustRun(ExitUsage, "grant", "install")
+}
+
+func TestGrantRequestPostsTheAsk(t *testing.T) {
+	h := newHarness(t)
+	serveRaw(h, map[string]func(*http.Request) (int, string){
+		apiv1.GrantsPath: func(r *http.Request) (int, string) {
+			if r.Method != http.MethodPost {
+				t.Errorf("method %s", r.Method)
+			}
+			return http.StatusCreated, `{"name":"grant-1017-160000-ab12","phase":"Pending","type":"egress","session":"task-1","ttl":"30m","reason":"look up the registry"}`
+		},
+	})
+	h.mustRun(ExitOK, "grant", "request", "--type", "egress", "--reason", "look up the registry",
+		"--fqdn", "ghcr.io", "--endpoint", "database:app=registry", "--port", "443", "--port", "53/udp", "--ttl", "30m")
+	contains(t, "stdout", h.stdout.String(), "requested", "name: grant-1017-160000-ab12", "phase: Pending")
+	var got apiv1.CreateGrantRequest
+	if err := json.Unmarshal(h.api.requests()[0].body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Type != "egress" || got.Reason != "look up the registry" || got.TTL != "30m" || len(got.FQDNs) != 1 || got.FQDNs[0] != "ghcr.io" {
+		t.Fatalf("body %#v", got)
+	}
+	if len(got.Endpoints) != 1 || got.Endpoints[0].Namespace != "database" || got.Endpoints[0].MatchLabels["app"] != "registry" {
+		t.Fatalf("endpoint %#v", got.Endpoints)
+	}
+	if len(got.Ports) != 2 || got.Ports[0].Port != 443 || got.Ports[0].Protocol != "" || got.Ports[1].Port != 53 || got.Ports[1].Protocol != "UDP" {
+		t.Fatalf("ports %#v", got.Ports)
+	}
+	before := len(h.api.requests())
+	h.mustRun(ExitUsage, "grant", "request", "--type", "kube")
+	h.mustRun(ExitUsage, "grant", "request", "--type", "egress", "--reason", "x", "--port", "nope")
+	h.mustRun(ExitUsage, "grant", "request", "--type", "egress", "--reason", "x", "--endpoint", ":app=a")
+	if len(h.api.requests()) != before {
+		t.Fatal("a refused request reached the API")
+	}
 }
 
 func TestGrantShowOneName(t *testing.T) {
