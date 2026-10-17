@@ -39,6 +39,7 @@ Usage:
   agent-run grant release <grant-id>              ask the broker to end one grant
   agent-run grant use <grant-id>|default         select that kube context in this pod
   agent-run mcp                                   access tools on stdin for the session
+  agent-run breakglass --reason <why>             ask for break-glass; Tom still approves it
   declare-activity start "<what>" --scope <a,b>   declare dev work, so it is not taken for a fault
   agent-run attach <name>                         attach to a session's TUI (Tom only)
   agent-run detach <name>                         detach every client from it (Tom only)
@@ -403,6 +404,12 @@ grant release names one grant. The grant object stays as the audit record.
 
 grant use runs agentd ctl grant-use. The name is grant-<id> or default.
 It does not call the API.
+`,
+	"breakglass": `Usage: agent-run breakglass --reason <why> [--ttl <duration>] [-o json]
+
+Ask for a break-glass grant (DESIGN-001 6.12). This posts type breakglass to
+/v1/grants and prints the approval page. The API sets the role. Tom still
+approves it. This command does not approve the grant or install it.
 `,
 	"mcp": `Usage: agent-run mcp
 
