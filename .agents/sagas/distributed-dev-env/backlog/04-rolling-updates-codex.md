@@ -90,3 +90,14 @@ Project catalog, common rules, task coordination, history retention and local
 repo freshness live in [plan 11](11-project-workspaces.md). No shared Git rollout
 is needed; do not share writable provider homes. No new
 management UI or v1/auth migration is selected by this plan update.
+
+## Source note, 2026-10-17
+
+Idle drain (DESIGN-001 5.2, Q-03) is in the operator source. An idle, outdated,
+non-summoned session is marked Draining. `prepare-restart` must record a
+conversation id before `deletePod`. The existing ensure path then starts the
+replacement on the current revision and the same volume. Busy, summoned,
+private-history, and canary sessions are not drained. The 72h session message
+and the 24h owner line are not sent: no notifier in this repo sends them, and
+drain does not wait on that notice. This note is source only. It does not
+deploy the operator. The acceptance list above is unchanged.

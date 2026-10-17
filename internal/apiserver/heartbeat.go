@@ -120,6 +120,7 @@ func agentStatus(st protocol.Status, now metav1.Time) *v1alpha1.AgentStatus {
 	a := &v1alpha1.AgentStatus{
 		Status:         clip(st.Agent.State, maxShort),
 		LastHeartbeat:  &now,
+		Attached:       st.Agent.Attached,
 		Agentd:         clip(st.Agentd, maxShort),
 		Boot:           clip(st.Boot, maxShort),
 		ConversationID: clip(st.Agent.ConversationID, maxShort),

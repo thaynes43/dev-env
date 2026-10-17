@@ -9,7 +9,9 @@
 //   - The operator never updates a session's pod or volume, and deletes a pod
 //     only through deletePod, whose guard (guard.go) allows the Draining and
 //     Suspended transitions only, and a suspend of a pod that ran only after a
-//     rescue in it (D-51). Drain is plan 04, so the guard refuses it today.
+//     rescue in it (D-51). Drain (DESIGN-001 5.2) allows that delete only after
+//     prepare-restart has recorded the conversation for the pod. drainPod is
+//     the caller; it does not lift a volume finalizer.
 //     One exception, default off: stopPrivateExecutor sets a Reaping private
 //     Session's executor's activeDeadlineSeconds after a confirmed stop intent
 //     (DESIGN-025 4), and no other Pod write exists in the module
@@ -66,8 +68,7 @@ const (
 	// templates, or a pod that ended.
 	ConditionPodReady = "PodReady"
 	// ConditionOutdated is True when the pod runs an older template revision
-	// than the current one (DESIGN-001 5.2). Plan 04 drains on it; until then
-	// it is reported only.
+	// than the current one (DESIGN-001 5.2). Idle drain reads it.
 	ConditionOutdated = "Outdated"
 	// ConditionRemovalBlocked is True while the session asks for its pod or
 	// volume to go (suspend, or delete, which is a reap) and 5.1's guard keeps
@@ -175,6 +176,10 @@ type Reconciler struct {
 	// Rescuer runs agentd's rescue in a pod (D-51). Nil means no rescue can
 	// run, so a pod that ran is never removed.
 	Rescuer Rescuer
+	// Restarter runs prepare-restart for an idle drain (DESIGN-001 5.2).
+	// Nil uses Rescuer when that value implements Restarter, which
+	// ExecRescuer does. With neither, an outdated idle pod stays.
+	Restarter Restarter
 	// WorkspaceStopper requests exit only for shared executors. StopVerifier
 	// supplies uncached typed Pod/Node/Lease reads; nil uses APIReader.
 	WorkspaceStopper WorkspaceStopper
@@ -448,11 +453,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 		if err := r.ensure(ctx, &s, t, &obs); err != nil {
 			return ctrl.Result{}, err
 		}
-		res, stop, err := r.idleTimer(ctx, &s, t, &obs)
+		// An idle outdated session drains (DESIGN-001 5.2) instead of parking
+		// on the suspend timer. The timer still runs when drain does not apply.
+		holdIdle, res, stop, err := r.drainIdle(ctx, &s, t, &obs)
 		if err != nil || stop {
 			return res, err
 		}
-		result = res
+		if !holdIdle {
+			res, stop, err = r.idleTimer(ctx, &s, t, &obs)
+			if err != nil || stop {
+				return res, err
+			}
+		}
+		result = sooner(result, res)
 	case !obs.pod.missing && obs.pod.foreign == "":
 		// Suspend or delete asks for the pod to go, or a hold pod is no longer
 		// needed: rescue first, then 5.1's guard decides.
@@ -1350,8 +1363,13 @@ func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessio
 	setRescueCondition(s, st, rescueReason(st))
 	if obs.removalBlocked != nil {
 		reason, what := "SuspendNeedsRescue", "suspend waits"
-		if !s.DeletionTimestamp.IsZero() {
+		switch {
+		case !s.DeletionTimestamp.IsZero():
 			reason, what = "DeleteNeedsRescue", "delete is a reap and waits"
+		case errors.Is(obs.removalBlocked, errDrainNeedsRestart):
+			reason, what = "DrainNeedsRestart", "drain waits"
+		case errors.Is(obs.removalBlocked, errSummonedNotDrained):
+			reason, what = "SummonedNotDrained", "a summoned session is not drained"
 		}
 		meta.SetStatusCondition(&st.Conditions, metav1.Condition{Type: ConditionRemovalBlocked, Status: metav1.ConditionTrue,
 			Reason: reason, Message: truncate(what + ": " + obs.removalBlocked.Error()), ObservedGeneration: s.Generation})
@@ -1493,6 +1511,9 @@ func podPhase(s *v1alpha1.AgentSession, obs observation) (v1alpha1.SessionPhase,
 			reason = string(pod.Status.Phase)
 		}
 		return v1alpha1.PhaseFailed, notReady("PodEnded", fmt.Sprintf("the pod ended (%s): %s; its volume is kept", reason, pod.Status.Message))
+	case pod.Status.Phase == corev1.PodRunning && podReady(pod) && drainEligible(s, pod, templateRevision(obs)):
+		return v1alpha1.PhaseDraining, metav1.Condition{Status: metav1.ConditionTrue, Reason: "PodReady",
+			Message: "the pod is Ready on " + pod.Spec.NodeName + " and idle on an older template revision, so it drains (DESIGN-001 5.2)"}
 	case pod.Status.Phase == corev1.PodRunning && podReady(pod):
 		return v1alpha1.PhaseRunning, metav1.Condition{Status: metav1.ConditionTrue, Reason: "PodReady", Message: "the pod is Ready on " + pod.Spec.NodeName}
 	default:

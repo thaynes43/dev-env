@@ -560,6 +560,12 @@ type AgentSessionStatus struct {
 	// +optional
 	Rescue *RescueStatus `json:"rescue,omitempty"`
 
+	// Restart is the prepare-restart proof for an idle drain (DESIGN-001 5.2).
+	// The operator writes it before deletePod may remove that pod. It names
+	// the conversation the same volume resumes and the pod the proof was taken in.
+	// +optional
+	Restart *RestartStatus `json:"restart,omitempty"`
+
 	// SuspendedAt is when the operator first saw the session suspended with
 	// no pod of its own: the start of its archive timer (D-09, D-62). A resume
 	// clears it.
@@ -921,6 +927,12 @@ type AgentStatus struct {
 	// LastActivity is the last time agentd saw the agent or its worktree change.
 	// +optional
 	LastActivity *metav1.Time `json:"lastActivity,omitempty"`
+
+	// Attached is how many clients are attached to the agent's tmux session
+	// (DESIGN-001 4.2, D-59). Drain treats any attached client as not idle.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	Attached int `json:"attached,omitempty"`
 
 	// LastHeartbeat is when the operator last accepted a heartbeat from the
 	// session's pod, by the operator's clock.
@@ -1334,6 +1346,26 @@ const (
 	// waits (D-10).
 	RescueFailed RescueResult = "Failed"
 )
+
+// RestartStatus is prepare-restart's recorded conversation for one pod
+// (DESIGN-001 5.2). The operator writes it before a drain deletes that pod.
+// A missing conversation id is not proof.
+type RestartStatus struct {
+	// ConversationID is the conversation the next boot on this volume resumes.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	ConversationID string `json:"conversationId"`
+
+	// PodUID is the pod prepare-restart ran in.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	PodUID string `json:"podUID"`
+
+	// Generation is the session generation when the proof was recorded.
+	// A spec change since then needs a new prepare-restart.
+	// +kubebuilder:validation:Minimum=1
+	Generation int64 `json:"generation"`
+}
 
 // RescueStatus records a session's newest rescue (D-10, D-51). The operator
 // writes it before it deletes the pod the rescue ran in, so a fresh operator
