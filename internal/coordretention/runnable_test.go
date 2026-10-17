@@ -22,6 +22,7 @@ import (
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	devv1 "github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/inbox"
 	"github.com/thaynes43/dev-env/internal/shelf"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
 )
@@ -242,6 +243,80 @@ func timePtr(at time.Time) *time.Time {
 	return &at
 }
 
+func TestInboxReleaseDeletesTheMessageBeforeTheAck(t *testing.T) {
+	message := messageSpec()
+	ackSpec := coord.InboxReadAckSpec{
+		Project: message.Project, MessageName: inbox.MessageName(message.Sender, message.Key),
+		MessageUID: "44444444-4444-4444-8444-444444444444", Recipient: message.Recipient, Actor: actor(),
+	}
+	if !inbox.ValidMessage(message) || !inbox.ValidAck(ackSpec) {
+		t.Fatal("inbox fixture")
+	}
+	msg := &coord.InboxMessage{
+		TypeMeta:   metav1.TypeMeta{APIVersion: protocol.CoordArchiveAPIVersion, Kind: "InboxMessage"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: retentionNS, Name: ackSpec.MessageName, UID: types.UID(ackSpec.MessageUID), ResourceVersion: "30"},
+		Spec:       message,
+	}
+	ack := &coord.InboxReadAck{
+		TypeMeta:   metav1.TypeMeta{APIVersion: protocol.CoordArchiveAPIVersion, Kind: "InboxReadAck"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: retentionNS, Name: inbox.AckName(ackSpec.MessageUID, ackSpec.Recipient.UID), UID: types.UID("77777777-7777-4777-8777-777777777777"), ResourceVersion: "40"},
+		Spec:       ackSpec,
+	}
+	toUnstructured := func(v runtime.Object) unstructured.Unstructured {
+		raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return unstructured.Unstructured{Object: raw}
+	}
+	rig := releasedRig()
+	rig.now = time.Date(2026, 10, 17, 17, 0, 0, 0, time.UTC)
+	past := rig.now.Add(-DefaultGrace - time.Minute).UTC()
+	for _, id := range []protocol.CoordArchiveIdentity{
+		{Resource: "inboxmessages", Project: message.Project, Name: msg.Name, UID: string(msg.UID)},
+		{Resource: "inboxreadacks", Project: ackSpec.Project, Name: ack.Name, UID: string(ack.UID)},
+	} {
+		key := lookupKey(id)
+		rig.archive.grace[key] = timePtr(past)
+		rig.archive.latest[key] = protocol.CoordArchiveEvent{State: "absent", At: past}
+		rig.archive.revisions[key] = []protocol.CoordArchiveRevision{{ResourceVersion: "seed", SHA256: strings.Repeat("ab", 32)}}
+	}
+	rig.archive.note = func(step string) { rig.order = append(rig.order, step) }
+	rig.base = fake.NewClientBuilder().WithScheme(retentionScheme(t)).WithObjects(msg.DeepCopy(), ack.DeepCopy()).Build()
+	reader := &rigReader{Client: rig.base, lists: &fixtureReader{objects: map[string][]unstructured.Unstructured{
+		"InboxMessageList": {toUnstructured(msg)},
+		"InboxReadAckList": {toUnstructured(ack)},
+	}}, rig: rig}
+	runnable := &Runnable{
+		Enabled: true, Grace: DefaultGrace, Client: &rigClient{Client: rig.base, rig: rig}, Reader: reader,
+		Namespace: retentionNS, Reconciled: map[string]bool{"dev-agents": true},
+		Kinds: map[Kind]bool{InboxMessage: true, InboxReadAck: true},
+		Pods:  &staticPods{name: "dev-env-shelf"}, Archive: rig.archive, Slots: shelf.NewExecSlots(2),
+		metrics: newRetentionMetrics(), Now: func() time.Time { return rig.now },
+	}
+	if got := runnable.Pass(context.Background()); got != resultComplete || rig.realDeletes != 2 {
+		t.Fatalf("result %s deletes %d order %v", got, rig.realDeletes, rig.order)
+	}
+	messageAt, ackAt := -1, -1
+	for i, step := range rig.order {
+		if step == "delete:InboxMessage" {
+			messageAt = i
+		}
+		if step == "delete:InboxReadAck" {
+			ackAt = i
+		}
+	}
+	if messageAt < 0 || ackAt < 0 || messageAt > ackAt {
+		t.Fatalf("message must be deleted before its ack, order %v", rig.order)
+	}
+	if err := rig.base.Get(context.Background(), client.ObjectKey{Namespace: msg.Namespace, Name: msg.Name}, &coord.InboxMessage{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("message after delete: %v", err)
+	}
+	if err := rig.base.Get(context.Background(), client.ObjectKey{Namespace: ack.Namespace, Name: ack.Name}, &coord.InboxReadAck{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("ack after delete: %v", err)
+	}
+}
+
 func TestFailedPresentResetDoesNotDeleteOnNewLeader(t *testing.T) {
 	opened := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	claim := retentionClaim(t, "issue:301", "55555555-5555-4555-8555-555555555555")
@@ -345,13 +420,20 @@ func claimIdentity(claim *coord.TaskClaim) string {
 	return lookupKey(protocol.CoordArchiveIdentity{Resource: "taskclaims", Project: claim.Spec.Identity.Project, Name: claim.Name, UID: string(claim.UID)})
 }
 
+func deleteLabel(obj client.Object) string {
+	if u, ok := obj.(*unstructured.Unstructured); ok && u.GetKind() != "" {
+		return "delete:" + u.GetKind()
+	}
+	return "delete"
+}
+
 func archiveVerifiedBeforeDelete(order []string) bool {
 	sawGet := false
 	for _, step := range order {
 		if step == "get" {
 			sawGet = true
 		}
-		if step == "delete" {
+		if step == "delete" || strings.HasPrefix(step, "delete:") {
 			return sawGet
 		}
 	}
@@ -474,7 +556,7 @@ type rigClient struct {
 }
 
 func (c *rigClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
-	c.rig.order = append(c.rig.order, "delete")
+	c.rig.order = append(c.rig.order, deleteLabel(obj))
 	var options client.DeleteOptions
 	options.ApplyOptions(opts)
 	if options.Preconditions == nil || options.Preconditions.UID == nil || options.Preconditions.ResourceVersion == nil {
