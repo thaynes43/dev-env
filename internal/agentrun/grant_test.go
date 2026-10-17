@@ -43,12 +43,12 @@ func TestGrantRequestPostsTheAsk(t *testing.T) {
 			if r.Method != http.MethodPost {
 				t.Errorf("method %s", r.Method)
 			}
-			return http.StatusCreated, `{"name":"grant-1017-160000-ab12","phase":"Pending","type":"egress","session":"task-1","ttl":"30m","reason":"look up the registry"}`
+			return http.StatusCreated, `{"name":"grant-1017-160000-ab12","phase":"Pending","type":"egress","session":"task-1","ttl":"30m","reason":"look up the registry","message":"waiting","approvalURL":"https://broker.example/grants/grant-1017-160000-ab12"}`
 		},
 	})
 	h.mustRun(ExitOK, "grant", "request", "--type", "egress", "--reason", "look up the registry",
 		"--fqdn", "ghcr.io", "--endpoint", "database:app=registry", "--port", "443", "--port", "53/udp", "--ttl", "30m")
-	contains(t, "stdout", h.stdout.String(), "requested", "name: grant-1017-160000-ab12", "phase: Pending")
+	contains(t, "stdout", h.stdout.String(), "requested", "name: grant-1017-160000-ab12", "phase: Pending", "message: waiting", "approval: https://broker.example/grants/grant-1017-160000-ab12")
 	var got apiv1.CreateGrantRequest
 	if err := json.Unmarshal(h.api.requests()[0].body, &got); err != nil {
 		t.Fatal(err)
@@ -90,6 +90,27 @@ func TestGrantReleaseAsksTheBroker(t *testing.T) {
 	if len(h.api.requests()) != 1 {
 		t.Fatal("a refused release reached the API")
 	}
+}
+
+func TestGrantReleaseTextFollowsTheRecord(t *testing.T) {
+	h := newHarness(t)
+	call := 0
+	serveRaw(h, map[string]func(*http.Request) (int, string){
+		apiv1.GrantPath("grant-abc"): func(r *http.Request) (int, string) {
+			call++
+			if call == 1 {
+				return http.StatusOK, `{"name":"grant-abc","phase":"Denied","type":"kube","session":"task-1","ttl":"30m","reason":"read pods"}`
+			}
+			return http.StatusOK, `{"name":"grant-abc","phase":"Released","type":"kube","session":"task-1","ttl":"30m","reason":"read pods","release":true}`
+		},
+	})
+	h.mustRun(ExitOK, "grant", "release", "grant-abc")
+	if strings.Contains(h.stdout.String(), "already released") || !strings.Contains(h.stdout.String(), "already ended") {
+		t.Fatalf("denied grant: %s", h.stdout.String())
+	}
+	h.stdout.Reset()
+	h.mustRun(ExitOK, "grant", "release", "grant-abc")
+	contains(t, "stdout", h.stdout.String(), "already released", "phase: Released")
 }
 
 func TestGrantShowOneName(t *testing.T) {

@@ -12,9 +12,9 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
-// grant list and show are the first slice of plan 07 step 7. They read the
-// existing /v1/grants routes. Request, use, release, break-glass and the
-// in-pod MCP server are not in this slice.
+// grant list, show, request and release are the CLI slice of plan 07 step 7.
+// They use the existing /v1/grants routes. Use and the in-pod MCP server are
+// not in this slice. Nothing here approves a grant or installs one.
 
 var grantPhases = []string{
 	apiv1.GrantPending, apiv1.GrantActive, apiv1.GrantDenied,
@@ -237,10 +237,14 @@ func (a *app) grantRelease(ctx context.Context, args []string) error {
 	if cmd.c.output == outputJSON {
 		return a.printJSON(out)
 	}
-	if status == http.StatusOK {
-		a.outf("already released\n")
-	} else {
+	switch {
+	case status == http.StatusAccepted:
 		a.outf("release requested\n")
+	case out.Release:
+		a.outf("already released\n")
+	default:
+		// Denied, Expired and Failed also answer 200. They ended without a release.
+		a.outf("already ended\n")
 	}
 	return a.printGrant(out)
 }
@@ -275,6 +279,12 @@ func (a *app) printGrant(out apiv1.Grant) error {
 	}
 	a.outf("name: %s\nphase: %s\ntype: %s\nsession: %s\nttl: %s\nexpires: %s\nreason: %s\n",
 		out.Name, out.Phase, out.Type, firstOf(out.Session, "-"), out.TTL, expires, out.Reason)
+	if out.Message != "" {
+		a.outf("message: %s\n", out.Message)
+	}
+	if out.ApprovalURL != "" {
+		a.outf("approval: %s\n", out.ApprovalURL)
+	}
 	return nil
 }
 

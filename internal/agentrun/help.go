@@ -29,14 +29,14 @@ Usage:
   agent-run rescue restore <session>/<stamp> (--local | -p "<task>")
                                                   start a session that fetches a rescue
   agent-run history list [--project <p>]          list archived Session histories by project
+  agent-run history show <uid>                    show one archived history's manifest
+  agent-run history read <uid> <root/path>        print an archived file, a page or --all
   agent-run grant list [--session <s>] [--phase <p>] [--mine]
                                                   list access grants, newest first
   agent-run grant show <grant-id>                 show one access grant
   agent-run grant request --type <t> --reason <why>
                                                   ask for a grant; Tom still approves it
   agent-run grant release <grant-id>              ask the broker to end one grant
-  agent-run history show <uid>                    show one archived history's manifest
-  agent-run history read <uid> <root/path>        print an archived file, a page or --all
   declare-activity start "<what>" --scope <a,b>   declare dev work, so it is not taken for a fault
   agent-run attach <name>                         attach to a session's TUI (Tom only)
   agent-run detach <name>                         detach every client from it (Tom only)
