@@ -909,6 +909,9 @@ exec fake, so the protocol is exercised):
   whose delete failed is released on the next pass. An ack whose message was
   deleted by hand, with no archive entry, is kept. A recipient ack retry after
   the release answers 200 with `archived: true` and writes nothing.
+  *2026-10-17:* `TestInboxReleaseDeletesTheMessageBeforeTheAck` runs one pass
+  on the fake client. The message delete is recorded before the ack delete.
+  The envtest of the whole rule remains.
 - **E4, rights.** Run as `dev-env-operator` under haynes-ops' Roles, copied into
   `testdata/` as the broker and keeper suites do. Delete works only in the
   operator namespace and only on the four kinds; deletecollection is refused. A
