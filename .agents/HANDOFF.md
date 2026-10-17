@@ -88,10 +88,24 @@ it after A is terminal. `B_CREATE_ACCEPTED_NOT_PILOT_ACCEPTANCE` is not done.
 - **r13 admit** merged as [haynes-ops #4031](https://github.com/thaynes43/haynes-ops/pull/4031),
   digest `c1967f6c62ba443ac28fc187cffe3ba7fd15260f95c8d192523734f91f08ca95`, window
   `2026-10-17T08:35:00Z`–`09:00:00Z`, placeholder sealUID
-  `3cfa283f-dc49-491b-a570-21cc156c2023`. It never ran. Omni OIDC discovery hung
-  (`https://haynes.na-west-1.omni.siderolabs.io/oidc/.well-known/openid-configuration`).
-  That window is expired. Do not reuse it. The next cohort needs a fresh seal, a fresh
-  window, and a bound live ConfigMap UID.
+  `3cfa283f-dc49-491b-a570-21cc156c2023`. It never ran. The Mac commands exported
+  `KUBECONFIG=/Users/thaynes/src/labspace/haynes-ops/kubeconfig` (also what that
+  repo's `.envrc` selects). That file runs `kubectl oidc-login get-token`. Repeated
+  polling started a new interactive browser login before `kubectl exec` reached the
+  pod, so discovery of
+  `https://haynes.na-west-1.omni.siderolabs.io/oidc/.well-known/openid-configuration`
+  never completed. That window is expired. Do not reuse it. The next cohort needs a
+  fresh seal, a fresh window, and a bound live ConfigMap UID.
+- **Mac cluster access, 2026-10-17.** Use the existing token-only kubeconfig. It has
+  no exec plugin. Every Mac `kubectl` command passes
+  `--kubeconfig=/Users/thaynes/.kube/haynes-ops-machine.yaml` and context
+  `haynes-haynes-ops-machine`. Flux on the Mac uses that same file only as a
+  command-scoped `KUBECONFIG=...` prefix. A bounded read with it succeeded:
+  namespace `dev`. Do not export or pass the haynes-ops repo kubeconfig. Do not
+  refresh Omni login. Do not retry interactive authentication inside a poll loop.
+  One failed token read stops the loop. The Mac path is not inside a remote pod.
+  Commands that run in the v1 pod or a session pod use that pod's own kube setup,
+  not this file. Do not change `.envrc`, security settings, or install credentials.
 
 ### Next attempt rules
 
@@ -108,7 +122,16 @@ it after A is terminal. `B_CREATE_ACCEPTED_NOT_PILOT_ACCEPTANCE` is not done.
    the CA file under
    `/home/dev/work/orders/dev-env-chapter7-pilot-runtime-1016-0907/public-operator-ca.pem`.
    `--tail` max is 5000. A Failed pod returns 409. v1 `agent-run log` is the wrong CLI.
-5. For everything outside the sealed Luna pilot, continue the
+5. **Mac kubectl and Flux.** Pass
+   `--kubeconfig=/Users/thaynes/.kube/haynes-ops-machine.yaml` on every Mac
+   `kubectl` (context `haynes-haynes-ops-machine`). For Mac Flux, prefix the
+   command with `KUBECONFIG=/Users/thaynes/.kube/haynes-ops-machine.yaml`. That
+   file is token-only. The repo file
+   `haynes-ops/kubeconfig` and its `.envrc` selection run interactive
+   `oidc-login` and caused the 2026-10-17 auth storm. Do not use them. Do not
+   refresh Omni login. A poll loop must not retry interactive auth. Do not assume
+   the Mac kubeconfig path exists inside a pod.
+6. For everything outside the sealed Luna pilot, continue the
    [2026-10-13 next-work order](CLAUDE-RESUME-2026-10-13.md#next-work-in-order) where
    it does not conflict with this page. H7 reader (Q-36) and Q-37 Retain remain out of
    scope until Tom reopens them.
@@ -2623,7 +2646,7 @@ plan 02 is done. The current order is the pickup brief's
 **Current order:** the [Next work — 2026-10-17 UTC](#next-work--2026-10-17-utc)
 section at the top of this page. It supersedes the 2026-10-13 brief's enumerated
 list where they differ (v2.29.4/2.29.5 pins, rendezvous cohort r3–r13, inbox CLI
-shape, freshness gate, expired r13 window, held H7/Q-37). The
+shape, freshness gate, expired r13 window, Mac token kubeconfig, held H7/Q-37). The
 [Cursor wind-down handoff](DEV-ENV-CURSOR-HANDOFF-2026-10-16.md) is history only.
 
 The [2026-10-13 next-work list](CLAUDE-RESUME-2026-10-13.md#next-work-in-order)
