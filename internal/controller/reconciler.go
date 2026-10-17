@@ -10,8 +10,8 @@
 //     only through deletePod, whose guard (guard.go) allows the Draining and
 //     Suspended transitions only, and a suspend of a pod that ran only after a
 //     rescue in it (D-51). Drain (DESIGN-001 5.2) allows that delete only after
-//     prepare-restart has recorded the conversation for the pod. drainPod is
-//     the caller; it does not lift a volume finalizer.
+//     a no-side-effect read has recorded the conversation and the existing stop
+//     has run. drainPod is the caller; it does not lift a volume finalizer.
 //     One exception, default off: stopPrivateExecutor sets a Reaping private
 //     Session's executor's activeDeadlineSeconds after a confirmed stop intent
 //     (DESIGN-025 4), and no other Pod write exists in the module
@@ -176,9 +176,10 @@ type Reconciler struct {
 	// Rescuer runs agentd's rescue in a pod (D-51). Nil means no rescue can
 	// run, so a pod that ran is never removed.
 	Rescuer Rescuer
-	// Restarter runs prepare-restart for an idle drain (DESIGN-001 5.2).
-	// Nil uses Rescuer when that value implements Restarter, which
-	// ExecRescuer does. With neither, an outdated idle pod stays.
+	// Restarter reads the launch record and, only after that proof is stored,
+	// stops the agent for an idle drain (DESIGN-001 5.2). Nil uses Rescuer
+	// when that value implements Restarter, which ExecRescuer does. With
+	// neither, an outdated idle pod stays and the idle timer may still park it.
 	Restarter Restarter
 	// WorkspaceStopper requests exit only for shared executors. StopVerifier
 	// supplies uncached typed Pod/Node/Lease reads; nil uses APIReader.

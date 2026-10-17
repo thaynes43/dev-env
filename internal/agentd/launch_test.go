@@ -257,3 +257,34 @@ func TestPrepareRestart(t *testing.T) {
 		t.Errorf("launched: %+v", rep)
 	}
 }
+
+// The drain read names the conversation and the live attach count, and it
+// does not stop the agent.
+func TestReadRestartDoesNotStop(t *testing.T) {
+	s, _, _ := launchFixture(t)
+	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONFile(s.statePath(launchFile), Launch{ConversationID: "conv-1"}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{handle: func(c Cmd) (Result, error) {
+		if len(c.Args) > 0 && c.Args[0] == "list-clients" {
+			return Result{Stdout: []byte("/dev/pts/1\n/dev/pts/2\n")}, nil
+		}
+		return Result{}, errors.New("unexpected command")
+	}}
+	rep := ReadRestart(context.Background(), runner, s, "s-1")
+	if !rep.Resumable || rep.ConversationID != "conv-1" || rep.Agent != nil || rep.Attached == nil || *rep.Attached != 2 {
+		t.Fatalf("read %+v", rep)
+	}
+	runner.handle = func(Cmd) (Result, error) { return Result{Stdout: []byte("\n")}, nil }
+	clear := ReadRestart(context.Background(), runner, s, "s-1")
+	if !clear.Resumable || clear.Agent != nil || clear.Attached == nil || *clear.Attached != 0 {
+		t.Fatalf("clear %+v", clear)
+	}
+	bare := ReadRestart(context.Background(), nil, s, "s-1")
+	if !bare.Resumable || bare.Agent != nil || bare.Attached != nil {
+		t.Fatalf("no runner %+v", bare)
+	}
+}

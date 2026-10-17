@@ -4,15 +4,21 @@ Source only. This change is not deployed, and it was not run against the cluster
 No session pod was restarted. `cmd/dev-env-operator/main.go` was not edited.
 
 DESIGN-001 5.2 (Q-03, Tom 2026-10-06) is implemented in the operator source.
-An idle, outdated session that is not summoned is marked `Draining`. The
-operator execs the existing `agentd ctl prepare-restart` and writes the
-reported conversation id onto `status.restart` before `deletePod`. If that
-command fails or the id is missing, the pod stays and `RemovalBlocked` says
-`DrainNeedsRestart`. After the pod is gone, the existing ensure path creates
-the replacement on the current template revision and the same volume.
-agentd's existing resume path is unchanged. `drainPod` calls `deletePod`; it
-does not lift a volume finalizer. `TestOnlyTheGuardDeletes` names `drainPod`
-the same way it names the other delete callers.
+Q-03 is unchanged. An idle, outdated session that is not summoned is marked
+`Draining`. The operator execs `agentd ctl prepare-restart --dry-run`, which
+reads the launch record and the live tmux attach count and does not stop the
+agent. It writes that conversation id onto `status.restart` only from that
+read. It reads again, and only when the count is zero and the proof is stored
+does it exec `agentd ctl prepare-restart`, which stops the agent, and then
+`deletePod`. A read that is not resumable, a missing attach count, a failed
+exec, or a proof that was not written does not stop the agent and does not
+delete the pod; drain then leaves the idle-suspend timer free. A live attach
+count above zero does not stop or delete either. After the pod is gone, the
+existing ensure path creates the replacement on the current template revision
+and the same volume. agentd's existing resume path is unchanged. `drainPod`
+calls `deletePod`; it does not lift a volume finalizer.
+`TestOnlyTheGuardDeletes` names `drainPod` the same way it names the other
+delete callers.
 
 A session is idle for this drain when its own pod is Ready, the heartbeat says
 `idle` or `waiting`, and no tmux client is attached. Busy, unreported, exited,
@@ -22,9 +28,9 @@ and pilots stay on the existing retention guard: drain does not mark them
 `Draining` and does not delete their pods or volumes. A suspend or a delete
 that arrives while the phase is still `Draining` still needs its rescue.
 
-`ExecRescuer` implements `PrepareRestart`. The operator already passes that
-value as `Rescuer`, so the running process picks the command up without a
-second wiring in `main.go`.
+`ExecRescuer` implements `ReadRestart` and `PrepareRestart`. The operator
+already passes that value as `Rescuer`, so the running process picks both
+commands up without a second wiring in `main.go`.
 
 ## Not implemented
 

@@ -126,9 +126,12 @@ Commands:
                            Put a coordination object (with --mark, append absent),
                            mark present/reset, look up revisions and grace,
                            select a verified archived UID/revision, or list a bounded verified page.
-  ctl prepare-restart      Print what the next boot resumes (the conversation in
-                           ~/.agentd/launch.json) as JSON, then stop the agent
-                           CLI as the pod's SIGTERM would (D-58).
+  ctl prepare-restart [--dry-run]
+                           Print what the next boot resumes (the conversation in
+                           ~/.agentd/launch.json) as JSON. --dry-run also prints
+                           the live tmux attach count and does not stop the agent.
+                           Without it, the command then stops the agent CLI as
+                           the pod's SIGTERM would (D-58).
   run-agent --launch FILE  Run the agent CLI; agentd starts this in tmux.
   ctl grant-install        Install a kube grant; token on stdin, pod UID required.
   ctl grant-remove         Remove a kube grant; pod UID required.
@@ -536,14 +539,17 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	stopAgent := false
 	proofStdin := false
+	dryRun := false
 	switch {
 	case len(args) == 1:
 	case len(args) == 2 && args[0] == "rescue" && args[1] == "--stop-agent":
 		stopAgent = true
 	case len(args) == 3 && args[0] == "rescue" && args[1] == "--stop-agent" && args[2] == "--workspace-stop-proof-stdin":
 		stopAgent, proofStdin = true, true
+	case len(args) == 2 && args[0] == "prepare-restart" && args[1] == "--dry-run":
+		dryRun = true
 	default:
-		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl status | rescue [--stop-agent] | rescues [--session S] | prune | prepare-restart | grant-install | grant-remove | grant-list | grant-use\n", binaryName)
+		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl status | rescue [--stop-agent] | rescues [--session S] | prune | prepare-restart [--dry-run] | grant-install | grant-remove | grant-list | grant-use\n", binaryName)
 		return exitUsage
 	}
 	switch args[0] {
@@ -613,7 +619,13 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		}
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
-		if err := enc.Encode(agentd.PrepareRestart(s, name, stopGrace)); err != nil {
+		var rep protocol.RestartReport
+		if dryRun {
+			rep = agentd.ReadRestart(ctx, r, s, name)
+		} else {
+			rep = agentd.PrepareRestart(s, name, stopGrace)
+		}
+		if err := enc.Encode(rep); err != nil {
 			return exitFailure
 		}
 		return exitOK

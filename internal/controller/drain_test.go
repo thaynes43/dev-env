@@ -21,29 +21,63 @@ import (
 )
 
 // fakeRestarter is prepare-restart for tests. envtest has no kubelet to exec into.
+// fn answers the dry-run read. stopFn answers the stop; when it is nil the stop
+// uses fn too. A nil attach count on a successful read counts as zero.
 type fakeRestarter struct {
-	mu    sync.Mutex
-	fn    func(*corev1.Pod) (protocol.RestartReport, error)
-	calls map[string]int
+	mu     sync.Mutex
+	fn     func(*corev1.Pod) (protocol.RestartReport, error)
+	stopFn func(*corev1.Pod) (protocol.RestartReport, error)
+	reads  map[string]int
+	stops  map[string]int
+}
+
+func (f *fakeRestarter) ReadRestart(_ context.Context, pod *corev1.Pod) (protocol.RestartReport, error) {
+	f.mu.Lock()
+	if f.reads == nil {
+		f.reads = map[string]int{}
+	}
+	f.reads[pod.Name]++
+	fn := f.fn
+	f.mu.Unlock()
+	if fn == nil {
+		return protocol.RestartReport{}, errors.New("no prepare-restart answer")
+	}
+	rep, err := fn(pod)
+	if err != nil || rep.Attached != nil {
+		return rep, err
+	}
+	zero := 0
+	rep.Attached = &zero
+	return rep, nil
 }
 
 func (f *fakeRestarter) PrepareRestart(_ context.Context, pod *corev1.Pod) (protocol.RestartReport, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.calls == nil {
-		f.calls = map[string]int{}
+	if f.stops == nil {
+		f.stops = map[string]int{}
 	}
-	f.calls[pod.Name]++
-	if f.fn == nil {
+	f.stops[pod.Name]++
+	fn := f.stopFn
+	if fn == nil {
+		fn = f.fn
+	}
+	f.mu.Unlock()
+	if fn == nil {
 		return protocol.RestartReport{}, errors.New("no prepare-restart answer")
 	}
-	return f.fn(pod)
+	return fn(pod)
 }
 
-func (f *fakeRestarter) callCount(name string) int {
+func (f *fakeRestarter) readCount(name string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.calls[name]
+	return f.reads[name]
+}
+
+func (f *fakeRestarter) stopCount(name string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stops[name]
 }
 
 // leaveBusy puts the agent back to busy when the test ends, so a later
@@ -149,8 +183,8 @@ func TestDrainLeavesACurrentRunningPod(t *testing.T) {
 	if after.UID != before.UID || !after.DeletionTimestamp.IsZero() {
 		t.Fatalf("the current pod was deleted: uid %s to %s, deleted %v", before.UID, after.UID, !after.DeletionTimestamp.IsZero())
 	}
-	if rt.callCount(live.Name) != 0 {
-		t.Fatalf("prepare-restart calls %d, want 0", rt.callCount(live.Name))
+	if rt.readCount(live.Name) != 0 || rt.stopCount(live.Name) != 0 {
+		t.Fatalf("prepare-restart reads %d stops %d, want 0", rt.readCount(live.Name), rt.stopCount(live.Name))
 	}
 }
 
@@ -201,8 +235,8 @@ func TestDrainLeavesABusyOutdatedPod(t *testing.T) {
 	if after.UID != before.UID || !after.DeletionTimestamp.IsZero() {
 		t.Fatalf("the busy pod was deleted")
 	}
-	if rt.callCount(live.Name) != 0 {
-		t.Fatalf("prepare-restart calls %d, want 0", rt.callCount(live.Name))
+	if rt.readCount(live.Name) != 0 || rt.stopCount(live.Name) != 0 {
+		t.Fatalf("prepare-restart reads %d stops %d, want 0", rt.readCount(live.Name), rt.stopCount(live.Name))
 	}
 }
 
@@ -255,12 +289,13 @@ func TestDrainLeavesASummonedSession(t *testing.T) {
 	if after.UID != before.UID || !after.DeletionTimestamp.IsZero() {
 		t.Fatal("the summoned pod was deleted")
 	}
-	if rt.callCount(live.Name) != 0 {
-		t.Fatalf("prepare-restart calls %d, want 0", rt.callCount(live.Name))
+	if rt.readCount(live.Name) != 0 || rt.stopCount(live.Name) != 0 {
+		t.Fatalf("prepare-restart reads %d stops %d, want 0", rt.readCount(live.Name), rt.stopCount(live.Name))
 	}
 }
 
-// Draining without a prepare-restart conversation is not deleted.
+// Draining without a prepare-restart conversation is not deleted. A refusing
+// read does not stop the agent.
 func TestDrainKeepsAPodWithoutPrepareRestartProof(t *testing.T) {
 	pod := readyDrainPod("s", "old-revision")
 	s := drainFixture("s")
@@ -316,8 +351,11 @@ func TestDrainKeepsAPodWithoutPrepareRestartProof(t *testing.T) {
 	if after.UID != before.UID || !after.DeletionTimestamp.IsZero() {
 		t.Fatal("deleted a Draining pod that had no conversation identity")
 	}
-	if rt.callCount(live.Name) == 0 {
-		t.Fatal("prepare-restart was not called")
+	if rt.readCount(live.Name) == 0 {
+		t.Fatal("the launch record was not read")
+	}
+	if rt.stopCount(live.Name) != 0 {
+		t.Fatalf("a refusing read stopped the agent %d times", rt.stopCount(live.Name))
 	}
 	claim := waitClaim(t, live.Name)
 	if !claim.DeletionTimestamp.IsZero() || !containsFinalizer(claim.Finalizers, Finalizer) {
@@ -416,6 +454,9 @@ func TestIdleOutdatedSessionDrainsOntoTheSameVolume(t *testing.T) {
 	if rolled.Spec.Volumes == nil {
 		t.Fatal("replacement pod has no volumes")
 	}
+	if rt.readCount(live.Name) == 0 || rt.stopCount(live.Name) == 0 {
+		t.Fatalf("reads %d stops %d", rt.readCount(live.Name), rt.stopCount(live.Name))
+	}
 }
 
 // Private-history sessions and canary originals are not drained, and a drain
@@ -473,6 +514,238 @@ func TestDrainLeavesPrivateHistoryAndCanarySessions(t *testing.T) {
 				t.Fatalf("volumeRemovalAllowed = %v", err)
 			}
 		})
+	}
+}
+
+func drainClient(t *testing.T, s *v1alpha1.AgentSession, pod *corev1.Pod) (client.Client, *v1alpha1.AgentSession, *corev1.Pod) {
+	t.Helper()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.AgentSession{}).WithObjects(s, pod, homeFor(s)).Build()
+	var stored v1alpha1.AgentSession
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(s), &stored); err != nil {
+		t.Fatal(err)
+	}
+	var storedPod corev1.Pod
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(pod), &storedPod); err != nil {
+		t.Fatal(err)
+	}
+	return c, &stored, &storedPod
+}
+
+// A dry-run that is not resumable does not stop the agent, and the idle timer
+// is not held.
+func TestRefusingReadDoesNotStopOrHoldIdle(t *testing.T) {
+	tmpl := currentTemplates(t)
+	s := drainFixture("refuse-read")
+	s.Status.Phase = v1alpha1.PhaseDraining
+	pod := readyDrainPod(s.Name, "old-revision")
+	c, stored, storedPod := drainClient(t, s, pod)
+	rt := &fakeRestarter{fn: func(p *corev1.Pod) (protocol.RestartReport, error) {
+		return protocol.RestartReport{Session: p.Name}, nil
+	}}
+	r := &Reconciler{Client: c, APIReader: c, Restarter: rt}
+	obs := observation{pod: owned[*corev1.Pod]{obj: storedPod}, templates: tmpl}
+	hold, _, _, err := r.drainIdle(context.Background(), stored, tmpl, &obs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hold {
+		t.Fatal("a refusing read held the idle timer")
+	}
+	if rt.readCount(pod.Name) == 0 || rt.stopCount(pod.Name) != 0 {
+		t.Fatalf("reads %d stops %d", rt.readCount(pod.Name), rt.stopCount(pod.Name))
+	}
+	if obs.removalBlocked == nil || !errors.Is(obs.removalBlocked, errDrainNeedsRestart) {
+		t.Fatalf("blocked %v", obs.removalBlocked)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(pod), &corev1.Pod{}); err != nil {
+		t.Fatalf("pod: %v", err)
+	}
+}
+
+// No restarter is a blocked drain: the pod stays and the idle timer is not held.
+func TestNoRestarterDoesNotHoldIdle(t *testing.T) {
+	tmpl := currentTemplates(t)
+	s := drainFixture("no-restarter")
+	s.Status.Phase = v1alpha1.PhaseDraining
+	pod := readyDrainPod(s.Name, "old-revision")
+	c, stored, storedPod := drainClient(t, s, pod)
+	r := &Reconciler{Client: c, APIReader: c}
+	obs := observation{pod: owned[*corev1.Pod]{obj: storedPod}, templates: tmpl}
+	hold, _, _, err := r.drainIdle(context.Background(), stored, tmpl, &obs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hold || obs.removalBlocked == nil || !errors.Is(obs.removalBlocked, errDrainNeedsRestart) {
+		t.Fatalf("hold %v blocked %v", hold, obs.removalBlocked)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(pod), &corev1.Pod{}); err != nil {
+		t.Fatalf("pod: %v", err)
+	}
+}
+
+// A live attach count above zero does not stop the agent and does not delete
+// the pod, even when the heartbeat still says nobody is attached.
+func TestLiveAttachCountStopsNothing(t *testing.T) {
+	tmpl := currentTemplates(t)
+	s := drainFixture("attached-live")
+	s.Status.Phase = v1alpha1.PhaseDraining
+	pod := readyDrainPod(s.Name, "old-revision")
+	c, stored, storedPod := drainClient(t, s, pod)
+	one := 1
+	rt := &fakeRestarter{fn: func(p *corev1.Pod) (protocol.RestartReport, error) {
+		return protocol.RestartReport{Session: p.Name, ConversationID: "conv-1", Resumable: true, Attached: &one}, nil
+	}}
+	r := &Reconciler{Client: c, APIReader: c, Restarter: rt}
+	obs := observation{pod: owned[*corev1.Pod]{obj: storedPod}, templates: tmpl}
+	hold, _, _, err := r.drainIdle(context.Background(), stored, tmpl, &obs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hold || obs.removalBlocked != nil {
+		t.Fatalf("hold %v blocked %v", hold, obs.removalBlocked)
+	}
+	if rt.stopCount(pod.Name) != 0 {
+		t.Fatal("an attached client was stopped")
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(pod), &corev1.Pod{}); err != nil {
+		t.Fatalf("pod: %v", err)
+	}
+}
+
+// The stop runs only after the dry-run is stored, and only when a second live
+// read still shows no attached client.
+func TestStopRunsOnlyAfterTheReadIsStored(t *testing.T) {
+	tmpl := currentTemplates(t)
+	s := drainFixture("ordered")
+	s.Status.Phase = v1alpha1.PhaseDraining
+	pod := readyDrainPod(s.Name, "old-revision")
+	c, stored, storedPod := drainClient(t, s, pod)
+	rt := &fakeRestarter{
+		fn: func(p *corev1.Pod) (protocol.RestartReport, error) {
+			return protocol.RestartReport{Session: p.Name, ConversationID: "conv-1", Resumable: true}, nil
+		},
+		stopFn: func(p *corev1.Pod) (protocol.RestartReport, error) {
+			var fresh v1alpha1.AgentSession
+			if err := c.Get(context.Background(), client.ObjectKey{Namespace: sessionNS, Name: p.Name}, &fresh); err != nil {
+				t.Fatal(err)
+			}
+			if fresh.Status.Restart == nil || fresh.Status.Restart.ConversationID != "conv-1" {
+				t.Fatal("stop ran before the read was stored")
+			}
+			return protocol.RestartReport{Session: p.Name, ConversationID: "conv-1", Resumable: true}, nil
+		},
+	}
+	r := &Reconciler{Client: c, APIReader: c, Restarter: rt}
+	obs := observation{pod: owned[*corev1.Pod]{obj: storedPod}, templates: tmpl}
+	hold, _, stop, err := r.drainIdle(context.Background(), stored, tmpl, &obs)
+	if err != nil || stop {
+		t.Fatalf("drainIdle err %v stop %v", err, stop)
+	}
+	if !hold {
+		t.Fatal("a completed drain returned holdIdle false")
+	}
+	if rt.readCount(pod.Name) < 2 || rt.stopCount(pod.Name) != 1 {
+		t.Fatalf("reads %d stops %d", rt.readCount(pod.Name), rt.stopCount(pod.Name))
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(pod), &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("pod delete: %v", err)
+	}
+	var kept corev1.PersistentVolumeClaim
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: sessionNS, Name: HomeClaimName(s.Name)}, &kept); err != nil {
+		t.Fatal(err)
+	}
+	if !containsFinalizer(kept.Finalizers, Finalizer) || !kept.DeletionTimestamp.IsZero() {
+		t.Fatalf("volume finalizer moved: deleted %v finalizers %v", !kept.DeletionTimestamp.IsZero(), kept.Finalizers)
+	}
+}
+
+// A client who attaches after the proof is stored still is not stopped.
+func TestLiveAttachAfterTheReadDoesNotStop(t *testing.T) {
+	tmpl := currentTemplates(t)
+	s := drainFixture("attach-later")
+	s.Status.Phase = v1alpha1.PhaseDraining
+	pod := readyDrainPod(s.Name, "old-revision")
+	c, stored, storedPod := drainClient(t, s, pod)
+	n := 0
+	rt := &fakeRestarter{fn: func(p *corev1.Pod) (protocol.RestartReport, error) {
+		n++
+		count := 0
+		if n > 1 {
+			count = 1
+		}
+		return protocol.RestartReport{Session: p.Name, ConversationID: "conv-1", Resumable: true, Attached: &count}, nil
+	}}
+	r := &Reconciler{Client: c, APIReader: c, Restarter: rt}
+	obs := observation{pod: owned[*corev1.Pod]{obj: storedPod}, templates: tmpl}
+	hold, _, _, err := r.drainIdle(context.Background(), stored, tmpl, &obs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hold || rt.stopCount(pod.Name) != 0 {
+		t.Fatalf("hold %v stops %d", hold, rt.stopCount(pod.Name))
+	}
+	if stored.Status.Restart == nil || stored.Status.Restart.ConversationID != "conv-1" {
+		t.Fatalf("proof %+v", stored.Status.Restart)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(pod), &corev1.Pod{}); err != nil {
+		t.Fatalf("pod: %v", err)
+	}
+}
+
+// recordRestart returning not written does not stop the agent and does not
+// delete the pod.
+func TestUnstoredReadDoesNotStop(t *testing.T) {
+	tmpl := currentTemplates(t)
+	s := drainFixture("unstored")
+	s.Status.Phase = v1alpha1.PhaseDraining
+	s.Generation = 4
+	pod := readyDrainPod(s.Name, "old-revision")
+	c, stored, storedPod := drainClient(t, s, pod)
+	stored.Generation = stored.Generation - 1
+	rt := &fakeRestarter{fn: func(p *corev1.Pod) (protocol.RestartReport, error) {
+		return protocol.RestartReport{Session: p.Name, ConversationID: "conv-1", Resumable: true}, nil
+	}}
+	r := &Reconciler{Client: c, APIReader: c, Restarter: rt}
+	obs := observation{pod: owned[*corev1.Pod]{obj: storedPod}, templates: tmpl}
+	_, _, _, err := r.drainIdle(context.Background(), stored, tmpl, &obs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.readCount(pod.Name) == 0 || rt.stopCount(pod.Name) != 0 {
+		t.Fatalf("reads %d stops %d", rt.readCount(pod.Name), rt.stopCount(pod.Name))
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(pod), &corev1.Pod{}); err != nil {
+		t.Fatalf("pod: %v", err)
+	}
+}
+
+// A failed prepare-restart does not stop the agent. The suspend window is
+// already past, so the idle timer parks the session.
+func TestDrainFailureLetsTheIdleTimerSuspend(t *testing.T) {
+	rt := &fakeRestarter{fn: func(*corev1.Pod) (protocol.RestartReport, error) {
+		return protocol.RestartReport{}, errors.New("prepare-restart failed")
+	}}
+	startOperator(t, func(r *Reconciler) { r.Restarter = rt })
+	live := newSession(t, func(s *v1alpha1.AgentSession) {
+		s.Spec.Lifecycle = &v1alpha1.Lifecycle{IdleSuspendAfter: &metav1.Duration{Duration: time.Second}}
+	})
+	leaveBusy(t, live.Name)
+	before := markRunning(t, waitPod(t, live.Name), "talosw02")
+	bumpTemplates(t)
+	setAgent(t, live.Name, protocol.AgentIdle, time.Now().Add(-time.Hour))
+	eventually(t, "the idle timer parks a blocked drain", func() error {
+		got := session(t, live.Name)
+		if got.Spec.OperatingMode != v1alpha1.OperatingModeSuspended || got.Annotations[v1alpha1.AnnotationSuspendedBy] != IdleTimerSuspender {
+			return fmt.Errorf("mode %s by %q", got.Spec.OperatingMode, got.Annotations[v1alpha1.AnnotationSuspendedBy])
+		}
+		return nil
+	})
+	after := waitPod(t, live.Name)
+	if after.UID != before.UID || !after.DeletionTimestamp.IsZero() {
+		t.Fatal("the blocked drain deleted the pod")
+	}
+	if rt.readCount(live.Name) == 0 || rt.stopCount(live.Name) != 0 {
+		t.Fatalf("reads %d stops %d", rt.readCount(live.Name), rt.stopCount(live.Name))
 	}
 }
 

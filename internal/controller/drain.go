@@ -17,10 +17,12 @@ import (
 	"github.com/thaynes43/dev-env/internal/templates"
 )
 
-// Restarter runs agentd's prepare-restart in a session pod (DESIGN-001 5.2).
-// An error means it did not run. A report with no conversation id is not an
-// error; drain refuses that report and keeps the pod.
+// Restarter is agentd's prepare-restart in a session pod (DESIGN-001 5.2).
+// ReadRestart only reads. PrepareRestart is the existing stop. An error means
+// the command did not run. A report with no conversation id is not an error;
+// drain refuses that report, does not stop the agent, and keeps the pod.
 type Restarter interface {
+	ReadRestart(ctx context.Context, pod *corev1.Pod) (protocol.RestartReport, error)
 	PrepareRestart(ctx context.Context, pod *corev1.Pod) (protocol.RestartReport, error)
 }
 
@@ -90,46 +92,62 @@ func restartProofFor(s *v1alpha1.AgentSession, pod *corev1.Pod) bool {
 }
 
 // drainIdle marks, proves, and deletes one outdated idle pod (DESIGN-001 5.2).
-// holdIdle means the idle-suspend timer waits: this session is on the drain
-// path, so it is rolled forward instead of parked. The 72h session message and
-// the 24h owner line are not sent; no notifier in this process sends them, and
-// drain does not wait on that notice.
+// holdIdle means the idle-suspend timer waits. It is false when drain is
+// blocked, so D-09 can still park the session. It stays true while a client
+// is attached or the drain is about to roll the pod. The 72h session message
+// and the 24h owner line are not sent; no notifier in this process sends
+// them, and drain does not wait on that notice.
 //
-// The phase is written by observe before prepare-restart runs, so a fresh
-// operator sees Draining and does not stop the agent on a session it has not
-// marked. prepare-restart runs before deletePod. A failure or a missing
-// conversation id sets RemovalBlocked and keeps the pod.
-func (r *Reconciler) drainIdle(ctx context.Context, s *v1alpha1.AgentSession, t *templates.Templates, obs *observation) (holdIdle bool, res ctrl.Result, stop bool, err error) {
+// The phase is written by observe before any exec, so a fresh operator sees
+// Draining and does not stop the agent on a session it has not marked. The
+// proof comes only from the dry-run read. The existing stop runs after that
+// proof is stored, the live attach count is zero, and deletePod is next. A
+// read that is not resumable, a record that is not written, or a live attach
+// count above zero does not stop the agent and does not delete the pod.
+func (r *Reconciler) drainIdle(ctx context.Context, s *v1alpha1.AgentSession, t *templates.Templates, obs *observation) (bool, ctrl.Result, bool, error) {
 	if t == nil || obs == nil || obs.pod.missing || obs.pod.foreign != "" || !drainEligible(s, obs.pod.obj, t.Revision()) {
 		return false, ctrl.Result{}, false, nil
 	}
 	pod := obs.pod.obj
 	// observe writes Draining at the end of the reconcile that first notices
-	// the idle outdated pod. Stop the agent only after that mark is stored.
+	// the idle outdated pod. Do not exec until that mark is stored.
 	if s.Status.Phase != v1alpha1.PhaseDraining {
 		return true, ctrl.Result{RequeueAfter: time.Second}, false, nil
 	}
-	if !restartProofFor(s, pod) {
-		if r.APIReader == nil {
-			obs.removalBlocked = fmt.Errorf("%w: %s", errDrainNeedsRestart, "no uncached reader")
-			return true, ctrl.Result{RequeueAfter: drainRetry}, false, nil
-		}
+	if r.APIReader == nil {
+		return blockDrain(obs, errors.New("no uncached reader"))
+	}
+	recorded := false
+	for range 2 {
 		if behind, err := r.cacheBehind(ctx, s, pod); err != nil || behind {
 			return true, ctrl.Result{RequeueAfter: time.Second}, true, client.IgnoreNotFound(err)
 		}
-		rep, prepErr := r.prepareRestart(ctx, pod)
-		if prepErr != nil || !restartReportProves(s, rep) {
-			why := prepErr
-			if why == nil {
-				why = errors.New("prepare-restart recorded no conversation identity")
-			}
-			obs.removalBlocked = fmt.Errorf("%w: %s", errDrainNeedsRestart, why.Error())
+		rep, err := r.readRestart(ctx, pod)
+		if err != nil {
+			return blockDrain(obs, err)
+		}
+		if !restartReportProves(s, rep) {
+			return blockDrain(obs, errors.New("prepare-restart recorded no conversation identity"))
+		}
+		if rep.Attached == nil {
+			return blockDrain(obs, errors.New("prepare-restart reported no live attach count"))
+		}
+		if *rep.Attached > 0 {
 			return true, ctrl.Result{RequeueAfter: drainRetry}, false, nil
 		}
-		rec := &v1alpha1.RestartStatus{ConversationID: rep.ConversationID, PodUID: string(pod.UID), Generation: s.Generation}
-		written, err := r.recordRestart(ctx, s, rec)
+		if restartProofFor(s, pod) && s.Status.Restart.ConversationID == rep.ConversationID {
+			recorded = true
+			break
+		}
+		written, err := r.recordRestart(ctx, s, &v1alpha1.RestartStatus{
+			ConversationID: rep.ConversationID, PodUID: string(pod.UID), Generation: s.Generation,
+		})
 		if err != nil || !written {
-			return true, ctrl.Result{RequeueAfter: time.Second}, true, err
+			// The read was not stored. Do not stop, and do not delete.
+			if err != nil {
+				return blockDrain(obs, err)
+			}
+			return true, ctrl.Result{RequeueAfter: time.Second}, false, nil
 		}
 		var cur corev1.Pod
 		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(pod), &cur); err != nil {
@@ -137,16 +155,29 @@ func (r *Reconciler) drainIdle(ctx context.Context, s *v1alpha1.AgentSession, t 
 		}
 		pod = &cur
 	}
+	if !recorded {
+		return blockDrain(obs, errors.New("prepare-restart recorded no conversation identity"))
+	}
+	if _, err := r.prepareRestart(ctx, pod); err != nil {
+		return blockDrain(obs, err)
+	}
 	if err := drainPod(ctx, r.Client, s, pod); err != nil {
 		if apierrors.IsConflict(err) {
 			return true, ctrl.Result{RequeueAfter: time.Second}, true, nil
 		}
 		obs.removalBlocked = err
-		return true, ctrl.Result{RequeueAfter: drainRetry}, false, nil
+		return false, ctrl.Result{RequeueAfter: drainRetry}, false, nil
 	}
 	log.FromContext(ctx).Info("drained an idle outdated session pod", "pod", pod.Name, "uid", pod.UID, "revision", pod.Labels[v1alpha1.LabelRevision])
-	r.event(s, corev1.EventTypeNormal, "Drain", "IdleDrain", "deleted the outdated pod after prepare-restart recorded the conversation (DESIGN-001 5.2)")
+	r.event(s, corev1.EventTypeNormal, "Drain", "IdleDrain", "deleted the outdated pod after the launch-record read was stored and the agent was stopped (DESIGN-001 5.2)")
 	return true, ctrl.Result{RequeueAfter: time.Second}, false, nil
+}
+
+// blockDrain keeps the pod and lets the idle-suspend timer run. removalBlocked
+// is set, so holdIdle is false (DESIGN-001 5.2, D-09).
+func blockDrain(obs *observation, why error) (bool, ctrl.Result, bool, error) {
+	obs.removalBlocked = fmt.Errorf("%w: %s", errDrainNeedsRestart, why.Error())
+	return false, ctrl.Result{RequeueAfter: drainRetry}, false, nil
 }
 
 // restartReportProves is the prepare-restart report drain accepts: this
@@ -155,18 +186,33 @@ func restartReportProves(s *v1alpha1.AgentSession, rep protocol.RestartReport) b
 	return s != nil && rep.Resumable && rep.Session == s.Name && rep.ConversationID != "" && len(rep.ConversationID) <= 256
 }
 
-// prepareRestart calls the configured restarter, or the rescuer when that
-// value implements Restarter. ExecRescuer does, so the operator process picks
-// the command up without a second wiring.
-func (r *Reconciler) prepareRestart(ctx context.Context, pod *corev1.Pod) (protocol.RestartReport, error) {
-	var restarter Restarter
+// restarter is the configured value, or the rescuer when that value implements
+// Restarter. ExecRescuer does, so the operator process picks both commands up
+// without a second wiring.
+func (r *Reconciler) restarter() (Restarter, error) {
 	if r.Restarter != nil {
-		restarter = r.Restarter
-	} else if existing, ok := r.Rescuer.(Restarter); ok {
-		restarter = existing
+		return r.Restarter, nil
 	}
-	if restarter == nil {
-		return protocol.RestartReport{}, errors.New("prepare-restart is not available")
+	if existing, ok := r.Rescuer.(Restarter); ok {
+		return existing, nil
+	}
+	return nil, errors.New("prepare-restart is not available")
+}
+
+// readRestart is the dry-run. It does not stop the agent.
+func (r *Reconciler) readRestart(ctx context.Context, pod *corev1.Pod) (protocol.RestartReport, error) {
+	restarter, err := r.restarter()
+	if err != nil {
+		return protocol.RestartReport{}, err
+	}
+	return restarter.ReadRestart(ctx, pod)
+}
+
+// prepareRestart is the existing stop. Drain calls it only when deletePod is next.
+func (r *Reconciler) prepareRestart(ctx context.Context, pod *corev1.Pod) (protocol.RestartReport, error) {
+	restarter, err := r.restarter()
+	if err != nil {
+		return protocol.RestartReport{}, err
 	}
 	return restarter.PrepareRestart(ctx, pod)
 }

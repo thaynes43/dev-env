@@ -1987,6 +1987,14 @@ survive the restart; they are rare in an idle session and the agent restarts the
 Active grants and leases survive a drain: they belong to the session, not the pod,
 and the operator re-labels the new pod and agentd re-installs grant tokens.
 
+**Source note, 2026-10-17.** Q-03 is unchanged. This slice's idle moment is the
+agent reporting idle or waiting, with no attached client. `status.agent.attached`
+is the heartbeat's client count. `status.restart` stores the conversation id, the
+pod UID, and the session generation from a no-side-effect read of the launch
+record (`agentd ctl prepare-restart --dry-run`). The existing stop runs only after
+that proof is stored and a live in-pod attach count is zero. The 72h session
+message and the Pushover line are deferred: they are not sent. D-50 egress stays.
+
 ### 5.3 What this changes for Renovate
 
 v1's image bumps are manual-only because a roll kills every session
