@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.29.5](https://github.com/thaynes43/dev-env/compare/v2.29.4...v2.29.5) (2026-10-17)
+
+
+### Bug Fixes
+
+* **agentd:** expose configured model and effort in ctl status ([#367](https://github.com/thaynes43/dev-env/issues/367)) ([5d44d12](https://github.com/thaynes43/dev-env/commit/5d44d12a55e37211f29d094370efc03911ba5e29))
+* **pilot:** accept direct task-claim stdout in the rendezvous gate ([#366](https://github.com/thaynes43/dev-env/issues/366)) ([b8a0873](https://github.com/thaynes43/dev-env/commit/b8a0873343d3e7d88666bba6d2133ee222522f48))
+* **pilot:** fix claim receipt exit 125 offline path ([#362](https://github.com/thaynes43/dev-env/issues/362)) ([e2be494](https://github.com/thaynes43/dev-env/commit/e2be49403871d742c82cf6404e2e139b9728e6d2))
+
 ## [2.29.4](https://github.com/thaynes43/dev-env/compare/v2.29.3...v2.29.4) (2026-10-17)
 
 
