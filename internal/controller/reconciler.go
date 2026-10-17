@@ -839,7 +839,11 @@ func archiveDeadline(s *v1alpha1.AgentSession, t *templates.Templates) (at time.
 // record (D-62). With no valid rescue and no pod, a hold pod rescues the volume
 // first (D-55). done means the reconcile ends here with res.
 func (r *Reconciler) archive(ctx context.Context, s *v1alpha1.AgentSession, obs *observation, archiveDue bool) (res ctrl.Result, done bool, err error) {
-	if r.privateHistoryEnabled(s) {
+	// A private HOME stays. The one pass is DESIGN-025 section 23: a reaped
+	// never-started Session whose cache already shows no claim. The empty
+	// path below asks the API server before releaseIfEmpty lifts anything,
+	// and this function still never reaches deleteVolume for that Session.
+	if r.privateHistoryEnabled(s) && (neverStartedReleaseAllowed(s) != nil || !obs.claim.missing || obs.claim.foreign != "") {
 		obs.removalBlocked = errPrivateHistoryRetained
 		return ctrl.Result{}, false, nil
 	}
@@ -1003,9 +1007,11 @@ func setRescueCondition(s *v1alpha1.AgentSession, st *v1alpha1.AgentSessionStatu
 // (D-45). Any pod or volume of the session's names keeps the finalizer, whoever
 // controls it.
 func (r *Reconciler) releaseIfEmpty(ctx context.Context, s *v1alpha1.AgentSession) (bool, error) {
-	// One exception for a protected private Session: its HOME expiry is
-	// Expired (DESIGN-025 6.6), and the reads below find no Pod and no claim.
-	if r.privateHistoryEnabled(s) && expiryReleaseAllowed(s) != nil {
+	// A protected private Session stays unless its HOME expiry is Expired
+	// (DESIGN-025 6.6) or it is the never-started reap in section 23. Either
+	// exception still requires the uncached NotFound reads below. A present
+	// Pod or HOME keeps the finalizer, and this function does not delete either.
+	if r.privateHistoryEnabled(s) && expiryReleaseAllowed(s) != nil && neverStartedReleaseAllowed(s) != nil {
 		return false, errPrivateHistoryRetained
 	}
 	if !controllerutil.ContainsFinalizer(s, Finalizer) {
@@ -1036,10 +1042,12 @@ func (r *Reconciler) releaseIfEmpty(ctx context.Context, s *v1alpha1.AgentSessio
 // releaseSession removes the session's finalizer. With releaseVolume and
 // releaseExpiryHome it is the only place that lifts a finalizer, and only
 // releaseIfEmpty calls it (TestOnlyTheGuardDeletes). It keeps every protected
-// private Session but one whose HOME expiry is Expired (expiryReleaseAllowed),
-// canary originals always.
+// private Session except a HOME expiry that is Expired (expiryReleaseAllowed)
+// and the never-started reap in DESIGN-025 section 23. Canary originals always
+// stay. releaseIfEmpty has already required uncached NotFound for the Pod and
+// the HOME; this function does not delete either.
 func releaseSession(ctx context.Context, c client.Client, s *v1alpha1.AgentSession) error {
-	if privateHistoryProtected(s) && expiryReleaseAllowed(s) != nil {
+	if privateHistoryProtected(s) && expiryReleaseAllowed(s) != nil && neverStartedReleaseAllowed(s) != nil {
 		return errPrivateHistoryRetained
 	}
 	orig := s.DeepCopy()
