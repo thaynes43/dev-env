@@ -158,8 +158,13 @@ func (r *Reconciler) drainIdle(ctx context.Context, s *v1alpha1.AgentSession, t 
 	if !recorded {
 		return blockDrain(obs, errors.New("prepare-restart recorded no conversation identity"))
 	}
+	// The conversation is already stored. A stop exec can fail after agentd
+	// has stopped the CLI (a dropped stream, or the 90s timeout against the
+	// 30s grace). Keeping the pod then lets the next heartbeat report the
+	// agent exited, drain becomes ineligible, and the session stays on the
+	// old revision with no agent. Delete the pod anyway.
 	if _, err := r.prepareRestart(ctx, pod); err != nil {
-		return blockDrain(obs, err)
+		log.FromContext(ctx).Error(err, "prepare-restart stop failed after the conversation was stored; deleting the pod")
 	}
 	if err := drainPod(ctx, r.Client, s, pod); err != nil {
 		if apierrors.IsConflict(err) {

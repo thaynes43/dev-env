@@ -287,4 +287,9 @@ func TestReadRestartDoesNotStop(t *testing.T) {
 	if !bare.Resumable || bare.Agent != nil || bare.Attached != nil {
 		t.Fatalf("no runner %+v", bare)
 	}
+	runner.handle = func(Cmd) (Result, error) { return Result{}, errors.New("list-clients timed out") }
+	unknown := ReadRestart(context.Background(), runner, s, "s-1")
+	if !unknown.Resumable || unknown.Agent != nil || unknown.Attached != nil {
+		t.Fatalf("uncounted attach %+v", unknown)
+	}
 }

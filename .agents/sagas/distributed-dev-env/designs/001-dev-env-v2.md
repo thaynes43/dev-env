@@ -1992,7 +1992,10 @@ agent reporting idle or waiting, with no attached client. `status.agent.attached
 is the heartbeat's client count. `status.restart` stores the conversation id, the
 pod UID, and the session generation from a no-side-effect read of the launch
 record (`agentd ctl prepare-restart --dry-run`). The existing stop runs only after
-that proof is stored and a live in-pod attach count is zero. The 72h session
+that proof is stored and a live in-pod attach count is zero. A dry-run that
+cannot count clients leaves the count unset and does not stop the agent. A
+stop exec that fails after that proof is stored still deletes the pod, so the
+session is not left on the old revision with no agent. The 72h session
 message and the Pushover line are deferred: they are not sent. D-50 egress stays.
 
 ### 5.3 What this changes for Renovate

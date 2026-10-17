@@ -659,6 +659,37 @@ func TestStopRunsOnlyAfterTheReadIsStored(t *testing.T) {
 	}
 }
 
+// A stop exec that fails after the conversation is stored still deletes the
+// pod. The CLI may already be stopped, and keeping the pod would leave the
+// session on the old revision with no agent.
+func TestStopErrorStillDeletesThePod(t *testing.T) {
+	tmpl := currentTemplates(t)
+	s := drainFixture("stop-error")
+	s.Status.Phase = v1alpha1.PhaseDraining
+	pod := readyDrainPod(s.Name, "old-revision")
+	c, stored, storedPod := drainClient(t, s, pod)
+	rt := &fakeRestarter{
+		fn: func(p *corev1.Pod) (protocol.RestartReport, error) {
+			return protocol.RestartReport{Session: p.Name, ConversationID: "conv-1", Resumable: true}, nil
+		},
+		stopFn: func(*corev1.Pod) (protocol.RestartReport, error) {
+			return protocol.RestartReport{}, errors.New("exec stream dropped after stop")
+		},
+	}
+	r := &Reconciler{Client: c, APIReader: c, Restarter: rt}
+	obs := observation{pod: owned[*corev1.Pod]{obj: storedPod}, templates: tmpl}
+	hold, _, stop, err := r.drainIdle(context.Background(), stored, tmpl, &obs)
+	if err != nil || stop || !hold {
+		t.Fatalf("drainIdle err %v stop %v hold %v", err, stop, hold)
+	}
+	if rt.stopCount(pod.Name) != 1 {
+		t.Fatalf("stops %d", rt.stopCount(pod.Name))
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(pod), &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("pod delete: %v", err)
+	}
+}
+
 // A client who attaches after the proof is stored still is not stopped.
 func TestLiveAttachAfterTheReadDoesNotStop(t *testing.T) {
 	tmpl := currentTemplates(t)

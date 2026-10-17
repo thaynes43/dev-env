@@ -27,7 +27,12 @@ func ReadRestart(ctx context.Context, r Runner, s Settings, session string) prot
 	if r == nil {
 		return rep
 	}
-	n := tmuxClients(ctx, r, s)
+	n, err := tmuxClientCount(ctx, r, s)
+	if err != nil {
+		// Nil means the count was not taken. Zero would let drain stop a
+		// client it could not see.
+		return rep
+	}
 	rep.Attached = &n
 	return rep
 }

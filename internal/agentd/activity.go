@@ -88,13 +88,23 @@ func claudeStatus(s Settings, pid int) (string, time.Time, bool) {
 }
 
 // tmuxClients counts the clients attached to the agent's tmux session. No
-// session, or no tmux server, is no client.
+// session, or no tmux server, is no client. A heartbeat uses this and treats
+// an error as zero. The drain dry-run uses tmuxClientCount so an error stays
+// an unknown count.
 func tmuxClients(ctx context.Context, r Runner, s Settings) int {
+	n, err := tmuxClientCount(ctx, r, s)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func tmuxClientCount(ctx context.Context, r Runner, s Settings) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	res, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"list-clients", "-t", "=" + TmuxSession, "-F", "#{client_tty}"}})
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	n := 0
 	for _, l := range strings.Split(strings.TrimSpace(string(res.Stdout)), "\n") {
@@ -102,7 +112,7 @@ func tmuxClients(ctx context.Context, r Runner, s Settings) int {
 			n++
 		}
 	}
-	return n
+	return n, nil
 }
 
 type worktreeScan struct {
