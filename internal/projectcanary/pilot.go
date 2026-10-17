@@ -26,6 +26,7 @@ const (
 	PilotActiveDeadlineSeconds int64 = 1200
 	PilotCaller                      = "dev/dev-env"
 	PilotProject                     = "dev-env"
+	PilotModel                       = "gpt-6-luna"
 	PilotProfile                     = "rule-canary-codex"
 	PilotSealNamespace               = "dev-env-budgets"
 	PilotSealName                    = "dev-env-private-pilot-v1"
@@ -166,7 +167,7 @@ func (p *PilotPolicy) Request(slot int) apiv1.CreateSessionRequest {
 	if slot < 0 || slot > 1 {
 		return apiv1.CreateSessionRequest{}
 	}
-	return apiv1.CreateSessionRequest{Project: PilotProject, Repo: PilotProject, Agent: "codex", Mode: "task", Model: "gpt-6.1-sol", Effort: "high", Prompt: p.Prompts[slot], Size: "S", Profile: PilotProfile, IdempotencyKey: p.Key(slot), Limits: &apiv1.Limits{Timeout: "15m"}}
+	return apiv1.CreateSessionRequest{Project: PilotProject, Repo: PilotProject, Agent: "codex", Mode: "task", Model: PilotModel, Effort: "high", Prompt: p.Prompts[slot], Size: "S", Profile: PilotProfile, IdempotencyKey: p.Key(slot), Limits: &apiv1.Limits{Timeout: "15m"}}
 }
 func (p *PilotPolicy) Slot(req apiv1.CreateSessionRequest) (int, bool) {
 	if p.Validate() != nil {

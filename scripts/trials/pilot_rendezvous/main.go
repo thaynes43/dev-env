@@ -152,7 +152,7 @@ func validateGate(c Config, o Observation, now time.Time) (*Deadlines, error) {
 	if o.Log.Truncated {
 		return nil, reject("log_truncated")
 	}
-	if s.UID != c.AUID || s.Name != c.Policy.SessionName(0) || s.Repo != "dev-env" || s.IdempotencyKey != c.Policy.Key(0) || s.Prompt != c.Policy.Prompts[0] || s.Agent != "codex" || s.Model != "gpt-6.1-sol" || s.Effort != "high" || s.Mode != "task" || s.Size != "S" || s.Profile != projectcanary.PilotProfile || s.Limits == nil || s.Limits.Timeout != "15m0s" || s.CreatedAt.Before(c.Policy.NotBefore) || (!c.ATaskStarted.IsZero() && s.CreatedAt.After(c.ATaskStarted)) {
+	if s.UID != c.AUID || s.Name != c.Policy.SessionName(0) || s.Repo != "dev-env" || s.IdempotencyKey != c.Policy.Key(0) || s.Prompt != c.Policy.Prompts[0] || s.Agent != "codex" || s.Model != projectcanary.PilotModel || s.Effort != "high" || s.Mode != "task" || s.Size != "S" || s.Profile != projectcanary.PilotProfile || s.Limits == nil || s.Limits.Timeout != "15m0s" || s.CreatedAt.Before(c.Policy.NotBefore) || (!c.ATaskStarted.IsZero() && s.CreatedAt.After(c.ATaskStarted)) {
 		return nil, reject("session_binding")
 	}
 	if s.PrivateHistory != nil && (s.PrivateHistory.SessionUID != c.AUID || (s.PrivateHistory.LastExecutor != nil && s.PrivateHistory.LastExecutor.PodUID != c.APodUID)) {
