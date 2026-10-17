@@ -1365,6 +1365,11 @@ type RestartStatus struct {
 	// A spec change since then needs a new prepare-restart.
 	// +kubebuilder:validation:Minimum=1
 	Generation int64 `json:"generation"`
+
+	// Stopped is set immediately before prepare-restart stops the agent.
+	// A delete retry requires it. A proof without it has not stopped the agent.
+	// +optional
+	Stopped bool `json:"stopped,omitempty"`
 }
 
 // RescueStatus records a session's newest rescue (D-10, D-51). The operator

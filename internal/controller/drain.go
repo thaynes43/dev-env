@@ -112,7 +112,7 @@ func (r *Reconciler) drainIdle(ctx context.Context, s *v1alpha1.AgentSession, t 
 	// The conversation is already stored for this pod. A later heartbeat can
 	// report the agent exited, or the tmux count can be unset, and those
 	// gates would keep the pod with no agent. Delete it.
-	if s != nil && s.Status.Phase == v1alpha1.PhaseDraining && restartProofFor(s, pod) {
+	if s != nil && s.Status.Phase == v1alpha1.PhaseDraining && restartProofFor(s, pod) && s.Status.Restart.Stopped {
 		return r.finishDrain(ctx, s, pod, obs)
 	}
 	if !drainEligible(s, pod, t.Revision()) {
@@ -172,6 +172,19 @@ func (r *Reconciler) drainIdle(ctx context.Context, s *v1alpha1.AgentSession, t 
 	// 30s grace). Keeping the pod then lets the next heartbeat report the
 	// agent exited, drain becomes ineligible, and the session stays on the
 	// old revision with no agent. Delete the pod anyway.
+	if s.Status.Restart == nil {
+		return blockDrain(obs, errors.New("prepare-restart recorded no conversation identity"))
+	}
+	written, err := r.recordRestart(ctx, s, &v1alpha1.RestartStatus{
+		ConversationID: s.Status.Restart.ConversationID, PodUID: s.Status.Restart.PodUID,
+		Generation: s.Status.Restart.Generation, Stopped: true,
+	})
+	if err != nil || !written {
+		if err != nil {
+			return blockDrain(obs, err)
+		}
+		return true, ctrl.Result{RequeueAfter: time.Second}, false, nil
+	}
 	if _, err := r.prepareRestart(ctx, pod); err != nil {
 		log.FromContext(ctx).Error(err, "prepare-restart stop failed after the conversation was stored; deleting the pod")
 	}

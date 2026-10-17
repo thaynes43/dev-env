@@ -1990,8 +1990,8 @@ and the operator re-labels the new pod and agentd re-installs grant tokens.
 **Source note, 2026-10-17.** Q-03 is unchanged. This slice's idle moment is the
 agent reporting idle or waiting, with no attached client. `status.agent.attached`
 is the heartbeat's client count. `status.restart` stores the conversation id, the
-pod UID, and the session generation from a no-side-effect read of the launch
-record (`agentd ctl prepare-restart --dry-run`). The existing stop runs only after
+pod UID, the session generation, and whether the stop was attempted, from a
+no-side-effect read of the launch record (`agentd ctl prepare-restart --dry-run`). The existing stop runs only after
 that proof is stored and a live in-pod attach count is zero. A dry-run that
 cannot count clients leaves the count unset and does not stop the agent. A
 stop exec that fails after that proof is stored still deletes the pod, so the

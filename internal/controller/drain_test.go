@@ -767,6 +767,15 @@ func TestLiveAttachAfterTheReadDoesNotStop(t *testing.T) {
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(pod), &corev1.Pod{}); err != nil {
 		t.Fatalf("pod: %v", err)
 	}
+	if _, _, _, err := r.drainIdle(context.Background(), stored, tmpl, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if rt.stopCount(pod.Name) != 0 {
+		t.Fatal("the retry stopped an attached client")
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(pod), &corev1.Pod{}); err != nil {
+		t.Fatalf("retry deleted the pod: %v", err)
+	}
 }
 
 // recordRestart returning not written does not stop the agent and does not
