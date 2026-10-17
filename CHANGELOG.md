@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.29.6](https://github.com/thaynes43/dev-env/compare/v2.29.5...v2.29.6) (2026-10-17)
+
+
+### Bug Fixes
+
+* **trials:** retain pilot log capture after executor stop ([#370](https://github.com/thaynes43/dev-env/issues/370)) ([60c4e38](https://github.com/thaynes43/dev-env/commit/60c4e38c507c21d5fce64c51d0decc4b56362996))
+
 ## [2.29.5](https://github.com/thaynes43/dev-env/compare/v2.29.4...v2.29.5) (2026-10-17)
 
 
