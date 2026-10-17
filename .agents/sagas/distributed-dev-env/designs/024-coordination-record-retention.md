@@ -441,7 +441,8 @@ grace is cleared). A shelf image from before `hold` reads a journal that
 contains one as corrupt, so those records stay refused until the shelf is new
 enough again. Do not roll the shelf image back after a hold has been written.
 `observed` is `not-found`, `uid-replaced`, `present`, `acknowledged` or, for an
-ack, `message-released`. A UID is **marked** when its last event is `absent`.
+ack, `message-released`. A UID is **marked** while it has a grace start. Its
+last event is then `absent` or `hold`. `hold` does not clear the grace start.
 Its **grace start** is the `at` of the first `absent` event after its last
 `present` or `reset` event. An event file is never rewritten.
 
