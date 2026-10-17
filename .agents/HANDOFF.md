@@ -8,10 +8,10 @@ paragraphs are historical; **installed state and next work** are the
 
 The front door for any agent that opens this repo, in the cluster's dev-env pod or on
 Tom's own machine. Read this page, then [CLAUDE.md](../CLAUDE.md) (the rules), then
-the saga. The 2026-10-13 Claude pickup brief still holds requirement history,
-owner gates and the
-[six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap);
-its enumerated next-work list is stale where this page's 2026-10-16 sections disagree.
+the saga. The [2026-10-13 pickup brief](CLAUDE-RESUME-2026-10-13.md) holds owner
+gates; the [2026-10-12 brief](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap)
+holds requirement history and the six-step roadmap. The 2026-10-13 enumerated
+next-work list is stale where this page's 2026-10-16 sections disagree.
 [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is the historical first-build order.
 
 ## Installed state — 2026-10-16 UTC
@@ -34,9 +34,10 @@ reviewed; do not re-land that WIP.
   the sealed pilot.
 
 **Chapter 7 rendezvous is not accepted.** Cohort `c7-rendezvous-1016-r3` (pod
-`private-pilot-c7-rendezvous-1016-r3-a`) exited **125** before any claim. Retain that
-failure; do not treat it as a pilot pass. The cursor handoff still holds earlier
-partial windows and original-A shutdown proof.
+`private-pilot-c7-rendezvous-1016-r3-a`) exited **125** before any claim (recorded
+2026-10-16 cluster pickup after haynes-ops #3992). Retain that failure; do not treat
+it as a pilot pass. The cursor handoff still holds earlier partial windows and
+original-A shutdown proof.
 
 **Held without reopening:** H7 reader work under Q-36 and the consumed Q-37 PV Retain
 step stay held unless Tom explicitly reopens them in a new ruling.
@@ -47,10 +48,12 @@ step stay held unless Tom explicitly reopens them in a new ruling.
    the saga. Do not reopen shipped [#358](https://github.com/thaynes43/dev-env/pull/358)
    / [#360](https://github.com/thaynes43/dev-env/pull/360) or re-deploy v2.29.4 unless
    a new pin is required for unrelated work.
-2. **Live pilot windows are open 24/7** (Tom). Do not add a separate owner go-ahead gate
-   for scheduling a new rendezvous attempt. Each attempt still needs fresh explicit
-   seal/window/identity bindings, one-shot dispatch, checked remove-only closure and
-   peer/v1 preservation; consumed attempts stay consumed.
+2. **Live pilot windows are open 24/7** (Tom, 2026-10-16 Cursor pickup). That removes
+   any separate scheduling go-ahead gate; it does not reuse consumed seals or
+   attempts. The cursor handoff's "not authorized by this file" lines only bound the
+   stopped 2026-10-16 session, not Tom's window rule. Each new attempt still needs
+   fresh explicit seal/window/identity bindings, one-shot dispatch, checked
+   remove-only closure and peer/v1 preservation.
 3. The smallest remaining Chapter 7 gap is the complete two-agent rendezvous (ACK,
    publication, authorized retrieval after original A's task completion). Bind new
    identities before dispatch; preserve r3 and prior partial records.
