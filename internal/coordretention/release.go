@@ -310,7 +310,17 @@ func (r *Runnable) ensureAckMark(ctx context.Context, ack liveRecord, message Su
 	if err != nil {
 		return err
 	}
-	if len(got) == 1 && got[0].GraceStart != nil {
+	if len(got) == 1 && got[0].LatestState == "hold" {
+		// A held ack is not a live grace. Reset it, then mark the new absence.
+		// Leaving the hold makes every later release of the message stale.
+		ev, err := resetEvent(ack.summary.Resource, r.now())
+		if err != nil {
+			return errArchiveInvalid
+		}
+		if err := r.markBatch(ctx, []protocol.CoordArchiveMarkRequest{{CoordArchiveIdentity: id, Event: ev}}); err != nil {
+			return err
+		}
+	} else if len(got) == 1 && got[0].GraceStart != nil {
 		return nil
 	}
 	ev, err := ackAbsentEvent(message, at)

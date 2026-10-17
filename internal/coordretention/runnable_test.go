@@ -2,6 +2,8 @@ package coordretention
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"testing"
 	"time"
@@ -492,20 +494,21 @@ func (c *rigClient) Delete(ctx context.Context, obj client.Object, opts ...clien
 }
 
 type memArchive struct {
-	err         error
-	freezeGrace bool
-	revisions   map[string][]protocol.CoordArchiveRevision
-	grace       map[string]*time.Time
-	latest      map[string]protocol.CoordArchiveEvent
-	objects     map[string][]byte
-	puts        []protocol.CoordArchivePutRequest
-	marks       []protocol.CoordArchiveMarkRequest
-	lookups     int
-	failPresent bool
-	failReset   bool
-	onCall      func()
-	onGet       func()
-	note        func(string)
+	err          error
+	freezeGrace  bool
+	revisions    map[string][]protocol.CoordArchiveRevision
+	grace        map[string]*time.Time
+	latest       map[string]protocol.CoordArchiveEvent
+	objects      map[string][]byte
+	puts         []protocol.CoordArchivePutRequest
+	marks        []protocol.CoordArchiveMarkRequest
+	lookups      int
+	failPresent  bool
+	failReset    bool
+	failResetUID string
+	onCall       func()
+	onGet        func()
+	note         func(string)
 }
 
 func newMemArchive() *memArchive {
@@ -583,9 +586,9 @@ func (m *memArchive) Mark(_ context.Context, req []protocol.CoordArchiveMarkRequ
 			}
 		}
 	}
-	if m.failReset {
+	if m.failReset || m.failResetUID != "" {
 		for _, item := range req {
-			if item.Event.State == "reset" {
+			if item.Event.State == "reset" && (m.failReset || item.UID == m.failResetUID) {
 				return nil, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "reset failed")
 			}
 		}
@@ -628,6 +631,61 @@ func (m *memArchive) Get(_ context.Context, q protocol.CoordArchiveGetQuery) (pr
 		}, ArchivedAt: time.Unix(1, 0).UTC()},
 		Object: append([]byte(nil), raw...),
 	}, nil
+}
+
+func TestEnsureAckMarkResetsOnlyAHeldAck(t *testing.T) {
+	const (
+		ackUID       = "66666666-6666-4666-8666-666666666666"
+		recipientUID = "77777777-7777-4777-8777-777777777777"
+		messageUID   = "88888888-8888-4888-8888-888888888888"
+	)
+	name := "read-ack." + strings.Repeat("ab", 16) + "." + strings.Repeat("cd", 16)
+	object := map[string]any{
+		"apiVersion": protocol.CoordArchiveAPIVersion,
+		"kind":       "InboxReadAck",
+		"metadata": map[string]any{
+			"namespace": "dev-env-system", "name": name, "uid": ackUID, "resourceVersion": "1",
+		},
+		"spec": map[string]any{
+			"project": "sample", "messageUID": messageUID,
+			"recipient": map[string]any{"uid": recipientUID},
+		},
+	}
+	raw, err := protocol.CanonicalJSON(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	ack := liveRecord{raw: raw, hash: hex.EncodeToString(sum[:]), summary: Summary{
+		Kind: InboxReadAck, Resource: "inboxreadacks", Project: "sample", Namespace: "dev-env-system",
+		Name: name, UID: ackUID, ResourceVersion: "1", Valid: true,
+		Recipient: SessionRef{UID: recipientUID}, Message: MessageRef{UID: messageUID, Namespace: "dev-agents", Name: "message." + strings.Repeat("ab", 16) + "." + strings.Repeat("cd", 16)},
+	}}
+	message := Summary{Namespace: ack.summary.Message.Namespace, Name: ack.summary.Message.Name, UID: messageUID}
+	arch := newMemArchive()
+	key := lookupKey(identityOf(ack.summary))
+	opened := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	arch.grace[key] = timePtr(opened)
+	arch.latest[key] = protocol.CoordArchiveEvent{State: "hold", At: opened.Add(time.Hour)}
+	arch.failResetUID = ackUID
+	now := opened.Add(40 * 24 * time.Hour)
+	runnable := &Runnable{Archive: arch, Slots: shelf.NewExecSlots(2), metrics: newRetentionMetrics(), Now: func() time.Time { return now }}
+	if err := runnable.ensureAckMark(context.Background(), ack, message, now); err == nil || arch.grace[key] == nil || arch.latest[key].State != "hold" {
+		t.Fatalf("held ack reset was skipped: %v grace %v latest %s", err, arch.grace[key], arch.latest[key].State)
+	}
+	arch.failResetUID = ""
+	if err := runnable.ensureAckMark(context.Background(), ack, message, now); err != nil || arch.grace[key] == nil || arch.latest[key].State != "absent" {
+		t.Fatalf("held ack not re-marked: %v grace %v latest %s", err, arch.grace[key], arch.latest[key].State)
+	}
+	sawReset := false
+	for _, item := range arch.marks {
+		if item.UID == ackUID && item.Event.State == "reset" {
+			sawReset = true
+		}
+	}
+	if !sawReset {
+		t.Fatal("ack reset was not attempted")
+	}
 }
 
 func (m *memArchive) onGetHook() {

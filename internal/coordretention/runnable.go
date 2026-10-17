@@ -525,6 +525,13 @@ func (r *Runnable) perform(ctx context.Context, c candidate) stepStatus {
 		if err := r.forceReset(ctx, c); err != nil {
 			return r.refuseArchive(c.item.Result.Summary.Kind, err)
 		}
+		if err := r.resetHeldAck(ctx, c); err != nil {
+			kind := InboxReadAck
+			if c.ack != nil {
+				kind = c.ack.Result.Summary.Kind
+			}
+			return r.refuseArchive(kind, err)
+		}
 		return stepStatus{}
 	}
 	if c.action == "mark" {
@@ -548,6 +555,19 @@ func (r *Runnable) clearStaleGrace(ctx context.Context, id protocol.CoordArchive
 		return errArchiveInvalid
 	}
 	return r.markBatch(ctx, []protocol.CoordArchiveMarkRequest{{CoordArchiveIdentity: id, Event: ev}})
+}
+
+func (r *Runnable) resetHeldAck(ctx context.Context, c candidate) error {
+	if c.ack == nil || c.ack.Record == nil || c.ack.Record.LatestState != "hold" {
+		return nil
+	}
+	ev, err := resetEvent(c.ack.Result.Summary.Resource, r.now())
+	if err != nil {
+		return errArchiveInvalid
+	}
+	return r.markBatch(ctx, []protocol.CoordArchiveMarkRequest{{
+		CoordArchiveIdentity: identityOf(c.ack.Result.Summary), Event: ev,
+	}})
 }
 
 func (r *Runnable) forceReset(ctx context.Context, c candidate) error {
