@@ -287,9 +287,14 @@ func TestReadRestartDoesNotStop(t *testing.T) {
 	if !bare.Resumable || bare.Agent != nil || bare.Attached != nil {
 		t.Fatalf("no runner %+v", bare)
 	}
-	runner.handle = func(Cmd) (Result, error) { return Result{}, errors.New("list-clients timed out") }
+	runner.handle = func(Cmd) (Result, error) { return Result{}, context.DeadlineExceeded }
 	unknown := ReadRestart(context.Background(), runner, s, "s-1")
 	if !unknown.Resumable || unknown.Agent != nil || unknown.Attached != nil {
 		t.Fatalf("uncounted attach %+v", unknown)
+	}
+	runner.handle = func(Cmd) (Result, error) { return Result{}, errors.New("no server running") }
+	none := ReadRestart(context.Background(), runner, s, "s-1")
+	if !none.Resumable || none.Agent != nil || none.Attached == nil || *none.Attached != 0 {
+		t.Fatalf("no server %+v", none)
 	}
 }

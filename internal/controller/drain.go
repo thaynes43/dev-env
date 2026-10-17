@@ -105,10 +105,19 @@ func restartProofFor(s *v1alpha1.AgentSession, pod *corev1.Pod) bool {
 // read that is not resumable, a record that is not written, or a live attach
 // count above zero does not stop the agent and does not delete the pod.
 func (r *Reconciler) drainIdle(ctx context.Context, s *v1alpha1.AgentSession, t *templates.Templates, obs *observation) (bool, ctrl.Result, bool, error) {
-	if t == nil || obs == nil || obs.pod.missing || obs.pod.foreign != "" || !drainEligible(s, obs.pod.obj, t.Revision()) {
+	if t == nil || obs == nil || obs.pod.missing || obs.pod.foreign != "" {
 		return false, ctrl.Result{}, false, nil
 	}
 	pod := obs.pod.obj
+	// The conversation is already stored for this pod. A later heartbeat can
+	// report the agent exited, or the tmux count can be unset, and those
+	// gates would keep the pod with no agent. Delete it.
+	if s != nil && s.Status.Phase == v1alpha1.PhaseDraining && restartProofFor(s, pod) {
+		return r.finishDrain(ctx, s, pod, obs)
+	}
+	if !drainEligible(s, pod, t.Revision()) {
+		return false, ctrl.Result{}, false, nil
+	}
 	// observe writes Draining at the end of the reconcile that first notices
 	// the idle outdated pod. Do not exec until that mark is stored.
 	if s.Status.Phase != v1alpha1.PhaseDraining {
@@ -166,6 +175,12 @@ func (r *Reconciler) drainIdle(ctx context.Context, s *v1alpha1.AgentSession, t 
 	if _, err := r.prepareRestart(ctx, pod); err != nil {
 		log.FromContext(ctx).Error(err, "prepare-restart stop failed after the conversation was stored; deleting the pod")
 	}
+	return r.finishDrain(ctx, s, pod, obs)
+}
+
+// finishDrain deletes a pod whose restart proof is already stored. A conflict
+// or another delete error retries here, not through the idle and attach gates.
+func (r *Reconciler) finishDrain(ctx context.Context, s *v1alpha1.AgentSession, pod *corev1.Pod, obs *observation) (bool, ctrl.Result, bool, error) {
 	if err := drainPod(ctx, r.Client, s, pod); err != nil {
 		if apierrors.IsConflict(err) {
 			return true, ctrl.Result{RequeueAfter: time.Second}, true, nil

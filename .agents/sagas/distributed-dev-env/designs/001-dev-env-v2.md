@@ -1995,7 +1995,9 @@ record (`agentd ctl prepare-restart --dry-run`). The existing stop runs only aft
 that proof is stored and a live in-pod attach count is zero. A dry-run that
 cannot count clients leaves the count unset and does not stop the agent. A
 stop exec that fails after that proof is stored still deletes the pod, so the
-session is not left on the old revision with no agent. The 72h session
+session is not left on the old revision with no agent. A later delete that
+fails retries the delete while that proof matches this pod, including after
+the agent has exited. The 72h session
 message and the Pushover line are deferred: they are not sent. D-50 egress stays.
 
 ### 5.3 What this changes for Renovate

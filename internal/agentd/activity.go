@@ -104,7 +104,11 @@ func tmuxClientCount(ctx context.Context, r Runner, s Settings) (int, error) {
 	defer cancel()
 	res, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"list-clients", "-t", "=" + TmuxSession, "-F", "#{client_tty}"}})
 	if err != nil {
-		return 0, err
+		// A timeout can hide a live client. No server and no session are zero.
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return 0, err
+		}
+		return 0, nil
 	}
 	n := 0
 	for _, l := range strings.Split(strings.TrimSpace(string(res.Stdout)), "\n") {

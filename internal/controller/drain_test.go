@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -687,6 +688,51 @@ func TestStopErrorStillDeletesThePod(t *testing.T) {
 	}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(pod), &corev1.Pod{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("pod delete: %v", err)
+	}
+}
+
+type conflictOnce struct {
+	client.Client
+	left int
+}
+
+func (c *conflictOnce) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	if _, ok := obj.(*corev1.Pod); ok && c.left > 0 {
+		c.left--
+		return apierrors.NewConflict(schema.GroupResource{Resource: "pods"}, obj.GetName(), errors.New("conflict"))
+	}
+	return c.Client.Delete(ctx, obj, opts...)
+}
+
+// A delete conflict after the stop retries the delete. The agent can be
+// exited by then, so the retry does not go back through the idle gates.
+func TestDeleteConflictRetriesAfterTheAgentHasExited(t *testing.T) {
+	tmpl := currentTemplates(t)
+	s := drainFixture("delete-conflict")
+	s.Status.Phase = v1alpha1.PhaseDraining
+	pod := readyDrainPod(s.Name, "old-revision")
+	base, stored, storedPod := drainClient(t, s, pod)
+	c := &conflictOnce{Client: base, left: 1}
+	rt := &fakeRestarter{fn: func(p *corev1.Pod) (protocol.RestartReport, error) {
+		return protocol.RestartReport{Session: p.Name, ConversationID: "conv-1", Resumable: true}, nil
+	}}
+	r := &Reconciler{Client: c, APIReader: base, Restarter: rt}
+	obs := observation{pod: owned[*corev1.Pod]{obj: storedPod}, templates: tmpl}
+	if _, _, _, err := r.drainIdle(context.Background(), stored, tmpl, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if err := base.Get(context.Background(), client.ObjectKeyFromObject(pod), &corev1.Pod{}); err != nil {
+		t.Fatalf("first delete removed the pod: %v", err)
+	}
+	stored.Status.Agent.Status = protocol.AgentExited
+	if _, _, _, err := r.drainIdle(context.Background(), stored, tmpl, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if rt.stopCount(pod.Name) != 1 {
+		t.Fatalf("retry stopped again: %d", rt.stopCount(pod.Name))
+	}
+	if err := base.Get(context.Background(), client.ObjectKeyFromObject(pod), &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("retry delete: %v", err)
 	}
 }
 
