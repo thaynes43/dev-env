@@ -152,6 +152,18 @@ it after A is terminal. `B_CREATE_ACCEPTED_NOT_PILOT_ACCEPTANCE` is not done.
    [2026-10-13 next-work order](CLAUDE-RESUME-2026-10-13.md#next-work-in-order) where
    it does not conflict with this page. H7 reader (Q-36) and Q-37 Retain remain out of
    scope until Tom reopens them.
+6. Before creating either actor, both sealed prompts must pass
+   `PilotPolicy.ValidateRendezvousCommands`. The harness `validate` and `run`
+   refuse otherwise, before observation or B's create. Require the 2.29.5 claim
+   pipeline with no extra argv, `task-claim-list` and `inbox-list` with
+   `--project dev-env`, and `inbox-read` / `inbox-ack` with
+   `--project dev-env --message NAME`. Every read and ack must be that exact
+   flag form, including a second line beside a good one. Refuse any extra
+   `task-claim-create` argv and the word `stdin` in either prompt.
+   Operator admission is unchanged. This check does not open a cohort, bind a
+   seal, or accept rendezvous. Context publication commands remain unproved.
+   The next live attempt still needs a fresh seal, a fresh window, and a bound
+   live ConfigMap UID.
 
 ## General archive get selectors: recorded-time source portion — 2026-10-14 UTC
 

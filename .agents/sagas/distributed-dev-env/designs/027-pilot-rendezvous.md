@@ -156,3 +156,32 @@ PR, trigger hosted CI, merge, release, publish an image, or start a runtime.
 On 2026-10-16 Tom directed the Cursor pickup to deliver this exact patch.
 This delivery is the source correction only. It does not admit a pilot, reuse
 a consumed seal or actor, or start a model.
+
+## Command contract before the next cohort — 2026-10-17
+
+Cohort r10 proved the read command and r11 proved the claim argv. On task image
+2.29.5, A passed the InboxMessage name to `inbox-read` as a positional and
+exited 2. The working command is
+`/usr/local/bin/agentd inbox-read --project dev-env --message EXACT_NAME`.
+`inbox-ack` uses the same flags. B then ran `task-claim-create stdin` and
+stopped. The working claim shape is
+`printf '%s' 'JSON' | /usr/local/bin/agentd task-claim-create` with no extra
+argv. The word `stdin` must not appear in either sealed prompt.
+
+`PilotPolicy.ValidateRendezvousCommands` requires both prompts to contain that
+claim pipeline, `task-claim-list --project dev-env`, `inbox-list --project dev-env`,
+and `inbox-read` / `inbox-ack` with `--project dev-env --message NAME`. `JSON`
+and `EXACT_NAME` in `RendezvousCommandText` are placeholders. The check refuses every `inbox-read` and `inbox-ack` that is not that exact
+flag form, including a second line beside a good one (`--project dev-env NAME`,
+or a message name followed by another token). It also refuses any extra
+`task-claim-create` argv and the word `stdin` anywhere in either prompt. Operator `Validate` does not call it, so
+existing admission of a short prompt is unchanged and this slice needs no new
+operator or task image.
+
+The rendezvous harness `validate` and `run` call the check. A failing prompt
+returns before observation, reservation, or B's create. Nonexec of a reviewed
+config must pass this check before either actor is created. Context publication
+was never reached on r10, so this contract does not certify a `context-publish`
+or `context-read` line. Passing the check does not open a cohort, bind a seal,
+or accept rendezvous. The next live attempt still needs a fresh seal, a fresh
+window, and a bound live ConfigMap UID.
