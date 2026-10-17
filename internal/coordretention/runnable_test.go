@@ -553,6 +553,11 @@ func (m *memArchive) Put(_ context.Context, req protocol.CoordArchivePutRequest,
 	if m.err != nil {
 		return protocol.CoordArchivePutResult{}, m.err
 	}
+	if req.Event != nil {
+		if err := m.refuseBackward(lookupKey(protocol.CoordArchiveIdentity{Resource: req.Manifest.Resource, Project: req.Manifest.Project, Name: req.Manifest.Name, UID: req.Manifest.UID}), req.Event.At); err != nil {
+			return protocol.CoordArchivePutResult{}, err
+		}
+	}
 	if mark != (req.Event != nil) {
 		return protocol.CoordArchivePutResult{}, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "mark flag")
 	}
@@ -591,6 +596,11 @@ func (m *memArchive) Mark(_ context.Context, req []protocol.CoordArchiveMarkRequ
 			if item.Event.State == "reset" && (m.failReset || item.UID == m.failResetUID) {
 				return nil, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "reset failed")
 			}
+		}
+	}
+	for _, item := range req {
+		if err := m.refuseBackward(lookupKey(item.CoordArchiveIdentity), item.Event.At); err != nil {
+			return nil, err
 		}
 	}
 	m.marks = append(m.marks, req...)
@@ -674,8 +684,10 @@ func TestEnsureAckMarkResetsOnlyAHeldAck(t *testing.T) {
 		t.Fatalf("held ack reset was skipped: %v grace %v latest %s", err, arch.grace[key], arch.latest[key].State)
 	}
 	arch.failResetUID = ""
-	if err := runnable.ensureAckMark(context.Background(), ack, message, now); err != nil || arch.grace[key] == nil || arch.latest[key].State != "absent" {
-		t.Fatalf("held ack not re-marked: %v grace %v latest %s", err, arch.grace[key], arch.latest[key].State)
+	// The message's grace start is older than the hold. The new absence must
+	// use the reset time, or the journal refuses it.
+	if err := runnable.ensureAckMark(context.Background(), ack, message, opened); err != nil || arch.grace[key] == nil || !arch.latest[key].At.Equal(now) || arch.latest[key].State != "absent" {
+		t.Fatalf("held ack not re-marked: %v grace %v latest %#v", err, arch.grace[key], arch.latest[key])
 	}
 	sawReset := false
 	for _, item := range arch.marks {
@@ -686,6 +698,14 @@ func TestEnsureAckMarkResetsOnlyAHeldAck(t *testing.T) {
 	if !sawReset {
 		t.Fatal("ack reset was not attempted")
 	}
+}
+
+func (m *memArchive) refuseBackward(key string, at time.Time) error {
+	prev, ok := m.latest[key]
+	if ok && !prev.At.IsZero() && at.Before(prev.At) {
+		return protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "event timestamp cannot move backward")
+	}
+	return nil
 }
 
 func (m *memArchive) onGetHook() {

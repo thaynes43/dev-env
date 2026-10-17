@@ -311,9 +311,11 @@ func (r *Runnable) ensureAckMark(ctx context.Context, ack liveRecord, message Su
 		return err
 	}
 	if len(got) == 1 && got[0].LatestState == "hold" {
-		// A held ack is not a live grace. Reset it, then mark the new absence.
-		// Leaving the hold makes every later release of the message stale.
-		ev, err := resetEvent(ack.summary.Resource, r.now())
+		// A held ack is not a live grace. Reset it, then mark the new absence
+		// at the reset time. The caller's absence time can be the message's
+		// old grace start, and the journal refuses an event older than the tail.
+		at = r.now().UTC()
+		ev, err := resetEvent(ack.summary.Resource, at)
 		if err != nil {
 			return errArchiveInvalid
 		}
