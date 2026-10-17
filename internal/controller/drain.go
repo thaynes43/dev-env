@@ -103,7 +103,6 @@ func (r *Reconciler) drainIdle(ctx context.Context, s *v1alpha1.AgentSession, t 
 	if t == nil || obs == nil || obs.pod.missing || obs.pod.foreign != "" || !drainEligible(s, obs.pod.obj, t.Revision()) {
 		return false, ctrl.Result{}, false, nil
 	}
-	holdIdle = true
 	pod := obs.pod.obj
 	// observe writes Draining at the end of the reconcile that first notices
 	// the idle outdated pod. Stop the agent only after that mark is stored.
