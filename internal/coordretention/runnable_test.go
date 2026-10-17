@@ -261,15 +261,14 @@ func TestFailedPresentResetDoesNotDeleteOnNewLeader(t *testing.T) {
 	if err := rig.base.Create(context.Background(), owner); err != nil {
 		t.Fatal(err)
 	}
-	if got := first.Pass(context.Background()); got != resultComplete || rig.realDeletes != 0 || arch.grace[key] == nil || arch.latest[key].State != "absent" {
+	if got := first.Pass(context.Background()); got != resultComplete || rig.realDeletes != 0 || arch.grace[key] == nil || arch.latest[key].State != "hold" {
 		t.Fatalf("failed present: result %s deletes %d grace %v latest %s", got, rig.realDeletes, arch.grace[key], arch.latest[key].State)
 	}
 
-	// Both the present and the reset failed, so the day-0 absence is still the
-	// tail. A new leader must not delete from it.
+	// The hold is durable. The day-0 absence is still the grace. A new leader
+	// must clear that grace and must not delete.
 	next := &passRig{archive: arch, now: opened.Add(31 * 24 * time.Hour)}
 	leader := next.build(t, claim)
-	leader.leaderStarted = next.now
 	if len(leader.blocked) != 0 {
 		t.Fatal("new leader kept the old block")
 	}

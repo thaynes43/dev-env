@@ -605,12 +605,13 @@ far less in practice (text alone is at most 384 KiB escaped). A page of 50 claim
 or acks holds no text. A batch of 1024 lookups prints about 200 KiB. Nothing is
 kept between passes but the resume key; the archive holds the rest.
 
-**Leader grace, 2026-10-17.** A present that fails to append leaves the old
-absence in place, and the journal tail then still equals that grace start. That
-equality is not a fence. A leader does not delete a grace that began before it
-started. It appends `reset` instead, and the next absence starts a new 30 days.
-A leader restart can delay a release. It cannot make one early. A shelf lookup
-with no journal tail refuses the release as `archive_outdated`.
+**Hold, 2026-10-17.** A present that fails to append leaves the old absence
+in place, and that tail still equals the grace start. That equality is not a
+fence. Before the present, the pass appends `hold`. `hold` keeps the grace
+start and is not an absent tail, so a later leader will not delete from it.
+That leader appends `reset` for a held record only. A grace with no hold is
+unchanged by a leader restart. A shelf lookup with no journal tail refuses
+the release as `archive_outdated`.
 
 **Metrics** (the leader exports them; other replicas export none of these):
 

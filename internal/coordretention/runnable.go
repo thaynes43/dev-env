@@ -45,13 +45,12 @@ type Runnable struct {
 	Log        logr.Logger
 	Registerer prometheus.Registerer
 
-	maxMarks      int
-	maxReleases   int
-	resume        orderKey
-	blocked       map[string]struct{}
-	leaderStarted time.Time
-	metrics       *retentionMetrics
-	registered    []prometheus.Collector
+	maxMarks    int
+	maxReleases int
+	resume      orderKey
+	blocked     map[string]struct{}
+	metrics     *retentionMetrics
+	registered  []prometheus.Collector
 }
 
 // NeedLeaderElection makes the pass run in the leader only.
@@ -70,11 +69,6 @@ func (r *Runnable) Start(ctx context.Context) error {
 		return err
 	}
 	defer r.unregisterMetrics()
-	// A grace that began before this leader started is not proof that the
-	// owner stayed away. A failed present leaves that old absence in place.
-	if r.leaderStarted.IsZero() {
-		r.leaderStarted = r.now()
-	}
 	r.metrics.LastProgress.Set(float64(r.now().Unix()))
 	wait := r.First
 	if wait <= 0 {
@@ -366,6 +360,15 @@ func (r *Runnable) resetKept(ctx context.Context, items []LookupResult) error {
 			return err
 		}
 		batch := groups[project]
+		if err := r.markBatch(ctx, holdRequests(batch)); err != nil {
+			for _, req := range batch {
+				r.block(orderKey{kind: kinds[lookupKey(req.CoordArchiveIdentity)], project: req.Project, name: req.Name, uid: req.UID})
+			}
+			if deadlineErr(err) || historyCode(err) == protocol.HistoryErrNoArchive || errors.Is(err, shelf.ErrNoShelf) || errors.Is(err, ErrLookupBusy) {
+				return err
+			}
+			continue
+		}
 		if err := r.markBatch(ctx, batch); err != nil {
 			if deadlineErr(err) || historyCode(err) == protocol.HistoryErrNoArchive || errors.Is(err, shelf.ErrNoShelf) || errors.Is(err, ErrLookupBusy) {
 				for _, req := range batch {
@@ -508,12 +511,21 @@ func (r *Runnable) mutate(ctx context.Context, items []LookupResult) string {
 }
 
 func (r *Runnable) perform(ctx context.Context, c candidate) stepStatus {
-	if c.action == "release" && (r.isBlocked(c.key) || r.unwitnessedGrace(c.item.Record)) {
+	if c.action == "release" && r.isBlocked(c.key) {
 		if err := r.forceReset(ctx, c); err != nil {
 			return r.refuseArchive(c.item.Result.Summary.Kind, err)
 		}
 		r.unblock(c.key)
 		return stepStatus{skipped: true}
+	}
+	// A hold is the durable mark that the owner was seen and the open grace
+	// must not be used. It survives a leader change. Clear it, and count the
+	// clear against the release cap. Do not delete on this pass.
+	if c.action == "release" && c.item.Record != nil && c.item.Record.LatestState == "hold" {
+		if err := r.forceReset(ctx, c); err != nil {
+			return r.refuseArchive(c.item.Result.Summary.Kind, err)
+		}
+		return stepStatus{}
 	}
 	if c.action == "mark" {
 		return r.markReleased(ctx, c)
@@ -521,14 +533,13 @@ func (r *Runnable) perform(ctx context.Context, c candidate) stepStatus {
 	return r.release(ctx, c)
 }
 
-// unwitnessedGrace is an open grace that began before this leader started.
-// The journal cannot show a present that failed to append, so that grace is
-// not evidence the owner stayed away. The leader clears it instead of deleting.
-func (r *Runnable) unwitnessedGrace(rec *protocol.CoordArchiveLookupResult) bool {
-	if r.leaderStarted.IsZero() || rec == nil || rec.GraceStart == nil {
-		return false
+func holdRequests(batch []protocol.CoordArchiveMarkRequest) []protocol.CoordArchiveMarkRequest {
+	out := make([]protocol.CoordArchiveMarkRequest, len(batch))
+	for i, req := range batch {
+		req.Event.State = "hold"
+		out[i] = req
 	}
-	return rec.GraceStart.UTC().Before(r.leaderStarted.UTC())
+	return out
 }
 
 func (r *Runnable) clearStaleGrace(ctx context.Context, id protocol.CoordArchiveIdentity) error {

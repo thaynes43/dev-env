@@ -71,7 +71,7 @@ func (a CoordArchive) readJournal(id protocol.CoordArchiveIdentity, rel string) 
 		found := 0
 		var event protocol.CoordArchiveEvent
 		tail := ""
-		for _, state := range []string{"absent", "present", "reset"} {
+		for _, state := range []string{"absent", "present", "reset", "hold"} {
 			file := filepath.Join(dir, fmt.Sprintf("%08d-%s.json", seq, state))
 			raw, readErr := readArchiveFileLinks(a.Root, file, protocol.MaxCoordArchiveEventBytes, 2)
 			if errors.Is(readErr, fs.ErrNotExist) {
@@ -104,7 +104,7 @@ func (a CoordArchive) readJournal(id protocol.CoordArchiveIdentity, rel string) 
 				at := event.At
 				result.GraceStart = &at
 			}
-		} else {
+		} else if event.State != "hold" {
 			result.GraceStart = nil
 		}
 	}
@@ -123,7 +123,7 @@ func journalTail(state coordJournalState) (string, *time.Time) {
 	}
 	name := strings.TrimSuffix(base[9:], ".json")
 	switch name {
-	case "absent", "present", "reset":
+	case "absent", "present", "reset", "hold":
 		at := state.LastAt.UTC()
 		return name, &at
 	default:
@@ -196,7 +196,7 @@ func (a CoordArchive) appendEvent(rel string, state coordJournalState, event pro
 	if event.State == "absent" {
 		at := event.At
 		state.GraceStart = &at
-	} else {
+	} else if event.State != "hold" {
 		state.GraceStart = nil
 	}
 	if err := a.syncJournal(state); err != nil {

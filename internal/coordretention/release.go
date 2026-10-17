@@ -127,10 +127,11 @@ func (r *Runnable) archiveRevision(ctx context.Context, rec liveRecord) error {
 	if got[0].GraceStart != nil && got[0].LatestState == "" {
 		return errArchiveOutdated
 	}
-	// A non-absent tail, or a grace this leader did not witness, is not deleted.
+	// A hold, or any other non-absent tail, is not an open grace to delete.
 	// Tail time equaling GraceStart is not a fence: while grace is open the
-	// tail is always the absent that opened it.
-	if r.unwitnessedGrace(&got[0]) || !absentGraceCurrent(got[0]) {
+	// tail of an unmarked failure is still the absent that opened it. A hold
+	// written when the owner was seen is what a later leader can see.
+	if !absentGraceCurrent(got[0]) {
 		return errGraceStale
 	}
 	if !got[0].Holds || len(got[0].Revisions) == 0 {

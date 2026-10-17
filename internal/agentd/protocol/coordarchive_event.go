@@ -119,7 +119,7 @@ func (e CoordArchiveEvent) Validate(resource string) error {
 				return invalid()
 			}
 		}
-	case "present":
+	case "present", "hold":
 		if !present {
 			return invalid()
 		}
