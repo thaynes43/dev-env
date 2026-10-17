@@ -938,6 +938,10 @@ exec fake, so the protocol is exercised):
   grace stays in the fake-client tests.
 - **E7, two passes at once.** Exactly one delete succeeds. Each revision has one
   archive entry.
+  *2026-10-17:* `TestSecondPassDoesNotDeleteTheSameRevision` runs a second pass
+  on the fake client. The record stays gone, the delete count stays one, and
+  the pass does not archive that revision again. The E7 envtest remains, and
+  a concurrent pair of passes remains.
 
 Unit tests (fake client) cover what envtest cannot: an owner present after its
 mark (a `present` event, then a full new grace after the next absence), the 720h
