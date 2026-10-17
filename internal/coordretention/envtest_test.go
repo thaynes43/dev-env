@@ -1,16 +1,30 @@
 package coordretention
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	devv1 "github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/contextpublication"
 	"github.com/thaynes43/dev-env/internal/inbox"
+	"github.com/thaynes43/dev-env/internal/sessiondirectory"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
 	"github.com/thaynes43/dev-env/internal/testenv"
 )
@@ -193,4 +207,201 @@ func decideClaim(t *testing.T, ctx context.Context, cfg EvalConfig, name string)
 		t.Fatalf("results %#v", got)
 	}
 	return got[0].Decision
+}
+
+// TestEnvtestRetentionDeleteRight is DESIGN-024 E4's delete right. It binds
+// only the design's R6 Role, not the rest of the haynes-ops operator Roles.
+// The identity-guard exec refusal stays out of this test. The Role is not
+// installed in haynes-ops.
+func TestEnvtestRetentionDeleteRight(t *testing.T) {
+	env, err := testenv.Start()
+	if err != nil {
+		t.Fatalf("envtest: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := env.Stop(); err != nil {
+			t.Log("envtest stop:", err)
+		}
+	})
+	ctx := context.Background()
+	scheme := retentionScheme(t)
+	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, rbacv1.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	admin, err := client.New(env.Config, client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const otherNS, operatorSA, sessionSA = "dev-agents", "dev-env-operator", "dev-env-agent"
+	for _, obj := range []client.Object{
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: retentionNS}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: otherNS}},
+		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: retentionNS, Name: operatorSA}},
+		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: otherNS, Name: sessionSA}},
+	} {
+		if err := admin.Create(ctx, obj); err != nil {
+			t.Fatal(err)
+		}
+	}
+	role, binding := retentionDeleteRole(t)
+	for _, obj := range []client.Object{role, binding} {
+		if err := admin.Create(ctx, obj); err != nil {
+			t.Fatal(err)
+		}
+	}
+	as := func(ns, name string) client.Client {
+		t.Helper()
+		cfg := rest.CopyConfig(env.Config)
+		cfg.Impersonate = rest.ImpersonationConfig{UserName: "system:serviceaccount:" + ns + ":" + name}
+		c, err := client.New(cfg, client.Options{Scheme: scheme})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	operator, session := as(retentionNS, operatorSA), as(otherNS, sessionSA)
+
+	claim := claimSpec()
+	message := messageSpec()
+	published := contextSpec()
+	live := []client.Object{
+		&coord.TaskClaim{ObjectMeta: metav1.ObjectMeta{Namespace: retentionNS, Name: taskclaim.Name(claim.Identity)}, Spec: claim},
+		&coord.PublishedContext{ObjectMeta: metav1.ObjectMeta{Namespace: retentionNS, Name: contextpublication.Name(published.Identity)}, Spec: published},
+		&coord.InboxMessage{ObjectMeta: metav1.ObjectMeta{Namespace: retentionNS, Name: inbox.MessageName(message.Sender, message.Key)}, Spec: message},
+	}
+	for _, obj := range live {
+		if err := admin.Create(ctx, obj); err != nil {
+			t.Fatal(err)
+		}
+	}
+	msg := live[2].(*coord.InboxMessage)
+	ackSpec := coord.InboxReadAckSpec{Project: message.Project, MessageName: msg.Name, MessageUID: string(msg.UID), Recipient: message.Recipient, Actor: actor()}
+	ack := &coord.InboxReadAck{ObjectMeta: metav1.ObjectMeta{Namespace: retentionNS, Name: inbox.AckName(ackSpec.MessageUID, ackSpec.Recipient.UID)}, Spec: ackSpec}
+	if err := admin.Create(ctx, ack); err != nil {
+		t.Fatal(err)
+	}
+	live = append(live, ack)
+	foreign := claimSpec()
+	foreign.Identity.TaskKey = "issue:399"
+	foreignClaim := &coord.TaskClaim{ObjectMeta: metav1.ObjectMeta{Namespace: otherNS, Name: taskclaim.Name(foreign.Identity)}, Spec: foreign}
+	if err := admin.Create(ctx, foreignClaim); err != nil {
+		t.Fatal(err)
+	}
+	digest := coord.DirectoryDigest(strings.Repeat("ab", 32))
+	directory := coord.SessionDirectorySpec{
+		Version: 1, Source: sender, SourceCreatedAt: metav1.Now(), Project: "sample", Repository: "repo", Base: "main",
+		Parent: "dev-env-system/human", TaskKey: "rights-other",
+		Request: coord.DirectoryRequest{Provider: "claude", CLI: "claude", Model: "claude-haiku-4-5", Effort: "low"},
+		Revisions: coord.DirectoryRevisions{
+			CanaryPolicy: digest, CatalogUID: "catalog", CatalogResourceVersion: "1", Catalog: digest, Rules: digest,
+			Template: "templates", Image: "ghcr.io/example/dev-env:test", ProjectSnapshot: digest,
+			Common: coord.DirectoryCommon{State: "Unknown"},
+		},
+	}
+	if !sessiondirectory.ValidSpec(directory) {
+		t.Fatal("directory fixture")
+	}
+	otherKind := &coord.SessionDirectory{ObjectMeta: metav1.ObjectMeta{Namespace: retentionNS, Name: sessiondirectory.Name(directory.Source)}, Spec: directory}
+	if err := admin.Create(ctx, otherKind); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := session.Get(ctx, client.ObjectKeyFromObject(live[0]), &coord.TaskClaim{}); !apierrors.IsForbidden(err) {
+		t.Fatalf("session get: %v", err)
+	}
+	if err := session.Delete(ctx, live[0]); !apierrors.IsForbidden(err) {
+		t.Fatalf("session delete: %v", err)
+	}
+	if err := operator.DeleteAllOf(ctx, &coord.TaskClaim{}, client.InNamespace(retentionNS)); !apierrors.IsForbidden(err) {
+		t.Fatalf("deletecollection: %v", err)
+	}
+	if err := admin.Get(ctx, client.ObjectKeyFromObject(live[0]), &coord.TaskClaim{}); err != nil {
+		t.Fatalf("claim after the refused collection delete: %v", err)
+	}
+	for _, obj := range live {
+		if err := operator.Delete(ctx, obj); err != nil {
+			t.Fatalf("operator delete %T: %v", obj, err)
+		}
+		if err := admin.Get(ctx, client.ObjectKeyFromObject(obj), obj); !apierrors.IsNotFound(err) {
+			t.Fatalf("operator delete %T left %v", obj, err)
+		}
+	}
+	if err := operator.Delete(ctx, foreignClaim); !apierrors.IsForbidden(err) {
+		t.Fatalf("delete outside the operator namespace: %v", err)
+	}
+	if err := admin.Get(ctx, client.ObjectKeyFromObject(foreignClaim), &coord.TaskClaim{}); err != nil {
+		t.Fatalf("foreign claim: %v", err)
+	}
+	if err := operator.Delete(ctx, otherKind); !apierrors.IsForbidden(err) {
+		t.Fatalf("delete of a coordination kind outside the role: %v", err)
+	}
+	if err := admin.Get(ctx, client.ObjectKeyFromObject(otherKind), &coord.SessionDirectory{}); err != nil {
+		t.Fatalf("session directory: %v", err)
+	}
+}
+
+func retentionDeleteRole(t *testing.T) (*rbacv1.Role, *rbacv1.RoleBinding) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "haynes-ops", "coordination-retention-operator.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec := utilyaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096)
+	var role *rbacv1.Role
+	var binding *rbacv1.RoleBinding
+	for {
+		var raw unstructured.Unstructured
+		if err := dec.Decode(&raw.Object); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			t.Fatal(err)
+		}
+		if len(raw.Object) == 0 {
+			continue
+		}
+		switch raw.GetKind() {
+		case "Role":
+			role = &rbacv1.Role{}
+			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Object, role); err != nil {
+				t.Fatal(err)
+			}
+		case "RoleBinding":
+			binding = &rbacv1.RoleBinding{}
+			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Object, binding); err != nil {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatalf("retention copy has %s %s", raw.GetKind(), raw.GetName())
+		}
+	}
+	if role == nil || binding == nil || role.Namespace != retentionNS || role.Name != "dev-env-coordination-retention" {
+		t.Fatalf("role %#v binding %#v", role, binding)
+	}
+	if len(role.Rules) != 1 || len(role.Rules[0].APIGroups) != 1 || role.Rules[0].APIGroups[0] != coord.GroupVersion.Group {
+		t.Fatalf("rule %#v", role.Rules)
+	}
+	if len(role.Rules[0].Verbs) != 1 || role.Rules[0].Verbs[0] != "delete" {
+		t.Fatalf("verbs %#v", role.Rules[0].Verbs)
+	}
+	want := map[string]bool{"taskclaims": true, "publishedcontexts": true, "inboxmessages": true, "inboxreadacks": true}
+	if len(role.Rules[0].Resources) != len(want) {
+		t.Fatalf("resources %#v", role.Rules[0].Resources)
+	}
+	for _, resource := range role.Rules[0].Resources {
+		if !want[resource] {
+			t.Fatalf("resource %s", resource)
+		}
+		delete(want, resource)
+	}
+	if binding.Namespace != retentionNS || binding.RoleRef.Kind != "Role" || binding.RoleRef.Name != role.Name || len(binding.Subjects) != 1 {
+		t.Fatalf("binding %#v", binding)
+	}
+	subject := binding.Subjects[0]
+	if subject.Kind != rbacv1.ServiceAccountKind || subject.Namespace != retentionNS || subject.Name != "dev-env-operator" {
+		t.Fatalf("subject %#v", subject)
+	}
+	return role, binding
 }

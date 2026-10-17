@@ -1,0 +1,25 @@
+# DESIGN-024 section 9, the R6 Role. This is the envtest copy. Applying it in
+# haynes-ops is R6 and is not part of this file.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dev-env-coordination-retention
+  namespace: dev-env-system
+rules:
+  - apiGroups: ["coordination.dev-env.haynesops.com"]
+    resources: ["taskclaims", "publishedcontexts", "inboxmessages", "inboxreadacks"]
+    verbs: ["delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dev-env-coordination-retention
+  namespace: dev-env-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dev-env-coordination-retention
+subjects:
+  - kind: ServiceAccount
+    name: dev-env-operator
+    namespace: dev-env-system
