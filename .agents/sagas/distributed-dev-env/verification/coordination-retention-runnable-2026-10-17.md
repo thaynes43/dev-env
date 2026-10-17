@@ -82,4 +82,4 @@ refusal that does not delete.
 - `dev_env_coordination_records*` help text was already updated by earlier source and was not edited here.
 - No haynes-ops Role, deployment flag, or alert was added. The retention flag is not set in any deployment.
 - The inbox message-and-ack unit is implemented and was not exercised by the focused TaskClaim tests.
-- A new leader starts with an empty resume key. A failed present reset clears the old grace in the archive, and a release still refuses unless the journal tail is the absent event that opened `GraceStart`. Memory of the failure is not required.
+- A new leader starts with an empty resume key. A failed present does not clear the old absence when the follow-up reset also fails. That leader blocks the record in memory. A later leader does not delete a grace that began before it started: it appends `reset` and the next absence starts a new 30 days. Tail time equaling `GraceStart` is not that fence. A shelf image that omits the lookup tail fields refuses release as `archive_outdated` until R6 pins an agent image that includes them.

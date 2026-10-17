@@ -45,12 +45,13 @@ type Runnable struct {
 	Log        logr.Logger
 	Registerer prometheus.Registerer
 
-	maxMarks    int
-	maxReleases int
-	resume      orderKey
-	blocked     map[string]struct{}
-	metrics     *retentionMetrics
-	registered  []prometheus.Collector
+	maxMarks      int
+	maxReleases   int
+	resume        orderKey
+	blocked       map[string]struct{}
+	leaderStarted time.Time
+	metrics       *retentionMetrics
+	registered    []prometheus.Collector
 }
 
 // NeedLeaderElection makes the pass run in the leader only.
@@ -69,6 +70,11 @@ func (r *Runnable) Start(ctx context.Context) error {
 		return err
 	}
 	defer r.unregisterMetrics()
+	// A grace that began before this leader started is not proof that the
+	// owner stayed away. A failed present leaves that old absence in place.
+	if r.leaderStarted.IsZero() {
+		r.leaderStarted = r.now()
+	}
 	r.metrics.LastProgress.Set(float64(r.now().Unix()))
 	wait := r.First
 	if wait <= 0 {
@@ -367,10 +373,9 @@ func (r *Runnable) resetKept(ctx context.Context, items []LookupResult) error {
 				}
 				return err
 			}
-			// A failed present leaves the old absent event in place. Clear that
-			// grace durably so the next leader cannot release from it. A reset
-			// that also fails stays blocked only until this leader stops; the
-			// delete path still requires the latest event to be that absence.
+			// A failed present leaves the old absent event in place. Try to
+			// clear it now. If that reset also fails, this leader blocks the
+			// record, and a later leader clears any grace it did not witness.
 			for _, req := range batch {
 				if clearErr := r.clearStaleGrace(ctx, req.CoordArchiveIdentity); clearErr != nil {
 					r.block(orderKey{kind: kinds[lookupKey(req.CoordArchiveIdentity)], project: req.Project, name: req.Name, uid: req.UID})
@@ -503,7 +508,7 @@ func (r *Runnable) mutate(ctx context.Context, items []LookupResult) string {
 }
 
 func (r *Runnable) perform(ctx context.Context, c candidate) stepStatus {
-	if c.action == "release" && r.isBlocked(c.key) {
+	if c.action == "release" && (r.isBlocked(c.key) || r.unwitnessedGrace(c.item.Record)) {
 		if err := r.forceReset(ctx, c); err != nil {
 			return r.refuseArchive(c.item.Result.Summary.Kind, err)
 		}
@@ -514,6 +519,16 @@ func (r *Runnable) perform(ctx context.Context, c candidate) stepStatus {
 		return r.markReleased(ctx, c)
 	}
 	return r.release(ctx, c)
+}
+
+// unwitnessedGrace is an open grace that began before this leader started.
+// The journal cannot show a present that failed to append, so that grace is
+// not evidence the owner stayed away. The leader clears it instead of deleting.
+func (r *Runnable) unwitnessedGrace(rec *protocol.CoordArchiveLookupResult) bool {
+	if r.leaderStarted.IsZero() || rec == nil || rec.GraceStart == nil {
+		return false
+	}
+	return rec.GraceStart.UTC().Before(r.leaderStarted.UTC())
 }
 
 func (r *Runnable) clearStaleGrace(ctx context.Context, id protocol.CoordArchiveIdentity) error {

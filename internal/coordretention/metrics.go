@@ -21,6 +21,7 @@ const (
 	resultShelfUnavailable   = "shelf_unavailable"
 	resultFailed             = "failed"
 	reasonUnknown            = "unknown"
+	reasonArchiveOutdated    = "archive_outdated"
 	reasonOwnerPresent       = "owner_present"
 	reasonArchiveInvalid     = "archive_invalid"
 	reasonArchiveMissing     = "archive_missing"
@@ -32,7 +33,7 @@ const (
 var (
 	passResults   = []string{resultComplete, resultCapped, resultPartial, resultShelfUnavailable, resultFailed}
 	refuseReasons = []string{
-		reasonUnknown, reasonOwnerPresent, reasonArchiveInvalid, reasonArchiveMissing,
+		reasonUnknown, reasonArchiveOutdated, reasonOwnerPresent, reasonArchiveInvalid, reasonArchiveMissing,
 		reasonArchiveMismatch, reasonPreconditionFailed, reasonForbidden,
 	}
 	metricKinds = []Kind{TaskClaim, PublishedContext, InboxMessage, InboxReadAck}

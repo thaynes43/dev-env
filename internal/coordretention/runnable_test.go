@@ -256,25 +256,29 @@ func TestFailedPresentResetDoesNotDeleteOnNewLeader(t *testing.T) {
 
 	rig.now = opened.Add(25 * 24 * time.Hour)
 	arch.failPresent = true
+	arch.failReset = true
 	owner := &devv1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: sender.Namespace, Name: sender.Name, UID: types.UID(sender.UID)}}
 	if err := rig.base.Create(context.Background(), owner); err != nil {
 		t.Fatal(err)
 	}
-	if got := first.Pass(context.Background()); got != resultComplete || rig.realDeletes != 0 || arch.grace[key] != nil || arch.latest[key].State != "reset" {
+	if got := first.Pass(context.Background()); got != resultComplete || rig.realDeletes != 0 || arch.grace[key] == nil || arch.latest[key].State != "absent" {
 		t.Fatalf("failed present: result %s deletes %d grace %v latest %s", got, rig.realDeletes, arch.grace[key], arch.latest[key].State)
 	}
 
-	// The original absence is already older than 30 days. The latest event is
-	// the reset, not that absent event. A new leader must not delete.
-	stale := opened
-	arch.grace[key] = &stale
+	// Both the present and the reset failed, so the day-0 absence is still the
+	// tail. A new leader must not delete from it.
 	next := &passRig{archive: arch, now: opened.Add(31 * 24 * time.Hour)}
 	leader := next.build(t, claim)
+	leader.leaderStarted = next.now
 	if len(leader.blocked) != 0 {
 		t.Fatal("new leader kept the old block")
 	}
-	if got := leader.Pass(context.Background()); got != resultComplete || next.realDeletes != 0 || deletedCount(leader) != 0 {
-		t.Fatalf("new leader: result %s deletes %d counted %v", got, next.realDeletes, deletedCount(leader))
+	if got := leader.Pass(context.Background()); got != resultFailed || next.realDeletes != 0 || deletedCount(leader) != 0 || arch.grace[key] == nil {
+		t.Fatalf("new leader while reset fails: result %s deletes %d grace %v counted %v", got, next.realDeletes, arch.grace[key], deletedCount(leader))
+	}
+	arch.failReset = false
+	if got := leader.Pass(context.Background()); got != resultComplete || next.realDeletes != 0 || deletedCount(leader) != 0 || arch.grace[key] != nil || arch.latest[key].State != "reset" {
+		t.Fatalf("new leader clear: result %s deletes %d grace %v latest %s", got, next.realDeletes, arch.grace[key], arch.latest[key].State)
 	}
 }
 
@@ -499,6 +503,7 @@ type memArchive struct {
 	marks       []protocol.CoordArchiveMarkRequest
 	lookups     int
 	failPresent bool
+	failReset   bool
 	onCall      func()
 	onGet       func()
 	note        func(string)
@@ -576,6 +581,13 @@ func (m *memArchive) Mark(_ context.Context, req []protocol.CoordArchiveMarkRequ
 		for _, item := range req {
 			if item.Event.State == "present" {
 				return nil, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "present reset failed")
+			}
+		}
+	}
+	if m.failReset {
+		for _, item := range req {
+			if item.Event.State == "reset" {
+				return nil, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "reset failed")
 			}
 		}
 	}
