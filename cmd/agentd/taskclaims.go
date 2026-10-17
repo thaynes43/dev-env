@@ -8,11 +8,14 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/thaynes43/dev-env/internal/agentd"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
+
+const taskClaimCreateMaxTimeout = 10 * time.Second
 
 func taskClaimCommand(ctx context.Context, command string, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) int {
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
@@ -22,6 +25,7 @@ func taskClaimCommand(ctx context.Context, command string, args []string, stdin 
 	uid := fs.String("uid", "", "optional original claim UID")
 	limit := fs.Int("limit", 100, "one page of 1..100 records")
 	cursor := fs.String("continue", "", "opaque continuation cursor")
+	timeout := fs.Duration("timeout", 0, "optional bounded create deadline (1s..10s)")
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
 		return exitUsage
 	}
@@ -30,7 +34,10 @@ func taskClaimCommand(ctx context.Context, command string, args []string, stdin 
 	}
 	switch command {
 	case "task-claim-create":
-		if fs.NFlag() != 0 {
+		if *project != "" || *name != "" || *uid != "" || *limit != 100 || *cursor != "" {
+			return exitUsage
+		}
+		if *timeout != 0 && (*timeout < time.Second || *timeout > taskClaimCreateMaxTimeout) {
 			return exitUsage
 		}
 		data, err := io.ReadAll(io.LimitReader(stdin, agentd.TaskClaimMaxRequestBytes+1))
@@ -43,15 +50,20 @@ func taskClaimCommand(ctx context.Context, command string, args []string, stdin 
 			return exitUsage
 		}
 	case "task-claim-list":
-		if *name != "" || *uid != "" || !agentd.ValidTaskClaimPage(*project, *limit, *cursor) {
+		if *timeout != 0 || *name != "" || *uid != "" || !agentd.ValidTaskClaimPage(*project, *limit, *cursor) {
 			return exitUsage
 		}
 	case "task-claim-get":
-		if *limit != 100 || *cursor != "" || !agentd.ValidTaskClaimRead(*project, *name, *uid) {
+		if *timeout != 0 || *limit != 100 || *cursor != "" || !agentd.ValidTaskClaimRead(*project, *name, *uid) {
 			return exitUsage
 		}
 	default:
 		return exitUsage
+	}
+	if command == "task-claim-create" && *timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, *timeout)
+		defer cancel()
 	}
 	s := agentd.Settings{APIURL: strings.TrimSuffix(getenv("AGENTD_API_URL"), "/"), APITokenFile: getenv("AGENTD_API_TOKEN_FILE"), APICAFile: getenv("AGENTD_API_CA_FILE")}
 	if s.APITokenFile == "" {

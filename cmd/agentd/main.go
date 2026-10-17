@@ -58,8 +58,10 @@ Commands:
                            to prepare declared shared references/project roots.
   project-refresh          Bootstrap/fetch the trusted catalog in this private
                            pod using its enabled startup settings; print report.
-  task-claim-create        Claim own explicit task from bounded JSON stdin;
-                           owner/provenance come from authenticated Session.
+  task-claim-create [--timeout D]
+                           Claim own explicit task from bounded JSON stdin;
+                           optional 1s..10s deadline; owner/provenance come
+                           from authenticated Session.
   task-claim-list --project P [--limit N] [--continue CURSOR]
                            Read one bounded ownership metadata page as JSON.
   task-claim-get --project P --claim NAME [--uid UID]
