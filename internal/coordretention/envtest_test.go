@@ -11,6 +11,7 @@ import (
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	devv1 "github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/inbox"
+	"github.com/thaynes43/dev-env/internal/taskclaim"
 	"github.com/thaynes43/dev-env/internal/testenv"
 )
 
@@ -108,6 +109,84 @@ func decideMessage(t *testing.T, ctx context.Context, cfg EvalConfig, name strin
 	}
 	if !summary.Valid {
 		t.Fatal("message was not summarized")
+	}
+	got := Evaluate(ctx, cfg, []Summary{summary})
+	if len(got) != 1 {
+		t.Fatalf("results %#v", got)
+	}
+	return got[0].Decision
+}
+
+// TestEnvtestReplacedOwnerReleases is DESIGN-024 E6. The live Session keeps
+// the owner's name and has a new UID. The claim that still names the old UID
+// is released. A claim that names the live UID stays kept. The delete after
+// grace stays in the fake-client tests.
+func TestEnvtestReplacedOwnerReleases(t *testing.T) {
+	env, err := testenv.Start()
+	if err != nil {
+		t.Fatalf("envtest: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := env.Stop(); err != nil {
+			t.Log("envtest stop:", err)
+		}
+	})
+	ctx := context.Background()
+	scheme := retentionScheme(t)
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	admin, err := client.New(env.Config, client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{retentionNS, sender.Namespace} {
+		if err := admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	session := &devv1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: sender.Namespace, Name: sender.Name}, Spec: devv1.AgentSessionSpec{
+		Repo: "haynes-ops", Agent: devv1.AgentClaude, Mode: devv1.ModeTask, Model: "claude-haiku-4-5", Prompt: "read the replaced owner",
+	}}
+	if err := admin.Create(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	if string(session.UID) == sender.UID {
+		t.Fatal("the API server reused the original owner UID")
+	}
+	replaced := claimSpec()
+	if err := admin.Create(ctx, &coord.TaskClaim{ObjectMeta: metav1.ObjectMeta{Namespace: retentionNS, Name: taskclaim.Name(replaced.Identity)}, Spec: replaced}); err != nil {
+		t.Fatal(err)
+	}
+	current := claimSpec()
+	current.Identity.TaskKey = "issue:302"
+	current.Owner.UID = string(session.UID)
+	if err := admin.Create(ctx, &coord.TaskClaim{ObjectMeta: metav1.ObjectMeta{Namespace: retentionNS, Name: taskclaim.Name(current.Identity)}, Spec: current}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := EvalConfig{Reader: admin, OperatorNamespace: retentionNS, ReconciledNamespaces: map[string]bool{sender.Namespace: true}}
+	if got := decideClaim(t, ctx, cfg, taskclaim.Name(replaced.Identity)); got != Released {
+		t.Fatalf("same name, new UID: %s, want Released", got)
+	}
+	if got := decideClaim(t, ctx, cfg, taskclaim.Name(current.Identity)); got != Kept {
+		t.Fatalf("live UID: %s, want Kept", got)
+	}
+}
+
+func decideClaim(t *testing.T, ctx context.Context, cfg EvalConfig, name string) Decision {
+	t.Helper()
+	sums, err := Summaries(ctx, ListConfig{Reader: cfg.Reader, Namespace: retentionNS, Enabled: map[Kind]bool{TaskClaim: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary Summary
+	for _, s := range sums {
+		if s.Name == name {
+			summary = s
+		}
+	}
+	if !summary.Valid {
+		t.Fatalf("claim %s was not summarized", name)
 	}
 	got := Evaluate(ctx, cfg, []Summary{summary})
 	if len(got) != 1 {
