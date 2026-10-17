@@ -84,6 +84,9 @@ func (c Config) validate() error {
 	if err != nil || string(prompt) != c.Policy.Prompts[1] {
 		return errRefused
 	}
+	if c.Policy.ValidateRendezvousCommands() != nil {
+		return refuseCommandContract()
+	}
 	return nil
 }
 func fileDigest(path, expected string) bool {
@@ -307,8 +310,17 @@ type Receipt struct {
 	Rejection         *gateRejection `json:"rejection,omitempty"`
 }
 
+func refuseCommandContract() error {
+	return fmt.Errorf("%w: command contract", errRefused)
+}
+
 func run(ctx context.Context, c Config, a adapters) (Receipt, error) {
 	receipt := Receipt{State: "NO_DISPATCH_GATE_UNCONFIRMED"}
+	// r10 passed inbox-read a positional name; r11 passed task-claim-create
+	// the argv stdin. Refuse before any observation or B create.
+	if c.Policy.ValidateRendezvousCommands() != nil {
+		return receipt, refuseCommandContract()
+	}
 	end := a.now().Add(5 * time.Minute)
 	if !c.ATaskStarted.IsZero() {
 		end = c.ATaskStarted.Add(5 * time.Minute)

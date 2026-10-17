@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/projectcanary/testutil"
 )
 
@@ -42,6 +43,9 @@ func newFixture(t *testing.T) *fixture {
 	p.NotBefore = time.Date(2026, 10, 16, 17, 50, 0, 0, time.UTC)
 	p.ExpiresAt = p.NotBefore.Add(30 * time.Minute)
 	p.Cohort = "synthetic-rendezvous"
+	commands := projectcanary.RendezvousCommandText()
+	p.Prompts[0] += "\n" + commands
+	p.Prompts[1] += "\n" + commands
 	f := &fixture{now: p.NotBefore.Add(4*time.Minute + 43*time.Second)}
 	f.c = Config{Policy: *p, AUID: aUID, APodUID: podUID, Head: strings.Repeat("a", 40), CommonMarker: "synthetic-common-marker", RepositoryMarker: "synthetic-repo-marker", ATaskStarted: p.NotBefore.Add(4*time.Minute + 4*time.Second), ReceiptDir: t.TempDir()}
 	put := func(name, text string) (string, string) {
@@ -628,5 +632,22 @@ func TestClaimOutputVisibilityBoundary(t *testing.T) {
 			}
 			t.Logf("visibleAfter=%s elapsed=%s creates=%d rejection=%+v", tc.visibleAfter, f.now.Sub(claimAt), f.calls, r.Rejection)
 		})
+	}
+}
+
+func TestGateRefusesProvedBadCommandShapesBeforeObservation(t *testing.T) {
+	f := newFixture(t)
+	message := "message.ce4a9f8a21da2153afba4e115e643770.555066cd2a8dc46506572a4da482f962"
+	bad := "Perform bounded integration without source edits.\n/usr/local/bin/agentd inbox-read " + message + "\n/usr/local/bin/agentd task-claim-create stdin\n"
+	f.c.Policy.Prompts = []string{bad, bad}
+	if err := os.WriteFile(f.c.PromptFile, []byte(bad), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.validate(); !errors.Is(err, errRefused) || !strings.Contains(err.Error(), "command contract") {
+		t.Fatalf("validate accepted bad commands: %v", err)
+	}
+	r, err := run(context.Background(), f.c, f.adapters(t))
+	if !errors.Is(err, errRefused) || !strings.Contains(err.Error(), "command contract") || r.Rejection != nil || f.calls != 0 || len(f.events) != 0 {
+		t.Fatalf("observed or dispatched after bad commands: %+v err%v events=%v calls%d", r, err, f.events, f.calls)
 	}
 }
