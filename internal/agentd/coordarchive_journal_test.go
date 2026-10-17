@@ -39,7 +39,7 @@ func coordEventFixture(resource, state string, at time.Time) protocol.CoordArchi
 		if role == "message" {
 			observed = "message-released"
 		}
-		if state == "present" && n == 0 {
+		if (state == "present" || state == "hold") && n == 0 {
 			observed = "present"
 		}
 		e.Sessions = append(e.Sessions, protocol.CoordArchiveObservation{Role: role, Namespace: "dev-agents", Name: "synthetic-source", UID: "44444444-4444-4444-4444-444444444444", Observed: observed})
@@ -140,6 +140,26 @@ func TestCoordArchiveJournalGraceTransitions(t *testing.T) {
 			writeCoordEvent(t, journalEventPath(t, a, id, 6, "absent"), duplicate)
 			requireCoordGrace(t, a, id, &e.At)
 		})
+	}
+}
+
+func TestCoordArchiveHoldKeepsGraceAndReadsBack(t *testing.T) {
+	a := coordArchiveRig(t)
+	m, raw := coordStoredFixture(t, "taskclaims")
+	id := coordLookupIdentity(m)
+	at := time.Date(2026, 10, 14, 11, 0, 0, 0, time.UTC)
+	absent := coordEventFixture("taskclaims", "absent", at)
+	if _, err := a.PutRecord(m, bytes.NewReader(raw), &absent); err != nil {
+		t.Fatal(err)
+	}
+	hold := coordEventFixture("taskclaims", "hold", at.Add(time.Hour))
+	result, err := a.Mark([]protocol.CoordArchiveMarkRequest{{CoordArchiveIdentity: id, Event: hold}})
+	if err != nil || len(result) != 1 || !result[0].Appended || result[0].GraceStart == nil || !result[0].GraceStart.Equal(at) {
+		t.Fatalf("hold: %v %+v", err, result)
+	}
+	got, err := a.Lookup([]protocol.CoordArchiveIdentity{id})
+	if err != nil || len(got) != 1 || got[0].LatestState != "hold" || got[0].GraceStart == nil || !got[0].GraceStart.Equal(at) {
+		t.Fatalf("lookup: %v %+v", err, got)
 	}
 }
 

@@ -114,6 +114,10 @@ func (a CoordArchive) lookupRecord(id protocol.CoordArchiveIdentity, rel string,
 			return zero, err
 		}
 		result.GraceStart = state.GraceStart
+		if stateName, at := journalTail(state); stateName != "" {
+			result.LatestState = stateName
+			result.LatestAt = at
+		}
 	} else if err := a.requireUnmarked(dir, rel); err != nil {
 		return zero, err
 	}

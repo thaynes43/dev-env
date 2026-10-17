@@ -51,7 +51,7 @@ func (a CoordArchive) readJournal(id protocol.CoordArchiveIdentity, rel string) 
 			}
 			seq, parseErr := strconv.Atoi(name[:8])
 			state := strings.TrimSuffix(name[9:], ".json")
-			if parseErr != nil || seq < 1 || fmt.Sprintf("%08d", seq) != name[:8] || (state != "absent" && state != "present" && state != "reset") {
+			if parseErr != nil || seq < 1 || fmt.Sprintf("%08d", seq) != name[:8] || (state != "absent" && state != "present" && state != "reset" && state != "hold") {
 				return corrupt()
 			}
 			count++
@@ -71,7 +71,7 @@ func (a CoordArchive) readJournal(id protocol.CoordArchiveIdentity, rel string) 
 		found := 0
 		var event protocol.CoordArchiveEvent
 		tail := ""
-		for _, state := range []string{"absent", "present", "reset"} {
+		for _, state := range []string{"absent", "present", "reset", "hold"} {
 			file := filepath.Join(dir, fmt.Sprintf("%08d-%s.json", seq, state))
 			raw, readErr := readArchiveFileLinks(a.Root, file, protocol.MaxCoordArchiveEventBytes, 2)
 			if errors.Is(readErr, fs.ErrNotExist) {
@@ -104,11 +104,31 @@ func (a CoordArchive) readJournal(id protocol.CoordArchiveIdentity, rel string) 
 				at := event.At
 				result.GraceStart = &at
 			}
-		} else {
+		} else if event.State != "hold" {
 			result.GraceStart = nil
 		}
 	}
 	return result, nil
+}
+
+// journalTail is the last folded event. Its time equals GraceStart only for the
+// absent event that opened the current grace.
+func journalTail(state coordJournalState) (string, *time.Time) {
+	if state.Tail == "" || state.LastAt.IsZero() {
+		return "", nil
+	}
+	base := filepath.Base(state.Tail)
+	if len(base) < len("00000001-a.json") || base[8] != '-' || !strings.HasSuffix(base, ".json") {
+		return "", nil
+	}
+	name := strings.TrimSuffix(base[9:], ".json")
+	switch name {
+	case "absent", "present", "reset", "hold":
+		at := state.LastAt.UTC()
+		return name, &at
+	default:
+		return "", nil
+	}
 }
 
 func (a CoordArchive) syncJournal(state coordJournalState) error {
@@ -176,7 +196,7 @@ func (a CoordArchive) appendEvent(rel string, state coordJournalState, event pro
 	if event.State == "absent" {
 		at := event.At
 		state.GraceStart = &at
-	} else {
+	} else if event.State != "hold" {
 		state.GraceStart = nil
 	}
 	if err := a.syncJournal(state); err != nil {

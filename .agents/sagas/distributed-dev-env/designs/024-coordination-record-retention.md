@@ -1,6 +1,6 @@
 # DESIGN-024: Coordination record retention: archive, then delete
 
-- **Status:** Accepted 2026-10-12; R2 put/mark/lookup with journal grace, exact get, immutable storage/indices and incoming cleanup in source, remaining commands and R3–R7 pending
+- **Status:** Accepted 2026-10-12; R2 archive commands in source; coordination retention runnable in source 2026-10-17 and still default off; R3–R7 not accepted or installed
 - **Decision:** [ADR-004](../adrs/004-coordination-record-retention.md) (Q-29,
   Tom, 2026-10-12: "Archive, then delete (Recommended)")
 - **Amends:** [DESIGN-010](010-atomic-task-claims.md),
@@ -9,6 +9,14 @@
   [DESIGN-001 D-67](001-dev-env-v2.md) (the shelf); each carries a dated note
 - **Delivery:** [plan 11](../backlog/11-project-workspaces.md), units R0 to R7
 - **Tracking:** [#175](https://github.com/thaynes43/dev-env/issues/175)
+
+**Runnable slice, 2026-10-17:** the section 5 leader runnable is in source and
+still default off. The operator starts it only with
+`--enable-coordination-retention`, which defaults to false and is refused unless
+`--enable-coordination-archive-reads` is also set.
+`--coordination-retention-grace` defaults to 720h; a shorter value is refused at
+start. No deployment or flag default turns it on. This is source in review, not
+R3, installed, or MVP acceptance.
 
 Everything here is default off. Two operator flags turn it on, in a haynes-ops
 change that comes last (section 9).
@@ -426,10 +434,15 @@ so it is never deleted: the runnable refuses it as `archive_invalid` (section 5)
 ```
 
 `state` is `absent` (the rule was proved), `present` (the rule was proved not
-to hold again, for example a Session came back) or `reset` (the archive lost a
-marked revision).
+to hold again, for example a Session came back), `hold` (the owner was seen
+while a grace was open; the grace start stays, and the record is not deleted
+from that grace) or `reset` (the archive lost a marked revision, or a held
+grace is cleared). A shelf image from before `hold` reads a journal that
+contains one as corrupt, so those records stay refused until the shelf is new
+enough again. Do not roll the shelf image back after a hold has been written.
 `observed` is `not-found`, `uid-replaced`, `present`, `acknowledged` or, for an
-ack, `message-released`. A UID is **marked** when its last event is `absent`.
+ack, `message-released`. A UID is **marked** while it has a grace start. Its
+last event is then `absent` or `hold`. `hold` does not clear the grace start.
 Its **grace start** is the `at` of the first `absent` event after its last
 `present` or `reset` event. An event file is never rewritten.
 
@@ -462,10 +475,10 @@ exclusive lock it:
 
 It prints the stored manifest and the UID's grace start.
 
-**`mark`** reads up to 1024 events on stdin, each `present` or `reset` with its
-identity, and appends each to a UID that is marked. Others are skipped. It never
-appends `absent`; only `put --mark` does, so nothing is marked before it is
-archived.
+**`mark`** reads up to 1024 events on stdin, each `present`, `hold` or `reset`
+with its identity, and appends each to a UID that is marked. Others are skipped.
+It never appends `absent`; only `put --mark` does, so nothing is marked before
+it is archived.
 
 **`lookup`** reads up to 1024 identities (resource, project, name, UID) on stdin
 and, under the shared lock, prints for each whether the archive holds it, its
@@ -547,9 +560,11 @@ every 6 hours, each with a 30-minute deadline.
      Otherwise `put --mark`. Count `marked`.
    - released, marked, grace not over: count it as pending.
    - released, marked, grace over: **release** it (below).
-   - kept, and marked: append a `present` event, batched in one `mark` exec per
-     project. The grace restarts at the next observed absence. Count
-     `grace_reset`.
+   - kept, and marked: append a `hold`, then a `present`, each batched in one
+     `mark` exec per project. The hold keeps the grace start and blocks a
+     delete. The present clears it. The grace restarts at the next observed
+     absence. Count `grace_reset`. The release re-check does the same hold
+     before its present.
    - Unknown: nothing. Count it.
 6. **Order.** Marks and releases run in a stable order (kind, project, name, UID),
    starting just after the key where the last pass stopped, and wrap round. The
@@ -597,6 +612,14 @@ far less in practice (text alone is at most 384 KiB escaped). A page of 50 claim
 or acks holds no text. A batch of 1024 lookups prints about 200 KiB. Nothing is
 kept between passes but the resume key; the archive holds the rest.
 
+**Hold, 2026-10-17.** A present that fails to append leaves the old absence
+in place, and that tail still equals the grace start. That equality is not a
+fence. Before the present, the pass appends `hold`. `hold` keeps the grace
+start and is not an absent tail, so a later leader will not delete from it.
+That leader appends `reset` for a held record only. A grace with no hold is
+unchanged by a leader restart. A shelf lookup with no journal tail refuses
+the release as `archive_outdated`.
+
 **Metrics** (the leader exports them; other replicas export none of these):
 
 | Metric | Type | Labels |
@@ -607,7 +630,7 @@ kept between passes but the resume key; the archive holds the rest.
 | `dev_env_coordination_retention_grace_resets_total` | counter | `kind` |
 | `dev_env_coordination_retention_deleted_total` | counter | `kind` |
 | `dev_env_coordination_retention_pending` | gauge | `kind`, from the last `complete` or `capped` pass |
-| `dev_env_coordination_retention_refused_total` | counter | `kind`, `reason`: `unknown`, `owner_present`, `archive_invalid`, `archive_missing`, `archive_mismatch`, `precondition_failed`, `forbidden` |
+| `dev_env_coordination_retention_refused_total` | counter | `kind`, `reason`: `unknown`, `archive_outdated`, `owner_present`, `archive_invalid`, `archive_missing`, `archive_mismatch`, `precondition_failed`, `forbidden` |
 
 The existing `dev_env_coordination_records*` series keep their names. Their help
 text changes from "never deleted" to counting live records.
