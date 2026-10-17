@@ -138,9 +138,7 @@ func TestNeverStartedReleaseLiftsFinalizerOnlyWhenPodAndHomeAreAbsent(t *testing
 	if allowed, err = r.releaseIfEmpty(ctx, fresh); allowed || err != nil {
 		t.Fatalf("present Pod: released=%v err=%v", allowed, err)
 	}
-	if !controllerutil.ContainsFinalizer(fresh, Finalizer) {
-		t.Fatal("present Pod lost the finalizer")
-	}
+	stored(t, c, s)
 
 	s = neverStartedReleaseSession()
 	home := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: HomeClaimName(s.Name), Namespace: s.Namespace, UID: "home-kept", Finalizers: []string{Finalizer}}}
