@@ -100,6 +100,21 @@ func (f *fixture) adapters(t *testing.T) adapters {
 		return raw, f.dispatchErr
 	}}
 }
+func TestGateAcceptsDirectAgentdClaimStdout(t *testing.T) {
+	f := newFixture(t)
+	p := f.c.Policy
+	claim := apiv1.TaskClaimResult{Outcome: "Created", Claim: apiv1.TaskClaim{UID: "55555555-5555-4555-8555-555555555555", Identity: apiv1.TaskClaimIdentity{Project: "dev-env", Repository: "dev-env", TaskKey: "task:" + p.Key(0)}, Owner: apiv1.TaskClaimOwner{Namespace: "dev-agents", Name: p.SessionName(0), UID: aUID}, Actor: apiv1.TaskClaimActor{Kind: "session", PodUID: podUID, PodName: p.SessionName(0)}, Provenance: apiv1.TaskClaimProvenance{CatalogRevision: p.CatalogRevision, RulesRevision: p.RulesRevision, ReportedHead: f.c.Head}, CreatedAt: p.NotBefore.Add(4*time.Minute + 22*time.Second)}}
+	raw, err := json.Marshal(claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.SplitN(f.o.Log.Text, "\n", 3)
+	f.o.Log.Text = parts[0] + "\n" + parts[1] + "\n" + string(raw) + "\n"
+	r, err := run(context.Background(), f.c, f.adapters(t))
+	if err != nil || r.State != "B_CREATE_ACCEPTED_NOT_PILOT_ACCEPTANCE" || f.calls != 1 {
+		t.Fatalf("direct stdout: %+v err%v calls%d", r, err, f.calls)
+	}
+}
 func TestGateInvokesPreboundDispatchWithoutReportingTurn(t *testing.T) {
 	f := newFixture(t)
 	r, err := run(context.Background(), f.c, f.adapters(t))
@@ -179,6 +194,9 @@ func TestGateRefusesWrongBindingsAndTerminalFacts(t *testing.T) {
 				f.o.Session.Model = "wrong"
 			case "endedTask":
 				f.o.Session.AgentStatus.Task = &apiv1.TaskResult{}
+				f.o.Session.AgentStatus.State = "exited"
+				parts := strings.SplitN(f.o.Log.Text, "\n", 3)
+				f.o.Log.Text = parts[0] + "\n" + parts[1] + "\n"
 			case "staleHeartbeat":
 				beat := f.now.Add(-maxHeartbeatAge - time.Second)
 				f.o.Session.AgentStatus.LastHeartbeat = &beat

@@ -136,6 +136,54 @@ func readyForLog(s apiv1.Session) bool {
 	return a != nil && a.Boot == "ready" && (a.State == "busy" || a.State == "running") && a.Head != "" && a.ProjectBootstrap != nil && a.ProjectBootstrap.State == "Ready"
 }
 
+// claimReceiptFromLog accepts the reviewed wrapper line or a direct agentd
+// task-claim-create stdout line when that is what reached the supported log.
+func claimReceiptFromLog(text string) (*apiv1.TaskClaimResult, string) {
+	var result *apiv1.TaskClaimResult
+	for _, line := range strings.Split(text, "\n") {
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var entry struct {
+			Operation string `json:"operation"`
+			ExitCode  *int   `json:"exitCode"`
+			Stdout    string `json:"stdout"`
+		}
+		if json.Unmarshal([]byte(line), &entry) == nil && entry.Operation == "task-claim-create" {
+			if entry.ExitCode == nil || *entry.ExitCode != 0 {
+				if result != nil {
+					return nil, "claim_receipt_duplicate"
+				}
+				return nil, "claim_receipt_failed"
+			}
+			if result != nil {
+				return nil, "claim_receipt_duplicate"
+			}
+			var r apiv1.TaskClaimResult
+			if json.Unmarshal([]byte(entry.Stdout), &r) != nil {
+				return nil, "claim_receipt_parse"
+			}
+			result = &r
+			continue
+		}
+		var direct apiv1.TaskClaimResult
+		if json.Unmarshal([]byte(line), &direct) != nil {
+			continue
+		}
+		if direct.Outcome != "Created" && direct.Outcome != "Confirmed" {
+			continue
+		}
+		if !protocol.ValidKubeUID(direct.Claim.UID) {
+			continue
+		}
+		if result != nil {
+			return nil, "claim_receipt_duplicate"
+		}
+		result = &direct
+	}
+	return result, ""
+}
+
 func validateGate(c Config, o Observation, now time.Time) (*Deadlines, error) {
 	s := o.Session
 	reject := func(predicate string) error {
@@ -162,10 +210,13 @@ func validateGate(c Config, o Observation, now time.Time) (*Deadlines, error) {
 		return nil, nil
 	}
 	a := s.AgentStatus
-	if a.Task != nil || a.State == "exited" || (a.Head != "" && a.Head != c.Head) {
+	if a.Head != "" && a.Head != c.Head {
 		return nil, reject("task_ended_or_head_changed")
 	}
-	if !readyForLog(s) {
+	if o.Log.Text == "" {
+		if !readyForLog(s) {
+			return nil, nil
+		}
 		return nil, nil
 	}
 	if s.PrivateHistory == nil || s.PrivateHistory.LastExecutor == nil {
@@ -209,35 +260,14 @@ func validateGate(c Config, o Observation, now time.Time) (*Deadlines, error) {
 	}
 	c.ATaskStarted = started
 
-	var result *apiv1.TaskClaimResult
-	for _, line := range strings.Split(o.Log.Text, "\n") {
-		if !strings.HasPrefix(line, "{") {
-			continue
-		}
-		var entry struct {
-			Operation string `json:"operation"`
-			ExitCode  *int   `json:"exitCode"`
-			Stdout    string `json:"stdout"`
-		}
-		if json.Unmarshal([]byte(line), &entry) != nil || entry.Operation != "task-claim-create" {
-			continue
-		}
-		if entry.ExitCode == nil || *entry.ExitCode != 0 {
-			if result != nil {
-				return nil, reject("claim_receipt_duplicate")
-			}
-			return nil, reject("claim_receipt_failed")
-		}
-		if result != nil {
-			return nil, reject("claim_receipt_duplicate")
-		}
-		var r apiv1.TaskClaimResult
-		if json.Unmarshal([]byte(entry.Stdout), &r) != nil {
-			return nil, reject("claim_receipt_parse")
-		}
-		result = &r
+	result, receiptReject := claimReceiptFromLog(o.Log.Text)
+	if receiptReject != "" {
+		return nil, reject(receiptReject)
 	}
 	if result == nil {
+		if a.Task != nil || a.State == "exited" {
+			return nil, reject("task_ended_or_head_changed")
+		}
 		return nil, nil
 	}
 	r := result.Claim
@@ -396,7 +426,14 @@ func liveAdapters(c Config, invoke func(context.Context, string, []string) ([]by
 		}
 		// Container creation/bootstrap has no task log yet (captured404).
 		// Wait using supported metadata; never swallow a real CLI error.
-		if !readyForLog(o.Session) {
+		fetchLog := readyForLog(o.Session)
+		if !fetchLog {
+			a := o.Session.AgentStatus
+			if a != nil && a.Boot == "ready" && a.Head != "" && o.Session.PrivateHistory != nil && o.Session.PrivateHistory.LastExecutor != nil && (a.State == "exited" || a.Task != nil) {
+				fetchLog = true
+			}
+		}
+		if !fetchLog {
 			return o, nil
 		}
 		raw, err = read(ctx, "log", c.Policy.SessionName(0), "--tail", "5000", "--once", "-o", "json")
