@@ -1,6 +1,6 @@
 # DESIGN-024: Coordination record retention: archive, then delete
 
-- **Status:** Accepted 2026-10-12; R2 put/mark/lookup with journal grace, exact get, immutable storage/indices and incoming cleanup in source, remaining commands and R3–R7 pending
+- **Status:** Accepted 2026-10-12; R2 archive commands in source; coordination retention runnable in source 2026-10-17 and still default off; R3–R7 not accepted or installed
 - **Decision:** [ADR-004](../adrs/004-coordination-record-retention.md) (Q-29,
   Tom, 2026-10-12: "Archive, then delete (Recommended)")
 - **Amends:** [DESIGN-010](010-atomic-task-claims.md),
@@ -9,6 +9,14 @@
   [DESIGN-001 D-67](001-dev-env-v2.md) (the shelf); each carries a dated note
 - **Delivery:** [plan 11](../backlog/11-project-workspaces.md), units R0 to R7
 - **Tracking:** [#175](https://github.com/thaynes43/dev-env/issues/175)
+
+**Runnable slice, 2026-10-17:** the section 5 leader runnable is in source and
+still default off. The operator starts it only with
+`--enable-coordination-retention`, which defaults to false and is refused unless
+`--enable-coordination-archive-reads` is also set.
+`--coordination-retention-grace` defaults to 720h; a shorter value is refused at
+start. No deployment or flag default turns it on. This is source in review, not
+R3, installed, or MVP acceptance.
 
 Everything here is default off. Two operator flags turn it on, in a haynes-ops
 change that comes last (section 9).

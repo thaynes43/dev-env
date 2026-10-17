@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -44,6 +45,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver"
 	"github.com/thaynes43/dev-env/internal/contextpublication"
 	"github.com/thaynes43/dev-env/internal/controller"
+	"github.com/thaynes43/dev-env/internal/coordretention"
 	"github.com/thaynes43/dev-env/internal/grantexpiry"
 	"github.com/thaynes43/dev-env/internal/inbox"
 	"github.com/thaynes43/dev-env/internal/podexec"
@@ -121,6 +123,8 @@ type options struct {
 	homeHistoryArchive            bool
 	historyArchiveReads           bool
 	coordinationArchiveReads      bool
+	coordinationRetention         bool
+	coordinationRetentionGrace    time.Duration
 	homeExpiryDelete              bool
 	homeExpiryGrace               time.Duration
 	privateProjectCanariesEnabled bool
@@ -159,6 +163,8 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.homeHistoryArchive, "enable-home-history-archive", false, "run the HOME expiry of private Sessions up to Archived: after the grace, rescue in a hold pod bound to the HOME, export the provider history into the shelf's history archive and verify it; deletes no HOME (DESIGN-025 5); needs --enable-private-terminal-record")
 	fs.BoolVar(&o.historyArchiveReads, "enable-history-archive-reads", false, "serve shared archived provider history on /v1/history to configured trusted callers (DESIGN-025 8, D-92); off, those routes answer 404")
 	fs.BoolVar(&o.coordinationArchiveReads, "enable-coordination-archive-reads", false, "serve default-off coordination archive fallbacks and archived-only lists to existing authorized callers; creates and ACL scopes stay unchanged (DESIGN-024 6)")
+	fs.BoolVar(&o.coordinationRetention, "enable-coordination-retention", false, "run the leader-only coordination retention pass; default off, and refused unless archive reads are on (DESIGN-024 5)")
+	fs.DurationVar(&o.coordinationRetentionGrace, "coordination-retention-grace", coordretention.DefaultGrace, "coordination retention grace after the latest absence; it may only lengthen 720h (DESIGN-024 5)")
 	fs.BoolVar(&o.homeExpiryDelete, "enable-home-expiry-delete", false, "let the HOME expiry go past Archived: verify the archive again, delete the private HOME with UID and resourceVersion preconditions and release a reaped Session (DESIGN-025 6.5, 6.6); needs --enable-home-history-archive and --enable-history-archive-reads, and stays off until the archived read is accepted on the installed system (#174)")
 	fs.DurationVar(&o.homeExpiryGrace, "home-expiry-grace", controller.DefaultHomeExpiryGrace, "the HOME expiry's grace after the recorded stop; it may only lengthen Q-31's 720h (DESIGN-025 13)")
 	fs.BoolVar(&o.retainedCommonRules, "enable-retained-common-rules", false, "retain reviewed common instruction inputs for new fixed private managed canaries")
@@ -378,6 +384,12 @@ func parseFlags(args []string) (options, error) {
 	if o.homeExpiryGrace < controller.DefaultHomeExpiryGrace {
 		return o, fmt.Errorf("--home-expiry-grace %s is under %s: the grace may only be lengthened (DESIGN-025 13)", o.homeExpiryGrace, controller.DefaultHomeExpiryGrace)
 	}
+	if o.coordinationRetention && !o.coordinationArchiveReads {
+		return o, errors.New("--enable-coordination-retention requires --enable-coordination-archive-reads: a deleted coordination record must stay readable (DESIGN-024 5)")
+	}
+	if o.coordinationRetentionGrace < coordretention.DefaultGrace {
+		return o, fmt.Errorf("--coordination-retention-grace %s is under %s: the grace may only be lengthened (DESIGN-024 5)", o.coordinationRetentionGrace, coordretention.DefaultGrace)
+	}
 	if o.privatePilot != nil && (!o.directoryEnabled || !slices.Contains(o.directoryProjects, projectcanary.PilotProject)) {
 		return o, errors.New("sealed pilot requires the dev-env session directory")
 	}
@@ -531,6 +543,13 @@ func run(args []string) error {
 		Templates: apiserver.TemplatesFrom(mgr.GetClient(), templatesKey), Log: ctrl.Log.WithName("shelf")}); err != nil {
 		return err
 	}
+	// Coordination retention is leader-only and stays off unless the flag is set
+	// (DESIGN-024 5). The flag is refused at parse time when archive reads are off.
+	if o.coordinationRetention {
+		if err := mgr.Add(newCoordinationRetention(o, mgr.GetClient(), mgr.GetAPIReader(), rescueShelf, &shelf.CoordinationArchive{Shelf: rescueShelf}, shelfSlots, ctrl.Log.WithName("coordination-retention"))); err != nil {
+			return err
+		}
+	}
 	if o.apiAddr != "0" {
 		var claims *taskclaim.KubeStore
 		if o.taskClaimsEnabled {
@@ -614,4 +633,31 @@ func run(args []string) error {
 		}
 	}
 	return mgr.Start(ctrl.SetupSignalHandler())
+}
+
+// newCoordinationRetention builds the default-off retention runnable. A false
+// flag returns nil so the process does not start a pass.
+func newCoordinationRetention(o options, c client.Client, reader client.Reader, pods *shelf.Shelf, archive *shelf.CoordinationArchive, slots *shelf.ExecSlots, log logr.Logger) *coordretention.Runnable {
+	if !o.coordinationRetention {
+		return nil
+	}
+	return &coordretention.Runnable{
+		Enabled:    true,
+		Grace:      o.coordinationRetentionGrace,
+		Client:     c,
+		Reader:     reader,
+		Namespace:  o.templatesNamespace,
+		Reconciled: map[string]bool{o.sessionNamespace: true},
+		Kinds: map[coordretention.Kind]bool{
+			coordretention.TaskClaim:        o.taskClaimsEnabled,
+			coordretention.PublishedContext: o.contextsEnabled,
+			coordretention.InboxMessage:     o.inboxEnabled,
+			coordretention.InboxReadAck:     o.inboxEnabled,
+		},
+		Pods:       pods,
+		Archive:    archive,
+		Slots:      slots,
+		Log:        log,
+		Registerer: ctrlmetrics.Registry,
+	}
 }

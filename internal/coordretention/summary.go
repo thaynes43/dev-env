@@ -1,5 +1,7 @@
-// Package coordretention contains the read-only inputs for coordination-record
-// retention. It has no runnable, mutation, archive transport, or wiring.
+// Package coordretention lists coordination records, decides release rules, and
+// runs the leader-only retention pass from DESIGN-024 section 5. The runnable
+// is default off: the operator starts it only with --enable-coordination-retention,
+// which itself stays off unless a deployment sets it. Deletes go through release.
 package coordretention
 
 import (
