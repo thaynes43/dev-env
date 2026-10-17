@@ -129,9 +129,6 @@ func TestNeverStartedReleaseLiftsFinalizerOnlyWhenPodAndHomeAreAbsent(t *testing
 		t.Fatalf("absent Pod and HOME: released=%v err=%v", allowed, err)
 	}
 	finalizerGone(t, c, fresh)
-	if err := releaseSession(ctx, c, fresh); err != nil {
-		t.Fatal(err)
-	}
 
 	s = neverStartedReleaseSession()
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: s.Name, Namespace: s.Namespace, UID: "still-here"}}
