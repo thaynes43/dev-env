@@ -340,6 +340,41 @@ func (s *stringList) Set(v string) error {
 	return nil
 }
 
+func (a *app) breakglass(ctx context.Context, args []string) error {
+	cmd := newCommand("breakglass", outputJSON)
+	var reason, ttl string
+	cmd.fs.StringVar(&reason, "reason", "", "")
+	cmd.fs.StringVar(&ttl, "ttl", "", "")
+	pos, err := cmd.parse(a, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) > 0 || strings.TrimSpace(reason) == "" {
+		return usageError("breakglass takes --reason and an optional --ttl; agent-run help breakglass")
+	}
+	// The API sets the role. This command does not name one, and it does not
+	// approve the grant or install it.
+	req := apiv1.CreateGrantRequest{Type: apiv1.GrantTypeBreakglass, Reason: reason, TTL: ttl}
+	c, err := a.connect(ctx, cmd.c.conn)
+	if err != nil {
+		return err
+	}
+	var out apiv1.Grant
+	status, err := a.call(ctx, c, http.MethodPost, apiv1.GrantsPath, nil, req, &out)
+	if err != nil {
+		return err
+	}
+	if cmd.c.output == outputJSON {
+		return a.printJSON(out)
+	}
+	if status == http.StatusOK {
+		a.outf("existing grant\n")
+	} else {
+		a.outf("requested\n")
+	}
+	return a.printGrant(out)
+}
+
 func grantPhaseKnown(phase string) bool {
 	for _, known := range grantPhases {
 		if phase == known {

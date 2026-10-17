@@ -133,6 +133,33 @@ func TestGrantShowOneName(t *testing.T) {
 	}
 }
 
+func TestBreakglassPostsTheAsk(t *testing.T) {
+	h := newHarness(t)
+	serveRaw(h, map[string]func(*http.Request) (int, string){
+		apiv1.GrantsPath: func(r *http.Request) (int, string) {
+			if r.Method != http.MethodPost {
+				t.Errorf("method %s", r.Method)
+			}
+			return http.StatusCreated, `{"name":"grant-1017-170000-ab12","phase":"Pending","type":"breakglass","session":"task-1","ttl":"30m","reason":"the node is stuck","approvalURL":"https://broker.example/bg"}`
+		},
+	})
+	h.mustRun(ExitOK, "breakglass", "--reason", "the node is stuck", "--ttl", "20m")
+	contains(t, "stdout", h.stdout.String(), "requested", "type: breakglass", "approval: https://broker.example/bg")
+	var got apiv1.CreateGrantRequest
+	if err := json.Unmarshal(h.api.requests()[0].body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Type != "breakglass" || got.Reason != "the node is stuck" || got.TTL != "20m" || got.Role != "" {
+		t.Fatalf("body %#v", got)
+	}
+	before := len(h.api.requests())
+	h.mustRun(ExitUsage, "breakglass")
+	h.mustRun(ExitUsage, "breakglass", "--reason", "   ")
+	if len(h.api.requests()) != before {
+		t.Fatal("a refused breakglass reached the API")
+	}
+}
+
 func TestGrantNameAndPhase(t *testing.T) {
 	if !validGrantCLIName("grant-abc") || validGrantCLIName("grant-") || validGrantCLIName("Grant-abc") || validGrantCLIName("grant-abc/extra") {
 		t.Fatal("grant name check")
