@@ -1,18 +1,63 @@
 # HANDOFF: start here
 
-**Current stopped state (2026-10-16):** read the [Cursor wind-down handoff](DEV-ENV-CURSOR-HANDOFF-2026-10-16.md)
-first. It supersedes older ownership/next-pickup wording below. Implementation,
-manual tests, releases and trials remain stopped; this link grants no restart.
+**Start here (2026-10-16):** read the [Cursor wind-down handoff](DEV-ENV-CURSOR-HANDOFF-2026-10-16.md)
+for the partial rendezvous windows, consumed seals and shutdown evidence to preserve.
+Do not repeat those attempts. Its uncommitted freshness WIP and v2.29.2 installed
+paragraphs are historical; **installed state and next work** are the
+[2026-10-16 block](#installed-state--2026-10-16-utc) below.
 
 The front door for any agent that opens this repo, in the cluster's dev-env pod or on
 Tom's own machine. Read this page, then [CLAUDE.md](../CLAUDE.md) (the rules), then
-the saga. To continue building, follow the
-[next work, in order](CLAUDE-RESUME-2026-10-13.md#next-work-in-order) in the
-2026-10-13 Claude pickup brief. It continues the
-[six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap)
-of the 2026-10-12 brief, which still holds the requirement history and the
-stopped routes. [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is
-the historical work order for the first build session.
+the saga. The 2026-10-13 Claude pickup brief still holds requirement history,
+owner gates and the
+[six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap);
+its enumerated next-work list is stale where this page's 2026-10-16 sections disagree.
+[KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is the historical first-build order.
+
+## Installed state — 2026-10-16 UTC
+
+**Released and installed v2.29.4**, release commit
+`f315635ad6fc30129da4e0310295634e57b78422`, including heartbeat freshness
+[#358](https://github.com/thaynes43/dev-env/pull/358) (`a7c8e609`) and Luna pilot
+[#360](https://github.com/thaynes43/dev-env/pull/360) (`e4350bc5`). The sealed pilot
+model is `gpt-6-luna`. The rendezvous harness freshness correction is merged and
+reviewed; do not re-land that WIP.
+
+- Task image `ghcr.io/thaynes43/dev-env:2.29.4@sha256:9f1213cce94cc0ad33fc01eb124136ec82a6cc47f1c9d7a997775ae3a5117bd2`,
+  cosign verified.
+- Operator `ghcr.io/thaynes43/dev-env-operator:sha-f315635@sha256:60f66558bd178543c64ff4b5554fbd204fd9c023f7f9d8c57b1b9016b7a4099a`,
+  publish run [38990213487](https://github.com/thaynes43/dev-env/actions/runs/38990213487),
+  keyless verified.
+- [haynes-ops #3992](https://github.com/thaynes43/haynes-ops/pull/3992) merged
+  `08cfff93f0ab3b286673df4e0116fe8c30819daf`. Flux applied `dev-env-crds`,
+  `dev-env-templates` and `dev-env-operator`. The live CRD requires `gpt-6-luna` for
+  the sealed pilot.
+
+**Chapter 7 rendezvous is not accepted.** Cohort `c7-rendezvous-1016-r3` (pod
+`private-pilot-c7-rendezvous-1016-r3-a`) exited **125** before any claim. Retain that
+failure; do not treat it as a pilot pass. The cursor handoff still holds earlier
+partial windows and original-A shutdown proof.
+
+**Held without reopening:** H7 reader work under Q-36 and the consumed Q-37 PV Retain
+step stay held unless Tom explicitly reopens them in a new ruling.
+
+## Next work — 2026-10-16 UTC
+
+1. Read this page, the cursor handoff (failures only), [CLAUDE.md](../CLAUDE.md) and
+   the saga. Do not reopen shipped [#358](https://github.com/thaynes43/dev-env/pull/358)
+   / [#360](https://github.com/thaynes43/dev-env/pull/360) or re-deploy v2.29.4 unless
+   a new pin is required for unrelated work.
+2. **Live pilot windows are open 24/7** (Tom). Do not add a separate owner go-ahead gate
+   for scheduling a new rendezvous attempt. Each attempt still needs fresh explicit
+   seal/window/identity bindings, one-shot dispatch, checked remove-only closure and
+   peer/v1 preservation; consumed attempts stay consumed.
+3. The smallest remaining Chapter 7 gap is the complete two-agent rendezvous (ACK,
+   publication, authorized retrieval after original A's task completion). Bind new
+   identities before dispatch; preserve r3 and prior partial records.
+4. For everything outside the sealed Luna pilot, continue the
+   [2026-10-13 next-work order](CLAUDE-RESUME-2026-10-13.md#next-work-in-order) where
+   it does not conflict with this page. H7 reader (Q-36) and Q-37 Retain remain out of
+   scope until Tom reopens them.
 
 ## General archive get selectors: recorded-time source portion — 2026-10-14 UTC
 
@@ -2521,11 +2566,15 @@ plan 02 is done. The current order is the pickup brief's
 
 ## What happens next
 
-Follow the [next work, in order](CLAUDE-RESUME-2026-10-13.md#next-work-in-order)
-in the 2026-10-13 Claude pickup brief, which continues the
-[six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap)
-of the 2026-10-12 brief. The list below is the historical 2026-10-07 start
-order, first titled "What happens first". Each item in it is done or superseded.
+**Current order:** the [Next work — 2026-10-16 UTC](#next-work--2026-10-16-utc)
+section at the top of this page. It supersedes the 2026-10-13 brief's enumerated
+list where they differ (installed v2.29.4, shipped freshness, Luna pilot CRD, r3
+failure, 24/7 live windows, held H7/Q-37).
+
+The [2026-10-13 next-work list](CLAUDE-RESUME-2026-10-13.md#next-work-in-order)
+and [six-step roadmap](CLAUDE-RESUME-2026-10-12.md#next-bounded-work-and-the-six-step-roadmap)
+remain the requirement-history source. The list below is the historical 2026-10-07
+start order, first titled "What happens first". Each item in it is done or superseded.
 
 1. **The laptop handoff** ([`handoffs/2026-10-06-tom-laptop-settings.md`](handoffs/2026-10-06-tom-laptop-settings.md)).
    All three parts are done (2026-10-07; the checklist below says how each was
