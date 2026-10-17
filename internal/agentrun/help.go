@@ -34,8 +34,8 @@ Usage:
   agent-run grant list [--session <s>] [--phase <p>] [--mine]
                                                   list access grants, newest first
   agent-run grant show <grant-id>                 show one access grant
-  agent-run grant request --type <t> --reason <why>
-                                                  ask for a grant; Tom still approves it
+  agent-run grant request --type <t> --reason <why> [--no-wait]
+                                                  ask for a grant and wait for the answer
   agent-run grant release <grant-id>              ask the broker to end one grant
   agent-run grant use <grant-id>|default         select that kube context in this pod
   agent-run mcp                                   access tools on stdin for the session
@@ -371,7 +371,7 @@ A reap returns at once; agent-run show <name> follows it until the session is go
 `,
 	"grant": `Usage: agent-run grant list [--session <name>] [--phase <phase>] [--mine] [-o json]
        agent-run grant show <grant-id> [-o json]
-       agent-run grant request --type <type> --reason <why> [type flags] [-o json]
+       agent-run grant request --type <type> --reason <why> [--no-wait] [type flags] [-o json]
        agent-run grant release <grant-id> [-o json]
        agent-run grant use <grant-id>|default
 
@@ -387,8 +387,10 @@ grant list prints name, phase, type, session, TTL and expiry, newest first.
 
 grant show prints one grant. The name is grant-<id>. It does not print a token.
 
-grant request asks for one grant for the calling session. An identical ask
-returns the grant the session already holds.
+grant request asks for one grant for the calling session. It prints the
+approval page, then reads the grant every 5s until the phase leaves Pending
+or 30m passes. --no-wait returns the pending grant. An identical ask returns
+the grant the session already holds.
   --type <type>      kube, egress, credential or breakglass
   --reason <why>     required; Tom reads it on the approval page
   --role <role>      kube catalog role

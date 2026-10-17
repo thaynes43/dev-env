@@ -90,9 +90,10 @@ In this repo:
   `grant_status` and `release_access` on stdin, and agentd registers that
   command as the `dev-env` server unless mcp.json already names one.
   `agent-run breakglass` posts a break-glass ask and prints the approval page.
-  The API sets the role. None of these commands approve a grant or install it.
-  Step 7 stays open: a request does not wait for Tom's answer, and use is not
-  yet proved against a live grant.
+  The API sets the role. `grant request` waits up to 30 minutes for a phase
+  other than Pending, and `--no-wait` returns immediately. None of these
+  commands approve a grant or install it. Step 7 stays open: use is not yet
+  proved against a live grant.
 - [ ] 8. Credential grants (Q-07): the keeper mints the Proxmox token or signs an SSH
   certificate, installs it in the pod's `grants` volume, and removes it at expiry.
   The first check failed on 2026-10-07: the operator token cannot mint an expiring
