@@ -31,6 +31,11 @@ func TestCollectStatusStates(t *testing.T) {
 				t.Errorf("%+v", st)
 			}
 		}},
+		{"configured model and effort", func(Settings) {}, func(t *testing.T, st protocol.Status) {
+			if st.Model != "claude-opus-5-5" || st.Effort != "high" {
+				t.Errorf("model/effort %+v", st)
+			}
+		}},
 		{"boot failed", func(s Settings) {
 			_ = writeJSONFile(s.statePath(bootFile), bootRecord{BootID: "b1", Boot: protocol.BootFailed, AgentError: "plan credential unavailable",
 				Steps: []Step{{Name: "git", State: StepWarn}, {Name: "mcp", State: StepOK}, {Name: "agent", State: StepFail}}})
@@ -86,7 +91,7 @@ func TestCollectStatusStates(t *testing.T) {
 				t.Fatal(err)
 			}
 			tc.setup(s)
-			st := CollectStatus(context.Background(), git, s, protocol.Session{Name: "s"}, now)
+			st := CollectStatus(context.Background(), git, s, protocol.Session{Name: "s", Model: "claude-opus-5-5", Effort: "high"}, now)
 			if st.Session != "s" || !strings.HasPrefix(st.Agentd, "agentd ") || !st.ObservedAt.Equal(now) {
 				t.Errorf("header %+v", st)
 			}

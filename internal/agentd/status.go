@@ -33,6 +33,8 @@ const startWindow = time.Minute
 func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Session, now time.Time) protocol.Status {
 	st := protocol.Status{
 		Session:    sess.Name,
+		Model:      sess.Model,
+		Effort:     sess.Effort,
 		Agentd:     version.Get().String("agentd"),
 		Boot:       protocol.BootBooting,
 		Agent:      protocol.AgentState{State: protocol.AgentPending},

@@ -56,6 +56,10 @@ type Step struct {
 // `agentd ctl status`. The operator copies it into the AgentSession's status.
 type Status struct {
 	Session string `json:"session"`
+	// Model and Effort are the session's configured values, not proof of the
+	// serving model (DESIGN-018).
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
 	// Agentd is agentd's version line.
 	Agentd   string    `json:"agentd"`
 	BootID   string    `json:"bootId"`
