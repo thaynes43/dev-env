@@ -11,8 +11,10 @@ import (
 // a reaped private Session whose retention admission is NeverStarted, with no
 // executor attempt and no recorded HOME. The caller still proves, by uncached
 // reads, that no Pod and no HOME claim of its names exist. This predicate does
-// not delete a volume, delete a pod, or lift a finalizer. archive,
-// releaseIfEmpty and releaseSession do not consult it yet.
+// not delete a volume, delete a pod, or lift a finalizer. archive skips its
+// private-history refusal only when this is nil and the cache shows no claim.
+// releaseIfEmpty then requires uncached NotFound for the Pod and the HOME
+// before releaseSession may lift the Session finalizer.
 func neverStartedReleaseAllowed(s *v1alpha1.AgentSession) error {
 	h := s.Status.PrivateHistory
 	switch {

@@ -2,8 +2,10 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -89,25 +91,97 @@ func TestNeverStartedReleasePredicate(t *testing.T) {
 	}
 }
 
-func TestNeverStartedReleaseDoesNotLiftTheFinalizer(t *testing.T) {
+func TestNeverStartedReleaseLiftsFinalizerOnlyWhenPodAndHomeAreAbsent(t *testing.T) {
+	ctx := context.Background()
+	stored := func(t *testing.T, c client.Client, s *v1alpha1.AgentSession) *v1alpha1.AgentSession {
+		t.Helper()
+		var fresh v1alpha1.AgentSession
+		if err := c.Get(ctx, client.ObjectKeyFromObject(s), &fresh); err != nil {
+			t.Fatal(err)
+		}
+		if fresh.DeletionTimestamp.IsZero() || !controllerutil.ContainsFinalizer(&fresh, Finalizer) {
+			t.Fatal("stored Session lost its reap timestamp or finalizer")
+		}
+		return &fresh
+	}
+	finalizerGone := func(t *testing.T, c client.Client, s *v1alpha1.AgentSession) {
+		t.Helper()
+		var got v1alpha1.AgentSession
+		if err := c.Get(ctx, client.ObjectKeyFromObject(s), &got); err != nil {
+			t.Fatal(err)
+		}
+		if controllerutil.ContainsFinalizer(&got, Finalizer) {
+			t.Fatal("finalizer stayed after both uncached reads were NotFound")
+		}
+	}
+
 	s := neverStartedReleaseSession()
-	if err := neverStartedReleaseAllowed(s); err != nil {
+	c := privateHistoryClient(s)
+	fresh := stored(t, c, s)
+	r := &Reconciler{Client: c, APIReader: c}
+	allowed, err := r.releaseIfEmpty(ctx, fresh)
+	if !allowed || err != nil {
+		t.Fatalf("absent Pod and HOME: released=%v err=%v", allowed, err)
+	}
+	finalizerGone(t, c, fresh)
+	if err := releaseSession(ctx, c, fresh); err != nil {
 		t.Fatal(err)
 	}
-	c := privateHistoryClient(s)
-	r := &Reconciler{Client: c, APIReader: c}
-	allowed, err := r.releaseIfEmpty(context.Background(), s)
-	if allowed || err == nil {
-		t.Fatal("releaseIfEmpty lifted a never-started Session before it consults the predicate")
+
+	s = neverStartedReleaseSession()
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: s.Name, Namespace: s.Namespace, UID: "still-here"}}
+	c = privateHistoryClient(s, pod)
+	fresh = stored(t, c, s)
+	r = &Reconciler{Client: c, APIReader: c}
+	if allowed, err = r.releaseIfEmpty(ctx, fresh); allowed || err != nil {
+		t.Fatalf("present Pod: released=%v err=%v", allowed, err)
 	}
-	var got v1alpha1.AgentSession
-	if getErr := c.Get(context.Background(), client.ObjectKeyFromObject(s), &got); getErr != nil {
-		t.Fatal(getErr)
+	if !controllerutil.ContainsFinalizer(fresh, Finalizer) {
+		t.Fatal("present Pod lost the finalizer")
 	}
-	if !controllerutil.ContainsFinalizer(&got, Finalizer) {
-		t.Fatal("finalizer was removed")
+
+	s = neverStartedReleaseSession()
+	home := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: HomeClaimName(s.Name), Namespace: s.Namespace, UID: "home-kept", Finalizers: []string{Finalizer}}}
+	c = privateHistoryClient(s, home)
+	fresh = stored(t, c, s)
+	r = &Reconciler{Client: c, APIReader: c}
+	if allowed, err = r.releaseIfEmpty(ctx, fresh); allowed || err != nil {
+		t.Fatalf("present HOME: released=%v err=%v", allowed, err)
 	}
-	if err := releaseSession(context.Background(), c, s); err == nil {
-		t.Fatal("releaseSession bypassed the private-history guard")
+	var kept corev1.PersistentVolumeClaim
+	if err := c.Get(ctx, client.ObjectKeyFromObject(home), &kept); err != nil || !kept.DeletionTimestamp.IsZero() {
+		t.Fatal("present HOME was deleted")
 	}
+
+	started, _ := privateHistoryFixture()
+	at := metav1.Now()
+	started.DeletionTimestamp = &at
+	c = privateHistoryClient(started)
+	fresh = stored(t, c, started)
+	r = &Reconciler{Client: c, APIReader: c}
+	if allowed, err = r.releaseIfEmpty(ctx, fresh); allowed || !errors.Is(err, errPrivateHistoryRetained) {
+		t.Fatalf("started Session: released=%v err=%v", allowed, err)
+	}
+
+	s = neverStartedReleaseSession()
+	home = &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: HomeClaimName(s.Name), Namespace: s.Namespace, UID: "home-kept", Finalizers: []string{Finalizer}}}
+	c = privateHistoryClient(s, home)
+	r = &Reconciler{Client: c, APIReader: c}
+	obs := observation{claim: owned[*corev1.PersistentVolumeClaim]{obj: home}}
+	if _, done, err := r.archive(ctx, s, &obs, true); done || err != nil || obs.removalBlocked == nil {
+		t.Fatalf("archive with a HOME: done=%v err=%v blocked=%v", done, err, obs.removalBlocked)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(home), &kept); err != nil || !kept.DeletionTimestamp.IsZero() {
+		t.Fatal("archive deleted a HOME")
+	}
+
+	s = neverStartedReleaseSession()
+	c = privateHistoryClient(s)
+	fresh = stored(t, c, s)
+	r = &Reconciler{Client: c, APIReader: c}
+	obs = observation{claim: owned[*corev1.PersistentVolumeClaim]{missing: true}}
+	if _, done, err := r.archive(ctx, fresh, &obs, true); !done || err != nil {
+		t.Fatalf("archive with no HOME: done=%v err=%v", done, err)
+	}
+	finalizerGone(t, c, fresh)
 }

@@ -21,10 +21,10 @@
   installs the D-92 shared-history correction in the operator and task agent.
   All existing flags are preserved; the shelf remains unchanged and H8 is not
   accepted. The operator's actual version is `v2.28.0-1-gcbf0700`.
-  *F2 contract, 2026-10-17:* section 23 names the never-started reap that has
-  nothing to archive. The predicate is in source. `archive`, `releaseIfEmpty`
-  and `releaseSession` still refuse that Session, so the finalizer stays until
-  those three call sites use the predicate.
+  *F2 release, 2026-10-17:* section 23 is in source. `archive`,
+  `releaseIfEmpty` and `releaseSession` release a matching reaped Session only
+  after uncached Pod and HOME reads are both NotFound. A present Pod or HOME
+  keeps the finalizer. The path does not delete a volume.
 - **Decision:** [ADR-005](../adrs/005-private-home-expiry.md) (Q-31, Tom,
   2026-10-12: "Archive, then delete (Recommended)"), amended by
   [ADR-006](../adrs/006-private-home-expiry-corrections.md) and
@@ -2114,10 +2114,11 @@ Plan 11 tracks these:
 - **No record, no expiry.** A Session whose executor was never observed, or
   vanished before its record, keeps its HOME until Tom removes it by hand. That
   includes the two 1011 canaries lost on talosw02, which are canaries anyway.
-- **Never-started Sessions.** A private Session with `admission: NeverStarted`, no
-  executor attempt and no HOME is still never released. Section 23 is the
-  contract for that plan 11 follow-up. It needs no owner question and is not
-  part of Q-31. The finalizer stays until the three named call sites use it.
+- **Never-started Sessions.** Section 23 releases a reaped ordinary private
+  Session with `admission: NeverStarted`, no executor attempt and no recorded
+  HOME, and only when uncached reads find no Pod and no HOME. Any recorded
+  HOME, executor attempt, live Session, canary, pilot or present object stays.
+  This is not a volume delete and it is not part of Q-31.
 - **Suspended Sessions are not stopped.** A suspended private Session whose
   executor still runs never expires until it is reaped. A stop at the suspended
   deadline is not planned; it needs its own owner question (plan 11 follow-up F3,
@@ -2360,9 +2361,12 @@ other result, including a present object, keeps the finalizer. Only then may
 `releaseSession` lift the Session finalizer. This path never calls
 `deleteVolume` or `deletePod`.
 
-Three call sites consult the predicate before the private-history refusal:
-`archive`'s early return, `releaseIfEmpty`, and `releaseSession`. As of this
-section those three still refuse, so a matching Session keeps its finalizer.
-Switching them is the rest of F2. `TestNeverStartedReleasePredicate` locks the
-predicate. `TestNeverStartedReleaseDoesNotLiftTheFinalizer` locks the current
-refusal until that switch.
+Three call sites consult the predicate before the private-history refusal.
+`archive` passes a matching Session through only when its cache already shows
+no claim, and it does not call `deleteVolume`. `releaseIfEmpty` reads the Pod
+and the HOME claim through the uncached API reader and calls `releaseSession`
+only when both are NotFound. `releaseSession` no longer refuses that Session,
+so the finalizer can lift. A present Pod or HOME, or any other read result,
+keeps the finalizer. `TestNeverStartedReleasePredicate` locks the predicate.
+`TestNeverStartedReleaseLiftsFinalizerOnlyWhenPodAndHomeAreAbsent` locks the
+three call sites.
