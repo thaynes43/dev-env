@@ -94,6 +94,38 @@ func TestGrantRequestWaitsForTheAnswer(t *testing.T) {
 	}
 }
 
+func TestGrantRequestReportsARefusal(t *testing.T) {
+	h := newHarness(t)
+	serveRaw(h, map[string]func(*http.Request) (int, string){
+		apiv1.GrantsPath: func(r *http.Request) (int, string) {
+			return http.StatusCreated, `{"name":"grant-abc","phase":"Pending","type":"kube","ttl":"30m","reason":"read pods"}`
+		},
+		apiv1.GrantPath("grant-abc"): func(r *http.Request) (int, string) {
+			return http.StatusOK, `{"name":"grant-abc","phase":"Denied","type":"kube","ttl":"30m","reason":"read pods"}`
+		},
+	})
+	h.mustRun(ExitFailed, "grant", "request", "--type", "kube", "--role", "dev-env-grant-workloads", "--reason", "read pods")
+	contains(t, "stdout", h.stdout.String(), "answered", "phase: Denied")
+	contains(t, "stderr", h.stderr.String(), "grant grant-abc was Denied")
+}
+
+func TestGrantRequestStopsAtThirtyMinutes(t *testing.T) {
+	h := newHarness(t)
+	serveRaw(h, map[string]func(*http.Request) (int, string){
+		apiv1.GrantsPath: func(r *http.Request) (int, string) {
+			return http.StatusCreated, `{"name":"grant-abc","phase":"Pending","type":"kube","ttl":"30m","reason":"read pods"}`
+		},
+		apiv1.GrantPath("grant-abc"): func(r *http.Request) (int, string) {
+			return http.StatusOK, `{"name":"grant-abc","phase":"Pending","type":"kube","ttl":"30m","reason":"read pods"}`
+		},
+	})
+	h.mustRun(ExitFailed, "grant", "request", "--type", "kube", "--role", "dev-env-grant-workloads", "--reason", "read pods")
+	contains(t, "stderr", h.stderr.String(), "still pending after 30m0s")
+	if len(h.sleeps) != int(grantAnswerWait/grantAnswerPoll) {
+		t.Fatalf("sleeps %d", len(h.sleeps))
+	}
+}
+
 func TestGrantReleaseAsksTheBroker(t *testing.T) {
 	h := newHarness(t)
 	serveRaw(h, map[string]func(*http.Request) (int, string){

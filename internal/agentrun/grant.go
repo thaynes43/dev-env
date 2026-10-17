@@ -181,10 +181,19 @@ func (a *app) grantRequest(ctx context.Context, args []string) error {
 		}
 	}
 	if cmd.c.output == outputJSON {
-		return a.printJSON(out)
+		if err := a.printJSON(out); err != nil {
+			return err
+		}
+	} else {
+		a.outf("answered\n")
+		if err := a.printGrant(out); err != nil {
+			return err
+		}
 	}
-	a.outf("answered\n")
-	return a.printGrant(out)
+	if out.Phase != apiv1.GrantActive {
+		return fail(ExitFailed, "grant %s was %s", out.Name, out.Phase)
+	}
+	return nil
 }
 
 func (a *app) finishGrantRequest(status int, out apiv1.Grant, format string) error {
