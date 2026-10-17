@@ -119,8 +119,10 @@ and directory metadata scope `dev-env`. Removing any required flag fails startup
 Old canary records are unchanged and cannot be reused by this route.
 
 The policy fixes project/repository `dev-env`, caller `dev/dev-env` (trusted
-client only), provider `codex`, model `gpt-6.1-sol`, effort `high`, profile
-`rule-canary-codex`, size S (at most 2 CPUs/4Gi), and task timeout 15m. Two reviewed
+client only), provider `codex`, model `gpt-6-luna`, effort `high`, profile
+`rule-canary-codex`, size S (at most 2 CPUs/4Gi), and task timeout 15m. On
+2026-10-16 Tom directed this model: coordination tests use `gpt-6-luna` so they
+stop spending `gpt-6.1-sol`. Two reviewed
 prompts and keys select fixed retained Session names `private-pilot-v1-a` and
 `private-pilot-v1-b`. Neither requests nor policy can add a third slot or change
 those scope limits. No restore, native host, tool pool or child dispatch follows.
