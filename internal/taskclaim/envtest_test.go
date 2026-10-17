@@ -104,10 +104,19 @@ func TestEnvtestBoundsAndSameWorkUnderOperatorRole(t *testing.T) {
 	if err != nil || created || got.UID != old.UID {
 		t.Fatal("renamed repository key minted a second owner of a pre-label claim", created, err)
 	}
-	// A release removes one live record. The project bound frees. The first
-	// owner's two claims stay, so that live Session cannot take the freed slot.
-	// The operator role cannot delete; this delete is the effect of retention's
-	// guarded delete, counted by the same live list.
+	// Put the source label back. Without it, first counts as one session record
+	// and a later refusal is the project bound, not the per-session bound.
+	if err := admin.Get(ctx, client.ObjectKey{Namespace: ns, Name: old.Name}, &old); err != nil {
+		t.Fatal(err)
+	}
+	old.Labels = claimLabels(old.Spec)
+	if err := admin.Update(ctx, &old); err != nil {
+		t.Fatal(err)
+	}
+	// A release removes one live record. The operator role cannot delete; this
+	// delete is the effect of retention's guarded delete, counted by the same
+	// live list. The project is then at 2 of 3, so only the per-session bound
+	// can refuse the remaining owner.
 	var released coord.TaskClaim
 	if err := admin.Get(ctx, client.ObjectKey{Namespace: ns, Name: Name(claim("second", "issue:4").Identity)}, &released); err != nil {
 		t.Fatal(err)
@@ -115,11 +124,11 @@ func TestEnvtestBoundsAndSameWorkUnderOperatorRole(t *testing.T) {
 	if err := admin.Delete(ctx, &released); err != nil {
 		t.Fatal(err)
 	}
-	if _, created, err := store.Create(ctx, claim("third", "issue:6")); err != nil || !created {
-		t.Fatal("project bound did not free after the release", created, err)
-	}
 	if _, _, err := store.Create(ctx, claim("first", "issue:7")); !errors.Is(err, ErrLimit) {
 		t.Fatal("a live session's per-session count dropped after another owner's release", err)
+	}
+	if _, created, err := store.Create(ctx, claim("third", "issue:6")); err != nil || !created {
+		t.Fatal("project bound did not free after the release", created, err)
 	}
 	// The other bounded kinds resolve under the same role.
 	for _, kind := range []string{"PublishedContextList", "InboxMessageList"} {
