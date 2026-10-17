@@ -57,7 +57,9 @@ type harness struct {
 	// kubectl answers the commands Env.Run runs with an exit code; nil means
 	// kubectl is not on PATH. ran records each command line.
 	kubectl func(argv []string) int
-	ran     []string
+	// agentd answers grant use. Nil means agentd is not on PATH.
+	agentd func(argv []string) (int, string, string)
+	ran    []string
 }
 
 var testNow = time.Date(2026, 10, 6, 21, 0, 0, 0, time.UTC)
@@ -108,7 +110,18 @@ func newHarness(t *testing.T) *harness {
 			if name == "kubectl" && h.kubectl != nil {
 				return "/usr/bin/kubectl", nil
 			}
+			if name == "agentd" && h.agentd != nil {
+				return "/usr/local/bin/agentd", nil
+			}
 			return "", errors.New("not found")
+		},
+		ExecOutput: func(_ context.Context, argv []string) (int, string, string, error) {
+			h.ran = append(h.ran, strings.Join(argv, " "))
+			if h.agentd == nil {
+				return 0, "", "", errors.New("no agentd")
+			}
+			code, stdout, stderr := h.agentd(argv)
+			return code, stdout, stderr, nil
 		},
 		Run: func(_ context.Context, argv []string) (int, error) {
 			h.ran = append(h.ran, strings.Join(argv, " "))

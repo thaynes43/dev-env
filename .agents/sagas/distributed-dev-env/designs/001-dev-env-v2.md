@@ -4363,9 +4363,14 @@ within D-31's cap.
 - **Artifacts.** `agent-run tools get <pool> <path> [dest]` and
   `agent-run tools put <pool> <src> <path>` move files through the same gateway.
   Small results, such as screenshots, still come back inline in MCP.
-- The gateway also serves a built-in `dev-env` MCP server with `request_access`,
-  `grant_status`, `release_access`, `request_lease` and `attach_tool`, thin wrappers
-  over the API, so a model asks for access the way it calls any tool (6.12).
+- **Access tools, 2026-10-17.** `request_access`, `grant_status` and
+  `release_access` are `agent-run mcp`, one JSON-RPC message per line on stdin
+  and stdout. agentd registers that command as the `dev-env` server for Claude
+  and Codex when it renders the session, including when `mcp.json` is absent,
+  unless git already named `dev-env`. The process answers `initialize` before
+  it connects, and connects on the first `tools/call`. These three tools call
+  `/v1/grants`. They do not approve a grant or install one. `request_lease`
+  and `attach_tool` stay on the loopback gateway when that gateway is built.
 - The gateway listens on loopback only. Session pods still open no port on the pod
   network (D-08).
 

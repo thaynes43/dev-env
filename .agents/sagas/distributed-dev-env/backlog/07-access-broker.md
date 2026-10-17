@@ -85,8 +85,11 @@ In this repo:
   `release_access`.
   *2026-10-17:* `agent-run grant list` and `grant show` read `/v1/grants`.
   `grant request` posts a request. `grant release` asks the broker to end one
-  grant and leaves the object as the audit record. Use and the MCP server
-  remain. None of these commands approve a grant or install it.
+  grant and leaves the object as the audit record. `grant use` selects an
+  installed kube context in the pod. `agent-run mcp` serves `request_access`,
+  `grant_status` and `release_access` on stdin, and agentd registers that
+  command as the `dev-env` server unless mcp.json already names one. Break-glass
+  as its own command remains. None of these commands approve a grant or install it.
 - [ ] 8. Credential grants (Q-07): the keeper mints the Proxmox token or signs an SSH
   certificate, installs it in the pod's `grants` volume, and removes it at expiry.
   The first check failed on 2026-10-07: the operator token cannot mint an expiring

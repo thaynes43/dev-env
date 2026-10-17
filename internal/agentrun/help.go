@@ -37,6 +37,8 @@ Usage:
   agent-run grant request --type <t> --reason <why>
                                                   ask for a grant; Tom still approves it
   agent-run grant release <grant-id>              ask the broker to end one grant
+  agent-run grant use <grant-id>|default         select that kube context in this pod
+  agent-run mcp                                   access tools on stdin for the session
   declare-activity start "<what>" --scope <a,b>   declare dev work, so it is not taken for a fault
   agent-run attach <name>                         attach to a session's TUI (Tom only)
   agent-run detach <name>                         detach every client from it (Tom only)
@@ -370,11 +372,12 @@ A reap returns at once; agent-run show <name> follows it until the session is go
        agent-run grant show <grant-id> [-o json]
        agent-run grant request --type <type> --reason <why> [type flags] [-o json]
        agent-run grant release <grant-id> [-o json]
+       agent-run grant use <grant-id>|default
 
-Read, request and release access grants (DESIGN-001 6.12). This is part of
-plan 07 step 7. Request posts the ask. Release asks the broker to end the
-grant. Neither approves a grant or installs it, and this command does not
-start the in-pod access MCP server.
+Read, request, release and use access grants (DESIGN-001 6.12). This is part
+of plan 07 step 7. Request posts the ask. Release asks the broker to end the
+grant. Use selects an installed kube context in this pod. None of these
+commands approve a grant or install one. The in-pod tools are agent-run mcp.
 
 grant list prints name, phase, type, session, TTL and expiry, newest first.
   --session <name>   only that session's grants
@@ -397,6 +400,19 @@ returns the grant the session already holds.
   --ttl <duration>   such as 45m; empty uses the API default
 
 grant release names one grant. The grant object stays as the audit record.
+
+grant use runs agentd ctl grant-use. The name is grant-<id> or default.
+It does not call the API.
+`,
+	"mcp": `Usage: agent-run mcp
+
+Serve the dev-env access tools on stdin and stdout (MCP). The tools are
+request_access, grant_status and release_access. They call /v1/grants.
+request_access asks; Tom still approves. release_access asks the broker to
+end one grant. grant_status reads. None of them approve or install a grant.
+
+agentd registers this command as the dev-env MCP server when it renders the
+session, unless mcp.json already names a dev-env server.
 `,
 	"fleet": `Usage: agent-run fleet [-o json]
 

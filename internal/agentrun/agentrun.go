@@ -84,6 +84,9 @@ type Env struct {
 	Run func(ctx context.Context, argv []string) (int, error)
 	// Output captures a bounded command response without exposing stderr.
 	Output func(ctx context.Context, argv []string) ([]byte, error)
+	// ExecOutput runs a program and returns its exit code and captured
+	// streams. A non-nil error means it did not start.
+	ExecOutput func(ctx context.Context, argv []string) (int, string, string, error)
 	// PortForward starts a loopback forward and waits for its readiness. Stop
 	// terminates and reaps it; the process also ends when ctx is canceled.
 	PortForward func(ctx context.Context, argv []string) (address string, stop func(), err error)
@@ -104,6 +107,7 @@ func DefaultEnv() Env {
 		LookPath:          exec.LookPath,
 		Run:               runProcess,
 		Output:            commandOutput,
+		ExecOutput:        execOutput,
 		PortForward:       startPortForward,
 	}
 }
@@ -224,6 +228,8 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return a.history(ctx, rest)
 	case "grant":
 		return a.grant(ctx, rest)
+	case "mcp":
+		return a.mcp(ctx, rest)
 	case "declare-activity":
 		return a.declareActivity(ctx, rest)
 	case "attach":
@@ -246,7 +252,7 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 }
 
 // commands are the words agent-run takes first, built or not yet.
-var commands = []string{"run", "list", "directory", "canary", "show", "log", "msg", "reap", "suspend", "resume", "rescue", "history", "grant", "declare-activity", "fleet", "version", "help", "attach", "detach", "prune", "sweep", "codex-remote"}
+var commands = []string{"run", "list", "directory", "canary", "show", "log", "msg", "reap", "suspend", "resume", "rescue", "history", "grant", "mcp", "declare-activity", "fleet", "version", "help", "attach", "detach", "prune", "sweep", "codex-remote"}
 
 // nearestCommand is the command within two edits of word, or "".
 func nearestCommand(word string) string {
