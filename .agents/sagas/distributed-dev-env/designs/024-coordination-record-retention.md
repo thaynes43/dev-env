@@ -911,7 +911,9 @@ exec fake, so the protocol is exercised):
   the release answers 200 with `archived: true` and writes nothing.
   *2026-10-17:* `TestInboxReleaseDeletesTheMessageBeforeTheAck` runs one pass
   on the fake client. The message delete is recorded before the ack delete.
-  The envtest of the whole rule remains.
+  `TestInboxAckDeletesOnTheNextPassAfterAConflict` leaves the ack in place
+  when its delete conflicts, then deletes it on the next pass once the message
+  is gone. The envtest of the whole rule remains.
 - **E4, rights.** Run as `dev-env-operator` under haynes-ops' Roles, copied into
   `testdata/` as the broker and keeper suites do. Delete works only in the
   operator namespace and only on the four kinds; deletecollection is refused. A
