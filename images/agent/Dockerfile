@@ -105,7 +105,7 @@ ARG RESTIC_VERSION=0.19.1
 # talosctl — read-only node triage (dmesg/logs/get) via apid; MUST track the cluster's
 # Talos version (nodes run v1.13.3). Same style as kubectl: the `v` lives in the ARG.
 # renovate: datasource=github-releases depName=siderolabs/talos
-ARG TALOSCTL_VERSION=v1.14.2
+ARG TALOSCTL_VERSION=v1.14.4
 # omnictl — read-only Omni machine/cluster status against SaaS Omni (the self-hosted
 # instance was decommissioned 2026-09-22); tracks upstream siderolabs/omni releases,
 # which stay API-compatible with nearby omnictl versions. renovate: datasource=github-releases depName=siderolabs/omni
