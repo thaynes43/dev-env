@@ -71,6 +71,27 @@ func TestGrantRequestPostsTheAsk(t *testing.T) {
 	}
 }
 
+func TestGrantReleaseAsksTheBroker(t *testing.T) {
+	h := newHarness(t)
+	serveRaw(h, map[string]func(*http.Request) (int, string){
+		apiv1.GrantPath("grant-abc"): func(r *http.Request) (int, string) {
+			if r.Method != http.MethodDelete {
+				t.Errorf("method %s", r.Method)
+			}
+			return http.StatusAccepted, `{"name":"grant-abc","phase":"Active","type":"kube","session":"task-1","ttl":"30m","reason":"read pods","release":true}`
+		},
+	})
+	h.mustRun(ExitOK, "grant", "release", "grant-abc")
+	contains(t, "stdout", h.stdout.String(), "release requested", "name: grant-abc", "phase: Active")
+	if len(h.api.requests()) != 1 || h.api.requests()[0].method != http.MethodDelete || len(h.api.requests()[0].body) != 0 {
+		t.Fatalf("requests %+v", h.api.requests())
+	}
+	h.mustRun(ExitUsage, "grant", "release", "not-a-grant")
+	if len(h.api.requests()) != 1 {
+		t.Fatal("a refused release reached the API")
+	}
+}
+
 func TestGrantShowOneName(t *testing.T) {
 	h := newHarness(t)
 	serveRaw(h, map[string]func(*http.Request) (int, string){

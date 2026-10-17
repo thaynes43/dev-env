@@ -33,12 +33,14 @@ func (a *app) grant(ctx context.Context, args []string) error {
 		return a.grantShow(ctx, args[1:])
 	case "request":
 		return a.grantRequest(ctx, args[1:])
+	case "release":
+		return a.grantRelease(ctx, args[1:])
 	case "help", "-h", "--help":
 		_, _ = io.WriteString(a.env.Stdout, commandHelp["grant"])
 		return nil
 	}
 	_, _ = io.WriteString(a.env.Stderr, commandHelp["grant"])
-	return usageError("unknown grant command %q: it is list, show or request", args[0])
+	return usageError("unknown grant command %q: it is list, show, request or release", args[0])
 }
 
 func (a *app) grantList(ctx context.Context, args []string) error {
@@ -210,6 +212,37 @@ func parseGrantPort(raw string) (apiv1.GrantPort, error) {
 		return apiv1.GrantPort{}, usageError("grant request: --port protocol is tcp or udp, not %q", raw)
 	}
 	return out, nil
+}
+
+func (a *app) grantRelease(ctx context.Context, args []string) error {
+	cmd := newCommand("grant", outputJSON)
+	pos, err := cmd.parse(a, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 || !validGrantCLIName(pos[0]) {
+		return usageError("grant release takes one grant-<id> name; agent-run help grant")
+	}
+	c, err := a.connect(ctx, cmd.c.conn)
+	if err != nil {
+		return err
+	}
+	// A second release of the same grant returns the audit record. It does not
+	// revoke anything itself: the broker ends the grant after spec.release.
+	var out apiv1.Grant
+	status, err := a.call(ctx, c, http.MethodDelete, apiv1.GrantPath(pos[0]), nil, nil, &out)
+	if err != nil {
+		return err
+	}
+	if cmd.c.output == outputJSON {
+		return a.printJSON(out)
+	}
+	if status == http.StatusOK {
+		a.outf("already released\n")
+	} else {
+		a.outf("release requested\n")
+	}
+	return a.printGrant(out)
 }
 
 func (a *app) grantShow(ctx context.Context, args []string) error {

@@ -34,6 +34,7 @@ Usage:
   agent-run grant show <grant-id>                 show one access grant
   agent-run grant request --type <t> --reason <why>
                                                   ask for a grant; Tom still approves it
+  agent-run grant release <grant-id>              ask the broker to end one grant
   agent-run history show <uid>                    show one archived history's manifest
   agent-run history read <uid> <root/path>        print an archived file, a page or --all
   declare-activity start "<what>" --scope <a,b>   declare dev work, so it is not taken for a fault
@@ -368,10 +369,12 @@ A reap returns at once; agent-run show <name> follows it until the session is go
 	"grant": `Usage: agent-run grant list [--session <name>] [--phase <phase>] [--mine] [-o json]
        agent-run grant show <grant-id> [-o json]
        agent-run grant request --type <type> --reason <why> [type flags] [-o json]
+       agent-run grant release <grant-id> [-o json]
 
-Read and request access grants (DESIGN-001 6.12). This is part of plan 07
-step 7. Request posts the ask. It does not approve a grant, install it, or
-release it, and it does not start the in-pod access MCP server.
+Read, request and release access grants (DESIGN-001 6.12). This is part of
+plan 07 step 7. Request posts the ask. Release asks the broker to end the
+grant. Neither approves a grant or installs it, and this command does not
+start the in-pod access MCP server.
 
 grant list prints name, phase, type, session, TTL and expiry, newest first.
   --session <name>   only that session's grants
@@ -392,6 +395,8 @@ returns the grant the session already holds.
   --port <port>      443, 53/udp; repeatable
   --credential <id>  proxmox or hw-ssh
   --ttl <duration>   such as 45m; empty uses the API default
+
+grant release names one grant. The grant object stays as the audit record.
 `,
 	"fleet": `Usage: agent-run fleet [-o json]
 
