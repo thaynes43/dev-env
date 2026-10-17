@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -23,6 +24,7 @@ import (
 	devv1 "github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/contextpublication"
 	"github.com/thaynes43/dev-env/internal/inbox"
+	"github.com/thaynes43/dev-env/internal/sessiondirectory"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
 	"github.com/thaynes43/dev-env/internal/testenv"
 )
@@ -207,9 +209,10 @@ func decideClaim(t *testing.T, ctx context.Context, cfg EvalConfig, name string)
 	return got[0].Decision
 }
 
-// TestEnvtestRetentionDeleteRight is DESIGN-024 E4's delete right. The Role is
-// the design's R6 copy. It is not installed in haynes-ops. The identity-guard
-// exec refusal stays out of this test.
+// TestEnvtestRetentionDeleteRight is DESIGN-024 E4's delete right. It binds
+// only the design's R6 Role, not the rest of the haynes-ops operator Roles.
+// The identity-guard exec refusal stays out of this test. The Role is not
+// installed in haynes-ops.
 func TestEnvtestRetentionDeleteRight(t *testing.T) {
 	env, err := testenv.Start()
 	if err != nil {
@@ -286,7 +289,21 @@ func TestEnvtestRetentionDeleteRight(t *testing.T) {
 	if err := admin.Create(ctx, foreignClaim); err != nil {
 		t.Fatal(err)
 	}
-	otherKind := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: retentionNS, Name: "retention-rights-other"}}
+	digest := coord.DirectoryDigest(strings.Repeat("ab", 32))
+	directory := coord.SessionDirectorySpec{
+		Version: 1, Source: sender, SourceCreatedAt: metav1.Now(), Project: "sample", Repository: "repo", Base: "main",
+		Parent: "dev-env-system/human", TaskKey: "rights-other",
+		Request: coord.DirectoryRequest{Provider: "claude", CLI: "claude", Model: "claude-haiku-4-5", Effort: "low"},
+		Revisions: coord.DirectoryRevisions{
+			CanaryPolicy: digest, CatalogUID: "catalog", CatalogResourceVersion: "1", Catalog: digest, Rules: digest,
+			Template: "templates", Image: "ghcr.io/example/dev-env:test", ProjectSnapshot: digest,
+			Common: coord.DirectoryCommon{State: "Unknown"},
+		},
+	}
+	if !sessiondirectory.ValidSpec(directory) {
+		t.Fatal("directory fixture")
+	}
+	otherKind := &coord.SessionDirectory{ObjectMeta: metav1.ObjectMeta{Namespace: retentionNS, Name: sessiondirectory.Name(directory.Source)}, Spec: directory}
 	if err := admin.Create(ctx, otherKind); err != nil {
 		t.Fatal(err)
 	}
@@ -318,10 +335,10 @@ func TestEnvtestRetentionDeleteRight(t *testing.T) {
 		t.Fatalf("foreign claim: %v", err)
 	}
 	if err := operator.Delete(ctx, otherKind); !apierrors.IsForbidden(err) {
-		t.Fatalf("delete of another kind: %v", err)
+		t.Fatalf("delete of a coordination kind outside the role: %v", err)
 	}
-	if err := admin.Get(ctx, client.ObjectKeyFromObject(otherKind), &corev1.ConfigMap{}); err != nil {
-		t.Fatalf("configmap: %v", err)
+	if err := admin.Get(ctx, client.ObjectKeyFromObject(otherKind), &coord.SessionDirectory{}); err != nil {
+		t.Fatalf("session directory: %v", err)
 	}
 }
 
