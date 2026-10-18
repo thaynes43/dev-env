@@ -97,7 +97,7 @@ func TestEnvtestIdentityGuardRefusesExec(t *testing.T) {
 		t.Fatalf("grant exec = %v", grant)
 	}
 	workbench := waitExec(t, env.Config, ns, pod.Name, "dev-env-workbench", false)
-	if workbench == nil || strings.Contains(workbench.Error(), "dev-env-identity-guard") || strings.Contains(workbench.Error(), "is forbidden:") {
+	if workbench == nil || strings.Contains(workbench.Error(), "dev-env-identity-guard") || !strings.Contains(workbench.Error(), "does not have a host assigned") {
 		t.Fatalf("workbench exec = %v", workbench)
 	}
 }
@@ -113,11 +113,10 @@ func waitExec(t *testing.T, cfg *rest.Config, namespace, pod, sa string, wantPol
 	for {
 		last = execAs(cfg, namespace, pod, sa)
 		policy := policyRefusal(last)
-		rbac := last != nil && strings.Contains(last.Error(), "is forbidden:") && !policy
 		if wantPolicy && policy {
 			return last
 		}
-		if !wantPolicy && last != nil && !policy && !rbac {
+		if !wantPolicy && last != nil && strings.Contains(last.Error(), "does not have a host assigned") {
 			return last
 		}
 		if time.Now().After(deadline) {
