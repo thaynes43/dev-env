@@ -357,7 +357,17 @@ The Codex native routing gate must be resolved before committing the fleet UX.
 
 ## Q-24: Codex MVP native routing
 
-**Asked through the native question tool on 2026-10-11; owner ruling pending.**
+**Answered 2026-10-18: separate paired session hosts.** Tom answered “Yes” to
+the small separate-host approach recommended in the readiness assessment,
+through the trusted parent chat. Each bounded native host has its own
+app-server, private enrollment and computer entry; Tom pairs each host once.
+Platform runtime test actors use only `gpt-6-luna` or `claude-haiku-4-5`.
+The ruling authorizes implementation, not pairing/login, credential/access
+creation, live acceptance or deployment. The held cohort, H7, live grant,
+release #369, drafts #292/#231 and v1 retirement remain held. Saga85 and
+Story94 record the ruling; do not ask the old question again.
+
+*Historical question, 2026-10-11:*
 Emission is not a phone-delivery receipt. The finite capability audit did not
 establish full native-chat routing from one paired computer to independent
 app-server pods. Pinned 0.160.1 owns threads in-process. Separate command/build
