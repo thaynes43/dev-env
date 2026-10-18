@@ -92,7 +92,14 @@ func awaitOwnedContinuation(ctx context.Context, read func(context.Context, stri
 		st, err := read(callCtx, b.TaskUID)
 		done()
 		if err != nil {
-			return apiv1.TaskBudgetBinding{}, false, err
+			// A failed GET grants no authority. Keep the proven-stopped original guard
+			// available until its original deadline; never retry a mutation here.
+			select {
+			case <-bounded.Done():
+				return apiv1.TaskBudgetBinding{}, false, nil
+			case <-ticker.C:
+			}
+			continue
 		}
 		n := st.Binding
 		if !st.Observed || n.TaskUID != b.TaskUID || n.HostID != b.HostID || n.PodUID != b.PodUID || !n.Deadline.Equal(b.Deadline) {

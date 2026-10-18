@@ -119,7 +119,7 @@ func OwnedRootPod(p OwnedRootPolicy) *corev1.Pod {
 		mode := int32(0444)
 		c.Env = append(c.Env, corev1.EnvVar{Name: "AGENTD_OWNED_HOME_INPUTS_SHA", Value: p.HomeInputsSHA})
 		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{Name: "owned-home-inputs", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: p.HomeInputsName}, DefaultMode: &mode, Items: []corev1.KeyToPath{{Key: "input.json", Path: "input.json"}, {Key: "requirements.toml", Path: "requirements.toml"}}}}})
-		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: "owned-home-inputs", MountPath: "/opt/dev-env/owned-home", ReadOnly: true}, corev1.VolumeMount{Name: "owned-home-inputs", MountPath: "/etc/codex", ReadOnly: true})
+		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: "owned-home-inputs", MountPath: "/opt/dev-env/owned-home", ReadOnly: true}, corev1.VolumeMount{Name: "owned-home-inputs", MountPath: "/etc/codex/requirements.toml", SubPath: "requirements.toml", ReadOnly: true})
 	}
 	return pod
 }

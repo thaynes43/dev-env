@@ -346,16 +346,48 @@ explicitly not child/continuation authority; Ready requires original native peer
 and pinned RPC readiness. Genuine uncertain evidence latches/stops. The guarded
 one-use budget bootstrap creates the assigned finite campaign once and freezes
 its confirmed server binding; unknown mutation acknowledgements never replay or
-rearm. No runtime budget/epoch/attempt is reset by this source phase.
+rearm. The initial bootstrap never resets a prior runtime budget or attempt. The explicit within-budget continuation below advances its retained epoch without resetting counters.
 
 A native stop event is accepted only after the independently probed ORIGINAL
 supervisor reports original native Wait, helper Wait and ECHILD in memory. The
-supervisor stays alive for that single stop-event acknowledgement, then exits;
-missing/unknown proof stays charged. No root receipt, vanished PID/group/socket,
+supervisor stays alive for that stop-event acknowledgement. By default it then
+exits. With policy `allowContinuation: true`, it may remain in that proven-stopped
+state until the ORIGINAL deadline while awaiting one explicit trusted-human
+`POST /v1/task-budgets/{uid}/continue` (`agent-run budget continue --decision ID
+TASK`). Coordinator/model callers are refused. The request includes the exact old
+binding and decision ID. All original native/child stops must be confirmed, the
+latch must be NativeRootStopped at epoch1, and the unchanged deadline, effort,
+checkpoint, stall and failure limits must still permit work. The service records
+the prior binding/owner/decision and advances epoch1 to2 exactly once; it retains
+all old counters, workers, events, stop receipts, intent and limits. It grants no
+extra quota and cannot resume an exhausted or unknown-stop campaign. The existing
+Extend decision/provenance contract remains unchanged.
+
+Continuation requires policy-bound nonsecret HOME inputs (`homeInputsName`,
+`homeInputsUID`, `homeInputsSHA`) with exactly input.json and requirements.toml.
+The Pod mounts its RWOP PVC at /workspace and creates UID1000-private HOME
+/workspace/home with CODEX_HOME beneath it. Before baseline/intent, the existing
+common-rules composer prepares Codex AGENTS.md and config; the admin floor mounts
+read-only as /etc/codex/requirements.toml. Conflicts/aliases are refused. Credentials
+and history are never preparation inputs. Native instruction loading is separate
+acceptance from these bytes.
+
+The ORIGINAL guard read-only checks frozen startup files before proving
+Continuable (dedicated authenticated CRI status44). Drift still permits Stopped43
+but refuses continuation before mutation. Inputs are checked again before the
+next launch. Original policy Baseline remains unchanged; StartupBaseline measures
+the actual retained HOME for each native-process epoch. The old evidence listener
+closes before the next run; epoch2 uses a separate one-use receipt. Safe failed
+GETs may be retried at one-second pace while the guard stays stopped; no unknown
+mutation is retried and only an explicit valid next binding permits launch.
+This supports native-process continuation only with the original living guard,
+Pod, HOME and budget. Container/Pod-loss recovery, automatic exhausted campaign
+recovery and full native conversation recovery parity are outside this source.
+Missing/unknown proof stays charged. No root receipt, vanished PID/group/socket,
 heartbeat or host-supplied ready boolean substitutes for this proof. Private
 child admission still requires a fresh Ready root; its original HOME/Pod stop
 proofs are unchanged. Source tests use inert native transport/processes and TLS/
-isolated Kubernetes fixtures. New route/policy/pins/enrollment/pairing, real native
+isolated Kubernetes fixtures. Live route/policy/pins/enrollment/pairing, real native
 recovery and authenticated phone acceptance remain separate held actions.
 
 The root source profile additionally fails closed unless the host kernel enforces
@@ -380,7 +412,7 @@ UID0-owned0600 FIFO requirement refused ordinary UID1000 CRI output pipes.
 The corrected pinned probe discards output authority rather than allowlisting
 UID1000: it validates original PID1/native evidence plus operator binding/HOME/
 baseline and every phase predicate locally. It returns only dedicated nonzero
-process statuses40..43 through CRI's independent status channel. Operator stdout
+process statuses40..44 through CRI's independent status channel. Operator stdout
 and stderr are discarded. The actual pinned client-go decoder treats absent or
 empty status as nil and truncated/malformed status as a generic error; both
 refuse, as do generic exit0, signals, transport errors and cancellation. Only an

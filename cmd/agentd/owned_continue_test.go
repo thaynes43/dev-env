@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -52,5 +53,31 @@ func TestAwaitOwnedContinuationRequiresExplicitSamePodBudgetAuthority(t *testing
 				t.Fatal("unexpected replay")
 			}
 		})
+	}
+}
+
+func TestAwaitOwnedContinuationReadFailureNeverGrantsAuthority(t *testing.T) {
+	b := apiv1.TaskBudgetBinding{TaskUID: "task", HostID: "host", PodUID: "pod", Epoch: 1, Deadline: time.Now().UTC().Add(time.Minute)}
+	next := b
+	next.Epoch++
+	calls := 0
+	got, ok, err := awaitOwnedContinuation(context.Background(), func(context.Context, string) (apiv1.TaskBudgetStatus, error) {
+		calls++
+		if calls == 1 {
+			return apiv1.TaskBudgetStatus{}, errors.New("lost GET response")
+		}
+		return apiv1.TaskBudgetStatus{Observed: true, Binding: next, StopConfirmed: true}, nil
+	}, b)
+	if err != nil || !ok || got != next || calls != 2 {
+		t.Fatal("safe GET retry", got, ok, err, calls)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, ok, err = awaitOwnedContinuation(ctx, func(context.Context, string) (apiv1.TaskBudgetStatus, error) {
+		cancel()
+		return apiv1.TaskBudgetStatus{}, errors.New("unknown status")
+	}, b)
+	if err != nil || ok {
+		t.Fatal("unknown read became authority", ok, err)
 	}
 }
