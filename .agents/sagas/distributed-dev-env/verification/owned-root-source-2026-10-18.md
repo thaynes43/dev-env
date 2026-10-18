@@ -47,8 +47,14 @@ latches, loss between dispatch and launch, wrong stop proof/ACK, bootstrap
 conflict/unknown/replay, and checkpoint/deadline crossing during a readiness check.
 Independent native read-only design and final implementation review found no
 remaining source blockers after the post-probe clock fix. The reviewer did not
-run tests or claim runtime acceptance. Full local suites and hosted checks are
-reported separately, rather than inferred from this review.
+run tests or claim runtime acceptance. Eight relevant local suites passed serially: hostexecutor7.931s,
+taskbudget0.181s, apiv1 0.062s, apiserver40.693s, controller81.271s,
+agentd244.996s, cmd/agentd0.390s and operator0.077s. Final source/clock/marker/
+flags rechecks passed (taskbudget0.120s, cmd/agentd0.024s, operator0.024s,
+API5.326s). Native review confirmed commitf72f0a6, including the directory-FD
+bootstrap marker and retained-admission requirement. Hosted required checks,
+PID1 result, merge SHA and publication receipts are recorded separately in the PR
+and durable handoff rather than inferred from local tests.
 
 All local tests run serially under the shared lock, nice19/GOMAXPROCS2/-p1. No CPU
 burner, stress/load loop, pod image build, provider call or live activation occurs.

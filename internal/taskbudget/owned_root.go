@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/internal/agentd/hostexecutor"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
@@ -56,7 +57,7 @@ func (p OwnedRootPolicy) Valid() bool {
 		}
 	}
 	for _, s := range []string{p.Name, p.ServiceAccount, p.TaskUID, p.HostID, p.HomeClaim, p.HomeUID, p.NetworkPolicyName, p.NetworkPolicyUID} {
-		if !validOwnedID(s) {
+		if !protocol.ValidTaskBudgetIdentifier(s) {
 			return false
 		}
 	}
@@ -65,17 +66,6 @@ func (p OwnedRootPolicy) Valid() bool {
 			return false
 		}
 		if _, err := hex.DecodeString(s); err != nil {
-			return false
-		}
-	}
-	return true
-}
-func validOwnedID(s string) bool {
-	if len(s) < 1 || len(s) > 128 {
-		return false
-	}
-	for _, c := range s {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("._:-", c)) {
 			return false
 		}
 	}

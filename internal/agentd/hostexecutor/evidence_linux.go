@@ -101,7 +101,7 @@ func NativeHomeBaseline(home string) (string, error) {
 		f := os.NewFile(uintptr(dup), "baseline-dir")
 		names, e := f.Readdirnames(4097)
 		_ = f.Close()
-		if e != nil && e != io.EOF {
+		if e != nil && !errors.Is(e, io.EOF) {
 			return e
 		}
 		if len(names) > 4096 {
