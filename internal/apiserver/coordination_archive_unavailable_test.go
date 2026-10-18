@@ -123,7 +123,7 @@ func TestArchivedReadsWithoutAVolumeAnswerUnavailable(t *testing.T) {
 		w = f.do(http.MethodGet, apiv1.InboxPath+"?project=sample&archived=only", recipient, nil)
 		unavailableWithout(t, w, req.Text)
 		w = f.do(http.MethodGet, ackPath, recipient, nil)
-		unavailableWithout(t, w, req.Text)
+		unavailableWithout(t, w, string(ack.UID))
 	})
 }
 
