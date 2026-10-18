@@ -165,6 +165,14 @@ it after A is terminal. `B_CREATE_ACCEPTED_NOT_PILOT_ACCEPTANCE` is not done.
    The next live attempt still needs a fresh seal, a fresh window, and a bound
    live ConfigMap UID.
 
+**R2 get measurement, 2026-10-18.** One worst-case `agentd ctl coord-archive get`
+of a 1 MiB object peaked at 41140 KiB on arm64 and 84688 KiB as an amd64 binary
+on VirtualApple, in an offline container limited to 0.25 CPU and 256 MiB, with
+no OOM. Neither figure is the installed amd64 shelf. The
+[record](sagas/distributed-dev-env/verification/coordination-archive-get-memory-2026-10-18.md)
+does not mount either archive, start R5, raise the shelf limit, open a cohort,
+or accept retention.
+
 ## General archive get selectors: recorded-time source portion — 2026-10-14 UTC
 
 The [selector slice](sagas/distributed-dev-env/verification/coordination-archive-selectors-2026-10-14.md)

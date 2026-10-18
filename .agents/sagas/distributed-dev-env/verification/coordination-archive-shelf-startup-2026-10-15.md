@@ -47,3 +47,7 @@ orders with history refusal, then both orders with history succeeding and
 coordination refusing. Executable source is unchanged by this evidence-only
 correction. The production-code review found no blocker; no runtime archive
 or credential action was performed.
+
+*Update, 2026-10-18:* the shelf-limit get measurement is recorded in
+[coordination-archive-get-memory-2026-10-18](coordination-archive-get-memory-2026-10-18.md).
+Runtime mount, clock chronology and installed acceptance remain unresolved.
