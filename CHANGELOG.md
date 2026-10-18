@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.30.0](https://github.com/thaynes43/dev-env/compare/v2.29.5...v2.30.0) (2026-10-18)
+
+
+### Features
+
+* **budget:** authenticate owned Codex root lifecycle ([#423](https://github.com/thaynes43/dev-env/issues/423)) ([4802b3e](https://github.com/thaynes43/dev-env/commit/4802b3ee1fd2d09d91e26563da024dd416154d3a))
+* **budget:** prepare owned HOME and one owner continuation ([#425](https://github.com/thaynes43/dev-env/issues/425)) ([598f60b](https://github.com/thaynes43/dev-env/commit/598f60bece90117ae394d79a17b0a5559de35ead))
+* **budget:** run finite private tasks with retained stop proof ([#422](https://github.com/thaynes43/dev-env/issues/422)) ([2b24c79](https://github.com/thaynes43/dev-env/commit/2b24c7934918b5bb61d1509c61f44ea9c2848e44))
+* **cli:** create and inspect assigned task budgets ([#421](https://github.com/thaynes43/dev-env/issues/421)) ([e6035b2](https://github.com/thaynes43/dev-env/commit/e6035b2a3da58b60529bd931d73a01015e259b52))
+
+
+### Bug Fixes
+
+* **budget:** authenticate owned root through CRI exit status ([#424](https://github.com/thaynes43/dev-env/issues/424)) ([82c9416](https://github.com/thaynes43/dev-env/commit/82c94167fedbc8eb8dfc945a61a44fc9221a42c9))
+* repair retention and grant integration boundaries ([#419](https://github.com/thaynes43/dev-env/issues/419)) ([a353373](https://github.com/thaynes43/dev-env/commit/a3533739bdee22870612dbd2be1bedd2a352981c))
+* **trials:** retain pilot log capture after executor stop ([#370](https://github.com/thaynes43/dev-env/issues/370)) ([60c4e38](https://github.com/thaynes43/dev-env/commit/60c4e38c507c21d5fce64c51d0decc4b56362996))
+
 ## [2.29.5](https://github.com/thaynes43/dev-env/compare/v2.29.4...v2.29.5) (2026-10-17)
 
 
