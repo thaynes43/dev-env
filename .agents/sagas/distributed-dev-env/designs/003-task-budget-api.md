@@ -287,6 +287,12 @@ permission. Ordinary private tasks retain the existing common-rule snapshot agai
 their accepted project snapshot; the CRD must permit that server-owned finite-task
 binding before the API exposes this route. No canary/pilot restriction is relaxed.
 
+The API checks the complete retained-common session document, including the full
+UID bound and longest name-collision candidate, before reserving child effort.
+A deterministic transport refusal and its idempotent retry create neither a child
+nor a charge. After reservation it re-confirms source identity; uncertainty there
+retains the reservation rather than guessing an unknown dispatch did not happen.
+
 Before one Pod create, the controller confirms the original protected HOME and
 private executor intent, exact active ledger worker/Session UID, unchanged retained
 common inputs and approved current template image. It then reserves the budget

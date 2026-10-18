@@ -203,6 +203,16 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 					if err != nil || retained.Confirm(ctx, s.Live) != nil {
 						return 0, nil, invalid(fieldError("project", "private budget common inputs changed"))
 					}
+					// Validate the complete document before charging a child. Use the
+					// longest collision candidate so later name retries cannot add a
+					// deterministic transport refusal after the reservation.
+					preview := sess.DeepCopy()
+					preview.Name = fmt.Sprintf("%s-%d", base, nameAttempts)
+					annotateTaskBudget(preview, b)
+					preview.Annotations[TaskBudgetWorkerAnnotation] = worker
+					if err := checkAgentd(preview); err != nil {
+						return 0, nil, err
+					}
 				}
 				// The server-owned attempt nonce makes a concurrent request for
 				// the same key conflict in CAS rather than share one reservation.
@@ -219,9 +229,6 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 			retained, err := commonrules.BoundSession(sess)
 			if err != nil || retained.Confirm(ctx, s.Live) != nil {
 				return 0, nil, invalid(fieldError("project", "private budget common inputs changed before dispatch; reservation retained"))
-			}
-			if err := checkAgentd(sess); err != nil {
-				return 0, nil, err
 			}
 		}
 		err := s.Client.Create(ctx, sess)

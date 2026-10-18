@@ -3,6 +3,7 @@ package apiserver
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -10,17 +11,21 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/commonrules"
 	commonfixture "github.com/thaynes43/dev-env/internal/commonrules/testutil"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
 )
 
 func TestPrivateBudgetDispatchRequiresNativeRootAndCompleteInputs(t *testing.T) {
-	for _, scenario := range []string{"unadmitted-root", "native-authority-lost", "fixed-model-free-root", "missing-common", "timeout-too-long", "missing-home-retention"} {
+	for _, scenario := range []string{"unadmitted-root", "native-authority-lost", "fixed-model-free-root", "missing-common", "timeout-too-long", "missing-home-retention", "oversize-common-document"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := coordinatorFixture(t)
 			bindCatalogFixture(t, f)
 			f.srv.PrivateHistoryRetention, f.srv.RetainedCommonRules = true, true
 			a, b := commonfixture.Sources("fixture common rules", "fixture header")
+			if scenario == "oversize-common-document" {
+				a.Data[commonrules.CommonKey] = strings.Repeat("\x01", commonrules.MaxCommonBytes)
+			}
 			for _, cm := range []*corev1.ConfigMap{a, b} {
 				cm.ResourceVersion = ""
 				if err := f.c.Create(context.Background(), cm); err != nil {
@@ -56,6 +61,7 @@ func TestPrivateBudgetDispatchRequiresNativeRootAndCompleteInputs(t *testing.T) 
 			req := coordinatorTask()
 			req.Model, req.Effort = "claude-haiku-4-5", ""
 			req.Limits = &apiv1.Limits{Timeout: "1m"}
+			req.IdempotencyKey = "refused-private-document"
 			switch scenario {
 			case "native-authority-lost":
 				svc.NativeInspector = nil
@@ -71,6 +77,15 @@ func TestPrivateBudgetDispatchRequiresNativeRootAndCompleteInputs(t *testing.T) 
 			w = f.do(http.MethodPost, apiv1.SessionsPath, tokCoordinator, req)
 			if w.Code >= 200 && w.Code < 300 {
 				t.Fatal("incomplete private admission accepted", w.Body.String())
+			}
+			if scenario == "oversize-common-document" {
+				if w.Code != http.StatusUnprocessableEntity {
+					t.Fatal("document refusal did not reach deterministic validation", w.Code, w.Body.String())
+				}
+				retry := f.do(http.MethodPost, apiv1.SessionsPath, tokCoordinator, req)
+				if retry.Code != w.Code || !strings.Contains(retry.Body.String(), "bounded transport") {
+					t.Fatal("deterministic refusal became an unknown charged dispatch", retry.Code, retry.Body.String())
+				}
 			}
 			var sessions v1alpha1.AgentSessionList
 			if err := f.c.List(context.Background(), &sessions); err != nil || len(sessions.Items) != 0 {

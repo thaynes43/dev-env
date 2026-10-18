@@ -13,7 +13,8 @@ Pod with resume/relaunch refused. A separate test root inspector and existing
 synthetic token identity fixture stand in for native readiness and TokenReview;
 no kubelet or provider is run. Zero model actors are launched.
 
-Regressions also cover missing/replaced HOME/common inputs, root not admitted,
+Regressions also cover complete-document size refusal before charging (including
+same-idempotency retry), missing/replaced HOME/common inputs, root not admitted,
 fixed zero-child native fixture, private timeout bounds, unknown reservation ACK,
 no launch replay, preboot TLS latch/error/binding refusal before state writes,
 API response ambiguity, PodGC synthetic termination, and missing/replaced Pod

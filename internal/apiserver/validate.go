@@ -285,7 +285,7 @@ func checkAgentd(sess *v1alpha1.AgentSession) error {
 		// or transported. The controller builds the pod with the actual API UID.
 		check = sess.DeepCopy()
 		check.UID = "00000000-0000-0000-0000-000000000000"
-		if capture {
+		if capture || sess.Spec.CommonRules != nil {
 			// Reserve the full protocol UID bound in both document transports.
 			// Capture still requires the API-assigned UID at actual Pod startup.
 			check.UID = types.UID(strings.Repeat("x", 128))
