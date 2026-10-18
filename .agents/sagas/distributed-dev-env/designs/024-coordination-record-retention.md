@@ -952,8 +952,11 @@ exec fake, so the protocol is exercised):
   refuses that annotation pad, so `TestOversizeRecordIsNotMarked` stays the
   proof. `TestEnvtestStaleDeleteRetriesTheNewRevision` changes the claim
   during the grace delete. The delete conflicts and the claim stays. The next
-  pass stores that new revision and deletes the claim. The other E2 refusals
-  stay on the fake client. `TestShelfUnavailableDoesNotDelete` counts
+  pass stores that new revision and deletes the claim.
+  `TestEnvtestNoShelfDoesNotMark` runs one pass on a real API server and the
+  real coordination archive while no shelf pod is ready. The pass answers
+  shelf_unavailable. The claim stays, and the archive has no revision. The
+  other E2 refusals stay on the fake client. `TestShelfUnavailableDoesNotDelete` counts
   archive calls. A missing shelf pod makes none. `no_archive` makes one probe
   lookup and no put or mark. `TestOversizeRecordIsNotMarked` runs on the fake
   client. A record whose canonical bytes exceed the archive bound stays live,
