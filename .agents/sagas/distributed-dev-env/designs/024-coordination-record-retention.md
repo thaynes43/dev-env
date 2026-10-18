@@ -905,7 +905,9 @@ exec fake, so the protocol is exercised):
   context whose source session is absent. No claim is created.
   `TestEnvtestArchiveBeforeDeleteMessage` does the same for one inbox message
   whose sender and recipient are both absent, so no acknowledgement is
-  required. An ack, a process exec, and the archived-read API remain.
+  required. `TestEnvtestArchiveBeforeDeleteAck` adds the recipient's
+  acknowledgement. The grace pass deletes the message before the ack. A
+  process exec and the archived-read API remain.
   Put, mark, and lookup cross one canonical JSON object before the real
   archive, which is the ctl request boundary.
 - **E2, refusals.** Each leaves the record live and counts its reason:
