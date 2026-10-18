@@ -939,8 +939,13 @@ exec fake, so the protocol is exercised):
   `archive_mismatch`, and the stored bytes stay the original put.
   `TestArchiveMissingLeavesTheRecord` also runs on the fake client. The verify
   read answers not found after the put. The record stays, the refusal is
-  `archive_missing`, and the runnable does not write a replacement. The reset
-  and the new grace remain. `TestShelfUnavailableDoesNotDelete` counts
+  `archive_missing`, and the runnable does not write a replacement.
+  `TestEnvtestArchiveMissingResetsAndRemarks` runs that refusal on a real API
+  server and the real coordination archive. After the mark, the revision
+  directory is removed and the journal stays. Inside the grace nothing
+  changes. Once the grace is over, the pass writes a reset, leaves the claim,
+  and does not delete it. The next pass stores the claim again and opens a
+  new grace. The other E2 refusals stay on the fake client. `TestShelfUnavailableDoesNotDelete` counts
   archive calls. A missing shelf pod makes none. `no_archive` makes one probe
   lookup and no put or mark. `TestOversizeRecordIsNotMarked` runs on the fake
   client. A record whose canonical bytes exceed the archive bound stays live,
@@ -949,8 +954,8 @@ exec fake, so the protocol is exercised):
   published context, and an inbox message with its acknowledgement while the
   mount check is stubbed, then restores the real check. The archive root is
   not a volume of its own, so the claim, context, and message GETs, their
-  `?archived=only` lists, and the   acknowledgement GET answer unavailable. They do not return the stored
-  message text or the acknowledgement UID. The E2 envtest remains.
+  `?archived=only` lists, and the acknowledgement GET answer unavailable. They do not return the stored
+  message text or the acknowledgement UID.
 - **E3, the inbox rule.** Sender absent and recipient present without an ack:
   kept. The recipient acks: released, the message deleted before the ack. An ack
   whose delete failed is released on the next pass. An ack whose message was
