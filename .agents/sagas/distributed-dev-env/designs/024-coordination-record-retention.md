@@ -899,9 +899,9 @@ exec fake, so the protocol is exercised):
   directory. The mount check is stubbed the same way the archive tests stub
   it. One absent owner's claim is marked and kept, kept again one minute
   inside the grace, then deleted once the grace is over. The archive get is
-  recorded before that delete, and the stored object's hash matches its
-  manifest. A context, a message, an ack, the exec transport, and the
-  archived-read API remain.
+  recorded before that delete. The stored bytes equal the canonical claim
+  read before that delete, and their hash matches the manifest. A context,
+  a message, an ack, the exec transport, and the archived-read API remain.
 - **E2, refusals.** Each leaves the record live and counts its reason:
   the revision removed after the mark (`archive_missing`, a `reset` event, then
   re-marked with a new grace); stored bytes altered (`archive_mismatch`, never
