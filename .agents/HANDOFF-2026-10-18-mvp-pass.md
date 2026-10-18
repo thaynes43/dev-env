@@ -292,18 +292,20 @@ Also still open, found while checking the tree:
 
 ## Codex review prompt
 
-Paste this to Codex. The merge SHA below is the squash merge of this handoff.
-If it still says `pending-squash-merge`, the recording commit has not landed.
+Paste this to Codex.
 
 ---
 
 Adversarially review the repository thaynes43/dev-env. The handoff is
 `.agents/HANDOFF-2026-10-18-mvp-pass.md` on main. The handoff merge SHA is
-`pending-squash-merge`.
+`3507f1f16a861acb65c2418d0fc3019608894587`.
 
 That handoff is the source of what was done and what is still open. Verify
 every claim against the code, `git log`, and the open pull requests. Where
 the summary and the tree disagree, the tree wins.
+
+Review the handoff at that SHA. A later commit on main only records the SHA
+in this prompt. It is not new product work.
 
 Advise the next steps. Keep the owner gates in the handoff. Do not retire
 v1. Do not open a live rendezvous cohort. Do not restart pod
