@@ -913,9 +913,10 @@ exec fake, so the protocol is exercised):
   check is stubbed the same way the archive tests stub it.
   `TestOnlyTestsCallSetCoordArchiveMountCheck` refuses any other non-test
   caller. `TestShelfExecRunsTheRealCoordArchiveCommand` puts one claim and
-  reads it back through the shelf client. That client execs `agentd ctl
-  coord-archive`, and the exec runs the real command entry. Nothing is
-  installed.
+  reads it back through the shelf client. The client builds `agentd ctl
+  coord-archive` argv and stdin. The in-process exec runs the real command
+  entry, and the stored object comes back. A separate process and a pods/exec
+  stream remain. Nothing is installed.
   Put, mark, and lookup cross one canonical JSON object before the real
   archive, which is the ctl request boundary.
 - **E2, refusals.** Each leaves the record live and counts its reason:

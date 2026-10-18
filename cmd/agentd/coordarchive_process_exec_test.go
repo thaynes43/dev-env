@@ -23,10 +23,10 @@ import (
 	shelfpkg "github.com/thaynes43/dev-env/internal/shelf"
 )
 
-// TestShelfExecRunsTheRealCoordArchiveCommand is DESIGN-024's process exec.
-// The shelf client runs agentd ctl coord-archive through the real command
-// entry. The stored object comes back from that command. This is not another
-// archive-before-delete proof.
+// TestShelfExecRunsTheRealCoordArchiveCommand runs the shelf client's
+// coord-archive argv through the real command entry in this process. The
+// stored object comes back. A separate process and a pods/exec stream remain.
+// This is not another archive-before-delete proof.
 func TestShelfExecRunsTheRealCoordArchiveCommand(t *testing.T) {
 	restore := agentd.SetCoordArchiveMountCheck(func(string, string) error { return nil })
 	t.Cleanup(restore)
