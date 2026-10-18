@@ -910,7 +910,9 @@ exec fake, so the protocol is exercised):
   `TestArchiveMissingLeavesTheRecord` also runs on the fake client. The verify
   read answers not found after the put. The record stays, the refusal is
   `archive_missing`, and the runnable does not write a replacement. The reset
-  and the new grace remain. The E2 envtest remains.
+  and the new grace remain. `TestShelfUnavailableDoesNotDelete` leaves
+  both the missing shelf and `no_archive` unmarked: no put and no mark.
+  Archived reads answering 503 remain. The E2 envtest remains.
 - **E3, the inbox rule.** Sender absent and recipient present without an ack:
   kept. The recipient acks: released, the message deleted before the ack. An ack
   whose delete failed is released on the next pass. An ack whose message was

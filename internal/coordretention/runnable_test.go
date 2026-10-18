@@ -127,8 +127,8 @@ func TestShelfUnavailableDoesNotDelete(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := &passRig{pods: tc.pods, archive: tc.arch}
 			runnable := rig.build(t, retentionClaim(t, "issue:301", "55555555-5555-4555-8555-555555555555"))
-			if got := runnable.Pass(context.Background()); got != resultShelfUnavailable || rig.realDeletes != 0 {
-				t.Fatalf("result %s deletes %d", got, rig.realDeletes)
+			if got := runnable.Pass(context.Background()); got != resultShelfUnavailable || rig.realDeletes != 0 || len(tc.arch.puts) != 0 || len(tc.arch.marks) != 0 {
+				t.Fatalf("result %s deletes %d puts %d marks %d", got, rig.realDeletes, len(tc.arch.puts), len(tc.arch.marks))
 			}
 		})
 	}
