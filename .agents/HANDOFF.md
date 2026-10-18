@@ -178,6 +178,15 @@ no OOM. Neither figure is the installed amd64 shelf. The
 does not mount either archive, start R5, raise the shelf limit, open a cohort,
 or accept retention.
 
+**Concurrent get and prune measurement, 2026-10-18.** Four worst-case gets and
+one `ctl prune` ran together in that same offline limit. Native arm64 peaked
+at 143355904 bytes with no OOM. An amd64 binary on VirtualApple reached the
+limit and the kernel killed one get, on both runs. Neither figure is the
+installed shelf. The
+[record](sagas/distributed-dev-env/verification/coordination-archive-concurrent-get-memory-2026-10-18.md)
+does not raise the 256 MiB limit, start R5, mount either archive, or open a
+cohort.
+
 ## General archive get selectors: recorded-time source portion — 2026-10-14 UTC
 
 The [selector slice](sagas/distributed-dev-env/verification/coordination-archive-selectors-2026-10-14.md)

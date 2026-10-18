@@ -55,5 +55,7 @@ access, deployment, deletion, v1 or cutover operation occurred.
 
 *Update, 2026-10-18:* the shelf-limit get measurement is recorded in
 [coordination-archive-get-memory-2026-10-18](coordination-archive-get-memory-2026-10-18.md).
+The concurrent four-get-plus-prune run is recorded in
+[coordination-archive-concurrent-get-memory-2026-10-18](coordination-archive-concurrent-get-memory-2026-10-18.md).
 Release, installed image, archive activation, consumer integration and MVP
-acceptance remain unproved.
+acceptance remain unproved. R5 is not started.

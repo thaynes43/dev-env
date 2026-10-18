@@ -80,4 +80,6 @@ The object SHA-256 is
 Stdout was 1049136 bytes each time. One get fit in the 256 MiB limit in
 all four runs. Four times the higher VirtualApple peak is 338752 KiB, which is above
 256 MiB. That arithmetic is not four concurrent gets and it is not a prune.
-R5 still makes that judgment, and R5 is not started.
+The concurrent run is
+[coordination-archive-concurrent-get-memory-2026-10-18](coordination-archive-concurrent-get-memory-2026-10-18.md).
+R5 is not started.

@@ -547,6 +547,15 @@ arithmetic is not a concurrent run. This does not raise the limit, start R5,
 or mount either archive. The
 [measurement record](../verification/coordination-archive-get-memory-2026-10-18.md)
 has the command and the binary hashes.
+*2026-10-18, concurrent run:* four gets of that same 1 MiB object stayed
+resident while one `ctl prune` ran, in the same 0.25 CPU and 256 MiB limit.
+Native arm64 peaked at 143159296 and 143355904 bytes, with no OOM. An amd64
+binary on VirtualApple reached the limit and the kernel killed one get, on
+both runs. The shelf image is amd64 on Talos, so R5 must not treat either
+result as the installed shelf's figure. This does not raise the limit, start
+R5, or mount either archive. The
+[concurrent record](../verification/coordination-archive-concurrent-get-memory-2026-10-18.md)
+has the command and the binary hashes.
 
 **A pass.** The first pass starts 10 minutes after the leader starts, then one
 every 6 hours, each with a 30-minute deadline.
@@ -1056,8 +1065,8 @@ batches, `list` paging across months and its 4 MiB page cut, ambiguity and the
 mount check. R2 also measures the peak memory of a worst-case `get` in a
 container with the shelf's limits. *2026-10-18:* section 5 records the
 offline runs. The higher arm64 peak was 41140 KiB. The higher amd64
-VirtualApple peak was 84688 KiB. Neither is the installed shelf. Nothing
-was installed.
+VirtualApple peak was 84688 KiB. Neither is the installed shelf. The
+concurrent four-get-plus-prune run is in section 5. Nothing was installed.
 
 **Installed** (R7, a verification record): the shelf mounts the archive and
 `coord-archive list` answers an empty page; the archive's PV is `Retain`;
