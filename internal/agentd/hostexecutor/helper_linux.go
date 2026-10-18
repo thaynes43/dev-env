@@ -29,6 +29,13 @@ func Helper() error {
 		return err
 	}
 	parent, err := os.Stat(fmt.Sprintf("/proc/%d/exe", os.Getppid()))
+	// Direct immutable PID1 is nondumpable. It supplies its already-open image
+	// descriptor over the same inherited control boundary before native launch.
+	if err != nil && os.Getppid() == 1 {
+		f := os.NewFile(4, "original-guard-image")
+		parent, err = f.Stat()
+		_ = f.Close()
+	}
 	if err != nil || !os.SameFile(self, parent) {
 		return errors.New("helper parent executable is not the owned supervisor")
 	}
@@ -64,6 +71,10 @@ func Helper() error {
 	err = unix.Prctl(unix.PR_GET_CHILD_SUBREAPER, uintptr(unsafe.Pointer(&mode)), 0, 0, 0)
 	if err != nil || mode != 1 {
 		return errors.New("subreaper mode not confirmed")
+	}
+	// Native children share the UID; protect the stop/evidence producer too.
+	if err := ProtectEvidenceProcess(); err != nil {
+		return err
 	}
 	deadline := time.NewTimer(time.Until(c.Binding.Deadline))
 	defer deadline.Stop()

@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,21 +34,6 @@ import (
 	"github.com/thaynes43/dev-env/internal/templates"
 )
 
-// Independent model-free root-readiness fixture. No native/provider readiness
-// is claimed; production has no general native inspector supplied by this test.
-type privateWorkflowRootInspector struct {
-	reader client.Reader
-	key    client.ObjectKey
-	uid    types.UID
-}
-
-func (i privateWorkflowRootInspector) InspectNativeAdmission(ctx context.Context, l *taskbudget.Ledger, b taskbudget.Binding) error {
-	var pod corev1.Pod
-	if l.Binding != b || l.Parent != coordinatorSA || i.reader.Get(ctx, i.key, &pod) != nil || pod.UID != i.uid || string(pod.UID) != b.PodUID || !pod.DeletionTimestamp.IsZero() || len(pod.Spec.Containers) != 1 || pod.Spec.Containers[0].Image != "synthetic-model-free-host" {
-		return taskbudget.ErrDenied
-	}
-	return nil
-}
 func privateWorkflowChild(t *testing.T, l *taskbudget.Ledger) taskbudget.Worker {
 	t.Helper()
 	for _, w := range l.Workers {
@@ -70,7 +54,7 @@ func TestEnvtestPrivateBudgetDispatchReserveStopPreserve(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{sessionNS, "dev-env-system", "private-budget-fixture", "kube-node-lease"} {
+	for _, name := range []string{sessionNS, "dev-env-system", "private-budget-fixture", "kube-node-lease", "dev-agents"} {
 		if err := live.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}); err != nil && !apierrors.IsAlreadyExists(err) {
 			t.Fatal(err)
 		}
@@ -83,14 +67,23 @@ func TestEnvtestPrivateBudgetDispatchReserveStopPreserve(t *testing.T) {
 	now := func() time.Time { return time.Unix(0, clock.Load()).UTC() }
 	f := coordinatorFixture(t)
 	f.srv.Client, f.srv.Live, f.srv.Now = live, live, now
-	root := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "private-budget-host", Namespace: "dev-env-system", Annotations: map[string]string{CoordinatorHostAnnotation: "host-a"}}, Spec: corev1.PodSpec{ServiceAccountName: "codex-host-a", Containers: []corev1.Container{{Name: "host", Image: "synthetic-model-free-host"}}}}
+
+	owned := prepareOwnedWorkflow(t, live, now)
+	root := taskbudget.OwnedRootPod(owned.policy)
+	root.Spec.NodeName = "synthetic-root-worker"
 	if err := live.Create(ctx, root); err != nil {
 		t.Fatal(err)
 	}
-	id := saIdentity(coordinatorSA)
+	root.Status.Phase = corev1.PodRunning
+	root.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: taskbudget.OwnedRootContainer, Image: owned.policy.Image, ImageID: owned.policy.Image, Ready: true, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now())}}}}
+	if err := live.Status().Update(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+	id := saIdentity("dev-agents/codex-host-a")
 	id.PodName, id.PodUID = root.Name, string(root.UID)
 	f.auth[tokCoordinator] = id
 	f.srv.Policy.Coordinators[0].PodName = root.Name
+	f.srv.Policy.Coordinators[0].ServiceAccount = "dev-agents/codex-host-a"
 	catalog := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "dev-env-project-catalog", Namespace: "dev-env-system"}, Data: map[string]string{"catalog.json": apiProjectCatalog}}
 	if err := live.Create(ctx, catalog); err != nil {
 		t.Fatal(err)
@@ -120,16 +113,13 @@ func TestEnvtestPrivateBudgetDispatchReserveStopPreserve(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := &taskbudget.Service{Store: taskbudget.KubeStore{Client: live, Live: live, Namespace: "private-budget-fixture"}, Now: now, Validator: controller.ManagedBudgetEvidenceValidator{Reader: live, Now: now}, ManagedInspector: controller.ManagedPodAdmissionInspector{Reader: live, Templates: client.ObjectKeyFromObject(template), Image: f.tmpl.Image}}
-	service.NativeInspector = privateWorkflowRootInspector{reader: live, key: client.ObjectKeyFromObject(root), uid: root.UID}
+	service.NativeInspector = owned.inspector
+	service.Validator = controller.OwnedRootBudgetValidator{Root: owned.inspector, Managed: service.Validator}
 	f.srv.TaskBudgets = service
 	f.srv.AssignedTaskBudgets = map[string]string{"host-a": "campaign-a"}
-	var serverMu sync.Mutex
-	handler := f.srv.Handler()
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serverMu.Lock()
-		defer serverMu.Unlock()
-		handler.ServeHTTP(w, r)
-	}))
+	auth := &ownedWorkflowAuth{values: f.auth}
+	f.srv.Auth = auth
+	server := httptest.NewTLSServer(f.srv.Handler())
 	defer server.Close()
 	request := func(method, path, token string, body any, want int) []byte {
 		t.Helper()
@@ -155,12 +145,35 @@ func TestEnvtestPrivateBudgetDispatchReserveStopPreserve(t *testing.T) {
 		}
 		return data
 	}
-	raw := request(http.MethodPost, apiv1.TaskBudgetsPath, tokCoordinator, apiv1.CreateTaskBudgetRequest{TaskUID: "campaign-a", Spec: apiv1.TaskBudgetSpec{SuccessCondition: "private HOME retained after bounded stop", OverallSeconds: 120, EffortSeconds: 180, CheckpointSeconds: 30}}, http.StatusCreated)
-	var budget apiv1.TaskBudgetStatus
-	if json.Unmarshal(raw, &budget) != nil {
-		t.Fatal("budget receipt")
+
+	remote := &apiv1.HTTPTaskBudgetGate{BaseURL: server.URL, Client: server.Client(), Token: func(context.Context) (string, error) { return tokCoordinator, nil }}
+	clock.Store(time.Now().UTC().UnixNano())
+	binding, err := remote.BootstrapOwned(ctx, apiv1.CreateTaskBudgetRequest{TaskUID: "campaign-a", Spec: owned.policy.Spec}, "host-a", string(root.UID))
+	if err != nil {
+		t.Fatal("bootstrap", err)
 	}
-	request(http.MethodPost, apiv1.TaskBudgetPath(budget.Binding.TaskUID)+"/admit", tokCoordinator, apiv1.TaskBudgetRequest{Binding: budget.Binding}, http.StatusOK)
+	budget := apiv1.TaskBudgetStatus{Binding: binding}
+	// A client-selected/local receipt is not production authority: before the
+	// actual guard endpoint exists, admission must refuse without charging.
+	request(http.MethodPost, apiv1.TaskBudgetPath(binding.TaskUID)+"/admit", tokCoordinator, apiv1.TaskBudgetRequest{Binding: binding}, http.StatusServiceUnavailable)
+	stopRoot, rootDone := owned.run(t, remote, binding)
+	readyBy := time.Now().Add(4 * time.Second)
+	for {
+		l, _, err := service.Store.Read(ctx, binding.TaskUID)
+		if err == nil && l.NativeAdmitted() && owned.inspector.InspectNativeContinuation(ctx, l, binding) == nil {
+			break
+		}
+		select {
+		case err := <-rootDone:
+			t.Fatal("guard exited before ready", err)
+		default:
+		}
+		if time.Now().After(readyBy) {
+			t.Fatal("original guard never became ready", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	var raw []byte
 	req := coordinatorTask()
 	req.Model, req.Effort, req.IdempotencyKey = "claude-haiku-4-5", "", "private-budget-once"
 	req.Limits = &apiv1.Limits{Timeout: "1m"}
@@ -216,7 +229,10 @@ func TestEnvtestPrivateBudgetDispatchReserveStopPreserve(t *testing.T) {
 		}
 	}
 	if pod.UID == "" || podCreates != 1 {
-		t.Fatalf("no single private launch: creates=%d session=%+v", podCreates, s.Status)
+		_ = live.Get(ctx, key, &s)
+		ledger, _, readErr := service.Store.Read(ctx, budget.Binding.TaskUID)
+		t.Logf("ledger=%+v read=%v inspector=%v", ledger, readErr, owned.inspector.InspectNativeContinuation(ctx, ledger, budget.Binding))
+		t.Fatalf("no single private launch: creates=%d session=%+v private=%+v", podCreates, s.Status, s.Status.PrivateHistory)
 	}
 	step()
 	step() // Bind the acknowledged live Pod and retain original identity.
@@ -248,12 +264,25 @@ func TestEnvtestPrivateBudgetDispatchReserveStopPreserve(t *testing.T) {
 	}
 	childIdentity := saIdentity(sessionNS + "/" + controller.ServiceAccountName)
 	childIdentity.PodName, childIdentity.PodUID = pod.Name, string(pod.UID)
-	serverMu.Lock()
-	f.auth["private-child-token"] = childIdentity
-	serverMu.Unlock()
+	auth.set("private-child-token", childIdentity)
 	gate := &apiv1.HTTPTaskBudgetGate{BaseURL: server.URL, Client: server.Client(), Token: func(context.Context) (string, error) { return "private-child-token", nil }}
 	if latch, err := gate.Observe(ctx, budget.Binding); err != nil || latch {
 		t.Fatal("live private worker could not observe", latch, err)
+	}
+	stopRoot()
+	select {
+	case err := <-rootDone:
+		if err != nil {
+			t.Fatal("original root stop", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("root stop timeout")
+	}
+	// Return completion to cleanup without hiding a second execution.
+
+	ledgerAfterRoot, _, err := service.Store.Read(ctx, budget.Binding.TaskUID)
+	if err != nil || !ledgerAfterRoot.Latched || ledgerAfterRoot.Reason != "NativeRootStopped" || !privateWorkflowChild(t, ledgerAfterRoot).Active {
+		t.Fatal("root stop did not latch while child stayed charged", err)
 	}
 	clock.Store(now().Add(31 * time.Second).UnixNano())
 	if latch, err := gate.Observe(ctx, budget.Binding); !latch {
@@ -318,5 +347,5 @@ func TestEnvtestPrivateBudgetDispatchReserveStopPreserve(t *testing.T) {
 	if err := live.Get(ctx, homeKey, &home); err != nil || home.UID != homeUID {
 		t.Fatal("missing executor lost HOME", err)
 	}
-	t.Log("model-free TLS/envtest: private dispatch, reservation-before-create, lost ACK with one Pod, exact root/local timers, latch, stale proof refusal, verified stop, retained HOME/Pod, denied resume and no replay; zero provider actors")
+	t.Log("model-free actual guard/peer/RPC/operator-inspector/TLS/envtest: private dispatch, reservation-before-create, lost ACK with one Pod, exact root/local timers, latch, stale proof refusal, verified stop, retained HOME/Pod, denied resume and no replay; zero provider actors")
 }

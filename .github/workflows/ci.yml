@@ -118,6 +118,17 @@ jobs:
             bin/tools/setup-envtest-*
             bin/tools/envtest
           key: envtest-${{ runner.os }}-${{ hashFiles('Makefile') }}
+      - name: Original PID1 evidence with inert native process
+        # One bounded isolated process tree; no provider, credentials or cluster.
+        run: |
+          GOMAXPROCS=2 nice -n 19 go test -p 1 -c -o /tmp/owned-root-evidence.test ./internal/agentd/hostexecutor
+          sudo nice -n 19 unshare --pid --fork --mount-proc --setuid 1000 --setgid 1000 env AGENTD_TEST_REQUIRE_PID1=true /tmp/owned-root-evidence.test -test.run '^TestOwnedRootPID1Evidence$' -test.v -test.timeout 30s
+
+      - name: One-shot PID1 bootstrap with synthetic HTTPS
+        run: |
+          GOMAXPROCS=2 nice -n 19 go test -p 1 -c -o /tmp/owned-root-bootstrap.test ./cmd/agentd
+          sudo nice -n 19 unshare --pid --fork --mount-proc --setuid 1000 --setgid 1000 env AGENTD_TEST_REQUIRE_PID1=true /tmp/owned-root-bootstrap.test -test.run '^TestOwnedRootBootstrapPID1$' -test.v -test.timeout 30s
+
       # Unit tests and the envtest suites, two packages at a time (Makefile).
       - name: go test -p 2
         run: make test

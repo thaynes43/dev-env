@@ -113,3 +113,61 @@ workload excludes owner clients, prompts, model turns and child inference. A
 fresh local permit file or permissive fake Gate is not that acceptance. Source
 checks use only synthetic TLS projections and inert native socket/process
 fixtures. They do not close the real native or accounting gates.
+
+## Explicit ordinary root source adapter
+
+`--owned-root-policy=<ConfigMap>` selects the separate ordinary root inspector,
+with exactly one configured coordinator and assigned campaign; default remains
+off and the fixed zero-task fixture remains separate. `OwnedRootPod(policy)`
+constructs the exact source profile without creating a Pod. The operator-owned
+`owned-root.json` binds the task, finite spec, immutable agent image, original
+HOME PVC UID, authorized `.codex` baseline and approved network-policy UID/spec
+hash. Signature/source review, sole trusted exec-client ownership, effective
+Cilium/storage isolation, credentials and installation remain separate gates.
+
+The original supervisor must be direct namespace PID1, nonroot1000, with no
+sidecars/init containers, host namespaces, elevated capabilities or writable
+image. PID1 and its authenticated helper become nondumpable before native starts.
+The helper uses inherited executable FD4 when protected PID1's proc executable
+is inaccessible. The server bounds concurrent connections to four and each connection to500ms;
+one idle peer cannot serialize all probes. A fresh bounded challenge probes the original PID1 Unix peer,
+boot/start identity and pidfd liveness, then reads protected memory. Ready proof
+also rechecks the original native peer and pinned initialize exchange. Receipts
+and worker-reported readiness are never inputs to operator authority.
+
+The exec-to-main interval needs independent protection: Yama ptrace_scope must
+be1/2/3 and stdout must already be a UID0-owned FIFO with mode0600. The fixed
+probe refuses unsupported/unknown/TTY/worker-accessible output before emitting
+proof. Yama alone does not protect proc FD reads; becoming nondumpable cannot
+revoke an already opened output descriptor. These requirements may refuse a CRI
+transport until separately verified; source tests do not assert compatibility.
+No sysctl, credential or trust enrollment is modified.
+
+The HOME claim must be Bound ReadWriteOncePod, rather than node-shared RWO. The
+startup baseline traverses directory FDs without symlinks, bounds entries/bytes,
+checks stable identities/content, and excludes only regular single-link rotating
+`auth.json`. Owner-approved digest comparison happens before admission; native
+mutations after launch are not rehashed as provenance. Unrelated recovery input
+or aliases refuse. The private directories and approved recovery baseline must
+already exist; this route does not prepare or erase an existing enrollment.
+
+The guarded bootstrap preflights HOME authority before consuming an intent, then
+writes and syncs a one-use intent and its parent directory
+before one authenticated budget create. Conflict, unknown acknowledgement or
+restart never triggers recovery/replay. The returned exact binding is frozen; its clock sanity check permits at most a
+fixed five-second operator/node skew without rewriting the deadline.
+Prepared permits initial Admit; Starting denies work without an authority-loss
+latch; dispatch, launch reservation and private continuation require fresh Ready.
+Unknown evidence stops work and retains accounting. Original native Wait, ECHILD
+and successful helper Wait advance protected state to Stopped. The still-live
+original guard supplies that proof for one stop-event request. An exact event
+acknowledgement is required; it atomically latches the campaign while each child
+stays charged until its own independent stop. Unknown replies remain unknown.
+
+The source integration uses actual inert guard/native/helper processes, Unix
+peer credentials/RPC, the production operator inspector, real TLS budget API and
+isolated Kubernetes admission/storage. Only Cilium's stored object and token
+identities are synthetic; no kubelet/datapath/provider exists there. A separate
+hosted CI test uses nonroot PID1 in a bounded fresh PID namespace, including the
+protected-parent FD4 path. Neither test establishes real Codex recovery, CRI
+pipe compatibility, phone pairing or installed/native usable acceptance.

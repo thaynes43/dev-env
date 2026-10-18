@@ -32,6 +32,7 @@ type Gate interface {
 }
 
 type Config struct {
+	Evidence     *EvidenceConfig `json:"-"`
 	Binding      Binding
 	HelperBinary string
 	NativeBinary string
@@ -137,12 +138,19 @@ func Run(ctx context.Context, c Config, gate Gate) (Receipt, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Receipt{}, err
 	}
+	if c.Evidence != nil {
+		if err := c.Evidence.start(c); err != nil {
+			return Receipt{}, err
+		}
+		defer c.Evidence.Close()
+	}
 	admitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	err = admit(admitCtx, gate, c.Binding)
 	cancel()
 	if err != nil {
 		return Receipt{}, fmt.Errorf("budget admission: %w", err)
 	}
+	c.Evidence.update("Starting", receipt)
 	if err = save(c.ReceiptPath, receipt); err != nil {
 		return receipt, err
 	}
@@ -161,6 +169,16 @@ func Run(ctx context.Context, c Config, gate Gate) (Receipt, error) {
 	defer func() { _ = conn.Close() }()
 	cmd := exec.Command(c.HelperBinary, "owned-codex-host-helper")
 	cmd.ExtraFiles = []*os.File{childFile}
+	var guardExe *os.File
+	if c.Evidence != nil && c.Evidence.RequirePID1 {
+		guardExe, err = os.Open("/proc/self/exe")
+		if err != nil {
+			_ = childFile.Close()
+			return receipt, err
+		}
+		defer func() { _ = guardExe.Close() }()
+		cmd.ExtraFiles = append(cmd.ExtraFiles, guardExe)
+	}
 	// Native output may contain credentials or pairing material. It is never
 	// copied to this receipt, the API, stderr or a public log.
 	cmd.Stdout = nil
@@ -222,6 +240,9 @@ func Run(ctx context.Context, c Config, gate Gate) (Receipt, error) {
 			receipt.NativeVersion = c.ReadyVersion
 			receipt.Updated = time.Now().UTC()
 			startupErr = save(c.ReceiptPath, receipt)
+			if startupErr == nil {
+				c.Evidence.update("Ready", receipt)
+			}
 		}
 		if startupErr != nil {
 			err = startupErr
@@ -248,6 +269,7 @@ func Run(ctx context.Context, c Config, gate Gate) (Receipt, error) {
 			case m, ok := <-events:
 				if ok && (m.Kind == "stopped" || m.Kind == "unknown") {
 					receipt.State = "Stopping"
+					c.Evidence.update("Stopping", receipt)
 					receipt.Reason = "native exit or helper backstop"
 					receipt.Updated = time.Now().UTC()
 					if e := save(c.ReceiptPath, receipt); e != nil {
@@ -273,6 +295,7 @@ func Run(ctx context.Context, c Config, gate Gate) (Receipt, error) {
 		}
 	}
 	receipt.State = "Stopping"
+	c.Evidence.update("Stopping", receipt)
 	receipt.Reason = reason
 	receipt.Updated = time.Now().UTC()
 	if e := save(c.ReceiptPath, receipt); e != nil {
@@ -315,6 +338,9 @@ func finish(c Config, r Receipt, m message, done <-chan error) (Receipt, error) 
 	r.TreeReaped = true
 	r.Updated = time.Now().UTC()
 	if err := save(c.ReceiptPath, r); err != nil {
+		return r, err
+	}
+	if err := c.Evidence.reportStopped(c, r); err != nil {
 		return r, err
 	}
 	return r, nil

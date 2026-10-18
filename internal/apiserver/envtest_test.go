@@ -55,6 +55,7 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	ownedRootFixtureProcess()
 	code := m.Run()
 	if env != nil {
 		if err := env.Stop(); err != nil {
