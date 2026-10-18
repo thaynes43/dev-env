@@ -934,6 +934,9 @@ exec fake, so the protocol is exercised):
   verify and delete (`precondition_failed`, then the next pass archives the new
   revision and deletes); no delete Role (`forbidden`). A worst-case publication
   (64 KiB of U+0001, about 384 KiB escaped) is archived, verified and deleted.
+  `TestEnvtestWorstCasePublicationDeletes` stores that publication on a real
+  API server and the real coordination archive, verifies it, and deletes it.
+  The stored JSON escapes each byte and stays inside the archive bound.
   *2026-10-17:* `TestArchiveMismatchLeavesTheRecord` runs on the fake client.
   The verify read returns altered bytes. The record stays, the refusal is
   `archive_mismatch`, and the stored bytes stay the original put.
