@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -213,13 +214,17 @@ func (f *fsArchive) Lookup(_ context.Context, ids []protocol.CoordArchiveIdentit
 	return f.a.Lookup(ids)
 }
 
-// decodeCtl is the coord-archive ctl JSON boundary: one canonical object and
-// no trailing value. A process exec remains outside this test.
+// decodeCtl is the coord-archive ctl JSON boundary: the request byte bound,
+// UTF-8, one canonical object, and no trailing value. A process exec remains
+// outside this test.
 func decodeCtl[T any](v T) (T, error) {
 	var zero T
 	raw, err := protocol.CanonicalJSON(v)
 	if err != nil {
 		return zero, err
+	}
+	if len(raw) > protocol.MaxCoordArchiveRequestBytes || !utf8.Valid(raw) {
+		return zero, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "request read, byte bound or UTF-8 refused")
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
