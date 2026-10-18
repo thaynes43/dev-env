@@ -69,10 +69,11 @@ func worstCaseCoordClaim(t *testing.T) (protocol.CoordArchiveManifest, []byte, [
 func TestCoordArchiveWorstCaseGetRoundTrip(t *testing.T) {
 	env, _ := coordCLIRig(t)
 	m, canonical, packet := worstCaseCoordClaim(t)
-	code, out, stderr := runCoordCLI([]string{"ctl", "coord-archive", "put"}, packet, env)
+	code, _, stderr := runCoordCLI([]string{"ctl", "coord-archive", "put"}, packet, env)
 	if code != exitOK || stderr != "" {
 		t.Fatalf("put: exit=%d stderr=%s", code, stderr)
 	}
+	var out []byte
 	code, out, stderr = runCoordCLI(coordGetArgs(m), nil, env)
 	var got protocol.CoordArchiveGetResult
 	if err := json.Unmarshal(out, &got); err != nil || code != exitOK || stderr != "" {

@@ -538,12 +538,15 @@ prune execs (D-67) take no slot, so archive traffic cannot queue them. R2
 measures a worst-case `get`'s peak memory in the shelf container. R5 raises the
 shelf's 256 MiB limit if four of them and a prune do not fit with room to spare.
 *2026-10-18:* one exact `agentd ctl coord-archive get` of a 1 MiB canonical
-object peaked at 36932 KiB in an offline container limited to 0.25 CPU and
-256 MiB, with no OOM. A second run peaked at 36052 KiB. Four times the higher
-peak is 147728 KiB. Concurrent gets and a prune were not measured. This does
-not raise the limit, start R5, or mount either archive. The
+object was measured offline at 0.25 CPU and 256 MiB, with no OOM. The native
+arm64 peaks were 36932 KiB and 36052 KiB. An amd64 binary on this Mac's
+VirtualApple CPU peaked at 81004 KiB and 80316 KiB. The shelf image is amd64
+on Talos, so R5 must not treat either peak as the installed shelf's figure.
+Four times the higher VirtualApple peak is 324016 KiB, above 256 MiB; that
+arithmetic is not a concurrent run. This does not raise the limit, start R5,
+or mount either archive. The
 [measurement record](../verification/coordination-archive-get-memory-2026-10-18.md)
-has the command and the binary hash.
+has the command and both binary hashes.
 
 **A pass.** The first pass starts 10 minutes after the leader starts, then one
 every 6 hours, each with a 30-minute deadline.
@@ -1051,9 +1054,10 @@ debris, the index repair after a crash between the rename and the index write,
 canonical JSON, the hash recheck, events only appended, `lookup` and `mark`
 batches, `list` paging across months and its 4 MiB page cut, ambiguity and the
 mount check. R2 also measures the peak memory of a worst-case `get` in a
-container with the shelf's limits. *2026-10-18:* that measurement is the
-offline 256 MiB run recorded in section 5. The higher peak was 36932 KiB.
-Nothing was installed.
+container with the shelf's limits. *2026-10-18:* section 5 records the
+offline runs. The higher arm64 peak was 36932 KiB. The higher amd64
+VirtualApple peak was 81004 KiB. Neither is the installed shelf. Nothing
+was installed.
 
 **Installed** (R7, a verification record): the shelf mounts the archive and
 `coord-archive list` answers an empty page; the archive's PV is `Retain`;
