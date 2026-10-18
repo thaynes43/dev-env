@@ -945,7 +945,10 @@ exec fake, so the protocol is exercised):
   directory is removed and the journal stays. Inside the grace nothing
   changes. Once the grace is over, the pass writes a reset, leaves the claim,
   and does not delete it. The next pass stores the claim again and opens a
-  new grace. The other E2 refusals stay on the fake client. `TestShelfUnavailableDoesNotDelete` counts
+  new grace. `TestEnvtestArchiveMismatchLeavesTheRecord` alters the stored
+  object after the mark. Once the grace is over, the verify read refuses.
+  The claim stays, and the altered bytes are not overwritten. The other E2
+  refusals stay on the fake client. `TestShelfUnavailableDoesNotDelete` counts
   archive calls. A missing shelf pod makes none. `no_archive` makes one probe
   lookup and no put or mark. `TestOversizeRecordIsNotMarked` runs on the fake
   client. A record whose canonical bytes exceed the archive bound stays live,
