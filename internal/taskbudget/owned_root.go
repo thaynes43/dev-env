@@ -101,7 +101,7 @@ func OwnedRootPod(p OwnedRootPolicy) *corev1.Pod {
 }
 
 type OwnedRootProbe interface {
-	Observe(context.Context, client.ObjectKey, string, Binding) (hostexecutor.Observation, error)
+	Observe(context.Context, client.ObjectKey, string, Binding, string, string) (int, error)
 }
 
 type OwnedRootInspector struct {
@@ -129,8 +129,8 @@ func (i *OwnedRootInspector) load(ctx context.Context) (*corev1.ConfigMap, Owned
 	return &cm, p, nil
 }
 
-func (i *OwnedRootInspector) observe(ctx context.Context, l *Ledger, b Binding) (hostexecutor.Observation, OwnedRootPolicy, error) {
-	var empty hostexecutor.Observation
+func (i *OwnedRootInspector) observe(ctx context.Context, l *Ledger, b Binding) (int, OwnedRootPolicy, error) {
+	const empty = 0
 	cm, p, err := i.load(ctx)
 	if err != nil {
 		return empty, p, err
@@ -182,8 +182,8 @@ func (i *OwnedRootInspector) observe(ctx context.Context, l *Ledger, b Binding) 
 	if i.Reader.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: p.NetworkPolicyName}, netPolicy) != nil || string(netPolicy.GetUID()) != p.NetworkPolicyUID || !netPolicy.GetDeletionTimestamp().IsZero() || OwnedPolicyDigest(netPolicy.Object["spec"]) != p.NetworkPolicySHA || netPolicy.Object["specs"] != nil {
 		return empty, p, ErrUnavailable
 	}
-	proof, err := i.Probe.Observe(ctx, key, OwnedRootContainer, b)
-	if err != nil || !sameRootBinding(proof.Binding, b) || proof.Version != 1 || proof.HomeUID != p.HomeUID || proof.Baseline != p.Baseline {
+	proof, err := i.Probe.Observe(ctx, key, OwnedRootContainer, b, p.HomeUID, p.Baseline)
+	if err != nil || !hostexecutor.ValidEvidenceExit(proof) {
 		return empty, p, ErrUnavailable
 	}
 	var again corev1.Pod
@@ -195,9 +195,6 @@ func (i *OwnedRootInspector) observe(ctx context.Context, l *Ledger, b Binding) 
 	}
 	return proof, p, nil
 }
-func sameRootBinding(a hostexecutor.Binding, b Binding) bool {
-	return a.TaskUID == b.TaskUID && a.Epoch == b.Epoch && a.HostID == b.HostID && a.PodUID == b.PodUID && a.Deadline.Equal(b.Deadline)
-}
 func (i *OwnedRootInspector) InspectNativeAdmission(ctx context.Context, l *Ledger, b Binding) error {
 	if l.NativeAdmitted() {
 		return i.InspectNativeContinuation(ctx, l, b)
@@ -206,7 +203,7 @@ func (i *OwnedRootInspector) InspectNativeAdmission(ctx context.Context, l *Ledg
 	if err != nil {
 		return err
 	}
-	if proof.Stage != "Prepared" || proof.Root.PID != 0 {
+	if proof != hostexecutor.EvidencePrepared {
 		return ErrDenied
 	}
 	return nil
@@ -216,10 +213,10 @@ func (i *OwnedRootInspector) InspectNativeContinuation(ctx context.Context, l *L
 	if err != nil {
 		return err
 	}
-	if proof.Stage == "Starting" || proof.Stage == "Prepared" {
+	if proof == hostexecutor.EvidenceStarting || proof == hostexecutor.EvidencePrepared {
 		return ErrNativeStarting
 	}
-	if !l.NativeAdmitted() || proof.Stage != "Ready" || proof.Root.PID < 2 || proof.NativeVersion != hostexecutor.PinnedNativeVersion {
+	if !l.NativeAdmitted() || proof != hostexecutor.EvidenceReady {
 		return ErrUnavailable
 	}
 	return nil
@@ -233,7 +230,7 @@ func (i *OwnedRootInspector) ValidateStop(ctx context.Context, l *Ledger, e apiv
 	if err != nil {
 		return err
 	}
-	if proof.Stage != "Stopped" || proof.Root.PID < 2 || !proof.RootWaitObserved || !proof.TreeReaped {
+	if proof != hostexecutor.EvidenceStopped {
 		return ErrUnavailable
 	}
 	return nil
