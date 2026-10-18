@@ -958,7 +958,11 @@ exec fake, so the protocol is exercised):
   shelf_unavailable. The claim stays, and the archive has no revision. The
   other E2 refusals stay on the fake client. `TestShelfUnavailableDoesNotDelete` counts
   archive calls. A missing shelf pod makes none. `no_archive` makes one probe
-  lookup and no put or mark. `TestOversizeRecordIsNotMarked` runs on the fake
+  lookup and no put or mark. `TestEnvtestNoArchiveDoesNotMark` runs that
+  probe on a real API server and the real coordination archive. The shelf pod
+  is ready, and the archive root is not a volume of its own. The pass answers
+  shelf_unavailable after one lookup. The claim stays, and the archive has no
+  revision. `TestOversizeRecordIsNotMarked` runs on the fake
   client. A record whose canonical bytes exceed the archive bound stays live,
   the refusal is `archive_invalid`, and the pass does not put or mark it.
   `TestArchivedReadsWithoutAVolumeAnswerUnavailable` stores a claim, a
