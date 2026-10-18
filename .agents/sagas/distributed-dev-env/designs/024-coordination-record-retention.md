@@ -932,7 +932,10 @@ exec fake, so the protocol is exercised):
   including Reaping and private-history-retained Sessions (never marked); Unknown
   from an injected timeout, 5xx and "no match for kind"; a label changed between
   verify and delete (`precondition_failed`, then the next pass archives the new
-  revision and deletes); no delete Role (`forbidden`). A worst-case publication
+  revision and deletes); no delete Role (`forbidden`).
+  `TestEnvtestForbiddenDeleteLeavesTheClaim` runs that pass on a real API
+  server. The deleter has no delete right. The verify read happens, the API
+  server refuses the delete, and the claim stays. A worst-case publication
   (64 KiB of U+0001, about 384 KiB escaped) is archived, verified and deleted.
   `TestEnvtestWorstCasePublicationDeletes` stores that publication on a real
   API server and the real coordination archive, verifies it, and deletes it.
