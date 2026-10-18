@@ -37,9 +37,9 @@ SHA256 pins. The container was `debian:bookworm-slim` image
 pod, or history archive was mounted.
 
 Binaries are `CGO_ENABLED=0 GOOS=linux go build -buildvcs=false ./cmd/agentd`
-with toolchain go1.27.2. `-buildvcs=false` keeps the hash off the git
-commit, because the measurement does not depend on a stamp. Test files and
-this record are not in that binary. The waiter is
+with toolchain go1.27.2. The Go sources are commit `55e4c25`. This record's
+later wording is not in the binary. `-buildvcs=false` keeps the hash off
+the git stamp. Test files are not in that binary. The waiter is
 `cmd/agentd/coordarchive_shelf_measure_wait.go` (`//go:build ignore`),
 built with `go build -buildvcs=false -o coord-get-measure-wait
 ./cmd/agentd/coordarchive_shelf_measure_wait.go`. It refuses to run unless

@@ -546,7 +546,7 @@ Four times the higher VirtualApple peak is 338752 KiB, above 256 MiB; that
 arithmetic is not a concurrent run. This does not raise the limit, start R5,
 or mount either archive. The
 [measurement record](../verification/coordination-archive-get-memory-2026-10-18.md)
-has the command and both binary hashes.
+has the command and the binary hashes.
 
 **A pass.** The first pass starts 10 minutes after the leader starts, then one
 every 6 hours, each with a 30-minute deadline.
