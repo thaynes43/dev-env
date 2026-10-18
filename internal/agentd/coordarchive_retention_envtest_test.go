@@ -37,9 +37,10 @@ import (
 // TestEnvtestArchiveBeforeDelete is DESIGN-024 E1 for one claim. The archive is
 // the real coordination archive on a temp directory. The mount check is stubbed
 // the same way the archive tests stub it. Put, mark, and lookup cross the ctl
-// JSON boundary. An ack, a process exec, and the archived-read API remain.
-// The published-context proof is TestEnvtestArchiveBeforeDeleteContext. The
-// inbox-message proof is TestEnvtestArchiveBeforeDeleteMessage.
+// JSON boundary. A process exec and the archived-read API remain. The other
+// record proofs are TestEnvtestArchiveBeforeDeleteContext,
+// TestEnvtestArchiveBeforeDeleteMessage, and
+// TestEnvtestArchiveBeforeDeleteAck.
 func TestEnvtestArchiveBeforeDelete(t *testing.T) {
 	old := coordArchiveIsMounted
 	coordArchiveIsMounted = func(string, string) error { return nil }
@@ -321,6 +322,138 @@ func TestEnvtestArchiveBeforeDeleteMessage(t *testing.T) {
 	if hex.EncodeToString(sum[:]) != stored.Manifest.Object.SHA256 || !bytes.Equal(stored.Object, live) {
 		t.Fatal("archived bytes are not the message read before the delete")
 	}
+}
+
+// TestEnvtestArchiveBeforeDeleteAck is DESIGN-024 E1 for a message and its
+// acknowledgement. The sender is absent and the recipient has acked, so the
+// message is released. The same grace pass deletes the message before the ack.
+func TestEnvtestArchiveBeforeDeleteAck(t *testing.T) {
+	old := coordArchiveIsMounted
+	coordArchiveIsMounted = func(string, string) error { return nil }
+	t.Cleanup(func() { coordArchiveIsMounted = old })
+
+	env, err := testenv.Start()
+	if err != nil {
+		t.Fatalf("envtest: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := env.Stop(); err != nil {
+			t.Log("envtest stop:", err)
+		}
+	})
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{coord.AddToScheme, devv1.AddToScheme, corev1.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	admin, err := client.New(env.Config, client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const ns = "dev-env-system"
+	if err := admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
+		t.Fatal(err)
+	}
+	spec := retentionMessageSpec()
+	spec.Key = "retention-2"
+	if !inbox.ValidMessage(spec) {
+		t.Fatal("message spec")
+	}
+	message := &coord.InboxMessage{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: inbox.MessageName(spec.Sender, spec.Key)}, Spec: spec}
+	if err := admin.Create(ctx, message); err != nil {
+		t.Fatal(err)
+	}
+	ackSpec := coord.InboxReadAckSpec{Project: spec.Project, MessageName: message.Name, MessageUID: string(message.UID), Recipient: spec.Recipient, Actor: spec.Actor}
+	if !inbox.ValidAck(ackSpec) {
+		t.Fatal("ack spec")
+	}
+	ack := &coord.InboxReadAck{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: inbox.AckName(ackSpec.MessageUID, ackSpec.Recipient.UID)}, Spec: ackSpec}
+	if err := admin.Create(ctx, ack); err != nil {
+		t.Fatal(err)
+	}
+
+	home := t.TempDir()
+	root := filepath.Join(home, protocol.CoordArchiveDirName)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 10, 17, 21, 0, 0, 0, time.UTC)
+	clock := start
+	archive := CoordArchive{Root: root, Home: home, Now: func() time.Time { return clock }}
+	var order []string
+	store := &fsArchive{a: archive, order: &order}
+	runnable := &coordretention.Runnable{
+		Enabled: true, Grace: coordretention.DefaultGrace, Client: &recordingClient{Client: admin, order: &order}, Reader: admin,
+		Namespace: ns, Reconciled: map[string]bool{spec.Sender.Namespace: true},
+		Kinds: map[coordretention.Kind]bool{coordretention.InboxMessage: true, coordretention.InboxReadAck: true},
+		Pods:  shelfPod{}, Archive: store, Slots: shelf.NewExecSlots(4),
+		Now: func() time.Time { return clock },
+	}
+	pass := func(at time.Time) string {
+		t.Helper()
+		clock = at
+		return runnable.Pass(ctx)
+	}
+	if got := pass(start); got != "complete" || len(order) != 0 {
+		t.Fatalf("mark pass %s order %v", got, order)
+	}
+	if err := admin.Get(ctx, client.ObjectKeyFromObject(message), &coord.InboxMessage{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.Get(ctx, client.ObjectKeyFromObject(ack), &coord.InboxReadAck{}); err != nil {
+		t.Fatal(err)
+	}
+	messageID := protocol.CoordArchiveIdentity{Resource: "inboxmessages", Project: spec.Project, Name: message.Name, UID: string(message.UID)}
+	ackID := protocol.CoordArchiveIdentity{Resource: "inboxreadacks", Project: spec.Project, Name: ack.Name, UID: string(ack.UID)}
+	for _, id := range []protocol.CoordArchiveIdentity{messageID, ackID} {
+		looked, err := archive.Lookup([]protocol.CoordArchiveIdentity{id})
+		if err != nil || len(looked) != 1 || looked[0].GraceStart == nil || !looked[0].Holds {
+			t.Fatalf("marked %s %#v %v", id.Resource, looked, err)
+		}
+	}
+	if got := pass(start.Add(coordretention.DefaultGrace - time.Minute)); got != "complete" || len(order) != 0 {
+		t.Fatalf("grace pass %s order %v", got, order)
+	}
+	liveMessage := liveKindBytes(t, ctx, admin, client.ObjectKeyFromObject(message), "InboxMessage")
+	liveAck := liveKindBytes(t, ctx, admin, client.ObjectKeyFromObject(ack), "InboxReadAck")
+	if got := pass(start.Add(coordretention.DefaultGrace)); got != "complete" || !verifyBeforeDelete(order) || !messageDeletedBeforeAck(order) {
+		t.Fatalf("delete pass %s order %v", got, order)
+	}
+	if err := admin.Get(ctx, client.ObjectKeyFromObject(message), &coord.InboxMessage{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("message after grace: %v", err)
+	}
+	if err := admin.Get(ctx, client.ObjectKeyFromObject(ack), &coord.InboxReadAck{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("ack after grace: %v", err)
+	}
+	for _, check := range []struct {
+		id   protocol.CoordArchiveIdentity
+		live []byte
+	}{{messageID, liveMessage}, {ackID, liveAck}} {
+		stored, err := archive.GetSelected(protocol.CoordArchiveGetQuery{Resource: check.id.Resource, Name: check.id.Name, UID: check.id.UID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(stored.Object)
+		if hex.EncodeToString(sum[:]) != stored.Manifest.Object.SHA256 || !bytes.Equal(stored.Object, check.live) {
+			t.Fatalf("archived bytes are not the %s read before the delete", check.id.Resource)
+		}
+	}
+}
+
+func messageDeletedBeforeAck(order []string) bool {
+	messageAt, ackAt := -1, -1
+	for i, step := range order {
+		if step == "delete" && messageAt < 0 {
+			messageAt = i
+			continue
+		}
+		if step == "delete" && ackAt < 0 {
+			ackAt = i
+		}
+	}
+	return messageAt >= 0 && ackAt > messageAt
 }
 
 func liveKindBytes(t *testing.T, ctx context.Context, c client.Client, key client.ObjectKey, kind string) []byte {
