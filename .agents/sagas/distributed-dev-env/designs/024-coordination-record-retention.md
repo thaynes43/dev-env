@@ -912,7 +912,10 @@ exec fake, so the protocol is exercised):
   answers `archived: true`, and `?archived=only` lists that claim. The mount
   check is stubbed the same way the archive tests stub it.
   `TestOnlyTestsCallSetCoordArchiveMountCheck` refuses any other non-test
-  caller. A process exec remains.
+  caller. `TestCoordArchiveProcessExecRunsTheRealCommand` puts, looks up, and
+  reads one synthetic task claim through the shelf client. The executor runs
+  `agentd ctl coord-archive` in-process, and the read bytes match the stored
+  object. The mount check is stubbed, so this proof does not skip.
   Put, mark, and lookup cross one canonical JSON object before the real
   archive, which is the ctl request boundary.
 - **E2, refusals.** Each leaves the record live and counts its reason:
