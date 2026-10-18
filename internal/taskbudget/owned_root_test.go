@@ -26,11 +26,11 @@ type policyProof struct {
 	during func()
 }
 
-func (p *policyProof) Observe(context.Context, client.ObjectKey, string, Binding) (hostexecutor.Observation, error) {
+func (p *policyProof) Observe(_ context.Context, _ client.ObjectKey, _ string, b Binding, homeUID, baseline string) (int, error) {
 	if p.during != nil {
 		p.during()
 	}
-	return p.proof, p.err
+	return hostexecutor.EvidenceExit(p.proof, hostexecutor.Binding{TaskUID: b.TaskUID, HostID: b.HostID, PodUID: b.PodUID, Epoch: b.Epoch, Deadline: b.Deadline}, homeUID, baseline), p.err
 }
 
 type rootPolicyFixture struct {

@@ -15,21 +15,8 @@ import (
 	"github.com/thaynes43/dev-env/internal/agentd"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/thaynes43/dev-env/internal/agentd/hostexecutor"
 )
-
-func TestOwnedRootProbeOutputRejectsRaceableTransport(t *testing.T) {
-	for _, st := range []unix.Stat_t{{Mode: unix.S_IFIFO | 0600, Uid: 1000}, {Mode: unix.S_IFIFO | 0620, Uid: 0}, {Mode: unix.S_IFREG | 0600, Uid: 0}, {Mode: unix.S_IFSOCK | 0600, Uid: 0}, {Mode: unix.S_IFCHR | 0600, Uid: 0}} {
-		if safeProbeOutput(st) {
-			t.Fatal("raceable output accepted", st)
-		}
-	}
-	if !safeProbeOutput(unix.Stat_t{Mode: unix.S_IFIFO | 0600, Uid: 0}) {
-		t.Fatal("protected output refused")
-	}
-}
 
 func TestOwnedRootBootstrapIntentPersistsAndRefusesAliasOrReplay(t *testing.T) {
 	state := t.TempDir()

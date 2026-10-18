@@ -42,10 +42,10 @@ func ownedRootBootstrap(ctx context.Context, s agentd.Settings, g *ownedBudgetGa
 	return binding, evidence, nil
 }
 
-// The protected, pinned command is the only producer consumed by operator exec.
-// Neither a socket path nor a supervisor PID can be selected by its caller.
-func ownedRootProbe(ctx context.Context, args []string, stdout io.Writer) int {
-	if len(args) != 2 || !protectedProbeOutput() || hostexecutor.RequireProbeIsolation() != nil || hostexecutor.ProtectEvidenceProcess() != nil {
+// The immutable probe validates original kernel/native evidence locally. Only
+// its dedicated CRI exit status carries authority; stdout/stderr carry none.
+func ownedRootProbe(ctx context.Context, args []string, _ io.Writer) int {
+	if len(args) != 4 || hostexecutor.RequireProbeIsolation() != nil || hostexecutor.ProtectEvidenceProcess() != nil {
 		return exitFailure
 	}
 	var binding hostexecutor.Binding
@@ -58,20 +58,7 @@ func ownedRootProbe(ctx context.Context, args []string, stdout io.Writer) int {
 	if err != nil {
 		return exitFailure
 	}
-	if json.NewEncoder(stdout).Encode(proof) != nil {
-		return exitFailure
-	}
-	return exitOK
-}
-
-// CRI exec must supply an inaccessible pipe from process creation onward.
-// Hardening in main alone cannot revoke an FD raced open during exec startup.
-func protectedProbeOutput() bool {
-	var st unix.Stat_t
-	return unix.Fstat(1, &st) == nil && safeProbeOutput(st)
-}
-func safeProbeOutput(st unix.Stat_t) bool {
-	return st.Mode&unix.S_IFMT == unix.S_IFIFO && st.Uid == 0 && st.Mode&0777 == 0600
+	return hostexecutor.EvidenceExit(proof, binding, args[2], args[3])
 }
 
 func writeOwnedBootstrapIntent(stateDir, task string) error {

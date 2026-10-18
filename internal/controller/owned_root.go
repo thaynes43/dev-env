@@ -1,14 +1,15 @@
 package controller
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"time"
 
+	kexec "k8s.io/client-go/util/exec"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/internal/agentd/hostexecutor"
@@ -21,30 +22,25 @@ type OwnedRootExec interface {
 }
 type OwnedRootProber struct{ Exec OwnedRootExec }
 
-func (p OwnedRootProber) Observe(ctx context.Context, key client.ObjectKey, container string, b taskbudget.Binding) (hostexecutor.Observation, error) {
-	var result hostexecutor.Observation
+// Observe trusts only the CRI process-exit status, never worker-accessible
+// stdout/stderr. The immutable probe verifies the complete expected predicate.
+func (p OwnedRootProber) Observe(ctx context.Context, key client.ObjectKey, container string, b taskbudget.Binding, homeUID, baseline string) (int, error) {
 	if p.Exec == nil {
-		return result, taskbudget.ErrUnavailable
+		return 0, taskbudget.ErrUnavailable
 	}
 	var challenge [32]byte
 	if _, err := rand.Read(challenge[:]); err != nil {
-		return result, err
+		return 0, err
 	}
-	nonce := hex.EncodeToString(challenge[:])
 	raw, _ := json.Marshal(b)
-	var out cappedBuffer
-	out.max = 8192
 	bounded, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	if p.Exec.Run(bounded, key.Namespace, key.Name, container, []string{"/usr/local/bin/agentd", "owned-codex-host-probe", nonce, string(raw)}, nil, &out, io.Discard) != nil || out.err != nil {
-		return result, taskbudget.ErrUnavailable
+	err := p.Exec.Run(bounded, key.Namespace, key.Name, container, []string{"/usr/local/bin/agentd", "owned-codex-host-probe", hex.EncodeToString(challenge[:]), string(raw), homeUID, baseline}, nil, io.Discard, io.Discard)
+	var status kexec.ExitError
+	if bounded.Err() != nil || !errors.As(err, &status) || !status.Exited() || !hostexecutor.ValidEvidenceExit(status.ExitStatus()) {
+		return 0, taskbudget.ErrUnavailable
 	}
-	d := json.NewDecoder(bytes.NewReader(out.Bytes()))
-	d.DisallowUnknownFields()
-	if d.Decode(&result) != nil || d.Decode(new(any)) != io.EOF || result.Version != 1 || result.Challenge != nonce {
-		return hostexecutor.Observation{}, taskbudget.ErrUnavailable
-	}
-	return result, nil
+	return status.ExitStatus(), nil
 }
 
 type OwnedRootBudgetValidator struct {

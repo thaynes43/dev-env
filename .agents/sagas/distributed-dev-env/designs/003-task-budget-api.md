@@ -373,12 +373,25 @@ Bootstrap conflicts always refuse: no GET-based never-admitted inference or rear
 An independently validated original-root stop atomically latches the campaign,
 while each child stays charged until its own independent stop evidence arrives.
 
-Yama alone does not restrict proc FD read access. Therefore the fixed probe also
-refuses unless stdout is a kernel FIFO owned by UID0 with mode0600. This must hold
-from CRI process creation onward; becoming nondumpable in main cannot revoke a
-pipe descriptor already raced open. Nonzero probe exit is always refused by the
-operator. Runtime CRI transport compatibility is a held installation prerequisite,
-not assumed from a synthetic writer. TTY/worker-owned/group-readable pipes refuse.
+### CRI correction, 2026-10-18
+
+Yama does not restrict proc FD reads in the exec-to-main interval. The former
+UID0-owned0600 FIFO requirement refused ordinary UID1000 CRI output pipes.
+The corrected pinned probe discards output authority rather than allowlisting
+UID1000: it validates original PID1/native evidence plus operator binding/HOME/
+baseline and every phase predicate locally. It returns only dedicated nonzero
+process statuses40..43 through CRI's independent status channel. Operator stdout
+and stderr are discarded. The actual pinned client-go decoder treats absent or
+empty status as nil and truncated/malformed status as a generic error; both
+refuse, as do generic exit0, signals, transport errors and cancellation. Only an
+explicit typed process-exit result with a dedicated status can authorize a phase.
+A same-UID preopened output FD can forge bytes or delay EOF, never select a normal
+exit status. Yama/nondumpability, immutable command/image, original kernel peer/
+pidfd/native RPC and trusted exec ownership remain intact. No root wrapper,
+capability, sysctl, execute-only image, key or new credential is introduced.
+Model-free wire/proc-FD fixtures establish the corrected seam; real installed
+CRI/native acceptance remains distinct. Earlier source-unit no-deploy language
+does not create a new permanent owner hold.
 
 Bootstrap preflights HOME UID/baseline before spending the intent or creating a
 ledger, then the original guard measures again before admission. The returned

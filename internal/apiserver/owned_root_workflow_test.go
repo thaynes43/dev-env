@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	kexec "k8s.io/client-go/util/exec"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -84,7 +85,7 @@ type ownedWorkflowExec struct {
 }
 
 func (e ownedWorkflowExec) Run(ctx context.Context, ns, pod, container string, args []string, _ io.Reader, out, stderr io.Writer) error {
-	if len(args) != 4 || args[0] != "/usr/local/bin/agentd" || args[1] != "owned-codex-host-probe" || container != taskbudget.OwnedRootContainer {
+	if len(args) != 6 || args[0] != "/usr/local/bin/agentd" || args[1] != "owned-codex-host-probe" || container != taskbudget.OwnedRootContainer {
 		return fmt.Errorf("unexpected probe")
 	}
 	var b hostexecutor.Binding
@@ -95,7 +96,7 @@ func (e ownedWorkflowExec) Run(ctx context.Context, ns, pod, container string, a
 	if err != nil {
 		return err
 	}
-	return json.NewEncoder(out).Encode(proof)
+	return kexec.CodeExitError{Err: fmt.Errorf("probe phase"), Code: hostexecutor.EvidenceExit(proof, b, args[4], args[5])}
 }
 
 // Cilium datapath is not present in envtest. Only its independent stored policy

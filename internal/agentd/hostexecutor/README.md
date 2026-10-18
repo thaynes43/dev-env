@@ -135,13 +135,17 @@ boot/start identity and pidfd liveness, then reads protected memory. Ready proof
 also rechecks the original native peer and pinned initialize exchange. Receipts
 and worker-reported readiness are never inputs to operator authority.
 
-The exec-to-main interval needs independent protection: Yama ptrace_scope must
-be1/2/3 and stdout must already be a UID0-owned FIFO with mode0600. The fixed
-probe refuses unsupported/unknown/TTY/worker-accessible output before emitting
-proof. Yama alone does not protect proc FD reads; becoming nondumpable cannot
-revoke an already opened output descriptor. These requirements may refuse a CRI
-transport until separately verified; source tests do not assert compatibility.
-No sysctl, credential or trust enrollment is modified.
+The exec-to-main interval keeps Yama ptrace_scope1/2/3 and nondumpable
+supervisor/helper/probe memory. CRI stdout/stderr are deliberately untrusted:
+some runtimes create UID1000 FIFOs, and a sibling can preopen proc FDs before
+probe userspace hardening. The operator discards those streams entirely. The
+pinned immutable probe locally authenticates original PID1/native peer/RPC,
+fresh challenge, exact binding/HOME/baseline and phase predicates. Only dedicated
+nonzero process exit statuses40..43 (Prepared/Starting/Ready/Stopped) traverse the
+separate CRI status channel. Nil/generic success, absent/empty/truncated status,
+signals, transport errors and cancellation refuse. No process identities are
+reconstructed from output. Existing trusted exec-client ownership, fixed immutable
+command/image, Yama and kernel proof remain necessary; no privilege or new keys.
 
 The HOME claim must be Bound ReadWriteOncePod, rather than node-shared RWO. The
 startup baseline traverses directory FDs without symlinks, bounds entries/bytes,
