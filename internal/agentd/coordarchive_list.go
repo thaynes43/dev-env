@@ -224,7 +224,8 @@ func coordListIndexMatches(e protocol.CoordArchiveIndexEntry, q protocol.CoordAr
 		return false
 	}
 	if q.RecipientUID == "" {
-		return (q.Resource == "inboxmessages" && protocol.ValidKubeUID(e.RecipientUID)) || (q.Resource != "inboxmessages" && e.RecipientUID == "")
+		inbox := q.Resource == "inboxmessages" || q.Resource == "inboxreadacks"
+		return (inbox && protocol.ValidKubeUID(e.RecipientUID)) || (!inbox && e.RecipientUID == "")
 	}
 	return e.RecipientUID == q.RecipientUID
 }

@@ -67,7 +67,7 @@ func (c *CoordinationArchive) Mark(ctx context.Context, req []protocol.CoordArch
 		return nil, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "bounded coordination mark batch required")
 	}
 	for _, item := range req {
-		if _, err := item.RecordDir(); err != nil || item.Event.Validate(item.Resource) != nil || (item.Event.State != "present" && item.Event.State != "reset") {
+		if _, err := item.RecordDir(); err != nil || item.Event.Validate(item.Resource) != nil || (item.Event.State != "present" && item.Event.State != "reset" && item.Event.State != "hold") {
 			return nil, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "invalid coordination mark request")
 		}
 	}
@@ -87,8 +87,13 @@ func (c *CoordinationArchive) Mark(ctx context.Context, req []protocol.CoordArch
 		return nil, errors.New("coordination archive mark response is incomplete")
 	}
 	for i := range out {
-		if out[i].CoordArchiveIdentity != req[i].CoordArchiveIdentity || out[i].GraceStart != nil {
+		if out[i].CoordArchiveIdentity != req[i].CoordArchiveIdentity {
 			return nil, errors.New("coordination archive mark response identity differs")
+		}
+		// A hold records that an owner was seen without clearing the old
+		// grace. Present/reset clear it in the following durable step.
+		if out[i].GraceStart != nil && (req[i].Event.State != "hold" || !utcTimePtr(out[i].GraceStart)) {
+			return nil, errors.New("coordination archive mark response has an invalid grace state")
 		}
 	}
 	return out, nil

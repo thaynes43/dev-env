@@ -44,7 +44,8 @@ next-work list is stale where this page's 2026-10-17 sections disagree.
 - [#362](https://github.com/thaynes43/dev-env/pull/362) (`e2be494`):
   `agentd task-claim-create --timeout`.
 - [#370](https://github.com/thaynes43/dev-env/pull/370) (`60c4e38`): retains the last
-  good log after executor stop.
+  good log after executor stop in the source harness. It merged after v2.29.5;
+  it is not part of that release or its task image.
 
 **dev-env `origin/main` seal (last fetch):** `60c4e38c507c21d5fce64c51d0decc4b56362996`.
 Session pods clone `repo: dev-env`, `base: main`, so the worktree HEAD is
