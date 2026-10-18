@@ -50,4 +50,7 @@ or credential action was performed.
 
 *Update, 2026-10-18:* the shelf-limit get measurement is recorded in
 [coordination-archive-get-memory-2026-10-18](coordination-archive-get-memory-2026-10-18.md).
+The concurrent four-get-plus-prune run is recorded in
+[coordination-archive-concurrent-get-memory-2026-10-18](coordination-archive-concurrent-get-memory-2026-10-18.md).
 Runtime mount, clock chronology and installed acceptance remain unresolved.
+R5 is not started.

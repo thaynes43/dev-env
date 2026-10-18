@@ -121,3 +121,37 @@ func TestCoordArchiveWorstCasePrepare(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestConcurrentMeasureWaiterPinsTheWorstCaseGet keeps the offline four-get
+// waiter on the same claim identity Prepare writes. The waiter is build-ignored
+// and is not an agentd command.
+func TestConcurrentMeasureWaiterPinsTheWorstCaseGet(t *testing.T) {
+	m, canonical, _ := worstCaseCoordClaim(t)
+	if m.Resource != "taskclaims" || m.ResourceVersion != "42" || m.UID != "44444444-4444-4444-8444-444444444444" {
+		t.Fatalf("worst-case identity changed: %+v", m)
+	}
+	if m.Name != "task-claim."+strings.Repeat("c", 32)+"."+strings.Repeat("d", 32) {
+		t.Fatalf("name %q", m.Name)
+	}
+	if len(canonical) != protocol.MaxCoordArchiveObjectBytes {
+		t.Fatalf("canonical %d", len(canonical))
+	}
+	src, err := os.ReadFile("coordarchive_shelf_measure_concurrent_wait.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, needle := range []string{
+		"//go:build ignore",
+		`strings.Repeat("c", 32)`,
+		`strings.Repeat("d", 32)`,
+		m.UID,
+		"268435456",
+		"rescue/measure-old/20260801-0000",
+		`{"olderThan":"720h","keep":[]}`,
+		"0.25",
+	} {
+		if !bytes.Contains(src, []byte(needle)) {
+			t.Fatalf("waiter source missing %q", needle)
+		}
+	}
+}
