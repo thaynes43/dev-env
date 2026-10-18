@@ -165,7 +165,7 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 	budgetEnv := ""
 	if budgetBound(s) && !hold {
 		b, err := taskbudget.BindingFromAnnotations(s.Annotations)
-		if err != nil || s.UID == "" || s.Spec.Workspace == nil {
+		if err != nil || s.UID == "" || s.Spec.Workspace == nil && (!privateHistoryProtected(s) || s.Spec.CommonRules == nil || s.Spec.ProjectCanary != nil || s.Spec.PrivatePilot != nil) {
 			return nil, fmt.Errorf("invalid bound task budget")
 		}
 		encoded, err := json.Marshal(protocol.TaskBudgetDeadline{Version: 1, TaskUID: b.TaskUID, Epoch: b.Epoch, Deadline: b.Deadline, HostID: b.HostID, RootPodUID: b.PodUID, SessionUID: string(s.UID)})
@@ -333,7 +333,7 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 	if budgetBound(s) {
 		pod.Annotations["k8tz.io/inject"] = "false"
 	}
-	if s.Spec.Workspace != nil && !hold {
+	if (s.Spec.Workspace != nil || budgetBound(s)) && !hold {
 		pod.Spec.RestartPolicy = corev1.RestartPolicyNever
 	}
 	if s.Spec.ProjectCanary != nil || projectcanary.IsPilot(s) {
@@ -480,7 +480,7 @@ func sessionDocument(s *v1alpha1.AgentSession) (string, error) {
 			}
 		}
 		common, err := commonrules.BoundSession(s)
-		if err != nil || len(s.UID) > 128 || (s.Spec.ProjectCanary == nil && !projectcanary.IsPilot(s)) || s.Spec.Workspace != nil || s.Spec.Mode != v1alpha1.ModeTask {
+		if err != nil || len(s.UID) > 128 || (s.Spec.ProjectCanary == nil && !projectcanary.IsPilot(s) && !privateBudgetTask(s)) || s.Spec.Workspace != nil || s.Spec.Mode != v1alpha1.ModeTask {
 			return "", sessionInvalidError{commonrules.ErrRefused}
 		}
 		raw, err := common.Bytes()

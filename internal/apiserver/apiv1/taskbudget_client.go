@@ -56,7 +56,11 @@ func (g *HTTPTaskBudgetGate) check(ctx context.Context, b TaskBudgetBinding, act
 	if resp.StatusCode != http.StatusOK {
 		return result, ErrTaskBudgetGate
 	}
-	d := json.NewDecoder(io.LimitReader(resp.Body, 64<<10))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, (64<<10)+1))
+	if err != nil || len(raw) > 64<<10 || !unambiguousBudgetStatus(raw) {
+		return TaskBudgetStatus{}, ErrTaskBudgetGate
+	}
+	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
 	if d.Decode(&result) != nil || d.Decode(new(any)) != io.EOF {
 		return TaskBudgetStatus{}, ErrTaskBudgetGate
@@ -82,4 +86,74 @@ func (g *HTTPTaskBudgetGate) Observe(ctx context.Context, b TaskBudgetBinding) (
 		return true, err
 	}
 	return st.Latched, nil
+}
+
+// Required safety fields cannot be absent/null, case aliases or duplicate keys.
+// Typed decoding below still validates every DTO field and exact binding.
+func unambiguousBudgetStatus(raw []byte) bool {
+	d := json.NewDecoder(bytes.NewReader(raw))
+	var walk func(int) bool
+	walk = func(depth int) bool {
+		if depth > 16 {
+			return false
+		}
+		tok, err := d.Token()
+		if err != nil {
+			return false
+		}
+		switch tok {
+		case json.Delim('{'):
+			seen := map[string]bool{}
+			for d.More() {
+				key, err := d.Token()
+				name, ok := key.(string)
+				folded := strings.ToLower(name)
+				if err != nil || !ok || seen[folded] {
+					return false
+				}
+				seen[folded] = true
+				if !walk(depth + 1) {
+					return false
+				}
+			}
+			end, err := d.Token()
+			return err == nil && end == json.Delim('}')
+		case json.Delim('['):
+			for d.More() {
+				if !walk(depth + 1) {
+					return false
+				}
+			}
+			end, err := d.Token()
+			return err == nil && end == json.Delim(']')
+		default:
+			return tok != json.Delim('}') && tok != json.Delim(']')
+		}
+	}
+	if !walk(0) {
+		return false
+	}
+	if _, err := d.Token(); err != io.EOF {
+		return false
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return false
+	}
+	for _, key := range []string{"observed", "admitted", "latched", "stopConfirmed"} {
+		v := string(fields[key])
+		if v != "true" && v != "false" {
+			return false
+		}
+	}
+	var binding map[string]json.RawMessage
+	if json.Unmarshal(fields["binding"], &binding) != nil || len(binding) != 5 {
+		return false
+	}
+	for _, key := range []string{"taskUID", "epoch", "deadline", "hostID", "podUID"} {
+		if len(binding[key]) == 0 || string(binding[key]) == "null" {
+			return false
+		}
+	}
+	return true
 }

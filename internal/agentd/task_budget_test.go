@@ -43,3 +43,25 @@ func TestTaskBudgetDeadlineArmedBeforeWorkAndCannotReset(t *testing.T) {
 		t.Fatal("legacy timer armed")
 	}
 }
+
+func TestPrivateCampaignDeadlinePreservesEarlierLocalStopAndSharedWire(t *testing.T) {
+	now := time.Now().UTC()
+	b := protocol.TaskBudgetDeadline{Version: 1, TaskUID: "campaign", Epoch: 1, Deadline: now.Add(time.Minute), HostID: "root", RootPodUID: "root-pod", SessionUID: "session"}
+	raw, _ := json.Marshal(b)
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &fields)
+	if _, ok := fields["campaignDeadline"]; ok {
+		t.Fatal("changed legacy shared wire")
+	}
+	for _, delta := range []time.Duration{-time.Second, 0, time.Minute} {
+		b.CampaignDeadline = b.Deadline.Add(delta)
+		raw, _ := json.Marshal(b)
+		got, err := protocol.ParseTaskBudgetDeadline(string(raw), "session", "private-pod", now)
+		if (err == nil) != (delta >= 0) {
+			t.Fatalf("campaign delta %v: %v", delta, err)
+		}
+		if err == nil && (!got.Deadline.Equal(b.Deadline) || !got.CampaignDeadline.Equal(b.CampaignDeadline)) {
+			t.Fatal("deadline extended/rebound")
+		}
+	}
+}

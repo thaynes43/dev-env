@@ -119,18 +119,33 @@ func (s *Server) taskBudgetControl(ctx context.Context, w http.ResponseWriter, r
 	if req.Binding.TaskUID != r.PathValue("uid") {
 		return 0, nil, badRequest("task UID does not match route")
 	}
-	if _, err := s.budgetCaller(ctx, c, req.Binding.TaskUID); err != nil {
+	authority, err := s.budgetCaller(ctx, c, req.Binding.TaskUID)
+	if err != nil {
 		return 0, nil, err
+	}
+	if !admit && c.kind == kindSession && c.session.Spec.Workspace == nil {
+		if err := s.checkSessionTaskBudget(ctx, c.session); err != nil {
+			return 0, nil, err
+		}
+		found := false
+		for _, w := range authority.Workers {
+			if w.ID == c.session.Annotations[TaskBudgetWorkerAnnotation] {
+				m := w.Managed
+				found = w.Active && m != nil && m.LaunchRequested && m.Namespace == c.session.Namespace && m.Name == c.session.Name && m.SessionUID == string(c.session.UID) && (m.PodUID == "" || m.PodUID == c.identity.PodUID)
+			}
+		}
+		if !found {
+			return 0, nil, budgetError(taskbudget.ErrDenied)
+		}
 	}
 	// Only the exact owning host may create/continue native model work.
 	if admit && c.kind != kindCoordinator {
 		return 0, nil, forbidden("host admission requires its bound coordinator")
 	}
 	var l *taskbudget.Ledger
-	var err error
 	if admit {
 		l, err = s.TaskBudgets.Admit(ctx, req.Binding)
-	} else if c.kind == kindCoordinator {
+	} else if c.kind == kindCoordinator || c.kind == kindSession && c.session.Spec.Workspace == nil {
 		l, err = s.TaskBudgets.ObserveNative(ctx, req.Binding)
 	} else {
 		l, err = s.TaskBudgets.Observe(ctx, req.Binding)

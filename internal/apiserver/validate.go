@@ -279,13 +279,13 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 func checkAgentd(sess *v1alpha1.AgentSession) error {
 	check := sess
 	capture := sess.Spec.ProjectCanary != nil && sess.Spec.ProjectCanary.CaptureOutput
-	if sess.UID == "" && (sess.Spec.Workspace != nil || capture || projectcanary.IsPilot(sess)) {
+	if sess.UID == "" && (sess.Spec.Workspace != nil || sess.Spec.CommonRules != nil || capture || projectcanary.IsPilot(sess)) {
 		// Kubernetes assigns the real UID only after Create. This copy checks
 		// document syntax and size; its validation-only UID is never persisted
 		// or transported. The controller builds the pod with the actual API UID.
 		check = sess.DeepCopy()
 		check.UID = "00000000-0000-0000-0000-000000000000"
-		if capture {
+		if capture || sess.Spec.CommonRules != nil {
 			// Reserve the full protocol UID bound in both document transports.
 			// Capture still requires the API-assigned UID at actual Pod startup.
 			check.UID = types.UID(strings.Repeat("x", 128))

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -75,15 +76,23 @@ func (v ManagedBudgetEvidenceValidator) Validate(ctx context.Context, l *taskbud
 		return taskbudget.ErrUnavailable
 	}
 	b, err := taskbudget.BindingFromAnnotations(s.Annotations)
-	if err != nil || b != l.Binding || string(s.UID) != ref.SessionUID || s.Spec.Parent != l.Parent || s.Annotations[taskbudget.WorkerAnnotation] != e.WorkerID || s.Spec.Workspace == nil {
+	if err != nil || b != l.Binding || string(s.UID) != ref.SessionUID || s.Spec.Parent != l.Parent || s.Annotations[taskbudget.WorkerAnnotation] != e.WorkerID {
 		return taskbudget.ErrDenied
 	}
 	if neverLaunched {
 		return v.validateNeverLaunched(ctx, &s)
 	}
-	_, pod, err := PodWorkspaceStopVerifier(v).Verify(ctx, &s, types.UID(ref.PodUID))
+	var pod *corev1.Pod
+	if s.Spec.Workspace == nil {
+		if !ref.LaunchRequested {
+			return taskbudget.ErrDenied
+		}
+		pod, err = privateBudgetStop(ctx, v.Reader, &s, types.UID(ref.PodUID), v.Now)
+	} else {
+		_, pod, err = PodWorkspaceStopVerifier(v).Verify(ctx, &s, types.UID(ref.PodUID))
+	}
 	if err != nil {
-		return taskbudget.ErrUnavailable
+		return fmt.Errorf("%w: %s", taskbudget.ErrUnavailable, err.Error())
 	}
 	if e.Kind == "failure" {
 		if e.AttemptID != "managed:"+ref.SessionUID || e.BlockerID != canonicalCheckpointBlocker(l.Binding) || e.Evidence.Kind != "managed-container-exit" {
@@ -95,6 +104,12 @@ func (v ManagedBudgetEvidenceValidator) Validate(ctx context.Context, l *taskbud
 			}
 		}
 		return taskbudget.ErrDenied
+	}
+	if s.Spec.Workspace == nil {
+		if e.Evidence.Kind != "private-retained-stop" {
+			return taskbudget.ErrDenied
+		}
+		return nil
 	}
 	if e.Evidence.Kind != "managed-rescue-stop" || !sharedRescued(&s) || s.Status.Rescue.SourcePodUID != ref.PodUID {
 		return taskbudget.ErrDenied
@@ -124,7 +139,10 @@ func (v ManagedBudgetEvidenceValidator) validateNeverLaunched(ctx context.Contex
 }
 
 func (r *Reconciler) observeTaskBudget(ctx context.Context, s *v1alpha1.AgentSession, pod *corev1.Pod) (*taskbudget.Ledger, error) {
-	if r.TaskBudgets == nil || r.APIReader == nil || s.Spec.Workspace == nil || s.UID == "" {
+	if r.TaskBudgets == nil || r.APIReader == nil || s.Spec.Workspace == nil && !privateHistoryProtected(s) || s.UID == "" {
+		return nil, taskbudget.ErrUnavailable
+	}
+	if s.Spec.Workspace == nil && (s.Spec.ProjectCanary != nil || s.Spec.PrivatePilot != nil) {
 		return nil, taskbudget.ErrUnavailable
 	}
 	b, err := taskbudget.BindingFromAnnotations(s.Annotations)
@@ -233,6 +251,9 @@ func (r *Reconciler) recordTaskBudgetStop(ctx context.Context, s *v1alpha1.Agent
 	}
 	e := apiv1.TaskBudgetEvent{Binding: l.Binding, ID: "managed-stop:" + ref.SessionUID, Kind: "worker-stop", WorkerID: id,
 		Evidence: apiv1.TaskBudgetEvidence{ID: "stop:" + ref.PodUID, Kind: "managed-rescue-stop", Reference: managedBudgetReference(*ref)}}
+	if s.Spec.Workspace == nil {
+		e.Evidence.Kind = "private-retained-stop"
+	}
 	_, err = r.TaskBudgets.Record(ctx, e)
 	return err
 }
@@ -348,7 +369,10 @@ func (v ManagedPodAdmissionInspector) InspectManagedAdmission(ctx context.Contex
 		return taskbudget.ErrUnavailable
 	}
 	b, err := taskbudget.BindingFromAnnotations(s.Annotations)
-	if err != nil || b != l.Binding || string(s.UID) != ref.SessionUID || s.Spec.Parent != l.Parent || s.Spec.Workspace == nil || s.Spec.Mode != v1alpha1.ModeTask || s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended || !s.DeletionTimestamp.IsZero() {
+	if err != nil || b != l.Binding || string(s.UID) != ref.SessionUID || s.Spec.Parent != l.Parent || s.Spec.Mode != v1alpha1.ModeTask || s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended || !s.DeletionTimestamp.IsZero() {
+		return taskbudget.ErrDenied
+	}
+	if s.Spec.Workspace == nil && (s.Spec.ProjectCanary != nil || s.Spec.PrivatePilot != nil) {
 		return taskbudget.ErrDenied
 	}
 	var cm corev1.ConfigMap
@@ -358,6 +382,9 @@ func (v ManagedPodAdmissionInspector) InspectManagedAdmission(ctx context.Contex
 	t, err := templates.Parse(cm.Data)
 	if err != nil || t.Image != v.Image {
 		return taskbudget.ErrDenied
+	}
+	if s.Spec.Workspace == nil {
+		return inspectPrivateManagedLaunch(ctx, v.Reader, l, ref, &s)
 	}
 	var pod corev1.Pod
 	if err := v.Reader.Get(ctx, types.NamespacedName{Namespace: s.Namespace, Name: s.Name}, &pod); !apierrors.IsNotFound(err) {
