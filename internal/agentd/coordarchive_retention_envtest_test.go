@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -197,7 +198,9 @@ func (f *fsArchive) Lookup(_ context.Context, ids []protocol.CoordArchiveIdentit
 }
 
 func (f *fsArchive) Get(_ context.Context, q protocol.CoordArchiveGetQuery) (protocol.CoordArchiveGetResult, error) {
-	*f.order = append(*f.order, "get")
+	if f.order != nil {
+		*f.order = append(*f.order, "get")
+	}
 	return f.a.GetSelected(q)
 }
 
@@ -209,4 +212,157 @@ type recordingClient struct {
 func (c recordingClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
 	*c.order = append(*c.order, "delete")
 	return c.Client.Delete(ctx, obj, opts...)
+}
+
+// TestEnvtestTwoPassesDeleteOnce is DESIGN-024 E7. Two passes reach the delete
+// together. Exactly one API delete succeeds, and the archive keeps one revision.
+func TestEnvtestTwoPassesDeleteOnce(t *testing.T) {
+	old := coordArchiveIsMounted
+	coordArchiveIsMounted = func(string, string) error { return nil }
+	t.Cleanup(func() { coordArchiveIsMounted = old })
+
+	env, err := testenv.Start()
+	if err != nil {
+		t.Fatalf("envtest: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := env.Stop(); err != nil {
+			t.Log("envtest stop:", err)
+		}
+	})
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{coord.AddToScheme, devv1.AddToScheme, corev1.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	admin, err := client.New(env.Config, client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const ns = "dev-env-system"
+	if err := admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
+		t.Fatal(err)
+	}
+	spec := retentionClaimSpec()
+	spec.Identity.TaskKey = "issue:302"
+	if !taskclaim.ValidSpec(spec) {
+		t.Fatal("claim spec")
+	}
+	claim := &coord.TaskClaim{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: taskclaim.Name(spec.Identity)}, Spec: spec}
+	if err := admin.Create(ctx, claim); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	root := filepath.Join(home, protocol.CoordArchiveDirName)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 10, 17, 18, 0, 0, 0, time.UTC)
+	clock := start
+	archive := CoordArchive{Root: root, Home: home, Now: func() time.Time { return clock }}
+	store := &fsArchive{a: archive}
+	slots := shelf.NewExecSlots(8)
+	deletes := &recordingClient{Client: admin, order: new([]string)}
+	runnable := &coordretention.Runnable{
+		Enabled: true, Grace: coordretention.DefaultGrace, Client: deletes, Reader: admin,
+		Namespace: ns, Reconciled: map[string]bool{spec.Owner.Namespace: true},
+		Kinds: map[coordretention.Kind]bool{coordretention.TaskClaim: true},
+		Pods:  shelfPod{}, Archive: store, Slots: slots,
+		Now: func() time.Time { return clock },
+	}
+	if got := func() string { clock = start; return runnable.Pass(ctx) }(); got != "complete" {
+		t.Fatalf("mark pass %s", got)
+	}
+	if got := func() string {
+		clock = start.Add(coordretention.DefaultGrace - time.Minute)
+		return runnable.Pass(ctx)
+	}(); got != "complete" {
+		t.Fatalf("grace pass %s", got)
+	}
+	gate := &deleteGate{ready: make(chan struct{})}
+	shared := &meetingClient{Client: admin, gate: gate}
+	at := start.Add(coordretention.DefaultGrace)
+	passes := [2]*coordretention.Runnable{}
+	for i := range passes {
+		passes[i] = &coordretention.Runnable{
+			Enabled: true, Grace: coordretention.DefaultGrace, Client: shared, Reader: admin,
+			Namespace: ns, Reconciled: map[string]bool{spec.Owner.Namespace: true},
+			Kinds: map[coordretention.Kind]bool{coordretention.TaskClaim: true},
+			Pods:  shelfPod{}, Archive: store, Slots: slots,
+			Now: func() time.Time { return at },
+		}
+	}
+	var wg sync.WaitGroup
+	results := make([]string, 2)
+	wg.Add(2)
+	for i := range passes {
+		go func(i int) {
+			defer wg.Done()
+			results[i] = passes[i].Pass(ctx)
+		}(i)
+	}
+	wg.Wait()
+	if results[0] != "complete" || results[1] != "complete" || gate.seen() != 2 || shared.okCount() != 1 {
+		t.Fatalf("results %q seen %d deletes %d", results, gate.seen(), shared.okCount())
+	}
+	if err := admin.Get(ctx, client.ObjectKeyFromObject(claim), &coord.TaskClaim{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("claim after the two passes: %v", err)
+	}
+	id := protocol.CoordArchiveIdentity{Resource: "taskclaims", Project: spec.Identity.Project, Name: claim.Name, UID: string(claim.UID)}
+	looked, err := archive.Lookup([]protocol.CoordArchiveIdentity{id})
+	if err != nil || len(looked) != 1 || len(looked[0].Revisions) != 1 {
+		t.Fatalf("archive %#v %v", looked, err)
+	}
+}
+
+type deleteGate struct {
+	mu    sync.Mutex
+	n     int
+	ready chan struct{}
+	once  sync.Once
+}
+
+func (g *deleteGate) arrive() {
+	g.mu.Lock()
+	g.n++
+	if g.n >= 2 {
+		g.once.Do(func() { close(g.ready) })
+	}
+	g.mu.Unlock()
+	select {
+	case <-g.ready:
+	case <-time.After(15 * time.Second):
+	}
+}
+
+func (g *deleteGate) seen() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.n
+}
+
+type meetingClient struct {
+	client.Client
+	gate *deleteGate
+	mu   sync.Mutex
+	ok   int
+}
+
+func (c *meetingClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	c.gate.arrive()
+	err := c.Client.Delete(ctx, obj, opts...)
+	if err == nil {
+		c.mu.Lock()
+		c.ok++
+		c.mu.Unlock()
+	}
+	return err
+}
+
+func (c *meetingClient) okCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ok
 }
