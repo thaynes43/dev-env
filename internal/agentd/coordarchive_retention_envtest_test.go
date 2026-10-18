@@ -5,11 +5,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -29,8 +33,9 @@ import (
 
 // TestEnvtestArchiveBeforeDelete is DESIGN-024 E1 for one claim. The archive is
 // the real coordination archive on a temp directory. The mount check is stubbed
-// the same way the archive tests stub it. A context, a message, an ack, the
-// exec transport, and the archived-read API remain.
+// the same way the archive tests stub it. Put, mark, and lookup cross the ctl
+// JSON boundary. A context, a message, an ack, a process exec, and the
+// archived-read API remain.
 func TestEnvtestArchiveBeforeDelete(t *testing.T) {
 	old := coordArchiveIsMounted
 	coordArchiveIsMounted = func(string, string) error { return nil }
@@ -183,6 +188,10 @@ type fsArchive struct {
 }
 
 func (f *fsArchive) Put(_ context.Context, req protocol.CoordArchivePutRequest, mark bool) (protocol.CoordArchivePutResult, error) {
+	req, err := decodeCtl(req)
+	if err != nil {
+		return protocol.CoordArchivePutResult{}, err
+	}
 	if mark != (req.Event != nil) {
 		return protocol.CoordArchivePutResult{}, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "--mark and absent event must be supplied together")
 	}
@@ -190,11 +199,41 @@ func (f *fsArchive) Put(_ context.Context, req protocol.CoordArchivePutRequest, 
 }
 
 func (f *fsArchive) Mark(_ context.Context, req []protocol.CoordArchiveMarkRequest) ([]protocol.CoordArchiveMarkResult, error) {
+	req, err := decodeCtl(req)
+	if err != nil {
+		return nil, err
+	}
 	return f.a.Mark(req)
 }
 
 func (f *fsArchive) Lookup(_ context.Context, ids []protocol.CoordArchiveIdentity) ([]protocol.CoordArchiveLookupResult, error) {
+	ids, err := decodeCtl(ids)
+	if err != nil {
+		return nil, err
+	}
 	return f.a.Lookup(ids)
+}
+
+// decodeCtl is the coord-archive ctl JSON boundary: the request byte bound,
+// UTF-8, one canonical object, and no trailing value. A process exec remains
+// outside this test.
+func decodeCtl[T any](v T) (T, error) {
+	var zero T
+	raw, err := protocol.CanonicalJSON(v)
+	if err != nil {
+		return zero, err
+	}
+	if len(raw) > protocol.MaxCoordArchiveRequestBytes || !utf8.Valid(raw) {
+		return zero, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "request read, byte bound or UTF-8 refused")
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var out T
+	var extra any
+	if err := dec.Decode(&out); err != nil || !errors.Is(dec.Decode(&extra), io.EOF) {
+		return zero, protocol.HistoryErrorf(protocol.HistoryErrInvalid, "", "one complete JSON request required")
+	}
+	return out, nil
 }
 
 func (f *fsArchive) Get(_ context.Context, q protocol.CoordArchiveGetQuery) (protocol.CoordArchiveGetResult, error) {
