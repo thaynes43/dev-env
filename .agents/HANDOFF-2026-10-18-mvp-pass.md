@@ -135,12 +135,14 @@ A local untracked `scripts/trials/pilotdigest/main.go` (`//go:build ignore`)
 was in the coordinator checkout. It was not committed and it is not on
 `main`.
 
-## The other Grok session
+## The other Grok sessions
 
-Two Cursor threads are distinct from this coordinator. Both are Grok chats
-from the transcripts. The split below is what those chats claim, checked
-against `gh pr list --state merged` and the haynes-ops pull requests named
-here. Where a chat and the git history do not line up, the git history wins.
+Two Cursor threads are distinct from this coordinator. The Friday-night thread
+was opened to take over after Tom told the Friday-afternoon thread to stand
+down at pull request #360. Both are Grok chats from the transcripts. The split
+below is what those chats claim, checked against `gh pr list --state merged`
+and the haynes-ops pull requests named here. Where a chat and the git history
+do not line up, the git history wins.
 
 ### Friday 2026-10-16, stood down at #360
 

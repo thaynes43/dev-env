@@ -2,7 +2,7 @@
 
 **Start here (2026-10-18):** [MVP source-pass handoff](HANDOFF-2026-10-18-mvp-pass.md).
 It records what landed on `main` from 2026-10-17 through 2026-10-18, what the
-other Grok session did, and which owner gates are still open. The 2026-10-17
+other Grok sessions did, and which owner gates are still open. The 2026-10-17
 installed-state rules, rendezvous rules, and held work below stay in force.
 
 **Start here (2026-10-17):** **installed state and next work** are the
