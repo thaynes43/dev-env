@@ -13,7 +13,6 @@ import (
 	admissionv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
@@ -90,17 +89,21 @@ func TestEnvtestIdentityGuardRefusesExec(t *testing.T) {
 	}
 
 	agent := waitExec(t, env.Config, ns, pod.Name, "dev-env-agent", true)
-	if !apierrors.IsForbidden(agent) || !strings.Contains(agent.Error(), "dev-env-identity-guard") {
+	if !policyRefusal(agent) {
 		t.Fatalf("agent exec = %v", agent)
 	}
 	grant := waitExec(t, env.Config, ns, pod.Name, "grant-synthetic", true)
-	if !apierrors.IsForbidden(grant) || !strings.Contains(grant.Error(), "dev-env-identity-guard") {
+	if !policyRefusal(grant) {
 		t.Fatalf("grant exec = %v", grant)
 	}
 	workbench := waitExec(t, env.Config, ns, pod.Name, "dev-env-workbench", false)
-	if workbench == nil || strings.Contains(workbench.Error(), "dev-env-identity-guard") || apierrors.IsForbidden(workbench) {
+	if workbench == nil || strings.Contains(workbench.Error(), "dev-env-identity-guard") || strings.Contains(workbench.Error(), "is forbidden:") {
 		t.Fatalf("workbench exec = %v", workbench)
 	}
+}
+
+func policyRefusal(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "is forbidden:") && strings.Contains(err.Error(), "dev-env-identity-guard")
 }
 
 func waitExec(t *testing.T, cfg *rest.Config, namespace, pod, sa string, wantPolicy bool) error {
@@ -109,8 +112,8 @@ func waitExec(t *testing.T, cfg *rest.Config, namespace, pod, sa string, wantPol
 	var last error
 	for {
 		last = execAs(cfg, namespace, pod, sa)
-		policy := last != nil && strings.Contains(last.Error(), "dev-env-identity-guard")
-		rbac := last != nil && apierrors.IsForbidden(last) && !policy
+		policy := policyRefusal(last)
+		rbac := last != nil && strings.Contains(last.Error(), "is forbidden:") && !policy
 		if wantPolicy && policy {
 			return last
 		}
