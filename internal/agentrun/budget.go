@@ -18,7 +18,10 @@ import (
 // still the owned executor's separate, independently checked operation.
 func (a *app) budget(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return usageError("budget requires create or show; agent-run help budget")
+		return usageError("budget requires create, show or continue; agent-run help budget")
+	}
+	if args[0] == "continue" {
+		return a.continueBudget(ctx, args[1:])
 	}
 	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		_, _ = io.WriteString(a.env.Stdout, commandHelp["budget"])
@@ -26,7 +29,7 @@ func (a *app) budget(ctx context.Context, args []string) error {
 	}
 	creating := args[0] == "create"
 	if !creating && args[0] != "show" {
-		return usageError("budget requires create or show; agent-run help budget")
+		return usageError("budget requires create, show or continue; agent-run help budget")
 	}
 	cmd := newCommand("budget", outputJSON)
 	var success string
@@ -100,4 +103,47 @@ func confirmedBudgetStatus(uid string, st apiv1.TaskBudgetStatus) bool {
 	return st.Observed && !st.Admitted && b.TaskUID == uid && protocol.ValidTaskBudgetIdentifier(b.HostID) &&
 		protocol.ValidTaskBudgetIdentifier(b.PodUID) && b.Epoch > 0 && !b.Deadline.IsZero() &&
 		!st.LastProgress.IsZero() && !st.NextCheckpoint.IsZero() && st.EffortMilliseconds >= 0 && st.UsageAccounting != ""
+}
+
+func (a *app) continueBudget(ctx context.Context, args []string) error {
+	cmd := newCommand("budget continue", outputJSON)
+	var decision string
+	cmd.fs.StringVar(&decision, "decision", "", "")
+	pos, err := cmd.parse(a, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 || !protocol.ValidTaskBudgetIdentifier(pos[0]) || !protocol.ValidTaskBudgetIdentifier(decision) {
+		return usageError("budget continue requires --decision ID and one task UID")
+	}
+	c, err := a.connect(ctx, cmd.c.conn)
+	if err != nil {
+		return err
+	}
+	one := *c
+	hc := *c.http
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	one.http = &hc
+	one.rejectOversizeResponse = true
+	uid := pos[0]
+	path := apiv1.TaskBudgetPath(uid)
+	var raw json.RawMessage
+	status, err := a.callOnce(ctx, &one, http.MethodGet, path, nil, &raw)
+	if err != nil {
+		return err
+	}
+	var before apiv1.TaskBudgetStatus
+	if status != http.StatusOK || !strictWireJSON(raw, reflect.TypeFor[apiv1.TaskBudgetStatus]()) || json.Unmarshal(raw, &before) != nil || !confirmedBudgetStatus(uid, before) || !before.Latched || before.Reason != "NativeRootStopped" || !before.StopConfirmed {
+		return unconfirmed(http.MethodGet, path, "original owned stop is not confirmed")
+	}
+	body := apiv1.ContinueTaskBudgetRequest{Binding: before.Binding, DecisionID: decision}
+	status, err = a.callOnce(ctx, &one, http.MethodPost, path+"/continue", body, &raw)
+	if err != nil {
+		return err
+	}
+	var after apiv1.TaskBudgetStatus
+	if status != http.StatusOK || !strictWireJSON(raw, reflect.TypeFor[apiv1.TaskBudgetStatus]()) || json.Unmarshal(raw, &after) != nil || !confirmedBudgetStatus(uid, after) || after.Latched || after.Binding.Epoch != before.Binding.Epoch+1 || after.Binding.TaskUID != before.Binding.TaskUID || after.Binding.HostID != before.Binding.HostID || after.Binding.PodUID != before.Binding.PodUID || !after.Binding.Deadline.Equal(before.Binding.Deadline) || after.EffortMilliseconds != before.EffortMilliseconds {
+		return unconfirmed(http.MethodPost, path+"/continue", "within-budget continuation is not confirmed")
+	}
+	return a.printJSON(after)
 }

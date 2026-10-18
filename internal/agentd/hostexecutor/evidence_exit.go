@@ -1,5 +1,7 @@
 package hostexecutor
 
+const OwnedRootHome = "/workspace/home"
+
 // These nonzero codes are an authenticated result on CRI's process-status
 // channel, not bytes on a pipe. Generic exit0/1/2, exec126/127 and signal128+
 // are never evidence. Keep all original peer/pidfd/RPC checks inside the probe.
@@ -8,9 +10,10 @@ const (
 	EvidenceStarting
 	EvidenceReady
 	EvidenceStopped
+	EvidenceContinuable
 )
 
-func ValidEvidenceExit(code int) bool { return code >= EvidencePrepared && code <= EvidenceStopped }
+func ValidEvidenceExit(code int) bool { return code >= EvidencePrepared && code <= EvidenceContinuable }
 
 // EvidenceExit follows ProbeEvidence, which authenticates the original kernel
 // PID1/native peer and fresh challenge. Recheck the operator's exact predicate
@@ -34,6 +37,9 @@ func EvidenceExit(p Observation, b Binding, homeUID, baseline string) int {
 		}
 	case "Stopped":
 		if p.Root.PID > 1 && p.RootWaitObserved && p.TreeReaped {
+			if p.ContinuationReady {
+				return EvidenceContinuable
+			}
 			return EvidenceStopped
 		}
 	}

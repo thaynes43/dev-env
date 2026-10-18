@@ -80,6 +80,7 @@ type Ledger struct {
 	Escalations               []apiv1.TaskBudgetEscalation `json:"escalations,omitempty"`
 	Workers                   []Worker                     `json:"workers,omitempty"`
 	Events                    []Event                      `json:"events,omitempty"`
+	Continuations             []Continuation               `json:"continuations,omitempty"`
 	Extensions                []Extension                  `json:"extensions,omitempty"`
 	// FailureAllowance records an explicit owner-authorized extra failed attempt;
 	// it never removes failures or resolves an old blocker.

@@ -138,3 +138,34 @@ func TestOwnedRootBootstrapPID1(t *testing.T) {
 		t.Fatal("bootstrap rearmed", err, calls.Load())
 	}
 }
+
+func TestOwnedHomeInputsValidateActualSubPathFloor(t *testing.T) {
+	dir := t.TempDir()
+	floor := filepath.Join(t.TempDir(), "requirements.toml")
+	for _, path := range []string{filepath.Join(dir, "input.json"), filepath.Join(dir, "requirements.toml"), floor} {
+		if err := os.WriteFile(path, []byte("original"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := readOwnedHomeInputs(dir, floor); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "requirements.toml"), []byte("new projection"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readOwnedHomeInputs(dir, floor); err == nil {
+		t.Fatal("new projection hid stale SubPath floor")
+	}
+	if err := os.WriteFile(floor, []byte("new projection"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readOwnedHomeInputs(dir, floor); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(floor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readOwnedHomeInputs(dir, floor); err == nil {
+		t.Fatal("missing actual admin floor accepted")
+	}
+}

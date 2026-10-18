@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -23,6 +24,14 @@ func ownedRootBootstrap(ctx context.Context, s agentd.Settings, g *ownedBudgetGa
 	if len(raw) > 8192 || json.Unmarshal([]byte(raw), &spec) != nil || spec.OverallSeconds < 1 || spec.OverallSeconds > 2700 || spec.EffortSeconds < 1 || spec.EffortSeconds > 3600 || spec.CheckpointSeconds < 1 || spec.CheckpointSeconds > 600 || spec.SuccessCondition == "" {
 		return hostexecutor.Binding{}, nil, apiv1.ErrTaskBudgetGate
 	}
+	if getenv("AGENTD_OWNED_ALLOW_CONTINUATION") == "true" && getenv("AGENTD_OWNED_HOME_INPUTS_SHA") == "" {
+		return hostexecutor.Binding{}, nil, apiv1.ErrTaskBudgetGate
+	}
+	if digest := getenv("AGENTD_OWNED_HOME_INPUTS_SHA"); digest != "" {
+		if s.Home != hostexecutor.OwnedRootHome || prepareOwnedHomeInputs(s, digest) != nil {
+			return hostexecutor.Binding{}, nil, apiv1.ErrTaskBudgetGate
+		}
+	}
 	if validateOwnedRootHome(s.Home, getenv("AGENTD_OWNED_HOME_UID"), getenv("AGENTD_OWNED_HOME_BASELINE")) != nil {
 		return hostexecutor.Binding{}, nil, apiv1.ErrTaskBudgetGate
 	}
@@ -39,6 +48,9 @@ func ownedRootBootstrap(ctx context.Context, s agentd.Settings, g *ownedBudgetGa
 	}
 	binding := hostexecutor.Binding{TaskUID: b.TaskUID, Epoch: b.Epoch, Deadline: b.Deadline, HostID: b.HostID, PodUID: b.PodUID}
 	evidence := &hostexecutor.EvidenceConfig{HomeUID: getenv("AGENTD_OWNED_HOME_UID"), Baseline: getenv("AGENTD_OWNED_HOME_BASELINE"), RequirePID1: true, ReportStopped: func(ctx context.Context, _ hostexecutor.Receipt) error { return g.remote.StopOwned(ctx, b) }}
+	if getenv("AGENTD_OWNED_ALLOW_CONTINUATION") == "true" {
+		evidence.CheckContinuation = func() bool { return checkOwnedHomeInputs(s, getenv("AGENTD_OWNED_HOME_INPUTS_SHA")) == nil }
+	}
 	return binding, evidence, nil
 }
 
@@ -54,7 +66,7 @@ func ownedRootProbe(ctx context.Context, args []string, _ io.Writer) int {
 	}
 	bounded, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
 	defer cancel()
-	proof, err := hostexecutor.ProbeEvidence(bounded, "/home/dev/.agentd/"+hostexecutor.EvidenceSocketName, 1, binding, args[0])
+	proof, err := hostexecutor.ProbeEvidence(bounded, hostexecutor.OwnedRootHome+"/.agentd/"+hostexecutor.EvidenceSocketName, 1, binding, args[0])
 	if err != nil {
 		return exitFailure
 	}
@@ -98,4 +110,51 @@ func validateOwnedRootHome(home, uid, expected string) error {
 		return apiv1.ErrTaskBudgetGate
 	}
 	return nil
+}
+
+func prepareOwnedHomeInputs(s agentd.Settings, digest string) error {
+	return ownedHomeInputs(s, digest, true)
+}
+func checkOwnedHomeInputs(s agentd.Settings, digest string) error {
+	return ownedHomeInputs(s, digest, false)
+}
+func ownedHomeInputs(s agentd.Settings, digest string, prepare bool) error {
+	data, err := readOwnedHomeInputs("/opt/dev-env/owned-home", "/etc/codex/requirements.toml")
+	if err != nil {
+		return err
+	}
+	if !prepare {
+		return agentd.CheckOwnedHome(s, data, digest)
+	}
+	return agentd.PrepareOwnedHome(s, data, digest)
+}
+
+// ConfigMap directory projections may update while a SubPath stays pinned.
+// Check the actual admin floor consumed by Codex, not just its source projection.
+func readOwnedHomeInputs(inputDir, floorPath string) (map[string]string, error) {
+	read := func(path string) (string, error) {
+		f, err := os.Open(path)
+		if err != nil {
+			return "", err
+		}
+		raw, err := io.ReadAll(io.LimitReader(f, agentd.OwnedHomeInputLimit+1))
+		_ = f.Close()
+		if err != nil || len(raw) > agentd.OwnedHomeInputLimit {
+			return "", apiv1.ErrTaskBudgetGate
+		}
+		return string(raw), nil
+	}
+	data := map[string]string{}
+	for _, key := range []string{"input.json", "requirements.toml"} {
+		value, err := read(filepath.Join(inputDir, key))
+		if err != nil {
+			return nil, err
+		}
+		data[key] = value
+	}
+	floor, err := read(floorPath)
+	if err != nil || floor != data["requirements.toml"] {
+		return nil, apiv1.ErrTaskBudgetGate
+	}
+	return data, nil
 }

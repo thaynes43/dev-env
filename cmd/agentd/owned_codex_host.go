@@ -76,7 +76,7 @@ func ownedCodexHost(ctx context.Context, args []string, stderr io.Writer, getenv
 		return refused()
 	}
 	c := hostexecutor.Config{Evidence: evidence, Binding: authoritative, HelperBinary: helper, NativeBinary: "/usr/local/bin/codex", Home: s.Home, SocketPath: filepath.Join(s.CodexHome, "owned-control.sock"), ReceiptPath: filepath.Join(s.StateDir, "owned-host.json"), StopTimeout: 3 * time.Second, ReadyVersion: hostexecutor.PinnedNativeVersion}
-	if _, err = hostexecutor.Run(ctx, c, gate); err != nil {
+	if err = runOwnedHostSequence(ctx, s, c, gate, getenv); err != nil {
 		return refused()
 	}
 	return exitOK

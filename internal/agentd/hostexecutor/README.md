@@ -141,7 +141,7 @@ some runtimes create UID1000 FIFOs, and a sibling can preopen proc FDs before
 probe userspace hardening. The operator discards those streams entirely. The
 pinned immutable probe locally authenticates original PID1/native peer/RPC,
 fresh challenge, exact binding/HOME/baseline and phase predicates. Only dedicated
-nonzero process exit statuses40..43 (Prepared/Starting/Ready/Stopped) traverse the
+nonzero process exit statuses40..44 (Prepared/Starting/Ready/Stopped/Continuable) traverse the
 separate CRI status channel. Nil/generic success, absent/empty/truncated status,
 signals, transport errors and cancellation refuse. No process identities are
 reconstructed from output. Existing trusted exec-client ownership, fixed immutable
@@ -175,3 +175,13 @@ identities are synthetic; no kubelet/datapath/provider exists there. A separate
 hosted CI test uses nonroot PID1 in a bounded fresh PID namespace, including the
 protected-parent FD4 path. Neither test establishes real Codex recovery, CRI
 pipe compatibility, phone pairing or installed/native usable acceptance.
+
+
+The optional owned-root continuation keeps the original living guard/Pod/HOME.
+Its read-only frozen-startup check distinguishes stop43 from continuable44;
+changed config/rules cannot advance the owner epoch. The existing authenticated
+human route can authorize one epoch within the unchanged finite budget after all
+stops are confirmed. Original intent, receipts, stop history and counters remain.
+The next epoch gets a distinct receipt, and actual startup measurement is separate
+from the original policy baseline. No automatic Pod-loss or exhaustion recovery
+is implemented. Tests use inert helper/native processes, not provider sessions.

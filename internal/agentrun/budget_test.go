@@ -175,3 +175,42 @@ func TestBudgetRejectsAmbiguousReceipts(t *testing.T) {
 		}
 	}
 }
+
+func TestBudgetContinueExplicitOnceAndNoDeadlineReset(t *testing.T) {
+	for _, scenario := range []string{"valid", "extended", "lost-ack"} {
+		t.Run(scenario, func(t *testing.T) {
+			h := newHarness(t)
+			calls := 0
+			h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				calls++
+				st := budgetReceipt()
+				if r.Method == http.MethodGet {
+					st.Latched = true
+					st.Reason = "NativeRootStopped"
+					writeTestJSON(w, http.StatusOK, st)
+					return
+				}
+				if r.Method != http.MethodPost || r.URL.Path != apiv1.TaskBudgetPath(st.Binding.TaskUID)+"/continue" {
+					t.Error("wrong mutation")
+				}
+				st.Binding.Epoch++
+				if scenario == "extended" {
+					st.Binding.Deadline = st.Binding.Deadline.Add(time.Second)
+				}
+				if scenario == "lost-ack" {
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				writeTestJSON(w, http.StatusOK, st)
+			}
+			want := ExitOK
+			if scenario != "valid" {
+				want = ExitUnconfirmed
+			}
+			h.mustRun(want, "budget", "continue", "campaign-a", "--decision", "owner-once")
+			if calls != 2 || len(h.sleeps) != 0 {
+				t.Fatal("continuation retried", calls)
+			}
+		})
+	}
+}

@@ -109,16 +109,6 @@ func codexConfiguredInputs(s Settings) (string, []string, int, error) {
 }
 
 func codexConfiguredInputsAt(path string) (string, []string, int, error) {
-	type instructions struct {
-		Developer   string   `toml:"developer_instructions"`
-		Fallbacks   []string `toml:"project_doc_fallback_filenames"`
-		DocMaxBytes *int     `toml:"project_doc_max_bytes"`
-	}
-	var cfg struct {
-		instructions
-		Profile  string                  `toml:"profile"`
-		Profiles map[string]instructions `toml:"profiles"`
-	}
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil, 0, nil
@@ -132,7 +122,24 @@ func codexConfiguredInputsAt(path string) (string, []string, int, error) {
 		return "", nil, 0, errors.New("native Codex configuration type or size is unconfirmed")
 	}
 	data, err := io.ReadAll(io.LimitReader(f, (256<<10)+1))
-	if err != nil || len(data) > 256<<10 || toml.Unmarshal(data, &cfg) != nil {
+	if err != nil {
+		return "", nil, 0, errors.New("native Codex configuration is unreadable")
+	}
+	return codexConfiguredInputsBytes(data)
+}
+
+func codexConfiguredInputsBytes(data []byte) (string, []string, int, error) {
+	type instructions struct {
+		Developer   string   `toml:"developer_instructions"`
+		Fallbacks   []string `toml:"project_doc_fallback_filenames"`
+		DocMaxBytes *int     `toml:"project_doc_max_bytes"`
+	}
+	var cfg struct {
+		instructions
+		Profile  string                  `toml:"profile"`
+		Profiles map[string]instructions `toml:"profiles"`
+	}
+	if len(data) > 256<<10 || toml.Unmarshal(data, &cfg) != nil {
 		return "", nil, 0, errors.New("native Codex configuration is invalid or exceeds its bound")
 	}
 	if cfg.Profile != "" {

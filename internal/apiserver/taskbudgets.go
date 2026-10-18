@@ -339,3 +339,27 @@ func (s *Server) callerHasTaskBudget(c *caller) bool {
 	}
 	return false
 }
+
+// continueTaskBudget is intentionally narrower than an extension: only the
+// existing authenticated human may request one default-off, within-budget
+// continuation after independently confirmed stops. It adds no time/effort.
+func (s *Server) continueTaskBudget(ctx context.Context, w http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+	if c.kind != kindHuman {
+		return 0, nil, forbidden("native continuation requires the authenticated owner")
+	}
+	var req apiv1.ContinueTaskBudgetRequest
+	if err := decodeJSON(w, r, 4096, &req, true); err != nil {
+		return 0, nil, err
+	}
+	if req.Binding.TaskUID != r.PathValue("uid") {
+		return 0, nil, badRequest("task UID does not match route")
+	}
+	if _, err := s.budgetCaller(ctx, c, req.Binding.TaskUID); err != nil {
+		return 0, nil, err
+	}
+	l, err := s.TaskBudgets.Continue(ctx, req, c.identity.Username)
+	if err != nil {
+		return 0, nil, budgetError(err)
+	}
+	return http.StatusOK, l.Status(), nil
+}
