@@ -344,3 +344,38 @@ func TestBudgetAPIUnrelatedSessionsPreserved(t *testing.T) {
 		t.Fatal("unrelated session blocked", w.Body.String())
 	}
 }
+
+func (apiBudgetValidator) AuthorizeNativeContinue(context.Context, *taskbudget.Ledger, apiv1.TaskBudgetBinding) error {
+	return nil
+}
+func TestContinueAPIRequiresTrustedOwnerAndRetainsOriginalAccounting(t *testing.T) {
+	f, b := budgetFixture(t)
+	store := f.srv.TaskBudgets.Store
+	l, rv, err := store.Read(context.Background(), b.TaskUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.Latched = true
+	l.Reason = "NativeRootStopped"
+	l.Escalation = &apiv1.TaskBudgetEscalation{ID: "original-stop"}
+	l.EffortMilliseconds = 1234
+	l.Workers = []taskbudget.Worker{{ID: "host:host-a:1", StoppedAt: f.now, StopEvidence: b.PodUID}}
+	if err = store.Update(context.Background(), l, rv); err != nil {
+		t.Fatal(err)
+	}
+	req := apiv1.ContinueTaskBudgetRequest{Binding: b, DecisionID: "owner-once"}
+	for _, token := range []string{tokCoordinator, tokClient} {
+		wantError(t, f.do(http.MethodPost, apiv1.TaskBudgetPath(b.TaskUID)+"/continue", token, req), http.StatusForbidden, apiv1.CodeForbidden)
+	}
+	w := f.do(http.MethodPost, apiv1.TaskBudgetPath(b.TaskUID)+"/continue", tokHuman, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("owner: %d %s", w.Code, w.Body.String())
+	}
+	got, _, err := store.Read(context.Background(), b.TaskUID)
+	if err != nil || got.Binding.Epoch != 2 || !got.Binding.Deadline.Equal(b.Deadline) || got.Spec != l.Spec || got.EffortMilliseconds != 1234 || len(got.Workers) != 1 || got.Workers[0].StoppedAt != l.Workers[0].StoppedAt || len(got.Continuations) != 1 || got.Continuations[0].Owner == "" {
+		t.Fatal("owner continuation lost old accounting", err)
+	}
+	if w = f.do(http.MethodPost, apiv1.TaskBudgetPath(b.TaskUID)+"/continue", tokHuman, req); w.Code == http.StatusOK {
+		t.Fatal("old binding replayed")
+	}
+}

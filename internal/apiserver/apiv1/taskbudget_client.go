@@ -186,7 +186,7 @@ func (g *HTTPTaskBudgetGate) BootstrapOwned(ctx context.Context, req CreateTaskB
 // StopOwned submits one independently validated owned-root stop, without retry.
 func (g *HTTPTaskBudgetGate) StopOwned(ctx context.Context, b TaskBudgetBinding) error {
 	id := "host:" + b.HostID + ":" + strconv.FormatUint(b.Epoch, 10)
-	event := TaskBudgetEvent{Binding: b, ID: "owned-stop:" + b.PodUID, Kind: "worker-stop", WorkerID: id, Evidence: TaskBudgetEvidence{ID: "owned-stop:" + b.PodUID, Kind: "owned-root-stop", Reference: b.PodUID}}
+	event := TaskBudgetEvent{Binding: b, ID: OwnedStopEventID(b), Kind: "worker-stop", WorkerID: id, Evidence: TaskBudgetEvidence{ID: OwnedStopEventID(b), Kind: "owned-root-stop", Reference: b.PodUID}}
 	raw, _ := json.Marshal(event)
 	status, body, err := g.ownedRequest(ctx, http.MethodPost, TaskBudgetPath(b.TaskUID)+"/events", raw)
 	if err != nil || status != http.StatusOK {
@@ -244,4 +244,18 @@ func (g *HTTPTaskBudgetGate) ownedRequest(ctx context.Context, method, path stri
 		return 0, nil, ErrTaskBudgetGate
 	}
 	return resp.StatusCode, raw, nil
+}
+
+// ReadOwnedStatus performs one bounded read. It never infers continuation from
+// a local receipt or retries an unknown mutation acknowledgement.
+func (g *HTTPTaskBudgetGate) ReadOwnedStatus(ctx context.Context, uid string) (TaskBudgetStatus, error) {
+	status, raw, err := g.ownedRequest(ctx, http.MethodGet, TaskBudgetPath(uid), nil)
+	if err != nil || status != http.StatusOK {
+		return TaskBudgetStatus{}, ErrTaskBudgetGate
+	}
+	st, err := decodeOwnedStatus(raw)
+	if err != nil || st.Binding.TaskUID != uid {
+		return TaskBudgetStatus{}, ErrTaskBudgetGate
+	}
+	return st, nil
 }

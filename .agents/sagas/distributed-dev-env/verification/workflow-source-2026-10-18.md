@@ -78,3 +78,43 @@ No protected privilege/credential/trust delta. This source requires matching
 agent+operator adoption;4802b3e installed by4049 does not include this new fix.
 HOME/preparation and continuation remain the same owner's next serial source work,
 not a new assignment/approval gate. Release369/equivalent task publication stays held.
+
+## Next serial source: HOME and retained continuation
+
+HOME uses a policy-bound immutable ConfigMap of nonsecret Codex settings/common
+snapshot plus requirements; composition reuses commonrules.Snapshot.CodexGlobal.
+Prepare owned directories/files before baseline and bootstrap intent, refusing
+aliases/conflicting retained content, with aligned exact Pod/inspector mounts.
+Mount PVC at /workspace and create private UID1000 HOME /workspace/home rather
+than requiring an unprivileged process to chmod a CSI-owned volume root.
+Native loaded-rule acceptance remains separate from mounted/composed bytes.
+
+Minimal post-stop continuation candidate retains the ORIGINAL PID1/Pod/HOME and
+original finite campaign deadline/effort/failure/checkpoint counters. An explicit
+existing authenticated-human request may continue ONCE only after independently
+proven native and child stops and only while all original budgets remain valid;
+policy opt-in defaults off. Store old epoch/stop/receipt/accounting and a unique
+new receipt/epoch, never clear intent/old receipt or extend exhausted authority.
+No replacement Pod or credential/enrollment clone. New human control is a concrete
+source behavior delta, default-off with ordinary-root policy; no live activation
+or new identity is authorized. Existing budget-extension decision verification
+must not be bypassed to grant extra quota. The implementation/review must confirm
+this within-budget transition is distinct from an exhausted-task extension.
+
+
+## Earned source checkpoint: PR424 merged and normally published
+
+PR424 exact e4c9dc9 passed required current-head CI and advisory review; squash
+merged as82c94167fedbc8eb8dfc945a61a44fc9221a42c9. Publish39175728361 succeeded:
+operator sha256:3e5227cc53e050b5c94a95eadc422b28a2c186b2562132fcddc36a99678f645c,
+login helper sha256:8b0daaf57d285c3b2d9567742e1e27ba0abd6c5b7e3df63cc7de0dbab3f80a08.
+Both sha-82c9416 images were signed and verified by the normal main workflow.
+No task release/publication or follow-on deployment was performed. HOME WIP was
+isolated on agent/owned-home-1018 before merge, preserving e4c9dc9 ancestry.
+
+Review caught startup drift being rebased into a continuation. Fixed with
+mandatory policy-bound HOME inputs for continuation and a read-only guard check
+before owner mutation (dedicated CRI status44); stop status43 remains available
+when inputs drift. Recheck after committed epoch before measurement/start.
+Original policy Baseline and actual per-epoch StartupBaseline are separate.
+No privileges, identity, credential or security checks were weakened.

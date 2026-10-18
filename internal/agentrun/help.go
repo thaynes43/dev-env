@@ -93,6 +93,7 @@ Exit codes:
 var commandHelp = map[string]string{
 	"budget": `Usage: agent-run budget create <task-uid> --success "RESULT" [flags]
        agent-run budget show <task-uid> [-o json]
+       agent-run budget continue <task-uid> --decision <id> [-o json]
 
 Create runs inside the already configured owning coordinator host. The operator
 selects its host/Pod binding and enforces the assigned task UID. The request is
@@ -108,9 +109,16 @@ Create flags (positive whole-second durations):
   -o json                complete status, including the immutable binding
 
 Show reads the retained ledger through the existing caller policy. Observation
-can record a due stop latch. Both commands report authority; neither admits or
+can record a due stop latch. Create/show report authority; neither admits or
 launches work, resets an epoch, extends a deadline or clears a latch. Native
 launch still requires the owned executor's independent admission checks.
+
+Continue requires the existing authenticated trusted owner and an explicit
+policy opt-in. It permits native-process continuation once on the original
+still-live guard/Pod/HOME only after independently proven root and child stops.
+The ORIGINAL deadline/effort/failure/checkpoint accounting and receipts remain.
+It cannot extend an exhausted budget, recover a lost Pod or let a model resume
+itself. A lost mutation acknowledgement is not retried.
 `,
 	"directory": `Usage: agent-run directory list --project <project> --once [flags]
 

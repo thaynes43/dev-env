@@ -257,3 +257,53 @@ func TestOwnedRootDispatchRechecksClockAfterReadiness(t *testing.T) {
 		})
 	}
 }
+
+func TestOwnedContinuationRequiresFrozenInputsAndOriginalLiveGuard(t *testing.T) {
+	f := newRootPolicyFixture(t)
+	ctx := context.Background()
+	var p OwnedRootPolicy
+	_ = json.Unmarshal([]byte(f.cm.Data[OwnedRootPolicyKey]), &p)
+	p.AllowContinuation = true
+	if p.Valid() {
+		t.Fatal("continuation accepted unbound startup inputs")
+	}
+	inputs := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: p.Namespace, Name: "home-inputs", UID: "inputs-original"}, Data: map[string]string{"input.json": "fixture", "requirements.toml": "fixture"}}
+	if err := f.live.Create(ctx, inputs); err != nil {
+		t.Fatal(err)
+	}
+	p.HomeInputsName = inputs.Name
+	p.HomeInputsUID = string(inputs.UID)
+	p.HomeInputsSHA = OwnedPolicyDigest(inputs.Data)
+	raw, _ := json.Marshal(p)
+	f.cm.Data[OwnedRootPolicyKey] = string(raw)
+	if err := f.live.Update(ctx, f.cm); err != nil {
+		t.Fatal(err)
+	}
+	pod := OwnedRootPod(p)
+	pod.UID = f.pod.UID
+	pod.CreationTimestamp = f.pod.CreationTimestamp
+	pod.Spec.NodeName = f.pod.Spec.NodeName
+	pod.Status = f.pod.Status
+	pod.ResourceVersion = f.pod.ResourceVersion
+	if err := f.live.Update(ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	f.probe.proof.Stage = "Stopped"
+	f.probe.proof.Root.PID = 3
+	f.probe.proof.RootWaitObserved = true
+	f.probe.proof.TreeReaped = true
+	if f.inspector.AuthorizeNativeContinue(ctx, f.ledger, f.ledger.Binding) == nil {
+		t.Fatal("startup drift became continuation")
+	}
+	f.probe.proof.ContinuationReady = true
+	if err := f.inspector.AuthorizeNativeContinue(ctx, f.ledger, f.ledger.Binding); err != nil {
+		t.Fatal("valid frozen continuation", err)
+	}
+	inputs.Data["input.json"] = "changed"
+	if err := f.live.Update(ctx, inputs); err != nil {
+		t.Fatal(err)
+	}
+	if f.inspector.AuthorizeNativeContinue(ctx, f.ledger, f.ledger.Binding) == nil {
+		t.Fatal("changed policy inputs accepted")
+	}
+}

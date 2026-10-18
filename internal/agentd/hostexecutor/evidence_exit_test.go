@@ -57,3 +57,20 @@ func TestEvidenceExitChecksWholePredicate(t *testing.T) {
 		}
 	}
 }
+
+func TestEvidenceContinuableRequiresEntireStoppedPredicate(t *testing.T) {
+	b := Binding{TaskUID: "task", HostID: "host", PodUID: "pod", Epoch: 1, Deadline: time.Now().UTC().Add(time.Minute)}
+	p := Observation{Version: 1, Binding: b, HomeUID: "home", Baseline: strings.Repeat("a", 64), Stage: "Stopped", Root: Identity{PID: 3}, RootWaitObserved: true, TreeReaped: true, ContinuationReady: true}
+	if EvidenceExit(p, b, "home", p.Baseline) != EvidenceContinuable {
+		t.Fatal("frozen stopped inputs refused")
+	}
+	p.ContinuationReady = false
+	if EvidenceExit(p, b, "home", p.Baseline) != EvidenceStopped {
+		t.Fatal("drift lost stop evidence")
+	}
+	p.ContinuationReady = true
+	p.TreeReaped = false
+	if ValidEvidenceExit(EvidenceExit(p, b, "home", p.Baseline)) {
+		t.Fatal("unknown stop became continuation")
+	}
+}

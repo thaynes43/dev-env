@@ -135,6 +135,7 @@ func runEvidenceLifecycle(t *testing.T, pid1 bool) {
 		t.Fatal(err)
 	}
 	gate := &evidenceGate{c: c}
+	afterStopped := false
 	c.Evidence = &EvidenceConfig{HomeUID: "independent-home-uid", Baseline: baseline, RequirePID1: pid1, ReportStopped: func(ctx context.Context, r Receipt) error {
 		proof, err := gate.observe("Stopped")
 		if err != nil {
@@ -145,13 +146,66 @@ func runEvidenceLifecycle(t *testing.T, pid1 bool) {
 		}
 		gate.stopped = true
 		return nil
+	}, CheckContinuation: func() bool { return true }, AfterStopped: func(r Receipt) error {
+		if !gate.stopped {
+			return errors.New("hook preceded stop acknowledgement")
+		}
+		proof, err := gate.observe("Stopped")
+		if err != nil {
+			return err
+		}
+		if !proof.ContinuationReady || EvidenceExit(proof, c.Binding, "independent-home-uid", baseline) != EvidenceContinuable {
+			return errors.New("original guard not serving continuable stop")
+		}
+		afterStopped = true
+		return nil
 	}}
 	r, err := Run(context.Background(), c, gate)
-	if err != nil || !gate.ready || !gate.stopped || r.State != "Stopped" {
+	if err != nil || !gate.ready || !gate.stopped || !afterStopped || r.State != "Stopped" {
 		t.Fatalf("actual lifecycle: ready=%v stopped=%v receipt=%+v err=%v", gate.ready, gate.stopped, r, err)
 	}
 	if _, err = Run(context.Background(), c, gate); !errors.Is(err, ErrNeedsReview) {
 		t.Fatal("one-use root rearmed", err)
+	}
+
+	// The original guard may run one separately receipted epoch while retaining
+	// the original policy baseline and opaque native HOME. This inert test grants
+	// no budget authority; API/service tests separately verify the owner transition.
+	oldReceipt, err := os.ReadFile(c.ReceiptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPath := c.ReceiptPath
+	if st, e := os.Lstat(c.SocketPath); e == nil && st.Mode()&os.ModeSocket != 0 {
+		if e = os.Remove(c.SocketPath); e != nil {
+			t.Fatal(e)
+		}
+	}
+	actual, err := NativeHomeBaseline(c.Home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Binding.Epoch = 2
+	c.ReceiptPath = filepath.Join(filepath.Dir(oldPath), "owned-host-epoch-2.json")
+	gate = &evidenceGate{c: c}
+	c.Evidence = &EvidenceConfig{HomeUID: "independent-home-uid", Baseline: baseline, ResumeBaseline: actual, RequirePID1: pid1, ReportStopped: func(ctx context.Context, r Receipt) error {
+		proof, e := gate.observe("Stopped")
+		if e != nil {
+			return e
+		}
+		if proof.Baseline != baseline || proof.StartupBaseline != actual || proof.Guard.PID != os.Getpid() || !proof.RootWaitObserved || !proof.TreeReaped {
+			return errors.New("continuation lost original guard/policy or wait/reap")
+		}
+		gate.stopped = true
+		return nil
+	}}
+	second, err := Run(context.Background(), c, gate)
+	if err != nil || !gate.ready || !gate.stopped || second.Binding.Epoch != 2 || second.Root == r.Root {
+		t.Fatal("separate native-process continuation", err)
+	}
+	retained, err := os.ReadFile(oldPath)
+	if err != nil || string(retained) != string(oldReceipt) {
+		t.Fatal("old receipt changed", err)
 	}
 }
 func TestOwnedRootEvidenceActualLifecycle(t *testing.T) { runEvidenceLifecycle(t, false) }
@@ -195,5 +249,13 @@ func TestOwnedRootEvidenceOneIdlePeerDoesNotStarveProbe(t *testing.T) {
 	proof, err := ProbeEvidence(ctx, path, os.Getpid(), c.Binding, strings.Repeat("cd", 32))
 	if err != nil || proof.Stage != "Prepared" {
 		t.Fatal("idle peer starved actual probe", err)
+	}
+}
+
+func TestContinuationHookRequiresExplicitStopAcknowledgement(t *testing.T) {
+	called := false
+	e := &EvidenceConfig{ReportStopped: func(context.Context, Receipt) error { return errors.New("lost stop acknowledgement") }, AfterStopped: func(Receipt) error { called = true; return nil }}
+	if err := e.reportStopped(Config{Binding: Binding{Deadline: time.Now().Add(time.Minute)}}, Receipt{State: "Stopped", RootWaitObserved: true, TreeReaped: true}); err == nil || called {
+		t.Fatal("lost stop status authorized continuation")
 	}
 }

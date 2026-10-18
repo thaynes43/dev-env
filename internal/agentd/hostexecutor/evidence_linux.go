@@ -27,34 +27,40 @@ const EvidenceSocketName = "owned-root-evidence.sock"
 // EvidenceConfig is supplied by the original immutable supervisor route, never
 // by a worker request. Production requires the original namespace PID1.
 type EvidenceConfig struct {
-	HomeUID       string
-	Baseline      string
-	RequirePID1   bool
-	ReportStopped func(context.Context, Receipt) error
-	mu            sync.Mutex
-	server        *evidenceServer
+	HomeUID           string
+	Baseline          string
+	RequirePID1       bool
+	ReportStopped     func(context.Context, Receipt) error
+	AfterStopped      func(Receipt) error
+	ResumeBaseline    string
+	CheckContinuation func() bool
+	mu                sync.Mutex
+	server            *evidenceServer
 }
 
 type Observation struct {
-	Version          int      `json:"version"`
-	Challenge        string   `json:"challenge"`
-	Binding          Binding  `json:"binding"`
-	Guard            Identity `json:"guard"`
-	HomeUID          string   `json:"homeUID"`
-	Baseline         string   `json:"baseline"`
-	Stage            string   `json:"stage"`
-	Root             Identity `json:"root"`
-	NativeVersion    string   `json:"nativeVersion"`
-	RootWaitObserved bool     `json:"rootWaitObserved"`
-	TreeReaped       bool     `json:"treeReaped"`
+	Version           int      `json:"version"`
+	Challenge         string   `json:"challenge"`
+	Binding           Binding  `json:"binding"`
+	Guard             Identity `json:"guard"`
+	HomeUID           string   `json:"homeUID"`
+	Baseline          string   `json:"baseline"`        // Original policy baseline; never rebased by continuation.
+	StartupBaseline   string   `json:"startupBaseline"` // Actual measurement for this native-process epoch.
+	ContinuationReady bool     `json:"continuationReady"`
+	Stage             string   `json:"stage"`
+	Root              Identity `json:"root"`
+	NativeVersion     string   `json:"nativeVersion"`
+	RootWaitObserved  bool     `json:"rootWaitObserved"`
+	TreeReaped        bool     `json:"treeReaped"`
 }
 
 type evidenceServer struct {
-	mu           sync.Mutex
-	current      Observation
-	nativeSocket string
-	listener     net.Listener
-	done         chan struct{}
+	mu                sync.Mutex
+	current           Observation
+	nativeSocket      string
+	listener          net.Listener
+	done              chan struct{}
+	checkContinuation func() bool
 }
 
 func ProtectEvidenceProcess() error {
@@ -243,7 +249,11 @@ func (e *EvidenceConfig) start(c Config) error {
 		return errors.New("owned HOME authority unavailable")
 	}
 	baseline, err := NativeHomeBaseline(c.Home)
-	if err != nil || baseline != e.Baseline {
+	expectedBaseline := e.Baseline
+	if e.ResumeBaseline != "" {
+		expectedBaseline = e.ResumeBaseline
+	}
+	if err != nil || baseline != expectedBaseline {
 		return errors.New("native baseline does not match assigned HOME authority")
 	}
 	path := filepath.Join(filepath.Dir(c.ReceiptPath), EvidenceSocketName)
@@ -259,7 +269,7 @@ func (e *EvidenceConfig) start(c Config) error {
 		_ = listener.Close()
 		return err
 	}
-	s := &evidenceServer{current: Observation{Version: 1, Binding: c.Binding, Guard: guard, HomeUID: e.HomeUID, Baseline: baseline, Stage: "Prepared"}, nativeSocket: c.SocketPath, listener: listener, done: make(chan struct{})}
+	s := &evidenceServer{current: Observation{Version: 1, Binding: c.Binding, Guard: guard, HomeUID: e.HomeUID, Baseline: e.Baseline, StartupBaseline: baseline, Stage: "Prepared"}, checkContinuation: e.CheckContinuation, nativeSocket: c.SocketPath, listener: listener, done: make(chan struct{})}
 	e.mu.Lock()
 	e.server = s
 	e.mu.Unlock()
@@ -357,6 +367,9 @@ func (s *evidenceServer) serve(conn net.Conn) {
 	if !stable {
 		return
 	}
+	if result.Stage == "Stopped" && s.checkContinuation != nil {
+		result.ContinuationReady = s.checkContinuation()
+	}
 	result.Challenge = req.Challenge
 	_ = json.NewEncoder(conn).Encode(result)
 }
@@ -419,5 +432,11 @@ func (e *EvidenceConfig) reportStopped(c Config, r Receipt) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	return e.ReportStopped(ctx, r)
+	if err := e.ReportStopped(ctx, r); err != nil {
+		return err
+	}
+	if e.AfterStopped != nil {
+		return e.AfterStopped(r)
+	}
+	return nil
 }

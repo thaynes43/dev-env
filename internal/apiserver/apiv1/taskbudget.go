@@ -1,6 +1,9 @@
 package apiv1
 
-import "time"
+import (
+	"strconv"
+	"time"
+)
 
 const TaskBudgetsPath = "/v1/task-budgets"
 
@@ -34,6 +37,11 @@ type TaskBudgetSpec struct {
 type CreateTaskBudgetRequest struct {
 	TaskUID string         `json:"taskUID"`
 	Spec    TaskBudgetSpec `json:"spec"`
+}
+
+type ContinueTaskBudgetRequest struct {
+	Binding    TaskBudgetBinding `json:"binding"`
+	DecisionID string            `json:"decisionID"`
 }
 
 type TaskBudgetRequest struct {
@@ -96,4 +104,14 @@ type TaskBudgetBlocker struct {
 	ID             string `json:"id"`
 	FailedAttempts int    `json:"failedAttempts"`
 	Resolved       bool   `json:"resolved"`
+}
+
+// OwnedStopEventID preserves the original epoch1 identity and gives a continued
+// epoch a distinct immutable stop event without overwriting the first receipt.
+func OwnedStopEventID(b TaskBudgetBinding) string {
+	id := "owned-stop:" + b.PodUID
+	if b.Epoch > 1 {
+		id += ":" + strconv.FormatUint(b.Epoch, 10)
+	}
+	return id
 }

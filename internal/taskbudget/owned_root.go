@@ -31,6 +31,10 @@ const OwnedRootPolicyKey = "owned-root.json"
 const OwnedRootContainer = "owned-root"
 
 type OwnedRootPolicy struct {
+	AllowContinuation bool                 `json:"allowContinuation,omitempty"`
+	HomeInputsName    string               `json:"homeInputsName,omitempty"`
+	HomeInputsUID     string               `json:"homeInputsUID,omitempty"`
+	HomeInputsSHA     string               `json:"homeInputsSHA,omitempty"`
 	Version           int                  `json:"version"`
 	Namespace         string               `json:"namespace"`
 	Name              string               `json:"name"`
@@ -48,6 +52,17 @@ type OwnedRootPolicy struct {
 }
 
 func (p OwnedRootPolicy) Valid() bool {
+	if p.AllowContinuation && p.HomeInputsName == "" {
+		return false
+	}
+	if p.HomeInputsName != "" || p.HomeInputsUID != "" || p.HomeInputsSHA != "" {
+		if len(validation.IsDNS1123Subdomain(p.HomeInputsName)) != 0 || !protocol.ValidTaskBudgetIdentifier(p.HomeInputsUID) || len(p.HomeInputsSHA) != 64 {
+			return false
+		}
+		if _, err := hex.DecodeString(p.HomeInputsSHA); err != nil {
+			return false
+		}
+	}
 	if p.Version != 1 || p.Namespace != "dev-agents" || p.HostID == NativeFixtureHostID || !ValidNativeFixtureImage(p.Image) || p.Spec.SuccessCondition == "" || len(p.Spec.SuccessCondition) > 1024 || p.Spec.OverallSeconds < 1 || p.Spec.OverallSeconds > 2700 || p.Spec.EffortSeconds < 1 || p.Spec.EffortSeconds > 3600 || p.Spec.CheckpointSeconds < 1 || p.Spec.CheckpointSeconds > 600 || p.Spec.CheckpointSeconds > p.Spec.OverallSeconds {
 		return false
 	}
@@ -91,12 +106,21 @@ func OwnedRootPod(p OwnedRootPolicy) *corev1.Pod {
 	c.Name = OwnedRootContainer
 	c.Command = []string{"/usr/local/bin/agentd", "owned-codex-host"}
 	c.Args = nil
-	c.Env[0].Value = "/home/dev"
-	c.Env[1].Value = "/home/dev/.codex"
+	c.Env[0].Value = hostexecutor.OwnedRootHome
+	c.Env[1].Value = hostexecutor.OwnedRootHome + "/.codex"
 	budget, _ := json.Marshal(p.Spec)
 	c.Env = append(c.Env, corev1.EnvVar{Name: "AGENTD_OWNED_ROOT_BOOTSTRAP", Value: "true"}, corev1.EnvVar{Name: "AGENTD_OWNED_TASK_UID", Value: p.TaskUID}, corev1.EnvVar{Name: "AGENTD_OWNED_HOST_ID", Value: p.HostID}, corev1.EnvVar{Name: "AGENTD_OWNED_HOME_UID", Value: p.HomeUID}, corev1.EnvVar{Name: "AGENTD_OWNED_HOME_BASELINE", Value: p.Baseline}, corev1.EnvVar{Name: "AGENTD_OWNED_BUDGET_SPEC", Value: string(budget)})
-	c.VolumeMounts[0].MountPath = "/home/dev"
+	c.VolumeMounts[0].MountPath = "/workspace"
 	pod.Spec.Volumes[0].VolumeSource = corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: p.HomeClaim}}
+	if p.AllowContinuation {
+		c.Env = append(c.Env, corev1.EnvVar{Name: "AGENTD_OWNED_ALLOW_CONTINUATION", Value: "true"})
+	}
+	if p.HomeInputsName != "" {
+		mode := int32(0444)
+		c.Env = append(c.Env, corev1.EnvVar{Name: "AGENTD_OWNED_HOME_INPUTS_SHA", Value: p.HomeInputsSHA})
+		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{Name: "owned-home-inputs", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: p.HomeInputsName}, DefaultMode: &mode, Items: []corev1.KeyToPath{{Key: "input.json", Path: "input.json"}, {Key: "requirements.toml", Path: "requirements.toml"}}}}})
+		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: "owned-home-inputs", MountPath: "/opt/dev-env/owned-home", ReadOnly: true}, corev1.VolumeMount{Name: "owned-home-inputs", MountPath: "/etc/codex", ReadOnly: true})
+	}
 	return pod
 }
 
@@ -139,7 +163,7 @@ func (i *OwnedRootInspector) observe(ctx context.Context, l *Ledger, b Binding) 
 	if i.Now != nil {
 		now = i.Now().UTC()
 	}
-	if l == nil || l.Binding != b || p.TaskUID != b.TaskUID || p.HostID != b.HostID || l.Parent != p.Namespace+"/"+p.ServiceAccount || l.Spec.SuccessCondition != p.Spec.SuccessCondition || l.Spec.OverallSeconds != p.Spec.OverallSeconds || l.Spec.EffortSeconds != p.Spec.EffortSeconds || l.Spec.CheckpointSeconds != p.Spec.CheckpointSeconds || b.Epoch != 1 || !b.Deadline.Equal(l.CreatedAt.Add(time.Duration(p.Spec.OverallSeconds)*time.Second)) || now.Before(l.CreatedAt) {
+	if l == nil || l.Binding != b || p.TaskUID != b.TaskUID || p.HostID != b.HostID || l.Parent != p.Namespace+"/"+p.ServiceAccount || l.Spec.SuccessCondition != p.Spec.SuccessCondition || l.Spec.OverallSeconds != p.Spec.OverallSeconds || l.Spec.EffortSeconds != p.Spec.EffortSeconds || l.Spec.CheckpointSeconds != p.Spec.CheckpointSeconds || (b.Epoch != 1 && (b.Epoch != 2 || len(l.Continuations) != 1 || l.Continuations[0].Prior.Epoch != 1 || l.Continuations[0].Prior.TaskUID != b.TaskUID || l.Continuations[0].Prior.HostID != b.HostID || l.Continuations[0].Prior.PodUID != b.PodUID || !l.Continuations[0].Prior.Deadline.Equal(b.Deadline))) || !b.Deadline.Equal(l.CreatedAt.Add(time.Duration(p.Spec.OverallSeconds)*time.Second)) || now.Before(l.CreatedAt) {
 		return empty, p, ErrDenied
 	}
 	var pod corev1.Pod
@@ -182,6 +206,12 @@ func (i *OwnedRootInspector) observe(ctx context.Context, l *Ledger, b Binding) 
 	if i.Reader.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: p.NetworkPolicyName}, netPolicy) != nil || string(netPolicy.GetUID()) != p.NetworkPolicyUID || !netPolicy.GetDeletionTimestamp().IsZero() || OwnedPolicyDigest(netPolicy.Object["spec"]) != p.NetworkPolicySHA || netPolicy.Object["specs"] != nil {
 		return empty, p, ErrUnavailable
 	}
+	var inputs corev1.ConfigMap
+	if p.HomeInputsName != "" {
+		if i.Reader.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: p.HomeInputsName}, &inputs) != nil || string(inputs.UID) != p.HomeInputsUID || !inputs.DeletionTimestamp.IsZero() || len(inputs.Data) != 2 || len(inputs.Data["input.json"]) > 512<<10 || len(inputs.Data["requirements.toml"]) > 64<<10 || OwnedPolicyDigest(inputs.Data) != p.HomeInputsSHA {
+			return empty, p, ErrUnavailable
+		}
+	}
 	proof, err := i.Probe.Observe(ctx, key, OwnedRootContainer, b, p.HomeUID, p.Baseline)
 	if err != nil || !hostexecutor.ValidEvidenceExit(proof) {
 		return empty, p, ErrUnavailable
@@ -192,6 +222,12 @@ func (i *OwnedRootInspector) observe(ctx context.Context, l *Ledger, b Binding) 
 	netAgain := netPolicy.DeepCopy()
 	if i.Reader.Get(ctx, key, &again) != nil || !reflect.DeepEqual(&pod, &again) || i.Reader.Get(ctx, i.Policy, &cmAgain) != nil || !reflect.DeepEqual(cm, &cmAgain) || i.Reader.Get(ctx, client.ObjectKeyFromObject(&home), &homeAgain) != nil || !reflect.DeepEqual(&home, &homeAgain) || i.Reader.Get(ctx, client.ObjectKeyFromObject(netPolicy), netAgain) != nil || !reflect.DeepEqual(netPolicy, netAgain) {
 		return empty, p, ErrUnavailable
+	}
+	if p.HomeInputsName != "" {
+		var inputsAgain corev1.ConfigMap
+		if i.Reader.Get(ctx, client.ObjectKeyFromObject(&inputs), &inputsAgain) != nil || !reflect.DeepEqual(inputs, inputsAgain) {
+			return empty, p, ErrUnavailable
+		}
 	}
 	return proof, p, nil
 }
@@ -223,15 +259,26 @@ func (i *OwnedRootInspector) InspectNativeContinuation(ctx context.Context, l *L
 }
 func (i *OwnedRootInspector) ValidateStop(ctx context.Context, l *Ledger, e apiv1.TaskBudgetEvent) error {
 	id := "host:" + l.Binding.HostID + ":" + strconv.FormatUint(l.Binding.Epoch, 10)
-	if e.Kind != "worker-stop" || e.WorkerID != id || e.ID != "owned-stop:"+l.Binding.PodUID || e.Evidence.Kind != "owned-root-stop" || e.Evidence.ID != e.ID || e.Evidence.Reference != l.Binding.PodUID || !l.NativeAdmitted() {
+	if e.Kind != "worker-stop" || e.WorkerID != id || e.ID != apiv1.OwnedStopEventID(l.Binding) || e.Evidence.Kind != "owned-root-stop" || e.Evidence.ID != e.ID || e.Evidence.Reference != l.Binding.PodUID || !l.NativeAdmitted() {
 		return ErrDenied
 	}
 	proof, _, err := i.observe(ctx, l, l.Binding)
 	if err != nil {
 		return err
 	}
-	if proof != hostexecutor.EvidenceStopped {
+	if proof != hostexecutor.EvidenceStopped && proof != hostexecutor.EvidenceContinuable {
 		return ErrUnavailable
+	}
+	return nil
+}
+
+func (i *OwnedRootInspector) AuthorizeNativeContinue(ctx context.Context, l *Ledger, b Binding) error {
+	phase, p, err := i.observe(ctx, l, b)
+	if err != nil {
+		return err
+	}
+	if !p.AllowContinuation || phase != hostexecutor.EvidenceContinuable {
+		return ErrDenied
 	}
 	return nil
 }

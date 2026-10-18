@@ -629,3 +629,50 @@ The returned receipt proves only that stored publication. Missing output or an
 uncertain capture ACK remains Unknown. Partial managed output does not prove
 complete native history, served model or billed cost. Source tests alone do not
 accept actual rule loading. See [the result reader contract](../.agents/sagas/distributed-dev-env/designs/022-fixed-canary-result-reader.md).
+
+### Prepared owned-root HOME and one within-budget continuation
+
+The source-owned Codex PID1 route can prepare a private HOME at
+`/workspace/home` on its original RWOP PVC. Its policy binds a nonsecret
+ConfigMap by name, UID and SHA-256 of the JSON-encoded data map. That map has
+exactly `input.json` and `requirements.toml`. The version-1 input contains the
+existing common-rules snapshot and `codexConfig`; preparation composes
+`CODEX_HOME/AGENTS.md` through `Snapshot.CodexGlobal`, writes config and disables
+the daemon updater. It requires the existing `CLAUDE.md` fallback and effective
+`project_doc_max_bytes >= 131072`. The requirements file mounts at
+`/etc/codex/requirements.toml`. Credentials/history are never preparation inputs.
+
+Preparation precedes the baseline and irreversible bootstrap intent. It refuses
+conflicting retained config, aliases or unsafe ownership/modes. A release operator
+must bind the baseline measured **after** those exact inputs have been prepared.
+Keeper access projection stays separate. Composed bytes do not prove the native
+process loaded instructions; that remains native acceptance evidence. No policy,
+HOME input or activation manifest is installed by this source change.
+
+With explicit policy `allowContinuation: true`, the original living guard can
+wait after a proven native-process stop for one trusted-owner request:
+
+```text
+agent-run budget continue --decision <unique-owner-decision-id> <task-uid>
+```
+
+The existing authenticated human route owns this request; model/coordinator
+credentials cannot issue it. Both native and child stops must be independently
+confirmed, and all original deadline, effort, checkpoint, stall and failure
+limits must still permit work. Frozen startup config/rules must still match;
+missing or changed inputs are refused without repair. Unknown stop or exhausted
+campaigns are refused. The request grants no extra budget and does not replace
+the existing budget-extension decision contract.
+
+A successful request advances epoch 1 to 2 on the **same original guard, Pod,
+HOME and budget**. The guard closes its old evidence listener before launching
+the next foreground native process. Old stop receipts, bootstrap intent, worker
+history and counters remain; epoch 2 has a separate one-use receipt. The policy
+baseline remains the original baseline; the resumed epoch separately measures
+its actual retained HOME. Lost acknowledgements do not authorize replay.
+
+This supports native-process continuation only while that original environment
+and budget remain valid. Recovery after container/Pod loss, automatic exhausted
+campaign recovery and full native conversation recovery parity are not provided.
+Native phone control and provider-history behavior still require authorized live
+acceptance; model-free process/API tests are source evidence only.

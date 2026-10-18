@@ -65,7 +65,7 @@ func TestOwnedRootCRIStatusDoesNotRequireRootOwnedOutput(t *testing.T) {
 
 func TestOwnedRootRejectsMissingOrGenericStatus(t *testing.T) {
 	b := taskbudget.Binding{TaskUID: "task", HostID: "host", PodUID: "pod", Epoch: 1, Deadline: time.Now().Add(time.Minute)}
-	for _, code := range []int{0, 1, 2, 39, 44, 126, 127, 137, 143, 255} {
+	for _, code := range []int{0, 1, 2, 39, 45, 126, 127, 137, 143, 255} {
 		p := OwnedRootProber{Exec: phaseExec{status: code, output: `{"stage":"Ready"}`}}
 		if _, err := p.Observe(context.Background(), client.ObjectKey{}, "owned-root", b, "home", strings.Repeat("a", 64)); err == nil {
 			t.Fatalf("unconfirmed code%d accepted", code)
