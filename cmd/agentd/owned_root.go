@@ -118,21 +118,42 @@ func checkOwnedHomeInputs(s agentd.Settings, digest string) error {
 	return ownedHomeInputs(s, digest, false)
 }
 func ownedHomeInputs(s agentd.Settings, digest string, prepare bool) error {
-	data := map[string]string{}
-	for _, key := range []string{"input.json", "requirements.toml"} {
-		f, err := os.Open("/opt/dev-env/owned-home/" + key)
-		if err != nil {
-			return err
-		}
-		raw, err := io.ReadAll(io.LimitReader(f, agentd.OwnedHomeInputLimit+1))
-		_ = f.Close()
-		if err != nil || len(raw) > agentd.OwnedHomeInputLimit {
-			return apiv1.ErrTaskBudgetGate
-		}
-		data[key] = string(raw)
+	data, err := readOwnedHomeInputs("/opt/dev-env/owned-home", "/etc/codex/requirements.toml")
+	if err != nil {
+		return err
 	}
 	if !prepare {
 		return agentd.CheckOwnedHome(s, data, digest)
 	}
 	return agentd.PrepareOwnedHome(s, data, digest)
+}
+
+// ConfigMap directory projections may update while a SubPath stays pinned.
+// Check the actual admin floor consumed by Codex, not just its source projection.
+func readOwnedHomeInputs(inputDir, floorPath string) (map[string]string, error) {
+	read := func(path string) (string, error) {
+		f, err := os.Open(path)
+		if err != nil {
+			return "", err
+		}
+		raw, err := io.ReadAll(io.LimitReader(f, agentd.OwnedHomeInputLimit+1))
+		_ = f.Close()
+		if err != nil || len(raw) > agentd.OwnedHomeInputLimit {
+			return "", apiv1.ErrTaskBudgetGate
+		}
+		return string(raw), nil
+	}
+	data := map[string]string{}
+	for _, key := range []string{"input.json", "requirements.toml"} {
+		value, err := read(filepath.Join(inputDir, key))
+		if err != nil {
+			return nil, err
+		}
+		data[key] = value
+	}
+	floor, err := read(floorPath)
+	if err != nil || floor != data["requirements.toml"] {
+		return nil, apiv1.ErrTaskBudgetGate
+	}
+	return data, nil
 }
