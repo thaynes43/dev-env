@@ -18,13 +18,14 @@ func ValidTaskBudgetIdentifier(id string) bool { return taskBudgetIdentifier.Mat
 // TaskBudgetDeadline is immutable Pod environment assigned by the controller.
 // It authorizes no extension, progress, resume or resource cleanup.
 type TaskBudgetDeadline struct {
-	Version    int       `json:"version"`
-	TaskUID    string    `json:"taskUID"`
-	Epoch      uint64    `json:"epoch"`
-	Deadline   time.Time `json:"deadline"`
-	HostID     string    `json:"hostID"`
-	RootPodUID string    `json:"rootPodUID"`
-	SessionUID string    `json:"sessionUID"`
+	Version          int       `json:"version"`
+	TaskUID          string    `json:"taskUID"`
+	Epoch            uint64    `json:"epoch"`
+	Deadline         time.Time `json:"deadline"`
+	CampaignDeadline time.Time `json:"campaignDeadline,omitzero"`
+	HostID           string    `json:"hostID"`
+	RootPodUID       string    `json:"rootPodUID"`
+	SessionUID       string    `json:"sessionUID"`
 }
 
 func ParseTaskBudgetDeadline(raw string, sessionUID, podUID string, now time.Time) (*TaskBudgetDeadline, error) {
@@ -45,6 +46,9 @@ func ParseTaskBudgetDeadline(raw string, sessionUID, podUID string, now time.Tim
 	}
 	if b.Version != 1 || b.Epoch == 0 || b.SessionUID != sessionUID || sessionUID == "" || podUID == "" || b.Deadline.IsZero() || !now.Before(b.Deadline) {
 		return nil, errors.New("task budget identity or finite future deadline unavailable")
+	}
+	if !b.CampaignDeadline.IsZero() && b.CampaignDeadline.Before(b.Deadline) {
+		return nil, errors.New("campaign deadline precedes local hard deadline")
 	}
 	for _, id := range []string{b.TaskUID, b.HostID, b.RootPodUID, b.SessionUID, podUID} {
 		if !ValidTaskBudgetIdentifier(id) {

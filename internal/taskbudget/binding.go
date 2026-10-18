@@ -111,3 +111,22 @@ func (s *Service) ReserveManagedLaunch(ctx context.Context, b Binding, id string
 		return ErrDenied
 	})
 }
+
+// NativeAdmitted is retained host admission, never inferred from heartbeat or
+// a child reservation. Only Admit creates this exact non-managed worker.
+func (l *Ledger) NativeAdmitted() bool {
+	if l == nil {
+		return false
+	}
+	id := "host:" + l.Binding.HostID + ":" + strconv.FormatUint(l.Binding.Epoch, 10)
+	count := 0
+	for _, w := range l.Workers {
+		if w.ID == id {
+			if !w.Active || w.Managed != nil {
+				return false
+			}
+			count++
+		}
+	}
+	return count == 1
+}

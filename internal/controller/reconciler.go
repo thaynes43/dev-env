@@ -286,13 +286,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if budgetBound(&s) {
-		// Unsupported bound topology preserves everything; never fall back
-		// to the weaker legacy group-stop cleanup path.
-		if s.Spec.Workspace == nil {
-			taskBudgetStopping(&s, "bound managed budget requires owned shared stop-and-preserve topology")
-			return r.writeStatus(ctx, &s, ctrl.Result{RequeueAfter: taskBudgetPoll})
+	if budgetBound(&s) && s.Spec.Workspace == nil {
+		if stop, err := r.reconcilePrivateTaskBudget(ctx, &s, &pod); stop || err != nil {
+			return ctrl.Result{RequeueAfter: taskBudgetPoll}, err
 		}
+	} else if budgetBound(&s) {
 		fresh := pod
 		var readErr error
 		if r.APIReader == nil {
@@ -1204,6 +1202,9 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 				return err
 			}
 			budget.Deadline = deadline
+			if s.Spec.Workspace == nil {
+				budget.CampaignDeadline = l.Binding.Deadline
+			}
 			encoded, err := json.Marshal(budget)
 			if err != nil {
 				return err

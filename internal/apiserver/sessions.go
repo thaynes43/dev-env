@@ -26,6 +26,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/commonrules"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
@@ -172,12 +173,36 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 						return 0, nil, budgetError(taskbudget.ErrUnavailable)
 					}
 				}
-				// The current budget controller requires shared executor stop
-				// evidence. Private project admission must not create a child
-				// that it cannot run, or charge effort for that non-dispatch.
-				// Existing idempotent children were returned above unchanged.
 				if sess.Spec.Workspace == nil {
-					return 0, nil, invalid(fieldError("project", "private project dispatch with an assigned task budget is not supported"))
+					// Only the complete finite private adapter may dispatch. Canary/pilot
+					// routes retain their separate refusals; nested dispatch remains denied.
+					if !s.PrivateHistoryRetention || !s.RetainedCommonRules || sess.Spec.Mode != v1alpha1.ModeTask || sess.Spec.Profile != "dev" || sess.Annotations[v1alpha1.AnnotationProjectSnapshot] == "" {
+						return 0, nil, invalid(fieldError("project", "private budget dispatch requires retained HOME/common inputs and the finite dev task profile"))
+					}
+					if sess.Spec.Limits == nil {
+						sess.Spec.Limits = &v1alpha1.SessionLimits{}
+					}
+					if sess.Spec.Limits.Timeout == nil {
+						sess.Spec.Limits.Timeout = &metav1.Duration{Duration: 45 * time.Minute}
+					}
+					if sess.Spec.Limits.Timeout.Duration <= 0 || sess.Spec.Limits.Timeout.Duration > 45*time.Minute {
+						return 0, nil, invalid(fieldError("limits.timeout", "private budget tasks require a timeout at most 45m"))
+					}
+					if b.HostID == taskbudget.NativeFixtureHostID {
+						return 0, nil, budgetError(taskbudget.ErrDenied)
+					}
+					native, err := s.TaskBudgets.ObserveNative(ctx, b)
+					if err != nil || native == nil || native.Latched || !native.NativeAdmitted() {
+						return 0, nil, budgetError(taskbudget.ErrUnavailable)
+					}
+					retained, err := commonrules.Resolve(ctx, s.Live, commonrules.Digest([]byte(sess.Annotations[v1alpha1.AnnotationProjectSnapshot])))
+					if err != nil {
+						return 0, nil, invalid(fieldError("project", "private budget common inputs are unavailable"))
+					}
+					sess.Spec.CommonRules, err = retained.Binding()
+					if err != nil || retained.Confirm(ctx, s.Live) != nil {
+						return 0, nil, invalid(fieldError("project", "private budget common inputs changed"))
+					}
 				}
 				// The server-owned attempt nonce makes a concurrent request for
 				// the same key conflict in CAS rather than share one reservation.
@@ -189,6 +214,15 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 			}
 			annotateTaskBudget(sess, b)
 			sess.Annotations[TaskBudgetWorkerAnnotation] = worker
+		}
+		if sess.Spec.Workspace == nil && sess.Spec.CommonRules != nil {
+			retained, err := commonrules.BoundSession(sess)
+			if err != nil || retained.Confirm(ctx, s.Live) != nil {
+				return 0, nil, invalid(fieldError("project", "private budget common inputs changed before dispatch; reservation retained"))
+			}
+			if err := checkAgentd(sess); err != nil {
+				return 0, nil, err
+			}
 		}
 		err := s.Client.Create(ctx, sess)
 		if apierrors.IsAlreadyExists(err) {

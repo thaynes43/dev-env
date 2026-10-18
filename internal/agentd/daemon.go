@@ -86,6 +86,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("task budget: %w", err)
 	}
 	defer stopDeadline()
+	stopBudgetWatch, err := d.armPrivateTaskBudgetWatch(ctx)
+	if err != nil {
+		return fmt.Errorf("private task budget: %w", err)
+	}
+	defer stopBudgetWatch()
 	d.expireCredentials()
 	if err := os.MkdirAll(d.S.StateDir, 0o700); err != nil {
 		return fmt.Errorf("state dir: %w", err)

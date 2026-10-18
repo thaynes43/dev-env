@@ -278,3 +278,33 @@ whole-executor stop proof and the private lifecycle adapter. No private-admissio
 flag, native readiness validator, pairing, credential or runtime activation is
 added. CLI tests use a local TLS fixture and no provider turns. Source delivery
 is separate from the held task release and GitOps installation.
+
+## Private finite task adapter — bounded source contract
+
+The private adapter must cover dispatch, pre-create reservation and stop accounting
+together. It cannot reuse the post-create canary-directory witness as launch
+permission. Ordinary private tasks retain the existing common-rule snapshot against
+their accepted project snapshot; the CRD must permit that server-owned finite-task
+binding before the API exposes this route. No canary/pilot restriction is relaxed.
+
+Before one Pod create, the controller confirms the original protected HOME and
+private executor intent, exact active ledger worker/Session UID, unchanged retained
+common inputs and approved current template image. It then reserves the budget
+launch in CAS. Unknown Create remains charged and cannot rearm either latch.
+
+A private finite task has both the campaign deadline and the earlier immutable local
+checkpoint deadline. Agentd observes the existing authenticated budget gate before
+boot and periodically; a latch or uncertain observation exits its container while
+the hard timer remains independent. This is finite executor self-stop, not a new
+private Pod patch, suspend-as-stop proof or reap. ADR-006's Pod patch/reap/hold rules
+and HOME retention remain intact. Shared executors retain their existing behavior.
+
+The controller accounts a private stop only from exact retained executor/HOME
+identity plus all admitted containers terminated on an independently healthy Node
+with a fresh owned Lease. It retains the original Pod and HOME; no shared rescue
+receipt is substituted and no removal/replacement follows a budget stop. Missing
+or replaced resources remain uncertain and charged. A stopped bound executor
+cannot resume, receive new work or create a replacement. Native root readiness,
+phone pairing, notification/progress authority and installed acceptance remain
+separate gaps. No live flag, deployment, credential, access or archive action is
+part of this source adapter.
