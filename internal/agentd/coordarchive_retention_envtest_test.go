@@ -13,6 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -107,6 +108,7 @@ func TestEnvtestArchiveBeforeDelete(t *testing.T) {
 	if err := admin.Get(ctx, client.ObjectKeyFromObject(claim), &coord.TaskClaim{}); err != nil {
 		t.Fatal(err)
 	}
+	live := liveClaimBytes(t, ctx, admin, claim)
 	if got := pass(start.Add(coordretention.DefaultGrace)); got != "complete" || !verifyBeforeDelete(order) {
 		t.Fatalf("delete pass %s order %v", got, order)
 	}
@@ -118,9 +120,29 @@ func TestEnvtestArchiveBeforeDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(stored.Object)
-	if hex.EncodeToString(sum[:]) != stored.Manifest.Object.SHA256 {
-		t.Fatal("archived object hash does not match its manifest")
+	if hex.EncodeToString(sum[:]) != stored.Manifest.Object.SHA256 || !bytes.Equal(stored.Object, live) {
+		t.Fatal("archived bytes are not the claim read before the delete")
 	}
+}
+
+func liveClaimBytes(t *testing.T, ctx context.Context, c client.Client, claim *coord.TaskClaim) []byte {
+	t.Helper()
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(coord.GroupVersion.WithKind("TaskClaim"))
+	if err := c.Get(ctx, client.ObjectKeyFromObject(claim), u); err != nil {
+		t.Fatal(err)
+	}
+	if u.GetAPIVersion() == "" {
+		u.SetAPIVersion(coord.GroupVersion.String())
+	}
+	if u.GetKind() == "" {
+		u.SetKind("TaskClaim")
+	}
+	raw, err := protocol.CanonicalJSON(u.Object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
 
 func verifyBeforeDelete(order []string) bool {
