@@ -894,6 +894,14 @@ exec fake, so the protocol is exercised):
   `Delete`. Each archive hash equals the hash of the object read before the pass.
   The fallback GET answers each with `archived: true`, and `?archived=only`
   lists them in the live item shape.
+  *2026-10-17:* `TestEnvtestArchiveBeforeDelete` runs the retention runnable
+  against a real API server and the real coordination archive on a temp
+  directory. The mount check is stubbed the same way the archive tests stub
+  it. One absent owner's claim is marked and kept, kept again one minute
+  inside the grace, then deleted once the grace is over. The archive get is
+  recorded before that delete, and the stored object's hash matches its
+  manifest. A context, a message, an ack, the exec transport, and the
+  archived-read API remain.
 - **E2, refusals.** Each leaves the record live and counts its reason:
   the revision removed after the mark (`archive_missing`, a `reset` event, then
   re-marked with a new grace); stored bytes altered (`archive_mismatch`, never
