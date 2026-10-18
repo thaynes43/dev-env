@@ -9,6 +9,17 @@ rules, and held owner gates stay in force. This page does not replace them.
 ([#415](https://github.com/thaynes43/dev-env/pull/415)). Nothing in the
 373–415 chain is in a release, and nothing in it is pinned in haynes-ops.
 
+[#418](https://github.com/thaynes43/dev-env/pull/418) merged later as
+`d828b41197662a1ec7ddfa8aa7c3f4844f8bc1f6` ("Record the concurrent
+coordination archive get and prune memory").
+[#419](https://github.com/thaynes43/dev-env/pull/419) merged as
+`a3533739bdee22870612dbd2be1bedd2a352981c` ("fix: repair retention and grant
+integration boundaries"). #419 is the last product commit this note describes.
+#418 records the offline concurrent gets and prune. The 256 MiB limit is not
+raised and R5 is not started. #419 repairs source boundaries. It does not
+merge release #369, and haynes-ops is not pinned to either merge. The owner
+gates already stated in [HANDOFF.md](HANDOFF.md) stay in force.
+
 v1 stays up. Do not restart pod `dev-env-68b4b9f6cf-lt6j7`. Do not open a
 live rendezvous cohort. A dev-env agent test uses `gpt-6-luna` or
 `claude-haiku-4-5`.
@@ -31,19 +42,22 @@ Checked on `thaynes43/haynes-ops` `main`, not by rolling a pod.
   new #173 canary.
 
 [Release pull request #369](https://github.com/thaynes43/dev-env/pull/369)
-is still open. Its changelog lists only
-[#370](https://github.com/thaynes43/dev-env/pull/370). Release Please last
-ran after #415 and left the pull request unchanged, because the later squash
-subjects are not conventional commits. Merging #369 would tag the whole tree
-as v2.29.6 and publish an agent image. It was left open.
+is still open. After #419, Release Please updated the changelog. It now lists
+[#370](https://github.com/thaynes43/dev-env/pull/370) and
+[#419](https://github.com/thaynes43/dev-env/pull/419)
+(`a3533739bdee22870612dbd2be1bedd2a352981c`). It still omits the rest of the
+373–418 chain, because those squash subjects are not conventional commits.
+Merging #369 would tag the whole tree as v2.29.6 and publish an agent image.
+Leave #369 open.
 
 ## This Cursor session
 
 This is the coordinator that started on 2026-10-17 around 09:33 EDT with a
 stand-by, then took the v2 MVP adoption goal after 13:44 EDT and kept merging
 through 2026-10-18. The workers were child agents of that chat. The table is
-`gh pr list --state merged` on 2026-10-18, merge commit SHAs included. #401
-is absent because it was closed, not merged.
+the coordinator chain through #415, with merge commit SHAs. #401 is absent
+because it was closed, not merged. #418 and #419 merged after this table.
+They are recorded in the opening.
 
 The chain is source and offline proof. It does not admit a pilot, pin an
 image, or accept Chapter 7.
@@ -107,7 +121,7 @@ medium documentation note. The pull request was closed rather than updated.
   stopped. Plan 04's Codex hosts, image pre-pull, and client acceptance are
   still backlog. The installed operator is still v2.29.4, so this drain is
   not running in the cluster.
-- **Coordination retention, default off (#376, then #382–#415).**
+- **Coordination retention, default off (#376, then #382–#415, then #418 and #419).**
   `--enable-coordination-retention` defaults to false and is refused unless
   archive reads are on. The later pull requests are envtest and offline
   proofs: archive before delete for a claim, context, message, and
@@ -115,9 +129,17 @@ medium documentation note. The pull request was closed rather than updated.
   shelf leave the live object unmarked; a second pass does not delete twice;
   a replaced owner and a stale delete are handled; reads of removed objects
   go through the real archive command; a worst-case publication is archived
-  and deleted in test; #415 records one-get memory. DESIGN-024 R5 still has
-  concurrent gets and a prune to judge. Retention is not turned on in
-  haynes-ops.
+  and deleted in test; #415 records one-get memory.
+  [#418](https://github.com/thaynes43/dev-env/pull/418)
+  (`d828b41197662a1ec7ddfa8aa7c3f4844f8bc1f6`) records four worst-case gets
+  and one prune in that same offline limit. Native arm64 peaked at 143355904
+  bytes with no OOM. VirtualApple amd64 hit 256 MiB and the kernel killed one
+  get, on both runs. Neither figure is the installed Talos shelf. The 256 MiB
+  limit is not raised and R5 is not started.
+  [#419](https://github.com/thaynes43/dev-env/pull/419)
+  (`a3533739bdee22870612dbd2be1bedd2a352981c`) repairs retention and grant
+  boundaries in source. Retention is not turned on in haynes-ops. Those owner
+  gates stay in [HANDOFF.md](HANDOFF.md).
 - **Grant CLI, source only (#378–#381).** `agent-run` can list, show,
   request, release, and use a grant, and can send a break-glass ask. #381
   fails a request that is refused or still pending. This is not a proof
@@ -218,7 +240,10 @@ that window. It is a dependency bump, not either session's product work.
 
 Checked against [HANDOFF.md](HANDOFF.md), the 2026-10-13 pickup brief, and
 `main` at `203413614f93c655abc9a00835e2f36f29e64990`. The 373–415 chain does
-not close any of these.
+not close any of these. #418
+(`d828b41197662a1ec7ddfa8aa7c3f4844f8bc1f6`) and #419
+(`a3533739bdee22870612dbd2be1bedd2a352981c`) do not close them either. The
+owner gates stay in [HANDOFF.md](HANDOFF.md).
 
 - **Fresh rendezvous seal, window, and bound ConfigMap UID.** Chapter 7 is
   not accepted. Done still means A and B both claim, an inbox ACK exists, A
@@ -269,11 +294,18 @@ not close any of these.
 
 Also still open, found while checking the tree:
 
-- The 373–415 source is not released and not installed. #369 must not be
-  merged as the changelog stands.
+- The 373–415 source, the #418 measurement, and the #419 boundary fixes are
+  not released and not installed. #369 must not be merged. Its changelog now
+  lists #370 and #419 and still omits the rest of that chain. Merging it
+  would tag the whole tree as v2.29.6.
 - Plan 04 beyond the idle-drain source: Codex hosts, pre-pull, and acceptance.
-- DESIGN-024 retention R5's concurrent gets and prune, then any haynes-ops
-  enablement. The runnable stays default off.
+- DESIGN-024 R5 is not started. #418
+  (`d828b41197662a1ec7ddfa8aa7c3f4844f8bc1f6`) recorded the offline concurrent
+  gets and prune. Native arm64 peaked at 143355904 bytes with no OOM.
+  VirtualApple amd64 hit 256 MiB and the kernel killed one get, on both runs.
+  Neither figure is the installed Talos shelf. The 256 MiB limit is not
+  raised. haynes-ops enablement stays with the owner gates in
+  [HANDOFF.md](HANDOFF.md). The runnable stays default off.
 - #154 budgets and #160 recovery, past the unwired inspector.
 - #175 consumer acceptance of claims and inbox with real consumers. The
   archive proofs are envtest.
@@ -304,8 +336,14 @@ That handoff is the source of what was done and what is still open. Verify
 every claim against the code, `git log`, and the open pull requests. Where
 the summary and the tree disagree, the tree wins.
 
-Review the handoff at that SHA. A later commit on main only records the SHA
-in this prompt. It is not new product work.
+Review the handoff at that SHA for the source pass it describes. #417 only
+recorded that SHA. Later, #418 (`d828b41197662a1ec7ddfa8aa7c3f4844f8bc1f6`)
+recorded the offline concurrent get and prune measurement, and #419
+(`a3533739bdee22870612dbd2be1bedd2a352981c`, "fix: repair retention and grant
+integration boundaries") repaired source boundaries. R5 is not started.
+The 256 MiB limit is not raised. The MVP is not adoptable. The owner gates
+in HANDOFF.md stay in force. A commit after #419 only records those two
+pulls in this page.
 
 Advise the next steps. Keep the owner gates in the handoff. Do not retire
 v1. Do not open a live rendezvous cohort. Do not restart pod
