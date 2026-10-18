@@ -945,12 +945,12 @@ exec fake, so the protocol is exercised):
   lookup and no put or mark. `TestOversizeRecordIsNotMarked` runs on the fake
   client. A record whose canonical bytes exceed the archive bound stays live,
   the refusal is `archive_invalid`, and the pass does not put or mark it.
-  `TestArchivedReadsWithoutAVolumeAnswerUnavailable` removes a claim, a
-  published context, and an inbox message, then reads them through the real
-  coordination archive while its root is not a volume of its own. The claim,
-  context, and message GETs, their `?archived=only` lists, and the
-  acknowledgement GET answer unavailable and do not return the removed text.
-  The E2 envtest remains.
+  `TestArchivedReadsWithoutAVolumeAnswerUnavailable` stores a claim, a
+  published context, and an inbox message with its acknowledgement while the
+  mount check is stubbed, then restores the real check. The archive root is
+  not a volume of its own, so the claim, context, and message GETs, their
+  `?archived=only` lists, and the acknowledgement GET answer unavailable and
+  do not return the stored text. The E2 envtest remains.
 - **E3, the inbox rule.** Sender absent and recipient present without an ack:
   kept. The recipient acks: released, the message deleted before the ack. An ack
   whose delete failed is released on the next pass. An ack whose message was
