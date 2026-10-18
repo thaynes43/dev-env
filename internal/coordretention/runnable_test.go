@@ -465,6 +465,24 @@ func TestArchiveMissingLeavesTheRecord(t *testing.T) {
 	}
 }
 
+func TestOversizeRecordIsNotMarked(t *testing.T) {
+	rig := releasedRig()
+	claim := retentionClaim(t, "issue:301", "55555555-5555-4555-8555-555555555555")
+	claim.Annotations = map[string]string{"pad": strings.Repeat("a", protocol.MaxCoordArchiveObjectBytes)}
+	calls := 0
+	rig.archive.onCall = func() { calls++ }
+	runnable := rig.build(t, claim)
+	if got := runnable.Pass(context.Background()); got != resultComplete || rig.realDeletes != 0 || len(rig.archive.puts) != 0 || len(rig.archive.marks) != 0 || calls != rig.archive.lookups {
+		t.Fatalf("result %s deletes %d puts %d marks %d calls %d lookups %d", got, rig.realDeletes, len(rig.archive.puts), len(rig.archive.marks), calls, rig.archive.lookups)
+	}
+	if sampleValue(runnable.metrics.Refused.WithLabelValues(string(TaskClaim), reasonArchiveInvalid)) != 1 {
+		t.Fatal("archive_invalid was not refused")
+	}
+	if err := rig.base.Get(context.Background(), client.ObjectKey{Namespace: claim.Namespace, Name: claim.Name}, &coord.TaskClaim{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFailedPresentResetDoesNotDeleteOnNewLeader(t *testing.T) {
 	opened := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	claim := retentionClaim(t, "issue:301", "55555555-5555-4555-8555-555555555555")
