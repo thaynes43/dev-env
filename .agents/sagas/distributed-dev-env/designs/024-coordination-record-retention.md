@@ -1012,8 +1012,9 @@ exec fake, so the protocol is exercised):
 - **E6, a replaced owner.** Same name, new UID: released.
   *2026-10-17:* `TestEnvtestReplacedOwnerReleases` creates the Session and both
   claims on a real API server. The claim that still names the old UID is
-  released. The claim that names the live UID stays kept. The delete after
-  grace stays in the fake-client tests.
+  released. The claim that names the live UID stays kept.
+  `TestEnvtestReplacedOwnerDeletesAfterGrace` marks that old claim and deletes
+  it once the grace is over. The live owner's claim is not marked and stays.
 - **E7, two passes at once.** Exactly one delete succeeds. Each revision has one
   archive entry.
   *2026-10-17:* `TestSecondPassDoesNotDeleteTheSameRevision` runs a second pass
