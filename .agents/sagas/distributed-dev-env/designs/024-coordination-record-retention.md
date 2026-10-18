@@ -901,7 +901,9 @@ exec fake, so the protocol is exercised):
   inside the grace, then deleted once the grace is over. The archive get is
   recorded before that delete. The stored bytes equal the canonical claim
   read before that delete, and their hash matches the manifest. A context,
-  a message, an ack, the exec transport, and the archived-read API remain.
+  a message, an ack, a process exec, and the archived-read API remain.
+  Put, mark, and lookup cross one canonical JSON object before the real
+  archive, which is the ctl request boundary.
 - **E2, refusals.** Each leaves the record live and counts its reason:
   the revision removed after the mark (`archive_missing`, a `reset` event, then
   re-marked with a new grace); stored bytes altered (`archive_mismatch`, never
