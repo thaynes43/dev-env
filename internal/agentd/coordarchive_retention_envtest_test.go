@@ -25,6 +25,8 @@ import (
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	devv1 "github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/contextpublication"
 	"github.com/thaynes43/dev-env/internal/coordretention"
 	"github.com/thaynes43/dev-env/internal/shelf"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
@@ -34,8 +36,8 @@ import (
 // TestEnvtestArchiveBeforeDelete is DESIGN-024 E1 for one claim. The archive is
 // the real coordination archive on a temp directory. The mount check is stubbed
 // the same way the archive tests stub it. Put, mark, and lookup cross the ctl
-// JSON boundary. A context, a message, an ack, a process exec, and the
-// archived-read API remain.
+// JSON boundary. A message, an ack, a process exec, and the archived-read API
+// remain. The published-context proof is TestEnvtestArchiveBeforeDeleteContext.
 func TestEnvtestArchiveBeforeDelete(t *testing.T) {
 	old := coordArchiveIsMounted
 	coordArchiveIsMounted = func(string, string) error { return nil }
@@ -131,6 +133,120 @@ func TestEnvtestArchiveBeforeDelete(t *testing.T) {
 	}
 }
 
+// TestEnvtestArchiveBeforeDeleteContext is DESIGN-024 E1 for one published
+// context. The source session is absent, so the context is released. No claim
+// is created.
+func TestEnvtestArchiveBeforeDeleteContext(t *testing.T) {
+	old := coordArchiveIsMounted
+	coordArchiveIsMounted = func(string, string) error { return nil }
+	t.Cleanup(func() { coordArchiveIsMounted = old })
+
+	env, err := testenv.Start()
+	if err != nil {
+		t.Fatalf("envtest: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := env.Stop(); err != nil {
+			t.Log("envtest stop:", err)
+		}
+	})
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{coord.AddToScheme, devv1.AddToScheme, corev1.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	admin, err := client.New(env.Config, client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const ns = "dev-env-system"
+	if err := admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
+		t.Fatal(err)
+	}
+	spec := retentionContextSpec()
+	if !contextpublication.ValidSpec(spec) {
+		t.Fatal("context spec")
+	}
+	published := &coord.PublishedContext{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: contextpublication.Name(spec.Identity)}, Spec: spec}
+	if err := admin.Create(ctx, published); err != nil {
+		t.Fatal(err)
+	}
+
+	home := t.TempDir()
+	root := filepath.Join(home, protocol.CoordArchiveDirName)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 10, 17, 19, 0, 0, 0, time.UTC)
+	clock := start
+	archive := CoordArchive{Root: root, Home: home, Now: func() time.Time { return clock }}
+	var order []string
+	store := &fsArchive{a: archive, order: &order}
+	runnable := &coordretention.Runnable{
+		Enabled: true, Grace: coordretention.DefaultGrace, Client: &recordingClient{Client: admin, order: &order}, Reader: admin,
+		Namespace: ns, Reconciled: map[string]bool{spec.Source.Namespace: true},
+		Kinds: map[coordretention.Kind]bool{coordretention.PublishedContext: true},
+		Pods:  shelfPod{}, Archive: store, Slots: shelf.NewExecSlots(2),
+		Now: func() time.Time { return clock },
+	}
+	pass := func(at time.Time) string {
+		t.Helper()
+		clock = at
+		return runnable.Pass(ctx)
+	}
+	if got := pass(start); got != "complete" || len(order) != 0 {
+		t.Fatalf("mark pass %s order %v", got, order)
+	}
+	if err := admin.Get(ctx, client.ObjectKeyFromObject(published), &coord.PublishedContext{}); err != nil {
+		t.Fatal(err)
+	}
+	id := protocol.CoordArchiveIdentity{Resource: "publishedcontexts", Project: spec.Project, Name: published.Name, UID: string(published.UID)}
+	looked, err := archive.Lookup([]protocol.CoordArchiveIdentity{id})
+	if err != nil || len(looked) != 1 || looked[0].GraceStart == nil || !looked[0].Holds {
+		t.Fatalf("marked archive %#v %v", looked, err)
+	}
+	if got := pass(start.Add(coordretention.DefaultGrace - time.Minute)); got != "complete" || len(order) != 0 {
+		t.Fatalf("grace pass %s order %v", got, order)
+	}
+	live := liveKindBytes(t, ctx, admin, client.ObjectKeyFromObject(published), "PublishedContext")
+	if got := pass(start.Add(coordretention.DefaultGrace)); got != "complete" || !verifyBeforeDelete(order) {
+		t.Fatalf("delete pass %s order %v", got, order)
+	}
+	if err := admin.Get(ctx, client.ObjectKeyFromObject(published), &coord.PublishedContext{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("context after grace: %v", err)
+	}
+	stored, err := archive.GetSelected(protocol.CoordArchiveGetQuery{Resource: id.Resource, Name: id.Name, UID: id.UID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(stored.Object)
+	if hex.EncodeToString(sum[:]) != stored.Manifest.Object.SHA256 || !bytes.Equal(stored.Object, live) {
+		t.Fatal("archived bytes are not the context read before the delete")
+	}
+}
+
+func liveKindBytes(t *testing.T, ctx context.Context, c client.Client, key client.ObjectKey, kind string) []byte {
+	t.Helper()
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(coord.GroupVersion.WithKind(kind))
+	if err := c.Get(ctx, key, u); err != nil {
+		t.Fatal(err)
+	}
+	if u.GetAPIVersion() == "" {
+		u.SetAPIVersion(coord.GroupVersion.String())
+	}
+	if u.GetKind() == "" {
+		u.SetKind(kind)
+	}
+	raw, err := protocol.CanonicalJSON(u.Object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
 func liveClaimBytes(t *testing.T, ctx context.Context, c client.Client, claim *coord.TaskClaim) []byte {
 	t.Helper()
 	u := &unstructured.Unstructured{}
@@ -175,6 +291,23 @@ func retentionClaimSpec() coord.TaskClaimSpec {
 			RulesRevision:   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 			GitHub:          "thaynes43/dev-env", DefaultBranch: "main", InitialPinState: "Unknown",
 		},
+	}
+}
+
+func retentionContextSpec() coord.PublishedContextSpec {
+	claim := retentionClaimSpec()
+	const text = "finite synthetic context"
+	return coord.PublishedContextSpec{
+		Identity: coord.ContextIdentity{SessionUID: claim.Owner.UID, Kind: "handoff", Key: "retention-301"},
+		Source:   claim.Owner, SourceGeneration: 1, SourceParent: "dev-env-system/human",
+		Project: claim.Identity.Project, Repository: claim.Identity.Repository,
+		Actor: claim.Actor, Provenance: claim.Provenance,
+		Attribution: coord.ContextAttribution{
+			Provider: "claude", RequestedModel: "claude-haiku-4-5",
+			ObservedModelState: "Unknown", UsageState: "Unknown", CostState: "Unknown",
+		},
+		Origin: "ExplicitPublished", Completeness: "ExplicitExcerpt", StopState: "Unknown",
+		Text: text, ContentSHA256: apiv1.ContextHash(text), ByteCount: int32(len(text)),
 	}
 }
 
