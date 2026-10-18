@@ -418,6 +418,31 @@ func TestSecondPassDoesNotDeleteTheSameRevision(t *testing.T) {
 	}
 }
 
+func TestArchiveMismatchLeavesTheRecord(t *testing.T) {
+	rig := releasedRig()
+	claim := retentionClaim(t, "issue:301", "55555555-5555-4555-8555-555555555555")
+	runnable := rig.build(t, claim)
+	rig.archive.alterGet = true
+	if got := runnable.Pass(context.Background()); got != resultComplete || rig.realDeletes != 0 {
+		t.Fatalf("result %s deletes %d", got, rig.realDeletes)
+	}
+	if sampleValue(runnable.metrics.Refused.WithLabelValues(string(TaskClaim), reasonArchiveMismatch)) != 1 {
+		t.Fatal("archive_mismatch was not refused")
+	}
+	if err := rig.base.Get(context.Background(), client.ObjectKey{Namespace: claim.Namespace, Name: claim.Name}, &coord.TaskClaim{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rig.archive.puts) != 1 || len(rig.archive.objects) != 1 {
+		t.Fatalf("puts %d objects %d", len(rig.archive.puts), len(rig.archive.objects))
+	}
+	for _, stored := range rig.archive.objects {
+		sum := sha256.Sum256(stored)
+		if hex.EncodeToString(sum[:]) != rig.archive.puts[0].Manifest.Object.SHA256 || string(stored) != string(rig.archive.puts[0].Object) {
+			t.Fatal("stored bytes were overwritten")
+		}
+	}
+}
+
 func TestFailedPresentResetDoesNotDeleteOnNewLeader(t *testing.T) {
 	opened := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	claim := retentionClaim(t, "issue:301", "55555555-5555-4555-8555-555555555555")
@@ -692,6 +717,7 @@ type memArchive struct {
 	onCall       func()
 	onGet        func()
 	note         func(string)
+	alterGet     bool
 }
 
 func newMemArchive() *memArchive {
@@ -816,13 +842,17 @@ func (m *memArchive) Get(_ context.Context, q protocol.CoordArchiveGetQuery) (pr
 	if raw == nil {
 		return protocol.CoordArchiveGetResult{}, protocol.HistoryErrorf(protocol.HistoryErrNotFound, "", "not found")
 	}
+	object := append([]byte(nil), raw...)
+	if m.alterGet && len(object) > 0 {
+		object[0] ^= 0xff
+	}
 	return protocol.CoordArchiveGetResult{
 		Manifest: protocol.CoordArchiveStoredManifest{CoordArchiveManifest: protocol.CoordArchiveManifest{
 			Format: protocol.CoordArchiveFormat, Resource: q.Resource, Name: q.Name, UID: q.UID,
 			ResourceVersion: q.ResourceVersion, Object: protocol.CoordArchiveObjectDigest{SHA256: q.SHA256, Bytes: int64(len(raw))},
 			ArchivedBy: archivedBy,
 		}, ArchivedAt: time.Unix(1, 0).UTC()},
-		Object: append([]byte(nil), raw...),
+		Object: object,
 	}, nil
 }
 
