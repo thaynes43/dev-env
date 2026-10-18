@@ -23,6 +23,9 @@ func ownedRootBootstrap(ctx context.Context, s agentd.Settings, g *ownedBudgetGa
 	if len(raw) > 8192 || json.Unmarshal([]byte(raw), &spec) != nil || spec.OverallSeconds < 1 || spec.OverallSeconds > 2700 || spec.EffortSeconds < 1 || spec.EffortSeconds > 3600 || spec.CheckpointSeconds < 1 || spec.CheckpointSeconds > 600 || spec.SuccessCondition == "" {
 		return hostexecutor.Binding{}, nil, apiv1.ErrTaskBudgetGate
 	}
+	if validateOwnedRootHome(s.Home, getenv("AGENTD_OWNED_HOME_UID"), getenv("AGENTD_OWNED_HOME_BASELINE")) != nil {
+		return hostexecutor.Binding{}, nil, apiv1.ErrTaskBudgetGate
+	}
 	// Separate irreversible bootstrap intent is written before the one API create.
 	// It is not an authority receipt and is never removed/rearmed automatically.
 	if err := writeOwnedBootstrapIntent(s.StateDir, getenv("AGENTD_OWNED_TASK_UID")); err != nil {
@@ -95,4 +98,17 @@ func writeOwnedBootstrapIntent(stateDir, task string) error {
 		return err
 	}
 	return unix.Fsync(fd)
+}
+
+// Preflight consumes no intent or ledger. Evidence.start measures again after
+// bootstrap so changes during the API request cannot inherit the earlier proof.
+func validateOwnedRootHome(home, uid, expected string) error {
+	if len(uid) < 1 || len(uid) > 128 || len(expected) != 64 {
+		return apiv1.ErrTaskBudgetGate
+	}
+	actual, err := hostexecutor.NativeHomeBaseline(home)
+	if err != nil || actual != expected {
+		return apiv1.ErrTaskBudgetGate
+	}
+	return nil
 }

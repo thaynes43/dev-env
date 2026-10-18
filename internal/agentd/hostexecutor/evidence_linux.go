@@ -265,12 +265,21 @@ func (e *EvidenceConfig) start(c Config) error {
 	e.mu.Unlock()
 	go func() {
 		defer close(s.done)
+		var active sync.WaitGroup
+		defer active.Wait()
+		slots := make(chan struct{}, 4)
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
 				return
 			}
-			s.serve(conn)
+			select {
+			case slots <- struct{}{}:
+				active.Add(1)
+				go func() { defer active.Done(); defer func() { <-slots }(); s.serve(conn) }()
+			default:
+				_ = conn.Close()
+			}
 		}
 	}()
 	return nil
@@ -310,7 +319,8 @@ func (e *EvidenceConfig) update(stage string, r Receipt) {
 
 func (s *evidenceServer) serve(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
-	_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+	deadline := time.Now().Add(500 * time.Millisecond)
+	_ = conn.SetDeadline(deadline)
 	var req struct {
 		Challenge string  `json:"challenge"`
 		Binding   Binding `json:"binding"`
@@ -327,7 +337,11 @@ func (s *evidenceServer) serve(conn net.Conn) {
 		return
 	}
 	if result.Stage == "Ready" {
-		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		probeDeadline := time.Now().Add(300 * time.Millisecond)
+		if deadline.Before(probeDeadline) {
+			probeDeadline = deadline
+		}
+		ctx, cancel := context.WithDeadline(context.Background(), probeDeadline)
 		err := probeNative(ctx, s.nativeSocket, result.Root, result.NativeVersion)
 		cancel()
 		if err != nil {

@@ -5,6 +5,7 @@ package hostexecutor
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -168,4 +169,31 @@ func TestOwnedRootPID1Evidence(t *testing.T) {
 		t.Fatal("PID1 fixture must run as nonroot1000")
 	}
 	runEvidenceLifecycle(t, true)
+}
+
+func TestOwnedRootEvidenceOneIdlePeerDoesNotStarveProbe(t *testing.T) {
+	c := config(t)
+	baseline, err := NativeHomeBaseline(c.Home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &EvidenceConfig{HomeUID: "home-original", Baseline: baseline}
+	if err := e.start(c); err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	path := filepath.Join(filepath.Dir(c.ReceiptPath), EvidenceSocketName)
+	idle, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = idle.Close() }()
+	// The idle peer occupies its entire500ms request allowance. This independent
+	// trusted observation must complete within250ms, before that allowance expires.
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	proof, err := ProbeEvidence(ctx, path, os.Getpid(), c.Binding, strings.Repeat("cd", 32))
+	if err != nil || proof.Stage != "Prepared" {
+		t.Fatal("idle peer starved actual probe", err)
+	}
 }

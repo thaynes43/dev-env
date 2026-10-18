@@ -147,6 +147,7 @@ func TestEnvtestPrivateBudgetDispatchReserveStopPreserve(t *testing.T) {
 	}
 
 	remote := &apiv1.HTTPTaskBudgetGate{BaseURL: server.URL, Client: server.Client(), Token: func(context.Context) (string, error) { return tokCoordinator, nil }}
+	clock.Store(time.Now().UTC().UnixNano())
 	binding, err := remote.BootstrapOwned(ctx, apiv1.CreateTaskBudgetRequest{TaskUID: "campaign-a", Spec: owned.policy.Spec}, "host-a", string(root.UID))
 	if err != nil {
 		t.Fatal("bootstrap", err)

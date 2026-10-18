@@ -129,7 +129,8 @@ The original supervisor must be direct namespace PID1, nonroot1000, with no
 sidecars/init containers, host namespaces, elevated capabilities or writable
 image. PID1 and its authenticated helper become nondumpable before native starts.
 The helper uses inherited executable FD4 when protected PID1's proc executable
-is inaccessible. A fresh bounded challenge probes the original PID1 Unix peer,
+is inaccessible. The server bounds concurrent connections to four and each connection to500ms;
+one idle peer cannot serialize all probes. A fresh bounded challenge probes the original PID1 Unix peer,
 boot/start identity and pidfd liveness, then reads protected memory. Ready proof
 also rechecks the original native peer and pinned initialize exchange. Receipts
 and worker-reported readiness are never inputs to operator authority.
@@ -150,9 +151,11 @@ mutations after launch are not rehashed as provenance. Unrelated recovery input
 or aliases refuse. The private directories and approved recovery baseline must
 already exist; this route does not prepare or erase an existing enrollment.
 
-The guarded bootstrap writes and syncs a one-use intent and its parent directory
+The guarded bootstrap preflights HOME authority before consuming an intent, then
+writes and syncs a one-use intent and its parent directory
 before one authenticated budget create. Conflict, unknown acknowledgement or
-restart never triggers recovery/replay. The returned exact binding is frozen.
+restart never triggers recovery/replay. The returned exact binding is frozen; its clock sanity check permits at most a
+fixed five-second operator/node skew without rewriting the deadline.
 Prepared permits initial Admit; Starting denies work without an authority-loss
 latch; dispatch, launch reservation and private continuation require fresh Ready.
 Unknown evidence stops work and retains accounting. Original native Wait, ECHILD

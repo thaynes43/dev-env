@@ -379,3 +379,13 @@ from CRI process creation onward; becoming nondumpable in main cannot revoke a
 pipe descriptor already raced open. Nonzero probe exit is always refused by the
 operator. Runtime CRI transport compatibility is a held installation prerequisite,
 not assumed from a synthetic writer. TTY/worker-owned/group-readable pipes refuse.
+
+Bootstrap preflights HOME UID/baseline before spending the intent or creating a
+ledger, then the original guard measures again before admission. The returned
+server deadline is never changed; a fixed five-second client-side sanity allowance
+handles bounded operator/node clock differences. Larger/unknown deadlines refuse.
+The evidence server permits at most four concurrent bounded connections, so one
+silent local peer cannot hold the only observer slot. Saturation refuses rather
+than creating an unbounded queue. This is not availability against a hostile
+same-UID worker: socket unlink or saturation can still stop the campaign. Unknown
+proof latches and keeps accounting/resources.

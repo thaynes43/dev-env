@@ -162,7 +162,9 @@ func unambiguousBudgetStatus(raw []byte) bool {
 
 // BootstrapOwned creates exactly once. Conflicts and unknown replies refuse
 // without a recovery read or mutation replay. The caller persists its
-// one-use bootstrap intent before invoking this method.
+// one-use bootstrap intent before invoking this method. The server deadline
+// remains immutable; a fixed five-second clock sanity tolerance avoids burning
+// the one-use bootstrap for ordinary bounded operator/node clock differences.
 func (g *HTTPTaskBudgetGate) BootstrapOwned(ctx context.Context, req CreateTaskBudgetRequest, host, pod string) (TaskBudgetBinding, error) {
 	raw, _ := json.Marshal(req)
 	status, body, err := g.ownedRequest(ctx, http.MethodPost, TaskBudgetsPath, raw)
@@ -174,7 +176,8 @@ func (g *HTTPTaskBudgetGate) BootstrapOwned(ctx context.Context, req CreateTaskB
 	}
 
 	st, err := decodeOwnedStatus(body)
-	if err != nil || st.Admitted || st.Latched || st.Binding.TaskUID != req.TaskUID || st.Binding.Epoch != 1 || st.Binding.HostID != host || st.Binding.PodUID != pod || !st.Binding.Deadline.After(time.Now()) || st.Binding.Deadline.After(time.Now().Add(time.Duration(req.Spec.OverallSeconds)*time.Second)) {
+	observed := time.Now()
+	if err != nil || st.Admitted || st.Latched || st.Binding.TaskUID != req.TaskUID || st.Binding.Epoch != 1 || st.Binding.HostID != host || st.Binding.PodUID != pod || !st.Binding.Deadline.After(observed) || st.Binding.Deadline.After(observed.Add(time.Duration(req.Spec.OverallSeconds)*time.Second+5*time.Second)) {
 		return TaskBudgetBinding{}, ErrTaskBudgetGate
 	}
 	return st.Binding, nil

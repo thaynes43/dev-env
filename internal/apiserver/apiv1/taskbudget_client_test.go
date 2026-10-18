@@ -105,7 +105,7 @@ func TestBudgetGateRefusesAmbiguousOrOversizedStopAuthority(t *testing.T) {
 }
 
 func TestOwnedBootstrapIsOneShotAndRefusesConflictOrUnknown(t *testing.T) {
-	for _, scenario := range []string{"created", "conflict", "unknown", "redirect", "wrong-binding"} {
+	for _, scenario := range []string{"created", "bounded-clock-skew", "excess-clock-skew", "conflict", "unknown", "redirect", "wrong-binding"} {
 		t.Run(scenario, func(t *testing.T) {
 			calls := 0
 			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +115,10 @@ func TestOwnedBootstrapIsOneShotAndRefusesConflictOrUnknown(t *testing.T) {
 				}
 				b := TaskBudgetBinding{TaskUID: "campaign", Epoch: 1, HostID: "host", PodUID: "pod", Deadline: time.Now().Add(59 * time.Second)}
 				switch scenario {
+				case "bounded-clock-skew":
+					b.Deadline = time.Now().Add(62 * time.Second)
+				case "excess-clock-skew":
+					b.Deadline = time.Now().Add(70 * time.Second)
 				case "conflict":
 					w.WriteHeader(http.StatusConflict)
 					return
@@ -134,7 +138,7 @@ func TestOwnedBootstrapIsOneShotAndRefusesConflictOrUnknown(t *testing.T) {
 			defer srv.Close()
 			gate := &HTTPTaskBudgetGate{BaseURL: srv.URL, Client: srv.Client(), Token: func(context.Context) (string, error) { return "synthetic", nil }}
 			_, err := gate.BootstrapOwned(context.Background(), CreateTaskBudgetRequest{TaskUID: "campaign", Spec: TaskBudgetSpec{OverallSeconds: 60}}, "host", "pod")
-			if (err == nil) != (scenario == "created") || calls != 1 {
+			if (err == nil) != (scenario == "created" || scenario == "bounded-clock-skew") || calls != 1 {
 				t.Fatal("bootstrap result/replay", calls, err)
 			}
 		})

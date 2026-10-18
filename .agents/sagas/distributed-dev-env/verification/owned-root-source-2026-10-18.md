@@ -71,3 +71,18 @@ prove phone/recovery/MVP usability. Runtime resource suitability is unmeasured.
 Normal operator/helper SHA publication is allowed after merge. No task agent
 release/tag, held #369 equivalent, image pin/flag/deploy, new credentials/RBAC/trust,
 H7/grant/rendezvous/two-agent cohort, held draft, v1 restart or cutover is included.
+
+## Advisory fixes before final CI
+
+The three MEDIUM findings on PR423 are addressed: a fixed five-second client
+clock sanity allowance leaves the server deadline unchanged; actual HOME UID/
+baseline preflight occurs before intent/API mutation and is repeated before
+admission; at most four concurrent500ms evidence handlers prevent one idle peer
+from blocking all observation, and shutdown drains them. New actual idle-peer,
+bounded/excess-skew and HOME-drift checks pass. A second hosted nonroot PID1
+fixture proves bootstrap ordering: wrong baseline spends neither intent nor HTTP,
+valid intent precedes exactly one synthetic HTTPS create, and replay refuses.
+Both PID1 checks run before the full hosted suite. Final independent delta review
+finds no new blockers. Local updated focused suites pass (host1.035s, apiv1 0.044s,
+cmd/agentd0.016s, API8.331s); pinned lint again reports zero issues. Final-head
+hosted CI/merge/publication remain separate receipts.
