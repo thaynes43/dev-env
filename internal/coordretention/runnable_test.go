@@ -443,6 +443,25 @@ func TestArchiveMismatchLeavesTheRecord(t *testing.T) {
 	}
 }
 
+func TestArchiveMissingLeavesTheRecord(t *testing.T) {
+	rig := releasedRig()
+	claim := retentionClaim(t, "issue:301", "55555555-5555-4555-8555-555555555555")
+	runnable := rig.build(t, claim)
+	rig.archive.hideGet = true
+	if got := runnable.Pass(context.Background()); got != resultComplete || rig.realDeletes != 0 {
+		t.Fatalf("result %s deletes %d", got, rig.realDeletes)
+	}
+	if sampleValue(runnable.metrics.Refused.WithLabelValues(string(TaskClaim), reasonArchiveMissing)) != 1 {
+		t.Fatal("archive_missing was not refused")
+	}
+	if err := rig.base.Get(context.Background(), client.ObjectKey{Namespace: claim.Namespace, Name: claim.Name}, &coord.TaskClaim{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rig.archive.puts) != 1 || len(rig.archive.objects) != 0 {
+		t.Fatalf("puts %d objects %d", len(rig.archive.puts), len(rig.archive.objects))
+	}
+}
+
 func TestFailedPresentResetDoesNotDeleteOnNewLeader(t *testing.T) {
 	opened := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	claim := retentionClaim(t, "issue:301", "55555555-5555-4555-8555-555555555555")
@@ -718,6 +737,7 @@ type memArchive struct {
 	onGet        func()
 	note         func(string)
 	alterGet     bool
+	hideGet      bool
 }
 
 func newMemArchive() *memArchive {
@@ -837,8 +857,13 @@ func (m *memArchive) Get(_ context.Context, q protocol.CoordArchiveGetQuery) (pr
 	if m.err != nil {
 		return protocol.CoordArchiveGetResult{}, m.err
 	}
-	raw := m.objects[q.UID+"/"+q.ResourceVersion+"/"+q.SHA256]
+	key := q.UID + "/" + q.ResourceVersion + "/" + q.SHA256
+	raw := m.objects[key]
 	m.onGetHook()
+	if m.hideGet {
+		delete(m.objects, key)
+		return protocol.CoordArchiveGetResult{}, protocol.HistoryErrorf(protocol.HistoryErrNotFound, "", "revision removed")
+	}
 	if raw == nil {
 		return protocol.CoordArchiveGetResult{}, protocol.HistoryErrorf(protocol.HistoryErrNotFound, "", "not found")
 	}

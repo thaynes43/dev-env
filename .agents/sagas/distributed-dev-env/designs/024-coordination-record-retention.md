@@ -906,8 +906,11 @@ exec fake, so the protocol is exercised):
   (64 KiB of U+0001, about 384 KiB escaped) is archived, verified and deleted.
   *2026-10-17:* `TestArchiveMismatchLeavesTheRecord` runs on the fake client.
   The verify read returns altered bytes. The record stays, the refusal is
-  `archive_mismatch`, and the stored bytes stay the original put. The E2
-  envtest remains.
+  `archive_mismatch`, and the stored bytes stay the original put.
+  `TestArchiveMissingLeavesTheRecord` also runs on the fake client. The verify
+  read answers not found after the put. The record stays, the refusal is
+  `archive_missing`, and the runnable does not write a replacement. The reset
+  and the new grace remain. The E2 envtest remains.
 - **E3, the inbox rule.** Sender absent and recipient present without an ack:
   kept. The recipient acks: released, the message deleted before the ack. An ack
   whose delete failed is released on the next pass. An ack whose message was
