@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -418,7 +419,7 @@ func TestEnvtestArchiveBeforeDeleteAck(t *testing.T) {
 	}
 	liveMessage := liveKindBytes(t, ctx, admin, client.ObjectKeyFromObject(message), "InboxMessage")
 	liveAck := liveKindBytes(t, ctx, admin, client.ObjectKeyFromObject(ack), "InboxReadAck")
-	if got := pass(start.Add(coordretention.DefaultGrace)); got != "complete" || !verifyBeforeDelete(order) || !messageDeletedBeforeAck(order) {
+	if got := pass(start.Add(coordretention.DefaultGrace)); got != "complete" || !verifyBeforeDelete(order) || !messageDeletedBeforeAck(order) || !recordedBefore(order, "get:inboxmessages", "delete:InboxMessage") || !recordedBefore(order, "get:inboxreadacks", "delete:InboxReadAck") {
 		t.Fatalf("delete pass %s order %v", got, order)
 	}
 	if err := admin.Get(ctx, client.ObjectKeyFromObject(message), &coord.InboxMessage{}); !apierrors.IsNotFound(err) {
@@ -445,11 +446,10 @@ func TestEnvtestArchiveBeforeDeleteAck(t *testing.T) {
 func messageDeletedBeforeAck(order []string) bool {
 	messageAt, ackAt := -1, -1
 	for i, step := range order {
-		if step == "delete" && messageAt < 0 {
+		if step == "delete:InboxMessage" && messageAt < 0 {
 			messageAt = i
-			continue
 		}
-		if step == "delete" && ackAt < 0 {
+		if step == "delete:InboxReadAck" && ackAt < 0 {
 			ackAt = i
 		}
 	}
@@ -499,14 +499,35 @@ func liveClaimBytes(t *testing.T, ctx context.Context, c client.Client, claim *c
 func verifyBeforeDelete(order []string) bool {
 	sawGet := false
 	for _, step := range order {
-		switch step {
-		case "get":
+		if isGet(step) {
 			sawGet = true
-		case "delete":
+		}
+		if isDelete(step) {
 			return sawGet
 		}
 	}
 	return false
+}
+
+func isDelete(step string) bool {
+	return step == "delete" || strings.HasPrefix(step, "delete:")
+}
+
+func isGet(step string) bool {
+	return step == "get" || strings.HasPrefix(step, "get:")
+}
+
+func recordedBefore(order []string, earlier, later string) bool {
+	earlierAt, laterAt := -1, -1
+	for i, step := range order {
+		if step == earlier && earlierAt < 0 {
+			earlierAt = i
+		}
+		if step == later && laterAt < 0 {
+			laterAt = i
+		}
+	}
+	return earlierAt >= 0 && laterAt > earlierAt
 }
 
 func retentionClaimSpec() coord.TaskClaimSpec {
@@ -610,7 +631,7 @@ func decodeCtl[T any](v T) (T, error) {
 
 func (f *fsArchive) Get(_ context.Context, q protocol.CoordArchiveGetQuery) (protocol.CoordArchiveGetResult, error) {
 	if f.order != nil {
-		*f.order = append(*f.order, "get")
+		*f.order = append(*f.order, "get:"+q.Resource)
 	}
 	return f.a.GetSelected(q)
 }
@@ -621,7 +642,15 @@ type recordingClient struct {
 }
 
 func (c recordingClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
-	*c.order = append(*c.order, "delete")
+	kind := obj.GetObjectKind().GroupVersionKind().Kind
+	if u, ok := obj.(*unstructured.Unstructured); ok && u.GetKind() != "" {
+		kind = u.GetKind()
+	}
+	label := "delete"
+	if kind != "" {
+		label = "delete:" + kind
+	}
+	*c.order = append(*c.order, label)
 	return c.Client.Delete(ctx, obj, opts...)
 }
 
