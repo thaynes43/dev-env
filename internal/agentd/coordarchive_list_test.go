@@ -81,6 +81,22 @@ func TestCoordArchiveListReportsCorruptLatestWithoutFallback(t *testing.T) {
 	}
 }
 
+func TestCoordArchiveListIncludesReadAcknowledgements(t *testing.T) {
+	a := coordArchiveRig(t)
+	m, raw := coordStoredFixture(t, "inboxreadacks")
+	if _, err := a.Put(m, bytes.NewReader(raw)); err != nil {
+		t.Fatal(err)
+	}
+	page, err := a.List(protocol.CoordArchiveListQuery{Resource: m.Resource, Project: m.Project, Limit: 1})
+	if err != nil || len(page.Items) != 1 {
+		t.Fatalf("ack list: %#v, %v", page, err)
+	}
+	item := page.Items[0]
+	if item.Error != "" || item.Manifest == nil || item.Manifest.RecipientUID != m.RecipientUID || item.Manifest.MessageUID != m.MessageUID || !bytes.Contains(item.Object, []byte(`"kind":"InboxReadAck"`)) || bytes.Contains(item.Object, []byte(`"text":`)) {
+		t.Fatalf("valid archived acknowledgement reported as corrupt: %#v", item)
+	}
+}
+
 func TestCoordArchiveListBindsRecipientIndexToVerifiedManifest(t *testing.T) {
 	a := coordArchiveRig(t)
 	m, raw := coordStoredFixture(t, "inboxmessages")

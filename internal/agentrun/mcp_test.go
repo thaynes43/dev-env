@@ -70,6 +70,33 @@ func TestAccessMCPInitializeDoesNotConnect(t *testing.T) {
 	}
 }
 
+func TestAccessMCPEgressProtocolsMatchTheGrantSchema(t *testing.T) {
+	for _, proto := range []string{"tcp", "udp", "TCP", "UDP", ""} {
+		t.Run(proto, func(t *testing.T) {
+			h := newHarness(t)
+			serveRaw(h, map[string]func(*http.Request) (int, string){
+				apiv1.GrantsPath: func(r *http.Request) (int, string) {
+					var req apiv1.CreateGrantRequest
+					requests := h.api.requests()
+					if err := json.Unmarshal(requests[len(requests)-1].body, &req); err != nil {
+						t.Error(err)
+					}
+					if len(req.Ports) != 1 || (req.Ports[0].Protocol != "" && req.Ports[0].Protocol != "TCP" && req.Ports[0].Protocol != "UDP") {
+						return http.StatusUnprocessableEntity, `{"code":"invalid","message":"protocol must be TCP or UDP"}`
+					}
+					return http.StatusCreated, `{"name":"grant-abc","phase":"Pending","type":"egress"}`
+				},
+			})
+			h.env.Stdin = strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"request_access","arguments":{"type":"egress","reason":"read the registry","fqdns":["ghcr.io"],"ports":[{"port":443,"protocol":"` + proto + `"}]}}}` + "\n")
+			h.mustRun(ExitOK, "mcp")
+			msgs := decodeMCPFrames(t, h.stdout.String())
+			if len(msgs) != 1 || !strings.Contains(msgs[0], `"isError":false`) {
+				t.Fatalf("egress request refused: %s", h.stdout.String())
+			}
+		})
+	}
+}
+
 func TestAccessMCPStatusAndRelease(t *testing.T) {
 	h := newHarness(t)
 	serveRaw(h, map[string]func(*http.Request) (int, string){

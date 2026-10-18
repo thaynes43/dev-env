@@ -239,7 +239,7 @@ func accessRequest(args accessToolArgs) (apiv1.CreateGrantRequest, error) {
 	if strings.TrimSpace(args.Reason) == "" {
 		return apiv1.CreateGrantRequest{}, usageError("reason is required; Tom reads it on the approval page")
 	}
-	for _, p := range args.Ports {
+	for i, p := range args.Ports {
 		if p.Port < 1 || p.Port > 65535 {
 			return apiv1.CreateGrantRequest{}, usageError("port %d is outside 1-65535", p.Port)
 		}
@@ -248,6 +248,7 @@ func accessRequest(args accessToolArgs) (apiv1.CreateGrantRequest, error) {
 		default:
 			return apiv1.CreateGrantRequest{}, usageError("port protocol is tcp or udp, not %q", p.Protocol)
 		}
+		args.Ports[i].Protocol = strings.ToUpper(p.Protocol)
 	}
 	return apiv1.CreateGrantRequest{
 		Type: args.Type, Role: args.Role, Namespaces: args.Namespaces, FQDNs: args.FQDNs,

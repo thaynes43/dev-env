@@ -68,6 +68,46 @@ func TestCoordArchiveProcessExecRunsTheRealCommand(t *testing.T) {
 	}
 }
 
+func TestCoordArchiveProcessExecHoldsAndClearsRetentionGrace(t *testing.T) {
+	restore := agentd.SetCoordArchiveMountCheck(func(string, string) error { return nil })
+	t.Cleanup(restore)
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, protocol.CoordArchiveDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	exec := &processCoordExec{env: map[string]string{"HOME": home}}
+	archive := &shelfpkg.CoordinationArchive{Shelf: &shelfpkg.Shelf{Reader: shelfPodClient(t), Exec: exec, Namespace: "dev-agents", Timeout: time.Second}}
+	manifest, object, _ := coordCLIData(t)
+	id := protocol.CoordArchiveIdentity{Resource: manifest.Resource, Project: manifest.Project, Name: manifest.Name, UID: manifest.UID}
+	start := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
+	event := protocol.CoordArchiveEvent{Format: protocol.CoordArchiveEventFormat, State: "absent", At: start, Rule: "owner-absent", By: "retention fixture", Sessions: []protocol.CoordArchiveObservation{{Role: "owner", Namespace: "dev-agents", Name: "owner", UID: "44444444-4444-4444-8444-444444444444", Observed: "not-found"}}}
+	ctx := context.Background()
+	if _, err := archive.Put(ctx, protocol.CoordArchivePutRequest{Manifest: manifest, Object: object, Event: &event}, true); err != nil {
+		t.Fatal(err)
+	}
+	event.State, event.At = "hold", start.Add(time.Hour)
+	event.Sessions[0].Observed = "present"
+	marked, err := archive.Mark(ctx, []protocol.CoordArchiveMarkRequest{{CoordArchiveIdentity: id, Event: event}})
+	if err != nil || len(marked) != 1 || marked[0].GraceStart == nil || !marked[0].GraceStart.Equal(start) {
+		t.Fatalf("hold must preserve the old grace until present is durable: %#v, %v", marked, err)
+	}
+	looked, err := archive.Lookup(ctx, []protocol.CoordArchiveIdentity{id})
+	if err != nil || len(looked) != 1 || looked[0].LatestState != "hold" || looked[0].LatestAt == nil || !looked[0].LatestAt.Equal(event.At) {
+		t.Fatalf("hold must survive the shelf JSON round trip: %#v, %v", looked, err)
+	}
+	event.State, event.At = "present", start.Add(2*time.Hour)
+	marked, err = archive.Mark(ctx, []protocol.CoordArchiveMarkRequest{{CoordArchiveIdentity: id, Event: event}})
+	if err != nil || len(marked) != 1 || marked[0].GraceStart != nil {
+		t.Fatalf("present must clear grace: %#v, %v", marked, err)
+	}
+	event.State, event.At = "absent", start.Add(3*time.Hour)
+	event.Sessions[0].Observed = "not-found"
+	put, err := archive.Put(ctx, protocol.CoordArchivePutRequest{Manifest: manifest, Object: object, Event: &event}, true)
+	if err != nil || put.GraceStart == nil || !put.GraceStart.Equal(event.At) {
+		t.Fatalf("new absence must start a fresh grace: %#v, %v", put, err)
+	}
+}
+
 func shelfPodClient(t *testing.T) client.Client {
 	t.Helper()
 	scheme := runtime.NewScheme()
