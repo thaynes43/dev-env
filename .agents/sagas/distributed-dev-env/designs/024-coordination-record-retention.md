@@ -968,8 +968,10 @@ exec fake, so the protocol is exercised):
   archive entry.
   *2026-10-17:* `TestSecondPassDoesNotDeleteTheSameRevision` runs a second pass
   on the fake client. The record stays gone, the delete count stays one, and
-  the pass does not archive that revision again. The E7 envtest remains, and
-  a concurrent pair of passes remains.
+  the pass does not archive that revision again.
+  `TestEnvtestTwoPassesDeleteOnce` runs two passes at once on a real API
+  server and the real coordination archive. Both reach the delete. Exactly one
+  delete succeeds, and the archive keeps one revision.
 
 Unit tests (fake client) cover what envtest cannot: an owner present after its
 mark (a `present` event, then a full new grace after the next absence), the 720h
