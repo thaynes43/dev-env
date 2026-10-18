@@ -251,3 +251,30 @@ provide a separate finite backstop; late startup still checks the absolute
 deadline before any native work. Budget-bound executors never restart, and budget
 hold rescue Pods explicitly receive an empty timer and opt out of k8tz injection.
 A stop intent, deadline exit or missing Pod is never a confirmed stop receipt.
+
+## Campaign CLI entry point — 2026-10-18 source increment
+
+`agent-run budget create TASK_UID --success "observable result"` sends one
+POST through the existing authenticated API. Defaults are 45 minutes overall,
+60 minutes summed effort and a 10-minute checkpoint; `--overall`, `--effort`
+and `--checkpoint` accept positive whole-second durations within those ceilings.
+The checkpoint cannot exceed the overall limit. The server must already assign
+this campaign to the caller's exact live coordinator host/Pod.
+
+`agent-run budget show TASK_UID [-o json]` reads retained identity, epoch,
+deadlines, latch, stop confirmation and elapsed-effort accounting. Reading may
+persist a due latch. Neither command admits or launches an executor, resets a
+campaign, extends limits or clears a latch. Repeating create conflicts; it does
+not silently retrieve or replace the original campaign. Use show to inspect it.
+
+Both commands refuse redirects and malformed or mismatched receipts. Create
+requires the initial epoch and exact requested deadline/checkpoint intervals.
+An uncertain response exits 6 without replaying the mutation; inspect retained
+state before considering any follow-up. Existing connection flags apply.
+
+This supplies the missing CLI bootstrap/read step for an assigned owned host.
+General private dispatch still requires reservation-before-create, independent
+whole-executor stop proof and the private lifecycle adapter. No private-admission
+flag, native readiness validator, pairing, credential or runtime activation is
+added. CLI tests use a local TLS fixture and no provider turns. Source delivery
+is separate from the held task release and GitOps installation.

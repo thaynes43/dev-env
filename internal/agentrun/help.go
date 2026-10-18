@@ -38,6 +38,9 @@ Usage:
                                                   ask for a grant and wait for the answer
   agent-run grant release <grant-id>              ask the broker to end one grant
   agent-run grant use <grant-id>|default         select that kube context in this pod
+  agent-run budget create <task-uid> --success "RESULT" [flags]
+                                                  create the host's assigned finite campaign
+  agent-run budget show <task-uid>               inspect retained campaign authority
   agent-run mcp                                   access tools on stdin for the session
   agent-run breakglass --reason <why>             ask for break-glass; Tom still approves it
   declare-activity start "<what>" --scope <a,b>   declare dev work, so it is not taken for a fault
@@ -88,6 +91,27 @@ Exit codes:
 `
 
 var commandHelp = map[string]string{
+	"budget": `Usage: agent-run budget create <task-uid> --success "RESULT" [flags]
+       agent-run budget show <task-uid> [-o json]
+
+Create runs inside the already configured owning coordinator host. The operator
+selects its host/Pod binding and enforces the assigned task UID. The request is
+sent once; an unconfirmed answer exits 6. Inspect with show before deciding what
+to do next. Repeating create does not reset an existing ledger.
+
+Create flags (positive whole-second durations):
+  --success <text>        observable result (required, at most 1024 bytes)
+  --overall <duration>    wall-time ceiling, at most 45m (default 45m)
+  --effort <duration>     summed-worker ceiling, at most 1h (default 1h)
+  --checkpoint <duration> next checkpoint, at most 10m (default 10m);
+                          cannot exceed --overall
+  -o json                complete status, including the immutable binding
+
+Show reads the retained ledger through the existing caller policy. Observation
+can record a due stop latch. Both commands report authority; neither admits or
+launches work, resets an epoch, extends a deadline or clears a latch. Native
+launch still requires the owned executor's independent admission checks.
+`,
 	"directory": `Usage: agent-run directory list --project <project> --once [flags]
 
 Reads one authorized page of retained session metadata through the operator.

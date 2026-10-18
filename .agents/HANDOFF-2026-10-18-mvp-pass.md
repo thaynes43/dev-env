@@ -261,9 +261,11 @@ owner gates stay in [HANDOFF.md](HANDOFF.md).
   flags are on, not before.
 - **Q-24 Codex native routing.**
   [DESIGN-006](sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md#q-24-codex-mvp-native-routing)
-  still says the 2026-10-11 question has no owner ruling. Phone delivery of
-  that prompt was never verified. Do not ask it again. Build nothing that
-  assumes an answer.
+  records Tom's 2026-10-18 approval of small separate native hosts with
+  independent computer entries and pairing. Only `gpt-6-luna` and
+  `claude-haiku-4-5` may be platform runtime test actors. This architecture
+  ruling grants no pairing, credentials, deployment or held live-cohort action.
+  Native lifecycle acceptance remains open.
 - **A new #173 canary.** Issue
   [#173](https://github.com/thaynes43/dev-env/issues/173) is open. The
   2026-10-13 handoff accepts the Sigo rerun for private-repo evidence and

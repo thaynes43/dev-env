@@ -51,7 +51,7 @@ func strictSessionJSON(raw []byte) bool {
 // standard-library wire DTO root before any typed decode: it refuses duplicate
 // keys, case aliases, unknown fields, trailing values, null scalars and nested
 // type errors that encoding/json alone would let through. show --once, canary
-// create and directory list use it (DESIGN-023, history-05).
+// create, directory list and budget use it (DESIGN-023, history-05).
 func strictWireJSON(raw []byte, root reflect.Type) bool {
 	// send fences the complete wire body before decoding. Independently bound
 	// the JSON value span here, even when this validator is called directly.
@@ -109,6 +109,13 @@ func strictWireJSON(raw []byte, root reflect.Type) bool {
 				return false
 			}
 			_, err := strconv.ParseInt(string(n), 10, t.Bits())
+			return err == nil
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			n, ok := tok.(json.Number)
+			if !ok {
+				return false
+			}
+			_, err := strconv.ParseUint(string(n), 10, t.Bits())
 			return err == nil
 		case reflect.Slice:
 			if tok == nil {

@@ -25,6 +25,23 @@ It supersedes the shared-Git/RWX prerequisite. The original ADRs and storage
 trial records remain historical evidence. No storage retry or runtime cutover
 is part of this documentation change.
 
+## Create and inspect an assigned campaign (source, 2026-10-18)
+
+Inside an already configured owning coordinator host, the new CLI source supports:
+
+```sh
+agent-run budget create TASK_UID --success "observable result" --overall 45m --effort 1h --checkpoint 10m
+agent-run budget show TASK_UID -o json
+```
+
+The operator must already assign that task UID to the host. Create sends once;
+exit 6 means its outcome is unconfirmed, so inspect retained state before any
+follow-up. Repeating create conflicts instead of resetting the campaign. Show
+reports the immutable binding, deadline, checkpoint, stop latch and elapsed-effort
+estimate; provider usage remains unavailable. A due checkpoint can latch on read.
+These commands do not admit or launch an executor. General private launch and
+native readiness remain unfinished, and this source change is not installed.
+
 ## Start here: how you would use it
 
 1. Open a Claude or Codex session and select the project. The project supplies

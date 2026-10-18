@@ -1,5 +1,13 @@
 # HANDOFF: start here
 
+**2026-10-18 implementation update:** Q-24 is answered: Tom approved small
+separate native hosts; see [DESIGN-006](sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md#q-24-codex-mvp-native-routing).
+The campaign CLI source increment is documented in
+[DESIGN-003](sagas/distributed-dev-env/designs/003-task-budget-api.md#campaign-cli-entry-point--2026-10-18-source-increment).
+It adds assigned campaign create/show, without executor admission. Private launch,
+native readiness and installed acceptance remain open. Release #369 and all
+runtime/access holds below remain in force. Older Q-24 pending entries are historical.
+
 **Start here (2026-10-18):** [MVP source-pass handoff](HANDOFF-2026-10-18-mvp-pass.md).
 It records what landed on `main` from 2026-10-17 through 2026-10-18, what the
 other Grok sessions did, and which owner gates are still open. The 2026-10-17
