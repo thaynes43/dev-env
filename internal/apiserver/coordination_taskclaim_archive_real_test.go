@@ -22,7 +22,8 @@ import (
 
 // TestTaskClaimArchiveGetReadsTheRealArchive is DESIGN-024 E1's archived read.
 // The live claim is gone. The GET and the archived-only list answer from the
-// real coordination archive. A process exec remains outside this test.
+// real coordination archive. Context, message, and acknowledgement reads are
+// separate tests.
 func TestTaskClaimArchiveGetReadsTheRealArchive(t *testing.T) {
 	restore := agentd.SetCoordArchiveMountCheck(func(string, string) error { return nil })
 	t.Cleanup(restore)

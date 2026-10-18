@@ -909,8 +909,14 @@ exec fake, so the protocol is exercised):
   acknowledgement. The grace pass deletes the message before the ack.
   `TestTaskClaimArchiveGetReadsTheRealArchive` removes the live claim and
   reads it from the real coordination archive through the API. The GET
-  answers `archived: true`, and `?archived=only` lists that claim. The mount
-  check is stubbed the same way the archive tests stub it.
+  answers `archived: true`, and `?archived=only` lists that claim.
+  `TestContextArchiveGetReadsTheRealArchive`,
+  `TestInboxArchiveGetReadsTheRealArchive`, and
+  `TestInboxAckArchiveGetReadsTheRealArchive` do the same for one published
+  context, one inbox message, and that message's acknowledgement. Each GET
+  answers `archived: true`. The context and message `?archived=only` lists
+  return the item. The mount check is stubbed the same way the archive tests
+  stub it. Nothing is installed.
   `TestOnlyTestsCallSetCoordArchiveMountCheck` refuses any other non-test
   caller. `TestCoordArchiveProcessExecRunsTheRealCommand` puts, looks up, and
   reads one synthetic task claim through the shelf client. The executor runs
