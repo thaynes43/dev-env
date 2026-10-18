@@ -32,6 +32,19 @@ var coordArchiveIsMounted = func(root, home string) error {
 	return historyArchiveIsMounted(root, home)
 }
 
+// SetCoordArchiveMountCheck replaces the coordination-archive mount check and
+// returns the previous one. Production startup keeps the filesystem-device
+// check. A test with a temporary directory installs its own check and restores
+// the previous one.
+func SetCoordArchiveMountCheck(check func(root, home string) error) func() {
+	if check == nil {
+		check = func(root, home string) error { return historyArchiveIsMounted(root, home) }
+	}
+	old := coordArchiveIsMounted
+	coordArchiveIsMounted = check
+	return func() { coordArchiveIsMounted = old }
+}
+
 func (a CoordArchive) CheckMounted() error {
 	fi, err := os.Lstat(a.Root)
 	if err != nil || !filepath.IsAbs(a.Root) || filepath.Clean(a.Root) != a.Root || !fi.IsDir() {

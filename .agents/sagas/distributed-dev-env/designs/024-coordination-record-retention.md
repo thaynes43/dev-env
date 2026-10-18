@@ -906,8 +906,12 @@ exec fake, so the protocol is exercised):
   `TestEnvtestArchiveBeforeDeleteMessage` does the same for one inbox message
   whose sender and recipient are both absent, so no acknowledgement is
   required. `TestEnvtestArchiveBeforeDeleteAck` adds the recipient's
-  acknowledgement. The grace pass deletes the message before the ack. A
-  process exec and the archived-read API remain.
+  acknowledgement. The grace pass deletes the message before the ack.
+  `TestTaskClaimArchiveGetReadsTheRealArchive` removes the live claim and
+  reads it from the real coordination archive through the API. The GET
+  answers `archived: true`, and `?archived=only` lists that claim. The mount
+  check is stubbed the same way the archive tests stub it. A process exec
+  remains.
   Put, mark, and lookup cross one canonical JSON object before the real
   archive, which is the ctl request boundary.
 - **E2, refusals.** Each leaves the record live and counts its reason:
