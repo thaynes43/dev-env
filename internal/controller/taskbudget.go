@@ -92,7 +92,7 @@ func (v ManagedBudgetEvidenceValidator) Validate(ctx context.Context, l *taskbud
 		_, pod, err = PodWorkspaceStopVerifier(v).Verify(ctx, &s, types.UID(ref.PodUID))
 	}
 	if err != nil {
-		return fmt.Errorf("%w: %v", taskbudget.ErrUnavailable, err)
+		return fmt.Errorf("%w: %s", taskbudget.ErrUnavailable, err.Error())
 	}
 	if e.Kind == "failure" {
 		if e.AttemptID != "managed:"+ref.SessionUID || e.BlockerID != canonicalCheckpointBlocker(l.Binding) || e.Evidence.Kind != "managed-container-exit" {

@@ -5,14 +5,15 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"github.com/thaynes43/dev-env/internal/agentd/protocol"
-	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
 func TestPrivateBudgetWatchStopsOnLatchOrUncertainty(t *testing.T) {

@@ -295,7 +295,13 @@ launch in CAS. Unknown Create remains charged and cannot rearm either latch.
 A private finite task has both the campaign deadline and the earlier immutable local
 checkpoint deadline. Agentd observes the existing authenticated budget gate before
 boot and periodically; a latch or uncertain observation exits its container while
-the hard timer remains independent. This is finite executor self-stop, not a new
+the hard timer remains independent. One failed observation (including the two-second
+request timeout) intentionally ends this finite child; there is no retry/grace window
+or automatic relaunch. An API rollout/outage therefore sacrifices that child's
+availability while preserving its HOME and Pod. The timer alone cannot reveal an
+earlier effort, repeated-failure or withdrawn-authority latch. This policy applies
+only to the assigned finite campaign child, not retained native/TUI or unbudgeted
+sessions. This is finite executor self-stop, not a new
 private Pod patch, suspend-as-stop proof or reap. ADR-006's Pod patch/reap/hold rules
 and HOME retention remain intact. Shared executors retain their existing behavior.
 
