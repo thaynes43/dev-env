@@ -280,7 +280,12 @@ func (s *Server) checkSessionTaskBudget(ctx context.Context, sess *v1alpha1.Agen
 	if err := s.liveTaskBudgetHost(ctx, b); err != nil {
 		return err
 	}
-	l, err := s.TaskBudgets.Observe(ctx, b)
+	var l *taskbudget.Ledger
+	if sess.Spec.Workspace == nil {
+		l, err = s.TaskBudgets.ObserveNative(ctx, b)
+	} else {
+		l, err = s.TaskBudgets.Observe(ctx, b)
+	}
 	if err != nil {
 		return budgetError(err)
 	}

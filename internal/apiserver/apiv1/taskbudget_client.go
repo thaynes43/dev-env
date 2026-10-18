@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"time"
 )
 
 var ErrTaskBudgetGate = errors.New("task budget gate refused or unavailable")
@@ -156,4 +158,87 @@ func unambiguousBudgetStatus(raw []byte) bool {
 		}
 	}
 	return true
+}
+
+// BootstrapOwned creates exactly once. Conflicts and unknown replies refuse
+// without a recovery read or mutation replay. The caller persists its
+// one-use bootstrap intent before invoking this method.
+func (g *HTTPTaskBudgetGate) BootstrapOwned(ctx context.Context, req CreateTaskBudgetRequest, host, pod string) (TaskBudgetBinding, error) {
+	raw, _ := json.Marshal(req)
+	status, body, err := g.ownedRequest(ctx, http.MethodPost, TaskBudgetsPath, raw)
+	if err != nil {
+		return TaskBudgetBinding{}, err
+	}
+	if status != http.StatusCreated {
+		return TaskBudgetBinding{}, ErrTaskBudgetGate
+	}
+
+	st, err := decodeOwnedStatus(body)
+	if err != nil || st.Admitted || st.Latched || st.Binding.TaskUID != req.TaskUID || st.Binding.Epoch != 1 || st.Binding.HostID != host || st.Binding.PodUID != pod || !st.Binding.Deadline.After(time.Now()) || st.Binding.Deadline.After(time.Now().Add(time.Duration(req.Spec.OverallSeconds)*time.Second)) {
+		return TaskBudgetBinding{}, ErrTaskBudgetGate
+	}
+	return st.Binding, nil
+}
+
+// StopOwned submits one independently validated owned-root stop, without retry.
+func (g *HTTPTaskBudgetGate) StopOwned(ctx context.Context, b TaskBudgetBinding) error {
+	id := "host:" + b.HostID + ":" + strconv.FormatUint(b.Epoch, 10)
+	event := TaskBudgetEvent{Binding: b, ID: "owned-stop:" + b.PodUID, Kind: "worker-stop", WorkerID: id, Evidence: TaskBudgetEvidence{ID: "owned-stop:" + b.PodUID, Kind: "owned-root-stop", Reference: b.PodUID}}
+	raw, _ := json.Marshal(event)
+	status, body, err := g.ownedRequest(ctx, http.MethodPost, TaskBudgetPath(b.TaskUID)+"/events", raw)
+	if err != nil || status != http.StatusOK {
+		return ErrTaskBudgetGate
+	}
+	st, err := decodeOwnedStatus(body)
+	if err != nil || !sameOwnedWireBinding(st.Binding, b) || st.LastEvidence == nil || *st.LastEvidence != event.Evidence {
+		return ErrTaskBudgetGate
+	}
+	return nil
+}
+
+func sameOwnedWireBinding(a, b TaskBudgetBinding) bool {
+	return a.TaskUID == b.TaskUID && a.Epoch == b.Epoch && a.HostID == b.HostID && a.PodUID == b.PodUID && a.Deadline.Equal(b.Deadline)
+}
+func decodeOwnedStatus(raw []byte) (TaskBudgetStatus, error) {
+	var st TaskBudgetStatus
+	if !unambiguousBudgetStatus(raw) {
+		return st, ErrTaskBudgetGate
+	}
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if d.Decode(&st) != nil || d.Decode(new(any)) != io.EOF || !st.Observed {
+		return TaskBudgetStatus{}, ErrTaskBudgetGate
+	}
+	return st, nil
+}
+func (g *HTTPTaskBudgetGate) ownedRequest(ctx context.Context, method, path string, body []byte) (int, []byte, error) {
+	if g == nil || g.Client == nil || g.Token == nil {
+		return 0, nil, ErrTaskBudgetGate
+	}
+	u, err := url.Parse(g.BaseURL)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.Path != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return 0, nil, ErrTaskBudgetGate
+	}
+	token, err := g.Token(ctx)
+	if err != nil || strings.TrimSpace(token) == "" {
+		return 0, nil, ErrTaskBudgetGate
+	}
+	req, err := http.NewRequestWithContext(ctx, method, g.BaseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, ErrTaskBudgetGate
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	hc := *g.Client
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := hc.Do(req)
+	if err != nil {
+		return 0, nil, ErrTaskBudgetGate
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 65537))
+	if err != nil || len(raw) > 65536 {
+		return 0, nil, ErrTaskBudgetGate
+	}
+	return resp.StatusCode, raw, nil
 }

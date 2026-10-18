@@ -219,6 +219,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return agentd.RunAgent(args[2], stdout, sigs, stopGrace)
 	case "owned-codex-host":
 		return ownedCodexHost(ctx, args[1:], stderr, getenv)
+	case "owned-codex-host-probe":
+		return ownedRootProbe(ctx, args[1:], stdout)
 	case "owned-codex-host-helper":
 		return ownedCodexHostHelper(stderr)
 	case "codex-host":

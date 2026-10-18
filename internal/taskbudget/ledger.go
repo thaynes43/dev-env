@@ -111,6 +111,12 @@ type NativeAdmissionInspector interface {
 	InspectNativeAdmission(context.Context, *Ledger, Binding) error
 }
 
+// NativeContinuationInspector separates fresh work authority from the original
+// prelaunch admission check. Inspectors are read-only and default remains closed.
+type NativeContinuationInspector interface {
+	InspectNativeContinuation(context.Context, *Ledger, Binding) error
+}
+
 type Service struct {
 	Store            Store
 	Validator        Validator
@@ -337,8 +343,17 @@ func (s *Service) ObserveNative(ctx context.Context, b Binding) (*Ledger, error)
 		if s.NativeInspector == nil {
 			return refuse(ErrUnavailable)
 		}
-		if err := s.NativeInspector.InspectNativeAdmission(ctx, l, b); err != nil {
-			return refuse(err)
+		var inspectErr error
+		if continuation, ok := s.NativeInspector.(NativeContinuationInspector); ok {
+			inspectErr = continuation.InspectNativeContinuation(ctx, l, b)
+		} else {
+			inspectErr = s.NativeInspector.InspectNativeAdmission(ctx, l, b)
+		}
+		if errors.Is(inspectErr, ErrNativeStarting) {
+			return inspectErr
+		}
+		if inspectErr != nil {
+			return refuse(inspectErr)
 		}
 		now, err := l.account(s.now())
 		if err != nil {
@@ -448,6 +463,23 @@ func (s *Service) Record(ctx context.Context, e apiv1.TaskBudgetEvent) (*Ledger,
 		}
 		switch e.Kind {
 		case "worker-start":
+			if inspector, ok := s.NativeInspector.(NativeContinuationInspector); ok {
+				if err := inspector.InspectNativeContinuation(ctx, l, e.Binding); err != nil {
+					if !errors.Is(err, ErrNativeStarting) && l.NativeAdmitted() {
+						l.latch(now, "NativeAuthorityUnavailable")
+					}
+					return err
+				}
+			}
+			checkedAt, err := l.account(s.now())
+			if err != nil {
+				return err
+			}
+			l.evaluate(checkedAt)
+			if l.Latched {
+				return ErrDenied
+			}
+			now = checkedAt
 			for _, w := range l.Workers {
 				if w.ID == e.WorkerID {
 					return ErrDenied
@@ -469,6 +501,9 @@ func (s *Service) Record(ctx context.Context, e apiv1.TaskBudgetEvent) (*Ledger,
 			}
 			if !found {
 				return ErrDenied
+			}
+			if e.Evidence.Kind == "owned-root-stop" {
+				l.latch(now, "NativeRootStopped")
 			}
 		case "progress", "resolved":
 			l.LastProgress, l.StallAnchor = now, now

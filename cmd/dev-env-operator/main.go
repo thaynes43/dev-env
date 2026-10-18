@@ -95,6 +95,7 @@ type options struct {
 	inboxCoordinatorReadProjects  []string
 	taskClaimsEnabled             bool
 	taskClaimReadProjects         []string
+	ownedRootPolicy               string
 	nativeFixtureEnabled          bool
 	nativeFixtureImage            string
 	taskBudgetsEnabled            bool
@@ -183,6 +184,7 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.inboxEnabled, "enable-durable-inbox", false, "enable immutable API inbox messages and explicit read acknowledgements")
 	inboxProjects := fs.String("inbox-projects", "", "explicit comma-separated projects enabled for durable Session inbox access")
 	inboxCoordinatorProjects := fs.String("inbox-coordinator-read-projects", "", "separate explicit projects granting configured coordinators inbox content read only")
+	fs.StringVar(&o.ownedRootPolicy, "owned-root-policy", "", "explicit operator-owned finite root policy ConfigMap in dev-env-system")
 	fs.BoolVar(&o.nativeFixtureEnabled, "enable-native-lifecycle-fixture", false, "admit only the fixed isolated zero-task native lifecycle fixture")
 	fs.StringVar(&o.nativeFixtureImage, "native-fixture-image", "", "signature-verified immutable agent image for the isolated fixture")
 	fs.StringVar(&o.taskBudgetNamespace, "task-budget-namespace", "", "dedicated protected namespace for retained budget ConfigMaps")
@@ -369,6 +371,11 @@ func parseFlags(args []string) (options, error) {
 	} else if o.taskBudgetNamespace != "" || o.taskBudgetWorkerImage != "" || len(o.assignedTaskBudgets) > 0 {
 		return o, errors.New("task budget configuration requires explicit enable-task-budgets")
 	}
+	if o.ownedRootPolicy != "" {
+		if len(validation.IsDNS1123Subdomain(o.ownedRootPolicy)) != 0 || !o.taskBudgetsEnabled || o.nativeFixtureEnabled || !o.coordinatorEnabled || len(o.coordinatorHosts) != 1 || len(o.assignedTaskBudgets) != 1 {
+			return o, errors.New("owned root needs one assigned coordinator, explicit policy and no fixture")
+		}
+	}
 	if err := validateNativeFixtureOptions(o); err != nil {
 		return o, err
 	}
@@ -475,6 +482,14 @@ func run(args []string) error {
 	podExec, err := podexec.New(cfg)
 	if err != nil {
 		return err
+	}
+	if o.ownedRootPolicy != "" {
+		if budgets == nil || o.nativeFixtureEnabled || !o.coordinatorEnabled || len(o.coordinatorHosts) != 1 || len(o.assignedTaskBudgets) != 1 {
+			return errors.New("owned-root policy needs one explicit assigned coordinator and no fixture")
+		}
+		root := &taskbudget.OwnedRootInspector{Reader: mgr.GetAPIReader(), Policy: client.ObjectKey{Namespace: "dev-env-system", Name: o.ownedRootPolicy}, Probe: controller.OwnedRootProber{Exec: podExec}, AssignedHost: o.coordinatorHosts[0].HostID, AssignedTask: o.assignedTaskBudgets[o.coordinatorHosts[0].HostID], AssignedPod: o.coordinatorHosts[0].PodName, AssignedParent: o.coordinatorHosts[0].ServiceAccount}
+		budgets.NativeInspector = root
+		budgets.Validator = controller.OwnedRootBudgetValidator{Root: root, Managed: budgets.Validator}
 	}
 	// The shelf pod holds the shared volume: rescues are listed, restored
 	// from and pruned through it (D-67), and history archived through it.

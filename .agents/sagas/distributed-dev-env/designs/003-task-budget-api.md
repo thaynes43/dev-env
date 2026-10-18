@@ -320,3 +320,62 @@ cannot resume, receive new work or create a replacement. Native root readiness,
 phone pairing, notification/progress authority and installed acceptance remain
 separate gaps. No live flag, deployment, credential, access or archive action is
 part of this source adapter.
+
+## Owned Codex root: independent PID1 evidence (source phase2)
+
+The ordinary owned-root profile is separate from the zero-task fixture and is
+explicit-off unless an operator-owned policy is configured. It runs the pinned
+agentd owned supervisor directly as PID1, nonroot, with immutable image/rootfs and
+all capabilities dropped. Supervisor and helper become nondumpable before native work. The fixed
+probe also becomes nondumpable and requires preexisting kernel/pipe isolation
+through the exec-to-main interval described below. A probe authenticates the ORIGINAL kernel PID1
+by Unix peer credentials, boot/start identity and pidfd liveness; a pathname,
+nonce, shared UID, executable name or private receipt alone is not authority.
+
+After the original one-use receipt lock, a bounded read-only Unix server exposes
+supervisor MEMORY, bound to task/epoch/deadline/host/Pod and the independently
+assigned HOME UID/frozen Codex baseline. Operator policy—not a worker request—
+authorizes that baseline. The guard hashes bounded regular native-home inputs
+before Admit, excluding only rotating access auth.json; aliases, special files,
+unknown peers and changed files refuse. Policy/PVC/Pod/container/image are read
+uncached and confirmed around the pinned protected probe through existing
+operator PodExec. No new live credentials or RBAC are installed.
+
+Prepared permits first admission without circular native readiness. Starting is
+explicitly not child/continuation authority; Ready requires original native peer
+and pinned RPC readiness. Genuine uncertain evidence latches/stops. The guarded
+one-use budget bootstrap creates the assigned finite campaign once and freezes
+its confirmed server binding; unknown mutation acknowledgements never replay or
+rearm. No runtime budget/epoch/attempt is reset by this source phase.
+
+A native stop event is accepted only after the independently probed ORIGINAL
+supervisor reports original native Wait, helper Wait and ECHILD in memory. The
+supervisor stays alive for that single stop-event acknowledgement, then exits;
+missing/unknown proof stays charged. No root receipt, vanished PID/group/socket,
+heartbeat or host-supplied ready boolean substitutes for this proof. Private
+child admission still requires a fresh Ready root; its original HOME/Pod stop
+proofs are unchanged. Source tests use inert native transport/processes and TLS/
+isolated Kubernetes fixtures. New route/policy/pins/enrollment/pairing, real native
+recovery and authenticated phone acceptance remain separate held actions.
+
+The root source profile additionally fails closed unless the host kernel enforces
+Yama ptrace_scope 1, 2, or 3. PID1 checks before any native launch, and the fixed
+probe checks again. This closes the fresh exec-to-main dumpability interval:
+worker processes have no CAP_SYS_PTRACE and are not ancestors of the exec probe.
+No sysctl is changed. Deployment must verify trusted exec-client ownership;
+worker-created/helper images, sidecars, hostPID and privilege additions refuse.
+The assigned HOME must be a Bound ReadWriteOncePod claim with exact UID; RWO alone
+is insufficient. The baseline uses no-symlink directory-FD traversal and stable
+identity/content checks excluding access time, including alias checks for the
+otherwise excluded rotating auth document. Kernel support and effective storage/
+network isolation remain installation acceptance, not inferred from these tests.
+Bootstrap conflicts always refuse: no GET-based never-admitted inference or rearm.
+An independently validated original-root stop atomically latches the campaign,
+while each child stays charged until its own independent stop evidence arrives.
+
+Yama alone does not restrict proc FD read access. Therefore the fixed probe also
+refuses unless stdout is a kernel FIFO owned by UID0 with mode0600. This must hold
+from CRI process creation onward; becoming nondumpable in main cannot revoke a
+pipe descriptor already raced open. Nonzero probe exit is always refused by the
+operator. Runtime CRI transport compatibility is a held installation prerequisite,
+not assumed from a synthetic writer. TTY/worker-owned/group-readable pipes refuse.

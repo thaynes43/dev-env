@@ -103,3 +103,74 @@ func TestBudgetGateRefusesAmbiguousOrOversizedStopAuthority(t *testing.T) {
 		})
 	}
 }
+
+func TestOwnedBootstrapIsOneShotAndRefusesConflictOrUnknown(t *testing.T) {
+	for _, scenario := range []string{"created", "conflict", "unknown", "redirect", "wrong-binding"} {
+		t.Run(scenario, func(t *testing.T) {
+			calls := 0
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.Method != http.MethodPost || r.URL.Path != TaskBudgetsPath {
+					t.Error("unexpected recovery/replay", r.Method, r.URL.Path)
+				}
+				b := TaskBudgetBinding{TaskUID: "campaign", Epoch: 1, HostID: "host", PodUID: "pod", Deadline: time.Now().Add(59 * time.Second)}
+				switch scenario {
+				case "conflict":
+					w.WriteHeader(http.StatusConflict)
+					return
+				case "unknown":
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				case "redirect":
+					w.Header().Set("Location", "/wrong")
+					w.WriteHeader(http.StatusTemporaryRedirect)
+					return
+				case "wrong-binding":
+					b.PodUID = "replacement"
+				}
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(TaskBudgetStatus{Observed: true, Binding: b})
+			}))
+			defer srv.Close()
+			gate := &HTTPTaskBudgetGate{BaseURL: srv.URL, Client: srv.Client(), Token: func(context.Context) (string, error) { return "synthetic", nil }}
+			_, err := gate.BootstrapOwned(context.Background(), CreateTaskBudgetRequest{TaskUID: "campaign", Spec: TaskBudgetSpec{OverallSeconds: 60}}, "host", "pod")
+			if (err == nil) != (scenario == "created") || calls != 1 {
+				t.Fatal("bootstrap result/replay", calls, err)
+			}
+		})
+	}
+}
+func TestOwnedStopRequiresCanonicalEvidenceAcknowledgement(t *testing.T) {
+	for _, scenario := range []string{"exact", "missing", "foreign", "unknown"} {
+		t.Run(scenario, func(t *testing.T) {
+			b := TaskBudgetBinding{TaskUID: "campaign", Epoch: 1, HostID: "host", PodUID: "pod", Deadline: time.Now().Add(time.Minute)}
+			calls := 0
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				var e TaskBudgetEvent
+				if json.NewDecoder(r.Body).Decode(&e) != nil {
+					t.Error("event")
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				st := TaskBudgetStatus{Observed: true, Binding: b, LastEvidence: &e.Evidence}
+				switch scenario {
+				case "missing":
+					st.LastEvidence = nil
+				case "foreign":
+					st.LastEvidence = &TaskBudgetEvidence{Kind: "other"}
+				case "unknown":
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(st)
+			}))
+			defer srv.Close()
+			gate := &HTTPTaskBudgetGate{BaseURL: srv.URL, Client: srv.Client(), Token: func(context.Context) (string, error) { return "synthetic", nil }}
+			err := gate.StopOwned(context.Background(), b)
+			if (err == nil) != (scenario == "exact") || calls != 1 {
+				t.Fatal("stop acknowledgement/replay", calls, err)
+			}
+		})
+	}
+}

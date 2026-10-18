@@ -2,6 +2,7 @@ package taskbudget
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"time"
 
@@ -86,6 +87,15 @@ func (s *Service) ReserveManagedLaunch(ctx context.Context, b Binding, id string
 		if s.ManagedInspector == nil {
 			return ErrUnavailable
 		}
+		if inspector, ok := s.NativeInspector.(NativeContinuationInspector); ok {
+			if err := inspector.InspectNativeContinuation(ctx, l, b); err != nil {
+				if !errors.Is(err, ErrNativeStarting) && l.NativeAdmitted() {
+					l.latch(s.now(), "NativeAuthorityUnavailable")
+				}
+				return err
+			}
+		}
+
 		for i := range l.Workers {
 			w := &l.Workers[i]
 			if w.ID != id {
