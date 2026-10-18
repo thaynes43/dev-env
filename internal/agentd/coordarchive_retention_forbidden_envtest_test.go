@@ -11,6 +11,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
@@ -81,8 +82,9 @@ func TestEnvtestForbiddenDeleteLeavesTheClaim(t *testing.T) {
 	clock := start
 	archive := CoordArchive{Root: root, Home: home, Now: func() time.Time { return clock }}
 	var order []string
+	deleter := &forbiddenDelete{Client: limited}
 	runnable := &coordretention.Runnable{
-		Enabled: true, Grace: coordretention.DefaultGrace, Client: &recordingClient{Client: limited, order: &order}, Reader: admin,
+		Enabled: true, Grace: coordretention.DefaultGrace, Client: &recordingClient{Client: deleter, order: &order}, Reader: admin,
 		Namespace: ns, Reconciled: map[string]bool{spec.Owner.Namespace: true},
 		Kinds: map[coordretention.Kind]bool{coordretention.TaskClaim: true},
 		Pods:  shelfPod{}, Archive: &fsArchive{a: archive, order: &order}, Slots: shelf.NewExecSlots(2),
@@ -97,8 +99,8 @@ func TestEnvtestForbiddenDeleteLeavesTheClaim(t *testing.T) {
 		t.Fatalf("mark pass %s order %v", got, order)
 	}
 	live := liveClaimBytes(t, ctx, admin, claim)
-	if got := pass(start.Add(coordretention.DefaultGrace)); got != "complete" || len(order) != 2 || order[0] != "get:taskclaims" || order[1] != "delete:TaskClaim" {
-		t.Fatalf("forbidden pass %s order %v", got, order)
+	if got := pass(start.Add(coordretention.DefaultGrace)); got != "complete" || len(order) != 2 || order[0] != "get:taskclaims" || order[1] != "delete:TaskClaim" || deleter.calls != 1 || !apierrors.IsForbidden(deleter.err) {
+		t.Fatalf("forbidden pass %s order %v calls %d err %v", got, order, deleter.calls, deleter.err)
 	}
 	if err := admin.Get(ctx, client.ObjectKeyFromObject(claim), &coord.TaskClaim{}); err != nil {
 		t.Fatalf("claim after the refused delete: %v", err)
@@ -112,4 +114,16 @@ func TestEnvtestForbiddenDeleteLeavesTheClaim(t *testing.T) {
 	if hex.EncodeToString(sum[:]) != stored.Manifest.Object.SHA256 || !bytes.Equal(stored.Object, live) {
 		t.Fatal("archived bytes are not the claim read before the refused delete")
 	}
+}
+
+type forbiddenDelete struct {
+	client.Client
+	calls int
+	err   error
+}
+
+func (f *forbiddenDelete) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	f.calls++
+	f.err = f.Client.Delete(ctx, obj, opts...)
+	return f.err
 }
