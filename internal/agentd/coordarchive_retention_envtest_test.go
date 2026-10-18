@@ -28,6 +28,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/contextpublication"
 	"github.com/thaynes43/dev-env/internal/coordretention"
+	"github.com/thaynes43/dev-env/internal/inbox"
 	"github.com/thaynes43/dev-env/internal/shelf"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
 	"github.com/thaynes43/dev-env/internal/testenv"
@@ -36,8 +37,9 @@ import (
 // TestEnvtestArchiveBeforeDelete is DESIGN-024 E1 for one claim. The archive is
 // the real coordination archive on a temp directory. The mount check is stubbed
 // the same way the archive tests stub it. Put, mark, and lookup cross the ctl
-// JSON boundary. A message, an ack, a process exec, and the archived-read API
-// remain. The published-context proof is TestEnvtestArchiveBeforeDeleteContext.
+// JSON boundary. An ack, a process exec, and the archived-read API remain.
+// The published-context proof is TestEnvtestArchiveBeforeDeleteContext. The
+// inbox-message proof is TestEnvtestArchiveBeforeDeleteMessage.
 func TestEnvtestArchiveBeforeDelete(t *testing.T) {
 	old := coordArchiveIsMounted
 	coordArchiveIsMounted = func(string, string) error { return nil }
@@ -227,6 +229,100 @@ func TestEnvtestArchiveBeforeDeleteContext(t *testing.T) {
 	}
 }
 
+// TestEnvtestArchiveBeforeDeleteMessage is DESIGN-024 E1 for one inbox
+// message. The sender and the recipient are both absent, so the message is
+// released without an acknowledgement. No claim or context is created.
+func TestEnvtestArchiveBeforeDeleteMessage(t *testing.T) {
+	old := coordArchiveIsMounted
+	coordArchiveIsMounted = func(string, string) error { return nil }
+	t.Cleanup(func() { coordArchiveIsMounted = old })
+
+	env, err := testenv.Start()
+	if err != nil {
+		t.Fatalf("envtest: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := env.Stop(); err != nil {
+			t.Log("envtest stop:", err)
+		}
+	})
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{coord.AddToScheme, devv1.AddToScheme, corev1.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	admin, err := client.New(env.Config, client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const ns = "dev-env-system"
+	if err := admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
+		t.Fatal(err)
+	}
+	spec := retentionMessageSpec()
+	if !inbox.ValidMessage(spec) {
+		t.Fatal("message spec")
+	}
+	message := &coord.InboxMessage{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: inbox.MessageName(spec.Sender, spec.Key)}, Spec: spec}
+	if err := admin.Create(ctx, message); err != nil {
+		t.Fatal(err)
+	}
+
+	home := t.TempDir()
+	root := filepath.Join(home, protocol.CoordArchiveDirName)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 10, 17, 20, 0, 0, 0, time.UTC)
+	clock := start
+	archive := CoordArchive{Root: root, Home: home, Now: func() time.Time { return clock }}
+	var order []string
+	store := &fsArchive{a: archive, order: &order}
+	runnable := &coordretention.Runnable{
+		Enabled: true, Grace: coordretention.DefaultGrace, Client: &recordingClient{Client: admin, order: &order}, Reader: admin,
+		Namespace: ns, Reconciled: map[string]bool{spec.Sender.Namespace: true},
+		Kinds: map[coordretention.Kind]bool{coordretention.InboxMessage: true},
+		Pods:  shelfPod{}, Archive: store, Slots: shelf.NewExecSlots(2),
+		Now: func() time.Time { return clock },
+	}
+	pass := func(at time.Time) string {
+		t.Helper()
+		clock = at
+		return runnable.Pass(ctx)
+	}
+	if got := pass(start); got != "complete" || len(order) != 0 {
+		t.Fatalf("mark pass %s order %v", got, order)
+	}
+	if err := admin.Get(ctx, client.ObjectKeyFromObject(message), &coord.InboxMessage{}); err != nil {
+		t.Fatal(err)
+	}
+	id := protocol.CoordArchiveIdentity{Resource: "inboxmessages", Project: spec.Project, Name: message.Name, UID: string(message.UID)}
+	looked, err := archive.Lookup([]protocol.CoordArchiveIdentity{id})
+	if err != nil || len(looked) != 1 || looked[0].GraceStart == nil || !looked[0].Holds {
+		t.Fatalf("marked archive %#v %v", looked, err)
+	}
+	if got := pass(start.Add(coordretention.DefaultGrace - time.Minute)); got != "complete" || len(order) != 0 {
+		t.Fatalf("grace pass %s order %v", got, order)
+	}
+	live := liveKindBytes(t, ctx, admin, client.ObjectKeyFromObject(message), "InboxMessage")
+	if got := pass(start.Add(coordretention.DefaultGrace)); got != "complete" || !verifyBeforeDelete(order) {
+		t.Fatalf("delete pass %s order %v", got, order)
+	}
+	if err := admin.Get(ctx, client.ObjectKeyFromObject(message), &coord.InboxMessage{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("message after grace: %v", err)
+	}
+	stored, err := archive.GetSelected(protocol.CoordArchiveGetQuery{Resource: id.Resource, Name: id.Name, UID: id.UID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(stored.Object)
+	if hex.EncodeToString(sum[:]) != stored.Manifest.Object.SHA256 || !bytes.Equal(stored.Object, live) {
+		t.Fatal("archived bytes are not the message read before the delete")
+	}
+}
+
 func liveKindBytes(t *testing.T, ctx context.Context, c client.Client, key client.ObjectKey, kind string) []byte {
 	t.Helper()
 	u := &unstructured.Unstructured{}
@@ -308,6 +404,16 @@ func retentionContextSpec() coord.PublishedContextSpec {
 		},
 		Origin: "ExplicitPublished", Completeness: "ExplicitExcerpt", StopState: "Unknown",
 		Text: text, ContentSHA256: apiv1.ContextHash(text), ByteCount: int32(len(text)),
+	}
+}
+
+func retentionMessageSpec() coord.InboxMessageSpec {
+	claim := retentionClaimSpec()
+	recipient := coord.SessionIdentity{Namespace: "dev-agents", Name: "recipient", UID: "22222222-2222-4222-8222-222222222222"}
+	return coord.InboxMessageSpec{
+		Project: claim.Identity.Project, Key: "retention-1", Sender: claim.Owner, Recipient: recipient,
+		Actor: claim.Actor, Provenance: claim.Provenance, Repository: claim.Identity.Repository,
+		Provider: "claude", RequestedModel: "claude-haiku-4-5", Text: "finite synthetic message",
 	}
 }
 

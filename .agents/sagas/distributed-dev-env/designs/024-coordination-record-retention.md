@@ -902,8 +902,10 @@ exec fake, so the protocol is exercised):
   recorded before that delete. The stored bytes equal the canonical claim
   read before that delete, and their hash matches the manifest.
   `TestEnvtestArchiveBeforeDeleteContext` does the same for one published
-  context whose source session is absent. No claim is created. A message,
-  an ack, a process exec, and the archived-read API remain.
+  context whose source session is absent. No claim is created.
+  `TestEnvtestArchiveBeforeDeleteMessage` does the same for one inbox message
+  whose sender and recipient are both absent, so no acknowledgement is
+  required. An ack, a process exec, and the archived-read API remain.
   Put, mark, and lookup cross one canonical JSON object before the real
   archive, which is the ctl request boundary.
 - **E2, refusals.** Each leaves the record live and counts its reason:
