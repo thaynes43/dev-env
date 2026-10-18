@@ -125,10 +125,12 @@ func TestShelfUnavailableDoesNotDelete(t *testing.T) {
 		{name: "no archive", pods: &staticPods{name: "shelf"}, arch: &memArchive{err: protocol.HistoryErrorf(protocol.HistoryErrNoArchive, "", "coordination archive is unavailable")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			tc.arch.onCall = func() { calls++ }
 			rig := &passRig{pods: tc.pods, archive: tc.arch}
 			runnable := rig.build(t, retentionClaim(t, "issue:301", "55555555-5555-4555-8555-555555555555"))
-			if got := runnable.Pass(context.Background()); got != resultShelfUnavailable || rig.realDeletes != 0 || len(tc.arch.puts) != 0 || len(tc.arch.marks) != 0 {
-				t.Fatalf("result %s deletes %d puts %d marks %d", got, rig.realDeletes, len(tc.arch.puts), len(tc.arch.marks))
+			if got := runnable.Pass(context.Background()); got != resultShelfUnavailable || rig.realDeletes != 0 || calls != tc.arch.lookups || len(tc.arch.puts) != 0 || len(tc.arch.marks) != 0 {
+				t.Fatalf("result %s deletes %d calls %d lookups %d puts %d marks %d", got, rig.realDeletes, calls, tc.arch.lookups, len(tc.arch.puts), len(tc.arch.marks))
 			}
 		})
 	}
