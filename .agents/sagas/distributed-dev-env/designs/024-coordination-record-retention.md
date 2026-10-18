@@ -1003,8 +1003,13 @@ exec fake, so the protocol is exercised):
   refused, a delete in another namespace is refused, and a delete of a
   SessionDirectory is refused. The session ServiceAccount cannot get or delete
   a claim. The test binds only this Role, so those refusals are this Role's
-  boundary, not the rest of the haynes-ops operator Roles. The identity-guard
-  exec refusal remains. This test does not install the Role.
+  boundary, not the rest of the haynes-ops operator Roles. This test does not
+  install the Role. `TestEnvtestIdentityGuardRefusesExec` copies
+  `dev-env-identity-guard` into testdata and runs it on a real API server.
+  RBAC allows the exec. `dev-env-agent` and a `grant-*` ServiceAccount are
+  refused, and   the refusal names the policy. The workbench exemption is not that refusal:
+  the exec handler answers that the pod has no host assigned. This test does
+  not install the policy.
 - **E5, bounds.** A project at a small test bound refuses; after a release it
   accepts. A live Session's per-Session count does not drop.
   *2026-10-17:* `TestEnvtestBoundsAndSameWorkUnderOperatorRole` deletes one
