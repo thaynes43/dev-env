@@ -74,8 +74,8 @@ func TestEnvtestNoArchiveDoesNotMark(t *testing.T) {
 		Pods:  shelfPod{}, Archive: store, Slots: shelf.NewExecSlots(2),
 		Now: time.Now,
 	}
-	if got := runnable.Pass(ctx); got != "shelf_unavailable" || len(order) != 0 || store.lookups != 1 {
-		t.Fatalf("pass %s order %v lookups %d", got, order, store.lookups)
+	if got := runnable.Pass(ctx); got != "shelf_unavailable" || len(order) != 0 || store.lookups != 1 || store.puts != 0 || store.marks != 0 {
+		t.Fatalf("pass %s order %v lookups %d puts %d marks %d", got, order, store.lookups, store.puts, store.marks)
 	}
 	if err := admin.Get(ctx, client.ObjectKeyFromObject(claim), &coord.TaskClaim{}); err != nil {
 		t.Fatal(err)
@@ -93,12 +93,22 @@ func TestEnvtestNoArchiveDoesNotMark(t *testing.T) {
 
 type countingArchive struct {
 	*fsArchive
-	lookups int
+	lookups, puts, marks int
 }
 
 func (c *countingArchive) Lookup(ctx context.Context, ids []protocol.CoordArchiveIdentity) ([]protocol.CoordArchiveLookupResult, error) {
 	c.lookups++
 	return c.fsArchive.Lookup(ctx, ids)
+}
+
+func (c *countingArchive) Put(ctx context.Context, req protocol.CoordArchivePutRequest, mark bool) (protocol.CoordArchivePutResult, error) {
+	c.puts++
+	return c.fsArchive.Put(ctx, req, mark)
+}
+
+func (c *countingArchive) Mark(ctx context.Context, req []protocol.CoordArchiveMarkRequest) ([]protocol.CoordArchiveMarkResult, error) {
+	c.marks++
+	return c.fsArchive.Mark(ctx, req)
 }
 
 func isNoArchive(err error) bool {
