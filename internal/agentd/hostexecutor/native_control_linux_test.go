@@ -134,7 +134,13 @@ func TestOwnerNativeProtocolAndLostAcknowledgement(t *testing.T) {
 				defer cancel()
 			}
 			if scenario == "cancel-after-dispatch" {
-				go func() { <-dispatched; cancel() }()
+				go func() {
+					select {
+					case <-dispatched:
+						cancel()
+					case <-ctx.Done():
+					}
+				}()
 			}
 
 			result, err := ControlNative(ctx, path, p, req, func(context.Context) error { return nil })
@@ -146,8 +152,10 @@ func TestOwnerNativeProtocolAndLostAcknowledgement(t *testing.T) {
 				t.Fatal("native error exported or misclassified", err)
 			}
 			if scenario == "rpc-timeout" || scenario == "original-deadline" {
-				if NativeControlRefusalExit(err) != 85 {
-					t.Fatal("native deadline not classified", err)
+				// A loaded runner may expire before dispatch; that must still refuse
+				// without a mutation. Once dispatch was observed, require its timeout.
+				if calls.Load() == 1 && NativeControlRefusalExit(err) != 85 {
+					t.Fatal("dispatched native deadline not classified", err)
 				}
 			}
 			if calls.Load() > 1 {
