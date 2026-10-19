@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.33.0](https://github.com/thaynes43/dev-env/compare/v2.32.0...v2.33.0) (2026-10-19)
+
+
+### Features
+
+* **agent:** bake the opwork OpenProject backlog CLI into the agent image ([#454](https://github.com/thaynes43/dev-env/issues/454)) ([a72ec00](https://github.com/thaynes43/dev-env/commit/a72ec00b1a9058123a70d03e91248d15d6bf9ea3))
+* **agentd:** send one continue after a revoked-token turn once a new Claude generation lands ([#449](https://github.com/thaynes43/dev-env/issues/449)) ([5dfbbb9](https://github.com/thaynes43/dev-env/commit/5dfbbb9dab35e98f3330371644e517254b408395))
+* **keeper:** Claude login transport, journal and access-only publisher ([#450](https://github.com/thaynes43/dev-env/issues/450)) ([0be3eea](https://github.com/thaynes43/dev-env/commit/0be3eea5315523b3a43c3f78ebaad4359e47c21a))
+* **keeper:** keep the shared Claude login fresh behind --enable-claude-auth ([#452](https://github.com/thaynes43/dev-env/issues/452)) ([7936a4d](https://github.com/thaynes43/dev-env/commit/7936a4dff8b65a25e551132fcb37ea95031380a1))
+
+
+### Bug Fixes
+
+* **controller:** only task sessions get private-history retention so interactive sessions can suspend ([#453](https://github.com/thaynes43/dev-env/issues/453)) ([467f6bb](https://github.com/thaynes43/dev-env/commit/467f6bbabf9c4366f9afffb0fc4fb5dfca0b46ed))
+
 ## [2.32.0](https://github.com/thaynes43/dev-env/compare/v2.31.0...v2.32.0) (2026-10-19)
 
 
