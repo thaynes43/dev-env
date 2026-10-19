@@ -153,9 +153,18 @@ func TestCreateRefusals(t *testing.T) {
 		code   string
 		field  string
 	}{
-		{"remote mode runs claude only", func(r *apiv1.CreateSessionRequest) {
-			r.Mode, r.Prompt, r.Agent, r.Model, r.Effort = "remote", "", "codex", "gpt-6-astra", ""
+		{"remote mode runs claude or codex only", func(r *apiv1.CreateSessionRequest) {
+			r.Mode, r.Prompt, r.Agent, r.Model, r.Effort = "remote", "", "opencode", "some-pool-model", ""
 		}, 422, apiv1.CodeInvalid, "mode"},
+		{"codex remote takes a codex model", func(r *apiv1.CreateSessionRequest) {
+			r.Mode, r.Prompt, r.Agent, r.Model, r.Effort = "remote", "", "codex", "claude-opus-5-5", ""
+		}, 422, apiv1.CodeInvalid, "model"},
+		{"codex remote is not a project task", func(r *apiv1.CreateSessionRequest) {
+			r.Mode, r.Prompt, r.Agent, r.Model, r.Effort, r.Project = "remote", "", "codex", "gpt-6-luna", "", "dev-env"
+		}, 422, apiv1.CodeInvalid, "project"},
+		{"codex local is still not built", func(r *apiv1.CreateSessionRequest) {
+			r.Mode, r.Prompt, r.Agent, r.Model, r.Effort = "local", "", "codex", "gpt-6-luna", ""
+		}, 422, apiv1.CodeInvalid, "agent"},
 		{"codex is plan 04's", func(r *apiv1.CreateSessionRequest) { r.Agent, r.Model, r.Effort = "codex", "gpt-6-astra", "" }, 422, apiv1.CodeInvalid, "agent"},
 		{"no agent", func(r *apiv1.CreateSessionRequest) { r.Agent = "" }, 422, apiv1.CodeInvalid, "agent"},
 		{"no model", func(r *apiv1.CreateSessionRequest) { r.Model, r.Effort = "", "" }, 422, apiv1.CodeInvalid, "model"},
@@ -214,6 +223,21 @@ func TestCreateRefusals(t *testing.T) {
 	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, remote); w.Code != http.StatusCreated || decode[apiv1.Session](t, w).Mode != "remote" {
 		t.Errorf("a remote session: %d %s", w.Code, w.Body.String())
 	}
+	// Story110 T17: a Codex remote session is the phone daemon. It needs no
+	// project snapshot and no prompt, and is accepted with a Codex model.
+	codexRemote := task()
+	codexRemote.Mode, codexRemote.Prompt, codexRemote.Agent, codexRemote.Model, codexRemote.Effort = "remote", "", "codex", "gpt-6-luna", ""
+	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, codexRemote); w.Code != http.StatusCreated {
+		t.Errorf("a codex remote session: %d %s", w.Code, w.Body.String())
+	} else if got := decode[apiv1.Session](t, w); got.Mode != "remote" || got.Agent != "codex" {
+		t.Errorf("a codex remote session came back as %s %s", got.Agent, got.Mode)
+	}
+	// A client (the workbench, the v1 pod) may start one; a session's token may not.
+	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokClient, codexRemote); w.Code != http.StatusCreated {
+		t.Errorf("a codex remote session from a client: %d %s", w.Code, w.Body.String())
+	}
+	childTok := f.sessionPod("haynes-ops-1006-100000", "dev", 0)
+	wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, childTok, codexRemote), http.StatusForbidden, apiv1.CodeForbidden)
 	ok := task()
 	ok.Effort = "ultracode"
 	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, ok); w.Code != http.StatusCreated {
@@ -231,7 +255,7 @@ func TestCreateRefusals(t *testing.T) {
 	}
 
 	var list v1alpha1.AgentSessionList
-	if err := f.c.List(context.Background(), &list); err != nil || len(list.Items) != 6 {
+	if err := f.c.List(context.Background(), &list); err != nil || len(list.Items) != 9 {
 		t.Errorf("a refused create left an object behind: %d, %v", len(list.Items), err)
 	}
 }

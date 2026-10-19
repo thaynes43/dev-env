@@ -138,8 +138,8 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	if interactive && local {
 		return usageError("--interactive and --local both start a TUI; pick one (--interactive adds Remote Control)")
 	}
-	if interactive && agent != protocol.AgentClaude {
-		return usageError("--interactive (Remote Control) runs claude sessions only, not %q", agent)
+	if interactive && agent != protocol.AgentClaude && agent != protocol.AgentCodex {
+		return usageError("--interactive (Remote Control) runs claude or codex sessions, not %q", agent)
 	}
 	if (interactive || local) && (timeout != "" || maxTurns != 0) {
 		return usageError("--timeout and --max-turns limit a task; a --local or --interactive session has none")
@@ -333,12 +333,17 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		if waitErr == nil {
 			a.outf("  %s\n", startLine(final, wait))
 		}
-		if interactive {
+		switch {
+		case interactive && agent == protocol.AgentCodex:
+			// Codex remote is a phone-pairing daemon, not a TUI: there is
+			// nothing to attach to and no login to run (the keeper owns it).
+			a.outf("It runs Codex's phone daemon, not a TUI. Once agent-run show %s says running, pair a phone with: agent-run pair %s\n", sess.Name, sess.Name)
+		case interactive:
 			a.outf("Its Claude login lives in its own pod. If agent-run show %s says login-required, run: agent-run login %s url\n", sess.Name, sess.Name)
-		}
-		if local || interactive {
 			a.outf("Attach to its TUI with: agent-run attach %s (detach with ctrl-b d)\n", sess.Name)
-		} else {
+		case local:
+			a.outf("Attach to its TUI with: agent-run attach %s (detach with ctrl-b d)\n", sess.Name)
+		default:
 			a.outf("Follow it with: agent-run show %s\n", sess.Name)
 		}
 	}

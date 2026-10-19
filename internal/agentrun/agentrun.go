@@ -242,6 +242,8 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return a.detach(ctx, rest)
 	case "login":
 		return a.login(ctx, rest)
+	case "pair":
+		return a.pair(ctx, rest)
 	}
 	if msg, ok := notYet[cmd]; ok {
 		return usageError("%s", msg)
@@ -258,7 +260,7 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 }
 
 // commands are the words agent-run takes first, built or not yet.
-var commands = []string{"run", "list", "directory", "canary", "show", "log", "msg", "reap", "suspend", "resume", "rescue", "history", "grant", "budget", "mcp", "breakglass", "declare-activity", "fleet", "version", "help", "attach", "detach", "login", "prune", "sweep", "codex-remote"}
+var commands = []string{"run", "list", "directory", "canary", "show", "log", "msg", "reap", "suspend", "resume", "rescue", "history", "grant", "budget", "mcp", "breakglass", "declare-activity", "fleet", "version", "help", "attach", "detach", "login", "pair", "prune", "sweep", "codex-remote"}
 
 // nearestCommand is the command within two edits of word, or "".
 func nearestCommand(word string) string {
@@ -296,7 +298,7 @@ func editDistance(a, b string) int {
 var notYet = map[string]string{
 	"prune":        "prune is gone in v2: the operator reaps sessions itself (DESIGN-001 4.3), and agent-run reap <name> reaps one now",
 	"sweep":        "sweep is gone in v2: the operator reaps sessions itself (DESIGN-001 4.3), and agent-run reap <name> reaps one now",
-	"codex-remote": "codex-remote arrives with the codex hub (plan 04); v1's agent-run in the dev-env pod still runs it",
+	"codex-remote": "codex-remote is v1's pod-level daemon, which v1's agent-run in the dev-env pod still runs; in v2 start agent-run --agent codex --interactive --model <id> and pair a phone with agent-run pair <name>",
 }
 
 func (a *app) help(args []string) error {

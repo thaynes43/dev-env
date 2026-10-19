@@ -47,6 +47,7 @@ Usage:
   agent-run attach <name>                         attach to a session's TUI (Tom only)
   agent-run detach <name>                         detach every client from it (Tom only)
   agent-run login <name> [url|code|status]        set up an --interactive session's Claude login (Tom only)
+  agent-run pair <name>                           print a phone pairing code for a Codex --interactive session (Tom only)
   agent-run fleet                                 show what runs and waits, by node and revision
   agent-run version                               print the version
   agent-run help [<command>]                      print help for agent-run or one command
@@ -206,7 +207,8 @@ Flags:
                              --idempotency-key, --wait=0 and -o json
   -p, --prompt <task>        the task, at most 64 KiB
   --local                    an interactive session instead of a task: the TUI, no prompt
-  --interactive              --local plus Remote Control (claude only), needs agent-run login
+  --interactive              --local plus Remote Control (claude: needs agent-run login; codex: a
+                             phone daemon with no TUI, paired with agent-run pair)
   --prompt-file <path>       read the task from a file instead; - reads stdin
   --repo <name>              the repository under the GitHub owner, such as haynes-ops;
                              or give it as the first argument. With --project,
@@ -393,6 +395,18 @@ window ends; a first login on a fresh pod needs no TUI exit.
 
 Like attach, it is for Tom's workbench, a laptop or the v1 pod: it runs kubectl
 exec into the session's pod, which an agent in a session pod cannot do (D-19).
+`,
+	"pair": `Usage: agent-run pair <name>
+
+Prints a short-lived pairing code for a Codex --interactive session (agent-run
+--agent codex --interactive --model <id>). In the ChatGPT app choose Remote, add a
+computer and type the code. A phone needs this once: the enrollment lives on the
+session's volume and survives a suspend and resume. The code is valid for about ten
+minutes and is a secret until then: it goes to stdout only, never to a log or a file,
+and the session must be Running with the daemon up (agent-run show says running).
+
+Like login, it is for Tom's workbench, a laptop or the v1 pod: it runs kubectl exec
+into the session's pod, which an agent in a session pod cannot do (D-19).
 `,
 	"detach": `Usage: agent-run detach <name>
 
