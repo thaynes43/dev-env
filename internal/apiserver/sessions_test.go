@@ -232,6 +232,12 @@ func TestCreateRefusals(t *testing.T) {
 	} else if got := decode[apiv1.Session](t, w); got.Mode != "remote" || got.Agent != "codex" {
 		t.Errorf("a codex remote session came back as %s %s", got.Agent, got.Mode)
 	}
+	// A client (the workbench, the v1 pod) may start one; a session's token may not.
+	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokClient, codexRemote); w.Code != http.StatusCreated {
+		t.Errorf("a codex remote session from a client: %d %s", w.Code, w.Body.String())
+	}
+	childTok := f.sessionPod("haynes-ops-1006-100000", "dev", 0)
+	wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, childTok, codexRemote), http.StatusForbidden, apiv1.CodeForbidden)
 	ok := task()
 	ok.Effort = "ultracode"
 	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, ok); w.Code != http.StatusCreated {
@@ -249,7 +255,7 @@ func TestCreateRefusals(t *testing.T) {
 	}
 
 	var list v1alpha1.AgentSessionList
-	if err := f.c.List(context.Background(), &list); err != nil || len(list.Items) != 7 {
+	if err := f.c.List(context.Background(), &list); err != nil || len(list.Items) != 9 {
 		t.Errorf("a refused create left an object behind: %d, %v", len(list.Items), err)
 	}
 }

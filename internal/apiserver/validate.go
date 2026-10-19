@@ -131,6 +131,12 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 			// session's HOME and the keeper's access-only login. It starts no
 			// task, so it needs neither the managed-task feature nor a project
 			// snapshot; a project is still a task-only route.
+			// It runs on the keeper's Codex login, so only Tom and his trusted
+			// clients (the workbench, the v1 pod) start one, never an agent's
+			// session token. The coordinator class is refused above.
+			if c.kind != kindHuman && c.kind != kindClient {
+				return nil, forbidden("a codex remote session runs on the keeper's login and is started by Tom or his workbench, not by a session")
+			}
 			if req.Project != "" {
 				add("project", "a codex remote session is not a project task")
 			}

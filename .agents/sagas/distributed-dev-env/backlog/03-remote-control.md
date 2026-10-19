@@ -84,7 +84,11 @@ connected all stay Tom's gates.
 
 - `agent-run --repo <r> --agent codex --interactive --model <id>` creates a
   `remote`-mode Codex session. The API takes it without a project snapshot or the
-  managed-task flag; a project route and `--local` Codex stay refused.
+  managed-task flag; a project route and `--local` Codex stay refused. Because it
+  runs on the keeper's Codex login, only Tom (`human`) and his trusted clients (the
+  workbench, the v1 pod) may create one: a session token and the coordinator class
+  get 403. There is no separate default-off switch yet; whether to add one until
+  Tom accepts the gates is left to him (advisory review, PR #457).
 - agentd runs a slim supervisor (`internal/agentd/codex_remote.go`), not the
   codex-host: no one-start receipt, no host-pod preflight, so a pod roll or a
   resume is not a dead end. It needs the keeper's access-only login

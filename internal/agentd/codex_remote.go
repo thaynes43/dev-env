@@ -212,11 +212,14 @@ type codexRemote struct {
 	liveFrom time.Time
 	// lastErr is the last fixed outcome logged (nil: up).
 	lastErr error
+	// lastStart is the last start attempt's error (nil: it worked).
+	lastStart error
 }
 
 var (
 	errCodexRemoteStart = errors.New("codex remote-control did not start")
 	errCodexRemoteState = errors.New("the Codex daemon state is unknown or incompatible")
+	errCodexRemoteDown  = errors.New("the Codex daemon is not running; waiting to retry the start")
 )
 
 // ensure starts the daemon when it is not running: auth first, then the stale
@@ -239,7 +242,11 @@ func (c *codexRemote) ensure(ctx context.Context, s Settings, now time.Time) err
 	}
 	c.liveFrom = time.Time{}
 	if now.Before(c.next) {
-		return nil
+		// Down and waiting to retry: say so, so the log never reads "up".
+		if c.lastStart != nil {
+			return c.lastStart
+		}
+		return errCodexRemoteDown
 	}
 	c.attempts++
 	// The next attempt waits whether or not this one works: a start that
@@ -249,6 +256,7 @@ func (c *codexRemote) ensure(ctx context.Context, s Settings, now time.Time) err
 	c.next = now.Add(min(delay, codexRemoteBackoffMax))
 	rec := codexRemoteState{BootID: c.boot, StartedAt: now.UTC(), Attempts: c.attempts}
 	err = c.start(ctx, s, now)
+	c.lastStart = err
 	if err != nil {
 		rec.Error = err.Error()
 	}

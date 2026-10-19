@@ -222,8 +222,8 @@ func TestCodexRemoteRestartsWithBoundedBackoff(t *testing.T) {
 	}
 	// The daemon dies. Before the first wait is over nothing starts.
 	w.setLive(false)
-	if err := c.ensure(ctx, w.s, now.Add(codexRemoteBackoffBase-time.Second)); err != nil || w.starts() != 1 {
-		t.Fatalf("restarted inside the backoff: %v %d", err, w.starts())
+	if err := c.ensure(ctx, w.s, now.Add(codexRemoteBackoffBase-time.Second)); !errors.Is(err, errCodexRemoteDown) || w.starts() != 1 {
+		t.Fatalf("restarted inside the backoff, or reported it as up: %v %d", err, w.starts())
 	}
 	// Starts keep failing: the wait doubles, then holds at the cap.
 	w.mu.Lock()
@@ -590,5 +590,39 @@ func TestCodexRemoteDrainIsBoundedByTheGrace(t *testing.T) {
 	d.stopCodexRemote()
 	if time.Since(began) > 3*time.Second || !strings.Contains(logs.String(), "still running after the grace") {
 		t.Fatalf("drain not bounded: %v %s", time.Since(began), logs.String())
+	}
+}
+
+// While the daemon is down and the supervisor waits out the backoff, the log
+// says it is down once, never that it is supervised (a review finding).
+func TestPollCodexRemoteNeverLogsUpWhileDown(t *testing.T) {
+	w := newFakeCodexWorld(t)
+	d, logs := newCodexRemoteDaemon(t, w)
+	w.startErr = errors.New("synthetic")
+	now := time.Now()
+	d.Now = func() time.Time { return now }
+	if step, _ := d.startAgent(context.Background(), protocol.Workspace{}, Step{State: StepOK}, "boot-1"); step.State != StepWarn {
+		t.Fatalf("step %+v", step)
+	}
+	for i := 0; i < 3; i++ {
+		now = now.Add(time.Second) // still inside the 5 s wait
+		d.pollCodexRemote(context.Background())
+	}
+	if strings.Contains(logs.String(), "is supervised") {
+		t.Fatalf("a down daemon was logged as up:\n%s", logs.String())
+	}
+	// The boot step already carried the failed start, so the polls add at most
+	// one line of their own and do not repeat it.
+	if n := strings.Count(logs.String(), "Codex remote daemon is down"); n > 1 {
+		t.Fatalf("%d down lines, want at most 1:\n%s", n, logs.String())
+	}
+	// It comes up: one recovery line.
+	w.mu.Lock()
+	w.startErr = nil
+	w.mu.Unlock()
+	now = now.Add(codexRemoteBackoffBase)
+	d.pollCodexRemote(context.Background())
+	if !strings.Contains(logs.String(), "supervised") {
+		t.Fatalf("no recovery line:\n%s", logs.String())
 	}
 }
