@@ -259,3 +259,24 @@ Pinned0.160.1 can automatically enroll
 a fresh backend computer under that flag before any pairing-code request. The
 approved bounded root uses the local managed Unix RPC daemon only, matching the
 actual pinned loopback test. It does not create/copy native remote enrollment.
+
+
+Cold native catalog startup is bounded separately from evidence probes. Pinned
+0.160.1 allows five seconds for model-catalog refresh before fallback; the owner
+command must leave time for its preceding fresh status/proof/initialize/consume.
+The finite command/CRI/API limits are 8/9/10 seconds, each capped at the original
+campaign deadline and caller cancellation. This changes no campaign allowance,
+consume/retry behavior or process-proof predicate. A caller should allow twelve
+seconds for this response while preserving its original credential expiry and
+cleanup reserve.
+
+The opt-in `TestPinnedNativeColdCatalogFallbackWithinOwnerBound` uses the verified
+`DEV_ENV_PINNED_NATIVE_BINARY` and a public frozen inputs ConfigMap JSON supplied
+as `DEV_ENV_FROZEN_INPUTS`. It retains the original config/common-rule/HOME bytes,
+adds only loopback network overrides and synthetic access-only authentication,
+and delays catalog metadata past the pinned five-second fallback with realistic
+preflight/CAS latency. No inference is requested. The inherited host requirements
+are not a substitute for the task's mounted system requirements; this test proves
+the protocol timing seam, while live hash receipts prove the actual task floor.
+Fixed protected helper exit diagnostics80–88 describe refusal phase only; stdout,
+stderr and native content cannot grant budget or stop/continue authority.

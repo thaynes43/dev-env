@@ -22,7 +22,7 @@ import (
 // Actual Unix credentials/WebSocket protocol, inert local server only: no CLI,
 // credential, provider, model, shared daemon or real native history is touched.
 func TestOwnerNativeProtocolAndLostAcknowledgement(t *testing.T) {
-	for _, scenario := range []string{"start", "resume", "history", "turn", "interrupt", "lost-ack", "wrong-thread", "wrong-peer", "wrong-version", "cancel", "server-request", "oversize"} {
+	for _, scenario := range []string{"start", "resume", "history", "turn", "interrupt", "lost-ack", "wrong-thread", "wrong-peer", "wrong-version", "cancel", "server-request", "oversize", "rpc-rejected", "rpc-timeout", "original-deadline", "cancel-after-dispatch"} {
 		t.Run(scenario, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "n.sock")
 			listener, err := net.Listen("unix", path)
@@ -30,6 +30,7 @@ func TestOwnerNativeProtocolAndLostAcknowledgement(t *testing.T) {
 				t.Fatal(err)
 			}
 			var calls atomic.Int32
+			dispatched := make(chan struct{})
 			srv := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				ws, e := (&websocket.Upgrader{}).Upgrade(w, r, nil)
 				if e != nil {
@@ -57,6 +58,7 @@ func TestOwnerNativeProtocolAndLostAcknowledgement(t *testing.T) {
 					return
 				}
 				calls.Add(1)
+				close(dispatched)
 				if msg.Method == "thread/start" || msg.Method == "thread/resume" || msg.Method == "turn/start" {
 					if string(msg.Params["model"]) != `"gpt-6-luna"` {
 						t.Error("model not pinned")
@@ -68,6 +70,15 @@ func TestOwnerNativeProtocolAndLostAcknowledgement(t *testing.T) {
 				if scenario == "lost-ack" || scenario == "cancel" {
 					return
 				}
+				if scenario == "rpc-rejected" {
+					_ = ws.WriteJSON(map[string]any{"id": msg.ID, "error": map[string]any{"code": -32000, "message": "NEVER_EXPORT_NATIVE_ERROR"}})
+					return
+				}
+				if scenario == "rpc-timeout" || scenario == "original-deadline" || scenario == "cancel-after-dispatch" {
+					_, _, _ = ws.ReadMessage()
+					return
+				}
+
 				if scenario == "server-request" {
 					_ = ws.WriteJSON(map[string]any{"id": 99, "method": "item/commandExecution/requestApproval", "params": map[string]any{}})
 					return
@@ -91,6 +102,9 @@ func TestOwnerNativeProtocolAndLostAcknowledgement(t *testing.T) {
 				root, _ = identity(os.Getppid())
 			}
 			b := Binding{TaskUID: "task", HostID: "host", PodUID: "pod", Epoch: 1, Deadline: time.Now().Add(time.Minute)}
+			if scenario == "original-deadline" {
+				b.Deadline = time.Now().Add(100 * time.Millisecond)
+			}
 			p := Observation{Stage: "Ready", Binding: b, Root: root, NativeVersion: PinnedNativeVersion}
 			req := apiv1.NativeControlRequest{Binding: apiv1.TaskBudgetBinding{TaskUID: b.TaskUID, HostID: b.HostID, PodUID: b.PodUID, Epoch: b.Epoch, Deadline: b.Deadline}, ID: "once", Operation: "thread/start"}
 			switch scenario {
@@ -114,10 +128,27 @@ func TestOwnerNativeProtocolAndLostAcknowledgement(t *testing.T) {
 			if scenario == "cancel" {
 				cancel()
 			}
+			if scenario == "rpc-timeout" {
+				cancel()
+				ctx, cancel = context.WithTimeout(context.Background(), 100*time.Millisecond)
+				defer cancel()
+			}
+			if scenario == "cancel-after-dispatch" {
+				go func() { <-dispatched; cancel() }()
+			}
+
 			result, err := ControlNative(ctx, path, p, req, func(context.Context) error { return nil })
 			want := scenario == "start" || scenario == "resume" || scenario == "history" || scenario == "turn" || scenario == "interrupt"
 			if (err == nil) != want {
 				t.Fatalf("result %s err %v", result, err)
+			}
+			if scenario == "rpc-rejected" && (NativeControlRefusalExit(err) != 86 || strings.Contains(err.Error(), "NEVER_EXPORT_NATIVE_ERROR")) {
+				t.Fatal("native error exported or misclassified", err)
+			}
+			if scenario == "rpc-timeout" || scenario == "original-deadline" {
+				if NativeControlRefusalExit(err) != 85 {
+					t.Fatal("native deadline not classified", err)
+				}
 			}
 			if calls.Load() > 1 {
 				t.Fatal("native mutation replayed")
