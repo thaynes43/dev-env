@@ -286,6 +286,12 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	if l.Provider == protocol.AgentCodex && codex.failed && code == 0 {
 		code = 1
 	}
+	// The exec stream names no served model; the thread's rollout does.
+	if l.Provider == protocol.AgentCodex && res.Seen && !protocolRefused && codex.thread && codex.terminal {
+		if applyCodexRolloutModels(&res.Observation, l) {
+			_, _ = fmt.Fprintf(out, "[agentd] %s\n", servedModelsText(res.Observation.ServedModels))
+		}
+	}
 	mu.Lock()
 	to := timedOut
 	mu.Unlock()
