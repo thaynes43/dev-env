@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.30.4](https://github.com/thaynes43/dev-env/compare/v2.30.3...v2.30.4) (2026-10-19)
+
+
+### Bug Fixes
+
+* **agentd:** consume complete evidence requests before reply ([#434](https://github.com/thaynes43/dev-env/issues/434)) ([239d968](https://github.com/thaynes43/dev-env/commit/239d96800f14a49ab7cd0776add07be2f257da2a))
+
 ## [2.30.3](https://github.com/thaynes43/dev-env/compare/v2.30.2...v2.30.3) (2026-10-19)
 
 
