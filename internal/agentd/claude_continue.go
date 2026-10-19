@@ -33,7 +33,8 @@ import (
 // Never twice: claude-continue.json on the volume records the generation last
 // evaluated. It is written before the send, so a crash or restart after the
 // send does not repeat it; only "agent not running yet" (nothing sent) leaves
-// no new receipt and is retried.
+// no new receipt, and a failure before the paste, are retried. A last turn that
+// is a user turn is not decided either: the request may still be on the old token.
 
 const (
 	continueReceiptFile = "claude-continue.json"
@@ -58,7 +59,9 @@ type continueReceipt struct {
 // lastTurn is the transcript's last conversational entry.
 type lastTurn struct {
 	Revoked bool
-	At      time.Time
+	// User: the last entry is a user turn, a request that may still be in flight.
+	User bool
+	At   time.Time
 }
 
 type transcriptEntry struct {
@@ -111,7 +114,7 @@ func classifyTranscript(tail []byte) lastTurn {
 		if json.Unmarshal(line, &e) != nil || e.IsSidechain || (e.Type != "user" && e.Type != "assistant") {
 			continue
 		}
-		var t lastTurn
+		t := lastTurn{User: e.Type == "user"}
 		t.At, _ = time.Parse(time.RFC3339Nano, e.Timestamp)
 		if e.Type == "assistant" {
 			text := strings.ToLower(entryText(e.Message))
@@ -209,6 +212,11 @@ func (d *Daemon) continueAfterRenewal(ctx context.Context) {
 	if tail, ok := readTranscriptTail(d.S, l.ConversationID); ok {
 		turn = classifyTranscript(tail)
 	}
+	// A user turn last may be a request still in flight on the old token, whose
+	// 401 has not been written yet: decide nothing, look again next poll.
+	if turn.User {
+		return
+	}
 	// An error older than the previous evaluation belongs to a generation that
 	// was already handled. A missing timestamp does not block the one send.
 	stale := havePrev && !turn.At.IsZero() && !turn.At.After(prev.EvaluatedAt)
@@ -224,8 +232,8 @@ func (d *Daemon) continueAfterRenewal(ctx context.Context) {
 	case err == nil:
 		_ = writeJSONFile(receiptPath, continueReceipt{applied.Generation, "sent", now})
 		d.Log.Info("Claude session continued after the login was renewed")
-	case errors.Is(err, ErrNotAddressable):
-		// Nothing was sent: put the earlier receipt back and look again next poll.
+	case errors.Is(err, ErrNotAddressable), errors.Is(err, errNotSent):
+		// Nothing reached the pane: put the earlier receipt back and look again next poll.
 		if havePrev {
 			_ = writeJSONFile(receiptPath, prev)
 		} else {

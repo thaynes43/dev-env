@@ -31,6 +31,17 @@ var ErrNoLog = errors.New("the session has no log yet")
 // running has nobody to read it. `agentd ctl deliver` exits 3 for it.
 var ErrNotAddressable = errors.New("not addressable")
 
+// errNotSent marks a Deliver failure that came before anything reached the pane
+// (the delivery lock, the tmux buffer load), so a caller that must send at most
+// once may try again. Its text is the wrapped error's own.
+var errNotSent = errors.New("nothing was sent")
+
+type notSentError struct{ err error }
+
+func (e notSentError) Error() string        { return e.err.Error() }
+func (e notSentError) Unwrap() error        { return e.err }
+func (e notSentError) Is(target error) bool { return target == errNotSent }
+
 // deliverLockFile serialises deliveries in one pod: from the buffer's load
 // to the Enter, one message at a time, so two never become one prompt.
 const deliverLockFile = "deliver.lock"
@@ -112,7 +123,7 @@ func Deliver(ctx context.Context, r Runner, s Settings, sess protocol.Session, f
 	defer cancel()
 	unlock, err := lockFileWait(s.statePath(deliverLockFile), deliverLockWait)
 	if err != nil {
-		return err
+		return notSentError{err}
 	}
 	defer unlock()
 	if sess.Agent == protocol.AgentCodex && l.Provider == protocol.AgentCodex {
@@ -134,7 +145,7 @@ func Deliver(ctx context.Context, r Runner, s Settings, sess protocol.Session, f
 	// A buffer of its own, so no other delivery can paste or delete it.
 	buffer := "agentd-msg-" + newBootID()
 	if _, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"load-buffer", "-b", buffer, "-"}, Stdin: strings.NewReader(msg)}); err != nil {
-		return fmt.Errorf("tmux load-buffer: %s", cmdDetail(err))
+		return notSentError{fmt.Errorf("tmux load-buffer: %s", cmdDetail(err))}
 	}
 	pasteArgs := []string{"paste-buffer", "-b", buffer, "-d", "-p"}
 	if sess.Agent == protocol.AgentCodex && l.Provider == protocol.AgentCodex {

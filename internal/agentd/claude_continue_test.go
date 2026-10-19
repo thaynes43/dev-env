@@ -360,3 +360,74 @@ func TestClaudeContinueNotSentWhileTheProjectionIsRefused(t *testing.T) {
 		t.Errorf("not sent once a valid newer generation merged: %d", rg.continues())
 	}
 }
+
+// A request in flight on the old token is a user turn when the new generation
+// lands: nothing is decided then, and its 401 is handled on a later poll.
+func TestClaudeContinueWaitsOutAnInFlightRequest(t *testing.T) {
+	rg := newContinueRig(t, protocol.ModeRemote, true, true)
+	rg.transcript(userTurn(loginNow), healthyTurn(loginNow.Add(time.Minute)), userTurn(loginNow.Add(2*time.Hour)))
+	rg.generation(1)
+	rg.poll()
+	if rg.continues() != 0 {
+		t.Fatal("sent over an in-flight request")
+	}
+	if _, err := os.Stat(rg.s.statePath(continueReceiptFile)); err == nil {
+		t.Fatal("a receipt was written while a user turn was last")
+	}
+	rg.appendTurn(revokedTurn(loginNow.Add(2*time.Hour + time.Minute)))
+	rg.poll()
+	rg.poll()
+	if rg.continues() != 1 {
+		t.Errorf("continues after the 401 landed: %d", rg.continues())
+	}
+}
+
+// A failure before anything reaches the pane is retried; one after the paste
+// started is not.
+func TestClaudeContinueRetriesOnlyFailuresBeforeThePaste(t *testing.T) {
+	rg := newContinueRig(t, protocol.ModeRemote, true, true)
+	rg.transcript(userTurn(loginNow), revokedTurn(loginNow.Add(time.Minute)))
+	failLoad := true
+	base := rg.r.handle
+	rg.r.handle = func(c Cmd) (Result, error) {
+		if c.Args[0] == "load-buffer" && failLoad {
+			return Result{}, &CmdError{Name: "tmux", ExitCode: 1}
+		}
+		return base(c)
+	}
+	rg.generation(1)
+	if rg.continues() != 0 {
+		t.Fatal("sent although tmux load-buffer failed")
+	}
+	if _, err := os.Stat(rg.s.statePath(continueReceiptFile)); err == nil {
+		t.Fatal("a receipt remained after a failure before the paste")
+	}
+	failLoad = false
+	rg.poll()
+	rg.poll()
+	if rg.continues() != 1 {
+		t.Errorf("continues after the retry: %d", rg.continues())
+	}
+
+	late := newContinueRig(t, protocol.ModeRemote, true, true)
+	late.transcript(userTurn(loginNow), revokedTurn(loginNow.Add(time.Minute)))
+	lbase := late.r.handle
+	failEnter := true
+	late.r.handle = func(c Cmd) (Result, error) {
+		if c.Args[0] == "send-keys" && failEnter {
+			return Result{}, &CmdError{Name: "tmux", ExitCode: 1}
+		}
+		return lbase(c)
+	}
+	late.generation(1)
+	failEnter = false
+	late.poll()
+	late.poll()
+	if late.continues() != 1 {
+		t.Errorf("a failure after the paste was retried: %d sends", late.continues())
+	}
+	var rc continueReceipt
+	if err := readJSONFile(late.s.statePath(continueReceiptFile), &rc); err != nil || rc.Outcome != "sending" {
+		t.Errorf("receipt %+v %v", rc, err)
+	}
+}

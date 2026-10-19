@@ -116,8 +116,10 @@ the checkpoint; the fixture shape (an assistant entry flagged `isApiErrorMessage
 text starting "API Error", naming a revoked or expired OAuth token) is what to confirm.
 `claude-continue.json` records the generation last evaluated and is written before the
 send, so repeated polls and an agentd restart send once; nothing is sent when the last
-turn is healthy, a user turn is newer, the merge was held back, the agent is not
-running (retried, no receipt), or the pod is in task mode or pod-owned mode.
+turn is healthy, the merge was held back, or the pod is in task mode or pod-owned
+mode. A user turn last (a request that may still be on the old token) and an agent
+that is not running decide nothing and are looked at again on the next poll, as is a
+Deliver failure before the paste; a failure after the paste is not repeated.
 
 Still in this plan (increments 3 to 6): keeper journal, transport, publisher and the refresh worker with its Lease fence
 (`--enable-claude-auth`, default off); the keeper-side login helper; the GitOps
