@@ -451,7 +451,8 @@ proof latches and keeps accounting/resources.
 relax any predicate. Unknown errors still exit1. The operator and inspector log
 only fixed stage/category fields, error type, context completion and explicit
 process-exit metadata. Remote error text, stdout/stderr, challenges, policy
-contents and credentials remain excluded from logs and proof. Original failed
+contents and credentials remain excluded from logs and the external CRI phase
+status result. The fresh challenge is still verified inside the probe. Original failed
 attempts retain their bindings, counters and evidence; diagnostics do not rearm
 actors or reset budgets.
 
