@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/go-logr/logr"
 	"log/slog"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 	"strings"
 	"testing"
+
+	"github.com/go-logr/logr"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 func TestOwnedRootDiagnosesConcurrentPodMetadataDriftWithoutWeakeningSnapshot(t *testing.T) {

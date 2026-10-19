@@ -4,16 +4,18 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/go-logr/logr"
-	"github.com/thaynes43/dev-env/internal/agentd/hostexecutor"
-	"github.com/thaynes43/dev-env/internal/taskbudget"
 	"io"
 	"log/slog"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-logr/logr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	"github.com/thaynes43/dev-env/internal/agentd/hostexecutor"
+	"github.com/thaynes43/dev-env/internal/taskbudget"
 )
 
 func TestOwnedRootRefusalDiagnosticCannotBecomeProofOrLeakOutput(t *testing.T) {
