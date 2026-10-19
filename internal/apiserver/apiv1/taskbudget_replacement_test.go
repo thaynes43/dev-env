@@ -115,13 +115,13 @@ func TestBudgetObservationReconnectKeepsOriginalCancellation(t *testing.T) {
 	for _, kind := range []string{"caller-cancel", "caller-deadline"} {
 		t.Run(kind, func(t *testing.T) {
 			var calls atomic.Int32
-			var cancel context.CancelFunc
+			cancelRequest := make(chan context.CancelFunc, 1)
 			release := make(chan struct{})
 			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				n := calls.Add(1)
 				if n == 2 {
 					if kind == "caller-cancel" {
-						cancel()
+						(<-cancelRequest)()
 					}
 					c, _, e := w.(http.Hijacker).Hijack()
 					if e != nil {
@@ -148,9 +148,9 @@ func TestBudgetObservationReconnectKeepsOriginalCancellation(t *testing.T) {
 			if stop, e := g.Observe(context.Background(), b); stop || e != nil {
 				t.Fatal(e)
 			}
-			var ctx context.Context
-			ctx, cancel = context.WithTimeout(context.Background(), 60*time.Millisecond)
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
 			defer cancel()
+			cancelRequest <- cancel
 			started := time.Now()
 			stop, e := g.Observe(ctx, b)
 			if !stop || e == nil || ctx.Err() == nil || time.Since(started) > 300*time.Millisecond {
