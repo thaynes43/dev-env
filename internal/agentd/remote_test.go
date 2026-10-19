@@ -94,9 +94,9 @@ func TestCheckLoginPresenceAndExpiry(t *testing.T) {
 }
 
 func TestRemoteLaunchRunsWithoutTheStaticToken(t *testing.T) {
-	s, sess, ws := launchFixture(t)
+	s, _, ws := launchFixture(t)
 	s.Getenv = envOf(nil) // the operator leaves the token out of a remote pod
-	sess = remoteSession()
+	sess := remoteSession()
 	sess.Repo = "haynes-ops"
 	l, err := BuildLaunch(s, sess, ws, "boot1", rescueNow)
 	if err != nil {
