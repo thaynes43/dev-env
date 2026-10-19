@@ -6,9 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"time"
+
 	kexec "k8s.io/client-go/util/exec"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/hostexecutor"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"

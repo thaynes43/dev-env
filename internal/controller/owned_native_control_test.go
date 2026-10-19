@@ -5,13 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/go-logr/logr"
-	kexec "k8s.io/client-go/util/exec"
 	"log/slog"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-logr/logr"
+	kexec "k8s.io/client-go/util/exec"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/thaynes43/dev-env/internal/agentd/hostexecutor"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
