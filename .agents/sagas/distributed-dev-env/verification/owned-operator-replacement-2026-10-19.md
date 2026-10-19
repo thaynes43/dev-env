@@ -87,8 +87,9 @@ SA/RoleBindings, no new subject, verb, Secret, credential, destination or pairin
 Tom has been asked once. Hold these additions and dependent009 wiring/root/token/
 model until materially new trusted approval; do not duplicate the question or
 work around the rejection. No other current backend access gap is identified.
-Phone remains separately parked. Existing runtime authorization ends12:00UTC;
-the handoff does not renew it. Ordinary v2 image delivery is not held by v1 rules.
+Phone remains separately parked. OpenAI-only restriction remains through
+12:00UTC; runtime remains `gpt-6-luna` under existing authorization and each
+original600s/120s bound. This handoff grants no new authority. Ordinary v2 image delivery is not held by v1 rules.
 V1 restart/cutover/retirement, rendezvous/cohort,H7/livegrant and held drafts remain
 held. Publication is irreversible; consumer Git pins/config provide rollback,
 which cannot resurrect a stopped process. Native continuation supports only the
