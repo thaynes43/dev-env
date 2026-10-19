@@ -73,3 +73,19 @@ func TestCodexRefreshOnceRequiresPositiveExpectedGenerationBeforeControl(t *test
 		})
 	}
 }
+
+func TestClaudeAuthDefaultsAndExplicitPrerequisites(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.claudeAuth.Enabled {
+		t.Fatal("Claude auth enabled by default")
+	}
+	for _, args := range [][]string{{"--enable-claude-auth", "--leader-elect=false"}, {"--enable-claude-auth", "--claude-auth-journal-secret="}, {"--enable-claude-auth", "--claude-live-secret="}, {"--enable-claude-auth", "--secret-namespace=dev-env-system"}} {
+		if _, err := parseFlags(args); err == nil {
+			t.Fatal("unsafe Claude auth configuration accepted")
+		}
+	}
+	o, err = parseFlags([]string{"--enable-claude-auth"})
+	if err != nil || !o.claudeAuth.Enabled || o.claudeAuth.JournalSecret != keeper.DefaultClaudeJournalSecret || o.claudeAuth.LiveSecret != keeper.DefaultClaudeLiveSecret {
+		t.Fatal("explicit auth configuration rejected or defaults wrong")
+	}
+}
