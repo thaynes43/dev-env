@@ -153,6 +153,8 @@ Commands:
                            claude-login container): run through an interactive
                            pods/exec, print the sign-in link, read the one-time
                            code on stdin, and have the keeper adopt the login.
+  claude-login-status [--login-dir D]
+                           Print the keeper's fixed login status as JSON.
   claude-login-idle        Do nothing until shutdown (that container's entrypoint).
   version                  Print the version, commit, Go version and platform.
   help                     Print this help.
@@ -244,6 +246,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return projectRefresh(ctx, args[1:], stdout, stderr, getenv, r)
 	case "claude-login":
 		return claudeLogin(ctx, args[1:], stdin, stdout)
+	case "claude-login-status":
+		return claudeLoginStatus(ctx, args[1:], stdout)
 	case "claude-login-idle":
 		return claudeLoginIdle(ctx, args[1:], stderr)
 	case "ctl":

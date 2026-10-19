@@ -63,3 +63,14 @@ func TestClaudeLoginIdleWaitsForShutdown(t *testing.T) {
 		t.Fatal("arguments accepted")
 	}
 }
+
+func TestClaudeLoginStatusWithoutAKeeperIsFixedUnavailable(t *testing.T) {
+	var buf bytes.Buffer
+	if claudeLoginStatus(context.Background(), []string{"--login-dir", t.TempDir()}, &buf) != exitFailure || !strings.Contains(buf.String(), `"code":"Unavailable"`) {
+		t.Fatalf("got %q", buf.String())
+	}
+	buf.Reset()
+	if claudeLoginStatus(context.Background(), []string{"extra"}, &buf) != exitFailure || !strings.Contains(buf.String(), `"code":"InvalidRequest"`) {
+		t.Fatalf("got %q", buf.String())
+	}
+}

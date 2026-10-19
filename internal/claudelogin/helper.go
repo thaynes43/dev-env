@@ -92,8 +92,8 @@ func Helper(ctx context.Context, dir string, o Options, in io.Reader, out io.Wri
 	}
 	attempt := r.AttemptUID
 	home := filepath.Join(dir, attempt)
-	adopted := false
-	defer func() { finish(dir, attempt, adopted, report) }()
+	spent := false // the keeper answered adopt: it has wiped the staging and ended the attempt
+	defer func() { finish(dir, attempt, spent, report) }()
 
 	report.Phase = "Staging"
 	tmp := filepath.Join(home, "tmp")
@@ -129,25 +129,26 @@ func Helper(ctx context.Context, dir string, o Options, in io.Reader, out io.Wri
 		case <-time.After(o.AdoptRetry):
 		}
 	}
+	spent = r.Code != "Busy"
 	if !r.OK {
 		return r, ErrHelper
 	}
-	adopted = true
 	report.Phase = "Adopted"
 	return r, nil
 }
 
 // finish clears the attempt and removes this attempt's staging. The keeper wipes
-// an adopted or failed adoption's staging itself; this covers every other exit.
+// the staging itself on any adopt answer but Busy (spent); this covers every
+// other exit.
 // Staging stays when the CLI's process group may still be alive, because killing
 // the direct child does not prove its descendants exited; expiry is then the
 // recovery path.
-func finish(dir, attempt string, adopted bool, report *Report) {
+func finish(dir, attempt string, spent bool, report *Report) {
 	if report.NativeStarted && !report.NativeGroupAbsent {
 		return
 	}
-	report.AttemptCleared = adopted
-	if !adopted {
+	report.AttemptCleared = spent
+	if !spent {
 		r, err := Control(context.Background(), dir, "cancel", attempt)
 		report.AttemptCleared = err == nil && r.OK && r.Code == "Cancelled"
 	}

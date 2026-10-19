@@ -58,3 +58,24 @@ func claudeLoginIdle(ctx context.Context, args []string, stderr io.Writer) int {
 	<-ctx.Done()
 	return exitOK
 }
+
+// claudeLoginStatus is `agentd claude-login-status [--login-dir D]`: one fixed
+// word from the keeper (Ready, PendingPublication or NeedsLogin) and the
+// published generation. It needs no terminal and shows no credential, so the
+// coordinator can check an adoption without reading a Secret.
+func claudeLoginStatus(ctx context.Context, args []string, stdout io.Writer) int {
+	result := claudelogin.Response{Code: "InvalidRequest"}
+	fs := flag.NewFlagSet("claude-login-status", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	dir := fs.String("login-dir", claudelogin.DefaultDir, "keeper/helper private staging")
+	if fs.Parse(args) == nil && fs.NArg() == 0 {
+		result.Code = "Unavailable"
+		if r, err := claudelogin.Control(ctx, *dir, "status", ""); err == nil {
+			result = r
+		}
+	}
+	if json.NewEncoder(stdout).Encode(result) != nil || !result.OK {
+		return exitFailure
+	}
+	return exitOK
+}

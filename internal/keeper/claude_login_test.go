@@ -255,6 +255,9 @@ func TestClaudeLoginFailuresMapToFixedCodesAndWipeStaging(t *testing.T) {
 			if left := f.leftovers(t); len(left) != 0 {
 				t.Fatalf("staging not wiped: %v", left)
 			}
+			if res.Login.NativeStarted && !res.Login.AttemptCleared {
+				t.Fatalf("staging wiped but the report says the attempt is not cleared: %+v", res.Login)
+			}
 			if strings.Contains(out, "evil.example") {
 				t.Fatal("a foreign link was shown to the caller")
 			}
