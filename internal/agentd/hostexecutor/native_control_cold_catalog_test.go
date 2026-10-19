@@ -122,6 +122,46 @@ func TestPinnedNativeColdCatalogFallbackWithinOwnerBound(t *testing.T) {
 	req := apiv1.NativeControlRequest{Binding: apiv1.TaskBudgetBinding{TaskUID: b.TaskUID, HostID: b.HostID, PodUID: b.PodUID, Epoch: 1, Deadline: b.Deadline}, ID: "frozen-thread-once", Operation: "thread/start"}
 	bounded, stop := context.WithTimeout(ctx, apiv1.NativeControlExecutionTimeout)
 	defer stop()
+	// The real guard independently initializes this same native daemon once per
+	// second with a300ms RPC bound while thread/start may wait on its catalog.
+	// Exercise that interaction, not just the owner command in isolation.
+	type heartbeatResult struct {
+		count int
+		max   time.Duration
+		err   error
+	}
+	heartbeats := make(chan heartbeatResult, 1)
+	heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)
+	defer stopHeartbeat()
+	go func() {
+		var result heartbeatResult
+		defer func() { heartbeats <- result }()
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case <-ticker.C:
+				callCtx, done := context.WithTimeout(heartbeatCtx, 300*time.Millisecond)
+				began := time.Now()
+				err := probeNative(callCtx, socket, root, PinnedNativeVersion)
+				done()
+				elapsed := time.Since(began)
+				if elapsed > result.max {
+					result.max = elapsed
+				}
+				if err != nil {
+					if heartbeatCtx.Err() != nil {
+						return
+					}
+					result.err = err
+					return
+				}
+				result.count++
+			}
+		}
+	}()
 	started := time.Now()
 	// Both complete authority calls may legitimately consume most of their
 	// existing two-second budgets. Compose them with the real five-second
@@ -130,6 +170,12 @@ func TestPinnedNativeColdCatalogFallbackWithinOwnerBound(t *testing.T) {
 	consumed := 0
 	result, err := ControlNative(bounded, socket, obs, req, func(context.Context) error { consumed++; time.Sleep(1600 * time.Millisecond); return nil })
 	t.Logf("real frozen thread/start duration=%v consumed=%d resultBytes=%d error=%v context=%v", time.Since(started), consumed, len(result), err, bounded.Err())
+	stopHeartbeat()
+	proof := <-heartbeats
+	t.Logf("concurrent real native readiness probes=%d max=%v error=%v", proof.count, proof.max, proof.err)
+	if proof.err != nil || proof.count < 4 {
+		t.Fatal("cold owner operation invalidated fresh guard readiness", proof.err, proof.count)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

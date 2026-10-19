@@ -311,6 +311,8 @@ unchanged observations do not write ledger accounting or create CAS contention;
 this test does not invent an observation write conflict. A second regression
 uses the real pinned native process/frozen public inputs and two1.6s authority
 phases: old8s command timed out after consuming once; corrected command returned
-one thread acknowledgement at8.234s, with zero inference. These tests diagnose
+one thread acknowledgement at8.236s, with zero inference. Eight concurrent
+real native readiness handshakes completed within the original300ms limit
+(maximum5.8ms) during that cold fallback. These tests diagnose
 processing composition, not the unobserved historical source of live latency.
 They do not prove rolling-upgrade, live-model, continuation or phone acceptance.
