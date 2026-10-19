@@ -55,7 +55,10 @@ func newOwnedBudgetGate(baseURL, tokenFile, caFile string, s agentd.Settings) (*
 	if !roots.AppendCertsFromPEM(pem) {
 		return nil, apiv1.ErrTaskBudgetGate
 	}
-	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: time.Second}).DialContext, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}, TLSHandshakeTimeout: time.Second, ResponseHeaderTimeout: time.Second, MaxIdleConns: 1, IdleConnTimeout: time.Second}
+	// The existing 2s caller/client budget covers admission, including the
+	// operator's bounded process proof. A separate 1s header cutoff would close
+	// this original guard while that proof is still using its allowed budget.
+	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: time.Second}).DialContext, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}, TLSHandshakeTimeout: time.Second, ResponseHeaderTimeout: 2 * time.Second, MaxIdleConns: 1, IdleConnTimeout: time.Second}
 	client := &http.Client{Transport: transport, Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	remote := &apiv1.HTTPTaskBudgetGate{BaseURL: baseURL, Client: client, Token: func(ctx context.Context) (string, error) {
 		if ctx.Err() != nil {

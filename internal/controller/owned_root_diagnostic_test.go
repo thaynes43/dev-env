@@ -50,3 +50,36 @@ func TestOwnedRootRefusalDiagnosticCannotBecomeProofOrLeakOutput(t *testing.T) {
 		})
 	}
 }
+
+// The refusal is always fail-closed, but diagnosis must distinguish the original
+// caller abandoning admission from the independent immutable proof limit.
+func TestOwnedRootRefusalIdentifiesContextOwner(t *testing.T) {
+	b := taskbudget.Binding{TaskUID: "task", HostID: "host", PodUID: "pod", Epoch: 1, Deadline: time.Now().Add(time.Minute)}
+	for _, owner := range []string{"caller-canceled", "caller-deadline", "probe-deadline"} {
+		t.Run(owner, func(t *testing.T) {
+			ctx := context.Background()
+			var cancel context.CancelFunc
+			switch owner {
+			case "caller-canceled":
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			case "caller-deadline":
+				ctx, cancel = context.WithDeadline(ctx, time.Now().Add(-time.Second))
+				defer cancel()
+			}
+			var output bytes.Buffer
+			ctx = log.IntoContext(ctx, logr.FromSlogHandler(slog.NewTextHandler(&output, nil)))
+			_, err := (OwnedRootProber{Exec: contextRefusalExec{}}).Observe(ctx, client.ObjectKey{}, "owned-root", b, "home", strings.Repeat("a", 64))
+			if !errors.Is(err, taskbudget.ErrUnavailable) || !strings.Contains(output.String(), "contextOwner="+owner) || !strings.Contains(output.String(), "typedExit=false") {
+				t.Fatalf("context refusal attribution lost: err=%v log=%s", err, output.String())
+			}
+		})
+	}
+}
+
+type contextRefusalExec struct{}
+
+func (contextRefusalExec) Run(ctx context.Context, _, _, _ string, _ []string, _ io.Reader, _, _ io.Writer) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
