@@ -169,15 +169,15 @@ func TestOwnedHTTPSAdmissionPreservesExistingRequestBudget(t *testing.T) {
 			entered := make(chan struct{}, 1)
 			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests <- struct{}{}
-				select {
-				case entered <- struct{}{}:
-				default:
-				}
 				var req apiv1.TaskBudgetRequest
 				if r.Method != http.MethodPost || r.URL.Path != apiv1.TaskBudgetPath(b.TaskUID)+"/admit" || r.Header.Get("Authorization") != "Bearer synthetic" || json.NewDecoder(r.Body).Decode(&req) != nil || !sameOwnedBinding(req.Binding, b) {
 					t.Error("admission method, authority or immutable binding changed")
 					w.WriteHeader(http.StatusBadRequest)
 					return
+				}
+				select {
+				case entered <- struct{}{}:
+				default:
 				}
 				if scenario != "proof-within-budget" {
 					<-r.Context().Done()
