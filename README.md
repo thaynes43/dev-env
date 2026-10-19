@@ -35,6 +35,8 @@ Agents: see [CLAUDE.md](CLAUDE.md) (Codex: [AGENTS.md](AGENTS.md)).
 
 ## Workflow and quick start
 
+For daily use, start with the [v2 quick start](docs/v2-quickstart.md): one
+page on phone sessions, Codex, tasks, upgrades and the shared logins.
 Read the [workflow guide](docs/workflow-guide.md) for architecture diagrams,
 the feature set, working v1/v2 commands, Codex session management, repository
 freshness and cutover gates. The [2026-10-10 owner scope](.agents/sagas/distributed-dev-env/requirements/2026-10-10-owner-scope.md)
