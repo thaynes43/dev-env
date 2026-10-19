@@ -43,6 +43,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/activity"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver"
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/contextpublication"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/coordretention"
@@ -52,6 +53,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/sessiondirectory"
 	"github.com/thaynes43/dev-env/internal/shelf"
+	"github.com/thaynes43/dev-env/internal/standby"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
 	"github.com/thaynes43/dev-env/internal/templates"
@@ -132,6 +134,9 @@ type options struct {
 	privateProjectCanaries        *projectcanary.Policy
 	managedChildDecisions         bool
 	coordinatorHosts              []apiserver.CoordinatorHost
+	standbyEnabled                bool
+	standbyRepo, standbyModel     string
+	standbyProfile, standbyEffort string
 	catalogBinding                *apiserver.CatalogBinding
 }
 
@@ -155,6 +160,11 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.apiTLSDir, "api-tls-dir", "/etc/dev-env-operator/api-tls", "directory holding the /v1 API's tls.crt and tls.key, the cert-manager Secret's mount")
 	fs.StringVar(&o.humanSA, "human-service-account", ownNamespace+"/dev-env-human", "Tom's ServiceAccount, <namespace>/<name>, whose token his laptop mints (D-05)")
 	fs.StringVar(&o.grantApprovalURL, "grant-approval-url", "", "base URL of the broker's approval page, such as https://dev-env.example.com/grants/; a pending grant's view links to it plus the grant's name (D-56). Empty links nothing")
+	fs.BoolVar(&o.standbyEnabled, "enable-standby-session", false, "keep one standby remote Claude session ready: the leader creates it on start and again when the last one is gone; three creations in 30 minutes trip a circuit breaker (Story110 T25, plan 03); needs the API")
+	fs.StringVar(&o.standbyRepo, "standby-repo", "haynes-ops", "repository of the standby remote session")
+	fs.StringVar(&o.standbyModel, "standby-model", "claude-opus-5-5", "full model id of the standby remote session")
+	fs.StringVar(&o.standbyProfile, "standby-profile", "full", "profile of the standby remote session; empty is the templates' default")
+	fs.StringVar(&o.standbyEffort, "standby-effort", "xhigh", "effort of the standby remote session; empty leaves the CLI's default")
 	fs.BoolVar(&o.coordinatorEnabled, "enable-coordinator-callers", false, "enable configured live-bound scoped coordinator callers")
 	fs.BoolVar(&o.privateProjectTasks, "enable-private-project-tasks", false, "enable new accepted-project tasks with private repositories and worktrees")
 	fs.BoolVar(&o.managedCodexTasks, "enable-managed-codex-tasks", false, "enable accepted-project managed Codex task admission")
@@ -397,6 +407,9 @@ func parseFlags(args []string) (options, error) {
 	if o.coordinationRetentionGrace < coordretention.DefaultGrace {
 		return o, fmt.Errorf("--coordination-retention-grace %s is under %s: the grace may only be lengthened (DESIGN-024 5)", o.coordinationRetentionGrace, coordretention.DefaultGrace)
 	}
+	if o.standbyEnabled && o.apiAddr == "0" {
+		return o, errors.New("--enable-standby-session requires the API (--api-bind-address): the standby is created through its creation path")
+	}
 	if o.privatePilot != nil && (!o.directoryEnabled || !slices.Contains(o.directoryProjects, projectcanary.PilotProject)) {
 		return o, errors.New("sealed pilot requires the dev-env session directory")
 	}
@@ -637,6 +650,20 @@ func run(args []string) error {
 			Templates:                apiserver.TemplatesFrom(mgr.GetClient(), templatesKey),
 			Log:                      ctrl.Log.WithName("api"),
 			GrantApprovalURL:         o.grantApprovalURL,
+		}
+		// The standby session is default off. It is made through the API's own
+		// creation path and found again by its label (Story110 T25, plan 03).
+		if o.standbyEnabled {
+			if err := mgr.Add(&standby.Runnable{
+				Reader: mgr.GetAPIReader(), Client: mgr.GetClient(),
+				SessionNamespace: o.sessionNamespace, StateNamespace: o.templatesNamespace,
+				Request: apiv1.CreateSessionRequest{Repo: o.standbyRepo, Agent: "claude", Mode: "remote",
+					Model: o.standbyModel, Effort: o.standbyEffort, Profile: o.standbyProfile},
+				Create: api.CreateStandby,
+				Log:    ctrl.Log.WithName("standby"),
+			}); err != nil {
+				return err
+			}
 		}
 		runner := &apiserver.Runner{
 			Addr:     o.apiAddr,
