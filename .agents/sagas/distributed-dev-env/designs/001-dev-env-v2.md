@@ -2005,7 +2005,8 @@ like any idle interactive one. Its pod, even one a later boot started through th
 resume path, keeps `launch.json` (the first launch) beside `resume.json`, and the
 read takes the conversation from `launch.json`. For Claude that id is chosen at
 launch, before the CLI has written anything, so the read counts it only once the
-conversation's transcript exists. A remote session that has never had a turn is
+conversation's transcript exists. This holds for every Claude launch, not only
+remote ones. A session that has never had a turn is
 therefore not drained (`DrainNeedsRestart`, the pod stays): `claude --resume` of an
 id the CLI never wrote would fail. A Codex remote host is never drained
 automatically. Its agentd reports `busy` for as long as the daemon is live, and no
