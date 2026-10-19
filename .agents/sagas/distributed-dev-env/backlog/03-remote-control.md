@@ -128,6 +128,8 @@ revalidation, merge latency, a session past 13 hours, two pods on one login). Un
 until then: that the CLI never refreshes a token file without a refresh token, merge
 latency through the kubelet's Secret propagation, and many pods on one account.
 
+Increment 3 status (2026-10-19): the keeper's Claude transport, private journal and access-only publisher (`internal/keeper/claude_*.go`) are source and unit tests only. Nothing calls them yet: no worker, flag or wiring (increment 4), and they are not released, installed or accepted.
+
 ## Goal
 
 Tom drives v2 sessions from his phone. The keeper is the sole owner of the Max login

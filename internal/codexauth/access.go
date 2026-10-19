@@ -51,7 +51,15 @@ type accessWire struct {
 
 // DecodeStrict rejects unknown fields and trailing documents. Its error never
 // contains input bytes (including errors from encoding/json).
-func DecodeStrict(raw []byte, out any) error {
+func DecodeStrict(raw []byte, out any) error { return decodeUnique(raw, out, true) }
+
+// DecodeTolerant is DecodeStrict without the unknown-field refusal, for a
+// provider's response where a refusal would discard a credential the provider
+// already issued. It still refuses duplicate members (at any depth), trailing
+// documents, empty and oversize input.
+func DecodeTolerant(raw []byte, out any) error { return decodeUnique(raw, out, false) }
+
+func decodeUnique(raw []byte, out any, strict bool) error {
 	if len(raw) == 0 || len(raw) > MaxBytes {
 		return ErrInvalid
 	}
@@ -59,7 +67,9 @@ func DecodeStrict(raw []byte, out any) error {
 		return ErrInvalid
 	}
 	d := json.NewDecoder(bytes.NewReader(raw))
-	d.DisallowUnknownFields()
+	if strict {
+		d.DisallowUnknownFields()
+	}
 	if d.Decode(out) != nil || !errors.Is(d.Decode(new(any)), io.EOF) {
 		return ErrInvalid
 	}
