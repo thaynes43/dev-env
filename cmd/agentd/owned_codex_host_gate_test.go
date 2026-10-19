@@ -163,11 +163,16 @@ func TestOwnedHTTPSGateFailsClosed(t *testing.T) {
 // budget, even when a valid bounded proof arrives after the first second.
 func TestOwnedHTTPSAdmissionPreservesExistingRequestBudget(t *testing.T) {
 	b := apiv1.TaskBudgetBinding{TaskUID: "task-fixture", Epoch: 1, Deadline: time.Now().Add(time.Minute), HostID: "host-fixture", PodUID: "pod-fixture"}
-	for _, scenario := range []string{"proof-within-budget", "caller-cancel", "request-deadline"} {
+	for _, scenario := range []string{"proof-within-budget", "caller-cancel-before-send", "caller-cancel-in-flight", "expired-deadline"} {
 		t.Run(scenario, func(t *testing.T) {
 			requests := make(chan struct{}, 2)
+			entered := make(chan struct{}, 1)
 			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests <- struct{}{}
+				select {
+				case entered <- struct{}{}:
+				default:
+				}
 				var req apiv1.TaskBudgetRequest
 				if r.Method != http.MethodPost || r.URL.Path != apiv1.TaskBudgetPath(b.TaskUID)+"/admit" || r.Header.Get("Authorization") != "Bearer synthetic" || json.NewDecoder(r.Body).Decode(&req) != nil || !sameOwnedBinding(req.Binding, b) {
 					t.Error("admission method, authority or immutable binding changed")
@@ -196,14 +201,25 @@ func TestOwnedHTTPSAdmissionPreservesExistingRequestBudget(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			limit := 2 * time.Second
-			if scenario == "request-deadline" {
-				limit = 30 * time.Millisecond
+			var ctx context.Context
+			var cancel context.CancelFunc
+			if scenario == "expired-deadline" {
+				ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			} else {
+				ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), limit)
 			defer cancel()
-			if scenario == "caller-cancel" {
+			if scenario == "caller-cancel-before-send" {
 				cancel()
+			}
+			if scenario == "caller-cancel-in-flight" {
+				go func() {
+					select {
+					case <-entered:
+						cancel()
+					case <-ctx.Done():
+					}
+				}()
 			}
 			err = g.remote.Admit(ctx, b)
 			if scenario == "proof-within-budget" && err != nil {
@@ -213,7 +229,7 @@ func TestOwnedHTTPSAdmissionPreservesExistingRequestBudget(t *testing.T) {
 				t.Fatal("canceled or expired admission accepted")
 			}
 			want := 1
-			if scenario == "caller-cancel" {
+			if scenario == "caller-cancel-before-send" || scenario == "expired-deadline" {
 				want = 0
 			}
 			if len(requests) != want {
