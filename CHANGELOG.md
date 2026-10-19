@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.32.0](https://github.com/thaynes43/dev-env/compare/v2.31.0...v2.32.0) (2026-10-19)
+
+
+### Features
+
+* **agentd:** consume the keeper's Claude live-credential projection ([#446](https://github.com/thaynes43/dev-env/issues/446)) ([1d8691f](https://github.com/thaynes43/dev-env/commit/1d8691f7bc9b5499df30145034861f004547fc54))
+
+
+### Bug Fixes
+
+* treat claude-haiku-5-5 as the latest Haiku with effort support ([#447](https://github.com/thaynes43/dev-env/issues/447)) ([957c400](https://github.com/thaynes43/dev-env/commit/957c400dd37bfde2d710bdb425eff199b18be78a))
+
 ## [2.31.0](https://github.com/thaynes43/dev-env/compare/v2.30.7...v2.31.0) (2026-10-19)
 
 
