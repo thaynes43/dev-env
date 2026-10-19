@@ -48,6 +48,7 @@ Usage:
   agent-run detach <name>                         detach every client from it (Tom only)
   agent-run login <name> [url|code|status]        set up an --interactive session's Claude login (Tom only)
   agent-run pair <name>                           print a phone pairing code for a Codex --interactive session (Tom only)
+  agent-run auth status [-o json]                 show the shared Claude and Codex logins' state and expiry
   agent-run fleet                                 show what runs and waits, by node and revision
   agent-run version                               print the version
   agent-run help [<command>]                      print help for agent-run or one command
@@ -92,6 +93,30 @@ Exit codes:
 `
 
 var commandHelp = map[string]string{
+	"auth": `Usage: agent-run auth status [--warn <duration>] [-o json]
+
+Shows how the keeper's shared Claude and Codex logins stand, for a session that
+follows them. It reads the access projections mounted in this pod
+(AGENTD_CLAUDE_LIVE_FILE and AGENTD_CODEX_ACCESS_FILE) and calls no API. They
+hold no refresh token, and no token value is ever printed.
+
+For each login it prints the state (Ready, or NeedsLogin when the access has
+expired and the keeper has published nothing newer), the generation, when the
+access expires and how long is left, and, for Codex, the keeper's last refresh.
+A login the pod does not follow prints NotConfigured. The Claude refresh login
+itself (about 30 days) lives with the keeper and is not in the projection.
+
+Flags:
+  --warn <duration>    report exit 1 when access ends within this window (default 30m)
+  --claude-file <path> read this file instead of AGENTD_CLAUDE_LIVE_FILE
+  --codex-file <path>  read this file instead of AGENTD_CODEX_ACCESS_FILE (or, when that
+                       is unset, /opt/dev-env/codex-access/access.json if it exists)
+  -o json              print the rows as JSON
+
+Exit codes, as claude-login-check: 0 every configured login is ready, 1 one has
+expired or is inside the warning window, 2 cannot tell (a file missing,
+unreadable or invalid, or nothing configured).
+`,
 	"budget": `Usage: agent-run budget create <task-uid> --success "RESULT" [flags]
        agent-run budget show <task-uid> [-o json]
        agent-run budget continue <task-uid> --decision <id> [-o json]
