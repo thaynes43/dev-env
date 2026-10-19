@@ -73,6 +73,47 @@ plan 03: the keeper-owned login, refresh and fencing, `dev-env-claude-live`, the
 console and its renewal page, the standby, archive on reap, messaging tier 2, and
 the 401-window resume.
 
+## Shared-login projection consumer (Story110 T09 increment 1, 2026-10-19): source and unit tests only
+
+Q-11/D-11 stays the target. This is the first of the six increments of the
+keeper-owned shared login, and only the consuming side. It is **not released,
+installed or accepted**; nothing publishes `dev-env-claude-live` yet, so no pod
+runs it.
+
+Delivered in source (`internal/claudeauth`, `internal/agentd/claude_auth.go`):
+
+- Projection mode is selected only by the profile variable `AGENTD_CLAUDE_LIVE_FILE`
+  (the mounted `access.json`). Unset, the task's static token and the interim
+  pod-owned login above behave exactly as before.
+- `claudeauth` holds the strict projection document (generation, access token,
+  expiry, scopes, subscription type, rate-limit tier, account and organization
+  uuids). A refresh token is not representable, and a document that carries one
+  (any member naming `refresh`) is refused.
+- agentd merges only `claudeAiOauth.{accessToken, expiresAt, scopes,
+  subscriptionType, rateLimitTier}` into the pod's own `.credentials.json`: 0600,
+  atomic rename, every CLI-owned member (`mcpOAuth`, unknown keys) kept, nothing
+  rewritten when the fields already match. It follows new generations on the
+  daemon's existing 5 s poll.
+- A generation receipt on the volume refuses an older generation and a changed
+  document of the same generation, across restarts.
+- `.claude.json` `oauthAccount` is seeded from the projection's uuids, also when the
+  projection lands after boot.
+- Fail closed: a credentials file that already holds a refresh token (a pod-owned
+  login) is never merged into, the agent is not started, and the boot reports
+  `login-conflict`. Projection mode refuses `login url|code` and never runs the
+  ceremony; a missing, invalid or expired projection holds the agent as
+  `login-required`.
+- `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` joins the remote-mode unset list, for both
+  projection and pod-owned pods.
+
+Still in this plan (increments 2 to 6): the 401-window `continue` after a merge;
+keeper journal, transport, publisher and the refresh worker with its Lease fence
+(`--enable-claude-auth`, default off); the keeper-side login helper; the GitOps
+profile, mounts, RBAC and image pins; then the bounded real checkpoint (CLI 2.1.296
+revalidation, merge latency, a session past 13 hours, two pods on one login). Unproven
+until then: that the CLI never refreshes a token file without a refresh token, merge
+latency through the kubelet's Secret propagation, and many pods on one account.
+
 ## Goal
 
 Tom drives v2 sessions from his phone. The keeper is the sole owner of the Max login

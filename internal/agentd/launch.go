@@ -112,7 +112,11 @@ var unsetForAgent = []string{
 // environment would bypass it and cannot register Remote Control (backlog 03,
 // DESIGN-001 6.2). The operator already leaves the token out of a remote pod;
 // this covers a profile envFrom Secret that still carries it.
-var unsetForRemote = append(append([]string{}, unsetForAgent...), "CLAUDE_CODE_OAUTH_TOKEN")
+//
+// It also drops CLAUDE_CODE_OAUTH_REFRESH_TOKEN, which the CLI honours as a
+// refresh credential (CLI 2.1.299): a pod must never hold one, in projection
+// mode or on a pod-owned login.
+var unsetForRemote = append(append([]string{}, unsetForAgent...), "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_REFRESH_TOKEN")
 
 // unsetFor is the agent's unset list for the session's mode.
 func unsetFor(sess protocol.Session) []string {

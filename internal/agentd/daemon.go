@@ -50,6 +50,8 @@ type Daemon struct {
 	// boot so a login that lands later can start the agent; waiting is true
 	// while the boot found no usable login.
 	remote *remoteWait
+	// claudeSyncErr is the last projection outcome logged (nil: applied).
+	claudeSyncErr error
 }
 
 // logCopyEvery is how often the session's log is copied to the shared volume,
@@ -219,6 +221,13 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 		why := "the repo step failed, so the agent was not started"
 		return newStep(name, nil, errors.New(why)), why
 	}
+	if d.projectsClaude() {
+		// Projection mode: apply the keeper's login before anything starts.
+		// A pod-owned login on this HOME is a conflict, not a wait.
+		if err := SyncClaudeAccess(d.S, d.now()); errors.Is(err, ErrClaudeLoginConflict) {
+			return newStep(name, nil, err), err.Error()
+		}
+	}
 	if d.Session.Mode == protocol.ModeRemote {
 		d.remote = &remoteWait{ws: ws, repo: repo, boot: bootID}
 	}
@@ -277,6 +286,9 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 func (d *Daemon) waitForLogin() (Step, string) {
 	d.remote.waiting = true
 	notes := []string{"login-required: no usable Claude login in this pod; no login is started until agent-run login asks for it"}
+	if d.projectsClaude() {
+		notes = []string{"login-required: waiting for the keeper's Claude projection; no login is run in this pod"}
+	}
 	return newStep("agent", notes, nil), ""
 }
 
@@ -312,7 +324,9 @@ func (d *Daemon) pollRemoteLogin(ctx context.Context) {
 		return
 	}
 	w.waiting, w.since = false, time.Time{}
-	StopLoginWindow(ctx, d.R, d.S)
+	if !d.projectsClaude() {
+		StopLoginWindow(ctx, d.R, d.S)
+	}
 	step, agentErr := d.startAgent(ctx, w.ws, w.repo, w.boot)
 	LogSteps(d.Log, []Step{step})
 	var rec bootRecord
@@ -372,6 +386,7 @@ func (d *Daemon) supervise(ctx context.Context) error {
 			if err := d.dispatchDecision(ctx); err != nil {
 				d.Log.Warn("managed child decision continuation is unavailable or uncertain")
 			}
+			d.syncClaudeAccess()
 			d.pollRemoteLogin(ctx)
 			if m := newestMtime(d.S.statePath(resultFile), d.S.statePath(tuiExitFile)); !m.Equal(last) {
 				last = m
@@ -380,6 +395,32 @@ func (d *Daemon) supervise(ctx context.Context) error {
 				d.copyLog()
 			}
 		}
+	}
+}
+
+// projectsClaude: this session follows the keeper's Claude login projection.
+func (d *Daemon) projectsClaude() bool {
+	return d.S.ClaudeLiveFile != "" && d.Session.Agent == protocol.AgentClaude
+}
+
+// syncClaudeAccess follows the keeper's newest generation on each poll. It
+// logs a fixed line when the outcome changes, not every poll.
+func (d *Daemon) syncClaudeAccess() {
+	if !d.projectsClaude() {
+		return
+	}
+	err := SyncClaudeAccess(d.S, d.now())
+	if errors.Is(err, d.claudeSyncErr) || (err == nil && d.claudeSyncErr == nil) {
+		return
+	}
+	d.claudeSyncErr = err
+	switch {
+	case err == nil:
+		d.Log.Info("Claude projection applied")
+	case errors.Is(err, ErrClaudeLoginConflict):
+		d.Log.Warn("Claude projection not applied: the pod holds its own login")
+	default:
+		d.Log.Warn("Claude authentication requires a current keeper projection")
 	}
 }
 

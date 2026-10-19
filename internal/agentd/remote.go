@@ -59,6 +59,7 @@ func (c loginCheck) Usable(now time.Time) bool {
 type credentialsShape struct {
 	ClaudeAiOauth *struct {
 		AccessToken           string `json:"accessToken"`
+		ExpiresAt             int64  `json:"expiresAt"`
 		RefreshToken          string `json:"refreshToken"`
 		RefreshTokenExpiresAt int64  `json:"refreshTokenExpiresAt"`
 	} `json:"claudeAiOauth"`
@@ -68,6 +69,9 @@ type credentialsShape struct {
 // symlink, an oversize or unparseable file all mean no usable login; no error
 // text carries file content.
 func checkLogin(s Settings) loginCheck {
+	if s.ClaudeLiveFile != "" {
+		return checkProjectedLogin(s)
+	}
 	path := filepath.Join(s.ClaudeConfigDir, credentialsFileName)
 	fi, err := os.Lstat(path)
 	if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxLoginFileBytes {
@@ -158,6 +162,9 @@ func LoginURL(ctx context.Context, r Runner, s Settings, sess protocol.Session, 
 	if sess.Mode != protocol.ModeRemote {
 		return "", errors.New("login is for remote sessions")
 	}
+	if s.ClaudeLiveFile != "" {
+		return "", ErrClaudeProjectionLogin
+	}
 	// One owner per rotating refresh token: never a second CLI on this HOME
 	// while the agent's CLI runs, even if its login file reads as absent. A
 	// login that still reads as usable may be renewed or replaced (a renewal
@@ -201,6 +208,9 @@ func LoginCode(ctx context.Context, r Runner, s Settings, sess protocol.Session,
 	if sess.Mode != protocol.ModeRemote {
 		return errors.New("login is for remote sessions")
 	}
+	if s.ClaudeLiveFile != "" {
+		return ErrClaudeProjectionLogin
+	}
 	raw, err := io.ReadAll(io.LimitReader(stdin, maxLoginCodeBytes+1))
 	if err != nil || len(raw) > maxLoginCodeBytes {
 		return errors.New("read the code: it is missing or too long")
@@ -243,6 +253,9 @@ func LoginCode(ctx context.Context, r Runner, s Settings, sess protocol.Session,
 func LoginStatus(ctx context.Context, r Runner, s Settings, sess protocol.Session, now time.Time) string {
 	if sess.Mode != protocol.ModeRemote {
 		return "not a remote session"
+	}
+	if s.ClaudeLiveFile != "" {
+		return projectionLoginStatus(s, now)
 	}
 	c := checkLogin(s)
 	switch {

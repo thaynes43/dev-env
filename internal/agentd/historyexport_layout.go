@@ -83,6 +83,9 @@ var claudeLayout = []historyRule{
 	// Credentials: never exported, listed by name only.
 	{".credentials.json", protocol.HistoryClassCredential, kindAny},
 	{".credentials.json.*", protocol.HistoryClassCredential, kindAny},
+	// A temporary copy writeClaudePrivateAtomic (claude_auth.go) left when
+	// agentd stopped mid-write: .credentials.json's bytes.
+	{".claude-access-*", protocol.HistoryClassCredential, kindAny},
 	// A temporary copy writeFileAtomic (files.go) left when agentd stopped
 	// mid-write, of .claude.json or settings.json. Below the credentials, so a
 	// credential's name always wins.
@@ -178,6 +181,7 @@ var agentdLayout = []historyRule{
 	{"native-invocation.json", protocol.HistoryClassNotHistory, kindAny},
 	{"native-started.json", protocol.HistoryClassNotHistory, kindAny},
 	{"codex-access-generation.json", protocol.HistoryClassNotHistory, kindAny},
+	{"claude-access-generation.json", protocol.HistoryClassNotHistory, kindAny},
 	{"codex-host-config.json", protocol.HistoryClassNotHistory, kindAny},
 	{"codex-host-start-intent.json", protocol.HistoryClassNotHistory, kindAny},
 	{"codex-host-preparation.json", protocol.HistoryClassNotHistory, kindAny},
@@ -204,6 +208,9 @@ var agentdLayout = []historyRule{
 	{".*.agentd-*", protocol.HistoryClassNotHistory, kindAny},
 	{".receipt-*", protocol.HistoryClassNotHistory, kindAny},
 	{".codex-access-*", protocol.HistoryClassNotHistory, kindAny},
+	// writeClaudePrivateAtomic's receipt copy (claude_auth.go); its credentials
+	// copy is in the Claude layout above.
+	{".claude-access-*", protocol.HistoryClassNotHistory, kindAny},
 }
 
 // classifyHistoryName finds the rule for a top-level name. The first matching
