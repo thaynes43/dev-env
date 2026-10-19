@@ -445,6 +445,16 @@ than creating an unbounded queue. This is not availability against a hostile
 same-UID worker: socket unlink or saturation can still stop the campaign. Unknown
 proof latches and keeps accounting/resources.
 
+**Diagnostic correction, 2026-10-19:** accepted proof remains exactly statuses
+40..44. The immutable probe additionally returns rejected diagnostic-only codes
+50..64 for its existing refusal stages; these codes never authorize a phase or
+relax any predicate. Unknown errors still exit1. The operator and inspector log
+only fixed stage/category fields, error type, context completion and explicit
+process-exit metadata. Remote error text, stdout/stderr, challenges, policy
+contents and credentials remain excluded from logs and proof. Original failed
+attempts retain their bindings, counters and evidence; diagnostics do not rearm
+actors or reset budgets.
+
 ### Owned-root native owner control
 
 The existing owned-root policy selects the native control adapter; it is absent
