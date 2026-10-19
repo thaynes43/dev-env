@@ -7,6 +7,17 @@ import (
 	"encoding/json"
 	"io"
 	"regexp"
+	"time"
+)
+
+// The pinned native catalog fetch has its own five-second bounded fallback.
+// Owner operations also perform fresh status/proof/one-use consumption before
+// that fetch. Keep nested finite envelopes and cap each at the original budget
+// deadline; cancellation and unknown-result no-replay remain unchanged.
+const (
+	NativeControlExecutionTimeout = 8 * time.Second
+	NativeControlTransportTimeout = 9 * time.Second
+	NativeControlRequestTimeout   = 10 * time.Second
 )
 
 // NativeControlRequest exposes a small supported native protocol, never arbitrary

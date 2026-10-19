@@ -33,7 +33,7 @@ func ownedNativeControl(ctx context.Context, args []string, in io.Reader, out io
 	if err != nil || s.Home != hostexecutor.OwnedRootHome {
 		return exitFailure
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(apiv1.NativeControlExecutionTimeout)
 	if req.Binding.Deadline.Before(deadline) {
 		deadline = req.Binding.Deadline
 	}
@@ -60,7 +60,7 @@ func ownedNativeControl(ctx context.Context, args []string, in io.Reader, out io
 		return authorizeOwnedNativeControl(ctx, req, gate.remote.ConsumeNativeControl)
 	})
 	if err != nil {
-		return exitFailure
+		return hostexecutor.NativeControlRefusalExit(err)
 	}
 	if json.NewEncoder(out).Encode(apiv1.NativeControlResponse{Binding: req.Binding, ID: req.ID, Operation: req.Operation, Result: result}) != nil {
 		return exitFailure

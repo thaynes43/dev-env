@@ -54,7 +54,7 @@ func (s *Server) nativeControl(ctx context.Context, w http.ResponseWriter, r *ht
 	if _, err := s.budgetCaller(ctx, c, req.Binding.TaskUID); err != nil {
 		return 0, nil, err
 	}
-	deadline := time.Now().Add(8 * time.Second)
+	deadline := time.Now().Add(apiv1.NativeControlRequestTimeout)
 	if req.Binding.Deadline.Before(deadline) {
 		deadline = req.Binding.Deadline
 	}
