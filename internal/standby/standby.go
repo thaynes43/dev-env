@@ -149,7 +149,7 @@ func (r *Runnable) Ensure(ctx context.Context) (string, error) {
 	recent := recentCreations(cm.Data[stateKey], now, window)
 	if len(recent) >= limit {
 		if !r.tripped {
-			r.Log.Info("standby circuit breaker open: no standby session until the window clears",
+			r.Log.Info("loop suspected: standby circuit breaker open, no standby session until the window clears",
 				"creations", len(recent), "window", window.String())
 		}
 		r.tripped = true
