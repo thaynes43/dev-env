@@ -162,13 +162,30 @@ This section supersedes the statements above that keep the actual served model
 Unknown and forbid a parent/child aggregate. It applies to observations of
 version 2. Version 1 observations keep their original rules and display.
 
-**What the provider reports.** The final result event is the only source. Claude's
+**What the provider reports.** The final result event is the primary source; for
+Codex, the thread's rollout is a second, narrower source (below). Claude's
 stream-json `result` event carries `usage`, `total_cost_usd` and `modelUsage`, a map
 from served model id to `inputTokens`, `outputTokens`, `cacheReadInputTokens`,
 `cacheCreationInputTokens` and `costUSD`. Codex `exec --json` reports token counts
 on `turn.completed`; agentd reads a served model there only from an explicit
-`model` string. The pinned 0.160 schema emits none, so Codex observations keep the
-served model Unknown in practice, and Codex cost stays Unknown.
+`model` string. The pinned 0.160 schema emits none, so the stream alone leaves the
+Codex served model Unknown, and Codex cost stays Unknown.
+
+*Codex rollout (2026-10-19).* When the stream named no model, agentd reads the
+Codex CLI's own rollout for the confirmed native thread, after the turn ends:
+`$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*-<thread-id>.jsonl`, the newest match.
+The served models are the distinct `payload.model` strings of its `turn_context`
+records. This is agentd's own runtime reading its own task's rollout, narrowly: no
+other field of any record is decoded, so no message text reaches status, result
+or log, which keeps it consistent with the agent rule against reading restricted
+Codex session files. Bounds: the thread id must be a native thread UUID; no symlink
+is followed at any level; a regular file only; at most 64 MiB, and a record line over
+64 KiB is skipped unread. A missing, oversized or invalid rollout, an invalid model
+id, or more than `MaxServedModels` models leaves the model Unknown, never a partial
+list. One model takes the turn's counters, as the stream path does. Several models
+share no honest split of one total, so each is listed with Unknown counters. An
+explicit stream model wins over the rollout. Reporting only: nothing here changes
+admission, budgets or cost.
 
 **Version 2 observation.** agentd records, from the final result event:
 
