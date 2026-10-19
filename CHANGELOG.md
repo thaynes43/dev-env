@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.30.3](https://github.com/thaynes43/dev-env/compare/v2.30.2...v2.30.3) (2026-10-19)
+
+
+### Bug Fixes
+
+* honor existing owned admission request budget ([#432](https://github.com/thaynes43/dev-env/issues/432)) ([84baa90](https://github.com/thaynes43/dev-env/commit/84baa90ad7f84e75afd7b56f628c5c28f0eb4860))
+
 ## [2.30.2](https://github.com/thaynes43/dev-env/compare/v2.30.1...v2.30.2) (2026-10-19)
 
 
