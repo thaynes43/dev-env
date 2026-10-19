@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -25,6 +26,25 @@ import (
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "fixture-evidence-probe":
+			if len(os.Args) != 7 || RequireProbeIsolation() != nil || ProtectEvidenceProcess() != nil {
+				os.Exit(ProbeRefusedIsolation)
+			}
+			anchor, err := strconv.Atoi(os.Args[3])
+			var binding Binding
+			if err != nil || json.Unmarshal([]byte(os.Args[4]), &binding) != nil {
+				os.Exit(ProbeRefusedBinding)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
+			proof, err := ProbeEvidence(ctx, os.Args[2], anchor, binding, strings.Repeat("ab", 32))
+			cancel()
+			if err != nil {
+				_, _ = fmt.Fprintln(os.Stderr, err)
+				os.Exit(ProbeRefusalExit(err))
+			}
+			// Test diagnostics only; acceptance below still needs explicit40–44.
+			_ = json.NewEncoder(os.Stdout).Encode(proof)
+			os.Exit(EvidenceExit(proof, binding, os.Args[5], os.Args[6]))
 		case "owned-codex-host-helper":
 			if Helper() != nil {
 				os.Exit(1)

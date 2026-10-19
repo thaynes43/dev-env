@@ -289,6 +289,13 @@ func (e *EvidenceConfig) start(c Config) error {
 				case stage := <-reports:
 					e.ReportRefusal(stage)
 				case <-s.done:
+					// Preserve the final queued close reason if shutdown wins the
+					// select. The server never waits for this diagnostic consumer.
+					select {
+					case stage := <-reports:
+						e.ReportRefusal(stage)
+					default:
+					}
 					return
 				}
 			}
@@ -369,9 +376,13 @@ func (s *evidenceServer) serve(conn net.Conn) {
 		Challenge string  `json:"challenge"`
 		Binding   Binding `json:"binding"`
 	}
-	d := json.NewDecoder(io.LimitReader(conn, 4096))
+	request := &io.LimitedReader{R: conn, N: 4097}
+	d := json.NewDecoder(request)
 	d.DisallowUnknownFields()
-	if d.Decode(&req) != nil {
+	// This one-request stream ends at the probe's write half-close. Consume the
+	// complete bounded frame: closing with an unread encoder newline resets an
+	// otherwise valid reply on Linux. Extra JSON/bytes never count as a request.
+	if d.Decode(&req) != nil || d.Decode(new(any)) != io.EOF || request.N == 0 {
 		s.refuse("request-decode")
 		return
 	}
@@ -454,6 +465,10 @@ func ProbeEvidence(ctx context.Context, path string, anchor int, b Binding, chal
 	}{challenge, b}) != nil {
 		return empty, probeRefusal{ProbeRefusedRequest, errors.New("evidence request unavailable")}
 	}
+	request, ok := conn.(*net.UnixConn)
+	if !ok || request.CloseWrite() != nil {
+		return empty, probeRefusal{ProbeRefusedRequest, errors.New("evidence request unavailable")}
+	}
 	raw, err := io.ReadAll(io.LimitReader(conn, 8193))
 	if err != nil {
 		code := ProbeRefusedResponseRead
@@ -464,7 +479,7 @@ func ProbeEvidence(ctx context.Context, path string, anchor int, b Binding, chal
 		case errors.Is(err, unix.ECONNRESET):
 			code = ProbeRefusedResponseReset
 		}
-		return empty, probeRefusal{code, errors.New("evidence response unavailable")}
+		return empty, probeRefusal{code, fmt.Errorf("evidence response unavailable: bytes=%d", len(raw))}
 	}
 	if len(raw) > 8192 {
 		return empty, probeRefusal{ProbeRefusedResponseOversize, errors.New("evidence response unavailable")}

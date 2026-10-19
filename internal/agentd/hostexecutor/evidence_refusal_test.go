@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -100,7 +101,7 @@ func TestProbeEvidenceAuthenticatedResponseFailures(t *testing.T) {
 						fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
 						n, pollErr := unix.Poll(fds, 200)
 						if pollErr != nil || n != 1 {
-							err = fmt.Errorf("request not pending: %d %v", n, pollErr)
+							err = fmt.Errorf("request not pending: %d %w", n, pollErr)
 						}
 					}); e != nil {
 						done <- e
@@ -212,6 +213,84 @@ func TestEvidenceServerBlockedDiagnosticDoesNotHoldProofOrClose(t *testing.T) {
 	case <-closed:
 	case <-ctx.Done():
 		t.Fatal("blocked diagnostic held server shutdown")
+	}
+}
+
+func TestEvidenceServerConsumesOneCompleteRequestBeforeReply(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		suffix     string
+		fragmented bool
+		want       bool
+	}{
+		{"encoder-newline", "\n", false, true},
+		{"fragmented-newline", "\n", true, true},
+		{"second-json-value", "\n{}\n", false, false},
+		{"trailing-junk", "\njunk", false, false},
+		{"request-byte-limit", strings.Repeat(" ", 4097), false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := config(t)
+			baseline, err := NativeHomeBaseline(c.Home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := &EvidenceConfig{HomeUID: "home", Baseline: baseline}
+			if err = e.start(c); err != nil {
+				t.Fatal(err)
+			}
+			defer e.Close()
+			conn, err := net.DialUnix("unix", nil, &net.UnixAddr{Net: "unix", Name: filepath.Join(filepath.Dir(c.ReceiptPath), EvidenceSocketName)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = conn.Close() }()
+			anchor, err := identity(os.Getpid())
+			if err != nil || !ownedSocketPeer(conn, anchor) {
+				t.Fatal("real guard peer unavailable", err)
+			}
+			if err = conn.SetDeadline(time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			challenge := strings.Repeat("ab", 32)
+			raw, err := json.Marshal(struct {
+				Challenge string  `json:"challenge"`
+				Binding   Binding `json:"binding"`
+			}{challenge, c.Binding})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = conn.Write(raw); err != nil {
+				t.Fatal(err)
+			}
+			if tc.fragmented {
+				if err = conn.SetReadDeadline(time.Now().Add(30 * time.Millisecond)); err != nil {
+					t.Fatal(err)
+				}
+				one := make([]byte, 1)
+				_, err = conn.Read(one)
+				var timeout net.Error
+				if !errors.As(err, &timeout) || !timeout.Timeout() {
+					t.Fatal("reply preceded complete request EOF", err)
+				}
+				if err = conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err = conn.Write([]byte(tc.suffix)); err != nil {
+				t.Fatal(err)
+			}
+			if err = conn.CloseWrite(); err != nil {
+				t.Fatal(err)
+			}
+			reply, readErr := io.ReadAll(io.LimitReader(conn, 8193))
+			var proof Observation
+			decodeErr := json.Unmarshal(reply, &proof)
+			accepted := readErr == nil && decodeErr == nil && proof.Challenge == challenge && EvidenceExit(proof, c.Binding, "home", baseline) == EvidencePrepared
+			if accepted != tc.want {
+				t.Fatalf("accepted=%v want=%v readErr=%v decodeErr=%v", accepted, tc.want, readErr, decodeErr)
+			}
+		})
 	}
 }
 func TestProbeEvidenceRetainsSpecificRefusal(t *testing.T) {

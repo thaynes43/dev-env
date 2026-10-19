@@ -3,11 +3,16 @@
 package hostexecutor
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -99,7 +104,24 @@ type evidenceGate struct {
 func (g *evidenceGate) observe(stage string) (Observation, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	proof, err := ProbeEvidence(ctx, filepath.Join(filepath.Dir(g.c.ReceiptPath), EvidenceSocketName), os.Getpid(), g.c.Binding, strings.Repeat("ab", 32))
+	binary, err := os.Executable()
+	if err != nil {
+		return Observation{}, err
+	}
+	rawBinding, _ := json.Marshal(g.c.Binding)
+	cmd := exec.CommandContext(ctx, binary, "fixture-evidence-probe", filepath.Join(filepath.Dir(g.c.ReceiptPath), EvidenceSocketName), strconv.Itoa(os.Getpid()), string(rawBinding), g.c.Evidence.HomeUID, g.c.Evidence.Baseline)
+	var diagnostic bytes.Buffer
+	cmd.Stderr = &diagnostic
+	raw, err := cmd.Output()
+	var exited *exec.ExitError
+	if !errors.As(err, &exited) || !exited.Exited() || !ValidEvidenceExit(exited.ExitCode()) {
+		return Observation{}, fmt.Errorf("separate probe refused (%s): %w", diagnostic.String(), err)
+	}
+	var proof Observation
+	err = json.Unmarshal(raw, &proof)
+	if err == nil && EvidenceExit(proof, g.c.Binding, g.c.Evidence.HomeUID, g.c.Evidence.Baseline) != exited.ExitCode() {
+		return proof, errors.New("test output differs from explicit process status")
+	}
 	if err == nil && proof.Stage != stage {
 		return proof, errors.New("wrong actual guard phase: " + proof.Stage)
 	}
@@ -126,6 +148,9 @@ func (g *evidenceGate) Observe(context.Context, Binding) (bool, error) {
 func runEvidenceLifecycle(t *testing.T, pid1 bool) {
 	t.Helper()
 	c := config(t)
+	// Match the production serialized binding shape, including nanosecond UTC
+	// deadline and original logical identifiers; no API or provider is involved.
+	c.Binding = Binding{TaskUID: "owned-luna-1019-0004", Epoch: 1, HostID: "owned-luna-1019-4", PodUID: "5dc5b644-277f-457a-a30f-96410e3c6c16", Deadline: time.Now().UTC().Add(600 * time.Second)}
 	c.ReadyVersion = PinnedNativeVersion
 	if err := os.WriteFile(filepath.Join(c.Home, "fixture-readiness"), nil, 0600); err != nil {
 		t.Fatal(err)
@@ -135,8 +160,9 @@ func runEvidenceLifecycle(t *testing.T, pid1 bool) {
 		t.Fatal(err)
 	}
 	gate := &evidenceGate{c: c}
+	refusals := make(chan string, 4)
 	afterStopped := false
-	c.Evidence = &EvidenceConfig{HomeUID: "independent-home-uid", Baseline: baseline, RequirePID1: pid1, ReportStopped: func(ctx context.Context, r Receipt) error {
+	c.Evidence = &EvidenceConfig{HomeUID: "independent-home-uid", Baseline: baseline, RequirePID1: pid1, ReportRefusal: func(stage string) { refusals <- stage }, ReportStopped: func(ctx context.Context, r Receipt) error {
 		proof, err := gate.observe("Stopped")
 		if err != nil {
 			return err
@@ -160,8 +186,15 @@ func runEvidenceLifecycle(t *testing.T, pid1 bool) {
 		afterStopped = true
 		return nil
 	}}
+	gate.c = c
 	r, err := Run(context.Background(), c, gate)
 	if err != nil || !gate.ready || !gate.stopped || !afterStopped || r.State != "Stopped" {
+		select {
+		case stage := <-refusals:
+			t.Logf("actual guard refusal stage=%s", stage)
+		case <-time.After(100 * time.Millisecond):
+			t.Log("no guard refusal stage received")
+		}
 		t.Fatalf("actual lifecycle: ready=%v stopped=%v receipt=%+v err=%v", gate.ready, gate.stopped, r, err)
 	}
 	if _, err = Run(context.Background(), c, gate); !errors.Is(err, ErrNeedsReview) {
@@ -199,6 +232,7 @@ func runEvidenceLifecycle(t *testing.T, pid1 bool) {
 		gate.stopped = true
 		return nil
 	}}
+	gate.c = c
 	second, err := Run(context.Background(), c, gate)
 	if err != nil || !gate.ready || !gate.stopped || second.Binding.Epoch != 2 || second.Root == r.Root {
 		t.Fatal("separate native-process continuation", err)
