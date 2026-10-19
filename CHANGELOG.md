@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.30.6](https://github.com/thaynes43/dev-env/compare/v2.30.5...v2.30.6) (2026-10-19)
+
+
+### Bug Fixes
+
+* **agentd:** compose owned authority and native operation deadlines ([#438](https://github.com/thaynes43/dev-env/issues/438)) ([a4e623e](https://github.com/thaynes43/dev-env/commit/a4e623ebe63e05f6b363e57a28f82d7ebc5eaa12))
+
 ## [2.30.5](https://github.com/thaynes43/dev-env/compare/v2.30.4...v2.30.5) (2026-10-19)
 
 
