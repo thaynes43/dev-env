@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.30.7](https://github.com/thaynes43/dev-env/compare/v2.30.6...v2.30.7) (2026-10-19)
+
+
+### Bug Fixes
+
+* preserve fresh owned authority during operator replacement ([#440](https://github.com/thaynes43/dev-env/issues/440)) ([4d81c4b](https://github.com/thaynes43/dev-env/commit/4d81c4b1d32e4930181dfa1666f4e4ca5b1cc0d6))
+
 ## [2.30.6](https://github.com/thaynes43/dev-env/compare/v2.30.5...v2.30.6) (2026-10-19)
 
 
