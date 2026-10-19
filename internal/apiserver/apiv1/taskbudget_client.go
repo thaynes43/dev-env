@@ -48,6 +48,14 @@ func (g *HTTPTaskBudgetGate) check(ctx context.Context, b TaskBudgetBinding, act
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
+	if action == "observe" {
+		// Only observation is idempotent. Allow net/http to replace a lost
+		// reused connection within the SAME context/client timeout. A new
+		// complete, exact-binding response is still mandatory below. Empty
+		// slice marks replayability without sending a header on the wire.
+		// Admission and every mutation retain their no-replay behavior.
+		req.Header["Idempotency-Key"] = []string{}
+	}
 	hc := *g.Client
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := hc.Do(req)
