@@ -57,20 +57,30 @@ func ownedRootBootstrap(ctx context.Context, s agentd.Settings, g *ownedBudgetGa
 // The immutable probe validates original kernel/native evidence locally. Only
 // its dedicated CRI exit status carries authority; stdout/stderr carry none.
 func ownedRootProbe(ctx context.Context, args []string, _ io.Writer) int {
-	if len(args) != 4 || hostexecutor.RequireProbeIsolation() != nil || hostexecutor.ProtectEvidenceProcess() != nil {
-		return exitFailure
+	if len(args) != 4 {
+		return hostexecutor.ProbeRefusedArguments
+	}
+	if hostexecutor.RequireProbeIsolation() != nil {
+		return hostexecutor.ProbeRefusedIsolation
+	}
+	if hostexecutor.ProtectEvidenceProcess() != nil {
+		return hostexecutor.ProbeRefusedProtection
 	}
 	var binding hostexecutor.Binding
 	if len(args[1]) > 4096 || json.Unmarshal([]byte(args[1]), &binding) != nil {
-		return exitFailure
+		return hostexecutor.ProbeRefusedBinding
 	}
 	bounded, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
 	defer cancel()
 	proof, err := hostexecutor.ProbeEvidence(bounded, hostexecutor.OwnedRootHome+"/.agentd/"+hostexecutor.EvidenceSocketName, 1, binding, args[0])
 	if err != nil {
-		return exitFailure
+		return hostexecutor.ProbeRefusalExit(err)
 	}
-	return hostexecutor.EvidenceExit(proof, binding, args[2], args[3])
+	code := hostexecutor.EvidenceExit(proof, binding, args[2], args[3])
+	if !hostexecutor.ValidEvidenceExit(code) {
+		return hostexecutor.ProbeRefusedPredicate
+	}
+	return code
 }
 
 func writeOwnedBootstrapIntent(stateDir, task string) error {

@@ -1,5 +1,7 @@
 package hostexecutor
 
+import "errors"
+
 const OwnedRootHome = "/workspace/home"
 
 // These nonzero codes are an authenticated result on CRI's process-status
@@ -14,6 +16,50 @@ const (
 )
 
 func ValidEvidenceExit(code int) bool { return code >= EvidencePrepared && code <= EvidenceContinuable }
+
+// Refusal codes carry diagnostics only. They must never become evidence exits.
+const (
+	ProbeRefusedArguments = 50 + iota
+	ProbeRefusedIsolation
+	ProbeRefusedProtection
+	ProbeRefusedBinding
+	ProbeRefusedChallenge
+	ProbeRefusedGuardIdentity
+	ProbeRefusedGuardLiveness
+	ProbeRefusedConnect
+	ProbeRefusedPeer
+	ProbeRefusedDeadline
+	ProbeRefusedRequest
+	ProbeRefusedResponse
+	ProbeRefusedIdentity
+	ProbeRefusedNative
+	ProbeRefusedPredicate
+)
+
+type probeRefusal struct {
+	code int
+	err  error
+}
+
+func (e probeRefusal) Error() string { return e.err.Error() }
+func (e probeRefusal) Unwrap() error { return e.err }
+
+// ProbeRefusalExit returns only a fixed rejection code, never error text.
+func ProbeRefusalExit(err error) int {
+	var refusal probeRefusal
+	if errors.As(err, &refusal) {
+		return refusal.code
+	}
+	return 1
+}
+
+func ProbeRefusalStage(code int) string {
+	stages := [...]string{"arguments", "isolation", "protection", "binding", "challenge", "guard-identity", "guard-liveness", "connect", "peer", "deadline", "request", "response", "identity", "native", "predicate"}
+	if code < ProbeRefusedArguments || code > ProbeRefusedPredicate {
+		return "unknown"
+	}
+	return stages[code-ProbeRefusedArguments]
+}
 
 // EvidenceExit follows ProbeEvidence, which authenticates the original kernel
 // PID1/native peer and fresh challenge. Recheck the operator's exact predicate

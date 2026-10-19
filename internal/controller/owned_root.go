@@ -6,11 +6,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	kexec "k8s.io/client-go/util/exec"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/thaynes43/dev-env/internal/agentd/hostexecutor"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
@@ -37,7 +40,31 @@ func (p OwnedRootProber) Observe(ctx context.Context, key client.ObjectKey, cont
 	defer cancel()
 	err := p.Exec.Run(bounded, key.Namespace, key.Name, container, []string{"/usr/local/bin/agentd", "owned-codex-host-probe", hex.EncodeToString(challenge[:]), string(raw), homeUID, baseline}, nil, io.Discard, io.Discard)
 	var status kexec.ExitError
-	if bounded.Err() != nil || !errors.As(err, &status) || !status.Exited() || !hostexecutor.ValidEvidenceExit(status.ExitStatus()) {
+	typed := errors.As(err, &status)
+	if bounded.Err() != nil || !typed || !status.Exited() || !hostexecutor.ValidEvidenceExit(status.ExitStatus()) {
+		exited, code := false, -1
+		stage, category := "unknown", "transport"
+		if typed {
+			exited, code = status.Exited(), status.ExitStatus()
+		}
+		switch {
+		case bounded.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+			category = "context"
+		case typed && exited:
+			category, stage = "process-exit", hostexecutor.ProbeRefusalStage(code)
+		case typed:
+			category = "unexited-status"
+		case err == nil:
+			category = "missing-exit-status"
+		case apierrors.IsForbidden(err):
+			category = "forbidden"
+		case apierrors.IsUnauthorized(err):
+			category = "unauthorized"
+		case apierrors.IsNotFound(err):
+			category = "not-found"
+		}
+		// Never log remote error text or output: both may contain worker bytes.
+		log.FromContext(ctx).WithName("owned-root").Info("owned root process proof refused", "category", category, "errorType", fmt.Sprintf("%T", err), "contextDone", bounded.Err() != nil, "typedExit", typed, "exited", exited, "exitCode", code, "probeStage", stage)
 		return 0, taskbudget.ErrUnavailable
 	}
 	return status.ExitStatus(), nil

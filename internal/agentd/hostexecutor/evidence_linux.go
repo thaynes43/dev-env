@@ -379,45 +379,48 @@ func (s *evidenceServer) serve(conn net.Conn) {
 func ProbeEvidence(ctx context.Context, path string, anchor int, b Binding, challenge string) (Observation, error) {
 	var empty Observation
 	if !validChallenge(challenge) || anchor < 1 {
-		return empty, errors.New("invalid evidence challenge/anchor")
+		return empty, probeRefusal{ProbeRefusedChallenge, errors.New("invalid evidence challenge/anchor")}
 	}
 	guard, err := identity(anchor)
-	if err != nil || !rootLive(guard) {
-		return empty, errors.New("original guard unavailable")
+	if err != nil {
+		return empty, probeRefusal{ProbeRefusedGuardIdentity, errors.New("original guard identity unavailable")}
+	}
+	if !rootLive(guard) {
+		return empty, probeRefusal{ProbeRefusedGuardLiveness, errors.New("original guard unavailable")}
 	}
 	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", path)
 	if err != nil {
-		return empty, err
+		return empty, probeRefusal{ProbeRefusedConnect, err}
 	}
 	defer func() { _ = conn.Close() }()
 	if !ownedSocketPeer(conn, guard) {
-		return empty, errors.New("evidence peer is not original guard")
+		return empty, probeRefusal{ProbeRefusedPeer, errors.New("evidence peer is not original guard")}
 	}
 	deadline, ok := ctx.Deadline()
 	if !ok {
-		return empty, errors.New("evidence observation requires finite context")
+		return empty, probeRefusal{ProbeRefusedDeadline, errors.New("evidence observation requires finite context")}
 	}
 	if err = conn.SetDeadline(deadline); err != nil {
-		return empty, err
+		return empty, probeRefusal{ProbeRefusedDeadline, err}
 	}
 	if json.NewEncoder(conn).Encode(struct {
 		Challenge string  `json:"challenge"`
 		Binding   Binding `json:"binding"`
 	}{challenge, b}) != nil {
-		return empty, errors.New("evidence request unavailable")
+		return empty, probeRefusal{ProbeRefusedRequest, errors.New("evidence request unavailable")}
 	}
 	raw, err := io.ReadAll(io.LimitReader(conn, 8193))
 	if err != nil || len(raw) > 8192 {
-		return empty, errors.New("evidence response unavailable")
+		return empty, probeRefusal{ProbeRefusedResponse, errors.New("evidence response unavailable")}
 	}
 	var result Observation
 	d := json.NewDecoder(strings.NewReader(string(raw)))
 	d.DisallowUnknownFields()
 	if d.Decode(&result) != nil || d.Decode(new(any)) != io.EOF || result.Version != 1 || result.Challenge != challenge || !sameBinding(result.Binding, b) || !reflect.DeepEqual(result.Guard, guard) || !rootLive(guard) {
-		return empty, errors.New("evidence identity changed")
+		return empty, probeRefusal{ProbeRefusedIdentity, errors.New("evidence identity changed")}
 	}
 	if result.Stage == "Ready" && (!rootLive(result.Root) || result.NativeVersion != PinnedNativeVersion) {
-		return empty, errors.New("original native root unavailable")
+		return empty, probeRefusal{ProbeRefusedNative, errors.New("original native root unavailable")}
 	}
 	return result, nil
 }
