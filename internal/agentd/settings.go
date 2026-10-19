@@ -57,6 +57,11 @@ type Settings struct {
 	// JSON file with accountUuid and organizationUuid from the keeper's
 	// Secret. When it exists, agentd seeds oauthAccount in .claude.json.
 	OAuthAccountFile string
+	// ClaudeLiveFile (AGENTD_CLAUDE_LIVE_FILE) selects projection mode: the
+	// keeper's dev-env-claude-live access.json, merged into the pod's
+	// credentials. Empty leaves the login unchanged (static token, or the
+	// pod-owned login of remote.go).
+	ClaudeLiveFile string
 	// CodexAccessFile opts into the keeper's single access.json projection.
 	// Empty leaves provider auth untouched; CodexHome stays host-private.
 	CodexAccessFile     string
@@ -140,6 +145,7 @@ func LoadSettings(getenv func(string) string) (Settings, error) {
 		PodUID:            getenv("DEV_ENV_POD_UID"),
 		StateDir:          filepath.Join(home, ".agentd"),
 		OAuthAccountFile:  getenv("AGENTD_OAUTH_ACCOUNT_FILE"),
+		ClaudeLiveFile:    getenv("AGENTD_CLAUDE_LIVE_FILE"),
 		CodexAccessFile:   getenv("AGENTD_CODEX_ACCESS_FILE"),
 		CodexHome:         or("CODEX_HOME", filepath.Join(home, ".codex")),
 		CodexBin:          "codex", ManagedCodexTasks: getenv("AGENTD_ENABLE_CODEX_TASKS") == "true",

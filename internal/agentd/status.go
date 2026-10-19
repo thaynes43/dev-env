@@ -95,7 +95,11 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 	case sess.Mode == protocol.ModeRemote && !hasCur && !checkLogin(s).Usable(now):
 		// Story110 T03: a remote pod without a usable login has not started
 		// its agent. The message names the way forward, never a secret.
-		st.Agent = protocol.AgentState{State: protocol.AgentLoginRequired, Error: "no usable Claude login in this pod; run: agent-run login " + sess.Name + " url"}
+		msg := "no usable Claude login in this pod; run: agent-run login " + sess.Name + " url"
+		if s.ClaudeLiveFile != "" {
+			msg = projectionLoginStatus(s, now)
+		}
+		st.Agent = protocol.AgentState{State: protocol.AgentLoginRequired, Error: msg}
 	case hasCur && workspaceLaunchPending(s, cur, now):
 		created := cur.CreatedAt
 		st.Agent = protocol.AgentState{State: protocol.AgentPending, StartedAt: &created}

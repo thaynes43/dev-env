@@ -131,6 +131,38 @@ func mergeOAuthAccount(cur json.RawMessage, a oauthAccount) (json.RawMessage, er
 	return json.Marshal(obj)
 }
 
+// ensureOAuthAccount sets oauthAccount's two uuids in the state file when they
+// differ, keeping every other key, and writes nothing when they already match
+// (the CLI owns the file while it runs). The projection consumer uses it so a
+// login that lands after boot still seeds Remote Control's eligibility check.
+func ensureOAuthAccount(statePath string, a oauthAccount) error {
+	top := map[string]json.RawMessage{}
+	data, err := os.ReadFile(statePath)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(data, &top); err != nil {
+			return fmt.Errorf("%s is not a JSON object, left as it is", statePath)
+		}
+	case isNotExist(err):
+	default:
+		return err
+	}
+	var cur oauthAccount
+	if raw, ok := top[keyOAuthAccount]; ok && json.Unmarshal(raw, &cur) == nil && cur == a {
+		return nil
+	}
+	merged, err := mergeOAuthAccount(top[keyOAuthAccount], a)
+	if err != nil {
+		return err
+	}
+	top[keyOAuthAccount] = merged
+	out, err := json.MarshalIndent(top, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(statePath, append(out, '\n'), 0o600)
+}
+
 // assertDefaultModel sets settings.json's "model": the default for every bare
 // `claude` in the pod. An in-session `/model` rewrites that key, so v1
 // re-asserts it on every boot (2026-08-29: the default silently became Opus
