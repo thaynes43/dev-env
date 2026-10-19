@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -127,10 +128,16 @@ func (g *ownedBudgetGate) Observe(ctx context.Context, b hostexecutor.Binding) (
 		return true, apiv1.ErrTaskBudgetGate
 	}
 	latched, err := g.remote.Observe(ctx, wireBinding(b))
-	if err != nil || latched {
+	if err != nil {
+		// Phase only: never log URLs, tokens, projections or native auth bytes.
+		slog.Warn("owned root observation refused", "phase", "remote-authority")
 		return true, err
 	}
+	if latched {
+		return true, nil
+	}
 	if agentd.SyncCodexAccess(g.settings, time.Now()) != nil {
+		slog.Warn("owned root observation refused", "phase", "access-sync")
 		return true, apiv1.ErrTaskBudgetGate
 	}
 	return false, nil
