@@ -160,7 +160,7 @@ func TestCreateRefusals(t *testing.T) {
 		{"no agent", func(r *apiv1.CreateSessionRequest) { r.Agent = "" }, 422, apiv1.CodeInvalid, "agent"},
 		{"no model", func(r *apiv1.CreateSessionRequest) { r.Model, r.Effort = "", "" }, 422, apiv1.CodeInvalid, "model"},
 		{"tools are plan 08's", func(r *apiv1.CreateSessionRequest) { r.Tools = []string{"blender"} }, 422, apiv1.CodeInvalid, "tools"},
-		{"haiku takes no effort", func(r *apiv1.CreateSessionRequest) { r.Model, r.Effort = "claude-haiku-4-5", "low" }, 422, apiv1.CodeInvalid, "effort"},
+		{"haiku 4.5 takes no effort", func(r *apiv1.CreateSessionRequest) { r.Model, r.Effort = "claude-haiku-4-5", "low" }, 422, apiv1.CodeInvalid, "effort"},
 		{"the 4.6 tier has no xhigh", func(r *apiv1.CreateSessionRequest) { r.Model = "claude-opus-4-6" }, 422, apiv1.CodeInvalid, "effort"},
 		{"an unknown level", func(r *apiv1.CreateSessionRequest) { r.Effort = "turbo" }, 422, apiv1.CodeInvalid, "effort"},
 		{"a prompt over 64 KiB", func(r *apiv1.CreateSessionRequest) { r.Prompt = strings.Repeat("x", protocol.MaxPromptBytes+1) }, 422, apiv1.CodeInvalid, "prompt"},
@@ -224,9 +224,14 @@ func TestCreateRefusals(t *testing.T) {
 	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, ok); w.Code != http.StatusCreated {
 		t.Errorf("haiku with no effort: %d %s", w.Code, w.Body.String())
 	}
+	ok = task()
+	ok.Model, ok.Effort = "claude-haiku-5-5", "low"
+	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, ok); w.Code != http.StatusCreated {
+		t.Errorf("haiku 5.5 takes effort: %d %s", w.Code, w.Body.String())
+	}
 
 	var list v1alpha1.AgentSessionList
-	if err := f.c.List(context.Background(), &list); err != nil || len(list.Items) != 5 {
+	if err := f.c.List(context.Background(), &list); err != nil || len(list.Items) != 6 {
 		t.Errorf("a refused create left an object behind: %d, %v", len(list.Items), err)
 	}
 }

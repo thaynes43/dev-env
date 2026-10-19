@@ -15,7 +15,10 @@ func TestClaudeEffortLevels(t *testing.T) {
 		"claude-opus-4-7[1m]":        fullEffort,
 		"claude-opus-4-6":            reducedEffort,
 		"claude-sonnet-4-6[1m]":      reducedEffort,
+		"claude-haiku-5-5":           fullEffort, // Haiku 5.5 takes effort; 4.5 does not
 		"claude-haiku-4-5":           nil,
+		"claude-haiku-4-5[1m]":       nil,
+		"claude-3-5-haiku-20241022":  nil,
 		"claude-sonnet-4-5":          nil,
 		"claude-opus-4-1-20250805":   nil,
 		"claude-sonnet-4-20250514":   nil,
@@ -35,6 +38,11 @@ func TestClaudeEffortLevels(t *testing.T) {
 		{"claude-opus-4-6", "ultracode", false},
 		{"claude-opus-4-6", "max", true},
 		{"claude-haiku-4-5", "low", false},
+		{"claude-haiku-5-5", "low", true},
+		{"claude-haiku-5-5", "xhigh", true},
+		{"claude-haiku-5-5", "max", true},
+		{"claude-haiku-5-5", "ultracode", true},
+		{"claude-haiku-5-5", "ultra", false},
 		{"claude-opus-5-5", "ultra", false},
 	} {
 		if got := ClaudeEffortAccepted(tc.model, tc.level); got != tc.ok {

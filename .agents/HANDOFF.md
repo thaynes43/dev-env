@@ -80,7 +80,8 @@ Session pods clone `repo: dev-env`, `base: main`, so the worktree HEAD is
 prose.
 
 **Chapter 7 rendezvous is not accepted.** Codex checks use Luna; Claude Code checks use
-Haiku. Luna quota is tighter.
+Haiku (`claude-haiku-5-5` for new launches, Tom's 2026-10-19 latest-family
+preference; record requested and served model). Luna quota is tighter.
 
 **Held without reopening:** H7 reader work under Q-36 and the consumed Q-37 PV Retain
 step stay held unless Tom explicitly reopens them in a new ruling.

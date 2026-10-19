@@ -11,7 +11,9 @@ pending; no root/token/model. Keep Saga85/Epic107/Story110, owner and counters.
 hosts, each with its own computer entry and pairing. See
 [DESIGN-006](designs/006-private-catalog-bootstrap.md#q-24-codex-mvp-native-routing).
 Older dated pending-Q24 entries below are historical. Runtime test actors are
-limited to `gpt-6-luna` and `claude-haiku-4-5`; architecture approval grants no
+limited to `gpt-6-luna` and the Haiku family. Since 2026-10-19 (Tom's
+latest-family preference) new Haiku launches use `claude-haiku-5-5`; earlier
+`claude-haiku-4-5` records stay as they happened. Architecture approval grants no
 pairing, credential, deployment or live-cohort authority.
 
 **Owner requirement, 2026-10-16:** [central cross-repository work coordination](requirements/2026-10-16-central-work-coordination.md)
