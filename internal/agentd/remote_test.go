@@ -346,6 +346,13 @@ func TestStatusRemoteLoginRequiredAndRegistered(t *testing.T) {
 		t.Errorf("offline: %+v", rc)
 	}
 
+	// A new boot whose resume has not started the CLI yet is starting, not offline.
+	_ = writeJSONFile(s.statePath(bootFile), bootRecord{BootID: "b2", Boot: protocol.BootReady})
+	if rc := collect().RemoteControl; rc.State != protocol.RemoteStarting {
+		t.Errorf("after a roll, before the resume: %+v", rc)
+	}
+	_ = writeJSONFile(s.statePath(bootFile), bootRecord{BootID: "b1", Boot: protocol.BootReady})
+
 	// Nothing in the status carries a token.
 	data, _ := json.Marshal(collect())
 	for _, secret := range []string{canaryAccess, canaryRefresh, "canary-mcp"} {

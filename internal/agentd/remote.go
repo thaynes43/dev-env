@@ -272,8 +272,10 @@ var bridgeSessionID = regexp.MustCompile(`^session_[A-Za-z0-9_-]{1,120}$`)
 
 // collectRemoteControl builds status.remoteControl from the CLI's own session
 // record, not from the pane. loggedIn is whether the pod has a usable login;
-// pid is the live CLI's pid, 0 when none.
-func collectRemoteControl(s Settings, sess protocol.Session, loggedIn bool, pid int, launched bool) *protocol.RemoteControl {
+// pid is the live CLI's pid, 0 when none. startedThisBoot is whether this
+// boot launched the CLI: after a roll or a resume, until it does, the state is
+// starting, not offline.
+func collectRemoteControl(s Settings, sess protocol.Session, loggedIn bool, pid int, startedThisBoot bool) *protocol.RemoteControl {
 	rc := &protocol.RemoteControl{Name: sess.Name}
 	switch {
 	case pid > 0:
@@ -285,7 +287,7 @@ func collectRemoteControl(s Settings, sess protocol.Session, loggedIn bool, pid 
 		}
 	case !loggedIn:
 		rc.State = protocol.RemoteLoginRequired
-	case launched:
+	case startedThisBoot:
 		rc.State = protocol.RemoteOffline
 	default:
 		rc.State = protocol.RemoteStarting
