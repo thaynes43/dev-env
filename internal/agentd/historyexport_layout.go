@@ -182,6 +182,7 @@ var agentdLayout = []historyRule{
 	{"native-started.json", protocol.HistoryClassNotHistory, kindAny},
 	{"codex-access-generation.json", protocol.HistoryClassNotHistory, kindAny},
 	{"claude-access-generation.json", protocol.HistoryClassNotHistory, kindAny},
+	{"claude-continue.json", protocol.HistoryClassNotHistory, kindAny},
 	{"codex-host-config.json", protocol.HistoryClassNotHistory, kindAny},
 	{"codex-host-start-intent.json", protocol.HistoryClassNotHistory, kindAny},
 	{"codex-host-preparation.json", protocol.HistoryClassNotHistory, kindAny},

@@ -388,6 +388,7 @@ func (d *Daemon) supervise(ctx context.Context) error {
 			}
 			d.syncClaudeAccess()
 			d.pollRemoteLogin(ctx)
+			d.continueAfterRenewal(ctx)
 			if m := newestMtime(d.S.statePath(resultFile), d.S.statePath(tuiExitFile)); !m.Equal(last) {
 				last = m
 				d.Log.Info("the agent exited")
