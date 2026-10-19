@@ -199,13 +199,14 @@ func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
 		w.needsLogin(ctx)
 		return claudeRecord{}, errClaudeRefresh
 	}
-	// The replacement is stored BEFORE anything is published. If this fails the
-	// journal still says RefreshIntent (or already holds the replacement); the
-	// next tick marks the first NeedsLogin and never repeats the POST.
-	if w.Fence(ctx, claudeSaveTimeout+claudeSafetyMargin) != nil {
-		w.note("leadership-unavailable")
-		return claudeRecord{}, errClaudeLeadership
-	}
+	// The replacement is stored BEFORE anything is published, and with no Lease
+	// check first: the old refresh token is already spent, so the save must not
+	// depend on leadership budget. The compare-and-swap on the resourceVersion
+	// read after our intent is the guard: if a newer leader has acted on the
+	// journal since, the save conflicts and nothing is overwritten. If the save
+	// fails the journal still says RefreshIntent (or already holds the
+	// replacement); the next tick marks the first NeedsLogin and never repeats
+	// the POST.
 	if w.Journal.save(ctx, secret, next) != nil {
 		w.note("journal-unavailable")
 		return claudeRecord{}, errClaudeJournal

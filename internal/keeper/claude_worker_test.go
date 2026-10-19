@@ -316,6 +316,52 @@ func TestClaudeWorkerShutdownAfterPOSTStillSavesAndPublishes(t *testing.T) {
 	}
 }
 
+func TestClaudeWorkerLeaseGoneAfterPOSTStillSavesReplacement(t *testing.T) {
+	f := newClaudeFix(t)
+	f.seed(t, syntheticClaudeRecord(1))
+	f.tick() // generation 1 published
+	f.clk.Step(6 * time.Hour)
+	posted := false
+	f.w.Fence = func(context.Context, time.Duration) error {
+		if posted {
+			return errors.New("synthetic: lease budget gone after the POST")
+		}
+		return nil
+	}
+	f.tr.Run = func(call int, old secretValue) (claudeTokens, error) {
+		posted = true
+		return rotated(call, old)
+	}
+	f.tick()
+	r := f.journal(t)
+	if f.tr.Calls != 1 || r.Stage != claudeReady || r.Access.Generation != 2 || r.Refresh.Reveal() != claudeNewRefreshCanary || f.liveGeneration(t) != 1 {
+		t.Fatalf("replacement must be saved, and not published without a lease: calls=%d stage=%s gen=%d", f.tr.Calls, r.Stage, r.Access.Generation)
+	}
+	posted = false // the next leader republishes the saved replacement; no new POST
+	f.tick()
+	if f.tr.Calls != 1 || f.liveGeneration(t) != 2 {
+		t.Fatal("saved replacement was not republished")
+	}
+}
+
+func TestClaudeWorkerNewerLeaderJournalIsNotOverwritten(t *testing.T) {
+	f := newClaudeFix(t)
+	f.seed(t, syntheticClaudeRecord(1))
+	f.tick()
+	f.clk.Step(6 * time.Hour)
+	f.tr.Run = func(call int, old secretValue) (claudeTokens, error) {
+		// While our POST is in flight a newer leader recovers the intent.
+		other := &claudeWorker{Journal: f.w.Journal, Fence: func(context.Context, time.Duration) error { return nil }, Clock: f.clk, Log: logr.Discard()}
+		other.needsLogin(context.Background())
+		return rotated(call, old)
+	}
+	f.tick()
+	r := f.journal(t)
+	if r.Stage != claudeNeedsLogin || r.Access.Generation != 1 || !r.Refresh.Empty() || f.liveGeneration(t) != 1 {
+		t.Fatal("a newer leader's journal write was overwritten or published over")
+	}
+}
+
 func TestClaudeWorkerTwoWorkersOneLeaseOnePOSTPerCycle(t *testing.T) {
 	f := newClaudeFix(t)
 	f.seed(t, syntheticClaudeRecord(1))
