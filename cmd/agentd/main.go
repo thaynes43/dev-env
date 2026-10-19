@@ -148,6 +148,12 @@ Commands:
   ctl credential-available Check for a live credential without printing material.
   ctl credential-use      Run a command with a live credential in its environment.
   ctl credential-expire   Remove expired credential files from the grants volume.
+  claude-login [--login-dir D]
+                           The keeper's Claude login helper (the keeper pod's
+                           claude-login container): run through an interactive
+                           pods/exec, print the sign-in link, read the one-time
+                           code on stdin, and have the keeper adopt the login.
+  claude-login-idle        Do nothing until shutdown (that container's entrypoint).
   version                  Print the version, commit, Go version and platform.
   help                     Print this help.
 
@@ -236,6 +242,10 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return projectSync(ctx, args[1:], stdout, stderr, getenv, r)
 	case "project-refresh":
 		return projectRefresh(ctx, args[1:], stdout, stderr, getenv, r)
+	case "claude-login":
+		return claudeLogin(ctx, args[1:], stdin, stdout)
+	case "claude-login-idle":
+		return claudeLoginIdle(ctx, args[1:], stderr)
 	case "ctl":
 		return ctl(ctx, args[1:], stdin, stdout, stderr, getenv, r)
 	case "ask-decision":

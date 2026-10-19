@@ -81,7 +81,7 @@ cmd/dev-env-operator/    the operator, and the access broker as its second mode,
 cmd/dev-env-keeper/      the keeper, its own binary in the operator image (D-38); main only, the work is internal/keeper
 cmd/agentd/              the in-pod supervisor: `run`, `hold` (the rescue pod, D-55), `shelf [--history-archive]` (the shelf pod,
                          D-67, DESIGN-025), `run-agent`
-                         (a task, or a TUI, D-58), `render`, `ctl status|rescue [--stop-agent]|prepare-restart` (D-40 to D-43,
+                         (a task, or a TUI, D-58), `claude-login[-idle]` (the keeper pod's Claude login helper, T09 increment 5), `render`, `ctl status|rescue [--stop-agent]|prepare-restart` (D-40 to D-43,
                          D-48, D-58), `ctl deliver|log` (D-65), `ctl login url|code|status` (remote sessions), `ctl rescues|hold-rescue|prune` (D-67),
                          `ctl grant-install|grant-remove|grant-list|grant-use` (D-63),
                          `ctl history-export|history-archive` (DESIGN-025 H4), `ctl coord-archive put [--mark]|mark|lookup|get` (DESIGN-024 R2; journal grace, recorded-time or pinned get)
@@ -134,6 +134,7 @@ internal/agentd/protocol/  what agentd and the operator exchange: the session do
 internal/agentd/hostexecutor/  owns one foreground native computer for one immutable budget binding (no budget authority, no pairing)
 internal/codexauth/      the access-only Codex document the keeper publishes and agentd reads; it cannot carry a refresh token
 internal/claudeauth/     the access-only Claude projection document (dev-env-claude-live) and the merge of its access fields into a pod's .credentials.json; it cannot carry a refresh token; pure, no I/O (Story110 T09 increment 1)
+internal/claudelogin/    the keeper-owned Claude login ceremony (Story110 T09 increment 5): the control socket's wire types and client, and the helper that runs the pinned `claude auth login` in a memory-backed staging HOME, prints only the sign-in link and reads the one-time code on stdin; reads no credential
 internal/tokenfile/      bounded reads of rotating projected bearer-token files
 internal/projectcatalog/ parses and validates the GitOps project catalog and its per-task snapshot; no filesystem or network authority
 internal/projectsync/    agentd's bounded, model-free GitOps project management (`agentd project-sync|project-refresh`): actor, API, receipt

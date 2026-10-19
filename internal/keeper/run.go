@@ -73,8 +73,8 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 	if o.Namespace == "" || o.GHTokenSecret.Namespace == "" || o.GHTokenSecret.Name == "" || o.GitHubApp == nil {
 		return errors.New("keeper: the namespace, the gh token Secret and the GitHub App are required")
 	}
-	if o.ClaudeAuth.Enabled && o.Namespace == o.GHTokenSecret.Namespace {
-		return errors.New("claude auth requires separate private/public namespaces")
+	if o.ClaudeAuth.Enabled && (o.Namespace == o.GHTokenSecret.Namespace || (o.ClaudeAuth.LoginDir != "" && !filepath.IsAbs(o.ClaudeAuth.LoginDir))) {
+		return errors.New("claude auth requires separate private/public namespaces and an absolute login directory")
 	}
 	if o.CodexAuth.Enabled && (o.Namespace == o.GHTokenSecret.Namespace || (o.CodexAuth.LoginDir != "" && !filepath.IsAbs(o.CodexAuth.LoginDir))) {
 		return errors.New("codex auth requires separate private/public namespaces and absolute private staging")

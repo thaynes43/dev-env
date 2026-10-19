@@ -28,6 +28,7 @@ import (
 type claudeTestTransport struct {
 	Calls int
 	Run   func(call int, refresh secretValue) (claudeTokens, error)
+	Prof  *claudeProfile // the profile answer; nil answers errClaudeProfile
 }
 
 func (t *claudeTestTransport) refresh(_ context.Context, r secretValue, _ []string) (claudeTokens, error) {
@@ -35,8 +36,11 @@ func (t *claudeTestTransport) refresh(_ context.Context, r secretValue, _ []stri
 	return t.Run(t.Calls, r)
 }
 
-func (*claudeTestTransport) profile(context.Context, secretValue) (claudeProfile, error) {
-	return claudeProfile{}, errClaudeProfile
+func (t *claudeTestTransport) profile(context.Context, secretValue) (claudeProfile, error) {
+	if t.Prof == nil {
+		return claudeProfile{}, errClaudeProfile
+	}
+	return *t.Prof, nil
 }
 
 // rotated is the default provider answer: a new access token per call and a
