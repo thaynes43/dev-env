@@ -315,7 +315,11 @@ stay private and are never pushed.
 
 V2 `--interactive` (Remote Control on a pod-owned Claude login, set up with
 `agent-run login`) is source-only until released and accepted, and its use is
-pending Tom's authorization of one isolated v2 login; automatic image
+pending Tom's authorization of one isolated v2 login. V2 `--agent codex
+--interactive` (the Codex phone daemon on the keeper's login, paired with
+`agent-run pair <name>`) is also source-only until released, installed and
+accepted; see [plan 03](../.agents/sagas/distributed-dev-env/backlog/03-remote-control.md).
+Automatic image
 drains and the complete grant/login CLI remain unfinished. The first #173 source slice admits declared project tasks
 into private worktrees and supplies project rules without RWX. New budget-bound
 private dispatch remains refused pending separate integration. GitOps delivery

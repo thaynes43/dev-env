@@ -79,6 +79,8 @@ Commands:
                            --termination-grace-seconds N from pod configuration,
                             and refuses a busy or uncertain host.
   ctl status               Print the session's status as JSON.
+  ctl codex-pair           Print a phone pairing code from a Codex --interactive
+                           session's daemon (stdout only; never logged or stored).
   ctl rescue [--stop-agent]
                            Commit every worktree's uncommitted work to a local
                            rescue/ branch, write a bundle of every ref origin
@@ -587,6 +589,8 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return credentialCtl(ctx, args, stdin, stdout, stderr, getenv, r)
 		case "login":
 			return loginCtl(ctx, args[1:], stdin, stdout, stderr, getenv, r)
+		case "codex-pair":
+			return codexPairCtl(ctx, args[1:], stdout, stderr, getenv)
 		case "deliver", "log":
 			return ctlMessageOrLog(ctx, args, stdin, stdout, stderr, getenv, r)
 		case "decision-read", "decision-answer":

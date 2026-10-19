@@ -58,7 +58,7 @@ func TestDispatch(t *testing.T) {
 		"detach":       "detach takes one session name",
 		"prune":        "prune is gone in v2: the operator reaps sessions itself",
 		"sweep":        "sweep is gone in v2",
-		"codex-remote": "plan 04",
+		"codex-remote": "agent-run pair <name>",
 	} {
 		h.mustRun(ExitUsage, verb)
 		contains(t, verb, h.stderr.String(), want)

@@ -36,6 +36,42 @@ func TestCreateInteractive(t *testing.T) {
 	contains(t, "stdout", h.stdout.String(), "agent-run attach "+name)
 }
 
+// --interactive with codex creates a remote-mode session too (Story110 T17): the
+// daemon has no TUI and no login of its own, so the hint is agent-run pair.
+func TestCreateInteractiveCodex(t *testing.T) {
+	h := newHarness(t)
+	serveCreate(h, runningOn(testSession(name, ""), "talosw02"))
+	h.mustRun(ExitOK, "haynes-ops", "--interactive", "--agent", "codex", "--model", "gpt-6-luna")
+	got := decodeCreate(t, h.api.requests()[0].body)
+	if got.Mode != "remote" || got.Prompt != "" || got.Limits != nil || got.Agent != "codex" || got.Model != "gpt-6-luna" {
+		t.Errorf("create %+v", got)
+	}
+	contains(t, "stdout", h.stdout.String(), "agent-run pair "+name)
+	if strings.Contains(h.stdout.String(), "agent-run attach") || strings.Contains(h.stdout.String(), "agent-run login") {
+		t.Errorf("a codex remote session has no TUI and no pod login: %q", h.stdout.String())
+	}
+}
+
+// pair execs agentd's codex-pair control in the session's pod over the POST
+// (SPDY) transport, like login. It takes no stdin and no code argument: the
+// pairing code comes back on the exec's stdout only.
+func TestPairExecsAgentdCtl(t *testing.T) {
+	h := newHarness(t)
+	h.kubectl = func([]string) int { return 0 }
+	serveSession(h, runningOn(testSession(name, ""), "talosw02"))
+	h.mustRun(ExitOK, "pair", name)
+	want := "env KUBECTL_REMOTE_COMMAND_WEBSOCKETS=false /usr/bin/kubectl --context test-context exec -n dev-agents " + name + " -c agent -- agentd ctl codex-pair"
+	if strings.Join(h.ran, "\n") != want {
+		t.Errorf("ran\n%s\nwant\n%s", strings.Join(h.ran, "\n"), want)
+	}
+	h.mustRun(ExitUsage, "pair")
+	contains(t, "stderr", h.stderr.String(), "pair takes one session name")
+	h.mustRun(ExitUsage, "pair", name, "extra")
+	h.kubectl = func([]string) int { return 1 }
+	h.mustRun(ExitFailed, "pair", name)
+	contains(t, "stderr", h.stderr.String(), "kubectl exec exited 1")
+}
+
 // login execs agentd's login control in the session's pod with kubectl. The
 // code travels on stdin (-i), never as an argument.
 func TestLoginExecsAgentdCtl(t *testing.T) {

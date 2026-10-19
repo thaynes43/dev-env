@@ -185,6 +185,10 @@ var agentdLayout = []historyRule{
 	{"claude-continue.json", protocol.HistoryClassNotHistory, kindAny},
 	{"codex-host-config.json", protocol.HistoryClassNotHistory, kindAny},
 	{"codex-host-start-intent.json", protocol.HistoryClassNotHistory, kindAny},
+	// Story110 T17: the Codex phone daemon's last start attempt and the time a
+	// pairing code was issued. Neither holds a code or any native output.
+	{"codex-remote.json", protocol.HistoryClassNotHistory, kindAny},
+	{"codex-pair-issued.json", protocol.HistoryClassNotHistory, kindAny},
 	{"codex-host-preparation.json", protocol.HistoryClassNotHistory, kindAny},
 	{"common-rule-ownership.json", protocol.HistoryClassNotHistory, kindAny},
 	{"common-launch-inputs.json", protocol.HistoryClassNotHistory, kindAny},

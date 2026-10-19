@@ -73,6 +73,61 @@ plan 03: the keeper-owned login, refresh and fencing, `dev-env-claude-live`, the
 console and its renewal page, the standby, archive on reap, messaging tier 2, and
 the 401-window resume.
 
+## Codex phone sessions (Story110 T17, 2026-10-19): source and unit tests only
+
+Codex has no per-session remote control like Claude's. Its phone link is one
+per-machine `codex remote-control` daemon, so v1 runs one pod-wide daemon
+(`agent-run codex-remote`). On v2 the same thing is one `--interactive` Codex
+session (option A of the T15 plan). Not released, installed or accepted: the live
+pairing, a prompt from the phone, suspend/resume and a keeper refresh while
+connected all stay Tom's gates.
+
+- `agent-run --repo <r> --agent codex --interactive --model <id>` creates a
+  `remote`-mode Codex session. The API takes it without a project snapshot or the
+  managed-task flag; a project route and `--local` Codex stay refused.
+- agentd runs a slim supervisor (`internal/agentd/codex_remote.go`), not the
+  codex-host: no one-start receipt, no host-pod preflight, so a pod roll or a
+  resume is not a dead end. It needs the keeper's access-only login
+  (`AGENTD_CODEX_ACCESS_FILE`, in the profile) and refuses to start codex without
+  it. Each start removes a dead daemon's pid files and socket, asserts
+  `remoteControlEnabled` on and `autoUpdateEnabled` off (v1's two traps; the
+  updater is stopped after each start), then runs `codex remote-control start`.
+  The poll loop restarts a gone daemon with a 5 s doubling backoff capped at 5 min.
+  An unknown state (a held lock, an odd pid file) is left alone. The existing codex
+  sync keeps rewriting `auth.json`; codex reloads a replaced file in-process (S-3).
+- SIGTERM on suspend or a roll goes to the daemon, bounded by the pod's stop grace.
+  The enrollment (codex's state sqlite and installation id) is under `CODEX_HOME`
+  on the session volume, so a resume is the same computer on the phone. Reaping
+  the session loses it.
+- Pairing: `agent-run pair <name>` execs `agentd ctl codex-pair` in the pod (the
+  same POST/SPDY transport as `login`). It prints the manual pairing code to
+  stdout only, for the coordinator to relay (about ten minutes, a secret until
+  then). The code is never an argument, an environment variable, a file or a log
+  line; agentd keeps only the time it was issued.
+- Status (`status.remoteControl.state`): `login-required` (no current keeper
+  projection), `starting`, `unpaired` (connected, no code ever issued),
+  `pair-code-issued` (connected, a code was issued), `errored`, `offline` (was
+  started this boot, now gone). **Codex exposes no read for the phone's side of the
+  pairing**: its sqlite holds the computer's enrollment, which exists whether or
+  not a phone paired, and the relay holds the pairing. So there is no `paired`
+  state; `pair-code-issued` does not prove a phone paired. A running daemon is
+  reported `busy`, so the idle timer does not suspend it and drop the phone's
+  computer; suspend it by hand.
+- Phone thread policy is v1's, with no image change: approval `never`, sandbox
+  `danger-full-access` (bubblewrap cannot run in these pods). D-49 already ships
+  `/etc/codex/requirements.toml` from the `dev-env-codex-requirements` ConfigMap
+  (a copy of v1's content in haynes-ops
+  `kubernetes/main/apps/dev/dev-env/app/resources/`), and agentd renders the
+  matching `config.toml` defaults. The agent image deliberately holds no
+  `/etc/codex/requirements.toml` (the smoke test asserts it), so none is added.
+- Like v1's, the phone picks the working directory, which bypasses per-worktree
+  isolation (the S-4 exec-server route would fix that). The session's `--model` is
+  recorded but the phone chooses its own per thread; `config.toml` carries the
+  GitOps default.
+- Needs haynes-ops, not this repo: the `AGENTD_CODEX_ACCESS_FILE` env and the
+  `codex-access` mount on the profile used (T13 finding 2), and a signed agent
+  image carrying this agentd.
+
 ## Shared-login projection consumer (Story110 T09 increment 1, 2026-10-19): source and unit tests only
 
 Q-11/D-11 stays the target. This is the first of the six increments of the

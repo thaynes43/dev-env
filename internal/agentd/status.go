@@ -92,6 +92,9 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 	switch {
 	case boot.AgentError != "":
 		st.Agent = protocol.AgentState{State: protocol.AgentFailed, Error: boot.AgentError}
+	case codexRemoteSession(sess):
+		// Story110 T17: the agent is the phone daemon, read from its own state.
+		st.RemoteControl, st.Agent = collectCodexRemote(ctx, s, sess, boot.BootID, now)
 	case sess.Mode == protocol.ModeRemote && !hasCur && !checkLogin(s).Usable(now):
 		// Story110 T03: a remote pod without a usable login has not started
 		// its agent. The message names the way forward, never a secret.

@@ -125,10 +125,24 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	switch v1alpha1.AgentKind(req.Agent) {
 	case v1alpha1.AgentClaude:
 	case v1alpha1.AgentCodex:
-		if !s.ManagedCodexTasks || req.Mode != "task" || len(snapshot) == 0 {
+		switch {
+		case req.Mode == "remote":
+			// Story110 T17: Codex remote runs the phone-pairing daemon on the
+			// session's HOME and the keeper's access-only login. It starts no
+			// task, so it needs neither the managed-task feature nor a project
+			// snapshot; a project is still a task-only route.
+			if req.Project != "" {
+				add("project", "a codex remote session is not a project task")
+			}
+			if err := protocol.ValidateCodexModel(req.Model); err != nil {
+				add("model", "%v", err)
+			}
+		case !s.ManagedCodexTasks || req.Mode != "task" || len(snapshot) == 0:
 			add("agent", "managed codex tasks require the enabled feature and an accepted project snapshot")
-		} else if err := protocol.ValidateCodexModel(req.Model); err != nil {
-			add("model", "%v", err)
+		default:
+			if err := protocol.ValidateCodexModel(req.Model); err != nil {
+				add("model", "%v", err)
+			}
 		}
 	case v1alpha1.AgentOpencode:
 		add("agent", "opencode sessions arrive in plan 09; plan 01 runs claude")
@@ -141,10 +155,10 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	case v1alpha1.ModeTask, v1alpha1.ModeLocal:
 		// Local sessions run the TUI from plan 02 (D-58).
 	case v1alpha1.ModeRemote:
-		// Story110 T03: the interim slice runs Claude only, on the pod's own
-		// login. Codex remote and the keeper's login stay plan 03.
-		if v1alpha1.AgentKind(req.Agent) != v1alpha1.AgentClaude {
-			add("mode", "remote sessions run claude only")
+		// Story110 T03: Claude remote runs on the pod's own login. Story110
+		// T17: Codex remote runs the pairing daemon on the keeper's login.
+		if k := v1alpha1.AgentKind(req.Agent); k != v1alpha1.AgentClaude && k != v1alpha1.AgentCodex {
+			add("mode", "remote sessions run claude or codex only")
 		}
 	case "":
 		add("mode", "required: task, local or remote")

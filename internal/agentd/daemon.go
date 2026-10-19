@@ -52,6 +52,8 @@ type Daemon struct {
 	remote *remoteWait
 	// claudeSyncErr is the last projection outcome logged (nil: applied).
 	claudeSyncErr error
+	// crm supervises a Codex remote session's phone daemon (Story110 T17).
+	crm *codexRemote
 }
 
 // logCopyEvery is how often the session's log is copied to the shared volume,
@@ -213,6 +215,11 @@ func (d *Daemon) workspaceBootHeartbeat(ctx context.Context, rec bootRecord) fun
 // twice and resume is the way back in (D-58). It returns the boot step and,
 // when the agent cannot run, why.
 func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Step, bootID string) (Step, string) {
+	if codexRemoteSession(d.Session) {
+		// Story110 T17: no CLI launch and no conversation to resume; the
+		// agent is the phone daemon, which the poll loop keeps up.
+		return d.startCodexRemote(ctx, bootID)
+	}
 	const name = "agent"
 	if d.Session.Agent == protocol.AgentCodex && (d.S.CodexAccessFile == "" || SyncCodexAccess(d.S, d.now()) != nil) {
 		return newStep(name, nil, ErrCodexAccess), ErrCodexAccess.Error()
@@ -388,6 +395,7 @@ func (d *Daemon) supervise(ctx context.Context) error {
 			}
 			d.syncClaudeAccess()
 			d.pollRemoteLogin(ctx)
+			d.pollCodexRemote(ctx)
 			d.continueAfterRenewal(ctx)
 			if m := newestMtime(d.S.statePath(resultFile), d.S.statePath(tuiExitFile)); !m.Equal(last) {
 				last = m
@@ -443,6 +451,7 @@ func (d *Daemon) expireCredentials() {
 // tmux, so nothing else would reach it; a CLI that is SIGKILLed instead
 // leaves its Remote Control entry offline and unarchived (S-6, S-15).
 func (d *Daemon) shutdown() {
+	d.stopCodexRemote()
 	var p agentPid
 	if readJSONFile(d.S.statePath(pidFile), &p) == nil && pidAlive(p) {
 		d.Log.Info("SIGTERM: forwarding to the agent", "pid", p.Pid, "grace", d.StopGrace)

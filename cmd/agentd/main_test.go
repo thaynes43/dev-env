@@ -235,3 +235,21 @@ func TestCtlLogin(t *testing.T) {
 		t.Errorf("code on a task session: %d %q", code, errOut)
 	}
 }
+
+// ctl codex-pair takes no arguments and is for a Codex --interactive session
+// only. A refusal prints nothing on stdout (Story110 T17).
+func TestCtlCodexPair(t *testing.T) {
+	home := t.TempDir()
+	claudeRemote := map[string]string{"HOME": home, "AGENTD_SESSION": `{"name":"r-1","repo":"r","agent":"claude","mode":"remote","model":"claude-haiku-4-5"}`}
+	codexTask := map[string]string{"HOME": home, "AGENTD_SESSION": `{"name":"r-1","repo":"r","agent":"codex","mode":"remote","model":"gpt-6-luna"}`}
+	if code, out, errOut := runArgs([]string{"ctl", "codex-pair", "extra"}, codexTask); code != exitUsage || out != "" || !strings.Contains(errOut, "usage: ctl codex-pair") {
+		t.Errorf("extra argument: %d %q %q", code, out, errOut)
+	}
+	if code, out, errOut := runArgs([]string{"ctl", "codex-pair"}, claudeRemote); code != exitFailure || out != "" || !strings.Contains(errOut, "codex --interactive") {
+		t.Errorf("a claude session: %d %q %q", code, out, errOut)
+	}
+	// A codex remote session with no keeper login has no code to give.
+	if code, out, errOut := runArgs([]string{"ctl", "codex-pair"}, codexTask); code != exitFailure || out != "" || !strings.Contains(errOut, "codex-pair") {
+		t.Errorf("no login: %d %q %q", code, out, errOut)
+	}
+}
