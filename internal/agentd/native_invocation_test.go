@@ -41,12 +41,25 @@ if [ "$1" = "resume" ]; then
   exit 0
 fi
 cat >> "$SYNTHETIC_INITIAL_PROMPTS"
+if [ -n "$SYNTHETIC_NATIVE_INITIAL_RELEASE" ]; then IFS= read -r ready < "$SYNTHETIC_NATIVE_INITIAL_RELEASE"; fi
 printf '%s\n' '{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123456789abc"}' '{"type":"turn.started"}' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1,"cached_input_tokens":0}}'
 `)
+	// Keep the initial fake CLI alive until its exact startup receipt exists.
+	// Immediate exit can become a zombie before recordStarted reads its start
+	// time, which correctly refuses to infer a live identity from a dead process.
+	barrierPath := filepath.Join(t.TempDir(), "initial-release")
+	if err := syscall.Mkfifo(barrierPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	barrier, err := os.OpenFile(barrierPath, os.O_RDWR|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = barrier.Close() })
 	l := Launch{Provider: protocol.AgentCodex, Session: sess.Name, SessionUID: sess.SessionUID, PodUID: s.PodUID,
 		ChildDecisions: true, NativeInvocationID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Argv: []string{cli, "exec", "--json"},
 		Dir: s.WorktreePath(sess.Name), Prompt: "EXACT-SYNTHETIC-INITIAL-PROMPT", BootID: "same-boot", CreatedAt: rescueNow,
-		Env:     []string{"SYNTHETIC_NATIVE_SPAWNS=" + spawns, "SYNTHETIC_INITIAL_PROMPTS=" + prompts},
+		Env:     []string{"SYNTHETIC_NATIVE_SPAWNS=" + spawns, "SYNTHETIC_INITIAL_PROMPTS=" + prompts, "SYNTHETIC_NATIVE_INITIAL_RELEASE=" + barrierPath},
 		LogPath: s.LogPath(sess.Name), EventsPath: s.statePath(eventsFile)}
 	if err := admitWorkspaceLaunch(context.Background(), s, sess, &l); err != nil {
 		t.Fatal(err)
@@ -63,13 +76,56 @@ printf '%s\n' '{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123
 	t.Setenv("AGENTD_ENABLE_CODEX_TASKS", "true")
 	t.Setenv("AGENTD_ENABLE_CHILD_DECISIONS", "true")
 	path := writeLaunch(t, s, l)
-	if code := RunAgent(path, &syncBuffer{}, make(chan os.Signal), 20*time.Millisecond); code != 0 {
-		t.Fatal("initial native invocation refused", code)
+	// The pane holds only agentd messages and the fake CLI's constant synthetic
+	// output, so it is safe to include in failure messages.
+	pane := &syncBuffer{}
+	released := make(chan error, 1)
+	go func() {
+		// The deadline only bounds a failing run; it never gates a passing one.
+		deadline := time.NewTimer(10 * time.Second)
+		defer deadline.Stop()
+		tick := time.NewTicker(10 * time.Millisecond)
+		defer tick.Stop()
+		var receiptErr error
+		for ownedNativeStarted(s, l) != nil {
+			select {
+			case <-tick.C:
+				continue
+			case <-deadline.C:
+				receiptErr = fmt.Errorf("synthetic initial invocation never published its exact live startup receipt")
+			}
+			break
+		}
+		_, releaseErr := barrier.WriteString("ready\n")
+		if receiptErr != nil {
+			released <- receiptErr
+		} else {
+			released <- releaseErr
+		}
+	}()
+	code := RunAgent(path, pane, make(chan os.Signal), 20*time.Millisecond)
+	err = <-released
+	// Remove the FIFO so a regression that replays this invocation fails the
+	// fake CLI's read at once instead of blocking until the test times out.
+	_ = os.Remove(barrierPath)
+	if err != nil {
+		t.Fatalf("%v; synthetic pane tail: %q", err, paneTail(pane))
+	}
+	if code != 0 {
+		t.Fatalf("initial native invocation refused %d; synthetic pane tail: %q", code, paneTail(pane))
 	}
 	if err := readJSONFile(path, &l); err != nil {
 		t.Fatal(err)
 	}
 	return s, sess, l, path
+}
+
+func paneTail(pane *syncBuffer) string {
+	diagnostic := pane.String()
+	if len(diagnostic) > 4096 {
+		diagnostic = diagnostic[len(diagnostic)-4096:]
+	}
+	return diagnostic
 }
 
 func nextNativeInvocation(t *testing.T, l Launch) Launch {
@@ -147,11 +203,7 @@ func TestNativeInvocationOwnedWaitAllowsOneSameWriterContinuation(t *testing.T) 
 		t.Fatal(err)
 	}
 	if code != 0 {
-		diagnostic := pane.String()
-		if len(diagnostic) > 4096 {
-			diagnostic = diagnostic[len(diagnostic)-4096:]
-		}
-		t.Fatalf("same-owner continuation was rejected %d; synthetic pane tail: %q", code, diagnostic)
+		t.Fatalf("same-owner continuation was rejected %d; synthetic pane tail: %q", code, paneTail(pane))
 	}
 	if code := RunAgent(s.statePath(resumeFile), &syncBuffer{}, make(chan os.Signal), 20*time.Millisecond); code == 0 {
 		t.Fatal("causal receipt was consumed twice")
