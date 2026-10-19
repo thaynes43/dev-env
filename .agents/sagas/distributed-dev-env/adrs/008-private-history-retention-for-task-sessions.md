@@ -44,12 +44,15 @@ HOME volume.
 
 ## Consequences
 
-- A remote or local Session gets no executor-identity retention. Its HOME is
-  protected by the volume's own guards, and the legacy rescue exec runs in its
-  pod as it did before retention. DESIGN-008's "no legacy rescue exec in a
-  provider HOME" holds for task Sessions only.
+- A remote or local Session gets no executor-identity retention, and its HOME
+  is no longer held by the retention latch. After a verified rescue, D-62's
+  autoarchive of a suspended Session (after `archiveAfter`) and D-51's archive
+  on a reap both delete the Session's HOME volume, provider history included,
+  as they did before retention existed. Resume before `archiveAfter` to keep it.
+  The legacy rescue exec runs in the pod again. DESIGN-008's "no legacy rescue
+  exec in a provider HOME" holds for task Sessions only.
 - Q-31's expiry reaches only a latched Session, so a remote or local Session
-  never expires through it; D-51's reap archive covers it as before.
+  never expires through it.
 - Not done here: the executor-stop flag, any HOME archive or deletion, and H7 or
   H8. Plan 11 follow-up F3 is unchanged.
 
