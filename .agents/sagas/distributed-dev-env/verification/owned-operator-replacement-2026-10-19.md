@@ -13,8 +13,10 @@ replacement, and the old ten-second API shutdown returns before an existing
 sixteen-second native request can finish. Observation alone gains the standard
 HTTP transport's replayable-request marker (not transmitted); it still requires
 a new complete exact-binding response within its original two-second context.
-Admission and mutations do not gain retries. Server drain becomes seventeen
-seconds without extending request/task deadlines. Local access sync is unchanged.
+Admission and mutations do not gain retries. Server drain becomes nineteen
+seconds to include the existing eighteen-second caller envelope (authentication
+and budget preflight precede the sixteen-second native timer) plus its response,
+without extending request/task deadlines. Local access sync is unchanged.
 
 Regression coverage retains denial, revocation, identity, malformed/truncated
 status, cancellation/deadline, lost-admission and fresh-connection failure refusal.

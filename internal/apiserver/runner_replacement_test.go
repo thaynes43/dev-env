@@ -54,9 +54,18 @@ func TestRunnerDrainsExistingNativeRequestEnvelope(t *testing.T) {
 	release := make(chan struct{})
 	requestCanceled := make(chan struct{}, 1)
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		// Authentication/budgetCaller run before the native route timer.
+		preflight := time.NewTimer(2 * time.Second)
+		defer preflight.Stop()
+		select {
+		case <-preflight.C:
+		case <-r.Context().Done():
+			requestCanceled <- struct{}{}
+			return
+		}
 		bounded, done := context.WithTimeout(r.Context(), apiv1.NativeControlRequestTimeout)
 		defer done()
-		close(entered)
 		select {
 		case <-release:
 			_, _ = w.Write([]byte("completed-within-original-native-envelope"))
@@ -66,8 +75,8 @@ func TestRunnerDrainsExistingNativeRequestEnvelope(t *testing.T) {
 	})
 	r, cancel, stopped := replacementRunner(t, dir, h)
 	hc := replacementHTTP(pool, r.boundAddr)
-	hc.Timeout = apiv1.NativeControlRequestTimeout
-	hc.Transport.(*http.Transport).ResponseHeaderTimeout = apiv1.NativeControlRequestTimeout
+	hc.Timeout = apiv1.NativeControlRequestTimeout + 2*time.Second
+	hc.Transport.(*http.Transport).ResponseHeaderTimeout = hc.Timeout
 	response := make(chan error, 1)
 	go func() {
 		resp, e := hc.Post("https://"+r.boundAddr()+"/native", "application/json", nil)
@@ -80,9 +89,9 @@ func TestRunnerDrainsExistingNativeRequestEnvelope(t *testing.T) {
 	<-entered
 	started := time.Now()
 	cancel()
-	// 11s is within the existing16s native request bound, beyond the old10s
-	// server drain. A graceful replacement must not let the process exit first.
-	delay := time.NewTimer(11 * time.Second)
+	// 2s preflight +15.25s native work fits the existing18s caller and16s
+	// route, but exceeds a drain of16s+1s that omits preflight.
+	delay := time.NewTimer(17250 * time.Millisecond)
 	defer delay.Stop()
 	select {
 	case e := <-stopped:

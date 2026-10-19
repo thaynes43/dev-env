@@ -378,8 +378,8 @@ func (r *Runner) boundAddr() string {
 	return ""
 }
 
-// Start serves until ctx ends, then drains the existing native request envelope
-// plus one second to finish its response. A certificate
+// Start serves until ctx ends, then drains the existing eighteen-second owner
+// HTTP envelope (including preflight) plus one second for its response. A certificate
 // watcher that fails stops the API with its error, so the pod restarts rather
 // than serve a certificate that no longer renews.
 func (r *Runner) Start(ctx context.Context) error {
@@ -425,7 +425,7 @@ func (r *Runner) Start(ctx context.Context) error {
 			failure = fmt.Errorf("the /v1 API's certificate watcher: %w", err)
 		}
 		r.ready.Store(false)
-		sctx, cancel := context.WithTimeout(context.Background(), apiv1.NativeControlRequestTimeout+time.Second)
+		sctx, cancel := context.WithTimeout(context.Background(), apiv1.NativeControlRequestTimeout+3*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(sctx)
 	}()

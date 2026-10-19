@@ -685,8 +685,9 @@ the exact original binding. Denials, malformed responses, cancellation, timeout
 and fresh-connection failure remain refusals; admission and mutation requests
 do not gain replay permission. Local access synchronization remains required.
 
-The API drains existing requests for seventeen seconds at shutdown, covering
-the existing sixteen-second native request bound plus its response. This does
+The API drains existing requests for nineteen seconds at shutdown, covering
+the existing eighteen-second owner HTTP envelope (including preflight) plus
+its response. This does
 not extend any task or request deadline. Deployment must keep a terminating
 endpoint serving fresh authority until service routing withdraws it; connection
 replacement alone cannot repair a fresh dial to an already closed listener.
