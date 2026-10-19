@@ -47,3 +47,20 @@ func TestCodexAccessExpiryAndMetadataSkew(t *testing.T) {
 		t.Fatal("expired access accepted")
 	}
 }
+
+func TestDecodeTolerant(t *testing.T) {
+	var v struct {
+		A string `json:"a"`
+	}
+	if DecodeTolerant([]byte(`{"a":"x","extra":{"n":[1]}}`), &v) != nil || v.A != "x" {
+		t.Fatal("an unknown member was refused")
+	}
+	if DecodeStrict([]byte(`{"a":"x","extra":1}`), &v) == nil {
+		t.Fatal("DecodeStrict must still refuse an unknown member")
+	}
+	for _, bad := range []string{``, `{"a":"x","a":"y"}`, `{"a":"x"}{}`, `{"a":"x","n":{"b":1,"b":2}}`, `[]`} {
+		if DecodeTolerant([]byte(bad), &v) == nil {
+			t.Fatalf("accepted %q", bad)
+		}
+	}
+}

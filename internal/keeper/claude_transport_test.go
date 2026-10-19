@@ -103,6 +103,31 @@ func TestClaudeRefreshRotatedAndAbsentRefreshToken(t *testing.T) {
 	}
 }
 
+// An unknown member must not discard a 200: the provider already spent the old
+// refresh token. Required fields and duplicate-member refusal still hold.
+func TestClaudeRefreshToleratesUnknownMembers(t *testing.T) {
+	body := `{"surprise":{"deep":[1,2]},"access_token":"` + claudeAccessCanary + `","token_type":"Bearer","expires_in":28800,"refresh_token":"` + claudeNewRefreshCanary +
+		`","account":{"uuid":"acct-1","email_address":"synthetic@example.invalid","phone":"1"},"organization":{"uuid":"org-1","name":"Synthetic Org","role":"x"},"future":true}`
+	tr, cap := claudeTokenServer(t, 200, body)
+	got, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil)
+	if err != nil {
+		t.Fatalf("unknown members discarded a 200: %v", err)
+	}
+	if got.Access.Reveal() != claudeAccessCanary || got.Refresh.Reveal() != claudeNewRefreshCanary || got.AccountUUID != "acct-1" || got.OrganizationUUID != "org-1" || got.ExpiresIn != 8*time.Hour {
+		t.Fatal("known members decoded wrongly beside unknown ones")
+	}
+	if cap.Calls.Load() != 1 {
+		t.Fatal("more than one request")
+	}
+	// Unknown members never rescue a missing required one.
+	for _, b := range []string{`{"extra":1,"expires_in":28800}`, `{"extra":1,"access_token":"` + claudeAccessCanary + `"}`} {
+		tr, _ := claudeTokenServer(t, 200, b)
+		if _, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil); !errors.Is(err, errClaudeRefresh) {
+			t.Fatal("a missing required member was accepted")
+		}
+	}
+}
+
 func TestClaudeRefreshErrorClasses(t *testing.T) {
 	huge := okClaudeBody(`,"scope":"` + strings.Repeat("a", 70<<10) + `"`)
 	cases := map[string]struct {
@@ -115,7 +140,6 @@ func TestClaudeRefreshErrorClasses(t *testing.T) {
 		"not json":           {200, `access ` + claudeAccessCanary},
 		"empty":              {200, ``},
 		"oversize":           {200, huge},
-		"unknown field":      {200, okClaudeBody(`,"surprise":"` + claudeNewRefreshCanary + `"`)},
 		"duplicate field":    {200, okClaudeBody(`,"expires_in":10`)},
 		"trailing document":  {200, okClaudeBody("") + `{}`},
 		"missing access":     {200, `{"expires_in":28800}`},
@@ -130,7 +154,7 @@ func TestClaudeRefreshErrorClasses(t *testing.T) {
 		"bad refresh":        {200, okClaudeBody(`,"refresh_token":"a b"`)},
 		"huge refresh life":  {200, okClaudeBody(`,"refresh_token_expires_in":99999999999`)},
 		"empty account uuid": {200, okClaudeBody(`,"account":{"uuid":""}`)},
-		"extra account key":  {200, okClaudeBody(`,"account":{"uuid":"a","phone":"1"}`)},
+		"duplicate nested":   {200, okClaudeBody(`,"account":{"uuid":"a","uuid":"b"}`)},
 		"empty org uuid":     {200, okClaudeBody(`,"organization":{}`)},
 		"blank scope token":  {200, okClaudeBody(`,"scope":"   "`)},
 		"too many scopes":    {200, okClaudeBody(`,"scope":"` + strings.TrimSpace(strings.Repeat("s ", 40)) + `"`)},
@@ -246,12 +270,13 @@ func TestClaudeProfileErrors(t *testing.T) {
 		status int
 		body   string
 	}{
-		"unauthorized": {401, claudeProfileBody},
-		"not json":     {200, claudeAccessCanary},
-		"no account":   {200, `{"organization":{"uuid":"org-1"}}`},
-		"no org":       {200, `{"account":{"uuid":"acct-1"}}`},
-		"blank tier":   {200, `{"account":{"uuid":"a"},"organization":{"uuid":"o","rate_limit_tier":"a b"}}`},
-		"oversize":     {200, `{"account":{"uuid":"a"},"organization":{"uuid":"o"},"pad":"` + strings.Repeat("x", 70<<10) + `"}`},
+		"unauthorized":   {401, claudeProfileBody},
+		"not json":       {200, claudeAccessCanary},
+		"duplicate uuid": {200, `{"account":{"uuid":"a","uuid":"b"},"organization":{"uuid":"o"}}`},
+		"no account":     {200, `{"organization":{"uuid":"org-1"}}`},
+		"no org":         {200, `{"account":{"uuid":"acct-1"}}`},
+		"blank tier":     {200, `{"account":{"uuid":"a"},"organization":{"uuid":"o","rate_limit_tier":"a b"}}`},
+		"oversize":       {200, `{"account":{"uuid":"a"},"organization":{"uuid":"o"},"pad":"` + strings.Repeat("x", 70<<10) + `"}`},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

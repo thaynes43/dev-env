@@ -82,8 +82,7 @@ func newClaudeHTTPRefresh() *claudeHTTPRefresh {
 }
 
 type claudeAccountWire struct {
-	UUID  string `json:"uuid"`
-	Email string `json:"email_address,omitempty"`
+	UUID string `json:"uuid"`
 }
 
 type claudeOrgWire struct {
@@ -93,7 +92,6 @@ type claudeOrgWire struct {
 type claudeTokenWire struct {
 	Access           string             `json:"access_token"`
 	Refresh          string             `json:"refresh_token,omitempty"`
-	Type             string             `json:"token_type,omitempty"`
 	ExpiresIn        int64              `json:"expires_in"`
 	RefreshExpiresIn int64              `json:"refresh_token_expires_in,omitempty"`
 	Scope            string             `json:"scope,omitempty"`
@@ -128,8 +126,12 @@ func (t *claudeHTTPRefresh) refresh(ctx context.Context, token secretValue, scop
 	if err != nil || len(data) > claudeauth.MaxBytes {
 		return claudeTokens{}, errClaudeRefresh
 	}
+	// Unknown members are ignored: by now the provider has accepted the POST and
+	// spent the old refresh token, so refusing a 200 over an extra member would
+	// lose the login. Duplicate members, the size bound and the required
+	// access_token and expires_in are still enforced; present fields are validated.
 	var w claudeTokenWire
-	if codexauth.DecodeStrict(data, &w) != nil {
+	if codexauth.DecodeTolerant(data, &w) != nil {
 		return claudeTokens{}, errClaudeRefresh
 	}
 	out, ok := validClaudeTokens(w)
@@ -197,7 +199,7 @@ func validClaudeTokens(w claudeTokenWire) (claudeTokens, bool) {
 // profile reads the account and subscription metadata for an access token. It
 // is a plain GET, so a failure is retryable and carries no spent-token risk.
 // The response has many fields this keeper does not use, so it is decoded
-// tolerantly; only the five named members are read, and each is bounded.
+// tolerantly (unknown members ignored, duplicate members refused); only the five named members are read, and each is bounded.
 func (t *claudeHTTPRefresh) profile(ctx context.Context, access secretValue) (claudeProfile, error) {
 	c, cancel := context.WithTimeout(ctx, claudeRequestTime)
 	defer cancel()
@@ -228,7 +230,7 @@ func (t *claudeHTTPRefresh) profile(ctx context.Context, access secretValue) (cl
 			Tier string `json:"rate_limit_tier"`
 		} `json:"organization"`
 	}
-	if json.Unmarshal(data, &w) != nil || !claudeField(w.Account.UUID) || !claudeField(w.Organization.UUID) {
+	if codexauth.DecodeTolerant(data, &w) != nil || !claudeField(w.Account.UUID) || !claudeField(w.Organization.UUID) {
 		return claudeProfile{}, errClaudeProfile
 	}
 	if w.Organization.Tier != "" && !claudeField(w.Organization.Tier) {
