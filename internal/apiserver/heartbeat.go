@@ -96,6 +96,7 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 
 	}
 	sess.Status.Agent = agentStatus(st, metav1.NewTime(s.now()))
+	sess.Status.RemoteControl = remoteControlStatus(st.RemoteControl)
 	if st.Usage != nil && st.UsageObservation == nil && sess.Status.UsageObservation == nil {
 		sess.Status.Usage = usageStatus(*st.Usage)
 	}
@@ -113,6 +114,20 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 		return 0, nil, fromKubeError(err, "session "+key.Name+" usage observation")
 	}
 	return http.StatusNoContent, nil, nil
+}
+
+// remoteControlStatus is status.remoteControl from a heartbeat: the entry's
+// name, id, link and state, each clipped (Story110 T03).
+func remoteControlStatus(rc *protocol.RemoteControl) *v1alpha1.RemoteControlStatus {
+	if rc == nil {
+		return nil
+	}
+	return &v1alpha1.RemoteControlStatus{
+		Name:      clip(rc.Name, maxShort),
+		SessionID: clip(rc.SessionID, maxShort),
+		URL:       clip(rc.URL, maxMessage),
+		State:     clip(rc.State, maxShort),
+	}
 }
 
 // agentStatus is status.agent from a heartbeat, received at now.

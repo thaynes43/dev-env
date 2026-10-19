@@ -149,7 +149,7 @@ func TestLaptopReadAndExecUseOneContext(t *testing.T) {
 				t.Errorf("forward = %q, want %q", l.starts[0], wantForward)
 			}
 			for _, command := range h.ran {
-				if !strings.HasPrefix(command, strings.Join(prefix, " ")+" exec -n dev-agents ") {
+				if !strings.HasPrefix(command, "env "+kubectlSPDYEnv+" "+strings.Join(prefix, " ")+" exec -n dev-agents ") {
 					t.Errorf("exec context differs: %s", command)
 				}
 			}

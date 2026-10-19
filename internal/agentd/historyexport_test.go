@@ -900,3 +900,30 @@ func TestHistoryExportListsTheGitRescue(t *testing.T) {
 		})
 	}
 }
+
+// The pod-owned Claude login of a remote session never enters the export: not
+// the plan, not the stream (Story110 T03). The canary stands for a token.
+func TestHistoryExportNeverCarriesThePodsClaudeLogin(t *testing.T) {
+	r := newHistoryRig(t)
+	login := `{"claudeAiOauth":{"accessToken":"` + canaryAccess + `","refreshToken":"` + canaryRefresh + `"},"mcpOAuth":{"x":"canary-mcp"}}`
+	r.write(t, ".claude/.credentials.json", login)
+	r.write(t, ".claude/.credentials.json.tmp.e5023036", login)
+	plan := r.plan(t)
+	sum, _, err := HistoryPlanSHA256(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planJSON, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := StreamHistoryExport(r.s, r.o, sum, &buf); err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	for what, b := range map[string][]byte{"plan": planJSON, "stream": buf.Bytes()} {
+		if bytes.Contains(b, []byte("canary")) || bytes.Contains(b, []byte(".credentials.json")) && what == "stream" {
+			t.Errorf("the %s carries the login", what)
+		}
+	}
+}

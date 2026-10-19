@@ -82,7 +82,7 @@ cmd/dev-env-keeper/      the keeper, its own binary in the operator image (D-38)
 cmd/agentd/              the in-pod supervisor: `run`, `hold` (the rescue pod, D-55), `shelf [--history-archive]` (the shelf pod,
                          D-67, DESIGN-025), `run-agent`
                          (a task, or a TUI, D-58), `render`, `ctl status|rescue [--stop-agent]|prepare-restart` (D-40 to D-43,
-                         D-48, D-58), `ctl deliver|log` (D-65), `ctl rescues|hold-rescue|prune` (D-67),
+                         D-48, D-58), `ctl deliver|log` (D-65), `ctl login url|code|status` (remote sessions, Q-110-01), `ctl rescues|hold-rescue|prune` (D-67),
                          `ctl grant-install|grant-remove|grant-list|grant-use` (D-63),
                          `ctl history-export|history-archive` (DESIGN-025 H4), `ctl coord-archive put [--mark]|mark|lookup|get` (DESIGN-024 R2; journal grace, recorded-time or pinned get)
 cmd/agent-run/           the CLI, one static binary (CGO_ENABLED=0, D-06); main only, the commands are internal/agentrun
@@ -108,7 +108,7 @@ internal/activity/       the reaper of expired declare-activity declarations (D-
 internal/shelf/          the operator's side of the shelf pod (D-67): finds it, lists and prunes rescues there by exec; the pruner is
                          a leader-only runnable; ExecSlots, the per-replica limit on archive execs (DESIGN-024 5, DESIGN-025 6.4);
                          HistoryReader, the history archive's reads for the API (DESIGN-025 8)
-internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66, D-67): -p, --local, list, show, log, msg, reap, suspend, resume, rescue list|restore, history list|show|read (DESIGN-025), declare-activity, attach, detach, fleet; finds the API and a token in a session
+internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66, D-67): -p, --local, list, show, log, msg, reap, suspend, resume, rescue list|restore, history list|show|read (DESIGN-025), declare-activity, attach, detach, login, fleet; finds the API and a token in a session
                          pod, in another pod (a minted token) or from flags; imports the standard library, apiv1 and
                          agentd's protocol only (`make build` checks); tests run against an httptest TLS server
 internal/keeper/         the keeper (D-52): mints the haynes-dev-bot token into dev-agents/dev-env-gh-token every 40 minutes

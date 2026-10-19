@@ -46,13 +46,13 @@ Usage:
   declare-activity start "<what>" --scope <a,b>   declare dev work, so it is not taken for a fault
   agent-run attach <name>                         attach to a session's TUI (Tom only)
   agent-run detach <name>                         detach every client from it (Tom only)
+  agent-run login <name> [url|code|status]        set up an --interactive session's Claude login (Tom only)
   agent-run fleet                                 show what runs and waits, by node and revision
   agent-run version                               print the version
   agent-run help [<command>]                      print help for agent-run or one command
 
-agent-run run ... is the same as agent-run ... -p, as in v1. --interactive (a
-TUI with Remote Control) arrives with plan 03; prune and sweep are gone, because
-the operator reaps sessions itself.
+agent-run run ... is the same as agent-run ... -p, as in v1. prune and sweep are
+gone, because the operator reaps sessions itself.
 
 Every command but version and help takes these flags:
   -o, --output json       print the API's answer as JSON (list and run also take -o name)
@@ -179,13 +179,17 @@ fields, not complete history, served model, billed cost or confirmed stop.
 	"run": `Usage: agent-run [--repo] <repo> -p "<task>" [flags]
        agent-run --project <project> [--repo <repo>] -p "<task>" [flags]
        agent-run [--repo] <repo> --local [flags]
+       agent-run [--repo] <repo> --interactive [flags]
        agent-run run [--repo] <repo> -p "<task>" [flags]
 
 Starts a session: a pod on a worker node clones the repository and keeps its
 work on the session's volume. With -p it runs the agent once on the task,
 headless. With --local it starts the agent's TUI in tmux, which Tom attaches to
-with agent-run attach. When a session's pod starts again later, the agent
-resumes the same conversation in the TUI; a task is never run twice.
+with agent-run attach. With --interactive it starts the same TUI with Remote
+Control, so the session also shows in the Claude app; its Claude login lives in
+its own pod, and agent-run login sets it up (an idle one is suspended after 72h,
+which archives its phone entry until it resumes). When a session's pod starts
+again later, the agent resumes the same conversation in the TUI; a task is never run twice.
 agent-run prints the session's name, then waits up to --wait for the pod to
 start. If the scheduler cannot place the pod, it prints the scheduler's reason
 as soon as it is clear; the session stays Pending and starts when room frees up.
@@ -202,6 +206,7 @@ Flags:
                              --idempotency-key, --wait=0 and -o json
   -p, --prompt <task>        the task, at most 64 KiB
   --local                    an interactive session instead of a task: the TUI, no prompt
+  --interactive              --local plus Remote Control (claude only), needs agent-run login
   --prompt-file <path>       read the task from a file instead; - reads stdin
   --repo <name>              the repository under the GitHub owner, such as haynes-ops;
                              or give it as the first argument. With --project,
@@ -237,8 +242,7 @@ Flags:
                              0 returns as soon as the session is created)
   -o name|json               print only the name, or the session as JSON
 
-v1's --interactive (a TUI with Remote Control) arrives with plan 03. --safe is
-gone: a session pod runs its agent without approval prompts, and the platform is
+--safe is gone: a session pod runs its agent without approval prompts, and the platform is
 the boundary.
 `,
 	"suspend": `Usage: agent-run suspend <name>... [-o json]
@@ -372,6 +376,18 @@ with ctrl-b d; the agent keeps running. The session must be Running.
 It is for Tom, from the workbench, a laptop or the v1 pod. An agent cannot exec
 into another session's pod (D-19), so inside a session pod attach refuses and
 points at agent-run msg. kubectl must be on PATH.
+`,
+	"login": `Usage: agent-run login <name> [url|code|status]
+
+Sets up the Claude login of a --interactive session. The login is the pod's own;
+nothing is copied from another pod. While status says login-required: run url,
+open the link and sign in, then pipe the code the page shows into code, for
+example: read -rs c; printf '%s' "$c" | agent-run login <name> code. The link and
+the code are never logged or stored. The agent starts by itself once the login
+exists. status (the default) says where it stands.
+
+Like attach, it is for Tom's workbench, a laptop or the v1 pod: it runs kubectl
+exec into the session's pod, which an agent in a session pod cannot do (D-19).
 `,
 	"detach": `Usage: agent-run detach <name>
 

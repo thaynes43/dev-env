@@ -16,6 +16,54 @@ remain relevant. No plan 03 code or login is built by the spike. Preserve the
 current work order: approval design, parity audit, keeper
 SSH minting, then the prerequisite if chosen. Never copy v1's refresh token.
 
+## Ruling Q-110-01: pod-owned login, interim slice (Tom, 2026-10-19)
+
+Tom chose "Pod-owned login" by phone prompt, as the smallest slice that gives a v2
+Claude session a phone link. It is an **interim departure from Q-11** (the keeper
+owns the one Max login); Q-11 and everything below stay the target. Story110 T03
+builds the slice. Source and tests only until a deployed acceptance says more.
+
+What the slice does:
+
+- `agent-run --interactive` (Claude only) creates a `remote`-mode session. The
+  operator leaves `CLAUDE_CODE_OAUTH_TOKEN` out of the pod and agentd removes it
+  from the agent's environment, so a profile `envFrom` Secret cannot bring it back.
+- The pod's own CLI owns its login. No refresh token is copied from v1, the keeper
+  or another pod. agentd reads `~/.claude/.credentials.json` for two facts only,
+  that a login is there and when its refresh token lapses, and never runs
+  `claude auth status` against that HOME. No token value reaches a status, log,
+  error, event, rescue bundle or history export (the credentials file stays
+  `HistoryClassCredential`; the rescue copies repositories only).
+- With no usable login agentd reports `status.agent.status: login-required` and
+  `status.remoteControl.state: login-required`, and holds the agent. The login is
+  the v1 renewal ceremony, driven by a coordinator: `agent-run login <name> url`
+  prints the sign-in link, Tom signs in and sends back the code, and
+  `agent-run login <name> code` reads it from stdin. Both run `agentd ctl login`
+  in the pod by `kubectl exec`; the link and code are never logged or stored.
+  agentd starts `claude --remote-control <session-name>` once the login exists.
+- The exec uses kubectl's SPDY transport (`KUBECTL_REMOTE_COMMAND_WEBSOCKETS=false`),
+  which is a POST. The v1 pod's service account may create `pods/exec` in
+  `dev-agents` but not get it, and kubectl's default WebSocket exec begins as a GET.
+  No RBAC is added. Live exec is unverified; if it is refused, that is a reported
+  gap, not an API route in this slice.
+- agentd reports `status.remoteControl.{name,sessionId,url,state}` from
+  `~/.claude/sessions/<pid>.json`: `starting` until the record holds a
+  `bridgeSessionId`, then `registered` with the link
+  `https://claude.ai/code/<bridgeSessionId>`; `offline` once the CLI is gone.
+- Stop, resume and a pod roll on the same HOME use agentd's existing SIGTERM
+  forwarding and `claude --resume <id> --remote-control <name>` (S-6). A remote
+  session idle for 72h (the default idle window) is suspended, which archives its
+  phone entry until it resumes. Update survival is not accepted until a real pod
+  roll shows the same entry and history.
+- Egress needs no change: session pods may reach any public address on TCP 80 and
+  443 (`dev-env-session-web`).
+
+Limits: each remote session has its own login and needs its own ceremony; reaping
+a session deletes its login, and a rescue restore never carries one. Staying in
+plan 03: the keeper-owned login, refresh and fencing, `dev-env-claude-live`, the
+console and its renewal page, the standby, archive on reap, messaging tier 2, and
+the 401-window resume.
+
 ## Goal
 
 Tom drives v2 sessions from his phone. The keeper is the sole owner of the Max login

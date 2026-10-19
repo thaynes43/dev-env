@@ -2,6 +2,8 @@ package agentd
 
 import (
 	"context"
+	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -473,5 +475,41 @@ func TestRescueOfAnEmptyVolume(t *testing.T) {
 				t.Errorf("found empty: %+v", rep)
 			}
 		})
+	}
+}
+
+// A remote session's pod-owned login lives in $HOME/.claude/.credentials.json.
+// The rescue copies repositories only, so nothing of it reaches the report or
+// anything under the shared volume the bundle is written to (Story110 T03).
+func TestRescueNeverCarriesThePodsClaudeLogin(t *testing.T) {
+	rig := newRescueRig(t)
+	writeCredentials(t, rig.s, 0)
+	writeFile(t, filepath.Join(rig.s.ClaudeConfigDir, ".credentials.json.tmp.abc123"), canaryAccess+canaryRefresh)
+	rep := rig.rescue(t)
+	if !rep.OK {
+		t.Fatalf("report %+v", rep)
+	}
+	data, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "canary") {
+		t.Error("the rescue report carries a token")
+	}
+	err = filepath.WalkDir(rig.s.SharedDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		if strings.Contains(string(b), "canary") || strings.HasSuffix(path, ".credentials.json") {
+			t.Errorf("%s carries the pod's login", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

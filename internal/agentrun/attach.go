@@ -60,34 +60,9 @@ func (a *app) tmuxExec(ctx context.Context, verb string, args []string, interact
 	if len(pos) != 1 {
 		return usageError("%s takes one session name; agent-run list shows them", verb)
 	}
-	if a.inSessionPod() {
-		return fail(ExitAuth, "%s is for Tom, from the workbench, a laptop or the v1 pod: an agent has no exec into another session's pod (D-19). Send it a message instead: agent-run msg %s \"<text>\"", verb, pos[0])
-	}
-	kubectl, err := a.env.LookPath("kubectl")
-	if err != nil {
-		return fail(ExitFailed, "%s runs kubectl exec, and kubectl is not on PATH", verb)
-	}
-	c, err := a.connect(ctx, cmd.c.conn)
+	argv, err := a.sessionExecBase(ctx, cmd, verb, pos[0])
 	if err != nil {
 		return err
-	}
-	// Outside a pod, exec must use the context captured for CA/token/forward.
-	// connect rejects selectors with automatic in-pod API/identity discovery.
-	if a.env.Getenv(envKubeHost) == "" || cmd.c.conn.kubeconfig != "" || cmd.c.conn.context != "" {
-		if _, err := a.kubectl(ctx, cmd.c.conn); err != nil {
-			return err
-		}
-	}
-	var s apiv1.Session
-	if _, err := a.call(ctx, c, http.MethodGet, apiv1.SessionPath(url.PathEscape(pos[0])), nil, nil, &s); err != nil {
-		return err
-	}
-	if s.Phase != "Running" {
-		return fail(ExitFailed, "%s is %s, so it has no running agent to %s; agent-run show %s says why", s.Name, firstOf(s.Phase, "not observed yet"), verb, s.Name)
-	}
-	argv := []string{kubectl, "exec", "-n", SessionNamespace, s.Name, "-c", agentContainer}
-	if a.kube != nil {
-		argv = a.kube.argv("exec", "-n", SessionNamespace, s.Name, "-c", agentContainer)
 	}
 	if interactive {
 		// tmux needs a terminal type, and kubectl exec does not pass TERM.
@@ -105,6 +80,50 @@ func (a *app) tmuxExec(ctx context.Context, verb string, args []string, interact
 	}
 	return nil
 }
+
+// sessionExecBase is the kubectl exec prefix into a Running session's pod,
+// after the checks attach, detach and login share: not inside a session pod,
+// kubectl on PATH, the API names the pod and it runs.
+func (a *app) sessionExecBase(ctx context.Context, cmd *command, verb, name string) ([]string, error) {
+	if a.inSessionPod() {
+		return nil, fail(ExitAuth, "%s is for Tom, from the workbench, a laptop or the v1 pod: an agent has no exec into another session's pod (D-19). Send it a message instead: agent-run msg %s \"<text>\"", verb, name)
+	}
+	kubectl, err := a.env.LookPath("kubectl")
+	if err != nil {
+		return nil, fail(ExitFailed, "%s runs kubectl exec, and kubectl is not on PATH", verb)
+	}
+	c, err := a.connect(ctx, cmd.c.conn)
+	if err != nil {
+		return nil, err
+	}
+	// Outside a pod, exec must use the context captured for CA/token/forward.
+	// connect rejects selectors with automatic in-pod API/identity discovery.
+	if a.env.Getenv(envKubeHost) == "" || cmd.c.conn.kubeconfig != "" || cmd.c.conn.context != "" {
+		if _, err := a.kubectl(ctx, cmd.c.conn); err != nil {
+			return nil, err
+		}
+	}
+	var s apiv1.Session
+	if _, err := a.call(ctx, c, http.MethodGet, apiv1.SessionPath(url.PathEscape(name)), nil, nil, &s); err != nil {
+		return nil, err
+	}
+	if s.Phase != "Running" {
+		return nil, fail(ExitFailed, "%s is %s, so it has no running agent to %s; agent-run show %s says why", s.Name, firstOf(s.Phase, "not observed yet"), verb, s.Name)
+	}
+	argv := []string{kubectl, "exec", "-n", SessionNamespace, s.Name, "-c", agentContainer}
+	if a.kube != nil {
+		argv = a.kube.argv("exec", "-n", SessionNamespace, s.Name, "-c", agentContainer)
+	}
+	// Force kubectl's SPDY exec, which is a POST. Its default WebSocket exec
+	// begins as a GET, and the v1 pod's service account may create pods/exec in
+	// dev-agents but not get it (ClusterRoleBinding dev-env-operator), so the
+	// default would answer 403. Not a new RBAC need: this uses the verb it has.
+	return append([]string{"env", kubectlSPDYEnv}, argv...), nil
+}
+
+// kubectlSPDYEnv turns off kubectl's WebSocket exec (honoured by kubectl 1.29
+// and later; the 1.37 client names it in its binary).
+const kubectlSPDYEnv = "KUBECTL_REMOTE_COMMAND_WEBSOCKETS=false"
 
 // inSessionPod reports whether agent-run runs in a session pod, by the same
 // sign connect uses: the pod's projected API token. agentd removes

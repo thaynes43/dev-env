@@ -46,6 +46,9 @@ type Daemon struct {
 	copying atomic.Bool
 	// writerRefused keeps an uncertain shared writer observational only.
 	writerRefused bool
+	// remote is set while a remote session's agent waits for the pod's
+	// Claude login (Story110 T03).
+	remote *remoteWait
 }
 
 // logCopyEvery is how often the session's log is copied to the shared volume,
@@ -215,6 +218,9 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 		why := "the repo step failed, so the agent was not started"
 		return newStep(name, nil, errors.New(why)), why
 	}
+	if !remoteLoginUsable(d.S, d.Session, d.now()) {
+		return d.waitForLogin(ctx, ws, repo, bootID)
+	}
 	var first Launch
 	firstErr := readJSONFile(d.S.statePath(launchFile), &first)
 	if firstErr != nil && !errors.Is(firstErr, os.ErrNotExist) {
@@ -260,6 +266,57 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 	return newStep(name, []string{fmt.Sprintf("%s started in tmux session %q, conversation %s", what, TmuxSession, launch.ConversationID)}, nil), ""
 }
 
+// waitForLogin holds a remote session's agent until the pod has a usable
+// Claude login: it opens the login window and remembers what the launch needs.
+// The boot stays ready; status reports login-required, and agent-run login
+// drives the ceremony (the link and code never pass through agentd's logs).
+func (d *Daemon) waitForLogin(ctx context.Context, ws protocol.Workspace, repo Step, bootID string) (Step, string) {
+	const name = "agent"
+	d.remote = &remoteWait{ws: ws, repo: repo, boot: bootID}
+	notes := []string{"login-required: no usable Claude login in this pod; the agent starts once agent-run login completes"}
+	return newStep(name, notes, StartLoginWindow(ctx, d.R, d.S)), ""
+}
+
+// loginSettle is how long a finished login may leave its window open before
+// agentd starts the agent anyway.
+const loginSettle = 30 * time.Second
+
+// pollRemoteLogin starts a waiting remote session's agent once its login
+// exists and the login window has ended (so the CLI has written all of it).
+func (d *Daemon) pollRemoteLogin(ctx context.Context) {
+	w := d.remote
+	if w == nil || d.writerRefused || !remoteLoginUsable(d.S, d.Session, d.now()) {
+		return
+	}
+	if w.since.IsZero() {
+		w.since = d.now()
+	}
+	if !loginWindowEnded(ctx, d.R, d.S) && d.now().Sub(w.since) < loginSettle {
+		return
+	}
+	d.remote = nil
+	StopLoginWindow(ctx, d.R, d.S)
+	step, agentErr := d.startAgent(ctx, w.ws, w.repo, w.boot)
+	LogSteps(d.Log, []Step{step})
+	var rec bootRecord
+	if readJSONFile(d.S.statePath(bootFile), &rec) == nil && rec.BootID == w.boot {
+		for i := range rec.Steps {
+			if rec.Steps[i].Name == step.Name {
+				rec.Steps[i] = step
+			}
+		}
+		rec.AgentError = agentErr
+		rec.Boot = protocol.BootReady
+		if agentErr != "" {
+			rec.Boot = protocol.BootFailed
+		}
+		if err := writeJSONFile(d.S.statePath(bootFile), rec); err != nil {
+			d.Log.Error("boot record", "err", err)
+		}
+	}
+	d.beat(ctx)
+}
+
 func (d *Daemon) supervise(ctx context.Context) error {
 	tick := time.NewTicker(d.Interval)
 	defer tick.Stop()
@@ -298,6 +355,7 @@ func (d *Daemon) supervise(ctx context.Context) error {
 			if err := d.dispatchDecision(ctx); err != nil {
 				d.Log.Warn("managed child decision continuation is unavailable or uncertain")
 			}
+			d.pollRemoteLogin(ctx)
 			if m := newestMtime(d.S.statePath(resultFile), d.S.statePath(tuiExitFile)); !m.Equal(last) {
 				last = m
 				d.Log.Info("the agent exited")

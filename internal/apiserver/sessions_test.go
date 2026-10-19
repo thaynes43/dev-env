@@ -153,7 +153,9 @@ func TestCreateRefusals(t *testing.T) {
 		code   string
 		field  string
 	}{
-		{"remote mode is plan 03's", func(r *apiv1.CreateSessionRequest) { r.Mode, r.Prompt = "remote", "" }, 422, apiv1.CodeInvalid, "mode"},
+		{"remote mode runs claude only", func(r *apiv1.CreateSessionRequest) {
+			r.Mode, r.Prompt, r.Agent, r.Model, r.Effort = "remote", "", "codex", "gpt-6-astra", ""
+		}, 422, apiv1.CodeInvalid, "mode"},
 		{"codex is plan 04's", func(r *apiv1.CreateSessionRequest) { r.Agent, r.Model, r.Effort = "codex", "gpt-6-astra", "" }, 422, apiv1.CodeInvalid, "agent"},
 		{"no agent", func(r *apiv1.CreateSessionRequest) { r.Agent = "" }, 422, apiv1.CodeInvalid, "agent"},
 		{"no model", func(r *apiv1.CreateSessionRequest) { r.Model, r.Effort = "", "" }, 422, apiv1.CodeInvalid, "model"},
@@ -206,6 +208,12 @@ func TestCreateRefusals(t *testing.T) {
 	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, local); w.Code != http.StatusCreated || decode[apiv1.Session](t, w).Mode != "local" {
 		t.Errorf("a local session: %d %s", w.Code, w.Body.String())
 	}
+	// Story110 T03: a Claude remote session runs on the pod's own login.
+	remote := task()
+	remote.Mode, remote.Prompt = "remote", ""
+	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, remote); w.Code != http.StatusCreated || decode[apiv1.Session](t, w).Mode != "remote" {
+		t.Errorf("a remote session: %d %s", w.Code, w.Body.String())
+	}
 	ok := task()
 	ok.Effort = "ultracode"
 	if w := f.do(http.MethodPost, apiv1.SessionsPath, tokHuman, ok); w.Code != http.StatusCreated {
@@ -218,7 +226,7 @@ func TestCreateRefusals(t *testing.T) {
 	}
 
 	var list v1alpha1.AgentSessionList
-	if err := f.c.List(context.Background(), &list); err != nil || len(list.Items) != 4 {
+	if err := f.c.List(context.Background(), &list); err != nil || len(list.Items) != 5 {
 		t.Errorf("a refused create left an object behind: %d, %v", len(list.Items), err)
 	}
 }
