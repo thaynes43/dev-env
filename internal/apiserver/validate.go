@@ -133,8 +133,10 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 			// snapshot; a project is still a task-only route.
 			// It runs on the keeper's Codex login, so only Tom and his trusted
 			// clients (the workbench, the v1 pod) start one, never an agent's
-			// session token. The coordinator class is refused above.
-			if c.kind != kindHuman && c.kind != kindClient {
+			// session token. The coordinator class is refused above. A session
+			// whose pod runs as the workbench ServiceAccount is the workbench, but the
+			// host it starts runs on the default profile (the profile rule below).
+			if c.kind != kindHuman && c.kind != kindClient && !s.isWorkbenchSession(c) {
 				return nil, forbidden("a codex remote session runs on the keeper's login and is started by Tom or his workbench, not by a session")
 			}
 			if req.Project != "" {
@@ -256,7 +258,15 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 
 	// A session's child runs on its parent's profile: a session cannot widen
 	// what it may read or reach by starting another (D-46).
-	if c.kind == kindSession && c.profile != "" {
+	// The exception is a Codex host a workbench session starts (Story110 T30):
+	// it runs on the default profile, never the workbench's, so the phone-driven
+	// Codex agent gets no pods/exec and cannot start more hosts.
+	switch {
+	case s.isWorkbenchSession(c) && v1alpha1.AgentKind(req.Agent) == v1alpha1.AgentCodex && req.Mode == "remote":
+		if spec.Profile != "" {
+			return nil, forbidden("a codex host started by a workbench session runs on the default profile; omit the profile")
+		}
+	case c.kind == kindSession && c.profile != "":
 		switch spec.Profile {
 		case "":
 			spec.Profile = c.profile

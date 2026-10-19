@@ -10,7 +10,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
 
+	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/templates"
 )
 
@@ -81,6 +83,47 @@ func TestWorkbenchSessionHeartbeats(t *testing.T) {
 	f.auth[tok] = id
 	w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, status(name))
 	if w.Code != http.StatusNoContent {
+		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// Story110 T30: a session whose pod runs as the workbench ServiceAccount may
+// create a Codex remote host, as the workbench itself may. A session on the
+// ordinary account may not.
+func TestWorkbenchSessionCreatesCodexHost(t *testing.T) {
+	f := newFixture(t)
+	f.srv.Policy.Clients = append(f.srv.Policy.Clients, sessionNS+"/"+templates.WorkbenchServiceAccount)
+	f.srv.Policy.WorkbenchServiceAccount = templates.WorkbenchServiceAccount
+	req := apiv1.CreateSessionRequest{Repo: "haynes-ops", Agent: "codex", Mode: "remote", Model: "gpt-6-luna"}
+
+	wbTok := f.sessionPod("haynes-ops-1019-100002", "dev", 0)
+	id := saIdentity(sessionNS + "/" + templates.WorkbenchServiceAccount)
+	id.PodName, id.PodUID = f.auth[wbTok].PodName, f.auth[wbTok].PodUID
+	f.auth[wbTok] = id
+	w := f.do(http.MethodPost, apiv1.SessionsPath, wbTok, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("workbench session creating a codex host: %d %s", w.Code, w.Body.String())
+	}
+	// The host must not inherit the workbench profile (its identity has pods/exec
+	// and could start more hosts): it runs on the default profile.
+	var host v1alpha1.AgentSession
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: decode[apiv1.Session](t, w).Name}, &host); err != nil {
+		t.Fatal(err)
+	}
+	if host.Spec.Profile != "" {
+		t.Errorf("the host's profile is %q, want the default", host.Spec.Profile)
+	}
+	// Naming the parent's (or any) profile is refused rather than honoured.
+	withProfile := req
+	withProfile.Profile = "dev"
+	wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, wbTok, withProfile), http.StatusForbidden, apiv1.CodeForbidden)
+
+	// An ordinary session stays refused.
+	plain := f.sessionPod("haynes-ops-1019-100003", "dev", 0)
+	wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, plain, req), http.StatusForbidden, apiv1.CodeForbidden)
+
+	// The workbench session is still its session for the heartbeat route.
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath("haynes-ops-1019-100002"), wbTok, status("haynes-ops-1019-100002")); w.Code != http.StatusNoContent {
 		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
 	}
 }
