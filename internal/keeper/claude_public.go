@@ -62,8 +62,11 @@ func (p *claudePublicSecret) publish(ctx context.Context, a claudeauth.Access, r
 			return nil
 		}
 	}
-	annotations := map[string]string{
+	annotations := map[string]any{
 		AnnotationExpiresAt: a.ExpiresAt.UTC().Format(time.RFC3339), AnnotationWrittenAt: now.UTC().Format(time.RFC3339),
+		// A merge patch keeps an annotation it leaves out, and a stale expiry would
+		// describe the previous refresh credential, so an unknown one is deleted (null).
+		AnnotationRefreshExpiresAt: nil,
 	}
 	if !refreshExpiresAt.IsZero() {
 		annotations[AnnotationRefreshExpiresAt] = refreshExpiresAt.UTC().Format(time.RFC3339)

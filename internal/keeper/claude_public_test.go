@@ -193,6 +193,34 @@ func TestClaudePublicationHasNoRefreshMaterial(t *testing.T) {
 	}
 }
 
+func TestClaudePublicationClearsStaleRefreshExpiry(t *testing.T) {
+	p, _ := claudePublicFixture(t, nil)
+	exp := claudeNow.Add(30 * 24 * time.Hour)
+	if err := p.publish(context.Background(), syntheticClaudeAccess(1, claudeNow, 8*time.Hour), exp, claudeNow); err != nil {
+		t.Fatal(err)
+	}
+	if liveClaude(t, p).Annotations[AnnotationRefreshExpiresAt] != exp.Format(time.RFC3339) {
+		t.Fatal("refresh expiry was not annotated")
+	}
+	// A rotation without a stated lifetime: the old token's expiry must go.
+	later := claudeNow.Add(7 * time.Hour)
+	if err := p.publish(context.Background(), syntheticClaudeAccess(2, later, 8*time.Hour), time.Time{}, later); err != nil {
+		t.Fatal(err)
+	}
+	s := liveClaude(t, p)
+	if _, ok := s.Annotations[AnnotationRefreshExpiresAt]; ok {
+		t.Fatal("a stale refresh expiry survived the publication")
+	}
+	if s.Annotations[AnnotationWrittenAt] != later.Format(time.RFC3339) {
+		t.Fatal("the other annotations were not updated")
+	}
+	// A new expiry is written again.
+	exp2 := later.Add(30 * 24 * time.Hour)
+	if err := p.publish(context.Background(), syntheticClaudeAccess(3, later, 8*time.Hour), exp2, later); err != nil || liveClaude(t, p).Annotations[AnnotationRefreshExpiresAt] != exp2.Format(time.RFC3339) {
+		t.Fatal("refresh expiry was not re-annotated")
+	}
+}
+
 func TestClaudePublishedGeneration(t *testing.T) {
 	p, _ := claudePublicFixture(t, nil)
 	if g, err := p.generation(context.Background()); err != nil || g != 0 {
