@@ -176,6 +176,11 @@ func TestApplyCodexRolloutModels(t *testing.T) {
 		if applyCodexRolloutModels(&u, l) {
 			t.Fatal("read a rollout for an unconfirmed thread")
 		}
+		l = launch(home)
+		l.Resume = true
+		if applyCodexRolloutModels(&u, l) {
+			t.Fatal("read the whole thread's models on a resumed run")
+		}
 	})
 	t.Run("stream-reported model wins", func(t *testing.T) {
 		home := t.TempDir()

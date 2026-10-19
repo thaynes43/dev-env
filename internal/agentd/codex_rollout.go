@@ -147,7 +147,10 @@ func codexRolloutModels(path string) (models []string, ok bool) {
 // counters, as the stream path does. Several share no honest split, so each
 // keeps Unknown counters. Nothing found leaves the observation Unknown.
 func applyCodexRolloutModels(u *protocol.UsageObservation, l Launch) bool {
-	if u.ActualModelState == protocol.UsageProviderReported || !l.NativeThreadConfirmed {
+	// A resumed run appends to the thread's rollout, so it would list every model
+	// the thread ever used, not this turn's, and retainInitialUsage drops a
+	// resume anyway.
+	if u.ActualModelState == protocol.UsageProviderReported || !l.NativeThreadConfirmed || l.Resume {
 		return false
 	}
 	path := findCodexRollout(codexHomeOf(l), l.ConversationID)
