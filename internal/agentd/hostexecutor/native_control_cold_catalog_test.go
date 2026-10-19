@@ -93,7 +93,7 @@ func TestPinnedNativeColdCatalogFallbackWithinOwnerBound(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer diag.Close()
+	defer func() { _ = diag.Close() }()
 	cmd.Stderr = diag
 	if e = cmd.Start(); e != nil {
 		t.Fatal(e)
