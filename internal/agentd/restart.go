@@ -8,14 +8,26 @@ import (
 )
 
 // launchRestart reads the conversation the next boot resumes (launch.json,
-// D-58). It does not stop the agent.
+// D-58). It does not stop the agent. launch.json is written by the first
+// launch and kept across resumes (a resume writes resume.json beside it), so
+// a remote pod that was itself started by resume still has it. A Claude
+// launch picks its conversation id before the CLI has written anything, so
+// the id proves a conversation only once its transcript exists: `claude
+// --resume` of an id the CLI never wrote fails, and drain keeps that pod.
 func launchRestart(s Settings, session string) protocol.RestartReport {
 	rep := protocol.RestartReport{Session: session}
 	var first Launch
-	if readJSONFile(s.statePath(launchFile), &first) == nil && first.ConversationID != "" &&
-		(first.Provider != protocol.AgentCodex || first.NativeThreadConfirmed && first.Session == session && nativeThreadID.MatchString(first.ConversationID)) {
-		rep.ConversationID, rep.Resumable = first.ConversationID, true
+	if readJSONFile(s.statePath(launchFile), &first) != nil || first.ConversationID == "" {
+		return rep
 	}
+	if first.Provider == protocol.AgentCodex {
+		if !first.NativeThreadConfirmed || first.Session != session || !nativeThreadID.MatchString(first.ConversationID) {
+			return rep
+		}
+	} else if _, ok := readTranscriptTail(s, first.ConversationID); !ok {
+		return rep
+	}
+	rep.ConversationID, rep.Resumable = first.ConversationID, true
 	return rep
 }
 

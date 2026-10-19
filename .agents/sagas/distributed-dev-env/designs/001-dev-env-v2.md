@@ -2000,6 +2000,23 @@ fails retries the delete while that proof matches this pod, including after
 the agent has exited. The 72h session
 message and the Pushover line are deferred: they are not sent. D-50 egress stays.
 
+**Remote sessions, 2026-10-19 (story 110 T19).** A remote Claude session drains
+like any idle interactive one. Its pod, even one a later boot started through the
+resume path, keeps `launch.json` (the first launch) beside `resume.json`, and the
+read takes the conversation from `launch.json`. For Claude that id is chosen at
+launch, before the CLI has written anything, so the read counts it only once the
+conversation's transcript exists. A remote session that has never had a turn is
+therefore not drained (`DrainNeedsRestart`, the pod stays): `claude --resume` of an
+id the CLI never wrote would fail. A Codex remote host is never drained
+automatically. Its agentd reports `busy` for as long as the daemon is live, and no
+phone-turn signal exists to wait for, so it is never idle. Upgrade it by hand with
+`agent-run suspend <name>` then `agent-run resume <name>`; the HOME, and with it the
+phone enrolment, stays on the volume. If an eligible session sits `Draining` with
+`status.restart` empty and operator logs say `unknown field "status.restart"`, the
+installed AgentSession CRD is older than `config/crd/` and the API server prunes the
+proof: sync the CRD copy in haynes-ops first (it was missing `status.restart` and
+`status.agent.attached` on 2026-10-19).
+
 ### 5.3 What this changes for Renovate
 
 v1's image bumps are manual-only because a roll kills every session

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -241,6 +242,19 @@ func TestStartAgentFailures(t *testing.T) {
 
 func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
 
+// writeTranscript is the file the Claude CLI writes once a conversation has a
+// turn; a launch's conversation id proves nothing until it exists.
+func writeTranscript(t *testing.T, s Settings, id string) {
+	t.Helper()
+	dir := filepath.Join(s.ClaudeConfigDir, "projects", "-work-tree")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte("{\"type\":\"user\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // prepare-restart names the conversation the next boot resumes (D-58).
 func TestPrepareRestart(t *testing.T) {
 	s, _, _ := launchFixture(t)
@@ -253,6 +267,7 @@ func TestPrepareRestart(t *testing.T) {
 	if err := writeJSONFile(s.statePath(launchFile), Launch{ConversationID: "conv-1"}); err != nil {
 		t.Fatal(err)
 	}
+	writeTranscript(t, s, "conv-1")
 	if rep := PrepareRestart(s, "s-1", time.Second); !rep.Resumable || rep.ConversationID != "conv-1" || rep.Session != "s-1" {
 		t.Errorf("launched: %+v", rep)
 	}
@@ -268,6 +283,7 @@ func TestReadRestartDoesNotStop(t *testing.T) {
 	if err := writeJSONFile(s.statePath(launchFile), Launch{ConversationID: "conv-1"}); err != nil {
 		t.Fatal(err)
 	}
+	writeTranscript(t, s, "conv-1")
 	runner := &fakeRunner{handle: func(c Cmd) (Result, error) {
 		if len(c.Args) > 0 && c.Args[0] == "list-clients" {
 			return Result{Stdout: []byte("/dev/pts/1\n/dev/pts/2\n")}, nil
