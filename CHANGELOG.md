@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.35.1](https://github.com/thaynes43/dev-env/compare/v2.35.0...v2.35.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* let idle remote sessions drain onto a new agent image ([#459](https://github.com/thaynes43/dev-env/issues/459)) ([dadd77e](https://github.com/thaynes43/dev-env/commit/dadd77ebe1b8b9c1ce0ad80411728020c035d7a9))
+
 ## [2.35.0](https://github.com/thaynes43/dev-env/compare/v2.34.0...v2.35.0) (2026-10-19)
 
 
