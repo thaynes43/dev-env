@@ -109,9 +109,16 @@ func TestExistingStandbyIsLeftAlone(t *testing.T) {
 	suspended := standbySession("suspended")
 	suspended.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
 	suspended.Status.Phase = v1alpha1.PhaseSuspended
+	// A real suspend leaves the agent exited; the session is still the standby.
+	suspendedExited := standbySession("suspended-exited")
+	suspendedExited.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+	suspendedExited.Status.Agent = &v1alpha1.AgentStatus{Status: protocol.AgentExited}
+	suspendedPhase := standbySession("suspended-phase")
+	suspendedPhase.Status.Phase = v1alpha1.PhaseSuspended
+	suspendedPhase.Status.Agent = &v1alpha1.AgentStatus{Status: protocol.AgentInterrupted}
 	idle := standbySession("idle")
 	idle.Status.Phase = v1alpha1.PhaseIdle
-	for _, s := range []*v1alpha1.AgentSession{standbySession("running"), idle, suspended} {
+	for _, s := range []*v1alpha1.AgentSession{standbySession("running"), idle, suspended, suspendedExited, suspendedPhase} {
 		g := newRig(t, s)
 		if name := g.ensure(); name != "" || g.made != 0 {
 			t.Errorf("%s: created %q with a standby present", s.Name, name)
@@ -206,6 +213,14 @@ func TestFailedCreateStillSpendsASlot(t *testing.T) {
 	g.fails = false
 	if name := g.ensure(); name != "" || g.made != 0 {
 		t.Errorf("a crash loop of failed creates was not stopped: %q", name)
+	}
+}
+
+func TestCorruptBreakerStateFailsClosed(t *testing.T) {
+	g := newRig(t, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: stateNS, Name: DefaultStateName},
+		Data: map[string]string{stateKey: "not json"}})
+	if name, err := g.r.Ensure(context.Background()); err == nil || name != "" || g.made != 0 {
+		t.Errorf("corrupt state: created %q (%d), err %v", name, g.made, err)
 	}
 }
 

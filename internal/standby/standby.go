@@ -103,6 +103,11 @@ func Alive(s *v1alpha1.AgentSession) bool {
 	case v1alpha1.PhaseArchived, v1alpha1.PhaseFailed:
 		return false
 	}
+	// Before the agent's status: a suspended session's agent has exited, and
+	// that is how it suspends, not an end.
+	if s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended || s.Status.Phase == v1alpha1.PhaseSuspended {
+		return true
+	}
 	if a := s.Status.Agent; a != nil {
 		switch a.Status {
 		case protocol.AgentExited, protocol.AgentFailed, protocol.AgentInterrupted:
@@ -146,7 +151,11 @@ func (r *Runnable) Ensure(ctx context.Context) (string, error) {
 	} else if err != nil {
 		return "", fmt.Errorf("read the breaker state: %w", err)
 	}
-	recent := recentCreations(cm.Data[stateKey], now, window)
+	recent, err := recentCreations(cm.Data[stateKey], now, window)
+	if err != nil {
+		// Fail closed: an unreadable record is not an empty one.
+		return "", fmt.Errorf("the breaker state in %s is unreadable; no standby is created until it is fixed: %w", key, err)
+	}
 	if len(recent) >= limit {
 		if !r.tripped {
 			r.Log.Info("loop suspected: standby circuit breaker open, no standby session until the window clears",
@@ -194,12 +203,13 @@ func (r *Runnable) stateName() string {
 }
 
 // recentCreations parses the stored times and keeps those inside the window.
-// Unreadable state counts as empty and the next write replaces it. A time in
-// the future is kept, the cautious side.
-func recentCreations(raw string, now time.Time, window time.Duration) []time.Time {
+// Unreadable state is an error. A time in the future is kept, the cautious side.
+func recentCreations(raw string, now time.Time, window time.Duration) ([]time.Time, error) {
 	var all []time.Time
 	if raw != "" {
-		_ = json.Unmarshal([]byte(raw), &all)
+		if err := json.Unmarshal([]byte(raw), &all); err != nil {
+			return nil, err
+		}
 	}
 	var out []time.Time
 	for _, t := range all {
@@ -207,5 +217,5 @@ func recentCreations(raw string, now time.Time, window time.Duration) []time.Tim
 			out = append(out, t)
 		}
 	}
-	return out
+	return out, nil
 }
