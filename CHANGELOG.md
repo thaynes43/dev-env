@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.30.1](https://github.com/thaynes43/dev-env/compare/v2.30.0...v2.30.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* enable trusted owner control for guarded native sessions ([#426](https://github.com/thaynes43/dev-env/issues/426)) ([513cd3b](https://github.com/thaynes43/dev-env/commit/513cd3bc63c29e3ad5e8a233059200aeedf4d548))
+
 ## [2.30.0](https://github.com/thaynes43/dev-env/compare/v2.29.5...v2.30.0) (2026-10-18)
 
 
