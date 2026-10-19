@@ -21,7 +21,7 @@ an absolute pinned Codex executable as `NativeBinary`. The private home and rece
 parent must already exist. The native command is fixed:
 
 ```
-codex app-server --remote-control --managed-daemon --listen unix:///PRIVATE/socket
+CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED=1 codex app-server --managed-daemon --listen unix:///PRIVATE/socket
 ```
 
 The helper accepts only an inherited socket from its parent with the same UID and
@@ -252,7 +252,10 @@ source merge/publication is independent of the held new root admission,
 credential-consumer and provider-network wiring. Effective operator ConfigMap
 GET permissions already suffice: no new named Roles/Bindings are required.
 
-The fixed helper omits `--remote-control`: pinned0.160.1 can automatically enroll
+The fixed helper omits `--remote-control` and sets the pinned internal startup
+environment `CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED=1`. This selects
+`DisabledEphemeral`, ignoring retained enablement without editing native stores.
+Pinned0.160.1 can automatically enroll
 a fresh backend computer under that flag before any pairing-code request. The
 approved bounded root uses the local managed Unix RPC daemon only, matching the
 actual pinned loopback test. It does not create/copy native remote enrollment.

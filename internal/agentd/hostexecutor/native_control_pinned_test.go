@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -84,6 +85,9 @@ func TestPinnedNativeTurnSurvivesControlDisconnectAndHistoryReconnect(t *testing
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cmd := nativeCommand(Config{NativeBinary: binary, Home: home, SocketPath: socket})
+	if !slices.Contains(cmd.Env, "CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED=1") {
+		t.Fatal("missing explicit suppression of retained remote-control preference")
+	}
 	for _, arg := range cmd.Args {
 		if arg == "--remote-control" {
 			t.Fatal("unapproved automatic remote enrollment")
