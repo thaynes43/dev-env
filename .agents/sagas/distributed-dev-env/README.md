@@ -417,6 +417,7 @@ explicit approval in phase 5.
 | 73 | D-92: shared history for trusted agents | **RECORDED** 2026-10-13 EDT through the Mac coordinator's owner clarification relay; original owner turn not directly observed by Root | All Tom's trusted dev-env agents may read shared history. Positive peer retrieval is the parity target; denied reads between trusted agents are not a gate. Preserve authentication, credential exclusion, integrity, write/delete protections, public/anonymous/external refusal and unchanged v1. No silent new identities, RBAC or trust expansion. Identify the concrete history-only authorization diff before execution. No question ID or new architecture/review project ([requirements and bounded plan](requirements/2026-10-13-shared-agent-history.md)). |
 | 74 | Interim pod-owned login slice for Remote Control | **PROPOSED, pending** 2026-10-19 (not a ruling) | Source support only: a `remote` session runs `claude --remote-control` on a Claude login the pod's own CLI owns, set up only by an explicit coordinator request (`agent-run login`). Using it needs Tom's explicit authorization for one isolated v2 Max login; until then no v2 login is created. The keeper-owned login (decision 17, Q-11), console and standby stay plan 03 ([backlog/03](backlog/03-remote-control.md#interim-pod-owned-login-slice-2026-10-19-source-support-only)). |
 | 75 | Q-110-03: how Claude MVP acceptance is checked | **RECORDED** 2026-10-19 (Tom, as relayed in the Story110 T09 increment 4 work order; the Q-110-03 record lives in the coordinator's order files, not in this repo) | Claude MVP acceptance checks are ordinary repeatable tests. Approvals are needed only for new credentials, RBAC or trust. |
+| 76 | Q-110-04: private-history retention for task sessions only | **DECIDED** 2026-10-19 (Tom, through the Claude native prompt) | "Exempt interactive (my pick)". Only a task Session is newly marked with private-history retention; remote and local Sessions suspend by rescue, pod delete and resume on the same HOME. Sessions already marked stay protected and canaries are unchanged. Amends the scope of DESIGN-008 and ADR-006 section 1 ([ADR-008](adrs/008-private-history-retention-for-task-sessions.md)). |
 
 The full options, consequences and rulings for Q-01 to Q-16, and the premise
 corrections withdrawing Q-17 and Q-18, plus Q-19's first owner CA provisioning
@@ -431,6 +432,7 @@ the 2026-10-13 pacing ruling is row 69, and Q-35/D-89 links ADR-007
 in row 70. Q-36/D-90 records the existing-access hold in row 71; Q-37/D-91
 records the consumed Retain delegation in row 72. D-92 records trusted shared
 history in row 73; its owner requirement is separate from capture-r2 acceptance.
+Q-110-04 links ADR-008 in row 76.
 
 
 ## Plan backlog

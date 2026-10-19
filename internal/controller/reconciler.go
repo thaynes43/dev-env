@@ -258,7 +258,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 		}()
 	}
 
-	if s.Spec.Workspace == nil && (r.PrivateHistoryRetention || privateHistoryProtected(&s)) {
+	if r.privateHistoryEnabled(&s) {
 		if err := r.initializePrivateHistory(ctx, &s); err != nil {
 			return ctrl.Result{RequeueAfter: time.Second}, err
 		}

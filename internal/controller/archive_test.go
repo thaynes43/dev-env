@@ -485,3 +485,26 @@ func TestARescueOfAReplacedPodIsNotTrusted(t *testing.T) {
 	}
 	assertNoPodOrVolumeWrites(t, op)
 }
+
+// ADR-008: with private-history retention on, a remote or local session is not
+// marked, so its suspend takes the ordinary rescue then pod delete path.
+func TestInteractiveSessionSuspendsWithPrivateRetentionOn(t *testing.T) {
+	for _, mode := range []v1alpha1.SessionMode{v1alpha1.ModeRemote, v1alpha1.ModeLocal} {
+		t.Run(string(mode), func(t *testing.T) {
+			startOperator(t, func(r *Reconciler) { r.PrivateHistoryRetention = true })
+			s := newSession(t, func(s *v1alpha1.AgentSession) { s.Spec.Mode, s.Spec.Prompt = mode, "" })
+			waitClaim(t, s.Name)
+			pod := waitPod(t, s.Name)
+			markRunning(t, pod, "talosw02")
+			waitStatus(t, s.Name, "Running", phaseIs(v1alpha1.PhaseRunning))
+			pod = waitPod(t, s.Name)
+			rescuer.answer(t, s.Name, reportFor(goodReport))
+			setMode(t, s.Name, v1alpha1.OperatingModeSuspended)
+			finishPodDelete(t, pod)
+			got := waitStatus(t, s.Name, "Suspended", phaseIs(v1alpha1.PhaseSuspended))
+			if got.Status.PrivateHistory != nil || got.Status.Rescue == nil || got.Status.Rescue.Result != v1alpha1.RescueVerified {
+				t.Fatalf("private history %+v, rescue %+v", got.Status.PrivateHistory, got.Status.Rescue)
+			}
+		})
+	}
+}

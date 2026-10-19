@@ -10,7 +10,8 @@ and native independent review govern merge (Tom, 2026-10-11).
 ## Contract
 
 An explicit, default-off operator setting enables conservative private-home
-retention for managed sessions without a shared workspace. Reap and suspended
+retention for managed sessions without a shared workspace. *Scope amended 2026-10-19 by [ADR-008](../adrs/008-private-history-retention-for-task-sessions.md):
+only task sessions are newly marked; a session already marked stays protected.* Reap and suspended
 autoarchive preserve the provider HOME PVC and durable AgentSession identity
 instead of allowing legacy Git rescue or an empty/foreign-volume fallback to
 destroy provider history. Shared sessions keep their existing typed lifecycle.
