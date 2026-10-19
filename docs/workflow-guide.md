@@ -314,7 +314,8 @@ Archive/history retention is a remaining feature. Rescue does not back up ignore
 stay private and are never pushed.
 
 V2 `--interactive` (Remote Control on a pod-owned Claude login, set up with
-`agent-run login`) is source-only until released and accepted; automatic image
+`agent-run login`) is source-only until released and accepted, and its use is
+pending Tom's authorization of one isolated v2 login; automatic image
 drains and the complete grant/login CLI remain unfinished. The first #173 source slice admits declared project tasks
 into private worktrees and supplies project rules without RWX. New budget-bound
 private dispatch remains refused pending separate integration. GitOps delivery

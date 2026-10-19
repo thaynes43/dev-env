@@ -379,12 +379,17 @@ points at agent-run msg. kubectl must be on PATH.
 `,
 	"login": `Usage: agent-run login <name> [url|code|status]
 
-Sets up the Claude login of a --interactive session. The login is the pod's own;
-nothing is copied from another pod. While status says login-required: run url,
-open the link and sign in, then pipe the code the page shows into code, for
-example: read -rs c; printf '%s' "$c" | agent-run login <name> code. The link and
-the code are never logged or stored. The agent starts by itself once the login
-exists. status (the default) says where it stands.
+Sets up, renews or recovers the Claude login of a --interactive session. The
+login is the pod's own; nothing is copied from another pod. Run url, open the
+link and sign in, then pipe the code the page shows into code, for example:
+read -rs c; printf '%s' "$c" | agent-run login <name> code. The link and the code
+are never logged or stored. status (the default) says where it stands.
+
+Only one CLI may own the login. While the session's agent runs, url refuses: exit
+its TUI first (agent-run attach <name>, then /exit). When no agent runs, url works
+even if the login still looks valid (renew before it lapses, or replace one the
+server revoked). The agent starts by itself once the new login lands and the login
+window ends; a first login on a fresh pod needs no TUI exit.
 
 Like attach, it is for Tom's workbench, a laptop or the v1 pod: it runs kubectl
 exec into the session's pod, which an agent in a session pod cannot do (D-19).

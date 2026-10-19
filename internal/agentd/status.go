@@ -137,13 +137,13 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 		}
 	}
 	pid := 0
-	var p agentPid
+	var p, live agentPid
 	if readJSONFile(s.statePath(pidFile), &p) == nil && pidAlive(p) {
-		pid = p.Pid
+		pid, live = p.Pid, p
 	}
 	applyActivity(ctx, r, s, &st, pid, hasCur && cur.TUI, now)
 	if sess.Mode == protocol.ModeRemote && sess.Agent == protocol.AgentClaude {
-		st.RemoteControl = collectRemoteControl(s, sess, checkLogin(s).Usable(now), pid, hasCur)
+		st.RemoteControl = collectRemoteControl(s, sess, checkLogin(s).Usable(now), live, hasCur)
 	}
 	return st
 }

@@ -3,6 +3,7 @@ package agentrun
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -28,9 +29,9 @@ const agentContainer = "agent"
 
 // runProcess runs argv with the process's own terminal, and returns its exit
 // code. An error means it could not start.
-func runProcess(ctx context.Context, argv []string) (int, error) {
+func runProcess(ctx context.Context, argv []string, stdin io.Reader) (int, error) {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
@@ -71,7 +72,7 @@ func (a *app) tmuxExec(ctx context.Context, verb string, args []string, interact
 	} else {
 		argv = append(argv, "--", "tmux", "detach-client", "-s", tmuxSession)
 	}
-	code, err := a.env.Run(ctx, argv)
+	code, err := a.env.Run(ctx, argv, a.env.Stdin)
 	switch {
 	case err != nil:
 		return fail(ExitFailed, "%s: %v", verb, err)

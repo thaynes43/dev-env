@@ -147,7 +147,7 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 			add("mode", "remote sessions run claude only")
 		}
 	case "":
-		add("mode", "required: task or local")
+		add("mode", "required: task, local or remote")
 	default:
 		add("mode", "%q is not task, local or remote", req.Mode)
 	}

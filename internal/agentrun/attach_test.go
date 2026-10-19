@@ -1,8 +1,10 @@
 package agentrun
 
 import (
+	"io"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -138,14 +140,27 @@ func TestAttachRefusals(t *testing.T) {
 }
 
 // The code is typed or piped on stdin. It is never an argument, an environment
-// entry, output, or a request to the API (Story110 T03).
+// entry, output, or a request to the API. The fake kubectl reads the process's
+// stdin, as the real child does, so a forwarding bug (no -i, stdin dropped)
+// fails here (Story110 T03).
 func TestLoginCodeStaysOffArgvEnvAndOutput(t *testing.T) {
 	const canary = "canarycode0123456789abcdef#canarystate0123456789"
 	h := newHarness(t)
 	h.env.Stdin = strings.NewReader(canary + "\n")
-	h.kubectl = func([]string) int { return 0 }
+	var got string
+	h.kubectl = func(argv []string) int {
+		// The child reads the stdin it was given, as kubectl exec -i would.
+		if slices.Contains(argv, "-i") && h.childStdin != nil {
+			b, _ := io.ReadAll(h.childStdin)
+			got = string(b)
+		}
+		return 0
+	}
 	serveSession(h, runningOn(testSession(name, ""), "talosw02"))
 	h.mustRun(ExitOK, "login", name, "code")
+	if strings.TrimSpace(got) != canary {
+		t.Errorf("the code did not reach the exec child's stdin: %q", got)
+	}
 	all := strings.Join(h.ran, "\n") + h.stdout.String() + h.stderr.String()
 	for _, r := range h.api.requests() {
 		all += r.path + string(r.body)

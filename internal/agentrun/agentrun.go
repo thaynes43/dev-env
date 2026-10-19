@@ -79,9 +79,9 @@ type Env struct {
 	ServiceAccountDir string
 	// LookPath finds a program on PATH (kubectl for laptop access and exec).
 	LookPath func(string) (string, error)
-	// Run runs a program on the process's own terminal and returns its exit
-	// code; an error means it could not start.
-	Run func(ctx context.Context, argv []string) (int, error)
+	// Run runs a program on the process's own terminal, with stdin as its
+	// input, and returns its exit code; an error means it could not start.
+	Run func(ctx context.Context, argv []string, stdin io.Reader) (int, error)
 	// Output captures a bounded command response without exposing stderr.
 	Output func(ctx context.Context, argv []string) ([]byte, error)
 	// ExecOutput runs a program and returns its exit code and captured

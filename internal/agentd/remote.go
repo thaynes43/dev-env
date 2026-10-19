@@ -94,11 +94,14 @@ func checkLogin(s Settings) loginCheck {
 	return c
 }
 
-// remoteWait is a remote session whose agent waits for a login.
+// remoteWait is a remote session's launch context, kept for the boot.
 type remoteWait struct {
-	ws    protocol.Workspace
-	repo  Step
-	boot  string
+	ws   protocol.Workspace
+	repo Step
+	boot string
+	// waiting: this boot found no usable login and holds the agent.
+	waiting bool
+	// since: when a usable login with a still-open login window was first seen.
 	since time.Time
 }
 
@@ -155,14 +158,13 @@ func LoginURL(ctx context.Context, r Runner, s Settings, sess protocol.Session, 
 	if sess.Mode != protocol.ModeRemote {
 		return "", errors.New("login is for remote sessions")
 	}
-	if checkLogin(s).Usable(now()) {
-		return "", errors.New("this pod already has a login")
-	}
 	// One owner per rotating refresh token: never a second CLI on this HOME
-	// while the agent's CLI runs, even if its login file reads as absent.
+	// while the agent's CLI runs, even if its login file reads as absent. A
+	// login that still reads as usable may be renewed or replaced (a renewal
+	// before it lapses, or one the server revoked) once no agent CLI runs.
 	var p agentPid
 	if readJSONFile(s.statePath(pidFile), &p) == nil && pidAlive(p) {
-		return "", errors.New("the agent is running on this pod's login; stop it before a new login")
+		return "", errors.New("the agent is running on this pod's login, and only one CLI may own it: exit its TUI (agent-run attach " + sess.Name + ", then /exit), then run login url again; the agent starts by itself once the new login lands")
 	}
 	if hasLoginWindow(ctx, r, s) {
 		if pane, err := loginPane(ctx, r, s); err == nil && strings.Contains(pane, loginExitMarker) {
@@ -217,10 +219,20 @@ func LoginCode(ctx context.Context, r Runner, s Settings, sess protocol.Session,
 	if _, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"load-buffer", "-b", buffer, "-"}, Stdin: strings.NewReader(code)}); err != nil {
 		return errors.New("tmux load-buffer failed")
 	}
+	// The buffer holds the code: delete it on every path, even a cancelled one.
+	defer func() {
+		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_, _ = r.Run(dctx, Cmd{Name: s.TmuxBin, Args: []string{"delete-buffer", "-b", buffer}})
+	}()
 	if _, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"paste-buffer", "-b", buffer, "-d", "-t", "=" + LoginTmuxSession + ":"}}); err != nil {
 		return errors.New("tmux paste-buffer failed")
 	}
-	time.Sleep(deliverSettle)
+	select {
+	case <-ctx.Done():
+		return errors.New("cancelled before Enter was sent")
+	case <-time.After(deliverSettle):
+	}
 	if _, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"send-keys", "-t", "=" + LoginTmuxSession + ":", "Enter"}}); err != nil {
 		return errors.New("tmux send-keys failed")
 	}
@@ -267,28 +279,52 @@ func loginWindowEnded(ctx context.Context, r Runner, s Settings) bool {
 }
 
 // claudeSessionRemote is the part of the CLI's sessions/<pid>.json that names
-// the Remote Control entry (S-6: bridgeSessionId holds session_<id>).
+// the Remote Control entry (S-6: bridgeSessionId holds session_<id>). procStart
+// is the process's start time, the value agentPid.Start holds, so a record an
+// earlier boot left behind under a reused pid is never taken for this CLI's.
 type claudeSessionRemote struct {
-	BridgeSessionID string `json:"bridgeSessionId"`
+	BridgeSessionID string          `json:"bridgeSessionId"`
+	ProcStart       json.RawMessage `json:"procStart"`
 }
 
-const remoteURLBase = "https://claude.ai/code/"
+const (
+	remoteURLBase       = "https://claude.ai/code/"
+	maxSessionRecordLen = 64 << 10
+)
 
 var bridgeSessionID = regexp.MustCompile(`^session_[A-Za-z0-9_-]{1,120}$`)
 
+// readRemoteRecord reads the CLI's session record for the live process p, with
+// checkLogin's care: not through a link, bounded in size (the agent can write
+// the file), and only if it belongs to this process.
+func readRemoteRecord(s Settings, p agentPid) (claudeSessionRemote, bool) {
+	var rec claudeSessionRemote
+	path := filepath.Join(s.ClaudeConfigDir, "sessions", strconv.Itoa(p.Pid)+".json")
+	fi, err := os.Lstat(path)
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxSessionRecordLen {
+		return rec, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(data, &rec) != nil {
+		return rec, false
+	}
+	if p.Start == "" || strings.Trim(string(rec.ProcStart), `"`) != p.Start {
+		return rec, false
+	}
+	return rec, true
+}
+
 // collectRemoteControl builds status.remoteControl from the CLI's own session
 // record, not from the pane. loggedIn is whether the pod has a usable login;
-// pid is the live CLI's pid, 0 when none. startedThisBoot is whether this
-// boot launched the CLI: after a roll or a resume, until it does, the state is
+// p is the live CLI (Pid 0 when none). startedThisBoot is whether this boot
+// launched the CLI: after a roll or a resume, until it does, the state is
 // starting, not offline.
-func collectRemoteControl(s Settings, sess protocol.Session, loggedIn bool, pid int, startedThisBoot bool) *protocol.RemoteControl {
+func collectRemoteControl(s Settings, sess protocol.Session, loggedIn bool, p agentPid, startedThisBoot bool) *protocol.RemoteControl {
 	rc := &protocol.RemoteControl{Name: sess.Name}
 	switch {
-	case pid > 0:
+	case p.Pid > 0:
 		rc.State = protocol.RemoteStarting
-		var rec claudeSessionRemote
-		data, err := os.ReadFile(filepath.Join(s.ClaudeConfigDir, "sessions", strconv.Itoa(pid)+".json"))
-		if err == nil && json.Unmarshal(data, &rec) == nil && bridgeSessionID.MatchString(rec.BridgeSessionID) {
+		if rec, ok := readRemoteRecord(s, p); ok && bridgeSessionID.MatchString(rec.BridgeSessionID) {
 			rc.State, rc.SessionID, rc.URL = protocol.RemoteRegistered, rec.BridgeSessionID, remoteURLBase+rec.BridgeSessionID
 		}
 	case !loggedIn:

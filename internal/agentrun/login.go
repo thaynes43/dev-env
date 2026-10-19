@@ -37,7 +37,7 @@ func (a *app) login(ctx context.Context, args []string) error {
 		argv = append(argv, "-i")
 	}
 	argv = append(argv, "--", "agentd", "ctl", "login", verb)
-	code, err := a.env.Run(ctx, argv)
+	code, err := a.env.Run(ctx, argv, a.env.Stdin)
 	switch {
 	case err != nil:
 		return fail(ExitFailed, "login %s: %v", verb, err)

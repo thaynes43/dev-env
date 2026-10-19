@@ -43,6 +43,13 @@ What the slice does:
   stdin. Both run `agentd ctl login` in the pod by `kubectl exec`; the link and code
   are never logged or stored. agentd starts `claude --remote-control <session-name>`
   once the login exists.
+- Renewal and recovery use the same command. `login url` is allowed whenever no
+  agent CLI runs, even if the login still reads as usable (renew before it lapses,
+  or replace one the server revoked); it is refused while the agent's CLI runs,
+  because only one CLI may own the login. The refusal says how to proceed: exit the
+  TUI (`agent-run attach`, then `/exit`), then run `login url` again. When the
+  ceremony's window ends, agentd starts or resumes the agent by itself, at boot or
+  later.
 - The exec uses kubectl's SPDY transport (`KUBECTL_REMOTE_COMMAND_WEBSOCKETS=false`),
   which is a POST. The v1 pod's service account may create `pods/exec` in
   `dev-agents` but not get it, and kubectl's default WebSocket exec begins as a GET.

@@ -1,11 +1,11 @@
 // Command agentd is the supervisor inside each session pod, a child of tini
 // (DESIGN-001 3.6). It renders config at boot, clones the repo, starts or
 // resumes the agent in tmux, sends heartbeats, and answers
-// `agentd ctl status|rescue|prepare-restart|deliver` for the operator.
+// `agentd ctl status|rescue|prepare-restart|deliver|login` for the operator.
 //
 // Built so far: the daemon (`run`), the rescue pod's `hold`, the agent runner
 // in the tmux pane (`run-agent`), `render`, `ctl status`, `ctl rescue` and
-// `ctl prepare-restart`, `ctl deliver`, `ctl log` and managed child decisions.
+// `ctl prepare-restart`, `ctl deliver`, `ctl log`, `ctl login` and managed child decisions.
 package main
 
 import (
@@ -91,6 +91,11 @@ Commands:
                            bracketed paste into the Claude TUI, or codex queue.
                            Exit 3 when the agent takes no message (a headless
                            task, or no agent running).
+  ctl login url|code|status
+                           A remote session's pod-owned Claude login: url starts
+                           the sign-in and prints its link (refused while the
+                           agent's CLI runs), code reads the code from stdin,
+                           status says where it stands.
   ctl log [--tail N]       Print the last N lines (default 200) of the session's
                            log, or of its copy on the shared volume.
   ctl decision-read --expected-session-uid UID --expected-pod-uid UID
