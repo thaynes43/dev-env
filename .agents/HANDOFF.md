@@ -1,5 +1,18 @@
 # HANDOFF: start here
 
+**Current Story110 checkpoint,2026-10-19:** source440 and release441 are merged;
+operator2.30.7 is installed through haynes-ops4095 (two Ready, actual signed
+digest verified). Task2.30.7 is published; generic task pins remain2.30.6.
+All54 protected Pods/26 Sessions/28 budgets are unchanged. Owned-root response,
+update survival, history, stop/continue and phone remain unaccepted.009 access
+and launch are paused on two exact public ConfigMap GET additions after an
+approval-review rejection; neither was executed. See the
+[delivery and precise hold](sagas/distributed-dev-env/verification/owned-operator-replacement-2026-10-19.md#delivered-checkpoint--2026-10-19-0934-utc).
+Older release369-pending and installed-version statements below are historical:
+369 publication was explicitly approved and completed. Preserve every actual
+v1/rendezvous/H7/grant/security hold and consumed attempt. Same canonical
+Saga85/Epic107/Story110 and sole owner; no new session or campaign reset.
+
 **2026-10-18 implementation update:** Q-24 is answered: Tom approved small
 separate native hosts; see [DESIGN-006](sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md#q-24-codex-mvp-native-routing).
 The campaign CLI source increment is documented in

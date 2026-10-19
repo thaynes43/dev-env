@@ -1,5 +1,12 @@
 # Saga: distributed-dev-env (dev-env v2)
 
+**Current2026-10-19 Story110:** [source/release/operator delivery and exact009
+access hold](verification/owned-operator-replacement-2026-10-19.md#delivered-checkpoint--2026-10-19-0934-utc)
+supersede older installed-state and release369-pending entries. Operator2.30.7 is
+installed; protected work is unchanged. Owned-root response/update/history/
+stop-continue/phone acceptance remains unproven.009 named-read approval is
+pending; no root/token/model. Keep Saga85/Epic107/Story110, owner and counters.
+
 **2026-10-18 ruling:** Q-24 is answered: Tom approved small separate native
 hosts, each with its own computer entry and pairing. See
 [DESIGN-006](designs/006-private-catalog-bootstrap.md#q-24-codex-mvp-native-routing).

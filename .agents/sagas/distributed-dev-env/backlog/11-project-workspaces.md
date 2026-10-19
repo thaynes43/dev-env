@@ -10,6 +10,20 @@ rule, freshness and retention code; do not enable old workspace opt-ins merely
 to obtain those capabilities. Prior storage trials and their stopped routes
 remain historical. No new backend selection or storage benchmark is a prerequisite.
 
+## Story110 delivery checkpoint —2026-10-19
+
+Same Saga85/Epic107/Story110 and sole owner. Source440/release441 are merged and
+signed; operator4095 is installed, with54 protected Pods/26 Sessions/28 budgets
+unchanged. Generic task pins remain2.30.6; task2.30.7 is published. The
+[delivery record](../verification/owned-operator-replacement-2026-10-19.md#delivered-checkpoint--2026-10-19-0934-utc)
+separates installed behavior from unproven owned-root response, update survival,
+history, stop/continue and phone. The inert009 packet passed final Mac checks;
+actual009 wiring/root/token/model stays paused on two precisely named public
+ConfigMap GET additions. Approval review rejected authorization without trusted
+exact approval; no access change was executed. No other current backend access
+gap identified. Retain all prior attempts/counters; do not open another story or
+owner to avoid this hold. Ordinary authorized v2 delivery remains allowed.
+
 ## Goal
 
 Claude, Codex and future local-model agents on different pods load common rules, discover each
