@@ -167,7 +167,9 @@ func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
 	// Re-read the stored intent and the Lease; POST only if both still hold.
 	secret, stored, err := w.load(ctx)
 	if err != nil || stored.Stage != claudeIntent || stored.AttemptUID != intent.AttemptUID {
-		w.needsLogin(ctx)
+		// Nothing has been sent yet: return our own intent to Ready if it is
+		// still what the journal holds.
+		w.abandon(ctx, prev, intent.AttemptUID)
 		return claudeRecord{}, errClaudeJournal
 	}
 	if w.Fence(ctx, claudeRequestBudget) != nil {

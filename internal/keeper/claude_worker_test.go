@@ -49,8 +49,17 @@ func rotated(call int, _ secretValue) (claudeTokens, error) {
 // failPatchClient fails every Patch on one Secret while Fail is set.
 type failPatchClient struct {
 	client.Client
-	Name string
-	Fail atomic.Bool
+	Name      string
+	Fail      atomic.Bool
+	Gets      atomic.Int32 // Gets of the named Secret so far
+	FailGetAt int32        // fail that numbered Get of the named Secret (0: none)
+}
+
+func (c *failPatchClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if key.Name == c.Name && c.FailGetAt != 0 && c.Gets.Add(1) == c.FailGetAt {
+		return errors.New("synthetic get failure")
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
 }
 
 func (c *failPatchClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
@@ -271,6 +280,20 @@ func TestClaudeWorkerLeaseLostBeforePOST(t *testing.T) {
 			t.Fatal("a recovered intent must become NeedsLogin without a POST")
 		}
 	})
+}
+
+func TestClaudeWorkerReReadFailureAfterIntentReturnsToReady(t *testing.T) {
+	f := newClaudeFix(t)
+	f.seed(t, syntheticClaudeRecord(1))
+	f.clk.Step(6 * time.Hour)
+	// Gets of the journal in one due tick: tick, refresh, then the re-read after
+	// the intent (3rd), which fails once.
+	f.c.Gets.Store(0)
+	f.c.FailGetAt = 3
+	f.tick()
+	if r := f.journal(t); f.tr.Calls != 0 || r.Stage != claudeReady || r.Access.Generation != 1 || r.Refresh.Reveal() != claudeOldRefreshCanary {
+		t.Fatal("an unsent intent must go back to Ready, not to NeedsLogin")
+	}
 }
 
 func TestClaudeWorkerTwoWorkersOneLeaseOnePOSTPerCycle(t *testing.T) {
