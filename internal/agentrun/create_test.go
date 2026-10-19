@@ -154,6 +154,8 @@ func TestCreateEffortPerModel(t *testing.T) {
 		{"claude-opus-4-6", "", "high"},
 		{"claude-sonnet-4-6[1m]", "max", "max"},
 		{"claude-haiku-4-5", "", ""},
+		{"claude-haiku-5-5", "", "xhigh"},
+		{"claude-haiku-5-5", "low", "low"},
 	} {
 		t.Run(tc.model+" "+tc.asked, func(t *testing.T) {
 			h := newHarness(t)
@@ -191,7 +193,7 @@ func TestCreateUsageErrors(t *testing.T) {
 		{"a latest alias", []string{"--repo", "r", "-p", "t", "--model", "claude-opus-latest"}, "an alias that moves with each release"},
 		{"no version", []string{"--repo", "r", "-p", "t", "--model", "claude-opus"}, `"claude-opus" is not a full Claude model id`},
 		{"not claude", []string{"--repo", "r", "-p", "t", "--model", "gpt-6-astra"}, "not a full Claude model id"},
-		{"effort on haiku", []string{"--repo", "r", "-p", "t", "--model", "claude-haiku-4-5", "--effort", "low"}, "model claude-haiku-4-5 has no effort control; leave --effort out"},
+		{"effort on haiku 4.5", []string{"--repo", "r", "-p", "t", "--model", "claude-haiku-4-5", "--effort", "low"}, "model claude-haiku-4-5 has no effort control; leave --effort out"},
 		{"xhigh on 4.6", []string{"--repo", "r", "-p", "t", "--model", "claude-opus-4-6", "--effort", "xhigh"}, "model claude-opus-4-6 takes low, medium, high, max"},
 		{"ultracode on 4.6", []string{"--repo", "r", "-p", "t", "--model", "claude-opus-4-6", "--effort", "ultracode"}, "takes low, medium, high, max"},
 		{"a made-up level", []string{"--repo", "r", "-p", "t", "--effort", "ultra"}, "takes low, medium, high, xhigh, max or ultracode"},

@@ -13,10 +13,12 @@ import (
 // before it sends a create, so both refuse the same levels. The table is v1
 // agent-run's claude_effort_levels (haynes-ops, probed 2026-09-01): only the
 // reduced tiers are listed, and every other model, a newer one included, takes
-// the full set.
+// the full set. Haiku 4.5 and older have no effort control; Haiku 5.5 takes the
+// full set (model-config table, checked 2026-10-19), so only the 1.x to 4.x
+// Haiku ids are in the no-effort pattern.
 var (
 	// claudeNoEffort are the models with no effort control.
-	claudeNoEffort = regexp.MustCompile(`^claude-(haiku-|sonnet-4-[05]|opus-4-[015]|[a-z]+-4-20|3)`)
+	claudeNoEffort = regexp.MustCompile(`^claude-(haiku-[0-4]|sonnet-4-[05]|opus-4-[015]|[a-z]+-4-20|3)`)
 	// claudeNoXHigh are the models without xhigh.
 	claudeNoXHigh = regexp.MustCompile(`^claude-(opus|sonnet)-4-6`)
 

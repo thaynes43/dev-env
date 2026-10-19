@@ -395,7 +395,7 @@ call, what a create checks, and how a reap and a heartbeat reach the objects.**
   `<namespace>/<name>`; the `mine` filter matches it. The API checks what only it
   knows: what plan 01 serves (agent `claude`, mode `task`, no `tools`, no `name` or
   `lane`; each later plan lifts its own line, and plan 02 lifts `local`, D-58); the effort level per model (v1
-  `agent-run`'s table: Haiku 4.5 and older take none, the 4.6 tier has no `xhigh`,
+  `agent-run`'s table: Haiku 4.5 and older take none (Haiku 5.5 takes the full set), the 4.6 tier has no `xhigh`,
   `ultracode` goes wherever `xhigh` does, every newer model takes the full set); the
   prompt at most 64 KiB (D-40); the idempotency key a label value; the profile in the
   templates. Then agentd's own check runs (`controller.CheckAgentdSession`, the code
