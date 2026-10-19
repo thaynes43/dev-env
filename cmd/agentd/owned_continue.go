@@ -75,7 +75,7 @@ func runOwnedHostSequence(ctx context.Context, s agentd.Settings, c hostexecutor
 		// First receipt/intent remain byte-for-byte intact. The only supported
 		// continued epoch has its own one-use file under the same private state.
 		c.ReceiptPath = filepath.Join(s.StateDir, fmt.Sprintf("owned-host-epoch-%d.json", next.Epoch))
-		c.Evidence = &hostexecutor.EvidenceConfig{HomeUID: c.Evidence.HomeUID, Baseline: c.Evidence.Baseline, ResumeBaseline: nextBaseline, CheckContinuation: c.Evidence.CheckContinuation, RequirePID1: c.Evidence.RequirePID1}
+		c.Evidence = &hostexecutor.EvidenceConfig{HomeUID: c.Evidence.HomeUID, Baseline: c.Evidence.Baseline, ResumeBaseline: nextBaseline, CheckContinuation: c.Evidence.CheckContinuation, ReportRefusal: c.Evidence.ReportRefusal, RequirePID1: c.Evidence.RequirePID1}
 	}
 }
 

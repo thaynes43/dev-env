@@ -34,6 +34,10 @@ const (
 	ProbeRefusedIdentity
 	ProbeRefusedNative
 	ProbeRefusedPredicate
+	ProbeRefusedResponseTimeout
+	ProbeRefusedResponseReset
+	ProbeRefusedResponseRead
+	ProbeRefusedResponseOversize
 )
 
 type probeRefusal struct {
@@ -54,8 +58,8 @@ func ProbeRefusalExit(err error) int {
 }
 
 func ProbeRefusalStage(code int) string {
-	stages := [...]string{"arguments", "isolation", "protection", "binding", "challenge", "guard-identity", "guard-liveness", "connect", "peer", "deadline", "request", "response", "identity", "native", "predicate"}
-	if code < ProbeRefusedArguments || code > ProbeRefusedPredicate {
+	stages := [...]string{"arguments", "isolation", "protection", "binding", "challenge", "guard-identity", "guard-liveness", "connect", "peer", "deadline", "request", "response", "identity", "native", "predicate", "response-timeout", "response-reset", "response-read", "response-oversize"}
+	if code < ProbeRefusedArguments || code > ProbeRefusedResponseOversize {
 		return "unknown"
 	}
 	return stages[code-ProbeRefusedArguments]

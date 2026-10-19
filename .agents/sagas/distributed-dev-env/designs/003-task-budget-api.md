@@ -525,3 +525,38 @@ a new backend computer using access-only ChatGPT auth; pairing-code creation is
 a separate operation. Fresh root approval covers local owner RPC, not new remote
 enrollment. No native enrollment is copied, created or reset by this workflow;
 phone/native remote enrollment requires its own explicit supported authorization.
+
+
+### Owned evidence response diagnosis — 2026-10-19 (Story110)
+
+The original004 actor refused admission before native inference. Installed
+v2.30.3 delivered an explicit CRI exit61 (`response`) in166ms with all caller
+and probe cancellation/deadline flags false. This is a response read failure
+or size refusal, before JSON/nonce/binding/phase validation; it is not evidence
+of a rejected identity predicate. Original Pod/HOME/ledger/deadline remain
+retained, and neither terminal Pod state nor caller STOP_UNCONFIRMED proves a
+native stop. No model call, operator restart or continuation occurred.
+
+The narrow diagnostic increment distinguishes finite response timeout, socket
+reset, other read error and oversize by fixed refusal-only exit codes65–68.
+The original guard reports only fixed request/guard/stability/encode close
+stages through one nonblocking, bounded queue per guard epoch to its own
+diagnostic writer. Reporting is best effort; a blocked sink cannot delay socket
+closure or server shutdown. Capacity rejection has its own fixed stage. No raw
+error, request/response content,
+challenge, policy or credential is logged or promoted to authority. Success
+remains only authenticated CRI exits40–44 after all original checks. EOF,
+truncation, partial data plus reset, missing status, cancellation and generic
+Stream success remain insufficient. Existing time, byte, peer/PID1/pidfd,
+immutable command/binding, native, budget and stop checks are unchanged.
+
+An actual authenticated Unix-peer regression reproduces reset on close with
+unread request bytes, including a partial reply; EOF/truncation/oversize/finite
+read timeout also refuse. It establishes a mechanism, not004's exact server
+close cause. This increment alone does not establish a correction, authorize
+rearming any actor, or claim native/phone/active-update acceptance. A separately authorized fresh
+diagnostic case may observe the installed fixed stages; it cannot rearm an old
+actor. Capture the
+fixed guard-side refusal before selecting a concrete correction or fresh case.
+Same original sole owner, Saga85/Epic107/Story110; all original attempts,
+counters, elapsed time and holds carry forward. No new framework or gate.

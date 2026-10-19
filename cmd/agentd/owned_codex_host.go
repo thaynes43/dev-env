@@ -71,6 +71,11 @@ func ownedCodexHost(ctx context.Context, args []string, stderr io.Writer, getenv
 		}
 
 	}
+	if evidence != nil {
+		evidence.ReportRefusal = func(stage string) {
+			_, _ = fmt.Fprintf(stderr, "owned root evidence response refused stage=%s\n", stage)
+		}
+	}
 	helper, err := os.Executable()
 	if err != nil {
 		return refused()
