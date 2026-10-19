@@ -1,5 +1,8 @@
 # Dev-env v2: workflow, quick start and feature set
 
+**Daily use:** the [v2 quick start](v2-quickstart.md) is the one-page version
+for Tom's phone-first workflow, with what was proven on 2026-10-19.
+
 **Current continuation, 2026-10-13:** the
 [2026-10-13 Claude pickup brief](../.agents/CLAUDE-RESUME-2026-10-13.md) records
 the deployed state, counters, rulings and next work. The
