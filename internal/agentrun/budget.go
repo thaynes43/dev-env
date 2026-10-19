@@ -142,7 +142,7 @@ func (a *app) nativeBudget(ctx context.Context, args []string) error {
 	raw = responseRaw
 	if req.Operation == "host/stop" {
 		var result apiv1.TaskBudgetStatus
-		if status != http.StatusAccepted || !strictWireJSON(raw, reflect.TypeFor[apiv1.TaskBudgetStatus]()) || json.Unmarshal(raw, &result) != nil || result.Binding != req.Binding || !result.Observed || !result.NativeStopRequested {
+		if status != http.StatusAccepted || !strictWireJSON(raw, reflect.TypeFor[apiv1.TaskBudgetStatus]()) || json.Unmarshal(raw, &result) != nil || result.Binding.TaskUID != req.Binding.TaskUID || result.Binding.HostID != req.Binding.HostID || result.Binding.PodUID != req.Binding.PodUID || result.Binding.Epoch != req.Binding.Epoch || !result.Binding.Deadline.Equal(req.Binding.Deadline) || !result.Observed || !result.NativeStopRequested {
 			return unconfirmed(http.MethodPost, path, "native stop request is unconfirmed; do not replay")
 		}
 		return a.printJSON(result)

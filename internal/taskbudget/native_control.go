@@ -68,7 +68,7 @@ func (s *Service) ReserveNativeControl(ctx context.Context, r apiv1.NativeContro
 	if !r.Valid() || owner == "" || len(owner) > 256 {
 		return nil, ErrDenied
 	}
-	return s.mutate(ctx, r.Binding, func(l *Ledger, now time.Time) error {
+	return s.mutate(ctx, r.Binding, func(l *Ledger, _ time.Time) error {
 		if l.Latched || !l.NativeAdmitted() || l.NativeStopRequested() || l.historyEvents() >= MaxEvents-2 {
 			return ErrDenied
 		}

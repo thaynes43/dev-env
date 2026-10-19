@@ -95,6 +95,9 @@ configured host policy, assigned campaign and its exact live owning Pod.
 | `POST /v1/task-budgets/{uid}/observe` | `{binding}`; a bound caller observes the same retained authority. |
 | `POST /v1/task-budgets/{uid}/events` | `{binding,id,kind,workerID?,attemptID?,blockerID?,evidence:{id,kind,reference}}`; only a bound executor, with independent validation for authoritative evidence. Caller-supplied worker starts are denied. |
 | `POST /v1/task-budgets/{uid}/extend` | `{binding,decisionID,nextStep,overallSeconds,effortSeconds,checkpointSeconds,evidence}`; authenticated human plus independent durable owner-decision verification. Agent and trusted-client self extension is denied. |
+| `POST /v1/task-budgets/{uid}/native` | `{binding,id,operation,threadID?,turnID?,text?}`; existing authenticated human only, one explicitly configured owned root. Supported operations are `thread/start`, `thread/resume`, `thread/read`, `turn/start`, `turn/interrupt`, `host/stop`. |
+| `POST /v1/task-budgets/{uid}/native-consume` | Same exact request; original bound coordinator only consumes a previously reserved human mutation once. Response `{binding,id,requestSHA256,consumed:true}` is required before native dispatch. |
+| `POST /v1/task-budgets/{uid}/continue` | `{binding,decisionID}`; existing authenticated human only, independently proven original guard stop and explicit policy opt-in, once within original budgets. |
 
 Extension is refused while proof or an adapter is missing. It requires the exact
 current task and epoch, a delivered escalation, all worker stops confirmed, and a
@@ -107,6 +110,13 @@ Status includes `observed`, `admitted`, exact `binding`, `latched`, `reason`,
 `escalation`, `stopConfirmed`, blocker counts and last evidence. HTTP success alone
 does not admit work: the client checks positive exact binding confirmation and
 `observed`; Admit additionally requires `admitted` and an unlatched ledger.
+
+Optional `nativeStopRequested:true` is derived from the current epoch's retained
+owner stop intent. It requests termination; it neither means `latched` nor
+`stopConfirmed` and does not free a worker. Original budget accounting still
+runs during stopping. A later independently validated stop event records the
+existing `NativeRootStopped` latch; only then may explicit owner continuation
+advance one epoch. Prior stop-request events remain in history.
 
 The host gate client is:
 
@@ -434,3 +444,52 @@ silent local peer cannot hold the only observer slot. Saturation refuses rather
 than creating an unbounded queue. This is not availability against a hostile
 same-UID worker: socket unlink or saturation can still stop the campaign. Unknown
 proof latches and keeps accounting/resources.
+
+### Owned-root native owner control
+
+The existing owned-root policy selects the native control adapter; it is absent
+with current default/fixture configuration. Human control uses an exact original
+binding and explicit ID (at most128 bytes), with only thread/turn IDs and at most
+8192 bytes of turn text as applicable. No arbitrary RPC, path, provider/model,
+approval, sandbox or credential override is exposed. Start/resume/turn requests
+pin `gpt-6-luna`; `thread/read` uses native RPC with turns, not private native
+JSONL/SQLite/auth stores. The one-shot CLI accepts JSON on stdin:
+`agent-run budget native TASK --once < request.json`.
+
+Before any mutation the human route commits an owner intent in the existing
+ledger. The fixed immutable exec argv binds a canonical SHA256; stdin must match
+it. After original guard/native peer checks and passive protocol initialization,
+the helper independently consumes the exact binding/ID/operation/hash through
+the original coordinator's HTTPS authority. Root/model callers cannot reserve
+human intents. Unreserved, changed, consumed or ambiguously acknowledged payloads
+run no native RPC; a racing copy of an approved payload can consume only that
+same one-use authority. Neither client nor helper retries lost mutation ACKs.
+
+Audit records are server-appended legacy-valid inert `activity` events with
+private intent/consume evidence kinds and bounded hash-derived event IDs. Public
+activity requests only observe and cannot append forged records. Existing event
+limits remain, with capacity checked before both intent and consume. Old
+serializers retain these fields; old operators do not understand the new stop
+flag, so this is not a mixed-version stop-enforcement acceptance claim.
+
+`host/stop` commits intent only. Admission, worker start, managed launch and
+owner mutations refuse while it is present. The original guard observes it and
+stops its owned native tree. `ObserveNative` still accounts/evaluates original
+limits but does not turn expected Stopping readiness loss into a different
+irreversible failure latch. Independent original Wait/ECHILD/helper and CRI stop
+validation remains mandatory before the existing once-continuation. Original
+receipts/counters, HOME and deadlines remain; exhaustion, unknown stop and Pod
+loss do not recover automatically. `turn/interrupt` stops a native turn and is
+not whole-tree termination.
+
+CRI response/history bytes are untrusted content, including against preopened
+same-UID FD forgery, and never become budget, stop, instruction-loading or
+served-model authority. Output errors remain sticky even if client-go drains
+past a valid JSON prefix. A native turn ACK means accepted, not completed;
+supported `thread/read` observes completion/history. Actual pinned0.160.1 with
+one scripted loopback Responses exchange establishes turn survival after client
+WebSocket disconnect, later completed-history read and same-thread resume. It
+uses no real model/provider/auth or shared owner daemon. Live owned-root/phone/
+active-upgrade acceptance needs matching published operator and task images;
+installed2.30 predates this helper. New root wiring is separately authorized,
+not implied by source publication. Existing effective ConfigMap GET rights suffice.

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
@@ -58,5 +59,21 @@ func TestBudgetNativeOneShotAndLostResponse(t *testing.T) {
 				t.Fatal("request replayed or subprocess", h.api.requests())
 			}
 		})
+	}
+}
+
+func TestNativeStopConfirmsEquivalentDeadlineOffset(t *testing.T) {
+	h := newHarness(t)
+	st := budgetReceipt()
+	st.NativeStopRequested = true
+	st.StopConfirmed = false
+	r := apiv1.NativeControlRequest{Binding: st.Binding, ID: "owner-stop", Operation: "host/stop"}
+	r.Binding.Deadline = r.Binding.Deadline.In(time.FixedZone("alternate", -4*60*60))
+	body, _ := json.Marshal(r)
+	h.env.Stdin = strings.NewReader(string(body))
+	h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) { writeTestJSON(w, http.StatusAccepted, st) }
+	h.mustRun(ExitOK, "budget", "native", "campaign-a", "--once")
+	if len(h.api.requests()) != 1 {
+		t.Fatal("stop repeated")
 	}
 }

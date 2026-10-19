@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
@@ -34,7 +35,7 @@ func ControlNative(ctx context.Context, socket string, p Observation, req apiv1.
 	if err != nil {
 		return nil, ErrNativeControl
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if !ownedSocketPeer(conn, p.Root) {
 		return nil, ErrNativeControl
 	}
@@ -48,7 +49,7 @@ func ControlNative(ctx context.Context, socket string, p Observation, req apiv1.
 	if err != nil {
 		return nil, ErrNativeControl
 	}
-	defer ws.Close()
+	defer func() { _ = ws.Close() }()
 	ws.SetReadLimit(NativeControlLimit)
 	if ws.SetReadDeadline(deadline) != nil || ws.SetWriteDeadline(deadline) != nil {
 		return nil, ErrNativeControl

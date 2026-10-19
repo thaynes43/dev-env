@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
@@ -34,7 +35,7 @@ func TestOwnerNativeProtocolAndLostAcknowledgement(t *testing.T) {
 				if e != nil {
 					return
 				}
-				defer ws.Close()
+				defer func() { _ = ws.Close() }()
 				_ = ws.SetReadDeadline(time.Now().Add(time.Second))
 				var msg struct {
 					ID     int                        `json:"id"`
@@ -83,7 +84,7 @@ func TestOwnerNativeProtocolAndLostAcknowledgement(t *testing.T) {
 				result := map[string]any{"thread": map[string]any{"id": thread, "turns": []any{map[string]string{"id": "saved-turn", "status": "completed"}}}, "turn": map[string]string{"id": "turn-a", "status": "inProgress"}}
 				_ = ws.WriteJSON(map[string]any{"id": msg.ID, "result": result, "error": nil})
 			})}
-			defer srv.Close()
+			defer func() { _ = srv.Close() }()
 			go func() { _ = srv.Serve(listener) }()
 			root, _ := identity(os.Getpid())
 			if scenario == "wrong-peer" {
