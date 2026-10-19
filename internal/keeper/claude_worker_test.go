@@ -296,6 +296,26 @@ func TestClaudeWorkerReReadFailureAfterIntentReturnsToReady(t *testing.T) {
 	}
 }
 
+func TestClaudeWorkerShutdownAfterPOSTStillSavesAndPublishes(t *testing.T) {
+	f := newClaudeFix(t)
+	f.seed(t, syntheticClaudeRecord(1))
+	f.tick() // generation 1 published
+	f.clk.Step(6 * time.Hour)
+	// Like the real fence, refuse a cancelled context.
+	f.w.Fence = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.tr.Run = func(call int, old secretValue) (claudeTokens, error) {
+		cancel() // the keeper is told to stop right after the provider answered
+		return rotated(call, old)
+	}
+	f.w.tick(ctx)
+	r := f.journal(t)
+	if f.tr.Calls != 1 || r.Stage != claudeReady || r.Access.Generation != 2 || r.Refresh.Reveal() != claudeNewRefreshCanary || f.liveGeneration(t) != 2 {
+		t.Fatalf("replacement lost to shutdown: calls=%d stage=%s gen=%d", f.tr.Calls, r.Stage, r.Access.Generation)
+	}
+}
+
 func TestClaudeWorkerTwoWorkersOneLeaseOnePOSTPerCycle(t *testing.T) {
 	f := newClaudeFix(t)
 	f.seed(t, syntheticClaudeRecord(1))

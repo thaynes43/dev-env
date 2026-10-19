@@ -116,6 +116,9 @@ func (w *claudeWorker) tick(ctx context.Context) {
 		if r, err = w.refresh(ctx); err != nil {
 			return
 		}
+		// The replacement is saved; publish it even if shutdown has begun. The
+		// fence and the publisher each carry their own 2 s timeout.
+		ctx = context.WithoutCancel(ctx)
 	}
 	if w.published == r.Access.Generation {
 		w.note("ready")
@@ -178,10 +181,15 @@ func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
 		return claudeRecord{}, errClaudeLeadership
 	}
 	resp, err := w.Transport.refresh(ctx, prev.Refresh, prev.Access.Scopes)
-	if err != nil || ctx.Err() != nil {
+	if err != nil {
 		w.needsLogin(ctx)
 		return claudeRecord{}, errClaudeRefresh
 	}
+	// The provider has accepted the POST and spent the old refresh token. From
+	// here on nothing may be lost to a shutdown, so the remaining steps run on
+	// a context detached from cancellation. Each step (fence, load, save,
+	// publish) carries its own 2 s timeout, which bounds the whole.
+	ctx = context.WithoutCancel(ctx)
 	if resp.AccountUUID != "" && resp.AccountUUID != prev.Access.AccountUUID {
 		w.needsLogin(ctx)
 		return claudeRecord{}, errClaudeAccount
