@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.34.0](https://github.com/thaynes43/dev-env/compare/v2.33.0...v2.34.0) (2026-10-19)
+
+
+### Features
+
+* **keeper:** adopt a fresh Claude login into the keeper journal ([#455](https://github.com/thaynes43/dev-env/issues/455)) ([3aa45d1](https://github.com/thaynes43/dev-env/commit/3aa45d104bf65ab5c79dab7fb36afb5f0994e3ee))
+
 ## [2.33.0](https://github.com/thaynes43/dev-env/compare/v2.32.0...v2.33.0) (2026-10-19)
 
 
