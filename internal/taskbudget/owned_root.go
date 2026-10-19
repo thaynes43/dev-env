@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strconv"
@@ -25,7 +26,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
-var errOwnedPodStarting = errors.New("original owned Pod status is still starting")
+var errOwnedPodStarting = fmt.Errorf("%w: original owned Pod status is still starting", ErrUnavailable)
 
 var ErrNativeStarting = errors.New("native root is in its bounded startup phase")
 

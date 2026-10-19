@@ -375,3 +375,14 @@ func TestOwnedRootAdmissionStartupStillFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+func TestOwnedRootAdmissionStartupCapFailsUnavailable(t *testing.T) {
+	f := newRootPolicyFixture(t)
+	f.inspector.Reader = &startingRootReader{Reader: f.live, always: true}
+	if err := f.inspector.InspectNativeAdmission(context.Background(), f.ledger, f.ledger.Binding); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("startup cap did not fail unavailable", err)
+	}
+	if len(f.ledger.Workers) != 0 {
+		t.Fatal("startup cap granted authority")
+	}
+}
