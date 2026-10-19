@@ -25,6 +25,8 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
+var errOwnedPodStarting = errors.New("original owned Pod status is still starting")
+
 var ErrNativeStarting = errors.New("native root is in its bounded startup phase")
 
 const OwnedRootPolicyKey = "owned-root.json"
@@ -168,7 +170,7 @@ func (i *OwnedRootInspector) observe(ctx context.Context, l *Ledger, b Binding) 
 	}
 	var pod corev1.Pod
 	key := client.ObjectKey{Namespace: p.Namespace, Name: p.Name}
-	if i.Reader.Get(ctx, key, &pod) != nil || string(pod.UID) != b.PodUID || pod.UID == "" || pod.CreationTimestamp.IsZero() || l.CreatedAt.Before(pod.CreationTimestamp.Time) || b.Deadline.After(pod.CreationTimestamp.Add(2750*time.Second)) || !pod.DeletionTimestamp.IsZero() || len(pod.OwnerReferences) != 0 || pod.Status.Phase != corev1.PodRunning || len(pod.Status.ContainerStatuses) != 1 {
+	if i.Reader.Get(ctx, key, &pod) != nil || string(pod.UID) != b.PodUID || pod.UID == "" || pod.CreationTimestamp.IsZero() || l.CreatedAt.Before(pod.CreationTimestamp.Time) || b.Deadline.After(pod.CreationTimestamp.Add(2750*time.Second)) || !pod.DeletionTimestamp.IsZero() || len(pod.OwnerReferences) != 0 {
 		return empty, p, ErrUnavailable
 	}
 	expected := OwnedRootPod(p)
@@ -190,6 +192,21 @@ func (i *OwnedRootInspector) observe(ctx context.Context, l *Ledger, b Binding) 
 	actual.DeprecatedServiceAccount = ""
 	if !apiequality.Semantic.DeepEqual(*actual, expected.Spec) {
 		return empty, p, ErrDenied
+	}
+	// The guard can make its single admission request before kubelet publishes
+	// Running/Ready. Wait only for this original exact-profile Pod's startup;
+	// no native process or admission mutation is allowed from this observation.
+	if pod.Status.Phase == corev1.PodPending && len(pod.Status.ContainerStatuses) <= 1 {
+		if len(pod.Status.ContainerStatuses) == 0 {
+			return empty, p, errOwnedPodStarting
+		}
+		c := pod.Status.ContainerStatuses[0]
+		if c.Name == OwnedRootContainer && c.RestartCount == 0 && c.LastTerminationState.Terminated == nil && c.State.Waiting != nil && (c.State.Waiting.Reason == "ContainerCreating" || c.State.Waiting.Reason == "PodInitializing") {
+			return empty, p, errOwnedPodStarting
+		}
+	}
+	if pod.Status.Phase != corev1.PodRunning || len(pod.Status.ContainerStatuses) != 1 {
+		return empty, p, ErrUnavailable
 	}
 	st := pod.Status.ContainerStatuses[0]
 	_, digest, _ := strings.Cut(p.Image, "@")
@@ -235,7 +252,22 @@ func (i *OwnedRootInspector) InspectNativeAdmission(ctx context.Context, l *Ledg
 	if l.NativeAdmitted() {
 		return i.InspectNativeContinuation(ctx, l, b)
 	}
-	proof, _, err := i.observe(ctx, l, b)
+	// One original admission request, not a mutation retry. Only the precise
+	// kubelet startup state may wait, bounded inside the existing request budget.
+	waitUntil := time.Now().Add(time.Second)
+	var proof int
+	var err error
+	for {
+		proof, _, err = i.observe(ctx, l, b)
+		if !errors.Is(err, errOwnedPodStarting) || !time.Now().Before(waitUntil) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ErrUnavailable
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 	if err != nil {
 		return err
 	}
