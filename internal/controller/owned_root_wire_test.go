@@ -33,6 +33,7 @@ func TestOwnedRootActualCRIWireStatus(t *testing.T) {
 		{"ready", `{"status":"Failure","reason":"NonZeroExitCode","details":{"causes":[{"reason":"ExitCode","message":"42"}]}}`, 42},
 		{"continuable", `{"status":"Failure","reason":"NonZeroExitCode","details":{"causes":[{"reason":"ExitCode","message":"44"}]}}`, 44},
 		{"stopped", `{"status":"Failure","reason":"NonZeroExitCode","details":{"causes":[{"reason":"ExitCode","message":"43"}]}}`, 43},
+		{"guard-liveness-refused", `{"status":"Failure","reason":"NonZeroExitCode","details":{"causes":[{"reason":"ExitCode","message":"56"}]}}`, 0},
 		{"empty-lost-status", "", 0},
 		{"generic-success", `{"status":"Success"}`, 0},
 		{"truncated", `{"status":"Failure","reason":"NonZeroExitCode","details":`, 0},

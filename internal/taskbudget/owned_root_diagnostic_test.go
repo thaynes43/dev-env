@@ -28,3 +28,24 @@ func TestOwnedRootDiagnosesConcurrentPodMetadataDriftWithoutWeakeningSnapshot(t 
 		t.Fatal("wrong snapshot diagnostic", output.String())
 	}
 }
+
+func TestOwnedRootStartupLogsOneTerminalRefusal(t *testing.T) {
+	for _, mode := range []string{"cap", "context"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newRootPolicyFixture(t)
+			f.inspector.Reader = &startingRootReader{Reader: f.live, always: true}
+			var output bytes.Buffer
+			ctx, cancel := context.WithCancel(log.IntoContext(context.Background(), logr.FromSlogHandler(slog.NewTextHandler(&output, nil))))
+			defer cancel()
+			if mode == "context" {
+				cancel()
+			}
+			if err := f.inspector.InspectNativeAdmission(ctx, f.ledger, f.ledger.Binding); !errors.Is(err, ErrUnavailable) {
+				t.Fatal("startup granted authority", err)
+			}
+			if strings.Count(output.String(), "owned root observation refused") != 1 || !strings.Contains(output.String(), "stage=pod-startup-"+mode) {
+				t.Fatal("terminal refusal missing or polling spam", output.String())
+			}
+		})
+	}
+}

@@ -30,6 +30,8 @@ func TestOwnedRootRefusalDiagnosticCannotBecomeProofOrLeakOutput(t *testing.T) {
 		{"untrusted-error", 0, errors.New("NEVER_LOG_WORKER_BYTES"), "unknown"},
 		{"generic-success", 0, nil, "unknown"},
 		{"signal", 143, nil, "unknown"},
+		{"unexited", 0, unexitedPhase{}, "unknown"},
+		{"canceled", 0, context.Canceled, "unknown"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var output bytes.Buffer

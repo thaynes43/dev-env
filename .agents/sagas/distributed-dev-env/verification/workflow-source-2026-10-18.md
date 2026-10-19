@@ -123,8 +123,10 @@ No privileges, identity, credential or security checks were weakened.
 
 Two owned-root starts refused before native admission or inference. The second
 Pod became Running/Ready before the refusal. Retained output does not identify
-the original predicate: the probe returned generic1 and its controller discarded
-the exec error. A static replay of its retained Ready profile passes the outer
+the original predicate: the probe maps local failures to generic1, while its
+controller discarded the original exec error/status. The later retained exit1
+was observed after the guard exited; it does not identify the admission refusal.
+A static replay of its retained Ready profile passes the outer
 checks only; local GET403→POST fallback, explicit CRI exit40 and separate-process
 nondumpable-guard proof also pass. None establishes the failed live predicate.
 

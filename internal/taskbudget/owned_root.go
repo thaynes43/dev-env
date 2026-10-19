@@ -295,11 +295,15 @@ func (i *OwnedRootInspector) InspectNativeAdmission(ctx context.Context, l *Ledg
 		}
 		select {
 		case <-ctx.Done():
+			log.FromContext(ctx).WithName("owned-root").Info("owned root observation refused", "stage", "pod-startup-context")
 			return ErrUnavailable
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
 	if err != nil {
+		if errors.Is(err, errOwnedPodStarting) {
+			log.FromContext(ctx).WithName("owned-root").Info("owned root observation refused", "stage", "pod-startup-cap")
+		}
 		return err
 	}
 	if proof != hostexecutor.EvidencePrepared {
