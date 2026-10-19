@@ -120,6 +120,18 @@ func (s *Server) resolveCaller(ctx context.Context, id Identity) (*caller, error
 	return nil, forbidden("%s may not call this API: it is not Tom's, a client's or a session's ServiceAccount, and summoning callers (CallerPolicy) arrive in plan 10", ref)
 }
 
+// isWorkbenchSession reports whether c is a session whose pod runs as the
+// workbench ServiceAccount. The ServiceAccount comes from the TokenReview, and
+// resolveCaller only treats a pod-bound token of that account as a session when
+// an AgentSession owns the pod, so a session on the ordinary account never
+// passes. Such a caller is that session for heartbeats and the workbench for the
+// Codex remote create rule.
+func (s *Server) isWorkbenchSession(c *caller) bool {
+	return c.kind == kindSession && s.Policy.WorkbenchServiceAccount != "" &&
+		c.identity.Namespace == s.Policy.SessionNamespace &&
+		c.identity.ServiceAccount == s.Policy.WorkbenchServiceAccount
+}
+
 // workbenchSessionPod reports whether id is the workbench ServiceAccount's token
 // bound to a pod that an AgentSession owns. A token bound to no pod, or to a
 // pod no session owns, is the client's. A pod that cannot be read is not

@@ -133,8 +133,9 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 			// snapshot; a project is still a task-only route.
 			// It runs on the keeper's Codex login, so only Tom and his trusted
 			// clients (the workbench, the v1 pod) start one, never an agent's
-			// session token. The coordinator class is refused above.
-			if c.kind != kindHuman && c.kind != kindClient {
+			// session token. The coordinator class is refused above. A session
+			// whose pod runs as the workbench ServiceAccount is the workbench.
+			if c.kind != kindHuman && c.kind != kindClient && !s.isWorkbenchSession(c) {
 				return nil, forbidden("a codex remote session runs on the keeper's login and is started by Tom or his workbench, not by a session")
 			}
 			if req.Project != "" {

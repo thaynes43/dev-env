@@ -197,8 +197,8 @@ nobody signs in per session.
   which only the v1 pod or a laptop with admin access may reach. The workbench
   will not change this: it reaches session pods only.
 - **`agent-run pair`, `attach` and `detach`**, until the workbench ships.
-- **Creating a Codex host.** Only you (from a laptop) or the v1 pod may. A
-  workbench session counts as a session, so it will not be able to either.
+- **Creating a Codex host.** Only you (from a laptop), the v1 pod or a
+  workbench session may; an ordinary session is refused.
 - **Restarting the v2 operator, keeper or shelf.** A v2 session is refused there.
 - **Proxmox operator work, `hw-ssh`, Unraid and PiKVM.** A v2 session has no key
   and no LAN reach by default. Each use needs an access grant you approve, and no
