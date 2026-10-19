@@ -75,6 +75,7 @@ type Server struct {
 	// needs protected storage, independently validated receipts and owned stop.
 	TaskBudgets         *taskbudget.Service
 	AssignedTaskBudgets map[string]string // configured HostID -> logical TaskUID
+	NativeOwnerControl  NativeOwnerControl
 	// Projects is a concrete uncached named ConfigMap binding, never a caller-supplied resolver.
 	Projects *CatalogBinding
 	// PrivateProjectTasks admits new catalog tasks into private repositories.
@@ -184,6 +185,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle(apiv1.TaskBudgetsPath+"/{uid}/observe", s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.observeTaskBudget}}))
 	mux.Handle(apiv1.TaskBudgetsPath+"/{uid}/events", s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.recordTaskBudgetEvent}}))
 	mux.Handle(apiv1.TaskBudgetsPath+"/{uid}/continue", s.serve(route{methods: map[string]handler{http.MethodPost: s.continueTaskBudget}}))
+	mux.Handle(apiv1.TaskBudgetsPath+"/{uid}/native", s.serve(route{methods: map[string]handler{http.MethodPost: s.nativeControl}}))
+	mux.Handle(apiv1.TaskBudgetsPath+"/{uid}/native-consume", s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.consumeNativeControl}}))
 	mux.Handle(apiv1.TaskBudgetsPath+"/{uid}/extend", s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.extendTaskBudget}}))
 	mux.Handle(apiv1.PilotPreflightPath, s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.preflightPrivatePilot}}))
 	mux.Handle(apiv1.SessionsPath, s.serve(route{coordinator: true, methods: map[string]handler{

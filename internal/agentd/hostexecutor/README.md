@@ -21,7 +21,7 @@ an absolute pinned Codex executable as `NativeBinary`. The private home and rece
 parent must already exist. The native command is fixed:
 
 ```
-codex app-server --remote-control --managed-daemon --listen unix:///PRIVATE/socket
+CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED=1 codex app-server --managed-daemon --listen unix:///PRIVATE/socket
 ```
 
 The helper accepts only an inherited socket from its parent with the same UID and
@@ -185,3 +185,77 @@ stops are confirmed. Original intent, receipts, stop history and counters remain
 The next epoch gets a distinct receipt, and actual startup measurement is separate
 from the original policy baseline. No automatic Pod-loss or exhaustion recovery
 is implemented. Tests use inert helper/native processes, not provider sessions.
+
+## Trusted owner thread/turn control
+
+The existing authenticated-human API adds
+`POST /v1/task-budgets/{uid}/native`, selected only when the existing explicit
+owned-root policy configures this adapter. It accepts an exact immutable binding,
+an explicit request ID, and one operation: `thread/start`, `thread/resume`,
+`thread/read` (including turns), `turn/start`, `turn/interrupt`, or `host/stop`.
+No arbitrary RPC/path, model/provider, approval, sandbox or credential override
+is accepted. Thread creation/resume and turns pin `gpt-6-luna`.
+
+Use `agent-run budget native TASK --once < request.json` as the existing human
+caller. Request JSON contains `binding`, `id`, `operation` and only the relevant
+`threadID`, `turnID`, or `text`. Prompts travel on stdin, never exec argv/logs.
+Every mutation is reserved durably on the original ledger before dispatch. The
+immutable exec command includes the canonical request SHA256; the helper checks
+it, authenticates original guard/native peer evidence and independently consumes
+that exact human reservation through the root-only `/native-consume` endpoint.
+Consumption follows passive native initialization immediately before the RPC.
+A same-UID process cannot create authority by invoking the helper directly:
+unreserved, modified, already-consumed and ambiguously acknowledged requests
+refuse. A racing copy of the exact approved payload can only consume that same
+one-use authority. Never replay an unconfirmed mutation or substitute a new ID
+for an attempted turn without a new explicit owner decision.
+
+The audit reuses existing `activity` event envelopes with private evidence-kind
+markers, bounded hash event IDs and existing history limits. External activity
+submission only observes; it cannot append a forged owner receipt. Old ledger
+serializers preserve these inert fields. This does NOT make older operators
+understand the new stop-request status; mixed-version enforcement remains
+unaccepted. No original deadline, effort, checkpoint, worker, stop receipt or
+failed attempt is cleared. Passive history reads reserve/consume nothing.
+
+`host/stop` commits an owner intent; the original living guard sees the request
+and stops its owned native tree. The intent is not termination proof and frees
+no charged worker. Observing expected Stopping readiness loss does not poison
+continuation with a new authority-failure latch. Only the existing independent
+Wait/ECHILD/helper/CRI stop validation records `NativeRootStopped`. The existing
+human `budget continue --decision ID TASK` can then authorize one epoch on the
+same guard/Pod/HOME inside the original budget. Old audit and stop events remain.
+Unknown/exhausted/deadline-expired campaigns and Pod/container loss refuse.
+Turn interrupt is a native turn operation, not whole-tree stop.
+
+Native result/history stdout is **untrusted content**, including against a
+same-UID preopened-CRI-FD forgery. It is never used as instruction-loading,
+served-model, readiness, stop, budget or continuation acceptance evidence.
+The existing dedicated CRI evidence statuses and kernel/native checks remain
+unchanged. Response bounds retain writer errors even when CRI drains them.
+A `turn/start` result is an acceptance acknowledgement; use supported
+`thread/read` to observe completion/history. No native JSONL/SQLite/auth store
+is read by this adapter and no interactive client or pairing is opened.
+
+The actual pinned0.160.1 test uses one scripted loopback Responses exchange,
+private HOME, no credentials and no real provider/model. It proves a turn stays
+on the original managed daemon when its control WebSocket closes and that a
+later connection reads completed history/resumes the same thread. It does not
+prove owned-guard integration, remote enrollment, live model/rule loading,
+phone steering or an active-session operator upgrade. Run serially with
+`DEV_ENV_PINNED_NATIVE_BINARY` pointing to verified0.160.1; ordinary CI without
+that artifact reports the optional local protocol proof as skipped.
+
+Installed task2.30.0 predates `owned-native-control`; this source needs matching
+published/verified operator and task-agent adoption before live use. Ordinary
+source merge/publication is independent of the held new root admission,
+credential-consumer and provider-network wiring. Effective operator ConfigMap
+GET permissions already suffice: no new named Roles/Bindings are required.
+
+The fixed helper omits `--remote-control` and sets the pinned internal startup
+environment `CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED=1`. This selects
+`DisabledEphemeral`, ignoring retained enablement without editing native stores.
+Pinned0.160.1 can automatically enroll
+a fresh backend computer under that flag before any pairing-code request. The
+approved bounded root uses the local managed Unix RPC daemon only, matching the
+actual pinned loopback test. It does not create/copy native remote enrollment.

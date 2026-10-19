@@ -326,7 +326,12 @@ func (s *Service) Observe(ctx context.Context, b Binding) (*Ledger, error) {
 // removed or unknown. Ordinary status observation still exposes a durable latch.
 func (s *Service) ObserveNative(ctx context.Context, b Binding) (*Ledger, error) {
 	return s.mutate(ctx, b, func(l *Ledger, _ time.Time) error {
-		if l.Latched {
+		// A committed owner stop intent already denies new admission. Deliver
+		// it to the original guard even during Stopping, without turning its
+		// expected readiness loss into an unrelated irreversible failure latch.
+		// mutate still accounts/evaluates the original limits; stop receipts
+		// continue to require the independent native-stop validator.
+		if l.Latched || l.NativeStopRequested() {
 			return nil
 		}
 		refuse := func(err error) error {
@@ -369,7 +374,7 @@ func (s *Service) ObserveNative(ctx context.Context, b Binding) (*Ledger, error)
 // model work, continuation, child dispatch or executor creation.
 func (s *Service) Admit(ctx context.Context, b Binding) (*Ledger, error) {
 	return s.mutate(ctx, b, func(l *Ledger, _ time.Time) error {
-		if l.Latched {
+		if l.Latched || l.NativeStopRequested() {
 			return ErrDenied
 		}
 		if s.Validator == nil || s.NativeInspector == nil {
@@ -464,6 +469,9 @@ func (s *Service) Record(ctx context.Context, e apiv1.TaskBudgetEvent) (*Ledger,
 		}
 		switch e.Kind {
 		case "worker-start":
+			if l.NativeStopRequested() {
+				return ErrDenied
+			}
 			if inspector, ok := s.NativeInspector.(NativeContinuationInspector); ok {
 				if err := inspector.InspectNativeContinuation(ctx, l, e.Binding); err != nil {
 					if !errors.Is(err, ErrNativeStarting) && l.NativeAdmitted() {
@@ -598,7 +606,8 @@ func (s *Service) Extend(ctx context.Context, e apiv1.TaskBudgetExtension, authe
 
 func (l *Ledger) Status() apiv1.TaskBudgetStatus {
 	st := apiv1.TaskBudgetStatus{Observed: true, Binding: l.Binding, Latched: l.Latched, Reason: l.Reason,
-		EffortMilliseconds: l.EffortMilliseconds, UsageAccounting: "SupervisorElapsedEstimate; provider usage unavailable",
+		NativeStopRequested: l.NativeStopRequested(),
+		EffortMilliseconds:  l.EffortMilliseconds, UsageAccounting: "SupervisorElapsedEstimate; provider usage unavailable",
 		LastProgress: l.LastProgress, NextCheckpoint: l.NextCheckpoint, Escalation: l.Escalation, StopConfirmed: l.stopped()}
 	blockers := map[string]apiv1.TaskBudgetBlocker{}
 	for _, e := range l.Events {

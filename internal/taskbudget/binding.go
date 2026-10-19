@@ -81,7 +81,7 @@ type ManagedAdmissionInspector interface {
 // Unknown create results keep the reservation. Absence never permits a retry.
 func (s *Service) ReserveManagedLaunch(ctx context.Context, b Binding, id string) (*Ledger, error) {
 	return s.mutate(ctx, b, func(l *Ledger, _ time.Time) error {
-		if l.Latched {
+		if l.Latched || l.NativeStopRequested() {
 			return ErrDenied
 		}
 		if s.ManagedInspector == nil {
@@ -112,7 +112,7 @@ func (s *Service) ReserveManagedLaunch(ctx context.Context, b Binding, id string
 				return err
 			}
 			l.evaluate(now)
-			if l.Latched {
+			if l.Latched || l.NativeStopRequested() {
 				return ErrDenied
 			}
 			w.Managed.LaunchRequested = true

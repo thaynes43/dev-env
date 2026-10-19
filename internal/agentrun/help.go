@@ -113,6 +113,19 @@ can record a due stop latch. Create/show report authority; neither admits or
 launches work, resets an epoch, extends a deadline or clears a latch. Native
 launch still requires the owned executor's independent admission checks.
 
+Native control: agent-run budget native TASK --once < request.json
+The existing authenticated human sends a complete original binding, explicit ID
+and operation on stdin: thread/start, thread/resume, thread/read, turn/start,
+turn/interrupt, or host/stop. Only the explicitly configured owned root is used;
+thread/turn creation pins gpt-6-luna. No prompt, model, pairing, credential or
+approval override is accepted in flags. Mutation IDs are reserved, then independently
+consumed by the immutable helper BEFORE dispatch; passive reads add no counter.
+lost acknowledgement is unconfirmed, never automatically retried. thread/read
+uses supported native history RPC, not JSONL/SQLite. turn/start only confirms
+acceptance; inspect thread/read for actual completion. turn/interrupt is not a
+whole-tree stop. host/stop requests original-guard termination; await independent
+stop confirmation before continue. Native content is not budget/stop evidence.
+
 Continue requires the existing authenticated trusted owner and an explicit
 policy opt-in. It permits native-process continuation once on the original
 still-live guard/Pod/HOME only after independently proven root and child stops.

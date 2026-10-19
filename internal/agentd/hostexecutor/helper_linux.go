@@ -78,9 +78,7 @@ func Helper() error {
 	}
 	deadline := time.NewTimer(time.Until(c.Binding.Deadline))
 	defer deadline.Stop()
-	cmd := exec.Command(c.NativeBinary, "app-server", "--remote-control", "--managed-daemon", "--listen", "unix://"+c.SocketPath)
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + c.Home, "CODEX_HOME=" + c.Home + "/.codex", "TMPDIR=/tmp", "LANG=C.UTF-8", "LC_ALL=C.UTF-8"}
-	cmd.Dir = c.Home
+	cmd := nativeCommand(c)
 	if err = cmd.Start(); err != nil {
 		return err
 	}
@@ -134,6 +132,17 @@ func Helper() error {
 		rootDone <- e
 	}
 	return stopAndReport(c, root, rootDone, send)
+}
+
+func nativeCommand(c Config) *exec.Cmd {
+	// A fresh --remote-control daemon auto-enrolls with the backend even
+	// without a pairing-code request. This bounded owner-RPC route grants no
+	// enrollment/pairing authority: force pinned 0.160.1 DisabledEphemeral,
+	// ignoring any retained HOME remote-control preference without editing it.
+	cmd := exec.Command(c.NativeBinary, "app-server", "--managed-daemon", "--listen", "unix://"+c.SocketPath)
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + c.Home, "CODEX_HOME=" + c.Home + "/.codex", "TMPDIR=/tmp", "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED=1"}
+	cmd.Dir = c.Home
+	return cmd
 }
 
 func stopAndReport(c Config, root Identity, done <-chan error, send func(message) error) error {

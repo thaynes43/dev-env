@@ -85,19 +85,20 @@ type TaskBudgetEscalation struct {
 }
 
 type TaskBudgetStatus struct {
-	Observed           bool                  `json:"observed"`
-	Admitted           bool                  `json:"admitted"`
-	Binding            TaskBudgetBinding     `json:"binding"`
-	Latched            bool                  `json:"latched"`
-	Reason             string                `json:"reason,omitempty"`
-	EffortMilliseconds int64                 `json:"effortMilliseconds"`
-	UsageAccounting    string                `json:"usageAccounting"`
-	LastProgress       time.Time             `json:"lastProgress"`
-	NextCheckpoint     time.Time             `json:"nextCheckpoint"`
-	Escalation         *TaskBudgetEscalation `json:"escalation,omitempty"`
-	StopConfirmed      bool                  `json:"stopConfirmed"`
-	Blockers           []TaskBudgetBlocker   `json:"blockers,omitempty"`
-	LastEvidence       *TaskBudgetEvidence   `json:"lastEvidence,omitempty"`
+	Observed            bool                  `json:"observed"`
+	Admitted            bool                  `json:"admitted"`
+	Binding             TaskBudgetBinding     `json:"binding"`
+	Latched             bool                  `json:"latched"`
+	NativeStopRequested bool                  `json:"nativeStopRequested,omitempty"`
+	Reason              string                `json:"reason,omitempty"`
+	EffortMilliseconds  int64                 `json:"effortMilliseconds"`
+	UsageAccounting     string                `json:"usageAccounting"`
+	LastProgress        time.Time             `json:"lastProgress"`
+	NextCheckpoint      time.Time             `json:"nextCheckpoint"`
+	Escalation          *TaskBudgetEscalation `json:"escalation,omitempty"`
+	StopConfirmed       bool                  `json:"stopConfirmed"`
+	Blockers            []TaskBudgetBlocker   `json:"blockers,omitempty"`
+	LastEvidence        *TaskBudgetEvidence   `json:"lastEvidence,omitempty"`
 }
 
 type TaskBudgetBlocker struct {

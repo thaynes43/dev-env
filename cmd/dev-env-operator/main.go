@@ -483,6 +483,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	var nativeControl apiserver.NativeOwnerControl
 	if o.ownedRootPolicy != "" {
 		if budgets == nil || o.nativeFixtureEnabled || !o.coordinatorEnabled || len(o.coordinatorHosts) != 1 || len(o.assignedTaskBudgets) != 1 {
 			return errors.New("owned-root policy needs one explicit assigned coordinator and no fixture")
@@ -490,6 +491,7 @@ func run(args []string) error {
 		root := &taskbudget.OwnedRootInspector{Reader: mgr.GetAPIReader(), Policy: client.ObjectKey{Namespace: "dev-env-system", Name: o.ownedRootPolicy}, Probe: controller.OwnedRootProber{Exec: podExec}, AssignedHost: o.coordinatorHosts[0].HostID, AssignedTask: o.assignedTaskBudgets[o.coordinatorHosts[0].HostID], AssignedPod: o.coordinatorHosts[0].PodName, AssignedParent: o.coordinatorHosts[0].ServiceAccount}
 		budgets.NativeInspector = root
 		budgets.Validator = controller.OwnedRootBudgetValidator{Root: root, Managed: budgets.Validator}
+		nativeControl = controller.OwnedNativeControl{Root: root, Exec: podExec}
 	}
 	// The shelf pod holds the shared volume: rescues are listed, restored
 	// from and pruned through it (D-67), and history archived through it.
@@ -607,8 +609,9 @@ func run(args []string) error {
 			TaskClaims: claims, TaskClaimReadProjects: o.taskClaimReadProjects,
 			Client:      mgr.GetClient(),
 			TaskBudgets: budgets, AssignedTaskBudgets: o.assignedTaskBudgets,
-			Live: mgr.GetAPIReader(),
-			Auth: apiserver.TokenReviewer{Client: mgr.GetClient()},
+			NativeOwnerControl: nativeControl,
+			Live:               mgr.GetAPIReader(),
+			Auth:               apiserver.TokenReviewer{Client: mgr.GetClient()},
 			Policy: apiserver.Policy{
 				Human:                 o.humanSA,
 				Clients:               o.clientSAs,
