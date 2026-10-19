@@ -493,3 +493,11 @@ uses no real model/provider/auth or shared owner daemon. Live owned-root/phone/
 active-upgrade acceptance needs matching published operator and task images;
 installed2.30 predates this helper. New root wiring is separately authorized,
 not implied by source publication. Existing effective ConfigMap GET rights suffice.
+
+The guarded helper intentionally launches local `app-server --managed-daemon
+--listen unix://...` **without `--remote-control`**. In pinned0.160.1 that flag
+selects enabled-ephemeral remote control, whose startup can automatically enroll
+a new backend computer using access-only ChatGPT auth; pairing-code creation is
+a separate operation. Fresh root approval covers local owner RPC, not new remote
+enrollment. No native enrollment is copied, created or reset by this workflow;
+phone/native remote enrollment requires its own explicit supported authorization.

@@ -251,3 +251,8 @@ published/verified operator and task-agent adoption before live use. Ordinary
 source merge/publication is independent of the held new root admission,
 credential-consumer and provider-network wiring. Effective operator ConfigMap
 GET permissions already suffice: no new named Roles/Bindings are required.
+
+The fixed helper omits `--remote-control`: pinned0.160.1 can automatically enroll
+a fresh backend computer under that flag before any pairing-code request. The
+approved bounded root uses the local managed Unix RPC daemon only, matching the
+actual pinned loopback test. It does not create/copy native remote enrollment.

@@ -83,9 +83,13 @@ func TestPinnedNativeTurnSurvivesControlDisconnectAndHistoryReconnect(t *testing
 	socket := filepath.Join(home, "n.sock")
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, binary, "app-server", "--managed-daemon", "--listen", "unix://"+socket)
-	cmd.Dir = home
-	cmd.Env = []string{"HOME=" + home, "CODEX_HOME=" + codexHome, "PATH=/usr/bin:/bin", "TMPDIR=" + home, "RUST_LOG=off"}
+	cmd := nativeCommand(Config{NativeBinary: binary, Home: home, SocketPath: socket})
+	for _, arg := range cmd.Args {
+		if arg == "--remote-control" {
+			t.Fatal("unapproved automatic remote enrollment")
+		}
+	}
+	cmd.Env = append(cmd.Env, "RUST_LOG=off")
 	var diagnostic strings.Builder
 	cmd.Stderr = &diagnostic
 	if err = cmd.Start(); err != nil {
