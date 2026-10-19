@@ -6,11 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 
 	kexec "k8s.io/client-go/util/exec"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/thaynes43/dev-env/internal/agentd/hostexecutor"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
@@ -37,7 +39,14 @@ func (p OwnedRootProber) Observe(ctx context.Context, key client.ObjectKey, cont
 	defer cancel()
 	err := p.Exec.Run(bounded, key.Namespace, key.Name, container, []string{"/usr/local/bin/agentd", "owned-codex-host-probe", hex.EncodeToString(challenge[:]), string(raw), homeUID, baseline}, nil, io.Discard, io.Discard)
 	var status kexec.ExitError
-	if bounded.Err() != nil || !errors.As(err, &status) || !status.Exited() || !hostexecutor.ValidEvidenceExit(status.ExitStatus()) {
+	typed := errors.As(err, &status)
+	if bounded.Err() != nil || !typed || !status.Exited() || !hostexecutor.ValidEvidenceExit(status.ExitStatus()) {
+		exited, code := false, -1
+		if typed {
+			exited, code = status.Exited(), status.ExitStatus()
+		}
+		// Never log remote error text or output: both may contain worker bytes.
+		log.FromContext(ctx).WithName("owned-root").Info("owned root process proof refused", "errorType", fmt.Sprintf("%T", err), "contextDone", bounded.Err() != nil, "typedExit", typed, "exited", exited, "exitCode", code, "probeStage", hostexecutor.ProbeRefusalStage(code))
 		return 0, taskbudget.ErrUnavailable
 	}
 	return status.ExitStatus(), nil

@@ -118,3 +118,29 @@ before owner mutation (dedicated CRI status44); stop status43 remains available
 when inputs drift. Recheck after committed epoch before measurement/start.
 Original policy Baseline and actual per-epoch StartupBaseline are separate.
 No privileges, identity, credential or security checks were weakened.
+
+## Guarded startup refusal diagnostics (2026-10-19)
+
+Two owned-root starts refused before native admission or inference. The second
+Pod became Running/Ready before the refusal. Retained output does not identify
+the original predicate: the probe returned generic1 and its controller discarded
+the exec error. A static replay of its retained Ready profile passes the outer
+checks only; local GET403→POST fallback, explicit CRI exit40 and separate-process
+nondumpable-guard proof also pass. None establishes the failed live predicate.
+
+The focused diagnostic correction preserves accepted CRI statuses40–44 exactly.
+Immutable probe refusals use rejected codes50–64 for arguments, isolation, memory
+protection, binding, challenge, guard identity/liveness, socket connect/peer,
+deadline/request/response, identity, native readiness or final predicate. Unknown
+errors remain rejected1. Operator logs only fixed stage, error type, context
+completion and typed-process-exit fields; no raw errors, stdout/stderr, challenges,
+policy contents or credentials. Inspector logs identify each original policy,
+profile, process-proof and individual resource-readback refusal. Whole-object
+readbacks, deadlines and original UID/profile checks remain unchanged.
+
+These diagnostics are source preparation, not a fix claimed for the unknown
+live cause. A subsequent supported observation must identify and reproduce that
+cause before accepting a correction. Old failed roots, HOME, receipts and original
+budgets remain retained and cannot be rearmed. No model, phone, access expansion
+or actor launch is part of the local diagnostic tests. Tests run serially with
+the shared lock, nice19/GOMAXPROCS2/-p1, without CPU burners or load loops.

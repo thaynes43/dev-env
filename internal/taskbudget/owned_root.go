@@ -20,6 +20,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/thaynes43/dev-env/internal/agentd/hostexecutor"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -156,12 +157,20 @@ func (i *OwnedRootInspector) load(ctx context.Context) (*corev1.ConfigMap, Owned
 	return &cm, p, nil
 }
 
-func (i *OwnedRootInspector) observe(ctx context.Context, l *Ledger, b Binding) (int, OwnedRootPolicy, error) {
+func (i *OwnedRootInspector) observe(ctx context.Context, l *Ledger, b Binding) (result int, policy OwnedRootPolicy, resultErr error) {
 	const empty = 0
+	stage := "policy"
+	defer func() {
+		if resultErr != nil && !errors.Is(resultErr, errOwnedPodStarting) {
+			// Fixed stages only; no remote errors, output or policy contents.
+			log.FromContext(ctx).WithName("owned-root").Info("owned root observation refused", "stage", stage)
+		}
+	}()
 	cm, p, err := i.load(ctx)
 	if err != nil {
 		return empty, p, err
 	}
+	stage = "binding"
 	now := time.Now().UTC()
 	if i.Now != nil {
 		now = i.Now().UTC()
@@ -170,11 +179,13 @@ func (i *OwnedRootInspector) observe(ctx context.Context, l *Ledger, b Binding) 
 		return empty, p, ErrDenied
 	}
 	var pod corev1.Pod
+	stage = "pod-identity"
 	key := client.ObjectKey{Namespace: p.Namespace, Name: p.Name}
 	if i.Reader.Get(ctx, key, &pod) != nil || string(pod.UID) != b.PodUID || pod.UID == "" || pod.CreationTimestamp.IsZero() || l.CreatedAt.Before(pod.CreationTimestamp.Time) || b.Deadline.After(pod.CreationTimestamp.Add(2750*time.Second)) || !pod.DeletionTimestamp.IsZero() || len(pod.OwnerReferences) != 0 {
 		return empty, p, ErrUnavailable
 	}
 	expected := OwnedRootPod(p)
+	stage = "pod-profile"
 	for k, v := range expected.Labels {
 		if pod.Labels[k] != v {
 			return empty, p, ErrDenied
@@ -206,6 +217,7 @@ func (i *OwnedRootInspector) observe(ctx context.Context, l *Ledger, b Binding) 
 			return empty, p, errOwnedPodStarting
 		}
 	}
+	stage = "pod-status"
 	if pod.Status.Phase != corev1.PodRunning || len(pod.Status.ContainerStatuses) != 1 {
 		return empty, p, ErrUnavailable
 	}
@@ -215,21 +227,25 @@ func (i *OwnedRootInspector) observe(ctx context.Context, l *Ledger, b Binding) 
 		return empty, p, ErrDenied
 	}
 	var home corev1.PersistentVolumeClaim
+	stage = "home"
 	if i.Reader.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: p.HomeClaim}, &home) != nil || string(home.UID) != p.HomeUID || !home.DeletionTimestamp.IsZero() || home.Status.Phase != corev1.ClaimBound || home.Spec.VolumeName == "" || len(home.Spec.AccessModes) != 1 || home.Spec.AccessModes[0] != corev1.ReadWriteOncePod {
 		return empty, p, ErrUnavailable
 	}
 	netPolicy := &unstructured.Unstructured{}
+	stage = "network"
 	netPolicy.SetAPIVersion("cilium.io/v2")
 	netPolicy.SetKind("CiliumNetworkPolicy")
 	if i.Reader.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: p.NetworkPolicyName}, netPolicy) != nil || string(netPolicy.GetUID()) != p.NetworkPolicyUID || !netPolicy.GetDeletionTimestamp().IsZero() || OwnedPolicyDigest(netPolicy.Object["spec"]) != p.NetworkPolicySHA || netPolicy.Object["specs"] != nil {
 		return empty, p, ErrUnavailable
 	}
 	var inputs corev1.ConfigMap
+	stage = "inputs"
 	if p.HomeInputsName != "" {
 		if i.Reader.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: p.HomeInputsName}, &inputs) != nil || string(inputs.UID) != p.HomeInputsUID || !inputs.DeletionTimestamp.IsZero() || len(inputs.Data) != 2 || len(inputs.Data["input.json"]) > 512<<10 || len(inputs.Data["requirements.toml"]) > 64<<10 || OwnedPolicyDigest(inputs.Data) != p.HomeInputsSHA {
 			return empty, p, ErrUnavailable
 		}
 	}
+	stage = "process-proof"
 	proof, err := i.Probe.Observe(ctx, key, OwnedRootContainer, b, p.HomeUID, p.Baseline)
 	if err != nil || !hostexecutor.ValidEvidenceExit(proof) {
 		return empty, p, ErrUnavailable
@@ -238,9 +254,23 @@ func (i *OwnedRootInspector) observe(ctx context.Context, l *Ledger, b Binding) 
 	var cmAgain corev1.ConfigMap
 	var homeAgain corev1.PersistentVolumeClaim
 	netAgain := netPolicy.DeepCopy()
-	if i.Reader.Get(ctx, key, &again) != nil || !reflect.DeepEqual(&pod, &again) || i.Reader.Get(ctx, i.Policy, &cmAgain) != nil || !reflect.DeepEqual(cm, &cmAgain) || i.Reader.Get(ctx, client.ObjectKeyFromObject(&home), &homeAgain) != nil || !reflect.DeepEqual(&home, &homeAgain) || i.Reader.Get(ctx, client.ObjectKeyFromObject(netPolicy), netAgain) != nil || !reflect.DeepEqual(netPolicy, netAgain) {
+	stage = "pod-readback"
+	if i.Reader.Get(ctx, key, &again) != nil || !reflect.DeepEqual(&pod, &again) {
 		return empty, p, ErrUnavailable
 	}
+	stage = "policy-readback"
+	if i.Reader.Get(ctx, i.Policy, &cmAgain) != nil || !reflect.DeepEqual(cm, &cmAgain) {
+		return empty, p, ErrUnavailable
+	}
+	stage = "home-readback"
+	if i.Reader.Get(ctx, client.ObjectKeyFromObject(&home), &homeAgain) != nil || !reflect.DeepEqual(&home, &homeAgain) {
+		return empty, p, ErrUnavailable
+	}
+	stage = "network-readback"
+	if i.Reader.Get(ctx, client.ObjectKeyFromObject(netPolicy), netAgain) != nil || !reflect.DeepEqual(netPolicy, netAgain) {
+		return empty, p, ErrUnavailable
+	}
+	stage = "inputs-readback"
 	if p.HomeInputsName != "" {
 		var inputsAgain corev1.ConfigMap
 		if i.Reader.Get(ctx, client.ObjectKeyFromObject(&inputs), &inputsAgain) != nil || !reflect.DeepEqual(inputs, inputsAgain) {
