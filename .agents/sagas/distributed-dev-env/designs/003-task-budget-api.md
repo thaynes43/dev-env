@@ -525,3 +525,52 @@ a new backend computer using access-only ChatGPT auth; pairing-code creation is
 a separate operation. Fresh root approval covers local owner RPC, not new remote
 enrollment. No native enrollment is copied, created or reset by this workflow;
 phone/native remote enrollment requires its own explicit supported authorization.
+
+
+### Complete owned evidence request frame — 2026-10-19 (Story110)
+
+Owned004 refused admission with authenticated CRI exit61 (`response`) in166ms,
+all caller/probe cancellation/deadline flags false, before native inference.
+A real guard-to-separate-probe process regression reproduces the reset. The
+guard decoded256 JSON bytes while one encoder newline remained in the socket;
+it sent711 response bytes, then closed with unread request data. Linux reset
+the stream, and the probe correctly refused the read error. Earlier lifecycle
+tests invoked the probe inside the guard process and missed this boundary.
+
+The fixed single-request protocol half-closes the probe's write side after its
+JSON request. The guard consumes exactly one complete request through EOF,
+within the original4096-byte/500ms server bounds, before replying. Extra JSON,
+trailing junk and excess bytes refuse. The probe still reads through response
+EOF and refuses every read error, including a complete-looking prefix followed
+by reset. No error is dropped, no timeout raised, and accepted evidence remains
+only authenticated CRI exits40–44 after all original identity/binding/nonce,
+PID1/peer/pidfd, native, immutable command, budget and stop checks. Paired guard
+and probe come from the same pinned task binary; this does not claim mixed
+framing-version support.
+
+Fixed refusal-only codes65–68 distinguish response timeout/reset/read/oversize.
+The original guard reports fixed request/guard/stability/encode/capacity stages
+through one bounded nonblocking diagnostic queue per epoch. Reporting is best
+effort; a blocked sink cannot hold sockets or server shutdown, and epoch2 keeps
+the reporter. No raw error, peer contents, challenge, policy or credential is
+logged or promoted to authority. The final queued close reason is drained by
+the independent diagnostic consumer if shutdown wins; proof never waits on it.
+
+The actual lifecycle test now launches a separate protected probe executable
+and requires an explicit40–44 process exit before checking diagnostic output.
+It uses production-shaped IDs and nanosecond UTC deadlines; hosted CI runs the
+same sequence as nonroot PID1, while local non-PID1 checks explicitly make no
+PID1 acceptance claim. Real socket tests cover segmented encoder newline,
+trailing JSON/junk, request/response byte limits, EOF/truncation, partial/reset,
+finite read timeout and blocked reporting. An additional retained local-only
+receipt prepared004's actual frozen public input bytes with the production HOME
+preparation function and matched its original baseline/UID before explicit40.
+No model, provider, credential or cluster actor was used in these reproductions.
+
+Original004 Pod/HOME/ledger/deadline and counters remain retained; its terminal
+Pod and caller STOP_UNCONFIRMED are not native-stop proof. Same original sole
+owner, Saga85/Epic107/Story110 and all prior elapsed time/holds remain. Fresh005
+is separately authorized only after matching signed publication/install,
+required CI/review and one original finite caller window. Runtime fix, hidden
+instruction response, stop/continue/history, phone and active-update acceptance
+remain unearned until observed; no rearm, broader admission or authority change.

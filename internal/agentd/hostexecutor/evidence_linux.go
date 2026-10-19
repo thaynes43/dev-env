@@ -34,8 +34,10 @@ type EvidenceConfig struct {
 	AfterStopped      func(Receipt) error
 	ResumeBaseline    string
 	CheckContinuation func() bool
-	mu                sync.Mutex
-	server            *evidenceServer
+	// ReportRefusal receives fixed local stage names only, never peer bytes/errors.
+	ReportRefusal func(string)
+	mu            sync.Mutex
+	server        *evidenceServer
 }
 
 type Observation struct {
@@ -61,6 +63,7 @@ type evidenceServer struct {
 	listener          net.Listener
 	done              chan struct{}
 	checkContinuation func() bool
+	reportRefusal     func(string)
 }
 
 func ProtectEvidenceProcess() error {
@@ -270,6 +273,34 @@ func (e *EvidenceConfig) start(c Config) error {
 		return err
 	}
 	s := &evidenceServer{current: Observation{Version: 1, Binding: c.Binding, Guard: guard, HomeUID: e.HomeUID, Baseline: e.Baseline, StartupBaseline: baseline, Stage: "Prepared"}, checkContinuation: e.CheckContinuation, nativeSocket: c.SocketPath, listener: listener, done: make(chan struct{})}
+	if e.ReportRefusal != nil {
+		// One bounded diagnostic queue/consumer per guard epoch. A blocked log
+		// sink cannot hold a socket, proof handler or evidence-server shutdown.
+		reports := make(chan string, 1)
+		s.reportRefusal = func(stage string) {
+			select {
+			case reports <- stage:
+			default:
+			}
+		}
+		go func() {
+			for {
+				select {
+				case stage := <-reports:
+					e.ReportRefusal(stage)
+				case <-s.done:
+					// Preserve the final queued close reason if shutdown wins the
+					// select. The server never waits for this diagnostic consumer.
+					select {
+					case stage := <-reports:
+						e.ReportRefusal(stage)
+					default:
+					}
+					return
+				}
+			}
+		}()
+	}
 	e.mu.Lock()
 	e.server = s
 	e.mu.Unlock()
@@ -289,6 +320,7 @@ func (e *EvidenceConfig) start(c Config) error {
 				go func() { defer active.Done(); defer func() { <-slots }(); s.serve(conn) }()
 			default:
 				_ = conn.Close()
+				s.refuse("capacity")
 			}
 		}
 	}()
@@ -327,23 +359,42 @@ func (e *EvidenceConfig) update(stage string, r Receipt) {
 	s.current.TreeReaped = r.TreeReaped
 }
 
+func (s *evidenceServer) refuse(stage string) {
+	if s.reportRefusal != nil {
+		s.reportRefusal(stage)
+	}
+}
+
 func (s *evidenceServer) serve(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 	deadline := time.Now().Add(500 * time.Millisecond)
-	_ = conn.SetDeadline(deadline)
+	if conn.SetDeadline(deadline) != nil {
+		s.refuse("socket-deadline")
+		return
+	}
 	var req struct {
 		Challenge string  `json:"challenge"`
 		Binding   Binding `json:"binding"`
 	}
-	d := json.NewDecoder(io.LimitReader(conn, 4096))
+	request := &io.LimitedReader{R: conn, N: 4097}
+	d := json.NewDecoder(request)
 	d.DisallowUnknownFields()
-	if d.Decode(&req) != nil || !validChallenge(req.Challenge) {
+	// This one-request stream ends at the probe's write half-close. Consume the
+	// complete bounded frame: closing with an unread encoder newline resets an
+	// otherwise valid reply on Linux. Extra JSON/bytes never count as a request.
+	if d.Decode(&req) != nil || d.Decode(new(any)) != io.EOF || request.N == 0 {
+		s.refuse("request-decode")
+		return
+	}
+	if !validChallenge(req.Challenge) {
+		s.refuse("request-challenge")
 		return
 	}
 	s.mu.Lock()
 	result := s.current
 	s.mu.Unlock()
 	if !sameBinding(req.Binding, result.Binding) {
+		s.refuse("request-binding")
 		return
 	}
 	if result.Stage == "Ready" {
@@ -355,23 +406,28 @@ func (s *evidenceServer) serve(conn net.Conn) {
 		err := probeNative(ctx, s.nativeSocket, result.Root, result.NativeVersion)
 		cancel()
 		if err != nil {
+			s.refuse("native-probe")
 			return
 		}
 	}
 	if !rootLive(result.Guard) {
+		s.refuse("guard-liveness")
 		return
 	}
 	s.mu.Lock()
 	stable := reflect.DeepEqual(result, s.current)
 	s.mu.Unlock()
 	if !stable {
+		s.refuse("observation-changed")
 		return
 	}
 	if result.Stage == "Stopped" && s.checkContinuation != nil {
 		result.ContinuationReady = s.checkContinuation()
 	}
 	result.Challenge = req.Challenge
-	_ = json.NewEncoder(conn).Encode(result)
+	if json.NewEncoder(conn).Encode(result) != nil {
+		s.refuse("response-encode")
+	}
 }
 
 // ProbeEvidence's anchor comes from the trusted launch topology. The production
@@ -409,9 +465,24 @@ func ProbeEvidence(ctx context.Context, path string, anchor int, b Binding, chal
 	}{challenge, b}) != nil {
 		return empty, probeRefusal{ProbeRefusedRequest, errors.New("evidence request unavailable")}
 	}
+	request, ok := conn.(*net.UnixConn)
+	if !ok || request.CloseWrite() != nil {
+		return empty, probeRefusal{ProbeRefusedRequest, errors.New("evidence request unavailable")}
+	}
 	raw, err := io.ReadAll(io.LimitReader(conn, 8193))
-	if err != nil || len(raw) > 8192 {
-		return empty, probeRefusal{ProbeRefusedResponse, errors.New("evidence response unavailable")}
+	if err != nil {
+		code := ProbeRefusedResponseRead
+		var timeout net.Error
+		switch {
+		case errors.As(err, &timeout) && timeout.Timeout():
+			code = ProbeRefusedResponseTimeout
+		case errors.Is(err, unix.ECONNRESET):
+			code = ProbeRefusedResponseReset
+		}
+		return empty, probeRefusal{code, fmt.Errorf("evidence response unavailable: bytes=%d", len(raw))}
+	}
+	if len(raw) > 8192 {
+		return empty, probeRefusal{ProbeRefusedResponseOversize, errors.New("evidence response unavailable")}
 	}
 	var result Observation
 	d := json.NewDecoder(strings.NewReader(string(raw)))
