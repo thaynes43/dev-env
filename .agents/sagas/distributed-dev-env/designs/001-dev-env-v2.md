@@ -492,7 +492,7 @@ The verbs stay, so muscle memory and every CLAUDE.md instruction carry over.
 | `agent-run [--repo r] [--agent a] [-p "…"\|--local\|--interactive] [--model] [--effort]` | `POST /v1/sessions`, prints the id. New: `--agent opencode`, `--size S\|M\|L`, `--profile`, `--tools a,b`. `--interactive` still means "TUI + Remote Control" for claude. |
 | `list` | `GET /v1/sessions` |
 | new: `show <id>` | `GET /v1/sessions/{id}`: the task, the last heartbeat and how the task ended (D-50). |
-| `attach [<id>]` | For Tom: `kubectl exec -it <pod> -- tmux attach` from the workbench or a laptop. Not offered to agents, which have no exec in `dev-agents` (D-19); they use `msg`. |
+| `attach [<id>]` | For Tom: `kubectl exec -it <pod> -- tmux attach` from the workbench or a laptop. Not offered to agents, which have no exec in `dev-agents` (D-19); they use `msg`. The one exception is a session in the `workbench` profile, which runs as `dev-env-workbench` (D-19, workbench amendment). |
 | `detach` | For Tom: exec `tmux detach-client` in the pod. |
 | `reap [<id>]` | `DELETE /v1/sessions/{id}` |
 | `prune`, `sweep` | Gone as commands. The operator's reaper does this continuously ([4.3](#43-timers)). `agent-run fleet` shows what it will do. |
@@ -1180,7 +1180,8 @@ task's prompt still runs once.**
   -- env TERM=<$TERM> tmux attach-session -t agent` with the caller's own Kubernetes
   rights. `agent-run detach <name>` runs `tmux detach-client -s agent` there. They
   are for Tom: from the v1 pod (its ServiceAccount has exec in `dev-agents`), the
-  workbench, or a laptop (step 12). Agents have no exec there (D-19), so inside a
+  workbench, a laptop (step 12) or a `workbench`-profile session (the account has exec,
+  and the operator sets `DEV_ENV_WORKBENCH=1`). Other agents have no exec there (D-19), so inside a
   session pod (known by its projected API token, as agent-run's connect finds it;
   agentd removes `AGENTD_SESSION` from the agent's environment) agent-run refuses
   both (exit 3) and points at `msg`. `agent-run
@@ -3196,6 +3197,23 @@ correction.
 - **Accepted, as in v1:** sessions inside the coordinator host or the codex hub can
   read that pod's login file, because they run where it lives.
 
+**D-19, workbench amendment (2026-10-19, Story110 T24; Tom Q-110-07: "build it").** One
+profile, `workbench`, may run its sessions as `dev-agents/dev-env-workbench` (the
+`serviceAccount` field of a profile accepts that name and no other). The account has
+the Role in the table below and nothing cluster-wide, and the identity guard and the
+Kyverno exec guard exempt it, as before. What this accepts, plainly: such a session
+can exec into **every** pod in `dev-agents`, so it can read any session's HOME, GitHub
+token, the keeper's login projections and the grant tokens (break-glass included) in
+that pod's grants tmpfs. It is as trusted as the v1 pod's exec today, and it is a
+model-driven session; keep the profile to Tom's ceremony sessions. It does not step up
+to a client: the API treats a workbench token bound to a session's pod as that
+session (child, depth and profile limits apply), and the account cannot mint a token
+(no `serviceaccounts/token`), so an unbound client token is unreachable from a pod. A
+workbench session's children inherit the profile (up to the usual four). Open
+hardening, not built: a Kyverno rule on the caller's pod-name claim to limit what a
+workbench pod may exec into. Every other profile keeps `dev-env-agent` and D-19 as
+written.
+
 **D-19 as built, and S-12 (2026-10-07, KICKOFF 8.4; haynes-ops #3477, #3479).**
 haynes-ops `apps/dev-env-system/rbac/` holds the ServiceAccounts, the Roles of the
 table below and three ValidatingAdmissionPolicies; `apps/kyverno/policies/app/` holds
@@ -3272,7 +3290,7 @@ the Kyverno exec rule.
 | `dev-env-system/dev-env-keeper` | Role in `dev-agents`: Secrets get, update and patch on `resourceNames` `dev-env-gh-token`, `dev-env-ops-gh-token`, `dev-env-claude-live`, `dev-env-codex-live` only; for credential grants (Q-07), also `pods/exec` in `dev-agents` and read on `AccessGrant`. ClusterRole: `tokenreviews` create. Leases (get, create, update) and Events (create, patch) in its own namespace (D-52). Plan 01 grants the Secrets `patch` only (D-52). | The four Secrets are created empty by GitOps, so no `create` is needed. |
 | `dev-env-system/dev-env-gpu-guard` (DaemonSet on GPU nodes) | Role in `dev-tools`: pods get, list; `pods/eviction` create. Read on the budgeter's Lease in `dev-env-system`. | Evicts agent GPU pods only; works when the operator is down (8.2). |
 | `upgrade-agent/<caller>` (alert-responder, upgrade-shepherd, triage, health-gate, the curation CronJob) | No new Kubernetes rights. Their projected token for the `dev-env-operator` audience lets them call the API, within their `CallerPolicy` (3.7). | They no longer need write on the `upgrade-work-orders` ConfigMap once plan 10 moves them. |
-| `dev-agents/dev-env-workbench` | Role in `dev-agents`: pods get, list; `pods/exec` create. | Tom's IDE; runs no agents by default. |
+| `dev-agents/dev-env-workbench` | Role in `dev-agents`: pods get, list; `pods/exec` create. | Tom's IDE. Also the one account a profile may run sessions as (`serviceAccount: dev-env-workbench`, Story110 T24): a session in it has the Role above and nothing cluster-wide, so it can run `agent-run login`, `pair` and `attach` (`DEV_ENV_WORKBENCH=1` lifts agent-run's own refusal; RBAC is the real gate). The operator treats a token bound to such a session's pod as that session, so it heartbeats; an unbound token is the client's. Hold pods never use it. |
 | `dev-env-system/dev-env-human` | none (token audience only) | Exists so Tom's laptop can mint an API token (D-05). |
 | tool pods (`dev-tools`) | none: no ServiceAccount token is mounted | As blender-authoring and audio-authoring today. |
 

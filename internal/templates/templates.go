@@ -85,11 +85,24 @@ var ReservedEnv = []string{
 	"KUBECONFIG",
 	"DEV_ENV_POD_UID",
 	"POD_NAMESPACE",
+	// "1" in a workbench pod, empty elsewhere: agent-run's cue that kubectl exec
+	// is allowed here. Rights come from RBAC, never from this variable.
+	WorkbenchEnv,
 	// The static token goes to task and local pods only, never remote ones
 	// (DESIGN-001 6.1, 6.2), so only the operator places it: see Claude.
 	"CLAUDE_CODE_OAUTH_TOKEN",
 	WorkspaceIDEnv,
 }
+
+// WorkbenchServiceAccount is the one non-default identity a profile may name
+// (DESIGN-001 6.11, D-46): the trusted client the operator already knows, exempt from
+// the identity guard, and held by haynes-ops' RBAC to pods get/list and pods/exec
+// create in dev-agents. Nothing else may be named, so a template cannot run a
+// session as the operator, the broker or any other account.
+const WorkbenchServiceAccount = "dev-env-workbench"
+
+// WorkbenchEnv is "1" in a workbench session's pod and empty in every other.
+const WorkbenchEnv = "DEV_ENV_WORKBENCH"
 
 // Environment variables no session pod may set (DESIGN-001 6.2, "Environment
 // rules"): the first two turn Remote Control off, the last two switch the CLI to a
@@ -246,6 +259,10 @@ type Profile struct {
 	// Labels go on the pod, for the egress tiers and the broker's standing
 	// policies to select on.
 	Labels map[string]string `json:"labels,omitempty"`
+	// ServiceAccount runs the profile's pods as that account instead of the
+	// agents' dev-env-agent. Empty, or WorkbenchServiceAccount: Validate refuses
+	// any other name. The rescue and hold pods never use it.
+	ServiceAccount string `json:"serviceAccount,omitempty"`
 }
 
 // Mount is a ConfigMap or a Secret mounted read-only as a directory.
@@ -462,6 +479,9 @@ func (t *Templates) Validate() error {
 			if (ef.SecretRef == nil) == (ef.ConfigMapRef == nil) {
 				add("%s.envFrom[%d] needs exactly one of secretRef and configMapRef", where, i)
 			}
+		}
+		if p.ServiceAccount != "" && p.ServiceAccount != WorkbenchServiceAccount {
+			add("%s.serviceAccount: only %q may be named, not %q", where, WorkbenchServiceAccount, p.ServiceAccount)
 		}
 		pNames := maps.Clone(names)
 		errs = append(errs, validateMounts(where+".mounts", p.Mounts, pNames)...)

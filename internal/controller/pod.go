@@ -159,6 +159,15 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		{Name: protocol.KubeconfigEnv, Value: protocol.GrantsDir + "/" + protocol.KubeconfigName},
 		{Name: protocol.PodUIDEnv, ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.uid"}}},
 		{Name: protocol.PodNamespaceEnv, ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}},
+		// Set, empty unless this is a workbench pod, so no envFrom source sets it.
+		{Name: templates.WorkbenchEnv, Value: ""},
+	}
+	// A profile may run its pods as the workbench identity, and only that one
+	// (templates.Validate). A hold pod, which rescues a volume, never does.
+	serviceAccount := ServiceAccountName
+	if !hold && profile.ServiceAccount == templates.WorkbenchServiceAccount {
+		serviceAccount = profile.ServiceAccount
+		env[len(env)-1].Value = "1"
 	}
 
 	// An explicit empty value overrides envFrom on legacy and hold Pods.
@@ -286,7 +295,7 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 			// node and volume. Nothing ever replaces a live pod (5.1).
 			RestartPolicy:                 corev1.RestartPolicyAlways,
 			TerminationGracePeriodSeconds: ptr.To[int64](TerminationGracePeriod),
-			ServiceAccountName:            ServiceAccountName,
+			ServiceAccountName:            serviceAccount,
 			AutomountServiceAccountToken:  ptr.To(true),
 			PriorityClassName:             PriorityClassName,
 			EnableServiceLinks:            ptr.To(false),

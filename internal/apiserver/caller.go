@@ -53,6 +53,11 @@ type Policy struct {
 	// SessionServiceAccount is the ServiceAccount every session pod runs as, in
 	// SessionNamespace.
 	SessionServiceAccount string
+	// WorkbenchServiceAccount is the second identity a session pod may run as,
+	// in SessionNamespace (the workbench profile, templates.WorkbenchServiceAccount).
+	// It is also a trusted client: a token bound to a session's pod speaks for that
+	// session, any other token of it speaks for the client. Empty: no such pod.
+	WorkbenchServiceAccount string
 	// ActivityNamespace holds the Activity declarations (dev-env-system, D-66).
 	// Empty answers /v1/activities with 503.
 	ActivityNamespace string
@@ -96,6 +101,10 @@ func (s *Server) resolveCaller(ctx context.Context, id Identity) (*caller, error
 	switch {
 	case ref == s.Policy.Human:
 		return &caller{kind: kindHuman, identity: id, parent: ref}, nil
+	case s.workbenchSessionPod(ctx, id):
+		// Before the clients: a workbench session's pod must heartbeat and
+		// act as the session it is. The pod's controller decides, not the token.
+		return s.resolveSession(ctx, id)
 	case slices.Contains(s.Policy.Clients, ref):
 		return &caller{kind: kindClient, identity: id, parent: ref}, nil
 	case id.Namespace == s.Policy.SessionNamespace && id.ServiceAccount == s.Policy.SessionServiceAccount:
@@ -109,6 +118,23 @@ func (s *Server) resolveCaller(ctx context.Context, id Identity) (*caller, error
 		}
 	}
 	return nil, forbidden("%s may not call this API: it is not Tom's, a client's or a session's ServiceAccount, and summoning callers (CallerPolicy) arrive in plan 10", ref)
+}
+
+// workbenchSessionPod reports whether id is the workbench ServiceAccount's token
+// bound to a pod that an AgentSession owns. A token bound to no pod, or to a
+// pod no session owns, is the client's. A pod that cannot be read is not
+// guessed at: it counts as a session pod, so resolveSession refuses it.
+func (s *Server) workbenchSessionPod(ctx context.Context, id Identity) bool {
+	if s.Policy.WorkbenchServiceAccount == "" || id.Namespace != s.Policy.SessionNamespace ||
+		id.ServiceAccount != s.Policy.WorkbenchServiceAccount || id.PodName == "" {
+		return false
+	}
+	var pod corev1.Pod
+	if err := s.get(ctx, types.NamespacedName{Namespace: id.Namespace, Name: id.PodName}, &pod); err != nil {
+		return true
+	}
+	owner := metav1.GetControllerOf(&pod)
+	return owner != nil && owner.Kind == "AgentSession"
 }
 
 // resolveSession finds the session a session pod's token speaks for. The token

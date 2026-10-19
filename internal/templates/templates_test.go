@@ -202,6 +202,8 @@ func TestValidateRefuses(t *testing.T) {
 		{"a profile mount at a common path", "path: /creds }\n  dev:", "path: /opt/dev-env/scripts }\n  dev:", "already mounted for every pod"},
 		{"a profile reusing a common volume name", "name: gh-token, secret: dev-env-gh-token, path: /creds }\n  dev:", "name: scripts, secret: dev-env-gh-token, path: /creds }\n  dev:", `volume name "scripts" is already used`},
 		{"envFrom with no source", "      - secretRef: { name: dev-env-mcp-secret }\n    mounts:\n      - { name: gh-token, secret: dev-env-gh-token, path: /creds }\n  dev:", "      - prefix: X_\n    mounts:\n      - { name: gh-token, secret: dev-env-gh-token, path: /creds }\n  dev:", "exactly one of secretRef and configMapRef"},
+		{"a profile running as the operator's account", "  dev:\n    envFrom:", "  dev:\n    serviceAccount: dev-env-operator\n    envFrom:", `profiles.dev.serviceAccount: only "dev-env-workbench" may be named`},
+		{"WorkbenchEnv, which the operator sets", "  - { name: CODEX_HOME, value: /home/dev/.codex }", "  - { name: DEV_ENV_WORKBENCH, value: \"1\" }", "DEV_ENV_WORKBENCH is set by the operator"},
 		{"a default profile that is not there", "defaultProfile: full", "defaultProfile: nope", `defaultProfile "nope" is not in profiles`},
 		{"a profile label the operator owns", "dev-env.haynesops.com/egress: ops", "dev-env.haynesops.com/profile: full", "is set by the operator"},
 		{"an app.kubernetes.io label", "dev-env.haynesops.com/egress: ops", "app.kubernetes.io/name: x", "is set by the operator"},
@@ -299,5 +301,20 @@ func TestLifecycle(t *testing.T) {
 		if _, err := parse(t, example(t)+bad); err == nil {
 			t.Errorf("accepted %q", bad)
 		}
+	}
+}
+
+// A profile may name the workbench account, and no other (D-46).
+func TestProfileMayNameTheWorkbenchAccount(t *testing.T) {
+	doc := strings.Replace(example(t), "  dev:\n    envFrom:", "  dev:\n    serviceAccount: dev-env-workbench\n    envFrom:", 1)
+	tm, err := parse(t, doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, p, err := tm.Profile("dev"); err != nil || p.ServiceAccount != WorkbenchServiceAccount {
+		t.Errorf("dev: %+v %v", p, err)
+	}
+	if _, p, err := tm.Profile("full"); err != nil || p.ServiceAccount != "" {
+		t.Errorf("full: %+v %v", p, err)
 	}
 }

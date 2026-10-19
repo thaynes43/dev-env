@@ -173,6 +173,19 @@ func TestAttachRefusals(t *testing.T) {
 
 	h.mustRun(ExitUsage, "attach")
 	h.mustRun(ExitUsage, "detach", "a", "b")
+
+	// A workbench session's pod runs as the account RBAC lets exec: the
+	// operator's cue lifts agent-run's own refusal, and kubectl exec runs.
+	h.vars[envAgentdTokenFile] = h.write("projected-token", "tok")
+	h.vars[envWorkbench] = "1"
+	serveSession(h, runningOn(testSession(name, ""), "talosw02"))
+	h.kubectl = func([]string) int { return 0 }
+	h.mustRun(ExitOK, "attach", name)
+	if len(h.ran) != 1 || !strings.Contains(h.ran[0], "exec") {
+		t.Errorf("a workbench pod ran %q, want one kubectl exec", h.ran)
+	}
+	delete(h.vars, envWorkbench)
+	delete(h.vars, envAgentdTokenFile)
 }
 
 // The code is typed or piped on stdin. It is never an argument, an environment
