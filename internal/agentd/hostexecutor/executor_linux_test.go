@@ -460,3 +460,35 @@ func TestInterruptedReceiptRefusesBeforeAuthorityAdmission(t *testing.T) {
 		t.Fatal("authority mutated before interrupted receipt refusal")
 	}
 }
+
+type deadlineAuthorityGate struct{ observed chan time.Time }
+
+func (g *deadlineAuthorityGate) Admit(ctx context.Context, _ Binding) error {
+	deadline, _ := ctx.Deadline()
+	g.observed <- deadline
+	<-ctx.Done()
+	return ctx.Err()
+}
+func (*deadlineAuthorityGate) Observe(context.Context, Binding) (bool, error) {
+	return true, errors.New("unexpected observation")
+}
+func TestAuthorityCallCannotOutliveOriginalDeadline(t *testing.T) {
+	c := config(t)
+	c.Binding.Deadline = time.Now().Add(120 * time.Millisecond)
+	gate := &deadlineAuthorityGate{observed: make(chan time.Time, 1)}
+	started := time.Now()
+	if _, err := Run(context.Background(), c, gate); err == nil {
+		t.Fatal("expired admission accepted")
+	}
+	select {
+	case observed := <-gate.observed:
+		if !observed.Equal(c.Binding.Deadline) || time.Since(started) > time.Second {
+			t.Fatal("authority call replaced original deadline", observed, c.Binding.Deadline, time.Since(started))
+		}
+	default:
+		t.Fatal("authority call never received the original deadline")
+	}
+	if _, err := os.Stat(filepath.Join(c.Home, "leaf.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("native created after deadline", err)
+	}
+}

@@ -132,7 +132,17 @@ type ownedWorkflow struct {
 }
 
 func prepareOwnedWorkflow(t *testing.T, live client.Client, now func() time.Time) *ownedWorkflow {
+	return prepareOwnedWorkflowNamed(t, live, now, "")
+}
+
+func prepareOwnedWorkflowNamed(t *testing.T, live client.Client, now func() time.Time, suffix string) *ownedWorkflow {
 	t.Helper()
+	named := func(name string) string {
+		if suffix != "" {
+			return name + "-" + suffix
+		}
+		return name
+	}
 	ctx := context.Background()
 	home := t.TempDir()
 	if os.Chmod(home, 0700) != nil || os.Mkdir(filepath.Join(home, ".codex"), 0700) != nil || os.Mkdir(filepath.Join(home, ".agentd"), 0700) != nil {
@@ -145,7 +155,7 @@ func prepareOwnedWorkflow(t *testing.T, live client.Client, now func() time.Time
 	if err != nil {
 		t.Fatal(err)
 	}
-	claim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "owned-root-home", Namespace: "dev-agents"}, Spec: corev1.PersistentVolumeClaimSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOncePod}, VolumeName: "synthetic-owned-volume", Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")}}}}
+	claim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: named("owned-root-home"), Namespace: "dev-agents"}, Spec: corev1.PersistentVolumeClaimSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOncePod}, VolumeName: "synthetic-owned-volume", Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")}}}}
 	if err := live.Create(ctx, claim); err != nil {
 		t.Fatal(err)
 	}
@@ -154,13 +164,13 @@ func prepareOwnedWorkflow(t *testing.T, live client.Client, now func() time.Time
 		t.Fatal(err)
 	}
 	network := taskbudget.NativeFixturePolicy()
-	network.SetName("owned-root-network")
+	network.SetName(named("owned-root-network"))
 	network.SetUID("synthetic-independent-policy")
 	network.SetResourceVersion("1")
-	network.Object["spec"].(map[string]any)["endpointSelector"] = map[string]any{"matchLabels": map[string]any{"app.kubernetes.io/name": "private-budget-host"}}
-	policy := taskbudget.OwnedRootPolicy{Version: 1, Namespace: "dev-agents", Name: "private-budget-host", ServiceAccount: "codex-host-a", TaskUID: "campaign-a", HostID: "host-a", Image: "ghcr.io/thaynes43/dev-env@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HomeClaim: claim.Name, HomeUID: string(claim.UID), Baseline: baseline, NetworkPolicyName: network.GetName(), NetworkPolicyUID: string(network.GetUID()), NetworkPolicySHA: taskbudget.OwnedPolicyDigest(network.Object["spec"]), Spec: apiv1.TaskBudgetSpec{SuccessCondition: "private HOME retained after bounded stop", OverallSeconds: 120, EffortSeconds: 180, CheckpointSeconds: 30}}
+	network.Object["spec"].(map[string]any)["endpointSelector"] = map[string]any{"matchLabels": map[string]any{"app.kubernetes.io/name": named("private-budget-host")}}
+	policy := taskbudget.OwnedRootPolicy{Version: 1, Namespace: "dev-agents", Name: named("private-budget-host"), ServiceAccount: "codex-host-a", TaskUID: "campaign-a", HostID: "host-a", Image: "ghcr.io/thaynes43/dev-env@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HomeClaim: claim.Name, HomeUID: string(claim.UID), Baseline: baseline, NetworkPolicyName: network.GetName(), NetworkPolicyUID: string(network.GetUID()), NetworkPolicySHA: taskbudget.OwnedPolicyDigest(network.Object["spec"]), Spec: apiv1.TaskBudgetSpec{SuccessCondition: "private HOME retained after bounded stop", OverallSeconds: 120, EffortSeconds: 180, CheckpointSeconds: 30}}
 	raw, _ := json.Marshal(policy)
-	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "owned-root-policy", Namespace: "dev-env-system"}, Data: map[string]string{taskbudget.OwnedRootPolicyKey: string(raw)}}
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: named("owned-root-policy"), Namespace: "dev-env-system"}, Data: map[string]string{taskbudget.OwnedRootPolicyKey: string(raw)}}
 	if err := live.Create(ctx, cm); err != nil {
 		t.Fatal(err)
 	}

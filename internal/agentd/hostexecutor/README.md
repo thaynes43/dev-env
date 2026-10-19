@@ -246,11 +246,10 @@ phone steering or an active-session operator upgrade. Run serially with
 `DEV_ENV_PINNED_NATIVE_BINARY` pointing to verified0.160.1; ordinary CI without
 that artifact reports the optional local protocol proof as skipped.
 
-Installed task2.30.0 predates `owned-native-control`; this source needs matching
-published/verified operator and task-agent adoption before live use. Ordinary
-source merge/publication is independent of the held new root admission,
-credential-consumer and provider-network wiring. Effective operator ConfigMap
-GET permissions already suffice: no new named Roles/Bindings are required.
+Operator and task-agent publications must match before live use. Image adoption
+is separate from the exact root profile, existing credential-reference consumer
+and provider/network authority. Per-attempt policy/input ConfigMap names must
+match the existing operator Roles; this does not grant general admission.
 
 The fixed helper omits `--remote-control` and sets the pinned internal startup
 environment `CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED=1`. This selects
@@ -264,9 +263,9 @@ actual pinned loopback test. It does not create/copy native remote enrollment.
 Cold native catalog startup is bounded separately from evidence probes. Pinned
 0.160.1 allows five seconds for model-catalog refresh before fallback; the owner
 command must leave time for its preceding fresh status/proof/initialize/consume.
-The finite command/CRI/API limits are 8/9/10 seconds, each capped at the original
+The finite command/CRI/API limits are 12/13/16 seconds, each capped at the original
 campaign deadline and caller cancellation. This changes no campaign allowance,
-consume/retry behavior or process-proof predicate. A caller should allow twelve
+consume/retry behavior or process-proof predicate. A caller should allow eighteen
 seconds for this response while preserving its original credential expiry and
 cleanup reserve.
 
@@ -280,3 +279,40 @@ are not a substitute for the task's mounted system requirements; this test prove
 the protocol timing seam, while live hash receipts prove the actual task floor.
 Fixed protected helper exit diagnostics80–88 describe refusal phase only; stdout,
 stderr and native content cannot grant budget or stop/continue authority.
+
+
+### Complete timing composition
+
+The owner-operation budget covers **all** preceding work, not just the final
+native RPC. Two authority calls can each take most of two seconds; a local
+proof allows800ms and the pinned catalog fallback takes five seconds. The
+12-second command bound includes those phases. CRI allows another second for
+exec transport; the16-second API includes reservation and ControlTarget proof
+before that exec. An18-second external caller retains its original credential
+expiry, cleanup reserve and no-replay rule. These are finite processing bounds,
+not additional campaign allowance or permission to accept stale evidence.
+
+| Path | Bound and cancellation owner |
+| --- | --- |
+| Bootstrap/admit/binding | Existing2s authenticated HTTP envelope; one bootstrap intent, no create replay. Admission is capped at the original binding deadline. |
+| Guard heartbeat | Cadence1s; complete observation2s capped at original deadline/caller cancellation. The inner CRI proof alone allows1s, so a1s outer context left no room for auth, metadata or response. Any error/refusal stops immediately; no grace, cached success or automatic operation retry. |
+| HTTP connection | Dial/TLS1s each, header/client2s total; idle connection timeout1s is connection reuse, not authority lifetime. Cold/reused connections remain subject to the same complete call deadline. |
+| Independent proof | Native readiness300ms inside server500ms, local helper800ms, CRI1s. Original peer/PID/challenge/binding and explicit exit40–44 remain required; missing/truncated status never proves success. |
+| Initial readiness | Existing2s within original deadline. Absent/refused startup sockets may be observed; initialized RPCs are never replayed. |
+| Helper launch/confirmation | Existing5s backstops; helper validates original binding and independently enforces its absolute deadline. No launch/confirmation limit extends that deadline. |
+| Stopped continuation | GET2s capped at original deadline; failed GET leaves the original process stopped. Only exact fresh human-authorized epoch2 permits once-only continuation. |
+| Stop | Existing configured3s tree stop plus2s helper wait; independent Wait/reap required. Receipt reporting has2s after stop, intentionally allowing evidence retention after deadline. It grants no running authority. |
+
+The latency regression uses real TLS/API/Kubernetes storage, original guard and
+kernel evidence, with bounded metadata/exec scheduling delays. The old outer
+context canceled at1.001s; the corrected fresh response completed at1.273s,
+then actual authority revocation produced original Wait/reap in265ms. Ordinary
+unchanged observations do not write ledger accounting or create CAS contention;
+this test does not invent an observation write conflict. A second regression
+uses the real pinned native process/frozen public inputs and two1.6s authority
+phases: old8s command timed out after consuming once; corrected command returned
+one thread acknowledgement at8.236s, with zero inference. Eight concurrent
+real native readiness handshakes completed within the original300ms limit
+(maximum5.8ms) during that cold fallback. These tests diagnose
+processing composition, not the unobserved historical source of live latency.
+They do not prove rolling-upgrade, live-model, continuation or phone acceptance.
