@@ -84,6 +84,8 @@ run --entrypoint /bin/bash "${image}" -euc '
   omnictl --help >/dev/null
   pve --help >/dev/null
   hw-ssh list >/dev/null
+  opwork --help >/dev/null
+  opwork pending | grep -q 'no pending records'
   # Baked in the image, not downloaded at boot, and installed outside CODEX_HOME so the
   # session volume cannot hide it.
   case "$(readlink -f "$(command -v codex)")" in /opt/dev-env/codex/*) ;; *) echo "codex is not under /opt/dev-env/codex" >&2; exit 1 ;; esac

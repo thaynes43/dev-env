@@ -7,7 +7,7 @@
 # `scripts/dev-env/Dockerfile` (v1, tag line 0.x) with these changes:
 #   * added: tini, agentd and agent-run (stage `go`), the Codex standalone and
 #     kubectl-cnpg (v1 downloaded both at boot onto the PVC), pve and hw-ssh
-#     (copies of v1's scripts, images/agent/tools/);
+#     (copies of v1's scripts, images/agent/tools/), opwork (Story97);
 #   * removed: code-server (v1's PID 1; nothing in a session pod serves a browser),
 #     github-app-token.sh (only the keeper mints tokens, D-11);
 #   * changed: the ENTRYPOINT, and the Codex install path (below).
@@ -428,6 +428,15 @@ RUN npm install -g "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}" \
 COPY images/agent/tools/pve.sh /usr/local/bin/pve
 COPY images/agent/tools/hw-ssh.sh /usr/local/bin/hw-ssh
 RUN chmod 0755 /usr/local/bin/pve /usr/local/bin/hw-ssh
+
+# opwork: the shared OpenProject backlog CLI (Story97). Byte-for-byte copies of haynes-ops
+# scripts/openproject/{opwork,agent-api}.py, which stay the source of truth and carry the
+# tests (scripts/tests/openproject). It uses the existing token consumer through kubectl
+# exec and needs the v2 API network policy to reach OpenProject; without it it reports
+# TRACKER UNAVAILABLE and keeps local checkpoints. No credential is baked or stored.
+COPY images/agent/tools/openproject/agent-api.py images/agent/tools/openproject/opwork.py /usr/local/lib/opwork/
+COPY images/agent/tools/opwork.sh /usr/local/bin/opwork
+RUN chmod 0755 /usr/local/bin/opwork && chmod 0644 /usr/local/lib/opwork/*.py
 
 # The binaries of this repo come last, so a Go change rebuilds only these layers.
 # agentd is the one thing tini starts; agent-run is the v2 CLI (D-50).
