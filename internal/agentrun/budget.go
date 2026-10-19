@@ -23,6 +23,9 @@ func (a *app) budget(ctx context.Context, args []string) error {
 	if args[0] == "continue" {
 		return a.continueBudget(ctx, args[1:])
 	}
+	if args[0] == "native" {
+		return a.nativeBudget(ctx, args[1:])
+	}
 	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		_, _ = io.WriteString(a.env.Stdout, commandHelp["budget"])
 		return nil
@@ -96,6 +99,59 @@ func (a *app) budget(ctx context.Context, args []string) error {
 		out.Binding.Deadline.UTC().Format(time.RFC3339Nano), out.NextCheckpoint.UTC().Format(time.RFC3339Nano),
 		out.Latched, firstOf(out.Reason, "-"), out.Admitted, out.EffortMilliseconds, out.UsageAccounting, out.StopConfirmed)
 	return nil
+}
+
+// nativeBudget consumes a complete explicit binding and request from stdin.
+// It does not select a new epoch, generate another ID or retry a lost response.
+func (a *app) nativeBudget(ctx context.Context, args []string) error {
+	cmd := newCommand("budget native", outputJSON)
+	var once bool
+	cmd.fs.BoolVar(&once, "once", false, "")
+	pos, err := cmd.parse(a, args)
+	if err != nil {
+		return err
+	}
+	if !once || len(pos) != 1 || !protocol.ValidTaskBudgetIdentifier(pos[0]) {
+		return usageError("budget native requires --once and one task UID; request JSON on stdin")
+	}
+	raw, err := io.ReadAll(io.LimitReader(a.env.Stdin, (16<<10)+1))
+	if err != nil || len(raw) > 16<<10 {
+		return usageError("native request exceeds 16KiB or could not be read")
+	}
+	var req apiv1.NativeControlRequest
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if dec.Decode(&req) != nil || dec.Decode(new(any)) != io.EOF || !strictWireJSON(raw, reflect.TypeFor[apiv1.NativeControlRequest]()) || !req.Valid() || req.Binding.TaskUID != pos[0] || !req.Binding.Deadline.After(a.env.Now()) {
+		return usageError("native request needs an exact current binding and valid operation/ID")
+	}
+	c, err := a.connect(ctx, cmd.c.conn)
+	if err != nil {
+		return err
+	}
+	one := *c
+	hc := *c.http
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	one.http = &hc
+	one.rejectOversizeResponse = true
+	path := apiv1.TaskBudgetPath(pos[0]) + "/native"
+	var responseRaw json.RawMessage
+	status, err := a.callOnce(ctx, &one, http.MethodPost, path, req, &responseRaw)
+	if err != nil {
+		return err
+	}
+	raw = responseRaw
+	if req.Operation == "host/stop" {
+		var result apiv1.TaskBudgetStatus
+		if status != http.StatusAccepted || !strictWireJSON(raw, reflect.TypeFor[apiv1.TaskBudgetStatus]()) || json.Unmarshal(raw, &result) != nil || result.Binding != req.Binding || !result.Observed || !result.NativeStopRequested {
+			return unconfirmed(http.MethodPost, path, "native stop request is unconfirmed; do not replay")
+		}
+		return a.printJSON(result)
+	}
+	result, decodeErr := apiv1.DecodeNativeControlResponse(raw, req)
+	if status != http.StatusOK || decodeErr != nil {
+		return unconfirmed(http.MethodPost, path, "native request is unconfirmed; ID consumed, do not replay")
+	}
+	return a.printJSON(result)
 }
 
 func confirmedBudgetStatus(uid string, st apiv1.TaskBudgetStatus) bool {

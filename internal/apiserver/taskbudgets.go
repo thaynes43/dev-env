@@ -289,7 +289,7 @@ func (s *Server) checkSessionTaskBudget(ctx context.Context, sess *v1alpha1.Agen
 	if err != nil {
 		return budgetError(err)
 	}
-	if l.Latched {
+	if l.Latched || l.NativeStopRequested() {
 		return budgetError(taskbudget.ErrDenied)
 	}
 

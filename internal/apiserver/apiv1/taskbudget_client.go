@@ -87,12 +87,12 @@ func (g *HTTPTaskBudgetGate) Observe(ctx context.Context, b TaskBudgetBinding) (
 	if err != nil {
 		return true, err
 	}
-	return st.Latched, nil
+	return st.Latched || st.NativeStopRequested, nil
 }
 
 // Required safety fields cannot be absent/null, case aliases or duplicate keys.
 // Typed decoding below still validates every DTO field and exact binding.
-func unambiguousBudgetStatus(raw []byte) bool {
+func unambiguousJSON(raw []byte) bool {
 	d := json.NewDecoder(bytes.NewReader(raw))
 	var walk func(int) bool
 	walk = func(depth int) bool {
@@ -138,6 +138,13 @@ func unambiguousBudgetStatus(raw []byte) bool {
 	if _, err := d.Token(); err != io.EOF {
 		return false
 	}
+	return true
+}
+
+func unambiguousBudgetStatus(raw []byte) bool {
+	if !unambiguousJSON(raw) {
+		return false
+	}
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(raw, &fields) != nil {
 		return false
@@ -158,6 +165,28 @@ func unambiguousBudgetStatus(raw []byte) bool {
 		}
 	}
 	return true
+}
+
+func (g *HTTPTaskBudgetGate) ConsumeNativeControl(ctx context.Context, r NativeControlRequest) error {
+	if !r.Valid() {
+		return ErrTaskBudgetGate
+	}
+	raw, _ := json.Marshal(r)
+	status, body, err := g.ownedRequest(ctx, http.MethodPost, TaskBudgetPath(r.Binding.TaskUID)+"/native-consume", raw)
+	if err != nil || status != http.StatusOK || !unambiguousJSON(body) {
+		return ErrTaskBudgetGate
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(body, &fields) != nil || len(fields) != 4 || string(fields["consumed"]) != "true" || len(fields["id"]) == 0 || len(fields["binding"]) == 0 || len(fields["requestSHA256"]) == 0 {
+		return ErrTaskBudgetGate
+	}
+	var permit NativeControlPermit
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if dec.Decode(&permit) != nil || dec.Decode(new(any)) != io.EOF || !permit.Consumed || !sameOwnedWireBinding(permit.Binding, r.Binding) || permit.ID != r.ID || permit.RequestSHA256 != NativeControlDigest(r) {
+		return ErrTaskBudgetGate
+	}
+	return nil
 }
 
 // BootstrapOwned creates exactly once. Conflicts and unknown replies refuse
