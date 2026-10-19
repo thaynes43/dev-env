@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.31.0](https://github.com/thaynes43/dev-env/compare/v2.30.7...v2.31.0) (2026-10-19)
+
+
+### Features
+
+* v2 remote mode on a pod-owned Claude login (interim) ([#443](https://github.com/thaynes43/dev-env/issues/443)) ([6adc588](https://github.com/thaynes43/dev-env/commit/6adc588d2e5ba4a11d2031aca4e8840bd064f0b5))
+
 ## [2.30.7](https://github.com/thaynes43/dev-env/compare/v2.30.6...v2.30.7) (2026-10-19)
 
 
