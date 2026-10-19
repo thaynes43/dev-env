@@ -104,7 +104,11 @@ printf '%s\n' '{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123
 		}
 	}()
 	code := RunAgent(path, pane, make(chan os.Signal), 20*time.Millisecond)
-	if err := <-released; err != nil {
+	err = <-released
+	// Remove the FIFO so a regression that replays this invocation fails the
+	// fake CLI's read at once instead of blocking until the test times out.
+	_ = os.Remove(barrierPath)
+	if err != nil {
 		t.Fatalf("%v; synthetic pane tail: %q", err, paneTail(pane))
 	}
 	if code != 0 {
