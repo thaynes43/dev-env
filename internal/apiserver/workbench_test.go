@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
 
+	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/templates"
@@ -99,9 +100,23 @@ func TestWorkbenchSessionCreatesCodexHost(t *testing.T) {
 	id := saIdentity(sessionNS + "/" + templates.WorkbenchServiceAccount)
 	id.PodName, id.PodUID = f.auth[wbTok].PodName, f.auth[wbTok].PodUID
 	f.auth[wbTok] = id
-	if w := f.do(http.MethodPost, apiv1.SessionsPath, wbTok, req); w.Code != http.StatusCreated {
+	w := f.do(http.MethodPost, apiv1.SessionsPath, wbTok, req)
+	if w.Code != http.StatusCreated {
 		t.Fatalf("workbench session creating a codex host: %d %s", w.Code, w.Body.String())
 	}
+	// The host must not inherit the workbench profile (its identity has pods/exec
+	// and could start more hosts): it runs on the default profile.
+	var host v1alpha1.AgentSession
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: decode[apiv1.Session](t, w).Name}, &host); err != nil {
+		t.Fatal(err)
+	}
+	if host.Spec.Profile != "" {
+		t.Errorf("the host's profile is %q, want the default", host.Spec.Profile)
+	}
+	// Naming the parent's (or any) profile is refused rather than honoured.
+	withProfile := req
+	withProfile.Profile = "dev"
+	wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, wbTok, withProfile), http.StatusForbidden, apiv1.CodeForbidden)
 
 	// An ordinary session stays refused.
 	plain := f.sessionPod("haynes-ops-1019-100003", "dev", 0)
