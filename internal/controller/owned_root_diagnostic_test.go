@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -49,4 +50,56 @@ func TestOwnedRootRefusalDiagnosticCannotBecomeProofOrLeakOutput(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Contexts are observed independently: a delayed transport can return after both
+// the original probe deadline and a later caller cancellation have occurred.
+func TestOwnedRootRefusalReportsBothContextStates(t *testing.T) {
+	b := taskbudget.Binding{TaskUID: "task", HostID: "host", PodUID: "pod", Epoch: 1, Deadline: time.Now().Add(time.Minute)}
+	for _, scenario := range []string{"caller-canceled", "caller-deadline", "probe-deadline", "probe-deadline-then-caller-canceled"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx := context.Background()
+			var cancel context.CancelFunc
+			executor := contextRefusalExec{}
+			wantCallerCanceled, wantCallerDeadline, wantProbeCanceled, wantProbeDeadline := false, false, false, false
+			switch scenario {
+			case "caller-canceled":
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+				wantCallerCanceled, wantProbeCanceled = true, true
+			case "caller-deadline":
+				ctx, cancel = context.WithDeadline(ctx, time.Now().Add(-time.Second))
+				defer cancel()
+				wantCallerDeadline, wantProbeDeadline = true, true
+			case "probe-deadline":
+				wantProbeDeadline = true
+			case "probe-deadline-then-caller-canceled":
+				ctx, cancel = context.WithCancel(ctx)
+				defer cancel()
+				executor.afterDone = cancel
+				wantCallerCanceled, wantProbeDeadline = true, true
+			}
+			var output bytes.Buffer
+			ctx = log.IntoContext(ctx, logr.FromSlogHandler(slog.NewTextHandler(&output, nil)))
+			_, err := (OwnedRootProber{Exec: executor}).Observe(ctx, client.ObjectKey{}, "owned-root", b, "home", strings.Repeat("a", 64))
+			if !errors.Is(err, taskbudget.ErrUnavailable) {
+				t.Fatal("context granted proof", err)
+			}
+			for key, expected := range map[string]bool{"callerCanceled": wantCallerCanceled, "callerDeadline": wantCallerDeadline, "probeCanceled": wantProbeCanceled, "probeDeadline": wantProbeDeadline, "typedExit": false} {
+				if !strings.Contains(output.String(), fmt.Sprintf("%s=%t", key, expected)) {
+					t.Fatalf("context states lost: %s", output.String())
+				}
+			}
+		})
+	}
+}
+
+type contextRefusalExec struct{ afterDone func() }
+
+func (e contextRefusalExec) Run(ctx context.Context, _, _, _ string, _ []string, _ io.Reader, _, _ io.Writer) error {
+	<-ctx.Done()
+	if e.afterDone != nil {
+		e.afterDone()
+	}
+	return ctx.Err()
 }

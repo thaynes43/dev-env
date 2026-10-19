@@ -456,6 +456,19 @@ status result. The fresh challenge is still verified inside the probe. Original 
 attempts retain their bindings, counters and evidence; diagnostics do not rearm
 actors or reset budgets.
 
+**Admission deadline correction, 2026-10-19:** the guard's HTTP response-header
+limit now matches its existing two-second client/admission budget. The previous
+one-second header cutoff could terminate the original guard while the operator
+was still running the allowed one-second proof plus policy/identity reads.
+An inert TLS regression reproduces premature refusal of a valid response inside
+the original two-second budget; caller cancellation and deadline expiry still
+refuse without retry. Dial/TLS limits, the one-second CRI proof, 800ms local probe,
+all accepted statuses and original campaign/stop authority are unchanged.
+Diagnostics log caller and probe context states separately. When both have ended,
+they do not infer which caused the refusal. A missing exit status is never proof.
+The failed 003 ordering is consistent with this mismatch, but live correction remains unearned
+until a fresh bounded acceptance succeeds; no old actor may be rearmed.
+
 ### Owned-root native owner control
 
 The existing owned-root policy selects the native control adapter; it is absent

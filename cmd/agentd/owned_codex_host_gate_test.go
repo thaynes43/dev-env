@@ -157,3 +157,84 @@ func TestOwnedHTTPSGateFailsClosed(t *testing.T) {
 		t.Fatal("nil observation continued")
 	}
 }
+
+// The trusted operator must observe the original guard while answering admission.
+// A local 1s header cutoff must not kill that guard before its existing 2s request
+// budget, even when a valid bounded proof arrives after the first second.
+func TestOwnedHTTPSAdmissionPreservesExistingRequestBudget(t *testing.T) {
+	b := apiv1.TaskBudgetBinding{TaskUID: "task-fixture", Epoch: 1, Deadline: time.Now().Add(time.Minute), HostID: "host-fixture", PodUID: "pod-fixture"}
+	for _, scenario := range []string{"proof-within-budget", "caller-cancel-before-send", "caller-cancel-in-flight", "expired-deadline"} {
+		t.Run(scenario, func(t *testing.T) {
+			requests := make(chan struct{}, 2)
+			entered := make(chan struct{}, 1)
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests <- struct{}{}
+				var req apiv1.TaskBudgetRequest
+				if r.Method != http.MethodPost || r.URL.Path != apiv1.TaskBudgetPath(b.TaskUID)+"/admit" || r.Header.Get("Authorization") != "Bearer synthetic" || json.NewDecoder(r.Body).Decode(&req) != nil || !sameOwnedBinding(req.Binding, b) {
+					t.Error("admission method, authority or immutable binding changed")
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				select {
+				case entered <- struct{}{}:
+				default:
+				}
+				if scenario != "proof-within-budget" {
+					<-r.Context().Done()
+					return
+				}
+				timer := time.NewTimer(1150 * time.Millisecond)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+					_ = json.NewEncoder(w).Encode(apiv1.TaskBudgetStatus{Observed: true, Admitted: true, Binding: b})
+				case <-r.Context().Done():
+				}
+			}))
+			defer srv.Close()
+			home := t.TempDir()
+			ca, token := filepath.Join(home, "ca"), filepath.Join(home, "token")
+			if os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600) != nil || os.WriteFile(token, []byte("synthetic"), 0o600) != nil {
+				t.Fatal("synthetic projections")
+			}
+			g, err := newOwnedBudgetGate(srv.URL, token, ca, agentd.Settings{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ctx context.Context
+			var cancel context.CancelFunc
+			if scenario == "expired-deadline" {
+				ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			} else {
+				ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
+			}
+			defer cancel()
+			if scenario == "caller-cancel-before-send" {
+				cancel()
+			}
+			if scenario == "caller-cancel-in-flight" {
+				go func() {
+					select {
+					case <-entered:
+						cancel()
+					case <-ctx.Done():
+					}
+				}()
+			}
+			err = g.remote.Admit(ctx, b)
+			if scenario == "proof-within-budget" && err != nil {
+				t.Fatalf("valid admission lost before original 2s budget: error=%v callerContext=%v", err, ctx.Err())
+			}
+			if scenario != "proof-within-budget" && err == nil {
+				t.Fatal("canceled or expired admission accepted")
+			}
+			want := 1
+			if scenario == "caller-cancel-before-send" || scenario == "expired-deadline" {
+				want = 0
+			}
+			if len(requests) != want {
+				t.Fatalf("unexpected admission/retry count %d, want %d", len(requests), want)
+			}
+		})
+	}
+}
