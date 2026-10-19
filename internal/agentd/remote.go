@@ -17,7 +17,7 @@ import (
 )
 
 // Remote mode on a pod-owned Claude login (Story110 T03, backlog 03's interim
-// slice, Q-110-01). The pod's own CLI is the only owner of its login: agentd
+// slice, source support only). The pod's own CLI is the only owner of its login: agentd
 // never copies a refresh token in, never runs `claude auth status` against
 // this HOME (a second refresher of one rotating token revokes the family), and
 // reads the credentials file for two facts only, whether a login is there and

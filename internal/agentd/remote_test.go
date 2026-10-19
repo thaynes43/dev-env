@@ -368,9 +368,9 @@ func TestStatusRemoteLoginRequiredAndRegistered(t *testing.T) {
 	}
 }
 
-// A remote session without a login does not start its agent, opens the login
-// window and logs nothing secret; once the login exists and the window ends,
-// the agent starts with the same boot (Story110 T03).
+// A remote session without a login does not start its agent and starts no
+// login either: the ceremony runs only on an explicit request. Once the login
+// exists and the window ends, the agent starts with the same boot.
 func TestDaemonHoldsRemoteAgentUntilLogin(t *testing.T) {
 	s := testSettings(t, t.TempDir())
 	s.TmuxBin, s.ClaudeBin = "tmux", "claude"
@@ -392,8 +392,25 @@ func TestDaemonHoldsRemoteAgentUntilLogin(t *testing.T) {
 	_ = writeJSONFile(s.statePath(bootFile), bootRecord{BootID: "b1", Boot: protocol.BootReady, Steps: []Step{{Name: "agent", State: StepOK}}})
 
 	step, agentErr := d.startAgent(context.Background(), ws, Step{Name: "repo", State: StepOK}, "b1")
-	if agentErr != "" || step.State == StepFail || d.remote == nil || tm.started != 1 || !strings.Contains(strings.Join(step.Notes, " "), "login-required") {
-		t.Fatalf("held: step %+v err %q remote %v started %d", step, agentErr, d.remote, tm.started)
+	if agentErr != "" || step.State == StepFail || d.remote == nil || !strings.Contains(strings.Join(step.Notes, " "), "login-required") {
+		t.Fatalf("held: step %+v err %q remote %v", step, agentErr, d.remote)
+	}
+	// Nothing starts a login on its own: no window, no claude process.
+	d.pollRemoteLogin(context.Background())
+	for _, l := range r.lines() {
+		if strings.Contains(l, "new-session") || strings.Contains(l, "auth login") {
+			t.Fatalf("a login started without a request: %s", l)
+		}
+	}
+	if tm.started != 0 || tm.window {
+		t.Fatalf("login window started without a request (started %d)", tm.started)
+	}
+	if st := CollectStatus(context.Background(), r, s, sess, loginNow); st.Agent.State != protocol.AgentLoginRequired {
+		t.Errorf("status %+v", st.Agent)
+	}
+	// The explicit request (agentd ctl login url) starts the ceremony.
+	if _, err := LoginURL(context.Background(), r, s, sess, func() time.Time { return loginNow }); err != nil || tm.started != 1 {
+		t.Fatalf("explicit login url: %v started %d", err, tm.started)
 	}
 	if _, err := os.Stat(s.statePath(launchFile)); err == nil {
 		t.Fatal("the agent was launched without a login")

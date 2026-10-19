@@ -219,7 +219,7 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 		return newStep(name, nil, errors.New(why)), why
 	}
 	if !remoteLoginUsable(d.S, d.Session, d.now()) {
-		return d.waitForLogin(ctx, ws, repo, bootID)
+		return d.waitForLogin(ws, repo, bootID)
 	}
 	var first Launch
 	firstErr := readJSONFile(d.S.statePath(launchFile), &first)
@@ -267,14 +267,14 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 }
 
 // waitForLogin holds a remote session's agent until the pod has a usable
-// Claude login: it opens the login window and remembers what the launch needs.
-// The boot stays ready; status reports login-required, and agent-run login
-// drives the ceremony (the link and code never pass through agentd's logs).
-func (d *Daemon) waitForLogin(ctx context.Context, ws protocol.Workspace, repo Step, bootID string) (Step, string) {
+// Claude login and remembers what the launch needs. It starts nothing: the
+// login ceremony begins only when someone asks for it (agentd ctl login url,
+// from agent-run login). The boot stays ready; status reports login-required.
+func (d *Daemon) waitForLogin(ws protocol.Workspace, repo Step, bootID string) (Step, string) {
 	const name = "agent"
 	d.remote = &remoteWait{ws: ws, repo: repo, boot: bootID}
-	notes := []string{"login-required: no usable Claude login in this pod; the agent starts once agent-run login completes"}
-	return newStep(name, notes, StartLoginWindow(ctx, d.R, d.S)), ""
+	notes := []string{"login-required: no usable Claude login in this pod; no login is started until agent-run login asks for it"}
+	return newStep(name, notes, nil), ""
 }
 
 // loginSettle is how long a finished login may leave its window open before
