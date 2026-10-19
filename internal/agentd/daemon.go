@@ -46,6 +46,10 @@ type Daemon struct {
 	copying atomic.Bool
 	// writerRefused keeps an uncertain shared writer observational only.
 	writerRefused bool
+	// remote is a remote session's launch context (Story110 T03), kept for the
+	// boot so a login that lands later can start the agent; waiting is true
+	// while the boot found no usable login.
+	remote *remoteWait
 }
 
 // logCopyEvery is how often the session's log is copied to the shared volume,
@@ -215,6 +219,12 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 		why := "the repo step failed, so the agent was not started"
 		return newStep(name, nil, errors.New(why)), why
 	}
+	if d.Session.Mode == protocol.ModeRemote {
+		d.remote = &remoteWait{ws: ws, repo: repo, boot: bootID}
+	}
+	if !remoteLoginUsable(d.S, d.Session, d.now()) {
+		return d.waitForLogin()
+	}
 	var first Launch
 	firstErr := readJSONFile(d.S.statePath(launchFile), &first)
 	if firstErr != nil && !errors.Is(firstErr, os.ErrNotExist) {
@@ -260,6 +270,70 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 	return newStep(name, []string{fmt.Sprintf("%s started in tmux session %q, conversation %s", what, TmuxSession, launch.ConversationID)}, nil), ""
 }
 
+// waitForLogin holds a remote session's agent until the pod has a usable
+// Claude login. It starts nothing: the login ceremony begins only when someone
+// asks for it (agentd ctl login url, from agent-run login). The boot stays
+// ready; status reports login-required.
+func (d *Daemon) waitForLogin() (Step, string) {
+	d.remote.waiting = true
+	notes := []string{"login-required: no usable Claude login in this pod; no login is started until agent-run login asks for it"}
+	return newStep("agent", notes, nil), ""
+}
+
+// loginSettle is how long a finished login may leave its window open before
+// agentd starts the agent anyway.
+const loginSettle = 30 * time.Second
+
+// pollRemoteLogin starts a remote session's agent when a login lands and no
+// agent CLI runs: at boot with no login (waiting), or later after a requested
+// login while the agent was not running (a renewal or a recovery). It acts only
+// once the login window has ended, so the CLI has written the whole login, and
+// never while the agent's CLI is alive (one owner for the login).
+func (d *Daemon) pollRemoteLogin(ctx context.Context) {
+	w := d.remote
+	if w == nil || d.writerRefused || !remoteLoginUsable(d.S, d.Session, d.now()) {
+		return
+	}
+	var p agentPid
+	if readJSONFile(d.S.statePath(pidFile), &p) == nil && pidAlive(p) {
+		w.since = time.Time{}
+		return
+	}
+	if !w.waiting && !hasLoginWindow(ctx, d.R, d.S) {
+		return
+	}
+	if w.since.IsZero() {
+		w.since = d.now()
+	}
+	// A renewal's old login already reads as usable, so only the window's end
+	// (the CLI finished, well or not) says the ceremony is over. A boot that
+	// found no login also starts once the new one has sat loginSettle.
+	if !loginWindowEnded(ctx, d.R, d.S) && (!w.waiting || d.now().Sub(w.since) < loginSettle) {
+		return
+	}
+	w.waiting, w.since = false, time.Time{}
+	StopLoginWindow(ctx, d.R, d.S)
+	step, agentErr := d.startAgent(ctx, w.ws, w.repo, w.boot)
+	LogSteps(d.Log, []Step{step})
+	var rec bootRecord
+	if readJSONFile(d.S.statePath(bootFile), &rec) == nil && rec.BootID == w.boot {
+		for i := range rec.Steps {
+			if rec.Steps[i].Name == step.Name {
+				rec.Steps[i] = step
+			}
+		}
+		rec.AgentError = agentErr
+		rec.Boot = protocol.BootReady
+		if agentErr != "" {
+			rec.Boot = protocol.BootFailed
+		}
+		if err := writeJSONFile(d.S.statePath(bootFile), rec); err != nil {
+			d.Log.Error("boot record", "err", err)
+		}
+	}
+	d.beat(ctx)
+}
+
 func (d *Daemon) supervise(ctx context.Context) error {
 	tick := time.NewTicker(d.Interval)
 	defer tick.Stop()
@@ -298,6 +372,7 @@ func (d *Daemon) supervise(ctx context.Context) error {
 			if err := d.dispatchDecision(ctx); err != nil {
 				d.Log.Warn("managed child decision continuation is unavailable or uncertain")
 			}
+			d.pollRemoteLogin(ctx)
 			if m := newestMtime(d.S.statePath(resultFile), d.S.statePath(tuiExitFile)); !m.Equal(last) {
 				last = m
 				d.Log.Info("the agent exited")

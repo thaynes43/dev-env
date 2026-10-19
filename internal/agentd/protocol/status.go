@@ -40,7 +40,35 @@ const (
 	// a result. agentd never runs a task's prompt twice (D-42); the next boot
 	// resumes the conversation in the TUI (D-58).
 	AgentInterrupted = "interrupted"
+	// AgentLoginRequired: a remote session's pod has no usable Claude login
+	// yet (or its login lapsed), so agentd has not started the agent. It is
+	// not working; agent-run login sets the login up (Story110 T03).
+	AgentLoginRequired = "login-required"
 )
+
+// Remote Control entry states (backlog 03, Story110 T03). The operator copies
+// them to status.remoteControl.state as free text.
+const (
+	// RemoteLoginRequired: no usable login, so no entry yet.
+	RemoteLoginRequired = "login-required"
+	// RemoteStarting: the CLI runs and has not registered an entry.
+	RemoteStarting = "starting"
+	// RemoteRegistered: the CLI's session record holds a bridge session id.
+	RemoteRegistered = "registered"
+	// RemoteOffline: the CLI is not running.
+	RemoteOffline = "offline"
+)
+
+// RemoteControl is a remote session's Remote Control entry, read from the
+// CLI's own session record (backlog 03 "Links"). The URL is set only once the
+// entry is registered.
+type RemoteControl struct {
+	// Name is the name agentd passed to --remote-control.
+	Name      string `json:"name,omitempty"`
+	SessionID string `json:"sessionId,omitempty"`
+	URL       string `json:"url,omitempty"`
+	State     string `json:"state,omitempty"`
+}
 
 // Step is the outcome of one boot step. Steps never stop the boot: a failed
 // one is reported and the next one runs.
@@ -72,6 +100,8 @@ type Status struct {
 	Usage            *Usage            `json:"usage,omitempty"`
 	UsageObservation *UsageObservation `json:"usageObservation,omitempty"`
 	Decision         *DecisionOutcome  `json:"decision,omitempty"`
+	// RemoteControl is set for a remote session only.
+	RemoteControl *RemoteControl `json:"remoteControl,omitempty"`
 	// ProjectBootstrap is the boot's private catalog bootstrap, when it ran:
 	// catalog names, states, steps and reason codes only (DESIGN-006).
 	ProjectBootstrap *ProjectBootstrap `json:"projectBootstrap,omitempty"`

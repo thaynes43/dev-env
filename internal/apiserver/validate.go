@@ -141,9 +141,13 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	case v1alpha1.ModeTask, v1alpha1.ModeLocal:
 		// Local sessions run the TUI from plan 02 (D-58).
 	case v1alpha1.ModeRemote:
-		add("mode", "remote sessions arrive in plan 03; task and local sessions run today")
+		// Story110 T03: the interim slice runs Claude only, on the pod's own
+		// login. Codex remote and the keeper's login stay plan 03.
+		if v1alpha1.AgentKind(req.Agent) != v1alpha1.AgentClaude {
+			add("mode", "remote sessions run claude only")
+		}
 	case "":
-		add("mode", "required: task or local")
+		add("mode", "required: task, local or remote")
 	default:
 		add("mode", "%q is not task, local or remote", req.Mode)
 	}

@@ -113,7 +113,7 @@ func TestBuildLaunchRefuses(t *testing.T) {
 		mutate func(*Settings, *protocol.Session)
 		want   string
 	}{
-		{"remote", func(_ *Settings, s *protocol.Session) { s.Mode = protocol.ModeRemote }, "plan 03"},
+		{"unknown mode", func(_ *Settings, s *protocol.Session) { s.Mode = "background" }, "is not task, local or remote"},
 		{"codex", func(_ *Settings, s *protocol.Session) { s.Agent = protocol.AgentCodex }, "managed codex tasks are disabled"},
 		{"alias", func(_ *Settings, s *protocol.Session) { s.Model = "opus" }, "aliases are refused"},
 		{"no static token", func(st *Settings, _ *protocol.Session) { st.Getenv = envOf(nil) }, "plan credential unavailable"},
@@ -129,7 +129,7 @@ func TestBuildLaunchRefuses(t *testing.T) {
 		})
 	}
 	s, sess, ws := launchFixture(t)
-	sess.Mode = protocol.ModeRemote
+	sess.Agent = protocol.AgentOpencode
 	if _, err := BuildLaunch(s, sess, ws, "b", time.Now()); !errors.Is(err, ErrNotInPlan01) {
 		t.Errorf("err = %v, want ErrNotInPlan01", err)
 	}

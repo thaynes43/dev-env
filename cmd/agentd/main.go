@@ -1,11 +1,11 @@
 // Command agentd is the supervisor inside each session pod, a child of tini
 // (DESIGN-001 3.6). It renders config at boot, clones the repo, starts or
 // resumes the agent in tmux, sends heartbeats, and answers
-// `agentd ctl status|rescue|prepare-restart|deliver` for the operator.
+// `agentd ctl status|rescue|prepare-restart|deliver|login` for the operator.
 //
 // Built so far: the daemon (`run`), the rescue pod's `hold`, the agent runner
 // in the tmux pane (`run-agent`), `render`, `ctl status`, `ctl rescue` and
-// `ctl prepare-restart`, `ctl deliver`, `ctl log` and managed child decisions.
+// `ctl prepare-restart`, `ctl deliver`, `ctl log`, `ctl login` and managed child decisions.
 package main
 
 import (
@@ -91,6 +91,11 @@ Commands:
                            bracketed paste into the Claude TUI, or codex queue.
                            Exit 3 when the agent takes no message (a headless
                            task, or no agent running).
+  ctl login url|code|status
+                           A remote session's pod-owned Claude login: url starts
+                           the sign-in and prints its link (refused while the
+                           agent's CLI runs), code reads the code from stdin,
+                           status says where it stands.
   ctl log [--tail N]       Print the last N lines (default 200) of the session's
                            log, or of its copy on the shared volume.
   ctl decision-read --expected-session-uid UID --expected-pod-uid UID
@@ -465,6 +470,45 @@ func ctlMessageOrLog(ctx context.Context, args []string, stdin io.Reader, stdout
 	return exitOK
 }
 
+// loginCtl is `ctl login url|code|status` (Story110 T03): the coordinator's
+// way to drive a remote session's pod-owned Claude login. url prints the
+// sign-in link to stdout only; code reads the code from stdin. Neither value is
+// logged, written to a file or put in an error.
+func loginCtl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, r agentd.Runner) int {
+	if len(args) != 1 || (args[0] != "url" && args[0] != "code" && args[0] != "status") {
+		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl login url | code (the code on stdin) | status\n", binaryName)
+		return exitUsage
+	}
+	s, err := agentd.LoadSettings(getenv)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
+		return exitFailure
+	}
+	sess, err := agentd.LoadSession(getenv)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
+		return exitFailure
+	}
+	switch args[0] {
+	case "url":
+		u, err := agentd.LoginURL(ctx, r, s, sess, time.Now)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "%s: login url: %v\n", binaryName, err)
+			return exitFailure
+		}
+		_, _ = fmt.Fprintln(stdout, u)
+	case "code":
+		if err := agentd.LoginCode(ctx, r, s, sess, stdin); err != nil {
+			_, _ = fmt.Fprintf(stderr, "%s: login code: %v\n", binaryName, err)
+			return exitFailure
+		}
+		_, _ = fmt.Fprintln(stdout, "code sent; login status says when the login exists")
+	default:
+		_, _ = fmt.Fprintln(stdout, agentd.LoginStatus(ctx, r, s, sess, time.Now()))
+	}
+	return exitOK
+}
+
 func daemon(ctx context.Context, log *slog.Logger, getenv func(string) string, r agentd.Runner) int {
 	s, err := agentd.LoadSettings(getenv)
 	if err != nil {
@@ -527,6 +571,8 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return grantCtl(args, stdin, stdout, stderr, getenv)
 		case "credential-install", "credential-remove", "credential-list", "credential-available", "credential-use", "credential-expire":
 			return credentialCtl(ctx, args, stdin, stdout, stderr, getenv, r)
+		case "login":
+			return loginCtl(ctx, args[1:], stdin, stdout, stderr, getenv, r)
 		case "deliver", "log":
 			return ctlMessageOrLog(ctx, args, stdin, stdout, stderr, getenv, r)
 		case "decision-read", "decision-answer":

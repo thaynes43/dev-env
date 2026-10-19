@@ -512,3 +512,41 @@ func TestDecisionNextQuestionSupersedesOnlyConfirmedSameWriterEscalation(t *test
 		})
 	}
 }
+
+// A remote session's entry reaches status.remoteControl, clipped; a session
+// that reports none keeps none (Story110 T03).
+func TestHeartbeatCopiesRemoteControl(t *testing.T) {
+	f := newFixture(t)
+	const name = "haynes-ops-1006-100000"
+	tok := f.sessionPod(name, "full", 0)
+	path := protocol.HeartbeatPath(name)
+
+	st := status(name)
+	st.Agent = protocol.AgentState{State: protocol.AgentBusy}
+	st.RemoteControl = &protocol.RemoteControl{
+		Name: name, SessionID: "session_abc", URL: "https://claude.ai/code/session_abc", State: protocol.RemoteRegistered,
+	}
+	if w := f.do(http.MethodPost, path, tok, st); w.Code != http.StatusNoContent {
+		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
+	}
+	rc := f.session(name).Status.RemoteControl
+	if rc == nil || rc.Name != name || rc.SessionID != "session_abc" || rc.URL != "https://claude.ai/code/session_abc" || rc.State != protocol.RemoteRegistered {
+		t.Fatalf("status.remoteControl %+v", rc)
+	}
+
+	st.RemoteControl = &protocol.RemoteControl{Name: name, State: strings.Repeat("x", 500)}
+	if w := f.do(http.MethodPost, path, tok, st); w.Code != http.StatusNoContent {
+		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
+	}
+	if rc := f.session(name).Status.RemoteControl; rc == nil || len(rc.State) > maxShort+4 || rc.URL != "" {
+		t.Errorf("a clipped, link-less entry: %+v", rc)
+	}
+
+	st.RemoteControl = nil
+	if w := f.do(http.MethodPost, path, tok, st); w.Code != http.StatusNoContent {
+		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
+	}
+	if rc := f.session(name).Status.RemoteControl; rc != nil {
+		t.Errorf("a heartbeat without an entry kept %+v", rc)
+	}
+}

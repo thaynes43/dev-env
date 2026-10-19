@@ -135,15 +135,21 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	if (interactive || local) && (prompt != "" || promptFile != "") {
 		return usageError("-p runs a task headless, so it cannot combine with --interactive or --local; pick one")
 	}
-	if interactive {
-		return usageError("--interactive (a TUI with Remote Control) arrives with plan 03; --local starts a TUI you attach to with agent-run attach")
+	if interactive && local {
+		return usageError("--interactive and --local both start a TUI; pick one (--interactive adds Remote Control)")
 	}
-	if local && (timeout != "" || maxTurns != 0) {
-		return usageError("--timeout and --max-turns limit a task; a --local session has none")
+	if interactive && agent != protocol.AgentClaude {
+		return usageError("--interactive (Remote Control) runs claude sessions only, not %q", agent)
+	}
+	if (interactive || local) && (timeout != "" || maxTurns != 0) {
+		return usageError("--timeout and --max-turns limit a task; a --local or --interactive session has none")
 	}
 	mode := protocol.ModeTask
-	if local {
+	switch {
+	case local:
 		mode = protocol.ModeLocal
+	case interactive:
+		mode = protocol.ModeRemote
 	}
 	if promptFile != "" {
 		if prompt != "" {
@@ -153,8 +159,8 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 			return err
 		}
 	}
-	if strings.TrimSpace(prompt) == "" && !local {
-		return usageError("say what to run: -p \"<task>\" or --prompt-file <path>, or --local for a TUI; agent-run help run lists the flags")
+	if strings.TrimSpace(prompt) == "" && !local && !interactive {
+		return usageError("say what to run: -p \"<task>\" or --prompt-file <path>, or --local or --interactive for a TUI; agent-run help run lists the flags")
 	}
 	if len(prompt) > protocol.MaxPromptBytes {
 		return usageError("the task is %d bytes, more than %d: a session's environment carries it (D-40)", len(prompt), protocol.MaxPromptBytes)
@@ -327,7 +333,10 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		if waitErr == nil {
 			a.outf("  %s\n", startLine(final, wait))
 		}
-		if local {
+		if interactive {
+			a.outf("Its Claude login lives in its own pod. If agent-run show %s says login-required, run: agent-run login %s url\n", sess.Name, sess.Name)
+		}
+		if local || interactive {
 			a.outf("Attach to its TUI with: agent-run attach %s (detach with ctrl-b d)\n", sess.Name)
 		} else {
 			a.outf("Follow it with: agent-run show %s\n", sess.Name)

@@ -207,8 +207,10 @@ func TestCreateUsageErrors(t *testing.T) {
 		{"missing prompt file", []string{"--repo", "r", "--prompt-file", "/nonexistent/order.md"}, "--prompt-file: open /nonexistent/order.md"},
 		{"--safe", []string{"--repo", "r", "-p", "t", "--safe"}, "--safe is gone in v2"},
 		{"-p with --interactive", []string{"--repo", "r", "-p", "t", "--interactive"}, "cannot combine with --interactive or --local"},
-		{"--interactive", []string{"--repo", "r", "--interactive"}, "arrives with plan 03"},
-		{"--local with a limit", []string{"--repo", "r", "--local", "--timeout", "40m"}, "a --local session has none"},
+		{"--interactive with --local", []string{"--repo", "r", "--interactive", "--local"}, "pick one"},
+		{"--interactive with codex", []string{"--repo", "r", "--interactive", "--agent", "codex", "--model", "gpt-6-astra"}, "claude sessions only"},
+		{"--interactive with a limit", []string{"--repo", "r", "--interactive", "--max-turns", "3"}, "a --local or --interactive session has none"},
+		{"--local with a limit", []string{"--repo", "r", "--local", "--timeout", "40m"}, "a --local or --interactive session has none"},
 		{"an unknown flag", []string{"--repo", "r", "-p", "t", "--tools", "blender"}, "flag provided but not defined: -tools"},
 		{"a bad output", []string{"--repo", "r", "-p", "t", "-o", "yaml"}, "-o yaml is not a format it prints; it takes -o name or -o json"},
 	} {

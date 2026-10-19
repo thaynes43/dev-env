@@ -92,6 +92,10 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 	switch {
 	case boot.AgentError != "":
 		st.Agent = protocol.AgentState{State: protocol.AgentFailed, Error: boot.AgentError}
+	case sess.Mode == protocol.ModeRemote && !hasCur && !checkLogin(s).Usable(now):
+		// Story110 T03: a remote pod without a usable login has not started
+		// its agent. The message names the way forward, never a secret.
+		st.Agent = protocol.AgentState{State: protocol.AgentLoginRequired, Error: "no usable Claude login in this pod; run: agent-run login " + sess.Name + " url"}
 	case hasCur && workspaceLaunchPending(s, cur, now):
 		created := cur.CreatedAt
 		st.Agent = protocol.AgentState{State: protocol.AgentPending, StartedAt: &created}
@@ -133,11 +137,14 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 		}
 	}
 	pid := 0
-	var p agentPid
+	var p, live agentPid
 	if readJSONFile(s.statePath(pidFile), &p) == nil && pidAlive(p) {
-		pid = p.Pid
+		pid, live = p.Pid, p
 	}
 	applyActivity(ctx, r, s, &st, pid, hasCur && cur.TUI, now)
+	if sess.Mode == protocol.ModeRemote && sess.Agent == protocol.AgentClaude {
+		st.RemoteControl = collectRemoteControl(s, sess, checkLogin(s).Usable(now), live, hasCur)
+	}
 	return st
 }
 

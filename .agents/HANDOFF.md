@@ -8,6 +8,11 @@ update survival, history, stop/continue and phone remain unaccepted.009 access
 and launch are paused on two exact public ConfigMap GET additions after an
 approval-review rejection; neither was executed. See the
 [delivery and precise hold](sagas/distributed-dev-env/verification/owned-operator-replacement-2026-10-19.md#delivered-checkpoint--2026-10-19-0934-utc).
+**Story110 T03 (2026-10-19, source only):** `agent-run --interactive` creates a Claude
+`remote` session on a pod-owned login ([backlog/03](sagas/distributed-dev-env/backlog/03-remote-control.md#interim-pod-owned-login-slice-2026-10-19-source-support-only)).
+Not released, installed or accepted. Using it needs Tom's explicit authorization for
+one isolated v2 Max login, which is pending; no v2 login exists. Live exec for
+`agent-run login` is unverified.
 Older release369-pending and installed-version statements below are historical:
 369 publication was explicitly approved and completed. Preserve every actual
 v1/rendezvous/H7/grant/security hold and consumed attempt. Same canonical

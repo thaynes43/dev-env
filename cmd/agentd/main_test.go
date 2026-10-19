@@ -213,3 +213,25 @@ func TestHold(t *testing.T) {
 		t.Errorf("hold x: %d", code)
 	}
 }
+
+// ctl login is for remote sessions only and takes url, code or status; the
+// code is read from stdin and never echoed (Story110 T03).
+func TestCtlLogin(t *testing.T) {
+	home := t.TempDir()
+	task := map[string]string{"HOME": home, "AGENTD_SESSION": `{"name":"r-1","repo":"r","agent":"claude","mode":"task","model":"claude-opus-5-5","prompt":"p"}`}
+	remote := map[string]string{"HOME": home, "AGENTD_SESSION": `{"name":"r-1","repo":"r","agent":"claude","mode":"remote","model":"claude-haiku-4-5"}`}
+	for _, args := range [][]string{{"ctl", "login"}, {"ctl", "login", "token"}, {"ctl", "login", "url", "extra"}} {
+		if code, _, errOut := runArgs(args, remote); code != exitUsage || !strings.Contains(errOut, "usage: ctl login") {
+			t.Errorf("%v: %d %q", args, code, errOut)
+		}
+	}
+	if code, out, _ := runArgs([]string{"ctl", "login", "status"}, task); code != exitOK || out != "not a remote session\n" {
+		t.Errorf("status on a task session: %d %q", code, out)
+	}
+	if code, _, errOut := runArgs([]string{"ctl", "login", "url"}, task); code != exitFailure || !strings.Contains(errOut, "remote sessions") {
+		t.Errorf("url on a task session: %d %q", code, errOut)
+	}
+	if code, _, errOut := runArgs([]string{"ctl", "login", "code"}, task); code != exitFailure || strings.Contains(errOut, "canary") {
+		t.Errorf("code on a task session: %d %q", code, errOut)
+	}
+}

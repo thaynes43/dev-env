@@ -107,6 +107,21 @@ var unsetForAgent = []string{
 	protocol.SessionEnv,
 }
 
+// unsetForRemote is unsetForAgent plus the static plan token: a remote
+// session's CLI runs on the pod's own Claude login, and a token in its
+// environment would bypass it and cannot register Remote Control (backlog 03,
+// DESIGN-001 6.2). The operator already leaves the token out of a remote pod;
+// this covers a profile envFrom Secret that still carries it.
+var unsetForRemote = append(append([]string{}, unsetForAgent...), "CLAUDE_CODE_OAUTH_TOKEN")
+
+// unsetFor is the agent's unset list for the session's mode.
+func unsetFor(sess protocol.Session) []string {
+	if sess.Mode == protocol.ModeRemote {
+		return unsetForRemote
+	}
+	return unsetForAgent
+}
+
 // interactiveGuard is the guard for an interactive session, appended to the
 // system prompt: v1's task guard without the task's ending.
 func interactiveGuard(ws protocol.Workspace, workDir string) string {
@@ -155,7 +170,7 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 	if sess.Agent == protocol.AgentCodex {
 		return buildCodexLaunch(s, sess, ws, nil, bootID, now)
 	}
-	if err := claudeOnStaticToken(s, sess); err != nil {
+	if err := claudeCredentialCheck(s, sess); err != nil {
 		return Launch{}, err
 	}
 	conv, err := newUUID()
@@ -168,7 +183,7 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 		Session:        sess.Name,
 		Dir:            ws.Worktree,
 		Env:            []string{"CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=dev-env"},
-		Unset:          unsetForAgent,
+		Unset:          unsetFor(sess),
 		LogPath:        s.LogPath(sess.Name),
 		EventsPath:     s.statePath(eventsFile),
 		ConversationID: conv,
@@ -181,8 +196,11 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 		}
 		l.CaptureOutput, l.CaptureModel, l.SessionUID, l.PodUID, l.Provider = true, sess.Model, sess.SessionUID, s.PodUID, protocol.AgentClaude
 	}
-	if sess.Mode == protocol.ModeLocal {
+	if sess.Mode == protocol.ModeLocal || sess.Mode == protocol.ModeRemote {
 		l.TUI = true
+		if sess.Mode == protocol.ModeRemote {
+			argv = append(argv, remoteControlArgs(sess)...)
+		}
 		guard := interactiveGuard(ws, s.WorkDir())
 		if sess.Workspace != nil {
 			guard = sharedGuard(ws, false)
@@ -230,7 +248,7 @@ func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first
 	if sess.Agent == protocol.AgentCodex {
 		return buildCodexLaunch(s, sess, ws, &first, bootID, now)
 	}
-	if err := claudeOnStaticToken(s, sess); err != nil {
+	if err := claudeCredentialCheck(s, sess); err != nil {
 		return Launch{}, err
 	}
 	if err := validateCommonResume(s, sess, first); err != nil {
@@ -251,6 +269,10 @@ func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first
 		return Launch{}, err
 	}
 	argv := append(claudeArgs(s, sess), "--resume", first.ConversationID)
+	if sess.Mode == protocol.ModeRemote {
+		// The same phone entry and history come back (S-6).
+		argv = append(argv, remoteControlArgs(sess)...)
+	}
 	argv = append(argv, rules...)
 	common, err := commonLaunchBinding(s, sess)
 	if err != nil {
@@ -261,7 +283,7 @@ func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first
 		Argv:           argv,
 		Dir:            ws.Worktree,
 		Env:            []string{"CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=dev-env"},
-		Unset:          unsetForAgent,
+		Unset:          unsetFor(sess),
 		LogPath:        s.LogPath(sess.Name),
 		EventsPath:     s.statePath(eventsFile),
 		ConversationID: first.ConversationID,
@@ -282,19 +304,28 @@ func claudeArgs(s Settings, sess protocol.Session) []string {
 	return append(argv, "--dangerously-skip-permissions")
 }
 
-// claudeOnStaticToken checks what agentd runs today: Claude task and local
-// sessions, on the plan's static token (V-05).
-func claudeOnStaticToken(s Settings, sess protocol.Session) error {
+// remoteControlArgs register the CLI's Remote Control entry under the
+// session's name (backlog 03: the Remote Control name is the session id).
+func remoteControlArgs(sess protocol.Session) []string {
+	return []string{"--remote-control", sess.Name}
+}
+
+// claudeCredentialCheck checks what agentd runs: Claude task and local
+// sessions on the plan's static token (V-05), and remote sessions on the pod's
+// own login, which needs no token here (agentd checks the login itself, see
+// remote.go, and strips the token from the agent's environment).
+func claudeCredentialCheck(s Settings, sess protocol.Session) error {
 	switch {
 	case sess.Agent != protocol.AgentClaude:
 		return fmt.Errorf("%w: %s sessions run from plan 04 (codex) or 09 (opencode)", ErrNotInPlan01, sess.Agent)
-	case sess.Mode == protocol.ModeRemote:
-		return fmt.Errorf("%w: remote mode arrives with plan 03 (Remote Control on the keeper's login)", ErrNotInPlan01)
-	case sess.Mode != protocol.ModeTask && sess.Mode != protocol.ModeLocal:
+	case sess.Mode != protocol.ModeTask && sess.Mode != protocol.ModeLocal && sess.Mode != protocol.ModeRemote:
 		return fmt.Errorf("mode %q is not task, local or remote", sess.Mode)
 	}
 	if err := protocol.ValidateClaudeModel(sess.Model); err != nil {
 		return err
+	}
+	if sess.Mode == protocol.ModeRemote {
+		return nil
 	}
 	// V-05: a session runs on the plan's static token or not at all.
 	if strings.TrimSpace(s.Getenv("CLAUDE_CODE_OAUTH_TOKEN")) == "" {

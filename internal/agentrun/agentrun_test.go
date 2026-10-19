@@ -50,8 +50,8 @@ func TestDispatch(t *testing.T) {
 	// Any other first word is the repository, as in v1.
 	h.mustRun(ExitUsage, "haynes-ops")
 	contains(t, "stderr", h.stderr.String(), `say what to run: -p "<task>"`)
-	h.mustRun(ExitUsage, "haynes-ops", "--interactive")
-	contains(t, "stderr", h.stderr.String(), "arrives with plan 03")
+	h.mustRun(ExitUsage, "haynes-ops", "--interactive", "--local")
+	contains(t, "stderr", h.stderr.String(), "pick one")
 
 	for verb, want := range map[string]string{
 		"attach":       "attach takes one session name",
