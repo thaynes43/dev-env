@@ -886,6 +886,38 @@ func TestDrainIdleMoment(t *testing.T) {
 	}
 }
 
+// Remote sessions drain like any idle interactive session. A Claude remote
+// session is eligible when idle. A Codex remote host reports busy for as long
+// as its daemon is live (agentd never sees a phone turn it could wait for), so
+// it is never eligible and takes a manual suspend and resume to upgrade.
+func TestDrainRemoteSessions(t *testing.T) {
+	tmpl := currentTemplates(t)
+	pod := readyDrainPod("s", "old-revision")
+	for _, c := range []struct {
+		name  string
+		agent string
+		state string
+		want  bool
+	}{
+		{"claude remote idle", "claude", protocol.AgentIdle, true},
+		{"claude remote waiting", "claude", protocol.AgentWaiting, true},
+		{"claude remote busy", "claude", protocol.AgentBusy, false},
+		{"codex remote host, live daemon", "codex", protocol.AgentBusy, false},
+		{"codex remote host, daemon down", "codex", protocol.AgentInterrupted, false},
+		{"codex remote host, starting", "codex", protocol.AgentPending, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := drainFixture("s")
+			s.Spec.Mode = v1alpha1.ModeRemote
+			s.Spec.Agent = v1alpha1.AgentKind(c.agent)
+			s.Status.Agent.Status = c.state
+			if got := drainEligible(s, pod, tmpl.Revision()); got != c.want {
+				t.Fatalf("eligible %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
 func TestParseRestartOutput(t *testing.T) {
 	ok := &cappedBuffer{max: 1024}
 	if _, err := ok.Write([]byte(`{"session":"s","conversationId":"conv-1","resumable":true}`)); err != nil {
