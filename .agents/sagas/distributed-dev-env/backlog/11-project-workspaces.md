@@ -399,3 +399,7 @@ are retained in the story orders. Independent Mac review and required CI gate
 source acceptance; new actors/window/activation remain unauthorized. Follow the
 [concrete acceptance procedure](../verification/pilot-rendezvous-2026-10-16.md).
 OpenProject integration is a separate readiness task, not a new strict status gate.
+The v2 agent image ships the shared `opwork` CLI (Story97, 2026-10-19): byte-for-byte copies of
+haynes-ops `scripts/openproject/{opwork,agent-api}.py` in `images/agent/tools/openproject/`, installed
+as `/usr/local/bin/opwork`. v2 pods reach the API only after haynes-ops #4103 (held network policy) is
+approved and applied; until then `opwork` exits 5 with `TRACKER UNAVAILABLE` and local checkpoints.
