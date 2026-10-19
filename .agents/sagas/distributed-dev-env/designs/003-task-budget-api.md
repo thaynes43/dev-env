@@ -464,8 +464,8 @@ An inert TLS regression reproduces premature refusal of a valid response inside
 the original two-second budget; caller cancellation and deadline expiry still
 refuse without retry. Dial/TLS limits, the one-second CRI proof, 800ms local probe,
 all accepted statuses and original campaign/stop authority are unchanged. Fixed
-context-owner diagnostics distinguish caller cancellation/deadline from the
-probe deadline without treating any missing status as proof. The failed003
+independent caller/probe context-state diagnostics record cancellation/deadline
+without inferring causal ownership when both have ended without treating any missing status as proof. The failed003
 ordering is consistent with this mismatch, but live correction remains unearned
 until a fresh bounded acceptance succeeds; no old actor may be rearmed.
 

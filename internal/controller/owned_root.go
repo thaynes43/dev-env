@@ -63,19 +63,8 @@ func (p OwnedRootProber) Observe(ctx context.Context, key client.ObjectKey, cont
 		case apierrors.IsNotFound(err):
 			category = "not-found"
 		}
-		contextOwner := "none"
-		switch {
-		case errors.Is(ctx.Err(), context.Canceled):
-			contextOwner = "caller-canceled"
-		case errors.Is(ctx.Err(), context.DeadlineExceeded):
-			contextOwner = "caller-deadline"
-		case errors.Is(bounded.Err(), context.DeadlineExceeded):
-			contextOwner = "probe-deadline"
-		case errors.Is(bounded.Err(), context.Canceled):
-			contextOwner = "probe-canceled"
-		}
 		// Never log remote error text or output: both may contain worker bytes.
-		log.FromContext(ctx).WithName("owned-root").Info("owned root process proof refused", "category", category, "errorType", fmt.Sprintf("%T", err), "contextDone", bounded.Err() != nil, "contextOwner", contextOwner, "typedExit", typed, "exited", exited, "exitCode", code, "probeStage", stage)
+		log.FromContext(ctx).WithName("owned-root").Info("owned root process proof refused", "category", category, "errorType", fmt.Sprintf("%T", err), "contextDone", bounded.Err() != nil, "callerCanceled", errors.Is(ctx.Err(), context.Canceled), "callerDeadline", errors.Is(ctx.Err(), context.DeadlineExceeded), "probeCanceled", errors.Is(bounded.Err(), context.Canceled), "probeDeadline", errors.Is(bounded.Err(), context.DeadlineExceeded), "typedExit", typed, "exited", exited, "exitCode", code, "probeStage", stage)
 		return 0, taskbudget.ErrUnavailable
 	}
 	return status.ExitStatus(), nil
