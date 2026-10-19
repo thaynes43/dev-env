@@ -14,10 +14,13 @@ import (
 // Owner operations also perform fresh status/proof/one-use consumption before
 // that fetch. Keep nested finite envelopes and cap each at the original budget
 // deadline; cancellation and unknown-result no-replay remain unchanged.
+// Execution includes two <=2s authority calls, a <=800ms local proof and the
+// native five-second catalog fallback. The API also includes reservation and
+// ControlTarget proofs before CRI; the external caller must allow 18 seconds.
 const (
-	NativeControlExecutionTimeout = 8 * time.Second
-	NativeControlTransportTimeout = 9 * time.Second
-	NativeControlRequestTimeout   = 10 * time.Second
+	NativeControlExecutionTimeout = 12 * time.Second
+	NativeControlTransportTimeout = 13 * time.Second
+	NativeControlRequestTimeout   = 16 * time.Second
 )
 
 // NativeControlRequest exposes a small supported native protocol, never arbitrary

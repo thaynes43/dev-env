@@ -26,6 +26,19 @@ type Binding struct {
 	PodUID   string    `json:"podUID"`
 }
 
+// AuthorityTimeout covers the complete authenticated authority roundtrip,
+// including Kubernetes identity reads and the inner one-second CRI proof. It
+// matches the existing admission/HTTP envelope; errors still stop immediately.
+const AuthorityTimeout = 2 * time.Second
+
+func authorityContext(ctx context.Context, b Binding) (context.Context, context.CancelFunc) {
+	deadline := time.Now().Add(AuthorityTimeout)
+	if b.Deadline.Before(deadline) {
+		deadline = b.Deadline
+	}
+	return context.WithDeadline(ctx, deadline)
+}
+
 type Gate interface {
 	Admit(context.Context, Binding) error
 	Observe(context.Context, Binding) (latched bool, err error)
@@ -144,7 +157,7 @@ func Run(ctx context.Context, c Config, gate Gate) (Receipt, error) {
 		}
 		defer c.Evidence.Close()
 	}
-	admitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	admitCtx, cancel := authorityContext(ctx, c.Binding)
 	err = admit(admitCtx, gate, c.Binding)
 	cancel()
 	if err != nil {
@@ -232,7 +245,7 @@ func Run(ctx context.Context, c Config, gate Gate) (Receipt, error) {
 	}
 	var startupErr error
 	if err == nil && c.ReadyVersion != "" {
-		probeCtx, cancelProbe := context.WithTimeout(ctx, 2*time.Second)
+		probeCtx, cancelProbe := authorityContext(ctx, c.Binding)
 		startupErr = probeNative(probeCtx, c.SocketPath, receipt.Root, c.ReadyVersion)
 		cancelProbe()
 		if startupErr == nil {
@@ -280,7 +293,7 @@ func Run(ctx context.Context, c Config, gate Gate) (Receipt, error) {
 				reason = "helper control lost"
 				break monitor
 			case <-ticker.C:
-				observeCtx, stop := context.WithTimeout(ctx, time.Second)
+				observeCtx, stop := authorityContext(ctx, c.Binding)
 				latched, e := observe(observeCtx, gate, c.Binding)
 				stop()
 				if e != nil {

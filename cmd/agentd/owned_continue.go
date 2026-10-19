@@ -88,7 +88,7 @@ func awaitOwnedContinuation(ctx context.Context, read func(context.Context, stri
 		if bounded.Err() != nil {
 			return apiv1.TaskBudgetBinding{}, false, nil
 		}
-		callCtx, done := context.WithTimeout(bounded, time.Second)
+		callCtx, done := context.WithTimeout(bounded, hostexecutor.AuthorityTimeout)
 		st, err := read(callCtx, b.TaskUID)
 		done()
 		if err != nil {

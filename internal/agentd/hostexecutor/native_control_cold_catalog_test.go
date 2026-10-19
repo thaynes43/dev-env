@@ -86,7 +86,7 @@ func TestPinnedNativeColdCatalogFallbackWithinOwnerBound(t *testing.T) {
 		t.Fatal(e)
 	}
 	socket := filepath.Join(home, "n.sock")
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cmd := nativeCommand(Config{NativeBinary: binary, Home: home, SocketPath: socket})
 	diag, e := os.Create(filepath.Join(home, "native.log"))
@@ -117,16 +117,18 @@ func TestPinnedNativeColdCatalogFallbackWithinOwnerBound(t *testing.T) {
 	if e = probeNative(ctx, socket, root, PinnedNativeVersion); e != nil {
 		t.Fatal(e)
 	}
-	b := Binding{TaskUID: "frozen-diagnostic", HostID: "frozen-host", PodUID: "frozen-pod", Epoch: 1, Deadline: time.Now().Add(10 * time.Second)}
+	b := Binding{TaskUID: "frozen-diagnostic", HostID: "frozen-host", PodUID: "frozen-pod", Epoch: 1, Deadline: time.Now().Add(15 * time.Second)}
 	obs := Observation{Binding: b, Stage: "Ready", Root: root, NativeVersion: PinnedNativeVersion}
 	req := apiv1.NativeControlRequest{Binding: apiv1.TaskBudgetBinding{TaskUID: b.TaskUID, HostID: b.HostID, PodUID: b.PodUID, Epoch: 1, Deadline: b.Deadline}, ID: "frozen-thread-once", Operation: "thread/start"}
 	bounded, stop := context.WithTimeout(ctx, apiv1.NativeControlExecutionTimeout)
 	defer stop()
 	started := time.Now()
-	// Realistic bounded status/proof work precedes initialize and CAS.
-	time.Sleep(400 * time.Millisecond)
+	// Both complete authority calls may legitimately consume most of their
+	// existing two-second budgets. Compose them with the real five-second
+	// catalog fallback rather than testing each fast path in isolation.
+	time.Sleep(1600 * time.Millisecond)
 	consumed := 0
-	result, err := ControlNative(bounded, socket, obs, req, func(context.Context) error { consumed++; time.Sleep(300 * time.Millisecond); return nil })
+	result, err := ControlNative(bounded, socket, obs, req, func(context.Context) error { consumed++; time.Sleep(1600 * time.Millisecond); return nil })
 	t.Logf("real frozen thread/start duration=%v consumed=%d resultBytes=%d error=%v context=%v", time.Since(started), consumed, len(result), err, bounded.Err())
 	if err != nil {
 		t.Fatal(err)
