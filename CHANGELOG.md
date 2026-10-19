@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.35.0](https://github.com/thaynes43/dev-env/compare/v2.34.0...v2.35.0) (2026-10-19)
+
+
+### Features
+
+* Codex remote sessions on v2 with phone pairing ([#457](https://github.com/thaynes43/dev-env/issues/457)) ([76ade7a](https://github.com/thaynes43/dev-env/commit/76ade7a4194f2495cbf31efd1c63c34fafb42b63))
+
 ## [2.34.0](https://github.com/thaynes43/dev-env/compare/v2.33.0...v2.34.0) (2026-10-19)
 
 
