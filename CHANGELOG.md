@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.30.2](https://github.com/thaynes43/dev-env/compare/v2.30.1...v2.30.2) (2026-10-19)
+
+
+### Bug Fixes
+
+* **operator:** wait for initial owned Pod readiness before admission ([#428](https://github.com/thaynes43/dev-env/issues/428)) ([bfacc9b](https://github.com/thaynes43/dev-env/commit/bfacc9b34b09467696827c1786e9baffbe75f84b))
+* retain owned-root refusal stages without weakening proof ([#431](https://github.com/thaynes43/dev-env/issues/431)) ([7628f42](https://github.com/thaynes43/dev-env/commit/7628f4298db3e9d1bde621da8c2e04c5f262a621))
+
 ## [2.30.1](https://github.com/thaynes43/dev-env/compare/v2.30.0...v2.30.1) (2026-10-19)
 
 
