@@ -80,6 +80,7 @@ type options struct {
 	probeAddr       string
 	proxmoxGrants   keeper.ProxmoxGrantOptions
 	codexAuth       keeper.CodexOptions
+	claudeAuth      keeper.ClaudeOptions
 }
 
 func defaultPermissions() string {
@@ -115,6 +116,9 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.codexAuth.JournalSecret, "codex-auth-journal-secret", keeper.DefaultCodexJournalSecret, "keeper-only private Codex auth journal Secret")
 	fs.StringVar(&o.codexAuth.LiveSecret, "codex-live-secret", keeper.DefaultCodexLiveSecret, "access-only Codex projection Secret in secret-namespace")
 	fs.StringVar(&o.codexAuth.LoginDir, "codex-login-dir", keeper.DefaultCodexLoginDir, "keeper/helper-only tmpfs staging and private control socket")
+	fs.BoolVar(&o.claudeAuth.Enabled, "enable-claude-auth", false, "enable the keeper-only worker that keeps the shared Claude login fresh; requires reviewed named-secret RBAC")
+	fs.StringVar(&o.claudeAuth.JournalSecret, "claude-auth-journal-secret", keeper.DefaultClaudeJournalSecret, "keeper-only private Claude auth journal Secret")
+	fs.StringVar(&o.claudeAuth.LiveSecret, "claude-live-secret", keeper.DefaultClaudeLiveSecret, "access-only Claude projection Secret in secret-namespace")
 	fs.StringVar(&o.proxmoxGrants.SessionNamespace, "session-namespace", "dev-agents", "namespace containing credential grants and session pods")
 	fs.StringVar(&o.proxmoxGrants.JournalSecret, "credential-journal-secret", keeper.DefaultCredentialJournalSecret, "keeper-only durable credential journal Secret in its own namespace")
 	fs.StringVar(&o.proxmoxGrants.CADir, "ssh-ca-dir", keeper.DefaultSSHCAPath, "mounted Ed25519 CA directory (private-key/public-key)")
@@ -140,6 +144,9 @@ func parseFlags(args []string) (options, error) {
 	}
 	if o.codexAuth.Enabled && (!o.leaderElect || o.codexAuth.JournalSecret == "" || o.codexAuth.LiveSecret == "" || !filepath.IsAbs(o.codexAuth.LoginDir) || o.namespace == o.secretNamespace) {
 		return o, errors.New("codex auth requires leader election, separate private/public namespaces and nonempty named configuration")
+	}
+	if o.claudeAuth.Enabled && (!o.leaderElect || o.claudeAuth.JournalSecret == "" || o.claudeAuth.LiveSecret == "" || o.namespace == o.secretNamespace) {
+		return o, errors.New("claude auth requires leader election, separate private/public namespaces and nonempty named configuration")
 	}
 	p, err := keeper.ParsePermissions(*perms)
 	if err != nil {
@@ -176,6 +183,7 @@ func run(args []string) error {
 		},
 		ProxmoxGrants: o.proxmoxGrants,
 		CodexAuth:     o.codexAuth,
+		ClaudeAuth:    o.claudeAuth,
 		Interval:      o.interval,
 		LeaderElect:   o.leaderElect,
 		MetricsAddr:   o.metricsAddr,
