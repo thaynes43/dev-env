@@ -158,6 +158,12 @@ func LoginURL(ctx context.Context, r Runner, s Settings, sess protocol.Session, 
 	if checkLogin(s).Usable(now()) {
 		return "", errors.New("this pod already has a login")
 	}
+	// One owner per rotating refresh token: never a second CLI on this HOME
+	// while the agent's CLI runs, even if its login file reads as absent.
+	var p agentPid
+	if readJSONFile(s.statePath(pidFile), &p) == nil && pidAlive(p) {
+		return "", errors.New("the agent is running on this pod's login; stop it before a new login")
+	}
 	if hasLoginWindow(ctx, r, s) {
 		if pane, err := loginPane(ctx, r, s); err == nil && strings.Contains(pane, loginExitMarker) {
 			StopLoginWindow(ctx, r, s)

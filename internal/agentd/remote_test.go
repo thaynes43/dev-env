@@ -229,6 +229,20 @@ func TestLoginURLStartsWindowAndPrintsOnlyTheLink(t *testing.T) {
 	if _, err := LoginURL(context.Background(), r, s, remoteSession(), func() time.Time { return loginNow }); err == nil || !strings.Contains(err.Error(), "already has a login") {
 		t.Errorf("with a login: %v", err)
 	}
+
+	// A live agent CLI refuses a login even when its credentials read as absent
+	// (a lapsed or unreadable file): never two CLIs on one HOME.
+	s2 := testSettings(t, t.TempDir())
+	s2.TmuxBin, s2.ClaudeBin = "tmux", "claude"
+	if err := os.MkdirAll(s2.StateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_ = writeJSONFile(s2.statePath(pidFile), agentPid{Pid: os.Getpid(), Start: procStartTime(os.Getpid())})
+	tm2 := &loginTmux{}
+	r2 := &fakeRunner{handle: tm2.handle}
+	if _, err := LoginURL(context.Background(), r2, s2, remoteSession(), func() time.Time { return loginNow }); err == nil || !strings.Contains(err.Error(), "agent is running") || tm2.started != 0 {
+		t.Errorf("with a live agent: %v started %d", err, tm2.started)
+	}
 }
 
 func TestLoginCodeNeverReachesArguments(t *testing.T) {
