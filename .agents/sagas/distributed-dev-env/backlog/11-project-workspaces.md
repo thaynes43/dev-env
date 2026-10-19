@@ -59,6 +59,9 @@ This is a recorded requirement, not an enabled integration or a change to Chapte
   pre-guard operator downgrade is not established safe once latches exist.
   Actual history export/directory/stopped reads remain unaccepted. Explicit
   published-context source is under review and does not prove native history.
+  *2026-10-19 (Q-110-04, [ADR-008](../adrs/008-private-history-retention-for-task-sessions.md)):*
+  only task Sessions are newly marked. Remote and local Sessions suspend by
+  rescue and pod delete; Sessions already marked stay protected.
 
 The [coordination contract](../../../../docs/session-coordination.md) records
 exact source evidence and the new read/mutation boundaries.

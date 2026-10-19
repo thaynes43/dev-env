@@ -37,8 +37,11 @@ func privateHistoryProtected(s *v1alpha1.AgentSession) bool {
 	return projectcanary.IsPilot(s) || s.Spec.ProjectCanary != nil || s.Spec.Workspace == nil && s.Status.PrivateHistory != nil
 }
 
+// privateHistoryEnabled: a session is newly marked only when it is a task
+// (ADR-008). Remote and local sessions are never marked, so they suspend through
+// the rescue path; one already marked, and any canary or pilot, stays protected.
 func (r *Reconciler) privateHistoryEnabled(s *v1alpha1.AgentSession) bool {
-	return s.Spec.Workspace == nil && (r.PrivateHistoryRetention || privateHistoryProtected(s))
+	return s.Spec.Workspace == nil && (r.PrivateHistoryRetention && s.Spec.Mode == v1alpha1.ModeTask || privateHistoryProtected(s))
 }
 
 func (r *Reconciler) privateHistorySession(ctx context.Context, s *v1alpha1.AgentSession) (*v1alpha1.AgentSession, error) {
