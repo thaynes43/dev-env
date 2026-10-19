@@ -222,7 +222,7 @@ func parseFlags(args []string) (options, error) {
 			}
 		}
 	}
-	policy := apiserver.Policy{Human: o.humanSA, Clients: o.clientSAs, SessionNamespace: o.sessionNamespace, SessionServiceAccount: controller.ServiceAccountName}
+	policy := apiserver.Policy{Human: o.humanSA, Clients: o.clientSAs, SessionNamespace: o.sessionNamespace, SessionServiceAccount: controller.ServiceAccountName, WorkbenchServiceAccount: templates.WorkbenchServiceAccount}
 	var err error
 	o.coordinatorHosts, err = apiserver.ParseCoordinatorHosts(*hosts, policy)
 	if err != nil {
@@ -613,11 +613,12 @@ func run(args []string) error {
 			Live:               mgr.GetAPIReader(),
 			Auth:               apiserver.TokenReviewer{Client: mgr.GetClient()},
 			Policy: apiserver.Policy{
-				Human:                 o.humanSA,
-				Clients:               o.clientSAs,
-				SessionNamespace:      o.sessionNamespace,
-				SessionServiceAccount: controller.ServiceAccountName,
-				CoordinatorEnabled:    o.coordinatorEnabled, Coordinators: o.coordinatorHosts,
+				Human:                   o.humanSA,
+				Clients:                 o.clientSAs,
+				SessionNamespace:        o.sessionNamespace,
+				SessionServiceAccount:   controller.ServiceAccountName,
+				WorkbenchServiceAccount: templates.WorkbenchServiceAccount,
+				CoordinatorEnabled:      o.coordinatorEnabled, Coordinators: o.coordinatorHosts,
 				// declare-activity's declarations live beside the operator
 				// (D-66).
 				ActivityNamespace: o.templatesNamespace,

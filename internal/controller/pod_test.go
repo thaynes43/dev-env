@@ -675,3 +675,46 @@ func TestDecisionPodFeatureCannotBeEnabledByTemplateOrPrivateTask(t *testing.T) 
 		})
 	}
 }
+
+// A profile that names the workbench account runs the session as it, with the
+// cue agent-run reads. Every other profile, and every hold pod, keeps the
+// agents' account and an empty cue.
+func TestWorkbenchProfilePodRunsAsTheWorkbench(t *testing.T) {
+	tmpl := exampleTemplates(t)
+	p := tmpl.Profiles["dev"]
+	p.ServiceAccount = templates.WorkbenchServiceAccount
+	tmpl.Profiles["dev"] = p
+	s := taskSession()
+	s.Spec.Profile = "dev"
+	pod, err := buildPod(s, tmpl, "https://api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pod.Spec.ServiceAccountName; got != "dev-env-workbench" {
+		t.Errorf("service account %q", got)
+	}
+	if e := envOf(pod.Spec.Containers[0], templates.WorkbenchEnv); e == nil || e.Value != "1" {
+		t.Errorf("%s %+v", templates.WorkbenchEnv, e)
+	}
+	hold, err := buildHoldPod(s, tmpl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := hold.Spec.ServiceAccountName; got != ServiceAccountName {
+		t.Errorf("hold pod service account %q", got)
+	}
+	if e := envOf(hold.Spec.Containers[0], templates.WorkbenchEnv); e == nil || e.Value != "" {
+		t.Errorf("hold pod %s %+v", templates.WorkbenchEnv, e)
+	}
+	s.Spec.Profile = "full"
+	other, err := buildPod(s, tmpl, "https://api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.Spec.ServiceAccountName != ServiceAccountName {
+		t.Errorf("full profile service account %q", other.Spec.ServiceAccountName)
+	}
+	if e := envOf(other.Spec.Containers[0], templates.WorkbenchEnv); e == nil || e.Value != "" {
+		t.Errorf("full profile %s %+v", templates.WorkbenchEnv, e)
+	}
+}

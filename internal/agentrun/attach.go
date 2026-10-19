@@ -86,7 +86,7 @@ func (a *app) tmuxExec(ctx context.Context, verb string, args []string, interact
 // after the checks attach, detach and login share: not inside a session pod,
 // kubectl on PATH, the API names the pod and it runs.
 func (a *app) sessionExecBase(ctx context.Context, cmd *command, verb, name string) ([]string, error) {
-	if a.inSessionPod() {
+	if a.inSessionPod() && !a.inWorkbenchPod() {
 		return nil, fail(ExitAuth, "%s is for Tom, from the workbench, a laptop or the v1 pod: an agent has no exec into another session's pod (D-19). Send it a message instead: agent-run msg %s \"<text>\"", verb, name)
 	}
 	kubectl, err := a.env.LookPath("kubectl")
@@ -125,6 +125,18 @@ func (a *app) sessionExecBase(ctx context.Context, cmd *command, verb, name stri
 // kubectlSPDYEnv turns off kubectl's WebSocket exec (honoured by kubectl 1.29
 // and later; the 1.37 client names it in its binary).
 const kubectlSPDYEnv = "KUBECTL_REMOTE_COMMAND_WEBSOCKETS=false"
+
+// envWorkbench is "1" in a workbench session's pod, which runs as the
+// dev-env-workbench ServiceAccount (templates.WorkbenchEnv): the operator sets it
+// and no template can. It only lifts agent-run's own refusal. The right to exec
+// is RBAC's: kubectl exec is refused (403) for any other pod's account, and the
+// identity guard refuses it again in dev-agents.
+const envWorkbench = "DEV_ENV_WORKBENCH"
+
+// inWorkbenchPod reports whether agent-run runs in a workbench session's pod.
+func (a *app) inWorkbenchPod() bool {
+	return a.env.Getenv(envWorkbench) == "1"
+}
 
 // inSessionPod reports whether agent-run runs in a session pod, by the same
 // sign connect uses: the pod's projected API token. agentd removes
