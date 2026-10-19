@@ -2,6 +2,8 @@ package agentd
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,5 +64,49 @@ func TestLaunchRestartNeedsTheFirstLaunch(t *testing.T) {
 	writeTranscript(t, s, "conv-1")
 	if rep := launchRestart(s, "s-1"); rep.Resumable {
 		t.Fatalf("resume.json alone proved a conversation: %+v", rep)
+	}
+}
+
+// A used session whose last transcript line is huge (a large tool result)
+// still proves its conversation: only the file's existence and size count.
+func TestLaunchRestartHugeLastLine(t *testing.T) {
+	s, _, _ := launchFixture(t)
+	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONFile(s.statePath(launchFile), Launch{ConversationID: "conv-1"}); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(s.ClaudeConfigDir, "projects", "-work-tree")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "conv-1.jsonl")
+	line := "{\"type\":\"user\",\"x\":\"" + strings.Repeat("a", 300<<10) + "\"}\n"
+	if err := os.WriteFile(path, []byte("{\"type\":\"user\"}\n"+line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if rep := launchRestart(s, "s-1"); !rep.Resumable || rep.ConversationID != "conv-1" {
+		t.Fatalf("huge last line: %+v", rep)
+	}
+	// Empty and symlinked transcripts prove nothing.
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if rep := launchRestart(s, "s-1"); rep.Resumable {
+		t.Fatalf("empty transcript proved a conversation: %+v", rep)
+	}
+	real := filepath.Join(dir, "real")
+	if err := os.WriteFile(real, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, path); err != nil {
+		t.Fatal(err)
+	}
+	if rep := launchRestart(s, "s-1"); rep.Resumable {
+		t.Fatalf("symlinked transcript proved a conversation: %+v", rep)
 	}
 }

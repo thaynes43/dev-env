@@ -2,6 +2,8 @@ package agentd
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -12,7 +14,7 @@ import (
 // launch and kept across resumes (a resume writes resume.json beside it), so
 // a remote pod that was itself started by resume still has it. A Claude
 // launch picks its conversation id before the CLI has written anything, so
-// the id proves a conversation only once its transcript exists: `claude
+// the id proves a conversation only once its transcript file exists and is non-empty: `claude
 // --resume` of an id the CLI never wrote fails, and drain keeps that pod.
 func launchRestart(s Settings, session string) protocol.RestartReport {
 	rep := protocol.RestartReport{Session: session}
@@ -24,11 +26,27 @@ func launchRestart(s Settings, session string) protocol.RestartReport {
 		if !first.NativeThreadConfirmed || first.Session != session || !nativeThreadID.MatchString(first.ConversationID) {
 			return rep
 		}
-	} else if _, ok := readTranscriptTail(s, first.ConversationID); !ok {
+	} else if !transcriptWritten(s, first.ConversationID) {
 		return rep
 	}
 	rep.ConversationID, rep.Resumable = first.ConversationID, true
 	return rep
+}
+
+// transcriptWritten reports that the CLI has written the conversation's
+// transcript: a regular, non-symlink, non-empty file. It reads no content, so
+// a huge last line (a large tool result) cannot hide a used session.
+func transcriptWritten(s Settings, conversationID string) bool {
+	if !conversationIDPattern.MatchString(conversationID) {
+		return false
+	}
+	matches, _ := filepath.Glob(filepath.Join(s.ClaudeConfigDir, "projects", "*", conversationID+".jsonl"))
+	for _, path := range matches {
+		if fi, err := os.Lstat(path); err == nil && fi.Mode().IsRegular() && fi.Size() > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // ReadRestart is `agentd ctl prepare-restart --dry-run` (DESIGN-001 5.2). It
