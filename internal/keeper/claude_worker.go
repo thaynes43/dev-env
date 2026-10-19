@@ -3,6 +3,7 @@ package keeper
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -22,6 +23,9 @@ type ClaudeOptions struct {
 	Enabled       bool
 	JournalSecret string
 	LiveSecret    string
+	// LoginDir is the memory-backed directory the login helper shares with the
+	// keeper; the keeper serves its private control socket there (increment 5).
+	LoginDir string
 }
 
 const claudePollInterval = 30 * time.Second
@@ -53,14 +57,26 @@ type claudeWorker struct {
 	Fence     func(context.Context, time.Duration) error
 	Clock     clock.Clock
 	Log       logr.Logger
+	// LoginDir enables the login control socket and the adoption of a staged
+	// login; empty leaves the worker refresh-only.
+	LoginDir string
 
-	published uint64 // last generation this process published
-	last      string // last state logged
+	// mu serializes a refresh tick with every control request, so an adoption
+	// never overlaps a refresh in flight. Everything below is guarded by it.
+	mu        sync.Mutex
+	published uint64        // last generation this process published
+	last      string        // last state logged
+	attempt   claudeAttempt // the one staging directory a helper may have open
 }
 
 func (*claudeWorker) NeedLeaderElection() bool { return true }
 
 func (w *claudeWorker) Start(ctx context.Context) error {
+	if w.LoginDir != "" {
+		if err := w.serveControl(ctx); err != nil {
+			return err
+		}
+	}
 	for ctx.Err() == nil {
 		w.tick(ctx)
 		select {
@@ -99,6 +115,8 @@ func (w *claudeWorker) due(r claudeRecord) bool {
 
 // tick runs at most one refresh. Its result is only logged as a state.
 func (w *claudeWorker) tick(ctx context.Context) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	_, r, err := w.load(ctx)
 	if err != nil {
 		w.note("journal-unavailable")
@@ -253,7 +271,11 @@ func claudeRunnable(o Options, c client.Client, fence *LeaseFence, clk clock.Clo
 	if a.LiveSecret == "" {
 		a.LiveSecret = DefaultClaudeLiveSecret
 	}
+	if a.LoginDir == "" {
+		a.LoginDir = DefaultClaudeLoginDir
+	}
 	return &claudeWorker{
+		LoginDir:  a.LoginDir,
 		Journal:   &claudeJournal{Client: c, Secret: types.NamespacedName{Namespace: o.Namespace, Name: a.JournalSecret}},
 		Transport: newClaudeHTTPRefresh(),
 		Publisher: &claudePublicSecret{Client: c, Secret: types.NamespacedName{Namespace: o.GHTokenSecret.Namespace, Name: a.LiveSecret}},

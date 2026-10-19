@@ -79,7 +79,7 @@ func TestClaudeAuthDefaultsAndExplicitPrerequisites(t *testing.T) {
 	if err != nil || o.claudeAuth.Enabled {
 		t.Fatal("Claude auth enabled by default")
 	}
-	for _, args := range [][]string{{"--enable-claude-auth", "--leader-elect=false"}, {"--enable-claude-auth", "--claude-auth-journal-secret="}, {"--enable-claude-auth", "--claude-live-secret="}, {"--enable-claude-auth", "--secret-namespace=dev-env-system"}} {
+	for _, args := range [][]string{{"--enable-claude-auth", "--leader-elect=false"}, {"--enable-claude-auth", "--claude-auth-journal-secret="}, {"--enable-claude-auth", "--claude-live-secret="}, {"--enable-claude-auth", "--secret-namespace=dev-env-system"}, {"--enable-claude-auth", "--claude-login-dir=relative"}} {
 		if _, err := parseFlags(args); err == nil {
 			t.Fatal("unsafe Claude auth configuration accepted")
 		}
