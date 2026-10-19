@@ -307,3 +307,82 @@ func TestOwnedContinuationRequiresFrozenInputsAndOriginalLiveGuard(t *testing.T)
 		t.Fatal("changed policy inputs accepted")
 	}
 }
+
+// Reproduce the real first boot: bootstrap has returned while kubelet still
+// publishes ContainerCreating. The same admission must wait, not be replayed.
+type startingRootReader struct {
+	client.Reader
+	reads    int
+	always   bool
+	wrongUID bool
+}
+
+func (r *startingRootReader) Get(ctx context.Context, k client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if err := r.Reader.Get(ctx, k, obj, opts...); err != nil {
+		return err
+	}
+	if p, ok := obj.(*corev1.Pod); ok {
+		r.reads++
+		if r.always || r.reads == 1 {
+			p.Status.Phase = corev1.PodPending
+			p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: OwnedRootContainer, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}}}}
+			if r.wrongUID {
+				p.UID = "replacement"
+			}
+		}
+	}
+	return nil
+}
+func TestOwnedRootAdmissionWaitsOriginalKubeletStartup(t *testing.T) {
+	f := newRootPolicyFixture(t)
+	r := &startingRootReader{Reader: f.live}
+	f.inspector.Reader = r
+	if err := f.inspector.InspectNativeAdmission(context.Background(), f.ledger, f.ledger.Binding); err != nil {
+		t.Fatal(err)
+	}
+	if r.reads < 3 || len(f.ledger.Workers) != 0 {
+		t.Fatal("startup admitted prematurely or mutated authority")
+	}
+}
+func TestOwnedRootAdmissionStartupStillFailsClosed(t *testing.T) {
+	for _, kind := range []string{"cancelled", "deadline", "replacement", "bad-profile"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newRootPolicyFixture(t)
+			r := &startingRootReader{Reader: f.live, always: true, wrongUID: kind == "replacement"}
+			f.inspector.Reader = r
+			if kind == "bad-profile" {
+				f.pod.Spec.HostPID = true
+				if err := f.live.Update(context.Background(), f.pod); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if kind == "cancelled" {
+				cancel()
+			}
+			if kind == "deadline" {
+				var stop context.CancelFunc
+				ctx, stop = context.WithTimeout(ctx, 10*time.Millisecond)
+				defer stop()
+			}
+			if err := f.inspector.InspectNativeAdmission(ctx, f.ledger, f.ledger.Binding); err == nil {
+				t.Fatal("unproven startup admitted")
+			}
+			if len(f.ledger.Workers) != 0 {
+				t.Fatal("failed startup granted authority")
+			}
+		})
+	}
+}
+
+func TestOwnedRootAdmissionStartupCapFailsUnavailable(t *testing.T) {
+	f := newRootPolicyFixture(t)
+	f.inspector.Reader = &startingRootReader{Reader: f.live, always: true}
+	if err := f.inspector.InspectNativeAdmission(context.Background(), f.ledger, f.ledger.Binding); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("startup cap did not fail unavailable", err)
+	}
+	if len(f.ledger.Workers) != 0 {
+		t.Fatal("startup cap granted authority")
+	}
+}
