@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.30.5](https://github.com/thaynes43/dev-env/compare/v2.30.4...v2.30.5) (2026-10-19)
+
+
+### Bug Fixes
+
+* **native:** allow bounded cold-catalog owner acknowledgement ([#436](https://github.com/thaynes43/dev-env/issues/436)) ([65b2b16](https://github.com/thaynes43/dev-env/commit/65b2b1627905549fccbde9f9d1fe08d26e549297))
+
 ## [2.30.4](https://github.com/thaynes43/dev-env/compare/v2.30.3...v2.30.4) (2026-10-19)
 
 
