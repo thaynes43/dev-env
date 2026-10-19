@@ -20,6 +20,11 @@ import (
 // token. The projections carry no refresh token. Only the non-secret members
 // are decoded, so a token value cannot reach the output, an error or a log.
 
+// authCodexMountPath is where the Codex access projection is mounted. agentd
+// removes AGENTD_CODEX_ACCESS_FILE from a managed Codex child's environment, so
+// a Codex session finds the file here instead. A variable so tests can move it.
+var authCodexMountPath = "/opt/dev-env/codex-access/access.json"
+
 const (
 	authMaxBytes       = 64 << 10
 	authDefaultWarning = 30 * time.Minute
@@ -80,6 +85,11 @@ func (a *app) auth(_ context.Context, args []string) error {
 	if codexFile == "" {
 		codexFile = a.env.Getenv("AGENTD_CODEX_ACCESS_FILE")
 	}
+	if codexFile == "" {
+		if _, err := os.Stat(authCodexMountPath); err == nil {
+			codexFile = authCodexMountPath
+		}
+	}
 	now := a.env.Now()
 	rows := []authRow{
 		readAuthRow("claude", claudeFile, "expiresAt", now, warn),
@@ -125,7 +135,7 @@ func authExitCode(rows []authRow) int {
 func readAuthRow(provider, path, expiryKey string, now time.Time, warn time.Duration) authRow {
 	row := authRow{Provider: provider, State: authUnknown}
 	if path == "" {
-		row.State, row.Reason, row.code = authNotConfigured, "no projection is mounted in this pod", -1
+		row.State, row.Reason, row.code = authNotConfigured, "no projection variable is set and none is mounted at the default path", -1
 		return row
 	}
 	raw, err := readAuthFile(path)

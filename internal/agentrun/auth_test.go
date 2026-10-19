@@ -14,6 +14,15 @@ import (
 // never reach stdout or stderr.
 const authCanary = "CANARY-token-9f3a7c21"
 
+// hermeticAuth moves the default Codex mount to an empty directory, so the
+// host's real mount cannot change a test's result.
+func hermeticAuth(t *testing.T, h *harness) {
+	t.Helper()
+	old := authCodexMountPath
+	t.Cleanup(func() { authCodexMountPath = old })
+	authCodexMountPath = filepath.Join(h.dir, "no-codex-mount", "access.json")
+}
+
 func authClaudeDoc(gen int, exp time.Time) string {
 	return fmt.Sprintf(`{"version":1,"generation":%d,"accessToken":%q,"expiresAt":%q,"scopes":["user:inference"],`+
 		`"subscriptionType":"max","rateLimitTier":"t","accountUuid":"a","organizationUuid":"o"}`,
@@ -111,6 +120,7 @@ func TestAuthStatus(t *testing.T) {
 		for _, viaEnv := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%s env=%v", tc.name, viaEnv), func(t *testing.T) {
 				h := newHarness(t)
+				hermeticAuth(t, h)
 				claude, codex := tc.claude(h), tc.cdx(h)
 				args := []string{"auth", "status"}
 				if viaEnv {
@@ -152,6 +162,7 @@ func TestAuthStatus(t *testing.T) {
 
 func TestAuthStatusWarnWindow(t *testing.T) {
 	h := newHarness(t)
+	hermeticAuth(t, h)
 	h.vars["AGENTD_CLAUDE_LIVE_FILE"] = h.write("claude.json", authClaudeDoc(1, testNow.Add(2*time.Hour)))
 	h.mustRun(ExitOK, "auth", "status")
 	h.mustRun(1, "auth", "status", "--warn", "3h")
@@ -160,6 +171,7 @@ func TestAuthStatusWarnWindow(t *testing.T) {
 
 func TestAuthStatusJSONFields(t *testing.T) {
 	h := newHarness(t)
+	hermeticAuth(t, h)
 	h.vars["AGENTD_CODEX_ACCESS_FILE"] = h.write("codex.json", authCodexDoc(4, testNow.Add(time.Hour), testNow.Add(-time.Minute)))
 	h.mustRun(ExitOK, "auth", "status", "-o", "json")
 	var rep authReport
@@ -177,6 +189,7 @@ func TestAuthStatusJSONFields(t *testing.T) {
 
 func TestAuthStatusUsage(t *testing.T) {
 	h := newHarness(t)
+	hermeticAuth(t, h)
 	h.mustRun(ExitUsage, "auth")
 	h.mustRun(ExitUsage, "auth", "login")
 	h.mustRun(ExitUsage, "auth", "status", "extra")
@@ -188,6 +201,7 @@ func TestAuthStatusUsage(t *testing.T) {
 
 func TestAuthStatusRefusesOversizeAndFollowsLinks(t *testing.T) {
 	h := newHarness(t)
+	hermeticAuth(t, h)
 	big := h.write("big.json", strings.Repeat(" ", authMaxBytes+1))
 	h.vars["AGENTD_CLAUDE_LIVE_FILE"] = big
 	h.mustRun(2, "auth", "status")
@@ -199,4 +213,21 @@ func TestAuthStatusRefusesOversizeAndFollowsLinks(t *testing.T) {
 	}
 	h.vars["AGENTD_CLAUDE_LIVE_FILE"] = link
 	h.mustRun(ExitOK, "auth", "status")
+}
+
+func TestAuthStatusCodexDefaultMount(t *testing.T) {
+	h := newHarness(t)
+	hermeticAuth(t, h)
+	authCodexMountPath = filepath.Join(h.dir, "codex-access", "access.json")
+	// Unset variable and no file: not configured.
+	h.mustRun(2, "auth", "status")
+	if !strings.Contains(h.stdout.String(), "codex   NotConfigured") {
+		t.Fatalf("stdout:\n%s", h.stdout.String())
+	}
+	// agentd strips the variable from a Codex child; the mount still answers.
+	h.write("codex-access/access.json", authCodexDoc(5, testNow.Add(24*time.Hour), testNow))
+	h.mustRun(ExitOK, "auth", "status")
+	if !strings.Contains(h.stdout.String(), "codex   Ready  generation 5") {
+		t.Fatalf("stdout:\n%s", h.stdout.String())
+	}
 }

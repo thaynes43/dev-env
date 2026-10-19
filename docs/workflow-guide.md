@@ -335,7 +335,8 @@ A session that follows the keeper's shared logins can check them without
 exec: `agent-run auth status` reads the mounted Claude and Codex access
 projections (no API call, no refresh token) and prints each login's state,
 generation, access expiry and time left, plus the keeper's last refresh for
-Codex. Exit 0 is fine, 1 is expired or inside the `--warn` window (default
+Codex. It finds the Codex projection at its default mount when agentd has
+removed the variable from a Codex session's environment. Exit 0 is fine, 1 is expired or inside the `--warn` window (default
 30m), 2 means it cannot tell, as v1's `claude-login-check` does. The Claude
 login's own roughly 30-day lifetime lives with the keeper and is not in the
 projection.

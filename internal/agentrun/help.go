@@ -109,7 +109,8 @@ itself (about 30 days) lives with the keeper and is not in the projection.
 Flags:
   --warn <duration>    report exit 1 when access ends within this window (default 30m)
   --claude-file <path> read this file instead of AGENTD_CLAUDE_LIVE_FILE
-  --codex-file <path>  read this file instead of AGENTD_CODEX_ACCESS_FILE
+  --codex-file <path>  read this file instead of AGENTD_CODEX_ACCESS_FILE (or, when that
+                       is unset, /opt/dev-env/codex-access/access.json if it exists)
   -o json              print the rows as JSON
 
 Exit codes, as claude-login-check: 0 every configured login is ready, 1 one has
