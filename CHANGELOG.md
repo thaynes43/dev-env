@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.36.0](https://github.com/thaynes43/dev-env/compare/v2.35.1...v2.36.0) (2026-10-19)
+
+
+### Features
+
+* **agent-run:** auth status for the shared Claude and Codex logins ([#461](https://github.com/thaynes43/dev-env/issues/461)) ([b56f45d](https://github.com/thaynes43/dev-env/commit/b56f45d413602d4038863e6651b59ba51552eb0d))
+* v2 workbench identity for coordinator sessions ([#462](https://github.com/thaynes43/dev-env/issues/462)) ([aed438d](https://github.com/thaynes43/dev-env/commit/aed438da78b0db8f4399b94fa55f6fea9034aa57))
+
 ## [2.35.1](https://github.com/thaynes43/dev-env/compare/v2.35.0...v2.35.1) (2026-10-19)
 
 
