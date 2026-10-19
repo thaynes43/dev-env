@@ -270,3 +270,20 @@ func TestPrivatePilotFlagDefaultOffAndExactExistingAuthority(t *testing.T) {
 		}
 	}
 }
+
+// The standby session is default off and needs the API (Story110 T25).
+func TestStandbyFlag(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.standbyEnabled {
+		t.Fatalf("the standby must be off by default: %+v, %v", o.standbyEnabled, err)
+	}
+	if o.standbyRepo != "haynes-ops" || o.standbyModel != "claude-opus-5-5" || o.standbyProfile != "full" {
+		t.Errorf("standby defaults: %s %s %s", o.standbyRepo, o.standbyModel, o.standbyProfile)
+	}
+	if o, err = parseFlags([]string{"--enable-standby-session"}); err != nil || !o.standbyEnabled {
+		t.Errorf("--enable-standby-session: %v %v", o.standbyEnabled, err)
+	}
+	if _, err = parseFlags([]string{"--enable-standby-session", "--api-bind-address=0"}); err == nil {
+		t.Error("the standby without the API was accepted")
+	}
+}

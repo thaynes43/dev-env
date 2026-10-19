@@ -1449,7 +1449,9 @@ sign of activity; the operator's timers judge the window.**
 | post-ready standby | the operator keeps one `remote` session on haynes-ops ready, as v1's post-ready does | Tom (2026-09-10): after a roll nothing could start a session |
 
 The standby keeps v1's circuit breaker: if three standbys are created inside 30
-minutes, the operator stops creating them and reports `loop suspected`.
+minutes, the operator stops creating them and reports `loop suspected`. The
+report is one operator log line (no Event, condition or metric yet), logged
+when the breaker opens; Story110 T25 builds that.
 
 **D-60 (2026-10-07, plan 02 step 6). Suspend and resume are API calls that set
 `spec.operatingMode`, and the idle timer sets it the same way.**

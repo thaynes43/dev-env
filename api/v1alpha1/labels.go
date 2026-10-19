@@ -82,6 +82,10 @@ const (
 	// selector (D-39); the API then matches spec.parent, so a key is scoped to its
 	// caller.
 	LabelIdempotencyKey = LabelPrefix + "idempotency-key"
+	// LabelStandby marks the operator's standby remote session (value "true"),
+	// the one the standby runnable keeps ready (Story110 T25, plan 03). The
+	// runnable finds its session by this label and touches no other.
+	LabelStandby = LabelPrefix + "standby"
 	// AnnotationRequestHash is the SHA-256 of the create request that carried the
 	// idempotency key. A repeat of the key with a different request is refused.
 	AnnotationRequestHash = LabelPrefix + "request-hash"
