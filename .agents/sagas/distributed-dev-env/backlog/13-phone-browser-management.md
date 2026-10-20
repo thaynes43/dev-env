@@ -188,8 +188,8 @@ link to the standby, deduplication and a priority chosen per event.
   holds both series for both providers, and the Claude lapse time matches the
   keeper's annotation; `auth status` in a workbench session shows the date; one
   test notice arrives on Tom's phone under the dev-env app. Natural time, not a gate: the
-  warning reaches Tom's phone about 2026-11-09 (7 days before the 2026-11-16
-  17:51 UTC lapse).
+  warning reaches Tom's phone about 2026-11-08 (the installed trigger is
+  floor(days left) of 7 or fewer, ahead of the 2026-11-16 17:51 UTC lapse).
 - **Dependencies.** NB-01 merged first, because both change the keeper status
   path and quickstart section 6 (met: NB-01 is installed). It does not depend on
   NB-02. **Tom's step, done 2026-10-20:** Tom created the "dev-env" Pushover
@@ -212,11 +212,12 @@ link to the standby, deduplication and a priority chosen per event.
   (then ship the state gauge and the NeedsLogin alert, and record the date as
   Unknown); at a design question; or at the budget.
 
-**Story 13.1 decisions and status (2026-10-20).** State: source in dev-env
-PR #495; not merged, released or installed. The haynes-ops pieces are
-PR #4138 (ExternalSecret, notice ConfigMap and its Role, a PodMonitor and the
-metrics ingress rule) and a prepared, unmerged mount change for the keeper
-HelmRelease (branch `agent/s131-keeper-mount`, folded into the release pin).
+**Story 13.1 decisions and status (2026-10-20).** State: installed and
+accepted on 2026-10-20 (evidence at the end of this section). Source is dev-env
+PR #495, released as 2.39.0 (#496). The haynes-ops pieces are PR #4138
+(ExternalSecret, notice ConfigMap and its Role, a PodMonitor and the metrics
+ingress rule) and PR #4140 (the 2.39.0 pin plus the keeper mount of the Pushover
+Secret).
 
 - **The lapse date is its own projection key, not a member of `access.json`.**
   The Secret `dev-env-claude-live` gets a second key, `login.json`
@@ -262,9 +263,41 @@ HelmRelease (branch `agent/s131-keeper-mount`, folded into the release pin).
   marking the journal NeedsLogin with a reservation. The keeper reports that as
   `LoginInProgress`, which neither opens nor ends an incident.
 - **One-shot test trigger:** `dev-env-keeper notify-test` (quickstart section 6).
-- **Left for the installed check:** Prometheus holding both series; the Claude
-  lapse matching the keeper's annotation; `agent-run auth status` in a
-  workbench session; one test notice on Tom's phone.
+- **Installed and accepted (2026-10-20).**
+  - Delivery: dev-env #495 and release 2.39.0 (#496, tag commit `0c22cc0`);
+    haynes-ops #4138 (ExternalSecret `dev-env-keeper-pushover` Ready, PodMonitor,
+    notices ConfigMap and Role) and #4140 (2.39.0 pin and the keeper mount).
+    Keeper and operator run `sha-0c22cc0`; sessions and the task worker run
+    `dev-env:2.39.0`.
+  - Keeper log: "notifier enabled", no "waiting" line.
+  - Prometheus: `dev_env_keeper_login_state` is Ready for claude and codex.
+    `dev_env_keeper_login_lapse_timestamp_seconds{provider="claude"}` is
+    1794851496, which is 2026-11-16T17:51:36Z and matches the keeper's
+    annotation. Codex has no lapse series (Unknown, by design).
+  - A fresh workbench session on 2.39.0 (haiku, reaped afterwards) ran the
+    image's own `agent-run`. All three commands exited 0 (more than 7 days
+    left). `auth status`: claude Ready, login lapses 2026-11-16T17:51:36Z
+    (27 days left); codex Ready, login lapses Unknown. `keeper-login claude
+    status`: Ready, login expires 2026-11-16T17:51:36Z (in 27 days).
+    `keeper-login codex status`: Ready, login expires Unknown (the provider gave
+    no date).
+  - Test notice: `kubectl exec ... dev-env-keeper notify-test` printed `sent`.
+    Tom confirmed on his phone that it arrived under the dev-env Pushover app
+    (2026-10-20, about 17:45 UTC).
+  - Natural time, not a gate: the first warning is expected about 2026-11-08
+    (as soon as floor(days left) is 7 or fewer, inside 09:00 to 21:00 New York
+    time); the lapse is 2026-11-16 17:51 UTC. Check the keeper log and Tom's
+    phone then.
+- **Follow-ups (not blocking, not started).**
+  1. An invalid notice flag (for example a bad `--notice-timezone`) stops the
+     keeper at start (Opus review, minor 4). A bad value should disable notices
+     and log, not stop the credential keeper.
+  2. The v2 session CLAUDE.md does not describe the keeper-login renewal flow
+     (haynes-ops `dev-env-config-claude`). A session told to renew has to find
+     it in quickstart section 6.
+  3. The notice cannot deep-link to the standby: the keeper can only get
+     AgentSessions by name, so notices link `https://claude.ai/code`. A stable
+     link needs either list access for the keeper or a fixed standby name.
 
 ## Later
 
