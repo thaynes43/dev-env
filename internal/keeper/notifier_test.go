@@ -526,6 +526,33 @@ func TestUnusableStateFallsBackToMemoryAndKeepsRetrying(t *testing.T) {
 	}
 }
 
+// An incident this process closed while the store was unusable must not come back
+// from the store and produce a second "restored" notice.
+func TestRecoveredStoreDoesNotResurrectAClosedIncident(t *testing.T) {
+	f := newNoticeFix(t, time.Date(2026, 11, 12, 16, 0, 0, 0, time.UTC))
+	// The store holds the incident from before the outage, already announced.
+	f.store.state = NoticeState{Version: 1, Incidents: map[string]incidentRecord{"claude": {ID: "claude-1", Opened: 1, Notified: true}}}
+	f.store.fail = true
+	f.hub.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
+	f.tick() // in memory: a fresh incident, announced
+	f.hub.Report(ProviderClaude, LoginReady, time.Time{})
+	f.tick() // resolved, in memory
+	if f.fake.count() != 2 {
+		t.Fatalf("setup: %v", f.fake.titles())
+	}
+	f.store.fail = false
+	f.tick()
+	f.tick()
+	if f.fake.count() != 2 {
+		t.Fatalf("a second restored notice after the store returned: %v", f.fake.titles())
+	}
+	f.n = f.newNotifier()
+	f.tick()
+	if f.fake.count() != 2 {
+		t.Fatalf("a restart repeated a notice: %v", f.fake.titles())
+	}
+}
+
 type forbiddenClient struct{ client.Client }
 
 func (forbiddenClient) Get(_ context.Context, key client.ObjectKey, _ client.Object, _ ...client.GetOption) error {

@@ -371,10 +371,11 @@ type Notifier struct {
 	state        *NoticeState // authoritative after the first load
 	dirty        bool         // a change not yet stored
 	backoffUntil time.Time
-	logged       string // last enabled/disabled line logged
-	degraded     error  // why the stored state cannot be used; nil when it can. The state is then in memory only.
-	degradedLogd error  // the reason last logged
-	saveLogged   bool   // the "not stored yet" line was logged and a save has not succeeded since
+	logged       string          // last enabled/disabled line logged
+	degraded     error           // why the stored state cannot be used; nil when it can. The state is then in memory only.
+	degradedLogd error           // the reason last logged
+	saveLogged   bool            // the "not stored yet" line was logged and a save has not succeeded since
+	gone         map[string]bool // incidents this process closed while the store was unusable
 	blocked      map[string]int64
 	blockedLogd  map[string]bool
 }
@@ -451,6 +452,18 @@ func (n *Notifier) Tick(ctx context.Context) {
 	n.persist(ctx)
 }
 
+// dropIncident forgets a closed incident, and remembers that this process did, for
+// the merge when an unreadable store comes back.
+func (n *Notifier) dropIncident(provider string) {
+	delete(n.state.Incidents, provider)
+	if n.degraded != nil {
+		if n.gone == nil {
+			n.gone = map[string]bool{}
+		}
+		n.gone[provider] = true
+	}
+}
+
 func emptyNoticeState() *NoticeState {
 	return &NoticeState{Version: 1, Warnings: map[string]warnRecord{}, Incidents: map[string]incidentRecord{}}
 }
@@ -497,9 +510,14 @@ func (n *Notifier) ensureState(ctx context.Context) {
 	for k, v := range n.state.Warnings {
 		st.Warnings[k] = v
 	}
+	for p := range n.gone {
+		// An incident this process already closed must not come back from the store.
+		delete(st.Incidents, p)
+	}
 	for k, v := range n.state.Incidents {
 		st.Incidents[k] = v
 	}
+	n.gone = nil
 	st.Version = 1
 	n.state, n.dirty = &st, true
 	n.recovered()
@@ -631,7 +649,7 @@ func (n *Notifier) incidents(ctx context.Context, provider string, obs LoginStat
 		}
 		if !inc.Notified {
 			// The incident was never announced; there is nothing to resolve.
-			delete(n.state.Incidents, provider)
+			n.dropIncident(provider)
 			n.dirty = true
 			return
 		}
@@ -640,7 +658,7 @@ func (n *Notifier) incidents(ctx context.Context, provider string, obs LoginStat
 			Message:  capitalize(provider) + " sign-in was renewed; the keeper holds a working login again.",
 			Priority: 0,
 		}, now) {
-			delete(n.state.Incidents, provider)
+			n.dropIncident(provider)
 			n.dirty = true
 		}
 	}
