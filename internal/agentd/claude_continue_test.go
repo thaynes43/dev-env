@@ -343,6 +343,35 @@ func TestClassifyTranscriptShapes(t *testing.T) {
 	}
 }
 
+// The real CLI 401 entry (NB-03, 2.37.0) and the neighbours that must not match.
+func TestClassifyTranscriptRealCLIAuthFailure(t *testing.T) {
+	const apiErr = `,"isApiErrorMessage":true`
+	text := func(s string) string { return `[{"type":"text","text":` + fmt.Sprintf("%q", s) + `}]` }
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"real entry: status, code and text", entry("assistant", loginNow, apiErr+`,"apiErrorStatus":401,"error":"authentication_failed"`, text("Not logged in · Please run /login")), true},
+		{"status 401 only", entry("assistant", loginNow, apiErr+`,"apiErrorStatus":401`, text("something unrecognised")), true},
+		{"error code only", entry("assistant", loginNow, apiErr+`,"error":"authentication_failed"`, text("something unrecognised")), true},
+		{"please run /login, mixed case", entry("assistant", loginNow, apiErr, text("Not logged in · PLEASE RUN /LOGIN")), true},
+		{"oauth token has been revoked", entry("assistant", loginNow, apiErr, text("OAuth token has been revoked")), true},
+		{"api error prefix without the flag", entry("assistant", loginNow, `,"apiErrorStatus":401`, text("API Error: 401 unauthorized")), true},
+		{"429 rate limit", entry("assistant", loginNow, apiErr+`,"apiErrorStatus":429,"error":"rate_limit"`, text("API Error: 429 rate limited")), false},
+		{"500 server error", entry("assistant", loginNow, apiErr+`,"apiErrorStatus":500,"error":"unknown"`, text("API Error: 500 internal server error")), false},
+		{"overloaded_error", entry("assistant", loginNow, apiErr+`,"apiErrorStatus":529`, text(`API Error: 529 {"error":{"type":"overloaded_error"}}`)), false},
+		{"prose about login, not an error", entry("assistant", loginNow, "", text("You may need to please run /login if the token is gone")), false},
+		{"prose with status field but no api error", entry("assistant", loginNow, `,"apiErrorStatus":401,"error":"authentication_failed"`, text("the docs say a 401 means please run /login")), false},
+		{"user quoting the real text", entry("user", loginNow, apiErr+`,"apiErrorStatus":401`, `"Not logged in · Please run /login"`), false},
+	}
+	for _, c := range cases {
+		if got := classifyTranscript([]byte(c.in + "\n")).Revoked; got != c.want {
+			t.Errorf("%s: revoked=%v want %v", c.name, got, c.want)
+		}
+	}
+}
+
 // A generation applied while the agent was down is not acted on if the
 // projection has since become unusable (the merge is held back).
 func TestClaudeContinueNotSentWhileTheProjectionIsRefused(t *testing.T) {
