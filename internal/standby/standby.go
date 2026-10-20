@@ -91,30 +91,75 @@ func (r *Runnable) Start(ctx context.Context) error {
 	}
 }
 
-// Alive reports whether a standby session still counts as the standby. A
-// suspended one counts: it resumes as the same phone entry with its history, so
-// replacing it would only leave two. A session being deleted (reaped), Archived
-// or Failed, or whose agent has ended, does not.
+// Alive reports whether a standby session still counts as the standby, by its
+// record alone: it counts unless it is Terminal or its agent ended while it was
+// steady (AgentEnded). Ensure adds one check Alive cannot make, a stale report
+// (staleAgentReport).
+//
+// Everything that is only moving counts, so the standby is never replaced while
+// it is still the same phone entry:
+//   - a suspended one (user suspend or the idle timer) resumes as the same
+//     entry with its history, so replacing it would only leave two;
+//   - a Draining one: the operator moves an idle standby onto a new template
+//     revision by stopping its agent and deleting its pod, and the agent
+//     reports exited or interrupted by design (DESIGN-001 5.2);
+//   - one whose pod is gone or starting (Pending): the record still holds the
+//     old pod's last report until the new pod's agentd sends its own.
 func Alive(s *v1alpha1.AgentSession) bool {
+	return !Terminal(s) && !AgentEnded(s)
+}
+
+// Terminal reports a session that is gone or past recovery: being deleted,
+// Archived or Failed.
+func Terminal(s *v1alpha1.AgentSession) bool {
 	if !s.DeletionTimestamp.IsZero() {
+		return true
+	}
+	return s.Status.Phase == v1alpha1.PhaseArchived || s.Status.Phase == v1alpha1.PhaseFailed
+}
+
+// AgentEnded reports a steady session (Running, Idle or no phase yet) whose
+// last report says the agent exited, failed or was interrupted. That is the
+// agent ending on its own, for example Tom typing /exit. It is not a suspend, a
+// drain or a pod restart, which spec.operatingMode and the other phases show.
+func AgentEnded(s *v1alpha1.AgentSession) bool {
+	if s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended {
 		return false
 	}
 	switch s.Status.Phase {
-	case v1alpha1.PhaseArchived, v1alpha1.PhaseFailed:
+	case "", v1alpha1.PhaseRunning, v1alpha1.PhaseIdle:
+	default:
 		return false
 	}
-	// Before the agent's status: a suspended session's agent has exited, and
-	// that is how it suspends, not an end.
-	if s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended || s.Status.Phase == v1alpha1.PhaseSuspended {
+	a := s.Status.Agent
+	if a == nil {
+		return false
+	}
+	switch a.Status {
+	case protocol.AgentExited, protocol.AgentFailed, protocol.AgentInterrupted:
 		return true
 	}
-	if a := s.Status.Agent; a != nil {
-		switch a.Status {
-		case protocol.AgentExited, protocol.AgentFailed, protocol.AgentInterrupted:
-			return false
-		}
+	return false
+}
+
+// staleAgentReport reports an ended-agent record that cannot be about the
+// session's current pod: the pod exists and was created after the last
+// heartbeat the operator accepted (or none was accepted). A session pod is Ready
+// as soon as its container starts (no readiness probe), so right after a drain
+// the phase is Running while the record still holds the old pod's "exited". A
+// missing pod is not stale evidence: a steady phase without a pod is brief, and
+// the phase rule decides.
+func (r *Runnable) staleAgentReport(ctx context.Context, s *v1alpha1.AgentSession) (bool, error) {
+	var pod corev1.Pod
+	err := r.Reader.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: s.Name}, &pod)
+	if apierrors.IsNotFound(err) {
+		return false, nil
 	}
-	return true
+	if err != nil {
+		return false, fmt.Errorf("read the pod of standby %s: %w", s.Name, err)
+	}
+	hb := s.Status.Agent.LastHeartbeat
+	return hb == nil || hb.Time.Before(pod.CreationTimestamp.Time), nil
 }
 
 // Ensure runs one pass. It returns the new session's name when it created one,
@@ -126,10 +171,21 @@ func (r *Runnable) Ensure(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("list standby sessions: %w", err)
 	}
 	for i := range list.Items {
-		if Alive(&list.Items[i]) {
-			r.tripped = false
-			return "", nil
+		it := &list.Items[i]
+		if Terminal(it) {
+			continue
 		}
+		if AgentEnded(it) {
+			stale, err := r.staleAgentReport(ctx, it)
+			if err != nil {
+				return "", err
+			}
+			if !stale {
+				continue
+			}
+		}
+		r.tripped = false
+		return "", nil
 	}
 
 	now := time.Now()
