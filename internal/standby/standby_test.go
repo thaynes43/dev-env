@@ -131,12 +131,18 @@ func TestGoneStandbyIsReplaced(t *testing.T) {
 	archived.Status.Phase = v1alpha1.PhaseArchived
 	failed := standbySession("failed")
 	failed.Status.Phase = v1alpha1.PhaseFailed
+	// The agent ended on its own in the current pod: the heartbeat is newer than the pod.
+	hb := metav1.NewTime(time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC))
 	exited := standbySession("exited")
-	exited.Status.Agent = &v1alpha1.AgentStatus{Status: protocol.AgentExited}
+	exited.Status.Agent = &v1alpha1.AgentStatus{Status: protocol.AgentExited, LastHeartbeat: &hb}
 	reaping := standbySession("reaping")
 	reaping.Finalizers = []string{"test/keep"}
 	for _, s := range []*v1alpha1.AgentSession{archived, failed, exited, reaping} {
-		g := newRig(t, s)
+		objs := []client.Object{s}
+		if s == exited {
+			objs = append(objs, sessionPod(s.Name, hb.Add(-time.Hour)))
+		}
+		g := newRig(t, objs...)
 		if s == reaping {
 			if err := g.c.Delete(context.Background(), s); err != nil {
 				t.Fatal(err)
@@ -145,6 +151,83 @@ func TestGoneStandbyIsReplaced(t *testing.T) {
 		if name := g.ensure(); name == "" {
 			t.Errorf("%s: no replacement was created", s.Name)
 		}
+	}
+}
+
+// movingStandby is a standby the operator is moving onto a new template
+// revision (drain): idle, agent stopped on purpose, pod deleted and recreated.
+func movingStandby(name string, phase v1alpha1.SessionPhase, agent string, hb *metav1.Time) *v1alpha1.AgentSession {
+	s := standbySession(name)
+	s.Status.Phase = phase
+	s.Status.Agent = &v1alpha1.AgentStatus{Status: agent, LastHeartbeat: hb}
+	return s
+}
+
+func sessionPod(name string, created time.Time) *corev1.Pod {
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: sessNS, Name: name, CreationTimestamp: metav1.NewTime(created)}}
+}
+
+// TestStandbyMovingToANewRevisionIsLeftAlone is NB-10: at the template revision
+// move the drain stops the idle standby's agent and recreates its pod, and the
+// runnable created a second standby two seconds later. Each state the standby
+// passes through must count as present.
+func TestStandbyMovingToANewRevisionIsLeftAlone(t *testing.T) {
+	t0 := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	before := metav1.NewTime(t0.Add(-time.Minute))
+	cases := map[string][]client.Object{
+		// Stop recorded, pod still there: the agent reports exited or interrupted.
+		"draining-agent-exited":      {movingStandby("s", v1alpha1.PhaseDraining, protocol.AgentExited, &before), sessionPod("s", t0.Add(-time.Hour))},
+		"draining-agent-interrupted": {movingStandby("s", v1alpha1.PhaseDraining, protocol.AgentInterrupted, &before)},
+		// Old pod deleted or terminating, new one not placed: the old report remains.
+		"pending-creating-exited":      {movingStandby("s", v1alpha1.PhasePending, protocol.AgentExited, &before)},
+		"pending-starting-interrupted": {movingStandby("s", v1alpha1.PhasePending, protocol.AgentInterrupted, &before), sessionPod("s", t0)},
+		// Old pod deleted, session still reads Running with the old report: a
+		// missing pod cannot prove the agent ended.
+		"running-pod-missing-exited": {movingStandby("s", v1alpha1.PhaseRunning, protocol.AgentExited, &before)},
+		"idle-pod-missing-exited":    {movingStandby("s", v1alpha1.PhaseIdle, protocol.AgentInterrupted, &before)},
+		"no-phase-pod-missing":       {movingStandby("s", "", protocol.AgentExited, &before)},
+		// New pod is Ready (no readiness probe) but has sent no heartbeat yet.
+		"running-new-pod-stale-report": {movingStandby("s", v1alpha1.PhaseRunning, protocol.AgentExited, &before), sessionPod("s", t0)},
+		"running-new-pod-no-heartbeat": {movingStandby("s", v1alpha1.PhaseRunning, protocol.AgentExited, nil), sessionPod("s", t0)},
+		// Back to normal.
+		"running-new-pod-reported": {movingStandby("s", v1alpha1.PhaseRunning, protocol.AgentIdle, &before), sessionPod("s", t0.Add(-time.Hour))},
+		// A user suspend or the idle timer: the same entry resumes.
+		"user-suspended-exited": func() []client.Object {
+			s := movingStandby("s", v1alpha1.PhaseSuspended, protocol.AgentExited, &before)
+			s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+			return []client.Object{s}
+		}(),
+	}
+	for name, objs := range cases {
+		g := newRig(t, objs...)
+		if got := g.ensure(); got != "" || g.made != 0 {
+			t.Errorf("%s: created %q while the standby was moving", name, got)
+		}
+	}
+}
+
+// An agent that ended on its own in the current pod is still replaced.
+func TestAgentEndedInTheCurrentPodIsReplaced(t *testing.T) {
+	t0 := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	after := metav1.NewTime(t0.Add(time.Minute))
+	for _, phase := range []v1alpha1.SessionPhase{v1alpha1.PhaseRunning, v1alpha1.PhaseIdle, ""} {
+		g := newRig(t, movingStandby("s", phase, protocol.AgentExited, &after), sessionPod("s", t0))
+		if got := g.ensure(); got == "" {
+			t.Errorf("phase %q: no replacement after the agent exited in its current pod", phase)
+		}
+	}
+}
+
+// A standby reaped after the move (or at any time) is replaced, and the
+// breaker still counts the creation.
+func TestReapedStandbyAfterAMoveIsReplaced(t *testing.T) {
+	g := newRig(t, movingStandby("s", v1alpha1.PhaseDraining, protocol.AgentExited, nil))
+	if got := g.ensure(); got != "" {
+		t.Fatalf("created %q mid-drain", got)
+	}
+	g.reap()
+	if got := g.ensure(); got == "" || g.made != 1 {
+		t.Errorf("no replacement after the reap (made %d)", g.made)
 	}
 }
 

@@ -1453,6 +1453,25 @@ minutes, the operator stops creating them and reports `loop suspected`. The
 report is one operator log line (no Event, condition or metric yet), logged
 when the breaker opens; Story110 T25 builds that.
 
+What counts as "a standby exists" (NB-10, 2026-10-20). The runnable creates a
+standby only when no labelled session is present, and a session counts unless it
+is over. Over means: being deleted (reaped), Archived, Failed, or steady (phase
+Running, Idle or none) with an agent that reported exited, failed or interrupted
+from its current pod, for example Tom typing `/exit`. A suspended standby counts,
+whether Tom suspended it or the idle timer did, because it resumes as the same
+phone entry. Everything the operator does to move a standby onto a new template
+revision counts too: drain (5.2) stops the idle agent, which then reports exited
+or interrupted by design, deletes the pod and recreates it on the same volume
+with spec.operatingMode still Running, so the session passes through Draining and
+Pending while its record still holds the old pod's report, and then Running
+before the new pod's first heartbeat. The first 2.38.0 revision move created a
+second standby two seconds into the drain because the runnable read that
+deliberate "exited" as the end of the standby. An ended-agent report from a
+pod older than the pod that exists now (heartbeat before the pod's creation, or
+no heartbeat), or with no pod at all, is stale and counts as present: a missing
+pod cannot prove the agent ended, and a standby that is really dead moves to
+Failed or Archived and is replaced then. The breaker is unchanged.
+
 **D-60 (2026-10-07, plan 02 step 6). Suspend and resume are API calls that set
 `spec.operatingMode`, and the idle timer sets it the same way.**
 
