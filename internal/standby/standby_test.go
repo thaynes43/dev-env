@@ -206,14 +206,64 @@ func TestStandbyMovingToANewRevisionIsLeftAlone(t *testing.T) {
 	}
 }
 
-// An agent that ended on its own in the current pod is still replaced.
+// An agent that ended on its own in the current, settled pod is still replaced.
 func TestAgentEndedInTheCurrentPodIsReplaced(t *testing.T) {
-	t0 := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
-	after := metav1.NewTime(t0.Add(time.Minute))
+	t0 := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC) // the rig's clock
+	podAt := t0.Add(-time.Hour)
+	after := metav1.NewTime(t0.Add(-30 * time.Minute))
 	for _, phase := range []v1alpha1.SessionPhase{v1alpha1.PhaseRunning, v1alpha1.PhaseIdle, ""} {
-		g := newRig(t, movingStandby("s", phase, protocol.AgentExited, &after), sessionPod("s", t0))
-		if got := g.ensure(); got == "" {
-			t.Errorf("phase %q: no replacement after the agent exited in its current pod", phase)
+		for _, boot := range []string{"", protocol.BootReady} {
+			s := movingStandby("s", phase, protocol.AgentExited, &after)
+			s.Status.Agent.Boot = boot
+			g := newRig(t, s, sessionPod("s", podAt))
+			if got := g.ensure(); got == "" {
+				t.Errorf("phase %q boot %q: no replacement after the agent exited in its current pod", phase, boot)
+			}
+		}
+	}
+	// agentd could not start the agent at all: a failed boot with state failed.
+	s := movingStandby("s", v1alpha1.PhaseRunning, protocol.AgentFailed, &after)
+	s.Status.Agent.Boot = protocol.BootFailed
+	g := newRig(t, s, sessionPod("s", podAt))
+	if got := g.ensure(); got == "" {
+		t.Error("no replacement for a standby whose agent failed to start")
+	}
+}
+
+// TestStandbyBootingAfterADrainIsLeftAlone is NB-10b, the state the operator
+// saw at 07:48:20 on 2.38.2: the drained standby's new pod was Ready, its
+// agentd had sent heartbeats since the pod started, and every one said
+// agent=interrupted (or exited) with boot=booting, because status reads the
+// previous boot's launch record until this boot starts the agent. The heartbeat
+// is newer than the pod, so #480's staleness check called it current.
+func TestStandbyBootingAfterADrainIsLeftAlone(t *testing.T) {
+	t0 := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC) // the rig's clock
+	hb := metav1.NewTime(t0.Add(-10 * time.Second))
+	for _, state := range []string{protocol.AgentInterrupted, protocol.AgentExited} {
+		for name, podAge := range map[string]time.Duration{"pod 40s old": 40 * time.Second, "pod 2h old": 2 * time.Hour} {
+			s := movingStandby("s", v1alpha1.PhaseRunning, state, &hb)
+			s.Status.Agent.Boot = protocol.BootBooting
+			g := newRig(t, s, sessionPod("s", t0.Add(-podAge)))
+			if got := g.ensure(); got != "" || g.made != 0 {
+				t.Errorf("%s, agent %s, booting: created %q", name, state, got)
+			}
+		}
+	}
+}
+
+// A pod younger than PodGrace never lets an ended-agent report replace the
+// standby, even one that claims boot ready; at the end of the grace it can.
+func TestPodGraceBeforeAnEndedAgentReplacesTheStandby(t *testing.T) {
+	t0 := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	hb := metav1.NewTime(t0.Add(-10 * time.Second))
+	for age, want := range map[time.Duration]bool{
+		time.Minute: false, PodGrace - time.Second: false, PodGrace + time.Second: true,
+	} {
+		s := movingStandby("s", v1alpha1.PhaseRunning, protocol.AgentInterrupted, &hb)
+		s.Status.Agent.Boot = protocol.BootReady
+		g := newRig(t, s, sessionPod("s", t0.Add(-age)))
+		if got := g.ensure() != ""; got != want {
+			t.Errorf("pod %s old: created=%v, want %v", age, got, want)
 		}
 	}
 }
