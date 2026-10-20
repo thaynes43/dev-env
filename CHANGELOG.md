@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.38.3](https://github.com/thaynes43/dev-env/compare/v2.38.2...v2.38.3) (2026-10-20)
+
+
+### Bug Fixes
+
+* **standby:** an agent report made while agentd boots is not an ended agent ([#489](https://github.com/thaynes43/dev-env/issues/489)) ([9a70ff9](https://github.com/thaynes43/dev-env/commit/9a70ff96a40203c718daa326f47b7ed5ee07abbe))
+
 ## [2.38.2](https://github.com/thaynes43/dev-env/compare/v2.38.1...v2.38.2) (2026-10-20)
 
 
