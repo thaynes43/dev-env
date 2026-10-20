@@ -141,6 +141,9 @@ type remoteWait struct {
 	boot string
 	// waiting: this boot found no usable login and holds the agent.
 	waiting bool
+	// deferred: this boot had a usable login but found a ceremony being opened,
+	// so the agent waits for that ceremony's window to end (no settle timeout).
+	deferred bool
 	// since: when a usable login with a still-open login window was first seen.
 	since time.Time
 }

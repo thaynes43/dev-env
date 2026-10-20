@@ -242,11 +242,16 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 		d.remote = &remoteWait{ws: ws, repo: repo, boot: bootID}
 		// Starting the agent's CLI and opening a login ceremony exclude each
 		// other (agentd ctl login url holds the same lock). If a ceremony is
-		// being opened right now, hold the agent as if no login existed: the
-		// poll starts it once that ceremony has ended.
+		// being opened right now, hold the agent: the poll starts it once that
+		// ceremony's window has ended. This is not the no-login wait, so the
+		// loginSettle override never cuts a ceremony short.
 		release, ok := d.lockLogin()
 		if !ok {
-			return d.waitForLogin()
+			if !remoteLoginUsable(d.S, d.Session, d.now()) {
+				return d.waitForLogin()
+			}
+			d.remote.deferred = true
+			return newStep(name, []string{"held: a login ceremony is opening; the agent starts when its window ends"}, nil), ""
 		}
 		defer release()
 	}
@@ -358,7 +363,7 @@ func (d *Daemon) pollRemoteLogin(ctx context.Context) {
 		w.since = time.Time{}
 		return
 	}
-	if !w.waiting && !hasLoginWindow(ctx, d.R, d.S) {
+	if !w.waiting && !w.deferred && !hasLoginWindow(ctx, d.R, d.S) {
 		return
 	}
 	if w.since.IsZero() {
@@ -370,7 +375,7 @@ func (d *Daemon) pollRemoteLogin(ctx context.Context) {
 	if !loginWindowEnded(ctx, d.R, d.S) && (!w.waiting || d.now().Sub(w.since) < loginSettle) {
 		return
 	}
-	w.waiting, w.since = false, time.Time{}
+	w.waiting, w.deferred, w.since = false, false, time.Time{}
 	if !d.projectsClaude() {
 		StopLoginWindow(ctx, d.R, d.S)
 	}

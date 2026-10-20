@@ -122,3 +122,44 @@ func TestLoginURLRefusedWhileDaemonStartsAgent(t *testing.T) {
 		t.Error("the daemon did not start the agent once the lock was free")
 	}
 }
+
+// A boot that finds a ceremony being opened holds the agent, but not as the
+// no-login wait: the settle timeout must not cut the ceremony short.
+func TestBootHeldByLoginLockWaitsForTheCeremonyWindow(t *testing.T) {
+	s := testSettings(t, t.TempDir())
+	s.TmuxBin, s.ClaudeBin = "tmux", "claude"
+	s.Getenv = envOf(nil)
+	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeCredentials(t, s, loginNow.Add(30*24*time.Hour).UnixMilli())
+	sess := remoteSession()
+	tm := &loginTmux{window: true, pane: loginPaneWithURL} // a ceremony waiting for its code
+	r := &fakeRunner{handle: tm.handle}
+	clock := loginNow
+	d := &Daemon{S: s, R: r, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Session: sess, Self: "/agentd", Now: func() time.Time { return clock }}
+	ws := protocol.Workspace{Clone: s.ClonePath(sess.Repo), Worktree: s.WorktreePath(sess.Name), Branch: "agent/" + sess.Name}
+	_ = writeJSONFile(s.statePath(bootFile), bootRecord{BootID: "b1", Boot: protocol.BootReady, Steps: []Step{{Name: "agent", State: StepOK}}})
+
+	release, err := acquireLoginLock(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step, agentErr := d.startAgent(context.Background(), ws, Step{Name: "repo", State: StepOK}, "b1")
+	release()
+	if agentErr != "" || step.State == StepFail || d.remote == nil || d.remote.waiting || !d.remote.deferred || tm.agent {
+		t.Fatalf("boot under the lock: %+v %q %+v agent %v", step, agentErr, d.remote, tm.agent)
+	}
+	// Far beyond loginSettle, the ceremony's window is still open: no start.
+	clock = clock.Add(10 * loginSettle)
+	d.pollRemoteLogin(context.Background())
+	if _, err := os.Stat(s.statePath(launchFile)); err == nil || tm.killed != 0 {
+		t.Fatalf("the open ceremony was cut short (killed %d, launch %v)", tm.killed, err)
+	}
+	// The window ends: the agent starts and the window is closed.
+	tm.pane += "Login successful.\nLOGIN_EXIT=0\n"
+	d.pollRemoteLogin(context.Background())
+	if _, err := os.Stat(s.statePath(launchFile)); err != nil || tm.killed != 1 || d.remote.deferred {
+		t.Errorf("after the window ended: launch %v killed %d remote %+v", err, tm.killed, d.remote)
+	}
+}
