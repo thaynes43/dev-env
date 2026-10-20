@@ -444,12 +444,16 @@ Proven from a session on 2026-10-20: `status` for both logins; `url` for both;
 for ChatGPT, `url`, `cancel` and `url` again; a caller from the v1 pod refused;
 and the keeper's logins unchanged after each abandoned try.
 
-**Known fault: Claude `cancel` does not free the keeper.** The keeper's helper
-keeps running, and the next `url` answers "held elsewhere" until the open
-ceremony ends, up to 15 minutes. So ask for a Claude link only when you are
-ready to sign in. If you need a fresh link sooner, a v1 coordinator can end the
-helper: it sends SIGHUP to `agentd claude-login` in the keeper pod's
-`claude-login` container. A fix is in progress.
+**Claude `cancel`: fixed in source, ships in 2.38.1, live check pending.** On
+2.38.0 a Claude `cancel` did not free the keeper: the helper kept running, and the
+next `url` answered "held elsewhere" until the open ceremony ended, up to 15
+minutes. The fix makes `cancel` tell the keeper's helper to stop (a new fixed
+command, `agentd claude-login-abandon`, which the operator runs in the keeper's
+`claude-login` container), so the next `url` should not be "held elsewhere". That
+is not proven yet: until the live check passes on 2.38.1, treat Claude `cancel` as
+2.38.0 behaves. Ask for a Claude link only when you are ready to sign in. If you
+need a fresh link sooner, a v1 coordinator can end the helper: it sends SIGHUP to
+`agentd claude-login` in the keeper pod's `claude-login` container.
 
 You have not run a full ceremony from v2 yet, so keep the v1 route as the
 fallback until you have.
@@ -475,7 +479,8 @@ The code is single-use and short-lived: it works only for the ceremony that is o
 and the ceremony closes after 15 minutes. It and the link appear in that chat and
 nowhere else. Never put either in a file, git, a PR, a handoff or notes, and tell the
 agent not to. If a code is wrong, expired or already used, nothing changes. Ask for
-`cancel`, then a fresh `url` (for Claude, the known fault above can make that wait).
+`cancel`, then a fresh `url` (until 2.38.1 is live and checked, the Claude `cancel`
+fault above can make that wait).
 
 **From a terminal in the session** (the same commands the agent runs):
 
@@ -484,7 +489,7 @@ agent-run keeper-login claude status    # state, generation, when the access tok
                                         # lapses and when the login itself lapses
 agent-run keeper-login claude url       # opens a ceremony, prints the sign-in link
 read -rs c; printf '%s' "$c" | agent-run keeper-login claude code   # paste the code
-agent-run keeper-login claude cancel    # abandon a ceremony this operator holds
+agent-run keeper-login claude cancel    # abandon a ceremony
 ```
 
 `status` exits 0 for Ready (or PendingPublication) and changes nothing. If `code` says
@@ -499,18 +504,22 @@ valid code replaces it. (If `cancel` races a code that is already being adopted,
 new login can still land, whole and never partial: `status` shows which.) If the
 operator restarts mid-ceremony, run `url` again. If `url` says the keeper's attempt is
 "held elsewhere", an earlier ceremony (before an operator restart, or from the v1
-route) still holds the keeper's one slot: `cancel` cannot end it, and it expires by
-itself within 15 minutes. Today a Claude `cancel` also leaves this state (the known
-fault above). The command reconnects by itself while the operator's other replica
-answers.
+route) still holds the keeper's one slot. For ChatGPT it expires by itself within 15
+minutes. For Claude, 2.38.1 is meant to let `cancel` end it too (fixed in source, live
+check pending); on 2.38.0 it expires within 15 minutes. The command reconnects by
+itself while the operator's other replica answers.
 
 Once, right after a ChatGPT `cancel`, `status` showed PendingPublication for about
 half a minute and the keeper logged an error, then went back to Ready on its own
-with the same login. Whether the cancel caused it is not known.
+with the same login. Reading the code: a ceremony pauses the keeper's refresh by
+design, and its half-minute check logged that pause as an error; after a cancel the
+restored login is republished at the next check. The error line is quieted in 2.38.1
+(source, live check pending); the short PendingPublication is expected.
 
-The operator runs only the two login helpers in the keeper pod. An admission
-policy, `dev-env-operator-exec-guard`, refuses anything else it tries there: the
-keeper's main container, a shell, other arguments.
+The operator runs only the keeper pod's login helpers, and for Claude the
+`claude-login-abandon` command. An admission policy, `dev-env-operator-exec-guard`,
+refuses anything else it tries there: the keeper's main container, a shell, other
+arguments.
 
 ## 7. Where notes live
 

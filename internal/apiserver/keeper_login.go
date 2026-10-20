@@ -63,7 +63,10 @@ const (
 	defaultKeeperStopWait = 10 * time.Second
 	// keeperStatusTimeout bounds the status exec well inside the API's write timeout.
 	keeperStatusTimeout = 20 * time.Second
-	maxKeeperCodeBytes  = 1024
+	// keeperAbandonTimeout bounds the abandon exec (its own wait for the helper to
+	// leave is 8 s) inside the same budget.
+	keeperAbandonTimeout = 15 * time.Second
+	maxKeeperCodeBytes   = 1024
 	// maxKeeperOutputLine bounds one terminal line the parser will consider.
 	maxKeeperOutputLine = 16 << 10
 )
@@ -75,6 +78,10 @@ type loginProvider struct {
 	container string
 	status    []string
 	login     []string
+	// abandon is an optional fixed command that cancels a ceremony in the login
+	// container without relying on terminal signals reaching the helper
+	// (NB-01b). Empty: the ceremony is stopped with a Ctrl-C.
+	abandon []string
 	// hosts are the sign-in link's allowed hosts (the helper already validates
 	// the link; the operator checks again before it hands one to a caller).
 	hosts []string
@@ -88,6 +95,7 @@ var keeperLoginProviders = map[string]loginProvider{
 		name: apiv1.KeeperLoginClaude, container: "claude-login",
 		status:    []string{"agentd", "claude-login-status"},
 		login:     []string{"agentd", "claude-login"},
+		abandon:   []string{"agentd", "claude-login-abandon"},
 		hosts:     []string{"claude.com", "claude.ai"},
 		takesCode: true,
 	},
@@ -199,6 +207,7 @@ func (w *lineWriter) line(raw []byte) {
 // ceremony is one open login exec.
 type ceremony struct {
 	provider loginProvider
+	pod      *corev1.Pod
 	cancel   context.CancelFunc
 	stdin    *io.PipeWriter
 	events   chan helperLine
@@ -243,13 +252,20 @@ func (c *ceremony) write(b []byte, wait time.Duration) bool {
 	}
 }
 
-// stop abandons the ceremony the way Tom would: a Ctrl-C ends the provider's
-// CLI, the helper cancels the keeper's attempt and wipes its staging, and only
-// then the exec is cut. A helper that does not leave within wait is cut anyway;
-// its hangup handler (or the keeper's fifteen-minute expiry) finishes the job.
-func (c *ceremony) stop(wait time.Duration) {
+// stop abandons the ceremony. A provider with an abandon command (Claude) gets
+// that command first: it signals the helper in the container itself, because
+// closing the exec stream did not hang the helper up live (NB-01b), and the CLI
+// does not leave on a Ctrl-C either. Without one (Codex) a Ctrl-C ends the
+// provider's CLI. Either way the helper cancels the keeper's attempt and wipes its
+// staging as it leaves, and only then is the exec cut. A helper that does not leave
+// within wait is cut anyway; the keeper's fifteen-minute expiry is the backstop.
+func (c *ceremony) stop(wait time.Duration, abandon func()) {
 	if !c.isDone() {
-		c.write([]byte{0x03}, wait)
+		if abandon != nil {
+			abandon()
+		} else {
+			c.write([]byte{0x03}, wait)
+		}
 		select {
 		case <-c.done:
 		case <-time.After(wait):
@@ -257,6 +273,17 @@ func (c *ceremony) stop(wait time.Duration) {
 	}
 	c.cancel()
 	<-c.done
+}
+
+// runAbandon runs the provider's fixed abandon command in the keeper's login
+// container, if it has one. The output is a fixed word and is not read.
+func (k *KeeperLogin) runAbandon(p loginProvider, pod *corev1.Pod) {
+	if len(p.abandon) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), keeperAbandonTimeout)
+	defer cancel()
+	_ = k.Exec.Run(ctx, pod.Namespace, pod.Name, p.container, p.abandon, nil, io.Discard, io.Discard)
 }
 
 // keeperPod finds the keeper pod's single running instance and checks that the
@@ -432,13 +459,13 @@ func (s *Server) keeperLoginURL(ctx context.Context, w http.ResponseWriter, r *h
 			if parts.complete(p) && cer.isDone() {
 				// The helper left as the link arrived: the link is dead.
 				k.forget(cer)
-				return 0, nil, helperEnded(cer.result())
+				return 0, nil, helperEnded(p, cer.result())
 			}
 		case <-cer.done:
 			// An open ceremony has not ended. A helper that is gone makes any link
 			// it printed dead, so this is never an answer with a link.
 			k.forget(cer)
-			return 0, nil, helperEnded(cer.result())
+			return 0, nil, helperEnded(p, cer.result())
 		case <-timer.C:
 			// Answer first: stopping a stuck helper can take twice the stop wait,
 			// which would push the answer past the API's write timeout. The
@@ -476,16 +503,21 @@ func validKeeperLink(s string, hosts []string) bool {
 // message. It is only reached for a ceremony this operator just opened, so a Busy
 // means the keeper's one attempt is held by something else: a ceremony an earlier
 // operator or leader opened (its exec is gone, the keeper has not yet noticed), or
-// the v1 route. `cancel` cannot end that one; its own 15-minute expiry does.
-func helperEnded(final *helperLine) error {
+// the v1 route. For Claude, `cancel` signals the helper in the keeper pod and ends
+// that; Codex has no such command and its attempt expires on its own.
+func helperEnded(p loginProvider, final *helperLine) error {
 	code := "Unavailable"
 	if final != nil && keeperResultWords[final.Code] {
 		code = final.Code
 	}
 	if code == "Busy" {
+		minutes := int(claudelogin.Lifetime / time.Minute)
+		if len(p.abandon) > 0 {
+			return newError(http.StatusConflict, apiv1.CodeConflict,
+				"the keeper's login attempt is held elsewhere (a ceremony an earlier operator or leader opened, or the v1 route): run keeper-login cancel, which tells the keeper's helper to stop, then url again; otherwise it expires by itself within %d minutes", minutes)
+		}
 		return newError(http.StatusConflict, apiv1.CodeConflict,
-			"the keeper's login attempt is held elsewhere (a ceremony an earlier operator or leader opened, or the v1 route): keeper-login cancel cannot end it, and it expires by itself within %d minutes; wait, or finish it where it was started",
-			int(claudelogin.Lifetime/time.Minute))
+			"the keeper's login attempt is held elsewhere (a ceremony an earlier operator or leader opened, or the v1 route): keeper-login cancel cannot end it, and it expires by itself within %d minutes; wait, or finish it where it was started", minutes)
 	}
 	return newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "the login helper ended without a sign-in link (%s)", code)
 }
@@ -507,7 +539,7 @@ func (k *KeeperLogin) begin(p loginProvider, pod *corev1.Pod) (*ceremony, error)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), claudelogin.Lifetime+time.Minute)
 	pr, pw := io.Pipe()
-	cer := &ceremony{provider: p, cancel: cancel, stdin: pw, events: make(chan helperLine, 8), done: make(chan struct{}), started: time.Now()}
+	cer := &ceremony{provider: p, pod: pod, cancel: cancel, stdin: pw, events: make(chan helperLine, 8), done: make(chan struct{}), started: time.Now()}
 	lw := &lineWriter{emit: func(l helperLine) {
 		if l.final() {
 			cer.mu.Lock()
@@ -543,7 +575,11 @@ func (k *KeeperLogin) forget(cer *ceremony) {
 
 // abandon stops a ceremony and forgets it.
 func (k *KeeperLogin) abandon(cer *ceremony) {
-	cer.stop(k.stopWait())
+	var run func()
+	if len(cer.provider.abandon) > 0 {
+		run = func() { k.runAbandon(cer.provider, cer.pod) }
+	}
+	cer.stop(k.stopWait(), run)
 	k.forget(cer)
 }
 
@@ -619,7 +655,7 @@ func (s *Server) keeperLoginCode(ctx context.Context, w http.ResponseWriter, r *
 
 // keeperLoginCancel answers DELETE: abandon the open ceremony. It answers the
 // same whether one was open or not.
-func (s *Server) keeperLoginCancel(_ context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+func (s *Server) keeperLoginCancel(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
 	p, k, err := s.keeperLoginGate(r, c)
 	if err != nil {
 		return 0, nil, err
@@ -629,6 +665,17 @@ func (s *Server) keeperLoginCancel(_ context.Context, _ http.ResponseWriter, r *
 	}
 	if cer := k.current(p); cer != nil {
 		k.abandon(cer)
+		return http.StatusNoContent, nil, nil
+	}
+	if len(p.abandon) > 0 {
+		// Nothing held here, but the keeper's helper may still be running: a
+		// ceremony this operator lost (restart, leader change) or the v1 route's.
+		// The abandon command is idempotent and touches no credential.
+		pod, err := k.keeperPod(ctx, s.Live, p.container)
+		if err != nil {
+			return 0, nil, err
+		}
+		k.runAbandon(p, pod)
 	}
 	return http.StatusNoContent, nil, nil
 }

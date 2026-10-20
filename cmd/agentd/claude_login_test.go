@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/thaynes43/dev-env/internal/claudelogin"
 )
 
 // A pod log, a pipe or a plain file is not an authenticated terminal: the
@@ -72,5 +74,22 @@ func TestClaudeLoginStatusWithoutAKeeperIsFixedUnavailable(t *testing.T) {
 	buf.Reset()
 	if claudeLoginStatus(context.Background(), []string{"extra"}, &buf) != exitFailure || !strings.Contains(buf.String(), `"code":"InvalidRequest"`) {
 		t.Fatalf("got %q", buf.String())
+	}
+}
+
+// NB-01b: claude-login-abandon takes no arguments, needs no terminal, prints one
+// fixed word and succeeds when no helper runs (this test process is not one).
+func TestClaudeLoginAbandonWithNoHelper(t *testing.T) {
+	var out bytes.Buffer
+	if code := claudeLoginAbandon(context.Background(), nil, &out); code != exitOK {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	var r claudelogin.Response
+	if json.Unmarshal(out.Bytes(), &r) != nil || !r.OK || r.Code != claudelogin.AbandonNone {
+		t.Fatalf("output %q", out.String())
+	}
+	out.Reset()
+	if code := claudeLoginAbandon(context.Background(), []string{"--x"}, &out); code != exitFailure || !strings.Contains(out.String(), "InvalidRequest") {
+		t.Fatalf("arguments: exit %d %q", code, out.String())
 	}
 }

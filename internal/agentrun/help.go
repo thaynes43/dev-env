@@ -442,9 +442,10 @@ caller gets a 403.
            keeper-login claude code. The code is never an argument. Codex: takes no
            code; it waits for the device sign-in to finish, and exits 5 if it is
            still waiting (run it again).
-  cancel   abandons a ceremony this operator holds. The keeper's login is untouched
-           until a code is adopted. A ceremony held elsewhere (an earlier operator,
-           the v1 route) cannot be cancelled here; it expires within 15 minutes.
+  cancel   abandons a ceremony. For Claude it also tells the keeper's login helper to
+           stop, so a ceremony the operator lost (a restart) or the v1 route holds is
+           ended too and the next url works. The keeper's login is untouched until a
+           code is adopted. A Codex ceremony held elsewhere expires within 15 minutes.
 
 One ceremony at a time per provider, open for at most 15 minutes. Only the
 operator's leader holds a ceremony, so the command reconnects by itself while a
