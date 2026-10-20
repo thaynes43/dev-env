@@ -567,6 +567,18 @@ func TestKeeperLoginAbandonedCeremonyTouchesNothing(t *testing.T) {
 	k.noLeak("abandon")
 }
 
+// waitNoCeremony waits for the operator to finish abandoning a ceremony.
+func (k *keeperFixture) waitNoCeremony(provider string) {
+	k.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for k.srv.KeeperLogin.current(keeperLoginProviders[provider]) != nil {
+		if time.Now().After(deadline) {
+			k.t.Fatal("the abandoned ceremony was never forgotten")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // secretData reads the two Secrets with a client that has no guard, as one string.
 func secretData(t *testing.T, k *keeperFixture) string {
 	t.Helper()
@@ -636,7 +648,9 @@ func TestKeeperLoginNoLink(t *testing.T) {
 			if strings.Contains(w.Body.String(), "CANARY") || strings.Contains(w.Body.String(), "evil.example") {
 				t.Fatalf("the refusal carries helper output: %s", w.Body.String())
 			}
-			// The failed ceremony was abandoned: a new one may start.
+			// The failed ceremony is abandoned (in the background when it timed out):
+			// once it is gone a new one may start.
+			k.waitNoCeremony("claude")
 			ex2 := claudeExec()
 			k.srv.KeeperLogin.Exec = ex2
 			if w := k.do(http.MethodPost, apiv1.KeeperLoginPathFor("claude")+"/url", tokWorkbench, nil); w.Code != http.StatusOK {

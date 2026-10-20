@@ -24,7 +24,7 @@ The operator does the exec, for the workbench only.
 |---|---|
 | `GET` | the keeper's state word (Ready, PendingPublication, NeedsLogin, Unavailable), generation, access expiry, login expiry. Times only. |
 | `POST .../url` | opens a ceremony; the response carries the sign-in link (Codex: and the one-time device code). |
-| `POST .../code` | Claude: body `{"code": ...}`, handed to the helper's terminal. Codex: no body; waits for the device sign-in to finish. 202 `Waiting` after 45 s, call again. |
+| `POST .../code` | Claude: body `{"code": ...}`, handed to the helper's terminal. Codex: no body; waits for the device sign-in to finish. 202 `Waiting` after 40 s, call again. |
 | `DELETE` | abandons the open ceremony. |
 
 CLI: `agent-run keeper-login claude|codex [status|url|code|cancel]`. The Claude code
@@ -94,8 +94,9 @@ until the helper image follows.
 ## Limits
 
 - One ceremony per provider; none survives an operator restart. Run `url` again.
-- Handlers answer inside the API's 60 s write timeout, so waits are 45 s and the
-  CLI client allows 75 s.
+- Handlers answer inside the API's 60 s write timeout: the link wait is 45 s (a
+  timeout answers first and abandons the ceremony in the background), the code
+  wait 40 s plus at most 10 s to write, and status 20 s; the CLI client allows 75 s.
 - Codex's device flow has no code to paste. `code` is "wait for the sign-in to
   finish"; if you prefer, run `status` until the generation moves.
 - The Claude CLI's behavior on this exec shape (terminal for stdin, CLI stdout

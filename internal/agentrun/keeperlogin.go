@@ -215,7 +215,11 @@ func (a *app) keeperLoginPost(ctx context.Context, c *conn, path string, body, o
 			if ctx.Err() == nil && nothingSent(err) {
 				return 0, nil, fail(ExitRetry, "could not reach the API at %s: %v; nothing was sent", c.url, err)
 			}
-			return 0, nil, fail(ExitUnconfirmed, "no confirmed answer to %s %s: %v; agent-run sent it once and did not repeat it. A code may have reached the keeper: do not paste it again; check agent-run keeper-login status", verb, path, err)
+			hint := "run it again, or abandon with agent-run keeper-login cancel"
+			if strings.HasSuffix(path, "/code") {
+				hint = "A code may have reached the keeper: do not paste it again; check agent-run keeper-login status"
+			}
+			return 0, nil, fail(ExitUnconfirmed, "no confirmed answer to %s %s: %v; agent-run sent it once and did not repeat it. %s", verb, path, err, hint)
 		}
 		var doc apiv1.ErrorResponse
 		isErr := json.Unmarshal(raw, &doc) == nil && doc.Error.Code != ""

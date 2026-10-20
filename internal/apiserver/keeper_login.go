@@ -59,9 +59,11 @@ const (
 	keeperServiceAccount = "dev-env-keeper"
 
 	defaultKeeperURLWait  = 45 * time.Second
-	defaultKeeperCodeWait = 45 * time.Second
+	defaultKeeperCodeWait = 40 * time.Second
 	defaultKeeperStopWait = 10 * time.Second
-	maxKeeperCodeBytes    = 1024
+	// keeperStatusTimeout bounds the status exec well inside the API's write timeout.
+	keeperStatusTimeout = 20 * time.Second
+	maxKeeperCodeBytes  = 1024
 	// maxKeeperOutputLine bounds one terminal line the parser will consider.
 	maxKeeperOutputLine = 16 << 10
 )
@@ -333,7 +335,7 @@ func (s *Server) keeperLoginStatus(ctx context.Context, _ http.ResponseWriter, r
 	if err != nil {
 		return 0, nil, err
 	}
-	ectx, cancel := context.WithTimeout(ctx, podCmdTimeout)
+	ectx, cancel := context.WithTimeout(ctx, keeperStatusTimeout)
 	defer cancel()
 	var out boundedBuffer
 	// A non-zero exit still carries the keeper's fixed word on stdout.
@@ -441,13 +443,17 @@ func (s *Server) keeperLoginURL(ctx context.Context, w http.ResponseWriter, r *h
 			k.forget(cer)
 			return 0, nil, helperEnded(cer.result())
 		case <-timer.C:
-			k.abandon(cer)
+			// Answer first: stopping a stuck helper can take twice the stop wait,
+			// which would push the answer past the API's write timeout. The
+			// ceremony stays registered until it is stopped, so a quick retry
+			// meets a conflict, not a second helper.
+			go k.abandon(cer)
 			return 0, nil, newError(http.StatusGatewayTimeout, apiv1.CodeUnavailable,
-				"the login helper showed no sign-in link in time; the ceremony was abandoned, run url again")
+				"the login helper showed no sign-in link in time; the ceremony is being abandoned, run url again in a moment")
 		case <-ctx.Done():
-			k.abandon(cer)
+			go k.abandon(cer)
 			return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable,
-				"the request ended before the sign-in link came; the ceremony was abandoned")
+				"the request ended before the sign-in link came; the ceremony is being abandoned")
 		}
 	}
 	w.Header().Set("Cache-Control", "no-store")
