@@ -255,6 +255,7 @@ func (w *credentialWorker) reconcile(ctx context.Context, job *v1alpha1.Credenti
 	if e.Stage == journalIntent {
 		if exists && e.Uncertain {
 			e.Failure = v1alpha1.CredentialAmbiguousMint
+			w.Log.Info("credential mint ended ambiguous; cleanup only", "job", job.Name, "reason", "an earlier mint attempt may have reached the provider")
 			return w.cleanup(ctx, job, e)
 		}
 		if pod == nil {
@@ -300,6 +301,9 @@ func (w *credentialWorker) reconcile(ctx context.Context, job *v1alpha1.Credenti
 				return errors.New("credential mint did not dispatch and will retry")
 			}
 			e.Failure = v1alpha1.CredentialAmbiguousMint
+			// merr is one of the provider's fixed messages and never carries
+			// command output or token material.
+			w.Log.Info("credential mint ended ambiguous; cleanup only", "job", job.Name, "reason", merr.Error())
 			return w.cleanup(ctx, job, e)
 		}
 		e.TokenID = result.TokenID

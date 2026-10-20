@@ -178,7 +178,8 @@ func TestCredentialProviderMetadataRequiresExplicitIsolation(t *testing.T) {
 		raw, _ := json.Marshal(map[string]any{"info": info, "value": credentialCanary, "full-tokenid": providerID(testGrantUID)})
 		p := &proxmoxProvider{SSH: &providerResponse{raw: raw}}
 		result, err := p.mint(context.Background(), e)
-		wantValid := privsep == false || privsep == 0
+		// PVE's create response quotes the number: "0" is accepted, "1" and others are not.
+		wantValid := privsep == false || privsep == 0 || privsep == "0"
 		if (err == nil) != wantValid || !result.PossibleDispatch {
 			t.Fatalf("isolation %v validation changed", privsep)
 		}
