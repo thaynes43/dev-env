@@ -274,7 +274,7 @@ Secret).
     `dev_env_keeper_login_lapse_timestamp_seconds{provider="claude"}` is
     1794851496, which is 2026-11-16T17:51:36Z and matches the keeper's
     annotation. Codex has no lapse series (Unknown, by design).
-  - A fresh workbench session on 2.39.0 (haiku, reaped afterwards) ran the
+  - A fresh workbench session on 2.39.0 (`claude-haiku-5-5`, reaped afterwards) ran the
     image's own `agent-run`. All three commands exited 0 (more than 7 days
     left). `auth status`: claude Ready, login lapses 2026-11-16T17:51:36Z
     (27 days left); codex Ready, login lapses Unknown. `keeper-login claude
