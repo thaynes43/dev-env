@@ -519,8 +519,9 @@ minutes. For Claude, `cancel` ends it too since 2.38.1 (built for this case; a s
 held elsewhere has not been tried live). The command reconnects by itself while the
 operator's other replica answers.
 
-After a ChatGPT `cancel`, `status` shows PendingPublication for about 25 to 35
-seconds, then Ready again with the same login. That is expected and harmless: a
+After a ChatGPT `cancel`, `status` shows PendingPublication for about half a
+minute or a little more (25 seconds once, over 35 the next time), then Ready
+again with the same login. That is expected and harmless: a
 ceremony pauses the keeper's refresh, and the keeper republishes the login at its
 next half-minute check. On 2.38.0 the keeper also logged an error for the pause;
 2.38.1 no longer does (proven from a session: none logged).

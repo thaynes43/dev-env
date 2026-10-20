@@ -70,11 +70,11 @@ host PEAR (`dev-env-1019-205125`, still 2.37.0) were not touched.
 | Project bootstrap Ready, 8 of 8 repos (#478); the standby's `CatalogUnconfirmed` gone | Proven from a session | LIVE-238b: five new sessions and the standby. No clone stalled, so #478's retry was not exercised |
 | The Claude 401 "continue" is sent after a failed turn (#473) | Proven from a session (new generation simulated) | LIVE-238b: receipt `sent`, the failed prompt completed. A real keeper refresh triggering it is not yet seen; a revoked token's wording is unobserved |
 | Keeper login from a workbench session (#475): `status` for both logins, `url` for both, ChatGPT `url`, `cancel`, `url` again, a v1-pod caller refused (other callers by unit test), logins unchanged after abandoned tries | Proven from a session (workbench) | LIVE-238a. No full ceremony with Tom's code yet |
-| Claude keeper-login `cancel` ends the helper (2.38.1, #483) | Proven from a session (workbench) | LIVE-2381, 06:53 to 06:56Z: no helper left after `cancel`, the next `url` not Busy, a no-ceremony `cancel` answers "no keeper login ceremony is open", `status` unchanged (gen 3, login lapse 2026-11-16T17:51:36Z) |
+| Claude keeper-login `cancel` ends the helper (2.38.1, #483) | Proven from a session (workbench) | LIVE-2381, 06:53 to 06:56Z: no helper left after `cancel`, the next `url` not Busy, a no-ceremony `cancel` answers "no keeper login ceremony is open", `status` unchanged (gen 3, same access and login expiry) |
 | Proxmox operator token end to end, reads only (2.38.1, #481) | Proven from a session (workbench) | LIVE-2381: credential grant (15 min) Active in 5 s, CredentialJob `Installed`, `credential-available` exit 0; with an egress grant for `pvedash.haynesnetwork:443`, `pve ha` showed `tier=operator` and `pve nodes` five nodes; release revoked the job in 19 s, PVE's token list back to `operator` only, `tier=read`. No write tried |
 | No ERROR log after a ChatGPT keeper-login `cancel` (2.38.1, #483) | Proven from a session | LIVE-2381: no "needs attention" line; PendingPublication lasted over 35 s this time (about 25 s before), then Ready, same login |
 | Standby counts a draining standby as present (2.38.1, #480) | Installed, not exercised | No template move since the 2.38.1 pin, so no drain has run |
-| Claude keeper refresh, generation 3 | Proven from a session (natural refresh observed) | LIVE-238a: refreshed at 05:50:05Z, access to 13:50:05Z, read by sessions. `keeper-login claude status` gives the login lapse as 2026-11-16T17:51:35Z |
+| Claude keeper refresh, generation 3 | Proven from a session (natural refresh observed) | LIVE-238a: refreshed at 05:50:05Z, access to 13:50:05Z, read by sessions. `keeper-login claude status` gives the login lapse as 2026-11-16T17:51:35Z before the refresh and 17:51:36Z after (a 1 s drift) |
 | The keeper's certificate SSH to a PVE node (#474) | Proven from a session | LIVE-238a: the node logged the certificate login and the `pvesh create`; the two stuck CredentialJobs from 00:49Z went Revoked |
 
 **Corrected tonight:**
@@ -115,8 +115,8 @@ host PEAR (`dev-env-1019-205125`, still 2.37.0) were not touched.
   ConfigMap's `creations` count should not change.
 - The ERROR line after a ChatGPT `cancel` (LIVE-238a O3) came from the keeper's
   30-second tick seeing the paused refresh during a ceremony. #483 logs it at
-  debug level; proven gone live. The 25 to 35 s PendingPublication after a
-  cancel is expected and harmless.
+  debug level; proven gone live. The PendingPublication after a cancel (about
+  25 s once, over 35 s the next time) is expected and harmless.
 
 **Open, not accepted:**
 
