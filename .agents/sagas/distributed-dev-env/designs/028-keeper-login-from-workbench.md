@@ -51,7 +51,7 @@ container (GitHub App key, SSH CA, the login journal's ServiceAccount) and the b
 The review (NB-01) made the pin a blocker, so the same haynes-ops PR adds a
 ValidatingAdmissionPolicy, `dev-env-operator-exec-guard` (`operator-exec-guard.yaml`):
 for the operator's ServiceAccount in `dev-env-system`, only `pods/exec` into pods named
-`dev-env-keeper-*`, containers `claude-login` or `codex-login`, with exactly the four
+`dev-env-keeper-*`, containers `claude-login` or `codex-login`, with exactly the five
 helper argv arrays of the provider table; attach, port-forward and proxy are refused.
 It is proven on kube-apiserver 1.35.0 (envtest) and matches no exec the operator makes
 today (rescue, log, deliver and the shelf run in `dev-agents`, tool pods in `dev-tools`).
@@ -81,18 +81,27 @@ Logging is the existing one line per request (method, path, status, caller class
 The operator reads and writes no Secret and no keeper state: it has no Secret
 rights, and a test fails on any Secret read or any write by its client.
 
-**Abandon.** Cancel (and a request that ends before the link arrives) sends a
-Ctrl-C to the terminal, waits up to 10 s for the helper to leave through its own
-cleanup (the provider's CLI exits, the helper cancels the keeper's attempt and
-wipes the staging), then cuts the exec. An operator restart or leader change
-drops the exec: the helper now treats a hangup (SIGHUP, new in this change for
-both helpers) as a cancel; failing that, the keeper's 15-minute attempt expiry
-frees the slot. Until then a new `url` answers a conflict naming the open
-ceremony. If the helper's hangup never arrives (a container runtime may not hang up a
-terminal exec when the client drops), the slot stays Busy up to 15 minutes, and `url` meanwhile
-answers that the attempt is held elsewhere and that `cancel` cannot end it. A
-`cancel` that races a code already being adopted can still end with the new login
-adopted, whole (the keeper's adoption is atomic); `status` shows the truth. A ceremony that never reaches `code` leaves the journal and the
+**Abandon (NB-01b).** Closing the exec stream does not hang the helper up (live,
+LIVE-238a D1: after `cancel` the helper and the provider's CLI stayed alive and the
+keeper's slot stayed held to the 15-minute deadline), and a Ctrl-C does not end the
+Claude CLI either. So Claude's cancel is a second, fixed, short exec in the same
+`claude-login` container: `agentd claude-login-abandon`. It finds the running
+`agentd claude-login` helpers by their exact argv, sends each SIGHUP (which the helper
+treats as a cancel: it kills the CLI's process group, cancels the keeper's attempt and
+wipes the staging), waits up to 8 s for them to leave and prints one fixed word
+(`Abandoned`, `NoCeremony`, `Stuck`). It reads no credential and no socket, and
+no helper running is a success, so it is idempotent. The operator runs it before it
+cuts the exec; it also runs it for a `cancel` that finds no ceremony in memory
+(restart, leader change, the v1 route's ceremony), which is how a "held elsewhere"
+slot is freed. Codex has no abandon command: its Ctrl-C works live, and its cancel is
+unchanged. The new argv is in `keeperLoginProviders` and in the haynes-ops
+`operator-exec-guard.yaml`; a unit test pins the table so the two cannot drift. A
+cancel that races a code already being adopted can still end with the new login
+adopted, whole (the keeper's adoption is atomic); `status` shows the truth. An operator
+restart or leader change drops the exec; `cancel` (or the keeper's 15-minute expiry)
+frees the slot.
+
+A ceremony that never reaches `code` leaves the journal and the
 published projection exactly as they were: adoption is the only write and it
 needs a code.
 

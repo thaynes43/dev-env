@@ -57,6 +57,13 @@ type fakeKeeperExec struct {
 	// hangAfterCode: the helper takes the code and never answers (a slow adoption).
 	hangAfterCode bool
 	ttyN          int
+	// hup is closed by the abandon command, as SIGHUP ends the real helper. A
+	// Ctrl-C ends nothing: live (LIVE-238a, D1) the Claude helper and CLI ignored it.
+	hup      chan struct{}
+	abandons int
+	// abandonStarted is closed when the abandon command starts, and the command
+	// then waits on abandonGate (both nil: no hold).
+	abandonStarted, abandonGate chan struct{}
 }
 
 func (e *fakeKeeperExec) record(ns, pod, container string, cmd []string) {
@@ -82,6 +89,19 @@ func (e *fakeKeeperExec) Run(_ context.Context, ns, pod, container string, cmd [
 	if stdin != nil {
 		return errors.New("a status command takes no stdin")
 	}
+	if len(cmd) == 2 && cmd[1] == "claude-login-abandon" {
+		if e.abandonStarted != nil {
+			close(e.abandonStarted)
+			<-e.abandonGate
+		}
+		e.mu.Lock()
+		e.abandons++
+		close(e.hup) // ends the helper now running; the next one gets a fresh channel
+		e.hup = make(chan struct{})
+		e.mu.Unlock()
+		_, _ = io.WriteString(stdout, `{"ok":true,"code":"Abandoned"}`+"\r\n")
+		return nil
+	}
 	_, _ = io.WriteString(stdout, e.statusOut)
 	return nil
 }
@@ -106,7 +126,11 @@ func (e *fakeKeeperExec) RunTTY(ctx context.Context, ns, pod, container string, 
 	if e.endNow {
 		return nil
 	}
-	// Read the terminal until Enter or Ctrl-C, echoing, as a tty does.
+	// Read the terminal until Enter, echoing, as a tty does; a hangup (the abandon
+	// command) ends the helper unless it is stuck.
+	e.mu.Lock()
+	hup := e.hup
+	e.mu.Unlock()
 	buf := make([]byte, 1)
 	var got []byte
 	read := make(chan byte)
@@ -124,6 +148,13 @@ func (e *fakeKeeperExec) RunTTY(ctx context.Context, ns, pod, container string, 
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-hup:
+			if e.noExit {
+				hup = nil
+				continue
+			}
+			w(e.finalForCancel + "\n")
+			return nil
 		case b, ok := <-read:
 			if !ok {
 				return io.ErrClosedPipe
@@ -133,11 +164,7 @@ func (e *fakeKeeperExec) RunTTY(ctx context.Context, ns, pod, container string, 
 			e.mu.Unlock()
 			switch b {
 			case 0x03:
-				if e.noExit {
-					continue
-				}
-				w(e.finalForCancel + "\n")
-				return nil
+				continue // ignored, as live
 			case '\r':
 				w(string(got) + "\n") // the echo of the typed line
 				if e.hangAfterCode {
@@ -306,6 +333,7 @@ func (k *keeperFixture) secretsUntouched() {
 
 func claudeExec() *fakeKeeperExec {
 	return &fakeKeeperExec{
+		hup:            make(chan struct{}),
 		link:           claudeLinkURL,
 		afterLink:      []string{`{"signInUrl":"` + claudeLinkURL + `","accessToken":"` + canaryToken + `"}`, canaryNoise},
 		finalForCode:   `{"ok":true,"code":"Adopted","generation":3,"login":{"phase":"Adopted"}}`,
@@ -560,8 +588,13 @@ func TestKeeperLoginAbandonedCeremonyTouchesNothing(t *testing.T) {
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("cancel: %d %s", w.Code, w.Body.String())
 	}
-	if got := ex.stdinBytes(); got != "\x03" {
-		t.Fatalf("the helper was sent %q, want one Ctrl-C", got)
+	// Claude's cancel is the fixed abandon command in the login container, not a
+	// terminal signal (NB-01b): exactly one, and no Ctrl-C.
+	if ex.abandons != 1 || ex.stdinBytes() != "" {
+		t.Fatalf("abandon commands %d, stdin %q: want one abandon and no Ctrl-C", ex.abandons, ex.stdinBytes())
+	}
+	if calls := ex.callList(); !strings.Contains(strings.Join(calls, "\n"), "dev-env-system/dev-env-keeper-abc/claude-login: agentd claude-login-abandon") {
+		t.Fatalf("exec calls = %v", calls)
 	}
 	// Cancel with nothing open is the same answer.
 	if w := k.do(http.MethodDelete, apiv1.KeeperLoginPathFor("claude"), tokWorkbench, nil); w.Code != http.StatusNoContent {
@@ -775,26 +808,144 @@ func TestKeeperLoginMethods(t *testing.T) {
 }
 
 // A helper that has already left when the link arrives gives a dead link: refused.
+// Deterministic: the handler is held (beforeAnswer) until the helper's exec has
+// ended, so it never races the helper's exit; without the hold, a handler that read
+// the link a moment before the exit would legitimately answer 200.
 func TestKeeperLoginDeadLinkIsRefused(t *testing.T) {
 	ex := claudeExec()
 	ex.afterLink = []string{`{"ok":false,"code":"NeedsLogin"}`}
 	ex.endNow = true
 	k := newKeeperFixture(t, ex)
+	var timedOut atomic.Bool
+	k.srv.KeeperLogin.beforeAnswer = func(c *ceremony) {
+		select {
+		case <-c.done:
+		case <-time.After(10 * time.Second): // a hang is a failure, not a flake
+			timedOut.Store(true)
+		}
+	}
 	w := k.do(http.MethodPost, apiv1.KeeperLoginPathFor("claude")+"/url", tokWorkbench, nil)
+	if timedOut.Load() {
+		t.Fatal("the helper's exec never ended")
+	}
 	wantError(t, w, http.StatusServiceUnavailable, apiv1.CodeUnavailable)
 	if strings.Contains(w.Body.String(), "oauth") {
 		t.Fatalf("a dead link was returned: %s", w.Body.String())
 	}
 }
 
-// Busy means the attempt is held elsewhere: the message says cancel cannot end it.
+// The other side of the same race: a helper that is still running when the link
+// is read is answered with the link. Held (beforeAnswer) until the test checks
+// the helper has not ended, so it does not depend on timing either.
+func TestKeeperLoginLiveLinkIsAnswered(t *testing.T) {
+	ex := claudeExec()
+	k := newKeeperFixture(t, ex)
+	k.srv.KeeperLogin.beforeAnswer = func(c *ceremony) {
+		if c.isDone() {
+			t.Error("the helper ended while the link was being answered")
+		}
+	}
+	if w := k.do(http.MethodPost, apiv1.KeeperLoginPathFor("claude")+"/url", tokWorkbench, nil); w.Code != http.StatusOK {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+}
+
+// A new ceremony cannot start while a no-ceremony cancel is running its abandon
+// command: the SIGHUP would take the new helper with it. Held on channels, no
+// sleeps: the abandon exec blocks until the test has tried the url.
+func TestKeeperLoginUrlWaitsOutARunningCancel(t *testing.T) {
+	ex := claudeExec()
+	ex.abandonStarted = make(chan struct{})
+	ex.abandonGate = make(chan struct{})
+	k := newKeeperFixture(t, ex)
+	cancelled := make(chan int, 1)
+	go func() {
+		cancelled <- k.do(http.MethodDelete, apiv1.KeeperLoginPathFor("claude"), tokWorkbench, nil).Code
+	}()
+	<-ex.abandonStarted
+	wantError(t, k.do(http.MethodPost, apiv1.KeeperLoginPathFor("claude")+"/url", tokWorkbench, nil), http.StatusConflict, apiv1.CodeConflict)
+	// A second cancel does not pile a second abandon on top.
+	wantError(t, k.do(http.MethodDelete, apiv1.KeeperLoginPathFor("claude"), tokWorkbench, nil), http.StatusConflict, apiv1.CodeConflict)
+	close(ex.abandonGate)
+	if code := <-cancelled; code != http.StatusNoContent {
+		t.Fatalf("cancel: %d", code)
+	}
+	if w := k.do(http.MethodPost, apiv1.KeeperLoginPathFor("claude")+"/url", tokWorkbench, nil); w.Code != http.StatusOK {
+		t.Fatalf("url after the cancel: %d %s", w.Code, w.Body.String())
+	}
+	if ex.abandons != 1 {
+		t.Fatalf("abandon commands = %d, want 1", ex.abandons)
+	}
+}
+
+// Busy means the attempt is held elsewhere. For Claude, cancel signals the keeper's
+// helper and so can end it; Codex has no such command and says to wait.
 func TestKeeperLoginBusyMessage(t *testing.T) {
 	ex := claudeExec()
 	ex.link, ex.afterLink, ex.endNow = "", []string{`{"ok":false,"code":"Busy"}`}, true
 	k := newKeeperFixture(t, ex)
 	e := wantError(t, k.do(http.MethodPost, apiv1.KeeperLoginPathFor("claude")+"/url", tokWorkbench, nil), http.StatusConflict, apiv1.CodeConflict)
-	if !strings.Contains(e.Message, "held elsewhere") || !strings.Contains(e.Message, "15 minutes") || !strings.Contains(e.Message, "cannot end it") {
-		t.Fatalf("message = %q", e.Message)
+	if !strings.Contains(e.Message, "held elsewhere") || !strings.Contains(e.Message, "15 minutes") || !strings.Contains(e.Message, "run keeper-login cancel") {
+		t.Fatalf("claude message = %q", e.Message)
+	}
+	cx := claudeExec()
+	cx.link, cx.afterLink, cx.endNow = "", []string{`{"ok":false,"code":"Busy"}`}, true
+	k.srv.KeeperLogin.Exec = cx
+	e = wantError(t, k.do(http.MethodPost, apiv1.KeeperLoginPathFor("codex")+"/url", tokWorkbench, nil), http.StatusConflict, apiv1.CodeConflict)
+	if !strings.Contains(e.Message, "held elsewhere") || !strings.Contains(e.Message, "cannot end it") {
+		t.Fatalf("codex message = %q", e.Message)
+	}
+}
+
+// NB-01b: cancel with no ceremony held here (the operator restarted, the leader
+// changed, or the v1 route holds the attempt) still tells the keeper's helper to
+// stop, so the slot frees. The command is a fixed argv in the claude-login
+// container; Codex has none and runs nothing; a missing keeper pod is a 503.
+func TestKeeperLoginCancelWithoutAHeldCeremonyStillAbandons(t *testing.T) {
+	ex := claudeExec()
+	k := newKeeperFixture(t, ex)
+	if w := k.do(http.MethodDelete, apiv1.KeeperLoginPathFor("claude"), tokWorkbench, nil); w.Code != http.StatusNoContent {
+		t.Fatalf("cancel: %d %s", w.Code, w.Body.String())
+	}
+	calls := ex.callList()
+	if len(calls) != 1 || calls[0] != "dev-env-system/dev-env-keeper-abc/claude-login: agentd claude-login-abandon" || ex.stdinBytes() != "" {
+		t.Fatalf("exec calls = %v", calls)
+	}
+	// Codex: a Ctrl-C ends its CLI, nothing is run when no ceremony is held.
+	before := len(ex.callList())
+	if w := k.do(http.MethodDelete, apiv1.KeeperLoginPathFor("codex"), tokWorkbench, nil); w.Code != http.StatusNoContent {
+		t.Fatalf("codex cancel: %d", w.Code)
+	}
+	if len(ex.callList()) != before {
+		t.Fatalf("codex cancel ran %v", ex.callList()[before:])
+	}
+	// No keeper pod: the caller is told, not left to think it worked.
+	var pod corev1.Pod
+	if err := k.c.Get(context.Background(), client.ObjectKey{Namespace: keeperNS, Name: "dev-env-keeper-abc"}, &pod); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.c.Delete(context.Background(), &pod); err != nil {
+		t.Fatal(err)
+	}
+	wantError(t, k.do(http.MethodDelete, apiv1.KeeperLoginPathFor("claude"), tokWorkbench, nil), http.StatusServiceUnavailable, apiv1.CodeUnavailable)
+}
+
+// The abandon argv is exactly one of the policy's list: a change to the provider
+// table that the admission guard would refuse must fail here, not live.
+func TestKeeperLoginProviderArgvMatchTheAdmissionGuard(t *testing.T) {
+	got := map[string][][]string{}
+	for _, p := range keeperLoginProviders {
+		got[p.container] = append(got[p.container], p.status, p.login)
+		if len(p.abandon) > 0 {
+			got[p.container] = append(got[p.container], p.abandon)
+		}
+	}
+	want := map[string][][]string{
+		"claude-login": {{"agentd", "claude-login-status"}, {"agentd", "claude-login"}, {"agentd", "claude-login-abandon"}},
+		"codex-login":  {{"dev-env-keeper", "codex-auth-status"}, {"dev-env-keeper", "codex-login"}},
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("provider argv = %v, want %v (and keep haynes-ops operator-exec-guard.yaml equal)", got, want)
 	}
 }
 

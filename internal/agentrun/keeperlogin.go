@@ -190,7 +190,7 @@ func (a *app) keeperLoginCancel(ctx context.Context, c *conn, path, provider str
 	if _, _, err := a.keeperLoginPost(ctx, c, path, nil, nil, http.MethodDelete); err != nil {
 		return err
 	}
-	a.outf("%s: no keeper login ceremony is open on the operator now.\n", provider)
+	a.outf("%s: cancelled. No ceremony is open now and the keeper's login is as it was; run url to start a new one.\n", provider)
 	return nil
 }
 

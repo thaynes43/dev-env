@@ -87,3 +87,20 @@ func claudeLoginStatus(ctx context.Context, args []string, stdout io.Writer) int
 	}
 	return exitOK
 }
+
+// claudeLoginAbandon is `agentd claude-login-abandon` (NB-01b): the operator's
+// cancel of a Claude login ceremony. It signals the running claude-login helper
+// in this container (the helper treats SIGHUP as a cancel) and prints one fixed
+// word. No terminal is needed, no credential is read, and no helper running is a
+// success.
+func claudeLoginAbandon(ctx context.Context, args []string, stdout io.Writer) int {
+	result := claudelogin.Response{Code: "InvalidRequest"}
+	if len(args) == 0 {
+		code := claudelogin.Abandon(ctx, claudelogin.AbandonOptions{})
+		result = claudelogin.Response{OK: code != claudelogin.AbandonStuck, Code: code}
+	}
+	if json.NewEncoder(stdout).Encode(result) != nil || !result.OK {
+		return exitFailure
+	}
+	return exitOK
+}

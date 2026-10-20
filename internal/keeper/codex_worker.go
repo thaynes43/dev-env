@@ -3,6 +3,7 @@ package keeper
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -52,6 +53,12 @@ type codexLoaded struct {
 
 var errCodexGenerationMismatch = errors.New("codex generation does not match")
 
+// errCodexLoginInProgress is errCodexRefresh while a live login reservation holds
+// the journal: begin pauses refresh until adoption or cancel, so the worker's tick
+// finds a non-Ready record for the ceremony's whole life (LIVE-238a, O3). It stays an
+// errCodexRefresh for every caller; only the log line differs.
+var errCodexLoginInProgress = fmt.Errorf("%w: a login ceremony holds the reservation", errCodexRefresh)
+
 func (*codexWorker) NeedLeaderElection() bool { return true }
 
 func (w *codexWorker) Start(ctx context.Context) error {
@@ -67,14 +74,31 @@ func (w *codexWorker) Start(ctx context.Context) error {
 		w.mu.Lock()
 		err := w.tick(ctx)
 		w.mu.Unlock()
-		if err != nil && ctx.Err() == nil {
-			w.Log.Error(err, "Codex authentication needs attention")
+		if ctx.Err() == nil {
+			w.logTickError(err)
 		}
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-w.Clock.After(30 * time.Second):
 		}
+	}
+}
+
+// loginReservationLive: a ceremony's reservation is held and not yet expired.
+func (w *codexWorker) loginReservationLive(r codexRecord) bool {
+	return r.Stage == codexNeedsLogin && !r.LoginUntil.IsZero() && w.Clock.Now().Before(r.LoginUntil)
+}
+
+// logTickError reports a failed tick. A login ceremony in progress is expected
+// (it pauses refresh by design), so it is not an ERROR line (LIVE-238a, O3).
+func (w *codexWorker) logTickError(err error) {
+	switch {
+	case err == nil:
+	case errors.Is(err, errCodexLoginInProgress):
+		w.Log.V(1).Info("Codex login ceremony in progress; refresh is paused until it ends")
+	default:
+		w.Log.Error(err, "Codex authentication needs attention")
 	}
 }
 
@@ -118,6 +142,9 @@ func (w *codexWorker) tickExpected(ctx context.Context, expected uint64) error {
 		}
 	}
 	if w.halted {
+		if w.loginReservationLive(d.Record) {
+			return errCodexLoginInProgress
+		}
 		return errCodexRefresh
 	}
 	r := d.Record
@@ -126,6 +153,9 @@ func (w *codexWorker) tickExpected(ctx context.Context, expected uint64) error {
 	}
 	if r.Stage != codexReady {
 		w.ready.Store(false)
+		if w.loginReservationLive(r) {
+			return errCodexLoginInProgress
+		}
 		return errCodexRefresh
 	}
 	now := w.Clock.Now()

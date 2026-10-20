@@ -157,6 +157,8 @@ Commands:
                            code on stdin, and have the keeper adopt the login.
   claude-login-status [--login-dir D]
                            Print the keeper's fixed login status as JSON.
+  claude-login-abandon     Signal the running claude-login helper to cancel its ceremony
+                           (the operator's cancel; no helper running is a success).
   claude-login-idle        Do nothing until shutdown (that container's entrypoint).
   version                  Print the version, commit, Go version and platform.
   help                     Print this help.
@@ -250,6 +252,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return claudeLogin(ctx, args[1:], stdin, stdout)
 	case "claude-login-status":
 		return claudeLoginStatus(ctx, args[1:], stdout)
+	case "claude-login-abandon":
+		return claudeLoginAbandon(ctx, args[1:], stdout)
 	case "claude-login-idle":
 		return claudeLoginIdle(ctx, args[1:], stderr)
 	case "ctl":
