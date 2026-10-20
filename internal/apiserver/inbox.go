@@ -51,7 +51,7 @@ func (s *Server) inboxRecipientCaller(ctx context.Context, c *caller) (*v1alpha1
 	var pod corev1.Pod
 	var sess v1alpha1.AgentSession
 	if s.Live.Get(ctx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: c.identity.PodName}, &pod) != nil ||
-		string(pod.UID) != c.identity.PodUID || !pod.DeletionTimestamp.IsZero() || pod.Spec.ServiceAccountName != s.Policy.SessionServiceAccount ||
+		string(pod.UID) != c.identity.PodUID || !pod.DeletionTimestamp.IsZero() || !s.sessionPodAccount(pod.Spec.ServiceAccountName) ||
 		s.Live.Get(ctx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: c.session.Name}, &sess) != nil ||
 		sess.UID == "" || sess.UID != c.session.UID || !metav1.IsControlledBy(&pod, &sess) {
 		return nil, inboxHidden()
