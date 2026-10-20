@@ -273,6 +273,19 @@ func newKeeperFixture(t *testing.T, ex *fakeKeeperExec) *keeperFixture {
 	f.srv.Policy.WorkbenchServiceAccount = templates.WorkbenchServiceAccount
 	f.srv.Policy.Clients = append(f.srv.Policy.Clients, sessionNS+"/"+templates.WorkbenchServiceAccount)
 	f.auth[tokWorkbench] = saIdentity(sessionNS + "/" + templates.WorkbenchServiceAccount)
+	// A configured coordinator host: refused by the route flag, and a later flag
+	// change must not open the keeper login to it silently.
+	host := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "codex-host-a-0", Namespace: keeperNS, UID: "host-pod-uid",
+		Annotations: map[string]string{CoordinatorHostAnnotation: "host-a"}},
+		Spec: corev1.PodSpec{ServiceAccountName: "codex-host-a", Containers: []corev1.Container{{Name: "host", Image: "synthetic"}}}}
+	if err := f.c.Create(context.Background(), host); err != nil {
+		t.Fatal(err)
+	}
+	cid := saIdentity(coordinatorSA)
+	cid.PodName, cid.PodUID = host.Name, string(host.UID)
+	f.auth[tokCoordinator] = cid
+	f.srv.Policy.CoordinatorEnabled = true
+	f.srv.Policy.Coordinators = []CoordinatorHost{{ServiceAccount: coordinatorSA, PodName: host.Name, HostID: "host-a"}}
 	f.srv.KeeperLogin = &KeeperLogin{Namespace: keeperNS, Exec: ex, Leader: func() bool { return true },
 		URLWait: 2 * time.Second, CodeWait: 2 * time.Second, StopWait: time.Second}
 	f.h = f.srv.Handler()
@@ -316,7 +329,7 @@ func TestKeeperLoginRefusesEveryCallerButTheWorkbench(t *testing.T) {
 	ex := claudeExec()
 	k := newKeeperFixture(t, ex)
 	stranger := k.sessionPod("ordinary-task", "dev", 0)
-	for name, tok := range map[string]string{"human": tokHuman, "v1 client": tokClient, "stranger": tokStranger, "ordinary session": stranger} {
+	for name, tok := range map[string]string{"human": tokHuman, "v1 client": tokClient, "stranger": tokStranger, "coordinator": tokCoordinator, "ordinary session": stranger} {
 		for _, rq := range []struct{ method, path string }{
 			{http.MethodGet, apiv1.KeeperLoginPathFor("claude")},
 			{http.MethodPost, apiv1.KeeperLoginPathFor("claude") + "/url"},
@@ -759,4 +772,52 @@ func TestKeeperLoginMethods(t *testing.T) {
 	} {
 		wantError(t, k.do(rq.method, rq.path, tokWorkbench, nil), http.StatusMethodNotAllowed, apiv1.CodeMethodNotAllowed)
 	}
+}
+
+// A helper that has already left when the link arrives gives a dead link: refused.
+func TestKeeperLoginDeadLinkIsRefused(t *testing.T) {
+	ex := claudeExec()
+	ex.afterLink = []string{`{"ok":false,"code":"NeedsLogin"}`}
+	ex.endNow = true
+	k := newKeeperFixture(t, ex)
+	w := k.do(http.MethodPost, apiv1.KeeperLoginPathFor("claude")+"/url", tokWorkbench, nil)
+	wantError(t, w, http.StatusServiceUnavailable, apiv1.CodeUnavailable)
+	if strings.Contains(w.Body.String(), "oauth") {
+		t.Fatalf("a dead link was returned: %s", w.Body.String())
+	}
+}
+
+// Busy means the attempt is held elsewhere: the message says cancel cannot end it.
+func TestKeeperLoginBusyMessage(t *testing.T) {
+	ex := claudeExec()
+	ex.link, ex.afterLink, ex.endNow = "", []string{`{"ok":false,"code":"Busy"}`}, true
+	k := newKeeperFixture(t, ex)
+	e := wantError(t, k.do(http.MethodPost, apiv1.KeeperLoginPathFor("claude")+"/url", tokWorkbench, nil), http.StatusConflict, apiv1.CodeConflict)
+	if !strings.Contains(e.Message, "held elsewhere") || !strings.Contains(e.Message, "15 minutes") || !strings.Contains(e.Message, "cannot end it") {
+		t.Fatalf("message = %q", e.Message)
+	}
+}
+
+// A device code that is not a short code is dropped, never returned.
+func TestKeeperLoginCodexRefusesOddDeviceCode(t *testing.T) {
+	base := claudeExec()
+	odd := &codexExec{fakeKeeperExec: base, finish: make(chan struct{})}
+	k := newKeeperFixture(t, base)
+	k.srv.KeeperLogin.Exec = oddCodeExec{odd}
+	k.srv.KeeperLogin.URLWait = 300 * time.Millisecond
+	w := k.do(http.MethodPost, apiv1.KeeperLoginPathFor("codex")+"/url", tokWorkbench, nil)
+	wantError(t, w, http.StatusGatewayTimeout, apiv1.CodeUnavailable)
+	if strings.Contains(w.Body.String(), "https://") || strings.Contains(w.Body.String(), "<script>") {
+		t.Fatalf("an odd device code reached the answer: %s", w.Body.String())
+	}
+	k.waitNoCeremony("codex")
+}
+
+type oddCodeExec struct{ *codexExec }
+
+func (o oddCodeExec) RunTTY(ctx context.Context, ns, pod, container string, cmd []string, stdin io.Reader, stdout io.Writer) error {
+	o.record(ns, pod, container, cmd)
+	_, _ = io.WriteString(stdout, "{\"verificationUrl\":\""+codexLinkURL+"\"}\r\n{\"userCode\":\"<script>alert(1)</script>\"}\r\n")
+	<-ctx.Done()
+	return ctx.Err()
 }

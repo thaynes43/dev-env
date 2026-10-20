@@ -433,7 +433,7 @@ caller gets a 403.
   status   the keeper's state (Ready, PendingPublication, NeedsLogin or
            Unavailable), its generation, when the access token lapses (the keeper
            renews that itself) and when the login itself lapses. Exit 0 when it is
-           Ready, 1 otherwise. It changes nothing.
+           Ready or PendingPublication, 1 otherwise. It changes nothing.
   url      opens a ceremony and prints the sign-in link on its own line (Codex
            prints a one-time code too). Open it and sign in. The link is a secret:
            it goes to your terminal only, never a log, and is not stored.
@@ -442,8 +442,9 @@ caller gets a 403.
            keeper-login claude code. The code is never an argument. Codex: takes no
            code; it waits for the device sign-in to finish, and exits 5 if it is
            still waiting (run it again).
-  cancel   abandons an open ceremony. The keeper's login is untouched until a code
-           is adopted.
+  cancel   abandons a ceremony this operator holds. The keeper's login is untouched
+           until a code is adopted. A ceremony held elsewhere (an earlier operator,
+           the v1 route) cannot be cancelled here; it expires within 15 minutes.
 
 One ceremony at a time per provider, open for at most 15 minutes. Only the
 operator's leader holds a ceremony, so the command reconnects by itself while a

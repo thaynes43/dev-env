@@ -231,36 +231,54 @@ nobody signs in per session.
 is pinned and the operator's new access is in place (the haynes-ops access change
 merges first). Until then the v1 route above is the only one. Not yet run live.
 
-From a workbench session (the standby session on your phone is one), you renew the
-keeper's Claude or ChatGPT login yourself. No v1 pod, no laptop. Only a workbench
-session may do this; any other session gets "not allowed".
+You do this from a workbench session (the standby session on your phone is one). No
+v1 pod, no laptop. Only a workbench session may do this; any other session gets
+"not allowed". From the phone you have no terminal, so the agent in that session
+runs the commands and you give it the sign-in code in the chat.
+
+**From your phone**
+
+1. Tell the workbench session: "renew the keeper's Claude login". It runs
+   `agent-run keeper-login claude status` first and tells you the state and when the
+   login lapses.
+2. It runs `agent-run keeper-login claude url` and puts the sign-in link in the chat.
+   Open it, sign in with your Max account, and copy the code the page shows.
+3. Paste the code into the same chat. The agent passes it to
+   `agent-run keeper-login claude code` on standard input and tells you the result.
+4. It runs `status` again. The generation should be higher and `login expires` about
+   30 days out.
+
+The code is single-use and short-lived: it works only for the ceremony that is open,
+and the ceremony closes after 15 minutes. It and the link appear in that chat and
+nowhere else. Never put either in a file, git, a PR, a handoff or notes, and tell the
+agent not to. If a code is wrong, expired or already used, nothing changes: ask for
+`cancel`, then a fresh `url`.
+
+**From a terminal in the session** (the same commands the agent runs):
 
 ```bash
 agent-run keeper-login claude status    # state, generation, when the access token
                                         # lapses and when the login itself lapses
 agent-run keeper-login claude url       # opens a ceremony, prints the sign-in link
 read -rs c; printf '%s' "$c" | agent-run keeper-login claude code   # paste the code
-agent-run keeper-login claude cancel    # abandon an open ceremony
+agent-run keeper-login claude cancel    # abandon a ceremony this operator holds
 ```
 
-1. Run `status` first. Exit 0 means Ready. It changes nothing.
-2. Run `url`. The link is on its own line. Open it on your phone, sign in with your
-   Max account, and copy the code the page shows. Finish within 15 minutes.
-3. Give the code to `code` on its standard input, never as an argument. It prints
-   that the keeper adopted the login, with the new generation. If it says it is
-   still working, run `status`.
-4. Run `status` again. The generation should be higher and `login expires` about 30
-   days out.
+`status` exits 0 for Ready (or PendingPublication) and changes nothing. If `code` says
+it is still working, run `status`.
 
 ChatGPT is the same with `codex`. Its `url` prints a link and a one-time code to type
 on that page; there is nothing to paste, and `agent-run keeper-login codex code`
 waits for the sign-in to finish (run it again if it says it is still waiting).
 
 If you give up, `cancel` leaves the keeper's current login exactly as it was: only a
-valid code replaces it. A wrong or expired code is refused the same way; run `cancel`,
-then `url` again. If the operator restarts mid-ceremony, run `url` again. The link and
-the code never go into git, notes or chat history you keep. The command reconnects by
-itself while the operator's standby replica answers.
+valid code replaces it. (If `cancel` races a code that is already being adopted, the
+new login can still land, whole and never partial: `status` shows which.) If the
+operator restarts mid-ceremony, run `url` again. If `url` says the keeper's attempt is
+"held elsewhere", an earlier ceremony (before an operator restart, or from the v1
+route) still holds the keeper's one slot: `cancel` cannot end it, and it expires by
+itself within 15 minutes. The command reconnects by itself while the operator's other
+replica answers.
 
 ## 7. Where notes live
 

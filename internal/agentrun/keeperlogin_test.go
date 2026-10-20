@@ -2,6 +2,7 @@ package agentrun
 
 import (
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -48,6 +49,14 @@ func TestKeeperLoginUsage(t *testing.T) {
 	h.mustRun(ExitUsage, "keeper-login", "claude", "code")
 	if n := len(h.api.requests()); n != 0 {
 		t.Fatalf("%d requests were sent", n)
+	}
+	// A terminal stdin would echo the code: refused with the pipe form.
+	if tty, err := os.Open("/dev/null"); err == nil { // a character device, like a tty
+		defer func() { _ = tty.Close() }()
+		h.env.Stdin = tty
+		h.mustRun(ExitUsage, "keeper-login", "claude", "code")
+		contains(t, "tty refusal", h.stderr.String(), "pipe, not a terminal", "read -rs c")
+		h.env.Stdin = strings.NewReader("")
 	}
 	// The code is never an argument.
 	h.mustRun(ExitUsage, "keeper-login", "claude", "code", testKeeperCode)

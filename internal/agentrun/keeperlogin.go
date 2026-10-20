@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -53,6 +54,12 @@ func (a *app) keeperLogin(ctx context.Context, args []string) error {
 	}
 	var code string
 	if verb == "code" && provider == apiv1.KeeperLoginClaude {
+		if f, ok := a.env.Stdin.(*os.File); ok {
+			if fi, err := f.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
+				// A terminal would echo the code as it is typed.
+				return usageError("keeper-login code reads the code from a pipe, not a terminal (it would echo): read -rs c; printf '%%s' \"$c\" | agent-run keeper-login claude code")
+			}
+		}
 		// Before any connection: a missing code sends nothing.
 		raw, err := io.ReadAll(io.LimitReader(a.env.Stdin, maxKeeperCodeInput+1))
 		if err != nil || len(raw) > maxKeeperCodeInput {

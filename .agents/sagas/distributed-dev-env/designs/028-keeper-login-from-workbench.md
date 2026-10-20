@@ -44,12 +44,23 @@ and `dev-env-keeper codex-auth-status`). Never the `app` container, never a
 container name from a request. The pod is found by the keeper's labels in
 `dev-env-system`, and must be Running, Ready, not deleting, on the
 `dev-env-keeper` ServiceAccount, with that container running. Zero or two matches
-refuse. RBAC cannot scope exec to a container, so the operator's Role in
-`dev-env-system` gains `pods get, list` and `pods/exec create` for the whole
-namespace; the container limit is code, and the namespace holds only the
-operator, broker, keeper and shelf pods (no guard policy applies to the operator's
-own ServiceAccount, and `dev-env-exec-guard`/`dev-env-identity-guard` match
-`dev-agents` identities only).
+refuse. RBAC cannot scope exec to a container, a command or a generated pod name, so the
+operator's Role in `dev-env-system` (`pods get, list`, `pods/exec create`, haynes-ops
+`operator-keeper-login.yaml`) would on its own reach every pod there: the keeper's `app`
+container (GitHub App key, SSH CA, the login journal's ServiceAccount) and the broker's.
+The review (NB-01) made the pin a blocker, so the same haynes-ops PR adds a
+ValidatingAdmissionPolicy, `dev-env-operator-exec-guard` (`operator-exec-guard.yaml`):
+for the operator's ServiceAccount in `dev-env-system`, only `pods/exec` into pods named
+`dev-env-keeper-*`, containers `claude-login` or `codex-login`, with exactly the four
+helper argv arrays of the provider table; attach, port-forward and proxy are refused.
+It is proven on kube-apiserver 1.35.0 (envtest) and matches no exec the operator makes
+today (rescue, log, deliver and the shelf run in `dev-agents`, tool pods in `dev-tools`).
+The operator's code fixes the same container and commands, and the route's caller class
+is the first limit. The two lists must change together: the guard's arrays equal
+`keeperLoginProviders`. `dev-env-exec-guard` and `dev-env-identity-guard` match
+`dev-agents` identities only and do not apply. `dev-env-system` holds the operator,
+broker and keeper pods and Job pods such as the h7 metadata audit (the shelf runs in
+`dev-agents`).
 
 **One long exec across two requests.** `claude auth login` prints a link and then
 waits for the code in the same process, and the helper insists on a terminal (the
@@ -77,7 +88,11 @@ wipes the staging), then cuts the exec. An operator restart or leader change
 drops the exec: the helper now treats a hangup (SIGHUP, new in this change for
 both helpers) as a cancel; failing that, the keeper's 15-minute attempt expiry
 frees the slot. Until then a new `url` answers a conflict naming the open
-ceremony. A ceremony that never reaches `code` leaves the journal and the
+ceremony. If the helper's hangup never arrives (a container runtime may not hang up a
+terminal exec when the client drops), the slot stays Busy up to 15 minutes, and `url` meanwhile
+answers that the attempt is held elsewhere and that `cancel` cannot end it. A
+`cancel` that races a code already being adopted can still end with the new login
+adopted, whole (the keeper's adoption is atomic); `status` shows the truth. A ceremony that never reaches `code` leaves the journal and the
 published projection exactly as they were: adoption is the only write and it
 needs a code.
 

@@ -14,13 +14,11 @@ import (
 	"github.com/thaynes43/dev-env/internal/keeper"
 )
 
-// SIGHUP ends a ceremony like SIGINT: the terminal went away (NB-01's login
-// route closing its exec), so the attempt is cancelled and its staging wiped.
 // All helper subcommands dispatch before Kubernetes/App/manager setup. The idle
 // entrypoint does nothing until shutdown. Login refuses pod-log/pipe output: it
 // must be an authenticated interactive control/exec with a terminal.
 func codexLoginCommand(args []string, in, out *os.File) int {
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 	if len(args) == 1 && args[0] == "codex-login-idle" {
 		<-ctx.Done()
@@ -28,6 +26,14 @@ func codexLoginCommand(args []string, in, out *os.File) int {
 	}
 	if len(args) == 0 {
 		return 1
+	}
+	if args[0] == "codex-login" {
+		// A hangup ends a ceremony like SIGINT: the terminal went away (NB-01's login
+		// route closing its exec), so the attempt is cancelled and its staging wiped.
+		// Only the ceremony: the idle entrypoint above is the container's PID 1.
+		var stopHup context.CancelFunc
+		ctx, stopHup = signal.NotifyContext(ctx, syscall.SIGHUP)
+		defer stopHup()
 	}
 	result := keeper.CodexControlResponse{Code: "InvalidRequest"}
 	fs := flag.NewFlagSet("codex-login", flag.ContinueOnError)

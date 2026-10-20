@@ -108,7 +108,9 @@ var (
 		"AuthenticatedTerminalRequired": true,
 	}
 	keeperCodePattern = regexp.MustCompile(`^[A-Za-z0-9._~:/+=%#-]+$`)
-	ansiPattern       = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]`)
+	// userCodePattern is a device flow's one-time code as the page shows it.
+	userCodePattern = regexp.MustCompile(`^[A-Za-z0-9-]{4,16}$`)
+	ansiPattern     = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]`)
 )
 
 // KeeperLogin is the routes' state. A nil Server.KeeperLogin answers them 503.
@@ -394,7 +396,7 @@ func (lp *linkParts) absorb(p loginProvider, l helperLine) {
 	if u := firstOf(l.SignInURL, l.VerificationURL); u != "" && validKeeperLink(u, p.hosts) {
 		lp.link = u
 	}
-	if l.UserCode != "" && !p.takesCode {
+	if l.UserCode != "" && !p.takesCode && userCodePattern.MatchString(l.UserCode) {
 		lp.userCode = l.UserCode
 	}
 }
@@ -427,19 +429,14 @@ func (s *Server) keeperLoginURL(ctx context.Context, w http.ResponseWriter, r *h
 		select {
 		case l := <-cer.events:
 			parts.absorb(p, l)
+			if parts.complete(p) && cer.isDone() {
+				// The helper left as the link arrived: the link is dead.
+				k.forget(cer)
+				return 0, nil, helperEnded(cer.result())
+			}
 		case <-cer.done:
-			// A line that arrived with the exit still counts.
-			for drained := false; !drained; {
-				select {
-				case l := <-cer.events:
-					parts.absorb(p, l)
-				default:
-					drained = true
-				}
-			}
-			if parts.complete(p) {
-				break
-			}
+			// An open ceremony has not ended. A helper that is gone makes any link
+			// it printed dead, so this is never an answer with a link.
 			k.forget(cer)
 			return 0, nil, helperEnded(cer.result())
 		case <-timer.C:
@@ -475,7 +472,11 @@ func validKeeperLink(s string, hosts []string) bool {
 	return false
 }
 
-// helperEnded turns a helper that ended without a link into a fixed message.
+// helperEnded turns a helper that ended without a usable link into a fixed
+// message. It is only reached for a ceremony this operator just opened, so a Busy
+// means the keeper's one attempt is held by something else: a ceremony an earlier
+// operator or leader opened (its exec is gone, the keeper has not yet noticed), or
+// the v1 route. `cancel` cannot end that one; its own 15-minute expiry does.
 func helperEnded(final *helperLine) error {
 	code := "Unavailable"
 	if final != nil && keeperResultWords[final.Code] {
@@ -483,7 +484,8 @@ func helperEnded(final *helperLine) error {
 	}
 	if code == "Busy" {
 		return newError(http.StatusConflict, apiv1.CodeConflict,
-			"the keeper already has a login ceremony open (it expires within %d minutes): finish it, or abandon it with keeper-login cancel", int(claudelogin.Lifetime/time.Minute))
+			"the keeper's login attempt is held elsewhere (a ceremony an earlier operator or leader opened, or the v1 route): keeper-login cancel cannot end it, and it expires by itself within %d minutes; wait, or finish it where it was started",
+			int(claudelogin.Lifetime/time.Minute))
 	}
 	return newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "the login helper ended without a sign-in link (%s)", code)
 }
