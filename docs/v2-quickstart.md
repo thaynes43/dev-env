@@ -5,10 +5,11 @@ headless tasks, network and Proxmox access, stopping and resuming, messages
 between sessions, upgrades and restarts, the shared logins, where notes live,
 and what still needs v1.
 
-State on 2026-10-20: release 2.38.1 runs the operator and the keeper
-(haynes-ops #4133, about 06:53 UTC). Session pods and the templates stay on
-2.38.0 (haynes-ops #4131, about 05:31 UTC), so no session had to move overnight;
-the next release brings them up to date. Each result below carries one of four proof levels:
+State on 2026-10-20: release 2.38.3 is installed everywhere: the operator,
+the keeper, the templates and the task worker (haynes-ops #4135, about 08:24
+UTC). The standby and one other idle session moved onto it by themselves; the
+Codex host did not (it moves only by suspend and resume, section 5). Each result below carries one of
+four proof levels:
 
 - **Proven on the phone:** you did it end to end on your phone.
 - **Proven from a session:** an agent did it live in a v2 workbench session or
@@ -47,11 +48,13 @@ Open it in the Claude app and type. It is named like `haynes-ops-1020-002115`;
   a minute. It makes at most 3 in 30 minutes, then waits, so a fault cannot loop.
 - Once you use it, it is an ordinary session. It is not replaced while it lives.
   For a fresh one, reap it when you are done with it.
-- One fault seen: on 2026-10-20, two seconds after the standby moved to 2.38.0,
-  the operator made a second one. The unused duplicate was reaped, and one
-  standby runs. 2.38.1 fixes it (#480): a standby that is moving to a new
-  version now counts as present. Installed, not exercised: no session has moved
-  since.
+- A fault, now fixed: on 2026-10-20 the operator made a second standby right
+  after the standby moved to a new version, twice (2.38.0 at 05:31 and 2.38.2
+  at 07:47). Both duplicates were reaped. The first fix (#480, 2.38.1) was not
+  enough: just after a move, the new pod still reports the old pod's ended
+  agent for about a minute. 2.38.3 fixes that (#489). Proven from a session:
+  the standby moved to 2.38.3 at 08:23 and no second one appeared through
+  08:31.
 
 To start another session, ask the standby or any coordinator, or run:
 
@@ -325,16 +328,16 @@ waiting for room on a node; do not start a second one.
 - **New agent image (a release):** a Claude session moves by itself once it is
   idle and nobody is attached. The pod is replaced; the phone entry and the
   conversation stay. Proven on the phone twice on 2026-10-19, and the session
-  still knew its earlier answer. With 2.38.0 the standby and one other session
-  moved the same way at 05:31 on 2026-10-20 (seen from a session, not yet
-  checked on the phone). A session that has never had a
-  turn, such as an unused standby, stays put until it has one.
+  still knew its earlier answer. On 2026-10-20 the standby and one other session
+  moved the same way three times, to 2.38.0, 2.38.2 and 2.38.3 (seen from a
+  session, not yet checked on the phone). A session that has never had a turn
+  stays put until it has one.
 - **Codex host:** never moves by itself. `agent-run list` marks it `outdated`.
   At a quiet moment run `agent-run suspend <name>`, then `agent-run resume <name>`.
   The pairing stays. Proven from a session on 2026-10-20: the host PEAR moved
   from 2.35.0 to 2.37.0 this way. Same pairing, the daemon reconnected, and the
   thread history was intact. Checking it in the ChatGPT app is still to do. PEAR
-  is still on 2.37.0; it moves to 2.38.0 only by another suspend and resume.
+  is still on 2.37.0; it moves to 2.38.3 only by another suspend and resume.
 
 ### Restart the operator, keeper or shelf from v2
 
