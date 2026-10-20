@@ -114,6 +114,66 @@ var (
 	cloneBackoff  = []time.Duration{5 * time.Second, 15 * time.Second}
 )
 
+// cloneStallArgs make Git give up on a stalled or trickling transfer by itself,
+// so its own cleanup removes the staging directory and the retry above can run.
+// A transfer is stalled when it averages under cloneLowSpeedLimit bytes a
+// second for cloneLowSpeedTime seconds. Healthy GitHub clones of the catalog
+// run at megabytes a second (S-7, and the 2026-10-20 NB-08b measurements);
+// the stalls measured in session pods ran at about 100 KB/s for a minute or
+// two, and the 2-minute repository deadline then killed Git mid-clone and left
+// staging that every later boot refuses to touch (StagingPreserved). The
+// deadline stays the backstop.
+//
+// Git leaves a clone whose checkout fails in place ("Clone succeeded, but
+// checkout failed"), and the stalls were seen in the checkout's lazy blob
+// fetch. So clones use --no-checkout and checkoutStaging populates the staging
+// directory as its own retried step; a failed clone command removes its own
+// directory, so the clone retry still starts clean.
+//
+// The assumption: a healthy transfer or pack build produces at least
+// cloneLowSpeedLimit bytes a second on average over cloneLowSpeedTime. A build
+// that sends only keepalives for longer than that (--quiet turns progress off)
+// is abandoned on every attempt; GitHub's packs for the catalog did not.
+const (
+	cloneLowSpeedLimit = "250000"
+	cloneLowSpeedTime  = "20"
+)
+
+func cloneStallArgs() []string {
+	return []string{"-c", "http.lowSpeedLimit=" + cloneLowSpeedLimit, "-c", "http.lowSpeedTime=" + cloneLowSpeedTime}
+}
+
+// checkoutStaging populates a --no-checkout clone's worktree, fetching the
+// blobs it needs, and retries a stalled or failed checkout in place. Git
+// restores the index and worktree from HEAD, which is idempotent, and staging
+// holds nothing else yet. A failure keeps the staging for the caller to preserve.
+func checkoutStaging(ctx context.Context, r Runner, s Settings, tmp string) error {
+	args := append([]string{"-C", tmp, "-c", "core.hooksPath=/dev/null"}, cloneStallArgs()...)
+	if s.WorkspaceID != "" || s.privateProjectGit {
+		// The clone command carried these; no auto maintenance in staging.
+		args = append(args, sharedGitPolicyArgs...)
+	}
+	args = append(args, "checkout", "--force", "--quiet")
+	// An empty repository clones with an unborn HEAD and nothing to check out;
+	// a plain clone succeeds there, so must this. Exit 1 is Git's "no such
+	// commit"; any other failure is not an answer and goes to the checkout.
+	if _, perr := r.Run(ctx, privateGitCommand(s, Cmd{Name: "git", Args: []string{"-C", tmp, "rev-parse", "--verify", "--quiet", "HEAD"}, Env: gitEnv})); perr != nil && ExitCodeOf(perr) == 1 {
+		return nil
+	}
+	var err error
+	for attempt := 0; attempt < cloneAttempts; attempt++ {
+		if attempt > 0 {
+			if serr := sleepFunc(ctx, cloneBackoff[min(attempt-1, len(cloneBackoff)-1)]); serr != nil {
+				return serr
+			}
+		}
+		if _, err = r.Run(ctx, privateGitCommand(s, Cmd{Name: "git", Args: args, Env: gitEnv})); err == nil {
+			return nil
+		}
+	}
+	return err
+}
+
 // sleepFunc waits, or returns early when ctx ends. Tests replace it.
 var sleepFunc = func(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
@@ -535,8 +595,17 @@ func cloneRepo(ctx context.Context, r Runner, s Settings, repo, dst string) (tim
 			return 0, err
 		}
 		start := time.Now()
-		_, err := r.Run(ctx, Cmd{Name: "git", Args: []string{"clone", "--filter=blob:none", "--quiet", s.RemoteURL(repo), tmp}, Env: gitEnv})
+		_, err := r.Run(ctx, Cmd{Name: "git", Args: append(cloneStallArgs(), "clone", "--filter=blob:none", "--no-checkout", "--quiet", s.RemoteURL(repo), tmp), Env: gitEnv})
 		if err == nil {
+			// A checkout that keeps failing ends the clone: its own retries
+			// have run, so the outer loop must not multiply them.
+			if err := checkoutStaging(ctx, r, s, tmp); err != nil {
+				if !preserve {
+					_ = os.RemoveAll(tmp)
+					return 0, fmt.Errorf("checkout of %s failed: %s", s.RemoteURL(repo), cmdDetail(err))
+				}
+				return 0, fmt.Errorf("clone checkout failed; %s %s keeps partial or uncertain data, preserved%s: %s", kind, tmp, recovery, cmdDetail(err))
+			}
 			if err := configureSharedGitPolicy(ctx, r, s, tmp); err != nil {
 				return 0, err
 			}

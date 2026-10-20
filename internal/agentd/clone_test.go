@@ -498,6 +498,92 @@ func TestPrepareRepoBaseAndDefaultBranch(t *testing.T) {
 	}
 }
 
+// A checkout that keeps failing has run its own retries: one clone, no clone
+// retry, and the unpreserved staging is removed.
+func TestCloneCheckoutFailureDoesNotMultiplyRetries(t *testing.T) {
+	noSleep(t)
+	home := t.TempDir()
+	s := testSettings(t, home)
+	s.TokenWait = 0
+	clones, checkouts := 0, 0
+	f := &fakeRunner{handle: func(c Cmd) (Result, error) {
+		switch {
+		case c.Name == "git" && slices.Contains(c.Args, "clone"):
+			clones++
+			if !slices.Contains(c.Args, "--no-checkout") {
+				t.Errorf("clone is not --no-checkout: %q", c.Args)
+			}
+			writeFile(t, filepath.Join(c.Args[len(c.Args)-1], "partial"), "x")
+		case c.Name == "git" && slices.Contains(c.Args, "checkout"):
+			checkouts++
+			return Result{}, &CmdError{Name: "git", Sub: "checkout", ExitCode: 128, Stderr: "fatal: Operation too slow"}
+		}
+		return Result{}, nil
+	}}
+	_, step := PrepareRepo(context.Background(), f, s, cloneSession("x-1"))
+	if step.State != StepFail || clones != 1 || checkouts != cloneAttempts {
+		t.Fatalf("clones %d, checkouts %d, step %s %q", clones, checkouts, step.State, step.Notes)
+	}
+	if left, _ := filepath.Glob(filepath.Join(s.ReposDir(), ".*")); len(left) != 0 || exists(s.ClonePath("x")) {
+		t.Errorf("left behind: %q", left)
+	}
+}
+
+// An empty repository has an unborn HEAD: nothing to check out, and a plain
+// clone of it succeeded before --no-checkout, so the checkout step skips it.
+func TestCheckoutStagingSkipsUnbornHead(t *testing.T) {
+	noSleep(t)
+	checkouts := 0
+	f := &fakeRunner{handle: func(c Cmd) (Result, error) {
+		switch {
+		case slices.Contains(c.Args, "rev-parse"):
+			return Result{}, &CmdError{Name: "git", Sub: "rev-parse", ExitCode: 1}
+		case slices.Contains(c.Args, "checkout"):
+			checkouts++
+		}
+		return Result{}, nil
+	}}
+	if err := checkoutStaging(context.Background(), f, testSettings(t, t.TempDir()), t.TempDir()); err != nil || checkouts != 0 {
+		t.Fatalf("err %v, checkouts %d", err, checkouts)
+	}
+}
+
+// An rev-parse failure that is not "no such commit" is no proof of an empty
+// repository: the checkout still runs and its failures still retry.
+func TestCheckoutStagingRevParseErrorStillChecksOut(t *testing.T) {
+	noSleep(t)
+	checkouts := 0
+	f := &fakeRunner{handle: func(c Cmd) (Result, error) {
+		switch {
+		case slices.Contains(c.Args, "rev-parse"):
+			return Result{}, &CmdError{Name: "git", Sub: "rev-parse", ExitCode: 128}
+		case slices.Contains(c.Args, "checkout"):
+			checkouts++
+			return Result{}, &CmdError{Name: "git", Sub: "checkout", ExitCode: 128}
+		}
+		return Result{}, nil
+	}}
+	if err := checkoutStaging(context.Background(), f, testSettings(t, t.TempDir()), t.TempDir()); err == nil || checkouts != cloneAttempts {
+		t.Fatalf("err %v, checkouts %d", err, checkouts)
+	}
+}
+
+// The real thing: --no-checkout clone of an empty bare repository, then the
+// checkout step, with Git's own exit codes.
+func TestCheckoutStagingEmptyRepositoryWithRealGit(t *testing.T) {
+	g := newGitFixture(t, "demo")
+	s, execRunner := g.settings(t)
+	empty := filepath.Join(t.TempDir(), "empty.git")
+	gitRun(t, g.env, g.root, "init", "-q", "--bare", empty)
+	tmp := filepath.Join(t.TempDir(), "clone")
+	if _, err := execRunner.Run(context.Background(), Cmd{Name: "git", Args: []string{"clone", "--no-checkout", "--quiet", "file://" + empty, tmp}, Env: gitEnv}); err != nil {
+		t.Fatalf("clone of an empty repository: %v", err)
+	}
+	if err := checkoutStaging(context.Background(), execRunner, s, tmp); err != nil {
+		t.Fatalf("checkout of an empty repository: %v", err)
+	}
+}
+
 func TestCloneRetriesAndCleansUp(t *testing.T) {
 	noSleep(t)
 	home := t.TempDir()
@@ -505,8 +591,11 @@ func TestCloneRetriesAndCleansUp(t *testing.T) {
 	s.TokenWait = 0
 	attempts := 0
 	f := &fakeRunner{handle: func(c Cmd) (Result, error) {
-		if c.Name == "git" && c.Args[0] == "clone" {
+		if c.Name == "git" && slices.Contains(c.Args, "clone") {
 			attempts++
+			if !slices.Contains(c.Args, "http.lowSpeedLimit="+cloneLowSpeedLimit) || !slices.Contains(c.Args, "http.lowSpeedTime="+cloneLowSpeedTime) {
+				t.Errorf("clone does not bound a stalled transfer: %q", c.Args)
+			}
 			// A clone that dies half way leaves its directory behind.
 			writeFile(t, filepath.Join(c.Args[len(c.Args)-1], "partial"), "x")
 			return Result{}, &CmdError{Name: "git", Sub: "clone", ExitCode: 128, Stderr: "fatal: unable to access"}

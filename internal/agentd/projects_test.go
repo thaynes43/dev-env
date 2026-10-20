@@ -33,6 +33,11 @@ type projectFixtureRunner struct {
 	// refspecs apply, and routes the HTTPS identity to the fixture with a
 	// command-scoped insteadOf instead of replacing the remote argument.
 	namedRemote bool
+	cloneArgs   [][]string
+	// checkoutFail makes the next that many staging checkouts fail, as a
+	// stalled blob fetch does after Git's low-speed abort.
+	checkoutFail, checkoutCalls int
+	checkoutArgs                [][]string
 }
 
 func (r *projectFixtureRunner) Run(ctx context.Context, cmd Cmd) (Result, error) {
@@ -40,8 +45,17 @@ func (r *projectFixtureRunner) Run(ctx context.Context, cmd Cmd) (Result, error)
 		return Result{}, errors.New("unexpected non-Git fixture command")
 	}
 	cmd.Args = slices.Clone(cmd.Args)
+	if slices.Contains(cmd.Args, "checkout") && slices.Contains(cmd.Args, "http.lowSpeedLimit="+cloneLowSpeedLimit) {
+		r.checkoutCalls++
+		r.checkoutArgs = append(r.checkoutArgs, slices.Clone(cmd.Args))
+		if r.checkoutFail > 0 {
+			r.checkoutFail--
+			return Result{}, &CmdError{Name: "git", Sub: "checkout", ExitCode: 128, Stderr: "fatal: unable to access: Operation too slow"}
+		}
+	}
 	if i := slices.Index(cmd.Args, "clone"); i >= 0 {
 		r.cloneCalls++
+		r.cloneArgs = append(r.cloneArgs, slices.Clone(cmd.Args))
 		if r.cloneFailure != "" {
 			if r.cloneFailure == "partial" {
 				if err := os.Mkdir(cmd.Args[len(cmd.Args)-1], 0o700); err != nil {
@@ -527,6 +541,65 @@ func TestProjectSyncUsesExistingCommonGitLock(t *testing.T) {
 	_, err = SyncProjects(ctx, r, s, c, projectSyncFixtureOptions())
 	if !errors.Is(err, context.DeadlineExceeded) || r.cloneCalls != 0 {
 		t.Fatal("sync bypassed common Git lock or ignored cancellation")
+	}
+}
+
+// A stalled transfer must end by Git's own hand, which cleans its staging
+// directory and lets the clone retry; the 2-minute deadline alone kills Git
+// mid-clone and leaves StagingPreserved (NB-08b).
+func TestProjectReferenceCloneBoundsStalledTransfer(t *testing.T) {
+	_, s, r, c := projectFixture(t)
+	if err := cloneProjectReference(context.Background(), r, s, c.Repositories()[0]); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.cloneArgs) != 1 {
+		t.Fatalf("clone calls: %d", len(r.cloneArgs))
+	}
+	args := r.cloneArgs[0]
+	i := slices.Index(args, "clone")
+	for _, want := range []string{"http.lowSpeedLimit=" + cloneLowSpeedLimit, "http.lowSpeedTime=" + cloneLowSpeedTime} {
+		j := slices.Index(args, want)
+		if j < 1 || j > i || args[j-1] != "-c" {
+			t.Fatalf("clone lacks %q before the subcommand: %q", want, args)
+		}
+	}
+}
+
+// The stalls were seen in the checkout, which Git does not undo. The clone is
+// --no-checkout and the checkout is its own retried step.
+func TestProjectReferenceCheckoutStallRetriesInPlace(t *testing.T) {
+	g, s, r, c := projectFixture(t)
+	r.checkoutFail = cloneAttempts - 1
+	if err := cloneProjectReference(context.Background(), r, s, c.Repositories()[0]); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(r.cloneArgs[0], "--no-checkout") || len(r.cloneArgs) != 1 || r.checkoutCalls != cloneAttempts {
+		t.Fatalf("clone %q, calls %d, checkouts %d", r.cloneArgs, len(r.cloneArgs), r.checkoutCalls)
+	}
+	for _, want := range []string{"gc.auto=0", "maintenance.auto=false", "core.hooksPath=/dev/null"} {
+		if !slices.Contains(r.checkoutArgs[0], want) {
+			t.Fatalf("checkout lacks %q: %q", want, r.checkoutArgs[0])
+		}
+	}
+	clone := s.ClonePath("demo")
+	if out := gitRun(t, g.env, clone, "status", "--porcelain"); out != "" {
+		t.Fatalf("reference is not a clean checkout: %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(clone, "README.md")); err != nil {
+		t.Fatalf("worktree not populated: %v", err)
+	}
+}
+
+func TestProjectReferenceCheckoutStallExhaustedPreservesStaging(t *testing.T) {
+	_, s, r, c := projectFixture(t)
+	r.checkoutFail = cloneAttempts
+	err := cloneProjectReference(context.Background(), r, s, c.Repositories()[0])
+	var staging *projectStagingPreserved
+	if !errors.As(err, &staging) {
+		t.Fatalf("got %v, want preserved staging", err)
+	}
+	if !exists(staging.path) || exists(s.ClonePath("demo")) || len(r.cloneArgs) != 1 {
+		t.Fatal("failed checkout must keep its staging, publish nothing and not clone again")
 	}
 }
 

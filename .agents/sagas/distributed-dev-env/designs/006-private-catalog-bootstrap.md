@@ -47,6 +47,28 @@ Prepare repositories sequentially within a ten-minute operation deadline and
 two-minute per-repository deadline; trusted catalog reads have a five-second
 timeout. Retain per-repository failures. A receipt
 reports what happened; it does not authorize a task to skip its freshness check.
+
+**Stalled clones (added 2026-10-20, NB-08b).** With the catalog at eight
+repositories, most boots ended `Partial`. Clones normally take 1 to 10 seconds,
+but one or two per boot trickled at about 100 KB/s, in the checkout's lazy blob
+fetch or a plain full clone alike (a GitHub-side or path effect, not the
+filter). The two-minute deadline then killed Git mid-clone and left staging,
+which is never deleted: `StagingPreserved` for that repository on every later
+boot, plus a `TimedOut` and a lost two minutes for each stall. The deadline and
+the sequential order stay as written. Every reference clone now also passes
+`-c http.lowSpeedLimit=250000 -c http.lowSpeedTime=20`: Git itself abandons a
+transfer under 250 KB/s for 20 seconds. Git leaves a clone whose checkout fails
+in place, and the stalls were in the checkout, so the clone is now
+`--no-checkout` and the checkout (`git checkout --force`, idempotent on fresh
+staging) is its own step with the same three attempts (5 s and 15 s backoff),
+each on a new connection, usually fast. A failed clone command removes its own
+directory and the clone retries as before. The same options apply to the
+selected repository's clone. Assumption: a healthy transfer averages 250 KB/s;
+a server that only sent keepalives for over 20 seconds would be abandoned on
+every attempt (`--quiet` hides progress). The deadline remains the backstop;
+staging that survives a kill, or three failed checkouts, is still preserved
+and still needs a person.
+
 Immediately before each new task, the existing selected-repository path still
 fetches and pins an immutable commit. A failed selected fetch blocks that new
 task. Resume retains its worktree, source receipt and saved project rules.
