@@ -62,6 +62,12 @@ type Response struct {
 	AttemptUID string  `json:"attemptUID,omitempty"`
 	Generation uint64  `json:"generation,omitempty"`
 	Login      *Report `json:"login,omitempty"`
+	// AccessExpiresAt and LoginExpiresAt are what `status` adds (NB-01): when
+	// the journaled access token lapses (the keeper renews it) and when the
+	// login itself lapses (the refresh token's expiry, absent when the provider
+	// did not say). Times only; a keeper from before this field omits them.
+	AccessExpiresAt *time.Time `json:"accessExpiresAt,omitempty"`
+	LoginExpiresAt  *time.Time `json:"loginExpiresAt,omitempty"`
 }
 
 // Report is fixed local flow metadata only. Native output, headers, response

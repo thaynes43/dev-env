@@ -16,6 +16,10 @@
 //	GET    /v1/history                     archived provider history of one project (DESIGN-025 8)
 //	GET    /v1/history/{session}           one archived history's manifest, in pages
 //	GET    /v1/history/{session}/file      one page of one archived file
+//	GET    /v1/keeper-login/{provider}     the keeper's login state and expiry, workbench only (NB-01)
+//	POST   /v1/keeper-login/{provider}/url   open a login ceremony: the sign-in link, to the workbench only
+//	POST   /v1/keeper-login/{provider}/code  the one-time code (Claude), or wait for the device flow (Codex)
+//	DELETE /v1/keeper-login/{provider}     abandon the open ceremony
 //
 // The API writes AgentSession objects and their status, and AccessGrant specs
 // (never their status: the broker decides a grant); it never touches a pod or a
@@ -121,6 +125,10 @@ type Server struct {
 	// CoordinationArchive is the typed, verified shelf transport. Nil leaves
 	// an enabled archive read unavailable rather than creating a hidden client.
 	CoordinationArchive CoordinationArchiveReader
+	// KeeperLogin turns the workbench's keeper login routes on (NB-01): GET
+	// /v1/keeper-login/{claude|codex} and the url, code and cancel calls beside
+	// it. Nil answers them 503.
+	KeeperLogin *KeeperLogin
 	// Templates returns the current templates, or why they are unusable. Nil
 	// skips the profile check and leaves the fleet's revision unknown.
 	Templates func(context.Context) (*templates.Templates, error)
@@ -238,6 +246,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle(apiv1.HistoryPath, s.serve(route{coordinator: true, identityGuard: s.historyRoutesOn, methods: map[string]handler{http.MethodGet: s.listHistory}}))
 	mux.Handle(apiv1.HistoryPath+"/{session}", s.serve(route{coordinator: true, history: true, identityGuard: s.historyRoutesOn, methods: map[string]handler{http.MethodGet: s.getHistory}}))
 	mux.Handle(apiv1.HistoryPath+"/{session}/file", s.serve(route{coordinator: true, history: true, identityGuard: s.historyRoutesOn, methods: map[string]handler{http.MethodGet: s.readHistoryFile}}))
+	// The keeper login (NB-01): the workbench only, checked in each handler.
+	mux.Handle(apiv1.KeeperLoginPath+"/{provider}", s.serve(route{methods: map[string]handler{
+		http.MethodGet:    s.keeperLoginStatus,
+		http.MethodDelete: s.keeperLoginCancel,
+	}}))
+	mux.Handle(apiv1.KeeperLoginPath+"/{provider}/url", s.serve(route{methods: map[string]handler{http.MethodPost: s.keeperLoginURL}}))
+	mux.Handle(apiv1.KeeperLoginPath+"/{provider}/code", s.serve(route{methods: map[string]handler{http.MethodPost: s.keeperLoginCode}}))
 	mux.Handle(apiv1.FleetPath, s.serve(route{methods: map[string]handler{
 		http.MethodGet: s.fleet,
 	}}))

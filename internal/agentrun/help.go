@@ -49,6 +49,8 @@ Usage:
   agent-run login <name> [url|code|status]        set up an --interactive session's Claude login (Tom only)
   agent-run pair <name>                           print a phone pairing code for a Codex --interactive session (Tom only)
   agent-run auth status [-o json]                 show the shared Claude and Codex logins' state and expiry
+  agent-run keeper-login claude|codex [status|url|code|cancel]
+                                                  renew the keeper's shared login (workbench only)
   agent-run fleet                                 show what runs and waits, by node and revision
   agent-run version                               print the version
   agent-run help [<command>]                      print help for agent-run or one command
@@ -420,6 +422,35 @@ window ends; a first login on a fresh pod needs no TUI exit.
 
 Like attach, it is for Tom's workbench, a laptop or the v1 pod: it runs kubectl
 exec into the session's pod, which an agent in a session pod cannot do (D-19).
+`,
+	"keeper-login": `Usage: agent-run keeper-login claude|codex [status|url|code|cancel] [-o json]
+
+Renews the keeper's shared Claude or Codex login from a workbench session, with
+no v1 pod and no laptop. The operator runs the keeper's own login helper for you
+and does nothing else in the keeper pod. Only the workbench may call it; any other
+caller gets a 403.
+
+  status   the keeper's state (Ready, PendingPublication, NeedsLogin or
+           Unavailable), its generation, when the access token lapses (the keeper
+           renews that itself) and when the login itself lapses. Exit 0 when it is
+           Ready or PendingPublication, 1 otherwise. It changes nothing.
+  url      opens a ceremony and prints the sign-in link on its own line (Codex
+           prints a one-time code too). Open it and sign in. The link is a secret:
+           it goes to your terminal only, never a log, and is not stored.
+  code     Claude: reads the one-time code the page shows from stdin and hands it to
+           the helper, for example: read -rs c; printf '%s' "$c" | agent-run
+           keeper-login claude code. The code is never an argument. Codex: takes no
+           code; it waits for the device sign-in to finish, and exits 5 if it is
+           still waiting (run it again).
+  cancel   abandons a ceremony this operator holds. The keeper's login is untouched
+           until a code is adopted. A ceremony held elsewhere (an earlier operator,
+           the v1 route) cannot be cancelled here; it expires within 15 minutes.
+
+One ceremony at a time per provider, open for at most 15 minutes. Only the
+operator's leader holds a ceremony, so the command reconnects by itself while a
+follower answers; if the operator restarts mid-ceremony, run url again. Adoption
+needs a valid code and the same account: a wrong code leaves the current login as
+it was. Renew well before the login lapses (status says when).
 `,
 	"pair": `Usage: agent-run pair <name>
 

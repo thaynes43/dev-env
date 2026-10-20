@@ -27,6 +27,14 @@ func codexLoginCommand(args []string, in, out *os.File) int {
 	if len(args) == 0 {
 		return 1
 	}
+	if args[0] == "codex-login" {
+		// A hangup ends a ceremony like SIGINT: the terminal went away (NB-01's login
+		// route closing its exec), so the attempt is cancelled and its staging wiped.
+		// Only the ceremony: the idle entrypoint above is the container's PID 1.
+		var stopHup context.CancelFunc
+		ctx, stopHup = signal.NotifyContext(ctx, syscall.SIGHUP)
+		defer stopHup()
+	}
 	result := keeper.CodexControlResponse{Code: "InvalidRequest"}
 	fs := flag.NewFlagSet("codex-login", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)

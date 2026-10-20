@@ -225,6 +225,61 @@ nobody signs in per session.
 - **Not proven yet:** the automatic "continue" a session gets when a turn fails
   on an expired token. No turn has needed it.
 
+### Renew the keeper login from v2
+
+**Status: source and unit-tested only.** It works after the release that carries it
+is pinned and the operator's new access is in place (the haynes-ops access change
+merges first). Until then the v1 route above is the only one. Not yet run live.
+
+You do this from a workbench session (the standby session on your phone is one). No
+v1 pod, no laptop. Only a workbench session may do this; any other session gets
+"not allowed". From the phone you have no terminal, so the agent in that session
+runs the commands and you give it the sign-in code in the chat.
+
+**From your phone**
+
+1. Tell the workbench session: "renew the keeper's Claude login". It runs
+   `agent-run keeper-login claude status` first and tells you the state and when the
+   login lapses.
+2. It runs `agent-run keeper-login claude url` and puts the sign-in link in the chat.
+   Open it, sign in with your Max account, and copy the code the page shows.
+3. Paste the code into the same chat. The agent passes it to
+   `agent-run keeper-login claude code` on standard input and tells you the result.
+4. It runs `status` again. The generation should be higher and `login expires` about
+   30 days out.
+
+The code is single-use and short-lived: it works only for the ceremony that is open,
+and the ceremony closes after 15 minutes. It and the link appear in that chat and
+nowhere else. Never put either in a file, git, a PR, a handoff or notes, and tell the
+agent not to. If a code is wrong, expired or already used, nothing changes: ask for
+`cancel`, then a fresh `url`.
+
+**From a terminal in the session** (the same commands the agent runs):
+
+```bash
+agent-run keeper-login claude status    # state, generation, when the access token
+                                        # lapses and when the login itself lapses
+agent-run keeper-login claude url       # opens a ceremony, prints the sign-in link
+read -rs c; printf '%s' "$c" | agent-run keeper-login claude code   # paste the code
+agent-run keeper-login claude cancel    # abandon a ceremony this operator holds
+```
+
+`status` exits 0 for Ready (or PendingPublication) and changes nothing. If `code` says
+it is still working, run `status`.
+
+ChatGPT is the same with `codex`. Its `url` prints a link and a one-time code to type
+on that page; there is nothing to paste, and `agent-run keeper-login codex code`
+waits for the sign-in to finish (run it again if it says it is still waiting).
+
+If you give up, `cancel` leaves the keeper's current login exactly as it was: only a
+valid code replaces it. (If `cancel` races a code that is already being adopted, the
+new login can still land, whole and never partial: `status` shows which.) If the
+operator restarts mid-ceremony, run `url` again. If `url` says the keeper's attempt is
+"held elsewhere", an earlier ceremony (before an operator restart, or from the v1
+route) still holds the keeper's one slot: `cancel` cannot end it, and it expires by
+itself within 15 minutes. The command reconnects by itself while the operator's other
+replica answers.
+
 ## 7. Where notes live
 
 - `~/.shared` is one folder that every v2 session mounts:
@@ -245,9 +300,10 @@ nobody signs in per session.
 
 - **The keeper login ceremonies** (section 6): the Claude login about once a
   month, next around 2026-11-18, and the ChatGPT login when it reports
-  NeedsLogin. They run inside the keeper pod in `dev-env-system`. A workbench
-  session can reach session pods only, so the v1 pod (or a laptop with admin
-  access) runs them.
+  NeedsLogin. Today the v1 pod (or a laptop with admin access) runs them in the
+  keeper pod. From a workbench session they move to `agent-run keeper-login` once
+  that is released and pinned (section 6, "Renew the keeper login from v2"); it is
+  not run live yet, so this still needs v1 until it is.
 - **Restarting the v2 operator, keeper or shelf.** A v2 session is refused there.
 - **Headless Codex tasks on a repo outside the catalog** (section 3).
 - **Retiring v1 itself.** That is your call.

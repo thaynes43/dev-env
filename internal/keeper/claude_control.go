@@ -105,6 +105,16 @@ func (w *claudeWorker) controlStatus(ctx context.Context) claudelogin.Response {
 		return claudelogin.Response{Code: "Unavailable"}
 	}
 	result := claudelogin.Response{OK: true, Code: "NeedsLogin"}
+	if r.Stage == claudeReady && !r.Access.ExpiresAt.IsZero() {
+		// Times only (NB-01 status): never a token. The login's own lapse is the
+		// refresh token's expiry, when the provider said one.
+		at := r.Access.ExpiresAt.UTC()
+		result.AccessExpiresAt = &at
+		if !r.RefreshExpiresAt.IsZero() {
+			lt := r.RefreshExpiresAt.UTC()
+			result.LoginExpiresAt = &lt
+		}
+	}
 	if r.Stage == claudeReady && r.Access.Validate(w.Clock.Now()) == nil {
 		result.Generation = r.Access.Generation
 		result.Code = "PendingPublication"

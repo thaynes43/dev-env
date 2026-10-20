@@ -641,6 +641,7 @@ func run(args []string) error {
 			PrivateProjectCanaries: o.privateProjectCanaries, RetainedCommonRules: o.retainedCommonRules,
 			PrivateHistoryRetention: o.privateHistoryRetention, PrivateCanaryTemplates: templatesKey,
 			Exec:                     podExec,
+			KeeperLogin:              &apiserver.KeeperLogin{Namespace: o.templatesNamespace, Exec: podExec, Leader: leaderNow(mgr, o.leaderElect)},
 			Shelf:                    rescueShelf,
 			HistoryReads:             o.historyArchiveReads,
 			History:                  &shelf.HistoryReader{Shelf: rescueShelf},
@@ -705,5 +706,24 @@ func newCoordinationRetention(o options, c client.Client, reader client.Reader, 
 		Slots:      slots,
 		Log:        log,
 		Registerer: ctrlmetrics.Registry,
+	}
+}
+
+// leaderNow reports whether this replica currently leads: the manager's elected
+// channel closes when it wins the Lease. The keeper login routes (NB-01) hold a
+// ceremony in one replica's memory, so only the leader opens one.
+func leaderNow(mgr ctrl.Manager, elect bool) func() bool {
+	if !elect {
+		// Without election every replica's channel closes at once, so two
+		// replicas would both claim ceremonies. A nil answer fails closed.
+		return nil
+	}
+	return func() bool {
+		select {
+		case <-mgr.Elected():
+			return true
+		default:
+			return false
+		}
 	}
 }

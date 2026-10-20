@@ -34,6 +34,13 @@ func TestCodexRefreshOncePrivateGenerationAndDuplicateFence(t *testing.T) {
 	if err != nil || !status.OK || status.Code != "Ready" || status.Generation != 1 {
 		t.Fatal("confirmed generation was not available through fixed status")
 	}
+	// NB-01: status adds the access expiry (a time), and no token or account.
+	if status.AccessExpiresAt == nil || !status.AccessExpiresAt.Equal(old.Access.ExpiresAt) {
+		t.Fatal("fixed status did not report the access expiry")
+	}
+	if raw, _ := json.Marshal(status); bytes.Contains(raw, []byte("canary")) || bytes.Contains(raw, []byte("account")) {
+		t.Fatal("fixed status exposed credential or account material")
+	}
 	n := syntheticCodexAccess(t, w.Clock.Now(), 2, "synthetic-account", 10*24*time.Hour)
 	x.Run = func(ctx context.Context, _ secretValue) (secretValue, secretValue, secretValue, error) {
 		d, err := w.load(ctx)
