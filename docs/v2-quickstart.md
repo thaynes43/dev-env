@@ -5,8 +5,10 @@ headless tasks, network and Proxmox access, stopping and resuming, messages
 between sessions, upgrades and restarts, the shared logins, where notes live,
 and what still needs v1.
 
-State on 2026-10-20: release 2.38.0 is installed (haynes-ops #4131, about 05:31
-UTC). Each result below carries one of four proof levels:
+State on 2026-10-20: release 2.38.1 runs the operator and the keeper
+(haynes-ops #4133, about 06:53 UTC). Session pods and the templates stay on
+2.38.0 (haynes-ops #4131, about 05:31 UTC), so no session had to move overnight;
+the next release brings them up to date. Each result below carries one of four proof levels:
 
 - **Proven on the phone:** you did it end to end on your phone.
 - **Proven from a session:** an agent did it live in a v2 workbench session or
@@ -47,7 +49,9 @@ Open it in the Claude app and type. It is named like `haynes-ops-1020-002115`;
   For a fresh one, reap it when you are done with it.
 - One fault seen: on 2026-10-20, two seconds after the standby moved to 2.38.0,
   the operator made a second one. The unused duplicate was reaped, and one
-  standby runs. A fix to the operator is in progress.
+  standby runs. 2.38.1 fixes it (#480): a standby that is moving to a new
+  version now counts as present. Installed, not exercised: no session has moved
+  since.
 
 To start another session, ask the standby or any coordinator, or run:
 
@@ -116,8 +120,9 @@ agent-run grant request --type egress --reason "internal sites" --ttl 8h \
 agent-run grant request --type egress --reason "pve" --ttl 8h \
   --fqdn pvedash.haynesnetwork --port 443
 
-# Proxmox writes: a short-lived operator token; `pve --yes ...` uses it by itself.
-# Not working yet, in 2.38.0 either; see below.
+# Proxmox writes: a short-lived operator token; `pve` uses it by itself.
+# Works since 2.38.1 (reads proven, writes not yet tried); it needs the
+# Proxmox API grant above too. See below.
 agent-run grant request --type credential --credential proxmox --reason "pve write" --ttl 4h
 
 # hw-ssh to the PVE nodes, HaynesTower and PiKVM (port 22 to gasha01 too)
@@ -139,16 +144,25 @@ agent-run grant request --type egress --reason "hw-ssh" --ttl 8h --port 22 \
 - Proven from a session (a fresh workbench session): internal ingress
   (Grafana's health page answered 200), `pve nodes` and `hw-ssh twin-top
   hostname`, each approved by policy with no phone step.
-- **The Proxmox operator token does not work yet.** Before 2.38.0 the grant
-  went Active, but the keeper's SSH client was offered the node's ECDSA host key,
-  while the keeper trusts only each node's ED25519 key, so it gave up before
-  logging in and no token was made. Earlier notes here said a token was issued;
-  that was wrong. 2.38.0 fixes the login (#474): on 2026-10-20 the keeper logged
-  in to a node and Proxmox made the token. But the keeper then misread Proxmox's
-  answer (two numbers come back as text), treated the token as uncertain and
-  deleted it at once. So no token reaches the session. A fix is in progress.
-  Even with it, handing the token to the session and using it there are still
-  untested. Until then, Proxmox writes stay in v1 (section 8).
+- **The Proxmox operator token works since 2.38.1, for reads so far.** Proven
+  from a session on 2026-10-20 (06:54 to 06:56 UTC), in a workbench session:
+  1. `agent-run grant request --type credential --credential proxmox
+     --reason "..." --ttl 15m` went Active in 5 seconds. The keeper made the token and put it in the
+     session (`agentd ctl credential-available --credential proxmox` exited 0).
+  2. `agent-run grant request --type egress --reason "..." --fqdn
+     pvedash.haynesnetwork --port 443 --ttl 15m` (the Proxmox API grant above)
+     went Active at once. Without it `pve` cannot reach Proxmox.
+  3. `pve ha` showed `tier=operator`; `pve nodes` listed all five nodes, quorum
+     OK.
+  4. `agent-run grant release <grant>` removed the token from Proxmox within 19
+     seconds, and `pve ha` went back to `tier=read`.
+
+  Only reads were run with the token. A write (`pve --yes ...`) has not been
+  tried from v2 yet (section 8).
+- Before 2.38.1 no token ever reached a session; earlier notes here that said a
+  token was issued were wrong. In 2.37.0 the keeper's SSH client failed the
+  nodes' host-key check (fixed in 2.38.0, #474). In 2.38.0 the keeper misread
+  Proxmox's answer and deleted each new token at once (fixed in 2.38.1, #481).
 
 ## 2. Codex on your phone
 
@@ -439,24 +453,21 @@ nobody signs in per session.
 
 ### Renew the keeper login from v2
 
-**Status: installed in 2.38.0** (dev-env #475; haynes-ops #4130 and #4131).
+**Status: installed** (2.38.0: dev-env #475, haynes-ops #4130 and #4131; the
+Claude `cancel` fix in 2.38.1: dev-env #483, haynes-ops #4132 and #4133).
 Proven from a session on 2026-10-20: `status` for both logins; `url` for both;
-for ChatGPT, `url`, `cancel` and `url` again; a caller from the v1 pod refused;
-and the keeper's logins unchanged after each abandoned try.
+`url`, `cancel` and `url` again for both; a caller from the v1 pod refused; and
+the keeper's logins unchanged after each abandoned try.
 
-**Claude `cancel`: fixed in source, ships in 2.38.1, live check pending.** On
-2.38.0 a Claude `cancel` did not free the keeper: the helper kept running, and the
-next `url` answered "held elsewhere" until the open ceremony ended, up to 15
-minutes. The fix makes `cancel` tell the keeper's helper to stop (a new fixed
-command, `agentd claude-login-abandon`, which the operator runs in the keeper's
-`claude-login` container), so the next `url` should not be "held elsewhere". That
-is not proven yet: until the live check passes on 2.38.1, treat Claude `cancel` as
-2.38.0 behaves. Ask for a Claude link only when you are ready to sign in. If you
-need a fresh link sooner, a v1 coordinator can end the helper: it sends SIGHUP to
-`agentd claude-login` in the keeper pod's `claude-login` container.
+On 2.38.0 a Claude `cancel` left the keeper's helper running, so the next `url`
+answered "held elsewhere" for up to 15 minutes. 2.38.1 fixes it: `cancel` now
+runs a fixed command in the keeper, `agentd claude-login-abandon`, that stops the
+helper. Proven from a session on 2.38.1: after `cancel` no helper was left, the
+next `url` gave a fresh link, a `cancel` with nothing open answered "no keeper
+login ceremony is open", and `status` did not change.
 
-You have not run a full ceremony from v2 yet, so keep the v1 route as the
-fallback until you have.
+You have not run a full ceremony from v2 yet, with your own code, so keep the v1
+route as the fallback until you have.
 
 You do this from a workbench session (the standby session on your phone is one). No
 v1 pod, no laptop. Only a workbench session may do this; any other session gets
@@ -479,8 +490,7 @@ The code is single-use and short-lived: it works only for the ceremony that is o
 and the ceremony closes after 15 minutes. It and the link appear in that chat and
 nowhere else. Never put either in a file, git, a PR, a handoff or notes, and tell the
 agent not to. If a code is wrong, expired or already used, nothing changes. Ask for
-`cancel`, then a fresh `url` (until 2.38.1 is live and checked, the Claude `cancel`
-fault above can make that wait).
+`cancel`, then a fresh `url`.
 
 **From a terminal in the session** (the same commands the agent runs):
 
@@ -505,16 +515,15 @@ new login can still land, whole and never partial: `status` shows which.) If the
 operator restarts mid-ceremony, run `url` again. If `url` says the keeper's attempt is
 "held elsewhere", an earlier ceremony (before an operator restart, or from the v1
 route) still holds the keeper's one slot. For ChatGPT it expires by itself within 15
-minutes. For Claude, 2.38.1 is meant to let `cancel` end it too (fixed in source, live
-check pending); on 2.38.0 it expires within 15 minutes. The command reconnects by
-itself while the operator's other replica answers.
+minutes. For Claude, `cancel` ends it too since 2.38.1 (built for this case; a slot
+held elsewhere has not been tried live). The command reconnects by itself while the
+operator's other replica answers.
 
-Once, right after a ChatGPT `cancel`, `status` showed PendingPublication for about
-half a minute and the keeper logged an error, then went back to Ready on its own
-with the same login. Reading the code: a ceremony pauses the keeper's refresh by
-design, and its half-minute check logged that pause as an error; after a cancel the
-restored login is republished at the next check. The error line is quieted in 2.38.1
-(source, live check pending); the short PendingPublication is expected.
+After a ChatGPT `cancel`, `status` shows PendingPublication for about 25 to 35
+seconds, then Ready again with the same login. That is expected and harmless: a
+ceremony pauses the keeper's refresh, and the keeper republishes the login at its
+next half-minute check. On 2.38.0 the keeper also logged an error for the pause;
+2.38.1 no longer does (proven from a session: none logged).
 
 The operator runs only the keeper pod's login helpers, and for Claude the
 `claude-login-abandon` command. An admission policy, `dev-env-operator-exec-guard`,
@@ -540,11 +549,13 @@ arguments.
 ## 8. What still needs v1
 
 - **A keeper login ceremony, until you have done one from v2.** The v2 route
-  is installed and partly proven, and Claude `cancel` has a known fault (section
-  6). The Claude login lapses on 2026-11-16; the ChatGPT login is needed only
-  when the keeper reports NeedsLogin.
-- **Proxmox writes.** The v2 token grant still fails (section 1). v1's `pve`
-  keeps its own operator token.
+  is installed and proven from a session, except the sign-in itself with your
+  code (section 6). The Claude login lapses on 2026-11-16 at 17:51 UTC; the
+  ChatGPT login is needed only when the keeper reports NeedsLogin.
+- **A Proxmox write, until one is tried from v2.** The v2 operator token now
+  reaches the session and `pve` runs at `tier=operator` (section 1), but only
+  reads were run with it. v1's `pve`, with its own long-lived operator token, is
+  the tested route for writes.
 - **Headless Codex tasks on a repo outside the catalog** (section 3), such as
   haynes-quest or the private repos left out of it.
 - **Cluster writes: pod deletes, `flux reconcile`, Jobs.** The workbench reads

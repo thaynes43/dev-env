@@ -1,9 +1,12 @@
 # 13: phone and browser management
 
 **Status:** plan, written 2026-10-20 in batch NEXT-BATCH-1020 (story NB-07,
-Saga85 / Epic107). Nothing in it is accepted. Proof levels are as of release 2.37.0.
+Saga85 / Epic107). Nothing in it is accepted. Proof levels are as of release 2.37.0,
+except where a line says otherwise. **Update, 2026-10-20 (2.38.1 on the operator and
+keeper):** NB-01 (keeper login from v2) and NB-02 (restarts from v2) are installed and
+proven from a workbench session. Tom has not done either from the phone yet.
 **Depends on:** [03](03-remote-control.md) (its delivered parts); NB-01 and NB-02,
-in progress in the same batch
+installed 2026-10-20
 **Parallel with:** [07](07-access-broker.md) (a human approval route, only if one
 is needed)
 
@@ -30,17 +33,17 @@ stays in plan 03.
 
 ## What Tom must manage
 
-| Job | Today (2.37.0) | Proof today | After NB-01 and NB-02 (planned) |
+| Job | Before the batch (2.37.0) | Proof before the batch | After NB-01 and NB-02 (2026-10-20) |
 |---|---|---|---|
 | See what runs: `list`, `show`, `log`, `fleet` | Ask a workbench session | `list` proven in a v2 session (Story110 T22). The others are installed; no v2 run is recorded | No change |
 | Talk to a Claude session | Claude app, Remote Control | Proven on the phone | No change |
 | Talk to Codex | ChatGPT app, Remote, a paired host | Proven on the phone | No change |
 | Start a session | Ask the standby to run `agent-run` | Creating a Codex host proven from a workbench session. A Claude session started from v2 and then used on the phone: not recorded | No change |
 | Suspend, resume, reap | Ask a workbench session | Reap proven from a workbench session (a Codex host probe). Suspend and resume proven from the v1 pod; not recorded from v2 | No change |
-| Renew the keeper logins | The v1 pod or an admin laptop starts the helper; Tom opens the link on his phone and pastes the code | The ceremony is proven on the phone, run from the v1 pod. From v2: not built | NB-01: `agent-run keeper-login claude\|codex status\|url\|code` |
-| Restart the operator, keeper, broker or shelf | The v1 pod or an admin laptop | From v2: not built (refused) | NB-02: a `rollout restart` from a workbench session |
+| Renew the keeper logins | The v1 pod or an admin laptop starts the helper; Tom opens the link on his phone and pastes the code | The ceremony is proven on the phone, run from the v1 pod. From v2: not built | NB-01: `agent-run keeper-login claude\|codex status\|url\|code\|cancel`. Proven from a workbench session: `status`, `url` and `cancel` for both (Claude `cancel` since 2.38.1). Not yet on the phone; no full ceremony with Tom's code from v2 |
+| Restart the operator, keeper, broker or shelf | The v1 pod or an admin laptop | From v2: not built (refused) | NB-02: a `rollout restart` from a workbench session. Proven from a workbench session for the keeper, shelf and operator (broker by dry run). Not yet on the phone |
 | Approve a grant | Standing policies approve the v1 set at once | Standing grants proven from a workbench session. A human approval route: not built | No change |
-| Status and health | `agent-run auth status`; three operator alerts | `auth status` proven from a workbench session. Alerts on the logins or the standby: not built | NB-01's `status` shows the keeper's state |
+| Status and health | `agent-run auth status`; three operator alerts | `auth status` proven from a workbench session. Alerts on the logins or the standby: not built | NB-01's `status` shows the keeper's state and the login lapse date (proven from a workbench session) |
 | Read notes and history | Ask a session: `~/.shared`, `agent-run log`, or resume a suspended session. Durable notes are in GitHub | Log and resume proven. Archived history reads: not built on the installed system | No change |
 
 ## What works today
@@ -50,10 +53,10 @@ stays in plan 03.
 | Remote Control, one entry per Claude session | Proven on the phone | Connect, steer, answer, suspend and resume as the same entry, history recalled, an operator restart and two automatic image moves. All on the shared keeper login. |
 | A workbench session running `agent-run` | Proven from a workbench session | `auth status`, `pair`, `attach`, creating a Codex host and reaping it, and the standing grants. No record shows Tom driving one from his phone yet. |
 | ChatGPT app for Codex hosts | Proven on the phone | Pairing, a prompt and answer, suspend and resume without pairing again, history kept. A coordinator relays the pairing code in chat. |
-| Standing auto-approved grants | Proven from a workbench session | Internal ingress, Proxmox API and hw-ssh work, each approved by policy with no phone step. The short-lived Proxmox token grant is approved, but no token was ever installed: a keeper SSH bug (NB-09). The fix is merged (#474), not yet released. |
+| Standing auto-approved grants | Proven from a workbench session | Internal ingress, Proxmox API and hw-ssh work, each approved by policy with no phone step. Proxmox operator token (2026-10-20, 2.38.1): proven from a workbench session for reads. The token reached the session and `pve` ran at `tier=operator`; release removed it. Before 2.38.1 no token was ever installed (NB-09, then a mint-parsing bug; #474, #481). No write tried. |
 | The operator-kept standby | Installed; it registered by itself | The operator created the standby and it registered Remote Control on the shared login. Tom opening and steering it on the phone is not recorded (morning item 1). |
 | The keeper login ceremony | Proven on the phone, run from the v1 pod | The Claude and ChatGPT logins were both renewed this way on 2026-10-19. |
-| The 401-window continue | Partly working, from a coordinator test | NB-03: the pod's token comes back from the keeper in about 4 s and the next turn works. The automatic continue missed the CLI's real 401 error; the fix is merged (#473), not yet released. |
+| The 401-window continue | Proven from a session (2.38.0, new generation simulated) | NB-03: the pod's token comes back from the keeper in about 4 s and the next turn works. The automatic continue missed the CLI's real 401 error until #473 (2.38.0); then it was sent and the failed prompt completed. A real keeper refresh setting it off is not yet seen. |
 | The Codex keeper refresh | Installed, not exercised | It first comes due before 2026-10-29. |
 | A Codex host moving to a new image (suspend, then resume) | Done by a coordinator, not yet on the phone | NB-03 moved PEAR from 2.35.0 to 2.37.0: same enrolment, same thread history, daemon reconnected. Tom's check in the ChatGPT app is morning item 2. |
 | Archived history reads (`agent-run history`) | Not built on the installed system | `--enable-history-archive-reads` is off, so the routes answer 404. NB-06 checks what turning it on needs. |
@@ -66,19 +69,22 @@ app. That is not separately recorded for v2. ChatGPT Remote works in the mobile
 app only, so Codex hosts have no browser path. v2 has no web page or dashboard of
 its own.
 
-## What this batch adds (in progress, not accepted)
+## What this batch added (installed; proven from a workbench session, not on the phone)
 
 **NB-01: keeper login from v2.** A new operator route that only workbench callers
-may use: `agent-run keeper-login claude|codex status|url|code`. It mirrors
+may use: `agent-run keeper-login claude|codex status|url|code|cancel`. It mirrors
 `agent-run login <session>`. The operator execs into the keeper pod's login
 container only (the `claude-login` helper, or the Codex login sidecar), never the
 keeper's main container. Access change: the operator's service account gets
 `pods` get and list and `pods/exec` create in `dev-env-system`. RBAC cannot limit
-exec to one container. Only the operator's code fixes the container and refuses
-other callers; no admission guard checks the container. Planned live check: `status` for both providers works from a disposable
-workbench session, and `url` returns a link that is then abandoned. The full
-ceremony with Tom is morning item 3. State: built and unit-tested (dev-env #475,
-haynes-ops #4130), under auth review, not released.
+exec to one container, so an admission policy, `dev-env-operator-exec-guard`
+(haynes-ops #4130, extended by #4132), pins the keeper pod, its two login
+containers and the fixed helper commands. State: installed (dev-env #475 in
+2.38.0; the Claude `cancel` fix #483 in 2.38.1). Proven from a workbench session
+on 2026-10-20: `status`, `url` and `cancel` for both providers, the next `url`
+not Busy after a `cancel`, a v1-pod caller refused, and the keeper's logins
+unchanged after each abandoned try. The full ceremony with Tom's code from the
+phone is morning item 3.
 
 **NB-02: restarts from v2.** Two Roles named `dev-env-workbench-admin`, bound to
 `dev-agents/dev-env-workbench`:
@@ -106,13 +112,14 @@ their own result files. This plan does not claim them.
 
 ## Gaps
 
-These remain if NB-01 and NB-02 pass.
+These remain now that NB-01 and NB-02 are installed.
 
 1. **A lapsed Claude login cuts the phone off, and nothing warns Tom.** The login
-   lapses about 30 days after the last sign-in, next around 2026-11-18.
-   `agent-run auth status` shows the access token, not that date. The keeper
-   writes the date as an annotation on its published Secret when the provider
-   gives one, but no command or alert reads it. v1's auth-watch pages Tom only
+   lapses about 30 days after the last sign-in. The keeper reports
+   2026-11-16 17:51 UTC (`agent-run keeper-login claude status`, 2026-10-20).
+   `agent-run auth status` shows the access token, not that date; only
+   `agent-run keeper-login claude status` in a workbench session shows it, and no
+   alert reads it. v1's auth-watch pages Tom only
    for v1's own login. If the login lapses, every Claude phone entry stops. The
    Codex host runs in the default profile, so it cannot run `keeper-login`, which
    is for workbench callers only. Recovery then needs the v1 pod or a laptop.
@@ -131,20 +138,18 @@ These remain if NB-01 and NB-02 pass.
 6. **Off home Wi-Fi is untested.** The phone path goes through the Anthropic and
    OpenAI relays. NB-04 lists any step that needs the home network.
 
-**Note for Tom.** Once NB-02 works, every workbench session can restart the v2
+**Note for Tom.** With NB-02 installed, every workbench session can restart the v2
 services. That includes the standby and every session it starts, because a child
 gets its parent's profile. The guard keeps that to a restart: no workbench session
-can change those services' image, arguments or service account. Once NB-01 works,
-workbench sessions can also start a keeper login ceremony; the sign-in still needs
+can change those services' image, arguments or service account. With NB-01
+installed, workbench sessions can also start a keeper login ceremony; the sign-in still needs
 Tom. The v1 pod can do both today, so this is parity, and this plan adds no gate.
 
-One open point for NB-01's review. The operator's new exec right reaches every
-container in `dev-env-system`, including the keeper's main container. That
-container runs as the keeper's service account, which can read the login journal
-that holds the refresh tokens. Only code keeps the operator in the login
-container. An admission check that pins the container, like the restart guard
-above, would close that. Whether to add one is a decision for NB-01's review and
-Tom, not for this plan.
+The open point this plan raised for NB-01's review is closed. The operator's
+exec right in `dev-env-system` could have reached the keeper's main container,
+whose service account reads the login journal that holds the refresh tokens.
+NB-01's review added `dev-env-operator-exec-guard` (haynes-ops #4130), which
+admits only the keeper pod's login helpers with fixed commands.
 
 ## Smallest next step: story 13.1, login lapse date and reminder
 
@@ -168,9 +173,11 @@ the shared login.
   metric, log or output. Installed: Prometheus holds both series for both
   providers, and the Claude lapse time matches the keeper's annotation; `auth
   status` in a workbench session shows the date. Natural time, not a gate: the
-  warning reaches Tom's phone about 2026-11-11.
+  warning reaches Tom's phone about 2026-11-09 (7 days before the 2026-11-16
+  17:51 UTC lapse).
 - **Dependencies.** NB-01 merged first, because both change the keeper status
-  path and quickstart section 6. It does not depend on NB-02.
+  path and quickstart section 6 (met: NB-01 is installed). It does not depend on
+  NB-02.
 - **Ownership.** One Sonnet writer; an Opus review, because it touches the
   keeper. The coordinator merges, releases and pins. Files: `internal/keeper`,
   `internal/claudeauth`, `internal/agentrun`, `docs/v2-quickstart.md` section 6;
@@ -213,8 +220,8 @@ In order. Each becomes its own story when picked up.
 
 ## Morning checklist
 
-From the batch handoff, section 7. Items 3 and 4 need NB-01 and NB-02 installed;
-skip them if they are not.
+From the batch handoff, section 7. Items 3 and 4 need NB-01 and NB-02, which are
+installed (2026-10-20).
 
 1. **Phone off home Wi-Fi (cellular).** Open the standby workbench session on
    claude.ai, steer it and get a reply. This records the standby on the phone and
