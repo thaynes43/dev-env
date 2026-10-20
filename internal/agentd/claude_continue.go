@@ -48,7 +48,10 @@ const (
 var conversationIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 
 // authErrorMarkers are lower-case fragments of the revoked/expired-token error.
-var authErrorMarkers = []string{"oauth token has been revoked", "oauth token has expired", "authentication_error"}
+var authErrorMarkers = []string{"oauth token has been revoked", "oauth token has expired", "authentication_error", "please run /login"}
+
+// authErrorCode is the transcript entry's top-level error code for a 401.
+const authErrorCode = "authentication_failed"
 
 type continueReceipt struct {
 	Generation  uint64    `json:"generation"`
@@ -65,11 +68,15 @@ type lastTurn struct {
 }
 
 type transcriptEntry struct {
-	Type        string          `json:"type"`
-	IsSidechain bool            `json:"isSidechain"`
-	IsAPIError  bool            `json:"isApiErrorMessage"`
-	Timestamp   string          `json:"timestamp"`
-	Message     json.RawMessage `json:"message"`
+	Type        string `json:"type"`
+	IsSidechain bool   `json:"isSidechain"`
+	IsAPIError  bool   `json:"isApiErrorMessage"`
+	// APIErrorStatus and Error are the CLI's top-level fields on an API error
+	// entry. Raw, so a field of an unexpected type never fails the whole line.
+	APIErrorStatus json.RawMessage `json:"apiErrorStatus"`
+	Error          json.RawMessage `json:"error"`
+	Timestamp      string          `json:"timestamp"`
+	Message        json.RawMessage `json:"message"`
 }
 
 // entryText joins the text blocks of a message.
@@ -119,6 +126,9 @@ func classifyTranscript(tail []byte) lastTurn {
 		if e.Type == "assistant" {
 			text := strings.ToLower(entryText(e.Message))
 			if e.IsAPIError || strings.HasPrefix(strings.TrimSpace(text), "api error") {
+				if string(e.APIErrorStatus) == "401" || string(e.Error) == `"`+authErrorCode+`"` {
+					t.Revoked = true
+				}
 				for _, m := range authErrorMarkers {
 					if strings.Contains(text, m) {
 						t.Revoked = true
