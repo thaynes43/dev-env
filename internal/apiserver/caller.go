@@ -124,11 +124,13 @@ func (s *Server) resolveCaller(ctx context.Context, id Identity) (*caller, error
 // ServiceAccount: the ordinary session account, or the workbench account when the
 // policy names it. The coordination routes recheck the live Pod with it, so a
 // workbench session is the session it is there too, exactly as it is for the
-// heartbeat (resolveCaller). The account alone grants nothing: the live Pod must
-// still be controlled by the caller's own AgentSession.
-func (s *Server) sessionPodAccount(name string) bool {
-	return name == s.Policy.SessionServiceAccount ||
-		(s.Policy.WorkbenchServiceAccount != "" && name == s.Policy.WorkbenchServiceAccount)
+// heartbeat (resolveCaller). The Pod's account must also be the one the token
+// carries, so the fence stays self-contained. The account alone grants nothing:
+// the live Pod must still be controlled by the caller's own AgentSession.
+func (s *Server) sessionPodAccount(name string, c *caller) bool {
+	return name == c.identity.ServiceAccount &&
+		(name == s.Policy.SessionServiceAccount ||
+			(s.Policy.WorkbenchServiceAccount != "" && name == s.Policy.WorkbenchServiceAccount))
 }
 
 // isWorkbenchSession reports whether c is a session whose pod runs as the
