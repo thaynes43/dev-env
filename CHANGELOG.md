@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.39.0](https://github.com/thaynes43/dev-env/compare/v2.38.3...v2.39.0) (2026-10-20)
+
+
+### Features
+
+* **keeper:** login lapse gauges, lapse date in auth status, and keeper Pushover notices ([#495](https://github.com/thaynes43/dev-env/issues/495)) ([0d2691d](https://github.com/thaynes43/dev-env/commit/0d2691d58bdb6684c174714957448bc8d2432595))
+
 ## [2.38.3](https://github.com/thaynes43/dev-env/compare/v2.38.2...v2.38.3) (2026-10-20)
 
 
