@@ -153,7 +153,8 @@ agent-run --project dev-env --agent codex --model gpt-6-luna -p "Summarize the o
 - Follow it with `agent-run show <name>` and `agent-run log <name> --tail 40`.
 - Cap it with `--timeout 40m` or `--max-turns 20`.
 - A finished task suspends itself after an hour. Its prompt never runs twice.
-- A Codex task with `--repo` is refused; use `--project`.
+- A Codex task with `--repo` is refused; use `--project`. A Codex task on a
+  repo outside the catalog, such as haynes-ops, still runs from v1.
 - `agent-run show <name>` reports the model that actually served the task, for
   Codex as well as Claude (Codex since 2.37.0; before, it said Unknown).
 - Proven: a Codex project task finished in one turn, in about 20 seconds.
@@ -248,6 +249,7 @@ nobody signs in per session.
   session can reach session pods only, so the v1 pod (or a laptop with admin
   access) runs them.
 - **Restarting the v2 operator, keeper or shelf.** A v2 session is refused there.
+- **Headless Codex tasks on a repo outside the catalog** (section 3).
 - **Retiring v1 itself.** That is your call.
 
 More detail is in the [workflow guide](workflow-guide.md) and
