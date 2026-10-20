@@ -298,7 +298,7 @@ them from a v1 session before step 7.
 
    # f. Keep the manifests (paths and hashes only) next to the copy.
    tar c -C "$W" --exclude='*.bundle' . | kx sh -c "mkdir -p $DST/manifests && tar x -C $DST/manifests" || fail=1
-   [ "$fail" = 0 ] && echo "ALL OK" || echo "SOMETHING FAILED: read the lines above"
+   [ "$fail" = 0 ] && echo "ALL OK" || { echo "SOMETHING FAILED: read the lines above"; exit 1; }
    EOF
    bash ~/work/migrate-v1-notes.sh "$S" && $v2 reap "$S"
    ```
