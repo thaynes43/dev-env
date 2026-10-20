@@ -1,6 +1,179 @@
 # HANDOFF: start here
 
-## Current state — 2026-10-20 UTC (v2 release 2.37.0)
+## Current state — 2026-10-20 UTC (v2 release 2.38.0)
+
+This block replaces the 2.37.0 block below, which stays as history (its rulings
+Q-110-03 to Q-110-08 still stand). It records batch NEXT-BATCH-1020 (Saga85 /
+Epic107, after Story110), run overnight from 03:27 UTC by coordinator
+task-dev-env-1019-232515. The dated record is that batch's progress
+file and per-story result files, kept by the coordinator outside git. The
+user-facing result is the [v2 quick start](../docs/v2-quickstart.md).
+
+Proof levels: **proven on the phone** (Tom, end to end); **proven from a
+session** (an agent in a v2 workbench session or the v1 coordinator, live, not
+Tom's phone); **installed, not exercised**; **not built** (no code, or off).
+Installed is not accepted.
+
+**Installed:** release 2.38.0 (dev-env #476, tag `v2.38.0`, commit `702a57f`).
+haynes-ops #4131 (`5ddbea0a`, about 05:32Z) pins, together: operator
+`sha-702a57f` (`sha256:981075c0…`); agent, task-budget worker and templates image
+`2.38.0` (`sha256:bb67ea9c…`); the keeper's `app` and `claude-login` at 2.38.0;
+`codex-login` `sha-702a57f` (`sha256:3b622b24…`). Both publish runs passed
+`cosign verify`. No CRD change. The shelf stays on 2.9.1 and the broker on
+`sha-eeb15e3`.
+
+2.38.0 adds: keeper login from a workbench session (#475); workbench sessions
+on the coordination routes (#472); the Claude 401 "continue" matching the real
+CLI error (#473); the keeper's SSH offering only the pinned host-key algorithms
+(#474); a stalled clone abandoned and retried (#478).
+
+haynes-ops changes installed tonight besides the pin: #4122 (five more catalog
+projects), #4123 and #4129 (workbench restarts of the operator, keeper, broker
+and shelf, guarded to the restart annotation), #4127 folded into #4131
+(workbench cluster read without Secrets, Flux read, Omni, GCP, MCP credentials,
+the project catalog read), #4128 (operator `--enable-private-executor-stop`),
+#4130 (the operator's exec into the keeper's login helpers only, pinned by
+`dev-env-operator-exec-guard`).
+
+At the install, MANGO (`dev-env-1019-190936`) and the standby
+(`haynes-ops-1020-002115`) moved to the new template revision at 05:31:38Z by
+the designed drain and are Running. T08 (`dev-env-1019-141220`) and the Codex
+host PEAR (`dev-env-1019-205125`, still 2.37.0) were not touched.
+
+**Proven tonight:**
+
+| Item | Proof level | Evidence |
+|---|---|---|
+| Restart the keeper, shelf and operator with `kubectl rollout restart` | Proven from a session (workbench) | NB-02, 03:45 to 04:01Z; every session pod kept its name, start time and restart count; the logins' generation and expiry unchanged. Broker: dry run only |
+| The workbench restart Roles allow and refuse what they should | Proven from a session (workbench) | NB-02 part A: `can-i` matrix; the guard refused a label, another annotation, an image and a replica change |
+| Codex host moved to a new image by suspend and resume | Proven from a session (v1 coordinator) | NB-03: PEAR 2.35.0 to 2.37.0, same `installation_id` and enrolment, daemon reconnected, thread history kept |
+| A damaged access token comes back from the keeper | Proven from a session | NB-03: Claude and Codex, about 4 s, next turn worked |
+| Codex and Claude tasks on a repo that was outside the catalog | Proven from a session | NB-08: both tasks on `libretto` Succeeded |
+| Reap, rescue and restore; suspend and resume (interactive sessions) | Proven from a session | NB-06: restored ref `refs/rescued/heads/rescue/<session>-<stamp>` held the same files by checksum; a code word recalled after resume |
+| A reaped task's pod stops | Proven from a session | #4128 live: seven reaped private tasks' pods went Failed (DeadlineExceeded); pods, volumes and Sessions kept |
+| Inbox, task claims, published contexts; `agent-run msg` | Proven from a session (default-profile sessions) | NB-05: send, read, ack, idempotent retry, claim conflict naming the owner, context publish and read; `msg` answered by a live session, 409 for an exited task |
+| Release 2.38.0 published, signed and installed | Verified in CI and the cluster | REL-238: publish runs 39374328506 and 39374348374, `cosign verify` passed; #4131 merged |
+| Workbench reads on 2.38.0: cluster without Secrets, Flux, Omni, `talosctl`, GCP, all ten MCP servers | Proven from a session (workbench) | LIVE-238b: NB-04 rows 4 to 7, 11, 14 and 15 pass; `can-i` says no to pod delete, Deployment patch and Job create |
+| Coordination routes from a workbench session (#472) | Proven from a session (workbench project task) | LIVE-238b: inbox both ways, ack and idempotent retry, sender read 404, claim conflict, context publish and read |
+| Project bootstrap Ready, 8 of 8 repos (#478); the standby's `CatalogUnconfirmed` gone | Proven from a session | LIVE-238b: five new sessions and the standby. No clone stalled, so #478's retry was not exercised |
+| The Claude 401 "continue" is sent after a failed turn (#473) | Proven from a session (new generation simulated) | LIVE-238b: receipt `sent`, the failed prompt completed. A real keeper refresh triggering it is not yet seen; a revoked token's wording is unobserved |
+| Keeper login from a workbench session (#475): `status` for both logins, `url` for both, ChatGPT `url`, `cancel`, `url` again, a v1 caller refused, logins unchanged after abandoned tries | Proven from a session (workbench) | LIVE-238a. Claude `cancel` fails (defect below). No full ceremony yet |
+| Claude keeper refresh, generation 3 | Proven from a session (natural refresh observed) | LIVE-238a: refreshed at 05:50:05Z, access to 13:50:05Z, read by sessions. `keeper-login claude status` gives the login lapse as 2026-11-16T17:51:35Z |
+| The keeper's certificate SSH to a PVE node (#474) | Proven from a session | LIVE-238a: the node logged the certificate login and the `pvesh create`; the two stuck CredentialJobs from 00:49Z went Revoked |
+
+**Corrected tonight:**
+
+- The Proxmox operator token grant never made a token before 2.38.0. The grant
+  reached Active, but the keeper's SSH client was offered each node's ECDSA host
+  key while the pin holds only ED25519, so it left before logging in (NB-09).
+  NB-04's first reading (the nodes lack CA trust) was wrong: the CA line is in
+  `dev-env`'s `authorized_keys` on all five nodes. The 2.37.0 block below says the
+  token grant was "exercised"; that meant Active, not a token. With 2.38.0 the
+  login works but the mint still fails one step later (defects below).
+- Reap and suspend of a task did not stop its pod before #4128 (task sessions
+  are private under ADR-008). The quick start's section 4 was wrong for tasks
+  and now says so.
+- `kubectl get` on the `coordination.dev-env.haynesops.com` records is refused
+  for every agent, v1 and the workbench by design (DESIGN-010, 013 and 014: the
+  message text is in them). The read path is `agentd` inside a session.
+
+**Defects found tonight, fixes in flight:**
+
+- **Claude keeper-login `cancel` does not end the helper** (LIVE-238a D1). The
+  cancel answers 204, the helper keeps running, and the next `url` is 409 "held
+  elsewhere" until the 15-minute deadline. The keeper side handles SIGHUP; the
+  operator's exec does not deliver it. Workaround: wait, or Tom or v1 sends
+  SIGHUP to `agentd claude-login` in the keeper's `claude-login` container. Fix
+  in progress as story NB-01b: a fixed abandon command for the helper, so the
+  exec guard's command list changes too.
+- **The Proxmox token is minted and then deleted** (LIVE-238a D2). PVE's `pvesh
+  create` answer carries `expire` and `privsep` as strings; the keeper expects
+  numbers, records `AmbiguousMint` and deletes the token. No token reaches a
+  session, and the keeper logs nothing about it. Fix in progress as story NB-09c:
+  accept both shapes and log one line on a refused mint, then rerun the
+  15-minute grant test. Proxmox writes stay in v1 until then.
+- **A second standby** (`haynes-ops-1020-053140`) appeared at 05:31:40Z, two
+  seconds after the standby drained onto 2.38.0 (LIVE-238b). The coordinator
+  reaped the unused duplicate; one standby runs. Fix in progress as story NB-10
+  (operator only).
+- After a ChatGPT keeper-login `cancel` the keeper showed PendingPublication for
+  about 25 s and logged an ERROR, then returned to Ready with the same login
+  (LIVE-238a O3). An alert keyed on that line would fire falsely. In NB-01b's
+  scope.
+
+**Open, not accepted:**
+
+- Tom's morning checks ([plan 13](sagas/distributed-dev-env/backlog/13-phone-browser-management.md#morning-checklist)):
+  the standby off home Wi-Fi; PEAR in the ChatGPT app after its image move; a
+  keeper login ceremony from v2; a restart from the phone; a message between
+  two sessions.
+- Only a project task (`agent-run --project <p> -p`) has a project, so only it
+  can use the inbox, claims and contexts. An interactive session, Tom's
+  included, gets 404 (LIVE-238b). This bears on held decision 5 below.
+- A reaped task stays Pending with its volume until the history archive is
+  switched on (H7: the shelf needs an H7-capable image, today 2.9.1, a second
+  volume and `--history-archive`; then the operator's archive and read flags) and
+  the guarded delete after it (H9). Owner gates are in DESIGN-025 section 12.
+  `agent-run history` answers 404 until then. Each coordination test leaves two
+  such tasks with 20Gi volumes. Left tonight: `dev-env-1020-033058`, `-033158`,
+  `-033206`, `-033558`, `-054000`, `-054012` and `libretto-1020-034202`,
+  `-034214`, `-035511`.
+- Suspended private tasks keep their pods running (ADR-006, plan 11 F3; NB-06
+  D3). Five were running at 03:45Z.
+- `dev-env-1020-002245` (a reaped Codex host probe that never cloned) retries a
+  rescue every 15 minutes and fails `NotProven`. It needs a dev-env fix that
+  accepts a provably clone-less volume, or a reviewed cleanup.
+- The session directory is off (`--enable-session-directory=false`).
+- `dev-env-agent-guard` has the same Kyverno `verify-images` annotation gap that
+  #4129 fixed in the workbench guard.
+- Two `libretto` task volumes keep preserved clone staging from before #478.
+- `dev-env-h7-metadata-audit` Kustomization is not Ready (a stalled Failed Job,
+  from before tonight).
+- `TestInboxArchiveListImmutableAttributionWithoutSenderJoin` fails when `TZ` is
+  not UTC (in the pod only; CI runs UTC).
+
+**Held for Tom (one question each, at the moment it is needed):**
+
+1. **Write tier for the workbench (NB-04 G-6).** The workbench now reads the
+   cluster but cannot delete pods, reconcile Flux or create Jobs. It is exempt
+   from the identity and exec guards, so granting writes needs narrower
+   exemptions and must keep exec into the keeper impossible. The alternative is
+   to keep the workbench read-only and do cluster writes from a default-profile
+   session.
+2. **Suspended private tasks (NB-06 D3).** Whether a stop at the suspend deadline is
+   wanted (ADR-006 left it as its own owner question).
+3. **The SSH user on gasha01.** `hw-ssh` has no entry because no guest user is
+   verified; name one and the alias is one line.
+4. **Catalog repos left out (NB-08):** haynes-quest (about 870 MB, would slow
+   every session's start), the private sigmaphiomicron-com, demo-console and
+   haynes-swarm, and the dormant hass-immich-addon, todos-for-dues, ytdrivarr
+   and ytdl-sub-config-manager.
+5. **A project-wide inbox and claims view for a human coordinator.** Today a
+   session reads only its own inbox; a project-wide view exists only for
+   configured coordinator hosts. Giving one to a workbench or v1 coordinator is a
+   change to DESIGN-014's scope, not RBAC.
+6. **Story 13.1 next** (recommended): the keeper login's lapse date in
+   `agent-run auth status`, keeper metrics, a 7-day phone warning and a critical
+   NeedsLogin alert. The keeper reports the Claude login lapses on
+   2026-11-16T17:51Z, and nothing warns yet.
+
+**In flight at the time of writing:** release 2.38.1 with NB-10 (standby
+duplicate), NB-01b (Claude cancel) and NB-09c (Proxmox mint). Its pin is planned
+to move the operator and the keeper's images only, not the templates, so no
+session drains overnight. When it is installed and its live checks pass, update
+the quick start (sections 1, 6 and 8) and this block.
+
+**Next safe step:** Tom's morning checks above, then his pick of the next
+story (13.1 recommended). Nothing else is queued beyond 2.38.1. A new story
+needs a saved record first (see `~/.claude/CLAUDE.md`, "Define work before
+pickup"). Preserve every
+v1, rendezvous, H7, grant and security hold and every consumed attempt; the
+older blocks below are history and do not reopen them.
+
+## State at release 2.37.0 — 2026-10-20 UTC (historical)
+
+*Historical. The 2.38.0 block above supersedes its installed state, its "still
+on v1" list and its next step. Its rulings Q-110-03 to Q-110-08 still stand.*
 
 This block replaces the 2026-10-19 Story110 checkpoint and the "next steps" that
 older blocks below still carry. The dated record is the Story110 progress file
@@ -2791,7 +2964,7 @@ plan 02 is done. The current order is the pickup brief's
 
 ## What happens next
 
-**Current order:** the [Current state — 2026-10-20 UTC](#current-state--2026-10-20-utc-v2-release-2370)
+**Current order:** the [Current state — 2026-10-20 UTC](#current-state--2026-10-20-utc-v2-release-2380)
 block at the top of this page (the [2026-10-17 next work](#next-work--2026-10-17-utc) is history). It supersedes the 2026-10-13 brief's enumerated
 list where they differ (v2.29.4/2.29.5 pins, rendezvous cohort r3–r13, inbox CLI
 shape, freshness gate, expired r13 window, Codex service-account kubeconfig, held H7/Q-37). The

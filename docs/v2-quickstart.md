@@ -1,12 +1,20 @@
 # Dev-env v2 quick start
 
 How to use v2 day to day, mostly from your phone: Claude and Codex sessions,
-headless tasks, network and Proxmox access, stopping and resuming, upgrades, the
-shared logins, where notes live, and what still needs v1.
+headless tasks, network and Proxmox access, stopping and resuming, messages
+between sessions, upgrades and restarts, the shared logins, where notes live,
+and what still needs v1.
 
-State on 2026-10-20: release 2.37.0 is installed. "Proven" below means it was
-done end to end on 2026-10-19 or 2026-10-20 (UTC), on your phone where a phone
-is involved.
+State on 2026-10-20: release 2.38.0 is installed (haynes-ops #4131, about 05:32
+UTC). Each result below carries one of four proof levels:
+
+- **Proven on the phone:** you did it end to end on your phone.
+- **Proven from a session:** an agent did it live in a v2 workbench session or
+  from the v1 coordinator, not on your phone.
+- **Installed, not exercised:** in the installed release, never run live.
+- **Not built:** no code yet, or the code is off on the installed system.
+
+Dates are UTC.
 
 ## Which `agent-run`
 
@@ -37,6 +45,9 @@ Open it in the Claude app and type. It is named like `haynes-ops-1020-002115`;
   a minute. It makes at most 3 in 30 minutes, then waits, so a fault cannot loop.
 - Once you use it, it is an ordinary session. It is not replaced while it lives.
   For a fresh one, reap it when you are done with it.
+- One fault seen: on 2026-10-20, two seconds after the standby moved to 2.38.0,
+  the operator made a second one. The unused duplicate was reaped, and one
+  standby runs. A fix to the operator is in progress.
 
 To start another session, ask the standby or any coordinator, or run:
 
@@ -57,7 +68,7 @@ agent-run --repo haynes-ops --interactive --model claude-opus-5-5
   `login-required` means the shared login has lapsed (section 6).
 - After 72 hours idle it suspends itself, and its phone entry is archived.
   `agent-run resume <name>` brings back the same entry and the same conversation.
-- Proven: open on the phone, prompt, answer, suspend and resume as the same
+- Proven on the phone: open, prompt, answer, suspend and resume as the same
   entry, and the earlier answer recalled after the resume. The operator made
   the standby by itself and it registered on the shared login.
 
@@ -69,7 +80,26 @@ it can:
 - run `agent-run pair`, `attach`, `detach` and `login` against other v2
   sessions, with no v1 pod;
 - create a Codex host (section 2);
+- renew the keeper's logins with `agent-run keeper-login` (section 6);
+- restart the operator, keeper, broker or shelf (section 5);
+- read the cluster as v1 does: `kubectl get` on everything except Secrets,
+  `flux get`, and read-only `omnictl` and `talosctl`;
+- use GCP with the same credentials as v1 (`tofu`), and all ten MCP servers;
 - get standing access grants for the LAN and Proxmox, as below.
+
+The cluster read, Omni, GCP and the MCP credentials came with 2.38.0 (haynes-ops
+#4127, installed with #4131). A workbench session started before that keeps its
+old settings until its pod is replaced. Proven from a session on 2026-10-20, in
+a fresh workbench session on 2.38.0: `kubectl get pods -A` worked and `kubectl
+get secrets` was refused; `flux get ks -A`, `omnictl get clusters` and
+`talosctl version` worked; GCP issued a token for sigo-alumni-prod; and all ten
+MCP servers connected, for Claude and for Codex. The claude.ai connectors (Docs,
+Gmail, Calendar, Drive) showed up too.
+
+A workbench session cannot change the cluster: no pod delete, no `flux
+reconcile`, no Jobs. Whether it should is your decision (see the handoff). Until
+then, use v1. A default-profile session has those rights in RBAC outside the
+dev-env namespaces (checked on 2026-10-19), but nobody has used them from v2.
 
 **Access grants.** A standing policy approves each of these at once, with no
 phone step. Ask from inside the session that needs it:
@@ -83,10 +113,11 @@ agent-run grant request --type egress --reason "internal sites" --ttl 8h \
 agent-run grant request --type egress --reason "pve" --ttl 8h \
   --fqdn pvedash.haynesnetwork --port 443
 
-# Proxmox writes: a short-lived operator token; `pve --yes ...` uses it by itself
+# Proxmox writes: a short-lived operator token; `pve --yes ...` uses it by itself.
+# Not working yet, in 2.38.0 either; see below.
 agent-run grant request --type credential --credential proxmox --reason "pve write" --ttl 4h
 
-# hw-ssh to the PVE nodes, HaynesTower, PiKVM and gasha01
+# hw-ssh to the PVE nodes, HaynesTower and PiKVM (port 22 to gasha01 too)
 agent-run grant request --type egress --reason "hw-ssh" --ttl 8h --port 22 \
   $(for h in haynesintelligence twin-top twin-bottom pve04 pve-filet02 \
       haynestower pikvm gasha01; do echo "--fqdn $h.haynesnetwork"; done)
@@ -99,9 +130,21 @@ agent-run grant request --type egress --reason "hw-ssh" --ttl 8h --port 22 \
   description, in haynes-ops `kubernetes/main/apps/dev-env-system/grant-policies/`.
 - The `hw-ssh` key is mounted only in workbench sessions. The same rules as v1
   apply: read first, declare disruptive work, never reboot a node.
-- Proven from a fresh workbench session: internal ingress (Grafana's health
-  page answered 200), `pve nodes`, `hw-ssh twin-top hostname`, and a Proxmox
-  token issued. All four were approved by policy with no phone step.
+- `hw-ssh` has no `gasha01` entry, in v1 or v2: nobody has confirmed which user
+  may log in there. Once that is known, `hw-ssh --raw <user>@gasha01.haynesnetwork`
+  works under the grant above.
+- Proven from a session (a fresh workbench session): internal ingress
+  (Grafana's health page answered 200), `pve nodes` and `hw-ssh twin-top
+  hostname`, each approved by policy with no phone step.
+- **The Proxmox operator token does not work yet.** Before 2.38.0 the grant
+  went Active, but the keeper's SSH client was offered the node's ECDSA host key,
+  while the keeper trusts only each node's ED25519 key, so it gave up before
+  logging in and no token was made. Earlier notes here said a token was issued;
+  that was wrong. 2.38.0 fixes the login (#474): on 2026-10-20 the keeper logged
+  in to a node and Proxmox made the token. But the keeper then misread Proxmox's
+  answer (two numbers come back as text), treated the token as uncertain and
+  deleted it at once. So no token reaches the session. A fix is in progress;
+  until it ships, Proxmox writes stay in v1 (section 8).
 
 ## 2. Codex on your phone
 
@@ -134,9 +177,12 @@ pair a phone with it once.
   reaping the host loses it.
 - A host never suspends itself, because its daemon counts as busy. Suspend or
   reap it when you are done.
-- Proven: pairing, a prompt and answer, suspend and resume without pairing
-  again, the earlier answer recalled, and an operator restart survived. From a
-  workbench session, creating a host and getting a pairing code both worked.
+- Proven on the phone: pairing, a prompt and answer, suspend and resume without
+  pairing again, the earlier answer recalled, and an operator restart survived.
+- Proven from a session: creating a host and getting a pairing code from a
+  workbench session; moving a host to a new image (section 5); and a damaged
+  ChatGPT access token in a pod put back from the keeper within about 4 seconds,
+  after which the next Codex turn worked.
 
 ## 3. Headless tasks
 
@@ -146,18 +192,29 @@ A task runs its prompt once, with no TUI, then stops.
 # Claude, on any repository
 agent-run --repo dev-env --model claude-opus-5-5 -p "Summarize the open PRs."
 
-# Codex, only on a catalog project: dev-env or sigo-alumni today
+# Codex, only on a catalog project (list below)
 agent-run --project dev-env --agent codex --model gpt-6-luna -p "Summarize the open PRs."
 ```
 
 - Follow it with `agent-run show <name>` and `agent-run log <name> --tail 40`.
 - Cap it with `--timeout 40m` or `--max-turns 20`.
-- A finished task suspends itself after an hour. Its prompt never runs twice.
-- A Codex task with `--repo` is refused; use `--project`. A Codex task on a
-  repo outside the catalog, such as haynes-ops, still runs from v1.
+- Its prompt never runs twice. A finished task suspends itself after an hour,
+  but its pod keeps running; reap it when you have read the result (section 4).
+- **Catalog projects** (since haynes-ops #4122, 2026-10-20): `dev-env`,
+  `sigo-alumni`, `haynes-ops`, `haynesnetwork`, `hass-sandbox`, `cigar-journal`
+  and `libretto`. A Codex task with `--repo` is refused; use `--project`. A
+  Codex task on a repo outside the catalog still runs from v1 (section 8).
+- Every session clones the catalog repos when it starts. With eight repos, one
+  slow clone sometimes hit the two-minute limit and the step reported
+  `Partial`. The session still ran. 2.38.0 abandons a stalled clone and retries
+  it (#478). On 2.38.0, five new sessions and the standby all reported Ready,
+  8 of 8 repos (proven from a session). No clone stalled, so the retry itself
+  has not been seen at work.
 - `agent-run show <name>` reports the model that actually served the task, for
   Codex as well as Claude (Codex since 2.37.0; before, it said Unknown).
-- Proven: a Codex project task finished in one turn, in about 20 seconds.
+- Proven from a session: a Codex project task finished in one turn, in about 20
+  seconds. On 2026-10-20 a Claude task and a Codex task both finished on
+  `libretto`, a repo that was not in the catalog the day before.
 
 ## 4. Stop, continue, finish
 
@@ -167,31 +224,170 @@ agent-run --project dev-env --agent codex --model gpt-6-luna -p "Summarize the o
 | `agent-run show <name>` | One session in detail. |
 | `agent-run log <name>` | The end of its log. |
 | `agent-run msg <name> "<text>"` | Types a message into its TUI. |
-| `agent-run suspend <name>` | Saves its Git work, stops the pod, keeps the volume. |
+| `agent-run suspend <name>` | Saves its Git work, stops the pod, keeps the volume. Tasks differ, below. |
 | `agent-run resume <name>` | A new pod on the same volume, same conversation. |
-| `agent-run reap <name>` | Saves its Git work, stops it, removes its volume. |
+| `agent-run reap <name>` | Saves its Git work, stops it, removes its volume. Tasks differ, below. |
 | `agent-run fleet` | What runs where, and what is on an old version. |
 
+**Interactive sessions** (`--interactive`, `--local`, the standby, a Codex host):
+
 - Suspend anything you may want to continue. Reap only what is finished: the
-  conversation goes with the volume. The Git work stays in a rescue bundle
-  (`agent-run rescue list`, then `agent-run rescue restore`).
+  conversation goes with the volume. The Git work stays in a rescue bundle.
+- `agent-run rescue list` shows the bundles. `agent-run rescue restore
+  <session>/<stamp> --local` starts a new session that holds the saved work in a
+  Git ref, `refs/rescued/heads/rescue/<session>-<stamp>`. The files are not put
+  in its worktree; copy them from that ref (`git checkout <ref> -- <path>`).
 - By default a session suspended for 7 days is archived. After that it can be
   restored from its rescue, but not resumed.
-- Pending means the session is waiting for room on a node. Do not start a
-  second one.
+- Proven from a session, 2026-10-20: reap with uncommitted files, then restore;
+  the restored ref held the same files, byte for byte. Suspend and resume kept
+  the worktree, an untracked file and the conversation (a code word was
+  recalled after the resume).
 
-## 5. Upgrades
+**Tasks** (`-p`). A task's HOME, which holds its conversation, is kept for a
+history archive that is not switched on yet (ADR-008). So for a task:
 
-- **Operator upgrade:** running sessions are left alone. Proven.
+- `reap` stops its pod (since haynes-ops #4128, 2026-10-20) and keeps its volume.
+  It makes no rescue bundle. The task stays in `agent-run list` as `reaping`
+  (phase Pending) until the history archive is switched on. Nothing is deleted.
+  Proven from a session: on 2026-10-20 the pods of nine reaped tasks stopped,
+  and their volumes stayed.
+- `suspend`, and a task's own suspend after an hour, do not stop its pod
+  (ADR-006). To stop a finished task, reap it.
+- `agent-run history list|show|read` answers 404 today. Reading archived
+  history is off, and nothing has been archived. Not built on the installed
+  system.
+
+Pending with `reaping` is a reaped task. Pending otherwise means the session is
+waiting for room on a node; do not start a second one.
+
+### Messages between sessions
+
+- `agent-run msg <name> "<text>"` types into a running interactive session. A
+  finished task answers 409 (not running). `agent-run log` shows agentd's own
+  lines, not the reply; read the reply in the session. Proven from a session:
+  the message arrived and the session answered.
+- Inbox, task claims and shared notes: an agent in a project task uses
+  `agentd`. Proven from a session, 2026-10-20, on `dev-env`.
+
+  ```bash
+  # send (the recipient's name and uid come from agent-run show)
+  echo '{"project":"dev-env","recipient":{"namespace":"dev-agents","name":"<name>","uid":"<uid>"},"key":"<unique>","text":"..."}' \
+    | agentd inbox-publish
+  agentd inbox-list --project dev-env                       # your own messages
+  agentd inbox-read --message <message> --project dev-env
+  agentd inbox-ack  --message <message> --project dev-env
+  echo '{"identity":{"project":"dev-env","repository":"dev-env","taskKey":"task:<slug>"}}' \
+    | agentd task-claim-create                              # or issue:<n>
+  agentd task-claim-list --project dev-env
+  agentd ctl context-publish | context-list | context-read  # shared notes
+  ```
+
+- Only a session started as a project task (`agent-run --project <p> -p ...`)
+  carries a project, so only such a session can send or receive. An interactive
+  session, or a task started with `--repo` alone, gets 404.
+- Only the recipient can read a message; the sender gets 404. A second claim on
+  the same task fails and names the owner.
+- Switched on today: the inbox and claims for `dev-env`, shared notes for
+  `dev-env` and `sigo-alumni`. The session directory is off.
+- `kubectl get` on these records is refused for every agent and for v1, on
+  purpose: the message text is stored in them. Read them through `agentd`
+  inside a project task. From the v1 pod:
+  `KUBECTL_REMOTE_COMMAND_WEBSOCKETS=false kubectl -n dev-agents exec <task-pod> -- agentd ...`.
+- A workbench session was refused by these routes before 2.38.0 (#472). Proven
+  from a session on 2.38.0: a workbench task and a default task sent, read and
+  acknowledged each other's messages, and shared a claim and a note.
+- A project task cannot be fully reaped yet (section 4), so every test of
+  messages, claims or notes leaves its sessions and volumes behind.
+
+## 5. Upgrades and restarts
+
+- **Operator upgrade:** running sessions are left alone. Proven on the phone.
 - **New agent image (a release):** a Claude session moves by itself once it is
   idle and nobody is attached. The pod is replaced; the phone entry and the
-  conversation stay. Proven twice on 2026-10-19, and the session still knew its
-  earlier answer. A session that has never had a turn, such as an unused
-  standby, stays put until it has one.
+  conversation stay. Proven on the phone twice on 2026-10-19, and the session
+  still knew its earlier answer. With 2.38.0 the standby and one other session
+  moved the same way at 05:31 on 2026-10-20 (seen from a session, not yet
+  checked on the phone). A session that has never had a
+  turn, such as an unused standby, stays put until it has one.
 - **Codex host:** never moves by itself. `agent-run list` marks it `outdated`.
   At a quiet moment run `agent-run suspend <name>`, then `agent-run resume <name>`.
-  The pairing stays. Suspend and resume of a host are proven; using them for an
-  upgrade has not been done yet.
+  The pairing stays. Proven from a session on 2026-10-20: the host PEAR moved
+  from 2.35.0 to 2.37.0 this way. Same pairing, the daemon reconnected, and the
+  thread history was intact. Checking it in the ChatGPT app is still to do. PEAR
+  is still on 2.37.0; it moves to 2.38.0 only by another suspend and resume.
+
+### Restart the operator, keeper or shelf from v2
+
+A workbench session can restart the operator, keeper, broker and shelf with
+`kubectl`, with no v1 pod. It can do nothing else to them: the only change it may
+make is the restart annotation that `kubectl rollout restart` writes. An image or
+an argument still goes through git. Run it from a workbench session (the standby
+will do), not from a task.
+
+Declare it first, so an alert from the restart is not taken for a fault:
+
+```bash
+declare-activity start "restart the v2 keeper" --scope dev-env-system,dev-agents --ttl 30m   # prints act-...
+kubectl -n dev-env-system rollout restart deploy/dev-env-keeper
+kubectl -n dev-env-system rollout status deploy/dev-env-keeper --timeout=300s
+declare-activity end act-...
+```
+
+| What | Command |
+|---|---|
+| operator (2 replicas) | `kubectl -n dev-env-system rollout restart deploy/dev-env-operator` |
+| keeper (1 replica, recreated, so it is gone for a couple of seconds) | `kubectl -n dev-env-system rollout restart deploy/dev-env-keeper` |
+| broker (2 replicas) | `kubectl -n dev-env-system rollout restart deploy/dev-env-broker` |
+| shelf (1 replica, in `dev-agents`) | `kubectl -n dev-agents rollout restart deploy/dev-env-shelf` |
+
+Restart one at a time, and wait for `rollout status` before the next.
+
+Every session pod keeps running. A restart never deletes or restarts a session;
+the operator comes back and finds them again. The keeper keeps the logins on its
+own volume, so its restart does not refresh or change them.
+
+Proven from a session, 2026-10-20 between 03:45 and 04:01: a workbench session
+restarted the keeper, the shelf and the operator. Every session pod kept its
+name, start time and restart count, `agent-run list` was the same, the standby
+stayed up, and `agent-run auth status` showed the same generation and expiry
+before and after. The broker was only checked with a dry run. You have not done
+it from the phone yet.
+
+After a restart, check:
+
+- `kubectl -n dev-env-system get deploy` shows the full READY count;
+- `agent-run list` shows the same sessions as before;
+- for the keeper, `agent-run auth status` shows the same generation and expiry,
+  and `kubectl -n dev-env-system logs deploy/dev-env-keeper -c app --tail=30`
+  shows the lease acquired and `claude auth state ready`.
+
+**The shelf** holds rescues and archives, and the operator runs them there. Restart
+it only when nothing is using it:
+
+- the operator log shows no rescue or archive running, and the last one finished
+  a few minutes ago:
+  `kubectl -n dev-env-system logs deploy/dev-env-operator --since=10m | grep -i -E 'rescu|archiv'`
+  (check both operator pods if need be);
+- no hold pod is running: `kubectl -n dev-agents get pods | grep hold`;
+- the archive is off today; once it is on, wait while any session is archiving.
+
+A session that keeps retrying a rescue (about 80 ms every 15 minutes) is no
+obstacle: restart between attempts. A restart during a copy loses nothing, but
+the step fails and runs again a minute later, so wait rather than force it.
+
+Two notes:
+
+- To check what you may do, use `kubectl auth can-i <verb> <resource>
+  --subresource=<log|exec|scale> -n <namespace>`. Written as `pods/log`, can-i
+  answers yes when the real answer is no.
+- If a restart is refused with `dev-env-workbench-admin-guard`, read the message:
+  it names what else changed. Kyverno rewrites its own `kyverno.io/verify-images`
+  annotations on an update; the guard allows exactly those (haynes-ops #4129).
+
+You cannot read Secrets, exec into these pods, delete or scale them, or change
+anything else about them from here. A pod that a restart does not fix is a git
+change, or Tom.
 
 ## 6. The shared logins
 
@@ -203,33 +399,53 @@ nobody signs in per session.
 - **Check.** In any v2 session, `agent-run auth status` shows each login's
   state (Ready or NeedsLogin), its generation and the time left on the current
   access token. Exit 0 is fine, 1 is expiring or expired, 2 means it cannot
-  tell. Proven in a workbench session.
+  tell. Proven from a session.
 - **Refresh is automatic.** The keeper renews the Claude access token at about
-  two thirds of its 8-hour life. Proven at 00:29 UTC on 2026-10-20: generation
-  2 reached the session pods and every session stayed on the phone. The ChatGPT
-  token is good until 2026-10-29, so its first automatic refresh has not come
-  due yet.
+  two thirds of its 8-hour life. Proven at 00:29 on 2026-10-20: generation 2
+  reached the session pods and every session stayed on the phone. Generation 3
+  followed at 05:50, as expected, and sessions read it. The ChatGPT token is
+  good until 2026-10-29, so its first automatic refresh has not come due yet.
 - Headless Claude tasks do not use the keeper's login. They keep their own
   long-lived token, as in v1.
 - **Renew the Claude login about once a month.** It lapses about 30 days after
-  the last sign-in. The current one is from 2026-10-19, so it lapses around
-  2026-11-18. `agent-run auth status` shows the access token, not this date;
-  put it in your calendar.
-- **Who does what.** A coordinator in the v1 pod starts the keeper's login
-  helper and sends you one sign-in link in chat. You open it on your phone, sign
-  in with your Max account and paste back the code the page shows. Finish within
-  15 minutes; after that the helper gives up and the coordinator starts again
-  with a fresh link. The link and the code never go into git or notes.
+  the last sign-in. Since 2.38.0, `agent-run keeper-login claude status` in a
+  workbench session shows the date; `agent-run auth status` does not. On
+  2026-10-20 it showed **2026-11-16 17:51 UTC**, two days before the 30-day
+  estimate these notes gave. Nothing warns you yet (plan 13, story 13.1 adds a
+  warning), so put it in your calendar.
+- **Two ways to renew.** From a workbench session with `agent-run keeper-login`
+  (below), or as before: a coordinator in the v1 pod starts the keeper's login
+  helper and sends you one sign-in link in chat. Either way you open the link on
+  your phone, sign in with your Max account and paste back the code the page
+  shows. Finish within 15 minutes; after that the helper gives up and you start
+  again with a fresh link. The link and the code never go into git or notes.
+  The v1 route is proven on the phone (2026-10-19).
 - **ChatGPT login.** Same shape, a device sign-in. It is needed only when the
   keeper reports NeedsLogin. It was renewed on 2026-10-19.
-- **Not proven yet:** the automatic "continue" a session gets when a turn fails
-  on an expired token. No turn has needed it.
+- **A turn that fails on a bad token.** agentd puts the keeper's token back in
+  the pod within about 5 seconds, and the next turn works (proven from a session
+  on 2026-10-20, Claude and Codex). Resend the failed message yourself. The
+  automatic "continue" is meant for a turn that failed before the keeper
+  published a new token. In 2.37.0 it did not recognise the Claude CLI's real
+  error; 2.38.0 fixes that (#473). Proven from a session on 2.38.0, with a new
+  token generation simulated: the session got the continue message and finished
+  the prompt that had failed. A real keeper refresh setting it off has not been
+  seen yet.
 
 ### Renew the keeper login from v2
 
-**Status: source and unit-tested only.** It works after the release that carries it
-is pinned and the operator's new access is in place (the haynes-ops access change
-merges first). Until then the v1 route above is the only one. Not yet run live.
+**Status: installed in 2.38.0** (dev-env #475; haynes-ops #4130 and #4131).
+Proven from a session on 2026-10-20: `status` for both logins; `url` for both;
+for ChatGPT, `url`, `cancel` and `url` again; any caller other than a workbench
+session refused; and the keeper's logins unchanged after each abandoned try.
+
+**Known fault: Claude `cancel` does not free the keeper.** The keeper's helper
+keeps running, and the next `url` answers "held elsewhere" until the open
+ceremony ends, up to 15 minutes. So ask for a Claude link only when you are
+ready to sign in. A fix is in progress.
+
+You have not run a full ceremony from v2 yet, so keep the v1 route as the
+fallback until you have.
 
 You do this from a workbench session (the standby session on your phone is one). No
 v1 pod, no laptop. Only a workbench session may do this; any other session gets
@@ -251,8 +467,8 @@ runs the commands and you give it the sign-in code in the chat.
 The code is single-use and short-lived: it works only for the ceremony that is open,
 and the ceremony closes after 15 minutes. It and the link appear in that chat and
 nowhere else. Never put either in a file, git, a PR, a handoff or notes, and tell the
-agent not to. If a code is wrong, expired or already used, nothing changes: ask for
-`cancel`, then a fresh `url`.
+agent not to. If a code is wrong, expired or already used, nothing changes. Ask for
+`cancel`, then a fresh `url` (for Claude, the known fault above can make that wait).
 
 **From a terminal in the session** (the same commands the agent runs):
 
@@ -277,8 +493,17 @@ new login can still land, whole and never partial: `status` shows which.) If the
 operator restarts mid-ceremony, run `url` again. If `url` says the keeper's attempt is
 "held elsewhere", an earlier ceremony (before an operator restart, or from the v1
 route) still holds the keeper's one slot: `cancel` cannot end it, and it expires by
-itself within 15 minutes. The command reconnects by itself while the operator's other
-replica answers.
+itself within 15 minutes. Today a Claude `cancel` also leaves this state (the known
+fault above). The command reconnects by itself while the operator's other replica
+answers.
+
+After a ChatGPT `cancel`, `status` showed PendingPublication for about half a minute
+and the keeper logged an error, then went back to Ready on its own with the same
+login.
+
+The operator runs only the two login helpers in the keeper pod. An admission
+policy, `dev-env-operator-exec-guard`, refuses anything else it tries there: the
+keeper's main container, a shell, other arguments.
 
 ## 7. Where notes live
 
@@ -298,15 +523,19 @@ replica answers.
 
 ## 8. What still needs v1
 
-- **The keeper login ceremonies** (section 6): the Claude login about once a
-  month, next around 2026-11-18, and the ChatGPT login when it reports
-  NeedsLogin. Today the v1 pod (or a laptop with admin access) runs them in the
-  keeper pod. From a workbench session they move to `agent-run keeper-login` once
-  that is released and pinned (section 6, "Renew the keeper login from v2"); it is
-  not run live yet, so this still needs v1 until it is.
-- **Restarting the v2 operator, keeper or shelf.** A v2 session is refused there.
-- **Headless Codex tasks on a repo outside the catalog** (section 3).
+- **A keeper login ceremony, until you have done one from v2.** The v2 route
+  is installed and partly proven, and Claude `cancel` has a known fault (section
+  6). The Claude login lapses on 2026-11-16; the ChatGPT login is needed only
+  when the keeper reports NeedsLogin.
+- **Proxmox writes.** The v2 token grant still fails (section 1). v1's `pve`
+  keeps its own operator token.
+- **Headless Codex tasks on a repo outside the catalog** (section 3), such as
+  haynes-quest or the private repos left out of it.
+- **Cluster writes: pod deletes, `flux reconcile`, Jobs.** The workbench reads
+  only (section 1). A default-profile session has the rights in RBAC but has not
+  used them yet.
 - **Retiring v1 itself.** That is your call.
 
-More detail is in the [workflow guide](workflow-guide.md) and
-[plan 03](../.agents/sagas/distributed-dev-env/backlog/03-remote-control.md).
+More detail is in the [workflow guide](workflow-guide.md),
+[plan 03](../.agents/sagas/distributed-dev-env/backlog/03-remote-control.md) and
+[plan 13](../.agents/sagas/distributed-dev-env/backlog/13-phone-browser-management.md).
