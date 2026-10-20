@@ -134,6 +134,14 @@ type KeeperLogin struct {
 
 	mu   sync.Mutex
 	open map[string]*ceremony
+	// cancelling: a cancel is running the abandon command for the provider, with
+	// no ceremony held here. A begin in that window would lose its new helper to
+	// the abandon's SIGHUP, so it is refused until the cancel ends.
+	cancelling map[string]bool
+
+	// beforeAnswer is a test seam: called when the link is complete, before the
+	// handler checks whether the helper has already left. Nil in production.
+	beforeAnswer func(*ceremony)
 }
 
 func (k *KeeperLogin) urlWait() time.Duration { return firstDuration(k.URLWait, defaultKeeperURLWait) }
@@ -456,10 +464,15 @@ func (s *Server) keeperLoginURL(ctx context.Context, w http.ResponseWriter, r *h
 		select {
 		case l := <-cer.events:
 			parts.absorb(p, l)
-			if parts.complete(p) && cer.isDone() {
-				// The helper left as the link arrived: the link is dead.
-				k.forget(cer)
-				return 0, nil, helperEnded(p, cer.result())
+			if parts.complete(p) {
+				if k.beforeAnswer != nil {
+					k.beforeAnswer(cer)
+				}
+				if cer.isDone() {
+					// The helper left as the link arrived: the link is dead.
+					k.forget(cer)
+					return 0, nil, helperEnded(p, cer.result())
+				}
 			}
 		case <-cer.done:
 			// An open ceremony has not ended. A helper that is gone makes any link
@@ -530,6 +543,9 @@ func (k *KeeperLogin) begin(p loginProvider, pod *corev1.Pod) (*ceremony, error)
 	if k.open == nil {
 		k.open = map[string]*ceremony{}
 	}
+	if k.cancelling[p.name] {
+		return nil, newError(http.StatusConflict, apiv1.CodeConflict, "a %s keeper-login cancel is in progress: run url again in a moment", p.name)
+	}
 	if old := k.open[p.name]; old != nil {
 		if !old.isDone() {
 			return nil, newError(http.StatusConflict, apiv1.CodeConflict,
@@ -581,6 +597,28 @@ func (k *KeeperLogin) abandon(cer *ceremony) {
 	}
 	cer.stop(k.stopWait(), run)
 	k.forget(cer)
+}
+
+// startCancel marks a no-ceremony cancel running for the provider. False means
+// one is already running, or a ceremony has been opened since the caller looked:
+// then there is something else to do first and nothing is signalled.
+func (k *KeeperLogin) startCancel(p loginProvider) bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.cancelling[p.name] || k.open[p.name] != nil {
+		return false
+	}
+	if k.cancelling == nil {
+		k.cancelling = map[string]bool{}
+	}
+	k.cancelling[p.name] = true
+	return true
+}
+
+func (k *KeeperLogin) endCancel(p loginProvider) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	delete(k.cancelling, p.name)
 }
 
 func (k *KeeperLogin) current(p loginProvider) *ceremony {
@@ -675,6 +713,10 @@ func (s *Server) keeperLoginCancel(ctx context.Context, _ http.ResponseWriter, r
 		if err != nil {
 			return 0, nil, err
 		}
+		if !k.startCancel(p) {
+			return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "a %s keeper-login ceremony or cancel is already in progress: run cancel again", p.name)
+		}
+		defer k.endCancel(p)
 		k.runAbandon(p, pod)
 	}
 	return http.StatusNoContent, nil, nil

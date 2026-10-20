@@ -61,6 +61,9 @@ type fakeKeeperExec struct {
 	// Ctrl-C ends nothing: live (LIVE-238a, D1) the Claude helper and CLI ignored it.
 	hup      chan struct{}
 	abandons int
+	// abandonStarted is closed when the abandon command starts, and the command
+	// then waits on abandonGate (both nil: no hold).
+	abandonStarted, abandonGate chan struct{}
 }
 
 func (e *fakeKeeperExec) record(ns, pod, container string, cmd []string) {
@@ -87,6 +90,10 @@ func (e *fakeKeeperExec) Run(_ context.Context, ns, pod, container string, cmd [
 		return errors.New("a status command takes no stdin")
 	}
 	if len(cmd) == 2 && cmd[1] == "claude-login-abandon" {
+		if e.abandonStarted != nil {
+			close(e.abandonStarted)
+			<-e.abandonGate
+		}
 		e.mu.Lock()
 		e.abandons++
 		close(e.hup) // ends the helper now running; the next one gets a fresh channel
@@ -801,15 +808,73 @@ func TestKeeperLoginMethods(t *testing.T) {
 }
 
 // A helper that has already left when the link arrives gives a dead link: refused.
+// Deterministic: the handler is held (beforeAnswer) until the helper's exec has
+// ended, so it never races the helper's exit; without the hold, a handler that read
+// the link a moment before the exit would legitimately answer 200.
 func TestKeeperLoginDeadLinkIsRefused(t *testing.T) {
 	ex := claudeExec()
 	ex.afterLink = []string{`{"ok":false,"code":"NeedsLogin"}`}
 	ex.endNow = true
 	k := newKeeperFixture(t, ex)
+	var timedOut atomic.Bool
+	k.srv.KeeperLogin.beforeAnswer = func(c *ceremony) {
+		select {
+		case <-c.done:
+		case <-time.After(10 * time.Second): // a hang is a failure, not a flake
+			timedOut.Store(true)
+		}
+	}
 	w := k.do(http.MethodPost, apiv1.KeeperLoginPathFor("claude")+"/url", tokWorkbench, nil)
+	if timedOut.Load() {
+		t.Fatal("the helper's exec never ended")
+	}
 	wantError(t, w, http.StatusServiceUnavailable, apiv1.CodeUnavailable)
 	if strings.Contains(w.Body.String(), "oauth") {
 		t.Fatalf("a dead link was returned: %s", w.Body.String())
+	}
+}
+
+// The other side of the same race: a helper that is still running when the link
+// is read is answered with the link. Held (beforeAnswer) until the test checks
+// the helper has not ended, so it does not depend on timing either.
+func TestKeeperLoginLiveLinkIsAnswered(t *testing.T) {
+	ex := claudeExec()
+	k := newKeeperFixture(t, ex)
+	k.srv.KeeperLogin.beforeAnswer = func(c *ceremony) {
+		if c.isDone() {
+			t.Error("the helper ended while the link was being answered")
+		}
+	}
+	if w := k.do(http.MethodPost, apiv1.KeeperLoginPathFor("claude")+"/url", tokWorkbench, nil); w.Code != http.StatusOK {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+}
+
+// A new ceremony cannot start while a no-ceremony cancel is running its abandon
+// command: the SIGHUP would take the new helper with it. Held on channels, no
+// sleeps: the abandon exec blocks until the test has tried the url.
+func TestKeeperLoginUrlWaitsOutARunningCancel(t *testing.T) {
+	ex := claudeExec()
+	ex.abandonStarted = make(chan struct{})
+	ex.abandonGate = make(chan struct{})
+	k := newKeeperFixture(t, ex)
+	cancelled := make(chan int, 1)
+	go func() {
+		cancelled <- k.do(http.MethodDelete, apiv1.KeeperLoginPathFor("claude"), tokWorkbench, nil).Code
+	}()
+	<-ex.abandonStarted
+	wantError(t, k.do(http.MethodPost, apiv1.KeeperLoginPathFor("claude")+"/url", tokWorkbench, nil), http.StatusConflict, apiv1.CodeConflict)
+	// A second cancel does not pile a second abandon on top.
+	wantError(t, k.do(http.MethodDelete, apiv1.KeeperLoginPathFor("claude"), tokWorkbench, nil), http.StatusConflict, apiv1.CodeConflict)
+	close(ex.abandonGate)
+	if code := <-cancelled; code != http.StatusNoContent {
+		t.Fatalf("cancel: %d", code)
+	}
+	if w := k.do(http.MethodPost, apiv1.KeeperLoginPathFor("claude")+"/url", tokWorkbench, nil); w.Code != http.StatusOK {
+		t.Fatalf("url after the cancel: %d %s", w.Code, w.Body.String())
+	}
+	if ex.abandons != 1 {
+		t.Fatalf("abandon commands = %d, want 1", ex.abandons)
 	}
 }
 
