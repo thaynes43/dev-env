@@ -308,6 +308,7 @@ func (w *claudeWorker) adopt(ctx context.Context, id string) claudelogin.Respons
 		return unavailable
 	}
 	w.note("adopted")
+	w.observe(next)
 	// Adoption is durable even if publication is unavailable now; the next tick
 	// retries publication only.
 	if w.Fence(ctx, claudeSaveTimeout+claudeSafetyMargin) != nil || w.Publisher.publish(ctx, next.Access, next.RefreshExpiresAt, w.Clock.Now()) != nil {

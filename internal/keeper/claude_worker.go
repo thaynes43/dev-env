@@ -60,6 +60,9 @@ type claudeWorker struct {
 	// LoginDir enables the login control socket and the adoption of a staged
 	// login; empty leaves the worker refresh-only.
 	LoginDir string
+	// Obs receives the journal's state for the login gauges and the notifier;
+	// nil keeps the worker as it was.
+	Obs *LoginHub
 
 	// mu serializes a refresh tick with every control request, so an adoption
 	// never overlaps a refresh in flight. Everything below is guarded by it.
@@ -122,6 +125,7 @@ func (w *claudeWorker) tick(ctx context.Context) {
 		w.note("journal-unavailable")
 		return
 	}
+	w.observe(r)
 	switch r.Stage {
 	case claudeIntent:
 		w.needsLogin(ctx)
@@ -230,7 +234,17 @@ func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
 		return claudeRecord{}, errClaudeJournal
 	}
 	w.note("refreshed")
+	w.observe(next)
 	return next, nil
+}
+
+// observe hands the journal's state to the gauges: words and a time, no token.
+func (w *claudeWorker) observe(r claudeRecord) {
+	if r.Stage == claudeReady {
+		w.Obs.Report(ProviderClaude, LoginReady, r.RefreshExpiresAt)
+		return
+	}
+	w.Obs.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
 }
 
 // abandon returns an intent that was never sent to Ready, if this attempt's
@@ -248,6 +262,7 @@ func (w *claudeWorker) abandon(ctx context.Context, ready claudeRecord, uid stri
 // and the refresh credential, which may be spent, is dropped.
 func (w *claudeWorker) needsLogin(ctx context.Context) {
 	w.note("needs-login")
+	w.Obs.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
 	if w.Fence(ctx, claudeSaveTimeout+claudeSafetyMargin) != nil {
 		return
 	}

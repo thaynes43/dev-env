@@ -212,6 +212,49 @@ link to the standby, deduplication and a priority chosen per event.
   (then ship the state gauge and the NeedsLogin alert, and record the date as
   Unknown); at a design question; or at the budget.
 
+**Story 13.1 decisions and status (2026-10-20).** State: source in the dev-env
+PR for story 13.1; not merged, released or installed. The haynes-ops pieces are
+a separate PR (ExternalSecret, notice ConfigMap and its Role, a PodMonitor and
+the metrics ingress rule) and a prepared, unmerged mount change for the keeper
+HelmRelease.
+
+- **The lapse date is its own projection key, not a member of `access.json`.**
+  The Secret `dev-env-claude-live` gets a second key, `login.json`
+  (`{"version":1,"loginLapsesAt":"<RFC 3339>"}`, no `refresh` in any name).
+  Reason: agentd decodes `access.json` strictly and refuses any member it does
+  not know, so a new member would stop every running session that still has an
+  older agentd from following the keeper's login. Those sessions must not be
+  disturbed. An older agentd reads only `access.json` and never sees the new
+  key (the whole Secret is mounted, so `agent-run` finds `login.json` beside it).
+  The keeper writes it with each published generation, and rewrites it for the
+  current generation after a restart. An unknown date removes the key.
+- **Codex has no known lapse date.** Its journal holds no refresh-token expiry,
+  so Codex exports no lapse series, has no projection field and shows `Unknown`.
+  Its state gauge and NeedsLogin notices work.
+- **Gauges** on the keeper's metrics port (8080): `dev_env_keeper_login_state
+  {provider,state}` with states `Ready`, `NeedsLogin`, `LoginInProgress`,
+  `Unknown`, and `dev_env_keeper_login_lapse_timestamp_seconds{provider}`
+  (Claude only, absent while no date is known). The workers hand their journal
+  reading to one in-memory hub; the journal format is unchanged.
+- **Link.** The keeper's existing RBAC reads AgentSessions by name only (`get`,
+  no `list`), and the standby's name changes. So there is no stable
+  per-session link to find. Every notice links `https://claude.ai/code` (the
+  session list where the standby appears on the phone), titled "Open the dev-env
+  standby", and the message names `agent-run keeper-login claude url` and
+  quickstart section 6. No RBAC was added for a link.
+- **Deduplication** is a ConfigMap, `dev-env-keeper-notices` in `dev-env-system`
+  (key `state.json`: the day and lapse of the last warning, the incident id and
+  whether it was announced; no secret). The keeper's existing Roles write no
+  ConfigMap, so haynes-ops pre-creates it and gives the keeper `get`, `update`
+  and `patch` on that name only: no `create`, no `list`.
+- **A ceremony is not an incident.** A Codex login ceremony pauses refresh by
+  marking the journal NeedsLogin with a reservation. The keeper reports that as
+  `LoginInProgress`, which neither opens nor ends an incident.
+- **One-shot test trigger:** `dev-env-keeper notify-test` (quickstart section 6).
+- **Left for the installed check:** Prometheus holding both series; the Claude
+  lapse matching the keeper's annotation; `agent-run auth status` in a
+  workbench session; one test notice on Tom's phone.
+
 ## Later
 
 In order. Each becomes its own story when picked up.

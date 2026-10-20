@@ -44,6 +44,9 @@ type codexWorker struct {
 	published uint64
 	halted    bool
 	ready     atomic.Bool
+	// Obs receives the journal's state for the login gauges and the notifier;
+	// nil keeps the worker as it was.
+	Obs *LoginHub
 }
 
 type codexLoaded struct {
@@ -82,6 +85,23 @@ func (w *codexWorker) Start(ctx context.Context) error {
 			return nil
 		case <-w.Clock.After(30 * time.Second):
 		}
+	}
+}
+
+// observe hands the journal's state to the gauges: words only. Codex has no
+// known login lapse date (its refresh token carries no expiry), so it never
+// reports one and its lapse series stays absent. A live ceremony reservation is
+// its own state, so a deliberate renewal does not look like a lapse.
+func (w *codexWorker) observe(r codexRecord) {
+	switch {
+	case w.halted:
+		w.Obs.Report(ProviderCodex, LoginNeedsLogin, time.Time{})
+	case r.Stage == codexReady:
+		w.Obs.Report(ProviderCodex, LoginReady, time.Time{})
+	case w.loginReservationLive(r):
+		w.Obs.Report(ProviderCodex, LoginInProgress, time.Time{})
+	default:
+		w.Obs.Report(ProviderCodex, LoginNeedsLogin, time.Time{})
 	}
 }
 
@@ -124,6 +144,7 @@ func (w *codexWorker) tickExpected(ctx context.Context, expected uint64) error {
 		w.ready.Store(false)
 		return err
 	}
+	w.observe(d.Record)
 	if expected != 0 {
 		if d.Record.Access.Generation != expected {
 			return errCodexGenerationMismatch
@@ -246,6 +267,7 @@ func (w *codexWorker) tickExpected(ctx context.Context, expected uint64) error {
 // clears refresh material and tombstones even a CAS whose response was lost.
 func (w *codexWorker) needsLogin(ctx context.Context) error {
 	w.halted = true
+	w.Obs.Report(ProviderCodex, LoginNeedsLogin, time.Time{})
 	w.ready.Store(false)
 	if w.Fence(ctx, codexSaveTimeout+codexSafetyMargin) == nil {
 		if d, err := w.load(ctx); err == nil {

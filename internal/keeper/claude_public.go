@@ -49,6 +49,23 @@ func (p *claudePublicSecret) publish(ctx context.Context, a claudeauth.Access, r
 	if p.Client.Get(c, p.Secret, &s) != nil || s.ResourceVersion == "" {
 		return errClaudePublication
 	}
+	// The lapse document (claudeauth.LoginKey) is written beside the access
+	// document, and rewritten for a generation already published, so a keeper
+	// that starts with a lapse date to add does not wait for the next refresh.
+	// An unknown lapse removes the key (null) rather than leave a stale date.
+	var loginRaw []byte
+	if !refreshExpiresAt.IsZero() {
+		if loginRaw, err = claudeauth.EncodeLogin(refreshExpiresAt); err != nil {
+			return errClaudePublication
+		}
+	}
+	data := map[string]any{claudeauth.LiveKey: raw}
+	sameGeneration := false
+	if loginRaw != nil {
+		data[claudeauth.LoginKey] = loginRaw
+	} else {
+		data[claudeauth.LoginKey] = nil
+	}
 	if oldRaw := s.Data[claudeauth.LiveKey]; len(oldRaw) != 0 {
 		old, err := claudeauth.Decode(oldRaw, claudeEpoch)
 		if err != nil || old.Generation > a.Generation || old.AccountUUID != a.AccountUUID {
@@ -59,7 +76,12 @@ func (p *claudePublicSecret) publish(ctx context.Context, a claudeauth.Access, r
 			if err != nil || !bytes.Equal(canonical, raw) {
 				return errClaudePublication
 			}
-			return nil
+			// The access document is current; only the lapse document may differ.
+			if bytes.Equal(s.Data[claudeauth.LoginKey], loginRaw) {
+				return nil
+			}
+			delete(data, claudeauth.LiveKey)
+			sameGeneration = true
 		}
 	}
 	annotations := map[string]any{
@@ -71,10 +93,15 @@ func (p *claudePublicSecret) publish(ctx context.Context, a claudeauth.Access, r
 	if !refreshExpiresAt.IsZero() {
 		annotations[AnnotationRefreshExpiresAt] = refreshExpiresAt.UTC().Format(time.RFC3339)
 	}
-	patch, _ := json.Marshal(map[string]any{
-		"metadata": map[string]any{"resourceVersion": s.ResourceVersion, "uid": s.UID, "annotations": annotations},
-		"data":     map[string][]byte{claudeauth.LiveKey: raw},
-	})
+	meta := map[string]any{"resourceVersion": s.ResourceVersion, "uid": s.UID}
+	if !sameGeneration {
+		meta["annotations"] = annotations
+	} else if !refreshExpiresAt.IsZero() {
+		meta["annotations"] = map[string]any{AnnotationRefreshExpiresAt: refreshExpiresAt.UTC().Format(time.RFC3339)}
+	} else {
+		meta["annotations"] = map[string]any{AnnotationRefreshExpiresAt: nil}
+	}
+	patch, _ := json.Marshal(map[string]any{"metadata": meta, "data": data})
 	target := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: p.Secret.Namespace, Name: p.Secret.Name}}
 	if p.Client.Patch(c, target, client.RawPatch(types.MergePatchType, patch), client.FieldOwner(FieldOwner)) != nil {
 		return errClaudePublication

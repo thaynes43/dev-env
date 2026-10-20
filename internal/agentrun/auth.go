@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -26,6 +27,11 @@ import (
 var authCodexMountPath = "/opt/dev-env/codex-access/access.json"
 
 const (
+	// authLoginFile is the lapse document the keeper publishes beside the Claude
+	// access projection (claudeauth.LoginKey; agent-run imports no keeper package).
+	authLoginFile = "login.json"
+	// authLapseWarning: a known lapse this close, or past, exits 1.
+	authLapseWarning   = 7 * 24 * time.Hour
 	authMaxBytes       = 64 << 10
 	authDefaultWarning = 30 * time.Minute
 	authReady          = "Ready"
@@ -53,6 +59,12 @@ type authRow struct {
 	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
 	SecondsLeft *int64     `json:"secondsLeft,omitempty"`
 	LastRefresh *time.Time `json:"lastRefresh,omitempty"`
+	// LoginLapsesAt is when the whole login lapses and a person must sign in
+	// again, when the keeper published it. LoginLapse is "Unknown" when it did
+	// not: never a guessed date.
+	LoginLapsesAt *time.Time `json:"loginLapsesAt,omitempty"`
+	LoginDaysLeft *int       `json:"loginDaysLeft,omitempty"`
+	LoginLapse    string     `json:"loginLapse,omitempty"`
 	// code is the row's contribution to the exit code: 0 fine, 1 near expiry
 	// or expired, 2 cannot tell, -1 not configured (does not count).
 	code int
@@ -95,6 +107,10 @@ func (a *app) auth(_ context.Context, args []string) error {
 		readAuthRow("claude", claudeFile, "expiresAt", now, warn),
 		readAuthRow("codex", codexFile, "exp", now, warn),
 	}
+	// Only Claude's keeper login has a known lapse date; Codex's refresh token
+	// carries none, so it stays Unknown.
+	addLoginLapse(&rows[0], claudeFile, now)
+	rows[1].LoginLapse = authUnknown
 	code := authExitCode(rows)
 	if cmd.c.output == outputJSON {
 		if err := a.printJSON(authReport{Logins: rows}); err != nil {
@@ -179,6 +195,44 @@ func readAuthRow(provider, path, expiryKey string, now time.Time, warn time.Dura
 	return row
 }
 
+// addLoginLapse reads the keeper's lapse document beside the access projection
+// and sets the row's lapse fields. A missing or unreadable document is
+// Unknown. A lapse within the warning window, or past, makes the row exit 1.
+func addLoginLapse(row *authRow, accessFile string, now time.Time) {
+	row.LoginLapse = authUnknown
+	if accessFile == "" || row.code < 0 {
+		return
+	}
+	raw, err := readAuthFile(filepath.Join(filepath.Dir(accessFile), authLoginFile))
+	if err != nil {
+		return
+	}
+	var doc struct {
+		Version       int       `json:"version"`
+		LoginLapsesAt time.Time `json:"loginLapsesAt"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if dec.Decode(&doc) != nil || doc.Version != 1 || doc.LoginLapsesAt.IsZero() || doc.LoginLapsesAt.Unix() <= 0 {
+		return
+	}
+	lapse := doc.LoginLapsesAt.UTC()
+	left := lapse.Sub(now)
+	days := int(left / (24 * time.Hour))
+	row.LoginLapse, row.LoginLapsesAt, row.LoginDaysLeft = lapse.Format(time.RFC3339), &lapse, &days
+	if left <= authLapseWarning {
+		row.code = 1
+		note := "login lapses within 7 days: renew from the standby (agent-run keeper-login claude url)"
+		if left <= 0 {
+			note = "login has lapsed: renew from the standby (agent-run keeper-login claude url)"
+		}
+		if row.Reason != "" {
+			note = row.Reason + "; " + note
+		}
+		row.Reason = note
+	}
+}
+
 // readAuthFile reads one bounded regular file. A symlink is followed (a
 // mounted Secret is a link into its data directory).
 func readAuthFile(path string) ([]byte, error) {
@@ -209,12 +263,28 @@ func (a *app) printAuthText(rows []authRow, warn time.Duration) {
 				line += "  keeper last refresh " + r.LastRefresh.Format(time.RFC3339)
 			}
 		}
+		switch {
+		case r.LoginLapsesAt != nil:
+			line += fmt.Sprintf("  login lapses %s (%s)", r.LoginLapsesAt.Format(time.RFC3339), authLoginLeft(*r.LoginLapsesAt, *r.LoginDaysLeft, a.env.Now()))
+		case r.ExpiresAt != nil && r.LoginLapse != "":
+			line += "  login lapses Unknown"
+		}
 		if r.Reason != "" {
 			line += "  " + r.Reason
 		}
 		_, _ = fmt.Fprintln(w, strings.TrimRight(line, " "))
 	}
 	_, _ = fmt.Fprintf(w, "warning window %s; exit 0 ok, 1 expired or inside the window, 2 cannot tell\n", warn)
+}
+
+func authLoginLeft(lapse time.Time, days int, now time.Time) string {
+	if !lapse.After(now) {
+		return "lapsed"
+	}
+	if days < 1 {
+		return "under a day left"
+	}
+	return fmt.Sprintf("%d days left", days)
 }
 
 func authLeft(secs int64) string {
