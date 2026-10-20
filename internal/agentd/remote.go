@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -38,6 +39,41 @@ const (
 
 // ErrLoginRequired marks a remote session whose pod has no usable login.
 var ErrLoginRequired = errors.New("login required")
+
+// ErrLoginBusy answers a `login url` while another login request, or the agent's
+// own start, holds the pod's login lock.
+var ErrLoginBusy = errors.New("busy: another login request is in progress on this pod, or the agent is starting; try again in a moment")
+
+const loginLockFile = "login.lock"
+
+// acquireLoginLock takes the pod's one login lock without waiting. It is an
+// flock on a file in the state directory, shared by every process that can
+// start a Claude CLI on this HOME: `agentd ctl login url`, which opens a
+// ceremony, and the daemon, which starts the agent. Holding it is what keeps
+// to one token family per pod (one owner per rotating refresh token). The
+// kernel drops the lock with the process, so a crashed holder never locks the
+// developer out. A held lock gives ErrLoginBusy.
+func acquireLoginLock(s Settings) (func(), error) {
+	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
+		return nil, errors.New("the login lock directory is unavailable")
+	}
+	f, err := os.OpenFile(s.statePath(loginLockFile), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
+	if err != nil {
+		return nil, errors.New("the login lock cannot be opened")
+	}
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, errors.New("the login lock is not a regular file")
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, ErrLoginBusy
+		}
+		return nil, errors.New("the login lock cannot be taken")
+	}
+	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
+}
 
 var loginURLPattern = regexp.MustCompile(`https://claude\.com/cai/oauth/authorize\?[^\s"'<>]+`)
 
@@ -165,6 +201,13 @@ func LoginURL(ctx context.Context, r Runner, s Settings, sess protocol.Session, 
 	if s.ClaudeLiveFile != "" {
 		return "", ErrClaudeProjectionLogin
 	}
+	// One ceremony at a time, and never beside the daemon's agent start: the
+	// checks below and the window they allow are one critical section.
+	release, err := acquireLoginLock(s)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	// One owner per rotating refresh token: never a second CLI on this HOME
 	// while the agent's CLI runs, even if its login file reads as absent. A
 	// login that still reads as usable may be renewed or replaced (a renewal
@@ -172,6 +215,10 @@ func LoginURL(ctx context.Context, r Runner, s Settings, sess protocol.Session, 
 	var p agentPid
 	if readJSONFile(s.statePath(pidFile), &p) == nil && pidAlive(p) {
 		return "", errors.New("the agent is running on this pod's login, and only one CLI may own it: exit its TUI (agent-run attach " + sess.Name + ", then /exit), then run login url again; the agent starts by itself once the new login lands")
+	}
+	// The agent's tmux session exists a moment before its pid file does.
+	if _, err := r.Run(ctx, Cmd{Name: s.TmuxBin, Args: []string{"has-session", "-t", "=" + TmuxSession}}); err == nil {
+		return "", errors.New("the agent is starting or running on this pod's login, and only one CLI may own it: exit its TUI (agent-run attach " + sess.Name + ", then /exit) and run login url again")
 	}
 	if hasLoginWindow(ctx, r, s) {
 		if pane, err := loginPane(ctx, r, s); err == nil && strings.Contains(pane, loginExitMarker) {

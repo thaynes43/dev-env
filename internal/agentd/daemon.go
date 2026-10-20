@@ -50,6 +50,9 @@ type Daemon struct {
 	// boot so a login that lands later can start the agent; waiting is true
 	// while the boot found no usable login.
 	remote *remoteWait
+	// loginLocked is set while this daemon holds the pod's login lock, so the
+	// agent start inside pollRemoteLogin does not take it a second time.
+	loginLocked bool
 	// claudeSyncErr is the last projection outcome logged (nil: applied).
 	claudeSyncErr error
 	// crm supervises a Codex remote session's phone daemon (Story110 T17).
@@ -237,6 +240,15 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 	}
 	if d.Session.Mode == protocol.ModeRemote {
 		d.remote = &remoteWait{ws: ws, repo: repo, boot: bootID}
+		// Starting the agent's CLI and opening a login ceremony exclude each
+		// other (agentd ctl login url holds the same lock). If a ceremony is
+		// being opened right now, hold the agent as if no login existed: the
+		// poll starts it once that ceremony has ended.
+		release, ok := d.lockLogin()
+		if !ok {
+			return d.waitForLogin()
+		}
+		defer release()
 	}
 	if !remoteLoginUsable(d.S, d.Session, d.now()) {
 		return d.waitForLogin()
@@ -299,6 +311,26 @@ func (d *Daemon) waitForLogin() (Step, string) {
 	return newStep("agent", notes, nil), ""
 }
 
+// lockLogin takes the pod's login lock for this daemon unless it already holds
+// it; ok is false only while another process holds it. A lock that cannot be
+// taken at all (an unusable state directory) never keeps the agent down: the
+// daemon logs it and goes on, since `login url` fails closed on the same error.
+func (d *Daemon) lockLogin() (release func(), ok bool) {
+	if d.loginLocked {
+		return func() {}, true
+	}
+	rel, err := acquireLoginLock(d.S)
+	if err != nil {
+		if errors.Is(err, ErrLoginBusy) {
+			return nil, false
+		}
+		d.Log.Warn("login lock unavailable; going on without it", "err", err)
+		return func() {}, true
+	}
+	d.loginLocked = true
+	return func() { d.loginLocked = false; rel() }, true
+}
+
 // loginSettle is how long a finished login may leave its window open before
 // agentd starts the agent anyway.
 const loginSettle = 30 * time.Second
@@ -313,6 +345,14 @@ func (d *Daemon) pollRemoteLogin(ctx context.Context) {
 	if w == nil || d.writerRefused || !remoteLoginUsable(d.S, d.Session, d.now()) {
 		return
 	}
+	// The pid check, the window's end and the agent start are one critical
+	// section against `login url`; a busy lock means a ceremony is opening, so
+	// this poll leaves everything as it is.
+	release, ok := d.lockLogin()
+	if !ok {
+		return
+	}
+	defer release()
 	var p agentPid
 	if readJSONFile(d.S.statePath(pidFile), &p) == nil && pidAlive(p) {
 		w.since = time.Time{}
