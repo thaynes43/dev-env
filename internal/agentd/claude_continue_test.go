@@ -358,6 +358,7 @@ func TestClassifyTranscriptRealCLIAuthFailure(t *testing.T) {
 		{"please run /login, mixed case", entry("assistant", loginNow, apiErr, text("Not logged in · PLEASE RUN /LOGIN")), true},
 		{"oauth token has been revoked", entry("assistant", loginNow, apiErr, text("OAuth token has been revoked")), true},
 		{"api error prefix without the flag", entry("assistant", loginNow, `,"apiErrorStatus":401`, text("API Error: 401 unauthorized")), true},
+		{"error as an object does not hide the entry", entry("assistant", loginNow, apiErr+`,"apiErrorStatus":"401","error":{"type":"x"}`, text("Not logged in · Please run /login")), true},
 		{"429 rate limit", entry("assistant", loginNow, apiErr+`,"apiErrorStatus":429,"error":"rate_limit"`, text("API Error: 429 rate limited")), false},
 		{"500 server error", entry("assistant", loginNow, apiErr+`,"apiErrorStatus":500,"error":"unknown"`, text("API Error: 500 internal server error")), false},
 		{"overloaded_error", entry("assistant", loginNow, apiErr+`,"apiErrorStatus":529`, text(`API Error: 529 {"error":{"type":"overloaded_error"}}`)), false},

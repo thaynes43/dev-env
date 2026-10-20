@@ -71,9 +71,10 @@ type transcriptEntry struct {
 	Type        string `json:"type"`
 	IsSidechain bool   `json:"isSidechain"`
 	IsAPIError  bool   `json:"isApiErrorMessage"`
-	// APIErrorStatus and Error are the CLI's top-level fields on an API error entry.
-	APIErrorStatus int             `json:"apiErrorStatus"`
-	Error          string          `json:"error"`
+	// APIErrorStatus and Error are the CLI's top-level fields on an API error
+	// entry. Raw, so a field of an unexpected type never fails the whole line.
+	APIErrorStatus json.RawMessage `json:"apiErrorStatus"`
+	Error          json.RawMessage `json:"error"`
 	Timestamp      string          `json:"timestamp"`
 	Message        json.RawMessage `json:"message"`
 }
@@ -125,7 +126,7 @@ func classifyTranscript(tail []byte) lastTurn {
 		if e.Type == "assistant" {
 			text := strings.ToLower(entryText(e.Message))
 			if e.IsAPIError || strings.HasPrefix(strings.TrimSpace(text), "api error") {
-				if e.APIErrorStatus == 401 || e.Error == authErrorCode {
+				if string(e.APIErrorStatus) == "401" || string(e.Error) == `"`+authErrorCode+`"` {
 					t.Revoked = true
 				}
 				for _, m := range authErrorMarkers {
