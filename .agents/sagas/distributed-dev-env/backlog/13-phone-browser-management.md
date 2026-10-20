@@ -50,12 +50,12 @@ stays in plan 03.
 | Remote Control, one entry per Claude session | Proven on the phone | Connect, steer, answer, suspend and resume as the same entry, history recalled, an operator restart and two automatic image moves. All on the shared keeper login. |
 | A workbench session running `agent-run` | Proven from a workbench session | `auth status`, `pair`, `attach`, creating a Codex host and reaping it, and the standing grants. No record shows Tom driving one from his phone yet. |
 | ChatGPT app for Codex hosts | Proven on the phone | Pairing, a prompt and answer, suspend and resume without pairing again, history kept. A coordinator relays the pairing code in chat. |
-| Standing auto-approved grants | Proven from a workbench session | Internal ingress, Proxmox API, hw-ssh and a short-lived Proxmox token, each approved by policy with no phone step. |
+| Standing auto-approved grants | Proven from a workbench session | Internal ingress, Proxmox API and hw-ssh work, each approved by policy with no phone step. The short-lived Proxmox token grant is approved, but no token was ever installed: a keeper SSH bug (NB-09). The fix is merged (#474), not yet released. |
 | The operator-kept standby | Installed; it registered by itself | The operator created the standby and it registered Remote Control on the shared login. Tom opening and steering it on the phone is not recorded (morning item 1). |
 | The keeper login ceremony | Proven on the phone, run from the v1 pod | The Claude and ChatGPT logins were both renewed this way on 2026-10-19. |
-| The 401-window continue | Installed, not exercised | NB-03 tests it tonight. A fix to how it recognises the CLI's error is open (#473). |
+| The 401-window continue | Partly working, from a coordinator test | NB-03: the pod's token comes back from the keeper in about 4 s and the next turn works. The automatic continue missed the CLI's real 401 error; the fix is merged (#473), not yet released. |
 | The Codex keeper refresh | Installed, not exercised | It first comes due before 2026-10-29. |
-| A Codex host moving to a new image (suspend, then resume) | Installed, not exercised | NB-03 tests it tonight. |
+| A Codex host moving to a new image (suspend, then resume) | Done by a coordinator, not yet on the phone | NB-03 moved PEAR from 2.35.0 to 2.37.0: same enrolment, same thread history, daemon reconnected. Tom's check in the ChatGPT app is morning item 2. |
 | Archived history reads (`agent-run history`) | Not built on the installed system | `--enable-history-archive-reads` is off, so the routes answer 404. NB-06 checks what turning it on needs. |
 | Alerts for the phone path | Not built | v2 has three alerts: rescue failed, operator metrics absent, coordination records near limit. None covers the keeper logins or the standby. |
 | A human approval route for other grants | Not built | Q-16 puts approvals in the Claude Code app. R-03 chose no route. |
@@ -77,8 +77,8 @@ keeper's main container. Access change: the operator's service account gets
 exec to one container. Only the operator's code fixes the container and refuses
 other callers; no admission guard checks the container. Planned live check: `status` for both providers works from a disposable
 workbench session, and `url` returns a link that is then abandoned. The full
-ceremony with Tom is morning item 3. State at writing: being built; its
-haynes-ops RBAC PR is open (#4130).
+ceremony with Tom is morning item 3. State: built and unit-tested (dev-env #475,
+haynes-ops #4130), under auth review, not released.
 
 **NB-02: restarts from v2.** Two Roles named `dev-env-workbench-admin`, bound to
 `dev-agents/dev-env-workbench`:
@@ -96,9 +96,10 @@ change only the template's `kubectl.kubernetes.io/restartedAt` annotation, which
 is what `kubectl rollout restart` writes. Planned live check: `rollout restart` of
 the keeper and the operator from a workbench session, inside a
 `declare-activity`, with every session still Running and the keeper Ready
-afterwards. The shelf is restarted only when no archive exec runs. State at
-writing: the Roles and the guard are merged (haynes-ops #4123), a guard fix is
-open (haynes-ops #4129), and no live restart is recorded.
+afterwards. The shelf is restarted only when no archive exec runs. State: merged
+(haynes-ops #4123, guard fix #4129). On 2026-10-20 a workbench session restarted
+the keeper, the shelf and the operator, and every session pod stayed unchanged.
+Tom has not done it from the phone yet (morning item 4).
 
 NB-03, NB-05 and NB-06 test rows of the tables above tonight. Their results go in
 their own result files. This plan does not claim them.
