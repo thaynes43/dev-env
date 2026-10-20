@@ -505,8 +505,11 @@ func TestCloneRetriesAndCleansUp(t *testing.T) {
 	s.TokenWait = 0
 	attempts := 0
 	f := &fakeRunner{handle: func(c Cmd) (Result, error) {
-		if c.Name == "git" && c.Args[0] == "clone" {
+		if c.Name == "git" && slices.Contains(c.Args, "clone") {
 			attempts++
+			if !slices.Contains(c.Args, "http.lowSpeedLimit="+cloneLowSpeedLimit) || !slices.Contains(c.Args, "http.lowSpeedTime="+cloneLowSpeedTime) {
+				t.Errorf("clone does not bound a stalled transfer: %q", c.Args)
+			}
 			// A clone that dies half way leaves its directory behind.
 			writeFile(t, filepath.Join(c.Args[len(c.Args)-1], "partial"), "x")
 			return Result{}, &CmdError{Name: "git", Sub: "clone", ExitCode: 128, Stderr: "fatal: unable to access"}

@@ -47,6 +47,21 @@ Prepare repositories sequentially within a ten-minute operation deadline and
 two-minute per-repository deadline; trusted catalog reads have a five-second
 timeout. Retain per-repository failures. A receipt
 reports what happened; it does not authorize a task to skip its freshness check.
+
+**Stalled clones (added 2026-10-20, NB-08b).** With the catalog at eight
+repositories, most boots ended `Partial`. Clones normally take 1 to 10 seconds,
+but one or two per boot trickled at about 100 KB/s, in the checkout's lazy blob
+fetch or a plain full clone alike (a GitHub-side or path effect, not the
+filter). The two-minute deadline then killed Git mid-clone and left staging,
+which is never deleted: `StagingPreserved` for that repository on every later
+boot, plus a `TimedOut` and a lost two minutes for each stall. The deadline and
+the sequential order stay as written. Every reference clone now also passes
+`-c http.lowSpeedLimit=250000 -c http.lowSpeedTime=20`: Git itself abandons a
+transfer under 250 KB/s for 20 seconds, removes its own staging directory and
+exits, and the existing three-attempt retry (5 s and 15 s backoff) starts a new
+connection, which is usually fast. The same options apply to the selected
+repository's clone. The deadline remains the backstop; staging that survives a
+kill is still preserved and still needs a person.
 Immediately before each new task, the existing selected-repository path still
 fetches and pins an immutable commit. A failed selected fetch blocks that new
 task. Resume retains its worktree, source receipt and saved project rules.

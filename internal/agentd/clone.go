@@ -114,6 +114,25 @@ var (
 	cloneBackoff  = []time.Duration{5 * time.Second, 15 * time.Second}
 )
 
+// cloneStallArgs make Git give up on a stalled or trickling transfer by itself,
+// so its own cleanup removes the staging directory and the retry above can run.
+// A transfer is stalled when it averages under cloneLowSpeedLimit bytes a
+// second for cloneLowSpeedTime seconds. Healthy GitHub clones of the catalog
+// run at megabytes a second (S-7, and the 2026-10-20 NB-08b measurements);
+// the stalls measured in session pods ran at about 100 KB/s for a minute or
+// two, and the 2-minute repository deadline then killed Git mid-clone and left
+// staging that every later boot refuses to touch (StagingPreserved). The
+// deadline stays the backstop. The -c settings reach the checkout's lazy blob
+// fetch too, which is where the stalls were seen.
+const (
+	cloneLowSpeedLimit = "250000"
+	cloneLowSpeedTime  = "20"
+)
+
+func cloneStallArgs() []string {
+	return []string{"-c", "http.lowSpeedLimit=" + cloneLowSpeedLimit, "-c", "http.lowSpeedTime=" + cloneLowSpeedTime}
+}
+
 // sleepFunc waits, or returns early when ctx ends. Tests replace it.
 var sleepFunc = func(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
@@ -535,7 +554,7 @@ func cloneRepo(ctx context.Context, r Runner, s Settings, repo, dst string) (tim
 			return 0, err
 		}
 		start := time.Now()
-		_, err := r.Run(ctx, Cmd{Name: "git", Args: []string{"clone", "--filter=blob:none", "--quiet", s.RemoteURL(repo), tmp}, Env: gitEnv})
+		_, err := r.Run(ctx, Cmd{Name: "git", Args: append(cloneStallArgs(), "clone", "--filter=blob:none", "--quiet", s.RemoteURL(repo), tmp), Env: gitEnv})
 		if err == nil {
 			if err := configureSharedGitPolicy(ctx, r, s, tmp); err != nil {
 				return 0, err

@@ -325,7 +325,7 @@ func cloneProjectReference(ctx context.Context, r Runner, s Settings, repo proje
 		if _, err := os.Lstat(clone); !errors.Is(err, os.ErrNotExist) {
 			return reasonErr(protocol.ReasonReferenceUncertain, "reference destination exists or is uncertain; preserved")
 		}
-		args := []string{"-c", "core.hooksPath=/dev/null"}
+		args := append([]string{"-c", "core.hooksPath=/dev/null"}, cloneStallArgs()...)
 		if s.privateProjectGit {
 			args = append(args, sharedGitPolicyArgs...)
 		}

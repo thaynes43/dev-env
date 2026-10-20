@@ -33,6 +33,7 @@ type projectFixtureRunner struct {
 	// refspecs apply, and routes the HTTPS identity to the fixture with a
 	// command-scoped insteadOf instead of replacing the remote argument.
 	namedRemote bool
+	cloneArgs   [][]string
 }
 
 func (r *projectFixtureRunner) Run(ctx context.Context, cmd Cmd) (Result, error) {
@@ -42,6 +43,7 @@ func (r *projectFixtureRunner) Run(ctx context.Context, cmd Cmd) (Result, error)
 	cmd.Args = slices.Clone(cmd.Args)
 	if i := slices.Index(cmd.Args, "clone"); i >= 0 {
 		r.cloneCalls++
+		r.cloneArgs = append(r.cloneArgs, slices.Clone(cmd.Args))
 		if r.cloneFailure != "" {
 			if r.cloneFailure == "partial" {
 				if err := os.Mkdir(cmd.Args[len(cmd.Args)-1], 0o700); err != nil {
@@ -527,6 +529,27 @@ func TestProjectSyncUsesExistingCommonGitLock(t *testing.T) {
 	_, err = SyncProjects(ctx, r, s, c, projectSyncFixtureOptions())
 	if !errors.Is(err, context.DeadlineExceeded) || r.cloneCalls != 0 {
 		t.Fatal("sync bypassed common Git lock or ignored cancellation")
+	}
+}
+
+// A stalled transfer must end by Git's own hand, which cleans its staging
+// directory and lets the clone retry; the 2-minute deadline alone kills Git
+// mid-clone and leaves StagingPreserved (NB-08b).
+func TestProjectReferenceCloneBoundsStalledTransfer(t *testing.T) {
+	_, s, r, c := projectFixture(t)
+	if err := cloneProjectReference(context.Background(), r, s, c.Repositories()[0]); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.cloneArgs) != 1 {
+		t.Fatalf("clone calls: %d", len(r.cloneArgs))
+	}
+	args := r.cloneArgs[0]
+	i := slices.Index(args, "clone")
+	for _, want := range []string{"http.lowSpeedLimit=" + cloneLowSpeedLimit, "http.lowSpeedTime=" + cloneLowSpeedTime} {
+		j := slices.Index(args, want)
+		if j < 1 || j > i || args[j-1] != "-c" {
+			t.Fatalf("clone lacks %q before the subcommand: %q", want, args)
+		}
 	}
 }
 
