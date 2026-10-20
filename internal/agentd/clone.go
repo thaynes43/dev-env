@@ -154,6 +154,12 @@ func checkoutStaging(ctx context.Context, r Runner, s Settings, tmp string) erro
 		args = append(args, sharedGitPolicyArgs...)
 	}
 	args = append(args, "checkout", "--force", "--quiet")
+	// An empty repository clones with an unborn HEAD and nothing to check out;
+	// a plain clone succeeds there, so must this. Exit 1 is Git's "no such
+	// commit"; any other failure is not an answer and goes to the checkout.
+	if _, perr := r.Run(ctx, privateGitCommand(s, Cmd{Name: "git", Args: []string{"-C", tmp, "rev-parse", "--verify", "--quiet", "HEAD"}, Env: gitEnv})); perr != nil && ExitCodeOf(perr) == 1 {
+		return nil
+	}
 	var err error
 	for attempt := 0; attempt < cloneAttempts; attempt++ {
 		if attempt > 0 {

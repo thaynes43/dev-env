@@ -529,6 +529,61 @@ func TestCloneCheckoutFailureDoesNotMultiplyRetries(t *testing.T) {
 	}
 }
 
+// An empty repository has an unborn HEAD: nothing to check out, and a plain
+// clone of it succeeded before --no-checkout, so the checkout step skips it.
+func TestCheckoutStagingSkipsUnbornHead(t *testing.T) {
+	noSleep(t)
+	checkouts := 0
+	f := &fakeRunner{handle: func(c Cmd) (Result, error) {
+		switch {
+		case slices.Contains(c.Args, "rev-parse"):
+			return Result{}, &CmdError{Name: "git", Sub: "rev-parse", ExitCode: 1}
+		case slices.Contains(c.Args, "checkout"):
+			checkouts++
+		}
+		return Result{}, nil
+	}}
+	if err := checkoutStaging(context.Background(), f, testSettings(t, t.TempDir()), t.TempDir()); err != nil || checkouts != 0 {
+		t.Fatalf("err %v, checkouts %d", err, checkouts)
+	}
+}
+
+// An rev-parse failure that is not "no such commit" is no proof of an empty
+// repository: the checkout still runs and its failures still retry.
+func TestCheckoutStagingRevParseErrorStillChecksOut(t *testing.T) {
+	noSleep(t)
+	checkouts := 0
+	f := &fakeRunner{handle: func(c Cmd) (Result, error) {
+		switch {
+		case slices.Contains(c.Args, "rev-parse"):
+			return Result{}, &CmdError{Name: "git", Sub: "rev-parse", ExitCode: 128}
+		case slices.Contains(c.Args, "checkout"):
+			checkouts++
+			return Result{}, &CmdError{Name: "git", Sub: "checkout", ExitCode: 128}
+		}
+		return Result{}, nil
+	}}
+	if err := checkoutStaging(context.Background(), f, testSettings(t, t.TempDir()), t.TempDir()); err == nil || checkouts != cloneAttempts {
+		t.Fatalf("err %v, checkouts %d", err, checkouts)
+	}
+}
+
+// The real thing: --no-checkout clone of an empty bare repository, then the
+// checkout step, with Git's own exit codes.
+func TestCheckoutStagingEmptyRepositoryWithRealGit(t *testing.T) {
+	g := newGitFixture(t, "demo")
+	s, execRunner := g.settings(t)
+	empty := filepath.Join(t.TempDir(), "empty.git")
+	gitRun(t, g.env, g.root, "init", "-q", "--bare", empty)
+	tmp := filepath.Join(t.TempDir(), "clone")
+	if _, err := execRunner.Run(context.Background(), Cmd{Name: "git", Args: []string{"clone", "--no-checkout", "--quiet", "file://" + empty, tmp}, Env: gitEnv}); err != nil {
+		t.Fatalf("clone of an empty repository: %v", err)
+	}
+	if err := checkoutStaging(context.Background(), execRunner, s, tmp); err != nil {
+		t.Fatalf("checkout of an empty repository: %v", err)
+	}
+}
+
 func TestCloneRetriesAndCleansUp(t *testing.T) {
 	noSleep(t)
 	home := t.TempDir()
