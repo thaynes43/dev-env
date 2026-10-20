@@ -149,6 +149,10 @@ func cloneStallArgs() []string {
 // holds nothing else yet. A failure keeps the staging for the caller to preserve.
 func checkoutStaging(ctx context.Context, r Runner, s Settings, tmp string) error {
 	args := append([]string{"-C", tmp, "-c", "core.hooksPath=/dev/null"}, cloneStallArgs()...)
+	if s.WorkspaceID != "" || s.privateProjectGit {
+		// The clone command carried these; no auto maintenance in staging.
+		args = append(args, sharedGitPolicyArgs...)
+	}
 	args = append(args, "checkout", "--force", "--quiet")
 	var err error
 	for attempt := 0; attempt < cloneAttempts; attempt++ {
@@ -587,9 +591,15 @@ func cloneRepo(ctx context.Context, r Runner, s Settings, repo, dst string) (tim
 		start := time.Now()
 		_, err := r.Run(ctx, Cmd{Name: "git", Args: append(cloneStallArgs(), "clone", "--filter=blob:none", "--no-checkout", "--quiet", s.RemoteURL(repo), tmp), Env: gitEnv})
 		if err == nil {
-			err = checkoutStaging(ctx, r, s, tmp)
-		}
-		if err == nil {
+			// A checkout that keeps failing ends the clone: its own retries
+			// have run, so the outer loop must not multiply them.
+			if err := checkoutStaging(ctx, r, s, tmp); err != nil {
+				if !preserve {
+					_ = os.RemoveAll(tmp)
+					return 0, fmt.Errorf("checkout of %s failed: %s", s.RemoteURL(repo), cmdDetail(err))
+				}
+				return 0, fmt.Errorf("clone checkout failed; %s %s keeps partial or uncertain data, preserved%s: %s", kind, tmp, recovery, cmdDetail(err))
+			}
 			if err := configureSharedGitPolicy(ctx, r, s, tmp); err != nil {
 				return 0, err
 			}

@@ -37,6 +37,7 @@ type projectFixtureRunner struct {
 	// checkoutFail makes the next that many staging checkouts fail, as a
 	// stalled blob fetch does after Git's low-speed abort.
 	checkoutFail, checkoutCalls int
+	checkoutArgs                [][]string
 }
 
 func (r *projectFixtureRunner) Run(ctx context.Context, cmd Cmd) (Result, error) {
@@ -46,6 +47,7 @@ func (r *projectFixtureRunner) Run(ctx context.Context, cmd Cmd) (Result, error)
 	cmd.Args = slices.Clone(cmd.Args)
 	if slices.Contains(cmd.Args, "checkout") && slices.Contains(cmd.Args, "http.lowSpeedLimit="+cloneLowSpeedLimit) {
 		r.checkoutCalls++
+		r.checkoutArgs = append(r.checkoutArgs, slices.Clone(cmd.Args))
 		if r.checkoutFail > 0 {
 			r.checkoutFail--
 			return Result{}, &CmdError{Name: "git", Sub: "checkout", ExitCode: 128, Stderr: "fatal: unable to access: Operation too slow"}
@@ -573,6 +575,11 @@ func TestProjectReferenceCheckoutStallRetriesInPlace(t *testing.T) {
 	}
 	if !slices.Contains(r.cloneArgs[0], "--no-checkout") || len(r.cloneArgs) != 1 || r.checkoutCalls != cloneAttempts {
 		t.Fatalf("clone %q, calls %d, checkouts %d", r.cloneArgs, len(r.cloneArgs), r.checkoutCalls)
+	}
+	for _, want := range []string{"gc.auto=0", "maintenance.auto=false", "core.hooksPath=/dev/null"} {
+		if !slices.Contains(r.checkoutArgs[0], want) {
+			t.Fatalf("checkout lacks %q: %q", want, r.checkoutArgs[0])
+		}
 	}
 	clone := s.ClonePath("demo")
 	if out := gitRun(t, g.env, clone, "status", "--porcelain"); out != "" {
