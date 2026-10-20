@@ -277,7 +277,8 @@ them from a v1 session before step 7.
    # d. Local branches that origin lacks: one bundle per canonical clone (none: skipped).
    for r in "$HOME"/repos/*/; do
      n=$(basename "$r")
-     nice -n 19 git -C "$r" bundle create "$W/$n.bundle" --branches --not --remotes 2>/dev/null || continue
+     out=$(nice -n 19 git -C "$r" bundle create "$W/$n.bundle" --branches --not --remotes 2>&1) || {
+       case $out in *"empty bundle"*) continue;; *) echo "BUNDLE FAIL $n: $out"; fail=1; continue;; esac; }
      kx sh -c "cat > $DST/bundles/$n.bundle" < "$W/$n.bundle" && echo "bundle $n copied" || fail=1
    done
 
