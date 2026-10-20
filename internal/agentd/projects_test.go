@@ -34,6 +34,9 @@ type projectFixtureRunner struct {
 	// command-scoped insteadOf instead of replacing the remote argument.
 	namedRemote bool
 	cloneArgs   [][]string
+	// checkoutFail makes the next that many staging checkouts fail, as a
+	// stalled blob fetch does after Git's low-speed abort.
+	checkoutFail, checkoutCalls int
 }
 
 func (r *projectFixtureRunner) Run(ctx context.Context, cmd Cmd) (Result, error) {
@@ -41,6 +44,13 @@ func (r *projectFixtureRunner) Run(ctx context.Context, cmd Cmd) (Result, error)
 		return Result{}, errors.New("unexpected non-Git fixture command")
 	}
 	cmd.Args = slices.Clone(cmd.Args)
+	if slices.Contains(cmd.Args, "checkout") && slices.Contains(cmd.Args, "http.lowSpeedLimit="+cloneLowSpeedLimit) {
+		r.checkoutCalls++
+		if r.checkoutFail > 0 {
+			r.checkoutFail--
+			return Result{}, &CmdError{Name: "git", Sub: "checkout", ExitCode: 128, Stderr: "fatal: unable to access: Operation too slow"}
+		}
+	}
 	if i := slices.Index(cmd.Args, "clone"); i >= 0 {
 		r.cloneCalls++
 		r.cloneArgs = append(r.cloneArgs, slices.Clone(cmd.Args))
@@ -550,6 +560,39 @@ func TestProjectReferenceCloneBoundsStalledTransfer(t *testing.T) {
 		if j < 1 || j > i || args[j-1] != "-c" {
 			t.Fatalf("clone lacks %q before the subcommand: %q", want, args)
 		}
+	}
+}
+
+// The stalls were seen in the checkout, which Git does not undo. The clone is
+// --no-checkout and the checkout is its own retried step.
+func TestProjectReferenceCheckoutStallRetriesInPlace(t *testing.T) {
+	g, s, r, c := projectFixture(t)
+	r.checkoutFail = cloneAttempts - 1
+	if err := cloneProjectReference(context.Background(), r, s, c.Repositories()[0]); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(r.cloneArgs[0], "--no-checkout") || len(r.cloneArgs) != 1 || r.checkoutCalls != cloneAttempts {
+		t.Fatalf("clone %q, calls %d, checkouts %d", r.cloneArgs, len(r.cloneArgs), r.checkoutCalls)
+	}
+	clone := s.ClonePath("demo")
+	if out := gitRun(t, g.env, clone, "status", "--porcelain"); out != "" {
+		t.Fatalf("reference is not a clean checkout: %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(clone, "README.md")); err != nil {
+		t.Fatalf("worktree not populated: %v", err)
+	}
+}
+
+func TestProjectReferenceCheckoutStallExhaustedPreservesStaging(t *testing.T) {
+	_, s, r, c := projectFixture(t)
+	r.checkoutFail = cloneAttempts
+	err := cloneProjectReference(context.Background(), r, s, c.Repositories()[0])
+	var staging *projectStagingPreserved
+	if !errors.As(err, &staging) {
+		t.Fatalf("got %v, want preserved staging", err)
+	}
+	if !exists(staging.path) || exists(s.ClonePath("demo")) || len(r.cloneArgs) != 1 {
+		t.Fatal("failed checkout must keep its staging, publish nothing and not clone again")
 	}
 }
 

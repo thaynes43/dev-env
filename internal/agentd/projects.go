@@ -329,11 +329,14 @@ func cloneProjectReference(ctx context.Context, r Runner, s Settings, repo proje
 		if s.privateProjectGit {
 			args = append(args, sharedGitPolicyArgs...)
 		}
-		args = append(args, "clone", "--filter=blob:none", "--quiet", "--branch", repo.DefaultBranch, repo.URL(), tmp)
+		args = append(args, "clone", "--filter=blob:none", "--no-checkout", "--quiet", "--branch", repo.DefaultBranch, repo.URL(), tmp)
 		_, err := r.Run(ctx, privateGitCommand(s, Cmd{Name: "git", Args: args, Env: gitEnv}))
 		if err == nil {
 			if err := noSymlinkComponents(filepath.Join(tmp, ".git")); err != nil {
 				return &projectStagingPreserved{tmp, "successful clone has uncertain Git administration"}
+			}
+			if err := checkoutStaging(ctx, r, s, tmp); err != nil {
+				return &projectStagingPreserved{tmp, "clone checkout failed"}
 			}
 			if err := configureSharedGitPolicy(ctx, r, s, tmp); err != nil {
 				return &projectStagingPreserved{tmp, "clone configuration cannot be safely provisioned"}
