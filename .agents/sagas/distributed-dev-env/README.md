@@ -455,6 +455,8 @@ v1 stays live throughout. No v2 plan edits haynes-ops'
 | [10: summoned sessions](backlog/10-summoned-sessions.md) | 02, 03, 07; spike S-16 | with 04, 08 |
 | [06: later](backlog/06-later.md) | 05 | each item on its own |
 | [11: rules, session context and private repo freshness](backlog/11-project-workspaces.md) | ADR-003; existing lifecycle/API/catalog foundations | independent units with bounded acceptance |
+| [12: owned native host executor source seam](backlog/12-owned-native-host.md) (source only; production selection off) | ADR-003; D-84 (#154, #160) | independent units with bounded acceptance |
+| [13: phone and browser management](backlog/13-phone-browser-management.md) (plan, 2026-10-20; restarts from v2 installed by haynes-ops #4123/#4129, keeper login from v2 in 2.38.0) | 03's delivered parts | with 07, only if a human approval route is needed |
 
 **Pilot and full replacement.** First demonstrate a coherent coordination workflow:
 independent bounded pods, common loaded rules, fresh task starts, peer discovery,
