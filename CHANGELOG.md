@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.38.2](https://github.com/thaynes43/dev-env/compare/v2.38.1...v2.38.2) (2026-10-20)
+
+
+### Bug Fixes
+
+* **agentd:** one login lock per pod so a second ceremony cannot start ([#443](https://github.com/thaynes43/dev-env/issues/443) D1) ([#485](https://github.com/thaynes43/dev-env/issues/485)) ([73d050f](https://github.com/thaynes43/dev-env/commit/73d050f9eb7359eeb1c7db891847d83d67918cdd))
+
 ## [2.38.1](https://github.com/thaynes43/dev-env/compare/v2.38.0...v2.38.1) (2026-10-20)
 
 
