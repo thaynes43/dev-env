@@ -128,8 +128,9 @@ missing planned work and actual guard/network losses. None is waived by the audi
 ## Status 2026-10-20
 
 Checked by story CR-1020 and the NEXT-BATCH-1020 stories before it. Their result
-files (NB-04-PARITY, LIVE-238a, LIVE-238b, LIVE-2381, CR-1020-W1-REVIEW,
-CR-1020-W2, CR-1020-W3a, CR-1020-W3b) are in the coordinator's order directory,
+files (NB-02, NB-04-PARITY, LIVE-238a, LIVE-238b, CR-1020-W1-REVIEW, CR-1020-W2,
+CR-1020-W3a, CR-1020-W3b) and the progress file `NEXT-BATCH-1020-PROGRESS.md`,
+whose log holds the LIVE-2381 entry, are in the coordinator's order directory,
 `/home/dev/work/orders/dev-env-reset-1018/`, outside git; the cutover copies them
 to `~/.shared/v1-home/work-orders/`. "Workbench" means a session on the
 `workbench` profile, running as `dev-agents/dev-env-workbench`. Live checks ran
@@ -141,7 +142,7 @@ in fresh workbench sessions that were reaped afterwards.
 | P-02 | Open. Not a v1-pod dependency | The `ops` persona is dev-env-ops. It runs as its own workload in `upgrade-agent` and keeps its rights when v1 scales to zero (W2). It moves in plan 10 |
 | P-03 | Closed for exec and proxy. Headlamp as in P-01 | #4141 grants `pods/exec` create and `services/proxy` and `pods/proxy` cluster-wide, as v1 has (W1 review); exec proven in W3b. Like v1, the workbench is exempt from the identity and exec guards. Secret reads stay absent (`can-i` no in W3b) |
 | P-04 | Closed for the workbench, with two recorded differences | Restarts of the operator, keeper and shelf from a workbench session, the broker by dry run (NB-02 with haynes-ops #4123 and #4129; the shelf again in W3b). Differences: the workbench admin guard refuses `rollout undo`, `pause`, `resume` and `set image`, `env`, `resources` (stricter than v1; break-glass is Tom's admin kubeconfig), and the archive guard refuses exec into the shelf pod (W1 review F3, F5) |
-| P-05 | Closed in RBAC and admission. A real clone run is open | `dev-env-agent-guard` does not match the workbench, so named-SA and Secret-mounting Jobs are admitted as in v1 (W1 review). W3b created and deleted a Job, and `kubectl create job --from=cronjob/books-census -n downloads --dry-run=server` was admitted. A real `--from=cronjob` run on a named safe CronJob is not done |
+| P-05 | Allowed by RBAC; partly proven live | By the W1 review's reading of the guards, `dev-env-agent-guard` does not match the workbench, so named-SA and Secret-mounting Jobs are admitted as in v1. Live (W3b): a default-SA Job created and deleted, and `kubectl create job --from=cronjob/books-census -n downloads --dry-run=server` admitted. Not done: a named-SA or Secret-mounting Job, and a real `--from=cronjob` run |
 | P-06 | Closed | #4141 binds v1's `observability` storage Role to the workbench. W3b: `can-i` yes for PVC create and delete and StatefulSet delete in `observability`, no for PVC create in `database` and PVC delete in `media` |
 | P-07 | Open. Not a v1-pod dependency | The work-order ConfigMap writes belong to dev-env-ops, unchanged in `upgrade-agent` (W2). Plan 10 |
 | P-08 | Closed | The standing ingress grant to `traefik-internal-network` on 8443; Grafana's health page answered 200 from a workbench session (NB-04) |
@@ -149,7 +150,7 @@ in fresh workbench sessions that were reaped afterwards.
 | P-10 | Mostly closed | `agent-run grant request`, `list` and `release` work unattended for egress and Proxmox credential grants, approved by policy within seconds (NB-04, W3a). Not shown here: a re-request after expiry, and grants through the built-in `dev-env` MCP server |
 | P-11 | Closed | The Proxmox read token is in the workbench profile; `pve nodes` and `pve ha` ran at `tier=read` (NB-04 row 8) |
 | P-12 | Closed for Omni Reader and GCP. Cloudflare not checked | `omnictl get clusters`, `talosctl` through an Omni-proxied config, and a GCP token exchange plus `projects.get` (LIVE-238b rows 6, 7 and 11). The Cloudflare DNS credential was not checked |
-| P-13 | Closed | Standing grants reach the PVE API and port 22 on all seven hw-ssh targets: `pve nodes`, `hw-ssh pve-all`, `haynestower` and `pikvm` answered (NB-04 rows 8 and 10). Grants last up to 8 hours, where v1's allowlist was permanent (NB-04 G-9) |
+| P-13 | Closed for the dashboard API and every SSH target. The per-node API is granted, not used | Standing grants reach the dashboard API and port 22 on all seven hw-ssh targets: `pve nodes`, `hw-ssh pve-all`, `haynestower` and `pikvm` answered (NB-04 rows 8 and 10). The per-node 8006 grant went Active, but no call used it. Grants last up to 8 hours, where v1's allowlist was permanent (NB-04 G-9) |
 | P-14 | Closed | The keeper mints, installs and revokes the token: reads on 2.38.1 (LIVE-2381), a write on 2.39.0 (`pve --yes vm 113 onboot 1`, the value it already had), and the token gone about 20 s after release (W3a). Fixes #474 and #481 |
 | P-15 | Closed for the live path | `pve` used the installed token (`tier=operator`) and fell back to `tier=read` after release (LIVE-2381, W3a). The unit-tested cases (beside kube grants, stale cleanup, redaction) were not repeated live |
 | P-16 | Parity met without certificates | Workbench sessions mount the same hw-ssh key as v1, so the same node users and sudo allowlist apply (NB-04 row 10). General certificates under Q-07 are not built; P-19 governs them |

@@ -170,8 +170,8 @@ agent-run grant request --type egress --reason "pve" --ttl 8h \
   --fqdn pvedash.haynesnetwork --port 443
 
 # Proxmox writes: a short-lived operator token; `pve` uses it by itself.
-# Works since 2.38.1 (reads and a write proven); it needs the Proxmox API
-# grant above too. See below.
+# Reads work since 2.38.1, a write was proven on 2.39.0; it needs the
+# Proxmox API grant above too. See below.
 agent-run grant request --type credential --credential proxmox --reason "pve write" --ttl 4h
 
 # hw-ssh to the PVE nodes, HaynesTower and PiKVM (port 22 to gasha01 too)
@@ -193,9 +193,9 @@ agent-run grant request --type egress --reason "hw-ssh" --ttl 8h --port 22 \
 - Proven from a session (a fresh workbench session): internal ingress
   (Grafana's health page answered 200), `pve nodes` and `hw-ssh twin-top
   hostname`, each approved by policy with no phone step.
-- **The Proxmox operator token works since 2.38.1, for reads and writes.**
-  Proven from a session on 2026-10-20 (06:54 to 06:56 UTC), in a workbench
-  session:
+- **The Proxmox operator token works: reads since 2.38.1, a write proven on
+  2.39.0.** Reads, proven from a session on 2026-10-20 (06:54 to 06:56 UTC), in a
+  workbench session:
   1. `agent-run grant request --type credential --credential proxmox
      --reason "..." --ttl 15m` went Active in 5 seconds. The keeper made the token and put it in the
      session (`agentd ctl credential-available --credential proxmox` exited 0).
@@ -729,8 +729,9 @@ Closed on 2026-10-20 (story CR-1020):
   session (section 1, with follow-ups F1 to F7).
 - **A Claude session or task on a repo outside the catalog.** `agent-run --repo
   <name>` clones a repo under your GitHub account whether or not it is in the
-  catalog. A task on the public `ytdrivarr` succeeded; private repos use the
-  same bot token, which works for the private catalog repos.
+  catalog. A task on the public `ytdrivarr` succeeded. A private repo outside
+  the catalog was not tried; it uses the same bot token that works for the
+  private catalog repos.
 
 Goes away with v1, by your rulings of 2026-10-20:
 

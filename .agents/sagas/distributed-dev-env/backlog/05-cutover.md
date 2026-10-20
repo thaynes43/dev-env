@@ -22,7 +22,8 @@ scaled, restarted or changed v1.
 **Depends on:** 03, 04, 07 (verified effective v1 parity, including accepted
 Headlamp-equivalent tasks, before retiring v1; restricted break-glass alone is not
 a replacement), Q-08's LimitRange live in haynes-ops (no BestEffort household pods), and Tom's
-explicit approval
+explicit approval. *(2026-10-20: Headlamp stays as it is through the cutover;
+guarded Headlamp-equivalent tasks are not proven. See the Headlamp row below.)*
 **Parallel with:** nothing
 
 ## Goal
@@ -45,8 +46,8 @@ The CR-1020 result files sit in the coordinator's order directory,
 | Restarts, messaging | Proven from a session | Keeper, operator and shelf restarts (NB-02; the keeper again at about 12:20 UTC at Tom's request; the shelf again in W3b); `agent-run msg` delivered and answered |
 | Repos outside the catalog | Proven for Claude | W2: `--repo ytdrivarr -p` task Succeeded. Headless Codex tasks still need the catalog |
 | Q-08 LimitRange | Live | `default-cpu-request` in every namespace, `dev-agents` and `dev-env-system` included |
-| Headlamp | Not touched by the cutover | It runs on its own in `frontend` and does not depend on v1. The workbench now has the exec and Job rights v1 used to reach it (#4141), so the effective v1 scope is kept. Retiring Headlamp (D-71) is a later, separate step |
-| Cluster objects that need v1 | None block scale-to-zero | W2: nothing else mounts `dev-env-home`; no v1-only network policy blocks a session; dev-env-ops only loses its view of v1's old declaration files |
+| Headlamp | Not touched by the cutover; guarded replacement not proven | It runs on its own in `frontend` and does not depend on v1, so the cutover removes nothing it provides. The workbench has the exec and Job rights v1 has (#4141). Accepted guarded Headlamp-equivalent tasks (D-71), such as owner-directed Secret reads, are not proven; the workbench cannot read Secrets. The CR-1020 coordinator classed that as later work, not a cutover blocker (progress file, 22:20 UTC). It is not Tom's ruling; his approval in step 6 covers it |
+| Cluster objects that need v1 | None block scale-to-zero | W2, read-only: nothing else mounts `dev-env-home`; no v1-only network policy blocks a session; dev-env-ops loses only its view of v1's old declaration files (read from its script; a live run is step 8) |
 | Copying v1's notes to v2 | Trial passed | W3a: one file copied into `~/.shared` and checked by checksum |
 | Tom's written approval | Open | Runbook step 6 |
 
@@ -67,9 +68,11 @@ The CR-1020 result files sit in the coordinator's order directory,
 - **Cursor workers go offline** (Tom, 2026-10-20, decision 79). The two Cursor
   "My Machines" workers in v1 (`cursor-worker-v1`, `cursor-worker-dev-env`) stop
   with v1 and are not moved to v2.
-- **dev-env-ops** already reads v2 `Activity` objects (W2). With v1 at zero its
-  `dev-activity-check.sh` prints `WARN: no running dev-env pod found in ns/dev`
-  and lists no tmux sessions; nothing breaks. Removing the v1 block and listing
+- **dev-env-ops** already reads v2 `Activity` objects (W2, from its script and
+  the script's `jq` filter on a synthetic object; no live run yet). With v1 at
+  zero its `dev-activity-check.sh` should print `WARN: no running dev-env pod
+  found in ns/dev` and list no tmux sessions, and keep listing v2 declarations.
+  Runbook step 8 checks this live. Removing the v1 block and listing
   `AgentSession`s instead is later polish in haynes-ops. Its summoning lanes move
   in plan 10, not here.
 - **v1 drain.** A final `agent-run sweep` is **not** a drain. It keeps every
@@ -90,8 +93,8 @@ The CR-1020 result files sit in the coordinator's order directory,
   `MEMORY.md` lines that are missing are appended, and nothing is overwritten.
   `~/.shared` is readable by every non-canary session; never copy a secret there.
 - **Never delete the `dev-env-home` PVC object.** Its PV has reclaim policy
-  `Delete` (StorageClass `ceph-block`), and nothing snapshots or backs it up (saga
-  decision 7). Deleting the PVC object destroys v1's history. Flux will not prune
+  `Delete` (StorageClass `ceph-block`), and nothing snapshots or backs it up
+  (decision 7 of v1's saga, haynes-ops `.agents/sagas/dev-env/`). Deleting the PVC object destroys v1's history. Flux will not prune
   it: the PVC carries `kustomize.toolkit.fluxcd.io/prune: disabled`. Scaling to
   zero removes only the pod. The PVC stays at least 30 days.
 - **v1's Max login is retired with the pod.** Tom stops renewing it; it lapses about
@@ -162,8 +165,9 @@ declare-activity start "v1 cutover: drain and scale dev-env v1 to zero" \
    `~/work/orders`, and replies, in its session and with one line in
    `~/work/orders/V1-WINDDOWN-REPLIES.md`. Wait for every reply, or note who did
    not answer.
-3. **Check that nothing is left unpushed.** In a v1 shell. It only reads (no
-   index lock is taken, so running agents are not disturbed):
+3. **Check that nothing is left unpushed.** In a v1 shell. It changes nothing
+   except the remote-tracking refs that `git fetch` updates, and takes no index
+   lock, so running agents are not disturbed:
 
    ```bash
    since=$(date -d '7 days ago' +%s)
@@ -189,64 +193,101 @@ declare-activity start "v1 cutover: drain and scale dev-env v1 to zero" \
    Each `WORKTREE` line of a live session's worktree is resolved by its owner (push
    or commit) before step 7. A squash-merged branch also shows up, because its
    commits are not on origin: note its PR and move on. Whatever stays local goes
-   into the bundles in step 4. On 2026-10-20 the `BRANCH` check found 109 such
-   branches in dev-env and haynes-ops alone, so expect a long list.
+   into the bundles in step 4. On 2026-10-20, without a fetch, the `BRANCH` check
+   found 109 such branches in dev-env and haynes-ops alone, so expect a long list.
 4. **Copy orders, memory and local branches to v2.** From a v1 shell, after the
-   handoffs (so nothing changes underneath). The commands follow W3a's tested
-   sequence; `kubectl exec` from v1 needs the POST/SPDY setting below.
+   handoffs (so nothing changes underneath). It follows W3a's tested sequence,
+   with three changes. Files over 5 MiB are left out: compiled test binaries and
+   tarballs, about 1.97 GiB of the 2.2 GB, which a scan cannot read and a new
+   agent does not need. Files that match a token or private-key pattern are left
+   out too: on 2026-10-20, 22 files in `~/work/orders` matched (names only were
+   listed; nobody read them). Both lists are kept in the manifests, and the
+   files stay on v1's volume. Git bundles are added.
+
+   First the writer session:
 
    ```bash
    export DEV_ENV_API_CA_FILE=~/.cache/dev-env-api-ca.crt     # quick start, "Which agent-run"
    v2=~/.local/bin/agent-run-v2.35.0                            # or the newest agent-run-v2.* there
-   $v2 --repo dev-env --local --model claude-haiku-5-5 --effort low   # a writer session; note its name
+   $v2 --repo dev-env --local --model claude-haiku-5-5 --effort low   # prints the session's name, does not attach
    S=<that session's name>
-   DST=/home/dev/.shared/v1-home
+   ```
+
+   Then write the copy script and run it. A script, so that a refusal in step a
+   really stops it:
+
+   ```bash
+   cat > ~/work/migrate-v1-notes.sh <<'EOF'
+   #!/bin/bash
+   # Usage: bash ~/work/migrate-v1-notes.sh <writer-session>
+   set -u
+   S=$1; DST=/home/dev/.shared/v1-home
+   W=$HOME/work/migrate-manifests; mkdir -p "$W"; fail=0
    kx() { KUBECTL_REMOTE_COMMAND_WEBSOCKETS=false timeout 1800 kubectl exec -i -n dev-agents "$S" -c agent -- "$@"; }
-   W=$HOME/work/migrate-manifests; mkdir -p "$W"
+   PAT='gh[pousr]_[A-Za-z0-9]{30,}|github_pat_|sk-ant-|-----BEGIN [A-Z ]*PRIVATE KEY|"refresh_token"|"access_token"'
 
-   # a. The target. It refuses to run over an existing copy. If it prints STOP, stop.
+   # 0. Secret scan, file names only. A hit in memory stops the run (read and fix it by hand).
+   if nice -n 19 grep -rIlE --exclude='*.jsonl' "$PAT" "$HOME"/.claude/projects/*/memory; then
+     echo "STOP: memory files above match a secret pattern"; exit 1
+   fi
+   ( cd "$HOME/work" && find orders -type f -size +5M ) > "$W/orders-skipped.txt"
+   ( cd "$HOME/work" && nice -n 19 grep -rIlE --exclude='*.jsonl' "$PAT" orders ) > "$W/orders-secret-scan.txt"
+   cat "$W/orders-skipped.txt" "$W/orders-secret-scan.txt" > "$W/orders-excluded.txt"
+   echo "left out: $(wc -l < "$W/orders-skipped.txt") large, $(wc -l < "$W/orders-secret-scan.txt") scan hits"
+
+   # a. The target. Refuse to run over an existing copy.
    kx sh -c "test ! -e $DST && mkdir -p $DST/work-orders $DST/memory $DST/bundles" \
-     || echo "STOP: $DST exists or mkdir failed"
+     || { echo "STOP: $DST exists or mkdir failed"; exit 1; }
 
-   # b. ~/work/orders, about 2.2 GB, a few minutes. No *.jsonl.
-   tar c -C "$HOME/work" --exclude='*.jsonl' orders | kx tar x -C $DST/work-orders
-   echo "orders rc: ${PIPESTATUS[*]}"
+   # b. ~/work/orders without *.jsonl and without the files left out above.
+   tar c -C "$HOME/work" --exclude='*.jsonl' --exclude-from="$W/orders-excluded.txt" orders \
+     | kx tar x -C "$DST/work-orders"
+   rc="${PIPESTATUS[*]}"; echo "orders rc: $rc"; [ "$rc" = "0 0" ] || fail=1
 
    # c. Each repo's auto-memory.
    for m in "$HOME"/.claude/projects/*/memory; do
      p=$(basename "$(dirname "$m")")
-     kx mkdir -p "$DST/memory/$p" && tar c -C "$m" --exclude='*.jsonl' . | kx tar x -C "$DST/memory/$p"
-     echo "memory $p rc: ${PIPESTATUS[*]}"
+     kx mkdir -p "$DST/memory/$p" || { fail=1; continue; }
+     tar c -C "$m" --exclude='*.jsonl' . | kx tar x -C "$DST/memory/$p"
+     rc="${PIPESTATUS[*]}"; echo "memory $p rc: $rc"; [ "$rc" = "0 0" ] || fail=1
    done
 
-   # d. Local branches that origin lacks: one bundle per canonical clone.
+   # d. Local branches that origin lacks: one bundle per canonical clone (none: skipped).
    for r in "$HOME"/repos/*/; do
      n=$(basename "$r")
      nice -n 19 git -C "$r" bundle create "$W/$n.bundle" --branches --not --remotes 2>/dev/null || continue
-     kx sh -c "cat > $DST/bundles/$n.bundle" < "$W/$n.bundle" && echo "bundle $n copied"
+     kx sh -c "cat > $DST/bundles/$n.bundle" < "$W/$n.bundle" && echo "bundle $n copied" || fail=1
    done
 
    # e. Verify: file count and checksums, checked on the v2 side over stdin.
-   ( cd "$HOME/work" && find orders -type f ! -name '*.jsonl' -print0 | sort -z | xargs -0 nice -n 19 sha256sum ) > "$W/orders.sha"
-   wc -l < "$W/orders.sha"; kx sh -c "find $DST/work-orders/orders -type f | wc -l"   # the two must match
-   kx sh -c "cd $DST/work-orders && sha256sum -c --quiet" < "$W/orders.sha" && echo "orders OK"
+   ( cd "$HOME/work" && find orders -type f ! -name '*.jsonl' | grep -vxF -f "$W/orders-excluded.txt" \
+       | sort | tr '\n' '\0' | xargs -0 nice -n 19 sha256sum ) > "$W/orders.sha"
+   src=$(wc -l < "$W/orders.sha"); dst=$(kx sh -c "find $DST/work-orders/orders -type f | wc -l")
+   [ "$src" = "$dst" ] || { echo "COUNT MISMATCH orders src=$src dst=$dst"; fail=1; }
+   kx sh -c "cd $DST/work-orders && sha256sum -c --quiet" < "$W/orders.sha" || { echo "CHECKSUM FAIL orders"; fail=1; }
    for m in "$HOME"/.claude/projects/*/memory; do
      p=$(basename "$(dirname "$m")")
      ( cd "$m" && find . -type f ! -name '*.jsonl' -print0 | sort -z | xargs -0 sha256sum ) > "$W/mem-$p.sha"
-     kx sh -c "cd $DST/memory/$p && sha256sum -c --quiet" < "$W/mem-$p.sha" || echo "CHECKSUM FAIL $p"
+     kx sh -c "cd $DST/memory/$p && sha256sum -c --quiet" < "$W/mem-$p.sha" || { echo "CHECKSUM FAIL $p"; fail=1; }
    done
-   ( cd "$W" && sha256sum ./*.bundle ) > "$W/bundles.sha"
-   kx sh -c "cd $DST/bundles && sha256sum -c --quiet" < "$W/bundles.sha" && echo "bundles OK"
+   if ls "$W"/*.bundle >/dev/null 2>&1; then
+     ( cd "$W" && sha256sum ./*.bundle ) > "$W/bundles.sha"
+     kx sh -c "cd $DST/bundles && sha256sum -c --quiet" < "$W/bundles.sha" || { echo "CHECKSUM FAIL bundles"; fail=1; }
+   fi
 
-   # f. Keep the manifests (paths and hashes only) next to the copy, then reap the writer.
-   tar c -C "$W" --exclude='*.bundle' . | kx sh -c "mkdir -p $DST/manifests && tar x -C $DST/manifests"
-   $v2 reap "$S"
+   # f. Keep the manifests (paths and hashes only) next to the copy.
+   tar c -C "$W" --exclude='*.bundle' . | kx sh -c "mkdir -p $DST/manifests && tar x -C $DST/manifests" || fail=1
+   [ "$fail" = 0 ] && echo "ALL OK" || echo "SOMETHING FAILED: read the lines above"
+   EOF
+   bash ~/work/migrate-v1-notes.sh "$S" && $v2 reap "$S"
    ```
 
-   No `STOP`, `FAIL` or count mismatch means it worked. Nothing is deleted on
-   either side. If a copy is cut off by the timeout, remove the exact `$DST` path
-   (no wildcard) and start again at a. The 2.2 GB is mostly compiled test binaries
-   and tarballs; it fits (about 11% of the 20Gi shared volume).
+   `ALL OK` means it worked; then the writer session is reaped. Nothing is deleted
+   on either side; the files left out stay on v1's volume, and
+   `manifests/orders-secret-scan.txt` names the ones to read before anyone copies
+   them by hand. If a copy is cut
+   off by the timeout, remove the exact `$DST` path (no wildcard) and run the
+   script again.
 
    Then merge the memory, in any running v2 session (the coordinator's will do).
    Only the `-home-dev-repos-<repo>` folders are merged; v2 uses the same names.
@@ -272,7 +313,8 @@ declare-activity start "v1 cutover: drain and scale dev-env v1 to zero" \
 5. **Stop v1's Codex daemon**, from a shell inside v1, with v1's own launcher:
    `agent-run codex-remote stop`. Then `tmux has-session -t codex-remote` must
    fail. The phone's v1 computer entry goes offline. PEAR, the v2 host, is not
-   affected.
+   affected. If Tom does not approve in step 6, start it again with
+   `agent-run codex-remote up` in v1.
 6. **Record Tom's written approval.** Ask Tom through AskUserQuestion once steps 1
    to 5 are done, naming what is left unpushed, if anything. Put his words in the
    saga decision log as a dated ruling, in a dev-env docs PR merged before step 7.
@@ -287,6 +329,7 @@ declare-activity start "v1 cutover: drain and scale dev-env v1 to zero" \
    ```bash
    flux reconcile source git haynes-ops -n flux-system
    flux reconcile kustomization dev-env -n dev --with-source
+   flux reconcile helmrelease dev-env -n dev
    ```
 
    Never `kubectl scale`: it is outside the OPERATOR tier, and Flux would undo it.
@@ -299,8 +342,11 @@ declare-activity start "v1 cutover: drain and scale dev-env v1 to zero" \
    - `agent-run list` shows the same v2 sessions as before; `agent-run auth status`
      exits 0.
    - Tom: the standby answers on the phone, and PEAR answers in the ChatGPT app.
-   - dev-env-ops' next check prints the expected "no running dev-env pod" warning
-     and still lists v2 declarations.
+   - dev-env-ops' next `dev-activity-check.sh` run prints the expected "no
+     running dev-env pod" warning and still lists the runbook's own v2
+     declaration. This is the first live run of that path. If the declaration is
+     missing, record it as a defect; `kubectl get activities.dev-env.haynesops.com
+     -n dev-env-system` still shows it.
    - End the declaration. Record the end state in the handoff and the progress
      file.
 9. **Rollback.** Revert the step 7 PR (a held-draft revert PR in haynes-ops) and

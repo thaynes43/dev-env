@@ -74,6 +74,12 @@ the workbench write tier as existing authority under Q-16.
   v1); no `rollout undo` or `set image` from the workbench (break-glass is Tom's
   admin kubeconfig); the exec guard's privileged list; no exec into the shelf;
   `kubectl delete pod` on a session skips its rescue; a stale template comment.
+- **Files in v1's `~/work/orders` that match a token or private-key pattern:**
+  22 on 2026-10-20 (16 observation `get-*.stdout` files from 2026-10-11 and
+  2026-10-12, four canary scripts, and two notes that name token fields), found
+  by a name-only scan; nobody read them. The cutover
+  copy leaves them out. Someone should check whether any holds a live credential,
+  and rotate it if so.
 - **Backlog, none blocks the cutover:** an expiry gauge for the static
   `CLAUDE_CODE_OAUTH_TOKEN` and an alert on the gh token's age (v1's auth-watch
   checked both); phone-path alerts (plan 13 later item 1); headless Codex tasks
@@ -96,7 +102,13 @@ the workbench write tier as existing authority under Q-16.
 cutover approval (runbook step 6); a `dev-env-system` fence for the workbench
 (W1 review F2); suspended private tasks (NB-06 D3); the gasha01 SSH user; the
 catalog repos left out (NB-08); a project-wide inbox for a human coordinator.
-G-6 (the workbench write tier), code-server, Cursor and timing are settled.
+Tom ruled on code-server, Cursor and timing. G-6, the workbench write tier, was
+settled by the CR-1020 coordinator as existing authority under Q-16 (row 81),
+not by a ruling from Tom. The 2.38.3 block's condition that exec into the keeper
+stay impossible is not met: like v1, the workbench can exec into the keeper. The
+W1 review weighed it: the keeper's `app` image is distroless and runs only
+keeper binaries, and Job create is the larger path, which v1 has too. It
+recommended parity now, with the fence (F2) held for Tom.
 
 **Next safe step:** the cutover story on 2026-10-21, in a fresh v2 workbench
 session with its own story record, following the plan 05 runbook. The
