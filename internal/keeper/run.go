@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
@@ -18,6 +19,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -42,6 +44,10 @@ type Options struct {
 	CodexAuth     CodexOptions
 	// ClaudeAuth keeps the shared Claude login fresh; off by default.
 	ClaudeAuth ClaudeOptions
+	// Notices configures the login gauges' notifier (plan 13, story 13.1).
+	// Zero values take the defaults; the notifier runs only while its Pushover
+	// credential files exist.
+	Notices NoticeOptions
 	// Interval is the longest wait between two refreshes; DefaultInterval when
 	// zero.
 	Interval time.Duration
@@ -152,6 +158,34 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 	if err := mgr.Add(k); err != nil {
 		return err
 	}
+	// The login gauges and the notifier read what the workers observe.
+	var providers []string
+	if o.ClaudeAuth.Enabled {
+		providers = append(providers, ProviderClaude)
+	}
+	if o.CodexAuth.Enabled {
+		providers = append(providers, ProviderCodex)
+	}
+	hub := NewLoginHub(providers...)
+	if err := registerLoginCollector(NewLoginCollector(hub)); err != nil {
+		return err
+	}
+	if len(providers) > 0 {
+		notices := o.Notices.withDefaults()
+		clk := o.Clock
+		if clk == nil {
+			clk = clock.RealClock{}
+		}
+		nf, err := NewNotifier(notices, hub,
+			&ConfigMapNoticeStore{Client: c, Name: types.NamespacedName{Namespace: o.Namespace, Name: notices.StateConfigMap}},
+			&PushoverSender{URL: notices.URL, TokenFile: notices.TokenFile, UserFile: notices.UserFile}, clk, o.Log.WithName("notices"))
+		if err != nil {
+			return err
+		}
+		if err := mgr.Add(nf); err != nil {
+			return err
+		}
+	}
 	if o.CodexAuth.Enabled {
 		a := o.CodexAuth
 		if a.JournalSecret == "" {
@@ -167,7 +201,7 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 		if clk == nil {
 			clk = clock.RealClock{}
 		}
-		worker := &codexWorker{Journal: &codexJournal{Client: c, Secret: types.NamespacedName{Namespace: o.Namespace, Name: a.JournalSecret}}, Transport: newCodexHTTPRefresh(), Publisher: &codexPublicSecret{Client: c, Secret: types.NamespacedName{Namespace: o.GHTokenSecret.Namespace, Name: a.LiveSecret}}, Fence: credentialFence.CheckBudget, Clock: clk, LoginDir: a.LoginDir, Identity: credentialFence.Identity, Log: o.Log.WithName("codex-auth")}
+		worker := &codexWorker{Journal: &codexJournal{Client: c, Secret: types.NamespacedName{Namespace: o.Namespace, Name: a.JournalSecret}}, Transport: newCodexHTTPRefresh(), Publisher: &codexPublicSecret{Client: c, Secret: types.NamespacedName{Namespace: o.GHTokenSecret.Namespace, Name: a.LiveSecret}}, Fence: credentialFence.CheckBudget, Clock: clk, LoginDir: a.LoginDir, Obs: hub, Identity: credentialFence.Identity, Log: o.Log.WithName("codex-auth")}
 		if err := mgr.Add(worker); err != nil {
 			return err
 		}
@@ -177,7 +211,11 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 		if clk == nil {
 			clk = clock.RealClock{}
 		}
-		if err := mgr.Add(claudeRunnable(o, c, credentialFence, clk)); err != nil {
+		r := claudeRunnable(o, c, credentialFence, clk)
+		if w, ok := r.(*claudeWorker); ok {
+			w.Obs = hub
+		}
+		if err := mgr.Add(r); err != nil {
 			return err
 		}
 	}
@@ -228,4 +266,17 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 		return err
 	}
 	return mgr.Start(ctx)
+}
+
+// registerLoginCollector adds the login gauges to controller-runtime's metrics
+// registry, replacing a collector an earlier Run in the same process left
+// there (tests start the keeper more than once).
+func registerLoginCollector(c *LoginCollector) error {
+	err := metrics.Registry.Register(c)
+	var already prometheus.AlreadyRegisteredError
+	if errors.As(err, &already) {
+		metrics.Registry.Unregister(already.ExistingCollector)
+		err = metrics.Registry.Register(c)
+	}
+	return err
 }

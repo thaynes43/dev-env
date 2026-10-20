@@ -91,12 +91,13 @@ func (a *app) keeperLoginStatus(ctx context.Context, c *conn, output, path strin
 	if _, err := a.call(ctx, c, http.MethodGet, path, nil, nil, &st); err != nil {
 		return err
 	}
+	now := a.env.Now()
+	soon := st.LoginExpiresAt != nil && (st.LoginExpiresAt.Sub(now) <= 0 || wholeDaysLeft(st.LoginExpiresAt.Sub(now)) <= authLapseWarnDays)
 	if output == outputJSON {
 		if err := a.printJSON(st); err != nil {
 			return err
 		}
 	} else {
-		now := a.env.Now()
 		line := fmt.Sprintf("%s: %s", st.Provider, st.State)
 		if st.Generation > 0 {
 			line += fmt.Sprintf(" (generation %d)", st.Generation)
@@ -107,11 +108,20 @@ func (a *app) keeperLoginStatus(ctx context.Context, c *conn, output, path strin
 		}
 		if st.LoginExpiresAt != nil {
 			a.outf("  login expires        %s (%s)\n", st.LoginExpiresAt.UTC().Format(time.RFC3339), until(now, *st.LoginExpiresAt))
+			if soon {
+				a.outf("  renew it from the standby: agent-run keeper-login %s url\n", st.Provider)
+			}
 		} else if st.AccessExpiresAt == nil && st.State != "Unavailable" {
 			a.outf("  (this keeper does not report expiry yet)\n")
+		} else if st.State == "Ready" || st.State == "PendingPublication" {
+			a.outf("  login expires        Unknown (the provider gave no date)\n")
 		}
 	}
 	if st.State != "Ready" && st.State != "PendingPublication" {
+		return &exitError{code: ExitFailed}
+	}
+	// A known lapse within 7 days, or past, exits 1; an unknown one does not.
+	if soon {
 		return &exitError{code: ExitFailed}
 	}
 	return nil

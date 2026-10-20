@@ -421,7 +421,8 @@ nobody signs in per session.
 - **Check.** In any v2 session, `agent-run auth status` shows each login's
   state (Ready or NeedsLogin), its generation and the time left on the current
   access token. Exit 0 is fine, 1 is expiring or expired, 2 means it cannot
-  tell. Proven from a session.
+  tell. Proven from a session. Once story 13.1 is installed it also shows when
+  the Claude login lapses (see "Lapse date and notices" below).
 - **Refresh is automatic.** The keeper renews the Claude access token at about
   two thirds of its 8-hour life. Proven at 00:29 on 2026-10-20: generation 2
   reached the session pods and every session stayed on the phone. Generation 3
@@ -430,11 +431,11 @@ nobody signs in per session.
 - Headless Claude tasks do not use the keeper's login. They keep their own
   long-lived token, as in v1.
 - **Renew the Claude login about once a month.** It lapses about 30 days after
-  the last sign-in. Since 2.38.0, `agent-run keeper-login claude status` in a
-  workbench session shows the date; `agent-run auth status` does not. On
-  2026-10-20 it showed **2026-11-16 17:51 UTC**, two days before the 30-day
-  estimate these notes gave. Nothing warns you yet (plan 13, story 13.1 adds a
-  warning), so put it in your calendar.
+  the last sign-in. `agent-run keeper-login claude status` in a workbench session
+  shows the date. On 2026-10-20 it showed **2026-11-16 17:51 UTC**, two days
+  before the 30-day estimate these notes gave. Story 13.1 adds a warning on your
+  phone and the date in `agent-run auth status` ("Lapse date and notices", below).
+  Until it is installed, put the date in your calendar.
 - **Two ways to renew.** From a workbench session with `agent-run keeper-login`
   (below), or as before: a coordinator in the v1 pod starts the keeper's login
   helper and sends you one sign-in link in chat. Either way you open the link on
@@ -533,6 +534,71 @@ The operator runs only the keeper pod's login helpers, and for Claude the
 `claude-login-abandon` command. An admission policy, `dev-env-operator-exec-guard`,
 refuses anything else it tries there: the keeper's main container, a shell, other
 arguments.
+
+### Lapse date and notices
+
+**Status: source only (plan 13, story 13.1). Not released, not installed, and no
+notice has reached your phone yet.** This section describes what the change does
+once it is.
+
+**The date.** The keeper publishes the Claude login's lapse date next to the
+access token, in a small non-secret file, `login.json`, in the same projection
+Secret. Sessions that still run an older agent ignore it. Two commands show it:
+
+```bash
+agent-run auth status                    # in any v2 session
+agent-run keeper-login claude status     # in a workbench session
+```
+
+`auth status` adds `login lapses <date> (N days left)` to the Claude line. N is
+the time left in whole days, rounded down (7 days 23 hours is 7). Both commands
+exit 1 when N is 7 or fewer, or when the login has lapsed, and print how to
+renew. The phone notice counts days the same way. When the keeper has no date they print `Unknown`; they never
+guess one, and an Unknown date does not change the exit code. The ChatGPT login
+has no known lapse date, so it is always Unknown.
+
+**The notices.** The keeper sends them straight to the "dev-env" Pushover
+application, not through Alertmanager. Each links to `https://claude.ai/code`,
+the session list where the standby shows on your phone.
+
+- *Claude login lapses in N days* (normal priority). Once N (whole days, rounded
+  down) is 7 or fewer, at most one a day, only between 09:00 and 21:00 New York
+  wall-clock time (also on the days the clocks change), until the login is
+  renewed. Renewal moves the lapse date later and ends the warnings.
+- *Keeper needs login (claude or codex)* (priority 1, any hour). Once when a
+  login reaches NeedsLogin, with the same renewal steps in the message. One
+  *Keeper login restored* notice (normal priority) when it leaves NeedsLogin.
+
+A keeper restart repeats nothing: the keeper remembers what it sent in a
+ConfigMap, `dev-env-keeper-notices`, which holds only times and incident ids.
+If that ConfigMap is missing, forbidden or corrupt, the keeper still sends,
+keeps its record in memory, logs the reason once and tries the ConfigMap again
+every minute; only a restart during that time can repeat a notice. After a crash
+between a send and the save, one notice can repeat. If Pushover refuses a notice
+with a 4xx other than 429 (a wrong token or user key), the keeper logs it once
+and stops sending that notice until it restarts or the situation changes (a new
+incident, a later lapse date); 429 and 5xx are retried every 5 minutes.
+If the Pushover files are missing the keeper logs "notifier disabled: no
+Pushover credentials" once, sends nothing, and keeps the gauges.
+
+**The gauges** (the keeper's metrics port, 8080, for dashboards):
+
+- `dev_env_keeper_login_state{provider,state}`: 1 for the current state
+  (`Ready`, `NeedsLogin`, `LoginInProgress`, `Unknown`) and 0 for the others.
+- `dev_env_keeper_login_lapse_timestamp_seconds{provider}`: Unix time of the
+  lapse. Only Claude has one, and only while a date is known; there is no series
+  at all when it is not.
+
+**Send a test notice.** One fixed notice, "dev-env test notice", to check the
+phone path. Run it from the v1 pod, which can exec into the keeper pod:
+
+```bash
+kubectl exec -n dev-env-system deploy/dev-env-keeper -c app -- \
+  /usr/local/bin/dev-env-keeper notify-test
+```
+
+It prints `sent`, or an error that names no credential. The keeper image is
+distroless, so there is no shell: that one binary is all it runs.
 
 ## 7. Where notes live
 

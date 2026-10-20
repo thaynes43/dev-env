@@ -13,12 +13,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,6 +42,9 @@ func main() {
 	}
 	if len(os.Args) > 1 && (os.Args[1] == "codex-login" || os.Args[1] == "codex-auth-status" || os.Args[1] == "codex-auth-refresh-once" || os.Args[1] == "codex-login-idle") {
 		os.Exit(codexLoginCommand(os.Args[1:], os.Stdin, os.Stdout))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "notify-test" {
+		os.Exit(notifyTest(os.Args[2:], os.Stdout))
 	}
 	if len(os.Args) == 2 && (os.Args[1] == "version" || os.Args[1] == "--version") {
 		fmt.Println(version.Get().String(binaryName))
@@ -67,6 +72,38 @@ func validateSSHCA(args []string, out io.Writer) int {
 	return 0
 }
 
+// notifyClient is nil in production (the sender's own bounded client); tests set
+// a client that trusts their fake server.
+var notifyClient *http.Client
+
+// notifyTest is the one-shot test trigger: it reads the same Pushover files as
+// the keeper, sends one fixed notice and prints only "sent" or a token-free
+// error. Run it with `kubectl exec -c app` in the keeper pod.
+func notifyTest(args []string, out io.Writer) int {
+	fs := flag.NewFlagSet("notify-test", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	n := keeper.NoticeOptions{}
+	fs.StringVar(&n.TokenFile, "pushover-token-file", keeper.DefaultPushoverTokenFile, "")
+	fs.StringVar(&n.UserFile, "pushover-user-file", keeper.DefaultPushoverUserFile, "")
+	fs.StringVar(&n.URL, "pushover-url", keeper.DefaultPushoverURL, "")
+	if fs.Parse(args) != nil || fs.NArg() != 0 || !strings.HasPrefix(n.URL, "https://") {
+		_, _ = fmt.Fprintln(out, "notify-test: usage: notify-test [--pushover-token-file F] [--pushover-user-file F]")
+		return 2
+	}
+	if !keeper.PushoverCredentialsPresent(n.TokenFile, n.UserFile) {
+		_, _ = fmt.Fprintln(out, "notify-test: no Pushover credentials")
+		return 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := keeper.SendTestNotice(ctx, &keeper.PushoverSender{URL: n.URL, TokenFile: n.TokenFile, UserFile: n.UserFile, Client: notifyClient}); err != nil {
+		_, _ = fmt.Fprintf(out, "notify-test: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintln(out, "sent")
+	return 0
+}
+
 type options struct {
 	namespace       string
 	secretNamespace string
@@ -81,6 +118,7 @@ type options struct {
 	proxmoxGrants   keeper.ProxmoxGrantOptions
 	codexAuth       keeper.CodexOptions
 	claudeAuth      keeper.ClaudeOptions
+	notices         keeper.NoticeOptions
 }
 
 func defaultPermissions() string {
@@ -125,6 +163,13 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.proxmoxGrants.CADir, "ssh-ca-dir", keeper.DefaultSSHCAPath, "mounted Ed25519 CA directory (private-key/public-key)")
 	fs.StringVar(&o.proxmoxGrants.TargetsFile, "proxmox-ssh-targets-file", keeper.DefaultSSHTargetsFile, "mounted JSON list of explicit pinned SSH host:22 targets")
 	fs.StringVar(&o.proxmoxGrants.KnownHostsFile, "ssh-known-hosts-file", keeper.DefaultSSHKnownHostsFile, "mounted strict OpenSSH known-hosts file")
+	fs.StringVar(&o.notices.TokenFile, "pushover-token-file", keeper.DefaultPushoverTokenFile, "file holding the dev-env Pushover application token; notices are off unless it and the user file exist and are not empty")
+	fs.StringVar(&o.notices.UserFile, "pushover-user-file", keeper.DefaultPushoverUserFile, "file holding the Pushover user key")
+	fs.StringVar(&o.notices.URL, "pushover-url", keeper.DefaultPushoverURL, "Pushover's message endpoint (HTTPS only)")
+	fs.StringVar(&o.notices.Zone, "notice-timezone", keeper.DefaultNoticeZone, "time zone of the daytime window and the calendar day of the warning")
+	fs.StringVar(&o.notices.WindowStart, "notice-window-start", keeper.DefaultNoticeWindowStart, "the warning is sent from this local time (HH:MM)")
+	fs.StringVar(&o.notices.WindowEnd, "notice-window-end", keeper.DefaultNoticeWindowEnd, "the warning is not sent from this local time (HH:MM)")
+	fs.StringVar(&o.notices.StateConfigMap, "notice-state-configmap", keeper.DefaultNoticeStateConfigMap, "ConfigMap in the keeper's namespace that keeps the notice deduplication state")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
@@ -148,6 +193,9 @@ func parseFlags(args []string) (options, error) {
 	}
 	if o.claudeAuth.Enabled && (!o.leaderElect || o.claudeAuth.JournalSecret == "" || o.claudeAuth.LiveSecret == "" || !filepath.IsAbs(o.claudeAuth.LoginDir) || o.namespace == o.secretNamespace) {
 		return o, errors.New("claude auth requires leader election, separate private/public namespaces, an absolute login directory and nonempty named configuration")
+	}
+	if err := o.notices.Validate(); err != nil {
+		return o, err
 	}
 	p, err := keeper.ParsePermissions(*perms)
 	if err != nil {
@@ -185,6 +233,7 @@ func run(args []string) error {
 		ProxmoxGrants: o.proxmoxGrants,
 		CodexAuth:     o.codexAuth,
 		ClaudeAuth:    o.claudeAuth,
+		Notices:       o.notices,
 		Interval:      o.interval,
 		LeaderElect:   o.leaderElect,
 		MetricsAddr:   o.metricsAddr,

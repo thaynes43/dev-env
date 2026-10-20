@@ -105,8 +105,11 @@ hold no refresh token, and no token value is ever printed.
 For each login it prints the state (Ready, or NeedsLogin when the access has
 expired and the keeper has published nothing newer), the generation, when the
 access expires and how long is left, and, for Codex, the keeper's last refresh.
-A login the pod does not follow prints NotConfigured. The Claude refresh login
-itself (about 30 days) lives with the keeper and is not in the projection.
+A login the pod does not follow prints NotConfigured. For Claude it also prints
+when the whole login lapses (about 30 days after each sign-in) and the days left,
+from the non-secret login.json the keeper publishes beside the projection. A
+login whose date the keeper did not publish prints "login lapses Unknown"; the
+date is never guessed. Codex's login has no known lapse date.
 
 Flags:
   --warn <duration>    report exit 1 when access ends within this window (default 30m)
@@ -116,8 +119,9 @@ Flags:
   -o json              print the rows as JSON
 
 Exit codes, as claude-login-check: 0 every configured login is ready, 1 one has
-expired or is inside the warning window, 2 cannot tell (a file missing,
-unreadable or invalid, or nothing configured).
+expired or is inside the warning window, or the Claude login has 7 whole days or fewer left
+(rounded down, so 7d23h counts as 7) or has lapsed, 2 cannot tell (a file missing, unreadable or invalid, or
+nothing configured). An Unknown lapse date does not change the exit code.
 `,
 	"budget": `Usage: agent-run budget create <task-uid> --success "RESULT" [flags]
        agent-run budget show <task-uid> [-o json]
@@ -432,8 +436,10 @@ caller gets a 403.
 
   status   the keeper's state (Ready, PendingPublication, NeedsLogin or
            Unavailable), its generation, when the access token lapses (the keeper
-           renews that itself) and when the login itself lapses. Exit 0 when it is
-           Ready or PendingPublication, 1 otherwise. It changes nothing.
+           renews that itself) and when the login itself lapses, or "Unknown" when the
+           provider gave no date. Exit 0 when it is Ready or PendingPublication,
+           1 otherwise, and 1 when 7 whole days (rounded down) or fewer remain. It changes
+           nothing.
   url      opens a ceremony and prints the sign-in link on its own line (Codex
            prints a one-time code too). Open it and sign in. The link is a secret:
            it goes to your terminal only, never a log, and is not stored.
