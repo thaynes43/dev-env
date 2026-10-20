@@ -53,7 +53,7 @@ stays in plan 03.
 | Standing auto-approved grants | Proven from a workbench session | Internal ingress, Proxmox API, hw-ssh and a short-lived Proxmox token, each approved by policy with no phone step. |
 | The operator-kept standby | Installed; it registered by itself | The operator created the standby and it registered Remote Control on the shared login. Tom opening and steering it on the phone is not recorded (morning item 1). |
 | The keeper login ceremony | Proven on the phone, run from the v1 pod | The Claude and ChatGPT logins were both renewed this way on 2026-10-19. |
-| The 401-window continue | Installed, not exercised | NB-03 tests it tonight. |
+| The 401-window continue | Installed, not exercised | NB-03 tests it tonight. A fix to how it recognises the CLI's error is open (#473). |
 | The Codex keeper refresh | Installed, not exercised | It first comes due before 2026-10-29. |
 | A Codex host moving to a new image (suspend, then resume) | Installed, not exercised | NB-03 tests it tonight. |
 | Archived history reads (`agent-run history`) | Not built on the installed system | `--enable-history-archive-reads` is off, so the routes answer 404. NB-06 checks what turning it on needs. |
@@ -76,16 +76,28 @@ keeper's main container. Access change: the operator's Role in `dev-env-system`
 gains `pods` get and list and `pods/exec` create. The container name is fixed in
 code. Planned live check: `status` for both providers works from a disposable
 workbench session, and `url` returns a link that is then abandoned. The full
-ceremony with Tom is morning item 3. State tonight: being built.
+ceremony with Tom is morning item 3. State at writing: being built; its
+haynes-ops RBAC PR is open (#4130).
 
-**NB-02: restarts from v2.** A Role `dev-env-workbench-admin` in `dev-env-system`,
-bound to `dev-agents/dev-env-workbench`. It allows `deployments` and
-`statefulsets` get, list and watch; `patch` only on the named operator, keeper,
-broker and shelf workloads; `pods` get and list; and `pods/log` get. No secrets,
-no exec, no delete. Planned live check: `rollout restart` of the keeper and the
-operator from a workbench session, inside a `declare-activity`, with every session
-still Running and the keeper Ready afterwards. The shelf is restarted only when no
-archive exec runs. State tonight: being built.
+**NB-02: restarts from v2.** Two Roles named `dev-env-workbench-admin`, bound to
+`dev-agents/dev-env-workbench`:
+
+- in `dev-env-system`: `deployments` and `statefulsets` get, list and watch;
+  `patch` only on the Deployments `dev-env-operator`, `dev-env-keeper` and
+  `dev-env-broker`; `pods` get and list; `pods/log` get;
+- in `dev-agents`: `deployments` get, list and watch; `patch` only on the
+  Deployment `dev-env-shelf`; `pods` list.
+
+No secrets, no exec, no delete. RBAC `patch` alone could rewrite a pod template:
+the image, the arguments or the service account. So a guard,
+`dev-env-workbench-admin-guard` (a ValidatingAdmissionPolicy), lets the workbench
+change only the template's `kubectl.kubernetes.io/restartedAt` annotation, which
+is what `kubectl rollout restart` writes. Planned live check: `rollout restart` of
+the keeper and the operator from a workbench session, inside a
+`declare-activity`, with every session still Running and the keeper Ready
+afterwards. The shelf is restarted only when no archive exec runs. State at
+writing: the Roles and the guard are merged (haynes-ops #4123), a guard fix is
+open (haynes-ops #4129), and no live restart is recorded.
 
 NB-03, NB-05 and NB-06 test rows of the tables above tonight. Their results go in
 their own result files. This plan does not claim them.
@@ -117,11 +129,12 @@ These remain if NB-01 and NB-02 pass.
 6. **Off home Wi-Fi is untested.** The phone path goes through the Anthropic and
    OpenAI relays. NB-04 lists any step that needs the home network.
 
-**Note for Tom.** If NB-02 lands, every workbench session can restart the v2
+**Note for Tom.** Once NB-02 works, every workbench session can restart the v2
 services. That includes the standby and every session it starts, because a child
-gets its parent's profile. If NB-01 lands, they can also start a keeper login
-ceremony. The v1 pod can do both today, so this is parity, and no new gate is
-proposed.
+gets its parent's profile. The guard keeps that to a restart: no workbench session
+can change those services' image, arguments or service account. Once NB-01 works,
+workbench sessions can also start a keeper login ceremony; the sign-in still needs
+Tom. The v1 pod can do both today, so this is parity, and no new gate is proposed.
 
 ## Smallest next step: story 13.1, login lapse date and reminder
 
