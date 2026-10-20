@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.38.1](https://github.com/thaynes43/dev-env/compare/v2.38.0...v2.38.1) (2026-10-20)
+
+
+### Bug Fixes
+
+* **apiserver:** cancel a Claude keeper-login ceremony with a fixed abandon command (agentd claude-login-abandon) ([#483](https://github.com/thaynes43/dev-env/issues/483)) ([ed156f0](https://github.com/thaynes43/dev-env/commit/ed156f0195854956f004cd883e01d7d4061f0998))
+* **keeper:** accept PVE's string-typed create response and log ambiguous mints ([#481](https://github.com/thaynes43/dev-env/issues/481)) ([a04bcdf](https://github.com/thaynes43/dev-env/commit/a04bcdfe0e9ddaa943726e028c173da621c18bd6))
+* **standby:** no second standby while the first drains for a revision move ([#480](https://github.com/thaynes43/dev-env/issues/480)) ([080e7b5](https://github.com/thaynes43/dev-env/commit/080e7b553c3f46508551ccacc00f2817a451e0be))
+
 ## [2.38.0](https://github.com/thaynes43/dev-env/compare/v2.37.0...v2.38.0) (2026-10-20)
 
 
