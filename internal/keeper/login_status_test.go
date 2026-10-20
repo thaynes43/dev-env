@@ -162,10 +162,43 @@ func TestCodexWorkerReportsACeremonyAsInProgress(t *testing.T) {
 	if s := hub.Snapshot()[ProviderCodex]; s.State != LoginReady {
 		t.Fatalf("after cancel = %+v, want Ready", s)
 	}
-	// Once the reservation has lapsed the login really needs a person.
+	// An abandoned renewal from a valid login: when the reservation lapses the
+	// tick restores Ready, and that is what the gauges must say, in the same tick.
 	start = w.begin(ctx)
 	if !start.OK {
 		t.Fatalf("second begin: %+v", start)
+	}
+	w.Clock.(interface{ Step(time.Duration) }).Step(codexCeremonyLifetime + time.Minute)
+	if err := w.tick(ctx); err != nil {
+		t.Fatalf("tick after an abandoned renewal = %v", err)
+	}
+	if s := hub.Snapshot()[ProviderCodex]; s.State != LoginReady {
+		t.Fatalf("after an abandoned renewal lapsed = %+v, want Ready", s)
+	}
+}
+
+// A ceremony started when there was nothing to resume (the access had already
+// expired) really needs a person once its reservation lapses.
+func TestCodexWorkerReportsALapsedCeremonyWithNothingToResumeAsNeedsLogin(t *testing.T) {
+	w, _, _ := codexFixture(t)
+	hub := NewLoginHub(ProviderCodex)
+	w.Obs = hub
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server, err := w.serveControl(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = server.Close() }()
+	saveCodexFixture(t, w, freshCodexRecord(t, w))
+	w.Clock.(interface{ Step(time.Duration) }).Step(11 * 24 * time.Hour) // the 10 day access has expired
+	start := w.begin(ctx)
+	if !start.OK {
+		t.Fatalf("begin: %+v", start)
+	}
+	_ = w.tick(ctx)
+	if s := hub.Snapshot()[ProviderCodex]; s.State != LoginInProgress {
+		t.Fatalf("during the ceremony = %+v, want LoginInProgress", s)
 	}
 	w.Clock.(interface{ Step(time.Duration) }).Step(codexCeremonyLifetime + time.Minute)
 	_ = w.tick(ctx)

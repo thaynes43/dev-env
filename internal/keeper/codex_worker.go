@@ -145,7 +145,6 @@ func (w *codexWorker) tickExpected(ctx context.Context, expected uint64) error {
 		w.ready.Store(false)
 		return err
 	}
-	w.observe(d.Record)
 	if expected != 0 {
 		if d.Record.Access.Generation != expected {
 			return errCodexGenerationMismatch
@@ -163,6 +162,9 @@ func (w *codexWorker) tickExpected(ctx context.Context, expected uint64) error {
 			return w.needsLogin(ctx)
 		}
 	}
+	// After the expired reservation is settled, so an abandoned renewal that the
+	// tick has just restored to Ready is never reported as NeedsLogin.
+	w.observe(d.Record)
 	if w.halted {
 		if w.loginReservationLive(d.Record) {
 			return errCodexLoginInProgress
