@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -24,26 +25,55 @@ type tokenInfo struct {
 	Comment string `json:"comment"`
 }
 
-// PVE's boolean schema may serialize as JSON false or numeric 0. Require
-// the field explicitly; a missing privsep must not silently mean false.
+// PVE is inconsistent: `pvesh create` returns info.expire and info.privsep as
+// JSON strings ("0"), while `pvesh get .../token` returns integers, and the
+// boolean schema may also serialize as true/false. Accept those forms and no
+// others. The values are still compared exactly afterwards.
+func flexInt(raw json.RawMessage, allowBool bool) (int64, bool) {
+	text := strings.TrimSpace(string(raw))
+	if len(text) >= 2 && text[0] == '"' && text[len(text)-1] == '"' {
+		var quoted string
+		if json.Unmarshal(raw, &quoted) != nil {
+			return 0, false
+		}
+		text = quoted
+		if text == "" || text != strings.TrimSpace(text) || strings.HasPrefix(text, "+") {
+			return 0, false
+		}
+	} else if allowBool {
+		switch text {
+		case "true":
+			return 1, true
+		case "false":
+			return 0, true
+		}
+	}
+	n, err := strconv.ParseInt(text, 10, 64)
+	return n, err == nil
+}
+
+// Require the fields explicitly; a missing privsep must not silently mean false.
 func (t *tokenInfo) UnmarshalJSON(raw []byte) error {
 	var wire struct {
-		Expire  int64           `json:"expire"`
+		Expire  json.RawMessage `json:"expire"`
 		Privsep json.RawMessage `json:"privsep"`
 		Comment string          `json:"comment"`
 	}
 	if json.Unmarshal(raw, &wire) != nil {
 		return errors.New("invalid provider metadata")
 	}
-	switch string(wire.Privsep) {
-	case "0", "false":
-		t.Privsep = 0
-	case "1", "true":
-		t.Privsep = 1
-	default:
+	privsep, ok := flexInt(wire.Privsep, true)
+	if !ok || (privsep != 0 && privsep != 1) {
 		return errors.New("missing or invalid provider isolation metadata")
 	}
-	t.Expire = wire.Expire
+	expire := int64(0)
+	if len(wire.Expire) != 0 {
+		if expire, ok = flexInt(wire.Expire, false); !ok {
+			return errors.New("invalid provider expiry metadata")
+		}
+	}
+	t.Expire = expire
+	t.Privsep = int(privsep)
 	t.Comment = wire.Comment
 	return nil
 }
@@ -85,8 +115,20 @@ func (p *proxmoxProvider) mint(ctx context.Context, e credentialEntry) (mintResu
 	}
 	result.PossibleDispatch = true
 	var response mintedWire
-	if decodeBounded(out, &response) != nil || response.ID != providerID(e.Spec.Grant.UID) || response.Info.Expire != e.Spec.ExpiresAt.Unix() || response.Info.Privsep != 0 || response.Info.Comment != providerComment(e) || !validTokenValue(response.Value) {
-		return result, errors.New("proxmox mint response was invalid")
+	// Each refusal names only which check failed, never a response value.
+	switch {
+	case decodeBounded(out, &response) != nil:
+		return result, errors.New("proxmox mint response was invalid: undecodable")
+	case response.ID != providerID(e.Spec.Grant.UID):
+		return result, errors.New("proxmox mint response was invalid: token id mismatch")
+	case response.Info.Expire != e.Spec.ExpiresAt.Unix():
+		return result, errors.New("proxmox mint response was invalid: expiry mismatch")
+	case response.Info.Privsep != 0:
+		return result, errors.New("proxmox mint response was invalid: privilege separation not disabled")
+	case response.Info.Comment != providerComment(e):
+		return result, errors.New("proxmox mint response was invalid: comment mismatch")
+	case !validTokenValue(response.Value):
+		return result, errors.New("proxmox mint response was invalid: secret shape")
 	}
 	result.TokenID = response.ID
 	result.TokenSecret = newSecretValue(response.Value)
@@ -114,7 +156,7 @@ func (p *proxmoxProvider) inspect(ctx context.Context, e credentialEntry) (bool,
 	}
 	var tokens []struct {
 		TokenID string          `json:"tokenid"`
-		Expire  int64           `json:"expire"`
+		Expire  json.RawMessage `json:"expire"`
 		Privsep json.RawMessage `json:"privsep"`
 		Comment string          `json:"comment"`
 	}
@@ -125,7 +167,9 @@ func (p *proxmoxProvider) inspect(ctx context.Context, e credentialEntry) (bool,
 		if t.TokenID != providerName(e.Spec.Grant.UID) {
 			continue
 		}
-		if t.Expire != e.Spec.ExpiresAt.Unix() || (string(t.Privsep) != "0" && string(t.Privsep) != "false") || t.Comment != providerComment(e) {
+		expire, okExpire := flexInt(t.Expire, false)
+		privsep, okPrivsep := flexInt(t.Privsep, true)
+		if !okExpire || expire != e.Spec.ExpiresAt.Unix() || !okPrivsep || privsep != 0 || t.Comment != providerComment(e) {
 			return true, errors.New("proxmox token ownership does not match")
 		}
 		return true, nil
