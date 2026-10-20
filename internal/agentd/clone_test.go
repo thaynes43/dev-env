@@ -498,6 +498,37 @@ func TestPrepareRepoBaseAndDefaultBranch(t *testing.T) {
 	}
 }
 
+// A checkout that keeps failing has run its own retries: one clone, no clone
+// retry, and the unpreserved staging is removed.
+func TestCloneCheckoutFailureDoesNotMultiplyRetries(t *testing.T) {
+	noSleep(t)
+	home := t.TempDir()
+	s := testSettings(t, home)
+	s.TokenWait = 0
+	clones, checkouts := 0, 0
+	f := &fakeRunner{handle: func(c Cmd) (Result, error) {
+		switch {
+		case c.Name == "git" && slices.Contains(c.Args, "clone"):
+			clones++
+			if !slices.Contains(c.Args, "--no-checkout") {
+				t.Errorf("clone is not --no-checkout: %q", c.Args)
+			}
+			writeFile(t, filepath.Join(c.Args[len(c.Args)-1], "partial"), "x")
+		case c.Name == "git" && slices.Contains(c.Args, "checkout"):
+			checkouts++
+			return Result{}, &CmdError{Name: "git", Sub: "checkout", ExitCode: 128, Stderr: "fatal: Operation too slow"}
+		}
+		return Result{}, nil
+	}}
+	_, step := PrepareRepo(context.Background(), f, s, cloneSession("x-1"))
+	if step.State != StepFail || clones != 1 || checkouts != cloneAttempts {
+		t.Fatalf("clones %d, checkouts %d, step %s %q", clones, checkouts, step.State, step.Notes)
+	}
+	if left, _ := filepath.Glob(filepath.Join(s.ReposDir(), ".*")); len(left) != 0 || exists(s.ClonePath("x")) {
+		t.Errorf("left behind: %q", left)
+	}
+}
+
 func TestCloneRetriesAndCleansUp(t *testing.T) {
 	noSleep(t)
 	home := t.TempDir()
