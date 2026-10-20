@@ -212,11 +212,11 @@ link to the standby, deduplication and a priority chosen per event.
   (then ship the state gauge and the NeedsLogin alert, and record the date as
   Unknown); at a design question; or at the budget.
 
-**Story 13.1 decisions and status (2026-10-20).** State: source in the dev-env
-PR for story 13.1; not merged, released or installed. The haynes-ops pieces are
-a separate PR (ExternalSecret, notice ConfigMap and its Role, a PodMonitor and
-the metrics ingress rule) and a prepared, unmerged mount change for the keeper
-HelmRelease.
+**Story 13.1 decisions and status (2026-10-20).** State: source in dev-env
+PR #495; not merged, released or installed. The haynes-ops pieces are
+PR #4138 (ExternalSecret, notice ConfigMap and its Role, a PodMonitor and the
+metrics ingress rule) and a prepared, unmerged mount change for the keeper
+HelmRelease (branch `agent/s131-keeper-mount`, folded into the release pin).
 
 - **The lapse date is its own projection key, not a member of `access.json`.**
   The Secret `dev-env-claude-live` gets a second key, `login.json`

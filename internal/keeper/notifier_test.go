@@ -414,6 +414,16 @@ func TestStateUnavailableSendsNothing(t *testing.T) {
 	if f.fake.count() != 0 {
 		t.Fatal("a notice was sent without the stored deduplication state")
 	}
+	for i := 0; i < 5; i++ {
+		f.clk.Step(time.Minute)
+		f.tick()
+	}
+	if got := strings.Count(f.logs.String(), "notifier waiting: notice state is unavailable"); got != 1 {
+		t.Fatalf("the waiting line was logged %d times over 6 ticks, want once:\n%s", got, f.logs.String())
+	}
+	if got := strings.Count(f.logs.String(), "notifier enabled"); got != 1 {
+		t.Fatalf("the enabled line was logged %d times, want once:\n%s", got, f.logs.String())
+	}
 	f.store.fail = false
 	f.tick()
 	if f.fake.count() != 1 {

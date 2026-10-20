@@ -323,6 +323,7 @@ type Notifier struct {
 	dirty        bool         // a change not yet stored
 	backoffUntil time.Time
 	logged       string // last enabled/disabled line logged
+	waiting      bool   // the "state unavailable" line was logged and the state has not loaded since
 }
 
 // NewNotifier builds a Notifier from validated options.
@@ -385,9 +386,13 @@ func (n *Notifier) Tick(ctx context.Context) {
 		st, err := n.Store.Load(ctx)
 		if err != nil {
 			// Without the stored state a send could repeat a notice: do nothing.
-			n.logOnce("notifier waiting: notice state is unavailable")
+			if !n.waiting {
+				n.Log.Info("notifier waiting: notice state is unavailable")
+				n.waiting = true
+			}
 			return
 		}
+		n.waiting = false
 		if st.Warnings == nil {
 			st.Warnings = map[string]warnRecord{}
 		}
