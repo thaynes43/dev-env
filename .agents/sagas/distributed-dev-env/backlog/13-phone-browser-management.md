@@ -156,32 +156,50 @@ admits only the keeper pod's login helpers with fixed commands.
 It closes gap 1 and the login half of gap 2. v2 then matches v1's auth-watch for
 the shared login.
 
+**Ruling (Tom, 2026-10-20, from his phone):** dev-env notices go out through a
+dedicated "dev-env" Pushover application, sent directly by the keeper and
+operator, not through Alertmanager. Alertmanager is generic and noisy; the
+dedicated app gives dev-env its own name and icon, clear titles, a tap-through
+link to the standby, deduplication and a priority chosen per event.
+
 - **Scope.** The keeper exports two gauges per provider on its existing metrics
   port (8080): login state, and the time the login lapses. `agent-run auth
   status` and `agent-run keeper-login claude status` show the lapse date and exit
   1 when 7 days or fewer remain. The date reaches session pods as a non-secret
   field in the access projection. Its name must not contain `refresh`, because
-  the projection parser refuses any such member. haynes-ops: a ServiceMonitor for
-  the keeper and a PrometheusRule with two alerts. "Login lapses within 7 days"
-  is a warning on the existing daytime Pushover route, as the Plex canary does.
-  "Keeper NeedsLogin" is critical. Quickstart section 6 changes in the same PR
-  (named writer). Excluded: the journal, the refresh logic, the ceremony, the
-  console, alerts for the standby.
+  the projection parser refuses any such member. The keeper sends two notices
+  to the dev-env Pushover app: "Claude login lapses in N days — renew from the
+  standby" at normal priority, once a day, daytime only (09:00 to 21:00 local),
+  from 7 days before the lapse; and "Keeper needs login" at priority 1 (it
+  breaks through quiet hours) when a provider reaches NeedsLogin, once per
+  incident, with one "resolved" notice after renewal. Each carries a link to the
+  standby session. Sends are deduplicated in the keeper's journal-backed state,
+  so a keeper restart does not repeat them. The gauges stay for dashboards; no
+  Alertmanager route is added. haynes-ops: an ExternalSecret for the app token
+  in `dev-env-system`, mounted only into the keeper. Quickstart section 6
+  changes in the same PR (named writer). Excluded: the journal, the refresh
+  logic, the ceremony, the console, notices for the standby.
 - **Acceptance.** Unit tests: the gauges follow the journal with a fake clock;
   `auth status` shows the date, exits 1 inside 7 days, and shows Unknown when the
   provider gave no date (never a guessed date); no token value appears in any
-  metric, log or output. Installed: Prometheus holds both series for both
-  providers, and the Claude lapse time matches the keeper's annotation; `auth
-  status` in a workbench session shows the date. Natural time, not a gate: the
+  metric, log or output; the notifier sends at most one warning per day and one
+  critical per incident, respects the daytime window, and survives a restart
+  without repeating (fake clock, fake Pushover server). Installed: Prometheus
+  holds both series for both providers, and the Claude lapse time matches the
+  keeper's annotation; `auth status` in a workbench session shows the date; one
+  test notice arrives on Tom's phone under the dev-env app. Natural time, not a gate: the
   warning reaches Tom's phone about 2026-11-09 (7 days before the 2026-11-16
   17:51 UTC lapse).
 - **Dependencies.** NB-01 merged first, because both change the keeper status
   path and quickstart section 6 (met: NB-01 is installed). It does not depend on
-  NB-02.
+  NB-02. **Tom first:** create the "dev-env" application in Pushover (name and
+  icon) and store its token in 1Password item `dev-env-pushover`, fields
+  `PUSHOVER_TOKEN` and `PUSHOVER_USER_KEY`. Agents cannot create the app.
 - **Ownership.** One Sonnet writer; an Opus review, because it touches the
   keeper. The coordinator merges, releases and pins. Files: `internal/keeper`,
   `internal/claudeauth`, `internal/agentrun`, `docs/v2-quickstart.md` section 6;
-  in haynes-ops the keeper app, a PrometheusRule and the Alertmanager route.
+  in haynes-ops the keeper app and an ExternalSecret for the dev-env Pushover
+  token.
 - **Budget.** About 3 hours elapsed. One writer and one reviewer, one at a time.
   Targeted tests only; CI is the full gate.
 - **Artifacts and handoff.** One dev-env PR and one haynes-ops PR, a release and
@@ -196,8 +214,8 @@ In order. Each becomes its own story when picked up.
 
 1. **Phone-path alerts on the operator.** Alerts for a tripped standby breaker,
    no registered standby for 10 minutes, and a session stuck in
-   `login-required`. The operator already has metrics and alerts, so this follows
-   13.1's pattern.
+   `login-required`. Sent through the same dev-env Pushover app as 13.1, with
+   the same deduplication.
 2. **History reads.** After NB-06, decide whether to turn on
    `--enable-history-archive-reads` and what H4's archive needs. Then reading a
    reaped session's history from the phone is one `agent-run history` call
