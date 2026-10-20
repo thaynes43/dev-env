@@ -5,7 +5,7 @@ headless tasks, network and Proxmox access, stopping and resuming, messages
 between sessions, upgrades and restarts, the shared logins, where notes live,
 and what still needs v1.
 
-State on 2026-10-20: release 2.38.0 is installed (haynes-ops #4131, about 05:32
+State on 2026-10-20: release 2.38.0 is installed (haynes-ops #4131, about 05:31
 UTC). Each result below carries one of four proof levels:
 
 - **Proven on the phone:** you did it end to end on your phone.
@@ -68,9 +68,10 @@ agent-run --repo haynes-ops --interactive --model claude-opus-5-5
   `login-required` means the shared login has lapsed (section 6).
 - After 72 hours idle it suspends itself, and its phone entry is archived.
   `agent-run resume <name>` brings back the same entry and the same conversation.
-- Proven on the phone: open, prompt, answer, suspend and resume as the same
-  entry, and the earlier answer recalled after the resume. The operator made
-  the standby by itself and it registered on the shared login.
+- Proven on the phone, on an ordinary Claude session: open, prompt, answer,
+  suspend and resume as the same entry, and the earlier answer recalled after
+  the resume. The operator made the standby by itself and it registered on the
+  shared login; you have not yet steered the standby itself from the phone.
 
 ### What a workbench session can do
 
@@ -93,13 +94,15 @@ old settings until its pod is replaced. Proven from a session on 2026-10-20, in
 a fresh workbench session on 2.38.0: `kubectl get pods -A` worked and `kubectl
 get secrets` was refused; `flux get ks -A`, `omnictl get clusters` and
 `talosctl version` worked; GCP issued a token for sigo-alumni-prod; and all ten
-MCP servers connected, for Claude and for Codex. The claude.ai connectors (Docs,
-Gmail, Calendar, Drive) showed up too.
+MCP servers connected for Claude. Codex has the same servers configured, and its
+HTTP servers answered a direct check. The claude.ai connectors (Docs, Gmail,
+Calendar, Drive) showed up too.
 
 A workbench session cannot change the cluster: no pod delete, no `flux
 reconcile`, no Jobs. Whether it should is your decision (see the handoff). Until
-then, use v1. A default-profile session has those rights in RBAC outside the
-dev-env namespaces (checked on 2026-10-19), but nobody has used them from v2.
+then, use v1. A default (`full` profile) session has those rights in RBAC
+outside the dev-env namespaces (checked on 2026-10-19), but nobody has used them
+from v2.
 
 **Access grants.** A standing policy approves each of these at once, with no
 phone step. Ask from inside the session that needs it:
@@ -143,8 +146,9 @@ agent-run grant request --type egress --reason "hw-ssh" --ttl 8h --port 22 \
   that was wrong. 2.38.0 fixes the login (#474): on 2026-10-20 the keeper logged
   in to a node and Proxmox made the token. But the keeper then misread Proxmox's
   answer (two numbers come back as text), treated the token as uncertain and
-  deleted it at once. So no token reaches the session. A fix is in progress;
-  until it ships, Proxmox writes stay in v1 (section 8).
+  deleted it at once. So no token reaches the session. A fix is in progress.
+  Even with it, handing the token to the session and using it there are still
+  untested. Until then, Proxmox writes stay in v1 (section 8).
 
 ## 2. Codex on your phone
 
@@ -239,10 +243,11 @@ agent-run --project dev-env --agent codex --model gpt-6-luna -p "Summarize the o
   in its worktree; copy them from that ref (`git checkout <ref> -- <path>`).
 - By default a session suspended for 7 days is archived. After that it can be
   restored from its rescue, but not resumed.
-- Proven from a session, 2026-10-20: reap with uncommitted files, then restore;
-  the restored ref held the same files, byte for byte. Suspend and resume kept
-  the worktree, an untracked file and the conversation (a code word was
-  recalled after the resume).
+- Proven from a session, 2026-10-20, on `--local` sessions: reap with
+  uncommitted files, then restore; the restored ref held the same files, byte
+  for byte. Suspend and resume kept the worktree, an untracked file and the
+  conversation (a code word was recalled after the resume). A remote session,
+  the standby and a Codex host were not reaped in this test.
 
 **Tasks** (`-p`). A task's HOME, which holds its conversation, is kept for a
 history archive that is not switched on yet (ADR-008). So for a task:
@@ -436,13 +441,15 @@ nobody signs in per session.
 
 **Status: installed in 2.38.0** (dev-env #475; haynes-ops #4130 and #4131).
 Proven from a session on 2026-10-20: `status` for both logins; `url` for both;
-for ChatGPT, `url`, `cancel` and `url` again; any caller other than a workbench
-session refused; and the keeper's logins unchanged after each abandoned try.
+for ChatGPT, `url`, `cancel` and `url` again; a caller from the v1 pod refused;
+and the keeper's logins unchanged after each abandoned try.
 
 **Known fault: Claude `cancel` does not free the keeper.** The keeper's helper
 keeps running, and the next `url` answers "held elsewhere" until the open
 ceremony ends, up to 15 minutes. So ask for a Claude link only when you are
-ready to sign in. A fix is in progress.
+ready to sign in. If you need a fresh link sooner, a v1 coordinator can end the
+helper: it sends SIGHUP to `agentd claude-login` in the keeper pod's
+`claude-login` container. A fix is in progress.
 
 You have not run a full ceremony from v2 yet, so keep the v1 route as the
 fallback until you have.
@@ -497,9 +504,9 @@ itself within 15 minutes. Today a Claude `cancel` also leaves this state (the kn
 fault above). The command reconnects by itself while the operator's other replica
 answers.
 
-After a ChatGPT `cancel`, `status` showed PendingPublication for about half a minute
-and the keeper logged an error, then went back to Ready on its own with the same
-login.
+Once, right after a ChatGPT `cancel`, `status` showed PendingPublication for about
+half a minute and the keeper logged an error, then went back to Ready on its own
+with the same login. Whether the cancel caused it is not known.
 
 The operator runs only the two login helpers in the keeper pod. An admission
 policy, `dev-env-operator-exec-guard`, refuses anything else it tries there: the
@@ -532,8 +539,8 @@ keeper's main container, a shell, other arguments.
 - **Headless Codex tasks on a repo outside the catalog** (section 3), such as
   haynes-quest or the private repos left out of it.
 - **Cluster writes: pod deletes, `flux reconcile`, Jobs.** The workbench reads
-  only (section 1). A default-profile session has the rights in RBAC but has not
-  used them yet.
+  only (section 1). A default (`full` profile) session has the rights in RBAC
+  but has not used them yet.
 - **Retiring v1 itself.** That is your call.
 
 More detail is in the [workflow guide](workflow-guide.md),

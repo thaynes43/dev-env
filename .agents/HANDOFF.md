@@ -15,7 +15,7 @@ Tom's phone); **installed, not exercised**; **not built** (no code, or off).
 Installed is not accepted.
 
 **Installed:** release 2.38.0 (dev-env #476, tag `v2.38.0`, commit `702a57f`).
-haynes-ops #4131 (`5ddbea0a`, about 05:32Z) pins, together: operator
+haynes-ops #4131 (`5ddbea0a`, about 05:31Z) pins, together: operator
 `sha-702a57f` (`sha256:981075c0…`); agent, task-budget worker and templates image
 `2.38.0` (`sha256:bb67ea9c…`); the keeper's `app` and `claude-login` at 2.38.0;
 `codex-login` `sha-702a57f` (`sha256:3b622b24…`). Both publish runs passed
@@ -49,15 +49,15 @@ host PEAR (`dev-env-1019-205125`, still 2.37.0) were not touched.
 | Codex host moved to a new image by suspend and resume | Proven from a session (v1 coordinator) | NB-03: PEAR 2.35.0 to 2.37.0, same `installation_id` and enrolment, daemon reconnected, thread history kept |
 | A damaged access token comes back from the keeper | Proven from a session | NB-03: Claude and Codex, about 4 s, next turn worked |
 | Codex and Claude tasks on a repo that was outside the catalog | Proven from a session | NB-08: both tasks on `libretto` Succeeded |
-| Reap, rescue and restore; suspend and resume (interactive sessions) | Proven from a session | NB-06: restored ref `refs/rescued/heads/rescue/<session>-<stamp>` held the same files by checksum; a code word recalled after resume |
-| A reaped task's pod stops | Proven from a session | #4128 live: seven reaped private tasks' pods went Failed (DeadlineExceeded); pods, volumes and Sessions kept |
+| Reap, rescue and restore; suspend and resume (`--local` sessions) | Proven from a session | NB-06: restored ref `refs/rescued/heads/rescue/<session>-<stamp>` held the same files by checksum; a code word recalled after resume |
+| A reaped task's pod stops | Proven from a session | #4128 live: seven reaped private tasks' pods went Failed (DeadlineExceeded); pods, volumes and Sessions kept. Two more on 2.38.0 (`dev-env-1020-054000`, `-054012`), seen with `kubectl get pods` |
 | Inbox, task claims, published contexts; `agent-run msg` | Proven from a session (default-profile sessions) | NB-05: send, read, ack, idempotent retry, claim conflict naming the owner, context publish and read; `msg` answered by a live session, 409 for an exited task |
 | Release 2.38.0 published, signed and installed | Verified in CI and the cluster | REL-238: publish runs 39374328506 and 39374348374, `cosign verify` passed; #4131 merged |
 | Workbench reads on 2.38.0: cluster without Secrets, Flux, Omni, `talosctl`, GCP, all ten MCP servers | Proven from a session (workbench) | LIVE-238b: NB-04 rows 4 to 7, 11, 14 and 15 pass; `can-i` says no to pod delete, Deployment patch and Job create |
 | Coordination routes from a workbench session (#472) | Proven from a session (workbench project task) | LIVE-238b: inbox both ways, ack and idempotent retry, sender read 404, claim conflict, context publish and read |
 | Project bootstrap Ready, 8 of 8 repos (#478); the standby's `CatalogUnconfirmed` gone | Proven from a session | LIVE-238b: five new sessions and the standby. No clone stalled, so #478's retry was not exercised |
 | The Claude 401 "continue" is sent after a failed turn (#473) | Proven from a session (new generation simulated) | LIVE-238b: receipt `sent`, the failed prompt completed. A real keeper refresh triggering it is not yet seen; a revoked token's wording is unobserved |
-| Keeper login from a workbench session (#475): `status` for both logins, `url` for both, ChatGPT `url`, `cancel`, `url` again, a v1 caller refused, logins unchanged after abandoned tries | Proven from a session (workbench) | LIVE-238a. Claude `cancel` fails (defect below). No full ceremony yet |
+| Keeper login from a workbench session (#475): `status` for both logins, `url` for both, ChatGPT `url`, `cancel`, `url` again, a v1-pod caller refused (other callers by unit test), logins unchanged after abandoned tries | Proven from a session (workbench) | LIVE-238a. Claude `cancel` fails (defect below). No full ceremony yet |
 | Claude keeper refresh, generation 3 | Proven from a session (natural refresh observed) | LIVE-238a: refreshed at 05:50:05Z, access to 13:50:05Z, read by sessions. `keeper-login claude status` gives the login lapse as 2026-11-16T17:51:35Z |
 | The keeper's certificate SSH to a PVE node (#474) | Proven from a session | LIVE-238a: the node logged the certificate login and the `pvesh create`; the two stuck CredentialJobs from 00:49Z went Revoked |
 
@@ -70,9 +70,9 @@ host PEAR (`dev-env-1019-205125`, still 2.37.0) were not touched.
   `dev-env`'s `authorized_keys` on all five nodes. The 2.37.0 block below says the
   token grant was "exercised"; that meant Active, not a token. With 2.38.0 the
   login works but the mint still fails one step later (defects below).
-- Reap and suspend of a task did not stop its pod before #4128 (task sessions
-  are private under ADR-008). The quick start's section 4 was wrong for tasks
-  and now says so.
+- Reap of a task did not stop its pod before #4128 (task sessions are private
+  under ADR-008); suspend still does not (ADR-006). The quick start's section 4
+  was wrong for tasks and now says so.
 - `kubectl get` on the `coordination.dev-env.haynesops.com` records is refused
   for every agent, v1 and the workbench by design (DESIGN-010, 013 and 014: the
   message text is in them). The read path is `agentd` inside a session.
@@ -91,15 +91,16 @@ host PEAR (`dev-env-1019-205125`, still 2.37.0) were not touched.
   numbers, records `AmbiguousMint` and deletes the token. No token reaches a
   session, and the keeper logs nothing about it. Fix in progress as story NB-09c:
   accept both shapes and log one line on a refused mint, then rerun the
-  15-minute grant test. Proxmox writes stay in v1 until then.
+  15-minute grant test. Behind it, the token's installation in the session and
+  its use there are still unproven. Proxmox writes stay in v1 until then.
 - **A second standby** (`haynes-ops-1020-053140`) appeared at 05:31:40Z, two
   seconds after the standby drained onto 2.38.0 (LIVE-238b). The coordinator
   reaped the unused duplicate; one standby runs. Fix in progress as story NB-10
   (operator only).
-- After a ChatGPT keeper-login `cancel` the keeper showed PendingPublication for
-  about 25 s and logged an ERROR, then returned to Ready with the same login
-  (LIVE-238a O3). An alert keyed on that line would fire falsely. In NB-01b's
-  scope.
+- Once, right after a ChatGPT keeper-login `cancel`, the keeper showed
+  PendingPublication for about 25 s and logged an ERROR, then returned to Ready
+  with the same login (LIVE-238a O3; not verified that the cancel caused it). An
+  alert keyed on that line would fire falsely. In NB-01b's scope.
 
 **Open, not accepted:**
 
@@ -138,8 +139,8 @@ host PEAR (`dev-env-1019-205125`, still 2.37.0) were not touched.
    cluster but cannot delete pods, reconcile Flux or create Jobs. It is exempt
    from the identity and exec guards, so granting writes needs narrower
    exemptions and must keep exec into the keeper impossible. The alternative is
-   to keep the workbench read-only and do cluster writes from a default-profile
-   session.
+   to keep the workbench read-only and do cluster writes from a default (`full`
+   profile) session.
 2. **Suspended private tasks (NB-06 D3).** Whether a stop at the suspend deadline is
    wanted (ADR-006 left it as its own owner question).
 3. **The SSH user on gasha01.** `hw-ssh` has no entry because no guest user is
