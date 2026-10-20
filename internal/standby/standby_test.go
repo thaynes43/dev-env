@@ -131,12 +131,18 @@ func TestGoneStandbyIsReplaced(t *testing.T) {
 	archived.Status.Phase = v1alpha1.PhaseArchived
 	failed := standbySession("failed")
 	failed.Status.Phase = v1alpha1.PhaseFailed
+	// The agent ended on its own in the current pod: the heartbeat is newer than the pod.
+	hb := metav1.NewTime(time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC))
 	exited := standbySession("exited")
-	exited.Status.Agent = &v1alpha1.AgentStatus{Status: protocol.AgentExited}
+	exited.Status.Agent = &v1alpha1.AgentStatus{Status: protocol.AgentExited, LastHeartbeat: &hb}
 	reaping := standbySession("reaping")
 	reaping.Finalizers = []string{"test/keep"}
 	for _, s := range []*v1alpha1.AgentSession{archived, failed, exited, reaping} {
-		g := newRig(t, s)
+		objs := []client.Object{s}
+		if s == exited {
+			objs = append(objs, sessionPod(s.Name, hb.Add(-time.Hour)))
+		}
+		g := newRig(t, objs...)
 		if s == reaping {
 			if err := g.c.Delete(context.Background(), s); err != nil {
 				t.Fatal(err)
@@ -175,6 +181,11 @@ func TestStandbyMovingToANewRevisionIsLeftAlone(t *testing.T) {
 		// Old pod deleted or terminating, new one not placed: the old report remains.
 		"pending-creating-exited":      {movingStandby("s", v1alpha1.PhasePending, protocol.AgentExited, &before)},
 		"pending-starting-interrupted": {movingStandby("s", v1alpha1.PhasePending, protocol.AgentInterrupted, &before), sessionPod("s", t0)},
+		// Old pod deleted, session still reads Running with the old report: a
+		// missing pod cannot prove the agent ended.
+		"running-pod-missing-exited": {movingStandby("s", v1alpha1.PhaseRunning, protocol.AgentExited, &before)},
+		"idle-pod-missing-exited":    {movingStandby("s", v1alpha1.PhaseIdle, protocol.AgentInterrupted, &before)},
+		"no-phase-pod-missing":       {movingStandby("s", "", protocol.AgentExited, &before)},
 		// New pod is Ready (no readiness probe) but has sent no heartbeat yet.
 		"running-new-pod-stale-report": {movingStandby("s", v1alpha1.PhaseRunning, protocol.AgentExited, &before), sessionPod("s", t0)},
 		"running-new-pod-no-heartbeat": {movingStandby("s", v1alpha1.PhaseRunning, protocol.AgentExited, nil), sessionPod("s", t0)},

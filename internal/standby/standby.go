@@ -147,13 +147,15 @@ func AgentEnded(s *v1alpha1.AgentSession) bool {
 // heartbeat the operator accepted (or none was accepted). A session pod is Ready
 // as soon as its container starts (no readiness probe), so right after a drain
 // the phase is Running while the record still holds the old pod's "exited". A
-// missing pod is not stale evidence: a steady phase without a pod is brief, and
-// the phase rule decides.
+// missing pod is stale too: during a drain the pod is deleted and recreated
+// while the phase can still read Running, and a missing pod cannot prove the
+// agent ended. A standby that is really dead moves to Failed or Archived and is
+// replaced then.
 func (r *Runnable) staleAgentReport(ctx context.Context, s *v1alpha1.AgentSession) (bool, error) {
 	var pod corev1.Pod
 	err := r.Reader.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: s.Name}, &pod)
 	if apierrors.IsNotFound(err) {
-		return false, nil
+		return true, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("read the pod of standby %s: %w", s.Name, err)

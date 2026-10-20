@@ -1468,7 +1468,9 @@ before the new pod's first heartbeat. The first 2.38.0 revision move created a
 second standby two seconds into the drain because the runnable read that
 deliberate "exited" as the end of the standby. An ended-agent report from a
 pod older than the pod that exists now (heartbeat before the pod's creation, or
-no heartbeat) is stale and counts as present. The breaker is unchanged.
+no heartbeat), or with no pod at all, is stale and counts as present: a missing
+pod cannot prove the agent ended, and a standby that is really dead moves to
+Failed or Archived and is replaced then. The breaker is unchanged.
 
 **D-60 (2026-10-07, plan 02 step 6). Suspend and resume are API calls that set
 `spec.operatingMode`, and the idle timer sets it the same way.**
