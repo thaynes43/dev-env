@@ -169,6 +169,7 @@ var agentdLayout = []historyRule{
 	// Locks.
 	{"agent.pid", protocol.HistoryClassNotHistory, kindAny},
 	{"deliver.lock", protocol.HistoryClassNotHistory, kindAny},
+	{"login.lock", protocol.HistoryClassNotHistory, kindAny},
 	{"rescue.lock", protocol.HistoryClassNotHistory, kindAny},
 	{"project-bootstrap.lock", protocol.HistoryClassNotHistory, kindAny},
 	{"codex-host-supervisor.lock", protocol.HistoryClassNotHistory, kindAny},

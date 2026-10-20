@@ -160,7 +160,9 @@ const loginPaneWithURL = "Opening browser to sign in...\nIf the browser did not 
 // loginTmux fakes the login window: has-session, new-session, capture-pane,
 // and the three calls that deliver a code.
 type loginTmux struct {
-	window  bool
+	window bool
+	// agent: the agent's own tmux session (TmuxSession) exists.
+	agent   bool
 	pane    string
 	loaded  string
 	started int
@@ -174,6 +176,12 @@ type loginTmux struct {
 func (f *loginTmux) handle(c Cmd) (Result, error) {
 	switch c.Args[0] {
 	case "has-session":
+		if len(c.Args) > 2 && c.Args[2] == "="+TmuxSession {
+			if f.agent {
+				return Result{}, nil
+			}
+			return Result{}, &CmdError{Name: "tmux", Sub: "has-session", ExitCode: 1}
+		}
 		if f.window {
 			return Result{}, nil
 		}
