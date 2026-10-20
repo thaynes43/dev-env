@@ -1,6 +1,6 @@
 # 03: Remote Control
 
-**Status:** backlog
+**Status:** partly delivered (2026-10-20): Claude and Codex Remote Control, the shared keeper logins, the workbench, the standby and standing access grants are installed and proven in release 2.37.0. The console page, archive on reap through the keeper and messaging tier 2 are still open. See "Delivered and open".
 **Depends on:** 02; 07's deployed broker core; spike S-1 (which auth
 path), S-5 (cross-pod messaging), S-6 (resume keeps the phone entry), S-15 (archive on
 reap). S-2 is answered: the static token cannot register Remote Control.
@@ -16,12 +16,42 @@ remain relevant. No plan 03 code or login is built by the spike. Preserve the
 current work order: approval design, parity audit, keeper
 SSH minting, then the prerequisite if chosen. Never copy v1's refresh token.
 
-## Interim pod-owned login slice (2026-10-19): source support only
+## Delivered and open (2026-10-20, release 2.37.0)
 
-Using it needs Tom's explicit authorization for one isolated v2 Max login, which is
-**pending**; until then no v2 login is created, and nothing here is a ruling. The
-keeper-owned login (Q-11), the console and the standby stay in this plan. Story110
-T03 builds the source slice; it is not released, installed or accepted.
+"Proven" means done end to end on Tom's phone (the 2026-10-19 to 2026-10-20 UTC
+runs; the dated record is the Story110 progress file). The plan below keeps its
+original wording; where it says "stays in this plan" or "source only", this
+section is current.
+
+| Item | State |
+|---|---|
+| Keeper-owned Claude login (Q-11), refresh and projection to pods | Delivered and proven. Two pods on one login with no refresh token in either; the keeper's own refresh at 00:29 UTC on 2026-10-20 kept sessions registered. |
+| Claude `remote` sessions: connect, steer, answer, suspend and resume as the same entry, history | Delivered and proven. |
+| Operator restart and automatic agent-image moves | Delivered and proven. A moved session kept its phone entry and transcript. |
+| Codex phone host (`agent-run pair`), keeper ChatGPT login | Delivered and proven, including suspend and resume without pairing again. |
+| Workbench identity (`agent-run pair`, `attach`, `detach`, `login` and `auth status` from inside v2) | Delivered and proven. |
+| Standby session | Delivered and proven. |
+| Standing access grants for workbench sessions | Delivered and proven. |
+| `agent-run auth status` | Delivered and proven. |
+| 401-window continue (one `continue` after a revoked-token turn) | Delivered in source and installed, not exercised: no turn has needed it. |
+| Codex keeper refresh | Installed, not yet exercised: the token is valid to 2026-10-29. |
+| Codex host moving to a new image by suspend then resume | Not exercised. |
+| Session older than 13 hours; merge latency after a refresh | Not measured. |
+| The console page and its login-renewal page | Open (backlog). The Claude login is renewed by a coordinator from the v1 pod or an admin laptop, next around 2026-11-18. |
+| Archive on reap through the keeper | Open (backlog). The CLI's own archive on SIGTERM is what runs today. |
+| Messaging tier 2 (S-5) | Open (backlog). |
+
+None of the open items blocks daily use. Dependency on v1: the keeper login
+ceremonies and restarting the operator, keeper or shelf still run from the v1
+pod; retiring v1 is Tom's decision.
+
+## Interim pod-owned login slice (2026-10-19): delivered, then superseded
+
+Tom authorized one isolated v2 Max login for it (Q-110-02, 2026-10-19), used for the
+first Haiku checkpoint (connect, steer and an answer were proven). The shared keeper
+login below replaced it the same day, and new sessions do not use it. The slice stays
+in the code for a session with no keeper projection. The keeper-owned login (Q-11) is
+delivered; the console and archive on reap stay in this plan.
 
 What the slice does:
 
@@ -73,14 +103,15 @@ plan 03: the keeper-owned login, refresh and fencing, `dev-env-claude-live`, the
 console and its renewal page, the standby, archive on reap, messaging tier 2, and
 the 401-window resume.
 
-## Codex phone sessions (Story110 T17, 2026-10-19): source and unit tests only
+## Codex phone sessions (Story110 T17, 2026-10-19): delivered and proven
 
 Codex has no per-session remote control like Claude's. Its phone link is one
 per-machine `codex remote-control` daemon, so v1 runs one pod-wide daemon
 (`agent-run codex-remote`). On v2 the same thing is one `--interactive` Codex
-session (option A of the T15 plan). Not released, installed or accepted: the live
-pairing, a prompt from the phone, suspend/resume and a keeper refresh while
-connected all stay Tom's gates.
+session (option A of the T15 plan). Installed in 2.35.0 and proven on 2026-10-19
+and 2026-10-20: live pairing, a prompt and answer from the phone, and suspend and
+resume without pairing again. A keeper Codex refresh while connected is not yet
+exercised (the token is valid to 2026-10-29).
 
 - `agent-run --repo <r> --agent codex --interactive --model <id>` creates a
   `remote`-mode Codex session. The API takes it without a project snapshot or the
@@ -132,7 +163,11 @@ connected all stay Tom's gates.
   `codex-access` mount on the profile used (T13 finding 2), and a signed agent
   image carrying this agentd.
 
-## Shared-login projection consumer (Story110 T09 increment 1, 2026-10-19): source and unit tests only
+## Shared-login projection consumer (Story110 T09 increments 1 to 5, 2026-10-19): delivered; see the table above
+
+The notes below were written when each increment was source only. All of them are
+now installed (release 2.34.0, activated on 2026-10-19 after Q-110-05); the status
+lines say what was true when each increment merged.
 
 Q-11/D-11 stays the target. This is the first of the six increments of the
 keeper-owned shared login, and only the consuming side. It is **not released,
