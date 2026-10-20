@@ -192,12 +192,13 @@ link to the standby, deduplication and a priority chosen per event.
   17:51 UTC lapse).
 - **Dependencies.** NB-01 merged first, because both change the keeper status
   path and quickstart section 6 (met: NB-01 is installed). It does not depend on
-  NB-02. **Tom first:** create the "dev-env" application in Pushover (name and
-  icon) and add its token as one new field, `PUSHOVER_TOKEN`, to the existing
-  1Password item `dev-env` (no new item; Tom, 2026-10-20). The user key is
-  reused from `upgrade-gate`/`PUSHOVER_USER_KEY`. Every consumer of `dev-env`
-  reads named fields (`remoteRef.property`), so the new field reaches only the
-  keeper's ExternalSecret. Agents cannot create the app.
+  NB-02. **Tom's step, done 2026-10-20:** Tom created the "dev-env" Pushover
+  application and added its token to the existing 1Password item `dev-env` as
+  the field `DEV_ENV_PUSHOVER_TOKEN` (no new item). Only Tom edits 1Password;
+  agents reference the field from git. The user key is reused from
+  `upgrade-gate`/`PUSHOVER_USER_KEY`. Every consumer of `dev-env` reads named
+  fields (`remoteRef.property`), so the new field reaches only the keeper's
+  ExternalSecret.
 - **Ownership.** One Sonnet writer; an Opus review, because it touches the
   keeper. The coordinator merges, releases and pins. Files: `internal/keeper`,
   `internal/claudeauth`, `internal/agentrun`, `docs/v2-quickstart.md` section 6;
