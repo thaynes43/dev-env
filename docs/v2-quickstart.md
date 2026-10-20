@@ -5,11 +5,14 @@ headless tasks, network and Proxmox access, stopping and resuming, messages
 between sessions, upgrades and restarts, the shared logins, where notes live,
 and what still needs v1.
 
-State on 2026-10-20: release 2.38.3 is installed everywhere: the operator,
-the keeper, the templates and the task worker (haynes-ops #4135, about 08:24
-UTC). The standby and one other idle session moved onto it by themselves; the
-Codex host did not (it moves only by suspend and resume, section 5). Each result below carries one of
-four proof levels:
+State on 2026-10-20, 23:00 UTC: release 2.39.0 is installed everywhere: the
+operator, the keeper, the templates and the task worker (haynes-ops #4140). The
+standby and one other idle session moved onto it by themselves; the Codex host
+did not (it moves only by suspend and resume, section 5). Since haynes-ops #4141
+(22:41 UTC) a workbench session has v1's cluster write tier too (section 1). The
+v1 cutover is planned for 2026-10-21, after the v1 sessions wind down, and only
+with your written approval; the date alone authorizes nothing (section 8). Each result below carries one of four
+proof levels:
 
 - **Proven on the phone:** you did it end to end on your phone.
 - **Proven from a session:** an agent did it live in a v2 workbench session or
@@ -78,7 +81,8 @@ agent-run --repo haynes-ops --interactive --model claude-opus-5-5
 - Proven on the phone, on an ordinary Claude session: open, prompt, answer,
   suspend and resume as the same entry, and the earlier answer recalled after
   the resume. The operator made the standby by itself and it registered on the
-  shared login; you have not yet steered the standby itself from the phone.
+  shared login. Proven on the phone on 2026-10-20: you steered the standby on
+  Wi-Fi (about 12:09) and on cellular, off the home network (about 12:11).
 
 ### What a workbench session can do
 
@@ -92,6 +96,9 @@ it can:
 - restart the operator, keeper, broker or shelf (section 5);
 - read the cluster as v1 does: `kubectl get` on everything except Secrets,
   `flux get`, and read-only `omnictl` and `talosctl`;
+- change the cluster as v1 does (since haynes-ops #4141, below): pod delete,
+  exec, `rollout restart`, `flux reconcile` and suspend, Jobs, CronJob suspend,
+  and PVC delete in `database`;
 - use GCP with the same credentials as v1 (`tofu`), and all ten MCP servers;
 - get standing access grants for the LAN and Proxmox, as below.
 
@@ -105,11 +112,55 @@ MCP servers connected for Claude. Codex has the same servers configured, and its
 HTTP servers answered a direct check. The claude.ai connectors (Docs, Gmail,
 Calendar, Drive) showed up too.
 
-A workbench session cannot change the cluster: no pod delete, no `flux
-reconcile`, no Jobs. Whether it should is your decision (see the handoff). Until
-then, use v1. A default (`full` profile) session has those rights in RBAC
-outside the dev-env namespaces (checked on 2026-10-19), but nobody has used them
-from v2.
+**The cluster write tier** (haynes-ops #4141, merged 2026-10-20 at 22:41). A
+workbench session holds exactly v1's OPERATOR tier, no more:
+
+- pod delete, exec into pods, and `services/proxy` and `pods/proxy`;
+- the restart patch on Deployments, StatefulSets and DaemonSets;
+- patches on Flux objects (`flux reconcile`, `flux suspend`) and ExternalSecrets;
+- Job create and delete, and CronJob patches (suspend);
+- PVC delete in `database`; PVC create and delete and StatefulSet delete in
+  `observability` (v1's migration grant).
+
+It still cannot read Secrets, change RBAC or admission policies, scale or delete
+Deployments, or delete PVCs anywhere else. Deploys still go through git.
+
+Proven from a session, 2026-10-20 between 22:42 and 22:48, in a fresh workbench
+session: every `kubectl auth can-i` answer matched v1, yes and no; `flux
+reconcile ks dev-env-rbac` applied the merge; a Job ran, then its pod and the Job
+were deleted; the shelf restarted with `rollout restart`; exec into a pod worked;
+and the guard refused a replica change and `kubectl set env`. Not proven live:
+the `restartedAt` restart of an ordinary app (in `media`) and a `create job
+--from=cronjob` were server dry runs only (no safe CronJob was named), and no PR
+merge from v2 was run (a draft PR was opened and closed). The first PR merge from
+v2 after the cutover is the live merge proof.
+
+What to know (the review's follow-ups F1 to F7):
+
+- **F1.** A task or session started from a workbench session runs on the
+  workbench profile, with this tier, as v1's tasks shared v1's identity. A
+  narrower worker profile is not built.
+- **F2.** As in v1, Job create and Flux patches can reach cluster-admin for
+  someone who sets out to. The workbench has exact v1 parity (#4141), including
+  exec into `dev-env-system` pods, so the earlier condition that exec into the
+  keeper stay impossible is not met. A fence around `dev-env-system` would
+  reduce today's parity rights. It is held for your decision, and it is not a
+  cutover prerequisite.
+- **F3.** Stricter than v1: the guard allows only the restart annotation on
+  workloads. So no `rollout undo`, `pause` or `resume`, and no `set image`, `set
+  env` or `set resources`. A break-glass rollback is your admin kubeconfig.
+- **F4.** The exec guard's list of privileged identities does not name the
+  workbench yet. It has no effect today.
+- **F5.** The archive guard refuses exec into the shelf pod. Restarting the shelf
+  still works.
+- **F6.** `kubectl delete pod` on a session pod skips the rescue that `agent-run
+  reap` and `suspend` do. Use those for sessions.
+- **F7.** A comment in haynes-ops' session templates still says the workbench
+  has exec in `dev-agents` only.
+
+A default (`full` profile) session has the write tier in RBAC too, outside the
+dev-env namespaces and within `dev-env-agent-guard`'s limits (checked on
+2026-10-19), but nobody has used it from v2.
 
 **Access grants.** A standing policy approves each of these at once, with no
 phone step. Ask from inside the session that needs it:
@@ -124,7 +175,7 @@ agent-run grant request --type egress --reason "pve" --ttl 8h \
   --fqdn pvedash.haynesnetwork --port 443
 
 # Proxmox writes: a short-lived operator token; `pve` uses it by itself.
-# Works since 2.38.1 (reads proven, writes not yet tried); it needs the
+# Reads work since 2.38.1, a write was proven on 2.39.0; it needs the
 # Proxmox API grant above too. See below.
 agent-run grant request --type credential --credential proxmox --reason "pve write" --ttl 4h
 
@@ -147,8 +198,9 @@ agent-run grant request --type egress --reason "hw-ssh" --ttl 8h --port 22 \
 - Proven from a session (a fresh workbench session): internal ingress
   (Grafana's health page answered 200), `pve nodes` and `hw-ssh twin-top
   hostname`, each approved by policy with no phone step.
-- **The Proxmox operator token works since 2.38.1, for reads so far.** Proven
-  from a session on 2026-10-20 (06:54 to 06:56 UTC), in a workbench session:
+- **The Proxmox operator token works: reads since 2.38.1, a write proven on
+  2.39.0.** Reads, proven from a session on 2026-10-20 (06:54 to 06:56 UTC), in a
+  workbench session:
   1. `agent-run grant request --type credential --credential proxmox
      --reason "..." --ttl 15m` went Active in 5 seconds. The keeper made the token and put it in the
      session (`agentd ctl credential-available --credential proxmox` exited 0).
@@ -160,12 +212,33 @@ agent-run grant request --type egress --reason "hw-ssh" --ttl 8h --port 22 \
   4. `agent-run grant release <grant>` removed the token from Proxmox within 19
      seconds, and `pve ha` went back to `tier=read`.
 
-  Only reads were run with the token. A write (`pve --yes ...`) has not been
-  tried from v2 yet (section 8).
+  A write, proven from a session on 2026-10-20 at about 22:40, in a fresh
+  workbench session holding both grants and a `declare-activity`: `pve --yes vm
+  113 onboot 1` set talosw03's onboot flag to the value it already had. `pve`
+  sent the PUT at `tier=operator`, the VM kept running, and the token was gone
+  from Proxmox about 20 seconds after the release. After the credential grant
+  turns Active, wait a few seconds and check that `pve ha` says `tier=operator`
+  before you write.
 - Before 2.38.1 no token ever reached a session; earlier notes here that said a
   token was issued were wrong. In 2.37.0 the keeper's SSH client failed the
   nodes' host-key check (fixed in 2.38.0, #474). In 2.38.0 the keeper misread
   Proxmox's answer and deleted each new token at once (fixed in 2.38.1, #481).
+
+### A terminal instead of code-server
+
+v2 has no code-server, by your ruling of 2026-10-20
+([decision 78](../.agents/sagas/distributed-dev-env/README.md#decision-log)). A proper
+front end comes later (plan 13). For a terminal, exec into a session pod from a
+machine with an admin kubeconfig, or from a workbench session:
+
+```bash
+kubectl -n dev-agents exec -it <name> -c agent -- bash   # a shell in the session
+agent-run attach <name>                                   # the agent's own TUI
+```
+
+The shell runs as the session's user, in its home. Leave the TUI with tmux's
+`Ctrl-b d`, or `agent-run detach <name>` from elsewhere. For a terminal of your
+own, start a `--local` session and reap it when you are done.
 
 ## 2. Codex on your phone
 
@@ -200,6 +273,9 @@ pair a phone with it once.
   reap it when you are done.
 - Proven on the phone: pairing, a prompt and answer, suspend and resume without
   pairing again, the earlier answer recalled, and an operator restart survived.
+  On 2026-10-20 at about 12:14, over cellular, PEAR showed up as the same
+  computer after its image move, a new turn worked, and it recalled its
+  history.
 - Proven from a session: creating a host and getting a pairing code from a
   workbench session; moving a host to a new image (section 5); and a damaged
   ChatGPT access token in a pod put back from the keeper within about 4 seconds,
@@ -329,22 +405,23 @@ waiting for room on a node; do not start a second one.
   idle and nobody is attached. The pod is replaced; the phone entry and the
   conversation stay. Proven on the phone twice on 2026-10-19, and the session
   still knew its earlier answer. On 2026-10-20 the standby and one other session
-  moved the same way three times, to 2.38.0, 2.38.2 and 2.38.3 (seen from a
-  session, not yet checked on the phone). A session that has never had a turn
-  stays put until it has one.
+  moved the same way to 2.38.0, 2.38.2, 2.38.3 and 2.39.0 (seen from a session;
+  you used the standby on the phone after its move to 2.38.3). A session that has
+  never had a turn stays put until it has one.
 - **Codex host:** never moves by itself. `agent-run list` marks it `outdated`.
   At a quiet moment run `agent-run suspend <name>`, then `agent-run resume <name>`.
   The pairing stays. Proven from a session on 2026-10-20: the host PEAR moved
   from 2.35.0 to 2.37.0 this way. Same pairing, the daemon reconnected, and the
-  thread history was intact. Checking it in the ChatGPT app is still to do. PEAR
-  is still on 2.37.0; it moves to 2.38.3 only by another suspend and resume.
+  thread history was intact. Proven on the phone too, on 2026-10-20 (section 2).
+  PEAR is still on 2.37.0; it moves to 2.39.0 only by another suspend and
+  resume.
 
 ### Restart the operator, keeper or shelf from v2
 
 A workbench session can restart the operator, keeper, broker and shelf with
-`kubectl`, with no v1 pod. It can do nothing else to them: the only change it may
-make is the restart annotation that `kubectl rollout restart` writes. An image or
-an argument still goes through git. Run it from a workbench session (the standby
+`kubectl`, with no v1 pod. On their Deployments the only change it may make is
+the restart annotation that `kubectl rollout restart` writes. An image or an
+argument still goes through git. Run it from a workbench session (the standby
 will do), not from a task.
 
 Declare it first, so an alert from the restart is not taken for a fault:
@@ -373,8 +450,10 @@ Proven from a session, 2026-10-20 between 03:45 and 04:01: a workbench session
 restarted the keeper, the shelf and the operator. Every session pod kept its
 name, start time and restart count, `agent-run list` was the same, the standby
 stayed up, and `agent-run auth status` showed the same generation and expiry
-before and after. The broker was only checked with a dry run. You have not done
-it from the phone yet.
+before and after. The broker was only checked with a dry run. At about 12:20 a
+workbench session restarted the keeper again, at your request, with the same
+result, and on 2026-10-20 at about 22:45 a fresh workbench session restarted the
+shelf (story CR-1020).
 
 After a restart, check:
 
@@ -401,15 +480,17 @@ the step fails and runs again a minute later, so wait rather than force it.
 Two notes:
 
 - To check what you may do, use `kubectl auth can-i <verb> <resource>
-  --subresource=<log|exec|scale> -n <namespace>`. Written as `pods/log`, can-i
-  answers yes when the real answer is no.
+  --subresource=<log|exec|scale> -n <namespace>`. Written as `pods/log` or
+  `pods/exec`, can-i can give the wrong answer.
 - If a restart is refused with `dev-env-workbench-admin-guard`, read the message:
   it names what else changed. Kyverno rewrites its own `kyverno.io/verify-images`
   annotations on an update; the guard allows exactly those (haynes-ops #4129).
 
-You cannot read Secrets, exec into these pods, delete or scale them, or change
-anything else about them from here. A pod that a restart does not fix is a git
-change, or Tom.
+You cannot read Secrets, scale these Deployments or change anything else about
+them from here. Since haynes-ops #4141 you can delete their pods and exec into
+them, as from v1 (section 1), but a restart is the safer tool: the keeper,
+operator and broker images are distroless, so exec runs only their own binaries.
+A pod that a restart does not fix is a git change, or Tom.
 
 ## 6. The shared logins
 
@@ -421,28 +502,30 @@ nobody signs in per session.
 - **Check.** In any v2 session, `agent-run auth status` shows each login's
   state (Ready or NeedsLogin), its generation and the time left on the current
   access token. Exit 0 is fine, 1 is expiring or expired, 2 means it cannot
-  tell. Proven from a session. Once story 13.1 is installed it also shows when
-  the Claude login lapses (see "Lapse date and notices" below).
+  tell. Proven from a session. Since 2.39.0 it also shows when the Claude login
+  lapses (see "Lapse date and notices" below).
 - **Refresh is automatic.** The keeper renews the Claude access token at about
   two thirds of its 8-hour life. Proven at 00:29 on 2026-10-20: generation 2
   reached the session pods and every session stayed on the phone. Generation 3
-  followed at 05:50, as expected, and sessions read it. The ChatGPT token is
-  good until 2026-10-29, so its first automatic refresh has not come due yet.
+  followed at 05:50, as expected, and sessions read it, and generation 4 by
+  12:13, when you checked the status on your phone. The ChatGPT token is good
+  until 2026-10-29, so its first automatic refresh has not come due yet.
 - Headless Claude tasks do not use the keeper's login. They keep their own
   long-lived token, as in v1.
 - **Renew the Claude login about once a month.** It lapses about 30 days after
   the last sign-in. `agent-run keeper-login claude status` in a workbench session
   shows the date. On 2026-10-20 it showed **2026-11-16 17:51 UTC**, two days
-  before the 30-day estimate these notes gave. Story 13.1 adds a warning on your
-  phone and the date in `agent-run auth status` ("Lapse date and notices", below).
-  Until it is installed, put the date in your calendar.
+  before the 30-day estimate these notes gave. Since 2.39.0 the keeper warns on
+  your phone from 7 days before, and `agent-run auth status` shows the date
+  ("Lapse date and notices", below). The first warning is due about 2026-11-08.
 - **Two ways to renew.** From a workbench session with `agent-run keeper-login`
   (below), or as before: a coordinator in the v1 pod starts the keeper's login
   helper and sends you one sign-in link in chat. Either way you open the link on
   your phone, sign in with your Max account and paste back the code the page
   shows. Finish within 15 minutes; after that the helper gives up and you start
   again with a fresh link. The link and the code never go into git or notes.
-  The v1 route is proven on the phone (2026-10-19).
+  The v1 route is proven on the phone (2026-10-19). It goes away with v1 at the
+  cutover; after that only the v2 route is left.
 - **ChatGPT login.** Same shape, a device sign-in. It is needed only when the
   keeper reports NeedsLogin. It was renewed on 2026-10-19.
 - **A turn that fails on a bad token.** agentd puts the keeper's token back in
@@ -470,8 +553,10 @@ helper. Proven from a session on 2.38.1: after `cancel` no helper was left, the
 next `url` gave a fresh link, a `cancel` with nothing open answered "no keeper
 login ceremony is open", and `status` did not change.
 
-You have not run a full ceremony from v2 yet, with your own code, so keep the v1
-route as the fallback until you have.
+You have not run a full ceremony from v2 yet, with your own code. On 2026-10-20
+you checked `status` on the phone and chose to skip the full renewal, so the
+first real one is the renewal due before 2026-11-16. Until the cutover the v1
+route stays as a fallback.
 
 You do this from a workbench session (the standby session on your phone is one). No
 v1 pod, no laptop. Only a workbench session may do this; any other session gets
@@ -537,9 +622,12 @@ arguments.
 
 ### Lapse date and notices
 
-**Status: source only (plan 13, story 13.1). Not released, not installed, and no
-notice has reached your phone yet.** This section describes what the change does
-once it is.
+**Status: installed and accepted** (plan 13, story 13.1: dev-env #495, release
+2.39.0; haynes-ops #4138 and #4140). Proven on 2026-10-20: the keeper logged
+"notifier enabled", Prometheus shows both gauges (the Claude lapse is
+2026-11-16 17:51:36 UTC), `auth status` and `keeper-login ... status` in a
+workbench session show the date (Unknown for ChatGPT), and the test notice
+below reached your phone at about 17:45 under the dev-env app.
 
 **The date.** The keeper publishes the Claude login's lapse date next to the
 access token, in a small non-secret file, `login.json`, in the same projection
@@ -590,12 +678,16 @@ Pushover credentials" once, sends nothing, and keeps the gauges.
   at all when it is not.
 
 **Send a test notice.** One fixed notice, "dev-env test notice", to check the
-phone path. Run it from the v1 pod, which can exec into the keeper pod:
+phone path. Run it from the v1 pod, or from a workbench session, which has the
+same exec right since haynes-ops #4141 (not yet run from there):
 
 ```bash
-kubectl exec -n dev-env-system deploy/dev-env-keeper -c app -- \
-  /usr/local/bin/dev-env-keeper notify-test
+KUBECTL_REMOTE_COMMAND_WEBSOCKETS=false kubectl exec -n dev-env-system \
+  deploy/dev-env-keeper -c app -- /usr/local/bin/dev-env-keeper notify-test
 ```
+
+(The setting makes `kubectl` use the older exec protocol, which needs only the
+exec right that v1 and the workbench hold.)
 
 It prints `sent`, or an error that names no credential. The keeper image is
 distroless, so there is no shell: that one binary is all it runs.
@@ -613,26 +705,54 @@ distroless, so there is no shell: that one binary is all it runs.
   archived.
 - Anything that must last (decisions, handoffs, backlog) goes in git or an
   issue, as in v1.
-- The v1 pod does not mount `~/.shared`. v1's notes stay in its own
-  `~/work/orders`.
+- The v1 pod does not mount `~/.shared`. Until the cutover, v1's notes stay in
+  its own `~/work/orders`. At the cutover they are copied, with each repo's
+  auto-memory and bundles of v1's local-only branches, into
+  `~/.shared/v1-home/` (`work-orders/`, `memory/`, `bundles/`, `manifests/`).
+  The memory is then merged into `~/.shared/memory/<name>`, so v2 sessions
+  load it; nothing there is overwritten. The steps are plan 05's
+  [cutover runbook](../.agents/sagas/distributed-dev-env/backlog/05-cutover.md#cutover-runbook-2026-10-21).
 
 ## 8. What still needs v1
 
-- **A keeper login ceremony, until you have done one from v2.** The v2 route
-  is installed and proven from a session, except the sign-in itself with your
-  code (section 6). The Claude login lapses on 2026-11-16 at 17:51 UTC; the
-  ChatGPT login is needed only when the keeper reports NeedsLogin.
-- **A Proxmox write, until one is tried from v2.** The v2 operator token now
-  reaches the session and `pve` runs at `tier=operator` (section 1), but only
-  reads were run with it. v1's `pve`, with its own long-lived operator token, is
-  the tested route for writes.
+Since 2026-10-20 almost nothing. What is left:
+
+- **A keeper login ceremony with your code, until you have done one from v2.**
+  The v2 route is installed and proven from a session, except the sign-in
+  itself (section 6). You skipped the full renewal on 2026-10-20, so the first
+  real one is the renewal due before 2026-11-16 17:51 UTC. After the cutover
+  the v2 route is the only one.
 - **Headless Codex tasks on a repo outside the catalog** (section 3), such as
-  haynes-quest or the private repos left out of it.
-- **Cluster writes: pod deletes, `flux reconcile`, Jobs.** The workbench reads
-  only (section 1). A default (`full` profile) session has the rights in RBAC
-  but has not used them yet.
-- **Retiring v1 itself.** That is your call.
+  haynes-quest or the private repos left out of it. Or use a Codex host on
+  your phone, which works on any repo, or add a public repo to the catalog.
+
+Closed on 2026-10-20 (story CR-1020):
+
+- **A Proxmox write.** Proven from a session at about 22:40 (section 1).
+- **Cluster writes: pod deletes, exec, `flux reconcile`, Jobs, restarts.** A
+  workbench session has v1's OPERATOR tier since haynes-ops #4141, proven from a
+  session (section 1, with follow-ups F1 to F7), except an ordinary-app restart
+  and a Job from a CronJob, which were server dry runs only. A PR merge from v2
+  has not been run yet.
+- **A Claude session or task on a repo outside the catalog.** `agent-run --repo
+  <name>` clones a repo under your GitHub account whether or not it is in the
+  catalog. A task on the public `ytdrivarr` succeeded. A private repo outside
+  the catalog was not tried; it uses the same bot token that works for the
+  private catalog repos.
+
+Goes away with v1, by your rulings of 2026-10-20:
+
+- **code-server.** Use a terminal in a session pod (section 1, "A terminal
+  instead of code-server"). A proper front end comes later (plan 13).
+- **The two Cursor "My Machines" workers.** They go offline and are not moved.
+
+**Retiring v1.** Planned for 2026-10-21, after the v1 sessions wind down and
+write handoffs for new agents. It needs your written approval and your go at
+that moment. The steps, the drain and the rollback are plan 05's
+[cutover runbook](../.agents/sagas/distributed-dev-env/backlog/05-cutover.md#cutover-runbook-2026-10-21).
+v1's volume is kept for at least 30 days, so a rollback is a revert.
 
 More detail is in the [workflow guide](workflow-guide.md),
-[plan 03](../.agents/sagas/distributed-dev-env/backlog/03-remote-control.md) and
+[plan 03](../.agents/sagas/distributed-dev-env/backlog/03-remote-control.md),
+[plan 05](../.agents/sagas/distributed-dev-env/backlog/05-cutover.md) and
 [plan 13](../.agents/sagas/distributed-dev-env/backlog/13-phone-browser-management.md).

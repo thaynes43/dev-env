@@ -152,7 +152,7 @@ codex 0.160.0), are given where they are used: [6.2](#62-claude-max-login-and-it
 | **tool pod** | One instance of a specialised tool (Blender, audio, image, transcription, 3D printing, video, a local LLM server), started for agents on demand and stopped when idle (8.1). | Pod in namespace `dev-tools`, any node that fits, owned by its `ToolSession` or pool |
 | **agent-run** | CLI client of the API. Same verbs as v1. One static Go binary. | Wherever it is called |
 | **dev-env-satellite** | Small agent on Tom's own machines: runs a model server, reports availability, steps aside when Tom uses the machine (8.4). | LaunchAgent on the Mac, Windows service on the PCs |
-| **workbench** | Tom's browser IDE (code-server) plus `agent-run` and `kubectl`. Runs no agents by default. | Small Deployment, namespace `dev-agents` (phase 5) |
+| **workbench** | Tom's browser IDE (code-server) plus `agent-run` and `kubectl`. Runs no agents by default. *(2026-10-20, decision log row 78: no code-server and no Deployment. The workbench is the `workbench` session profile; Tom uses a terminal in a session pod until a front end exists.)* | Small Deployment, namespace `dev-agents` (phase 5) |
 | **codex hub** | The one long-lived session that runs the Codex remote-control daemon and keeps the phone's enrolment. | A session pod of kind `codex-hub` (phase 4) |
 
 The operator, broker, agentd and `agent-run` are written in Go (Q-02, Tom
@@ -3248,6 +3248,22 @@ hardening, not built: a Kyverno rule on the caller's pod-name claim to limit wha
 workbench pod may exec into. Every other profile keeps `dev-env-agent` and D-19 as
 written.
 
+**D-19, workbench operator tier (2026-10-20, story CR-1020; decision log row 81).**
+haynes-ops #4141 binds a ClusterRole with v1's ten OPERATOR write rules (pod
+delete, `pods/exec` create, `services/proxy` and `pods/proxy`, the workload
+restart patches, Flux and ExternalSecret patches, Job create and delete, CronJob
+patches) and v1's `database` and `observability` PVC Roles to
+`dev-agents/dev-env-workbench`. So "nothing cluster-wide" above no longer holds:
+a workbench session can exec into pods in every namespace, the keeper's
+included, as the v1 pod can. `dev-env-workbench-admin-guard` still limits its
+workload patches to the restart annotation. The profile is also no longer kept
+to ceremony sessions: the operator's standby runs on it, and children inherit
+it (CR-1020 review F1). This is parity under Q-16, recorded by the coordinator,
+not ruled by Tom. The earlier condition that exec into the keeper stay
+impossible is not met. A fence around `dev-env-system` (review F2) would reduce
+today's parity rights; it is held for Tom's decision and is not a cutover
+prerequisite.
+
 **D-19 as built, and S-12 (2026-10-07, KICKOFF 8.4; haynes-ops #3477, #3479).**
 haynes-ops `apps/dev-env-system/rbac/` holds the ServiceAccounts, the Roles of the
 table below and three ValidatingAdmissionPolicies; `apps/kyverno/policies/app/` holds
@@ -3324,7 +3340,7 @@ the Kyverno exec rule.
 | `dev-env-system/dev-env-keeper` | Role in `dev-agents`: Secrets get, update and patch on `resourceNames` `dev-env-gh-token`, `dev-env-ops-gh-token`, `dev-env-claude-live`, `dev-env-codex-live` only; for credential grants (Q-07), also `pods/exec` in `dev-agents` and read on `AccessGrant`. ClusterRole: `tokenreviews` create. Leases (get, create, update) and Events (create, patch) in its own namespace (D-52). Plan 01 grants the Secrets `patch` only (D-52). | The four Secrets are created empty by GitOps, so no `create` is needed. |
 | `dev-env-system/dev-env-gpu-guard` (DaemonSet on GPU nodes) | Role in `dev-tools`: pods get, list; `pods/eviction` create. Read on the budgeter's Lease in `dev-env-system`. | Evicts agent GPU pods only; works when the operator is down (8.2). |
 | `upgrade-agent/<caller>` (alert-responder, upgrade-shepherd, triage, health-gate, the curation CronJob) | No new Kubernetes rights. Their projected token for the `dev-env-operator` audience lets them call the API, within their `CallerPolicy` (3.7). | They no longer need write on the `upgrade-work-orders` ConfigMap once plan 10 moves them. |
-| `dev-agents/dev-env-workbench` | Role in `dev-agents`: pods get, list; `pods/exec` create. | Tom's IDE. Also the one account a profile may run sessions as (`serviceAccount: dev-env-workbench`, Story110 T24): a session in it has the Role above and nothing cluster-wide, so it can run `agent-run login`, `pair` and `attach` (`DEV_ENV_WORKBENCH=1` lifts agent-run's own refusal; RBAC is the real gate). The operator treats a token bound to such a session's pod as that session, so it heartbeats; an unbound token is the client's. Hold pods never use it. |
+| `dev-agents/dev-env-workbench` | Role in `dev-agents`: pods get, list; `pods/exec` create. | Tom's IDE. Also the one account a profile may run sessions as (`serviceAccount: dev-env-workbench`, Story110 T24): a session in it has the Role above and nothing cluster-wide, so it can run `agent-run login`, `pair` and `attach` (`DEV_ENV_WORKBENCH=1` lifts agent-run's own refusal; RBAC is the real gate). The operator treats a token bound to such a session's pod as that session, so it heartbeats; an unbound token is the client's. Hold pods never use it. *(Since 2026-10-20, haynes-ops #4141, it also holds v1's OPERATOR tier cluster-wide; see "D-19, workbench operator tier".)* |
 | `dev-env-system/dev-env-human` | none (token audience only) | Exists so Tom's laptop can mint an API token (D-05). |
 | tool pods (`dev-tools`) | none: no ServiceAccount token is mounted | As blender-authoring and audio-authoring today. |
 
