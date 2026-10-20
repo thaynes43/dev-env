@@ -228,3 +228,17 @@ This recipe covers keeper minting. General hw-ssh grants remain separate work.
 See [the workflow checkpoint](workflow-guide.md#proxmox-activation-checkpoint),
 [D-69/D-72](../.agents/sagas/distributed-dev-env/designs/001-dev-env-v2.md#612-access-no-prompts-in-the-pod-control-at-the-platform),
 and [plan 07](../.agents/sagas/distributed-dev-env/backlog/07-access-broker.md).
+
+## Host-key algorithm (fix, 2026-10-20)
+
+A PVE node serves ECDSA, RSA and ED25519 host keys, and the pinned
+`dev-env-keeper-ssh-trust` known-hosts data holds only each node's ED25519 key.
+The SSH library's default algorithm order prefers ECDSA, so the node presented a
+key that was not pinned and every keeper handshake ended before authentication
+(`Connection closed ... [preauth]` on the node, `credential mint did not
+dispatch` in the keeper). The keeper now offers, per target, only the host-key
+algorithms pinned for that target (`internal/keeper/ssh_hostkeys.go`). The
+known-hosts callback still verifies the key itself: a changed or unpinned key,
+or a target with no pin, is still refused. No node change and no change to the
+pinned data is needed. Certificate acceptance on the node is still to be shown
+by the bounded real-provider test above.

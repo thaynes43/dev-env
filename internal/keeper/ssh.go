@@ -58,6 +58,9 @@ type sshTrust struct {
 	ca      ssh.Signer
 	targets []string
 	hostKey ssh.HostKeyCallback
+	// knownHosts is the pinned file's content, read once with the callback so
+	// each target's offered host-key algorithms match what is pinned for it.
+	knownHosts []byte
 }
 
 func (s *NativeSSH) now() time.Time {
@@ -100,14 +103,15 @@ func (s *NativeSSH) trust() (*sshTrust, error) {
 		}
 		seen[target] = true
 	}
-	if _, err = readBoundedFile(s.KnownHostsFile, 64<<10); err != nil {
+	knownHosts, err := readBoundedFile(s.KnownHostsFile, 64<<10)
+	if err != nil {
 		return nil, err
 	}
 	callback, err := knownhosts.New(s.KnownHostsFile)
 	if err != nil {
 		return nil, errors.New("SSH host trust configuration is invalid")
 	}
-	return &sshTrust{ca: ca, targets: targets, hostKey: callback}, nil
+	return &sshTrust{ca: ca, targets: targets, hostKey: callback, knownHosts: knownHosts}, nil
 }
 func (s *NativeSSH) Ready() error { _, err := s.trust(); return err }
 
@@ -155,11 +159,14 @@ func (s *NativeSSH) Run(ctx context.Context, command string) ([]byte, bool, erro
 	if err != nil {
 		return nil, false, err
 	}
-	config := &ssh.ClientConfig{User: "dev-env", Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: trust.hostKey, Timeout: 5 * time.Second}
+	auth := []ssh.AuthMethod{ssh.PublicKeys(signer)}
 	for _, target := range trust.targets {
 		if ctx.Err() != nil {
 			break
 		}
+		// Offer only the host-key algorithms pinned for this target (see
+		// hostKeyAlgorithms); the callback below still verifies the key itself.
+		config := &ssh.ClientConfig{User: "dev-env", Auth: auth, HostKeyCallback: trust.hostKey, HostKeyAlgorithms: hostKeyAlgorithms(trust.knownHosts, target), Timeout: 5 * time.Second}
 		dial := s.dial
 		if dial == nil {
 			dial = (&net.Dialer{Timeout: 5 * time.Second}).DialContext
