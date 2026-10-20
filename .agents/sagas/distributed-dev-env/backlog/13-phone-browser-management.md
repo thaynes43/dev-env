@@ -72,9 +72,10 @@ its own.
 may use: `agent-run keeper-login claude|codex status|url|code`. It mirrors
 `agent-run login <session>`. The operator execs into the keeper pod's login
 container only (the `claude-login` helper, or the Codex login sidecar), never the
-keeper's main container. Access change: the operator's Role in `dev-env-system`
-gains `pods` get and list and `pods/exec` create. The container name is fixed in
-code. Planned live check: `status` for both providers works from a disposable
+keeper's main container. Access change: the operator's service account gets
+`pods` get and list and `pods/exec` create in `dev-env-system`. RBAC cannot limit
+exec to one container. Only the operator's code fixes the container and refuses
+other callers; no admission guard checks the container. Planned live check: `status` for both providers works from a disposable
 workbench session, and `url` returns a link that is then abandoned. The full
 ceremony with Tom is morning item 3. State at writing: being built; its
 haynes-ops RBAC PR is open (#4130).
@@ -134,7 +135,15 @@ services. That includes the standby and every session it starts, because a child
 gets its parent's profile. The guard keeps that to a restart: no workbench session
 can change those services' image, arguments or service account. Once NB-01 works,
 workbench sessions can also start a keeper login ceremony; the sign-in still needs
-Tom. The v1 pod can do both today, so this is parity, and no new gate is proposed.
+Tom. The v1 pod can do both today, so this is parity, and this plan adds no gate.
+
+One open point for NB-01's review. The operator's new exec right reaches every
+container in `dev-env-system`, including the keeper's main container. That
+container runs as the keeper's service account, which can read the login journal
+that holds the refresh tokens. Only code keeps the operator in the login
+container. An admission check that pins the container, like the restart guard
+above, would close that. Whether to add one is a decision for NB-01's review and
+Tom, not for this plan.
 
 ## Smallest next step: story 13.1, login lapse date and reminder
 
