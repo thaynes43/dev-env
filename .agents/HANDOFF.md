@@ -1,6 +1,6 @@
 # HANDOFF: start here
 
-## Current state — 2026-10-20 UTC (v2 release 2.38.0)
+## Current state — 2026-10-20 UTC (v2 release 2.38.1)
 
 This block replaces the 2.37.0 block below, which stays as history (its rulings
 Q-110-03 to Q-110-08 still stand). It records batch NEXT-BATCH-1020 (Saga85 /
@@ -14,13 +14,24 @@ session** (an agent in a v2 workbench session or the v1 coordinator, live, not
 Tom's phone); **installed, not exercised**; **not built** (no code, or off).
 Installed is not accepted.
 
-**Installed:** release 2.38.0 (dev-env #476, tag `v2.38.0`, commit `702a57f`).
+**Installed, operator and keeper:** release 2.38.1 (dev-env #484, tag `v2.38.1`,
+commit `fdf2542`). haynes-ops #4133 (`73e08fd3`, about 06:53Z) pins operator
+`sha-fdf2542` (`sha256:c1680f80…`), the keeper's `app` `sha-fdf2542`,
+`claude-login` `2.38.1` (`sha256:8db9ce94…`) and `codex-login` `sha-fdf2542`
+(`sha256:eea8b0ab…`). Both publish runs (39382009894, 39382031869) passed
+`cosign verify`. No CRD change. haynes-ops #4132 (the exec guard allows
+`agentd claude-login-abandon`) merged before the pin. The templates and the
+task-budget worker image deliberately stay 2.38.0, so no session drained
+overnight; the next release moves them. 2.38.1 fixes the three defects found on
+2.38.0 (below): #480 standby duplicate, #481 Proxmox mint, #483 Claude cancel.
+
+**Installed, sessions:** release 2.38.0 (dev-env #476, tag `v2.38.0`, commit `702a57f`).
 haynes-ops #4131 (`5ddbea0a`, about 05:31Z) pins, together: operator
 `sha-702a57f` (`sha256:981075c0…`); agent, task-budget worker and templates image
 `2.38.0` (`sha256:bb67ea9c…`); the keeper's `app` and `claude-login` at 2.38.0;
-`codex-login` `sha-702a57f` (`sha256:3b622b24…`). Both publish runs passed
-`cosign verify`. No CRD change. The shelf stays on 2.9.1 and the broker on
-`sha-eeb15e3`.
+`codex-login` `sha-702a57f` (`sha256:3b622b24…`); 2.38.1 replaced the operator
+and keeper images above. Both publish runs passed `cosign verify`. No CRD change.
+The shelf stays on 2.9.1 and the broker on `sha-eeb15e3`.
 
 2.38.0 adds: keeper login from a workbench session (#475); workbench sessions
 on the coordination routes (#472); the Claude 401 "continue" matching the real
@@ -53,12 +64,17 @@ host PEAR (`dev-env-1019-205125`, still 2.37.0) were not touched.
 | A reaped task's pod stops | Proven from a session | #4128 live: seven reaped private tasks' pods went Failed (DeadlineExceeded); pods, volumes and Sessions kept. Two more on 2.38.0 (`dev-env-1020-054000`, `-054012`), seen with `kubectl get pods` |
 | Inbox, task claims, published contexts; `agent-run msg` | Proven from a session (default-profile sessions) | NB-05: send, read, ack, idempotent retry, claim conflict naming the owner, context publish and read; `msg` answered by a live session, 409 for an exited task |
 | Release 2.38.0 published, signed and installed | Verified in CI and the cluster | REL-238: publish runs 39374328506 and 39374348374, `cosign verify` passed; #4131 merged |
+| Release 2.38.1 published, signed and installed for the operator and keeper | Verified in CI and the cluster | REL-2381: publish runs 39382009894 and 39382031869, `cosign verify` passed; #4133 merged; operator rolled, keeper restarted, every preserved session unchanged, one standby |
 | Workbench reads on 2.38.0: cluster without Secrets, Flux, Omni, `talosctl`, GCP, all ten MCP servers | Proven from a session (workbench) | LIVE-238b: NB-04 rows 4 to 7, 11, 14 and 15 pass; `can-i` says no to pod delete, Deployment patch and Job create |
 | Coordination routes from a workbench session (#472) | Proven from a session (workbench project task) | LIVE-238b: inbox both ways, ack and idempotent retry, sender read 404, claim conflict, context publish and read |
 | Project bootstrap Ready, 8 of 8 repos (#478); the standby's `CatalogUnconfirmed` gone | Proven from a session | LIVE-238b: five new sessions and the standby. No clone stalled, so #478's retry was not exercised |
 | The Claude 401 "continue" is sent after a failed turn (#473) | Proven from a session (new generation simulated) | LIVE-238b: receipt `sent`, the failed prompt completed. A real keeper refresh triggering it is not yet seen; a revoked token's wording is unobserved |
-| Keeper login from a workbench session (#475): `status` for both logins, `url` for both, ChatGPT `url`, `cancel`, `url` again, a v1-pod caller refused (other callers by unit test), logins unchanged after abandoned tries | Proven from a session (workbench) | LIVE-238a. Claude `cancel` fails (defect below). No full ceremony yet |
-| Claude keeper refresh, generation 3 | Proven from a session (natural refresh observed) | LIVE-238a: refreshed at 05:50:05Z, access to 13:50:05Z, read by sessions. `keeper-login claude status` gives the login lapse as 2026-11-16T17:51:35Z |
+| Keeper login from a workbench session (#475): `status` for both logins, `url` for both, ChatGPT `url`, `cancel`, `url` again, a v1-pod caller refused (other callers by unit test), logins unchanged after abandoned tries | Proven from a session (workbench) | LIVE-238a. No full ceremony with Tom's code yet |
+| Claude keeper-login `cancel` ends the helper (2.38.1, #483) | Proven from a session (workbench) | LIVE-2381, 06:53 to 06:56Z: no helper left after `cancel`, the next `url` not Busy, a no-ceremony `cancel` answers "no keeper login ceremony is open", `status` unchanged (gen 3, same access and login expiry) |
+| Proxmox operator token end to end, reads only (2.38.1, #481) | Proven from a session (workbench) | LIVE-2381: credential grant (15 min) Active in 5 s, CredentialJob `Installed`, `credential-available` exit 0; with an egress grant for `pvedash.haynesnetwork:443`, `pve ha` showed `tier=operator` and `pve nodes` five nodes; release revoked the job in 19 s, PVE's token list back to `operator` only, `tier=read`. No write tried |
+| No ERROR log after a ChatGPT keeper-login `cancel` (2.38.1, #483) | Proven from a session | LIVE-2381: no "needs attention" line; PendingPublication lasted over 35 s this time (about 25 s before), then Ready, same login |
+| Standby counts a draining standby as present (2.38.1, #480) | Installed, not exercised | No template move since the 2.38.1 pin, so no drain has run |
+| Claude keeper refresh, generation 3 | Proven from a session (natural refresh observed) | LIVE-238a: refreshed at 05:50:05Z, access to 13:50:05Z, read by sessions. `keeper-login claude status` gives the login lapse as 2026-11-16T17:51:35Z before the refresh and 17:51:36Z after (a 1 s drift) |
 | The keeper's certificate SSH to a PVE node (#474) | Proven from a session | LIVE-238a: the node logged the certificate login and the `pvesh create`; the two stuck CredentialJobs from 00:49Z went Revoked |
 
 **Corrected tonight:**
@@ -69,7 +85,7 @@ host PEAR (`dev-env-1019-205125`, still 2.37.0) were not touched.
   NB-04's first reading (the nodes lack CA trust) was wrong: the CA line is in
   `dev-env`'s `authorized_keys` on all five nodes. The 2.37.0 block below says the
   token grant was "exercised"; that meant Active, not a token. With 2.38.0 the
-  login works but the mint still fails one step later (defects below).
+  login worked but the mint failed one step later; 2.38.1 fixes that (below).
 - Reap of a task did not stop its pod before #4128 (task sessions are private
   under ADR-008); suspend still does not (ADR-006). The quick start's section 4
   was wrong for tasks and now says so.
@@ -77,30 +93,30 @@ host PEAR (`dev-env-1019-205125`, still 2.37.0) were not touched.
   for every agent, v1 and the workbench by design (DESIGN-010, 013 and 014: the
   message text is in them). The read path is `agentd` inside a session.
 
-**Defects found tonight, fixes in flight:**
+**Defects found tonight on 2.38.0, fixed in 2.38.1:**
 
-- **Claude keeper-login `cancel` does not end the helper** (LIVE-238a D1). The
-  cancel answers 204, the helper keeps running, and the next `url` is 409 "held
-  elsewhere" until the 15-minute deadline. The keeper side handles SIGHUP; the
-  operator's exec does not deliver it. Workaround: wait, or Tom or v1 sends
-  SIGHUP to `agentd claude-login` in the keeper's `claude-login` container. Fix
-  in progress as story NB-01b: a fixed abandon command for the helper, so the
-  exec guard's command list changes too.
-- **The Proxmox token is minted and then deleted** (LIVE-238a D2). PVE's `pvesh
-  create` answer carries `expire` and `privsep` as strings; the keeper expects
-  numbers, records `AmbiguousMint` and deletes the token. No token reaches a
-  session, and the keeper logs nothing about it. Fix in progress as story NB-09c:
-  accept both shapes and log one line on a refused mint, then rerun the
-  15-minute grant test. Behind it, the token's installation in the session and
-  its use there are still unproven. Proxmox writes stay in v1 until then.
+- **Claude keeper-login `cancel` did not end the helper** (LIVE-238a D1). The
+  next `url` was 409 "held elsewhere" for up to 15 minutes, because the
+  operator's exec delivered no hangup. Fixed by #483 with haynes-ops #4132: the
+  cancel runs a fixed `agentd claude-login-abandon` exec in the keeper's
+  `claude-login` container, which the exec guard allows. Proven from a session
+  (table above). A slot held elsewhere (an earlier operator or the v1 route) is
+  now freed by `cancel` too, by design; that case was not tried live.
+- **The Proxmox token was minted and then deleted** (LIVE-238a D2). PVE's `pvesh
+  create` answer carries `expire` and `privsep` as strings; the keeper expected
+  numbers, recorded `AmbiguousMint` and deleted the token. Fixed by #481 (both
+  shapes accepted; one log line names a refused mint's reason). Proven from a
+  session for reads (table above). A Proxmox write with the token is untested.
 - **A second standby** (`haynes-ops-1020-053140`) appeared at 05:31:40Z, two
   seconds after the standby drained onto 2.38.0 (LIVE-238b). The coordinator
-  reaped the unused duplicate; one standby runs. Fix in progress as story NB-10
-  (operator only).
-- Once, right after a ChatGPT keeper-login `cancel`, the keeper showed
-  PendingPublication for about 25 s and logged an ERROR, then returned to Ready
-  with the same login (LIVE-238a O3; not verified that the cancel caused it). An
-  alert keyed on that line would fire falsely. In NB-01b's scope.
+  reaped the unused duplicate. Fixed by #480 (a draining, pending or suspended
+  standby, a stale report or a missing pod counts as present). Installed, not
+  exercised: the next template move is its live test, and the standby
+  ConfigMap's `creations` count should not change.
+- The ERROR line after a ChatGPT `cancel` (LIVE-238a O3) came from the keeper's
+  30-second tick seeing the paused refresh during a ceremony. #483 logs it at
+  debug level; proven gone live. The PendingPublication after a cancel (about
+  25 s once, over 35 s the next time) is expected and harmless.
 
 **Open, not accepted:**
 
@@ -123,7 +139,8 @@ host PEAR (`dev-env-1019-205125`, still 2.37.0) were not touched.
   D3). Five were running at 03:45Z.
 - `dev-env-1020-002245` (a reaped Codex host probe that never cloned) retries a
   rescue every 15 minutes and fails `NotProven`. It needs a dev-env fix that
-  accepts a provably clone-less volume, or a reviewed cleanup.
+  accepts a provably clone-less volume, or a reviewed cleanup. Recorded as a
+  story, not started, because it changes the volume-delete guard.
 - The session directory is off (`--enable-session-directory=false`).
 - `dev-env-agent-guard` has the same Kyverno `verify-images` annotation gap that
   #4129 fixed in the workbench guard.
@@ -158,22 +175,21 @@ host PEAR (`dev-env-1019-205125`, still 2.37.0) were not touched.
    NeedsLogin alert. The keeper reports the Claude login lapses on
    2026-11-16T17:51Z, and nothing warns yet.
 
-**In flight at the time of writing:** release 2.38.1 with NB-10 (standby
-duplicate), NB-01b (Claude cancel) and NB-09c (Proxmox mint). Its pin is planned
-to move the operator and the keeper's images only, not the templates, so no
-session drains overnight. When it is installed and its live checks pass, update
-the quick start (sections 1, 6 and 8) and this block.
+**In flight at the time of writing:** story NB-11, the two #443 review nits (a
+`login url` race in the pod-owned login mode; renewal status). Source only, no
+live sessions.
 
 **Next safe step:** Tom's morning checks above, then his pick of the next
-story (13.1 recommended). Nothing else is queued beyond 2.38.1. A new story
-needs a saved record first (see `~/.claude/CLAUDE.md`, "Define work before
-pickup"). Preserve every
-v1, rendezvous, H7, grant and security hold and every consumed attempt; the
-older blocks below are history and do not reopen them.
+story (13.1 recommended). Nothing else is queued beyond NB-11. The next
+release moves the templates and task worker to it, so idle sessions drain then
+(the first live test of #480). A new story needs a saved record first (see
+`~/.claude/CLAUDE.md`, "Define work before pickup"). Preserve every v1,
+rendezvous, H7, grant and security hold and every consumed attempt; the older
+blocks below are history and do not reopen them.
 
 ## State at release 2.37.0 — 2026-10-20 UTC (historical)
 
-*Historical. The 2.38.0 block above supersedes its installed state, its "still
+*Historical. The 2.38.1 block above supersedes its installed state, its "still
 on v1" list and its next step. Its rulings Q-110-03 to Q-110-08 still stand.*
 
 This block replaces the 2026-10-19 Story110 checkpoint and the "next steps" that
@@ -2965,7 +2981,7 @@ plan 02 is done. The current order is the pickup brief's
 
 ## What happens next
 
-**Current order:** the [Current state — 2026-10-20 UTC](#current-state--2026-10-20-utc-v2-release-2380)
+**Current order:** the [Current state — 2026-10-20 UTC](#current-state--2026-10-20-utc-v2-release-2381)
 block at the top of this page (the [2026-10-17 next work](#next-work--2026-10-17-utc) is history). It supersedes the 2026-10-13 brief's enumerated
 list where they differ (v2.29.4/2.29.5 pins, rendezvous cohort r3–r13, inbox CLI
 shape, freshness gate, expired r13 window, Codex service-account kubeconfig, held H7/Q-37). The
