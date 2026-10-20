@@ -1,6 +1,113 @@
 # HANDOFF: start here
 
-## Current state — 2026-10-20 UTC (v2 release 2.38.3)
+## Current state — 2026-10-20 23:00 UTC (v2 release 2.39.0; cutover readiness)
+
+This block replaces the 2.38.3 block below, which stays as history. It records
+story CR-1020 (cutover readiness, Saga85 / Epic107), run by coordinator
+task-dev-env-1019-232515 from 22:20 UTC. The dated record is that story's
+result files (`CR-1020-W1-RESULT.md`, `-W1-REVIEW.md`, `-W2-RESULT.md`,
+`-W3a-RESULT.md`, `-W3b-RESULT.md`) and the progress file
+`NEXT-BATCH-1020-PROGRESS.md`, in `/home/dev/work/orders/dev-env-reset-1018/`
+on v1's volume, outside git. The cutover copies them to
+`~/.shared/v1-home/work-orders/`. The user-facing result is the
+[v2 quick start](../docs/v2-quickstart.md).
+
+**Verdict.** v2 is ready for all agent work. The v1 cutover is planned for
+**2026-10-21**, after the v1 sessions wind down and write handoffs for new
+agents (decision 80). It needs Tom's written approval and his go at that moment.
+Nothing on 2026-10-20 scaled, restarted or changed v1. The steps are the
+[cutover runbook](sagas/distributed-dev-env/backlog/05-cutover.md#cutover-runbook-2026-10-21)
+in plan 05.
+
+**Installed, everything:** release 2.39.0 (dev-env #496, tag `v2.39.0`, commit
+`0c22cc0`), full pin haynes-ops #4140: operator and keeper `app`
+`sha-0c22cc0` (`sha256:570a334d…`); the task worker, templates and keeper
+`claude-login` `2.39.0` (`sha256:ca877240…`); keeper `codex-login`
+`sha-0c22cc0` (`sha256:5d3335ef…`). Publish runs 39466593953 and 39466623563
+passed `cosign verify`. No CRD change. haynes-ops #4138 added the keeper's
+Pushover ExternalSecret, the notices ConfigMap and Role, a PodMonitor and the
+metrics ingress rule (story 13.1). The broker keeps `sha-eeb15e3` and the shelf
+2.9.1. After the pin, haynes-ops #4141 (merged 22:41 UTC, `1696c867`) gave the
+workbench v1's OPERATOR tier.
+
+**Sessions.** The standby `haynes-ops-1020-002115` and MANGO
+`dev-env-1019-190936` drained onto 2.39.0. T08 `dev-env-1019-141220` and the
+Codex host PEAR `dev-env-1019-205125` (2.37.0; it moves only by suspend and
+resume) were not touched. All four kept their pod UIDs and start times through W3b's run.
+
+**Accepted live:**
+
+| Item | Proof level | Evidence |
+|---|---|---|
+| Claude standby on the phone, Wi-Fi and cellular | Proven on the phone (Tom) | About 12:09 and 12:11 UTC |
+| PEAR in the ChatGPT app over cellular: same computer, new turn, history recalled | Proven on the phone (Tom) | About 12:14 UTC |
+| Keeper status | Proven on the phone (Tom) | About 12:13 UTC: generation 4, the Claude login lapses 2026-11-16 17:51 UTC. The full renewal was skipped at Tom's direction; automatic refresh is seen (generations 2 to 4) |
+| Login-lapse notices (story 13.1) | Installed and accepted | 2.39.0; both gauges in Prometheus; the test notice reached Tom's phone at about 17:45 UTC |
+| Keeper, operator and shelf restarts from a workbench session | Proven from a session | NB-02 (03:45 to 04:01 UTC), the keeper again at about 12:20 UTC at Tom's request, the shelf again in W3b (between 22:42 and 22:48 UTC); session pods unchanged |
+| Proxmox through a grant: reads and a write | Proven from a session | Reads on 2.38.1 (LIVE-2381) and about 12:20 UTC. W3a, 22:40 UTC: `pve --yes vm 113 onboot 1` (1 to 1) at `tier=operator`; the token left Proxmox about 20 s after release |
+| Messages between sessions | Proven from a session | `agent-run msg` delivered and answered (about 12:20 UTC); inbox, claims and shared notes between project tasks (NB-05, LIVE-238b) |
+| Workbench reads: cluster without Secrets, Flux, Omni, `talosctl`, GCP, all ten MCP servers | Proven from a session | LIVE-238b (2.38.0) |
+| Workbench write tier = v1's OPERATOR tier (haynes-ops #4141) | Merged; proven from a session | W1 review: the same 10 write rules as v1's `dev-env-operator`, none extra and none missing, plus v1's `database` and `observability` PVC Roles. W3b (22:42 to 22:48 UTC): every expected `can-i` yes and no; `flux reconcile ks dev-env-rbac`; a Job created, its pod and the Job deleted; `rollout restart` of the shelf; exec into a pod; the guard refused a replica change and `set env` (stricter than v1, expected) |
+| GitHub from v2 | Proven from a session | W3b: clone, push a branch, open a draft PR (dev-env #498) and close it with the branch deleted. A merge from v2 was not run; it uses the same bot token as v1 |
+| Claude on a repo outside the catalog | Proven from a session | W2: `--repo ytdrivarr -p`, Succeeded, reaped |
+| Copying v1's notes into `~/.shared` | Trial passed | W3a: one file, checksum equal, removed by exact path |
+| Nothing in the cluster needs the v1 pod running | Read-only inventory | W2: nothing else mounts `dev-env-home`; dev-env-ops already reads v2 `Activity` objects and only warns with v1 at zero; no v1-only network policy blocks a session |
+
+**Tom's rulings on 2026-10-20** ([decision log](sagas/distributed-dev-env/README.md#decision-log) rows 78 to 80): no v2
+code-server, a proper front end later (plan 13), a terminal by exec into a v2
+session pod until then; the Cursor "My Machines" workers go offline with v1; the
+cutover waits until 2026-10-21 after the v1 sessions wind down. Row 81 records
+the workbench write tier as existing authority under Q-16.
+
+**Still open (W2, W3b and the W1 review):**
+
+- **For the cutover itself** (runbook steps): each v1 session pushes its
+  branches and writes a handoff; check for unpushed work; copy `~/work/orders`,
+  the auto-memory and bundles of local-only branches into `~/.shared/v1-home/`,
+  then merge the memory; stop v1's Codex daemon; Tom's written approval; the
+  held-draft scale-to-zero PR. A final `agent-run sweep` is not a drain (plan 05).
+- **W3b leftovers, optional:** a real `kubectl create job --from=cronjob/...` on a
+  named safe CronJob (the server dry run passed); a real restart of an ordinary
+  app outside `dev-env-system` (dry run passed).
+- **W1 review follow-ups F1 to F7** (quick start section 1): tasks a workbench
+  session starts get its tier; a `dev-env-system` fence (Tom's call, cuts below
+  v1); no `rollout undo` or `set image` from the workbench (break-glass is Tom's
+  admin kubeconfig); the exec guard's privileged list; no exec into the shelf;
+  `kubectl delete pod` on a session skips its rescue; a stale template comment.
+- **Backlog, none blocks the cutover:** an expiry gauge for the static
+  `CLAUDE_CODE_OAUTH_TOKEN` and an alert on the gh token's age (v1's auth-watch
+  checked both); phone-path alerts (plan 13 later item 1); headless Codex tasks
+  on repos outside the catalog; v1-only egress to `llama-server.ai:8080` and
+  `flux-system/source-controller:9090`, no known user; `dev-activity-check.sh`
+  polish; the gasha01 SSH user; standing grants end at 8 hours where v1's
+  allowlist was permanent; a live `opwork` run from v2; dev-env-ops' Max login
+  renewal text still says "ask a dev-env agent".
+- **Unchanged from the 2.38.3 block:** reaped tasks keep their Session and 20Gi
+  volume until H7/H9 (about 180Gi now); suspended private tasks keep running
+  (ADR-006); `dev-env-1020-002245` retries a rescue every 15 minutes; the session
+  directory is off; `dev-env-agent-guard`'s Kyverno annotation gap; the stalled
+  `dev-env-h7-metadata-audit` Job; the `TZ` test.
+- **Cleanup after the 30 days, before `apps/dev/dev-env` is deleted:** listed in
+  plan 05's scope (the `dev-env-operator` ClusterRole that dev-env-ops binds,
+  `openproject-agent-credentials`, the v1 image used by dev-env-ops and vexa,
+  operator arguments and policies naming `dev/dev-env`, and more).
+
+**Held for Tom (one question each, at the moment it is needed):** the written
+cutover approval (runbook step 6); a `dev-env-system` fence for the workbench
+(W1 review F2); suspended private tasks (NB-06 D3); the gasha01 SSH user; the
+catalog repos left out (NB-08); a project-wide inbox for a human coordinator.
+G-6 (the workbench write tier), code-server, Cursor and timing are settled.
+
+**Next safe step:** the cutover story on 2026-10-21, in a fresh v2 workbench
+session with its own story record, following the plan 05 runbook. The
+wind-down notice for v1 sessions is drafted in the coordinator's order directory
+(`CR-1020-WINDDOWN-NOTICE.md`) and was not sent on 2026-10-20. Preserve every v1
+session until Tom's go, and every rendezvous, H7, grant and security hold.
+
+## State at release 2.38.3 — 2026-10-20 UTC (historical)
+
+*Historical. The current-state block above supersedes its installed state, its
+open list and its held list. Its records of what was proven still stand.*
 
 This block replaces the 2.37.0 block below, which stays as history (its rulings
 Q-110-03 to Q-110-08 still stand). It records batch NEXT-BATCH-1020 (Saga85 /

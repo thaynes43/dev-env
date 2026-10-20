@@ -1,7 +1,19 @@
 # Dev-env v2: workflow, quick start and feature set
 
 **Daily use:** the [v2 quick start](v2-quickstart.md) is the one-page version
-for Tom's phone-first workflow, with what was proven on 2026-10-19.
+for Tom's phone-first workflow, with what was proven up to 2026-10-20.
+
+**Current state, 2026-10-20:** release 2.39.0 is installed, and v2 is ready for
+all agent work. Tom accepted the phone workflow (the Claude standby on cellular,
+the Codex host in the ChatGPT app, keeper status). A workbench session has v1's
+cluster write tier (haynes-ops #4141), Proxmox reads and writes through grants,
+restarts of the v2 services and messages between sessions, all proven live. The
+v1 cutover is planned for 2026-10-21, after the v1 sessions wind down and write
+handoffs, and only with Tom's written approval. The
+[handoff](../.agents/HANDOFF.md) has the evidence, and plan 05 has the
+[cutover runbook](../.agents/sagas/distributed-dev-env/backlog/05-cutover.md#cutover-runbook-2026-10-21).
+v2 has no code-server: a proper front end comes later, and until then a terminal
+is an exec into a session pod (quick start section 1).
 
 **Current continuation, 2026-10-13:** the
 [2026-10-13 Claude pickup brief](../.agents/CLAUDE-RESUME-2026-10-13.md) records
@@ -114,6 +126,8 @@ storage, but it does not require shared Git directories or NFS Git benchmarks.
 
 This table reflects source and saved runtime evidence as of 2026-10-12.
 A released feature is not automatically enabled or accepted on live sessions.
+*(Historical. The current state is in the [quick start](v2-quickstart.md) and
+the [handoff](../.agents/HANDOFF.md).)*
 
 | Goal or capability | Available evidence | Remaining work |
 |---|---|---|
@@ -197,7 +211,9 @@ V2 is a different Go binary. Do not overwrite the v1 command or assume identical
 verbs mean identical behavior. The examples below use `v2run` as a shell array
 holding the explicitly selected v2 binary.
 
-For ordinary work today, continue using v1 or ask an agent to start the session:
+Since 2026-10-20 ordinary work runs on v2: see the [quick start](v2-quickstart.md),
+whose "Which `agent-run`" section sets up the v2 client in the v1 pod. Until v1
+is retired (planned 2026-10-21), v1's own launcher still works:
 
 ```bash
 # V1: Claude terminal plus phone session.
@@ -526,6 +542,16 @@ inventory remains useful for migration planning. Required owner workflows need
 usable replacements before cutover, and Tom must explicitly approve retirement.
 It is not necessary to finish every inventory row, the full frontend or local
 models before testing a smaller coherent workflow.
+
+**Cutover status, 2026-10-20 (story CR-1020).** Every prerequisite an agent can
+verify is verified: plan 05's
+[prerequisite table](../.agents/sagas/distributed-dev-env/backlog/05-cutover.md#prerequisites-on-2026-10-20)
+lists each with its evidence, and R-04's
+[status table](../.agents/sagas/distributed-dev-env/research/R-04-v1-capability-parity.md#status-2026-10-20)
+closes the parity rows that are done. What is left is the drain itself (each v1
+session pushes its branches and writes a handoff; v1's notes and memory are
+copied into `~/.shared/v1-home/`), Tom's written approval, and the held-draft
+haynes-ops PR that scales v1 to zero. A final `agent-run sweep` is not a drain.
 
 ## 9. How we keep the project on track
 
