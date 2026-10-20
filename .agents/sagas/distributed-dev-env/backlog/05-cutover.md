@@ -15,7 +15,7 @@ Tom's explicit decommissioning approval. It authorizes no migration-time
 permission reduction, automatic retirement or new privilege.
 
 **Status, 2026-10-20 (story CR-1020):** every prerequisite an agent can verify
-is verified (table below). The cutover is planned for **2026-10-21**, after the
+is verified (table below), within the W3 limits the table names. The cutover is planned for **2026-10-21**, after the
 v1 sessions wind down and write handoffs for new agents (decision 80). It runs
 only with Tom's written approval and his go at that moment. Nothing in CR-1020
 scaled, restarted or changed v1.
@@ -42,14 +42,14 @@ The CR-1020 result files sit in the coordinator's order directory,
 | Plan 04: Codex on the phone | Accepted by Tom | PEAR in the ChatGPT app over cellular, about 12:14 UTC: the same computer, a new turn, history recalled |
 | Shared logins | Accepted | Keeper status on the phone (generation 4, the Claude login lapses 2026-11-16 17:51 UTC); automatic refresh seen (generations 2, 3, 4); lapse notices on 2.39.0, test notice on Tom's phone (story 13.1). The full renewal was skipped at Tom's direction, so it is not a gap |
 | Plan 07: grants, Proxmox | Proven from a session | Standing grants for the LAN, Proxmox API and hw-ssh; the Proxmox token for reads (2.38.1) and for a write (W3a, 22:40 UTC: `pve --yes vm 113 onboot 1` at `tier=operator`, token gone 20 s after release) |
-| Workbench has v1's OPERATOR tier | Merged and proven from a session | haynes-ops #4141 (merged 22:41 UTC); W1 review: the same 10 write rules as v1, none extra, none missing; W3b: `can-i` matrix, `flux reconcile`, Job create and delete, pod delete, shelf `rollout restart`, exec, guard refusals, a PR opened and closed from v2 |
+| Workbench has v1's OPERATOR tier | Merged and proven from a session | haynes-ops #4141 (merged 22:41 UTC); W1 review: the same 10 write rules as v1, none extra, none missing; W3b: `can-i` matrix, `flux reconcile`, Job create and delete, pod delete, shelf `rollout restart`, exec, guard refusals, a draft PR opened and closed from v2. **Not proven live:** a PR merge from v2 (W3b closed draft dev-env #498 without merging; the first post-cutover merge is the proof, runbook step 7), the `restartedAt` restart of an ordinary app in `media` (server dry run only), and a Job from a CronJob (server dry run only; no safe CronJob named) |
 | Restarts, messaging | Proven from a session | Keeper, operator and shelf restarts (NB-02; the keeper again at about 12:20 UTC at Tom's request; the shelf again in W3b); `agent-run msg` delivered and answered |
 | Repos outside the catalog | Proven for Claude | W2: `--repo ytdrivarr -p` task Succeeded. Headless Codex tasks still need the catalog |
 | Q-08 LimitRange | Live | `default-cpu-request` in every namespace, `dev-agents` and `dev-env-system` included |
-| Headlamp | Not touched by the cutover; guarded replacement not proven | It runs on its own in `frontend` and does not depend on v1, so the cutover removes nothing it provides. The workbench has the exec and Job rights v1 has (#4141). Accepted guarded Headlamp-equivalent tasks (D-71), such as owner-directed Secret reads, are not proven; the workbench cannot read Secrets. The CR-1020 coordinator classed that as later work, not a cutover blocker (progress file, 22:20 UTC). It is not Tom's ruling; his approval in step 6 covers it |
+| Headlamp | Not touched by the cutover; guarded replacement not proven | It runs on its own in `frontend` and does not depend on v1, so the cutover removes nothing it provides. The workbench has the exec and Job rights v1 has (#4141). Accepted guarded Headlamp-equivalent tasks (D-71), such as owner-directed Secret reads, are not proven; the workbench cannot read Secrets. The CR-1020 coordinator classed that as later work, not a cutover blocker (progress file, 22:20 UTC). It is not Tom's ruling; his approval in step 5 covers it |
 | Cluster objects that need v1 | None block scale-to-zero | W2, read-only: nothing else mounts `dev-env-home`; no v1-only network policy blocks a session; dev-env-ops loses only its view of v1's old declaration files (read from its script; a live run is step 8) |
 | Copying v1's notes to v2 | Trial passed | W3a: one file copied into `~/.shared` and checked by checksum |
-| Tom's written approval | Open | Runbook step 6 |
+| Tom's written approval | Open | Runbook step 5 |
 
 ## Scope
 
@@ -102,8 +102,9 @@ The CR-1020 result files sit in the coordinator's order directory,
   to the keeper, which has had its own login since plan 03. The `claude-login-check`
   page and the v1 renewal runbook give way to `agent-run keeper-login` in a
   workbench session and the keeper's lapse notices (quick start section 6).
-- **v1's Codex login is retired with the pod too.** Before scale-to-zero, stop v1's
-  daemon from a shell inside the v1 pod, with v1's own `agent-run codex-remote stop`.
+- **v1's Codex login is retired with the pod too.** Before scale-to-zero, and only
+  after Tom's written approval (runbook steps 5 and 6), stop v1's daemon from a
+  shell inside the v1 pod, with v1's own `agent-run codex-remote stop`.
   (In v2 the same command stops the codex hub, DESIGN-001 3.5.) Nothing refreshes that
   login again, and its `auth.json` goes with the PVC. Nothing is copied to the keeper or the codex hub, which have had their own
   logins since plan 04 (DESIGN-001 D-12). The phone's v1 computer entry goes offline.
@@ -136,18 +137,25 @@ The CR-1020 result files sit in the coordinator's order directory,
 
 ## Cutover runbook (2026-10-21)
 
+**What authorizes it.** Tomorrow's date alone authorizes nothing. Steps 1 to 5
+prepare and check; they stop, restart or end nothing in v1. (Step 3's `git
+fetch` updates remote-tracking refs, and step 4 writes its manifests and
+bundles under `~/work/migrate-manifests`.) Nothing that
+stops, restarts, retires or disrupts v1 or a v1 session (v1's Codex daemon
+included) runs before all four of these hold:
+
+- every v1 session has reported its wind-down and handoff done (step 2);
+- no live worktree has unpushed or uncommitted work (step 3);
+- v1's orders and memory are copied to v2 and verified (step 4);
+- Tom's written approval is recorded in the decision log (step 5).
+
+If Tom does not approve, nothing is stopped: v1 and its sessions keep running
+as they are, and the copy in `~/.shared/v1-home/` simply stays.
+
 Run by a new cutover coordinator in a v2 workbench session (the standby will do),
 under its own story record. Merging step 7 ends every v1 session, so the
-coordinator must not run in v1. Steps 3, 4 and 5 need a shell in the v1 pod; run
+coordinator must not run in v1. Steps 3, 4 and 6 need a shell in the v1 pod; run
 them from a v1 session before step 7.
-
-First declare the work from the v2 coordinator, so the remediation agent takes
-alerts as planned:
-
-```bash
-declare-activity start "v1 cutover: drain and scale dev-env v1 to zero" \
-  --scope dev,dev-env,dev-agents,upgrade-agent --ttl 4h
-```
 
 1. **Announce.** Tell Tom the plan and the expected end time. List v1's sessions
    in a v1 shell with `tmux ls`. Send each agent session the wind-down notice
@@ -163,8 +171,9 @@ declare-activity start "v1 cutover: drain and scale dev-env v1 to zero" \
    story, pushes every branch it owns to `origin` (`agent/*`, never main), writes a
    handoff for a new v2 agent in its repo (backlog or issue) and in
    `~/work/orders`, and replies, in its session and with one line in
-   `~/work/orders/V1-WINDDOWN-REPLIES.md`. Wait for every reply, or note who did
-   not answer.
+   `~/work/orders/V1-WINDDOWN-REPLIES.md`. Go on only when every session has
+   replied done. A session that cannot finish replies "partial" with a reason;
+   name it in the step 5 question.
 3. **Check that nothing is left unpushed.** In a v1 shell. It changes nothing
    except the remote-tracking refs that `git fetch` updates, and takes no index
    lock, so running agents are not disturbed:
@@ -190,19 +199,28 @@ declare-activity start "v1 cutover: drain and scale dev-env v1 to zero" \
    done
    ```
 
-   Each `WORKTREE` line of a live session's worktree is resolved by its owner (push
-   or commit) before step 7. A squash-merged branch also shows up, because its
-   commits are not on origin: note its PR and move on. Whatever stays local goes
-   into the bundles in step 4. On 2026-10-20, without a fetch, the `BRANCH` check
-   found 109 such branches in dev-env and haynes-ops alone, so expect a long list.
-4. **Copy orders, memory and local branches to v2.** From a v1 shell, after the
-   handoffs (so nothing changes underneath). It follows W3a's tested sequence,
-   with three changes. Files over 5 MiB are left out: compiled test binaries and
-   tarballs, about 1.97 GiB of the 2.2 GB, which a scan cannot read and a new
-   agent does not need. Files that match a token or private-key pattern are left
-   out too: on 2026-10-20, 22 files in `~/work/orders` matched (names only were
-   listed; nobody read them). Both lists are kept in the manifests, and the
-   files stay on v1's volume. Git bundles are added.
+   Every `WORKTREE` line of a live session's worktree is resolved by its owner
+   (push or commit) and the check rerun until none is left. `BRANCH` lines are
+   older local branches: a squash-merged branch shows up too, because its commits
+   are not on origin, so note its PR and move on. Whatever stays local goes into
+   the bundles in step 4, and the step 5 question says how many there are. On
+   2026-10-20, without a fetch, the `BRANCH` check found 109 such branches in
+   dev-env and haynes-ops alone, so expect a long list.
+4. **Copy orders, memory and local branches to v2, and verify.** From a v1 shell,
+   after the handoffs, so nothing changes underneath. It follows W3a's tested
+   sequence, with three changes:
+   - only text files of `~/work/orders` are copied. Non-text files (compiled test
+     binaries, tarballs, gzip files: about 1.6 GiB in 901 files on 2026-10-20)
+     are build output a new agent does not need, and a scan cannot see inside
+     them;
+   - every text file that will be copied is scanned first for token and
+     private-key patterns, Proxmox API tokens included; a match is left out. On
+     2026-10-20, 23 of 8,182 text files matched (names only were listed; nobody
+     read them). A match in the memory stops the run;
+   - Git bundles of local-only branches are added.
+
+   The files left out stay on v1's volume, listed in the manifests. On
+   2026-10-20 that left about 140 MiB to copy.
 
    First the writer session:
 
@@ -213,35 +231,39 @@ declare-activity start "v1 cutover: drain and scale dev-env v1 to zero" \
    S=<that session's name>
    ```
 
-   Then write the copy script and run it. A script, so that a refusal in step a
-   really stops it:
+   Then write the copy script and run it. A script, so that a refusal really
+   stops it:
 
    ```bash
    cat > ~/work/migrate-v1-notes.sh <<'EOF'
    #!/bin/bash
    # Usage: bash ~/work/migrate-v1-notes.sh <writer-session>
-   set -u
+   set -u; export LC_ALL=C
    S=$1; DST=/home/dev/.shared/v1-home
    W=$HOME/work/migrate-manifests; mkdir -p "$W"; fail=0
    kx() { KUBECTL_REMOTE_COMMAND_WEBSOCKETS=false timeout 1800 kubectl exec -i -n dev-agents "$S" -c agent -- "$@"; }
-   PAT='gh[pousr]_[A-Za-z0-9]{30,}|github_pat_|sk-ant-|-----BEGIN [A-Z ]*PRIVATE KEY|"refresh_token"|"access_token"'
+   PAT='gh[pousr]_[A-Za-z0-9]{30,}|github_pat_|sk-ant-|sk-proj-|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY'
+   PAT="$PAT"'|"refresh_token"|"access_token"|PVEAPIToken'
+   PAT="$PAT"'|[A-Za-z0-9._-]+@[A-Za-z0-9._-]+![A-Za-z0-9._-]+[=:][0-9a-fA-F]{8}-[0-9a-fA-F]{4}-'
 
-   # 0. Secret scan, file names only. A hit in memory stops the run (read and fix it by hand).
-   if nice -n 19 grep -rIlE --exclude='*.jsonl' "$PAT" "$HOME"/.claude/projects/*/memory; then
-     echo "STOP: memory files above match a secret pattern"; exit 1
+   # 0. Scan. Memory: every file, read as text; a match stops the run (fix it by hand).
+   if nice -n 19 grep -rlaE --exclude='*.jsonl' "$PAT" "$HOME"/.claude/projects/*/memory; then
+     echo "STOP: the memory files above match a secret pattern"; exit 1
    fi
-   ( cd "$HOME/work" && find orders -type f -size +5M ) > "$W/orders-skipped.txt"
-   ( cd "$HOME/work" && nice -n 19 grep -rIlE --exclude='*.jsonl' "$PAT" orders ) > "$W/orders-secret-scan.txt"
-   cat "$W/orders-skipped.txt" "$W/orders-secret-scan.txt" > "$W/orders-excluded.txt"
-   echo "left out: $(wc -l < "$W/orders-skipped.txt") large, $(wc -l < "$W/orders-secret-scan.txt") scan hits"
+   #    Orders: the copy list is the text files that do not match.
+   cd "$HOME/work" || exit 1
+   nice -n 19 grep -rIl --exclude='*.jsonl' '' orders | sort > "$W/orders-text.txt"
+   tr '\n' '\0' < "$W/orders-text.txt" | nice -n 19 xargs -0 grep -alE "$PAT" | sort > "$W/orders-secret-scan.txt"
+   find orders -type f ! -name '*.jsonl' | sort | comm -23 - "$W/orders-text.txt" > "$W/orders-not-text.txt"
+   comm -23 "$W/orders-text.txt" "$W/orders-secret-scan.txt" > "$W/orders-copy.txt"
+   echo "copying $(wc -l < "$W/orders-copy.txt") files; left out $(wc -l < "$W/orders-not-text.txt") non-text and empty, $(wc -l < "$W/orders-secret-scan.txt") scan matches"
 
    # a. The target. Refuse to run over an existing copy.
    kx sh -c "test ! -e $DST && mkdir -p $DST/work-orders $DST/memory $DST/bundles" \
      || { echo "STOP: $DST exists or mkdir failed"; exit 1; }
 
-   # b. ~/work/orders without *.jsonl and without the files left out above.
-   tar c -C "$HOME/work" --exclude='*.jsonl' --exclude-from="$W/orders-excluded.txt" orders \
-     | kx tar x -C "$DST/work-orders"
+   # b. The orders copy list.
+   tar c -T "$W/orders-copy.txt" | kx tar x -C "$DST/work-orders"
    rc="${PIPESTATUS[*]}"; echo "orders rc: $rc"; [ "$rc" = "0 0" ] || fail=1
 
    # c. Each repo's auto-memory.
@@ -260,8 +282,7 @@ declare-activity start "v1 cutover: drain and scale dev-env v1 to zero" \
    done
 
    # e. Verify: file count and checksums, checked on the v2 side over stdin.
-   ( cd "$HOME/work" && find orders -type f ! -name '*.jsonl' | grep -vxF -f "$W/orders-excluded.txt" \
-       | sort | tr '\n' '\0' | xargs -0 nice -n 19 sha256sum ) > "$W/orders.sha"
+   tr '\n' '\0' < "$W/orders-copy.txt" | xargs -0 nice -n 19 sha256sum > "$W/orders.sha"
    src=$(wc -l < "$W/orders.sha"); dst=$(kx sh -c "find $DST/work-orders/orders -type f | wc -l")
    [ "$src" = "$dst" ] || { echo "COUNT MISMATCH orders src=$src dst=$dst"; fail=1; }
    kx sh -c "cd $DST/work-orders && sha256sum -c --quiet" < "$W/orders.sha" || { echo "CHECKSUM FAIL orders"; fail=1; }
@@ -283,11 +304,9 @@ declare-activity start "v1 cutover: drain and scale dev-env v1 to zero" \
    ```
 
    `ALL OK` means it worked; then the writer session is reaped. Nothing is deleted
-   on either side; the files left out stay on v1's volume, and
-   `manifests/orders-secret-scan.txt` names the ones to read before anyone copies
-   them by hand. If a copy is cut
-   off by the timeout, remove the exact `$DST` path (no wildcard) and run the
-   script again.
+   on either side. `manifests/orders-secret-scan.txt` names the files to read
+   before anyone copies them by hand. If a copy is cut off by the timeout, remove
+   the exact `$DST` path (no wildcard) and run the script again.
 
    Then merge the memory, in any running v2 session (the coordinator's will do).
    Only the `-home-dev-repos-<repo>` folders are merged; v2 uses the same names.
@@ -310,15 +329,24 @@ declare-activity start "v1 cutover: drain and scale dev-env v1 to zero" \
    ```
 
    It never overwrites a v2 file, and a second run adds nothing.
-5. **Stop v1's Codex daemon**, from a shell inside v1, with v1's own launcher:
-   `agent-run codex-remote stop`. Then `tmux has-session -t codex-remote` must
-   fail. The phone's v1 computer entry goes offline. PEAR, the v2 host, is not
-   affected. If Tom does not approve in step 6, start it again with
-   `agent-run codex-remote up` in v1.
-6. **Record Tom's written approval.** Ask Tom through AskUserQuestion once steps 1
-   to 5 are done, naming what is left unpushed, if anything. Put his words in the
-   saga decision log as a dated ruling, in a dev-env docs PR merged before step 7.
-   Without his approval, stop here.
+5. **Record Tom's written approval.** Only after steps 2 to 4 are complete, ask
+   Tom through AskUserQuestion. Name what is left: any session that replied
+   "partial", the count of local-only branches that went into the bundles, and
+   the files the copy left out. Put his words in the saga decision log as a dated
+   ruling, in a dev-env docs PR merged before step 6. If he does not approve, or
+   does not answer, stop here: nothing has been stopped, and nothing is.
+6. **Stop v1's Codex daemon**, only after step 5's ruling is merged, from a shell
+   inside v1, with v1's own launcher: `agent-run codex-remote stop`. Then
+   `tmux has-session -t codex-remote` must fail. The phone's v1 computer entry
+   goes offline. PEAR, the v2 host, is not affected.
+
+   Declare the disruptive part from the v2 coordinator first, so the remediation
+   agent takes the alerts as planned:
+
+   ```bash
+   declare-activity start "v1 cutover: scale dev-env v1 to zero" \
+     --scope dev,dev-env,dev-agents,upgrade-agent --ttl 4h
+   ```
 7. **Scale v1 to zero by GitOps.** One haynes-ops PR that changes only
    `kubernetes/main/apps/dev/dev-env/app/helmrelease.yaml`:
    `values.controllers.dev-env.replicas: 1` to `0`. It is under
@@ -333,6 +361,9 @@ declare-activity start "v1 cutover: drain and scale dev-env v1 to zero" \
    ```
 
    Never `kubectl scale`: it is outside the OPERATOR tier, and Flux would undo it.
+   If the v2 coordinator merges this PR, that is the first PR merge from v2:
+   CR-1020 did not exercise one (W3b opened and closed draft dev-env #498 only).
+   The first post-cutover PR merge from v2 is the live merge proof; record it.
 8. **Verify v2.**
    - `kubectl -n dev get deploy dev-env` shows 0 replicas and
      `kubectl -n dev get pods -l app.kubernetes.io/controller=dev-env` no pod;
@@ -343,15 +374,16 @@ declare-activity start "v1 cutover: drain and scale dev-env v1 to zero" \
      exits 0.
    - Tom: the standby answers on the phone, and PEAR answers in the ChatGPT app.
    - dev-env-ops' next `dev-activity-check.sh` run prints the expected "no
-     running dev-env pod" warning and still lists the runbook's own v2
-     declaration. This is the first live run of that path. If the declaration is
-     missing, record it as a defect; `kubectl get activities.dev-env.haynesops.com
-     -n dev-env-system` still shows it.
+     running dev-env pod" warning and still lists step 6's v2 declaration. This is
+     the first live run of that path. If the declaration is missing, record it as
+     a defect; `kubectl get activities.dev-env.haynesops.com -n dev-env-system`
+     still shows it.
    - End the declaration. Record the end state in the handoff and the progress
      file.
 9. **Rollback.** Revert the step 7 PR (a held-draft revert PR in haynes-ops) and
    reconcile as in step 7. v1 comes back on the same PVC: its files are there, but
-   its tmux sessions and agents are not restored. Its Max login works only until
+   its tmux sessions and agents are not restored, and its Codex daemon starts again
+   only by `agent-run codex-remote up` inside it. Its Max login works only until
    it lapses (2026-11-15). The PVC is kept for at least 30 days, so a rollback
    stays possible that long.
 

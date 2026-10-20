@@ -12,9 +12,11 @@ on v1's volume, outside git. The cutover copies them to
 `~/.shared/v1-home/work-orders/`. The user-facing result is the
 [v2 quick start](../docs/v2-quickstart.md).
 
-**Verdict.** v2 is ready for all agent work. The v1 cutover is planned for
+**Verdict.** v2 is ready for all agent work, within the W3 limits listed under
+"Still open" (no PR merge from v2 yet; two write paths by server dry run only). The v1 cutover is planned for
 **2026-10-21**, after the v1 sessions wind down and write handoffs for new
-agents (decision 80). It needs Tom's written approval and his go at that moment.
+agents (decision 80). It needs Tom's written approval and his go at that moment; the date alone
+authorizes nothing.
 Nothing on 2026-10-20 scaled, restarted or changed v1. The steps are the
 [cutover runbook](sagas/distributed-dev-env/backlog/05-cutover.md#cutover-runbook-2026-10-21)
 in plan 05.
@@ -47,7 +49,7 @@ resume) were not touched. All four kept their pod UIDs and start times through W
 | Proxmox through a grant: reads and a write | Proven from a session | Reads on 2.38.1 (LIVE-2381) and about 12:20 UTC. W3a, 22:40 UTC: `pve --yes vm 113 onboot 1` (1 to 1) at `tier=operator`; the token left Proxmox about 20 s after release |
 | Messages between sessions | Proven from a session | `agent-run msg` delivered and answered (about 12:20 UTC); inbox, claims and shared notes between project tasks (NB-05, LIVE-238b) |
 | Workbench reads: cluster without Secrets, Flux, Omni, `talosctl`, GCP, all ten MCP servers | Proven from a session | LIVE-238b (2.38.0) |
-| Workbench write tier = v1's OPERATOR tier (haynes-ops #4141) | Merged; proven from a session | W1 review: the same 10 write rules as v1's `dev-env-operator`, none extra and none missing, plus v1's `database` and `observability` PVC Roles. W3b (22:42 to 22:48 UTC): every expected `can-i` yes and no; `flux reconcile ks dev-env-rbac`; a Job created, its pod and the Job deleted; `rollout restart` of the shelf; exec into a pod; the guard refused a replica change and `set env` (stricter than v1, expected) |
+| Workbench write tier = v1's OPERATOR tier (haynes-ops #4141) | Merged; proven from a session | W1 review: the same 10 write rules as v1's `dev-env-operator`, none extra and none missing, plus v1's `database` and `observability` PVC Roles. W3b (22:42 to 22:48 UTC): every expected `can-i` yes and no; `flux reconcile ks dev-env-rbac`; a Job created, its pod and the Job deleted; `rollout restart` of the shelf; exec into a pod; the guard refused a replica change and `set env` (stricter than v1, expected). Not live: the `restartedAt` restart of an ordinary app in `media` and a Job from a CronJob, both server dry runs only |
 | GitHub from v2 | Proven from a session | W3b: clone, push a branch, open a draft PR (dev-env #498) and close it with the branch deleted. A merge from v2 was not run; it uses the same bot token as v1 |
 | Claude on a repo outside the catalog | Proven from a session | W2: `--repo ytdrivarr -p`, Succeeded, reaped |
 | Copying v1's notes into `~/.shared` | Trial passed | W3a: one file, checksum equal, removed by exact path |
@@ -61,23 +63,29 @@ the workbench write tier as existing authority under Q-16.
 
 **Still open (W2, W3b and the W1 review):**
 
-- **For the cutover itself** (runbook steps): each v1 session pushes its
-  branches and writes a handoff; check for unpushed work; copy `~/work/orders`,
-  the auto-memory and bundles of local-only branches into `~/.shared/v1-home/`,
-  then merge the memory; stop v1's Codex daemon; Tom's written approval; the
-  held-draft scale-to-zero PR. A final `agent-run sweep` is not a drain (plan 05).
-- **W3b leftovers, optional:** a real `kubectl create job --from=cronjob/...` on a
-  named safe CronJob (the server dry run passed); a real restart of an ordinary
-  app outside `dev-env-system` (dry run passed).
+- **For the cutover itself**, in this order (plan 05 runbook): every v1 session
+  pushes its branches, writes a handoff and reports done; no live worktree has
+  unpushed work; `~/work/orders` (text files that pass a secret scan), the
+  auto-memory and bundles of local-only branches are copied into
+  `~/.shared/v1-home/` and verified, and the memory merged; then Tom's written
+  approval in the decision log. Only after all of that: stop v1's Codex daemon,
+  then the held-draft scale-to-zero PR. The date alone authorizes nothing, and
+  if Tom does not approve, nothing is stopped. A final `agent-run sweep` is not a
+  drain (plan 05).
+- **W3 limits: not proven live.** No PR merge from v2 was exercised (W3b opened
+  and closed draft dev-env #498 only); the first post-cutover merge from v2 is
+  the live merge proof. The `restartedAt` restart of an ordinary app (in
+  `media`) was a server dry run only. A Job from a CronJob was a server dry run
+  only, because no safe CronJob was named.
 - **W1 review follow-ups F1 to F7** (quick start section 1): tasks a workbench
-  session starts get its tier; a `dev-env-system` fence (Tom's call, cuts below
-  v1); no `rollout undo` or `set image` from the workbench (break-glass is Tom's
-  admin kubeconfig); the exec guard's privileged list; no exec into the shelf;
+  session starts get its tier; the `dev-env-system` fence (F2, below); no
+  `rollout undo` or `set image` from the workbench (break-glass is Tom's admin
+  kubeconfig); the exec guard's privileged list; no exec into the shelf;
   `kubectl delete pod` on a session skips its rescue; a stale template comment.
 - **Files in v1's `~/work/orders` that match a token or private-key pattern:**
-  22 on 2026-10-20 (16 observation `get-*.stdout` files from 2026-10-11 and
-  2026-10-12, four canary scripts, and two notes that name token fields), found
-  by a name-only scan; nobody read them. The cutover
+  23 on 2026-10-20, Proxmox token forms included (16 observation `get-*.stdout`
+  files from 2026-10-11 and 2026-10-12, four canary scripts and three other text
+  files), found by a name-only scan; nobody read them. The cutover
   copy leaves them out. Someone should check whether any holds a live credential,
   and rotate it if so.
 - **Backlog, none blocks the cutover:** an expiry gauge for the static
@@ -99,16 +107,14 @@ the workbench write tier as existing authority under Q-16.
   operator arguments and policies naming `dev/dev-env`, and more).
 
 **Held for Tom (one question each, at the moment it is needed):** the written
-cutover approval (runbook step 6); a `dev-env-system` fence for the workbench
+cutover approval (runbook step 5); the `dev-env-system` fence for the workbench
 (W1 review F2); suspended private tasks (NB-06 D3); the gasha01 SSH user; the
 catalog repos left out (NB-08); a project-wide inbox for a human coordinator.
 Tom ruled on code-server, Cursor and timing. G-6, the workbench write tier, was
-settled by the CR-1020 coordinator as existing authority under Q-16 (row 81),
-not by a ruling from Tom. The 2.38.3 block's condition that exec into the keeper
-stay impossible is not met: like v1, the workbench can exec into the keeper. The
-W1 review weighed it: the keeper's `app` image is distroless and runs only
-keeper binaries, and Job create is the larger path, which v1 has too. It
-recommended parity now, with the fence (F2) held for Tom.
+classed by the CR-1020 coordinator as existing authority under Q-16 (row 81),
+not ruled by Tom. The `dev-env-system` fence (W1 review F2) stays held for Tom. The workbench has exact v1 parity (#4141), including exec into `dev-env-system` pods, so the earlier condition that exec into the keeper stay impossible is not met. The proposed fence would reduce today's parity rights. It is Tom's decision and not a cutover prerequisite. The W1 review weighed the keeper: its `app`
+image is distroless and runs only keeper binaries, and Job create is the larger
+path, which v1 has too.
 
 **Next safe step:** the cutover story on 2026-10-21, in a fresh v2 workbench
 session with its own story record, following the plan 05 runbook. The

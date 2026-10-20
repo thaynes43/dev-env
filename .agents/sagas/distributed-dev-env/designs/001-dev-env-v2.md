@@ -3258,8 +3258,11 @@ a workbench session can exec into pods in every namespace, the keeper's
 included, as the v1 pod can. `dev-env-workbench-admin-guard` still limits its
 workload patches to the restart annotation. The profile is also no longer kept
 to ceremony sessions: the operator's standby runs on it, and children inherit
-it (CR-1020 review F1). This is parity under Q-16, recorded by the coordinator;
-a fence around `dev-env-system` would cut below v1 and is held for Tom.
+it (CR-1020 review F1). This is parity under Q-16, recorded by the coordinator,
+not ruled by Tom. The earlier condition that exec into the keeper stay
+impossible is not met. A fence around `dev-env-system` (review F2) would reduce
+today's parity rights; it is held for Tom's decision and is not a cutover
+prerequisite.
 
 **D-19 as built, and S-12 (2026-10-07, KICKOFF 8.4; haynes-ops #3477, #3479).**
 haynes-ops `apps/dev-env-system/rbac/` holds the ServiceAccounts, the Roles of the

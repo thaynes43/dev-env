@@ -550,8 +550,11 @@ lists each with its evidence, and R-04's
 [status table](../.agents/sagas/distributed-dev-env/research/R-04-v1-capability-parity.md#status-2026-10-20)
 closes the parity rows that are done. What is left is the drain itself (each v1
 session pushes its branches and writes a handoff; v1's notes and memory are
-copied into `~/.shared/v1-home/`), Tom's written approval, and the held-draft
-haynes-ops PR that scales v1 to zero. A final `agent-run sweep` is not a drain.
+copied into `~/.shared/v1-home/` and verified), then Tom's written approval;
+only after those, stopping v1's Codex daemon and the held-draft haynes-ops PR
+that scales v1 to zero. The date alone authorizes nothing, and if Tom does not
+approve, nothing is stopped. No PR merge from v2 has been run yet; the first one
+after the cutover is the live proof. A final `agent-run sweep` is not a drain.
 
 ## 9. How we keep the project on track
 

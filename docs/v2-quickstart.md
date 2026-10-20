@@ -11,7 +11,7 @@ standby and one other idle session moved onto it by themselves; the Codex host
 did not (it moves only by suspend and resume, section 5). Since haynes-ops #4141
 (22:41 UTC) a workbench session has v1's cluster write tier too (section 1). The
 v1 cutover is planned for 2026-10-21, after the v1 sessions wind down, and only
-with your written approval (section 8). Each result below carries one of four
+with your written approval; the date alone authorizes nothing (section 8). Each result below carries one of four
 proof levels:
 
 - **Proven on the phone:** you did it end to end on your phone.
@@ -129,9 +129,11 @@ Proven from a session, 2026-10-20 between 22:42 and 22:48, in a fresh workbench
 session: every `kubectl auth can-i` answer matched v1, yes and no; `flux
 reconcile ks dev-env-rbac` applied the merge; a Job ran, then its pod and the Job
 were deleted; the shelf restarted with `rollout restart`; exec into a pod worked;
-and the guard refused a replica change and `kubectl set env`. A restart outside
-`dev-env-system` and a `create job --from=cronjob` were checked by server dry run
-only.
+and the guard refused a replica change and `kubectl set env`. Not proven live:
+the `restartedAt` restart of an ordinary app (in `media`) and a `create job
+--from=cronjob` were server dry runs only (no safe CronJob was named), and no PR
+merge from v2 was run (a draft PR was opened and closed). The first PR merge from
+v2 after the cutover is the live merge proof.
 
 What to know (the review's follow-ups F1 to F7):
 
@@ -139,8 +141,11 @@ What to know (the review's follow-ups F1 to F7):
   workbench profile, with this tier, as v1's tasks shared v1's identity. A
   narrower worker profile is not built.
 - **F2.** As in v1, Job create and Flux patches can reach cluster-admin for
-  someone who sets out to. Fencing `dev-env-system` off from the workbench would
-  cut below v1, so it is your decision.
+  someone who sets out to. The workbench has exact v1 parity (#4141), including
+  exec into `dev-env-system` pods, so the earlier condition that exec into the
+  keeper stay impossible is not met. A fence around `dev-env-system` would
+  reduce today's parity rights. It is held for your decision, and it is not a
+  cutover prerequisite.
 - **F3.** Stricter than v1: the guard allows only the restart annotation on
   workloads. So no `rollout undo`, `pause` or `resume`, and no `set image`, `set
   env` or `set resources`. A break-glass rollback is your admin kubeconfig.
@@ -726,7 +731,9 @@ Closed on 2026-10-20 (story CR-1020):
 - **A Proxmox write.** Proven from a session at about 22:40 (section 1).
 - **Cluster writes: pod deletes, exec, `flux reconcile`, Jobs, restarts.** A
   workbench session has v1's OPERATOR tier since haynes-ops #4141, proven from a
-  session (section 1, with follow-ups F1 to F7).
+  session (section 1, with follow-ups F1 to F7), except an ordinary-app restart
+  and a Job from a CronJob, which were server dry runs only. A PR merge from v2
+  has not been run yet.
 - **A Claude session or task on a repo outside the catalog.** `agent-run --repo
   <name>` clones a repo under your GitHub account whether or not it is in the
   catalog. A task on the public `ytdrivarr` succeeded. A private repo outside
