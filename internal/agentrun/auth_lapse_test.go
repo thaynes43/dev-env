@@ -24,9 +24,12 @@ func TestAuthStatusShowsTheLoginLapse(t *testing.T) {
 		absent  []string
 	}{
 		{"far away", authLoginDoc(testNow.Add(20*24*time.Hour + time.Hour)), ExitOK, []string{"login lapses 2026-10-26T22:00:00Z (20 days left)"}, []string{"renew from the standby"}},
-		{"exactly 7 days", authLoginDoc(testNow.Add(7 * 24 * time.Hour)), 1, []string{"login lapses 2026-10-13T21:00:00Z (7 days left)", "login lapses within 7 days: renew from the standby"}, nil},
-		{"just over 7 days", authLoginDoc(testNow.Add(7*24*time.Hour + time.Minute)), ExitOK, []string{"(7 days left)"}, []string{"renew from the standby"}},
-		{"under a day", authLoginDoc(testNow.Add(5 * time.Hour)), 1, []string{"(under a day left)", "within 7 days"}, nil},
+		{"exactly 7 days", authLoginDoc(testNow.Add(7 * 24 * time.Hour)), 1, []string{"login lapses 2026-10-13T21:00:00Z (7 days left)", "login lapses in 7 days or fewer: renew from the standby"}, nil},
+		// Whole days left, rounded down, is what both this command and the phone
+		// notice show; 7 or fewer exits 1.
+		{"7 days 23 hours", authLoginDoc(testNow.Add(7*24*time.Hour + 23*time.Hour + 59*time.Minute)), 1, []string{"(7 days left)", "7 days or fewer"}, nil},
+		{"8 days", authLoginDoc(testNow.Add(8 * 24 * time.Hour)), ExitOK, []string{"(8 days left)"}, []string{"renew from the standby"}},
+		{"under a day", authLoginDoc(testNow.Add(5 * time.Hour)), 1, []string{"(under a day left)", "7 days or fewer"}, nil},
 		{"lapsed", authLoginDoc(testNow.Add(-time.Hour)), 1, []string{"(lapsed)", "login has lapsed: renew from the standby"}, nil},
 		{"no file is Unknown", "", ExitOK, []string{"claude  Ready", "login lapses Unknown"}, []string{"login lapses 20"}},
 		{"unreadable document is Unknown", `{"version":1,"loginLapsesAt":`, ExitOK, []string{"login lapses Unknown"}, nil},
@@ -80,7 +83,7 @@ func TestAuthStatusCodexLapseIsUnknown(t *testing.T) {
 	// A login.json beside Codex's file must not be read as its lapse.
 	h.write("codex/login.json", authLoginDoc(testNow.Add(time.Hour)))
 	h.mustRun(ExitOK, "auth", "status")
-	if out := h.stdout.String(); !strings.Contains(out, "codex   Ready") || !strings.Contains(out, "login lapses Unknown") || strings.Contains(out, "within 7 days") {
+	if out := h.stdout.String(); !strings.Contains(out, "codex   Ready") || !strings.Contains(out, "login lapses Unknown") || strings.Contains(out, "7 days or fewer") {
 		t.Fatalf("codex row:\n%s", out)
 	}
 }
@@ -93,7 +96,7 @@ func TestKeeperLoginStatusLapseExitCode(t *testing.T) {
 		}
 	}
 	h := newHarness(t)
-	far := testNow.Add(20 * 24 * time.Hour)
+	far := testNow.Add(8 * 24 * time.Hour)
 	h.api.handle = status(&far)
 	h.mustRun(ExitOK, "keeper-login", "claude", "status")
 	if strings.Contains(h.stdout.String(), "renew it from the standby") {
@@ -103,6 +106,9 @@ func TestKeeperLoginStatusLapseExitCode(t *testing.T) {
 	h.api.handle = status(&soon)
 	h.mustRun(1, "keeper-login", "claude", "status")
 	contains(t, "7 days", h.stdout.String(), "login expires", "in 7 days", "renew it from the standby: agent-run keeper-login claude url")
+	almost := testNow.Add(7*24*time.Hour + 23*time.Hour) // 7 whole days: the same count the phone notice uses
+	h.api.handle = status(&almost)
+	h.mustRun(1, "keeper-login", "claude", "status")
 	past := testNow.Add(-time.Hour)
 	h.api.handle = status(&past)
 	h.mustRun(1, "keeper-login", "claude", "status")

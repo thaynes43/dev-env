@@ -247,6 +247,17 @@ HelmRelease (branch `agent/s131-keeper-mount`, folded into the release pin).
   whether it was announced; no secret). The keeper's existing Roles write no
   ConfigMap, so haynes-ops pre-creates it and gives the keeper `get`, `update`
   and `patch` on that name only: no `create`, no `list`.
+- **Day counting.** Days left are the time left divided by 24 hours, rounded
+  down, in the phone notice and both CLI commands. The warning and exit 1 start
+  when that is 7 or fewer (so about 8 days before the lapse, in real time), and
+  the wording is "in 7 days", "in 6 days" ... "in 1 day", "in under a day".
+  The daytime window is the New York wall clock, also on DST days.
+- **Failure behaviour.** A missing, forbidden or corrupt dedup ConfigMap does not
+  silence notices: the keeper keeps its record in memory, logs the reason once and
+  retries the store every pass (a restart meanwhile, or a crash between a send and
+  its save, may repeat one notice: at-least-once). A Pushover 4xx other than 429
+  stops that notice kind until a restart or a state change; 429 and 5xx retry
+  every 5 minutes.
 - **A ceremony is not an incident.** A Codex login ceremony pauses refresh by
   marking the journal NeedsLogin with a reservation. The keeper reports that as
   `LoginInProgress`, which neither opens nor ends an incident.

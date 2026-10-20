@@ -92,7 +92,7 @@ func (a *app) keeperLoginStatus(ctx context.Context, c *conn, output, path strin
 		return err
 	}
 	now := a.env.Now()
-	soon := st.LoginExpiresAt != nil && st.LoginExpiresAt.Sub(now) <= authLapseWarning
+	soon := st.LoginExpiresAt != nil && (st.LoginExpiresAt.Sub(now) <= 0 || wholeDaysLeft(st.LoginExpiresAt.Sub(now)) <= authLapseWarnDays)
 	if output == outputJSON {
 		if err := a.printJSON(st); err != nil {
 			return err

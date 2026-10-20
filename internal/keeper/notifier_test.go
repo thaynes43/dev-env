@@ -18,9 +18,12 @@ import (
 
 	"github.com/go-logr/logr/funcr"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	clocktesting "k8s.io/utils/clock/testing"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
@@ -134,6 +137,7 @@ type noticeFix struct {
 	logs  *bytes.Buffer
 	dir   string
 	n     *Notifier
+	alt   NoticeStore // used instead of store when set
 }
 
 func newNoticeFix(t *testing.T, start time.Time) *noticeFix {
@@ -152,9 +156,13 @@ func newNoticeFix(t *testing.T, start time.Time) *noticeFix {
 func (f *noticeFix) newNotifier() *Notifier {
 	f.t.Helper()
 	log := funcr.New(func(prefix, args string) { f.logs.WriteString(prefix + args + "\n") }, funcr.Options{Verbosity: 2})
+	var store NoticeStore = f.store
+	if f.alt != nil {
+		store = f.alt
+	}
 	n, err := NewNotifier(NoticeOptions{
 		TokenFile: filepath.Join(f.dir, "token"), UserFile: filepath.Join(f.dir, "user"), URL: "https://example.invalid/unused",
-	}, f.hub, f.store, nil, f.clk, log)
+	}, f.hub, store, nil, f.clk, log)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -175,21 +183,22 @@ func (f *noticeFix) at(ts string) {
 
 func TestWarningOncePerLocalDayInsideTheWindow(t *testing.T) {
 	// 2026-11-16 17:51 UTC is the lapse. New York is on EST (UTC-5) from Nov 1,
-	// so the 09:00 to 21:00 window is 14:00Z to 02:00Z.
+	// so the 09:00 to 21:00 window is 14:00Z to 02:00Z. The warning starts when
+	// the whole days left (rounded down) are 7 or fewer, as agent-run counts.
 	f := newNoticeFix(t, time.Date(2026, 11, 8, 15, 0, 0, 0, time.UTC))
 	f.hub.Report(ProviderClaude, LoginReady, noticeLapse)
 
-	f.tick() // 8 days out: nothing yet
-	f.at("2026-11-09T17:00:00Z")
-	f.tick() // 7d 0h51m: still more than 7 days
+	f.tick() // 8 days 2h out: 8 whole days
+	f.at("2026-11-08T17:00:00Z")
+	f.tick() // 8 days 0h51m: still 8
 	if f.fake.count() != 0 {
-		t.Fatalf("a warning went out before the 7 day mark: %v", f.fake.titles())
+		t.Fatalf("a warning went out with 8 whole days left: %v", f.fake.titles())
 	}
 
-	f.at("2026-11-09T18:00:00Z") // 13:00 local, 6d 23h 51m left
+	f.at("2026-11-08T18:00:00Z") // 13:00 local, 7 days 23h51m left: 7 whole days
 	f.tick()
 	if f.fake.count() != 1 {
-		t.Fatalf("no warning at the 7 day mark: %v", f.fake.titles())
+		t.Fatalf("no warning at 7 whole days: %v", f.fake.titles())
 	}
 	req := f.fake.last()
 	if req.form.Get("priority") != "0" || req.form.Get("title") != "Claude login lapses in 7 days" ||
@@ -198,34 +207,100 @@ func TestWarningOncePerLocalDayInsideTheWindow(t *testing.T) {
 		t.Fatalf("warning = %v", req.form)
 	}
 	f.tick()
-	f.at("2026-11-10T01:30:00Z") // 20:30 local, same local day, inside the window
+	f.at("2026-11-09T01:30:00Z") // 20:30 local, same local day, inside the window
 	f.tick()
 	if f.fake.count() != 1 {
 		t.Fatalf("a second warning in the same local day: %v", f.fake.titles())
 	}
 
-	f.at("2026-11-10T03:00:00Z") // 22:00 local: outside the window
+	f.at("2026-11-09T03:00:00Z") // 22:00 local: outside the window
 	f.tick()
-	f.at("2026-11-10T13:59:00Z") // 08:59 local, next local day, window not yet open
+	f.at("2026-11-09T13:59:00Z") // 08:59 local, next local day, window not yet open
 	f.tick()
 	if f.fake.count() != 1 {
 		t.Fatalf("a warning went out outside 09:00-21:00 local: %v", f.fake.titles())
 	}
 
-	f.at("2026-11-10T14:00:00Z") // 09:00 local, next day
+	f.at("2026-11-09T14:00:00Z") // 09:00 local, next day, 7 days 3h left
 	f.tick()
 	if f.fake.count() != 2 || f.fake.last().form.Get("title") != "Claude login lapses in 7 days" {
 		t.Fatalf("the next day's warning: %v", f.fake.titles())
 	}
+	f.at("2026-11-10T14:00:00Z") // 6 days 3h left
+	f.tick()
+	if f.fake.count() != 3 || f.fake.last().form.Get("title") != "Claude login lapses in 6 days" {
+		t.Fatalf("six days: %v", f.fake.titles())
+	}
+	f.at("2026-11-15T15:00:00Z") // 1 day 2h left
+	f.tick()
+	if f.fake.count() != 4 || f.fake.last().form.Get("title") != "Claude login lapses in 1 day" {
+		t.Fatalf("one day: %v", f.fake.titles())
+	}
 	f.at("2026-11-16T15:00:00Z") // 10:00 local, under a day left
 	f.tick()
-	if f.fake.count() != 3 || f.fake.last().form.Get("title") != "Claude login lapses in under a day" {
+	if f.fake.count() != 5 || f.fake.last().form.Get("title") != "Claude login lapses in under a day" {
 		t.Fatalf("the last day's warning: %v", f.fake.titles())
 	}
 	f.at("2026-11-16T18:00:00Z") // lapsed: NeedsLogin announces that, not a warning
 	f.tick()
-	if f.fake.count() != 3 {
+	if f.fake.count() != 5 {
 		t.Fatalf("a warning for an already lapsed login: %v", f.fake.titles())
+	}
+}
+
+// The notice and agent-run count days the same way: the time left divided by
+// 24 hours, rounded down, and 7 or fewer warns.
+func TestWholeDaysLeftRule(t *testing.T) {
+	for _, tc := range []struct {
+		left time.Duration
+		want int
+	}{
+		{-time.Hour, 0}, {0, 0}, {23*time.Hour + 59*time.Minute, 0}, {24 * time.Hour, 1},
+		{7 * 24 * time.Hour, 7}, {7*24*time.Hour + 23*time.Hour + 59*time.Minute, 7}, {8 * 24 * time.Hour, 8},
+	} {
+		if got := WholeDaysLeft(tc.left); got != tc.want {
+			t.Errorf("WholeDaysLeft(%v) = %d, want %d", tc.left, got, tc.want)
+		}
+	}
+}
+
+// The window is the local wall clock. On a day the clocks change, elapsed time
+// since midnight is an hour off.
+func TestWindowFollowsTheWallClockOnDSTDays(t *testing.T) {
+	f := newNoticeFix(t, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC))
+	ny, _ := time.LoadLocation("America/New_York")
+	at := func(y int, m time.Month, d, h, min int) time.Time { return time.Date(y, m, d, h, min, 0, 0, ny) }
+	for _, tc := range []struct {
+		name string
+		t    time.Time
+		want bool
+	}{
+		{"fall-back day 08:30", at(2026, 11, 1, 8, 30), false},
+		{"fall-back day 09:00", at(2026, 11, 1, 9, 0), true},
+		{"fall-back day 20:30", at(2026, 11, 1, 20, 30), true},
+		{"fall-back day 21:00", at(2026, 11, 1, 21, 0), false},
+		{"spring-forward day 08:30", at(2027, 3, 14, 8, 30), false},
+		{"spring-forward day 09:00", at(2027, 3, 14, 9, 0), true},
+		{"spring-forward day 20:30", at(2027, 3, 14, 20, 30), true},
+		{"spring-forward day 21:00", at(2027, 3, 14, 21, 0), false},
+		{"ordinary day 09:00", at(2026, 11, 10, 9, 0), true},
+		{"ordinary day 21:00", at(2026, 11, 10, 21, 0), false},
+	} {
+		if got := f.n.inWindow(tc.t.In(ny)); got != tc.want {
+			t.Errorf("%s: inWindow = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	// End to end on the fall-back day: no warning at 08:30 local, one at 09:00.
+	f.hub.Report(ProviderClaude, LoginReady, time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC))
+	f.clk.SetTime(at(2026, 11, 1, 8, 30).UTC())
+	f.tick()
+	if f.fake.count() != 0 {
+		t.Fatal("warned at 08:30 local on the fall-back day")
+	}
+	f.clk.SetTime(at(2026, 11, 1, 9, 0).UTC())
+	f.tick()
+	if f.fake.count() != 1 {
+		t.Fatal("no warning at 09:00 local on the fall-back day")
 	}
 }
 
@@ -406,28 +481,207 @@ func TestRedirectIsNotFollowedAndNon2xxIsAnError(t *testing.T) {
 	}
 }
 
-func TestStateUnavailableSendsNothing(t *testing.T) {
+// An unusable store must not silence a notice, the critical one above all. The
+// process keeps its own dedup in memory, says why once, and keeps trying the store.
+func TestUnusableStateFallsBackToMemoryAndKeepsRetrying(t *testing.T) {
 	f := newNoticeFix(t, time.Date(2026, 11, 12, 16, 0, 0, 0, time.UTC))
 	f.store.fail = true
 	f.hub.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
 	f.tick()
-	if f.fake.count() != 0 {
-		t.Fatal("a notice was sent without the stored deduplication state")
+	if f.fake.count() != 1 || f.fake.last().form.Get("priority") != "1" {
+		t.Fatalf("the critical notice was silenced by an unusable state: %v", f.fake.titles())
 	}
 	for i := 0; i < 5; i++ {
 		f.clk.Step(time.Minute)
 		f.tick()
 	}
-	if got := strings.Count(f.logs.String(), "notifier waiting: notice state is unavailable"); got != 1 {
-		t.Fatalf("the waiting line was logged %d times over 6 ticks, want once:\n%s", got, f.logs.String())
+	if f.fake.count() != 1 {
+		t.Fatalf("the in-memory dedup repeated the critical: %v", f.fake.titles())
+	}
+	if got := strings.Count(f.logs.String(), "notifier using in-memory state: notice state is unavailable"); got != 1 {
+		t.Fatalf("the fallback was logged %d times over 6 ticks, want once:\n%s", got, f.logs.String())
 	}
 	if got := strings.Count(f.logs.String(), "notifier enabled"); got != 1 {
 		t.Fatalf("the enabled line was logged %d times, want once:\n%s", got, f.logs.String())
 	}
+	if got := strings.Count(f.logs.String(), "notice state not stored yet"); got > 1 {
+		t.Fatalf("the save line was logged %d times, want at most once", got)
+	}
+	// The store comes back: it is read again, the process's record is merged in and
+	// stored, and a restart now repeats nothing.
 	f.store.fail = false
 	f.tick()
+	if f.store.saves == 0 || !strings.Contains(f.logs.String(), "notice state is stored again") {
+		t.Fatalf("the state was not stored once the store returned (saves=%d)", f.store.saves)
+	}
+	f.n = f.newNotifier()
+	f.tick()
 	if f.fake.count() != 1 {
-		t.Fatal("not sent once the state came back")
+		t.Fatalf("a restart after recovery repeated the critical: %v", f.fake.titles())
+	}
+	f.hub.Report(ProviderClaude, LoginReady, time.Time{})
+	f.tick()
+	if f.fake.count() != 2 || f.fake.last().form.Get("title") != "Keeper login restored (claude)" {
+		t.Fatalf("resolved after recovery: %v", f.fake.titles())
+	}
+}
+
+type forbiddenClient struct{ client.Client }
+
+func (forbiddenClient) Get(_ context.Context, key client.ObjectKey, _ client.Object, _ ...client.GetOption) error {
+	return apierrors.NewForbidden(schema.GroupResource{Resource: "configmaps"}, key.Name, errors.New("synthetic RBAC refusal"))
+}
+
+func TestMissingForbiddenAndCorruptConfigMapsDoNotSilenceTheCritical(t *testing.T) {
+	name := types.NamespacedName{Namespace: "system", Name: DefaultNoticeStateConfigMap}
+	for _, tc := range []struct {
+		name   string
+		store  func(t *testing.T) (*ConfigMapNoticeStore, client.Client)
+		reason string
+	}{
+		{"missing", func(t *testing.T) (*ConfigMapNoticeStore, client.Client) {
+			c := claudeClient(t)
+			return &ConfigMapNoticeStore{Client: c, Name: name}, c
+		}, "the notice ConfigMap does not exist"},
+		{"forbidden", func(t *testing.T) (*ConfigMapNoticeStore, client.Client) {
+			return &ConfigMapNoticeStore{Client: forbiddenClient{claudeClient(t)}, Name: name}, nil
+		}, "the keeper may not use the notice ConfigMap"},
+		{"corrupt", func(t *testing.T) (*ConfigMapNoticeStore, client.Client) {
+			c := claudeClient(t, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: name.Namespace, Name: name.Name}, Data: map[string]string{noticeStateKey: "{not json"}})
+			return &ConfigMapNoticeStore{Client: c, Name: name}, c
+		}, "the notice state in the ConfigMap cannot be read"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newNoticeFix(t, time.Date(2026, 11, 12, 16, 0, 0, 0, time.UTC))
+			store, c := tc.store(t)
+			f.alt = store
+			f.n = f.newNotifier()
+			f.hub.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
+			f.tick()
+			f.tick()
+			if f.fake.count() != 1 || f.fake.last().form.Get("priority") != "1" {
+				t.Fatalf("critical not sent with a %s ConfigMap: %v", tc.name, f.fake.titles())
+			}
+			if got := strings.Count(f.logs.String(), "notifier using in-memory state: "+tc.reason); got != 1 {
+				t.Fatalf("reason %q logged %d times:\n%s", tc.reason, got, f.logs.String())
+			}
+			switch tc.name {
+			case "corrupt":
+				// Saving repairs it: the keeper is its only writer.
+				var cm corev1.ConfigMap
+				if err := c.Get(context.Background(), name, &cm); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := unmarshalState([]byte(cm.Data[noticeStateKey])); err != nil {
+					t.Fatalf("the corrupt state was not repaired: %q", cm.Data[noticeStateKey])
+				}
+				f.n = f.newNotifier()
+				f.tick()
+				if f.fake.count() != 1 {
+					t.Fatal("repeated after the state was repaired")
+				}
+			case "missing":
+				// Created later: found on a later pass, and the record is stored.
+				if err := c.Create(context.Background(), &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: name.Namespace, Name: name.Name}}); err != nil {
+					t.Fatal(err)
+				}
+				f.tick()
+				var cm corev1.ConfigMap
+				_ = c.Get(context.Background(), name, &cm)
+				if !strings.Contains(cm.Data[noticeStateKey], "claude") {
+					t.Fatalf("the in-memory record was not stored once the ConfigMap existed: %q", cm.Data[noticeStateKey])
+				}
+				if f.fake.count() != 1 {
+					t.Fatal("repeated when the ConfigMap appeared")
+				}
+			}
+			for _, text := range []string{f.logs.String()} {
+				if strings.Contains(text, "synthetic RBAC refusal") || strings.Contains(text, "CANARY") {
+					t.Fatal("the log carries text from the API server or a credential")
+				}
+			}
+		})
+	}
+}
+
+// A Pushover 4xx (except 429) refuses the request itself; retrying every few
+// minutes for the whole incident only invites a block. 429 and 5xx keep retrying.
+func TestPushover4xxIsNotRetriedUntilTheStateChanges(t *testing.T) {
+	f := newNoticeFix(t, time.Date(2026, 11, 12, 16, 0, 0, 0, time.UTC))
+	f.fake.setStatus(401)
+	f.hub.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
+	f.tick()
+	for i := 0; i < 12; i++ { // an hour of ticks, well past the backoff
+		f.clk.Step(5 * time.Minute)
+		f.tick()
+	}
+	if f.fake.count() != 1 {
+		t.Fatalf("a refused critical was retried: %d requests in an hour", f.fake.count())
+	}
+	if got := strings.Count(f.logs.String(), "refused by Pushover (status 401)"); got != 1 {
+		t.Fatalf("the refusal was logged %d times, want once", got)
+	}
+	// The same incident ending and a new one starting is a state change.
+	f.fake.setStatus(200)
+	f.hub.Report(ProviderClaude, LoginReady, time.Time{})
+	f.tick()
+	f.clk.Step(time.Minute)
+	f.hub.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
+	f.tick()
+	if f.fake.count() != 2 || f.fake.last().form.Get("priority") != "1" {
+		t.Fatalf("a new incident was not tried: %v", f.fake.titles())
+	}
+	// A restart tries again once.
+	g := newNoticeFix(t, time.Date(2026, 11, 12, 16, 0, 0, 0, time.UTC))
+	g.fake.setStatus(400)
+	g.hub.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
+	g.tick()
+	g.n = g.newNotifier()
+	g.tick()
+	if g.fake.count() != 2 {
+		t.Fatalf("a restart should try the refused notice again once: %d", g.fake.count())
+	}
+}
+
+func TestPushover4xxWarningWaitsForALaterLapseDate(t *testing.T) {
+	f := newNoticeFix(t, time.Date(2026, 11, 12, 16, 0, 0, 0, time.UTC))
+	f.fake.setStatus(403)
+	f.hub.Report(ProviderClaude, LoginReady, noticeLapse)
+	f.tick()
+	f.at("2026-11-13T16:00:00Z") // the next local day
+	f.tick()
+	f.at("2026-11-14T16:00:00Z")
+	f.tick()
+	if f.fake.count() != 1 {
+		t.Fatalf("a refused warning was retried: %d", f.fake.count())
+	}
+	f.fake.setStatus(200)
+	f.hub.Report(ProviderClaude, LoginReady, noticeLapse.Add(3*time.Hour)) // the login was renewed
+	f.tick()
+	if f.fake.count() != 2 {
+		t.Fatalf("a later lapse date did not lift the block: %d", f.fake.count())
+	}
+}
+
+func TestPushover429And5xxKeepTheBoundedRetry(t *testing.T) {
+	for _, status := range []int{429, 500, 503} {
+		f := newNoticeFix(t, time.Date(2026, 11, 12, 16, 0, 0, 0, time.UTC))
+		f.fake.setStatus(status)
+		f.hub.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
+		f.tick()
+		f.clk.Step(6 * time.Minute)
+		f.tick()
+		f.clk.Step(6 * time.Minute)
+		f.tick()
+		if f.fake.count() != 3 {
+			t.Errorf("status %d: %d requests over 12 minutes, want 3 (one per backoff)", status, f.fake.count())
+		}
+		f.fake.setStatus(200)
+		f.clk.Step(6 * time.Minute)
+		f.tick()
+		if f.fake.count() != 4 {
+			t.Errorf("status %d: not sent once Pushover recovered", status)
+		}
 	}
 }
 

@@ -119,8 +119,8 @@ Flags:
   -o json              print the rows as JSON
 
 Exit codes, as claude-login-check: 0 every configured login is ready, 1 one has
-expired or is inside the warning window, or the Claude login lapses in 7 days or
-fewer (or has lapsed), 2 cannot tell (a file missing, unreadable or invalid, or
+expired or is inside the warning window, or the Claude login has 7 whole days or fewer left
+(rounded down, so 7d23h counts as 7) or has lapsed, 2 cannot tell (a file missing, unreadable or invalid, or
 nothing configured). An Unknown lapse date does not change the exit code.
 `,
 	"budget": `Usage: agent-run budget create <task-uid> --success "RESULT" [flags]
@@ -438,7 +438,7 @@ caller gets a 403.
            Unavailable), its generation, when the access token lapses (the keeper
            renews that itself) and when the login itself lapses, or "Unknown" when the
            provider gave no date. Exit 0 when it is Ready or PendingPublication,
-           1 otherwise, and 1 when the login lapses in 7 days or fewer. It changes
+           1 otherwise, and 1 when 7 whole days (rounded down) or fewer remain. It changes
            nothing.
   url      opens a ceremony and prints the sign-in link on its own line (Codex
            prints a one-time code too). Open it and sign in. The link is a secret:

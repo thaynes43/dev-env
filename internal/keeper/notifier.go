@@ -17,6 +17,7 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -46,14 +47,16 @@ const (
 	// DefaultNoticeStateConfigMap is pre-created by GitOps in the keeper's namespace.
 	DefaultNoticeStateConfigMap = "dev-env-keeper-notices"
 	noticeStateKey              = "state.json"
+	// noticeStoreTimeout bounds each ConfigMap call, as every other keeper API call is.
+	noticeStoreTimeout = 5 * time.Second
 
 	DefaultNoticeZone        = "America/New_York"
 	DefaultNoticeWindowStart = "09:00"
 	DefaultNoticeWindowEnd   = "21:00"
 
-	// noticeWarnWithin: the warning starts this long before the lapse.
-	noticeWarnWithin = 7 * 24 * time.Hour
-	noticeTick       = time.Minute
+	// noticeWarnDays: the warning starts once the whole days left are this many or fewer.
+	noticeWarnDays = 7
+	noticeTick     = time.Minute
 	// noticeBackoff: after a failed send nothing is sent for this long.
 	noticeBackoff     = 5 * time.Minute
 	noticeHTTPTimeout = 10 * time.Second
@@ -73,6 +76,11 @@ var (
 	errPushoverCredentials = errors.New("pushover credentials are not available")
 	errPushoverSend        = errors.New("pushover request failed")
 	errNoticeState         = errors.New("notice state is unavailable")
+	// The reasons the stored state cannot be used. Fixed text, so a log line that
+	// names one carries nothing from the API server.
+	errNoticeStateMissing   = errors.New("the notice ConfigMap does not exist")
+	errNoticeStateForbidden = errors.New("the keeper may not use the notice ConfigMap")
+	errNoticeStateCorrupt   = errors.New("the notice state in the ConfigMap cannot be read")
 )
 
 // Notice is one Pushover message.
@@ -157,9 +165,24 @@ func (p *PushoverSender) Send(ctx context.Context, n Notice) error {
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		// Pushover's error body can repeat the request fields; it is not read.
-		return fmt.Errorf("%w: status %d", errPushoverSend, resp.StatusCode)
+		return &SendError{Status: resp.StatusCode}
 	}
 	return nil
+}
+
+// SendError is a non-2xx answer from Pushover. It carries the status only.
+type SendError struct{ Status int }
+
+func (e *SendError) Error() string {
+	return fmt.Sprintf("%v: status %d", errPushoverSend, e.Status)
+}
+
+func (e *SendError) Unwrap() error { return errPushoverSend }
+
+// Permanent reports a 4xx other than 429: the request itself is refused (a wrong
+// token or user key), and repeating it will not help. 429 and 5xx are retried.
+func (e *SendError) Permanent() bool {
+	return e.Status >= 400 && e.Status < 500 && e.Status != http.StatusTooManyRequests
 }
 
 // NoticeState is the deduplication record: times and incident ids, no secret.
@@ -200,15 +223,27 @@ func marshalState(s NoticeState) ([]byte, error) { return json.Marshal(s) }
 func unmarshalState(raw []byte) (NoticeState, error) {
 	st := NoticeState{Version: 1}
 	if err := json.Unmarshal(raw, &st); err != nil || st.Version != 1 {
-		return NoticeState{}, errNoticeState
+		return NoticeState{}, errNoticeStateCorrupt
 	}
 	return st, nil
 }
 
+func storeError(err error) error {
+	switch {
+	case apierrors.IsNotFound(err):
+		return errNoticeStateMissing
+	case apierrors.IsForbidden(err):
+		return errNoticeStateForbidden
+	}
+	return errNoticeState
+}
+
 func (c *ConfigMapNoticeStore) Load(ctx context.Context) (NoticeState, error) {
+	ctx, cancel := context.WithTimeout(ctx, noticeStoreTimeout)
+	defer cancel()
 	var cm corev1.ConfigMap
 	if err := c.Client.Get(ctx, c.Name, &cm); err != nil {
-		return NoticeState{}, errNoticeState
+		return NoticeState{}, storeError(err)
 	}
 	if raw := cm.Data[noticeStateKey]; raw != "" {
 		return unmarshalState([]byte(raw))
@@ -216,22 +251,27 @@ func (c *ConfigMapNoticeStore) Load(ctx context.Context) (NoticeState, error) {
 	return NoticeState{Version: 1}, nil
 }
 
+// Save replaces state.json, whatever it holds now (so it also repairs a corrupt
+// one). The Update carries the resourceVersion of the Get just before it, so it
+// is a compare-and-swap against a concurrent write in that window only; the
+// keeper's leader is the one writer.
 func (c *ConfigMapNoticeStore) Save(ctx context.Context, s NoticeState) error {
+	ctx, cancel := context.WithTimeout(ctx, noticeStoreTimeout)
+	defer cancel()
 	raw, err := marshalState(s)
 	if err != nil {
 		return errNoticeState
 	}
 	var cm corev1.ConfigMap
 	if err := c.Client.Get(ctx, c.Name, &cm); err != nil {
-		return errNoticeState
+		return storeError(err)
 	}
 	if cm.Data == nil {
 		cm.Data = map[string]string{}
 	}
 	cm.Data[noticeStateKey] = string(raw)
-	// Update carries the resourceVersion read above, so it is a compare-and-swap.
-	if c.Client.Update(ctx, &cm) != nil {
-		return errNoticeState
+	if err := c.Client.Update(ctx, &cm); err != nil {
+		return storeError(err)
 	}
 	return nil
 }
@@ -303,6 +343,15 @@ func (o NoticeOptions) Validate() error {
 	return nil
 }
 
+// WholeDaysLeft is the day count the phone notice and agent-run both use: the
+// time left divided by 24 hours, rounded down. 7d23h is 7 days; under 24h is 0.
+func WholeDaysLeft(left time.Duration) int {
+	if left <= 0 {
+		return 0
+	}
+	return int(left / (24 * time.Hour))
+}
+
 // Notifier turns the hub's observations into notices. It is a leader-only
 // runnable; a restart rereads the state and repeats nothing.
 type Notifier struct {
@@ -323,7 +372,11 @@ type Notifier struct {
 	dirty        bool         // a change not yet stored
 	backoffUntil time.Time
 	logged       string // last enabled/disabled line logged
-	waiting      bool   // the "state unavailable" line was logged and the state has not loaded since
+	degraded     error  // why the stored state cannot be used; nil when it can. The state is then in memory only.
+	degradedLogd error  // the reason last logged
+	saveLogged   bool   // the "not stored yet" line was logged and a save has not succeeded since
+	blocked      map[string]int64
+	blockedLogd  map[string]bool
 }
 
 // NewNotifier builds a Notifier from validated options.
@@ -368,8 +421,9 @@ func (n *Notifier) logOnce(line string) {
 
 // inWindow reports whether local time is in [WindowStart, WindowEnd).
 func (n *Notifier) inWindow(local time.Time) bool {
-	y, m, d := local.Date()
-	since := local.Sub(time.Date(y, m, d, 0, 0, 0, 0, local.Location()))
+	// The wall clock, not the time elapsed since midnight: on a day the clocks
+	// change those differ by an hour.
+	since := time.Duration(local.Hour())*time.Hour + time.Duration(local.Minute())*time.Minute + time.Duration(local.Second())*time.Second
 	return since >= n.WindowStart && since < n.WindowEnd
 }
 
@@ -382,26 +436,7 @@ func (n *Notifier) Tick(ctx context.Context) {
 		return
 	}
 	n.logOnce("notifier enabled")
-	if n.state == nil {
-		st, err := n.Store.Load(ctx)
-		if err != nil {
-			// Without the stored state a send could repeat a notice: do nothing.
-			if !n.waiting {
-				n.Log.Info("notifier waiting: notice state is unavailable")
-				n.waiting = true
-			}
-			return
-		}
-		n.waiting = false
-		if st.Warnings == nil {
-			st.Warnings = map[string]warnRecord{}
-		}
-		if st.Incidents == nil {
-			st.Incidents = map[string]incidentRecord{}
-		}
-		st.Version = 1
-		n.state = &st
-	}
+	n.ensureState(ctx)
 	now := n.Clock.Now()
 	snap := n.Hub.Snapshot()
 	providers := make([]string, 0, len(snap))
@@ -416,6 +451,75 @@ func (n *Notifier) Tick(ctx context.Context) {
 	n.persist(ctx)
 }
 
+func emptyNoticeState() *NoticeState {
+	return &NoticeState{Version: 1, Warnings: map[string]warnRecord{}, Incidents: map[string]incidentRecord{}}
+}
+
+// ensureState loads the stored state, or falls back to this process's memory when
+// it cannot be used (missing, forbidden, corrupt, unreachable). A notice, the
+// critical one above all, is never silenced for want of a ConfigMap: the price
+// is that a restart while the store is down may repeat one. The store is tried
+// again on every later tick.
+func (n *Notifier) ensureState(ctx context.Context) {
+	if n.state == nil {
+		st, err := n.Store.Load(ctx)
+		if err != nil {
+			n.state = emptyNoticeState()
+			n.setDegraded(err)
+			return
+		}
+		if st.Warnings == nil {
+			st.Warnings = map[string]warnRecord{}
+		}
+		if st.Incidents == nil {
+			st.Incidents = map[string]incidentRecord{}
+		}
+		st.Version = 1
+		n.state = &st
+		return
+	}
+	if n.degraded == nil {
+		return
+	}
+	st, err := n.Store.Load(ctx)
+	if err != nil {
+		n.setDegraded(err)
+		return
+	}
+	// The stored state is readable again. What this process recorded meanwhile is
+	// newer than anything stored, so it wins.
+	if st.Warnings == nil {
+		st.Warnings = map[string]warnRecord{}
+	}
+	if st.Incidents == nil {
+		st.Incidents = map[string]incidentRecord{}
+	}
+	for k, v := range n.state.Warnings {
+		st.Warnings[k] = v
+	}
+	for k, v := range n.state.Incidents {
+		st.Incidents[k] = v
+	}
+	st.Version = 1
+	n.state, n.dirty = &st, true
+	n.recovered()
+}
+
+func (n *Notifier) setDegraded(err error) {
+	n.degraded = err
+	if !errors.Is(n.degradedLogd, err) {
+		n.Log.Info("notifier using in-memory state: " + err.Error() + "; it is retried every pass, and a restart meanwhile may repeat a notice")
+		n.degradedLogd = err
+	}
+}
+
+func (n *Notifier) recovered() {
+	if n.degraded != nil {
+		n.Log.Info("notice state is stored again")
+	}
+	n.degraded, n.degradedLogd = nil, nil
+}
+
 // persist stores a pending change. A failure leaves it pending: the next tick
 // stores it again, and nothing is sent twice meanwhile because the in-memory
 // state already records what was sent.
@@ -423,21 +527,71 @@ func (n *Notifier) persist(ctx context.Context) {
 	if !n.dirty {
 		return
 	}
-	if err := n.Store.Save(ctx, *n.state); err != nil {
-		n.Log.Info("notice state not stored yet; it is retried on the next pass")
+	// With the state unreadable for any reason but corruption, the next Load
+	// recovers it and merges; saving over it could discard what it holds. A
+	// corrupt state is repaired by saving.
+	if n.degraded != nil && !errors.Is(n.degraded, errNoticeStateCorrupt) {
 		return
 	}
-	n.dirty = false
+	if err := n.Store.Save(ctx, *n.state); err != nil {
+		if !n.saveLogged {
+			n.Log.Info("notice state not stored yet; it is retried on the next pass")
+			n.saveLogged = true
+		}
+		return
+	}
+	n.dirty, n.saveLogged = false, false
+	n.recovered()
 }
 
-func (n *Notifier) send(ctx context.Context, notice Notice, now time.Time) bool {
-	if now.Before(n.backoffUntil) {
+// send posts one notice. key names the notice kind and provider, sig the state it
+// is about (the incident, or the lapse date for a warning). A Pushover 4xx other
+// than 429 refuses the request itself, so that kind is not sent again until the
+// keeper restarts or sig moves on (a new incident, a later lapse date); 429, 5xx
+// and transport errors retry after the backoff.
+func (n *Notifier) send(ctx context.Context, key string, sig int64, notice Notice, now time.Time) bool {
+	if n.isBlocked(key, sig) || now.Before(n.backoffUntil) {
 		return false
 	}
 	notice.URL, notice.URLTitle = NoticeLinkURL, NoticeLinkTitle
 	if err := n.Sender.Send(ctx, notice); err != nil {
 		n.backoffUntil = now.Add(noticeBackoff)
+		var se *SendError
+		if errors.As(err, &se) && se.Permanent() {
+			if n.blocked == nil {
+				n.blocked, n.blockedLogd = map[string]int64{}, map[string]bool{}
+			}
+			n.blocked[key] = sig
+			if !n.blockedLogd[key] {
+				n.Log.Info(fmt.Sprintf("notice refused by Pushover (status %d); not retried until the keeper restarts or the state changes", se.Status), "notice", key)
+				n.blockedLogd[key] = true
+			}
+			return false
+		}
 		n.Log.Info("notice not sent; it is retried later", "reason", err.Error())
+		return false
+	}
+	return true
+}
+
+// isBlocked: a refused notice stays blocked for the same sig; a warning also for
+// a lapse date that moved by less than the slack.
+func (n *Notifier) isBlocked(key string, sig int64) bool {
+	was, ok := n.blocked[key]
+	if !ok {
+		return false
+	}
+	if strings.HasPrefix(key, "warning:") {
+		if sig > was+int64(noticeLapseSlack/time.Second) {
+			delete(n.blocked, key)
+			delete(n.blockedLogd, key)
+			return false
+		}
+		return true
+	}
+	if sig != was {
+		delete(n.blocked, key)
+		delete(n.blockedLogd, key)
 		return false
 	}
 	return true
@@ -462,7 +616,7 @@ func (n *Notifier) incidents(ctx context.Context, provider string, obs LoginStat
 		if inc.Notified {
 			return
 		}
-		if n.send(ctx, Notice{
+		if n.send(ctx, "critical:"+provider, inc.Opened, Notice{
 			Title:    "Keeper needs login (" + provider + ")",
 			Message:  capitalize(provider) + " sign-in is needed. Until it is renewed the phone sessions cannot start. Renew from the standby session: agent-run keeper-login " + provider + " url (quickstart section 6).",
 			Priority: 1,
@@ -481,7 +635,7 @@ func (n *Notifier) incidents(ctx context.Context, provider string, obs LoginStat
 			n.dirty = true
 			return
 		}
-		if n.send(ctx, Notice{
+		if n.send(ctx, "resolved:"+provider, inc.Opened, Notice{
 			Title:    "Keeper login restored (" + provider + ")",
 			Message:  capitalize(provider) + " sign-in was renewed; the keeper holds a working login again.",
 			Priority: 0,
@@ -499,8 +653,9 @@ func (n *Notifier) warning(ctx context.Context, provider string, obs LoginStatus
 		return
 	}
 	left := obs.LapsesAt.Sub(now)
-	if left > noticeWarnWithin || left <= 0 {
-		// Not yet within a week; or already lapsed, which NeedsLogin announces.
+	// The same rule as agent-run: whole days left, rounded down, is 7 or fewer.
+	// A lapsed login is announced by NeedsLogin, not by a warning.
+	if left <= 0 || WholeDaysLeft(left) > noticeWarnDays {
 		return
 	}
 	local := now.In(n.Zone)
@@ -517,15 +672,15 @@ func (n *Notifier) warning(ctx context.Context, provider string, obs LoginStatus
 		return
 	}
 	var when string
-	switch days := int((left + 24*time.Hour - 1) / (24 * time.Hour)); {
-	case left < 24*time.Hour:
+	switch days := WholeDaysLeft(left); {
+	case days < 1:
 		when = "in under a day"
 	case days == 1:
 		when = "in 1 day"
 	default:
 		when = fmt.Sprintf("in %d days", days)
 	}
-	if n.send(ctx, Notice{
+	if n.send(ctx, "warning:"+provider, obs.LapsesAt.Unix(), Notice{
 		Title:    capitalize(provider) + " login lapses " + when,
 		Message:  capitalize(provider) + " login lapses " + when + " (" + obs.LapsesAt.UTC().Format("2006-01-02 15:04 UTC") + ") — renew from the standby: agent-run keeper-login " + provider + " url (quickstart section 6).",
 		Priority: 0,

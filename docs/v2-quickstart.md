@@ -550,9 +550,10 @@ agent-run auth status                    # in any v2 session
 agent-run keeper-login claude status     # in a workbench session
 ```
 
-`auth status` adds `login lapses <date> (N days left)` to the Claude line. Both
-commands exit 1 when 7 days or fewer remain, or when the login has lapsed, and
-print how to renew. When the keeper has no date they print `Unknown`; they never
+`auth status` adds `login lapses <date> (N days left)` to the Claude line. N is
+the time left in whole days, rounded down (7 days 23 hours is 7). Both commands
+exit 1 when N is 7 or fewer, or when the login has lapsed, and print how to
+renew. The phone notice counts days the same way. When the keeper has no date they print `Unknown`; they never
 guess one, and an Unknown date does not change the exit code. The ChatGPT login
 has no known lapse date, so it is always Unknown.
 
@@ -560,15 +561,23 @@ has no known lapse date, so it is always Unknown.
 application, not through Alertmanager. Each links to `https://claude.ai/code`,
 the session list where the standby shows on your phone.
 
-- *Claude login lapses in N days* (normal priority). From 7 days before the
-  lapse, at most one a day, only between 09:00 and 21:00 New York time, until the
-  login is renewed. Renewal moves the lapse date later and ends the warnings.
+- *Claude login lapses in N days* (normal priority). Once N (whole days, rounded
+  down) is 7 or fewer, at most one a day, only between 09:00 and 21:00 New York
+  wall-clock time (also on the days the clocks change), until the login is
+  renewed. Renewal moves the lapse date later and ends the warnings.
 - *Keeper needs login (claude or codex)* (priority 1, any hour). Once when a
   login reaches NeedsLogin, with the same renewal steps in the message. One
   *Keeper login restored* notice (normal priority) when it leaves NeedsLogin.
 
 A keeper restart repeats nothing: the keeper remembers what it sent in a
 ConfigMap, `dev-env-keeper-notices`, which holds only times and incident ids.
+If that ConfigMap is missing, forbidden or corrupt, the keeper still sends,
+keeps its record in memory, logs the reason once and tries the ConfigMap again
+every minute; only a restart during that time can repeat a notice. After a crash
+between a send and the save, one notice can repeat. If Pushover refuses a notice
+with a 4xx other than 429 (a wrong token or user key), the keeper logs it once
+and stops sending that notice until it restarts or the situation changes (a new
+incident, a later lapse date); 429 and 5xx are retried every 5 minutes.
 If the Pushover files are missing the keeper logs "notifier disabled: no
 Pushover credentials" once, sends nothing, and keeps the gauges.
 

@@ -30,8 +30,10 @@ const (
 	// authLoginFile is the lapse document the keeper publishes beside the Claude
 	// access projection (claudeauth.LoginKey; agent-run imports no keeper package).
 	authLoginFile = "login.json"
-	// authLapseWarning: a known lapse this close, or past, exits 1.
-	authLapseWarning   = 7 * 24 * time.Hour
+	// authLapseWarnDays: a known lapse with this many whole days left (rounded
+	// down) or fewer, or already past, exits 1. The keeper's phone notice counts
+	// days the same way (keeper.WholeDaysLeft).
+	authLapseWarnDays  = 7
 	authMaxBytes       = 64 << 10
 	authDefaultWarning = 30 * time.Minute
 	authReady          = "Ready"
@@ -218,11 +220,11 @@ func addLoginLapse(row *authRow, accessFile string, now time.Time) {
 	}
 	lapse := doc.LoginLapsesAt.UTC()
 	left := lapse.Sub(now)
-	days := int(left / (24 * time.Hour))
+	days := wholeDaysLeft(left)
 	row.LoginLapse, row.LoginLapsesAt, row.LoginDaysLeft = lapse.Format(time.RFC3339), &lapse, &days
-	if left <= authLapseWarning {
+	if left <= 0 || days <= authLapseWarnDays {
 		row.code = 1
-		note := "login lapses within 7 days: renew from the standby (agent-run keeper-login claude url)"
+		note := "login lapses in 7 days or fewer: renew from the standby (agent-run keeper-login claude url)"
 		if left <= 0 {
 			note = "login has lapsed: renew from the standby (agent-run keeper-login claude url)"
 		}
@@ -231,6 +233,15 @@ func addLoginLapse(row *authRow, accessFile string, now time.Time) {
 		}
 		row.Reason = note
 	}
+}
+
+// wholeDaysLeft is the time left in whole days, rounded down: 7d23h is 7, under
+// a day is 0, and nothing is negative.
+func wholeDaysLeft(left time.Duration) int {
+	if left <= 0 {
+		return 0
+	}
+	return int(left / (24 * time.Hour))
 }
 
 // readAuthFile reads one bounded regular file. A symlink is followed (a
