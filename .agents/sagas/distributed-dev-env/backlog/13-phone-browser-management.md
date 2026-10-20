@@ -2,8 +2,8 @@
 
 **Status:** plan, written 2026-10-20 in batch NEXT-BATCH-1020 (story NB-07,
 Saga85 / Epic107). Nothing in it is accepted. Proof levels are as of release 2.37.0,
-except where a line says otherwise. **Update, 2026-10-20 (2.38.1 on the operator and
-keeper):** NB-01 (keeper login from v2) and NB-02 (restarts from v2) are installed and
+except where a line says otherwise. **Update, 2026-10-20 (release 2.38.3
+installed):** NB-01 (keeper login from v2) and NB-02 (restarts from v2) are installed and
 proven from a workbench session. Tom has not done either from the phone yet.
 **Depends on:** [03](03-remote-control.md) (its delivered parts); NB-01 and NB-02,
 installed 2026-10-20
