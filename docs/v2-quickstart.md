@@ -1,11 +1,12 @@
 # Dev-env v2 quick start
 
 How to use v2 day to day, mostly from your phone: Claude and Codex sessions,
-headless tasks, stopping and resuming, upgrades, the shared logins, where notes
-live, and what still needs v1.
+headless tasks, network and Proxmox access, stopping and resuming, upgrades, the
+shared logins, where notes live, and what still needs v1.
 
-State on 2026-10-19: release 2.35.1 is installed. "Proven" below means it was
-done end to end on 2026-10-19, on your phone where a phone is involved.
+State on 2026-10-20: release 2.37.0 is installed. "Proven" below means it was
+done end to end on 2026-10-19 or 2026-10-20 (UTC), on your phone where a phone
+is involved.
 
 ## Which `agent-run`
 
@@ -21,19 +22,33 @@ done end to end on 2026-10-19, on your phone where a phone is involved.
   ```
 
   The CA is public. The examples below say `agent-run`; in the v1 pod, type `v2`.
+  You need the v1 pod only for the few jobs in section 8.
 
 ## 1. A Claude session on your phone
 
-Ask a coordinator to start one, or run it yourself:
+**One is always waiting.** The operator keeps a standby session on your phone:
+Opus 5.5 (`claude-opus-5-5`) on haynes-ops, in the workbench profile (below).
+Open it in the Claude app and type. It is named like `haynes-ops-1020-002115`;
+`agent-run show <name>` gives its parent as
+`dev-env-system/dev-env-operator-standby`.
+
+- There is one standby at a time. A suspended standby still counts: resume it.
+  When it is reaped or its agent ends, the operator makes a new one within about
+  a minute. It makes at most 3 in 30 minutes, then waits, so a fault cannot loop.
+- Once you use it, it is an ordinary session. It is not replaced while it lives.
+  For a fresh one, reap it when you are done with it.
+
+To start another session, ask the standby or any coordinator, or run:
 
 ```bash
 agent-run --repo haynes-ops --interactive --model claude-opus-5-5
 ```
 
-- The session is named after the repo and the time, such as
-  `haynes-ops-1019-231500`.
-- After a minute or two it appears in the Claude app under that name. Open it
-  and type your first prompt.
+- A session started from a workbench session is a workbench session too. From
+  the v1 pod, add `--profile workbench` for one; without it you get the default
+  profile.
+- The session is named after the repo and the time. After a minute or two it
+  appears in the Claude app under that name.
 - It uses the shared Claude login (section 6). Nobody signs in per session.
   agent-run still prints a hint about `agent-run login`. Ignore it: a session on
   the shared login refuses `login`.
@@ -43,32 +58,66 @@ agent-run --repo haynes-ops --interactive --model claude-opus-5-5
 - After 72 hours idle it suspends itself, and its phone entry is archived.
   `agent-run resume <name>` brings back the same entry and the same conversation.
 - Proven: open on the phone, prompt, answer, suspend and resume as the same
-  entry, and the earlier answer recalled after the resume.
+  entry, and the earlier answer recalled after the resume. The operator made
+  the standby by itself and it registered on the shared login.
 
-Coming soon:
+### What a workbench session can do
 
-- **Workbench.** A v2 session in the `workbench` profile that can run
-  `agent-run pair` and `attach` itself, so a v2 coordinator needs the v1 pod
-  less. It is merged; it needs the next release, two haynes-ops changes and a
-  live test.
-- **Standby.** The operator keeps one Claude session ready on your phone at all
-  times, like v1 does after a pod restart. It is being built. Until then, ask
-  the v1 standby or any coordinator to start one.
+A workbench session runs as `dev-env-workbench`. On top of an ordinary session
+it can:
+
+- run `agent-run pair`, `attach`, `detach` and `login` against other v2
+  sessions, with no v1 pod;
+- create a Codex host (section 2);
+- get standing access grants for the LAN and Proxmox, as below.
+
+**Access grants.** A standing policy approves each of these at once, with no
+phone step. Ask from inside the session that needs it:
+
+```bash
+# Internal sites, https://<app>.haynesops.com (curl, Playwright). Also the default profile.
+agent-run grant request --type egress --reason "internal sites" --ttl 8h \
+  --endpoint network:app.kubernetes.io/instance=traefik-internal-network --port 8443
+
+# Proxmox API for `pve` (read with the built-in token)
+agent-run grant request --type egress --reason "pve" --ttl 8h \
+  --fqdn pvedash.haynesnetwork --port 443
+
+# Proxmox writes: a short-lived operator token; `pve --yes ...` uses it by itself
+agent-run grant request --type credential --credential proxmox --reason "pve write" --ttl 4h
+
+# hw-ssh to the PVE nodes, HaynesTower, PiKVM and gasha01
+agent-run grant request --type egress --reason "hw-ssh" --ttl 8h --port 22 \
+  $(for h in haynesintelligence twin-top twin-bottom pve04 pve-filet02 \
+      haynestower pikvm gasha01; do echo "--fqdn $h.haynesnetwork"; done)
+```
+
+- Egress grants last up to 8 hours, the Proxmox token up to 4. When one
+  expires, ask again. `agent-run grant list --mine` shows what you hold.
+- Two more policies exist for workbench sessions: each PVE node's API on port
+  8006, and the Ceph manager's metrics. Their exact flags are in each policy's
+  description, in haynes-ops `kubernetes/main/apps/dev-env-system/grant-policies/`.
+- The `hw-ssh` key is mounted only in workbench sessions. The same rules as v1
+  apply: read first, declare disruptive work, never reboot a node.
+- Proven from a fresh workbench session: internal ingress (Grafana's health
+  page answered 200), `pve nodes`, `hw-ssh twin-top hostname`, and a Proxmox
+  token issued. All four were approved by policy with no phone step.
 
 ## 2. Codex on your phone
 
 A Codex phone session is a host: one pod that runs Codex's phone daemon. You
 pair a phone with it once.
 
-1. Create the host from the v1 pod (or ask its coordinator). A v2 session is
-   refused, because the host runs on the shared ChatGPT login.
+1. Create the host from a workbench session (the standby will do) or the v1
+   pod. An ordinary session is refused, because the host runs on the shared
+   ChatGPT login. The host itself runs on the default profile.
 
    ```bash
    agent-run --repo dev-env --agent codex --interactive --model gpt-6-astra
    ```
 
-2. When `agent-run show <name>` says Running, get a pairing code, also from the
-   v1 pod:
+2. When `agent-run show <name>` says Running, get a pairing code from the same
+   place:
 
    ```bash
    agent-run pair <name>
@@ -86,7 +135,8 @@ pair a phone with it once.
 - A host never suspends itself, because its daemon counts as busy. Suspend or
   reap it when you are done.
 - Proven: pairing, a prompt and answer, suspend and resume without pairing
-  again, the earlier answer recalled, and an operator restart survived.
+  again, the earlier answer recalled, and an operator restart survived. From a
+  workbench session, creating a host and getting a pairing code both worked.
 
 ## 3. Headless tasks
 
@@ -104,8 +154,9 @@ agent-run --project dev-env --agent codex --model gpt-6-luna -p "Summarize the o
 - Cap it with `--timeout 40m` or `--max-turns 20`.
 - A finished task suspends itself after an hour. Its prompt never runs twice.
 - A Codex task with `--repo` is refused; use `--project`.
+- `agent-run show <name>` reports the model that actually served the task, for
+  Codex as well as Claude (Codex since 2.37.0; before, it said Unknown).
 - Proven: a Codex project task finished in one turn, in about 20 seconds.
-  Codex does not report the model it served, so v2 shows it as Unknown.
 
 ## 4. Stop, continue, finish
 
@@ -134,7 +185,8 @@ agent-run --project dev-env --agent codex --model gpt-6-luna -p "Summarize the o
 - **New agent image (a release):** a Claude session moves by itself once it is
   idle and nobody is attached. The pod is replaced; the phone entry and the
   conversation stay. Proven twice on 2026-10-19, and the session still knew its
-  earlier answer. A session that has never had a turn stays put until it has one.
+  earlier answer. A session that has never had a turn, such as an unused
+  standby, stays put until it has one.
 - **Codex host:** never moves by itself. `agent-run list` marks it `outdated`.
   At a quiet moment run `agent-run suspend <name>`, then `agent-run resume <name>`.
   The pairing stays. Suspend and resume of a host are proven; using them for an
@@ -147,23 +199,21 @@ one ChatGPT login and refreshes them. Sessions get a short-lived access token,
 never the refresh token. So sessions cannot break each other's login, and
 nobody signs in per session.
 
-- **Check.** Inside a v2 session, `agent-run auth status` shows each login's
-  state (Ready or NeedsLogin) and the time left on the current access token.
-  Exit 0 is fine, 1 is expiring or expired, 2 means it cannot tell. It is
-  coming in the next release; 2.35.1 does not have it. Until then a coordinator
-  in the v1 pod checks the Claude login with:
-
-  ```bash
-  kubectl exec deploy/dev-env-keeper -c claude-login -n dev-env-system \
-    -- agentd claude-login-status
-  ```
-
-  `"code":"Ready"` is fine.
+- **Check.** In any v2 session, `agent-run auth status` shows each login's
+  state (Ready or NeedsLogin), its generation and the time left on the current
+  access token. Exit 0 is fine, 1 is expiring or expired, 2 means it cannot
+  tell. Proven in a workbench session.
+- **Refresh is automatic.** The keeper renews the Claude access token at about
+  two thirds of its 8-hour life. Proven at 00:29 UTC on 2026-10-20: generation
+  2 reached the session pods and every session stayed on the phone. The ChatGPT
+  token is good until 2026-10-29, so its first automatic refresh has not come
+  due yet.
 - Headless Claude tasks do not use the keeper's login. They keep their own
   long-lived token, as in v1.
 - **Renew the Claude login about once a month.** It lapses about 30 days after
-  the last sign-in. The current one is from 2026-10-19, so plan for mid-November.
-  Nothing in v2 shows the days left yet.
+  the last sign-in. The current one is from 2026-10-19, so it lapses around
+  2026-11-18. `agent-run auth status` shows the access token, not this date;
+  put it in your calendar.
 - **Who does what.** A coordinator in the v1 pod starts the keeper's login
   helper and sends you one sign-in link in chat. You open it on your phone, sign
   in with your Max account and paste back the code the page shows. Finish within
@@ -171,9 +221,8 @@ nobody signs in per session.
   with a fresh link. The link and the code never go into git or notes.
 - **ChatGPT login.** Same shape, a device sign-in. It is needed only when the
   keeper reports NeedsLogin. It was renewed on 2026-10-19.
-- **Not proven yet:** the keeper's automatic refresh of the Claude access token
-  (the first was due late on 2026-10-19), and the automatic "continue" a session
-  gets when a turn fails on an expired token.
+- **Not proven yet:** the automatic "continue" a session gets when a turn fails
+  on an expired token. No turn has needed it.
 
 ## 7. Where notes live
 
@@ -193,23 +242,13 @@ nobody signs in per session.
 
 ## 8. What still needs v1
 
-- **The keeper login ceremonies** (section 6). They run inside the keeper pod,
-  which only the v1 pod or a laptop with admin access may reach. The workbench
-  will not change this: it reaches session pods only.
-- **`agent-run pair`, `attach` and `detach`**, until the workbench ships.
-- **Creating a Codex host.** Only you (from a laptop), the v1 pod or a
-  workbench session may (it runs on the default profile, not the workbench's);
-  an ordinary session is refused.
+- **The keeper login ceremonies** (section 6): the Claude login about once a
+  month, next around 2026-11-18, and the ChatGPT login when it reports
+  NeedsLogin. They run inside the keeper pod in `dev-env-system`. A workbench
+  session can reach session pods only, so the v1 pod (or a laptop with admin
+  access) runs them.
 - **Restarting the v2 operator, keeper or shelf.** A v2 session is refused there.
-- **Proxmox operator work, `hw-ssh`, Unraid and PiKVM.** A v2 session has no key
-  and no LAN reach by default. Each use needs an access grant you approve, and no
-  standing grant policy exists yet.
-- **Codex tasks on a repo outside the catalog**, such as haynes-ops.
-- **A session that is always on your phone after a restart** (v1's standby),
-  until the v2 standby ships.
-- **Playwright against internal `*.haynesops.com` sites.** Probably blocked from
-  v2; not tested.
+- **Retiring v1 itself.** That is your call.
 
-Retiring v1 is your call once these are covered. More detail is in the
-[workflow guide](workflow-guide.md) and
+More detail is in the [workflow guide](workflow-guide.md) and
 [plan 03](../.agents/sagas/distributed-dev-env/backlog/03-remote-control.md).
