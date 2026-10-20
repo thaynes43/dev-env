@@ -94,12 +94,13 @@ func (w *codexWorker) Start(ctx context.Context) error {
 // its own state, so a deliberate renewal does not look like a lapse.
 func (w *codexWorker) observe(r codexRecord) {
 	switch {
+	case w.loginReservationLive(r):
+		// Checked before halted: begin sets halted for the ceremony's whole life.
+		w.Obs.Report(ProviderCodex, LoginInProgress, time.Time{})
 	case w.halted:
 		w.Obs.Report(ProviderCodex, LoginNeedsLogin, time.Time{})
 	case r.Stage == codexReady:
 		w.Obs.Report(ProviderCodex, LoginReady, time.Time{})
-	case w.loginReservationLive(r):
-		w.Obs.Report(ProviderCodex, LoginInProgress, time.Time{})
 	default:
 		w.Obs.Report(ProviderCodex, LoginNeedsLogin, time.Time{})
 	}

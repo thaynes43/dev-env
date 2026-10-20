@@ -1,6 +1,7 @@
 package keeper
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -120,5 +121,55 @@ func TestClaudeWorkerReportsTheJournalToTheGauges(t *testing.T) {
 	h.tick()
 	if s := h.w.Obs.Snapshot()[ProviderClaude]; s.State != LoginNeedsLogin || !s.LapsesAt.IsZero() {
 		t.Fatalf("needs-login = %+v", s)
+	}
+}
+
+// A deliberate Codex renewal pauses refresh and sets halted for the ceremony's
+// life. The gauges and the notifier must see LoginInProgress, not NeedsLogin, so
+// a renewal from Ready opens no incident and ends none.
+func TestCodexWorkerReportsACeremonyAsInProgress(t *testing.T) {
+	w, _, _ := codexFixture(t)
+	hub := NewLoginHub(ProviderCodex)
+	w.Obs = hub
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server, err := w.serveControl(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = server.Close() }()
+	saveCodexFixture(t, w, freshCodexRecord(t, w))
+	if w.tick(ctx) != nil {
+		t.Fatal("a fresh record must tick clean")
+	}
+	if s := hub.Snapshot()[ProviderCodex]; s.State != LoginReady || !s.LapsesAt.IsZero() {
+		t.Fatalf("ready = %+v", s)
+	}
+	start := w.begin(ctx)
+	if !start.OK {
+		t.Fatalf("begin: %+v", start)
+	}
+	_ = w.tick(ctx)
+	if s := hub.Snapshot()[ProviderCodex]; s.State != LoginInProgress {
+		t.Fatalf("during a ceremony = %+v, want LoginInProgress", s)
+	}
+	if c := w.cancelLogin(ctx, start.AttemptUID); !c.OK {
+		t.Fatalf("cancel: %+v", c)
+	}
+	if w.tick(ctx) != nil {
+		t.Fatal("tick after cancel")
+	}
+	if s := hub.Snapshot()[ProviderCodex]; s.State != LoginReady {
+		t.Fatalf("after cancel = %+v, want Ready", s)
+	}
+	// Once the reservation has lapsed the login really needs a person.
+	start = w.begin(ctx)
+	if !start.OK {
+		t.Fatalf("second begin: %+v", start)
+	}
+	w.Clock.(interface{ Step(time.Duration) }).Step(codexCeremonyLifetime + time.Minute)
+	_ = w.tick(ctx)
+	if s := hub.Snapshot()[ProviderCodex]; s.State != LoginNeedsLogin {
+		t.Fatalf("after the reservation lapsed = %+v, want NeedsLogin", s)
 	}
 }
