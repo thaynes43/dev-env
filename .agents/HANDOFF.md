@@ -1,24 +1,89 @@
 # HANDOFF: start here
 
-**Current Story110 checkpoint,2026-10-19:** source440 and release441 are merged;
-operator2.30.7 is installed through haynes-ops4095 (two Ready, actual signed
-digest verified). Task2.30.7 is published; generic task pins remain2.30.6.
-All54 protected Pods/26 Sessions/28 budgets are unchanged. Owned-root response,
-update survival, history, stop/continue and phone remain unaccepted.009 access
-and launch are paused on two exact public ConfigMap GET additions after an
-approval-review rejection; neither was executed. See the
-[delivery and precise hold](sagas/distributed-dev-env/verification/owned-operator-replacement-2026-10-19.md#delivered-checkpoint--2026-10-19-0934-utc).
-**Story110 T03 (2026-10-19, source only):** `agent-run --interactive` creates a Claude
-`remote` session on a pod-owned login ([backlog/03](sagas/distributed-dev-env/backlog/03-remote-control.md#interim-pod-owned-login-slice-2026-10-19-source-support-only)).
-Not released, installed or accepted. Using it needs Tom's explicit authorization for
-one isolated v2 Max login, which is pending; no v2 login exists. Live exec for
-`agent-run login` is unverified.
-Older release369-pending and installed-version statements below are historical:
-369 publication was explicitly approved and completed. Preserve every actual
-v1/rendezvous/H7/grant/security hold and consumed attempt. Same canonical
-Saga85/Epic107/Story110 and sole owner; no new session or campaign reset.
+## Current state — 2026-10-20 UTC (v2 release 2.37.0)
 
-**2026-10-18 implementation update:** Q-24 is answered: Tom approved small
+This block replaces the 2026-10-19 Story110 checkpoint and the "next steps" that
+older blocks below still carry. The dated record is the Story110 progress file
+kept by the coordinator; the user-facing result is the
+[v2 quick start](../docs/v2-quickstart.md). "Proven" means done end to end,
+on Tom's phone where a phone is involved. Installed is not the same as accepted.
+
+**Installed:** release 2.37.0 (#468). Operator `sha-9539413`, agent image `2.37.0`,
+deployed through haynes-ops pins #4121 (`f79e4cbe`) and #4120 (`84f4adbf`, standby).
+The keeper holds one Claude Max login and one ChatGPT login (sections below).
+
+**Proven end to end on v2, 2026-10-19 to 2026-10-20:**
+
+- **Claude on the phone, on the shared keeper login.** Connect, steer, completed
+  response with the served model recorded, suspend and resume as the same phone
+  entry, and the earlier answer recalled. No per-pod login; no pod holds a refresh
+  token.
+- **Codex on the phone, on the shared keeper login.** A Codex host session paired
+  once (`agent-run pair`); prompt and answer; suspend and resume without pairing
+  again; thread history kept.
+- **Headless tasks.** A Claude task and a Codex project task (served model
+  reported for Codex since 2.37.0).
+- **Operator restart.** Session pods stayed unchanged and the phone kept working.
+- **Automatic agent-image moves.** Idle Claude sessions moved onto a new image
+  twice (same phone entry, same transcript, history recalled from the phone). This
+  needed the AgentSession CRD sync, haynes-ops #4113.
+- **Workbench identity.** A session in the `workbench` profile (service account
+  `dev-env-workbench`) runs `agent-run pair|attach|detach|login|auth status`
+  against v2 sessions and creates Codex hosts, with no v1 pod.
+- **Standby.** The operator makes and keeps one Opus 5.5 `haynes-ops` session on
+  the phone (default off in source; enabled by haynes-ops #4120). It registered
+  Remote Control by itself on the shared login.
+- **Standing access grants** (haynes-ops #4117, `308f4ab3`): internal ingress,
+  Proxmox API, hw-ssh and a short-lived Proxmox operator token are auto-approved
+  by policy for workbench sessions, with no phone step. All four were exercised
+  from a fresh workbench session.
+- **Keeper Claude refresh.** The keeper refreshed the Claude access token on its
+  own at 00:29:48Z (generation 2); sessions stayed registered.
+
+**Rulings Q-110-03 to Q-110-08 (Tom, 2026-10-19; text in the Story110 progress file):**
+
+- Q-110-03: for the Claude v2 MVP, acceptance checks are ordinary repeatable tests; reruns are allowed, and new credentials, RBAC or trust scope still need approval.
+- Q-110-04: only task sessions get private-history retention; interactive sessions can suspend again (ADR-008, #453).
+- Q-110-05: activate the shared keeper-owned Claude login as bundled.
+- Q-110-06: one fresh keeper-owned ChatGPT login for Codex.
+- Q-110-07: build the v2 workbench identity.
+- Q-110-08: approve the access-grants bundle (standing egress policies, Proxmox grants for workbench, the v1 `hw-ssh` key mounted only in workbench; reverses Q-07).
+
+Q-110-01's provenance caveat applies to Q-110-01 only. Q-110-02 (one isolated
+login for the T08 checkpoint) was used and is superseded by the shared login.
+
+**Not yet exercised:**
+
+- The 401-window continue: no turn has needed it.
+- Codex keeper refresh: the Codex token is valid to 2026-10-29, so its first
+  refresh is not due.
+- A Codex host moving to a new agent image by suspend then resume. Suspend and
+  resume of a host are proven; using them as the upgrade path is not.
+- A Remote Control session past 13 hours, and merge latency after a refresh: not measured.
+
+**Still on v1 (none is a blocker for daily work):**
+
+- The keeper login ceremonies. The Claude login lapses about 30 days after the
+  last sign-in, so the next one is due around 2026-11-18. The ChatGPT login is
+  renewed only if the keeper reports NeedsLogin. Run them from the v1 pod or
+  Tom's admin laptop; a workbench session reaches session pods only.
+- Restarting the v2 operator, keeper or shelf. A v2 session is refused.
+- Headless Codex tasks on a repo outside the catalog (the catalog is `dev-env`
+  and `sigo-alumni`), such as haynes-ops.
+- Retiring v1. That is Tom's call, after he accepts the replacements.
+
+**Backlog (none blocking):** the console page and its login-renewal page; archive
+on reap through the keeper; messaging tier 2 (all [plan 03](sagas/distributed-dev-env/backlog/03-remote-control.md));
+the Codex host image-move exercise above; the two #443 follow-ups (a `login url`
+call within one poll of a finished ceremony; renewal status).
+
+**Next safe step:** none is queued. A new story needs a saved record first (see
+`~/.claude/CLAUDE.md`, "Define work before pickup"). Preserve every actual
+v1/rendezvous/H7/grant/security hold and consumed attempt; the older blocks
+below are history and do not reopen them. Same canonical Saga85/Epic107/Story110
+and sole owner.
+
+**Historical, 2026-10-18 implementation update:** Q-24 is answered: Tom approved small
 separate native hosts; see [DESIGN-006](sagas/distributed-dev-env/designs/006-private-catalog-bootstrap.md#q-24-codex-mvp-native-routing).
 The campaign CLI source increment is documented in
 [DESIGN-003](sagas/distributed-dev-env/designs/003-task-budget-api.md#campaign-cli-entry-point--2026-10-18-source-increment).
@@ -26,12 +91,12 @@ It adds assigned campaign create/show, without executor admission. Private launc
 native readiness and installed acceptance remain open. Release #369 and all
 runtime/access holds below remain in force. Older Q-24 pending entries are historical.
 
-**Start here (2026-10-18):** [MVP source-pass handoff](HANDOFF-2026-10-18-mvp-pass.md).
+**Historical (2026-10-18):** [MVP source-pass handoff](HANDOFF-2026-10-18-mvp-pass.md).
 It records what landed on `main` from 2026-10-17 through 2026-10-18, what the
 other Grok sessions did, and which owner gates are still open. The 2026-10-17
 installed-state rules, rendezvous rules, and held work below stay in force.
 
-**Start here (2026-10-17):** **installed state and next work** are the
+**Historical (2026-10-17):** **installed state and next work** are the
 [2026-10-17 blocks](#installed-state--2026-10-17-utc) below. The older
 [Cursor wind-down handoff](DEV-ENV-CURSOR-HANDOFF-2026-10-16.md) is a stopped-session
 snapshot only: partial windows, consumed seals and shutdown evidence to preserve, not
@@ -46,6 +111,8 @@ next-work list is stale where this page's 2026-10-17 sections disagree.
 [KICKOFF.md](sagas/distributed-dev-env/KICKOFF.md) is the historical first-build order.
 
 ## Installed state — 2026-10-17 UTC
+
+*Historical. The installed release is in the 2026-10-20 block at the top.*
 
 **Released and installed v2.29.4**, release commit
 `f315635ad6fc30129da4e0310295634e57b78422`, including heartbeat freshness
@@ -87,6 +154,8 @@ preference; record requested and served model). Luna quota is tighter.
 step stay held unless Tom explicitly reopens them in a new ruling.
 
 ## Next work — 2026-10-17 UTC
+
+*Historical. The 2026-10-20 block at the top supersedes this list; the rendezvous rules and holds below still stand.*
 
 **Do not start a live cohort from this chat.** A takeover agent reads this page and
 the saga, then runs the next attempt only with a fresh seal, window and bound live
@@ -2722,8 +2791,8 @@ plan 02 is done. The current order is the pickup brief's
 
 ## What happens next
 
-**Current order:** the [Next work — 2026-10-17 UTC](#next-work--2026-10-17-utc)
-section at the top of this page. It supersedes the 2026-10-13 brief's enumerated
+**Current order:** the [Current state — 2026-10-20 UTC](#current-state--2026-10-20-utc-v2-release-2370)
+block at the top of this page (the [2026-10-17 next work](#next-work--2026-10-17-utc) is history). It supersedes the 2026-10-13 brief's enumerated
 list where they differ (v2.29.4/2.29.5 pins, rendezvous cohort r3–r13, inbox CLI
 shape, freshness gate, expired r13 window, Codex service-account kubeconfig, held H7/Q-37). The
 [Cursor wind-down handoff](DEV-ENV-CURSOR-HANDOFF-2026-10-16.md) is history only.
