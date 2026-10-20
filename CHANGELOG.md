@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.38.0](https://github.com/thaynes43/dev-env/compare/v2.37.0...v2.38.0) (2026-10-20)
+
+
+### Features
+
+* **apiserver:** renew the keeper login from a workbench session (agent-run keeper-login) ([#475](https://github.com/thaynes43/dev-env/issues/475)) ([fe48aa1](https://github.com/thaynes43/dev-env/commit/fe48aa1e95353e3a79da815d1c8dbbf86ada8fe7))
+
+
+### Bug Fixes
+
+* **agentd:** abandon a stalled clone so the retry runs instead of leaving staging ([#478](https://github.com/thaynes43/dev-env/issues/478)) ([33fb2ec](https://github.com/thaynes43/dev-env/commit/33fb2ec20cfe0b886ed8a3aa1623e0856356aea4))
+* **agentd:** recognise the real Claude CLI 401 in the continue classifier ([#473](https://github.com/thaynes43/dev-env/issues/473)) ([ed9f15e](https://github.com/thaynes43/dev-env/commit/ed9f15ebcb4dcfcfe1839f4cc5c87ee9bbadce48))
+* **apiserver:** accept a workbench session on the coordination routes ([#472](https://github.com/thaynes43/dev-env/issues/472)) ([b820538](https://github.com/thaynes43/dev-env/commit/b8205387ac50611c6b424cb9ec48c27ab5ab5a3c))
+* **keeper:** offer only the pinned SSH host-key algorithms per target ([#474](https://github.com/thaynes43/dev-env/issues/474)) ([ebe2da6](https://github.com/thaynes43/dev-env/commit/ebe2da6b4b20ca8186c9dbeb6f3321d0ad633130))
+
 ## [2.37.0](https://github.com/thaynes43/dev-env/compare/v2.36.0...v2.37.0) (2026-10-19)
 
 
