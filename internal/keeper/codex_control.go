@@ -35,6 +35,9 @@ type CodexControlResponse struct {
 	AttemptUID string            `json:"attemptUID,omitempty"`
 	Generation uint64            `json:"generation,omitempty"`
 	Login      *CodexLoginReport `json:"login,omitempty"`
+	// AccessExpiresAt is what `status` adds (NB-01): when the journaled access
+	// token lapses. A time only; a keeper from before this field omits it.
+	AccessExpiresAt *time.Time `json:"accessExpiresAt,omitempty"`
 }
 
 // CodexLoginReport contains fixed local flow metadata only. Native errors,
@@ -130,6 +133,10 @@ func (w *codexWorker) controlStatus(ctx context.Context) CodexControlResponse {
 		return CodexControlResponse{Code: "Unavailable"}
 	}
 	result := CodexControlResponse{OK: true, Code: "NeedsLogin"}
+	if !w.halted && d.Record.Stage == codexReady && !d.Record.Access.ExpiresAt.IsZero() {
+		at := d.Record.Access.ExpiresAt.UTC()
+		result.AccessExpiresAt = &at
+	}
 	if !w.halted && d.Record.Stage == codexReady && d.Record.Access.Validate(w.Clock.Now()) == nil {
 		result.Generation = d.Record.Access.Generation
 		result.Code = "PendingPublication"

@@ -564,6 +564,10 @@ const (
 	CodeInternal = "internal"
 	// CodeUnavailable (503): the API server could not be reached; retry.
 	CodeUnavailable = "unavailable"
+	// CodeNotLeader (503): this replica does not hold a keeper login ceremony.
+	// Only the leader opens one, so the caller reconnects (a new connection may
+	// land on the leader) and sends the request again; nothing was done.
+	CodeNotLeader = "not_leader"
 )
 
 // Rescue is one rescue on the shared volume, as GET /v1/rescues lists it (D-48,

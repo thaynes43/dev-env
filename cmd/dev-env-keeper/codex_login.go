@@ -14,11 +14,13 @@ import (
 	"github.com/thaynes43/dev-env/internal/keeper"
 )
 
+// SIGHUP ends a ceremony like SIGINT: the terminal went away (NB-01's login
+// route closing its exec), so the attempt is cancelled and its staging wiped.
 // All helper subcommands dispatch before Kubernetes/App/manager setup. The idle
 // entrypoint does nothing until shutdown. Login refuses pod-log/pipe output: it
 // must be an authenticated interactive control/exec with a terminal.
 func codexLoginCommand(args []string, in, out *os.File) int {
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	defer cancel()
 	if len(args) == 1 && args[0] == "codex-login-idle" {
 		<-ctx.Done()

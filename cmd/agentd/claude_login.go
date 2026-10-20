@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 
@@ -23,6 +25,12 @@ import (
 // result; the one-time code is typed on stdin.
 func claudeLogin(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) int {
 	result := claudelogin.Response{Code: "InvalidRequest"}
+	// A hangup is the terminal going away (the operator's login route closing its
+	// exec, NB-01): end the ceremony the way a cancel does, so the keeper's
+	// attempt is cancelled and the staging wiped instead of waiting out its
+	// fifteen minutes.
+	ctx, stopHup := signal.NotifyContext(ctx, syscall.SIGHUP)
+	defer stopHup()
 	fs := flag.NewFlagSet("claude-login", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	dir := fs.String("login-dir", claudelogin.DefaultDir, "keeper/helper private staging")

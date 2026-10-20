@@ -1,0 +1,118 @@
+# DESIGN-028: renew the keeper login from a workbench session
+
+Story NB-01, batch NEXT-BATCH-1020 (Saga85, Epic107). Source and unit tests
+only until released, pinned and run live. It changes no ADR and no
+accepted ruling. DESIGN-001 6.11 (identities), backlog 03 (increment 5, the
+keeper-owned Claude ceremony) and D-78 (the Codex login helper) stay
+controlling. The keeper's journal, refresh logic and published projection are not
+changed.
+
+## Problem
+
+The keeper's shared Claude and Codex logins lapse (Claude about 30 days after each
+login). Renewal ran as `kubectl exec -it deploy/dev-env-keeper -c claude-login`
+from the v1 pod or Tom's laptop. v2 sessions cannot do it: no exec in
+`dev-env-system`, and `agent-run login` is a client-side exec into a session pod,
+not the keeper. Tom must be able to renew from a v2 workbench session, from his
+phone, without v1.
+
+## Decision
+
+The operator does the exec, for the workbench only.
+
+| Route (all under `/v1/keeper-login/{claude\|codex}`) | Does |
+|---|---|
+| `GET` | the keeper's state word (Ready, PendingPublication, NeedsLogin, Unavailable), generation, access expiry, login expiry. Times only. |
+| `POST .../url` | opens a ceremony; the response carries the sign-in link (Codex: and the one-time device code). |
+| `POST .../code` | Claude: body `{"code": ...}`, handed to the helper's terminal. Codex: no body; waits for the device sign-in to finish. 202 `Waiting` after 45 s, call again. |
+| `DELETE` | abandons the open ceremony. |
+
+CLI: `agent-run keeper-login claude|codex [status|url|code|cancel]`. The Claude code
+is read from stdin, never an argument.
+
+**Caller class.** Workbench only: a session whose pod runs as
+`dev-agents/dev-env-workbench`, or that account's own unbound token (the two
+shapes the Codex remote create rule already accepts). Tom's human account, the v1
+pod, coordinators and every other session get 403 before the operator looks at the
+keeper. (Tom can still exec himself with his own kubeconfig; this route adds no
+path for him.)
+
+**Where it execs.** Only the keeper pod's login container, named in a table in
+code (`claude-login` running `agentd claude-login`, `codex-login` running
+`dev-env-keeper codex-login`; status uses the existing `agentd claude-login-status`
+and `dev-env-keeper codex-auth-status`). Never the `app` container, never a
+container name from a request. The pod is found by the keeper's labels in
+`dev-env-system`, and must be Running, Ready, not deleting, on the
+`dev-env-keeper` ServiceAccount, with that container running. Zero or two matches
+refuse. RBAC cannot scope exec to a container, so the operator's Role in
+`dev-env-system` gains `pods get, list` and `pods/exec create` for the whole
+namespace; the container limit is code, and the namespace holds only the
+operator, broker, keeper and shelf pods (no guard policy applies to the operator's
+own ServiceAccount, and `dev-env-exec-guard`/`dev-env-identity-guard` match
+`dev-agents` identities only).
+
+**One long exec across two requests.** `claude auth login` prints a link and then
+waits for the code in the same process, and the helper insists on a terminal (the
+proven shape). So `url` starts the helper on a pseudo-terminal exec and the
+operator keeps that exec open in memory until `code` or `cancel`. That state is
+per replica, and the operator has two replicas behind one Service, so **only the
+leader holds ceremonies**. A follower answers `503 not_leader` having done
+nothing, and `agent-run` closes its connection and sends again (a new connection
+may land on the leader; 12 tries). Status holds no state and any replica answers.
+
+**Secrets.** The link, the Codex device code and the pasted code are secrets for
+the ceremony's life. The operator reads only brace-led JSON lines of the helper's
+fixed shape off the terminal and drops everything else unread (the terminal echoes
+the typed code). The link is checked against the provider's host again before it
+is returned. The code is written to the terminal, kept nowhere, and not echoed in
+any answer. No error carries helper output: failures are the keeper's fixed words.
+Logging is the existing one line per request (method, path, status, caller class).
+The operator reads and writes no Secret and no keeper state: it has no Secret
+rights, and a test fails on any Secret read or any write by its client.
+
+**Abandon.** Cancel (and a request that ends before the link arrives) sends a
+Ctrl-C to the terminal, waits up to 10 s for the helper to leave through its own
+cleanup (the provider's CLI exits, the helper cancels the keeper's attempt and
+wipes the staging), then cuts the exec. An operator restart or leader change
+drops the exec: the helper now treats a hangup (SIGHUP, new in this change for
+both helpers) as a cancel; failing that, the keeper's 15-minute attempt expiry
+frees the slot. Until then a new `url` answers a conflict naming the open
+ceremony. A ceremony that never reaches `code` leaves the journal and the
+published projection exactly as they were: adoption is the only write and it
+needs a code.
+
+**Keeper change: expiry in status.** `claude-login-status` and
+`codex-auth-status` print only a state word and a generation, but the story wants
+expiry. The keeper's control `status` answer gains `accessExpiresAt` and
+(Claude, when the provider said) `loginExpiresAt`, times only, from the journal it
+already loaded. A keeper from before this change omits them and `status` says so.
+Strict decoders on both sides mean the operator, keeper and helper images must
+move together (the pin PR moves the keeper `app` and both login containers in one
+rollout); a newer keeper with an older `claude-login` image reads `Unavailable`
+until the helper image follows.
+
+## Limits
+
+- One ceremony per provider; none survives an operator restart. Run `url` again.
+- Handlers answer inside the API's 60 s write timeout, so waits are 45 s and the
+  CLI client allows 75 s.
+- Codex's device flow has no code to paste. `code` is "wait for the sign-in to
+  finish"; if you prefer, run `status` until the generation moves.
+- The Claude CLI's behavior on this exec shape (terminal for stdin, CLI stdout
+  piped by the helper) is the one the keeper ceremony already ran live
+  (backlog 03 increment 5); only the transport in front of it is new.
+
+## Acceptance
+
+Source and tested: `internal/apiserver/keeper_login_test.go` (403 for the human,
+the v1 pod, a stranger and an ordinary session; status members; the link only in
+the response and never in a log; the code on stdin byte for byte; Codex device
+flow; abandon with no write and no Secret read; no-link, busy, refused and
+waiting outcomes; pod selection; no canary in any body, log or command line),
+`internal/keeper/claude_login_status_test.go` (an abandoned ceremony leaves the
+journal and projection alone; expiry reported), `internal/agentrun/keeperlogin_test.go`.
+Installed and usable: after release, the haynes-ops RBAC, and a pin that moves the
+operator and the keeper together: from a disposable workbench session,
+`keeper-login claude status` and `codex status` work, `url` returns a link and an
+abandoned `cancel` leaves `status` as it was. A full ceremony with Tom's code is a
+separate step with Tom.

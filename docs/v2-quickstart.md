@@ -225,6 +225,43 @@ nobody signs in per session.
 - **Not proven yet:** the automatic "continue" a session gets when a turn fails
   on an expired token. No turn has needed it.
 
+### Renew the keeper login from v2
+
+**Status: source and unit-tested only.** It works after the release that carries it
+is pinned and the operator's new access is in place (the haynes-ops access change
+merges first). Until then the v1 route above is the only one. Not yet run live.
+
+From a workbench session (the standby session on your phone is one), you renew the
+keeper's Claude or ChatGPT login yourself. No v1 pod, no laptop. Only a workbench
+session may do this; any other session gets "not allowed".
+
+```bash
+agent-run keeper-login claude status    # state, generation, when the access token
+                                        # lapses and when the login itself lapses
+agent-run keeper-login claude url       # opens a ceremony, prints the sign-in link
+read -rs c; printf '%s' "$c" | agent-run keeper-login claude code   # paste the code
+agent-run keeper-login claude cancel    # abandon an open ceremony
+```
+
+1. Run `status` first. Exit 0 means Ready. It changes nothing.
+2. Run `url`. The link is on its own line. Open it on your phone, sign in with your
+   Max account, and copy the code the page shows. Finish within 15 minutes.
+3. Give the code to `code` on its standard input, never as an argument. It prints
+   that the keeper adopted the login, with the new generation. If it says it is
+   still working, run `status`.
+4. Run `status` again. The generation should be higher and `login expires` about 30
+   days out.
+
+ChatGPT is the same with `codex`. Its `url` prints a link and a one-time code to type
+on that page; there is nothing to paste, and `agent-run keeper-login codex code`
+waits for the sign-in to finish (run it again if it says it is still waiting).
+
+If you give up, `cancel` leaves the keeper's current login exactly as it was: only a
+valid code replaces it. A wrong or expired code is refused the same way; run `cancel`,
+then `url` again. If the operator restarts mid-ceremony, run `url` again. The link and
+the code never go into git, notes or chat history you keep. The command reconnects by
+itself while the operator's standby replica answers.
+
 ## 7. Where notes live
 
 - `~/.shared` is one folder that every v2 session mounts:
@@ -245,9 +282,10 @@ nobody signs in per session.
 
 - **The keeper login ceremonies** (section 6): the Claude login about once a
   month, next around 2026-11-18, and the ChatGPT login when it reports
-  NeedsLogin. They run inside the keeper pod in `dev-env-system`. A workbench
-  session can reach session pods only, so the v1 pod (or a laptop with admin
-  access) runs them.
+  NeedsLogin. Today the v1 pod (or a laptop with admin access) runs them in the
+  keeper pod. From a workbench session they move to `agent-run keeper-login` once
+  that is released and pinned (section 6, "Renew the keeper login from v2"); it is
+  not run live yet, so this still needs v1 until it is.
 - **Restarting the v2 operator, keeper or shelf.** A v2 session is refused there.
 - **Headless Codex tasks on a repo outside the catalog** (section 3).
 - **Retiring v1 itself.** That is your call.

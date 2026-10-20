@@ -37,8 +37,33 @@ func New(cfg *rest.Config) (*Executor, error) {
 // returns an error that k8s.io/client-go/util/exec.ExitError matches, with its
 // exit status.
 func (e *Executor) Run(ctx context.Context, namespace, pod, container string, cmd []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	return e.run(ctx, namespace, pod, container, cmd, stdin, stdout, stderr, false)
+}
+
+// RunTTY is Run on a pseudo-terminal, for a helper that refuses a pipe (the
+// keeper's login helpers check for a terminal before they start the provider's
+// CLI). A terminal merges stderr into stdout and echoes what is written to
+// stdin, so the caller must treat stdout as untrusted terminal noise. The
+// terminal is 300 columns wide, so a long sign-in link is not wrapped by the
+// provider's CLI.
+func (e *Executor) RunTTY(ctx context.Context, namespace, pod, container string, cmd []string, stdin io.Reader, stdout io.Writer) error {
+	return e.run(ctx, namespace, pod, container, cmd, stdin, stdout, nil, true)
+}
+
+// fixedSize is the terminal size RunTTY reports, once.
+type fixedSize struct{ sent bool }
+
+func (f *fixedSize) Next() *remotecommand.TerminalSize {
+	if f.sent {
+		return nil
+	}
+	f.sent = true
+	return &remotecommand.TerminalSize{Width: 300, Height: 50}
+}
+
+func (e *Executor) run(ctx context.Context, namespace, pod, container string, cmd []string, stdin io.Reader, stdout, stderr io.Writer, tty bool) error {
 	req := e.client.Post().Resource("pods").Namespace(namespace).Name(pod).SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{Container: container, Command: cmd, Stdin: stdin != nil, Stdout: true, Stderr: true}, clientscheme.ParameterCodec)
+		VersionedParams(&corev1.PodExecOptions{Container: container, Command: cmd, Stdin: stdin != nil, Stdout: true, Stderr: !tty, TTY: tty}, clientscheme.ParameterCodec)
 	ws, err := remotecommand.NewWebSocketExecutor(e.config, "GET", req.URL().String())
 	if err != nil {
 		return err
@@ -53,5 +78,9 @@ func (e *Executor) Run(ctx context.Context, namespace, pod, container string, cm
 	if err != nil {
 		return err
 	}
-	return ex.StreamWithContext(ctx, remotecommand.StreamOptions{Stdin: stdin, Stdout: stdout, Stderr: stderr})
+	opts := remotecommand.StreamOptions{Stdin: stdin, Stdout: stdout, Stderr: stderr}
+	if tty {
+		opts.Tty, opts.TerminalSizeQueue = true, &fixedSize{}
+	}
+	return ex.StreamWithContext(ctx, opts)
 }
