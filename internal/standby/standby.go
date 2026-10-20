@@ -93,8 +93,8 @@ func (r *Runnable) Start(ctx context.Context) error {
 
 // Alive reports whether a standby session still counts as the standby, by its
 // record alone: it counts unless it is Terminal or its agent ended while it was
-// steady (AgentEnded). Ensure adds one check Alive cannot make, a stale report
-// (staleAgentReport).
+// steady (AgentEnded). Ensure adds the check Alive cannot make, on the pod
+// (unprovenAgentEnd).
 //
 // Everything that is only moving counts, so the standby is never replaced while
 // it is still the same phone entry:
@@ -122,6 +122,12 @@ func Terminal(s *v1alpha1.AgentSession) bool {
 // last report says the agent exited, failed or was interrupted. That is the
 // agent ending on its own, for example Tom typing /exit. It is not a suspend, a
 // drain or a pod restart, which spec.operatingMode and the other phases show.
+//
+// A report made while the pod's agentd is still booting (agent.boot "booting")
+// proves nothing about the agent. Before this boot starts the agent, status
+// derives the state from the volume's launch record of the previous boot and
+// reports it "interrupted" (or "exited"), so a drained standby reports a dead
+// agent for the whole boot (about a minute) with a fresh heartbeat (NB-10b).
 func AgentEnded(s *v1alpha1.AgentSession) bool {
 	if s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended {
 		return false
@@ -132,7 +138,7 @@ func AgentEnded(s *v1alpha1.AgentSession) bool {
 		return false
 	}
 	a := s.Status.Agent
-	if a == nil {
+	if a == nil || a.Boot == protocol.BootBooting {
 		return false
 	}
 	switch a.Status {
@@ -142,16 +148,20 @@ func AgentEnded(s *v1alpha1.AgentSession) bool {
 	return false
 }
 
-// staleAgentReport reports an ended-agent record that cannot be about the
-// session's current pod: the pod exists and was created after the last
-// heartbeat the operator accepted (or none was accepted). A session pod is Ready
-// as soon as its container starts (no readiness probe), so right after a drain
-// the phase is Running while the record still holds the old pod's "exited". A
-// missing pod is stale too: during a drain the pod is deleted and recreated
-// while the phase can still read Running, and a missing pod cannot prove the
-// agent ended. A standby that is really dead moves to Failed or Archived and is
-// replaced then.
-func (r *Runnable) staleAgentReport(ctx context.Context, s *v1alpha1.AgentSession) (bool, error) {
+// PodGrace is how long a standby's pod must have existed before an ended-agent
+// report can replace the standby. A new pod boots for about a minute after it is
+// Ready, so a recent pod's report is never taken as proof.
+const PodGrace = 5 * time.Minute
+
+// unprovenAgentEnd reports an ended-agent record that cannot be trusted as the
+// end of the standby: there is no pod (a drain deletes and recreates it while
+// the phase can still read Running, and a missing pod proves nothing; a standby
+// that is really dead moves to Failed or Archived and is replaced then), the
+// pod is younger than PodGrace, or the report is older than the pod (a pod is
+// Ready as soon as its container starts, so the record can still hold the old
+// pod's last report, or none). AgentEnded already refuses a report made while
+// the agent is booting.
+func (r *Runnable) unprovenAgentEnd(ctx context.Context, s *v1alpha1.AgentSession, now time.Time) (bool, error) {
 	var pod corev1.Pod
 	err := r.Reader.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: s.Name}, &pod)
 	if apierrors.IsNotFound(err) {
@@ -160,8 +170,12 @@ func (r *Runnable) staleAgentReport(ctx context.Context, s *v1alpha1.AgentSessio
 	if err != nil {
 		return false, fmt.Errorf("read the pod of standby %s: %w", s.Name, err)
 	}
+	created := pod.CreationTimestamp.Time
+	if now.Sub(created) < PodGrace {
+		return true, nil
+	}
 	hb := s.Status.Agent.LastHeartbeat
-	return hb == nil || hb.Time.Before(pod.CreationTimestamp.Time), nil
+	return hb == nil || hb.Time.Before(created), nil
 }
 
 // Ensure runs one pass. It returns the new session's name when it created one,
@@ -172,17 +186,21 @@ func (r *Runnable) Ensure(ctx context.Context) (string, error) {
 		client.MatchingLabels{v1alpha1.LabelStandby: "true"}); err != nil {
 		return "", fmt.Errorf("list standby sessions: %w", err)
 	}
+	now := time.Now()
+	if r.Now != nil {
+		now = r.Now()
+	}
 	for i := range list.Items {
 		it := &list.Items[i]
 		if Terminal(it) {
 			continue
 		}
 		if AgentEnded(it) {
-			stale, err := r.staleAgentReport(ctx, it)
+			unproven, err := r.unprovenAgentEnd(ctx, it, now)
 			if err != nil {
 				return "", err
 			}
-			if !stale {
+			if !unproven {
 				continue
 			}
 		}
@@ -190,10 +208,6 @@ func (r *Runnable) Ensure(ctx context.Context) (string, error) {
 		return "", nil
 	}
 
-	now := time.Now()
-	if r.Now != nil {
-		now = r.Now()
-	}
 	window, limit := r.Window, r.MaxCreations
 	if window <= 0 {
 		window = DefaultWindow

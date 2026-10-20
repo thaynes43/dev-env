@@ -1472,6 +1472,19 @@ no heartbeat), or with no pod at all, is stale and counts as present: a missing
 pod cannot prove the agent ended, and a standby that is really dead moves to
 Failed or Archived and is replaced then. The breaker is unchanged.
 
+NB-10b (2026-10-20). #480 was not enough on 2.38.2: a drained standby's new pod
+is Ready at once but its agentd boots for about a minute, and until it starts the
+agent, status reads the previous boot's launch record from the volume and sends
+agent=interrupted (or exited) with boot=booting, with a heartbeat newer than the
+pod. The runnable took that for an ended agent and created a second standby at
+the first tick after the operator roll. Two more rules close it: a report made
+while `status.agent.boot` is "booting" is never an ended agent, and an ended-agent
+report cannot replace a standby whose pod is younger than 5 minutes (PodGrace).
+The runnable reads sessions and pods through the API reader, never the cache, so
+a new leader sees the live state on its first pass. A standby stuck in boot
+"booting" is not replaced by the runnable; it is a boot fault for the operator
+to surface, and a duplicate is the worse failure.
+
 **D-60 (2026-10-07, plan 02 step 6). Suspend and resume are API calls that set
 `spec.operatingMode`, and the idle timer sets it the same way.**
 
