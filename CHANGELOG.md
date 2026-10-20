@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.37.0](https://github.com/thaynes43/dev-env/compare/v2.36.0...v2.37.0) (2026-10-19)
+
+
+### Features
+
+* **agentd:** report the served model for Codex tasks ([#465](https://github.com/thaynes43/dev-env/issues/465)) ([dd6d289](https://github.com/thaynes43/dev-env/commit/dd6d2895227d2c2d4391330fe6d54f34aa6e9ebc))
+* **operator:** keep one standby remote Claude session ready (default off) ([#466](https://github.com/thaynes43/dev-env/issues/466)) ([123bedc](https://github.com/thaynes43/dev-env/commit/123bedc22e213bddce406108c6c3a120d53b8ee8))
+
+
+### Bug Fixes
+
+* **apiserver:** let a workbench session create a Codex host ([#467](https://github.com/thaynes43/dev-env/issues/467)) ([f908dd6](https://github.com/thaynes43/dev-env/commit/f908dd643e999ec99a6af6aa34f93cdf290ed606))
+
 ## [2.36.0](https://github.com/thaynes43/dev-env/compare/v2.35.1...v2.36.0) (2026-10-19)
 
 
