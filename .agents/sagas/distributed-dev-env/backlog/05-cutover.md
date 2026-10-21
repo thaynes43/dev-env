@@ -245,7 +245,9 @@ them from a v1 session before step 7.
    Every `WORKTREE` line of a live session's worktree is resolved by its owner
    (push or commit) and the check rerun until none is left. The exception is a
    line that step 2's protected list covers: it stays unpushed, and step 4a
-   captures it. `BRANCH` lines are older local branches: a squash-merged branch
+   captures it. The coordinator checks that each remaining line is covered by a
+   `ref` or `path` entry, and the step 5 question gives their count, not their
+   names. `BRANCH` lines are older local branches: a squash-merged branch
    shows up too, because its commits are not on origin, so note its PR and move
    on. Whatever stays local goes into the bundles in step 4, except protected
    refs, and the step 5 question says how many there are. On
@@ -272,11 +274,14 @@ them from a v1 session before step 7.
    - Git bundles of local-only branches are added;
    - protected material stays on v1. The script reads step 2's list
      (`~/work/migrate-manifests/protected.txt`) and stops without it. Order and
-     memory files under a `path` entry are not copied, and protected order
-     files are not even opened. Each bundle is built from an explicit list of local branches
-     that origin lacks, minus every `ref` entry; a clone with no refs left is
-     skipped. The protected names stay in `~/work/migrate-manifests/v1-only/`
-     (mode 700), which is not copied.
+     memory files under a `path` entry are not copied, scanned or opened. Each
+     bundle is built from an explicit list of local branches that origin lacks,
+     minus every `ref` entry; a clone with no refs left is skipped. A branch
+     that carries a protected ref's commits (built on it, merged from it, or a
+     `rescue/*` of its worktree) is protected too: it is left out, printed and
+     counted, and step 4a keeps it with the owner of those commits. The
+     protected names stay in `~/work/migrate-manifests/v1-only/` (mode 700),
+     which is not copied.
 
    The files left out stay on v1's volume, listed in the manifests (protected
    names only in `v1-only/`). On 2026-10-20 that left about 140 MiB to copy.
@@ -300,7 +305,7 @@ them from a v1 session before step 7.
    set -u; export LC_ALL=C
    S=$1; DST=/home/dev/.shared/v1-home
    W=$HOME/work/migrate-manifests; mkdir -p "$W"; fail=0
-   V=$W/v1-only; mkdir -p -m 700 "$V"    # protected names only; step f never copies it
+   V=$W/v1-only; mkdir -p -m 700 "$V"    # lists that stay on v1, protected names among them
    kx() { KUBECTL_REMOTE_COMMAND_WEBSOCKETS=false timeout 1800 kubectl exec -i -n dev-agents "$S" -c agent -- "$@"; }
    PAT='gh[pousr]_[A-Za-z0-9]{30,}|github_pat_|sk-ant-|sk-proj-|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY'
    PAT="$PAT"'|"refresh_token"|"access_token"|PVEAPIToken'
@@ -327,10 +332,18 @@ them from a v1 session before step 7.
    drop_protected() { while IFS= read -r f; do
      if inpath "$1/${f#./}"; then echo "$f" >&4; else echo "$f"; fi; done < "$2" > "$3" 4> "$4"; }
 
-   # 0. Scan and list. Nothing is copied before step a.
-   #    Memory: every file, read as text; a match stops the run (fix it by hand).
-   if nice -n 19 grep -rlaE --exclude='*.jsonl' "$PAT" "$HOME"/.claude/projects/*/memory; then
-     echo "STOP: the memory files above match a secret pattern"; exit 1
+   # 0. List and scan. Nothing is copied before step a.
+   #    Memory: each folder's file list, minus protected paths. Every file that
+   #    will be copied is read as text; a match stops the run (fix it by hand).
+   for m in "$HOME"/.claude/projects/*/memory; do
+     p=$(basename "$(dirname "$m")")
+     ( cd "$m" && find . -type f ! -name '*.jsonl' | sort ) > "$V/mem-$p.all"
+     drop_protected "$m" "$V/mem-$p.all" "$V/mem-$p.txt" "$V/mem-$p.protected"
+     while IFS= read -r f; do echo "$m/${f#./}"; done < "$V/mem-$p.txt"
+   done > "$V/memory-copy.txt"
+   tr '\n' '\0' < "$V/memory-copy.txt" | nice -n 19 xargs -0 -r grep -laE "$PAT" > "$V/memory-secret-scan.txt"
+   if [ -s "$V/memory-secret-scan.txt" ]; then
+     cat "$V/memory-secret-scan.txt"; echo "STOP: the memory files above match a secret pattern"; exit 1
    fi
    #    Orders: protected paths come out first, unopened; the copy list is the
    #    text files left that do not match.
@@ -342,24 +355,26 @@ them from a v1 session before step 7.
    comm -23 "$W/orders-open.txt" "$W/orders-text.txt" > "$W/orders-not-text.txt"
    comm -23 "$W/orders-text.txt" "$W/orders-secret-scan.txt" > "$W/orders-copy.txt"
    echo "copying $(wc -l < "$W/orders-copy.txt") files; left out $(wc -l < "$W/orders-not-text.txt") non-text and empty, $(wc -l < "$W/orders-secret-scan.txt") scan matches, $(wc -l < "$V/orders-protected.txt") protected"
-   #    Memory: each folder's file list, minus protected paths.
-   for m in "$HOME"/.claude/projects/*/memory; do
-     p=$(basename "$(dirname "$m")")
-     ( cd "$m" && find . -type f ! -name '*.jsonl' | sort ) > "$V/mem-$p.all"
-     drop_protected "$m" "$V/mem-$p.all" "$V/mem-$p.txt" "$V/mem-$p.protected"
-   done
-   #    Refs: each canonical clone's local branches that origin lacks, minus protected refs.
+   #    Refs: each canonical clone's local branches that origin lacks, minus
+   #    protected refs, and minus any branch that carries a protected ref's commits.
    for r in "$HOME"/repos/*/; do
      n=$(basename "$r")
      git -C "$r" for-each-ref --format='%(refname)' refs/heads > "$V/heads-$n.txt" || { echo "REFS FAIL $n"; fail=1; }
      while read -r ref; do
        [ -n "$(nice -n 19 git -C "$r" rev-list -n 1 "$ref" --not --remotes)" ] || continue
        if inref "$n" "$ref"; then echo "$ref" >&4; else echo "$ref"; fi
-     done < "$V/heads-$n.txt" > "$W/bundle-$n.refs" 4> "$V/refs-$n.protected"
+     done < "$V/heads-$n.txt" > "$V/kept-$n.txt" 4> "$V/refs-$n.protected"
+     mapfile -t pr < "$V/refs-$n.protected"
+     while read -r ref; do
+       if [ "${#pr[@]}" -gt 0 ] && [ "$(nice -n 19 git -C "$r" rev-list --count "$ref" --not --remotes)" != \
+            "$(nice -n 19 git -C "$r" rev-list --count "$ref" --not --remotes "${pr[@]}")" ]; then
+         echo "$ref" >&4; else echo "$ref"; fi
+     done < "$V/kept-$n.txt" > "$W/bundle-$n.refs" 4> "$V/carry-$n.txt"
      sed "s|^|protected ref, not bundled: $n |" "$V/refs-$n.protected"
+     sed "s|^|carries protected commits, not bundled: $n |" "$V/carry-$n.txt"
    done
    np=$(cat "$V"/orders-protected.txt "$V"/mem-*.protected 2>/dev/null | wc -l)
-   nr=$(cat "$V"/refs-*.protected 2>/dev/null | wc -l)
+   nr=$(cat "$V"/refs-*.protected "$V"/carry-*.txt 2>/dev/null | wc -l)
    echo "protected, left on v1 for step 4a: $np files, $nr refs" | tee "$W/protected-counts.txt"
    [ "${2:-}" = check ] && { echo "CHECK ONLY: nothing copied"; exit 0; }
 
@@ -374,7 +389,7 @@ them from a v1 session before step 7.
    # c. Each repo's auto-memory, from its list; a folder with nothing left is skipped.
    for m in "$HOME"/.claude/projects/*/memory; do
      p=$(basename "$(dirname "$m")")
-     [ -s "$V/mem-$p.txt" ] || { rm -f "$W/mem-$p.sha"; echo "memory $p: nothing to copy, skipped"; continue; }
+     [ -s "$V/mem-$p.txt" ] || { rm -f "$W/mem-$p.sha"; echo "memory: a folder with nothing left to copy, skipped"; continue; }
      kx mkdir -p "$DST/memory/$p" || { fail=1; continue; }
      tar c -C "$m" -T "$V/mem-$p.txt" | kx tar x -C "$DST/memory/$p"
      rc="${PIPESTATUS[*]}"; echo "memory $p rc: $rc"; [ "$rc" = "0 0" ] || fail=1
@@ -407,25 +422,33 @@ them from a v1 session before step 7.
      kx sh -c "cd $DST/bundles && sha256sum -c --quiet" < "$W/bundles.sha" || { echo "CHECKSUM FAIL bundles"; fail=1; }
    fi
 
-   # f. Keep the manifests (paths and hashes only) next to the copy. The
-   #    protected list and v1-only/ stay on v1; protected-counts.txt goes along.
-   tar c -C "$W" --exclude='*.bundle' --exclude=./protected.txt --exclude=./v1-only . |
-     kx sh -c "mkdir -p $DST/manifests && tar x -C $DST/manifests" || fail=1
+   # f. Keep the manifests (paths and hashes only) next to the copy: this
+   #    script's own files, by name. protected.txt and v1-only/ stay on v1.
+   ( cd "$W" && for x in orders-*.txt orders.sha mem-*.sha bundles.sha bundle-*.refs protected-counts.txt; do
+       [ -f "$x" ] && echo "$x"; done ) > "$V/manifests.txt"
+   tar c -C "$W" -T "$V/manifests.txt" | kx sh -c "mkdir -p $DST/manifests && tar x -C $DST/manifests" || fail=1
    [ "$fail" = 0 ] && echo "ALL OK" || { echo "SOMETHING FAILED: read the lines above"; exit 1; }
    EOF
-   bash ~/work/migrate-v1-notes.sh - check     # copies nothing: counts and protected refs
-   # Compare them with step 2's list; then the real run:
+   bash ~/work/migrate-v1-notes.sh - check     # copies nothing
+   ```
+
+   The `check` run copies nothing. It prints the counts, each ref it will leave
+   out, and `protected, left on v1 for step 4a: <n> files, <m> refs` (protected
+   paths are counted, not named). Compare them with what the owners named. A
+   missing ref or a lower count than expected means a glob did not match: fix
+   `protected.txt` and check again. The printed refs stay in that v1 shell; the
+   progress file and the step 5 question get counts and owners only. Then the
+   real run:
+
+   ```bash
    bash ~/work/migrate-v1-notes.sh "$S" && $v2 reap "$S"
    ```
 
-   The `check` run copies nothing. It prints the counts, each protected ref it
-   will leave out, and `protected, left on v1 for step 4a: <n> files, <m> refs`
-   (protected paths are counted, not named). Compare them with what the owners
-   named. A missing ref or a lower count than expected means a glob did not
-   match: fix `protected.txt` before the real run. `ALL OK` means the real run
-   worked; then the writer session is reaped. Nothing is deleted on either side.
-   The script removes only its own earlier output: a bundle from an earlier run,
-   and the checksum list of a memory folder that now has nothing to copy.
+   `ALL OK` means the real run worked; then the writer session is reaped.
+   Nothing is deleted on either side. The script removes only its own earlier
+   output: a bundle from an earlier run, and the checksum list of a memory folder
+   that now has nothing to copy. Only the script's own manifests are copied, by
+   name, so a stray file in `~/work/migrate-manifests` stays on v1.
    `manifests/orders-secret-scan.txt` names the files to read before anyone
    copies them by hand. If a copy is cut off by the timeout, remove the exact
    `$DST` path (no wildcard) and run the script again.
@@ -460,8 +483,9 @@ them from a v1 session before step 7.
    - Capture protected material (step 2's list, which step 4 left out) here and
      only here, under its owner's custody. Each owner gets archives of its own,
      never mixed with another owner's items, named by owner and item number
-     rather than by the protected names. Bundle protected refs from an explicit
-     ref list, as step 4 does. These archives are never handed to a different
+     rather than by the protected names. Bundle protected refs, and the
+     branches step 4 found carrying their commits, from an explicit ref list.
+     A carrying branch goes with the owner of the protected commits. These archives are never handed to a different
      owner's successor (for example, an evaluator's material to a developer's
      successor) and never copied to `~/.shared`. An earlier archive that mixes
      owners goes to neither owner's successor; capture each owner's part again
