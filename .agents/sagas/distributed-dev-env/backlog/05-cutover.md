@@ -206,6 +206,10 @@ them from a v1 session before step 7.
    the bundles in step 4, and the step 5 question says how many there are. On
    2026-10-20, without a fetch, the `BRANCH` check found 109 such branches in
    dev-env and haynes-ops alone, so expect a long list.
+
+   The loop does not show gitignored files. For each live worktree, also count
+   `git --no-optional-locks status --porcelain --ignored=matching` entries outside
+   build and cache directories, and hand any found to step 4a.
 4. **Copy orders, memory and local branches to v2, and verify.** From a v1 shell,
    after the handoffs, so nothing changes underneath. It follows W3a's tested
    sequence, with three changes:
@@ -330,10 +334,38 @@ them from a v1 session before step 7.
    ```
 
    It never overwrites a v2 file, and a second run adds nothing.
+
+   **4a. Preserve what the copy cannot carry.** The step 4 copy reaches only text
+   files under `~/work/orders` and committed local branches. It does not reach
+   untracked or gitignored files inside worktrees (evidence folders, gitignored
+   local checkpoints, scratch evidence), non-text evidence, or files the scan
+   leaves out. From a v1 shell, before step 5:
+   - Capture them read-only into a protected directory on the v1 volume, outside
+     `~/work` so the sweeper never reaps it. Use `umask 077`, directory mode 700,
+     files mode 600, the same user as the originals. Use `git bundle create` for
+     commits, `tar` of an explicit file list for untracked and ignored files, and
+     `cp --preserve=timestamps` for single files. Run them under `nice -n 19`, one
+     at a time. Never check out, stash, clean, commit or delete anything at the source.
+   - Verify every artifact: sha256 and bytes; for a bundle, `git bundle verify` and
+     heads equal to the source refs; for a tar, an entry count equal to the source
+     file count and `tar --compare` against the source. Check mtimes or refs before
+     and after each capture.
+   - Record every item in a protected manifest in one of three states:
+     - preserved;
+     - interim: the owner is still active, so re-capture after it quiesces;
+     - owner input: a named owner, the question, and a safe default that keeps the data.
+
+     Also keep a summary in `~/work/orders` with archive names, sizes and hashes only.
+   - Do not copy these archives to `~/.shared`: no v2 destination there has access
+     equal to the originals.
+   - Before step 5, re-capture every interim item and run a drift check on the rest.
+
+   The 2026-10-21 run is summarized in `~/work/orders/dev-env-reset-1018/CR-1021-PRESERVATION.md`.
 5. **Record Tom's written approval.** Only after steps 2 to 4 are complete, ask
    Tom through AskUserQuestion. Name what is left: any session that replied
    "partial", the count of local-only branches that went into the bundles, and
-   the files the copy left out. Put his words in the saga decision log as a dated
+   the files the copy left out, and every step 4a item still interim or awaiting
+   owner input. Put his words in the saga decision log as a dated
    ruling, in a dev-env docs PR merged before step 6. If he does not approve, or
    does not answer, stop here: nothing has been stopped, and nothing is.
 6. **Stop v1's Codex daemon**, only after step 5's ruling is merged, from a shell
@@ -386,7 +418,9 @@ them from a v1 session before step 7.
    its tmux sessions and agents are not restored, and its Codex daemon starts again
    only by `agent-run codex-remote up` inside it. Its Max login works only until
    it lapses (2026-11-15). The PVC is kept for at least 30 days, so a rollback
-   stays possible that long.
+   stays possible that long. It is also kept until every step 4a archive has an
+   owner-approved destination with equal protection, because those archives live
+   on that PVC.
 
 After step 9's window: one week at zero, then the acceptance below, then the
 held-draft cleanup PRs after 30 days.
