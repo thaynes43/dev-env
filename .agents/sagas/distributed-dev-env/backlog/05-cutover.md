@@ -96,7 +96,8 @@ The CR-1020 result files sit in the coordinator's order directory,
   `Delete` (StorageClass `ceph-block`), and nothing snapshots or backs it up
   (decision 7 of v1's saga, haynes-ops `.agents/sagas/dev-env/`). Deleting the PVC object destroys v1's history. Flux will not prune
   it: the PVC carries `kustomize.toolkit.fluxcd.io/prune: disabled`. Scaling to
-  zero removes only the pod. The PVC stays at least 30 days.
+  zero removes only the pod. The PVC stays at least 30 days, and until every
+  step 4a archive has a destination Tom approved, with equal protection.
 - **v1's Max login is retired with the pod.** Tom stops renewing it; it lapses about
   30 days after its last `/login` (W2 read 2026-11-15 01:38 UTC). Nothing is copied
   to the keeper, which has had its own login since plan 03. The `claude-login-check`
@@ -140,7 +141,8 @@ The CR-1020 result files sit in the coordinator's order directory,
 **What authorizes it.** Tomorrow's date alone authorizes nothing. Steps 1 to 5
 prepare and check; they stop, restart or end nothing in v1. (Step 3's `git
 fetch` updates remote-tracking refs, and step 4 writes its manifests and
-bundles under `~/work/migrate-manifests`.) Nothing that
+bundles under `~/work/migrate-manifests`; step 4a writes its archives and
+manifest to a protected directory on v1's volume.) Nothing that
 stops, restarts, retires or disrupts v1 or a v1 session (v1's Codex daemon
 included) runs before all four of these hold:
 
@@ -154,7 +156,7 @@ as they are, and the copy in `~/.shared/v1-home/` simply stays.
 
 Run by a new cutover coordinator in a v2 workbench session (the standby will do),
 under its own story record. Merging step 7 ends every v1 session, so the
-coordinator must not run in v1. Steps 3, 4 and 6 need a shell in the v1 pod; run
+coordinator must not run in v1. Steps 3, 4 (with 4a) and 6 need a shell in the v1 pod; run
 them from a v1 session before step 7.
 
 1. **Announce.** Tell Tom the plan and the expected end time. List v1's sessions
@@ -207,9 +209,12 @@ them from a v1 session before step 7.
    2026-10-20, without a fetch, the `BRANCH` check found 109 such branches in
    dev-env and haynes-ops alone, so expect a long list.
 
-   The loop does not show gitignored files. For each live worktree, also count
-   `git --no-optional-locks status --porcelain --ignored=matching` entries outside
-   build and cache directories, and hand any found to step 4a.
+   The loop does not show gitignored files, and `status` lists an ignored
+   directory as one entry. For each live worktree, also list ignored files with
+   `nice -n 19 git -C "$wt" ls-files -z --others --ignored --exclude-standard`
+   (files only; it writes no index), leave out build and cache directories, and
+   hand any found to step 4a. Also hand to step 4a the untracked paths of
+   worktrees that no live session owns: no owner can resolve their `WORKTREE` lines.
 4. **Copy orders, memory and local branches to v2, and verify.** From a v1 shell,
    after the handoffs, so nothing changes underneath. It follows W3a's tested
    sequence, with three changes:
@@ -340,30 +345,37 @@ them from a v1 session before step 7.
    untracked or gitignored files inside worktrees (evidence folders, gitignored
    local checkpoints, scratch evidence), non-text evidence, or files the scan
    leaves out. From a v1 shell, before step 5:
-   - Capture them read-only into a protected directory on the v1 volume, outside
+   - Capture them, reading the source only, into a protected directory on the v1 volume, outside
      `~/work` so the sweeper never reaps it. Use `umask 077`, directory mode 700,
      files mode 600, the same user as the originals. Use `git bundle create` for
-     commits, `tar` of an explicit file list for untracked and ignored files, and
+     commits, `tar` of an explicit list of files, not directories
+     (`--null --no-recursion -T`), for untracked and ignored files, and
      `cp --preserve=timestamps` for single files. Run them under `nice -n 19`, one
      at a time. Never check out, stash, clean, commit or delete anything at the source.
-   - Verify every artifact: sha256 and bytes; for a bundle, `git bundle verify` and
-     heads equal to the source refs; for a tar, an entry count equal to the source
-     file count and `tar --compare` against the source. Check mtimes or refs before
+   - Verify every artifact: sha256 and bytes; for a bundle,
+     `git -C <source repo> bundle verify` and heads equal to the source refs; for a
+     tar, an entry count equal to the source file count and `tar --compare` with the
+     same `-C` as the create. Check mtimes or refs before
      and after each capture.
    - Record every item in a protected manifest in one of three states:
      - preserved;
      - interim: the owner is still active, so re-capture after it quiesces;
      - owner input: a named owner, the question, and a safe default that keeps the data.
-
-     Also keep a summary in `~/work/orders` with archive names, sizes and hashes only.
+   - Keep a summary in `~/work/orders` (on v1's volume; step 4's copy has already
+     run) with archive names, sizes and hashes only, and copy those names, sizes and
+     hashes into the cutover coordinator's progress file: after step 7 no v2 agent
+     can read v1's `~/work/orders`.
    - Do not copy these archives to `~/.shared`: no v2 destination there has access
      equal to the originals.
-   - Before step 5, re-capture every interim item and run a drift check on the rest.
+   - Before step 5, re-capture each interim item whose owner replied done in step 2
+     and mark it preserved; drift-check the rest. Any item still interim goes into
+     the step 5 question.
 
-   The 2026-10-21 run is summarized in `~/work/orders/dev-env-reset-1018/CR-1021-PRESERVATION.md`.
+   The 2026-10-21 run is summarized in
+   `~/work/orders/dev-env-reset-1018/CR-1021-PRESERVATION.md` (on v1's volume).
 5. **Record Tom's written approval.** Only after steps 2 to 4 are complete, ask
    Tom through AskUserQuestion. Name what is left: any session that replied
-   "partial", the count of local-only branches that went into the bundles, and
+   "partial", the count of local-only branches that went into the bundles,
    the files the copy left out, and every step 4a item still interim or awaiting
    owner input. Put his words in the saga decision log as a dated
    ruling, in a dev-env docs PR merged before step 6. If he does not approve, or
@@ -418,8 +430,8 @@ them from a v1 session before step 7.
    its tmux sessions and agents are not restored, and its Codex daemon starts again
    only by `agent-run codex-remote up` inside it. Its Max login works only until
    it lapses (2026-11-15). The PVC is kept for at least 30 days, so a rollback
-   stays possible that long. It is also kept until every step 4a archive has an
-   owner-approved destination with equal protection, because those archives live
+   stays possible that long. It is also kept until every step 4a archive has a
+   destination Tom approved, with equal protection, because those archives live
    on that PVC.
 
 After step 9's window: one week at zero, then the acceptance below, then the
@@ -430,4 +442,5 @@ held-draft cleanup PRs after 30 days.
 - Tom approves the cutover in writing (a dated ruling in the decision log).
 - One week after scale-to-zero, nobody has needed v1.
 - v1's PVC is deleted only after its rescue branches are bundled to the shared
-  volume (runbook step 4 does this), and never before the 30 days.
+  volume (runbook step 4 does this), never before the 30 days, and never before
+  every step 4a archive has a destination Tom approved, with equal protection.
