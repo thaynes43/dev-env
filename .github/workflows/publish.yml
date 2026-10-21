@@ -140,7 +140,7 @@ jobs:
         with:
           # The same pin as haynes-ops dev-env-build.yml. See the header comment and
           # thaynes43/haynes-ops#3092 before changing it.
-          cosign-release: v3.1.3
+          cosign-release: v3.1.4
 
       # An existing tag is final. Its digest is read back so that a signing retry
       # signs exactly what is there.
