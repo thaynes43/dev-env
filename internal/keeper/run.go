@@ -46,7 +46,9 @@ type Options struct {
 	ClaudeAuth ClaudeOptions
 	// Notices configures the login gauges' notifier (plan 13, story 13.1).
 	// Zero values take the defaults; the notifier runs only while its Pushover
-	// credential files exist.
+	// credential files exist. Disabled is a bad notice flag: the command logs
+	// it and Run does not start the notifier, so the validation error cannot
+	// stop the credential keeper.
 	Notices NoticeOptions
 	// Interval is the longest wait between two refreshes; DefaultInterval when
 	// zero.
@@ -71,6 +73,13 @@ type Options struct {
 // runnable (codexWorker), as the package doc says.
 func keeperJobs(o Options) []Job {
 	return []Job{GitHubTokenJob("gh-token", o.GitHubApp, o.GHTokenSecret)}
+}
+
+// noticesStart reports whether Run adds the notifier. Disabled notice flags
+// are logged by the command and must not reach NewNotifier: that returns the
+// validation error and would stop the credential keeper.
+func noticesStart(providerCount int, notices NoticeOptions) bool {
+	return providerCount > 0 && !notices.Disabled
 }
 
 // Run runs the keeper until ctx ends or this process loses the leader election,
@@ -170,7 +179,9 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 	if err := registerLoginCollector(NewLoginCollector(hub)); err != nil {
 		return err
 	}
-	if len(providers) > 0 {
+	// A bad notice flag sets Disabled. NewNotifier would return that validation
+	// error and stop the credential keeper, so the notifier stays off.
+	if noticesStart(len(providers), o.Notices) {
 		notices := o.Notices.withDefaults()
 		clk := o.Clock
 		if clk == nil {

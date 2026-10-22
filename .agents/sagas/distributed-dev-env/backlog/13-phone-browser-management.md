@@ -288,16 +288,20 @@ Secret).
     (as soon as floor(days left) is 7 or fewer, inside 09:00 to 21:00 New York
     time); the lapse is 2026-11-16 17:51 UTC. Check the keeper log and Tom's
     phone then.
-- **Follow-ups (not blocking, not started).**
-  1. An invalid notice flag (for example a bad `--notice-timezone`) stops the
-     keeper at start (Opus review, minor 4). A bad value should disable notices
-     and log, not stop the credential keeper.
-  2. The v2 session CLAUDE.md does not describe the keeper-login renewal flow
-     (haynes-ops `dev-env-config-claude`). A session told to renew has to find
-     it in quickstart section 6.
-  3. The notice cannot deep-link to the standby: the keeper can only get
-     AgentSessions by name, so notices link `https://claude.ai/code`. A stable
-     link needs either list access for the keeper or a fixed standby name.
+- **Follow-ups (not blocking).**
+  1. Done (Opus review, minor 4). An invalid notice flag does not stop the
+     keeper at start. A bad value disables notices and logs `notices disabled`;
+     the credential keeper keeps running. That is `--notice-timezone`, either
+     window flag, and `--pushover-url`, whenever `NoticeOptions.Validate`
+     refuses them. Valid notice flags, including the defaults, stay valid.
+     Login gauges are unchanged.
+  2. Not started. The v2 session CLAUDE.md does not describe the keeper-login
+     renewal flow (haynes-ops `dev-env-config-claude`). A session told to renew
+     has to find it in quickstart section 6.
+  3. Not started. The notice cannot deep-link to the standby: the keeper can
+     only get AgentSessions by name, so notices link `https://claude.ai/code`.
+     A stable link needs either list access for the keeper or a fixed standby
+     name.
 
 ## Later
 

@@ -284,6 +284,9 @@ type NoticeOptions struct {
 	WindowStart         string // "09:00"
 	WindowEnd           string // "21:00"
 	StateConfigMap      string
+	// Disabled is set when a notice flag failed validation. The keeper command
+	// logs that failure and leaves the notifier off. Credential refresh still runs.
+	Disabled bool
 }
 
 func (o NoticeOptions) withDefaults() NoticeOptions {
