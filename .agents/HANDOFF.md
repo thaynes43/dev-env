@@ -32,8 +32,8 @@ GitOps state and an observed running image are different evidence levels.
 - **W3 limits remain:** no live PR merge from v2 was demonstrated; the
   ordinary-app restart and Job-from-CronJob paths were server dry runs only.
   The quick start's [W1 follow-ups](../docs/v2-quickstart.md) remain separately
-  scoped. The held `dev-env-system` fence (W1 F2) and optional G6 are not
-  cutover prerequisites.
+  scoped. The held `dev-env-system` fence (W1 F2) is not a cutover
+  prerequisite.
 - **Native review evidence remains a gap for the October 22 deliveries in
   this reconciliation.** The available [#505 advisory
   review](https://github.com/thaynes43/dev-env/pull/505#issuecomment-6330162641)
@@ -54,8 +54,10 @@ GitOps state and an observed running image are different evidence levels.
   follows from this reconciliation.
 - The other historical backlog and owner holds below retain their recorded
   scope; this docs slice neither executes nor accepts them. The `TZ` test,
-  keeper renewal text and plan 13 follow-ups are no longer current open
-  items, for the linked reasons above.
+  the v2 session CLAUDE.md renewal text (plan 13 follow-up 2, haynes-ops
+  #4160) and plan 13 follow-ups are no longer current open items, for the
+  linked reasons above. The separate dev-env-ops Max-login renewal-text
+  backlog item remains open.
 
 **Next safe step:** continue the wider #92 CLI quick start through a bounded
 coordinator packet and the normal `CI - Success` and native independent
