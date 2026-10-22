@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.39.1](https://github.com/thaynes43/dev-env/compare/v2.39.0...v2.39.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* **keeper:** a bad notice flag disables notices instead of stopping the keeper ([#505](https://github.com/thaynes43/dev-env/issues/505)) ([4ebf457](https://github.com/thaynes43/dev-env/commit/4ebf457764e9ccdf7d1651671aa70a221d245936))
+
 ## [2.39.0](https://github.com/thaynes43/dev-env/compare/v2.38.3...v2.39.0) (2026-10-20)
 
 
