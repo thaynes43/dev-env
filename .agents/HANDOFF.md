@@ -1,6 +1,74 @@
 # HANDOFF: start here
 
-## Current state — 2026-10-20 23:00 UTC (v2 release 2.39.0; cutover readiness)
+## Current state — 2026-10-22 UTC (v2 release 2.39.1; documentation reconciliation)
+
+This block supersedes the installed-version and open-item summaries in the
+October 20 block below. That block and the earlier records stay as dated
+history. This is the small October 22 documentation slice of
+[OpenProject #92](https://work.haynesnetwork.com/work_packages/92), not
+completion of its wider CLI acceptance or approval to retire v1.
+
+**Source, publication and pin:**
+
+| Change | Dated evidence | What it establishes |
+|---|---|---|
+| Release 2.39.1 | [dev-env #506](https://github.com/thaynes43/dev-env/pull/506), commit `617ed15fa850d8fff49a9d2c45fa11e4411cd077`; [release](https://github.com/thaynes43/dev-env/releases/tag/v2.39.1), published 2026-10-22 01:37:49 UTC | Published release; not proof that every retained session moved images |
+| Invalid notice flags disable notices while the keeper continues | [dev-env #505](https://github.com/thaynes43/dev-env/pull/505), merge `4ebf457764e9ccdf7d1651671aa70a221d245936` | Source fix included in 2.39.1 |
+| Archived-inbox timestamp comparison uses UTC | [dev-env #507](https://github.com/thaynes43/dev-env/pull/507), merge `cd0df43f409267296ffee5caec5368364149bb58` | Test-only fix; remove the `TZ` regression from the current open list. Focused UTC and America/New_York passes are the PR author's reported results, not tests rerun for this reconciliation |
+| Keeper renewal instructions corrected | [haynes-ops #4160](https://github.com/thaynes43/haynes-ops/pull/4160), merge `b2fde82135d1b6bcb4b77765e6015c7b5511f0cb` | Session instructions use `agent-run keeper-login claude url` and `agent-run keeper-login claude code` |
+| Matching 2.39.1 image pins | [haynes-ops #4161](https://github.com/thaynes43/haynes-ops/pull/4161), merge `946dc6cd0506d73957a706fdab553d1d852c8135` | GitOps pin merged; its publication record links signed operator/codex-login [run 39706772225](https://github.com/thaynes43/dev-env/actions/runs/39706772225) and signed agent [run 39706793789](https://github.com/thaynes43/dev-env/actions/runs/39706793789). No new runtime check is performed by this docs change |
+| Plan 13 follow-ups reconciled | [dev-env #508](https://github.com/thaynes43/dev-env/pull/508), merge `2cb9e33fac9b6c3150a13a0113f8382f916043d3`; [plan 13](sagas/distributed-dev-env/backlog/13-phone-browser-management.md#smallest-next-step-story-131-login-lapse-date-and-reminder) | Follow-ups 1 and 2 are done; Tom closed 3. The general Claude Code session-list link is sufficient; no dedicated standby-link task remains |
+
+The pin record keeps the broker and shelf unchanged. It describes template
+updates and idle-session draining separately from Codex-host movement; do not
+infer that a merged pin migrated every existing session. Publication, desired
+GitOps state and an observed running image are different evidence levels.
+
+**Acceptance and current open work:**
+
+- The accepted CR-1020 phone checks remain accepted: standby on cellular,
+  PEAR/history, keeper status and notice delivery. Their dated evidence is in
+  the October 20 table below; do not repeat them for this docs slice.
+- **W3 limits remain:** no live PR merge from v2 was demonstrated; the
+  ordinary-app restart and Job-from-CronJob paths were server dry runs only.
+  The quick start's [W1 follow-ups](../docs/v2-quickstart.md) remain separately
+  scoped. The held `dev-env-system` fence (W1 F2) is not a cutover
+  prerequisite.
+- **Native review evidence remains a gap for the October 22 deliveries in
+  this reconciliation.** The available [#505 advisory
+  review](https://github.com/thaynes43/dev-env/pull/505#issuecomment-6330162641)
+  and [#507 advisory
+  review](https://github.com/thaynes43/dev-env/pull/507#issuecomment-6330589465)
+  do not replace the [required native independent
+  review](../CLAUDE.md#automated-pr-review-agents-read-this). The release's
+  skipped advisory is not a review. Recover an existing exact-head receipt
+  before certifying that gate; missing evidence alone does not establish a
+  code defect or undo the merges.
+- **The wider CLI quick start and cutover remain separate work.** Preserve
+  owner handoffs, local-only and excluded artifacts, protected-material
+  separation, verified copying and the final preservation/drift checks. A
+  recorded plan or one-file copy trial is not the full verified copy.
+  Follow the current [cutover runbook](sagas/distributed-dev-env/backlog/05-cutover.md#cutover-runbook-2026-10-21)
+  and obtain Tom's explicit final go. Historical dates authorize nothing.
+  No v1 restart, daemon stop, session interruption, scale-down or PVC deletion
+  follows from this reconciliation.
+- The other historical backlog and owner holds below retain their recorded
+  scope; this docs slice neither executes nor accepts them. The `TZ` test,
+  the v2 session CLAUDE.md renewal text (plan 13 follow-up 2, haynes-ops
+  #4160) and plan 13 follow-ups are no longer current open items, for the
+  linked reasons above. The separate dev-env-ops Max-login renewal-text
+  backlog item remains open.
+
+**Next safe step:** continue the wider #92 CLI quick start through a bounded
+coordinator packet and the normal `CI - Success` and native independent
+review gates. Do not declare all #92, MVP acceptance or cutover complete from
+this documentation reconciliation.
+
+## State at release 2.39.0 — 2026-10-20 23:00 UTC (historical)
+
+*Historical. The October 22 block above supersedes this block's installed
+version and open-item summaries. Its dated observations and original text
+remain below.*
 
 This block replaces the 2.38.3 block below, which stays as history. It records
 story CR-1020 (cutover readiness, Saga85 / Epic107), run by coordinator
