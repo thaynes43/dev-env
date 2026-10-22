@@ -14,6 +14,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/resource"
+
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
@@ -422,6 +424,8 @@ func (a *app) reap(ctx context.Context, args []string) error {
 
 func (a *app) fleet(ctx context.Context, args []string) error {
 	cmd := newCommand("fleet", outputJSON)
+	var resources bool
+	cmd.fs.BoolVar(&resources, "resources", false, "")
 	pos, err := cmd.parse(a, args)
 	if err != nil {
 		return err
@@ -433,9 +437,16 @@ func (a *app) fleet(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	callCtx := ctx
+	if resources {
+		callCtx = withFleetResources(ctx)
+	}
 	var f apiv1.Fleet
-	if _, err := a.call(ctx, c, http.MethodGet, apiv1.FleetPath, nil, nil, &f); err != nil {
+	if _, err := a.call(callCtx, c, http.MethodGet, apiv1.FleetPath, nil, nil, &f); err != nil {
 		return err
+	}
+	if resources {
+		fillAbsentFleetResources(&f)
 	}
 	if cmd.c.output == outputJSON {
 		return a.printJSON(f)
@@ -463,7 +474,11 @@ func (a *app) fleet(ctx context.Context, args []string) error {
 	a.outf("\n")
 	now := a.env.Now()
 	tw := a.table()
-	_, _ = fmt.Fprintln(tw, "NAME\tPHASE\tAGENT\tNODE\tHEARTBEAT\tAGE\tNOTE")
+	if resources {
+		_, _ = fmt.Fprintln(tw, "NAME\tPHASE\tAGENT\tNODE\tHEARTBEAT\tAGE\tNOTE\tPOD\tSPEC NODE\tRESOURCES")
+	} else {
+		_, _ = fmt.Fprintln(tw, "NAME\tPHASE\tAGENT\tNODE\tHEARTBEAT\tAGE\tNOTE")
+	}
 	for _, s := range f.Sessions {
 		beat := "-"
 		if s.LastHeartbeat != nil {
@@ -482,10 +497,83 @@ func (a *app) fleet(ctx context.Context, args []string) error {
 		if s.Phase == "Pending" && s.Pending != "" {
 			parts = append(parts, s.Pending)
 		}
+		if resources {
+			podUID, specNode, observed := formatFleetResources(s.Resources)
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", s.Name, s.Phase, dash(s.AgentState), dash(s.Node),
+				beat, age(now, s.CreatedAt), strings.Join(parts, "; "), podUID, specNode, observed)
+			continue
+		}
 		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", s.Name, s.Phase, dash(s.AgentState), dash(s.Node),
 			beat, age(now, s.CreatedAt), strings.Join(parts, "; "))
 	}
 	return tw.Flush()
+}
+
+func fillAbsentFleetResources(f *apiv1.Fleet) {
+	for i := range f.Sessions {
+		if f.Sessions[i].Resources == nil {
+			f.Sessions[i].Resources = &apiv1.FleetResources{State: apiv1.FleetResourcesUnknown, Reason: apiv1.FleetResourcesUnavailable}
+		}
+	}
+}
+
+func formatFleetResources(obs *apiv1.FleetResources) (podUID, specNode, text string) {
+	if obs == nil || obs.State != apiv1.FleetResourcesObserved {
+		reason := apiv1.FleetResourcesUnavailable
+		if obs != nil && obs.Reason != "" {
+			reason = obs.Reason
+		}
+		return "Unknown", "Unknown", "Unknown (" + reason + ")"
+	}
+	podUID = obs.PodUID
+	if podUID == "" {
+		podUID = "Unknown"
+	}
+	specNode = "Unknown"
+	if obs.Node != nil {
+		switch obs.Node.State {
+		case apiv1.FleetNodeSet:
+			if obs.Node.Name != "" {
+				specNode = obs.Node.Name
+			}
+		case apiv1.FleetNodeUnscheduled:
+			specNode = "Unscheduled"
+		}
+	}
+	parts := make([]string, 0, len(obs.Containers)+len(obs.InitContainers))
+	for _, container := range obs.Containers {
+		parts = append(parts, formatFleetContainer(container))
+	}
+	for _, container := range obs.InitContainers {
+		parts = append(parts, formatFleetContainer(container))
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "no containers")
+	}
+	return podUID, specNode, strings.Join(parts, "; ")
+}
+
+func formatFleetContainer(container apiv1.FleetContainerResources) string {
+	name := container.Name
+	if container.Kind == apiv1.FleetContainerInit {
+		name = "init/" + name
+	}
+	return fmt.Sprintf("%s cpu %s/%s memory %s/%s", name, formatFleetQuantity(container.CPURequest), formatFleetQuantity(container.CPULimit), formatFleetQuantity(container.MemoryRequest), formatFleetQuantity(container.MemoryLimit))
+}
+
+func formatFleetQuantity(quantity apiv1.FleetQuantity) string {
+	switch quantity.State {
+	case apiv1.FleetQuantitySet:
+		parsed, err := resource.ParseQuantity(quantity.Value)
+		if err != nil || parsed.String() != quantity.Value {
+			return "Unknown"
+		}
+		return quantity.Value
+	case apiv1.FleetQuantityAbsent:
+		return "absent"
+	default:
+		return "Unknown"
+	}
 }
 
 // phaseCounts is "Running 3, Pending 1", in the lifecycle's order.

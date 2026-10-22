@@ -501,6 +501,69 @@ type FleetSession struct {
 	// TaskResult is how a task-mode session's task ended, once it has. Phase
 	// stays the pod's (D-44): an ended canary is Failed whatever its task did.
 	TaskResult *TaskVerdict `json:"taskResult,omitempty"`
+	// Resources is set only for a request that opted in with Dev-Env-Fleet:
+	// resources-v1. It is the bound Pod's configured spec. Nil means this
+	// response did not carry that observation.
+	Resources *FleetResources `json:"resources,omitempty"`
+}
+
+// Fleet resource observation states and the request header that opts in.
+const (
+	FleetHeader            = "Dev-Env-Fleet"
+	FleetResourcesV1       = "resources-v1"
+	FleetResourcesObserved = "Observed"
+	FleetResourcesUnknown  = "Unknown"
+	FleetQuantitySet       = "Set"
+	FleetQuantityAbsent    = "Absent"
+	FleetNodeSet           = "Set"
+	FleetNodeUnscheduled   = "Unscheduled"
+	FleetContainerOrdinary = "ordinary"
+	FleetContainerInit     = "init"
+	// Closed reasons. They name the binding result, not a Pod message.
+	FleetResourcesMissing     = "missing"
+	FleetResourcesForeign     = "foreign"
+	FleetResourcesAmbiguous   = "ambiguous"
+	FleetResourcesReplaced    = "replaced"
+	FleetResourcesUnreadable  = "unreadable"
+	FleetResourcesOversized   = "oversized"
+	FleetResourcesUnavailable = "unavailable"
+)
+
+// FleetResources is one session's bound Pod spec, or Unknown when that spec
+// was not verified. It is not measured consumption, free node capacity, or a
+// scheduling result.
+type FleetResources struct {
+	State          string                    `json:"state"`
+	Reason         string                    `json:"reason,omitempty"`
+	ObservedAt     *time.Time                `json:"observedAt,omitempty"`
+	PodUID         string                    `json:"podUID,omitempty"`
+	Node           *FleetResourceNode        `json:"node,omitempty"`
+	Containers     []FleetContainerResources `json:"containers,omitempty"`
+	InitContainers []FleetContainerResources `json:"initContainers,omitempty"`
+}
+
+// FleetResourceNode is Pod spec.nodeName. Unscheduled means the spec names no node.
+type FleetResourceNode struct {
+	State string `json:"state"`
+	Name  string `json:"name,omitempty"`
+}
+
+// FleetContainerResources is one ordinary or init container's CPU and memory
+// requests and limits. An absent quantity was not set. A set value of 0 was
+// configured as zero.
+type FleetContainerResources struct {
+	Kind          string        `json:"kind"`
+	Name          string        `json:"name"`
+	CPURequest    FleetQuantity `json:"cpuRequest"`
+	CPULimit      FleetQuantity `json:"cpuLimit"`
+	MemoryRequest FleetQuantity `json:"memoryRequest"`
+	MemoryLimit   FleetQuantity `json:"memoryLimit"`
+}
+
+// FleetQuantity is one configured quantity, or an explicit absence.
+type FleetQuantity struct {
+	State string `json:"state"`
+	Value string `json:"value,omitempty"`
 }
 
 // FleetNode is the number of session pods on one node.

@@ -15,7 +15,8 @@ import (
 // fleet serves GET /v1/fleet: every session that holds or waits for a pod, the
 // scheduler's reason for each that waits, the nodes they run on, the current
 // template revision and the sessions behind it. It reports; it gates nothing
-// (D-21).
+// (D-21). Dev-Env-Fleet: resources-v1 also reports the bound Pod spec. Without
+// that header this handler does not list Pods.
 func (s *Server) fleet(ctx context.Context, _ http.ResponseWriter, r *http.Request, _ *caller) (int, any, error) {
 	if len(r.URL.Query()) > 0 {
 		return 0, nil, badRequest("GET /v1/fleet takes no query parameters")
@@ -23,6 +24,22 @@ func (s *Server) fleet(ctx context.Context, _ http.ResponseWriter, r *http.Reque
 	var list v1alpha1.AgentSessionList
 	if err := s.Client.List(ctx, &list, client.InNamespace(s.Policy.SessionNamespace)); err != nil {
 		return 0, nil, fromKubeError(err, "list sessions")
+	}
+	var resources map[string]*apiv1.FleetResources
+	if r.Header.Get(apiv1.FleetHeader) == apiv1.FleetResourcesV1 {
+		shown := make([]v1alpha1.AgentSession, 0, len(list.Items))
+		for i := range list.Items {
+			phase := phaseOf(&list.Items[i])
+			if phase == string(v1alpha1.PhaseSuspended) || phase == string(v1alpha1.PhaseArchived) {
+				continue
+			}
+			shown = append(shown, list.Items[i])
+		}
+		var err error
+		resources, err = s.fleetPodResources(ctx, shown)
+		if err != nil {
+			return 0, nil, err
+		}
 	}
 	f := apiv1.Fleet{
 		Phases:   map[string]int{},
@@ -58,6 +75,13 @@ func (s *Server) fleet(ctx context.Context, _ http.ResponseWriter, r *http.Reque
 			fs.AgentState, fs.LastHeartbeat = a.State, a.LastHeartbeat
 		}
 		fs.TaskResult = v.TaskVerdict()
+		if resources != nil {
+			obs, ok := resources[fleetSessionKey(sess)]
+			if !ok || obs == nil {
+				obs = unknownFleetResource(apiv1.FleetResourcesUnavailable)
+			}
+			fs.Resources = obs
+		}
 		f.Sessions = append(f.Sessions, fs)
 		if fs.Node != "" {
 			nodes[fs.Node]++

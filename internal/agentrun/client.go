@@ -28,6 +28,14 @@ var retryDelays = []time.Duration{time.Second, 2 * time.Second}
 // maxResponse bounds what agent-run reads of an answer.
 const maxResponse = 8 << 20
 
+// fleetResourcesHeader marks one fleet call that opts into Pod spec resources.
+// The value is only the presence of the key. Other calls leave it unset.
+type fleetResourcesHeader struct{}
+
+func withFleetResources(ctx context.Context) context.Context {
+	return context.WithValue(ctx, fleetResourcesHeader{}, true)
+}
+
 // call sends one request to the API and decodes a 2xx answer into out. It
 // returns the status code, or an *exitError that says what went wrong in
 // words, with the exit code for its kind.
@@ -182,6 +190,9 @@ func (a *app) send(ctx context.Context, c *conn, method, target string, payload 
 	// This client reads provider-reported usage and attribution (DESIGN-018);
 	// an older operator ignores the header.
 	req.Header.Set(apiv1.AttributionHeader, apiv1.AttributionProvider)
+	if ctx.Value(fleetResourcesHeader{}) != nil {
+		req.Header.Set(apiv1.FleetHeader, apiv1.FleetResourcesV1)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return 0, nil, err
