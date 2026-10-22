@@ -295,12 +295,15 @@ Secret).
      window flag, and `--pushover-url`, whenever `NoticeOptions.Validate`
      refuses them. Valid notice flags, including the defaults, stay valid.
      Login gauges are unchanged.
-  2. Not started. The v2 session CLAUDE.md does not describe the keeper-login
-     renewal flow (haynes-ops `dev-env-config-claude`). A session told to renew
-     has to find it in quickstart section 6.
-  3. Not started. The notice cannot deep-link to the standby: the keeper can
-     only get AgentSessions by name, so notices link `https://claude.ai/code`.
-     A stable link needs either list access for the keeper or a fixed standby
+  2. Done (haynes-ops #4160, b2fde821). The v2 session CLAUDE.md
+     (`dev-env-config-claude`) tells the standby to renew the keeper's Claude
+     login with `agent-run keeper-login claude url` and `agent-run keeper-login
+     claude code`. The login lapses 2026-11-16 17:51Z; Pushover warns from
+     about 2026-11-08.
+  3. Closed (Tom, 2026-10-22, Mac Cursor session). The notice does not need a
+     link to the standby. He can see the standby in Claude Code. The keeper
+     keeps AgentSession reads by name only (`get`, no `list`), and notice URLs
+     keep the general link `https://claude.ai/code` with no fixed standby
      name.
 
 ## Later
