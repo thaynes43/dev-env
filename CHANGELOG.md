@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.40.0](https://github.com/thaynes43/dev-env/compare/v2.39.1...v2.40.0) (2026-10-22)
+
+
+### Features
+
+* expose read-only standby observation metrics ([#512](https://github.com/thaynes43/dev-env/issues/512)) ([ebc5111](https://github.com/thaynes43/dev-env/commit/ebc51111f0d5c10bcf32f94c74963661c2ce0a45))
+
 ## [2.39.1](https://github.com/thaynes43/dev-env/compare/v2.39.0...v2.39.1) (2026-10-22)
 
 
