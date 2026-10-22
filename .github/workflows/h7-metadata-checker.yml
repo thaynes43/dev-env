@@ -50,14 +50,14 @@ jobs:
         run: |
           nice -n 19 go test -mod=readonly -p 1 -parallel 1 -count 1 -timeout 2m ./...
           nice -n 19 env GOOS=darwin GOARCH=arm64 go build -mod=readonly -trimpath -o "$RUNNER_TEMP/h7-checker/get-darwin-arm64" .
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0; pinned haynes-ops convention
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0; pinned haynes-ops convention
         with:
           python-version: '3.15'
       - name: Python3.12 checker and real CEL integration fixtures
         run: |
           python3 --version
           nice -n 19 python3 -I -B tools/h7-metadata-checker/test_checker.py --cel-helper "$RUNNER_TEMP/h7-checker/cel-linux-amd64"
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.15'
       - name: Python3.9 checker and real CEL integration fixtures
