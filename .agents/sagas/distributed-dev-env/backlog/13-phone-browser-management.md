@@ -325,6 +325,58 @@ In order. Each becomes its own story when picked up.
    asking an agent proves too slow or costly. A page on the internal ingress would
    work at home only, so it needs an outside route behind Authentik.
 
+## Standby observation metrics (source only, 2026-10-22)
+
+OpenProject #111 source slice. Later item 1 still owns the phone-path alerts.
+These metrics are the read-only observations a later alert can consume. This
+section records that source contract. Alert delivery, Pushover, a Grafana
+panel, a GitOps pin, production activation, and phone-path acceptance stay
+outside this slice.
+
+The operator registers one collector on every replica, on the existing metrics
+registry, using the API reader at scrape time. `--enable-standby-session` is
+the switch. The collector calls get on ConfigMap `dev-env-standby` and lists
+labeled AgentSessions. It does that only while the flag is on. It leaves
+Ensure, session writes, and the breaker update on the existing leader runnable.
+
+| Metric | Meaning |
+| --- | --- |
+| `dev_env_standby_enabled` | 0 or 1 from the configured flag. Always emitted. |
+| `dev_env_standby_snapshot_valid` | 1 when this scrape's required reads and decoding succeeded. 0 after a read, permission, or decode failure. |
+| `dev_env_standby_session_count{state}` | Count of labeled records in one fixed state. A valid scrape emits every state, including zero. |
+| `dev_env_standby_latest_heartbeat_timestamp_seconds{state}` | Latest valid recorded heartbeat in that state, Unix seconds from the session. Omitted when that state has no valid heartbeat. The value is the stored time, and it stays at that time as the collector clock advances. |
+| `dev_env_standby_creation_budget_exhausted` | 1 when the stored recent creation count has reached the existing three creations in 30 minutes, otherwise 0. |
+
+The only series label is `state`, on the count and the heartbeat. Its values
+are `registered`, `starting`, `login_required`, `offline`, `booting`,
+`moving`, `suspended`, `terminal`, and `unknown`.
+
+A labeled record whose agent is not `claude` or whose mode is not `remote` is
+`unknown`. Otherwise `Terminal` is `terminal`. Suspended operating mode or
+phase is `suspended`. Pending or Draining phase is `moving`. A missing agent,
+a phase other than Running or Idle, or boot metadata other than `booting` or
+`ready` is `unknown`. Boot `booting` is `booting`. On a Running or Idle record
+with boot `ready`: agent or remote `login-required` is `login_required`; agent
+`exited`, `failed`, or `interrupted`, or remote `offline`, is `offline`;
+remote `registered` with agent `busy`, `idle`, or `waiting` is `registered`;
+remote `starting` is `starting`. Every other ready record is `unknown`. A
+stored session id or URL leaves the category unchanged. Booting, moving, and
+suspended records stay in those categories when an older remote state says
+`registered`. Each labeled record counts on its own.
+
+A heartbeat is valid when it is present, its Unix time is positive, and it is
+not after the collector clock. Missing and future timestamps omit that state's
+heartbeat series. The collector keeps the breaker's existing window, limit,
+and future-timestamp parsing. NotFound on `dev-env-standby` is empty history.
+Each enabled read uses a 10 second context.
+
+An invalid snapshot emits `enabled` and `snapshot_valid` 0 and omits the
+count, heartbeat, and budget series, so other operator metrics remain. A
+disabled collector emits `enabled` 0, `snapshot_valid` 1, zero counts, and
+budget 0, omits heartbeats, and makes no API read. A consumer needs the
+series to be present with `enabled` 1 and `snapshot_valid` 1. An absent scrape
+is not a healthy standby.
+
 ## Acceptance (the plan as a whole)
 
 - From his phone, off home Wi-Fi, with no v1 pod and no laptop, Tom lists

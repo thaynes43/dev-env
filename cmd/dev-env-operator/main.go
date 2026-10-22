@@ -557,6 +557,11 @@ func run(args []string) error {
 	// The HOME expiry's gauges, read from the same cache at scrape time
 	// (DESIGN-025 10).
 	ctrlmetrics.Registry.MustRegister(&controller.HomeExpiryCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace, DeleteOn: o.homeExpiryDelete})
+	// Standby observations, read from the API reader on every replica at scrape
+	// time. The flag selects enabled or disabled; registration itself is unconditional.
+	if err := standby.RegisterCollector(ctrlmetrics.Registry, standbyCollector(o, mgr.GetAPIReader())); err != nil {
+		return fmt.Errorf("register standby metrics: %w", err)
+	}
 	// Expired declare-activity declarations go within a minute (D-17, D-66).
 	if err := mgr.Add(&activity.Reaper{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Namespace: o.templatesNamespace,
 		Log: ctrl.Log.WithName("activities")}); err != nil {
@@ -706,6 +711,18 @@ func newCoordinationRetention(o options, c client.Client, reader client.Reader, 
 		Slots:      slots,
 		Log:        log,
 		Registerer: ctrlmetrics.Registry,
+	}
+}
+
+// standbyCollector is the process-wide standby observation collector. Enabled
+// copies --enable-standby-session. The API reader is used only while that flag
+// is set. The collector does not create a session or update the breaker.
+func standbyCollector(o options, reader client.Reader) *standby.Collector {
+	return &standby.Collector{
+		Reader:           reader,
+		SessionNamespace: o.sessionNamespace,
+		StateNamespace:   o.templatesNamespace,
+		Enabled:          o.standbyEnabled,
 	}
 }
 
