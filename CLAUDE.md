@@ -19,6 +19,11 @@ and authorized live/stopped context. Repositories and task worktrees stay per po
 Shared Git/RWX and its storage trial are no longer prerequisites. Delivery is in
 [plan 11](.agents/sagas/distributed-dev-env/backlog/11-project-workspaces.md).
 
+Before launching work that has an explicit hardware, host-operations, or
+workbench role, follow the [launch-profile preflight](docs/launch-profile-preflight.md).
+It documents the existing profile selectors and their limits; it grants neither
+credentials nor approval.
+
 **Start with [`.agents/HANDOFF.md`](.agents/HANDOFF.md).** It gives the current
 state, what happens next, where every file is, the ruling index, and what an agent
 can and cannot do outside the cluster.
