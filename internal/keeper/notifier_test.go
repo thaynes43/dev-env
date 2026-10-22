@@ -894,3 +894,15 @@ func TestNoticeOptionsValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestDisabledNoticesDoNotStart(t *testing.T) {
+	if noticesStart(2, NoticeOptions{Disabled: true}) {
+		t.Fatal("a bad notice flag would still start the notifier")
+	}
+	if !noticesStart(2, NoticeOptions{}) {
+		t.Fatal("valid notice flags would not start the notifier")
+	}
+	if noticesStart(0, NoticeOptions{}) {
+		t.Fatal("notices would start with no login provider")
+	}
+}

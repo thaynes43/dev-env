@@ -76,6 +76,11 @@ func validateSSHCA(args []string, out io.Writer) int {
 // a client that trusts their fake server.
 var notifyClient *http.Client
 
+// noticeFailureLog is stderr in production, the same stream as the keeper's
+// logger. A bad notice flag writes one line here and does not fail parseFlags.
+// Tests replace it.
+var noticeFailureLog io.Writer = os.Stderr
+
 // notifyTest is the one-shot test trigger: it reads the same Pushover files as
 // the keeper, sends one fixed notice and prints only "sent" or a token-free
 // error. Run it with `kubectl exec -c app` in the keeper pod.
@@ -195,7 +200,10 @@ func parseFlags(args []string) (options, error) {
 		return o, errors.New("claude auth requires leader election, separate private/public namespaces, an absolute login directory and nonempty named configuration")
 	}
 	if err := o.notices.Validate(); err != nil {
-		return o, err
+		// Plan 13, story 13.1 follow-up 1: a bad notice flag disables notices
+		// and is logged. It must not stop the credential keeper.
+		o.notices.Disabled = true
+		logr.FromSlogHandler(slog.NewJSONHandler(noticeFailureLog, nil)).WithName(binaryName).Error(err, "notices disabled")
 	}
 	p, err := keeper.ParsePermissions(*perms)
 	if err != nil {

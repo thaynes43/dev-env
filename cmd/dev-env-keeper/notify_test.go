@@ -96,19 +96,45 @@ func TestNotifyTestErrorsNameNoCredential(t *testing.T) {
 }
 
 func TestParseFlagsNoticeDefaultsAndRefusals(t *testing.T) {
+	var logs bytes.Buffer
+	old := noticeFailureLog
+	noticeFailureLog = &logs
+	t.Cleanup(func() { noticeFailureLog = old })
+
 	o, err := parseFlags(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	n := o.notices
-	if n.TokenFile != "/etc/dev-env-keeper/pushover/token" || n.UserFile != "/etc/dev-env-keeper/pushover/user" ||
+	if n.Disabled || n.Validate() != nil || logs.Len() != 0 ||
+		n.TokenFile != "/etc/dev-env-keeper/pushover/token" || n.UserFile != "/etc/dev-env-keeper/pushover/user" ||
 		n.Zone != "America/New_York" || n.WindowStart != "09:00" || n.WindowEnd != "21:00" || n.StateConfigMap != "dev-env-keeper-notices" ||
 		n.URL != "https://api.pushover.net/1/messages.json" {
-		t.Errorf("notice defaults %+v", n)
+		t.Errorf("notice defaults %+v log %q", n, logs.String())
 	}
-	for _, bad := range []string{"--notice-timezone=Nowhere/Land", "--notice-window-start=9", "--notice-window-end=7pm", "--notice-window-start=22:00", "--pushover-url=http://x"} {
-		if _, err := parseFlags([]string{bad}); err == nil {
-			t.Errorf("%s accepted", bad)
+	for _, bad := range []struct{ flag, text string }{
+		{"--notice-timezone=Nowhere/Land", "Nowhere/Land"},
+		{"--notice-window-start=9", "HH:MM"},
+		{"--notice-window-end=7pm", "7pm"},
+		{"--notice-window-start=22:00", "before its end"},
+		{"--pushover-url=http://x", "HTTPS"},
+	} {
+		logs.Reset()
+		got, err := parseFlags([]string{bad.flag})
+		if err != nil || !got.notices.Disabled || got.notices.Validate() == nil ||
+			!strings.Contains(logs.String(), "notices disabled") || !strings.Contains(logs.String(), bad.text) {
+			t.Errorf("%s: err=%v disabled=%v log %q", bad.flag, err, got.notices.Disabled, logs.String())
 		}
+	}
+	logs.Reset()
+	_, err = parseFlags([]string{"--notice-timezone=Nowhere/Land", "--refresh-interval=10s"})
+	if err == nil || !strings.Contains(err.Error(), "refresh-interval") || strings.Contains(err.Error(), "timezone") {
+		t.Errorf("refresh interval: %v", err)
+	}
+	logs.Reset()
+	o, err = parseFlags([]string{"--notice-timezone=America/Chicago", "--notice-window-start=08:00", "--notice-window-end=20:00", "--pushover-url=https://example.com/1/messages.json"})
+	if err != nil || o.notices.Disabled || o.notices.Validate() != nil || logs.Len() != 0 ||
+		o.notices.Zone != "America/Chicago" || o.notices.WindowStart != "08:00" || o.notices.WindowEnd != "20:00" || o.notices.URL != "https://example.com/1/messages.json" {
+		t.Errorf("valid overrides %+v %v log %q", o.notices, err, logs.String())
 	}
 }
