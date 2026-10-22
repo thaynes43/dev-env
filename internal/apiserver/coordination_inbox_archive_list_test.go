@@ -243,6 +243,12 @@ func TestInboxArchiveListImmutableAttributionWithoutSenderJoin(t *testing.T) {
 	}
 	got.Archived = false
 	got.ArchivedAt = nil
+	// Compare the reported instant without depending on the timezone
+	// representation chosen by metav1.Time versus time.Time decoding.
+	if got.Provenance.ReportedAt != nil && want.Provenance.ReportedAt != nil {
+		gotAt, wantAt := got.Provenance.ReportedAt.UTC(), want.Provenance.ReportedAt.UTC()
+		got.Provenance.ReportedAt, want.Provenance.ReportedAt = &gotAt, &wantAt
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("immutable attribution changed: got=%#v want=%#v", got, want)
 	}
