@@ -3,7 +3,15 @@
 **Daily use:** the [v2 quick start](v2-quickstart.md) is the one-page version
 for Tom's phone-first workflow, with what was proven up to 2026-10-20.
 
-**Current state, 2026-10-20:** release 2.39.0 is installed, and v2 is ready for
+**Current state, 2026-10-22:** [release 2.39.1](https://github.com/thaynes43/dev-env/releases/tag/v2.39.1)
+is published and its matching [GitOps pin is merged](https://github.com/thaynes43/haynes-ops/pull/4161).
+The [current handoff](../.agents/HANDOFF.md#current-state--2026-10-22-utc-v2-release-2391-documentation-reconciliation)
+links the notice fix, the closed timezone regression and plan 13 follow-ups,
+and separates source/publication evidence from runtime and review acceptance.
+Keep CR-1020 phone acceptance, W3 limits and preservation/copy gates intact;
+the planned cutover date below grants no authority or proof of completion.
+
+**October 20 checkpoint (historical):** release 2.39.0 is installed, and v2 is ready for
 all agent work. Tom accepted the phone workflow (the Claude standby on cellular,
 the Codex host in the ChatGPT app, keeper status). A workbench session has v1's
 cluster write tier (haynes-ops #4141), Proxmox reads and writes through grants,
