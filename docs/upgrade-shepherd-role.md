@@ -81,6 +81,19 @@ not extend an expiry by itself.
 An `authorized` field is rejected. Authority is an evidence URL the runtime
 boundary can inspect later. Offline input never becomes a grant.
 
+Schema fields use exact JSON names. Before typed decode, every schema object
+must use the canonical spelling of each field. A case-variant is invalid on
+its own, and it is invalid beside the canonical spelling even when both values
+match. An escaped spelling is read after JSON decoding, so it cannot hide the
+same key or a case-variant. A Unicode case-fold that Go's decoder would accept,
+such as a long-s alias of `state`, is invalid too. This covers the root
+document, envelope, snapshot, prior attempt, nested objects, and objects in
+arrays. The checker does not rewrite keys or digests. Alert label maps stay
+byte-for-byte case-sensitive: `Service` and `service` are different keys.
+Decision 82 in the [saga decision log](../.agents/sagas/distributed-dev-env/README.md)
+records the rule. The source step is in
+[plan 10](../.agents/sagas/distributed-dev-env/backlog/10-summoned-sessions.md).
+
 ## Match, expiry, and custody
 
 A candidate requires every one of these: state `active`; the same operation,
@@ -105,6 +118,12 @@ written in when an expiry is present. The existing 2h cap applies to Activity
 scope `cluster`. This contract rejects cluster-wide matchers, so it does not
 silently shorten a named-service window to 2h. That reading is a proposal for
 review, not a change to Activity.
+
+The offline checker's 8h ceiling does not override a shorter activity expiry,
+task deadline, or authorization limit, and it does not prove that an Activity
+was declared with any particular scope. A synthetic named-service fixture,
+including one whose window is 3h, is not permission for cluster maintenance.
+Trusted live scope and expiry binding remains a later gate.
 
 Terminal states are monotonic in the record: a same-attempt edit does not
 overwrite them, because it conflicts. Completion or rollback without
@@ -132,8 +151,11 @@ revision. They are not copied into this role.
 
 ## Proposed numeric defaults
 
-These are offline validation bounds for review. They are not agreed
-production SLOs and they do not change deployed heartbeats.
+These retained bounds are conservative offline fixture and validation defaults.
+Saga decision 82 records them on 2026-10-23 under the repair authorization.
+They are not agreed production SLOs, runtime authorization, deployed heartbeat
+changes, or a fresh human ruling. The 45m default, the 8h Activity maximum,
+and the 2h cluster cap are existing API facts, not new knobs.
 
 | Bound | Value | Standing |
 | --- | --- | --- |

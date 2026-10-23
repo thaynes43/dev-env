@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -108,6 +110,10 @@ func parse(data []byte, now time.Time) (parsed, error) {
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		c.add("$", "trailing JSON after the first document")
 		return parsed{}, c.err()
+	}
+	rejectNoncanonical(data, reflect.TypeOf(checkDoc{}), "$", &c)
+	if err := c.err(); err != nil {
+		return parsed{}, err
 	}
 	var doc checkDoc
 	body := json.NewDecoder(bytes.NewReader(data))
@@ -210,6 +216,140 @@ func selfAuth(key string) bool {
 	default:
 		return false
 	}
+}
+
+// rejectNoncanonical requires exact JSON object names on schema structs before
+// typed decode. encoding/json would accept a case-fold alias and let two
+// spellings overwrite one field. Map fields, including alert labels, are not
+// schema structs: their keys stay case-sensitive.
+func rejectNoncanonical(raw []byte, typ reflect.Type, path string, c *collector) bool {
+	if typ == nil || len(bytes.TrimSpace(raw)) == 0 {
+		return false
+	}
+	typ = derefSchema(typ)
+	switch typ.Kind() {
+	case reflect.Struct:
+		return rejectStructNames(raw, typ, path, c)
+	case reflect.Slice, reflect.Array:
+		elem := derefSchema(typ.Elem())
+		if elem.Kind() != reflect.Struct {
+			return false
+		}
+		return rejectArrayNames(raw, elem, path, c)
+	default:
+		return false
+	}
+}
+
+func derefSchema(typ reflect.Type) reflect.Type {
+	for typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	return typ
+}
+
+type schemaClass int
+
+const (
+	schemaUnknown schemaClass = iota
+	schemaExact
+	schemaAlias
+)
+
+func schemaFields(typ reflect.Type) map[string]reflect.Type {
+	out := make(map[string]reflect.Type)
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		if field.PkgPath != "" {
+			continue
+		}
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		if name == "" || name == "-" {
+			continue
+		}
+		out[name] = field.Type
+	}
+	return out
+}
+
+func classifySchemaKey(key string, fields map[string]reflect.Type) (string, reflect.Type, schemaClass) {
+	if fieldType, ok := fields[key]; ok {
+		return key, fieldType, schemaExact
+	}
+	var matchName string
+	var matchType reflect.Type
+	for name, fieldType := range fields {
+		if strings.EqualFold(key, name) && (matchName == "" || name < matchName) {
+			matchName = name
+			matchType = fieldType
+		}
+	}
+	if matchName != "" {
+		return matchName, matchType, schemaAlias
+	}
+	return "", nil, schemaUnknown
+}
+
+func schemaPath(parent, key string) string {
+	if parent == "$" {
+		return key
+	}
+	return parent + "." + key
+}
+
+func rejectStructNames(raw []byte, typ reflect.Type, path string, c *collector) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return false
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &obj); err != nil {
+		return false
+	}
+	fields := schemaFields(typ)
+	var aliases []string
+	var exact []string
+	for key := range obj {
+		_, _, class := classifySchemaKey(key, fields)
+		switch class {
+		case schemaAlias:
+			aliases = append(aliases, key)
+		case schemaExact:
+			exact = append(exact, key)
+		}
+	}
+	sort.Strings(aliases)
+	if len(aliases) > 0 {
+		key := aliases[0]
+		name, _, _ := classifySchemaKey(key, fields)
+		c.add(schemaPath(path, key), fmt.Sprintf("noncanonical field %q; schema field is %q", key, name))
+		return true
+	}
+	sort.Strings(exact)
+	for _, key := range exact {
+		_, fieldType, _ := classifySchemaKey(key, fields)
+		if rejectNoncanonical(obj[key], fieldType, schemaPath(path, key), c) {
+			return true
+		}
+	}
+	return false
+}
+
+func rejectArrayNames(raw []byte, elem reflect.Type, path string, c *collector) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return false
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(trimmed, &items); err != nil {
+		return false
+	}
+	for i, item := range items {
+		if rejectNoncanonical(item, elem, fmt.Sprintf("%s[%d]", path, i), c) {
+			return true
+		}
+	}
+	return false
 }
 
 func unknownField(err error) (string, bool) {

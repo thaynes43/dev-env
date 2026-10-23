@@ -407,6 +407,120 @@ func TestRoleCorePinned(t *testing.T) {
 	}
 }
 
+func TestExactSchemaNames(t *testing.T) {
+	base := func() []byte {
+		t.Helper()
+		return mustJSON(t, sample(t, "haynes-ops", "claude", fixedNow))
+	}
+	attempt := `"operationId":"op-174","attemptId":"attempt-1","predecessorAttemptId"`
+	noncanonical := `noncanonical field "AttemptId"; schema field is "attemptId"`
+	mustSwap(t, base(), attempt, `"operationId":"op-174","attemptId":"attempt-1","AttemptId":"attempt-1","predecessorAttemptId"`, noncanonical)
+	mustSwap(t, base(), attempt, `"operationId":"op-174","AttemptId":"attempt-1","attemptId":"attempt-1","predecessorAttemptId"`, noncanonical)
+	mustSwap(t, base(), attempt, `"operationId":"op-174","AttemptId":"attempt-1","predecessorAttemptId"`, noncanonical)
+	mustSwap(t, base(), attempt, `"operationId":"op-174","\u0041ttemptId":"attempt-1","predecessorAttemptId"`, noncanonical)
+	mustSwap(t, base(), attempt, `"operationId":"op-174","attemptId":"attempt-1","\u0041ttemptId":"attempt-1","predecessorAttemptId"`, noncanonical)
+	mustSwap(t, base(), attempt, `"operationId":"op-174","attemptId":"attempt-1","\u0061ttemptId":"attempt-1","predecessorAttemptId"`, "duplicate key")
+	mustSwap(t, base(), `"heartbeatIntervalSeconds":60,"state":"active","revision":"0123456789abcdef0123456789abcdef01234567","attemptId":"attempt-1"`, `"heartbeatIntervalSeconds":60,"state":"active","revision":"0123456789abcdef0123456789abcdef01234567","AttemptId":"attempt-1"`, `envelope.observation.AttemptId: noncanonical field "AttemptId"`)
+	mustSwap(t, base(), `"role":{"version":"upgrade-shepherd-role/v1"`, `"role":{"Version":"upgrade-shepherd-role/v1"`, `envelope.role.Version: noncanonical field "Version"; schema field is "version"`)
+	mustSwap(t, base(), `"baselines":[{"service":"appdaemon"`, `"baselines":[{"Service":"appdaemon"`, `envelope.baselines[0].Service: noncanonical field "Service"; schema field is "service"`)
+	mustSwap(t, base(), `"metadata":"available"`, `"Metadata":"available"`, `snapshot.Metadata: noncanonical field "Metadata"; schema field is "metadata"`)
+	mustSwap(t, base(), `{"envelope":`, `{"Envelope":`, `Envelope: noncanonical field "Envelope"; schema field is "envelope"`)
+	mustSwap(t, base(), `{"envelope":`, `{"Envelope":null,"envelope":`, `Envelope: noncanonical field "Envelope"; schema field is "envelope"`)
+	mustSwap(t, base(), `"nativeReview":""}}}`, `"nativeReview":""}},"Envelope":null}`, `Envelope: noncanonical field "Envelope"; schema field is "envelope"`)
+
+	var probe struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal([]byte("{\"\u017ftate\":\"active\"}"), &probe); err != nil || probe.State != "active" {
+		t.Fatalf("Go decoder precondition: %v state=%q", err, probe.State)
+	}
+	mustSwap(t, base(), `"state":"active"},"snapshot"`, "\"\u017ftate\":\"active\"},\"snapshot\"", `schema field is "state"`)
+	mustSwap(t, base(), `"state":"active"},"snapshot"`, `"\u017ftate":"active"},"snapshot"`, `schema field is "state"`)
+	mustSwap(t, base(), `"state":"active"},"snapshot"`, "\"state\":\"active\",\"\u017ftate\":\"active\"},\"snapshot\"", `schema field is "state"`)
+
+	doc := sample(t, "haynes-ops", "claude", fixedNow)
+	doc.PriorAttempt = &priorAttempt{AttemptID: "attempt-1", PayloadDigest: "sha256:" + strings.Repeat("ab", 32)}
+	mustCheck(t, doc, fixedNow)
+	prior := mustJSON(t, doc)
+	mustSwap(t, prior, `"priorAttempt":{"attemptId":"attempt-1","payloadDigest"`, `"priorAttempt":{"AttemptId":"attempt-1","payloadDigest"`, `priorAttempt.AttemptId: noncanonical field "AttemptId"`)
+	mustSwap(t, prior, `"priorAttempt":{`, `"PriorAttempt":{`, `PriorAttempt: noncanonical field "PriorAttempt"; schema field is "priorAttempt"`)
+}
+
+func TestLabelCasePreserved(t *testing.T) {
+	serviceOnly := map[string]string{"alertname": "AppDaemonRestart", "namespace": "home-automation", "service": "web"}
+	serviceCase := map[string]string{"alertname": "AppDaemonRestart", "namespace": "home-automation", "Service": "web"}
+	bothA := map[string]string{"alertname": "AppDaemonRestart", "namespace": "home-automation", "service": "web", "Service": "API"}
+	bothB := map[string]string{"alertname": "AppDaemonRestart", "namespace": "home-automation", "service": "API", "Service": "web"}
+	for _, labels := range []map[string]string{serviceOnly, serviceCase, bothA} {
+		res := mustCheck(t, labelDoc(t, labels, labels), fixedNow)
+		if res.Decision != DecisionCandidate {
+			t.Fatalf("candidate %s %+v", res.Decision, res.FailedPredicates)
+		}
+	}
+	for _, tc := range []struct {
+		name     string
+		expected map[string]string
+		observed map[string]string
+	}{
+		{name: "key case", expected: serviceOnly, observed: serviceCase},
+		{name: "value case", expected: bothA, observed: bothB},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := mustCheck(t, labelDoc(t, tc.expected, tc.observed), fixedNow)
+			if res.Decision == DecisionCandidate || res.Decision != DecisionRespond || !hasPred(res.FailedPredicates, "unexpected-label") {
+				t.Fatalf("got %s %+v", res.Decision, res.FailedPredicates)
+			}
+		})
+	}
+	left, err := CanonicalDigest(mustJSON(t, labelDoc(t, serviceOnly, serviceOnly)), fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := CanonicalDigest(mustJSON(t, labelDoc(t, serviceCase, serviceCase)), fixedNow)
+	if err != nil || left == right {
+		t.Fatalf("key digest %s %s err %v", left, right, err)
+	}
+	original, err := CanonicalDigest(mustJSON(t, labelDoc(t, bothA, bothA)), fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	swapped, err := CanonicalDigest(mustJSON(t, labelDoc(t, bothB, bothB)), fixedNow)
+	if err != nil || original == swapped {
+		t.Fatalf("value digest %s %s err %v", original, swapped, err)
+	}
+}
+
+func labelDoc(t *testing.T, expected, observed map[string]string) checkDoc {
+	t.Helper()
+	doc := sample(t, "haynes-ops", "claude", fixedNow)
+	envAlert := doc.Envelope.ExpectedAlerts[0]
+	envAlert.Labels = expected
+	doc.Envelope.ExpectedAlerts = []expectedAlert{envAlert}
+	snapAlert := doc.Snapshot.Alerts[0]
+	snapAlert.Labels = observed
+	doc.Snapshot.Alerts = []observedAlert{snapAlert}
+	return doc
+}
+
+func mustSwap(t *testing.T, raw []byte, old, neu, needle string) {
+	t.Helper()
+	_, err := Check(replaceOnce(t, raw, old, neu), fixedNow)
+	if err == nil || !strings.Contains(err.Error(), needle) {
+		t.Fatalf("swap %s: %v", needle, err)
+	}
+}
+
+func replaceOnce(t *testing.T, raw []byte, old, neu string) []byte {
+	t.Helper()
+	if n := bytes.Count(raw, []byte(old)); n != 1 {
+		tail := raw
+		if len(tail) > 160 {
+			tail = tail[len(tail)-160:]
+		}
+		t.Fatalf("count %d for %s tail %s", n, old, tail)
+	}
+	return bytes.Replace(raw, []byte(old), []byte(neu), 1)
+}
 func sample(t *testing.T, repo, provider string, now time.Time) checkDoc {
 	t.Helper()
 	start := now.Add(-time.Minute)
@@ -444,7 +558,7 @@ func sample(t *testing.T, repo, provider string, now time.Time) checkDoc {
 				Requested: modelIn{Provider: provider, Model: model, Effort: "high", State: "configured"},
 			},
 			Actions:        actions{Allowed: []string{"inspect", "reconcile", "postcheck"}, AuthorizationEvidence: []string{"https://example.test/authority/174"}},
-			Targets:        targets{Services: []string{"appdaemon"}, Dependencies: []string{"mosquitto"}},
+			Targets:        targets{Services: []string{"appdaemon"}, Dependencies: []string{"broker"}},
 			Activity:       activityRef{UID: "activity-1", Start: start.Format(time.RFC3339Nano), Expiry: start.Add(45 * time.Minute).Format(time.RFC3339Nano)},
 			Task:           taskRef{Deadline: start.Add(time.Hour).Format(time.RFC3339Nano), Impact: impact{MaxServices: 2, MaxSeverity: "warning", WindowSeconds: 300}},
 			Authorization:  authorization{LimitExpiry: start.Add(time.Hour).Format(time.RFC3339Nano)},
