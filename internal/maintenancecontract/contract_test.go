@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -186,6 +187,211 @@ func TestPreExisting(t *testing.T) {
 			t.Fatalf("detail %q", item.Detail)
 		}
 	}
+}
+
+func TestAlertPredatesOperation(t *testing.T) {
+	start := fixedNow.Add(-time.Minute)
+
+	t.Run("one nanosecond before start", func(t *testing.T) {
+		doc := sample(t, "haynes-ops", "claude", fixedNow)
+		doc.Snapshot.Alerts[0].StartedAt = start.Add(-time.Nanosecond).Format(time.RFC3339Nano)
+		res := mustCheck(t, doc, fixedNow)
+		assertPredates(t, res, 0, "appdaemon")
+		if len(res.MatchedIDs.Alerts) != 0 {
+			t.Fatalf("matched %+v", res.MatchedIDs.Alerts)
+		}
+	})
+
+	t.Run("before healthy baseline", func(t *testing.T) {
+		doc := sample(t, "haynes-ops", "claude", fixedNow)
+		doc.Snapshot.Alerts[0].StartedAt = start.Add(-2 * time.Minute).Format(time.RFC3339Nano)
+		res := mustCheck(t, doc, fixedNow)
+		assertPredates(t, res, 0, "appdaemon")
+		if res.Decision == DecisionCandidate || len(res.MatchedIDs.Alerts) != 0 {
+			t.Fatalf("decision %s matched %+v", res.Decision, res.MatchedIDs.Alerts)
+		}
+	})
+
+	t.Run("equal start stays eligible", func(t *testing.T) {
+		doc := sample(t, "haynes-ops", "claude", fixedNow)
+		doc.Snapshot.Alerts[0].StartedAt = start.Format(time.RFC3339Nano)
+		res := mustCheck(t, doc, fixedNow)
+		if res.Decision != DecisionCandidate || hasPred(res.FailedPredicates, "alert-predates-operation") || !sameInts(res.MatchedIDs.Alerts, []int{0}) {
+			t.Fatalf("equal %s %+v matched %+v", res.Decision, res.FailedPredicates, res.MatchedIDs.Alerts)
+		}
+	})
+
+	t.Run("later start stays eligible", func(t *testing.T) {
+		doc := sample(t, "haynes-ops", "claude", fixedNow)
+		doc.Snapshot.Alerts[0].StartedAt = start.Add(time.Second).Format(time.RFC3339Nano)
+		res := mustCheck(t, doc, fixedNow)
+		if res.Decision != DecisionCandidate || hasPred(res.FailedPredicates, "alert-predates-operation") || !sameInts(res.MatchedIDs.Alerts, []int{0}) {
+			t.Fatalf("later %s %+v matched %+v", res.Decision, res.FailedPredicates, res.MatchedIDs.Alerts)
+		}
+	})
+
+	t.Run("equal start still needs other predicates", func(t *testing.T) {
+		doc := sample(t, "haynes-ops", "claude", fixedNow)
+		doc.Snapshot.Alerts[0].StartedAt = start.Format(time.RFC3339Nano)
+		doc.Snapshot.Alerts[0].Symptom = "crash"
+		res := mustCheck(t, doc, fixedNow)
+		if res.Decision != DecisionRespond || hasPred(res.FailedPredicates, "alert-predates-operation") || !hasPred(res.FailedPredicates, "unexpected-symptom") || len(res.MatchedIDs.Alerts) != 0 {
+			t.Fatalf("equal other %s %+v matched %+v", res.Decision, res.FailedPredicates, res.MatchedIDs.Alerts)
+		}
+	})
+
+	t.Run("mixed early then valid", func(t *testing.T) {
+		doc := sample(t, "haynes-ops", "claude", fixedNow)
+		early := doc.Snapshot.Alerts[0]
+		early.StartedAt = start.Add(-time.Nanosecond).Format(time.RFC3339Nano)
+		valid := doc.Snapshot.Alerts[0]
+		valid.StartedAt = start.Format(time.RFC3339Nano)
+		doc.Snapshot.Alerts = []observedAlert{early, valid}
+		res := mustCheck(t, doc, fixedNow)
+		assertPredates(t, res, 0, "appdaemon")
+		if predatesIndex(res, 1) || !sameInts(res.MatchedIDs.Alerts, []int{1}) {
+			t.Fatalf("preds %+v matched %+v", res.FailedPredicates, res.MatchedIDs.Alerts)
+		}
+	})
+
+	t.Run("mixed valid then early", func(t *testing.T) {
+		doc := sample(t, "haynes-ops", "claude", fixedNow)
+		valid := doc.Snapshot.Alerts[0]
+		valid.StartedAt = start.Add(time.Second).Format(time.RFC3339Nano)
+		early := doc.Snapshot.Alerts[0]
+		early.StartedAt = start.Add(-time.Nanosecond).Format(time.RFC3339Nano)
+		doc.Snapshot.Alerts = []observedAlert{valid, early}
+		res := mustCheck(t, doc, fixedNow)
+		assertPredates(t, res, 1, "appdaemon")
+		if predatesIndex(res, 0) || !sameInts(res.MatchedIDs.Alerts, []int{0}) {
+			t.Fatalf("preds %+v matched %+v", res.FailedPredicates, res.MatchedIDs.Alerts)
+		}
+	})
+
+	t.Run("early out of scope stays visible beside later match", func(t *testing.T) {
+		doc := sample(t, "haynes-ops", "claude", fixedNow)
+		early := doc.Snapshot.Alerts[0]
+		early.Service = "gatus"
+		early.StartedAt = start.Add(-time.Minute).Format(time.RFC3339Nano)
+		valid := doc.Snapshot.Alerts[0]
+		valid.StartedAt = start.Add(time.Second).Format(time.RFC3339Nano)
+		doc.Snapshot.Alerts = []observedAlert{early, valid}
+		res := mustCheck(t, doc, fixedNow)
+		if res.Decision != DecisionRespond || !predatesIndex(res, 0) || !hasPred(res.FailedPredicates, "service-mismatch") {
+			t.Fatalf("preds %+v", res.FailedPredicates)
+		}
+		if !sameInts(res.MatchedIDs.Alerts, []int{1}) || !visibleMentions(res, "gatus", 0) {
+			t.Fatalf("matched %+v visible %+v", res.MatchedIDs.Alerts, res.VisibleConditions)
+		}
+	})
+
+	t.Run("early unknown baseline stays visible", func(t *testing.T) {
+		doc := sample(t, "haynes-ops", "claude", fixedNow)
+		doc.Envelope.Baselines[0].Health = "unknown"
+		doc.Envelope.Baselines[0].Symptom = ""
+		doc.Envelope.Baselines[0].Severity = ""
+		early := doc.Snapshot.Alerts[0]
+		early.StartedAt = start.Add(-time.Nanosecond).Format(time.RFC3339Nano)
+		later := doc.Snapshot.Alerts[0]
+		later.StartedAt = start.Format(time.RFC3339Nano)
+		doc.Snapshot.Alerts = []observedAlert{early, later}
+		res := mustCheck(t, doc, fixedNow)
+		if !predatesIndex(res, 0) || !hasPred(res.FailedPredicates, "unknown-baseline") || len(res.MatchedIDs.Alerts) != 0 {
+			t.Fatalf("preds %+v matched %+v", res.FailedPredicates, res.MatchedIDs.Alerts)
+		}
+	})
+
+	t.Run("early missing baseline stays visible", func(t *testing.T) {
+		doc := sample(t, "haynes-ops", "claude", fixedNow)
+		doc.Envelope.Baselines = nil
+		doc.Snapshot.Alerts[0].StartedAt = start.Add(-time.Nanosecond).Format(time.RFC3339Nano)
+		res := mustCheck(t, doc, fixedNow)
+		if res.Decision != DecisionRespond || !predatesIndex(res, 0) || !hasPred(res.FailedPredicates, "missing-baseline") || len(res.MatchedIDs.Alerts) != 0 {
+			t.Fatalf("decision %s preds %+v matched %+v", res.Decision, res.FailedPredicates, res.MatchedIDs.Alerts)
+		}
+	})
+}
+
+func TestBaselineObservedBeforeActivity(t *testing.T) {
+	start := fixedNow.Add(-time.Minute)
+	reject := func(t *testing.T, health string) {
+		t.Helper()
+		doc := sample(t, "haynes-ops", "claude", fixedNow)
+		doc.Envelope.Baselines[0].Health = health
+		if health == "degraded" {
+			doc.Envelope.Baselines[0].Symptom = "disk"
+			doc.Envelope.Baselines[0].Severity = "warning"
+		}
+		doc.Envelope.Baselines[0].ObservedAt = start.Add(time.Nanosecond).Format(time.RFC3339Nano)
+		_, err := Check(mustJSON(t, doc), fixedNow)
+		if err == nil || !strings.Contains(err.Error(), "envelope.baselines[0].observedAt: is after the activity start") {
+			t.Fatalf("%s late baseline: %v", health, err)
+		}
+	}
+	t.Run("healthy after start", func(t *testing.T) { reject(t, "healthy") })
+	t.Run("degraded after start", func(t *testing.T) { reject(t, "degraded") })
+
+	accept := func(t *testing.T, at time.Time, health string) {
+		t.Helper()
+		doc := sample(t, "haynes-ops", "claude", fixedNow)
+		doc.Envelope.Baselines[0].Health = health
+		doc.Envelope.Baselines[0].ObservedAt = at.Format(time.RFC3339Nano)
+		if health == "degraded" {
+			doc.Envelope.Baselines[0].Symptom = "disk"
+			doc.Envelope.Baselines[0].Severity = "warning"
+		}
+		res, err := Check(mustJSON(t, doc), fixedNow)
+		if err != nil {
+			t.Fatalf("%s: %v", health, err)
+		}
+		if health == "healthy" && (res.Decision != DecisionCandidate || hasPred(res.FailedPredicates, "alert-predates-operation")) {
+			t.Fatalf("healthy %s %+v", res.Decision, res.FailedPredicates)
+		}
+		if health == "degraded" && !hasVisible(res.VisibleConditions, "pre-existing-degradation") {
+			t.Fatalf("degraded visible %+v", res.VisibleConditions)
+		}
+	}
+	t.Run("healthy at start", func(t *testing.T) { accept(t, start, "healthy") })
+	t.Run("healthy before start", func(t *testing.T) { accept(t, start.Add(-time.Minute), "healthy") })
+	t.Run("degraded at start", func(t *testing.T) { accept(t, start, "degraded") })
+	t.Run("degraded before start", func(t *testing.T) { accept(t, start.Add(-time.Minute), "degraded") })
+
+	t.Run("unknown baseline semantics", func(t *testing.T) {
+		doc := sample(t, "haynes-ops", "claude", fixedNow)
+		doc.Envelope.Baselines[0].Health = "unknown"
+		doc.Envelope.Baselines[0].ObservedAt = start.Format(time.RFC3339Nano)
+		res := mustCheck(t, doc, fixedNow)
+		if res.Decision != DecisionInsufficient || !hasPred(res.FailedPredicates, "unknown-baseline") || hasPred(res.FailedPredicates, "alert-predates-operation") {
+			t.Fatalf("%s %+v", res.Decision, res.FailedPredicates)
+		}
+	})
+
+	t.Run("missing baseline semantics", func(t *testing.T) {
+		doc := sample(t, "haynes-ops", "claude", fixedNow)
+		doc.Envelope.Baselines = nil
+		res := mustCheck(t, doc, fixedNow)
+		if res.Decision != DecisionInsufficient || !hasPred(res.FailedPredicates, "missing-baseline") || hasPred(res.FailedPredicates, "alert-predates-operation") {
+			t.Fatalf("%s %+v", res.Decision, res.FailedPredicates)
+		}
+	})
+
+	t.Run("future baseline still rejected", func(t *testing.T) {
+		doc := sample(t, "haynes-ops", "claude", fixedNow)
+		doc.Envelope.Baselines[0].ObservedAt = fixedNow.Add(6 * time.Second).Format(time.RFC3339Nano)
+		_, err := Check(mustJSON(t, doc), fixedNow)
+		if err == nil || !strings.Contains(err.Error(), "future beyond the 5s") {
+			t.Fatalf("future baseline: %v", err)
+		}
+	})
+
+	t.Run("malformed baseline still rejected", func(t *testing.T) {
+		doc := sample(t, "haynes-ops", "claude", fixedNow)
+		doc.Envelope.Baselines[0].ObservedAt = "not-a-time"
+		_, err := Check(mustJSON(t, doc), fixedNow)
+		if err == nil || !strings.Contains(err.Error(), "RFC3339") {
+			t.Fatalf("malformed baseline: %v", err)
+		}
+	})
 }
 
 func TestReplay(t *testing.T) {
@@ -658,6 +864,50 @@ func insertField(raw []byte, field string) []byte {
 	out = append(out, field...)
 	out = append(out, ',')
 	return append(out, raw[1:]...)
+}
+
+func assertPredates(t *testing.T, res Result, index int, service string) {
+	t.Helper()
+	if res.Decision != DecisionRespond || !predatesIndex(res, index) || !visibleMentions(res, service, index) {
+		t.Fatalf("decision %s preds %+v visible %+v", res.Decision, res.FailedPredicates, res.VisibleConditions)
+	}
+	for _, item := range res.FailedPredicates {
+		if item.Name == "alert-predates-operation" && strings.Contains(item.Detail, "caused") {
+			t.Fatalf("invented cause %q", item.Detail)
+		}
+	}
+}
+
+func predatesIndex(res Result, index int) bool {
+	needle := "snapshot alert " + strconv.Itoa(index) + " "
+	for _, item := range res.FailedPredicates {
+		if item.Name == "alert-predates-operation" && strings.Contains(item.Detail, needle) && strings.Contains(item.Detail, "no cause is attributed") {
+			return true
+		}
+	}
+	return false
+}
+
+func visibleMentions(res Result, service string, index int) bool {
+	needle := "index " + strconv.Itoa(index)
+	for _, item := range res.VisibleConditions {
+		if item.Kind == "pre-existing-degradation" && item.Service == service && strings.Contains(item.Detail, needle) && strings.Contains(item.Detail, "no cause is attributed") {
+			return true
+		}
+	}
+	return false
+}
+
+func sameInts(got, want []int) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func hasPred(items []Predicate, name string) bool {

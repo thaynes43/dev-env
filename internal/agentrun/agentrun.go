@@ -6,9 +6,11 @@
 // `history list|show|read`. The other verbs of 3.5 arrive with the plans
 // that build their routes.
 //
-// It imports the standard library, the API's wire types (internal/apiserver/apiv1)
-// and agentd's protocol constants only, never the Kubernetes libraries, so the
-// binary stays static and small. `make build` checks both.
+// It imports the standard library, the API's wire types (internal/apiserver/apiv1),
+// agentd's protocol constants, and the standard-library helpers
+// internal/maintenancecontract, internal/version, and internal/tokenfile.
+// It does not import the Kubernetes libraries, so the binary stays static and
+// small. `make build` checks that.
 package agentrun
 
 import (

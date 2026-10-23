@@ -69,9 +69,13 @@ func Check(data []byte, now time.Time) (Result, error) {
 	return evaluate(doc, now.UTC()), nil
 }
 
-// CanonicalDigest is the sha256 of the parsed envelope. It covers the
-// envelope only, so a later snapshot is not a payload change. The same
-// attempt with a different digest conflicts and is not merged.
+// CanonicalDigest is the sha256 of the parsed envelope. The digest includes
+// the whole immutable envelope, including its observation and heartbeat.
+// Refreshing that envelope changes the digest and conflicts with a
+// priorAttempt; there is no cross-heartbeat replay promise. A later snapshot
+// is not itself a payload change. Only an independent snapshot change that
+// still passes the existing consistency checks can leave the digest unchanged.
+// The same attempt with a different digest conflicts and is not merged.
 func CanonicalDigest(data []byte, now time.Time) (string, error) {
 	doc, err := parse(data, now)
 	if err != nil {
@@ -560,11 +564,16 @@ func validateTimes(doc *checkDoc, now time.Time, c *collector) instants {
 	if !when.start.IsZero() && when.start.After(now.Add(ClockTolerance)) {
 		c.add("envelope.activity.start", "is in the future beyond the 5s clock tolerance")
 	}
+	when.alertStarts = make([]time.Time, len(doc.Snapshot.Alerts))
 	for i := range env.Baselines {
-		c.observed(fmt.Sprintf("envelope.baselines[%d].observedAt", i), env.Baselines[i].ObservedAt, now)
+		path := fmt.Sprintf("envelope.baselines[%d].observedAt", i)
+		observedAt := c.observed(path, env.Baselines[i].ObservedAt, now)
+		if !when.start.IsZero() && !observedAt.IsZero() && observedAt.After(when.start) {
+			c.add(path, "is after the activity start")
+		}
 	}
 	for i := range doc.Snapshot.Alerts {
-		c.observed(fmt.Sprintf("snapshot.alerts[%d].startedAt", i), doc.Snapshot.Alerts[i].StartedAt, now)
+		when.alertStarts[i] = c.observed(fmt.Sprintf("snapshot.alerts[%d].startedAt", i), doc.Snapshot.Alerts[i].StartedAt, now)
 	}
 	if terminalStates[env.State] {
 		when.receipt = c.observed("envelope.terminal.receiptAt", env.Terminal.ReceiptAt, now)

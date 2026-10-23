@@ -2,6 +2,7 @@ package maintenancecontract
 
 import (
 	"sort"
+	"strconv"
 	"time"
 )
 
@@ -191,6 +192,13 @@ func correlateLaunch(snap snapshot, acc *accumulator) {
 	}
 }
 
+func alertPredatesOperation(when instants, index int) bool {
+	if index < 0 || index >= len(when.alertStarts) || when.start.IsZero() || when.alertStarts[index].IsZero() {
+		return false
+	}
+	return when.alertStarts[index].Before(when.start)
+}
+
 func correlateAlerts(doc parsed, acc *accumulator) {
 	env := doc.doc.Envelope
 	snap := doc.doc.Snapshot
@@ -220,12 +228,19 @@ func correlateAlerts(doc parsed, acc *accumulator) {
 		return
 	}
 	for i, alert := range snap.Alerts {
+		if alertPredatesOperation(doc.when, i) {
+			acc.respond("alert-predates-operation", "snapshot alert "+strconv.Itoa(i)+" for service "+alert.Service+" started before the activity; the pre-existing condition is visible and no cause is attributed")
+			acc.show("pre-existing-degradation", alert.Service, "snapshot alert index "+strconv.Itoa(i)+" for service "+alert.Service+" started before the activity and stays visible; no cause is attributed")
+		}
 		if !contains(env.Targets.Services, alert.Service) {
 			acc.respond("service-mismatch", "alert service "+alert.Service+" is outside the operation")
 			continue
 		}
 		base, ok := baselines[alert.Service]
 		if !ok || base.Health == "unknown" {
+			continue
+		}
+		if alertPredatesOperation(doc.when, i) {
 			continue
 		}
 		if exactAlert(env.ExpectedAlerts, alert) {

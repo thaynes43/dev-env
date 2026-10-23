@@ -70,13 +70,17 @@ Required envelope facts:
 - evidence URLs
 - state `planned`, `active`, `completed`, `rolled_back`, `failed`, or `held`
 
-The canonical attempt digest is SHA-256 of the parsed envelope, not of the
-snapshot and not of the raw input bytes. Times are normalized to UTC
-RFC3339Nano. The same attempt id with the same digest is a replay. The same
-attempt id with a different digest conflicts and is not merged. A later
-attempt uses a new attempt id and names its predecessor. This checker has no
-store, so it cannot prove a later attempt kept the original expiry. It will
-not extend an expiry by itself.
+The canonical attempt digest is SHA-256 of the whole parsed immutable
+envelope, including its observation and heartbeat. It is not a digest of the
+snapshot alone and not of the raw input bytes. Times are normalized to UTC
+RFC3339Nano. Refreshing that envelope, including a heartbeat refresh, changes
+the digest and conflicts with a priorAttempt. There is no cross-heartbeat
+replay promise. Only an independent snapshot change that still passes the
+existing consistency checks can leave the digest unchanged. The same attempt
+id with the same digest is a replay. The same attempt id with a different
+digest conflicts and is not merged. A later attempt uses a new attempt id and
+names its predecessor. This checker has no store, so it cannot prove a later
+attempt kept the original expiry. It will not extend an expiry by itself.
 
 An `authorized` field is rejected. Authority is an evidence URL the runtime
 boundary can inspect later. Offline input never becomes a grant.
@@ -105,6 +109,17 @@ baseline; and no unexplained worsening.
 
 Exact means the same service, label map, resource, severity, and symptom.
 `cluster`, `*`, and regular expressions do not match.
+
+An alert with startedAt strictly before the activity start is pre-existing.
+The result is `respond`, the predicate is `alert-predates-operation`, and the
+condition stays visible with its service and index. No cause is attributed.
+That alert is not matched. An earlier alert with that failure stays visible
+when a later alert matches. An alert at the activity start is eligible only
+when every other predicate passes. A baseline observedAt later than the
+activity start is invalid input and is rejected before evaluation, for a
+healthy or degraded baseline. There is no clock-tolerance exemption across
+that boundary. Comparing an alert's observed duration with
+impactIntervalSeconds is deferred and is not enforced here.
 
 Missing, unknown, stale, or unavailable evidence cannot become a candidate.
 A failed, stopped, expired, drifted, or conflicting record is `respond`.
@@ -149,6 +164,14 @@ Flux, Gatus, or Renovate fields. It may carry source CI and native-review
 tokens. Component procedures stay in the repository runbooks at a pinned
 revision. They are not copied into this role.
 
+`sourceCI`, `nativeReview`, and platform `fluxRevision` are untrusted ancillary
+inputs. They are not authenticated CI, review, or deployment evidence. They do
+not independently gate a candidate today. Core snapshot, owner, and
+desired-revision predicates still apply. Actual pull-request CI and native
+review gates are verified outside this checker. Full trusted binding and richer
+surfacing of these fields are deferred. That limitation is not an implemented
+policy.
+
 ## Proposed numeric defaults
 
 These retained bounds are conservative offline fixture and validation defaults.
@@ -177,7 +200,9 @@ agent-run maintenance check --input <file|-> [--now <RFC3339>]
 
 Exit 0 means the checker produced JSON. Read `decision`: `candidate`,
 `respond`, or `insufficient-evidence`. Exit 0 does not authorize anything.
-Exit 2 means the input is invalid and the JSON names the fields. The command
+Exit 2 is used for invalid use and for invalid input. Schema validation
+errors carry JSON that names the fields. Usage errors, input or output errors,
+and an invalid `--now` may print a plain diagnostic with no JSON. The command
 does not read a token, call the API, launch a session, or suppress an alert.
 `--now` injects the clock. Without it, the process wall clock is used.
 

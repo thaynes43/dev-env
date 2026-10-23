@@ -300,6 +300,7 @@ type instants struct {
 	observation, progress              time.Time
 	snapshotObservation                time.Time
 	receipt                            time.Time
+	alertStarts                        []time.Time
 }
 
 type parsed struct {
