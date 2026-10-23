@@ -306,6 +306,7 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	if errs := metavalidation.ValidateAnnotations(sess.Annotations, field.NewPath("metadata", "annotations")); len(errs) != 0 {
 		return nil, invalid(fieldError("project", "snapshot exceeds the aggregate annotation bound"))
 	}
+	s.bindUsageCaptureParent(ctx, c, sess)
 	return sess, nil
 }
 

@@ -303,3 +303,59 @@ foreign-Pod, replaced-source, version 1 and explicit refusals, a reaped source
 and both reader shapes; agent-run show, show --once (including a null model
 list) and the canary result reader with the new shape and with inconsistent
 attribution.
+
+
+## Captured direct-child receipts (2026-10-23)
+
+OpenProject #109 source slice. Issue #248 stays open: this is not an all-history
+descendant total and not durable PublishedContext attribution.
+
+When `--enable-child-usage-capture` is set, a child created by an authenticated
+Session stores `spec.usageCaptureParentUID` from a fresh read of that parent.
+The request body cannot set it. Human, client, and coordinator creates leave it
+absent. A replaced parent keeps the UID from create time, so capture does not
+follow the new object. The flag defaults off. Off, create does not write the
+UID and heartbeat does not read or write a parent ledger.
+
+`status.capturedUsage` on the surviving parent is version 1, scope
+`CapturedDirectChildInitialInvocations`, coverage `CaptureOnly`, retention
+`ParentLifetime`. It stores at most 64 receipts and 262144 serialized bytes.
+A full ledger sets a sticky overflow mark and adds no row. There is no
+eviction, archive, or reap delay. The receipt is the child's accepted initial
+observation, copied as stored, including provider, requested model, actual-model
+state, and explicit zero versus Unknown. A later conflict does not rewrite it.
+The same child UID is one row. The same key and payload replay does not change
+the capture time. `usageRollup` stays a live retained-descendant sum and does
+not include these rows.
+
+`agent-run show PARENT --captured-usage -o json` sends
+`Dev-Env-Usage-Capture: direct-v1`. Text and `--once` are refused before a
+request. Without the header, session JSON does not carry the ledger or the
+parent UID. A disabled or older server is an unavailable view, not zero usage.
+A Session sees the ledger only for its own UID. A restricted coordinator does
+not receive receipt rows. This is source only. The flag is not enabled in a
+deployment, and the CRD is not installed by this slice.
+
+The overflow mark is presence-safe. A missing overflow field is not overflow,
+and once it is true it stays true. Removing the whole capturedUsage object is
+refused, so a later liveness or reconciler write can keep a ledger that has not
+overflowed. Before a row is accepted, the writer reserves the overflow field
+and the bytes of the direct-v1 view inside the 262144-byte cap. Setting
+overflow then leaves both the stored ledger and the receipt view readable. No
+row is evicted.
+
+A receipt is copied only from the child stored observation after that usage
+write. The observation must validate, match this request source, have no usage
+conflict, and bind the authenticated request pod. When private history records
+a last executor, that executor has to be the same pod. A conflict on the parent
+write does not fail the heartbeat; the next identical heartbeat can record the
+same accepted observation. A later conflicting snapshot does not copy the
+earlier one.
+
+An absent ledger is unavailable. It is not an empty available list and it is
+not zero usage. Dev-Env-Usage-Capture: direct-v1 is its own opt-in. agent-run
+sends it together with Dev-Env-Attribution: provider-v1. A read without the
+capture header does not include the ledger. The client checks the whole view
+before printing it. A malformed or oversized view is unavailable, with no
+partial receipt list. Observation versions 1 and 2, a reported zero, and
+Unknown stay as they were captured.

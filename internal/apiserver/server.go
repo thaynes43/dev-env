@@ -136,6 +136,9 @@ type Server struct {
 	Log logr.Logger
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// ChildUsageCapture records accepted direct-child usage on the parent.
+	// Default off: no parent read or write and no receipt view.
+	ChildUsageCapture bool
 	// GrantApprovalURL is the base URL of the broker's approval page; a pending
 	// grant's view links to it plus the grant's name. Empty links nothing.
 	GrantApprovalURL string

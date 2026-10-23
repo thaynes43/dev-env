@@ -107,9 +107,10 @@ func note(s apiv1.Session) string {
 
 func (a *app) show(ctx context.Context, args []string) error {
 	cmd := newCommand("show", outputJSON)
-	var once, asJSON bool
+	var once, asJSON, captured bool
 	cmd.fs.BoolVar(&once, "once", false, "")
 	cmd.fs.BoolVar(&asJSON, "json", false, "")
+	cmd.fs.BoolVar(&captured, "captured-usage", false, "")
 	onceFlags, jsonFlags := 0, 0
 	for _, arg := range args {
 		if arg == "--once" || arg == "-once" || strings.HasPrefix(arg, "--once=") || strings.HasPrefix(arg, "-once=") {
@@ -136,12 +137,27 @@ func (a *app) show(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if captured {
+		if once {
+			return usageError("show --captured-usage cannot be combined with --once")
+		}
+		if cmd.c.output != outputJSON {
+			return usageError("show --captured-usage requires -o json")
+		}
+	}
 	if once {
 		return a.showOnce(ctx, c, pos[0])
 	}
+	callCtx := ctx
+	if captured {
+		callCtx = withUsageCapture(ctx)
+	}
 	var s apiv1.Session
-	if _, err := a.call(ctx, c, http.MethodGet, apiv1.SessionPath(url.PathEscape(pos[0])), nil, nil, &s); err != nil {
+	if _, err := a.call(callCtx, c, http.MethodGet, apiv1.SessionPath(url.PathEscape(pos[0])), nil, nil, &s); err != nil {
 		return err
+	}
+	if captured {
+		s.CapturedUsage = apiv1.NormalizeCapturedUsage(s.UID, s.CapturedUsage)
 	}
 	if cmd.c.output == outputJSON {
 		return a.printJSON(s)

@@ -113,6 +113,10 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 	if err := s.recordUsageObservation(ctx, &sess, c.pod, st.UsageObservation); err != nil {
 		return 0, nil, fromKubeError(err, "session "+key.Name+" usage observation")
 	}
+	// Capture is best-effort and must not change the heartbeat result.
+	if err := s.captureChildUsage(ctx, &sess, c.pod, st.UsageObservation); err != nil {
+		s.Log.Error(err, "capture child usage", "session", key.Name)
+	}
 	return http.StatusNoContent, nil, nil
 }
 

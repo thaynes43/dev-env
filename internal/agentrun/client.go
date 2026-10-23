@@ -36,6 +36,12 @@ func withFleetResources(ctx context.Context) context.Context {
 	return context.WithValue(ctx, fleetResourcesHeader{}, true)
 }
 
+type usageCaptureHeader struct{}
+
+func withUsageCapture(ctx context.Context) context.Context {
+	return context.WithValue(ctx, usageCaptureHeader{}, true)
+}
+
 // call sends one request to the API and decodes a 2xx answer into out. It
 // returns the status code, or an *exitError that says what went wrong in
 // words, with the exit code for its kind.
@@ -192,6 +198,9 @@ func (a *app) send(ctx context.Context, c *conn, method, target string, payload 
 	req.Header.Set(apiv1.AttributionHeader, apiv1.AttributionProvider)
 	if ctx.Value(fleetResourcesHeader{}) != nil {
 		req.Header.Set(apiv1.FleetHeader, apiv1.FleetResourcesV1)
+	}
+	if ctx.Value(usageCaptureHeader{}) != nil {
+		req.Header.Set(apiv1.UsageCaptureHeader, apiv1.UsageCaptureDirectV1)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {

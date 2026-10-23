@@ -258,6 +258,9 @@ type Session struct {
 	Usage            *Usage            `json:"usage,omitempty"`
 	UsageObservation *UsageObservation `json:"usageObservation,omitempty"`
 	UsageConflict    *UsageConflict    `json:"usageConflict,omitempty"`
+	// CapturedUsage is set only for Dev-Env-Usage-Capture: direct-v1. It is not
+	// a usage total. Nil means this response did not carry the receipt view.
+	CapturedUsage *CapturedUsage `json:"capturedUsage,omitempty"`
 	// UsageRollup sums the retained descendants' own initial invocations. It is
 	// present only on a single Session's view, and only when it has
 	// descendants.

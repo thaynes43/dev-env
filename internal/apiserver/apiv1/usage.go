@@ -53,3 +53,30 @@ type UsageRollupKey struct {
 	SessionUID    string `json:"sessionUID"`
 	ObservationID string `json:"observationID"`
 }
+
+const (
+	// UsageCaptureHeader opts a single Session read into the receipt view.
+	UsageCaptureHeader   = "Dev-Env-Usage-Capture"
+	UsageCaptureDirectV1 = "direct-v1"
+)
+
+// CapturedUsage is the opted-in receipt view. Available false with no receipts
+// is not a claim of zero usage.
+type CapturedUsage struct {
+	Available bool                   `json:"available"`
+	Reason    string                 `json:"reason,omitempty"`
+	Scope     string                 `json:"scope,omitempty"`
+	Coverage  string                 `json:"coverage,omitempty"`
+	Retention string                 `json:"retention,omitempty"`
+	Overflow  bool                   `json:"overflow,omitempty"`
+	Receipts  []CapturedUsageReceipt `json:"receipts,omitempty"`
+}
+
+// CapturedUsageReceipt is one copied initial observation.
+type CapturedUsageReceipt struct {
+	Key         string            `json:"key"`
+	ParentUID   string            `json:"parentUID"`
+	ChildName   string            `json:"childName,omitempty"`
+	CapturedAt  time.Time         `json:"capturedAt"`
+	Observation *UsageObservation `json:"observation,omitempty"`
+}
