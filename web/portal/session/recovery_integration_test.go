@@ -45,7 +45,13 @@ func testProtectedReadCost(t *testing.T, a *PostgresStore) {
 	auth.e.config.Store = a
 	startedLogin := time.Now()
 	auth.login(t)
-	t.Logf("LEGITIMATE_LOGIN_EVIDENCE begin+callback=%s witness_GETs=9 login_starts=1", time.Since(startedLogin))
+	f.mu.Lock()
+	loginGets := f.calls
+	f.mu.Unlock()
+	if loginGets != 9 {
+		t.Fatal("legitimate login witness request count changed")
+	}
+	t.Logf("LEGITIMATE_LOGIN_EVIDENCE begin+callback=%s witness_GETs=%d login_starts=1", time.Since(startedLogin), loginGets)
 	authorizer := currentFixture(auth, func(*http.Request) (*http.Response, error) { return userInfoResponse(currentAllow), nil })
 	authorizer.store = a
 	handler := NewAssembly(AssemblyConfig{Session: auth.e, Authorizer: authorizer, Reader: readFunc(func(_ context.Context, r portal.Resource) (portal.Snapshot, error) {

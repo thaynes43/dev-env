@@ -125,7 +125,7 @@ func commitLossPool(t *testing.T) (*pgxpool.Pool, <-chan int) {
 			}
 		}
 	}()
-	t.Cleanup(workers.Wait)
+	t.Cleanup(func() { _ = listener.Close(); workers.Wait() })
 	config.ConnConfig.Port = uint16(listener.Addr().(*net.TCPAddr).Port)
 	config.MaxConns = 1
 	pool, err := pgxpool.NewWithConfig(context.Background(), config)

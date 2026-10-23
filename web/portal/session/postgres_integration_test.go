@@ -70,7 +70,6 @@ GRANT SELECT,INSERT,DELETE ON portal.pending_logins,portal.sessions TO dev_env_v
 		t.Fatal("fixture grant failed")
 	}
 	fence := &fixtureFence{generation: strings.Repeat("g", 32)}
-	u.User = url.UserPassword("dev_env_v2_portal_runtime", "synthetic-ci-only-password")
 	newReplica := func() *PostgresStore {
 		s := fixtureStore(t)
 		s.fence = fence
@@ -356,9 +355,6 @@ func TestPostgresIntegration(t *testing.T) {
 			_, err := a.pool.Exec(ctx, sql)
 			requireSQLState(t, err, "42501")
 		}
-		base := os.Getenv("PORTAL_TEST_DATABASE_URL")
-		u, _ := url.Parse(base)
-		u.User = url.UserPassword("dev_env_v2_portal_runtime", "synthetic-ci-only-password")
 		for _, mode := range []string{"other-database", "plaintext", "wrong-hostname", "untrusted-CA"} {
 			c := integrationRuntimeConfig(t)
 			switch mode {
@@ -399,6 +395,11 @@ func TestPostgresIntegration(t *testing.T) {
 	})
 
 	t.Run("shared-insert-ceiling-and-bounded-expiry-cleanup", func(t *testing.T) {
+		// This sequential subtest owns a fresh pending-login fixture. Remove
+		// earlier rows so cleanup's arbitrary LIMIT cannot depend on their age.
+		if _, err := admin.Exec(ctx, "DELETE FROM portal.pending_logins"); err != nil {
+			t.Fatal("pending fixture reset failed")
+		}
 		fresh := time.Now().UTC().Truncate(time.Microsecond)
 		l := login
 		l.ExpiresAt = fresh.Add(time.Minute)

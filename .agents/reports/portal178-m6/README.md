@@ -1,4 +1,4 @@
-# M6 same-connection recovery fence — source work in progress
+# M6 same-connection recovery fence — source acceptance pending
 
 Story [178](https://work.haynesnetwork.com/work_packages/178), under Epic 120 / Saga 85.
 Fresh baseline `d4d21ef9d8f6682cabe1a45b78f5fd3726f50ef1` includes accepted
@@ -15,7 +15,7 @@ The contract replaces generation-only checking. Acquire and begin once. Before
 session-table SQL, measure system identifier, active WAL timeline from
 `pg_walfile_name(pg_current_wal_lsn())`, postmaster start, server address/port and
 writable/non-recovery using the SAME `pgx.Tx`. Compare to one fresh linearizable
-API GET, with resourceVersion absent (never0), fixed trusted API CA/token and
+API GET, with resourceVersion absent (never 0), fixed trusted API CA/token and
 fixed object path. Require exact pinned witness UID, resourceVersion and all
 admission fields again immediately before and after COMMIT. Any uncertainty
 returns unavailable and discards results; no automatic write retry.
@@ -40,15 +40,15 @@ First reviewable milestone: direct reader, same-transaction protocol, strict
 negative/boundary fixtures and docs. Hosted disposable asynchronous failover must
 lose an acknowledged DELETE with witness unchanged and show resurrected session
 and callback denial before any observer. All unrun proof remains explicit.
-Source success cannot release witness/DB/auth/isolation/GateA or shared Authentik
+Source success cannot release witness/DB/auth/isolation/Gate A or shared Authentik
 logging holds.
 
-Local evidence so far: official Go1.27.2 archive checksum verified, compiler
+Local evidence so far: official Go 1.27.2 archive checksum verified, compiler
 binary SHA256 `548d3c32f83fa81152f543eb1526be7884cfe0526eb5e9ce29d3eca14786e7e0`.
 Focused portal tests and vet pass; selected transaction/current-membership
 `-race` passes. Local actual PostgreSQL and API RBAC fixtures explicitly skip
-because disposable facilities are not configured. Hosted results and required
-final-head independent native review are pending. A Python YAML parser is not
+because disposable facilities are not configured. Hosted interim results are in [EVIDENCE.md](EVIDENCE.md); fresh final-head CI and
+independent native review remain pending. A Python YAML parser is not
 installed locally; workflow acceptance is checked by GitHub and source review.
 
 References: PostgreSQL 16 [control/WAL functions](https://www.postgresql.org/docs/16/functions-admin.html)
@@ -56,3 +56,5 @@ and [LOCK privileges](https://www.postgresql.org/docs/16/sql-lock.html);
 Kubernetes 1.35 [most-recent GET semantics](https://v1-35.docs.kubernetes.io/docs/reference/using-api/api-concepts/).
 The API can internally serve a consistent GET through its supported cache;
 there is no application cache, informer, object-file or resourceVersion0 request.
+
+Actual disposable proof and measured request costs: [EVIDENCE.md](EVIDENCE.md).
