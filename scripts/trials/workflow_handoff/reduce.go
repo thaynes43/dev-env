@@ -318,6 +318,8 @@ type reducer struct {
 	writes           bool
 	suppressedAssign map[string]bool
 	conflictedReview map[string]bool
+	conflictedPass   map[string]bool
+	passTimes        map[string]time.Time
 }
 
 func check(data []byte) (result, int) {
@@ -971,6 +973,8 @@ func reduce(doc document, prov provenanceOut, items []parsed) result {
 		receiptSet:       map[string]bool{},
 		suppressedAssign: map[string]bool{},
 		conflictedReview: map[string]bool{},
+		conflictedPass:   map[string]bool{},
+		passTimes:        map[string]time.Time{},
 		replays:          replays,
 	}
 	for _, msg := range idConflicts {
@@ -988,7 +992,23 @@ func (r *reducer) prescan(items []parsed) {
 	emitted := map[string]bool{}
 	successors := map[string]string{}
 	emittedAssign := map[string]bool{}
+	passes := map[string]passEvent{}
 	for _, item := range items {
+		if pass, ok := item.body.(passEvent); ok {
+			r.passTimes[pass.Identity] = item.at
+			if pass.Authorized && pass.AuthorizationRef != "" {
+				key := instantKey(item.at)
+				if prior, exists := passes[key]; exists {
+					if !samePassAdvice(prior, pass) {
+						r.conflictedPass[key] = true
+						r.conflict("equal-time conflicting worker passes require manual disposition")
+					}
+				} else {
+					passes[key] = pass
+				}
+			}
+		}
+
 		ev, ok := item.body.(reviewEvent)
 		if ok && ev.Phase == "terminal" && ev.Head == r.doc.Head && r.bindingOK(ev) {
 			subject := ev.Task + "\x00" + ev.UID
@@ -1022,6 +1042,18 @@ func (r *reducer) prescan(items []parsed) {
 	}
 }
 
+func samePassAdvice(a, b passEvent) bool {
+	if a.Executor != b.Executor || a.WritesAllowed != b.WritesAllowed || len(a.Preserves) != len(b.Preserves) {
+		return false
+	}
+	for i := range a.Preserves {
+		if a.Preserves[i] != b.Preserves[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func (r *reducer) bindingOK(ev reviewEvent) bool {
 	if r.doc.ReviewBinding == nil {
 		return true
@@ -1032,7 +1064,7 @@ func (r *reducer) bindingOK(ev reviewEvent) bool {
 func (r *reducer) apply(item parsed) {
 	switch ev := item.body.(type) {
 	case passEvent:
-		r.applyPass(ev)
+		r.applyPass(ev, item.at)
 	case execEvent:
 		r.applyExec(ev, item.at)
 	case deadlineEvent:
@@ -1064,7 +1096,7 @@ func (r *reducer) apply(item parsed) {
 	}
 }
 
-func (r *reducer) applyPass(ev passEvent) {
+func (r *reducer) applyPass(ev passEvent, at time.Time) {
 	if r.exec.deadline && (!ev.Authorized || ev.AuthorizationRef == "") {
 		r.refusals = append(r.refusals, "no automatic new allowance after deadline "+ev.Identity)
 		return
@@ -1073,11 +1105,22 @@ func (r *reducer) applyPass(ev passEvent) {
 		r.refusals = append(r.refusals, "worker pass "+ev.Identity+" is not externally authorized")
 		return
 	}
+	if r.conflictedPass[instantKey(at)] {
+		r.writes = false
+		r.refusals = append(r.refusals, "conflicting worker pass "+ev.Identity+" not applied")
+		return
+	}
 	if r.exec.identity != "" && ev.Executor != r.exec.identity {
 		r.refusals = append(r.refusals, "worker pass executor mismatch "+ev.Identity)
 		return
 	}
 	for _, id := range ev.Preserves {
+		if when, exists := r.passTimes[id]; exists && !when.Before(at) {
+			r.conflictedPass[instantKey(at)] = true
+			r.conflict("worker pass preservation requires a strictly earlier pass")
+			r.writes = false
+			return
+		}
 		if !r.passIDs[id] {
 			r.refusals = append(r.refusals, "worker pass "+ev.Identity+" does not preserve unknown pass "+id)
 			return
@@ -1741,6 +1784,9 @@ func (r *reducer) boundReviewBlockers(reviews []reviewView, gateVerdict string) 
 }
 
 func (r *reducer) writesOpen() bool {
+	if len(r.conflictedPass) > 0 {
+		return false
+	}
 	if r.exec.deadline || r.exec.verified || r.exec.ambiguous || r.exec.state == "exited" || r.exec.state == "ended-pending-verified-stop" {
 		return false
 	}
