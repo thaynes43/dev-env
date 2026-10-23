@@ -1,0 +1,46 @@
+{
+  "schema": "dev-env.workflow-handoff/v1",
+  "story": "177",
+  "relatedStories": [
+    "117",
+    "101"
+  ],
+  "repository": "github.com/thaynes43/dev-env",
+  "pullRequest": 9001,
+  "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "coordinator": "coordinator-sol",
+  "modelProvenance": {
+    "serving": "Unknown",
+    "cost": "Unknown",
+    "configuredUI": "Grok4.7ExtraHigh"
+  },
+  "events": [
+    {
+      "kind": "review-observation",
+      "identity": "obs-approved",
+      "sourceTime": "2026-10-23T15:00:00Z",
+      "task": "native-review-1",
+      "uid": "uid-review-1",
+      "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source": "native-review-log",
+      "phase": "terminal",
+      "verdict": "approved"
+    },
+    {
+      "kind": "gate-evidence",
+      "identity": "gate-missing",
+      "sourceTime": "2026-10-23T16:00:00Z",
+      "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "agentOpened": true,
+      "requiredCI": "missing",
+      "nativeReviewVerdict": "approved",
+      "reviewJobSuccess": true,
+      "findings": "disposed",
+      "headUnchanged": true
+    }
+  ],
+  "reviewBinding": {
+    "task": "native-review-1",
+    "uid": "uid-review-1"
+  }
+}

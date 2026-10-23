@@ -1,0 +1,57 @@
+{
+  "schema": "dev-env.workflow-handoff/v1",
+  "story": "177",
+  "relatedStories": [
+    "117",
+    "101"
+  ],
+  "repository": "github.com/thaynes43/dev-env",
+  "pullRequest": 0,
+  "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "coordinator": "coordinator-sol",
+  "modelProvenance": {
+    "serving": "Unknown",
+    "cost": "Unknown",
+    "configuredUI": "Grok4.7ExtraHigh"
+  },
+  "events": [
+    {
+      "kind": "worker-pass",
+      "identity": "pass-1",
+      "sourceTime": "2026-10-23T13:00:00Z",
+      "executor": "executor-a",
+      "deadline": "2026-10-23T14:42:01Z",
+      "budget": "original",
+      "authorized": true,
+      "authorizationRef": "external-dispatch-pass-1",
+      "preserves": [],
+      "writesAllowed": false
+    },
+    {
+      "kind": "executor-state",
+      "identity": "ex-exit",
+      "sourceTime": "2026-10-23T13:40:00Z",
+      "executor": "executor-a",
+      "state": "exited"
+    },
+    {
+      "kind": "stop-release",
+      "identity": "stop-1",
+      "sourceTime": "2026-10-23T13:41:00Z",
+      "executor": "executor-a",
+      "verified": false,
+      "ambiguous": true
+    },
+    {
+      "kind": "successor-assignment",
+      "identity": "as-1",
+      "sourceTime": "2026-10-23T13:50:00Z",
+      "assignmentKey": "story-177-executor",
+      "predecessor": "executor-a",
+      "successor": "executor-b",
+      "authorized": true,
+      "authorizationRef": "external-assignment-1",
+      "supportedContinuation": true
+    }
+  ]
+}

@@ -1,0 +1,78 @@
+{
+  "schema": "dev-env.workflow-handoff/v1",
+  "story": "177",
+  "relatedStories": [
+    "117",
+    "101"
+  ],
+  "repository": "github.com/thaynes43/dev-env",
+  "pullRequest": 9001,
+  "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "coordinator": "coordinator-sol",
+  "modelProvenance": {
+    "serving": "Unknown",
+    "cost": "Unknown",
+    "configuredUI": "Grok4.7ExtraHigh"
+  },
+  "events": [
+    {
+      "kind": "scope-instruction",
+      "identity": "scope-other",
+      "sourceTime": "2026-10-23T13:30:00Z",
+      "reference": "tracker:177",
+      "summary": "agents do not need permission to merge PRs they opened",
+      "verbatim": "I have told you over and over and over and over that agents do not need permission to merge PRs they opened",
+      "scope": "ordinary-dev-env-merge-release",
+      "supersedes": [
+        "scope-merge"
+      ]
+    },
+    {
+      "kind": "gate-evidence",
+      "identity": "gate-1",
+      "sourceTime": "2026-10-23T16:00:00Z",
+      "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "agentOpened": true,
+      "requiredCI": "passed",
+      "nativeReviewVerdict": "approved",
+      "reviewJobSuccess": true,
+      "findings": "disposed",
+      "headUnchanged": true
+    },
+    {
+      "kind": "hold",
+      "identity": "hold-media",
+      "sourceTime": "2026-10-23T13:40:00Z",
+      "action": "media-work",
+      "state": "pending",
+      "reason": "no media action is assigned"
+    },
+    {
+      "kind": "scope-instruction",
+      "identity": "scope-merge",
+      "sourceTime": "2026-10-23T13:30:00Z",
+      "reference": "tracker:177",
+      "summary": "agents do not need permission to merge PRs they opened",
+      "verbatim": "I have told you over and over and over and over that agents do not need permission to merge PRs they opened",
+      "scope": "ordinary-dev-env-merge-release",
+      "supersedes": [
+        "scope-other"
+      ]
+    },
+    {
+      "kind": "review-observation",
+      "identity": "obs-approved",
+      "sourceTime": "2026-10-23T15:00:00Z",
+      "task": "native-review-1",
+      "uid": "uid-review-1",
+      "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source": "native-review-log",
+      "phase": "terminal",
+      "verdict": "approved"
+    }
+  ],
+  "reviewBinding": {
+    "task": "native-review-1",
+    "uid": "uid-review-1"
+  }
+}
