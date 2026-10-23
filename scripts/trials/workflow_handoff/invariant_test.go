@@ -50,6 +50,11 @@ func handoffSemantics(got result) any {
 
 func assertSameSemantics(t *testing.T, want, got result) {
 	t.Helper()
+	for _, observation := range []result{want, got} {
+		if observation.ManualDisposition && (observation.WritesRecommended || observation.MergeRelease != "blocked" || len(observation.Recommendations) != 0) {
+			t.Fatalf("manual disposition retained action advice: %#v", handoffSemantics(observation))
+		}
+	}
 	if !reflect.DeepEqual(handoffSemantics(want), handoffSemantics(got)) {
 		t.Fatalf("semantic result changed with equivalent evidence:\nwant %#v\ngot  %#v", handoffSemantics(want), handoffSemantics(got))
 	}
@@ -95,6 +100,56 @@ func TestFiniteHandoffPermutationAndReplayInvariants(t *testing.T) {
 				}
 				got, _ := check(body)
 				assertSameSemantics(t, want, got)
+			}
+		}
+	}
+}
+
+func TestManualDispositionSuppressesAdviceInLiveContexts(t *testing.T) {
+	for _, name := range []string{"repair-writable-merge.json", "b-one-successor.json"} {
+		raw, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc document
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatal(err)
+		}
+		baseline, code := check(raw)
+		if code != 0 || (name == "repair-writable-merge.json" && !baseline.WritesRecommended) || (name == "b-one-successor.json" && baseline.RecordedSuccessorCount != 1) {
+			t.Fatalf("baseline %s is not live evidence %#v", name, baseline)
+		}
+		original := append([]json.RawMessage{}, doc.Events...)
+		collision := []json.RawMessage{
+			json.RawMessage(`{"kind":"delivery-receipt","identity":"ambiguous-receipt","sourceTime":"2026-10-23T13:00:00Z"}`),
+			json.RawMessage(`{"kind":"delivery-receipt","identity":"ambiguous-receipt","sourceTime":"2026-10-23T14:00:00Z"}`),
+		}
+		var first result
+		for _, reverse := range []bool{false, true} {
+			doc.Events = append(append([]json.RawMessage{}, original...), collision...)
+			if reverse {
+				for i, j := 0, len(doc.Events)-1; i < j; i, j = i+1, j-1 {
+					doc.Events[i], doc.Events[j] = doc.Events[j], doc.Events[i]
+				}
+			}
+			// Duplicate the complete evidence stream as an idempotency control.
+			doc.Events = append(doc.Events, append([]json.RawMessage{}, doc.Events...)...)
+			body, err := json.Marshal(doc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, code := check(body)
+			if code != 3 || !got.ManualDisposition || got.WritesRecommended || got.MergeRelease != "blocked" || len(got.Recommendations) != 0 {
+				t.Errorf("conflict advice on %s: writes=%v merge=%s recommendations=%v", name, got.WritesRecommended, got.MergeRelease, got.Recommendations)
+			}
+			// Unambiguous recorded facts remain observations, not new action advice.
+			if got.ActiveSuccessor != baseline.ActiveSuccessor || got.RecordedSuccessorCount != baseline.RecordedSuccessorCount || got.Executor != baseline.Executor || len(got.Passes) != len(baseline.Passes) {
+				t.Fatalf("conflict invented or erased recorded state on %s", name)
+			}
+			if reverse {
+				assertSameSemantics(t, first, got)
+			} else {
+				first = got
 			}
 		}
 	}

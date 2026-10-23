@@ -1517,6 +1517,12 @@ func (r *reducer) finish() result {
 	}
 	switch {
 	case len(r.conflicts) > 0:
+		// Retain unambiguous recorded facts, but unresolved input gives no
+		// action advice, including advice collected before the conflict.
+		res.WritesRecommended = false
+		res.Recommendations = []string{}
+		merge = "blocked"
+		blockers = []string{"manual disposition is required"}
 		res.Status = "conflict"
 		res.ExitCode = 3
 		res.Outcome = "manual-disposition"
