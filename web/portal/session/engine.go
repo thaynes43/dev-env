@@ -303,7 +303,10 @@ func (e *Engine) callback(w http.ResponseWriter, r *http.Request) {
 	if tokenExpiry.Before(expires) {
 		expires = tokenExpiry
 	}
-	if !expires.After(now) {
+	// Max-Age takes precedence over Expires in browsers. Floor it so a
+	// fractional remaining second never extends the token's cookie deadline.
+	maxAge := int(expires.Sub(now) / time.Second)
+	if maxAge <= 0 {
 		authFailure(w, portal.ErrDenied)
 		return
 	}
@@ -313,7 +316,7 @@ func (e *Engine) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cookie(w, loginCookie, "", time.Unix(1, 0), -1)
-	cookie(w, sessionCookie, handle, record.ExpiresAt, cookieAge(expires.Sub(now)))
+	cookie(w, sessionCookie, handle, record.ExpiresAt, maxAge)
 	w.Header().Set("Location", LandingPath)
 	w.WriteHeader(http.StatusSeeOther)
 }

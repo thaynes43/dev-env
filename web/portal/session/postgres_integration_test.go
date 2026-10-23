@@ -176,7 +176,8 @@ func TestPostgresIntegration(t *testing.T) {
 			t.Fatal("tampered ciphertext authorized")
 		}
 		l := login
-		l.ExpiresAt = now.Add(time.Second)
+		// Independent of how long earlier SQL subtests took on the hosted runner.
+		l.ExpiresAt = time.Now().UTC().Add(time.Minute).Truncate(time.Microsecond)
 		lh := handle("expired-login")
 		if a.PutLogin(ctx, lh, l) != nil {
 			t.Fatal("expiry fixture insert failed")

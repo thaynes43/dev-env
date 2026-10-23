@@ -175,12 +175,13 @@ func TestFixedLandingAndForgedReturnURLOrHost(t *testing.T) {
 
 func TestSessionAndCookieCappedBySignedAccessExpiry(t *testing.T) {
 	f := setupAuth(t)
+	f.now = f.now.Add(125 * time.Millisecond)
 	f.e.config.IdleTTL = 2 * time.Hour
 	f.e.config.AbsoluteTTL = 3 * time.Hour
 	f.login(t)
 	key, _ := requestHandle(f.request("GET", LandingPath, ""), sessionCookie)
 	r := f.store.sessions[key]
-	if r.ExpiresAt.After(r.tokenExpiresAt) || r.IdleExpiresAt.After(r.tokenExpiresAt) || f.session.MaxAge > 3600 || f.session.Expires.After(r.tokenExpiresAt) {
+	if r.ExpiresAt.After(r.tokenExpiresAt) || r.IdleExpiresAt.After(r.tokenExpiresAt) || f.session.MaxAge > int(r.ExpiresAt.Sub(r.CreatedAt)/time.Second) || f.session.Expires.After(r.tokenExpiresAt) {
 		t.Fatal("session or cookie outlived access token")
 	}
 	before := r.ExpiresAt
