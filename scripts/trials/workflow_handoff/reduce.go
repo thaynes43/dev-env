@@ -1073,6 +1073,10 @@ func (r *reducer) applyPass(ev passEvent) {
 		r.refusals = append(r.refusals, "worker pass "+ev.Identity+" is not externally authorized")
 		return
 	}
+	if r.exec.identity != "" && ev.Executor != r.exec.identity {
+		r.refusals = append(r.refusals, "worker pass executor mismatch "+ev.Identity)
+		return
+	}
 	for _, id := range ev.Preserves {
 		if !r.passIDs[id] {
 			r.refusals = append(r.refusals, "worker pass "+ev.Identity+" does not preserve unknown pass "+id)
@@ -1090,12 +1094,7 @@ func (r *reducer) applyPass(ev passEvent) {
 		AuthorizationRef: ev.AuthorizationRef,
 	})
 	r.passIDs[ev.Identity] = true
-	if ev.WritesAllowed && r.writesOpen() {
-		r.writes = true
-	}
-	if !r.writesOpen() {
-		r.writes = false
-	}
+	r.writes = ev.WritesAllowed && r.writesOpen()
 }
 
 func (r *reducer) applyExec(ev execEvent, at time.Time) {
@@ -1556,6 +1555,10 @@ func (r *reducer) resolveScope() (*scopeView, []scopeView) {
 	for _, sc := range r.scopes {
 		retained = append(retained, scopeViewOf(sc))
 	}
+	if hasEqualTimeScopeCycle(r.scopes) {
+		r.conflict("equal-time supersession cycle requires manual disposition")
+		return nil, retained
+	}
 	var max time.Time
 	have := false
 	for _, sc := range r.scopes {
@@ -1587,6 +1590,34 @@ func (r *reducer) resolveScope() (*scopeView, []scopeView) {
 		r.conflict("scope instructions resolve to no current scope; manual disposition required")
 	}
 	return nil, retained
+}
+
+// A cycle has no authoritative winner, even if an older scope survives.
+func hasEqualTimeScopeCycle(scopes []scopeRec) bool {
+	colors := make([]uint8, len(scopes))
+	var visit func(int) bool
+	visit = func(i int) bool {
+		if colors[i] == 1 {
+			return true
+		}
+		if colors[i] == 2 {
+			return false
+		}
+		colors[i] = 1
+		for j := range scopes {
+			if scopes[i].at.Equal(scopes[j].at) && contains(scopes[i].ev.Supersedes, scopes[j].ev.Identity) && visit(j) {
+				return true
+			}
+		}
+		colors[i] = 2
+		return false
+	}
+	for i := range scopes {
+		if visit(i) {
+			return true
+		}
+	}
+	return false
 }
 
 func scopeViewOf(sc scopeRec) scopeView {

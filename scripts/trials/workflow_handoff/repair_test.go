@@ -113,7 +113,7 @@ func TestEqualTimeHoldDispositionFailsClosed(t *testing.T) {
 func TestMutuallySupersedingScopeFailsClosed(t *testing.T) {
 	for _, name := range []string{"repair-mutual-scopes.json", "repair-mutual-scopes-reversed.json"} {
 		got := mustRun(t, name, 3)
-		if got.CurrentScope != nil || len(got.RetainedScope) != 2 || !got.RetainedScope[0].Superseded || !got.RetainedScope[1].Superseded || !has(got.Conflicts, "no current scope") || got.MergeRelease != "blocked" || countPrefix(got.Recommendations, "recommend existing normal") != 0 || holdState(got, "media-work") != "pending" {
+		if got.CurrentScope != nil || len(got.RetainedScope) != 2 || !got.RetainedScope[0].Superseded || !got.RetainedScope[1].Superseded || !has(got.Conflicts, "equal-time supersession cycle") || got.MergeRelease != "blocked" || countPrefix(got.Recommendations, "recommend existing normal") != 0 || holdState(got, "media-work") != "pending" {
 			t.Fatalf("%s %#v", name, got)
 		}
 	}
