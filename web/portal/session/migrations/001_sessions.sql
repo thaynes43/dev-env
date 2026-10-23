@@ -6,14 +6,12 @@ CREATE TABLE portal.pending_logins (
     version smallint NOT NULL CHECK (version = 1),
     state_digest bytea NOT NULL CHECK (octet_length(state_digest) = 32),
     expires_at timestamptz NOT NULL,
-    payload bytea NOT NULL CHECK (octet_length(payload) BETWEEN 28 AND 131072),
-    consumed_at timestamptz
+    payload bytea NOT NULL CHECK (octet_length(payload) BETWEEN 28 AND 131072)
 );
 CREATE TABLE portal.sessions (
     handle bytea PRIMARY KEY CHECK (octet_length(handle) = 32),
     generation text NOT NULL CHECK (length(generation) BETWEEN 32 AND 128),
     version smallint NOT NULL CHECK (version = 1),
     expires_at timestamptz NOT NULL,
-    payload bytea NOT NULL CHECK (octet_length(payload) BETWEEN 28 AND 131072),
-    revoked_at timestamptz
+    payload bytea NOT NULL CHECK (octet_length(payload) BETWEEN 28 AND 131072)
 );

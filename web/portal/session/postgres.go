@@ -259,7 +259,7 @@ func (s *PostgresStore) TakeLogin(ctx context.Context, h Handle, state string, n
 	err := s.run(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		var data []byte
 		var expiry time.Time
-		err := tx.QueryRow(ctx, "UPDATE portal.pending_logins SET consumed_at=$4 WHERE handle=$1 AND generation=$2 AND version=1 AND state_digest=$3 AND consumed_at IS NULL AND expires_at>GREATEST($4,clock_timestamp()) RETURNING expires_at,payload", h[:], s.generation, digest[:], now).Scan(&expiry, &data)
+		err := tx.QueryRow(ctx, "DELETE FROM portal.pending_logins WHERE handle=$1 AND generation=$2 AND version=1 AND state_digest=$3 AND expires_at>GREATEST($4,clock_timestamp()) RETURNING expires_at,payload", h[:], s.generation, digest[:], now).Scan(&expiry, &data)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return portal.ErrDenied
 		}
@@ -309,7 +309,7 @@ func (s *PostgresStore) GetSession(ctx context.Context, h Handle) (Record, error
 	err := s.run(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		var expiry time.Time
 		var data []byte
-		err := tx.QueryRow(ctx, "SELECT expires_at,payload FROM portal.sessions WHERE handle=$1 AND generation=$2 AND version=1 AND revoked_at IS NULL AND expires_at>GREATEST($3,clock_timestamp())", h[:], s.generation, s.now()).Scan(&expiry, &data)
+		err := tx.QueryRow(ctx, "SELECT expires_at,payload FROM portal.sessions WHERE handle=$1 AND generation=$2 AND version=1 AND expires_at>GREATEST($3,clock_timestamp())", h[:], s.generation, s.now()).Scan(&expiry, &data)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return portal.ErrDenied
 		}
@@ -334,7 +334,7 @@ func (s *PostgresStore) GetSession(ctx context.Context, h Handle) (Record, error
 
 func (s *PostgresStore) RevokeSession(ctx context.Context, h Handle) error {
 	return s.run(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, "UPDATE portal.sessions SET revoked_at=COALESCE(revoked_at,$3) WHERE handle=$1 AND generation=$2", h[:], s.generation, s.now())
+		_, err := tx.Exec(ctx, "DELETE FROM portal.sessions WHERE handle=$1 AND generation=$2", h[:], s.generation)
 		if err != nil {
 			return portal.ErrUnavailable
 		}

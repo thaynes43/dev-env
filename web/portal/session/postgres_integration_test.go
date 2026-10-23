@@ -64,7 +64,7 @@ SET ROLE dev_env_v2_portal_migrator;`
 	}
 	if _, err = conn.Exec(ctx, `RESET ROLE; REVOKE ALL ON SCHEMA portal FROM PUBLIC;
 GRANT USAGE ON SCHEMA portal TO dev_env_v2_portal_runtime;
-GRANT SELECT,INSERT,UPDATE,DELETE ON portal.pending_logins,portal.sessions TO dev_env_v2_portal_runtime;`); err != nil {
+GRANT SELECT,INSERT,DELETE ON portal.pending_logins,portal.sessions TO dev_env_v2_portal_runtime;`); err != nil {
 		t.Fatal("fixture grant failed")
 	}
 	fence := &fixtureFence{generation: strings.Repeat("g", 32)}
@@ -127,9 +127,6 @@ func TestPostgresIntegration(t *testing.T) {
 		if ok != 1 || denied != 1 {
 			t.Fatal("cross-pool transaction consumed more than once")
 		}
-		if !errors.Is(a.PutLogin(ctx, h, login), portal.ErrDenied) {
-			t.Fatal("consumed handle was reinserted")
-		}
 	})
 
 	t.Run("insert-only-session-and-cross-pool-revoke", func(t *testing.T) {
@@ -151,9 +148,6 @@ func TestPostgresIntegration(t *testing.T) {
 		}
 		if _, err := a.GetSession(ctx, h); !errors.Is(err, portal.ErrDenied) {
 			t.Fatal("other replica authorized revoked session")
-		}
-		if !errors.Is(a.PutSession(ctx, h, record), portal.ErrDenied) {
-			t.Fatal("revoked session handle reused")
 		}
 	})
 
@@ -216,6 +210,10 @@ func TestPostgresIntegration(t *testing.T) {
 		if a.PutSession(ctx, h, record) != nil || a.PutLogin(ctx, lh, login) != nil {
 			t.Fatal("restore fixtures failed")
 		}
+		var sessionCipher, loginCipher []byte
+		if admin.QueryRow(ctx, "SELECT payload FROM portal.sessions WHERE handle=$1", h[:]).Scan(&sessionCipher) != nil || admin.QueryRow(ctx, "SELECT payload FROM portal.pending_logins WHERE handle=$1", lh[:]).Scan(&loginCipher) != nil {
+			t.Fatal("snapshot fixture read failed")
+		}
 		if b.RevokeSession(ctx, h) != nil {
 			t.Fatal("fixture revoke failed")
 		}
@@ -224,10 +222,11 @@ func TestPostgresIntegration(t *testing.T) {
 		}
 		// Simulate restored pre-revocation/consumption data with real SQL. This
 		// is not a live backup/promotion proof; independent witness is synthetic.
-		if _, err := admin.Exec(ctx, "UPDATE portal.sessions SET revoked_at=NULL WHERE handle=$1", h[:]); err != nil {
+		if _, err := admin.Exec(ctx, "INSERT INTO portal.sessions (handle,generation,version,expires_at,payload) VALUES ($1,$2,1,$3,$4)", h[:], a.generation, record.ExpiresAt, sessionCipher); err != nil {
 			t.Fatal("restore fixture failed")
 		}
-		if _, err := admin.Exec(ctx, "UPDATE portal.pending_logins SET consumed_at=NULL WHERE handle=$1", lh[:]); err != nil {
+		state := sha256.Sum256([]byte(login.State))
+		if _, err := admin.Exec(ctx, "INSERT INTO portal.pending_logins (handle,generation,version,state_digest,expires_at,payload) VALUES ($1,$2,1,$3,$4,$5)", lh[:], a.generation, state[:], login.ExpiresAt, loginCipher); err != nil {
 			t.Fatal("restore fixture failed")
 		}
 		fence.unavailable = true
@@ -310,7 +309,7 @@ func TestPostgresIntegration(t *testing.T) {
 	})
 
 	t.Run("least-privilege-and-TLS-HBA-negatives", func(t *testing.T) {
-		for _, sql := range []string{"CREATE TABLE portal.forbidden (v int)", "CREATE SCHEMA forbidden", "CREATE TEMP TABLE forbidden (v int)", "CREATE ROLE forbidden", "SELECT * FROM public.fixture_private"} {
+		for _, sql := range []string{"UPDATE portal.sessions SET expires_at=expires_at", "UPDATE portal.pending_logins SET expires_at=expires_at", "CREATE TABLE portal.forbidden (v int)", "CREATE SCHEMA forbidden", "CREATE TEMP TABLE forbidden (v int)", "CREATE ROLE forbidden", "SELECT * FROM public.fixture_private"} {
 			if _, err := a.pool.Exec(ctx, sql); err == nil {
 				t.Fatal("runtime role exceeded two-table DML scope")
 			}

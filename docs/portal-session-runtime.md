@@ -13,8 +13,7 @@ M3's authentication checks, CSRF and opaque cookie rules continue to apply.
 
 Use existing Go BFF and CNPG PostgreSQL, two tables in logical database
 `dev_env_v2_portal`, schema `portal`: pending_logins and sessions. Handles are
-SHA256 digests only. Rows are insert-only; consumption/revocation leave
-tombstones. Login consumption atomically matches handle, state digest, current
+SHA256 digests only. Rows are created with INSERT only; consumption/revocation use conditional DELETE. Login consumption atomically matches handle, state digest, current
 generation and expiry; incorrect state cannot consume the row. Every read is
 from the writable primary, never a read replica/cache. Errors, uncertain commits,
 outage, expiry, decrypt failure or missing fence deny; there is no memory fallback
@@ -26,7 +25,7 @@ deadline are capped by the actual access-token deadline, with no refresh path.
 
 The shared postgres16 cluster's min/max synchronous replica settings are both
 zero. Local synchronous_commit does **not** prove acknowledged-write survival
-after promotion. A missing DELETE/revoke or consumed marker could resurrect
+after promotion. A missing DELETE/revoke or login consumption could resurrect
 authority. A generation inside the restored DB, a restart or process-local flag
 does not fix this. The store therefore requires a fresh external RecoveryFence
 check before and after each operation and before each response's authorization.
@@ -88,7 +87,7 @@ CREATE SCHEMA portal AUTHORIZATION dev_env_v2_portal_migrator;
 -- Migrator creates ONLY the two tables using migrations/001_sessions.sql.
 REVOKE ALL ON SCHEMA portal FROM PUBLIC;
 GRANT USAGE ON SCHEMA portal TO dev_env_v2_portal_runtime;
-GRANT SELECT, INSERT, UPDATE, DELETE ON portal.pending_logins, portal.sessions
+GRANT SELECT, INSERT, DELETE ON portal.pending_logins, portal.sessions
   TO dev_env_v2_portal_runtime;
 ALTER ROLE dev_env_v2_portal_runtime IN DATABASE dev_env_v2_portal
   SET search_path = pg_catalog, portal;
@@ -100,7 +99,7 @@ Credentials must be set through reviewed secure provisioning, never SQL files,
 command arguments or logs. Migrator owns only portal schema/tables, never the
 database or other objects; do not grant database CREATE/TEMP or memberships.
 Mount migrator only in a separately reviewed migration job. The BFF gets no
-migrator/admin token, grant option, inherited/admin role, ownership or CREATE.
+migrator/admin token, grant option, inherited/admin role, ownership, UPDATE or CREATE.
 Audit effective memberships and default privileges as well as explicit grants.
 
 PUBLIC CONNECT/TEMP on other databases cannot be cancelled by a role-local
@@ -192,4 +191,7 @@ Focused commands: Go1.27.2, GOTOOLCHAIN=local, GOMAXPROCS=2, nice -n 19,
 `go test -p 1 ./web/portal/...` and `go vet -p 1 ./web/portal/...`.
 No suite loops, load tests or local container builds. Retention/cleanup,
 deployment rate/connection limits and live failover/network-ack testing remain
-reviewed activation prerequisites; tombstones are not automatically removed.
+reviewed activation prerequisites. Root journal1091 narrows runtime SQL rights
+to SELECT/INSERT/DELETE; no UPDATE or Touch path exists. Consumed/revoked rows
+are deleted; the engine always generates new random handles rather than reusing
+a consumed/revoked handle. INSERT collisions cannot replace any existing row.
