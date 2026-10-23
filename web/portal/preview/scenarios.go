@@ -82,6 +82,9 @@ func writeHTML(dir, name string, snapshot portal.Snapshot, now time.Time) error 
 // The pages are synthetic. They do not contact a tracker, provider, or cluster.
 func writeScenarios(dir string) error {
 	final := dir
+	if err := ensureFreshEvidenceDestination(final); err != nil {
+		return err
+	}
 	staging, err := os.MkdirTemp(filepath.Dir(final), filepath.Base(final)+".staging-")
 	if err != nil {
 		return err
@@ -193,16 +196,79 @@ func writeScenarios(dir string) error {
 	return nil
 }
 
+// relevantEvidencePaths are the trees that render Attention evidence or check it.
+var relevantEvidencePaths = []string{"web/portal", "scripts/trials/portal_attention"}
+
+var resolveSourceHead = func() (string, error) {
+	return inspectSourceHead("")
+}
+
 func sourceHead() (string, error) {
-	out, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	return resolveSourceHead()
+}
+
+func inspectSourceHead(root string) (string, error) {
+	top := root
+	if top == "" {
+		out, err := gitCommand("rev-parse", "--show-toplevel").Output()
+		if err != nil {
+			return "", fmt.Errorf("source head unavailable")
+		}
+		top = strings.TrimSpace(string(out))
+	}
+	if top == "" {
+		return "", fmt.Errorf("source head unavailable")
+	}
+	head, err := gitOutput(top, "rev-parse", "HEAD")
+	if err != nil || !isGitHex(head) {
+		return "", fmt.Errorf("source head unavailable")
+	}
+	statusArgs := append([]string{"status", "--porcelain", "--"}, relevantEvidencePaths...)
+	status, err := gitOutput(top, statusArgs...)
 	if err != nil {
 		return "", fmt.Errorf("source head unavailable")
 	}
-	head := strings.TrimSpace(string(out))
-	if len(head) != 40 {
-		return "", fmt.Errorf("source head unavailable")
+	if strings.TrimSpace(status) != "" {
+		return "", fmt.Errorf("relevant source tree is dirty; refusing to record a clean source head")
 	}
 	return head, nil
+}
+
+func gitOutput(root string, args ...string) (string, error) {
+	out, err := gitCommand(append([]string{"-C", root}, args...)...).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func gitCommand(args ...string) *exec.Cmd {
+	cmd := exec.Command("git", args...)
+	cmd.Env = withoutGitOverrides(os.Environ())
+	return cmd
+}
+
+func withoutGitOverrides(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "GIT_DIR=") || strings.HasPrefix(entry, "GIT_WORK_TREE=") || strings.HasPrefix(entry, "GIT_INDEX_FILE=") {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func isGitHex(head string) bool {
+	if len(head) != 40 {
+		return false
+	}
+	for _, r := range head {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 type manifestFile struct {
@@ -245,20 +311,41 @@ func writeManifest(dir string) error {
 	return os.WriteFile(filepath.Join(dir, "manifest.json"), append(body, '\n'), 0o600)
 }
 
-func publishScenarioDir(staging, final string) error {
-	backup := final + ".previous"
-	if err := os.RemoveAll(backup); err != nil {
+// ensureFreshEvidenceDestination refuses any existing destination or backup.
+// The publisher never removes either path.
+func ensureFreshEvidenceDestination(final string) error {
+	if err := refuseExistingEvidencePath(final); err != nil {
 		return err
 	}
-	if _, err := os.Stat(final); err == nil {
-		if err = os.Rename(final, backup); err != nil {
-			return err
-		}
-	} else if !os.IsNotExist(err) {
+	return refuseExistingEvidencePath(final + ".previous")
+}
+
+func refuseExistingEvidencePath(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	kind := "file"
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		kind = "symlink"
+	case info.IsDir():
+		kind = "directory"
+	}
+	return fmt.Errorf("refusing to replace existing evidence %s %s", kind, path)
+}
+
+// publishScenarioDir renames staging onto final only when both final and
+// final.previous are absent. A failed rename leaves an existing target in place.
+func publishScenarioDir(staging, final string) error {
+	if err := ensureFreshEvidenceDestination(final); err != nil {
 		return err
 	}
 	if err := os.Rename(staging, final); err != nil {
-		return err
+		return fmt.Errorf("scenario destination unchanged: %w", err)
 	}
-	return os.RemoveAll(backup)
+	return nil
 }

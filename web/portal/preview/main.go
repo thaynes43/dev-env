@@ -121,12 +121,8 @@ func main() {
 		os.Exit(1)
 	}
 	if *scenarios != "" {
-		if err := os.MkdirAll(*scenarios, 0o700); err != nil {
-			fmt.Fprintln(os.Stderr, "Scenario directory unavailable.")
-			os.Exit(1)
-		}
 		if err := writeScenarios(*scenarios); err != nil {
-			fmt.Fprintln(os.Stderr, "Synthetic scenarios unavailable; no complete evidence set written.")
+			fmt.Fprintf(os.Stderr, "Synthetic scenarios unavailable; no complete evidence set written: %v\n", err)
 			os.Exit(1)
 		}
 		fmt.Println("Wrote offline synthetic Attention scenarios.")

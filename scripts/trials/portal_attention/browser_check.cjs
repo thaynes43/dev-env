@@ -4,16 +4,108 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
-if (process.env.PORTAL_BROWSER_NICED !== "1") {
-  const child = spawn("nice", ["-n", "19", process.execPath, ...process.argv.slice(1)], {
-    stdio: "inherit",
-    env: { ...process.env, PORTAL_BROWSER_NICED: "1" },
-  });
-  child.on("exit", (code) => process.exit(code === null ? 1 : code));
-} else {
-main();
+const htmlNames = [
+  "populated.html",
+  "verified-empty.html",
+  "unknown-listing.html",
+  "stale-with-fresh-row.html",
+  "fresh-row-unknown-listing.html",
+  "future-listing.html",
+  "hostile.html",
+  "no-owner.html",
+];
+const textNames = ["denied.txt", "unavailable.txt"];
+const refused = "Attention unavailable. Current task state is Unknown.\n";
+const relevantEvidencePaths = ["web/portal", "scripts/trials/portal_attention"];
+
+function sha256(bytes) {
+  return crypto.createHash("sha256").update(bytes).digest("hex");
+}
+
+function gitEnv() {
+  const env = { ...process.env };
+  delete env.GIT_DIR;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_INDEX_FILE;
+  return env;
+}
+
+function gitOutput(cwd, args) {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8", env: gitEnv() });
+  if (result.error || result.status !== 0) {
+    throw new Error("source head unavailable");
+  }
+  return result.stdout;
+}
+
+function checkoutEvidence(start) {
+  const root = gitOutput(start, ["rev-parse", "--show-toplevel"]).trim();
+  const head = gitOutput(root, ["rev-parse", "HEAD"]).trim();
+  if (!/^[0-9a-f]{40}$/.test(head)) {
+    throw new Error("source head unavailable");
+  }
+  const status = gitOutput(root, ["status", "--porcelain", "--", ...relevantEvidencePaths]);
+  return { head, dirty: status.trim().length > 0 };
+}
+
+function assertExactSourceHead(manifestHead, evidence) {
+  if (evidence.dirty) {
+    throw new Error("source tree is dirty; refusing evidence as an exact source head");
+  }
+  if (manifestHead !== evidence.head) {
+    throw new Error("scenario manifest source head does not match checkout HEAD; refusing a mismatched source head");
+  }
+}
+
+function loadManifest(dir, sourceStart) {
+  const manifestPath = path.join(dir, "manifest.json");
+  if (!fs.existsSync(manifestPath)) {
+    throw new Error("scenario manifest missing; refusing a partial or stale evidence set");
+  }
+  const raw = fs.readFileSync(manifestPath);
+  let parsed;
+  try { parsed = JSON.parse(raw.toString("utf8")); } catch (err) {
+    throw new Error("scenario manifest is not JSON; refusing the evidence set");
+  }
+  if (!parsed.sourceHead || !/^[0-9a-f]{40}$/.test(parsed.sourceHead) || !Array.isArray(parsed.files) || parsed.files.length === 0) {
+    throw new Error("scenario manifest has no source head or files; refusing the evidence set");
+  }
+  const names = new Set();
+  for (const file of parsed.files) {
+    if (!file.name || file.name.includes("/") || file.name.includes("..")) {
+      throw new Error("scenario manifest entry is not a single file name");
+    }
+    const full = path.join(dir, file.name);
+    if (!fs.existsSync(full)) throw new Error("scenario manifest entry missing: " + file.name);
+    const got = sha256(fs.readFileSync(full));
+    if (got !== file.sha256) throw new Error("scenario file hash mismatch for " + file.name + "; refusing a stale evidence set");
+    names.add(file.name);
+  }
+  for (const required of htmlNames.concat(textNames)) {
+    if (!names.has(required)) throw new Error("scenario manifest omits " + required);
+  }
+  for (const entry of fs.readdirSync(dir)) {
+    if (entry !== "manifest.json" && !names.has(entry)) {
+      throw new Error("scenario directory has " + entry + " outside the manifest; refusing a stale evidence set");
+    }
+  }
+  const evidence = checkoutEvidence(sourceStart || __dirname);
+  assertExactSourceHead(parsed.sourceHead, evidence);
+  return { sourceHead: parsed.sourceHead, digest: sha256(raw), files: parsed.files.length };
+}
+
+if (require.main === module) {
+  if (process.env.PORTAL_BROWSER_NICED !== "1") {
+    const child = spawn("nice", ["-n", "19", process.execPath, ...process.argv.slice(1)], {
+      stdio: "inherit",
+      env: { ...process.env, PORTAL_BROWSER_NICED: "1" },
+    });
+    child.on("exit", (code) => process.exit(code === null ? 1 : code));
+  } else {
+    main();
+  }
 }
 
 function main() {
@@ -52,19 +144,6 @@ const viewports = [
   { name: "tablet-768", width: 768, height: 1024 },
   { name: "desktop-1280", width: 1280, height: 800 },
 ];
-const htmlNames = [
-  "populated.html",
-  "verified-empty.html",
-  "unknown-listing.html",
-  "stale-with-fresh-row.html",
-  "fresh-row-unknown-listing.html",
-  "future-listing.html",
-  "hostile.html",
-  "no-owner.html",
-];
-const textNames = ["denied.txt", "unavailable.txt"];
-const refused = "Attention unavailable. Current task state is Unknown.\n";
-
 function must(cond, message, failures) {
   if (!cond) failures.push(message);
 }
@@ -189,7 +268,7 @@ async function inspectHTML(page, name, viewport, failures) {
   must(observed.fields.length === 0 || observed.described, name + " freshness not described", failures);
   for (const link of observed.links) {
     must(link.h >= 44 && link.w >= 44, name + " " + viewport + " link target " + link.w + "x" + link.h, failures);
-    must(link.name.startsWith("Open canonical record") && link.name.includes("Open canonical record"), name + " inaccessible link name", failures);
+    must(link.name.startsWith("Open canonical record"), name + " inaccessible link name", failures);
     must(link.href.startsWith("https://work.haynesnetwork.com/work_packages/") && link.rel === "noreferrer", name + " unexpected link", failures);
     must(visible(link), name + " " + viewport + " link clipped", failures);
   }
@@ -250,9 +329,6 @@ async function inspectText(page, name, viewport, failures) {
   must(shown.trim() === refused.trim() && !shown.includes("Verified empty"), name + " " + viewport + " text response", failures);
 }
 
-function sha256(bytes) {
-  return crypto.createHash("sha256").update(bytes).digest("hex");
-}
 function packageVersion(start) {
   let dir = start;
   for (let i = 0; i < 5; i++) {
@@ -265,40 +341,6 @@ function packageVersion(start) {
     dir = parent;
   }
   return "unknown";
-}
-function loadManifest(dir) {
-  const manifestPath = path.join(dir, "manifest.json");
-  if (!fs.existsSync(manifestPath)) {
-    throw new Error("scenario manifest missing; refusing a partial or stale evidence set");
-  }
-  const raw = fs.readFileSync(manifestPath);
-  let parsed;
-  try { parsed = JSON.parse(raw.toString("utf8")); } catch (err) {
-    throw new Error("scenario manifest is not JSON; refusing the evidence set");
-  }
-  if (!parsed.sourceHead || !/^[0-9a-f]{40}$/.test(parsed.sourceHead) || !Array.isArray(parsed.files) || parsed.files.length === 0) {
-    throw new Error("scenario manifest has no source head or files; refusing the evidence set");
-  }
-  const names = new Set();
-  for (const file of parsed.files) {
-    if (!file.name || file.name.includes("/") || file.name.includes("..")) {
-      throw new Error("scenario manifest entry is not a single file name");
-    }
-    const full = path.join(dir, file.name);
-    if (!fs.existsSync(full)) throw new Error("scenario manifest entry missing: " + file.name);
-    const got = sha256(fs.readFileSync(full));
-    if (got !== file.sha256) throw new Error("scenario file hash mismatch for " + file.name + "; refusing a stale evidence set");
-    names.add(file.name);
-  }
-  for (const required of htmlNames.concat(textNames)) {
-    if (!names.has(required)) throw new Error("scenario manifest omits " + required);
-  }
-  for (const entry of fs.readdirSync(dir)) {
-    if (entry !== "manifest.json" && !names.has(entry)) {
-      throw new Error("scenario directory has " + entry + " outside the manifest; refusing a stale evidence set");
-    }
-  }
-  return { sourceHead: parsed.sourceHead, digest: sha256(raw), files: parsed.files.length };
 }
 
 (async () => {
@@ -398,3 +440,5 @@ function loadManifest(dir) {
   process.exit(1);
 });
 }
+
+module.exports = { loadManifest, checkoutEvidence, assertExactSourceHead, htmlNames, textNames };
