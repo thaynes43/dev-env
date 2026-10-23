@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -19,6 +20,7 @@ import (
 
 const sessionCookie = "__Host-portal"
 const loginCookie = "__Host-portal-login"
+const LandingPath = "/portal/projects/dev-env/environments/internal/attention"
 
 type Config struct {
 	Origin, Callback string
@@ -43,7 +45,7 @@ type Engine struct {
 }
 
 func New(c Config) (*Engine, error) {
-	origin, err := url.Parse(c.Origin)
+	origin, err := configuredURL(c.Origin)
 	if err != nil || origin.Scheme != "https" || origin.Host == "" || origin.User != nil || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" {
 		return nil, portal.ErrUnavailable
 	}
@@ -106,11 +108,30 @@ func cookieAge(ttl time.Duration) int {
 }
 
 func (e *Engine) Authenticate(r *http.Request) (portal.Principal, error) {
-	_, record, err := e.current(r)
+	key, record, err := e.current(r)
 	if err != nil {
 		return portal.Principal{}, err
 	}
+	if ref, ok := r.Context().Value(sessionContextKey{}).(sessionReference); ok && (ref.handle != key || ref.principal != record.Principal || ref.tokenDigest != sha256.Sum256([]byte(record.accessToken))) {
+		return portal.Principal{}, portal.ErrDenied
+	}
 	return record.Principal, nil
+}
+
+type sessionContextKey struct{}
+type sessionReference struct {
+	handle      Handle
+	principal   portal.Principal
+	tokenDigest [32]byte
+}
+
+func (e *Engine) bind(r *http.Request) *http.Request {
+	key, record, err := e.current(r)
+	if err != nil {
+		return r
+	}
+	ref := sessionReference{handle: key, principal: record.Principal, tokenDigest: sha256.Sum256([]byte(record.accessToken))}
+	return r.WithContext(context.WithValue(r.Context(), sessionContextKey{}, ref))
 }
 
 func (e *Engine) current(r *http.Request) (Handle, Record, error) {
@@ -135,7 +156,7 @@ func (e *Engine) current(r *http.Request) (Handle, Record, error) {
 		return Handle{}, Record{}, portal.ErrUnavailable
 	}
 	now := e.config.Now()
-	if !identityText(record.Principal.Issuer) || !identityText(record.Principal.Subject) || record.Principal.Issuer != e.config.Verifier.issuer || !now.Before(record.IdleExpiresAt) || !now.Before(record.ExpiresAt) || record.CreatedAt.IsZero() || record.CreatedAt.After(now) || record.IdleExpiresAt.After(record.ExpiresAt) || len(record.CSRF) != 43 {
+	if !validRecord(record, now) || record.Principal.Issuer != e.config.Verifier.issuer {
 		return Handle{}, Record{}, portal.ErrDenied
 	}
 	return key, record, nil
@@ -255,7 +276,7 @@ func (e *Engine) callback(w http.ResponseWriter, r *http.Request) {
 		authFailure(w, normalize(err))
 		return
 	}
-	principal, err := e.config.Verifier.Verify(r.Context(), raw, login.Nonce)
+	principal, tokenExpiry, err := e.config.Verifier.verifyExchange(r.Context(), raw, login.Nonce)
 	if err != nil {
 		authFailure(w, normalize(err))
 		return
@@ -275,15 +296,30 @@ func (e *Engine) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now = e.config.Now()
-	record := Record{Principal: principal, CSRF: csrf, CreatedAt: now, IdleExpiresAt: now.Add(e.config.IdleTTL), ExpiresAt: now.Add(e.config.AbsoluteTTL)}
+	expires := now.Add(e.config.IdleTTL)
+	if absolute := now.Add(e.config.AbsoluteTTL); absolute.Before(expires) {
+		expires = absolute
+	}
+	if tokenExpiry.Before(expires) {
+		expires = tokenExpiry
+	}
+	if !expires.After(now) {
+		authFailure(w, portal.ErrDenied)
+		return
+	}
+	record := Record{Principal: principal, CSRF: csrf, CreatedAt: now, IdleExpiresAt: expires, ExpiresAt: expires, accessToken: raw.accessToken, tokenExpiresAt: tokenExpiry}
 	if err = e.config.Store.PutSession(r.Context(), sessionKey, record); err != nil {
 		authFailure(w, normalize(err))
 		return
 	}
 	cookie(w, loginCookie, "", time.Unix(1, 0), -1)
-	cookie(w, sessionCookie, handle, record.ExpiresAt, cookieAge(e.config.AbsoluteTTL))
-	w.Header().Set("Location", "/")
+	cookie(w, sessionCookie, handle, record.ExpiresAt, cookieAge(expires.Sub(now)))
+	w.Header().Set("Location", LandingPath)
 	w.WriteHeader(http.StatusSeeOther)
+}
+
+func validRecord(r Record, now time.Time) bool {
+	return identityText(r.Principal.Issuer) && identityText(r.Principal.Subject) && bearerText(r.accessToken) && !r.CreatedAt.IsZero() && !r.CreatedAt.After(now) && now.Before(r.IdleExpiresAt) && now.Before(r.ExpiresAt) && now.Before(r.tokenExpiresAt) && !r.IdleExpiresAt.After(r.ExpiresAt) && !r.ExpiresAt.After(r.tokenExpiresAt) && len(r.CSRF) == 43
 }
 
 var logoutForm = template.Must(template.New("logout").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Portal logout</title></head><body><main><h1>Portal logout</h1><form method="post" action="/auth/logout"><input type="hidden" name="csrf" value="{{.}}"><button type="submit">Log out of this portal</button></form></main></body></html>`))

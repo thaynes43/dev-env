@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -78,22 +79,22 @@ func (c *OAuthCodeClient) AuthorizationURL(state, nonce, verifier string) (strin
 	return c.config.AuthCodeURL(state, oidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier)), nil
 }
 
-func (c *OAuthCodeClient) Exchange(ctx context.Context, code, verifier string) (string, error) {
+func (c *OAuthCodeClient) Exchange(ctx context.Context, code, verifier string) (codeTokens, error) {
 	if c == nil || c.client == nil {
-		return "", portal.ErrUnavailable
+		return codeTokens{}, portal.ErrUnavailable
 	}
 	if code == "" || len(code) > 4096 || len(verifier) != 43 {
-		return "", portal.ErrDenied
+		return codeTokens{}, portal.ErrDenied
 	}
 	token, err := c.config.Exchange(oidc.ClientContext(ctx, c.client), code, oauth2.VerifierOption(verifier))
 	if err != nil {
-		return "", portal.ErrUnavailable
+		return codeTokens{}, portal.ErrUnavailable
 	}
 	raw, ok := token.Extra("id_token").(string)
-	if !ok || raw == "" || len(raw) > 64*1024 || token.RefreshToken != "" {
-		return "", portal.ErrDenied
+	if !ok || raw == "" || len(raw) > 64*1024 || token.RefreshToken != "" || !bearerText(token.AccessToken) || !strings.EqualFold(token.TokenType, "Bearer") || token.Expiry.IsZero() || !token.Expiry.After(time.Now()) {
+		return codeTokens{}, portal.ErrDenied
 	}
-	return raw, nil
+	return codeTokens{idToken: raw, accessToken: token.AccessToken, expiresAt: token.Expiry}, nil
 }
 
 func configuredURL(raw string) (*url.URL, error) {
@@ -103,10 +104,47 @@ func configuredURL(raw string) (*url.URL, error) {
 	}
 	hostname := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 	_, literalErr := netip.ParseAddr(hostname)
-	if literalErr == nil || hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") {
+	if hostname == "" || literalErr == nil || hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") || !dnsName(hostname) {
+		return nil, portal.ErrUnavailable
+	}
+	if port := u.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return nil, portal.ErrUnavailable
+		}
+	} else if strings.HasSuffix(u.Host, ":") {
 		return nil, portal.ErrUnavailable
 	}
 	return u, nil
+}
+
+func dnsName(host string) bool {
+	if len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, c := range label {
+			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func bearerText(s string) bool {
+	if len(s) == 0 || len(s) > 64*1024 {
+		return false
+	}
+	for _, c := range s {
+		if c < 33 || c > 126 {
+			return false
+		}
+	}
+	return true
 }
 
 // NewIssuerHTTPClient bounds future token/JWKS/discovery requests to exact

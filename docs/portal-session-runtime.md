@@ -159,3 +159,37 @@ verified Traefik-to-Go TLS, same-namespace backend, per-backend CA/serverName
 ServersTransport and isolation. Shared insecureSkipVerify is forbidden for this
 backend. Live IdP, proxy spoof/bypass, HBA, replica promotion, restore and fence
 evidence are unrun; source/CI success does not activate this portal.
+
+## Dependencies and disposable evidence
+
+Primary-source verification on 2026-10-23 selected maintained
+[pgx/v5 v5.11.0](https://github.com/jackc/pgx/releases/tag/v5.11.0).
+Its [go.mod](https://github.com/jackc/pgx/blob/v5.11.0/go.mod) requires Go1.25.0;
+the repository's Go1.27.2 and existing x/sync and x/text satisfy that floor.
+The [upstream security advisories](https://github.com/jackc/pgx/security/advisories)
+were checked: this pin is above the published fixes including
+GHSA-j88v-2chj-qfwx (5.9.2) and GHSA-mrww-27vc-gghv (5.5.4).
+`go get` checksum verification agrees with the
+[Go checksum database](https://sum.golang.org/lookup/github.com/jackc/pgx/v5@v5.11.0):
+`h1:IzBBtyK9AHqf98cctWFifYSci2hgQR/cd56wB4p+ogg=`. This is a targeted
+dependency check, not complete advisory or production security acceptance.
+Only pgx/pool's small pgpassfile/pgservicefile/puddle dependency closure is new;
+no existing module is downgraded or upgraded.
+
+The dedicated hosted CI service runs a digest-pinned official PostgreSQL16,
+two independent runtime connection pools, real migrations, AEAD payloads,
+concurrent callback consumption, durable cross-pool revoke/logout, actual
+verified TLS, role grants/HBA negatives and restore-shaped SQL fixtures.
+It uses synthetic identities and ephemeral TLS material only. No live service,
+grant, image build or Tom membership mutation is involved. The external witness
+in this test is explicitly synthetic. A postcommit witness-loss fixture proves
+that a durable write may still produce an unavailable caller result; it does
+not simulate a lost network COMMIT acknowledgment or a real CNPG promotion.
+Absent PORTAL_TEST_DATABASE_URL explicitly skips DB proof locally; hosted CI
+must run the integration suite without that skip before source acceptance.
+
+Focused commands: Go1.27.2, GOTOOLCHAIN=local, GOMAXPROCS=2, nice -n 19,
+`go test -p 1 ./web/portal/...` and `go vet -p 1 ./web/portal/...`.
+No suite loops, load tests or local container builds. Retention/cleanup,
+deployment rate/connection limits and live failover/network-ack testing remain
+reviewed activation prerequisites; tombstones are not automatically removed.

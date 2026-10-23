@@ -1,5 +1,12 @@
 # Portal session boundary: M3 source contract
 
+**M5B amendment:** [the runtime contract](portal-session-runtime.md) supersedes
+M3's access-token discard/UserInfo prohibition and cookie-only absolute expiry
+description for the reviewed M5B source. The exact session now retains an
+encrypted short-lived access token for fresh UserInfo checks; both server and
+cookie lifetimes are capped by its verified expiry. The original M3 account
+below remains historical. Runtime wiring remains unavailable pending its gates.
+
 Status: source implementation under Story178, following canonical
 journals970/985/988/993. PR526 is merged at its reviewed target; this work is
 excluded from that PR and needs its own exact-head review and CI. The same
