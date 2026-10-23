@@ -181,8 +181,12 @@ required make-test job. All missing local facilities are explicit skips.
 
 Login starts have one constant-size per-engine limiter: burst 4, one start/second;
 under a two-replica ceiling this is burst 8/two starts per second. The shared store
-uses nonblocking insert-only transaction advisory locks across replicas, caps each\nat 256 rows and deletes
-at most 32 expired rows per insertion, without UPDATE/admin grants. No function privilege is added: the normal runtime\nrole must prove EXECUTE on the advisory-lock function in disposable/live acceptance.\nA held insert lock never blocks logout/revoke/callback DELETEs, including while\nan insertion waits for its pre-commit witness GET.
+uses nonblocking insert-only transaction advisory locks across replicas, caps each
+at 256 rows and deletes
+at most 32 expired rows per insertion, without UPDATE/admin grants. No function privilege is added: the normal runtime
+role must prove EXECUTE on the advisory-lock function in disposable/live acceptance.
+A held insert lock never blocks logout/revoke/callback DELETEs, including while
+an insertion waits for its pre-commit witness GET.
 These source bounds are conservative admission limits, not measured production
 capacity or an SLO; deployment replicas, retention policy, real API latency and
 legitimate-flow proof must be accepted before activation.
