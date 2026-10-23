@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -251,10 +252,163 @@ func TestGateReplay(t *testing.T) {
 	if !differ.ManualDisposition || differ.MergeRelease == "recommend-normal-workflow" || countPrefix(differ.Recommendations, "recommend existing normal") != 0 || !has(differ.Conflicts, "equal-time conflicting gate evidence") {
 		t.Fatalf("different equal-time gates %#v %s", differ.Conflicts, differ.MergeRelease)
 	}
+	// Chronological sorting: the later gate wins even when the file lists it first.
+	// This does not claim direct coverage of the defensive earlier-than-stored branch.
 	ordered := mustRun(t, "e-gate-stale-order.json", 0)
 	if ordered.Outcome != "merge-blocked" || ordered.MergeRelease != "blocked" || !has(ordered.MergeBlockers, "required CI is missing") || countPrefix(ordered.Recommendations, "recommend existing normal") != 0 || len(ordered.Conflicts) != 0 {
 		t.Fatalf("stale gate overwrote newer evidence %#v %s", ordered.MergeBlockers, ordered.NextAction)
 	}
+}
+
+func TestRepair02(t *testing.T) {
+	merge := mustRun(t, "e-merge.json", 0)
+	if merge.Outcome != "recommend-normal-merge-release" || merge.PullRequest <= 0 || len(merge.Reviews) != 1 || !merge.Reviews[0].Picked || merge.Reviews[0].Verdict != "approved" {
+		t.Fatalf("armed merge %#v", merge.Reviews)
+	}
+	cases := []struct {
+		file    string
+		code    int
+		blocker string
+	}{
+		{"f1-no-binding.json", 0, "review binding is required"},
+		{"f1-no-observation.json", 0, "no picked bound review"},
+		{"f1-running-only.json", 0, "no picked bound review"},
+		{"f1-negative.json", 0, "picked review verdict is rejected"},
+		{"f1-unknown.json", 0, "picked review verdict is unavailable"},
+		{"f1-unrelated.json", 0, "no picked bound review"},
+		{"f1-wrong-head.json", 0, "no picked bound review"},
+		{"f1-pr-zero.json", 0, "pull request number must be positive"},
+	}
+	for _, tc := range cases {
+		got := mustRun(t, tc.file, tc.code)
+		if got.Outcome == "recommend-normal-merge-release" || !has(got.MergeBlockers, tc.blocker) {
+			t.Fatalf("%s blockers %#v outcome %s", tc.file, got.MergeBlockers, got.Outcome)
+		}
+	}
+	for _, name := range []string{"f2-verified-then-ambiguous.json", "f2-ambiguous-then-verified.json"} {
+		got := mustRun(t, name, 3)
+		if got.Executor.VerifiedStop || !got.Executor.StopAmbiguous || got.ActiveSuccessor != "" || !has(got.Conflicts, "equal-time ambiguous and verified stop") {
+			t.Fatalf("%s stop %#v successor %q", name, got.Executor, got.ActiveSuccessor)
+		}
+	}
+	earlier := mustRun(t, "f2-earlier-ambiguous.json", 0)
+	if !earlier.Executor.VerifiedStop || earlier.Executor.StopAmbiguous || earlier.ActiveSuccessor == "" {
+		t.Fatalf("earlier ambiguous %#v %s", earlier.Executor, earlier.ActiveSuccessor)
+	}
+	for _, name := range []string{"m2-review-z-first.json", "m2-review-offset-first.json"} {
+		got := mustRun(t, name, 3)
+		if !has(got.Conflicts, "equal-time conflicting review") || (len(got.Reviews) > 0 && got.Reviews[0].Picked) {
+			t.Fatalf("%s review %#v", name, got.Reviews)
+		}
+	}
+	latest := mustRun(t, "m2-latest-instant.json", 0)
+	if len(latest.Reviews) != 1 || !latest.Reviews[0].Picked || latest.Reviews[0].Verdict != "approved" || latest.Reviews[0].Observation != "obs-late" {
+		t.Fatalf("latest instant %#v", latest.Reviews)
+	}
+	for _, name := range []string{"m2-assign-z-first.json", "m2-assign-offset-first.json"} {
+		got := mustRun(t, name, 3)
+		if got.ActiveSuccessor != "" || !has(got.Conflicts, "equal-time conflicting successor") {
+			t.Fatalf("%s assign %q %#v", name, got.ActiveSuccessor, got.Conflicts)
+		}
+	}
+	for _, name := range []string{"m1-verdict-case.json", "m1-identity-case.json", "m3-hold-merge-case.json", "m3-hold-pr-merge.json", "m3-hold-publish.json", "m3-hold-unknown.json"} {
+		got := mustRun(t, name, 2)
+		if name[:2] == "m1" && !has(got.Refusals, "case-variant JSON key") {
+			t.Fatalf("%s %#v", name, got.Refusals)
+		}
+		if name[:2] == "m3" && !has(got.Refusals, "hold action is not in the vocabulary") {
+			t.Fatalf("%s %#v", name, got.Refusals)
+		}
+	}
+	for _, name := range []string{"m4-exit-no-writes.json", "m4-stop-no-writes.json", "m4-new-pass-no-writes.json"} {
+		got := mustRun(t, name, 0)
+		if got.WritesRecommended || got.Completion || got.TaskClaim != "unchanged" {
+			t.Fatalf("%s writes %v", name, got.WritesRecommended)
+		}
+	}
+	if len(mustRun(t, "m4-new-pass-no-writes.json", 0).Passes) != 2 {
+		t.Fatal("new pass was not retained")
+	}
+	diffKey := mustRun(t, "m5-different-key.json", 0)
+	if !strings.Contains(diffKey.BlockedReason, "different assignment key") || strings.Contains(diffKey.BlockedReason, "changed same-key") || diffKey.RecordedSuccessorCount != 1 {
+		t.Fatalf("different key %s", diffKey.BlockedReason)
+	}
+	sticky := mustRun(t, "m8-later-approval.json", 3)
+	if len(sticky.Reviews) == 0 || sticky.Reviews[0].Picked || countPrefix(sticky.Recommendations, "recommend existing normal") != 0 {
+		t.Fatalf("sticky %#v", sticky.Reviews)
+	}
+}
+
+func TestEachGateFieldConflicts(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "e-merge.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	events := doc["events"].([]any)
+	var gate map[string]any
+	for _, ev := range events {
+		item := ev.(map[string]any)
+		if item["kind"] == "gate-evidence" {
+			gate = item
+		}
+	}
+	if gate == nil {
+		t.Fatal("missing gate")
+	}
+	same := cloneMap(gate)
+	same["identity"] = "gate-same-fields"
+	if code := checkGateVariant(t, doc, events, same); code != 0 {
+		t.Fatalf("identical gate fields conflicted with exit %d", code)
+	}
+	flips := []struct {
+		field string
+		value any
+	}{
+		{"head", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+		{"agentOpened", false},
+		{"requiredCI", "failed"},
+		{"nativeReviewVerdict", "rejected"},
+		{"reviewJobSuccess", false},
+		{"findings", "pending"},
+		{"headUnchanged", false},
+	}
+	for _, flip := range flips {
+		next := cloneMap(gate)
+		next["identity"] = "gate-flip-" + flip.field
+		next[flip.field] = flip.value
+		if code := checkGateVariant(t, doc, events, next); code != 3 {
+			t.Fatalf("field %s was ignored, exit %d", flip.field, code)
+		}
+	}
+}
+
+func checkGateVariant(t *testing.T, doc map[string]any, events []any, gate map[string]any) int {
+	t.Helper()
+	cloned := map[string]any{}
+	for k, v := range doc {
+		cloned[k] = v
+	}
+	nextEvents := append([]any{}, events...)
+	nextEvents = append(nextEvents, gate)
+	cloned["events"] = nextEvents
+	body, err := json.Marshal(cloned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, code := check(body)
+	return code
+}
+
+func cloneMap(in map[string]any) map[string]any {
+	out := map[string]any{}
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func mustRun(t *testing.T, name string, code int) result {

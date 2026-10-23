@@ -44,7 +44,7 @@ A delivery of that record to a parent is not acknowledgment and not ownership.
 
 Keep this with the ordinary dev-env merge and release path. It does not clear a separate hold and it does not authorize access, security, production, or media work.
 
-User, Sentinel_686bdbe09ca88191932046a3d8655f20: "I have told you over and over and over and over that agents do not need permission to merge PRs they opened"
+User, recorded for work package 177: "I have told you over and over and over and over that agents do not need permission to merge PRs they opened"
 
 Normal authorized merge and release still waits for unchanged-head preflight, required CI, independent native review, and disposition of every finding. Do not ask for redundant permission for that path. Do not treat the sentence as a waiver for a denied action.
 
@@ -62,7 +62,7 @@ One JSON document, at most 128KiB. Fields are evidence references. The file does
   "repository": "github.com/thaynes43/dev-env",
   "pullRequest": 0,
   "head": "0123456789abcdef0123456789abcdef01234567",
-  "coordinator": "sol-native01a164b6-4fdd-73f2-b49b-738c23b5a709",
+  "coordinator": "coordinator-sol",
   "reviewBinding": {"task": "native-review-1", "uid": "uid-review-1"},
   "modelProvenance": {"serving": "Unknown", "cost": "Unknown", "configuredUI": ""},
   "events": []
@@ -89,6 +89,15 @@ The command reads one file, or stdin when the argument is `-`. It prints one JSO
 | 0 | `reduced` | The record reduced. Blocked custody and a merge blocker are results, not tool failures. Read `nextAction`. |
 | 2 | `refused` | Malformed document, unknown field, oversize input, or invalid provenance. Nothing was applied. |
 | 3 | `conflict` | Same identity with a different payload, or equal-time authoritative inputs that disagree. Manual disposition is required. No lexicographic winner. |
+
+
+A merge recommendation also requires a review binding, a pull request number above zero, and exactly one picked approved terminal observation for that task, UID, and head. The gate verdict must match that observation. Missing, running-only, negative, unavailable, unrelated, or wrong-head evidence blocks the recommendation. Required CI, findings, unchanged head, and action-specific holds still apply. A known hold such as `media-work` does not block merge. `Merge`, `pr-merge`, `publish`, and any other unknown action is refused rather than treated as authority.
+
+RFC3339 timestamps may use `Z` or a numeric offset. The checker compares the UTC instant. Fractional seconds are refused. Two different offsets for one instant are the same time.
+
+An equal-time conflict stays a manual disposition. A later approval does not clear it. The defensive check that an older gate does not overwrite a stored later gate remains in the checker. The stale-gate fixture shows that sorting by source time keeps the later gate. It does not by itself execute that defensive branch.
+
+An exited or verified-stopped executor does not receive a further write recommendation, even when the record has no deadline. A later explicitly authorized pass is retained and does not by itself recommend writes. TaskClaim stays unchanged.
 
 Identical gate fields at the same source time are one observation even when the event identities differ. Different gate fields at that time remain a conflict, and an older gate does not replace a newer one.
 

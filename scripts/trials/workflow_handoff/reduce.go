@@ -281,6 +281,7 @@ type execState struct {
 	verified   bool
 	ambiguous  bool
 	stopAt     time.Time
+	stopSet    bool
 	turnEnded  bool
 	deadline   bool
 	deadlineAt time.Time
@@ -315,6 +316,7 @@ type reducer struct {
 	gate             gateState
 	writes           bool
 	suppressedAssign map[string]bool
+	conflictedReview map[string]bool
 }
 
 func check(data []byte) (result, int) {
@@ -637,7 +639,7 @@ func decode[T any](raw json.RawMessage) (T, error) {
 }
 
 func mustTime(s string) time.Time {
-	t, err := time.Parse(time.RFC3339, s)
+	t, err := parseStamp(s)
 	if err != nil {
 		return time.Time{}
 	}
@@ -776,6 +778,9 @@ func validateHold(ev holdEvent) error {
 	if !validToken(ev.Action) || !validText(ev.Reason, 400) {
 		return errors.New("hold fields are invalid")
 	}
+	if !knownHoldAction(ev.Action) {
+		return errors.New("hold action is not in the vocabulary")
+	}
 	if ev.State != "pending" {
 		return errors.New("hold state must be pending")
 	}
@@ -788,6 +793,9 @@ func validateDisp(ev dispEvent) error {
 	}
 	if !validToken(ev.Action) || !validToken(ev.Source) {
 		return errors.New("hold-disposition fields are invalid")
+	}
+	if !knownHoldAction(ev.Action) {
+		return errors.New("hold action is not in the vocabulary")
 	}
 	return nil
 }
@@ -861,11 +869,18 @@ func validateClaim(ev claimEvent) error {
 }
 
 func parseStamp(s string) (time.Time, error) {
-	t, err := time.Parse(time.RFC3339, s)
-	if err != nil || t.Format(time.RFC3339) != s {
+	if strings.Contains(s, ".") {
 		return time.Time{}, errors.New("sourceTime must be RFC3339")
 	}
-	return t, nil
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}, errors.New("sourceTime must be RFC3339")
+	}
+	return t.UTC(), nil
+}
+
+func instantKey(t time.Time) string {
+	return t.UTC().Format(time.RFC3339)
 }
 
 func validHead(s string) bool {
@@ -954,6 +969,7 @@ func reduce(doc document, prov provenanceOut, items []parsed) result {
 		passIDs:          map[string]bool{},
 		receiptSet:       map[string]bool{},
 		suppressedAssign: map[string]bool{},
+		conflictedReview: map[string]bool{},
 		replays:          replays,
 	}
 	for _, msg := range idConflicts {
@@ -975,10 +991,11 @@ func (r *reducer) prescan(items []parsed) {
 		ev, ok := item.body.(reviewEvent)
 		if ok && ev.Phase == "terminal" && ev.Head == r.doc.Head && r.bindingOK(ev) {
 			subject := ev.Task + "\x00" + ev.UID
-			key := subject + "\x00" + ev.SourceTime
+			key := subject + "\x00" + instantKey(item.at)
 			if prev, seen := verdicts[key]; seen && prev != ev.Verdict {
 				if !emitted[subject] {
 					r.conflict("equal-time conflicting review verdicts for task " + ev.Task + " uid " + ev.UID)
+					r.conflictedReview[subject] = true
 					emitted[subject] = true
 				}
 			} else if !seen {
@@ -989,7 +1006,7 @@ func (r *reducer) prescan(items []parsed) {
 		if !ok {
 			continue
 		}
-		key := as.AssignmentKey + "\x00" + as.SourceTime
+		key := as.AssignmentKey + "\x00" + instantKey(item.at)
 		if prev, seen := successors[key]; seen && prev != as.Successor {
 			r.suppressedAssign[key] = true
 			if !emittedAssign[as.AssignmentKey] {
@@ -1072,10 +1089,10 @@ func (r *reducer) applyPass(ev passEvent) {
 		AuthorizationRef: ev.AuthorizationRef,
 	})
 	r.passIDs[ev.Identity] = true
-	if ev.WritesAllowed && !r.exec.deadline {
+	if ev.WritesAllowed && r.writesOpen() {
 		r.writes = true
 	}
-	if r.exec.deadline {
+	if !r.writesOpen() {
 		r.writes = false
 	}
 }
@@ -1085,16 +1102,19 @@ func (r *reducer) applyExec(ev execEvent, at time.Time) {
 		r.refusals = append(r.refusals, "executor change "+ev.Identity+" refused")
 		return
 	}
-	if r.exec.deadline && ev.State == "running" {
-		r.refusals = append(r.refusals, "running state "+ev.Identity+" does not reopen a turn ended by deadline")
+	if ev.State == "running" && !r.writesOpen() {
+		r.refusals = append(r.refusals, "running state "+ev.Identity+" does not reopen an ended executor")
 		return
 	}
 	r.exec.identity = ev.Executor
 	if r.exec.state == "ended-pending-verified-stop" && ev.State == "exited" {
+		r.writes = false
 		return
 	}
 	r.exec.state = ev.State
-	_ = at
+	if ev.State == "exited" {
+		r.writes = false
+	}
 }
 
 func (r *reducer) applyDeadline(ev deadlineEvent, at time.Time) {
@@ -1122,42 +1142,61 @@ func (r *reducer) applyStop(ev stopEvent, at time.Time) {
 	if r.exec.identity == "" {
 		r.exec.identity = ev.Executor
 	}
+	if r.exec.stopSet && at.Equal(r.exec.stopAt) && stopDisagrees(r.exec, ev) {
+		r.conflict("equal-time ambiguous and verified stop require manual disposition")
+		r.exec.verified = false
+		r.exec.ambiguous = true
+		r.writes = false
+		return
+	}
 	if ev.Ambiguous {
-		if r.exec.verified && !at.After(r.exec.stopAt) {
+		if r.exec.stopSet && at.Before(r.exec.stopAt) {
 			r.refusals = append(r.refusals, "stale ambiguous stop "+ev.Identity+" does not overwrite a verified release")
 			return
 		}
-		if r.exec.verified && at.After(r.exec.stopAt) {
+		if r.exec.verified && r.exec.stopSet && at.After(r.exec.stopAt) {
 			r.exec.verified = false
 			r.exec.ambiguous = true
 			r.exec.stopAt = at
+			r.exec.stopSet = true
+			r.writes = false
 			r.conflict("later ambiguous stop conflicts with a verified release")
 			return
 		}
 		r.exec.ambiguous = true
 		r.exec.verified = false
 		r.exec.stopAt = at
+		r.exec.stopSet = true
+		r.writes = false
 		return
 	}
 	if !ev.Verified {
 		r.refusals = append(r.refusals, "unverified stop "+ev.Identity+" is not a release")
 		return
 	}
-	if r.exec.ambiguous && at.Before(r.exec.stopAt) {
+	if r.exec.stopSet && at.Before(r.exec.stopAt) {
 		r.refusals = append(r.refusals, "stale verified stop "+ev.Identity+" does not overwrite a later ambiguous release")
-		return
-	}
-	if r.exec.ambiguous && at.Equal(r.exec.stopAt) {
-		r.conflict("equal-time ambiguous and verified stop require manual disposition")
-		r.exec.verified = false
 		return
 	}
 	r.exec.verified = true
 	r.exec.ambiguous = false
 	r.exec.stopAt = at
+	r.exec.stopSet = true
+	r.writes = false
 	if r.exec.state != "ended-pending-verified-stop" {
 		r.exec.state = "exited"
 	}
+}
+
+func stopDisagrees(ex execState, ev stopEvent) bool {
+	incomingVerified := ev.Verified && !ev.Ambiguous
+	if ex.ambiguous && incomingVerified {
+		return true
+	}
+	if ex.verified && ev.Ambiguous {
+		return true
+	}
+	return false
 }
 
 func (r *reducer) applyDelivery(ev header) {
@@ -1211,7 +1250,7 @@ func (r *reducer) applyDisp(ev dispEvent, at time.Time) {
 }
 
 func (r *reducer) applyAssign(ev assignEvent, at time.Time) {
-	key := ev.AssignmentKey + "\x00" + ev.SourceTime
+	key := ev.AssignmentKey + "\x00" + instantKey(at)
 	if r.suppressedAssign[key] {
 		r.refusals = append(r.refusals, "conflicting assignment "+ev.Identity+" not recorded")
 		r.blocked = true
@@ -1245,6 +1284,10 @@ func (r *reducer) applyAssign(ev assignEvent, at time.Time) {
 		return
 	}
 	r.blocked = true
+	if r.successor.key != ev.AssignmentKey {
+		r.blockedReason = "different assignment key does not create another successor"
+		return
+	}
 	r.blockedReason = "changed same-key assignment does not replace the recorded successor"
 }
 
@@ -1292,13 +1335,9 @@ func (r *reducer) applyGate(ev gateEvent, at time.Time) {
 }
 
 func sameGatePayload(a, b gateEvent) bool {
-	return a.Head == b.Head &&
-		a.AgentOpened == b.AgentOpened &&
-		a.RequiredCI == b.RequiredCI &&
-		a.NativeReviewVerdict == b.NativeReviewVerdict &&
-		a.ReviewJobSuccess == b.ReviewJobSuccess &&
-		a.Findings == b.Findings &&
-		a.HeadUnchanged == b.HeadUnchanged
+	a.header = header{}
+	b.header = header{}
+	return a == b
 }
 
 func (r *reducer) recommend(msg string) {
@@ -1322,14 +1361,14 @@ func (r *reducer) conflict(msg string) {
 func (r *reducer) finish() result {
 	reviews := r.resolveReviews()
 	current, retained := r.resolveScope()
-	merge, blockers := r.evalMerge()
+	merge, blockers := r.evalMerge(reviews)
 	active := ""
 	count := 0
 	if r.successor != nil {
 		active = r.successor.successor
 		count = 1
 	}
-	writes := r.writes && !r.exec.deadline
+	writes := r.writes && r.writesOpen()
 	res := result{
 		Schema:         schemaName,
 		Story:          r.doc.Story,
@@ -1421,6 +1460,10 @@ func (r *reducer) resolveReviews() []reviewView {
 	views := []reviewView{}
 	for _, key := range order {
 		parts := strings.Split(key, "\x00")
+		if r.conflictedReview[key] {
+			views = append(views, reviewView{Task: parts[0], UID: parts[1], Picked: false})
+			continue
+		}
 		group := grouped[key]
 		var terminals []observation
 		var running []observation
@@ -1570,7 +1613,7 @@ func contains(list []string, want string) bool {
 	return false
 }
 
-func (r *reducer) evalMerge() (string, []string) {
+func (r *reducer) evalMerge(reviews []reviewView) (string, []string) {
 	if r.gate.conflict {
 		return "blocked", []string{"equal-time conflicting gate evidence"}
 	}
@@ -1601,6 +1644,7 @@ func (r *reducer) evalMerge() (string, []string) {
 	if !g.HeadUnchanged {
 		blockers = append(blockers, "unchanged-head preflight is not recorded")
 	}
+	blockers = append(blockers, r.boundReviewBlockers(reviews, g.NativeReviewVerdict)...)
 	for _, h := range r.holds {
 		if h.view.State == "pending" && blocksMerge(h.view.Action) {
 			blockers = append(blockers, "action-specific hold "+h.view.Identity+" on "+h.view.Action)
@@ -1618,6 +1662,59 @@ func (r *reducer) evalMerge() (string, []string) {
 	return "blocked", blockers
 }
 
+func (r *reducer) boundReviewBlockers(reviews []reviewView, gateVerdict string) []string {
+	if r.doc.ReviewBinding == nil {
+		return []string{"review binding is required"}
+	}
+	blockers := []string{}
+	if r.doc.PullRequest <= 0 {
+		blockers = append(blockers, "pull request number must be positive")
+	}
+	picked := []reviewView{}
+	for _, rev := range reviews {
+		if rev.Picked {
+			picked = append(picked, rev)
+		}
+	}
+	if len(picked) == 0 {
+		blockers = append(blockers, "no picked bound review")
+		return blockers
+	}
+	if len(picked) != 1 {
+		blockers = append(blockers, "more than one picked review")
+		return blockers
+	}
+	one := picked[0]
+	if one.Task != r.doc.ReviewBinding.Task || one.UID != r.doc.ReviewBinding.UID {
+		blockers = append(blockers, "picked review does not match the binding")
+	}
+	if one.Head != r.doc.Head {
+		blockers = append(blockers, "picked review head does not match the record head")
+	}
+	if one.Verdict != "approved" {
+		blockers = append(blockers, "picked review verdict is "+one.Verdict)
+	}
+	if gateVerdict != one.Verdict {
+		blockers = append(blockers, "gate verdict does not match the picked review verdict")
+	}
+	return blockers
+}
+
+func (r *reducer) writesOpen() bool {
+	if r.exec.deadline || r.exec.verified || r.exec.ambiguous || r.exec.state == "exited" || r.exec.state == "ended-pending-verified-stop" {
+		return false
+	}
+	return true
+}
+
+func knownHoldAction(action string) bool {
+	switch action {
+	case "merge", "release", "merge-release", "source-merge", "source-pr-merge", "media-work", "deployment":
+		return true
+	default:
+		return false
+	}
+}
 func blocksMerge(action string) bool {
 	switch action {
 	case "merge", "release", "merge-release", "source-merge", "source-pr-merge":
@@ -1663,6 +1760,9 @@ func consumeValue(dec *json.Decoder) error {
 			if _, exists := seen[key]; exists {
 				return fmt.Errorf("duplicate JSON key %q", key)
 			}
+			if canon, ok := canonicalSchemaKey(key); ok && key != canon {
+				return fmt.Errorf("case-variant JSON key %q for canonical %q", key, canon)
+			}
 			seen[key] = struct{}{}
 			if err := consumeValue(dec); err != nil {
 				return err
@@ -1694,3 +1794,30 @@ func consumeValue(dec *json.Decoder) error {
 		return errors.New("unexpected delimiter")
 	}
 }
+
+func canonicalSchemaKey(key string) (string, bool) {
+	canon, ok := schemaCanonical[strings.ToLower(key)]
+	return canon, ok
+}
+
+var schemaCanonical = func() map[string]string {
+	tags := []string{
+		"schema", "story", "relatedStories", "repository", "pullRequest", "head", "coordinator",
+		"reviewBinding", "modelProvenance", "events", "task", "uid", "serving", "cost", "configuredUI",
+		"kind", "identity", "sourceTime", "executor", "deadline", "budget", "authorized", "authorizationRef",
+		"preserves", "writesAllowed", "state", "verified", "ambiguous", "delivery", "source", "phase",
+		"verdict", "reference", "summary", "verbatim", "scope", "supersedes", "action", "reason",
+		"permitsReconsideration", "assignmentKey", "predecessor", "successor", "supportedContinuation",
+		"agentOpened", "requiredCI", "nativeReviewVerdict", "reviewJobSuccess", "findings", "headUnchanged",
+		"note",
+	}
+	out := make(map[string]string, len(tags))
+	for _, tag := range tags {
+		fold := strings.ToLower(tag)
+		if _, exists := out[fold]; exists {
+			panic("schema tags fold together")
+		}
+		out[fold] = tag
+	}
+	return out
+}()

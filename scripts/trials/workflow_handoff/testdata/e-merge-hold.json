@@ -6,15 +6,26 @@
     "101"
   ],
   "repository": "github.com/thaynes43/dev-env",
-  "pullRequest": 0,
+  "pullRequest": 9001,
   "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "coordinator": "sol-native01a164b6-4fdd-73f2-b49b-738c23b5a709",
+  "coordinator": "coordinator-sol",
   "modelProvenance": {
     "serving": "Unknown",
     "cost": "Unknown",
     "configuredUI": "Grok4.7ExtraHigh"
   },
   "events": [
+    {
+      "kind": "review-observation",
+      "identity": "obs-approved",
+      "sourceTime": "2026-10-23T15:00:00Z",
+      "task": "native-review-1",
+      "uid": "uid-review-1",
+      "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source": "native-review-log",
+      "phase": "terminal",
+      "verdict": "approved"
+    },
     {
       "kind": "hold",
       "identity": "hold-merge",
@@ -35,5 +46,9 @@
       "findings": "disposed",
       "headUnchanged": true
     }
-  ]
+  ],
+  "reviewBinding": {
+    "task": "native-review-1",
+    "uid": "uid-review-1"
+  }
 }

@@ -8,7 +8,7 @@
   "repository": "github.com/thaynes43/dev-env",
   "pullRequest": 0,
   "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "coordinator": "sol-native01a164b6-4fdd-73f2-b49b-738c23b5a709",
+  "coordinator": "coordinator-sol",
   "modelProvenance": {
     "serving": "Unknown",
     "cost": "Unknown",
