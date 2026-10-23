@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.42.0](https://github.com/thaynes43/dev-env/compare/v2.41.0...v2.42.0) (2026-10-23)
+
+
+### Features
+
+* **usage:** capture direct-child receipts on the parent ([#517](https://github.com/thaynes43/dev-env/issues/517)) ([09ab4ee](https://github.com/thaynes43/dev-env/commit/09ab4ee9510dff21c7964a2807062da60d613962))
+
 ## [2.41.0](https://github.com/thaynes43/dev-env/compare/v2.40.0...v2.41.0) (2026-10-23)
 
 
