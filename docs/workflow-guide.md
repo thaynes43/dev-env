@@ -210,6 +210,16 @@ under that paragraph.)* The
 [pickup brief](../.agents/CLAUDE-RESUME-2026-10-12.md#what-is-actually-delivered)
 has the full revisions.
 
+### Offline upgrade-shepherd check
+
+`agent-run maintenance check --input <file>` validates one bounded operation
+envelope and correlates a supplied snapshot. It is offline and source-only.
+The JSON decision is `candidate`, `respond`, or `insufficient-evidence`.
+A candidate is not alert deferral, suppression, or operational authorization.
+The role contract and its proposed numeric defaults are in the
+[upgrade-shepherd role](upgrade-shepherd-role.md). The command does not install
+that role into a provider, contact the cluster, or change Activity.
+
 ## 3. Quick start with the working paths
 
 ### Pick the launcher first

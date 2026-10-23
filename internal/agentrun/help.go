@@ -45,6 +45,7 @@ Usage:
   agent-run mcp                                   access tools on stdin for the session
   agent-run breakglass --reason <why>             ask for break-glass; Tom still approves it
   declare-activity start "<what>" --scope <a,b>   declare dev work, so it is not taken for a fault
+  agent-run maintenance check --input <file>      offline correlation check; a candidate is not alert deferral
   agent-run attach <name>                         attach to a session's TUI (Tom only)
   agent-run detach <name>                         detach every client from it (Tom only)
   agent-run login <name> [url|code|status]        set up an --interactive session's Claude login (Tom only)
@@ -59,7 +60,7 @@ Usage:
 agent-run run ... is the same as agent-run ... -p, as in v1. prune and sweep are
 gone, because the operator reaps sessions itself.
 
-Every command but version and help takes these flags:
+Every command but version, help, and maintenance takes these flags:
   -o, --output json       print the API's answer as JSON (list and run also take -o name)
   --api-url <url>         the API's https:// address (or DEV_ENV_API_URL)
   --token-file <path>     a file holding a token for the audience dev-env-operator
@@ -572,6 +573,21 @@ end one grant. grant_status reads. None of them approve or install a grant.
 agentd registers this command as the dev-env MCP server when it renders the
 session, unless mcp.json already names a dev-env server.
 `,
+	"maintenance": `Usage: agent-run maintenance check --input <file|-> [--now <RFC3339>]
+
+Checks one offline upgrade-shepherd envelope and the supplied snapshot. It does
+not contact the API, read a token, launch a session, or suppress an alert.
+
+--input is a JSON file, or - for stdin. --now injects the clock. Without
+--now, the clock is this process's wall time, not a network time service.
+
+Exit 0 means the check produced JSON. Read decision: candidate, respond, or
+insufficient-evidence. Exit 0 is not authorization. A candidate is not alert
+deferral. Exit 2 means the input is invalid and the JSON names the fields.
+Nothing is sent either way.
+
+The numeric limits are proposed source-contract defaults, not production SLOs.
+`,
 	"fleet": `Usage: agent-run fleet [--resources] [-o json]
 
 Shows the fleet: the current template revision, how many sessions are in each
@@ -594,6 +610,6 @@ Prints the version, the commit, the Go version and the platform.
 	"help": `Usage: agent-run help [<command>]
 
 Prints help for agent-run, or for one command: run, list, show, log, msg, reap,
-suspend, resume, rescue, declare-activity, attach, detach, fleet, version.
+suspend, resume, rescue, declare-activity, maintenance, attach, detach, fleet, version.
 `,
 }
