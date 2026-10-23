@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -219,4 +220,73 @@ func testDisposableAsyncFailover(t *testing.T, admin *pgxpool.Pool, a, b *Postgr
 		t.Fatal("new generation consumed resurrected callback")
 	}
 	t.Log("ASYNC_FAILOVER_EVIDENCE acknowledged DELETEs=2 resurrected rows=2 unchanged witness; promoted pools=2 denied session+callback before observer; old-primary pooled connection denied")
+}
+
+// This pause is a deterministic transaction boundary, not a sleep/load test.
+// The underlying witness and identity checks still use production code.
+type pausedInsertFence struct {
+	RecoveryFence
+	reached, resume chan struct{}
+	once            sync.Once
+}
+
+func (f *pausedInsertFence) Recheck(ctx context.Context, s AdmissionSnapshot) error {
+	cancelled := false
+	f.once.Do(func() {
+		close(f.reached)
+		select {
+		case <-f.resume:
+		case <-ctx.Done():
+			cancelled = true
+		}
+	})
+	if cancelled {
+		return portal.ErrUnavailable
+	}
+	return f.RecoveryFence.Recheck(ctx, s)
+}
+
+func testInsertDoesNotBlockRevocation(t *testing.T, a, b *PostgresStore, record Record) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	record.CreatedAt = now
+	record.IdleExpiresAt = now.Add(5 * time.Minute)
+	record.ExpiresAt = now.Add(5 * time.Minute)
+	record.tokenExpiresAt = now.Add(time.Hour)
+	login := Login{State: strings.Repeat("s", 43), Nonce: strings.Repeat("n", 43), Verifier: strings.Repeat("v", 43), ExpiresAt: now.Add(5 * time.Minute)}
+	fence, _ := newAdmissionFixture(t, poolIncarnation(t, a.pool))
+	original := b.fence
+	b.fence = fence
+	defer func() { b.fence = original }()
+	session, callback, insert := Handle{201}, Handle{202}, Handle{203}
+	if b.PutSession(ctx, session, record) != nil || b.PutLogin(ctx, callback, login) != nil {
+		t.Fatal("concurrency seed failed")
+	}
+	pause := &pausedInsertFence{RecoveryFence: fence, reached: make(chan struct{}), resume: make(chan struct{})}
+	writer := *a
+	writer.fence = pause
+	writer.timeout = 5 * time.Second
+	result := make(chan error, 1)
+	go func() { result <- writer.PutSession(ctx, insert, record) }()
+	defer func() {
+		close(pause.resume)
+		if err := <-result; err != nil && !t.Failed() {
+			t.Error("paused insert failed after release")
+		}
+	}()
+	deadline, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	select {
+	case <-pause.reached:
+	case <-deadline.Done():
+		t.Fatal("insert did not reach precommit boundary")
+	}
+	if b.RevokeSession(deadline, session) != nil {
+		t.Fatal("held insert admission blocked revoke")
+	}
+	if _, err := b.TakeLogin(deadline, callback, login.State, now); err != nil {
+		t.Fatal("held insert admission blocked callback consumption")
+	}
+	t.Log("INSERT_ADMISSION_EVIDENCE paused precommit insert does not block independent revoke or callback DELETE")
 }

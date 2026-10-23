@@ -230,16 +230,24 @@ func insertError(err error) error {
 	return portal.ErrUnavailable
 }
 
-// Serialize each table's insertion bound across replicas using existing DELETE
-// privilege (no advisory-lock function/admin grant). Names are internal constants,
-// never request data. Cleanup does at most 32 deletes; both tables cap at 256 rows.
+// Serialize insertion admission across replicas without table-wide locks. A
+// nonblocking transaction advisory lock is taken only by inserters; revocation
+// and callback DELETEs never acquire it. No role/admin grant is added.
 func admitPortalInsert(ctx context.Context, tx pgx.Tx, table string) error {
-	if table != "pending_logins" && table != "sessions" {
+	var key int32
+	switch table {
+	case "pending_logins":
+		key = 1
+	case "sessions":
+		key = 2
+	default:
 		return portal.ErrUnavailable
 	}
-	if _, err := tx.Exec(ctx, "LOCK TABLE portal."+table+" IN SHARE ROW EXCLUSIVE MODE"); err != nil {
+	var acquired bool
+	if tx.QueryRow(ctx, "SELECT pg_catalog.pg_try_advisory_xact_lock($1,$2)", int32(178), key).Scan(&acquired) != nil || !acquired {
 		return portal.ErrUnavailable
 	}
+
 	if _, err := tx.Exec(ctx, "DELETE FROM portal."+table+" WHERE handle IN (SELECT handle FROM portal."+table+" WHERE expires_at<=clock_timestamp() LIMIT 32)"); err != nil {
 		return portal.ErrUnavailable
 	}

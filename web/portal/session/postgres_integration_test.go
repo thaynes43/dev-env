@@ -425,6 +425,8 @@ func TestPostgresIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("paused-insert-admission-does-not-block-revoke-or-callback", func(t *testing.T) { testInsertDoesNotBlockRevocation(t, a, b, record) })
+
 	t.Run("actual-lost-commit-response-discards-write-result-and-read-payload", func(t *testing.T) { testActualLostCommitResponse(t, admin, a, record) })
 
 	t.Run("protected-read-witness-count-and-latency", func(t *testing.T) { testProtectedReadCost(t, a) })
