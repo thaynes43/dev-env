@@ -166,7 +166,11 @@ func observeQuantity(list corev1.ResourceList, name corev1.ResourceName) apiv1.F
 	if !ok {
 		return apiv1.FleetQuantity{State: apiv1.FleetQuantityAbsent}
 	}
-	return apiv1.FleetQuantity{State: apiv1.FleetQuantitySet, Value: quantity.String()}
+	number, suffix := quantity.CanonicalizeBytes(nil)
+	buf := make([]byte, 0, len(number)+len(suffix))
+	buf = append(buf, number...)
+	buf = append(buf, suffix...)
+	return apiv1.FleetQuantity{State: apiv1.FleetQuantitySet, Value: string(buf)}
 }
 
 func capFleetResources(obs map[string]*apiv1.FleetResources) map[string]*apiv1.FleetResources {

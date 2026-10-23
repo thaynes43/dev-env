@@ -397,3 +397,25 @@ func (d deadlineReader) List(ctx context.Context, list client.ObjectList, opts .
 	}
 	return d.Reader.List(ctx, list, opts...)
 }
+
+func TestFleetQuantityCanonicalizesCachedSpellings(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{in: "+1", want: "1"},
+		{in: "1E3", want: "1e3"},
+		{in: "1e+3", want: "1e3"},
+		{in: "1e03", want: "1e3"},
+		{in: "0", want: "0"},
+		{in: "100m", want: "100m"},
+		{in: "1Gi", want: "1Gi"},
+		{in: "64Mi", want: "64Mi"},
+	} {
+		got := observeQuantity(corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(tc.in)}, corev1.ResourceCPU)
+		if got.State != apiv1.FleetQuantitySet || got.Value != tc.want {
+			t.Errorf("%s: %+v, want %s", tc.in, got, tc.want)
+		}
+	}
+	absent := observeQuantity(corev1.ResourceList{}, corev1.ResourceMemory)
+	if absent.State != apiv1.FleetQuantityAbsent || absent.Value != "" {
+		t.Fatalf("unset quantity: %+v", absent)
+	}
+}

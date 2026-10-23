@@ -175,7 +175,7 @@ func TestFleetResourcesMalformedMetadata(t *testing.T) {
 						CPURequest: absent, CPULimit: absent, MemoryRequest: absent, MemoryLimit: absent}},
 				}},
 				{Name: "ok", Phase: "Running", Node: "status-node", CreatedAt: testNow, Resources: &apiv1.FleetResources{
-					State: apiv1.FleetResourcesObserved, PodUID: "pod-ok",
+					State: apiv1.FleetResourcesObserved, ObservedAt: &testNow, PodUID: "pod-ok",
 					Node: &apiv1.FleetResourceNode{State: apiv1.FleetNodeSet, Name: "spec-node"},
 					Containers: []apiv1.FleetContainerResources{{Kind: apiv1.FleetContainerOrdinary, Name: "agent",
 						CPURequest: apiv1.FleetQuantity{State: apiv1.FleetQuantitySet, Value: "100m"}, CPULimit: apiv1.FleetQuantity{State: apiv1.FleetQuantitySet, Value: "0"},
@@ -220,5 +220,59 @@ func TestFleetResourcesMalformedMetadata(t *testing.T) {
 	ok := byName["ok"]
 	if ok.State != apiv1.FleetResourcesObserved || ok.PodUID != "pod-ok" || ok.Containers[0].CPULimit.Value != "0" || ok.Containers[0].MemoryLimit.Value != "1e3" || ok.InitContainers[0].MemoryRequest.Value != "64Mi" {
 		t.Fatalf("valid observation changed: %+v", ok)
+	}
+}
+
+func TestFleetResourcesObservedStampAndReason(t *testing.T) {
+	h := newHarness(t)
+	zero := time.Time{}
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		absent := apiv1.FleetQuantity{State: apiv1.FleetQuantityAbsent}
+		valid := apiv1.FleetContainerResources{Kind: apiv1.FleetContainerOrdinary, Name: "agent",
+			CPURequest: apiv1.FleetQuantity{State: apiv1.FleetQuantitySet, Value: "100m"}, CPULimit: apiv1.FleetQuantity{State: apiv1.FleetQuantitySet, Value: "0"},
+			MemoryRequest: absent, MemoryLimit: absent}
+		writeTestJSON(w, http.StatusOK, apiv1.Fleet{
+			Revision: "rev", Phases: map[string]int{"Running": 4},
+			Sessions: []apiv1.FleetSession{
+				{Name: "reason", Phase: "Running", CreatedAt: testNow, Resources: &apiv1.FleetResources{
+					State: apiv1.FleetResourcesObserved, Reason: "leaked-reason-text", ObservedAt: &testNow, PodUID: "pod-r",
+					Node: &apiv1.FleetResourceNode{State: apiv1.FleetNodeSet, Name: "n"}, Containers: []apiv1.FleetContainerResources{valid}}},
+				{Name: "nostamp", Phase: "Running", CreatedAt: testNow, Resources: &apiv1.FleetResources{
+					State: apiv1.FleetResourcesObserved, PodUID: "pod-n",
+					Node: &apiv1.FleetResourceNode{State: apiv1.FleetNodeSet, Name: "n"}, Containers: []apiv1.FleetContainerResources{valid}}},
+				{Name: "zerostamp", Phase: "Running", CreatedAt: testNow, Resources: &apiv1.FleetResources{
+					State: apiv1.FleetResourcesObserved, ObservedAt: &zero, PodUID: "pod-z",
+					Node: &apiv1.FleetResourceNode{State: apiv1.FleetNodeSet, Name: "n"}, Containers: []apiv1.FleetContainerResources{valid}}},
+				{Name: "ok", Phase: "Running", CreatedAt: testNow, Resources: &apiv1.FleetResources{
+					State: apiv1.FleetResourcesObserved, ObservedAt: &testNow, PodUID: "pod-ok",
+					Node: &apiv1.FleetResourceNode{State: apiv1.FleetNodeSet, Name: "spec-node"}, Containers: []apiv1.FleetContainerResources{valid}}},
+			},
+		})
+	}
+	h.mustRun(ExitOK, "fleet", "--resources")
+	out := h.stdout.String()
+	if strings.Contains(out, "leaked-reason-text") || strings.Contains(out, "pod-r") || strings.Contains(out, "pod-n") || strings.Contains(out, "pod-z") {
+		t.Fatalf("text kept a malformed observation\n%s", out)
+	}
+	contains(t, "stamp", out, "Unknown (unavailable)", "pod-ok", "agent cpu 100m/0 memory absent/absent")
+	h.mustRun(ExitOK, "fleet", "--resources", "-o", "json")
+	raw := h.stdout.String()
+	if strings.Contains(raw, "leaked-reason-text") {
+		t.Fatalf("json leaked the reason\n%s", raw)
+	}
+	var decoded apiv1.Fleet
+	if err := json.Unmarshal(h.stdout.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	for _, session := range decoded.Sessions {
+		if session.Name == "ok" {
+			if session.Resources == nil || session.Resources.State != apiv1.FleetResourcesObserved || session.Resources.ObservedAt == nil || session.Resources.ObservedAt.IsZero() || session.Resources.Reason != "" {
+				t.Fatalf("valid observation: %+v", session.Resources)
+			}
+			continue
+		}
+		if session.Resources == nil || session.Resources.State != apiv1.FleetResourcesUnknown || session.Resources.Reason != apiv1.FleetResourcesUnavailable || session.Resources.PodUID != "" {
+			t.Fatalf("%s: %+v", session.Name, session.Resources)
+		}
 	}
 }

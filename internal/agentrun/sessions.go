@@ -545,7 +545,7 @@ func knownFleetReason(reason string) string {
 }
 
 func validObservedFleetResources(obs *apiv1.FleetResources) bool {
-	if !safeFleetToken(obs.PodUID, 128) {
+	if obs.Reason != "" || obs.ObservedAt == nil || obs.ObservedAt.IsZero() || !safeFleetToken(obs.PodUID, 128) {
 		return false
 	}
 	if obs.Node == nil {
