@@ -63,6 +63,21 @@ remote resources or scripts are rendered. Responses use no-store, a restrictive
 CSP, no-referrer and nosniff. These source checks do not establish deployed
 authentication, session security, proxy trust, CSRF, SSRF or ingress isolation.
 
+## Mobile presentation
+
+Essential facts stay visible on every item: canonical source, owner, next actor, next action, source age, source update, last verification and freshness. Task outcome, worker liveness, review, reviewed head, authority and release stay labeled and separate, inside a native `details` disclosure, so a phone can scan the next action without treating those facts as one status. The disclosure is not an action and queues nothing.
+
+A verified empty snapshot shows all four groups at zero and says verified empty. A listing whose own evidence is missing, stale, future or older than its source update keeps Unknown group counts, including when a row inside it is fresh. A read whose state is unknown does not render group counts. Denied and unavailable reads stay the same plain refusal. They never become a verified empty page.
+
+An offline browser check drives this preview renderer and the Chromium already present in the session image. It is repeatable synthetic evidence at 320px, 390px, tablet and desktop widths. It is not a physical-device pass, deployed authentication, or Gate A.
+
+```sh
+GOTOOLCHAIN=local GOMAXPROCS=2 nice -n 19 \
+  go run -p 1 ./web/portal/preview --scenarios /tmp/portal-attention-scenarios
+node scripts/trials/portal_attention/browser_check.cjs \
+  /tmp/portal-attention-scenarios /tmp/portal-attention-browser
+```
+
 ## Offline evidence and custody
 
 Run focused tests with Go1.27.2 as pinned by `go.mod`, `GOTOOLCHAIN=local`,

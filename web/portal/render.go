@@ -53,10 +53,10 @@ func display(s string) string {
 	return strings.TrimSpace(s)
 }
 
-type field struct{ Label, Value string }
+type field struct{ Label, Value, Class string }
 type rowView struct {
 	ID, Title, Freshness, Link string
-	Fields                     []field
+	Primary, Secondary         []field
 }
 type groupView struct {
 	ID, Title, Count string
@@ -79,11 +79,8 @@ func makePage(s Snapshot, now time.Time, freshFor time.Duration) pageView {
 	if !listingVerified {
 		p.Notice = listingFreshness + ". Listing counts are not verified as current; current Attention contents are Unknown. Last verified: " + evidenceMoment(s.VerifiedAt, now)
 	}
-	if len(s.Items) == 0 {
-		if listingVerified {
-			p.Notice = "Verified empty: no Attention items in this authorized snapshot. Last verified: " + evidenceMoment(s.VerifiedAt, now)
-		}
-		return p
+	if len(s.Items) == 0 && listingVerified {
+		p.Notice = "Verified empty: no Attention items in this authorized snapshot. Last verified: " + evidenceMoment(s.VerifiedAt, now)
 	}
 	for _, group := range []struct {
 		id    Group
@@ -98,13 +95,22 @@ func makePage(s Snapshot, now time.Time, freshFor time.Duration) pageView {
 				ID: item.Resource.Task, Title: display(item.Title),
 				Freshness: freshness(item.UpdatedAt, item.VerifiedAt, now, freshFor),
 				Link:      "https://work.haynesnetwork.com/work_packages/" + strconv.Itoa(item.WorkPackage),
-				Fields: []field{
-					{"Canonical source", "OpenProject #" + strconv.Itoa(item.WorkPackage)},
-					{"Owner", display(item.Owner)}, {"Next actor", display(item.NextActor)}, {"Next action", display(item.NextAction)},
-					{"Task outcome", display(item.TaskOutcome)}, {"Worker liveness", display(item.WorkerState)},
-					{"Review", display(item.ReviewState)}, {"Reviewed head", display(item.ReviewHead)},
-					{"Authority", display(item.AuthorityState)}, {"Release", display(item.ReleaseState)},
-					{"Source age", age(item.UpdatedAt, now)}, {"Source updated", evidenceMoment(item.UpdatedAt, now)}, {"Last verified", evidenceMoment(item.VerifiedAt, now)},
+				Primary: []field{
+					{"Next action", display(item.NextAction), "next"},
+					{"Owner", display(item.Owner), ""},
+					{"Next actor", display(item.NextActor), ""},
+					{"Canonical source", "OpenProject #" + strconv.Itoa(item.WorkPackage), ""},
+					{"Source age", age(item.UpdatedAt, now), ""},
+					{"Source updated", evidenceMoment(item.UpdatedAt, now), ""},
+					{"Last verified", evidenceMoment(item.VerifiedAt, now), ""},
+				},
+				Secondary: []field{
+					{"Task outcome", display(item.TaskOutcome), ""},
+					{"Worker liveness", display(item.WorkerState), ""},
+					{"Review", display(item.ReviewState), ""},
+					{"Reviewed head", display(item.ReviewHead), ""},
+					{"Authority", display(item.AuthorityState), ""},
+					{"Release", display(item.ReleaseState), ""},
 				},
 			})
 		}

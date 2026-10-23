@@ -55,3 +55,56 @@ func TestInvalidFixtureWritesNoPartialPage(t *testing.T) {
 		}
 	}
 }
+
+func TestOfflineScenariosKeepHonestStates(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeScenarios(dir); err != nil {
+		t.Fatal(err)
+	}
+	read := func(name string) string {
+		t.Helper()
+		b, err := os.ReadFile(dir + "/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	empty := read("verified-empty.html")
+	if !strings.Contains(empty, "Verified empty") || !strings.Contains(empty, ">Needs you · 0</h2>") || !strings.Contains(empty, "No items in this group.") {
+		t.Fatal("verified empty groups")
+	}
+	unknown := read("unknown-listing.html")
+	if !strings.Contains(unknown, "Attention unknown") || strings.Contains(unknown, "· 0") || strings.Contains(unknown, "Needs you ·") {
+		t.Fatal("unknown listing invented a count")
+	}
+	stale := read("stale-with-fresh-row.html")
+	if !strings.Contains(stale, "Stale evidence. Listing counts are not verified as current;") || !strings.Contains(stale, `<p class="freshness">Verified within snapshot window</p>`) || strings.Contains(stale, "· 0") {
+		t.Fatal("fresh row inside stale listing")
+	}
+	missing := read("fresh-row-unknown-listing.html")
+	if !strings.Contains(missing, "Freshness unknown. Listing counts are not verified as current;") || !strings.Contains(missing, `<p class="freshness">Verified within snapshot window</p>`) || strings.Contains(missing, "· 0") {
+		t.Fatal("fresh row inside unknown listing")
+	}
+	future := read("future-listing.html")
+	if !strings.Contains(future, "Unknown (untrusted future timestamp:") || strings.Contains(future, "· 0") {
+		t.Fatal("future listing")
+	}
+	hostile := read("hostile.html")
+	if strings.Contains(hostile, "<script>") || strings.Contains(hostile, "<img ") || !strings.Contains(hostile, "&lt;script&gt;") || !strings.Contains(hostile, "<dt>Owner</dt><dd>Unknown</dd>") {
+		t.Fatal("hostile text")
+	}
+	absent := read("no-owner.html")
+	if !strings.Contains(absent, "<dt>Owner</dt><dd>Unknown</dd>") || !strings.Contains(absent, `<dt>Next action</dt><dd class="next">Unknown</dd>`) || !strings.Contains(absent, "<dt>Next actor</dt><dd>Unknown</dd>") {
+		t.Fatal("missing actor")
+	}
+	const refused = "Attention unavailable. Current task state is Unknown.\n"
+	for _, name := range []string{"denied.txt", "unavailable.txt"} {
+		if read(name) != refused {
+			t.Fatalf("%s body", name)
+		}
+	}
+	populated := read("populated.html")
+	if strings.Count(populated, "<article ") != 4 || strings.Contains(populated, "<script") || strings.Contains(populated, "Listing counts") {
+		t.Fatal("populated preview")
+	}
+}

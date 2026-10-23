@@ -113,11 +113,26 @@ func render(source io.Reader) ([]byte, error) {
 }
 
 func main() {
-	output := flag.String("output", "", "output HTML file (required); run from repository root")
+	output := flag.String("output", "", "output HTML file; run from repository root")
+	scenarios := flag.String("scenarios", "", "directory for offline presentation evidence pages")
 	flag.Parse()
-	if *output == "" {
-		fmt.Fprintln(os.Stderr, "--output is required")
+	if *output == "" && *scenarios == "" {
+		fmt.Fprintln(os.Stderr, "--output or --scenarios is required")
 		os.Exit(1)
+	}
+	if *scenarios != "" {
+		if err := os.MkdirAll(*scenarios, 0o700); err != nil {
+			fmt.Fprintln(os.Stderr, "Scenario directory unavailable.")
+			os.Exit(1)
+		}
+		if err := writeScenarios(*scenarios); err != nil {
+			fmt.Fprintln(os.Stderr, "Synthetic scenarios unavailable; no complete evidence set written.")
+			os.Exit(1)
+		}
+		fmt.Println("Wrote offline synthetic Attention scenarios.")
+	}
+	if *output == "" {
+		return
 	}
 	f, err := os.Open("scripts/trials/portal_attention/fixtures.json")
 	if err != nil {

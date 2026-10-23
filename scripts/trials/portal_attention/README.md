@@ -38,3 +38,17 @@ Run only this finite suite, one process under `nice -n 19`, with at most two
 CPUs available to heavier checks. No real lifecycle, load, media, model or
 credential fixtures. Parent coordinates required independent review once the
 PR head is stable; this tool grants no runtime authority.
+
+## Go presentation check
+
+The Go handler in `web/portal` is the presentation under test. The command
+below writes the same synthetic states through that handler and opens them in
+local Chromium. A screenshot from this check is not device or deployed-auth
+acceptance. Run it from the repository root, one process, under `nice -n 19`.
+
+```sh
+GOTOOLCHAIN=local GOMAXPROCS=2 nice -n 19 \
+  go run -p 1 ./web/portal/preview --scenarios /tmp/portal-attention-scenarios
+node scripts/trials/portal_attention/browser_check.cjs \
+  /tmp/portal-attention-scenarios /tmp/portal-attention-browser
+```

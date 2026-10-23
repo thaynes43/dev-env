@@ -614,3 +614,78 @@ func TestProjectWorkerBindingAndPayloadExclusion(t *testing.T) {
 		})
 	}
 }
+
+func TestEssentialFactsStayOutsideSeparateEvidence(t *testing.T) {
+	w := response(dependencies(), "GET", attentionPath)
+	body := w.Body.String()
+	if w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	details := strings.Index(body, "<details")
+	if details < 0 {
+		t.Fatal("separate evidence disclosure missing")
+	}
+	for _, label := range []string{"<dt>Next action</dt>", "<dt>Owner</dt>", "<dt>Next actor</dt>", "<dt>Canonical source</dt>", "<dt>Source age</dt>", "<dt>Source updated</dt>", "<dt>Last verified</dt>"} {
+		if i := strings.Index(body, label); i < 0 || i > details {
+			t.Fatalf("%s not visible before disclosure", label)
+		}
+	}
+	secondary := body[details:]
+	for _, label := range []string{"<dt>Task outcome</dt>", "<dt>Worker liveness</dt>", "<dt>Review</dt>", "<dt>Reviewed head</dt>", "<dt>Authority</dt>", "<dt>Release</dt>"} {
+		if !strings.Contains(secondary, label) {
+			t.Fatalf("%s left the separate evidence", label)
+		}
+	}
+	if !strings.Contains(body, "<summary>Separate outcome, worker, review, authority and release</summary>") {
+		t.Fatal("disclosure name missing")
+	}
+	if !strings.Contains(body, `aria-describedby="fresh-task-one"`) || !strings.Contains(body, `<p class="freshness">Verified within snapshot window</p>`) {
+		t.Fatal("freshness is not tied to the row")
+	}
+	if strings.Count(body, "href=") != 1 || strings.Contains(body, "<script") || strings.Contains(body, "<form") {
+		t.Fatal("presentation added an active control")
+	}
+}
+
+func TestEmptyAndUnknownListingsDoNotInventCurrentZeros(t *testing.T) {
+	d := dependencies()
+	d.Reader = readFunc(func(_ context.Context, r Resource) (Snapshot, error) {
+		s := sample(r)
+		s.Items = nil
+		return s, nil
+	})
+	body := response(d, "GET", attentionPath).Body.String()
+	for _, title := range []string{"Needs you", "Needs worker", "Review returned", "Handoff missing"} {
+		if !strings.Contains(body, ">"+title+" · 0</h2>") || !strings.Contains(body, "No items in this group.") {
+			t.Fatalf("verified empty group missing: %s", title)
+		}
+	}
+	if !strings.Contains(body, "Verified empty") {
+		t.Fatal("verified empty notice missing")
+	}
+
+	d = dependencies()
+	d.Reader = readFunc(func(_ context.Context, r Resource) (Snapshot, error) {
+		s := sample(r)
+		s.Items = nil
+		s.State = Unknown
+		return s, nil
+	})
+	body = response(d, "GET", attentionPath).Body.String()
+	if !strings.Contains(body, "Attention unknown") || strings.Contains(body, "· 0") || strings.Contains(body, "No items in this group.") {
+		t.Fatal("unknown read presented a current count")
+	}
+
+	d = dependencies()
+	d.Reader = readFunc(func(_ context.Context, r Resource) (Snapshot, error) {
+		s := sample(r)
+		s.Items = nil
+		s.UpdatedAt = fixtureNow.Add(-7 * time.Minute)
+		s.VerifiedAt = fixtureNow.Add(-6 * time.Minute)
+		return s, nil
+	})
+	body = response(d, "GET", attentionPath).Body.String()
+	if strings.Contains(body, "· 0") || strings.Contains(body, "Verified empty") || !strings.Contains(body, ">Needs you · Unknown</h2>") || !strings.Contains(body, "Count for this group is Unknown.") {
+		t.Fatal("stale empty listing presented a current zero")
+	}
+}
