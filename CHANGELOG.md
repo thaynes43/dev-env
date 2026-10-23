@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.44.0](https://github.com/thaynes43/dev-env/compare/v2.43.0...v2.44.0) (2026-10-23)
+
+
+### Features
+
+* **portal:** add fixture-backed Go read boundary and mobile preview ([#526](https://github.com/thaynes43/dev-env/issues/526)) ([cb28f25](https://github.com/thaynes43/dev-env/commit/cb28f252b1504c69d9b2d369a7551c6cfbb12176))
+* **portal:** add source-only OIDC sessions and fail-closed assembly ([#527](https://github.com/thaynes43/dev-env/issues/527)) ([8b19240](https://github.com/thaynes43/dev-env/commit/8b192402b8ec4b564ccab0ee1b9dfdb001f7f213))
+* **portal:** record security contract and add offline Attention preview ([#525](https://github.com/thaynes43/dev-env/issues/525)) ([597e2cb](https://github.com/thaynes43/dev-env/commit/597e2cb2fb56a7ce81e055d5f0ed601de126c6ce))
+* **workflow:** add an offline coordinator handoff checker ([#524](https://github.com/thaynes43/dev-env/issues/524)) ([259484b](https://github.com/thaynes43/dev-env/commit/259484b625c72f39a9e93c45b937c825bd3ede28))
+
+
+### Bug Fixes
+
+* **deps:** update module github.com/google/cel-go to v0.32.0 ([#522](https://github.com/thaynes43/dev-env/issues/522)) ([380a759](https://github.com/thaynes43/dev-env/commit/380a759d947faf1131653867cdecf4b7ade878f5))
+
 ## [2.43.0](https://github.com/thaynes43/dev-env/compare/v2.42.0...v2.43.0) (2026-10-23)
 
 
