@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -98,7 +98,12 @@ func (c *OAuthCodeClient) Exchange(ctx context.Context, code, verifier string) (
 
 func configuredURL(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
-	if err != nil || !identityText(raw) || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawPath != "" || u.Opaque != "" || net.ParseIP(u.Hostname()) != nil || u.Hostname() == "localhost" || strings.HasSuffix(u.Hostname(), ".localhost") {
+	if err != nil || !identityText(raw) || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawPath != "" || u.Opaque != "" {
+		return nil, portal.ErrUnavailable
+	}
+	hostname := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	_, literalErr := netip.ParseAddr(hostname)
+	if literalErr == nil || hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") {
 		return nil, portal.ErrUnavailable
 	}
 	return u, nil

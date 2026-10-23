@@ -56,7 +56,9 @@ func TestMaintainedVerifierAndCallerBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := VerifierConfig{Issuer: "https://issuer.example/portal/", ClientID: "synthetic-client", Algorithms: []string{oidc.ES256}, Keys: &oidc.StaticKeySet{PublicKeys: []crypto.PublicKey{&key.PublicKey}}, Now: func() time.Time { return now }}
+	// Trust both public keys so the ES384 token's only rejection reason is
+	// the algorithm allowlist, rather than a missing verification key.
+	config := VerifierConfig{Issuer: "https://issuer.example/portal/", ClientID: "synthetic-client", Algorithms: []string{oidc.ES256}, Keys: &oidc.StaticKeySet{PublicKeys: []crypto.PublicKey{&key.PublicKey, &wrongAlgKey.PublicKey}}, Now: func() time.Time { return now }}
 	v, err := NewTokenVerifier(config)
 	if err != nil {
 		t.Fatal(err)

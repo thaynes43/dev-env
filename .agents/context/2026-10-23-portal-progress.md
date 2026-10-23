@@ -360,3 +360,33 @@ may the coordinator explicitly assign a single subsequent presentation owner.
 Approved OIDC setup905 remains separate infrastructure work; no 1Password ask,
 runtime binding, RBAC, secret grant, provider call, ingress or public exposure
 was performed. Story178 remains open for its actual usable/internal acceptance.
+
+### M3 native clarification and test isolation
+
+The full native review in #178 journal1007 covers initial M3 head `4cfa2bb2`
+and returned PASS-with-minors, with no security/correctness blocker. The reviewer
+independently ran 31 top-level tests and 138 subtests, vet, formatting and module
+verification. Its initial-head CI39995631874 also passed. Neither receipt is
+coverage of the following correction.
+
+The same owner clarified that the effective M3 lifetime is fixed `IdleTTL`
+from creation; `AbsoluteTTL` currently controls cookie expiry, with a redundant
+later server check until a reviewed activity path exists. The prior PR reply's
+"independent upper fence" wording was incorrect for current behavior and is
+superseded by the explicit contract. The overlapping expiry test is now named
+`after-both-deadlines`, with its coverage limit stated.
+
+Algorithm rejection now uses a trusted ES384 key, the fake exchange checks the
+exact code, and logout tests reach a failing RevokeSession after a successful
+lookup. Issuer tests isolate literal-IP/localhost rejection with matching
+endpoint hosts; the existing guard also handles hostname case/absolute-name
+and IPv6-zone forms. Finite callback tests cover malformed/missing/duplicate/
+extra fields, oversized codes and missing/duplicate login cookies. Back-to-back
+tabs prove a wrong-state attempt cannot consume the browser's current login.
+The test-store contract says this explicitly. Preview failure wording is fixed.
+No activity endpoint, production policy, callback allowlist expansion, provider,
+store adapter, identity binding or ingress change is included.
+
+Exact corrected-head tests/preview/native/CI and PR receipts are recorded in
+#178/PR527. Same-owner fix custody remains; no provider handoff is performed
+until the actual reviewed source boundary is accepted and explicitly released.

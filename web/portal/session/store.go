@@ -24,6 +24,7 @@ type Record struct {
 
 // Store has no production in-memory fallback. TakeLogin must atomically check
 // state/expiry and consume exactly once, returning ErrDenied on absence/replay.
+// A wrong-state attempt must not consume the bound unexpired transaction.
 // Revocation must be durable and visible to every GetSession before success.
 // Implementations must not log handles, state, nonce, verifier or CSRF values.
 type Store interface {

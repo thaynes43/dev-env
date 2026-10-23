@@ -22,8 +22,13 @@ const loginCookie = "__Host-portal-login"
 
 type Config struct {
 	Origin, Callback string
-	// All durations are explicit source configuration, not selected production
-	// defaults. Polling/Authenticate never extend these stored expiry times.
+	// All durations are explicit source configuration, not production defaults.
+	// M3 has no activity/touch operation: IdleTTL is the fixed server lifetime
+	// from creation. AbsoluteTTL currently determines cookie expiry; with
+	// IdleTTL <= AbsoluteTTL its later server check cannot decide independently.
+	// A reviewed activity path and new tests are prerequisites for sliding idle
+	// behavior or an independently deciding absolute lifetime. Polling never
+	// extends a deadline.
 	LoginTTL, IdleTTL, AbsoluteTTL time.Duration
 	Now                            func() time.Time
 	Store                          Store

@@ -100,3 +100,20 @@ func TestTransportConfigurationCannotIntroduceOtherDestinations(t *testing.T) {
 		}
 	}
 }
+
+func TestIssuerItselfCannotBeIPOrLocalhost(t *testing.T) {
+	base := tripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("rejected issuer made a request")
+		return nil, portal.ErrUnavailable
+	})
+	for _, issuer := range []string{"https://127.0.0.1", "https://169.254.169.254", "https://[::1]", "https://[fe80::1%25eth0]", "https://localhost", "https://LOCALHOST", "https://auth.localhost.", "https://localhost."} {
+		t.Run(issuer, func(t *testing.T) {
+			// Endpoint and issuer hosts match; only the literal/local-host rule
+			// can reject these otherwise complete configurations.
+			client, err := NewIssuerHTTPClient(issuer, map[string]string{issuer + "/keys": "GET"}, base, time.Second, 64)
+			if !errors.Is(err, portal.ErrUnavailable) || client != nil {
+				t.Fatal("unsafe issuer accepted")
+			}
+		})
+	}
+}

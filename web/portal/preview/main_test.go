@@ -27,7 +27,7 @@ func TestExistingFoundationFixtureRendersOffline(t *testing.T) {
 		}
 	}
 	if strings.Contains(s, "Listing counts") {
-		t.Fatal("synthetic listing evidence missing")
+		t.Fatal("unexpected listing warning in verified synthetic snapshot")
 	}
 	if strings.Count(s, "<article ") != 4 || strings.Count(s, "href=") != 4 {
 		t.Fatal("fixture rows or fixed source links missing")

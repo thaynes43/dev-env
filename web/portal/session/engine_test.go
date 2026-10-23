@@ -30,11 +30,13 @@ import (
 // Inert stores exist only in tests. This is not a production persistence or
 // multi-replica revocation claim.
 type memoryStore struct {
-	mu       sync.Mutex
-	logins   map[Handle]Login
-	sessions map[Handle]Record
-	fail     bool
-	puts     int
+	mu          sync.Mutex
+	logins      map[Handle]Login
+	sessions    map[Handle]Record
+	fail        bool
+	failRevoke  bool
+	revocations int
+	puts        int
 }
 
 func (s *memoryStore) PutLogin(_ context.Context, h Handle, v Login) error {
@@ -84,7 +86,8 @@ func (s *memoryStore) GetSession(_ context.Context, h Handle) (Record, error) {
 func (s *memoryStore) RevokeSession(_ context.Context, h Handle) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.fail {
+	s.revocations++
+	if s.fail || s.failRevoke {
 		return errors.New("SECRET-STORE-CANARY")
 	}
 	delete(s.sessions, h)
@@ -129,7 +132,7 @@ func setupAuth(t *testing.T) *authFixture {
 		}
 		verifier := r.PostForm.Get("code_verifier")
 		sum := sha256.Sum256([]byte(verifier))
-		if base64.RawURLEncoding.EncodeToString(sum[:]) != f.challenge || r.PostForm.Get("grant_type") != "authorization_code" || r.PostForm.Get("redirect_uri") != "https://portal.example/auth/callback" {
+		if base64.RawURLEncoding.EncodeToString(sum[:]) != f.challenge || r.PostForm.Get("code") != "synthetic-code" || r.PostForm.Get("grant_type") != "authorization_code" || r.PostForm.Get("redirect_uri") != "https://portal.example/auth/callback" {
 			t.Fatal("code/PKCE/callback binding missing")
 		}
 		id, syntheticCredential, ok := r.BasicAuth()
@@ -285,6 +288,71 @@ func TestStateExpiryAndFailedExchangeDoNotReplay(t *testing.T) {
 	}
 }
 
+func TestCallbackRejectsMalformedParametersAndLoginCookies(t *testing.T) {
+	for _, mode := range []string{"missing-code", "missing-state", "duplicate-code", "duplicate-state", "extra-iss", "extra-session-state", "oversized-code", "malformed-query", "missing-cookie", "duplicate-cookie", "empty-duplicate-cookie"} {
+		t.Run(mode, func(t *testing.T) {
+			f := setupAuth(t)
+			pending := f.begin(t)
+			r := f.callback
+			q := r.URL.Query()
+			switch mode {
+			case "missing-code":
+				q.Del("code")
+			case "missing-state":
+				q.Del("state")
+			case "duplicate-code":
+				q.Add("code", "synthetic-code")
+			case "duplicate-state":
+				q.Add("state", q.Get("state"))
+			case "extra-iss":
+				q.Set("iss", f.e.config.Verifier.issuer)
+			case "extra-session-state":
+				q.Set("session_state", "synthetic")
+			case "oversized-code":
+				q.Set("code", strings.Repeat("x", 4097))
+			case "missing-cookie":
+				r.Header.Del("Cookie")
+			case "duplicate-cookie":
+				r.AddCookie(pending)
+			case "empty-duplicate-cookie":
+				r.Header.Set("Cookie", loginCookie+"=; "+loginCookie+"="+pending.Value)
+			}
+			r.URL.RawQuery = q.Encode()
+			if mode == "malformed-query" {
+				r.URL.RawQuery = "code=%ZZ&state=" + q.Get("state")
+			}
+			w := httptest.NewRecorder()
+			f.e.ServeHTTP(w, r)
+			if w.Code != 403 || w.Body.String() != "Portal authentication unavailable or denied.\n" || w.Header().Get("Set-Cookie") != "" || w.Header().Get("Location") != "" || f.exchanges != 0 || f.store.puts != 0 {
+				t.Fatal("invalid callback reached exchange or leaked success/data")
+			}
+		})
+	}
+}
+
+func TestBackToBackTabsKeepStateBoundToLatestBrowserCookie(t *testing.T) {
+	f := setupAuth(t)
+	f.begin(t)
+	firstQuery := f.callback.URL.RawQuery
+	latestCookie := f.begin(t)
+	latestCallback := f.callback
+	// The browser now carries the second login cookie. A callback from the
+	// earlier tab must not consume the second tab's transaction.
+	wrongTab := httptest.NewRequest("GET", "https://portal.example/auth/callback?"+firstQuery, nil)
+	wrongTab.AddCookie(latestCookie)
+	w := httptest.NewRecorder()
+	f.e.ServeHTTP(w, wrongTab)
+	if w.Code != 403 || f.exchanges != 0 {
+		t.Fatal("cross-tab state mismatch accepted")
+	}
+	w = httptest.NewRecorder()
+	f.e.ServeHTTP(w, latestCallback)
+	if w.Code != 303 || f.exchanges != 1 || f.store.puts != 1 {
+		t.Fatal("wrong-state attempt consumed the current transaction")
+	}
+	_ = findCookie(t, w, sessionCookie)
+}
+
 type alteredCodes struct {
 	CodeClient
 	mode string
@@ -362,7 +430,9 @@ func TestEngineRejectsMismatchedClientAndAuthorizationParameters(t *testing.T) {
 }
 
 func TestLocalRevocationExpiryAndPolling(t *testing.T) {
-	for _, mode := range []string{"revoke", "idle-expiry", "absolute-expiry", "unavailable", "duplicate-cookie", "forged-cookie", "wrong-host", "plain-http"} {
+	// With no activity path, IdleTTL is the effective fixed lifetime. The
+	// after-both-deadlines case cannot isolate the later absolute-time check.
+	for _, mode := range []string{"revoke", "idle-expiry", "after-both-deadlines", "unavailable", "duplicate-cookie", "forged-cookie", "wrong-host", "plain-http"} {
 		t.Run(mode, func(t *testing.T) {
 			f := setupAuth(t)
 			f.login(t)
@@ -382,7 +452,7 @@ func TestLocalRevocationExpiryAndPolling(t *testing.T) {
 				}
 			case "idle-expiry":
 				f.now = f.now.Add(time.Minute)
-			case "absolute-expiry":
+			case "after-both-deadlines":
 				f.now = f.now.Add(time.Hour)
 			case "unavailable":
 				f.store.fail = true
@@ -408,7 +478,7 @@ func TestLocalRevocationExpiryAndPolling(t *testing.T) {
 }
 
 func TestLogoutRequiresOriginAndSessionBoundCSRF(t *testing.T) {
-	for _, mode := range []string{"valid", "missing-origin", "wrong-origin", "duplicate-origin", "missing-csrf", "wrong-csrf", "store-failure"} {
+	for _, mode := range []string{"valid", "missing-origin", "wrong-origin", "duplicate-origin", "missing-csrf", "wrong-csrf", "lookup-failure", "revoke-failure"} {
 		t.Run(mode, func(t *testing.T) {
 			f := setupAuth(t)
 			f.login(t)
@@ -439,8 +509,11 @@ func TestLogoutRequiresOriginAndSessionBoundCSRF(t *testing.T) {
 			if mode == "duplicate-origin" {
 				r.Header.Add("Origin", "https://evil.example")
 			}
-			if mode == "store-failure" {
+			if mode == "lookup-failure" {
 				f.store.fail = true
+			}
+			if mode == "revoke-failure" {
+				f.store.failRevoke = true
 			}
 			w = httptest.NewRecorder()
 			f.e.ServeHTTP(w, r)
@@ -454,6 +527,14 @@ func TestLogoutRequiresOriginAndSessionBoundCSRF(t *testing.T) {
 			} else {
 				if w.Code == 200 || w.Header().Get("Set-Cookie") != "" || strings.Contains(w.Body.String(), "CANARY") {
 					t.Fatal("invalid logout succeeded or leaked")
+				}
+				if mode == "revoke-failure" {
+					if f.store.revocations != 1 {
+						t.Fatal("revoke failure branch was not reached")
+					}
+					if _, err := f.e.Authenticate(f.request("GET", "/auth/logout", "")); err != nil {
+						t.Fatal("failed revocation incorrectly claimed success")
+					}
 				}
 			}
 			if f.exchanges != 1 {

@@ -73,6 +73,22 @@ calling the IdP; IdP SSO logout semantics remain separate and unverified. Reads
 and polling do not update activity or extend idle expiry. Login or group claims
 never become operator human/workbench identity or grant metadata authority.
 
+## M3 lifetime semantics
+
+There is no activity/touch operation in M3. The effective server-side session
+lifetime is the configured `IdleTTL` measured from creation: it is a fixed,
+non-sliding cap. Since construction requires `IdleTTL <= AbsoluteTTL`, the
+later absolute-time check cannot independently decide an authentication result.
+`AbsoluteTTL` currently determines the browser cookie's Max-Age/Expires; a
+browser may retain that opaque handle after server authentication has expired.
+Cookie presence never proves authentication or authority.
+
+A reviewed activity path and corresponding tests are prerequisites for genuine
+sliding idle behavior and an independently effective absolute lifetime. No such
+endpoint or runtime policy is added here. The test named
+`after-both-deadlines` proves rejection after both deadlines, and deliberately
+does not claim to isolate the redundant absolute check.
+
 ## Finite negative test map
 
 Use fake clock, fake exchange, atomic fake stores, upstream static signing
@@ -102,3 +118,14 @@ and exact preview-count coverage corrections. The current reader still denies
 the entire collection if any item is unauthorized; choosing a usable authorized
 selection adapter remains a separate reviewed integration, never an inferred
 role or broadened permission.
+
+## Remaining Gate A evidence
+
+The source milestone does not establish production-store bounds, rate limits,
+atomicity across replicas, clock behavior or recovery. Actual IdP callback
+parameters and refresh-token behavior must be verified: extra `iss` or
+`session_state` currently fails closed, and unexpected refresh tokens are
+rejected. Do not widen callback acceptance from assumptions. TLS termination
+and backend bypass, DNS/egress restrictions, re-login/old-handle revocation and
+a useful post-login landing route also remain deployment/integration evidence.
+No live provider, client secret, binding or route follows from this source.
