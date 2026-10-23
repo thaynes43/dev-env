@@ -278,3 +278,16 @@ stays unavailable until its accepted interface is separately integrated.
 No listener, OIDC middleware, operator-human mapping, live connector or
 runtime authorization is installed by this increment. Gate A and Gate B
 remain separate and unmet.
+
+### M3 session source, 2026-10-23
+
+Canonical #178 journals985/993 continue the same implementation owner after
+PR526 merged. The [session-boundary contract](../../../../docs/portal-session-boundary.md)
+selects maintained coreos/go-oidc/v3 with the existing oauth2 module, typed
+single-use transaction/shared-session storage interfaces, opaque cookies,
+current local revocation, Origin/CSRF logout and fail-closed handler composition.
+Offline signing keys, clocks, stores and transports provide finite source tests.
+There is no production storage fallback, running listener, provider call,
+runtime human mapping, metadata adapter or ingress activation. The approved
+confidential-client setup remains separate infrastructure work. These source
+tests leave Gate A and the public ASVS gate unmet.

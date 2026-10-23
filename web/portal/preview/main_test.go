@@ -21,10 +21,13 @@ func TestExistingFoundationFixtureRendersOffline(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(body)
-	for _, title := range []string{"Needs you", "Needs worker", "Review returned", "Handoff missing", "Source preview", "Stale evidence", "Freshness unknown", "2026-10-23T14:18:10Z"} {
+	for _, title := range []string{"Needs you · 1", "Needs worker · 1", "Review returned · 1", "Handoff missing · 1", "Source preview", "Stale evidence", "Freshness unknown", "2026-10-23T14:18:10Z"} {
 		if !strings.Contains(s, title) {
 			t.Errorf("missing fixture presentation %s", title)
 		}
+	}
+	if strings.Contains(s, "Listing counts") {
+		t.Fatal("unexpected listing warning in verified synthetic snapshot")
 	}
 	if strings.Count(s, "<article ") != 4 || strings.Count(s, "href=") != 4 {
 		t.Fatal("fixture rows or fixed source links missing")
