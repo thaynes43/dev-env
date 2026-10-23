@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -168,6 +169,8 @@ func TestFleetResourcesBindingRefusals(t *testing.T) {
 		{name: "label without owner", pods: []corev1.Pod{labeledPod("run", sessionNS, "pod-label", "321m")}, reason: apiv1.FleetResourcesForeign},
 		{name: "other namespace", pods: []corev1.Pod{fleetPod("run", "other", "pod-ns", "654m", fleetOwner(session))}, reason: apiv1.FleetResourcesForeign},
 		{name: "ambiguous", pods: []corev1.Pod{fleetPod("run", sessionNS, "pod-a", "111m", fleetOwner(session)), fleetPod("run", sessionNS, "pod-b", "222m", fleetOwner(session))}, reason: apiv1.FleetResourcesAmbiguous},
+		{name: "nil controller", pods: []corev1.Pod{fleetPod("run", sessionNS, "pod-nil", "333m", ownerWithoutController(session, nil))}, reason: apiv1.FleetResourcesForeign},
+		{name: "controller false", pods: []corev1.Pod{fleetPod("run", sessionNS, "pod-false", "444m", ownerWithoutController(session, boolPtr(false)))}, reason: apiv1.FleetResourcesForeign},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -229,8 +232,48 @@ func TestFleetResourcesReadFailureAndCancel(t *testing.T) {
 	}
 	f.srv.Live = cancelReader{}
 	w = f.doHeader(http.MethodGet, apiv1.FleetPath, tokHuman, nil, http.Header{apiv1.FleetHeader: []string{apiv1.FleetResourcesV1}})
-	if w.Code == http.StatusOK || strings.Contains(w.Body.String(), `"state":"Set"`) {
-		t.Fatalf("canceled read returned resources: %d %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"state":"Set"`) || strings.Contains(w.Body.String(), `"state":"Observed"`) {
+		t.Fatalf("reader cancel while the caller is active failed the fleet: %d %s", w.Code, w.Body.String())
+	}
+	fl = decode[apiv1.Fleet](t, w)
+	if fl.Phases["Running"] != 1 || fl.Sessions[0].Node != "status-node" || fl.Sessions[0].Resources == nil || fl.Sessions[0].Resources.Reason != apiv1.FleetResourcesUnreadable {
+		t.Fatalf("reader cancel observation %+v", fl)
+	}
+}
+
+func TestFleetResourcesCallerCancelAborts(t *testing.T) {
+	f := newFixture(t)
+	addFleetSession(t, f, "run", v1alpha1.PhaseRunning, "status-node", "0/9 nodes are available: 3 Insufficient cpu.")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodGet, apiv1.FleetPath, nil).WithContext(ctx)
+	req.Header.Set("Authorization", "Bearer "+tokHuman)
+	req.Header.Set(apiv1.FleetHeader, apiv1.FleetResourcesV1)
+	w := httptest.NewRecorder()
+	f.h.ServeHTTP(w, req)
+	if w.Code == http.StatusOK || strings.Contains(w.Body.String(), `"state":"Observed"`) || strings.Contains(w.Body.String(), `"state":"Set"`) {
+		t.Fatalf("caller cancel returned a fleet: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestFleetResourcesLocalDeadlineIsUnknown(t *testing.T) {
+	f := newFixture(t)
+	addFleetSession(t, f, "run", v1alpha1.PhaseRunning, "status-node", "")
+	prev := fleetPodListTimeout
+	fleetPodListTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { fleetPodListTimeout = prev })
+	f.srv.Live = deadlineReader{Reader: f.c}
+	start := time.Now()
+	w := f.doHeader(http.MethodGet, apiv1.FleetPath, tokHuman, nil, http.Header{apiv1.FleetHeader: []string{apiv1.FleetResourcesV1}})
+	if time.Since(start) > time.Second {
+		t.Fatalf("local deadline waited %s", time.Since(start))
+	}
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"state":"Observed"`) {
+		t.Fatalf("local deadline failed the fleet: %d %s", w.Code, w.Body.String())
+	}
+	fl := decode[apiv1.Fleet](t, w)
+	if fl.Phases["Running"] != 1 || fl.Revision == "" || fl.Sessions[0].Resources == nil || fl.Sessions[0].Resources.Reason != apiv1.FleetResourcesUnreadable {
+		t.Fatalf("deadline observation %+v", fl)
 	}
 }
 
@@ -267,8 +310,14 @@ func addFleetSession(t *testing.T, f *fixture, name string, phase v1alpha1.Sessi
 }
 
 func fleetOwner(s *v1alpha1.AgentSession) metav1.OwnerReference {
-	return metav1.OwnerReference{APIVersion: v1alpha1.GroupVersion.String(), Kind: "AgentSession", Name: s.Name, UID: s.UID}
+	return ownerWithoutController(s, boolPtr(true))
 }
+
+func ownerWithoutController(s *v1alpha1.AgentSession, controller *bool) metav1.OwnerReference {
+	return metav1.OwnerReference{APIVersion: v1alpha1.GroupVersion.String(), Kind: "AgentSession", Name: s.Name, UID: s.UID, Controller: controller}
+}
+
+func boolPtr(v bool) *bool { return &v }
 
 func fleetPod(name, namespace, uid, cpu string, owner metav1.OwnerReference) corev1.Pod {
 	return corev1.Pod{
@@ -329,4 +378,22 @@ func (cancelReader) Get(context.Context, client.ObjectKey, client.Object, ...cli
 
 func (cancelReader) List(context.Context, client.ObjectList, ...client.ListOption) error {
 	return context.Canceled
+}
+
+type deadlineReader struct {
+	client.Reader
+}
+
+func (d deadlineReader) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*corev1.PodList); ok {
+		timer := time.NewTimer(time.Second)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return errors.New("pod list did not observe the deadline")
+		}
+	}
+	return d.Reader.List(ctx, list, opts...)
 }

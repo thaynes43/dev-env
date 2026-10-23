@@ -13,8 +13,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
-
-	"k8s.io/apimachinery/pkg/api/resource"
+	"unicode"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
@@ -511,34 +510,107 @@ func (a *app) fleet(ctx context.Context, args []string) error {
 
 func fillAbsentFleetResources(f *apiv1.Fleet) {
 	for i := range f.Sessions {
-		if f.Sessions[i].Resources == nil {
-			f.Sessions[i].Resources = &apiv1.FleetResources{State: apiv1.FleetResourcesUnknown, Reason: apiv1.FleetResourcesUnavailable}
-		}
+		f.Sessions[i].Resources = normalizeFleetResources(f.Sessions[i].Resources)
 	}
 }
 
+func normalizeFleetResources(obs *apiv1.FleetResources) *apiv1.FleetResources {
+	if obs == nil {
+		return unknownFleetObservation(apiv1.FleetResourcesUnavailable)
+	}
+	switch obs.State {
+	case apiv1.FleetResourcesUnknown:
+		return unknownFleetObservation(knownFleetReason(obs.Reason))
+	case apiv1.FleetResourcesObserved:
+		if !validObservedFleetResources(obs) {
+			return unknownFleetObservation(apiv1.FleetResourcesUnavailable)
+		}
+		return obs
+	default:
+		return unknownFleetObservation(apiv1.FleetResourcesUnavailable)
+	}
+}
+
+func unknownFleetObservation(reason string) *apiv1.FleetResources {
+	return &apiv1.FleetResources{State: apiv1.FleetResourcesUnknown, Reason: knownFleetReason(reason)}
+}
+
+func knownFleetReason(reason string) string {
+	switch reason {
+	case apiv1.FleetResourcesMissing, apiv1.FleetResourcesForeign, apiv1.FleetResourcesAmbiguous, apiv1.FleetResourcesReplaced, apiv1.FleetResourcesUnreadable, apiv1.FleetResourcesOversized, apiv1.FleetResourcesUnavailable:
+		return reason
+	default:
+		return apiv1.FleetResourcesUnavailable
+	}
+}
+
+func validObservedFleetResources(obs *apiv1.FleetResources) bool {
+	if !safeFleetToken(obs.PodUID, 128) {
+		return false
+	}
+	if obs.Node == nil {
+		return false
+	}
+	switch obs.Node.State {
+	case apiv1.FleetNodeSet:
+		if !safeFleetToken(obs.Node.Name, 253) {
+			return false
+		}
+	case apiv1.FleetNodeUnscheduled:
+		if obs.Node.Name != "" {
+			return false
+		}
+	default:
+		return false
+	}
+	for i := range obs.Containers {
+		if !validFleetContainer(obs.Containers[i], apiv1.FleetContainerOrdinary) {
+			return false
+		}
+	}
+	for i := range obs.InitContainers {
+		if !validFleetContainer(obs.InitContainers[i], apiv1.FleetContainerInit) {
+			return false
+		}
+	}
+	return true
+}
+
+func validFleetContainer(container apiv1.FleetContainerResources, kind string) bool {
+	return container.Kind == kind && safeFleetToken(container.Name, 253) && validFleetQuantity(container.CPURequest) && validFleetQuantity(container.CPULimit) && validFleetQuantity(container.MemoryRequest) && validFleetQuantity(container.MemoryLimit)
+}
+
+func validFleetQuantity(quantity apiv1.FleetQuantity) bool {
+	switch quantity.State {
+	case apiv1.FleetQuantityAbsent:
+		return quantity.Value == ""
+	case apiv1.FleetQuantitySet:
+		return canonicalFleetQuantity(quantity.Value)
+	default:
+		return false
+	}
+}
+
+func safeFleetToken(value string, max int) bool {
+	if value == "" || len(value) > max {
+		return false
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f || unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
 func formatFleetResources(obs *apiv1.FleetResources) (podUID, specNode, text string) {
-	if obs == nil || obs.State != apiv1.FleetResourcesObserved {
-		reason := apiv1.FleetResourcesUnavailable
-		if obs != nil && obs.Reason != "" {
-			reason = obs.Reason
-		}
-		return "Unknown", "Unknown", "Unknown (" + reason + ")"
+	obs = normalizeFleetResources(obs)
+	if obs.State != apiv1.FleetResourcesObserved {
+		return "Unknown", "Unknown", "Unknown (" + obs.Reason + ")"
 	}
-	podUID = obs.PodUID
-	if podUID == "" {
-		podUID = "Unknown"
-	}
-	specNode = "Unknown"
-	if obs.Node != nil {
-		switch obs.Node.State {
-		case apiv1.FleetNodeSet:
-			if obs.Node.Name != "" {
-				specNode = obs.Node.Name
-			}
-		case apiv1.FleetNodeUnscheduled:
-			specNode = "Unscheduled"
-		}
+	specNode = "Unscheduled"
+	if obs.Node.State == apiv1.FleetNodeSet {
+		specNode = obs.Node.Name
 	}
 	parts := make([]string, 0, len(obs.Containers)+len(obs.InitContainers))
 	for _, container := range obs.Containers {
@@ -550,7 +622,7 @@ func formatFleetResources(obs *apiv1.FleetResources) (podUID, specNode, text str
 	if len(parts) == 0 {
 		parts = append(parts, "no containers")
 	}
-	return podUID, specNode, strings.Join(parts, "; ")
+	return obs.PodUID, specNode, strings.Join(parts, "; ")
 }
 
 func formatFleetContainer(container apiv1.FleetContainerResources) string {
@@ -564,8 +636,7 @@ func formatFleetContainer(container apiv1.FleetContainerResources) string {
 func formatFleetQuantity(quantity apiv1.FleetQuantity) string {
 	switch quantity.State {
 	case apiv1.FleetQuantitySet:
-		parsed, err := resource.ParseQuantity(quantity.Value)
-		if err != nil || parsed.String() != quantity.Value {
+		if !canonicalFleetQuantity(quantity.Value) {
 			return "Unknown"
 		}
 		return quantity.Value
@@ -574,6 +645,60 @@ func formatFleetQuantity(quantity apiv1.FleetQuantity) string {
 	default:
 		return "Unknown"
 	}
+}
+
+// canonicalFleetQuantity accepts the server's canonical quantity spelling.
+// The mantissa is an integer without a leading zero, the sign is present only
+// when negative, and the suffix is one decimal unit, one binary unit, or a
+// decimal exponent. It does not parse Kubernetes quantities.
+func canonicalFleetQuantity(value string) bool {
+	if value == "0" {
+		return true
+	}
+	if value == "" || len(value) > 32 || strings.ContainsFunc(value, unicode.IsControl) {
+		return false
+	}
+	rest := value
+	if rest[0] == '-' {
+		rest = rest[1:]
+		if rest == "" || rest[0] == '0' {
+			return false
+		}
+	}
+	if rest[0] < '1' || rest[0] > '9' {
+		return false
+	}
+	i := 1
+	for i < len(rest) && rest[i] >= '0' && rest[i] <= '9' {
+		i++
+	}
+	suffix := rest[i:]
+	switch suffix {
+	case "", "n", "u", "m", "k", "M", "G", "T", "P", "E", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei":
+		return true
+	}
+	if len(suffix) < 2 || suffix[0] != 'e' {
+		return false
+	}
+	exp := suffix[1:]
+	if exp[0] == '-' {
+		exp = exp[1:]
+		if exp == "" {
+			return false
+		}
+	}
+	if exp == "0" {
+		return true
+	}
+	if exp[0] < '1' || exp[0] > '9' {
+		return false
+	}
+	for _, c := range exp[1:] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // phaseCounts is "Running 3, Pending 1", in the lifecycle's order.

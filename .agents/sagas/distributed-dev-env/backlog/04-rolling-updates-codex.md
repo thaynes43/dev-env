@@ -116,7 +116,7 @@ OpenProject #106 source slice. `agent-run fleet --resources` sends
 spec node, and each ordinary and init container's configured CPU and memory
 requests and limits. The figures are the Pod spec. They are not measured use,
 free node capacity, or a placement decision. A missing or unverified binding
-is Unknown. A configured zero stays zero, and an unset quantity stays absent.
+is Unknown. The owner reference has to be that session's controller. A Pod list that reaches its own read deadline is Unknown and the fleet phases stay; a canceled caller still fails the request. A configured zero stays zero, and an unset quantity stays absent.
 Fleet output without the flag is unchanged, and that request does not list
 Pods. This note is source only. It does not schedule Pods or accept live
 placement.

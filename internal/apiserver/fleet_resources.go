@@ -3,7 +3,6 @@ package apiserver
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -13,10 +12,11 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
-const (
-	fleetPodListTimeout         = 10 * time.Second
-	fleetResourcesMaxContainers = 32
-)
+const fleetResourcesMaxContainers = 32
+
+// fleetPodListTimeout bounds the Pod list. Tests shorten it. Only the caller's
+// own cancellation fails the fleet; this deadline does not.
+var fleetPodListTimeout = 10 * time.Second
 
 // fleetResourcesMaxBytes bounds one opted-in resources payload. Past it, every
 // observation in that response is unavailable. A prefix of the sessions is not
@@ -24,19 +24,21 @@ const (
 var fleetResourcesMaxBytes = 1 << 20
 
 // fleetPodResources lists Pods in the session namespace once and joins them to
-// the sessions fleet will show. A canceled read returns an error. Any other
-// read error is an Unknown observation, not an empty resource spec.
-func (s *Server) fleetPodResources(ctx context.Context, sessions []v1alpha1.AgentSession) (map[string]*apiv1.FleetResources, error) {
+// the sessions fleet will show. Cancellation of the caller fails the fleet.
+// The local read deadline, or any other list error while the caller is still
+// active, is an Unknown observation, not an empty resource spec.
+func (s *Server) fleetPodResources(parent context.Context, sessions []v1alpha1.AgentSession) (map[string]*apiv1.FleetResources, error) {
 	if s.Live == nil {
 		return unknownFleetResources(sessions, apiv1.FleetResourcesUnreadable), nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, fleetPodListTimeout)
+	readCtx, cancel := context.WithTimeout(parent, fleetPodListTimeout)
 	defer cancel()
 	var pods corev1.PodList
-	if err := s.Live.List(ctx, &pods, client.InNamespace(s.Policy.SessionNamespace)); err != nil {
-		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return nil, err
-		}
+	err := s.Live.List(readCtx, &pods, client.InNamespace(s.Policy.SessionNamespace))
+	if parent.Err() != nil {
+		return nil, parent.Err()
+	}
+	if err != nil {
 		return unknownFleetResources(sessions, apiv1.FleetResourcesUnreadable), nil
 	}
 	return bindFleetResources(s.now(), s.Policy.SessionNamespace, sessions, pods.Items), nil
@@ -107,7 +109,7 @@ func ownedBySession(pod *corev1.Pod, sess *v1alpha1.AgentSession) bool {
 	apiVersion := v1alpha1.GroupVersion.String()
 	for i := range pod.OwnerReferences {
 		ref := &pod.OwnerReferences[i]
-		if ref.APIVersion == apiVersion && ref.Kind == "AgentSession" && ref.UID == sess.UID && ref.Name == sess.Name {
+		if ref.APIVersion == apiVersion && ref.Kind == "AgentSession" && ref.UID == sess.UID && ref.Name == sess.Name && ref.Controller != nil && *ref.Controller {
 			return true
 		}
 	}

@@ -93,9 +93,13 @@ func TestFleetResourcesUnparseableQuantity(t *testing.T) {
 		}}})
 	}
 	h.mustRun(ExitOK, "fleet", "--resources")
-	contains(t, "unparseable", h.stdout.String(), "agent cpu Unknown/absent memory absent/absent")
-	if strings.Contains(h.stdout.String(), "not-a-quantity") {
+	contains(t, "unparseable", h.stdout.String(), "Unknown (unavailable)")
+	if strings.Contains(h.stdout.String(), "not-a-quantity") || strings.Contains(h.stdout.String(), "cpu 0") {
 		t.Fatalf("raw quantity printed: %s", h.stdout.String())
+	}
+	h.mustRun(ExitOK, "fleet", "--resources", "-o", "json")
+	if strings.Contains(h.stdout.String(), "not-a-quantity") || strings.Contains(h.stdout.String(), `"value"`) {
+		t.Fatalf("json kept the bad quantity: %s", h.stdout.String())
 	}
 }
 
@@ -127,5 +131,94 @@ func TestFleetWithoutResourcesKeepsItsHeaderOff(t *testing.T) {
 	h.mustRun(ExitOK, "fleet")
 	if strings.Contains(h.stdout.String(), "RESOURCES") || strings.Contains(h.stdout.String(), "resources") {
 		t.Fatalf("plain fleet printed resources: %s", h.stdout.String())
+	}
+}
+
+func TestCanonicalFleetQuantity(t *testing.T) {
+	for _, value := range []string{"0", "100m", "1", "1Gi", "64Mi", "256Mi", "1500m", "1536Mi", "1e3", "1e-3", "2Ki", "1n", "1u", "1k", "1M", "-100m"} {
+		if !canonicalFleetQuantity(value) {
+			t.Errorf("%s should be canonical", value)
+		}
+	}
+	for _, value := range []string{"", "not-a-quantity", "1.5", "1.0", "01", "0m", "-0", "1e+3", "1E3", "1e03", "100 m", "1Gi\n", strings.Repeat("1", 33)} {
+		if canonicalFleetQuantity(value) {
+			t.Errorf("%s should be unknown", value)
+		}
+	}
+}
+
+func TestFleetResourcesMalformedMetadata(t *testing.T) {
+	h := newHarness(t)
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		absent := apiv1.FleetQuantity{State: apiv1.FleetQuantityAbsent}
+		writeTestJSON(w, http.StatusOK, apiv1.Fleet{
+			Revision: "rev",
+			Phases:   map[string]int{"Running": 5},
+			Sessions: []apiv1.FleetSession{
+				{Name: "badqty", Phase: "Running", CreatedAt: testNow, Resources: &apiv1.FleetResources{
+					State: apiv1.FleetResourcesObserved, PodUID: "pod-1",
+					Node: &apiv1.FleetResourceNode{State: apiv1.FleetNodeSet, Name: "n"},
+					Containers: []apiv1.FleetContainerResources{{Kind: apiv1.FleetContainerOrdinary, Name: "agent",
+						CPURequest: apiv1.FleetQuantity{State: apiv1.FleetQuantitySet, Value: "not-a-quantity"}, CPULimit: absent, MemoryRequest: absent, MemoryLimit: absent}},
+				}},
+				{Name: "nouid", Phase: "Running", CreatedAt: testNow, Resources: &apiv1.FleetResources{
+					State: apiv1.FleetResourcesObserved, PodUID: "",
+					Node: &apiv1.FleetResourceNode{State: apiv1.FleetNodeSet, Name: "n"},
+					Containers: []apiv1.FleetContainerResources{{Kind: apiv1.FleetContainerOrdinary, Name: "agent",
+						CPURequest: apiv1.FleetQuantity{State: apiv1.FleetQuantitySet, Value: "0"}, CPULimit: absent, MemoryRequest: absent, MemoryLimit: absent}},
+				}},
+				{Name: "badreason", Phase: "Running", CreatedAt: testNow, Resources: &apiv1.FleetResources{State: apiv1.FleetResourcesUnknown, Reason: "made-up\nreason"}},
+				{Name: "badkind", Phase: "Running", CreatedAt: testNow, Resources: &apiv1.FleetResources{
+					State: apiv1.FleetResourcesObserved, PodUID: "pod-2",
+					Node: &apiv1.FleetResourceNode{State: apiv1.FleetNodeSet, Name: "node\tname"},
+					Containers: []apiv1.FleetContainerResources{{Kind: "sidecar", Name: "agent",
+						CPURequest: absent, CPULimit: absent, MemoryRequest: absent, MemoryLimit: absent}},
+				}},
+				{Name: "ok", Phase: "Running", Node: "status-node", CreatedAt: testNow, Resources: &apiv1.FleetResources{
+					State: apiv1.FleetResourcesObserved, PodUID: "pod-ok",
+					Node: &apiv1.FleetResourceNode{State: apiv1.FleetNodeSet, Name: "spec-node"},
+					Containers: []apiv1.FleetContainerResources{{Kind: apiv1.FleetContainerOrdinary, Name: "agent",
+						CPURequest: apiv1.FleetQuantity{State: apiv1.FleetQuantitySet, Value: "100m"}, CPULimit: apiv1.FleetQuantity{State: apiv1.FleetQuantitySet, Value: "0"},
+						MemoryRequest: apiv1.FleetQuantity{State: apiv1.FleetQuantitySet, Value: "1Gi"}, MemoryLimit: apiv1.FleetQuantity{State: apiv1.FleetQuantitySet, Value: "1e3"}}},
+					InitContainers: []apiv1.FleetContainerResources{{Kind: apiv1.FleetContainerInit, Name: "bootstrap",
+						CPURequest: absent, CPULimit: absent, MemoryRequest: apiv1.FleetQuantity{State: apiv1.FleetQuantitySet, Value: "64Mi"}, MemoryLimit: absent}},
+				}},
+			},
+		})
+	}
+	h.mustRun(ExitOK, "fleet", "--resources")
+	out := h.stdout.String()
+	for _, leaked := range []string{"not-a-quantity", "made-up", "sidecar", "node\tname", "\nreason"} {
+		if strings.Contains(out, leaked) {
+			t.Fatalf("text leaked %q\n%s", leaked, out)
+		}
+	}
+	contains(t, "malformed text", out, "Unknown (unavailable)", "agent cpu 100m/0 memory 1Gi/1e3", "init/bootstrap cpu absent/absent memory 64Mi/absent")
+	h.mustRun(ExitOK, "fleet", "--resources", "-o", "json")
+	raw := h.stdout.String()
+	for _, leaked := range []string{"not-a-quantity", "made-up", "sidecar", "node\tname"} {
+		if strings.Contains(raw, leaked) {
+			t.Fatalf("json leaked %q\n%s", leaked, raw)
+		}
+	}
+	var decoded apiv1.Fleet
+	if err := json.Unmarshal(h.stdout.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]apiv1.FleetResources{}
+	for _, session := range decoded.Sessions {
+		if session.Resources == nil {
+			t.Fatalf("%s resources missing", session.Name)
+		}
+		byName[session.Name] = *session.Resources
+	}
+	for _, name := range []string{"badqty", "nouid", "badreason", "badkind"} {
+		if byName[name].State != apiv1.FleetResourcesUnknown || byName[name].Reason != apiv1.FleetResourcesUnavailable || byName[name].PodUID != "" || len(byName[name].Containers) != 0 {
+			t.Fatalf("%s stayed partial: %+v", name, byName[name])
+		}
+	}
+	ok := byName["ok"]
+	if ok.State != apiv1.FleetResourcesObserved || ok.PodUID != "pod-ok" || ok.Containers[0].CPULimit.Value != "0" || ok.Containers[0].MemoryLimit.Value != "1e3" || ok.InitContainers[0].MemoryRequest.Value != "64Mi" {
+		t.Fatalf("valid observation changed: %+v", ok)
 	}
 }
