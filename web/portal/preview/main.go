@@ -94,7 +94,9 @@ func render(source io.Reader) ([]byte, error) {
 	if err = d.Decode(new(any)); !errors.Is(err, io.EOF) || f.Version != 1 || f.AsOf.IsZero() {
 		return nil, portal.ErrUnavailable
 	}
-	s := portal.Snapshot{Resource: scope, State: f.ReadState}
+	// The fixture's readState/asOf explicitly witness this synthetic listing;
+	// individual rows retain their own missing or older verification evidence.
+	s := portal.Snapshot{Resource: scope, State: f.ReadState, UpdatedAt: f.AsOf, VerifiedAt: f.AsOf}
 	for _, item := range f.Items {
 		r := scope
 		r.Task = item.ID

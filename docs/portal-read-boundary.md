@@ -34,9 +34,10 @@ the unavailable workflow adapter return 503, never fixture success.
 ## Summary and truth contract
 
 The reader returns a bounded typed snapshot, with exact requested scope and
-task identities. It cannot return prompts, logs, artifacts, pairing data or
-credentials. Production adapters must select fields before this boundary;
-escaping is not secret redaction. A separate pure projection validates the
+task identities. It has no field for prompts, logs, artifacts, pairing data or
+credentials. Production adapters must select and redact fields before this
+boundary; text fields must never be filled with sensitive payloads. Escaping
+is not secret redaction. A separate pure projection refuses archived claims and validates the
 existing task-claim/session binding and selects owner and worker metadata;
 session exit is executor evidence, never the task outcome or release state.
 
@@ -52,6 +53,9 @@ mean Unknown. Evidence beyond the explicitly configured window is Stale. Only
 a fresh verified empty snapshot says Verified empty; denied/unavailable/unknown
 and stale empty snapshots never claim that nothing needs attention. The window
 is a fixture parameter, not an operational freshness guarantee.
+Nonempty listings also carry their own verification evidence. Missing, stale,
+future or verification-before-update listing evidence produces a visible warning
+and Unknown group counts, even if an individual row is freshly verified.
 
 Plain text is bounded and escaped with `html/template`. Display controls are
 removed; blank/invisible-only text becomes Unknown. No raw HTML, Markdown,
@@ -61,7 +65,7 @@ authentication, session security, proxy trust, CSRF, SSRF or ingress isolation.
 
 ## Offline evidence and custody
 
-Run focused tests with the existing exact Go1.27.2 toolchain, `GOTOOLCHAIN=local`,
+Run focused tests with Go1.27.2 as pinned by `go.mod`, `GOTOOLCHAIN=local`,
 `GOMAXPROCS=2`, `nice -n 19`, `go test -p 1 ./web/portal/...`. Tests use injected
 dependencies and recorders, with no provider, tracker, cluster or listener.
 The preview command under `web/portal/preview` renders synthetic data through
@@ -72,7 +76,7 @@ From the repository root:
 
 ```sh
 GOTOOLCHAIN=local GOMAXPROCS=2 nice -n 19 \
-  /home/dev/work/portal-toolchains/go1.27.2/bin/go run -p 1 \
+  go run -p 1 \
   ./web/portal/preview --output /tmp/portal-attention.html
 ```
 
@@ -80,10 +84,17 @@ Open that local file to inspect the mobile page. The command reuses
 `scripts/trials/portal_attention/fixtures.json` and its fixed observation time;
 it does not connect to OpenProject, Authentik, a provider or the operator. The
 preview's issuer and subject are invented `.example` fixture values. The
+fixture's `readState` and fixed `asOf` supply its synthetic listing evidence;
+individual row verification remains separate. The
 offline authenticator/authorizer live only in this command and are never
 defaults for the handler. An independent second render in the preview test
 compares the full output, supporting repeatability rather than merely
 asserting a checksum.
+
+Before live wiring, Gate A must include dependency-panic containment and server
+log redaction. Although buffering prevents a dependency panic from returning
+metadata, a default `net/http` server may log the panic value. This source
+package installs no server and establishes no production log protection.
 
 This session owns source, tests, findings and review/CI/merge pickup. Source
 merge is distinct from release, installation and usable acceptance. Approved

@@ -59,8 +59,8 @@ type rowView struct {
 	Fields                     []field
 }
 type groupView struct {
-	ID, Title string
-	Rows      []rowView
+	ID, Title, Count string
+	Rows             []rowView
 }
 type pageView struct {
 	Policy, ObservedAt, Notice string
@@ -74,12 +74,14 @@ func makePage(s Snapshot, now time.Time, freshFor time.Duration) pageView {
 		p.Notice = "Attention unknown. The read did not verify current task state."
 		return p
 	}
+	listingFreshness := freshness(s.UpdatedAt, s.VerifiedAt, now, freshFor)
+	listingVerified := listingFreshness == "Verified within snapshot window"
+	if !listingVerified {
+		p.Notice = listingFreshness + ". Listing counts are not current; current Attention contents are Unknown. Last verified: " + moment(s.VerifiedAt)
+	}
 	if len(s.Items) == 0 {
-		fresh := freshness(s.UpdatedAt, s.VerifiedAt, now, freshFor)
-		if fresh == "Verified within snapshot window" {
+		if listingVerified {
 			p.Notice = "Verified empty: no Attention items in this authorized snapshot. Last verified: " + moment(s.VerifiedAt)
-		} else {
-			p.Notice = fresh + ". Current Attention contents are Unknown. Last verified: " + moment(s.VerifiedAt)
 		}
 		return p
 	}
@@ -105,6 +107,10 @@ func makePage(s Snapshot, now time.Time, freshFor time.Duration) pageView {
 					{"Source age", age(item.UpdatedAt, now)}, {"Source updated", moment(item.UpdatedAt)}, {"Last verified", moment(item.VerifiedAt)},
 				},
 			})
+		}
+		g.Count = "Unknown"
+		if listingVerified {
+			g.Count = strconv.Itoa(len(g.Rows))
 		}
 		p.Groups = append(p.Groups, g)
 	}

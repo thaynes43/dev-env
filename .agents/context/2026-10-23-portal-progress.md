@@ -277,3 +277,31 @@ perform the authorized source merge. One implementation owner remains; no
 arbitrary new deadline or turn limit was set. Source/tests do not establish
 release, installation, Gate A, human runtime binding, ingress or usable portal
 acceptance. Outcome custody continues through those separately scoped gates.
+
+### M2 native-review correction
+
+Canonical #178 journal971 relays the full independent Claude review of
+`75e6379748c16384202daade8b35b722642182ef`. That head's required CI passed,
+but native review correctly required a listing-freshness fix. Nonempty
+snapshots had ignored their own verification, so absent/stale listing evidence
+could display zero group counts despite an individually fresh item. The
+correction checks listing evidence for every verified snapshot, warns visibly
+and labels group counts Unknown when listing evidence is not current. The
+synthetic preview now explicitly witnesses its listing at the fixture's fixed
+observation time while preserving each row's separate verification.
+
+Exact row freshness assertions replace the vacuous whole-page Unknown check.
+Additional finite cases cover a fresh item in missing/stale/future/predates-update
+listings and the exact freshness boundary; cancellation without metadata escape;
+valid 24 versus 25 rows; 512 versus 513 UTF-8 bytes; refusal/frame headers;
+trusted identity unchanged by spoofed headers; rendered CSS versus CSP hash;
+visible link text in its accessible name; and archived-claim refusal.
+Docs clarify field selection/redaction, portable Go1.27.2 invocation and the
+future Gate A requirement for dependency-panic containment/log redaction.
+No production server or panic logging behavior is claimed by this source pass.
+
+The corrected focused suite passes fifteen top-level tests, serialized under
+the same verified toolchain and CPU settings. Exact corrected head, preview
+checksum and fresh CI/native-review targets are published on #178 and PR526;
+the old head's receipts are not coverage of this correction. M3 source and all
+runtime/ingress/identity activation remain outside PR526.

@@ -2,7 +2,10 @@ package portal
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -68,8 +71,10 @@ func assertRefused(t *testing.T, w *httptest.ResponseRecorder, status int) {
 	if w.Code != status || w.Body.String() != "Attention unavailable. Current task state is Unknown.\n" {
 		t.Fatalf("unsafe refusal %d %q", w.Code, w.Body.String())
 	}
-	if w.Header().Get("Cache-Control") != "no-store" {
-		t.Fatal("refusal is cacheable")
+	for name, want := range map[string]string{"Cache-Control": "no-store", "X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Content-Type": "text/plain; charset=utf-8"} {
+		if w.Header().Get(name) != want {
+			t.Fatalf("unsafe refusal header %s", name)
+		}
 	}
 }
 
@@ -233,7 +238,7 @@ func TestMissingDependenciesAndReadStates(t *testing.T) {
 }
 
 func TestWrongSourceBindingNeverLeaks(t *testing.T) {
-	for _, mode := range []string{"project", "environment", "task", "collection", "duplicate", "group", "head", "too-many", "oversize", "invalid-utf8", "state", "unknown-with-items", "detail-empty", "canonical-link"} {
+	for _, mode := range []string{"project", "environment", "task", "collection", "duplicate", "group", "head", "oversize", "invalid-utf8", "state", "unknown-with-items", "detail-empty", "canonical-link"} {
 		t.Run(mode, func(t *testing.T) {
 			d := dependencies()
 			path := attentionPath
@@ -258,8 +263,6 @@ func TestWrongSourceBindingNeverLeaks(t *testing.T) {
 					s.Items[0].Group = "invented"
 				case "head":
 					s.Items[0].ReviewHead = "javascript:alert(1)"
-				case "too-many":
-					s.Items = make([]Item, 25)
 				case "oversize":
 					s.Items[0].Owner = strings.Repeat("x", 513)
 				case "invalid-utf8":
@@ -306,7 +309,7 @@ func TestEscapedHostileMetadataAndSeparateTruth(t *testing.T) {
 	if strings.Count(body, "href=") != 1 || strings.Contains(body, "<form") || strings.Contains(body, "<iframe") {
 		t.Fatal("active surface or unvalidated link")
 	}
-	for name, want := range map[string]string{"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": contentPolicy} {
+	for name, want := range map[string]string{"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Content-Security-Policy": contentPolicy} {
 		if w.Header().Get(name) != want {
 			t.Errorf("missing %s", name)
 		}
@@ -357,14 +360,156 @@ func TestStaleFutureAndUnknownEvidence(t *testing.T) {
 				if empty && strings.Contains(body, "Verified empty") != valid {
 					t.Fatal("empty overstates verification")
 				}
-				if mode == "stale" && !strings.Contains(body, "Stale evidence") {
-					t.Fatal("staleness hidden")
+				expected := map[string]string{"fresh": "Verified within snapshot window", "boundary": "Verified within snapshot window", "stale": "Stale evidence", "missing-update": "Freshness unknown", "missing-verified": "Freshness unknown", "future-update": "Freshness unknown", "future-verified": "Freshness unknown", "verification-before-update": "Unknown: verification predates source update"}[mode]
+				if !empty && !strings.Contains(body, `<p class="freshness">`+expected+`</p>`) {
+					t.Fatalf("wrong exact row freshness, want %s", expected)
 				}
-				if !valid && mode != "stale" && !strings.Contains(strings.ToLower(body), "unknown") {
-					t.Fatal("uncertainty hidden")
+				if empty && !valid && !strings.Contains(body, `role="status">`+expected+". Listing counts are not current;") {
+					t.Fatal("empty listing warning missing")
 				}
 			})
 		}
+	}
+}
+
+func TestListingFreshnessWithFreshItem(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		updated, verified time.Time
+		warning           string
+	}{
+		{"fresh", fixtureNow.Add(-2 * time.Minute), fixtureNow.Add(-time.Minute), ""},
+		{"boundary", fixtureNow.Add(-6 * time.Minute), fixtureNow.Add(-5 * time.Minute), ""},
+		{"missing-update", time.Time{}, fixtureNow.Add(-time.Minute), "Freshness unknown"},
+		{"missing-verified", fixtureNow.Add(-2 * time.Minute), time.Time{}, "Freshness unknown"},
+		{"stale", fixtureNow.Add(-7 * time.Minute), fixtureNow.Add(-6 * time.Minute), "Stale evidence"},
+		{"future-update", fixtureNow.Add(time.Minute), fixtureNow.Add(-time.Minute), "Freshness unknown"},
+		{"future-verified", fixtureNow.Add(-time.Minute), fixtureNow.Add(time.Minute), "Freshness unknown"},
+		{"verification-before-update", fixtureNow.Add(-time.Minute), fixtureNow.Add(-2 * time.Minute), "Unknown: verification predates source update"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			d := dependencies()
+			d.Reader = readFunc(func(_ context.Context, r Resource) (Snapshot, error) {
+				s := sample(r)
+				s.UpdatedAt = test.updated
+				s.VerifiedAt = test.verified
+				return s, nil
+			})
+			w := response(d, "GET", attentionPath)
+			body := w.Body.String()
+			if w.Code != 200 {
+				t.Fatal(w.Code)
+			}
+			if !strings.Contains(body, `<p class="freshness">Verified within snapshot window</p>`) {
+				t.Fatal("fresh item proof lost")
+			}
+			if test.warning != "" {
+				if !strings.Contains(body, `role="status">`+test.warning+". Listing counts are not current;") {
+					t.Fatal("listing warning missing")
+				}
+				for _, title := range []string{"Needs you", "Needs worker", "Review returned", "Handoff missing"} {
+					if !strings.Contains(body, ">"+title+" · Unknown</h2>") {
+						t.Fatalf("unverified count for %s", title)
+					}
+				}
+			} else {
+				if strings.Contains(body, "Listing counts are not current") || !strings.Contains(body, ">Needs you · 0</h2>") || !strings.Contains(body, ">Handoff missing · 1</h2>") {
+					t.Fatal("fresh listing count incorrect")
+				}
+			}
+		})
+	}
+}
+
+func TestCancellationDuringReadReturnsNoMetadata(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d := dependencies()
+	d.Reader = readFunc(func(_ context.Context, r Resource) (Snapshot, error) {
+		s := sample(r)
+		s.Items[0].Title = "SECRET-CANARY"
+		cancel()
+		return s, nil
+	})
+	r := httptest.NewRequest("GET", attentionPath, nil).WithContext(ctx)
+	w := httptest.NewRecorder()
+	NewHandler(d).ServeHTTP(w, r)
+	assertRefused(t, w, 503)
+}
+
+func TestExactRowAndByteBounds(t *testing.T) {
+	for _, count := range []int{24, 25} {
+		t.Run(fmt.Sprintf("rows-%d", count), func(t *testing.T) {
+			d := dependencies()
+			s := sample(fixtureScope)
+			item := s.Items[0]
+			s.Items = nil
+			allowed := map[Resource]bool{fixtureScope: true}
+			for index := range count {
+				row := item
+				row.Resource.Task = fmt.Sprintf("task-%d", index)
+				s.Items = append(s.Items, row)
+				allowed[row.Resource] = true
+			}
+			d.Authorizer = authorizeFunc(func(_ context.Context, p Principal, r Resource) error {
+				if p != fixturePrincipal || !allowed[r] {
+					return ErrDenied
+				}
+				return nil
+			})
+			d.Reader = readFunc(func(context.Context, Resource) (Snapshot, error) { return s, nil })
+			w := response(d, "GET", attentionPath)
+			if count == 24 {
+				if w.Code != 200 || strings.Count(w.Body.String(), "<article ") != 24 {
+					t.Fatal("valid boundary rejected")
+				}
+			} else {
+				assertRefused(t, w, 503)
+			}
+		})
+	}
+	for _, length := range []int{512, 513} {
+		t.Run(fmt.Sprintf("bytes-%d", length), func(t *testing.T) {
+			d := dependencies()
+			owner := strings.Repeat("é", 256)
+			if length == 513 {
+				owner += "x"
+			}
+			d.Reader = readFunc(func(_ context.Context, r Resource) (Snapshot, error) {
+				s := sample(r)
+				s.Items[0].Owner = owner
+				return s, nil
+			})
+			w := response(d, "GET", attentionPath)
+			if length == 512 {
+				if w.Code != 200 || !strings.Contains(w.Body.String(), "<dt>Owner</dt><dd>"+owner+"</dd>") {
+					t.Fatal("512-byte Unicode text rejected")
+				}
+			} else {
+				assertRefused(t, w, 503)
+			}
+		})
+	}
+}
+
+func TestRenderedStyleMatchesCSP(t *testing.T) {
+	w := response(dependencies(), "GET", attentionPath)
+	body := w.Body.String()
+	_, styleAndRest, ok := strings.Cut(body, "<style>")
+	if !ok {
+		t.Fatal("missing style")
+	}
+	style, _, ok := strings.Cut(styleAndRest, "</style>")
+	if !ok {
+		t.Fatal("missing style end")
+	}
+	digest := sha256.Sum256([]byte(style))
+	hash := "'sha256-" + base64.StdEncoding.EncodeToString(digest[:]) + "'"
+	if !strings.Contains(w.Header().Get("Content-Security-Policy"), hash) {
+		t.Fatal("rendered CSS differs from allowed CSP hash")
+	}
+	if !strings.Contains(body, `aria-label="Open canonical record for Synthetic task (task-one)"`) {
+		t.Fatal("accessible name lacks visible link label")
 	}
 }
 
@@ -394,6 +539,25 @@ func TestMethodsRoutesAndSpoofedHeaders(t *testing.T) {
 	w := httptest.NewRecorder()
 	NewHandler(d).ServeHTTP(w, r)
 	assertRefused(t, w, 404)
+	// Headers also cannot replace a successfully authenticated principal with a
+	// different subject. Current authorization sees only the trusted pair.
+	d = dependencies()
+	original := d.Authorizer
+	d.Authorizer = authorizeFunc(func(c context.Context, p Principal, resource Resource) error {
+		if p != fixturePrincipal {
+			t.Error("header replaced trusted identity")
+		}
+		return original.Authorize(c, p, resource)
+	})
+	r = httptest.NewRequest("GET", attentionPath, nil)
+	r.Header.Set("X-Forwarded-User", "subject-two")
+	r.Header.Set("X-Forwarded-Sub", "subject-two")
+	r.Header.Set("X-Forwarded-Issuer", "https://other.example/")
+	w = httptest.NewRecorder()
+	NewHandler(d).ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatal("spoofed header changed authorized principal")
+	}
 }
 
 func TestProjectWorkerBindingAndPayloadExclusion(t *testing.T) {
@@ -405,10 +569,12 @@ func TestProjectWorkerBindingAndPayloadExclusion(t *testing.T) {
 	if err != nil || got.Owner != "worker-one" || got.WorkerPhase != "Suspended" {
 		t.Fatalf("projection %v %v", got, err)
 	}
-	for _, mode := range []string{"project", "task", "claim-uid", "owner-name", "owner-uid", "session-name", "session-uid", "empty-binding"} {
+	for _, mode := range []string{"project", "task", "claim-uid", "owner-name", "owner-uid", "session-name", "session-uid", "empty-binding", "archived"} {
 		t.Run(mode, func(t *testing.T) {
 			c, s, binding := claim, session, b
 			switch mode {
+			case "archived":
+				c.Archived = true
 			case "project":
 				c.Identity.Project = "project-two"
 			case "task":

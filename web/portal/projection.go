@@ -19,7 +19,7 @@ type WorkerSummary struct {
 
 func ProjectWorker(binding SourceBinding, claim apiv1.TaskClaim, session apiv1.Session) (WorkerSummary, error) {
 	r := binding.Resource
-	if !identifier.MatchString(r.Project) || !identifier.MatchString(r.Environment) || !identifier.MatchString(r.Task) || binding.ClaimUID == "" || binding.SessionUID == "" || binding.SessionName == "" ||
+	if claim.Archived || !identifier.MatchString(r.Project) || !identifier.MatchString(r.Environment) || !identifier.MatchString(r.Task) || binding.ClaimUID == "" || binding.SessionUID == "" || binding.SessionName == "" ||
 		claim.UID != binding.ClaimUID || claim.Identity.Project != r.Project || claim.Identity.TaskKey != r.Task || claim.Owner.Name != binding.SessionName || claim.Owner.UID != binding.SessionUID || session.Name != binding.SessionName || session.UID != binding.SessionUID {
 		return WorkerSummary{}, ErrUnavailable
 	}
