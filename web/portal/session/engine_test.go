@@ -144,7 +144,7 @@ func setupAuth(t *testing.T) *authFixture {
 			subject = "synthetic-subject"
 		}
 		raw := signedFixture(t, key, jose.ES256, map[string]any{"iss": v.issuer, "aud": "synthetic-client", "sub": subject, "nonce": f.nonce, "iat": f.now.Unix(), "exp": f.now.Add(time.Hour).Unix()})
-		body, err := json.Marshal(map[string]string{"id_token": raw, "access_token": "synthetic-unused", "token_type": "Bearer"})
+		body, err := json.Marshal(map[string]any{"id_token": raw, "access_token": raw, "token_type": "Bearer", "expires_in": 3600})
 		if err != nil {
 			t.Fatal(err)
 		}

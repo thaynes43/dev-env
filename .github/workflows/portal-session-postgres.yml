@@ -1,0 +1,88 @@
+name: Portal session PostgreSQL
+
+on:
+  pull_request:
+    paths:
+      - web/portal/session/**
+      - web/portal/boundary.go
+      - go.mod
+      - go.sum
+      - .github/workflows/portal-session-postgres.yml
+  push:
+    branches: [main]
+    paths:
+      - web/portal/session/**
+      - web/portal/boundary.go
+      - go.mod
+      - go.sum
+      - .github/workflows/portal-session-postgres.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portal-postgres-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  postgres:
+    name: Portal PostgreSQL integration
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97
+        env:
+          POSTGRES_PASSWORD: synthetic-ci-admin-only
+          POSTGRES_DB: dev_env_v2_portal
+        ports:
+          - 5432:5432
+        options: >-
+          --cpus 2 --memory 512m
+          --health-cmd "pg_isready -U postgres -d dev_env_v2_portal"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Enable disposable verified TLS and role-scoped HBA
+        env:
+          PORTAL_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          umask 077
+          mkdir "$RUNNER_TEMP/portal-tls"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -subj /CN=localhost -addext subjectAltName=DNS:localhost \
+            -keyout "$RUNNER_TEMP/portal-tls/server.key" \
+            -out "$RUNNER_TEMP/portal-tls/server.crt" >/dev/null 2>&1
+          docker cp "$RUNNER_TEMP/portal-tls" "$PORTAL_POSTGRES_CONTAINER:/tmp/portal-tls"
+          docker exec -u root "$PORTAL_POSTGRES_CONTAINER" sh -eu -c '
+            cp /tmp/portal-tls/server.crt "$PGDATA/server.crt"
+            cp /tmp/portal-tls/server.key "$PGDATA/server.key"
+            chown postgres:postgres "$PGDATA/server.crt" "$PGDATA/server.key"
+            chmod 600 "$PGDATA/server.key"
+            printf "\nssl = on\n" >> "$PGDATA/postgresql.conf"
+            {
+              printf "hostssl dev_env_v2_portal dev_env_v2_portal_runtime all scram-sha-256\n"
+              printf "host all dev_env_v2_portal_runtime all reject\n"
+              printf "local all dev_env_v2_portal_runtime reject\n"
+              cat "$PGDATA/pg_hba.conf"
+            } > "$PGDATA/portal-hba.conf"
+            chown postgres:postgres "$PGDATA/portal-hba.conf"
+            mv "$PGDATA/portal-hba.conf" "$PGDATA/pg_hba.conf"
+          '
+          docker exec "$PORTAL_POSTGRES_CONTAINER" psql -U postgres -d dev_env_v2_portal -qAtc 'SELECT pg_reload_conf()' >/dev/null
+      - name: Focused actual PostgreSQL and authorization tests
+        env:
+          GOTOOLCHAIN: local
+          GOMAXPROCS: '2'
+        run: |
+          export PORTAL_TEST_DATABASE_URL="postgres://postgres:synthetic-ci-admin-only@localhost:5432/dev_env_v2_portal?sslmode=verify-full&sslrootcert=$RUNNER_TEMP/portal-tls/server.crt"
+          nice -n 19 go test -p 1 -count=1 -v ./web/portal/session
+          git diff --exit-code
+      - name: Remove disposable private TLS material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/portal-tls"

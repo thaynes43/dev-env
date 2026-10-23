@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/subtle"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 	"unicode"
@@ -59,7 +58,7 @@ func NewRemoteTokenVerifier(c VerifierConfig, jwksURL string, client *http.Clien
 }
 
 func NewTokenVerifier(c VerifierConfig) (*TokenVerifier, error) {
-	u, err := url.Parse(c.Issuer)
+	u, err := configuredURL(c.Issuer)
 	if err != nil || !identityText(c.Issuer) || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || !identityText(c.ClientID) || c.Keys == nil || c.Now == nil || c.ClockSkew < 0 || len(c.Algorithms) == 0 {
 		return nil, portal.ErrUnavailable
 	}
@@ -74,6 +73,42 @@ func NewTokenVerifier(c VerifierConfig) (*TokenVerifier, error) {
 	// algorithm/signature/issuer/audience/expiry validation.
 	v := oidc.NewVerifier(c.Issuer, c.Keys, &oidc.Config{ClientID: c.ClientID, SupportedSigningAlgs: append([]string(nil), c.Algorithms...), Now: c.Now})
 	return &TokenVerifier{verifier: v, issuer: c.Issuer, clientID: c.ClientID, now: c.Now, skew: c.ClockSkew}, nil
+}
+
+// Authentik access tokens use the same issuer/client signing configuration.
+// Verify both signatures and immutable identity; signed access expiry is the
+// actual cap even if expires_in overstates it. at_hash, when present, must match.
+func (v *TokenVerifier) verifyExchange(ctx context.Context, pair codeTokens, nonce string) (portal.Principal, time.Time, error) {
+	p, err := v.Verify(ctx, pair.idToken, nonce)
+	if err != nil {
+		return portal.Principal{}, time.Time{}, err
+	}
+	access, err := v.Verify(ctx, pair.accessToken, nonce)
+	if err != nil || access != p {
+		return portal.Principal{}, time.Time{}, portal.ErrDenied
+	}
+	id, err := v.verifier.Verify(ctx, pair.idToken)
+	if err != nil {
+		return portal.Principal{}, time.Time{}, portal.ErrDenied
+	}
+	if id.AccessTokenHash != "" && id.VerifyAccessToken(pair.accessToken) != nil {
+		return portal.Principal{}, time.Time{}, portal.ErrDenied
+	}
+	token, err := v.verifier.Verify(ctx, pair.accessToken)
+	if err != nil || pair.expiresAt.IsZero() {
+		return portal.Principal{}, time.Time{}, portal.ErrDenied
+	}
+	expiry := pair.expiresAt
+	if token.Expiry.Before(expiry) {
+		expiry = token.Expiry
+	}
+	if id.Expiry.Before(expiry) {
+		expiry = id.Expiry
+	}
+	if !expiry.After(v.now()) {
+		return portal.Principal{}, time.Time{}, portal.ErrDenied
+	}
+	return p, expiry, nil
 }
 
 // Verify returns only the immutable principal, never raw claims/provider tokens.

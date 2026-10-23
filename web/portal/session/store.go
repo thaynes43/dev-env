@@ -20,6 +20,9 @@ type Record struct {
 	Principal                           portal.Principal
 	CSRF                                string
 	CreatedAt, IdleExpiresAt, ExpiresAt time.Time
+	// Private to the server package, persisted only inside AEAD payloads.
+	accessToken    string
+	tokenExpiresAt time.Time
 }
 
 // Store has no production in-memory fallback. TakeLogin must atomically check
@@ -36,12 +39,21 @@ type Store interface {
 }
 
 // CodeClient receives only fixed configured destinations through its concrete
-// adapter, never a URL from a request. It returns only the server-side ID token,
-// not an access/refresh token or userinfo payload.
+// adapter, never a URL from a request. M5B retains only the exact session's
+// short-lived access token for live UserInfo; no refresh operation exists.
 type CodeClient interface {
 	Binding() CodeBinding
 	AuthorizationURL(state, nonce, verifier string) (string, error)
-	Exchange(context.Context, string, string) (string, error)
+	Exchange(context.Context, string, string) (codeTokens, error)
 }
+
+type codeTokens struct {
+	idToken, accessToken string
+	expiresAt            time.Time
+}
+
+func (codeTokens) String() string { return "[redacted portal exchange]" }
+func (Record) String() string     { return "[redacted portal session]" }
+func (Login) String() string      { return "[redacted portal login]" }
 
 type CodeBinding struct{ Issuer, ClientID, Callback, AuthorizationEndpoint string }

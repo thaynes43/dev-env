@@ -36,6 +36,12 @@ type Authorizer interface {
 	Authorize(context.Context, Principal, Resource) error
 }
 
+// ReleaseAuthorizer checks all returned objects and fresh current authority in
+// one final operation. An early allow must never stand in for this call.
+type ReleaseAuthorizer interface {
+	AuthorizeRelease(context.Context, Principal, Resource, []Item) error
+}
+
 type MetadataReader interface {
 	Read(context.Context, Resource) (Snapshot, error)
 }
@@ -160,15 +166,21 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if err = d.Authorizer.Authorize(r.Context(), current, resource); err != nil {
+	if release, ok := d.Authorizer.(ReleaseAuthorizer); ok {
+		err = release.AuthorizeRelease(r.Context(), current, resource, snapshot.Items)
+	} else {
+		err = d.Authorizer.Authorize(r.Context(), current, resource)
+		if err == nil {
+			for _, item := range snapshot.Items {
+				if err = d.Authorizer.Authorize(r.Context(), current, item.Resource); err != nil {
+					break
+				}
+			}
+		}
+	}
+	if err != nil {
 		refuseDependency(w, err)
 		return
-	}
-	for _, item := range snapshot.Items {
-		if err = d.Authorizer.Authorize(r.Context(), current, item.Resource); err != nil {
-			refuseDependency(w, err)
-			return
-		}
 	}
 	if r.Context().Err() != nil {
 		refuse(w, http.StatusServiceUnavailable)
