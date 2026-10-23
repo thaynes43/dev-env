@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.41.0](https://github.com/thaynes43/dev-env/compare/v2.40.0...v2.41.0) (2026-10-23)
+
+
+### Features
+
+* **fleet:** report bound Pod resource specs on opt-in ([#514](https://github.com/thaynes43/dev-env/issues/514)) ([5437434](https://github.com/thaynes43/dev-env/commit/5437434bdbd9d2a574e936d901d3b3b6ddd3067d))
+
 ## [2.40.0](https://github.com/thaynes43/dev-env/compare/v2.39.1...v2.40.0) (2026-10-22)
 
 
