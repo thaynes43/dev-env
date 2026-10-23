@@ -14,6 +14,8 @@ func TestEveryBindingIdentityConflictSuppressesAllCopies(t *testing.T) {
 		{"stop-release", "executor"}, {"worker-pass", "unauthorized"},
 	}
 	for _, variant := range variants {
+		var baseline result
+		haveBaseline := false
 		for _, spelling := range []string{"same", "offset", "later"} {
 			for _, reverse := range []bool{false, true} {
 				a := map[string]any{"kind": variant.kind, "identity": "duplicate-binding", "sourceTime": "2026-10-23T13:00:00Z", "executor": "executor-a"}
@@ -47,6 +49,11 @@ func TestEveryBindingIdentityConflictSuppressesAllCopies(t *testing.T) {
 				}
 				got := bindingFixture(t, events...)
 				assertBindingConflict(t, got)
+				if haveBaseline {
+					assertSameSemantics(t, baseline, got)
+				} else {
+					baseline, haveBaseline = got, true
+				}
 				if got.ActiveSuccessor != "" || got.RecordedSuccessorCount != 0 || !has(got.Conflicts, "dropped ambiguous record kind "+variant.kind+" identity duplicate-binding") {
 					t.Fatalf("%s %s reverse=%v %#v", variant.kind, spelling, reverse, got)
 				}

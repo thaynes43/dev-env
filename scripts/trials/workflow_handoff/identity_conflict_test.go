@@ -17,6 +17,7 @@ func TestNonbindingIdentityConflictsHaveNoFirstWinner(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, kind := range []string{"successor-assignment", "review-observation", "scope-instruction", "hold", "hold-disposition", "gate-evidence", "delivery-receipt", "acknowledgment", "lease-expiry", "reconnect", "taskclaim-mutation"} {
+		var first result
 		for _, reverse := range []bool{false, true} {
 			doc := cloneMap(canonical)
 			events := []any{}
@@ -82,6 +83,11 @@ func TestNonbindingIdentityConflictsHaveNoFirstWinner(t *testing.T) {
 				t.Fatal(err)
 			}
 			got, code := check(body)
+			if reverse {
+				assertSameSemantics(t, first, got)
+			} else {
+				first = got
+			}
 			if code != 3 || !got.ManualDisposition || !has(got.Conflicts, "dropped ambiguous record kind "+kind+" identity nonbinding-collision") || countPrefix(got.Recommendations, "recommend existing normal") != 0 {
 				t.Fatalf("%s reverse=%v %#v", kind, reverse, got)
 			}
@@ -125,6 +131,13 @@ func TestNonbindingIdentityConflictsHaveNoFirstWinner(t *testing.T) {
 			if positiveCode != 0 || positive.IgnoredReplayCount != 1 || len(positive.Conflicts) != 0 {
 				t.Fatalf("%s exact replay %#v", kind, positive)
 			}
+			doc["events"] = append(events, a)
+			singleBody, err := json.Marshal(doc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			single, _ := check(singleBody)
+			assertSameSemantics(t, single, positive)
 		}
 	}
 }

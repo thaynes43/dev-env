@@ -44,6 +44,8 @@ func assertBindingConflict(t *testing.T, got result) {
 
 func TestCrossKindEqualTimeExecutorBindings(t *testing.T) {
 	for _, kind := range []string{"executor-state", "deadline-reached", "stop-release"} {
+		var baseline result
+		haveBaseline := false
 		for _, reverse := range []bool{false, true} {
 			for _, offset := range []bool{false, true} {
 				pass := bindingPass()
@@ -63,6 +65,11 @@ func TestCrossKindEqualTimeExecutorBindings(t *testing.T) {
 				}
 				got := bindingFixture(t, events...)
 				assertBindingConflict(t, got)
+				if haveBaseline {
+					assertSameSemantics(t, baseline, got)
+				} else {
+					baseline, haveBaseline = got, true
+				}
 				if !has(got.Conflicts, "equal-time conflicting executor bindings") {
 					t.Fatalf("%s reverse=%v offset=%v %v", kind, reverse, offset, got.Conflicts)
 				}
