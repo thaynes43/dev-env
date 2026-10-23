@@ -1,15 +1,15 @@
 # M6 same-connection recovery fence — source work in progress
 
-Story [178](https://work.haynesnetwork.com/work_packages/178), under Epic120/Saga85.
+Story [178](https://work.haynesnetwork.com/work_packages/178), under Epic 120 / Saga 85.
 Fresh baseline `d4d21ef9d8f6682cabe1a45b78f5fd3726f50ef1` includes accepted
-PR529. Sole source implementer dev-env-1023-205407; one implementer, no children.
+PR 529. Sole source implementer dev-env-1023-205407; one implementer, no children.
 Root owns independent final-head native review, required CI and authorized merge.
 UI, infra, #177/#160/#122/Future121 and V1 remain separately owned.
 
 The external record is exactly ConfigMap
 `dev-agents/dev-env-v2-portal-admission`; runtime has only GET on that resourceName.
 No controller or per-session Kubernetes objects. Extra narrow RBAC is pending;
-this PR grants/provisions/deploys nothing. Runtime assembly remains503.
+this PR grants/provisions/deploys nothing. Runtime assembly remains 503.
 
 The contract replaces generation-only checking. Acquire and begin once. Before
 session-table SQL, measure system identifier, active WAL timeline from
@@ -51,8 +51,8 @@ because disposable facilities are not configured. Hosted results and required
 final-head independent native review are pending. A Python YAML parser is not
 installed locally; workflow acceptance is checked by GitHub and source review.
 
-References: PostgreSQL16 [control/WAL functions](https://www.postgresql.org/docs/16/functions-admin.html)
+References: PostgreSQL 16 [control/WAL functions](https://www.postgresql.org/docs/16/functions-admin.html)
 and [LOCK privileges](https://www.postgresql.org/docs/16/sql-lock.html);
-Kubernetes1.35 [most-recent GET semantics](https://v1-35.docs.kubernetes.io/docs/reference/using-api/api-concepts/).
+Kubernetes 1.35 [most-recent GET semantics](https://v1-35.docs.kubernetes.io/docs/reference/using-api/api-concepts/).
 The API can internally serve a consistent GET through its supported cache;
 there is no application cache, informer, object-file or resourceVersion0 request.

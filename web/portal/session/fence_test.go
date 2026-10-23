@@ -82,7 +82,7 @@ func newAdmissionFixture(t *testing.T, i Incarnation) (*KubernetesFence, *admiss
 }
 
 func TestAdmissionStrictRecord(t *testing.T) {
-	for _, mode := range []string{"valid", "closed", "missing", "extra", "wrong-type", "duplicate", "recreated", "deleting", "no-version", "bad-schema", "old-generation", "bad-system", "checkpoint-not-active", "bad-time", "bad-address", "bad-port", "trailing", "too-deep"} {
+	for _, mode := range []string{"valid", "closed", "missing", "extra", "wrong-type", "duplicate", "recreated", "deleting", "no-version", "zero-version", "bad-schema", "old-generation", "bad-system", "checkpoint-not-active", "bad-time", "bad-address", "bad-port", "trailing", "too-deep"} {
 		t.Run(mode, func(t *testing.T) {
 			cm := admissionDocument(fixtureIncarnation())
 			switch mode {
@@ -99,6 +99,8 @@ func TestAdmissionStrictRecord(t *testing.T) {
 				cm.DeletionTimestamp = &now
 			case "no-version":
 				cm.ResourceVersion = ""
+			case "zero-version":
+				cm.ResourceVersion = "0"
 			case "bad-schema":
 				cm.Data["schema"] = "2"
 			case "old-generation":
@@ -299,5 +301,40 @@ func TestAdmissionTransportHasNoAmbientProxyOrUntrustedCA(t *testing.T) {
 	fence.client.CloseIdleConnections()
 	if _, err := fence.read(context.Background()); !errors.Is(err, portal.ErrUnavailable) {
 		t.Fatal("untrusted Kubernetes TLS accepted")
+	}
+}
+
+func TestExactAdmissionSnapshotCannotChangeAnyField(t *testing.T) {
+	for _, field := range []string{"uid", "resourceVersion", "generation", "system_identifier", "timeline", "postmaster_started_at", "server_address", "server_port"} {
+		t.Run(field, func(t *testing.T) {
+			fence, f := newAdmissionFixture(t, fixtureIncarnation())
+			snapshot, err := fence.read(context.Background())
+			if err != nil {
+				t.Fatal("fixture snapshot failed")
+			}
+			f.mu.Lock()
+			switch field {
+			case "uid":
+				f.doc.UID = "new-object"
+			case "resourceVersion":
+				f.doc.ResourceVersion = "18"
+			case "generation":
+				f.doc.Data[field] = strings.Repeat("h", 32)
+			case "system_identifier":
+				f.doc.Data[field] = "987654321"
+			case "timeline":
+				f.doc.Data[field] = "00000002"
+			case "postmaster_started_at":
+				f.doc.Data[field] = "2026-10-23T20:00:01Z"
+			case "server_address":
+				f.doc.Data[field] = "127.0.0.2"
+			case "server_port":
+				f.doc.Data[field] = "5433"
+			}
+			f.mu.Unlock()
+			if !errors.Is(fence.Recheck(context.Background(), snapshot), portal.ErrUnavailable) {
+				t.Fatal("changed admission snapshot accepted")
+			}
+		})
 	}
 }

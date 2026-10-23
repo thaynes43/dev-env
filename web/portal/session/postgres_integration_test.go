@@ -402,7 +402,7 @@ func TestPostgresIntegration(t *testing.T) {
 		fresh := time.Now().UTC().Truncate(time.Microsecond)
 		l := login
 		l.ExpiresAt = fresh.Add(time.Minute)
-		// A finite256-row capacity fixture, not a load/stress test. No concurrent loop.
+		// A finite 256-row capacity fixture, not a load/stress test. No concurrent loop.
 		_, err := admin.Exec(ctx, `INSERT INTO portal.pending_logins(handle,generation,version,state_digest,expires_at,payload)
    SELECT decode(lpad(to_hex(i),64,'0'),'hex'),$1,1,$2,$3,$4 FROM generate_series(1000,1255) AS i`, a.generation, make([]byte, 32), l.ExpiresAt, make([]byte, 28))
 		if err != nil {
@@ -423,6 +423,8 @@ func TestPostgresIntegration(t *testing.T) {
 			t.Fatal("cleanup did not remove exactly32 expired rows")
 		}
 	})
+
+	t.Run("actual-lost-commit-response-discards-write-result-and-read-payload", func(t *testing.T) { testActualLostCommitResponse(t, admin, a, record) })
 
 	t.Run("protected-read-witness-count-and-latency", func(t *testing.T) { testProtectedReadCost(t, a) })
 	t.Run("physical-asynchronous-failover-loses-acknowledged-deletes", func(t *testing.T) { testDisposableAsyncFailover(t, admin, a, b) })

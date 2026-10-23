@@ -1,4 +1,4 @@
-# Portal session runtime contract (M5B, Story178)
+# Portal session runtime contract (M5B, Story 178)
 
 Source direction: PORTAL178-M5B-SESSION-RUNTIME-20261023-01, extending
 DESIGN-029 and accepted M3. This document amends M3's token-discard and
@@ -32,7 +32,7 @@ actual acquired `pgx.Tx`, measures the exact PostgreSQL incarnation before
 session-table SQL, and requires an identical fresh witness snapshot immediately
 before and after COMMIT. The [M6 recovery contract](../.agents/reports/portal178-m6/README.md)
 specifies the fixed ConfigMap, trusted direct GET, strict record and UID/RV pin.
-No observer/controller or cached generation can open admission. Runtime remains503;
+No observer/controller or cached generation can open admission. Runtime remains 503;
 source implementation and disposable protocol evidence do not satisfy live gates.
 
 Existing recovery owner must explicitly close admission before logical restore
@@ -170,7 +170,7 @@ no existing module is downgraded or upgraded.
 
 The hosted disposable suite now uses production `postgresPoolConfig`, including
 verified TLS, RuntimeParams and read-write ValidateConnect, for runtime pools.
-It checks exact SQLSTATE42501/HBA28000 and x509 classes, SET ROLE/TRUNCATE denial,
+It checks exact SQLSTATE 42501 / HBA 28000 and x509 classes, SET ROLE/TRUNCATE denial,
 database-clock expiry, bounded cleanup/cardinality, two app pools and real physical
 asynchronous promotion with acknowledged DELETE loss and an unchanged witness.
 The [fixed recovery helper](../scripts/trials/portal_recovery/README.md) is hosted
@@ -179,10 +179,10 @@ on the reusable PostgreSQL job; a separate advisory/standalone success cannot
 substitute. A disposable envtest checks proposed named-GET-only RBAC in the ordinary
 required make-test job. All missing local facilities are explicit skips.
 
-Login starts have one constant-size per-engine limiter: burst4, one start/second;
-under a two-replica ceiling this is burst8/two starts per second. The shared store
-serializes insertion into each of its two tables, caps each at256 rows and deletes
-at most32 expired rows per insertion, without UPDATE/admin/function grants.
+Login starts have one constant-size per-engine limiter: burst 4, one start/second;
+under a two-replica ceiling this is burst 8/two starts per second. The shared store
+serializes insertion into each of its two tables, caps each at 256 rows and deletes
+at most 32 expired rows per insertion, without UPDATE/admin/function grants.
 These source bounds are conservative admission limits, not measured production
 capacity or an SLO; deployment replicas, retention policy, real API latency and
 legitimate-flow proof must be accepted before activation.

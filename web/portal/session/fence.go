@@ -268,7 +268,7 @@ func uniqueJSON(data []byte) bool {
 
 const incarnationSQL = `SELECT (pg_catalog.pg_control_system()).system_identifier::text,
  pg_catalog.left(pg_catalog.pg_walfile_name(pg_catalog.pg_current_wal_lsn()),8),
- pg_catalog.pg_postmaster_start_time(), pg_catalog.inet_server_addr()::text,
+ pg_catalog.pg_postmaster_start_time(), pg_catalog.host(pg_catalog.inet_server_addr()),
  pg_catalog.inet_server_port(), pg_catalog.pg_is_in_recovery(),
  pg_catalog.current_setting('transaction_read_only')`
 

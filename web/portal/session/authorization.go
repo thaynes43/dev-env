@@ -211,3 +211,8 @@ func workPackageTask(id int) string {
 }
 
 var _ portal.Authorizer = (*CurrentAuthorizer)(nil)
+
+func (CurrentAuthorizationConfig) String() string     { return "[redacted portal authorization config]" }
+func (c CurrentAuthorizationConfig) GoString() string { return c.String() }
+func (CurrentAuthorizer) String() string              { return "[redacted portal authorizer]" }
+func (a CurrentAuthorizer) GoString() string          { return a.String() }

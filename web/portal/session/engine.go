@@ -199,7 +199,7 @@ func (e *Engine) begin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A single bounded limiter per engine, not a map keyed by attacker addresses.
-	// Under the proposed two-replica ceiling: burst8, sustained2 login starts/sec.
+	// Under the proposed two-replica ceiling: burst 8, sustained 2 login starts/sec.
 	// A restart cannot bypass the independent shared-store cardinality ceiling.
 	if e.loginAdmission == nil || !e.loginAdmission.AllowN(e.config.Now(), 1) {
 		authFailure(w, portal.ErrUnavailable)
@@ -400,3 +400,8 @@ var _ portal.Authenticator = (*Engine)(nil)
 
 func (sessionReference) String() string     { return "[redacted portal session reference]" }
 func (r sessionReference) GoString() string { return r.String() }
+
+func (Config) String() string     { return "[redacted portal engine config]" }
+func (c Config) GoString() string { return c.String() }
+func (Engine) String() string     { return "[redacted portal engine]" }
+func (e Engine) GoString() string { return e.String() }

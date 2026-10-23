@@ -43,7 +43,9 @@ func testProtectedReadCost(t *testing.T, a *PostgresStore) {
 	auth := setupAuth(t)
 	auth.now = now
 	auth.e.config.Store = a
+	startedLogin := time.Now()
 	auth.login(t)
+	t.Logf("LEGITIMATE_LOGIN_EVIDENCE begin+callback=%s witness_GETs=9 login_starts=1", time.Since(startedLogin))
 	authorizer := currentFixture(auth, func(*http.Request) (*http.Response, error) { return userInfoResponse(currentAllow), nil })
 	authorizer.store = a
 	handler := NewAssembly(AssemblyConfig{Session: auth.e, Authorizer: authorizer, Reader: readFunc(func(_ context.Context, r portal.Resource) (portal.Snapshot, error) {
@@ -158,7 +160,7 @@ func testDisposableAsyncFailover(t *testing.T, admin *pgxpool.Pool, a, b *Postgr
 		t.Fatal("fixture did not lose acknowledged deletes")
 	}
 	promoted := poolIncarnation(t, standby)
-	if promoted.SystemIdentifier != admitted.SystemIdentifier || promoted.Timeline == admitted.Timeline || promoted.PostmasterStartedAt == admitted.PostmasterStartedAt {
+	if promoted.SystemIdentifier != admitted.SystemIdentifier || promoted.Timeline == admitted.Timeline || promoted.PostmasterStartedAt.Equal(admitted.PostmasterStartedAt) {
 		t.Fatal("fixture did not physically promote/restart")
 	}
 	newReplica := func() *PostgresStore {

@@ -294,11 +294,11 @@ tests leave Gate A and the public ASVS gate unmet.
 
 ### M6 same-connection recovery source, 2026-10-23
 
-After accepted PR529 merge `d4d21ef9`, the sole fresh source successor implements
+After accepted PR 529 merge `d4d21ef9`, the sole fresh source successor implements
 transaction-bound exact incarnation admission and the [M6 recovery contract](../../../reports/portal178-m6/README.md).
 Fixed external ConfigMap GETs carry no per-session Kubernetes state or mutation
 power. Measured identity must belong to the actual SQL transaction, with exact
-UID/RV snapshot checks around commit. Runtime remains503. Disposable asynchronous
+UID/RV snapshot checks around commit. Runtime remains 503. Disposable asynchronous
 failover/RBAC/latency evidence, final-head native review and required CI must be
 recorded separately; live admission RBAC and DB/auth/isolation/Gate A and shared
 Authentik logging remain external gates. UI/infra/Future121 ownership is unchanged.

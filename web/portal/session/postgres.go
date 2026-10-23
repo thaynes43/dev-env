@@ -232,7 +232,7 @@ func insertError(err error) error {
 
 // Serialize each table's insertion bound across replicas using existing DELETE
 // privilege (no advisory-lock function/admin grant). Names are internal constants,
-// never request data. Cleanup does at most32 deletes; both tables cap at256 rows.
+// never request data. Cleanup does at most 32 deletes; both tables cap at 256 rows.
 func admitPortalInsert(ctx context.Context, tx pgx.Tx, table string) error {
 	if table != "pending_logins" && table != "sessions" {
 		return portal.ErrUnavailable

@@ -1,9 +1,9 @@
 # Disposable asynchronous session-recovery proof
 
 Only the existing hosted PostgreSQL workflow invokes this fixed-action helper.
-It uses the digest-pinned official PostgreSQL16 service's own binaries, two
-postmasters inside that disposable service (CPU2/memory512MiB), no image build.
-One suite at a time, nice19, GOMAXPROCS2/-p1; no stress/looped suites.
+It uses the digest-pinned official PostgreSQL 16 service's own binaries, two
+postmasters inside that disposable service (CPU 2 / memory 512 MiB), no image build.
+One suite at a time, nice 19, GOMAXPROCS=2 / -p 1; no stress/looped suites.
 
 After real session/login insertion, take a streaming physical basebackup and
 wait for both rows on the standby. Stop its receiver before acknowledged primary
