@@ -966,17 +966,19 @@ func dedup(items []parsed) ([]parsed, int, []string, map[string]bool) {
 		seen[item.identity] = item.canonical
 		out = append(out, item)
 	}
-	// A conflicting binding identity has no retained first winner, of any kind.
+	// Any conflicting identity has no retained first winner, of any kind.
 	suppressed := map[string]bool{}
 	for _, item := range items {
-		if conflictedIDs[item.identity] && bindingIdentities[item.identity] {
-			suppressed[instantKey(item.at)] = true
+		if conflictedIDs[item.identity] {
+			if bindingIdentities[item.identity] {
+				suppressed[instantKey(item.at)] = true
+			}
 			conflicts = append(conflicts, "dropped ambiguous record kind "+item.kind+" identity "+item.identity+"; manual disposition retains the raw evidence")
 		}
 	}
 	kept := out[:0]
 	for _, item := range out {
-		if !conflictedIDs[item.identity] || !bindingIdentities[item.identity] {
+		if !conflictedIDs[item.identity] {
 			kept = append(kept, item)
 		}
 	}

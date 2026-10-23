@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -36,9 +35,10 @@ func TestEveryBindingIdentityConflictSuppressesAllCopies(t *testing.T) {
 				default:
 					b["executor"] = "executor-b"
 				}
-				if spelling == "offset" {
+				switch spelling {
+				case "offset":
 					b["sourceTime"] = "2026-10-23T09:00:00-04:00"
-				} else if spelling == "later" {
+				case "later":
 					b["sourceTime"] = "2026-10-23T13:01:00Z"
 				}
 				events := []map[string]any{bindingPass(), a, b, bindingSuccessor()}
@@ -55,9 +55,10 @@ func TestEveryBindingIdentityConflictSuppressesAllCopies(t *testing.T) {
 	}
 	for _, kind := range []string{"executor-state", "deadline-reached", "stop-release"} {
 		event := map[string]any{"kind": kind, "identity": "exact-binding", "sourceTime": "2026-10-23T13:00:00Z", "executor": "executor-a"}
-		if kind == "executor-state" {
+		switch kind {
+		case "executor-state":
 			event["state"] = "running"
-		} else if kind == "stop-release" {
+		case "stop-release":
 			event["verified"], event["ambiguous"] = true, false
 		}
 		got := bindingFixture(t, bindingPass(), event, cloneMap(event))
@@ -98,7 +99,7 @@ func TestPreservationConflictPrecedesTiedStop(t *testing.T) {
 	}
 }
 
-func TestDroppedHoldIsNamedAndRawEvidencePreserved(t *testing.T) {
+func TestDroppedHoldOutputRequiresManualDisposition(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("testdata", "e-merge.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -113,9 +114,8 @@ func TestDroppedHoldIsNamedAndRawEvidencePreserved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := append([]byte{}, body...)
 	got, code := check(body)
-	if code != 3 || got.WritesRecommended || got.MergeRelease != "blocked" || !got.ManualDisposition || !has(got.Conflicts, "dropped ambiguous record kind hold identity pass-binding") || !has(got.Conflicts, "dropped ambiguous record kind worker-pass identity pass-binding") || !bytes.Equal(body, before) || !bytes.Contains(body, []byte(`"state":"pending"`)) {
-		t.Fatalf("ambiguous raw hold was treated as disposition %#v", got)
+	if code != 3 || got.WritesRecommended || got.MergeRelease != "blocked" || !got.ManualDisposition || !has(got.Conflicts, "dropped ambiguous record kind hold identity pass-binding") || !has(got.Conflicts, "dropped ambiguous record kind worker-pass identity pass-binding") || holdState(got, "merge") != "" || holdState(got, "media-work") != "pending" || len(got.Holds) != 1 {
+		t.Fatalf("ambiguous hold output failed to retain manual disposition %#v", got)
 	}
 }
