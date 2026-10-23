@@ -943,28 +943,47 @@ func earlier(a, b parsed) bool {
 	return a.at.Before(b.at)
 }
 
-func dedup(items []parsed) ([]parsed, int, []string) {
+func dedup(items []parsed) ([]parsed, int, []string, map[string]bool) {
 	seen := map[string]string{}
+	passIdentities := map[string]bool{}
+	conflictedIDs := map[string]bool{}
 	out := make([]parsed, 0, len(items))
 	replays := 0
 	conflicts := []string{}
 	for _, item := range items {
+		if _, ok := item.body.(passEvent); ok {
+			passIdentities[item.identity] = true
+		}
 		if prev, ok := seen[item.identity]; ok {
 			if prev == item.canonical {
 				replays++
 				continue
 			}
+			conflictedIDs[item.identity] = true
 			conflicts = append(conflicts, "identity "+item.identity+" reused with a different payload")
 			continue
 		}
 		seen[item.identity] = item.canonical
 		out = append(out, item)
 	}
-	return out, replays, conflicts
+	// A conflicting identity involving any pass has no retained first winner.
+	suppressed := map[string]bool{}
+	for _, item := range items {
+		if conflictedIDs[item.identity] && passIdentities[item.identity] {
+			suppressed[instantKey(item.at)] = true
+		}
+	}
+	kept := out[:0]
+	for _, item := range out {
+		if !conflictedIDs[item.identity] || !passIdentities[item.identity] {
+			kept = append(kept, item)
+		}
+	}
+	return kept, replays, conflicts, suppressed
 }
 
 func reduce(doc document, prov provenanceOut, items []parsed) result {
-	items, replays, idConflicts := dedup(items)
+	items, replays, idConflicts, passConflicts := dedup(items)
 	sortByTime(items)
 	r := &reducer{
 		doc:              doc,
@@ -973,7 +992,7 @@ func reduce(doc document, prov provenanceOut, items []parsed) result {
 		receiptSet:       map[string]bool{},
 		suppressedAssign: map[string]bool{},
 		conflictedReview: map[string]bool{},
-		conflictedPass:   map[string]bool{},
+		conflictedPass:   passConflicts,
 		passTimes:        map[string]time.Time{},
 		replays:          replays,
 	}
@@ -993,7 +1012,17 @@ func (r *reducer) prescan(items []parsed) {
 	successors := map[string]string{}
 	emittedAssign := map[string]bool{}
 	passes := map[string]passEvent{}
+	executors := map[string]string{}
 	for _, item := range items {
+		if executor := bindingExecutor(item.body); executor != "" {
+			key := instantKey(item.at)
+			if prior, exists := executors[key]; exists && prior != executor {
+				r.conflictedPass[key] = true
+				r.conflict("equal-time conflicting executor bindings require manual disposition")
+			} else if !exists {
+				executors[key] = executor
+			}
+		}
 		if pass, ok := item.body.(passEvent); ok {
 			r.passTimes[pass.Identity] = item.at
 			if pass.Authorized && pass.AuthorizationRef != "" {
@@ -1061,7 +1090,28 @@ func (r *reducer) bindingOK(ev reviewEvent) bool {
 	return ev.Task == r.doc.ReviewBinding.Task && ev.UID == r.doc.ReviewBinding.UID
 }
 
+func bindingExecutor(body any) string {
+	switch ev := body.(type) {
+	case passEvent:
+		if ev.Authorized && ev.AuthorizationRef != "" {
+			return ev.Executor
+		}
+	case execEvent:
+		return ev.Executor
+	case deadlineEvent:
+		return ev.Executor
+	case stopEvent:
+		return ev.Executor
+	}
+	return ""
+}
+
 func (r *reducer) apply(item parsed) {
+	if bindingExecutor(item.body) != "" && r.conflictedPass[instantKey(item.at)] {
+		r.writes = false
+		r.refusals = append(r.refusals, "conflicting executor-binding event "+item.identity+" not applied")
+		return
+	}
 	switch ev := item.body.(type) {
 	case passEvent:
 		r.applyPass(ev, item.at)
@@ -1121,6 +1171,8 @@ func (r *reducer) applyPass(ev passEvent, at time.Time) {
 			r.writes = false
 			return
 		}
+	}
+	for _, id := range ev.Preserves {
 		if !r.passIDs[id] {
 			r.refusals = append(r.refusals, "worker pass "+ev.Identity+" does not preserve unknown pass "+id)
 			return
