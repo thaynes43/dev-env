@@ -625,18 +625,21 @@ func TestEssentialFactsStayOutsideSeparateEvidence(t *testing.T) {
 	if details < 0 {
 		t.Fatal("separate evidence disclosure missing")
 	}
-	for _, label := range []string{"<dt>Next action</dt>", "<dt>Owner</dt>", "<dt>Next actor</dt>", "<dt>Canonical source</dt>", "<dt>Source age</dt>", "<dt>Source updated</dt>", "<dt>Last verified</dt>"} {
+	for _, label := range []string{"<dt>Next action</dt>", "<dt>Owner</dt>", "<dt>Next actor</dt>", "<dt>Canonical source</dt>", "<dt>Source age</dt>", "<dt>Source updated</dt>", "<dt>Last verified</dt>", "<dt>Task outcome</dt>", "<dt>Worker liveness</dt>"} {
 		if i := strings.Index(body, label); i < 0 || i > details {
 			t.Fatalf("%s not visible before disclosure", label)
 		}
 	}
 	secondary := body[details:]
-	for _, label := range []string{"<dt>Task outcome</dt>", "<dt>Worker liveness</dt>", "<dt>Review</dt>", "<dt>Reviewed head</dt>", "<dt>Authority</dt>", "<dt>Release</dt>"} {
+	for _, label := range []string{"<dt>Review</dt>", "<dt>Reviewed head</dt>", "<dt>Authority</dt>", "<dt>Release</dt>"} {
 		if !strings.Contains(secondary, label) {
 			t.Fatalf("%s left the separate evidence", label)
 		}
 	}
-	if !strings.Contains(body, "<summary>Separate outcome, worker, review, authority and release</summary>") {
+	if strings.Contains(secondary, "<dt>Task outcome</dt>") || strings.Contains(secondary, "<dt>Worker liveness</dt>") {
+		t.Fatal("handoff evidence was only inside the disclosure")
+	}
+	if !strings.Contains(body, "<summary>Separate review, authority and release</summary>") {
 		t.Fatal("disclosure name missing")
 	}
 	if !strings.Contains(body, `aria-describedby="fresh-task-one"`) || !strings.Contains(body, `<p class="freshness">Verified within snapshot window</p>`) {
@@ -687,5 +690,48 @@ func TestEmptyAndUnknownListingsDoNotInventCurrentZeros(t *testing.T) {
 	body = response(d, "GET", attentionPath).Body.String()
 	if strings.Contains(body, "· 0") || strings.Contains(body, "Verified empty") || !strings.Contains(body, ">Needs you · Unknown</h2>") || !strings.Contains(body, "Count for this group is Unknown.") {
 		t.Fatal("stale empty listing presented a current zero")
+	}
+}
+
+func TestTaskRouteDoesNotClaimOtherGroupsEmpty(t *testing.T) {
+	w := response(dependencies(), "GET", taskPath)
+	body := w.Body.String()
+	if w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	if strings.Contains(body, "· 0") || strings.Contains(body, "No items in this group.") || strings.Contains(body, "Verified empty") {
+		t.Fatal("task page implied empty groups beyond its scope")
+	}
+	if !strings.Contains(body, ">Handoff missing · 1</h2>") || !strings.Contains(body, "Other Attention groups are outside this page and are not verified empty.") {
+		t.Fatal("task scope wording missing")
+	}
+	for _, title := range []string{"Needs you", "Needs worker", "Review returned"} {
+		if strings.Contains(body, ">"+title+" ·") {
+			t.Fatalf("task page rendered %s", title)
+		}
+	}
+}
+
+func TestReviewReturnedShowsHeadBeforeDisclosure(t *testing.T) {
+	d := dependencies()
+	d.Reader = readFunc(func(_ context.Context, r Resource) (Snapshot, error) {
+		s := sample(r)
+		s.Items[0].Group = ReviewReturned
+		s.Items[0].ReviewState = "Findings returned"
+		s.Items[0].ReviewHead = strings.Repeat("a", 40)
+		return s, nil
+	})
+	body := response(d, "GET", attentionPath).Body.String()
+	details := strings.Index(body, "<details")
+	review := strings.Index(body, "<dt>Review</dt>")
+	head := strings.Index(body, "<dt>Reviewed head</dt>")
+	if details < 0 || review < 0 || head < 0 || review > details || head > details {
+		t.Fatal("review evidence hidden in the disclosure")
+	}
+	if strings.Contains(body[details:], "<dt>Review</dt>") || strings.Contains(body[details:], "<dt>Reviewed head</dt>") {
+		t.Fatal("review evidence duplicated inside the disclosure")
+	}
+	if !strings.Contains(body, "<summary>Separate outcome, worker, authority and release</summary>") {
+		t.Fatal("review disclosure name missing")
 	}
 }

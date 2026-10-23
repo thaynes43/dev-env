@@ -1,9 +1,44 @@
 #!/usr/bin/env node
 // Offline Attention presentation check. Opens local files in the session
 // Chromium. It does not prove a physical device, deployed authentication, or Gate A.
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { chromium } = require("/usr/local/lib/node_modules/@playwright/mcp/node_modules/playwright");
+const { spawn } = require("child_process");
+
+if (process.env.PORTAL_BROWSER_NICED !== "1") {
+  const child = spawn("nice", ["-n", "19", process.execPath, ...process.argv.slice(1)], {
+    stdio: "inherit",
+    env: { ...process.env, PORTAL_BROWSER_NICED: "1" },
+  });
+  child.on("exit", (code) => process.exit(code === null ? 1 : code));
+} else {
+main();
+}
+
+function main() {
+const defaultModule = "/usr/local/lib/node_modules/@playwright/mcp/node_modules/playwright";
+const modulePath = process.env.PORTAL_PLAYWRIGHT_MODULE || defaultModule;
+const chrome = process.env.CHROME_PATH || "/opt/dev-env/ms-playwright/chromium-1247/chrome-linux64/chrome";
+let playwright;
+try {
+  playwright = require(modulePath);
+} catch (err) {
+  console.error("Playwright module unavailable at " + modulePath + ".");
+  console.error("That default is bound to the dev-env session image. Set PORTAL_PLAYWRIGHT_MODULE to an installed Playwright module.");
+  console.error(err && err.message ? err.message : err);
+  process.exit(1);
+}
+const chromium = playwright.chromium;
+if (!chromium || typeof chromium.launch !== "function") {
+  console.error("Playwright module at " + modulePath + " does not export chromium.launch.");
+  process.exit(1);
+}
+if (!fs.existsSync(chrome)) {
+  console.error("Chromium executable unavailable at " + chrome + ".");
+  console.error("That default is bound to the dev-env session image. Set CHROME_PATH to the image Chromium binary.");
+  process.exit(1);
+}
 
 const scenariosDir = process.argv[2];
 const outDir = process.argv[3];
@@ -11,7 +46,6 @@ if (!scenariosDir || !outDir) {
   console.error("usage: browser_check.cjs <scenarios-dir> <output-dir>");
   process.exit(2);
 }
-const chrome = process.env.CHROME_PATH || "/opt/dev-env/ms-playwright/chromium-1247/chrome-linux64/chrome";
 const viewports = [
   { name: "mobile-320", width: 320, height: 640 },
   { name: "mobile-390", width: 390, height: 844 },
@@ -134,6 +168,18 @@ async function inspectHTML(page, name, viewport, failures) {
   if (name === "future-listing.html") must(text.includes("untrusted future timestamp"), name + " trusted a future timestamp", failures);
   if (name === "hostile.html") must(text.includes("Unknown") && !observed.raw.includes("<script>") && !observed.raw.includes("<img "), name + " executed hostile text", failures);
   if (name === "no-owner.html") must(text.includes("Unknown"), name + " hid a missing owner", failures);
+  if (name === "populated.html") {
+    const visibleFacts = await page.evaluate(() => {
+      const sectionText = (title) => {
+        const section = [...document.querySelectorAll("section")].find((node) => (node.querySelector("h2") || {}).textContent.startsWith(title));
+        const primary = section && section.querySelector("dl.primary");
+        return primary ? primary.innerText : "";
+      };
+      return { review: sectionText("Review returned"), handoff: sectionText("Handoff missing") };
+    });
+    must(visibleFacts.review.includes("Review") && visibleFacts.review.includes("Reviewed head"), name + " hid review evidence", failures);
+    must(visibleFacts.handoff.includes("Task outcome") && visibleFacts.handoff.includes("Worker liveness"), name + " hid handoff evidence", failures);
+  }
   const visible = (box) => box && box.w > 0 && box.h > 0 && box.left >= -1 && box.right <= observed.inner + 1 && box.scroll <= box.client + 1;
   for (const field of observed.fields) {
     for (const key of ["owner", "action", "actor", "source", "verified", "fresh", "title"]) {
@@ -149,7 +195,7 @@ async function inspectHTML(page, name, viewport, failures) {
   }
   for (const summary of observed.summaries) {
     must(summary.h >= 44 && summary.w >= 44, name + " " + viewport + " summary target " + summary.w + "x" + summary.h, failures);
-    must(summary.text.includes("Separate outcome, worker, review, authority and release"), name + " summary name", failures);
+    must(summary.text.startsWith("Separate ") && summary.text.length > 12, name + " summary name", failures);
     must(visible(summary), name + " " + viewport + " summary clipped", failures);
   }
   await page.screenshot({ path: path.join(outDir, name.replace(".html", "") + "-" + viewport + ".png"), fullPage: true });
@@ -176,15 +222,18 @@ async function inspectHTML(page, name, viewport, failures) {
     await page.keyboard.press("Enter");
     const opened = await page.evaluate(() => {
       const details = document.activeElement.closest("details");
-      const text = details ? details.innerText : "";
+      const article = details ? details.closest("article") : null;
+      const primary = article && article.querySelector("dl.primary") ? article.querySelector("dl.primary").innerText : "";
+      const inside = details ? details.innerText : "";
+      const labels = ["Task outcome", "Worker liveness", "Review", "Reviewed head", "Authority", "Release"];
       return {
         open: !!(details && details.open),
-        separate: text.includes("Task outcome") && text.includes("Worker liveness") && text.includes("Review") && text.includes("Authority") && text.includes("Release"),
+        covered: labels.every((label) => primary.includes(label) || inside.includes(label)),
         scroll: document.documentElement.scrollWidth,
         client: document.documentElement.clientWidth,
       };
     });
-    must(opened.open && opened.separate, name + " " + viewport + " disclosure did not open", failures);
+    must(opened.open && opened.covered, name + " " + viewport + " disclosure did not open", failures);
     must(opened.scroll <= opened.client + 1, name + " " + viewport + " overflow after disclosure", failures);
     if (name === "populated.html" && viewport === "mobile-390") {
       await page.screenshot({ path: path.join(outDir, "populated-mobile-390-open.png"), fullPage: true });
@@ -201,10 +250,69 @@ async function inspectText(page, name, viewport, failures) {
   must(shown.trim() === refused.trim() && !shown.includes("Verified empty"), name + " " + viewport + " text response", failures);
 }
 
+function sha256(bytes) {
+  return crypto.createHash("sha256").update(bytes).digest("hex");
+}
+function packageVersion(start) {
+  let dir = start;
+  for (let i = 0; i < 5; i++) {
+    const pkg = path.join(dir, "package.json");
+    if (fs.existsSync(pkg)) {
+      try { return JSON.parse(fs.readFileSync(pkg, "utf8")).version || "unknown"; } catch (err) { return "unknown"; }
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return "unknown";
+}
+function loadManifest(dir) {
+  const manifestPath = path.join(dir, "manifest.json");
+  if (!fs.existsSync(manifestPath)) {
+    throw new Error("scenario manifest missing; refusing a partial or stale evidence set");
+  }
+  const raw = fs.readFileSync(manifestPath);
+  let parsed;
+  try { parsed = JSON.parse(raw.toString("utf8")); } catch (err) {
+    throw new Error("scenario manifest is not JSON; refusing the evidence set");
+  }
+  if (!parsed.sourceHead || !/^[0-9a-f]{40}$/.test(parsed.sourceHead) || !Array.isArray(parsed.files) || parsed.files.length === 0) {
+    throw new Error("scenario manifest has no source head or files; refusing the evidence set");
+  }
+  const names = new Set();
+  for (const file of parsed.files) {
+    if (!file.name || file.name.includes("/") || file.name.includes("..")) {
+      throw new Error("scenario manifest entry is not a single file name");
+    }
+    const full = path.join(dir, file.name);
+    if (!fs.existsSync(full)) throw new Error("scenario manifest entry missing: " + file.name);
+    const got = sha256(fs.readFileSync(full));
+    if (got !== file.sha256) throw new Error("scenario file hash mismatch for " + file.name + "; refusing a stale evidence set");
+    names.add(file.name);
+  }
+  for (const required of htmlNames.concat(textNames)) {
+    if (!names.has(required)) throw new Error("scenario manifest omits " + required);
+  }
+  for (const entry of fs.readdirSync(dir)) {
+    if (entry !== "manifest.json" && !names.has(entry)) {
+      throw new Error("scenario directory has " + entry + " outside the manifest; refusing a stale evidence set");
+    }
+  }
+  return { sourceHead: parsed.sourceHead, digest: sha256(raw), files: parsed.files.length };
+}
+
 (async () => {
   const started = Date.now();
   fs.mkdirSync(outDir, { recursive: true });
   const failures = [];
+  let reportBrowserVersion = "unknown";
+  let manifest;
+  try {
+    manifest = loadManifest(scenariosDir);
+  } catch (err) {
+    console.error(err.message || err);
+    process.exit(1);
+  }
   const browser = await chromium.launch({
     executablePath: chrome,
     headless: true,
@@ -218,7 +326,39 @@ async function inspectText(page, name, viewport, failures) {
         colorScheme: "light",
         reducedMotion: "reduce",
       });
+      const blocked = [];
+      const remoteResponses = [];
+      await context.route("**/*", async (route) => {
+        const url = route.request().url();
+        if (url.startsWith("file:") || url.startsWith("about:") || url.startsWith("data:")) {
+          await route.continue();
+          return;
+        }
+        blocked.push(url);
+        await route.abort("blockedbyclient");
+      });
+      context.on("response", (response) => {
+        const url = response.url();
+        if (!url.startsWith("file:") && !url.startsWith("about:") && !url.startsWith("data:")) remoteResponses.push(url);
+      });
       const page = await context.newPage();
+      if (viewport.name === "mobile-320") {
+        const probe = await context.newPage();
+        const saw = new Promise((resolve) => {
+          const timer = setTimeout(() => resolve(false), 1000);
+          probe.on("request", (request) => {
+            if (request.url().includes("example.invalid/portal-offline-probe")) {
+              clearTimeout(timer);
+              resolve(true);
+            }
+          });
+        });
+        await probe.setContent("<!doctype html><html><body><img src=\"https://example.invalid/portal-offline-probe\"></body></html>");
+        must(await saw, "offline probe was not intercepted", failures);
+        must(blocked.some((url) => url.includes("example.invalid/portal-offline-probe")), "offline probe was not aborted before network", failures);
+        must(!remoteResponses.some((url) => url.includes("example.invalid")), "offline probe received a response", failures);
+        await probe.close();
+      }
       for (const name of htmlNames) {
         await inspectHTML(page, name, viewport.name, failures);
       }
@@ -230,6 +370,7 @@ async function inspectText(page, name, viewport, failures) {
       }
       await context.close();
     }
+    reportBrowserVersion = await browser.version();
   } finally {
     await browser.close();
   }
@@ -237,6 +378,12 @@ async function inspectText(page, name, viewport, failures) {
     startedEpochMs: started,
     elapsedMs: Date.now() - started,
     chrome,
+    browserVersion: reportBrowserVersion,
+    playwrightModule: modulePath,
+    playwrightVersion: packageVersion(modulePath),
+    sourceHead: manifest.sourceHead,
+    manifestDigest: manifest.digest,
+    manifestFiles: manifest.files,
     scenariosDir,
     failures,
   };
@@ -250,3 +397,4 @@ async function inspectText(page, name, viewport, failures) {
   console.error(err);
   process.exit(1);
 });
+}

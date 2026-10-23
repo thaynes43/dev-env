@@ -44,11 +44,13 @@ PR head is stable; this tool grants no runtime authority.
 The Go handler in `web/portal` is the presentation under test. The command
 below writes the same synthetic states through that handler and opens them in
 local Chromium. A screenshot from this check is not device or deployed-auth
-acceptance. Run it from the repository root, one process, under `nice -n 19`.
+acceptance. Run it from the repository root, one checker run at a time, under `nice -n 19`.
+
+Playwright and Chromium default to the paths in the dev-env session image. Set `PORTAL_PLAYWRIGHT_MODULE` or `CHROME_PATH` to override them. The checker prints the actual module and browser versions and the scenario manifest digest. It aborts any non-file request before the network and refuses a stale or partial scenario directory.
 
 ```sh
 GOTOOLCHAIN=local GOMAXPROCS=2 nice -n 19 \
   go run -p 1 ./web/portal/preview --scenarios /tmp/portal-attention-scenarios
-node scripts/trials/portal_attention/browser_check.cjs \
+nice -n 19 node scripts/trials/portal_attention/browser_check.cjs \
   /tmp/portal-attention-scenarios /tmp/portal-attention-browser
 ```

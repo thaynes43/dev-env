@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"strings"
 	"testing"
@@ -106,5 +108,10 @@ func TestOfflineScenariosKeepHonestStates(t *testing.T) {
 	populated := read("populated.html")
 	if strings.Count(populated, "<article ") != 4 || strings.Contains(populated, "<script") || strings.Contains(populated, "Listing counts") {
 		t.Fatal("populated preview")
+	}
+	manifest := read("manifest.json")
+	sum := sha256.Sum256([]byte(populated))
+	if !strings.Contains(manifest, `"sourceHead"`) || !strings.Contains(manifest, hex.EncodeToString(sum[:])) {
+		t.Fatal("scenario manifest does not bind the source head and populated file")
 	}
 }

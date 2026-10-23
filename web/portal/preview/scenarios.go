@@ -2,11 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -76,6 +81,18 @@ func writeHTML(dir, name string, snapshot portal.Snapshot, now time.Time) error 
 // writeScenarios renders the offline presentation matrix through the existing handler.
 // The pages are synthetic. They do not contact a tracker, provider, or cluster.
 func writeScenarios(dir string) error {
+	final := dir
+	staging, err := os.MkdirTemp(filepath.Dir(final), filepath.Base(final)+".staging-")
+	if err != nil {
+		return err
+	}
+	published := false
+	defer func() {
+		if !published {
+			_ = os.RemoveAll(staging)
+		}
+	}()
+	dir = staging
 	now := time.Date(2026, 10, 23, 16, 0, 0, 0, time.UTC)
 	freshUpdated, freshVerified := now.Add(-2*time.Minute), now.Add(-time.Minute)
 	base := portal.Snapshot{Resource: scope, State: portal.Verified, UpdatedAt: freshUpdated, VerifiedAt: freshVerified}
@@ -163,5 +180,85 @@ func writeScenarios(dir string) error {
 	if code != http.StatusServiceUnavailable || string(body) != refused {
 		return fmt.Errorf("unavailable scenario status %d", code)
 	}
-	return writeNamed(dir, "unavailable.txt", body)
+	if err = writeNamed(dir, "unavailable.txt", body); err != nil {
+		return err
+	}
+	if err = writeManifest(dir); err != nil {
+		return err
+	}
+	if err = publishScenarioDir(staging, final); err != nil {
+		return err
+	}
+	published = true
+	return nil
+}
+
+func sourceHead() (string, error) {
+	out, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	if err != nil {
+		return "", fmt.Errorf("source head unavailable")
+	}
+	head := strings.TrimSpace(string(out))
+	if len(head) != 40 {
+		return "", fmt.Errorf("source head unavailable")
+	}
+	return head, nil
+}
+
+type manifestFile struct {
+	Name   string `json:"name"`
+	SHA256 string `json:"sha256"`
+}
+
+func writeManifest(dir string) error {
+	head, err := sourceHead()
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	var files []manifestFile
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Name() == "manifest.json" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(raw)
+		files = append(files, manifestFile{Name: entry.Name(), SHA256: hex.EncodeToString(sum[:])})
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
+	if len(files) == 0 {
+		return fmt.Errorf("scenario set empty")
+	}
+	body, err := json.MarshalIndent(struct {
+		SourceHead string         `json:"sourceHead"`
+		Files      []manifestFile `json:"files"`
+	}{SourceHead: head, Files: files}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "manifest.json"), append(body, '\n'), 0o600)
+}
+
+func publishScenarioDir(staging, final string) error {
+	backup := final + ".previous"
+	if err := os.RemoveAll(backup); err != nil {
+		return err
+	}
+	if _, err := os.Stat(final); err == nil {
+		if err = os.Rename(final, backup); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Rename(staging, final); err != nil {
+		return err
+	}
+	return os.RemoveAll(backup)
 }
