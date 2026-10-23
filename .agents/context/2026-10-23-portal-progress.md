@@ -79,7 +79,7 @@ network, credential, deployment, public ingress or V1 operations in this pass.
 
 ### First milestone / +15-minute checkpoint, 14:33 UTC
 
-The [source inventory and threat map](../sagas/distributed-dev-env/designs/2026-10-23-portal-foundations.md)
+The [source inventory and threat map](../sagas/distributed-dev-env/designs/029-portal-foundations.md)
 is written. GitOps negative route evidence is scoped and pinned: the complete
 recursive tree has three routing-candidate HelmReleases under
 `dev-env-system/**` (broker, keeper, operator), with no portal route/host in

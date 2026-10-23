@@ -32,7 +32,7 @@ independent worker/task state, stale/missing/future evidence, and unavailable
 versus verified-empty results. They do not test OIDC, backend authorization,
 session/CSRF handling, audit storage, commands, rate limiting or deployed
 Authentik. Those remain pending in the
-[source/threat map](../../../.agents/sagas/distributed-dev-env/designs/2026-10-23-portal-foundations.md).
+[source/threat map](../../../.agents/sagas/distributed-dev-env/designs/029-portal-foundations.md).
 
 Run only this finite suite, one process under `nice -n 19`, with at most two
 CPUs available to heavier checks. No real lifecycle, load, media, model or
