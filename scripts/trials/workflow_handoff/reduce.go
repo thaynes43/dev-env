@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 )
@@ -332,8 +333,8 @@ func check(data []byte) (result, int) {
 	if err := dec.Decode(&doc); err != nil {
 		return refused(err.Error()), 2
 	}
-	if dec.More() {
-		return refused("trailing JSON value"), 2
+	if err := requireEOF(dec); err != nil {
+		return refused(err.Error()), 2
 	}
 	items, prov, err := validate(doc)
 	if err != nil {
@@ -632,8 +633,8 @@ func decode[T any](raw json.RawMessage) (T, error) {
 	if err := dec.Decode(&out); err != nil {
 		return out, err
 	}
-	if dec.More() {
-		return out, errors.New("trailing event value")
+	if err := requireEOF(dec); err != nil {
+		return out, err
 	}
 	return out, nil
 }
@@ -1130,7 +1131,11 @@ func (r *reducer) applyDeadline(ev deadlineEvent, at time.Time) {
 	r.exec.deadline = true
 	r.exec.deadlineAt = at
 	r.exec.turnEnded = true
-	r.exec.state = "ended-pending-verified-stop"
+	if r.exec.verified {
+		r.exec.state = "exited"
+	} else {
+		r.exec.state = "ended-pending-verified-stop"
+	}
 	r.writes = false
 }
 
@@ -1183,9 +1188,7 @@ func (r *reducer) applyStop(ev stopEvent, at time.Time) {
 	r.exec.stopAt = at
 	r.exec.stopSet = true
 	r.writes = false
-	if r.exec.state != "ended-pending-verified-stop" {
-		r.exec.state = "exited"
-	}
+	r.exec.state = "exited"
 }
 
 func stopDisagrees(ex execState, ev stopEvent) bool {
@@ -1239,7 +1242,7 @@ func (r *reducer) applyDisp(ev dispEvent, at time.Time) {
 	}
 	n := 0
 	for i := range r.holds {
-		if r.holds[i].view.Action == ev.Action && r.holds[i].view.State == "pending" && !r.holds[i].at.After(at) {
+		if r.holds[i].view.Action == ev.Action && r.holds[i].view.State == "pending" && r.holds[i].at.Before(at) {
 			r.holds[i].view.State = "reconsidered"
 			n++
 		}
@@ -1430,7 +1433,7 @@ func (r *reducer) finish() result {
 		res.ExitCode = 0
 		res.Outcome = "merge-blocked"
 		res.NextAction = "merge blocked: " + strings.Join(blockers, "; ")
-	case r.exec.deadline && r.successor == nil:
+	case r.exec.deadline && !r.exec.verified && r.successor == nil:
 		res.Status = "reduced"
 		res.ExitCode = 0
 		res.Outcome = "executor-ended-pending-verified-stop"
@@ -1580,6 +1583,9 @@ func (r *reducer) resolveScope() (*scopeView, []scopeView) {
 		view := scopeViewOf(tops[0])
 		return &view, retained
 	}
+	if len(r.scopes) > 0 {
+		r.conflict("scope instructions resolve to no current scope; manual disposition required")
+	}
 	return nil, retained
 }
 
@@ -1622,6 +1628,9 @@ func (r *reducer) evalMerge(reviews []reviewView) (string, []string) {
 	}
 	g := r.gate.ev
 	blockers := []string{}
+	if r.writes && r.writesOpen() {
+		blockers = append(blockers, "current executor writes remain recommended")
+	}
 	if g.Head != r.doc.Head {
 		blockers = append(blockers, "gate head does not match the record head")
 	}
@@ -1730,10 +1739,14 @@ func rejectDuplicateKeys(data []byte) error {
 	if err := consumeValue(dec); err != nil {
 		return err
 	}
-	if dec.More() {
-		return errors.New("trailing JSON value")
+	return requireEOF(dec)
+}
+
+func requireEOF(dec *json.Decoder) error {
+	if _, err := dec.Token(); err == io.EOF {
+		return nil
 	}
-	return nil
+	return errors.New("trailing JSON data after root value")
 }
 
 func consumeValue(dec *json.Decoder) error {
@@ -1796,11 +1809,15 @@ func consumeValue(dec *json.Decoder) error {
 }
 
 func canonicalSchemaKey(key string) (string, bool) {
-	canon, ok := schemaCanonical[strings.ToLower(key)]
-	return canon, ok
+	for _, tag := range schemaTags {
+		if strings.EqualFold(key, tag) {
+			return tag, true
+		}
+	}
+	return "", false
 }
 
-var schemaCanonical = func() map[string]string {
+var schemaTags = func() []string {
 	tags := []string{
 		"schema", "story", "relatedStories", "repository", "pullRequest", "head", "coordinator",
 		"reviewBinding", "modelProvenance", "events", "task", "uid", "serving", "cost", "configuredUI",
@@ -1811,13 +1828,12 @@ var schemaCanonical = func() map[string]string {
 		"agentOpened", "requiredCI", "nativeReviewVerdict", "reviewJobSuccess", "findings", "headUnchanged",
 		"note",
 	}
-	out := make(map[string]string, len(tags))
-	for _, tag := range tags {
-		fold := strings.ToLower(tag)
-		if _, exists := out[fold]; exists {
-			panic("schema tags fold together")
+	for i, tag := range tags {
+		for _, other := range tags[:i] {
+			if strings.EqualFold(tag, other) {
+				panic("schema tags fold together")
+			}
 		}
-		out[fold] = tag
 	}
-	return out
+	return tags
 }()

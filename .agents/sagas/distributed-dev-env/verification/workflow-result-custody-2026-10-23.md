@@ -7,3 +7,11 @@ The change adds `docs/coordinator-result-handoff.md` and the offline checker in 
 This record does not accept [#117](https://work.haynesnetwork.com/work_packages/117) or [#101](https://work.haynesnetwork.com/work_packages/101). It does not change runtime orchestration, TaskClaim, inbox delivery, admission, or deployment. Serving model and cost for the implementation session are Unknown. Configured UI is not serving evidence.
 
 Sol keeps result pickup, native review, required CI, findings disposition, and the ordinary dev-env merge and release path. The checker grants none of that.
+
+## SOL177 bounded correction, 2026-10-23
+
+The review of head `f4a260300a4d4c2cccce7e20c5d26b7c5881daaf` returned FIX-NEEDED for F3. This repair matches schema tags with Unicode `EqualFold`, checks tag collisions with the same rule, and exercises actual nested gate/disposition keys, escaped keys, long s, Kelvin sign, canonical input, exact unknown keys and literal string values. ASCII case fixtures now use known event fields.
+
+Minor dispositions: m1 requires EOF in both token and typed parser paths, preserving trailing whitespace. m2 blocks merge advice while executor writes remain recommended. m3 keeps the offline deadline display-only, documents mandatory coordinator clock ownership, and includes a finite post-deadline observation without an enforcement event. m4 permits only strictly later hold dispositions, with both equal-time input orders and a later positive case. m5 reports a conflict when retained mutually superseding scopes resolve to no current scope, preserving holds and blocking merge in both orders. m6 preserves exact replay timestamp representation conservatively and tests same-instant offset spelling conflict. m7 updates the PR body for the final repair; older reviews cover only their recorded heads. m8 displays a verified-stopped executor as exited on either side of a deadline event, preserving turn-ended and stop evidence.
+
+These are finite offline checks, not live orchestration or broader #117/#101 acceptance. Parent coordinator retains fresh final-head CI/native review, findings disposition, unchanged-head preflight and authorized merge/release; the implementation successor stops at ready handoff. Exact head and validation outcomes are in the PR and designated SOL177-REPAIR-RESULT.md receipt.

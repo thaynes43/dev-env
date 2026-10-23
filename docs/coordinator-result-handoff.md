@@ -36,7 +36,7 @@ A delivery of that record to a parent is not acknowledgment and not ownership.
 1. Match a review observation to the bound task, UID, and head. Pick one terminal verdict. Ignore a repeated observation. Refuse a wrong head or UID. An equal-time pair of different verdicts needs manual disposition; do not pick a winner by sort order.
 2. Treat executor exit as exit only. It does not release the parent outcome and it does not change TaskClaim.
 3. Record a successor only after a verified, unambiguous stop and a separate externally authorized supported assignment. Otherwise write blocked custody and keep the coordinator. Duplicate assignment, reconnect, and lease expiry do not add another successor. A later different successor for the same key does not replace the recorded one.
-4. Keep the latest owner-scope reference and every unresolved hold. A standing merge instruction does not clear a hold on a different action. A hold changes only when an externally established trusted disposition names that action and permits reconsideration.
+4. Keep the latest owner-scope reference and every unresolved hold. A standing merge instruction does not clear a hold on a different action. A hold changes only when a strictly later externally established trusted disposition names that action and permits reconsideration. A hold and disposition at the same instant leave the hold pending in either input order.
 5. At the worker deadline, mark the executor turn ended and pending a verified stop. Do not recommend more writes and do not invent a new allowance. The coordinator still owns review, repair, required CI, and the outcome. A later pass needs its own identity, its own external authorization, and it keeps the earlier budget in the record.
 6. For an agent-opened dev-env pull request, recommend the existing merge and release workflow only when the exact head is unchanged, required CI passed, a native review verdict is recorded, findings are disposed, and no action-specific hold covers merge or release. Review-job success is not that verdict. Publication is not deployment. The checker does not merge, publish, or deploy. A missing gate or a matching hold names the blocker.
 
@@ -69,7 +69,7 @@ One JSON document, at most 128KiB. Fields are evidence references. The file does
 }
 ```
 
-Event `kind` values are `worker-pass`, `executor-state`, `deadline-reached`, `stop-release`, `delivery-receipt`, `acknowledgment`, `review-observation`, `scope-instruction`, `hold`, `hold-disposition`, `successor-assignment`, `lease-expiry`, `reconnect`, `gate-evidence`, and `taskclaim-mutation`. Each event has `identity` and `sourceTime` (`RFC3339`, no fractional seconds). A repeated identity with the same payload is ignored. The same identity with a different payload is a conflict.
+Event `kind` values are `worker-pass`, `executor-state`, `deadline-reached`, `stop-release`, `delivery-receipt`, `acknowledgment`, `review-observation`, `scope-instruction`, `hold`, `hold-disposition`, `successor-assignment`, `lease-expiry`, `reconnect`, `gate-evidence`, and `taskclaim-mutation`. Each event has `identity` and `sourceTime` (`RFC3339`, no fractional seconds). A repeated identity with the same payload is ignored. Replay requires the same timestamp string representation as well as the same typed payload. Reusing an identity with a different offset spelling, even for the same UTC instant, is conservatively a conflict; this never broadens permission. Distinct observations still group by UTC instant. The same identity with a different payload is a conflict.
 
 `taskclaim-mutation` is always refused. The checker leaves TaskClaim unchanged.
 
@@ -97,10 +97,16 @@ RFC3339 timestamps may use `Z` or a numeric offset. The checker compares the UTC
 
 An equal-time conflict stays a manual disposition. A later approval does not clear it. The defensive check that an older gate does not overwrite a stored later gate remains in the checker. The stale-gate fixture shows that sorting by source time keeps the later gate. It does not by itself execute that defensive branch.
 
-An exited or verified-stopped executor does not receive a further write recommendation, even when the record has no deadline. A later explicitly authorized pass is retained and does not by itself recommend writes. TaskClaim stays unchanged.
+A merge recommendation is blocked while the current executor still has writes recommended. An exited or verified-stopped executor does not receive a further write recommendation, even when the record has no deadline. A later explicitly authorized pass is retained and does not by itself recommend writes. TaskClaim stays unchanged.
 
 Identical gate fields at the same source time are one observation even when the event identities differ. Different gate fields at that time remain a conflict, and an older gate does not replace a newer one.
 
 `checkerAuthority` is always `none`. `completion` is always false. `deployment` is always `not-performed`. `publication` stays distinct from deployment.
 
 Finite fixtures under `scripts/trials/workflow_handoff/testdata/` cover review pickup, successor custody, scope and holds, the worker deadline, and the merge recommendation. They prove the checker and this procedure only.
+
+The pass `deadline` field is recorded evidence for display, not clock enforcement. This offline reducer reads no wall clock, runs no scheduler, and ends the turn only from an explicit `deadline-reached` event. The coordinator must own the actual clock, stop source work on time, and record that event. The finite `repair-writable-merge.json` fixture intentionally has a gate observation after its pass deadline without that event: writes remain recommended and merge is blocked. `d-deadline.json` proves the explicit event ends write advice. Neither fixture proves a runtime timer.
+
+If retained scope instructions supersede one another and leave no current scope, the checker reports a manual-disposition conflict and blocks merge. It retains every scope and pending hold; it does not invent a winner or grant authorization. Equal-time mutually superseding fixtures cover both input orders. A verified stop is displayed as `exited`, including when a deadline was recorded; its ended-turn and stop evidence remain separate.
+
+Schema keys must exactly match their canonical tags. Unicode simple-fold variants (including long s and Kelvin sign) are refused before typed decoding, as are duplicate keys, unknown fields, and trailing JSON data. Legitimate string values and case-sensitive identifiers retain their exact text.

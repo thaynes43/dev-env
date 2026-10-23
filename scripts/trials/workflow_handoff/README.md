@@ -12,3 +12,5 @@ go run . - < testdata/d-deadline.json
 Exit 0 means the record reduced. Exit 2 means the input was refused. Exit 3 means a conflict needs manual disposition. The procedure and the JSON template are in `docs/coordinator-result-handoff.md`.
 
 Fixtures in `testdata/` are synthetic. They do not prove a live subscriber, a deployed policy, or a native review.
+
+The `deadline` field alone is display evidence. The coordinator owns the clock and must record an explicit `deadline-reached` event; this offline tool has no timer. A writable executor blocks merge advice. Same-instant hold dispositions leave the hold pending. Replay retains the exact source-time representation, while ordering and equal-time grouping compare UTC instants.
