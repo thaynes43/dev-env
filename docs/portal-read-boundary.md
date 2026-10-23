@@ -63,6 +63,25 @@ remote resources or scripts are rendered. Responses use no-store, a restrictive
 CSP, no-referrer and nosniff. These source checks do not establish deployed
 authentication, session security, proxy trust, CSRF, SSRF or ingress isolation.
 
+## Mobile presentation
+
+Essential facts stay visible on every item: canonical source, owner, next actor, next action, source age, source update, last verification and freshness. Task outcome, worker liveness, review, reviewed head, authority and release stay labeled and separate. A returned review keeps its review state and reviewed head visible. A missing handoff keeps worker liveness and task outcome visible. The other separate facts stay in a native `details` disclosure. The disclosure is not an action and queues nothing. A single-task page names that task's group only and does not present the other groups as verified empty.
+
+A verified empty snapshot shows all four groups at zero and says verified empty. A listing whose own evidence is missing, stale, future or older than its source update keeps Unknown group counts, including when a row inside it is fresh. A read whose state is unknown does not render group counts. Denied and unavailable reads stay the same plain refusal. They never become a verified empty page.
+
+An offline browser check drives this preview renderer and the Chromium already present in the session image. It is repeatable synthetic evidence at 320px, 390px, tablet and desktop widths. It is not a physical-device pass, deployed authentication, or Gate A.
+
+The checker defaults are bound to the dev-env session image: Playwright module `/usr/local/lib/node_modules/@playwright/mcp/node_modules/playwright` and Chromium `/opt/dev-env/ms-playwright/chromium-1247/chrome-linux64/chrome`. Override them with `PORTAL_PLAYWRIGHT_MODULE` and `CHROME_PATH`. A missing module or binary stops with that path instead of a stack trace. Run one checker at a time. The checker refuses a scenario directory whose `manifest.json` does not match the file hashes and the checkout source head. Uncommitted changes under `web/portal` or `scripts/trials/portal_attention` are refused, so a dirty tree cannot be labeled as an exact commit. Standard output is the elapsed time and failure count. `report.json` records the Playwright version, Chromium version, source head and manifest digest. The scenario command writes only a directory that does not yet exist. An existing destination and an existing `<dir>.previous` are left unchanged. The commands below call `mktemp -u`, which prints a new path and does not create it, so a second copy of the same command does not reuse or delete the first directory.
+
+```sh
+scenarios=$(mktemp -u /tmp/portal-attention-scenarios.XXXXXX)
+browser=$(mktemp -u /tmp/portal-attention-browser.XXXXXX)
+GOTOOLCHAIN=local GOMAXPROCS=2 nice -n 19 \
+  go run -p 1 ./web/portal/preview --scenarios "$scenarios"
+nice -n 19 node scripts/trials/portal_attention/browser_check.cjs \
+  "$scenarios" "$browser"
+```
+
 ## Offline evidence and custody
 
 Run focused tests with Go1.27.2 as pinned by `go.mod`, `GOTOOLCHAIN=local`,

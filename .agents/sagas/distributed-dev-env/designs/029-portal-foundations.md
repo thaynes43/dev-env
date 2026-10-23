@@ -291,3 +291,17 @@ There is no production storage fallback, running listener, provider call,
 runtime human mapping, metadata adapter or ingress activation. The approved
 confidential-client setup remains separate infrastructure work. These source
 tests leave Gate A and the public ASVS gate unmet.
+
+### M4 mobile presentation, 2026-10-23
+
+Attention rendering keeps the accepted read and session contracts. The phone
+and desktop page shows canonical source, owner, next actor, next action, age,
+source update, last verification and freshness without a disclosure. Task
+outcome, worker liveness, review, reviewed head, authority and release remain
+separate labeled facts. Facts that a group must show stay outside the disclosure. Verified empty snapshots
+show the four groups at zero. Unknown and stale listings do not present a
+current zero count. A returned review keeps review state and reviewed head visible. A missing
+handoff keeps worker liveness and task outcome visible. A single-task page
+does not present the other groups as verified empty. Offline browser checks
+are one checker run at a time, bound to a source-head manifest, and remain
+synthetic presentation evidence, not device, authentication or Gate A acceptance.
