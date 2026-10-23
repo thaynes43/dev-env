@@ -46,11 +46,13 @@ below writes the same synthetic states through that handler and opens them in
 local Chromium. A screenshot from this check is not device or deployed-auth
 acceptance. Run it from the repository root, one checker run at a time, under `nice -n 19`.
 
-Playwright and Chromium default to the paths in the dev-env session image. Set `PORTAL_PLAYWRIGHT_MODULE` or `CHROME_PATH` to override them. Standard output is the elapsed time and failure count. `report.json` records the Playwright module version, Chromium version, source head and scenario manifest digest. The checker aborts any non-file request before the network. It refuses a stale or partial scenario directory, a manifest source head that is not this checkout's HEAD, and uncommitted changes under `web/portal` or `scripts/trials/portal_attention`. The scenario command writes only a new directory. An existing destination or `<dir>.previous` stays unchanged.
+Playwright and Chromium default to the paths in the dev-env session image. Set `PORTAL_PLAYWRIGHT_MODULE` or `CHROME_PATH` to override them. Standard output is the elapsed time and failure count. `report.json` records the Playwright module version, Chromium version, source head and scenario manifest digest. The checker aborts any non-file request before the network. It refuses a stale or partial scenario directory, a manifest source head that is not this checkout's HEAD, and uncommitted changes under `web/portal` or `scripts/trials/portal_attention`. The scenario command writes only a new directory. An existing destination or `<dir>.previous` stays unchanged. The commands below call `mktemp -u`, which prints a new path and does not create it, so a second copy of the same command does not reuse or delete the first directory.
 
 ```sh
+scenarios=$(mktemp -u /tmp/portal-attention-scenarios.XXXXXX)
+browser=$(mktemp -u /tmp/portal-attention-browser.XXXXXX)
 GOTOOLCHAIN=local GOMAXPROCS=2 nice -n 19 \
-  go run -p 1 ./web/portal/preview --scenarios /tmp/portal-attention-scenarios
+  go run -p 1 ./web/portal/preview --scenarios "$scenarios"
 nice -n 19 node scripts/trials/portal_attention/browser_check.cjs \
-  /tmp/portal-attention-scenarios /tmp/portal-attention-browser
+  "$scenarios" "$browser"
 ```
