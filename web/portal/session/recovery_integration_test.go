@@ -248,6 +248,13 @@ func (f *pausedInsertFence) Recheck(ctx context.Context, s AdmissionSnapshot) er
 
 func testInsertDoesNotBlockRevocation(t *testing.T, a, b *PostgresStore, record Record) {
 	t.Helper()
+	for _, kind := range []string{"sessions", "pending_logins"} {
+		t.Run(kind, func(t *testing.T) { testInsertKindDoesNotBlockRevocation(t, a, b, record, kind) })
+	}
+}
+
+func testInsertKindDoesNotBlockRevocation(t *testing.T, a, b *PostgresStore, record Record, kind string) {
+	t.Helper()
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	record.CreatedAt = now
@@ -268,7 +275,13 @@ func testInsertDoesNotBlockRevocation(t *testing.T, a, b *PostgresStore, record 
 	writer.fence = pause
 	writer.timeout = 5 * time.Second
 	result := make(chan error, 1)
-	go func() { result <- writer.PutSession(ctx, insert, record) }()
+	go func() {
+		if kind == "pending_logins" {
+			result <- writer.PutLogin(ctx, insert, login)
+		} else {
+			result <- writer.PutSession(ctx, insert, record)
+		}
+	}()
 	defer func() {
 		close(pause.resume)
 		if err := <-result; err != nil && !t.Failed() {
