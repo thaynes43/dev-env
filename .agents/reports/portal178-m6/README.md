@@ -1,0 +1,58 @@
+# M6 same-connection recovery fence — source work in progress
+
+Story [178](https://work.haynesnetwork.com/work_packages/178), under Epic120/Saga85.
+Fresh baseline `d4d21ef9d8f6682cabe1a45b78f5fd3726f50ef1` includes accepted
+PR529. Sole source implementer dev-env-1023-205407; one implementer, no children.
+Root owns independent final-head native review, required CI and authorized merge.
+UI, infra, #177/#160/#122/Future121 and V1 remain separately owned.
+
+The external record is exactly ConfigMap
+`dev-agents/dev-env-v2-portal-admission`; runtime has only GET on that resourceName.
+No controller or per-session Kubernetes objects. Extra narrow RBAC is pending;
+this PR grants/provisions/deploys nothing. Runtime assembly remains503.
+
+The contract replaces generation-only checking. Acquire and begin once. Before
+session-table SQL, measure system identifier, active WAL timeline from
+`pg_walfile_name(pg_current_wal_lsn())`, postmaster start, server address/port and
+writable/non-recovery using the SAME `pgx.Tx`. Compare to one fresh linearizable
+API GET, with resourceVersion absent (never0), fixed trusted API CA/token and
+fixed object path. Require exact pinned witness UID, resourceVersion and all
+admission fields again immediately before and after COMMIT. Any uncertainty
+returns unavailable and discards results; no automatic write retry.
+
+Record data is a strict string schema: `schema=1`, `state=open|closed`,
+`generation`, `system_identifier`, `timeline` (eight uppercase hex digits),
+`postmaster_started_at` (UTC RFC3339Nano), `server_address` (canonical IP),
+`server_port` (canonical decimal). Missing/error/closed/malformed/recreated or
+mismatched witness denies. Recreated UID needs separate approved configuration
+and closed recovery; observing a new object cannot silently admit it.
+
+Recovery owner closes admission before restore, measures the actual new primary,
+rotates AEAD key AND an independent fresh generation through the approved secret
+path, and CAS-opens the exact incarnation. Never reuse generation or restore it
+from backup. Logical restore on unchanged server and control-plane/witness restore
+require explicit CLOSED admission; identity functions alone cannot detect those.
+Runtime cannot edit the witness. No shared CNPG policy changes or production
+failover are authorized. PostgreSQL role/function proof remains disposable/live
+acceptance; do not add pg_monitor/admin speculatively.
+
+First reviewable milestone: direct reader, same-transaction protocol, strict
+negative/boundary fixtures and docs. Hosted disposable asynchronous failover must
+lose an acknowledged DELETE with witness unchanged and show resurrected session
+and callback denial before any observer. All unrun proof remains explicit.
+Source success cannot release witness/DB/auth/isolation/GateA or shared Authentik
+logging holds.
+
+Local evidence so far: official Go1.27.2 archive checksum verified, compiler
+binary SHA256 `548d3c32f83fa81152f543eb1526be7884cfe0526eb5e9ce29d3eca14786e7e0`.
+Focused portal tests and vet pass; selected transaction/current-membership
+`-race` passes. Local actual PostgreSQL and API RBAC fixtures explicitly skip
+because disposable facilities are not configured. Hosted results and required
+final-head independent native review are pending. A Python YAML parser is not
+installed locally; workflow acceptance is checked by GitHub and source review.
+
+References: PostgreSQL16 [control/WAL functions](https://www.postgresql.org/docs/16/functions-admin.html)
+and [LOCK privileges](https://www.postgresql.org/docs/16/sql-lock.html);
+Kubernetes1.35 [most-recent GET semantics](https://v1-35.docs.kubernetes.io/docs/reference/using-api/api-concepts/).
+The API can internally serve a consistent GET through its supported cache;
+there is no application cache, informer, object-file or resourceVersion0 request.

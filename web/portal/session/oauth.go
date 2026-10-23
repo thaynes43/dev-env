@@ -197,3 +197,8 @@ func (t *issuerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	response.Body = io.NopCloser(bytes.NewReader(data))
 	return response, nil
 }
+
+func (CodeConfig) String() string          { return "[redacted portal code config]" }
+func (c CodeConfig) GoString() string      { return c.String() }
+func (OAuthCodeClient) String() string     { return "[redacted portal code client]" }
+func (c OAuthCodeClient) GoString() string { return c.String() }

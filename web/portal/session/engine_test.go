@@ -148,7 +148,9 @@ func setupAuth(t *testing.T) *authFixture {
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.now = f.now.Add(f.exchangeAdvance)
+		if f.exchangeAdvance != 0 {
+			f.now = f.now.Add(f.exchangeAdvance)
+		}
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
 	}), time.Second, 64*1024)
 	if err != nil {

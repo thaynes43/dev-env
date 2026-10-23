@@ -258,3 +258,30 @@ func TestReferenceTokenDigestNotRawCredential(t *testing.T) {
 		t.Fatal("missing private exact-session reference")
 	}
 }
+
+func TestUserInfoServiceErrorsRemainUnavailable(t *testing.T) {
+	for _, status := range []int{401, 403, 429, 500, 502, 503} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			f := setupAuth(t)
+			f.login(t)
+			req := f.e.bind(f.request("GET", LandingPath, ""))
+			principal, err := f.e.Authenticate(req)
+			if err != nil {
+				t.Fatal("fixture authenticate failed")
+			}
+			a := currentFixture(f, func(*http.Request) (*http.Response, error) {
+				r := userInfoResponse(currentAllow)
+				r.StatusCode = status
+				return r, nil
+			})
+			err = a.Authorize(req.Context(), principal, portal.Resource{Project: "dev-env", Environment: "internal"})
+			want := portal.ErrDenied
+			if status == 429 || status >= 500 {
+				want = portal.ErrUnavailable
+			}
+			if !errors.Is(err, want) {
+				t.Fatal("provider diagnostic classification lost")
+			}
+		})
+	}
+}

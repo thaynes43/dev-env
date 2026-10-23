@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"errors"
 	"net/http/httptest"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/thaynes43/dev-env/web/portal"
@@ -72,11 +74,7 @@ GRANT SELECT,INSERT,DELETE ON portal.pending_logins,portal.sessions TO dev_env_v
 	newReplica := func() *PostgresStore {
 		s := fixtureStore(t)
 		s.fence = fence
-		c, err := pgxpool.ParseConfig(u.String())
-		if err != nil {
-			t.Fatal("fixture runtime config failed")
-		}
-		c.MaxConns = 2
+		c := integrationRuntimeConfig(t)
 		pool, err := pgxpool.NewWithConfig(ctx, c)
 		if err != nil {
 			t.Fatal("fixture runtime pool failed")
@@ -86,6 +84,35 @@ GRANT SELECT,INSERT,DELETE ON portal.pending_logins,portal.sessions TO dev_env_v
 		return s
 	}
 	return admin, newReplica(), newReplica(), fence
+}
+
+func integrationRuntimeConfig(t *testing.T) *pgxpool.Config {
+	t.Helper()
+	u, err := url.Parse(os.Getenv("PORTAL_TEST_DATABASE_URL"))
+	if err != nil || u.Hostname() != "localhost" {
+		t.Fatal("fixture config must be loopback")
+	}
+	ca, err := os.ReadFile(u.Query().Get("sslrootcert"))
+	if err != nil {
+		t.Fatal("fixture CA missing")
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(ca) {
+		t.Fatal("fixture CA invalid")
+	}
+	c, err := postgresPoolConfig("localhost", "dev_env_v2_portal_runtime", "synthetic-ci-only-password", roots)
+	if err != nil {
+		t.Fatal("production pool config failed")
+	}
+	return c
+}
+
+func requireSQLState(t *testing.T, err error, want string) {
+	t.Helper()
+	var pg *pgconn.PgError
+	if !errors.As(err, &pg) || pg.Code != want {
+		t.Fatalf("expected SQLSTATE%s (error type %T)", want, err)
+	}
 }
 
 func TestPostgresIntegration(t *testing.T) {
@@ -184,6 +211,21 @@ func TestPostgresIntegration(t *testing.T) {
 		}
 		if _, err := b.TakeLogin(ctx, lh, l.State, l.ExpiresAt); !errors.Is(err, portal.ErrDenied) {
 			t.Fatal("expired transaction consumed")
+		}
+	})
+
+	t.Run("database-clock-overrides-lagging-application-clock", func(t *testing.T) {
+		h := handle("db-clock")
+		if a.PutSession(ctx, h, record) != nil {
+			t.Fatal("clock fixture insert failed")
+		}
+		if _, err := admin.Exec(ctx, "UPDATE portal.sessions SET expires_at=clock_timestamp()-interval '1 second' WHERE handle=$1", h[:]); err != nil {
+			t.Fatal("clock fixture failed")
+		}
+		a.now = func() time.Time { return now.Add(-time.Hour) }
+		defer func() { a.now = time.Now }()
+		if _, err := a.GetSession(ctx, h); !errors.Is(err, portal.ErrDenied) {
+			t.Fatal("lagging app clock bypassed database expiry")
 		}
 	})
 
@@ -310,19 +352,15 @@ func TestPostgresIntegration(t *testing.T) {
 	})
 
 	t.Run("least-privilege-and-TLS-HBA-negatives", func(t *testing.T) {
-		for _, sql := range []string{"UPDATE portal.sessions SET expires_at=expires_at", "UPDATE portal.pending_logins SET expires_at=expires_at", "CREATE TABLE portal.forbidden (v int)", "CREATE SCHEMA forbidden", "CREATE TEMP TABLE forbidden (v int)", "CREATE ROLE forbidden", "SELECT * FROM public.fixture_private"} {
-			if _, err := a.pool.Exec(ctx, sql); err == nil {
-				t.Fatal("runtime role exceeded two-table DML scope")
-			}
+		for _, sql := range []string{"UPDATE portal.sessions SET expires_at=expires_at", "UPDATE portal.pending_logins SET expires_at=expires_at", "CREATE TABLE portal.forbidden (v int)", "CREATE SCHEMA forbidden", "CREATE TEMP TABLE forbidden (v int)", "CREATE ROLE forbidden", "SELECT * FROM public.fixture_private", "SET ROLE dev_env_v2_portal_migrator", "TRUNCATE portal.sessions", "TRUNCATE portal.pending_logins"} {
+			_, err := a.pool.Exec(ctx, sql)
+			requireSQLState(t, err, "42501")
 		}
 		base := os.Getenv("PORTAL_TEST_DATABASE_URL")
 		u, _ := url.Parse(base)
 		u.User = url.UserPassword("dev_env_v2_portal_runtime", "synthetic-ci-only-password")
 		for _, mode := range []string{"other-database", "plaintext", "wrong-hostname", "untrusted-CA"} {
-			c, err := pgxpool.ParseConfig(u.String())
-			if err != nil {
-				t.Fatal("negative connection config failed")
-			}
+			c := integrationRuntimeConfig(t)
 			switch mode {
 			case "other-database":
 				c.ConnConfig.Database = "postgres"
@@ -336,15 +374,58 @@ func TestPostgresIntegration(t *testing.T) {
 			}
 			pool, err := pgxpool.NewWithConfig(ctx, c)
 			if err != nil {
-				continue
+				t.Fatal("negative pool config invalid before network proof")
 			}
 			err = pool.Ping(ctx)
 			pool.Close()
 			if err == nil {
 				t.Fatalf("%s connection accepted", mode)
 			}
+			switch mode {
+			case "other-database", "plaintext":
+				requireSQLState(t, err, "28000")
+			case "wrong-hostname":
+				var hostname x509.HostnameError
+				if !errors.As(err, &hostname) {
+					t.Fatalf("expected x509 hostname failure, got %T", err)
+				}
+			case "untrusted-CA":
+				var authority x509.UnknownAuthorityError
+				if !errors.As(err, &authority) {
+					t.Fatalf("expected x509 CA failure, got %T", err)
+				}
+			}
 		}
 	})
+
+	t.Run("shared-insert-ceiling-and-bounded-expiry-cleanup", func(t *testing.T) {
+		fresh := time.Now().UTC().Truncate(time.Microsecond)
+		l := login
+		l.ExpiresAt = fresh.Add(time.Minute)
+		// A finite256-row capacity fixture, not a load/stress test. No concurrent loop.
+		_, err := admin.Exec(ctx, `INSERT INTO portal.pending_logins(handle,generation,version,state_digest,expires_at,payload)
+   SELECT decode(lpad(to_hex(i),64,'0'),'hex'),$1,1,$2,$3,$4 FROM generate_series(1000,1255) AS i`, a.generation, make([]byte, 32), l.ExpiresAt, make([]byte, 28))
+		if err != nil {
+			t.Fatal("bounded capacity fixture failed")
+		}
+		defer func() { _, _ = admin.Exec(ctx, "DELETE FROM portal.pending_logins WHERE payload=$1", make([]byte, 28)) }()
+		if !errors.Is(a.PutLogin(ctx, Handle{199}, l), portal.ErrUnavailable) {
+			t.Fatal("shared pending-login cardinality bound bypassed")
+		}
+		if _, err := admin.Exec(ctx, "UPDATE portal.pending_logins SET expires_at=clock_timestamp()-interval '1 second' WHERE payload=$1", make([]byte, 28)); err != nil {
+			t.Fatal("cleanup fixture failed")
+		}
+		if b.PutLogin(ctx, Handle{200}, l) != nil {
+			t.Fatal("bounded cleanup failed to admit legitimate login")
+		}
+		var remaining int
+		if admin.QueryRow(ctx, "SELECT count(*) FROM portal.pending_logins WHERE payload=$1", make([]byte, 28)).Scan(&remaining) != nil || remaining != 224 {
+			t.Fatal("cleanup did not remove exactly32 expired rows")
+		}
+	})
+
+	t.Run("protected-read-witness-count-and-latency", func(t *testing.T) { testProtectedReadCost(t, a) })
+	t.Run("physical-asynchronous-failover-loses-acknowledged-deletes", func(t *testing.T) { testDisposableAsyncFailover(t, admin, a, b) })
 
 	t.Run("outage-has-no-fallback", func(t *testing.T) {
 		a.Close()

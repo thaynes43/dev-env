@@ -23,14 +23,6 @@ import (
 	"github.com/thaynes43/dev-env/web/portal"
 )
 
-// RecoveryFence must freshly consult an independently durable, cross-replica
-// witness outside the session database/backup, refusing uncertain primary
-// lineage or generation. No production implementation is supplied. A constant
-// generation, process boolean or generation in restored PostgreSQL is unsafe.
-type RecoveryFence interface {
-	Check(context.Context, string) error
-}
-
 type PostgresConfig struct {
 	Host, Username, Password string
 	CA                       []byte
@@ -53,7 +45,7 @@ type PostgresStore struct {
 // NewPostgresStore accepts only the proposed dedicated DB/role and CNPG primary
 // service. Configuration cannot select an admin user, replica, DSN, insecure
 // sslmode, Unix socket, ambient password/service file or plaintext fallback.
-// The constructor opens no connection; every operation checks the fence first.
+// The constructor opens no connection; operations bind the fence to their transaction.
 func NewPostgresStore(c PostgresConfig) (*PostgresStore, error) {
 	if c.Host != "postgres16-rw.database.svc.cluster.local" || c.Username != "dev_env_v2_portal_runtime" || c.Password == "" || len(c.Password) > 4096 {
 		return nil, portal.ErrUnavailable
@@ -191,17 +183,22 @@ func (s *PostgresStore) run(ctx context.Context, fn func(context.Context, pgx.Tx
 	}
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	if ctx.Err() != nil || s.fence.Check(ctx, s.generation) != nil {
+	if ctx.Err() != nil {
 		return portal.ErrUnavailable
 	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return portal.ErrUnavailable
 	}
+	return s.runAcquired(ctx, tx, fn)
+}
+
+// runAcquired receives only the transaction already acquired by run. Neither
+// measurement nor session SQL can select another connection from the pool.
+func (s *PostgresStore) runAcquired(ctx context.Context, tx pgx.Tx, fn func(context.Context, pgx.Tx) error) error {
 	defer func() { _ = tx.Rollback(ctx) }()
-	var recovery bool
-	var readOnly string
-	if tx.QueryRow(ctx, "SELECT pg_is_in_recovery(), current_setting('transaction_read_only')").Scan(&recovery, &readOnly) != nil || recovery || readOnly != "off" {
+	snapshot, err := s.fence.Check(ctx, tx, s.generation)
+	if err != nil {
 		return portal.ErrUnavailable
 	}
 	if _, err = tx.Exec(ctx, "SET LOCAL synchronous_commit = on"); err != nil {
@@ -210,13 +207,13 @@ func (s *PostgresStore) run(ctx context.Context, fn func(context.Context, pgx.Tx
 	if err = fn(ctx, tx); err != nil {
 		return normalize(err)
 	}
-	if s.fence.Check(ctx, s.generation) != nil {
+	if s.fence.Recheck(ctx, snapshot) != nil {
 		return portal.ErrUnavailable
 	}
 	if tx.Commit(ctx) != nil {
 		return portal.ErrUnavailable
 	}
-	if ctx.Err() != nil || s.fence.Check(ctx, s.generation) != nil {
+	if ctx.Err() != nil || s.fence.Recheck(ctx, snapshot) != nil {
 		return portal.ErrUnavailable
 	}
 	return nil
@@ -233,6 +230,26 @@ func insertError(err error) error {
 	return portal.ErrUnavailable
 }
 
+// Serialize each table's insertion bound across replicas using existing DELETE
+// privilege (no advisory-lock function/admin grant). Names are internal constants,
+// never request data. Cleanup does at most32 deletes; both tables cap at256 rows.
+func admitPortalInsert(ctx context.Context, tx pgx.Tx, table string) error {
+	if table != "pending_logins" && table != "sessions" {
+		return portal.ErrUnavailable
+	}
+	if _, err := tx.Exec(ctx, "LOCK TABLE portal."+table+" IN SHARE ROW EXCLUSIVE MODE"); err != nil {
+		return portal.ErrUnavailable
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM portal."+table+" WHERE handle IN (SELECT handle FROM portal."+table+" WHERE expires_at<=clock_timestamp() LIMIT 32)"); err != nil {
+		return portal.ErrUnavailable
+	}
+	var count int
+	if tx.QueryRow(ctx, "SELECT count(*) FROM (SELECT 1 FROM portal."+table+" LIMIT 256) AS bounded").Scan(&count) != nil || count >= 256 {
+		return portal.ErrUnavailable
+	}
+	return nil
+}
+
 func (s *PostgresStore) PutLogin(ctx context.Context, h Handle, l Login) error {
 	if s == nil || s.now == nil || len(l.State) != 43 || len(l.Nonce) != 43 || len(l.Verifier) != 43 || !l.ExpiresAt.After(s.now()) {
 		return portal.ErrDenied
@@ -245,6 +262,9 @@ func (s *PostgresStore) PutLogin(ctx context.Context, h Handle, l Login) error {
 		return err
 	}
 	return s.run(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if err := admitPortalInsert(ctx, tx, "pending_logins"); err != nil {
+			return err
+		}
 		_, err := tx.Exec(ctx, "INSERT INTO portal.pending_logins (handle,generation,version,state_digest,expires_at,payload) VALUES ($1,$2,1,$3,$4,$5)", h[:], s.generation, state[:], l.ExpiresAt, data)
 		return insertError(err)
 	})
@@ -299,6 +319,9 @@ func (s *PostgresStore) PutSession(ctx context.Context, h Handle, r Record) erro
 		return err
 	}
 	return s.run(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if err := admitPortalInsert(ctx, tx, "sessions"); err != nil {
+			return err
+		}
 		_, err := tx.Exec(ctx, "INSERT INTO portal.sessions (handle,generation,version,expires_at,payload) VALUES ($1,$2,1,$3,$4)", h[:], s.generation, r.ExpiresAt, data)
 		return insertError(err)
 	})
@@ -350,3 +373,8 @@ var _ Store = (*PostgresStore)(nil)
 
 // strings is used for strict explicit key encoding; whitespace is not accepted.
 func canonicalKey(key string) bool { return !strings.ContainsAny(key, "\r\n\t ") }
+
+func (c PostgresConfig) GoString() string { return c.String() }
+func (s PostgresStore) GoString() string  { return s.String() }
+func (sessionPayload) String() string     { return "[redacted portal payload]" }
+func (s sessionPayload) GoString() string { return s.String() }

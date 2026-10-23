@@ -91,6 +91,9 @@ func (a *CurrentAuthorizer) Authorize(ctx context.Context, p portal.Principal, r
 	if err != nil || response == nil || response.Body == nil {
 		return portal.ErrUnavailable
 	}
+	if response.StatusCode >= 500 || response.StatusCode == http.StatusTooManyRequests {
+		return portal.ErrUnavailable
+	}
 	if response.StatusCode != http.StatusOK {
 		return portal.ErrDenied
 	}

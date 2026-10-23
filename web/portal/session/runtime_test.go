@@ -19,6 +19,7 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-jose/go-jose/v4"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/thaynes43/dev-env/web/portal"
 )
@@ -30,7 +31,7 @@ type fixtureFence struct {
 	unavailable   bool
 }
 
-func (f *fixtureFence) Check(ctx context.Context, generation string) error {
+func (f *fixtureFence) check(ctx context.Context, generation string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
@@ -38,6 +39,22 @@ func (f *fixtureFence) Check(ctx context.Context, generation string) error {
 		return portal.ErrUnavailable
 	}
 	return nil
+}
+
+func (f *fixtureFence) Check(ctx context.Context, tx pgx.Tx, generation string) (AdmissionSnapshot, error) {
+	if err := f.check(ctx, generation); err != nil {
+		return AdmissionSnapshot{}, err
+	}
+	// Hosted DB fixtures measure the actual acquired connection too.
+	if tx != nil {
+		if _, err := measureIncarnation(ctx, tx); err != nil {
+			return AdmissionSnapshot{}, err
+		}
+	}
+	return AdmissionSnapshot{Generation: generation}, nil
+}
+func (f *fixtureFence) Recheck(ctx context.Context, snapshot AdmissionSnapshot) error {
+	return f.check(ctx, snapshot.Generation)
 }
 
 func fixtureStore(t *testing.T) *PostgresStore {
@@ -254,9 +271,11 @@ func TestAccessTokenPairMustMatchVerifiedIdentityAndHash(t *testing.T) {
 }
 
 func TestServerValuesDoNotFormatAsCredentials(t *testing.T) {
-	for _, value := range []any{Record{CSRF: "SECRET-CANARY", accessToken: "SECRET-CANARY"}, Login{State: "SECRET-CANARY"}, codeTokens{accessToken: "SECRET-CANARY"}, PostgresConfig{Password: "SECRET-CANARY", Key: "SECRET-CANARY"}} {
-		if strings.Contains(fmt.Sprintf("%v", value), "SECRET-CANARY") {
-			t.Fatal("default formatting leaked credential")
+	for _, value := range []any{Record{CSRF: "SECRET-CANARY", accessToken: "SECRET-CANARY"}, Login{State: "SECRET-CANARY"}, codeTokens{accessToken: "SECRET-CANARY"}, PostgresConfig{Password: "SECRET-CANARY", Key: "SECRET-CANARY"}, CodeConfig{ClientSecret: "SECRET-CANARY"}, sessionPayload{AccessToken: "SECRET-CANARY"}, sessionReference{principal: portal.Principal{Subject: "SECRET-CANARY"}}} {
+		for _, format := range []string{"%v", "%+v", "%#v"} {
+			if strings.Contains(fmt.Sprintf(format, value), "SECRET-CANARY") {
+				t.Fatal("formatting leaked credential")
+			}
 		}
 	}
 }
@@ -277,5 +296,46 @@ func TestPostgresClientPinsVerifiedPrimaryAndRejectsAmbientAuthority(t *testing.
 	t.Setenv("PGSERVICEFILE", "unapproved-credential-path")
 	if _, err := postgresPoolConfig("postgres16-rw.database.svc.cluster.local", "dev_env_v2_portal_runtime", "synthetic-fixture", roots); !errors.Is(err, portal.ErrUnavailable) {
 		t.Fatal("ambient credential authority accepted")
+	}
+}
+
+func TestExplicitHS256DowngradeRejected(t *testing.T) {
+	f := setupAuth(t)
+	secret := []byte("synthetic-HMAC-key-at-least-32-bytes")
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: secret}, nil)
+	if err != nil {
+		t.Fatal("fixture HMAC signer failed")
+	}
+	claims := fmt.Sprintf(`{"iss":%q,"aud":"synthetic-client","sub":"synthetic-subject","nonce":"synthetic-nonce","exp":%d}`, f.e.config.Verifier.issuer, f.now.Add(time.Hour).Unix())
+	object, err := signer.Sign([]byte(claims))
+	if err != nil {
+		t.Fatal("fixture signing failed")
+	}
+	raw, err := object.CompactSerialize()
+	if err != nil {
+		t.Fatal("fixture serialization failed")
+	}
+	if _, err := f.e.config.Verifier.Verify(context.Background(), raw, "synthetic-nonce"); err == nil {
+		t.Fatal("HS256 downgrade accepted by asymmetric verifier")
+	}
+	if _, err := NewTokenVerifier(VerifierConfig{Issuer: f.e.config.Verifier.issuer, ClientID: "synthetic-client", Algorithms: []string{"HS256"}, Keys: &oidc.StaticKeySet{}, Now: time.Now}); !errors.Is(err, portal.ErrUnavailable) {
+		t.Fatal("symmetric signing configured")
+	}
+}
+
+func TestLoginAdmissionBeforeAllocationOrStoreWrite(t *testing.T) {
+	f := setupAuth(t)
+	for range 4 {
+		w := httptest.NewRecorder()
+		f.e.ServeHTTP(w, f.request("GET", "/auth/login", ""))
+		if w.Code != 303 {
+			t.Fatal("legitimate bounded login start refused")
+		}
+	}
+	before := len(f.store.logins)
+	w := httptest.NewRecorder()
+	f.e.ServeHTTP(w, f.request("GET", "/auth/login", ""))
+	if w.Code != 503 || len(f.store.logins) != before || w.Header().Get("Location") != "" || w.Header().Get("Set-Cookie") != "" {
+		t.Fatal("login admission exceeded bound before storage")
 	}
 }

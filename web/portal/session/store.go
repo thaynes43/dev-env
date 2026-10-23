@@ -57,3 +57,7 @@ func (Record) String() string     { return "[redacted portal session]" }
 func (Login) String() string      { return "[redacted portal login]" }
 
 type CodeBinding struct{ Issuer, ClientID, Callback, AuthorizationEndpoint string }
+
+func (c codeTokens) GoString() string { return c.String() }
+func (r Record) GoString() string     { return r.String() }
+func (l Login) GoString() string      { return l.String() }

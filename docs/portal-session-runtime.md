@@ -27,31 +27,21 @@ The shared postgres16 cluster's min/max synchronous replica settings are both
 zero. Local synchronous_commit does **not** prove acknowledged-write survival
 after promotion. A missing DELETE/revoke or login consumption could resurrect
 authority. A generation inside the restored DB, a restart or process-local flag
-does not fix this. The store therefore requires a fresh external RecoveryFence
-check before and after each operation and before each response's authorization.
-No approved cross-replica witness implementation exists in this source change.
-Runtime construction remains unavailable. Offline injected witnesses prove the
-protocol's rejection behavior, not live failover durability.
+does not fix this. The M6 source implementation therefore binds the external RecoveryFence to the
+actual acquired `pgx.Tx`, measures the exact PostgreSQL incarnation before
+session-table SQL, and requires an identical fresh witness snapshot immediately
+before and after COMMIT. The [M6 recovery contract](../.agents/reports/portal178-m6/README.md)
+specifies the fixed ConfigMap, trusted direct GET, strict record and UID/RV pin.
+No observer/controller or cached generation can open admission. Runtime remains503;
+source implementation and disposable protocol evidence do not satisfy live gates.
 
-Proposed recovery procedure, requiring independent source/config/authority review:
-
-1. A separately durable, strongly consistent external witness owns generation
-   and primary incarnation. Fence access on promotion, restoration, uncertain
-   lineage or loss of the witness; all BFF replicas must consult it freshly.
-   Before opening any new primary, change the independent generation and prove
-   no replica can authorize the old generation. This must cover the interval
-   before the application notices failover; a post-failover manual rotation alone
-   cannot close that interval.
-2. Keep runtime unavailable while proving the witness closes that race under
-   partition, failover and restored backups. Do not change the shared CNPG
-   replication/backup policy to make a fixture pass.
-3. After a reviewed recovery, rotate SESSION_GENERATION outside DB backup,
-   distribute it consistently to every replica and the witness, invalidate both
-   session and pending-login generations, and require fresh sign-in. Verify old
-   cookies and callback transactions deny even if old rows are restored.
-4. Record exact runtime/config heads, old/new lineage proofs without secret
-   values, acknowledged-write test results and negative Gate A evidence before
-   releasing the fence. A mounted static generation alone is insufficient.
+Existing recovery owner must explicitly close admission before logical restore
+into an unchanged server or witness/control-plane restore. Those operations may
+preserve all measured PostgreSQL fields and are not automatically detectable.
+After recovery, independently rotate both SESSION_AEAD_KEY and SESSION_GENERATION
+through the approved server-side secret path. Never restore either old authority
+or reuse a generation from backup. Measure the new primary and CAS-open its exact
+incarnation; the runtime has no write access to the admission object.
 
 ## Concrete provisioning proposal — not granted or applied
 
@@ -135,7 +125,10 @@ introspection or old ID/access-token claims cannot substitute. The future
 provider-local mapping must evaluate active status and direct membership of the
 privately pinned existing Admins UUID, preserve normal sub/profile and shared
 mappings, and undergo separate haynes-ops review. No UUID is in this document.
-Current client foundation PR4246 does not implement that mapping.
+Infrastructure PR4246/4257 and actual role/provider acceptance are separately owned.
+The source verifier allows only asymmetric signing algorithms; deployed Authentik
+must pin the reviewed RSA signer/RS256 and leave JWE encryption disabled. HS256
+and unsigned downgrade negatives do not select or provision a provider key.
 
 Request-private session references bind authorization to the exact handle and
 token. A second healthy session of the same subject cannot mask a revoked one.
@@ -175,23 +168,38 @@ dependency check, not complete advisory or production security acceptance.
 Only pgx/pool's small pgpassfile/pgservicefile/puddle dependency closure is new;
 no existing module is downgraded or upgraded.
 
-The dedicated hosted CI service runs a digest-pinned official PostgreSQL16,
-two independent runtime connection pools, real migrations, AEAD payloads,
-concurrent callback consumption, durable cross-pool revoke/logout, actual
-verified TLS, role grants/HBA negatives and restore-shaped SQL fixtures.
-It uses synthetic identities and ephemeral TLS material only. No live service,
-grant, image build or Tom membership mutation is involved. The external witness
-in this test is explicitly synthetic. A postcommit witness-loss fixture proves
-that a durable write may still produce an unavailable caller result; it does
-not simulate a lost network COMMIT acknowledgment or a real CNPG promotion.
-Absent PORTAL_TEST_DATABASE_URL explicitly skips DB proof locally; hosted CI
-must run the integration suite without that skip before source acceptance.
+The hosted disposable suite now uses production `postgresPoolConfig`, including
+verified TLS, RuntimeParams and read-write ValidateConnect, for runtime pools.
+It checks exact SQLSTATE42501/HBA28000 and x509 classes, SET ROLE/TRUNCATE denial,
+database-clock expiry, bounded cleanup/cardinality, two app pools and real physical
+asynchronous promotion with acknowledged DELETE loss and an unchanged witness.
+The [fixed recovery helper](../scripts/trials/portal_recovery/README.md) is hosted
+only and never targets production. The required `CI - Success` directly depends
+on the reusable PostgreSQL job; a separate advisory/standalone success cannot
+substitute. A disposable envtest checks proposed named-GET-only RBAC in the ordinary
+required make-test job. All missing local facilities are explicit skips.
+
+Login starts have one constant-size per-engine limiter: burst4, one start/second;
+under a two-replica ceiling this is burst8/two starts per second. The shared store
+serializes insertion into each of its two tables, caps each at256 rows and deletes
+at most32 expired rows per insertion, without UPDATE/admin/function grants.
+These source bounds are conservative admission limits, not measured production
+capacity or an SLO; deployment replicas, retention policy, real API latency and
+legitimate-flow proof must be accepted before activation.
+
+A successful store operation requires three fresh admission GETs. Current handler
+composition makes seven protected store reads (21 GETs) and two current UserInfo
+calls per Attention response; the hosted fixture asserts that exact count and
+reports serial GET/full-request latency. There is no automatic background polling,
+retry or cached allow. Two in-flight GETs per fence and two SQL connections per
+pool bound concurrency. Keep automatic browser polling disabled until live API
+budget evidence supports a frequency and replica/client ceiling. Loopback fixture
+latency cannot establish a live control-plane load budget.
 
 Focused commands: Go1.27.2, GOTOOLCHAIN=local, GOMAXPROCS=2, nice -n 19,
 `go test -p 1 ./web/portal/...` and `go vet -p 1 ./web/portal/...`.
-No suite loops, load tests or local container builds. Retention/cleanup,
-deployment rate/connection limits and live failover/network-ack testing remain
-reviewed activation prerequisites. Root journal1091 narrows runtime SQL rights
-to SELECT/INSERT/DELETE; no UPDATE or Touch path exists. Consumed/revoked rows
-are deleted; the engine always generates new random handles rather than reusing
-a consumed/revoked handle. INSERT collisions cannot replace any existing row.
+Hosted disposable session tests run under `-race` with the same CPU/package bounds.
+No suite loops, load tests or local container builds. Root journal1091 narrows
+runtime SQL rights to SELECT/INSERT/DELETE; no UPDATE or Touch path exists.
+INSERT collisions cannot replace existing rows. Live role, witness RBAC, DB/auth,
+shared Authentik secret-safe logging, proxy/isolation and Gate A remain held.

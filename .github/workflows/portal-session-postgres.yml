@@ -1,27 +1,14 @@
 name: Portal session PostgreSQL
 
 on:
-  pull_request:
-    paths:
-      - web/portal/session/**
-      - web/portal/boundary.go
-      - go.mod
-      - go.sum
-      - .github/workflows/portal-session-postgres.yml
-  push:
-    branches: [main]
-    paths:
-      - web/portal/session/**
-      - web/portal/boundary.go
-      - go.mod
-      - go.sum
-      - .github/workflows/portal-session-postgres.yml
+  workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: portal-postgres-${{ github.ref }}
+  group: portal-postgres-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -36,6 +23,7 @@ jobs:
           POSTGRES_DB: dev_env_v2_portal
         ports:
           - 5432:5432
+          - 5433:5433
         options: >-
           --cpus 2 --memory 512m
           --health-cmd "pg_isready -U postgres -d dev_env_v2_portal"
@@ -66,6 +54,7 @@ jobs:
             chmod 600 "$PGDATA/server.key"
             printf "\nssl = on\n" >> "$PGDATA/postgresql.conf"
             {
+              printf "host replication postgres 127.0.0.1/32 scram-sha-256\n"
               printf "hostssl dev_env_v2_portal dev_env_v2_portal_runtime all scram-sha-256\n"
               printf "host all dev_env_v2_portal_runtime all reject\n"
               printf "local all dev_env_v2_portal_runtime reject\n"
@@ -79,9 +68,10 @@ jobs:
         env:
           GOTOOLCHAIN: local
           GOMAXPROCS: '2'
+          PORTAL_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
         run: |
           export PORTAL_TEST_DATABASE_URL="postgres://postgres:synthetic-ci-admin-only@localhost:5432/dev_env_v2_portal?sslmode=verify-full&sslrootcert=$RUNNER_TEMP/portal-tls/server.crt"
-          nice -n 19 go test -p 1 -count=1 -v ./web/portal/session
+          nice -n 19 go test -race -p 1 -count=1 -v ./web/portal/session
           git diff --exit-code
       - name: Remove disposable private TLS material
         if: always()
