@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "asOf": "2026-10-23T14:18:10Z",
+  "readState": "verified",
+  "items": [
+    {
+      "id": "decision-example",
+      "title": "A decision needs your attention",
+      "group": "needs-you",
+      "canonicalWorkPackage": 178,
+      "owner": "Example outcome owner",
+      "nextActor": "Existing decision owner",
+      "nextAction": "Open the recorded scope decision in its existing surface",
+      "sourceUpdatedAt": "2026-10-23T14:08:10Z",
+      "verifiedAt": "2026-10-23T14:17:10Z",
+      "workerState": "Waiting",
+      "taskOutcome": "Pending decision",
+      "reviewHead": null
+    },
+    {
+      "id": "pickup-example",
+      "title": "The next pickup is recorded",
+      "group": "needs-worker",
+      "canonicalWorkPackage": 178,
+      "owner": "Example coordinator",
+      "nextActor": null,
+      "nextAction": "Confirm the already recorded pickup owner",
+      "sourceUpdatedAt": "2026-10-23T14:06:10Z",
+      "verifiedAt": null,
+      "workerState": "Unknown",
+      "taskOutcome": "Awaiting pickup",
+      "reviewHead": null
+    },
+    {
+      "id": "review-example",
+      "title": "Review findings have returned",
+      "group": "review-returned",
+      "canonicalWorkPackage": 178,
+      "owner": "Example implementation owner",
+      "nextActor": "Example implementation owner",
+      "nextAction": "Acknowledge findings, fix or answer them, then recheck the exact head",
+      "sourceUpdatedAt": "2026-10-23T14:09:10Z",
+      "verifiedAt": "2026-10-23T14:10:10Z",
+      "workerState": "Idle",
+      "taskOutcome": "Review response pending; CI and release evidence separate",
+      "reviewHead": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "id": "handoff-example",
+      "title": "The worker exited; the result is missing",
+      "group": "handoff-missing",
+      "canonicalWorkPackage": 178,
+      "owner": "Example outcome owner",
+      "nextActor": "Example outcome owner",
+      "nextAction": "Collect and acknowledge the durable result before deciding the outcome",
+      "sourceUpdatedAt": "2026-10-23T14:16:10Z",
+      "verifiedAt": "2026-10-23T14:17:10Z",
+      "workerState": "Exited",
+      "taskOutcome": "Unverified; handoff missing",
+      "reviewHead": null
+    }
+  ]
+}
