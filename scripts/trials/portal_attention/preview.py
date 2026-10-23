@@ -56,7 +56,7 @@ footer { color: #465774; margin-top: 1.5rem; }
 def timestamp(value):
     if value is None:
         return None
-    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value):
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", value):
         raise ValueError("expected UTC timestamp or null")
     return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
 
@@ -66,10 +66,13 @@ def text(value):
         return "Unknown"
     if not isinstance(value, str) or len(value) > MAX_TEXT:
         raise ValueError("expected bounded text or null")
+    if any(unicodedata.category(char) == "Cs" for char in value):
+        raise ValueError("invalid Unicode display text")
     # Drop terminal/control characters, including bidi controls. Never interpret ANSI.
     value = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", value)
     value = "".join(char for char in value if unicodedata.category(char) not in {"Cc", "Cf"})
-    return html.escape(value, quote=True) if value.strip() else "Unknown"
+    visible = any(unicodedata.category(char)[0] in "LNPS" and char not in "\u115f\u1160\u3164\uffa0\u2800" for char in value)
+    return html.escape(value, quote=True) if visible else "Unknown"
 
 
 def validate(document):
@@ -168,6 +171,7 @@ def render(document):
         content = '<div class="groups">' + "".join(sections) + '</div>'
     digest = base64.b64encode(hashlib.sha256(STYLE.encode()).digest()).decode()
     policy = "default-src 'none'; style-src 'sha256-" + digest + "'; base-uri 'none'; form-action 'none'"
+    observation = html.escape(document["asOf"], quote=True)
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
             f'<meta http-equiv="Content-Security-Policy" content="{html.escape(policy, quote=True)}">'
@@ -176,7 +180,7 @@ def render(document):
             '<p>Who owns the next step, and when was it last verified?</p>'
             '<p class="notice"><strong>Synthetic preview. No live data or actions.</strong> '
             'Groups come from fixture metadata. Worker state and task outcome stay separate.</p>'
-            f'<p>Fixture observation: <time datetime="{document["asOf"]}">{document["asOf"]}</time></p></header>{content}'
+            f'<p>Fixture observation: <time datetime="{observation}">{observation}</time></p></header>{content}'
             '<footer>Source preparation only. Review, CI, release, installation and acceptance need separate evidence.</footer>'
             '</main></body></html>\n')
 
@@ -206,11 +210,11 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
-        page = render(load(Path(__file__).with_name("fixtures.json")))
+        encoded = render(load(Path(__file__).with_name("fixtures.json"))).encode("utf-8")
     except (ValueError, OSError, RecursionError):
         parser.exit(1, "Invalid or unavailable synthetic fixture; no output written.\n")
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(page, encoding="utf-8")
+    args.output.write_bytes(encoded)
     print("Wrote synthetic read-only preview:", args.output)
 
 

@@ -32,6 +32,10 @@ class PreviewTests(unittest.TestCase):
     def setUp(self):
         self.document = preview.load(Path(__file__).with_name("fixtures.json"))
 
+    def row_markup(self, row_id):
+        start = f'<article aria-labelledby="row-{row_id}">'
+        return preview.render(self.document).split(start, 1)[1].split("</article>", 1)[0]
+
     def test_all_four_groups_and_required_evidence(self):
         page = Page(preview.render(self.document))
         words = " ".join(page.words)
@@ -49,6 +53,7 @@ class PreviewTests(unittest.TestCase):
             page = preview.render(self.document)
             self.assertIn("Unverified; handoff missing", page)
             self.assertIn("Handoff missing · 1", page)
+            self.assertIn(f"<dt>Worker state</dt><dd>{state}</dd>", self.row_markup(row["id"]))
 
     def test_all_metadata_strings_are_inert_html(self):
         attack = '<script>alert("fixture")</script><img src="https://invalid.example/x" onerror="alert(1)">'
@@ -67,7 +72,7 @@ class PreviewTests(unittest.TestCase):
         self.assertNotIn("\x1b", page)
         self.assertNotIn("\x07", page)
         self.assertNotIn("\u202e", page)
-        self.assertIn("Review", page)
+        self.assertIn('<h3 id="row-decision-example">Review]52;synthetic</h3>', self.row_markup("decision-example"))
 
     def test_control_only_ownership_cannot_become_a_blank_owner(self):
         self.document["items"][0]["owner"] = "\x1b[0m\x00\u202e"
@@ -75,10 +80,11 @@ class PreviewTests(unittest.TestCase):
         self.assertIn("<dt>Owner</dt><dd>Unknown</dd>", page)
 
     def test_format_only_or_empty_ownership_is_unknown_and_legitimate_text_survives(self):
-        for value in ("", " ", "\u200b", "\u200e", "\ufeff", "\u2060", "\u200c\u200d"):
+        for value in ("", " ", "\u200b", "\u200e", "\ufeff", "\u2060", "\u200c\u200d",
+                      "\u115f", "\u1160", "\u3164", "\uffa0", "\u2800", "\ufe0f", "\u0301"):
             with self.subTest(value=repr(value)):
                 self.document["items"][0]["owner"] = value
-                self.assertIn("<dt>Owner</dt><dd>Unknown</dd>", preview.render(self.document))
+                self.assertIn("<dt>Owner</dt><dd>Unknown</dd>", self.row_markup("decision-example"))
         self.document["items"][0]["owner"] = "Renée – 漢字 🚀"
         self.assertIn("<dt>Owner</dt><dd>Renée – 漢字 🚀</dd>", preview.render(self.document))
 
@@ -86,7 +92,9 @@ class PreviewTests(unittest.TestCase):
         page = Page(preview.render(self.document))
         labels = [attrs["aria-label"] for tag, attrs in page.tags if tag == "a"]
         self.assertEqual(len(set(labels)), 4)
-        for row, label in zip(self.document["items"], labels):
+        for row in self.document["items"]:
+            scoped = Page(self.row_markup(row["id"]))
+            label = next(attrs["aria-label"] for tag, attrs in scoped.tags if tag == "a")
             self.assertIn(row["title"], label)
             self.assertIn(row["id"], label)
 
@@ -122,9 +130,10 @@ class PreviewTests(unittest.TestCase):
         row = self.document["items"][0]
         for field in ("owner", "nextActor", "nextAction", "sourceUpdatedAt", "verifiedAt"):
             row[field] = None
-        page = preview.render(self.document)
+        page = self.row_markup("decision-example")
         self.assertIn("Freshness unknown", page)
-        self.assertGreaterEqual(page.count("<dd>Unknown</dd>"), 5)
+        for field in ("Owner", "Next actor", "Next action", "Source age", "Source updated", "Last verified"):
+            self.assertIn(f"<dt>{field}</dt><dd>Unknown</dd>", page)
 
     def test_source_age_and_last_verification_are_independent(self):
         row = self.document["items"][0]
@@ -213,6 +222,33 @@ class PreviewTests(unittest.TestCase):
             self.assertEqual(result.exception.code, 1)
             self.assertEqual(errors.getvalue(), "Invalid or unavailable synthetic fixture; no output written.\n")
             self.assertFalse(output.exists())
+
+    def test_surrogate_or_encoding_error_cannot_create_partial_output(self):
+        for invalid_render in (False, True):
+            with self.subTest(invalid_render=invalid_render), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "preview.html"
+                document = copy.deepcopy(self.document)
+                document["items"][0]["owner"] = "\ud800"
+                errors = io.StringIO()
+                with mock.patch("sys.argv", ["preview.py", "--output", str(output)]), \
+                        mock.patch.object(preview, "load", return_value=document), \
+                        contextlib.redirect_stderr(errors):
+                    if invalid_render:
+                        with mock.patch.object(preview, "render", return_value="\ud800"):
+                            with self.assertRaises(SystemExit):
+                                preview.main()
+                    else:
+                        with self.assertRaises(SystemExit):
+                            preview.main()
+                self.assertEqual(errors.getvalue(), "Invalid or unavailable synthetic fixture; no output written.\n")
+                self.assertFalse(output.exists())
+
+    def test_non_ascii_timestamp_digits_are_refused(self):
+        for value in ("２０２６-10-23T14:18:10Z", "٢٠٢٦-10-23T14:18:10Z"):
+            with self.subTest(value=value):
+                self.document["asOf"] = value
+                with self.assertRaises(ValueError):
+                    preview.render(self.document)
 
     def test_invalid_schema_fields_fail_closed(self):
         for field, value in (("group", "approved"), ("id", "\" onclick=alert(1)"),

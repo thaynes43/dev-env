@@ -74,6 +74,8 @@ the sole refresher of Claude/Codex provider logins. The portal never holds,
 refreshes or proxies those provider refresh tokens; see the existing
 `internal/keeper/claude_worker.go` and `internal/keeper/codex_worker.go`
 ownership boundary. A portal OIDC session is a separate identity concern.
+Canonical #178 journal 866 is the parent's explicit source-boundary addendum;
+the Go citations above are its pinned implementation evidence.
 
 Enforce deny-by-default resource/project/environment scope on every read,
 download, stream and command. Existing valid standing authority remains valid;

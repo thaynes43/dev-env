@@ -182,6 +182,44 @@ SHA256: `cd7165afdc83142f843297f366ed0793645d77018b6a9e641bf91973376f6904`.
 The exact new target is recorded in #178/PR 525 after push. No additional
 source increment begins before that PR's safe disposition.
 
+### Consolidated native-review correction and pass-boundary handoff
+
+Parent journal 930 supplied the superseded-433 review at 15:37 UTC. Its
+decoder-test/CI blocker was already resolved on `e46cdf5`, whose required and
+fixture CI passed and whose downloaded source-head/hash were verified. The
+bounded decoder-or-schema refusal contract remains; no ad hoc JSON parser was
+added. Local dated observations above are not claims of final-head coverage.
+
+The final correction makes Unknown/control/worker/link assertions specific to
+their row; rejects surrogate display text; treats isolated marks and known
+blank fillers as Unknown; validates ASCII timestamps and escapes their output;
+and encodes the complete page before opening the output, preventing malformed
+Unicode from creating a partial file. Finite tests cover each behavior. Links
+retain their distinct contextual names, with order-independent assertions.
+The optional alternative link representation is not needed for that contract.
+Checksums now use a portable relative filename. The HTML checksum proves
+reproducibility; the upload action's archive digest is the integrity reference.
+DESIGN-029 also cites parent identity addendum 866. Shared CLAUDE/CI remain
+unchanged; Python-only Layout reasoning still applies.
+
+The final suite contains **26 finite tests**. Exact final head, test result,
+preview hash and pending CI/native review are published in canonical #178 and
+PR 525 after push. Earlier native/advisory/CI receipts cover only their named
+heads. Source remains a read-only synthetic foundation, not an operational
+portal. No source merge/release, internal deployment or runtime acceptance is
+claimed without its actual receipt.
+
+The next Go template/BFF increment is specified in canonical contract 914. It
+has **not started** because PR 525's safe disposition is its explicit
+prerequisite. At the original 15:48:10 UTC first-pass ceiling, preserve this
+clean pushed source head and the concrete next step: parent obtains matching
+final-head native review and CI, dispositions findings, performs the already
+authorized source merge, then retains supported next-pass custody for the same
+implementation owner. This checkpoint ends no project ownership, grants no
+automatic new execution allowance and promises no unsupported headless resume.
+No worker, alternate owner, grant, credential action, route, listener, connector,
+OIDC activation or production operation was started by this pass.
+
 PR, required independent review, merge, release, installation and usable
 acceptance remain pending. At the first-pass
 boundary preserve exact head/base, checks, findings and next safe step here and
