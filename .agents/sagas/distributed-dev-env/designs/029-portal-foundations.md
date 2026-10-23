@@ -63,13 +63,13 @@ session and 5-minute privileged elevation**; they require threat-model review
 and are not selected production policy or an SLO. Background polling is not
 user activity. Verify actual deployed MFA/logout semantics before claiming them.
 
-An OIDC issuer-plus-subject principal never automatically becomes an operator
-human or workbench caller. Existing
+An OIDC issuer-plus-subject principal is not an operator human or workbench
+caller. Authentication and authorization remain separate. Existing
 [`auth.go`](https://github.com/thaynes43/dev-env/blob/380a759d947faf1131653867cdecf4b7ade878f5/internal/apiserver/auth.go#L61)
 and [`caller.go`](https://github.com/thaynes43/dev-env/blob/380a759d947faf1131653867cdecf4b7ade878f5/internal/apiserver/caller.go#L99)
 require audience-bound ServiceAccount authentication and explicit caller
-classification. The BFF must enforce each user's project/resource scope
-without promoting all logged-in users to those identities. The keeper remains
+classification. The BFF must enforce each user's project/resource scope;
+portal login does not confer either caller identity. The keeper remains
 the sole refresher of Claude/Codex provider logins. The portal never holds,
 refreshes or proxies those provider refresh tokens; see the existing
 `internal/keeper/claude_worker.go` and `internal/keeper/codex_worker.go`
@@ -265,3 +265,16 @@ that review from this initial pass. Keep implementation and identity/route gaps
 explicit, retain the dedicated implementation owner for fixes and CI, and
 preserve supported parent pickup at the pass boundary. A completed executor
 or source milestone is not completed portal delivery.
+
+### M2 read-boundary source, 2026-10-23
+
+After PR525 merged as `597e2cb2fb56a7ce81e055d5f0ed601de126c6ce`, the sole
+authorized implementation successor continues in `web/portal/`. The
+[M2 read contract](../../../../docs/portal-read-boundary.md) specifies the
+Go standard-library handler/template, typed summary dependencies, explicit
+resource/project/environment scope and post-read revocation checks. Fixture
+and pure projection tests establish source behavior only. The #177 adapter
+stays unavailable until its accepted interface is separately integrated.
+No listener, OIDC middleware, operator-human mapping, live connector or
+runtime authorization is installed by this increment. Gate A and Gate B
+remain separate and unmet.
