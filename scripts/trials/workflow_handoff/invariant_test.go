@@ -63,7 +63,22 @@ func assertSameSemantics(t *testing.T, want, got result) {
 func TestFiniteHandoffPermutationAndReplayInvariants(t *testing.T) {
 	// Bounded representative permutations: reverse, rotate and adjacent swaps.
 	// Include valid/later-time flows and conflict classes, not just one repro.
-	for _, name := range []string{"e-merge.json", "b-one-successor.json", "followup-pass-revokes.json", "followup-pass-allows.json", "pass-conflict-offset.json", "followup-scope-cycle.json", "a-same-identity-conflict.json"} {
+	baselines := []struct {
+		name, outcome string
+		code          int
+		writes        bool
+		successors    int
+	}{
+		{"e-merge.json", "recommend-normal-merge-release", 0, false, 0},
+		{"b-one-successor.json", "pending-coordinator", 0, false, 1},
+		{"followup-pass-revokes.json", "recommend-normal-merge-release", 0, false, 0},
+		{"followup-pass-allows.json", "merge-blocked", 0, true, 0},
+		{"pass-conflict-offset.json", "manual-disposition", 3, false, 0},
+		{"followup-scope-cycle.json", "manual-disposition", 3, false, 0},
+		{"a-same-identity-conflict.json", "manual-disposition", 3, false, 0},
+	}
+	for _, expected := range baselines {
+		name := expected.name
 		raw, err := os.ReadFile(filepath.Join("testdata", name))
 		if err != nil {
 			t.Fatal(err)
@@ -72,7 +87,10 @@ func TestFiniteHandoffPermutationAndReplayInvariants(t *testing.T) {
 		if err := json.Unmarshal(raw, &doc); err != nil {
 			t.Fatal(err)
 		}
-		want, _ := check(raw)
+		want, code := check(raw)
+		if code != expected.code || want.Outcome != expected.outcome || want.WritesRecommended != expected.writes || want.RecordedSuccessorCount != expected.successors {
+			t.Fatalf("%s baseline became vacuous: exit=%d outcome=%s writes=%v successors=%d", name, code, want.Outcome, want.WritesRecommended, want.RecordedSuccessorCount)
+		}
 		original := append([]json.RawMessage{}, doc.Events...)
 		variants := [][]json.RawMessage{append([]json.RawMessage{}, original...)}
 		reverse := append([]json.RawMessage{}, original...)

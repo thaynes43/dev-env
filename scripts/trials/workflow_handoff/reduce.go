@@ -320,6 +320,7 @@ type reducer struct {
 	conflictedReview map[string]bool
 	conflictedPass   map[string]bool
 	passTimes        map[string]time.Time
+	custodyAmbiguity []time.Time
 }
 
 func check(data []byte) (result, int) {
@@ -943,9 +944,10 @@ func earlier(a, b parsed) bool {
 	return a.at.Before(b.at)
 }
 
-func dedup(items []parsed) ([]parsed, int, []string, map[string]bool) {
+func dedup(items []parsed) ([]parsed, int, []string, map[string]bool, []time.Time) {
 	seen := map[string]string{}
 	bindingIdentities := map[string]bool{}
+	custodyIdentities := map[string]bool{}
 	conflictedIDs := map[string]bool{}
 	out := make([]parsed, 0, len(items))
 	replays := 0
@@ -953,6 +955,10 @@ func dedup(items []parsed) ([]parsed, int, []string, map[string]bool) {
 	for _, item := range items {
 		if isBindingEvidence(item.body) {
 			bindingIdentities[item.identity] = true
+			custodyIdentities[item.identity] = true
+		}
+		if _, ok := item.body.(assignEvent); ok {
+			custodyIdentities[item.identity] = true
 		}
 		if prev, ok := seen[item.identity]; ok {
 			if prev == item.canonical {
@@ -968,8 +974,12 @@ func dedup(items []parsed) ([]parsed, int, []string, map[string]bool) {
 	}
 	// Any conflicting identity has no retained first winner, of any kind.
 	suppressed := map[string]bool{}
+	custody := []time.Time{}
 	for _, item := range items {
 		if conflictedIDs[item.identity] {
+			if custodyIdentities[item.identity] {
+				custody = append(custody, item.at)
+			}
 			if bindingIdentities[item.identity] {
 				suppressed[instantKey(item.at)] = true
 			}
@@ -982,11 +992,11 @@ func dedup(items []parsed) ([]parsed, int, []string, map[string]bool) {
 			kept = append(kept, item)
 		}
 	}
-	return kept, replays, conflicts, suppressed
+	return kept, replays, conflicts, suppressed, custody
 }
 
 func reduce(doc document, prov provenanceOut, items []parsed) result {
-	items, replays, idConflicts, passConflicts := dedup(items)
+	items, replays, idConflicts, passConflicts, custody := dedup(items)
 	sortByTime(items)
 	r := &reducer{
 		doc:              doc,
@@ -997,6 +1007,7 @@ func reduce(doc document, prov provenanceOut, items []parsed) result {
 		conflictedReview: map[string]bool{},
 		conflictedPass:   passConflicts,
 		passTimes:        map[string]time.Time{},
+		custodyAmbiguity: custody,
 		replays:          replays,
 	}
 	for _, msg := range idConflicts {
@@ -1082,6 +1093,16 @@ func (r *reducer) prescan(items []parsed) {
 				r.conflictedPass[instantKey(item.at)] = true
 				r.conflict("worker pass preservation requires a strictly earlier pass")
 			}
+		}
+	}
+	// Preserve ambiguity even when its event cannot be applied. It must not
+	// restore an older release or free a later successor assignment key.
+	for _, item := range items {
+		if r.conflictedPass[instantKey(item.at)] {
+			r.custodyAmbiguity = append(r.custodyAmbiguity, item.at)
+		}
+		if assignment, ok := item.body.(assignEvent); ok && r.suppressedAssign[assignment.AssignmentKey+"\x00"+instantKey(item.at)] {
+			r.custodyAmbiguity = append(r.custodyAmbiguity, item.at)
 		}
 	}
 }
@@ -1367,6 +1388,14 @@ func (r *reducer) applyAssign(ev assignEvent, at time.Time) {
 			r.successor = nil
 		}
 		return
+	}
+	for _, ambiguity := range r.custodyAmbiguity {
+		if !ambiguity.After(at) {
+			r.blocked = true
+			r.blockedReason = "custody ambiguity at or before assignment requires manual disposition"
+			r.refusals = append(r.refusals, "assignment "+ev.Identity+" not recorded after custody ambiguity")
+			return
+		}
 	}
 	if r.exec.identity != "" && ev.Predecessor != r.exec.identity {
 		r.blocked = true
