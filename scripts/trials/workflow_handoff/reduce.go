@@ -945,14 +945,14 @@ func earlier(a, b parsed) bool {
 
 func dedup(items []parsed) ([]parsed, int, []string, map[string]bool) {
 	seen := map[string]string{}
-	passIdentities := map[string]bool{}
+	bindingIdentities := map[string]bool{}
 	conflictedIDs := map[string]bool{}
 	out := make([]parsed, 0, len(items))
 	replays := 0
 	conflicts := []string{}
 	for _, item := range items {
-		if _, ok := item.body.(passEvent); ok {
-			passIdentities[item.identity] = true
+		if isBindingEvidence(item.body) {
+			bindingIdentities[item.identity] = true
 		}
 		if prev, ok := seen[item.identity]; ok {
 			if prev == item.canonical {
@@ -966,16 +966,17 @@ func dedup(items []parsed) ([]parsed, int, []string, map[string]bool) {
 		seen[item.identity] = item.canonical
 		out = append(out, item)
 	}
-	// A conflicting identity involving any pass has no retained first winner.
+	// A conflicting binding identity has no retained first winner, of any kind.
 	suppressed := map[string]bool{}
 	for _, item := range items {
-		if conflictedIDs[item.identity] && passIdentities[item.identity] {
+		if conflictedIDs[item.identity] && bindingIdentities[item.identity] {
 			suppressed[instantKey(item.at)] = true
+			conflicts = append(conflicts, "dropped ambiguous record kind "+item.kind+" identity "+item.identity+"; manual disposition retains the raw evidence")
 		}
 	}
 	kept := out[:0]
 	for _, item := range out {
-		if !conflictedIDs[item.identity] || !passIdentities[item.identity] {
+		if !conflictedIDs[item.identity] || !bindingIdentities[item.identity] {
 			kept = append(kept, item)
 		}
 	}
@@ -1069,6 +1070,18 @@ func (r *reducer) prescan(items []parsed) {
 			successors[key] = as.Successor
 		}
 	}
+	for _, item := range items {
+		pass, ok := item.body.(passEvent)
+		if !ok || !pass.Authorized || pass.AuthorizationRef == "" {
+			continue
+		}
+		for _, id := range pass.Preserves {
+			if when, exists := r.passTimes[id]; exists && !when.Before(item.at) {
+				r.conflictedPass[instantKey(item.at)] = true
+				r.conflict("worker pass preservation requires a strictly earlier pass")
+			}
+		}
+	}
 }
 
 func samePassAdvice(a, b passEvent) bool {
@@ -1088,6 +1101,15 @@ func (r *reducer) bindingOK(ev reviewEvent) bool {
 		return true
 	}
 	return ev.Task == r.doc.ReviewBinding.Task && ev.UID == r.doc.ReviewBinding.UID
+}
+
+func isBindingEvidence(body any) bool {
+	switch body.(type) {
+	case passEvent, execEvent, deadlineEvent, stopEvent:
+		return true
+	default:
+		return false
+	}
 }
 
 func bindingExecutor(body any) string {
@@ -1114,7 +1136,7 @@ func (r *reducer) apply(item parsed) {
 	}
 	switch ev := item.body.(type) {
 	case passEvent:
-		r.applyPass(ev, item.at)
+		r.applyPass(ev)
 	case execEvent:
 		r.applyExec(ev, item.at)
 	case deadlineEvent:
@@ -1146,7 +1168,7 @@ func (r *reducer) apply(item parsed) {
 	}
 }
 
-func (r *reducer) applyPass(ev passEvent, at time.Time) {
+func (r *reducer) applyPass(ev passEvent) {
 	if r.exec.deadline && (!ev.Authorized || ev.AuthorizationRef == "") {
 		r.refusals = append(r.refusals, "no automatic new allowance after deadline "+ev.Identity)
 		return
@@ -1155,22 +1177,9 @@ func (r *reducer) applyPass(ev passEvent, at time.Time) {
 		r.refusals = append(r.refusals, "worker pass "+ev.Identity+" is not externally authorized")
 		return
 	}
-	if r.conflictedPass[instantKey(at)] {
-		r.writes = false
-		r.refusals = append(r.refusals, "conflicting worker pass "+ev.Identity+" not applied")
-		return
-	}
 	if r.exec.identity != "" && ev.Executor != r.exec.identity {
 		r.refusals = append(r.refusals, "worker pass executor mismatch "+ev.Identity)
 		return
-	}
-	for _, id := range ev.Preserves {
-		if when, exists := r.passTimes[id]; exists && !when.Before(at) {
-			r.conflictedPass[instantKey(at)] = true
-			r.conflict("worker pass preservation requires a strictly earlier pass")
-			r.writes = false
-			return
-		}
 	}
 	for _, id := range ev.Preserves {
 		if !r.passIDs[id] {
