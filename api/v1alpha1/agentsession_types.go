@@ -1566,6 +1566,7 @@ type RescuedRef struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.sharedAdmission) || (has(self.status) && has(self.status.sharedAdmission))",message="recorded shared admission cannot be erased with status"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.sessionDirectory) || (has(self.status) && has(self.status.sessionDirectory))",message="directory evidence cannot be erased with status"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.privateHistory) || (has(self.status) && has(self.status.privateHistory))",message="private history retention cannot be erased with status"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.capturedUsage) || (has(self.status) && has(self.status.capturedUsage))",message="captured usage ledger cannot be erased with status"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.usageObservation) || (has(self.status) && has(self.status.usageObservation))",message="original usage observation cannot be erased"
 type AgentSession struct {
 	metav1.TypeMeta   `json:",inline"`

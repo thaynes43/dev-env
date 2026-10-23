@@ -256,7 +256,7 @@ func TestCapturedUsageByteBoundary(t *testing.T) {
 
 func fatObservation(t *testing.T, i int) *v1alpha1.UsageObservationStatus {
 	t.Helper()
-	n := int64(protocol.MaxUsageTokens)
+	n := protocol.MaxUsageTokens
 	unknown := protocol.TokenObservation{State: protocol.UsageUnknown}
 	reported := protocol.TokenObservation{State: protocol.UsageReported, Amount: &n}
 	cost := protocol.CostObservation{State: protocol.UsageReported, Amount: strings.Repeat("9", 64), Unit: "USD", Kind: protocol.UsageCLIEstimate}

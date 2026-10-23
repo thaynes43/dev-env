@@ -334,3 +334,55 @@ func TestCapturedUsageSchemaAcceptsAndRefuses(t *testing.T) {
 		t.Fatal("parent removal kept a receipt", err)
 	}
 }
+
+func TestCapturedUsageStatusRemovalRefused(t *testing.T) {
+	c := ctx(t)
+	s := taskSession()
+	if err := k8s.Create(c, s); err != nil {
+		t.Fatal(err)
+	}
+	if err := k8s.Get(c, client.ObjectKeyFromObject(s), s); err != nil {
+		t.Fatal(err)
+	}
+	obs := schemaUsage()
+	obs.Source.SessionUID = string(s.UID)
+	s.Status.CapturedUsage = &v1alpha1.CapturedUsageStatus{
+		Version: 1, Scope: v1alpha1.CapturedUsageScope, Coverage: v1alpha1.CapturedUsageCoverage, Retention: v1alpha1.CapturedUsageRetention,
+		Receipts: []v1alpha1.CapturedUsageReceipt{{
+			Key: strings.Repeat("c", 64), ParentUID: string(s.UID), ChildName: "child",
+			CapturedAt: metav1.NewTime(time.Now().UTC().Truncate(time.Second)), Observation: *obs,
+		}},
+	}
+	if err := k8s.Status().Update(c, s); err != nil {
+		t.Fatal("ledger-only status rejected", err)
+	}
+	if err := k8s.Get(c, client.ObjectKeyFromObject(s), s); err != nil {
+		t.Fatal(err)
+	}
+	if s.Status.CapturedUsage == nil || s.Status.UsageObservation != nil || s.Status.PrivateHistory != nil || s.Status.SessionDirectory != nil || s.Status.SharedAdmission != nil {
+		t.Fatal("status removal fixture is not ledger-only")
+	}
+	rv := s.ResourceVersion
+	key := s.Status.CapturedUsage.Receipts[0].Key
+	for _, tc := range []struct {
+		name  string
+		patch string
+		kind  types.PatchType
+	}{
+		{"status-null", `{"status":null}`, types.MergePatchType},
+		{"status-remove", `[{"op":"remove","path":"/status"}]`, types.JSONPatchType},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := s.DeepCopy()
+			err := k8s.Status().Patch(c, bad, client.RawPatch(tc.kind, []byte(tc.patch)))
+			wantInvalid(t, err, "captured usage ledger cannot be erased with status")
+			got := &v1alpha1.AgentSession{}
+			if err := k8s.Get(c, client.ObjectKeyFromObject(s), got); err != nil {
+				t.Fatal(err)
+			}
+			if got.ResourceVersion != rv || got.Status.CapturedUsage == nil || len(got.Status.CapturedUsage.Receipts) != 1 || got.Status.CapturedUsage.Receipts[0].Key != key {
+				t.Fatalf("refused status removal changed stored ledger rv=%s/%s", got.ResourceVersion, rv)
+			}
+		})
+	}
+}

@@ -2876,6 +2876,9 @@ spec:
         - message: private history retention cannot be erased with status
           rule: '!has(oldSelf.status) || !has(oldSelf.status.privateHistory) || (has(self.status)
             && has(self.status.privateHistory))'
+        - message: captured usage ledger cannot be erased with status
+          rule: '!has(oldSelf.status) || !has(oldSelf.status.capturedUsage) || (has(self.status)
+            && has(self.status.capturedUsage))'
         - message: original usage observation cannot be erased
           rule: '!has(oldSelf.status) || !has(oldSelf.status.usageObservation) ||
             (has(self.status) && has(self.status.usageObservation))'
