@@ -43,6 +43,20 @@ and callback denial before any observer. All unrun proof remains explicit.
 Source success cannot release witness/DB/auth/isolation/Gate A or shared Authentik
 logging holds.
 
+Per-replica witness GET admission is a token bucket checked before a concurrency
+slot and before the request. The ceiling is 30 GETs/second with burst 57, from
+the measured 21 GETs per protected read and 9 per login, one read per second,
+the existing one login per second, and login burst 4. Two replicas are 60
+GETs/second and burst 114. Over budget sends no request and does not retry.
+Non-positive, non-finite, or above-ceiling configuration is unavailable. Loopback
+latency is not treated as live capacity.
+
+The code client token URL is only `/application/o/token/`. Issuer HTTP
+configuration rejects `revoke` and `introspect` paths. The hosted PostgreSQL
+workflow sets `PORTAL_REQUIRE_DISPOSABLE_PROOF=1`, so a missing database or
+failover input fails instead of skipping. The same acquired SQL connection,
+pre-commit witness, and post-commit witness recheck are unchanged.
+
 Local evidence so far: official Go 1.27.2 archive checksum verified, compiler
 binary SHA256 `548d3c32f83fa81152f543eb1526be7884cfe0526eb5e9ce29d3eca14786e7e0`.
 Focused portal tests and vet pass; selected transaction/current-membership

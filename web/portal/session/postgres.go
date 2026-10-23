@@ -89,6 +89,8 @@ func postgresPoolConfig(host, username, password string, roots *x509.CertPool) (
 	c.ConnConfig.Fallbacks = nil
 	c.ConnConfig.RuntimeParams = map[string]string{"application_name": "dev-env-portal", "search_path": "pg_catalog,portal", "statement_timeout": "5000"}
 	c.ConnConfig.Tracer = nil
+	// Two connections per replica. Advisory-lock independence does not keep a
+	// same-replica revoke available while both connections are already held.
 	c.MaxConns = 2
 	c.MinConns = 0
 	c.BeforeConnect = nil

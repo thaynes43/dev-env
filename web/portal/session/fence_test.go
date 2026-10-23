@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -40,9 +41,17 @@ type admissionFixture struct {
 	calls, changeAt, status int
 	raw                     string
 	delays                  []time.Duration
+	apiURL, tokenFile       string
+	ca                      []byte
 }
 
 func newAdmissionFixture(t *testing.T, i Incarnation) (*KubernetesFence, *admissionFixture) {
+	t.Helper()
+	perSecond, burst := witnessGetCeiling()
+	return newBudgetAdmissionFixture(t, i, perSecond, burst)
+}
+
+func newBudgetAdmissionFixture(t *testing.T, i Incarnation, perSecond float64, burst int) (*KubernetesFence, *admissionFixture) {
 	t.Helper()
 	f := &admissionFixture{doc: admissionDocument(i), status: 200}
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +82,8 @@ func newAdmissionFixture(t *testing.T, i Incarnation) (*KubernetesFence, *admiss
 		t.Fatal("fixture token failed")
 	}
 	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
-	fence, err := NewKubernetesFence(AdmissionConfig{APIURL: server.URL, CA: ca, TokenFile: token, UID: "synthetic-witness-uid", Timeout: time.Second})
+	f.apiURL, f.ca, f.tokenFile = server.URL, ca, token
+	fence, err := NewKubernetesFence(AdmissionConfig{APIURL: server.URL, CA: ca, TokenFile: token, UID: "synthetic-witness-uid", Timeout: time.Second, WitnessGetsPerSecond: perSecond, WitnessGetBurst: burst})
 	if err != nil {
 		t.Fatal("fixture admission config failed")
 	}
@@ -336,5 +346,130 @@ func TestExactAdmissionSnapshotCannotChangeAnyField(t *testing.T) {
 				t.Fatal("changed admission snapshot accepted")
 			}
 		})
+	}
+}
+
+func TestWitnessBudgetMatchesMeasuredReadAndLogin(t *testing.T) {
+	perSecond, burst := witnessGetCeiling()
+	if measuredGetsPerProtectedRead != 21 || measuredGetsPerLogin != 9 || perSecond != 30 || burst != 57 {
+		t.Fatalf("witness budget drifted from 21/read and 9/login: rate=%v burst=%d", perSecond, burst)
+	}
+}
+
+func TestWitnessBudgetRejectsUntrustedValuesWithoutHTTP(t *testing.T) {
+	_, f := newAdmissionFixture(t, fixtureIncarnation())
+	ceiling, burst := witnessGetCeiling()
+	base := AdmissionConfig{APIURL: f.apiURL, CA: f.ca, TokenFile: f.tokenFile, UID: "synthetic-witness-uid", Timeout: time.Second, WitnessGetsPerSecond: ceiling, WitnessGetBurst: burst}
+	accepted, err := NewKubernetesFence(base)
+	if err != nil || accepted == nil {
+		t.Fatal("derived witness ceiling rejected")
+	}
+	bad := []AdmissionConfig{base, base, base, base, base, base, base}
+	bad[0].WitnessGetsPerSecond = 0
+	bad[1].WitnessGetsPerSecond = -1
+	bad[2].WitnessGetsPerSecond = math.NaN()
+	bad[3].WitnessGetsPerSecond = math.Inf(1)
+	bad[4].WitnessGetsPerSecond = ceiling + 1
+	bad[5].WitnessGetBurst = 0
+	bad[6].WitnessGetBurst = burst + 1
+	for _, cfg := range bad {
+		got, err := NewKubernetesFence(cfg)
+		if err == nil || got != nil {
+			t.Fatal("untrusted witness budget accepted")
+		}
+	}
+	f.mu.Lock()
+	calls := f.calls
+	f.mu.Unlock()
+	if calls != 0 {
+		t.Fatal("rejected witness budget sent HTTP")
+	}
+}
+
+func TestOverBudgetWitnessGetSendsNoHTTP(t *testing.T) {
+	fence, f := newBudgetAdmissionFixture(t, fixtureIncarnation(), 1.0/3600, 1)
+	if _, err := fence.read(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	calls := f.calls
+	f.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("budgeted GET count %d", calls)
+	}
+	_, err := fence.read(context.Background())
+	f.mu.Lock()
+	calls = f.calls
+	f.mu.Unlock()
+	if !errors.Is(err, portal.ErrUnavailable) || calls != 1 {
+		t.Fatalf("over-budget GET admitted: err=%v calls=%d", err, calls)
+	}
+}
+
+func TestOverBudgetWitnessGetReturnsBeforeOccupiedSlots(t *testing.T) {
+	release := make(chan struct{})
+	entered := make(chan struct{}, 2)
+	var mu sync.Mutex
+	calls := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		entered <- struct{}{}
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(server.Close)
+	var closeOnce sync.Once
+	unlock := func() { closeOnce.Do(func() { close(release) }) }
+	t.Cleanup(unlock)
+	token := filepath.Join(t.TempDir(), "token")
+	if os.WriteFile(token, []byte("SYNTHETIC-KUBE-TOKEN"), 0o600) != nil {
+		t.Fatal("fixture token failed")
+	}
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	fence, err := NewKubernetesFence(AdmissionConfig{APIURL: server.URL, CA: ca, TokenFile: token, UID: "synthetic-witness-uid", Timeout: 5 * time.Second, WitnessGetsPerSecond: 1.0 / 3600, WitnessGetBurst: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fence.client.CloseIdleConnections() })
+	done := make(chan error, 2)
+	for range 2 {
+		go func() {
+			_, err := fence.read(context.Background())
+			done <- err
+		}()
+	}
+	for range 2 {
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("in-flight witness GET did not reach the fixture")
+		}
+	}
+	over := make(chan error, 1)
+	go func() {
+		_, err := fence.read(context.Background())
+		over <- err
+	}()
+	select {
+	case err := <-over:
+		if !errors.Is(err, portal.ErrUnavailable) {
+			t.Fatal("over-budget GET was admitted while slots were occupied")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("over-budget GET waited for a slot")
+	}
+	mu.Lock()
+	got := calls
+	mu.Unlock()
+	if got != 2 {
+		t.Fatalf("over-budget GET sent HTTP, calls=%d", got)
+	}
+	unlock()
+	for range 2 {
+		<-done
 	}
 }

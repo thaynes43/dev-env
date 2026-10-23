@@ -137,7 +137,12 @@ against 120/121/122/123/178, then repeat session and live UserInfo authorization
 after rendering and immediately before releasing the buffered response. Errors,
 redirects, missing/malformed/wrong-typed/duplicate booleans and wrong sub deny.
 
-Local logout needs no IdP. Actual IdP session deletion, disable and token revoke
+Local logout needs no IdP. The code client accepts only `/application/o/token/`
+on the configured issuer host, the Authentik 2026.8 token endpoint. Issuer HTTP
+configuration rejects any allowlisted path with a `revoke` or `introspect`
+segment. No revoke, introspection, refresh, or end-session call is added, and
+logout stays a local durable DELETE. This pin is source configuration, not a
+live provider request or a shared Authentik change. Actual IdP session deletion, disable and token revoke
 must deny in live Gate A using disposable identities; cookie disappearance alone
 is not immediate token revocation. Do not alter Tom's real Admins membership.
 The live metadata adapter remains unavailable: only OP haynes-engineering GET
@@ -177,7 +182,9 @@ The [fixed recovery helper](../scripts/trials/portal_recovery/README.md) is host
 only and never targets production. The required `CI - Success` directly depends
 on the reusable PostgreSQL job; a separate advisory/standalone success cannot
 substitute. A disposable envtest checks proposed named-GET-only RBAC in the ordinary
-required make-test job. All missing local facilities are explicit skips.
+required make-test job. A local run without `PORTAL_REQUIRE_DISPOSABLE_PROOF` skips a missing disposable
+database or failover input. The hosted PostgreSQL workflow sets that variable,
+and the same missing input then fails the job.
 
 Login starts have one constant-size per-engine limiter: burst 4, one start/second;
 under a two-replica ceiling this is burst 8/two starts per second. The shared store
@@ -185,8 +192,13 @@ serializes insert admission across replicas using transaction advisory locks,
 with waits bounded by the operation deadline. Each table caps at 256 rows and deletes
 at most 32 expired rows per insertion, without UPDATE/admin grants. No function privilege is added: the normal runtime
 role must prove EXECUTE on the advisory-lock function in disposable/live acceptance.
-A held insert lock never blocks logout/revoke/callback DELETEs, including while
-an insertion waits for its pre-commit witness GET.
+A held insert advisory lock does not lock logout, revoke, or callback DELETE
+statements, including while an insertion waits for its pre-commit witness GET.
+That lock independence is not same-replica availability. The pool has two
+connections, so two inserts can hold both, and a revoke on that replica then
+waits for a connection until the operation deadline and can return unavailable.
+The hosted overlap fixture revokes through a separate pool. Deadlines bound the
+wait, and there is no retry.
 These source bounds are conservative admission limits, not measured production
 capacity or an SLO; deployment replicas, retention policy, real API latency and
 legitimate-flow proof must be accepted before activation.
@@ -199,6 +211,18 @@ retry or cached allow. Two in-flight GETs per fence and two SQL connections per
 pool bound concurrency. Keep automatic browser polling disabled until live API
 budget evidence supports a frequency and replica/client ceiling. Loopback fixture
 latency cannot establish a live control-plane load budget.
+
+Each fence also checks a token bucket before it takes a concurrency slot and
+before any witness GET. The trusted per-replica ceiling is 30 GETs/second with
+burst 57: the measured 21 GETs for one protected read per second, plus the
+measured 9 GETs for the existing one login per second, with burst covering one
+protected read plus the login burst of four (21 + 4x9). Two replicas are 60
+GETs/second and burst 114 because each replica has its own fence. Configuration
+must be finite and positive and cannot exceed that ceiling. Zero is unavailable,
+not unlimited. A lower budget is allowed. An over-budget GET returns unavailable
+and is not retried or sent. This is a source admission ceiling from those counts
+and the existing login, replica, and pool plan. Ingress rate limiting remains an
+extra layer.
 
 Focused commands: Go1.27.2, GOTOOLCHAIN=local, GOMAXPROCS=2, nice -n 19,
 `go test -p 1 ./web/portal/...` and `go vet -p 1 ./web/portal/...`.

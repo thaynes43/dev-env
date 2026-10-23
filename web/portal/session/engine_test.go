@@ -122,7 +122,7 @@ func setupAuth(t *testing.T) *authFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := NewIssuerHTTPClient(v.issuer, map[string]string{"https://issuer.example/token": "POST"}, tripFunc(func(r *http.Request) (*http.Response, error) {
+	client, err := NewIssuerHTTPClient(v.issuer, map[string]string{"https://issuer.example/application/o/token/": "POST"}, tripFunc(func(r *http.Request) (*http.Response, error) {
 		f.exchanges++
 		if f.exchangeFailure {
 			return nil, errors.New("SECRET-PROVIDER-CANARY")
@@ -156,7 +156,7 @@ func setupAuth(t *testing.T) *authFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	codes, err := NewCodeClient(CodeConfig{Issuer: v.issuer, ClientID: "synthetic-client", ClientSecret: "fixture-only-not-a-credential", Callback: "https://portal.example/auth/callback", AuthorizationURL: "https://issuer.example/authorize", TokenURL: "https://issuer.example/token", AuthStyle: oauth2.AuthStyleInHeader, HTTPClient: client})
+	codes, err := NewCodeClient(CodeConfig{Issuer: v.issuer, ClientID: "synthetic-client", ClientSecret: "fixture-only-not-a-credential", Callback: "https://portal.example/auth/callback", AuthorizationURL: "https://issuer.example/authorize", TokenURL: "https://issuer.example/application/o/token/", AuthStyle: oauth2.AuthStyleInHeader, HTTPClient: client})
 	if err != nil {
 		t.Fatal(err)
 	}

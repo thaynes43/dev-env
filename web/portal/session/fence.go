@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"io"
+	"math"
 	"mime"
 	"net"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/thaynes43/dev-env/internal/tokenfile"
@@ -25,6 +27,36 @@ import (
 
 const admissionPath = "/api/v1/namespaces/dev-agents/configmaps/dev-env-v2-portal-admission"
 const maximumAdmission = 16 * 1024
+
+// Hosted disposable loopback counted these witness GETs. The counts are not a
+// live latency or control-plane capacity measurement.
+const (
+	measuredGetsPerProtectedRead = 21
+	measuredGetsPerLogin         = 9
+	// Polling stays off, and login admission is already one start per second
+	// with burst 4 on each replica. The fence admits one protected read per
+	// second beside that login rate. Each replica has its own fence.
+	witnessReadsPerSecond  = 1
+	witnessLoginsPerSecond = 1
+	witnessLoginBurst      = 4
+)
+
+// witnessGetCeiling is 30 GETs/second and burst 57 on one replica:
+// 21 + 9 each second, and one protected read plus the login burst (21 + 4*9).
+// Two replicas are 60 GETs/second and burst 114. A lower budget is allowed.
+func witnessGetCeiling() (float64, int) {
+	perSecond := witnessReadsPerSecond*measuredGetsPerProtectedRead + witnessLoginsPerSecond*measuredGetsPerLogin
+	burst := witnessReadsPerSecond*measuredGetsPerProtectedRead + witnessLoginBurst*measuredGetsPerLogin
+	return float64(perSecond), burst
+}
+
+func witnessBudget(perSecond float64, burst int) (*rate.Limiter, bool) {
+	ceiling, maxBurst := witnessGetCeiling()
+	if math.IsNaN(perSecond) || math.IsInf(perSecond, 0) || perSecond <= 0 || perSecond > ceiling || burst <= 0 || burst > maxBurst {
+		return nil, false
+	}
+	return rate.NewLimiter(rate.Limit(perSecond), burst), true
+}
 
 // Incarnation identifies the actual backend, not the pool's configured hostname.
 // Timeline is the active WAL filename prefix, never checkpoint timeline metadata.
@@ -60,18 +92,25 @@ type AdmissionConfig struct {
 	CA             []byte
 	TokenFile, UID string
 	Timeout        time.Duration
+	// WitnessGetsPerSecond and WitnessGetBurst bound fresh admission GETs
+	// before a concurrency slot is taken. Both must be finite and positive
+	// and neither may exceed witnessGetCeiling. Zero is unavailable, not unlimited.
+	WitnessGetsPerSecond float64
+	WitnessGetBurst      int
 }
 
 type KubernetesFence struct {
 	endpoint, tokenFile, uid string
 	client                   *http.Client
 	slots                    chan struct{}
+	gets                     *rate.Limiter
 }
 
 func NewKubernetesFence(c AdmissionConfig) (*KubernetesFence, error) {
+	limiter, budgetOK := witnessBudget(c.WitnessGetsPerSecond, c.WitnessGetBurst)
 	u, err := admissionAPIURL(c.APIURL)
 	roots := x509.NewCertPool()
-	if err != nil || (u.Path != "" && u.Path != "/") || !roots.AppendCertsFromPEM(c.CA) || c.TokenFile == "" || !boundedIdentifier(c.UID) || c.Timeout <= 0 || c.Timeout > 5*time.Second {
+	if err != nil || !budgetOK || (u.Path != "" && u.Path != "/") || !roots.AppendCertsFromPEM(c.CA) || c.TokenFile == "" || !boundedIdentifier(c.UID) || c.Timeout <= 0 || c.Timeout > 5*time.Second {
 		return nil, portal.ErrUnavailable
 	}
 	// Deliberately build a dedicated transport; DefaultTransport/ProxyFromEnvironment
@@ -84,7 +123,7 @@ func NewKubernetesFence(c AdmissionConfig) (*KubernetesFence, error) {
 		ResponseHeaderTimeout: c.Timeout, MaxResponseHeaderBytes: 8 * 1024, DisableCompression: true,
 	}
 	u.Path = admissionPath
-	return &KubernetesFence{endpoint: u.String(), tokenFile: c.TokenFile, uid: c.UID, slots: make(chan struct{}, 2), client: &http.Client{Transport: transport, Timeout: c.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	return &KubernetesFence{endpoint: u.String(), tokenFile: c.TokenFile, uid: c.UID, slots: make(chan struct{}, 2), gets: limiter, client: &http.Client{Transport: transport, Timeout: c.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
 func admissionAPIURL(raw string) (*url.URL, error) {
@@ -123,7 +162,12 @@ func boundedIdentifier(s string) bool {
 }
 
 func (f *KubernetesFence) read(ctx context.Context) (AdmissionSnapshot, error) {
-	if f == nil || f.client == nil || f.slots == nil {
+	if f == nil || f.client == nil || f.slots == nil || f.gets == nil || ctx == nil || ctx.Err() != nil {
+		return AdmissionSnapshot{}, portal.ErrUnavailable
+	}
+	// Spend the budget before taking a slot and before any request. Over budget
+	// is unavailable: nothing is queued, retried, or sent.
+	if !f.gets.Allow() {
 		return AdmissionSnapshot{}, portal.ErrUnavailable
 	}
 	// Bound outstanding GETs across all operations sharing this fence, without a

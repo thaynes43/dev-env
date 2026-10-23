@@ -20,14 +20,13 @@ import (
 	"github.com/thaynes43/dev-env/web/portal"
 )
 
-// Hosted CI only: this suite refuses non-loopback DBs and uses disposable
-// identities. Absence is an explicit skip, never replica/DB evidence.
+// Hosted CI sets PORTAL_REQUIRE_DISPOSABLE_PROOF. A missing database then fails
+// the job. A local run without that variable still skips. This suite refuses
+// non-loopback DBs and uses disposable identities. A skip is not DB evidence.
 func integrationPools(t *testing.T) (*pgxpool.Pool, *PostgresStore, *PostgresStore, *fixtureFence) {
 	t.Helper()
 	dsn := os.Getenv("PORTAL_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("disposable PostgreSQL not configured; no DB proof")
-	}
+	requireHostedProof(t, dsn == "", "disposable PostgreSQL not configured; no DB proof")
 	u, err := url.Parse(dsn)
 	if err != nil || u.Scheme != "postgres" || u.Hostname() != "localhost" || u.Path != "/dev_env_v2_portal" || u.Query().Get("sslmode") != "verify-full" {
 		t.Fatal("integration DB must be disposable loopback with verified TLS")
@@ -440,4 +439,32 @@ func TestPostgresIntegration(t *testing.T) {
 			t.Fatal("closed primary store fell back")
 		}
 	})
+}
+
+func hostedProofDisposition(requireProof, missing bool) string {
+	if !missing {
+		return "run"
+	}
+	if requireProof {
+		return "fail"
+	}
+	return "skip"
+}
+
+func requireHostedProof(t *testing.T, missing bool, reason string) {
+	t.Helper()
+	switch hostedProofDisposition(os.Getenv("PORTAL_REQUIRE_DISPOSABLE_PROOF") == "1", missing) {
+	case "run":
+		return
+	case "fail":
+		t.Fatalf("required hosted proof missing: %s", reason)
+	default:
+		t.Skip(reason)
+	}
+}
+
+func TestHostedProofMissingInputFailsOnlyWhenRequired(t *testing.T) {
+	if hostedProofDisposition(false, true) != "skip" || hostedProofDisposition(true, true) != "fail" || hostedProofDisposition(true, false) != "run" || hostedProofDisposition(false, false) != "run" {
+		t.Fatal("hosted proof missing-input disposition changed")
+	}
 }

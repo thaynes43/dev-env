@@ -39,6 +39,7 @@ jobs:
       - name: Enable disposable verified TLS and role-scoped HBA
         env:
           PORTAL_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+          PORTAL_REQUIRE_DISPOSABLE_PROOF: "1"
         run: |
           umask 077
           mkdir "$RUNNER_TEMP/portal-tls"
