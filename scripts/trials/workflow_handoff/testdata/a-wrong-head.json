@@ -1,0 +1,34 @@
+{
+  "schema": "dev-env.workflow-handoff/v1",
+  "story": "177",
+  "relatedStories": [
+    "117",
+    "101"
+  ],
+  "repository": "github.com/thaynes43/dev-env",
+  "pullRequest": 0,
+  "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "coordinator": "sol-native01a164b6-4fdd-73f2-b49b-738c23b5a709",
+  "modelProvenance": {
+    "serving": "Unknown",
+    "cost": "Unknown",
+    "configuredUI": "Grok4.7ExtraHigh"
+  },
+  "events": [
+    {
+      "kind": "review-observation",
+      "identity": "obs-wrong",
+      "sourceTime": "2026-10-23T13:30:00Z",
+      "task": "native-review-1",
+      "uid": "uid-review-1",
+      "head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "source": "native-review-log",
+      "phase": "terminal",
+      "verdict": "approved"
+    }
+  ],
+  "reviewBinding": {
+    "task": "native-review-1",
+    "uid": "uid-review-1"
+  }
+}

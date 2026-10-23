@@ -1,0 +1,51 @@
+{
+  "schema": "dev-env.workflow-handoff/v1",
+  "story": "177",
+  "relatedStories": [
+    "117",
+    "101"
+  ],
+  "repository": "github.com/thaynes43/dev-env",
+  "pullRequest": 0,
+  "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "coordinator": "sol-native01a164b6-4fdd-73f2-b49b-738c23b5a709",
+  "modelProvenance": {
+    "serving": "Unknown",
+    "cost": "Unknown",
+    "configuredUI": "Grok4.7ExtraHigh"
+  },
+  "events": [
+    {
+      "kind": "worker-pass",
+      "identity": "pass-1",
+      "sourceTime": "2026-10-23T13:00:00Z",
+      "executor": "executor-a",
+      "deadline": "2026-10-23T14:42:01Z",
+      "budget": "original",
+      "authorized": true,
+      "authorizationRef": "external-dispatch-pass-1",
+      "preserves": [],
+      "writesAllowed": false
+    },
+    {
+      "kind": "deadline-reached",
+      "identity": "deadline-1",
+      "sourceTime": "2026-10-23T14:42:01Z",
+      "executor": "executor-a"
+    },
+    {
+      "kind": "worker-pass",
+      "identity": "pass-2",
+      "sourceTime": "2026-10-23T15:00:00Z",
+      "executor": "executor-a",
+      "deadline": "2026-10-23T14:42:01Z",
+      "budget": "pass-2",
+      "authorized": true,
+      "authorizationRef": "external-pass-2",
+      "preserves": [
+        "pass-1"
+      ],
+      "writesAllowed": false
+    }
+  ]
+}

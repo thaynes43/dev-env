@@ -324,6 +324,8 @@ including the trusted v1 client; session agents use the message API. Detach with
 `Ctrl-b d` and the session keeps running. A Pending session is waiting for
 capacity, not a reason to launch duplicates.
 
+A headless `-p` task runs its prompt once. `msg` applies to a local TUI session; a headless task does not accept messages. Coordinator custody of that result is recorded separately in the [coordinator result handoff](coordinator-result-handoff.md). A delivery receipt is not acknowledgment, ownership, or completion. The offline checker only validates a bounded handoff record.
+
 ```bash
 # Local TUI only; headless tasks do not accept messages.
 "${v2run[@]}" msg SESSION "The coordinator is reviewing the deployment evidence for this project."

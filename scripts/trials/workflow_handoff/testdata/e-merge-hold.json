@@ -1,0 +1,39 @@
+{
+  "schema": "dev-env.workflow-handoff/v1",
+  "story": "177",
+  "relatedStories": [
+    "117",
+    "101"
+  ],
+  "repository": "github.com/thaynes43/dev-env",
+  "pullRequest": 0,
+  "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "coordinator": "sol-native01a164b6-4fdd-73f2-b49b-738c23b5a709",
+  "modelProvenance": {
+    "serving": "Unknown",
+    "cost": "Unknown",
+    "configuredUI": "Grok4.7ExtraHigh"
+  },
+  "events": [
+    {
+      "kind": "hold",
+      "identity": "hold-merge",
+      "sourceTime": "2026-10-23T13:40:00Z",
+      "action": "merge-release",
+      "state": "pending",
+      "reason": "explicit merge hold remains"
+    },
+    {
+      "kind": "gate-evidence",
+      "identity": "gate-1",
+      "sourceTime": "2026-10-23T16:00:00Z",
+      "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "agentOpened": true,
+      "requiredCI": "passed",
+      "nativeReviewVerdict": "approved",
+      "reviewJobSuccess": true,
+      "findings": "disposed",
+      "headUnchanged": true
+    }
+  ]
+}

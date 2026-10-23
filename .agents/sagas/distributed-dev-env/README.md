@@ -7,6 +7,8 @@ installed; protected work is unchanged. Owned-root response/update/history/
 stop-continue/phone acceptance remains unproven.009 named-read approval is
 pending; no root/token/model. Keep Saga85/Epic107/Story110, owner and counters.
 
+**2026-10-23 source-only #177:** the [workflow result-custody record](verification/workflow-result-custody-2026-10-23.md) documents an offline handoff checker and coordinator procedure. It does not accept #117 or #101, and it does not change runtime orchestration.
+
 **2026-10-18 ruling:** Q-24 is answered: Tom approved small separate native
 hosts, each with its own computer entry and pairing. See
 [DESIGN-006](designs/006-private-catalog-bootstrap.md#q-24-codex-mvp-native-routing).
