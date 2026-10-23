@@ -51,7 +51,7 @@ Usage:
   agent-run auth status [-o json]                 show the shared Claude and Codex logins' state and expiry
   agent-run keeper-login claude|codex [status|url|code|cancel]
                                                   renew the keeper's shared login (workbench only)
-  agent-run fleet                                 show what runs and waits, by node and revision
+  agent-run fleet [--resources]                   show what runs and waits; --resources adds the bound Pod spec
   agent-run version                               print the version
   agent-run help [<command>]                      print help for agent-run or one command
 
@@ -566,12 +566,20 @@ end one grant. grant_status reads. None of them approve or install a grant.
 agentd registers this command as the dev-env MCP server when it renders the
 session, unless mcp.json already names a dev-env server.
 `,
-	"fleet": `Usage: agent-run fleet [-o json]
+	"fleet": `Usage: agent-run fleet [--resources] [-o json]
 
 Shows the fleet: the current template revision, how many sessions are in each
 phase, how many session pods each node runs, the sessions on an older revision,
 and every session that holds or waits for a pod, with the scheduler's reason for
 each that waits. It reports; it gates nothing.
+
+--resources asks for Dev-Env-Fleet: resources-v1 and adds the bound Pod UID,
+the Pod spec node, and each ordinary and init container's configured CPU and
+memory requests and limits. Those values are the Pod spec. They are not
+measured use or free node capacity. Unknown means the binding or the server
+did not supply the observation. absent means the spec does not set that
+quantity. 0 means the spec sets zero. An older operator omits the observation
+and the command shows Unknown. The request is not sent again without the header.
 `,
 	"version": `Usage: agent-run version
 
