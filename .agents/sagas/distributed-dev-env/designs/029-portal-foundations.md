@@ -63,6 +63,18 @@ session and 5-minute privileged elevation**; they require threat-model review
 and are not selected production policy or an SLO. Background polling is not
 user activity. Verify actual deployed MFA/logout semantics before claiming them.
 
+An OIDC issuer-plus-subject principal never automatically becomes an operator
+human or workbench caller. Existing
+[`auth.go`](https://github.com/thaynes43/dev-env/blob/380a759d947faf1131653867cdecf4b7ade878f5/internal/apiserver/auth.go#L61)
+and [`caller.go`](https://github.com/thaynes43/dev-env/blob/380a759d947faf1131653867cdecf4b7ade878f5/internal/apiserver/caller.go#L99)
+require audience-bound ServiceAccount authentication and explicit caller
+classification. The BFF must enforce each user's project/resource scope
+without promoting all logged-in users to those identities. The keeper remains
+the sole refresher of Claude/Codex provider logins. The portal never holds,
+refreshes or proxies those provider refresh tokens; see the existing
+`internal/keeper/claude_worker.go` and `internal/keeper/codex_worker.go`
+ownership boundary. A portal OIDC session is a separate identity concern.
+
 Enforce deny-by-default resource/project/environment scope on every read,
 download, stream and command. Existing valid standing authority remains valid;
 ask only for material scope deltas. Known denials and action-specific holds

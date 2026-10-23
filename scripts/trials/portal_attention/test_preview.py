@@ -1,12 +1,15 @@
 """Finite, offline presentation threat fixtures; no auth/runtime acceptance."""
 
 import copy
+import contextlib
 import hashlib
 import base64
+import io
 from html.parser import HTMLParser
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import preview
 
@@ -46,7 +49,6 @@ class PreviewTests(unittest.TestCase):
             page = preview.render(self.document)
             self.assertIn("Unverified; handoff missing", page)
             self.assertIn("Handoff missing · 1", page)
-            self.assertEqual(row["taskOutcome"], "Unverified; handoff missing")
 
     def test_all_metadata_strings_are_inert_html(self):
         attack = '<script>alert("fixture")</script><img src="https://invalid.example/x" onerror="alert(1)">'
@@ -71,6 +73,27 @@ class PreviewTests(unittest.TestCase):
         self.document["items"][0]["owner"] = "\x1b[0m\x00\u202e"
         page = preview.render(self.document)
         self.assertIn("<dt>Owner</dt><dd>Unknown</dd>", page)
+
+    def test_format_only_or_empty_ownership_is_unknown_and_legitimate_text_survives(self):
+        for value in ("", " ", "\u200b", "\u200e", "\ufeff", "\u2060", "\u200c\u200d"):
+            with self.subTest(value=repr(value)):
+                self.document["items"][0]["owner"] = value
+                self.assertIn("<dt>Owner</dt><dd>Unknown</dd>", preview.render(self.document))
+        self.document["items"][0]["owner"] = "Renée – 漢字 🚀"
+        self.assertIn("<dt>Owner</dt><dd>Renée – 漢字 🚀</dd>", preview.render(self.document))
+
+    def test_link_accessible_names_include_distinct_row_context(self):
+        page = Page(preview.render(self.document))
+        labels = [attrs["aria-label"] for tag, attrs in page.tags if tag == "a"]
+        self.assertEqual(len(set(labels)), 4)
+        for row, label in zip(self.document["items"], labels):
+            self.assertIn(row["title"], label)
+            self.assertIn(row["id"], label)
+
+    def test_observation_time_has_machine_readable_datetime(self):
+        page = Page(preview.render(self.document))
+        times = [attrs["datetime"] for tag, attrs in page.tags if tag == "time"]
+        self.assertEqual(times, [self.document["asOf"]])
 
     def test_links_are_constructed_only_from_numeric_canonical_ids(self):
         self.document["items"][0]["nextAction"] = "javascript:alert(1) https://invalid.example/"
@@ -169,10 +192,30 @@ class PreviewTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     preview.load(path)
 
+    def test_deep_json_fails_with_bounded_generic_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "nested.json"
+            path.write_bytes(b"[" * 2000 + b"0" + b"]" * 2000)
+            with self.assertRaisesRegex(ValueError, "^invalid synthetic JSON fixture$"):
+                preview.load(path)
+
+    def test_cli_recursion_failure_never_echoes_input_or_writes_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "preview.html"
+            errors = io.StringIO()
+            with mock.patch("sys.argv", ["preview.py", "--output", str(output)]), \
+                    mock.patch.object(preview, "load", side_effect=RecursionError("SYNTHETIC-NOT-FOR-OUTPUT")), \
+                    contextlib.redirect_stderr(errors):
+                with self.assertRaises(SystemExit) as result:
+                    preview.main()
+            self.assertEqual(result.exception.code, 1)
+            self.assertEqual(errors.getvalue(), "Invalid or unavailable synthetic fixture; no output written.\n")
+            self.assertFalse(output.exists())
+
     def test_invalid_schema_fields_fail_closed(self):
         for field, value in (("group", "approved"), ("id", "\" onclick=alert(1)"),
                              ("sourceUpdatedAt", "2026-10-23"), ("verifiedAt", "2026-02-31T00:00:00Z"),
-                             ("reviewHead", "main"), ("owner", {"admin": True}), ("title", "")):
+                             ("reviewHead", "main"), ("owner", {"admin": True})):
             with self.subTest(field=field):
                 doc = copy.deepcopy(self.document)
                 doc["items"][0][field] = value
@@ -185,11 +228,18 @@ class PreviewTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     preview.render(doc)
 
-    def test_review_head_is_exact_and_not_a_release_claim(self):
-        page = preview.render(self.document)
-        self.assertIn("a" * 40, page)
-        self.assertIn("CI and release evidence separate", page)
-        self.assertIn("installation and acceptance need separate evidence", page)
+    def test_rendered_review_head_and_inert_evidence_badge_for_each_group(self):
+        # Presentation only: no claim to detect actual review/release/authorization state.
+        row = self.document["items"][2]
+        self.document["items"] = [row]
+        for group in preview.GROUPS:
+            with self.subTest(group=group):
+                row["group"] = group
+                page = Page(preview.render(self.document))
+                self.assertEqual(page.words.count("a" * 40), 1)
+                self.assertFalse({"button", "form", "input"} & {tag for tag, _ in page.tags})
+                badges = [attrs["class"] for tag, attrs in page.tags if tag == "span"]
+                self.assertEqual(badges, ["freshness stale"])
 
     def test_inert_page_has_matching_style_hash_and_no_active_surface(self):
         page = Page(preview.render(self.document))

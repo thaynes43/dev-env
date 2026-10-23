@@ -6,6 +6,7 @@ import hashlib
 import html
 import json
 import re
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -63,11 +64,11 @@ def timestamp(value):
 def text(value):
     if value is None:
         return "Unknown"
-    if not isinstance(value, str) or not value.strip() or len(value) > MAX_TEXT:
-        raise ValueError("expected bounded nonempty text or null")
+    if not isinstance(value, str) or len(value) > MAX_TEXT:
+        raise ValueError("expected bounded text or null")
     # Drop terminal/control characters, including bidi controls. Never interpret ANSI.
     value = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", value)
-    value = re.sub(r"[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]", "", value)
+    value = "".join(char for char in value if unicodedata.category(char) not in {"Cc", "Cf"})
     return html.escape(value, quote=True) if value.strip() else "Unknown"
 
 
@@ -146,7 +147,8 @@ def card(row, as_of):
     work = row["canonicalWorkPackage"]  # Validated integer; never an input URL.
     return (f'<article aria-labelledby="row-{row["id"]}"><h3 id="row-{row["id"]}">{text(row["title"])}</h3>'
             f'<span class="freshness {state}">{label}</span><dl>{details}</dl>'
-            f'<a href="https://work.haynesnetwork.com/work_packages/{work}" rel="noreferrer">'
+            f'<a href="https://work.haynesnetwork.com/work_packages/{work}" rel="noreferrer" '
+            f'aria-label="Canonical fixture record for {text(row["title"])} ({row["id"]}), work package {work}">'
             f'Canonical fixture record · #{work}</a></article>')
 
 
@@ -174,7 +176,7 @@ def render(document):
             '<p>Who owns the next step, and when was it last verified?</p>'
             '<p class="notice"><strong>Synthetic preview. No live data or actions.</strong> '
             'Groups come from fixture metadata. Worker state and task outcome stay separate.</p>'
-            f'<p>Fixture observation: <time>{document["asOf"]}</time></p></header>{content}'
+            f'<p>Fixture observation: <time datetime="{document["asOf"]}">{document["asOf"]}</time></p></header>{content}'
             '<footer>Source preparation only. Review, CI, release, installation and acceptance need separate evidence.</footer>'
             '</main></body></html>\n')
 
@@ -193,7 +195,10 @@ def load(path):
         raw = source.read(MAX_BYTES + 1)
     if len(raw) > MAX_BYTES:
         raise ValueError("fixture exceeds byte bound")
-    return json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object)
+    try:
+        return json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object)
+    except (ValueError, RecursionError):
+        raise ValueError("invalid synthetic JSON fixture") from None
 
 
 def main():
@@ -202,7 +207,7 @@ def main():
     args = parser.parse_args()
     try:
         page = render(load(Path(__file__).with_name("fixtures.json")))
-    except (ValueError, OSError):
+    except (ValueError, OSError, RecursionError):
         parser.exit(1, "Invalid or unavailable synthetic fixture; no output written.\n")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(page, encoding="utf-8")

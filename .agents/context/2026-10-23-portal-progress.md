@@ -154,6 +154,34 @@ Gate A's actual authorized configuration and runtime evidence; Gate B does not
 permit public exposure. Missing route/backend identity are implementation and
 delivery prerequisites, not reasons to stop independent source preparation.
 
+### Native review corrections, 15:05 UTC
+
+Parent journal 899 relayed the required native exact-head review of `d15d780`
+and authorized bounded corrections in the same PR. Display normalization now
+removes Unicode Cc/Cf controls, including invisible format-only owners; empty
+display values remain Unknown. Tests assert rendered head/badge properties
+rather than claiming release detection from fixture text. DESIGN-029 explicitly
+separates OIDC principals from operator caller classes and preserves the keeper
+as sole provider-login refresher. Links have distinct accessible row names,
+the observation time has `datetime`, deep JSON/recursion fails generically,
+and fixture CI rejects untracked source-tree changes. The Python-only package
+does not need a Go Layout entry; shared `CLAUDE.md` remains unchanged.
+
+The parent supplied an existing compiler in the same pod's isolated toolchain
+directory. At 15:01 UTC the owner verified Go 1.27.2 and SHA256
+`548d3c32f83fa81152f543eb1526be7884cfe0526eb5e9ce29d3eca14786e7e0`
+at `/home/dev/work/portal-toolchains/go1.27.2/bin/go`. Earlier compiler-absence
+observations remain dated history. No system install, PATH/profile change or
+new access was used. No heavy Go suite is needed for these Python corrections.
+The corrected source requires a fresh exact-head CI/native-review receipt;
+the earlier native result does not cover the new head.
+
+The corrected finite suite passed **24 tests** in 0.018s, serialized under
+`nice -n 19`; renderer generation, local links and diff checks passed. Preview
+SHA256: `cd7165afdc83142f843297f366ed0793645d77018b6a9e641bf91973376f6904`.
+The exact new target is recorded in #178/PR 525 after push. No additional
+source increment begins before that PR's safe disposition.
+
 PR, required independent review, merge, release, installation and usable
 acceptance remain pending. At the first-pass
 boundary preserve exact head/base, checks, findings and next safe step here and
