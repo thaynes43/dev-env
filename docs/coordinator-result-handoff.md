@@ -79,7 +79,7 @@ From a checkout:
 
 ```bash
 GOTOOLCHAIN=local CGO_ENABLED=0 \
-  go run ./scripts/trials/workflow_handoff testdata/e-merge.json
+  go run ./scripts/trials/workflow_handoff scripts/trials/workflow_handoff/testdata/e-merge.json
 ```
 
 The command reads one file, or stdin when the argument is `-`. It prints one JSON result and does not write the input, the tracker, or the network.
@@ -89,6 +89,8 @@ The command reads one file, or stdin when the argument is `-`. It prints one JSO
 | 0 | `reduced` | The record reduced. Blocked custody and a merge blocker are results, not tool failures. Read `nextAction`. |
 | 2 | `refused` | Malformed document, unknown field, oversize input, or invalid provenance. Nothing was applied. |
 | 3 | `conflict` | Same identity with a different payload, or equal-time authoritative inputs that disagree. Manual disposition is required. No lexicographic winner. |
+
+Identical gate fields at the same source time are one observation even when the event identities differ. Different gate fields at that time remain a conflict, and an older gate does not replace a newer one.
 
 `checkerAuthority` is always `none`. `completion` is always false. `deployment` is always `not-performed`. `publication` stays distinct from deployment.
 

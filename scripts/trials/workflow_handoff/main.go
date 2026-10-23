@@ -17,7 +17,7 @@ func main() {
 
 func run(args []string, in io.Reader, out, errw io.Writer) int {
 	if len(args) != 1 || (strings.HasPrefix(args[0], "-") && args[0] != "-") {
-		fmt.Fprintln(errw, "usage: workflow_handoff <file> | workflow_handoff -")
+		_, _ = fmt.Fprintln(errw, "usage: workflow_handoff <file> | workflow_handoff -")
 		res := refused("usage: workflow_handoff <file> | workflow_handoff -")
 		_ = writeResult(out, res)
 		return 2
@@ -34,12 +34,12 @@ func run(args []string, in io.Reader, out, errw io.Writer) int {
 	if err != nil {
 		res := refused(err.Error())
 		_ = writeResult(out, res)
-		fmt.Fprintln(errw, err.Error())
+		_, _ = fmt.Fprintln(errw, err.Error())
 		return 2
 	}
 	res, code := check(data)
 	if err := writeResult(out, res); err != nil {
-		fmt.Fprintln(errw, err.Error())
+		_, _ = fmt.Fprintln(errw, err.Error())
 		return 2
 	}
 	return code

@@ -238,6 +238,25 @@ func TestSourceDoesNotImportRuntimeClients(t *testing.T) {
 	}
 }
 
+func TestGateReplay(t *testing.T) {
+	replayed := mustRun(t, "e-gate-same-identity.json", 0)
+	if replayed.IgnoredReplayCount < 1 || len(replayed.Conflicts) != 0 || replayed.Outcome != "recommend-normal-merge-release" {
+		t.Fatalf("same-identity gate replay %#v replays %d", replayed.Conflicts, replayed.IgnoredReplayCount)
+	}
+	identical := mustRun(t, "e-gate-equal-time-identical.json", 0)
+	if identical.ManualDisposition || len(identical.Conflicts) != 0 || identical.MergeRelease != "recommend-normal-workflow" || countPrefix(identical.Recommendations, "recommend existing normal") != 1 {
+		t.Fatalf("identical equal-time gates conflicted %#v %s", identical.Conflicts, identical.NextAction)
+	}
+	differ := mustRun(t, "e-gate-equal-time-differ.json", 3)
+	if !differ.ManualDisposition || differ.MergeRelease == "recommend-normal-workflow" || countPrefix(differ.Recommendations, "recommend existing normal") != 0 || !has(differ.Conflicts, "equal-time conflicting gate evidence") {
+		t.Fatalf("different equal-time gates %#v %s", differ.Conflicts, differ.MergeRelease)
+	}
+	ordered := mustRun(t, "e-gate-stale-order.json", 0)
+	if ordered.Outcome != "merge-blocked" || ordered.MergeRelease != "blocked" || !has(ordered.MergeBlockers, "required CI is missing") || countPrefix(ordered.Recommendations, "recommend existing normal") != 0 || len(ordered.Conflicts) != 0 {
+		t.Fatalf("stale gate overwrote newer evidence %#v %s", ordered.MergeBlockers, ordered.NextAction)
+	}
+}
+
 func mustRun(t *testing.T, name string, code int) result {
 	t.Helper()
 	path := filepath.Join("testdata", name)

@@ -1,0 +1,61 @@
+{
+  "schema": "dev-env.workflow-handoff/v1",
+  "story": "177",
+  "relatedStories": [
+    "117",
+    "101"
+  ],
+  "repository": "github.com/thaynes43/dev-env",
+  "pullRequest": 0,
+  "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "coordinator": "sol-native01a164b6-4fdd-73f2-b49b-738c23b5a709",
+  "modelProvenance": {
+    "serving": "Unknown",
+    "cost": "Unknown",
+    "configuredUI": "Grok4.7ExtraHigh"
+  },
+  "events": [
+    {
+      "kind": "scope-instruction",
+      "identity": "scope-merge",
+      "sourceTime": "2026-10-23T13:30:00Z",
+      "reference": "transcript:Sentinel_686bdbe09ca88191932046a3d8655f20",
+      "summary": "agents do not need permission to merge PRs they opened",
+      "verbatim": "I have told you over and over and over and over that agents do not need permission to merge PRs they opened",
+      "scope": "ordinary-dev-env-merge-release",
+      "supersedes": []
+    },
+    {
+      "kind": "hold",
+      "identity": "hold-media",
+      "sourceTime": "2026-10-23T13:40:00Z",
+      "action": "media-work",
+      "state": "pending",
+      "reason": "no media action is assigned"
+    },
+    {
+      "kind": "gate-evidence",
+      "identity": "gate-1",
+      "sourceTime": "2026-10-23T16:00:00Z",
+      "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "agentOpened": true,
+      "requiredCI": "passed",
+      "nativeReviewVerdict": "approved",
+      "reviewJobSuccess": true,
+      "findings": "disposed",
+      "headUnchanged": true
+    },
+    {
+      "kind": "gate-evidence",
+      "identity": "gate-2",
+      "sourceTime": "2026-10-23T16:00:00Z",
+      "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "agentOpened": true,
+      "requiredCI": "passed",
+      "nativeReviewVerdict": "approved",
+      "reviewJobSuccess": true,
+      "findings": "disposed",
+      "headUnchanged": true
+    }
+  ]
+}

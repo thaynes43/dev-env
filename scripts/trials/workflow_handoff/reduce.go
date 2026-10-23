@@ -297,7 +297,6 @@ type reducer struct {
 	doc              document
 	prov             provenanceOut
 	exec             execState
-	items            []parsed
 	passes           []passView
 	passIDs          map[string]bool
 	receipts         []string
@@ -1281,12 +1280,25 @@ func (r *reducer) applyGate(ev gateEvent, at time.Time) {
 		return
 	}
 	if r.gate.set && at.Equal(r.gate.at) {
+		if sameGatePayload(r.gate.ev, ev) {
+			return
+		}
 		r.gate.set = false
 		r.gate.conflict = true
 		r.conflict("equal-time conflicting gate evidence requires manual disposition")
 		return
 	}
 	r.gate = gateState{set: true, at: at, ev: ev}
+}
+
+func sameGatePayload(a, b gateEvent) bool {
+	return a.Head == b.Head &&
+		a.AgentOpened == b.AgentOpened &&
+		a.RequiredCI == b.RequiredCI &&
+		a.NativeReviewVerdict == b.NativeReviewVerdict &&
+		a.ReviewJobSuccess == b.ReviewJobSuccess &&
+		a.Findings == b.Findings &&
+		a.HeadUnchanged == b.HeadUnchanged
 }
 
 func (r *reducer) recommend(msg string) {
