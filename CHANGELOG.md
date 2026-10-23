@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.43.0](https://github.com/thaynes43/dev-env/compare/v2.42.0...v2.43.0) (2026-10-23)
+
+
+### Features
+
+* **maintenance:** add offline upgrade-shepherd correlation check ([#520](https://github.com/thaynes43/dev-env/issues/520)) ([b972bcc](https://github.com/thaynes43/dev-env/commit/b972bccfb48fa1c10a30ee6785a3f5ef161a56bc))
+
 ## [2.42.0](https://github.com/thaynes43/dev-env/compare/v2.41.0...v2.42.0) (2026-10-23)
 
 
