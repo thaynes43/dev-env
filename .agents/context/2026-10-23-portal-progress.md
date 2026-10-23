@@ -305,3 +305,58 @@ the same verified toolchain and CPU settings. Exact corrected head, preview
 checksum and fresh CI/native-review targets are published on #178 and PR526;
 the old head's receipts are not coverage of this correction. M3 source and all
 runtime/ingress/identity activation remain outside PR526.
+
+## M2 accepted source and M3 continuation
+
+PR526 merged at 2026-10-23 16:54:41 UTC as
+`cb28f252b1504c69d9b2d369a7551c6cfbb12176`, from reviewed head
+`7b4f6858b8e81f42a187c45691532785d61b5d5a`. Required CI39988176697 passed;
+native reviewer `dev-env-1023-164635` reviewed all eleven files and the full
+correction and returned PASS-with-minors. Canonical #178 journal989 preserves
+the full report. The root performed the guarded source merge; this owner
+verified the GitHub receipt and did not race it. Source merge establishes no
+release, installation, runtime session or Gate A/public acceptance.
+
+Canonical journals985/993 direct the same implementation owner to continue M3
+without another worker, reset, guessed deadline or premature provider switch.
+The assigned branch merged freshly fetched accepted main via local
+`371a6cc935931c8009463c422ca0f04a826c37c6`, preserving additive WIP without
+discard, force or another worktree. The [M3 source contract](../../docs/portal-session-boundary.md)
+records the maintained verifier selection and finite negative-test map.
+
+M3 adds `web/portal/session`: a coreos/go-oidc/v3 v3.21.0 verifier wrapper with
+explicit nonce/authorized-party/time binding; confidential code/S256 adapters
+with fixed issuer/client/callback/scopes; single-use pending-login and shared
+session-store interfaces; opaque secure host-only cookies; local logout,
+revocation and expiry without provider calls or polling activity extension;
+Origin/CSRF protection; and buffered panic/cancellation/response containment.
+There is no production store fallback or deployment/listener entry point.
+Unconfigured assembly remains unavailable. Metadata authorization stays
+independent and all live metadata adapters remain unavailable.
+
+Exact token/JWKS destinations, methods, body budgets and redirects are bounded
+in the client. Constructors initiate no network request. Static and remote
+maintained key-set verification is exercised with generated synthetic keys and
+inert transports only. No real provider, tracker, cluster or credential is used
+by these source tests. Secrets, raw provider tokens, panic values and agent
+content are not logged or returned. The test-only stores make no claim about
+deployed multi-replica persistence or revocation.
+
+The two optional M2 review minors are carried here: Unknown listing wording
+no longer asserts definite staleness, future evidence is explicitly untrusted,
+and the preview test checks exact numeric group counts with no listing warning.
+Current focused evidence is thirty-one top-level tests across the portal,
+preview and session packages, passing serialized with the verified Go1.27.2
+toolchain, GOTOOLCHAIN=local/GOMAXPROCS=2/nice19/-p1; session tests 0.013s at
+the latest source check. Targeted `go vet -p 1 ./web/portal/...` also passes.
+Module tidy retains oauth2 v0.37.0, adds the pinned OIDC/go-jose modules and
+reclassifies the existing client_model dependency as direct without upgrading it.
+
+Next action is the M3 exact-head source PR, root-coordinated independent native
+review, findings, required CI and authorized source merge. Exact head/test/preview
+and review receipts stay in #178 and the PR. No handoff to another provider or
+implementation owner has occurred. Only after this natural reviewed boundary
+may the coordinator explicitly assign a single subsequent presentation owner.
+Approved OIDC setup905 remains separate infrastructure work; no 1Password ask,
+runtime binding, RBAC, secret grant, provider call, ingress or public exposure
+was performed. Story178 remains open for its actual usable/internal acceptance.

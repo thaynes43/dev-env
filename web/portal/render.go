@@ -77,11 +77,11 @@ func makePage(s Snapshot, now time.Time, freshFor time.Duration) pageView {
 	listingFreshness := freshness(s.UpdatedAt, s.VerifiedAt, now, freshFor)
 	listingVerified := listingFreshness == "Verified within snapshot window"
 	if !listingVerified {
-		p.Notice = listingFreshness + ". Listing counts are not current; current Attention contents are Unknown. Last verified: " + moment(s.VerifiedAt)
+		p.Notice = listingFreshness + ". Listing counts are not verified as current; current Attention contents are Unknown. Last verified: " + evidenceMoment(s.VerifiedAt, now)
 	}
 	if len(s.Items) == 0 {
 		if listingVerified {
-			p.Notice = "Verified empty: no Attention items in this authorized snapshot. Last verified: " + moment(s.VerifiedAt)
+			p.Notice = "Verified empty: no Attention items in this authorized snapshot. Last verified: " + evidenceMoment(s.VerifiedAt, now)
 		}
 		return p
 	}
@@ -104,7 +104,7 @@ func makePage(s Snapshot, now time.Time, freshFor time.Duration) pageView {
 					{"Task outcome", display(item.TaskOutcome)}, {"Worker liveness", display(item.WorkerState)},
 					{"Review", display(item.ReviewState)}, {"Reviewed head", display(item.ReviewHead)},
 					{"Authority", display(item.AuthorityState)}, {"Release", display(item.ReleaseState)},
-					{"Source age", age(item.UpdatedAt, now)}, {"Source updated", moment(item.UpdatedAt)}, {"Last verified", moment(item.VerifiedAt)},
+					{"Source age", age(item.UpdatedAt, now)}, {"Source updated", evidenceMoment(item.UpdatedAt, now)}, {"Last verified", evidenceMoment(item.VerifiedAt, now)},
 				},
 			})
 		}
@@ -115,6 +115,13 @@ func makePage(s Snapshot, now time.Time, freshFor time.Duration) pageView {
 		p.Groups = append(p.Groups, g)
 	}
 	return p
+}
+
+func evidenceMoment(t, now time.Time) string {
+	if t.After(now) {
+		return "Unknown (untrusted future timestamp: " + moment(t) + ")"
+	}
+	return moment(t)
 }
 
 func moment(t time.Time) string {

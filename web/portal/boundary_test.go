@@ -364,7 +364,7 @@ func TestStaleFutureAndUnknownEvidence(t *testing.T) {
 				if !empty && !strings.Contains(body, `<p class="freshness">`+expected+`</p>`) {
 					t.Fatalf("wrong exact row freshness, want %s", expected)
 				}
-				if empty && !valid && !strings.Contains(body, `role="status">`+expected+". Listing counts are not current;") {
+				if empty && !valid && !strings.Contains(body, `role="status">`+expected+". Listing counts are not verified as current;") {
 					t.Fatal("empty listing warning missing")
 				}
 			})
@@ -404,7 +404,7 @@ func TestListingFreshnessWithFreshItem(t *testing.T) {
 				t.Fatal("fresh item proof lost")
 			}
 			if test.warning != "" {
-				if !strings.Contains(body, `role="status">`+test.warning+". Listing counts are not current;") {
+				if !strings.Contains(body, `role="status">`+test.warning+". Listing counts are not verified as current;") {
 					t.Fatal("listing warning missing")
 				}
 				for _, title := range []string{"Needs you", "Needs worker", "Review returned", "Handoff missing"} {
@@ -413,7 +413,7 @@ func TestListingFreshnessWithFreshItem(t *testing.T) {
 					}
 				}
 			} else {
-				if strings.Contains(body, "Listing counts are not current") || !strings.Contains(body, ">Needs you · 0</h2>") || !strings.Contains(body, ">Handoff missing · 1</h2>") {
+				if strings.Contains(body, "Listing counts are not verified as current") || !strings.Contains(body, ">Needs you · 0</h2>") || !strings.Contains(body, ">Handoff missing · 1</h2>") {
 					t.Fatal("fresh listing count incorrect")
 				}
 			}
@@ -510,6 +510,21 @@ func TestRenderedStyleMatchesCSP(t *testing.T) {
 	}
 	if !strings.Contains(body, `aria-label="Open canonical record for Synthetic task (task-one)"`) {
 		t.Fatal("accessible name lacks visible link label")
+	}
+}
+
+func TestFutureVerificationCannotAppearAsTrustedTimestamp(t *testing.T) {
+	d := dependencies()
+	future := fixtureNow.Add(time.Hour)
+	d.Reader = readFunc(func(_ context.Context, r Resource) (Snapshot, error) {
+		s := sample(r)
+		s.VerifiedAt = future
+		s.Items[0].VerifiedAt = future
+		return s, nil
+	})
+	w := response(d, "GET", attentionPath)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "Last verified: Unknown (untrusted future timestamp:") || !strings.Contains(w.Body.String(), "<dt>Last verified</dt><dd>Unknown (untrusted future timestamp:") {
+		t.Fatal("future evidence was presented as trusted verification")
 	}
 }
 
