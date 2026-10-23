@@ -1,5 +1,5 @@
 # Fixture-only Linux AMD64 image. Hosted build only; system Git and v1 unchanged.
-ARG BASE_IMAGE=ghcr.io/thaynes43/dev-env:2.25.0@sha256:25b20148706fe0b735cc879891c12851977c72a32b5b83cc68ef511246a3cd29
+ARG BASE_IMAGE=ghcr.io/thaynes43/dev-env:2.44.0@sha256:d3224cb97a66e1bb3d72e5171154db7399265ed1c537ca146ef9a01f308cacef
 FROM ${BASE_IMAGE} AS builder
 USER root
 ARG COMMIT
