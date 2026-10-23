@@ -502,9 +502,11 @@ and prints its validated raw JSON. Missing retained provenance remains Unknown;
 the response does not prove publication acknowledgement or complete history.
 Without --once, ordinary show behavior is unchanged. --context still selects a
 kubeconfig context; it is not a published-context selector on this command.
---captured-usage -o json asks for Dev-Env-Usage-Capture: direct-v1 and prints that
-session's captured direct-child receipts. Text and --once are refused. An older
-or disabled server is unavailable, not zero usage.
+--captured-usage -o json asks for Dev-Env-Usage-Capture: direct-v1. agent-run also
+sends Dev-Env-Attribution: provider-v1 on that read. The capture view is a
+separate capability: ordinary show output still omits the ledger. Text and
+--once are refused before a request. A missing, older, disabled, malformed, or
+oversized view is unavailable, not zero usage and not a partial receipt list.
 `,
 	"reap": `Usage: agent-run reap <name>... [-o json]
 

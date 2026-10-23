@@ -488,6 +488,7 @@ type Lifecycle struct {
 // in its memory.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.sharedAdmission) || has(self.sharedAdmission)",message="shared admission evidence cannot be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.privateHistory) || has(self.privateHistory)",message="private history retention cannot be removed"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.capturedUsage) || has(self.capturedUsage)",message="captured usage ledger cannot be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.sessionDirectory) || has(self.sessionDirectory)",message="directory creation evidence cannot be removed"
 type AgentSessionStatus struct {
 	// +optional
@@ -1338,7 +1339,7 @@ const (
 )
 
 // CapturedUsageStatus is version 1 of the parent-lifetime receipt ledger.
-// +kubebuilder:validation:XValidation:rule="!oldSelf.overflow || self.overflow",message="captured usage overflow is sticky"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.overflow) || !oldSelf.overflow || (has(self.overflow) && self.overflow)",message="captured usage overflow is sticky"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.receipts) || size(self.receipts) >= size(oldSelf.receipts)",message="captured usage receipts are append-only"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.receipts) || oldSelf.receipts.all(old, self.receipts.exists(new, new == old))",message="captured usage receipts do not change"
 type CapturedUsageStatus struct {

@@ -156,8 +156,8 @@ func (a *app) show(ctx context.Context, args []string) error {
 	if _, err := a.call(callCtx, c, http.MethodGet, apiv1.SessionPath(url.PathEscape(pos[0])), nil, nil, &s); err != nil {
 		return err
 	}
-	if captured && s.CapturedUsage == nil {
-		s.CapturedUsage = &apiv1.CapturedUsage{Available: false, Reason: "unavailable"}
+	if captured {
+		s.CapturedUsage = apiv1.NormalizeCapturedUsage(s.UID, s.CapturedUsage)
 	}
 	if cmd.c.output == outputJSON {
 		return a.printJSON(s)

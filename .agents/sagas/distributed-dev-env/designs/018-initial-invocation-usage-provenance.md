@@ -335,3 +335,27 @@ parent UID. A disabled or older server is an unavailable view, not zero usage.
 A Session sees the ledger only for its own UID. A restricted coordinator does
 not receive receipt rows. This is source only. The flag is not enabled in a
 deployment, and the CRD is not installed by this slice.
+
+The overflow mark is presence-safe. A missing overflow field is not overflow,
+and once it is true it stays true. Removing the whole capturedUsage object is
+refused, so a later liveness or reconciler write can keep a ledger that has not
+overflowed. Before a row is accepted, the writer reserves the overflow field
+and the bytes of the direct-v1 view inside the 262144-byte cap. Setting
+overflow then leaves both the stored ledger and the receipt view readable. No
+row is evicted.
+
+A receipt is copied only from the child stored observation after that usage
+write. The observation must validate, match this request source, have no usage
+conflict, and bind the authenticated request pod. When private history records
+a last executor, that executor has to be the same pod. A conflict on the parent
+write does not fail the heartbeat; the next identical heartbeat can record the
+same accepted observation. A later conflicting snapshot does not copy the
+earlier one.
+
+An absent ledger is unavailable. It is not an empty available list and it is
+not zero usage. Dev-Env-Usage-Capture: direct-v1 is its own opt-in. agent-run
+sends it together with Dev-Env-Attribution: provider-v1. A read without the
+capture header does not include the ledger. The client checks the whole view
+before printing it. A malformed or oversized view is unavailable, with no
+partial receipt list. Observation versions 1 and 2, a reported zero, and
+Unknown stay as they were captured.

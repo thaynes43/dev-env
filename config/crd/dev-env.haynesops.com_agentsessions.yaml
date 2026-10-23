@@ -1370,7 +1370,8 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: captured usage overflow is sticky
-                  rule: '!oldSelf.overflow || self.overflow'
+                  rule: '!has(oldSelf.overflow) || !oldSelf.overflow || (has(self.overflow)
+                    && self.overflow)'
                 - message: captured usage receipts are append-only
                   rule: '!has(oldSelf.receipts) || size(self.receipts) >= size(oldSelf.receipts)'
                 - message: captured usage receipts do not change
@@ -2852,6 +2853,8 @@ spec:
               rule: '!has(oldSelf.sharedAdmission) || has(self.sharedAdmission)'
             - message: private history retention cannot be removed
               rule: '!has(oldSelf.privateHistory) || has(self.privateHistory)'
+            - message: captured usage ledger cannot be removed
+              rule: '!has(oldSelf.capturedUsage) || has(self.capturedUsage)'
             - message: directory creation evidence cannot be removed
               rule: '!has(oldSelf.sessionDirectory) || has(self.sessionDirectory)'
         required:
