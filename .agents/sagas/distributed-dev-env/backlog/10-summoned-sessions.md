@@ -91,3 +91,18 @@ DESIGN-001 3.7 (D-36), 6.1, 6.4, 6.10 (`ops`), 7.3 (V-14); research note
 - No metered spend on any summon path (the spend ConfigMaps stay at their July
   values).
 - `dev-env-ops` is scaled to zero and its login is no longer renewed.
+
+## Source-only upgrade-shepherd step (2026-10-23)
+
+This step is the offline contract only. It does not move a caller, install the
+role, or accept this plan. Trusted integration, including live scope and expiry
+binding, remains a later gate. Caller migration remains
+[work package 115](https://work.haynesnetwork.com/work_packages/115).
+Draft PR 231 stays untouched.
+
+- Role contract: [upgrade-shepherd role](../../../../docs/upgrade-shepherd-role.md)
+- Offline command: `agent-run maintenance check`
+- Offline tests: `internal/maintenancecontract`, with the command covered in `internal/agentrun`
+- Design record, not implementation acceptance: [work package 176](https://work.haynesnetwork.com/work_packages/176)
+- Parity anchor: [work package 98](https://work.haynesnetwork.com/work_packages/98)
+- Coordinator record: [saga decision 82](../README.md)
