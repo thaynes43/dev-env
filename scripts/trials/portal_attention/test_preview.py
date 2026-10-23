@@ -67,6 +67,11 @@ class PreviewTests(unittest.TestCase):
         self.assertNotIn("\u202e", page)
         self.assertIn("Review", page)
 
+    def test_control_only_ownership_cannot_become_a_blank_owner(self):
+        self.document["items"][0]["owner"] = "\x1b[0m\x00\u202e"
+        page = preview.render(self.document)
+        self.assertIn("<dt>Owner</dt><dd>Unknown</dd>", page)
+
     def test_links_are_constructed_only_from_numeric_canonical_ids(self):
         self.document["items"][0]["nextAction"] = "javascript:alert(1) https://invalid.example/"
         page = Page(preview.render(self.document))

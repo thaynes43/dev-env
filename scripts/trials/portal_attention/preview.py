@@ -68,7 +68,7 @@ def text(value):
     # Drop terminal/control characters, including bidi controls. Never interpret ANSI.
     value = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", value)
     value = re.sub(r"[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]", "", value)
-    return html.escape(value, quote=True)
+    return html.escape(value, quote=True) if value.strip() else "Unknown"
 
 
 def validate(document):

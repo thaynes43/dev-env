@@ -134,6 +134,26 @@ suite and produces the inert preview plus exact source-head/hash artifact.
 The existing required CI aggregate is unchanged. No runtime/image/deployment
 input was modified. Local Go validation remains unavailable.
 
+### Ready source PR and remaining custody
+
+[PR 525](https://github.com/thaynes43/dev-env/pull/525) is open and ready on
+the assigned branch. Initial implementation head:
+`49eea27d3bd34bd5ee07a1eb7f9da692891fe39d`; base:
+`380a759d947faf1131653867cdecf4b7ade878f5`. The fixture workflow passed on
+that initial head. A final self-review found that control-only owner text could
+sanitize to blank; the next source revision keeps it visibly Unknown and adds
+a nineteenth finite regression check. Final PR head and exact-head CI/review
+receipts are published in canonical #178 and the PR to avoid a self-referential
+commit hash in this file.
+
+The parent coordinates the required exact-final-head native Claude review;
+this pass launches none. The dedicated implementation owner retains findings,
+fixes, CI and normal authorized source merge/release after the gates pass.
+No additional Tom merge approval is needed. Internal operation still requires
+Gate A's actual authorized configuration and runtime evidence; Gate B does not
+permit public exposure. Missing route/backend identity are implementation and
+delivery prerequisites, not reasons to stop independent source preparation.
+
 PR, required independent review, merge, release, installation and usable
 acceptance remain pending. At the first-pass
 boundary preserve exact head/base, checks, findings and next safe step here and
