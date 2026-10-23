@@ -11,7 +11,7 @@ and the remaining live gates. No runtime was built, installed or accepted here.
 | Same job, actual TLS wire response suppression | Backend COMMIT CommandComplete dropped after real commit: one durable insert with unavailable caller result; successful read payload discarded; no automatic write retry. |
 | Same job, legitimate login | Begin + callback 16.458586ms, nine fresh witness GETs, one admitted start. |
 | Same job, protected Attention read | Seven actual store reads / 21 fresh witness GETs / two current UserInfo calls, 19.54753ms end to end. Three serial fresh GET samples average 551.538 microseconds. Loopback synthetic measurements only. |
-| Later insertion correction | Replace table-wide insertion locks with nonblocking transaction advisory locks used only by inserters. Add a deterministic paused-precommit insert test proving revoke/callback DELETEs are independent. No function/role grant added; fresh hosted runtime-role proof required. |
+| Later insertion correction | Replace table-wide insertion locks with transaction advisory locks used only by inserters, waiting within the operation deadline. Add a deterministic paused-precommit insert test proving revoke/callback DELETEs are independent. No function/role grant added; fresh hosted runtime-role proof required. |
 | Later fixture correction | Isolate pending rows before 256-row cleanup fixture (advisory 4364300492), assert observed login GET count, close commit-loss listener before waiting for its worker. Fresh final-head CI required. |
 | Local Go 1.27.2, nice 19 / GOMAXPROCS=2 / -p 1 | Focused portal tests/vet and targeted transaction/current-membership race pass. Actual local PostgreSQL remains explicitly skipped without a disposable DB. |
 

@@ -303,3 +303,64 @@ func testInsertKindDoesNotBlockRevocation(t *testing.T, a, b *PostgresStore, rec
 	}
 	t.Log("INSERT_ADMISSION_EVIDENCE paused precommit insert does not block independent revoke or callback DELETE")
 }
+
+func testOverlappingLegitimateInserts(t *testing.T, admin *pgxpool.Pool, a, b *PostgresStore, record Record) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	record.CreatedAt = now
+	record.IdleExpiresAt = now.Add(time.Minute)
+	record.ExpiresAt = now.Add(time.Minute)
+	record.tokenExpiresAt = now.Add(time.Hour)
+	fence, _ := newAdmissionFixture(t, poolIncarnation(t, a.pool))
+	pause := &pausedInsertFence{RecoveryFence: fence, reached: make(chan struct{}), resume: make(chan struct{})}
+	first, second := *a, *b
+	first.fence = pause
+	second.fence = fence
+	first.timeout = 5 * time.Second
+	second.timeout = 5 * time.Second
+	firstResult := make(chan error, 1)
+	secondResult := make(chan error, 1)
+	var release sync.Once
+	defer func() { release.Do(func() { close(pause.resume) }) }()
+	go func() { firstResult <- first.PutSession(ctx, Handle{205}, record) }()
+	defer func() {
+		release.Do(func() { close(pause.resume) })
+		if err := <-firstResult; err != nil && !t.Failed() {
+			t.Error("first overlapping insert failed")
+		}
+	}()
+	select {
+	case <-pause.reached:
+	case <-ctx.Done():
+		t.Fatal("first insert did not reach boundary")
+	}
+	go func() { secondResult <- second.PutSession(ctx, Handle{206}, record) }()
+	defer func() {
+		release.Do(func() { close(pause.resume) })
+		if err := <-secondResult; err != nil && !t.Failed() {
+			t.Error("second overlapping insert failed")
+		}
+	}()
+	// Observe a real PostgreSQL wait, using the disposable administrator only.
+	// This is a bounded two-insert fixture, not a load or retry loop.
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var waiting bool
+		if admin.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_locks WHERE locktype='advisory' AND NOT granted AND database=(SELECT oid FROM pg_catalog.pg_database WHERE datname=current_database()))").Scan(&waiting) != nil {
+			t.Fatal("fixture lock observation failed")
+		}
+		if waiting {
+			break
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			t.Fatal("second insert did not wait for admission")
+		}
+	}
+	release.Do(func() { close(pause.resume) })
+	t.Log("LOGIN_OVERLAP_EVIDENCE two legitimate app-pool inserts overlap at admission; second waits within deadline and both commit without retry")
+}

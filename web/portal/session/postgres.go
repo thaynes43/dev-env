@@ -231,7 +231,7 @@ func insertError(err error) error {
 }
 
 // Serialize insertion admission across replicas without table-wide locks. A
-// nonblocking transaction advisory lock is taken only by inserters; revocation
+// transaction advisory lock is taken only by inserters; revocation
 // and callback DELETEs never acquire it. No role/admin grant is added.
 func admitPortalInsert(ctx context.Context, tx pgx.Tx, table string) error {
 	var key int32
@@ -243,8 +243,9 @@ func admitPortalInsert(ctx context.Context, tx pgx.Tx, table string) error {
 	default:
 		return portal.ErrUnavailable
 	}
-	var acquired bool
-	if tx.QueryRow(ctx, "SELECT pg_catalog.pg_try_advisory_xact_lock($1,$2)", int32(178), key).Scan(&acquired) != nil || !acquired {
+	// Waiting is bounded by the existing operation context; it does not retry
+	// an INSERT or COMMIT and never locks out DELETEs.
+	if _, err := tx.Exec(ctx, "SELECT pg_catalog.pg_advisory_xact_lock($1,$2)", int32(178), key); err != nil {
 		return portal.ErrUnavailable
 	}
 
