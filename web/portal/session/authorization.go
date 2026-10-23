@@ -42,7 +42,8 @@ func NewCurrentAuthorizer(c CurrentAuthorizationConfig) (*CurrentAuthorizer, err
 	}
 	t := c.Transport.Clone()
 	// No dynamic proxy, custom dial/TLS hooks, skip-verify or alternate TLS peer.
-	if t.Proxy != nil || t.Dial != nil || t.DialContext != nil || t.DialTLS != nil || t.DialTLSContext != nil || len(t.TLSNextProto) > 0 || t.TLSClientConfig.KeyLogWriter != nil || t.TLSClientConfig.InsecureSkipVerify || t.TLSClientConfig.VerifyConnection != nil || t.TLSClientConfig.VerifyPeerCertificate != nil || (t.TLSClientConfig.ServerName != "" && t.TLSClientConfig.ServerName != endpoint.Hostname()) {
+	legacyDial := t.Dial != nil || t.DialTLS != nil //nolint:staticcheck // Inspect deprecated hooks to reject them; never invoke them.
+	if t.Proxy != nil || legacyDial || t.DialContext != nil || t.DialTLSContext != nil || len(t.TLSNextProto) > 0 || t.TLSClientConfig.KeyLogWriter != nil || t.TLSClientConfig.InsecureSkipVerify || t.TLSClientConfig.VerifyConnection != nil || t.TLSClientConfig.VerifyPeerCertificate != nil || (t.TLSClientConfig.ServerName != "" && t.TLSClientConfig.ServerName != endpoint.Hostname()) {
 		return nil, portal.ErrUnavailable
 	}
 	t.TLSClientConfig = t.TLSClientConfig.Clone()

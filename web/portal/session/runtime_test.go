@@ -82,7 +82,6 @@ func TestAEADRowTypeVersionGenerationStateExpiryBinding(t *testing.T) {
 			case "truncated":
 				data = data[:10]
 			case "wrong-key":
-				store = fixtureStore(t)
 				block := make([]byte, 32)
 				block[0] = 1
 				var err error
