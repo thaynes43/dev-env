@@ -303,3 +303,35 @@ foreign-Pod, replaced-source, version 1 and explicit refusals, a reaped source
 and both reader shapes; agent-run show, show --once (including a null model
 list) and the canary result reader with the new shape and with inconsistent
 attribution.
+
+
+## Captured direct-child receipts (2026-10-23)
+
+OpenProject #109 source slice. Issue #248 stays open: this is not an all-history
+descendant total and not durable PublishedContext attribution.
+
+When `--enable-child-usage-capture` is set, a child created by an authenticated
+Session stores `spec.usageCaptureParentUID` from a fresh read of that parent.
+The request body cannot set it. Human, client, and coordinator creates leave it
+absent. A replaced parent keeps the UID from create time, so capture does not
+follow the new object. The flag defaults off. Off, create does not write the
+UID and heartbeat does not read or write a parent ledger.
+
+`status.capturedUsage` on the surviving parent is version 1, scope
+`CapturedDirectChildInitialInvocations`, coverage `CaptureOnly`, retention
+`ParentLifetime`. It stores at most 64 receipts and 262144 serialized bytes.
+A full ledger sets a sticky overflow mark and adds no row. There is no
+eviction, archive, or reap delay. The receipt is the child's accepted initial
+observation, copied as stored, including provider, requested model, actual-model
+state, and explicit zero versus Unknown. A later conflict does not rewrite it.
+The same child UID is one row. The same key and payload replay does not change
+the capture time. `usageRollup` stays a live retained-descendant sum and does
+not include these rows.
+
+`agent-run show PARENT --captured-usage -o json` sends
+`Dev-Env-Usage-Capture: direct-v1`. Text and `--once` are refused before a
+request. Without the header, session JSON does not carry the ledger or the
+parent UID. A disabled or older server is an unavailable view, not zero usage.
+A Session sees the ledger only for its own UID. A restricted coordinator does
+not receive receipt rows. This is source only. The flag is not enabled in a
+deployment, and the CRD is not installed by this slice.

@@ -140,7 +140,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.idempotencyKey) || has(self.caller)",message="idempotencyKey is for summoned sessions only: set caller and lane"
 // +kubebuilder:validation:XValidation:rule="!has(self.caller) || self.mode != 'local'",message="a summoned session runs in task or remote mode, never local"
 // +kubebuilder:validation:XValidation:rule="!has(self.caller) || (has(self.profile) && self.profile != 'full')",message="a summoned session names its profile, and it is never full (D-36)"
-// +kubebuilder:validation:XValidation:rule="has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort) && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size) && has(self.profile) == has(oldSelf.profile) && has(self.tools) == has(oldSelf.tools) && has(self.llm) == has(oldSelf.llm) && has(self.parent) == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller) && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey) == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits) && has(self.restore) == has(oldSelf.restore) && has(self.workspace) == has(oldSelf.workspace) && has(self.projectCanary) == has(oldSelf.projectCanary) && has(self.commonRules) == has(oldSelf.commonRules) && has(self.sessionDirectory) == has(oldSelf.sessionDirectory) && has(self.privatePilot) == has(oldSelf.privatePilot)",message="immutable after create: no spec field may be added or removed, except operatingMode and lifecycle"
+// +kubebuilder:validation:XValidation:rule="has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort) && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size) && has(self.profile) == has(oldSelf.profile) && has(self.tools) == has(oldSelf.tools) && has(self.llm) == has(oldSelf.llm) && has(self.parent) == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller) && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey) == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits) && has(self.restore) == has(oldSelf.restore) && has(self.workspace) == has(oldSelf.workspace) && has(self.projectCanary) == has(oldSelf.projectCanary) && has(self.commonRules) == has(oldSelf.commonRules) && has(self.sessionDirectory) == has(oldSelf.sessionDirectory) && has(self.privatePilot) == has(oldSelf.privatePilot) && has(self.usageCaptureParentUID) == has(oldSelf.usageCaptureParentUID)",message="immutable after create: no spec field may be added or removed, except operatingMode and lifecycle"
 // +kubebuilder:validation:XValidation:rule="!has(self.projectCanary) || (self.mode == 'task' && self.agent in ['claude', 'codex'] && self.size == 'S' && has(self.parent) && self.parent == self.projectCanary.client && !has(self.workspace) && !has(self.restore) && !has(self.tools) && !has(self.llm) && !has(self.caller) && !has(self.lane) && !has(self.lifecycle) && has(self.limits) && has(self.limits.timeout) && duration(self.limits.timeout) <= duration('180s') && (self.agent == 'codex' ? (!has(self.limits.maxTurns) || self.limits.maxTurns == 0) : (has(self.limits.maxTurns) && self.limits.maxTurns > 0 && self.limits.maxTurns <= 3)))",message="project canaries require their fixed private bounded subscription task contract"
 // +kubebuilder:validation:XValidation:rule="!has(self.commonRules) || (has(self.projectCanary) && has(self.projectCanary.commonRevision) && self.projectCanary.commonRevision == self.commonRules.commonRevision) || (has(self.privatePilot) && self.privatePilot.commonRevision == self.commonRules.commonRevision) || (!has(self.projectCanary) && !has(self.privatePilot) && !has(self.workspace) && self.mode == 'task' && self.agent in ['claude', 'codex'] && has(self.profile) && self.profile == 'dev' && has(self.parent) && has(self.limits) && has(self.limits.timeout) && duration(self.limits.timeout) > duration('0s') && duration(self.limits.timeout) <= duration('45m'))",message="common rules require a matching managed canary or finite private task binding"
 // +kubebuilder:validation:XValidation:rule="!has(self.sessionDirectory) || has(self.projectCanary) || has(self.privatePilot)",message="directory enrollment requires a managed canary"
@@ -265,6 +265,15 @@ type AgentSessionSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only operatingMode and lifecycle may change"
 	// +optional
 	Parent string `json:"parent,omitempty"`
+
+	// UsageCaptureParentUID is the authenticated parent Session UID when child
+	// usage capture is enabled. The API sets it from that parent object. It is
+	// not a permission and it is not taken from the request body.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="usage capture parent UID is immutable"
+	// +optional
+	UsageCaptureParentUID string `json:"usageCaptureParentUID,omitempty"`
 
 	// Caller is the CallerPolicy of a summoned session, for example
 	// alert-responder (DESIGN-001 3.7). Empty for Tom's own sessions. A
@@ -555,6 +564,12 @@ type AgentSessionStatus struct {
 	// UsageConflict is a bounded unavailable/conflict receipt, never a new total.
 	// +optional
 	UsageConflict *UsageConflictStatus `json:"usageConflict,omitempty"`
+
+	// CapturedUsage is the parent's append-only ledger of direct children's
+	// accepted initial observations (OpenProject #109). It is absent unless
+	// capture is enabled. It is not a usage total.
+	// +optional
+	CapturedUsage *CapturedUsageStatus `json:"capturedUsage,omitempty"`
 
 	// Rescue records the session's newest rescue (D-10, D-51).
 	// +optional
@@ -1311,6 +1326,51 @@ type UsageObservationStatus struct {
 	// +kubebuilder:validation:MaxLength=128
 	// +optional
 	WorkerID string `json:"workerID,omitempty"`
+}
+
+// Captured usage ledger limits. A larger ledger does not evict a row.
+const (
+	CapturedUsageMaxReceipts = 64
+	CapturedUsageMaxBytes    = 262144
+	CapturedUsageScope       = "CapturedDirectChildInitialInvocations"
+	CapturedUsageCoverage    = "CaptureOnly"
+	CapturedUsageRetention   = "ParentLifetime"
+)
+
+// CapturedUsageStatus is version 1 of the parent-lifetime receipt ledger.
+// +kubebuilder:validation:XValidation:rule="!oldSelf.overflow || self.overflow",message="captured usage overflow is sticky"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.receipts) || size(self.receipts) >= size(oldSelf.receipts)",message="captured usage receipts are append-only"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.receipts) || oldSelf.receipts.all(old, self.receipts.exists(new, new == old))",message="captured usage receipts do not change"
+type CapturedUsageStatus struct {
+	// +kubebuilder:validation:Enum=1
+	Version int32 `json:"version"`
+	// +kubebuilder:validation:Enum=CapturedDirectChildInitialInvocations
+	Scope string `json:"scope"`
+	// +kubebuilder:validation:Enum=CaptureOnly
+	Coverage string `json:"coverage"`
+	// +kubebuilder:validation:Enum=ParentLifetime
+	Retention string `json:"retention"`
+	// +optional
+	Overflow bool `json:"overflow,omitempty"`
+	// +kubebuilder:validation:MaxItems=64
+	// +listType=map
+	// +listMapKey=key
+	// +optional
+	Receipts []CapturedUsageReceipt `json:"receipts,omitempty"`
+}
+
+// CapturedUsageReceipt is one accepted initial observation copied onto its parent.
+type CapturedUsageReceipt struct {
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
+	Key string `json:"key"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	ParentUID string `json:"parentUID"`
+	// +kubebuilder:validation:MaxLength=253
+	// +optional
+	ChildName   string                 `json:"childName,omitempty"`
+	CapturedAt  metav1.Time            `json:"capturedAt"`
+	Observation UsageObservationStatus `json:"observation"`
 }
 
 type UsageConflictStatus struct {

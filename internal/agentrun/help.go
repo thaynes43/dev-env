@@ -19,7 +19,8 @@ Usage:
                                                   create or report a trusted fixed original
   agent-run canary result --id <id> --session-uid <uid> --context <name> --json --once
                                                   read one retained fixed publication
-  agent-run show <name>                           show one session, with its task
+  agent-run show <name> [--captured-usage -o json]
+                                              show one session; --captured-usage adds direct-child receipts
   agent-run log <name> [--tail N]                 print the end of a session's log
   agent-run msg <name> "<text>"                   send a message into a session's TUI
   agent-run reap <name>...                        rescue, stop and archive sessions
@@ -501,6 +502,9 @@ and prints its validated raw JSON. Missing retained provenance remains Unknown;
 the response does not prove publication acknowledgement or complete history.
 Without --once, ordinary show behavior is unchanged. --context still selects a
 kubeconfig context; it is not a published-context selector on this command.
+--captured-usage -o json asks for Dev-Env-Usage-Capture: direct-v1 and prints that
+session's captured direct-child receipts. Text and --once are refused. An older
+or disabled server is unavailable, not zero usage.
 `,
 	"reap": `Usage: agent-run reap <name>... [-o json]
 

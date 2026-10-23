@@ -135,6 +135,7 @@ type options struct {
 	managedChildDecisions         bool
 	coordinatorHosts              []apiserver.CoordinatorHost
 	standbyEnabled                bool
+	childUsageCapture             bool
 	standbyRepo, standbyModel     string
 	standbyProfile, standbyEffort string
 	catalogBinding                *apiserver.CatalogBinding
@@ -161,6 +162,7 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.humanSA, "human-service-account", ownNamespace+"/dev-env-human", "Tom's ServiceAccount, <namespace>/<name>, whose token his laptop mints (D-05)")
 	fs.StringVar(&o.grantApprovalURL, "grant-approval-url", "", "base URL of the broker's approval page, such as https://dev-env.example.com/grants/; a pending grant's view links to it plus the grant's name (D-56). Empty links nothing")
 	fs.BoolVar(&o.standbyEnabled, "enable-standby-session", false, "keep one standby remote Claude session ready: the leader creates it on start and again when the last one is gone; three creations in 30 minutes trip a circuit breaker (Story110 T25, plan 03); needs the API")
+	fs.BoolVar(&o.childUsageCapture, "enable-child-usage-capture", false, "copy an accepted direct child's initial usage observation onto its parent Session; default off (OpenProject #109)")
 	fs.StringVar(&o.standbyRepo, "standby-repo", "haynes-ops", "repository of the standby remote session")
 	fs.StringVar(&o.standbyModel, "standby-model", "claude-opus-5-5", "full model id of the standby remote session")
 	fs.StringVar(&o.standbyProfile, "standby-profile", "full", "profile of the standby remote session; empty is the templates' default")
@@ -645,6 +647,7 @@ func run(args []string) error {
 			Projects:     o.catalogBinding, PrivateProjectTasks: o.privateProjectTasks, ManagedCodexTasks: o.managedCodexTasks, ManagedChildDecisions: o.managedChildDecisions,
 			PrivateProjectCanaries: o.privateProjectCanaries, RetainedCommonRules: o.retainedCommonRules,
 			PrivateHistoryRetention: o.privateHistoryRetention, PrivateCanaryTemplates: templatesKey,
+			ChildUsageCapture:        o.childUsageCapture,
 			Exec:                     podExec,
 			KeeperLogin:              &apiserver.KeeperLogin{Namespace: o.templatesNamespace, Exec: podExec, Leader: leaderNow(mgr, o.leaderElect)},
 			Shelf:                    rescueShelf,

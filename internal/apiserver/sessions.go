@@ -434,18 +434,19 @@ func (s *Server) getSession(ctx context.Context, _ http.ResponseWriter, r *http.
 	if err != nil {
 		return 0, nil, err
 	}
+	opted := r.Header.Get(apiv1.UsageCaptureHeader) == apiv1.UsageCaptureDirectV1
 	if c.kind == kindCoordinator {
 		sess, err := s.childForCoordinator(ctx, key, c, "")
 		if err != nil {
 			return 0, nil, err
 		}
-		return http.StatusOK, s.withUsageRollup(ctx, sess, c), nil
+		return http.StatusOK, s.withUsageRollup(ctx, sess, c, opted), nil
 	}
 	var sess v1alpha1.AgentSession
 	if err := s.get(ctx, key, &sess); err != nil {
 		return 0, nil, fromKubeError(err, "session "+key.Name)
 	}
-	return http.StatusOK, s.withUsageRollup(ctx, &sess, c), nil
+	return http.StatusOK, s.withUsageRollup(ctx, &sess, c, opted), nil
 }
 
 // withUsageRollup is a single Session's view with its retained descendants'
@@ -453,7 +454,7 @@ func (s *Server) getSession(ctx context.Context, _ http.ResponseWriter, r *http.
 // never zero. A coordinator may read only its direct children, so on a
 // child's view it gets the totals of the work it delegated but not the
 // invocation keys, which name grandchildren it may not read.
-func (s *Server) withUsageRollup(ctx context.Context, sess *v1alpha1.AgentSession, c *caller) apiv1.Session {
+func (s *Server) withUsageRollup(ctx context.Context, sess *v1alpha1.AgentSession, c *caller, capture bool) apiv1.Session {
 	v := view(sess, true)
 	var list v1alpha1.AgentSessionList
 	if err := s.Client.List(ctx, &list, client.InNamespace(sess.Namespace)); err == nil {
@@ -461,6 +462,9 @@ func (s *Server) withUsageRollup(ctx context.Context, sess *v1alpha1.AgentSessio
 	}
 	if v.UsageRollup != nil && c.kind == kindCoordinator {
 		v.UsageRollup.Invocations = nil
+	}
+	if capture {
+		v.CapturedUsage = capturedUsageView(sess, c, s.ChildUsageCapture)
 	}
 	return v
 }

@@ -191,3 +191,29 @@ func TestUsageSchemaRejectsUnqualifiedOrInventedMetrics(t *testing.T) {
 		})
 	}
 }
+
+func TestCapturedUsageSchemaAcceptsAndRefuses(t *testing.T) {
+	c := ctx(t)
+	s := testutil.New(t, "claude", "dev/client").Session
+	s.Name, s.Namespace = name(), ns
+	s.Spec.UsageCaptureParentUID = "parent-uid"
+	if err := k8s.Create(c, s); err != nil {
+		t.Fatal(err)
+	}
+	obs := schemaUsage()
+	obs.Source.SessionUID = string(s.UID)
+	row := v1alpha1.CapturedUsageReceipt{Key: strings.Repeat("a", 64), ParentUID: string(s.UID), ChildName: "child", CapturedAt: metav1.Now(), Observation: *obs}
+	s.Status.CapturedUsage = &v1alpha1.CapturedUsageStatus{Version: 1, Scope: v1alpha1.CapturedUsageScope, Coverage: v1alpha1.CapturedUsageCoverage, Retention: v1alpha1.CapturedUsageRetention, Receipts: []v1alpha1.CapturedUsageReceipt{row}}
+	if err := k8s.Status().Update(c, s); err != nil {
+		t.Fatal("valid ledger rejected", err)
+	}
+	changed := s.DeepCopy()
+	changed.Status.CapturedUsage.Receipts[0].ChildName = "renamed"
+	if err := k8s.Status().Update(c, changed); err == nil {
+		t.Fatal("receipt mutation was accepted")
+	}
+	s.Spec.UsageCaptureParentUID = "other-uid"
+	if err := k8s.Update(c, s); err == nil {
+		t.Fatal("parent uid mutation was accepted")
+	}
+}
