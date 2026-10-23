@@ -6,7 +6,7 @@ toolchain go1.27.1
 
 require (
 	github.com/antlr4-go/antlr/v4 v4.13.1
-	github.com/google/cel-go v0.30.0
+	github.com/google/cel-go v0.32.0
 )
 
 require (
