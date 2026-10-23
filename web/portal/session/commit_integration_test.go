@@ -28,7 +28,7 @@ func commitLossPool(t *testing.T) (*pgxpool.Pool, <-chan int) {
 	t.Helper()
 	u, err := url.Parse(os.Getenv("PORTAL_TEST_DATABASE_URL"))
 	if err != nil || u.Host != "localhost:5432" {
-		t.Fatal("commit-loss fixture requires disposable localhost5432")
+		t.Fatal("commit-loss fixture requires disposable localhost:5432")
 	}
 	certPath := u.Query().Get("sslrootcert")
 	cert, err := tls.LoadX509KeyPair(certPath, filepath.Join(filepath.Dir(certPath), "server.key"))

@@ -5,14 +5,16 @@ and the remaining live gates. No runtime was built, installed or accepted here.
 
 | Head / evidence | Observed result |
 | --- | --- |
-| Initial `328f5ae`, CI 40024701791 | Failed actual SQL because inet text included a netmask; lint also required `Time.Equal`. Corrected, not waived. Advisory findings4364266515/4364266736 accepted and answered. |
+| Initial `328f5ae`, CI 40024701791 | Failed actual SQL because inet text included a netmask; lint also required `Time.Equal`. Corrected, not waived. Advisory findings 4364266515 / 4364266736 accepted and answered. |
 | Corrected `ca1fc8a97598b83fcf5ccedcd7f1b39e0aad97eb`, [PostgreSQL job 120660648186](https://github.com/thaynes43/dev-env/actions/runs/40025341968/job/120660648186) | PASS under `-race`, 42 top-level tests / 229 nodes, all 13 actual SQL subtests run. One explicit API-RBAC skip in this dedicated job; required make-test job supplies API assets separately. Lint/build/generated also passed on this head. |
 | Same disposable PostgreSQL job | Two acknowledged DELETEs, two resurrected rows after physical asynchronous promotion, unchanged witness, two promoted runtime pools deny old session and callback before any observer; old-primary pinned connection denies new admission. |
 | Same job, actual TLS wire response suppression | Backend COMMIT CommandComplete dropped after real commit: one durable insert with unavailable caller result; successful read payload discarded; no automatic write retry. |
 | Same job, legitimate login | Begin + callback 16.458586ms, nine fresh witness GETs, one admitted start. |
 | Same job, protected Attention read | Seven actual store reads / 21 fresh witness GETs / two current UserInfo calls, 19.54753ms end to end. Three serial fresh GET samples average 551.538 microseconds. Loopback synthetic measurements only. |
-| Later fixture correction | Isolate pending rows before 256-row cleanup fixture (advisory4364300492), assert observed login GET count, close commit-loss listener before waiting for its worker. Fresh final-head CI required. |
-| Local Go 1.27.2, nice 19 / GOMAXPROCS=2 / -p 1 | Focused portal tests/vet pass, targeted transaction/current-membership race pass. Actual local PostgreSQL/API tests explicitly skip without facilities. |
+| Later fixture correction | Isolate pending rows before 256-row cleanup fixture (advisory 4364300492), assert observed login GET count, close commit-loss listener before waiting for its worker. Fresh final-head CI required. |
+| Local Go 1.27.2, nice 19 / GOMAXPROCS=2 / -p 1 | Focused portal tests/vet and targeted transaction/current-membership race pass. Actual local PostgreSQL remains explicitly skipped without a disposable DB. |
+
+Local disposable Kubernetes 1.35 envtest on source head 6929307 passed the named GET and all eight RBAC negatives in 3.407 seconds, with zero skips. It used the existing make envtest provisioning path; no live API or grant was used. Later prose/test-message spacing changes do not alter that RBAC implementation.
 
 Final actual head, required aggregate CI and independent native review must be
 recorded in the PR and canonical story after the final correction. Root retains

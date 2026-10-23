@@ -110,7 +110,7 @@ func requireSQLState(t *testing.T, err error, want string) {
 	t.Helper()
 	var pg *pgconn.PgError
 	if !errors.As(err, &pg) || pg.Code != want {
-		t.Fatalf("expected SQLSTATE%s (error type %T)", want, err)
+		t.Fatalf("expected SQLSTATE %s (error type %T)", want, err)
 	}
 }
 
@@ -421,7 +421,7 @@ func TestPostgresIntegration(t *testing.T) {
 		}
 		var remaining int
 		if admin.QueryRow(ctx, "SELECT count(*) FROM portal.pending_logins WHERE payload=$1", make([]byte, 28)).Scan(&remaining) != nil || remaining != 224 {
-			t.Fatal("cleanup did not remove exactly32 expired rows")
+			t.Fatal("cleanup did not remove exactly 32 expired rows")
 		}
 	})
 

@@ -69,7 +69,7 @@ func testProtectedReadCost(t *testing.T, a *PostgresStore) {
 	calls := f.calls
 	f.mu.Unlock()
 	if w.Code != 200 || calls != 21 {
-		t.Fatalf("protected read: status%d GETs%d expected21", w.Code, calls)
+		t.Fatalf("protected read: status %d, GETs %d, expected 21", w.Code, calls)
 	}
 	t.Logf("PROTECTED_READ_EVIDENCE witness_GETs=%d elapsed=%s store_reads=7 current_UserInfo=2; synthetic loopback only", calls, elapsed)
 	// Three fresh round trips per protected SQL operation, measured serially; this

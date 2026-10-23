@@ -46,8 +46,8 @@ logging holds.
 Local evidence so far: official Go 1.27.2 archive checksum verified, compiler
 binary SHA256 `548d3c32f83fa81152f543eb1526be7884cfe0526eb5e9ce29d3eca14786e7e0`.
 Focused portal tests and vet pass; selected transaction/current-membership
-`-race` passes. Local actual PostgreSQL and API RBAC fixtures explicitly skip
-because disposable facilities are not configured. Hosted interim results are in [EVIDENCE.md](EVIDENCE.md); fresh final-head CI and
+`-race` passes. Local PostgreSQL explicitly skips without a disposable DB. The focused API RBAC
+test passed against a locally provisioned disposable Kubernetes 1.35 API server. Hosted interim results are in [EVIDENCE.md](EVIDENCE.md); fresh final-head CI and
 independent native review remain pending. A Python YAML parser is not
 installed locally; workflow acceptance is checked by GitHub and source review.
 
@@ -55,6 +55,6 @@ References: PostgreSQL 16 [control/WAL functions](https://www.postgresql.org/doc
 and [LOCK privileges](https://www.postgresql.org/docs/16/sql-lock.html);
 Kubernetes 1.35 [most-recent GET semantics](https://v1-35.docs.kubernetes.io/docs/reference/using-api/api-concepts/).
 The API can internally serve a consistent GET through its supported cache;
-there is no application cache, informer, object-file or resourceVersion0 request.
+there is no application cache, informer, object-file or resourceVersion=0 request.
 
 Actual disposable proof and measured request costs: [EVIDENCE.md](EVIDENCE.md).

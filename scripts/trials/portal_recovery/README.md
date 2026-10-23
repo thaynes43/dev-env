@@ -15,6 +15,6 @@ witness/generation open and verify old pooled-primary connections deny as well.
 The helper grants no runtime power and is never run against production.
 
 No environment means explicit skipped disposable proof, never a success claim.
-This is PostgreSQL protocol evidence; real CNPG/role/auth/isolation/GateA and
+This is PostgreSQL protocol evidence; real CNPG/role/auth/isolation/Gate A and
 external admission RBAC acceptance remain independent. API transport negatives
 use disposable TLS servers, not a live Kubernetes credential or witness.
