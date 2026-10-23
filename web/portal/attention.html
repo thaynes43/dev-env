@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="{{.Policy}}">
+<title>Attention · Source preview</title><style>/*PORTAL_STYLE*/</style></head>
+<body><main><header><p class="eyebrow">Dev-env · Read-only source foundation</p>
+<h1>Attention</h1><p>Who owns the next step, and when was it last verified?</p>
+<p class="notice"><strong>Source preview. No live adapter or actions supplied.</strong>
+Canonical workflow metadata supplies each group. Worker liveness and task outcome stay separate.</p>
+<p>Snapshot observed: <time datetime="{{.ObservedAt}}">{{.ObservedAt}}</time></p></header>
+{{if .Notice}}<p class="notice" role="status">{{.Notice}}</p>{{end}}
+<div class="groups">{{range .Groups}}<section aria-labelledby="group-{{.ID}}">
+<h2 id="group-{{.ID}}">{{.Title}} · {{len .Rows}}</h2>
+{{range .Rows}}<article aria-labelledby="row-{{.ID}}"><h3 id="row-{{.ID}}">{{.Title}}</h3>
+<p class="freshness">{{.Freshness}}</p><dl>{{range .Fields}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl>
+<a href="{{.Link}}" rel="noreferrer" aria-label="Canonical record for {{.Title}} ({{.ID}})">Open canonical record</a>
+</article>{{end}}</section>{{end}}</div>
+<footer>Source, tests, review, CI, release, installation and acceptance each need their own evidence.</footer>
+</main></body></html>

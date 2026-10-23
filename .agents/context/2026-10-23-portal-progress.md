@@ -197,8 +197,9 @@ and encodes the complete page before opening the output, preventing malformed
 Unicode from creating a partial file. Finite tests cover each behavior. Links
 retain their distinct contextual names, with order-independent assertions.
 The optional alternative link representation is not needed for that contract.
-Checksums now use a portable relative filename. The HTML checksum proves
-reproducibility; the upload action's archive digest is the integrity reference.
+Checksums now use a portable relative filename. The HTML checksum supports
+portable reproduction; actual reproduction requires an independent comparison.
+The upload action's archive digest is the integrity reference.
 DESIGN-029 also cites parent identity addendum 866. Shared CLAUDE/CI remain
 unchanged; Python-only Layout reasoning still applies.
 
@@ -225,3 +226,54 @@ acceptance remain pending. At the first-pass
 boundary preserve exact head/base, checks, findings and next safe step here and
 in #178. The parent retains supported continuation custody; executor exit is
 not project completion and authorizes no automatic headless resume.
+
+## M2 successor source checkpoint, 2026-10-23 16:20 UTC
+
+The prior pass above is historical. PR525 merged at 16:02:58 UTC as
+`597e2cb2fb56a7ce81e055d5f0ed601de126c6ce`, from reviewed head
+`3d9bb051717de39b3b80b27ad7338562c2cddc0a`. This worktree freshly fetched
+that accepted main and verified the portal files match the reviewed source.
+This is squash integration, not a claim that the old branch is an ancestor.
+Final PR525 native review passed with two wording minors, corrected here;
+that review does not cover M2.
+
+Execution owner is now `dev-env-1023-160816`, branch
+`agent/dev-env-1023-160816`, following the explicit relinquishment and verified
+Suspended predecessor with source/home retained. #178 claim/readback and ACK
+are canonical. Prior Ready/Running-without-Codex and known-undelivered msg409
+were recorded as handoff evidence on #177; no transport debugging, other
+session inspection or lifecycle action was performed by this successor.
+
+The [read boundary](../../docs/portal-read-boundary.md) and `web/portal/` now
+provide a compiling stdlib handler/template, default unavailable dependencies,
+pre/post-read explicit authorization, summary-only source binding, four mobile
+Attention groups and a no-listener preview reusing PR525 fixtures. Nil live
+dependencies cannot become fixture data. Unknown, unavailable, stale and fresh
+verified-empty reads remain distinct. Canonical #177 workflow integration is
+explicitly unavailable; there is no new reducer.
+
+The compiler was initially absent; the existing provisioning subsequently
+supplied `/home/dev/work/portal-toolchains/go1.27.2`. Version Go1.27.2 and
+compiler SHA256 `548d3c32f83fa81152f543eb1526be7884cfe0526eb5e9ce29d3eca14786e7e0`
+were verified before use. At 16:20 UTC, focused serialized `go test -p 1
+./web/portal/...` passed (portal 0.006s, preview 0.006s), under
+`GOTOOLCHAIN=local GOMAXPROCS=2 nice -n 19`. Eleven top-level tests include
+finite two-user/two-project/environment, guessed-ID, withdrawal, unavailable,
+missing-dependency, hostile-text, timestamp and source-binding cases. Preview
+tests independently compare two full renders. No external provider/tracker/
+cluster or listener is required.
+
+Playwright inspection of the inert preview at 320px and 390px found four
+groups/cards, no horizontal overflow, minimum 44px links, visible keyboard
+focus, zero external resources and zero script/form/frame/image elements.
+An ignored meta `frame-ancestors` directive was removed from the meta policy;
+the HTTP header retains it. This is offline browser evidence, not phone or
+deployed-security acceptance. Generated local HTML/screenshot stay in ignored
+`bin/`, outside source control.
+
+Next action: publish this focused PR, obtain the root-coordinated independent
+native review at its exact final head, resolve findings and required CI, then
+perform the authorized source merge. One implementation owner remains; no
+arbitrary new deadline or turn limit was set. Source/tests do not establish
+release, installation, Gate A, human runtime binding, ingress or usable portal
+acceptance. Outcome custody continues through those separately scoped gates.
