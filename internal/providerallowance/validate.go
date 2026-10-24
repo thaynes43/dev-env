@@ -43,6 +43,10 @@ const (
 	IssueNotActionable            = "not_actionable"
 	IssueHistoricalNotCurrent     = "historical_not_current"
 	IssueModelIncompatible        = "model_incompatible"
+	IssueInvalidSchema            = "invalid_schema"
+	IssueInvalidEnum              = "invalid_enum"
+	IssueInvalidTime              = "invalid_time"
+	IssueInvalidCount             = "invalid_count"
 )
 
 // Issue is one contract finding. Codes are stable for tests.
@@ -93,8 +97,12 @@ type Assessment struct {
 	ResetCredit        ResetCreditAssessment
 }
 
-// ValidateObservation checks shape and caller-supplied trust. It does not
-// modify obs and does not read a clock or a provider.
+// ValidateObservation checks wire shape and caller-supplied trust. It does not
+// modify obs and does not read a clock or a provider. Shape uses the same
+// schema, enum, date-time, count, and decimal checks as decode, including on a
+// value that was built in memory. An allowlist miss, reset-credit misuse, or
+// display-only promotion clears Actionable on every measure. SemanticsEvidenced
+// can still report that a source rule matched.
 func ValidateObservation(obs Observation, trusted TrustedContext, reg Registry) Assessment {
 	var out Assessment
 	out.ServedModel = ServedModelUnknown
@@ -135,7 +143,7 @@ func ValidateObservation(obs Observation, trusted TrustedContext, reg Registry) 
 			out.Issues = append(out.Issues, issue(IssueDerivationFormula, "derivations", "this source cannot carry derivations"))
 		}
 	}
-	blocked := !out.ShapeOK || hasIdentityBlock(out.Issues) || !srcOK
+	blocked := !out.ShapeOK || hasIdentityBlock(out.Issues) || hasPolicyBlock(out.Issues) || !srcOK
 	assessMeasures(&out, obs, trusted, parts, src, srcOK, blocked)
 	out.CompleteAllowance = completeAllowance(obs, out)
 	return out
@@ -143,12 +151,45 @@ func ValidateObservation(obs Observation, trusted TrustedContext, reg Registry) 
 
 func shapeIssues(obs Observation) []Issue {
 	var out []Issue
+	if obs.Schema != SchemaObservation {
+		out = append(out, issue(IssueInvalidSchema, "schema", "observation schema is not providerallowance.v1"))
+	}
+	if !knownAvailability(obs.Availability) {
+		out = append(out, issue(IssueInvalidEnum, "availability", "invalid availability"))
+	}
+	if !knownCompleteness(obs.Completeness) {
+		out = append(out, issue(IssueInvalidEnum, "completeness", "invalid completeness"))
+	}
+	if !knownBinding(obs.Scope.BindingState) {
+		out = append(out, issue(IssueInvalidEnum, "scope.bindingState", "invalid binding state"))
+	}
+	if !knownSourceKind(obs.Source.Kind) {
+		out = append(out, issue(IssueInvalidEnum, "source.kind", "invalid source kind"))
+	}
+	if err := validateDateTime(obs.CapturedAt); err != nil {
+		out = append(out, issue(IssueInvalidTime, "capturedAt", "invalid date-time"))
+	}
+	if obs.ProviderObservedAt != nil {
+		if err := validateDateTime(*obs.ProviderObservedAt); err != nil {
+			out = append(out, issue(IssueInvalidTime, "providerObservedAt", "invalid date-time"))
+		}
+	}
+	if obs.Sequence < 0 {
+		out = append(out, issue(IssueInvalidCount, "sequence", "count is negative"))
+	}
+	if obs.BindingGeneration < 0 {
+		out = append(out, issue(IssueInvalidCount, "bindingGeneration", "count is negative"))
+	}
 	seenDirect := map[string]struct{}{}
 	for _, field := range obs.DirectFields {
 		if _, dup := seenDirect[field.Field]; dup {
 			out = append(out, issue(IssueDuplicateID, "directFields."+field.Field, "duplicate direct field"))
 		}
 		seenDirect[field.Field] = struct{}{}
+		if !knownOriginalType(field.OriginalType) {
+			out = append(out, issue(IssueInvalidEnum, "directFields."+field.Field+".originalType", "invalid original type"))
+			continue
+		}
 		if !lexicalOK(field) {
 			out = append(out, issue(IssueLexicalType, "directFields."+field.Field, "lexical value does not match originalType"))
 		}
@@ -159,6 +200,13 @@ func shapeIssues(obs Observation) []Issue {
 			out = append(out, issue(IssueDuplicateID, "measures."+m.ID, "duplicate measure id"))
 		}
 		seenMeasure[m.ID] = struct{}{}
+		if !knownCategory(m.Category) {
+			out = append(out, issue(IssueInvalidEnum, "measures."+m.ID+".category", "invalid measure category"))
+		}
+		if !knownDirection(m.Direction) {
+			out = append(out, issue(IssueInvalidEnum, "measures."+m.ID+".direction", "invalid measure direction"))
+		}
+		out = append(out, windowShape(m.Window, "measures."+m.ID+".window")...)
 		out = append(out, valueShape(m.Value, "measures."+m.ID+".value")...)
 		if (m.Currency != nil) != (m.Unit == UnitMoney) {
 			out = append(out, issue(IssueCurrency, "measures."+m.ID+".currency", "currency is set only for unit money"))
@@ -170,19 +218,48 @@ func shapeIssues(obs Observation) []Issue {
 			out = append(out, issue(IssueDuplicateID, "derivations."+d.ID, "duplicate derivation id"))
 		}
 		seenDeriv[d.ID] = struct{}{}
+		if !knownFormula(d.Formula) {
+			out = append(out, issue(IssueInvalidEnum, "derivations."+d.ID+".formula", "invalid derivation formula"))
+		}
 		out = append(out, valueShape(d.Value, "derivations."+d.ID+".value")...)
 	}
 	return out
 }
 
+func windowShape(w Window, path string) []Issue {
+	var out []Issue
+	if !knownReset(w.ResetPrecision) {
+		out = append(out, issue(IssueInvalidEnum, path+".resetPrecision", "invalid reset precision"))
+	}
+	if w.StartAt != nil {
+		if err := validateDateTime(*w.StartAt); err != nil {
+			out = append(out, issue(IssueInvalidTime, path+".startAt", "invalid date-time"))
+		}
+	}
+	if w.ResetAt != nil {
+		if err := validateDateTime(*w.ResetAt); err != nil {
+			out = append(out, issue(IssueInvalidTime, path+".resetAt", "invalid date-time"))
+		}
+	}
+	if w.DurationMinutes != nil && *w.DurationMinutes < 0 {
+		out = append(out, issue(IssueInvalidCount, path+".durationMinutes", "count is negative"))
+	}
+	return out
+}
+
 func valueShape(v MeasureValue, path string) []Issue {
-	if v.State == ValueKnown && v.Decimal == nil {
-		return []Issue{issue(IssueKnownDecimal, path, "a known value requires a decimal")}
+	var out []Issue
+	if !knownValueState(v.State) {
+		out = append(out, issue(IssueInvalidEnum, path+".state", "invalid value state"))
+	} else if v.State == ValueKnown && v.Decimal == nil {
+		out = append(out, issue(IssueKnownDecimal, path, "a known value requires a decimal"))
+	} else if v.State != ValueKnown && v.Decimal != nil {
+		out = append(out, issue(IssueKnownDecimal, path, "only a known value carries a decimal"))
 	}
-	if v.State != ValueKnown && v.Decimal != nil {
-		return []Issue{issue(IssueKnownDecimal, path, "only a known value carries a decimal")}
+	if v.Decimal != nil && !decimalPattern.MatchString(*v.Decimal) {
+		out = append(out, issue(IssueKnownDecimal, path+".decimal", "decimal is not a canonical decimal string"))
 	}
-	return nil
+	return out
 }
 
 func lexicalOK(field DirectField) bool {
@@ -226,6 +303,16 @@ func identityIssues(obs Observation, trusted TrustedContext, parts RegistryParts
 		out = append(out, issue(IssueAccountMismatch, "scope.accountRef", "no trusted account record matches this binding"))
 	}
 	return out
+}
+
+func hasPolicyBlock(issues []Issue) bool {
+	for _, item := range issues {
+		switch item.Code {
+		case IssueFieldNotAllowlisted, IssueResetCreditMisuse, IssueDisplayPromotion, IssueDerivationFormula:
+			return true
+		}
+	}
+	return false
 }
 
 func hasIdentityBlock(issues []Issue) bool {

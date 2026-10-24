@@ -30,5 +30,7 @@ remain required before merge. Merge is not part of this slice.
 ## Next
 
 Sol reviews the exact PR head, collects findings, and returns consolidated
-repairs to the same implementation owner when a repair is authorized. Packet B
+repairs to the same implementation owner when a repair is authorized. Repair
+01 on this PR corrects canonical field names, fail-closed measure
+actionability, and typed shape checks. Native review remains held. Packet B
 waits for its own activation.

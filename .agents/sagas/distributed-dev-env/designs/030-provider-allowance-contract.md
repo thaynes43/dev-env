@@ -75,9 +75,22 @@ or reduces a series of observations.
 JSON decode rejects a second key, including a Unicode-escaped spelling of the
 same key, unknown fields, boolean-for-integer values, fractional integers,
 malformed date-times, and documents outside caller-supplied limits.
+Property names are compared with the canonical field list before typed decode,
+at every observation and read object. A second spelling that matches only
+under case folding, including a Unicode fold such as long s, is rejected in
+either input order. String and array values are not folded.
 `FixtureParseLimits` is a finite bound for these fixtures. It is not a
 production SLO or a shared resource policy. Missing provider time stays
-missing. Decode does not call a clock or a provider.
+missing. A JSON null stays distinct from a missing required key. Decode does
+not call a clock or a provider.
+
+`ValidateObservation` applies those schema, enum, date-time, count, and
+decimal checks to a Go value as well as to a decoded document. An unsupported
+schema or other shape failure is not actionable. An allowlist miss,
+reset-credit misuse, or display-only promotion also clears `Actionable` on
+every measure. `SemanticsEvidenced` can still say that a source rule matched,
+including historical Codex fields and the known meters in a partial
+observation. Unknown meters stay unknown.
 
 ## Schema tests
 

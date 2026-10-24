@@ -839,7 +839,7 @@ func walkArray(dec *json.Decoder, depth int, lim ParseLimits, path string) error
 }
 
 func strictInto(b []byte, keys []string, dest any) error {
-	if err := requireKeys(b, keys); err != nil {
+	if err := canonicalKeys(b, keys); err != nil {
 		return err
 	}
 	dec := json.NewDecoder(bytes.NewReader(b))
@@ -862,17 +862,90 @@ func strictInto(b []byte, keys []string, dest any) error {
 	return nil
 }
 
-func requireKeys(b []byte, keys []string) error {
+// canonicalKeys compares property names with the canonical field list before
+// typed decode. encoding/json folds case, including Unicode folds such as
+// long s, and DisallowUnknownFields still accepts that alias beside the
+// canonical name. Exact duplicate keys are rejected here as well. String
+// values are not compared or rewritten.
+func canonicalKeys(b []byte, keys []string) error {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.UseNumber()
-	var raw map[string]json.RawMessage
-	if err := dec.Decode(&raw); err != nil {
+	tok, err := dec.Token()
+	if err != nil || tok != json.Delim('{') {
 		return &DecodeError{Code: "invalid_json", Msg: "expected a JSON object"}
 	}
+	allowed := make(map[string]struct{}, len(keys))
 	for _, key := range keys {
-		if _, ok := raw[key]; !ok {
+		allowed[key] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(keys))
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return &DecodeError{Code: "invalid_json", Msg: err.Error()}
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return &DecodeError{Code: "invalid_json", Msg: "object key is not a string"}
+		}
+		if _, dup := seen[key]; dup {
+			return &DecodeError{Code: "duplicate_key", Path: key, Msg: "duplicate key"}
+		}
+		seen[key] = struct{}{}
+		if _, ok := allowed[key]; !ok {
+			return &DecodeError{Code: "unknown_field", Path: key, Msg: "field is not a canonical name"}
+		}
+		if err := skipValue(dec); err != nil {
+			return err
+		}
+	}
+	end, err := dec.Token()
+	if err != nil {
+		return &DecodeError{Code: "invalid_json", Msg: err.Error()}
+	}
+	if end != json.Delim('}') {
+		return &DecodeError{Code: "invalid_json", Msg: "object is not closed"}
+	}
+	for _, key := range keys {
+		if _, ok := seen[key]; !ok {
 			return &DecodeError{Code: "missing_field", Path: key, Msg: "required field is missing"}
 		}
+	}
+	return nil
+}
+
+func skipValue(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return &DecodeError{Code: "invalid_json", Msg: err.Error()}
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		return nil
+	}
+	if delim != '{' && delim != '[' {
+		return &DecodeError{Code: "invalid_json", Msg: "unexpected delimiter"}
+	}
+	for dec.More() {
+		if delim == '{' {
+			if _, err := dec.Token(); err != nil {
+				return &DecodeError{Code: "invalid_json", Msg: err.Error()}
+			}
+		}
+		if err := skipValue(dec); err != nil {
+			return err
+		}
+	}
+	end, err := dec.Token()
+	if err != nil {
+		return &DecodeError{Code: "invalid_json", Msg: err.Error()}
+	}
+	want := json.Delim('}')
+	if delim == '[' {
+		want = ']'
+	}
+	if end != want {
+		return &DecodeError{Code: "invalid_json", Msg: "object or array is not closed"}
 	}
 	return nil
 }
