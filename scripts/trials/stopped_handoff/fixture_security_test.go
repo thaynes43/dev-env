@@ -593,6 +593,103 @@ func TestPreservedSourceErrorKeepsTheSnapshot(t *testing.T) {
 	}
 }
 
+func TestIndexFlagsRefuseBeforeWrite(t *testing.T) {
+	cases := []struct {
+		name string
+		path string
+		flag string
+	}{
+		{"committed-skip-worktree", "committed.txt", "--skip-worktree"},
+		{"committed-assume-unchanged", "committed.txt", "--assume-unchanged"},
+		{"staged-skip-worktree", "staged.txt", "--skip-worktree"},
+		{"staged-assume-unchanged", "staged.txt", "--assume-unchanged"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pred := t.TempDir()
+			report, err := materialize(pred)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := gitCmd(pred, "update-index", tc.flag, "--", tc.path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(pred, tc.path), []byte("hidden divergence\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			sum := hashFile(t, filepath.Join(pred, tc.path))
+			for i := range report.Manifest.Entries {
+				if report.Manifest.Entries[i].Path == tc.path {
+					report.Manifest.Entries[i].SHA256 = sum
+				}
+			}
+			doc := withFixture(t, loadDoc(t), report)
+			index := hashFile(t, filepath.Join(pred, ".git", "index"))
+			flags, err := gitCmd(pred, "ls-files", "-v", "--", tc.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var checkBuf, errBuf bytes.Buffer
+			if code := run([]string{"check", "--verify-root", pred, writeDoc(t, doc)}, nil, &checkBuf, &bytes.Buffer{}); code != 0 {
+				t.Fatalf("verify-root exit %d %s", code, checkBuf.String())
+			}
+			var res result
+			if err := json.Unmarshal(checkBuf.Bytes(), &res); err != nil {
+				t.Fatal(err)
+			}
+			if res.FixtureVerified || res.RestoreAuthorized {
+				t.Fatalf("flagged divergence verified %#v", res.FixtureVerified)
+			}
+			into := t.TempDir()
+			code := run([]string{"restore", "--record", writeDoc(t, doc), "--from", pred, "--into", into}, nil, &bytes.Buffer{}, &errBuf)
+			if code == 0 || dirCount(t, into) != 0 || !strings.Contains(errBuf.String(), "before any restore write") {
+				t.Fatalf("restore code %d recipient %d err %s", code, dirCount(t, into), errBuf.String())
+			}
+			if hashFile(t, filepath.Join(pred, ".git", "index")) != index || hashFile(t, filepath.Join(pred, tc.path)) != sum {
+				t.Fatal("predecessor bytes or index changed")
+			}
+			flagsAfter, err := gitCmd(pred, "ls-files", "-v", "--", tc.path)
+			if err != nil || flagsAfter != flags {
+				t.Fatalf("index flags changed %q -> %q (%v)", flags, flagsAfter, err)
+			}
+		})
+	}
+}
+
+func TestStagedNewDirectoryRestores(t *testing.T) {
+	pred := t.TempDir()
+	report, err := materialize(pred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(pred, "newdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("synthetic staged nested\n")
+	if err := os.WriteFile(filepath.Join(pred, "newdir", "added.txt"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitCmd(pred, "add", "--", "newdir/added.txt"); err != nil {
+		t.Fatal(err)
+	}
+	report.Manifest.Entries = append(report.Manifest.Entries, manifestEntry{
+		Path: "newdir/added.txt", GitState: "staged", SHA256: hashFile(t, filepath.Join(pred, "newdir", "added.txt")),
+	})
+	doc := withFixture(t, loadDoc(t), report)
+	index := hashFile(t, filepath.Join(pred, ".git", "index"))
+	into := t.TempDir()
+	var errBuf bytes.Buffer
+	if code := run([]string{"restore", "--record", writeDoc(t, doc), "--from", pred, "--into", into}, nil, &bytes.Buffer{}, &errBuf); code != 0 {
+		t.Fatalf("nested staged restore %d %s", code, errBuf.String())
+	}
+	if string(mustRead(t, filepath.Join(into, "newdir", "added.txt"))) != string(body) {
+		t.Fatal("nested staged bytes were not restored")
+	}
+	if hashFile(t, filepath.Join(pred, ".git", "index")) != index {
+		t.Fatal("nested staged restore changed the predecessor index")
+	}
+}
+
 func dirCount(t *testing.T, dir string) int {
 	t.Helper()
 	entries, err := os.ReadDir(dir)

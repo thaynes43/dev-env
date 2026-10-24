@@ -199,7 +199,13 @@ func overlay(src, dst string, man manifest, modes map[string]os.FileMode) error 
 		if err != nil {
 			return err
 		}
+		if err := ensureRecipientParent(dstRoot, entry.Path); err != nil {
+			return err
+		}
 		if err := dstRoot.WriteFile(entry.Path, body, modes[entry.Path]); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("recipient path %s was not written: %w", entry.Path, err)
+			}
 			return fmt.Errorf("refusing to write %s outside the recipient fixture: %w", entry.Path, err)
 		}
 		if err := dstRoot.Chmod(entry.Path, modes[entry.Path]); err != nil {
@@ -210,6 +216,17 @@ func overlay(src, dst string, man manifest, modes map[string]os.FileMode) error 
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func ensureRecipientParent(root *os.Root, name string) error {
+	dir := filepath.Dir(name)
+	if dir == "." || dir == "" {
+		return nil
+	}
+	if err := root.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("cannot create recipient parent for %s: %w", name, err)
 	}
 	return nil
 }
@@ -336,6 +353,12 @@ func bindTreeAndModes(root string, man manifest) error {
 	for _, entry := range man.Entries {
 		switch entry.GitState {
 		case "committed":
+			if err := refuseIndexFlags(root, entry.Path); err != nil {
+				return err
+			}
+			if err := requireWorktreeBlob(root, entry.Path, "HEAD:"+entry.Path); err != nil {
+				return err
+			}
 			mode, err := headBlobMode(root, entry.Path)
 			if err != nil {
 				return err
@@ -343,7 +366,27 @@ func bindTreeAndModes(root string, man manifest) error {
 			if err := worktreeModeMatches(root, entry.Path, mode); err != nil {
 				return err
 			}
-		case "staged", "unstaged":
+		case "staged":
+			if err := refuseIndexFlags(root, entry.Path); err != nil {
+				return err
+			}
+			if err := requireWorktreeBlob(root, entry.Path, ":"+entry.Path); err != nil {
+				return err
+			}
+			mode, err := indexGitMode(root, entry.Path)
+			if err != nil {
+				return err
+			}
+			if err := worktreeModeMatches(root, entry.Path, mode); err != nil {
+				return err
+			}
+		case "unstaged":
+			if err := refuseIndexFlags(root, entry.Path); err != nil {
+				return err
+			}
+			if err := requireSameGitObject(root, ":"+entry.Path, "HEAD:"+entry.Path); err != nil {
+				return err
+			}
 			mode, err := indexGitMode(root, entry.Path)
 			if err != nil {
 				return err
@@ -352,6 +395,52 @@ func bindTreeAndModes(root string, man manifest) error {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func refuseIndexFlags(dir, path string) error {
+	out, err := gitCmd(dir, "ls-files", "-v", "--", path)
+	if err != nil {
+		return err
+	}
+	if out == "" || strings.Contains(out, "\n") {
+		return fmt.Errorf("%s is not a single index record", path)
+	}
+	tag, name, ok := strings.Cut(out, " ")
+	if !ok || name != path || len(tag) != 1 {
+		return fmt.Errorf("%s index record %q is not a single tag", path, out)
+	}
+	flag := tag[0]
+	if flag == 'S' || flag == 's' || (flag >= 'a' && flag <= 'z') {
+		return fmt.Errorf("refusing index flag %q for %s before any restore write", tag, path)
+	}
+	return nil
+}
+
+func requireWorktreeBlob(dir, path, object string) error {
+	work, err := gitCmd(dir, "hash-object", "--", path)
+	if err != nil {
+		return err
+	}
+	return sameGitID(dir, path, work, object)
+}
+
+func requireSameGitObject(dir, left, right string) error {
+	got, err := gitCmd(dir, "rev-parse", "--verify", left)
+	if err != nil {
+		return err
+	}
+	return sameGitID(dir, left, got, right)
+}
+
+func sameGitID(dir, path, got, object string) error {
+	want, err := gitCmd(dir, "rev-parse", "--verify", object)
+	if err != nil {
+		return err
+	}
+	if got != want {
+		return fmt.Errorf("refusing %s before any restore write: blob %s is not %s (%s)", path, got, object, want)
 	}
 	return nil
 }
