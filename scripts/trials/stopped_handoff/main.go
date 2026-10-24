@@ -94,6 +94,9 @@ func cmdCheck(args []string, in io.Reader, out, errw io.Writer) int {
 
 func readInput(path string, in io.Reader) ([]byte, error) {
 	if path == "-" {
+		if in == nil {
+			return nil, errors.New("stdin is not available")
+		}
 		return readBounded(in)
 	}
 	f, err := os.Open(path)
@@ -140,7 +143,31 @@ func applyVerify(res result, root string, data []byte) result {
 		res.Phases = append(res.Phases, phase{Name: "fixture-verify", Duration: time.Since(start).String()})
 		return res
 	}
-	if err := verifyFixture(root, doc.Manifest); err != nil {
+	resolved, err := absOutside(root)
+	if err != nil {
+		res.FixtureVerified = false
+		res.RestoreAuthorized = false
+		res.BlockedCustody = true
+		res.Outcome = "blocked-custody"
+		res.BlockedReason = err.Error()
+		res.NextAction = blockedNext("keep the fixture outside a worktree")
+		res.Phases = append(res.Phases, phase{Name: "fixture-verify", Duration: time.Since(start).String()})
+		return res
+	}
+	if err := requireHEAD(resolved, doc.Predecessor.Head); err != nil || doc.Observed.Head != doc.Predecessor.Head {
+		if err == nil {
+			err = errors.New("fixture HEAD does not match both record heads")
+		}
+		res.FixtureVerified = false
+		res.RestoreAuthorized = false
+		res.BlockedCustody = true
+		res.Outcome = "blocked-custody"
+		res.BlockedReason = err.Error()
+		res.NextAction = blockedNext("correct the synthetic fixture head")
+		res.Phases = append(res.Phases, phase{Name: "fixture-verify", Duration: time.Since(start).String()})
+		return res
+	}
+	if err := verifyFixture(resolved, doc.Manifest); err != nil {
 		res.FixtureVerified = false
 		res.RestoreAuthorized = false
 		res.BlockedCustody = true
@@ -203,13 +230,19 @@ func cmdRestore(args []string, out, errw io.Writer) int {
 		if err := writeResult(out, res); err != nil {
 			return 2
 		}
-		return code
+		if code != 0 {
+			return code
+		}
+		return 4
 	}
 	doc, err := parseDocument(data)
 	if err != nil {
 		return failFixture(out, errw, err)
 	}
-	if err := restoreFixture(from, into, doc.Manifest); err != nil {
+	if doc.Predecessor.Head != doc.Observed.Head {
+		return failFixture(out, errw, errors.New("fixture HEAD does not match both record heads"))
+	}
+	if err := restoreFixture(from, into, doc.Manifest, doc.Predecessor.Head); err != nil {
 		res.FixtureVerified = false
 		res.RestoreAuthorized = false
 		res.BlockedCustody = true

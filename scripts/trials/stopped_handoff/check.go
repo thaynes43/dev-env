@@ -531,6 +531,7 @@ func reduce(doc document) result {
 	res.AcknowledgmentRecorded = g.ack
 	res.NextOwner = g.nextOwner
 	reasons := custodyReasons(doc)
+	reasons = append(reasons, stopOrderReasons(doc)...)
 	if !g.pickup || !g.ack || g.nextOwner == "" {
 		reasons = append(reasons, "explicit pickup, acknowledgment, or next owner is missing")
 	}
@@ -541,7 +542,7 @@ func reduce(doc document) result {
 	if successor != "" {
 		res.RecordedSuccessorCount = 1
 	}
-	res.AcceptedStop = stoppedClean(doc.Predecessor)
+	res.AcceptedStop = stoppedClean(doc.Predecessor) && !hasReason(reasons, reasonLaterObservation)
 	if doc.Observed.ContextPresent && !doc.Observed.ContextChanged {
 		res.ExplicitContextProof = "source-record"
 	}
@@ -572,6 +573,52 @@ func reduce(doc document) result {
 	res.BlockedCustody = false
 	res.NextAction = fmt.Sprintf("recorded successor %s as evidence only; %s", successor, blockedNext("do not treat this as an assignment"))
 	return res
+}
+
+const (
+	reasonLaterObservation = "stop contradicted by a later running or reconnect observation"
+	reasonBeforeStop       = "pickup, acknowledgment, next owner, or successor precedes the verified stop"
+)
+
+func stopOrderReasons(doc document) []string {
+	stopAt, err := time.Parse(time.RFC3339, doc.Predecessor.SourceTime)
+	if err != nil {
+		return []string{"verified stop time is unreadable"}
+	}
+	var later, before bool
+	for _, ev := range doc.Events {
+		at, err := time.Parse(time.RFC3339, ev.SourceTime)
+		if err != nil {
+			return []string{"event time is unreadable"}
+		}
+		switch ev.Kind {
+		case "delayed-running", "reconnect":
+			if !at.Before(stopAt) {
+				later = true
+			}
+		case "pickup", "acknowledgment", "next-owner", "successor-request":
+			if at.Before(stopAt) {
+				before = true
+			}
+		}
+	}
+	var reasons []string
+	if later {
+		reasons = append(reasons, reasonLaterObservation)
+	}
+	if before {
+		reasons = append(reasons, reasonBeforeStop)
+	}
+	return reasons
+}
+
+func hasReason(reasons []string, want string) bool {
+	for _, reason := range reasons {
+		if reason == want {
+			return true
+		}
+	}
+	return false
 }
 
 func custodyReasons(doc document) []string {
@@ -808,6 +855,31 @@ func validSHA(v string) bool {
 	return true
 }
 
+func canonicalKey(key string) error {
+	for _, r := range key {
+		if r > 127 {
+			return fmt.Errorf("non-ASCII JSON key %q", key)
+		}
+	}
+	if _, ok := canonicalKeys[key]; !ok {
+		return fmt.Errorf("JSON key %q is not canonical", key)
+	}
+	return nil
+}
+
+var canonicalKeys = map[string]struct{}{
+	"schema": {}, "story": {}, "synthetic": {}, "predecessor": {}, "recipient": {},
+	"observed": {}, "manifest": {}, "excerpt": {}, "events": {}, "taskClaim": {},
+	"continuation": {}, "assignment": {}, "advisoryChecker": {}, "identity": {},
+	"uid": {}, "head": {}, "sourceTime": {}, "rulesRevision": {}, "scopeRef": {},
+	"authorityRef": {}, "executorState": {}, "stopVerified": {}, "stopAmbiguous": {},
+	"contextPresent": {}, "contextChanged": {}, "contextHash": {}, "wipPresent": {},
+	"wipChanged": {}, "wipHash": {}, "algorithm": {}, "entries": {}, "path": {},
+	"gitState": {}, "sha256": {}, "kind": {}, "contentHash": {}, "pendingFindings": {},
+	"holds": {}, "consumedBudget": {}, "attempts": {}, "nativeHistory": {}, "nativeImport": {},
+	"owner": {}, "note": {}, "successor": {}, "authorized": {}, "supported": {},
+}
+
 func rejectDuplicateKeys(data []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
@@ -844,6 +916,9 @@ func consumeValue(dec *json.Decoder) error {
 			key, ok := keyTok.(string)
 			if !ok {
 				return errors.New("object key is not a string")
+			}
+			if err := canonicalKey(key); err != nil {
+				return err
 			}
 			if _, exists := seen[key]; exists {
 				return fmt.Errorf("duplicate JSON key %q", key)

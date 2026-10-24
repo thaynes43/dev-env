@@ -6,7 +6,9 @@ This is the source check for story [#101](https://work.haynesnetwork.com/work_pa
 
 ## What a passing source run shows
 
-The predecessor and recipient are separate synthetic identities. The predecessor fixture has one public commit plus staged, unstaged, and untracked files. The manifest records each path, git state, and SHA-256. The recipient restore copies those states into its own directory and checks every byte. The predecessor snapshot, including HEAD, status, diff, and file hashes, must match afterward.
+The predecessor and recipient are separate synthetic identities. The predecessor fixture has one public commit plus staged, unstaged, and untracked files. The manifest records each path, git state, and SHA-256. A recipient restore is allowed only for a clean commit, staged `A ` or `M `, unstaged ` M`, and untracked files. It copies those bytes, the index mode and blob, and the untracked file mode. `MM` and any other mixed state are refused before the recipient is written. The predecessor and recipient Git HEAD must both equal the record's predecessor head and observed head before that write. The predecessor snapshot, including HEAD, status, diff, index hash, and file hashes, must match afterward.
+
+This overlay is a fixture stand-in. The supported code-rescue path commits staged and unstaged work into one tree and does not keep that split. An installed drill has to prove its own preservation. `preflight` names that rescue route and does not activate it.
 
 The record keeps the source UID, head, source time, rules revision, scope reference, authority reference, holds, pending findings, consumed budget, and attempt count. A public excerpt is labeled `public-handoff-excerpt`. Native history and native import stay false. The checker refuses a record that claims either.
 
@@ -16,16 +18,17 @@ Phase durations are the time this process spent parsing, validating, and reducin
 
 | Record | Result |
 | --- | --- |
-| Hash-matched stopped predecessor, explicit pickup, acknowledgment, and next owner | Synthetic restore is authorized. This is not an installed journey. |
+| Record-asserted stopped predecessor, with explicit pickup, acknowledgment, and next owner | `check` without `--verify-root` accepts an internally consistent record. It does not read fixture bytes, and the file booleans do not grant authority. This is not an installed journey. |
 | Missing or changed context or WIP | Blocked custody. No restore and no successor. |
 | Running, uncertain, unavailable, ambiguous, or unverified predecessor | Blocked custody. An exited process is not a verified stop. |
 | Observed UID or head differs | Blocked custody. No successor. |
 | Repeated identical event | Ignored replay. No second result or owner. |
 | Same event identity with a different payload | Conflict. Manual disposition. No chosen owner, result, or successor. |
-| Reconnect or delayed running | Recorded as a refusal. It does not replace a verified stop or create another result. |
+| Reconnect or delayed running at or after `predecessor.sourceTime` | Blocked custody. That time is the verified-stop instant. A running or reconnect observation before the stop stays a stale refusal and does not replace the stop. |
 | Late result after the initial wait | One observed hash. `installedJourney` stays false. |
-| Missing pickup, acknowledgment, or next owner | Partial. The tool does not invent them. |
-| Continuation unavailable, or assignment not independently authorized | No successor. The recorded next owner stays the one in the record. |
+| Pickup, acknowledgment, next owner, or successor-request before the verified stop | Blocked custody. Nothing is backdated into authority. |
+| Missing pickup, acknowledgment, or next owner | Partial. The tool does not invent them. Pickup and acknowledgment notes are not an actor identity. The next-owner string is kept as recorded and is not compared with either identity. |
+| Continuation unavailable, or the record does not assert an authorized supported assignment | No successor. The recorded next owner stays the one in the record. A record assertion is not an authorization. |
 | A later different successor request | Does not replace the first recorded successor. |
 | `taskClaim` other than `unchanged` | Refused. Nothing is applied. |
 
@@ -42,7 +45,9 @@ go run ./scripts/trials/stopped_handoff preflight
 
 `check` reads one JSON document, or stdin when the argument is `-`, and writes only its result. `preflight` prints a capability skeleton. Source presence is `checker-present`. Release, profile, operator settings, and route activation are unknown or not read. `deployedCapability` is false. Live stop, read, restore, and assignment are `not-performed`. H7 retention is not required for this excerpt check.
 
-`materialize`, `verify`, and `restore` are explicit fixture commands. They refuse a directory inside this source worktree. `restore` writes the recipient only after `check` authorizes restore, and only inside the empty `--into` directory. Tests keep those directories under the test temp directory.
+`materialize`, `verify`, and `restore` are explicit fixture commands. Roots are resolved with `EvalSymlinks` before confinement checks. A target is refused when its parent directory is inside a Git worktree, including when the process cwd is elsewhere and when the path is a symlink. Fixture reads and writes go through `os.OpenRoot`, so a symlink cannot leave that root. `--into` must not resolve inside the predecessor or its `.git`. `.git` must be a plain directory. Local Git config may contain only the keys `git init` writes here. Commands disable hooks and fsmonitor and set `GIT_OPTIONAL_LOCKS=0`, so a read does not rewrite the predecessor index.
+
+`restore` writes the recipient only after `check` authorizes restore, and only inside the resolved empty `--into` directory. Exit 0 means that write was verified. Exit 4 means the record did not authorize a write and the recipient was left untouched. Exit 2 means the fixture was refused. Exit 3 is a record conflict. `restore --record -` and `verify --manifest -` are refused because those commands do not read stdin. Tests keep fixture directories under the test temp directory.
 
 ```bash
 go test -p 1 -count=1 ./scripts/trials/stopped_handoff/

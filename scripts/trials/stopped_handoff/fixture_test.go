@@ -102,7 +102,7 @@ func TestRestoreRefusesWithoutWriting(t *testing.T) {
 	into := t.TempDir()
 	var buf bytes.Buffer
 	code := run([]string{"restore", "--record", record, "--from", pred, "--into", into}, nil, &buf, &bytes.Buffer{})
-	if code != 0 {
+	if code != 4 {
 		t.Fatalf("running restore exit %d %s", code, buf.String())
 	}
 	var res result
@@ -133,7 +133,7 @@ func TestRestoreRefusesWithoutWriting(t *testing.T) {
 	into2 := t.TempDir()
 	buf.Reset()
 	code = run([]string{"restore", "--record", writeDoc(t, changed), "--from", pred, "--into", into2}, nil, &buf, &bytes.Buffer{})
-	if code != 0 {
+	if code != 4 {
 		t.Fatalf("changed restore %d", code)
 	}
 	entries, err = os.ReadDir(into2)
@@ -145,14 +145,31 @@ func TestRestoreRefusesWithoutWriting(t *testing.T) {
 	}
 }
 
-func TestMaterializeRefusesSourceWorktree(t *testing.T) {
-	dir := filepath.Join(".", "testdata", "guard-empty")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+func TestMaterializeRefusesTargetWorktree(t *testing.T) {
+	base := t.TempDir()
+	fake := filepath.Join(base, "fakewt")
+	if err := os.MkdirAll(fake, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	if _, err := materialize(dir); err == nil {
-		t.Fatal("materialize wrote inside the source worktree")
+	if _, err := gitCmd(fake, "init", "-b", "main"); err != nil {
+		t.Fatal(err)
+	}
+	empty := filepath.Join(fake, "emptyB")
+	if err := os.Mkdir(empty, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := materialize(empty); err == nil {
+		t.Fatal("materialize wrote inside a target worktree")
+	}
+	alias := filepath.Join(base, "aliasB")
+	if err := os.Symlink(empty, alias); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := materialize(alias); err == nil {
+		t.Fatal("materialize followed a symlink into a worktree")
+	}
+	if _, err := os.Stat(filepath.Join(empty, ".git")); !os.IsNotExist(err) {
+		t.Fatal("nested repository was created")
 	}
 }
 

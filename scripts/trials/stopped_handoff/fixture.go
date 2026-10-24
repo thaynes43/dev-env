@@ -96,7 +96,10 @@ func manifestFrom(root string) (manifest, error) {
 	return man, nil
 }
 
-func restoreFixture(from, into string, man manifest) error {
+func restoreFixture(from, into string, man manifest, head string) error {
+	if !validHead(head) {
+		return errors.New("record head is not 40 lowercase hex characters")
+	}
 	src, err := absOutside(from)
 	if err != nil {
 		return err
@@ -110,6 +113,9 @@ func restoreFixture(from, into string, man manifest) error {
 	}
 	if err := verifyFixture(src, man); err != nil {
 		return fmt.Errorf("predecessor fixture: %w", err)
+	}
+	if err := requireHEAD(src, head); err != nil {
+		return err
 	}
 	before, err := snapshot(src, man)
 	if err != nil {
@@ -127,37 +133,60 @@ func restoreFixture(from, into string, man manifest) error {
 	if _, err := gitCmd(dst, "checkout", "--detach", "FETCH_HEAD"); err != nil {
 		return err
 	}
-	if err := overlay(src, dst, man); err != nil {
+	if err := requireHEAD(dst, head); err != nil {
 		return err
+	}
+	if err := overlay(src, dst, man); err != nil {
+		return finishSource(src, man, before, err)
 	}
 	if err := verifyFixture(dst, man); err != nil {
-		return err
+		return finishSource(src, man, before, err)
 	}
+	if err := samePreservation(src, dst, man); err != nil {
+		return finishSource(src, man, before, err)
+	}
+	return finishSource(src, man, before, nil)
+}
+
+func finishSource(src string, man manifest, before string, opErr error) error {
 	after, err := snapshot(src, man)
 	if err != nil {
+		if opErr != nil {
+			return opErr
+		}
 		return err
 	}
 	if before != after {
 		return errOriginalAltered
 	}
-	return nil
+	return opErr
 }
 
 func overlay(src, dst string, man manifest) error {
+	modes, err := fixtureModes(src, man)
+	if err != nil {
+		return err
+	}
+	dstRoot, err := os.OpenRoot(dst)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dstRoot.Close() }()
+	srcRoot, err := os.OpenRoot(src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = srcRoot.Close() }()
 	for _, entry := range man.Entries {
 		if entry.GitState == "committed" {
 			continue
 		}
-		from, err := joinWithin(src, entry.Path)
+		body, err := srcRoot.ReadFile(entry.Path)
 		if err != nil {
 			return err
 		}
-		body, err := os.ReadFile(from)
-		if err != nil {
-			return err
-		}
-		if err := writeRel(dst, entry.Path, string(body)); err != nil {
-			return err
+		if err := dstRoot.WriteFile(entry.Path, body, modes[entry.Path]); err != nil {
+			return fmt.Errorf("refusing to write %s outside the recipient fixture: %w", entry.Path, err)
 		}
 		if entry.GitState == "staged" {
 			if _, err := gitCmd(dst, "add", "--", entry.Path); err != nil {
@@ -168,12 +197,42 @@ func overlay(src, dst string, man manifest) error {
 	return nil
 }
 
+func fixtureModes(root string, man manifest) (map[string]os.FileMode, error) {
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = r.Close() }()
+	modes := map[string]os.FileMode{}
+	for _, entry := range man.Entries {
+		if entry.GitState == "committed" {
+			continue
+		}
+		info, err := r.Lstat(entry.Path)
+		if err != nil {
+			return nil, err
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("%s is not a regular file", entry.Path)
+		}
+		perm := info.Mode().Perm()
+		if perm != 0o644 && perm != 0o755 {
+			return nil, fmt.Errorf("refusing unsupported mode %o for %s before any restore write", perm, entry.Path)
+		}
+		modes[entry.Path] = perm
+	}
+	return modes, nil
+}
+
 func verifyFixture(root string, man manifest) error {
 	abs, err := absOutside(root)
 	if err != nil {
 		return err
 	}
 	if err := validateManifest(man); err != nil {
+		return err
+	}
+	if err := guardRepo(abs); err != nil {
 		return err
 	}
 	status, err := gitCmd(abs, "status", "--porcelain=v1")
@@ -198,17 +257,17 @@ func verifyFixture(root string, man manifest) error {
 			}
 		case "staged":
 			if code != "A " && code != "M " {
-				return fmt.Errorf("%s is not staged (%q)", entry.Path, code)
+				return fmt.Errorf("refusing unsupported git state %q for %s before any restore write", code, entry.Path)
 			}
 			want[entry.Path] = code
 		case "unstaged":
-			if code != " M" && code != "MM" {
-				return fmt.Errorf("%s is not unstaged (%q)", entry.Path, code)
+			if code != " M" {
+				return fmt.Errorf("refusing unsupported git state %q for %s before any restore write", code, entry.Path)
 			}
 			want[entry.Path] = code
 		case "untracked":
 			if code != "??" {
-				return fmt.Errorf("%s is not untracked (%q)", entry.Path, code)
+				return fmt.Errorf("refusing unsupported git state %q for %s before any restore write", code, entry.Path)
 			}
 			want[entry.Path] = code
 		default:
@@ -244,6 +303,11 @@ func snapshot(root string, man manifest) (string, error) {
 		return "", err
 	}
 	fmt.Fprintf(&b, "diff\n%s\ncached\n%s\n", diff, cached)
+	indexHash, err := hashGitIndex(root)
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprintf(&b, "index %s\n", indexHash)
 	for _, entry := range man.Entries {
 		sum, err := fileSHA(root, entry.Path)
 		if err != nil {
@@ -296,18 +360,23 @@ func parsePorcelain(status string) map[string]string {
 }
 
 func fileSHA(root, name string) (string, error) {
-	path, err := joinWithin(root, name)
+	rel, err := cleanRel(name)
 	if err != nil {
 		return "", err
 	}
-	info, err := os.Lstat(path)
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = r.Close() }()
+	info, err := r.Lstat(rel)
 	if err != nil {
 		return "", err
 	}
 	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("%s is not a regular file", name)
 	}
-	body, err := os.ReadFile(path)
+	body, err := r.ReadFile(rel)
 	if err != nil {
 		return "", err
 	}
@@ -316,11 +385,16 @@ func fileSHA(root, name string) (string, error) {
 }
 
 func writeRel(root, name, body string) error {
-	path, err := joinWithin(root, name)
+	rel, err := cleanRel(name)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(body), 0o644)
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+	return r.WriteFile(rel, []byte(body), 0o644)
 }
 
 func cleanRel(name string) (string, error) {
@@ -334,22 +408,15 @@ func cleanRel(name string) (string, error) {
 	return clean, nil
 }
 
-func joinWithin(root, name string) (string, error) {
-	rel, err := cleanRel(name)
-	if err != nil {
-		return "", err
-	}
-	full := filepath.Join(root, rel)
-	root = filepath.Clean(root)
-	if full != root && !strings.HasPrefix(full, root+string(filepath.Separator)) {
-		return "", fmt.Errorf("path %q escapes the fixture", name)
-	}
-	return full, nil
-}
-
 func gitCmd(dir string, args ...string) (string, error) {
-	full := make([]string, 0, len(args)+4)
-	full = append(full, "-c", "core.hooksPath=/dev/null", "-c", "protocol.file.allow=always")
+	full := make([]string, 0, len(args)+8)
+	full = append(full,
+		"--no-optional-locks",
+		"-c", "core.hooksPath=/dev/null",
+		"-c", "core.fsmonitor=",
+		"-c", "diff.autoRefreshIndex=false",
+		"-c", "protocol.file.allow=always",
+	)
 	full = append(full, args...)
 	cmd := exec.Command("git", full...)
 	cmd.Dir = dir
@@ -375,6 +442,7 @@ func fixtureEnv() []string {
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_OPTIONAL_LOCKS=0",
 		"GIT_AUTHOR_NAME=synthetic",
 		"GIT_AUTHOR_EMAIL=synthetic@example.invalid",
 		"GIT_COMMITTER_NAME=synthetic",
@@ -387,30 +455,41 @@ func absOutside(dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	abs = filepath.Clean(abs)
-	info, err := os.Stat(abs)
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	resolved = filepath.Clean(resolved)
+	info, err := os.Lstat(resolved)
 	if err != nil {
 		return "", err
 	}
 	if !info.IsDir() {
 		return "", fmt.Errorf("%s is not a directory", dir)
 	}
-	if err := ensureOutsideWorktree(abs); err != nil {
+	if err := ensureOutsideWorktree(resolved); err != nil {
 		return "", err
 	}
-	return abs, nil
+	return resolved, nil
 }
 
 func ensureOutsideWorktree(abs string) error {
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	parent := filepath.Dir(abs)
+	cmd := exec.Command("git", "-C", parent, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=", "rev-parse", "--show-toplevel")
 	cmd.Env = fixtureEnv()
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil
+		if strings.Contains(string(out), "not a git repository") {
+			return nil
+		}
+		return fmt.Errorf("worktree guard failed closed for %s: %w (%s)", abs, err, strings.TrimSpace(string(out)))
 	}
-	top := filepath.Clean(strings.TrimRight(string(out), "\r\n"))
+	top := filepath.Clean(strings.TrimSpace(string(out)))
+	if resolved, err := filepath.EvalSymlinks(top); err == nil {
+		top = filepath.Clean(resolved)
+	}
 	if abs == top || strings.HasPrefix(abs, top+string(filepath.Separator)) {
-		return fmt.Errorf("%s is inside the source worktree", abs)
+		return fmt.Errorf("%s is inside a git worktree", abs)
 	}
 	return nil
 }
@@ -426,15 +505,19 @@ func requireEmpty(dir string) error {
 	return nil
 }
 
-func separate(a, b string) error {
-	if a == b {
+func separate(src, dst string) error {
+	if src == dst {
 		return errors.New("fixture directories must be separate")
 	}
-	if inside(a, b) {
+	if inside(src, dst) {
 		return errors.New("recipient fixture is inside the predecessor")
 	}
-	if inside(b, a) {
+	if inside(dst, src) {
 		return errors.New("predecessor fixture is inside the recipient")
+	}
+	gitDir := filepath.Join(src, ".git")
+	if dst == gitDir || inside(gitDir, dst) || inside(dst, gitDir) {
+		return errors.New("recipient fixture is inside the predecessor git directory")
 	}
 	return nil
 }
@@ -445,4 +528,130 @@ func inside(parent, child string) bool {
 		return false
 	}
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func requireHEAD(dir, head string) error {
+	got, err := gitCmd(dir, "rev-parse", "HEAD")
+	if err != nil {
+		return err
+	}
+	if got != head {
+		return fmt.Errorf("fixture HEAD %s does not match record head %s", got, head)
+	}
+	return nil
+}
+
+func guardRepo(dir string) error {
+	if err := plainGitDir(dir); err != nil {
+		return err
+	}
+	return localConfigAllowed(dir)
+}
+
+func plainGitDir(dir string) error {
+	info, err := os.Lstat(filepath.Join(dir, ".git"))
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return errors.New(".git is a symlink")
+	}
+	if !info.IsDir() {
+		return errors.New(".git is not a plain directory")
+	}
+	return nil
+}
+
+func localConfigAllowed(dir string) error {
+	out, err := gitCmd(dir, "config", "--local", "--list")
+	if err != nil {
+		return err
+	}
+	allowed := map[string]bool{
+		"core.repositoryformatversion": true,
+		"core.filemode":                true,
+		"core.bare":                    true,
+		"core.logallrefupdates":        true,
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" {
+			continue
+		}
+		key, _, ok := strings.Cut(line, "=")
+		if !ok || !allowed[strings.ToLower(key)] {
+			return fmt.Errorf("local git config %q is not allowed", key)
+		}
+	}
+	return nil
+}
+
+func hashGitIndex(dir string) (string, error) {
+	if err := plainGitDir(dir); err != nil {
+		return "", err
+	}
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = r.Close() }()
+	body, err := r.ReadFile(".git/index")
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func samePreservation(src, dst string, man manifest) error {
+	srcStatus, err := gitCmd(src, "status", "--porcelain=v1")
+	if err != nil {
+		return err
+	}
+	dstStatus, err := gitCmd(dst, "status", "--porcelain=v1")
+	if err != nil {
+		return err
+	}
+	srcCodes := parsePorcelain(srcStatus)
+	dstCodes := parsePorcelain(dstStatus)
+	srcRoot, err := os.OpenRoot(src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = srcRoot.Close() }()
+	dstRoot, err := os.OpenRoot(dst)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dstRoot.Close() }()
+	for _, entry := range man.Entries {
+		if srcCodes[entry.Path] != dstCodes[entry.Path] {
+			return fmt.Errorf("%s status %q does not match recipient %q", entry.Path, srcCodes[entry.Path], dstCodes[entry.Path])
+		}
+		srcInfo, err := srcRoot.Lstat(entry.Path)
+		if err != nil {
+			return err
+		}
+		dstInfo, err := dstRoot.Lstat(entry.Path)
+		if err != nil {
+			return err
+		}
+		if srcInfo.Mode().Perm() != dstInfo.Mode().Perm() {
+			return fmt.Errorf("%s mode %o does not match recipient %o", entry.Path, srcInfo.Mode().Perm(), dstInfo.Mode().Perm())
+		}
+		if entry.GitState == "untracked" {
+			continue
+		}
+		srcLine, err := gitCmd(src, "ls-files", "-s", "--", entry.Path)
+		if err != nil {
+			return err
+		}
+		dstLine, err := gitCmd(dst, "ls-files", "-s", "--", entry.Path)
+		if err != nil {
+			return err
+		}
+		if srcLine != dstLine {
+			return fmt.Errorf("%s index %q does not match recipient %q", entry.Path, srcLine, dstLine)
+		}
+	}
+	return nil
 }

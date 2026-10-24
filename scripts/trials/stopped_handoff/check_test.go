@@ -116,8 +116,20 @@ func TestReplayReconnectAndLateResult(t *testing.T) {
 		Kind: "delayed-running", Identity: "delay-1", SourceTime: "2026-10-23T23:09:00Z", Note: "synthetic delayed running",
 	})
 	delayedRes := mustCheck(t, delayed, 0)
-	if delayedRes.ExecutorState != "stopped" || !delayedRes.AcceptedStop || delayedRes.ResultCount != 0 || delayedRes.RecordedSuccessor != "" || !has(delayedRes.Refusals, "delayed running observation does not replace a verified stop or create another result") {
-		t.Fatalf("delayed %#v %s", delayedRes.Refusals, delayedRes.ExecutorState)
+	if delayedRes.ExecutorState != "stopped" || delayedRes.AcceptedStop || delayedRes.RestoreAuthorized || !delayedRes.BlockedCustody || delayedRes.ResultCount != 0 || delayedRes.RecordedSuccessor != "" || !strings.Contains(delayedRes.BlockedReason, reasonLaterObservation) || !has(delayedRes.Refusals, "delayed running observation does not replace a verified stop or create another result") {
+		t.Fatalf("delayed %#v %s stop %v", delayedRes.Refusals, delayedRes.BlockedReason, delayedRes.AcceptedStop)
+	}
+	if delayedRes.Holds[0] != "hold-synthetic-merge" || delayedRes.ConsumedBudget != "attempt-1" || delayedRes.Attempts != 1 || delayedRes.AuthorityRef != "authority-synthetic-1" {
+		t.Fatalf("delayed lost custody %#v", delayedRes)
+	}
+
+	stale := loadDoc(t)
+	stale.Events = append(stale.Events, event{
+		Kind: "delayed-running", Identity: "delay-old", SourceTime: "2026-10-23T22:30:00Z", Note: "synthetic stale running",
+	})
+	staleRes := mustCheck(t, stale, 0)
+	if !staleRes.AcceptedStop || !staleRes.RestoreAuthorized || staleRes.Outcome != "source-record-accepted" || !has(staleRes.Refusals, "delayed running observation does not replace a verified stop or create another result") {
+		t.Fatalf("stale running %#v %s", staleRes.Refusals, staleRes.BlockedReason)
 	}
 
 	reconn := loadDoc(t)
@@ -125,8 +137,8 @@ func TestReplayReconnectAndLateResult(t *testing.T) {
 		Kind: "reconnect", Identity: "re-1", SourceTime: "2026-10-23T23:09:30Z", Note: "synthetic reconnect",
 	})
 	reconnRes := mustCheck(t, reconn, 0)
-	if reconnRes.RecordedSuccessorCount != 0 || !has(reconnRes.Refusals, "reconnect does not create a successor or another result") {
-		t.Fatalf("reconnect %#v", reconnRes.Refusals)
+	if reconnRes.RecordedSuccessorCount != 0 || reconnRes.RestoreAuthorized || !reconnRes.BlockedCustody || !strings.Contains(reconnRes.BlockedReason, reasonLaterObservation) || !has(reconnRes.Refusals, "reconnect does not create a successor or another result") {
+		t.Fatalf("reconnect %#v %s", reconnRes.Refusals, reconnRes.BlockedReason)
 	}
 
 	late := loadDoc(t)
@@ -289,6 +301,49 @@ func TestPreflightIsSourcePresenceOnly(t *testing.T) {
 	}
 	if report.SourceCommit != strings.TrimSpace(string(out)) || report.SourcePresence != "checker-present" {
 		t.Fatalf("commit %s presence %s", report.SourceCommit, report.SourcePresence)
+	}
+}
+
+func TestCanonicalKeysAndStopOrder(t *testing.T) {
+	raw := string(mustRead(t, "testdata/source-accepted.json"))
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"executor-case", strings.Replace(raw, `"executorState": "stopped",`, `"executorState": "running", "ExecutorState": "stopped",`, 1), "not canonical"},
+		{"holds-case", strings.Replace(raw, `"holds": ["hold-synthetic-merge"],`, `"holds": ["hold-synthetic-merge"], "Holds": [],`, 1), "not canonical"},
+		{"unicode-synthetic", strings.Replace(raw, `"synthetic": true,`, `"synthetic": false, "ſynthetic": true,`, 1), "non-ASCII"},
+		{"taskclaim-case", strings.Replace(raw, `"taskClaim": "unchanged",`, `"taskClaim": "rewritten", "TASKCLAIM": "unchanged",`, 1), "not canonical"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.body == raw {
+				t.Fatal("replacement missed")
+			}
+			res, code := check([]byte(tc.body))
+			if code != 2 || res.TaskClaim != "unchanged" || res.RestoreAuthorized || !strings.Contains(res.Refusals[0], tc.want) {
+				t.Fatalf("code %d refusals %#v", code, res.Refusals)
+			}
+		})
+	}
+
+	later := authorizeSuccessor(loadDoc(t))
+	later.Events = append(later.Events, event{
+		Kind: "delayed-running", Identity: "run-1", SourceTime: "2026-10-24T01:00:00Z", Note: "running seen two hours after the verified stop",
+	})
+	laterRes := mustCheck(t, later, 0)
+	if laterRes.RestoreAuthorized || !laterRes.BlockedCustody || laterRes.AcceptedStop || laterRes.RecordedSuccessor != "" || laterRes.Holds[0] != "hold-synthetic-merge" {
+		t.Fatalf("later running %#v %s", laterRes.RecordedSuccessor, laterRes.BlockedReason)
+	}
+
+	early := authorizeSuccessor(loadDoc(t))
+	for i := range early.Events {
+		early.Events[i].SourceTime = "2026-10-23T22:00:00Z"
+	}
+	earlyRes := mustCheck(t, early, 0)
+	if earlyRes.RestoreAuthorized || earlyRes.RecordedSuccessor != "" || !strings.Contains(earlyRes.BlockedReason, reasonBeforeStop) || earlyRes.ConsumedBudget != "attempt-1" || earlyRes.Attempts != 1 {
+		t.Fatalf("early pickup %#v %s", earlyRes.RecordedSuccessor, earlyRes.BlockedReason)
 	}
 }
 
