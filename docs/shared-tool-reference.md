@@ -322,7 +322,12 @@ opwork show <id>
 
 - Prerequisite: the platform policy admits the OpenProject instance. The
   Dockerfile says that without that path the tool reports the tracker
-  unavailable. This task did not call the tracker.
+  unavailable. Before each API call, `request` calls `token()` in the pinned
+  client [`agent-api.py`](../images/agent/tools/openproject/agent-api.py),
+  which reads a dedicated token-only helper with `kubectl exec`. Successful
+  helper access from `full` and `workbench` is Unknown; these sources have
+  no dated evidence of that access. This task did not call the tracker or
+  the helper.
 - Proof: declared/configured. Not observed in this task. A historical
   successful search or show is Unknown in the sources read here.
 
