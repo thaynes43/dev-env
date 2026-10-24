@@ -312,6 +312,9 @@ func (s *Server) serve(rt route) http.Handler {
 			if err := coordinatorAllowed(c, rt.coordinator); err != nil {
 				return 0, err
 			}
+			if c.kind == kindPortalReader && (r.Method != http.MethodGet || r.URL.Path != apiv1.SessionsPath) {
+				return 0, forbidden("the portal reader may only list session summaries")
+			}
 			status, body, err := h(r.Context(), w, r, c)
 			if err != nil {
 				return 0, err

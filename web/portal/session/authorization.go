@@ -11,6 +11,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/thaynes43/dev-env/web/portal"
@@ -140,11 +141,18 @@ func allowedResource(r portal.Resource) bool {
 	if r.Project != "dev-env" || r.Environment != "internal" {
 		return false
 	}
-	switch r.Task {
-	case "", "120", "121", "122", "123", "178":
+	if r.Task == "" {
 		return true
 	}
-	return false
+	return canonicalWorkPackageID(r.Task)
+}
+
+func canonicalWorkPackageID(id string) bool {
+	if id == "" || len(id) > 18 || id[0] == '0' {
+		return false
+	}
+	n, err := strconv.Atoi(id)
+	return err == nil && n > 0 && strconv.Itoa(n) == id
 }
 
 // Token-walk the top-level object to reject duplicate security claims. Other
@@ -205,19 +213,10 @@ func (a *CurrentAuthorizer) AuthorizeRelease(ctx context.Context, p portal.Princ
 }
 
 func workPackageTask(id int) string {
-	switch id {
-	case 120:
-		return "120"
-	case 121:
-		return "121"
-	case 122:
-		return "122"
-	case 123:
-		return "123"
-	case 178:
-		return "178"
+	if id < 1 {
+		return ""
 	}
-	return "!denied"
+	return strconv.Itoa(id)
 }
 
 var _ portal.Authorizer = (*CurrentAuthorizer)(nil)

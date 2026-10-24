@@ -36,11 +36,18 @@ func TestProductionRejectsPartialMetadataAndCanaries(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	root := writeRuntimeDir(t, "SECRET-CANARY")
-	if err := os.WriteFile(filepath.Join(root, "secrets/OPENPROJECT_TOKEN"), []byte("op-token-canary\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "secrets/OPENPROJECT_TOKEN"), []byte("op token\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadProduction(root); !errors.Is(err, errProductionConfig) || strings.Contains(err.Error(), "SECRET-CANARY") {
-		t.Fatal("partial metadata mount or canary accepted")
+		t.Fatal("malformed task token was accepted")
+	}
+	independent := writeRuntimeDir(t, "SECRET-CANARY")
+	if err := os.WriteFile(filepath.Join(independent, "secrets/OPENPROJECT_TOKEN"), []byte("op-token-canary\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadProduction(independent); err != nil {
+		t.Fatal("tasks token without a sessions token was rejected")
 	}
 	broken := writeRuntimeDir(t, "SECRET-CANARY")
 	if err := os.WriteFile(filepath.Join(broken, "config/origin"), []byte("https://evil.example\n"), 0o600); err != nil {
@@ -381,7 +388,7 @@ func writeRuntimeDir(t *testing.T, password string) string {
 	files := map[string]string{
 		"config/origin": productionOrigin, "config/issuer": productionIssuer, "config/authorization-url": productionAuthorization,
 		"config/token-url": productionToken, "config/userinfo-url": productionUserInfo, "config/jwks-url": productionJWKS,
-		"config/openproject-base-url": openProjectBase, "config/operator-api-url": "https://operator.dev-env.svc",
+		"config/openproject-base-url": openProjectPortalOrigin, "config/operator-api-url": operatorPortalOrigin,
 		"config/admission-api-url": "https://kubernetes.default.svc", "config/admission-uid": "synthetic-admission-uid",
 		"config/admission-token-file": filepath.Join(root, "admission-token"), "config/auth-style": "header",
 		"config/login-ttl": "1m", "config/idle-ttl": "30m", "config/absolute-ttl": "1h", "config/fresh-for": "1m",

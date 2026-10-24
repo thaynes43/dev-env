@@ -29,6 +29,9 @@ const (
 	// kindSession is a session pod, by its projected token.
 	kindSession     callerKind = "session"
 	kindCoordinator callerKind = "coordinator"
+	// kindPortalReader is the default-off portal ServiceAccount. It is not a
+	// human, client, session, or coordinator.
+	kindPortalReader callerKind = "portal-reader"
 )
 
 // maxSessionDepth is the deepest a session may sit (DESIGN-001 3.4, "two levels
@@ -64,6 +67,9 @@ type Policy struct {
 	// Coordinators are separately configured host identities, never trusted Clients.
 	CoordinatorEnabled bool
 	Coordinators       []CoordinatorHost
+	// PortalReaderEnabled accepts only the portal ServiceAccount, and only for
+	// its session-summary read. Default off.
+	PortalReaderEnabled bool
 }
 
 // caller is an authenticated, classified caller.
@@ -116,6 +122,9 @@ func (s *Server) resolveCaller(ctx context.Context, id Identity) (*caller, error
 				return s.resolveCoordinator(ctx, id, host)
 			}
 		}
+	}
+	if s.Policy.PortalReaderEnabled && ref == portalReaderRef {
+		return s.resolvePortalReader(ctx, id)
 	}
 	return nil, forbidden("%s may not call this API: it is not Tom's, a client's or a session's ServiceAccount, and summoning callers (CallerPolicy) arrive in plan 10", ref)
 }

@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"bytes"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
@@ -17,6 +18,9 @@ import (
 //go:embed attention.html
 var pageSource string
 
+//go:embed views.html
+var viewsSource string
+
 //go:embed attention.css
 var pageStyle string
 
@@ -24,7 +28,8 @@ var (
 	exactHead     = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	contentPolicy = policy()
 	// Only the embedded, repository-owned CSS enters this template source.
-	pageTemplate = template.Must(template.New("attention").Parse(strings.Replace(pageSource, "/*PORTAL_STYLE*/", pageStyle, 1)))
+	pageTemplate  = template.Must(template.New("attention").Parse(strings.Replace(pageSource, "/*PORTAL_STYLE*/", pageStyle, 1)))
+	viewsTemplate = template.Must(template.New("views").Parse(strings.Replace(viewsSource, "/*PORTAL_STYLE*/", pageStyle, 1)))
 )
 
 func policy() string {
@@ -62,6 +67,32 @@ type groupView struct {
 	ID, Title, Count string
 	Rows             []rowView
 }
+type ProductField struct{ Label, Value string }
+type ProductRow struct {
+	Title, Link string
+	Fields      []ProductField
+}
+type ProductPage struct {
+	Title, Notice, ObservedAt string
+	Connected                 bool
+	Rows                      []ProductRow
+}
+
+func RenderProduct(page ProductPage) ([]byte, error) {
+	view := struct {
+		Policy, Title, Notice, ObservedAt string
+		Rows                              []ProductRow
+	}{Policy: strings.TrimSuffix(contentPolicy, "; frame-ancestors 'none'"), Title: page.Title, Notice: page.Notice, ObservedAt: page.ObservedAt}
+	if page.Connected {
+		view.Rows = page.Rows
+	}
+	var body bytes.Buffer
+	if err := viewsTemplate.Execute(&body, view); err != nil {
+		return nil, err
+	}
+	return body.Bytes(), nil
+}
+
 type pageView struct {
 	Policy, ObservedAt, Notice, Scope string
 	Groups                            []groupView

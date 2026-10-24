@@ -14,6 +14,8 @@ type AssemblyConfig struct {
 	Session    *Engine
 	Authorizer portal.Authorizer
 	Reader     portal.MetadataReader
+	Sessions   *SessionSource
+	Tasks      *TaskSource
 	FreshFor   time.Duration
 	Now        func() time.Time
 }
@@ -30,6 +32,10 @@ func NewAssembly(c AssemblyConfig) http.Handler {
 	return contained(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/auth/") {
 			c.Session.ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == SessionsPath || r.URL.Path == TasksPath {
+			serveProduct(w, c.Session.bind(r), c)
 			return
 		}
 		reads.ServeHTTP(w, c.Session.bind(r))

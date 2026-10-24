@@ -81,11 +81,7 @@ func LoadProduction(root string) (Runtime, error) {
 		}
 		return nil
 	}
-	if pinned("config/origin", productionOrigin) != nil || pinned("config/issuer", productionIssuer) != nil || pinned("config/authorization-url", productionAuthorization) != nil || pinned("config/token-url", productionToken) != nil || pinned("config/userinfo-url", productionUserInfo) != nil || pinned("config/jwks-url", productionJWKS) != nil || pinned("config/openproject-base-url", openProjectBase) != nil {
-		return Runtime{}, errProductionConfig
-	}
-	operatorURL, err := text("config/operator-api-url")
-	if err != nil {
+	if pinned("config/origin", productionOrigin) != nil || pinned("config/issuer", productionIssuer) != nil || pinned("config/authorization-url", productionAuthorization) != nil || pinned("config/token-url", productionToken) != nil || pinned("config/userinfo-url", productionUserInfo) != nil || pinned("config/jwks-url", productionJWKS) != nil || pinned("config/openproject-base-url", openProjectPortalOrigin) != nil || pinned("config/operator-api-url", operatorPortalOrigin) != nil {
 		return Runtime{}, errProductionConfig
 	}
 	admissionURL, err := text("config/admission-api-url")
@@ -190,7 +186,7 @@ func LoadProduction(root string) (Runtime, error) {
 	if err != nil || leaf.NotBefore.After(time.Now()) || !leaf.NotAfter.After(time.Now()) || !sanMatch(leaf, productionHost) {
 		return Runtime{}, errProductionConfig
 	}
-	meta, err := metadataSelection(root, operatorURL, openProjectCA, operatorCA)
+	sessions, tasks, err := productSources(root, openProjectCA, operatorCA)
 	if err != nil {
 		return Runtime{}, errProductionConfig
 	}
@@ -232,47 +228,44 @@ func LoadProduction(root string) (Runtime, error) {
 	if err != nil {
 		return Runtime{}, errProductionConfig
 	}
-	reader, err := newMetadataReader(meta, nil)
-	if err != nil {
-		return Runtime{}, errProductionConfig
-	}
 	closeStore = false
-	return Runtime{Handler: productionGate(NewAssembly(AssemblyConfig{Session: engine, Authorizer: authorizer, Reader: reader, FreshFor: freshFor, Now: time.Now}), productionHost), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}, NextProtos: []string{"http/1.1"}}, store: store}, nil
+	return Runtime{Handler: productionGate(NewAssembly(AssemblyConfig{Session: engine, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: sessions, Tasks: tasks, FreshFor: freshFor, Now: time.Now}), productionHost), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}, NextProtos: []string{"http/1.1"}}, store: store}, nil
 }
 
-func metadataSelection(root, operatorURL string, openProjectCA, operatorCA []byte) (metadataConfig, error) {
-	opPath := filepath.Join(root, "secrets/OPENPROJECT_TOKEN")
-	operatorPath := filepath.Join(root, "secrets/OPERATOR_TOKEN")
-	bindingPath := filepath.Join(root, "config/session-bindings.json")
-	opThere, err := mountedPresent(opPath)
+func productSources(root string, openProjectCA, operatorCA []byte) (*SessionSource, *TaskSource, error) {
+	sessions, err := optionalSessionSource(root, operatorCA)
 	if err != nil {
-		return metadataConfig{}, err
+		return nil, nil, err
 	}
-	operatorThere, err := mountedPresent(operatorPath)
+	tasks, err := optionalTaskSource(root, openProjectCA)
 	if err != nil {
-		return metadataConfig{}, err
+		return nil, nil, err
 	}
-	bindingThere, err := mountedPresent(bindingPath)
-	if err != nil {
-		return metadataConfig{}, err
+	return sessions, tasks, nil
+}
+
+func optionalSessionSource(root string, ca []byte) (*SessionSource, error) {
+	path := filepath.Join(root, "secrets/OPERATOR_TOKEN")
+	present, err := mountedPresent(path)
+	if err != nil || !present {
+		return nil, err
 	}
-	if opThere != operatorThere || opThere != bindingThere {
-		return metadataConfig{}, errProductionConfig
+	if _, err := operatorCredential(path, time.Now()); err != nil {
+		return nil, errProductionConfig
 	}
-	if !opThere {
-		return metadataConfig{now: time.Now, timeout: 5 * time.Second}, nil
+	return newSessionSource(path, ca, time.Now, nil)
+}
+
+func optionalTaskSource(root string, ca []byte) (*TaskSource, error) {
+	path := filepath.Join(root, "secrets/OPENPROJECT_TOKEN")
+	present, err := mountedPresent(path)
+	if err != nil || !present {
+		return nil, err
 	}
-	opToken, err := readBearerFile(opPath)
-	operatorToken, operatorErr := readBearerFile(operatorPath)
-	raw, rawErr := readMountedBytes(root, "config/session-bindings.json", 8192)
-	if err != nil || operatorErr != nil || rawErr != nil {
-		return metadataConfig{}, errProductionConfig
+	if _, err := readBearerFile(path); err != nil {
+		return nil, errProductionConfig
 	}
-	bindings, err := parseBindings(raw)
-	if err != nil {
-		return metadataConfig{}, errProductionConfig
-	}
-	return metadataConfig{enabled: true, openProjectCA: openProjectCA, operatorCA: operatorCA, openProjectToken: opToken, operatorToken: operatorToken, operatorBase: operatorURL, bindings: bindings, timeout: 5 * time.Second, now: time.Now}, nil
+	return newTaskSource(path, ca, time.Now, nil)
 }
 
 func parseBindings(raw []byte) (map[string]sessionBinding, error) {
