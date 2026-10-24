@@ -4,16 +4,22 @@
 <meta http-equiv="Content-Security-Policy" content="{{.Policy}}">
 <title>Attention · Source preview</title><style>/*PORTAL_STYLE*/</style></head>
 <body><main><header><p class="eyebrow">Dev-env · Read-only source foundation</p>
-<h1>Attention</h1><p>Who owns the next step, and when was it last verified?</p>
+<h1>Attention</h1><p class="lede">Who owns the next step, and when was it last verified?</p>
 <p class="notice"><strong>Source preview. No live adapter or actions supplied.</strong>
 Canonical workflow metadata supplies each group. Worker liveness and task outcome stay separate.</p>
-<p>Snapshot observed: <time datetime="{{.ObservedAt}}">{{.ObservedAt}}</time></p></header>
+<p class="observed">Snapshot observed: <time datetime="{{.ObservedAt}}">{{.ObservedAt}}</time></p></header>
 {{if .Notice}}<p class="notice" role="status">{{.Notice}}</p>{{end}}
+{{if .Scope}}<p class="scope">{{.Scope}}</p>{{end}}
 <div class="groups">{{range .Groups}}<section aria-labelledby="group-{{.ID}}">
 <h2 id="group-{{.ID}}">{{.Title}} · {{.Count}}</h2>
-{{range .Rows}}<article aria-labelledby="row-{{.ID}}"><h3 id="row-{{.ID}}">{{.Title}}</h3>
-<p class="freshness">{{.Freshness}}</p><dl>{{range .Fields}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl>
+{{if not .Rows}}{{if eq .Count "Unknown"}}<p class="group-state">Count for this group is Unknown.</p>{{else}}<p class="group-state">No items in this group.</p>{{end}}{{end}}
+{{range .Rows}}<article aria-labelledby="row-{{.ID}}" aria-describedby="fresh-{{.ID}}"><h3 id="row-{{.ID}}">{{.Title}}</h3>
+<div id="fresh-{{.ID}}"><p class="freshness">{{.Freshness}}</p></div>
+<dl class="primary">{{range .Primary}}<dt>{{.Label}}</dt><dd{{with .Class}} class="{{.}}"{{end}}>{{.Value}}</dd>{{end}}</dl>
 <a href="{{.Link}}" rel="noreferrer" aria-label="Open canonical record for {{.Title}} ({{.ID}})">Open canonical record</a>
+<details class="separate"><summary>{{.Summary}}</summary>
+<p class="separate-note">These facts stay separate. Worker exit, a review receipt, authority and release do not complete the task or queue an action.</p>
+<dl>{{range .Secondary}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl></details>
 </article>{{end}}</section>{{end}}</div>
 <footer>Source, tests, review, CI, release, installation and acceptance each need their own evidence.</footer>
 </main></body></html>

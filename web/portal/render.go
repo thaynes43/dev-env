@@ -53,18 +53,52 @@ func display(s string) string {
 	return strings.TrimSpace(s)
 }
 
-type field struct{ Label, Value string }
+type field struct{ Label, Value, Class string }
 type rowView struct {
-	ID, Title, Freshness, Link string
-	Fields                     []field
+	ID, Title, Freshness, Link, Summary string
+	Primary, Secondary                  []field
 }
 type groupView struct {
 	ID, Title, Count string
 	Rows             []rowView
 }
 type pageView struct {
-	Policy, ObservedAt, Notice string
-	Groups                     []groupView
+	Policy, ObservedAt, Notice, Scope string
+	Groups                            []groupView
+}
+
+func attentionFields(item Item, now time.Time) (primary, secondary []field, summary string) {
+	primary = []field{
+		{"Next action", display(item.NextAction), "next"},
+		{"Owner", display(item.Owner), ""},
+		{"Next actor", display(item.NextActor), ""},
+		{"Canonical source", "OpenProject #" + strconv.Itoa(item.WorkPackage), ""},
+		{"Source age", age(item.UpdatedAt, now), ""},
+		{"Source updated", evidenceMoment(item.UpdatedAt, now), ""},
+		{"Last verified", evidenceMoment(item.VerifiedAt, now), ""},
+	}
+	outcome := field{"Task outcome", display(item.TaskOutcome), ""}
+	liveness := field{"Worker liveness", display(item.WorkerState), ""}
+	review := field{"Review", display(item.ReviewState), ""}
+	head := field{"Reviewed head", display(item.ReviewHead), ""}
+	authority := field{"Authority", display(item.AuthorityState), ""}
+	release := field{"Release", display(item.ReleaseState), ""}
+	switch item.Group {
+	case ReviewReturned:
+		// Review and the reviewed head stay visible for this group.
+		primary = append(primary, review, head)
+		secondary = []field{outcome, liveness, authority, release}
+		summary = "Separate outcome, worker, authority and release"
+	case HandoffMissing:
+		// Worker exit and task outcome stay visible and separate for a missing handoff.
+		primary = append(primary, outcome, liveness)
+		secondary = []field{review, head, authority, release}
+		summary = "Separate review, authority and release"
+	default:
+		secondary = []field{outcome, liveness, review, head, authority, release}
+		summary = "Separate outcome, worker, review, authority and release"
+	}
+	return primary, secondary, summary
 }
 
 func makePage(s Snapshot, now time.Time, freshFor time.Duration) pageView {
@@ -74,16 +108,17 @@ func makePage(s Snapshot, now time.Time, freshFor time.Duration) pageView {
 		p.Notice = "Attention unknown. The read did not verify current task state."
 		return p
 	}
+	taskScoped := s.Resource.Task != ""
+	if taskScoped {
+		p.Scope = "One task. Other Attention groups are outside this page and are not verified empty."
+	}
 	listingFreshness := freshness(s.UpdatedAt, s.VerifiedAt, now, freshFor)
 	listingVerified := listingFreshness == "Verified within snapshot window"
 	if !listingVerified {
 		p.Notice = listingFreshness + ". Listing counts are not verified as current; current Attention contents are Unknown. Last verified: " + evidenceMoment(s.VerifiedAt, now)
 	}
-	if len(s.Items) == 0 {
-		if listingVerified {
-			p.Notice = "Verified empty: no Attention items in this authorized snapshot. Last verified: " + evidenceMoment(s.VerifiedAt, now)
-		}
-		return p
+	if len(s.Items) == 0 && listingVerified {
+		p.Notice = "Verified empty: no Attention items in this authorized snapshot. Last verified: " + evidenceMoment(s.VerifiedAt, now)
 	}
 	for _, group := range []struct {
 		id    Group
@@ -94,23 +129,20 @@ func makePage(s Snapshot, now time.Time, freshFor time.Duration) pageView {
 			if item.Group != group.id {
 				continue
 			}
+			primary, secondary, summary := attentionFields(item, now)
 			g.Rows = append(g.Rows, rowView{
 				ID: item.Resource.Task, Title: display(item.Title),
 				Freshness: freshness(item.UpdatedAt, item.VerifiedAt, now, freshFor),
 				Link:      "https://work.haynesnetwork.com/work_packages/" + strconv.Itoa(item.WorkPackage),
-				Fields: []field{
-					{"Canonical source", "OpenProject #" + strconv.Itoa(item.WorkPackage)},
-					{"Owner", display(item.Owner)}, {"Next actor", display(item.NextActor)}, {"Next action", display(item.NextAction)},
-					{"Task outcome", display(item.TaskOutcome)}, {"Worker liveness", display(item.WorkerState)},
-					{"Review", display(item.ReviewState)}, {"Reviewed head", display(item.ReviewHead)},
-					{"Authority", display(item.AuthorityState)}, {"Release", display(item.ReleaseState)},
-					{"Source age", age(item.UpdatedAt, now)}, {"Source updated", evidenceMoment(item.UpdatedAt, now)}, {"Last verified", evidenceMoment(item.VerifiedAt, now)},
-				},
+				Summary:   summary, Primary: primary, Secondary: secondary,
 			})
 		}
 		g.Count = "Unknown"
 		if listingVerified {
 			g.Count = strconv.Itoa(len(g.Rows))
+		}
+		if taskScoped && len(g.Rows) == 0 {
+			continue
 		}
 		p.Groups = append(p.Groups, g)
 	}
