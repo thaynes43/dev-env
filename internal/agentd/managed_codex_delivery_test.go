@@ -123,7 +123,7 @@ func TestManagedCodexDeliveryActualTTY(t *testing.T) {
 			}
 			received.WriteByte(one[0])
 			if strings.HasSuffix(received.String(), "\x1b[201~\r") || strings.HasSuffix(received.String(), "\x1b[201~\n") {
-				if err := os.WriteFile(path, []byte(received.String()), 0o600); err != nil {
+				if err := publishCompletedFixtureReceipt(path, []byte(received.String())); err != nil {
 					t.Fatal(err)
 				}
 				return
@@ -173,6 +173,35 @@ func TestManagedCodexDeliveryActualTTY(t *testing.T) {
 	if err != nil || !strings.HasPrefix(string(data), "\x1b[200~") || !strings.HasSuffix(string(data), "\x1b[201~\r") || !strings.Contains(string(data), answer) {
 		t.Fatal("actual native terminal did not receive the exact bounded bracketed paste and one Enter")
 	}
+}
+
+// publishCompletedFixtureReceipt puts the finished bytes in a same-directory
+// sibling and renames that sibling to path after close. The final name is
+// absent until the payload is complete, and the sibling keeps mode 0600.
+func publishCompletedFixtureReceipt(path string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = f.Close()
+			_ = os.Remove(tmp)
+		}
+	}()
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 func waitFixtureFile(t *testing.T, ctx context.Context, path string) {
