@@ -155,7 +155,7 @@ export DEV_ENV_SHARED_GUARD_CHECKOUT="$dest"
 nice -n 19 python3 -O -B -m unittest discover -s scripts/delivery -p 'test_*.py' -v
 ```
 
-Hosted CI checks out that same commit with `actions/checkout` and sets `DEV_ENV_SHARED_GUARD_CHECKOUT`. The wrapper itself takes `--shared-checkout` and does not read that variable.
+That checkout has to be a complete copy of the commit, including the helper blob. The commands above are. A blobless or sparse partial clone does not have the objects the dirty-helper test clones, and the tests will not fetch the missing objects. Hosted CI checks out that same commit with `actions/checkout` (`fetch-depth: 1`, no sparse filter) and sets `DEV_ENV_SHARED_GUARD_CHECKOUT`. The wrapper itself takes `--shared-checkout` and does not read that variable.
 
 The evidence file is a coordinator attestation. It does not grant authority. Required fields are exact: repository `thaynes43/dev-env`, the pull request number, `reviewedCommit` equal to the delivered head, `nativeVerdict` of `PASS` or `PASS-with-minors`, every finding `resolved` or `not-applicable` with a concrete reason, `scopeAuthorization.scope` of `source-only`, `pendingHolds` as an empty array, `writableImplementer` as boolean false, and a `receipt` hash plus source for the original native result. Unknown required values refuse. Zero and false must be those JSON types. Do not put provider, model, tokens, or other secrets in the file. The audit records `nativeEvidenceProvenance` and `configurationProvenance` as `Unknown`.
 
