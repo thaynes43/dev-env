@@ -305,3 +305,14 @@ handoff keeps worker liveness and task outcome visible. A single-task page
 does not present the other groups as verified empty. Offline browser checks
 are one checker run at a time, bound to a source-head manifest, and remain
 synthetic presentation evidence, not device, authentication or Gate A acceptance.
+
+### M6 same-connection recovery source, 2026-10-23
+
+After accepted PR 529 merge `d4d21ef9`, the sole fresh source successor implements
+transaction-bound exact incarnation admission and the [M6 recovery contract](../../../reports/portal178-m6/README.md).
+Fixed external ConfigMap GETs carry no per-session Kubernetes state or mutation
+power. Measured identity must belong to the actual SQL transaction, with exact
+UID/RV snapshot checks around commit. Runtime remains 503. Disposable asynchronous
+failover/RBAC/latency evidence, final-head native review and required CI must be
+recorded separately; live admission RBAC and DB/auth/isolation/Gate A and shared
+Authentik logging remain external gates. UI/infra/Future121 ownership is unchanged.

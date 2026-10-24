@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/oauth2"
+
 	"github.com/thaynes43/dev-env/web/portal"
 )
 
@@ -115,5 +117,59 @@ func TestIssuerItselfCannotBeIPOrLocalhost(t *testing.T) {
 				t.Fatal("unsafe issuer accepted")
 			}
 		})
+	}
+}
+
+func TestIssuerClientRejectsRevokeAndIntrospectWithoutHTTP(t *testing.T) {
+	calls := 0
+	base := tripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		t.Fatal("rejected issuer path made a request")
+		return nil, portal.ErrUnavailable
+	})
+	issuer := "https://issuer.example/application/o/dev-env-v2-portal/"
+	for _, path := range []string{"/application/o/revoke/", "/application/o/introspect/", "/application/o/introspect", "/application/o/dev-env-v2-portal/revoke/", "/application/o/Revoke/"} {
+		client, err := NewIssuerHTTPClient(issuer, map[string]string{"https://issuer.example" + path: "POST"}, base, time.Second, 64)
+		if !errors.Is(err, portal.ErrUnavailable) || client != nil {
+			t.Fatalf("issuer client accepted %s", path)
+		}
+	}
+	if calls != 0 {
+		t.Fatal("revoke or introspect configuration sent HTTP")
+	}
+}
+
+func TestCodeClientPinsAuthentikTokenPath(t *testing.T) {
+	calls := 0
+	base := tripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		t.Fatal("token path check made a request")
+		return nil, portal.ErrUnavailable
+	})
+	issuer := "https://issuer.example/application/o/dev-env-v2-portal/"
+	token := "https://issuer.example/application/o/token/"
+	allowed := map[string]string{
+		token: "POST",
+		"https://issuer.example/application/o/authorize/": "POST",
+		"https://issuer.example/token":                    "POST",
+	}
+	client, err := NewIssuerHTTPClient(issuer, allowed, base, time.Second, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseCfg := CodeConfig{Issuer: issuer, ClientID: "synthetic-client", ClientSecret: "fixture-only-not-a-credential", Callback: "https://portal.example/auth/callback", AuthorizationURL: "https://issuer.example/application/o/authorize/", TokenURL: token, AuthStyle: oauth2.AuthStyleInHeader, HTTPClient: client}
+	if _, err := NewCodeClient(baseCfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"https://issuer.example/application/o/authorize/", "https://issuer.example/token", "https://issuer.example/application/o/revoke/", "https://issuer.example/application/o/introspect/"} {
+		cfg := baseCfg
+		cfg.TokenURL = bad
+		got, err := NewCodeClient(cfg)
+		if !errors.Is(err, portal.ErrUnavailable) || got != nil {
+			t.Fatalf("token URL %s accepted", bad)
+		}
+	}
+	if calls != 0 {
+		t.Fatal("token path configuration sent HTTP")
 	}
 }

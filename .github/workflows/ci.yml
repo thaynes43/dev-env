@@ -361,13 +361,18 @@ jobs:
             --entrypoint /usr/bin/nice dev-env-git-wait:ci \
             -n 19 python3 /opt/dev-env/trials/checks/check-git-wait-image.py
 
-  # The one required check. Skipped jobs (the image jobs on push, the agent image
-  # when it did not change) are fine; failed or cancelled ones are not.
+  # Reuse the real PostgreSQL proof; its result is part of the required gate.
+  portal-postgres:
+    name: Portal PostgreSQL gate
+    uses: ./.github/workflows/portal-session-postgres.yml
+
+  # The one required check. Skipped optional image jobs are permitted.
   success:
     name: CI - Success
     if: always()
     needs:
       - changes
+      - portal-postgres
       - lint
       - test
       - build

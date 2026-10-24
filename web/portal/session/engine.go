@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
+	"golang.org/x/time/rate"
 
 	"github.com/thaynes43/dev-env/web/portal"
 )
@@ -25,12 +26,9 @@ const LandingPath = "/portal/projects/dev-env/environments/internal/attention"
 type Config struct {
 	Origin, Callback string
 	// All durations are explicit source configuration, not production defaults.
-	// M3 has no activity/touch operation: IdleTTL is the fixed server lifetime
-	// from creation. AbsoluteTTL currently determines cookie expiry; with
-	// IdleTTL <= AbsoluteTTL its later server check cannot decide independently.
-	// A reviewed activity path and new tests are prerequisites for sliding idle
-	// behavior or an independently deciding absolute lifetime. Polling never
-	// extends a deadline.
+	// IdleTTL is a fixed lifetime from creation. Polling never extends it.
+	// Cookie/session expiry is capped by both configured lifetimes and the
+	// signed access-token deadline. Sliding activity requires separate review.
 	LoginTTL, IdleTTL, AbsoluteTTL time.Duration
 	Now                            func() time.Time
 	Store                          Store
@@ -39,6 +37,7 @@ type Config struct {
 }
 
 type Engine struct {
+	loginAdmission     *rate.Limiter
 	config             Config
 	host, issuerOrigin string
 	codeBinding        CodeBinding
@@ -61,7 +60,7 @@ func New(c Config) (*Engine, error) {
 	if err != nil || endpoint.Host != issuer.Host || binding.Issuer != c.Verifier.issuer || binding.ClientID != c.Verifier.clientID || binding.Callback != c.Callback {
 		return nil, portal.ErrUnavailable
 	}
-	return &Engine{config: c, host: origin.Host, issuerOrigin: issuer.Scheme + "://" + issuer.Host, codeBinding: binding}, nil
+	return &Engine{loginAdmission: rate.NewLimiter(rate.Every(time.Second), 4), config: c, host: origin.Host, issuerOrigin: issuer.Scheme + "://" + issuer.Host, codeBinding: binding}, nil
 }
 
 func randomHandle() (string, Handle, error) {
@@ -197,6 +196,13 @@ func (e *Engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (e *Engine) begin(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawQuery != "" || r.URL.ForceQuery {
 		authFailure(w, portal.ErrDenied)
+		return
+	}
+	// A single bounded limiter per engine, not a map keyed by attacker addresses.
+	// Under the proposed two-replica ceiling: burst 8, sustained 2 login starts/sec.
+	// A restart cannot bypass the independent shared-store cardinality ceiling.
+	if e.loginAdmission == nil || !e.loginAdmission.AllowN(e.config.Now(), 1) {
+		authFailure(w, portal.ErrUnavailable)
 		return
 	}
 	handle, key, err := randomHandle()
@@ -391,3 +397,11 @@ func authHeaders(w http.ResponseWriter) {
 
 // Compile-time interface proof; request headers never select the principal.
 var _ portal.Authenticator = (*Engine)(nil)
+
+func (sessionReference) String() string     { return "[redacted portal session reference]" }
+func (r sessionReference) GoString() string { return r.String() }
+
+func (Config) String() string     { return "[redacted portal engine config]" }
+func (c Config) GoString() string { return c.String() }
+func (Engine) String() string     { return "[redacted portal engine]" }
+func (e Engine) GoString() string { return e.String() }

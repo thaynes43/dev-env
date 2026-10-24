@@ -1,4 +1,4 @@
-# Portal session runtime contract (M5B, Story178)
+# Portal session runtime contract (M5B, Story 178)
 
 Source direction: PORTAL178-M5B-SESSION-RUNTIME-20261023-01, extending
 DESIGN-029 and accepted M3. This document amends M3's token-discard and
@@ -27,31 +27,21 @@ The shared postgres16 cluster's min/max synchronous replica settings are both
 zero. Local synchronous_commit does **not** prove acknowledged-write survival
 after promotion. A missing DELETE/revoke or login consumption could resurrect
 authority. A generation inside the restored DB, a restart or process-local flag
-does not fix this. The store therefore requires a fresh external RecoveryFence
-check before and after each operation and before each response's authorization.
-No approved cross-replica witness implementation exists in this source change.
-Runtime construction remains unavailable. Offline injected witnesses prove the
-protocol's rejection behavior, not live failover durability.
+does not fix this. The M6 source implementation therefore binds the external RecoveryFence to the
+actual acquired `pgx.Tx`, measures the exact PostgreSQL incarnation before
+session-table SQL, and requires an identical fresh witness snapshot immediately
+before and after COMMIT. The [M6 recovery contract](../.agents/reports/portal178-m6/README.md)
+specifies the fixed ConfigMap, trusted direct GET, strict record and UID/RV pin.
+No observer/controller or cached generation can open admission. Runtime remains 503;
+source implementation and disposable protocol evidence do not satisfy live gates.
 
-Proposed recovery procedure, requiring independent source/config/authority review:
-
-1. A separately durable, strongly consistent external witness owns generation
-   and primary incarnation. Fence access on promotion, restoration, uncertain
-   lineage or loss of the witness; all BFF replicas must consult it freshly.
-   Before opening any new primary, change the independent generation and prove
-   no replica can authorize the old generation. This must cover the interval
-   before the application notices failover; a post-failover manual rotation alone
-   cannot close that interval.
-2. Keep runtime unavailable while proving the witness closes that race under
-   partition, failover and restored backups. Do not change the shared CNPG
-   replication/backup policy to make a fixture pass.
-3. After a reviewed recovery, rotate SESSION_GENERATION outside DB backup,
-   distribute it consistently to every replica and the witness, invalidate both
-   session and pending-login generations, and require fresh sign-in. Verify old
-   cookies and callback transactions deny even if old rows are restored.
-4. Record exact runtime/config heads, old/new lineage proofs without secret
-   values, acknowledged-write test results and negative Gate A evidence before
-   releasing the fence. A mounted static generation alone is insufficient.
+Existing recovery owner must explicitly close admission before logical restore
+into an unchanged server or witness/control-plane restore. Those operations may
+preserve all measured PostgreSQL fields and are not automatically detectable.
+After recovery, independently rotate both SESSION_AEAD_KEY and SESSION_GENERATION
+through the approved server-side secret path. Never restore either old authority
+or reuse a generation from backup. Measure the new primary and CAS-open its exact
+incarnation; the runtime has no write access to the admission object.
 
 ## Concrete provisioning proposal — not granted or applied
 
@@ -135,7 +125,10 @@ introspection or old ID/access-token claims cannot substitute. The future
 provider-local mapping must evaluate active status and direct membership of the
 privately pinned existing Admins UUID, preserve normal sub/profile and shared
 mappings, and undergo separate haynes-ops review. No UUID is in this document.
-Current client foundation PR4246 does not implement that mapping.
+Infrastructure PR4246/4257 and actual role/provider acceptance are separately owned.
+The source verifier allows only asymmetric signing algorithms; deployed Authentik
+must pin the reviewed RSA signer/RS256 and leave JWE encryption disabled. HS256
+and unsigned downgrade negatives do not select or provision a provider key.
 
 Request-private session references bind authorization to the exact handle and
 token. A second healthy session of the same subject cannot mask a revoked one.
@@ -144,7 +137,14 @@ against 120/121/122/123/178, then repeat session and live UserInfo authorization
 after rendering and immediately before releasing the buffered response. Errors,
 redirects, missing/malformed/wrong-typed/duplicate booleans and wrong sub deny.
 
-Local logout needs no IdP. Actual IdP session deletion, disable and token revoke
+Local logout needs no IdP. The code client accepts only `/application/o/token/`
+on the configured issuer host, the Authentik 2026.8 token endpoint. Issuer HTTP
+configuration rejects any allowlisted path with a `revoke` or `introspect`
+segment. No revoke, introspection, refresh, or end-session call is added, and
+logout stays a local durable DELETE. Adding `end-session` to that reject list
+remains optional and is not part of this source; no new IdP call is introduced.
+This pin is source configuration, not a
+live provider request or a shared Authentik change. Actual IdP session deletion, disable and token revoke
 must deny in live Gate A using disposable identities; cookie disappearance alone
 is not immediate token revocation. Do not alter Tom's real Admins membership.
 The live metadata adapter remains unavailable: only OP haynes-engineering GET
@@ -175,23 +175,79 @@ dependency check, not complete advisory or production security acceptance.
 Only pgx/pool's small pgpassfile/pgservicefile/puddle dependency closure is new;
 no existing module is downgraded or upgraded.
 
-The dedicated hosted CI service runs a digest-pinned official PostgreSQL16,
-two independent runtime connection pools, real migrations, AEAD payloads,
-concurrent callback consumption, durable cross-pool revoke/logout, actual
-verified TLS, role grants/HBA negatives and restore-shaped SQL fixtures.
-It uses synthetic identities and ephemeral TLS material only. No live service,
-grant, image build or Tom membership mutation is involved. The external witness
-in this test is explicitly synthetic. A postcommit witness-loss fixture proves
-that a durable write may still produce an unavailable caller result; it does
-not simulate a lost network COMMIT acknowledgment or a real CNPG promotion.
-Absent PORTAL_TEST_DATABASE_URL explicitly skips DB proof locally; hosted CI
-must run the integration suite without that skip before source acceptance.
+The hosted disposable suite now uses production `postgresPoolConfig`, including
+verified TLS, RuntimeParams and read-write ValidateConnect, for runtime pools.
+It checks exact SQLSTATE 42501 / HBA 28000 and x509 classes, SET ROLE/TRUNCATE denial,
+database-clock expiry, bounded cleanup/cardinality, two app pools and real physical
+asynchronous promotion with acknowledged DELETE loss and an unchanged witness.
+The [fixed recovery helper](../scripts/trials/portal_recovery/README.md) is hosted
+only and never targets production. The required `CI - Success` directly depends
+on the reusable PostgreSQL job; a separate advisory/standalone success cannot
+substitute. A disposable envtest checks proposed named-GET-only RBAC in the ordinary
+required make-test job. A local run without `PORTAL_REQUIRE_DISPOSABLE_PROOF` skips a missing disposable
+database or failover input. The hosted PostgreSQL job sets that variable in the
+environment of the "Focused actual PostgreSQL and authorization tests" step, so
+the `go test` process sees it. A missing database or failover input then fails
+that step. The same variable on an earlier step does not reach this process.
+
+Login starts have one constant-size per-engine limiter: burst 4, one start/second;
+under a two-replica ceiling this is burst 8/two starts per second. The shared store
+serializes insert admission across replicas using transaction advisory locks,
+with waits bounded by the operation deadline. Each table caps at 256 rows and deletes
+at most 32 expired rows per insertion, without UPDATE/admin grants. No function privilege is added: the normal runtime
+role must prove EXECUTE on the advisory-lock function in disposable/live acceptance.
+A held insert advisory lock does not lock logout, revoke, or callback DELETE
+statements, including while an insertion waits for its pre-commit witness GET.
+That lock independence is not same-replica availability. The pool has two
+connections, so two inserts can hold both, and a revoke on that replica then
+waits for a connection until the operation deadline and can return unavailable.
+The hosted overlap fixture revokes through a separate pool. Deadlines bound the
+wait, and there is no retry.
+These source bounds are conservative admission limits, not measured production
+capacity or an SLO; deployment replicas, retention policy, real API latency and
+legitimate-flow proof must be accepted before activation.
+
+A successful store operation requires three fresh admission GETs. Current handler
+composition makes seven protected store reads (21 GETs) and two current UserInfo
+calls per Attention response; the hosted fixture asserts that exact count and
+reports serial GET/full-request latency. There is no automatic background polling,
+retry or cached allow. Two in-flight GETs per fence and two SQL connections per
+pool bound concurrency. Keep automatic browser polling disabled until live API
+budget evidence supports a frequency and replica/client ceiling. Loopback fixture
+latency cannot establish a live control-plane load budget.
+
+Each fence also checks a token bucket before it takes a concurrency slot and
+before any witness GET. The trusted per-replica ceiling is 30 GETs/second with
+burst 57: the measured 21 GETs for one protected read per second, plus the
+measured 9 GETs for the existing one login per second, with burst covering one
+protected read plus the login burst of four (21 + 4x9). Two replicas are 60
+GETs/second and burst 114 because each replica has its own fence. Configuration
+must be finite and positive and cannot exceed that ceiling. Zero is unavailable,
+not unlimited. A lower budget is allowed. An over-budget GET returns unavailable
+and is not retried or sent. This is a source admission ceiling from those counts
+and the existing login, replica, and pool plan. Ingress rate limiting remains an
+extra layer.
+
+These budget facts are activation inputs. They do not add another limit.
+A forged session cookie that misses spends one witness GET, the check before
+session SQL, and returns before the later rechecks. About thirty such requests
+per second can exhaust one fence. Protected reads then return unavailable.
+Logout needs the current session read plus revocation, about six GETs when both
+complete. While the budget is exhausted, logout returns unavailable. A logout
+that fails before revocation commits clears neither the cookie nor the row.
+Per-client ingress limits stay a Gate A activation input.
+The pre-commit and post-commit witness reads take separate tokens. Under budget
+pressure a write can commit and then be reported unavailable. That is the
+existing uncertain-commit result: discard it and do not replay it. A login
+callback in that state has already consumed its pending login.
+The 30/57 ceiling is per fence. Calling it per replica assumes exactly one
+fence per process. The 60/114 two-replica figure assumes exactly two replicas.
+Runtime wiring does not exist and does not enforce either assumption.
 
 Focused commands: Go1.27.2, GOTOOLCHAIN=local, GOMAXPROCS=2, nice -n 19,
 `go test -p 1 ./web/portal/...` and `go vet -p 1 ./web/portal/...`.
-No suite loops, load tests or local container builds. Retention/cleanup,
-deployment rate/connection limits and live failover/network-ack testing remain
-reviewed activation prerequisites. Root journal1091 narrows runtime SQL rights
-to SELECT/INSERT/DELETE; no UPDATE or Touch path exists. Consumed/revoked rows
-are deleted; the engine always generates new random handles rather than reusing
-a consumed/revoked handle. INSERT collisions cannot replace any existing row.
+Hosted disposable session tests run under `-race` with the same CPU/package bounds.
+No suite loops, load tests or local container builds. Root journal1091 narrows
+runtime SQL rights to SELECT/INSERT/DELETE; no UPDATE or Touch path exists.
+INSERT collisions cannot replace existing rows. Live role, witness RBAC, DB/auth,
+shared Authentik secret-safe logging, proxy/isolation and Gate A remain held.

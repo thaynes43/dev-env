@@ -91,6 +91,9 @@ func (a *CurrentAuthorizer) Authorize(ctx context.Context, p portal.Principal, r
 	if err != nil || response == nil || response.Body == nil {
 		return portal.ErrUnavailable
 	}
+	if response.StatusCode >= 500 || response.StatusCode == http.StatusTooManyRequests {
+		return portal.ErrUnavailable
+	}
 	if response.StatusCode != http.StatusOK {
 		return portal.ErrDenied
 	}
@@ -208,3 +211,8 @@ func workPackageTask(id int) string {
 }
 
 var _ portal.Authorizer = (*CurrentAuthorizer)(nil)
+
+func (CurrentAuthorizationConfig) String() string     { return "[redacted portal authorization config]" }
+func (c CurrentAuthorizationConfig) GoString() string { return c.String() }
+func (CurrentAuthorizer) String() string              { return "[redacted portal authorizer]" }
+func (a CurrentAuthorizer) GoString() string          { return a.String() }

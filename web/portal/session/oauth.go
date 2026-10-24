@@ -30,9 +30,24 @@ type OAuthCodeClient struct {
 	issuer string
 }
 
+// Authentik 2026.8 serves the provider token endpoint at this issuer-host path.
+// UserInfo remains /application/o/userinfo/. Revoke and introspect are never called.
+const authentikTokenPath = "/application/o/token/"
+
+func rejectedIssuerPath(path string) bool {
+	for _, segment := range strings.Split(strings.Trim(path, "/"), "/") {
+		switch strings.ToLower(segment) {
+		case "revoke", "introspect":
+			return true
+		}
+	}
+	return false
+}
+
 // NewCodeClient selects a confidential code-only flow, with no offline scope,
 // refresh operation or dynamic endpoint discovery. Secret material must be
 // supplied later by reviewed server-side configuration, never a browser/header.
+// TokenURL must be the reviewed Authentik token path. Logout stays local.
 func NewCodeClient(c CodeConfig) (*OAuthCodeClient, error) {
 	issuer, err := configuredURL(c.Issuer)
 	if err != nil {
@@ -50,7 +65,7 @@ func NewCodeClient(c CodeConfig) (*OAuthCodeClient, error) {
 	if err != nil {
 		return nil, portal.ErrUnavailable
 	}
-	if auth.Host != issuer.Host || token.Host != issuer.Host || callback.Path != "/auth/callback" || !identityText(c.ClientID) || c.ClientSecret == "" || c.HTTPClient == nil || (c.AuthStyle != oauth2.AuthStyleInHeader && c.AuthStyle != oauth2.AuthStyleInParams) {
+	if auth.Host != issuer.Host || token.Host != issuer.Host || token.Path != authentikTokenPath || callback.Path != "/auth/callback" || !identityText(c.ClientID) || c.ClientSecret == "" || c.HTTPClient == nil || (c.AuthStyle != oauth2.AuthStyleInHeader && c.AuthStyle != oauth2.AuthStyleInParams) {
 		return nil, portal.ErrUnavailable
 	}
 	transport, ok := c.HTTPClient.Transport.(*issuerTransport)
@@ -159,7 +174,7 @@ func NewIssuerHTTPClient(issuer string, allowed map[string]string, base http.Rou
 	copyAllowed := make(map[string]string, len(allowed))
 	for raw, method := range allowed {
 		target, err := configuredURL(raw)
-		if err != nil || target.Host != u.Host || (method != "GET" && method != "POST") {
+		if err != nil || target.Host != u.Host || (method != "GET" && method != "POST") || rejectedIssuerPath(target.Path) {
 			return nil, portal.ErrUnavailable
 		}
 		copyAllowed[raw] = method
@@ -197,3 +212,8 @@ func (t *issuerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	response.Body = io.NopCloser(bytes.NewReader(data))
 	return response, nil
 }
+
+func (CodeConfig) String() string          { return "[redacted portal code config]" }
+func (c CodeConfig) GoString() string      { return c.String() }
+func (OAuthCodeClient) String() string     { return "[redacted portal code client]" }
+func (c OAuthCodeClient) GoString() string { return c.String() }
