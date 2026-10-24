@@ -141,7 +141,9 @@ Local logout needs no IdP. The code client accepts only `/application/o/token/`
 on the configured issuer host, the Authentik 2026.8 token endpoint. Issuer HTTP
 configuration rejects any allowlisted path with a `revoke` or `introspect`
 segment. No revoke, introspection, refresh, or end-session call is added, and
-logout stays a local durable DELETE. This pin is source configuration, not a
+logout stays a local durable DELETE. Adding `end-session` to that reject list
+remains optional and is not part of this source; no new IdP call is introduced.
+This pin is source configuration, not a
 live provider request or a shared Authentik change. Actual IdP session deletion, disable and token revoke
 must deny in live Gate A using disposable identities; cookie disappearance alone
 is not immediate token revocation. Do not alter Tom's real Admins membership.
@@ -183,8 +185,10 @@ only and never targets production. The required `CI - Success` directly depends
 on the reusable PostgreSQL job; a separate advisory/standalone success cannot
 substitute. A disposable envtest checks proposed named-GET-only RBAC in the ordinary
 required make-test job. A local run without `PORTAL_REQUIRE_DISPOSABLE_PROOF` skips a missing disposable
-database or failover input. The hosted PostgreSQL workflow sets that variable,
-and the same missing input then fails the job.
+database or failover input. The hosted PostgreSQL job sets that variable in the
+environment of the "Focused actual PostgreSQL and authorization tests" step, so
+the `go test` process sees it. A missing database or failover input then fails
+that step. The same variable on an earlier step does not reach this process.
 
 Login starts have one constant-size per-engine limiter: burst 4, one start/second;
 under a two-replica ceiling this is burst 8/two starts per second. The shared store
@@ -223,6 +227,22 @@ not unlimited. A lower budget is allowed. An over-budget GET returns unavailable
 and is not retried or sent. This is a source admission ceiling from those counts
 and the existing login, replica, and pool plan. Ingress rate limiting remains an
 extra layer.
+
+These budget facts are activation inputs. They do not add another limit.
+A forged session cookie that misses spends one witness GET, the check before
+session SQL, and returns before the later rechecks. About thirty such requests
+per second can exhaust one fence. Protected reads then return unavailable.
+Logout needs the current session read plus revocation, about six GETs when both
+complete. While the budget is exhausted, logout returns unavailable. A logout
+that fails before revocation commits clears neither the cookie nor the row.
+Per-client ingress limits stay a Gate A activation input.
+The pre-commit and post-commit witness reads take separate tokens. Under budget
+pressure a write can commit and then be reported unavailable. That is the
+existing uncertain-commit result: discard it and do not replay it. A login
+callback in that state has already consumed its pending login.
+The 30/57 ceiling is per fence. Calling it per replica assumes exactly one
+fence per process. The 60/114 two-replica figure assumes exactly two replicas.
+Runtime wiring does not exist and does not enforce either assumption.
 
 Focused commands: Go1.27.2, GOTOOLCHAIN=local, GOMAXPROCS=2, nice -n 19,
 `go test -p 1 ./web/portal/...` and `go vet -p 1 ./web/portal/...`.

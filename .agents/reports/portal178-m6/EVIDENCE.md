@@ -29,6 +29,11 @@ limits and an approved request budget. These loopback samples establish request
 count/protocol behavior, not a live throughput/SLO or control-plane capacity.
 The source ceiling derived from the recorded 21 and 9 GET counts is 30
 GETs/second per replica, burst 57, and it is checked before a witness request.
+Activation inputs, with no added limit: unauthenticated cookie misses share that
+budget and can make logout unavailable; a committed write can be reported
+unavailable when the post-commit read is over budget; one fence per process and
+two replicas for the 60/114 figure are assumptions until runtime wiring exists.
+Rejecting an end-session path stays optional. No new IdP call was added.
 
 Still unavailable: live witness/RBAC and effective runtime role, DB/auth/provider,
 shared Authentik secret-safe logging, proxy/isolation/metadata boundary and Gate A.

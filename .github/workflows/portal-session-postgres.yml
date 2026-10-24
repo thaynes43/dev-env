@@ -39,7 +39,6 @@ jobs:
       - name: Enable disposable verified TLS and role-scoped HBA
         env:
           PORTAL_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
-          PORTAL_REQUIRE_DISPOSABLE_PROOF: "1"
         run: |
           umask 077
           mkdir "$RUNNER_TEMP/portal-tls"
@@ -69,6 +68,7 @@ jobs:
         env:
           GOTOOLCHAIN: local
           GOMAXPROCS: '2'
+          PORTAL_REQUIRE_DISPOSABLE_PROOF: "1"
           PORTAL_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
         run: |
           export PORTAL_TEST_DATABASE_URL="postgres://postgres:synthetic-ci-admin-only@localhost:5432/dev_env_v2_portal?sslmode=verify-full&sslrootcert=$RUNNER_TEMP/portal-tls/server.crt"

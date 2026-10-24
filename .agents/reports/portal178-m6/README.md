@@ -52,18 +52,26 @@ Non-positive, non-finite, or above-ceiling configuration is unavailable. Loopbac
 latency is not treated as live capacity.
 
 The code client token URL is only `/application/o/token/`. Issuer HTTP
-configuration rejects `revoke` and `introspect` paths. The hosted PostgreSQL
-workflow sets `PORTAL_REQUIRE_DISPOSABLE_PROOF=1`, so a missing database or
-failover input fails instead of skipping. The same acquired SQL connection,
-pre-commit witness, and post-commit witness recheck are unchanged.
+configuration rejects `revoke` and `introspect` paths. Rejecting `end-session`
+as well remains optional and is not added; no new IdP call is introduced.
+The hosted PostgreSQL go-test step sets `PORTAL_REQUIRE_DISPOSABLE_PROOF=1`
+in that step's environment, so a missing database or failover input fails
+the test process instead of skipping. A value set only on an earlier step
+does not. The same acquired SQL connection, pre-commit witness, and
+post-commit witness recheck are unchanged. Unauthenticated cookie misses can
+exhaust the shared witness budget and make logout unavailable. A committed
+write can still be reported unavailable when the post-commit read is over
+budget. One fence per process, and two replicas for the 60/114 figure, are
+activation assumptions, not enforced wiring.
 
 Local evidence so far: official Go 1.27.2 archive checksum verified, compiler
 binary SHA256 `548d3c32f83fa81152f543eb1526be7884cfe0526eb5e9ce29d3eca14786e7e0`.
 Focused portal tests and vet pass; selected transaction/current-membership
 `-race` passes. Local PostgreSQL explicitly skips without a disposable DB. The focused API RBAC
 test passed against a locally provisioned disposable Kubernetes 1.35 API server. Hosted interim results are in [EVIDENCE.md](EVIDENCE.md); fresh final-head CI and
-independent native review remain pending. A Python YAML parser is not
-installed locally; workflow acceptance is checked by GitHub and source review.
+independent native review remain pending. A Go test parses this workflow with
+the existing `sigs.k8s.io/yaml` module and requires the proof variable in the
+go-test process environment. Valid YAML alone does not prove that placement.
 
 References: PostgreSQL 16 [control/WAL functions](https://www.postgresql.org/docs/16/functions-admin.html)
 and [LOCK privileges](https://www.postgresql.org/docs/16/sql-lock.html);

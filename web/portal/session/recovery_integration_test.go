@@ -99,7 +99,7 @@ func recoveryControl(t *testing.T, action string) {
 
 func testDisposableAsyncFailover(t *testing.T, admin *pgxpool.Pool, a, b *PostgresStore) {
 	t.Helper()
-	requireHostedProof(t, os.Getenv("GITHUB_ACTIONS") != "true" || os.Getenv("PORTAL_POSTGRES_CONTAINER") == "", "hosted disposable physical failover not configured; no failover proof")
+	requireHostedProof(t, hostedFailoverInputMissing(), "hosted disposable physical failover not configured; no failover proof")
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	login := Login{State: strings.Repeat("s", 43), Nonce: strings.Repeat("n", 43), Verifier: strings.Repeat("v", 43), ExpiresAt: now.Add(5 * time.Minute)}

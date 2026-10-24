@@ -20,9 +20,10 @@ import (
 	"github.com/thaynes43/dev-env/web/portal"
 )
 
-// Hosted CI sets PORTAL_REQUIRE_DISPOSABLE_PROOF. A missing database then fails
-// the job. A local run without that variable still skips. This suite refuses
-// non-loopback DBs and uses disposable identities. A skip is not DB evidence.
+// The hosted go-test step sets PORTAL_REQUIRE_DISPOSABLE_PROOF. A missing
+// database then fails that process. A local run without that variable still
+// skips. This suite refuses non-loopback DBs and uses disposable identities.
+// A skip is not DB evidence.
 func integrationPools(t *testing.T) (*pgxpool.Pool, *PostgresStore, *PostgresStore, *fixtureFence) {
 	t.Helper()
 	dsn := os.Getenv("PORTAL_TEST_DATABASE_URL")
@@ -449,6 +450,10 @@ func hostedProofDisposition(requireProof, missing bool) string {
 		return "fail"
 	}
 	return "skip"
+}
+
+func hostedFailoverInputMissing() bool {
+	return os.Getenv("GITHUB_ACTIONS") != "true" || os.Getenv("PORTAL_POSTGRES_CONTAINER") == ""
 }
 
 func requireHostedProof(t *testing.T, missing bool, reason string) {
