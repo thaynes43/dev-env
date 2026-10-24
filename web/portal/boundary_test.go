@@ -735,3 +735,29 @@ func TestReviewReturnedShowsHeadBeforeDisclosure(t *testing.T) {
 		t.Fatal("review disclosure name missing")
 	}
 }
+
+func TestUnknownSourceFactsDoNotInventAnAttentionGroup(t *testing.T) {
+	d := dependencies()
+	when := fixtureNow.Add(-time.Minute)
+	d.Reader = readFunc(func(_ context.Context, r Resource) (Snapshot, error) {
+		return Snapshot{Resource: r, State: Unknown, UpdatedAt: when, VerifiedAt: fixtureNow, Items: []Item{{
+			Resource: Resource{Project: r.Project, Environment: r.Environment, Task: "task-one"}, WorkPackage: 178,
+			Title: "Synthetic subject", Owner: "synthetic-session", WorkerState: "Running", UpdatedAt: when, VerifiedAt: fixtureNow,
+		}}}, nil
+	})
+	body := response(d, "GET", attentionPath).Body.String()
+	if !strings.Contains(body, "Attention unknown") || !strings.Contains(body, "Synthetic subject") || !strings.Contains(body, "synthetic-session") || !strings.Contains(body, "<dt>Worker liveness</dt><dd>Running</dd>") || !strings.Contains(body, "<dt>Task outcome</dt><dd>Unknown</dd>") || !strings.Contains(body, "https://work.haynesnetwork.com/work_packages/178") {
+		t.Fatal("source facts missing")
+	}
+	if strings.Contains(body, "Needs you ·") || strings.Contains(body, "Verified empty") {
+		t.Fatal("unknown source facts became an Attention group")
+	}
+	d.Reader = readFunc(func(_ context.Context, r Resource) (Snapshot, error) {
+		return Snapshot{Resource: r, State: Unknown, Items: []Item{{
+			Resource: Resource{Project: r.Project, Environment: r.Environment, Task: "task-one"}, WorkPackage: 178, Group: NeedsYou, Title: "Synthetic subject",
+		}}}, nil
+	})
+	if response(d, "GET", attentionPath).Code != http.StatusServiceUnavailable {
+		t.Fatal("unknown snapshot with an Attention group was rendered")
+	}
+}

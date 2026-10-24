@@ -1,5 +1,7 @@
 # Portal session boundary: M3 source contract
 
+**M6 assembly:** the executable wires this engine. Unconfigured `NewRuntimeAssembly` stays unavailable. The 2026-10-24 item correction in the runtime contract supersedes proposed v2 1Password item names.
+
 **M5B amendment:** [the runtime contract](portal-session-runtime.md) supersedes
 M3's access-token discard/UserInfo prohibition and cookie-only absolute expiry
 description for the reviewed M5B source. The exact session now retains an

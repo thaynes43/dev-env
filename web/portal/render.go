@@ -65,6 +65,8 @@ type groupView struct {
 type pageView struct {
 	Policy, ObservedAt, Notice, Scope string
 	Groups                            []groupView
+	// Facts are source rows whose Attention group is not supplied. They are not a fifth group.
+	Facts []rowView
 }
 
 func attentionFields(item Item, now time.Time) (primary, secondary []field, summary string) {
@@ -106,6 +108,15 @@ func makePage(s Snapshot, now time.Time, freshFor time.Duration) pageView {
 	p := pageView{Policy: strings.TrimSuffix(contentPolicy, "; frame-ancestors 'none'"), ObservedAt: moment(now)}
 	if s.State == Unknown {
 		p.Notice = "Attention unknown. The read did not verify current task state."
+		for _, item := range s.Items {
+			primary, secondary, summary := attentionFields(item, now)
+			p.Facts = append(p.Facts, rowView{
+				ID: item.Resource.Task, Title: display(item.Title),
+				Freshness: freshness(item.UpdatedAt, item.VerifiedAt, now, freshFor),
+				Link:      "https://work.haynesnetwork.com/work_packages/" + strconv.Itoa(item.WorkPackage),
+				Summary:   summary, Primary: primary, Secondary: secondary,
+			})
+		}
 		return p
 	}
 	taskScoped := s.Resource.Task != ""

@@ -46,6 +46,8 @@ on:
     paths:
       - 'images/operator/**'
       - 'images/codex-login/**'
+      - 'images/portal/**'
+      - 'web/portal/**'
       - 'images/THIRD_PARTY.md'
       - 'LICENSE'
       - 'cmd/**'
@@ -83,6 +85,9 @@ jobs:
           - name: codex-login
             image: dev-env-codex-login
             dockerfile: images/codex-login/Dockerfile
+          - name: portal
+            image: dev-env-portal
+            dockerfile: images/portal/Dockerfile
     # workflow_dispatch can be started on any branch; only main publishes.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest

@@ -226,7 +226,14 @@ func validSnapshot(s Snapshot, requested Resource) bool {
 		return false
 	}
 	if s.State != Verified && len(s.Items) != 0 {
-		return false
+		if s.State != Unknown {
+			return false
+		}
+		for _, item := range s.Items {
+			if item.Group != "" || item.NextActor != "" || item.NextAction != "" || item.TaskOutcome != "" || item.ReviewState != "" || item.ReviewHead != "" || item.AuthorityState != "" || item.ReleaseState != "" {
+				return false
+			}
+		}
 	}
 	if requested.Task != "" && s.State == Verified && len(s.Items) != 1 {
 		return false
@@ -238,7 +245,7 @@ func validSnapshot(s Snapshot, requested Resource) bool {
 			return false
 		}
 		seen[r.Task] = true
-		if !knownGroup(item.Group) || item.WorkPackage < 1 || item.WorkPackage > 999999999 {
+		if item.WorkPackage < 1 || item.WorkPackage > 999999999 || (s.State == Verified && !knownGroup(item.Group)) || (s.State == Unknown && item.Group != "") {
 			return false
 		}
 		if item.ReviewHead != "" && !exactHead.MatchString(item.ReviewHead) {

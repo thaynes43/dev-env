@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"time"
 
@@ -32,6 +33,10 @@ type CurrentAuthorizer struct {
 }
 
 func NewCurrentAuthorizer(c CurrentAuthorizationConfig) (*CurrentAuthorizer, error) {
+	return newCurrentAuthorizer(c, nil)
+}
+
+func newCurrentAuthorizer(c CurrentAuthorizationConfig, dial func(context.Context, string, string) (net.Conn, error)) (*CurrentAuthorizer, error) {
 	issuer, err := configuredURL(c.Issuer)
 	if err != nil {
 		return nil, portal.ErrUnavailable
@@ -55,6 +60,11 @@ func NewCurrentAuthorizer(c CurrentAuthorizationConfig) (*CurrentAuthorizer, err
 	t.MaxResponseHeaderBytes = 16 * 1024
 	t.TLSHandshakeTimeout = c.Timeout
 	t.ResponseHeaderTimeout = c.Timeout
+	// The exported constructor passes a nil dial and still rejects a caller DialContext.
+	// Tests supply a dial only after those checks. TLS name and roots stay pinned.
+	if dial != nil {
+		t.DialContext = dial
+	}
 	return &CurrentAuthorizer{issuer: c.Issuer, subject: c.Subject, endpoint: c.UserInfoURL, store: c.Store, now: c.Now, client: &http.Client{Transport: t, Timeout: c.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
