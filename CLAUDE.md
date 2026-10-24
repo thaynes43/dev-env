@@ -170,6 +170,7 @@ scripts/trials/native_lifecycle_profile/  renders the isolated native lifecycle 
 scripts/trials/pilot_rendezvous/  default-off bounded existing-CLI pilot gate/one-dispatch harness; offline injected checks
 scripts/trials/workflow_handoff/  offline coordinator handoff checker; validates one bounded record and prints the next manual action; does not dispatch, grant, or write tracker state
 scripts/trials/stopped_handoff/  offline synthetic stopped-handoff fixture driver; validates one record and local git fixtures only; does not dispatch, stop a live executor, or change a TaskClaim
+scripts/delivery/        source-only wrapper for the pinned haynes-ops delivery guard; verifies that checkout, then invokes it once; no reconcile, release, or deployment
 images/THIRD_PARTY.md    what each published image bundles and under which license; update it with the Dockerfiles.
                          It and LICENSE are copied into both images, whose license directories CI checks (#55)
 Makefile                 generate, check-generated, check-layout, lint, test, envtest, build, build-agent-run-darwin, tools

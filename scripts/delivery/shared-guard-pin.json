@@ -1,0 +1,10 @@
+{
+  "schema": "dev-env.shared-guard-pin/v1",
+  "repository": "thaynes43/haynes-ops",
+  "commit": "63f6b2a5fc54cde0f3df4b0a8456320f7ae12285",
+  "path": "scripts/upgrade-agent/deliver_reviewed_pr.py",
+  "sha256": "1e451ca00c80d176d8f08a142f40cb491b94e8936610389e7c61137db90a21e0",
+  "sourcePR": 4284,
+  "reviewedHead": "61fc2ebb71302442eab762f0b9a243fdbd7eab6b",
+  "provenance": "Unknown"
+}
