@@ -299,6 +299,15 @@ func verifyFixture(root string, man manifest) error {
 	if err := guardRepo(abs); err != nil {
 		return err
 	}
+	if err := refuseReplaceRefs(abs); err != nil {
+		return err
+	}
+	if err := refuseLocalAttributes(abs); err != nil {
+		return err
+	}
+	if err := refuseWholeIndexFlags(abs); err != nil {
+		return err
+	}
 	status, err := gitCmd(abs, "status", "--porcelain=v1")
 	if err != nil {
 		return err
@@ -411,9 +420,62 @@ func refuseIndexFlags(dir, path string) error {
 	if !ok || name != path || len(tag) != 1 {
 		return fmt.Errorf("%s index record %q is not a single tag", path, out)
 	}
-	flag := tag[0]
-	if flag == 'S' || flag == 's' || (flag >= 'a' && flag <= 'z') {
+	if indexFlagUnsupported(tag[0]) {
 		return fmt.Errorf("refusing index flag %q for %s before any restore write", tag, path)
+	}
+	return nil
+}
+
+func refuseWholeIndexFlags(dir string) error {
+	out, err := gitCmd(dir, "ls-files", "-v", "-z")
+	if err != nil {
+		return err
+	}
+	for _, rec := range strings.Split(out, "\x00") {
+		if rec == "" {
+			continue
+		}
+		if len(rec) < 3 || rec[1] != ' ' {
+			return fmt.Errorf("index record %q is not a single tag", rec)
+		}
+		path := rec[2:]
+		if indexFlagUnsupported(rec[0]) {
+			return fmt.Errorf("refusing index flag %q for %s before any restore write", rec[:1], path)
+		}
+	}
+	return nil
+}
+
+func indexFlagUnsupported(flag byte) bool {
+	return flag == 'S' || (flag >= 'a' && flag <= 'z')
+}
+
+func refuseReplaceRefs(dir string) error {
+	out, err := gitCmd(dir, "for-each-ref", "--format=%(refname)", "refs/replace")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(out) != "" {
+		return fmt.Errorf("refusing replace refs before any restore write")
+	}
+	return nil
+}
+
+func refuseLocalAttributes(dir string) error {
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+	info, err := r.Lstat(".git/info/attributes")
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > 0 {
+		return fmt.Errorf("refusing local git attributes before any restore write")
 	}
 	return nil
 }
@@ -706,6 +768,7 @@ func fixtureEnv() []string {
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_OPTIONAL_LOCKS=0",
+		"GIT_NO_REPLACE_OBJECTS=1",
 		"GIT_AUTHOR_NAME=synthetic",
 		"GIT_AUTHOR_EMAIL=synthetic@example.invalid",
 		"GIT_COMMITTER_NAME=synthetic",
@@ -830,19 +893,20 @@ func localConfigAllowed(dir string) error {
 	if err != nil {
 		return err
 	}
-	allowed := map[string]bool{
-		"core.repositoryformatversion": true,
-		"core.filemode":                true,
-		"core.bare":                    true,
-		"core.logallrefupdates":        true,
+	allowed := map[string]string{
+		"core.repositoryformatversion": "0",
+		"core.filemode":                "true",
+		"core.bare":                    "false",
+		"core.logallrefupdates":        "true",
 	}
 	for _, line := range strings.Split(out, "\n") {
 		if line == "" {
 			continue
 		}
-		key, _, ok := strings.Cut(line, "=")
-		if !ok || !allowed[strings.ToLower(key)] {
-			return fmt.Errorf("local git config %q is not allowed", key)
+		key, value, ok := strings.Cut(line, "=")
+		want, known := allowed[strings.ToLower(key)]
+		if !ok || !known || value != want {
+			return fmt.Errorf("local git config %q is not allowed", line)
 		}
 	}
 	return nil
