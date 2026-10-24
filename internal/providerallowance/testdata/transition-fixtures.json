@@ -1,0 +1,90 @@
+{
+  "status": "proposed acceptance inputs/expectations; NOT executed collector transitions",
+  "scenarios": [
+    {
+      "id": "last-good-failed-attempt",
+      "input": "good capturedT1/providerT0; read failsT2; GETT3",
+      "expected": "lastGood staysT1/T0; lastAttemptT2 error; servedAtT3 only; no freshness laundering"
+    },
+    {
+      "id": "passed-reset",
+      "input": "known window resetsT2; nowT3; no new source",
+      "expected": "historical value retained; current expired/Unknown, not used0 or remaining100"
+    },
+    {
+      "id": "sparse-event",
+      "input": "complete meterT1 then reset-only eventT2",
+      "expected": "retain completeT1 and partialT2 separately; no invented complete hybrid or freshening"
+    },
+    {
+      "id": "exact-replay",
+      "input": "same producer/incarnation/binding/observation ID and payload twice",
+      "expected": "one immutable record; original received/captured times; no double count"
+    },
+    {
+      "id": "conflicting-replay",
+      "input": "same idempotency key two payloads",
+      "expected": "conflict/quarantine; neither arrival wins; advice suppressed"
+    },
+    {
+      "id": "out-of-order",
+      "input": "sequence2 arrives before sequence1",
+      "expected": "retain both; sequence1 cannot replace newer compatible view merely by receipt time"
+    },
+    {
+      "id": "source-order-unknown",
+      "input": "different producers equal-time conflicting readings",
+      "expected": "conflict/Unknown, not array-order winner"
+    },
+    {
+      "id": "account-change",
+      "input": "generation1 accountA followed by generation2 accountB",
+      "expected": "no merge/sum; old scoped cache/cursor invalidated; no account guess"
+    },
+    {
+      "id": "shared-pool",
+      "input": "verified single entitlementE aliases Cursor/Grok",
+      "expected": "one pool once; no double-count; unverified relationship stays unresolved"
+    },
+    {
+      "id": "legacy-and-bucket",
+      "input": "Codex same legacy projection plus codex bucket",
+      "expected": "aliases one observation projection, not additive allowance"
+    },
+    {
+      "id": "reset-credit-details",
+      "input": "availableCount0; details excluded/unknown",
+      "expected": "count0 retained; details null/unknown, not an empty known list"
+    },
+    {
+      "id": "restart",
+      "input": "durable lastGood and conflict store reopened",
+      "expected": "original times/values/conflict preserved; service restart does not imply provider refresh"
+    },
+    {
+      "id": "read-scope",
+      "input": "caller authenticated but no explicit account binding",
+      "expected": "deny; no unauthorized rows/ETag or provider request"
+    },
+    {
+      "id": "retention-and-page",
+      "input": "synthetic test profile historyLimit2/pageLimit1; three records",
+      "expected": "bounded history plus retained lastGood; no silent completeness; scoped snapshot paging; limit+1 refusal"
+    },
+    {
+      "id": "provider-outage",
+      "input": "healthy local store, provider auth/throttle/unconfigured",
+      "expected": "readiness remains local; HTTP200 explicit provider status/lastGood, not collector503"
+    },
+    {
+      "id": "ui-outage",
+      "input": "portal stopped; HTTP/CLI fixture consumer runs",
+      "expected": "identical canonical DTO from independent collector; no browser dependency"
+    },
+    {
+      "id": "denied-source",
+      "input": "private Cursor native gap or provider refusal",
+      "expected": "source unavailable; Story193 held, no auth extraction/private fallback/inference"
+    }
+  ]
+}

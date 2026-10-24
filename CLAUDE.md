@@ -146,6 +146,7 @@ internal/claudelogin/    the keeper-owned Claude login ceremony (Story110 T09 in
 internal/tokenfile/      bounded reads of rotating projected bearer-token files
 internal/projectcatalog/ parses and validates the GitOps project catalog and its per-task snapshot; no filesystem or network authority
 internal/projectsync/    agentd's bounded, model-free GitOps project management (`agentd project-sync|project-refresh`): actor, API, receipt
+internal/providerallowance/  typed providerallowance.v1 observation and providerallowance.read.v1 cached-read contract: strict decode, caller-supplied trust, and derivation checks; no collector, adapter, storage, or network
 internal/projectcanary/  validates the two finite operator-owned project rule canaries and binds a session to one
 internal/projectcanary/testutil/  synthetic canary fixtures for tests
 internal/commonrules/    retains the common instruction inputs (common text, Codex header) bound to an enabled managed task
