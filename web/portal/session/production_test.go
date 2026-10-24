@@ -216,12 +216,12 @@ func openProjectHandler(t *testing.T, hits *pathList) http.Handler {
 	t.Helper()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.add(r.URL.RequestURI())
-		if r.Header.Get("Authorization") != "Bearer op-token-canary" || !strings.HasPrefix(r.URL.Path, "/api/v3/projects/haynes-engineering/work_packages/") {
+		if r.Header.Get("Authorization") != "Bearer op-token-canary" || !strings.HasPrefix(r.URL.Path, "/api/v3/work_packages/") || strings.Contains(r.URL.Path, "/projects/") {
 			http.NotFound(w, r)
 			return
 		}
-		id := strings.TrimPrefix(r.URL.Path, "/api/v3/projects/haynes-engineering/work_packages/")
-		body, _ := json.Marshal(map[string]any{"id": json.RawMessage(id), "subject": "Synthetic subject", "updatedAt": time.Now().UTC().Format(time.RFC3339), "description": map[string]string{"raw": "SECRET-DESCRIPTION"}})
+		id := strings.TrimPrefix(r.URL.Path, "/api/v3/work_packages/")
+		body, _ := json.Marshal(map[string]any{"id": json.RawMessage(id), "subject": "Synthetic subject", "updatedAt": time.Now().UTC().Format(time.RFC3339), "description": map[string]string{"raw": "SECRET-DESCRIPTION"}, "_links": map[string]any{"project": map[string]string{"href": "/api/v3/projects/haynes-engineering"}}})
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(body)
 	})
@@ -246,7 +246,7 @@ func operatorHandler(t *testing.T, hits *pathList) http.Handler {
 			return
 		}
 		task := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1/task-claims/claim-"), "/")
-		if !strings.HasPrefix(r.URL.Path, "/v1/task-claims/claim-") {
+		if !strings.HasPrefix(r.URL.Path, "/v1/task-claims/claim-") || r.URL.RawQuery != "project=dev-env" {
 			http.NotFound(w, r)
 			return
 		}
@@ -306,7 +306,7 @@ func writeRuntimeDir(t *testing.T, password string) string {
 		"secrets/OIDC_CLIENT_ID": productionClientID, "secrets/OIDC_CLIENT_SECRET": "fixture-only-not-a-credential",
 		"secrets/DB_USERNAME": productionDBUser, "secrets/DB_PASSWORD": password,
 		"secrets/SESSION_AEAD_KEY": base64.StdEncoding.EncodeToString(make([]byte, 32)), "secrets/SESSION_GENERATION": strings.Repeat("g", 32),
-		"secrets/PORTAL_SUBJECT": "SUBJECT-CANARY",
+		"config/subject": "SUBJECT-CANARY",
 	}
 	for name, value := range files {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(value+"\n"), 0o600); err != nil {

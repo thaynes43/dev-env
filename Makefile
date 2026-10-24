@@ -24,7 +24,9 @@ export CGO_ENABLED := 0
 
 BIN_DIR := $(CURDIR)/bin
 TOOLS_DIR := $(BIN_DIR)/tools
-BINARIES := agent-run agentd dev-env-keeper dev-env-operator dev-env-portal
+# The portal binary is build-portal, not this list. The agent image runs make build
+# after copying only api, cmd, and internal, so a portal entry here breaks that image.
+BINARIES := agent-run agentd dev-env-keeper dev-env-operator
 
 # Stamped into every binary (internal/version). VERSION is the release tag; there
 # is none before release-please's first release (B4). COMMIT stays empty here
@@ -109,7 +111,12 @@ ENVTEST_USE = $(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(ENVTEST_DI
 ENVTEST_WRITABLE = chmod -R u+w $(ENVTEST_DIR)
 
 .PHONY: build
-build: $(addprefix $(BIN_DIR)/,$(BINARIES)) ## Build every binary into bin/ and check that agent-run is static and small.
+build: $(addprefix $(BIN_DIR)/,$(BINARIES)) ## Build every shared binary into bin/ and check that agent-run is static and small.
+
+.PHONY: build-portal
+build-portal: ## Build only the portal BFF. The agent and operator images do not run this target.
+	@mkdir -p $(BIN_DIR)
+	$(NICE) $(GO) build -p $(GO_PARALLELISM) -trimpath -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/dev-env-portal ./cmd/dev-env-portal
 	@$(GO) version -m $(BIN_DIR)/agent-run | grep -q 'CGO_ENABLED=0' \
 		|| { echo "bin/agent-run was not built with CGO_ENABLED=0 (D-06)"; exit 1; }
 	@if $(GO) version -m $(BIN_DIR)/agent-run | grep -E '^\s+dep\s+(k8s\.io|sigs\.k8s\.io)/'; then \

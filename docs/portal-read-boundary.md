@@ -43,7 +43,7 @@ session exit is executor evidence, never the task outcome or release state.
 
 Attention group, task outcome, next action and review facts are supplied by
 canonical workflow metadata. This package does not infer transitions or replace
-#177. Until that accepted interface is available, use `UnavailableReader`. The production executable's metadata reader is separate: it GETs only OpenProject work packages 120, 121, 122, 123, and 178 and the configured dev-env session summaries. A match still renders Unknown, because this reader does not invent Attention groups. Missing tokens or bindings return unavailable. The preview command stays on its fixtures.
+#177. Until that accepted interface is available, use `UnavailableReader`. The production executable's metadata reader is separate: it GETs `/api/v3/work_packages/{id}` for 120, 121, 122, 123, and 178, requires the haynes-engineering project representation, and reads `GET /v1/sessions?repo=dev-env` plus `GET /v1/task-claims/{name}?project=dev-env`. A match still renders Unknown, because this reader does not invent Attention groups. Missing tokens or bindings return unavailable. The preview command stays on its fixtures.
 Task outcome, worker liveness, review, authority and release are displayed
 separately. Canonical links are constructed from validated numeric work-package
 IDs at one fixed HTTPS origin; no imported URL becomes a link.

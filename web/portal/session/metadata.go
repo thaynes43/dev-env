@@ -127,7 +127,10 @@ func (m *metadataReader) validate(ctx context.Context, tasks []string) error {
 
 func (m *metadataReader) one(ctx context.Context, task string, sessions []operatorSession) error {
 	binding := m.bindings[task]
-	body, err := m.get(ctx, m.openProject, openProjectBase+"/api/v3/projects/haynes-engineering/work_packages/"+task, m.openProjectToken, metadataLimit)
+	// opwork.Client.wp reads GET /api/v3/work_packages/{id}. The project-nested
+	// single-id path is not that interface. haynes-engineering is the project
+	// identifier used by that client, proven here from the representation.
+	body, err := m.get(ctx, m.openProject, openProjectBase+"/api/v3/work_packages/"+task, m.openProjectToken, metadataLimit)
 	if err != nil {
 		return portal.ErrUnavailable
 	}
@@ -135,8 +138,18 @@ func (m *metadataReader) one(ctx context.Context, task string, sessions []operat
 		ID        json.RawMessage `json:"id"`
 		Subject   string          `json:"subject"`
 		UpdatedAt string          `json:"updatedAt"`
+		Links     struct {
+			Project struct {
+				Href string `json:"href"`
+			} `json:"project"`
+		} `json:"_links"`
+		Embedded struct {
+			Project struct {
+				Identifier string `json:"identifier"`
+			} `json:"project"`
+		} `json:"_embedded"`
 	}
-	if json.Unmarshal(body, &page) != nil || !bytes.Equal(bytes.TrimSpace(page.ID), []byte(task)) || !identityText(page.Subject) {
+	if json.Unmarshal(body, &page) != nil || !bytes.Equal(bytes.TrimSpace(page.ID), []byte(task)) || !identityText(page.Subject) || !haynesEngineering(page.Links.Project.Href, page.Embedded.Project.Identifier) {
 		return portal.ErrUnavailable
 	}
 	if _, err := time.Parse(time.RFC3339, page.UpdatedAt); err != nil {
@@ -153,7 +166,8 @@ func (m *metadataReader) one(ctx context.Context, task string, sessions []operat
 	if matched != 1 || summary.Repo != "dev-env" || !identityText(summary.Phase) {
 		return portal.ErrUnavailable
 	}
-	claimBody, err := m.get(ctx, m.operator, m.operatorBase+"/v1/task-claims/"+binding.claim, m.operatorToken, claimLimit)
+	// getTaskClaim requires ?project= and returns not found when it does not match.
+	claimBody, err := m.get(ctx, m.operator, m.operatorBase+"/v1/task-claims/"+binding.claim+"?project=dev-env", m.operatorToken, claimLimit)
 	if err != nil {
 		return portal.ErrUnavailable
 	}
@@ -166,6 +180,17 @@ func (m *metadataReader) one(ctx context.Context, task string, sessions []operat
 		return portal.ErrUnavailable
 	}
 	return nil
+}
+
+func haynesEngineering(href, identifier string) bool {
+	const project = "/api/v3/projects/haynes-engineering"
+	if identifier != "" && identifier != "haynes-engineering" {
+		return false
+	}
+	if href != "" && href != project {
+		return false
+	}
+	return href == project || identifier == "haynes-engineering"
 }
 
 type operatorSession struct {

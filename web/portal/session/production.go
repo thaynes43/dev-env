@@ -27,12 +27,14 @@ import (
 )
 
 const (
-	ProductionRoot          = "/etc/dev-env-portal"
-	productionListen        = ":8443"
-	productionHost          = "dev-env-v2.haynesops.com"
-	productionOrigin        = "https://dev-env-v2.haynesops.com"
-	productionIssuer        = "https://authentik.haynesnetwork.com/application/o/dev-env-v2-portal/"
-	productionAuthorization = productionIssuer + "authorize/"
+	ProductionRoot   = "/etc/dev-env-portal"
+	productionListen = ":8443"
+	productionHost   = "dev-env-v2.haynesops.com"
+	productionOrigin = "https://dev-env-v2.haynesops.com"
+	productionIssuer = "https://authentik.haynesnetwork.com/application/o/dev-env-v2-portal/"
+	// The existing code client pins this issuer-host authorization path. The provider
+	// well-known document was not read: that GET returned HTTP 403 and is not retried.
+	productionAuthorization = "https://authentik.haynesnetwork.com/application/o/authorize/"
 	productionToken         = "https://authentik.haynesnetwork.com/application/o/token/"
 	productionUserInfo      = "https://authentik.haynesnetwork.com/application/o/userinfo/"
 	productionJWKS          = productionIssuer + "jwks/"
@@ -158,7 +160,8 @@ func LoadProduction(root string) (Runtime, error) {
 	password, passwordErr := text("secrets/DB_PASSWORD")
 	key, keyErr := text("secrets/SESSION_AEAD_KEY")
 	generation, generationErr := text("secrets/SESSION_GENERATION")
-	subject, subjectErr := text("secrets/PORTAL_SUBJECT")
+	// config/subject is the existing issuer-plus-subject pin. It is not a 1Password property.
+	subject, subjectErr := text("config/subject")
 	if err != nil || secretErr != nil || userErr != nil || passwordErr != nil || keyErr != nil || generationErr != nil || subjectErr != nil || clientID != productionClientID || dbUser != productionDBUser || !bearerText(secret) || !bearerText(password) || !identityText(subject) {
 		return Runtime{}, errProductionConfig
 	}

@@ -13,20 +13,16 @@ const (
 	CanonicalItem  = "dev-env"
 )
 
-var (
-	errConsumerRejected = errors.New("portal consumer selection rejected")
-	errConsumerHeld     = errors.New("portal runtime selection held")
-)
+var errConsumerRejected = errors.New("portal consumer selection rejected")
 
-// Selectable properties are the OIDC fields already handed to Tom on HaynesKube/dev-env.
-// Runtime field names belong to that same item, and selection stays held.
+// selectableProperties are individual remoteRef entries on HaynesKube/dev-env.
+// The four runtime names are inert staged definitions: accepting them is not
+// population, installation, SecretSynced, or an access grant.
 // SSH_CA_* are unrelated keeper fields from DESIGN-001 D-72 and must not be projected.
 var (
 	selectableProperties = map[string]struct{}{
 		"OIDC_CLIENT_ID":     {},
 		"OIDC_CLIENT_SECRET": {},
-	}
-	heldProperties = map[string]struct{}{
 		"DB_USERNAME":        {},
 		"DB_PASSWORD":        {},
 		"SESSION_AEAD_KEY":   {},
@@ -60,9 +56,9 @@ type remoteRef struct {
 	Property string `json:"property"`
 }
 
-// ValidatePortalConsumer accepts only individual remoteRef.property entries for
-// the two OIDC fields on HaynesKube/dev-env. It rejects historical item keys,
-// whole-item extract, unrelated properties, renamed secret keys, and held runtime fields.
+// ValidatePortalConsumer accepts individual remoteRef.property entries for the
+// two OIDC fields and the four inert runtime projections on HaynesKube/dev-env.
+// It rejects historical item keys, whole-item extract, unrelated properties, and renamed secret keys.
 func ValidatePortalConsumer(document []byte) error {
 	if len(document) == 0 || len(document) > 8192 {
 		return errConsumerRejected
@@ -96,9 +92,6 @@ func ValidatePortalConsumer(document []byte) error {
 			return errConsumerRejected
 		}
 		seen[property] = struct{}{}
-		if _, held := heldProperties[property]; held {
-			return errConsumerHeld
-		}
 		if _, unrelated := unrelatedProperties[property]; unrelated {
 			return errConsumerRejected
 		}

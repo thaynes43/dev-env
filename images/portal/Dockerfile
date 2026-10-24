@@ -14,7 +14,7 @@ RUN go mod download
 COPY . .
 ARG COMMIT=
 ARG VERSION=
-RUN make bin/dev-env-portal COMMIT="${COMMIT}" VERSION="${VERSION}"
+RUN make build-portal COMMIT="${COMMIT}" VERSION="${VERSION}"
 RUN mkdir -p /out/licenses/go-stdlib \
  && CGO_ENABLED=0 go-licenses save ./cmd/dev-env-portal \
       --ignore github.com/thaynes43/dev-env --save_path=/out/licenses/go-modules \
