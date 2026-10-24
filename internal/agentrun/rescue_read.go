@@ -146,17 +146,12 @@ func writeRescueTree(out string, files []apiv1.RescueTreeFile) ([]rescueReceiptF
 			return nil, err
 		}
 		n, werr := w.Write(f.Bytes)
+		if cerr := w.Chmod(mode); werr == nil && cerr != nil {
+			werr = cerr
+		}
 		cerr := w.Close()
 		if werr != nil || cerr != nil || n != len(f.Bytes) {
 			return nil, errors.New("writing the rescue tree failed")
-		}
-		full := filepath.Join(abs, filepath.FromSlash(f.Path))
-		rel, err := filepath.Rel(abs, full)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return nil, errors.New("writing the rescue tree failed")
-		}
-		if err := os.Chmod(full, mode); err != nil {
-			return nil, err
 		}
 		receipt = append(receipt, rescueReceiptFile{Path: f.Path, Mode: f.Mode, SHA256: f.SHA256, Bytes: len(f.Bytes)})
 	}

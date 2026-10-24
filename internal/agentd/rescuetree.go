@@ -68,14 +68,15 @@ func classifyOneTree(ctx context.Context, r Runner, repo, commit string) (string
 	defer cancel()
 	res, err := r.Run(bctx, Cmd{
 		Name: "git",
-		Args: []string{"-C", repo, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=", "ls-tree", "-r", "-l", "-z", commit},
+		Args: []string{"-C", repo, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=", "-c", "core.alternateRefsCommand=", "ls-tree", "-r", "-l", "-z", commit},
 		Env:  isolatedGitEnv(), UnsetEnv: isolatedGitUnset,
+		StdoutMax: rescueTreeResponseCap + 1,
 	})
+	if res.StdoutOver || len(res.Stdout) > rescueTreeResponseCap {
+		return protocol.TreeTooLarge, nil
+	}
 	if err != nil {
 		return "", err
-	}
-	if len(res.Stdout) > rescueTreeResponseCap {
-		return protocol.TreeTooLarge, nil
 	}
 	entries, regular := parseTreeSizes(res.Stdout)
 	if !regular {

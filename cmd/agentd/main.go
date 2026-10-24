@@ -440,6 +440,7 @@ func rescueTreeCtl(ctx context.Context, args []string, stdout, stderr io.Writer,
 	base := fs.String("base", "", "")
 	clone := fs.String("clone", "", "")
 	bundle := fs.String("bundle", "", "")
+	ref := fs.String("ref", "", "")
 	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 1 || *repo == "" || *commit == "" {
 		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl rescue-tree --repo <name> --commit <oid> <session>/<stamp>\n", binaryName)
 		return exitUsage
@@ -450,13 +451,13 @@ func rescueTreeCtl(ctx context.Context, args []string, stdout, stderr io.Writer,
 		return exitFailure
 	}
 	var out protocol.RescueTree
-	if *base != "" || *clone != "" || *bundle != "" {
-		if *base == "" || *clone == "" || *bundle == "" {
+	if *base != "" || *clone != "" || *bundle != "" || *ref != "" {
+		if *base == "" || *clone == "" || *bundle == "" || *ref == "" {
 			_, _ = fmt.Fprintf(stderr, "%s: rescue-tree failed\n", binaryName)
 			return exitFailure
 		}
 		got, err := agentd.MaterializeRescueTree(ctx, r, s, agentd.RescueMaterialize{
-			ID: fs.Arg(0), Repo: *repo, Clone: *clone, Bundle: *bundle, Commit: *commit, Base: *base,
+			ID: fs.Arg(0), Repo: *repo, Clone: *clone, Bundle: *bundle, Commit: *commit, Base: *base, Ref: *ref,
 		})
 		if err != nil {
 			_, _ = fmt.Fprintf(stderr, "%s: rescue-tree failed\n", binaryName)

@@ -14,7 +14,7 @@ const (
 	RescueTreeNotFound   = "not-found"
 	RescueTreeIncomplete = "incomplete"
 	RescueTreeMismatch   = "mismatch"
-	RescueTreeRefused = "refused"
+	RescueTreeRefused    = "refused"
 	// RescueTreeMissingBase is a byte read whose recorded base commit is not
 	// in the recipient clone. The thin bundle stays where it is.
 	RescueTreeMissingBase = "missing-base"
@@ -33,15 +33,30 @@ const (
 )
 
 // RescueTree is what `agentd ctl rescue-tree` prints. OK is false for a
-// refusal; the files are present only when OK is true.
+// refusal. Files are the blobs the thin bundle itself carries, not the
+// recipient's existing base. Delta names every path that differs from the
+// bundle's single prerequisite.
 type RescueTree struct {
-	OK     bool             `json:"ok"`
-	Code   string           `json:"code,omitempty"`
-	ID     string           `json:"id,omitempty"`
-	Repo   string           `json:"repo,omitempty"`
-	Commit string           `json:"commit,omitempty"`
-	Ref    string           `json:"ref,omitempty"`
-	Files  []RescueTreeFile `json:"files,omitempty"`
+	OK           bool              `json:"ok"`
+	Code         string            `json:"code,omitempty"`
+	ID           string            `json:"id,omitempty"`
+	Repo         string            `json:"repo,omitempty"`
+	Commit       string            `json:"commit,omitempty"`
+	Ref          string            `json:"ref,omitempty"`
+	Prerequisite string            `json:"prerequisite,omitempty"`
+	Delta        []RescueTreeDelta `json:"delta,omitempty"`
+	Files        []RescueTreeFile  `json:"files,omitempty"`
+}
+
+// RescueTreeDelta is one path that differs between the bundle prerequisite
+// and the rescue commit. Carried is true when that path's blob bytes are in
+// Files. A deleted path has no mode, oid, or bytes.
+type RescueTreeDelta struct {
+	Path    string `json:"path"`
+	Change  string `json:"change"`
+	Mode    string `json:"mode,omitempty"`
+	OID     string `json:"oid,omitempty"`
+	Carried bool   `json:"carried,omitempty"`
 }
 
 // RescueTreeFile is one regular file in the rescue-branch tree.

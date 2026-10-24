@@ -268,7 +268,9 @@ type AgentSessionSpec struct {
 
 	// UsageCaptureParentUID is the authenticated parent Session UID when child
 	// usage capture is enabled. The API sets it from that parent object. It is
-	// not a permission and it is not taken from the request body.
+	// not a permission and it is not taken from the request body. The rescue-byte
+	// route also compares it. That comparison is not a grant, and production
+	// leaves the field empty because usage capture is off.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=128
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="usage capture parent UID is immutable"

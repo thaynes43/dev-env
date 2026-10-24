@@ -684,14 +684,27 @@ type RescueRepo struct {
 // commit id without these bytes is not this response. The bytes stay inside
 // the cluster (D-10, D-48): a human or client is refused.
 type RescueTree struct {
-	ID         string           `json:"id"`
-	SessionUID string           `json:"sessionUID"`
-	PodUID     string           `json:"podUID"`
-	Repo       string           `json:"repo"`
-	Project    string           `json:"project,omitempty"`
-	Commit     string           `json:"commit"`
-	Ref        string           `json:"ref"`
-	Files      []RescueTreeFile `json:"files"`
+	ID           string            `json:"id"`
+	SessionUID   string            `json:"sessionUID"`
+	PodUID       string            `json:"podUID"`
+	Repo         string            `json:"repo"`
+	Project      string            `json:"project,omitempty"`
+	Commit       string            `json:"commit"`
+	Ref          string            `json:"ref"`
+	Prerequisite string            `json:"prerequisite,omitempty"`
+	Delta        []RescueTreeDelta `json:"delta,omitempty"`
+	Files        []RescueTreeFile  `json:"files"`
+}
+
+// RescueTreeDelta is one path that differs from the bundle's prerequisite.
+// Bytes for a carried path are in RescueTree.Files. Other paths name objects
+// the recipient clone already has.
+type RescueTreeDelta struct {
+	Path    string `json:"path"`
+	Change  string `json:"change"`
+	Mode    string `json:"mode,omitempty"`
+	OID     string `json:"oid,omitempty"`
+	Carried bool   `json:"carried,omitempty"`
 }
 
 // RescueTreeFile is one regular file in the rescue-branch tree.

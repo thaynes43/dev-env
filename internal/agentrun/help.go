@@ -339,13 +339,18 @@ the layout are listed as unrecognized and never pruned.
   -o json            the API's list as JSON
 
 rescue read verifies the existing thin bundle in the caller's clone and
-writes that rescue commit's files to --out. It does not start a session,
-check out, or run hooks. A human, a client, and a coordinator are refused.
-A session is refused unless it is that session, by UID, or the direct child
-whose stored parent UID is that session. The commit and the base commit must
-be the ones the operator recorded. --out must not exist and must not pass
-through a symlink, so a path whose ancestor is a symlink (macOS /tmp and
-/var) is refused. The command prints hashes, not file bytes.
+writes the blobs that bundle carries to --out. It does not start a session,
+check out, or run hooks, and it does not copy the recipient's existing base.
+A human, a client, and a coordinator are refused. A running session cannot
+read its own current rescue: the operator marks that rescue superseded before
+the pod is ensured. A direct child is refused unless usageCaptureParentUID is
+that session's UID. That field is set only when child usage capture is on,
+which is off by default, and it is not a grant. The commit, the base commit
+and the ref must be the ones the operator recorded. --out must not exist and
+must not pass through a symlink, so a path whose ancestor is a symlink
+(macOS /tmp and /var) is refused. The command prints hashes, not file bytes.
+A 429 is not retried. Untracked objects fetched into the clone remain until
+git gc.
   --repo <name>         the clone the rescue holds
   --commit <oid>        the rescue-branch commit
   --session-uid <uid>   the rescued session's UID

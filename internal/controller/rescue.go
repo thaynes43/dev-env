@@ -376,7 +376,9 @@ func verdict(s *v1alpha1.AgentSession, pod *corev1.Pod, rep protocol.RescueRepor
 				add("%s: bundle: %s", repo.Path, firstNonEmpty(b.Error, "not verified"))
 			} else {
 				bundled = b.Refs
-				baseCommit = b.BaseCommit
+				if protocol.ValidGitObject(b.BaseCommit) {
+					baseCommit = b.BaseCommit
+				}
 			}
 		}
 		for _, ref := range repo.UnpushedRefs {

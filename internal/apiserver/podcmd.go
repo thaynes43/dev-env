@@ -159,6 +159,8 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 
 func (b *limitedBuffer) String() string { return b.buf.String() }
 
+func (b *limitedBuffer) Bytes() []byte { return b.buf.Bytes() }
+
 // sessionLog serves GET /v1/sessions/{name}/log?tail=N: agentd ctl log in the
 // running pod.
 func (s *Server) sessionLog(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {

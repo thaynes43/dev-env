@@ -19,6 +19,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
+	"github.com/thaynes43/dev-env/internal/shelf"
 )
 
 const (
@@ -76,7 +77,7 @@ func TestReadRescueTreeAuthorizesTheParent(t *testing.T) {
 		t.Fatalf("tree %+v cmds %v", got, ex.cmds)
 	}
 	joined := strings.Join(ex.cmds[0], " ")
-	if !strings.Contains(joined, "--base "+strings.Repeat("c", 40)) || !strings.Contains(joined, "--clone /home/dev/repos/"+treeRepo) || strings.Contains(joined, "hold-rescue") {
+	if !strings.Contains(joined, "--base "+strings.Repeat("c", 40)) || !strings.Contains(joined, "--clone /home/dev/repos/"+treeRepo) || !strings.Contains(joined, "--ref refs/heads/rescue/"+own+"-"+treeStamp) || strings.Contains(joined, "hold-rescue") {
 		t.Fatalf("exec %q", joined)
 	}
 	otherTok := f.sessionPod("byte-1006-170003", "dev", 0)
@@ -215,9 +216,17 @@ func (e *treeExec) Run(_ context.Context, _, _, _ string, cmd []string, _ io.Rea
 	if e.badHash {
 		digest = strings.Repeat("ab", 32)
 	}
+	ref := "refs/heads/rescue/verified"
+	for i, arg := range cmd {
+		if arg == "--ref" && i+1 < len(cmd) {
+			ref = cmd[i+1]
+		}
+	}
 	return json.NewEncoder(stdout).Encode(protocol.RescueTree{
-		OK: true, ID: cmd[len(cmd)-1], Repo: treeRepo, Commit: treeCommit, Ref: "refs/heads/rescue/verified",
-		Files: []protocol.RescueTreeFile{{Path: "README.md", Mode: "100644", SHA256: digest, Bytes: append([]byte(nil), e.bytes...)}},
+		OK: true, ID: cmd[len(cmd)-1], Repo: treeRepo, Commit: treeCommit, Ref: ref,
+		Prerequisite: strings.Repeat("c", 40),
+		Delta:        []protocol.RescueTreeDelta{{Path: "README.md", Change: "modified", Mode: "100644", OID: strings.Repeat("d", 40), Carried: true}},
+		Files:        []protocol.RescueTreeFile{{Path: "README.md", Mode: "100644", SHA256: digest, Bytes: e.bytes}},
 	})
 }
 
@@ -319,6 +328,25 @@ func treeSnapshot(t *testing.T, project, repo string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+func TestRescueTreeBusyDoesNotExec(t *testing.T) {
+	f := newFixture(t)
+	ex := &treeExec{bytes: []byte("edited\n")}
+	f.srv.Exec = ex
+	f.srv.RescueTreeSlots = shelf.NewExecSlots(1)
+	release, ok := f.srv.RescueTreeSlots.TryTake()
+	if !ok {
+		t.Fatal("slot")
+	}
+	defer release()
+	name := "byte-1006-170020"
+	tok := f.sessionPod(name, "dev", 0)
+	uid := f.markRescue(name, treeRepo, "")
+	errBody := wantError(t, f.do(http.MethodGet, treePath(name, uid, treePod, ""), tok, nil), http.StatusTooManyRequests, apiv1.CodeLimitExceeded)
+	if len(ex.cmds) != 0 || !strings.Contains(errBody.Message, "already reading") {
+		t.Fatalf("busy %+v cmds %d", errBody, len(ex.cmds))
+	}
 }
 
 func sessionNames(t *testing.T, f *fixture) map[string]bool {

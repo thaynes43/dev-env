@@ -71,6 +71,18 @@ func TestRescueReadWritesOnlyAVerifiedTree(t *testing.T) {
 	if !strings.Contains(h.stdout.String(), hex.EncodeToString(sum[:])) || !strings.Contains(h.stdout.String(), "README.md") {
 		t.Fatalf("receipt:\n%s", h.stdout.String())
 	}
+	busy := 0
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		busy++
+		writeTestJSON(w, http.StatusTooManyRequests, apiv1.ErrorResponse{Error: apiv1.Error{Code: apiv1.CodeLimitExceeded, Message: "this replica is already reading a rescue tree"}})
+	}
+	h.mustRun(ExitRetry, "rescue", "read", id, "--repo", "haynes-ops", "--commit", commit, "--session-uid", sessionUID, "--pod-uid", podUID, "--out", filepath.Join(parent, "busy"))
+	if busy != 1 {
+		t.Fatalf("a 429 was retried: %d", busy)
+	}
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		writeTestJSON(w, http.StatusOK, tree)
+	}
 	h.mustRun(ExitFailed, "rescue", "read", id, "--repo", "haynes-ops", "--commit", commit, "--session-uid", sessionUID, "--pod-uid", podUID, "--out", out)
 	if string(mustRead(t, filepath.Join(out, "README.md"))) != marker {
 		t.Fatal("a collision rewrote the directory")

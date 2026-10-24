@@ -119,6 +119,9 @@ type Server struct {
 	// (DESIGN-024 section 5), shared with the HOME expiry's relay: every
 	// history read takes one. Nil takes none.
 	ShelfSlots *shelf.ExecSlots
+	// RescueTreeSlots limits rescue-byte reads on this replica. Nil takes
+	// none. Two is the installed width: see the handler for the measurement.
+	RescueTreeSlots *shelf.ExecSlots
 	// CoordinationArchiveReads enables archived coordination GET fallbacks.
 	// It is default-off until separately configured by the operator.
 	CoordinationArchiveReads bool

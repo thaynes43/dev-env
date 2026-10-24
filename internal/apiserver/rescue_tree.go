@@ -59,21 +59,33 @@ func (s *Server) readRescueTree(ctx context.Context, _ http.ResponseWriter, r *h
 	if c.pod == nil || c.pod.Name == "" || c.pod.Namespace == "" || s.Exec == nil {
 		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "the rescue tree cannot be read now")
 	}
+	// Two slots per replica. A near-cap read was measured at about 28 MiB of
+	// live heap (113 MiB for four concurrent reads) against an operator that
+	// already uses about 67 MiB of its 256 MiB limit. Two concurrent reads stay
+	// near 123 MiB. A busy replica answers 429, which agent-run does not retry.
+	release, ok := s.rescueTreeSlot()
+	if !ok {
+		return 0, nil, newError(http.StatusTooManyRequests, apiv1.CodeLimitExceeded, "this replica is already reading a rescue tree")
+	}
+	defer release()
 	// The recipient is the caller's pod, which already has the clone. The
 	// shelf has no base, and this does not write a tree onto the shared volume.
 	ctx, cancel := context.WithTimeout(ctx, podCmdTimeout)
 	defer cancel()
 	stdout, stderr := &limitedBuffer{max: 8 << 20}, &limitedBuffer{max: 4 << 10}
-	cmd := []string{"agentd", "ctl", "rescue-tree", "--repo", q.repo, "--commit", q.commit, "--base", ref.BaseCommit, "--clone", ref.Repo, "--bundle", ref.Bundle, id}
-	if err := s.Exec.Run(ctx, c.pod.Namespace, c.pod.Name, controller.ContainerName, cmd, nil, stdout, stderr); err != nil || stdout.over {
+	cmd := []string{"agentd", "ctl", "rescue-tree", "--repo", q.repo, "--commit", q.commit, "--base", ref.BaseCommit, "--clone", ref.Repo, "--bundle", ref.Bundle, "--ref", ref.Name, id}
+	if err := s.Exec.Run(ctx, c.pod.Namespace, c.pod.Name, controller.ContainerName, cmd, nil, stdout, stderr); err != nil {
 		s.Log.Info("rescue tree read failed", "rescue", id, "repo", q.repo)
 		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "the rescue tree cannot be read now")
 	}
+	if stdout.over {
+		return 0, nil, invalid(fieldError("rescue", "the rescue tree is %s", protocol.TreeTooLarge))
+	}
 	var tree protocol.RescueTree
-	if err := json.Unmarshal([]byte(stdout.String()), &tree); err != nil {
+	if err := json.Unmarshal(stdout.Bytes(), &tree); err != nil {
 		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "the rescue tree cannot be read now")
 	}
-	view, err := rescueTreeView(id, q, tree)
+	view, err := rescueTreeView(id, q, ref.Name, tree)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -221,14 +233,21 @@ func rescueTreeCanonical(rec *v1alpha1.RescueStatus, q rescueTreeQueryValues) (v
 	return none, invalid(fieldError("commit", "the commit is not a rescue ref in this rescue's canonical list"))
 }
 
-func rescueTreeView(id string, q rescueTreeQueryValues, tree protocol.RescueTree) (apiv1.RescueTree, error) {
+func (s *Server) rescueTreeSlot() (func(), bool) {
+	if s.RescueTreeSlots == nil {
+		return func() {}, true
+	}
+	return s.RescueTreeSlots.TryTake()
+}
+
+func rescueTreeView(id string, q rescueTreeQueryValues, ref string, tree protocol.RescueTree) (apiv1.RescueTree, error) {
 	var none apiv1.RescueTree
 	switch {
 	case !tree.OK && tree.Code == protocol.RescueTreeNotFound:
 		return none, notFound("no rescue tree %s", id)
-	case !tree.OK && (tree.Code == protocol.RescueTreeMissingBase || tree.Code == protocol.TreeTooLarge || tree.Code == protocol.TreeNotRegular || tree.Code == protocol.RescueTreeMismatch || tree.Code == protocol.RescueTreeRefused || tree.Code == protocol.TreeCaptureFailed || tree.Code == protocol.TreeWithheld):
+	case !tree.OK && (tree.Code == protocol.RescueTreeMissingBase || tree.Code == protocol.RescueTreeIncomplete || tree.Code == protocol.TreeTooLarge || tree.Code == protocol.TreeNotRegular || tree.Code == protocol.RescueTreeMismatch || tree.Code == protocol.RescueTreeRefused || tree.Code == protocol.TreeCaptureFailed || tree.Code == protocol.TreeWithheld):
 		return none, invalid(fieldError("rescue", "the rescue tree is %s", tree.Code))
-	case !tree.OK || tree.ID != id || tree.Repo != q.repo || tree.Commit != q.commit || !protocol.RescueWorkRef(tree.Ref):
+	case !tree.OK || tree.ID != id || tree.Repo != q.repo || tree.Commit != q.commit || tree.Ref != ref || !protocol.RescueWorkRef(tree.Ref) || !protocol.ValidGitObject(tree.Prerequisite):
 		return none, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "the rescue tree cannot be read now")
 	}
 	var raw int64
@@ -242,13 +261,26 @@ func rescueTreeView(id string, q rescueTreeQueryValues, tree protocol.RescueTree
 			return none, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "the rescue tree cannot be read now")
 		}
 		seen[f.Path] = true
-		files = append(files, apiv1.RescueTreeFile{Path: f.Path, Mode: f.Mode, SHA256: f.SHA256, Bytes: append([]byte(nil), f.Bytes...)})
+		files = append(files, apiv1.RescueTreeFile{Path: f.Path, Mode: f.Mode, SHA256: f.SHA256, Bytes: f.Bytes})
+	}
+	delta := make([]apiv1.RescueTreeDelta, 0, len(tree.Delta))
+	for _, d := range tree.Delta {
+		if !protocol.AcceptableRescueTreePath(d.Path) || (d.Change != "added" && d.Change != "modified" && d.Change != "deleted") {
+			return none, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "the rescue tree cannot be read now")
+		}
+		if d.Change != "deleted" && (!protocol.RegularTreeMode(d.Mode) || !protocol.ValidGitObject(d.OID)) {
+			return none, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "the rescue tree cannot be read now")
+		}
+		if d.Carried && !seen[d.Path] {
+			return none, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "the rescue tree cannot be read now")
+		}
+		delta = append(delta, apiv1.RescueTreeDelta{Path: d.Path, Change: d.Change, Mode: d.Mode, OID: d.OID, Carried: d.Carried})
 	}
 	if raw > 8<<20 {
 		return none, invalid(fieldError("rescue", "the rescue tree is %s", protocol.TreeTooLarge))
 	}
 	return apiv1.RescueTree{
 		ID: id, SessionUID: q.sessionUID, PodUID: q.podUID, Repo: q.repo, Project: q.project,
-		Commit: q.commit, Ref: tree.Ref, Files: files,
+		Commit: q.commit, Ref: tree.Ref, Prerequisite: tree.Prerequisite, Delta: delta, Files: files,
 	}, nil
 }

@@ -311,7 +311,7 @@ func TestMaterializeRescueTreeMatchesTheWorktree(t *testing.T) {
 	}
 	gitRun(t, env, rig.ws.Clone, "config", "core.hooksPath", hookDir)
 	gitRun(t, env, rig.ws.Clone, "remote", "set-url", "origin", "https://127.0.0.1:9/no.git")
-	req := RescueMaterialize{ID: rep.Session + "/" + rep.Stamp, Repo: filepath.Base(rep.Repos[0].Path), Clone: rig.ws.Clone, Bundle: rb.File, Commit: commit, Base: rb.BaseCommit}
+	req := RescueMaterialize{ID: rep.Session + "/" + rep.Stamp, Repo: filepath.Base(rep.Repos[0].Path), Clone: rig.ws.Clone, Bundle: rb.File, Commit: commit, Base: rb.BaseCommit, Ref: ref}
 	got, err := MaterializeRescueTree(context.Background(), rig.r, rig.s, req)
 	if err != nil || !got.OK || got.Ref != ref || got.Commit != commit {
 		t.Fatalf("materialize %+v %v", got, err)
@@ -346,11 +346,11 @@ func TestMaterializeRescueTreeMatchesTheWorktree(t *testing.T) {
 
 	empty := t.TempDir()
 	gitRun(t, env, empty, "init", "-q")
-	missing, err := MaterializeRescueTree(context.Background(), rig.r, rig.s, RescueMaterialize{ID: req.ID, Repo: req.Repo, Clone: empty, Bundle: rb.File, Commit: commit, Base: rb.BaseCommit})
+	missing, err := MaterializeRescueTree(context.Background(), rig.r, rig.s, RescueMaterialize{ID: req.ID, Repo: req.Repo, Clone: empty, Bundle: rb.File, Commit: commit, Base: rb.BaseCommit, Ref: ref})
 	if err != nil || missing.OK || missing.Code != protocol.RescueTreeMissingBase || len(missing.Files) != 0 {
 		t.Fatalf("missing base %+v %v", missing, err)
 	}
-	wrong, err := MaterializeRescueTree(context.Background(), rig.r, rig.s, RescueMaterialize{ID: req.ID, Repo: req.Repo, Clone: rig.ws.Clone, Bundle: rb.File, Commit: rb.BaseCommit, Base: rb.BaseCommit})
+	wrong, err := MaterializeRescueTree(context.Background(), rig.r, rig.s, RescueMaterialize{ID: req.ID, Repo: req.Repo, Clone: rig.ws.Clone, Bundle: rb.File, Commit: rb.BaseCommit, Base: rb.BaseCommit, Ref: ref})
 	if err != nil || wrong.OK || len(wrong.Files) != 0 {
 		t.Fatalf("base used as the rescue commit %+v %v", wrong, err)
 	}
@@ -402,7 +402,7 @@ func TestMaterializeRescueTreeMatchesTheWorktree(t *testing.T) {
 	}
 	swapped, err := MaterializeRescueTree(context.Background(), rig.r, rig.s, RescueMaterialize{
 		ID: "link-1006-170000/20261006-1730", Repo: req.Repo, Clone: rig.ws.Clone,
-		Bundle: "rescue/link-1006-170000/20261006-1730/demo.bundle", Commit: commit, Base: rb.BaseCommit,
+		Bundle: "rescue/link-1006-170000/20261006-1730/demo.bundle", Commit: commit, Base: rb.BaseCommit, Ref: ref,
 	})
 	swappedBody, _ := json.Marshal(swapped)
 	if err != nil || swapped.OK || len(swapped.Files) != 0 || strings.Contains(string(swappedBody), "OUTSIDE-SECRET") {
@@ -417,10 +417,10 @@ func TestMaterializeOverCapDoesNotReadBodies(t *testing.T) {
 	writeFile(t, filepath.Join(rig.ws.Worktree, "big.bin"), string(blob))
 	rep := rig.rescue(t)
 	rb := rep.Repos[0].Bundle
-	var commit string
+	var commit, ref string
 	for _, one := range rb.Refs {
 		if protocol.RescueWorkRef(one.Name) {
-			commit = one.Commit
+			commit, ref = one.Commit, one.Name
 		}
 	}
 	if !rep.OK || rb == nil || !rb.Verified || rb.TreeRefused != protocol.TreeTooLarge || commit == "" {
@@ -429,7 +429,7 @@ func TestMaterializeOverCapDoesNotReadBodies(t *testing.T) {
 	runner := &failSubstr{base: rig.r, substr: "cat-file --batch"}
 	got, err := MaterializeRescueTree(context.Background(), runner, rig.s, RescueMaterialize{
 		ID: rep.Session + "/" + rep.Stamp, Repo: filepath.Base(rep.Repos[0].Path), Clone: rig.ws.Clone,
-		Bundle: rb.File, Commit: commit, Base: rb.BaseCommit,
+		Bundle: rb.File, Commit: commit, Base: rb.BaseCommit, Ref: ref,
 	})
 	if err != nil || got.OK || got.Code != protocol.TreeTooLarge || len(got.Files) != 0 || runner.hits != 0 {
 		t.Fatalf("over cap %+v hits %d %v", got, runner.hits, err)
