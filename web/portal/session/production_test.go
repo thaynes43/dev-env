@@ -195,10 +195,25 @@ func testEngine(t *testing.T, store *memoryStore, now time.Time) *Engine {
 	return engine
 }
 
+func fixtureTaskKey(task string) (string, bool) {
+	key, ok := map[string]string{
+		"120": "task:attention-120",
+		"121": "task:attention-121",
+		"122": "issue:900122",
+		"123": "task:wp.123",
+		"178": "issue:501",
+	}[task]
+	return key, ok
+}
+
 func testBindings() map[string]sessionBinding {
 	out := make(map[string]sessionBinding, len(approvedTasks))
 	for _, task := range approvedTasks {
-		out[task] = sessionBinding{session: "synthetic-session", sessionUID: "synthetic-session-uid", claim: "claim-" + task, claimUID: "claim-uid-" + task}
+		key, ok := fixtureTaskKey(task)
+		if !ok {
+			panic("fixture missing canonical key")
+		}
+		out[task] = sessionBinding{project: "dev-env", repository: "dev-env", taskKey: key, session: "synthetic-session", sessionUID: "synthetic-session-uid", claim: "claim-" + task, claimUID: "claim-uid-" + task}
 	}
 	return out
 }
@@ -246,11 +261,12 @@ func operatorHandler(t *testing.T, hits *pathList) http.Handler {
 			return
 		}
 		task := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1/task-claims/claim-"), "/")
-		if !strings.HasPrefix(r.URL.Path, "/v1/task-claims/claim-") || r.URL.RawQuery != "project=dev-env" {
+		key, keyOK := fixtureTaskKey(task)
+		if !strings.HasPrefix(r.URL.Path, "/v1/task-claims/claim-") || r.URL.RawQuery != "project=dev-env" || !keyOK {
 			http.NotFound(w, r)
 			return
 		}
-		body, _ := json.Marshal(map[string]any{"name": "claim-" + task, "uid": "claim-uid-" + task, "identity": map[string]string{"project": "dev-env", "repository": "dev-env", "taskKey": task}, "owner": map[string]string{"namespace": "dev-agents", "name": "synthetic-session", "uid": "synthetic-session-uid"}, "createdAt": time.Now().UTC().Format(time.RFC3339)})
+		body, _ := json.Marshal(map[string]any{"name": "claim-" + task, "uid": "claim-uid-" + task, "identity": map[string]string{"project": "dev-env", "repository": "dev-env", "taskKey": key}, "owner": map[string]string{"namespace": "dev-agents", "name": "synthetic-session", "uid": "synthetic-session-uid"}, "createdAt": time.Now().UTC().Format(time.RFC3339)})
 		_, _ = w.Write(body)
 	})
 }
