@@ -95,7 +95,7 @@ func (s *SessionSource) Read(ctx context.Context) (portal.ProductPage, error) {
 			if row.Repo != "dev-env" || row.Name == "" || row.UID == "" || row.Phase == "" {
 				return page, portal.ErrUnavailable
 			}
-			page.Rows = append(page.Rows, portal.ProductRow{Title: shown(row.Name), Fields: []portal.ProductField{{"Phase", shown(row.Phase)}, {"Freshness", shown(row.Freshness)}, {"UID", shown(row.UID)}}})
+			page.Rows = append(page.Rows, portal.ProductRow{Title: shown(row.Name), Fields: []portal.ProductField{{Label: "Phase", Value: shown(row.Phase)}, {Label: "Freshness", Value: shown(row.Freshness)}, {Label: "UID", Value: shown(row.UID)}}})
 		}
 		complete = decoded.Complete
 		cursor = decoded.NextCursor
@@ -217,13 +217,13 @@ func taskRow(element halWorkPackage) (portal.ProductRow, error) {
 		Title: shown(element.Subject),
 		Link:  "https://work.haynesnetwork.com/work_packages/" + id,
 		Fields: []portal.ProductField{
-			{"Status", shown(element.Links.Status.Title)},
-			{"Assignee", shown(element.Links.Assignee.Title)},
-			{"Accountable", shown(element.CustomField1)},
-			{"Responsible", shown(element.Links.Responsible.Title)},
-			{"Repositories", shown(element.CustomField3)},
-			{"Created", shownTime(element.CreatedAt)},
-			{"Updated", shownTime(element.UpdatedAt)},
+			{Label: "Status", Value: shown(element.Links.Status.Title)},
+			{Label: "Assignee", Value: shown(element.Links.Assignee.Title)},
+			{Label: "Accountable", Value: shown(element.CustomField1)},
+			{Label: "Responsible", Value: shown(element.Links.Responsible.Title)},
+			{Label: "Repositories", Value: shown(element.CustomField3)},
+			{Label: "Created", Value: shownTime(element.CreatedAt)},
+			{Label: "Updated", Value: shownTime(element.UpdatedAt)},
 		},
 	}, nil
 }

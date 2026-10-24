@@ -70,10 +70,7 @@ func TestSessionsAndTasksAreIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := newTaskSource(opToken, opCA, func() time.Time { return now }, dial)
-	if err != nil {
-		t.Fatal(err)
-	}
+	var tasks *TaskSource
 	authorizer := currentFixture(f, func(*http.Request) (*http.Response, error) { return userInfoResponse(currentAllow), nil })
 	handler := NewAssembly(AssemblyConfig{Session: f.e, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: sessions, Tasks: nil, FreshFor: time.Minute, Now: func() time.Time { return now }})
 	w := httptest.NewRecorder()

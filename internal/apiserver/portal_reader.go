@@ -164,7 +164,7 @@ func encodePortalCursor(cursor portalCursor) string {
 }
 
 func portalPosition(s *v1alpha1.AgentSession) portalCursor {
-	return portalCursor{Created: s.CreationTimestamp.Time.UTC(), Name: s.Name}
+	return portalCursor{Created: s.CreationTimestamp.UTC(), Name: s.Name}
 }
 
 func sortPortalSessions(items []v1alpha1.AgentSession) {
