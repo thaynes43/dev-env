@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -60,6 +63,9 @@ func TestSymlinkCannotEscapeFixture(t *testing.T) {
 	}
 	if hashFile(t, canary) != before || string(mustRead(t, canary)) != "canary-original\n" {
 		t.Fatal("outside canary changed")
+	}
+	if n := dirCount(t, into); n != 0 {
+		t.Fatalf("recipient was written: %d entries", n)
 	}
 }
 
@@ -320,4 +326,278 @@ func TestInheritedGitEnvIsNotUsed(t *testing.T) {
 	if hashFile(t, filepath.Join(canary, ".git", "index")) != before {
 		t.Fatal("inherited Git environment changed the canary")
 	}
+}
+
+func TestUnsupportedModesLeaveRecipientEmpty(t *testing.T) {
+	pred := t.TempDir()
+	report, err := materialize(pred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(pred, "untracked.txt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	doc := withFixture(t, loadDoc(t), report)
+	index := hashFile(t, filepath.Join(pred, ".git", "index"))
+	into := t.TempDir()
+	code := run([]string{"restore", "--record", writeDoc(t, doc), "--from", pred, "--into", into}, nil, &bytes.Buffer{}, &bytes.Buffer{})
+	if code == 0 || dirCount(t, into) != 0 {
+		t.Fatalf("0600 restore code %d recipient %d", code, dirCount(t, into))
+	}
+	if hashFile(t, filepath.Join(pred, ".git", "index")) != index {
+		t.Fatal("0600 refusal changed the predecessor index")
+	}
+
+	pred = t.TempDir()
+	report, err = materialize(pred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(pred, "tracked.txt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	doc = withFixture(t, loadDoc(t), report)
+	index = hashFile(t, filepath.Join(pred, ".git", "index"))
+	tracked := hashFile(t, filepath.Join(pred, "tracked.txt"))
+	into = t.TempDir()
+	code = run([]string{"restore", "--record", writeDoc(t, doc), "--from", pred, "--into", into}, nil, &bytes.Buffer{}, &bytes.Buffer{})
+	if code == 0 || dirCount(t, into) != 0 {
+		t.Fatalf("exec-bit restore code %d recipient %d", code, dirCount(t, into))
+	}
+	if hashFile(t, filepath.Join(pred, ".git", "index")) != index || hashFile(t, filepath.Join(pred, "tracked.txt")) != tracked {
+		t.Fatal("exec-bit refusal changed predecessor bytes or index")
+	}
+}
+
+func TestCommittedEntriesMustBeHeadBlobs(t *testing.T) {
+	pred := t.TempDir()
+	report, err := materialize(pred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pred, ".git", "info", "exclude"), []byte("ignored.txt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pred, "ignored.txt"), []byte("never committed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	doc := withFixture(t, loadDoc(t), report)
+	doc.Manifest.Entries = append(doc.Manifest.Entries, manifestEntry{
+		Path: "ignored.txt", GitState: "committed", SHA256: hashFile(t, filepath.Join(pred, "ignored.txt")),
+	})
+	var checkBuf bytes.Buffer
+	if code := run([]string{"check", "--verify-root", pred, writeDoc(t, doc)}, nil, &checkBuf, &bytes.Buffer{}); code != 0 {
+		t.Fatalf("ignored check exit %d %s", code, checkBuf.String())
+	}
+	var res result
+	if err := json.Unmarshal(checkBuf.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.FixtureVerified || res.RestoreAuthorized {
+		t.Fatalf("ignored file verified %#v", res)
+	}
+	index := hashFile(t, filepath.Join(pred, ".git", "index"))
+	into := t.TempDir()
+	if code := run([]string{"restore", "--record", writeDoc(t, doc), "--from", pred, "--into", into}, nil, &bytes.Buffer{}, &bytes.Buffer{}); code == 0 || dirCount(t, into) != 0 {
+		t.Fatal("ignored-as-committed wrote the recipient")
+	}
+	if hashFile(t, filepath.Join(pred, ".git", "index")) != index {
+		t.Fatal("ignored refusal changed the index")
+	}
+
+	alias := withFixture(t, loadDoc(t), report)
+	alias.Manifest.Entries = append(alias.Manifest.Entries, manifestEntry{
+		Path: "./committed.txt", GitState: "committed", SHA256: alias.Manifest.Entries[0].SHA256,
+	})
+	body, err := json.Marshal(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasRes, code := check(body)
+	if code != 2 || aliasRes.RestoreAuthorized || !strings.Contains(aliasRes.Refusals[0], "not canonical") {
+		t.Fatalf("alias code %d %#v", code, aliasRes.Refusals)
+	}
+	meta := loadDoc(t)
+	meta.Manifest.Entries = append(meta.Manifest.Entries, manifestEntry{
+		Path: ".git/description", GitState: "committed", SHA256: strings.Repeat("ab", 32),
+	})
+	body, err = json.Marshal(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaRes, code := check(body)
+	if code != 2 || metaRes.RestoreAuthorized || !strings.Contains(metaRes.Refusals[0], "git metadata") {
+		t.Fatalf("metadata code %d %#v", code, metaRes.Refusals)
+	}
+}
+
+func TestManifestParserRejectsFoldedKeys(t *testing.T) {
+	pred := t.TempDir()
+	report, err := materialize(pred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := report.Manifest.Entries[0].SHA256
+	bad := strings.Repeat("0", 64)
+	body := `{"algorithm":"sha256","entries":[{"path":"committed.txt","gitState":"committed","sha256":"` + bad + `","SHA256":"` + good + `"}`
+	for _, entry := range report.Manifest.Entries[1:] {
+		body += `,{"path":"` + entry.Path + `","gitState":"` + entry.GitState + `","sha256":"` + entry.SHA256 + `"}`
+	}
+	body += `]}`
+	path := filepath.Join(t.TempDir(), "folded.json")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := run([]string{"verify", "--root", pred, "--manifest", path}, nil, &bytes.Buffer{}, &bytes.Buffer{}); code == 0 {
+		t.Fatal("case-variant manifest key was accepted")
+	}
+	folded := strings.Replace(body, `"sha256":"`+bad+`","SHA256":"`+good+`"`, `"\u017fha256":"`+good+`"`, 1)
+	foldedPath := filepath.Join(t.TempDir(), "long-s.json")
+	if err := os.WriteFile(foldedPath, []byte(folded), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := run([]string{"verify", "--root", pred, "--manifest", foldedPath}, nil, &bytes.Buffer{}, &bytes.Buffer{}); code == 0 {
+		t.Fatal("unicode manifest key was accepted")
+	}
+	trail := body + `{"x":1}`
+	trailPath := filepath.Join(t.TempDir(), "trail.json")
+	if err := os.WriteFile(trailPath, []byte(trail), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := run([]string{"verify", "--root", pred, "--manifest", trailPath}, nil, &bytes.Buffer{}, &bytes.Buffer{}); code == 0 {
+		t.Fatal("trailing manifest JSON was accepted")
+	}
+}
+
+func TestVerifyBindsReportHead(t *testing.T) {
+	pred := t.TempDir()
+	report, err := materialize(pred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := gitCmd(pred, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "advance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitCmd(pred, "update-ref", "HEAD", next); err != nil {
+		t.Fatal(err)
+	}
+	if code := run([]string{"verify", "--root", pred, "--manifest", writeManifest(t, report)}, nil, &bytes.Buffer{}, &bytes.Buffer{}); code == 0 {
+		t.Fatal("verify accepted a moved HEAD")
+	}
+}
+
+func TestUmaskDoesNotChangeRestoredModes(t *testing.T) {
+	old := syscall.Umask(0o077)
+	defer syscall.Umask(old)
+	pred := t.TempDir()
+	report, err := materialize(pred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := withFixture(t, loadDoc(t), report)
+	into := t.TempDir()
+	if code := run([]string{"restore", "--record", writeDoc(t, doc), "--from", pred, "--into", into}, nil, &bytes.Buffer{}, &bytes.Buffer{}); code != 0 {
+		t.Fatal("umask 077 restore failed")
+	}
+	for _, name := range []string{"committed.txt", "tracked.txt", "staged.txt", "untracked.txt"} {
+		src, err := os.Lstat(filepath.Join(pred, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dst, err := os.Lstat(filepath.Join(into, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if src.Mode().Perm() != 0o644 || dst.Mode().Perm() != src.Mode().Perm() {
+			t.Fatalf("%s mode src %o dst %o", name, src.Mode().Perm(), dst.Mode().Perm())
+		}
+	}
+}
+
+func TestFsmonitorOverrideDoesNotRunHook(t *testing.T) {
+	dir := t.TempDir()
+	canary := filepath.Join(t.TempDir(), "fsmonitor-canary")
+	hook := filepath.Join(t.TempDir(), "hook")
+	script := "#!/bin/sh\necho ran > " + canary + "\nexit 0\n"
+	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitCmd(dir, "init", "-b", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitCmd(dir, "config", "core.fsmonitor", hook); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("f\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitCmd(dir, "add", "--", "f"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitCmd(dir, "commit", "-m", "c"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitCmd(dir, "status", "--porcelain=v1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(canary); !os.IsNotExist(err) {
+		t.Fatal("fsmonitor hook ran under the command override")
+	}
+}
+
+func TestRecipientSymlinkCannotReceiveBytes(t *testing.T) {
+	pred := t.TempDir()
+	report, err := materialize(pred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "canary")
+	if err := os.WriteFile(outside, []byte("canary-original\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := hashFile(t, outside)
+	dst := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(dst, "untracked.txt")); err != nil {
+		t.Fatal(err)
+	}
+	modes, err := fixtureModes(pred, report.Manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := overlay(pred, dst, report.Manifest, modes); err == nil {
+		t.Fatal("overlay followed a recipient symlink")
+	}
+	if hashFile(t, outside) != before {
+		t.Fatal("recipient symlink changed the outside canary")
+	}
+}
+
+func TestPreservedSourceErrorKeepsTheSnapshot(t *testing.T) {
+	pred := t.TempDir()
+	report, err := materialize(pred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := snapshot(pred, report.Manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = finishSource(pred, report.Manifest, before, errors.New("post-write failure"))
+	var preserved preservedSourceError
+	if !errors.As(err, &preserved) || preserved.Error() != "post-write failure" {
+		t.Fatalf("preserved error %#v", err)
+	}
+	if snapshotAfter, err := snapshot(pred, report.Manifest); err != nil || snapshotAfter != before {
+		t.Fatal("snapshot changed")
+	}
+}
+
+func dirCount(t *testing.T, dir string) int {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(entries)
 }

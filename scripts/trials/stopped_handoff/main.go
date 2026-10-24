@@ -154,6 +154,16 @@ func applyVerify(res result, root string, data []byte) result {
 		res.Phases = append(res.Phases, phase{Name: "fixture-verify", Duration: time.Since(start).String()})
 		return res
 	}
+	if err := guardRepo(resolved); err != nil {
+		res.FixtureVerified = false
+		res.RestoreAuthorized = false
+		res.BlockedCustody = true
+		res.Outcome = "blocked-custody"
+		res.BlockedReason = err.Error()
+		res.NextAction = blockedNext("correct the synthetic fixture git config")
+		res.Phases = append(res.Phases, phase{Name: "fixture-verify", Duration: time.Since(start).String()})
+		return res
+	}
 	if err := requireHEAD(resolved, doc.Predecessor.Head); err != nil || doc.Observed.Head != doc.Predecessor.Head {
 		if err == nil {
 			err = errors.New("fixture HEAD does not match both record heads")
@@ -187,11 +197,26 @@ func cmdVerify(args []string, out, errw io.Writer) int {
 	if !ok {
 		return usage(out, errw)
 	}
-	man, err := readManifest(manifestPath)
+	man, head, err := readManifest(manifestPath)
 	if err != nil {
 		return failFixture(out, errw, err)
 	}
-	if err := verifyFixture(root, man); err != nil {
+	resolved, err := absOutside(root)
+	if err != nil {
+		return failFixture(out, errw, err)
+	}
+	if err := guardRepo(resolved); err != nil {
+		return failFixture(out, errw, err)
+	}
+	if head != "" {
+		if !validHead(head) {
+			return failFixture(out, errw, errors.New("report head is not 40 lowercase hex characters"))
+		}
+		if err := requireHEAD(resolved, head); err != nil {
+			return failFixture(out, errw, err)
+		}
+	}
+	if err := verifyFixture(resolved, man); err != nil {
 		return failFixture(out, errw, err)
 	}
 	return emit(out, fixtureReport{Schema: fixtureSchema, Verified: true, OriginalsPreserved: "not-checked"})
@@ -249,7 +274,10 @@ func cmdRestore(args []string, out, errw io.Writer) int {
 		res.Outcome = "blocked-custody"
 		res.BlockedReason = err.Error()
 		res.OriginalsPreserved = "unknown"
-		if errors.Is(err, errOriginalAltered) {
+		var preserved preservedSourceError
+		if errors.As(err, &preserved) {
+			res.OriginalsPreserved = "preserved"
+		} else if errors.Is(err, errOriginalAltered) {
 			res.OriginalsPreserved = "altered"
 		}
 		res.ExitCode = 2

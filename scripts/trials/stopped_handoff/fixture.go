@@ -114,6 +114,10 @@ func restoreFixture(from, into string, man manifest, head string) error {
 	if err := verifyFixture(src, man); err != nil {
 		return fmt.Errorf("predecessor fixture: %w", err)
 	}
+	modes, err := fixtureModes(src, man)
+	if err != nil {
+		return fmt.Errorf("predecessor fixture: %w", err)
+	}
 	if err := requireHEAD(src, head); err != nil {
 		return err
 	}
@@ -136,7 +140,10 @@ func restoreFixture(from, into string, man manifest, head string) error {
 	if err := requireHEAD(dst, head); err != nil {
 		return err
 	}
-	if err := overlay(src, dst, man); err != nil {
+	if err := overlay(src, dst, man, modes); err != nil {
+		return finishSource(src, man, before, err)
+	}
+	if err := applyCommittedModes(src, dst, man); err != nil {
 		return finishSource(src, man, before, err)
 	}
 	if err := verifyFixture(dst, man); err != nil {
@@ -159,14 +166,21 @@ func finishSource(src string, man manifest, before string, opErr error) error {
 	if before != after {
 		return errOriginalAltered
 	}
-	return opErr
+	if opErr != nil {
+		return preservedSourceError{err: opErr}
+	}
+	return nil
 }
 
-func overlay(src, dst string, man manifest) error {
-	modes, err := fixtureModes(src, man)
-	if err != nil {
-		return err
-	}
+type preservedSourceError struct {
+	err error
+}
+
+func (e preservedSourceError) Error() string { return e.err.Error() }
+
+func (e preservedSourceError) Unwrap() error { return e.err }
+
+func overlay(src, dst string, man manifest, modes map[string]os.FileMode) error {
 	dstRoot, err := os.OpenRoot(dst)
 	if err != nil {
 		return err
@@ -187,6 +201,9 @@ func overlay(src, dst string, man manifest) error {
 		}
 		if err := dstRoot.WriteFile(entry.Path, body, modes[entry.Path]); err != nil {
 			return fmt.Errorf("refusing to write %s outside the recipient fixture: %w", entry.Path, err)
+		}
+		if err := dstRoot.Chmod(entry.Path, modes[entry.Path]); err != nil {
+			return err
 		}
 		if entry.GitState == "staged" {
 			if _, err := gitCmd(dst, "add", "--", entry.Path); err != nil {
@@ -222,6 +239,36 @@ func fixtureModes(root string, man manifest) (map[string]os.FileMode, error) {
 		modes[entry.Path] = perm
 	}
 	return modes, nil
+}
+
+func applyCommittedModes(src, dst string, man manifest) error {
+	srcRoot, err := os.OpenRoot(src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = srcRoot.Close() }()
+	dstRoot, err := os.OpenRoot(dst)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dstRoot.Close() }()
+	for _, entry := range man.Entries {
+		if entry.GitState != "committed" {
+			continue
+		}
+		info, err := srcRoot.Lstat(entry.Path)
+		if err != nil {
+			return err
+		}
+		perm := info.Mode().Perm()
+		if perm != 0o644 && perm != 0o755 {
+			return fmt.Errorf("refusing unsupported mode %o for %s", perm, entry.Path)
+		}
+		if err := dstRoot.Chmod(entry.Path, perm); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func verifyFixture(root string, man manifest) error {
@@ -279,7 +326,112 @@ func verifyFixture(root string, man manifest) error {
 			return fmt.Errorf("unexpected git status for %s", path)
 		}
 	}
+	return bindTreeAndModes(abs, man)
+}
+
+func bindTreeAndModes(root string, man manifest) error {
+	if _, err := fixtureModes(root, man); err != nil {
+		return err
+	}
+	for _, entry := range man.Entries {
+		switch entry.GitState {
+		case "committed":
+			mode, err := headBlobMode(root, entry.Path)
+			if err != nil {
+				return err
+			}
+			if err := worktreeModeMatches(root, entry.Path, mode); err != nil {
+				return err
+			}
+		case "staged", "unstaged":
+			mode, err := indexGitMode(root, entry.Path)
+			if err != nil {
+				return err
+			}
+			if err := worktreeModeMatches(root, entry.Path, mode); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
+}
+
+func worktreeModeMatches(root, path, gitMode string) error {
+	want, err := permFromGitMode(gitMode)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+	info, err := r.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file", path)
+	}
+	if info.Mode().Perm() != want {
+		return fmt.Errorf("refusing worktree mode %o for %s; git mode is %s; refusing before any restore write", info.Mode().Perm(), path, gitMode)
+	}
+	return nil
+}
+
+func permFromGitMode(mode string) (os.FileMode, error) {
+	switch mode {
+	case "100644":
+		return 0o644, nil
+	case "100755":
+		return 0o755, nil
+	default:
+		return 0, fmt.Errorf("refusing unsupported git mode %s before any restore write", mode)
+	}
+}
+
+func headBlobMode(dir, path string) (string, error) {
+	out, err := gitCmd(dir, "ls-tree", "HEAD", "--", path)
+	if err != nil {
+		return "", err
+	}
+	if out == "" || strings.Contains(out, "\n") {
+		return "", fmt.Errorf("%s is not a single HEAD blob", path)
+	}
+	meta, name, ok := strings.Cut(out, "\t")
+	if !ok || name != path {
+		return "", fmt.Errorf("%s is not in the HEAD tree", path)
+	}
+	parts := strings.Fields(meta)
+	if len(parts) != 3 || parts[1] != "blob" {
+		return "", fmt.Errorf("%s is not a HEAD blob", path)
+	}
+	if _, err := permFromGitMode(parts[0]); err != nil {
+		return "", fmt.Errorf("%s: %w", path, err)
+	}
+	return parts[0], nil
+}
+
+func indexGitMode(dir, path string) (string, error) {
+	out, err := gitCmd(dir, "ls-files", "-s", "--", path)
+	if err != nil {
+		return "", err
+	}
+	if out == "" || strings.Contains(out, "\n") {
+		return "", fmt.Errorf("%s is not a single index blob", path)
+	}
+	meta, name, ok := strings.Cut(out, "\t")
+	if !ok || name != path {
+		return "", fmt.Errorf("%s is not in the index", path)
+	}
+	parts := strings.Fields(meta)
+	if len(parts) != 3 || parts[2] != "0" {
+		return "", fmt.Errorf("%s is not a stage-zero index blob", path)
+	}
+	if _, err := permFromGitMode(parts[0]); err != nil {
+		return "", fmt.Errorf("%s: %w", path, err)
+	}
+	return parts[0], nil
 }
 
 func snapshot(root string, man manifest) (string, error) {
@@ -318,27 +470,39 @@ func snapshot(root string, man manifest) (string, error) {
 	return b.String(), nil
 }
 
-func readManifest(path string) (manifest, error) {
+func readManifest(path string) (manifest, string, error) {
 	data, err := readInput(path, nil)
 	if err != nil {
-		return manifest{}, err
+		return manifest{}, "", err
 	}
-	var report fixtureReport
+	if err := rejectDuplicateKeys(data); err != nil {
+		return manifest{}, "", err
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
+	var report fixtureReport
 	if err := dec.Decode(&report); err != nil {
-		var man manifest
 		dec = json.NewDecoder(bytes.NewReader(data))
 		dec.DisallowUnknownFields()
+		var man manifest
 		if err2 := dec.Decode(&man); err2 != nil {
-			return manifest{}, err
+			return manifest{}, "", err
 		}
-		return man, nil
+		if err := requireEOF(dec); err != nil {
+			return manifest{}, "", err
+		}
+		if len(man.Entries) == 0 {
+			return manifest{}, "", errors.New("manifest is missing")
+		}
+		return man, "", nil
 	}
-	if len(report.Manifest.Entries) > 0 {
-		return report.Manifest, nil
+	if err := requireEOF(dec); err != nil {
+		return manifest{}, "", err
 	}
-	return manifest{}, errors.New("manifest is missing")
+	if len(report.Manifest.Entries) == 0 {
+		return manifest{}, "", errors.New("manifest is missing")
+	}
+	return report.Manifest, report.Head, nil
 }
 
 func parsePorcelain(status string) map[string]string {
@@ -394,7 +558,10 @@ func writeRel(root, name, body string) error {
 		return err
 	}
 	defer func() { _ = r.Close() }()
-	return r.WriteFile(rel, []byte(body), 0o644)
+	if err := r.WriteFile(rel, []byte(body), 0o644); err != nil {
+		return err
+	}
+	return r.Chmod(rel, 0o644)
 }
 
 func cleanRel(name string) (string, error) {
@@ -405,6 +572,11 @@ func cleanRel(name string) (string, error) {
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path %q escapes the fixture", name)
 	}
+	for _, part := range strings.Split(clean, "/") {
+		if strings.EqualFold(part, ".git") {
+			return "", fmt.Errorf("path %q is git metadata", name)
+		}
+	}
 	return clean, nil
 }
 
@@ -414,6 +586,8 @@ func gitCmd(dir string, args ...string) (string, error) {
 		"--no-optional-locks",
 		"-c", "core.hooksPath=/dev/null",
 		"-c", "core.fsmonitor=",
+		"-c", "core.excludesFile=/dev/null",
+		"-c", "core.attributesFile=/dev/null",
 		"-c", "diff.autoRefreshIndex=false",
 		"-c", "protocol.file.allow=always",
 	)

@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const (
@@ -335,13 +337,17 @@ func validateManifest(man manifest) error {
 	}
 	seen := map[string]bool{}
 	for _, entry := range man.Entries {
-		if seen[entry.Path] {
-			return fmt.Errorf("duplicate manifest path %q", entry.Path)
-		}
-		seen[entry.Path] = true
-		if _, err := cleanRel(entry.Path); err != nil {
+		clean, err := cleanRel(entry.Path)
+		if err != nil {
 			return err
 		}
+		if clean != entry.Path {
+			return fmt.Errorf("manifest path %q is not canonical", entry.Path)
+		}
+		if seen[clean] {
+			return fmt.Errorf("duplicate manifest path %q", entry.Path)
+		}
+		seen[clean] = true
 		switch entry.GitState {
 		case "committed", "staged", "unstaged", "untracked":
 		default:
@@ -458,9 +464,11 @@ type gathered struct {
 	conflicts  []string
 }
 
-func gather(events []event) gathered {
+func gather(events []event, stopAt time.Time) gathered {
+	events = chronological(events)
 	seen := map[string]string{}
 	var g gathered
+	var firstSuccAt, firstLateAt time.Time
 	for _, ev := range events {
 		canon := canonicalEvent(ev)
 		if prev, ok := seen[ev.Identity]; ok {
@@ -485,12 +493,42 @@ func gather(events []event) gathered {
 				g.conflicts = append(g.conflicts, "conflicting next-owner records")
 			}
 		case "successor-request":
+			at, err := time.Parse(time.RFC3339, ev.SourceTime)
+			if err != nil {
+				g.conflicts = append(g.conflicts, "event time is unreadable")
+				continue
+			}
+			if len(g.successors) == 0 {
+				g.successors = append(g.successors, ev.Successor)
+				firstSuccAt = at
+				continue
+			}
+			if ev.Successor != g.successors[0] && at.Equal(firstSuccAt) {
+				g.conflicts = append(g.conflicts, "successor requests at one instant conflict")
+				continue
+			}
 			g.successors = append(g.successors, ev.Successor)
 		case "result-after-wait":
+			at, err := time.Parse(time.RFC3339, ev.SourceTime)
+			if err != nil {
+				g.conflicts = append(g.conflicts, "event time is unreadable")
+				continue
+			}
+			if at.Before(stopAt) {
+				g.refusals = append(g.refusals, "result before the verified stop is not a late result")
+				continue
+			}
 			g.lateCount++
 			if g.late == "" {
 				g.late = ev.ContentHash
-			} else if g.late != ev.ContentHash {
+				firstLateAt = at
+				continue
+			}
+			if g.late != ev.ContentHash && at.Equal(firstLateAt) {
+				g.conflicts = append(g.conflicts, "late results at one instant conflict")
+				continue
+			}
+			if g.late != ev.ContentHash {
 				g.refusals = append(g.refusals, "additional result ignored")
 			}
 		case "reconnect":
@@ -505,7 +543,15 @@ func gather(events []event) gathered {
 func reduce(doc document) result {
 	res := baseResult()
 	copySource(&res, doc)
-	g := gather(doc.Events)
+	stopAt, err := time.Parse(time.RFC3339, doc.Predecessor.SourceTime)
+	if err != nil {
+		res.Status = "refused"
+		res.ExitCode = 2
+		res.Outcome = "refused"
+		res.Refusals = append(res.Refusals, "verified stop time is unreadable")
+		return res
+	}
+	g := gather(doc.Events, stopAt)
 	res.IgnoredReplayCount = g.replays
 	res.Refusals = append(res.Refusals, g.refusals...)
 	res.LateResult = g.late
@@ -578,6 +624,7 @@ func reduce(doc document) result {
 const (
 	reasonLaterObservation = "stop contradicted by a later running or reconnect observation"
 	reasonBeforeStop       = "pickup, acknowledgment, next owner, or successor precedes the verified stop"
+	reasonResultBeforeStop = "result precedes the verified stop"
 )
 
 func stopOrderReasons(doc document) []string {
@@ -585,7 +632,7 @@ func stopOrderReasons(doc document) []string {
 	if err != nil {
 		return []string{"verified stop time is unreadable"}
 	}
-	var later, before bool
+	var later, before, resultBefore bool
 	for _, ev := range doc.Events {
 		at, err := time.Parse(time.RFC3339, ev.SourceTime)
 		if err != nil {
@@ -600,6 +647,10 @@ func stopOrderReasons(doc document) []string {
 			if at.Before(stopAt) {
 				before = true
 			}
+		case "result-after-wait":
+			if at.Before(stopAt) {
+				resultBefore = true
+			}
 		}
 	}
 	var reasons []string
@@ -609,7 +660,23 @@ func stopOrderReasons(doc document) []string {
 	if before {
 		reasons = append(reasons, reasonBeforeStop)
 	}
+	if resultBefore {
+		reasons = append(reasons, reasonResultBeforeStop)
+	}
 	return reasons
+}
+
+func chronological(events []event) []event {
+	out := append([]event(nil), events...)
+	sort.SliceStable(out, func(i, j int) bool {
+		ti, errI := time.Parse(time.RFC3339, out[i].SourceTime)
+		tj, errJ := time.Parse(time.RFC3339, out[j].SourceTime)
+		if errI != nil || errJ != nil {
+			return false
+		}
+		return ti.Before(tj)
+	})
+	return out
 }
 
 func hasReason(reasons []string, want string) bool {
@@ -802,8 +869,8 @@ func bounded(v, name string) error {
 		return fmt.Errorf("%s is too long", name)
 	}
 	for _, c := range v {
-		if c < 0x20 || c == 0x7f {
-			return fmt.Errorf("%s contains a control character", name)
+		if c < 0x20 || c == 0x7f || unicode.Is(unicode.Cc, c) || unicode.Is(unicode.Cf, c) {
+			return fmt.Errorf("%s contains a control or format character", name)
 		}
 	}
 	return nil
@@ -878,6 +945,7 @@ var canonicalKeys = map[string]struct{}{
 	"gitState": {}, "sha256": {}, "kind": {}, "contentHash": {}, "pendingFindings": {},
 	"holds": {}, "consumedBudget": {}, "attempts": {}, "nativeHistory": {}, "nativeImport": {},
 	"owner": {}, "note": {}, "successor": {}, "authorized": {}, "supported": {},
+	"verified": {}, "originalsPreserved": {}, "error": {},
 }
 
 func rejectDuplicateKeys(data []byte) error {

@@ -152,6 +152,7 @@ func TestReplayReconnectAndLateResult(t *testing.T) {
 	}
 	second := late.Events[len(late.Events)-1]
 	second.Identity = "late-2"
+	second.SourceTime = "2026-10-23T23:11:00Z"
 	second.ContentHash = strings.Repeat("a", 64)
 	late.Events = append(late.Events, second)
 	secondRes := mustCheck(t, late, 0)
@@ -344,6 +345,86 @@ func TestCanonicalKeysAndStopOrder(t *testing.T) {
 	earlyRes := mustCheck(t, early, 0)
 	if earlyRes.RestoreAuthorized || earlyRes.RecordedSuccessor != "" || !strings.Contains(earlyRes.BlockedReason, reasonBeforeStop) || earlyRes.ConsumedBudget != "attempt-1" || earlyRes.Attempts != 1 {
 		t.Fatalf("early pickup %#v %s", earlyRes.RecordedSuccessor, earlyRes.BlockedReason)
+	}
+}
+
+func TestSuccessorAndResultFollowSourceTime(t *testing.T) {
+	base := loadDoc(t)
+	ordered := base
+	ordered.Continuation = "available"
+	ordered.Assignment = assignment{Authorized: true, Supported: true, Successor: "succ-earlier"}
+	ordered.Events = append(ordered.Events,
+		event{Kind: "successor-request", Identity: "s-late", SourceTime: "2026-10-23T23:30:00Z", Successor: "succ-later"},
+		event{Kind: "successor-request", Identity: "s-early", SourceTime: "2026-10-23T23:08:00Z", Successor: "succ-earlier"},
+	)
+	res := mustCheck(t, ordered, 0)
+	if res.RecordedSuccessor != "succ-earlier" || res.RecordedSuccessorCount != 1 || res.BlockedCustody || res.SuccessorAction != "not-performed" || !has(res.Refusals, "duplicate successor does not replace the recorded successor") {
+		t.Fatalf("earliest successor %#v %s", res.RecordedSuccessor, res.Refusals)
+	}
+	if res.Holds[0] != "hold-synthetic-merge" || res.AuthorityRef != base.Predecessor.AuthorityRef || res.ConsumedBudget != "attempt-1" || res.Attempts != 1 {
+		t.Fatalf("custody fields %#v %s", res.Holds, res.AuthorityRef)
+	}
+
+	laterWins := ordered
+	laterWins.Assignment.Successor = "succ-later"
+	later := mustCheck(t, laterWins, 0)
+	if later.RecordedSuccessor != "" || !later.BlockedCustody || !later.RestoreAuthorized || !strings.Contains(later.BlockedReason, "supported successor assignment is not recorded") {
+		t.Fatalf("later successor replaced the earlier one: %q %v %s", later.RecordedSuccessor, later.RestoreAuthorized, later.BlockedReason)
+	}
+
+	same := base
+	same.Continuation = "available"
+	same.Assignment = assignment{Authorized: true, Supported: true, Successor: "succ-a"}
+	same.Events = append(same.Events,
+		event{Kind: "successor-request", Identity: "s-a", SourceTime: "2026-10-23T23:08:00Z", Successor: "succ-a"},
+		event{Kind: "successor-request", Identity: "s-b", SourceTime: "2026-10-23T23:08:00Z", Successor: "succ-b"},
+	)
+	sameRes := mustCheck(t, same, 3)
+	if sameRes.RecordedSuccessor != "" || sameRes.LateResult != "" || sameRes.Holds[0] != "hold-synthetic-merge" || !has(sameRes.Conflicts, "successor requests at one instant conflict") {
+		t.Fatalf("same-instant successor %#v %s", sameRes.Conflicts, sameRes.RecordedSuccessor)
+	}
+
+	earlyHash := strings.Repeat("2", 64)
+	lateHash := strings.Repeat("1", 64)
+	results := base
+	results.Events = append(results.Events,
+		event{Kind: "result-after-wait", Identity: "r-late", SourceTime: "2026-10-23T23:40:00Z", ContentHash: lateHash},
+		event{Kind: "result-after-wait", Identity: "r-early", SourceTime: "2026-10-23T23:10:00Z", ContentHash: earlyHash},
+	)
+	resultRes := mustCheck(t, results, 0)
+	if resultRes.LateResult != earlyHash || resultRes.ResultCount != 1 || !has(resultRes.Refusals, "additional result ignored") {
+		t.Fatalf("late result %s %#v", resultRes.LateResult, resultRes.Refusals)
+	}
+
+	tie := base
+	tie.Events = append(tie.Events,
+		event{Kind: "result-after-wait", Identity: "r-a", SourceTime: "2026-10-23T23:10:00Z", ContentHash: earlyHash},
+		event{Kind: "result-after-wait", Identity: "r-b", SourceTime: "2026-10-23T23:10:00Z", ContentHash: lateHash},
+	)
+	tieRes := mustCheck(t, tie, 3)
+	if tieRes.LateResult != "" || tieRes.RecordedSuccessor != "" || tieRes.Attempts != 1 || !has(tieRes.Conflicts, "late results at one instant conflict") {
+		t.Fatalf("same-instant result %#v %s", tieRes.Conflicts, tieRes.LateResult)
+	}
+
+	pre := base
+	pre.Events = append(pre.Events, event{
+		Kind: "result-after-wait", Identity: "r-pre", SourceTime: "2026-10-23T22:00:00Z", ContentHash: earlyHash,
+	})
+	preRes := mustCheck(t, pre, 0)
+	if preRes.LateResult != "" || preRes.RestoreAuthorized || !strings.Contains(preRes.BlockedReason, reasonResultBeforeStop) || preRes.Holds[0] != "hold-synthetic-merge" {
+		t.Fatalf("pre-stop result %q %s", preRes.LateResult, preRes.BlockedReason)
+	}
+
+	marked := base
+	marked.Excerpt.Holds = []string{"hold\u202egrem"}
+	marked.Predecessor.ScopeRef = "scope\u200b101"
+	body, err := json.Marshal(marked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markedRes, code := check(body)
+	if code != 2 || markedRes.RestoreAuthorized || markedRes.TaskClaim != "unchanged" {
+		t.Fatalf("format character accepted %d %#v", code, markedRes.Refusals)
 	}
 }
 
