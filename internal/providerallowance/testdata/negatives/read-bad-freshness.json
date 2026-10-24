@@ -1,0 +1,585 @@
+{
+  "schema": "providerallowance.read.v1",
+  "snapshotRevision": "synthetic-revision-1",
+  "servedAt": "2026-10-24T17:00:00Z",
+  "items": [
+    {
+      "observation": {
+        "schema": "providerallowance.v1",
+        "observationId": "historical-codex-188",
+        "producerRef": "fixture-producer",
+        "producerIncarnation": "fixture-incarnation-1",
+        "sequence": 1,
+        "bindingGeneration": 0,
+        "provider": "openai",
+        "source": {
+          "kind": "native_rpc",
+          "version": "CLI-and-daemon0.160.1",
+          "capabilityRef": "story188:codex-native-field-schema"
+        },
+        "scope": {
+          "accountRef": null,
+          "workspaceRef": null,
+          "entitlementRef": null,
+          "products": [
+            "codex"
+          ],
+          "bindingState": "unknown"
+        },
+        "capturedAt": "2026-10-24T16:02:43.684834Z",
+        "providerObservedAt": null,
+        "availability": "available",
+        "completeness": "partial",
+        "directFields": [
+          {
+            "field": "ordinaryUsageAllowed",
+            "originalType": "boolean",
+            "lexicalValue": "true"
+          },
+          {
+            "field": "spendControlReached",
+            "originalType": "boolean",
+            "lexicalValue": "false"
+          },
+          {
+            "field": "secondary",
+            "originalType": "null",
+            "lexicalValue": null
+          },
+          {
+            "field": "resetCredits.detailsState",
+            "originalType": "string",
+            "lexicalValue": "unknown"
+          },
+          {
+            "field": "resetCredits.availableCount",
+            "originalType": "decimal",
+            "lexicalValue": "0"
+          }
+        ],
+        "measures": [
+          {
+            "id": "codex-primary",
+            "category": "included_quota",
+            "window": {
+              "ref": "codex-primary-window",
+              "durationMinutes": 10080,
+              "startAt": null,
+              "resetAt": "2026-10-30T17:41:01Z",
+              "resetPrecision": "instant"
+            },
+            "unit": "percent",
+            "currency": null,
+            "direction": "used",
+            "value": {
+              "state": "known",
+              "decimal": "50"
+            },
+            "validationRef": "story188:codex0.160.1:primary-fields",
+            "evidenceFields": []
+          },
+          {
+            "id": "codex-secondary",
+            "category": "included_quota",
+            "window": {
+              "ref": "codex-secondary-window",
+              "durationMinutes": null,
+              "startAt": null,
+              "resetAt": null,
+              "resetPrecision": "unknown"
+            },
+            "unit": "percent",
+            "currency": null,
+            "direction": "used",
+            "value": {
+              "state": "not_reported",
+              "decimal": null
+            },
+            "validationRef": null,
+            "evidenceFields": []
+          }
+        ],
+        "derivations": [],
+        "evidenceRefs": [
+          "codex-unix-native-sanitized.json"
+        ],
+        "errorCode": null
+      },
+      "receivedAt": "2026-10-24T16:32:00Z",
+      "validation": {
+        "state": "source_fields_validated",
+        "validationRefs": [
+          "story188:codex0.160.1:primary-fields"
+        ]
+      },
+      "binding": {
+        "state": "unknown",
+        "generation": 0,
+        "accountRef": null,
+        "workspaceRef": null
+      },
+      "freshness": {
+        "state": "unknown",
+        "asOf": "2026-10-24T17:00:00Z",
+        "basis": "capture_only",
+        "policyRef": null,
+        "reason": "Original provider measurement time unavailable; capture is not provider freshness"
+      },
+      "currentMeasures": [
+        {
+          "measureId": "codex-primary",
+          "state": "unknown",
+          "value": {
+            "state": "unknown",
+            "decimal": null
+          },
+          "reason": "No verified current account binding/provider freshness"
+        },
+        {
+          "measureId": "codex-secondary",
+          "state": "unknown",
+          "value": {
+            "state": "unknown",
+            "decimal": null
+          },
+          "reason": "No verified current account binding/provider freshness"
+        }
+      ]
+    },
+    {
+      "observation": {
+        "schema": "providerallowance.v1",
+        "observationId": "historical-cursor-188",
+        "producerRef": "fixture-producer",
+        "producerIncarnation": "fixture-incarnation-1",
+        "sequence": 1,
+        "bindingGeneration": 0,
+        "provider": "cursor",
+        "source": {
+          "kind": "native_display",
+          "version": "2026.10.22-27dcf5f",
+          "capabilityRef": "story188:cursor-display-only"
+        },
+        "scope": {
+          "accountRef": null,
+          "workspaceRef": null,
+          "entitlementRef": null,
+          "products": [
+            "cursor"
+          ],
+          "bindingState": "unknown"
+        },
+        "capturedAt": "2026-10-24T16:31:07.267468Z",
+        "providerObservedAt": null,
+        "availability": "available",
+        "completeness": "partial",
+        "directFields": [
+          {
+            "field": "plan",
+            "originalType": "string",
+            "lexicalValue": "Super"
+          },
+          {
+            "field": "periodHeading",
+            "originalType": "string",
+            "lexicalValue": "Monthly plan and on-demand usage"
+          },
+          {
+            "field": "included",
+            "originalType": "string",
+            "lexicalValue": "75% used"
+          },
+          {
+            "field": "auto",
+            "originalType": "string",
+            "lexicalValue": "75% used"
+          },
+          {
+            "field": "api",
+            "originalType": "string",
+            "lexicalValue": "0% used"
+          },
+          {
+            "field": "onDemand",
+            "originalType": "string",
+            "lexicalValue": "$0 / $200"
+          },
+          {
+            "field": "remainingLabel",
+            "originalType": "string",
+            "lexicalValue": "$200 remaining"
+          },
+          {
+            "field": "resetLabel",
+            "originalType": "string",
+            "lexicalValue": "Oct 28"
+          }
+        ],
+        "measures": [],
+        "derivations": [],
+        "evidenceRefs": [
+          "CURSOR-NATIVE-DISPLAY-OBSERVATION.json"
+        ],
+        "errorCode": null
+      },
+      "receivedAt": "2026-10-24T16:32:00Z",
+      "validation": {
+        "state": "display_only",
+        "validationRefs": []
+      },
+      "binding": {
+        "state": "unknown",
+        "generation": 0,
+        "accountRef": null,
+        "workspaceRef": null
+      },
+      "freshness": {
+        "state": "unknown",
+        "asOf": "2026-10-24T17:00:00Z",
+        "basis": "capture_only",
+        "policyRef": null,
+        "reason": "Original provider measurement time unavailable; capture is not provider freshness"
+      },
+      "currentMeasures": []
+    },
+    {
+      "observation": {
+        "schema": "providerallowance.v1",
+        "observationId": "claude-no-retained-output",
+        "producerRef": "fixture-producer",
+        "producerIncarnation": "fixture-incarnation-1",
+        "sequence": 1,
+        "bindingGeneration": 0,
+        "provider": "anthropic",
+        "source": {
+          "kind": "passive_event",
+          "version": "2.1.296",
+          "capabilityRef": "story188:no-configured-statusline-observed"
+        },
+        "scope": {
+          "accountRef": null,
+          "workspaceRef": null,
+          "entitlementRef": null,
+          "products": [
+            "anthropic"
+          ],
+          "bindingState": "unknown"
+        },
+        "capturedAt": "2026-10-24T16:04:27.285839Z",
+        "providerObservedAt": null,
+        "availability": "unconfigured",
+        "completeness": "unknown",
+        "directFields": [],
+        "measures": [
+          {
+            "id": "five-hour",
+            "category": "included_quota",
+            "window": {
+              "ref": "five-hour-window",
+              "durationMinutes": 300,
+              "startAt": null,
+              "resetAt": null,
+              "resetPrecision": "unknown"
+            },
+            "unit": "percent",
+            "currency": null,
+            "direction": "used",
+            "value": {
+              "state": "unknown",
+              "decimal": null
+            },
+            "validationRef": null,
+            "evidenceFields": []
+          },
+          {
+            "id": "seven-day",
+            "category": "included_quota",
+            "window": {
+              "ref": "seven-day-window",
+              "durationMinutes": 10080,
+              "startAt": null,
+              "resetAt": null,
+              "resetPrecision": "unknown"
+            },
+            "unit": "percent",
+            "currency": null,
+            "direction": "used",
+            "value": {
+              "state": "unknown",
+              "decimal": null
+            },
+            "validationRef": null,
+            "evidenceFields": []
+          }
+        ],
+        "derivations": [],
+        "evidenceRefs": [
+          "claude-passive-capability.json"
+        ],
+        "errorCode": "NO_RETAINED_SANITIZED_OBSERVATION"
+      },
+      "receivedAt": "2026-10-24T16:32:00Z",
+      "validation": {
+        "state": "unverified",
+        "validationRefs": []
+      },
+      "binding": {
+        "state": "unknown",
+        "generation": 0,
+        "accountRef": null,
+        "workspaceRef": null
+      },
+      "freshness": {
+        "state": "unknown",
+        "asOf": "2026-10-24T17:00:00Z",
+        "basis": "capture_only",
+        "policyRef": null,
+        "reason": "Original provider measurement time unavailable; capture is not provider freshness"
+      },
+      "currentMeasures": [
+        {
+          "measureId": "five-hour",
+          "state": "unknown",
+          "value": {
+            "state": "unknown",
+            "decimal": null
+          },
+          "reason": "No verified current account binding/provider freshness"
+        },
+        {
+          "measureId": "seven-day",
+          "state": "unknown",
+          "value": {
+            "state": "unknown",
+            "decimal": null
+          },
+          "reason": "No verified current account binding/provider freshness"
+        }
+      ]
+    },
+    {
+      "observation": {
+        "schema": "providerallowance.v1",
+        "observationId": "synthetic-reset-expired",
+        "producerRef": "fixture-producer",
+        "producerIncarnation": "fixture-incarnation-1",
+        "sequence": 1,
+        "bindingGeneration": 0,
+        "provider": "synthetic-provider",
+        "source": {
+          "kind": "synthetic",
+          "version": "fixture-v1",
+          "capabilityRef": "synthetic:not-live"
+        },
+        "scope": {
+          "accountRef": "fixture-account",
+          "workspaceRef": "fixture-workspace",
+          "entitlementRef": null,
+          "products": [
+            "synthetic-provider"
+          ],
+          "bindingState": "verified"
+        },
+        "capturedAt": "2026-10-23T10:00:00Z",
+        "providerObservedAt": "2026-10-23T09:59:00Z",
+        "availability": "available",
+        "completeness": "complete",
+        "directFields": [],
+        "measures": [
+          {
+            "id": "five-hour",
+            "category": "included_quota",
+            "window": {
+              "ref": "five-hour-window",
+              "durationMinutes": 300,
+              "startAt": null,
+              "resetAt": "2026-10-23T15:00:00Z",
+              "resetPrecision": "instant"
+            },
+            "unit": "percent",
+            "currency": null,
+            "direction": "used",
+            "value": {
+              "state": "known",
+              "decimal": "0.36"
+            },
+            "validationRef": "fixture:verified-field-v1",
+            "evidenceFields": []
+          }
+        ],
+        "derivations": [],
+        "evidenceRefs": [],
+        "errorCode": null
+      },
+      "receivedAt": "2026-10-23T10:00:01Z",
+      "validation": {
+        "state": "source_fields_validated",
+        "validationRefs": [
+          "fixture:verified-field-v1"
+        ]
+      },
+      "binding": {
+        "state": "verified",
+        "generation": 0,
+        "accountRef": "fixture-account",
+        "workspaceRef": "fixture-workspace"
+      },
+      "freshness": {
+        "state": "expired",
+        "asOf": "2026-10-24T17:00:00Z",
+        "basis": "provider_observation",
+        "policyRef": null,
+        "reason": "Known reset passed with no new source observation"
+      },
+      "currentMeasures": [
+        {
+          "measureId": "five-hour",
+          "state": "expired",
+          "value": {
+            "state": "unknown",
+            "decimal": null
+          },
+          "reason": "Past reset; no automatic replenishment"
+        }
+      ]
+    }
+  ],
+  "sourceStatuses": [
+    {
+      "provider": "openai",
+      "producerRef": "fixture-producer",
+      "availability": "available",
+      "lastGood": {
+        "observationId": "historical-codex-188",
+        "capturedAt": "2026-10-24T16:02:43.684834Z",
+        "providerObservedAt": null,
+        "receivedAt": "2026-10-24T16:32:00Z"
+      },
+      "lastAttempt": {
+        "attemptedAt": "2026-10-24T16:50:00Z",
+        "completedAt": "2026-10-24T16:50:01Z",
+        "result": "unknown",
+        "code": "SYNTHETIC_NO_NEW_PROVIDER_READ"
+      },
+      "freshness": {
+        "state": "fresh-because-served",
+        "asOf": "2026-10-24T17:00:00Z",
+        "basis": "capture_only",
+        "policyRef": null,
+        "reason": "Original provider measurement time unavailable; capture is not provider freshness"
+      },
+      "validation": {
+        "state": "source_fields_validated",
+        "validationRefs": [
+          "story188:codex0.160.1:primary-fields"
+        ]
+      },
+      "binding": {
+        "state": "unknown",
+        "generation": 0,
+        "accountRef": null,
+        "workspaceRef": null
+      }
+    },
+    {
+      "provider": "cursor",
+      "producerRef": "fixture-producer",
+      "availability": "available",
+      "lastGood": {
+        "observationId": "historical-cursor-188",
+        "capturedAt": "2026-10-24T16:31:07.267468Z",
+        "providerObservedAt": null,
+        "receivedAt": "2026-10-24T16:32:00Z"
+      },
+      "lastAttempt": {
+        "attemptedAt": "2026-10-24T16:50:00Z",
+        "completedAt": "2026-10-24T16:50:01Z",
+        "result": "unknown",
+        "code": "SYNTHETIC_NO_NEW_PROVIDER_READ"
+      },
+      "freshness": {
+        "state": "unknown",
+        "asOf": "2026-10-24T17:00:00Z",
+        "basis": "capture_only",
+        "policyRef": null,
+        "reason": "Original provider measurement time unavailable; capture is not provider freshness"
+      },
+      "validation": {
+        "state": "display_only",
+        "validationRefs": []
+      },
+      "binding": {
+        "state": "unknown",
+        "generation": 0,
+        "accountRef": null,
+        "workspaceRef": null
+      }
+    },
+    {
+      "provider": "anthropic",
+      "producerRef": "fixture-producer",
+      "availability": "unconfigured",
+      "lastGood": null,
+      "lastAttempt": {
+        "attemptedAt": "2026-10-24T16:50:00Z",
+        "completedAt": "2026-10-24T16:50:01Z",
+        "result": "unknown",
+        "code": "SYNTHETIC_NO_NEW_PROVIDER_READ"
+      },
+      "freshness": {
+        "state": "unknown",
+        "asOf": "2026-10-24T17:00:00Z",
+        "basis": "capture_only",
+        "policyRef": null,
+        "reason": "Original provider measurement time unavailable; capture is not provider freshness"
+      },
+      "validation": {
+        "state": "unverified",
+        "validationRefs": []
+      },
+      "binding": {
+        "state": "unknown",
+        "generation": 0,
+        "accountRef": null,
+        "workspaceRef": null
+      }
+    },
+    {
+      "provider": "synthetic-provider",
+      "producerRef": "fixture-producer",
+      "availability": "unavailable",
+      "lastGood": {
+        "observationId": "synthetic-reset-expired",
+        "capturedAt": "2026-10-23T10:00:00Z",
+        "providerObservedAt": "2026-10-23T09:59:00Z",
+        "receivedAt": "2026-10-23T10:00:01Z"
+      },
+      "lastAttempt": {
+        "attemptedAt": "2026-10-24T16:50:00Z",
+        "completedAt": "2026-10-24T16:50:01Z",
+        "result": "error",
+        "code": "SYNTHETIC_SOURCE_READ_FAILED"
+      },
+      "freshness": {
+        "state": "expired",
+        "asOf": "2026-10-24T17:00:00Z",
+        "basis": "provider_observation",
+        "policyRef": null,
+        "reason": "Known reset passed with no new source observation"
+      },
+      "validation": {
+        "state": "source_fields_validated",
+        "validationRefs": [
+          "fixture:verified-field-v1"
+        ]
+      },
+      "binding": {
+        "state": "verified",
+        "generation": 0,
+        "accountRef": "fixture-account",
+        "workspaceRef": "fixture-workspace"
+      }
+    }
+  ],
+  "nextCursor": null
+}

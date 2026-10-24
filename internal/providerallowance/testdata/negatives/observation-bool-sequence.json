@@ -1,0 +1,101 @@
+{
+  "schema": "providerallowance.v1",
+  "observationId": "historical-codex-188",
+  "producerRef": "fixture-producer",
+  "producerIncarnation": "fixture-incarnation-1",
+  "sequence": true,
+  "bindingGeneration": 0,
+  "provider": "openai",
+  "source": {
+    "kind": "native_rpc",
+    "version": "CLI-and-daemon0.160.1",
+    "capabilityRef": "story188:codex-native-field-schema"
+  },
+  "scope": {
+    "accountRef": null,
+    "workspaceRef": null,
+    "entitlementRef": null,
+    "products": [
+      "codex"
+    ],
+    "bindingState": "unknown"
+  },
+  "capturedAt": "2026-10-24T16:02:43.684834Z",
+  "providerObservedAt": null,
+  "availability": "available",
+  "completeness": "partial",
+  "directFields": [
+    {
+      "field": "ordinaryUsageAllowed",
+      "originalType": "boolean",
+      "lexicalValue": "true"
+    },
+    {
+      "field": "spendControlReached",
+      "originalType": "boolean",
+      "lexicalValue": "false"
+    },
+    {
+      "field": "secondary",
+      "originalType": "null",
+      "lexicalValue": null
+    },
+    {
+      "field": "resetCredits.detailsState",
+      "originalType": "string",
+      "lexicalValue": "unknown"
+    },
+    {
+      "field": "resetCredits.availableCount",
+      "originalType": "decimal",
+      "lexicalValue": "0"
+    }
+  ],
+  "measures": [
+    {
+      "id": "codex-primary",
+      "category": "included_quota",
+      "window": {
+        "ref": "codex-primary-window",
+        "durationMinutes": 10080,
+        "startAt": null,
+        "resetAt": "2026-10-30T17:41:01Z",
+        "resetPrecision": "instant"
+      },
+      "unit": "percent",
+      "currency": null,
+      "direction": "used",
+      "value": {
+        "state": "known",
+        "decimal": "50"
+      },
+      "validationRef": "story188:codex0.160.1:primary-fields",
+      "evidenceFields": []
+    },
+    {
+      "id": "codex-secondary",
+      "category": "included_quota",
+      "window": {
+        "ref": "codex-secondary-window",
+        "durationMinutes": null,
+        "startAt": null,
+        "resetAt": null,
+        "resetPrecision": "unknown"
+      },
+      "unit": "percent",
+      "currency": null,
+      "direction": "used",
+      "value": {
+        "state": "not_reported",
+        "decimal": null
+      },
+      "validationRef": null,
+      "evidenceFields": []
+    }
+  ],
+  "derivations": [],
+  "evidenceRefs": [
+    "codex-unix-native-sanitized.json"
+  ],
+  "errorCode": null
+}

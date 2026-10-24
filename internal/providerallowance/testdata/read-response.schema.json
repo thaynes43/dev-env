@@ -1,0 +1,806 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dev-env:providerallowance:read:v1:draft",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "enum": [
+        "providerallowance.read.v1"
+      ]
+    },
+    "snapshotRevision": {
+      "type": "string"
+    },
+    "servedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/item"
+      }
+    },
+    "sourceStatuses": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/sourceStatus"
+      }
+    },
+    "nextCursor": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "snapshotRevision",
+    "servedAt",
+    "items",
+    "sourceStatuses",
+    "nextCursor"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "scope": {
+      "type": "object",
+      "properties": {
+        "accountRef": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspaceRef": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "entitlementRef": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "products": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bindingState": {
+          "enum": [
+            "verified",
+            "unknown",
+            "mismatch"
+          ]
+        }
+      },
+      "required": [
+        "accountRef",
+        "workspaceRef",
+        "entitlementRef",
+        "products",
+        "bindingState"
+      ],
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "native_rpc",
+            "native_display",
+            "passive_event",
+            "synthetic",
+            "advisory"
+          ]
+        },
+        "version": {
+          "type": "string"
+        },
+        "capabilityRef": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "version",
+        "capabilityRef"
+      ],
+      "additionalProperties": false
+    },
+    "direct": {
+      "type": "object",
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "originalType": {
+          "enum": [
+            "string",
+            "decimal",
+            "boolean",
+            "null"
+          ]
+        },
+        "lexicalValue": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "field",
+        "originalType",
+        "lexicalValue"
+      ],
+      "additionalProperties": false
+    },
+    "window": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "durationMinutes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "startAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resetAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resetPrecision": {
+          "enum": [
+            "instant",
+            "display_only",
+            "unknown",
+            "not_applicable"
+          ]
+        }
+      },
+      "required": [
+        "ref",
+        "durationMinutes",
+        "startAt",
+        "resetAt",
+        "resetPrecision"
+      ],
+      "additionalProperties": false
+    },
+    "value": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "enum": [
+            "known",
+            "unknown",
+            "not_reported",
+            "not_applicable",
+            "uncapped"
+          ]
+        },
+        "decimal": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "decimal"
+      ],
+      "additionalProperties": false
+    },
+    "measure": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "category": {
+          "enum": [
+            "included_quota",
+            "api_spend",
+            "rate_limit",
+            "local_capacity",
+            "advisory"
+          ]
+        },
+        "window": {
+          "$ref": "#/$defs/window"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "direction": {
+          "enum": [
+            "used",
+            "remaining",
+            "limit",
+            "none",
+            "unknown"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/value"
+        },
+        "validationRef": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidenceFields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "category",
+        "window",
+        "unit",
+        "currency",
+        "direction",
+        "value",
+        "validationRef",
+        "evidenceFields"
+      ],
+      "additionalProperties": false
+    },
+    "derivation": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "formula": {
+          "enum": [
+            "complement_percent",
+            "sum_compatible_values"
+          ]
+        },
+        "inputRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unit": {
+          "type": "string"
+        },
+        "precision": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/value"
+        }
+      },
+      "required": [
+        "id",
+        "formula",
+        "inputRefs",
+        "unit",
+        "precision",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "observation": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "enum": [
+            "providerallowance.v1"
+          ]
+        },
+        "observationId": {
+          "type": "string"
+        },
+        "producerRef": {
+          "type": "string"
+        },
+        "producerIncarnation": {
+          "type": "string"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bindingGeneration": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "provider": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "capturedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "providerObservedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "availability": {
+          "enum": [
+            "available",
+            "partial",
+            "unavailable",
+            "unconfigured",
+            "auth_needed",
+            "throttled",
+            "unsupported",
+            "conflict"
+          ]
+        },
+        "completeness": {
+          "enum": [
+            "complete",
+            "partial",
+            "unknown"
+          ]
+        },
+        "directFields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/direct"
+          }
+        },
+        "measures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/measure"
+          }
+        },
+        "derivations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/derivation"
+          }
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "errorCode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "observationId",
+        "producerRef",
+        "producerIncarnation",
+        "sequence",
+        "bindingGeneration",
+        "provider",
+        "source",
+        "scope",
+        "capturedAt",
+        "providerObservedAt",
+        "availability",
+        "completeness",
+        "directFields",
+        "measures",
+        "derivations",
+        "evidenceRefs",
+        "errorCode"
+      ],
+      "additionalProperties": false
+    },
+    "lastGood": {
+      "type": "object",
+      "properties": {
+        "observationId": {
+          "type": "string"
+        },
+        "capturedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "providerObservedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "receivedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "observationId",
+        "capturedAt",
+        "providerObservedAt",
+        "receivedAt"
+      ],
+      "additionalProperties": false
+    },
+    "lastAttempt": {
+      "type": "object",
+      "properties": {
+        "attemptedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result": {
+          "enum": [
+            "success",
+            "error",
+            "unavailable",
+            "unknown"
+          ]
+        },
+        "code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "attemptedAt",
+        "completedAt",
+        "result",
+        "code"
+      ],
+      "additionalProperties": false
+    },
+    "freshness": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "enum": [
+            "fresh",
+            "stale",
+            "unknown",
+            "expired"
+          ]
+        },
+        "asOf": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "basis": {
+          "enum": [
+            "provider_observation",
+            "capture_only",
+            "none"
+          ]
+        },
+        "policyRef": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "asOf",
+        "basis",
+        "policyRef",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "validation": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "enum": [
+            "source_fields_validated",
+            "display_only",
+            "unverified",
+            "partial",
+            "rejected",
+            "conflict"
+          ]
+        },
+        "validationRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "state",
+        "validationRefs"
+      ],
+      "additionalProperties": false
+    },
+    "binding": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "enum": [
+            "verified",
+            "unknown",
+            "mismatch"
+          ]
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "accountRef": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspaceRef": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "generation",
+        "accountRef",
+        "workspaceRef"
+      ],
+      "additionalProperties": false
+    },
+    "currentMeasure": {
+      "type": "object",
+      "properties": {
+        "measureId": {
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "known",
+            "unknown",
+            "expired",
+            "not_reported",
+            "not_applicable",
+            "uncapped",
+            "conflict"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/value"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "measureId",
+        "state",
+        "value",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "item": {
+      "type": "object",
+      "properties": {
+        "observation": {
+          "$ref": "#/$defs/observation"
+        },
+        "receivedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "validation": {
+          "$ref": "#/$defs/validation"
+        },
+        "binding": {
+          "$ref": "#/$defs/binding"
+        },
+        "freshness": {
+          "$ref": "#/$defs/freshness"
+        },
+        "currentMeasures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/currentMeasure"
+          }
+        }
+      },
+      "required": [
+        "observation",
+        "receivedAt",
+        "validation",
+        "binding",
+        "freshness",
+        "currentMeasures"
+      ],
+      "additionalProperties": false
+    },
+    "sourceStatus": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "producerRef": {
+          "type": "string"
+        },
+        "availability": {
+          "enum": [
+            "available",
+            "partial",
+            "unavailable",
+            "unconfigured",
+            "auth_needed",
+            "throttled",
+            "unsupported",
+            "conflict"
+          ]
+        },
+        "lastGood": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/lastGood"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastAttempt": {
+          "$ref": "#/$defs/lastAttempt"
+        },
+        "freshness": {
+          "$ref": "#/$defs/freshness"
+        },
+        "validation": {
+          "$ref": "#/$defs/validation"
+        },
+        "binding": {
+          "$ref": "#/$defs/binding"
+        }
+      },
+      "required": [
+        "provider",
+        "producerRef",
+        "availability",
+        "lastGood",
+        "lastAttempt",
+        "freshness",
+        "validation",
+        "binding"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
