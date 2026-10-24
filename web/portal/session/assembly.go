@@ -36,9 +36,8 @@ func NewAssembly(c AssemblyConfig) http.Handler {
 	}))
 }
 
-// Runtime is deliberately unavailable until an independently reviewed external
-// recovery fence and live metadata boundary are supplied in a future change.
-// A static mounted generation, process flag or restored database is no witness.
+// NewRuntimeAssembly is the unconfigured process. It stays unavailable.
+// The executable uses LoadProduction. A static generation or restored database is no witness.
 func NewRuntimeAssembly() http.Handler { return NewAssembly(AssemblyConfig{}) }
 
 // The body cap covers the read boundary's 24 bounded text rows. No data or

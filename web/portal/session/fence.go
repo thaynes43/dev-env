@@ -107,6 +107,10 @@ type KubernetesFence struct {
 }
 
 func NewKubernetesFence(c AdmissionConfig) (*KubernetesFence, error) {
+	return newKubernetesFence(c, nil)
+}
+
+func newKubernetesFence(c AdmissionConfig, dial func(context.Context, string, string) (net.Conn, error)) (*KubernetesFence, error) {
 	limiter, budgetOK := witnessBudget(c.WitnessGetsPerSecond, c.WitnessGetBurst)
 	u, err := admissionAPIURL(c.APIURL)
 	roots := x509.NewCertPool()
@@ -115,9 +119,14 @@ func NewKubernetesFence(c AdmissionConfig) (*KubernetesFence, error) {
 	}
 	// Deliberately build a dedicated transport; DefaultTransport/ProxyFromEnvironment
 	// and arbitrary caller transports cannot add destinations or credential hooks.
+	// A nil dial is the production path. Tests may pass a dial; certificate checks stay.
+	dialer := (&net.Dialer{Timeout: c.Timeout, KeepAlive: 30 * time.Second}).DialContext
+	if dial != nil {
+		dialer = dial
+	}
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: u.Hostname(), MinVersion: tls.VersionTLS12},
-		DialContext:     (&net.Dialer{Timeout: c.Timeout, KeepAlive: 30 * time.Second}).DialContext,
+		DialContext:     dialer,
 		MaxConnsPerHost: 2, MaxIdleConns: 2, MaxIdleConnsPerHost: 2,
 		IdleConnTimeout: 30 * time.Second, TLSHandshakeTimeout: c.Timeout,
 		ResponseHeaderTimeout: c.Timeout, MaxResponseHeaderBytes: 8 * 1024, DisableCompression: true,

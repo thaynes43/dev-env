@@ -316,3 +316,7 @@ UID/RV snapshot checks around commit. Runtime remains 503. Disposable asynchrono
 failover/RBAC/latency evidence, final-head native review and required CI must be
 recorded separately; live admission RBAC and DB/auth/isolation/Gate A and shared
 Authentik logging remain external gates. UI/infra/Future121 ownership is unchanged.
+
+### M6 production assembly, 2026-10-24
+
+The internal portal executable is `dev-env-portal`. It loads the mounted contract, wires the existing session engine, current authorizer, PostgreSQL store, and same-connection fence, and listens only on TLS port 8443 for `dev-env-v2.haynesops.com`. Unconfigured `NewRuntimeAssembly` remains unavailable. Metadata reads are limited to OpenProject work packages 120, 121, 122, 123, and 178 plus configured dev-env session summaries. A successful allowlisted read renders Unknown rather than an invented Attention group. Canonical 1Password item is existing `HaynesKube/dev-env`; proposed items `dev-env-v2-portal`, `dev-env-v2-portal-runtime`, and `dev-env-v2-portal-migration` are superseded and are not selectors. OIDC client id value `dev-env-v2-portal-internal`, the provider, and the callback are unchanged. Runtime field population on that same item stays held. Consumers select individual `remoteRef.property` entries only. This source does not install, populate, or read the item.

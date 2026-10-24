@@ -22,6 +22,17 @@ source.
 | Go standard library and runtime | BSD-3-Clause | [go.dev/LICENSE](https://go.dev/LICENSE) |
 | Base image `gcr.io/distroless/static:nonroot` | Apache-2.0 (the [distroless](https://github.com/GoogleContainerTools/distroless) project) | Its Debian files (`ca-certificates`, `tzdata`, `base-files`, `netbase`) keep their licenses in `/usr/share/doc/*/copyright` inside the image. |
 
+## Portal image: `ghcr.io/thaynes43/dev-env-portal`
+
+Built from [`portal/Dockerfile`](portal/Dockerfile). Everything in it is open source. Publication uses `sha-<short>` from `publish.yml` and does not assign `latest`.
+
+| Component | License | Notes |
+|---|---|---|
+| `dev-env-portal` | MIT | This repo. Internal read-only portal process. |
+| Go modules linked into the binary | Apache-2.0, BSD-3-Clause, MIT, BSD-2-Clause, ISC | PostgreSQL driver, OIDC and JWT verification, and the Kubernetes types used by the admission fence, pinned in [`go.mod`](../go.mod) and [`go.sum`](../go.sum). License texts are collected during the image build. |
+| Go standard library and runtime | BSD-3-Clause | [go.dev/LICENSE](https://go.dev/LICENSE) |
+| Base image `gcr.io/distroless/static:nonroot` | Apache-2.0 (the [distroless](https://github.com/GoogleContainerTools/distroless) project) | Its Debian files keep their licenses in `/usr/share/doc/*/copyright` inside the image. |
+
 ## Agent image: `ghcr.io/thaynes43/dev-env` (tag line 2.x)
 
 Built from [`agent/Dockerfile`](agent/Dockerfile) (KICKOFF B5, D-53) and published from

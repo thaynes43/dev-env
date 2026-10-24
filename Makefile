@@ -24,7 +24,7 @@ export CGO_ENABLED := 0
 
 BIN_DIR := $(CURDIR)/bin
 TOOLS_DIR := $(BIN_DIR)/tools
-BINARIES := agent-run agentd dev-env-keeper dev-env-operator
+BINARIES := agent-run agentd dev-env-keeper dev-env-operator dev-env-portal
 
 # Stamped into every binary (internal/version). VERSION is the release tag; there
 # is none before release-please's first release (B4). COMMIT stays empty here
