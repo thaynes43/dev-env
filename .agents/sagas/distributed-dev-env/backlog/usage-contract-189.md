@@ -36,5 +36,6 @@ actionability, and typed shape checks. Repair 02 corrects alias sums,
 schema-invalid nulls, projection ambiguity, the over-limit lower bound,
 inventory promotion, availability conflict, and trusted entitlement bindings.
 Repair 03 counts two or more present members of one valid alias group once.
-Fresh native review and current CI remain required. Packet B waits for its
-own activation.
+Repair 04 checks date-time values as RFC 3339 spellings, including lowercase
+separators and a UTC 23:59 leap second. Fresh native review and current CI
+remain required. Packet B waits for its own activation.

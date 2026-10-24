@@ -98,7 +98,12 @@ derivation. Explicit `conflict` availability keeps the raw value and semantic
 diagnostics and suppresses actionable, complete, and derived advice. A shared
 pool counts only products named by caller-trusted entitlement bindings for
 that account, workspace, generation, and producer. One observation cannot
-supply both aliases.
+supply both aliases. A date-time is an RFC 3339 spelling: four-digit date,
+two ASCII digits for each clock and offset component, `T` or `t`, an optional
+dot and one or more fractional digits, and `Z`/`z` or a signed offset from
+`00:00` through `23:59`. Second 60 is accepted only at UTC 23:59. The original
+characters stay on the value. Go's extra one-digit hour, comma fraction, and
+hour-24 or minute-60 offsets are not accepted.
 
 `ValidateObservation` applies those schema, enum, date-time, count, and
 decimal checks to a Go value as well as to a decoded document. An unsupported

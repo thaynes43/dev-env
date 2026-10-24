@@ -7,7 +7,7 @@
 // JSON null is accepted only where the schema allows null. Required arrays
 // marshal as arrays when the Go slice is nil. Decode also rejects a second
 // key, an unknown field, a boolean where an integer is required, a fractional
-// integer, a date-time without an offset, and input outside the caller-supplied
+// integer, a date-time that is not an RFC 3339 spelling, and input outside the caller-supplied
 // limits. ValidateObservation applies the same schema, enum, time, count, and
 // decimal checks to a Go value. An allowlist miss, reset-credit promotion,
 // display-only source, or explicit availability conflict clears measure

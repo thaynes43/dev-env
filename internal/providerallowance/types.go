@@ -1142,13 +1142,120 @@ func skipValue(dec *json.Decoder) error {
 }
 
 func validateDateTime(s string) error {
-	if s == "" || strings.TrimSpace(s) != s {
+	if s == "" || strings.TrimSpace(s) != s || !rfc3339DateTime(s) {
 		return errors.New("invalid date-time")
 	}
-	if _, err := time.Parse(time.RFC3339Nano, s); err != nil {
-		return err
-	}
 	return nil
+}
+
+// rfc3339DateTime matches the Draft 2020-12 date-time format: RFC 3339
+// section 5.6, with T/t and Z/z, a dot fraction of any positive length, and
+// second 60 only when the offset places it at UTC 23:59. The input string
+// is not rewritten.
+func rfc3339DateTime(s string) bool {
+	if len(s) < 20 || (s[10] != 'T' && s[10] != 't') {
+		return false
+	}
+	return rfc3339Date(s[:10]) && rfc3339Time(s[11:])
+}
+
+func rfc3339Date(s string) bool {
+	if len(s) != 10 || s[4] != '-' || s[7] != '-' {
+		return false
+	}
+	if !asciiDigits(s[0:4]) || !asciiDigits(s[5:7]) || !asciiDigits(s[8:10]) {
+		return false
+	}
+	_, err := time.Parse("2006-01-02", s)
+	return err == nil
+}
+
+func rfc3339Time(str string) bool {
+	if len(str) < 9 || str[2] != ':' || str[5] != ':' {
+		return false
+	}
+	hour, ok := asciiRange(str[0:2], 0, 23)
+	if !ok {
+		return false
+	}
+	minute, ok := asciiRange(str[3:5], 0, 59)
+	if !ok {
+		return false
+	}
+	second, ok := asciiRange(str[6:8], 0, 60)
+	if !ok {
+		return false
+	}
+	rest := str[8:]
+	if len(rest) == 0 {
+		return false
+	}
+	if rest[0] == '.' {
+		rest = rest[1:]
+		digits := 0
+		for len(rest) > 0 && rest[0] >= '0' && rest[0] <= '9' {
+			digits++
+			rest = rest[1:]
+		}
+		if digits == 0 {
+			return false
+		}
+	}
+	if len(rest) == 0 {
+		return false
+	}
+	if rest[0] == 'Z' || rest[0] == 'z' {
+		if len(rest) != 1 {
+			return false
+		}
+	} else {
+		if len(rest) != 6 || rest[3] != ':' {
+			return false
+		}
+		sign := 0
+		switch rest[0] {
+		case '+':
+			sign = -1
+		case '-':
+			sign = 1
+		default:
+			return false
+		}
+		zoneHour, ok := asciiRange(rest[1:3], 0, 23)
+		if !ok {
+			return false
+		}
+		zoneMinute, ok := asciiRange(rest[4:6], 0, 59)
+		if !ok {
+			return false
+		}
+		utcMinutes := (hour*60 + minute) + sign*(zoneHour*60+zoneMinute)
+		if utcMinutes < 0 {
+			utcMinutes += 24 * 60
+		}
+		hour, minute = utcMinutes/60, utcMinutes%60
+	}
+	return second < 60 || (hour == 23 && minute == 59)
+}
+
+func asciiDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
+}
+
+func asciiRange(s string, min, max int) (int, bool) {
+	if !asciiDigits(s) {
+		return 0, false
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < min || n > max {
+		return 0, false
+	}
+	return n, true
 }
 
 func validateRequiredDate(s, path string) error {
