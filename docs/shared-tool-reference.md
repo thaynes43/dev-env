@@ -350,7 +350,19 @@ git show HEAD
 
 ### gh
 
-GitHub read-only discovery. The image pins `GH_VERSION` 2.102.0. Command
+Repository GitHub reads, and ordinary delivery commands such as `gh pr create`
+and a reviewed `gh pr merge`, use agentd's managed wrapper `~/.local/bin/gh`.
+`renderGHWrapper` in `internal/agentd/render.go` reads the keeper projection
+on each call. Do not export `GH_TOKEN` and do not run `gh auth login`.
+
+A connected GitHub app is a different identity. A denial from that app does
+not mean the managed wrapper is missing, forbidden, or a host-wide permission
+failure. Do not repair that app, add a grant, or switch credentials. If the
+managed wrapper itself denies an operation, stop and report that denial.
+`rstack` is not an identified GitHub route in this repository; do not invent
+one.
+
+The examples below are read-only discovery. The image pins `GH_VERSION` 2.102.0. Command
 spelling was checked against cli/cli tag `v2.102.0`:
 [`repo view`](https://github.com/cli/cli/blob/v2.102.0/pkg/cmd/repo/view/view.go)
 is `view [<repository>]`, and
@@ -417,6 +429,8 @@ default.
 
 Consult the [v2 quick start](v2-quickstart.md) and the
 [launch profile preflight](launch-profile-preflight.md), and ask the owner
-when the source does not answer. Preserve a denial. The 2026-10-20 workbench
+when the source does not answer. Preserve a denial. A denial from a connected
+GitHub app is that app's denial. It does not show that managed `gh` is unavailable,
+and it is not a reason to log in or change credentials. The 2026-10-20 workbench
 note that `kubectl get secrets` was refused is one such denial. This page
 does not add another route, a credential, or a network setup.
