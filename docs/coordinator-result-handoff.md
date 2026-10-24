@@ -123,3 +123,7 @@ Reusing any event identity with different payloads drops every copy, regardless 
 Any manual-disposition conflict suppresses all action advice in the output: `writesRecommended` is false, `mergeRelease` is blocked, and `recommendations` is empty. Unambiguous recorded facts, including a previously recorded successor, remain observations; their presence does not recommend a new assignment or authorize continuation. This also applies when the ambiguous records are nonbinding and the executor otherwise has a writable pass. Valid records without conflicts retain their normal advice.
 
 Dropped or suppressed custody evidence keeps its ambiguity instant: binding-event or assignment identity collisions, conflicting pass instants, and conflicting assignment instants block recording any successor at or after that ambiguity until manual disposition. Dropping ambiguous evidence never lets an older verified release authorize recording a successor or frees a later assignment key; the executor view may retain that prior release as a historical observation, not current permission or release. A successor recorded strictly before later ambiguity may remain an observation, with conflict advice still suppressed.
+
+## Story 101 source checks
+
+`scripts/trials/stopped_handoff` and [stopped-handoff-validation.md](stopped-handoff-validation.md) are the offline synthetic stopped-predecessor fixture driver. This checker remains advisory evidence. It does not validate those fixtures, dispatch a recipient, or prove an installed #101 journey.

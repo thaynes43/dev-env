@@ -1,0 +1,103 @@
+{
+  "schema": "dev-env.stopped-handoff-validation/v1",
+  "story": "101",
+  "synthetic": true,
+  "predecessor": {
+    "identity": "synthetic-predecessor",
+    "uid": "uid-predecessor-1000",
+    "head": "0123456789abcdef0123456789abcdef01234567",
+    "sourceTime": "2026-10-23T23:00:00Z",
+    "rulesRevision": "rules-rev-synthetic-1",
+    "scopeRef": "scope-101-synthetic",
+    "authorityRef": "authority-synthetic-1",
+    "executorState": "stopped",
+    "stopVerified": true,
+    "stopAmbiguous": false
+  },
+  "recipient": {
+    "identity": "synthetic-recipient",
+    "uid": "uid-recipient-2000"
+  },
+  "observed": {
+    "uid": "uid-predecessor-1000",
+    "head": "0123456789abcdef0123456789abcdef01234567",
+    "contextPresent": true,
+    "contextChanged": false,
+    "contextHash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "wipPresent": true,
+    "wipChanged": false,
+    "wipHash": "2960e62eda65485683e4e908ee6a24372fefd8f42ea149323f2c3abf166e780f"
+  },
+  "manifest": {
+    "algorithm": "sha256",
+    "entries": [
+      {
+        "path": "committed.txt",
+        "gitState": "committed",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      {
+        "path": "tracked.txt",
+        "gitState": "unstaged",
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      {
+        "path": "staged.txt",
+        "gitState": "staged",
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      {
+        "path": "untracked.txt",
+        "gitState": "untracked",
+        "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    ]
+  },
+  "excerpt": {
+    "kind": "public-handoff-excerpt",
+    "contentHash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "pendingFindings": ["finding-synthetic-1"],
+    "holds": ["hold-synthetic-merge"],
+    "consumedBudget": "attempt-1",
+    "attempts": 1,
+    "nativeHistory": false,
+    "nativeImport": false
+  },
+  "events": [
+    {
+      "kind": "pickup",
+      "identity": "pickup-1",
+      "sourceTime": "2026-10-23T23:05:00Z",
+      "owner": "",
+      "note": "synthetic pickup",
+      "successor": "",
+      "contentHash": ""
+    },
+    {
+      "kind": "acknowledgment",
+      "identity": "ack-1",
+      "sourceTime": "2026-10-23T23:06:00Z",
+      "owner": "",
+      "note": "synthetic acknowledgment",
+      "successor": "",
+      "contentHash": ""
+    },
+    {
+      "kind": "next-owner",
+      "identity": "owner-1",
+      "sourceTime": "2026-10-23T23:07:00Z",
+      "owner": "coordinator-sol",
+      "note": "",
+      "successor": "",
+      "contentHash": ""
+    }
+  ],
+  "taskClaim": "unchanged",
+  "continuation": "unavailable",
+  "assignment": {
+    "authorized": false,
+    "supported": false,
+    "successor": ""
+  },
+  "advisoryChecker": "scripts/trials/workflow_handoff"
+}
