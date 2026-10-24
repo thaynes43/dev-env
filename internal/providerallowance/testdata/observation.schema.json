@@ -1,0 +1,442 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dev-env:providerallowance:observation:v1:draft",
+  "title": "Story189 design draft: sanitized immutable observation",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "enum": [
+        "providerallowance.v1"
+      ]
+    },
+    "observationId": {
+      "type": "string"
+    },
+    "producerRef": {
+      "type": "string"
+    },
+    "producerIncarnation": {
+      "type": "string"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "bindingGeneration": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "provider": {
+      "type": "string"
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "scope": {
+      "$ref": "#/$defs/scope"
+    },
+    "capturedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "providerObservedAt": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "availability": {
+      "enum": [
+        "available",
+        "partial",
+        "unavailable",
+        "unconfigured",
+        "auth_needed",
+        "throttled",
+        "unsupported",
+        "conflict"
+      ]
+    },
+    "completeness": {
+      "enum": [
+        "complete",
+        "partial",
+        "unknown"
+      ]
+    },
+    "directFields": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/direct"
+      }
+    },
+    "measures": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/measure"
+      }
+    },
+    "derivations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/derivation"
+      }
+    },
+    "evidenceRefs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "errorCode": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "observationId",
+    "producerRef",
+    "producerIncarnation",
+    "sequence",
+    "bindingGeneration",
+    "provider",
+    "source",
+    "scope",
+    "capturedAt",
+    "providerObservedAt",
+    "availability",
+    "completeness",
+    "directFields",
+    "measures",
+    "derivations",
+    "evidenceRefs",
+    "errorCode"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "scope": {
+      "type": "object",
+      "properties": {
+        "accountRef": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspaceRef": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "entitlementRef": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "products": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bindingState": {
+          "enum": [
+            "verified",
+            "unknown",
+            "mismatch"
+          ]
+        }
+      },
+      "required": [
+        "accountRef",
+        "workspaceRef",
+        "entitlementRef",
+        "products",
+        "bindingState"
+      ],
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "native_rpc",
+            "native_display",
+            "passive_event",
+            "synthetic",
+            "advisory"
+          ]
+        },
+        "version": {
+          "type": "string"
+        },
+        "capabilityRef": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "version",
+        "capabilityRef"
+      ],
+      "additionalProperties": false
+    },
+    "direct": {
+      "type": "object",
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "originalType": {
+          "enum": [
+            "string",
+            "decimal",
+            "boolean",
+            "null"
+          ]
+        },
+        "lexicalValue": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "field",
+        "originalType",
+        "lexicalValue"
+      ],
+      "additionalProperties": false
+    },
+    "window": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "durationMinutes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "startAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resetAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resetPrecision": {
+          "enum": [
+            "instant",
+            "display_only",
+            "unknown",
+            "not_applicable"
+          ]
+        }
+      },
+      "required": [
+        "ref",
+        "durationMinutes",
+        "startAt",
+        "resetAt",
+        "resetPrecision"
+      ],
+      "additionalProperties": false
+    },
+    "value": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "enum": [
+            "known",
+            "unknown",
+            "not_reported",
+            "not_applicable",
+            "uncapped"
+          ]
+        },
+        "decimal": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "decimal"
+      ],
+      "additionalProperties": false
+    },
+    "measure": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "category": {
+          "enum": [
+            "included_quota",
+            "api_spend",
+            "rate_limit",
+            "local_capacity",
+            "advisory"
+          ]
+        },
+        "window": {
+          "$ref": "#/$defs/window"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "direction": {
+          "enum": [
+            "used",
+            "remaining",
+            "limit",
+            "none",
+            "unknown"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/value"
+        },
+        "validationRef": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidenceFields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "category",
+        "window",
+        "unit",
+        "currency",
+        "direction",
+        "value",
+        "validationRef",
+        "evidenceFields"
+      ],
+      "additionalProperties": false
+    },
+    "derivation": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "formula": {
+          "enum": [
+            "complement_percent",
+            "sum_compatible_values"
+          ]
+        },
+        "inputRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unit": {
+          "type": "string"
+        },
+        "precision": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/value"
+        }
+      },
+      "required": [
+        "id",
+        "formula",
+        "inputRefs",
+        "unit",
+        "precision",
+        "value"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
