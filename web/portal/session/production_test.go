@@ -168,6 +168,67 @@ func TestProductionMetadataAllowlistAndAssembly(t *testing.T) {
 	}
 }
 
+func TestMetadataGetUsesGeneratedClaimName(t *testing.T) {
+	binding := testBindings()["178"]
+	now := time.Now().UTC().Truncate(time.Second)
+	opCert, opCA := mintNamed(t, openProjectHost)
+	operatorCert, operatorCA := mintNamed(t, "operator.dev-env.svc")
+	opSrv := serveTLS(t, opCert, openProjectHandler(t, &pathList{}))
+	mode := "match"
+	var claimURI string
+	operatorSrv := serveTLS(t, operatorCert, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept") != "application/json" || r.Header.Get("Authorization") != "Bearer operator-token-canary" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v1/sessions" && r.URL.RawQuery == "repo=dev-env" {
+			body, _ := json.Marshal(map[string]any{"sessions": []any{map[string]any{"uid": binding.sessionUID, "name": binding.session, "repo": "dev-env", "phase": "Running"}}})
+			_, _ = w.Write(body)
+			return
+		}
+		claimURI = r.URL.RequestURI()
+		if r.URL.Path != "/v1/task-claims/"+binding.claim || r.URL.RawQuery != "project=dev-env" {
+			http.NotFound(w, r)
+			return
+		}
+		name, uid, project, repository, key, owner, ownerUID := binding.claim, binding.claimUID, binding.project, binding.repository, binding.taskKey, binding.session, binding.sessionUID
+		switch mode {
+		case "uid":
+			uid = "other-claim-uid"
+		case "owner":
+			owner = "other-session"
+		case "owner-uid":
+			ownerUID = "other-session-uid"
+		case "key":
+			key = "issue:178"
+		case "project":
+			project = "other"
+		case "repository":
+			repository = "other"
+		case "name":
+			name = claimObjectName("dev-env", "dev-env", "issue:178")
+		}
+		body, _ := json.Marshal(map[string]any{"name": name, "uid": uid, "identity": map[string]string{"project": project, "repository": repository, "taskKey": key}, "owner": map[string]string{"namespace": "dev-agents", "name": owner, "uid": ownerUID}, "createdAt": now.Format(time.RFC3339)})
+		_, _ = w.Write(body)
+	}))
+	dial := routeDial(map[string]string{openProjectHost: opSrv, "operator.dev-env.svc": operatorSrv})
+	reader, err := newMetadataReader(metadataConfig{enabled: true, openProjectCA: opCA, operatorCA: operatorCA, openProjectToken: "op-token-canary", operatorToken: "operator-token-canary", operatorBase: "https://operator.dev-env.svc", bindings: testBindings(), timeout: time.Second, now: func() time.Time { return now }}, dial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := reader.Read(context.Background(), portal.Resource{Project: "dev-env", Environment: "internal", Task: "178"})
+	if err != nil || claimURI != "/v1/task-claims/"+binding.claim+"?project=dev-env" || snapshot.State != portal.Unknown || len(snapshot.Items) != 1 || snapshot.Items[0].WorkPackage != 178 || snapshot.Items[0].Group != "" || snapshot.Items[0].Owner != binding.session || snapshot.Items[0].WorkerState != "Running" {
+		t.Fatalf("generated claim was not read from its named endpoint: %s %v", claimURI, err)
+	}
+	for _, mismatch := range []string{"uid", "owner", "owner-uid", "key", "project", "repository", "name"} {
+		mode = mismatch
+		if _, err := reader.Read(context.Background(), portal.Resource{Project: "dev-env", Environment: "internal", Task: "178"}); !errors.Is(err, portal.ErrUnavailable) {
+			t.Fatalf("mismatched %s claim was accepted", mismatch)
+		}
+	}
+}
+
 func testEngine(t *testing.T, store *memoryStore, now time.Time) *Engine {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -213,7 +274,7 @@ func testBindings() map[string]sessionBinding {
 		if !ok {
 			panic("fixture missing canonical key")
 		}
-		out[task] = sessionBinding{project: "dev-env", repository: "dev-env", taskKey: key, session: "synthetic-session", sessionUID: "synthetic-session-uid", claim: "claim-" + task, claimUID: "claim-uid-" + task}
+		out[task] = sessionBinding{project: "dev-env", repository: "dev-env", taskKey: key, session: "synthetic-session", sessionUID: "synthetic-session-uid", claim: claimObjectName("dev-env", "dev-env", key), claimUID: "claim-uid-" + task}
 	}
 	return out
 }
@@ -260,13 +321,19 @@ func operatorHandler(t *testing.T, hits *pathList) http.Handler {
 			_, _ = w.Write(body)
 			return
 		}
-		task := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1/task-claims/claim-"), "/")
+		name := strings.TrimPrefix(r.URL.Path, "/v1/task-claims/")
+		var task string
+		for _, candidate := range approvedTasks {
+			if testBindings()[candidate].claim == name {
+				task = candidate
+			}
+		}
 		key, keyOK := fixtureTaskKey(task)
-		if !strings.HasPrefix(r.URL.Path, "/v1/task-claims/claim-") || r.URL.RawQuery != "project=dev-env" || !keyOK {
+		if !strings.HasPrefix(r.URL.Path, "/v1/task-claims/") || strings.Contains(name, "/") || r.URL.RawQuery != "project=dev-env" || !keyOK {
 			http.NotFound(w, r)
 			return
 		}
-		body, _ := json.Marshal(map[string]any{"name": "claim-" + task, "uid": "claim-uid-" + task, "identity": map[string]string{"project": "dev-env", "repository": "dev-env", "taskKey": key}, "owner": map[string]string{"namespace": "dev-agents", "name": "synthetic-session", "uid": "synthetic-session-uid"}, "createdAt": time.Now().UTC().Format(time.RFC3339)})
+		body, _ := json.Marshal(map[string]any{"name": testBindings()[task].claim, "uid": "claim-uid-" + task, "identity": map[string]string{"project": "dev-env", "repository": "dev-env", "taskKey": key}, "owner": map[string]string{"namespace": "dev-agents", "name": "synthetic-session", "uid": "synthetic-session-uid"}, "createdAt": time.Now().UTC().Format(time.RFC3339)})
 		_, _ = w.Write(body)
 	})
 }
