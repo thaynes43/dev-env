@@ -12,6 +12,8 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
@@ -25,6 +27,10 @@ const (
 	metadataLimit   = 256 << 10
 	claimLimit      = 64 << 10
 	maxSummaries    = 64
+	mediaJSON       = "application/json"
+	mediaHAL        = "application/hal+json"
+	projectIdent    = "haynes-engineering"
+	projectIdentURL = "/api/v3/projects/" + projectIdent
 )
 
 var approvedTasks = []string{"120", "121", "122", "123", "178"}
@@ -105,34 +111,43 @@ func (m *metadataReader) Read(ctx context.Context, resource portal.Resource) (po
 		}
 		tasks = []string{resource.Task}
 	}
-	if err := m.validate(ctx, tasks); err != nil {
+	items, updated, err := m.collect(ctx, tasks)
+	if err != nil {
 		return portal.Snapshot{}, err
 	}
-	// Sources matched. Attention group and outcome are not invented from them.
-	return portal.Snapshot{Resource: resource, State: portal.Unknown}, nil
+	// #177 supplies Attention groups through the offline workflow handoff checker.
+	// That checker is not a portal read contract, so these rows stay ungrouped.
+	return portal.Snapshot{Resource: resource, State: portal.Unknown, UpdatedAt: updated, VerifiedAt: m.now(), Items: items}, nil
 }
 
-func (m *metadataReader) validate(ctx context.Context, tasks []string) error {
+func (m *metadataReader) collect(ctx context.Context, tasks []string) ([]portal.Item, time.Time, error) {
 	sessions, err := m.sessionSummaries(ctx)
 	if err != nil {
-		return err
+		return nil, time.Time{}, err
 	}
+	items := make([]portal.Item, 0, len(tasks))
+	var updated time.Time
 	for _, task := range tasks {
-		if err := m.one(ctx, task, sessions); err != nil {
-			return err
+		item, err := m.one(ctx, task, sessions)
+		if err != nil {
+			return nil, time.Time{}, err
 		}
+		if item.UpdatedAt.After(updated) {
+			updated = item.UpdatedAt
+		}
+		items = append(items, item)
 	}
-	return nil
+	return items, updated, nil
 }
 
-func (m *metadataReader) one(ctx context.Context, task string, sessions []operatorSession) error {
+func (m *metadataReader) one(ctx context.Context, task string, sessions []operatorSession) (portal.Item, error) {
 	binding := m.bindings[task]
 	// opwork.Client.wp reads GET /api/v3/work_packages/{id}. The project-nested
 	// single-id path is not that interface. haynes-engineering is the project
 	// identifier used by that client, proven here from the representation.
-	body, err := m.get(ctx, m.openProject, openProjectBase+"/api/v3/work_packages/"+task, m.openProjectToken, metadataLimit)
+	body, err := m.get(ctx, m.openProject, openProjectBase+"/api/v3/work_packages/"+task, m.openProjectToken, metadataLimit, mediaHAL)
 	if err != nil {
-		return portal.ErrUnavailable
+		return portal.Item{}, portal.ErrUnavailable
 	}
 	var page struct {
 		ID        json.RawMessage `json:"id"`
@@ -145,15 +160,26 @@ func (m *metadataReader) one(ctx context.Context, task string, sessions []operat
 		} `json:"_links"`
 		Embedded struct {
 			Project struct {
-				Identifier string `json:"identifier"`
+				ID         json.RawMessage `json:"id"`
+				Identifier string          `json:"identifier"`
+				Links      struct {
+					Self struct {
+						Href string `json:"href"`
+					} `json:"self"`
+				} `json:"_links"`
 			} `json:"project"`
 		} `json:"_embedded"`
 	}
-	if json.Unmarshal(body, &page) != nil || !bytes.Equal(bytes.TrimSpace(page.ID), []byte(task)) || !identityText(page.Subject) || !haynesEngineering(page.Links.Project.Href, page.Embedded.Project.Identifier) {
-		return portal.ErrUnavailable
+	if json.Unmarshal(body, &page) != nil || !bytes.Equal(bytes.TrimSpace(page.ID), []byte(task)) || !identityText(page.Subject) {
+		return portal.Item{}, portal.ErrUnavailable
 	}
-	if _, err := time.Parse(time.RFC3339, page.UpdatedAt); err != nil {
-		return portal.ErrUnavailable
+	projectID, projectIDOK := jsonPositive(page.Embedded.Project.ID)
+	if !haynesProject(page.Links.Project.Href, page.Embedded.Project.Identifier, page.Embedded.Project.Links.Self.Href, projectID, projectIDOK) {
+		return portal.Item{}, portal.ErrUnavailable
+	}
+	updated, err := time.Parse(time.RFC3339, page.UpdatedAt)
+	if err != nil {
+		return portal.Item{}, portal.ErrUnavailable
 	}
 	matched := 0
 	var summary operatorSession
@@ -164,33 +190,74 @@ func (m *metadataReader) one(ctx context.Context, task string, sessions []operat
 		}
 	}
 	if matched != 1 || summary.Repo != "dev-env" || !identityText(summary.Phase) {
-		return portal.ErrUnavailable
+		return portal.Item{}, portal.ErrUnavailable
 	}
 	// getTaskClaim requires ?project= and returns not found when it does not match.
-	claimBody, err := m.get(ctx, m.operator, m.operatorBase+"/v1/task-claims/"+binding.claim+"?project=dev-env", m.operatorToken, claimLimit)
+	claimBody, err := m.get(ctx, m.operator, m.operatorBase+"/v1/task-claims/"+binding.claim+"?project=dev-env", m.operatorToken, claimLimit, mediaJSON)
 	if err != nil {
-		return portal.ErrUnavailable
+		return portal.Item{}, portal.ErrUnavailable
 	}
 	var claim apiv1.TaskClaim
 	if json.Unmarshal(claimBody, &claim) != nil || claim.UID != binding.claimUID || claim.Identity.Project != "dev-env" || claim.Identity.Repository != "dev-env" || claim.Identity.TaskKey != task {
-		return portal.ErrUnavailable
+		return portal.Item{}, portal.ErrUnavailable
 	}
-	_, err = portal.ProjectWorker(portal.SourceBinding{Resource: portal.Resource{Project: "dev-env", Environment: "internal", Task: task}, ClaimUID: binding.claimUID, SessionName: binding.session, SessionUID: binding.sessionUID}, claim, apiv1.Session{Name: summary.Name, UID: summary.UID, Phase: summary.Phase})
+	worker, err := portal.ProjectWorker(portal.SourceBinding{Resource: portal.Resource{Project: "dev-env", Environment: "internal", Task: task}, ClaimUID: binding.claimUID, SessionName: binding.session, SessionUID: binding.sessionUID}, claim, apiv1.Session{Name: summary.Name, UID: summary.UID, Phase: summary.Phase})
 	if err != nil {
-		return portal.ErrUnavailable
+		return portal.Item{}, portal.ErrUnavailable
 	}
-	return nil
+	workPackage, err := strconv.Atoi(task)
+	if err != nil {
+		return portal.Item{}, portal.ErrUnavailable
+	}
+	return portal.Item{Resource: portal.Resource{Project: "dev-env", Environment: "internal", Task: task}, WorkPackage: workPackage, Title: page.Subject, Owner: worker.Owner, WorkerState: worker.WorkerPhase, UpdatedAt: updated, VerifiedAt: m.now()}, nil
 }
 
-func haynesEngineering(href, identifier string) bool {
-	const project = "/api/v3/projects/haynes-engineering"
-	if identifier != "" && identifier != "haynes-engineering" {
+// haynesProject accepts the identifier href used by opwork, or a numeric
+// /api/v3/projects/{id} href only when the same representation's embedded
+// project identifier is haynes-engineering and its id matches that href.
+// A numeric href without that embedded identity fails closed. Links are not followed.
+func haynesProject(href, identifier, self string, id int, idOK bool) bool {
+	if identifier != "" && identifier != projectIdent {
 		return false
 	}
-	if href != "" && href != project {
+	numeric, numericOK := projectNumber(href)
+	switch {
+	case href == projectIdentURL:
+		if self == "" || self == projectIdentURL {
+			return true
+		}
+		selfID, selfOK := projectNumber(self)
+		return idOK && selfOK && selfID == id && self == "/api/v3/projects/"+strconv.Itoa(id)
+	case numericOK:
+		if identifier != projectIdent || !idOK || id != numeric {
+			return false
+		}
+		return self == "" || self == href
+	default:
 		return false
 	}
-	return href == project || identifier == "haynes-engineering"
+}
+
+func projectNumber(href string) (int, bool) {
+	const prefix = "/api/v3/projects/"
+	if !strings.HasPrefix(href, prefix) || strings.ContainsAny(href, "?#") {
+		return 0, false
+	}
+	raw := strings.TrimPrefix(href, prefix)
+	if raw == "" || raw == projectIdent {
+		return 0, false
+	}
+	n, err := strconv.Atoi(raw)
+	return n, err == nil && n > 0 && strconv.Itoa(n) == raw
+}
+
+func jsonPositive(raw json.RawMessage) (int, bool) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || raw[0] == '"' {
+		return 0, false
+	}
+	n, err := strconv.Atoi(string(raw))
+	return n, err == nil && n > 0 && strconv.Itoa(n) == string(raw)
 }
 
 type operatorSession struct {
@@ -198,7 +265,7 @@ type operatorSession struct {
 }
 
 func (m *metadataReader) sessionSummaries(ctx context.Context) ([]operatorSession, error) {
-	body, err := m.get(ctx, m.operator, m.operatorBase+"/v1/sessions?repo=dev-env", m.operatorToken, metadataLimit)
+	body, err := m.get(ctx, m.operator, m.operatorBase+"/v1/sessions?repo=dev-env", m.operatorToken, metadataLimit, mediaJSON)
 	if err != nil {
 		return nil, portal.ErrUnavailable
 	}
@@ -240,8 +307,8 @@ func nonEmptyPrompt(raw json.RawMessage) bool {
 	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) && !bytes.Equal(trimmed, []byte(`""`))
 }
 
-func (m *metadataReader) get(ctx context.Context, client *http.Client, rawURL, token string, limit int64) ([]byte, error) {
-	if client == nil || !bearerText(token) {
+func (m *metadataReader) get(ctx context.Context, client *http.Client, rawURL, token string, limit int64, accept string) ([]byte, error) {
+	if client == nil || !bearerText(token) || (accept != mediaJSON && accept != mediaHAL) {
 		return nil, portal.ErrUnavailable
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -249,7 +316,7 @@ func (m *metadataReader) get(ctx context.Context, client *http.Client, rawURL, t
 		return nil, portal.ErrUnavailable
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", accept)
 	req.Header.Set("Cache-Control", "no-store")
 	response, err := client.Do(req)
 	if response != nil && response.Body != nil {
@@ -259,7 +326,7 @@ func (m *metadataReader) get(ctx context.Context, client *http.Client, rawURL, t
 		return nil, portal.ErrUnavailable
 	}
 	media, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
-	if err != nil || media != "application/json" {
+	if err != nil || media != accept {
 		return nil, portal.ErrUnavailable
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, limit+1))

@@ -95,7 +95,7 @@ func TestProductionMetadataAllowlistAndAssembly(t *testing.T) {
 		t.Fatal("unapproved work package was fetched")
 	}
 	snapshot, err := reader.Read(context.Background(), portal.Resource{Project: "dev-env", Environment: "internal"})
-	if err != nil || snapshot.State != portal.Unknown || len(snapshot.Items) != 0 || strings.Contains(fmt.Sprintf("%#v", snapshot), "SECRET-DESCRIPTION") || strings.Contains(fmt.Sprintf("%#v", snapshot), "Synthetic subject") {
+	if err != nil || snapshot.State != portal.Unknown || len(snapshot.Items) != len(approvedTasks) || snapshot.Items[0].Group != "" || snapshot.Items[0].TaskOutcome != "" || snapshot.Items[0].Title != "Synthetic subject" || snapshot.Items[0].WorkerState != "Running" || strings.Contains(fmt.Sprintf("%#v", snapshot), "SECRET-DESCRIPTION") {
 		t.Fatal("allowlisted read invented attention or kept source text")
 	}
 	if hits.len() != 11 {
@@ -139,7 +139,7 @@ func TestProductionMetadataAllowlistAndAssembly(t *testing.T) {
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, portalRequest("GET", LandingPath, rawCookie))
 	body := w.Body.String()
-	if w.Code != http.StatusOK || !strings.Contains(body, "Attention unknown") || strings.Contains(body, "Verified empty") || strings.Contains(body, "SECRET-DESCRIPTION") || strings.Contains(body, "Synthetic subject") || strings.Contains(body, "op-token-canary") || strings.Contains(body, "synthetic-access-token") || strings.Contains(body, "synthetic-subject") {
+	if w.Code != http.StatusOK || !strings.Contains(body, "Attention unknown") || !strings.Contains(body, "Synthetic subject") || !strings.Contains(body, "synthetic-session") || !strings.Contains(body, "<dt>Worker liveness</dt><dd>Running</dd>") || !strings.Contains(body, "<dt>Task outcome</dt><dd>Unknown</dd>") || strings.Contains(body, "Verified empty") || strings.Contains(body, "Needs you · ") || strings.Contains(body, "SECRET-DESCRIPTION") || strings.Contains(body, "op-token-canary") || strings.Contains(body, "synthetic-access-token") || strings.Contains(body, "synthetic-subject") {
 		t.Fatal("attention response was not an unknown allowlisted read")
 	}
 	w = httptest.NewRecorder()
@@ -216,13 +216,13 @@ func openProjectHandler(t *testing.T, hits *pathList) http.Handler {
 	t.Helper()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.add(r.URL.RequestURI())
-		if r.Header.Get("Authorization") != "Bearer op-token-canary" || !strings.HasPrefix(r.URL.Path, "/api/v3/work_packages/") || strings.Contains(r.URL.Path, "/projects/") {
+		if r.Header.Get("Accept") != "application/hal+json" || r.Header.Get("Authorization") != "Bearer op-token-canary" || !strings.HasPrefix(r.URL.Path, "/api/v3/work_packages/") || strings.Contains(r.URL.Path, "/projects/") {
 			http.NotFound(w, r)
 			return
 		}
 		id := strings.TrimPrefix(r.URL.Path, "/api/v3/work_packages/")
-		body, _ := json.Marshal(map[string]any{"id": json.RawMessage(id), "subject": "Synthetic subject", "updatedAt": time.Now().UTC().Format(time.RFC3339), "description": map[string]string{"raw": "SECRET-DESCRIPTION"}, "_links": map[string]any{"project": map[string]string{"href": "/api/v3/projects/haynes-engineering"}}})
-		w.Header().Set("Content-Type", "application/json")
+		body, _ := json.Marshal(map[string]any{"id": json.RawMessage(id), "subject": "Synthetic subject", "updatedAt": time.Now().UTC().Format(time.RFC3339), "description": map[string]string{"raw": "SECRET-DESCRIPTION"}, "_links": map[string]any{"project": map[string]string{"href": "/api/v3/projects/6"}}, "_embedded": map[string]any{"project": map[string]any{"id": 6, "identifier": "haynes-engineering", "_links": map[string]any{"self": map[string]string{"href": "/api/v3/projects/6"}}}}})
+		w.Header().Set("Content-Type", "application/hal+json; charset=utf-8")
 		_, _ = w.Write(body)
 	})
 }
@@ -231,7 +231,7 @@ func operatorHandler(t *testing.T, hits *pathList) http.Handler {
 	t.Helper()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.add(r.URL.RequestURI())
-		if r.Header.Get("Authorization") != "Bearer operator-token-canary" || r.URL.Path == "/v1/task-claims" || strings.Contains(r.URL.Path, "/log") {
+		if r.Header.Get("Accept") != "application/json" || r.Header.Get("Authorization") != "Bearer operator-token-canary" || r.URL.Path == "/v1/task-claims" || strings.Contains(r.URL.Path, "/log") {
 			http.NotFound(w, r)
 			return
 		}
