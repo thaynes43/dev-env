@@ -245,6 +245,13 @@ func parseFlags(args []string) (options, error) {
 	if err != nil {
 		return o, err
 	}
+	if err := apiserver.ValidatePortalCaller(apiserver.Policy{
+		Human: o.humanSA, Clients: o.clientSAs, SessionNamespace: o.sessionNamespace,
+		SessionServiceAccount: controller.ServiceAccountName, WorkbenchServiceAccount: templates.WorkbenchServiceAccount,
+		Coordinators: o.coordinatorHosts,
+	}); err != nil {
+		return o, err
+	}
 	if *catalog != "" || *cloneOwner != "" {
 		parts := strings.Split(*catalog, "/")
 		if len(parts) != 2 {

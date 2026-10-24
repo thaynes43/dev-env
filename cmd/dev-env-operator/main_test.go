@@ -300,4 +300,10 @@ func TestPortalReaderFlag(t *testing.T) {
 	if _, err = parseFlags([]string{"--enable-portal-reader", "--session-namespace=other"}); err == nil {
 		t.Fatal("portal reader accepted a namespace other than dev-agents")
 	}
+	if _, err = parseFlags([]string{"--client-service-accounts=dev-agents/dev-env-v2-portal"}); err == nil {
+		t.Fatal("portal account was also accepted as a client")
+	}
+	if _, err = parseFlags([]string{"--human-service-account=dev-agents/dev-env-v2-portal"}); err == nil {
+		t.Fatal("portal account was also accepted as the human caller")
+	}
 }

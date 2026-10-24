@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -28,6 +31,7 @@ const (
 	portalPageDefault     = 50
 	portalPageMax         = 100
 	portalFreshFor        = 15 * time.Minute
+	portalCursorMax       = 2048
 )
 
 // resolvePortalReader accepts only a pod-bound token for the portal ServiceAccount.
@@ -39,72 +43,100 @@ func (s *Server) resolvePortalReader(ctx context.Context, id Identity) (*caller,
 	if id.PodName == "" || id.PodUID == "" || len(validation.IsDNS1123Subdomain(id.PodName)) != 0 {
 		return nil, forbidden("the portal reader calls with its pod's projected token")
 	}
-	var pod corev1.Pod
-	if err := s.get(ctx, types.NamespacedName{Namespace: portalReaderNamespace, Name: id.PodName}, &pod); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, forbidden("the portal reader's pod is gone")
-		}
-		return nil, fromKubeError(err, "the portal reader's pod")
+	if s.Live == nil {
+		return nil, forbidden("the portal reader's pod evidence is unavailable")
 	}
-	if string(pod.UID) != id.PodUID || pod.Namespace != portalReaderNamespace || pod.Spec.ServiceAccountName != portalReaderAccount {
+	var pod corev1.Pod
+	if err := s.Live.Get(ctx, types.NamespacedName{Namespace: portalReaderNamespace, Name: id.PodName}, &pod); err != nil {
+		return nil, forbidden("the portal reader's pod evidence is unavailable")
+	}
+	if pod.DeletionTimestamp != nil || string(pod.UID) != id.PodUID || pod.Namespace != portalReaderNamespace || pod.Spec.ServiceAccountName != portalReaderAccount {
 		return nil, forbidden("the portal reader token is not bound to its current pod")
 	}
 	return &caller{kind: kindPortalReader, identity: id, parent: portalReaderRef, pod: &pod}, nil
 }
 
 func (s *Server) listPortalSessions(ctx context.Context, r *http.Request) (int, any, error) {
-	if s.Policy.SessionNamespace != portalReaderNamespace {
+	if err := portalCanonicalRequest(r); err != nil {
+		return 0, nil, err
+	}
+	if s.Policy.SessionNamespace != portalReaderNamespace || s.Live == nil {
 		return 0, nil, forbidden("the portal reader is not serving the dev-agents session namespace")
 	}
-	limit, cursor, err := portalPageQuery(r.URL.Query())
+	limit, cursor, err := portalPageQuery(r.URL.RawQuery)
 	if err != nil {
 		return 0, nil, err
 	}
+	if cursor != nil && cursor.Limit != limit {
+		return 0, nil, badRequest("the portal session cursor does not match this limit")
+	}
+	opts := &client.ListOptions{Namespace: portalReaderNamespace, Limit: int64(limit)}
+	if cursor != nil {
+		opts.Continue = cursor.Continue
+		opts.Raw = &metav1.ListOptions{ResourceVersion: cursor.RV}
+	}
 	var list v1alpha1.AgentSessionList
-	if err := s.Live.List(ctx, &list, client.InNamespace(portalReaderNamespace)); err != nil {
+	if err := s.Live.List(ctx, &list, opts); err != nil {
+		if apierrors.IsResourceExpired(err) {
+			return 0, nil, badRequest("the portal session snapshot expired")
+		}
 		return 0, nil, fromKubeError(err, "list sessions")
 	}
-	items := make([]v1alpha1.AgentSession, 0, len(list.Items))
-	for _, item := range list.Items {
-		if item.Namespace == portalReaderNamespace && item.Spec.Repo == portalSessionRepo {
-			items = append(items, item)
-		}
+	if int64(len(list.Items)) > int64(limit) {
+		return 0, nil, internal("the portal session list was not bounded")
 	}
-	sortPortalSessions(items)
+	if cursor != nil && list.ResourceVersion != cursor.RV {
+		return 0, nil, badRequest("the portal session snapshot changed")
+	}
 	now := s.now()
-	page := apiv1.PortalSessionPage{Sessions: []apiv1.PortalSessionSummary{}, Limit: limit, ObservedAt: now, Freshness: "observed"}
-	started := cursor == nil
-	for i := range items {
-		if !started {
-			if samePortalCursor(portalPosition(&items[i]), *cursor) {
-				started = true
-			}
+	page := apiv1.PortalSessionPage{Sessions: []apiv1.PortalSessionSummary{}, Limit: limit, ObservedAt: now.UTC(), Freshness: "observed"}
+	for i := range list.Items {
+		item := &list.Items[i]
+		if item.Namespace != portalReaderNamespace || item.Spec.Repo != portalSessionRepo {
 			continue
 		}
-		if len(page.Sessions) == limit {
-			page.Complete = false
-			page.NextCursor = encodePortalCursor(portalPosition(&items[i-1]))
-			return http.StatusOK, page, nil
-		}
-		summary := portalSummary(&items[i], now)
-		if summary.Freshness == "unknown" || (page.Freshness == "observed" && summary.Freshness != "observed") {
+		summary := portalSummary(item, now)
+		if freshnessRank(summary.Freshness) > freshnessRank(page.Freshness) {
 			page.Freshness = summary.Freshness
 		}
 		page.Sessions = append(page.Sessions, summary)
 	}
-	if !started {
-		return 0, nil, badRequest("the portal session cursor is not in this repository")
+	if list.Continue == "" {
+		page.Complete = true
+		return http.StatusOK, page, nil
 	}
-	page.Complete = true
+	if list.ResourceVersion == "" {
+		return 0, nil, internal("the portal session list has no snapshot")
+	}
+	encoded, err := encodePortalCursor(portalCursor{RV: list.ResourceVersion, Continue: list.Continue, Limit: limit})
+	if err != nil {
+		return 0, nil, internal("the portal session cursor does not fit its bound")
+	}
+	page.NextCursor = encoded
 	return http.StatusOK, page, nil
 }
 
-type portalCursor struct {
-	Created time.Time `json:"created"`
-	Name    string    `json:"name"`
+func portalCanonicalRequest(r *http.Request) error {
+	if r.URL == nil || r.URL.Path != apiv1.SessionsPath || (r.URL.RawPath != "" && r.URL.RawPath != apiv1.SessionsPath) || strings.Contains(r.URL.RawQuery, ";") {
+		return badRequest("the portal session path is not canonical")
+	}
+	if _, err := url.ParseQuery(r.URL.RawQuery); err != nil {
+		return badRequest("the portal session query is not canonical")
+	}
+	return nil
 }
 
-func portalPageQuery(q map[string][]string) (int, *portalCursor, error) {
+type portalCursor struct {
+	RV       string `json:"rv"`
+	Continue string `json:"continue"`
+	Limit    int    `json:"limit"`
+}
+
+func portalPageQuery(raw string) (int, *portalCursor, error) {
+	q, err := url.ParseQuery(raw)
+	if err != nil || strings.Contains(raw, ";") {
+		return 0, nil, badRequest("the portal session query is not canonical")
+	}
 	limit := portalPageDefault
 	var cursor *portalCursor
 	for key, values := range q {
@@ -133,74 +165,69 @@ func portalPageQuery(q map[string][]string) (int, *portalCursor, error) {
 
 func decodePortalCursor(raw string) (portalCursor, error) {
 	var cursor portalCursor
-	if len(raw) == 0 || len(raw) > 256 || strings.ContainsAny(raw, "/?#") {
+	if len(raw) == 0 || len(raw) > portalCursorMax || strings.ContainsAny(raw, "/?#") {
 		return cursor, errPortalCursor
 	}
 	data, err := base64.RawURLEncoding.DecodeString(raw)
-	if err != nil || len(data) > 256 {
+	if err != nil || len(data) == 0 || len(data) > portalCursorMax {
 		return cursor, errPortalCursor
 	}
 	dec := json.NewDecoder(strings.NewReader(string(data)))
 	dec.DisallowUnknownFields()
-	if dec.Decode(&cursor) != nil || cursor.Created.IsZero() || len(validation.IsDNS1123Label(cursor.Name)) != 0 {
+	if dec.Decode(&cursor) != nil || !portalCursorText(cursor.RV, 128) || !portalCursorText(cursor.Continue, 1500) || cursor.Limit < 1 || cursor.Limit > portalPageMax {
 		return portalCursor{}, errPortalCursor
 	}
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		return portalCursor{}, errPortalCursor
 	}
-	cursor.Created = cursor.Created.UTC()
 	return cursor, nil
 }
 
-func samePortalCursor(a, b portalCursor) bool {
-	return a.Name == b.Name && a.Created.UTC().Equal(b.Created.UTC())
+func portalCursorText(value string, max int) bool {
+	if value == "" || len(value) > max || strings.ContainsAny(value, " \t\r\n/?#") {
+		return false
+	}
+	return true
 }
 
 var errPortalCursor = badRequest("the portal session cursor is malformed")
 
-func encodePortalCursor(cursor portalCursor) string {
-	data, _ := json.Marshal(cursor)
-	return base64.RawURLEncoding.EncodeToString(data)
-}
-
-func portalPosition(s *v1alpha1.AgentSession) portalCursor {
-	return portalCursor{Created: s.CreationTimestamp.UTC(), Name: s.Name}
-}
-
-func sortPortalSessions(items []v1alpha1.AgentSession) {
-	for i := 1; i < len(items); i++ {
-		item := items[i]
-		j := i
-		for j > 0 && portalBefore(&item, &items[j-1]) {
-			items[j] = items[j-1]
-			j--
-		}
-		items[j] = item
+func encodePortalCursor(cursor portalCursor) (string, error) {
+	data, err := json.Marshal(cursor)
+	if err != nil {
+		return "", err
 	}
+	encoded := base64.RawURLEncoding.EncodeToString(data)
+	if len(encoded) > portalCursorMax {
+		return "", errPortalCursor
+	}
+	return encoded, nil
 }
 
-func portalBefore(a, b *v1alpha1.AgentSession) bool {
-	if c := a.CreationTimestamp.Compare(b.CreationTimestamp.Time); c != 0 {
-		return c > 0
+func freshnessRank(value string) int {
+	switch value {
+	case "observed":
+		return 0
+	case "stale":
+		return 1
+	default:
+		return 2
 	}
-	return a.Name < b.Name
 }
 
 func portalSummary(s *v1alpha1.AgentSession, now time.Time) apiv1.PortalSessionSummary {
-	observed := s.CreationTimestamp.Time
-	for _, condition := range s.Status.Conditions {
-		if condition.LastTransitionTime.After(observed) {
-			observed = condition.LastTransitionTime.Time
-		}
-	}
+	observed := now.UTC()
 	freshness := "unknown"
-	phase := phaseOf(s)
-	if s.Status.Phase != "" {
-		if now.Sub(observed) <= portalFreshFor {
-			freshness = "observed"
-		} else {
-			freshness = "stale"
+	if s.Status.Agent != nil && s.Status.Agent.LastHeartbeat != nil {
+		beat := s.Status.Agent.LastHeartbeat.Time
+		if !beat.After(now) {
+			observed = beat.UTC()
+			if now.Sub(beat) <= portalFreshFor {
+				freshness = "observed"
+			} else {
+				freshness = "stale"
+			}
 		}
 	}
-	return apiv1.PortalSessionSummary{Name: s.Name, UID: string(s.UID), Repo: portalSessionRepo, Phase: phase, ObservedAt: observed.UTC(), Freshness: freshness}
+	return apiv1.PortalSessionSummary{Name: s.Name, UID: string(s.UID), Repo: portalSessionRepo, Phase: phaseOf(s), ObservedAt: observed, Freshness: freshness}
 }

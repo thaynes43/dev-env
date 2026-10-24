@@ -3,14 +3,17 @@ package apiserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
@@ -18,66 +21,62 @@ import (
 
 func TestPortalReaderSessionSummaries(t *testing.T) {
 	f := newFixture(t)
-	ctx := context.Background()
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "portal-pod", Namespace: sessionNS, UID: types.UID("pod-uid")}, Spec: corev1.PodSpec{ServiceAccountName: "dev-env-v2-portal", Containers: []corev1.Container{{Name: "portal", Image: "x"}}}}
-	if err := f.c.Create(ctx, pod); err != nil {
-		t.Fatal(err)
-	}
 	now := f.now
-	add := func(name, repo, phase string, created time.Time) {
-		t.Helper()
-		s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS, UID: types.UID("uid-" + name), CreationTimestamp: metav1.NewTime(created)}, Spec: v1alpha1.AgentSessionSpec{Repo: repo, Agent: "claude", Mode: "task", Model: "claude-opus-5-5", Prompt: "SECRET-PROMPT", Parent: humanSA}}
-		if err := f.c.Create(ctx, s); err != nil {
-			t.Fatal(err)
-		}
-		s.CreationTimestamp = metav1.NewTime(created)
-		if err := f.c.Update(ctx, s); err != nil {
-			t.Fatal(err)
-		}
-		if phase != "" {
-			s.Status.Phase = v1alpha1.SessionPhase(phase)
-			if err := f.c.Status().Update(ctx, s); err != nil {
-				t.Fatal(err)
-			}
-		}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "portal-pod", Namespace: sessionNS, UID: types.UID("pod-uid")}, Spec: corev1.PodSpec{ServiceAccountName: "dev-env-v2-portal", Containers: []corev1.Container{{Name: "portal", Image: "x"}}}}
+	beat := func(at time.Time) *v1alpha1.AgentStatus {
+		stamp := metav1.NewTime(at)
+		return &v1alpha1.AgentStatus{LastHeartbeat: &stamp}
 	}
-	add("newer", "dev-env", "Running", now.Add(-time.Minute))
-	add("older", "dev-env", "Running", now.Add(-2*time.Hour))
-	add("unseen", "dev-env", "", now.Add(-time.Minute))
-	add("foreign", "haynes-ops", "Running", now)
-	other := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: "outside", Namespace: "other", CreationTimestamp: metav1.NewTime(now)}, Spec: v1alpha1.AgentSessionSpec{Repo: "dev-env", Agent: "claude", Mode: "task", Model: "claude-opus-5-5", Prompt: "SECRET-PROMPT", Parent: humanSA}}
-	if err := f.c.Create(ctx, other); err != nil {
-		t.Fatal(err)
+	sess := func(name, repo, phase string, hb *v1alpha1.AgentStatus) v1alpha1.AgentSession {
+		return v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS, UID: types.UID("uid-" + name)}, Spec: v1alpha1.AgentSessionSpec{Repo: repo, Agent: "claude", Mode: "task", Model: "claude-opus-5-5", Prompt: "SECRET-PROMPT", Parent: humanSA}, Status: v1alpha1.AgentSessionStatus{Phase: v1alpha1.SessionPhase(phase), Agent: hb}}
 	}
+	live := &portalLive{pod: pod, rv: "7", sessions: []v1alpha1.AgentSession{
+		sess("newer", "dev-env", "Running", beat(now.Add(-time.Minute))),
+		sess("older", "dev-env", "Running", beat(now.Add(-2*time.Hour))),
+		sess("unseen", "dev-env", "", nil),
+		sess("future", "dev-env", "Running", beat(now.Add(time.Hour))),
+		sess("zzz-foreign", "haynes-ops", "Running", beat(now)),
+		{ObjectMeta: metav1.ObjectMeta{Name: "outside", Namespace: "other", UID: "uid-outside"}, Spec: v1alpha1.AgentSessionSpec{Repo: "dev-env", Prompt: "SECRET-PROMPT"}},
+	}}
+	f.srv.Live = live
 	id := saIdentity(portalReaderRef)
 	id.PodName, id.PodUID = pod.Name, string(pod.UID)
 	f.auth["tok-portal"] = id
+	f.srv.Policy.Clients = append(f.srv.Policy.Clients, portalReaderRef)
 	wantError(t, f.do(http.MethodGet, apiv1.SessionsPath, "tok-portal", nil), http.StatusForbidden, apiv1.CodeForbidden)
+	if strings.Contains(f.do(http.MethodGet, apiv1.SessionsPath, "tok-portal", nil).Body.String(), "SECRET-PROMPT") {
+		t.Fatal("disabled portal account received a generic session list")
+	}
+	f.srv.Policy.Clients = []string{clientSA}
 	f.srv.Policy.PortalReaderEnabled = true
-	page := decode[apiv1.PortalSessionPage](t, f.do(http.MethodGet, apiv1.SessionsPath+"?limit=2", "tok-portal", nil))
-	body := f.do(http.MethodGet, apiv1.SessionsPath+"?limit=2", "tok-portal", nil).Body.String()
-	if page.Complete || page.Limit != 2 || len(page.Sessions) != 2 || strings.Contains(body, "SECRET-PROMPT") || strings.Contains(body, "haynes-ops") || strings.Contains(body, "prompt") || strings.Contains(body, "outside") {
-		t.Fatalf("page leaked scope or truncated silently: %+v %s", page, body)
+	first := f.do(http.MethodGet, apiv1.SessionsPath+"?limit=2", "tok-portal", nil)
+	page := decode[apiv1.PortalSessionPage](t, first)
+	body := first.Body.String()
+	if page.Complete || page.Limit != 2 || len(page.Sessions) != 2 || page.Sessions[0].Name != "future" || page.Sessions[1].Name != "newer" || strings.Contains(body, "SECRET-PROMPT") || strings.Contains(body, "haynes-ops") || strings.Contains(body, "prompt") || strings.Contains(body, "outside") {
+		t.Fatalf("page leaked scope or scanned without a bound: %+v %s", page, body)
 	}
-	if page.Sessions[0].Name != "unseen" && page.Sessions[0].Name != "newer" {
-		t.Fatalf("unexpected first page order %+v", page.Sessions)
+	if page.Sessions[0].Freshness != "unknown" || page.Sessions[1].Freshness != "observed" || page.Sessions[1].Phase != "Running" {
+		t.Fatalf("freshness %+v", page.Sessions)
 	}
-	names := map[string]apiv1.PortalSessionSummary{}
-	for _, row := range page.Sessions {
-		names[row.Name] = row
-		if row.Repo != "dev-env" || row.UID == "" {
-			t.Fatalf("summary missing canonical fields %+v", row)
-		}
-	}
-	if row, ok := names["unseen"]; ok && (row.Phase != "Pending" || row.Freshness != "unknown") {
-		t.Fatalf("unobserved phase %+v", row)
+	if live.lists[0].Limit != 2 || live.lists[0].Namespace != sessionNS || live.lists[0].Continue != "" {
+		t.Fatalf("first list was not a bounded namespace page: %+v", live.lists[0])
 	}
 	rest := decode[apiv1.PortalSessionPage](t, f.do(http.MethodGet, apiv1.SessionsPath+"?limit=2&cursor="+page.NextCursor, "tok-portal", nil))
-	if !rest.Complete || len(rest.Sessions) != 1 || rest.Sessions[0].Name == "foreign" || strings.Contains(rest.Sessions[0].Name, "outside") {
+	if rest.Complete || len(rest.Sessions) != 1 || rest.Sessions[0].Name != "older" || rest.Sessions[0].Freshness != "stale" {
 		t.Fatalf("second page %+v", rest)
 	}
-	if rest.Sessions[0].Freshness != "stale" || rest.Sessions[0].Phase != "Running" {
-		t.Fatalf("stale session %+v", rest.Sessions[0])
+	continued := live.lists[len(live.lists)-1]
+	if continued.Continue == "" || continued.Raw == nil || continued.Raw.ResourceVersion != "7" || continued.Limit != 2 {
+		t.Fatalf("continuation lost its snapshot: %+v", continued)
+	}
+	live.changed = true
+	if f.do(http.MethodGet, apiv1.SessionsPath+"?limit=2&cursor="+rest.NextCursor, "tok-portal", nil).Code == http.StatusOK {
+		t.Fatal("changed snapshot was reported complete")
+	}
+	live.changed = false
+	final := decode[apiv1.PortalSessionPage](t, f.do(http.MethodGet, apiv1.SessionsPath+"?limit=2&cursor="+rest.NextCursor, "tok-portal", nil))
+	if !final.Complete || len(final.Sessions) != 1 || final.Sessions[0].Name != "unseen" || final.Sessions[0].Freshness != "unknown" || final.Sessions[0].Phase != "Pending" {
+		t.Fatalf("final page %+v", final)
 	}
 	for _, path := range []string{
 		apiv1.SessionsPath + "?repo=dev-env",
@@ -85,6 +84,10 @@ func TestPortalReaderSessionSummaries(t *testing.T) {
 		apiv1.SessionsPath + "?limit=101",
 		apiv1.SessionsPath + "?cursor=" + page.NextCursor + "/extra",
 		apiv1.SessionsPath + "?mine=true",
+		apiv1.SessionsPath + "?limit=1&bad=%zz",
+		apiv1.SessionsPath + "?repo=foreign;limit=1",
+		"/v1/%73essions",
+		apiv1.SessionsPath + "?limit=1&cursor=" + page.NextCursor,
 	} {
 		if f.do(http.MethodGet, path, "tok-portal", nil).Code == http.StatusOK {
 			t.Fatalf("unsafe query accepted %s", path)
@@ -111,4 +114,80 @@ func TestPortalReaderSessionSummaries(t *testing.T) {
 	if _, err := json.Marshal(page); err != nil {
 		t.Fatal(err)
 	}
+	deleting := pod.DeepCopy()
+	stamp := metav1.NewTime(now)
+	deleting.DeletionTimestamp = &stamp
+	f.srv.Live = &portalLive{pod: deleting, rv: "7"}
+	wantError(t, f.do(http.MethodGet, apiv1.SessionsPath, "tok-portal", nil), http.StatusForbidden, apiv1.CodeForbidden)
+	f.srv.Live = &portalLive{pod: pod, getErr: errors.New("unavailable"), rv: "7"}
+	wantError(t, f.do(http.MethodGet, apiv1.SessionsPath, "tok-portal", nil), http.StatusForbidden, apiv1.CodeForbidden)
+	if err := ValidatePortalCaller(Policy{Human: portalReaderRef}); err == nil {
+		t.Fatal("portal account was also accepted as the human caller")
+	}
+	if err := ValidatePortalCaller(Policy{Coordinators: []CoordinatorHost{{ServiceAccount: portalReaderRef}}}); err == nil {
+		t.Fatal("portal account was also accepted as a coordinator")
+	}
+}
+
+type portalLive struct {
+	pod      *corev1.Pod
+	getErr   error
+	sessions []v1alpha1.AgentSession
+	rv       string
+	changed  bool
+	lists    []client.ListOptions
+}
+
+func (p *portalLive) Get(_ context.Context, key client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
+	pod, ok := obj.(*corev1.Pod)
+	if !ok || p.pod == nil || key.Namespace != sessionNS || key.Name != p.pod.Name {
+		return errors.New("unavailable")
+	}
+	if p.getErr != nil {
+		return p.getErr
+	}
+	*pod = *p.pod
+	return nil
+}
+
+func (p *portalLive) List(_ context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	lo := &client.ListOptions{}
+	lo.ApplyOptions(opts)
+	copied := *lo
+	if lo.Raw != nil {
+		raw := *lo.Raw
+		copied.Raw = &raw
+	}
+	p.lists = append(p.lists, copied)
+	if p.changed || (lo.Raw != nil && lo.Raw.ResourceVersion != "" && lo.Raw.ResourceVersion != p.rv) {
+		return apierrors.NewResourceExpired("expired")
+	}
+	items := append([]v1alpha1.AgentSession{}, p.sessions...)
+	for i := 1; i < len(items); i++ {
+		for j := i; j > 0 && items[j].Name < items[j-1].Name; j-- {
+			items[j], items[j-1] = items[j-1], items[j]
+		}
+	}
+	start := 0
+	if lo.Continue != "" {
+		name := strings.TrimPrefix(lo.Continue, "after:")
+		for start < len(items) && items[start].Name <= name {
+			start++
+		}
+	}
+	limit := int(lo.Limit)
+	if limit < 1 {
+		limit = len(items)
+	}
+	end := start + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	out := list.(*v1alpha1.AgentSessionList)
+	out.Items = append([]v1alpha1.AgentSession{}, items[start:end]...)
+	out.ResourceVersion = p.rv
+	if end < len(items) && len(out.Items) > 0 {
+		out.Continue = "after:" + out.Items[len(out.Items)-1].Name
+	}
+	return nil
 }
