@@ -428,6 +428,34 @@ func shelfCtl(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv f
 	return exitOK
 }
 
+// rescueTreeCtl is `ctl rescue-tree --repo R --commit SHA <session>/<stamp>`.
+// It prints a rescue-branch tree. It does not change the rescue.
+func rescueTreeCtl(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string, r agentd.Runner) int {
+	fs := flag.NewFlagSet("ctl rescue-tree", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	repo := fs.String("repo", "", "")
+	commit := fs.String("commit", "", "")
+	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 1 || *repo == "" || *commit == "" {
+		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl rescue-tree --repo <name> --commit <oid> <session>/<stamp>\n", binaryName)
+		return exitUsage
+	}
+	s, err := agentd.LoadSettings(getenv)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: rescue-tree failed\n", binaryName)
+		return exitFailure
+	}
+	out, err := agentd.ReadRescueTree(ctx, r, s, fs.Arg(0), *repo, *commit)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: rescue-tree failed\n", binaryName)
+		return exitFailure
+	}
+	enc := json.NewEncoder(stdout)
+	if err := enc.Encode(out); err != nil {
+		return exitFailure
+	}
+	return exitOK
+}
+
 // exitNotAddressable is ctl deliver's exit code for a session that takes no
 // message now (agentd.ErrNotAddressable); the API answers it with a 409.
 const exitNotAddressable = 3
@@ -603,6 +631,8 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return contextCtl(ctx, args, stdin, stdout, stderr, getenv)
 		case "rescues", "prune", "hold-rescue":
 			return shelfCtl(args, stdin, stdout, stderr, getenv)
+		case "rescue-tree":
+			return rescueTreeCtl(ctx, args, stdout, stderr, getenv, r)
 		case "history-export", "history-archive":
 			return historyCtl(args, stdin, stdout, stderr, getenv)
 		case "coord-archive":

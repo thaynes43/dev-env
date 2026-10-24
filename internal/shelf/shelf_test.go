@@ -119,6 +119,15 @@ func TestListAndPruneRunAgentdInTheShelf(t *testing.T) {
 		t.Errorf("hold = %+v, %v, ran %q", held, err, ex.cmds[2])
 	}
 
+	ex.out = `{"ok":true,"id":"a/20261008-0024","repo":"demo","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ref":"refs/heads/rescue/a-20261008-0024","files":[]}`
+	tree, err := s.Tree(context.Background(), "a/20261008-0024", "demo", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil || !tree.OK || tree.Repo != "demo" || ex.cmds[3] != "agentd ctl rescue-tree --repo demo --commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa a/20261008-0024" {
+		t.Errorf("tree = %+v, %v, ran %q", tree, err, ex.cmds[3])
+	}
+	if strings.Contains(ex.cmds[3], "hold-rescue") {
+		t.Errorf("tree read held the rescue: %q", ex.cmds[3])
+	}
+
 	ex.out, ex.errOut, ex.err = "", "agentd: prune: olderThan 1h0m0s is below the floor", errors.New("exit 1")
 	if _, err := s.Prune(context.Background(), protocol.PruneRequest{OlderThan: "1h"}); err == nil || !strings.Contains(err.Error(), "below the floor") {
 		t.Errorf("a failed exec: err = %v, want agentd's stderr in it", err)

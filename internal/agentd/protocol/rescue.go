@@ -165,6 +165,22 @@ type RepoBundle struct {
 	// are exactly Refs.
 	Verified bool   `json:"verified,omitempty"`
 	Error    string `json:"error,omitempty"`
+	// TreeArchives are tar copies of this bundle's rescue-branch trees. A thin
+	// bundle does not carry the objects reachable from origin, so a read that
+	// has no clone uses these bytes. Restore does not fetch them.
+	TreeArchives []TreeArchive `json:"treeArchives,omitempty"`
+	// TreeRefused is a code, not a path, when a rescue branch's tree is not a
+	// set of regular files. The thin bundle stays valid for restore.
+	TreeRefused string `json:"treeRefused,omitempty"`
+}
+
+// TreeArchive is one rescue-branch tree stored beside its thin bundle.
+type TreeArchive struct {
+	Ref    string `json:"ref"`
+	Commit string `json:"commit"`
+	File   string `json:"file"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
 }
 
 // BundleRef is one ref inside a bundle.

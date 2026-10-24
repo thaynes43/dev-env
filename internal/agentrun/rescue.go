@@ -12,9 +12,9 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
-// rescue list and rescue restore (D-67). The bundles never leave the cluster:
-// list shows what the shelf pod holds, and restore is a create whose new
-// session fetches one rescue into refs/rescued/ on its first boot.
+// rescue list, rescue read and rescue restore (D-67). list is metadata.
+// read copies one rescue-branch tree and does not start a session.
+// restore is a create whose new session fetches one rescue into refs/rescued/.
 
 func (a *app) rescue(ctx context.Context, args []string) error {
 	if len(args) == 0 {
@@ -24,6 +24,8 @@ func (a *app) rescue(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "list":
 		return a.rescueList(ctx, args[1:])
+	case "read":
+		return a.rescueRead(ctx, args[1:])
 	case "restore":
 		return a.createSession(ctx, args[1:], true)
 	case "help", "-h", "--help":
@@ -31,7 +33,7 @@ func (a *app) rescue(ctx context.Context, args []string) error {
 		return nil
 	}
 	_, _ = io.WriteString(a.env.Stderr, commandHelp["rescue"])
-	return usageError("unknown rescue command %q: it is list or restore", args[0])
+	return usageError("unknown rescue command %q: it is list, read or restore", args[0])
 }
 
 func (a *app) rescueList(ctx context.Context, args []string) error {

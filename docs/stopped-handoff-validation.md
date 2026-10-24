@@ -69,12 +69,14 @@ go test -p 1 -count=1 ./scripts/trials/stopped_handoff/
 
 ## Installed stage, not this packet
 
-Preflight names one blocked operation and its owner:
+`agent-run rescue read` is the source path that copies one rescue-branch tree without starting a session. It is specified in [rescue-byte-retrieval.md](rescue-byte-retrieval.md). Source tests are not an installed journey. #101 stays open until that journey passes.
 
-- Operation: installed disposable predecessor stop and supported read/restore/assignment.
-- Owner: separate reviewed installed-drill stage.
+The installed stage is still a separate reviewed drill:
 
-That stage needs accepted disposable identities and a supported stop, read, rescue, and assignment route. Retrieval for #101 has to work without a Ready source pod and without a new model turn. This source package does not perform that drill, does not stop a live predecessor, and does not mark #101 Accepted.
+- Operation: disposable predecessor stop, then a byte read by that session's parent, with no new model and no new AgentSession.
+- Owner: the recovery implementation owner, after this source path is installed. Not this packet.
+
+Retrieval has to work without a Ready source pod and without a new model turn. This source package does not perform that drill, does not stop a live predecessor, and does not mark #101 Accepted.
 
 Proof classes stay separate:
 

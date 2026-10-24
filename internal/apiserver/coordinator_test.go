@@ -117,6 +117,7 @@ func TestCoordinatorAlwaysFiltersDirectChildrenAndRefusesForeignRoutes(t *testin
 	}
 	for _, route := range []struct{ method, path string }{
 		{http.MethodGet, apiv1.FleetPath}, {http.MethodGet, apiv1.RescuesPath},
+		{http.MethodGet, apiv1.RescueTreePath("own-task", "20261006-1730")},
 		{http.MethodGet, apiv1.GrantsPath}, {http.MethodPost, apiv1.GrantsPath},
 		{http.MethodGet, apiv1.GrantPath("unrelated")}, {http.MethodDelete, apiv1.GrantPath("unrelated")},
 		{http.MethodGet, apiv1.ActivitiesPath}, {http.MethodPost, apiv1.ActivitiesPath},

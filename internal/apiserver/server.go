@@ -246,6 +246,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle(apiv1.RescuesPath, s.serve(route{methods: map[string]handler{
 		http.MethodGet: s.listRescues,
 	}}))
+	mux.Handle(apiv1.RescuesPath+"/{session}/{stamp}/tree", s.serve(route{methods: map[string]handler{
+		http.MethodGet: s.readRescueTree,
+	}}))
 	mux.Handle(apiv1.HistoryPath, s.serve(route{coordinator: true, identityGuard: s.historyRoutesOn, methods: map[string]handler{http.MethodGet: s.listHistory}}))
 	mux.Handle(apiv1.HistoryPath+"/{session}", s.serve(route{coordinator: true, history: true, identityGuard: s.historyRoutesOn, methods: map[string]handler{http.MethodGet: s.getHistory}}))
 	mux.Handle(apiv1.HistoryPath+"/{session}/file", s.serve(route{coordinator: true, history: true, identityGuard: s.historyRoutesOn, methods: map[string]handler{http.MethodGet: s.readHistoryFile}}))

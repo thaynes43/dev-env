@@ -27,6 +27,8 @@ Usage:
   agent-run suspend <name>...                     rescue and stop sessions, keeping their volumes
   agent-run resume <name>                         start a suspended session again, conversation intact
   agent-run rescue list [--session <name>]        list the rescues on the shelf
+  agent-run rescue read <session>/<stamp> --repo <name> --commit <oid> --session-uid <uid> --pod-uid <uid> --out <dir>
+                                                  copy one rescue tree into a new directory
   agent-run rescue restore <session>/<stamp> (--local | -p "<task>")
                                                   start a session that fetches a rescue
   agent-run history list [--project <p>]          list archived Session histories by project
@@ -319,10 +321,12 @@ message may have arrived, so do not send it again before checking. It exits 5
 only when nothing was sent (the API could not be reached at all).
 `,
 	"rescue": `Usage: agent-run rescue list [--session <name>] [-o json]
+       agent-run rescue read <session>/<stamp> --repo <name> --commit <oid> --session-uid <uid> --pod-uid <uid> [--project <name>] --out <dir> [-o json]
        agent-run rescue restore <session>/<stamp> (--local | -p "<task>") [--repo <name>] [flags]
 
 A rescue is the bundle of a session's work, written to the shared volume when the
-session is suspended or reaped (D-10, D-48). The bundles never leave the cluster.
+session is suspended or reaped (D-10, D-48). rescue list shows metadata. rescue
+restore starts a new session. Neither of those returns file bytes.
 
 rescue list shows them, newest first: id, when it was made (UTC), the repos it
 holds a bundle for, its size, its state, and how long it is kept. The state is
@@ -333,6 +337,18 @@ the rescue after the retention (D-09, 30 days). Paths under rescue/ that do not 
 the layout are listed as unrecognized and never pruned.
   --session <name>   only this session's rescues
   -o json            the API's list as JSON
+
+rescue read copies one rescue-branch tree into a new directory. It does not
+start a session, check out a repository, or run hooks. The commit must be the
+rescue branch's tip; the session's branch commit is not enough. --out must not
+exist. A repeat into the same directory is refused. The command prints each
+path and its SHA-256, not the file bytes.
+  --repo <name>         the clone the rescue holds
+  --commit <oid>        the rescue-branch commit
+  --session-uid <uid>   the rescued session's UID
+  --pod-uid <uid>       the pod UID recorded on that rescue
+  --project <name>      the session's project, when it has a snapshot
+  --out <dir>           a new directory for the files
 
 rescue restore starts a new session that fetches one rescue (D-67). It is a run:
 it takes the same flags (-p or --local, --agent, --model, --effort, --base, --size,

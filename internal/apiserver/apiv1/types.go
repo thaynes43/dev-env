@@ -82,6 +82,12 @@ type MessageResult struct {
 // CreateSessionRequest.Restore.
 const RescuesPath = "/v1/rescues"
 
+// RescueTreePath is GET /v1/rescues/{session}/{stamp}/tree. It returns the
+// bytes of one rescue-branch tree. It does not create a session.
+func RescueTreePath(session, stamp string) string {
+	return RescuesPath + "/" + session + "/" + stamp + "/tree"
+}
+
 // ActivitiesPath is declare-activity's route (DESIGN-001 6.9, D-17, D-66):
 // GET lists the live declarations, POST declares one.
 const ActivitiesPath = "/v1/activities"
@@ -671,6 +677,27 @@ type RescueRepo struct {
 	// A restore fetches them under refs/rescued/.
 	Refs  []string `json:"refs"`
 	Bytes int64    `json:"bytes"`
+}
+
+// RescueTree is the body of a successful rescue-tree read. Bytes are the
+// file contents. A commit id without these bytes is not this response.
+type RescueTree struct {
+	ID         string           `json:"id"`
+	SessionUID string           `json:"sessionUID"`
+	PodUID     string           `json:"podUID"`
+	Repo       string           `json:"repo"`
+	Project    string           `json:"project,omitempty"`
+	Commit     string           `json:"commit"`
+	Ref        string           `json:"ref"`
+	Files      []RescueTreeFile `json:"files"`
+}
+
+// RescueTreeFile is one regular file in the rescue-branch tree.
+type RescueTreeFile struct {
+	Path   string `json:"path"`
+	Mode   string `json:"mode"`
+	SHA256 string `json:"sha256"`
+	Bytes  []byte `json:"bytes"`
 }
 
 // RescueList is GET /v1/rescues, newest first.
