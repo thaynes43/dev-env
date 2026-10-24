@@ -577,14 +577,14 @@ func TestMethodsRoutesAndSpoofedHeaders(t *testing.T) {
 
 func TestProjectWorkerBindingAndPayloadExclusion(t *testing.T) {
 	r := Resource{"project-one", "internal", "task-one"}
-	b := SourceBinding{Resource: r, ClaimUID: "claim-one", SessionName: "worker-one", SessionUID: "uid-one"}
-	claim := apiv1.TaskClaim{UID: "claim-one", Identity: apiv1.TaskClaimIdentity{Project: r.Project, TaskKey: r.Task}, Owner: apiv1.TaskClaimOwner{Name: "worker-one", UID: "uid-one"}}
+	b := SourceBinding{Resource: r, ClaimUID: "claim-one", SessionName: "worker-one", SessionUID: "uid-one", IdentityProject: r.Project, IdentityRepository: "repo-one", TaskKey: "task:worker-one"}
+	claim := apiv1.TaskClaim{UID: "claim-one", Identity: apiv1.TaskClaimIdentity{Project: r.Project, Repository: "repo-one", TaskKey: "task:worker-one"}, Owner: apiv1.TaskClaimOwner{Name: "worker-one", UID: "uid-one"}}
 	session := apiv1.Session{Name: "worker-one", UID: "uid-one", Phase: "Suspended", Prompt: "SECRET-PROMPT", Repo: "SECRET-REPOSITORY", Model: "SECRET-MODEL", Outcome: &apiv1.Outcome{}}
 	got, err := ProjectWorker(b, claim, session)
 	if err != nil || got.Owner != "worker-one" || got.WorkerPhase != "Suspended" {
 		t.Fatalf("projection %v %v", got, err)
 	}
-	for _, mode := range []string{"project", "task", "claim-uid", "owner-name", "owner-uid", "session-name", "session-uid", "empty-binding", "archived"} {
+	for _, mode := range []string{"project", "repository", "task", "bare-task-key", "claim-uid", "owner-name", "owner-uid", "session-name", "session-uid", "empty-binding", "archived"} {
 		t.Run(mode, func(t *testing.T) {
 			c, s, binding := claim, session, b
 			switch mode {
@@ -592,8 +592,13 @@ func TestProjectWorkerBindingAndPayloadExclusion(t *testing.T) {
 				c.Archived = true
 			case "project":
 				c.Identity.Project = "project-two"
+			case "repository":
+				c.Identity.Repository = "repo-two"
 			case "task":
-				c.Identity.TaskKey = "task-two"
+				c.Identity.TaskKey = "task:worker-two"
+			case "bare-task-key":
+				c.Identity.TaskKey = r.Task
+				binding.TaskKey = r.Task
 			case "claim-uid":
 				c.UID = "replacement"
 			case "owner-name":

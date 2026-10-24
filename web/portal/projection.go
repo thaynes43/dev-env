@@ -8,6 +8,9 @@ import "github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 type SourceBinding struct {
 	Resource                          Resource
 	ClaimUID, SessionName, SessionUID string
+	// IdentityProject, IdentityRepository and TaskKey are the canonical
+	// TaskClaim identity. Resource.Task remains the OpenProject id and is not a claim key.
+	IdentityProject, IdentityRepository, TaskKey string
 }
 
 // WorkerSummary deliberately omits prompts, provenance URLs, usage, remote
@@ -19,8 +22,8 @@ type WorkerSummary struct {
 
 func ProjectWorker(binding SourceBinding, claim apiv1.TaskClaim, session apiv1.Session) (WorkerSummary, error) {
 	r := binding.Resource
-	if claim.Archived || !identifier.MatchString(r.Project) || !identifier.MatchString(r.Environment) || !identifier.MatchString(r.Task) || binding.ClaimUID == "" || binding.SessionUID == "" || binding.SessionName == "" ||
-		claim.UID != binding.ClaimUID || claim.Identity.Project != r.Project || claim.Identity.TaskKey != r.Task || claim.Owner.Name != binding.SessionName || claim.Owner.UID != binding.SessionUID || session.Name != binding.SessionName || session.UID != binding.SessionUID {
+	if claim.Archived || !identifier.MatchString(r.Project) || !identifier.MatchString(r.Environment) || !identifier.MatchString(r.Task) || binding.ClaimUID == "" || binding.SessionUID == "" || binding.SessionName == "" || binding.IdentityProject == "" || binding.IdentityRepository == "" || binding.TaskKey == "" || binding.TaskKey == r.Task ||
+		claim.UID != binding.ClaimUID || claim.Identity.Project != binding.IdentityProject || claim.Identity.Project != r.Project || claim.Identity.Repository != binding.IdentityRepository || claim.Identity.TaskKey != binding.TaskKey || claim.Owner.Name != binding.SessionName || claim.Owner.UID != binding.SessionUID || session.Name != binding.SessionName || session.UID != binding.SessionUID {
 		return WorkerSummary{}, ErrUnavailable
 	}
 	if !validText(claim.Owner.Name) || !validText(session.Phase) {

@@ -286,21 +286,67 @@ func parseBindings(raw []byte) (map[string]sessionBinding, error) {
 		return nil, errProductionConfig
 	}
 	var extra any
-	if dec.Decode(&extra) != io.EOF || doc.Schema != 1 || len(doc.Sessions) != len(approvedTasks) {
+	if dec.Decode(&extra) != io.EOF || doc.Schema != 2 || len(doc.Sessions) != len(approvedTasks) {
 		return nil, errProductionConfig
 	}
 	out := make(map[string]sessionBinding, len(doc.Sessions))
+	seenKey := map[string]struct{}{}
+	seenClaim := map[string]struct{}{}
+	seenClaimUID := map[string]struct{}{}
+	sessionUID := map[string]string{}
+	sessionName := map[string]string{}
 	for _, item := range doc.Sessions {
-		if _, dup := out[item.Task]; dup {
+		if !approvedWorkPackage(item.Task) {
 			return nil, errProductionConfig
 		}
-		out[item.Task] = sessionBinding{session: item.Session, sessionUID: item.SessionUID, claim: item.Claim, claimUID: item.ClaimUID}
+		binding := sessionBinding{project: item.Project, repository: item.Repository, taskKey: item.TaskKey, session: item.Session, sessionUID: item.SessionUID, claim: item.Claim, claimUID: item.ClaimUID}
+		if _, dup := out[item.Task]; dup || !binding.valid() || item.TaskKey == item.Task {
+			return nil, errProductionConfig
+		}
+		if _, dup := seenKey[item.TaskKey]; dup {
+			return nil, errProductionConfig
+		}
+		if _, dup := seenClaim[item.Claim]; dup {
+			return nil, errProductionConfig
+		}
+		if _, dup := seenClaimUID[item.ClaimUID]; dup {
+			return nil, errProductionConfig
+		}
+		if previous, ok := sessionName[item.Session]; ok && previous != item.SessionUID {
+			return nil, errProductionConfig
+		}
+		if previous, ok := sessionUID[item.SessionUID]; ok && previous != item.Session {
+			return nil, errProductionConfig
+		}
+		out[item.Task] = binding
+		seenKey[item.TaskKey] = struct{}{}
+		seenClaim[item.Claim] = struct{}{}
+		seenClaimUID[item.ClaimUID] = struct{}{}
+		sessionName[item.Session] = item.SessionUID
+		sessionUID[item.SessionUID] = item.Session
+	}
+	for _, task := range approvedTasks {
+		if _, ok := out[task]; !ok {
+			return nil, errProductionConfig
+		}
 	}
 	return out, nil
 }
 
+func approvedWorkPackage(task string) bool {
+	for _, approved := range approvedTasks {
+		if task == approved {
+			return true
+		}
+	}
+	return false
+}
+
 type bindingDocument struct {
 	Task       string `json:"task"`
+	Project    string `json:"project"`
+	Repository string `json:"repository"`
+	TaskKey    string `json:"taskKey"`
 	Session    string `json:"session"`
 	SessionUID string `json:"sessionUid"`
 	Claim      string `json:"claim"`

@@ -3,8 +3,10 @@ package session
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/projectcatalog"
 	"github.com/thaynes43/dev-env/internal/tokenfile"
 	"github.com/thaynes43/dev-env/web/portal"
 )
@@ -37,8 +40,41 @@ var approvedTasks = []string{"120", "121", "122", "123", "178"}
 
 var bindingName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
+// canonicalTaskKey is the TaskClaim grammar from taskclaim.ValidIdentity and the
+// coordination CRD. A bare work-package number does not match it.
+var canonicalTaskKey = regexp.MustCompile(`^(issue:[1-9][0-9]{0,18}|task:[a-z0-9]([a-z0-9._-]{0,126}[a-z0-9])?)$`)
+
+// claimDigest is the hex half of taskclaim.ValidName. The two labels together
+// are the full SHA-256 of the canonical identity, not a URL path allowance.
+var claimDigest = regexp.MustCompile(`^[a-f0-9]{64}$`)
+
 type sessionBinding struct {
+	project, repository, taskKey         string
 	session, sessionUID, claim, claimUID string
+}
+
+func (b sessionBinding) valid() bool {
+	return b.project == "dev-env" && b.repository == "dev-env" && projectcatalog.ValidName(b.project) && projectcatalog.ValidName(b.repository) && canonicalTaskKey.MatchString(b.taskKey) && bindingName.MatchString(b.session) && canonicalClaimName(b.claim) && b.claim == claimObjectName(b.project, b.repository, b.taskKey) && boundedIdentifier(b.sessionUID) && boundedIdentifier(b.claimUID)
+}
+
+// canonicalClaimName is taskclaim.ValidName: task-claim, then two lowercase
+// 32-hex labels. Session names do not use this grammar.
+func canonicalClaimName(name string) bool {
+	parts := strings.Split(name, ".")
+	return len(parts) == 3 && parts[0] == "task-claim" && len(parts[1]) == 32 && len(parts[2]) == 32 && claimDigest.MatchString(parts[1]+parts[2])
+}
+
+// claimObjectName is taskclaim.Name. The digest covers project, repository,
+// and taskKey in that JSON field order. It does not cover the work-package id.
+func claimObjectName(project, repository, taskKey string) string {
+	data, _ := json.Marshal(struct {
+		Project    string `json:"project"`
+		Repository string `json:"repository"`
+		TaskKey    string `json:"taskKey"`
+	}{Project: project, Repository: repository, TaskKey: taskKey})
+	sum := sha256.Sum256(data)
+	d := hex.EncodeToString(sum[:])
+	return "task-claim." + d[:32] + "." + d[32:]
 }
 
 type metadataConfig struct {
@@ -73,11 +109,36 @@ func newMetadataReader(c metadataConfig, dial func(context.Context, string, stri
 	if c.now == nil || c.timeout <= 0 || c.timeout > 10*time.Second || len(c.bindings) != len(approvedTasks) {
 		return nil, portal.ErrUnavailable
 	}
+	seenKey := map[string]struct{}{}
+	seenClaim := map[string]struct{}{}
+	seenClaimUID := map[string]struct{}{}
+	sessionName := map[string]string{}
+	sessionUID := map[string]string{}
 	for _, task := range approvedTasks {
 		binding, ok := c.bindings[task]
-		if !ok || !bindingName.MatchString(binding.session) || !bindingName.MatchString(binding.claim) || !boundedIdentifier(binding.sessionUID) || !boundedIdentifier(binding.claimUID) {
+		if !ok || !binding.valid() || binding.taskKey == task {
 			return nil, portal.ErrUnavailable
 		}
+		if _, dup := seenKey[binding.taskKey]; dup {
+			return nil, portal.ErrUnavailable
+		}
+		if _, dup := seenClaim[binding.claim]; dup {
+			return nil, portal.ErrUnavailable
+		}
+		if _, dup := seenClaimUID[binding.claimUID]; dup {
+			return nil, portal.ErrUnavailable
+		}
+		if previous, seen := sessionName[binding.session]; seen && previous != binding.sessionUID {
+			return nil, portal.ErrUnavailable
+		}
+		if previous, seen := sessionUID[binding.sessionUID]; seen && previous != binding.session {
+			return nil, portal.ErrUnavailable
+		}
+		seenKey[binding.taskKey] = struct{}{}
+		seenClaim[binding.claim] = struct{}{}
+		seenClaimUID[binding.claimUID] = struct{}{}
+		sessionName[binding.session] = binding.sessionUID
+		sessionUID[binding.sessionUID] = binding.session
 	}
 	base, err := serviceOrigin(c.operatorBase)
 	if err != nil || c.openProjectToken == "" || c.operatorToken == "" {
@@ -198,10 +259,10 @@ func (m *metadataReader) one(ctx context.Context, task string, sessions []operat
 		return portal.Item{}, portal.ErrUnavailable
 	}
 	var claim apiv1.TaskClaim
-	if json.Unmarshal(claimBody, &claim) != nil || claim.UID != binding.claimUID || claim.Identity.Project != "dev-env" || claim.Identity.Repository != "dev-env" || claim.Identity.TaskKey != task {
+	if json.Unmarshal(claimBody, &claim) != nil || claim.Name != binding.claim || claim.UID != binding.claimUID || claim.Identity.Project != binding.project || claim.Identity.Repository != binding.repository || claim.Identity.TaskKey != binding.taskKey || claim.Identity.TaskKey == task {
 		return portal.Item{}, portal.ErrUnavailable
 	}
-	worker, err := portal.ProjectWorker(portal.SourceBinding{Resource: portal.Resource{Project: "dev-env", Environment: "internal", Task: task}, ClaimUID: binding.claimUID, SessionName: binding.session, SessionUID: binding.sessionUID}, claim, apiv1.Session{Name: summary.Name, UID: summary.UID, Phase: summary.Phase})
+	worker, err := portal.ProjectWorker(portal.SourceBinding{Resource: portal.Resource{Project: "dev-env", Environment: "internal", Task: task}, ClaimUID: binding.claimUID, SessionName: binding.session, SessionUID: binding.sessionUID, IdentityProject: binding.project, IdentityRepository: binding.repository, TaskKey: binding.taskKey}, claim, apiv1.Session{Name: summary.Name, UID: summary.UID, Phase: summary.Phase})
 	if err != nil {
 		return portal.Item{}, portal.ErrUnavailable
 	}
