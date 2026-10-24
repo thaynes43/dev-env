@@ -21,6 +21,8 @@ type fakeShelf struct {
 	err   error
 	asked []string
 	held  []string
+	trees []string
+	tree  protocol.RescueTree
 }
 
 func (f *fakeShelf) Hold(_ context.Context, id string) (protocol.HoldResult, error) {
@@ -35,6 +37,17 @@ func (f *fakeShelf) Hold(_ context.Context, id string) (protocol.HoldResult, err
 		}
 	}
 	return protocol.HoldResult{}, nil
+}
+
+func (f *fakeShelf) Tree(_ context.Context, id, repo, commit string) (protocol.RescueTree, error) {
+	f.trees = append(f.trees, id+" "+repo+" "+commit)
+	if f.err != nil {
+		return protocol.RescueTree{}, f.err
+	}
+	if f.tree.ID != "" || f.tree.Code != "" || f.tree.OK {
+		return f.tree, nil
+	}
+	return protocol.RescueTree{Code: protocol.RescueTreeNotFound}, nil
 }
 
 func (f *fakeShelf) List(_ context.Context, session string) (protocol.RescueList, error) {

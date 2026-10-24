@@ -73,6 +73,21 @@ func TestVerdictVerified(t *testing.T) {
 	}
 }
 
+func TestVerdictCopiesOnlyAValidBaseCommit(t *testing.T) {
+	base := strings.Repeat("c", 40)
+	rep := goodReport("s1")
+	rep.Repos[0].Bundle.BaseCommit = base
+	rec, reason := verdictFor(rep)
+	if rec.Result != v1alpha1.RescueVerified || reason != "Verified" || rec.UnpushedRefs[0].BaseCommit != base || rec.UnpushedRefs[1].BaseCommit != base {
+		t.Fatalf("record %+v reason %s", rec.UnpushedRefs, reason)
+	}
+	rep.Repos[0].Bundle.BaseCommit = "not-an-object"
+	rec, reason = verdictFor(rep)
+	if rec.Result != v1alpha1.RescueVerified || reason != "Verified" || rec.UnpushedRefs[0].BaseCommit != "" {
+		t.Fatalf("malformed base was copied: %+v reason %s", rec.UnpushedRefs, reason)
+	}
+}
+
 func TestVerdictCleanAndPushed(t *testing.T) {
 	rec, reason := verdictFor(cleanReport("s1"))
 	if rec.Result != v1alpha1.RescueCleanAndPushed || reason != "CleanAndPushed" || rec.LastBundle != "" {

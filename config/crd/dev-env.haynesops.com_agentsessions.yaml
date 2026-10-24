@@ -494,7 +494,9 @@ spec:
                 description: |-
                   UsageCaptureParentUID is the authenticated parent Session UID when child
                   usage capture is enabled. The API sets it from that parent object. It is
-                  not a permission and it is not taken from the request body.
+                  not a permission and it is not taken from the request body. The rescue-byte
+                  route also compares it. That comparison is not a grant, and production
+                  leaves the field empty because usage capture is off.
                 maxLength: 128
                 minLength: 1
                 type: string
@@ -2199,6 +2201,16 @@ spec:
                       description: RescuedRef is one local ref origin lacked at a
                         rescue.
                       properties:
+                        baseCommit:
+                          description: |-
+                            BaseCommit is the commit the thin bundle was verified against, resolved
+                            in the clone at rescue and stored by the operator. A byte read refuses
+                            a record that lacks one. Names and bundle-file contents are not this
+                            value.
+                          maxLength: 64
+                          minLength: 40
+                          pattern: ^[0-9a-f]{40}$|^[0-9a-f]{64}$
+                          type: string
                         bundle:
                           description: Bundle is the bundle file on the shared volume
                             that holds it.

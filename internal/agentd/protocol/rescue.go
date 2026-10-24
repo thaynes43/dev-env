@@ -159,12 +159,32 @@ type RepoBundle struct {
 	// every origin ref when the clone has no origin/HEAD. A restore clones
 	// origin first, then fetches the bundle.
 	Base string `json:"base,omitempty"`
+	// BaseCommit is the commit Base resolved to in the clone when this bundle
+	// was created. The operator copies it onto the rescued refs. A byte read
+	// trusts that record, not a value read back from the bundle file.
+	BaseCommit string `json:"baseCommit,omitempty"`
 	// Refs are the refs inside the bundle, each with the local ref it holds.
 	Refs []BundleRef `json:"refs,omitempty"`
 	// Verified is set when `git bundle verify` passed and the bundle's heads
 	// are exactly Refs.
 	Verified bool   `json:"verified,omitempty"`
 	Error    string `json:"error,omitempty"`
+	// TreeArchives is unused. File bytes are not stored beside the bundle.
+	// Older manifests may still name a tar; a read does not serve it. Restore
+	// does not fetch one.
+	TreeArchives []TreeArchive `json:"treeArchives,omitempty"`
+	// TreeRefused is a code, not a path, when a rescue branch's tree is not a
+	// set of regular files. The thin bundle stays valid for restore.
+	TreeRefused string `json:"treeRefused,omitempty"`
+}
+
+// TreeArchive is one rescue-branch tree stored beside its thin bundle.
+type TreeArchive struct {
+	Ref    string `json:"ref"`
+	Commit string `json:"commit"`
+	File   string `json:"file"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
 }
 
 // BundleRef is one ref inside a bundle.

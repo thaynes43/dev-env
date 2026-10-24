@@ -368,7 +368,7 @@ func verdict(s *v1alpha1.AgentSession, pod *corev1.Pod, rep protocol.RescueRepor
 			}
 		}
 		var bundled []protocol.BundleRef
-		file := ""
+		file, baseCommit := "", ""
 		if b := repo.Bundle; b != nil {
 			file = b.File
 			if b.Error != "" || !b.Verified {
@@ -376,12 +376,15 @@ func verdict(s *v1alpha1.AgentSession, pod *corev1.Pod, rep protocol.RescueRepor
 				add("%s: bundle: %s", repo.Path, firstNonEmpty(b.Error, "not verified"))
 			} else {
 				bundled = b.Refs
+				if protocol.ValidGitObject(b.BaseCommit) {
+					baseCommit = b.BaseCommit
+				}
 			}
 		}
 		for _, ref := range repo.UnpushedRefs {
 			refs++
 			if len(rec.UnpushedRefs) < maxRecordedRefs {
-				rec.UnpushedRefs = append(rec.UnpushedRefs, v1alpha1.RescuedRef{Repo: repo.Path, Name: ref.Name, Commit: ref.Commit, Bundle: file})
+				rec.UnpushedRefs = append(rec.UnpushedRefs, v1alpha1.RescuedRef{Repo: repo.Path, Name: ref.Name, Commit: ref.Commit, Bundle: file, BaseCommit: baseCommit})
 			} else {
 				rec.OmittedRefs++
 			}

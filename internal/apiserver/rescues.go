@@ -21,6 +21,8 @@ import (
 type RescueShelf interface {
 	List(ctx context.Context, session string) (protocol.RescueList, error)
 	Hold(ctx context.Context, id string) (protocol.HoldResult, error)
+	// Tree reads one rescue-branch tree. It must not change the rescue.
+	Tree(ctx context.Context, id, repo, commit string) (protocol.RescueTree, error)
 }
 
 // listRescues is GET /v1/rescues[?session=] (D-67).

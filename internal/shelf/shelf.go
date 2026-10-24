@@ -96,6 +96,14 @@ func (s *Shelf) List(ctx context.Context, session string) (protocol.RescueList, 
 	return list, err
 }
 
+// Tree is `agentd ctl rescue-tree` in the shelf. It reads one rescue-branch
+// tree and does not hold or otherwise change the rescue.
+func (s *Shelf) Tree(ctx context.Context, id, repo, commit string) (protocol.RescueTree, error) {
+	var out protocol.RescueTree
+	err := s.run(ctx, []string{"agentd", "ctl", "rescue-tree", "--repo", repo, "--commit", commit, id}, nil, &out)
+	return out, err
+}
+
 // Hold is `agentd ctl hold-rescue <id>` in the shelf: a restore's check,
 // which also keeps the rescue from the next prune (D-67).
 func (s *Shelf) Hold(ctx context.Context, id string) (protocol.HoldResult, error) {

@@ -82,6 +82,12 @@ type MessageResult struct {
 // CreateSessionRequest.Restore.
 const RescuesPath = "/v1/rescues"
 
+// RescueTreePath is GET /v1/rescues/{session}/{stamp}/tree. It returns the
+// bytes of one rescue-branch tree. It does not create a session.
+func RescueTreePath(session, stamp string) string {
+	return RescuesPath + "/" + session + "/" + stamp + "/tree"
+}
+
 // ActivitiesPath is declare-activity's route (DESIGN-001 6.9, D-17, D-66):
 // GET lists the live declarations, POST declares one.
 const ActivitiesPath = "/v1/activities"
@@ -671,6 +677,42 @@ type RescueRepo struct {
 	// A restore fetches them under refs/rescued/.
 	Refs  []string `json:"refs"`
 	Bytes int64    `json:"bytes"`
+}
+
+// RescueTree is the body of a successful rescue-tree read. Bytes are the
+// file contents after the thin bundle verified in the caller's clone. A
+// commit id without these bytes is not this response. The bytes stay inside
+// the cluster (D-10, D-48): a human or client is refused.
+type RescueTree struct {
+	ID           string            `json:"id"`
+	SessionUID   string            `json:"sessionUID"`
+	PodUID       string            `json:"podUID"`
+	Repo         string            `json:"repo"`
+	Project      string            `json:"project,omitempty"`
+	Commit       string            `json:"commit"`
+	Ref          string            `json:"ref"`
+	Prerequisite string            `json:"prerequisite,omitempty"`
+	Delta        []RescueTreeDelta `json:"delta,omitempty"`
+	Files        []RescueTreeFile  `json:"files"`
+}
+
+// RescueTreeDelta is one path that differs from the bundle's prerequisite.
+// Bytes for a carried path are in RescueTree.Files. Other paths name objects
+// the recipient clone already has.
+type RescueTreeDelta struct {
+	Path    string `json:"path"`
+	Change  string `json:"change"`
+	Mode    string `json:"mode,omitempty"`
+	OID     string `json:"oid,omitempty"`
+	Carried bool   `json:"carried,omitempty"`
+}
+
+// RescueTreeFile is one regular file in the rescue-branch tree.
+type RescueTreeFile struct {
+	Path   string `json:"path"`
+	Mode   string `json:"mode"`
+	SHA256 string `json:"sha256"`
+	Bytes  []byte `json:"bytes"`
 }
 
 // RescueList is GET /v1/rescues, newest first.

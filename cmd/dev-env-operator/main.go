@@ -514,6 +514,9 @@ func run(args []string) error {
 	// One limit on this replica's archive execs into the shelf (DESIGN-024
 	// section 5): the HOME expiry's relay and the history reads share it.
 	shelfSlots := shelf.NewExecSlots(shelf.DefaultExecSlots)
+	// Rescue-byte reads do not take a shelf archive slot. Two per replica
+	// keeps a 67 MiB operator plus two near-cap reads under the 256 MiB limit.
+	rescueTreeSlots := shelf.NewExecSlots(shelf.DefaultExecSlots)
 	r := &controller.Reconciler{
 		SessionDirectory: directoryStore,
 		Client:           mgr.GetClient(),
@@ -654,6 +657,7 @@ func run(args []string) error {
 			HistoryReads:             o.historyArchiveReads,
 			History:                  &shelf.HistoryReader{Shelf: rescueShelf},
 			ShelfSlots:               shelfSlots,
+			RescueTreeSlots:          rescueTreeSlots,
 			CoordinationArchiveReads: o.coordinationArchiveReads,
 			CoordinationArchive:      &shelf.CoordinationArchive{Shelf: rescueShelf},
 			Templates:                apiserver.TemplatesFrom(mgr.GetClient(), templatesKey),

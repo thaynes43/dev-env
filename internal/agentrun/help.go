@@ -27,6 +27,8 @@ Usage:
   agent-run suspend <name>...                     rescue and stop sessions, keeping their volumes
   agent-run resume <name>                         start a suspended session again, conversation intact
   agent-run rescue list [--session <name>]        list the rescues on the shelf
+  agent-run rescue read <session>/<stamp> --repo <name> --commit <oid> --session-uid <uid> --pod-uid <uid> --out <dir>
+                                                  copy one rescue tree into a new directory
   agent-run rescue restore <session>/<stamp> (--local | -p "<task>")
                                                   start a session that fetches a rescue
   agent-run history list [--project <p>]          list archived Session histories by project
@@ -319,10 +321,12 @@ message may have arrived, so do not send it again before checking. It exits 5
 only when nothing was sent (the API could not be reached at all).
 `,
 	"rescue": `Usage: agent-run rescue list [--session <name>] [-o json]
+       agent-run rescue read <session>/<stamp> --repo <name> --commit <oid> --session-uid <uid> --pod-uid <uid> [--project <name>] --out <dir> [-o json]
        agent-run rescue restore <session>/<stamp> (--local | -p "<task>") [--repo <name>] [flags]
 
 A rescue is the bundle of a session's work, written to the shared volume when the
-session is suspended or reaped (D-10, D-48). The bundles never leave the cluster.
+session is suspended or reaped (D-10, D-48). rescue list shows metadata. rescue
+restore starts a new session. Neither of those returns file bytes.
 
 rescue list shows them, newest first: id, when it was made (UTC), the repos it
 holds a bundle for, its size, its state, and how long it is kept. The state is
@@ -333,6 +337,26 @@ the rescue after the retention (D-09, 30 days). Paths under rescue/ that do not 
 the layout are listed as unrecognized and never pruned.
   --session <name>   only this session's rescues
   -o json            the API's list as JSON
+
+rescue read verifies the existing thin bundle in the caller's clone and
+writes the blobs that bundle carries to --out. It does not start a session,
+check out, or run hooks, and it does not copy the recipient's existing base.
+A human, a client, and a coordinator are refused. A running session cannot
+read its own current rescue: the operator marks that rescue superseded before
+the pod is ensured. A direct child is refused unless usageCaptureParentUID is
+that session's UID. That field is set only when child usage capture is on,
+which is off by default, and it is not a grant. The commit, the base commit
+and the ref must be the ones the operator recorded. --out must not exist and
+must not pass through a symlink, so a path whose ancestor is a symlink
+(macOS /tmp and /var) is refused. The command prints hashes, not file bytes.
+A 429 is not retried. Untracked objects fetched into the clone remain until
+git gc.
+  --repo <name>         the clone the rescue holds
+  --commit <oid>        the rescue-branch commit
+  --session-uid <uid>   the rescued session's UID
+  --pod-uid <uid>       the pod UID recorded on that rescue
+  --project <name>      the session's project, when it has a snapshot
+  --out <dir>           a new directory for the files
 
 rescue restore starts a new session that fetches one rescue (D-67). It is a run:
 it takes the same flags (-p or --local, --agent, --model, --effort, --base, --size,

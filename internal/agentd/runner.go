@@ -28,13 +28,17 @@ type Cmd struct {
 	UnsetEnv []string
 	// Stdin is the command's input; nil means /dev/null.
 	Stdin io.Reader
+	// StdoutMax, when positive, stops the process once stdout reaches this
+	// many bytes. Result.Stdout holds at most that many, and StdoutOver is set.
+	StdoutMax int
 }
 
 // Result is what a command printed and how it exited.
 type Result struct {
-	Stdout   []byte
-	Stderr   []byte
-	ExitCode int
+	Stdout     []byte
+	Stderr     []byte
+	ExitCode   int
+	StdoutOver bool
 }
 
 // Runner runs external commands. Tests use a fake; the daemon uses ExecRunner.
@@ -116,6 +120,36 @@ var stopGrace = 3 * time.Second
 // within waitDelay, the allowance sharedGitAdminBudget's headroom covers.
 var waitDelay = 5 * time.Second
 
+// cappedWriter keeps at most max bytes and stops the process group past that.
+type cappedWriter struct {
+	max  int
+	buf  bytes.Buffer
+	over atomic.Bool
+	cmd  *exec.Cmd
+}
+
+func (w *cappedWriter) Write(p []byte) (int, error) {
+	if w == nil || w.over.Load() {
+		return len(p), nil
+	}
+	room := w.max - w.buf.Len()
+	if room < 0 {
+		room = 0
+	}
+	if len(p) > room {
+		if room > 0 {
+			_, _ = w.buf.Write(p[:room])
+		}
+		w.over.Store(true)
+		if w.cmd != nil && w.cmd.Process != nil {
+			_ = syscall.Kill(-w.cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return len(p), nil
+	}
+	_, _ = w.buf.Write(p)
+	return len(p), nil
+}
+
 // ExecRunner runs commands as child processes.
 type ExecRunner struct {
 	// BaseEnv is every command's environment before Cmd.Env; nil means
@@ -176,13 +210,28 @@ func (r ExecRunner) Run(ctx context.Context, c Cmd) (Result, error) {
 	}
 	cmd.WaitDelay = waitDelay
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	var capped, errCap *cappedWriter
+	if c.StdoutMax > 0 {
+		capped = &cappedWriter{max: c.StdoutMax, cmd: cmd}
+		errCap = &cappedWriter{max: 64 << 10, cmd: cmd}
+		cmd.Stdout, cmd.Stderr = capped, errCap
+	} else {
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	}
 	err := cmd.Run()
 	close(exited)
 	if stopping.Load() {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
 	res := Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
+	if capped != nil {
+		res.Stdout = capped.buf.Bytes()
+		res.Stderr = errCap.buf.Bytes()
+		res.StdoutOver = capped.over.Load()
+		if res.StdoutOver {
+			err = nil
+		}
+	}
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
@@ -191,7 +240,7 @@ func (r ExecRunner) Run(ctx context.Context, c Cmd) (Result, error) {
 			if len(c.Args) > 0 {
 				sub = c.Args[0]
 			}
-			return res, &CmdError{Name: c.Name, Sub: sub, ExitCode: res.ExitCode, Stderr: stderr.String()}
+			return res, &CmdError{Name: c.Name, Sub: sub, ExitCode: res.ExitCode, Stderr: string(res.Stderr)}
 		}
 		return res, fmt.Errorf("%s: %w", c.Name, err)
 	}
