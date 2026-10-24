@@ -138,17 +138,21 @@ func (b *tailBuffer) String() string {
 // field, not embedded: an embedded bytes.Buffer brings ReadFrom, which io.Copy
 // in the exec stream would call instead of Write, past the cap.
 type limitedBuffer struct {
-	buf bytes.Buffer
-	max int
+	buf  bytes.Buffer
+	max  int
+	over bool
 }
 
 func (b *limitedBuffer) Write(p []byte) (int, error) {
 	if room := b.max - b.buf.Len(); room > 0 {
 		if len(p) > room {
 			_, _ = b.buf.Write(p[:room])
+			b.over = true
 		} else {
 			_, _ = b.buf.Write(p)
 		}
+	} else if len(p) > 0 {
+		b.over = true
 	}
 	return len(p), nil
 }

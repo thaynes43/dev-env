@@ -187,6 +187,20 @@ func bundleRepo(ctx context.Context, r Runner, s Settings, rr protocol.RepoRescu
 	if rb.Base != "" {
 		args = append(args, "--not", rb.Base)
 	}
+	if rb.Base != "" && !strings.HasPrefix(rb.Base, "--") {
+		// Resolve the base here, under the isolated environment, so a replace
+		// ref cannot choose the commit the operator records.
+		bres, berr := r.Run(ctx, Cmd{
+			Name: "git",
+			Args: []string{"-C", rr.Path, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=", "rev-parse", "--verify", rb.Base + "^{commit}"},
+			Env:  isolatedGitEnv(), UnsetEnv: isolatedGitUnset,
+		})
+		if berr == nil {
+			if oid := strings.TrimSpace(string(bres.Stdout)); protocol.ValidGitObject(oid) {
+				rb.BaseCommit = oid
+			}
+		}
+	}
 	bctx, cancel := context.WithTimeout(ctx, bundleTimeout)
 	_, err = r.Run(bctx, Cmd{Name: "git", Args: args, Env: gitEnv})
 	cancel()

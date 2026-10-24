@@ -679,9 +679,10 @@ type RescueRepo struct {
 	Bytes int64    `json:"bytes"`
 }
 
-// RescueTree is the wire shape of a rescue-tree response. This route does
-// not return it: file bytes stay in the cluster (D-10, D-48). A commit id
-// without those bytes is not acceptance.
+// RescueTree is the body of a successful rescue-tree read. Bytes are the
+// file contents after the thin bundle verified in the caller's clone. A
+// commit id without these bytes is not this response. The bytes stay inside
+// the cluster (D-10, D-48): a human or client is refused.
 type RescueTree struct {
 	ID         string           `json:"id"`
 	SessionUID string           `json:"sessionUID"`

@@ -428,13 +428,18 @@ func shelfCtl(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv f
 	return exitOK
 }
 
-// rescueTreeCtl is `ctl rescue-tree --repo R --commit SHA <session>/<stamp>`.
-// It prints a refusal. It does not return file bytes or change the rescue.
+// rescueTreeCtl is `ctl rescue-tree`. Without a clone it prints a refusal.
+// With the operator-recorded clone, base, and bundle, it verifies that thin
+// bundle in the clone and prints the rescue commit's files. It does not
+// check out or change the rescue directory.
 func rescueTreeCtl(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string, r agentd.Runner) int {
 	fs := flag.NewFlagSet("ctl rescue-tree", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	repo := fs.String("repo", "", "")
 	commit := fs.String("commit", "", "")
+	base := fs.String("base", "", "")
+	clone := fs.String("clone", "", "")
+	bundle := fs.String("bundle", "", "")
 	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 1 || *repo == "" || *commit == "" {
 		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl rescue-tree --repo <name> --commit <oid> <session>/<stamp>\n", binaryName)
 		return exitUsage
@@ -444,10 +449,27 @@ func rescueTreeCtl(ctx context.Context, args []string, stdout, stderr io.Writer,
 		_, _ = fmt.Fprintf(stderr, "%s: rescue-tree failed\n", binaryName)
 		return exitFailure
 	}
-	out, err := agentd.ReadRescueTree(ctx, r, s, fs.Arg(0), *repo, *commit)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "%s: rescue-tree failed\n", binaryName)
-		return exitFailure
+	var out protocol.RescueTree
+	if *base != "" || *clone != "" || *bundle != "" {
+		if *base == "" || *clone == "" || *bundle == "" {
+			_, _ = fmt.Fprintf(stderr, "%s: rescue-tree failed\n", binaryName)
+			return exitFailure
+		}
+		got, err := agentd.MaterializeRescueTree(ctx, r, s, agentd.RescueMaterialize{
+			ID: fs.Arg(0), Repo: *repo, Clone: *clone, Bundle: *bundle, Commit: *commit, Base: *base,
+		})
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "%s: rescue-tree failed\n", binaryName)
+			return exitFailure
+		}
+		out = got
+	} else {
+		got, err := agentd.ReadRescueTree(ctx, r, s, fs.Arg(0), *repo, *commit)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "%s: rescue-tree failed\n", binaryName)
+			return exitFailure
+		}
+		out = got
 	}
 	enc := json.NewEncoder(stdout)
 	if err := enc.Encode(out); err != nil {

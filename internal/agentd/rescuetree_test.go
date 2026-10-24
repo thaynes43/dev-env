@@ -278,6 +278,169 @@ func TestUnsafeTreeNames(t *testing.T) {
 	}
 }
 
+func TestMaterializeRescueTreeMatchesTheWorktree(t *testing.T) {
+	rig := newRescueRig(t)
+	wt, env := rig.ws.Worktree, rig.g.env
+	writeFile(t, filepath.Join(wt, "README.md"), "edited\n")
+	writeFile(t, filepath.Join(wt, "staged.txt"), "index-only\n")
+	gitRun(t, env, wt, "add", "staged.txt")
+	writeFile(t, filepath.Join(wt, "staged.txt"), "worktree-wins\n")
+	writeFile(t, filepath.Join(wt, "scratch", "new.sh"), "echo\n")
+	if err := os.Chmod(filepath.Join(wt, "scratch", "new.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(wt, "build.log"), "SECRET-IGNORED\n")
+	before := gitRun(t, env, wt, "status", "--porcelain=v1", "--untracked-files=all")
+	rep := rig.rescue(t)
+	rb := rep.Repos[0].Bundle
+	var commit, ref string
+	for _, one := range rb.Refs {
+		if protocol.RescueWorkRef(one.Name) {
+			commit, ref = one.Commit, one.Name
+		}
+	}
+	if !rep.OK || rb == nil || !rb.Verified || !protocol.ValidGitObject(rb.BaseCommit) || commit == "" {
+		t.Fatalf("bundle %+v commit %s", rb, commit)
+	}
+	sum := fileSum(t, filepath.Join(rig.s.SharedDir, filepath.FromSlash(rb.File)))
+	hook := filepath.Join(t.TempDir(), "hook-ran")
+	hookDir := t.TempDir()
+	writeFile(t, filepath.Join(hookDir, "post-checkout"), "#!/bin/sh\ntouch "+hook+"\n")
+	if err := os.Chmod(filepath.Join(hookDir, "post-checkout"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, env, rig.ws.Clone, "config", "core.hooksPath", hookDir)
+	gitRun(t, env, rig.ws.Clone, "remote", "set-url", "origin", "https://127.0.0.1:9/no.git")
+	req := RescueMaterialize{ID: rep.Session + "/" + rep.Stamp, Repo: filepath.Base(rep.Repos[0].Path), Clone: rig.ws.Clone, Bundle: rb.File, Commit: commit, Base: rb.BaseCommit}
+	got, err := MaterializeRescueTree(context.Background(), rig.r, rig.s, req)
+	if err != nil || !got.OK || got.Ref != ref || got.Commit != commit {
+		t.Fatalf("materialize %+v %v", got, err)
+	}
+	files := map[string]protocol.RescueTreeFile{}
+	encoded, _ := json.Marshal(got)
+	if strings.Contains(string(encoded), "SECRET-IGNORED") || strings.Contains(string(encoded), "index-only") {
+		t.Fatal("the response contains ignored or staged-only bytes")
+	}
+	for _, f := range got.Files {
+		files[f.Path] = f
+		sum := sha256.Sum256(f.Bytes)
+		if hex.EncodeToString(sum[:]) != f.SHA256 {
+			t.Fatalf("hash %s", f.Path)
+		}
+	}
+	if string(files["README.md"].Bytes) != "edited\n" || string(files["staged.txt"].Bytes) != "worktree-wins\n" || string(files["scratch/new.sh"].Bytes) != "echo\n" || files["scratch/new.sh"].Mode != "100755" {
+		t.Fatalf("files %#v", files)
+	}
+	if _, err := os.Stat(hook); !os.IsNotExist(err) {
+		t.Fatal("a hook ran")
+	}
+	if after := gitRun(t, env, wt, "status", "--porcelain=v1", "--untracked-files=all"); after != before {
+		t.Fatalf("status changed:\n%s", after)
+	}
+	if fileSum(t, filepath.Join(rig.s.SharedDir, filepath.FromSlash(rb.File))) != sum {
+		t.Fatal("the read changed the bundle")
+	}
+	if tars, _ := filepath.Glob(filepath.Join(rig.s.SharedDir, "rescue", rep.Session, rep.Stamp, "*.tree.tar")); len(tars) != 0 {
+		t.Fatalf("stored a tree tar: %v", tars)
+	}
+
+	empty := t.TempDir()
+	gitRun(t, env, empty, "init", "-q")
+	missing, err := MaterializeRescueTree(context.Background(), rig.r, rig.s, RescueMaterialize{ID: req.ID, Repo: req.Repo, Clone: empty, Bundle: rb.File, Commit: commit, Base: rb.BaseCommit})
+	if err != nil || missing.OK || missing.Code != protocol.RescueTreeMissingBase || len(missing.Files) != 0 {
+		t.Fatalf("missing base %+v %v", missing, err)
+	}
+	wrong, err := MaterializeRescueTree(context.Background(), rig.r, rig.s, RescueMaterialize{ID: req.ID, Repo: req.Repo, Clone: rig.ws.Clone, Bundle: rb.File, Commit: rb.BaseCommit, Base: rb.BaseCommit})
+	if err != nil || wrong.OK || len(wrong.Files) != 0 {
+		t.Fatalf("base used as the rescue commit %+v %v", wrong, err)
+	}
+	bundlePath := filepath.Join(rig.s.SharedDir, filepath.FromSlash(rb.File))
+	saved, err := os.ReadFile(bundlePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bundlePath, []byte("FORGED-BUNDLE\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	forged, err := MaterializeRescueTree(context.Background(), rig.r, rig.s, req)
+	body, _ := json.Marshal(forged)
+	if err != nil || forged.OK || len(forged.Files) != 0 || strings.Contains(string(body), "FORGED-BUNDLE") {
+		t.Fatalf("forged bundle %+v %v", forged, err)
+	}
+	if err := os.WriteFile(bundlePath, saved, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	real := strings.TrimSpace(gitRun(t, env, wt, "rev-parse", commit+":README.md"))
+	writeFile(t, filepath.Join(wt, "replaced-blob"), "REPLACED-CONTENT\n")
+	other := strings.TrimSpace(gitRun(t, env, wt, "hash-object", "-w", filepath.Join(wt, "replaced-blob")))
+	gitRun(t, env, rig.ws.Clone, "replace", real, other)
+	again, err := MaterializeRescueTree(context.Background(), rig.r, rig.s, req)
+	if err != nil || !again.OK {
+		t.Fatalf("replace %+v %v", again, err)
+	}
+	for _, f := range again.Files {
+		if f.Path == "README.md" && string(f.Bytes) != "edited\n" {
+			t.Fatalf("replace selected %q", f.Bytes)
+		}
+	}
+
+	runner := &failSubstr{base: rig.r, substr: " fetch "}
+	failed, err := MaterializeRescueTree(context.Background(), runner, rig.s, req)
+	if err != nil || failed.OK || len(failed.Files) != 0 || runner.hits == 0 {
+		t.Fatalf("injected fetch %+v hits %d %v", failed, runner.hits, err)
+	}
+	if fileSum(t, bundlePath) != sum {
+		t.Fatal("the injected failure changed the bundle")
+	}
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("OUTSIDE-SECRET\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(rig.s.SharedDir, "rescue", "link-1006-170000")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	swapped, err := MaterializeRescueTree(context.Background(), rig.r, rig.s, RescueMaterialize{
+		ID: "link-1006-170000/20261006-1730", Repo: req.Repo, Clone: rig.ws.Clone,
+		Bundle: "rescue/link-1006-170000/20261006-1730/demo.bundle", Commit: commit, Base: rb.BaseCommit,
+	})
+	swappedBody, _ := json.Marshal(swapped)
+	if err != nil || swapped.OK || len(swapped.Files) != 0 || strings.Contains(string(swappedBody), "OUTSIDE-SECRET") {
+		t.Fatalf("symlink %+v %v", swapped, err)
+	}
+}
+
+func TestMaterializeOverCapDoesNotReadBodies(t *testing.T) {
+	rig := newRescueRig(t)
+	blob := make([]byte, 9<<20)
+	blob[0], blob[len(blob)-1] = 'A', 'Z'
+	writeFile(t, filepath.Join(rig.ws.Worktree, "big.bin"), string(blob))
+	rep := rig.rescue(t)
+	rb := rep.Repos[0].Bundle
+	var commit string
+	for _, one := range rb.Refs {
+		if protocol.RescueWorkRef(one.Name) {
+			commit = one.Commit
+		}
+	}
+	if !rep.OK || rb == nil || !rb.Verified || rb.TreeRefused != protocol.TreeTooLarge || commit == "" {
+		t.Fatalf("rescue %+v", rb)
+	}
+	runner := &failSubstr{base: rig.r, substr: "cat-file --batch"}
+	got, err := MaterializeRescueTree(context.Background(), runner, rig.s, RescueMaterialize{
+		ID: rep.Session + "/" + rep.Stamp, Repo: filepath.Base(rep.Repos[0].Path), Clone: rig.ws.Clone,
+		Bundle: rb.File, Commit: commit, Base: rb.BaseCommit,
+	})
+	if err != nil || got.OK || got.Code != protocol.TreeTooLarge || len(got.Files) != 0 || runner.hits != 0 {
+		t.Fatalf("over cap %+v hits %d %v", got, runner.hits, err)
+	}
+	info, err := os.Stat(filepath.Join(rig.s.SharedDir, filepath.FromSlash(rb.File)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("9MiB raw, thin bundle %d bytes, read code %s", info.Size(), got.Code)
+}
+
 func fileSum(t *testing.T, path string) string {
 	t.Helper()
 	b, err := os.ReadFile(path)

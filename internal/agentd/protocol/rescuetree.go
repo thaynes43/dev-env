@@ -14,7 +14,10 @@ const (
 	RescueTreeNotFound   = "not-found"
 	RescueTreeIncomplete = "incomplete"
 	RescueTreeMismatch   = "mismatch"
-	RescueTreeRefused    = "refused"
+	RescueTreeRefused = "refused"
+	// RescueTreeMissingBase is a byte read whose recorded base commit is not
+	// in the recipient clone. The thin bundle stays where it is.
+	RescueTreeMissingBase = "missing-base"
 	// TreeNotRegular is RepoBundle.TreeRefused when the rescue tree contains
 	// a symlink, a gitlink, or a path that is not a regular file.
 	TreeNotRegular = "not-regular"

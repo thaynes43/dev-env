@@ -2,9 +2,13 @@ package apiserver
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/types"
@@ -12,6 +16,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
@@ -23,8 +28,10 @@ import (
 // session UID, or its direct child when that child's stored parent UID is
 // this session. A human, a client, and a coordinator are refused: D-10 and
 // D-48 keep rescue bytes inside the cluster, and this route does not carry
-// them out. A name match without a UID is refused. The handler still does
-// not return file bytes. The thin bundle stays the rescue artifact.
+// them out to those callers. A name match without a UID is refused. The
+// handler execs the caller's pod, which already has the clone, and returns
+// the files only after that pod verifies the thin bundle against the
+// operator-recorded base commit. It does not exec the shelf.
 func (s *Server) readRescueTree(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
 	if err := rescueByteCaller(c); err != nil {
 		return 0, nil, err
@@ -45,13 +52,32 @@ func (s *Server) readRescueTree(ctx context.Context, _ http.ResponseWriter, r *h
 	if !rescueByteOwner(c, sess) {
 		return 0, nil, forbidden("this caller cannot read that session's rescued bytes")
 	}
-	if err := rescueTreeBound(sess, id, q); err != nil {
+	ref, err := rescueTreeBound(sess, id, q)
+	if err != nil {
 		return 0, nil, err
 	}
-	// The canonical commit is known. File bytes are not served: a shelf tar
-	// is not that commit, and sending the bytes to a human or client would
-	// leave the cluster. The shelf is not called and nothing is allocated.
-	return 0, nil, invalid(fieldError("rescue", "rescued file bytes are not served"))
+	if c.pod == nil || c.pod.Name == "" || c.pod.Namespace == "" || s.Exec == nil {
+		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "the rescue tree cannot be read now")
+	}
+	// The recipient is the caller's pod, which already has the clone. The
+	// shelf has no base, and this does not write a tree onto the shared volume.
+	ctx, cancel := context.WithTimeout(ctx, podCmdTimeout)
+	defer cancel()
+	stdout, stderr := &limitedBuffer{max: 8 << 20}, &limitedBuffer{max: 4 << 10}
+	cmd := []string{"agentd", "ctl", "rescue-tree", "--repo", q.repo, "--commit", q.commit, "--base", ref.BaseCommit, "--clone", ref.Repo, "--bundle", ref.Bundle, id}
+	if err := s.Exec.Run(ctx, c.pod.Namespace, c.pod.Name, controller.ContainerName, cmd, nil, stdout, stderr); err != nil || stdout.over {
+		s.Log.Info("rescue tree read failed", "rescue", id, "repo", q.repo)
+		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "the rescue tree cannot be read now")
+	}
+	var tree protocol.RescueTree
+	if err := json.Unmarshal([]byte(stdout.String()), &tree); err != nil {
+		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "the rescue tree cannot be read now")
+	}
+	view, err := rescueTreeView(id, q, tree)
+	if err != nil {
+		return 0, nil, err
+	}
+	return http.StatusOK, view, nil
 }
 
 type rescueTreeQueryValues struct {
@@ -140,52 +166,89 @@ func (s *Server) rescueSession(ctx context.Context, name string) (*v1alpha1.Agen
 	return &sess, nil
 }
 
-func rescueTreeBound(sess *v1alpha1.AgentSession, id string, q rescueTreeQueryValues) error {
+func rescueTreeBound(sess *v1alpha1.AgentSession, id string, q rescueTreeQueryValues) (v1alpha1.RescuedRef, error) {
+	var none v1alpha1.RescuedRef
 	_, stamp, err := protocol.ParseRescueID(id)
 	if err != nil {
-		return invalid(fieldError("rescue", "%v", err))
+		return none, invalid(fieldError("rescue", "%v", err))
 	}
 	rec := sess.Status.Rescue
 	switch {
 	case string(sess.UID) != q.sessionUID:
-		return invalid(fieldError("sessionUID", "the session UID does not match"))
+		return none, invalid(fieldError("sessionUID", "the session UID does not match"))
 	case sess.Spec.Repo != q.repo:
-		return invalid(fieldError("repo", "the repository does not match the session"))
+		return none, invalid(fieldError("repo", "the repository does not match the session"))
 	case rec == nil || rec.Stamp != stamp || rec.Result != v1alpha1.RescueVerified || rec.Superseded || rec.PodUID == "" || rec.PodUID != q.podUID:
-		return invalid(fieldError("rescue", "the rescue is missing, incomplete, or superseded"))
+		return none, invalid(fieldError("rescue", "the rescue is missing, incomplete, or superseded"))
 	case rec.LastBundle != "rescue/"+sess.Name+"/"+stamp+"/manifest.json":
-		return invalid(fieldError("rescue", "the rescue manifest does not match this stamp"))
+		return none, invalid(fieldError("rescue", "the rescue manifest does not match this stamp"))
 	}
 	raw := sess.Annotations[v1alpha1.AnnotationProjectSnapshot]
 	if raw == "" {
 		if q.project != "" {
-			return invalid(fieldError("project", "this session has no project"))
+			return none, invalid(fieldError("project", "this session has no project"))
 		}
 	} else {
 		snap, err := projectcatalog.ParseSnapshot([]byte(raw))
 		if err != nil || snap.Project() != q.project || snap.Selected().Name != q.repo {
-			return invalid(fieldError("project", "the project does not match the session"))
+			return none, invalid(fieldError("project", "the project does not match the session"))
 		}
 	}
 	return rescueTreeCanonical(rec, q)
 }
 
-func rescueTreeCanonical(rec *v1alpha1.RescueStatus, q rescueTreeQueryValues) error {
+func rescueTreeCanonical(rec *v1alpha1.RescueStatus, q rescueTreeQueryValues) (v1alpha1.RescuedRef, error) {
+	var none v1alpha1.RescuedRef
 	if rec == nil || rec.OmittedRefs > 0 {
-		return invalid(fieldError("commit", "the rescue's canonical ref list is incomplete"))
+		return none, invalid(fieldError("commit", "the rescue's canonical ref list is incomplete"))
 	}
 	dir := path.Dir(rec.LastBundle)
 	for _, ref := range rec.UnpushedRefs {
 		if ref.Commit != q.commit || !protocol.RescueWorkRef(ref.Name) {
 			continue
 		}
-		if path.Base(ref.Repo) != q.repo || path.Clean(ref.Repo) != ref.Repo || strings.Contains(ref.Repo, "..") {
+		if path.Base(ref.Repo) != q.repo || !filepath.IsAbs(ref.Repo) || filepath.Clean(ref.Repo) != ref.Repo || strings.Contains(ref.Repo, "..") {
 			continue
 		}
-		if ref.Bundle == "" || path.Clean(ref.Bundle) != ref.Bundle || path.Dir(ref.Bundle) != dir {
+		if ref.Bundle == "" || path.Clean(ref.Bundle) != ref.Bundle || path.Dir(ref.Bundle) != dir || strings.Contains(ref.Bundle, "..") {
 			continue
 		}
-		return nil
+		if !protocol.ValidGitObject(ref.BaseCommit) {
+			return none, invalid(fieldError("commit", "the rescue has no recorded base commit"))
+		}
+		return ref, nil
 	}
-	return invalid(fieldError("commit", "the commit is not a rescue ref in this rescue's canonical list"))
+	return none, invalid(fieldError("commit", "the commit is not a rescue ref in this rescue's canonical list"))
+}
+
+func rescueTreeView(id string, q rescueTreeQueryValues, tree protocol.RescueTree) (apiv1.RescueTree, error) {
+	var none apiv1.RescueTree
+	switch {
+	case !tree.OK && tree.Code == protocol.RescueTreeNotFound:
+		return none, notFound("no rescue tree %s", id)
+	case !tree.OK && (tree.Code == protocol.RescueTreeMissingBase || tree.Code == protocol.TreeTooLarge || tree.Code == protocol.TreeNotRegular || tree.Code == protocol.RescueTreeMismatch || tree.Code == protocol.RescueTreeRefused || tree.Code == protocol.TreeCaptureFailed || tree.Code == protocol.TreeWithheld):
+		return none, invalid(fieldError("rescue", "the rescue tree is %s", tree.Code))
+	case !tree.OK || tree.ID != id || tree.Repo != q.repo || tree.Commit != q.commit || !protocol.RescueWorkRef(tree.Ref):
+		return none, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "the rescue tree cannot be read now")
+	}
+	var raw int64
+	files := make([]apiv1.RescueTreeFile, 0, len(tree.Files))
+	seen := map[string]bool{}
+	for _, f := range tree.Files {
+		sum := sha256.Sum256(f.Bytes)
+		got := hex.EncodeToString(sum[:])
+		raw += int64(len(f.Bytes))
+		if !protocol.AcceptableRescueTreePath(f.Path) || !protocol.RegularTreeMode(f.Mode) || !protocol.ValidSHA256(f.SHA256) || got != f.SHA256 || seen[f.Path] || raw < 0 {
+			return none, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "the rescue tree cannot be read now")
+		}
+		seen[f.Path] = true
+		files = append(files, apiv1.RescueTreeFile{Path: f.Path, Mode: f.Mode, SHA256: f.SHA256, Bytes: append([]byte(nil), f.Bytes...)})
+	}
+	if raw > 8<<20 {
+		return none, invalid(fieldError("rescue", "the rescue tree is %s", protocol.TreeTooLarge))
+	}
+	return apiv1.RescueTree{
+		ID: id, SessionUID: q.sessionUID, PodUID: q.podUID, Repo: q.repo, Project: q.project,
+		Commit: q.commit, Ref: tree.Ref, Files: files,
+	}, nil
 }

@@ -159,6 +159,10 @@ type RepoBundle struct {
 	// every origin ref when the clone has no origin/HEAD. A restore clones
 	// origin first, then fetches the bundle.
 	Base string `json:"base,omitempty"`
+	// BaseCommit is the commit Base resolved to in the clone when this bundle
+	// was created. The operator copies it onto the rescued refs. A byte read
+	// trusts that record, not a value read back from the bundle file.
+	BaseCommit string `json:"baseCommit,omitempty"`
 	// Refs are the refs inside the bundle, each with the local ref it holds.
 	Refs []BundleRef `json:"refs,omitempty"`
 	// Verified is set when `git bundle verify` passed and the bundle's heads

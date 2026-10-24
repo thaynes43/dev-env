@@ -2,7 +2,10 @@ package apiserver
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -29,6 +32,8 @@ func TestReadRescueTreeAuthorizesTheParent(t *testing.T) {
 	f := newFixture(t)
 	sh := &fakeShelf{}
 	f.srv.Shelf = sh
+	ex := &treeExec{bytes: []byte("edited\n")}
+	f.srv.Exec = ex
 	before := sessionNames(t, f)
 	sh.tree = protocol.RescueTree{OK: true, Files: []protocol.RescueTreeFile{{Path: "README.md", Bytes: []byte("PLANTED-SECRET")}}}
 
@@ -59,14 +64,26 @@ func TestReadRescueTreeAuthorizesTheParent(t *testing.T) {
 	own := "byte-1006-170002"
 	ownTok := f.sessionPod(own, "dev", 0)
 	ownUID := f.markRescue(own, treeRepo, "")
-	withheld := wantError(t, f.do(http.MethodGet, treePath(own, ownUID, treePod, ""), ownTok, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
-	if !strings.Contains(withheld.Message, "not served") || strings.Contains(withheld.Message, "PLANTED-SECRET") || len(sh.trees) != 0 {
-		t.Fatalf("own session served bytes: %s trees %v", withheld.Message, sh.trees)
+	if len(ex.cmds) != 0 {
+		t.Fatalf("a refused caller reached the clone: %v", ex.cmds)
+	}
+	w := f.do(http.MethodGet, treePath(own, ownUID, treePod, ""), ownTok, nil)
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "PLANTED-SECRET") {
+		t.Fatalf("own session: %d %s", w.Code, w.Body.String())
+	}
+	got := decode[apiv1.RescueTree](t, w)
+	if got.Commit != treeCommit || len(got.Files) != 1 || string(got.Files[0].Bytes) != "edited\n" || len(ex.cmds) != 1 {
+		t.Fatalf("tree %+v cmds %v", got, ex.cmds)
+	}
+	joined := strings.Join(ex.cmds[0], " ")
+	if !strings.Contains(joined, "--base "+strings.Repeat("c", 40)) || !strings.Contains(joined, "--clone /home/dev/repos/"+treeRepo) || strings.Contains(joined, "hold-rescue") {
+		t.Fatalf("exec %q", joined)
 	}
 	otherTok := f.sessionPod("byte-1006-170003", "dev", 0)
+	cmds := len(ex.cmds)
 	e = wantError(t, f.do(http.MethodGet, treePath(own, ownUID, treePod, ""), otherTok, nil), http.StatusForbidden, apiv1.CodeForbidden)
-	if strings.Contains(e.Message, humanSA) {
-		t.Fatalf("sibling leaked %s", e.Message)
+	if strings.Contains(e.Message, humanSA) || len(ex.cmds) != cmds {
+		t.Fatalf("sibling leaked %s cmds %d", e.Message, len(ex.cmds))
 	}
 
 	parentName := "byte-1006-170010"
@@ -77,9 +94,10 @@ func TestReadRescueTreeAuthorizesTheParent(t *testing.T) {
 	wantError(t, f.do(http.MethodGet, treePath(named, string(f.session(named).UID), treePod, ""), parentTok, nil), http.StatusForbidden, apiv1.CodeForbidden)
 	proved := "byte-1006-170012"
 	f.childRescue(proved, parentName, parentUID)
-	child := wantError(t, f.do(http.MethodGet, treePath(proved, string(f.session(proved).UID), treePod, ""), parentTok, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
-	if !strings.Contains(child.Message, "not served") || len(sh.trees) != 0 {
-		t.Fatalf("proved child: %s trees %v", child.Message, sh.trees)
+	beforeChild := len(ex.cmds)
+	cw := f.do(http.MethodGet, treePath(proved, string(f.session(proved).UID), treePod, ""), parentTok, nil)
+	if cw.Code != http.StatusOK || strings.Contains(cw.Body.String(), "PLANTED-SECRET") || len(ex.cmds) != beforeChild+1 {
+		t.Fatalf("proved child: %d %s cmds %d", cw.Code, cw.Body.String(), len(ex.cmds))
 	}
 
 	omitted := f.session(own)
@@ -143,9 +161,28 @@ func TestReadRescueTreeAuthorizesTheParent(t *testing.T) {
 	if gotSnap := f.session(projectName).Annotations[v1alpha1.AnnotationProjectSnapshot]; gotSnap == "" {
 		t.Fatal("project snapshot was not stored")
 	}
+	pw := f.do(http.MethodGet, treePath(projectName, projectUID, treePod, "dev-env"), projectTok, nil)
+	if pw.Code != http.StatusOK || strings.Contains(pw.Body.String(), "PLANTED-SECRET") {
+		t.Fatalf("project: %d %s", pw.Code, pw.Body.String())
+	}
+	if got := decode[apiv1.RescueTree](t, pw); got.Project != "dev-env" || string(got.Files[0].Bytes) != "edited\n" {
+		t.Fatalf("project field %+v", got)
+	}
+	ex.badHash = true
+	bad := f.do(http.MethodGet, treePath(projectName, projectUID, treePod, "dev-env"), projectTok, nil)
+	ex.badHash = false
+	if bad.Code != http.StatusServiceUnavailable || strings.Contains(bad.Body.String(), "edited") {
+		t.Fatalf("forged hash: %d %s", bad.Code, bad.Body.String())
+	}
+	nobase := f.session(projectName)
+	nobase.Status.Rescue.UnpushedRefs[0].BaseCommit = ""
+	if err := f.c.Status().Update(context.Background(), nobase); err != nil {
+		t.Fatal(err)
+	}
+	cmds = len(ex.cmds)
 	e = wantError(t, f.do(http.MethodGet, treePath(projectName, projectUID, treePod, "dev-env"), projectTok, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
-	if !strings.Contains(e.Message, "not served") || strings.Contains(e.Message, "PLANTED-SECRET") {
-		t.Fatalf("project: %s", e.Message)
+	if !strings.Contains(e.Message, "base commit") || len(ex.cmds) != cmds {
+		t.Fatalf("missing base: %s cmds %d", e.Message, len(ex.cmds))
 	}
 	wantError(t, f.do(http.MethodGet, treePath(projectName, projectUID, treePod, ""), projectTok, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
 	wantError(t, f.do(http.MethodGet, treePath(projectName, projectUID, treePod, "other"), projectTok, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
@@ -163,6 +200,25 @@ func TestReadRescueTreeAuthorizesTheParent(t *testing.T) {
 			t.Fatalf("missing %s in %v", n, after)
 		}
 	}
+}
+
+type treeExec struct {
+	cmds    [][]string
+	bytes   []byte
+	badHash bool
+}
+
+func (e *treeExec) Run(_ context.Context, _, _, _ string, cmd []string, _ io.Reader, stdout, _ io.Writer) error {
+	e.cmds = append(e.cmds, append([]string(nil), cmd...))
+	sum := sha256.Sum256(e.bytes)
+	digest := hex.EncodeToString(sum[:])
+	if e.badHash {
+		digest = strings.Repeat("ab", 32)
+	}
+	return json.NewEncoder(stdout).Encode(protocol.RescueTree{
+		OK: true, ID: cmd[len(cmd)-1], Repo: treeRepo, Commit: treeCommit, Ref: "refs/heads/rescue/verified",
+		Files: []protocol.RescueTreeFile{{Path: "README.md", Mode: "100644", SHA256: digest, Bytes: append([]byte(nil), e.bytes...)}},
+	})
 }
 
 func (f *fixture) childRescue(name, parent, parentUID string) string {
@@ -212,6 +268,7 @@ func (f *fixture) markRescue(name, repo, snapshot string) string {
 		UnpushedRefs: []v1alpha1.RescuedRef{{
 			Repo: "/home/dev/repos/" + repo, Name: "refs/heads/rescue/" + name + "-" + treeStamp,
 			Commit: treeCommit, Bundle: "rescue/" + name + "/" + treeStamp + "/" + repo + ".bundle",
+			BaseCommit: strings.Repeat("c", 40),
 		}},
 	}
 	if err := f.c.Status().Update(context.Background(), s); err != nil {

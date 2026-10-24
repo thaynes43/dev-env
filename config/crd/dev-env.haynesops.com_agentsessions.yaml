@@ -2199,6 +2199,16 @@ spec:
                       description: RescuedRef is one local ref origin lacked at a
                         rescue.
                       properties:
+                        baseCommit:
+                          description: |-
+                            BaseCommit is the commit the thin bundle was verified against, resolved
+                            in the clone at rescue and stored by the operator. A byte read refuses
+                            a record that lacks one. Names and bundle-file contents are not this
+                            value.
+                          maxLength: 64
+                          minLength: 40
+                          pattern: ^[0-9a-f]{40}$|^[0-9a-f]{64}$
+                          type: string
                         bundle:
                           description: Bundle is the bundle file on the shared volume
                             that holds it.

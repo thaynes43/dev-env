@@ -69,7 +69,7 @@ go test -p 1 -count=1 ./scripts/trials/stopped_handoff/
 
 ## Installed stage, not this packet
 
-`agent-run rescue read` is the source path that asks for one rescue-branch tree without starting a session. The API does not return file bytes. It is specified in [rescue-byte-retrieval.md](rescue-byte-retrieval.md). Source tests are not an installed journey. #101 stays open until that journey passes.
+`agent-run rescue read` verifies one existing thin bundle in the caller's clone without starting a session. It is specified in [rescue-byte-retrieval.md](rescue-byte-retrieval.md). Source tests are not an installed journey. #101 stays open until that journey passes.
 
 The installed stage is still a separate reviewed drill:
 

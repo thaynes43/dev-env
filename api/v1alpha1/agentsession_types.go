@@ -1542,6 +1542,16 @@ type RescuedRef struct {
 	// Bundle is the bundle file on the shared volume that holds it.
 	// +optional
 	Bundle string `json:"bundle,omitempty"`
+
+	// BaseCommit is the commit the thin bundle was verified against, resolved
+	// in the clone at rescue and stored by the operator. A byte read refuses
+	// a record that lacks one. Names and bundle-file contents are not this
+	// value.
+	// +kubebuilder:validation:MinLength=40
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{40}$|^[0-9a-f]{64}$`
+	// +optional
+	BaseCommit string `json:"baseCommit,omitempty"`
 }
 
 // AgentSession is one agent session: its pod, its volume and its lifecycle. The
