@@ -670,6 +670,59 @@ func (a *LastAttempt) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+func (o Observation) MarshalJSON() ([]byte, error) {
+	w := observationWire(o)
+	w.DirectFields = nonNilSlice(w.DirectFields)
+	w.Measures = nonNilSlice(w.Measures)
+	w.Derivations = nonNilSlice(w.Derivations)
+	w.EvidenceRefs = nonNilSlice(w.EvidenceRefs)
+	return json.Marshal(w)
+}
+
+func (s Scope) MarshalJSON() ([]byte, error) {
+	w := scopeWire(s)
+	w.Products = nonNilSlice(w.Products)
+	return json.Marshal(w)
+}
+
+func (m Measure) MarshalJSON() ([]byte, error) {
+	w := measureWire(m)
+	w.EvidenceFields = nonNilSlice(w.EvidenceFields)
+	return json.Marshal(w)
+}
+
+func (d Derivation) MarshalJSON() ([]byte, error) {
+	w := derivationWire(d)
+	w.InputRefs = nonNilSlice(w.InputRefs)
+	return json.Marshal(w)
+}
+
+func (r ReadResponse) MarshalJSON() ([]byte, error) {
+	w := readWire(r)
+	w.Items = nonNilSlice(w.Items)
+	w.SourceStatuses = nonNilSlice(w.SourceStatuses)
+	return json.Marshal(w)
+}
+
+func (item ReadItem) MarshalJSON() ([]byte, error) {
+	w := itemWire(item)
+	w.CurrentMeasures = nonNilSlice(w.CurrentMeasures)
+	return json.Marshal(w)
+}
+
+func (v ValidationRecord) MarshalJSON() ([]byte, error) {
+	w := validationWire(v)
+	w.ValidationRefs = nonNilSlice(w.ValidationRefs)
+	return json.Marshal(w)
+}
+
+func nonNilSlice[T any](in []T) []T {
+	if in == nil {
+		return []T{}
+	}
+	return in
+}
+
 type (
 	observationWire Observation
 	scopeWire       Scope
@@ -865,8 +918,10 @@ func strictInto(b []byte, keys []string, dest any) error {
 // canonicalKeys compares property names with the canonical field list before
 // typed decode. encoding/json folds case, including Unicode folds such as
 // long s, and DisallowUnknownFields still accepts that alias beside the
-// canonical name. Exact duplicate keys are rejected here as well. String
-// values are not compared or rewritten.
+// canonical name. Exact duplicate keys are rejected here as well. JSON null
+// is rejected for every field the schema does not list as nullable, including
+// string-array elements, before encoding/json turns null into an empty string
+// or a nil slice. String values are not compared or rewritten.
 func canonicalKeys(b []byte, keys []string) error {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.UseNumber()
@@ -878,6 +933,7 @@ func canonicalKeys(b []byte, keys []string) error {
 	for _, key := range keys {
 		allowed[key] = struct{}{}
 	}
+	nullable, stringArrays := policyFor(keys)
 	seen := make(map[string]struct{}, len(keys))
 	for dec.More() {
 		keyTok, err := dec.Token()
@@ -895,7 +951,9 @@ func canonicalKeys(b []byte, keys []string) error {
 		if _, ok := allowed[key]; !ok {
 			return &DecodeError{Code: "unknown_field", Path: key, Msg: "field is not a canonical name"}
 		}
-		if err := skipValue(dec); err != nil {
+		_, allowNull := nullable[key]
+		_, stringArray := stringArrays[key]
+		if err := consumeChecked(dec, key, allowNull, stringArray); err != nil {
 			return err
 		}
 	}
@@ -910,6 +968,139 @@ func canonicalKeys(b []byte, keys []string) error {
 		if _, ok := seen[key]; !ok {
 			return &DecodeError{Code: "missing_field", Path: key, Msg: "required field is missing"}
 		}
+	}
+	return nil
+}
+
+func policyFor(keys []string) (map[string]struct{}, map[string]struct{}) {
+	switch {
+	case sameKeys(keys, observationKeys):
+		return keySet("providerObservedAt", "errorCode"), keySet("evidenceRefs")
+	case sameKeys(keys, scopeKeys):
+		return keySet("accountRef", "workspaceRef", "entitlementRef"), keySet("products")
+	case sameKeys(keys, directKeys):
+		return keySet("lexicalValue"), nil
+	case sameKeys(keys, windowKeys):
+		return keySet("durationMinutes", "startAt", "resetAt"), nil
+	case sameKeys(keys, valueKeys):
+		return keySet("decimal"), nil
+	case sameKeys(keys, measureKeys):
+		return keySet("currency", "validationRef"), keySet("evidenceFields")
+	case sameKeys(keys, derivationKeys):
+		return nil, keySet("inputRefs")
+	case sameKeys(keys, readKeys):
+		return keySet("nextCursor"), nil
+	case sameKeys(keys, validationKeys):
+		return nil, keySet("validationRefs")
+	case sameKeys(keys, bindingKeys):
+		return keySet("accountRef", "workspaceRef"), nil
+	case sameKeys(keys, freshnessKeys):
+		return keySet("policyRef"), nil
+	case sameKeys(keys, statusKeys):
+		return keySet("lastGood"), nil
+	case sameKeys(keys, lastGoodKeys):
+		return keySet("providerObservedAt"), nil
+	case sameKeys(keys, attemptKeys):
+		return keySet("completedAt", "code"), nil
+	default:
+		return nil, nil
+	}
+}
+
+func sameKeys(a, b []string) bool {
+	return len(a) > 0 && len(a) == len(b) && &a[0] == &b[0]
+}
+
+func keySet(keys ...string) map[string]struct{} {
+	out := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		out[key] = struct{}{}
+	}
+	return out
+}
+
+func consumeChecked(dec *json.Decoder, key string, allowNull, stringArray bool) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return &DecodeError{Code: "invalid_json", Path: key, Msg: err.Error()}
+	}
+	if tok == nil {
+		if !allowNull {
+			return &DecodeError{Code: "invalid_type", Path: key, Msg: "null is not allowed"}
+		}
+		return nil
+	}
+	delim, isDelim := tok.(json.Delim)
+	if !isDelim {
+		return nil
+	}
+	if delim == '[' {
+		return consumeArray(dec, key, stringArray)
+	}
+	if delim == '{' {
+		return consumeRest(dec, '{')
+	}
+	return &DecodeError{Code: "invalid_json", Path: key, Msg: "unexpected delimiter"}
+}
+
+func consumeArray(dec *json.Decoder, key string, stringsOnly bool) error {
+	i := 0
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return &DecodeError{Code: "invalid_json", Path: key, Msg: err.Error()}
+		}
+		path := fmt.Sprintf("%s[%d]", key, i)
+		if tok == nil {
+			return &DecodeError{Code: "invalid_type", Path: path, Msg: "null is not allowed"}
+		}
+		if stringsOnly {
+			if _, ok := tok.(string); !ok {
+				if delim, ok := tok.(json.Delim); ok {
+					if err := consumeRest(dec, delim); err != nil {
+						return err
+					}
+				}
+				return &DecodeError{Code: "invalid_type", Path: path, Msg: "array element must be a string"}
+			}
+		} else if delim, ok := tok.(json.Delim); ok {
+			if err := consumeRest(dec, delim); err != nil {
+				return err
+			}
+		}
+		i++
+	}
+	end, err := dec.Token()
+	if err != nil {
+		return &DecodeError{Code: "invalid_json", Path: key, Msg: err.Error()}
+	}
+	if end != json.Delim(']') {
+		return &DecodeError{Code: "invalid_json", Path: key, Msg: "array is not closed"}
+	}
+	return nil
+}
+
+func consumeRest(dec *json.Decoder, open json.Delim) error {
+	closeDelim := json.Delim('}')
+	if open == '[' {
+		closeDelim = ']'
+	}
+	for dec.More() {
+		if open == '{' {
+			if _, err := dec.Token(); err != nil {
+				return &DecodeError{Code: "invalid_json", Msg: err.Error()}
+			}
+		}
+		if err := skipValue(dec); err != nil {
+			return err
+		}
+	}
+	end, err := dec.Token()
+	if err != nil {
+		return &DecodeError{Code: "invalid_json", Msg: err.Error()}
+	}
+	if end != closeDelim {
+		return &DecodeError{Code: "invalid_json", Msg: "object or array is not closed"}
 	}
 	return nil
 }

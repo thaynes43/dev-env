@@ -47,6 +47,7 @@ const (
 	IssueInvalidEnum              = "invalid_enum"
 	IssueInvalidTime              = "invalid_time"
 	IssueInvalidCount             = "invalid_count"
+	IssueAvailabilityConflict     = "availability_conflict"
 )
 
 // Issue is one contract finding. Codes are stable for tests.
@@ -100,9 +101,9 @@ type Assessment struct {
 // ValidateObservation checks wire shape and caller-supplied trust. It does not
 // modify obs and does not read a clock or a provider. Shape uses the same
 // schema, enum, date-time, count, and decimal checks as decode, including on a
-// value that was built in memory. An allowlist miss, reset-credit misuse, or
-// display-only promotion clears Actionable on every measure. SemanticsEvidenced
-// can still report that a source rule matched.
+// value that was built in memory. An allowlist miss, reset-credit misuse,
+// display-only promotion, or explicit availability conflict clears Actionable
+// on every measure. SemanticsEvidenced can still report that a source rule matched.
 func ValidateObservation(obs Observation, trusted TrustedContext, reg Registry) Assessment {
 	var out Assessment
 	out.ServedModel = ServedModelUnknown
@@ -142,6 +143,9 @@ func ValidateObservation(obs Observation, trusted TrustedContext, reg Registry) 
 		if src.AllowNormalizedMeasures && !src.AllowDerivations && len(obs.Derivations) > 0 {
 			out.Issues = append(out.Issues, issue(IssueDerivationFormula, "derivations", "this source cannot carry derivations"))
 		}
+	}
+	if obs.Availability == AvailabilityConflict {
+		out.Issues = append(out.Issues, issue(IssueAvailabilityConflict, "availability", "conflicting evidence is not advice"))
 	}
 	blocked := !out.ShapeOK || hasIdentityBlock(out.Issues) || hasPolicyBlock(out.Issues) || !srcOK
 	assessMeasures(&out, obs, trusted, parts, src, srcOK, blocked)
@@ -308,7 +312,7 @@ func identityIssues(obs Observation, trusted TrustedContext, parts RegistryParts
 func hasPolicyBlock(issues []Issue) bool {
 	for _, item := range issues {
 		switch item.Code {
-		case IssueFieldNotAllowlisted, IssueResetCreditMisuse, IssueDisplayPromotion, IssueDerivationFormula:
+		case IssueFieldNotAllowlisted, IssueResetCreditMisuse, IssueDisplayPromotion, IssueDerivationFormula, IssueAvailabilityConflict:
 			return true
 		}
 	}
@@ -493,7 +497,7 @@ func rangeCheck(rule MetricRule, lexical string) (bool, string) {
 	if err != nil {
 		return false, IssueKnownDecimal
 	}
-	if rule.Min == nil && !rule.AllowOverLimit {
+	if rule.Min == nil {
 		return false, IssueRangeMissing
 	}
 	if rule.Max == nil && !rule.AllowOverLimit {
@@ -561,12 +565,9 @@ func resetMisuse(obs Observation, src SourceRule) []Issue {
 	}
 	var out []Issue
 	for _, m := range obs.Measures {
-		if m.Category != CategoryRateLimit && m.Category != CategoryLocal {
-			continue
-		}
 		for _, ev := range m.EvidenceFields {
 			if _, ok := names[ev]; ok {
-				out = append(out, issue(IssueResetCreditMisuse, "measures."+m.ID, "reset-credit inventory is not a rate-limit budget or capacity grant"))
+				out = append(out, issue(IssueResetCreditMisuse, "measures."+m.ID, "reset-credit inventory is not allowance, budget, or capacity"))
 			}
 		}
 	}

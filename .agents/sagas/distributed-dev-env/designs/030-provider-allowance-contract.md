@@ -81,14 +81,29 @@ under case folding, including a Unicode fold such as long s, is rejected in
 either input order. String and array values are not folded.
 `FixtureParseLimits` is a finite bound for these fixtures. It is not a
 production SLO or a shared resource policy. Missing provider time stays
-missing. A JSON null stays distinct from a missing required key. Decode does
-not call a clock or a provider.
+missing. A JSON null stays distinct from a missing required key. A null is
+also distinct from a value: required strings, objects, and arrays, including
+string-array elements, reject null before typed decode can turn it into an
+empty string or a nil slice. Nullable fields stay nullable, and a valid empty
+array stays an empty array. A nil Go slice for a required array serializes as
+`[]`. Decode does not call a clock or a provider. Summing two or more members
+of one alias group is refused, including a pair inside a larger sum, a subset
+of a larger group, and members joined by overlapping groups. Duplicate,
+repeated, or overlapping projection rules are registry defects and are not
+counted. `AllowOverLimit` permits a missing upper bound only. Reset-credit
+inventory stays metadata for every allowance category and cannot feed a
+derivation. Explicit `conflict` availability keeps the raw value and semantic
+diagnostics and suppresses actionable, complete, and derived advice. A shared
+pool counts only products named by caller-trusted entitlement bindings for
+that account, workspace, generation, and producer. One observation cannot
+supply both aliases.
 
 `ValidateObservation` applies those schema, enum, date-time, count, and
 decimal checks to a Go value as well as to a decoded document. An unsupported
 schema or other shape failure is not actionable. An allowlist miss,
-reset-credit misuse, or display-only promotion also clears `Actionable` on
-every measure. `SemanticsEvidenced` can still say that a source rule matched,
+reset-credit misuse, display-only promotion, or explicit availability
+conflict also clears `Actionable` on every measure. `SemanticsEvidenced` can
+still say that a source rule matched,
 including historical Codex fields and the known meters in a partial
 observation. Unknown meters stay unknown.
 

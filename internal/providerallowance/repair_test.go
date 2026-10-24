@@ -321,6 +321,7 @@ func inventoryRegistry() *providerallowance.StaticRegistry {
 		}
 		sources[i].DirectFields = map[string]providerallowance.DirectFieldRule{
 			"resetCredits.availableCount": {OriginalType: providerallowance.TypeDecimal, Class: providerallowance.ClassInventory},
+			"resetCredits.detailsState":   {OriginalType: providerallowance.TypeString, Class: providerallowance.ClassInventory},
 		}
 	}
 	return providerallowance.NewStaticRegistry(providerallowance.RegistryParts{

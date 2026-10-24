@@ -1,6 +1,10 @@
 package providerallowance
 
-import "math/big"
+import (
+	"math/big"
+	"sort"
+	"strings"
+)
 
 // DerivedValue is a confirmed formula result. Lexical is the declared spelling.
 type DerivedValue struct {
@@ -218,22 +222,54 @@ func measureByID(obs Observation, id string) (Measure, bool) {
 }
 
 func aliasSet(obs Observation, ids []string, parts RegistryParts) bool {
-	set := map[string]struct{}{}
-	for _, id := range ids {
-		set[id] = struct{}{}
+	parent := map[string]string{}
+	var find func(string) string
+	find = func(id string) string {
+		if _, ok := parent[id]; !ok {
+			parent[id] = id
+			return id
+		}
+		if parent[id] != id {
+			parent[id] = find(parent[id])
+		}
+		return parent[id]
 	}
+	union := func(a, b string) {
+		ra, rb := find(a), find(b)
+		if ra != rb {
+			parent[rb] = ra
+		}
+	}
+	known := map[string]struct{}{}
 	for _, rule := range parts.Projections {
-		if rule.Provider != obs.Provider || rule.SourceVersion != obs.Source.Version || len(rule.MeasureIDs) != len(ids) || len(ids) < 2 {
+		if rule.Provider != obs.Provider || rule.SourceVersion != obs.Source.Version {
 			continue
 		}
-		match := true
-		for _, id := range rule.MeasureIDs {
-			if _, ok := set[id]; !ok {
-				match = false
-				break
-			}
+		members := uniqueStrings(rule.MeasureIDs)
+		if len(members) < 2 {
+			continue
 		}
-		if match {
+		for _, id := range members {
+			known[id] = struct{}{}
+		}
+		for _, id := range members[1:] {
+			union(members[0], id)
+		}
+	}
+	counts := map[string]int{}
+	seen := map[string]struct{}{}
+	for _, id := range ids {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		if _, ok := known[id]; !ok {
+			continue
+		}
+		counts[find(id)]++
+	}
+	for _, n := range counts {
+		if n >= 2 {
 			return true
 		}
 	}
@@ -277,10 +313,12 @@ func SharedPools(observations []Observation, trusted []TrustedContext, reg Regis
 			if obs.Scope.EntitlementRef == nil || *obs.Scope.EntitlementRef != rule.EntitlementRef {
 				continue
 			}
-			if !productsSubset(obs.Scope.Products, rule.Products) {
+			if !bindingReady(obs, trusted[i], parts) {
 				continue
 			}
-			if !bindingReady(obs, trusted[i], parts) {
+			product, ok := boundEntitlementProduct(obs, rule)
+			if !ok {
+				out.Issues = append(out.Issues, issue(IssueAccountMismatch, "scope.entitlementRef", "payload entitlement is not a trusted account binding"))
 				continue
 			}
 			account := *obs.Scope.AccountRef
@@ -293,11 +331,7 @@ func SharedPools(observations []Observation, trusted []TrustedContext, reg Regis
 			} else if current.account != account || current.workspace != workspace || current.generation != int64(obs.BindingGeneration) {
 				current.conflict = true
 			}
-			for _, product := range obs.Scope.Products {
-				if containsStr(rule.Products, product) {
-					current.products[product] = struct{}{}
-				}
-			}
+			current.products[product] = struct{}{}
 		}
 		if current.conflict {
 			out.Issues = append(out.Issues, issue(IssueAccountMismatch, "scope.accountRef", "shared-pool aliases cross accounts"))
@@ -326,10 +360,15 @@ func Projections(obs Observation, reg Registry) ProjectionAssessment {
 		out.Issues = []Issue{issue(IssueRegistryMissing, "registry", "a trusted registry is required")}
 		return out
 	}
+	parts := snapshotRegistry(reg)
+	if issues := append(registryDuplicates(parts), projectionAmbiguities(parts.Projections)...); len(issues) > 0 {
+		out.Issues = issues
+		return out
+	}
 	covered := map[string]struct{}{}
 	groups := 0
 	var id string
-	for _, rule := range reg.Projections() {
+	for _, rule := range parts.Projections {
 		if rule.Provider != obs.Provider || rule.SourceVersion != obs.Source.Version || len(rule.MeasureIDs) < 2 {
 			continue
 		}
@@ -360,16 +399,70 @@ func Projections(obs Observation, reg Registry) ProjectionAssessment {
 	return out
 }
 
-func productsSubset(products, allowed []string) bool {
-	if len(products) == 0 {
-		return false
+func boundEntitlementProduct(obs Observation, rule EntitlementRule) (string, bool) {
+	if obs.Scope.AccountRef == nil || obs.Scope.WorkspaceRef == nil || len(obs.Scope.Products) != 1 {
+		return "", false
 	}
-	for _, product := range products {
-		if !containsStr(allowed, product) {
-			return false
+	product := obs.Scope.Products[0]
+	if !containsStr(rule.Products, product) {
+		return "", false
+	}
+	for _, binding := range rule.Bindings {
+		if binding.AccountRef == *obs.Scope.AccountRef &&
+			binding.WorkspaceRef == *obs.Scope.WorkspaceRef &&
+			binding.Generation == int64(obs.BindingGeneration) &&
+			binding.ProducerRef == obs.ProducerRef &&
+			binding.ProducerIncarnation == obs.ProducerIncarnation &&
+			binding.Product == product {
+			return product, true
 		}
 	}
-	return true
+	return "", false
+}
+
+func projectionAmbiguities(rules []ProjectionRule) []Issue {
+	var out []Issue
+	seenSet := map[string]struct{}{}
+	owner := map[string]string{}
+	for _, rule := range rules {
+		members := uniqueStrings(rule.MeasureIDs)
+		if len(members) != len(rule.MeasureIDs) {
+			out = append(out, issue(IssueRegistryDuplicate, "registry.projection", "projection repeats a measure"))
+			continue
+		}
+		if len(members) < 2 {
+			continue
+		}
+		sorted := append([]string(nil), members...)
+		sort.Strings(sorted)
+		setKey := rule.Provider + "\x00" + rule.SourceVersion + "\x00" + strings.Join(sorted, "\x00")
+		if _, ok := seenSet[setKey]; ok {
+			out = append(out, issue(IssueRegistryDuplicate, "registry.projection", "projection member set is repeated"))
+			continue
+		}
+		seenSet[setKey] = struct{}{}
+		for _, member := range members {
+			memKey := rule.Provider + "\x00" + rule.SourceVersion + "\x00" + member
+			if prev, ok := owner[memKey]; ok && prev != rule.ID {
+				out = append(out, issue(IssueRegistryDuplicate, "registry.projection", "projection groups overlap"))
+			}
+			owner[memKey] = rule.ID
+		}
+	}
+	return out
+}
+
+func uniqueStrings(ids []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func coversMeasures(obs Observation, ids []string) bool {

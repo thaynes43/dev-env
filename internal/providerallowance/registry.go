@@ -31,7 +31,8 @@ type DirectFieldRule struct {
 // MetricRule is the source semantic for one validation reference. Windows
 // lists the window refs it may describe. An empty list matches nothing.
 // Min and Max are decimal strings. AllowOverLimit keeps a value above Max
-// when Max is set, and permits a missing Max. HistoricalOnly evidences a
+// when Max is set, and permits a missing Max. It does not permit a missing
+// Min. HistoricalOnly evidences a
 // field without making it a current entitlement. ComplementOf is the decimal
 // bound for complement_percent. An empty ComplementOf does not enable that
 // formula. ModelScope empty means this package has no served-model claim.
@@ -65,15 +66,30 @@ type AccountRule struct {
 }
 
 // EntitlementRule is a verified shared pool. Verified false does not invent
-// a pool identity. Products are aliases of that one pool.
+// a pool identity. Products are aliases of that one pool. Bindings are the
+// caller-trusted account, workspace, generation, producer, and product
+// associations. A payload entitlement or product list does not create one.
 type EntitlementRule struct {
 	EntitlementRef string
 	Products       []string
 	Verified       bool
+	Bindings       []EntitlementBinding
+}
+
+// EntitlementBinding is one independently trusted product association.
+// The observation does not create this record.
+type EntitlementBinding struct {
+	AccountRef          string
+	WorkspaceRef        string
+	Generation          int64
+	ProducerRef         string
+	ProducerIncarnation string
+	Product             string
 }
 
 // ProjectionRule groups measure ids that are aliases of one projection.
-// Those ids are not added together.
+// Those ids are not added together. Duplicate ids, repeated member sets,
+// repeated members, and overlapping groups are registry defects.
 type ProjectionRule struct {
 	ID            string
 	Provider      string
@@ -175,6 +191,7 @@ func cloneParts(in RegistryParts) RegistryParts {
 	for i, ent := range in.Entitlements {
 		out.Entitlements[i] = ent
 		out.Entitlements[i].Products = append([]string(nil), ent.Products...)
+		out.Entitlements[i].Bindings = append([]EntitlementBinding(nil), ent.Bindings...)
 	}
 	for i, proj := range in.Projections {
 		out.Projections[i] = proj

@@ -266,6 +266,10 @@ func poolRegistry(verified bool) *providerallowance.StaticRegistry {
 		},
 		Entitlements: []providerallowance.EntitlementRule{{
 			EntitlementRef: "entitlement-E", Products: []string{"cursor", "grok"}, Verified: verified,
+			Bindings: []providerallowance.EntitlementBinding{
+				{AccountRef: "fixture-account", WorkspaceRef: "fixture-workspace", Generation: 0, ProducerRef: "fixture-producer", ProducerIncarnation: "fixture-incarnation-1", Product: "cursor"},
+				{AccountRef: "fixture-account", WorkspaceRef: "fixture-workspace", Generation: 0, ProducerRef: "fixture-producer", ProducerIncarnation: "fixture-incarnation-1", Product: "grok"},
+			},
 		}},
 	})
 }

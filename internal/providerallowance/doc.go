@@ -4,11 +4,14 @@
 // providerallowance.read.v1. Both are closed JSON documents. Property names
 // must match the canonical field names exactly at every typed object. A case
 // fold or a Unicode fold is rejected, and string values are not rewritten.
-// Decode also rejects a second key, an unknown field, a boolean where an
-// integer is required, a fractional integer, a date-time without an offset,
-// and input outside the caller-supplied limits. ValidateObservation applies
-// the same schema, enum, time, count, and decimal checks to a Go value.
-// An allowlist or reset-credit policy failure clears measure actionability.
+// JSON null is accepted only where the schema allows null. Required arrays
+// marshal as arrays when the Go slice is nil. Decode also rejects a second
+// key, an unknown field, a boolean where an integer is required, a fractional
+// integer, a date-time without an offset, and input outside the caller-supplied
+// limits. ValidateObservation applies the same schema, enum, time, count, and
+// decimal checks to a Go value. An allowlist miss, reset-credit promotion,
+// display-only source, or explicit availability conflict clears measure
+// actionability.
 //
 // Direct evidence, source-semantic measures, and derivations stay separate.
 // ValidateObservation takes the caller-supplied trusted context and registry.
