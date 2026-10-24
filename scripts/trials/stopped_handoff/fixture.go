@@ -134,7 +134,11 @@ func restoreFixture(from, into string, man manifest, head string) error {
 	if _, err := gitCmd(dst, "fetch", "--no-tags", src, "HEAD"); err != nil {
 		return err
 	}
-	if _, err := gitCmd(dst, "checkout", "--detach", "FETCH_HEAD"); err != nil {
+	branch, err := gitCmd(src, "symbolic-ref", "--short", "HEAD")
+	if err != nil || branch == "" || strings.HasPrefix(branch, "-") || strings.ContainsAny(branch, " \t\n") {
+		return fmt.Errorf("refusing ref %q before any restore write", branch)
+	}
+	if _, err := gitCmd(dst, "checkout", "-B", branch, "FETCH_HEAD"); err != nil {
 		return err
 	}
 	if err := requireHEAD(dst, head); err != nil {
@@ -302,10 +306,16 @@ func verifyFixture(root string, man manifest) error {
 	if err := refuseReplaceRefs(abs); err != nil {
 		return err
 	}
+	if err := refuseUnsupportedRefs(abs); err != nil {
+		return err
+	}
 	if err := refuseLocalAttributes(abs); err != nil {
 		return err
 	}
 	if err := refuseWholeIndexFlags(abs); err != nil {
+		return err
+	}
+	if err := refuseGitlinks(abs); err != nil {
 		return err
 	}
 	status, err := gitCmd(abs, "status", "--porcelain=v1")
@@ -373,6 +383,9 @@ func bindTreeAndModes(root string, man manifest) error {
 				return err
 			}
 			if err := worktreeModeMatches(root, entry.Path, mode); err != nil {
+				return err
+			}
+			if err := requireCheckoutBytes(root, entry.Path, entry.SHA256); err != nil {
 				return err
 			}
 		case "staged":
@@ -457,6 +470,68 @@ func refuseReplaceRefs(dir string) error {
 	}
 	if strings.TrimSpace(out) != "" {
 		return fmt.Errorf("refusing replace refs before any restore write")
+	}
+	return nil
+}
+
+func refuseUnsupportedRefs(dir string) error {
+	head, err := gitCmd(dir, "symbolic-ref", "--quiet", "HEAD")
+	if err != nil || !strings.HasPrefix(head, "refs/heads/") {
+		return fmt.Errorf("refusing detached HEAD before any restore write")
+	}
+	out, err := gitCmd(dir, "for-each-ref", "--format=%(refname)")
+	if err != nil {
+		return err
+	}
+	found := false
+	for _, ref := range strings.Split(out, "\n") {
+		if ref == "" {
+			continue
+		}
+		if ref == head {
+			found = true
+			continue
+		}
+		return fmt.Errorf("refusing ref %s before any restore write", ref)
+	}
+	if !found {
+		return fmt.Errorf("refusing missing HEAD ref %s before any restore write", head)
+	}
+	return nil
+}
+
+func refuseGitlinks(dir string) error {
+	out, err := gitStdout(dir, "ls-files", "-s", "-z")
+	if err != nil {
+		return err
+	}
+	for rec := range strings.SplitSeq(string(out), "\x00") {
+		if rec == "" {
+			continue
+		}
+		mode, _, ok := strings.Cut(rec, " ")
+		if !ok {
+			return fmt.Errorf("index record %q has no mode", rec)
+		}
+		if mode == "160000" {
+			path := rec
+			if i := strings.IndexByte(rec, '\t'); i >= 0 {
+				path = rec[i+1:]
+			}
+			return fmt.Errorf("refusing gitlink %s before any restore write", path)
+		}
+	}
+	return nil
+}
+
+func requireCheckoutBytes(dir, path, want string) error {
+	out, err := gitStdout(dir, "cat-file", "--filters", "HEAD:"+path)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(out)
+	if hex.EncodeToString(sum[:]) != want {
+		return fmt.Errorf("refusing checkout bytes for %s before any restore write", path)
 	}
 	return nil
 }
@@ -732,6 +807,14 @@ func cleanRel(name string) (string, error) {
 }
 
 func gitCmd(dir string, args ...string) (string, error) {
+	stdout, err := gitStdout(dir, args...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(string(stdout), "\r\n"), nil
+}
+
+func gitStdout(dir string, args ...string) ([]byte, error) {
 	full := make([]string, 0, len(args)+8)
 	full = append(full,
 		"--no-optional-locks",
@@ -754,9 +837,9 @@ func gitCmd(dir string, args ...string) (string, error) {
 		if msg == "" {
 			msg = strings.TrimSpace(stdout.String())
 		}
-		return "", fmt.Errorf("git %s: %w (%s)", strings.Join(args, " "), err, msg)
+		return nil, fmt.Errorf("git %s: %w (%s)", strings.Join(args, " "), err, msg)
 	}
-	return strings.TrimRight(stdout.String(), "\r\n"), nil
+	return stdout.Bytes(), nil
 }
 
 func fixtureEnv() []string {

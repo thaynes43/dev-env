@@ -748,6 +748,7 @@ func TestReplaceRefsRefuseBeforeWrite(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(pred, "committed.txt"), []byte("replaced committed\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		alignReplacement(t, pred, "committed.txt", "replaced committed\n")
 		for i := range report.Manifest.Entries {
 			if report.Manifest.Entries[i].Path == "committed.txt" {
 				report.Manifest.Entries[i].SHA256 = hashFile(t, filepath.Join(pred, "committed.txt"))
@@ -768,6 +769,7 @@ func TestReplaceRefsRefuseBeforeWrite(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(pred, "extra.txt"), []byte("HIDDEN predecessor WIP\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		alignReplacement(t, pred, "extra.txt", "HIDDEN predecessor WIP\n")
 		doc := withFixture(t, loadDoc(t), report)
 		before := snapFixture(t, pred, []string{"committed.txt", "tracked.txt", "staged.txt", "untracked.txt", "extra.txt"})
 		assertFixtureRefused(t, pred, doc, before, "replace refs")
@@ -873,6 +875,192 @@ func TestUntrackedNewDirectoryRefusedBeforeWrite(t *testing.T) {
 	assertFixtureRefused(t, pred, doc, before, "before any restore write")
 }
 
+func TestExtraRefsRefuseBeforeWrite(t *testing.T) {
+	t.Run("stash", func(t *testing.T) {
+		pred := t.TempDir()
+		report, err := materialize(pred)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pred, "committed.txt"), []byte("stashed predecessor WIP\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := gitCmd(pred, "stash", "push", "--", "committed.txt"); err != nil {
+			t.Fatal(err)
+		}
+		doc := withFixture(t, loadDoc(t), report)
+		before := snapFixture(t, pred, []string{"committed.txt", "tracked.txt", "staged.txt", "untracked.txt"})
+		assertFixtureRefused(t, pred, doc, before, "refs/stash")
+	})
+	t.Run("stash-untracked", func(t *testing.T) {
+		pred := t.TempDir()
+		report, err := materialize(pred)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pred, "scratch.txt"), []byte("untracked predecessor WIP\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := gitCmd(pred, "stash", "push", "-u", "--", "scratch.txt"); err != nil {
+			t.Fatal(err)
+		}
+		doc := withFixture(t, loadDoc(t), report)
+		before := snapFixture(t, pred, []string{"committed.txt", "tracked.txt", "staged.txt", "untracked.txt", "scratch.txt"})
+		if before["f:scratch.txt"] != "absent" {
+			t.Fatal("stash -u left scratch.txt in the worktree")
+		}
+		assertFixtureRefused(t, pred, doc, before, "refs/stash")
+	})
+	t.Run("unpushed-branch", func(t *testing.T) {
+		pred := t.TempDir()
+		report, err := materialize(pred)
+		if err != nil {
+			t.Fatal(err)
+		}
+		commit := commitFile(t, pred, "wip.txt", "unpushed predecessor WIP\n")
+		if _, err := gitCmd(pred, "update-ref", "refs/heads/wip", commit); err != nil {
+			t.Fatal(err)
+		}
+		doc := withFixture(t, loadDoc(t), report)
+		before := snapFixture(t, pred, []string{"committed.txt", "tracked.txt", "staged.txt", "untracked.txt"})
+		assertFixtureRefused(t, pred, doc, before, "refs/heads/wip")
+	})
+	t.Run("unreachable-tag", func(t *testing.T) {
+		pred := t.TempDir()
+		report, err := materialize(pred)
+		if err != nil {
+			t.Fatal(err)
+		}
+		commit := commitFile(t, pred, "tagged.txt", "tagged predecessor WIP\n")
+		if _, err := gitCmd(pred, "update-ref", "refs/tags/dropped", commit); err != nil {
+			t.Fatal(err)
+		}
+		doc := withFixture(t, loadDoc(t), report)
+		before := snapFixture(t, pred, []string{"committed.txt", "tracked.txt", "staged.txt", "untracked.txt"})
+		assertFixtureRefused(t, pred, doc, before, "refs/tags/dropped")
+	})
+}
+
+func TestGitlinkRefusedBeforeWrite(t *testing.T) {
+	for _, ignore := range []string{"all", "dirty"} {
+		t.Run(ignore, func(t *testing.T) {
+			pred := t.TempDir()
+			report, err := materialize(pred)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sub := filepath.Join(pred, "sub")
+			if err := os.Mkdir(sub, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := gitCmd(sub, "init", "-b", "main"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(sub, "s.txt"), []byte("base\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := gitCmd(sub, "add", "--", "s.txt"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := gitCmd(sub, "commit", "-m", "sub"); err != nil {
+				t.Fatal(err)
+			}
+			subHead, err := gitCmd(sub, "rev-parse", "HEAD")
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := fmt.Sprintf("[submodule \"sub\"]\n\tpath = sub\n\turl = ./sub\n\tignore = %s\n", ignore)
+			if err := os.WriteFile(filepath.Join(pred, ".gitmodules"), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := gitCmd(pred, "add", "--", ".gitmodules"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := gitCmd(pred, "update-index", "--add", "--cacheinfo", "160000,"+subHead+",sub"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := gitCmd(pred, "commit", "-m", "link"); err != nil {
+				t.Fatal(err)
+			}
+			report.Head, err = gitCmd(pred, "rev-parse", "HEAD")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(sub, "s.txt"), []byte("SUBMODULE predecessor WIP\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			doc := withFixture(t, loadDoc(t), report)
+			before := snapFixture(t, pred, []string{"committed.txt", "tracked.txt", "staged.txt", "untracked.txt", ".gitmodules", "sub/s.txt"})
+			assertFixtureRefused(t, pred, doc, before, "refusing gitlink sub")
+		})
+	}
+}
+
+func TestCheckoutFiltersRefuseBeforeWrite(t *testing.T) {
+	t.Run("eol-crlf", func(t *testing.T) {
+		pred := t.TempDir()
+		report, err := materialize(pred)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pred, ".gitattributes"), []byte("committed.txt text eol=crlf\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		report.Head = trackPath(t, pred, ".gitattributes")
+		doc := withFixture(t, loadDoc(t), report)
+		before := snapFixture(t, pred, []string{"committed.txt", "tracked.txt", "staged.txt", "untracked.txt", ".gitattributes"})
+		assertFixtureRefused(t, pred, doc, before, "refusing checkout bytes for committed.txt")
+	})
+	t.Run("ident", func(t *testing.T) {
+		pred := t.TempDir()
+		report, err := materialize(pred)
+		if err != nil {
+			t.Fatal(err)
+		}
+		report.Head = replaceTreeFiles(t, pred, map[string]string{
+			"committed.txt":  "$Id$\n",
+			".gitattributes": "committed.txt ident\n",
+		})
+		for i := range report.Manifest.Entries {
+			if report.Manifest.Entries[i].Path == "committed.txt" {
+				report.Manifest.Entries[i].SHA256 = hashFile(t, filepath.Join(pred, "committed.txt"))
+			}
+		}
+		doc := withFixture(t, loadDoc(t), report)
+		before := snapFixture(t, pred, []string{"committed.txt", "tracked.txt", "staged.txt", "untracked.txt", ".gitattributes"})
+		assertFixtureRefused(t, pred, doc, before, "refusing checkout bytes for committed.txt")
+	})
+	t.Run("text-crlf-zerostat", func(t *testing.T) {
+		pred := t.TempDir()
+		report, err := materialize(pred)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pred, ".gitattributes"), []byte("committed.txt text\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		report.Head = trackPath(t, pred, ".gitattributes")
+		if err := os.WriteFile(filepath.Join(pred, "committed.txt"), []byte("synthetic committed line\r\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		blob, err := gitCmd(pred, "rev-parse", "HEAD:committed.txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := gitCmd(pred, "update-index", "--cacheinfo", "100644,"+blob+",committed.txt"); err != nil {
+			t.Fatal(err)
+		}
+		for i := range report.Manifest.Entries {
+			if report.Manifest.Entries[i].Path == "committed.txt" {
+				report.Manifest.Entries[i].SHA256 = hashFile(t, filepath.Join(pred, "committed.txt"))
+			}
+		}
+		doc := withFixture(t, loadDoc(t), report)
+		before := snapFixture(t, pred, []string{"committed.txt", "tracked.txt", "staged.txt", "untracked.txt", ".gitattributes"})
+		assertFixtureRefused(t, pred, doc, before, "refusing checkout bytes for committed.txt")
+	})
+}
+
 func assertFixtureRefused(t *testing.T, pred string, doc document, before map[string]string, want string) {
 	t.Helper()
 	var checkBuf bytes.Buffer
@@ -946,6 +1134,12 @@ func snapFixture(t *testing.T, dir string, paths []string) map[string]string {
 		t.Fatal(err)
 	}
 	snap["status"] = status
+	refs, err := gitCmd(dir, "for-each-ref", "--format=%(refname)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap["refs"] = refs
+	snap["config"] = hashFile(t, filepath.Join(dir, ".git", "config"))
 	for _, path := range paths {
 		full := filepath.Join(dir, path)
 		info, err := os.Lstat(full)
@@ -992,6 +1186,99 @@ func trackPath(t *testing.T, dir, name string) string {
 		t.Fatal(err)
 	}
 	if _, err := gitCmd(dir, "update-index", "--add", "--cacheinfo", "100644,"+blob+","+name); err != nil {
+		t.Fatal(err)
+	}
+	return commit
+}
+
+func alignReplacement(t *testing.T, dir, name, body string) {
+	t.Helper()
+	blob := gitInput(t, dir, body, "hash-object", "--stdin")
+	if _, err := gitCmd(dir, "update-index", "--cacheinfo", "100644,"+blob+","+name); err != nil {
+		t.Fatal(err)
+	}
+	got, err := gitCmd(dir, "rev-parse", "--verify", "HEAD:"+name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == blob {
+		t.Fatalf("git followed the replacement for %s", name)
+	}
+}
+
+func replaceTreeFiles(t *testing.T, dir string, files map[string]string) string {
+	t.Helper()
+	blobs := map[string]string{}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		blob, err := gitCmd(dir, "hash-object", "-w", "--", name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		blobs[name] = blob
+	}
+	list, err := gitCmd(dir, "ls-tree", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var treeIn strings.Builder
+	seen := map[string]bool{}
+	for _, line := range strings.Split(list, "\n") {
+		if line == "" {
+			continue
+		}
+		_, name, ok := strings.Cut(line, "\t")
+		if !ok {
+			t.Fatalf("tree line %q", line)
+		}
+		if blob, ok := blobs[name]; ok {
+			treeIn.WriteString("100644 blob " + blob + "\t" + name + "\n")
+			seen[name] = true
+			continue
+		}
+		treeIn.WriteString(line + "\n")
+	}
+	for name, blob := range blobs {
+		if !seen[name] {
+			treeIn.WriteString("100644 blob " + blob + "\t" + name + "\n")
+		}
+	}
+	tree := gitInput(t, dir, treeIn.String(), "mktree")
+	parent, err := gitCmd(dir, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := gitCmd(dir, "commit-tree", tree, "-p", parent, "-m", "replace tree files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitCmd(dir, "update-ref", "HEAD", commit); err != nil {
+		t.Fatal(err)
+	}
+	for name, blob := range blobs {
+		if _, err := gitCmd(dir, "update-index", "--add", "--cacheinfo", "100644,"+blob+","+name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return commit
+}
+
+func commitFile(t *testing.T, dir, name, body string) string {
+	t.Helper()
+	blob := gitInput(t, dir, body, "hash-object", "-w", "--stdin")
+	list, err := gitCmd(dir, "ls-tree", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := gitInput(t, dir, list+"\n100644 blob "+blob+"\t"+name+"\n", "mktree")
+	parent, err := gitCmd(dir, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := gitCmd(dir, "commit-tree", tree, "-p", parent, "-m", "side "+name)
+	if err != nil {
 		t.Fatal(err)
 	}
 	return commit
