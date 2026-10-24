@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.45.0](https://github.com/thaynes43/dev-env/compare/v2.44.0...v2.45.0) (2026-10-24)
+
+
+### Features
+
+* **portal:** add fenced PostgreSQL sessions and current authorization ([#529](https://github.com/thaynes43/dev-env/issues/529)) ([d4d21ef](https://github.com/thaynes43/dev-env/commit/d4d21ef9d8f6682cabe1a45b78f5fd3726f50ef1))
+* **portal:** assemble the internal read-only runtime ([#541](https://github.com/thaynes43/dev-env/issues/541)) ([fa8b1e2](https://github.com/thaynes43/dev-env/commit/fa8b1e2cf3af91e33bf0558873d70920e569751d))
+* **portal:** fence sessions on their actual PostgreSQL connection ([#531](https://github.com/thaynes43/dev-env/issues/531)) ([0b14da9](https://github.com/thaynes43/dev-env/commit/0b14da986f067b9a4f1f92ad1a85667f2dfd0e1d))
+* **portal:** make Attention readable on a phone ([#528](https://github.com/thaynes43/dev-env/issues/528)) ([190a815](https://github.com/thaynes43/dev-env/commit/190a8152479589be03ed282ce5808007ab97ce4c))
+* **trials:** check synthetic stopped handoffs offline ([#532](https://github.com/thaynes43/dev-env/issues/532)) ([2854dbe](https://github.com/thaynes43/dev-env/commit/2854dbea0ab9c06f5065c08990d5d3e9cd4cc423))
+
+
+### Bug Fixes
+
+* **deps:** update module github.com/go-jose/go-jose/v4 to v4.1.6 ([#535](https://github.com/thaynes43/dev-env/issues/535)) ([e279fe4](https://github.com/thaynes43/dev-env/commit/e279fe4fb60896a3d63f6f8c340b5e2e74a8e39d))
+* **deps:** update module golang.org/x/time to v0.16.0 ([#537](https://github.com/thaynes43/dev-env/issues/537)) ([480e0cd](https://github.com/thaynes43/dev-env/commit/480e0cde55c7863dbc88084316ccdb0ffe0e0ae5))
+* **portal:** bind work packages to canonical TaskClaim keys ([#542](https://github.com/thaynes43/dev-env/issues/542)) ([5b39ebb](https://github.com/thaynes43/dev-env/commit/5b39ebb13f3651c8aa741a2b4358bc1eecf6dd30))
+
 ## [2.44.0](https://github.com/thaynes43/dev-env/compare/v2.43.0...v2.44.0) (2026-10-23)
 
 
