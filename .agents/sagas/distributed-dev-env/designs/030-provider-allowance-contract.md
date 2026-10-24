@@ -90,7 +90,9 @@ array stays an empty array. A nil Go slice for a required array serializes as
 of one alias group is refused, including a pair inside a larger sum, a subset
 of a larger group, and members joined by overlapping groups. Duplicate,
 repeated, or overlapping projection rules are registry defects and are not
-counted. `AllowOverLimit` permits a missing upper bound only. Reset-credit
+counted. Two or more present members of one valid group count as one
+projection when another registered member is absent. One present member
+remains a scalar. `AllowOverLimit` permits a missing upper bound only. Reset-credit
 inventory stays metadata for every allowance category and cannot feed a
 derivation. Explicit `conflict` availability keeps the raw value and semantic
 diagnostics and suppresses actionable, complete, and derived advice. A shared

@@ -121,6 +121,81 @@ func TestProjectionsRejectAmbiguousGroups(t *testing.T) {
 	}
 }
 
+func TestProjectionCountsPresentAliasIntersection(t *testing.T) {
+	base := reviewedRegistry()
+	pair := compatibleSum(t, "0.10", "0.20", "0.30")
+	trio := providerallowance.ProjectionRule{
+		ID: "trio", Provider: "synthetic-provider", SourceVersion: "fixture-v1",
+		MeasureIDs: []string{"part-a", "part-b", "part-c"},
+	}
+	group := projectionRegistry(base, trio)
+	before := snapshot(t, pair)
+	subset := providerallowance.Projections(pair, group)
+	assertUnchanged(t, before, pair)
+	if !subset.Aliased || subset.Count != 1 || subset.ProjectionID != "trio" || len(subset.Issues) != 0 {
+		t.Fatalf("two of three = %#v", subset)
+	}
+	refused := providerallowance.Derive(pair, trustLike(pair, providerallowance.BindingVerified), group)
+	if refused.Confirmed || len(refused.Values) != 0 || !hasCode(refused.Issues, providerallowance.IssueProjectionAlias) {
+		t.Fatalf("subset sum = %#v", refused)
+	}
+
+	complete := providerallowance.Projections(pair, projectionRegistry(base, providerallowance.ProjectionRule{
+		ID: "legacy-bucket", Provider: "synthetic-provider", SourceVersion: "fixture-v1",
+		MeasureIDs: []string{"part-a", "part-b"},
+	}))
+	if !complete.Aliased || complete.Count != 1 || complete.ProjectionID != "legacy-bucket" || len(complete.Issues) != 0 {
+		t.Fatalf("complete pair = %#v", complete)
+	}
+
+	withScalar := threePartSum(t, "0.10", "0.20", "0.30", "0.60")
+	withScalar.Derivations = nil
+	scalar := providerallowance.Projections(withScalar, projectionRegistry(base, providerallowance.ProjectionRule{
+		ID: "legacy-bucket", Provider: "synthetic-provider", SourceVersion: "fixture-v1",
+		MeasureIDs: []string{"part-a", "part-b"},
+	}))
+	if !scalar.Aliased || scalar.Count != 2 || scalar.ProjectionID != "" || len(scalar.Issues) != 0 {
+		t.Fatalf("pair plus scalar = %#v", scalar)
+	}
+
+	one := compatibleSum(t, "0.10", "0.20", "0.30")
+	one.Measures[1].ID = "part-d"
+	one.Derivations = nil
+	alone := providerallowance.Projections(one, group)
+	if alone.Aliased || alone.Count != 2 || alone.ProjectionID != "" || len(alone.Issues) != 0 {
+		t.Fatalf("single member = %#v", alone)
+	}
+
+	disjointObs := withScalar
+	fourth := withScalar.Measures[0]
+	fourth.ID = "part-d"
+	fourth.Value.Decimal = sp("0.40")
+	disjointObs.Measures = append(append([]providerallowance.Measure{}, withScalar.Measures...), fourth)
+	disjoint := providerallowance.Projections(disjointObs, projectionRegistry(base,
+		providerallowance.ProjectionRule{ID: "ab", Provider: "synthetic-provider", SourceVersion: "fixture-v1", MeasureIDs: []string{"part-a", "part-b"}},
+		providerallowance.ProjectionRule{ID: "cd", Provider: "synthetic-provider", SourceVersion: "fixture-v1", MeasureIDs: []string{"part-c", "part-d"}},
+	))
+	if !disjoint.Aliased || disjoint.Count != 2 || disjoint.ProjectionID != "" || len(disjoint.Issues) != 0 {
+		t.Fatalf("disjoint = %#v", disjoint)
+	}
+
+	duplicated := providerallowance.ProjectionRule{
+		ID: "legacy-bucket", Provider: "synthetic-provider", SourceVersion: "fixture-v1",
+		MeasureIDs: []string{"part-a", "part-b"},
+	}
+	ambiguous := providerallowance.Projections(pair, projectionRegistry(base, duplicated, duplicated))
+	if ambiguous.Aliased || ambiguous.Count != 0 || ambiguous.ProjectionID != "" || !hasCode(ambiguous.Issues, providerallowance.IssueRegistryDuplicate) {
+		t.Fatalf("duplicate = %#v", ambiguous)
+	}
+	overlap := providerallowance.Projections(withScalar, projectionRegistry(base,
+		providerallowance.ProjectionRule{ID: "ab", Provider: "synthetic-provider", SourceVersion: "fixture-v1", MeasureIDs: []string{"part-a", "part-b"}},
+		providerallowance.ProjectionRule{ID: "bc", Provider: "synthetic-provider", SourceVersion: "fixture-v1", MeasureIDs: []string{"part-b", "part-c"}},
+	))
+	if overlap.Aliased || overlap.Count != 0 || overlap.ProjectionID != "" || !hasCode(overlap.Issues, providerallowance.IssueRegistryDuplicate) {
+		t.Fatalf("overlap = %#v", overlap)
+	}
+}
+
 func TestNullValuesMatchSchema(t *testing.T) {
 	observation := compileSchema(t, "observation.schema.json", "urn:dev-env:providerallowance:observation:v1:draft")
 	readSchema := compileSchema(t, "read-response.schema.json", "urn:dev-env:providerallowance:read:v1:draft")
@@ -393,17 +468,17 @@ func TestSharedPoolsUseTrustedEntitlementBindings(t *testing.T) {
 		t.Fatalf("other account = %#v", other)
 	}
 
-	self, selfTrust := poolObservation(t, "cursor", "fixture-account")
+	self, _ := poolObservation(t, "cursor", "fixture-account")
 	self.Scope.Products = []string{"cursor", "grok"}
-	selfTrust = trustLike(self, providerallowance.BindingVerified)
+	selfTrust := trustLike(self, providerallowance.BindingVerified)
 	claimed := providerallowance.SharedPools([]providerallowance.Observation{self, grokObs}, []providerallowance.TrustedContext{selfTrust, grokTrust}, reg)
 	if claimed.Resolved || claimed.Count != 0 || claimed.EntitlementRef != "" || !hasCode(claimed.Issues, providerallowance.IssueAccountMismatch) {
 		t.Fatalf("self-asserted aliases = %#v", claimed)
 	}
 
-	extra, extraTrust := poolObservation(t, "cursor", "fixture-account")
+	extra, _ := poolObservation(t, "cursor", "fixture-account")
 	extra.Scope.Products = []string{"cursor", "extra-alias"}
-	extraTrust = trustLike(extra, providerallowance.BindingVerified)
+	extraTrust := trustLike(extra, providerallowance.BindingVerified)
 	aliased := providerallowance.SharedPools([]providerallowance.Observation{extra, grokObs}, []providerallowance.TrustedContext{extraTrust, grokTrust}, reg)
 	if aliased.Resolved || aliased.EntitlementRef != "" || !hasCode(aliased.Issues, providerallowance.IssueAccountMismatch) {
 		t.Fatalf("extra alias = %#v", aliased)

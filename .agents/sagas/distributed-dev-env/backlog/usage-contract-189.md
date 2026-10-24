@@ -35,5 +35,6 @@ repairs to the same implementation owner when a repair is authorized. Repair
 actionability, and typed shape checks. Repair 02 corrects alias sums,
 schema-invalid nulls, projection ambiguity, the over-limit lower bound,
 inventory promotion, availability conflict, and trusted entitlement bindings.
+Repair 03 counts two or more present members of one valid alias group once.
 Fresh native review and current CI remain required. Packet B waits for its
 own activation.

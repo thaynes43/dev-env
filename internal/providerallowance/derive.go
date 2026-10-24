@@ -31,7 +31,8 @@ type PoolAssessment struct {
 	Issues         []Issue
 }
 
-// ProjectionAssessment counts alias projections. Aliased measures count once.
+// ProjectionAssessment counts alias projections. Two or more present members
+// of one trusted group count once. One present member stays a scalar.
 type ProjectionAssessment struct {
 	Count        int
 	Aliased      bool
@@ -353,6 +354,9 @@ func SharedPools(observations []Observation, trusted []TrustedContext, reg Regis
 }
 
 // Projections reports whether measure ids are aliases of one projection.
+// A valid group counts once when at least two of its members are present.
+// Absent registered members do not make the present aliases independent.
+// Ambiguous registries return issues and are not counted.
 func Projections(obs Observation, reg Registry) ProjectionAssessment {
 	var out ProjectionAssessment
 	if reg == nil {
@@ -369,15 +373,16 @@ func Projections(obs Observation, reg Registry) ProjectionAssessment {
 	groups := 0
 	var id string
 	for _, rule := range parts.Projections {
-		if rule.Provider != obs.Provider || rule.SourceVersion != obs.Source.Version || len(rule.MeasureIDs) < 2 {
+		if rule.Provider != obs.Provider || rule.SourceVersion != obs.Source.Version {
 			continue
 		}
-		if !coversMeasures(obs, rule.MeasureIDs) {
+		present := presentMeasureIDs(obs, rule.MeasureIDs)
+		if len(present) < 2 {
 			continue
 		}
 		groups++
 		id = rule.ID
-		for _, measureID := range rule.MeasureIDs {
+		for _, measureID := range present {
 			covered[measureID] = struct{}{}
 		}
 	}
@@ -465,15 +470,22 @@ func uniqueStrings(ids []string) []string {
 	return out
 }
 
-func coversMeasures(obs Observation, ids []string) bool {
+func presentMeasureIDs(obs Observation, ids []string) []string {
 	have := map[string]struct{}{}
 	for _, measure := range obs.Measures {
 		have[measure.ID] = struct{}{}
 	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(ids))
 	for _, id := range ids {
 		if _, ok := have[id]; !ok {
-			return false
+			continue
 		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
 	}
-	return true
+	return out
 }

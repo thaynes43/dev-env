@@ -19,7 +19,8 @@
 // producerRef, and evidenceRefs, do not grant trust. Derive confirms a
 // declared result only after those checks and an exact decimal comparison.
 // It does not clamp an over-limit percent and does not emit a negative
-// complement.
+// complement. Two or more present members of one alias group count as one
+// projection. One present member stays a scalar.
 //
 // UsageJSONCommand documents the existing agent-run -o json convention for a
 // later read command. This package does not register that command, open a
