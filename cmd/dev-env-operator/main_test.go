@@ -287,3 +287,23 @@ func TestStandbyFlag(t *testing.T) {
 		t.Error("the standby without the API was accepted")
 	}
 }
+
+func TestPortalReaderFlag(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.portalReaderEnabled {
+		t.Fatal("portal reader must be off by default")
+	}
+	o, err = parseFlags([]string{"--enable-portal-reader"})
+	if err != nil || !o.portalReaderEnabled {
+		t.Fatal("portal reader flag was not accepted")
+	}
+	if _, err = parseFlags([]string{"--enable-portal-reader", "--session-namespace=other"}); err == nil {
+		t.Fatal("portal reader accepted a namespace other than dev-agents")
+	}
+	if _, err = parseFlags([]string{"--client-service-accounts=dev-agents/dev-env-v2-portal"}); err == nil {
+		t.Fatal("portal account was also accepted as a client")
+	}
+	if _, err = parseFlags([]string{"--human-service-account=dev-agents/dev-env-v2-portal"}); err == nil {
+		t.Fatal("portal account was also accepted as the human caller")
+	}
+}

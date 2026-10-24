@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="{{.Policy}}">
+<title>{{.Title}}</title><style>/*PORTAL_STYLE*/</style></head>
+<body><main><header><p class="eyebrow">Dev-env · Read-only</p>
+<nav><a href="/portal/projects/dev-env/environments/internal/sessions">Sessions</a>
+<a href="/portal/projects/dev-env/environments/internal/tasks">Tasks</a></nav>
+<h1>{{.Title}}</h1>
+<p class="notice" role="status">{{.Notice}}</p>
+<p class="observed">Observed: <time datetime="{{.ObservedAt}}">{{.ObservedAt}}</time></p></header>
+{{if .Rows}}<section>{{range .Rows}}<article><h2>{{.Title}}</h2>
+{{if .Link}}<a href="{{.Link}}" rel="noreferrer">Open canonical record</a>{{end}}
+<dl>{{range .Fields}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl>
+</article>{{end}}</section>{{end}}
+</main></body></html>

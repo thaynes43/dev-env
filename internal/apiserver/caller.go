@@ -29,6 +29,9 @@ const (
 	// kindSession is a session pod, by its projected token.
 	kindSession     callerKind = "session"
 	kindCoordinator callerKind = "coordinator"
+	// kindPortalReader is the default-off portal ServiceAccount. It is not a
+	// human, client, session, or coordinator.
+	kindPortalReader callerKind = "portal-reader"
 )
 
 // maxSessionDepth is the deepest a session may sit (DESIGN-001 3.4, "two levels
@@ -64,6 +67,9 @@ type Policy struct {
 	// Coordinators are separately configured host identities, never trusted Clients.
 	CoordinatorEnabled bool
 	Coordinators       []CoordinatorHost
+	// PortalReaderEnabled accepts only the portal ServiceAccount, and only for
+	// its session-summary read. Default off.
+	PortalReaderEnabled bool
 }
 
 // caller is an authenticated, classified caller.
@@ -98,6 +104,15 @@ func (s *Server) resolveCaller(ctx context.Context, id Identity) (*caller, error
 	if ref == "" {
 		return nil, forbidden("only ServiceAccount tokens may call this API; %q is not one", id.Username)
 	}
+	if ref == portalReaderRef {
+		if err := ValidatePortalCaller(s.Policy); err != nil {
+			return nil, forbidden("the portal ServiceAccount overlaps another caller class")
+		}
+		if !s.Policy.PortalReaderEnabled {
+			return nil, forbidden("the portal reader is disabled")
+		}
+		return s.resolvePortalReader(ctx, id)
+	}
 	switch {
 	case ref == s.Policy.Human:
 		return &caller{kind: kindHuman, identity: id, parent: ref}, nil
@@ -118,6 +133,23 @@ func (s *Server) resolveCaller(ctx context.Context, id Identity) (*caller, error
 		}
 	}
 	return nil, forbidden("%s may not call this API: it is not Tom's, a client's or a session's ServiceAccount, and summoning callers (CallerPolicy) arrive in plan 10", ref)
+}
+
+// ValidatePortalCaller rejects a policy that also names the portal ServiceAccount
+// as a human, client, session, workbench, or coordinator.
+func ValidatePortalCaller(p Policy) error {
+	if p.Human == portalReaderRef || slices.Contains(p.Clients, portalReaderRef) {
+		return fmt.Errorf("portal service account overlaps another caller")
+	}
+	if p.SessionNamespace == portalReaderNamespace && (p.SessionServiceAccount == portalReaderAccount || p.WorkbenchServiceAccount == portalReaderAccount) {
+		return fmt.Errorf("portal service account overlaps another caller")
+	}
+	for _, host := range p.Coordinators {
+		if host.ServiceAccount == portalReaderRef {
+			return fmt.Errorf("portal service account overlaps another caller")
+		}
+	}
+	return nil
 }
 
 // sessionPodAccount reports whether a session pod may run as the named

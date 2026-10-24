@@ -117,6 +117,7 @@ type options struct {
 	clientSAs                     []string
 	grantApprovalURL              string
 	coordinatorEnabled            bool
+	portalReaderEnabled           bool
 	privatePilot                  *projectcanary.PilotPolicy
 	privateProjectTasks           bool
 	managedCodexTasks             bool
@@ -168,6 +169,7 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.standbyProfile, "standby-profile", "full", "profile of the standby remote session; empty is the templates' default")
 	fs.StringVar(&o.standbyEffort, "standby-effort", "xhigh", "effort of the standby remote session; empty leaves the CLI's default")
 	fs.BoolVar(&o.coordinatorEnabled, "enable-coordinator-callers", false, "enable configured live-bound scoped coordinator callers")
+	fs.BoolVar(&o.portalReaderEnabled, "enable-portal-reader", false, "accept the dev-agents/dev-env-v2-portal ServiceAccount for paginated dev-env session summaries only")
 	fs.BoolVar(&o.privateProjectTasks, "enable-private-project-tasks", false, "enable new accepted-project tasks with private repositories and worktrees")
 	fs.BoolVar(&o.managedCodexTasks, "enable-managed-codex-tasks", false, "enable accepted-project managed Codex task admission")
 	fs.BoolVar(&o.privateHistoryRetention, "enable-private-history-retention", false, "retain private managed HOME and durable Session identity on reap and suspended autoarchive")
@@ -215,6 +217,9 @@ func parseFlags(args []string) (options, error) {
 	if o.sessionNamespace == "" || o.templatesNamespace == "" || o.templatesName == "" {
 		return o, errors.New("--session-namespace, --templates-namespace and --templates-name must not be empty")
 	}
+	if o.portalReaderEnabled && o.sessionNamespace != "dev-agents" {
+		return o, errors.New("--enable-portal-reader requires --session-namespace=dev-agents")
+	}
 	if o.apiAddr != "0" {
 		if o.apiTLSDir == "" {
 			return o, errors.New("--api-tls-dir must not be empty while the API is on")
@@ -238,6 +243,13 @@ func parseFlags(args []string) (options, error) {
 	var err error
 	o.coordinatorHosts, err = apiserver.ParseCoordinatorHosts(*hosts, policy)
 	if err != nil {
+		return o, err
+	}
+	if err := apiserver.ValidatePortalCaller(apiserver.Policy{
+		Human: o.humanSA, Clients: o.clientSAs, SessionNamespace: o.sessionNamespace,
+		SessionServiceAccount: controller.ServiceAccountName, WorkbenchServiceAccount: templates.WorkbenchServiceAccount,
+		Coordinators: o.coordinatorHosts,
+	}); err != nil {
 		return o, err
 	}
 	if *catalog != "" || *cloneOwner != "" {
@@ -639,6 +651,7 @@ func run(args []string) error {
 				SessionServiceAccount:   controller.ServiceAccountName,
 				WorkbenchServiceAccount: templates.WorkbenchServiceAccount,
 				CoordinatorEnabled:      o.coordinatorEnabled, Coordinators: o.coordinatorHosts,
+				PortalReaderEnabled: o.portalReaderEnabled,
 				// declare-activity's declarations live beside the operator
 				// (D-66).
 				ActivityNamespace: o.templatesNamespace,

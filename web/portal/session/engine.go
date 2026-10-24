@@ -22,6 +22,8 @@ import (
 const sessionCookie = "__Host-portal"
 const loginCookie = "__Host-portal-login"
 const LandingPath = "/portal/projects/dev-env/environments/internal/attention"
+const SessionsPath = "/portal/projects/dev-env/environments/internal/sessions"
+const TasksPath = "/portal/projects/dev-env/environments/internal/tasks"
 
 type Config struct {
 	Origin, Callback string
@@ -323,7 +325,7 @@ func (e *Engine) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	cookie(w, loginCookie, "", time.Unix(1, 0), -1)
 	cookie(w, sessionCookie, handle, record.ExpiresAt, maxAge)
-	w.Header().Set("Location", LandingPath)
+	w.Header().Set("Location", SessionsPath)
 	w.WriteHeader(http.StatusSeeOther)
 }
 

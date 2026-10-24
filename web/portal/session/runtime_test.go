@@ -163,7 +163,7 @@ func TestFixedLandingAndForgedReturnURLOrHost(t *testing.T) {
 	f.begin(t)
 	w := httptest.NewRecorder()
 	f.e.ServeHTTP(w, f.callback)
-	if w.Code != 303 || w.Header().Get("Location") != LandingPath {
+	if w.Code != 303 || w.Header().Get("Location") != SessionsPath {
 		t.Fatal("callback did not use fixed authorized landing")
 	}
 	for _, path := range []string{"/auth/login?return=https://evil.example/", "/auth/login?next=//evil.example/", LandingPath + "?return=https://evil.example/"} {

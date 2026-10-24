@@ -1,0 +1,654 @@
+package session
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"mime"
+	"net"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+	"unicode"
+
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/web/portal"
+)
+
+const (
+	openProjectPortalOrigin       = "https://openproject-web.frontend.svc.cluster.local:8443"
+	openProjectPortalHost         = "openproject-web.frontend.svc.cluster.local"
+	openProjectProjectPath        = "/api/v3/projects/3/work_packages"
+	operatorPortalOrigin          = "https://dev-env-operator.dev-env-system.svc.cluster.local:8443"
+	operatorPortalHost            = "dev-env-operator.dev-env-system.svc.cluster.local"
+	productPageSize               = 50
+	productPageCap                = 4
+	productHALLimit         int64 = 1 << 20
+)
+
+// SessionSource reads portal session summaries. The operator token is read on
+// every request so a one-hour projected token can rotate.
+type SessionSource struct {
+	path   string
+	client *http.Client
+	now    func() time.Time
+}
+
+// TaskSource reads project 3's work-package collection. It does not follow an
+// arbitrary HAL origin or path.
+type TaskSource struct {
+	path   string
+	client *http.Client
+	now    func() time.Time
+}
+
+func newSessionSource(tokenPath string, ca []byte, now func() time.Time, dial func(context.Context, string, string) (net.Conn, error)) (*SessionSource, error) {
+	client, err := pinnedClient(ca, operatorPortalHost, 5*time.Second, dial)
+	if err != nil || now == nil || tokenPath == "" {
+		return nil, portal.ErrUnavailable
+	}
+	return &SessionSource{path: tokenPath, client: client, now: now}, nil
+}
+
+func newTaskSource(tokenPath string, ca []byte, now func() time.Time, dial func(context.Context, string, string) (net.Conn, error)) (*TaskSource, error) {
+	client, err := pinnedClient(ca, openProjectPortalHost, 5*time.Second, dial)
+	if err != nil || now == nil || tokenPath == "" {
+		return nil, portal.ErrUnavailable
+	}
+	return &TaskSource{path: tokenPath, client: client, now: now}, nil
+}
+
+func (s *SessionSource) Read(ctx context.Context) (portal.ProductPage, error) {
+	page := portal.ProductPage{Title: "Sessions", Connected: true}
+	if s == nil || s.client == nil || s.now == nil {
+		return page, portal.ErrUnavailable
+	}
+	token, err := operatorCredential(s.path, s.now())
+	if err != nil {
+		return page, portal.ErrUnavailable
+	}
+	cursor := ""
+	complete := false
+	freshness := "observed"
+	for n := 0; n < productPageCap; n++ {
+		raw := operatorPortalOrigin + "/v1/sessions?limit=" + strconv.Itoa(productPageSize)
+		if cursor != "" {
+			raw += "&cursor=" + url.QueryEscape(cursor)
+		}
+		body, err := productGet(ctx, s.client, raw, token, 256<<10, mediaJSON)
+		if err != nil {
+			return page, err
+		}
+		decoded, err := decodeSessionPage(body, s.now())
+		if err != nil {
+			return page, err
+		}
+		if decoded.Freshness == "unknown" || decoded.Freshness == "stale" {
+			freshness = decoded.Freshness
+		}
+		for _, row := range decoded.Sessions {
+			page.Rows = append(page.Rows, portal.ProductRow{Title: shown(row.Name), Fields: []portal.ProductField{{Label: "Phase", Value: shown(row.Phase)}, {Label: "Freshness", Value: shown(row.Freshness)}, {Label: "UID", Value: shown(row.UID)}}})
+		}
+		complete = decoded.Complete
+		cursor = decoded.NextCursor
+		if complete {
+			break
+		}
+	}
+	page.Notice = "Connected session summaries."
+	if !complete {
+		page.Notice = "Sessions read is incomplete. This is not the full inventory."
+	} else if freshness != "observed" {
+		page.Notice = "Session freshness is " + freshness + "."
+	} else if len(page.Rows) == 0 {
+		page.Notice = "The completed session read returned no dev-env sessions."
+	}
+	return page, nil
+}
+
+func (s *TaskSource) Read(ctx context.Context) (portal.ProductPage, error) {
+	page := portal.ProductPage{Title: "Tasks", Connected: true}
+	if s == nil || s.client == nil || s.now == nil {
+		return page, portal.ErrUnavailable
+	}
+	token, err := readBearerFile(s.path)
+	if err != nil {
+		return page, portal.ErrUnavailable
+	}
+	seen := map[int]struct{}{}
+	total := 0
+	haveTotal := false
+	complete := false
+	for pageNo := 1; pageNo <= productPageCap; pageNo++ {
+		body, err := productGet(ctx, s.client, taskCollectionURL(pageNo), token, productHALLimit, mediaHAL)
+		if err != nil {
+			return page, err
+		}
+		rows, pageTotal, done, err := decodeTaskPage(body, pageNo, seen)
+		if err != nil || (haveTotal && pageTotal != total) {
+			return page, portal.ErrUnavailable
+		}
+		total = pageTotal
+		haveTotal = true
+		page.Rows = append(page.Rows, rows...)
+		if done {
+			complete = true
+			break
+		}
+	}
+	page.Notice = "Connected project 3 work packages."
+	if !complete {
+		page.Notice = "Tasks read is incomplete. This is not the full inventory."
+	} else if len(page.Rows) == 0 {
+		page.Notice = "The completed task read returned no work packages."
+	}
+	return page, nil
+}
+
+func decodeSessionPage(body []byte, now time.Time) (apiv1.PortalSessionPage, error) {
+	var page apiv1.PortalSessionPage
+	obj, err := jsonObject(body)
+	if err != nil {
+		return page, err
+	}
+	for _, key := range []string{"sessions", "limit", "complete", "freshness", "observedAt"} {
+		if _, ok := obj[key]; !ok {
+			return page, portal.ErrUnavailable
+		}
+	}
+	for key := range obj {
+		switch key {
+		case "sessions", "limit", "complete", "freshness", "observedAt", "nextCursor":
+		default:
+			return page, portal.ErrUnavailable
+		}
+	}
+	limit, ok := jsonInt(obj["limit"])
+	if !ok || limit < 1 || limit > 100 || limit != productPageSize {
+		return page, portal.ErrUnavailable
+	}
+	var complete bool
+	if json.Unmarshal(obj["complete"], &complete) != nil {
+		return page, portal.ErrUnavailable
+	}
+	var freshness string
+	if json.Unmarshal(obj["freshness"], &freshness) != nil || (freshness != "observed" && freshness != "stale" && freshness != "unknown") {
+		return page, portal.ErrUnavailable
+	}
+	if _, err := observationTime(obj["observedAt"], now); err != nil {
+		return page, err
+	}
+	var rows []json.RawMessage
+	if json.Unmarshal(obj["sessions"], &rows) != nil || len(rows) > limit {
+		return page, portal.ErrUnavailable
+	}
+	names, uids := map[string]struct{}{}, map[string]struct{}{}
+	page.Sessions = make([]apiv1.PortalSessionSummary, 0, len(rows))
+	for _, raw := range rows {
+		row, err := decodeSessionRow(raw, now)
+		if err != nil {
+			return apiv1.PortalSessionPage{}, err
+		}
+		if _, dup := names[row.Name]; dup {
+			return page, portal.ErrUnavailable
+		}
+		if _, dup := uids[row.UID]; dup {
+			return page, portal.ErrUnavailable
+		}
+		names[row.Name] = struct{}{}
+		uids[row.UID] = struct{}{}
+		page.Sessions = append(page.Sessions, row)
+	}
+	next := ""
+	if raw, ok := obj["nextCursor"]; ok {
+		if json.Unmarshal(raw, &next) != nil || next == "" || len(next) > 2048 || strings.ContainsAny(next, " \t\r\n/?#") {
+			return page, portal.ErrUnavailable
+		}
+	}
+	if complete == (next != "") {
+		return page, portal.ErrUnavailable
+	}
+	page.Limit = limit
+	page.Complete = complete
+	page.Freshness = freshness
+	page.NextCursor = next
+	observed, _ := observationTime(obj["observedAt"], now)
+	page.ObservedAt = observed
+	return page, nil
+}
+
+func decodeSessionRow(raw json.RawMessage, now time.Time) (apiv1.PortalSessionSummary, error) {
+	var row apiv1.PortalSessionSummary
+	obj, err := jsonObject(raw)
+	if err != nil {
+		return row, err
+	}
+	for _, key := range []string{"name", "uid", "repo", "phase", "observedAt", "freshness"} {
+		if _, ok := obj[key]; !ok {
+			return row, portal.ErrUnavailable
+		}
+	}
+	if len(obj) != 6 {
+		return row, portal.ErrUnavailable
+	}
+	var name, uid, repo, phase, freshness string
+	if json.Unmarshal(obj["name"], &name) != nil || json.Unmarshal(obj["uid"], &uid) != nil || json.Unmarshal(obj["repo"], &repo) != nil || json.Unmarshal(obj["phase"], &phase) != nil || json.Unmarshal(obj["freshness"], &freshness) != nil {
+		return row, portal.ErrUnavailable
+	}
+	if name == "" || uid == "" || repo != "dev-env" || !sessionPhase(phase) || (freshness != "observed" && freshness != "stale" && freshness != "unknown") {
+		return row, portal.ErrUnavailable
+	}
+	observed, err := observationTime(obj["observedAt"], now)
+	if err != nil {
+		return row, err
+	}
+	return apiv1.PortalSessionSummary{Name: name, UID: uid, Repo: repo, Phase: phase, ObservedAt: observed, Freshness: freshness}, nil
+}
+
+func sessionPhase(phase string) bool {
+	switch phase {
+	case "Pending", "Running", "Idle", "Draining", "Suspended", "Archived", "Failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func decodeTaskPage(body []byte, page int, seen map[int]struct{}) ([]portal.ProductRow, int, bool, error) {
+	obj, err := jsonObject(body)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	for _, key := range []string{"total", "count", "pageSize", "offset", "_embedded", "_links"} {
+		if _, ok := obj[key]; !ok {
+			return nil, 0, false, portal.ErrUnavailable
+		}
+	}
+	total, okT := jsonInt(obj["total"])
+	count, okC := jsonInt(obj["count"])
+	size, okS := jsonInt(obj["pageSize"])
+	offset, okO := jsonInt(obj["offset"])
+	if !okT || !okC || !okS || !okO || total < 0 || count < 0 || count > productPageSize || size != productPageSize || offset != page {
+		return nil, 0, false, portal.ErrUnavailable
+	}
+	embedded, err := jsonObject(obj["_embedded"])
+	if err != nil {
+		return nil, 0, false, err
+	}
+	rawElements, ok := embedded["elements"]
+	if !ok {
+		return nil, 0, false, portal.ErrUnavailable
+	}
+	var elements []json.RawMessage
+	if json.Unmarshal(rawElements, &elements) != nil || len(elements) != count {
+		return nil, 0, false, portal.ErrUnavailable
+	}
+	links, err := jsonObject(obj["_links"])
+	if err != nil {
+		return nil, 0, false, err
+	}
+	next := ""
+	if raw, ok := links["nextByOffset"]; ok {
+		link, err := jsonObject(raw)
+		if err != nil {
+			return nil, 0, false, err
+		}
+		if href, ok := link["href"]; ok && string(href) != "null" {
+			if json.Unmarshal(href, &next) != nil {
+				return nil, 0, false, portal.ErrUnavailable
+			}
+		}
+	}
+	rows := make([]portal.ProductRow, 0, len(elements))
+	for _, raw := range elements {
+		var element halWorkPackage
+		if json.Unmarshal(raw, &element) != nil {
+			return nil, 0, false, portal.ErrUnavailable
+		}
+		if _, dup := seen[element.ID]; dup {
+			return nil, 0, false, portal.ErrUnavailable
+		}
+		row, err := taskRow(element)
+		if err != nil {
+			return nil, 0, false, err
+		}
+		seen[element.ID] = struct{}{}
+		rows = append(rows, row)
+	}
+	expected := total - (page-1)*productPageSize
+	last := count < productPageSize || page*productPageSize >= total
+	if last {
+		if count != expected || next != "" {
+			return nil, 0, false, portal.ErrUnavailable
+		}
+		return rows, total, true, nil
+	}
+	if count != productPageSize || !taskHint(next, page+1) {
+		return nil, 0, false, portal.ErrUnavailable
+	}
+	return rows, total, false, nil
+}
+
+func jsonObject(data []byte) (map[string]json.RawMessage, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	tok, err := dec.Token()
+	if err != nil || tok != json.Delim('{') {
+		return nil, portal.ErrUnavailable
+	}
+	out := map[string]json.RawMessage{}
+	for dec.More() {
+		keyTok, err := dec.Token()
+		key, ok := keyTok.(string)
+		if err != nil || !ok {
+			return nil, portal.ErrUnavailable
+		}
+		if _, dup := out[key]; dup {
+			return nil, portal.ErrUnavailable
+		}
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return nil, portal.ErrUnavailable
+		}
+		out[key] = raw
+	}
+	tok, err = dec.Token()
+	if err != nil || tok != json.Delim('}') {
+		return nil, portal.ErrUnavailable
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return nil, portal.ErrUnavailable
+	}
+	return out, nil
+}
+
+func jsonInt(raw json.RawMessage) (int, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	var n int
+	if dec.Decode(&n) != nil || n < 0 {
+		return 0, false
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return 0, false
+	}
+	return n, true
+}
+
+func observationTime(raw json.RawMessage, now time.Time) (time.Time, error) {
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		return time.Time{}, portal.ErrUnavailable
+	}
+	parsed, err := time.Parse(time.RFC3339, text)
+	if err != nil || parsed.After(now) {
+		return time.Time{}, portal.ErrUnavailable
+	}
+	return parsed.UTC(), nil
+}
+
+type halWorkPackage struct {
+	ID           int    `json:"id"`
+	Subject      string `json:"subject"`
+	CreatedAt    string `json:"createdAt"`
+	UpdatedAt    string `json:"updatedAt"`
+	CustomField1 string `json:"customField1"`
+	CustomField3 string `json:"customField3"`
+	Description  struct {
+		Raw string `json:"raw"`
+	} `json:"description"`
+	Links struct {
+		Project struct {
+			Href string `json:"href"`
+		} `json:"project"`
+		Status struct {
+			Title string `json:"title"`
+		} `json:"status"`
+		Assignee struct {
+			Title string `json:"title"`
+		} `json:"assignee"`
+		Responsible struct {
+			Title string `json:"title"`
+		} `json:"responsible"`
+	} `json:"_links"`
+	Embedded struct {
+		Project struct {
+			ID         int    `json:"id"`
+			Identifier string `json:"identifier"`
+		} `json:"project"`
+	} `json:"_embedded"`
+}
+
+func taskRow(element halWorkPackage) (portal.ProductRow, error) {
+	if element.ID < 1 || !projectThree(element) {
+		return portal.ProductRow{}, portal.ErrUnavailable
+	}
+	id := strconv.Itoa(element.ID)
+	return portal.ProductRow{
+		Title: shown(element.Subject),
+		Link:  "https://work.haynesnetwork.com/work_packages/" + id,
+		Fields: []portal.ProductField{
+			{Label: "Status", Value: shown(element.Links.Status.Title)},
+			{Label: "Assignee", Value: shown(element.Links.Assignee.Title)},
+			{Label: "Accountable", Value: shown(element.CustomField1)},
+			{Label: "Responsible", Value: shown(element.Links.Responsible.Title)},
+			{Label: "Repositories", Value: shown(element.CustomField3)},
+			{Label: "Created", Value: shownTime(element.CreatedAt)},
+			{Label: "Updated", Value: shownTime(element.UpdatedAt)},
+		},
+	}, nil
+}
+
+func projectThree(element halWorkPackage) bool {
+	if element.Links.Project.Href != "/api/v3/projects/3" {
+		return false
+	}
+	if element.Embedded.Project.ID == 0 && element.Embedded.Project.Identifier == "" {
+		return true
+	}
+	return element.Embedded.Project.ID == 3 && element.Embedded.Project.Identifier == "haynes-engineering"
+}
+
+func taskCollectionURL(page int) string {
+	return openProjectPortalOrigin + openProjectProjectPath + "?offset=" + strconv.Itoa(page) + "&pageSize=" + strconv.Itoa(productPageSize) + "&filters=%5B%5D"
+}
+
+func taskHint(href string, page int) bool {
+	if href == "" || strings.ContainsAny(href, "#@\\") || strings.Contains(href, "..") || strings.Contains(strings.ToLower(href), "%2e") || strings.Contains(href, "%") && strings.Contains(href, "work_packages") && !strings.Contains(href, "filters=%5B%5D") && !strings.Contains(href, "filters=[]") {
+		return false
+	}
+	if strings.Contains(href, "%2f") || strings.Contains(href, "%2F") {
+		return false
+	}
+	var u *url.URL
+	var err error
+	switch {
+	case strings.HasPrefix(href, "/"):
+		u, err = url.ParseRequestURI(href)
+		if err != nil || u.Host != "" || u.Scheme != "" || u.User != nil {
+			return false
+		}
+	case strings.HasPrefix(href, "https://"):
+		u, err = url.ParseRequestURI(href)
+		if err != nil || u.User != nil {
+			return false
+		}
+		if u.Host != openProjectPortalHost+":8443" && u.Host != "work.haynesnetwork.com" {
+			return false
+		}
+	default:
+		return false
+	}
+	if u.Fragment != "" || u.RawPath != "" || u.Path != openProjectProjectPath {
+		return false
+	}
+	return taskQuery(u.RawQuery, page)
+}
+
+func taskQuery(raw string, page int) bool {
+	if raw == "" || strings.Contains(raw, ";") {
+		return false
+	}
+	seen := map[string]string{}
+	for _, pair := range strings.Split(raw, "&") {
+		key, value, ok := strings.Cut(pair, "=")
+		if !ok {
+			return false
+		}
+		if _, dup := seen[key]; dup {
+			return false
+		}
+		uk, errK := url.QueryUnescape(key)
+		uv, errV := url.QueryUnescape(value)
+		if errK != nil || errV != nil || uk != key {
+			return false
+		}
+		seen[key] = uv
+	}
+	return len(seen) == 3 && seen["offset"] == strconv.Itoa(page) && seen["pageSize"] == strconv.Itoa(productPageSize) && seen["filters"] == "[]"
+}
+
+func productGet(ctx context.Context, client *http.Client, rawURL, token string, limit int64, accept string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil || client == nil || !bearerText(token) {
+		return nil, portal.ErrUnavailable
+	}
+	req.Header.Set("Accept", accept)
+	req.Header.Set("Authorization", "Bearer "+token)
+	response, err := client.Do(req)
+	if err != nil || response == nil {
+		return nil, portal.ErrUnavailable
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1024))
+		return nil, portal.ErrUnavailable
+	}
+	media, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if err != nil || media != accept {
+		return nil, portal.ErrUnavailable
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
+	if err != nil || int64(len(body)) > limit {
+		return nil, portal.ErrUnavailable
+	}
+	return body, nil
+}
+
+func operatorCredential(path string, now time.Time) (string, error) {
+	raw, err := readBearerFile(path)
+	if err != nil || !operatorTokenCurrent(raw, now) {
+		return "", portal.ErrUnavailable
+	}
+	return raw, nil
+}
+
+func operatorTokenCurrent(raw string, now time.Time) bool {
+	parts := strings.Split(raw, ".")
+	if len(parts) != 3 || parts[0] == "" || parts[2] == "" {
+		return false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return false
+	}
+	var claims struct {
+		Aud json.RawMessage `json:"aud"`
+		Exp int64           `json:"exp"`
+	}
+	if json.Unmarshal(payload, &claims) != nil || claims.Exp <= now.Unix() {
+		return false
+	}
+	var one string
+	var many []string
+	if json.Unmarshal(claims.Aud, &one) == nil {
+		many = []string{one}
+	} else if json.Unmarshal(claims.Aud, &many) != nil || len(many) != 1 {
+		return false
+	}
+	return len(many) == 1 && many[0] == apiv1.TokenAudience
+}
+
+func shown(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, value)
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "Unknown"
+	}
+	if len(value) > 256 {
+		value = value[:256]
+	}
+	return value
+}
+
+func shownTime(value string) string {
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return "Unknown"
+	}
+	return parsed.UTC().Format(time.RFC3339)
+}
+
+func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
+	authHeaders(w)
+	if r.Method != http.MethodGet || r.URL.RawQuery != "" || r.URL.RawPath != "" || c.Session == nil || c.Authorizer == nil || c.Now == nil {
+		authFailure(w, portal.ErrUnavailable)
+		return
+	}
+	principal, err := c.Session.Authenticate(r)
+	if err != nil {
+		authFailure(w, err)
+		return
+	}
+	resource := portal.Resource{Project: "dev-env", Environment: "internal"}
+	if err = c.Authorizer.Authorize(r.Context(), principal, resource); err != nil {
+		authFailure(w, err)
+		return
+	}
+	var page portal.ProductPage
+	switch r.URL.Path {
+	case SessionsPath:
+		page = portal.ProductPage{Title: "Sessions", Notice: "Sessions not connected"}
+		if c.Sessions != nil {
+			page, err = c.Sessions.Read(r.Context())
+		}
+	case TasksPath:
+		page = portal.ProductPage{Title: "Tasks", Notice: "Tasks not connected"}
+		if c.Tasks != nil {
+			page, err = c.Tasks.Read(r.Context())
+		}
+	default:
+		authFailure(w, portal.ErrDenied)
+		return
+	}
+	if err != nil {
+		title := "Sessions"
+		if r.URL.Path == TasksPath {
+			title = "Tasks"
+		}
+		page = portal.ProductPage{Title: title, Notice: title + " unavailable"}
+	}
+	if current, currentErr := c.Session.Authenticate(r); currentErr != nil || current != principal {
+		authFailure(w, portal.ErrDenied)
+		return
+	}
+	if err = c.Authorizer.Authorize(r.Context(), principal, resource); err != nil {
+		authFailure(w, err)
+		return
+	}
+	page.ObservedAt = c.Now().UTC().Format(time.RFC3339)
+	body, err := portal.RenderProduct(page)
+	if err != nil {
+		authFailure(w, portal.ErrUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(body)
+}

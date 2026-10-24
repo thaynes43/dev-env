@@ -327,6 +327,9 @@ func generatedName(repo string, now time.Time) string {
 
 // listSessions serves GET /v1/sessions.
 func (s *Server) listSessions(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+	if c.kind == kindPortalReader {
+		return s.listPortalSessions(ctx, r)
+	}
 	f, err := parseFilters(r.URL.Query())
 	if err != nil {
 		return 0, nil, err

@@ -449,6 +449,28 @@ type SessionList struct {
 	Sessions []Session `json:"sessions"`
 }
 
+// PortalSessionSummary is the only session object the portal reader returns.
+// It has no prompt, log, environment, outcome, or control fields.
+type PortalSessionSummary struct {
+	Name       string    `json:"name"`
+	UID        string    `json:"uid"`
+	Repo       string    `json:"repo"`
+	Phase      string    `json:"phase"`
+	ObservedAt time.Time `json:"observedAt"`
+	Freshness  string    `json:"freshness"`
+}
+
+// PortalSessionPage is GET /v1/sessions for the portal reader. Complete is false
+// when another page remains. Freshness is observed, stale, or unknown.
+type PortalSessionPage struct {
+	Sessions   []PortalSessionSummary `json:"sessions"`
+	Limit      int                    `json:"limit"`
+	Complete   bool                   `json:"complete"`
+	Freshness  string                 `json:"freshness"`
+	NextCursor string                 `json:"nextCursor,omitempty"`
+	ObservedAt time.Time              `json:"observedAt"`
+}
+
 // List filters: the query parameters of GET /v1/sessions (DESIGN-001 3.4). Each
 // is optional; an unknown parameter is refused.
 const (

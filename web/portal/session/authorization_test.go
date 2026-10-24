@@ -99,8 +99,8 @@ func TestCurrentAuthorizationRechecksBeforeFinalRelease(t *testing.T) {
 				task.Task = "178"
 				id := 178
 				if mode == "outside-ID" {
-					task.Task = "179"
-					id = 179
+					task.Task = "0178"
+					id = 178
 				}
 				if mode == "mismatched-ID" {
 					id = 123
@@ -190,7 +190,10 @@ func TestCurrentAuthorizationDefaultDenyAndTransport(t *testing.T) {
 	})
 	r := f.e.bind(f.request("GET", LandingPath, ""))
 	p, _ := f.e.Authenticate(r)
-	for _, resource := range []portal.Resource{{Project: "haynes-engineering", Environment: "internal", Task: "178"}, {Project: "other", Environment: "internal"}, {Project: "dev-env", Environment: "prod"}, {Project: "dev-env", Environment: "internal", Task: "179"}, {Project: "dev-env", Environment: "internal", Task: "0178"}, {Project: "dev-env", Environment: "internal", Task: "178/logs"}} {
+	if !canonicalWorkPackageID("179") || canonicalWorkPackageID("0178") || canonicalWorkPackageID("178/logs") {
+		t.Fatal("work-package id grammar drifted")
+	}
+	for _, resource := range []portal.Resource{{Project: "haynes-engineering", Environment: "internal", Task: "178"}, {Project: "other", Environment: "internal"}, {Project: "dev-env", Environment: "prod"}, {Project: "dev-env", Environment: "internal", Task: "0178"}, {Project: "dev-env", Environment: "internal", Task: "178/logs"}} {
 		if !errors.Is(a.Authorize(r.Context(), p, resource), portal.ErrDenied) {
 			t.Fatal("outside allowlist accepted")
 		}
