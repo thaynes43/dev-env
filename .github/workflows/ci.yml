@@ -105,6 +105,18 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Checkout pinned shared guard
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: thaynes43/haynes-ops
+          ref: 63f6b2a5fc54cde0f3df4b0a8456320f7ae12285
+          path: _shared-guard-pinned
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Finite delivery guard tests
+        env:
+          DEV_ENV_SHARED_GUARD_CHECKOUT: ${{ github.workspace }}/_shared-guard-pinned
+        run: nice -n 19 python3 -O -B -m unittest discover -s scripts/delivery -p 'test_*.py' -v
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
